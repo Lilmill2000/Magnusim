@@ -701,31 +701,44 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   persistMeshResult(project_id, baseRunning);
 
   let lastStage = null;
+  let lineCarry = '';
+  const flushParsedLine = (line) => {
+    const parsed = parseCfmeshLine(line);
+    if (!parsed) return;
+    if (parsed.kind === 'result') lastResult = parsed.data;
+    if (parsed.kind === 'progress' && parsed.data && parsed.data.stage) {
+      const stage = String(parsed.data.stage);
+      const detail = parsed.data.msg ? String(parsed.data.msg) : null;
+      if (stage !== lastStage || detail) {
+        lastStage = stage;
+        if (liveJob && liveJob.child === child) {
+          const running = { ...baseRunning, stage, stage_detail: detail };
+          try {
+            persistMeshResult(project_id, running);
+            onUpdate(running);
+          } catch (_) {}
+        }
+      }
+    }
+  };
   const appendLog = (chunk) => {
     const s = chunk.toString('utf8');
     logBuf += s;
     try {
       writeFileSync(winLog, logBuf, 'utf8');
     } catch {}
-    for (const line of s.split(/\r?\n/)) {
-      const parsed = parseCfmeshLine(line);
-      if (!parsed) continue;
-      if (parsed.kind === 'result') lastResult = parsed.data;
-      if (parsed.kind === 'progress' && parsed.data && parsed.data.stage) {
-        const stage = String(parsed.data.stage);
-        const detail = parsed.data.msg ? String(parsed.data.msg) : null;
-        if (stage !== lastStage || detail) {
-          lastStage = stage;
-          if (liveJob && liveJob.child === child) {
-            const running = { ...baseRunning, stage, stage_detail: detail };
-            try {
-              persistMeshResult(project_id, running);
-              onUpdate(running);
-            } catch (_) {}
-          }
-        }
-      }
-    }
+    // Carry incomplete trailing fragment across chunks so JSON result lines
+    // split mid-chunk still set lastResult (avoids exit_code 45 false-fail).
+    lineCarry += s;
+    const parts = lineCarry.split(/\r?\n/);
+    lineCarry = parts.pop() ?? '';
+    for (const line of parts) flushParsedLine(line);
+  };
+  const flushLineCarry = () => {
+    if (!lineCarry) return;
+    const rem = lineCarry;
+    lineCarry = '';
+    flushParsedLine(rem);
   };
   child.stdout?.on('data', appendLog);
   child.stderr?.on('data', appendLog);
@@ -749,7 +762,10 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     onUpdate(failed);
   });
 
-  child.on('exit', (code, signal) => {
+  // Decide on 'close' (not 'exit'): exit can fire while the final JSON result
+  // chunk is still in the pipe; close waits until stdout/stderr are fully drained.
+  child.on('close', (code, signal) => {
+    flushLineCarry();
     const exit_code = code == null ? (signal ? -2 : -1) : code;
     const finished_at = new Date().toISOString();
     try {
@@ -1050,36 +1066,48 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
   persistMeshResult(project_id, baseRunning);
 
   let lastStage = null;
+  let lineCarry = '';
+  const flushParsedLine = (line) => {
+    const parsed = parseCfmeshLine(line);
+    if (!parsed) return;
+    if (parsed.kind === 'result') lastResult = parsed.data;
+    if (parsed.kind === 'progress' && parsed.data && parsed.data.stage) {
+      const stage = String(parsed.data.stage);
+      const detail = parsed.data.msg ? String(parsed.data.msg) : null;
+      if (stage !== lastStage || detail) {
+        lastStage = stage;
+        if (liveJob && liveJob.child === child) {
+          const running = { ...baseRunning, stage, stage_detail: detail };
+          try {
+            persistMeshResult(project_id, running);
+            onUpdate(running);
+          } catch (_) {}
+        }
+      }
+    }
+  };
   const appendLog = (chunk) => {
     const s = chunk.toString('utf8');
     logBuf += s;
     try {
       writeFileSync(winLog, logBuf, 'utf8');
     } catch {}
-    for (const line of s.split(/\r?\n/)) {
-      const parsed = parseCfmeshLine(line);
-      if (!parsed) continue;
-      if (parsed.kind === 'result') lastResult = parsed.data;
-      if (parsed.kind === 'progress' && parsed.data && parsed.data.stage) {
-        const stage = String(parsed.data.stage);
-        const detail = parsed.data.msg ? String(parsed.data.msg) : null;
-        if (stage !== lastStage || detail) {
-          lastStage = stage;
-          if (liveJob && liveJob.child === child) {
-            const running = { ...baseRunning, stage, stage_detail: detail };
-            try {
-              persistMeshResult(project_id, running);
-              onUpdate(running);
-            } catch (_) {}
-          }
-        }
-      }
-    }
+    lineCarry += s;
+    const parts = lineCarry.split(/\r?\n/);
+    lineCarry = parts.pop() ?? '';
+    for (const line of parts) flushParsedLine(line);
+  };
+  const flushLineCarry = () => {
+    if (!lineCarry) return;
+    const rem = lineCarry;
+    lineCarry = '';
+    flushParsedLine(rem);
   };
   child.stdout?.on('data', appendLog);
   child.stderr?.on('data', appendLog);
 
   child.on('close', (code) => {
+    flushLineCarry();
     const exit_code = code == null ? 1 : code;
     const finished_at = new Date().toISOString();
     if (liveJob && liveJob.child === child) liveJob = null;
