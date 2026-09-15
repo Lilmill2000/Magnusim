@@ -1,6 +1,6 @@
 /**
  * CFD Desk W24 - Start Run 1 + live Area average (seven-series from run)
- * Prior: W22 - Area average setup (Result control â†’ Surface data â†’ Area average 1)
+ * Prior: W22 - Area average setup (Result control → Surface data → Area average 1)
  * + W21 mesh generate + W20 mesh settings + W19 BCs + W18 Materials + W17 Incompressible + W16 project/geo
  * HARD: BOTH face57@Body1 + face71@Body1; no fake charts; no solves
  */
@@ -346,7 +346,7 @@ let sourceBounds = null;
 let lutRange = [0, 0.79];
 
 // Colour scale for a (case, field) across every /api/times entry. Per-frame
-// foam / fingerprint minâ€“max must not move the legend while Time Step
+// foam / fingerprint min–max must not move the legend while Time Step
 // scrubs or plays. First paint may hold the current frame until the series
 // lock is computed from every cached time.
 const seriesLut = {
@@ -902,8 +902,8 @@ if (typeof ResizeObserver === 'function') {
   try {
     const ro = new ResizeObserver(scheduleViewerResize);
     const wrap = document.querySelector('.viewport-wrap');
-    // Watch the wrap, not #viewer â€” vtk resize mutates the canvas and
-    // observing that host loops render â†’ resize â†’ render on a core.
+    // Watch the wrap, not #viewer — vtk resize mutates the canvas and
+    // observing that host loops render → resize → render on a core.
     if (wrap) ro.observe(wrap);
     const fpEl = document.getElementById('filters-panel');
     if (fpEl) {
@@ -1977,7 +1977,7 @@ function applyCutClipAndParts() {
   // the (rescaled) CAD edge actor.
   const clipEdges = !meshInspectOpen && !meshCompareOn();
   // Particle traces are clipped visually with the model too. This is display
-  // only â€” the traces themselves (seeds, integration) are untouched.
+  // only — the traces themselves (seeds, integration) are untouched.
   const ptMappers = [ptMapper, ptGlyphMapper, ptSeedMapper];
   const extra = clipEdges ? [geomEdgeMapper, ...ptMappers] : ptMappers;
   for (const m of extra) {
@@ -2382,7 +2382,7 @@ function updateCuttingPlane(opts) {
 
 // Tick label precision follows the range: 1234 Pa, 12.3 m/s, 0.46 m/s.
 function legendTick(t, span) {
-  if (!Number.isFinite(t)) return 'â€”';
+  if (!Number.isFinite(t)) return '—';
   const s = Math.abs(span);
   if (s >= 500) return Math.round(t).toLocaleString('en-US');
   if (s >= 20) return t.toFixed(1);
@@ -3083,7 +3083,7 @@ function updatePtLegend(field, lo, hi) {
   if (!show) return;
   const title = el.querySelector('.legend-title');
   const units = el.querySelector('.legend-units');
-  if (title) title.textContent = field === 'p' ? 'Particle trace Â· Pressure' : 'Particle trace Â· Velocity Magnitude';
+  if (title) title.textContent = field === 'p' ? 'Particle trace · Pressure' : 'Particle trace · Velocity Magnitude';
   if (units) units.textContent = field === 'p' ? 'Pa' : 'm/s';
   paintLegendTrackTicks(el, lo, hi);
 }
@@ -3168,7 +3168,7 @@ function syncSharedLegend() {
     return;
   }
   // Nothing on screen uses the surface field. If the trace is coloured,
-  // that quantity takes the main legend so Velocity â†’ Pressure replaces
+  // that quantity takes the main legend so Velocity → Pressure replaces
   // the card instead of stacking a second one.
   if (traceOn) {
     const own = applyPtOwn();
@@ -3805,14 +3805,14 @@ function syncPtAssignList() {
           escapeHtml(f) +
           '" aria-label="Remove ' +
           escapeHtml(f) +
-          '">Ã—</button></li>'
+          '">×</button></li>'
         );
       })
       .join('');
   }
   if (count) count.textContent = String(labels.length);
   const available = ptFaceCatalog.filter((f) => f.available);
-  // Don't overwrite the "Computing streamlinesâ€¦" status while a trace is
+  // Don't overwrite the "Computing streamlines…" status while a trace is
   // being built; the generic hint made a slow trace look like nothing happened.
   if (!ptLoading) {
     setPtFacesHint(
@@ -4893,7 +4893,7 @@ async function loadParticleTrace(overrides) {
   const hint = document.getElementById('pt-faces-hint');
   ptLoading = true;
   const doneLoading = () => { if (token === ptLoadToken) ptLoading = false; };
-  if (hint) hint.textContent = 'Computing streamlines from the volumeâ€¦ (first time on a run can take a minute)';
+  if (hint) hint.textContent = 'Computing streamlines from the volume… (first time on a run can take a minute)';
   const assetUrl = apiParticleTraceUrl();
   let entry = null;
   try {
@@ -4926,8 +4926,8 @@ async function loadParticleTrace(overrides) {
       const n = meta.n_seeds != null ? meta.n_seeds : 0;
       const paths = meta.tube_proof && meta.tube_proof.n_paths != null ? meta.tube_proof.n_paths : n;
       hint.textContent = n
-        ? n + ' seeds Â· ' + paths + ' traces.'
-        : 'Seeds on this runâ€™s inlet and outlet patches.';
+        ? n + ' seeds · ' + paths + ' traces.'
+        : 'Seeds on this run’s inlet and outlet patches.';
     }
   }
   if (!meta || meta.empty) {
@@ -5625,7 +5625,7 @@ async function loadPlotOverPath(overrides) {
   }
   syncPopChromeFromState();
   const n = (popState.points || []).length;
-  // Honest empty: Generate disabled / no series with 0 points â€” do not invent a curve
+  // Honest empty: Generate disabled / no series with 0 points — do not invent a curve
   if (n < 1) {
     clearPopSeries();
     publishW9({ generate_enabled: false });
@@ -6103,10 +6103,10 @@ window.__CFD_W11_APPLY__ = async function applyW11(partial) {
 };
 
 
-/* Field surface loads after a real case attach â€” not on empty / new projects. */
+/* Field surface loads after a real case attach — not on empty / new projects. */
 
 
-/* W24.1b: mode-aware FILTERS (mesh inspect Ã¢â€°Â  Solution Fields post) */
+/* W24.1b: mode-aware FILTERS (mesh inspect â‰  Solution Fields post) */
 window.__CFD_FILTERS_MODE__ = 'post';
 
 function setFiltersToolbarMode(mode) {
@@ -6331,7 +6331,7 @@ function hasPostResults() {
 
 // Capture the camera relative to a bounding box (direction, view-up and
 // distance as a multiple of the box span) so the same view can be re-applied
-// to a box in different units â€” results are drawn in metres, CAD in mm.
+// to a box in different units — results are drawn in metres, CAD in mm.
 function captureRelativeCamera(bounds) {
   const cam = renderer && renderer.getActiveCamera && renderer.getActiveCamera();
   if (!cam || !bounds) return null;
@@ -6458,7 +6458,7 @@ function syncRunResultsPanel(statusText) {
     const last = Number(rec.last_saved_iteration) || 0;
     hint.textContent =
       name +
-      ' is still solving â€” live results: ' +
+      ' is still solving — live results: ' +
       (transient
         ? frames + (frames === 1 ? ' frame' : ' frames') + (last ? ' saved to t = ' + formatSimTime(last) : '')
         : 'saved to iteration ' + last) +
@@ -6472,17 +6472,17 @@ function syncRunResultsPanel(statusText) {
     const iter = st === 'stopped' ? rec.last_saved_iteration || rec.iteration : rec.iteration || rec.endTime;
     const frames = Number(rec.n_saved_times) || 0;
     const when = transient
-      ? (frames ? ' Â· ' + frames + ' frames' : '') +
+      ? (frames ? ' · ' + frames + ' frames' : '') +
         (iter ? ' to t = ' + formatSimTime(st === 'stopped' ? iter : rec.transient && rec.transient.end_time ? rec.transient.end_time : iter) : '')
       : iter
-        ? ' Â· iteration ' + iter
+        ? ' · iteration ' + iter
         : '';
     hint.textContent =
       'Fields from ' +
       name +
       when +
       (st === 'stopped' ? ' (stopped early)' : '') +
-      (transient ? '. Use Filters â†’ Animation â†’ Time Step to play the frames.' : '. Filters and plots stay here until you leave Results.');
+      (transient ? '. Use Filters → Animation → Time Step to play the frames.' : '. Filters and plots stay here until you leave Results.');
     return;
   }
   if (st === 'running') {
@@ -6572,7 +6572,7 @@ async function openRunResults(runId) {
       setFiltersVisible(true);
     } catch (_) {}
     // A filter clicked while the case was still attaching was skipped (no
-    // case yet) â€” run it now that the fields are in.
+    // case yet) — run it now that the fields are in.
     if (ptState.enabled && !ptLinePd) {
       loadParticleTrace().catch((e) => console.error('[CFD] PT after attach', e));
     }
@@ -6599,9 +6599,9 @@ function syncMeshInspectPanel(statusText) {
   if (status) status.textContent = statusText || (isGeneratedMeshReady() ? 'Generated' : 'No mesh');
   if (line) {
     if (cells != null && pts != null) {
-      line.textContent = Number(cells).toLocaleString() + ' cells Â· ' + Number(pts).toLocaleString() + ' nodes';
+      line.textContent = Number(cells).toLocaleString() + ' cells · ' + Number(pts).toLocaleString() + ' nodes';
     } else {
-      line.textContent = statusText || 'â€”';
+      line.textContent = statusText || '—';
     }
   }
   const delForm = document.getElementById('mesh-delete');
@@ -6684,7 +6684,7 @@ function applySceneClippingRange() {
   // Near plane: just in front of the scene when the camera is outside it, a
   // small fraction of the model size when the camera is inside (zoomed into
   // a particle trace or cut). Far plane: just past the scene. Keeping far/near
-  // in the thousands is what keeps the depth buffer usable â€” a ratio in the
+  // in the thousands is what keeps the depth buffer usable — a ratio in the
   // hundreds of thousands makes CAD edges z-fight with the faces and makes
   // far-side edges bleed through the model.
   const near = Math.max(span * 2e-3, (d - R) * 0.9);
@@ -6718,7 +6718,7 @@ function boundsRoughlyEqual(a, b) {
 
 /**
  * Orbit pivot. vtk.js's trackball rotate manipulator turns the camera about
- * the style's centerOfRotation, which defaults to the world origin â€” the CAD
+ * the style's centerOfRotation, which defaults to the world origin — the CAD
  * origin, usually nowhere near the part. We pivot about the geometry's centre
  * of mass instead (volume centroid of the closed CAD shell via the divergence
  * theorem), falling back to the centre of the visible bounds.
@@ -6757,7 +6757,7 @@ function cadCenterOfMass() {
     return null;
   }
   if (!n) return null;
-  // A watertight shell has |V| â‰« 0 relative to its area; otherwise the
+  // A watertight shell has |V| ≫ 0 relative to its area; otherwise the
   // signed volume cancels and the surface centroid is the honest answer.
   if (area > 0 && Math.abs(vol) > 1e-6 * Math.pow(area, 1.5)) {
     return [cv[0] / vol, cv[1] / vol, cv[2] / vol];
@@ -7053,7 +7053,7 @@ function applyMeshClipping() {
     if (!plane.enabled || !plane.vtkPlane) continue;
     const { origin, normal } = meshPlaneOrigin(plane.axis, plane.frac, plane.inverse, plane.com);
     // vtk.js clipping planes are world-space. Mesh polydata is metres; the
-    // actor is scaled to CAD mm â€” without this multiply the plane misses the mesh.
+    // actor is scaled to CAD mm — without this multiply the plane misses the mesh.
     plane.vtkPlane.setOrigin(origin[0] * s, origin[1] * s, origin[2] * s);
     plane.vtkPlane.setNormal(normal[0], normal[1], normal[2]);
     try { meshSurfMapper.addClippingPlane(plane.vtkPlane); } catch (_) {}
@@ -7337,7 +7337,7 @@ async function showMeshInspect(meshId) {
   try { highlightGeomFaces([]); } catch (_) {}
   try { surfaceActor.setVisibility(false); } catch (_) {}
   try { cutActor.setVisibility(false); } catch (_) {}
-  syncMeshInspectPanel('Loading meshâ€¦');
+  syncMeshInspectPanel('Loading mesh…');
   renderMeshPlaneList();
   try {
     if (casePath && String(casePath) !== String(getCaseDir() || '')) {
@@ -7374,7 +7374,6 @@ function compareMeshPool() {
     const st = window.__CFD_W20_STATE__;
     if (st && Array.isArray(st.meshes_all) && st.meshes_all.length) return st.meshes_all;
   } catch (_) {}
-  // Prefer study meshes when catalog empty; safe now that meshListAll does not recurse.
   return meshList();
 }
 
@@ -7731,7 +7730,7 @@ function fillCompareSelects() {
   if (syncWrap) syncWrap.hidden = true; // results-compare only
   const opts = meshes
     .map((m) => {
-      const label = m.geometry_name ? m.geometry_name + ' â€” ' + m.name : m.name;
+      const label = m.geometry_name ? m.geometry_name + ' — ' + m.name : m.name;
       return '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(label) + '</option>';
     })
     .join('');
@@ -8117,14 +8116,14 @@ function resultsCompareOptions() {
   runs.forEach((rec, idx) => {
     const runId = String(rec.id);
     const runName = rec.name || 'Run ' + (idx + 1);
-    out.push({ value: runId + '|', runId, viewId: '', label: runName + ' Â· Current filters', rec, view: null });
+    out.push({ value: runId + '|', runId, viewId: '', label: runName + ' · Current filters', rec, view: null });
     for (const v of Array.isArray(rec.views) ? rec.views : []) {
       if (!v || !v.id) continue;
       out.push({
         value: runId + '|' + String(v.id),
         runId,
         viewId: String(v.id),
-        label: runName + ' Â· ' + (v.name || 'View'),
+        label: runName + ' · ' + (v.name || 'View'),
         rec,
         view: v,
       });
@@ -8187,7 +8186,7 @@ function fillResultsCompareSelects() {
   if (la) la.textContent = oa ? oa.label : '';
   if (lb) {
     lb.textContent = ob
-      ? (sync ? ((ob.rec && ob.rec.name) || ob.label) + ' Â· same filters as A' : ob.label)
+      ? (sync ? ((ob.rec && ob.rec.name) || ob.label) + ' · same filters as A' : ob.label)
       : '';
   }
 }
@@ -8646,7 +8645,7 @@ function syncCompareResultsLegend() {
       paintLegendTrackTicks(legendB, rb[0], rb[1]);
     }
   }
-  // Pane B trace: same rule as the main viewer â€” shares the surface scale
+  // Pane B trace: same rule as the main viewer — shares the surface scale
   // when coloured by the surface field, otherwise its own range. A user-set
   // scale is never widened by the trace.
   const P = R.pt;
@@ -8888,7 +8887,7 @@ async function loadMeshSectionForInspect(opts) {
     renderer.setBackground(1, 1, 1);
   } catch (_) {}
   await reader.setUrl(vtpUrl);
-  // vtk.js setUrl is async in some builds â€” poll until points exist
+  // vtk.js setUrl is async in some builds — poll until points exist
   let pd = null;
   for (let i = 0; i < 120; i++) {
     pd = reader.getOutputData ? reader.getOutputData() : null;
@@ -9216,7 +9215,7 @@ function filterSetSummary(set) {
   if (nPlanes) bits.push(nPlanes + (nPlanes === 1 ? ' plane' : ' planes'));
   if (set.pt && set.pt.open && set.pt.enabled) bits.push('trace');
   if (set.anim && set.anim.open) bits.push('animation');
-  return bits.join(' Â· ');
+  return bits.join(' · ');
 }
 
 // Rebuild the live filters from a saved set. `opts.camera === false` keeps
@@ -9410,7 +9409,7 @@ function renderViewsBlock() {
     views
       .map((v) =>
         '<option value="' + escapeHtml(String(v.id)) + '">' + escapeHtml(String(v.name || 'View')) +
-        (v.set ? ' â€” ' + escapeHtml(filterSetSummary(v.set)) : '') + '</option>'
+        (v.set ? ' — ' + escapeHtml(filterSetSummary(v.set)) : '') + '</option>'
       )
       .join('');
   sel.value = activeViewId || '';
@@ -9464,7 +9463,7 @@ async function deleteActiveView() {
   if (!resultsRunId || !activeViewId) return;
   const cur = runViews(resultsRunId).find((v) => String(v.id) === String(activeViewId));
   const ok = await confirmAction({
-    title: 'Delete view â€œ' + (cur ? cur.name : 'View') + 'â€?',
+    title: 'Delete view “' + (cur ? cur.name : 'View') + '”?',
     copy: 'Only the saved view is removed. The filters currently shown stay as they are.',
   });
   if (!ok) return;
@@ -9634,7 +9633,7 @@ document.getElementById('btn-add-result-plane')?.addEventListener('click', () =>
       const plane = resultPlanes.find((p) => p.id === id);
       confirmAction({
         title: 'Delete ' + (plane ? plane.name : 'cutting plane') + '?',
-        copy: 'The plane and its position are removed from this runâ€™s filters.',
+        copy: 'The plane and its position are removed from this run’s filters.',
       }).then((ok) => { if (ok) removeResultPlane(id); });
       return;
     }
@@ -9722,7 +9721,7 @@ btnParticleTrace?.addEventListener('click', () => {
 document.getElementById('pt-delete')?.addEventListener('click', () => {
   confirmAction({
     title: 'Delete Particle Trace 1?',
-    copy: 'The traces and their seed settings are removed from this runâ€™s filters.',
+    copy: 'The traces and their seed settings are removed from this run’s filters.',
   }).then((ok) => { if (ok) { dismissParticleTrace(); scheduleFilterAutosave(); } });
 });
 
@@ -9958,7 +9957,7 @@ btnPlotOverPath?.addEventListener('click', () => {
   });
   sub?.addEventListener('change', () => {
     popState.subdivisions = Math.max(0, Math.floor(Number(sub.value) || 0));
-    // do not auto-generate; wait for Generate (banked UX) â€” but prove may call apply
+    // do not auto-generate; wait for Generate (banked UX) — but prove may call apply
     publishW9();
   });
   fv?.addEventListener('change', () => {
@@ -10402,7 +10401,7 @@ document.getElementById('anim-delete')?.addEventListener('click', () => {
 })();
 
 
-console.info('[CFD W11] slim chrome + live iso-volume (threshold) + Iso Surface + Plot + PT + CP â€” no boot fetch');
+console.info('[CFD W11] slim chrome + live iso-volume (threshold) + Iso Surface + Plot + PT + CP — no boot fetch');
 publishW9({ ready: false });
 publishW8({ ready: false });
 
@@ -10435,7 +10434,7 @@ function clampAnimSpeed(v) {
 function formatAnimSpeed(v) {
   const n = clampAnimSpeed(v);
   const t = Math.round(n * 10) / 10;
-  return (Math.abs(t - Math.round(t)) < 1e-6 ? String(Math.round(t)) : t.toFixed(1)) + 'Ã—';
+  return (Math.abs(t - Math.round(t)) < 1e-6 ? String(Math.round(t)) : t.toFixed(1)) + '×';
 }
 
 function nearestTimeIndex(times, value) {
@@ -10483,7 +10482,7 @@ function animTimesAreSeconds() {
 }
 
 function formatAnimTimeNumber(t) {
-  if (t == null || t === '') return 'â€”';
+  if (t == null || t === '') return '—';
   const n = Number(t);
   if (!Number.isFinite(n)) return String(t);
   if (Math.abs(n - Math.round(n)) < 5e-5) return String(Math.round(n));
@@ -10492,7 +10491,7 @@ function formatAnimTimeNumber(t) {
 
 function formatAnimTimeLabel(t, seconds) {
   const s = formatAnimTimeNumber(t);
-  if (s === 'â€”') return s;
+  if (s === '—') return s;
   return seconds ? s + ' s' : s;
 }
 
@@ -10706,14 +10705,14 @@ function syncAnimChromeFromState() {
     if (ptMode) {
       const rep = String(ptState.representation || 'Cylinders');
       note.textContent = !ptLinePd || !ptState.enabled
-        ? 'Add a Particle Trace first â€” the animation moves its Spheres or Comets along the flow.'
+        ? 'Add a Particle Trace first — the animation moves its Spheres or Comets along the flow.'
         : rep === 'Cylinders'
           ? 'Cylinders show the whole path. Play switches the trace to Comets so the motion is visible.'
           : 'Particles travel at the local flow speed; Pulses and Relative comet length are set on the Particle Trace.';
     } else {
       const win = animWindowRange();
       const span = times.length
-        ? formatAnimTimeNumber(times[win.startIdx]) + ' â†’ ' + formatAnimTimeNumber(times[win.endIdx])
+        ? formatAnimTimeNumber(times[win.startIdx]) + ' → ' + formatAnimTimeNumber(times[win.endIdx])
         : '';
       note.textContent = times.length
         ? 'Play loops ' + span + ' (' + (win.endIdx - win.startIdx + 1) + ' of ' + times.length + ' frames). Step or drag either end to skip initialization.'
@@ -10923,14 +10922,14 @@ function setAnimFrameHint(done, total) {
       done +
       ' / ' +
       total +
-      (ptState.enabled ? ' (field + traces)â€¦' : 'â€¦');
+      (ptState.enabled ? ' (field + traces)…' : '…');
     return;
   }
   if (total && done >= total) {
     const times = animState.times || [];
     const win = animWindowRange();
     const span = times.length
-      ? formatAnimTimeNumber(times[win.startIdx]) + ' â†’ ' + formatAnimTimeNumber(times[win.endIdx])
+      ? formatAnimTimeNumber(times[win.startIdx]) + ' → ' + formatAnimTimeNumber(times[win.endIdx])
       : '';
     const loop = span ? 'Play loops ' + span + '. ' : '';
     note.textContent = loop + (ptState.enabled
@@ -10946,7 +10945,7 @@ async function preloadAnimFrames(times, field, onProgress) {
   const wantPt = !!ptState.enabled;
   if (wantPt) ensurePtCacheSettings();
   // Count simulation times, not cache entries. With traces on, each time
-  // still needs a field frame and a PT frame â€” that used to report 122
+  // still needs a field frame and a PT frame — that used to report 122
   // for a 61-time run (t = 0 plus 60 writes).
   const missing = list.filter((t) => !animTimeIsCached(field, t, wantPt));
   const total = list.length;
@@ -11060,7 +11059,7 @@ function startPtAnimationPlay() {
   stopAnimationPlay();
   const hint = document.getElementById('anim-map-note');
   if (!ptLinePd || !ptState.enabled) {
-    if (hint) hint.textContent = 'Add a Particle Trace first â€” the animation moves its Spheres or Comets along the flow.';
+    if (hint) hint.textContent = 'Add a Particle Trace first — the animation moves its Spheres or Comets along the flow.';
     publishW12({ note: 'no particle trace to animate' });
     return;
   }
@@ -11130,7 +11129,7 @@ function startAnimationPlay() {
     runLoop();
     return;
   }
-  if (playBtn) playBtn.textContent = 'Loadingâ€¦';
+  if (playBtn) playBtn.textContent = 'Loading…';
   setAnimFrameHint(ready, windowTimes.length);
   preloadAnimFrames(windowTimes, field, setAnimFrameHint)
     .then(() => {
@@ -11339,7 +11338,7 @@ function syncInspectReadout() {
     return;
   }
   const [x, y, z] = inspectState.position;
-  const fmtM = (v) => (Number.isFinite(v) ? Number(v).toFixed(3) : 'â€”');
+  const fmtM = (v) => (Number.isFinite(v) ? Number(v).toFixed(3) : '—');
   const at = `(${fmtM(x)}, ${fmtM(y)}, ${fmtM(z)}) m`;
   // Values only when the sample point is inside the mesh; a miss never shows a number.
   if (inspectState.hit && !inspectState.empty) {
@@ -11347,10 +11346,10 @@ function syncInspectReadout() {
     const pv = inspectState.p;
     const muS =
       mu == null || !Number.isFinite(mu)
-        ? 'â€”'
+        ? '—'
         : (Math.abs(mu) < 1e-6 ? '0.00' : Number(mu).toPrecision(4)) + ' m/s';
-    const pS = pv == null || !Number.isFinite(pv) ? 'â€”' : Math.round(Number(pv)).toLocaleString('en-US') + ' Pa';
-    el.textContent = `Velocity ${muS}  Â·  Pressure ${pS}  Â·  ${at}`;
+    const pS = pv == null || !Number.isFinite(pv) ? '—' : Math.round(Number(pv)).toLocaleString('en-US') + ' Pa';
+    el.textContent = `Velocity ${muS}  ·  Pressure ${pS}  ·  ${at}`;
     el.dataset.hit = '1';
     el.dataset.magu = String(mu);
     el.dataset.p = String(pv);
@@ -11796,7 +11795,7 @@ function formatMetres(m) {
   if (!Number.isFinite(v) || v <= 0) return null;
   if (v >= 1) return v.toFixed(3).replace(/\.?0+$/, '') + ' m';
   if (v >= 1e-3) return (v * 1e3).toFixed(v * 1e3 >= 10 ? 1 : 2).replace(/\.?0+$/, '') + ' mm';
-  return (v * 1e6).toFixed(0) + ' Âµm';
+  return (v * 1e6).toFixed(0) + ' µm';
 }
 
 function syncMeshFinishedChrome() {
@@ -11855,7 +11854,7 @@ function syncMeshFinishedChrome() {
       if (h) bits.push('surface size ' + h);
     }
     if (elapsedTxt && (ready || failed)) bits.push(elapsedTxt);
-    meta.textContent = bits.join(' Â· ');
+    meta.textContent = bits.join(' · ');
   }
   if (elapsedEl) {
     const showClock = !!(running || finishing) && elapsedTxt;
@@ -12220,7 +12219,7 @@ window.__CFD_W15_1_APPLY__ = async function applyW151(partial) {
     if (!path) return;
     attachCaseDirClient(path).catch((e) => console.error('[CFD W15.1] attach', e));
   });
-  // Resume from server-side mesh.json / live PID â€” not from this tab's memory.
+  // Resume from server-side mesh.json / live PID — not from this tab's memory.
   (async () => {
     try {
       let hashId = null;
@@ -12303,7 +12302,7 @@ window.__CFD_W15_1_APPLY__ = async function applyW151(partial) {
         jobState.case_dir = null;
         jobState.times = [];
         jobState.n_times = 0;
-        jobState.note = 'idle â€” add geometry';
+        jobState.note = 'idle — add geometry';
         syncJobStatusChrome();
         if (typeof applyWorkbenchStage === 'function') applyWorkbenchStage();
         else if (window.__CFD_APPLY_WB_STAGE__) window.__CFD_APPLY_WB_STAGE__();
@@ -12322,7 +12321,7 @@ window.__CFD_W15_1_APPLY__ = async function applyW151(partial) {
 })();
 
 /* ========================================================================
- * W16 â€” project create + STEP CAD (B-rep preview, not auto-tessellated STL)
+ * W16 — project create + STEP CAD (B-rep preview, not auto-tessellated STL)
  * ======================================================================== */
 const geomStlReader = vtkSTLReader.newInstance();
 const geomCadFaceReader = vtkXMLPolyDataReader.newInstance();
@@ -13091,7 +13090,7 @@ function detachResultsCase() {
   jobState.times = [];
   jobState.n_times = 0;
   jobState.attached_at = null;
-  jobState.note = 'idle â€” add geometry';
+  jobState.note = 'idle — add geometry';
   jobState.path_kind = null;
   stopJobPoll();
   clearResultActors();
@@ -13297,8 +13296,8 @@ function fillGeometryDetail() {
   const bodies = (part && (part.assembly_bodies || part.bodies)) || ((assembly && assembly.bodies) || []);
   const selected = (w16State.selectedBodies && w16State.selectedBodies.length)
     ? w16State.selectedBodies.map((n) => 'Body' + n).join(', ')
-    : (bodies.join(', ') || 'â€”');
-  const name = (g && g.name) || 'â€”';
+    : (bodies.join(', ') || '—');
+  const name = (g && g.name) || '—';
   const title = document.getElementById('geo-detail-title');
   const nameEl = document.getElementById('geo-detail-name');
   const repr = document.getElementById('geo-detail-repr');
@@ -13402,7 +13401,7 @@ async function loadGeometryStl(url) {
 }
 
 function geometryReprLabel(g) {
-  if (!g) return 'â€”';
+  if (!g) return '—';
   const kind = g.source_kind || g.representation || 'step';
   const unit = String(g.length_unit || '').toUpperCase();
   const unitLabel = { MM: 'mm', CM: 'cm', M: 'm', INCH: 'in' }[unit];
@@ -13899,7 +13898,7 @@ window.__CFD_W16_APPLY__ = async function applyW16(partial) {
 
 
 /* ========================================================================
- * W17 â€” Create Simulation â†’ Incompressible (persist simulation.json)
+ * W17 — Create Simulation → Incompressible (persist simulation.json)
  * Defaults: k-omega SST / Steady-state / SIMPLE. No mesh/Air/BCs/solves.
  * ======================================================================== */
 const W17_DEFAULTS = {
@@ -13917,7 +13916,7 @@ const w17State = {
   activeId: null,
   defaults: null,
   project_id: null,
-  note: 'W17: Create Simulation â†’ Incompressible with bank defaults',
+  note: 'W17: Create Simulation → Incompressible with bank defaults',
   soft_pass_avoided: true,
 };
 
@@ -13941,7 +13940,7 @@ function publishW17(extra) {
 
 
 function treeMark(ok) {
-  return ok ? '<span class="tree-check" aria-hidden="true">âœ“</span>' : '';
+  return ok ? '<span class="tree-check" aria-hidden="true">✓</span>' : '';
 }
 
 let heldTreeScroll = null;
@@ -14889,7 +14888,7 @@ function fillCreateSimulationExtras() {
   if (copyWrap && copySel) {
     copyWrap.hidden = studies.length < 1;
     copySel.innerHTML =
-      '<option value="">None â€” empty study</option>' +
+      '<option value="">None — empty study</option>' +
       studies
         .map((s) => {
           return (
@@ -15006,8 +15005,8 @@ window.__CFD_W17_APPLY__ = async function applyW17(partial) {
     });
 })();
 /* ========================================================================
- * W18 â€” Materials â†’ Air + Body1 assign (persist materials.json)
- * Bank: Materials + â†’ Air (Newtonian) â†’ assign Body1 â†’ âœ“ save.
+ * W18 — Materials → Air + Body1 assign (persist materials.json)
+ * Bank: Materials + → Air (Newtonian) → assign Body1 → ✓ save.
  * No BCs / mesh form / solves in this slice.
  * ======================================================================== */
 const W18_AIR_DEFAULTS = {
@@ -15028,7 +15027,7 @@ const w18State = {
   material: null,
   draft_volumes: [],
   materials_json: null,
-  note: 'W18: Materials â†’ Air + Body1 assign (checkmark save)',
+  note: 'W18: Materials → Air + Body1 assign (checkmark save)',
 };
 window.__CFD_W18_STATE__ = w18State;
 
@@ -15168,7 +15167,7 @@ function syncBcsHub() {
           const faces = (bc.faces || []).join(', ') || 'no faces';
           const typeLabel =
             bc.bc_type === 'Wall'
-              ? 'Wall Â· ' + (String(bc.wall_type || '').toLowerCase() === 'slip' ? 'Slip' : 'No-slip')
+              ? 'Wall · ' + (String(bc.wall_type || '').toLowerCase() === 'slip' ? 'Slip' : 'No-slip')
               : bc.bc_type;
           return (
             '<li>' +
@@ -15180,7 +15179,7 @@ function syncBcsHub() {
             '"></span><span class="hub-item-name">' +
             escapeHtml(bc.name) +
             '</span><span class="hub-item-sub">' +
-            escapeHtml(typeLabel + ' Â· ' + faces) +
+            escapeHtml(typeLabel + ' · ' + faces) +
             '</span></span></button>' +
             '<button type="button" class="hub-item-del" data-del-bc="' +
             escapeHtml(bc.id) +
@@ -15225,7 +15224,7 @@ function applyMaterialRecord(mat, projectId, opts) {
   w18State.ready = true;
   w18State.created = true;
   w18State.libraryApplied = true;
-  w18State.note = 'Air assigned to ' + (w18State.material.assigned_volumes.join(', ') || 'â€”');
+  w18State.note = 'Air assigned to ' + (w18State.material.assigned_volumes.join(', ') || '—');
   treeUi.expanded.Materials = true;
   treeUi.expanded.Air = true;
   syncSimulationTree();
@@ -15632,8 +15631,8 @@ function walkPolyLines(pd, fn) {
     const off = offsets.getData ? offsets.getData() : offsets;
     const ids = conn.getData ? conn.getData() : conn;
     if (off && off.length && ids) {
-      // VTK 9 / vtk.js: [0, n0, n0+n1, â€¦]. ASCII VTP often stores only the
-      // running totals [n0, n0+n1, â€¦] with no leading 0.
+      // VTK 9 / vtk.js: [0, n0, n0+n1, …]. ASCII VTP often stores only the
+      // running totals [n0, n0+n1, …] with no leading 0.
       const startsAtZero = Number(off[0]) === 0;
       const nCells = startsAtZero ? off.length - 1 : off.length;
       for (let i = 0; i < nCells; i++) {
@@ -15841,20 +15840,20 @@ function cadEdgeHiddenByFaces(edge, hideIds) {
 
 function formatCadLength(mm) {
   const v = Number(mm);
-  if (!Number.isFinite(v)) return 'â€”';
+  if (!Number.isFinite(v)) return '—';
   const a = Math.abs(v);
   if (a >= 1000) return (v / 1000).toFixed(a >= 10000 ? 2 : 3).replace(/\.?0+$/, '') + ' m';
   if (a >= 0.05) return v.toFixed(a >= 10 ? 2 : 3).replace(/\.?0+$/, '') + ' mm';
-  return (v * 1000).toFixed(1).replace(/\.?0+$/, '') + ' Âµm';
+  return (v * 1000).toFixed(1).replace(/\.?0+$/, '') + ' µm';
 }
 
 function formatCadArea(mm2) {
   const v = Number(mm2);
-  if (!Number.isFinite(v)) return 'â€”';
+  if (!Number.isFinite(v)) return '—';
   const a = Math.abs(v);
-  if (a >= 1e6) return (v / 1e6).toFixed(3).replace(/\.?0+$/, '') + ' mÂ²';
-  if (a >= 100) return (v / 100).toFixed(2).replace(/\.?0+$/, '') + ' cmÂ²';
-  return v.toFixed(a >= 10 ? 1 : 2).replace(/\.?0+$/, '') + ' mmÂ²';
+  if (a >= 1e6) return (v / 1e6).toFixed(3).replace(/\.?0+$/, '') + ' m²';
+  if (a >= 100) return (v / 100).toFixed(2).replace(/\.?0+$/, '') + ' cm²';
+  return v.toFixed(a >= 10 ? 1 : 2).replace(/\.?0+$/, '') + ' mm²';
 }
 
 function selectedFaceIds() {
@@ -16331,10 +16330,10 @@ function applyEdgeSelectionDisplay() {
 }
 
 function formatCadXYZ(p) {
-  if (!p) return 'â€”';
+  if (!p) return '—';
   const f = (v) => {
     const n = Number(v);
-    if (!Number.isFinite(n)) return 'â€”';
+    if (!Number.isFinite(n)) return '—';
     return n.toFixed(Math.abs(n) >= 10 ? 2 : 3).replace(/\.?0+$/, '');
   };
   return f(p[0]) + ', ' + f(p[1]) + ', ' + f(p[2]) + ' mm';
@@ -16454,11 +16453,11 @@ function syncMeasureChip() {
     rows.push('<span class="measure-chip-k">Face ' + faceIds[0] + '</span>');
     rows.push('<span class="measure-chip-v">Area ' + formatCadArea(faceAreaOf(faceIds[0])) + '</span>');
     if (shape && shape.kind === 'cylinder') {
-      rows.push('<span class="measure-chip-hint">Cylindrical Â· Ã˜ ' + formatCadLength(shape.cyl.diameter) + '</span>');
+      rows.push('<span class="measure-chip-hint">Cylindrical · Ø ' + formatCadLength(shape.cyl.diameter) + '</span>');
     } else if (shape && shape.kind === 'sphere') {
-      rows.push('<span class="measure-chip-hint">Spherical Â· Ã˜ ' + formatCadLength(shape.sph.diameter) + '</span>');
+      rows.push('<span class="measure-chip-hint">Spherical · Ø ' + formatCadLength(shape.sph.diameter) + '</span>');
     } else if (shape && shape.kind === 'disk') {
-      rows.push('<span class="measure-chip-hint">Circular Â· Ã˜ ' + formatCadLength(shape.circ.diameter) + '</span>');
+      rows.push('<span class="measure-chip-hint">Circular · Ø ' + formatCadLength(shape.circ.diameter) + '</span>');
     } else if (info && info.flat) {
       rows.push('<span class="measure-chip-hint">Planar</span>');
     } else if (shape && shape.kind === 'curved') {
@@ -16479,7 +16478,7 @@ function syncMeasureChip() {
       if (extra.shortest != null && extra.shortest > 1e-4) {
         rows.push('<span class="measure-chip-v">Shortest ' + formatCadLength(extra.shortest) + '</span>');
       } else {
-        rows.push('<span class="measure-chip-hint">Adjacent â€” they share an edge</span>');
+        rows.push('<span class="measure-chip-hint">Adjacent — they share an edge</span>');
       }
       if (extra.farthest != null && extra.farthest > 1e-4 &&
         (extra.shortest == null || Math.abs(extra.farthest - extra.shortest) > 1e-3)) {
@@ -16497,7 +16496,7 @@ function syncMeasureChip() {
       } else if (minDist != null && minDist > 1e-4) {
         rows.push('<span class="measure-chip-v">Distance ' + formatCadLength(minDist) + '</span>');
       } else {
-        rows.push('<span class="measure-chip-hint">Adjacent â€” they share an edge</span>');
+        rows.push('<span class="measure-chip-hint">Adjacent — they share an edge</span>');
       }
     }
   } else if (faceIds.length > 2) {
@@ -17192,7 +17191,7 @@ function faceOrientationInfo(faceId) {
 }
 
 /**
- * CAD triangle cache â†’ world. The CAD actor is drawn at native units in the
+ * CAD triangle cache → world. The CAD actor is drawn at native units in the
  * geometry / mesh views but scaled down to the solver's metres in Results, so
  * anything computed from cadTriCache (face centres, centroids) must follow the
  * actor's current scale before it is handed to the camera.
@@ -18504,7 +18503,7 @@ window.__CFD_W18_ASSIGN__ = function assignW18(vol) {
       w18State.materials_json = null;
       w18State.project_id = (out && out.project && out.project.id) || null;
       closeAirPanel();
-      publishW18({ ready: false, note: 'W18: waiting for Materials â†’ Air' });
+      publishW18({ ready: false, note: 'W18: waiting for Materials → Air' });
       return out;
     };
   }
@@ -18518,7 +18517,7 @@ window.__CFD_W18_ASSIGN__ = function assignW18(vol) {
       w18State.ready = false;
       w18State.libraryApplied = false;
       syncSimulationTree();
-      publishW18({ ready: false, note: 'W18: Materials + â†’ Air available' });
+      publishW18({ ready: false, note: 'W18: Materials + → Air available' });
       return out;
     };
   }
@@ -18663,7 +18662,7 @@ function publishW19(extra) {
 
 function unitsForVelocity(vt, fr) {
   if (vt === 'Flow rate' && fr === 'Mass flow') return ['kg/s', 'lb/s'];
-  if (vt === 'Flow rate') return ['mÂ³/s', 'ftÂ³/min'];
+  if (vt === 'Flow rate') return ['m³/s', 'ft³/min'];
   return ['m/s', 'ft/s'];
 }
 
@@ -18705,7 +18704,7 @@ function syncBcAssignList() {
           escapeHtml(f) +
           '" aria-label="Remove ' +
           escapeHtml(f) +
-          '">Ã—</button>' +
+          '">×</button>' +
           '</li>'
         );
       })
@@ -18805,7 +18804,7 @@ function updateBcPerFaceHint() {
     n > 1 && val !== ''
       ? 'Each face gets this value on its own. ' +
         n +
-        ' faces Ã— ' +
+        ' faces × ' +
         val +
         ' ' +
         unit +
@@ -18840,7 +18839,7 @@ function readBcEditorDraft() {
     const n = Number(document.getElementById('bc-value') && document.getElementById('bc-value').value);
     out.value = Number.isFinite(n) ? n : out.velocity_type === 'Fixed' ? 5 : 0.01;
     const unitEl = document.getElementById('bc-unit');
-    out.unit = (unitEl && unitEl.value) || (out.velocity_type === 'Fixed' ? 'm/s' : 'mÂ³/s');
+    out.unit = (unitEl && unitEl.value) || (out.velocity_type === 'Fixed' ? 'm/s' : 'm³/s');
     out.direction = document.getElementById('bc-direction')
       ? document.getElementById('bc-direction').value
       : 'Normal to face';
@@ -19095,7 +19094,7 @@ async function createBcClient(bcType) {
     body.vector = [0, 0, 1];
   } else if (isWallBcType(bcType)) {
     // A face-by-face Wall BC exists to differ from the default, so start it
-    // on the opposite treatment (default no-slip â†’ new wall slip).
+    // on the opposite treatment (default no-slip → new wall slip).
     body.wall_type = bcDefaults().wall_type === 'Slip' ? 'No-slip' : 'Slip';
   } else {
     body.pressure_type = 'Fixed value';
@@ -19332,7 +19331,7 @@ window.__CFD_W19_APPLY__ = async function applyW19(partial) {
     });
 })();
 
-/* ---- W20 â€” Mesh form settings only (persist mesh.json) ---- */
+/* ---- W20 — Mesh form settings only (persist mesh.json) ---- */
 const W20_DEFAULTS = {
   name: 'Mesh 1',
   algorithm: 'Standard',
@@ -19764,14 +19763,14 @@ function meshCopyOptionLabel(m, destId) {
   const otherGeom = !!(geom && m.geometry_id && destGeom && String(m.geometry_id) !== String(destGeom));
   const bits = otherGeom ? [geom, name] : [name];
   if (m.generated || (m.live_mesh_result && m.live_mesh_result.status === 'done')) bits.push('generated');
-  return bits.join(' Â· ');
+  return bits.join(' · ');
 }
 
 function fillMeshCopySelect(sel, destId) {
   if (!sel || document.activeElement === sel) return;
   const others = destId ? otherMeshesForCopy(destId) : [];
   sel.innerHTML =
-    '<option value="">Select a meshâ€¦</option>' +
+    '<option value="">Select a mesh…</option>' +
     others
       .slice()
       .reverse()
@@ -20371,7 +20370,7 @@ function syncRefsHub() {
             '"></span><span class="hub-item-name">' +
             escapeHtml(ref.name) +
             '</span><span class="hub-item-sub">' +
-            escapeHtml(ref.type + ' Â· ' + faces) +
+            escapeHtml(ref.type + ' · ' + faces) +
             '</span></span></button>' +
             '<button type="button" class="hub-item-del" data-del-ref="' +
             escapeHtml(ref.id) +
@@ -20456,7 +20455,7 @@ function syncRefAssignList() {
           escapeHtml(f) +
           '" aria-label="Remove ' +
           escapeHtml(f) +
-          '">Ã—</button>' +
+          '">×</button>' +
           '</li>'
         );
       })
@@ -20813,7 +20812,7 @@ window.__CFD_W26_APPLY__ = applyRefRecords;
     });
 })();
 
-/* ---- W23 â€” Mesh Generate on W16 STEP/Body1 (snappyHexMesh + eMesh; no W15.1 stamp) ---- */
+/* ---- W23 — Mesh Generate on W16 STEP/Body1 (snappyHexMesh + eMesh; no W15.1 stamp) ---- */
 async function generateMeshClient() {
   jobState.status = 'running';
   jobState.mode = 'mesh';
@@ -20949,10 +20948,10 @@ window.__CFD_W21_OPEN__ = function openW21() {
 })();
 
 /**
- * W22 â€” Area average setup (Result control â†’ Surface data â†’ Area average 1)
- * Bank: Write control Time step; assign BOTH face 57@Body1 + face 71@Body1 â†’ âœ“
+ * W22 — Area average setup (Result control → Surface data → Area average 1)
+ * Bank: Write control Time step; assign BOTH face 57@Body1 + face 71@Body1 → ✓
  * Persists projects/<id>/result_controls.json (+ area_average.json) via POST/GET /api/result-controls.
- * SETUP ONLY â€” no solves; no fake chart values (honest empty until run).
+ * SETUP ONLY — no solves; no fake chart values (honest empty until run).
  */
 const W22_AA = {
   name: 'Area average 1',
@@ -21055,7 +21054,7 @@ function syncAaAssignList() {
           escapeHtml(f) +
           '" aria-label="Remove ' +
           escapeHtml(f) +
-          '">Ã—</button>' +
+          '">×</button>' +
           '</li>'
         );
       })
@@ -21133,7 +21132,7 @@ function syncResultsHub() {
         escapeHtml(String(rc.id || rc.name)) +
         '">' +
         escapeHtml(rc.name || rc.kind || 'Result') +
-        (n ? ' Â· ' + n + (n === 1 ? ' face' : ' faces') : '') +
+        (n ? ' · ' + n + (n === 1 ? ' face' : ' faces') : '') +
         '</button></li>'
       );
     })
@@ -21465,7 +21464,7 @@ const w27State = {
   start_error: null,
   starting: false,
   // W30 transient: the form model for the selected draft, the server's
-  // resolved numbers for it (auto Î”t, frame interval, step estimate), and the
+  // resolved numbers for it (auto Δt, frame interval, step estimate), and the
   // preview request bookkeeping.
   transient: null,
   transient_preview: null,
@@ -21510,10 +21509,10 @@ function transientSettingsFor(rec) {
   return base;
 }
 
-/** Seconds â†’ short label (5 s, 0.1 s, 2.5e-4 s). */
+/** Seconds → short label (5 s, 0.1 s, 2.5e-4 s). */
 function formatSimTime(v, opts) {
   const n = Number(v);
-  if (!Number.isFinite(n)) return 'â€”';
+  if (!Number.isFinite(n)) return '—';
   const unit = opts && opts.noUnit ? '' : ' s';
   if (n === 0) return '0' + unit;
   const a = Math.abs(n);
@@ -21627,12 +21626,12 @@ function fillTransientForm(t, locked) {
   const dtLabel = document.getElementById('sim-tr-delta-t-label');
   if (coRow) coRow.hidden = fixed;
   if (maxDtRow) maxDtRow.hidden = fixed;
-  if (dtLabel) dtLabel.textContent = fixed ? 'Time step Î”t' : 'Initial Î”t';
+  if (dtLabel) dtLabel.textContent = fixed ? 'Time step Δt' : 'Initial Δt';
   const reset = document.getElementById('sim-tr-reset');
   if (reset) reset.hidden = !!locked;
 }
 
-/** Hint under the transient inputs: frame interval, auto Î”t, steps, flow-through. */
+/** Hint under the transient inputs: frame interval, auto Δt, steps, flow-through. */
 function renderTransientHint() {
   const hint = document.getElementById('sim-tr-hint');
   if (!hint) return;
@@ -21644,33 +21643,33 @@ function renderTransientHint() {
   const bits = [];
   bits.push('A result frame every ' + formatSimTime(interval) + ' (' + frames + ' frames)');
   if ((t.time_step_mode || 'adjustable') !== 'fixed') {
-    bits.push('max Î”t limited to that interval so every frame is written');
+    bits.push('max Δt limited to that interval so every frame is written');
   }
   if (ctrl) {
     const dtAuto = ctrl.source && ctrl.source.delta_t === 'auto';
     if (ctrl.adjust_time_step) {
       bits.push(
-        (dtAuto ? 'starting Î”t â‰ˆ ' : 'starting Î”t ') +
+        (dtAuto ? 'starting Δt ≈ ' : 'starting Δt ') +
           formatSimTime(ctrl.delta_t) +
           (dtAuto ? ' (auto)' : '') +
-          ', adjusted to keep Co â‰¤ ' +
+          ', adjusted to keep Co ≤ ' +
           String(Number(ctrl.max_co))
       );
     } else {
-      bits.push('fixed Î”t ' + formatSimTime(ctrl.delta_t) + (dtAuto ? ' (auto)' : ''));
+      bits.push('fixed Δt ' + formatSimTime(ctrl.delta_t) + (dtAuto ? ' (auto)' : ''));
     }
     const est = ctrl.estimate || {};
     if (Number.isFinite(est.steps) && est.steps > 0) {
       bits.push('roughly ' + Number(est.steps).toLocaleString() + ' time steps');
     }
     if (Number.isFinite(est.flow_through_s) && est.flow_through_s > 0) {
-      bits.push('one flow-through of the domain â‰ˆ ' + formatSimTime(est.flow_through_s));
+      bits.push('one flow-through of the domain ≈ ' + formatSimTime(est.flow_through_s));
     }
   }
-  let html = escapeHtml(bits.join(' Â· ') + '.');
+  let html = escapeHtml(bits.join(' · ') + '.');
   if (ctrl && ctrl.estimate && Number.isFinite(ctrl.estimate.steps) && ctrl.estimate.steps > 200000) {
     html +=
-      ' <span class="sim-tr-warn">That is a long run â€” a shorter simulation time, a coarser mesh or a higher Courant number (Advanced) will finish sooner.</span>';
+      ' <span class="sim-tr-warn">That is a long run — a shorter simulation time, a coarser mesh or a higher Courant number (Advanced) will finish sooner.</span>';
   } else if (pv && pv.partial) {
     html += ' <span>Assign a mesh and boundary conditions to see the calculated time step.</span>';
   }
@@ -21726,14 +21725,14 @@ async function persistTransientSettings() {
   }
 }
 
-/** Live transient progress from the run doc: physical time, Î”t, Co. */
+/** Live transient progress from the run doc: physical time, Δt, Co. */
 function transientProgressText(run, endTime) {
   const t = Number(run && run.sim_time != null ? run.sim_time : run && run.iteration) || 0;
   const end = Number(endTime) || 0;
   let s = 't = ' + formatSimTime(t) + (end > 0 ? ' / ' + formatSimTime(end) : '');
   if (end > 0 && t > 0) s += ' (' + Math.min(100, Math.floor((t / end) * 100)) + '%)';
   const extra = [];
-  if (run && Number.isFinite(Number(run.delta_t)) && Number(run.delta_t) > 0) extra.push('Î”t ' + formatSimTime(run.delta_t));
+  if (run && Number.isFinite(Number(run.delta_t)) && Number(run.delta_t) > 0) extra.push('Δt ' + formatSimTime(run.delta_t));
   if (run && Number.isFinite(Number(run.co_mean))) {
     extra.push(
       'Co ' +
@@ -21743,7 +21742,7 @@ function transientProgressText(run, endTime) {
   } else if (run && Number.isFinite(Number(run.co_max))) {
     extra.push('Co max ' + Number(run.co_max).toPrecision(2));
   }
-  if (extra.length) s += ' Â· ' + extra.join(' Â· ');
+  if (extra.length) s += ' · ' + extra.join(' · ');
   return s;
 }
 
@@ -21850,7 +21849,7 @@ function syncRunMeshSelect() {
   for (const m of meshes) {
     if (!m.id) continue;
     seen.add(String(m.id));
-    const cells = m.n_cells != null ? ' Â· ' + Number(m.n_cells).toLocaleString() + ' cells' : '';
+    const cells = m.n_cells != null ? ' · ' + Number(m.n_cells).toLocaleString() + ' cells' : '';
     const ready = m.ready ? '' : ' (not generated)';
     html +=
       '<option value="' +
@@ -21883,7 +21882,7 @@ function syncRunResultList() {
   if (!list) return;
   const rcs = (rec && rec.result_controls) || [];
   if (!rcs.length) {
-    list.innerHTML = '<li class="hub-empty">None yet â€” use Add or the + on this run</li>';
+    list.innerHTML = '<li class="hub-empty">None yet — use Add or the + on this run</li>';
     return;
   }
   list.innerHTML = rcs
@@ -21894,7 +21893,7 @@ function syncRunResultList() {
         escapeHtml(String(rc.id || rc.name)) +
         '">' +
         escapeHtml(rc.name || rc.kind || 'Result') +
-        (n ? ' Â· ' + n + (n === 1 ? ' face' : ' faces') : '') +
+        (n ? ' · ' + n + (n === 1 ? ' face' : ' faces') : '') +
         '</button></li>'
       );
     })
@@ -21951,7 +21950,7 @@ function syncRunMeshHub() {
         '"' +
         (locked ? ' disabled' : '') +
         '><span class="hub-item-name">' +
-        escapeHtml((m.name || 'Mesh') + (picked ? ' Â· assigned' : '')) +
+        escapeHtml((m.name || 'Mesh') + (picked ? ' · assigned' : '')) +
         '</span><span class="hub-item-sub">' +
         escapeHtml(m.ready ? cells : 'Not generated') +
         '</span></button></li>'
@@ -22058,7 +22057,7 @@ function syncRunCopyUi() {
   if (picker) picker.hidden = !picking;
   if (sel && document.activeElement !== sel) {
     sel.innerHTML =
-      '<option value="">Select a runâ€¦</option>' +
+      '<option value="">Select a run…</option>' +
       others
         .slice()
         .reverse()
@@ -22069,7 +22068,7 @@ function syncRunCopyUi() {
             '<option value="' +
             escapeHtml(String(r.id)) +
             '">' +
-            escapeHtml(bits.join(' Â· ')) +
+            escapeHtml(bits.join(' · ')) +
             '</option>'
           );
         })
@@ -22240,7 +22239,7 @@ function startSimElapsedClock() {
 }
 
 // W31: mean Courant number of a transient run, drawn on the residual plot
-// (same log axis â€” Co sits around 0.1â€“1) as a dashed line.
+// (same log axis — Co sits around 0.1–1) as a dashed line.
 const SIM_CO_SERIES = { key: 'co_mean', color: '#d92d20' };
 
 // Geometry of the last drawn residual plot, for the hover readout.
@@ -22276,7 +22275,7 @@ function drawResidualPlot(svg, series, endTime, opts) {
   }
   const planned = Number(endTime) || 0;
   // Transient: scale to the planned simulation time (0.5 s must not become
-  // a 1 s axis â€” that leftover floor made short runs look cut off). Include
+  // a 1 s axis — that leftover floor made short runs look cut off). Include
   // a tiny data overshoot so the last sample is not clipped. Steady still
   // floors at 1 iteration so an empty-ish plot has a usable axis.
   const xmax = transientAxis
@@ -22394,7 +22393,7 @@ function hideSimPlotTip() {
 
 function simPlotNum(v) {
   const n = Number(v);
-  if (!Number.isFinite(n)) return 'â€”';
+  if (!Number.isFinite(n)) return '—';
   if (n === 0) return '0';
   const a = Math.abs(n);
   if (a >= 100) return n.toFixed(0);
@@ -22440,7 +22439,7 @@ function updateSimPlotTip(clientX) {
     lines.push(
       '<span class="co">Co mean ' +
         escapeHtml(simPlotNum(row.co_mean)) +
-        (Number.isFinite(Number(row.co_max)) ? ' Â· max ' + escapeHtml(simPlotNum(row.co_max)) : '') +
+        (Number.isFinite(Number(row.co_max)) ? ' · max ' + escapeHtml(simPlotNum(row.co_max)) : '') +
         '</span>'
     );
   }
@@ -22448,10 +22447,10 @@ function updateSimPlotTip(clientX) {
   for (const s of SIM_RES_SERIES) {
     const v = Number(row[s.key]);
     if (Number.isFinite(v) && v > 0) {
-      res.push('<span style="color:' + s.color + '">' + (s.key === 'omega' ? 'Ï‰' : s.key) + '</span> ' + escapeHtml(v.toExponential(1)));
+      res.push('<span style="color:' + s.color + '">' + (s.key === 'omega' ? 'ω' : s.key) + '</span> ' + escapeHtml(v.toExponential(1)));
     }
   }
-  if (res.length) lines.push(res.join(' Â· '));
+  if (res.length) lines.push(res.join(' · '));
   tip.innerHTML = lines.join('<br>');
   tip.hidden = false;
   // Flip the box to the other side of the cursor near the right edge.
@@ -22556,7 +22555,7 @@ function syncSimControlPanel() {
   if (hint) {
     if (w27State.starting) {
       hint.hidden = false;
-      hint.textContent = w27State.start_error || 'Startingâ€¦';
+      hint.textContent = w27State.start_error || 'Starting…';
     } else if (rec && !meshId) {
       hint.hidden = false;
       hint.textContent = 'Expand this run and assign a mesh under Mesh.';
@@ -22639,7 +22638,7 @@ function syncSimControlPanel() {
       line.textContent = err ? String(err).split('\n')[0].slice(0, 160) : 'Solve failed. Open Job / debug for the log.';
     } else if (running && runTransient) {
       if (run.stop_requested && run.stage === 'solve') {
-        line.textContent = 'Writing t = ' + formatSimTime(simT) + ', then reconstructingâ€¦';
+        line.textContent = 'Writing t = ' + formatSimTime(simT) + ', then reconstructing…';
       } else if (run.stage === 'solve' && simT > 0) {
         line.textContent = transientProgressText(run, end);
       } else {
@@ -22647,9 +22646,9 @@ function syncSimControlPanel() {
       }
     } else if (running) {
       if (run.stop_requested && run.stage === 'solve') {
-        line.textContent = 'Writing iteration ' + (it || 'â€”') + ', then reconstructingâ€¦';
+        line.textContent = 'Writing iteration ' + (it || '—') + ', then reconstructing…';
       } else if (run.stage === 'solve' && it > 0) {
-        line.textContent = 'Iteration ' + it + ' / ' + (end || 'â€”');
+        line.textContent = 'Iteration ' + it + ' / ' + (end || '—');
       } else {
         line.textContent = (SIM_STAGE_LABELS[run.stage] || 'Starting') + '...';
       }
@@ -22657,17 +22656,17 @@ function syncSimControlPanel() {
       const saved = Number(run.last_saved_iteration) || 0;
       line.textContent =
         saved > 0
-          ? 'Stopped at t = ' + formatSimTime(simT || saved) + ' Â· frames saved to t = ' + formatSimTime(saved)
+          ? 'Stopped at t = ' + formatSimTime(simT || saved) + ' · frames saved to t = ' + formatSimTime(saved)
           : simT > 0
-            ? 'Stopped at t = ' + formatSimTime(simT) + ' Â· nothing saved yet'
+            ? 'Stopped at t = ' + formatSimTime(simT) + ' · nothing saved yet'
             : 'Stopped';
     } else if (stopped) {
       const saved = Number(run.last_saved_iteration) || 0;
       line.textContent =
         saved > 0
-          ? 'Stopped at iteration ' + (it || saved) + ' Â· results saved to iteration ' + saved
+          ? 'Stopped at iteration ' + (it || saved) + ' · results saved to iteration ' + saved
           : it > 0
-            ? 'Stopped at iteration ' + it + ' Â· nothing saved yet'
+            ? 'Stopped at iteration ' + it + ' · nothing saved yet'
             : 'Stopped';
     } else if (done && runTransient) {
       const frames = Number(run.n_saved_times) || 0;
@@ -22675,8 +22674,8 @@ function syncSimControlPanel() {
       line.textContent =
         formatSimTime(simT || end) +
         ' simulated' +
-        (frames ? ' Â· ' + frames + ' frames' : '') +
-        (steps ? ' Â· ' + steps.toLocaleString() + ' time steps' : '');
+        (frames ? ' · ' + frames + ' frames' : '') +
+        (steps ? ' · ' + steps.toLocaleString() + ' time steps' : '');
     } else if (done) {
       line.textContent = (it || end) + ' iterations';
     } else {
@@ -22699,7 +22698,7 @@ function syncSimControlPanel() {
     else if (run.n_procs === 1) bits.push('serial');
     if (elapsedTxt && !running) bits.push(elapsedTxt);
     if (running && run.pid != null) bits.push('PID ' + run.pid);
-    meta.textContent = bits.join(' Â· ');
+    meta.textContent = bits.join(' · ');
   }
   const series = Array.isArray(run.residuals) ? run.residuals : [];
   drawResidualPlot(plot, series, end, { transient: runTransient });
@@ -22884,7 +22883,7 @@ async function refreshLiveResultsFrames(run, justFinished) {
   if (!justFinished && liveFramesSeen != null && n === liveFramesSeen) return;
   if (liveFramesBusy || w27State.attaching) {
     // Polling stops once the run is done, so a request that lands while a
-    // frame is still loading must not be dropped â€” run it afterwards.
+    // frame is still loading must not be dropped — run it afterwards.
     liveFramesQueued = { run, justFinished: !!justFinished || (liveFramesQueued && liveFramesQueued.justFinished) };
     return;
   }
@@ -22954,9 +22953,9 @@ async function startSolveClient() {
     return extra || { ok: false, error: msg };
   };
   w27State.starting = true;
-  w27State.start_error = 'Startingâ€¦';
+  w27State.start_error = 'Starting…';
   if (startBtn) startBtn.disabled = true;
-  showHint('Startingâ€¦');
+  showHint('Starting…');
   try {
     await persistSimControl({ skipSync: true });
   } catch (_) {}
@@ -23249,7 +23248,7 @@ async function renameActiveRunClient(name) {
   window.__CFD_MONITORS__ = monState;
 
   function fmtNum(v, digits) {
-    if (v == null || !Number.isFinite(Number(v))) return 'â€”';
+    if (v == null || !Number.isFinite(Number(v))) return '—';
     const n = Number(v);
     const a = Math.abs(n);
     if (a === 0) return '0';
@@ -23259,21 +23258,21 @@ async function renameActiveRunClient(name) {
   }
 
   function fmtArea(m2) {
-    if (m2 == null || !Number.isFinite(Number(m2))) return 'â€”';
+    if (m2 == null || !Number.isFinite(Number(m2))) return '—';
     const a = Number(m2);
-    if (a < 0.01) return fmtNum(a * 1e4, 1) + ' cmÂ²';
-    return fmtNum(a, 4) + ' mÂ²';
+    if (a < 0.01) return fmtNum(a * 1e4, 1) + ' cm²';
+    return fmtNum(a, 4) + ' m²';
   }
 
   function fmtFlow(q) {
-    if (q == null || !Number.isFinite(Number(q))) return 'â€”';
+    if (q == null || !Number.isFinite(Number(q))) return '—';
     const a = Math.abs(Number(q));
     if (a < 0.01) return fmtNum(a * 1000, a * 1000 < 1 ? 3 : 2) + ' L/s';
-    return fmtNum(a, 4) + ' mÂ³/s';
+    return fmtNum(a, 4) + ' m³/s';
   }
 
   function fmtMassFlow(kgs) {
-    if (kgs == null || !Number.isFinite(Number(kgs))) return 'â€”';
+    if (kgs == null || !Number.isFinite(Number(kgs))) return '—';
     const a = Math.abs(Number(kgs));
     if (a < 0.01) return fmtNum(a * 1000, 3) + ' g/s';
     return fmtNum(a, 4) + ' kg/s';
@@ -23337,7 +23336,7 @@ async function renameActiveRunClient(name) {
       if (f.pressure_Pa != null) rows.push(['Pressure', fmtNum(f.pressure_Pa, 1) + ' Pa']);
       rows.push(['Iteration', String(f.iteration)]);
     }
-    rows.push(['Area', fmtArea(m.area_m2) + (m.n_faces != null ? ' Â· ' + m.n_faces + ' mesh faces' : '')]);
+    rows.push(['Area', fmtArea(m.area_m2) + (m.n_faces != null ? ' · ' + m.n_faces + ' mesh faces' : '')]);
     let note = '';
     if (
       f &&
@@ -23400,7 +23399,7 @@ async function renameActiveRunClient(name) {
     el.hidden = false;
     el.classList.toggle('is-warn', imb != null && imb > 1);
     el.textContent =
-      'Flow in ' + fmtFlow(b.in_m3s) + ' Â· out ' + fmtFlow(b.out_m3s) + (imb != null ? ' Â· imbalance ' + fmtImbalance(imb) : '');
+      'Flow in ' + fmtFlow(b.in_m3s) + ' · out ' + fmtFlow(b.out_m3s) + (imb != null ? ' · imbalance ' + fmtImbalance(imb) : '');
   }
 
   function renderRunMonitorsHub() {
@@ -23420,7 +23419,7 @@ async function renameActiveRunClient(name) {
       if (hint) {
         hint.textContent =
           rec.status === 'running'
-            ? 'Waiting for the first iterationâ€¦'
+            ? 'Waiting for the first iteration…'
             : 'Every inlet and outlet is monitored automatically: mean velocity, flow rate and pressure per iteration.';
       }
       list.innerHTML = pendingCards();
@@ -23508,7 +23507,7 @@ async function renameActiveRunClient(name) {
 })();
 
 /* ======================================================================
- * W28 â€” Capture (framed screenshot / screen recording) + saved media
+ * W28 — Capture (framed screenshot / screen recording) + saved media
  * ====================================================================== */
 
 /** Lazily created so the tree can ask for counts before this section runs. */
@@ -23653,7 +23652,7 @@ function fmtClock(sec) {
 
 function mediaItemSub(it) {
   const bits = [];
-  if (it.width && it.height) bits.push(it.width + ' Ã— ' + it.height + ' px');
+  if (it.width && it.height) bits.push(it.width + ' × ' + it.height + ' px');
   if (it.kind === 'recording' && it.duration_s) bits.push(fmtClock(it.duration_s));
   if (it.ext) bits.push(String(it.ext).toUpperCase());
   bits.push(fmtBytes(it.bytes));
@@ -23661,7 +23660,7 @@ function mediaItemSub(it) {
     const d = new Date(it.created_at);
     if (!Number.isNaN(d.getTime())) bits.push(d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }));
   }
-  return bits.join(' Â· ');
+  return bits.join(' · ');
 }
 
 function renderMediaPanel() {
@@ -23676,21 +23675,21 @@ function renderMediaPanel() {
   const rec = st.byOwner[owner];
   const isRec = p.kind === 'recording';
   if (title) title.textContent = isRec ? 'Recordings' : 'Screenshots';
-  if (ownerEl) ownerEl.textContent = mediaOwnerLabel(p.ownerKind, p.id) + (p.ownerKind === 'run' ? ' Â· Results' : ' Â· Mesh');
+  if (ownerEl) ownerEl.textContent = mediaOwnerLabel(p.ownerKind, p.id) + (p.ownerKind === 'run' ? ' · Results' : ' · Mesh');
   const items = (rec ? rec.items : []).filter((i) => i.kind === p.kind);
   if (hint) {
     hint.textContent = !rec || !rec.loaded
-      ? 'Loadingâ€¦'
+      ? 'Loading…'
       : items.length
         ? 'Click a thumbnail to view it full size.'
         : isRec
-          ? 'Use Record in the toolbar while this ' + (p.ownerKind === 'run' ? 'runâ€™s results are' : 'mesh is') + ' open to record the framed view.'
-          : 'Use Screenshot in the toolbar while this ' + (p.ownerKind === 'run' ? 'runâ€™s results are' : 'mesh is') + ' open to capture the framed view.';
+          ? 'Use Record in the toolbar while this ' + (p.ownerKind === 'run' ? 'run’s results are' : 'mesh is') + ' open to record the framed view.'
+          : 'Use Screenshot in the toolbar while this ' + (p.ownerKind === 'run' ? 'run’s results are' : 'mesh is') + ' open to capture the framed view.';
   }
   list.innerHTML = items
     .map((it) => {
       const thumb = isRec
-        ? '<video src="' + escapeHtml(it.url) + '" preload="metadata" muted playsinline></video><span class="media-play" aria-hidden="true">â–¶</span>'
+        ? '<video src="' + escapeHtml(it.url) + '" preload="metadata" muted playsinline></video><span class="media-play" aria-hidden="true">▶</span>'
         : '<img src="' + escapeHtml(it.url) + '" alt="" loading="lazy" />';
       return (
         '<div class="media-item" data-media-id="' + escapeHtml(it.id) + '">' +
@@ -23711,7 +23710,7 @@ function renderMediaPanel() {
 async function deleteMediaItem(owner, item) {
   const ok = await confirmAction({
     title: 'Delete ' + (item.kind === 'recording' ? 'recording' : 'screenshot') + '?',
-    copy: 'â€œ' + item.name + 'â€ will be removed from this project. This cannot be undone.',
+    copy: '“' + item.name + '” will be removed from this project. This cannot be undone.',
     yes: 'Delete',
   });
   if (!ok) return false;
@@ -23892,7 +23891,7 @@ function captureOutputScale(frame) {
 /**
  * Scale the panes actually render at. The whole pane buffer grows with the
  * frame's factor (only the frame is copied out), so a small frame asking for
- * 1080 px would push a 1500Ã—900 pane past 13 Mpx per frame and the take stalls.
+ * 1080 px would push a 1500×900 pane past 13 Mpx per frame and the take stalls.
  * Cap the buffer at a 4K-equivalent pixel budget; the output canvas keeps the
  * requested size and drawImage bridges the (small) remainder.
  */
@@ -24017,7 +24016,7 @@ function captureLayerEls() {
 /** What the capture belongs to: the run whose results are open, or the inspected mesh. */
 function captureOwner() {
   if (resultsViewOpen && resultsRunId) {
-    return { ownerKind: 'run', id: String(resultsRunId), owner: mediaOwnerKey('run', resultsRunId), label: mediaOwnerLabel('run', resultsRunId) + ' â€º Results' };
+    return { ownerKind: 'run', id: String(resultsRunId), owner: mediaOwnerKey('run', resultsRunId), label: mediaOwnerLabel('run', resultsRunId) + ' › Results' };
   }
   const mid = meshInspectOpen && w20State ? w20State.active_id : null;
   if (mid) {
@@ -24028,7 +24027,7 @@ function captureOwner() {
 
 function captureDefaultName(kind) {
   const own = captureOwner();
-  const base = own ? own.label.replace(/ â€º Results$/, '') : (document.querySelector('.project-name')?.textContent.trim() || 'cfd');
+  const base = own ? own.label.replace(/ › Results$/, '') : (document.querySelector('.project-name')?.textContent.trim() || 'cfd');
   const what = resultsViewOpen ? (activeField === 'p' ? 'pressure' : 'velocity') : meshInspectOpen ? 'mesh' : 'view';
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
@@ -24052,7 +24051,7 @@ function capturePanes() {
 /**
  * Render a pane synchronously so its WebGL drawing buffer holds fresh pixels
  * for drawImage. renderWindow.render() is *not* enough: vtk's interactor turns
- * it into a no-op while an animation is running (drag, particle cometsâ€¦), and
+ * it into a no-op while an animation is running (drag, particle comets…), and
  * with preserveDrawingBuffer=false the composited buffer reads back empty.
  */
 function renderPaneNow(pane) {
@@ -24146,10 +24145,10 @@ function applyFrameToDom() {
     if (hi) {
       const rs = captureRenderScale(f, scale);
       note = rs < scale * 0.999
-        ? ' Â· rendered at ' + Math.round(Math.min(f.w, f.h) * rs) + ' px, enlarge frame for sharper'
-        : ' Â· upscaled render';
+        ? ' · rendered at ' + Math.round(Math.min(f.w, f.h) * rs) + ' px, enlarge frame for sharper'
+        : ' · upscaled render';
     }
-    size.textContent = Math.round(f.w * scale) + ' Ã— ' + Math.round(f.h * scale) + ' px' + note;
+    size.textContent = Math.round(f.w * scale) + ' × ' + Math.round(f.h * scale) + ' px' + note;
   }
 }
 
@@ -24211,7 +24210,7 @@ function startCapture(mode) {
   if (els.aspect) els.aspect.value = captureState.aspect;
   if (els.minSide) els.minSide.value = String(captureState.minSide || 0);
   if (!captureState.open) {
-    // A tree flyout (Recordings, Graphs, Monitorsâ€¦) would sit inside the frame â€” park it.
+    // A tree flyout (Recordings, Graphs, Monitors…) would sit inside the frame — park it.
     stashTreePanelForCapture();
     captureState.frame = loadSavedFrame() || defaultFrame();
     captureState.open = true;
@@ -24223,7 +24222,7 @@ function startCapture(mode) {
   if (els.durWrap) els.durWrap.hidden = captureState.mode !== 'rec';
   if (els.bar) {
     els.bar.hidden = false;
-    // Narrow windows: the toolbar scrolls horizontally â€” bring the fan-out into view.
+    // Narrow windows: the toolbar scrolls horizontally — bring the fan-out into view.
     try { els.bar.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
   }
   if (els.rec) els.rec.hidden = true;
@@ -24468,7 +24467,7 @@ function startRecording() {
     return { x: cur.x, y: cur.y, w: rec.startFrame.w, h: rec.startFrame.h };
   };
   const minGap = 1000 / fps - 2;
-  // Copy the panes right after vtk rendered them (same task â†’ buffer still
+  // Copy the panes right after vtk rendered them (same task → buffer still
   // holds the pixels). No second render per frame, so dragging costs the same
   // as it does without recording.
   const onRendered = () => {
@@ -24589,15 +24588,15 @@ function saveCaptureDialog(cap) {
       : '<img src="' + url + '" alt="Preview" />';
   }
   if (meta) {
-    const bits = [cap.width + ' Ã— ' + cap.height + ' px'];
+    const bits = [cap.width + ' × ' + cap.height + ' px'];
     if (isRec) bits.push(fmtClock(cap.duration), String(cap.ext).toUpperCase());
     bits.push(fmtBytes(cap.blob.size));
-    meta.textContent = bits.join(' Â· ');
+    meta.textContent = bits.join(' · ');
   }
   if (name) name.value = captureDefaultName(cap.kind);
   if (dest) {
     dest.textContent = own
-      ? 'Saves under ' + own.label + ' â€º ' + (isRec ? 'Recordings' : 'Screenshots') + ' in the tree.'
+      ? 'Saves under ' + own.label + ' › ' + (isRec ? 'Recordings' : 'Screenshots') + ' in the tree.'
       : 'No run or mesh is open, so this will be downloaded only.';
   }
   if (dlWrap) dlWrap.hidden = !own;
@@ -24626,7 +24625,7 @@ function saveCaptureDialog(cap) {
       if (own) captureState.alsoDownload = !!(dl && dl.checked);
       if (yes) {
         yes.disabled = true;
-        yes.textContent = 'Savingâ€¦';
+        yes.textContent = 'Saving…';
       }
       let saved = null;
       if (own) {
@@ -24828,7 +24827,7 @@ const GRAPH_QUANTITIES = {
   Umag: { label: 'Mean velocity', unit: 'm/s', pick: (s) => s.Umag },
   Un: { label: 'Normal velocity', unit: 'm/s', pick: (s) => (s.Un_m_s != null ? Math.abs(s.Un_m_s) : null) },
   p: { label: 'Pressure', unit: 'Pa', pick: (s) => s.p_Pa },
-  Q: { label: 'Flow rate', unit: 'mÂ³/s', pick: (s) => (s.Q_m3s != null ? Math.abs(s.Q_m3s) : null) },
+  Q: { label: 'Flow rate', unit: 'm³/s', pick: (s) => (s.Q_m3s != null ? Math.abs(s.Q_m3s) : null) },
   mdot: { label: 'Mass flow', unit: 'kg/s', pick: (s, rho) => (s.Q_m3s != null ? Math.abs(s.Q_m3s) * (rho || 1.196) : null) },
 };
 
@@ -24934,7 +24933,7 @@ function wireChartHover(svgEl, pts, geo, unit, timeAxis) {
     dot.setAttribute('cy', y);
     const label =
       (timeAxis ? 't = ' + formatSimTime(p[0]) : 'Iteration ' + Math.round(p[0])) +
-      ' Â· ' + graphTick(p[1], p[1]) + ' ' + unit;
+      ' · ' + graphTick(p[1], p[1]) + ' ' + unit;
     tipText.textContent = label;
     const tw = label.length * 6.2 + 12;
     let tx = x + 8;
@@ -24978,7 +24977,7 @@ function renderGraphsPanel(runId) {
   const data = graphsData(runId);
   if (!data) {
     list.innerHTML = '';
-    if (hint) hint.textContent = rec && rec.status === 'draft' ? 'Start this run first. Graphs fill in as the solver iterates.' : 'Loading monitor historyâ€¦';
+    if (hint) hint.textContent = rec && rec.status === 'draft' ? 'Start this run first. Graphs fill in as the solver iterates.' : 'Loading monitor history…';
     if (typeof window.__CFD_REFRESH_MONITORS__ === 'function') {
       Promise.resolve(window.__CFD_REFRESH_MONITORS__(runId)).then(() => {
         if (treeUi.openPanel === 'run-graphs' && st.graphs && st.graphs.runId === runId) renderGraphsPanel(runId);
@@ -24996,7 +24995,7 @@ function renderGraphsPanel(runId) {
   } else {
     if (hint) {
       hint.textContent =
-        (data.status === 'running' ? 'Live â€” updates every few seconds. ' : '') +
+        (data.status === 'running' ? 'Live — updates every few seconds. ' : '') +
         q.label + ' on each monitored boundary, ' + (timeAxis ? 'over simulated time' : 'per solver iteration') + '. Hover a curve to read values.';
     }
     const width = Math.max(300, (list.clientWidth || 580) - 22);
