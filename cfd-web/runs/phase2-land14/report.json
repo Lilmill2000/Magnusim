@@ -9,13 +9,16 @@
   "machine": "Timmy",
   "baseline_HEAD": "a3fa5e6d57d8c37fad17219986c6479f78066e93",
   "baseline_land13": "538e4d4335032aa23d862d947b7dd82b1945cb83",
-  "commit_sha": "PENDING",
-  "commit_short": "PENDING",
+  "commit_sha": "ca17a44eb75602b5cf8dc34d7dcb28069c9ce118",
+  "commit_short": "ca17a44",
   "guard": {
     "script": "scripts/__tests__/test_no_node_sibling_writes.js",
     "prove": "scripts/__tests__/prove-no-node-sibling-writes.mjs",
     "plant": "scripts/__tests__/fixtures/land14-forbidden-write.plant.js",
-    "npm": ["guard:node-siblings", "prove:node-siblings"],
+    "npm": [
+      "guard:node-siblings",
+      "prove:node-siblings"
+    ],
     "how": "Static scan of scripts/**/*.{js,mjs,cjs} (skips __tests__/fixtures, generated). Fails on writeFile/writeFileSync/promises.writeFile/outputFileSync/writeJsonSync targeting sibling SoT JSON filenames or *JsonPath helpers (materials/bcs/mesh/refinements/result_controls/simulation(s)/catalog). Allowlist: job-runner.js, w28-media.js, w16-project-geometry.js. Python writeJsonCli / set-* via py-json.js ALLOWED (Project path owns write).",
     "siblings_banned": [
       "materials.json",
