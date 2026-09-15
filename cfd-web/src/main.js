@@ -2326,6 +2326,9 @@ async function loadCutPlane() {
     enabled: resultPlanes.filter((p) => resultPlaneOn(p)).length,
     clip: resultPlanes.some((p) => resultPlaneOn(p) && p.clipModel),
   };
+  try {
+    publishW7({ cut_loaded: true, cut_fingerprint: cutFingerprint(activeResultCutPolyData()) });
+  } catch (_) {}
   return out;
 }
 
@@ -4943,9 +4946,28 @@ async function loadParticleTrace(overrides) {
   return window.__CFD_W8__;
 }
 
+function activeResultCutPolyData() {
+  for (const plane of resultPlanes) {
+    if (!resultPlaneOn(plane) || !plane.mapper) continue;
+    try {
+      const pd = plane.mapper.getInputData ? plane.mapper.getInputData() : null;
+      if (pd && pd.getNumberOfPoints && pd.getNumberOfPoints() > 0) return pd;
+    } catch (_) {}
+  }
+  try {
+    return cutMapper.getInputData ? cutMapper.getInputData() : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function publishW7(extra) {
-  const cutPd = cutMapper.getInputData ? cutMapper.getInputData() : null;
+  const cutPd = activeResultCutPolyData();
   const fp = cutFingerprint(cutPd);
+  const clipOn =
+    resultPlanes.some((p) => resultPlaneOn(p) && p.clipModel) || !!cutState.clipModel;
+  // Keep legacy cutState.clipModel aligned with multi-plane clip for W7 probes.
+  if (resultPlanes.length) cutState.clipModel = clipOn;
   window.__CFD_W7__ = {
     increment: 'W7',
     ready: !!(sourcePolyData && window.__CFD_W6__ && window.__CFD_W6__.ready),
@@ -4956,12 +4978,23 @@ function publishW7(extra) {
     cut_fingerprint: fp,
     vectors_live: false,
     clip_model_optional: true,
-    clip_model_on: !!cutState.clipModel,
+    clip_model_on: clipOn,
     other_filters_chrome_only: true,
     particle_trace_live: true,
     no_fake_plane_widget: true,
     ...(extra || {}),
   };
+  // Prefer a real multi-plane cut fingerprint over a pending/empty override from
+  // callers that raced ahead of /api/cut-plane.
+  if (
+    extra &&
+    extra.cut_fingerprint &&
+    fp &&
+    !fp.empty &&
+    (extra.cut_fingerprint.pending || extra.cut_fingerprint.empty)
+  ) {
+    window.__CFD_W7__.cut_fingerprint = fp;
+  }
 }
 
 function styleFieldSurfaceActor() {
@@ -5271,7 +5304,7 @@ async function loadField(field, opts) {
 }
 
 /** Prove helper: apply position/orientation/miss and return cut fingerprint delta */
-window.__CFD_W7_APPLY__ = function applyW7( partial ) {
+window.__CFD_W7_APPLY__ = async function applyW7( partial ) {
   if (partial && typeof partial === 'object') {
     if (partial.position != null) {
       cutState.position = Number(partial.position);
@@ -5287,10 +5320,25 @@ window.__CFD_W7_APPLY__ = function applyW7( partial ) {
     if (partial.partsSolid != null) cutState.partsSolid = String(partial.partsSolid);
     if (partial.partsOpacity != null) cutState.partsOpacity = Number(partial.partsOpacity);
     if (partial.vectors != null) cutState.vectors = !!partial.vectors;
+    // Multi-plane UI: mirror apply onto the first enabled result plane.
+    const plane = resultPlanes.find((p) => resultPlaneOn(p)) || resultPlanes[0];
+    if (plane) {
+      if (partial.position != null) plane.position = cutState.position;
+      if (partial.axis) plane.axis = cutState.axis;
+      if (partial.inverse != null) plane.inverse = cutState.inverse;
+      if (partial.enabled != null) plane.enabled = cutState.enabled;
+      if (partial.opacity != null) plane.opacity = cutState.opacity;
+      if (partial.clipModel != null) plane.clipModel = cutState.clipModel;
+      try { renderResultPlaneList(); } catch (_) {}
+    }
     syncChromeFromState();
   }
   const miss = !!(partial && partial.miss);
-  const fp = updateCuttingPlane({ miss });
+  updateCuttingPlane({ miss });
+  if (!miss) {
+    try { await loadCutPlane(); } catch (e) { console.error('[CFD] W7 apply cut', e); }
+  }
+  const fp = cutFingerprint(activeResultCutPolyData());
   publishW7({
     cut_fingerprint: fp,
     last_apply: partial || null,
@@ -14519,8 +14567,8 @@ function syncSimulationTree() {
             '<li class="tree-node' +
             treeExpClass('Simulation') +
             sel('sim-hub') +
-            '" data-label="Simulation" data-w27-sim-control="1">' +
-            '<div class="tree-row">' +
+            '" data-label="Simulation">' +
+            '<div class="tree-row" data-w27-sim-control="1">' +
             '<span class="tw">' +
             treeTw('Simulation') +
             '</span>' +
@@ -25341,7 +25389,14 @@ function activateTreePanel(selectKey, panelKey) {
         tw.textContent = next ? '-' : '+';
         return;
       }
-      const node = e.target.closest('.tree-node');
+      // Prefer the tree-node that owns the clicked .tree-row so a click on
+      // "Simulation" / run title is not attributed to a nested Mesh/Results node
+      // merely because the parent li wraps those children.
+      const clickedRow = e.target.closest('.tree-row');
+      const node =
+        clickedRow && clickedRow.parentElement && clickedRow.parentElement.classList.contains('tree-node')
+          ? clickedRow.parentElement
+          : e.target.closest('.tree-node');
       if (!node) return;
       e.stopPropagation();
       if (runCopyPick && runCopyPick.destId) {
@@ -25676,7 +25731,20 @@ function activateTreePanel(selectKey, panelKey) {
         }
         return;
       }
-      if (node.matches('[data-w27-sim-control="1"]')) {
+      if (node.matches('[data-w27-sim-control="1"]') || e.target.closest('[data-w27-sim-control="1"]')) {
+        const rid = w27State.selected_run_id || w27State.active_run_id;
+        const rec = rid && typeof findRunRecord === 'function' ? findRunRecord(rid) : null;
+        // From run setup panels (control / mesh / monitors), Simulation restores the
+        // run control panel so Transient fields + Start stay reachable.
+        const runSetupOpen =
+          treeUi.openPanel === 'sim-control' ||
+          treeUi.openPanel === 'run-mesh' ||
+          treeUi.openPanel === 'rc' ||
+          treeUi.openPanel === 'run-results';
+        if (rec && runSetupOpen) {
+          openRunPanel(rid);
+          return;
+        }
         if (closeIfTreeItemOpen('sim-hub')) return;
         markTreeSelected('sim-hub');
         openTreeDetail('sim-hub', { toggle: false });
