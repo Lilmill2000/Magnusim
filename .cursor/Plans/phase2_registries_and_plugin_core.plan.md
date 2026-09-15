@@ -4,7 +4,7 @@ overview: "Turn every hard-coded domain concept (analysis type, solver, mesher, 
 todos:
   - id: p2-registry-core
     content: "cfddesk/registry/: Registry[T] base, SchemaField -> JSON Schema, PluginManifest, discovery via entry points + plugins/ folder"
-    status: pending
+    status: completed
   - id: p2-analysis-type
     content: "AnalysisType spec + built-ins incompressible_steady / incompressible_transient; replace PRIMARY_SIM_ANALYSIS and W17 strings"
     status: pending

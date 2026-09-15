@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
+from cfddesk.registry.schema import SchemaField as SettingField
+
 SemanticClass = Literal[
     "inlet",
     "outlet",
@@ -21,22 +23,6 @@ SemanticClass = Literal[
     "periodic",
 ]
 PatchType = Literal["patch", "wall", "symmetry", "empty", "wedge"]
-
-
-@dataclass(frozen=True)
-class SettingField:
-    key: str
-    label: str
-    kind: Literal[
-        "float", "int", "vector3", "bool", "choice", "text", "raw_dict"
-    ]
-    default: Any = None
-    choices: tuple[str, ...] = ()
-    unit: str = ""
-    # Shown only when solver.energy is enabled
-    energy_only: bool = False
-    # Intensive: merge faces; extensive: one patch per face; none ≈ intensive.
-    rate_kind: Literal["intensive", "extensive", "none"] = "none"
 
 
 WriterFn = Callable[[str, dict[str, Any], dict[str, Any]], str]
