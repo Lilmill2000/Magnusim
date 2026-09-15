@@ -26,6 +26,7 @@ from cfddesk.units.pressure import pa_to_kinematic
 if TYPE_CHECKING:
     from cfddesk.cad.step import LoadedSolid
     from cfddesk.project.model import Project
+    from cfddesk.project.transient import TransientControl
 
 # Re-export library constant for gate scripts that import NU_AIR from writer.
 __all_nu__ = NU_AIR
@@ -425,6 +426,7 @@ def write_fv_schemes(
     turbulence: TurbulenceModel = "laminar",
     numerics: Any | None = None,
     for_potential: bool = False,
+    transient: Any | None = None,
 ) -> None:
     """Write system/fvSchemes from NumericsSettings.schemes (inc24a.1).
 
@@ -432,7 +434,13 @@ def write_fv_schemes(
     ``cfddesk.project.numerics.map_*_ui_to_of``. Named gradient / laplacian /
     interpolation rows from the Schemes form are emitted so written case matches
     UI intent (no UI/writer drift).
+
+    When ``transient`` is set, emit the compact w30 / js_transient schemes
+    (Euler|backward ddt, no bounded div) via ``write_fv_schemes_transient``.
     """
+    if transient is not None:
+        write_fv_schemes_transient(path, ctrl=transient)
+        return
     from cfddesk.project.numerics import (
         NumericsSettings,
         SchemesSettings,
@@ -820,14 +828,31 @@ def validate_p_ref_value(project: Project, p_ref_value_pa: float) -> str | None:
 def write_control_dict(
     path: Path,
     *,
-    amgx: bool,
+    amgx: bool = False,
     end_time: int = 2000,
     write_interval: int = 100,
     delta_t: float = 1.0,
     write_control: str = "timeStep",
     inlet_patch: str | None = None,
     outlet_patch: str | None = None,
+    application: str | None = None,
+    transient: Any | None = None,
+    functions_text: str | None = None,
 ) -> None:
+    """Write system/controlDict.
+
+    Steady (default): simpleFoam + optional pInlet/pOutlet (legacy CLI).
+    Transient: delegates to ``write_control_dict_transient`` (pimpleFoam / w30).
+    When ``functions_text`` is provided (steady), it replaces the default
+    minMax + pInlet/pOutlet block — used by the web mon_/flow_ path.
+    """
+    if transient is not None:
+        write_control_dict_transient(
+            path,
+            ctrl=transient,
+            functions_text=functions_text or "",
+        )
+        return
     from cfddesk.case.surface_averages import control_dict_surface_p_block
 
     libs_line = (
@@ -835,32 +860,17 @@ def write_control_dict(
         if amgx
         else "libs            (fieldFunctionObjects);\n"
     )
-    extra_fn = ""
-    if inlet_patch and outlet_patch:
-        extra_fn = control_dict_surface_p_block(inlet_patch, outlet_patch)
-    _write_foam(
-        path,
-        _foam_header("controlDict")
-        + f"""
-application     simpleFoam;
-{libs_line}startFrom       startTime;
-startTime       0;
-stopAt          endTime;
-endTime         {end_time};
-deltaT          {delta_t:g};
-writeControl    {write_control};
-writeInterval   {write_interval};
-purgeWrite      2;
-writeFormat     ascii;
-writePrecision  12;
-writeCompression off;
-timeFormat      general;
-timePrecision   6;
-runTimeModifiable true;
-
-functions
-{{
-    minMax
+    app = application or "simpleFoam"
+    if functions_text is not None:
+        extra_fn = functions_text
+        if not amgx:
+            libs_line = ""
+    else:
+        extra_fn = ""
+        if inlet_patch and outlet_patch:
+            extra_fn = control_dict_surface_p_block(inlet_patch, outlet_patch)
+    if functions_text is None:
+        functions_body = f"""    minMax
     {{
         type            fieldMinMax;
         libs            (fieldFunctionObjects);
@@ -889,11 +899,220 @@ functions
         writeControl    writeTime;
         log             true;
     }}
-{extra_fn}}}
+{extra_fn}"""
+    else:
+        functions_body = extra_fn
+    _write_foam(
+        path,
+        _foam_header("controlDict")
+        + f"""
+application     {app};
+{libs_line}startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         {end_time};
+deltaT          {delta_t:g};
+writeControl    {write_control};
+writeInterval   {write_interval};
+purgeWrite      2;
+writeFormat     ascii;
+writePrecision  12;
+writeCompression off;
+timeFormat      general;
+timePrecision   6;
+runTimeModifiable true;
+
+functions
+{{
+{functions_body}
+}}
 
 // ************************************************************************* //
 """,
     )
+
+
+
+def write_fv_options_limit_u(path: Path, *, max_u: float) -> None:
+    """Velocity cap FO (w27 limitU) — 10x expected speed, floor 50 m/s."""
+    u = float(max_u)
+    # Match JS Number.toPrecision(6) for the max value
+    from cfddesk.case.function_objects import js_to_precision
+
+    max_s = js_to_precision(u, 6)
+    _write_foam(
+        path,
+        _foam_header("fvOptions")
+        + f"""
+limitU
+{{
+    type            limitVelocity;
+    active          yes;
+    selectionMode   all;
+    max             {max_s};
+}}
+
+// ************************************************************************* //
+""",
+    )
+
+
+def write_fv_solution_pimple(
+    path: Path,
+    *,
+    ctrl: "TransientControl",
+    turbulence: TurbulenceModel = "kOmegaSST",
+    numerics: Any | None = None,
+) -> None:
+    """pimpleFoam fvSolution matching w30.transientFvSolution."""
+    n_outer = max(1, int(round(ctrl.n_outer_correctors)))
+    n_corr = max(1, int(round(ctrl.n_correctors)))
+    n_non_orth = max(0, int(round(ctrl.n_non_orthogonal_correctors)))
+    if n_outer > 1:
+        relax = """relaxationFactors
+{
+    fields
+    {
+        p               0.3;
+        pFinal          1;
+    }
+    equations
+    {
+        "(U|k|omega)"   0.7;
+        "(U|k|omega)Final" 1;
+    }
+}"""
+    else:
+        relax = """relaxationFactors
+{
+    equations
+    {
+        ".*"            1;
+    }
+}"""
+    # turbulence / numerics reserved for Phase 2 unification; w30 hard-codes U|k|omega.
+    _ = (turbulence, numerics)
+    _write_foam(
+        path,
+        _foam_header("fvSolution")
+        + f"""
+solvers
+{{
+    p
+    {{
+        solver          GAMG;
+        tolerance       1e-7;
+        relTol          0.01;
+        smoother        GaussSeidel;
+        nCellsInCoarsestLevel 20;
+        maxIter         200;
+    }}
+    pFinal
+    {{
+        $p;
+        relTol          0;
+    }}
+    "(U|k|omega)"
+    {{
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-8;
+        relTol          0.1;
+        maxIter         50;
+    }}
+    "(U|k|omega)Final"
+    {{
+        $U;
+        relTol          0;
+    }}
+}}
+PIMPLE
+{{
+    momentumPredictor   yes;
+    nOuterCorrectors    {n_outer};
+    nCorrectors         {n_corr};
+    nNonOrthogonalCorrectors {n_non_orth};
+    turbOnFinalIterOnly yes;
+    consistent          no;
+}}
+{relax}
+
+// ************************************************************************* //
+""",
+    )
+
+
+def write_fv_schemes_transient(path: Path, *, ctrl: "TransientControl") -> None:
+    """Compact transient fvSchemes matching w30.transientFvSchemes / js_transient golden."""
+    from cfddesk.project.transient import foam_num  # noqa: F401 — unused; scheme is token
+
+    ddt = "backward" if ctrl.time_scheme == "backward" else "Euler"
+    _write_foam(
+        path,
+        _foam_header("fvSchemes")
+        + f"""
+ddtSchemes {{ default {ddt}; }}
+gradSchemes
+{{
+    default         Gauss linear;
+    grad(U)         cellLimited Gauss linear 1;
+    grad(k)         cellLimited Gauss linear 1;
+    grad(omega)     cellLimited Gauss linear 1;
+}}
+divSchemes
+{{
+    default         none;
+    div(phi,U)      Gauss linearUpwind grad(U);
+    div(phi,k)      Gauss limitedLinear 1;
+    div(phi,omega)  Gauss limitedLinear 1;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}}
+laplacianSchemes {{ default Gauss linear limited corrected 0.5; }}
+interpolationSchemes {{ default linear; }}
+snGradSchemes {{ default limited corrected 0.5; }}
+wallDist {{ method meshWave; }}
+
+// ************************************************************************* //
+""",
+    )
+
+
+def write_control_dict_transient(
+    path: Path,
+    *,
+    ctrl: "TransientControl",
+    functions_text: str = "",
+) -> None:
+    """pimpleFoam controlDict matching w30.transientControlDict / js_transient golden."""
+    from cfddesk.project.transient import foam_num
+
+    adjust = ctrl.adjust_time_step
+    body = f"""application     pimpleFoam;
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         {foam_num(ctrl.end_time)};
+deltaT          {foam_num(ctrl.delta_t)};
+writeControl    {"adjustableRunTime" if adjust else "runTime"};
+writeInterval   {foam_num(ctrl.write_interval)};
+purgeWrite      0;
+writeFormat     ascii;
+writePrecision  8;
+writeCompression off;
+timeFormat      general;
+timePrecision   8;
+runTimeModifiable true;
+
+adjustTimeStep  {"yes" if adjust else "no"};
+maxCo           {foam_num(ctrl.max_co)};
+maxDeltaT       {foam_num(ctrl.max_delta_t)};
+
+functions
+{{
+{functions_text or "    // no area-average probes"}
+}}
+"""
+    _write_foam(path, _foam_header("controlDict") + "\n" + body)
 
 
 def write_amgxp_options(path: Path, json_src: Path) -> None:

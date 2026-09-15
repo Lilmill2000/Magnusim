@@ -1,0 +1,53 @@
+{
+  "phase": "Phase 1",
+  "land": "land1",
+  "title": "Steps 1-3 foundation: transient + function_objects + web_adapter",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-14 23:20:28 CT",
+  "machine": "Timmy",
+  "port_8082": "up",
+  "tests": {
+    "unit_suite": "61 passed",
+    "land1_focused": "21 passed (golden steady_cpu/amgx + transient + function_objects + web_adapter)",
+    "js_transient_golden": "PASS (normalized both sides vs fixtures/golden/js_transient)"
+  },
+  "files_touched": {
+    "added": [
+      "cfd-web/python/cfddesk/project/transient.py",
+      "cfd-web/python/cfddesk/case/function_objects.py",
+      "cfd-web/python/cfddesk/project/web_adapter.py",
+      "cfd-web/python/tests/unit/test_transient.py",
+      "cfd-web/python/tests/unit/test_function_objects.py",
+      "cfd-web/python/tests/unit/test_web_adapter.py",
+      "cfd-web/python/tests/fixtures/js-project/*"
+    ],
+    "modified": [
+      "cfd-web/python/cfddesk/case/writer.py (write_control_dict/fv_schemes transient hooks; write_control_dict_transient; write_fv_schemes_transient; write_fv_solution_pimple; write_fv_options_limit_u)",
+      "cfd-web/python/cfddesk/project/settings.py (SolverMode steady|transient)",
+      "cfd-web/python/cfddesk/case/surface_averages.py (deprecated note; keep pInlet/pOutlet for CLI)",
+      "cfd-web/python/cfddesk/units/quantities.py (ft3/min + ft\u00b3/min aliases)"
+    ]
+  },
+  "landed": [
+    "Step 1: TransientControl + estimate_delta_t/flow_through_time/resolve; writer pimpleFoam variants matching w30 / js_transient",
+    "Step 2: function_objects mon_/flow_ surfaceFieldValue (NOT pInlet/pOutlet)",
+    "Step 3: web_adapter RunSpec + load_run_spec reading boundary_conditions/materials/mesh/result_controls/simulation_control"
+  ],
+  "NOT_yet_done": [
+    "tools/prepare_run.py (Step 4) \u2014 copy polyMesh, write 0/ fields via bc_registry, full case golden vs js_steady/js_transient",
+    "cfddesk/wsl/templates/solve.sh + tools/run_solve.py (Step 5)",
+    "snappy hex-dominant script move (Step 6)",
+    "JSONL job protocol / job-runner.js (Step 7)",
+    "Delete JS writer writeSolveCase / transient* writers (Step 8) \u2014 soft-pass kill: do NOT delete until prepare_run + goldens prove equivalence",
+    "Node stops writing project JSON / project_cli.py (Step 9)",
+    "Playwright solve smoke + manual transient (Step 10)"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 1 done; JS writer still authoritative until prepare_run goldens prove equivalence.",
+  "notes": [
+    "Existing write_simplefoam_case steady path unchanged (goldens green).",
+    "surface_averages pInlet/pOutlet retained for legacy CLI.",
+    "js_transient FO order in golden includes mon_/flow_ for pressure_1 and velocity_inlet_1."
+  ]
+}

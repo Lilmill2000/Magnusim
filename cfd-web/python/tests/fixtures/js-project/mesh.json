@@ -1,0 +1,14 @@
+{
+  "active_id": "mesh_1",
+  "meshes": [
+    {
+      "id": "mesh_1",
+      "name": "Mesh 1",
+      "simulation_id": "sim_1",
+      "live_mesh_result": {
+        "case_dir": "UNUSED",
+        "n_cells": 1000
+      }
+    }
+  ]
+}

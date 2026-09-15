@@ -17,7 +17,7 @@ from typing import Literal
 InletDirectionMode = Literal["normal", "vector"]
 SolverBackend = Literal["cpu", "amgx"]
 SolverEndCondition = Literal["residual", "iterations"]
-SolverMode = Literal["steady"]
+SolverMode = Literal["steady", "transient"]
 LocationSource = Literal["auto", "manual"]
 SizingMode = Literal["automatic", "manual"]
 # Hex-dominant = snappyHexMesh; Standard = gmsh BREP → gmshToFoam (Phase 5b).
@@ -388,8 +388,11 @@ class SolverSettings:
         turb = data.get("turbulence", "laminar")
         if turb not in TURBULENCE_MODELS:
             turb = "laminar"
+        mode = data.get("mode", "steady")
+        if mode not in ("steady", "transient"):
+            mode = "steady"
         return SolverSettings(
-            mode="steady",
+            mode=mode,  # type: ignore[arg-type]
             backend=backend,  # type: ignore[arg-type]
             end_condition=end_condition,  # type: ignore[arg-type]
             end_time=int(data.get("end_time", 1000)),

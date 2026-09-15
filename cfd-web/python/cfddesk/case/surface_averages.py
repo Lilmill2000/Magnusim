@@ -1,5 +1,8 @@
 """Inlet/outlet area-average(p) functionObjects + log/.dat parsers.
 
+DEPRECATED for web UI Graphs: prefer cfddesk.case.function_objects
+(mon_/flow_ names). Kept for the legacy CLI / write_simplefoam_case path.
+
 Phase 6 result control: live area average of pressure on the first inlet
 and first outlet patch. Function-object names are fixed (``pInlet`` /
 ``pOutlet``); patch names come from the project BC registry.

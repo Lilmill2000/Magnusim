@@ -1,0 +1,23 @@
+{
+  "defaults": { "wall_type": "No-slip" },
+  "boundary_conditions": [
+    {
+      "name": "velocity_inlet_1",
+      "bc_type": "Velocity Inlet",
+      "velocity_type": "Fixed",
+      "value": 1.0,
+      "unit": "m/s",
+      "direction": "normal",
+      "faces": ["face 1@Body1"],
+      "simulation_id": "sim_1"
+    },
+    {
+      "name": "pressure_1",
+      "bc_type": "Pressure Outlet",
+      "value": 0,
+      "unit": "Pa",
+      "faces": ["face 2@Body1"],
+      "simulation_id": "sim_1"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "endTime": 200,
+  "writeInterval": 50,
+  "transient": {
+    "end_time": 5,
+    "write_count": 50,
+    "time_step_mode": "adjustable",
+    "max_co": 1,
+    "time_scheme": "Euler",
+    "n_outer_correctors": 1,
+    "n_correctors": 2,
+    "n_non_orth_correctors": 0
+  }
+}

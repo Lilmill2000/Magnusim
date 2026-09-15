@@ -1,0 +1,5 @@
+{
+  "id": "sim_1",
+  "name": "Incompressible",
+  "time_dependency": "Steady-state"
+}
