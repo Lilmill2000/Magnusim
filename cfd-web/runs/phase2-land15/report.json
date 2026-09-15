@@ -9,8 +9,8 @@
   "machine": "Timmy",
   "baseline_HEAD": "372560928c417c34ad211311751850d418ea41f6",
   "baseline_land14": "ca17a44eb75602b5cf8dc34d7dcb28069c9ce118",
-  "commit_sha": "PENDING",
-  "commit_short": "PENDING",
+  "commit_sha": "56195eac78d9f513d9ce437e322039f35e8ff4df",
+  "commit_short": "56195ea",
   "split": {
     "before": {
       "path": "cfd-web/python/cfddesk/project/web_mirrors.py",
@@ -21,14 +21,38 @@
       "path": "cfd-web/python/cfddesk/project/web_mirrors/",
       "loc_total": 1120,
       "modules": {
-        "__init__.py": {"loc": 71, "owner": "public re-exports (stable import path)"},
-        "_common.py": {"loc": 96, "owner": "shared helpers + WEB_SIBLING_RELS"},
-        "materials.py": {"loc": 94, "owner": "materials to_web_/from_web_"},
-        "bcs.py": {"loc": 127, "owner": "boundary_conditions to_web_/from_web_"},
-        "mesh.py": {"loc": 190, "owner": "mesh + mesh_refinements to_web_/from_web_"},
-        "controls.py": {"loc": 62, "owner": "result_controls + simulation_control"},
-        "simulations.py": {"loc": 99, "owner": "simulations catalog + runs/catalog"},
-        "ops.py": {"loc": 381, "owner": "apply/regenerate/ingest/synthesize/mark"}
+        "__init__.py": {
+          "loc": 71,
+          "owner": "public re-exports (stable import path)"
+        },
+        "_common.py": {
+          "loc": 96,
+          "owner": "shared helpers + WEB_SIBLING_RELS"
+        },
+        "materials.py": {
+          "loc": 94,
+          "owner": "materials to_web_/from_web_"
+        },
+        "bcs.py": {
+          "loc": 127,
+          "owner": "boundary_conditions to_web_/from_web_"
+        },
+        "mesh.py": {
+          "loc": 190,
+          "owner": "mesh + mesh_refinements to_web_/from_web_"
+        },
+        "controls.py": {
+          "loc": 62,
+          "owner": "result_controls + simulation_control"
+        },
+        "simulations.py": {
+          "loc": 99,
+          "owner": "simulations catalog + runs/catalog"
+        },
+        "ops.py": {
+          "loc": 381,
+          "owner": "apply/regenerate/ingest/synthesize/mark"
+        }
       }
     },
     "how": "Boring move+re-export: delete god-module file; package owns converters by sibling kind; ops owns write-through orchestration; __init__ + web_adapter keep public symbols identical (identity-equal)."
@@ -92,7 +116,7 @@
     "modified": []
   },
   "notes": [
-    "Did not change converter logic — AST move of function bodies into owned modules.",
+    "Did not change converter logic \u2014 AST move of function bodies into owned modules.",
     "Did not invent FILTERS chrome / describe fill / Node rewrite.",
     "Did not claim Phase 2 CLOSED / Phase 3+.",
     "Did not push.",
