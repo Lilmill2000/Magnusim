@@ -1,0 +1,271 @@
+"""Built-in incompressible AnalysisType specs (Phase 2 land2)."""
+
+from __future__ import annotations
+
+from typing import Any, TYPE_CHECKING
+
+from cfddesk.registry.analysis import AnalysisType, ResultField
+from cfddesk.registry.requirements import Requirement
+from cfddesk.registry.schema import SchemaField
+
+if TYPE_CHECKING:
+    from cfddesk.registry.discovery import RegistryHub
+
+# Matches project.settings.TURBULENCE_MODELS / case.ras — inlined so registry
+# builtins do not import project/cad (OCP) at load_all time.
+_TURBULENCE_MODELS: tuple[str, ...] = (
+    "laminar",
+    "kEpsilon",
+    "kOmegaSST",
+    "LRR",
+    "SSG",
+)
+
+# Product BC keys from case.bc_registry.BC_TYPES (placeholders OK until BC wrap).
+_INCOMPRESSIBLE_BC_TYPES: tuple[str, ...] = (
+    "velocity_inlet_fixed",
+    "velocity_inlet_volumetric",
+    "velocity_inlet_mean",
+    "velocity_inlet_freestream",
+    "velocity_inlet_mass",
+    "velocity_outlet",
+    "pressure_inlet_gauge",
+    "pressure_inlet_total",
+    "pressure_outlet_gauge",
+    "pressure_outlet_total",
+    "pressure_outlet_mean",
+    "wall_noslip",
+    "wall_slip",
+    "wall_moving",
+    "wall_rotating",
+    "fan",
+    "periodic",
+    "natural_convection",
+    "symmetry",
+    "wedge",
+    "empty",
+    "custom",
+)
+
+_FIELDS: tuple[str, ...] = ("U", "p", "k", "omega", "nut")
+
+_RESULT_FIELDS: tuple[ResultField, ...] = (
+    ResultField("U", "Velocity", "velocity", "vector"),
+    ResultField("p", "Pressure", "pressure", "scalar"),
+    ResultField("k", "Turbulent kinetic energy", "specific_energy", "scalar"),
+    ResultField("omega", "Specific dissipation rate", "specific_dissipation_rate", "scalar"),
+    ResultField("nut", "Turbulent viscosity", "kinematic_viscosity", "scalar"),
+)
+
+# MonitorSpec keys (placeholders until p2-bc-material-monitor).
+_MONITORS: tuple[str, ...] = ("area_average", "flow")
+
+_MATERIAL_MODELS: tuple[str, ...] = ("newtonian_incompressible",)
+
+
+def _settings_schema() -> tuple[SchemaField, ...]:
+    """Per-analysis settings aligned with W17_DEFAULTS + TurbulenceModel."""
+    return (
+        SchemaField(
+            "turbulence_model",
+            "Turbulence model",
+            "choice",
+            default="kOmegaSST",
+            choices=_TURBULENCE_MODELS,
+            group="flow",
+        ),
+        SchemaField(
+            "passive_species",
+            "Passive species",
+            "int",
+            default=0,
+            min=0,
+            max=20,
+            group="flow",
+        ),
+        SchemaField(
+            "energy",
+            "Energy",
+            "bool",
+            default=False,
+            group="flow",
+            advanced=True,
+        ),
+    )
+
+
+def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
+    ddt_default = "Euler" if transient else "steadyState"
+    return (
+        SchemaField(
+            "residual_u",
+            "Residual U",
+            "float",
+            default=1e-6,
+            min=0.0,
+            group="residuals",
+        ),
+        SchemaField(
+            "residual_p",
+            "Residual p",
+            "float",
+            default=1e-6,
+            min=0.0,
+            group="residuals",
+        ),
+        SchemaField(
+            "relax_u",
+            "Relaxation U",
+            "float",
+            default=0.7,
+            min=0.0,
+            max=1.0,
+            group="relaxation",
+        ),
+        SchemaField(
+            "relax_p",
+            "Relaxation p",
+            "float",
+            default=0.3,
+            min=0.0,
+            max=1.0,
+            group="relaxation",
+        ),
+        SchemaField(
+            "n_non_orthogonal",
+            "Non-orthogonal correctors",
+            "int",
+            default=1,
+            min=0,
+            group="solution",
+        ),
+        SchemaField(
+            "ddt_default",
+            "Time scheme",
+            "text",
+            default=ddt_default,
+            group="schemes",
+            advanced=True,
+        ),
+    )
+
+
+def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
+    fields: list[SchemaField] = [
+        SchemaField(
+            "end_time",
+            "End time",
+            "float",
+            default=1000.0 if not transient else 1.0,
+            min=0.0,
+            group="control",
+        ),
+        SchemaField(
+            "write_interval",
+            "Write interval",
+            "int",
+            default=1000 if not transient else 50,
+            min=1,
+            group="control",
+        ),
+        SchemaField(
+            "write_control",
+            "Write control",
+            "choice",
+            default="timeStep",
+            choices=("timeStep", "runTime", "adjustableRunTime"),
+            group="control",
+        ),
+    ]
+    if transient:
+        fields.insert(
+            1,
+            SchemaField(
+                "delta_t",
+                "Time step",
+                "float",
+                default=0.001,
+                min=0.0,
+                group="control",
+            ),
+        )
+        fields.append(
+            SchemaField(
+                "max_co",
+                "Max Courant",
+                "float",
+                default=1.0,
+                min=0.0,
+                group="control",
+                advanced=True,
+            )
+        )
+    return tuple(fields)
+
+
+def _validate_minimal(
+    _project: Any = None,
+    _simulation: Any = None,
+    **_kwargs: Any,
+) -> list[str]:
+    """Land2 stub — real Project/Simulation checks deferred with migration."""
+    return []
+
+
+def build_incompressible_steady() -> AnalysisType:
+    return AnalysisType(
+        key="incompressible_steady",
+        label="Incompressible Fluid Flow",
+        category="FLUID DYNAMICS",
+        time_dependency="steady",
+        fields=_FIELDS,
+        turbulence_models=_TURBULENCE_MODELS,
+        default_turbulence="kOmegaSST",
+        bc_types=_INCOMPRESSIBLE_BC_TYPES,
+        material_models=_MATERIAL_MODELS,
+        solver_backends=("simpleFoam", "simpleFoam_amgx"),
+        default_solver="simpleFoam",
+        monitors=_MONITORS,
+        result_fields=_RESULT_FIELDS,
+        settings_schema=_settings_schema(),
+        numerics_schema=_numerics_schema(transient=False),
+        control_schema=_control_schema(transient=False),
+        validate=_validate_minimal,
+        region_roles=("fluid",),
+        write_case=None,  # Phase 1 writers stay outside registry this land
+        parse_log_line=None,
+        requires=(Requirement("wsl_tool", "simpleFoam"),),
+    )
+
+
+def build_incompressible_transient() -> AnalysisType:
+    return AnalysisType(
+        key="incompressible_transient",
+        label="Incompressible Fluid Flow (Transient)",
+        category="FLUID DYNAMICS",
+        time_dependency="transient",
+        fields=_FIELDS,
+        turbulence_models=_TURBULENCE_MODELS,
+        default_turbulence="kOmegaSST",
+        bc_types=_INCOMPRESSIBLE_BC_TYPES,
+        material_models=_MATERIAL_MODELS,
+        solver_backends=("pimpleFoam",),
+        default_solver="pimpleFoam",
+        monitors=_MONITORS,
+        result_fields=_RESULT_FIELDS,
+        settings_schema=_settings_schema(),
+        numerics_schema=_numerics_schema(transient=True),
+        control_schema=_control_schema(transient=True),
+        validate=_validate_minimal,
+        region_roles=("fluid",),
+        write_case=None,
+        parse_log_line=None,
+        requires=(Requirement("wsl_tool", "pimpleFoam"),),
+    )
+
+
+def register_incompressible(hub: "RegistryHub") -> None:
+    """Register both incompressible AnalysisTypes (idempotent same-plugin)."""
+    reg = hub.registry("analysis")
+    reg.register(build_incompressible_steady(), plugin="builtin")
+    reg.register(build_incompressible_transient(), plugin="builtin")

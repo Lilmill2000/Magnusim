@@ -1,7 +1,8 @@
-"""cfddesk.registry — plugin registry core (Phase 2 land1)."""
+"""cfddesk.registry — plugin registry core (Phase 2)."""
 
 from __future__ import annotations
 
+from cfddesk.registry.analysis import AnalysisType, ResultField, schema_defaults
 from cfddesk.registry.base import Registry, RegistryError, Spec
 from cfddesk.registry.discovery import (
     RegistryHub,
@@ -15,6 +16,8 @@ from cfddesk.registry.requirements import Missing, Requirement, check_requiremen
 from cfddesk.registry.schema import SchemaField, to_json_schema, validate
 
 __all__ = [
+    "AnalysisType",
+    "ResultField",
     "Registry",
     "RegistryError",
     "RegistryHub",
@@ -22,6 +25,7 @@ __all__ = [
     "SchemaField",
     "to_json_schema",
     "validate",
+    "schema_defaults",
     "PluginManifest",
     "Requirement",
     "Missing",

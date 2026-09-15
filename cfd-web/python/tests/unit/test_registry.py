@@ -44,7 +44,7 @@ def test_load_all_succeeds_and_idempotent():
     hub1 = load_all()
     hub2 = load_all()
     assert hub1 is hub2
-    # Land1 builtins register zero domain specs — hub still usable
+    # Hub usable; land2+ registers analysis builtins (tested separately)
     reg = get_registry("smoke")
     assert reg.kind == "smoke"
     assert reg.keys() == []

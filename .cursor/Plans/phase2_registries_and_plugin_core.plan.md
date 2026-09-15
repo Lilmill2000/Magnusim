@@ -7,7 +7,7 @@ todos:
     status: completed
   - id: p2-analysis-type
     content: "AnalysisType spec + built-ins incompressible_steady / incompressible_transient; replace PRIMARY_SIM_ANALYSIS and W17 strings"
-    status: pending
+    status: completed
   - id: p2-solver-backend
     content: "SolverBackend spec + simpleFoam / pimpleFoam (+ amgx variant); residual/courant parsers move here"
     status: pending

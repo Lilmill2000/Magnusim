@@ -1,4 +1,4 @@
-"""Built-in domain specs (Phase 2). Land1 registers zero domain specs."""
+"""Built-in domain specs (Phase 2)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,10 @@ if TYPE_CHECKING:
 def register_builtins(hub: "RegistryHub") -> None:
     """Register built-in specs into `hub`.
 
-    Phase 2 land1: intentionally empty — AnalysisType / Solver / Mesh / etc.
-    land in later Phase 2 steps. Ensures load_all() has a stable hook.
+    Phase 2 land2: AnalysisType incompressible_steady / incompressible_transient.
+    Later lands add Solver / Mesh / Material / Monitor / Filter.
+    Idempotent under load_all retries (same-plugin re-register).
     """
-    _ = hub  # hub kinds are created on demand by plugins / later lands
+    from cfddesk.builtin.incompressible import register_incompressible
+
+    register_incompressible(hub)
