@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from cfddesk.jobs.events import EVENT_PREFIX, Event, emit, parse_line
+from cfddesk.jobs.events import EVENT_PREFIX, EVENT_PREFIX_ALIASES, Event, emit, parse_line
 
 
 def test_parse_prefixed_event():
@@ -62,3 +62,26 @@ def test_event_to_json_compact():
     s = ev.to_json()
     assert "event" in s and "time_saved" in s
     assert " " not in s  # separators compact
+
+
+def test_parse_magnusim_prefix():
+    line = "MAGNUSIM_EVENT " + json.dumps({"event": "stage", "stage": "solve"})
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.event == "stage"
+    assert ev.fields["stage"] == "solve"
+
+
+def test_parse_cfddesk_alias_still_works():
+    line = "CFDDESK_EVENT " + json.dumps({"event": "time_saved", "t": 3.0})
+    ev = parse_line(line)
+    assert ev is not None
+    assert ev.event == "time_saved"
+    assert ev.fields["t"] == 3.0
+
+
+def test_event_prefix_is_magnusim():
+    assert EVENT_PREFIX.startswith("MAGNUSIM_EVENT")
+    assert "CFDDESK_EVENT " in EVENT_PREFIX_ALIASES
+    assert EVENT_PREFIX in EVENT_PREFIX_ALIASES
+

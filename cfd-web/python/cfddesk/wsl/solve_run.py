@@ -317,7 +317,7 @@ def kill_solve(wsl_case_id: str, run_id: str | None = None) -> None:
 
 
 def stream_events_to_stdout(proc: subprocess.Popen) -> tuple[int, ProgressParser]:
-    """Relay events as ``CFDDESK_EVENT`` JSONL; return (exit_code, parser)."""
+    """Relay events as ``MAGNUSIM_EVENT`` JSONL; return (exit_code, parser)."""
     parser = ProgressParser()
     for ev in iter_events(proc, parser=parser):
         # Re-emit with prefix so Node parse_line works uniformly.

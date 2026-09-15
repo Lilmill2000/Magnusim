@@ -3,17 +3,18 @@
  * Thin JSONL job adapter (Phase 1 Step 7 partial).
  *
  * Spawns a Python tool (prepare_run / run_solve / generate_*), splits stdout by
- * line, parses CFDDESK_EVENT (and bare {"event":...}) JSON, writes structured
+ * line, parses MAGNUSIM_EVENT / CFDDESK_EVENT alias (and bare {"event":...}) JSON, writes structured
  * rows via log.js, and invokes onEvent.
  *
- * Does NOT yet replace w27 applyProgressLine / w21 parseCfmeshLine — that is
+ * w27 startSolve uses this for run_solve JSONL; w21 parseCfmeshLine still separate — that is
  * the next land once run_solve is proven end-to-end from startSolve.
  */
 import { spawn } from 'node:child_process';
 import { createJobLogger } from './log.js';
 import { PYTHON } from './python-env.js';
 
-const EVENT_PREFIX = 'CFDDESK_EVENT ';
+const EVENT_PREFIX = 'MAGNUSIM_EVENT ';
+const EVENT_PREFIX_ALIASES = ['MAGNUSIM_EVENT ', 'CFDDESK_EVENT '];
 
 /**
  * @param {string} line
@@ -27,8 +28,13 @@ export function parseJobLine(line) {
     raw = raw.slice(raw.indexOf(']') + 1).trim();
   }
   let payload = null;
-  if (raw.startsWith(EVENT_PREFIX)) payload = raw.slice(EVENT_PREFIX.length).trim();
-  else if (raw.startsWith('{') && raw.includes('"event"')) payload = raw;
+  for (const prefix of EVENT_PREFIX_ALIASES) {
+    if (raw.startsWith(prefix)) {
+      payload = raw.slice(prefix.length).trim();
+      break;
+    }
+  }
+  if (payload == null && raw.startsWith('{') && raw.includes('"event"')) payload = raw;
   if (!payload) return null;
   try {
     const data = JSON.parse(payload);

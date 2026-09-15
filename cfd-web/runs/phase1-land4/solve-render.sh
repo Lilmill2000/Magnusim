@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # cfddesk solve pipeline (Phase 1 Step 5). Placeholders replaced by solve_run.render_solve_script:
-#   __DST__ __WIN_OUT__ __NPROCS__ __APP__ __RUN_ID__
+#   /home/drmil/cases/cfddesk-w27-land4-smoke /mnt/c/Users/drmil/Desktop/Code/CFD/cfd-web/runs/phase1-land4/prep-out 1 simpleFoam land4-smoke
 # Emits MAGNUSIM_EVENT JSON lines (CFDDESK_EVENT still accepted by parsers); OpenFOAM stdout passes through.
 set -uo pipefail
-DST="__DST__"
-WIN_OUT="__WIN_OUT__"
-NPROCS="__NPROCS__"
-RUN_ID="__RUN_ID__"
-APP="__APP__"
+DST="/home/drmil/cases/cfddesk-w27-land4-smoke"
+WIN_OUT="/mnt/c/Users/drmil/Desktop/Code/CFD/cfd-web/runs/phase1-land4/prep-out"
+NPROCS="1"
+RUN_ID="land4-smoke"
+APP="simpleFoam"
 
 _evt() {
   echo "MAGNUSIM_EVENT $1"

@@ -51,7 +51,8 @@ def test_template_exists_and_has_placeholders():
     text = p.read_text(encoding="utf-8")
     for tok in ("__DST__", "__WIN_OUT__", "__NPROCS__", "__APP__", "__RUN_ID__"):
         assert tok in text
-    assert "CFDDESK_EVENT" in text
+    assert "MAGNUSIM_EVENT" in text
+    assert 'echo "MAGNUSIM_EVENT' in text  # emit preferred brand
     assert "openfoam2606" in text
     assert "decomposePar" in text
     assert "W27_" not in text
@@ -157,3 +158,10 @@ def test_run_solve_parse_log_cli(tmp_path: Path, capsys):
     assert all(p is not None for p in parsed)
     assert any(p.event == "residual" for p in parsed if p)
     assert any(p.event == "result" for p in parsed if p)
+
+
+def test_magnusim_prefixed_sample():
+    log = SAMPLE_LOG.replace("CFDDESK_EVENT", "MAGNUSIM_EVENT")
+    events = events_from_lines(log.splitlines())
+    assert any(e.event == "residual" for e in events)
+    assert any(e.event == "result" for e in events)

@@ -36,6 +36,7 @@ import {
 } from './w30-transient.js';
 import { createJobLogger } from './log.js';
 import { envGet } from './env-compat.js';
+import { spawnJob } from './job-runner.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -144,6 +145,88 @@ function consumeProgressChunk(state, chunk) {
   for (const line of parts) applyProgressLine(state, line);
 }
 
+
+/**
+ * Apply one MAGNUSIM_EVENT / CFDDESK_EVENT JSONL object to the live progress
+ * state (twin of cfddesk.wsl.solve_run.ProgressParser event handling).
+ * Keeps snapshotProgress / enrichRunDoc shape unchanged for /api/run/status.
+ */
+function applyJobEvent(state, ev) {
+  if (!state || !ev || typeof ev !== 'object') return;
+  const kind = ev.event;
+  if (kind === 'stage') {
+    const st = String(ev.stage || '');
+    if (st === 'decompose') state.stage = 'decompose';
+    else if (st === 'solve') state.stage = 'solve';
+    else if (st === 'reconstruct' || st === 'solve_end') state.stage = 'reconstruct';
+    else if (st === 'copy' || st === 'copy_to_wsl') state.stage = 'copy';
+    return;
+  }
+  if (kind === 'time_saved') {
+    const t = Number(ev.t);
+    if (Number.isFinite(t) && !(state.saved_times || []).includes(t)) {
+      if (!state.saved_times) state.saved_times = [];
+      state.saved_times.push(t);
+    }
+    return;
+  }
+  if (kind === 'progress') {
+    if (state.stage !== 'solve') return;
+    if (state.current && Number.isFinite(state.current.t)) state.series.push(state.current);
+    const t = Number(ev.time != null ? ev.time : ev.sim_time);
+    const prev = state.current || {};
+    const pend = state.pending || {};
+    state.pending = null;
+    state.current = { t };
+    for (const k of ['delta_t', 'co_max', 'co_mean']) {
+      if (Number.isFinite(Number(ev[k]))) state.current[k] = Number(ev[k]);
+      else if (Number.isFinite(pend[k])) state.current[k] = pend[k];
+      else if (Number.isFinite(prev[k])) state.current[k] = prev[k];
+    }
+    if (!state.solve_started_at && Number.isFinite(t) && t > 0) {
+      state.solve_started_at = new Date().toISOString();
+    }
+    return;
+  }
+  if (kind === 'residual') {
+    if (!state.current) return;
+    const field = ev.field;
+    const initial = Number(ev.initial);
+    if (field && Number.isFinite(initial)) state.current[field] = initial;
+    if (ev.fields && typeof ev.fields === 'object') {
+      for (const [k, v] of Object.entries(ev.fields)) {
+        const n = Number(v);
+        if (Number.isFinite(n)) state.current[k] = n;
+      }
+    }
+    return;
+  }
+  if (kind === 'courant') {
+    if (!state.pending) state.pending = {};
+    if (Number.isFinite(Number(ev.mean))) state.pending.co_mean = Number(ev.mean);
+    if (Number.isFinite(Number(ev.max))) state.pending.co_max = Number(ev.max);
+    if (Number.isFinite(Number(ev.delta_t))) state.pending.delta_t = Number(ev.delta_t);
+    return;
+  }
+}
+
+function parsePrepareRunStdout(stdout) {
+  const lines = String(stdout || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.startsWith('{')) continue;
+    try {
+      return JSON.parse(line);
+    } catch {
+      /* keep scanning */
+    }
+  }
+  return null;
+}
+
 function compactResidual(row) {
   const ux = Number(row.Ux);
   const uy = Number(row.Uy);
@@ -223,6 +306,11 @@ function enrichRunDoc(doc) {
     try {
       progress = parseSolveProgress(readFileSync(doc.log_path, 'utf8'));
       fromLog = true;
+      // New JSONL path may leave a thin text log; keep stamped residuals.
+      if ((!progress.n_steps || progress.n_steps === 0) && Array.isArray(doc.residuals) && doc.residuals.length) {
+        progress = null;
+        fromLog = false;
+      }
     } catch {
       progress = null;
     }
@@ -2235,44 +2323,142 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
   mkdirSync(winOut, { recursive: true });
   mkdirSync(REPORT_DIR, { recursive: true });
 
+  // Phase 1 land4: Python prepare_run writes the case; job-runner spawns run_solve.
+  // writeSolveCase / buildSolveScript remain in this file until land5 soft-pass kill.
+  const prepArgs = [
+    pyTool('prepare_run.py'),
+    '--project-dir',
+    projectDir(id),
+    '--run-id',
+    String(runId),
+    '--out-dir',
+    winOut,
+    '--n-procs',
+    String(nProcs),
+  ];
+  if (draft && draft.mesh_id) prepArgs.push('--mesh-id', String(draft.mesh_id));
+  if (draft && draft.simulation_id) prepArgs.push('--simulation-id', String(draft.simulation_id));
+  let prepResult = null;
   try {
-    writeSolveCase(winOut, ready, { endTime: et, writeInterval: wi, nProcs, transient });
+    const prep = spawnSync(PYTHON, prepArgs, {
+      windowsHide: true,
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    prepResult = parsePrepareRunStdout(prep.stdout);
+    if (prep.status !== 0 || !prepResult || !prepResult.ok) {
+      const errMsg =
+        (prepResult && (prepResult.error || prepResult.message)) ||
+        String(prep.stderr || prep.stdout || '').slice(0, 800) ||
+        `prepare_run exited ${prep.status}`;
+      return {
+        ok: false,
+        status: 500,
+        bodyExtra: { error: 'Failed to prepare solve case: ' + errMsg, increment: INCREMENT },
+      };
+    }
   } catch (err) {
     return {
       ok: false,
       status: 500,
-      bodyExtra: { error: 'Failed to write solve case: ' + String(err), increment: INCREMENT },
+      bodyExtra: { error: 'Failed to prepare solve case: ' + String(err), increment: INCREMENT },
     };
   }
 
   const wslRunCase = wslCasePath(`cfddesk-w27-${runId}`);
   const winLog = join(REPORT_DIR, `run-${runId}.log`);
-  const shPath = join(REPORT_DIR, `solve-${runId}.sh`);
-  writeFileSync(
-    shPath,
-    buildSolveScript({
-      runId,
-      wslWinOut: winToWsl(winOut),
-      wslRunCase,
-      nProcs,
-      solver,
-    }).replace(/\r\n/g, '\n'),
-    'utf8'
-  );
-  const argv = ['wsl', '-d', WSL_DISTRO, '--', 'bash', winToWsl(shPath)];
   const started_at = new Date().toISOString();
   let logBuf = '';
-  const jobLog = createJobLogger('solve', runId);
-  const child = spawn(argv[0], argv.slice(1), {
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
   const progress = newProgressState();
+  const runSolveArgs = [
+    '--case-dir',
+    winOut,
+    '--wsl-case',
+    wslRunCase,
+    '--n-procs',
+    String(nProcs),
+    '--app',
+    solver,
+    '--run-id',
+    String(runId),
+  ];
+  const argv = [PYTHON, pyTool('run_solve.py'), ...runSolveArgs];
+
+  let runFinished = false;
+  const finishRun = (code, signal, errMsg) => {
+    if (runFinished) return;
+    runFinished = true;
+    const exit_code = code == null ? (signal ? -2 : -1) : code;
+    const snap = liveRun && liveRun.progress ? snapshotProgress(liveRun.progress) : parseSolveProgress(logBuf);
+    const stopRequested = !!(liveRun && liveRun.stop_requested);
+    if (liveRun && liveRun.stop_timer) clearTimeout(liveRun.stop_timer);
+    const base = (liveRun && liveRun.baseRunning) || {};
+    liveRun = null;
+    const savedTimes = listSavedTimes(winOut);
+    const lastSaved = savedTimes.length ? savedTimes[savedTimes.length - 1] : 0;
+    const stopped = stopRequested || (exit_code !== 0 && signal === 'SIGTERM');
+    const status = errMsg ? 'failed' : stopped ? 'stopped' : exit_code === 0 ? 'done' : 'failed';
+    const unit = isTransient ? 't = ' + lastSaved + ' s' : 'iteration ' + lastSaved;
+    persistRunDoc(id, {
+      ...base,
+      status,
+      exit_code,
+      signal: signal || null,
+      stop_requested: stopRequested,
+      finished_at: new Date().toISOString(),
+      log_excerpt: logBuf.slice(-6000),
+      stage: snap.stage,
+      iteration: snap.iteration,
+      sim_time: snap.sim_time,
+      n_steps: snap.n_steps,
+      residuals: snap.residuals || [],
+      ...(snap.co_max != null ? { co_max: snap.co_max } : {}),
+      ...(snap.co_mean != null ? { co_mean: snap.co_mean } : {}),
+      ...(snap.delta_t != null ? { delta_t: snap.delta_t } : {}),
+      last_saved_iteration: lastSaved,
+      n_saved_times: savedTimes.length,
+      has_results: lastSaved > 0,
+      ...(errMsg ? { error: errMsg } : {}),
+      note: errMsg
+        ? `Failed to start ${solver}: ` + errMsg
+        : status === 'done'
+          ? `${solver} finished. Results are in the run folder.`
+          : status === 'stopped'
+            ? lastSaved > 0
+              ? `Run stopped. Results up to ${unit} are available.`
+              : 'Run stopped before the first saved ' + (isTransient ? 'time step.' : 'iteration.')
+            : `${solver} failed (exit ${exit_code}${signal ? ' ' + signal : ''}).`,
+    });
+  };
+
+  const { child, jobLog } = spawnJob({
+    kind: 'solve',
+    jobId: String(runId),
+    script: pyTool('run_solve.py'),
+    args: runSolveArgs,
+    onEvent: (ev) => {
+      if (liveRun && liveRun.progress) applyJobEvent(liveRun.progress, ev);
+      try {
+        const line =
+          ev && ev.event === 'log' && ev.line
+            ? String(ev.line) + '\n'
+            : JSON.stringify(ev) + '\n';
+        logBuf += line;
+        writeFileSync(winLog, logBuf, 'utf8');
+      } catch {}
+    },
+    onExit: (code, signal) => finishRun(code, signal, null),
+  });
   progress._jobLog = jobLog;
-  liveRun = { child, run_id: runId, wsl_case: wslRunCase, project_id: id, progress, jobLog };
-  jobLog.info('spawn', { pid: child.pid || null, solver });
-
-
+  liveRun = {
+    child,
+    run_id: runId,
+    wsl_case: wslRunCase,
+    project_id: id,
+    progress,
+    jobLog,
+    protocol: 'magnusim-jsonl',
+  };
   const baseRunning = {
     status: 'running',
     mode: 'solve',
@@ -2303,6 +2489,8 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     n_procs: nProcs,
     endTime: et,
     writeInterval: wi,
+    prepare_run: prepResult,
+    solve_protocol: 'magnusim-jsonl',
     mesh_source: {
       case_dir: ready.mesh.case_dir,
       mesh_path: ready.mesh.mesh_path,
@@ -2325,75 +2513,11 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
       : `simpleFoam ${nProcs > 1 ? nProcs + ' ranks' : 'serial'} — Incompressible / k-ω SST / SIMPLE`,
     increment: INCREMENT,
   };
+  liveRun.baseRunning = baseRunning;
   persistRunDoc(id, baseRunning);
   const cat0 = loadCatalog(id);
   const named0 = (cat0.runs.find((r) => String(r.id) === String(runId)) || {}).name;
   if (named0) baseRunning.name = named0;
-
-  const appendLog = (chunk) => {
-    const s = chunk.toString('utf8');
-    logBuf += s;
-    if (liveRun && liveRun.progress) consumeProgressChunk(liveRun.progress, s);
-    try {
-      writeFileSync(winLog, logBuf, 'utf8');
-    } catch {}
-  };
-  child.stdout?.on('data', appendLog);
-  child.stderr?.on('data', appendLog);
-
-  child.on('error', (err) => {
-    logBuf += `\nSPAWN_ERROR: ${err}\n`;
-    try {
-      writeFileSync(winLog, logBuf, 'utf8');
-    } catch {}
-    liveRun = null;
-    persistRunDoc(id, {
-      ...baseRunning,
-      status: 'failed',
-      exit_code: -1,
-      finished_at: new Date().toISOString(),
-      log_excerpt: logBuf.slice(-2000),
-      error: String(err),
-      note: `Failed to start WSL ${solver}: ` + String(err),
-    });
-  });
-
-  child.on('exit', (code, signal) => {
-    const exit_code = code == null ? (signal ? -2 : -1) : code;
-    const progress = liveRun && liveRun.progress ? snapshotProgress(liveRun.progress) : parseSolveProgress(logBuf);
-    const stopRequested = !!(liveRun && liveRun.stop_requested);
-    if (liveRun && liveRun.stop_timer) clearTimeout(liveRun.stop_timer);
-    liveRun = null;
-    const savedTimes = listSavedTimes(winOut);
-    const lastSaved = savedTimes.length ? savedTimes[savedTimes.length - 1] : 0;
-    const stopped = stopRequested || (exit_code !== 0 && signal === 'SIGTERM');
-    const status = stopped ? 'stopped' : exit_code === 0 ? 'done' : 'failed';
-    const unit = isTransient ? 't = ' + lastSaved + ' s' : 'iteration ' + lastSaved;
-    persistRunDoc(id, {
-      ...baseRunning,
-      status,
-      exit_code,
-      signal: signal || null,
-      stop_requested: stopRequested,
-      finished_at: new Date().toISOString(),
-      log_excerpt: logBuf.slice(-6000),
-      stage: progress.stage,
-      iteration: progress.iteration,
-      sim_time: progress.sim_time,
-      n_steps: progress.n_steps,
-      last_saved_iteration: lastSaved,
-      n_saved_times: savedTimes.length,
-      has_results: lastSaved > 0,
-      note:
-        status === 'done'
-          ? `${solver} finished. Results are in the run folder.`
-          : status === 'stopped'
-            ? lastSaved > 0
-              ? `Run stopped. Results up to ${unit} are available.`
-              : 'Run stopped before the first saved ' + (isTransient ? 'time step.' : 'iteration.')
-            : `${solver} failed (exit ${exit_code}${signal ? ' ' + signal : ''}).`,
-    });
-  });
 
   return {
     ok: true,
@@ -2430,18 +2554,26 @@ export function stopSolve({ projectId } = {}) {
   run.stop_requested_at = Date.now();
   try {
     spawn(
-      'wsl',
-      [
-        '-d',
-        WSL_DISTRO,
-        '--',
-        'bash',
-        '-lc',
-        `sed -i 's/^stopAt .*/stopAt          writeNow;/' ${JSON.stringify(caseQ + '/system/controlDict')} 2>/dev/null || true`,
-      ],
+      PYTHON,
+      [pyTool('stop_solve.py'), '--wsl-case', caseQ, '--run-id', String(run.run_id || '')],
       { windowsHide: true, stdio: 'ignore' }
     );
-  } catch {}
+  } catch {
+    try {
+      spawn(
+        'wsl',
+        [
+          '-d',
+          WSL_DISTRO,
+          '--',
+          'bash',
+          '-lc',
+          `sed -i 's/^stopAt .*/stopAt          writeNow;/' ${JSON.stringify(caseQ + '/system/controlDict')} 2>/dev/null || true`,
+        ],
+        { windowsHide: true, stdio: 'ignore' }
+      );
+    } catch {}
+  }
   run.stop_timer = setTimeout(() => {
     if (liveRun === run && run.child && run.child.exitCode == null) killSolveNow(run);
   }, STOP_GRACE_MS);
@@ -2470,18 +2602,26 @@ function killSolveNow(run) {
   } catch {}
   try {
     spawn(
-      'wsl',
-      [
-        '-d',
-        WSL_DISTRO,
-        '--',
-        'bash',
-        '-lc',
-        `pkill -f ${JSON.stringify(caseQ)} 2>/dev/null || true; pkill -f ${JSON.stringify('cfddesk-w27-' + run.run_id)} 2>/dev/null || true`,
-      ],
+      PYTHON,
+      [pyTool('stop_solve.py'), '--wsl-case', caseQ, '--run-id', String(run.run_id || ''), '--force'],
       { windowsHide: true, stdio: 'ignore' }
     );
-  } catch {}
+  } catch {
+    try {
+      spawn(
+        'wsl',
+        [
+          '-d',
+          WSL_DISTRO,
+          '--',
+          'bash',
+          '-lc',
+          `pkill -f ${JSON.stringify(caseQ)} 2>/dev/null || true; pkill -f ${JSON.stringify('cfddesk-w27-' + run.run_id)} 2>/dev/null || true`,
+        ],
+        { windowsHide: true, stdio: 'ignore' }
+      );
+    } catch {}
+  }
 }
 
 // Saved iteration folders (numeric, > 0) in the Windows-side run case.

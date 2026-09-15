@@ -1,9 +1,9 @@
 """One JSONL event protocol for mesh and solve jobs (Phase 1 Step 7).
 
-Bash templates echo lines prefixed with ``CFDDESK_EVENT `` followed by a JSON
-object. Python tools may also call :func:`emit` directly. Node
-``scripts/job-runner.js`` splits stdout by line and relays via
-:func:`parse_line`.
+Bash templates echo lines prefixed with ``MAGNUSIM_EVENT `` followed by a JSON
+object (``CFDDESK_EVENT `` is still accepted as an alias). Python tools may
+also call :func:`emit` directly. Node ``scripts/job-runner.js`` splits stdout
+by line and relays via :func:`parse_line`.
 
 Legacy ``W27_*`` / ``CFMESH_*`` markers are NOT required on the new path;
 ``run_solve`` / progress parsing derive residual/Courant from OpenFOAM lines.
@@ -14,7 +14,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-EVENT_PREFIX = "CFDDESK_EVENT "
+# Prefer Magnusim branding; keep CFDDESK_EVENT as parse/emit alias for mid-flight.
+EVENT_PREFIX = "MAGNUSIM_EVENT "
+EVENT_PREFIX_ALIASES = ("MAGNUSIM_EVENT ", "CFDDESK_EVENT ")
 
 EventKind = Literal[
     "start",
@@ -62,7 +64,7 @@ class Event:
 
 
 def emit(event: str, **fields: Any) -> None:
-    """Print one ``CFDDESK_EVENT`` JSONL line to stdout (flushed)."""
+    """Print one ``MAGNUSIM_EVENT`` JSONL line to stdout (flushed)."""
     kind = str(event)
     if kind not in KNOWN_KINDS:
         raise ValueError(f"unknown event kind: {kind!r}")
@@ -74,7 +76,8 @@ def parse_line(line: str) -> Event | None:
     """Parse a single stdout line into an :class:`Event`, or None if not ours.
 
     Accepts:
-    - ``CFDDESK_EVENT {...}``
+    - ``MAGNUSIM_EVENT {...}`` (preferred)
+    - ``CFDDESK_EVENT {...}`` (alias)
     - bare JSON object with an ``event`` key (already-normalized JSONL)
     """
     raw = (line or "").strip()
@@ -84,9 +87,11 @@ def parse_line(line: str) -> Event | None:
     if raw.startswith("[") and "]" in raw[:8]:
         raw = raw.split("]", 1)[1].lstrip()
     payload_s: str | None = None
-    if raw.startswith(EVENT_PREFIX):
-        payload_s = raw[len(EVENT_PREFIX) :].strip()
-    elif raw.startswith("{") and '"event"' in raw:
+    for prefix in EVENT_PREFIX_ALIASES:
+        if raw.startswith(prefix):
+            payload_s = raw[len(prefix) :].strip()
+            break
+    if payload_s is None and raw.startswith("{") and '"event"' in raw:
         payload_s = raw
     if not payload_s:
         return None

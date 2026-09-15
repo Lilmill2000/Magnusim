@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stream a WSL OpenFOAM solve as CFDDESK_EVENT JSONL (Phase 1 Step 5).
+"""Stream a WSL OpenFOAM solve as MAGNUSIM_EVENT JSONL (Phase 1 Step 5).
 
 CLI: tools/run_solve.py --case-dir ... --wsl-case ... --n-procs N --app simpleFoam|pimpleFoam --run-id ...
 
