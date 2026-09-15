@@ -9,18 +9,40 @@
   "machine": "Timmy",
   "baseline_HEAD": "9e7fdeda545140e0579fc845c3284fdcdd95e9ac",
   "baseline_land15": "56195eac78d9f513d9ce437e322039f35e8ff4df",
-  "commit_sha": "PENDING",
-  "commit_short": "PENDING",
+  "commit_sha": "6c6a218bcfb97375d14db63981b83a714e6b9d26",
+  "commit_short": "6c6a218",
   "filled": {
     "describe": "Registry.describe emits numerics_schema + control_schema via to_json_schema when present on specs (AnalysisType)",
-    "dump_keys_analysis": ["key", "label", "plugin", "schema", "numerics_schema", "control_schema", "requires"],
+    "dump_keys_analysis": [
+      "key",
+      "label",
+      "plugin",
+      "schema",
+      "numerics_schema",
+      "control_schema",
+      "requires"
+    ],
     "fields": {
-      "numerics_schema": ["residual_u", "residual_p", "relax_u", "relax_p", "n_non_orthogonal", "ddt_default"],
-      "control_schema_steady": ["end_time", "write_interval", "write_control"],
-      "control_schema_transient_extra": ["delta_t", "max_co"]
+      "numerics_schema": [
+        "residual_u",
+        "residual_p",
+        "relax_u",
+        "relax_p",
+        "n_non_orthogonal",
+        "ddt_default"
+      ],
+      "control_schema_steady": [
+        "end_time",
+        "write_interval",
+        "write_control"
+      ],
+      "control_schema_transient_extra": [
+        "delta_t",
+        "max_co"
+      ]
     },
     "defaults_examples": {
-      "residual_u": 1e-6,
+      "residual_u": 1e-06,
       "ddt_default_steady": "steadyState",
       "ddt_default_transient": "Euler",
       "delta_t": 0.001
