@@ -23,6 +23,24 @@ class Spec(Protocol):
 T = TypeVar("T")
 
 
+def _schema_to_json(schema: Any, *, kind: str, key: str, bag: str) -> Any:
+    """Convert SchemaField bags to JSON Schema; warn + None on failure."""
+    try:
+        from cfddesk.registry.schema import to_json_schema
+
+        return to_json_schema(list(schema))
+    except (TypeError, ValueError, AttributeError) as exc:
+        log.warning(
+            "describe: %s for %s/%s failed (%s); setting %s=None",
+            bag,
+            kind,
+            key,
+            exc,
+            bag,
+        )
+        return None
+
+
 class Registry(Generic[T]):
     """Keyed store of specs for one kind (analysis, solver, bc, ...)."""
 
@@ -75,24 +93,26 @@ class Registry(Generic[T]):
                 "label": getattr(spec, "label", key),
                 "plugin": self._plugins.get(key, getattr(spec, "plugin", "builtin")),
             }
-            schema = (
+            # Historical dump key: settings/params/schema -> "schema"
+            primary = (
                 getattr(spec, "settings_schema", None)
                 or getattr(spec, "params_schema", None)
                 or getattr(spec, "schema", None)
             )
-            if schema is not None:
-                try:
-                    from cfddesk.registry.schema import to_json_schema
-
-                    row["schema"] = to_json_schema(list(schema))
-                except (TypeError, ValueError, AttributeError) as exc:
-                    log.warning(
-                        "describe: schema for %s/%s failed (%s); setting schema=None",
-                        self.kind,
-                        key,
-                        exc,
-                    )
-                    row["schema"] = None
+            if primary is not None:
+                row["schema"] = _schema_to_json(
+                    primary, kind=self.kind, key=key, bag="schema"
+                )
+            # AnalysisType bags (land16): emit when present so dump isn't hollow.
+            for bag in ("numerics_schema", "control_schema"):
+                if not hasattr(spec, bag):
+                    continue
+                bag_val = getattr(spec, bag)
+                if bag_val is None:
+                    continue
+                row[bag] = _schema_to_json(
+                    bag_val, kind=self.kind, key=key, bag=bag
+                )
             requires = getattr(spec, "requires", None)
             if requires is not None:
                 row["requires"] = [

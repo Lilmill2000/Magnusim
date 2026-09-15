@@ -45,6 +45,107 @@
         },
         "additionalProperties": false
       },
+      "numerics_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "residual_u": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual U"
+          },
+          "residual_p": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual p"
+          },
+          "relax_u": {
+            "type": "number",
+            "default": 0.7,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation U"
+          },
+          "relax_p": {
+            "type": "number",
+            "default": 0.3,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation p"
+          },
+          "n_non_orthogonal": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 0,
+            "x-cfddesk": {
+              "group": "solution"
+            },
+            "title": "Non-orthogonal correctors"
+          },
+          "ddt_default": {
+            "type": "string",
+            "default": "steadyState",
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true
+            },
+            "title": "Time scheme"
+          }
+        },
+        "additionalProperties": false
+      },
+      "control_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "end_time": {
+            "type": "number",
+            "default": 1000.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "End time"
+          },
+          "write_interval": {
+            "type": "integer",
+            "default": 1000,
+            "minimum": 1,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write interval"
+          },
+          "write_control": {
+            "type": "string",
+            "default": "timeStep",
+            "enum": [
+              "timeStep",
+              "runTime",
+              "adjustableRunTime"
+            ],
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write control"
+          }
+        },
+        "additionalProperties": false
+      },
       "requires": [
         {
           "kind": "wsl_tool",
@@ -94,6 +195,126 @@
               "advanced": true
             },
             "title": "Energy"
+          }
+        },
+        "additionalProperties": false
+      },
+      "numerics_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "residual_u": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual U"
+          },
+          "residual_p": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual p"
+          },
+          "relax_u": {
+            "type": "number",
+            "default": 0.7,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation U"
+          },
+          "relax_p": {
+            "type": "number",
+            "default": 0.3,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation p"
+          },
+          "n_non_orthogonal": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 0,
+            "x-cfddesk": {
+              "group": "solution"
+            },
+            "title": "Non-orthogonal correctors"
+          },
+          "ddt_default": {
+            "type": "string",
+            "default": "Euler",
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true
+            },
+            "title": "Time scheme"
+          }
+        },
+        "additionalProperties": false
+      },
+      "control_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "end_time": {
+            "type": "number",
+            "default": 1.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "End time"
+          },
+          "delta_t": {
+            "type": "number",
+            "default": 0.001,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Time step"
+          },
+          "write_interval": {
+            "type": "integer",
+            "default": 50,
+            "minimum": 1,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write interval"
+          },
+          "write_control": {
+            "type": "string",
+            "default": "timeStep",
+            "enum": [
+              "timeStep",
+              "runTime",
+              "adjustableRunTime"
+            ],
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write control"
+          },
+          "max_co": {
+            "type": "number",
+            "default": 1.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true
+            },
+            "title": "Max Courant"
           }
         },
         "additionalProperties": false

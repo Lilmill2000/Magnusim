@@ -53,6 +53,10 @@ def test_describe_returns_labels_and_schemas():
         assert isinstance(row.get("schema"), dict)
         assert "properties" in row["schema"]
         assert "turbulence_model" in row["schema"]["properties"]
+        assert isinstance(row.get("numerics_schema"), dict)
+        assert "residual_u" in row["numerics_schema"]["properties"]
+        assert isinstance(row.get("control_schema"), dict)
+        assert "end_time" in row["control_schema"]["properties"]
         assert row.get("requires")
 
 

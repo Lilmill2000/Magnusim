@@ -1,0 +1,90 @@
+{
+  "phase": "Phase 2",
+  "land": "land16",
+  "title": "describe/dump fill: numerics_schema + control_schema",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 09:50:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "9e7fdeda545140e0579fc845c3284fdcdd95e9ac",
+  "baseline_land15": "56195eac78d9f513d9ce437e322039f35e8ff4df",
+  "commit_sha": "PENDING",
+  "commit_short": "PENDING",
+  "filled": {
+    "describe": "Registry.describe emits numerics_schema + control_schema via to_json_schema when present on specs (AnalysisType)",
+    "dump_keys_analysis": ["key", "label", "plugin", "schema", "numerics_schema", "control_schema", "requires"],
+    "fields": {
+      "numerics_schema": ["residual_u", "residual_p", "relax_u", "relax_p", "n_non_orthogonal", "ddt_default"],
+      "control_schema_steady": ["end_time", "write_interval", "write_control"],
+      "control_schema_transient_extra": ["delta_t", "max_co"]
+    },
+    "defaults_examples": {
+      "residual_u": 1e-6,
+      "ddt_default_steady": "steadyState",
+      "ddt_default_transient": "Euler",
+      "delta_t": 0.001
+    },
+    "how": "No invented schemas — builtins already had SchemaField bags; describe was hollow (settings-only as schema). land16 surfaces the existing bags in dump JSON."
+  },
+  "tests": {
+    "land16_focused": "5 passed (test_describe_dump_land16)",
+    "analysis_describe": "patched test_describe_returns_labels_and_schemas",
+    "focused_related": "41 passed (land16 + analysis + dump + sweep + registry)",
+    "unit_suite": "217 passed",
+    "registry_dump_check": "ok (committed matches live dump)"
+  },
+  "ui_8082": {
+    "root": 200,
+    "index": 200,
+    "api_simulation": 200,
+    "api_mesh": 200,
+    "api_materials": 200,
+    "api_projects": 200,
+    "evidence": "curl/Invoke-WebRequest http://127.0.0.1:8082/ (+ /index.html,/api/simulation,/api/mesh,/api/materials,/api/projects) after describe fill; no Vite restart"
+  },
+  "prove": {
+    "registry_dump_check": true,
+    "numerics_control_in_describe": true,
+    "numerics_control_in_dump": true,
+    "defaults_present": true,
+    "non_analysis_kinds_unchanged": true,
+    "unit_suite_green": true,
+    "live_8082_200": true
+  },
+  "plan_todo": "none updated (Phase 2 stays OPEN; no CLOSED)",
+  "landed": [
+    "cfddesk/registry/base.py: describe emits numerics_schema + control_schema JSON Schema bags",
+    "scripts/generated/registry.json regenerated (analysis rows now include numerics/control)",
+    "tests/unit/test_describe_dump_land16.py focused prove",
+    "tests/unit/test_analysis_registry.py describe assertions extended"
+  ],
+  "NOT_yet_done": [
+    "Bank analysis display name Incompressible / turbulence k-omega SST label map (UI product strings; not dump bags)",
+    "FILTERS invent (OUT)",
+    "cmd_write_json still raw-_atomic_write siblings bridge (carry from land14)",
+    "prepare_run writer reroute remain carry",
+    "soft-pass != Phase 2 done; no Phase 3+"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done. land16 is describe/dump fill only (numerics_schema + control_schema). No FILTERS invent, no Node rewrite, no Phase 2 CLOSED, no Phase 3+. Dump shape additive for analysis only.",
+  "files_touched": {
+    "added": [
+      "cfd-web/python/tests/unit/test_describe_dump_land16.py",
+      "cfd-web/runs/phase2-land16/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land16/report.json"
+    ],
+    "modified": [
+      "cfd-web/python/cfddesk/registry/base.py",
+      "cfd-web/python/tests/unit/test_analysis_registry.py",
+      "cfd-web/scripts/generated/registry.json"
+    ]
+  },
+  "notes": [
+    "Did not invent FILTERS chrome.",
+    "Did not rewrite Node / bank UI label map.",
+    "Did not claim Phase 2 CLOSED / Phase 3+.",
+    "Did not push.",
+    ":8082 remained serving (200)."
+  ],
+  "report_path": "cfd-web/runs/phase2-land16/report.json"
+}
