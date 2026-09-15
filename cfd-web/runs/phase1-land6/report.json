@@ -62,5 +62,7 @@
     "writer.py / web_case.py not grown.",
     "Phase 3+ forbidden / not touched.",
     "Hot path already used prepare_run + run_solve since land4/5; this land removes the dormant JS writer + obsolete JS-only golden path."
-  ]
+  ],
+  "commit_sha": "48c26619b1b50a2b030aac7cbcc345065f937e59",
+  "commit_short": "48c2661"
 }
