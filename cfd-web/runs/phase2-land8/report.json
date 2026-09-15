@@ -1,68 +1,68 @@
-﻿{
-    "phase":  "Phase 2",
-    "landed":  [
-                   "web_adapter re-exports to_web_*/from_web_* for materials, BCs, mesh, mesh_refinements, result_controls, simulation_control, simulations, runs/catalog",
-                   "cfddesk/project/web_mirrors.py: converters + regenerate_web_mirrors + ingest_web_siblings_if_newer",
-                   "PROJECT_VERSION 15 + persistence.web_mirrors=derived + updated_at",
-                   "v15 upgrade + load-time ingest when siblings newer than project.json",
-                   "project_cli write-through (Project then regenerate sibling mirrors) for set-materials/bcs/mesh/refinements/result-controls/sim-control",
-                   "tests/unit/test_web_mirrors_land8.py",
-                   "plan p2-collapse-web-json -\u003e completed (soft-pass)"
-               ],
-    "machine":  "Timmy",
-    "files_touched":  {
-                          "modified":  [
-                                           "cfd-web/python/cfddesk/project/web_adapter.py",
-                                           "cfd-web/python/cfddesk/project/model.py",
-                                           "cfd-web/python/tools/project_cli.py",
-                                           "cfd-web/python/tests/unit/test_geometry_bodies.py",
-                                           ".cursor/Plans/phase2_registries_and_plugin_core.plan.md"
-                                       ],
-                          "added":  [
-                                        "cfd-web/python/cfddesk/project/web_mirrors.py",
-                                        "cfd-web/python/tests/unit/test_web_mirrors_land8.py",
-                                        "cfd-web/runs/phase2-land8/baseline_HEAD.txt",
-                                        "cfd-web/runs/phase2-land8/report.json"
-                                    ]
-                      },
-    "commit_short":  "PENDING",
-    "node_write_ban_note":  "NOT_yet_done — no live lint/prove that Node never writes siblings; left Node write paths alone (ban can brick :8082)",
-    "mesh_fingerprint":  {
-                             "match":  true,
-                             "before_v15_baseline_HEAD_9dbd759":  "1fe52a19f6e6f90a",
-                             "fixture":  "tests/fixtures/projects/v13.json",
-                             "note":  "v15 mirror ingest does not touch fingerprint payload",
-                             "after_v15_upgrade":  "1fe52a19f6e6f90a"
-                         },
-    "tests":  {
-                  "land8_focused":  "6 passed (test_web_mirrors_land8) + related green",
-                  "unit_suite":  "180 passed"
-              },
-    "python_package":  "cfddesk",
-    "title":  "Collapse web JSON into Project (v15); siblings derived mirrors; write-through CLI",
-    "baseline_HEAD":  "9dbd7599dcbd13c71b08a34acc2a6c96e3f2b9ba",
-    "timestamp_local":  "2026-09-15 04:30:00 CT",
-    "NOT_yet_done":  [
-                         "Node never writes siblings — live lint/prove (left alone)",
-                         "analysis_type incompressible remap (OUT)",
-                         "tools/registry_dump.py / JS W17 replace (OUT)",
-                         "write_case goldens (OUT)",
-                         "soft-pass != Phase 2 done; no Phase 3+"
-                     ],
-    "product":  "Magnusim",
-    "soft_pass_prove":  {
-                            "round_trip":  "siblings -\u003e Project -\u003e mirrors (materials/BCs/mesh/control) in test_roundtrip_siblings_to_project_to_mirrors",
-                            "fingerprint":  "1fe52a19f6e6f90a unchanged"
-                        },
-    "land":  "land8",
-    "notes":  [
-                  "PRIMARY_SIM_ANALYSIS remains free-string incompressible (no remap).",
-                  "Did not claim Node never writes siblings.",
-                  "Did not push.",
-                  "Kept :8082 alone."
-              ],
-    "commit_sha":  "PENDING",
-    "soft_pass_kill":  "Do NOT claim Phase 2 done. land8 is web-json v15 collapse soft-pass only. No analysis_type remap, no registry_dump/JS W17, no write_case goldens, no Node write ban without prove, no Phase 3+.",
-    "result":  "PASS",
-    "node_write_ban_claimed":  false
+{
+  "phase": "Phase 2",
+  "landed": [
+    "web_adapter re-exports to_web_*/from_web_* for materials, BCs, mesh, mesh_refinements, result_controls, simulation_control, simulations, runs/catalog",
+    "cfddesk/project/web_mirrors.py: converters + regenerate_web_mirrors + ingest_web_siblings_if_newer",
+    "PROJECT_VERSION 15 + persistence.web_mirrors=derived + updated_at",
+    "v15 upgrade + load-time ingest when siblings newer than project.json",
+    "project_cli write-through (Project then regenerate sibling mirrors) for set-materials/bcs/mesh/refinements/result-controls/sim-control",
+    "tests/unit/test_web_mirrors_land8.py",
+    "plan p2-collapse-web-json -> completed (soft-pass)"
+  ],
+  "machine": "Timmy",
+  "files_touched": {
+    "modified": [
+      "cfd-web/python/cfddesk/project/web_adapter.py",
+      "cfd-web/python/cfddesk/project/model.py",
+      "cfd-web/python/tools/project_cli.py",
+      "cfd-web/python/tests/unit/test_geometry_bodies.py",
+      ".cursor/Plans/phase2_registries_and_plugin_core.plan.md"
+    ],
+    "added": [
+      "cfd-web/python/cfddesk/project/web_mirrors.py",
+      "cfd-web/python/tests/unit/test_web_mirrors_land8.py",
+      "cfd-web/runs/phase2-land8/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land8/report.json"
+    ]
+  },
+  "commit_short": "f24630c",
+  "node_write_ban_note": "NOT_yet_done \u2014 no live lint/prove that Node never writes siblings; left Node write paths alone (ban can brick :8082)",
+  "mesh_fingerprint": {
+    "match": true,
+    "before_v15_baseline_HEAD_9dbd759": "1fe52a19f6e6f90a",
+    "fixture": "tests/fixtures/projects/v13.json",
+    "note": "v15 mirror ingest does not touch fingerprint payload",
+    "after_v15_upgrade": "1fe52a19f6e6f90a"
+  },
+  "tests": {
+    "land8_focused": "6 passed (test_web_mirrors_land8) + related green",
+    "unit_suite": "180 passed"
+  },
+  "python_package": "cfddesk",
+  "title": "Collapse web JSON into Project (v15); siblings derived mirrors; write-through CLI",
+  "baseline_HEAD": "9dbd7599dcbd13c71b08a34acc2a6c96e3f2b9ba",
+  "timestamp_local": "2026-09-15 04:30:00 CT",
+  "NOT_yet_done": [
+    "Node never writes siblings \u2014 live lint/prove (left alone)",
+    "analysis_type incompressible remap (OUT)",
+    "tools/registry_dump.py / JS W17 replace (OUT)",
+    "write_case goldens (OUT)",
+    "soft-pass != Phase 2 done; no Phase 3+"
+  ],
+  "product": "Magnusim",
+  "soft_pass_prove": {
+    "round_trip": "siblings -> Project -> mirrors (materials/BCs/mesh/control) in test_roundtrip_siblings_to_project_to_mirrors",
+    "fingerprint": "1fe52a19f6e6f90a unchanged"
+  },
+  "land": "land8",
+  "notes": [
+    "PRIMARY_SIM_ANALYSIS remains free-string incompressible (no remap).",
+    "Did not claim Node never writes siblings.",
+    "Did not push.",
+    "Kept :8082 alone."
+  ],
+  "commit_sha": "f24630cbb65bf136cb2807e5304e5eec6fc3825a",
+  "soft_pass_kill": "Do NOT claim Phase 2 done. land8 is web-json v15 collapse soft-pass only. No analysis_type remap, no registry_dump/JS W17, no write_case goldens, no Node write ban without prove, no Phase 3+.",
+  "result": "PASS",
+  "node_write_ban_claimed": false
 }
