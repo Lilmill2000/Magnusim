@@ -1,0 +1,54 @@
+{
+  "phase": "Phase 2",
+  "land": "land3",
+  "title": "SolverBackend registry + simpleFoam/pimpleFoam/amgx builtins + AnalysisType wiring",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 02:45:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "a38a8fdab790e6b04a181b8fe2859d359991d50a",
+  "commit_sha": "PENDING",
+  "commit_short": "PENDING",
+  "tests": {
+    "unit_suite": "136 passed",
+    "land3_focused": "6 passed (test_solver_registry.py) + 7 (test_analysis_registry.py) + 18 (test_registry.py) = 31 focused"
+  },
+  "solver_backends_resolution": "WIRE (prefer over delete): AnalysisType.solver_backends stays tuple[str]; register_builtins registers OpenFOAM solvers then validate_analysis_solver_refs(hub) asserts every analysis bag key and default_solver exists in solver registry (RegistryError on unknown).",
+  "landed": [
+    "cfddesk/registry/solver.py: SolverBackend frozen dataclass + validate_analysis_solver_refs",
+    "cfddesk/builtin/solvers_openfoam.py: simpleFoam, pimpleFoam, simpleFoam_amgx",
+    "register_builtins: solvers first, then analysis, then cross-ref validation",
+    "tests/unit/test_solver_registry.py: load_all keys, shape, AnalysisType consistency, unknown-key raise",
+    "plan frontmatter p2-solver-backend -> completed (soft-pass; residual parsers deferred)"
+  ],
+  "NOT_yet_done": [
+    "residual_line / extra_lines (Courant) still in wsl/solve_run Phase 1 parsers — stubs None this land",
+    "write_fv_solution / write_control_dict still in case/writer + web_case — stubs None this land",
+    "runner/parallel.py mpirun_simplefoam_inner not yet generic over application",
+    "PRIMARY_SIM / v14 migration / W17 / JS / Geometry / web-json / Mesh/BC/Material/Monitor/Filter",
+    "Phase 3+; soft-pass != Phase 2 done"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done; land3 is SolverBackend+builtins+AnalysisType key wiring only. No JS/W17, no PRIMARY_SIM/v14, no write_case goldens, no Mesh/BC/Material/Monitor/Filter full specs.",
+  "files_touched": {
+    "added": [
+      "cfd-web/python/cfddesk/registry/solver.py",
+      "cfd-web/python/cfddesk/builtin/solvers_openfoam.py",
+      "cfd-web/python/tests/unit/test_solver_registry.py",
+      "cfd-web/runs/phase2-land3/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land3/report.json"
+    ],
+    "modified": [
+      "cfd-web/python/cfddesk/registry/__init__.py",
+      "cfd-web/python/cfddesk/builtin/__init__.py",
+      ".cursor/Plans/phase2_registries_and_plugin_core.plan.md"
+    ]
+  },
+  "notes": [
+    "cfMesh / HEXCORE-PROCESS-BACKUP-2026-09-02 untouched.",
+    "No leftover backup/ clutter dirs created.",
+    "No JS changes; :8082 / tunnel not touched.",
+    "Did not push.",
+    "simpleFoam_amgx: application=simpleFoam, parallel=none (serial-only AmgX), requires gpu+simpleFoam."
+  ]
+}
