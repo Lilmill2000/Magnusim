@@ -1,4 +1,4 @@
-"""SolverBackend registry spec (Phase 2 land3)."""
+"""SolverApp registry spec (Phase 2 land3 / land3-fix)."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ StopStrategy = Literal["stopAt_writeNow", "sigterm"]
 
 
 @dataclass(frozen=True)
-class SolverBackend:
-    """Registered OpenFOAM (or other) solver application backend."""
+class SolverApp:
+    """Registered OpenFOAM (or other) solver application."""
 
     key: str
     label: str
@@ -40,7 +40,8 @@ def validate_analysis_solver_refs(hub: "RegistryHub") -> None:
     """Fail if any AnalysisType.solver_backends / default_solver is not registered.
 
     Keeps AnalysisType.solver_backends as tuple[str] (no third free-string list)
-    by wiring keys to the solver registry after builtins register.
+    by wiring keys to the solver registry after builtins + plugins register.
+    Called at end of load_all (after plugin discovery), not only from builtins.
     """
     solver_keys = set(hub.registry("solver").keys())
     for spec in hub.registry("analysis").items():

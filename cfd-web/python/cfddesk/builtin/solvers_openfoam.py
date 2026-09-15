@@ -1,18 +1,18 @@
-"""Built-in OpenFOAM SolverBackend specs (Phase 2 land3)."""
+"""Built-in OpenFOAM SolverApp specs (Phase 2 land3)."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from cfddesk.registry.requirements import Requirement
-from cfddesk.registry.solver import SolverBackend
+from cfddesk.registry.solver import SolverApp
 
 if TYPE_CHECKING:
     from cfddesk.registry.discovery import RegistryHub
 
 
-def build_simple_foam() -> SolverBackend:
-    return SolverBackend(
+def build_simple_foam() -> SolverApp:
+    return SolverApp(
         key="simpleFoam",
         label="simpleFoam (SIMPLE steady)",
         application="simpleFoam",
@@ -28,8 +28,8 @@ def build_simple_foam() -> SolverBackend:
     )
 
 
-def build_pimple_foam() -> SolverBackend:
-    return SolverBackend(
+def build_pimple_foam() -> SolverApp:
+    return SolverApp(
         key="pimpleFoam",
         label="pimpleFoam (PIMPLE transient)",
         application="pimpleFoam",
@@ -45,9 +45,9 @@ def build_pimple_foam() -> SolverBackend:
     )
 
 
-def build_simple_foam_amgx() -> SolverBackend:
+def build_simple_foam_amgx() -> SolverApp:
     """AmgX-on-p variant of simpleFoam (serial-only; same binary application)."""
-    return SolverBackend(
+    return SolverApp(
         key="simpleFoam_amgx",
         label="simpleFoam + AmgX (p)",
         application="simpleFoam",

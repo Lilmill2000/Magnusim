@@ -344,7 +344,7 @@ def discover_entry_points(
 
 
 def load_all(*, web_root: Path | str | None = None, force: bool = False) -> RegistryHub:
-    """Register builtins then discover plugins.
+    """Register builtins then discover plugins, then validate solver refs.
 
     Sets _LOADED True only when discovery completed without plugin-load failures,
     so a later load_all() without force=True retries discovery after a partial load.
@@ -368,5 +368,9 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
     disabled = _disabled_plugins(_resolve_web_root(web_root))
     _, ep_fail = discover_entry_points(hub, disabled)
     _, folder_fail = discover_folder_plugins(hub, web_root=web_root)
+    # After plugins: every AnalysisType solver bag key must resolve.
+    from cfddesk.registry.solver import validate_analysis_solver_refs
+
+    validate_analysis_solver_refs(hub)
     _LOADED = not (ep_fail or folder_fail)
     return hub

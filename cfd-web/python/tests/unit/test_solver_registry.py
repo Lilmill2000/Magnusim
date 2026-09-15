@@ -1,12 +1,14 @@
-"""Phase 2 land3: SolverBackend registry + OpenFOAM builtins + AnalysisType wiring."""
+"""Phase 2 land3-fix: SolverApp registry + OpenFOAM builtins + load_all validation."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
 from cfddesk.registry import (
     RegistryError,
-    SolverBackend,
+    SolverApp,
     get_registry,
     load_all,
     reset_for_tests,
@@ -26,6 +28,22 @@ def _clean_registry():
     reset_for_tests()
 
 
+def test_settings_solver_backend_literal_untouched():
+    """project.settings.SolverBackend (cpu|amgx) must remain — not the registry class."""
+    from pathlib import Path as _Path
+
+    settings_src = (
+        _Path(__file__).resolve().parents[2] / "cfddesk" / "project" / "settings.py"
+    ).read_text(encoding="utf-8")
+    assert 'SolverBackend = Literal["cpu", "amgx"]' in settings_src
+    assert "backend: SolverBackend" in settings_src
+    # Registry public name is SolverApp, not SolverBackend
+    from cfddesk import registry as reg_mod
+
+    assert hasattr(reg_mod, "SolverApp")
+    assert not hasattr(reg_mod, "SolverBackend")
+
+
 def test_load_all_registers_solver_keys():
     hub = load_all()
     reg = get_registry("solver")
@@ -37,7 +55,7 @@ def test_solver_specs_shape():
     load_all()
     reg = get_registry("solver")
     simple = reg.get("simpleFoam")
-    assert isinstance(simple, SolverBackend)
+    assert isinstance(simple, SolverApp)
     assert simple.application == "simpleFoam"
     assert simple.time_dependency == "steady"
     assert simple.parallel == "mpirun"
@@ -91,6 +109,48 @@ def test_validate_analysis_solver_refs_raises_on_unknown():
     hub.registry("analysis").register(bad, plugin="builtin")
     with pytest.raises(RegistryError, match="unknown solver"):
         validate_analysis_solver_refs(hub)
+
+
+def test_load_all_rejects_plugin_analysis_with_unknown_solver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Post-builtin plugin AnalysisType with unknown solver key fails on load_all."""
+    plugins = tmp_path / "plugins" / "badsolver"
+    plugins.mkdir(parents=True)
+    (plugins / "manifest.toml").write_text(
+        'key = "badsolver"\nname = "Bad Solver Refs"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    (plugins / "plugin.py").write_text(
+        """
+from dataclasses import dataclass
+from cfddesk.registry.manifest import PluginManifest
+
+@dataclass(frozen=True)
+class Spec:
+    key: str
+    label: str
+    solver_backends: tuple = ()
+    default_solver: str = ""
+
+def register(hub):
+    hub.registry("analysis").register(
+        Spec(
+            key="plugin_bad_analysis",
+            label="Bad",
+            solver_backends=("totallyFakeSolver",),
+            default_solver="totallyFakeSolver",
+        ),
+        plugin="badsolver",
+    )
+    return PluginManifest(key="badsolver", name="Bad Solver Refs", version="0.1.0")
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CFDDESK_WEB_ROOT", str(tmp_path))
+    reset_for_tests()
+    with pytest.raises(RegistryError, match="unknown solver"):
+        load_all(web_root=tmp_path)
 
 
 def test_describe_solver_includes_requires():
