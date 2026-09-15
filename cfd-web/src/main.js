@@ -18250,18 +18250,24 @@ function sampleFaceSeeds(tris) {
     const diag = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) || 1;
     const hole = nearestDist > Math.max(diag * 0.05, 1e-4);
     const curved = minDot < 0.92;
+    // One face-level outward sense; orient every seed to it so hole/curved
+    // sampling cannot flip a single arrow (e.g. annulus face 4@Body1).
+    const faceNOut = faceOutwardNormal(n, nearestPt, faceId);
     const seeds = [];
     if (!hole && !curved) {
-      const nOut = faceOutwardNormal(nearest.n || n, nearestPt, faceId);
-      seeds.push({ c: nearestPt, n: nOut, area, nOut });
+      seeds.push({ c: nearestPt, n: faceNOut, area, nOut: faceNOut });
     } else {
       const count = hole ? (list.length > 120 ? 6 : 4) : Math.min(5, Math.max(3, list.length > 80 ? 5 : 3));
       for (const t of pickSpreadTris(list, count)) {
-        const ln = faceOutwardNormal(t.n, t.c, faceId);
-        seeds.push({ c: t.c, n: ln, area: t.area, nOut: ln });
+        let ln = v3norm(t.n);
+        if (v3len(ln) < 1e-9) ln = faceNOut;
+        else if (v3dot(ln, faceNOut) < 0) ln = v3scale(ln, -1);
+        // Arrow sense follows the face consensus, not per-tri outward probes
+        // (those can flip near holes / annulus rims like face 4@Body1).
+        seeds.push({ c: t.c, n: ln, area: t.area, nOut: faceNOut });
       }
     }
-    const nOut = (seeds[0] && seeds[0].nOut) || faceOutwardNormal(n, nearestPt, faceId);
+    const nOut = faceNOut;
     groups.push({ faceId, c: (seeds[0] && seeds[0].c) || nearestPt, nOut, area, diag, seeds });
   });
   return groups;
