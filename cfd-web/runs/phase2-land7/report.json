@@ -1,4 +1,4 @@
-﻿{
+{
   "phase": "Phase 2",
   "land": "land7",
   "title": "Geometry bodies/regions (v14); fingerprint soft-pass for single-fluid",
@@ -8,8 +8,8 @@
   "timestamp_local": "2026-09-15 04:05:00 CT",
   "machine": "Timmy",
   "baseline_HEAD": "845d24bd13a8b0f3d7e6a78354a7fee28159f2a6",
-  "commit_sha": "PENDING",
-  "commit_short": "PENDING",
+  "commit_sha": "89f12e864b70ae896fe00f6ca36a07243717c3ae",
+  "commit_short": "89f12e8",
   "tests": {
     "unit_suite": "174 passed",
     "land7_focused": "20 passed (test_geometry_bodies + test_fingerprints + test_project_migrations)"
@@ -24,7 +24,7 @@
   },
   "landed": [
     "hierarchy.Body + Geometry.bodies; volumes read-only alias; regions()",
-    "PROJECT_VERSION 14 + _upgrade_to_v14 (volumes→bodies fluid/fluid; materials body_ids)",
+    "PROJECT_VERSION 14 + _upgrade_to_v14 (volumes\u2192bodies fluid/fluid; materials body_ids)",
     "BC optional region: str | None",
     "materials body_ids with volume_ids mirrored alias; assign_bodies/faces_for_bodies",
     "fingerprint gate for bodies",
@@ -34,7 +34,7 @@
     "plan p2-geometry-regions -> completed (soft-pass)"
   ],
   "NOT_yet_done": [
-    "analysis_type incompressible → incompressible_steady/transient remap (OUT this land)",
+    "analysis_type incompressible \u2192 incompressible_steady/transient remap (OUT this land)",
     "web-json v15 collapse",
     "JS / W17 / registry_dump",
     "MeshBackend.multi_region=True / multi-region mesh enable (Phase 6)",
