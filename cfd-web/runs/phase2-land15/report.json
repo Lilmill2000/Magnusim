@@ -1,0 +1,102 @@
+{
+  "phase": "Phase 2",
+  "land": "land15",
+  "title": "web_mirrors split: thinner owned converters (behavior-parity)",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 09:15:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "372560928c417c34ad211311751850d418ea41f6",
+  "baseline_land14": "ca17a44eb75602b5cf8dc34d7dcb28069c9ce118",
+  "commit_sha": "PENDING",
+  "commit_short": "PENDING",
+  "split": {
+    "before": {
+      "path": "cfd-web/python/cfddesk/project/web_mirrors.py",
+      "loc": 969,
+      "nonblank": 888
+    },
+    "after": {
+      "path": "cfd-web/python/cfddesk/project/web_mirrors/",
+      "loc_total": 1120,
+      "modules": {
+        "__init__.py": {"loc": 71, "owner": "public re-exports (stable import path)"},
+        "_common.py": {"loc": 96, "owner": "shared helpers + WEB_SIBLING_RELS"},
+        "materials.py": {"loc": 94, "owner": "materials to_web_/from_web_"},
+        "bcs.py": {"loc": 127, "owner": "boundary_conditions to_web_/from_web_"},
+        "mesh.py": {"loc": 190, "owner": "mesh + mesh_refinements to_web_/from_web_"},
+        "controls.py": {"loc": 62, "owner": "result_controls + simulation_control"},
+        "simulations.py": {"loc": 99, "owner": "simulations catalog + runs/catalog"},
+        "ops.py": {"loc": 381, "owner": "apply/regenerate/ingest/synthesize/mark"}
+      }
+    },
+    "how": "Boring move+re-export: delete god-module file; package owns converters by sibling kind; ops owns write-through orchestration; __init__ + web_adapter keep public symbols identical (identity-equal)."
+  },
+  "tests": {
+    "land8_focused": "6 passed (test_web_mirrors_land8)",
+    "land15_focused": "3 passed (test_web_mirrors_land15)",
+    "focused_combined": "9 passed",
+    "unit_suite": "212 passed"
+  },
+  "ui_8082": {
+    "root": 200,
+    "index": 200,
+    "api_simulation": 200,
+    "api_mesh": 200,
+    "api_materials": 200,
+    "api_projects": 200,
+    "evidence": "curl.exe http://127.0.0.1:8082/ (+ /index.html,/api/simulation,/api/mesh,/api/materials,/api/projects) after split; no Vite restart"
+  },
+  "prove": {
+    "public_imports_stable": true,
+    "web_adapter_identity_reexports": true,
+    "owned_module_split": true,
+    "land8_roundtrip_green": true,
+    "unit_suite_green": true,
+    "live_8082_200": true,
+    "json_behavior_unchanged": true
+  },
+  "plan_todo": "none updated (Phase 2 stays OPEN; no CLOSED)",
+  "landed": [
+    "cfddesk/project/web_mirrors/ package replaces web_mirrors.py god-module",
+    "owned converters: materials / bcs / mesh / controls / simulations",
+    "ops: apply_web_sibling_to_project + regenerate_web_mirrors + ingest/synthesize",
+    "tests/unit/test_web_mirrors_land15.py ownership + stable import prove"
+  ],
+  "NOT_yet_done": [
+    "describe fill (OUT)",
+    "FILTERS invent (OUT)",
+    "cmd_write_json still raw-_atomic_write siblings bridge (carry from land14)",
+    "prepare_run writer reroute remain carry",
+    "soft-pass != Phase 2 done; no Phase 3+"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done. land15 is web_mirrors split only (behavior-parity move+re-export). No describe fill, no FILTERS invent, no Node rewrite, no Phase 2 CLOSED, no Phase 3+. Sibling JSON write-through unchanged.",
+  "files_touched": {
+    "added": [
+      "cfd-web/python/cfddesk/project/web_mirrors/__init__.py",
+      "cfd-web/python/cfddesk/project/web_mirrors/_common.py",
+      "cfd-web/python/cfddesk/project/web_mirrors/materials.py",
+      "cfd-web/python/cfddesk/project/web_mirrors/bcs.py",
+      "cfd-web/python/cfddesk/project/web_mirrors/mesh.py",
+      "cfd-web/python/cfddesk/project/web_mirrors/controls.py",
+      "cfd-web/python/cfddesk/project/web_mirrors/simulations.py",
+      "cfd-web/python/cfddesk/project/web_mirrors/ops.py",
+      "cfd-web/python/tests/unit/test_web_mirrors_land15.py",
+      "cfd-web/runs/phase2-land15/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land15/report.json"
+    ],
+    "removed": [
+      "cfd-web/python/cfddesk/project/web_mirrors.py"
+    ],
+    "modified": []
+  },
+  "notes": [
+    "Did not change converter logic — AST move of function bodies into owned modules.",
+    "Did not invent FILTERS chrome / describe fill / Node rewrite.",
+    "Did not claim Phase 2 CLOSED / Phase 3+.",
+    "Did not push.",
+    ":8082 remained serving (200)."
+  ],
+  "report_path": "cfd-web/runs/phase2-land15/report.json"
+}
