@@ -1,4 +1,4 @@
-﻿name: ci
+name: ci
 on:
   push:
   pull_request:
@@ -39,7 +39,9 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run test:js-case
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test
         env:
           CI: "1"
+

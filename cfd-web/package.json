@@ -11,7 +11,8 @@
     "lint": "eslint scripts src --max-warnings 10000",
     "typecheck": "tsc -p tsconfig.json",
     "test:e2e": "playwright test",
-    "test": "npm run lint && npm run typecheck && npm run test:e2e",
+    "test:js-case": "node scripts/__tests__/compare-js-case.mjs",
+    "test": "npm run lint && npm run typecheck && npm run test:js-case && npm run test:e2e",
     "capture:js-case": "node scripts/__tests__/capture-js-case.mjs"
   },
   "dependencies": {
@@ -28,3 +29,4 @@
     "@playwright/test": "^1.49.0"
   }
 }
+

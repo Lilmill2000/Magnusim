@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const PROJECTS_ROOT = join(ROOT, 'projects');
+export const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT
+  ? resolve(process.env.CFDDESK_PROJECTS_ROOT)
+  : join(ROOT, 'projects');
 
 export function normalizeFs(p) {
   return String(p || '')
