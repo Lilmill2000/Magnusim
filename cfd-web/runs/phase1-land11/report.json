@@ -82,6 +82,6 @@
     ":8082 kept up",
     "CFMESH_PROGRESS parse shim remains in w21 (plan legacy compatibility)"
   ],
-  "commit_sha": null,
-  "commit_short": null
+  "commit_sha": "83df5a2d02ccca62c55f8cc1a05a4fed8cce705a",
+  "commit_short": "83df5a2"
 }
