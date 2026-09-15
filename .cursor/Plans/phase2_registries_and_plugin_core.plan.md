@@ -28,7 +28,7 @@ todos:
     status: completed
   - id: p2-registry-cli
     content: "tools/registry_dump.py: emits full registry (labels, schemas, requirements) as JSON for Phase 3"
-    status: pending
+    status: completed
   - id: p2-tests
     content: "Registry tests: all built-ins load, schemas validate defaults, plugin discovery from a temp entry point"
     status: pending

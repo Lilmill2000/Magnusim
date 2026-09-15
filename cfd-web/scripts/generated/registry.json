@@ -1,0 +1,1190 @@
+{
+  "analysis": [
+    {
+      "key": "incompressible_steady",
+      "label": "Incompressible Fluid Flow",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "turbulence_model": {
+            "type": "string",
+            "default": "kOmegaSST",
+            "enum": [
+              "laminar",
+              "kEpsilon",
+              "kOmegaSST",
+              "LRR",
+              "SSG"
+            ],
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Turbulence model"
+          },
+          "passive_species": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 20,
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Passive species"
+          },
+          "energy": {
+            "type": "boolean",
+            "default": false,
+            "x-cfddesk": {
+              "group": "flow",
+              "advanced": true
+            },
+            "title": "Energy"
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "simpleFoam",
+          "version_spec": ""
+        }
+      ]
+    },
+    {
+      "key": "incompressible_transient",
+      "label": "Incompressible Fluid Flow (Transient)",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "turbulence_model": {
+            "type": "string",
+            "default": "kOmegaSST",
+            "enum": [
+              "laminar",
+              "kEpsilon",
+              "kOmegaSST",
+              "LRR",
+              "SSG"
+            ],
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Turbulence model"
+          },
+          "passive_species": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 20,
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Passive species"
+          },
+          "energy": {
+            "type": "boolean",
+            "default": false,
+            "x-cfddesk": {
+              "group": "flow",
+              "advanced": true
+            },
+            "title": "Energy"
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "pimpleFoam",
+          "version_spec": ""
+        }
+      ]
+    }
+  ],
+  "solver": [
+    {
+      "key": "simpleFoam",
+      "label": "simpleFoam (SIMPLE steady)",
+      "plugin": "builtin",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "simpleFoam",
+          "version_spec": ""
+        }
+      ]
+    },
+    {
+      "key": "pimpleFoam",
+      "label": "pimpleFoam (PIMPLE transient)",
+      "plugin": "builtin",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "pimpleFoam",
+          "version_spec": ""
+        }
+      ]
+    },
+    {
+      "key": "simpleFoam_amgx",
+      "label": "simpleFoam + AmgX (p)",
+      "plugin": "builtin",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "simpleFoam",
+          "version_spec": ""
+        },
+        {
+          "kind": "gpu",
+          "name": "cuda",
+          "version_spec": ""
+        }
+      ]
+    }
+  ],
+  "mesher": [
+    {
+      "key": "standard",
+      "label": "Standard",
+      "plugin": "builtin",
+      "requires": []
+    },
+    {
+      "key": "cfmesh",
+      "label": "cfMesh cartesianMesh (legacy)",
+      "plugin": "builtin",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "cartesianMesh",
+          "version_spec": ""
+        }
+      ]
+    },
+    {
+      "key": "snappy_hexdominant",
+      "label": "Hex-dominant",
+      "plugin": "builtin",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "snappyHexMesh",
+          "version_spec": ""
+        }
+      ]
+    }
+  ],
+  "bc": [
+    {
+      "key": "velocity_inlet_fixed",
+      "label": "Velocity inlet \u2014 fixed value",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "direction_mode": {
+            "type": "string",
+            "default": "normal",
+            "enum": [
+              "normal",
+              "vector"
+            ],
+            "title": "Direction"
+          },
+          "speed_m_s": {
+            "type": "number",
+            "default": 20.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Speed"
+          },
+          "velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Velocity vector"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "velocity_inlet_volumetric",
+      "label": "Velocity inlet \u2014 volumetric flow",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "volumetric_flow_m3_s": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "m\u00b3/s",
+              "rate_kind": "extensive"
+            },
+            "title": "Volumetric flow"
+          },
+          "flow_kind": {
+            "type": "string",
+            "default": "volumetric",
+            "enum": [
+              "volumetric"
+            ],
+            "title": "Kind"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "velocity_inlet_mean",
+      "label": "Velocity inlet \u2014 mean value",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "direction_mode": {
+            "type": "string",
+            "default": "normal",
+            "enum": [
+              "normal",
+              "vector"
+            ],
+            "title": "Direction"
+          },
+          "speed_m_s": {
+            "type": "number",
+            "default": 20.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Speed"
+          },
+          "velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Velocity vector"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "velocity_inlet_freestream",
+      "label": "Velocity inlet \u2014 freestream",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "direction_mode": {
+            "type": "string",
+            "default": "normal",
+            "enum": [
+              "normal",
+              "vector"
+            ],
+            "title": "Direction"
+          },
+          "speed_m_s": {
+            "type": "number",
+            "default": 20.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Speed"
+          },
+          "velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Velocity vector"
+          },
+          "freestream_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa",
+              "rate_kind": "intensive"
+            },
+            "title": "Freestream pressure"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "velocity_inlet_mass",
+      "label": "Velocity inlet \u2014 mass flow",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "mass_flow_kg_s": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "kg/s",
+              "rate_kind": "extensive"
+            },
+            "title": "Mass flow"
+          },
+          "rho": {
+            "type": "number",
+            "default": 1.0,
+            "x-cfddesk": {
+              "unit": "kg/m\u00b3"
+            },
+            "title": "Density"
+          },
+          "flow_kind": {
+            "type": "string",
+            "default": "mass",
+            "enum": [
+              "mass"
+            ],
+            "title": "Kind"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "velocity_outlet",
+      "label": "Velocity outlet \u2014 fixed value",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Velocity vector"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "pressure_inlet_gauge",
+      "label": "Pressure inlet \u2014 fixed gauge",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gauge_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa",
+              "rate_kind": "intensive"
+            },
+            "title": "Gauge pressure"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "pressure_inlet_total",
+      "label": "Pressure inlet \u2014 total pressure",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "total_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa"
+            },
+            "title": "Total pressure"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "pressure_outlet_gauge",
+      "label": "Pressure outlet \u2014 fixed gauge",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gauge_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa",
+              "rate_kind": "intensive"
+            },
+            "title": "Gauge pressure"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "pressure_outlet_total",
+      "label": "Pressure outlet \u2014 total pressure",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "total_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa"
+            },
+            "title": "Total pressure"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "pressure_outlet_mean",
+      "label": "Pressure outlet \u2014 mean value",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "mean_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa"
+            },
+            "title": "Mean pressure"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "wall_noslip",
+      "label": "Wall \u2014 no-slip",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "thermal_mode": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "fixed_temperature",
+              "fixed_heat_flux",
+              "external_heat_transfer"
+            ],
+            "x-cfddesk": {
+              "energy_only": true
+            },
+            "title": "Thermal"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Temperature"
+          },
+          "heat_flux_W_m2": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2",
+              "energy_only": true,
+              "rate_kind": "extensive"
+            },
+            "title": "Heat flux"
+          },
+          "htc_W_m2K": {
+            "type": "number",
+            "default": 10.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2K",
+              "energy_only": true
+            },
+            "title": "HTC"
+          },
+          "ambient_T_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true
+            },
+            "title": "Ambient T"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "wall_slip",
+      "label": "Wall \u2014 slip",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "thermal_mode": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "fixed_temperature",
+              "fixed_heat_flux",
+              "external_heat_transfer"
+            ],
+            "x-cfddesk": {
+              "energy_only": true
+            },
+            "title": "Thermal"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Temperature"
+          },
+          "heat_flux_W_m2": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2",
+              "energy_only": true,
+              "rate_kind": "extensive"
+            },
+            "title": "Heat flux"
+          },
+          "htc_W_m2K": {
+            "type": "number",
+            "default": 10.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2K",
+              "energy_only": true
+            },
+            "title": "HTC"
+          },
+          "ambient_T_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true
+            },
+            "title": "Ambient T"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "wall_moving",
+      "label": "Wall \u2014 moving",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Wall velocity"
+          },
+          "thermal_mode": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "fixed_temperature",
+              "fixed_heat_flux",
+              "external_heat_transfer"
+            ],
+            "x-cfddesk": {
+              "energy_only": true
+            },
+            "title": "Thermal"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Temperature"
+          },
+          "heat_flux_W_m2": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2",
+              "energy_only": true,
+              "rate_kind": "extensive"
+            },
+            "title": "Heat flux"
+          },
+          "htc_W_m2K": {
+            "type": "number",
+            "default": 10.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2K",
+              "energy_only": true
+            },
+            "title": "HTC"
+          },
+          "ambient_T_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true
+            },
+            "title": "Ambient T"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "wall_rotating",
+      "label": "Wall \u2014 rotating",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m"
+            },
+            "title": "Origin"
+          },
+          "axis": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "title": "Axis"
+          },
+          "rpm": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "1/min"
+            },
+            "title": "RPM"
+          },
+          "thermal_mode": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "fixed_temperature",
+              "fixed_heat_flux",
+              "external_heat_transfer"
+            ],
+            "x-cfddesk": {
+              "energy_only": true
+            },
+            "title": "Thermal"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Temperature"
+          },
+          "heat_flux_W_m2": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2",
+              "energy_only": true,
+              "rate_kind": "extensive"
+            },
+            "title": "Heat flux"
+          },
+          "htc_W_m2K": {
+            "type": "number",
+            "default": 10.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2K",
+              "energy_only": true
+            },
+            "title": "HTC"
+          },
+          "ambient_T_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true
+            },
+            "title": "Ambient T"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "fan",
+      "label": "Fan",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gauge_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa",
+              "rate_kind": "intensive"
+            },
+            "title": "Reference pressure"
+          },
+          "direction": {
+            "type": "string",
+            "default": "in",
+            "enum": [
+              "in",
+              "out"
+            ],
+            "title": "Direction"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "periodic",
+      "label": "Periodic",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "paired_bc_id": {
+            "type": "string",
+            "default": "",
+            "title": "Paired BC"
+          },
+          "transform": {
+            "type": "string",
+            "default": "translational",
+            "enum": [
+              "rotational",
+              "translational"
+            ],
+            "title": "Transform"
+          },
+          "rotationAxis": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "title": "Rotation axis"
+          },
+          "rotationCentre": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m"
+            },
+            "title": "Rotation centre"
+          },
+          "separationVector": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m"
+            },
+            "title": "Separation vector"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": false
+    },
+    {
+      "key": "natural_convection",
+      "label": "Natural convection inlet/outlet",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "total_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa"
+            },
+            "title": "Total pressure"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "symmetry",
+      "label": "Symmetry",
+      "plugin": "builtin",
+      "supported": true
+    },
+    {
+      "key": "wedge",
+      "label": "Wedge",
+      "plugin": "builtin",
+      "supported": false
+    },
+    {
+      "key": "empty",
+      "label": "Empty / 2D",
+      "plugin": "builtin",
+      "supported": false
+    },
+    {
+      "key": "custom",
+      "label": "Custom (raw OpenFOAM)",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "raw": {
+            "type": "object",
+            "default": {
+              "U": "type            zeroGradient;",
+              "p": "type            zeroGradient;"
+            },
+            "title": "Per-field raw entries (U/p/T/\u2026)"
+          },
+          "patch_type_override": {
+            "type": "string",
+            "default": "patch",
+            "enum": [
+              "patch",
+              "wall",
+              "symmetry"
+            ],
+            "title": "Mesh patch type"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    }
+  ],
+  "material": [
+    {
+      "key": "newtonian_incompressible",
+      "label": "Newtonian (incompressible)",
+      "plugin": "builtin"
+    }
+  ],
+  "monitor": [
+    {
+      "key": "area_average",
+      "label": "Area average",
+      "plugin": "builtin"
+    },
+    {
+      "key": "flow_rate",
+      "label": "Flow rate",
+      "plugin": "builtin"
+    }
+  ],
+  "filter": [
+    {
+      "key": "cut_plane",
+      "label": "Cutting Plane",
+      "plugin": "builtin"
+    },
+    {
+      "key": "streamlines",
+      "label": "Particle Trace",
+      "plugin": "builtin"
+    },
+    {
+      "key": "plot_over_path",
+      "label": "Plot-over-path",
+      "plugin": "builtin"
+    },
+    {
+      "key": "iso_surface",
+      "label": "Iso Surface",
+      "plugin": "builtin"
+    },
+    {
+      "key": "iso_volume",
+      "label": "Iso Volume",
+      "plugin": "builtin"
+    },
+    {
+      "key": "inspect_point",
+      "label": "Inspect point",
+      "plugin": "builtin"
+    },
+    {
+      "key": "surface_field",
+      "label": "Surface field",
+      "plugin": "builtin"
+    },
+    {
+      "key": "mesh_surface",
+      "label": "Mesh surface",
+      "plugin": "builtin"
+    },
+    {
+      "key": "mesh_section",
+      "label": "Mesh section",
+      "plugin": "builtin"
+    }
+  ],
+  "plugins": [],
+  "missing": []
+}

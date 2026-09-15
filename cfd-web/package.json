@@ -14,7 +14,8 @@
     "test:prepare-run-golden": "node scripts/__tests__/compare-js-case.mjs",
     "test": "npm run lint && npm run typecheck && npm run test:prepare-run-golden && npm run test:e2e",
     "capture:js-case": "node scripts/__tests__/capture-js-case.mjs",
-    "test:js-case": "npm run test:prepare-run-golden"
+    "test:js-case": "npm run test:prepare-run-golden",
+    "gen:registry": "node scripts/gen-registry.mjs"
   },
   "dependencies": {
     "@kitware/vtk.js": "^32.12.1"
