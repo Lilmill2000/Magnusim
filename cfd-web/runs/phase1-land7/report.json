@@ -91,5 +91,7 @@
     "writer.py / web_case.py not grown",
     "Phase 3+ not touched",
     "Hex-dominant snap knobs now from snappy_policy.py (not old JS nSolveIter=30)"
-  ]
+  ],
+  "commit_sha": "293ee2f053242ea44d82d4b16cb56186701a21a0",
+  "commit_short": "293ee2f"
 }
