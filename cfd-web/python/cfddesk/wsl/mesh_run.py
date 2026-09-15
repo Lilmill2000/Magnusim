@@ -23,6 +23,20 @@ from cfddesk.wsl.openfoam import WslCommandResult, run_wsl_bash
 _SNAPPY_PARALLEL_SH = "run_snappy_parallel.sh"
 _GMSH_STANDARD_SH = "run_gmsh_standard.sh"
 _CFMESH_STANDARD_SH = "run_cfmesh_standard.sh"
+_STANDARD_SH = "run_standard_mesh.sh"
+_TEMPLATES = Path(__file__).resolve().parent / "templates"
+
+
+def _read_mesh_template(name: str) -> str:
+    """Load a bash body from `cfddesk/wsl/templates/` (LF, no BOM)."""
+    raw = (_TEMPLATES / name).read_text(encoding="utf-8")
+    if raw.startswith("\ufeff"):
+        raw = raw.lstrip("\ufeff")
+    return raw.replace("\r\n", "\n")
+
+
+def _write_lf(path: Path, text: str) -> None:
+    path.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
 
 
 def windows_to_wsl_path(win_path: Path) -> str:
@@ -174,70 +188,13 @@ def write_run_snappy_parallel_sh(
 
     Parallel snappy on complex geometry is often only 3–6× faster than serial,
     not N×, because refine/snap load is uneven across ranks.
+    Bodies live in `cfddesk/wsl/templates/run_snappy_parallel.sh`.
     """
     n = max(2, int(n_cpus))
     method = decompose_method if decompose_method else "scotch"
-    # Real .sh on disk — never rely on Windows-expanded bash -lc with $FOAM_*.
-    text = f"""#!/usr/bin/env bash
-# cfddesk parallel snappyHexMesh (N={n}, method={method})
-# Note: on complex geometry parallel snappy is often only 3-6x faster than
-# serial, not Nx, due to load imbalance during refine/snap.
-set -uo pipefail
-CASE_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$CASE_DIR"
-N={n}
-
-fail() {{
-  echo "MESH_SCRIPT_FAIL: $1" >&2
-  exit 1
-}}
-
-# Drop leftover processor* from a previous different N (solve-path same rule).
-rm -rf processor*[0-9]* || true
-
-# Stale 0/ (and other time dirs) from a prior solve name inlet/outlet/walls.
-# blockMesh only has patch blockBounds — decomposePar would FOAM FATAL on
-# missing patchField entries. Meshing does not need fields; solve rewrites 0/.
-rm -rf 0
-for t in [1-9]*; do
-  [ -d "$t" ] || continue
-  case "$t" in processor*) continue ;; esac
-  rm -rf "$t"
-done
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  blockMesh > log.blockMesh 2>&1
-' || fail blockMesh
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  decomposePar > log.decomposePar 2>&1
-' || fail decomposePar
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  mpirun -np '"$N"' snappyHexMesh -parallel -overwrite > log.snappyHexMesh 2>&1
-' || fail snappyHexMesh
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  reconstructParMesh -constant -mergeTol 1e-6 > log.reconstructParMesh 2>&1
-' || fail reconstructParMesh
-
-# Final polyMesh must live in constant/ (same as serial -overwrite path).
-rm -rf processor*[0-9]* || true
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  checkMesh > log.checkMesh 2>&1 || true
-'
-
-# checkMesh exit code is evaluated in Python (_checkmesh_ok); do not abort
-# the script on skewness-only failures when layers are enabled.
-echo MESH_SCRIPT_OK
-"""
-    path.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
+    text = _read_mesh_template(_SNAPPY_PARALLEL_SH)
+    text = text.replace("__N__", str(n)).replace("__METHOD__", method)
+    _write_lf(path, text)
 
 
 def _cat_log(wsl_case: str, log_name: str) -> str:
@@ -578,37 +535,10 @@ def write_run_gmsh_standard_sh(path: Path) -> None:
     """Write ext4-native Standard mesh script (LF): gmshToFoam → checkMesh.
 
     Wall/patch types are applied on the Windows results copy after sync-back
-    (``apply_boundary_patch_types``) — gmshToFoam defaults everything to
-    ``patch``.
+    (`apply_boundary_patch_types`) — gmshToFoam defaults everything to
+    `patch`. Body: `templates/run_gmsh_standard.sh`.
     """
-    text = """#!/usr/bin/env bash
-set -eu
-CASE_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$CASE_DIR"
-
-fail() {
-  echo "MESH_SCRIPT_FAIL: $1" >&2
-  exit 1
-}
-
-MSH="constant/triSurface/geometry.msh"
-test -f "$MSH" || fail "missing $MSH"
-
-rm -rf constant/polyMesh
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  gmshToFoam constant/triSurface/geometry.msh > log.gmshToFoam 2>&1
-' || fail gmshToFoam
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  checkMesh > log.checkMesh 2>&1 || true
-'
-
-echo MESH_SCRIPT_OK
-"""
-    path.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
+    _write_lf(path, _read_mesh_template(_GMSH_STANDARD_SH))
 
 
 def run_gmsh_pipeline(
@@ -730,84 +660,14 @@ def run_gmsh_pipeline(
     )
 
 
-_STANDARD_SH = "run_standard_mesh.sh"
-
-# Rewrites patch types in constant/polyMesh/boundary from patch_types.txt
-# (gmshToFoam emits every patch as ``type patch``).
-_PATCH_TYPES_PY = r'''
-from pathlib import Path
-import re
-types = {}
-for line in Path("constant/triSurface/patch_types.txt").read_text(
-    encoding="utf-8", errors="replace"
-).splitlines():
-    parts = line.split()
-    if len(parts) >= 2:
-        types[parts[0]] = parts[1]
-path = Path("constant/polyMesh/boundary")
-text = path.read_text(encoding="utf-8", errors="replace")
-changed = 0
-for name, want in types.items():
-    pat = re.compile(r"(\n\s*" + re.escape(name) + r"\s*\{[^}]*?\btype\s+)(\w+)(\s*;)")
-    text, n = pat.subn(lambda m: m.group(1) + want + m.group(3), text)
-    changed += n
-# gmshToFoam adds physicalType entries that shadow the real type for some tools
-text = re.sub(r"\n(\s*)physicalType\s+\w+\s*;", r"\n\1// physicalType removed", text)
-path.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
-print("PATCH_TYPES_APPLIED", changed)
-'''
-
 
 def write_run_standard_sh(path: Path) -> None:
     """Write ext4-native script for the surface-first Standard mesh:
-    gmshToFoam → patch types → optional layers-only snappyHexMesh → checkMesh."""
-    text = (
-        """#!/usr/bin/env bash
-set -u
-CASE_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$CASE_DIR"
+    gmshToFoam → patch types → optional layers-only snappyHexMesh → checkMesh.
 
-fail() {
-  echo "MESH_SCRIPT_FAIL: $1" >&2
-  exit 1
-}
-
-MSH="constant/triSurface/geometry.msh"
-test -f "$MSH" || fail "missing $MSH"
-rm -rf constant/polyMesh 0 [1-9]*
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  gmshToFoam constant/triSurface/geometry.msh > log.gmshToFoam 2>&1
-' || fail gmshToFoam
-test -f constant/polyMesh/boundary || fail "gmshToFoam produced no polyMesh"
-
-if [ -f constant/triSurface/patch_types.txt ]; then
-  python3 - <<'PY' > log.patchTypes 2>&1 || fail patchTypes
-"""
-        + _PATCH_TYPES_PY
-        + """PY
-fi
-
-if [ -f system/snappyHexMeshDict ]; then
-  openfoam2606 bash -c '
-    cd "'"$CASE_DIR"'"
-    snappyHexMesh -overwrite > log.snappyHexMesh 2>&1
-  ' || fail snappyHexMesh
-  grep -q "Finished meshing" log.snappyHexMesh || fail "snappyHexMesh did not finish"
-else
-  echo "layers off (no snappyHexMeshDict)" > log.snappyHexMesh
-fi
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  checkMesh > log.checkMesh 2>&1 || true
-'
-
-echo MESH_SCRIPT_OK
-"""
-    )
-    path.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
+    Body: `templates/run_standard_mesh.sh`.
+    """
+    _write_lf(path, _read_mesh_template(_STANDARD_SH))
 
 
 def run_standard_pipeline(
@@ -922,114 +782,12 @@ def run_standard_pipeline(
 def write_run_cfmesh_standard_sh(path: Path) -> None:
     """Write ext4-native Standard+hexcore script (LF).
 
-    ``surfaceFeatureEdges`` → ``geometry.fms`` (corners/edges), then
-    ``cartesianMesh`` → optional face-split ``createPatch`` → retype
-    inlet/outlet from ``wall`` → ``patch`` via ``patch_types.txt`` →
-    ``checkMesh``.
+    `surfaceFeatureEdges` → `geometry.fms` (corners/edges), then
+    `cartesianMesh` → optional face-split `createPatch` → retype
+    inlet/outlet from `wall` → `patch` via `patch_types.txt` →
+    `checkMesh`. Body: `templates/run_cfmesh_standard.sh`.
     """
-    text = """#!/usr/bin/env bash
-set -eu
-CASE_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$CASE_DIR"
-
-fail() {
-  echo "MESH_SCRIPT_FAIL: $1" >&2
-  exit 1
-}
-
-test -f system/meshDict || fail "missing system/meshDict"
-test -f constant/triSurface/geometry.stl || fail "missing constant/triSurface/geometry.stl"
-
-rm -rf constant/polyMesh
-rm -f constant/triSurface/geometry.fms
-
-# Use meshDict surfaceFile as-is. Do NOT force .fms via surfaceFeatureEdges —
-# that marks every sharp CAD edge and cartesianMesh builds dark fine bands
-# (not SimScale-uniform surface). Optional .fms only if meshDict asks for it.
-SURF="$(awk '/^surfaceFile/{gsub(/"/, "", $2); gsub(/;/, "", $2); print $2; exit}' system/meshDict || true)"
-if [ "$SURF" = "constant/triSurface/geometry.fms" ]; then
-  openfoam2606 bash -c '
-    cd "'"$CASE_DIR"'"
-    surfaceFeatureEdges -angle 89 \
-      constant/triSurface/geometry.stl \
-      constant/triSurface/geometry.fms \
-      > log.surfaceFeatureEdges 2>&1
-  ' || fail surfaceFeatureEdges
-  test -f constant/triSurface/geometry.fms || fail "missing geometry.fms after surfaceFeatureEdges"
-else
-  echo "surfaceFile=$SURF (skip surfaceFeatureEdges — uniform surface)" > log.surfaceFeatureEdges
-fi
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
-  cartesianMesh > log.cartesianMesh 2>&1
-' || fail cartesianMesh
-
-# Merge walls__f* → walls and retype inlet/outlet (cfMesh emits type wall).
-if [ -f system/createPatchDict.cfmeshFaces ]; then
-  cp -f system/createPatchDict.cfmeshFaces system/createPatchDict
-  openfoam2606 bash -c '
-    cd "'"$CASE_DIR"'"
-    createPatch -overwrite > log.createPatch.cfmeshFaces 2>&1
-  ' || fail createPatch.cfmeshFaces
-fi
-
-# Belt: rewrite types from patch_types.txt if createPatch left inlet/outlet as wall.
-if [ -f constant/triSurface/patch_types.txt ] && [ -f constant/polyMesh/boundary ]; then
-  python3 - <<'PY'
-from pathlib import Path
-import re
-types = {}
-for line in Path("constant/triSurface/patch_types.txt").read_text(
-    encoding="utf-8", errors="replace"
-).splitlines():
-    parts = line.split()
-    if len(parts) >= 2:
-        types[parts[0]] = parts[1]
-path = Path("constant/polyMesh/boundary")
-lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-changed = 0
-current = None
-out = []
-skip = {"FoamFile", "version", "format", "arch", "class", "location", "object"}
-name_re = re.compile(r"^\\s*([A-Za-z_]\\w*)\\s*$")
-type_re = re.compile(r"^(\\s*type\\s+)\\S+(\\s*;.*)$")
-for line in lines:
-    raw = line.rstrip("\\r\\n")
-    m_name = name_re.match(raw)
-    if m_name and m_name.group(1) not in skip:
-        current = m_name.group(1)
-        out.append(line)
-        continue
-    if raw.strip() == "}":
-        current = None
-        out.append(line)
-        continue
-    if current and current in types:
-        m_type = type_re.match(raw)
-        if m_type:
-            want = types[current]
-            nl = "\\n" if line.endswith("\\n") else ""
-            new_line = f"{m_type.group(1)}{want}{m_type.group(2)}{nl}"
-            if new_line.rstrip("\\n") != raw:
-                changed += 1
-            out.append(new_line)
-            continue
-    out.append(line)
-path.write_bytes("".join(out).replace("\\r\\n", "\\n").encode("utf-8"))
-print("PATCH_TYPES_APPLIED", changed)
-PY
-fi
-
-openfoam2606 bash -c '
-  cd "'"$CASE_DIR"'"
-  checkMesh > log.checkMesh 2>&1 || true
-'
-
-echo MESH_SCRIPT_OK
-"""
-    path.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
+    _write_lf(path, _read_mesh_template(_CFMESH_STANDARD_SH))
 
 
 def run_cfmesh_pipeline(

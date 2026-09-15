@@ -31,3 +31,17 @@ Courant / `Time =` lines into `residual` / `courant` / `progress` events.
 Legacy `W27_*` / `W25_*` markers are **not** emitted on this path. The JS
 `buildSolveScript` / `writeSolveCase` writers were deleted in Phase 1 land6;
 solve ownership is `prepare_run` + `run_solve` + `solve.sh`.
+
+## Mesh pipeline scripts
+
+These are written onto the Windows case and synced to WSL (LF, no BOM). Placeholders
+are substituted by `cfddesk.wsl.mesh_run` at write time:
+
+| File | Placeholders | Used by |
+|---|---|---|
+| `run_snappy_parallel.sh` | `__N__`, `__METHOD__` | `write_run_snappy_parallel_sh` / parallel snappy |
+| `run_gmsh_standard.sh` | (none) | `write_run_gmsh_standard_sh` |
+| `run_standard_mesh.sh` | (none) | `write_run_standard_sh` (gmsh + optional layers) |
+| `run_cfmesh_standard.sh` | (none) | `write_run_cfmesh_standard_sh` |
+
+Markers: `MESH_SCRIPT_OK` / `MESH_SCRIPT_FAIL: <step>` (parsed in Python).

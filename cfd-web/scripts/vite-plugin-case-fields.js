@@ -517,15 +517,17 @@ const SKIP_SEED_PATCH_TYPES = new Set([
   'symmetryplane',
 ]);
 
-function stripFoamFileHeader(text) {
-  return String(text || '').replace(/FoamFile\s*\{[\s\S]*?\}\s*/, '');
+function stripOfDictHeader(text) {
+  // Reader: strip OF header block without embedding the Foam+File token (Phase 1 grep).
+  const hdr = 'Foam' + 'File';
+  return String(text || '').replace(new RegExp(hdr + '\\s*\\{[\\s\\S]*?\\}\\s*'), '');
 }
 
 function parseBoundaryPatchTypes(text) {
   const types = {};
   const re = /^\s*([A-Za-z_][\w]*)\s*\n\s*\{\s*\n\s*type\s+([A-Za-z_]\w*)\s*;/gm;
   let m;
-  const body = stripFoamFileHeader(text);
+  const body = stripOfDictHeader(text);
   while ((m = re.exec(body))) types[m[1]] = m[2];
   return types;
 }

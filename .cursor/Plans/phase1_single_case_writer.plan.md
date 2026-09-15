@@ -4,34 +4,34 @@ overview: "Make cfddesk the only code that writes OpenFOAM dictionaries and shel
 todos:
   - id: p1-transient-writer
     content: "Add transient (pimpleFoam) support to cfddesk/case: SolverSettings.mode, TransientControl dataclass, write_control_dict/fv_schemes/fv_solution variants"
-    status: pending
+    status: completed
   - id: p1-function-objects
     content: "cfddesk/case/function_objects.py: surfaceFieldValue monitors (mon_/flow_) and limitU fvOptions from result_controls"
-    status: pending
+    status: completed
   - id: p1-web-bc-adapter
     content: "cfddesk/project/web_adapter.py: read boundary_conditions.json/materials.json/mesh.json/runs catalog into a Project/RunSpec"
-    status: pending
+    status: completed
   - id: p1-prepare-run-tool
     content: "tools/prepare_run.py: writes complete run case (0/, constant/, system/, decomposeParDict, case.foam, run meta); golden-tested against js_steady/js_transient"
-    status: pending
+    status: completed
   - id: p1-solve-script
     content: "cfddesk/wsl/templates/solve.sh + tools/run_solve.py streaming JSONL events; replaces buildSolveScript and W27_* regexes"
-    status: pending
+    status: completed
   - id: p1-snappy-script
     content: "Move GENERATE_SH_TEMPLATE (w21) into cfddesk/wsl/templates/snappy_hexdominant.sh + tools/generate_snappy.py emitting JSONL"
-    status: pending
+    status: completed
   - id: p1-job-protocol
     content: "cfddesk/jobs/events.py + scripts/job-runner.js: one JSONL event protocol for mesh and solve; adapt CFMESH_PROGRESS emitters"
-    status: pending
+    status: completed
   - id: p1-delete-js-writer
     content: "Delete writeSolveCase/foamHeader/writeVolField/buildSolveScript from w27-solve.js and transient* writers from w30-transient.js; keep parsing/HTTP"
-    status: pending
+    status: completed
   - id: p1-node-no-project-writes
     content: "Node stops writing project.json: introduce tools/project_cli.py and route the 10 writeProject call sites through it"
-    status: pending
+    status: completed
   - id: p1-verify
     content: "Golden equivalence + Playwright solve smoke (steady 20 iters) + manual transient run"
-    status: pending
+    status: completed
 isProject: false
 ---
 
