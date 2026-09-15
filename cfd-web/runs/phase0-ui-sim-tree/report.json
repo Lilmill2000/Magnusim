@@ -1,0 +1,56 @@
+{
+    "verdict":  "PASS",
+    "base":  "https://simulation.lilmill2000.com",
+    "project_id":  "proto-ui-sim-tree-1789442480951-20260915032121-85d78d",
+    "before":  {
+                   "stage":  "geometry",
+                   "treeText":  "-\nsource\nÃ¢Å“â€œ\n-\nGeometry\nÃ¢Å“â€œ\nBody1",
+                   "hasMaterialsAttr":  false,
+                   "hasBcsAttr":  false,
+                   "hasMeshAttr":  false,
+                   "hasSimControlAttr":  false,
+                   "materialsText":  false,
+                   "bcText":  false,
+                   "meshText":  false,
+                   "simText":  false,
+                   "studyCount":  0,
+                   "createBtnVisible":  true,
+                   "w17ready":  false,
+                   "w17sim":  null
+               },
+    "after":  {
+                  "stage":  "setup",
+                  "treeText":  "-\nsource\nÃ¢Å“â€œ\n-\nGeometry\nÃ¢Å“â€œ\nBody1\n-\nIncompressible Steady-state\n-\nMaterials\n+\n-\nBoundary conditions\n+\nDefaults\nNo-slip walls\n-\nMesh\n-\nSimulation",
+                  "hasMaterialsAttr":  true,
+                  "hasBcsAttr":  true,
+                  "hasMeshAttr":  true,
+                  "hasSimControlAttr":  true,
+                  "materialsText":  true,
+                  "bcText":  true,
+                  "meshText":  true,
+                  "simText":  true,
+                  "studyCount":  1,
+                  "createBtnVisible":  true,
+                  "w17ready":  true,
+                  "w17sim":  "sim-mu23uug7-3260db"
+              },
+    "errors":  [
+
+               ],
+    "screenshots":  {
+                        "before":  "public-before-create.png",
+                        "modal":  "public-modal.png",
+                        "after":  "public-after-create.png"
+                    },
+    "fix":  {
+                "why":  "empty meshes_all made meshListAll-\u003emeshList-\u003emeshesForStudy-\u003emeshListAll recurse until stack overflow; syncSimulationTree aborted leaving geometry-only / No simulation yet",
+                "change":  "meshListAll(): return meshes_all/meshes arrays even when empty; never fall back to meshList()",
+                "file":  "src/main.js"
+            },
+    "checked_at":  "2026-09-15T03:21:37.558Z",
+    "before_fix":  {
+                       "public_url":  "https://simulation.lilmill2000.com/",
+                       "symptom":  "treeText=No simulation yet; stage=empty; Maximum call stack size exceeded in meshesForStudy\u003c-\u003emeshListAll",
+                       "source":  "01-hydrated.png (pre-fix localhost open of project with sims on disk)"
+                   }
+}
