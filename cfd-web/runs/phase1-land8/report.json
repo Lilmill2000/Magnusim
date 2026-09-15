@@ -31,9 +31,19 @@
   },
   "writeProject": {
     "active_writeFileSync_outside_allowlist": 0,
-    "allowlisted_remaining": ["w16-project-geometry.js"],
-    "routed_via_pyJson": ["w17-simulation.js", "w19-boundary-conditions.js", "w20-mesh.js", "w22-area-average.js", "w26-mesh-refinements.js"],
-    "noop": ["w18-materials.js"],
+    "allowlisted_remaining": [
+      "w16-project-geometry.js"
+    ],
+    "routed_via_pyJson": [
+      "w17-simulation.js",
+      "w19-boundary-conditions.js",
+      "w20-mesh.js",
+      "w22-area-average.js",
+      "w26-mesh-refinements.js"
+    ],
+    "noop": [
+      "w18-materials.js"
+    ],
     "note": "w16 geometry* may stay in Node until Phase 3 per plan Step 9"
   },
   "tests": {
@@ -78,5 +88,7 @@
     "writer.py / web_case.py not grown",
     "Phase 3+ not touched",
     ":8082 kept up"
-  ]
+  ],
+  "commit_sha": "a8013d2d0cdf906e75929e3ad10ea0eeb950b7b7",
+  "commit_short": "a8013d2"
 }
