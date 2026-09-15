@@ -1,8 +1,36 @@
 {
   "faces_length_unit": "mm",
-  "bodies": ["Body1"],
+  "bodies": [
+    "Body1"
+  ],
   "faces": [
-    { "id": 1, "area": 100.0, "centroid": [0, 0, 0], "normal": [1, 0, 0] },
-    { "id": 2, "area": 100.0, "centroid": [10, 0, 0], "normal": [-1, 0, 0] }
+    {
+      "id": 1,
+      "area": 2026.8299163899908,
+      "centroid": [
+        0,
+        0,
+        0
+      ],
+      "normal": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "area": 2026.8299163899908,
+      "centroid": [
+        10,
+        0,
+        0
+      ],
+      "normal": [
+        -1,
+        0,
+        0
+      ]
+    }
   ]
 }

@@ -3,15 +3,19 @@
 Matches w27-solve.js surfaceFieldValue blocks that Graphs / getRunMonitors
 consume. Do NOT swap to pInlet/pOutlet (legacy CLI path in surface_averages.py).
 """
-
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import dataclass
 from typing import Iterable, Literal, Sequence
 
 from cfddesk.project.transient import TransientControl
+from cfddesk.project.web_adapter import (
+    bc_faces as _bc_faces_adapter,
+    is_pressure_bc as _is_pressure_bc_adapter,
+    is_velocity_inlet as _is_velocity_inlet_adapter,
+    is_velocity_outlet as _is_velocity_outlet_adapter,
+)
 
 MonitorKind = Literal["area_average", "flow"]
 
@@ -139,18 +143,9 @@ def monitors_functions_text(
     return "\n".join(blocks) if blocks else "    // no area-average probes"
 
 
-def _bc_type(bc: object) -> str:
-    if isinstance(bc, dict):
-        return str(bc.get("bc_type") or "")
-    return str(getattr(bc, "bc_type", "") or "")
-
-
 def _bc_faces(bc: object) -> list[str]:
     if isinstance(bc, dict):
-        faces = list(bc.get("faces") or [])
-        if bc.get("face") and bc["face"] not in faces:
-            faces.append(str(bc["face"]))
-        return [str(f) for f in faces if f]
+        return _bc_faces_adapter(bc)
     faces = list(getattr(bc, "faces", []) or [])
     face = getattr(bc, "face", None)
     if face and face not in faces:
@@ -158,16 +153,26 @@ def _bc_faces(bc: object) -> list[str]:
     return [str(f) for f in faces if f]
 
 
+def _as_bc_dict(bc: object) -> dict:
+    if isinstance(bc, dict):
+        return bc
+    return {
+        "bc_type": getattr(bc, "bc_type", "") or "",
+        "faces": list(getattr(bc, "faces", []) or []),
+        "face": getattr(bc, "face", None),
+    }
+
+
 def _is_velocity_inlet(bc: object) -> bool:
-    return bool(re.search(r"velocity\s*inlet", _bc_type(bc), re.I))
+    return _is_velocity_inlet_adapter(_as_bc_dict(bc))
 
 
 def _is_velocity_outlet(bc: object) -> bool:
-    return bool(re.search(r"velocity\s*outlet", _bc_type(bc), re.I))
+    return _is_velocity_outlet_adapter(_as_bc_dict(bc))
 
 
 def _is_pressure_bc(bc: object) -> bool:
-    return bool(re.match(r"pressure", _bc_type(bc), re.I))
+    return _is_pressure_bc_adapter(_as_bc_dict(bc))
 
 
 def monitor_patches_from_mapped(

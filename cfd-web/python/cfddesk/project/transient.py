@@ -8,7 +8,7 @@ fvSolution. Steady path is untouched.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
 TimeScheme = Literal["Euler", "backward"]
