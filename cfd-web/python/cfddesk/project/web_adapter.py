@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from cfddesk.project.transient import TransientControl, resolve_transient_control
 
-SolverApp = Literal["simpleFoam", "pimpleFoam"]
+SolverAppName = Literal["simpleFoam", "pimpleFoam"]
 
 
 @dataclass
@@ -52,7 +52,7 @@ class RunSpec:
     run_id: str
     mesh_case_dir: Path
     n_procs: int
-    solver_app: SolverApp
+    solver_app: SolverAppName
     end_time: float
     write_interval: float
     transient: TransientControl | None

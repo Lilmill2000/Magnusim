@@ -166,3 +166,13 @@ def test_load_all_idempotent_solvers():
     load_all()
     load_all(force=True)
     assert set(get_registry("solver").keys()) == EXPECTED_SOLVER_KEYS
+
+def test_web_adapter_solver_app_name_no_collision():
+    """land3-fix2: web_adapter Literal is SolverAppName; registry class stays SolverApp."""
+    import cfddesk.project.web_adapter as wa
+    from cfddesk.registry.solver import SolverApp as RegSolverApp
+
+    assert hasattr(wa, "SolverAppName")
+    assert not hasattr(wa, "SolverApp")
+    assert wa.SolverAppName.__args__ == ("simpleFoam", "pimpleFoam")
+    assert isinstance(RegSolverApp, type)
