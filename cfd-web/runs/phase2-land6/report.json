@@ -1,0 +1,124 @@
+{
+  "phase": "Phase 2",
+  "land": "land6",
+  "title": "ResultFilterType registry + export-backed builtins (no AnalysisType filter bag)",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 03:50:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "92de282fdb25f63781b45de06046156bbd29d01b",
+  "commit_sha": "223bc6732cd5caf8b3235aec45862abec8f7c485",
+  "commit_short": "223bc67",
+  "tests": {
+    "unit_suite": "166 passed",
+    "land6_focused": "9 passed (test_result_filter_registry)"
+  },
+  "type_name_chosen": "ResultFilterType",
+  "naming_collision_check": {
+    "registry_ResultFilterType": "cfddesk.registry.result_filter.ResultFilterType (key/label/tool/exporter registry)",
+    "results_FilterSpec": "cfddesk.results.filters.FilterSpec (persistence dataclass union) UNTOUCHED",
+    "results_FilterType": "cfddesk.results.filters.FilterType Literal UNTOUCHED",
+    "rejected_names": [
+      "FilterSpec",
+      "ResultFilterSpec",
+      "FilterType"
+    ],
+    "reason": "FilterSpec/FilterType already exist in results/filters.py \u2014 soft-pass prefers ResultFilterType"
+  },
+  "bags_resolution": {
+    "result_filters": "NONE_EXIST - AnalysisType has no result_filters/filters/filter_types bags. Soft-pass: do not invent a bag; register ResultFilterType only. analysis_has_filter_bags probe returns False."
+  },
+  "builtins_registered": [
+    {
+      "key": "cut_plane",
+      "tool": "export_cut_plane.py",
+      "model": "CutPlaneFilter"
+    },
+    {
+      "key": "streamlines",
+      "tool": "export_particle_trace.py",
+      "model": "StreamlineFilter",
+      "label": "Particle Trace"
+    },
+    {
+      "key": "plot_over_path",
+      "tool": "export_plot_over_path.py",
+      "model": "PlotOverPathFilter",
+      "output": "json"
+    },
+    {
+      "key": "iso_surface",
+      "tool": "export_iso_surface.py",
+      "model": "IsoSurfaceFilter"
+    },
+    {
+      "key": "iso_volume",
+      "tool": "export_iso_volume.py",
+      "model": "IsoVolumeFilter"
+    },
+    {
+      "key": "inspect_point",
+      "tool": "export_inspect_point.py",
+      "model": null,
+      "output": "json"
+    },
+    {
+      "key": "surface_field",
+      "tool": "export_case_field.py",
+      "model": null
+    },
+    {
+      "key": "mesh_surface",
+      "tool": "export_mesh_surface_vtp.py",
+      "cache_scope": "case"
+    },
+    {
+      "key": "mesh_section",
+      "tool": "export_mesh_section_vtp.py",
+      "cache_scope": "case"
+    }
+  ],
+  "not_registered_no_export": [
+    "animation",
+    "field_calculator"
+  ],
+  "landed": [
+    "registry/result_filter.py: ResultFilterType + analysis_has_filter_bags probe",
+    "builtin/filters.py: 9 export-backed keys",
+    "register_builtins: filters between monitors and analysis",
+    "base.describe: also reads params_schema",
+    "tests/unit/test_result_filter_registry.py",
+    "plan p2-result-filter -> completed (soft-pass)"
+  ],
+  "NOT_yet_done": [
+    "params_schema still empty stubs \u2014 full SchemaField from filter dataclasses later",
+    "vite-plugin-case-fields.js hand-written handlers untouched (Phase 3 generic /api/filter/<key>)",
+    "animation / field_calculator not registered (no export_*.py)",
+    "FO MonitorKind flow vs registry flow_rate \u2014 no map helper / no third name this land",
+    "Geometry v14, web-json collapse, registry_dump, JS, Phase 3+",
+    "soft-pass != Phase 2 done"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done. land6 is ResultFilterType registry+builtins only. No AnalysisType filter bag, no filters.py/JS collapse, no flow/flow_rate rename.",
+  "files_touched": {
+    "added": [
+      "cfd-web/python/cfddesk/registry/result_filter.py",
+      "cfd-web/python/cfddesk/builtin/filters.py",
+      "cfd-web/python/tests/unit/test_result_filter_registry.py",
+      "cfd-web/runs/phase2-land6/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land6/report.json"
+    ],
+    "modified": [
+      "cfd-web/python/cfddesk/registry/__init__.py",
+      "cfd-web/python/cfddesk/registry/base.py",
+      "cfd-web/python/cfddesk/builtin/__init__.py",
+      ".cursor/Plans/phase2_registries_and_plugin_core.plan.md"
+    ]
+  },
+  "notes": [
+    "results/filters.py FilterSpec/FilterType untouched.",
+    "No JS / vite-plugin-case-fields rewrite.",
+    "No leftover backup/ clutter dirs.",
+    "Did not push."
+  ]
+}
