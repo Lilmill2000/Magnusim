@@ -52,5 +52,6 @@
     "writer.py not grown; BC helpers remain in web_case / web_adapter.",
     "Phase 3+ forbidden / not touched.",
     "Legacy W27_* markers not emitted by new solve.sh (JS buildSolveScript still does)."
-  ]
+  ],
+  "commit_sha": "8de0f6f747a2d8071c20b93d6e73aab7c1b92800"
 }
