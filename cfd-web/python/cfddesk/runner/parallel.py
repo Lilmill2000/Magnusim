@@ -99,7 +99,7 @@ def mpirun_simplefoam_inner(
 def kill_mpirun_tree(wsl_case: str) -> ParallelStepResult:
     """Kill mpirun + solver/mesh ranks for this case (Force Stop).
 
-    Covers simpleFoam (solve) and snappyHexMesh (parallel mesh) plus mpirun.
+    Covers simpleFoam/pimpleFoam (solve) and snappyHexMesh (parallel mesh) plus mpirun.
     Matches by cmdline *or* /proc/PID/cwd == case (snappy argv often omits the
     case path). Writes a real ``.sh`` under /tmp and runs it — never inline
     ``pkill -f run_snappy_parallel.sh`` (that self-matches the killer cmdline).
@@ -115,9 +115,10 @@ CASE={case_q}
 kill_case_procs() {{
   local sig="$1"
   pkill -$sig -f "simpleFoam.*$CASE" 2>/dev/null || true
+  pkill -$sig -f "pimpleFoam.*$CASE" 2>/dev/null || true
   pkill -$sig -f "mpirun.*$CASE" 2>/dev/null || true
   pkill -$sig -f "snappyHexMesh.*$CASE" 2>/dev/null || true
-  for pid in $(pgrep -f 'simpleFoam|snappyHexMesh|mpirun' 2>/dev/null || true); do
+  for pid in $(pgrep -f 'simpleFoam|pimpleFoam|snappyHexMesh|mpirun' 2>/dev/null || true); do
     [ -d "/proc/$pid" ] || continue
     cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
     if [ "$cwd" = "$CASE" ]; then
