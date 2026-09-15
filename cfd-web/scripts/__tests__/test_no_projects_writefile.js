@@ -1,9 +1,10 @@
-/**
+﻿/**
  * Phase 1 Step 9 lint-style guard.
+ * Phase 2 land14 extends coverage: scripts/__tests__/test_no_node_sibling_writes.js + prove-no-node-sibling-writes.mjs.
  * Fails on scripts with active writeProject->project.json (writeFileSync).
  * Fails on Node writeFileSync of simulation(s).json and other project setup JSON.
  * Allowlist: job-runner.js, w28-media.js, w16-project-geometry.js (geometry* until Phase 3).
- * Note: vite-plugin-case-fields.js / prefs.js write under .cache or local prefs — not projects/.
+ * Note: vite-plugin-case-fields.js / prefs.js write under .cache or local prefs â€” not projects/.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -74,3 +75,4 @@ if (failed) process.exit(1);
 console.log(
   'PASS: no active writeProject/setup-JSON writeFileSync outside allowlist (job-runner/w28/w16)',
 );
+

@@ -15,7 +15,9 @@
     "test": "npm run lint && npm run typecheck && npm run test:prepare-run-golden && npm run test:e2e",
     "capture:js-case": "node scripts/__tests__/capture-js-case.mjs",
     "test:js-case": "npm run test:prepare-run-golden",
-    "gen:registry": "node scripts/gen-registry.mjs"
+    "gen:registry": "node scripts/gen-registry.mjs",
+    "guard:node-siblings": "node scripts/__tests__/test_no_node_sibling_writes.js",
+    "prove:node-siblings": "node scripts/__tests__/prove-no-node-sibling-writes.mjs"
   },
   "dependencies": {
     "@kitware/vtk.js": "^32.12.1"

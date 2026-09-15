@@ -1,0 +1,94 @@
+{
+  "phase": "Phase 2",
+  "land": "land14",
+  "title": "Node never-writes siblings: lint/guard prove (SoT ban)",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 07:35:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "a3fa5e6d57d8c37fad17219986c6479f78066e93",
+  "baseline_land13": "538e4d4335032aa23d862d947b7dd82b1945cb83",
+  "commit_sha": "PENDING",
+  "commit_short": "PENDING",
+  "guard": {
+    "script": "scripts/__tests__/test_no_node_sibling_writes.js",
+    "prove": "scripts/__tests__/prove-no-node-sibling-writes.mjs",
+    "plant": "scripts/__tests__/fixtures/land14-forbidden-write.plant.js",
+    "npm": ["guard:node-siblings", "prove:node-siblings"],
+    "how": "Static scan of scripts/**/*.{js,mjs,cjs} (skips __tests__/fixtures, generated). Fails on writeFile/writeFileSync/promises.writeFile/outputFileSync/writeJsonSync targeting sibling SoT JSON filenames or *JsonPath helpers (materials/bcs/mesh/refinements/result_controls/simulation(s)/catalog). Allowlist: job-runner.js, w28-media.js, w16-project-geometry.js. Python writeJsonCli / set-* via py-json.js ALLOWED (Project path owns write).",
+    "siblings_banned": [
+      "materials.json",
+      "boundary_conditions.json",
+      "mesh.json",
+      "mesh_refinements.json",
+      "result_controls.json",
+      "area_average.json",
+      "simulation_control.json",
+      "simulations.json",
+      "simulation.json",
+      "runs/catalog.json"
+    ]
+  },
+  "tests": {
+    "guard_clean": "PASS (npm run guard:node-siblings)",
+    "prove_plant_fails": "PASS (npm run prove:node-siblings — planted fixture FAIL + clean PASS)",
+    "phase1_step9_guard": "PASS (test_no_projects_writefile.js)"
+  },
+  "ui_8082": {
+    "root": 200,
+    "index": 200,
+    "api_simulation": 200,
+    "api_mesh": 200,
+    "api_materials": 200,
+    "api_projects": 200,
+    "evidence": "curl.exe http://127.0.0.1:8082/ (+ /api/simulation,/api/mesh,/api/materials,/api/projects) after guard; no Vite restart required (lint-only land)"
+  },
+  "prove": {
+    "static_lint_fails_on_forbidden_plant": true,
+    "clean_tree_green": true,
+    "live_8082_200": true,
+    "no_node_fs_sibling_sot_writes": true
+  },
+  "plan_todo": "none updated (Phase 2 stays OPEN; no CLOSED)",
+  "landed": [
+    "scripts/__tests__/test_no_node_sibling_writes.js — Phase 2 land14 Node sibling SoT write ban",
+    "scripts/__tests__/fixtures/land14-forbidden-write.plant.js — intentional bad case",
+    "scripts/__tests__/prove-no-node-sibling-writes.mjs — clean PASS + plant FAIL prove",
+    "package.json scripts guard:node-siblings / prove:node-siblings",
+    "Phase 1 test_no_projects_writefile.js cross-ref to land14"
+  ],
+  "NOT_yet_done": [
+    "cmd_write_json still raw-_atomic_write siblings (Python owns syscall but not full Project write-through); stamp/purge/copy via writeJsonCli remain bridge",
+    "w21 winLog writeFileSync under projects/.../mesh (job logs; not sibling SoT list)",
+    "web_mirrors rewrite/split (OUT this land)",
+    "describe fill (OUT)",
+    "FILTERS invent (OUT)",
+    "prepare_run writer reroute remain carry",
+    "soft-pass != Phase 2 done; no Phase 3+"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done. land14 is Node never-writes-siblings lint/guard prove only. No web_mirrors rewrite/split, no describe fill, no FILTERS invent, no Phase 2 CLOSED, no Phase 3+. Ban is static lint — did not brick :8082.",
+  "files_touched": {
+    "added": [
+      "cfd-web/scripts/__tests__/test_no_node_sibling_writes.js",
+      "cfd-web/scripts/__tests__/prove-no-node-sibling-writes.mjs",
+      "cfd-web/scripts/__tests__/fixtures/land14-forbidden-write.plant.js",
+      "cfd-web/runs/phase2-land14/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land14/prove-node-siblings.log",
+      "cfd-web/runs/phase2-land14/report.json"
+    ],
+    "modified": [
+      "cfd-web/package.json",
+      "cfd-web/scripts/__tests__/test_no_projects_writefile.js"
+    ]
+  },
+  "notes": [
+    "No remaining Node writeFileSync of sibling SoT JSON outside allowlist — product already routes via writeJsonCli / set-* (Phase 1 land9 + land8 write-through).",
+    "Did not rewrite web_mirrors / split.",
+    "Did not invent FILTERS chrome.",
+    "Did not claim Phase 2 CLOSED / Phase 3+.",
+    "Did not push.",
+    ":8082 remained serving (200)."
+  ],
+  "report_path": "cfd-web/runs/phase2-land14/report.json"
+}

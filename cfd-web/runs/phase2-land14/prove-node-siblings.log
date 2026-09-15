@@ -1,0 +1,7 @@
+﻿
+> cfd-web@0.1.0 prove:node-siblings
+> node scripts/__tests__/prove-no-node-sibling-writes.mjs
+
+ok: clean tree PASS
+ok: planted forbidden pattern FAIL (as required)
+PASS land14 prove: lint fails on forbidden sibling write plant; clean tree green
