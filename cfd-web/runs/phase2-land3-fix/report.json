@@ -8,8 +8,8 @@
   "timestamp_local": "2026-09-15 02:57:43 CT",
   "machine": "Timmy",
   "baseline_HEAD": "07fc7f774cc432375c7e2e853b14ec9249bdf98d",
-  "commit_sha": "PENDING",
-  "commit_short": "PENDING",
+  "commit_sha": "1dc02245ce26e4b4a7e441609ba41d8e5e011719",
+  "commit_short": "1dc0224",
   "tests": {
     "land3_fix_focused": "33 passed (test_solver_registry 8 + test_analysis_registry 7 + test_registry 18)",
     "unit_non_cad": "64 passed (CAD/OCP-gated modules + generate_legacy_markers excluded \u2014 Timmy OCP env not collectable)",
