@@ -8,8 +8,8 @@
   "timestamp_local": "2026-09-15 02:25:00 CT",
   "machine": "Timmy",
   "baseline_HEAD": "79d88326ab86d4d785f7daabee8bf7b520c41aaa",
-  "commit_sha": null,
-  "commit_short": null,
+  "commit_sha": "26ae33373692081a5c8bd4b44e1f5381102d1edb",
+  "commit_short": "26ae333",
   "tests": {
     "unit_suite": "130 passed",
     "land2_focused": "7 passed (test_analysis_registry.py) + 18 passed (test_registry.py) = 25 focused"
