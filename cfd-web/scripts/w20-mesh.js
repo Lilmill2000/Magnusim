@@ -187,12 +187,49 @@ function cloneSettings(src, name) {
   };
 }
 
+
+/**
+ * Post-0c6be39 hydrate migrate for product mesh_engine.
+ * - explicit ui_mesh_engine=cfmesh -> keep (real Advanced pick)
+ * - absent ui_mesh_engine + advanced.mesh_engine=cfmesh -> coerce to standard
+ *   (old hexcore_backend-coupled bug stamp). Persist ui_mesh_engine so the
+ *   distinction stays unambiguous. Soft-pass kill: no blind cfmesh->standard.
+ */
+function migrateMeshEngineEntry(entry) {
+  if (!entry || typeof entry !== 'object') return { entry, changed: false };
+  const settings = entry.settings && typeof entry.settings === 'object' ? { ...entry.settings } : {};
+  const adv = { ...(settings.advanced || {}) };
+  const hasUi = Object.prototype.hasOwnProperty.call(entry, 'ui_mesh_engine');
+  let ui;
+  if (hasUi) {
+    ui = String(entry.ui_mesh_engine || 'standard').trim().toLowerCase();
+  } else {
+    const advEngine = String(adv.mesh_engine || 'standard').trim().toLowerCase();
+    ui = advEngine === 'cfmesh' ? 'standard' : advEngine;
+  }
+  if (ui !== 'standard' && ui !== 'cfmesh') ui = 'standard';
+  let changed = false;
+  if (!hasUi || String(entry.ui_mesh_engine) !== ui) changed = true;
+  if (String(adv.mesh_engine || '') !== ui) {
+    adv.mesh_engine = ui;
+    changed = true;
+  }
+  return {
+    entry: {
+      ...entry,
+      ui_mesh_engine: ui,
+      settings: { ...settings, advanced: adv },
+    },
+    changed,
+  };
+}
+
 function makeMeshEntry(raw) {
   const src = raw || {};
   const settings = src.settings || cloneDefaultSettings(src.name);
   const name = String(src.name || settings.name || W20_DEFAULTS.name);
   if (settings.name !== name) settings.name = name;
-  return {
+  const base = {
     id: src.id || newMeshId(),
     name,
     settings,
@@ -203,6 +240,10 @@ function makeMeshEntry(raw) {
     created_at: src.created_at || new Date().toISOString(),
     updated_at: src.updated_at || src.created_at || new Date().toISOString(),
   };
+  if (Object.prototype.hasOwnProperty.call(src, 'ui_mesh_engine')) {
+    base.ui_mesh_engine = src.ui_mesh_engine;
+  }
+  return migrateMeshEngineEntry(base).entry;
 }
 
 function geomNames(proj) {
@@ -788,6 +829,9 @@ function upsertMesh(body) {
   }
   active.settings = settings;
   active.name = settings.name;
+  // Persist explicit Advanced mesh_engine as ui_mesh_engine so hydrate migrate
+  // can tell real Advanced=cfmesh from old bug-stamped cfmesh.
+  active.ui_mesh_engine = (settings.advanced && settings.advanced.mesh_engine) || 'standard';
   active.updated_at = now;
   return saveComposed(projectId, proj, sim, existing, meshes, active, now, {
     saved: true,
@@ -822,8 +866,31 @@ function getMesh(projectIdOpt, geomIdOpt, simIdOpt) {
       body: { error: 'project not found', project_id: projectId },
     };
   }
-  const raw = readMeshFile(projectId);
-  const all = meshesFromDoc(raw);
+  let raw = readMeshFile(projectId);
+  let all = meshesFromDoc(raw);
+  // Hydrate migrate: coerce bug-stamped cfmesh (no ui_mesh_engine) and persist.
+  let migrated = false;
+  if (raw && all.length) {
+    const next = [];
+    for (const m of all) {
+      const { entry, changed } = migrateMeshEngineEntry(m);
+      if (changed) migrated = true;
+      next.push(entry);
+    }
+    if (migrated) {
+      all = next;
+      const activeForWrite =
+        findMeshById(all, raw.active_id) || all[0];
+      const simForWrite = getActiveSimulation(projectId, proj, simIdOpt);
+      if (simForWrite && activeForWrite) {
+        const now = new Date().toISOString();
+        const docWrite = composeMeshDoc(projectId, simForWrite, raw, all, activeForWrite, now);
+        writeMeshFile(projectId, docWrite);
+        raw = readMeshFile(projectId) || docWrite;
+        all = meshesFromDoc(raw);
+      }
+    }
+  }
   const primaryId = primaryGeometryId(proj);
   const sim = getActiveSimulation(projectId, proj, simIdOpt);
   const geomId = (sim && sim.geometry_id) || activeGeometryId(proj, geomIdOpt);
@@ -856,6 +923,7 @@ function getMesh(projectIdOpt, geomIdOpt, simIdOpt) {
       meshes: listPayload(scoped, active && active.id, names),
       meshes_all: listPayload(liveStudyMeshes(projectId, proj, all), raw && raw.active_id, names),
       geometry_id: geomId,
+      mesh_engine_migrated: migrated,
       increment: 'W20',
     },
   };

@@ -124,7 +124,26 @@ def from_web_mesh(doc: dict | None) -> tuple[list[Any], str]:
             hex_element_core=bool(settings_raw.get("hex_element_core", True)),
         )
         adv = settings_raw.get("advanced") if isinstance(settings_raw.get("advanced"), dict) else {}
-        ui_engine = str(adv.get("mesh_engine") or "standard").strip().lower()
+        # Build meta first so we can detect an *explicit* ui_mesh_engine stamp before
+        # reading advanced.mesh_engine (post-0c6be39 hydrate migrate).
+        live = raw.get("live_mesh_result") or doc.get("live_mesh_result")
+        meta = {
+            k: v
+            for k, v in raw.items()
+            if k not in ("id", "name", "settings", "meshes", "simulation_id", "n_cells", "n_points")
+        }
+        # Product mesh_engine:
+        #   explicit ui_mesh_engine=cfmesh -> real Advanced pick, keep cfmesh
+        #   absent ui_mesh_engine + adv.mesh_engine=cfmesh -> old hexcore_backend-coupled
+        #     bug stamp; coerce to standard and persist ui_mesh_engine=standard
+        # Soft-pass kill: do NOT blind-rewrite every cfmesh->standard.
+        if "ui_mesh_engine" in meta:
+            ui_engine = str(meta.get("ui_mesh_engine") or "standard").strip().lower()
+        else:
+            adv_engine = str(adv.get("mesh_engine") or "standard").strip().lower()
+            if adv_engine not in ("standard", "cfmesh"):
+                adv_engine = "standard"
+            ui_engine = "standard" if adv_engine == "cfmesh" else adv_engine
         if ui_engine not in ("standard", "cfmesh"):
             ui_engine = "standard"
         # Explicit legacy Advanced=cfmesh only. Do not treat default hexcore_backend as
@@ -137,12 +156,6 @@ def from_web_mesh(doc: dict | None) -> tuple[list[Any], str]:
                 ms = dataclasses.replace(ms, max_meshing_runtime_s=float(runtime))
             except (TypeError, ValueError):
                 pass
-        live = raw.get("live_mesh_result") or doc.get("live_mesh_result")
-        meta = {
-            k: v
-            for k, v in raw.items()
-            if k not in ("id", "name", "settings", "meshes", "simulation_id", "n_cells", "n_points")
-        }
         meta["ui_mesh_engine"] = ui_engine
         if live is not None:
             meta["live_mesh_result"] = live
