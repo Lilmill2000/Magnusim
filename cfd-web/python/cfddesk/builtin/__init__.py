@@ -12,7 +12,7 @@ def register_builtins(hub: "RegistryHub") -> None:
     """Register built-in specs into `hub`.
 
     Phase 2 land5: AnalysisType + SolverApps + MeshBackends + BC wrap +
-    MaterialModel + MonitorSpec.
+    MaterialModel + MonitorType.
     Idempotent under load_all retries (same-plugin re-register).
     Cross-ref validation (solver / bc / material / monitor bags) runs at end of
     load_all (after plugins).

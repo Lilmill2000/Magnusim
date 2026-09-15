@@ -17,7 +17,7 @@ from cfddesk.registry.discovery import (
 from cfddesk.registry.manifest import PluginManifest
 from cfddesk.registry.material import MaterialModel, validate_analysis_material_refs
 from cfddesk.registry.mesher import MeshBackend, analysis_has_mesh_bags
-from cfddesk.registry.monitor import MonitorSpec, validate_analysis_monitor_refs
+from cfddesk.registry.monitor import MonitorType, validate_analysis_monitor_refs
 from cfddesk.registry.requirements import Missing, Requirement, check_requirements
 from cfddesk.registry.schema import SchemaField, to_json_schema, validate
 from cfddesk.registry.solver import SolverApp, validate_analysis_solver_refs
@@ -33,7 +33,7 @@ __all__ = [
     "validate_analysis_bc_refs",
     "MaterialModel",
     "validate_analysis_material_refs",
-    "MonitorSpec",
+    "MonitorType",
     "validate_analysis_monitor_refs",
     "Registry",
     "RegistryError",

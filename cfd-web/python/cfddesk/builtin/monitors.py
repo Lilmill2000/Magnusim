@@ -1,4 +1,4 @@
-"""Built-in MonitorSpec specs (Phase 2 land5).
+"""Built-in MonitorType specs (Phase 2 land5 / land5-fix).
 
 Keys area_average / flow_rate match plan Step 5. Phase 1 function_objects still
 uses MonitorKind Literal "area_average"|"flow" for instance descriptors — that
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Sequence
 
-from cfddesk.registry.monitor import MonitorSpec
+from cfddesk.registry.monitor import MonitorType
 from cfddesk.registry.schema import SchemaField
 
 if TYPE_CHECKING:
@@ -75,8 +75,8 @@ def _parse_dat_stub(text: str) -> list[dict[str, Any]]:
     return rows
 
 
-def build_area_average() -> MonitorSpec:
-    return MonitorSpec(
+def build_area_average() -> MonitorType:
+    return MonitorType(
         key="area_average",
         label="Area average",
         target="patch",
@@ -94,8 +94,8 @@ def build_area_average() -> MonitorSpec:
     )
 
 
-def build_flow_rate() -> MonitorSpec:
-    return MonitorSpec(
+def build_flow_rate() -> MonitorType:
+    return MonitorType(
         key="flow_rate",
         label="Flow rate",
         target="patch",

@@ -140,7 +140,7 @@ Publish as a folder in this repo (`templates/plugin/`) plus instructions; a sepa
 - `cfddesk/registry/__init__.py`: `API_VERSION = "1.0"`. `discovery` compares major.
 - `@cfddesk/plugin-ui` `package.json` version `1.0.0`; exported `PLUGIN_UI_API_VERSION`; loader logs mismatch.
 - Add `cfddesk/registry/compat.py` with `deprecated(...)` decorator producing structured warnings collected per plugin.
-- Freeze `SchemaField`, `AnalysisType`, `MeshBackend`, `SolverBackend`, `BcTypeSpec`, `MaterialModel`, `MonitorSpec`, `ResultFilterSpec`, `CaseContext`, `Event` as the 1.0 surface; document in `compatibility.md`.
+- Freeze `SchemaField`, `AnalysisType`, `MeshBackend`, `SolverBackend`, `BcTypeSpec`, `MaterialModel`, `MonitorType`, `ResultFilterSpec`, `CaseContext`, `Event` as the 1.0 surface; document in `compatibility.md`.
 
 ## Step 8: Tests
 

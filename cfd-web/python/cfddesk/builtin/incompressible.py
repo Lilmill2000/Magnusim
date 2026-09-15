@@ -57,7 +57,7 @@ _RESULT_FIELDS: tuple[ResultField, ...] = (
     ResultField("nut", "Turbulent viscosity", "kinematic_viscosity", "scalar"),
 )
 
-# MonitorSpec keys (wired to registry in land5).
+# MonitorType keys (wired to registry in land5; flow->flow_rate bag fix).
 _MONITORS: tuple[str, ...] = ("area_average", "flow_rate")
 
 _MATERIAL_MODELS: tuple[str, ...] = ("newtonian_incompressible",)

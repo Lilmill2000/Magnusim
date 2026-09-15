@@ -1,8 +1,9 @@
-"""MonitorSpec registry (Phase 2 land5).
+"""MonitorType registry (Phase 2 land5 / land5-fix).
 
-Named MonitorSpec per plan Step 5. Distinct from case.function_objects.MonitorSpec
-(patch + kind instance descriptor) — same lesson as SolverApp vs settings.SolverBackend:
-do not collapse or rename the Phase 1 type; keep both modules' names explicit.
+Named MonitorType (registry type key/label/target). Distinct from
+case.function_objects.MonitorSpec (patch + kind instance descriptor) - same
+lesson as SolverApp vs settings.SolverBackend: do not collapse or rename the
+Phase 1 FO type; keep both modules' names explicit.
 """
 
 from __future__ import annotations
@@ -20,14 +21,14 @@ MonitorTarget = Literal["patch", "point", "volume", "line"]
 
 
 @dataclass(frozen=True)
-class MonitorSpec:
+class MonitorType:
     """Registered monitor / functionObject type (area_average, flow_rate, ...)."""
 
     key: str
     label: str
     target: MonitorTarget
     fields_schema: tuple[SchemaField, ...] = ()
-    # Soft-pass stubs — point at Phase 1 function_objects without moving call sites.
+    # Soft-pass stubs - point at Phase 1 function_objects without moving call sites.
     write_function_object: Callable[..., str] | None = None
     parse_dat: Callable[[str], Any] | None = None
 

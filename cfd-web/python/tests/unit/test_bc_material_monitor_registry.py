@@ -1,4 +1,4 @@
-"""Phase 2 land5: BC wrap + MaterialModel + MonitorSpec registries."""
+"""Phase 2 land5/land5-fix: BC wrap + MaterialModel + MonitorType registries."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from cfddesk.case.bc_registry import BC_TYPES, BcTypeSpec
 from cfddesk.case import function_objects as fo
 from cfddesk.registry import (
     MaterialModel,
-    MonitorSpec,
+    MonitorType,
     RegistryError,
     get_registry,
     load_all,
@@ -36,10 +36,10 @@ def _clean_registry():
 
 
 def test_fo_monitor_spec_untouched_naming_collision():
-    """registry.MonitorSpec must not replace function_objects.MonitorSpec."""
+    """registry.MonitorType must not replace function_objects.MonitorSpec."""
     assert {"patch", "kind"} <= {f.name for f in fields(fo.MonitorSpec)}
-    assert {"key", "label", "target"} <= {f.name for f in fields(MonitorSpec)}
-    assert fo.MonitorSpec is not MonitorSpec
+    assert {"key", "label", "target"} <= {f.name for f in fields(MonitorType)}
+    assert fo.MonitorSpec is not MonitorType
     assert fo.MonitorKind.__args__ == ("area_average", "flow")
 
 
@@ -77,7 +77,7 @@ def test_monitor_spec_shape_and_stubs():
     load_all()
     aa = get_registry("monitor").get("area_average")
     fr = get_registry("monitor").get("flow_rate")
-    assert isinstance(aa, MonitorSpec)
+    assert isinstance(aa, MonitorType)
     assert aa.target == "patch"
     assert callable(aa.write_function_object)
     assert callable(aa.parse_dat)

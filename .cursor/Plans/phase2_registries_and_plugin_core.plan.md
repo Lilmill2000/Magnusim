@@ -15,7 +15,7 @@ todos:
     content: "MeshBackend spec + standard / cfmesh / snappy_hexdominant; w21 branches collapse to registry lookup"
     status: completed
   - id: p2-bc-material-monitor
-    content: "Wrap bc_registry in Registry; MaterialModel spec (newtonian_incompressible); MonitorSpec registry"
+    content: "Wrap bc_registry in Registry; MaterialModel spec (newtonian_incompressible); MonitorType registry (was MonitorSpec; FO MonitorSpec untouched)"
     status: completed
   - id: p2-result-filter
     content: "ResultFilter/Exporter spec wrapping tools/export_*.py; registry maps filter key -> tool + params schema"
@@ -86,7 +86,7 @@ cfddesk/registry/
   solver.py            # SolverBackend spec
   mesher.py            # MeshBackend spec
   material.py          # MaterialModel spec
-  monitor.py           # MonitorSpec
+  monitor.py           # MonitorType
   result_filter.py     # ResultFilterSpec
   bc.py                # re-export BcTypeSpec through Registry
 cfddesk/builtin/
@@ -204,7 +204,7 @@ Constraint (workspace rule): cfMesh path stays registered and callable; `HEXCORE
       library: tuple[dict, ...]                       # presets (air, water, ...) from materials/library.py
   ```
   Built-in `newtonian_incompressible`.
-- `registry/monitor.py`: `MonitorSpec(key, label, target: Literal["patch","point","volume","line"], fields_schema, write_function_object(ctx, target_ref, write_control_text) -> str, parse_dat(text) -> Series)`. Built-ins `area_average` (`mon_<patch>`), `flow_rate` (`flow_<patch>`) from Phase 1's `function_objects.py`; the `.dat` parser from `w27.parseSurfaceFieldValueDat` (moved to `surface_averages.py`).
+- `registry/monitor.py`: `MonitorType(key, label, target: Literal["patch","point","volume","line"], fields_schema, write_function_object(ctx, target_ref, write_control_text) -> str, parse_dat(text) -> Series)`. Built-ins `area_average` (`mon_<patch>`), `flow_rate` (`flow_<patch>`) from Phase 1's `function_objects.py`; the `.dat` parser from `w27.parseSurfaceFieldValueDat` (moved to `surface_averages.py`).
 
 ## Step 6: `ResultFilter`
 
