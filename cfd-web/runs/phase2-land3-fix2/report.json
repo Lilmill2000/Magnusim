@@ -1,0 +1,54 @@
+{
+  "phase": "Phase 2",
+  "land": "land3-fix2",
+  "title": "Rename web_adapter SolverApp Literal to SolverAppName (DA/LH residual before Mesh)",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 03:05:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "f8192f88887874d14f1c9f6dc8e5f7843a93699c",
+  "commit_sha": "3a7bc3180c8dc88ec9572fee74f48a3dc9bbcfb6",
+  "commit_short": "3a7bc31",
+  "tests": {
+    "land3_fix2_focused": "22 passed (test_solver_registry 9 + test_web_adapter + test_analysis_registry)",
+    "unit_non_cad": "130 passed",
+    "unit_suite_note": "CAD/OCP-gated modules excluded as on Timmy; no regressions."
+  },
+  "fixes": [
+    "project.web_adapter.SolverApp Literal[simpleFoam|pimpleFoam] renamed to SolverAppName",
+    "RunSpec.solver_app annotation updated to SolverAppName",
+    "Registry class SolverApp unchanged",
+    "project.settings.SolverBackend Literal[cpu|amgx] left untouched (AmgX dual-path carry)",
+    "New test: test_web_adapter_solver_app_name_no_collision"
+  ],
+  "NOT_yet_done": [
+    "MeshBackend / BC wrap / Material / Monitor / ResultFilter",
+    "Unify settings.backend vs simpleFoam_amgx (explicit carry)",
+    "residual_line / write_fv_solution stubs still None",
+    "JS / W17 / PRIMARY_SIM / Phase 3+",
+    "soft-pass != Phase 2 done"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done; land3-fix2 is web_adapter Literal rename only (class-vs-Literal collision). No MeshBackend, no JS, AmgX dual-path stays.",
+  "files_touched": {
+    "modified": [
+      "cfd-web/python/cfddesk/project/web_adapter.py",
+      "cfd-web/python/tests/unit/test_solver_registry.py"
+    ],
+    "added": [
+      "cfd-web/runs/phase2-land3-fix2/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land3-fix2/report.json"
+    ]
+  },
+  "confirm_settings_SolverBackend_untouched": true,
+  "confirm_no_class_vs_literal_SolverApp_collision": true,
+  "confirm_registry_SolverApp_class_remains": true,
+  "confirm_no_web_adapter_type_named_SolverApp": true,
+  "notes": [
+    "cfMesh / HEXCORE-PROCESS-BACKUP-2026-09-02 untouched.",
+    "No leftover backup/ clutter dirs created.",
+    "No JS changes; :8082 / tunnel not touched.",
+    "Did not push.",
+    "No imports of web_adapter.SolverApp existed; only definition + RunSpec annotation needed updates."
+  ]
+}
