@@ -404,26 +404,35 @@ function absorbSeriesRange(field, lo, hi) {
 }
 
 function absorbSeriesFromEntry(field, entry) {
-  const foamR = rangeFromFoamMeta(field, entry && entry.meta);
-  if (foamR) absorbSeriesRange(field, foamR[0], foamR[1]);
   const pd = entry && entry.pd;
-  if (!pd) return;
+  let pdR = null;
   try {
-    const pointData = pd.getPointData ? pd.getPointData() : null;
+    const pointData = pd && pd.getPointData ? pd.getPointData() : null;
     const arr = pointData ? pointData.getArrayByName(field) : null;
-    if (!arr) return;
-    const data = arr.getData();
-    let mn = Infinity;
-    let mx = -Infinity;
-    for (let i = 0; i < data.length; i++) {
-      const v = data[i];
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
-    if (Number.isFinite(mn) && Number.isFinite(mx) && mx > mn) {
-      absorbSeriesRange(field, mn, mx);
+    if (arr) {
+      const data = arr.getData();
+      let mn = Infinity;
+      let mx = -Infinity;
+      for (let i = 0; i < data.length; i++) {
+        const v = data[i];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      if (Number.isFinite(mn) && Number.isFinite(mx) && mx > mn) {
+        pdR = robustLutRange(mn, mx, data);
+        absorbSeriesRange(field, pdR[0], pdR[1]);
+      }
     }
   } catch (_) {}
+  const foamR = rangeFromFoamMeta(field, entry && entry.meta);
+  // Skip volume-field spikes (e.g. magU foam 500 vs surface p99 ~49) that collapse LUT to solid blue.
+  if (foamR && pdR && Number.isFinite(pdR[0]) && Number.isFinite(pdR[1])) {
+    const foamSpan = foamR[1] - foamR[0];
+    const pdSpan = pdR[1] - pdR[0];
+    if (!(pdSpan > 0 && foamSpan > pdSpan * 1.5)) absorbSeriesRange(field, foamR[0], foamR[1]);
+  } else if (foamR && !pdR) {
+    absorbSeriesRange(field, foamR[0], foamR[1]);
+  }
 }
 
 function seriesTimesComplete(field) {
@@ -473,10 +482,24 @@ function applyLockedSeriesLegend(field) {
   if ((animState.times || []).length < 2) return;
   const r = lockSeriesLut(name, { force: true });
   if (!r || scaleOverrideFor(name)) return;
-  setLegendAutoExtents(name, r[0], r[1]);
-  lutRange = [r[0], r[1]];
-  try { lut.setRange(r[0], r[1]); lut.build(); } catch (_) {}
-  updateLegend(name, r[0], r[1]);
+  let lo = r[0];
+  let hi = r[1];
+  try {
+    const arr = sourcePolyData && sourcePolyData.getPointData
+      ? sourcePolyData.getPointData().getArrayByName(name)
+      : null;
+    if (arr) {
+      const rr = robustLutRange(lo, hi, arr.getData());
+      if (rr && Number.isFinite(rr[0]) && Number.isFinite(rr[1]) && rr[1] > rr[0]) {
+        lo = rr[0];
+        hi = rr[1];
+      }
+    }
+  } catch (_) {}
+  setLegendAutoExtents(name, lo, hi);
+  lutRange = [lo, hi];
+  try { lut.setRange(lo, hi); lut.build(); } catch (_) {}
+  updateLegend(name, lo, hi);
   try { syncSharedLegend(); } catch (_) {}
   try { renderWindow.render(); } catch (_) {}
 }
@@ -1309,6 +1332,42 @@ function boundsObj(bounds) {
   };
 }
 
+
+function percentilesOfScalarData(data, qs) {
+  const n = data && data.length ? data.length : 0;
+  if (!n) return (qs || []).map(() => null);
+  const a = Array.from(data);
+  a.sort((x, y) => x - y);
+  return (qs || []).map((q) => {
+    const i = Math.min(n - 1, Math.max(0, Math.floor(Number(q) * (n - 1))));
+    const v = a[i];
+    return Number.isFinite(v) ? v : null;
+  });
+}
+
+function percentileOfScalarData(data, q) {
+  const r = percentilesOfScalarData(data, [q]);
+  return r && r.length ? r[0] : null;
+}
+
+/** Prefer p01–p99 when absolute min/max are spike-dominated (solid blue / solid red). */
+function robustLutRange(umin, umax, data) {
+  if (!(Number.isFinite(umax) && Number.isFinite(umin) && umax > umin)) return [umin, umax];
+  const pair = percentilesOfScalarData(data, [0.01, 0.99]);
+  const p01 = pair[0];
+  const p99 = pair[1];
+  if (!Number.isFinite(p01) || !Number.isFinite(p99) || !(p99 > p01)) return [umin, umax];
+  const robustSpan = p99 - p01;
+  const fullSpan = umax - umin;
+  if (fullSpan > robustSpan * 1.5 + 1e-12) return [p01, p99];
+  return [umin, umax];
+}
+
+function robustLutHi(umin, umax, data) {
+  const r = robustLutRange(umin, umax, data);
+  return r && r.length === 2 ? r[1] : umax;
+}
+
 function fingerprintFromPolyData(pd, meta, field, assetUrl) {
   if (!pd) return null;
   const pts = pd.getPoints();
@@ -1324,6 +1383,8 @@ function fingerprintFromPolyData(pd, meta, field, assetUrl) {
   let nSamples = 0;
   let browser_sample_fnv = null;
   let sample_head = null;
+  let lut_umin = null;
+  let lut_umax = null;
   if (arr) {
     const data = arr.getData();
     nSamples = data.length;
@@ -1339,6 +1400,9 @@ function fingerprintFromPolyData(pd, meta, field, assetUrl) {
     }
     umin = mn;
     umax = mx;
+    const rr = robustLutRange(umin, umax, data);
+    lut_umin = rr[0];
+    lut_umax = rr[1];
     sample_head = head;
     browser_sample_fnv = sampleChecksum(data);
   }
@@ -1355,6 +1419,8 @@ function fingerprintFromPolyData(pd, meta, field, assetUrl) {
     bounds: b,
     umin,
     umax,
+    lut_umin,
+    lut_umax,
     nonzero,
     nSamples,
     sample_head,
@@ -2089,6 +2155,20 @@ function resultPlaneGeom(plane) {
   return { origin, normal: axisN, clipNormal: clipN };
 }
 
+function styleResultPlaneMapper(mapper, field) {
+  if (!mapper) return;
+  const name = field === 'p' ? 'p' : 'magU';
+  try {
+    mapper.setScalarVisibility(true);
+    mapper.setScalarMode(ScalarMode.USE_POINT_FIELD_DATA);
+    mapper.setColorByArrayName(name);
+    mapper.setColorMode(ColorMode.MAP_SCALARS);
+    mapper.setInterpolateScalarsBeforeMapping(true);
+    mapper.setUseLookupTableScalarRange(true);
+    mapper.setLookupTable(lut);
+  } catch (_) {}
+}
+
 function styleResultPlaneActor(actor, opacity) {
   try { actor.setScale(1, 1, 1); } catch (_) {}
   try {
@@ -2159,13 +2239,7 @@ function addResultPlane(init, opts) {
   const vtkP = vtkPlane.newInstance();
   const reader = vtkXMLPolyDataReader.newInstance();
   const mapper = vtkMapper.newInstance();
-  mapper.setScalarVisibility(true);
-  mapper.setScalarMode(ScalarMode.USE_POINT_FIELD_DATA);
-  mapper.setColorByArrayName(activeField === 'p' ? 'p' : 'magU');
-  mapper.setColorMode(ColorMode.MAP_SCALARS);
-  mapper.setInterpolateScalarsBeforeMapping(true);
-  mapper.setUseLookupTableScalarRange(true);
-  mapper.setLookupTable(lut);
+  styleResultPlaneMapper(mapper, activeField);
   const actor = vtkActor.newInstance();
   actor.setMapper(mapper);
   actor.setVisibility(false);
@@ -2269,8 +2343,7 @@ async function loadResultPlane(plane) {
   if (!polyDataHasPolys(pd)) pd = triangulateCut(pd);
   try {
     plane.mapper.setInputData(pd);
-    plane.mapper.setColorByArrayName(field);
-    plane.mapper.setLookupTable(lut);
+    styleResultPlaneMapper(plane.mapper, field);
     styleResultPlaneActor(plane.actor, plane.opacity);
     const n = geom.clipNormal || geom.normal;
     const b = sourceBounds;
@@ -3107,6 +3180,16 @@ function syncSharedLegend() {
   let base = Array.isArray(lutRange) && lutRange.length === 2 ? lutRange : null;
   const seriesBase = seriesRangeForLegend(activeField);
   if (seriesBase) base = seriesBase;
+  try {
+    const fname = activeField === 'p' ? 'p' : 'magU';
+    const arr = sourcePolyData && sourcePolyData.getPointData
+      ? sourcePolyData.getPointData().getArrayByName(fname)
+      : null;
+    if (base && arr) {
+      const rr = robustLutRange(base[0], base[1], arr.getData());
+      if (rr && Number.isFinite(rr[0]) && Number.isFinite(rr[1]) && rr[1] > rr[0]) base = rr;
+    }
+  } catch (_) {}
   // Results compare with the same quantity in both panes: one scale spanning
   // both runs, so identical colours mean identical values left and right.
   const cmpRange = typeof compareResultsRangeFor === 'function' ? compareResultsRangeFor(activeField) : null;
@@ -4968,6 +5051,46 @@ function publishW7(extra) {
     resultPlanes.some((p) => resultPlaneOn(p) && p.clipModel) || !!cutState.clipModel;
   // Keep legacy cutState.clipModel aligned with multi-plane clip for W7 probes.
   if (resultPlanes.length) cutState.clipModel = clipOn;
+  let cut_mapper_dump = null;
+  try {
+    const plane = resultPlanes.find((p) => resultPlaneOn(p) && p.mapper) || null;
+    const m = plane && plane.mapper;
+    if (m) {
+      const pd = m.getInputData ? m.getInputData() : null;
+      const pointData = pd && pd.getPointData ? pd.getPointData() : null;
+      const arrays = [];
+      try {
+        const arrs = pointData && pointData.getArrays ? pointData.getArrays() : [];
+        for (let i = 0; i < (arrs ? arrs.length : 0); i++) arrays.push(arrs[i].getName());
+      } catch (_) {}
+      const colorBy = m.getColorByArrayName ? m.getColorByArrayName() : null;
+      const sArr = pointData && colorBy ? pointData.getArrayByName(colorBy) : null;
+      let sMin = null;
+      let sMax = null;
+      if (sArr) {
+        const d = sArr.getData();
+        let mn = Infinity;
+        let mx = -Infinity;
+        for (let i = 0; i < d.length; i++) {
+          if (d[i] < mn) mn = d[i];
+          if (d[i] > mx) mx = d[i];
+        }
+        sMin = mn;
+        sMax = mx;
+      }
+      cut_mapper_dump = {
+        scalarVisibility: !!(m.getScalarVisibility && m.getScalarVisibility()),
+        colorByArrayName: colorBy,
+        colorMode: m.getColorMode ? m.getColorMode() : null,
+        useLookupTableScalarRange: !!(m.getUseLookupTableScalarRange && m.getUseLookupTableScalarRange()),
+        lutRange: lut && lut.getRange ? Array.from(lut.getRange()) : null,
+        arrays,
+        scalarMin: sMin,
+        scalarMax: sMax,
+        nPoints: pd && pd.getNumberOfPoints ? pd.getNumberOfPoints() : 0,
+      };
+    }
+  } catch (_) { cut_mapper_dump = null; }
   window.__CFD_W7__ = {
     increment: 'W7',
     ready: !!(sourcePolyData && window.__CFD_W6__ && window.__CFD_W6__.ready),
@@ -4976,6 +5099,7 @@ function publishW7(extra) {
     field: activeField,
     cut_state: { ...cutState },
     cut_fingerprint: fp,
+    cut_mapper_dump,
     vectors_live: false,
     clip_model_optional: true,
     clip_model_on: clipOn,
@@ -5207,19 +5331,34 @@ function applyLoadedField(field, entry, token) {
   sourceBounds = pd && pd.getBounds ? pd.getBounds().slice() : null;
   const fp = fingerprintFromPolyData(pd, meta, field, assetUrl);
   if (fp && fp.umin !== null && fp.umax !== null && fp.umax > fp.umin) {
-    lo = fp.umin;
-    hi = fp.umax;
+    lo = (fp.lut_umin != null) ? fp.lut_umin : fp.umin;
+    hi = (fp.lut_umax != null && fp.lut_umax > lo) ? fp.lut_umax : fp.umax;
   }
   absorbSeriesRange(field, lo, hi);
   absorbSeriesFromEntry(field, entry);
   const scaled = resolveFieldLutRange(field, lo, hi);
   lo = scaled[0];
   hi = scaled[1];
-  const series = seriesRangeForLegend(field);
-  setLegendAutoExtents(field, series ? series[0] : lo, series ? series[1] : hi);
+  try {
+    const arr = pd && pd.getPointData ? pd.getPointData().getArrayByName(field) : null;
+    if (arr) {
+      const rr = robustLutRange(lo, hi, arr.getData());
+      if (rr && Number.isFinite(rr[0]) && Number.isFinite(rr[1]) && rr[1] > rr[0]) {
+        lo = rr[0];
+        hi = rr[1];
+      }
+    }
+  } catch (_) {}
+  setLegendAutoExtents(field, lo, hi);
   lutRange = [lo, hi];
   lut.setRange(lo, hi);
   lut.build();
+  try {
+    resultPlanes.forEach((pl) => {
+      if (pl && pl.mapper) styleResultPlaneMapper(pl.mapper, field);
+    });
+    styleCutSliceActor();
+  } catch (_) {}
   updateLegend(field, lo, hi);
   try { syncSharedLegend(); } catch (_) {}
 
