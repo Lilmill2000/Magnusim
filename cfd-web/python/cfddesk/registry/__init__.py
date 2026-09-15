@@ -12,6 +12,7 @@ from cfddesk.registry.discovery import (
     reset_for_tests,
 )
 from cfddesk.registry.manifest import PluginManifest
+from cfddesk.registry.mesher import MeshBackend, analysis_has_mesh_bags
 from cfddesk.registry.requirements import Missing, Requirement, check_requirements
 from cfddesk.registry.schema import SchemaField, to_json_schema, validate
 from cfddesk.registry.solver import SolverApp, validate_analysis_solver_refs
@@ -21,6 +22,8 @@ __all__ = [
     "ResultField",
     "SolverApp",
     "validate_analysis_solver_refs",
+    "MeshBackend",
+    "analysis_has_mesh_bags",
     "Registry",
     "RegistryError",
     "RegistryHub",
