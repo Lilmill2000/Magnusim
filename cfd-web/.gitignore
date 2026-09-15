@@ -5,7 +5,9 @@ python/**/__pycache__/
 *.py[cod]
 .cache/
 projects/
+.magnusim-local.json
 .cfddesk-local.json
+.magnusim-ready
 .cfddesk-ready
 dist/
 .DS_Store
