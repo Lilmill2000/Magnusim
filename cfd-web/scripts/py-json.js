@@ -95,3 +95,52 @@ export function pyJsonSync(scriptName, args, stdinObj = null) {
   }
   return doc;
 }
+
+/**
+ * Shared Step 9 helper: atomically write project.json via project_cli.
+ * @param {string} projectDirPath
+ * @param {object} proj
+ * @param {string} [simId]
+ */
+export function writeProjectCli(projectDirPath, proj, simId = '') {
+  return pyJsonSync(
+    'project_cli.py',
+    ['write-project', '--project-dir', projectDirPath, '--sim-id', String(simId || '')],
+    proj,
+  );
+}
+
+/**
+ * Write active-study mirror simulation.json via project_cli.
+ * @param {string} projectDirPath
+ * @param {object} sim
+ * @param {string} [simId]
+ */
+export function writeSimulationCli(projectDirPath, sim, simId = '') {
+  return pyJsonSync(
+    'project_cli.py',
+    [
+      'write-simulation',
+      '--project-dir',
+      projectDirPath,
+      '--sim-id',
+      String(simId || (sim && sim.id) || ''),
+    ],
+    sim,
+  );
+}
+
+/**
+ * Write simulations.json (+ active mirror) via project_cli.
+ * @param {string} projectDirPath
+ * @param {object} catalog
+ * @param {string} [simId]
+ */
+export function saveSimCatalogCli(projectDirPath, catalog, simId = '') {
+  return pyJsonSync(
+    'project_cli.py',
+    ['save-sim-catalog', '--project-dir', projectDirPath, '--sim-id', String(simId || '')],
+    catalog,
+  );
+}
+

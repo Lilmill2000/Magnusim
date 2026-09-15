@@ -15,14 +15,13 @@ import {
   mkdirSync,
   readFileSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { matchesStudy } from './w16-geometry-scope.js';
-import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
+import { firstLegacySimId, getActiveSimulation, writeActiveMirror } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
-import { pyJsonSync } from './py-json.js';
+import { pyJsonSync, writeProjectCli } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -80,12 +79,8 @@ function readProject(id) {
 }
 
 function writeProject(proj) {
-  // Phase 1 Step 9: project.json via project_cli.
-  return pyJsonSync(
-    'project_cli.py',
-    ['write-project', '--project-dir', projectDir(proj.id), '--sim-id', String((proj.simulation && proj.simulation.id) || proj.active_simulation_id || '')],
-    proj,
-  );
+  // Phase 1 Step 9/land9: shared writeProjectCli helper.
+  return writeProjectCli(projectDir(proj.id), proj, String((proj.simulation && proj.simulation.id) || proj.active_simulation_id || ''));
 }
 
 function readRcFile(id) {
@@ -396,7 +391,7 @@ function persistRcDoc(projectId, sim, aa) {
     };
     simDoc.updated_at = now;
     simDoc.increment = 'W22';
-    writeFileSync(simulationJsonPath(projectId), JSON.stringify(simDoc, null, 2), 'utf8');
+    writeActiveMirror(projectId, simDoc);
   } catch {
     /* non-fatal */
   }

@@ -1,0 +1,82 @@
+﻿{
+  "phase": "Phase 1",
+  "land": "land9",
+  "title": "Close Step 9 sibling sim JSON + Step 10 Playwright UI Solve on public URL",
+  "result": "PARTIAL",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 00:49:44 CT",
+  "machine": "Timmy",
+  "port_8082": "up HTTP 200",
+  "public_url": "https://simulation.lilmill2000.com/",
+  "public_http": 200,
+  "baseline_HEAD": "9e2d081",
+  "land8_commit": "a8013d2",
+  "hard_soft_pass_bar": {
+    "public_url_while_8082_200": true,
+    "playwright_ui_click_Solve": true,
+    "sibling_simulation_json_ownership_evidence": true,
+    "note": "All three hard-bar items landed; Phase 1 still not fully checkoff-ready (plan acceptance leftovers)."
+  },
+  "closed": {
+    "sibling_sim_json": {
+      "status": "CLOSED",
+      "items": [
+        "project_cli: write-simulation + save-sim-catalog",
+        "w17-sim-catalog saveCatalog/writeActiveMirror routed via saveSimCatalogCli/writeSimulationCli",
+        "soft stamps w18/w19/w20/w22/w26 -> writeActiveMirror (no Node writeFileSync simulation.json)",
+        "writeProject wrappers deduped via writeProjectCli in py-json.js",
+        "guard extended: fails on Node writeFileSync simulation(s).json outside allowlist",
+        "evidence: runs/phase1-land9/sibling-ownership.json (public API touch advanced mtimes)"
+      ]
+    },
+    "step10_ui_solve": {
+      "status": "CLOSED",
+      "items": [
+        "Playwright e2e/phase1-land9-solve.spec.js against https://simulation.lilmill2000.com/",
+        "UI Create run -> Copy from previous (#sim-copy-run) -> fill endTime=20 -> click #btn-sim-start",
+        "run 8b17c61e land9-ui-mu293w94 status=done exit=0 residuals=20 n_saved_times=2 prepare_run_ok solve_protocol=magnusim-jsonl",
+        "evidence: runs/phase1-land9/ui-solve-evidence.json + playwright-ui-solve.log"
+      ]
+    }
+  },
+  "tests": {
+    "unit_project_cli": "6 passed",
+    "unit_suite_note": "103 passed earlier this land with python/.venv",
+    "prepare_run_golden": "3 passed COMPARE OK",
+    "step9_guard": "PASS (project.json + simulation(s).json)",
+    "playwright_ui_solve_public": "1 passed (18.6s)"
+  },
+  "Phase1_can_check_off": false,
+  "reason": "Hard soft-pass trio landed (public UI Solve + sibling ownership + :8082/public 200). Phase 1 acceptance still incomplete: Node still writeFileSync-s other projects/ files (w17 purge/copy/stampMissing materials|bcs|mesh|refinements|runs catalog; w21/w27 job logs; vite-plugin stamps; w16 geometry allowlisted). Manual transient on sample-project-transient not re-proven (empty BCs/meshes catalog). Plan file todos still pending (tracking only).",
+  "NOT_done": [
+    "Route remaining Node projects/ writes (w17 purge/copy/stampMissing non-sim JSON) so only job-runner.js + w28-media.js (+ plan-allowlisted w16 geometry*) write under projects/",
+    "Step 10 manual transient on sample-project-transient (needs study/mesh/BC catalog repair or Generate+Solve)",
+    "Plan markdown todo statuses still pending (tracking only)"
+  ],
+  "files_touched_summary": {
+    "added": [
+      "cfd-web/e2e/phase1-land9-solve.spec.js",
+      "cfd-web/runs/phase1-land9/*"
+    ],
+    "modified": [
+      "cfd-web/python/tools/project_cli.py",
+      "cfd-web/python/tests/unit/test_project_cli.py",
+      "cfd-web/scripts/py-json.js",
+      "cfd-web/scripts/w17-sim-catalog.js",
+      "cfd-web/scripts/w17-simulation.js",
+      "cfd-web/scripts/w18-materials.js",
+      "cfd-web/scripts/w19-boundary-conditions.js",
+      "cfd-web/scripts/w20-mesh.js",
+      "cfd-web/scripts/w22-area-average.js",
+      "cfd-web/scripts/w26-mesh-refinements.js",
+      "cfd-web/scripts/__tests__/test_no_projects_writefile.js"
+    ]
+  },
+  "notes": [
+    "API-only land5-style prove intentionally does NOT count for Step 10 this land",
+    "writer.py / web_case.py not grown",
+    "Phase 3+ not touched",
+    ":8082 kept up (restarted once to load JS routing)"
+  ]
+}

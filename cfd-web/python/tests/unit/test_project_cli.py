@@ -88,6 +88,8 @@ def test_cli_subcommands_listed():
         "mesh-result",
         "write-project",
         "save-catalog",
+        "write-simulation",
+        "save-sim-catalog",
     ):
         assert name in src
 
@@ -124,3 +126,37 @@ def test_run_upsert_sidecar_naming(tmp_path: Path):
     assert (proj / "runs" / "run-abcd1234.json").is_file()
     stamped = json.loads((proj / "project.json").read_text(encoding="utf-8"))
     assert stamped["run_1"]["run_id"] == "abcd1234"
+
+
+def test_save_sim_catalog_and_write_simulation(tmp_path: Path):
+    proj = tmp_path / "proj1"
+    proj.mkdir()
+    sim = {
+        "id": "sim-1",
+        "name": "Incompressible Steady-state",
+        "time_dependency": "Steady-state",
+    }
+    proc = _run(
+        ["save-sim-catalog", "--project-dir", str(proj), "--sim-id", "sim-1"],
+        {"active_id": "sim-1", "simulations": [sim]},
+    )
+    assert proc.returncode == 0, proc.stderr
+    cat = json.loads((proj / "simulations.json").read_text(encoding="utf-8"))
+    assert cat["active_id"] == "sim-1"
+    mirror = json.loads((proj / "simulation.json").read_text(encoding="utf-8"))
+    assert mirror["id"] == "sim-1"
+    assert "simulation_json" in mirror
+    proc2 = _run(
+        ["write-simulation", "--project-dir", str(proj), "--sim-id", "sim-1"],
+        {**sim, "increment": "W18", "materials": {"count": 1}},
+    )
+    assert proc2.returncode == 0, proc2.stderr
+    mirror2 = json.loads((proj / "simulation.json").read_text(encoding="utf-8"))
+    assert mirror2.get("increment") == "W18"
+    # empty catalog clears mirror
+    proc3 = _run(
+        ["save-sim-catalog", "--project-dir", str(proj)],
+        {"active_id": None, "simulations": []},
+    )
+    assert proc3.returncode == 0, proc3.stderr
+    assert not (proj / "simulation.json").exists()

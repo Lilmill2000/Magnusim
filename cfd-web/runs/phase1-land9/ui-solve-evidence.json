@@ -1,0 +1,19 @@
+{
+  "public": "https://simulation.lilmill2000.com",
+  "local_8082": 200,
+  "project_id": "sample-project-steady-state-20260914220621-a75ad1",
+  "simulation_id": "sim-mu1sn0hz-7ce276",
+  "run_id": "8b17c61e",
+  "run_name": "land9-ui-mu293w94",
+  "copied_from": "fee30c54",
+  "mesh_id": "mesh-mu1spmlz-71af58",
+  "status": "done",
+  "exit_code": 0,
+  "iteration": 20,
+  "residuals": 20,
+  "n_saved_times": 2,
+  "solve_protocol": "magnusim-jsonl",
+  "prepare_run_ok": true,
+  "clicked": "#btn-sim-start",
+  "ui_copy": "#sim-copy-run"
+}

@@ -370,6 +370,74 @@ def cmd_save_catalog(args: argparse.Namespace) -> int:
     return _print_doc(doc)
 
 
+
+def cmd_write_simulation(args: argparse.Namespace) -> int:
+    """Atomically write projects/<id>/simulation.json (active-study mirror)."""
+    project_dir = Path(args.project_dir).resolve()
+    body = _read_stdin_json()
+    if not isinstance(body, dict):
+        print(json.dumps({"ok": False, "error": "stdin must be object"}))
+        return 1
+    path = project_dir / "simulation.json"
+    doc = dict(body)
+    doc["simulation_json"] = str(path)
+    if args.sim_id and not doc.get("id"):
+        doc["id"] = args.sim_id
+    doc["updated_at"] = doc.get("updated_at") or _now()
+    doc["persistence"] = "filesystem"
+    _atomic_write(path, doc)
+    return _print_doc(doc)
+
+
+def cmd_save_sim_catalog(args: argparse.Namespace) -> int:
+    """Write simulations.json and mirror active study to simulation.json."""
+    project_dir = Path(args.project_dir).resolve()
+    body = _read_stdin_json()
+    if not isinstance(body, dict):
+        print(json.dumps({"ok": False, "error": "stdin must be object"}))
+        return 1
+    simulations = list(body.get("simulations") or [])
+    active_id = body.get("active_id")
+    if active_id and not any(
+        str(s.get("id")) == str(active_id) for s in simulations if isinstance(s, dict)
+    ):
+        active_id = (
+            simulations[0]["id"]
+            if simulations and isinstance(simulations[0], dict)
+            else None
+        )
+    if not active_id and simulations and isinstance(simulations[0], dict):
+        active_id = simulations[0].get("id")
+    doc = {
+        "active_id": active_id,
+        "simulations": simulations,
+        "updated_at": body.get("updated_at") or _now(),
+    }
+    if args.sim_id:
+        doc["simulation_id"] = args.sim_id
+    cat_path = project_dir / "simulations.json"
+    _atomic_write(cat_path, doc)
+    mirror = project_dir / "simulation.json"
+    active = next(
+        (
+            s
+            for s in simulations
+            if isinstance(s, dict) and str(s.get("id")) == str(active_id)
+        ),
+        None,
+    )
+    if active:
+        mirrored = dict(active)
+        mirrored["simulation_json"] = str(mirror)
+        _atomic_write(mirror, mirrored)
+    elif mirror.exists():
+        try:
+            mirror.unlink()
+        except OSError:
+            pass
+    return _print_doc(doc)
+
+
 def _stamp_run_on_project(project_dir: Path, body: dict[str, Any]) -> None:
     proj_path = project_dir / "project.json"
     proj = _read_json(proj_path)
@@ -411,6 +479,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("mesh-result", cmd_mesh_result, False),
         ("write-project", cmd_write_project, False),
         ("save-catalog", cmd_save_catalog, False),
+        ("write-simulation", cmd_write_simulation, False),
+        ("save-sim-catalog", cmd_save_sim_catalog, False),
     ]:
         sp = sub.add_parser(name)
         add_common(sp)

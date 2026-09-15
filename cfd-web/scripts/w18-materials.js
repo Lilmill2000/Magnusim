@@ -10,11 +10,10 @@ import {
   mkdirSync,
   readFileSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { activeGeometryId, matchesGeometry, matchesStudy, primaryGeometryId } from './w16-geometry-scope.js';
-import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
+import { firstLegacySimId, getActiveSimulation, writeActiveMirror } from './w17-sim-catalog.js';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
 import { pyJsonSync } from './py-json.js';
@@ -277,7 +276,7 @@ function upsertMaterials(body) {
     };
     simDoc.updated_at = built.material.updated_at;
     simDoc.increment = 'W18';
-    writeFileSync(simulationJsonPath(projectId), JSON.stringify(simDoc, null, 2), 'utf8');
+    writeActiveMirror(projectId, simDoc);
   } catch {
     /* non-fatal */
   }
@@ -360,7 +359,7 @@ function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
     if (sim && sim.materials) {
       delete sim.materials;
       sim.updated_at = proj.updated_at;
-      writeFileSync(simulationJsonPath(projectId), JSON.stringify(sim, null, 2), 'utf8');
+      writeActiveMirror(projectId, sim);
     }
   } catch {
     /* non-fatal */

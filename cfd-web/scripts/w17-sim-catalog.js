@@ -2,11 +2,12 @@
  * Multi-study catalog: projects/<id>/simulations.json
  * Active study is also mirrored to simulation.json for older readers.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activeGeometryId, geometriesOf } from './w16-geometry-scope.js';
 import { envGet } from './env-compat.js';
+import { saveSimCatalogCli, writeSimulationCli } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -114,7 +115,7 @@ function stampMissing(projectId, simId, geomId) {
 export function writeActiveMirror(projectId, sim) {
   if (!sim) return null;
   const path = simulationJsonPath(projectId);
-  writeJson(path, { ...sim, simulation_json: path });
+  writeSimulationCli(projectDir(projectId), { ...sim, simulation_json: path }, sim.id);
   return path;
 }
 
@@ -131,18 +132,13 @@ export function saveCatalog(projectId, catalog) {
     simulations,
     updated_at: new Date().toISOString(),
   };
-  writeJson(simulationsJsonPath(projectId), doc);
-  const active = simulations.find((s) => s.id === active_id) || null;
-  if (active) writeActiveMirror(projectId, active);
-  else {
-    try {
-      const p = simulationJsonPath(projectId);
-      if (existsSync(p)) unlinkSync(p);
-    } catch {
-      /* leftover mirror is non-fatal */
-    }
-  }
-  return doc;
+  // Phase 1 land9: Python owns simulations.json + simulation.json mirror.
+  const saved = saveSimCatalogCli(projectDir(projectId), doc, active_id || '');
+  return {
+    active_id: (saved && saved.active_id) != null ? saved.active_id : doc.active_id,
+    simulations: (saved && saved.simulations) || doc.simulations,
+    updated_at: (saved && saved.updated_at) || doc.updated_at,
+  };
 }
 
 export function pruneOrphanStudies(projectId, proj) {

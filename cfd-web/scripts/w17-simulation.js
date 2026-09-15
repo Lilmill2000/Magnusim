@@ -21,7 +21,7 @@ import {
   upsertSimulationInCatalog,
 } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
-import { pyJsonSync } from './py-json.js';
+import { writeProjectCli } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -61,12 +61,8 @@ function readProject(id) {
 }
 
 function writeProject(proj) {
-  // Phase 1 Step 9: project.json writes go through project_cli (Python).
-  return pyJsonSync(
-    'project_cli.py',
-    ['write-project', '--project-dir', projectDir(proj.id), '--sim-id', String(proj.active_simulation_id || '')],
-    proj,
-  );
+  // Phase 1 Step 9/land9: shared writeProjectCli helper.
+  return writeProjectCli(projectDir(proj.id), proj, String(proj.active_simulation_id || ''));
 }
 
 function newSimId() {
