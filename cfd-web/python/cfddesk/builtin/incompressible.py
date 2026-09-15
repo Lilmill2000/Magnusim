@@ -11,7 +11,7 @@ from cfddesk.registry.schema import SchemaField
 if TYPE_CHECKING:
     from cfddesk.registry.discovery import RegistryHub
 
-# Matches project.settings.TURBULENCE_MODELS / case.ras — inlined so registry
+# Matches project.settings.TURBULENCE_MODELS / case.ras â€” inlined so registry
 # builtins do not import project/cad (OCP) at load_all time.
 _TURBULENCE_MODELS: tuple[str, ...] = (
     "laminar",
@@ -57,8 +57,8 @@ _RESULT_FIELDS: tuple[ResultField, ...] = (
     ResultField("nut", "Turbulent viscosity", "kinematic_viscosity", "scalar"),
 )
 
-# MonitorSpec keys (placeholders until p2-bc-material-monitor).
-_MONITORS: tuple[str, ...] = ("area_average", "flow")
+# MonitorSpec keys (wired to registry in land5).
+_MONITORS: tuple[str, ...] = ("area_average", "flow_rate")
 
 _MATERIAL_MODELS: tuple[str, ...] = ("newtonian_incompressible",)
 
@@ -208,7 +208,7 @@ def _validate_minimal(
     _simulation: Any = None,
     **_kwargs: Any,
 ) -> list[str]:
-    """Land2 stub — real Project/Simulation checks deferred with migration."""
+    """Land2 stub â€” real Project/Simulation checks deferred with migration."""
     return []
 
 
@@ -269,3 +269,4 @@ def register_incompressible(hub: "RegistryHub") -> None:
     reg = hub.registry("analysis")
     reg.register(build_incompressible_steady(), plugin="builtin")
     reg.register(build_incompressible_transient(), plugin="builtin")
+

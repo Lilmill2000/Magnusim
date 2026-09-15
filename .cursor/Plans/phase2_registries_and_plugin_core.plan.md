@@ -16,7 +16,7 @@ todos:
     status: completed
   - id: p2-bc-material-monitor
     content: "Wrap bc_registry in Registry; MaterialModel spec (newtonian_incompressible); MonitorSpec registry"
-    status: pending
+    status: completed
   - id: p2-result-filter
     content: "ResultFilter/Exporter spec wrapping tools/export_*.py; registry maps filter key -> tool + params schema"
     status: pending

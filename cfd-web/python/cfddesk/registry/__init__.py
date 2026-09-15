@@ -1,9 +1,12 @@
-"""cfddesk.registry — plugin registry core (Phase 2)."""
+"""cfddesk.registry ? plugin registry core (Phase 2)."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from cfddesk.registry.analysis import AnalysisType, ResultField, schema_defaults
 from cfddesk.registry.base import Registry, RegistryError, Spec
+from cfddesk.registry.bc import validate_analysis_bc_refs
 from cfddesk.registry.discovery import (
     RegistryHub,
     get_hub,
@@ -12,7 +15,9 @@ from cfddesk.registry.discovery import (
     reset_for_tests,
 )
 from cfddesk.registry.manifest import PluginManifest
+from cfddesk.registry.material import MaterialModel, validate_analysis_material_refs
 from cfddesk.registry.mesher import MeshBackend, analysis_has_mesh_bags
+from cfddesk.registry.monitor import MonitorSpec, validate_analysis_monitor_refs
 from cfddesk.registry.requirements import Missing, Requirement, check_requirements
 from cfddesk.registry.schema import SchemaField, to_json_schema, validate
 from cfddesk.registry.solver import SolverApp, validate_analysis_solver_refs
@@ -24,6 +29,12 @@ __all__ = [
     "validate_analysis_solver_refs",
     "MeshBackend",
     "analysis_has_mesh_bags",
+    "BcTypeSpec",
+    "validate_analysis_bc_refs",
+    "MaterialModel",
+    "validate_analysis_material_refs",
+    "MonitorSpec",
+    "validate_analysis_monitor_refs",
     "Registry",
     "RegistryError",
     "RegistryHub",
@@ -41,3 +52,12 @@ __all__ = [
     "load_all",
     "reset_for_tests",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy BcTypeSpec ? avoids circular import with case.bc_registry."""
+    if name == "BcTypeSpec":
+        from cfddesk.case.bc_registry import BcTypeSpec
+
+        return BcTypeSpec
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

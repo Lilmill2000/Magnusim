@@ -1,0 +1,73 @@
+{
+  "phase": "Phase 2",
+  "land": "land5",
+  "title": "BC wrap + MaterialModel + MonitorSpec registries; AnalysisType bags wired",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 03:35:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "ccde65686ffb800b763039f8663e7387909bb074",
+  "commit_sha": "PENDING",
+  "commit_short": "PENDING",
+  "tests": {
+    "unit_suite": "157 passed",
+    "land5_focused": "54 passed (test_bc_material_monitor_registry + test_bc_registry + test_solver_registry + test_mesher_registry + test_analysis_registry + test_registry)"
+  },
+  "bags_resolution": {
+    "bc_types": "WIRED - register_builtin_bcs from case.bc_registry.BC_TYPES (same objects, no duplicate defs); validate_analysis_bc_refs at end of load_all",
+    "material_models": "WIRED - MaterialModel newtonian_incompressible + library presets; validate_analysis_material_refs at end of load_all",
+    "monitors": "WIRED - MonitorSpec area_average + flow_rate; AnalysisType bag updated flow->flow_rate; validate_analysis_monitor_refs at end of load_all"
+  },
+  "naming_collision_check": {
+    "registry_MonitorSpec": "cfddesk.registry.monitor.MonitorSpec (key/label/target type registry)",
+    "fo_MonitorSpec": "cfddesk.case.function_objects.MonitorSpec (patch+kind instance) UNTOUCHED",
+    "BcTypeSpec": "lazy __getattr__ re-export from registry package to avoid circular import with bc_registry->schema",
+    "MaterialModel": "no collision (LibraryMaterial stays in materials/library.py)"
+  },
+  "landed": [
+    "cfddesk/registry/bc.py: register_builtin_bcs + validate_analysis_bc_refs",
+    "cfddesk/registry/material.py: MaterialModel + validate_analysis_material_refs",
+    "cfddesk/registry/monitor.py: MonitorSpec + validate_analysis_monitor_refs",
+    "cfddesk/builtin/materials.py: newtonian_incompressible + library",
+    "cfddesk/builtin/monitors.py: area_average / flow_rate stubs -> function_objects",
+    "load_all: validate bc/material/monitor alongside solver",
+    "incompressible _MONITORS: flow_rate (was placeholder flow)",
+    "tests/unit/test_bc_material_monitor_registry.py",
+    "plan frontmatter p2-bc-material-monitor -> completed (soft-pass)"
+  ],
+  "NOT_yet_done": [
+    "bc_registry.BC_TYPES not yet a live view over Registry (wrap registers same objects; call sites unchanged)",
+    "BcTypeSpec.fields_written / write_field generalization",
+    "MaterialModel.write_files / transportProperties still Phase 1",
+    "Monitor parse_dat full w27 parser; FO call sites not moved",
+    "ResultFilter, Geometry v14, web-json collapse, registry_dump / JS / W17",
+    "soft-pass != Phase 2 done"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done. land5 is wrap/register + bag validate only. No BC call-site rewrite, no W17/JS, no ResultFilter/Geometry/web-json/Phase3+.",
+  "files_touched": {
+    "added": [
+      "cfd-web/python/cfddesk/registry/bc.py",
+      "cfd-web/python/cfddesk/registry/material.py",
+      "cfd-web/python/cfddesk/registry/monitor.py",
+      "cfd-web/python/cfddesk/builtin/materials.py",
+      "cfd-web/python/cfddesk/builtin/monitors.py",
+      "cfd-web/python/tests/unit/test_bc_material_monitor_registry.py",
+      "cfd-web/runs/phase2-land5/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land5/report.json"
+    ],
+    "modified": [
+      "cfd-web/python/cfddesk/registry/__init__.py",
+      "cfd-web/python/cfddesk/registry/discovery.py",
+      "cfd-web/python/cfddesk/builtin/__init__.py",
+      "cfd-web/python/cfddesk/builtin/incompressible.py",
+      ".cursor/Plans/phase2_registries_and_plugin_core.plan.md"
+    ]
+  },
+  "notes": [
+    "Existing bc_registry tests still green; product BC_TYPES/get_type/default_settings unchanged.",
+    "No leftover backup/ clutter dirs.",
+    "No JS / W17 / dual-defaults / MeshAlgorithm mapping changes.",
+    "Did not push."
+  ]
+}

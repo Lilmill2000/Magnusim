@@ -212,10 +212,10 @@ def _parse_simple_toml(text: str, *, source: str = "") -> dict[str, Any] | None:
         log.warning("TOML parse failed (tomli) for %s: %s", src, exc)
         return None
 
-    # No real TOML library — line fallback only for flat string keys.
+    # No real TOML library â€” line fallback only for flat string keys.
     if _toml_needs_full_parser(text):
         log.warning(
-            "No tomllib/tomli available; refusing to load %s — manifest has [tables] "
+            "No tomllib/tomli available; refusing to load %s â€” manifest has [tables] "
             "and/or requires arrays that the line fallback would drop silently",
             src,
         )
@@ -261,7 +261,7 @@ def _load_folder_plugin(
             raise ImportError(f"{plugin_py} missing register(hub)")
         result = register(hub)
     except Exception as exc:
-        log.warning("Failing plugin import %s: %s — continuing", key, exc)
+        log.warning("Failing plugin import %s: %s â€” continuing", key, exc)
         return None, True
     if isinstance(result, PluginManifest):
         return result, False
@@ -334,7 +334,7 @@ def discover_entry_points(
         try:
             result = fn(hub)
         except Exception as exc:
-            log.warning("Entry-point plugin %s failed: %s — continuing", name, exc)
+            log.warning("Entry-point plugin %s failed: %s â€” continuing", name, exc)
             had_failures = True
             continue
         if isinstance(result, PluginManifest):
@@ -344,7 +344,7 @@ def discover_entry_points(
 
 
 def load_all(*, web_root: Path | str | None = None, force: bool = False) -> RegistryHub:
-    """Register builtins then discover plugins, then validate solver refs.
+    """Register builtins then discover plugins, then validate analysis bag refs.
 
     Sets _LOADED True only when discovery completed without plugin-load failures,
     so a later load_all() without force=True retries discovery after a partial load.
@@ -354,7 +354,7 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
     hub = get_hub()
     if _LOADED and not force:
         return hub
-    # Built-ins first — never skip even if plugins fail; do not re-stamp on retry
+    # Built-ins first â€” never skip even if plugins fail; do not re-stamp on retry
     # unless force (same-plugin re-register is idempotent).
     if not _BUILTINS_REGISTERED or force:
         try:
@@ -368,9 +368,16 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
     disabled = _disabled_plugins(_resolve_web_root(web_root))
     _, ep_fail = discover_entry_points(hub, disabled)
     _, folder_fail = discover_folder_plugins(hub, web_root=web_root)
-    # After plugins: every AnalysisType solver bag key must resolve.
+    # After plugins: every AnalysisType bag key must resolve (solver/bc/material/monitor).
+    from cfddesk.registry.bc import validate_analysis_bc_refs
+    from cfddesk.registry.material import validate_analysis_material_refs
+    from cfddesk.registry.monitor import validate_analysis_monitor_refs
     from cfddesk.registry.solver import validate_analysis_solver_refs
 
     validate_analysis_solver_refs(hub)
+    validate_analysis_bc_refs(hub)
+    validate_analysis_material_refs(hub)
+    validate_analysis_monitor_refs(hub)
     _LOADED = not (ep_fail or folder_fail)
     return hub
+
