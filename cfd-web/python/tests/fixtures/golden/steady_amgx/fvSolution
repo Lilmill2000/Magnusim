@@ -1,0 +1,81 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}
+solvers
+{
+    p
+    {
+        solver          amgx;
+        tolerance       1e-7;
+        relTol          0.01;
+        amgx
+        {
+            dict        p;
+            caching
+            {
+                matrix
+                {
+                    update      always;
+                }
+                preconditioner
+                {
+                    update      always;
+                }
+            }
+        }
+    }
+    pFinal
+    {
+        $p;
+        relTol          0;
+    }
+    U
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-8;
+        relTol          0.1;
+    }
+    "(k|epsilon|omega|R)"
+    {
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-8;
+        relTol          0.1;
+    }
+}
+SIMPLE
+{
+    nNonOrthogonalCorrectors 1;
+    consistent      yes;
+    momentumPredictor yes;
+    // residualControl on U only - AmgX p residual reports 0 (TRANSLATION section 3).
+    // Target U and p residuals 1e-5; p judged via FO/continuity on AmgX branch.
+    residualControl
+    {
+        U               1e-06;
+    }
+    pRefCell        0;
+    pRefValue       0;
+}
+relaxationFactors
+{
+    fields
+    {
+        p               0.3;
+    }
+    equations
+    {
+        U               0.7;
+        k               0.7;
+        omega           0.7;
+    }
+}
+cache
+{
+    grad(U);
+}

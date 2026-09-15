@@ -1,4 +1,4 @@
-/**
+﻿/**
  * W17 — Create Simulation -> Incompressible studies.
  * Catalog: projects/<id>/simulations.json (active mirrored to simulation.json).
  */
@@ -23,7 +23,7 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = join(ROOT, 'projects');
+const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
 export const W17_DEFAULTS = {

@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Machine prefs in ``cfd-web/.cfddesk-local.json`` (same file Setup.bat writes).
  * Merge-only writes so WSL paths are never wiped.

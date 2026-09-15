@@ -89,3 +89,46 @@ export function wslCasePath(idOrPath) {
   if (raw.startsWith('/')) return raw.replace(/\/+$/, '');
   return `${wslCaseRoot()}/${raw}`;
 }
+
+let toolchainChecked = false;
+
+/**
+ * Once per Vite process: warn if .cfddesk-local.json lacks OpenFOAM/cfMesh
+ * versions or live `foamVersion` disagrees.
+ */
+export function verifyWslToolchain() {
+  if (toolchainChecked) return;
+  toolchainChecked = true;
+  const local = readLocal();
+  const distro = wslDistro();
+  const recordedOf = String(local.openfoam_version || '').trim();
+  const recordedCf = String(local.cfmesh_version || '').trim();
+  if (!recordedOf) {
+    console.warn('[cfddesk] .cfddesk-local.json missing openfoam_version — re-run Setup.bat to pin toolchain');
+  }
+  if (!recordedCf && String(local.cartesianMesh || '') === 'yes') {
+    console.warn('[cfddesk] .cfddesk-local.json missing cfmesh_version');
+  }
+  try {
+    const r = spawnSync(
+      'wsl',
+      ['-d', distro, '--', 'openfoam2606', 'bash', '-c', 'foamVersion'],
+      { encoding: 'utf8', timeout: 60000, windowsHide: true },
+    );
+    if (r.status !== 0) {
+      console.warn('[cfddesk] could not probe foamVersion in WSL distro', distro);
+      return;
+    }
+    const live = String(r.stdout || '')
+      .trim()
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .pop();
+    if (recordedOf && live && recordedOf !== live && !live.includes(recordedOf) && !recordedOf.includes(live)) {
+      console.warn('[cfddesk] OpenFOAM version drift: local json has ' + recordedOf + ' but WSL reports ' + live);
+    }
+  } catch (err) {
+    console.warn('[cfddesk] verifyWslToolchain failed', err && err.message);
+  }
+}

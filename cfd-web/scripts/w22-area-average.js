@@ -1,4 +1,4 @@
-/**
+﻿/**
  * W22 — Area average setup (filesystem persistence).
  * Persists projects/<id>/result_controls.json (+ area_average.json mirror)
  * via POST/GET /api/result-controls and /api/area-average.
@@ -24,7 +24,7 @@ import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = join(ROOT, 'projects');
+const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
 export const W22_FACE_INLET = 'face 57@Body1';

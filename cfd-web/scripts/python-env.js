@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Python side of cfd-web, all under `cfd-web/python/`:
  *

@@ -380,7 +380,7 @@ const MESH_SECTION_EXPORT_SCRIPT = pyTool('export_mesh_section_vtp.py');
 const MESH_SECTION_CACHE_ROOT = join(CACHE_DIR, 'mesh-section');
 const MESH_SURFACE_EXPORT_SCRIPT = pyTool('export_mesh_surface_vtp.py');
 const MESH_SURFACE_CACHE_ROOT = join(CACHE_DIR, 'mesh-surface');
-const PROJECTS_ROOT = join(ROOT, 'projects');
+const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
 const ACTIVE_PROJECT_PATH = join(PROJECTS_ROOT, 'active.json');
 
 const ALLOWED_FIELDS = new Set(['magU', 'p']);

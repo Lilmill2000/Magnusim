@@ -15,6 +15,32 @@ dependencies = [
     "gmsh>=4.12",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov", "ruff>=0.5", "mypy>=1.10", "pip-tools", "hypothesis"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cfddesk*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "wsl: needs WSL + OpenFOAM (deselect with -m 'not wsl')",
+  "occt: needs cadquery-ocp and a STEP fixture",
+  "slow: > 10 s",
+]
+addopts = "-m 'not wsl'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true

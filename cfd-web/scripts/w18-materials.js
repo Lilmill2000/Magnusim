@@ -1,4 +1,4 @@
-/**
+﻿/**
  * W18 — Materials → Air + Body1 assign (filesystem persistence).
  * Persists projects/<id>/materials.json via POST/GET /api/materials.
  * Bank path: Materials + → Air (Newtonian) → assign Body1 → ✓ save.
@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = join(ROOT, 'projects');
+const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
 /** Exact bank labels from walkthrough step 4 / FINDINGS */

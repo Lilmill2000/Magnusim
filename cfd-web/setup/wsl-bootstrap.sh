@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # Install OpenFOAM v2606 + case directory inside the CFD Desk WSL distro.
 # Invoked as root by Setup.ps1. Optional arg: preferred Linux username.
 set -euo pipefail

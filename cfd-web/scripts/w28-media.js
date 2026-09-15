@@ -1,4 +1,4 @@
-/**
+﻿/**
  * W28 Media — screenshots and screen recordings saved per run (Results) or per
  * mesh, under projects/<project>/media/<owner>/ with an index.json sidecar.
  *
@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = join(ROOT, 'projects');
+const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const INCREMENT = 'W28';
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB per file

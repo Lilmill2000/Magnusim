@@ -1,0 +1,8 @@
+﻿This folder is the portable CFD Desk copy.
+
+It has the app source and Setup.bat. It does not include your projects,
+node_modules, Python venv, WSL settings, or cache.
+
+1. Unzip this archive to another PC.
+2. Double-click Setup.bat (first run 30-90 minutes).
+3. Double-click start.bat. The first-run wizard sets units, hardware, and port.

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Simulation Control — incompressible steady simpleFoam from the project mesh,
  * Air, and assigned BCs. Does not re-split polyMesh. No bank face57/71 gates.
  */
@@ -34,10 +34,11 @@ import {
   transientProgressFromLine,
   describeTransient,
 } from './w30-transient.js';
+import { createJobLogger } from './log.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = join(ROOT, 'projects');
+const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const REPORT_DIR = join(ROOT, '.cache', 'jobs', 'run');
 const WSL_DISTRO = wslDistro();
@@ -86,6 +87,7 @@ function newProgressState() {
 
 function applyProgressLine(state, raw) {
   const line = String(raw || '').replace(/^\s*\[\d+\]\s*/, '');
+  if (state && state._jobLog && /W27_/.test(line)) { try { state._jobLog.info('progress', { line: line.slice(0, 200) }); } catch {} }
   if (/W27_DECOMPOSE_BEGIN/.test(line)) state.stage = 'decompose';
   else if (/W27_SIMPLEFOAM_BEGIN/.test(line)) state.stage = 'solve';
   else if (/W27_SIMPLEFOAM_END/.test(line)) state.stage = 'reconstruct';
@@ -2258,11 +2260,16 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
   const argv = ['wsl', '-d', WSL_DISTRO, '--', 'bash', winToWsl(shPath)];
   const started_at = new Date().toISOString();
   let logBuf = '';
+  const jobLog = createJobLogger('solve', runId);
   const child = spawn(argv[0], argv.slice(1), {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  liveRun = { child, run_id: runId, wsl_case: wslRunCase, project_id: id, progress: newProgressState() };
+  const progress = newProgressState();
+  progress._jobLog = jobLog;
+  liveRun = { child, run_id: runId, wsl_case: wslRunCase, project_id: id, progress, jobLog };
+  jobLog.info('spawn', { pid: child.pid || null, solver });
+
 
   const baseRunning = {
     status: 'running',
@@ -2287,6 +2294,7 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     started_at,
     finished_at: null,
     log_path: winLog,
+    log_jsonl_path: jobLog.path,
     log_excerpt: '',
     wsl_case: wslRunCase,
     case_dir: winOut,

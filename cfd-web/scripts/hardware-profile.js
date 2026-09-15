@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * One-shot PC check used by the setup wizard.
  * Writes ``hardware`` into ``.cfddesk-local.json`` so solves pick n_procs from it.

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * CFD Desk W24 - Start Run 1 + live Area average (seven-series from run)
  * Prior: W22 - Area average setup (Result control → Surface data → Area average 1)
  * + W21 mesh generate + W20 mesh settings + W19 BCs + W18 Materials + W17 Incompressible + W16 project/geo
@@ -13375,7 +13375,7 @@ async function loadGeometryCad(facesUrl, edgesUrl) {
     if (typeof rebuildCadEdgeCache === 'function') rebuildCadEdgeCache();
   }
   try { if (compareState.on) applyCadEdgesNow(); } catch (_) {}
-  try { await loadGeometryModifiers(w16State.geometry); } catch (e) { console.warn('[CFD] modifiers', e); }
+  try { const _lgm = globalThis['loadGeometryModifiers']; if (typeof _lgm === 'function') await _lgm(w16State.geometry); } catch (e) { console.warn('[CFD] modifiers', e); }
   return { pd, fp, edgeFp };
 }
 

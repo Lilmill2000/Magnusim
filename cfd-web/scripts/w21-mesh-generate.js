@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Mesh Generate (POST /api/mesh/generate).
  * Standard (default engine)      -> scripts/generate_standard.py: gmsh uniform surface +
  *                                   hex element core + tet shell, OpenFOAM boundary layers.
@@ -22,12 +22,13 @@ import { ensureBody1Stl } from './w16-project-geometry.js';
 import { activeGeometryId } from './w16-geometry-scope.js';
 import { PYTHON, pyTool } from './python-env.js';
 import { wslCasePath, wslDistro } from './wsl-env.js';
+import { createJobLogger } from './log.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 /* Scratch for the Hex-dominant (snappyHexMesh) path: bash scripts, logs, WSL case copies. */
 const REPORT_DIR = join(ROOT, '.cache', 'jobs', 'snappy');
-const PROJECTS_ROOT = join(ROOT, 'projects');
+const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const WSL_DISTRO = wslDistro();
 /** Case layout template only — geometry surfaces overwritten from project Body1. */
@@ -760,12 +761,14 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
 
   let logBuf = '';
   let lastResult = null;
+  const jobLog = createJobLogger('mesh', generateId);
   const child = spawn(argv[0], argv.slice(1), {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
   });
   liveJob = { child, generate_id: generateId, path_kind: pathKind, project_id, started_at, mesh_id: meshId || null };
+  jobLog.info('spawn', { pid: child.pid || null, path_kind: pathKind, engine });
 
   const baseRunning = {
     status: 'running',
@@ -781,6 +784,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     started_at,
     finished_at: null,
     log_path: winLog,
+    log_jsonl_path: jobLog.path,
     log_excerpt: '',
     wsl_case: wslCasePath(wslDst),
     case_dir: winOut,
@@ -1105,12 +1109,14 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
   const started_at = new Date().toISOString();
 
   let logBuf = '';
+  const jobLog = createJobLogger('mesh', generateId);
   const child = spawn(argv[0], argv.slice(1), {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   liveJob = { child, generate_id: generateId, path_kind: PATH_SNAPPY, project_id, started_at };
+  jobLog.info('spawn', { pid: child.pid || null, path_kind: PATH_SNAPPY });
 
   const baseRunning = {
     status: 'running',
@@ -1125,6 +1131,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     started_at,
     finished_at: null,
     log_path: winLog,
+    log_jsonl_path: jobLog.path,
     log_excerpt: '',
     wsl_case: wslDst,
     wsl_script: wslSh,

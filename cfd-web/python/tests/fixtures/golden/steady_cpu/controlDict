@@ -1,0 +1,81 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+application     simpleFoam;
+libs            (fieldFunctionObjects);
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         1000;
+deltaT          1;
+writeControl    timeStep;
+writeInterval   1000;
+purgeWrite      2;
+writeFormat     ascii;
+writePrecision  12;
+writeCompression off;
+timeFormat      general;
+timePrecision   6;
+runTimeModifiable true;
+functions
+{
+    minMax
+    {
+        type            fieldMinMax;
+        libs            (fieldFunctionObjects);
+        fields          (U p);
+        mode            magnitude;
+        writeControl    writeTime;
+        log             true;
+    }
+    volIntU
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        fields          (U);
+        operation       volIntegrate;
+        writeFields     false;
+        writeControl    writeTime;
+        log             true;
+    }
+    volIntP
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        fields          (p);
+        operation       volIntegrate;
+        writeFields     false;
+        writeControl    writeTime;
+        log             true;
+    }
+    pInlet
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             true;
+        writeFields     false;
+        regionType      patch;
+        name            inlet;
+        operation       areaAverage;
+        fields          (p);
+    }
+    pOutlet
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             true;
+        writeFields     false;
+        regionType      patch;
+        name            outlet;
+        operation       areaAverage;
+        fields          (p);
+    }
+}

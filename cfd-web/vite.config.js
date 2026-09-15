@@ -1,6 +1,8 @@
-import { defineConfig } from 'vite';
+﻿import { defineConfig } from 'vite';
 import { caseFieldsApiPlugin } from './scripts/vite-plugin-case-fields.js';
 import { listenPort } from './scripts/prefs.js';
+import { verifyWslToolchain } from './scripts/wsl-env.js';
+verifyWslToolchain();
 
 const PORT = listenPort();
 process.env.CFDDESK_BOUND_PORT = String(PORT);

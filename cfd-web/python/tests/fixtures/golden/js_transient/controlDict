@@ -1,0 +1,83 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     pimpleFoam;
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         5;
+deltaT          0.001;
+writeControl    adjustableRunTime;
+writeInterval   0.1;
+purgeWrite      0;
+writeFormat     ascii;
+writePrecision  8;
+writeCompression off;
+timeFormat      general;
+timePrecision   8;
+runTimeModifiable true;
+
+adjustTimeStep  yes;
+maxCo           1;
+maxDeltaT       0.1;
+
+functions
+{
+    mon_pressure_1
+    {
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    runTime;
+        writeInterval   0.00200000;
+        log             true;
+        writeFields     false;
+        regionType      patch;
+        name            pressure_1;
+        operation       areaAverage;
+        fields          ( U p );
+    }
+    flow_pressure_1
+    {
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    runTime;
+        writeInterval   0.00200000;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            pressure_1;
+        operation       sum;
+        fields          ( phi );
+    }
+    mon_velocity_inlet_1
+    {
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    runTime;
+        writeInterval   0.00200000;
+        log             true;
+        writeFields     false;
+        regionType      patch;
+        name            velocity_inlet_1;
+        operation       areaAverage;
+        fields          ( U p );
+    }
+    flow_velocity_inlet_1
+    {
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    runTime;
+        writeInterval   0.00200000;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            velocity_inlet_1;
+        operation       sum;
+        fields          ( phi );
+    }
+}
