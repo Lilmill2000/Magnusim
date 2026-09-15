@@ -5,9 +5,10 @@ Uniform CAD-fitted triangulated surface (gmsh) → hex element core joined by
 pyramids (optional) → tet shell → gmshToFoam → prism layers on walls
 (snappyHexMesh, layers only) → checkMesh.
 
-Same stdout contract as generate_cfmesh_standard.py:
-    CFMESH_PROGRESS {json}   one line per stage
-    CFMESH_RESULT   {json}   exactly one line at the end
+Stdout contract (Phase 1 Step 7):
+    MAGNUSIM_EVENT {"event":"progress","stage":...}  one line per stage
+    MAGNUSIM_EVENT {"event":"result","ok":...}       exactly one at the end
+With --legacy-markers also emit CFMESH_PROGRESS / CFMESH_RESULT for one-phase compat.
 Writes ``w21-counts.json`` + ``standard-meta.json`` into --case-dir.
 Isolated: never touches the cfMesh HEXCORE backup or another WSL case.
 """
@@ -25,6 +26,7 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
+from cfddesk.jobs.events import emit
 from cfddesk.cad.step import load_step
 from cfddesk.cad.units import shape_bbox
 from cfddesk.mesh.gmsh_standard import apply_boundary_patch_types, emitted_patch_types
@@ -49,17 +51,30 @@ from cfddesk.runner.case_id import validate_wsl_case_id
 from cfddesk.runner.sync import RESULTS_MARKER, copy_back
 from cfddesk.wsl.mesh_run import run_standard_pipeline
 
+_LEGACY_MARKERS = False  # set by main() from --legacy-markers
+
 PATH_KIND = "standard"
 BACKEND = "gmsh-hexcore"
 
 
 def _progress(stage: str, **extra) -> None:
-    print("CFMESH_PROGRESS " + json.dumps({"stage": stage, **extra}, separators=(",", ":")), flush=True)
+    """Emit progress via job protocol; optional legacy CFMESH_PROGRESS line."""
+    payload = {"stage": stage, **extra}
+    emit("progress", **payload)
+    if _LEGACY_MARKERS:
+        print("CFMESH_PROGRESS " + json.dumps(payload, separators=(",", ":")), flush=True)
+
+
 
 
 def _result(ok: bool, **extra) -> int:
-    print("CFMESH_RESULT " + json.dumps({"ok": bool(ok), **extra}, separators=(",", ":")), flush=True)
+    """Emit result via job protocol; optional legacy CFMESH_RESULT line."""
+    payload = {"ok": bool(ok), **extra}
+    emit("result", **payload)
+    if _LEGACY_MARKERS:
+        print("CFMESH_RESULT " + json.dumps(payload, separators=(",", ":")), flush=True)
     return 0 if ok else 1
+
 
 
 def _read_json(path: Path) -> dict:
@@ -207,7 +222,14 @@ def main() -> int:
     p.add_argument("--mesh-id", default="", help="W20 mesh id — only that mesh's refinements")
     p.add_argument("--timeout", type=float, default=18000.0)
     p.add_argument("--threads", type=int, default=16)
+    p.add_argument(
+        "--legacy-markers",
+        action="store_true",
+        help="Also emit CFMESH_PROGRESS/CFMESH_RESULT lines (one-phase frontend compat).",
+    )
     args = p.parse_args()
+    global _LEGACY_MARKERS
+    _LEGACY_MARKERS = bool(args.legacy_markers)
 
     project_dir = Path(args.project_dir).resolve()
     case_dir = Path(args.case_dir).resolve()

@@ -17,6 +17,7 @@ import { activeGeometryId, matchesGeometry, matchesStudy, primaryGeometryId } fr
 import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
+import { pyJsonSync } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -69,8 +70,8 @@ function readProject(id) {
 }
 
 function writeProject(proj) {
-  mkdirSync(projectDir(proj.id), { recursive: true });
-  writeFileSync(projectJsonPath(proj.id), JSON.stringify(proj, null, 2), 'utf8');
+  // Phase 1 Step 9: materials stamps go through project_cli set-materials (Python).
+  // Keep no-op so callers do not dual-write project.json from Node.
   return proj;
 }
 
@@ -84,11 +85,13 @@ function readMaterialsFile(id) {
   }
 }
 
-function writeMaterialsFile(id, doc) {
-  mkdirSync(projectDir(id), { recursive: true });
-  const p = materialsJsonPath(id);
-  writeFileSync(p, JSON.stringify(doc, null, 2), 'utf8');
-  return p;
+function writeMaterialsFile(id, doc, simId) {
+  const out = pyJsonSync(
+    'project_cli.py',
+    ['set-materials', '--project-dir', projectDir(id), '--sim-id', String(simId || '')],
+    doc,
+  );
+  return materialsJsonPath(id);
 }
 
 function readSimulationFile(id) {

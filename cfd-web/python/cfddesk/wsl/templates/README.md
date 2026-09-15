@@ -1,4 +1,4 @@
-# WSL bash templates
+﻿# WSL bash templates
 
 Placeholders are literal tokens replaced by Python (`str.replace`), never shell-expanded
 before render:
@@ -11,17 +11,23 @@ before render:
 | `__APP__` | `simpleFoam` or `pimpleFoam` |
 | `__RUN_ID__` | Run id (e.g. `run-1`) |
 
+Snappy hex-dominant (`snappy_hexdominant.sh`) uses `__DST__`, `__WIN_OUT__`, and
+related tokens documented in that file's header.
+
 ## Event contract
 
 Templates echo lines:
 
 ```
-CFDDESK_EVENT {"event":"stage","stage":"decompose",...}
+MAGNUSIM_EVENT {"event":"stage","stage":"decompose",...}
 ```
 
-OpenFOAM / mpirun stdout is left untouched. `cfddesk.wsl.solve_run` / `tools/run_solve.py`
-parse `CFDDESK_EVENT` via `cfddesk.jobs.events` and turn residual / Courant / `Time =`
-lines into `residual` / `courant` / `progress` events.
+(`CFDDESK_EVENT` is still accepted as a parse alias.)
 
-Legacy `W27_*` markers are not emitted on this path (JS `buildSolveScript` still does
-until a later land deletes it).
+OpenFOAM / mpirun stdout is left untouched. `cfddesk.wsl.solve_run` /
+`tools/run_solve.py` parse events via `cfddesk.jobs.events` and turn residual /
+Courant / `Time =` lines into `residual` / `courant` / `progress` events.
+
+Legacy `W27_*` / `W25_*` markers are **not** emitted on this path. The JS
+`buildSolveScript` / `writeSolveCase` writers were deleted in Phase 1 land6;
+solve ownership is `prepare_run` + `run_solve` + `solve.sh`.

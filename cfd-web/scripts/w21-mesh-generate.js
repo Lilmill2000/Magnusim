@@ -34,7 +34,6 @@ const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'proje
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const WSL_DISTRO = wslDistro();
 /** Case layout template only — geometry surfaces overwritten from project Body1. */
-const WSL_TEMPLATE_CASE = wslCasePath('cfddesk-manual-test-project-1');
 const INCREMENT = 'W25';
 const MESH_SURFACE_EXPORT_SCRIPT = pyTool('export_mesh_surface_vtp.py');
 const MESH_SURFACE_CACHE_ROOT = join(ROOT, '.cache', 'mesh-surface');
@@ -44,7 +43,7 @@ const STANDARD_GENERATE_SCRIPT = pyTool('generate_standard.py');
 const PATH_CFMESH = 'cartesianMesh';
 const PATH_STANDARD = 'standard';
 const PATH_SNAPPY = 'snappyHexMesh';
-const GENERATE_SH_TEMPLATE = "#!/usr/bin/env bash\nset -uo pipefail\nTEMPLATE=\"__WSL_TEMPLATE__\"\nDST=\"__WSL_DST__\"\nWIN_OUT=\"__WSL_WIN_OUT__\"\nBLOCK='__BLOCK__'\nFEAT_LEVEL='__FEATURE_LEVEL__'\nWALLS_LEVEL='__WALLS_LEVEL__'\nADD_LAYERS='__ADD_LAYERS__'\nSNAP_NSMOOTH='__SNAP_NSMOOTH__'\nSNAP_TOL='__SNAP_TOL__'\nSNAP_NSOLVE='__SNAP_NSOLVE__'\nSNAP_NRELAX='__SNAP_NRELAX__'\nSNAP_NFEAT='__SNAP_NFEAT__'\nWSL_BODY1=\"__WSL_BODY1__\"\nWSL_STEP=\"__WSL_STEP__\"\nPROJECT_ID=\"__PROJECT_ID__\"\nSTEP_SHA=\"__STEP_SHA__\"\nBODY1_SHA=\"__BODY1_SHA__\"\necho \"W25_GENERATE_START generate_id=__GENERATE_ID__ bash_pid=$$ dst=$DST block=$BLOCK feature_level=$FEAT_LEVEL walls_level=$WALLS_LEVEL add_layers=$ADD_LAYERS path_kind=snappyHexMesh increment=W25\"\necho \"W25_GEOMETRY project_id=$PROJECT_ID step=$WSL_STEP body1=$WSL_BODY1 step_sha=$STEP_SHA body1_sha=$BODY1_SHA\"\necho \"W25_TEMPLATE scaffolding_only=$TEMPLATE (triSurface replaced with project Body1; NOT MTP1-silent-copy remesh)\"\nif [ ! -f \"$WSL_STEP\" ]; then\n  echo \"W25_GEOMETRY_FAIL missing source.step: $WSL_STEP\"\n  mkdir -p \"$WIN_OUT\"\n  echo \"W25_GENERATE_END exit=46 win_out=$WIN_OUT\"\n  exit 46\nfi\nif [ ! -f \"$WSL_BODY1\" ]; then\n  echo \"W25_GEOMETRY_FAIL missing Body1.stl: $WSL_BODY1\"\n  mkdir -p \"$WIN_OUT\"\n  echo \"W25_GENERATE_END exit=46 win_out=$WIN_OUT\"\n  exit 46\nfi\nrm -rf \"$DST\"\nmkdir -p \"$DST\"\ncp -a \"$TEMPLATE/constant\" \"$DST/\"\ncp -a \"$TEMPLATE/system\" \"$DST/\"\ncd \"$DST\"\npython3 - <<'PY'\nfrom pathlib import Path\nimport struct, json, sys, shutil, re, math\n\nbody1_src = Path(\"__WSL_BODY1__\")\nstep_src = Path(\"__WSL_STEP__\")\ntri = Path(\"constant/triSurface\")\ntri.mkdir(parents=True, exist_ok=True)\nfor p in list(tri.glob(\"*\")):\n    try:\n        p.unlink()\n    except IsADirectoryError:\n        shutil.rmtree(p)\n\nraw = body1_src.read_bytes()\nis_bin = len(raw) >= 84 and not raw[:5].lower().startswith(b\"solid\")\nscale = 0.001\n\ndef scale_bounds_from_binary(buf):\n    ntri = struct.unpack_from(\"<I\", buf, 80)[0]\n    xmin=ymin=zmin=float(\"inf\")\n    xmax=ymax=zmax=float(\"-inf\")\n    off = 84\n    hdr = b\"W23 Body1 from project source.step (mm->m)\"[:80].ljust(80, b\"\\0\")\n    out = bytearray(hdr)\n    out += struct.pack(\"<I\", ntri)\n    for i in range(ntri):\n        chunk = buf[off:off+50]\n        if len(chunk) < 50:\n            break\n        vals = list(struct.unpack(\"<12fH\", chunk))\n        for j in range(12):\n            vals[j] = vals[j] * scale\n        out += struct.pack(\"<12fH\", *vals)\n        xs = vals[3], vals[6], vals[9]\n        ys = vals[4], vals[7], vals[10]\n        zs = vals[5], vals[8], vals[11]\n        xmin=min(xmin,*xs); xmax=max(xmax,*xs)\n        ymin=min(ymin,*ys); ymax=max(ymax,*ys)\n        zmin=min(zmin,*zs); zmax=max(zmax,*zs)\n        off += 50\n    return bytes(out), {\"xmin\":xmin,\"xmax\":xmax,\"ymin\":ymin,\"ymax\":ymax,\"zmin\":zmin,\"zmax\":zmax,\"ntri\":ntri,\"scale\":scale}\n\nif is_bin:\n    scaled, bounds = scale_bounds_from_binary(raw)\nelse:\n    text = raw.decode(\"utf-8\", errors=\"ignore\")\n    out_lines = [\"solid Body1_W23\"]\n    xmin=ymin=zmin=float(\"inf\"); xmax=ymax=zmax=float(\"-inf\")\n    for line in text.splitlines():\n        s=line.strip()\n        if s.startswith(\"vertex\"):\n            parts=s.split()\n            x,y,z = float(parts[1])*scale, float(parts[2])*scale, float(parts[3])*scale\n            out_lines.append(f\"  vertex {x} {y} {z}\")\n            xmin=min(xmin,x); xmax=max(xmax,x)\n            ymin=min(ymin,y); ymax=max(ymax,y)\n            zmin=min(zmin,z); zmax=max(zmax,z)\n        elif s.startswith(\"facet normal\"):\n            parts=s.split()\n            nx,ny,nz=float(parts[2]),float(parts[3]),float(parts[4])\n            n=math.sqrt(nx*nx+ny*ny+nz*nz) or 1.0\n            out_lines.append(f\"facet normal {nx/n} {ny/n} {nz/n}\")\n        elif s.startswith(\"outer\") or s.startswith(\"endloop\") or s.startswith(\"endfacet\"):\n            out_lines.append(s)\n    out_lines.append(\"endsolid Body1_W23\")\n    scaled = (\"\\n\".join(out_lines)+\"\\n\").encode(\"ascii\")\n    bounds = {\"xmin\":xmin,\"xmax\":xmax,\"ymin\":ymin,\"ymax\":ymax,\"zmin\":zmin,\"zmax\":zmax,\"ntri\":None,\"scale\":scale}\n\nbody1_dst = tri / \"Body1.stl\"\nbody1_dst.write_bytes(scaled)\n\npad = 1.33\ncx = 0.5*(bounds[\"xmin\"]+bounds[\"xmax\"])\ncy = 0.5*(bounds[\"ymin\"]+bounds[\"ymax\"])\ncz = 0.5*(bounds[\"zmin\"]+bounds[\"zmax\"])\nhx = 0.5*(bounds[\"xmax\"]-bounds[\"xmin\"])*pad\nhy = 0.5*(bounds[\"ymax\"]-bounds[\"ymin\"])*pad\nhz = 0.5*(bounds[\"zmax\"]-bounds[\"zmin\"])*pad\nverts = [\n    (cx-hx, cy-hy, cz-hz),\n    (cx+hx, cy-hy, cz-hz),\n    (cx+hx, cy+hy, cz-hz),\n    (cx-hx, cy+hy, cz-hz),\n    (cx-hx, cy-hy, cz+hz),\n    (cx+hx, cy-hy, cz+hz),\n    (cx+hx, cy+hy, cz+hz),\n    (cx-hx, cy+hy, cz+hz),\n]\nloc = (cx, cy, cz - 0.15*hz)\n\nblock = \"__BLOCK__\"\nfeat_level = int(\"__FEATURE_LEVEL__\")\nwalls_level = int(\"__WALLS_LEVEL__\")\nadd_layers = (\"__ADD_LAYERS__\" == \"true\")\nsnap_nsmooth = int(\"__SNAP_NSMOOTH__\")\nsnap_tol = float(\"__SNAP_TOL__\")\nsnap_nsolve = int(\"__SNAP_NSOLVE__\")\nsnap_nrelax = int(\"__SNAP_NRELAX__\")\nsnap_nfeat = int(\"__SNAP_NFEAT__\")\n\nbm = Path(\"system/blockMeshDict\")\nbm_txt = bm.read_text()\nvert_block = \"vertices\\n(\\n\" + \"\\n\".join(f\"    ({v[0]:.8f} {v[1]:.8f} {v[2]:.8f})\" for v in verts) + \"\\n);\"\nbm_txt2 = re.sub(r\"vertices\\s*\\([\\s\\S]*?\\);\", vert_block, bm_txt, count=1)\nbm_txt2 = re.sub(r\"hex \\(0 1 2 3 4 5 6 7\\) \\([^)]+\\)\", f\"hex (0 1 2 3 4 5 6 7) {block}\", bm_txt2)\nbm.write_text(bm_txt2)\n\nsnap_lines = [\n\"FoamFile\",\n\"{\",\n\"    version     2.0;\",\n\"    format      ascii;\",\n\"    class       dictionary;\",\n\"    object      snappyHexMeshDict;\",\n\"}\",\n\"// W25: Body1/source.step + lifted addLayers/snappy_policy (not MTP1)\",\n\"castellatedMesh true;\",\n\"snap            true;\",\nf\"addLayers       {\'true\' if add_layers else \'false\'};\",\n\"\",\n\"geometry\",\n\"{\",\n\"    Body1.stl\",\n\"    {\",\n\"        type triSurfaceMesh;\",\n\"        name Body1;\",\n\"    }\",\n\"}\",\n\"\",\n\"castellatedMeshControls\",\n\"{\",\n\"    maxLocalCells 2000000;\",\n\"    maxGlobalCells 4000000;\",\n\"    minRefinementCells 0;\",\n\"    maxLoadUnbalance 0.10;\",\n\"    nCellsBetweenLevels 2;\",\n\"\",\n\"    features\",\n\"    (\",\n\"        {\",\n'            file \"cadFeatures.eMesh\";',\nf\"            level {feat_level};\",\n\"        }\",\n\"    );\",\n\"\",\n\"    refinementSurfaces\",\n\"    {\",\n\"        Body1\",\n\"        {\",\nf\"            level ({walls_level} {walls_level});\",\n\"            patchInfo { type wall; }\",\n\"        }\",\n\"    }\",\n\"\",\n\"    resolveFeatureAngle 20;\",\n\"    refinementRegions {}\",\nf\"    locationInMesh ({loc[0]:.8f} {loc[1]:.8f} {loc[2]:.8f});\",\n\"    allowFreeStandingZoneFaces true;\",\n\"}\",\n\"\",\n\"snapControls\",\n\"{\",\nf\"    nSmoothPatch {snap_nsmooth};\",\nf\"    tolerance {snap_tol};\",\nf\"    nSolveIter {snap_nsolve};\",\nf\"    nRelaxIter {snap_nrelax};\",\nf\"    nFeatureSnapIter {snap_nfeat};\",\n\"    implicitFeatureSnap false;\",\n\"    explicitFeatureSnap true;\",\n\"    multiRegionFeatureSnap false;\",\n\"}\",\n\"\",\n\"addLayersControls\",\n\"{\",\n\"    relativeSizes true;\",\n\"    layers\",\n\"    {\",\n*( [\"        Body1\", \"        {\", \"            nSurfaceLayers 2;\", \"        }\"] if add_layers else [] ),\n\"    }\",\nf\"    expansionRatio {1.1 if add_layers else 1.0};\",\n\"    finalLayerThickness 0.3;\",\nf\"    minThickness {0.2 if add_layers else 0.1};\",\n\"    nGrow 0;\",\nf\"    featureAngle {130 if add_layers else 60};\",\n\"    slipFeatureAngle 30;\",\nf\"    nRelaxIter {5 if add_layers else 3};\",\nf\"    nSmoothSurfaceNormals {3 if add_layers else 1};\",\nf\"    nSmoothNormals {10 if add_layers else 3};\",\n\"    nSmoothThickness 10;\",\n\"    maxFaceThicknessRatio 0.5;\",\n\"    maxThicknessToMedialRatio 0.3;\",\n\"    minMedialAxisAngle 90;\",\n\"    nBufferCellsNoExtrude 0;\",\n\"    nLayerIter 50;\",\n\"}\",\n\"\",\n\"meshQualityControls\",\n\"{\",\n\"    maxNonOrtho 65;\",\n\"    maxBoundarySkewness 20;\",\n\"    maxInternalSkewness 4;\",\n\"    maxConcave 80;\",\n\"    minVol 1e-13;\",\n\"    minTetQuality 1e-30;\",\n\"    minArea -1;\",\n\"    minTwist 0.02;\",\n\"    minDeterminant 0.001;\",\n\"    minFaceWeight 0.05;\",\n\"    minVolRatio 0.01;\",\n\"    minTriangleTwist -1;\",\n\"    nSmoothScale 4;\",\n\"    errorReduction 0.75;\",\n\"    relaxed\",\n\"    {\",\n\"        maxNonOrtho 75;\",\n\"    }\",\n\"}\",\n\"\",\n\"debug 0;\",\n\"mergeTolerance 1e-6;\",\n]\nPath(\"system/snappyHexMeshDict\").write_text(\"\\n\".join(snap_lines) + \"\\n\")\n\nsfe = \"\"\"FoamFile\n{\n    version     2.0;\n    format      ascii;\n    class       dictionary;\n    object      surfaceFeatureExtractDict;\n}\nBody1.stl\n{\n    extractionMethod    extractFromSurface;\n    includedAngle       150;\n    writeObj            yes;\n}\n\"\"\"\nPath(\"system/surfaceFeatureExtractDict\").write_text(sfe)\n\nmeta = {\n  \"increment\": \"W23\",\n  \"project_id\": \"__PROJECT_ID__\",\n  \"step_path\": str(step_src),\n  \"body1_path_src\": str(body1_src),\n  \"body1_path_case\": str(body1_dst.resolve()),\n  \"step_sha256\": \"__STEP_SHA__\",\n  \"body1_sha256_src\": \"__BODY1_SHA__\",\n  \"body1_bytes_scaled\": len(scaled),\n  \"bounds_m\": bounds,\n  \"feature_level\": feat_level,\n  \"walls_level\": walls_level,\n  \"add_layers\": add_layers,\n  \"snappy_geometry_rev\": 3,\n  \"snap\": {\"n_smooth_patch\": snap_nsmooth, \"tolerance\": snap_tol, \"n_solve_iter\": snap_nsolve, \"n_relax_iter\": snap_nrelax, \"n_feature_snap_iter\": snap_nfeat},\n  \"block\": block,\n  \"locationInMesh\": list(loc),\n  \"template_case\": \"__WSL_TEMPLATE__\",\n  \"template_role\": \"scaffolding_only\",\n  \"mtp1_silent_copy\": False,\n  \"geometry_source\": \"W16_project_STEP_Body1\",\n}\nPath(\"w23-geometry-meta.json\").write_text(json.dumps(meta, indent=2))\nprint(\"W25_DICTS_PATCHED\", json.dumps({\"bounds_m\": bounds, \"body1_bytes\": len(scaled), \"ntri\": bounds.get(\"ntri\")}))\nPY\nEC_PATCH=$?\nif [ \"$EC_PATCH\" -ne 0 ]; then\n  echo \"W25_PATCH_FAIL exit=$EC_PATCH\"\n  mkdir -p \"$WIN_OUT\"\n  echo \"W25_GENERATE_END exit=$EC_PATCH win_out=$WIN_OUT\"\n  exit $EC_PATCH\nfi\necho \"W25_CWD=$(pwd)\"\nopenfoam2606 surfaceFeatureExtract 2>&1 | tee log.surfaceFeatureExtract\nEC_SFE=${PIPESTATUS[0]}\necho \"W25_SURFACEFEATURE_END exit=$EC_SFE\"\nif [ \"$EC_SFE\" -ne 0 ]; then\n  mkdir -p \"$WIN_OUT\"\n  cp -f log.surfaceFeatureExtract w23-geometry-meta.json \"$WIN_OUT/\" 2>/dev/null || true\n  echo \"W25_GENERATE_END exit=$EC_SFE win_out=$WIN_OUT\"\n  exit $EC_SFE\nfi\nif [ -f constant/triSurface/Body1.eMesh ]; then\n  cp -f constant/triSurface/Body1.eMesh constant/triSurface/cadFeatures.eMesh\nfi\npython3 - <<'PY'\nfrom pathlib import Path\nimport sys, json\nem = Path(\"constant/triSurface/cadFeatures.eMesh\")\nif not em.is_file() or em.stat().st_size < 50:\n    b = Path(\"constant/triSurface/Body1.eMesh\")\n    if b.is_file():\n        em.write_bytes(b.read_bytes())\nif not em.is_file() or em.stat().st_size < 50:\n    print(\"W25_EMESH_FAIL missing_or_empty\", em, file=sys.stderr)\n    sys.exit(42)\nlines = em.read_text(errors=\"ignore\").splitlines()\nints=[]; past=False\nfor i,l in enumerate(lines):\n    s=l.strip()\n    if not past:\n        if s==\"}\" or s.startswith(\"// *****\"): past=True\n        continue\n    if s.isdigit(): ints.append(int(s))\n    if len(ints)>=2: break\nn_edges = ints[1] if len(ints)>1 else 0\nif n_edges < 1:\n    print(\"W25_EMESH_FAIL zero_edges\", file=sys.stderr)\n    sys.exit(42)\nmeta_path = Path(\"w23-geometry-meta.json\")\nmeta = json.loads(meta_path.read_text()) if meta_path.is_file() else {}\nmeta[\"emesh_bytes\"] = em.stat().st_size\nmeta[\"emesh_n_edges\"] = n_edges\nmeta[\"emesh_n_points\"] = ints[0] if ints else None\nmeta_path.write_text(json.dumps(meta, indent=2))\nPath(\"w21-feature-meta.json\").write_text(json.dumps(meta, indent=2))\nprint(\"W25_EMESH_OK\", json.dumps({\"bytes\": em.stat().st_size, \"n_edges\": n_edges, \"n_points\": ints[0] if ints else None}))\nwalls = Path(\"constant/triSurface/walls.stl\")\ninlet = Path(\"constant/triSurface/inlet.stl\")\nif walls.is_file() or inlet.is_file():\n    print(\"W25_MTP1_LEAK walls/inlet still present\", file=sys.stderr)\n    sys.exit(47)\nif not Path(\"constant/triSurface/Body1.stl\").is_file():\n    print(\"W25_GEOMETRY_FAIL Body1.stl missing in case\", file=sys.stderr)\n    sys.exit(46)\nPY\nEC_EM=$?\nif [ \"$EC_EM\" -ne 0 ]; then\n  mkdir -p \"$WIN_OUT\"\n  cp -f log.surfaceFeatureExtract w23-geometry-meta.json \"$WIN_OUT/\" 2>/dev/null || true\n  echo \"W25_GENERATE_END exit=$EC_EM win_out=$WIN_OUT\"\n  exit $EC_EM\nfi\nopenfoam2606 blockMesh 2>&1 | tee log.blockMesh\nEC_BM=${PIPESTATUS[0]}\necho \"W25_BLOCKMESH_END exit=$EC_BM\"\nif [ \"$EC_BM\" -ne 0 ]; then\n  mkdir -p \"$WIN_OUT\"\n  cp -f log.blockMesh w23-geometry-meta.json \"$WIN_OUT/\" 2>/dev/null || true\n  echo \"W25_GENERATE_END exit=$EC_BM win_out=$WIN_OUT\"\n  exit $EC_BM\nfi\nPHYS=$(lscpu -p=CORE,SOCKET 2>/dev/null | grep -v '^#' | sort -u | wc -l | tr -d ' ')\nTHREADS=$(nproc 2>/dev/null || echo 1)\nNPROC=$THREADS\nif [ -n \"$PHYS\" ] && [ \"$PHYS\" -ge 1 ]; then\n  NPROC=$PHYS\nfi\nif [ \"$NPROC\" -lt 1 ]; then\n  NPROC=1\nfi\necho \"W25_NPROC threads=$THREADS cores=$PHYS using=$NPROC\"\nrm -rf 0 processor*\nrun_serial_snappy() {\n  rm -rf processor*\n  openfoam2606 snappyHexMesh -overwrite 2>&1 | tee log.snappyHexMesh\n  EC=${PIPESTATUS[0]}\n}\nif [ \"$NPROC\" -gt 1 ]; then\n  printf '%s\\n' 'FoamFile' '{' '    version     2.0;' '    format      ascii;' '    class       dictionary;' '    object      decomposeParDict;' '}' \"numberOfSubdomains $NPROC;\" 'method          scotch;' > system/decomposeParDict\n  openfoam2606 decomposePar 2>&1 | tee log.decomposePar\n  EC_DEC=${PIPESTATUS[0]}\n  echo \"W25_DECOMPOSE_END exit=$EC_DEC nproc=$NPROC\"\n  if [ \"$EC_DEC\" -ne 0 ]; then\n    echo \"W25_DECOMPOSE_FALLBACK serial\"\n    run_serial_snappy\n  else\n    openfoam2606 mpirun -np \"$NPROC\" snappyHexMesh -parallel -overwrite 2>&1 | tee log.snappyHexMesh\n    EC=${PIPESTATUS[0]}\n    echo \"W25_SNAPPY_MPI_END exit=$EC\"\n    if [ \"$EC\" -eq 0 ]; then\n      openfoam2606 reconstructParMesh -constant -mergeTol 1e-6 2>&1 | tee log.reconstructParMesh\n      rm -rf processor*\n    else\n      echo \"W25_MPI_FALLBACK serial\"\n      run_serial_snappy\n    fi\n  fi\nelse\n  run_serial_snappy\nfi\necho \"W25_SNAPPY_END exit=$EC nproc=$NPROC\"\npython3 - <<'PY'\nfrom pathlib import Path\nimport re, json, sys\ntext = Path(\"log.snappyHexMesh\").read_text(errors=\"ignore\")\nmarks = [int(x) for x in re.findall(r\"Marked for refinement due to explicit features\\s*:\\s*(\\d+)\", text)]\ntotal = sum(marks) if marks else 0\nPath(\"w21-feature-marks.json\").write_text(json.dumps({\"marks\": marks, \"total\": total}, indent=2))\nprint(\"W25_FEATURE_MARKS\", marks, \"total\", total)\nif total < 1:\n    print(\"W25_FEATURE_MARKS_FAIL zero explicit feature refinement\", file=sys.stderr)\n    sys.exit(44)\nPY\nEC_FEAT=$?\nif [ \"$EC_FEAT\" -ne 0 ]; then\n  EC=$EC_FEAT\nfi\npython3 - <<'PY'\nfrom pathlib import Path\nimport json\ndef first_int(path):\n    lines = Path(path).read_text(errors=\"ignore\").splitlines()\n    past = False\n    for i,l in enumerate(lines):\n        s=l.strip()\n        if not past:\n            if s == \"}\" or s.startswith(\"// *****\"):\n                past = True\n            continue\n        if s.isdigit() and i > 5:\n            return int(s)\n    return None\ndef n_cells_owner(path):\n    lines = Path(path).read_text(errors=\"ignore\").splitlines()\n    mode=\"seek\"; vals=[]; nfaces=None\n    for i,l in enumerate(lines):\n        s=l.strip()\n        if mode==\"seek\":\n            if s.isdigit() and i>10:\n                nfaces=int(s); mode=\"paren\"\n            continue\n        if mode==\"paren\":\n            if s==\"(\": mode=\"vals\"\n            continue\n        if mode==\"vals\":\n            if s==\")\": break\n            if s.lstrip(\"-\").isdigit(): vals.append(int(s))\n    return (max(vals)+1 if vals else None), (nfaces if nfaces is not None else len(vals))\npm = Path(\"constant/polyMesh\")\nn_points = first_int(pm/\"points\") if (pm/\"points\").is_file() else None\nn_cells, n_faces = n_cells_owner(pm/\"owner\") if (pm/\"owner\").is_file() else (None, None)\ndoc = {\n  \"n_points\": n_points,\n  \"n_cells\": n_cells,\n  \"n_faces\": n_faces,\n  \"source\": \"polyMesh/points+owner\",\n  \"polyMesh\": str(pm.resolve()),\n  \"increment\": \"W23\",\n}\nPath(\"w21-counts.json\").write_text(json.dumps(doc, indent=2))\nprint(\"W25_COUNTS\", json.dumps(doc))\nif n_cells in (694700, 694712, 293400, 293412):\n    print(\"W25_COUNTS_SUSPECT hardcoded_bankish\", n_cells, file=__import__(\"sys\").stderr)\nPY\nrm -rf \"$WIN_OUT\"\nmkdir -p \"$WIN_OUT/constant/triSurface\" \"$WIN_OUT/system\"\nif [ -d constant/polyMesh ]; then cp -a constant/polyMesh \"$WIN_OUT/constant/\"; fi\nif [ -f constant/triSurface/cadFeatures.eMesh ]; then cp -f constant/triSurface/cadFeatures.eMesh \"$WIN_OUT/constant/triSurface/\"; fi\nif [ -f constant/triSurface/Body1.stl ]; then cp -f constant/triSurface/Body1.stl \"$WIN_OUT/constant/triSurface/\"; fi\ncp -a system \"$WIN_OUT/\" 2>/dev/null || true\ncp -f log.blockMesh log.snappyHexMesh log.surfaceFeatureExtract log.decomposePar log.reconstructParMesh w21-counts.json w21-feature-meta.json w21-feature-marks.json w23-geometry-meta.json \"$WIN_OUT/\" 2>/dev/null || true\ntouch \"$WIN_OUT/case.foam\"\necho \"W25_GENERATE_END exit=$EC win_out=$WIN_OUT path_kind=snappyHexMesh step=$WSL_STEP body1=$WSL_BODY1 increment=W25\"\nexit $EC\n";
+const SNAPPY_GENERATE_SCRIPT = pyTool('generate_snappy.py');
 
 /** @type {null | { child: import('node:child_process').ChildProcess, generate_id: string }} */
 let liveJob = null;
@@ -174,105 +173,11 @@ export function resolveProjectGeometry(projectId) {
   };
 }
 
-/** Lifted from cfddesk mesh/snappy_policy.py (SNAPPY_GEOMETRY_REV=3). */
-const SNAPPY_GEOMETRY_REV = 3;
-const FEATURE_LEVEL_CAP = 4;
-
 function clampFineness(fineness) {
   const f = Math.round(Number(fineness));
   if (!Number.isFinite(f)) return 5;
   return Math.max(1, Math.min(10, f));
 }
-
-function featureLevelFromFineness(fineness) {
-  const f = clampFineness(fineness);
-  return Math.min(FEATURE_LEVEL_CAP, 2 + Math.floor((f - 1) / 3));
-}
-
-/** Preferential feature level: max(walls+1, fineness floor), cap 4. */
-function featureRefinementLevel(wallsLevel, fineness) {
-  const fromWalls = Number(wallsLevel) + 1;
-  const fromFineness = featureLevelFromFineness(fineness);
-  return Math.min(FEATURE_LEVEL_CAP, Math.max(2, fromWalls, fromFineness));
-}
-
-/**
- * Lifted from cfddesk project/mesh_sizing.physics_refinement_for_fineness.
- * F<=3 -> walls 1; F4-6 -> walls 2; F7-10 -> walls 3. Physics-off -> walls 1.
- */
-function wallsLevelForSettings(settings) {
-  const f = clampFineness(settings && settings.fineness != null ? settings.fineness : 5);
-  const phys =
-    !settings || settings.physics_based_meshing === undefined
-      ? true
-      : !!settings.physics_based_meshing;
-  if (!phys || f <= 3) return 1;
-  return Math.min(3, 1 + Math.floor((f - 1) / 3));
-}
-
-/**
- * Official snappy snapControls (ESI snap guide + OpenFOAM user-guide 4.4).
- * nSmoothPatch 3, tolerance 2.0, nSolveIter 30, nRelaxIter 5,
- * nFeatureSnapIter 10, implicitFeatureSnap false, explicitFeatureSnap true.
- * Implicit snap is only for simple geometry without sharp corners.
- * Feature snap needs extra iterations; do not invent 100+ nSolveIter.
- */
-function snapControlsForFineness(fineness, hasFeatures = true) {
-  const f = clampFineness(fineness);
-  return {
-    n_smooth_patch: 3,
-    tolerance: 2.0,
-    n_solve_iter: 30,
-    n_relax_iter: 5,
-    n_feature_snap_iter: hasFeatures ? (f <= 3 ? 10 : 15) : 10,
-    implicit_feature_snap: false,
-    explicit_feature_snap: true,
-  };
-}
-
-/** Lifted from cfddesk mesh_sizing.cells_across / base_cell_from_fineness. */
-function cellsAcross(fineness) {
-  const f = clampFineness(fineness);
-  return 16.0 * Math.pow(2.0, (f - 1) / 3.0);
-}
-
-/**
- * Prefer bbox-diagonal base-cell block counts when bounds known (prepare_mesh_case spirit).
- * Fallback ladder kept for missing bounds.
- */
-function blockFromFineness(fineness, boundsM) {
-  const f = clampFineness(fineness);
-  if (boundsM && Number.isFinite(boundsM.xmin)) {
-    const dx = Math.abs(boundsM.xmax - boundsM.xmin);
-    const dy = Math.abs(boundsM.ymax - boundsM.ymin);
-    const dz = Math.abs(boundsM.zmax - boundsM.zmin);
-    const diag = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-    const base = Math.max(1e-5, Math.min(1.0, diag / cellsAcross(f)));
-    // padded domain ~1.33 like generate script
-    const pad = 1.33;
-    const nx = Math.max(8, Math.round((dx * pad) / base));
-    const ny = Math.max(8, Math.round((dy * pad) / base));
-    const nz = Math.max(12, Math.round((dz * pad) / base));
-    return `(${nx} ${ny} ${nz})`;
-  }
-  if (f <= 3) return '(10 10 20)';
-  if (f <= 6) return '(18 18 48)'; // denser than old (12 12 24); F5 mesh_sizing-aligned
-  if (f <= 8) return '(24 24 64)';
-  return '(32 32 80)';
-}
-
-function finenessParams(fineness, settings, boundsM) {
-  const f = clampFineness(fineness);
-  const wallsLevel = wallsLevelForSettings({
-    ...(settings || {}),
-    fineness: f,
-  });
-  const featureLevel = featureRefinementLevel(wallsLevel, f);
-  const snap = snapControlsForFineness(f, true);
-  const block = blockFromFineness(f, boundsM);
-  return { block, featureLevel, wallsLevel, snap, snappy_geometry_rev: SNAPPY_GEOMETRY_REV };
-}
-
 
 export function readPolyMeshCounts(polyMeshDir) {
   const pointsPath = join(polyMeshDir, 'points');
@@ -408,51 +313,6 @@ function prewarmMeshSurface(winOut) {
   return { ok: r.status === 0 && existsSync(outVtp), path: outVtp, status: r.status };
 }
 
-function fillGenerateScript(template, map) {
-  let s = template;
-  for (const [k, v] of Object.entries(map)) {
-    s = s.split(k).join(String(v));
-  }
-  return s;
-}
-
-function writeGenerateScript({
-  generateId,
-  wslDst,
-  winOut,
-  wslWinOut,
-  block,
-  featureLevel,
-  wallsLevel,
-  addLayers,
-  snap,
-  geometry,
-}) {
-  mkdirSync(REPORT_DIR, { recursive: true });
-  const shPath = join(REPORT_DIR, `generate-${generateId}.sh`);
-  const body = fillGenerateScript(GENERATE_SH_TEMPLATE, {
-    __WSL_TEMPLATE__: WSL_TEMPLATE_CASE,
-    __WSL_DST__: wslDst,
-    __WSL_WIN_OUT__: wslWinOut,
-    __BLOCK__: block,
-    __FEATURE_LEVEL__: String(featureLevel),
-    __WALLS_LEVEL__: String(wallsLevel),
-    __ADD_LAYERS__: addLayers ? 'true' : 'false',
-    __SNAP_NSMOOTH__: String(snap.n_smooth_patch),
-    __SNAP_TOL__: String(snap.tolerance),
-    __SNAP_NSOLVE__: String(snap.n_solve_iter),
-    __SNAP_NRELAX__: String(snap.n_relax_iter),
-    __SNAP_NFEAT__: String(snap.n_feature_snap_iter),
-    __WSL_BODY1__: geometry.wsl_body1,
-    __WSL_STEP__: geometry.wsl_step,
-    __PROJECT_ID__: geometry.project_id,
-    __STEP_SHA__: geometry.step_sha256,
-    __BODY1_SHA__: geometry.body1_sha256,
-    __GENERATE_ID__: generateId,
-  });
-  writeFileSync(shPath, body.replace(/\r\n/g, '\n'), 'utf8');
-  return { shPath, wslSh: winToWsl(shPath), winOut };
-}
 
 export function persistMeshResult(projectId, resultFields) {
   if (!projectId) return null;
@@ -613,6 +473,19 @@ function parseCfmeshLine(line) {
   if (s.startsWith('CFMESH_RESULT ')) {
     try {
       return { kind: 'result', data: JSON.parse(s.slice('CFMESH_RESULT '.length)) };
+    } catch {
+      return null;
+    }
+  }
+  // Phase 1 Step 7: MAGNUSIM_EVENT / CFDDESK_EVENT progress|result (same stage names).
+  for (const prefix of ['MAGNUSIM_EVENT ', 'CFDDESK_EVENT ']) {
+    if (!s.startsWith(prefix)) continue;
+    try {
+      const data = JSON.parse(s.slice(prefix.length));
+      if (!data || typeof data !== 'object') return null;
+      if (data.event === 'progress') return { kind: 'progress', data };
+      if (data.event === 'result') return { kind: 'result', data };
+      return null;
     } catch {
       return null;
     }
@@ -1051,46 +924,18 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
       ? true
       : !!settings_snapshot.automatic_boundary_layers;
   // Geometry bounds may be mm from W16 fingerprint; generate scales Body1 mm->m.
-  let boundsM = null;
-  if (geometry.bounds) {
-    const b = geometry.bounds;
-    const lookMm = Math.abs((b.xmax ?? b[1] ?? 0) - (b.xmin ?? b[0] ?? 0)) > 2;
-    const s = lookMm ? 0.001 : 1;
-    boundsM = {
-      xmin: (b.xmin ?? b[0]) * s,
-      xmax: (b.xmax ?? b[1]) * s,
-      ymin: (b.ymin ?? b[2]) * s,
-      ymax: (b.ymax ?? b[3]) * s,
-      zmin: (b.zmin ?? b[4]) * s,
-      zmax: (b.zmax ?? b[5]) * s,
-    };
-  }
-  const { block, featureLevel, wallsLevel, snap, snappy_geometry_rev } = finenessParams(
-    fineness,
-    settings_snapshot,
-    boundsM
-  );
-
-  const wslDst = wslCasePath(`cfddesk-w25-${generateId}`);
+  const physicsBased =
+    settings_snapshot.physics_based_meshing === undefined
+      ? true
+      : !!settings_snapshot.physics_based_meshing;
+  const wslDst = `cfddesk-w25-${generateId}`;
   mkdirSync(REPORT_DIR, { recursive: true });
-  // W25b: put remesh under active project so SPA attach/mesh-inspect reads layered mesh
   const winOut = project_id
     ? join(PROJECTS_ROOT, project_id, 'mesh', `run-w25-${generateId}`)
     : join(REPORT_DIR, 'cases', `run-w25-${generateId}`);
   mkdirSync(winOut, { recursive: true });
   const winLog = join(REPORT_DIR, `generate-${generateId}.log`);
-  const { shPath, wslSh } = writeGenerateScript({
-    generateId,
-    wslDst,
-    winOut,
-    wslWinOut: winToWsl(winOut),
-    block,
-    featureLevel,
-    wallsLevel,
-    addLayers,
-    snap,
-    geometry,
-  });
+  const projectDir = join(PROJECTS_ROOT, project_id);
 
   let fingerprint_before = null;
   try {
@@ -1106,15 +951,35 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     fingerprint_before = null;
   }
 
-  const argv = ['wsl', '-d', WSL_DISTRO, '--', 'bash', wslSh];
+  const argv = [
+    PYTHON,
+    SNAPPY_GENERATE_SCRIPT,
+    '--project-dir',
+    projectDir,
+    '--case-dir',
+    winOut,
+    '--wsl-case',
+    wslDst,
+    '--generate-id',
+    generateId,
+    '--fineness',
+    String(clampFineness(fineness)),
+    '--add-layers',
+    addLayers ? '1' : '0',
+    '--physics-based',
+    physicsBased ? '1' : '0',
+    '--legacy-markers',
+  ];
   const command = argv.join(' ');
   const started_at = new Date().toISOString();
 
   let logBuf = '';
+  let lastResult = null;
   const jobLog = createJobLogger('mesh', generateId);
   const child = spawn(argv[0], argv.slice(1), {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PYTHONUNBUFFERED: '1' },
   });
 
   liveJob = { child, generate_id: generateId, path_kind: PATH_SNAPPY, project_id, started_at };
@@ -1135,8 +1000,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     log_path: winLog,
     log_jsonl_path: jobLog.path,
     log_excerpt: '',
-    wsl_case: wslDst,
-    wsl_script: wslSh,
+    wsl_case: wslCasePath(wslDst),
     case_dir: winOut,
     mesh_path: join(winOut, 'constant', 'polyMesh'),
     n_cells: null,
@@ -1150,18 +1014,14 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     project_id,
     settings_snapshot,
     fineness_used: fineness,
-    block_used: block,
-    feature_level_used: featureLevel,
-    walls_level_used: wallsLevel,
     add_layers_used: addLayers,
-    snap_used: snap,
-    snappy_geometry_rev,
+    snappy_geometry_rev: null,
     lift: {
       from: [
-        'cfddesk/mesh/case_writer.py:_add_layers_controls_block',
-        'cfddesk/mesh/snappy_policy.py:SNAPPY_GEOMETRY_REV=3',
-        'cfddesk/project/mesh_sizing.py:physics_refinement_for_fineness',
-        'cfddesk/mesh/feature_edges.py:cadFeatures.eMesh (via surfaceFeatureExtract)',
+        'cfddesk/mesh/snappy_hexdominant.py',
+        'cfddesk/mesh/snappy_policy.py',
+        'cfddesk/wsl/templates/snappy_hexdominant.sh',
+        'tools/generate_snappy.py',
       ],
       automatic_boundary_layers: addLayers,
     },
@@ -1175,156 +1035,89 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     },
     step_path: geometry.step_path,
     body1_path: geometry.body1_path,
+    stage: 'starting',
+    stage_detail: null,
+    note: `Hex-dominant snappy via generate_snappy.py (fineness ${fineness}, layers ${addLayers ? 'on' : 'off'}).`,
     mtp1_silent_copy: false,
-    note:
-      'W25: snappyHexMesh + lifted addLayers/snappy_policy on W16 STEP/Body1 (surfaceFeatureExtract->eMesh + blockMesh + snappy). NOT MTP1-silent-copy. NOT checkMesh. No invented cell counts. No solves.',
-    no_fake_progress: true,
-    soft_pass_avoided: true,
-    increment: INCREMENT,
   };
-
   persistMeshResult(project_id, baseRunning);
 
+  let lastStage = null;
   const appendLog = (chunk) => {
     const s = chunk.toString('utf8');
     logBuf += s;
     try {
       writeFileSync(winLog, logBuf, 'utf8');
     } catch {}
+    for (const line of s.split(/\r?\n/)) {
+      const parsed = parseCfmeshLine(line);
+      if (!parsed) continue;
+      if (parsed.kind === 'result') lastResult = parsed.data;
+      if (parsed.kind === 'progress' && parsed.data && parsed.data.stage) {
+        const stage = String(parsed.data.stage);
+        const detail = parsed.data.msg ? String(parsed.data.msg) : null;
+        if (stage !== lastStage || detail) {
+          lastStage = stage;
+          if (liveJob && liveJob.child === child) {
+            const running = { ...baseRunning, stage, stage_detail: detail };
+            try {
+              persistMeshResult(project_id, running);
+              onUpdate(running);
+            } catch (_) {}
+          }
+        }
+      }
+    }
   };
   child.stdout?.on('data', appendLog);
   child.stderr?.on('data', appendLog);
 
-  child.on('error', (err) => {
-    logBuf += `\nSPAWN_ERROR: ${err}\n`;
-    try {
-      writeFileSync(winLog, logBuf, 'utf8');
-    } catch {}
-    liveJob = null;
-    const failed = {
-      ...baseRunning,
-      status: 'failed',
-      exit_code: -1,
-      finished_at: new Date().toISOString(),
-      log_excerpt: logBuf.slice(-2000),
-      error: String(err),
-      note: `W25: remesh failed to spawn: ${err}`,
-    };
-    persistMeshResult(project_id, failed);
-    onUpdate(failed);
-  });
-
-  child.on('exit', (code, signal) => {
-    const exit_code = code == null ? (signal ? -2 : -1) : code;
+  child.on('close', (code) => {
+    const exit_code = code == null ? 1 : code;
     const finished_at = new Date().toISOString();
-    const excerpt = logBuf.slice(-4000);
-    try {
-      writeFileSync(winLog, logBuf, 'utf8');
-    } catch {}
-
-    const polyDir = join(winOut, 'constant', 'polyMesh');
-    let counts = { n_cells: null, n_points: null, n_faces: null, source: null };
+    if (liveJob && liveJob.child === child) liveJob = null;
+    const counts = lastResult
+      ? {
+          n_cells: lastResult.n_cells ?? null,
+          n_points: lastResult.n_points ?? null,
+          n_faces: lastResult.n_faces ?? null,
+          counts_source: lastResult.counts_source || null,
+        }
+      : readPolyMeshCounts(join(winOut, 'constant', 'polyMesh'));
     let fingerprint_after = null;
-    let emesh = null;
-    let feature_marks_total = null;
-    let geometry_meta = null;
     try {
-      const countsJson = join(winOut, 'w21-counts.json');
-      if (existsSync(countsJson)) {
-        const j = JSON.parse(readFileSync(countsJson, 'utf8'));
-        counts = {
-          n_cells: j.n_cells ?? null,
-          n_points: j.n_points ?? null,
-          n_faces: j.n_faces ?? null,
-          source: j.source || 'w21-counts.json',
-        };
-      } else if (existsSync(polyDir)) {
-        const c = readPolyMeshCounts(polyDir);
-        counts = {
-          n_cells: c.n_cells,
-          n_points: c.n_points,
-          n_faces: c.n_faces,
-          source: c.source,
-        };
-      }
-      const emeshPath = join(winOut, 'constant', 'triSurface', 'cadFeatures.eMesh');
-      emesh = readEmeshStats(emeshPath);
-      const marksPath = join(winOut, 'w21-feature-marks.json');
-      if (existsSync(marksPath)) {
-        const m = JSON.parse(readFileSync(marksPath, 'utf8'));
-        feature_marks_total = m.total ?? null;
-      }
-      const gmeta = join(winOut, 'w23-geometry-meta.json');
-      if (existsSync(gmeta)) {
-        geometry_meta = JSON.parse(readFileSync(gmeta, 'utf8'));
-      }
-      try {
-        if (existsSync(polyDir)) fingerprint_after = fingerprintPolyMesh(polyDir);
-      } catch (fpErr) {
-        fingerprint_after = { error: String(fpErr), ...counts };
-      }
-    } catch (e) {
-      logBuf += `\nCOUNT_PARSE_ERROR: ${e}\n`;
-      try {
-        writeFileSync(winLog, logBuf, 'utf8');
-      } catch {}
+      fingerprint_after = fingerprintPolyMesh(join(winOut, 'constant', 'polyMesh'));
+    } catch {
+      fingerprint_after = null;
     }
-
-    try {
-      if (existsSync(polyDir)) prewarmMeshSurface(winOut);
-    } catch (_) {}
-    try {
-      writeFileSync(winLog, logBuf, 'utf8');
-    } catch {}
-
-    const banned = new Set([694700, 694712, 293400, 293412, 694700000]);
-    const inventSuspect =
-      counts.n_cells != null && banned.has(Number(counts.n_cells)) && !existsSync(polyDir);
-
-    const body1InCase = join(winOut, 'constant', 'triSurface', 'Body1.stl');
-    const wallsLeak = existsSync(join(winOut, 'constant', 'triSurface', 'walls.stl'));
-    const usedProjectBody =
-      existsSync(body1InCase) &&
-      !wallsLeak &&
-      geometry_meta &&
-      geometry_meta.mtp1_silent_copy === false;
-
-    const ok =
-      exit_code === 0 &&
-      counts.n_cells != null &&
-      counts.n_points != null &&
-      emesh &&
-      emesh.present &&
-      (emesh.n_edges || 0) > 0 &&
-      !inventSuspect &&
-      usedProjectBody;
-
-    liveJob = null;
+    const ok = exit_code === 0 && !(lastResult && lastResult.ok === false);
     const terminal = {
       ...baseRunning,
       status: ok ? 'done' : 'failed',
-      exit_code: ok ? exit_code : exit_code === 0 && !ok ? 45 : exit_code,
+      exit_code,
       finished_at,
-      log_excerpt: excerpt,
-      case_dir: winOut,
-      mesh_path: polyDir,
       n_cells: counts.n_cells,
       n_points: counts.n_points,
       n_faces: counts.n_faces,
-      counts_source: counts.source,
-      emesh,
-      feature_marks_total,
+      counts_source: counts.counts_source || 'polyMesh/points+owner',
+      feature_marks_total: lastResult && lastResult.feature_marks_total != null ? lastResult.feature_marks_total : null,
       fingerprint_after,
-      geometry_meta,
-      signal: signal || null,
+      snappy_geometry_rev: lastResult && lastResult.snappy_geometry_rev != null ? lastResult.snappy_geometry_rev : null,
+      block_used: lastResult && lastResult.block != null ? lastResult.block : null,
+      feature_level_used: lastResult && lastResult.feature_level != null ? lastResult.feature_level : null,
+      walls_level_used: lastResult && lastResult.walls_level != null ? lastResult.walls_level : null,
+      snap_used: lastResult && lastResult.snap != null ? lastResult.snap : null,
+      stage: ok ? 'done' : 'failed',
+      error: ok ? null : (lastResult && lastResult.error) || `generate_snappy exit ${exit_code}`,
       note: ok
-        ? `W25: snappyHexMesh+BL lift done (exit ${exit_code}). cells=${counts.n_cells} points=${counts.n_points}. addLayers=${addLayers}. step=${geometry.step_path}. NOT MTP1-silent-copy. NOT checkMesh.`
-        : `W25: remesh failed (exit ${exit_code}${signal ? ' signal ' + signal : ''}${inventSuspect ? ' invented-counts-suspect' : ''}${!usedProjectBody ? ' geometry-not-project-Body1' : ''}). Honest fail.`,
-      no_fake_progress: true,
-      soft_pass_avoided: true,
+        ? `Hex-dominant snappy done (exit ${exit_code}). cells=${counts.n_cells} points=${counts.n_points}.`
+        : `Hex-dominant snappy failed (exit ${exit_code}).`,
+      log_excerpt: logBuf.slice(-4000),
       mtp1_silent_copy: false,
-      increment: INCREMENT,
     };
+    try {
+      prewarmMeshSurface(winOut);
+    } catch (_) {}
     persistMeshResult(project_id, terminal);
     onUpdate(terminal);
   });
@@ -1361,7 +1154,7 @@ export const W21_META = {
   path_kind: 'snappyHexMesh',
   report_dir: REPORT_DIR,
   forbidden_path_kind: 'checkMesh',
-  wsl_template_case: WSL_TEMPLATE_CASE,
+  generate_script: 'generate_snappy.py',
   geometry_source: 'W16_project_STEP_Body1',
   mtp1_silent_copy: false,
 };
