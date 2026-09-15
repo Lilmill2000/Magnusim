@@ -8,8 +8,8 @@
   "timestamp_local": "2026-09-15 02:45:00 CT",
   "machine": "Timmy",
   "baseline_HEAD": "a38a8fdab790e6b04a181b8fe2859d359991d50a",
-  "commit_sha": "PENDING",
-  "commit_short": "PENDING",
+  "commit_sha": "cb1e212476f285d4d45c3cacaae29b7c8005a43e",
+  "commit_short": "cb1e212",
   "tests": {
     "unit_suite": "136 passed",
     "land3_focused": "6 passed (test_solver_registry.py) + 7 (test_analysis_registry.py) + 18 (test_registry.py) = 31 focused"
@@ -23,8 +23,8 @@
     "plan frontmatter p2-solver-backend -> completed (soft-pass; residual parsers deferred)"
   ],
   "NOT_yet_done": [
-    "residual_line / extra_lines (Courant) still in wsl/solve_run Phase 1 parsers — stubs None this land",
-    "write_fv_solution / write_control_dict still in case/writer + web_case — stubs None this land",
+    "residual_line / extra_lines (Courant) still in wsl/solve_run Phase 1 parsers \u2014 stubs None this land",
+    "write_fv_solution / write_control_dict still in case/writer + web_case \u2014 stubs None this land",
     "runner/parallel.py mpirun_simplefoam_inner not yet generic over application",
     "PRIMARY_SIM / v14 migration / W17 / JS / Geometry / web-json / Mesh/BC/Material/Monitor/Filter",
     "Phase 3+; soft-pass != Phase 2 done"
