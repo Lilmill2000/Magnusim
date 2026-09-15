@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
 
-from cfddesk.registry.analysis import AnalysisType, ResultField
+from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 
@@ -238,6 +238,46 @@ def _validate_minimal(
     except Exception:
         pass
     return errors
+
+
+def _write_web_solve_case(ctx: CaseContext) -> None:
+    """Delegate to Phase 1 web_case writer (steady + transient via RunSpec).
+
+    Lazy-import so load_all / builtin registration does not pull OCP / web_adapter
+    at registry bootstrap time.
+    """
+    from pathlib import Path as _Path
+
+    from cfddesk.case.web_case import write_web_solve_case
+
+    if ctx.run_spec is None:
+        raise ValueError("CaseContext.run_spec is required for AnalysisType.write_case")
+    out = ctx.out_dir
+    if out is None:
+        raise ValueError("CaseContext.out_dir is required for AnalysisType.write_case")
+    write_web_solve_case(ctx.run_spec, _Path(out))
+
+
+def _write_case_steady(ctx: CaseContext) -> None:
+    """incompressible_steady write_case -> Phase 1 simpleFoam / web_case path."""
+    spec = ctx.run_spec
+    if spec is not None and getattr(spec, "transient", None) is not None:
+        raise ValueError(
+            "incompressible_steady.write_case requires RunSpec.transient is None"
+        )
+    _write_web_solve_case(ctx)
+
+
+def _write_case_transient(ctx: CaseContext) -> None:
+    """incompressible_transient write_case -> Phase 1 pimpleFoam / web_case path."""
+    spec = ctx.run_spec
+    if spec is None or getattr(spec, "transient", None) is None:
+        raise ValueError(
+            "incompressible_transient.write_case requires RunSpec.transient set"
+        )
+    _write_web_solve_case(ctx)
+
+
 def build_incompressible_steady() -> AnalysisType:
     return AnalysisType(
         key="incompressible_steady",
@@ -258,7 +298,7 @@ def build_incompressible_steady() -> AnalysisType:
         control_schema=_control_schema(transient=False),
         validate=_validate_minimal,
         region_roles=("fluid",),
-        write_case=None,  # Phase 1 writers stay outside registry this land
+        write_case=_write_case_steady,
         parse_log_line=None,
         requires=(Requirement("wsl_tool", "simpleFoam"),),
     )
@@ -284,7 +324,7 @@ def build_incompressible_transient() -> AnalysisType:
         control_schema=_control_schema(transient=True),
         validate=_validate_minimal,
         region_roles=("fluid",),
-        write_case=None,
+        write_case=_write_case_transient,
         parse_log_line=None,
         requires=(Requirement("wsl_tool", "pimpleFoam"),),
     )

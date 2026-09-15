@@ -64,7 +64,7 @@ def test_get_defaults_validate_via_schemafield():
         assert isinstance(spec, AnalysisType)
         assert spec.default_turbulence == "kOmegaSST"
         assert "U" in spec.fields and "p" in spec.fields
-        assert spec.write_case is None  # land2: no Phase 1 writer wire
+        assert callable(spec.write_case)  # land12: Phase 1 web_case wired
         assert callable(spec.validate)
         assert spec.validate() == []
         for schema_name in ("settings_schema", "numerics_schema", "control_schema"):

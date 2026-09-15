@@ -6,6 +6,7 @@ from typing import Any
 
 from cfddesk.registry.analysis import (
     AnalysisType,
+    CaseContext,
     DEFAULT_STEADY_KEY,
     DEFAULT_TRANSIENT_KEY,
     LEGACY_ANALYSIS_ALIAS,
@@ -35,6 +36,7 @@ from cfddesk.registry.solver import SolverApp, validate_analysis_solver_refs
 
 __all__ = [
     "AnalysisType",
+    "CaseContext",
     "DEFAULT_STEADY_KEY",
     "DEFAULT_TRANSIENT_KEY",
     "LEGACY_ANALYSIS_ALIAS",

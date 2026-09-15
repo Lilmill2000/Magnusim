@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 from cfddesk.registry.requirements import Requirement
@@ -95,6 +96,25 @@ class ResultField:
     kind: ResultKind
 
 
+
+@dataclass(frozen=True)
+class CaseContext:
+    """Inputs for AnalysisType.write_case (Phase 1 prepare_run / web_case).
+
+    Bundles what tools/prepare_run.py computed. Built-in write_case delegates
+    to cfddesk.case.web_case.write_web_solve_case via run_spec + out_dir
+    (other fields reserved for later lands).
+    """
+
+    out_dir: Path
+    run_spec: Any
+    project: Any = None
+    simulation: Any = None
+    geometry: Any = None
+    mesh_case_dir: Path | None = None
+    n_procs: int = 1
+
+
 @dataclass(frozen=True)
 class AnalysisType:
     """Registered analysis / physics type (incompressible, CHT, ...)."""
@@ -117,7 +137,7 @@ class AnalysisType:
     control_schema: tuple[SchemaField, ...]
     validate: Callable[..., list[str]]
     region_roles: tuple[str, ...] = ("fluid",)
-    write_case: Callable[..., None] | None = None
+    write_case: Callable[[CaseContext], None] | None = None
     parse_log_line: Callable[[str], Any] | None = None
     requires: tuple[Requirement, ...] = ()
 
