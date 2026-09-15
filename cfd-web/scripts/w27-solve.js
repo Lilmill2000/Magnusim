@@ -12,7 +12,6 @@ import {
   writeFileSync,
   readdirSync,
   statSync,
-  cpSync,
   rmSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -28,10 +27,6 @@ import {
   simIsTransient,
   normalizeTransient,
   resolveTransientControl,
-  transientControlDict,
-  transientFvSchemes,
-  transientFvSolution,
-  transientProgressFromLine,
   describeTransient,
 } from './w30-transient.js';
 import { createJobLogger } from './log.js';
@@ -88,31 +83,17 @@ function newProgressState() {
   return { buf: '', series: [], stage: 'starting', current: null, pending: null, solve_started_at: null, saved_times: [] };
 }
 
+/**
+ * Raw OpenFOAM log-line progress (residuals / Time / Courant). W27_* bash
+ * markers removed with legacy bash solve script (land6). Live runs use applyJobEvent.
+ */
 function applyProgressLine(state, raw) {
   const line = String(raw || '').replace(/^\s*\[\d+\]\s*/, '');
-  if (state && state._jobLog && /W27_/.test(line)) { try { state._jobLog.info('progress', { line: line.slice(0, 200) }); } catch {} }
-  if (/W27_DECOMPOSE_BEGIN/.test(line)) state.stage = 'decompose';
-  else if (/W27_SIMPLEFOAM_BEGIN/.test(line)) state.stage = 'solve';
-  else if (/W27_SIMPLEFOAM_END/.test(line)) state.stage = 'reconstruct';
-  else if (/W27_RUN_END/.test(line)) state.stage = 'copy';
-  // The solve script echoes this after each time directory has been copied to
-  // the Windows run folder mid-run (live results).
-  const saved = line.match(/W27_TIME_SAVED t=([0-9.eE+-]+)/);
-  if (saved) {
-    const t = Number(saved[1]);
-    if (Number.isFinite(t) && !state.saved_times.includes(t)) state.saved_times.push(t);
-    return;
-  }
   const tm = line.match(/^Time\s*=\s*([0-9.+-eE]+)\s*$/);
   if (tm) {
-    // reconstructPar echoes every saved time too; those are not progress.
     if (state.stage !== 'solve') return;
     if (state.current && Number.isFinite(state.current.t)) state.series.push(state.current);
     const t = Number(tm[1]);
-    // pimpleFoam prints "Courant Number" and "deltaT" just BEFORE the
-    // "Time =" line of the step they belong to; they were parked in
-    // `pending`. Carry the previous step's values when a line is missing
-    // (fixed Δt prints no deltaT line) so a snapshot is never blank.
     const prev = state.current || {};
     const pend = state.pending || {};
     state.pending = null;
@@ -126,10 +107,22 @@ function applyProgressLine(state, raw) {
     }
     return;
   }
-  // Transient-only lines (Courant number, deltaT); no-ops for simpleFoam.
   if (state.stage === 'solve') {
     if (!state.pending) state.pending = {};
-    if (transientProgressFromLine(line, state.pending)) return;
+    const co = line.match(/^Courant Number mean:\s*([0-9.eE+-]+)\s+max:\s*([0-9.eE+-]+)/);
+    if (co) {
+      const mean = Number(co[1]);
+      const v = Number(co[2]);
+      if (Number.isFinite(mean)) state.pending.co_mean = mean;
+      if (Number.isFinite(v)) state.pending.co_max = v;
+      return;
+    }
+    const dt = line.match(/^deltaT\s*=\s*([0-9.eE+-]+)/);
+    if (dt) {
+      const v = Number(dt[1]);
+      if (Number.isFinite(v)) state.pending.delta_t = v;
+      return;
+    }
   }
   const rm = line.match(/Solving for (Ux|Uy|Uz|p|omega|k), Initial residual = ([0-9.eE+-]+)/);
   if (rm && state.current) {
@@ -138,12 +131,6 @@ function applyProgressLine(state, raw) {
   }
 }
 
-function consumeProgressChunk(state, chunk) {
-  state.buf += String(chunk || '');
-  const parts = state.buf.split(/\r?\n/);
-  state.buf = parts.pop() || '';
-  for (const line of parts) applyProgressLine(state, line);
-}
 
 
 /**
@@ -290,7 +277,21 @@ function snapshotProgress(state) {
 
 export function parseSolveProgress(text) {
   const state = newProgressState();
-  for (const line of String(text || '').split(/\r?\n/)) applyProgressLine(state, line);
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        const ev = JSON.parse(trimmed);
+        if (ev && typeof ev === 'object' && ev.event) {
+          applyJobEvent(state, ev);
+          continue;
+        }
+      } catch {
+        /* fall through to raw OpenFOAM line */
+      }
+    }
+    applyProgressLine(state, line);
+  }
   return snapshotProgress(state);
 }
 
@@ -527,53 +528,6 @@ function facesArea(faces, props) {
   return a;
 }
 
-/**
- * Area-weighted unit normal pointing INTO the fluid for a set of CAD faces
- * (the CAD normals are outward, same orientation as the mesh patch). Null when
- * no face has a normal.
- */
-function facesInwardNormal(faces, props) {
-  let n = [0, 0, 0];
-  let any = false;
-  for (const f of faces || []) {
-    const p = props && props[f];
-    if (!p || !Array.isArray(p.normal) || p.normal.length !== 3) continue;
-    const a = Number.isFinite(p.area) && p.area > 0 ? p.area : 1;
-    n = [n[0] - a * p.normal[0], n[1] - a * p.normal[1], n[2] - a * p.normal[2]];
-    any = true;
-  }
-  if (!any) return null;
-  const m = Math.hypot(n[0], n[1], n[2]);
-  return m > 0 ? n.map((x) => x / m) : null;
-}
-
-/**
- * Velocity vector written for a Fixed → Vector inlet: the air enters at the
- * typed speed, moving along the vector — U = speed · d̂, exactly as typed.
- * The component through the face is speed · (d̂ · n_in); for a vector 70° off
- * the face normal only 34 % of the speed crosses the face. That is geometry,
- * not something to correct for, but it is recorded so the UI can show it.
- */
-function vectorInletVelocity(bc, faceProps) {
-  const spd = Math.abs(inletSpeedMs(bc));
-  const dir = inletDirection(bc);
-  if (!dir) return null;
-  const nIn = facesInwardNormal(bcFaces(bc), faceProps);
-  const cos = nIn ? dir[0] * nIn[0] + dir[1] * nIn[1] + dir[2] * nIn[2] : null;
-  return {
-    U: dir.map((d) => d * spd),
-    magnitude: spd,
-    speed_through_face: cos != null ? spd * cos : null,
-    cos,
-  };
-}
-
-/** Hydraulic diameter of a set of faces (equivalent circle of the total area). */
-function hydraulicDiameter(faces, props) {
-  const a = facesArea(faces, props);
-  return a > 0 ? 2 * Math.sqrt(a / Math.PI) : null;
-}
-
 export function parseBoundaryPatches(boundaryPath) {
   if (!boundaryPath || !existsSync(boundaryPath)) return [];
   const text = readFileSync(boundaryPath, 'utf8');
@@ -756,47 +710,6 @@ function resolveNProcs(nCells, opts) {
   return Math.max(1, nProcs);
 }
 
-function foamHeader(cls, obj) {
-  return `FoamFile
-{
-    version     2.0;
-    format      ascii;
-    class       ${cls};
-    object      ${obj};
-}
-`;
-}
-
-function writeFoamDict(path, cls, obj, body) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, foamHeader(cls, obj) + '\n' + body.trim() + '\n', 'utf8');
-}
-
-function writeVolField(path, { object, cls, dims, internal, patches }) {
-  const lines = [
-    foamHeader(cls, object).trimEnd(),
-    '',
-    `dimensions      ${dims};`,
-    '',
-    `internalField   ${internal};`,
-    '',
-    'boundaryField',
-    '{',
-  ];
-  for (const [name, block] of Object.entries(patches)) {
-    lines.push(`    ${name}`);
-    lines.push('    {');
-    for (const [k, v] of Object.entries(block)) {
-      lines.push(`        ${k}          ${v};`);
-    }
-    lines.push('    }');
-  }
-  lines.push('}');
-  lines.push('');
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, lines.join('\n'), 'utf8');
-}
-
 /** Volumetric flow rate in m³/s for a Flow rate → Volumetric flow inlet. */
 function volumetricM3s(bc) {
   const v = Number(bc && bc.value);
@@ -857,19 +770,6 @@ function usesFlowRate(bc) {
   return /ft³\/min|ft3\/min|m³\/s|m3\/s|kg\/s|lb\/s/i.test(unit);
 }
 
-function usesVector(bc) {
-  return /vector/i.test(String((bc && bc.direction) || '')) && Array.isArray(bc && bc.vector);
-}
-
-/** Unit direction vector for a Fixed → Vector inlet; null when degenerate. */
-function inletDirection(bc) {
-  if (!usesVector(bc)) return null;
-  const v = bc.vector.map((x) => Number(x) || 0);
-  const m = Math.hypot(v[0], v[1], v[2]);
-  if (!(m > 0)) return null;
-  return v.map((x) => x / m);
-}
-
 /**
  * Representative speed of an inlet in m/s (for turbulence and the velocity
  * guard). Flow-rate inlets use the assigned face area when it is known.
@@ -882,19 +782,6 @@ function inletRefSpeed(bc, faceArea, rho) {
     return a ? (Math.abs(q) * n) / a : Math.max(1, Math.abs(q) * 1000);
   }
   return Math.abs(inletSpeedMs(bc));
-}
-
-/**
- * k / omega freestream values from turbulence intensity I and length scale L.
- * L is 7 % of the inlet hydraulic diameter (fully developed pipe flow).
- */
-function kOmegaFromScales(speed, dHyd) {
-  const U = Math.max(Math.abs(Number(speed) || 0), 0.1);
-  const I = 0.05;
-  const k = 1.5 * (I * U) * (I * U);
-  const L = Math.max(0.07 * (Number(dHyd) || 0), 1e-3);
-  const omega = Math.sqrt(k) / (0.09 ** 0.25 * L);
-  return { k, omega, I, L };
 }
 
 function loadMeshWebBcs(mesh) {
@@ -1243,470 +1130,6 @@ export function transientControlFor(ready, settings) {
     nCells: ready.mesh && ready.mesh.n_cells,
     speedRef: referenceSpeed(ready, faceProps),
   });
-}
-
-export function writeSolveCase(winOut, ready, { endTime, writeInterval, nProcs, transient }) {
-  const polySrc = ready.mesh.mesh_path;
-  const polyDst = join(winOut, 'constant', 'polyMesh');
-  mkdirSync(join(winOut, 'constant'), { recursive: true });
-  mkdirSync(join(winOut, '0'), { recursive: true });
-  mkdirSync(join(winOut, 'system'), { recursive: true });
-  // A restart (e.g. of a stopped run) must not keep iterations or monitor
-  // histories from the previous attempt.
-  try {
-    for (const d of readdirSync(winOut, { withFileTypes: true })) {
-      // Numeric time dirs other than 0 (0 is rewritten below), plus any
-      // half-copied live frame (.sync_<t>) left by an interrupted run.
-      const isTime = d.isDirectory() && /^\d+(\.\d+)?(?:[eE][+-]?\d+)?$/.test(d.name) && Number(d.name) > 0;
-      const isTmp = d.isDirectory() && d.name.startsWith('.sync_');
-      if (isTime || isTmp) rmSync(join(winOut, d.name), { recursive: true, force: true });
-    }
-  } catch {}
-  for (const stale of ['postProcessing', 'log.simpleFoam', 'log.pimpleFoam', 'log.decomposePar', 'log.reconstructPar', 'log.reconstructPar.live', 'log.livesync']) {
-    try { if (existsSync(join(winOut, stale))) rmSync(join(winOut, stale), { recursive: true, force: true }); } catch {}
-  }
-  if (existsSync(polyDst)) rmSync(polyDst, { recursive: true, force: true });
-  cpSync(polySrc, polyDst, { recursive: true });
-
-  const patchList = ready.mesh.patches.length ? ready.mesh.patches : parseBoundaryPatches(join(polyDst, 'boundary'));
-  const patchNames = patchList.map((p) => p.name);
-  const role = {};
-  for (const { bc, patch } of ready.mapped) {
-    if (isVelocityInlet(bc)) role[patch] = { kind: 'inlet', bc };
-    else if (isPressureBc(bc)) role[patch] = { kind: 'pressure', bc };
-    else if (isVelocityOutlet(bc)) role[patch] = { kind: 'velOutlet', bc };
-    else if (isWallBc(bc)) role[patch] = { kind: 'wall', bc, treatment: wallTreatment(bc) };
-  }
-  const wallDefault = ready.wallDefault || 'No-slip';
-
-  const rho = ready.air.rho || 1.196;
-  const faceProps = ready.faceProps || loadFaceProps(ready.project_id);
-
-  // Reference speed and length for turbulence: the velocity inlet(s), or for a
-  // pressure-driven case the Bernoulli speed of the pressure difference on the
-  // smallest pressure face.
-  let speedRef = 1;
-  let dHyd = null;
-  const inletsMapped = ready.mapped.filter((m) => isVelocityInlet(m.bc));
-  if (inletsMapped.length) {
-    let best = 0;
-    let bestArea = 0;
-    for (const m of inletsMapped) {
-      const a = facesArea(bcFaces(m.bc), faceProps);
-      const s = inletRefSpeed(m.bc, a / Math.max(1, bcFaces(m.bc).length), rho);
-      if (s > best) best = s;
-      if (a > bestArea) bestArea = a;
-    }
-    speedRef = Math.max(best, 0.1);
-    dHyd = bestArea > 0 ? 2 * Math.sqrt(bestArea / Math.PI) : null;
-  } else {
-    const pm = ready.mapped.filter((m) => isPressureBc(m.bc));
-    const pvals = pm.map((m) => pressurePa(m.bc));
-    if (pvals.length >= 2) {
-      const dp = Math.max(...pvals) - Math.min(...pvals);
-      speedRef = Math.max(1, Math.sqrt((2 * Math.abs(dp)) / rho));
-    }
-    let minArea = Infinity;
-    for (const m of pm) {
-      const a = facesArea(bcFaces(m.bc), faceProps);
-      if (a > 0 && a < minArea) minArea = a;
-    }
-    dHyd = Number.isFinite(minArea) ? 2 * Math.sqrt(minArea / Math.PI) : null;
-  }
-  if (!dHyd) {
-    // no CAD face data: fall back to a tenth of the smallest mesh extent
-    const b = ready.mesh && ready.mesh.bounds;
-    dHyd = b ? 0.1 * Math.min(b[1] - b[0], b[3] - b[2], b[5] - b[4]) : 0.05;
-  }
-  const speedForK = speedRef;
-  const turb = kOmegaFromScales(speedRef, dHyd);
-  const kStr = turb.k.toPrecision(6);
-  const wStr = turb.omega.toPrecision(6);
-
-  const U = {};
-  const p = {};
-  const k = {};
-  const omega = {};
-  const nut = {};
-  for (const name of patchNames) {
-    const r = role[name];
-    const kind = r ? r.kind : 'wall';
-    if (kind === 'inlet') {
-      const bc = r.bc;
-      const nFaces = Math.max(1, bcFaces(bc).length);
-      if (usesFlowRate(bc) && isMassFlow(bc) && massFlowKgs(bc) != null) {
-        // apply_per_face: every assigned face carries the value, so the patch
-        // (all faces of this BC) carries n × value
-        U[name] = {
-          type: 'flowRateInletVelocity',
-          massFlowRate: `constant ${(massFlowKgs(bc) * nFaces).toPrecision(8)}`,
-          rhoInlet: `${rho}`,
-          extrapolateProfile: 'false',
-          value: 'uniform (0 0 0)',
-        };
-      } else if (usesFlowRate(bc) && volumetricM3s(bc) != null) {
-        U[name] = {
-          type: 'flowRateInletVelocity',
-          volumetricFlowRate: `constant ${(volumetricM3s(bc) * nFaces).toPrecision(8)}`,
-          extrapolateProfile: 'false',
-          value: 'uniform (0 0 0)',
-        };
-      } else {
-        const spd = Math.abs(inletSpeedMs(bc));
-        const vec = vectorInletVelocity(bc, faceProps);
-        if (vec) {
-          const v = vec.U.map((c) => c.toPrecision(8));
-          U[name] = { type: 'fixedValue', value: `uniform (${v.join(' ')})` };
-        } else {
-          // into the domain, normal to the face (negative refValue = inflow)
-          U[name] = {
-            type: 'surfaceNormalFixedValue',
-            refValue: `uniform ${-spd}`,
-            value: 'uniform (0 0 0)',
-          };
-        }
-      }
-      p[name] = { type: 'zeroGradient' };
-      k[name] = { type: 'fixedValue', value: `uniform ${kStr}` };
-      omega[name] = { type: 'fixedValue', value: `uniform ${wStr}` };
-      nut[name] = { type: 'calculated', value: 'uniform 0' };
-    } else if (kind === 'pressure') {
-      // Static (gauge) pressure on the face. simpleFoam's p is kinematic, so
-      // Pa / rho. Flow may enter or leave: pressureInletOutletVelocity takes
-      // the velocity from the interior for outflow and normal to the face for
-      // inflow; k / omega fall back to the freestream values on inflow.
-      const pKin = pressurePa(r.bc) / rho;
-      U[name] = {
-        type: 'pressureInletOutletVelocity',
-        value: 'uniform (0 0 0)',
-      };
-      p[name] = { type: 'fixedValue', value: `uniform ${pKin.toPrecision(8)}` };
-      k[name] = { type: 'inletOutlet', inletValue: `uniform ${kStr}`, value: `uniform ${kStr}` };
-      omega[name] = { type: 'inletOutlet', inletValue: `uniform ${wStr}`, value: `uniform ${wStr}` };
-      nut[name] = { type: 'calculated', value: 'uniform 0' };
-    } else if (kind === 'velOutlet') {
-      U[name] = { type: 'inletOutlet', inletValue: 'uniform (0 0 0)', value: 'uniform (0 0 0)' };
-      p[name] = { type: 'zeroGradient' };
-      k[name] = { type: 'inletOutlet', inletValue: `uniform ${kStr}`, value: `uniform ${kStr}` };
-      omega[name] = { type: 'inletOutlet', inletValue: `uniform ${wStr}`, value: `uniform ${wStr}` };
-      nut[name] = { type: 'calculated', value: 'uniform 0' };
-    } else {
-      // Walls: explicit Wall BCs carry their own treatment; every patch no BC
-      // claims (the mesher's `walls`) takes the project default.
-      const treatment = r && r.kind === 'wall' ? r.treatment : wallDefault;
-      if (treatment === 'Slip') {
-        // Free-slip: zero normal velocity, no shear. No wall functions — there
-        // is no boundary layer to model, so turbulence just sees zero gradient.
-        U[name] = { type: 'slip' };
-        p[name] = { type: 'zeroGradient' };
-        k[name] = { type: 'zeroGradient' };
-        omega[name] = { type: 'zeroGradient' };
-        nut[name] = { type: 'calculated', value: 'uniform 0' };
-      } else {
-        U[name] = { type: 'noSlip' };
-        p[name] = { type: 'zeroGradient' };
-        k[name] = { type: 'kqRWallFunction', value: `uniform ${kStr}` };
-        omega[name] = { type: 'omegaWallFunction', value: `uniform ${wStr}` };
-        nut[name] = { type: 'nutkWallFunction', value: 'uniform 0' };
-      }
-    }
-  }
-
-  writeVolField(join(winOut, '0', 'U'), {
-    object: 'U',
-    cls: 'volVectorField',
-    dims: '[0 1 -1 0 0 0 0]',
-    internal: 'uniform (0 0 0)',
-    patches: U,
-  });
-  writeVolField(join(winOut, '0', 'p'), {
-    object: 'p',
-    cls: 'volScalarField',
-    dims: '[0 2 -2 0 0 0 0]',
-    internal: 'uniform 0',
-    patches: p,
-  });
-  writeVolField(join(winOut, '0', 'k'), {
-    object: 'k',
-    cls: 'volScalarField',
-    dims: '[0 2 -2 0 0 0 0]',
-    internal: `uniform ${kStr}`,
-    patches: k,
-  });
-  writeVolField(join(winOut, '0', 'omega'), {
-    object: 'omega',
-    cls: 'volScalarField',
-    dims: '[0 0 -1 0 0 0 0]',
-    internal: `uniform ${wStr}`,
-    patches: omega,
-  });
-  writeVolField(join(winOut, '0', 'nut'), {
-    object: 'nut',
-    cls: 'volScalarField',
-    dims: '[0 2 -1 0 0 0 0]',
-    internal: 'uniform 0',
-    patches: nut,
-  });
-
-  writeFoamDict(
-    join(winOut, 'constant', 'transportProperties'),
-    'dictionary',
-    'transportProperties',
-    `transportModel  Newtonian;
-nu              [0 2 -1 0 0 0 0] ${ready.air.nu};`
-  );
-  writeFoamDict(
-    join(winOut, 'constant', 'turbulenceProperties'),
-    'dictionary',
-    'turbulenceProperties',
-    `simulationType  RAS;
-RAS
-{
-    RASModel        kOmegaSST;
-    turbulence      on;
-    printCoeffs     on;
-}`
-  );
-
-  // Monitors: every inlet / outlet patch gets an area average of U and p and a
-  // flow-rate sum every iteration, so mass balance and the "Area average"
-  // monitors read straight from postProcessing/. Faces the user monitors that
-  // are not a BC patch cannot be sampled (they are part of "walls").
-  const monitoredPatches = new Set();
-  for (const m of ready.mapped) {
-    if (isVelocityInlet(m.bc) || isPressureBc(m.bc) || isVelocityOutlet(m.bc)) monitoredPatches.add(m.patch);
-  }
-  for (const lab of listAaFaces(ready.aa)) {
-    const owner = ready.mapped.find((m) => bcFaces(m.bc).includes(lab));
-    if (owner && patchNames.includes(owner.patch)) monitoredPatches.add(owner.patch);
-  }
-  // Transient (W30): pimpleFoam with its own controlDict / fvSchemes /
-  // fvSolution; everything else (mesh, fields, BCs, monitors) is shared.
-  const isTransient = !!transient;
-  // Steady: one monitor row per iteration. Transient: rows at a physical
-  // interval (50 per result frame; `runTime` does not clip Δt to hit them) —
-  // per-step rows with an adaptive Δt would be tens of thousands of lines.
-  const monWrite = isTransient
-    ? `writeControl    runTime;
-        writeInterval   ${Number(transient.write_interval / 50).toPrecision(6)};`
-    : `writeControl    timeStep;
-        writeInterval   1;`;
-  const aaFos = [];
-  for (const patch of monitoredPatches) {
-    aaFos.push(`    mon_${patch}
-    {
-        type            surfaceFieldValue;
-        libs            ("libfieldFunctionObjects.so");
-        ${monWrite}
-        log             true;
-        writeFields     false;
-        regionType      patch;
-        name            ${patch};
-        operation       areaAverage;
-        fields          ( U p );
-    }
-    flow_${patch}
-    {
-        type            surfaceFieldValue;
-        libs            ("libfieldFunctionObjects.so");
-        ${monWrite}
-        log             false;
-        writeFields     false;
-        regionType      patch;
-        name            ${patch};
-        operation       sum;
-        fields          ( phi );
-    }`);
-  }
-
-  const functionsText = aaFos.join('\n') || '    // no area-average probes';
-  if (isTransient) {
-    writeFoamDict(join(winOut, 'system', 'controlDict'), 'dictionary', 'controlDict', transientControlDict(transient, functionsText));
-    writeFoamDict(join(winOut, 'system', 'fvSchemes'), 'dictionary', 'fvSchemes', transientFvSchemes(transient));
-    writeFoamDict(join(winOut, 'system', 'fvSolution'), 'dictionary', 'fvSolution', transientFvSolution(transient));
-  }
-
-  if (!isTransient) writeFoamDict(
-    join(winOut, 'system', 'controlDict'),
-    'dictionary',
-    'controlDict',
-    `application     simpleFoam;
-startFrom       startTime;
-startTime       0;
-stopAt          endTime;
-endTime         ${endTime};
-deltaT          1;
-writeControl    timeStep;
-writeInterval   ${writeInterval};
-purgeWrite      0;
-writeFormat     ascii;
-writePrecision  8;
-writeCompression off;
-timeFormat      general;
-timePrecision   6;
-runTimeModifiable true;
-
-functions
-{
-${functionsText}
-}`
-  );
-
-  if (!isTransient) writeFoamDict(
-    join(winOut, 'system', 'fvSchemes'),
-    'dictionary',
-    'fvSchemes',
-    // Second-order convection for momentum (linearUpwind), first-order for the
-    // turbulence scalars — the usual steady RANS setup for hybrid hex/tet meshes.
-    `ddtSchemes { default steadyState; }
-gradSchemes
-{
-    default         Gauss linear;
-    grad(U)         cellLimited Gauss linear 1;
-    grad(k)         cellLimited Gauss linear 1;
-    grad(omega)     cellLimited Gauss linear 1;
-}
-divSchemes
-{
-    default         none;
-    div(phi,U)      bounded Gauss linearUpwind grad(U);
-    div(phi,k)      bounded Gauss upwind;
-    div(phi,omega)  bounded Gauss upwind;
-    div((nuEff*dev2(T(grad(U))))) Gauss linear;
-}
-laplacianSchemes { default Gauss linear limited corrected 0.5; }
-interpolationSchemes { default linear; }
-snGradSchemes { default limited corrected 0.5; }
-wallDist { method meshWave; }`
-  );
-
-  // Classic SIMPLE with standard relaxation. The pressure boundary fixes the
-  // pressure level, so no pRefCell. residualControl stops the run early once
-  // all initial residuals are below the tolerance.
-  if (!isTransient) writeFoamDict(
-    join(winOut, 'system', 'fvSolution'),
-    'dictionary',
-    'fvSolution',
-    `solvers
-{
-    p
-    {
-        solver          GAMG;
-        tolerance       1e-7;
-        relTol          0.01;
-        smoother        GaussSeidel;
-        nCellsInCoarsestLevel 20;
-        maxIter         200;
-    }
-    "(U|k|omega)"
-    {
-        solver          smoothSolver;
-        smoother        symGaussSeidel;
-        tolerance       1e-8;
-        relTol          0.1;
-        maxIter         50;
-    }
-}
-SIMPLE
-{
-    nNonOrthogonalCorrectors 1;
-    consistent      no;
-    residualControl { p 1e-4; U 1e-4; "(k|omega)" 1e-4; }
-}
-relaxationFactors
-{
-    fields
-    {
-        p               0.3;
-    }
-    equations
-    {
-        U               0.7;
-        k               0.7;
-        omega           0.7;
-    }
-}`
-  );
-
-  // Velocity guard against the first SIMPLE iterations overshooting on a
-  // pressure-driven start. 10x the expected speed never touches a converged
-  // solution.
-  const uMax = Math.max(50, 10 * Math.abs(speedForK));
-  writeFoamDict(
-    join(winOut, 'system', 'fvOptions'),
-    'dictionary',
-    'fvOptions',
-    `limitU
-{
-    type            limitVelocity;
-    active          yes;
-    selectionMode   all;
-    max             ${uMax.toPrecision(6)};
-}`
-  );
-
-  if (nProcs > 1) {
-    writeFoamDict(
-      join(winOut, 'system', 'decomposeParDict'),
-      'dictionary',
-      'decomposeParDict',
-      `numberOfSubdomains ${nProcs};
-method          scotch;`
-    );
-  }
-
-  writeFileSync(join(winOut, 'case.foam'), '', 'ascii');
-  writeJson(join(winOut, 'w27-case.json'), {
-    increment: INCREMENT,
-    endTime,
-    writeInterval,
-    nProcs,
-    solver: isTransient ? 'pimpleFoam' : 'simpleFoam',
-    time_dependency: isTransient ? 'Transient' : 'Steady-state',
-    ...(isTransient ? { transient } : {}),
-    nu: ready.air.nu,
-    rho,
-    patches: patchNames,
-    wall_default: wallDefault,
-    mapped: ready.mapped.map((m) => ({
-      name: m.bc.name,
-      bc_type: m.bc.bc_type,
-      patch: m.patch,
-      faces: bcFaces(m.bc),
-      value: m.bc.value,
-      unit: m.bc.unit || null,
-      ...(isWallBc(m.bc) ? { wall_type: wallTreatment(m.bc) } : {}),
-      face_area_m2: facesArea(bcFaces(m.bc), faceProps) || null,
-      ...(isVelocityInlet(m.bc) && !usesFlowRate(m.bc) && usesVector(m.bc)
-        ? (() => {
-            const vec = vectorInletVelocity(m.bc, faceProps);
-            return vec
-              ? {
-                  inlet_vector_U: vec.U,
-                  inlet_vector_cos: vec.cos,
-                  inlet_speed_through_face: vec.speed_through_face,
-                }
-              : {};
-          })()
-        : {}),
-    })),
-    monitors: Array.from(monitoredPatches),
-    turbulence: {
-      model: 'kOmegaSST',
-      intensity: turb.I,
-      length_scale_m: turb.L,
-      hydraulic_diameter_m: dHyd,
-      speed_ref_m_s: speedRef,
-      k: turb.k,
-      omega: turb.omega,
-    },
-    n_cells: ready.mesh.n_cells,
-    mesh_id: ready.mesh.mesh_id || null,
-    mesh_name: ready.mesh.mesh_name || null,
-    result_controls: (ready.aa && ready.aa.result_controls) || [],
-    numerics: isTransient ? 'pimple-linearUpwind' : 'simple-linearUpwind',
-  });
-  return { patches: patchNames, nProcs, turb };
 }
 
 function runsDir(projectId) {
@@ -2100,150 +1523,6 @@ function persistRunDoc(projectId, doc) {
   }
 }
 
-function buildSolveScript({ runId, wslWinOut, wslRunCase, nProcs, solver }) {
-  const n = Math.max(1, Number(nProcs) || 1);
-  // simpleFoam (steady) or pimpleFoam (transient). The W27_SIMPLEFOAM_* stage
-  // markers are kept verbatim for both: the progress parser keys on them.
-  const app = solver === 'pimpleFoam' ? 'pimpleFoam' : 'simpleFoam';
-  return `#!/usr/bin/env bash
-set -uo pipefail
-DST="${wslRunCase}"
-WIN_OUT="${wslWinOut}"
-NPROCS="${n}"
-RUN_ID="${runId}"
-APP="${app}"
-echo "W27_RUN_START run_id=$RUN_ID bash_pid=$$ dst=$DST nprocs=$NPROCS app=$APP increment=W27"
-if [ ! -d "$WIN_OUT/constant/polyMesh" ]; then
-  echo "W27_MESH_FAIL missing polyMesh in $WIN_OUT"
-  echo "W27_RUN_END exit=46"
-  exit 46
-fi
-rm -rf "$DST"
-mkdir -p "$DST"
-cp -a "$WIN_OUT/." "$DST/"
-cd "$DST" || exit 47
-echo "W27_CWD=$(pwd)"
-EC=0
-
-# ---- Live results ---------------------------------------------------------
-# While the solver runs, finished time directories are reconstructed (parallel)
-# and copied to the Windows run folder, so Results can be opened mid-run. A
-# time directory counts as finished once the solver has moved on to a later
-# one, or nothing in it has changed for SYNC_SETTLE seconds. Each frame lands
-# under a temporary name and is renamed into place, so the UI never sees a
-# half-copied folder.
-SYNC_EVERY=10
-SYNC_SETTLE_MIN=0.2
-sync_results() {
-  local src="$DST"
-  [ "$NPROCS" -gt 1 ] && src="$DST/processor0"
-  local newest="" t d
-  local list=()
-  for d in "$src"/[0-9]*; do
-    [ -d "$d" ] || continue
-    t=$(basename "$d")
-    [ "$t" = "0" ] && continue
-    list+=("$t")
-    if [ -z "$newest" ] || awk -v a="$t" -v b="$newest" 'BEGIN{exit !(a+0 > b+0)}'; then newest="$t"; fi
-  done
-  [ "\${#list[@]}" -gt 0 ] || return 0
-  local todo=()
-  for t in "\${list[@]}"; do
-    [ -d "$WIN_OUT/$t" ] && continue
-    if [ "$NPROCS" -gt 1 ]; then
-      # Every rank must have written this time, and none may still be writing it.
-      [ "$(ls -d "$DST"/processor*/"$t" 2>/dev/null | wc -l)" -ge "$NPROCS" ] || continue
-      [ -z "$(find "$DST"/processor*/"$t" -type f -mmin -$SYNC_SETTLE_MIN -print -quit 2>/dev/null)" ] || continue
-    elif [ "$t" = "$newest" ]; then
-      # Still being written? (any file touched in the last ~12 s)
-      [ -z "$(find "$src/$t" -type f -mmin -$SYNC_SETTLE_MIN -print -quit 2>/dev/null)" ] || continue
-    fi
-    todo+=("$t")
-  done
-  [ "\${#todo[@]}" -gt 0 ] || return 0
-  if [ "$NPROCS" -gt 1 ]; then
-    local tl; tl=$(IFS=,; echo "\${todo[*]}")
-    openfoam2606 bash -c "cd '$DST' && reconstructPar -time '$tl'" >> log.reconstructPar.live 2>&1 || true
-  fi
-  for t in "\${todo[@]}"; do
-    if [ ! -f "$DST/$t/U" ] && [ ! -f "$DST/$t/p" ]; then
-      # Reconstruction did not produce fields: drop the stub so the final
-      # reconstructPar redoes this time.
-      [ "$NPROCS" -gt 1 ] && rm -rf "$DST/$t"
-      continue
-    fi
-    rm -rf "$WIN_OUT/.sync_$t" 2>/dev/null
-    local ok=0 tries=0
-    if cp -a "$DST/$t" "$WIN_OUT/.sync_$t" 2>>log.livesync; then
-      # The rename can be refused while a Windows process (indexer, watcher)
-      # holds a handle inside the new folder; retry briefly.
-      while [ "$tries" -lt 5 ]; do
-        if mv "$WIN_OUT/.sync_$t" "$WIN_OUT/$t" 2>>log.livesync; then ok=1; break; fi
-        tries=$((tries + 1))
-        sleep 1
-      done
-    fi
-    if [ "$ok" -eq 1 ]; then
-      echo "W27_TIME_SAVED t=$t"
-    else
-      echo "W27_TIME_SYNC_RETRY t=$t" >> log.livesync
-      rm -rf "$WIN_OUT/.sync_$t" 2>/dev/null
-    fi
-  done
-  # Monitor histories (Graphs) update alongside the frames.
-  if [ -d postProcessing ]; then cp -a postProcessing "$WIN_OUT/" 2>/dev/null || true; fi
-  return 0
-}
-live_sync_loop() {
-  local n=0
-  while kill -0 "$1" 2>/dev/null; do
-    sleep 2
-    n=$((n + 2))
-    if [ "$n" -ge "$SYNC_EVERY" ]; then n=0; sync_results; fi
-  done
-}
-
-if [ "$NPROCS" -gt 1 ]; then
-  echo "W27_DECOMPOSE_BEGIN n=$NPROCS"
-  openfoam2606 bash -c "cd '$DST' && decomposePar -force" 2>&1 | tee log.decomposePar
-  EC=\${PIPESTATUS[0]}
-  echo "W27_DECOMPOSE_END exit=$EC"
-  if [ "$EC" -ne 0 ]; then
-    echo "W27_RUN_END exit=$EC"
-    exit $EC
-  fi
-  echo "W27_SIMPLEFOAM_BEGIN parallel n=$NPROCS app=$APP"
-  ( openfoam2606 bash -c "cd '$DST' && mpirun -np $NPROCS $APP -parallel" 2>&1 | tee "log.$APP"; exit "\${PIPESTATUS[0]}" ) &
-  SOLVER_PID=$!
-  live_sync_loop "$SOLVER_PID"
-  wait "$SOLVER_PID"
-  EC=$?
-  echo "W27_SIMPLEFOAM_END exit=$EC"
-  openfoam2606 bash -c "cd '$DST' && reconstructPar -newTimes" 2>&1 | tee log.reconstructPar || true
-else
-  echo "W27_SIMPLEFOAM_BEGIN serial app=$APP"
-  ( openfoam2606 bash -c "cd '$DST' && $APP" 2>&1 | tee "log.$APP"; exit "\${PIPESTATUS[0]}" ) &
-  SOLVER_PID=$!
-  live_sync_loop "$SOLVER_PID"
-  wait "$SOLVER_PID"
-  EC=$?
-  echo "W27_SIMPLEFOAM_END exit=$EC"
-fi
-mkdir -p "$WIN_OUT"
-for d in "log.$APP" log.decomposePar log.reconstructPar log.reconstructPar.live log.livesync postProcessing; do
-  [ -e "$d" ] && cp -a "$d" "$WIN_OUT/" 2>/dev/null || true
-done
-for d in [0-9]*; do
-  [ -d "$d" ] || continue
-  # Frames already copied live are complete; only bring over the rest.
-  if [ "$d" != "0" ] && [ -d "$WIN_OUT/$d" ]; then continue; fi
-  cp -a "$d" "$WIN_OUT/" 2>/dev/null || true
-done
-echo "W27_RUN_END exit=$EC win_out=$WIN_OUT"
-exit $EC
-`;
-}
-
 export function startSolve({ projectId, endTime, writeInterval, runId, transient: transientIn } = {}) {
   if (liveRun && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) {
     return {
@@ -2323,8 +1602,7 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
   mkdirSync(winOut, { recursive: true });
   mkdirSync(REPORT_DIR, { recursive: true });
 
-  // Phase 1 land4: Python prepare_run writes the case; job-runner spawns run_solve.
-  // writeSolveCase / buildSolveScript remain in this file until land5 soft-pass kill.
+  // Phase 1: Python prepare_run writes the case; job-runner spawns run_solve.
   const prepArgs = [
     pyTool('prepare_run.py'),
     '--project-dir',
@@ -2542,7 +1820,7 @@ export function stopSolve({ projectId } = {}) {
     };
   }
   const caseId = run.wsl_case || '';
-  const caseQ = caseId.startsWith('/') ? caseId : wslCasePath(caseId);
+  const caseQ = run.wsl_case_path || (caseId.startsWith('/') ? caseId : wslCasePath(caseId));
   if (run.stop_requested) {
     // Second click: the graceful stop is still draining — force it.
     killSolveNow(run);
@@ -2603,7 +1881,7 @@ const STOP_GRACE_MS = 120000;
 
 function killSolveNow(run) {
   const caseId = run.wsl_case || '';
-  const caseQ = caseId.startsWith('/') ? caseId : wslCasePath(caseId);
+  const caseQ = run.wsl_case_path || (caseId.startsWith('/') ? caseId : wslCasePath(caseId));
   try {
     run.child.kill();
   } catch {}
