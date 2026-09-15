@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * GET/POST /api/prefs and POST /api/prefs/hardware-check
  */

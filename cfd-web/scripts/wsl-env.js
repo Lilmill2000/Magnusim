@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * WSL distro + case root for this machine.
  *

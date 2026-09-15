@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * A case_dir may only be served for the project folder it lives under.
  * Home lists every project; workbench APIs must not leak another project's mesh.

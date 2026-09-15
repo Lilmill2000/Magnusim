@@ -46,7 +46,18 @@ const phase0Rules = {
 };
 
 export default [
-  { ignores: ['node_modules/**', 'dist/**', 'python/**', 'projects/**', '.cache/**', 'e2e/**'] },
+  {
+    ignores: [
+      'node_modules/**',
+      'dist/**',
+      'python/**',
+      'projects/**',
+      '.cache/**',
+      'e2e/**',
+      'scripts/diag-*.cjs',
+      'scripts/prove-*.cjs',
+    ],
+  },
   js.configs.recommended,
   {
     files: ['src/**/*.{js,mjs,cjs}'],

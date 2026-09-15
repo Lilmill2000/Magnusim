@@ -5,6 +5,9 @@ python/**/__pycache__/
 *.py[cod]
 .cache/
 projects/
+!python/tests/fixtures/projects/
+!python/tests/fixtures/projects/**
+e2e/.tmp-projects/
 .magnusim-local.json
 .cfddesk-local.json
 .magnusim-ready

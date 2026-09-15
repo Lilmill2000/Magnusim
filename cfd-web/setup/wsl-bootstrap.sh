@@ -74,10 +74,40 @@ fi
 
 python3 - <<PY
 import json
+import subprocess
+
+def _run(argv):
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        return r.returncode, (r.stdout or ""), (r.stderr or "")
+    except Exception:
+        return 1, "", ""
+
+def openfoam_version():
+    code, out, _ = _run(["openfoam2606", "bash", "-c", 'printf %s "$WM_PROJECT_VERSION"'])
+    s = out.strip()
+    if code == 0 and s:
+        return s
+    code, out, _ = _run(["openfoam2606", "bash", "-c", "foamVersion"])
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return lines[-1] if code == 0 and lines else ""
+
+def cfmesh_version(present):
+    if present != "yes":
+        return ""
+    for pkg in ("cfmesh-openfoam2606", "openfoam2606-cfmesh"):
+        code, out, _ = _run(["dpkg-query", "-W", "-f=${Version}", pkg])
+        s = out.strip()
+        if code == 0 and s:
+            return s
+    return "present"
+
 print(json.dumps({
     "user": "$TARGET_USER",
     "home": "$HOME_DIR",
     "cases": "$HOME_DIR/cases",
     "cartesianMesh": "$CFMESH",
+    "openfoam_version": openfoam_version(),
+    "cfmesh_version": cfmesh_version("$CFMESH"),
 }))
 PY

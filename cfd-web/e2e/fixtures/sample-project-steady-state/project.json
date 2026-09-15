@@ -1,0 +1,33 @@
+{
+  "id": "sample-project-steady-state-e2e",
+  "title": "Sample project steady-state",
+  "description": "Isolated Playwright fixture (not live projects/)",
+  "category": "Other",
+  "units": "Metric",
+  "folder": "My Projects",
+  "created_at": "2026-01-01T00:00:00.000Z",
+  "updated_at": "2026-01-01T00:00:00.000Z",
+  "geometry": {
+    "id": "geom-e2e",
+    "name": "Elbow",
+    "bodies": ["Body1"],
+    "volume": "Body1",
+    "step_path": "geometry/source.step",
+    "source_kind": "step",
+    "representation": "step",
+    "tessellated": false
+  },
+  "geometries": [
+    {
+      "id": "geom-e2e",
+      "name": "Elbow",
+      "step_path": "geometry/source.step",
+      "source_kind": "step",
+      "representation": "step",
+      "n_solids": 1,
+      "assembly_bodies": ["Body1"]
+    }
+  ],
+  "active_geometry_id": "geom-e2e",
+  "increment": "W16"
+}

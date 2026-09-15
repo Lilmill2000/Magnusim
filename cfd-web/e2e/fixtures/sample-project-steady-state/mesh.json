@@ -1,0 +1,46 @@
+{
+  "id": "mesh_1",
+  "project_id": "sample-project-steady-state-e2e",
+  "simulation_id": "sim_1",
+  "geometry_id": "geom-e2e",
+  "name": "Mesh 1",
+  "active_id": "mesh_1",
+  "ui_mesh_engine": "standard",
+  "settings": {
+    "name": "Mesh 1",
+    "algorithm": "Standard",
+    "sizing": "Automatic",
+    "fineness": 5,
+    "curvature": "Automatic",
+    "automatic_boundary_layers": true,
+    "physics_based_meshing": true,
+    "hex_element_core": true,
+    "advanced": {
+      "small_feature_suppression": "",
+      "small_feature_suppression_unit": "m",
+      "gap_refinement_factor": 0.05,
+      "global_gradation_rate": 1.22,
+      "mesh_engine": "standard"
+    }
+  },
+  "generated": false,
+  "live_mesh_result": null,
+  "meshes": [
+    {
+      "id": "mesh_1",
+      "name": "Mesh 1",
+      "simulation_id": "sim_1",
+      "geometry_id": "geom-e2e",
+      "ui_mesh_engine": "standard",
+      "settings": {
+        "name": "Mesh 1",
+        "algorithm": "Standard",
+        "sizing": "Automatic",
+        "fineness": 5,
+        "hex_element_core": true,
+        "advanced": { "mesh_engine": "standard" }
+      },
+      "generated": false
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "sim_1",
+  "name": "Incompressible Steady-state",
+  "analysis": "Incompressible",
+  "time_dependency": "Steady-state",
+  "algorithm": "SIMPLE",
+  "turbulence_model": "k-omega SST",
+  "geometry_id": "geom-e2e",
+  "geometry_name": "Elbow",
+  "geometry_body": "Body1"
+}

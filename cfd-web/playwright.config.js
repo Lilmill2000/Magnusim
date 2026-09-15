@@ -1,7 +1,10 @@
 import { defineConfig } from '@playwright/test';
+import { prepareE2eProjectsRoot } from './e2e/prepare-projects.js';
 
-const PORT = (process.env.MAGNUSIM_BOUND_PORT || process.env.CFDDESK_BOUND_PORT || '8082');
+const PORT = process.env.MAGNUSIM_E2E_PORT || '8083';
 const baseURL = `http://127.0.0.1:${PORT}`;
+const projectsRoot = process.env.MAGNUSIM_E2E_PROJECTS_ROOT || prepareE2eProjectsRoot();
+process.env.MAGNUSIM_PROJECTS_ROOT = projectsRoot;
 
 export default defineConfig({
   testDir: './e2e',
@@ -17,7 +20,13 @@ export default defineConfig({
   webServer: {
     command: 'npm run dev',
     url: baseURL,
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 120_000,
+    env: {
+      ...process.env,
+      MAGNUSIM_PROJECTS_ROOT: projectsRoot,
+      MAGNUSIM_PORT: String(PORT),
+      MAGNUSIM_BOUND_PORT: String(PORT),
+    },
   },
 });

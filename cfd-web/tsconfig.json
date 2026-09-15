@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "allowJs": true,
-    "checkJs": false,
+    "checkJs": true,
     "noEmit": true,
     "target": "ES2022",
     "module": "ESNext",
@@ -10,5 +10,12 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["scripts/**/*.js"]
+  "include": ["scripts/**/*.js"],
+  "exclude": [
+    "scripts/__tests__/**",
+    "scripts/vite-plugin-case-fields.js",
+    "scripts/w16-project-geometry.js",
+    "scripts/w21-mesh-generate.js",
+    "scripts/w27-solve.js"
+  ]
 }

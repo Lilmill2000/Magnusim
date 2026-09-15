@@ -1,0 +1,421 @@
+{
+  "version": 6,
+  "units": {
+    "native_unit": "MM",
+    "declared_unit": "INCH",
+    "scale_to_metres": 0.001,
+    "confirmed": true,
+    "ambiguous": true,
+    "notes": [
+      "Multiple length-unit kinds in STEP text: ['INCH', 'M', 'MM']",
+      "Geometric context unit is INCH but OCCT cascade unit is MM (shape coordinates are in MM). Confirm which scale applies."
+    ]
+  },
+  "results": {
+    "color_scale": {
+      "mode": "auto",
+      "vmin": null,
+      "vmax": null,
+      "field": "magU",
+      "cmap": "coolwarm"
+    },
+    "window": {
+      "x": null,
+      "y": null,
+      "width": 1000,
+      "height": 700
+    },
+    "display": {
+      "boundary_mode": "translucent",
+      "geometry_rep": "step_solid",
+      "density_kg_m3": null,
+      "field_unit": "m/s"
+    },
+    "filters": [
+      {
+        "id": "6d28deefa78c",
+        "type": "cut_plane",
+        "visible": true,
+        "orientation": "Y",
+        "position": 0.5,
+        "coloring": "Velocity Magnitude",
+        "vectors": false,
+        "opacity": 0.9,
+        "clip_model": false,
+        "show_edges": false
+      }
+    ],
+    "views": [],
+    "screenshots": [],
+    "records": []
+  },
+  "paths": {
+    "wsl_case_id": "",
+    "local_case": "case",
+    "local_results": "results"
+  },
+  "geometries": [
+    {
+      "id": "bb7e642d6f8d",
+      "name": "Geometry 1",
+      "step_path": "C:\\Users\\drmil\\Desktop\\Code\\CFD\\cfd-web\\projects\\sample-project-steady-state-20260914220621-a75ad1\\geometry\\source.step",
+      "faces": [
+        {
+          "id": 0,
+          "centroid": [
+            23.09024567747947,
+            120.89816293663216,
+            294.35957685572197
+          ],
+          "area": 1140.665661300381,
+          "bc_id": "bae67f0cb08b"
+        },
+        {
+          "id": 1,
+          "centroid": [
+            0.0,
+            -1.7763568394002505e-15,
+            5.6799111077190645
+          ],
+          "area": 7773.300458196831,
+          "bc_id": "13736986ccc3"
+        },
+        {
+          "id": 2,
+          "centroid": [
+            -2.04820895955328,
+            -3.638271243046759,
+            177.8936071426394
+          ],
+          "area": 160151.32889572295,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 3,
+          "centroid": [
+            7.105427357601002e-15,
+            2.842170943040401e-14,
+            9.298117831235681e-15
+          ],
+          "area": 60936.27767826311,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 4,
+          "centroid": [
+            47.684911196725196,
+            113.79557808763487,
+            293.83759558338585
+          ],
+          "area": 170.50148658678486,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 5,
+          "centroid": [
+            82.43118526119852,
+            81.25160315650328,
+            270.0443659819495
+          ],
+          "area": 652.8778068712711,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 6,
+          "centroid": [
+            76.11150770575891,
+            102.4505357622423,
+            303.6735078032135
+          ],
+          "area": 42.07927088486675,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 7,
+          "centroid": [
+            96.70340328818145,
+            84.280015341555,
+            303.614162029979
+          ],
+          "area": 62.77469948290648,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 8,
+          "centroid": [
+            89.48403322518207,
+            103.27988067029898,
+            276.45976248871756
+          ],
+          "area": 9053.314716698731,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 9,
+          "centroid": [
+            127.0,
+            93.89807552983325,
+            279.4
+          ],
+          "area": 2026.8299163899912,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 10,
+          "centroid": [
+            -1.9036405404534008e-15,
+            -5.684341886080802e-14,
+            254.0
+          ],
+          "area": 833.7243251275236,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 11,
+          "centroid": [
+            1.518364548058404e-18,
+            3.552713678800501e-15,
+            279.4
+          ],
+          "area": 8107.319665559958,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 12,
+          "centroid": [
+            6.78018574481474e-16,
+            -7.105427357601002e-15,
+            304.79999999999995
+          ],
+          "area": 2026.8299163899908,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 13,
+          "centroid": [
+            7.024606734184283e-15,
+            5.684341886080802e-14,
+            -508.00000000000006
+          ],
+          "area": 72965.87699003967,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 14,
+          "centroid": [
+            6.559717429696056e-15,
+            0.0,
+            -253.99999999999997
+          ],
+          "area": 486439.1799335978,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 15,
+          "centroid": [
+            0.0,
+            0.0,
+            304.79999999999995
+          ],
+          "area": 47810.193668232256,
+          "bc_id": "a197d196ebfb"
+        },
+        {
+          "id": 16,
+          "centroid": [
+            -7.575098484999474e-16,
+            3.552713678800501e-15,
+            279.4
+          ],
+          "area": 9631.495762685228,
+          "bc_id": "a197d196ebfb"
+        }
+      ],
+      "volumes": [
+        {
+          "id": "solid-0",
+          "name": "Solid 1",
+          "face_ids": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16
+          ]
+        }
+      ]
+    }
+  ],
+  "simulations": [
+    {
+      "id": "71145a57e403",
+      "name": "Incompressible",
+      "analysis_type": "incompressible",
+      "geometry_id": "bb7e642d6f8d",
+      "materials": [
+        {
+          "id": "air-1",
+          "name": "Air",
+          "library_key": "air",
+          "viscosity_model": "Newtonian",
+          "nu": 1.5e-05,
+          "rho": 1.204,
+          "volume_ids": [
+            "solid-0"
+          ]
+        }
+      ],
+      "initial_conditions": {},
+      "boundary_conditions": [
+        {
+          "id": "bae67f0cb08b",
+          "name": "Velocity inlet 1",
+          "patch_name": "inlet",
+          "type": "velocity_inlet_fixed",
+          "variant": "fixed_value",
+          "settings": {
+            "direction_mode": "normal",
+            "speed_m_s": 0.5,
+            "velocity": [
+              -1.0,
+              0.0,
+              0.0
+            ],
+            "temperature_K": 293.15
+          },
+          "face_ids": [
+            0
+          ],
+          "refinement_level": 2
+        },
+        {
+          "id": "13736986ccc3",
+          "name": "Pressure outlet 1",
+          "patch_name": "outlet",
+          "type": "pressure_outlet_gauge",
+          "variant": "fixed_gauge",
+          "settings": {
+            "gauge_pressure": 0.0
+          },
+          "face_ids": [
+            1
+          ],
+          "refinement_level": 2
+        },
+        {
+          "id": "a197d196ebfb",
+          "name": "Wall no-slip 1",
+          "patch_name": "walls",
+          "type": "wall_noslip",
+          "variant": "noslip",
+          "settings": {
+            "thermal_mode": "adiabatic",
+            "temperature_K": 293.15,
+            "heat_flux_W_m2": 0.0,
+            "htc_W_m2K": 10.0,
+            "ambient_T_K": 293.15
+          },
+          "face_ids": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16
+          ],
+          "refinement_level": 1
+        }
+      ],
+      "advanced_concepts": {},
+      "numerics": {},
+      "simulation_control": {},
+      "result_control": {},
+      "solver": {
+        "mode": "steady",
+        "backend": "cpu",
+        "end_condition": "residual",
+        "end_time": 1000,
+        "residual_u": 1e-06,
+        "residual_p": 1e-06,
+        "turbulence": "laminar",
+        "turbulence_intensity_pct": 5.0,
+        "warm_start": false,
+        "energy": false
+      },
+      "boundary": {
+        "inlet_speed_m_s": 0.5,
+        "inlet_direction_mode": "normal",
+        "inlet_vector": [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        "outlet_p": 0.0,
+        "walls_type": "noSlip"
+      },
+      "meshes": [
+        {
+          "id": "ddb687aabeaf",
+          "name": "Mesh 1",
+          "settings": {
+            "base_cell_m": 0.025,
+            "refinement": {
+              "inlet": 2,
+              "outlet": 2,
+              "walls": 1
+            },
+            "location_in_mesh": null,
+            "location_source": "auto",
+            "min_cells_across_passage": 3.0,
+            "stl_facet_to_cell_ratio": 0.3333333333333333,
+            "fineness": 5,
+            "sizing_mode": "automatic",
+            "physics_based": true,
+            "add_layers": false,
+            "max_meshing_runtime_s": 18000.0,
+            "algorithm": "standard",
+            "hex_element_core": true,
+            "hexcore_backend": "cfmesh",
+            "bbox_resolution_x": 0,
+            "bbox_resolution_y": 0,
+            "bbox_resolution_z": 0,
+            "max_local_cells": 40000000,
+            "max_global_cells": 100000000,
+            "min_refinement_cells": 1,
+            "max_load_unbalance": 0.2,
+            "cells_between_levels": 3,
+            "resolve_feature_angle": 30.0,
+            "allow_free_standing_zone_faces": false
+          },
+          "results_subdir": "results",
+          "refinements": []
+        }
+      ],
+      "runs": [],
+      "active_mesh_id": "ddb687aabeaf",
+      "active_run_id": ""
+    }
+  ],
+  "field_units": {}
+}

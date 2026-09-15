@@ -34,6 +34,7 @@ test.describe('Magnusim smoke', () => {
       const id = String(p.id || '');
       const title = String(p.title || p.name || '');
       return (
+        id === 'sample-project-steady-state-e2e' ||
         id.startsWith('sample-project-steady-state') ||
         /sample.*steady/i.test(title)
       );

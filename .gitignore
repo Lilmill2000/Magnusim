@@ -18,6 +18,7 @@ cfd-web/.magnusim-ready
 cfd-web/.cfddesk-ready
 cfd-web/dist/
 cfd-web/test-results/
+cfd-web/e2e/.tmp-projects/
 cfd-web/playwright-report/
 cfd-web/blob-report/
 cfd-web/playwright/.cache/

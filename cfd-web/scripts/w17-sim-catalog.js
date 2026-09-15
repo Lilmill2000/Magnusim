@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Multi-study catalog: projects/<id>/simulations.json
  * Active study is also mirrored to simulation.json for older readers.

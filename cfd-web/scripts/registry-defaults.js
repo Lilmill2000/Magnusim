@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Phase 2 land13 — thin dual-defaults consumer.
  * Reads committed scripts/generated/registry.json so W17 / MESH_ENGINES

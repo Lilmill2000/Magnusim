@@ -38,3 +38,29 @@ def test_location_quantum_helper():
     base = (0.1, 0.2, 0.3)
     delta = LOCATION_FINGERPRINT_QUANTUM_M * 0.1
     assert quantize_location_m(base) == quantize_location_m((base[0] + delta, base[1], base[2]))
+
+
+def test_fingerprint_stable_under_sub_quantum_location_move():
+    doc = json.loads((PROJECTS / "v13.json").read_text(encoding="utf-8"))
+    proj = Project.from_dict(doc)
+    sim = proj.primary_simulation()
+    assert sim and sim.meshes
+    m0 = sim.meshes[0]
+    loc = m0.settings.location_in_mesh or (0.1, 0.2, 0.3)
+    if m0.settings.location_in_mesh is None:
+        m0 = replace(m0, settings=replace(m0.settings, location_in_mesh=loc))
+        sim = replace(sim, meshes=[m0])
+        proj = replace(
+            proj,
+            simulations=[sim if s.id == sim.id else s for s in proj.simulations],
+        )
+    fp1 = proj.mesh_input_fingerprint()
+    delta = LOCATION_FINGERPRINT_QUANTUM_M * 0.1
+    nudged = (loc[0] + delta, loc[1], loc[2])
+    new_mesh = replace(m0, settings=replace(m0.settings, location_in_mesh=nudged))
+    new_sim = replace(sim, meshes=[new_mesh])
+    moved = replace(
+        proj,
+        simulations=[new_sim if s.id == sim.id else s for s in proj.simulations],
+    )
+    assert moved.mesh_input_fingerprint() == fp1

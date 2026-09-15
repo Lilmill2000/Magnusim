@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Which geometry is active, and whether a setup record belongs to it.
  * Records with no geometry_id belong to the project's first / primary geometry
