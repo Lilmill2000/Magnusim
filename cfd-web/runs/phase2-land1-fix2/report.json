@@ -1,0 +1,48 @@
+﻿{
+  "phase": "Phase 2",
+  "land": "land1-fix2",
+  "title": "EP _LOADED residual: entry-point load/non-callable failures feed had_failures; prune land1-fix backup",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 02:13:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "f09aaa053afb95883a30e6ab3d0eb684ae8aa7c4",
+  "commit_sha": "c7d1ec54f7f52f7f79c4353b8a7f34cc81b88aa5",
+  "commit_short": "c7d1ec5",
+  "tests": {
+    "unit_suite": "123 passed",
+    "land1_fix2_focused": "18 passed (test_registry.py)"
+  },
+  "fixes": [
+    "_entry_point_callables: return (callables, had_failures); ep.load() exceptions and non-callable results set had_failures",
+    "discover_entry_points: seed had_failures from EP load failures so load_all keeps _LOADED False and retries without force",
+    "Deleted untracked cfd-web/runs/phase2-land1-fix/backup/ leftover pre-fix copies"
+  ],
+  "files_touched": {
+    "modified": [
+      "cfd-web/python/cfddesk/registry/discovery.py",
+      "cfd-web/python/tests/unit/test_registry.py"
+    ],
+    "added": [
+      "cfd-web/runs/phase2-land1-fix2/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land1-fix2/report.json"
+    ],
+    "deleted_untracked": [
+      "cfd-web/runs/phase2-land1-fix/backup/"
+    ]
+  },
+  "NOT_yet_done": [
+    "AnalysisType + incompressible_steady/transient builtins (p2-analysis-type / land2)",
+    "SolverBackend / MeshBackend / BC wrap / Material / Monitor / ResultFilter",
+    "No JS/UI / Phase 3+"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done; land1-fix2 is EP _LOADED honesty + clutter prune only — no AnalysisType/Solver/Mesh/Material/Monitor/Filter specs yet; UI unchanged.",
+  "notes": [
+    "cfMesh / HEXCORE-PROCESS-BACKUP-2026-09-02 untouched.",
+    "No JS changes; :8082 / tunnel not touched.",
+    "Did not push.",
+    "backup/ was untracked leftover; removed from disk (never in git).",
+    "New tests: test_load_all_retries_after_ep_load_failure, test_ep_non_callable_feeds_had_failures."
+  ]
+}
