@@ -8,8 +8,8 @@
   "timestamp_local": "2026-09-15 04:55:53 CT",
   "machine": "Timmy",
   "baseline_HEAD": "3f4ca8429856d825479808f0543418337389ea44",
-  "commit_sha": "PENDING_LAND_COMMIT",
-  "commit_short": "PENDING",
+  "commit_sha": "f478c62dfd741d968d0d013761bf46328a37bd8a",
+  "commit_short": "f478c62",
   "tests": {
     "land10_focused": "11 passed (test_phase2_registry_sweep 7 + test_registry_dump 4)",
     "unit_suite": "191 passed"
