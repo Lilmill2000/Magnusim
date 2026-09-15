@@ -22,6 +22,7 @@ import {
 } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
 import { writeProjectCli, writeJsonCli } from './py-json.js';
+import { buildW17DefaultsFromRegistry } from './registry-defaults.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -29,16 +30,8 @@ const _projectsRoot = envGet('PROJECTS_ROOT');
 const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
-export const W17_DEFAULTS = {
-  analysis: 'Incompressible',
-  analysis_title: 'Incompressible Fluid Flow',
-  category: 'FLUID DYNAMICS',
-  flow_group: 'FLOW',
-  turbulence_model: 'k-omega SST',
-  time_dependency: 'Steady-state',
-  algorithm: 'SIMPLE',
-  passive_species: '0',
-};
+/** Dump-backed defaults (scripts/generated/registry.json). */
+export const W17_DEFAULTS = buildW17DefaultsFromRegistry();
 
 function readActiveId() {
   if (!existsSync(ACTIVE_PATH)) return null;

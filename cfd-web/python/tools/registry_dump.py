@@ -7,7 +7,7 @@ Prints (or writes) JSON:
   {analysis, solver, mesher, bc, material, monitor, filter, plugins, missing}
 
 Uses existing load_all / Registry.describe / check_requirements.
-Does not rewrite W17 / MESH_ENGINES consumers; dual-defaults stay carry.
+land13: W17 / MESH_ENGINES consumers read scripts/generated/registry.json via registry-defaults.js.
 
 --check: dump live registry and fail (exit 1) if committed
 scripts/generated/registry.json differs (stale golden).

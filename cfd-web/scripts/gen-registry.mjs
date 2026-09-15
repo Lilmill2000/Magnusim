@@ -1,6 +1,6 @@
 /**
  * Optional npm helper: regenerate scripts/generated/registry.json
- * from python/tools/registry_dump.py. Does NOT wire W17 consumers.
+ * from python/tools/registry_dump.py. Consumers: scripts/registry-defaults.js (land13).
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

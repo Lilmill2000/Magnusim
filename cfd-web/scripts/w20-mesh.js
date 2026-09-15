@@ -25,6 +25,10 @@ import { firstLegacySimId, getActiveSimulation, listSimulations, writeActiveMirr
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
 import { pyJsonSync, writeProjectCli } from './py-json.js';
+import {
+  MESH_ENGINES,
+  buildMeshDefaultsFromRegistry,
+} from './registry-defaults.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -32,10 +36,12 @@ const _projectsRoot = envGet('PROJECTS_ROOT');
 const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
-/** Exact bank labels — HARD, no invent */
+const _meshReg = buildMeshDefaultsFromRegistry();
+
+/** Exact bank labels — HARD, no invent; algorithm + mesh_engine from registry dump */
 export const W20_DEFAULTS = {
   name: 'Mesh 1',
-  algorithm: 'Standard',
+  algorithm: _meshReg.algorithm_label,
   sizing: 'Automatic',
   fineness: 5,
   fineness_labels: { coarse: 'COARSE', fine: 'FINE' },
@@ -55,12 +61,12 @@ export const W20_DEFAULTS = {
     small_feature_suppression_unit: 'm',
     gap_refinement_factor: 0.05,
     global_gradation_rate: 1.22,
-    /* 'standard' (gmsh surface + hex core + layers) or 'cfmesh' (legacy cartesianMesh) */
-    mesh_engine: 'standard',
+    /* dump-backed: 'standard' or 'cfmesh' (MESH_ENGINES from registry.json) */
+    mesh_engine: _meshReg.mesh_engine,
   },
 };
 
-const MESH_ENGINES = new Set(['standard', 'cfmesh']);
+export { MESH_ENGINES };
 /* Old projects stored the fixed SimScale example value; treat it as automatic. */
 const LEGACY_SFS_DEFAULT = '4.227e-6';
 
