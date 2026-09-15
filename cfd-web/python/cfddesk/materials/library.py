@@ -43,8 +43,14 @@ def by_key(key: str) -> LibraryMaterial:
     raise KeyError(key)
 
 
-def default_air_dict(*, material_id: str, volume_ids: list[str] | None = None) -> dict[str, Any]:
+def default_air_dict(
+    *,
+    material_id: str,
+    volume_ids: list[str] | None = None,
+    body_ids: list[str] | None = None,
+) -> dict[str, Any]:
     air = by_key("air")
+    ids = list(body_ids if body_ids is not None else (volume_ids or []))
     return {
         "id": material_id,
         "name": air.name,
@@ -52,7 +58,8 @@ def default_air_dict(*, material_id: str, volume_ids: list[str] | None = None) -
         "viscosity_model": air.viscosity_model,
         "nu": air.nu,
         "rho": air.rho,
-        "volume_ids": list(volume_ids or []),
+        "body_ids": ids,
+        "volume_ids": list(ids),  # legacy alias
     }
 
 

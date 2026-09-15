@@ -1,0 +1,69 @@
+﻿{
+  "phase": "Phase 2",
+  "land": "land7",
+  "title": "Geometry bodies/regions (v14); fingerprint soft-pass for single-fluid",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 04:05:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "845d24bd13a8b0f3d7e6a78354a7fee28159f2a6",
+  "commit_sha": "PENDING",
+  "commit_short": "PENDING",
+  "tests": {
+    "unit_suite": "174 passed",
+    "land7_focused": "20 passed (test_geometry_bodies + test_fingerprints + test_project_migrations)"
+  },
+  "mesh_fingerprint": {
+    "fixture": "tests/fixtures/projects/v13.json",
+    "before_v14_baseline_HEAD_845d24b": "1fe52a19f6e6f90a",
+    "after_v14_upgrade": "1fe52a19f6e6f90a",
+    "match": true,
+    "bodies_in_payload_single_fluid": false,
+    "note": "bodies only enter _mesh_fingerprint_payload when any body.role != fluid OR more than one region"
+  },
+  "landed": [
+    "hierarchy.Body + Geometry.bodies; volumes read-only alias; regions()",
+    "PROJECT_VERSION 14 + _upgrade_to_v14 (volumes→bodies fluid/fluid; materials body_ids)",
+    "BC optional region: str | None",
+    "materials body_ids with volume_ids mirrored alias; assign_bodies/faces_for_bodies",
+    "fingerprint gate for bodies",
+    "validate_multi_region_meshing (MeshBackend.multi_region stays False)",
+    "AnalysisType region_roles via run_analysis_validate / incompressible validate",
+    "tests/unit/test_geometry_bodies.py",
+    "plan p2-geometry-regions -> completed (soft-pass)"
+  ],
+  "NOT_yet_done": [
+    "analysis_type incompressible → incompressible_steady/transient remap (OUT this land)",
+    "web-json v15 collapse",
+    "JS / W17 / registry_dump",
+    "MeshBackend.multi_region=True / multi-region mesh enable (Phase 6)",
+    "write_case goldens / AnalysisType.write_case wiring",
+    "soft-pass != Phase 2 done"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done. land7 is geometry bodies/regions v14 + fingerprint soft-pass only. No analysis_type remap, no web-json v15, no JS, no multi-region mesh enable, no write_case goldens, no Phase 3+.",
+  "files_touched": {
+    "added": [
+      "cfd-web/python/tests/unit/test_geometry_bodies.py",
+      "cfd-web/runs/phase2-land7/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land7/report.json"
+    ],
+    "modified": [
+      "cfd-web/python/cfddesk/project/hierarchy.py",
+      "cfd-web/python/cfddesk/project/model.py",
+      "cfd-web/python/cfddesk/materials/library.py",
+      "cfd-web/python/cfddesk/registry/mesher.py",
+      "cfd-web/python/cfddesk/registry/analysis.py",
+      "cfd-web/python/cfddesk/registry/__init__.py",
+      "cfd-web/python/cfddesk/builtin/incompressible.py",
+      "cfd-web/python/tests/unit/test_project_migrations.py",
+      ".cursor/Plans/phase2_registries_and_plugin_core.plan.md"
+    ]
+  },
+  "notes": [
+    "PRIMARY_SIM_ANALYSIS remains free-string incompressible (no remap).",
+    "MeshBackend.multi_region remains False on all builtins.",
+    "No leftover backup/ clutter dirs.",
+    "Did not push."
+  ]
+}

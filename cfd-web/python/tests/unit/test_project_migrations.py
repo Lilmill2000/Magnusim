@@ -1,5 +1,5 @@
 
-"""Fixture-based Project.from_dict migrations v5..v13."""
+"""Fixture-based Project.from_dict migrations v5..v13 → current PROJECT_VERSION."""
 from __future__ import annotations
 
 import json
@@ -13,7 +13,7 @@ from tests.conftest import PROJECTS
 
 
 @pytest.mark.parametrize("ver", list(range(5, 14)))
-def test_migrate_to_v13(ver):
+def test_migrate_to_current(ver):
     path = PROJECTS / f"v{ver}.json"
     if not path.is_file():
         pytest.skip(f"missing {path.name}")

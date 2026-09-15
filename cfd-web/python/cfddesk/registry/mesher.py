@@ -46,3 +46,38 @@ def analysis_has_mesh_bags(hub: "RegistryHub") -> bool:
         if hasattr(spec, "default_mesher") or hasattr(spec, "meshers"):
             return True
     return False
+
+
+def geometry_region_count(project: Any) -> int:
+    """Number of distinct body regions on the primary geometry (0 if none)."""
+    geom = getattr(project, "primary_geometry", lambda: None)()
+    if geom is None:
+        return 0
+    bodies = getattr(geom, "bodies", None) or []
+    if not bodies:
+        return 0
+    return len({getattr(b, "region", "fluid") for b in bodies})
+
+
+def validate_multi_region_meshing(
+    project: Any,
+    mesher: MeshBackend | None,
+) -> list[str]:
+    """Reject multi-region geometry when the mesher does not support it.
+
+    Built-ins all have ``multi_region=False`` this phase; Phase 6 CHT provides
+    a multi-region backend. Soft-pass: do not enable multi-region meshing.
+    """
+    errors: list[str] = []
+    n_regions = geometry_region_count(project)
+    if n_regions <= 1:
+        return errors
+    if mesher is None or not bool(getattr(mesher, "multi_region", False)):
+        key = getattr(mesher, "key", None) if mesher is not None else None
+        label = f" mesher={key!r}" if key else ""
+        errors.append(
+            f"multi-region geometry ({n_regions} regions) requires a "
+            f"MeshBackend with multi_region=True{label}"
+        )
+    return errors
+

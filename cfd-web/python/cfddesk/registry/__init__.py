@@ -16,7 +16,7 @@ from cfddesk.registry.discovery import (
 )
 from cfddesk.registry.manifest import PluginManifest
 from cfddesk.registry.material import MaterialModel, validate_analysis_material_refs
-from cfddesk.registry.mesher import MeshBackend, analysis_has_mesh_bags
+from cfddesk.registry.mesher import MeshBackend, analysis_has_mesh_bags, validate_multi_region_meshing
 from cfddesk.registry.monitor import MonitorType, validate_analysis_monitor_refs
 from cfddesk.registry.result_filter import ResultFilterType, analysis_has_filter_bags
 from cfddesk.registry.requirements import Missing, Requirement, check_requirements
@@ -30,6 +30,7 @@ __all__ = [
     "validate_analysis_solver_refs",
     "MeshBackend",
     "analysis_has_mesh_bags",
+    "validate_multi_region_meshing",
     "BcTypeSpec",
     "validate_analysis_bc_refs",
     "MaterialModel",

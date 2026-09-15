@@ -63,3 +63,25 @@ def schema_defaults(fields: tuple[SchemaField, ...] | list[SchemaField]) -> dict
         elif f.kind == "bool":
             out[f.key] = False
     return out
+
+
+def run_analysis_validate(
+    spec: AnalysisType,
+    project: Any = None,
+    simulation: Any = None,
+    *,
+    mesher: Any = None,
+    **kwargs: Any,
+) -> list[str]:
+    """Invoke AnalysisType.validate with region_roles + optional mesher."""
+    return list(
+        spec.validate(
+            project,
+            simulation,
+            region_roles=spec.region_roles,
+            mesher=mesher,
+            **kwargs,
+        )
+        or []
+    )
+

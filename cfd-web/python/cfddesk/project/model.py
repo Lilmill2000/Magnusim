@@ -22,6 +22,9 @@ default display name / patch unless the user has edited Name.
 v12: seed ``numerics`` / ``initial_conditions`` / ``simulation_control`` from
 existing SolverSettings. Does **not** touch mesh fingerprints (staleness
 must be unchanged across migrate).
+v13: Phase 5 mesh schema (fineness, active_mesh_id, run.mesh_id, results_subdir).
+v14: Geometry.bodies (role/region) replaces volumes; materials body_ids;
+optional BC region. Mesh fingerprint unchanged for single-fluid projects.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ from cfddesk.case.bc_registry import (
 )
 from cfddesk.materials.library import RHO_AIR
 from cfddesk.project.hierarchy import (
+    Body,
     Geometry,
     MeshNode,
     RunNode,
@@ -108,7 +112,7 @@ from cfddesk.results.window_geom import ResultsWindowGeom
 FaceRole = Literal["unassigned", "inlet", "outlet", "walls"]
 ROLES: tuple[FaceRole, ...] = ("unassigned", "inlet", "outlet", "walls")
 
-PROJECT_VERSION = 13
+PROJECT_VERSION = 14
 
 PRIMARY_SIM_NAME = "Incompressible"
 PRIMARY_SIM_ANALYSIS = "incompressible"
@@ -157,6 +161,8 @@ class BoundaryCondition:
     paired_bc_id: str | None = None
     # True once the user edits Name; type changes then leave ``name`` alone.
     name_is_custom: bool = False
+    # Optional region scope (None = all / fluid default).
+    region: str | None = None
 
     def to_dict(self) -> dict:
         out: dict[str, Any] = {
@@ -174,6 +180,8 @@ class BoundaryCondition:
             out["subvariant"] = self.subvariant
         if self.paired_bc_id:
             out["paired_bc_id"] = self.paired_bc_id
+        if self.region is not None:
+            out["region"] = self.region
         return out
 
     @staticmethod
@@ -188,6 +196,7 @@ class BoundaryCondition:
         if paired is None and isinstance(settings, dict):
             paired = settings.get("paired_bc_id")
         sub = migrated.get("subvariant")
+        region_raw = migrated.get("region")
         return BoundaryCondition(
             id=str(migrated["id"]),
             name=str(migrated["name"]),
@@ -200,6 +209,7 @@ class BoundaryCondition:
             subvariant=str(sub) if sub else None,
             paired_bc_id=str(paired) if paired else None,
             name_is_custom=bool(migrated.get("name_is_custom", False)),
+            region=str(region_raw) if region_raw not in (None, "") else None,
         )
 
 
@@ -264,44 +274,72 @@ def _faces_from_list(items: list[dict]) -> list[FaceFingerprint]:
     ]
 
 
-def _volumes_from_dict(items: list | None) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
+def _bodies_from_dict(items: list | None) -> list[Body]:
+    out: list[Body] = []
     for item in items or []:
         if not isinstance(item, dict):
             continue
-        vid = str(item.get("id") or item.get("volume_id") or "")
-        if not vid:
+        body = Body.from_dict(item)
+        if not body.id:
             continue
-        face_ids = [int(x) for x in (item.get("face_ids") or [])]
-        out.append(
-            {
-                "id": vid,
-                "name": str(item.get("name") or vid),
-                "face_ids": face_ids,
-            }
-        )
+        out.append(body)
     return out
 
 
 def _geometry_from_dict(data: dict) -> Geometry:
+    # Prefer bodies (v14+); fall back to legacy volumes dicts.
+    raw_bodies = data.get("bodies")
+    if raw_bodies is None:
+        raw_bodies = data.get("volumes")
     return Geometry(
         id=str(data.get("id") or _new_id()),
         name=str(data.get("name") or "Geometry 1"),
         step_path=str(data.get("step_path") or ""),
         faces=_faces_from_list(data.get("faces") or []),
-        volumes=_volumes_from_dict(data.get("volumes")),
+        bodies=_bodies_from_dict(raw_bodies),
     )
 
 
-def _volumes_dicts_from_solid(solid: LoadedSolid) -> list[dict[str, Any]]:
+def _bodies_from_solid(solid: LoadedSolid) -> list[Body]:
     return [
-        {
-            "id": v.volume_id,
-            "name": v.name,
-            "face_ids": list(v.face_ids),
-        }
+        Body(
+            id=v.volume_id,
+            name=v.name,
+            face_ids=tuple(v.face_ids),
+            role="fluid",
+            region="fluid",
+        )
         for v in solid.volumes
     ]
+
+
+def _material_body_ids(material: dict[str, Any]) -> list[str]:
+    """Prefer body_ids; fall back to legacy volume_ids alias."""
+    raw = material.get("body_ids")
+    if raw is None:
+        raw = material.get("volume_ids")
+    return [str(x) for x in (raw or [])]
+
+
+def _set_material_body_ids(material: dict[str, Any], body_ids: list[str]) -> None:
+    """Write body_ids and keep volume_ids as a mirrored alias."""
+    ids = [str(x) for x in body_ids]
+    material["body_ids"] = ids
+    material["volume_ids"] = list(ids)
+
+
+
+def _normalize_materials_list(items: list | None) -> list[dict[str, Any]]:
+    """Ensure each material has body_ids with volume_ids as mirrored alias."""
+    out: list[dict[str, Any]] = []
+    for m in items or []:
+        if not isinstance(m, dict):
+            continue
+        m = copy.deepcopy(m)
+        ids = _material_body_ids(m)
+        _set_material_body_ids(m, ids)
+        out.append(m)
+    return out
 
 
 def _simulation_from_dict(data: dict, *, geometry_id: str) -> Simulation:
@@ -328,7 +366,7 @@ def _simulation_from_dict(data: dict, *, geometry_id: str) -> Simulation:
         runs=runs,
         solver=SolverSettings.from_dict(data.get("solver")),
         boundary=BoundarySettings.from_dict(data.get("boundary")),
-        materials=copy.deepcopy(data.get("materials") or []),
+        materials=_normalize_materials_list(data.get("materials") or []),
         initial_conditions=copy.deepcopy(data.get("initial_conditions") or {}),
         advanced_concepts=copy.deepcopy(data.get("advanced_concepts") or {}),
         numerics=copy.deepcopy(data.get("numerics") or {}),
@@ -572,24 +610,28 @@ class Project:
         return self._replace_bcs(bcs)
 
     def materials_assigned(self) -> bool:
-        """GREEN Materials rule: at least one material has non-empty volume_ids."""
+        """GREEN Materials rule: at least one material has non-empty body_ids."""
         sim = self.primary_simulation()
         if sim is None:
             return False
-        return any(bool(m.get("volume_ids")) for m in sim.materials)
+        return any(bool(_material_body_ids(m)) for m in sim.materials)
 
     def assigned_material(self) -> dict[str, Any] | None:
-        """First material with a volume assignment (case-write source of ν/ρ)."""
+        """First material with a body assignment (case-write source of ν/ρ)."""
         sim = self.primary_simulation()
         if sim is None:
             return None
         for m in sim.materials:
-            if m.get("volume_ids"):
+            if _material_body_ids(m):
                 return m
         return None
 
     def assign_volumes(self, material_id: str, volume_ids: list[str]) -> Project:
-        wanted = {str(v) for v in volume_ids}
+        """Legacy alias for assign_bodies (volume_ids == body_ids)."""
+        return self.assign_bodies(material_id, volume_ids)
+
+    def assign_bodies(self, material_id: str, body_ids: list[str]) -> Project:
+        wanted = {str(v) for v in body_ids}
         if not wanted:
             return self
         sim = self.primary_simulation()
@@ -599,20 +641,24 @@ class Project:
         found = False
         for m in sim.materials:
             m = copy.deepcopy(m)
-            remaining = [v for v in (m.get("volume_ids") or []) if v not in wanted]
+            remaining = [v for v in _material_body_ids(m) if v not in wanted]
             if str(m.get("id")) == material_id:
                 found = True
                 merged = sorted(set(remaining) | wanted)
-                m["volume_ids"] = merged
+                _set_material_body_ids(m, merged)
             else:
-                m["volume_ids"] = remaining
+                _set_material_body_ids(m, remaining)
             materials.append(m)
         if not found:
             raise KeyError(f"Unknown material id {material_id!r}")
         return self._replace_primary_sim(materials=materials)
 
     def unassign_volumes(self, volume_ids: list[str]) -> Project:
-        wanted = {str(v) for v in volume_ids}
+        """Legacy alias for unassign_bodies."""
+        return self.unassign_bodies(volume_ids)
+
+    def unassign_bodies(self, body_ids: list[str]) -> Project:
+        wanted = {str(v) for v in body_ids}
         if not wanted:
             return self
         sim = self.primary_simulation()
@@ -621,7 +667,9 @@ class Project:
         materials = []
         for m in sim.materials:
             m = copy.deepcopy(m)
-            m["volume_ids"] = [v for v in (m.get("volume_ids") or []) if v not in wanted]
+            _set_material_body_ids(
+                m, [v for v in _material_body_ids(m) if v not in wanted]
+            )
             materials.append(m)
         return self._replace_primary_sim(materials=materials)
 
@@ -660,15 +708,19 @@ class Project:
         return self.field_units.get(key, default)
 
     def faces_for_volumes(self, volume_ids: list[str]) -> list[int]:
-        """Resolve volume ids → face ids via Geometry.volumes (OCCT map)."""
+        """Resolve volume/body ids → face ids via Geometry.bodies (OCCT map)."""
+        return self.faces_for_bodies(volume_ids)
+
+    def faces_for_bodies(self, body_ids: list[str]) -> list[int]:
+        """Resolve body ids → face ids via Geometry.bodies."""
         geom = self.primary_geometry()
         if geom is None:
             return []
-        wanted = {str(v) for v in volume_ids}
+        wanted = {str(v) for v in body_ids}
         fids: list[int] = []
-        for vol in geom.volumes:
-            if str(vol.get("id")) in wanted:
-                for fid in vol.get("face_ids") or []:
+        for body in geom.bodies:
+            if body.id in wanted:
+                for fid in body.face_ids:
                     if int(fid) not in fids:
                         fids.append(int(fid))
         return fids
@@ -1498,6 +1550,8 @@ class Project:
             project = _upgrade_to_v12(project)
         if version < 13:
             project = _upgrade_to_v13(project, project_dir=project_dir)
+        if version < 14:
+            project = _upgrade_to_v14(project)
         return project
 
     @staticmethod
@@ -1597,7 +1651,7 @@ class Project:
             name=prev_geom.name if prev_geom is not None else "Geometry 1",
             step_path=str(solid.path),
             faces=faces,
-            volumes=_volumes_dicts_from_solid(solid),
+            bodies=_bodies_from_solid(solid),
         )
         mesh_node = MeshNode(
             id=(
@@ -1683,8 +1737,8 @@ def _kin_pressure_to_pa(settings: dict[str, Any], rho: float) -> dict[str, Any]:
 def _ensure_geometry_volumes(
     geom: Geometry, *, project_dir: str | Path | None
 ) -> tuple[Geometry, str]:
-    """Populate volumes from STEP when missing. Returns (geom, source_note)."""
-    if geom.volumes:
+    """Populate bodies from STEP when missing. Returns (geom, source_note)."""
+    if geom.bodies:
         return geom, "present"
     step = Path(geom.step_path) if geom.step_path else None
     if step is not None and not step.is_file() and project_dir is not None:
@@ -1697,21 +1751,23 @@ def _ensure_geometry_volumes(
 
             solid = load_step(step)
             return (
-                dataclasses.replace(geom, volumes=_volumes_dicts_from_solid(solid)),
+                dataclasses.replace(geom, bodies=_bodies_from_solid(solid)),
                 "occt_step",
             )
         except Exception:
             pass
-    # Last resort — one synthetic volume owning all faces.
+    # Last resort — one synthetic fluid body owning all faces.
     return (
         dataclasses.replace(
             geom,
-            volumes=[
-                {
-                    "id": "solid-0",
-                    "name": "Solid 1",
-                    "face_ids": [f.face_id for f in geom.faces],
-                }
+            bodies=[
+                Body(
+                    id="solid-0",
+                    name="Solid 1",
+                    face_ids=tuple(f.face_id for f in geom.faces),
+                    role="fluid",
+                    region="fluid",
+                )
             ],
         ),
         "synthetic_fallback",
@@ -1741,8 +1797,8 @@ def _upgrade_to_v7(
         materials = []
         for m in sim.materials:
             m = copy.deepcopy(m)
-            if "volume_ids" not in m:
-                m["volume_ids"] = []
+            ids = _material_body_ids(m)
+            _set_material_body_ids(m, ids)
             if "id" not in m or not m["id"]:
                 m["id"] = _new_id()
             materials.append(m)
@@ -1954,6 +2010,22 @@ def _mesh_fingerprint_payload(
     extrusion = extrusion_fingerprint_payload(refinements)
     if extrusion:
         payload["extrusion_mesh_refinements"] = extrusion
+    # v14: bodies only when non-trivial (role != fluid or >1 region).
+    # Single-fluid projects must keep the pre-v14 fingerprint hash.
+    geom = project.primary_geometry()
+    if geom is not None and geom.bodies:
+        roles_non_fluid = any(b.role != "fluid" for b in geom.bodies)
+        region_names = {b.region for b in geom.bodies}
+        if roles_non_fluid or len(region_names) > 1:
+            payload["bodies"] = [
+                {
+                    "id": b.id,
+                    "role": b.role,
+                    "region": b.region,
+                    "face_ids": list(b.face_ids),
+                }
+                for b in sorted(geom.bodies, key=lambda x: x.id)
+            ]
     return payload
 
 
@@ -2247,6 +2319,58 @@ def _upgrade_to_v13(
         )
 
     return dataclasses.replace(project, version=13, simulations=simulations)
+
+
+
+def _upgrade_to_v14(project: Project) -> Project:
+    """volumes → bodies(role=fluid, region=fluid); materials volume_ids → body_ids.
+
+    Does **not** re-stamp mesh fingerprints. Single-fluid projects keep the
+    same ``mesh_input_fingerprint`` (bodies omitted from the payload unless
+    any body is non-fluid or more than one region exists).
+    """
+    geometries: list[Geometry] = []
+    for g in project.geometries:
+        if g.bodies:
+            bodies = list(g.bodies)
+        else:
+            # Defensive: volumes property may be empty too; keep empty list.
+            bodies = [
+                Body(
+                    id=str(vol.get("id") or ""),
+                    name=str(vol.get("name") or vol.get("id") or ""),
+                    face_ids=tuple(int(x) for x in (vol.get("face_ids") or [])),
+                    role="fluid",
+                    region="fluid",
+                )
+                for vol in g.volumes
+                if str(vol.get("id") or "")
+            ]
+        # Normalize role/region defaults for any pre-v14 body dicts already loaded
+        bodies = [
+            Body(
+                id=b.id,
+                name=b.name,
+                face_ids=tuple(b.face_ids),
+                role=b.role if b.role in ("fluid", "solid", "void") else "fluid",
+                region=b.region or "fluid",
+            )
+            for b in bodies
+        ]
+        geometries.append(dataclasses.replace(g, bodies=bodies))
+
+    simulations: list[Simulation] = []
+    for sim in project.simulations:
+        materials = []
+        for m in sim.materials:
+            m = copy.deepcopy(m)
+            _set_material_body_ids(m, _material_body_ids(m))
+            materials.append(m)
+        simulations.append(dataclasses.replace(sim, materials=materials))
+
+    return dataclasses.replace(
+        project, version=14, geometries=geometries, simulations=simulations
+    )
 
 
 def _default_simulation(geometry_id: str) -> Simulation:

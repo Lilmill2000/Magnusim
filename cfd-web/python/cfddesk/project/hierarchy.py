@@ -6,7 +6,7 @@ import copy
 import dataclasses
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from cfddesk.project.settings import (
     BoundarySettings,
@@ -54,6 +54,43 @@ def next_run_name(runs: list[RunNode], turbulence: str) -> str:
     return f"{label} {n}"
 
 
+BodyRole = Literal["fluid", "solid", "void"]
+
+
+@dataclass
+class Body:
+    """CAD solid / region body (v14). Replaces Geometry.volumes dicts."""
+
+    id: str
+    name: str
+    face_ids: tuple[int, ...]
+    role: BodyRole = "fluid"
+    region: str = "fluid"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "face_ids": list(self.face_ids),
+            "role": self.role,
+            "region": self.region,
+        }
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> "Body":
+        role = str(data.get("role") or "fluid")
+        if role not in ("fluid", "solid", "void"):
+            role = "fluid"
+        face_raw = data.get("face_ids") or []
+        return Body(
+            id=str(data.get("id") or data.get("volume_id") or ""),
+            name=str(data.get("name") or data.get("id") or ""),
+            face_ids=tuple(int(x) for x in face_raw),
+            role=role,  # type: ignore[arg-type]
+            region=str(data.get("region") or "fluid"),
+        )
+
+
 @dataclass
 class Geometry:
     id: str
@@ -61,8 +98,27 @@ class Geometry:
     step_path: str
     # Face geometry only — no role in serialization (BC membership is source of truth)
     faces: list  # list[FaceFingerprint] — typed loosely to avoid cycle
-    # TopAbs_SOLID enumeration: [{id, name, face_ids}]
-    volumes: list[dict[str, Any]] = field(default_factory=list)
+    # TopAbs_SOLID enumeration as Body list (v14); replaces volumes dicts
+    bodies: list[Body] = field(default_factory=list)
+
+    @property
+    def volumes(self) -> list[dict[str, Any]]:
+        """Read-only legacy alias of bodies as {id, name, face_ids} dicts."""
+        return [
+            {
+                "id": b.id,
+                "name": b.name,
+                "face_ids": list(b.face_ids),
+            }
+            for b in self.bodies
+        ]
+
+    def regions(self) -> dict[str, list[Body]]:
+        """Group bodies by region name (insertion order of first sighting)."""
+        out: dict[str, list[Body]] = {}
+        for b in self.bodies:
+            out.setdefault(b.region, []).append(b)
+        return out
 
     def to_dict(self) -> dict:
         return {
@@ -78,7 +134,7 @@ class Geometry:
                 }
                 for f in self.faces
             ],
-            "volumes": copy.deepcopy(self.volumes),
+            "bodies": [b.to_dict() for b in self.bodies],
         }
 
 

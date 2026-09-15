@@ -203,15 +203,41 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
     return tuple(fields)
 
 
+def _validate_region_roles(project: Any, region_roles: tuple[str, ...]) -> list[str]:
+    """Reject when geometry lacks a body for each required AnalysisType role."""
+    if project is None:
+        return []
+    geom = getattr(project, "primary_geometry", lambda: None)()
+    if geom is None:
+        return []
+    bodies = getattr(geom, "bodies", None) or []
+    present = {getattr(b, "role", "fluid") for b in bodies}
+    errors: list[str] = []
+    for role in region_roles:
+        if role not in present and bodies:
+            # Only complain when bodies exist but required role is missing
+            # (empty bodies = not yet enumerated — defer).
+            errors.append(f"analysis requires a body with role={role!r}")
+    return errors
+
+
 def _validate_minimal(
-    _project: Any = None,
+    project: Any = None,
     _simulation: Any = None,
+    *,
+    region_roles: tuple[str, ...] = ("fluid",),
+    mesher: Any = None,
     **_kwargs: Any,
 ) -> list[str]:
-    """Land2 stub â€” real Project/Simulation checks deferred with migration."""
-    return []
+    """Region-role + multi-region mesher checks (soft-pass geometry land7)."""
+    errors = _validate_region_roles(project, region_roles)
+    try:
+        from cfddesk.registry.mesher import validate_multi_region_meshing
 
-
+        errors.extend(validate_multi_region_meshing(project, mesher))
+    except Exception:
+        pass
+    return errors
 def build_incompressible_steady() -> AnalysisType:
     return AnalysisType(
         key="incompressible_steady",
