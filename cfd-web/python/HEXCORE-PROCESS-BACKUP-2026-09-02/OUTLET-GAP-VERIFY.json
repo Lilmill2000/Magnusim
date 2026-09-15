@@ -1,0 +1,52 @@
+{
+  "ok": true,
+  "production_recipe": "gap localRef + hollowCone, minCellSize stays bulk",
+  "cad": {
+    "gap_m": 0.0047752,
+    "r_inner_m": 0.0254,
+    "r_outer_m": 0.0301752,
+    "faces": {
+      "inner_cylinder": 11,
+      "outer_cylinder": 16,
+      "vf_floor": 10,
+      "outlet": 12,
+      "roof": 15
+    }
+  },
+  "old_F5": {
+    "n_cells": 644889,
+    "metal_interior": 2226,
+    "lid_faces": 101,
+    "lid_azimuth_bins": "28/36",
+    "barrel_p50_mm": 2.53
+  },
+  "exp_mincell_floor": {
+    "n_cells": 1942268,
+    "metal_interior": 0,
+    "lid_faces": 0,
+    "note": "works but floods barrel; not shipped"
+  },
+  "exp_nofloor_wide_roof_ref": {
+    "n_cells": 1139494,
+    "metal_interior": 0,
+    "lid_faces": 0,
+    "note": "proved local/object Ref carve without minCellSize drop"
+  },
+  "v2_production": {
+    "n_cells": 754477,
+    "metal_interior": 0,
+    "lid_faces": 0,
+    "barrel_p50_mm": 2.53,
+    "wsl": "cfddesk-outlet-gap-v2",
+    "localRef": [
+      "pressure_outlet",
+      "walls__f10",
+      "walls__f11",
+      "walls__f16"
+    ]
+  },
+  "images": {
+    "old": "images/old_645k_outlet.png",
+    "v2": "images/v2_outlet.png"
+  }
+}

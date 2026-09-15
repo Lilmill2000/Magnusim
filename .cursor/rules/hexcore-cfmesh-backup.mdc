@@ -1,0 +1,19 @@
+---
+description: Keep the 2026-09-02 cfMesh hexcore process restorable; do not delete it while trying body-fitted meshing.
+alwaysApply: true
+---
+
+# Hexcore process — keep the backup
+
+Standard + Hex element core **on** is cfMesh `cartesianMesh` (hex bulk + poly skin + thin-wall gap local/object Ref). That path is frozen at:
+
+`cfd-web/python/HEXCORE-PROCESS-BACKUP-2026-09-02/`
+(moved intact from `cfddesk/runs/phase5c/` on 2026-09-12; live paths in its README are relative to `cfd-web/python/`)
+
+- Do **not** delete, overwrite, or “clean up” that folder.
+- A surface-first / snap-to-STEP hexcore is a **new** backend. Keep the cfMesh path callable (UI toggle) until the user says to retire it.
+- If the body-fitted experiment fails, restore files from `HEXCORE-PROCESS-BACKUP-2026-09-02/src/` using that folder’s README. Do not reinvent knobs.
+- **Banned** on the cfMesh path: `localRefinement ".*"`, `minCellSize` ≪ boundary, localRef thickness ≥ 3×skin, retired gmsh ~27-hex box.
+- Isolated remesh only (`cfddesk-outlet-gap-*`). Do not push experiments into the live UI WSL case.
+
+Known-good F=5 gap-aware mesh: 754,477 cells, 0 VF-wall lid faces, `allow_gap_min_cell=False`.

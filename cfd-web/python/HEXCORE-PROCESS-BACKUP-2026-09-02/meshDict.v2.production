@@ -1,0 +1,88 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| cfddesk Standard + Hex element core — cfMesh cartesianMesh                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      meshDict;
+}
+
+surfaceFile "constant/triSurface/geometry.fms";
+
+maxCellSize     0.022819622;
+boundaryCellSize 0.011409811;
+// Bulk ≈ boundary; peel ≈ walls localRef (1×skin). minCellSize = bulk.
+boundaryCellSizeRefinementThickness 0.011409811;
+minCellSize     0.011409811;
+
+// Keep template cells that cross the CAD so steep slopes / junctions are not
+// stripped during inside/outside classification (ROOT-CAUSE body-fit).
+keepCellsIntersectingBoundary 1;
+
+// Thin peel on walls + optional gap localRef (thin-wall CAD).
+// walls.* omitted when skin < 0.004 m (Fine path).
+localRefinement
+{
+    "walls.*"
+    {
+        cellSize 0.0057049054;
+        refinementThickness 0.0028524527;
+    }
+    "pressure_outlet"
+    {
+        cellSize 0.0015917333;
+        refinementThickness 0.0071628;
+    }
+    "walls__f10"
+    {
+        cellSize 0.0015917333;
+        refinementThickness 0.0071628;
+    }
+    "walls__f11"
+    {
+        cellSize 0.0015917333;
+        refinementThickness 0.0071628;
+    }
+    "walls__f16"
+    {
+        cellSize 0.0015917333;
+        refinementThickness 0.0071628;
+    }
+}
+
+// Thin-wall CAD annulus (gap < 2×skin). hollowCone only — not a domain-wide refine.
+objectRefinements
+{
+    gap_0
+    {
+        type hollowCone;
+        cellSize 0.0015917333;
+        p0 (0 0 0.2492248);
+        p1 (0 0 0.3095752);
+        radius0_Inner 0.0206248;
+        radius0_Outer 0.0349504;
+        radius1_Inner 0.0206248;
+        radius1_Outer 0.0349504;
+    }
+}
+
+// CAD topological edges (featureEdgeMesh) — pin sharp corners/edges to the mesh.
+// cellSize = skin (not deep additionalRefinementLevels) to keep peel ~3 cells.
+edgeMeshRefinement
+{
+    cadFeatures
+    {
+        edgeFile "constant/triSurface/cadFeatures.eMesh";
+        cellSize 0.0057049054;
+        refinementThickness 0.0057049054;
+    }
+}
+
+// Wall prism layers deferred (SimScale Automatic BL = follow-on).
+// nLayers 0: no extra prism stack; cartesianMesh still wraps one surface layer.
+boundaryLayers
+{
+    nLayers 0;
+}

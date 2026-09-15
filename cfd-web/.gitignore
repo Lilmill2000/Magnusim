@@ -1,0 +1,12 @@
+node_modules/
+python/.venv/
+python/**/__pycache__/
+**/__pycache__/
+*.py[cod]
+.cache/
+projects/
+.cfddesk-local.json
+.cfddesk-ready
+dist/
+.DS_Store
+Thumbs.db

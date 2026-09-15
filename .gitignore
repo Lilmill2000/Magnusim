@@ -1,0 +1,28 @@
+﻿# This folder is the zip / GitHub root. App code lives in cfd-web/.
+# Fresh share copy (built by pack-portable.ps1) — regenerable; do not commit.
+CFD-Desk/
+dist/
+
+cfd-web/node_modules/
+cfd-web/python/.venv/
+cfd-web/python/**/__pycache__/
+cfd-web/python/cfddesk.egg-info/
+**/__pycache__/
+*.py[cod]
+*.pyc
+cfd-web/.cache/
+cfd-web/projects/
+cfd-web/.cfddesk-local.json
+cfd-web/.cfddesk-ready
+cfd-web/dist/
+cfd-web/test-results/
+cfd-web/playwright-report/
+cfd-web/blob-report/
+cfd-web/playwright/.cache/
+
+.DS_Store
+Thumbs.db
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

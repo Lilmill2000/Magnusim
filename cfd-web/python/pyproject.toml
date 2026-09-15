@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cfddesk"
+version = "0.2.0"
+description = "Python backend for the CFD Desk web app: STEP -> mesh -> OpenFOAM (WSL) -> post-processing exports"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "cadquery-ocp>=7.8",
+    "pyvista>=0.43",
+    "psutil>=5.9",
+    "gmsh>=4.12",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cfddesk*"]
