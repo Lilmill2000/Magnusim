@@ -31,7 +31,7 @@ todos:
     status: completed
   - id: p2-tests
     content: "Registry tests: all built-ins load, schemas validate defaults, plugin discovery from a temp entry point"
-    status: pending
+    status: completed
 isProject: false
 ---
 

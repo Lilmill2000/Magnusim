@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Dump the full cfddesk plugin registry as JSON (Phase 2 land9 / p2-registry-cli).
 
-CLI: tools/registry_dump.py [--check-requirements] [--out PATH] [--web-root PATH]
+CLI: tools/registry_dump.py [--check-requirements] [--check] [--out PATH] [--web-root PATH]
 
 Prints (or writes) JSON:
   {analysis, solver, mesher, bc, material, monitor, filter, plugins, missing}
 
 Uses existing load_all / Registry.describe / check_requirements.
 Does not rewrite W17 / MESH_ENGINES consumers; dual-defaults stay carry.
+
+--check: dump live registry and fail (exit 1) if committed
+scripts/generated/registry.json differs (stale golden).
 """
 
 from __future__ import annotations
@@ -20,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
+WEB_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_COMMITTED_REGISTRY = WEB_ROOT / "scripts" / "generated" / "registry.json"
 if str(CFDDESK_ROOT) not in sys.path:
     sys.path.insert(0, str(CFDDESK_ROOT))
 
@@ -105,6 +110,60 @@ def dump_registry(
     return payload
 
 
+def check_committed_registry(
+    *,
+    committed_path: Path | str | None = None,
+    web_root: Path | str | None = None,
+    force: bool = True,
+    env: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    """Compare live dump_registry() to the committed scripts/generated/registry.json.
+
+    Returns (ok, message). ok=False when the file is missing or content differs.
+    Does not rewrite consumers; callers regenerate via npm run gen:registry.
+    """
+    path = Path(committed_path) if committed_path is not None else DEFAULT_COMMITTED_REGISTRY
+    if not path.is_file():
+        return False, f"missing committed registry.json: {path}"
+    try:
+        committed = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return False, f"committed registry.json is not valid JSON: {exc}"
+    if not isinstance(committed, dict):
+        return False, "committed registry.json must be a JSON object"
+    fresh = dump_registry(
+        web_root=web_root,
+        check_reqs=False,
+        env=env,
+        force=force,
+    )
+    # describe() may keep tuple defaults; committed JSON has lists — canonicalize.
+    fresh_canon = json.loads(json.dumps(fresh))
+    if fresh_canon == committed:
+        return True, "committed registry.json matches live dump"
+    fresh = fresh_canon  # use canon for drift hints below
+    # Short drift hint for CLI / tests (avoid dumping full diffs).
+    drift_kinds: list[str] = []
+    for kind in list(DUMP_KINDS) + ["plugins", "missing"]:
+        if fresh.get(kind) != committed.get(kind):
+            drift_kinds.append(kind)
+    extra = sorted(set(committed) - set(fresh))
+    missing_keys = sorted(set(fresh) - set(committed))
+    parts = []
+    if drift_kinds:
+        parts.append("drift in: " + ", ".join(drift_kinds))
+    if extra:
+        parts.append("extra committed keys: " + ", ".join(extra))
+    if missing_keys:
+        parts.append("missing committed keys: " + ", ".join(missing_keys))
+    detail = "; ".join(parts) if parts else "content differs"
+    return (
+        False,
+        f"committed registry.json is stale ({detail}); "
+        "regenerate with: npm run gen:registry",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
@@ -118,6 +177,23 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Fill missing[] via check_requirements on manifests and specs "
             "(env empty unless --env-json)."
+        ),
+    )
+    p.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Exit 0 if committed scripts/generated/registry.json matches a live "
+            "dump; exit 1 on drift (stale golden). Does not write the file."
+        ),
+    )
+    p.add_argument(
+        "--committed",
+        type=Path,
+        default=None,
+        help=(
+            "Path to committed registry.json for --check "
+            f"(default: {DEFAULT_COMMITTED_REGISTRY})."
         ),
     )
     p.add_argument(
@@ -162,6 +238,20 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         env = raw
+
+    if args.check:
+        try:
+            ok, message = check_committed_registry(
+                committed_path=args.committed,
+                web_root=args.web_root,
+                force=True,  # always force for stale check
+                env=env,
+            )
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}), flush=True)
+            return 1
+        print(json.dumps({"ok": ok, "message": message}), flush=True)
+        return 0 if ok else 1
 
     try:
         payload = dump_registry(
