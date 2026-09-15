@@ -2,12 +2,12 @@
  * Multi-study catalog: projects/<id>/simulations.json
  * Active study is also mirrored to simulation.json for older readers.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activeGeometryId, geometriesOf } from './w16-geometry-scope.js';
 import { envGet } from './env-compat.js';
-import { saveSimCatalogCli, writeSimulationCli } from './py-json.js';
+import { saveSimCatalogCli, writeSimulationCli, writeJsonCli } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -35,10 +35,8 @@ function readJson(p) {
   }
 }
 
-function writeJson(p, doc) {
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(doc, null, 2), 'utf8');
-  return p;
+function writeJson(projectId, rel, doc) {
+  return writeJsonCli(projectDir(projectId), rel, doc);
 }
 
 export function studyBaseName(sim) {
@@ -68,11 +66,11 @@ export function assignStudyNames(list) {
 function stampMissing(projectId, simId, geomId) {
   if (!simId) return;
   const files = [
-    join(projectDir(projectId), 'materials.json'),
-    join(projectDir(projectId), 'boundary_conditions.json'),
-    join(projectDir(projectId), 'mesh.json'),
-    join(projectDir(projectId), 'mesh_refinements.json'),
-    join(projectDir(projectId), 'runs', 'catalog.json'),
+    'materials.json',
+    'boundary_conditions.json',
+    'mesh.json',
+    'mesh_refinements.json',
+    'runs/catalog.json',
   ];
   const geom = String(geomId || '').trim();
   const stampList = (arr) => {
@@ -88,8 +86,8 @@ function stampMissing(projectId, simId, geomId) {
     }
     return n;
   };
-  for (const p of files) {
-    const doc = readJson(p);
+  for (const rel of files) {
+    const doc = readJson(join(projectDir(projectId), rel));
     if (!doc) continue;
     let changed = 0;
     if (Array.isArray(doc.materials)) changed += stampList(doc.materials);
@@ -108,7 +106,7 @@ function stampMissing(projectId, simId, geomId) {
       doc.simulation_id = simId;
       changed += 1;
     }
-    if (changed) writeJson(p, doc);
+    if (changed) writeJson(projectId, rel, doc);
   }
 }
 

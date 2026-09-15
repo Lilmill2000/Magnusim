@@ -3,7 +3,7 @@
  * Catalog: projects/<id>/simulations.json (active mirrored to simulation.json).
  */
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activeGeometryId, geometriesOf, matchesGeometry, matchesStudy, primaryGeometryId } from './w16-geometry-scope.js';
@@ -21,7 +21,7 @@ import {
   upsertSimulationInCatalog,
 } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
-import { writeProjectCli } from './py-json.js';
+import { writeProjectCli, writeJsonCli } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -91,9 +91,8 @@ function readJson(p) {
   }
 }
 
-function writeJson(p, doc) {
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(doc, null, 2), 'utf8');
+function writeJson(projectId, rel, doc) {
+  writeJsonCli(projectDir(projectId), rel, doc);
 }
 
 function catalogPayload(projectId, proj, cat) {
@@ -267,8 +266,9 @@ function copySimulationSettings(projectId, proj, fromId, toId, include) {
   const primary = primaryGeometryId(proj);
   const legacy = firstLegacySimId(projectId, proj);
 
-  const copyList = (p, key, mapFn) => {
-    const doc = readJson(p);
+  const readRel = (rel) => readJson(join(projectDir(projectId), rel));
+  const copyList = (rel, key, mapFn) => {
+    const doc = readRel(rel);
     if (!doc || !Array.isArray(doc[key])) return;
     const src = doc[key].filter(
       (r) => matchesStudy(r, from, legacy) && matchesGeometry(r, fromGeom, primary)
@@ -282,32 +282,30 @@ function copySimulationSettings(projectId, proj, fromId, toId, include) {
     doc[key] = kept.concat(copies);
     doc.simulation_id = to;
     doc.updated_at = new Date().toISOString();
-    writeJson(p, doc);
+    writeJson(projectId, rel, doc);
   };
 
   if (want.includes('materials')) {
-    const p = join(projectDir(projectId), 'materials.json');
-    copyList(p, 'materials', (r, i) => cloneRec(r, to, `mat-copy-${Date.now().toString(36)}-${i}`));
-    const doc = readJson(p);
+    copyList('materials.json', 'materials', (r, i) => cloneRec(r, to, `mat-copy-${Date.now().toString(36)}-${i}`));
+    const doc = readRel('materials.json');
     if (doc) {
       doc.air = (doc.materials || []).find((m) => m.name === 'Air' && matchesStudy(m, to, to)) || null;
-      writeJson(p, doc);
+      writeJson(projectId, 'materials.json', doc);
     }
   }
   if (want.includes('bcs')) {
-    copyList(join(projectDir(projectId), 'boundary_conditions.json'), 'boundary_conditions', (r, i) =>
+    copyList('boundary_conditions.json', 'boundary_conditions', (r, i) =>
       cloneRec(r, to, `bc-copy-${Date.now().toString(36)}-${i}`)
     );
   }
   if (want.includes('mesh')) {
-    const p = join(projectDir(projectId), 'mesh.json');
-    copyList(p, 'meshes', (r, i) => {
+    copyList('mesh.json', 'meshes', (r, i) => {
       const c = cloneRec(r, to, `mesh-copy-${Date.now().toString(36)}-${i}`);
       c.generated = false;
       c.live_mesh_result = null;
       return c;
     });
-    copyList(join(projectDir(projectId), 'mesh_refinements.json'), 'refinements', (r, i) =>
+    copyList('mesh_refinements.json', 'refinements', (r, i) =>
       cloneRec(r, to, `ref-copy-${Date.now().toString(36)}-${i}`)
     );
   }
@@ -324,8 +322,7 @@ export function purgeStudyRecords(projectId, simId, geomId) {
       if (!r.simulation_id && gid && String(r.geometry_id || '') === gid) return false;
       return true;
     });
-  const meshPath = join(projectDir(projectId), 'mesh.json');
-  const meshDoc = readJson(meshPath);
+  const meshDoc = readJson(join(projectDir(projectId), 'mesh.json'));
   if (meshDoc && Array.isArray(meshDoc.meshes)) {
     meshDoc.meshes = drop(meshDoc.meshes);
     if (
@@ -341,16 +338,16 @@ export function purgeStudyRecords(projectId, simId, geomId) {
       meshDoc.settings = (next && next.settings) || meshDoc.settings;
     }
     meshDoc.updated_at = new Date().toISOString();
-    writeJson(meshPath, meshDoc);
+    writeJson(projectId, 'mesh.json', meshDoc);
   }
   const files = [
-    [join(projectDir(projectId), 'materials.json'), 'materials'],
-    [join(projectDir(projectId), 'boundary_conditions.json'), 'boundary_conditions'],
-    [join(projectDir(projectId), 'mesh_refinements.json'), 'refinements'],
-    [join(projectDir(projectId), 'runs', 'catalog.json'), 'runs'],
+    ['materials.json', 'materials'],
+    ['boundary_conditions.json', 'boundary_conditions'],
+    ['mesh_refinements.json', 'refinements'],
+    ['runs/catalog.json', 'runs'],
   ];
-  for (const [p, key] of files) {
-    const doc = readJson(p);
+  for (const [rel, key] of files) {
+    const doc = readJson(join(projectDir(projectId), rel));
     if (!doc || !Array.isArray(doc[key])) continue;
     doc[key] = drop(doc[key]);
     if (String(doc.simulation_id || '') === want) {
@@ -361,7 +358,7 @@ export function purgeStudyRecords(projectId, simId, geomId) {
       doc.air = (doc.materials || []).find((m) => m && m.name === 'Air' && String(m.simulation_id || '') !== want) || null;
     }
     doc.updated_at = new Date().toISOString();
-    writeJson(p, doc);
+    writeJson(projectId, rel, doc);
   }
 }
 
@@ -403,8 +400,7 @@ export function purgeOrphanSetupRecords(projectId, proj, liveSimIds) {
   const keep = (arr) => (arr || []).filter((r) => keepLiveSetupRec(r, liveSims, liveGeoms, remainingStudyGeoms));
   const now = new Date().toISOString();
 
-  const meshPath = join(projectDir(projectId), 'mesh.json');
-  const meshDoc = readJson(meshPath);
+  const meshDoc = readJson(join(projectDir(projectId), 'mesh.json'));
   if (meshDoc) {
     if (Array.isArray(meshDoc.meshes)) meshDoc.meshes = keep(meshDoc.meshes);
     const next = (meshDoc.meshes || []).find((m) => m && m.id === meshDoc.active_id) || null;
@@ -415,19 +411,19 @@ export function purgeOrphanSetupRecords(projectId, proj, liveSimIds) {
     meshDoc.live_mesh_result = (next && next.live_mesh_result) || null;
     if (next && next.settings) meshDoc.settings = next.settings;
     meshDoc.updated_at = now;
-    writeJson(meshPath, meshDoc);
+    writeJson(projectId, 'mesh.json', meshDoc);
   }
 
   const files = [
-    [join(projectDir(projectId), 'materials.json'), 'materials'],
-    [join(projectDir(projectId), 'boundary_conditions.json'), 'boundary_conditions'],
-    [join(projectDir(projectId), 'mesh_refinements.json'), 'refinements'],
-    [join(projectDir(projectId), 'result_controls.json'), 'result_controls'],
-    [join(projectDir(projectId), 'area_average.json'), 'result_controls'],
-    [join(projectDir(projectId), 'runs', 'catalog.json'), 'runs'],
+    ['materials.json', 'materials'],
+    ['boundary_conditions.json', 'boundary_conditions'],
+    ['mesh_refinements.json', 'refinements'],
+    ['result_controls.json', 'result_controls'],
+    ['area_average.json', 'result_controls'],
+    ['runs/catalog.json', 'runs'],
   ];
-  for (const [p, key] of files) {
-    const doc = readJson(p);
+  for (const [rel, key] of files) {
+    const doc = readJson(join(projectDir(projectId), rel));
     if (!doc || !Array.isArray(doc[key])) continue;
     doc[key] = keep(doc[key]);
     if (doc.simulation_id && !liveSims.has(String(doc.simulation_id))) {
@@ -447,7 +443,7 @@ export function purgeOrphanSetupRecords(projectId, proj, liveSimIds) {
       doc.area_average_1 = aaOk ? doc.area_average_1 : null;
     }
     doc.updated_at = now;
-    writeJson(p, doc);
+    writeJson(projectId, rel, doc);
   }
 }
 

@@ -1,0 +1,24 @@
+﻿{
+    "public":  "https://simulation.lilmill2000.com",
+    "local_8082":  200,
+    "project_id":  "sample-project-transient-20260914222029-84cf9f",
+    "simulation_id":  "sim-mu28ukxz-9ba780",
+    "run_id":  "1524785e",
+    "run_name":  "land10-transient-v2",
+    "status":  "done",
+    "exit_code":  0,
+    "solver":  "pimpleFoam",
+    "prepare_run_ok":  true,
+    "sim_time":  0.02,
+    "iteration":  null,
+    "n_saved_times":  2,
+    "residuals":  162,
+    "solve_protocol":  "magnusim-jsonl",
+    "postProcessing_dirs":  [
+                                "flow_pressure_2",
+                                "flow_velocity_inlet_2",
+                                "mon_pressure_2",
+                                "mon_velocity_inlet_2"
+                            ],
+    "note":  "API public transient after BC name remap to mesh patches; sample materials/bcs/mesh repaired via project_cli"
+}

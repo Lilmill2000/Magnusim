@@ -584,7 +584,9 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   const wslDst = `cfddesk-cfdweb-${generateId}`;
   const winOut = join(PROJECTS_ROOT, project_id, 'mesh', `run-${generateId}`);
   mkdirSync(winOut, { recursive: true });
-  const winLog = join(winOut, 'generate.log');
+  // Phase 1 land10: job logs live under .cache (not projects/); job-runner/log.js owns JSONL.
+  mkdirSync(REPORT_DIR, { recursive: true });
+  const winLog = join(REPORT_DIR, `generate-${generateId}.log`);
   const projectDir = join(PROJECTS_ROOT, project_id);
 
   let fingerprint_before = null;

@@ -1,6 +1,9 @@
-﻿import { test, expect } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
+
+/** Opt-in: hits public URL. Default skip so CI / npm test stay local-only. */
+const PUBLIC_E2E = (process.env.MAGNUSIM_PUBLIC_E2E || process.env.CFDDESK_PUBLIC_E2E) === '1';
 
 const PUBLIC = process.env.MAGNUSIM_PUBLIC_URL || 'https://simulation.lilmill2000.com';
 const LOCAL = process.env.MAGNUSIM_LOCAL_URL || 'http://127.0.0.1:8082';
@@ -9,6 +12,7 @@ const COPY_FROM_RUN = 'fee30c54'; // known done run with mesh
 const EVIDENCE = path.join('runs', 'phase1-land9', 'ui-solve-evidence.json');
 
 test.describe('Phase1 land9 UI Solve (public)', () => {
+  test.skip(!PUBLIC_E2E, 'Set MAGNUSIM_PUBLIC_E2E=1 to run public URL Solve smoke');
   test('public Start click -> done with residuals', async ({ page, request }) => {
     expect((await request.get(LOCAL + '/')).status(), 'local :8082 must be HTTP 200').toBe(200);
     expect((await request.get(PUBLIC + '/')).status(), 'public URL must be HTTP 200').toBe(200);

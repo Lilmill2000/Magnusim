@@ -90,6 +90,7 @@ def test_cli_subcommands_listed():
         "save-catalog",
         "write-simulation",
         "save-sim-catalog",
+        "write-json",
     ):
         assert name in src
 
@@ -160,3 +161,26 @@ def test_save_sim_catalog_and_write_simulation(tmp_path: Path):
     )
     assert proc3.returncode == 0, proc3.stderr
     assert not (proj / "simulation.json").exists()
+
+
+def test_write_json_allowlisted(tmp_path: Path):
+    proj = tmp_path / "proj1"
+    proj.mkdir()
+    body = {"materials": [{"id": "m1", "name": "Air"}], "simulation_id": "sim-1"}
+    proc = _run(
+        ["write-json", "--project-dir", str(proj), "--rel", "materials.json"],
+        body,
+    )
+    assert proc.returncode == 0, proc.stderr
+    doc = json.loads((proj / "materials.json").read_text(encoding="utf-8"))
+    assert doc["materials"][0]["name"] == "Air"
+    bad = _run(
+        ["write-json", "--project-dir", str(proj), "--rel", "evil.json"],
+        {"x": 1},
+    )
+    assert bad.returncode != 0
+
+
+def test_cli_lists_write_json():
+    src = CLI.read_text(encoding="utf-8")
+    assert "write-json" in src

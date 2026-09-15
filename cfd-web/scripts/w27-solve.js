@@ -9,7 +9,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  writeFileSync,
   readdirSync,
   statSync,
   rmSync,
@@ -414,11 +413,6 @@ function runListPayload(projectId, cat, extra) {
   return { runs, active_run_id, ...rest };
 }
 
-function writeJson(p, obj) {
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(obj, null, 2), 'utf8');
-  return p;
-}
 
 export function sanitizePatchName(label) {
   let base = String(label || '')
@@ -1738,7 +1732,7 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
             ? String(ev.line) + '\n'
             : JSON.stringify(ev) + '\n';
         logBuf += line;
-        writeFileSync(winLog, logBuf, 'utf8');
+        // Phase 1 land10: structured log via job-runner createJobLogger (.cache/logs), not projects/.
       } catch {}
     },
     onExit: (code, signal) => finishRun(code, signal, null),

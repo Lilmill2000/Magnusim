@@ -336,6 +336,42 @@ def cmd_mesh_result(args: argparse.Namespace) -> int:
 
 
 
+
+ALLOWED_WRITE_JSON_RELS = frozenset(
+    {
+        "materials.json",
+        "boundary_conditions.json",
+        "mesh.json",
+        "mesh_refinements.json",
+        "result_controls.json",
+        "area_average.json",
+        "simulation_control.json",
+        "runs/catalog.json",
+    }
+)
+
+
+def cmd_write_json(args: argparse.Namespace) -> int:
+    """Atomically write an allowlisted project-relative JSON doc (Node builds; Python owns write)."""
+    project_dir = Path(args.project_dir).resolve()
+    rel = str(args.rel or "").replace("\\", "/").lstrip("/")
+    if rel not in ALLOWED_WRITE_JSON_RELS:
+        print(json.dumps({"ok": False, "error": f"rel not allowlisted: {rel}"}))
+        return 1
+    body = _read_stdin_json()
+    if not isinstance(body, dict):
+        print(json.dumps({"ok": False, "error": "stdin must be object"}))
+        return 1
+    path = project_dir / Path(rel)
+    doc = dict(body)
+    if not doc.get("updated_at"):
+        doc["updated_at"] = _now()
+    if not doc.get("persistence"):
+        doc["persistence"] = "filesystem"
+    _atomic_write(path, doc)
+    return _print_doc(doc)
+
+
 def cmd_write_project(args: argparse.Namespace) -> int:
     """Atomically write full project.json (Node builds doc; Python owns write)."""
     project_dir = Path(args.project_dir).resolve()
@@ -478,12 +514,19 @@ def build_parser() -> argparse.ArgumentParser:
         ("run-delete", cmd_run_delete, True),
         ("mesh-result", cmd_mesh_result, False),
         ("write-project", cmd_write_project, False),
+        ("write-json", cmd_write_json, False),
         ("save-catalog", cmd_save_catalog, False),
         ("write-simulation", cmd_write_simulation, False),
         ("save-sim-catalog", cmd_save_sim_catalog, False),
     ]:
         sp = sub.add_parser(name)
         add_common(sp)
+        if name == "write-json":
+            sp.add_argument(
+                "--rel",
+                required=True,
+                help="Project-relative JSON path (allowlisted)",
+            )
         if extra:
             sp.add_argument("--run-id", default="")
             sp.add_argument(

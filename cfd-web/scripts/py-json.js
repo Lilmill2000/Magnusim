@@ -144,3 +144,26 @@ export function saveSimCatalogCli(projectDirPath, catalog, simId = '') {
   );
 }
 
+/**
+ * Atomically write an allowlisted project-relative JSON file via project_cli.
+ * @param {string} projectDirPath
+ * @param {string} rel e.g. 'materials.json' or 'runs/catalog.json'
+ * @param {object} doc
+ * @param {string} [simId]
+ */
+export function writeJsonCli(projectDirPath, rel, doc, simId = '') {
+  return pyJsonSync(
+    'project_cli.py',
+    [
+      'write-json',
+      '--project-dir',
+      projectDirPath,
+      '--rel',
+      String(rel),
+      '--sim-id',
+      String(simId || ''),
+    ],
+    doc,
+  );
+}
+
