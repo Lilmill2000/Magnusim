@@ -33,8 +33,8 @@ def test_v13_fixture_upgrades_to_v14_bodies():
     doc = json.loads((PROJECTS / "v13.json").read_text(encoding="utf-8"))
     assert doc["version"] == 13
     proj = Project.from_dict(doc)
-    assert proj.version == 14
-    assert PROJECT_VERSION == 14
+    assert proj.version == PROJECT_VERSION
+    assert PROJECT_VERSION >= 14
     geom = proj.primary_geometry()
     assert geom is not None
     assert geom.bodies

@@ -71,17 +71,86 @@ def _stamp(doc: dict[str, Any], *, sim_id: str | None, increment: str) -> dict[s
     return out
 
 
+
+
+def write_through_project(project_dir: Path, kind: str, body: dict, *, sim_id: str = "") -> tuple[object, str, dict]:
+    """Load/synthesize Project, apply sibling body, save if python schema, regenerate mirrors.
+
+    Returns (project, mode, mirror_doc_for_kind).
+    Soft-pass: does NOT ban Node writes; only makes Python CLI write-through.
+    """
+    from cfddesk.project.web_mirrors import (
+        apply_web_sibling_to_project,
+        is_python_project_doc,
+        load_or_synthesize_project,
+        mark_web_mirrors_derived,
+        regenerate_web_mirrors,
+        to_web_boundary_conditions,
+        to_web_materials,
+        to_web_mesh,
+        to_web_mesh_refinements,
+        to_web_result_controls,
+        to_web_runs_catalog,
+        to_web_simulation_control,
+        to_web_simulations,
+    )
+
+    proj, mode = load_or_synthesize_project(project_dir)
+    proj = apply_web_sibling_to_project(proj, kind, body if isinstance(body, dict) else {}, sim_id=sim_id or None)
+    proj = mark_web_mirrors_derived(proj)
+    # Save Project when project.json is already Python schema (or first synthesize keep web stamps)
+    proj_path = project_dir / "project.json"
+    existing = _read_json(proj_path)
+    if is_python_project_doc(existing) or mode == "python":
+        try:
+            proj.save(proj_path)
+            mode = "python"
+        except Exception:
+            # Fall back: keep web project.json untouched
+            mode = mode if mode != "python" else "synthesized"
+    # Regenerate the touched sibling (+ keep others if python mode)
+    kinds = [kind if kind != "bcs" else "boundary_conditions"]
+    if kind in ("boundary_conditions", "bcs"):
+        kinds = ["boundary_conditions"]
+    elif kind == "refinements":
+        kinds = ["mesh_refinements"]
+    elif kind == "sim_control":
+        kinds = ["simulation_control"]
+    elif kind == "catalog":
+        kinds = ["runs"]
+    regenerate_web_mirrors(proj, project_dir, sim_id=sim_id or None, project_id=project_dir.name, kinds=kinds)
+    to_map = {
+        "materials": to_web_materials,
+        "boundary_conditions": to_web_boundary_conditions,
+        "bcs": to_web_boundary_conditions,
+        "mesh": to_web_mesh,
+        "mesh_refinements": to_web_mesh_refinements,
+        "refinements": to_web_mesh_refinements,
+        "result_controls": to_web_result_controls,
+        "simulation_control": to_web_simulation_control,
+        "sim_control": to_web_simulation_control,
+        "simulations": to_web_simulations,
+        "runs": to_web_runs_catalog,
+        "catalog": to_web_runs_catalog,
+    }
+    fn = to_map.get(kind, to_web_materials)
+    mirror = fn(proj, sim_id=sim_id or None, project_id=project_dir.name) if kind not in ("runs", "catalog") else fn(proj, sim_id=sim_id or None)
+    return proj, mode, mirror
+
 def cmd_set_materials(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir).resolve()
     body = _read_stdin_json()
+    raw = body if isinstance(body, dict) else {"materials": body}
+    _proj, mode, mirror = write_through_project(
+        project_dir, "materials", raw, sim_id=args.sim_id or ""
+    )
+    doc = _stamp(mirror, sim_id=args.sim_id, increment="W18")
     path = project_dir / "materials.json"
-    doc = body if isinstance(body, dict) else {"materials": body}
-    doc = _stamp(doc, sim_id=args.sim_id, increment="W18")
     _atomic_write(path, doc)
-    # Soft stamp on project.json materials pointer (Python owns the write).
+    # Soft stamp on web project.json materials pointer when not python schema.
     proj_path = project_dir / "project.json"
     proj = _read_json(proj_path)
-    if proj:
+    if proj and mode != "python":
         air = doc.get("air") or (doc.get("materials") or [None])[0]
         proj["materials"] = {
             "air": (
@@ -107,13 +176,16 @@ def cmd_set_materials(args: argparse.Namespace) -> int:
 def cmd_set_bcs(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir).resolve()
     body = _read_stdin_json()
+    raw = body if isinstance(body, dict) else {"boundary_conditions": body}
+    _proj, mode, mirror = write_through_project(
+        project_dir, "boundary_conditions", raw, sim_id=args.sim_id or ""
+    )
+    doc = _stamp(mirror, sim_id=args.sim_id, increment="W19")
     path = project_dir / "boundary_conditions.json"
-    doc = body if isinstance(body, dict) else {"boundary_conditions": body}
-    doc = _stamp(doc, sim_id=args.sim_id, increment="W19")
     _atomic_write(path, doc)
     proj_path = project_dir / "project.json"
     proj = _read_json(proj_path)
-    if proj:
+    if proj and mode != "python":
         bcs = list(doc.get("boundary_conditions") or [])
         proj["boundary_conditions"] = {
             "count": len(bcs),
@@ -131,17 +203,26 @@ def cmd_set_bcs(args: argparse.Namespace) -> int:
 def cmd_set_mesh_settings(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir).resolve()
     body = _read_stdin_json()
-    path = project_dir / "mesh.json"
-    doc = body if isinstance(body, dict) else {"settings": body}
-    # Preserve caller stamps when present (W21 live results use increment W21/W25).
+    raw = body if isinstance(body, dict) else {"settings": body}
+    _proj, mode, mirror = write_through_project(
+        project_dir, "mesh", raw, sim_id=args.sim_id or ""
+    )
     inc = "W20"
     if isinstance(body, dict) and body.get("increment"):
         inc = str(body.get("increment"))
-    doc = _stamp(doc, sim_id=args.sim_id, increment=inc)
+    doc = _stamp(mirror, sim_id=args.sim_id, increment=inc)
+    # Preserve caller live_mesh_result / meshes extras from stdin when present
+    if isinstance(body, dict):
+        for k in ("live_mesh_result", "meshes", "bank_exact", "generated", "id", "name", "active_id"):
+            if k in body and k not in doc:
+                doc[k] = body[k]
+            elif k in body and k in ("live_mesh_result", "meshes"):
+                doc[k] = body[k]
+    path = project_dir / "mesh.json"
     _atomic_write(path, doc)
     proj_path = project_dir / "project.json"
     proj = _read_json(proj_path)
-    if proj:
+    if proj and mode != "python":
         settings = doc.get("settings") if isinstance(doc.get("settings"), dict) else {}
         proj["mesh"] = {
             "id": doc.get("id") or doc.get("active_id"),
@@ -164,13 +245,16 @@ def cmd_set_mesh_settings(args: argparse.Namespace) -> int:
 def cmd_set_refinements(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir).resolve()
     body = _read_stdin_json()
+    raw = body if isinstance(body, dict) else {"refinements": body}
+    _proj, mode, mirror = write_through_project(
+        project_dir, "mesh_refinements", raw, sim_id=args.sim_id or ""
+    )
+    doc = _stamp(mirror, sim_id=args.sim_id, increment="W26")
     path = project_dir / "mesh_refinements.json"
-    doc = body if isinstance(body, dict) else {"refinements": body}
-    doc = _stamp(doc, sim_id=args.sim_id, increment="W26")
     _atomic_write(path, doc)
     proj_path = project_dir / "project.json"
     proj = _read_json(proj_path)
-    if proj:
+    if proj and mode != "python":
         refs = list(doc.get("refinements") or [])
         proj["mesh_refinements"] = {
             "count": len(refs),
@@ -191,8 +275,11 @@ def cmd_set_result_controls(args: argparse.Namespace) -> int:
     only_aa = isinstance(body, dict) and body.get("_file") == "area_average.json"
     if only_aa and isinstance(body, dict):
         body = {k: v for k, v in body.items() if k != "_file"}
-    doc = body if isinstance(body, dict) else {"controls": body}
-    doc = _stamp(doc, sim_id=args.sim_id, increment="W22")
+    raw = body if isinstance(body, dict) else {"controls": body}
+    _proj, mode, mirror = write_through_project(
+        project_dir, "result_controls", raw, sim_id=args.sim_id or ""
+    )
+    doc = _stamp(mirror if isinstance(mirror, dict) else raw, sim_id=args.sim_id, increment="W22")
     rc_path = project_dir / "result_controls.json"
     aa_path = project_dir / "area_average.json"
     if only_aa:
@@ -236,9 +323,12 @@ def cmd_set_result_controls(args: argparse.Namespace) -> int:
 def cmd_set_sim_control(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir).resolve()
     body = _read_stdin_json()
+    raw = body if isinstance(body, dict) else {}
+    _proj, _mode, mirror = write_through_project(
+        project_dir, "simulation_control", raw, sim_id=args.sim_id or ""
+    )
+    doc = _stamp(mirror, sim_id=args.sim_id, increment="W17")
     path = project_dir / "simulation_control.json"
-    doc = body if isinstance(body, dict) else {}
-    doc = _stamp(doc, sim_id=args.sim_id, increment="W17")
     _atomic_write(path, doc)
     return _print_doc(doc)
 

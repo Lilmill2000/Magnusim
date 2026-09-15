@@ -24,6 +24,7 @@ existing SolverSettings. Does **not** touch mesh fingerprints (staleness
 must be unchanged across migrate).
 v13: Phase 5 mesh schema (fineness, active_mesh_id, run.mesh_id, results_subdir).
 v14: Geometry.bodies (role/region) replaces volumes; materials body_ids;
+v15: web sibling JSON become derived mirrors; ingest if newer than project.
 optional BC region. Mesh fingerprint unchanged for single-fluid projects.
 """
 
@@ -112,7 +113,7 @@ from cfddesk.results.window_geom import ResultsWindowGeom
 FaceRole = Literal["unassigned", "inlet", "outlet", "walls"]
 ROLES: tuple[FaceRole, ...] = ("unassigned", "inlet", "outlet", "walls")
 
-PROJECT_VERSION = 14
+PROJECT_VERSION = 15
 
 PRIMARY_SIM_NAME = "Incompressible"
 PRIMARY_SIM_ANALYSIS = "incompressible"
@@ -421,6 +422,9 @@ class Project:
     simulations: list[Simulation] = field(default_factory=list)
     # Object-scoped display units, e.g. "bc:<id>.gauge_pressure" → "psi"
     field_units: dict[str, str] = field(default_factory=dict)
+    # Soft-pass land8 / v15: sibling mirror bookkeeping
+    updated_at: str | None = None
+    persistence: dict[str, Any] = field(default_factory=dict)
 
     # ---- primary node access -------------------------------------------------
 
@@ -1437,7 +1441,7 @@ class Project:
     # ---- persistence ---------------------------------------------------------
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "version": self.version,
             "units": {
                 "native_unit": self.native_unit,
@@ -1461,6 +1465,11 @@ class Project:
             "simulations": [s.to_dict() for s in self.simulations],
             "field_units": dict(self.field_units),
         }
+        if self.updated_at:
+            d["updated_at"] = self.updated_at
+        if self.persistence:
+            d["persistence"] = dict(self.persistence)
+        return d
 
     def save(self, path: str | Path) -> None:
         """Atomic write; snapshots the pre-upgrade file once on schema bump."""
@@ -1532,6 +1541,16 @@ class Project:
             geometries=geometries,
             simulations=simulations,
             field_units={str(k): str(v) for k, v in field_units.items()},
+            updated_at=(str(data["updated_at"]) if data.get("updated_at") else None),
+            persistence=(
+                dict(data["persistence"])
+                if isinstance(data.get("persistence"), dict)
+                else (
+                    {"legacy": data["persistence"]}
+                    if data.get("persistence")
+                    else {}
+                )
+            ),
         )
         project = project._sync_faces_from_bcs()
         if version < 6:
@@ -1552,6 +1571,13 @@ class Project:
             project = _upgrade_to_v13(project, project_dir=project_dir)
         if version < 14:
             project = _upgrade_to_v14(project)
+        if version < 15:
+            project = _upgrade_to_v15(project, project_dir=project_dir)
+        elif project_dir is not None:
+            # Already v15+: still ingest siblings that are newer than project.json
+            from cfddesk.project.web_mirrors import ingest_web_siblings_if_newer
+
+            project = ingest_web_siblings_if_newer(project, project_dir)
         return project
 
     @staticmethod
@@ -2371,6 +2397,21 @@ def _upgrade_to_v14(project: Project) -> Project:
     return dataclasses.replace(
         project, version=14, geometries=geometries, simulations=simulations
     )
+
+
+
+def _upgrade_to_v15(project: Project, project_dir: str | Path | None = None) -> Project:
+    """Mark web siblings as derived mirrors; ingest if sibling files are newer.
+
+    Compares sibling `updated_at` (else mtime) to project `updated_at`.
+    Does not change mesh fingerprints.
+    """
+    from cfddesk.project.web_mirrors import ingest_web_siblings_if_newer, mark_web_mirrors_derived
+
+    if project_dir is not None:
+        return ingest_web_siblings_if_newer(project, project_dir)
+    return mark_web_mirrors_derived(project)
+
 
 
 def _default_simulation(geometry_id: str) -> Simulation:

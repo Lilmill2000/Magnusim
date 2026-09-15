@@ -25,7 +25,7 @@ todos:
     status: completed
   - id: p2-collapse-web-json
     content: "Project becomes the only persisted model; web_adapter reads/writes sim-scoped nodes; sibling *.json become derived mirrors (v15)"
-    status: pending
+    status: completed
   - id: p2-registry-cli
     content: "tools/registry_dump.py: emits full registry (labels, schemas, requirements) as JSON for Phase 3"
     status: pending

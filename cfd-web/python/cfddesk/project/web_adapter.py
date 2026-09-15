@@ -590,3 +590,31 @@ def load_run_spec(
         ok=True,
         error=None,
     )
+
+
+# Phase 2 land8 re-exports (Project <-> web sibling mirrors)
+from cfddesk.project.web_mirrors import (  # noqa: E402
+    WEB_SIBLING_RELS,
+    apply_web_sibling_to_project,
+    from_web_boundary_conditions,
+    from_web_materials,
+    from_web_mesh,
+    from_web_mesh_refinements,
+    from_web_result_controls,
+    from_web_runs_catalog,
+    from_web_simulation_control,
+    from_web_simulations,
+    ingest_web_siblings_if_newer,
+    is_python_project_doc,
+    load_or_synthesize_project,
+    mark_web_mirrors_derived,
+    regenerate_web_mirrors,
+    to_web_boundary_conditions,
+    to_web_materials,
+    to_web_mesh,
+    to_web_mesh_refinements,
+    to_web_result_controls,
+    to_web_runs_catalog,
+    to_web_simulation_control,
+    to_web_simulations,
+)
