@@ -1,7 +1,9 @@
-"""Phase 2 land1: registry core unit tests."""
+"""Phase 2 land1 / land1-fix: registry core unit tests."""
 
 from __future__ import annotations
 
+import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from cfddesk.registry import (
     to_json_schema,
     validate,
 )
+from cfddesk.registry import discovery as discovery_mod
 from cfddesk.registry.discovery import get_hub
 
 
@@ -71,6 +74,21 @@ def test_describe_includes_plugin():
     ]
 
 
+def test_describe_schema_failure_warns(caplog):
+    @dataclass
+    class _Broken:
+        key: str = "b"
+        label: str = "B"
+        settings_schema: object = object()  # not iterable SchemaFields
+
+    reg = Registry("demo")
+    reg.register(_Broken(), plugin="p1")
+    with caplog.at_level(logging.WARNING, logger="cfddesk.registry.base"):
+        desc = reg.describe()
+    assert desc[0]["schema"] is None
+    assert any("schema" in r.message.lower() for r in caplog.records)
+
+
 def test_to_json_schema_and_validate_roundtrip():
     fields = [
         SchemaField(
@@ -108,6 +126,8 @@ def test_to_json_schema_and_validate_roundtrip():
     assert schema["properties"]["mode"]["enum"] == ["a", "b"]
     assert schema["properties"]["extra"]["x-cfddesk"]["depends_on"] == {"mode": "b"}
     assert schema["properties"]["extra"]["x-cfddesk"]["advanced"] is True
+    # All fields have defaults → not required
+    assert "required" not in schema
 
     assert validate(
         {"speed": 10.0, "n": 2, "mode": "a", "on": True, "dir": [1, 0, 0]}, fields
@@ -117,6 +137,31 @@ def test_to_json_schema_and_validate_roundtrip():
     assert any("n" in e for e in errs)
     assert any("mode" in e for e in errs)
     assert any("dir" in e for e in errs)
+
+
+def test_required_fields_in_schema_and_validate():
+    fields = [
+        SchemaField("name", "Name", "text"),  # default None → required
+        SchemaField("n", "Count", "int", default=1),
+        SchemaField("flag", "Flag", "bool"),  # bool + None default → optional
+        SchemaField("meta", "Meta", "raw_dict"),  # raw_dict → optional
+        SchemaField(
+            "detail",
+            "Detail",
+            "text",
+            depends_on={"name": "special"},
+        ),
+    ]
+    schema = to_json_schema(fields)
+    assert schema["required"] == ["name", "detail"]
+    assert validate({"name": "ok", "n": 2}, fields) == []
+    errs = validate({"n": 2}, fields)
+    assert any("missing required field 'name'" in e for e in errs)
+    # detail only required when depends_on matches
+    assert validate({"name": "other"}, fields) == []
+    errs2 = validate({"name": "special"}, fields)
+    assert any("missing required field 'detail'" in e for e in errs2)
+    assert validate({"name": "special", "detail": "x"}, fields) == []
 
 
 def test_temp_folder_plugin_and_requirements(tmp_path: Path, monkeypatch):
@@ -211,6 +256,110 @@ def test_failing_plugin_does_not_break_builtins(tmp_path: Path, monkeypatch):
     assert hub.registry("demo").get("ok").key == "ok"
 
 
+def test_load_all_retries_after_plugin_failure(tmp_path: Path, monkeypatch):
+    """Partial load leaves _LOADED False so a later load_all() retries without force."""
+    plugins = tmp_path / "plugins" / "flaky"
+    plugins.mkdir(parents=True)
+    (plugins / "manifest.toml").write_text(
+        'key = "flaky"\nname = "Flaky"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    (plugins / "plugin.py").write_text("raise RuntimeError('boom')\n", encoding="utf-8")
+    monkeypatch.setenv("CFDDESK_WEB_ROOT", str(tmp_path))
+    reset_for_tests()
+    hub1 = load_all(web_root=tmp_path)
+    assert discovery_mod._LOADED is False
+    assert "recovered" not in hub1.registry("analysis").keys()
+    # Builtins remain; demo registration from first attempt survives retry
+    hub1.registry("demo").register(_DummySpec("kept", "Kept"), plugin="builtin")
+
+    (plugins / "plugin.py").write_text(
+        """
+from dataclasses import dataclass
+from cfddesk.registry.manifest import PluginManifest
+
+@dataclass(frozen=True)
+class Spec:
+    key: str
+    label: str
+
+def register(hub):
+    hub.registry("analysis").register(Spec("recovered", "Recovered"), plugin="flaky")
+    return PluginManifest(key="flaky", name="Flaky", version="0.1.0",
+                          provides={"analysis": ["recovered"]})
+""",
+        encoding="utf-8",
+    )
+    # Drop cached failed module so re-import picks up the fixed file
+    sys.modules.pop("cfddesk._plugins.flaky", None)
+
+    hub2 = load_all(web_root=tmp_path)  # no force=
+    assert hub2 is hub1
+    assert discovery_mod._LOADED is True
+    assert "recovered" in hub2.registry("analysis").keys()
+    assert "kept" in hub2.registry("demo").keys()  # builtins / prior regs not wiped
+
+
+def test_toml_fallback_fail_closed_on_tables(monkeypatch, caplog):
+    """Without tomllib/tomli, manifests with [tables]/requires arrays must not silently degrade."""
+    real_import = __import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name in ("tomllib", "tomli"):
+            raise ImportError(f"blocked {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", _fake_import)
+    text = '''key = "p"
+name = "P"
+
+[requires]
+tool = "x"
+'''
+    with caplog.at_level(logging.WARNING, logger="cfddesk.registry.discovery"):
+        result = discovery_mod._parse_simple_toml(text, source="plugins/p/manifest.toml")
+    assert result is None
+    assert any("refusing" in r.message.lower() or "tables" in r.message.lower() for r in caplog.records)
+
+
+def test_toml_fallback_fail_closed_on_requires_array(monkeypatch, caplog):
+    real_import = __import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name in ("tomllib", "tomli"):
+            raise ImportError(f"blocked {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", _fake_import)
+    text = 'key = "p"\nrequires = [{kind = "wsl_tool", name = "blockMesh"}]\n'
+    with caplog.at_level(logging.WARNING, logger="cfddesk.registry.discovery"):
+        result = discovery_mod._parse_simple_toml(text, source="plugins/p/manifest.toml")
+    assert result is None
+    assert any("requires" in r.message.lower() or "refusing" in r.message.lower() for r in caplog.records)
+
+
+def test_toml_fallback_flat_ok(monkeypatch):
+    real_import = __import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name in ("tomllib", "tomli"):
+            raise ImportError(f"blocked {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", _fake_import)
+    text = 'key = "p"\nname = "P"\nversion = "1.0.0"\n'
+    result = discovery_mod._parse_simple_toml(text, source="plugins/p/manifest.toml")
+    assert result == {"key": "p", "name": "P", "version": "1.0.0"}
+
+
+def test_no_public_uimanifest_export():
+    import cfddesk.registry as reg
+
+    assert "UiManifest" not in reg.__all__
+    assert not hasattr(reg, "UiManifest")
+    assert not hasattr(PluginManifest, "ui")
+
+
 def test_reset_for_tests_clears_state():
     hub = load_all()
     hub.registry("demo").register(_DummySpec("z", "Z"), plugin="builtin")
@@ -222,9 +371,9 @@ def test_reset_for_tests_clears_state():
 def test_setting_field_alias_still_works():
     """bc_registry.SettingField is SchemaField alias; BC_TYPES still load."""
     from cfddesk.case.bc_registry import BC_TYPES, SettingField
-    from cfddesk.registry.schema import SchemaField
+    from cfddesk.registry.schema import SchemaField as SF
 
-    assert SettingField is SchemaField
+    assert SettingField is SF
     assert len(BC_TYPES) >= 20
     f = SettingField("v", "V", "float", default=1.0, unit="m/s")
     assert f.key == "v"

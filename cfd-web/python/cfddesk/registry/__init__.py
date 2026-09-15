@@ -10,7 +10,7 @@ from cfddesk.registry.discovery import (
     load_all,
     reset_for_tests,
 )
-from cfddesk.registry.manifest import PluginManifest, UiManifest
+from cfddesk.registry.manifest import PluginManifest
 from cfddesk.registry.requirements import Missing, Requirement, check_requirements
 from cfddesk.registry.schema import SchemaField, to_json_schema, validate
 
@@ -23,7 +23,6 @@ __all__ = [
     "to_json_schema",
     "validate",
     "PluginManifest",
-    "UiManifest",
     "Requirement",
     "Missing",
     "check_requirements",

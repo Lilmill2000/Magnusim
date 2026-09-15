@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -14,6 +15,10 @@ from cfddesk.registry.base import Registry
 from cfddesk.registry.manifest import PluginManifest
 
 log = logging.getLogger(__name__)
+
+# Table header or requires=array that the line fallback cannot represent.
+_TABLE_HDR_RE = re.compile(r"^\s*\[")
+_REQUIRES_ARRAY_RE = re.compile(r"^\s*requires\s*=\s*\[", re.IGNORECASE)
 
 
 class RegistryHub:
@@ -40,6 +45,7 @@ class RegistryHub:
 
 _HUB: RegistryHub | None = None
 _LOADED = False
+_BUILTINS_REGISTERED = False
 
 
 def get_hub() -> RegistryHub:
@@ -55,11 +61,12 @@ def get_registry(kind: str) -> Registry[Any]:
 
 def reset_for_tests() -> None:
     """Clear all registries and load state (unit tests)."""
-    global _HUB, _LOADED
+    global _HUB, _LOADED, _BUILTINS_REGISTERED
     if _HUB is not None:
         _HUB.clear()
     _HUB = RegistryHub()
     _LOADED = False
+    _BUILTINS_REGISTERED = False
 
 
 def _disabled_plugins(web_root: Path | None) -> set[str]:
@@ -145,16 +152,21 @@ def _entry_point_callables() -> list[tuple[str, Callable[..., Any]]]:
     return out
 
 
-def _parse_simple_toml(text: str) -> dict[str, Any]:
-    """Minimal TOML subset parser (top-level string/list keys) for scaffolding."""
-    try:
-        import tomllib
+def _toml_needs_full_parser(text: str) -> bool:
+    """True if source has [tables] or requires arrays the line fallback cannot represent."""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if _TABLE_HDR_RE.match(line) or line.startswith("["):
+            return True
+        if _REQUIRES_ARRAY_RE.match(line):
+            return True
+    return False
 
-        return tomllib.loads(text)
-    except ImportError:
-        pass
-    except Exception:
-        pass
+
+def _fallback_line_toml(text: str) -> dict[str, Any]:
+    """Minimal top-level string-key parser (no tables/arrays)."""
     data: dict[str, Any] = {}
     for raw in text.splitlines():
         line = raw.strip()
@@ -169,24 +181,66 @@ def _parse_simple_toml(text: str) -> dict[str, Any]:
     return data
 
 
+def _parse_simple_toml(text: str, *, source: str = "") -> dict[str, Any] | None:
+    """Parse TOML preferring tomllib/tomli; fail-closed when fallback cannot represent."""
+    src = source or "manifest"
+
+    try:
+        import tomllib
+
+        return tomllib.loads(text)
+    except ImportError:
+        pass
+    except Exception as exc:
+        log.warning("TOML parse failed for %s: %s", src, exc)
+        return None
+
+    try:
+        import tomli  # type: ignore[import-not-found]
+
+        return tomli.loads(text)
+    except ImportError:
+        pass
+    except Exception as exc:
+        log.warning("TOML parse failed (tomli) for %s: %s", src, exc)
+        return None
+
+    # No real TOML library — line fallback only for flat string keys.
+    if _toml_needs_full_parser(text):
+        log.warning(
+            "No tomllib/tomli available; refusing to load %s — manifest has [tables] "
+            "and/or requires arrays that the line fallback would drop silently",
+            src,
+        )
+        return None
+    return _fallback_line_toml(text)
+
+
 def _load_folder_plugin(
     plugin_dir: Path,
     hub: RegistryHub,
     disabled: set[str],
-) -> PluginManifest | None:
+) -> tuple[PluginManifest | None, bool]:
+    """Load one folder plugin. Returns (manifest_or_None, load_failed)."""
     manifest_path = plugin_dir / "manifest.toml"
     plugin_py = plugin_dir / "plugin.py"
     if not manifest_path.is_file() or not plugin_py.is_file():
-        return None
+        return None, False
     try:
-        meta = _parse_simple_toml(manifest_path.read_text(encoding="utf-8"))
+        meta = _parse_simple_toml(
+            manifest_path.read_text(encoding="utf-8"),
+            source=str(manifest_path),
+        )
     except Exception as exc:
         log.warning("Bad manifest in %s: %s", plugin_dir, exc)
-        return None
+        return None, True
+    if meta is None:
+        # Already warned inside _parse_simple_toml (parse fail or fail-closed fallback).
+        return None, True
     key = str(meta.get("key") or plugin_dir.name)
     if key in disabled:
         log.info("Plugin %s disabled via .cfddesk-local.json", key)
-        return None
+        return None, False
     mod_name = f"cfddesk._plugins.{plugin_dir.name}"
     try:
         spec = importlib.util.spec_from_file_location(mod_name, plugin_py)
@@ -201,9 +255,9 @@ def _load_folder_plugin(
         result = register(hub)
     except Exception as exc:
         log.warning("Failing plugin import %s: %s — continuing", key, exc)
-        return None
+        return None, True
     if isinstance(result, PluginManifest):
-        return result
+        return result, False
     # Build a minimal manifest from toml if register returned None
     from cfddesk.registry.requirements import Requirement
 
@@ -219,12 +273,15 @@ def _load_folder_plugin(
                         version_spec=str(item.get("version_spec", "") or ""),
                     )
                 )
-    return PluginManifest(
-        key=key,
-        name=str(meta.get("name") or key),
-        version=str(meta.get("version") or "0.0.0"),
-        requires=requires,
-        provides={},
+    return (
+        PluginManifest(
+            key=key,
+            name=str(meta.get("name") or key),
+            version=str(meta.get("version") or "0.0.0"),
+            requires=requires,
+            provides={},
+        ),
+        False,
     )
 
 
@@ -232,28 +289,36 @@ def discover_folder_plugins(
     hub: RegistryHub,
     *,
     web_root: Path | str | None = None,
-) -> list[PluginManifest]:
+) -> tuple[list[PluginManifest], bool]:
+    """Discover plugins under web_root/plugins. Returns (manifests, had_failures)."""
     root = _resolve_web_root(web_root)
     if root is None:
-        return []
+        return [], False
     plugins_dir = Path(root) / "plugins"
     if not plugins_dir.is_dir():
-        return []
+        return [], False
     disabled = _disabled_plugins(Path(root))
     manifests: list[PluginManifest] = []
+    had_failures = False
     for child in sorted(plugins_dir.iterdir()):
         if not child.is_dir():
             continue
-        m = _load_folder_plugin(child, hub, disabled)
+        m, failed = _load_folder_plugin(child, hub, disabled)
+        if failed:
+            had_failures = True
         if m is not None:
             hub.manifests[m.key] = m
             manifests.append(m)
-    return manifests
+    return manifests, had_failures
 
 
-def discover_entry_points(hub: RegistryHub, disabled: set[str] | None = None) -> list[PluginManifest]:
+def discover_entry_points(
+    hub: RegistryHub, disabled: set[str] | None = None
+) -> tuple[list[PluginManifest], bool]:
+    """Load entry-point plugins. Returns (manifests, had_failures)."""
     disabled = disabled or set()
     manifests: list[PluginManifest] = []
+    had_failures = False
     for name, fn in _entry_point_callables():
         if name in disabled:
             log.info("Entry-point plugin %s disabled", name)
@@ -262,29 +327,38 @@ def discover_entry_points(hub: RegistryHub, disabled: set[str] | None = None) ->
             result = fn(hub)
         except Exception as exc:
             log.warning("Entry-point plugin %s failed: %s — continuing", name, exc)
+            had_failures = True
             continue
         if isinstance(result, PluginManifest):
             hub.manifests[result.key] = result
             manifests.append(result)
-    return manifests
+    return manifests, had_failures
 
 
 def load_all(*, web_root: Path | str | None = None, force: bool = False) -> RegistryHub:
-    """Idempotent: register builtins then discover plugins."""
-    global _LOADED
+    """Register builtins then discover plugins.
+
+    Sets _LOADED True only when discovery completed without plugin-load failures,
+    so a later load_all() without force=True retries discovery after a partial load.
+    Builtins stay registered across retries (not wiped).
+    """
+    global _LOADED, _BUILTINS_REGISTERED
     hub = get_hub()
     if _LOADED and not force:
         return hub
-    # Built-ins first — never skip even if plugins fail.
-    try:
-        from cfddesk.builtin import register_builtins
+    # Built-ins first — never skip even if plugins fail; do not re-stamp on retry
+    # unless force (same-plugin re-register is idempotent).
+    if not _BUILTINS_REGISTERED or force:
+        try:
+            from cfddesk.builtin import register_builtins
 
-        register_builtins(hub)
-    except Exception as exc:
-        log.error("register_builtins failed: %s", exc)
-        raise
+            register_builtins(hub)
+        except Exception as exc:
+            log.error("register_builtins failed: %s", exc)
+            raise
+        _BUILTINS_REGISTERED = True
     disabled = _disabled_plugins(_resolve_web_root(web_root))
-    discover_entry_points(hub, disabled)
-    discover_folder_plugins(hub, web_root=web_root)
-    _LOADED = True
+    _, ep_fail = discover_entry_points(hub, disabled)
+    _, folder_fail = discover_folder_plugins(hub, web_root=web_root)
+    _LOADED = not (ep_fail or folder_fail)
     return hub

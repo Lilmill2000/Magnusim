@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
+
+log = logging.getLogger(__name__)
 
 
 class RegistryError(Exception):
@@ -78,7 +81,13 @@ class Registry(Generic[T]):
                     from cfddesk.registry.schema import to_json_schema
 
                     row["schema"] = to_json_schema(list(schema))
-                except Exception:
+                except (TypeError, ValueError, AttributeError) as exc:
+                    log.warning(
+                        "describe: schema for %s/%s failed (%s); setting schema=None",
+                        self.kind,
+                        key,
+                        exc,
+                    )
                     row["schema"] = None
             requires = getattr(spec, "requires", None)
             if requires is not None:

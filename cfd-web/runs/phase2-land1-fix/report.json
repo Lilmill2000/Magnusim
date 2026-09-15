@@ -1,0 +1,50 @@
+{
+  "phase": "Phase 2",
+  "land": "land1-fix",
+  "title": "land1 debt: toml warn/fail-closed, load_all retry, drop UiManifest, required schema, describe warn",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 02:05:33 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "d7aa5cefe952b84530338d48dd70dcd23554f4ea",
+  "commit_sha": "PENDING",
+  "commit_short": "PENDING",
+  "tests": {
+    "unit_suite": "121 passed",
+    "land1_fix_focused": "16 passed (test_registry.py)"
+  },
+  "fixes": [
+    "toml: prefer tomllib/tomli; fail-closed + log.warning when fallback would drop [tables]/requires arrays",
+    "load_all: _LOADED only True when discovery had no plugin-load failures; retries without force; builtins sticky via _BUILTINS_REGISTERED",
+    "UiManifest deleted; PluginManifest.ui removed; not in registry.__all__",
+    "SchemaField to_json_schema marks required; validate() enforces missing required (respects depends_on; bool/raw_dict optional)",
+    "Registry.describe: narrow except (TypeError/ValueError/AttributeError) + log.warning instead of silent bare except"
+  ],
+  "files_touched": {
+    "modified": [
+      "cfd-web/python/cfddesk/registry/discovery.py",
+      "cfd-web/python/cfddesk/registry/manifest.py",
+      "cfd-web/python/cfddesk/registry/__init__.py",
+      "cfd-web/python/cfddesk/registry/schema.py",
+      "cfd-web/python/cfddesk/registry/base.py",
+      "cfd-web/python/tests/unit/test_registry.py"
+    ],
+    "added": [
+      "cfd-web/runs/phase2-land1-fix/report.json",
+      "cfd-web/runs/phase2-land1-fix/baseline_HEAD.txt"
+    ]
+  },
+  "NOT_yet_done": [
+    "AnalysisType + incompressible_steady/transient builtins (p2-analysis-type / land2)",
+    "SolverBackend / MeshBackend / BC wrap / Material / Monitor / ResultFilter",
+    "No JS/UI / Phase 3+"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done; land1-fix is debt cleanup on registry foundation only ? no AnalysisType/Solver/Mesh/Material/Monitor/Filter specs yet; UI unchanged.",
+  "notes": [
+    "cfMesh / HEXCORE-PROCESS-BACKUP-2026-09-02 untouched.",
+    "No JS changes; :8082 / tunnel not touched.",
+    "Did not push.",
+    "Addressed Long Haul / DA ranked change-cost items on 8c65899 (baseline before edits d7aa5ce)."
+  ]
+}

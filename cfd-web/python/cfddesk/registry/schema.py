@@ -46,6 +46,17 @@ _KIND_TO_JSON: dict[str, dict[str, Any]] = {
 }
 
 
+def _is_required_field(f: SchemaField) -> bool:
+    """Fields with no default are required (bool/raw_dict stay optional when omitted)."""
+    return f.default is None and f.kind not in ("raw_dict", "bool")
+
+
+def _depends_active(f: SchemaField, values: dict[str, Any]) -> bool:
+    if not f.depends_on:
+        return True
+    return all(values.get(dep_key) == dep_val for dep_key, dep_val in f.depends_on.items())
+
+
 def to_json_schema(fields: list[SchemaField] | tuple[SchemaField, ...]) -> dict[str, Any]:
     """Build a JSON Schema draft-2020-12 object for the given fields."""
     properties: dict[str, Any] = {}
@@ -83,10 +94,8 @@ def to_json_schema(fields: list[SchemaField] | tuple[SchemaField, ...]) -> dict[
         # Always include title for UI
         prop["title"] = f.label
         properties[f.key] = prop
-        # Fields with no default are required
-        if f.default is None and f.kind != "raw_dict":
-            # Keep loose: only require when explicitly no default and not bool
-            pass
+        if _is_required_field(f):
+            required.append(f.key)
     schema: dict[str, Any] = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -107,26 +116,26 @@ def validate(values: dict[str, Any], fields: list[SchemaField] | tuple[SchemaFie
             errors.append(f"unknown field {key!r}")
             continue
         f = by_key[key]
-        if f.depends_on:
-            skip = False
-            for dep_key, dep_val in f.depends_on.items():
-                if values.get(dep_key) != dep_val:
-                    skip = True
-                    break
-            if skip:
-                continue
+        if not _depends_active(f, values):
+            continue
         err = _check_value(f, val)
         if err:
             errors.append(err)
     for f in fields:
-        if f.key not in values and f.default is None and f.kind not in ("raw_dict", "bool"):
-            # optional unless explicitly needed later; no hard require this land
-            pass
+        if f.key in values:
+            continue
+        if not _is_required_field(f):
+            continue
+        if not _depends_active(f, values):
+            continue
+        errors.append(f"missing required field {f.key!r}")
     return errors
 
 
 def _check_value(f: SchemaField, val: Any) -> str | None:
     if val is None:
+        if _is_required_field(f):
+            return f"{f.key}: required value is null"
         return None
     if f.kind == "float":
         if not isinstance(val, (int, float)) or isinstance(val, bool):
