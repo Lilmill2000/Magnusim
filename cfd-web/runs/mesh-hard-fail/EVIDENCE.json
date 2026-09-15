@@ -1,86 +1,67 @@
-﻿{
-    "title":  "Mesh HARD FAIL prove — Test 2 → standard/gmsh-hexcore",
-    "updated_at_ct":  "9/15/2026 11:15 AM CT",
-    "soft_pass":  false,
-    "phase2_closed":  false,
-    "daniel_ui_fail_shot":  {
-                                "meaning":  "Coord UI Test 2 Mesh 1 = 633201 cells / 695855 nodes (nodes\u003ecells)",
-                                "project":  "test-2-20260909045913-08903e",
-                                "path_kind":  "cartesianMesh",
-                                "backend":  "cfmesh",
-                                "case":  "projects/test-2-20260909045913-08903e/mesh/run-7a782c3f",
-                                "screenshots":  [
-                                                    "runs/mesh-hard-fail/test2-close.png",
-                                                    "runs/mesh-hard-fail/test2-overall.png",
-                                                    "runs/mesh-hard-fail/before-test2-cfmesh-close.png"
-                                                ]
-                            },
-    "disk_snappy_variant":  {
-                                "project":  "test-2-20260909050125-ad5996",
-                                "path_kind":  "snappyHexMesh",
-                                "n_cells":  141930,
-                                "n_points":  175315,
-                                "note":  "Legacy W25 snappy attach; same STEP; not the denser UI fail Daniel saw",
-                                "screenshot":  "runs/mesh-hard-fail/before-ad5996-snappy-overall.png",
-                                "remesh_attempt":  "generate_standard.py kicked (not snappy) but failed on stale BC faces face 57/71 (STEP has 17 faces)"
-                            },
-    "cyclone_bar":  {
-                        "project":  "cyclone-v2-20260911002809-870d9f",
-                        "mesh_id":  "mesh-mtxd2pdi-6b4076",
-                        "path_kind":  "standard",
-                        "backend":  "gmsh-hexcore",
-                        "n_cells":  678028,
-                        "n_points":  296119,
-                        "cells_per_node":  2.29,
-                        "BL":  {
-                                   "n":  3,
-                                   "total_thickness_m":  0.002413108960567475,
-                                   "expansion":  1.5
-                               },
-                        "screenshots":  [
-                                            "runs/mesh-hard-fail/cyclone-default-close.png",
-                                            "runs/mesh-hard-fail/cyclone-default-overall.png",
-                                            "runs/mesh-hard-fail/bar-cyclone-gmsh-hexcore-close.png"
-                                        ]
-                    },
-    "after_prove":  {
-                        "project":  "test-2-20260909045913-08903e",
-                        "generate_id":  "18e8de7a",
-                        "command_tool":  "python/tools/generate_standard.py",
-                        "path_kind":  "standard",
-                        "backend":  "gmsh-hexcore",
-                        "n_cells":  677818,
-                        "n_points":  296046,
-                        "cells_per_node":  2.29,
-                        "layers_applied":  true,
-                        "hex_core_applied":  true,
-                        "BL":  {
-                                   "n":  3,
-                                   "total_thickness_m":  0.002413108960567475,
-                                   "expansion":  1.5
-                               },
-                        "note":  "Same STEP + Cyclone Default knobs → nearly identical topology/counts (not snappy relabel; not denser-cfmesh soft-pass)",
-                        "screenshots":  [
-                                            "runs/mesh-hard-fail/after-test2-gmsh-hexcore-close.png",
-                                            "runs/mesh-hard-fail/after-test2-gmsh-hexcore-overall.png"
-                                        ]
-                    },
-    "root_cause":  {
-                       "summary":  "New Standard generates were routed off Cyclone Default gmsh-hexcore onto legacy writers (cfMesh cartesian for live UI 633k fail; older Test 2 variant snappy W25).",
-                       "mechanism":  "web_mirrors.to_web_mesh mapped Python hexcore_backend default \u0027cfmesh\u0027 → UI advanced.mesh_engine \u0027cfmesh\u0027. w21 then ran generate_cfmesh_standard.py. hexcore_backend≠product mesh_engine.",
-                       "not":  "Flipping algorithm string alone; n_cells soft-pass; inventing a third defaults source"
-                   },
-    "fix":  {
-                "files":  [
-                              "cfd-web/python/cfddesk/project/web_mirrors/mesh.py",
-                              "cfd-web/python/cfddesk/project/settings.py",
-                              "cfd-web/scripts/vite-plugin-case-fields.js"
-                          ],
-                "notes":  [
-                              "to_web_mesh emits mesh_engine from ui_mesh_engine (default standard); no longer from hexcore_backend",
-                              "add_layers default True to match W20/Cyclone BL on",
-                              "vite hydrate path_kind fallback snappyHexMesh→standard (soft-pass hygiene)",
-                              "MESH_ENGINES still land13 registry.json only — no third defaults source"
-                          ]
-            }
+{
+  "title": "Mesh HARD FAIL prove \u2014 Test 2 \u2192 standard/gmsh-hexcore",
+  "sha_fix": "0c6be39",
+  "sha_debugger_left_alone": "0d6e1ea",
+  "phase2_closed": false,
+  "soft_pass": false,
+  "daniel_hate_pin": {
+    "which": "ON-SCREEN Coord UI Test 2 Mesh 1",
+    "project": "test-2-20260909045913-08903e",
+    "cells": 633201,
+    "nodes": 695855,
+    "path_kind": "cartesianMesh",
+    "backend": "cfmesh",
+    "cells_per_node": 0.91,
+    "why_hate": "nodes>cells surface-dense \u2014 NOT Cyclone hex-core topology; denser \u2260 better",
+    "screenshots": [
+      "cfd-web/runs/mesh-hard-fail/test2-close.png",
+      "cfd-web/runs/mesh-hard-fail/test2-overall.png",
+      "cfd-web/runs/mesh-hard-fail/before-test2-cfmesh-close.png"
+    ],
+    "not_this": "disk snappy variant test-2-20260909050125-ad5996 ~141930 cells (legacy W25)"
+  },
+  "cyclone_bar": {
+    "project": "cyclone-v2-20260911002809-870d9f",
+    "mesh_id": "mesh-mtxd2pdi-6b4076",
+    "path_kind": "standard",
+    "backend": "gmsh-hexcore",
+    "cells": 678028,
+    "nodes": 296119,
+    "cells_per_node": 2.29,
+    "BL_n": 3,
+    "screenshots": [
+      "cfd-web/runs/mesh-hard-fail/cyclone-default-close.png",
+      "cfd-web/runs/mesh-hard-fail/bar-cyclone-gmsh-hexcore-close.png"
+    ]
+  },
+  "after_new_generate": {
+    "project": "test-2-20260909045913-08903e",
+    "generate_id": "18e8de7a",
+    "command": "python/tools/generate_standard.py ... --fineness 5 --add-layers 1 --hex-core 1",
+    "path_kind": "standard",
+    "engine": "standard",
+    "backend_meta": "gmsh-hexcore",
+    "cells": 677818,
+    "nodes": 296046,
+    "cells_per_node": 2.29,
+    "layers_applied": true,
+    "hex_core_applied": true,
+    "BL": {
+      "n": 3,
+      "total_thickness_m": 0.002413108960567475,
+      "expansion": 1.5
+    },
+    "screenshots": [
+      "cfd-web/runs/mesh-hard-fail/after-test2-gmsh-hexcore-close.png",
+      "cfd-web/runs/mesh-hard-fail/after-test2-gmsh-hexcore-overall.png"
+    ],
+    "soft_pass_kill": "Not claiming pass from ~678k proximity alone \u2014 backend=gmsh-hexcore + cells>>nodes + section visual match Cyclone"
+  },
+  "root_cause": "to_web_mesh mapped Python hexcore_backend default cfmesh \u2192 UI mesh_engine=cfmesh \u2192 w21 ran generate_cfmesh_standard.py (cartesianMesh). hexcore_backend \u2260 product mesh_engine. Older ad5996 was W25 snappy attach (separate).",
+  "fix_files": [
+    "cfd-web/python/cfddesk/project/web_mirrors/mesh.py",
+    "cfd-web/python/cfddesk/project/settings.py",
+    "cfd-web/scripts/vite-plugin-case-fields.js"
+  ],
+  "defaults_source": "land13 MESH_ENGINES from registry.json only \u2014 no third defaults source"
 }
