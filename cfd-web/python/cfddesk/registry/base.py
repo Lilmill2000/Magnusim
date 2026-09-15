@@ -75,7 +75,11 @@ class Registry(Generic[T]):
                 "label": getattr(spec, "label", key),
                 "plugin": self._plugins.get(key, getattr(spec, "plugin", "builtin")),
             }
-            schema = getattr(spec, "settings_schema", None) or getattr(spec, "schema", None)
+            schema = (
+                getattr(spec, "settings_schema", None)
+                or getattr(spec, "params_schema", None)
+                or getattr(spec, "schema", None)
+            )
             if schema is not None:
                 try:
                     from cfddesk.registry.schema import to_json_schema

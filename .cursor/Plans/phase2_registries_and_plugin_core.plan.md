@@ -18,11 +18,11 @@ todos:
     content: "Wrap bc_registry in Registry; MaterialModel spec (newtonian_incompressible); MonitorType registry (was MonitorSpec; FO MonitorSpec untouched)"
     status: completed
   - id: p2-result-filter
-    content: "ResultFilter/Exporter spec wrapping tools/export_*.py; registry maps filter key -> tool + params schema"
-    status: pending
+    content: "ResultFilterType (not FilterSpec) wrapping tools/export_*.py; registry maps filter key -> tool + params schema"
+    status: completed
   - id: p2-geometry-regions
     content: "Geometry gains bodies with roles (fluid/solid) + regions; migration v14; fingerprint unaffected for single fluid body"
-    status: pending
+    status: completed
   - id: p2-collapse-web-json
     content: "Project becomes the only persisted model; web_adapter reads/writes sim-scoped nodes; sibling *.json become derived mirrors (v15)"
     status: pending
@@ -87,7 +87,7 @@ cfddesk/registry/
   mesher.py            # MeshBackend spec
   material.py          # MaterialModel spec
   monitor.py           # MonitorType
-  result_filter.py     # ResultFilterSpec
+  result_filter.py     # ResultFilterType
   bc.py                # re-export BcTypeSpec through Registry
 cfddesk/builtin/
   __init__.py          # register_builtins() called by load_all()
@@ -96,7 +96,7 @@ cfddesk/builtin/
   meshers.py           # standard, cfmesh, snappy_hexdominant
   materials.py         # newtonian_incompressible (+ library entries)
   monitors.py          # area_average, flow_rate
-  filters.py           # cut_plane, streamlines, plot_over_path, iso_surface, iso_volume, inspect_point, field (surface)
+  filters.py           # cut_plane, streamlines, plot_over_path, iso_surface, iso_volume, inspect_point, surface_field, mesh_surface, mesh_section
 ```
 
 ## Step 1: Registry core
@@ -206,11 +206,11 @@ Constraint (workspace rule): cfMesh path stays registered and callable; `HEXCORE
   Built-in `newtonian_incompressible`.
 - `registry/monitor.py`: `MonitorType(key, label, target: Literal["patch","point","volume","line"], fields_schema, write_function_object(ctx, target_ref, write_control_text) -> str, parse_dat(text) -> Series)`. Built-ins `area_average` (`mon_<patch>`), `flow_rate` (`flow_<patch>`) from Phase 1's `function_objects.py`; the `.dat` parser from `w27.parseSurfaceFieldValueDat` (moved to `surface_averages.py`).
 
-## Step 6: `ResultFilter`
+## Step 6: `ResultFilterType`
 
 ```python
 @dataclass(frozen=True)
-class ResultFilterSpec:
+class ResultFilterType:
     key: str                  # "cut_plane", "streamlines", "iso_surface", "iso_volume", "plot_over_path", "inspect_point", "surface_field", "mesh_surface", "mesh_section"
     label: str
     params_schema: tuple[SchemaField, ...]
