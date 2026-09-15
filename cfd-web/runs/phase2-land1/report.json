@@ -8,7 +8,7 @@
   "timestamp_local": "2026-09-15 01:44:12 CT",
   "machine": "Timmy",
   "baseline_HEAD": "f5f919e55378e71d6dca5f1749201b8981dad922",
-  "commit_sha": "PENDING",
+  "commit_sha": "8c65899615cba937a4a21b819ed3aec89a7097a2",
   "tests": {
     "unit_suite": "114 passed",
     "land1_focused": "9 passed (test_registry.py); bc_registry still green (2)"
@@ -50,10 +50,11 @@
     "tools/registry_dump.py (p2-registry-cli)",
     "Full built-in load / golden write_case tests (p2-tests broader)"
   ],
-  "soft_pass_kill": "Do NOT claim Phase 2 done; land1 is registry foundation only — no AnalysisType/Solver/Mesh/Material/Monitor/Filter specs yet; UI unchanged.",
+  "soft_pass_kill": "Do NOT claim Phase 2 done; land1 is registry foundation only \u2014 no AnalysisType/Solver/Mesh/Material/Monitor/Filter specs yet; UI unchanged.",
   "notes": [
     "cfMesh / HEXCORE-PROCESS-BACKUP-2026-09-02 untouched.",
     "No JS changes; :8082 / tunnel not touched.",
     "Real WSL requirement probes stubbed; API tested with fake env."
-  ]
+  ],
+  "commit_short": "8c65899"
 }
