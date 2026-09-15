@@ -1,5 +1,5 @@
-﻿#!/bin/bash
-# Install OpenFOAM v2606 + case directory inside the CFD Desk WSL distro.
+#!/bin/bash
+# Install OpenFOAM v2606 + case directory inside the Magnusim WSL distro.
 # Invoked as root by Setup.ps1. Optional arg: preferred Linux username.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
