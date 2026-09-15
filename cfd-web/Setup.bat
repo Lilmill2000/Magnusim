@@ -2,9 +2,9 @@
 setlocal
 cd /d "%~dp0"
 
-title CFD Desk setup
+title Magnusim setup
 echo.
-echo CFD Desk setup
+echo Magnusim setup
 echo This installs Node.js, Python, the app packages, WSL Ubuntu, and OpenFOAM.
 echo First run can take 30-90 minutes. Leave this window open.
 echo.

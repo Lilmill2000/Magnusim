@@ -1,20 +1,19 @@
 // @ts-check
 /**
- * Machine prefs in ``cfd-web/.cfddesk-local.json`` (same file Setup.bat writes).
+ * Machine prefs in ``cfd-web/.magnusim-local.json`` (also reads ``.cfddesk-local.json``).
  * Merge-only writes so WSL paths are never wiped.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { envGet, resolveLocalJsonPath } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const WEB_ROOT = resolve(__dirname, '..');
 export const DEFAULT_PORT = 8082;
 export const DEFAULT_UNITS = 'Metric';
 
-const LOCAL_JSON = process.env.CFDDESK_LOCAL_JSON
-  ? resolve(process.env.CFDDESK_LOCAL_JSON)
-  : join(WEB_ROOT, '.cfddesk-local.json');
+const LOCAL_JSON = resolveLocalJsonPath(WEB_ROOT);
 
 let mem = null;
 
@@ -55,7 +54,7 @@ export function clampPort(value) {
 }
 
 export function listenPort() {
-  const env = clampPort(process.env.CFDDESK_PORT);
+  const env = clampPort(envGet('PORT'));
   if (env != null) return env;
   const saved = clampPort(readLocalDoc().port);
   return saved != null ? saved : DEFAULT_PORT;

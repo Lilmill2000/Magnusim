@@ -1,0 +1,162 @@
+{
+    "result":  "PASS",
+    "phase":  "rename-only",
+    "not_phase_1":  true,
+    "backup_commit":  "1807bab",
+    "timestamp_ct":  "2026-09-14 22:34:29 CT",
+    "timestamp_utc":  "2026-09-15 03:34:29 UTC",
+    "machine":  "Timmy",
+    "machineId":  "86b12acc-4d5d-4bdc-92c3-a54243996cb5",
+    "root":  "C:\\Users\\drmil\\Desktop\\Code\\CFD",
+    "live_app":  "cfd-web",
+    "renames":  [
+                    {
+                        "where":  [
+                                      "UI titles",
+                                      "wizard copy",
+                                      "bats/ps1 echoes",
+                                      "READMEs",
+                                      "package.json description",
+                                      "e2e describe",
+                                      "pyproject description",
+                                      "main.js comment"
+                                  ],
+                        "from":  "CFD Desk",
+                        "to":  "Magnusim"
+                    },
+                    {
+                        "where":  [
+                                      "pack-portable.ps1",
+                                      "root README"
+                                  ],
+                        "from":  "CFD-Desk-\u003csha\u003e.zip",
+                        "to":  "Magnusim-\u003csha\u003e.zip"
+                    },
+                    {
+                        "where":  [
+                                      "scripts/env-compat.js",
+                                      "prefs",
+                                      "python-env",
+                                      "wsl-env",
+                                      "project-isolation",
+                                      "w16-w28",
+                                      "vite-plugin",
+                                      "w32-prefs",
+                                      "vite.config BOUND_PORT dual-set",
+                                      "playwright",
+                                      "start.bat",
+                                      "e2e"
+                                  ],
+                        "from":  "CFDDESK_* env",
+                        "to":  "MAGNUSIM_* first, CFDDESK_* fallback"
+                    },
+                    {
+                        "where":  [
+                                      "prefs.js",
+                                      "wsl-env.js",
+                                      "stop.ps1",
+                                      "Setup.ps1",
+                                      "gitignores"
+                                  ],
+                        "from":  ".cfddesk-local.json only",
+                        "to":  "prefer .magnusim-local.json, still read .cfddesk-local.json"
+                    },
+                    {
+                        "where":  [
+                                      "Setup.ps1",
+                                      "gitignores",
+                                      "env-compat.resolveReadyStampPath"
+                                  ],
+                        "from":  ".cfddesk-ready only",
+                        "to":  "prefer .magnusim-ready, still accept .cfddesk-ready"
+                    },
+                    {
+                        "where":  [
+                                      "wsl-env.js verifyWslToolchain"
+                                  ],
+                        "from":  "console [cfddesk]",
+                        "to":  "[magnusim]"
+                    }
+                ],
+    "kept_out_of_scope":  [
+                              "Folder path cfd-web",
+                              "Repo root Code\\CFD",
+                              "Public hostname simulation.lilmill2000.com",
+                              "Python package directory/import cfddesk (mid-flight safe)",
+                              "WSL case id prefixes cfddesk-* (runtime paths)",
+                              "Legacy ignore entry CFD-Desk/ (plus new Magnusim/)"
+                          ],
+    "long_haul_deleted":  [
+                              {
+                                  "path":  "cfd-web/scripts/patch-meshlistall.cjs",
+                                  "bytes":  1716,
+                                  "note":  "Long Haul untracked leftover; meshListAll fix already ship-with-waived"
+                              },
+                              {
+                                  "path":  "cfd-web/src/main.js.restore",
+                                  "bytes":  1929724,
+                                  "note":  "Long Haul untracked leftover (~1.9MB)"
+                              }
+                          ],
+    "files_touched":  [
+                          ".gitignore",
+                          "cfd-web/.gitignore",
+                          "cfd-web/e2e/smoke.spec.js",
+                          "cfd-web/index.html",
+                          "cfd-web/package.json",
+                          "cfd-web/playwright.config.js",
+                          "cfd-web/python/pyproject.toml",
+                          "cfd-web/python/README.md",
+                          "cfd-web/README.md",
+                          "cfd-web/scripts/env-compat.js",
+                          "cfd-web/scripts/hardware-profile.js",
+                          "cfd-web/scripts/prefs.js",
+                          "cfd-web/scripts/project-isolation.js",
+                          "cfd-web/scripts/python-env.js",
+                          "cfd-web/scripts/vite-plugin-case-fields.js",
+                          "cfd-web/scripts/w16-project-geometry.js",
+                          "cfd-web/scripts/w17-sim-catalog.js",
+                          "cfd-web/scripts/w17-simulation.js",
+                          "cfd-web/scripts/w18-materials.js",
+                          "cfd-web/scripts/w19-boundary-conditions.js",
+                          "cfd-web/scripts/w20-mesh.js",
+                          "cfd-web/scripts/w21-mesh-generate.js",
+                          "cfd-web/scripts/w22-area-average.js",
+                          "cfd-web/scripts/w26-mesh-refinements.js",
+                          "cfd-web/scripts/w27-solve.js",
+                          "cfd-web/scripts/w28-media.js",
+                          "cfd-web/scripts/w32-prefs.js",
+                          "cfd-web/scripts/wsl-env.js",
+                          "cfd-web/Setup.bat",
+                          "cfd-web/setup/Setup.ps1",
+                          "cfd-web/src/dashboard.js",
+                          "cfd-web/src/main.js",
+                          "cfd-web/start.bat",
+                          "cfd-web/START-HERE.txt",
+                          "cfd-web/stop.bat",
+                          "cfd-web/stop.ps1",
+                          "cfd-web/vite.config.js",
+                          "pack-portable.ps1",
+                          "README.md"
+                      ],
+    "smoke":  {
+                  "api_prefs_status":  200,
+                  "dashboard_titles":  [
+                                           "Magnusim - Projects",
+                                           "Magnusim"
+                                       ],
+                  "public":  {
+                                 "status":  200,
+                                 "url":  "https://simulation.lilmill2000.com/",
+                                 "title":  "Magnusim - Projects"
+                             },
+                  "note":  "Server modules not hot-reloaded; live Vite kept old in-memory handlers (still CFDDESK-compatible). Client HTML/JS served Magnusim titles without restart.",
+                  "vite_restarted":  false,
+                  "local":  {
+                                "status":  200,
+                                "url":  "http://127.0.0.1:8082/",
+                                "title":  "Magnusim - Projects"
+                            }
+              },
+    "package_strategy":  "Kept python/cfddesk import path; user-visible Magnusim; env/local-json dual-read compat via scripts/env-compat.js"
+}

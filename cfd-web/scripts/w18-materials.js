@@ -1,4 +1,4 @@
-﻿/**
+/**
  * W18 — Materials → Air + Body1 assign (filesystem persistence).
  * Persists projects/<id>/materials.json via POST/GET /api/materials.
  * Bank path: Materials + → Air (Newtonian) → assign Body1 → ✓ save.
@@ -16,10 +16,12 @@ import { dirname, join, resolve } from 'node:path';
 import { activeGeometryId, matchesGeometry, matchesStudy, primaryGeometryId } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
 import { fileURLToPath } from 'node:url';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
 /** Exact bank labels from walkthrough step 4 / FINDINGS */

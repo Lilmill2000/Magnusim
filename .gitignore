@@ -1,4 +1,4 @@
-﻿# This folder is the zip / GitHub root. App code lives in cfd-web/.
+# This folder is the zip / GitHub root. App code lives in cfd-web/.
 # Fresh share copy (built by pack-portable.ps1) — regenerable; do not commit.
 CFD-Desk/
 dist/
@@ -12,7 +12,9 @@ cfd-web/python/cfddesk.egg-info/
 *.pyc
 cfd-web/.cache/
 cfd-web/projects/
+cfd-web/.magnusim-local.json
 cfd-web/.cfddesk-local.json
+cfd-web/.magnusim-ready
 cfd-web/.cfddesk-ready
 cfd-web/dist/
 cfd-web/test-results/

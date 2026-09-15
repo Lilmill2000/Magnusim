@@ -1,4 +1,4 @@
-﻿# Build dist/CFD-Desk-<shortsha>.zip from git archive (source only; no projects).
+# Build dist/Magnusim-<shortsha>.zip from git archive (source only; no projects).
 $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
 Set-Location $Root
@@ -12,7 +12,7 @@ if (-not $sha) { throw "Could not resolve HEAD short sha" }
 
 $dist = Join-Path $Root 'dist'
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
-$zipName = "CFD-Desk-$sha.zip"
+$zipName = "Magnusim-$sha.zip"
 $zipPath = Join-Path $dist $zipName
 
 if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }

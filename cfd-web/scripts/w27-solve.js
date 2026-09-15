@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Simulation Control — incompressible steady simpleFoam from the project mesh,
  * Air, and assigned BCs. Does not re-split polyMesh. No bank face57/71 gates.
  */
@@ -35,10 +35,12 @@ import {
   describeTransient,
 } from './w30-transient.js';
 import { createJobLogger } from './log.js';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const REPORT_DIR = join(ROOT, '.cache', 'jobs', 'run');
 const WSL_DISTRO = wslDistro();

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const WSL = process.env.CFDDESK_E2E_WSL === '1';
+const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 
 /** Click a mesh form toggle until aria-pressed/checked is the wanted state. */
 async function setMeshToggle(page, id, on) {
@@ -24,7 +24,7 @@ async function setMeshToggle(page, id, on) {
   }
 }
 
-test.describe('CFD Desk smoke', () => {
+test.describe('Magnusim smoke', () => {
   test('home -> sample project -> mesh form', async ({ page, request }) => {
     const res = await request.get('/api/projects');
     expect(res.ok()).toBeTruthy();
@@ -71,8 +71,8 @@ test.describe('CFD Desk smoke', () => {
     test.info().annotations.push({ type: 'smoke', description: 'steps 1-3 green' });
 
     if (!WSL) {
-      // Soft-pass kill: CI may skip WSL, but Timmy Phase-0 overall PASS requires CFDDESK_E2E_WSL=1.
-      test.info().annotations.push({ type: 'skip-mesh', description: 'CFDDESK_E2E_WSL!=1' });
+      // Soft-pass kill: CI may skip WSL, but Timmy Phase-0 overall PASS requires MAGNUSIM_E2E_WSL=1 (or CFDDESK_E2E_WSL).
+      test.info().annotations.push({ type: 'skip-mesh', description: 'MAGNUSIM_E2E_WSL/CFDDESK_E2E_WSL!=1' });
       return;
     }
 

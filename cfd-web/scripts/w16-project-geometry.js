@@ -1,4 +1,4 @@
-﻿/**
+/**
  * W16 — project create + geometry import (filesystem persistence).
  * Projects live under cfd-web/projects/<id>/project.json + geometry/.
  * Each import is kept under geometry/parts/<id>/ (own STEP + CAD preview).
@@ -33,16 +33,18 @@ import {
   primaryGeometryId,
 } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const CONVERT_SCRIPT = pyTool('convert_step_to_stl.py');
 const CAD_PREVIEW_SCRIPT = pyTool('export_step_cad_preview.py');
 const NORMALIZE_SCRIPT = pyTool('normalize_cad_import.py');
 const THUMB_SCRIPT = pyTool('render_geometry_thumb.py');
-const DEFAULT_STEP = String(process.env.CFDDESK_DEFAULT_STEP || '').trim();
+const DEFAULT_STEP = String(envGet('DEFAULT_STEP') || '').trim();
 const thumbJobs = new Map();
 
 function ensureProjectsRoot() {

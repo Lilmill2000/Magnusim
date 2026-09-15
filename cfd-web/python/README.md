@@ -2,7 +2,7 @@
 
 Everything the web app runs through Python lives here. The Node API
 (`../scripts/*.js`) spawns `.venv/Scripts/python.exe` on scripts in `tools/`
-(see `../scripts/python-env.js`; override with the `CFDDESK_PYTHON` env var).
+(see `../scripts/python-env.js`; override with the `MAGNUSIM_PYTHON` / `CFDDESK_PYTHON` env var).
 
 | Path | Purpose |
 |------|---------|

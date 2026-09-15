@@ -3,14 +3,15 @@
  * Python side of cfd-web, all under `cfd-web/python/`:
  *
  *   python/.venv/      interpreter + deps (pyvista, gmsh, cadquery-ocp, …)
- *   python/cfddesk/    library package (CAD, mesh writers, case writers, WSL runner)
+ *   python/cfddesk/    library package (import path kept as cfddesk during rename)
  *   python/tools/      CLI entry points the API spawns (export_*.py, generate_*.py, …)
  *
- * Override the interpreter with the CFDDESK_PYTHON env var.
+ * Override the interpreter with MAGNUSIM_PYTHON (or legacy CFDDESK_PYTHON).
  */
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const WEB_ROOT = resolve(__dirname, '..');
@@ -25,7 +26,7 @@ function defaultPython() {
   return process.platform === 'win32' ? 'python' : 'python3';
 }
 
-export const PYTHON = process.env.CFDDESK_PYTHON || defaultPython();
+export const PYTHON = envGet('PYTHON') || defaultPython();
 
 /** Absolute path of a tool script, e.g. pyTool('export_case_field.py'). */
 export function pyTool(name) {

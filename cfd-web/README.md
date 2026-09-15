@@ -1,4 +1,4 @@
-# CFD Desk — web app (`cfd-web`)
+# Magnusim — web app (`cfd-web`)
 
 Vite + vtk.js single-page app. The dev server also hosts the `/api/*` backend as a Vite
 middleware (`scripts/vite-plugin-case-fields.js`) which shells out to the Python side in
@@ -11,7 +11,7 @@ Python, npm packages, the `python/.venv` CAD/mesh stack, WSL Ubuntu, and OpenFOA
 Leave the window open; the first run can take 30–90 minutes. If Windows asks for
 Administrator, accept. If it asks you to reboot, reboot and run Setup.bat again.
 
-Setup writes `.cfddesk-local.json` with this machine’s WSL user and `~/cases` path so
+Setup writes `.magnusim-local.json` (legacy `.cfddesk-local.json` still read) with this machine’s WSL user and `~/cases` path so
 mesh/solve use this machine’s WSL user and `~/cases`. The first time you start the app, a wizard
 sets default units, runs a hardware check (solver rank count), and lets you pick
 the listen port. **Preferences** on the home screen opens that again.
@@ -43,10 +43,10 @@ request, so edits under `python/` take effect immediately (export caches key on 
 | `scripts/w21-mesh-generate.js` | `POST /api/mesh/generate`: routes to the mesh engines, tracks the job, persists `mesh.json` |
 | `scripts/w27-solve.js` | Solver runs in WSL, residuals, monitors, result times |
 | `scripts/w28-media.js` | Screenshots and recordings saved under a run or mesh |
-| `python/` | Python side: `.venv`, the `cfddesk` library package and the CLI tools the API spawns — see `python/README.md` |
+| `python/` | Python side: `.venv`, the `cfddesk` library package (import path kept; product name Magnusim) and the CLI tools the API spawns — see `python/README.md` |
 | `python/HEXCORE-PROCESS-BACKUP-2026-09-02/` | Frozen known-good cfMesh hexcore path (do not edit or delete) |
 | `projects/<id>/` | Per-project data: `project.json`, `mesh.json`, `boundary_conditions.json`, `geometry/`, `mesh/run-<id>/`, `runs/`, `media/` |
 | `.cache/` | Server scratch (export caches, job scripts and logs). Safe to delete. |
 | `public/` | Static assets |
 
-Python interpreter: `CFDDESK_PYTHON` env var, default `python\.venv\Scripts\python.exe`.
+Python interpreter: `MAGNUSIM_PYTHON` env var (falls back to `CFDDESK_PYTHON`), default `python\.venv\Scripts\python.exe`.

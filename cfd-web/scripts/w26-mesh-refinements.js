@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Mesh refinements — filesystem persistence.
  * GET/POST /api/mesh/refinements → projects/<id>/mesh_refinements.json
  *
@@ -20,10 +20,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
 export const REF_TYPES = ['Surface custom sizing', 'Inflate boundary layer'];

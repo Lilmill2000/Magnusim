@@ -1,4 +1,4 @@
-﻿This folder is the portable CFD Desk copy.
+This folder is the portable Magnusim copy.
 
 It has the app source and Setup.bat. It does not include your projects,
 node_modules, Python venv, WSL settings, or cache.

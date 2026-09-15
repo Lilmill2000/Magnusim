@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Boundary conditions — filesystem persistence.
  * POST/GET /api/bcs → projects/<id>/boundary_conditions.json
  *
@@ -26,10 +26,12 @@ import {
 } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
 import { fileURLToPath } from 'node:url';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
 export const BC_TYPES = [

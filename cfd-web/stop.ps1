@@ -1,19 +1,24 @@
-# Stops CFD Desk (Vite on the prefs port) and its npm / start.bat wrappers.
+# Stops Magnusim (Vite on the prefs port) and its npm / start.bat wrappers.
 # Does not touch other Node apps.
 $ErrorActionPreference = 'SilentlyContinue'
 
 function Read-DeskPort {
   $port = 8082
-  $j = Join-Path $PSScriptRoot '.cfddesk-local.json'
-  if (Test-Path $j) {
+  $candidates = @(
+    (Join-Path $PSScriptRoot '.magnusim-local.json'),
+    (Join-Path $PSScriptRoot '.cfddesk-local.json')
+  )
+  foreach ($j in $candidates) {
+    if (-not (Test-Path $j)) { continue }
     try {
       $doc = Get-Content -Path $j -Raw -Encoding UTF8 | ConvertFrom-Json
       $n = [int]$doc.port
-      if ($n -ge 1024 -and $n -le 65535) { $port = $n }
+      if ($n -ge 1024 -and $n -le 65535) { return $n }
     } catch {}
   }
   return $port
 }
+
 
 function Test-AgentWrapper([string]$commandLine) {
   if (-not $commandLine) { return $false }
@@ -27,7 +32,7 @@ function Test-ServerProcess($proc) {
 }
 
 $port = Read-DeskPort
-Write-Host ("Stopping CFD Desk on http://127.0.0.1:{0}" -f $port)
+Write-Host ("Stopping Magnusim on http://127.0.0.1:{0}" -f $port)
 
 $byId = @{}
 Get-CimInstance Win32_Process | ForEach-Object { $byId[[int]$_.ProcessId] = $_ }
@@ -46,7 +51,7 @@ Get-CimInstance Win32_Process | ForEach-Object {
 }
 
 if ($seeds.Count -eq 0) {
-  Write-Host 'CFD Desk is not running.'
+  Write-Host 'Magnusim is not running.'
   exit 2
 }
 
@@ -76,5 +81,5 @@ if ($left.Count) {
   exit 1
 }
 
-Write-Host 'CFD Desk stopped.'
+Write-Host 'Magnusim stopped.'
 exit 0

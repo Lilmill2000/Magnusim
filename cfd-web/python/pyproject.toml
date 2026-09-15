@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cfddesk"
 version = "0.2.0"
-description = "Python backend for the CFD Desk web app: STEP -> mesh -> OpenFOAM (WSL) -> post-processing exports"
+description = "Python backend for the Magnusim web app: STEP -> mesh -> OpenFOAM (WSL) -> post-processing exports"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [

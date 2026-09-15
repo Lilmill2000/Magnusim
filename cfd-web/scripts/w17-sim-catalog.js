@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Multi-study catalog: projects/<id>/simulations.json
  * Active study is also mirrored to simulation.json for older readers.
  */
@@ -6,10 +6,12 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from '
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activeGeometryId, geometriesOf } from './w16-geometry-scope.js';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 
 export function projectDir(id) {
   return join(PROJECTS_ROOT, id);

@@ -1,11 +1,12 @@
-﻿import { defineConfig } from 'vite';
+import { defineConfig } from 'vite';
 import { caseFieldsApiPlugin } from './scripts/vite-plugin-case-fields.js';
 import { listenPort } from './scripts/prefs.js';
 import { verifyWslToolchain } from './scripts/wsl-env.js';
 verifyWslToolchain();
 
 const PORT = listenPort();
-process.env.CFDDESK_BOUND_PORT = String(PORT);
+process.env.MAGNUSIM_BOUND_PORT = String(PORT);
+process.env.CFDDESK_BOUND_PORT = String(PORT); // legacy alias
 
 // Same-origin /api/* served by the Vite middleware plugin (projects, geometry,
 // mesh generate, post-processing exports via python/.venv + python/tools).

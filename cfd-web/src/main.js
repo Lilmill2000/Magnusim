@@ -1,5 +1,5 @@
 /**
- * CFD Desk W24 - Start Run 1 + live Area average (seven-series from run)
+ * Magnusim W24 - Start Run 1 + live Area average (seven-series from run)
  * Prior: W22 - Area average setup (Result control → Surface data → Area average 1)
  * + W21 mesh generate + W20 mesh settings + W19 BCs + W18 Materials + W17 Incompressible + W16 project/geo
  * HARD: BOTH face57@Body1 + face71@Body1; no fake charts; no solves

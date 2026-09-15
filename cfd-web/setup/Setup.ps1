@@ -1,4 +1,4 @@
-﻿# CFD Desk first-run installer. Called by Setup.bat (do not double-click this file).
+# Magnusim first-run installer. Called by Setup.bat (do not double-click this file).
 
 # Idempotent: already-installed pieces are skipped. After a WSL reboot, run Setup.bat again.
 
@@ -26,9 +26,17 @@ $LogDir = Join-Path $WebRoot '.cache\setup'
 
 $LogPath = Join-Path $LogDir 'setup.log'
 
-$LocalJson = Join-Path $WebRoot '.cfddesk-local.json'
+$MagnusimLocal = Join-Path $WebRoot '.magnusim-local.json'
+$LegacyLocal = Join-Path $WebRoot '.cfddesk-local.json'
+if (Test-Path $MagnusimLocal) { $LocalJson = $MagnusimLocal }
+elseif (Test-Path $LegacyLocal) { $LocalJson = $LegacyLocal }
+else { $LocalJson = $MagnusimLocal }
 
-$StampPath = Join-Path $WebRoot '.cfddesk-ready'
+$MagnusimReady = Join-Path $WebRoot '.magnusim-ready'
+$LegacyReady = Join-Path $WebRoot '.cfddesk-ready'
+if (Test-Path $MagnusimReady) { $StampPath = $MagnusimReady }
+elseif (Test-Path $LegacyReady) { $StampPath = $LegacyReady }
+else { $StampPath = $MagnusimReady }
 
 $PythonDir = Join-Path $WebRoot 'python'
 
@@ -708,7 +716,7 @@ try {
 
     Write-Host ''
 
-    Write-Host 'CFD Desk setup' -ForegroundColor White
+    Write-Host 'Magnusim setup' -ForegroundColor White
 
     Write-Host "App folder: $WebRoot"
 

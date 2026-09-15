@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * One-shot PC check used by the setup wizard.
- * Writes ``hardware`` into ``.cfddesk-local.json`` so solves pick n_procs from it.
+ * Writes ``hardware`` into ``.magnusim-local.json (or legacy .cfddesk-local.json)`` so solves pick n_procs from it.
  */
 import { cpus, totalmem } from 'node:os';
 import { spawnSync } from 'node:child_process';

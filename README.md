@@ -1,4 +1,4 @@
-﻿# CFD Desk
+# Magnusim
 
 Windows app for incompressible CFD (geometry â†’ mesh â†’ OpenFOAM solve) in the browser.
 
@@ -17,7 +17,7 @@ You need a 64-bit Intel/AMD Windows 10/11 PC with about 15 GB free and virtualiz
 
 `.gitignore` keeps `node_modules`, `python/.venv`, `projects`, and `.cache` out of git. Receivers clone and run Setup.bat.
 
-To share a clean source zip (no projects or machine files), run `pack-portable.ps1` from this folder. It writes `dist/CFD-Desk-<shortsha>.zip` via `git archive`. Unzip on the other PC and double-click Setup.bat. See `cfd-web/START-HERE.txt` inside the archive.
+To share a clean source zip (no projects or machine files), run `pack-portable.ps1` from this folder. It writes `dist/Magnusim-<shortsha>.zip` via `git archive`. Unzip on the other PC and double-click Setup.bat. See `cfd-web/START-HERE.txt` inside the archive.
 
 If you zip this working tree instead, zip **before** you run Setup, or exclude `cfd-web/node_modules`, `cfd-web/python/.venv`, and `cfd-web/.cache`.
 

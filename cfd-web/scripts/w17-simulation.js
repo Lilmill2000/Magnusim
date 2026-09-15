@@ -1,4 +1,4 @@
-﻿/**
+/**
  * W17 — Create Simulation -> Incompressible studies.
  * Catalog: projects/<id>/simulations.json (active mirrored to simulation.json).
  */
@@ -20,10 +20,12 @@ import {
   firstLegacySimId,
   upsertSimulationInCatalog,
 } from './w17-sim-catalog.js';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
 export const W17_DEFAULTS = {

@@ -5,11 +5,11 @@
 import { basename, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
+import { envGet } from './env-compat.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT
-  ? resolve(process.env.CFDDESK_PROJECTS_ROOT)
-  : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+export const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 
 export function normalizeFs(p) {
   return String(p || '')

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Mesh Generate (POST /api/mesh/generate).
  * Standard (default engine)      -> scripts/generate_standard.py: gmsh uniform surface +
  *                                   hex element core + tet shell, OpenFOAM boundary layers.
@@ -23,12 +23,14 @@ import { activeGeometryId } from './w16-geometry-scope.js';
 import { PYTHON, pyTool } from './python-env.js';
 import { wslCasePath, wslDistro } from './wsl-env.js';
 import { createJobLogger } from './log.js';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 /* Scratch for the Hex-dominant (snappyHexMesh) path: bash scripts, logs, WSL case copies. */
 const REPORT_DIR = join(ROOT, '.cache', 'jobs', 'snappy');
-const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const WSL_DISTRO = wslDistro();
 /** Case layout template only — geometry surfaces overwritten from project Body1. */

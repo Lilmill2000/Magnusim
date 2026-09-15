@@ -3,6 +3,7 @@
  */
 import { clampPort, listenPort, publicPrefs, writeLocalDoc } from './prefs.js';
 import { runHardwareCheck } from './hardware-profile.js';
+import { envGet } from './env-compat.js';
 
 export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBody }) {
   if (parts[0] !== 'api' || parts[1] !== 'prefs') return false;
@@ -44,7 +45,7 @@ export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBod
     if (body.wizard_completed != null) patch.wizard_completed = !!body.wizard_completed;
     writeLocalDoc(patch);
     const prefs = publicPrefs();
-    const bound = clampPort(process.env.CFDDESK_BOUND_PORT) || listenPort();
+    const bound = clampPort(envGet('BOUND_PORT')) || listenPort();
     return sendJson(res, 200, {
       ok: true,
       prefs,

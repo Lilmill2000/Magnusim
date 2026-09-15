@@ -27,13 +27,16 @@ if not exist "node_modules\vite" (
   )
 )
 
+set MAGNUSIM_PORT=8082
 set CFDDESK_PORT=8082
-for /f "usebackq delims=" %%P in (`node --input-type=module -e "import {listenPort} from './scripts/prefs.js'; process.stdout.write(String(listenPort()))"`) do set CFDDESK_PORT=%%P
-set CFDDESK_BOUND_PORT=%CFDDESK_PORT%
+for /f "usebackq delims=" %%P in (`node --input-type=module -e "import {listenPort} from './scripts/prefs.js'; process.stdout.write(String(listenPort()))"`) do set MAGNUSIM_PORT=%%P
+set CFDDESK_PORT=%MAGNUSIM_PORT%
+set MAGNUSIM_BOUND_PORT=%MAGNUSIM_PORT%
+set CFDDESK_BOUND_PORT=%MAGNUSIM_PORT%
 
 REM A leftover listener makes Vite exit immediately (--strictPort).
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /C:":%CFDDESK_PORT%" ^| findstr /C:"LISTENING"') do (
-  echo Stopping leftover process on port %CFDDESK_PORT% ^(PID %%P^)
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /C:":%MAGNUSIM_PORT%" ^| findstr /C:"LISTENING"') do (
+  echo Stopping leftover process on port %MAGNUSIM_PORT% ^(PID %%P^)
   taskkill /PID %%P /F >nul 2>&1
 )
 
@@ -41,11 +44,11 @@ REM Never let chokidar fall back to a busy-poll of the tree.
 set CHOKIDAR_USEPOLLING=0
 
 echo.
-echo CFD Desk web app:  http://127.0.0.1:%CFDDESK_PORT%
+echo Magnusim web app:  http://127.0.0.1:%MAGNUSIM_PORT%
 echo Leave this window open, or double-click stop.bat to shut it down.
 echo.
 
-start "" powershell -NoProfile -WindowStyle Hidden -Command "for ($i=0; $i -lt 60; $i++) { try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 http://127.0.0.1:%CFDDESK_PORT%/).StatusCode -eq 200) { Start-Process 'http://127.0.0.1:%CFDDESK_PORT%/'; exit 0 } } catch {} Start-Sleep -Seconds 1 }; exit 1"
+start "" powershell -NoProfile -WindowStyle Hidden -Command "for ($i=0; $i -lt 60; $i++) { try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 http://127.0.0.1:%MAGNUSIM_PORT%/).StatusCode -eq 200) { Start-Process 'http://127.0.0.1:%MAGNUSIM_PORT%/'; exit 0 } } catch {} Start-Sleep -Seconds 1 }; exit 1"
 
 call npm run dev
 if errorlevel 1 pause

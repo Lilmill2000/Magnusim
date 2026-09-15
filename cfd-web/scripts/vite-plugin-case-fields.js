@@ -1,4 +1,4 @@
-﻿/**
+/**
  * W6/W8/W9/W10/W11/W12/W13 Vite middleware:
  *   GET /api/times?case=                  -> real OpenFOAM time dirs on disk (W12)
  *   GET /api/fields/:field?case=&time=     -> surface VTP (magU/p) from case tree
@@ -65,6 +65,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { envGet } from './env-compat.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -380,7 +381,8 @@ const MESH_SECTION_EXPORT_SCRIPT = pyTool('export_mesh_section_vtp.py');
 const MESH_SECTION_CACHE_ROOT = join(CACHE_DIR, 'mesh-section');
 const MESH_SURFACE_EXPORT_SCRIPT = pyTool('export_mesh_surface_vtp.py');
 const MESH_SURFACE_CACHE_ROOT = join(CACHE_DIR, 'mesh-surface');
-const PROJECTS_ROOT = process.env.CFDDESK_PROJECTS_ROOT ? resolve(process.env.CFDDESK_PROJECTS_ROOT) : join(ROOT, 'projects');
+const _projectsRoot = envGet('PROJECTS_ROOT');
+const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PROJECT_PATH = join(PROJECTS_ROOT, 'active.json');
 
 const ALLOWED_FIELDS = new Set(['magU', 'p']);

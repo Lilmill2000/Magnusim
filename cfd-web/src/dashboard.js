@@ -191,7 +191,7 @@ export function showHome() {
     history.replaceState(null, '', '#/');
   }
   applyHomeFilterFromRoute();
-  document.title = 'CFD Desk — Projects';
+  document.title = 'Magnusim - Projects';
   refreshHome().then(() => startHomeActivityPoll()).catch(() => {});
 }
 
@@ -205,7 +205,7 @@ export function showWorkbench() {
   if (app) app.hidden = false;
   document.body.classList.remove('on-home');
   document.body.classList.add('on-workbench');
-  document.title = 'CFD Desk';
+  document.title = 'Magnusim';
   stopHomeActivityPoll();
   requestAnimationFrame(() => {
     window.__CFD_RESIZE_VIEWER__?.();

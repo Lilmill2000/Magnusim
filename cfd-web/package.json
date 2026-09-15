@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "CFD Desk web app: project setup, geometry, boundary conditions and SimScale-style meshing on OpenFOAM (WSL)",
+  "description": "Magnusim web app: project setup, geometry, boundary conditions and SimScale-style meshing on OpenFOAM (WSL)",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --strictPort",
     "build": "vite build",

@@ -1,6 +1,6 @@
-﻿import { defineConfig } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
 
-const PORT = process.env.CFDDESK_BOUND_PORT || '8082';
+const PORT = (process.env.MAGNUSIM_BOUND_PORT || process.env.CFDDESK_BOUND_PORT || '8082');
 const baseURL = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
