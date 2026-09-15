@@ -21,6 +21,7 @@ import {
   upsertSimulationInCatalog,
 } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
+import { pyJsonSync } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -60,9 +61,12 @@ function readProject(id) {
 }
 
 function writeProject(proj) {
-  mkdirSync(projectDir(proj.id), { recursive: true });
-  writeFileSync(projectJsonPath(proj.id), JSON.stringify(proj, null, 2), 'utf8');
-  return proj;
+  // Phase 1 Step 9: project.json writes go through project_cli (Python).
+  return pyJsonSync(
+    'project_cli.py',
+    ['write-project', '--project-dir', projectDir(proj.id), '--sim-id', String(proj.active_simulation_id || '')],
+    proj,
+  );
 }
 
 function newSimId() {

@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
+import { pyJsonSync } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -79,9 +80,12 @@ function readProject(id) {
 }
 
 function writeProject(proj) {
-  mkdirSync(projectDir(proj.id), { recursive: true });
-  writeFileSync(projectJsonPath(proj.id), JSON.stringify(proj, null, 2), 'utf8');
-  return proj;
+  // Phase 1 Step 9: project.json via project_cli.
+  return pyJsonSync(
+    'project_cli.py',
+    ['write-project', '--project-dir', projectDir(proj.id), '--sim-id', String((proj.simulation && proj.simulation.id) || proj.active_simulation_id || '')],
+    proj,
+  );
 }
 
 function readRcFile(id) {
@@ -353,21 +357,12 @@ function persistRcDoc(projectId, sim, aa) {
     note: 'W22 Area average 1 setup — Write control Time step; faces face57+face71. No results/charts until run. No solves.',
   };
 
-  mkdirSync(projectDir(projectId), { recursive: true });
-  writeFileSync(rcPath, JSON.stringify(doc, null, 2), 'utf8');
-  // Mirror dedicated area_average.json (same payload, easier prove path)
-  writeFileSync(
-    aaPath,
-    JSON.stringify(
-      {
-        ...doc,
-        mirror_of: 'result_controls.json',
-      },
-      null,
-      2
-    ),
-    'utf8'
+  pyJsonSync(
+    'project_cli.py',
+    ['set-result-controls', '--project-dir', projectDir(projectId), '--sim-id', String(sim.id || '')],
+    doc,
   );
+  // set-result-controls writes rc + aa mirror and soft-stamps project.json.
 
   const proj = readProject(projectId);
   if (proj) {
@@ -447,11 +442,10 @@ function deleteAreaAverage(projectIdOpt, simIdOpt) {
       simulation_id: nextAa && nextAa.simulation_id ? nextAa.simulation_id : null,
       updated_at: now,
     };
-    writeFileSync(resultControlsJsonPath(projectId), JSON.stringify(doc, null, 2), 'utf8');
-    writeFileSync(
-      areaAverageJsonPath(projectId),
-      JSON.stringify({ ...doc, mirror_of: 'result_controls.json' }, null, 2),
-      'utf8'
+    pyJsonSync(
+      'project_cli.py',
+      ['set-result-controls', '--project-dir', projectDir(projectId), '--sim-id', String((sim && sim.id) || '')],
+      doc,
     );
     if (proj.result_controls) {
       proj.result_controls.count = kept.length;

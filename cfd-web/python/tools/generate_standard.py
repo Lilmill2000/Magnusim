@@ -26,7 +26,7 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.jobs.events import emit
+from cfddesk.jobs import legacy_markers as _legacy
 from cfddesk.cad.step import load_step
 from cfddesk.cad.units import shape_bbox
 from cfddesk.mesh.gmsh_standard import apply_boundary_patch_types, emitted_patch_types
@@ -51,7 +51,6 @@ from cfddesk.runner.case_id import validate_wsl_case_id
 from cfddesk.runner.sync import RESULTS_MARKER, copy_back
 from cfddesk.wsl.mesh_run import run_standard_pipeline
 
-_LEGACY_MARKERS = False  # set by main() from --legacy-markers
 
 PATH_KIND = "standard"
 BACKEND = "gmsh-hexcore"
@@ -59,21 +58,13 @@ BACKEND = "gmsh-hexcore"
 
 def _progress(stage: str, **extra) -> None:
     """Emit progress via job protocol; optional legacy CFMESH_PROGRESS line."""
-    payload = {"stage": stage, **extra}
-    emit("progress", **payload)
-    if _LEGACY_MARKERS:
-        print("CFMESH_PROGRESS " + json.dumps(payload, separators=(",", ":")), flush=True)
-
-
+    _legacy.progress(stage, **extra)
 
 
 def _result(ok: bool, **extra) -> int:
     """Emit result via job protocol; optional legacy CFMESH_RESULT line."""
-    payload = {"ok": bool(ok), **extra}
-    emit("result", **payload)
-    if _LEGACY_MARKERS:
-        print("CFMESH_RESULT " + json.dumps(payload, separators=(",", ":")), flush=True)
-    return 0 if ok else 1
+    return _legacy.result(ok, **extra)
+
 
 
 
@@ -228,8 +219,7 @@ def main() -> int:
         help="Also emit CFMESH_PROGRESS/CFMESH_RESULT lines (one-phase frontend compat).",
     )
     args = p.parse_args()
-    global _LEGACY_MARKERS
-    _LEGACY_MARKERS = bool(args.legacy_markers)
+    _legacy.set_legacy_markers(bool(args.legacy_markers))
 
     project_dir = Path(args.project_dir).resolve()
     case_dir = Path(args.case_dir).resolve()

@@ -19,7 +19,7 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.jobs.events import emit  # noqa: E402
+from cfddesk.jobs import legacy_markers as _legacy  # noqa: E402
 from cfddesk.mesh.snappy_hexdominant import (  # noqa: E402
     fineness_params,
     read_feature_marks,
@@ -35,23 +35,16 @@ from cfddesk.wsl.mesh_run import windows_to_wsl_path  # noqa: E402
 _TEMPLATES = CFDDESK_ROOT / "cfddesk" / "wsl" / "templates"
 _SNAPPY_SH = _TEMPLATES / "snappy_hexdominant.sh"
 
-_LEGACY_MARKERS = False
 PATH_KIND = "snappyHexMesh"
 
 
 def _progress(stage: str, **extra) -> None:
-    payload = {"stage": stage, **extra}
-    emit("progress", **payload)
-    if _LEGACY_MARKERS:
-        print("CFMESH_PROGRESS " + json.dumps(payload, separators=(",", ":")), flush=True)
+    _legacy.progress(stage, **extra)
 
 
 def _result(ok: bool, **extra) -> int:
-    payload = {"ok": bool(ok), "path_kind": PATH_KIND, **extra}
-    emit("result", **payload)
-    if _LEGACY_MARKERS:
-        print("CFMESH_RESULT " + json.dumps(payload, separators=(",", ":")), flush=True)
-    return 0 if ok else 1
+    return _legacy.result(ok, path_kind=PATH_KIND, **extra)
+
 
 
 def _read_json(path: Path) -> dict:
@@ -76,7 +69,6 @@ def render_snappy_script(*, dst: str, win_out: str, generate_id: str) -> str:
 
 
 def main() -> int:
-    global _LEGACY_MARKERS
     p = argparse.ArgumentParser(description="Hex-dominant snappyHexMesh generate")
     p.add_argument("--project-dir", required=True)
     p.add_argument("--case-dir", required=True)
@@ -97,7 +89,7 @@ def main() -> int:
         help="Host-prep + render bash only (no WSL).",
     )
     args = p.parse_args()
-    _LEGACY_MARKERS = bool(args.legacy_markers)
+    _legacy.set_legacy_markers(bool(args.legacy_markers))
 
     project_dir = Path(args.project_dir).resolve()
     case_dir = Path(args.case_dir).resolve()
@@ -229,7 +221,7 @@ def main() -> int:
                         data = json.loads(payload)
                         if data.get("event") == "result":
                             last_result = data
-                        if _LEGACY_MARKERS and data.get("event") == "progress":
+                        if _legacy.legacy_enabled() and data.get("event") == "progress":
                             print(
                                 "CFMESH_PROGRESS "
                                 + json.dumps(

@@ -32,6 +32,7 @@ import {
 import { createJobLogger } from './log.js';
 import { envGet } from './env-compat.js';
 import { spawnJob } from './job-runner.js';
+import { pyJsonSync } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -677,7 +678,11 @@ export function saveSimulationControl(projectId, partial) {
     updated_at: new Date().toISOString(),
     increment: INCREMENT,
   };
-  writeJson(join(projectDir(id), 'simulation_control.json'), next);
+  pyJsonSync(
+    'project_cli.py',
+    ['set-sim-control', '--project-dir', projectDir(id), '--sim-id', ''],
+    next,
+  );
   return { ok: true, ...next };
 }
 
@@ -1315,12 +1320,15 @@ function loadCatalog(projectId) {
 }
 
 function saveCatalog(projectId, cat) {
-  mkdirSync(runsDir(projectId), { recursive: true });
-  writeJson(catalogPath(projectId), {
-    active_id: cat.active_id || null,
-    runs: cat.runs || [],
-    updated_at: new Date().toISOString(),
-  });
+  pyJsonSync(
+    'project_cli.py',
+    ['save-catalog', '--project-dir', projectDir(projectId), '--sim-id', ''],
+    {
+      active_id: cat.active_id || null,
+      runs: cat.runs || [],
+      updated_at: new Date().toISOString(),
+    },
+  );
 }
 
 function upsertCatalogRun(projectId, doc) {
@@ -1348,7 +1356,7 @@ function renameCatalogRun(projectId, runId, name, simulationId) {
   const side = readJsonSafe(runSidecarPath(projectId, runId));
   if (side) {
     side.name = rec.name;
-    writeJson(runSidecarPath(projectId, runId), side);
+    writeRunSidecar(projectId, runId, side);
   }
   return {
     ok: true,
@@ -1388,7 +1396,7 @@ export function createDraftRun({ projectId, name, simulationId } = {}) {
   cat.runs.push(rec);
   cat.active_id = runId;
   saveCatalog(id, cat);
-  writeJson(runSidecarPath(id, runId), {
+  writeRunSidecar(id, runId, {
     ...rec,
     run_id: runId,
     project_id: id,
@@ -1436,7 +1444,7 @@ export function updateRunSettings(projectId, partial) {
   if (partial.current_view !== undefined) rec.current_view = partial.current_view || null;
   saveCatalog(id, cat);
   const side = readJsonSafe(runSidecarPath(id, runId)) || { run_id: runId, project_id: id };
-  writeJson(runSidecarPath(id, runId), { ...side, ...rec, run_id: runId, project_id: id, increment: INCREMENT });
+  writeRunSidecar(id, runId, { ...side, ...rec, run_id: runId, project_id: id, increment: INCREMENT });
   return {
     ok: true,
     run: rec,
@@ -1496,30 +1504,35 @@ function loadRunDoc(projectId, runId) {
   return merged;
 }
 
+function writeRunSidecar(projectId, runId, body) {
+  const payload = { ...(body || {}), id: runId, run_id: runId, project_id: projectId };
+  pyJsonSync(
+    'project_cli.py',
+    ['run-upsert', '--project-dir', projectDir(projectId), '--run-id', String(runId), '--sim-id', String((body && body.simulation_id) || '')],
+    payload,
+  );
+}
+
 function persistRunDoc(projectId, doc) {
-  const runsDirPath = runsDir(projectId);
-  mkdirSync(runsDirPath, { recursive: true });
   const cat = upsertCatalogRun(projectId, doc);
   const named = (cat.runs.find((r) => String(r.id) === String(doc.run_id)) || {}).name;
   const withName = named ? { ...doc, name: named } : doc;
-  if (doc.run_id) writeJson(runSidecarPath(projectId, doc.run_id), withName);
-  const projPath = join(projectDir(projectId), 'project.json');
-  if (existsSync(projPath)) {
-    try {
-      const proj = JSON.parse(readFileSync(projPath, 'utf8'));
-      proj.run_1 = {
-        run_id: withName.run_id,
-        name: withName.name || null,
-        status: withName.status,
-        pid: withName.pid,
-        case_dir: withName.case_dir,
-        log_path: withName.log_path,
-        increment: INCREMENT,
-        updated_at: withName.finished_at || withName.started_at,
-      };
-      proj.updated_at = new Date().toISOString();
-      writeFileSync(projPath, JSON.stringify(proj, null, 2), 'utf8');
-    } catch {}
+  if (doc.run_id) {
+    // Catalog already saved by upsertCatalogRun; stamp run_1 via run-upsert --stamp-project.
+    pyJsonSync(
+      'project_cli.py',
+      [
+        'run-upsert',
+        '--project-dir',
+        projectDir(projectId),
+        '--run-id',
+        String(doc.run_id),
+        '--sim-id',
+        String(withName.simulation_id || ''),
+        '--stamp-project',
+      ],
+      { ...withName, id: doc.run_id, run_id: doc.run_id, project_id: projectId, increment: INCREMENT },
+    );
   }
 }
 

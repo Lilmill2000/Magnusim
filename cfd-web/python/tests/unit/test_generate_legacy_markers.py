@@ -1,4 +1,4 @@
-﻿"""Tests for generate_* --legacy-markers / emit() job protocol (Step 7 remainder)."""
+"""Tests for generate_* --legacy-markers / emit() job protocol (Step 7 remainder)."""
 from __future__ import annotations
 
 import importlib.util
@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from cfddesk.jobs import legacy_markers as legacy
 from cfddesk.jobs.events import EVENT_PREFIX, parse_line
 
 TOOLS = Path(__file__).resolve().parents[2] / "tools"
@@ -24,7 +25,7 @@ def _load_tool(name: str):
 @pytest.mark.parametrize("tool", ["generate_standard.py", "generate_cfmesh_standard.py"])
 def test_progress_emits_magnusim_without_legacy(tool, capsys):
     mod = _load_tool(tool)
-    mod._LEGACY_MARKERS = False
+    legacy.set_legacy_markers(False)
     mod._progress("gmsh", msg="hi")
     out = capsys.readouterr().out.strip().splitlines()
     assert len(out) == 1
@@ -39,35 +40,36 @@ def test_progress_emits_magnusim_without_legacy(tool, capsys):
 @pytest.mark.parametrize("tool", ["generate_standard.py", "generate_cfmesh_standard.py"])
 def test_progress_dual_with_legacy_markers(tool, capsys):
     mod = _load_tool(tool)
-    mod._LEGACY_MARKERS = True
+    legacy.set_legacy_markers(True)
     mod._progress("gmshToFoam")
     lines = [ln for ln in capsys.readouterr().out.strip().splitlines() if ln]
     assert len(lines) == 2
     assert lines[0].startswith(EVENT_PREFIX)
     assert lines[1].startswith("CFMESH_PROGRESS ")
-    legacy = json.loads(lines[1][len("CFMESH_PROGRESS ") :])
-    assert legacy["stage"] == "gmshToFoam"
+    legacy_payload = json.loads(lines[1][len("CFMESH_PROGRESS ") :])
+    assert legacy_payload["stage"] == "gmshToFoam"
+    legacy.set_legacy_markers(False)
 
 
 @pytest.mark.parametrize("tool", ["generate_standard.py", "generate_cfmesh_standard.py"])
 def test_result_dual_with_legacy_markers(tool, capsys):
     mod = _load_tool(tool)
-    mod._LEGACY_MARKERS = True
+    legacy.set_legacy_markers(True)
     rc = mod._result(True, n_cells=12)
     assert rc == 0
     lines = [ln for ln in capsys.readouterr().out.strip().splitlines() if ln]
     assert len(lines) == 2
     assert lines[0].startswith(EVENT_PREFIX)
     assert lines[1].startswith("CFMESH_RESULT ")
-    legacy = json.loads(lines[1][len("CFMESH_RESULT ") :])
-    assert legacy["ok"] is True
-    assert legacy["n_cells"] == 12
+    legacy_payload = json.loads(lines[1][len("CFMESH_RESULT ") :])
+    assert legacy_payload["ok"] is True
+    assert legacy_payload["n_cells"] == 12
+    legacy.set_legacy_markers(False)
 
 
-@pytest.mark.parametrize("tool", ["generate_standard.py", "generate_cfmesh_standard.py"])
+@pytest.mark.parametrize("tool", ["generate_standard.py", "generate_cfmesh_standard.py", "generate_snappy.py"])
 def test_legacy_markers_cli_flag_exists(tool):
-    mod = _load_tool(tool)
-    # argparse is built inside main; smoke that the flag string is in source
     src = (TOOLS / tool).read_text(encoding="utf-8")
     assert "--legacy-markers" in src
-    assert "global _LEGACY_MARKERS" in src
+    assert "set_legacy_markers" in src
+    assert "legacy_markers" in src

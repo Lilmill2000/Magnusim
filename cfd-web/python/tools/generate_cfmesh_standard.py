@@ -19,9 +19,8 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.jobs.events import emit
+from cfddesk.jobs import legacy_markers as _legacy
 
-_LEGACY_MARKERS = False  # set by main() from --legacy-markers
 from cfddesk.cad.location import find_location_in_mesh
 from cfddesk.cad.passage import check_passage_cells, measure_role_passages
 from cfddesk.cad.step import load_step
@@ -69,19 +68,13 @@ _BANNED_WSL = frozenset(
 
 def _progress(stage: str, **extra) -> None:
     """Emit progress via job protocol; optional legacy CFMESH_PROGRESS line."""
-    payload = {"stage": stage, **extra}
-    emit("progress", **payload)
-    if _LEGACY_MARKERS:
-        print("CFMESH_PROGRESS " + json.dumps(payload, separators=(",", ":")), flush=True)
+    _legacy.progress(stage, **extra)
 
 
 def _result(ok: bool, **extra) -> int:
     """Emit result via job protocol; optional legacy CFMESH_RESULT line."""
-    payload = {"ok": bool(ok), **extra}
-    emit("result", **payload)
-    if _LEGACY_MARKERS:
-        print("CFMESH_RESULT " + json.dumps(payload, separators=(",", ":")), flush=True)
-    return 0 if ok else 1
+    return _legacy.result(ok, **extra)
+
 
 
 def _read_json(path: Path) -> dict:
@@ -252,8 +245,7 @@ def main() -> int:
         help="Also emit CFMESH_PROGRESS/CFMESH_RESULT lines (one-phase frontend compat).",
     )
     args = p.parse_args()
-    global _LEGACY_MARKERS
-    _LEGACY_MARKERS = bool(args.legacy_markers)
+    _legacy.set_legacy_markers(bool(args.legacy_markers))
 
     project_dir = Path(args.project_dir).resolve()
     case_dir = Path(args.case_dir).resolve()

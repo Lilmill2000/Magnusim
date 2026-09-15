@@ -86,5 +86,41 @@ def test_cli_subcommands_listed():
         "run-upsert",
         "run-delete",
         "mesh-result",
+        "write-project",
+        "save-catalog",
     ):
         assert name in src
+
+
+def test_write_project_and_set_bcs_stamp(tmp_path: Path):
+    proj = tmp_path / "proj1"
+    proj.mkdir()
+    (proj / "project.json").write_text(json.dumps({"id": "proj1", "name": "P"}), encoding="utf-8")
+    proc = _run(
+        ["set-bcs", "--project-dir", str(proj), "--sim-id", "sim-1"],
+        {"boundary_conditions": [{"id": "bc1", "name": "Velocity inlet 1", "bc_type": "Velocity inlet"}]},
+    )
+    assert proc.returncode == 0, proc.stderr
+    stamped = json.loads((proj / "project.json").read_text(encoding="utf-8"))
+    assert stamped["boundary_conditions"]["count"] == 1
+    proc2 = _run(
+        ["write-project", "--project-dir", str(proj)],
+        {"id": "proj1", "name": "P2", "active_simulation_id": "sim-1"},
+    )
+    assert proc2.returncode == 0, proc2.stderr
+    doc = json.loads((proj / "project.json").read_text(encoding="utf-8"))
+    assert doc["name"] == "P2"
+
+
+def test_run_upsert_sidecar_naming(tmp_path: Path):
+    proj = tmp_path / "proj1"
+    proj.mkdir()
+    (proj / "project.json").write_text(json.dumps({"id": "proj1"}), encoding="utf-8")
+    proc = _run(
+        ["run-upsert", "--project-dir", str(proj), "--run-id", "abcd1234", "--stamp-project"],
+        {"id": "abcd1234", "status": "draft", "name": "Run 1"},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (proj / "runs" / "run-abcd1234.json").is_file()
+    stamped = json.loads((proj / "project.json").read_text(encoding="utf-8"))
+    assert stamped["run_1"]["run_id"] == "abcd1234"

@@ -111,6 +111,20 @@ def cmd_set_bcs(args: argparse.Namespace) -> int:
     doc = body if isinstance(body, dict) else {"boundary_conditions": body}
     doc = _stamp(doc, sim_id=args.sim_id, increment="W19")
     _atomic_write(path, doc)
+    proj_path = project_dir / "project.json"
+    proj = _read_json(proj_path)
+    if proj:
+        bcs = list(doc.get("boundary_conditions") or [])
+        proj["boundary_conditions"] = {
+            "count": len(bcs),
+            "names": [b.get("name") for b in bcs if isinstance(b, dict)],
+            "types": [b.get("bc_type") for b in bcs if isinstance(b, dict)],
+            "boundary_conditions_json": str(path),
+            "updated_at": doc["updated_at"],
+        }
+        proj["updated_at"] = doc["updated_at"]
+        proj["increment"] = "W19"
+        _atomic_write(proj_path, proj)
     return _print_doc(doc)
 
 
@@ -119,8 +133,31 @@ def cmd_set_mesh_settings(args: argparse.Namespace) -> int:
     body = _read_stdin_json()
     path = project_dir / "mesh.json"
     doc = body if isinstance(body, dict) else {"settings": body}
-    doc = _stamp(doc, sim_id=args.sim_id, increment="W20")
+    # Preserve caller stamps when present (W21 live results use increment W21/W25).
+    inc = "W20"
+    if isinstance(body, dict) and body.get("increment"):
+        inc = str(body.get("increment"))
+    doc = _stamp(doc, sim_id=args.sim_id, increment=inc)
     _atomic_write(path, doc)
+    proj_path = project_dir / "project.json"
+    proj = _read_json(proj_path)
+    if proj:
+        settings = doc.get("settings") if isinstance(doc.get("settings"), dict) else {}
+        proj["mesh"] = {
+            "id": doc.get("id") or doc.get("active_id"),
+            "name": doc.get("name"),
+            "algorithm": settings.get("algorithm"),
+            "sizing": settings.get("sizing"),
+            "fineness": settings.get("fineness"),
+            "bank_exact": doc.get("bank_exact"),
+            "mesh_json": str(path),
+            "active_id": doc.get("active_id"),
+            "mesh_count": len(doc.get("meshes") or []) or 1,
+            "updated_at": doc["updated_at"],
+        }
+        proj["updated_at"] = doc["updated_at"]
+        proj["increment"] = inc
+        _atomic_write(proj_path, proj)
     return _print_doc(doc)
 
 
@@ -131,21 +168,68 @@ def cmd_set_refinements(args: argparse.Namespace) -> int:
     doc = body if isinstance(body, dict) else {"refinements": body}
     doc = _stamp(doc, sim_id=args.sim_id, increment="W26")
     _atomic_write(path, doc)
+    proj_path = project_dir / "project.json"
+    proj = _read_json(proj_path)
+    if proj:
+        refs = list(doc.get("refinements") or [])
+        proj["mesh_refinements"] = {
+            "count": len(refs),
+            "names": [r.get("name") for r in refs if isinstance(r, dict)],
+            "types": [r.get("type") for r in refs if isinstance(r, dict)],
+            "mesh_refinements_json": str(path),
+            "updated_at": doc["updated_at"],
+        }
+        proj["updated_at"] = doc["updated_at"]
+        proj["increment"] = "W26"
+        _atomic_write(proj_path, proj)
     return _print_doc(doc)
 
 
 def cmd_set_result_controls(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir).resolve()
     body = _read_stdin_json()
-    # Prefer result_controls.json; also accept area_average.json alias payload.
-    name = "result_controls.json"
-    if isinstance(body, dict) and body.get("_file") == "area_average.json":
-        name = "area_average.json"
+    only_aa = isinstance(body, dict) and body.get("_file") == "area_average.json"
+    if only_aa and isinstance(body, dict):
         body = {k: v for k, v in body.items() if k != "_file"}
-    path = project_dir / name
     doc = body if isinstance(body, dict) else {"controls": body}
     doc = _stamp(doc, sim_id=args.sim_id, increment="W22")
-    _atomic_write(path, doc)
+    rc_path = project_dir / "result_controls.json"
+    aa_path = project_dir / "area_average.json"
+    if only_aa:
+        _atomic_write(aa_path, doc)
+    else:
+        _atomic_write(rc_path, doc)
+        mirror = dict(doc)
+        mirror["mirror_of"] = "result_controls.json"
+        _atomic_write(aa_path, mirror)
+    path = aa_path if only_aa else rc_path
+    proj_path = project_dir / "project.json"
+    proj = _read_json(proj_path)
+    if proj:
+        rcs = list(doc.get("result_controls") or [])
+        aa = doc.get("area_average_1")
+        aa_sum = None
+        if isinstance(aa, dict):
+            aa_sum = {
+                "name": aa.get("name"),
+                "kind": aa.get("kind"),
+                "category": aa.get("category"),
+                "write_control": aa.get("write_control"),
+                "faces": aa.get("faces"),
+                "both_faces": True,
+                "results_available": False,
+            }
+        proj["result_controls"] = {
+            "count": len(rcs),
+            "names": [r.get("name") for r in rcs if isinstance(r, dict)],
+            "area_average_1": aa_sum,
+            "result_controls_json": str(rc_path),
+            "area_average_json": str(aa_path),
+            "updated_at": doc["updated_at"],
+        }
+        proj["updated_at"] = doc["updated_at"]
+        proj["increment"] = "W22"
+        _atomic_write(proj_path, proj)
     return _print_doc(doc)
 
 
@@ -158,6 +242,14 @@ def cmd_set_sim_control(args: argparse.Namespace) -> int:
     _atomic_write(path, doc)
     return _print_doc(doc)
 
+
+
+def _run_sidecar_path(runs_dir: Path, run_id: str) -> Path:
+    """Match JS w27 runSidecarPath: runs/run-<id>.json."""
+    rid = str(run_id or "").strip()
+    if rid.startswith("run-"):
+        return runs_dir / f"{rid}.json"
+    return runs_dir / f"run-{rid}.json"
 
 def cmd_run_upsert(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir).resolve()
@@ -181,10 +273,21 @@ def cmd_run_upsert(args: argparse.Namespace) -> int:
         runs[idx] = {**(runs[idx] or {}), **body}
     else:
         runs.append(body)
-    catalog = _stamp({"runs": runs}, sim_id=args.sim_id, increment="W27")
-    _atomic_write(catalog_path, catalog)
-    run_path = runs_dir / f"{run_id}.json"
+    active_id = body.get("active_id")
+    if active_id is None:
+        active_id = catalog.get("active_id")
+    if active_id is None:
+        active_id = run_id
+    catalog_out = _stamp(
+        {"runs": runs, "active_id": active_id},
+        sim_id=args.sim_id,
+        increment="W27",
+    )
+    _atomic_write(catalog_path, catalog_out)
+    run_path = _run_sidecar_path(runs_dir, run_id)
     _atomic_write(run_path, body)
+    if getattr(args, "stamp_project", False):
+        _stamp_run_on_project(project_dir, body)
     return _print_doc(body)
 
 
@@ -197,7 +300,7 @@ def cmd_run_delete(args: argparse.Namespace) -> int:
     runs = [r for r in (catalog.get("runs") or []) if not (r and r.get("id") == run_id)]
     catalog = _stamp({"runs": runs}, sim_id=args.sim_id, increment="W27")
     _atomic_write(catalog_path, catalog)
-    run_path = runs_dir / f"{run_id}.json"
+    run_path = _run_sidecar_path(runs_dir, run_id)
     if run_path.is_file():
         run_path.unlink()
     return _print_doc({"ok": True, "deleted": run_id})
@@ -232,6 +335,62 @@ def cmd_mesh_result(args: argparse.Namespace) -> int:
     return _print_doc(existing)
 
 
+
+def cmd_write_project(args: argparse.Namespace) -> int:
+    """Atomically write full project.json (Node builds doc; Python owns write)."""
+    project_dir = Path(args.project_dir).resolve()
+    body = _read_stdin_json()
+    if not isinstance(body, dict):
+        print(json.dumps({"ok": False, "error": "stdin must be object"}))
+        return 1
+    path = project_dir / "project.json"
+    if not body.get("id"):
+        body = {**body, "id": project_dir.name}
+    body = dict(body)
+    body["updated_at"] = body.get("updated_at") or _now()
+    body["persistence"] = "filesystem"
+    _atomic_write(path, body)
+    return _print_doc(body)
+
+
+def cmd_save_catalog(args: argparse.Namespace) -> int:
+    """Write runs/catalog.json from stdin (full catalog document)."""
+    project_dir = Path(args.project_dir).resolve()
+    body = _read_stdin_json()
+    if not isinstance(body, dict):
+        print(json.dumps({"ok": False, "error": "stdin must be object"}))
+        return 1
+    runs_dir = project_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    path = runs_dir / "catalog.json"
+    doc = _stamp(body, sim_id=args.sim_id, increment="W27")
+    if "runs" not in doc:
+        doc["runs"] = []
+    _atomic_write(path, doc)
+    return _print_doc(doc)
+
+
+def _stamp_run_on_project(project_dir: Path, body: dict[str, Any]) -> None:
+    proj_path = project_dir / "project.json"
+    proj = _read_json(proj_path)
+    if not proj:
+        return
+    run_id = str(body.get("id") or body.get("run_id") or "")
+    proj["run_1"] = {
+        "run_id": run_id,
+        "name": body.get("name"),
+        "status": body.get("status"),
+        "pid": body.get("pid"),
+        "case_dir": body.get("case_dir"),
+        "log_path": body.get("log_path"),
+        "increment": body.get("increment") or "W27",
+        "updated_at": body.get("finished_at") or body.get("started_at") or body.get("updated_at") or _now(),
+    }
+    proj["updated_at"] = _now()
+    proj["increment"] = "W27"
+    _atomic_write(proj_path, proj)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="cfddesk web project JSON CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -250,11 +409,18 @@ def build_parser() -> argparse.ArgumentParser:
         ("run-upsert", cmd_run_upsert, True),
         ("run-delete", cmd_run_delete, True),
         ("mesh-result", cmd_mesh_result, False),
+        ("write-project", cmd_write_project, False),
+        ("save-catalog", cmd_save_catalog, False),
     ]:
         sp = sub.add_parser(name)
         add_common(sp)
         if extra:
             sp.add_argument("--run-id", default="")
+            sp.add_argument(
+                "--stamp-project",
+                action="store_true",
+                help="Also stamp project.json run_1 pointer (W27)",
+            )
         sp.set_defaults(func=fn)
     return p
 
