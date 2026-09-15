@@ -1,0 +1,73 @@
+﻿{
+  "phase": "Phase 2",
+  "land": "land12",
+  "title": "AnalysisType.write_case goldens via Phase 1 web_case writers",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 06:20:00 CT",
+  "machine": "Timmy",
+  "baseline_HEAD": "e2c7e9339f84085dda986b1920e3c77496660ce8",
+  "baseline_land11": "5ee7b48bba4a8cc4c834d1a88c852ed05d6d6222",
+  "commit_sha": "6aeb7524e8491dacee705bb8228b69c04a6ab286",
+  "commit_short": "6aeb752",
+  "tests": {
+    "land12_focused": "10 passed (test_write_case_golden 3 + test_analysis_registry 7)",
+    "unit_suite": "204 passed"
+  },
+  "wiring": {
+    "CaseContext": "cfddesk.registry.analysis.CaseContext (out_dir, run_spec, ...)",
+    "steady": "incompressible_steady.write_case = _write_case_steady -> write_web_solve_case",
+    "transient": "incompressible_transient.write_case = _write_case_transient -> write_web_solve_case",
+    "lazy_import": true,
+    "mode_guards": "steady rejects RunSpec.transient set; transient requires it",
+    "goldens": "js_steady + js_transient via registry write_case (semantic parity)",
+    "write_case_None": "fail (asserted)"
+  },
+  "prove": {
+    "both_builtins_callable": true,
+    "steady_golden_parity": true,
+    "transient_golden_parity": true,
+    "write_case_not_None": true
+  },
+  "plan_todo": "none updated (p2-tests already completed; Phase 2 stays OPEN)",
+  "landed": [
+    "registry/analysis.py: CaseContext; write_case typed Callable[[CaseContext], None]",
+    "builtin/incompressible.py: wire both builtins to Phase 1 write_web_solve_case",
+    "tests/unit/test_write_case_golden.py: registry path vs Phase 1 js goldens",
+    "test_analysis_registry: write_case must be callable (not None)"
+  ],
+  "NOT_yet_done": [
+    "W17 / MESH_ENGINES consumer rewrite (OUT)",
+    "vite FILTERS chrome (OUT)",
+    "JS defaults rewrite / dual-defaults consumer (OUT)",
+    "Node write ban (OUT)",
+    "prepare_run still calls write_web_solve_case directly (not yet AnalysisType.write_case)",
+    "write_simplefoam_case CLI path not routed through AnalysisType.write_case",
+    "SolverApp write_fv_solution / write_control_dict still None stubs",
+    "web_mirrors split remain carry",
+    "describe fill remain carry",
+    "soft-pass != Phase 2 done; no Phase 3+"
+  ],
+  "soft_pass_kill": "Do NOT claim Phase 2 done. land12 is write_case goldens only. No W17/FILTERS, no dual-defaults consumer, no Phase 2 CLOSED, no Phase 3+, no new solver physics.",
+  "files_touched": {
+    "added": [
+      "cfd-web/python/tests/unit/test_write_case_golden.py",
+      "cfd-web/runs/phase2-land12/baseline_HEAD.txt",
+      "cfd-web/runs/phase2-land12/report.json"
+    ],
+    "modified": [
+      "cfd-web/python/cfddesk/registry/analysis.py",
+      "cfd-web/python/cfddesk/registry/__init__.py",
+      "cfd-web/python/cfddesk/builtin/incompressible.py",
+      "cfd-web/python/tests/unit/test_analysis_registry.py"
+    ]
+  },
+  "notes": [
+    "Did not wire W17/FILTERS/dual-defaults.",
+    "Did not claim Phase 2 CLOSED.",
+    "Did not touch :8082 UI.",
+    "Did not push."
+  ],
+  "report_path": "cfd-web/runs/phase2-land12/report.json"
+}
