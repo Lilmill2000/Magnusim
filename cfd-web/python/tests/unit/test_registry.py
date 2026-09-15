@@ -300,6 +300,73 @@ def register(hub):
     assert "kept" in hub2.registry("demo").keys()  # builtins / prior regs not wiped
 
 
+
+def test_load_all_retries_after_ep_load_failure(monkeypatch):
+    """Failed EP import leaves _LOADED False so a later load_all() retries without force."""
+    calls = {"n": 0}
+
+    class FlakyEP:
+        name = "flaky_ep"
+
+        def load(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise ImportError("boom on first EP load")
+
+            def register(hub):
+                hub.registry("analysis").register(
+                    _DummySpec("from_ep", "From EP"), plugin="flaky_ep"
+                )
+                return PluginManifest(
+                    key="flaky_ep",
+                    name="Flaky EP",
+                    version="0.1.0",
+                    provides={"analysis": ["from_ep"]},
+                )
+
+            return register
+
+    class FakeEPs:
+        def select(self, group=None):
+            return [FlakyEP()]
+
+    import importlib.metadata as md
+
+    monkeypatch.setattr(md, "entry_points", lambda: FakeEPs())
+    reset_for_tests()
+    hub1 = load_all()
+    assert discovery_mod._LOADED is False
+    assert "from_ep" not in hub1.registry("analysis").keys()
+    hub1.registry("demo").register(_DummySpec("kept", "Kept"), plugin="builtin")
+
+    hub2 = load_all()  # no force=
+    assert hub2 is hub1
+    assert discovery_mod._LOADED is True
+    assert "from_ep" in hub2.registry("analysis").keys()
+    assert "kept" in hub2.registry("demo").keys()
+
+
+def test_ep_non_callable_feeds_had_failures(monkeypatch):
+    """Non-callable EP load result must also keep _LOADED False."""
+
+    class BadEP:
+        name = "not_callable_ep"
+
+        def load(self):
+            return object()  # not callable
+
+    class FakeEPs:
+        def select(self, group=None):
+            return [BadEP()]
+
+    import importlib.metadata as md
+
+    monkeypatch.setattr(md, "entry_points", lambda: FakeEPs())
+    reset_for_tests()
+    load_all()
+    assert discovery_mod._LOADED is False
+
+
 def test_toml_fallback_fail_closed_on_tables(monkeypatch, caplog):
     """Without tomllib/tomli, manifests with [tables]/requires arrays must not silently degrade."""
     real_import = __import__

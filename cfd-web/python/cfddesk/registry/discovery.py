@@ -115,18 +115,23 @@ def _resolve_web_root(web_root: Path | str | None = None) -> Path | None:
         return None
 
 
-def _entry_point_callables() -> list[tuple[str, Callable[..., Any]]]:
-    """Load callables from importlib.metadata entry points group cfddesk.plugins."""
+def _entry_point_callables() -> tuple[list[tuple[str, Callable[..., Any]]], bool]:
+    """Load callables from importlib.metadata entry points group cfddesk.plugins.
+
+    Returns (callables, had_failures). ep.load() / non-callable failures set
+    had_failures so load_all does not sticky-set _LOADED after a partial EP load.
+    """
     out: list[tuple[str, Callable[..., Any]]] = []
+    had_failures = False
     try:
         from importlib.metadata import entry_points
     except ImportError:
-        return out
+        return out, False
     try:
         eps = entry_points()
     except Exception as exc:
         log.warning("entry_points() failed: %s", exc)
-        return out
+        return out, False
     # Python 3.10 returns a SelectableGroups dict-like; 3.12+ has .select
     selected = []
     if hasattr(eps, "select"):
@@ -144,12 +149,14 @@ def _entry_point_callables() -> list[tuple[str, Callable[..., Any]]]:
             loaded = ep.load()
         except Exception as exc:
             log.warning("Failed to load entry point %s: %s", name, exc)
+            had_failures = True
             continue
         if callable(loaded):
             out.append((name, loaded))
         else:
             log.warning("Entry point %s is not callable", name)
-    return out
+            had_failures = True
+    return out, had_failures
 
 
 def _toml_needs_full_parser(text: str) -> bool:
@@ -318,8 +325,9 @@ def discover_entry_points(
     """Load entry-point plugins. Returns (manifests, had_failures)."""
     disabled = disabled or set()
     manifests: list[PluginManifest] = []
-    had_failures = False
-    for name, fn in _entry_point_callables():
+    callables, load_fail = _entry_point_callables()
+    had_failures = load_fail
+    for name, fn in callables:
         if name in disabled:
             log.info("Entry-point plugin %s disabled", name)
             continue
