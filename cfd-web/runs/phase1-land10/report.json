@@ -1,88 +1,90 @@
-﻿{
-    "phase":  "Phase 1",
-    "land":  "land10",
-    "title":  "Close Step 9 remaining projects/ JSON writes + gate land9 e2e + transient prove",
-    "result":  "PARTIAL",
-    "product":  "Magnusim",
-    "python_package":  "cfddesk",
-    "timestamp_local":  "2026-09-15 00:59:41 CT",
-    "machine":  "Timmy",
-    "port_8082":  "up HTTP 200",
-    "public_url":  "https://simulation.lilmill2000.com/",
-    "public_http":  200,
-    "baseline_HEAD":  "0c407c6",
-    "land9_commit":  "0c407c6",
-    "closed":  {
-                   "land9_carry":  {
-                                       "status":  "CLOSED",
-                                       "items":  [
-                                                     "e2e/phase1-land9-solve.spec.js gated behind MAGNUSIM_PUBLIC_E2E=1 (CI/npm test skips public URL)",
-                                                     "Pruned fee30c54 status dumps from runs/phase1-land9 (start-steady.json, status-steady-final.json); kept slim ui-solve-evidence.json"
-                                                 ]
-                                   },
-                   "step9_remaining_writes":  {
-                                                  "status":  "CLOSED",
-                                                  "items":  [
-                                                                "project_cli write-json allowlisted rels for materials/bcs/mesh/refinements/result_controls/area_average/simulation_control/runs/catalog",
-                                                                "w17-sim-catalog stampMissing + w17-simulation purge/copy route via writeJsonCli",
-                                                                "w21 generate.log moved from projects/.../mesh/run-*/generate.log to .cache/jobs/snappy",
-                                                                "w27 dead writeJson + redundant winLog writeFileSync removed (job-runner .cache/logs)",
-                                                                "Guard extended for setup JSON filenames; vite-plugin/prefs clarified as .cache/local (not projects/)",
-                                                                "w16 geometry* remains allowlisted per plan Step 9"
-                                                            ]
-                                              },
-                   "step10_transient":  {
-                                            "status":  "CLOSED_API",
-                                            "items":  [
-                                                          "Public URL + :8082 HTTP 200",
-                                                          "sample-project-transient repaired (materials/bcs/mesh) via project_cli; BC names remapped to mesh patches pressure_2/velocity_inlet_2",
-                                                          "API start pimpleFoam run 1524785e land10-transient-v2 status=done exit=0 residuals=162 n_saved_times=2",
-                                                          "postProcessing mon_/flow_ dirs present (mon_pressure_2, mon_velocity_inlet_2, flow_*)",
-                                                          "evidence: runs/phase1-land10/transient-evidence.json"
-                                                      ],
-                                            "not_ui_graphs":  "Graphs panel Playwright click not re-run; monitors proven on disk via postProcessing"
-                                        }
-               },
-    "tests":  {
-                  "unit_suite":  "105 passed",
-                  "unit_project_cli":  "8 passed (incl. write-json)",
-                  "prepare_run_golden":  "3 passed COMPARE OK",
-                  "step9_guard":  "PASS (project.json + simulation(s).json + setup JSON)",
-                  "playwright_land9_public_default":  "1 skipped (gate)"
-              },
-    "Phase1_can_check_off":  false,
-    "reason":  "Step 9 remaining Node setup-JSON writes closed; land9 e2e gated; fee30c54 dumps pruned; transient API prove GREEN on public URL. Phase 1 acceptance still incomplete: cfddesk/wsl/templates/ missing the four mesh_run run_*.sh bodies (still generated in mesh_run.py); FoamFile token remains in vite-plugin stripFoamFileHeader (reader, not OF writer); w16 still Node-writes geometry*/project.json per plan allowlist; transient Graphs panel UI not Playwright-proven; plan markdown todos still pending (tracking).",
-    "NOT_done":  [
-                     "Move mesh_run.py run_*.sh bodies into cfddesk/wsl/templates/ (acceptance bullet)",
-                     "Optional: remove/rename FoamFile match in vite-plugin strip helper so grep -l FoamFile scripts/ is empty",
-                     "Optional: Playwright Graphs panel assert on transient monitors",
-                     "Plan markdown todo statuses still pending (tracking only)"
-                 ],
-    "files_touched_summary":  {
-                                  "added":  [
-                                                "cfd-web/runs/phase1-land10/*"
-                                            ],
-                                  "modified":  [
-                                                   "cfd-web/e2e/phase1-land9-solve.spec.js",
-                                                   "cfd-web/python/tools/project_cli.py",
-                                                   "cfd-web/python/tests/unit/test_project_cli.py",
-                                                   "cfd-web/scripts/py-json.js",
-                                                   "cfd-web/scripts/w17-sim-catalog.js",
-                                                   "cfd-web/scripts/w17-simulation.js",
-                                                   "cfd-web/scripts/w21-mesh-generate.js",
-                                                   "cfd-web/scripts/w27-solve.js",
-                                                   "cfd-web/scripts/__tests__/test_no_projects_writefile.js"
-                                               ],
-                                  "deleted":  [
-                                                  "cfd-web/runs/phase1-land9/start-steady.json",
-                                                  "cfd-web/runs/phase1-land9/status-steady-final.json"
-                                              ]
-                              },
-    "notes":  [
-                  "vite-plugin stamps write under .cache — not projects/; no allowlist needed",
-                  "w21 .cache job logs remain writeFileSync (not under projects/)",
-                  "writer.py / web_case.py not grown",
-                  "Phase 3+ not touched",
-                  ":8082 kept up"
-              ]
+{
+  "phase": "Phase 1",
+  "land": "land10",
+  "title": "Close Step 9 remaining projects/ JSON writes + gate land9 e2e + transient prove",
+  "result": "PARTIAL",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-15 00:59:41 CT",
+  "machine": "Timmy",
+  "port_8082": "up HTTP 200",
+  "public_url": "https://simulation.lilmill2000.com/",
+  "public_http": 200,
+  "baseline_HEAD": "0c407c6",
+  "land9_commit": "0c407c6",
+  "closed": {
+    "land9_carry": {
+      "status": "CLOSED",
+      "items": [
+        "e2e/phase1-land9-solve.spec.js gated behind MAGNUSIM_PUBLIC_E2E=1 (CI/npm test skips public URL)",
+        "Pruned fee30c54 status dumps from runs/phase1-land9 (start-steady.json, status-steady-final.json); kept slim ui-solve-evidence.json"
+      ]
+    },
+    "step9_remaining_writes": {
+      "status": "CLOSED",
+      "items": [
+        "project_cli write-json allowlisted rels for materials/bcs/mesh/refinements/result_controls/area_average/simulation_control/runs/catalog",
+        "w17-sim-catalog stampMissing + w17-simulation purge/copy route via writeJsonCli",
+        "w21 generate.log moved from projects/.../mesh/run-*/generate.log to .cache/jobs/snappy",
+        "w27 dead writeJson + redundant winLog writeFileSync removed (job-runner .cache/logs)",
+        "Guard extended for setup JSON filenames; vite-plugin/prefs clarified as .cache/local (not projects/)",
+        "w16 geometry* remains allowlisted per plan Step 9"
+      ]
+    },
+    "step10_transient": {
+      "status": "CLOSED_API",
+      "items": [
+        "Public URL + :8082 HTTP 200",
+        "sample-project-transient repaired (materials/bcs/mesh) via project_cli; BC names remapped to mesh patches pressure_2/velocity_inlet_2",
+        "API start pimpleFoam run 1524785e land10-transient-v2 status=done exit=0 residuals=162 n_saved_times=2",
+        "postProcessing mon_/flow_ dirs present (mon_pressure_2, mon_velocity_inlet_2, flow_*)",
+        "evidence: runs/phase1-land10/transient-evidence.json"
+      ],
+      "not_ui_graphs": "Graphs panel Playwright click not re-run; monitors proven on disk via postProcessing"
+    }
+  },
+  "tests": {
+    "unit_suite": "105 passed",
+    "unit_project_cli": "8 passed (incl. write-json)",
+    "prepare_run_golden": "3 passed COMPARE OK",
+    "step9_guard": "PASS (project.json + simulation(s).json + setup JSON)",
+    "playwright_land9_public_default": "1 skipped (gate)"
+  },
+  "Phase1_can_check_off": false,
+  "reason": "Step 9 remaining Node setup-JSON writes closed; land9 e2e gated; fee30c54 dumps pruned; transient API prove GREEN on public URL. Phase 1 acceptance still incomplete: cfddesk/wsl/templates/ missing the four mesh_run run_*.sh bodies (still generated in mesh_run.py); FoamFile token remains in vite-plugin stripFoamFileHeader (reader, not OF writer); w16 still Node-writes geometry*/project.json per plan allowlist; transient Graphs panel UI not Playwright-proven; plan markdown todos still pending (tracking).",
+  "NOT_done": [
+    "Move mesh_run.py run_*.sh bodies into cfddesk/wsl/templates/ (acceptance bullet)",
+    "Optional: remove/rename FoamFile match in vite-plugin strip helper so grep -l FoamFile scripts/ is empty",
+    "Optional: Playwright Graphs panel assert on transient monitors",
+    "Plan markdown todo statuses still pending (tracking only)"
+  ],
+  "files_touched_summary": {
+    "added": [
+      "cfd-web/runs/phase1-land10/*"
+    ],
+    "modified": [
+      "cfd-web/e2e/phase1-land9-solve.spec.js",
+      "cfd-web/python/tools/project_cli.py",
+      "cfd-web/python/tests/unit/test_project_cli.py",
+      "cfd-web/scripts/py-json.js",
+      "cfd-web/scripts/w17-sim-catalog.js",
+      "cfd-web/scripts/w17-simulation.js",
+      "cfd-web/scripts/w21-mesh-generate.js",
+      "cfd-web/scripts/w27-solve.js",
+      "cfd-web/scripts/__tests__/test_no_projects_writefile.js"
+    ],
+    "deleted": [
+      "cfd-web/runs/phase1-land9/start-steady.json",
+      "cfd-web/runs/phase1-land9/status-steady-final.json"
+    ]
+  },
+  "notes": [
+    "vite-plugin stamps write under .cache — not projects/; no allowlist needed",
+    "w21 .cache job logs remain writeFileSync (not under projects/)",
+    "writer.py / web_case.py not grown",
+    "Phase 3+ not touched",
+    ":8082 kept up"
+  ],
+  "commit_sha": "19c7b58e26618429346fad209ee3988e40758ad0",
+  "commit_short": "19c7b58"
 }
