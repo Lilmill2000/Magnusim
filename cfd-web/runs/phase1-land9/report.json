@@ -1,4 +1,4 @@
-﻿{
+{
   "phase": "Phase 1",
   "land": "land9",
   "title": "Close Step 9 sibling sim JSON + Step 10 Playwright UI Solve on public URL",
@@ -78,5 +78,7 @@
     "writer.py / web_case.py not grown",
     "Phase 3+ not touched",
     ":8082 kept up (restarted once to load JS routing)"
-  ]
+  ],
+  "commit_sha": "0c407c69e06e962b441b944605adfc874acc51d3",
+  "commit_short": "0c407c6"
 }
