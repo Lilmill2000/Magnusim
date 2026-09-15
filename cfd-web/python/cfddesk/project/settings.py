@@ -100,7 +100,7 @@ class MeshSettings:
     fineness: int = 5
     sizing_mode: SizingMode = "automatic"
     physics_based: bool = True
-    add_layers: bool = False
+    add_layers: bool = True
     max_meshing_runtime_s: float = 18_000.0
     # Phase 5b — Standard (gmsh BREP) is the default; Hex-dominant = snappy.
     # from_dict still defaults missing keys to hex-dominant so stamped legacy
@@ -196,7 +196,7 @@ class MeshSettings:
             fineness=fineness,
             sizing_mode=sizing_mode,  # type: ignore[arg-type]
             physics_based=bool(data.get("physics_based", True)),
-            add_layers=bool(data.get("add_layers", False)),
+            add_layers=bool(data.get("add_layers", True)),
             max_meshing_runtime_s=float(data.get("max_meshing_runtime_s", 18_000.0)),
             algorithm=algorithm,  # type: ignore[arg-type]
             # Missing key → True (current Standard default). Explicit False kept.

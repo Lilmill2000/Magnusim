@@ -27,6 +27,16 @@ def to_web_mesh(
         active_id = getattr(sim, "active_mesh_id", None) or (sim.meshes[0].id if sim.meshes else None)
         for m in sim.meshes:
             settings = m.settings.to_dict() if hasattr(m.settings, "to_dict") else {}
+            meta = dict(getattr(m, "web_meta", None) or {})
+            # Product mesh_engine (W20 Advanced):
+            #   standard -> generate_standard.py / gmsh-hexcore (Cyclone Default bar)
+            #   cfmesh   -> legacy cartesianMesh (explicit Advanced choice only)
+            # Do NOT map hexcore_backend -> mesh_engine. hexcore_backend is an internal
+            # Standard hex-core impl hint (cfmesh|bodyfit), not the generate path picker.
+            # Mapping it flipped new meshes onto legacy cfMesh / away from Cyclone path.
+            ui_engine = str(meta.get("ui_mesh_engine") or "standard").strip().lower()
+            if ui_engine not in ("standard", "cfmesh"):
+                ui_engine = "standard"
             web_settings = {
                 "name": m.name,
                 "algorithm": _algo_to_web(str(settings.get("algorithm") or "standard")),
@@ -34,16 +44,13 @@ def to_web_mesh(
                 "fineness": int(settings.get("fineness") or 5),
                 "physics_based_meshing": bool(settings.get("physics_based", True)),
                 "hex_element_core": bool(settings.get("hex_element_core", True)),
-                "automatic_boundary_layers": bool(settings.get("add_layers", False)),
+                "automatic_boundary_layers": bool(settings.get("add_layers", True)),
                 "maximum_meshing_runtime": str(settings.get("max_meshing_runtime_s") or 18000.0),
                 "maximum_meshing_runtime_unit": "s",
                 "advanced": {
-                    "mesh_engine": "cfmesh"
-                    if str(settings.get("hexcore_backend") or "") == "cfmesh"
-                    else "standard",
+                    "mesh_engine": ui_engine,
                 },
             }
-            meta = dict(getattr(m, "web_meta", None) or {})
             entry: dict[str, Any] = {
                 "id": m.id,
                 "name": m.name,
@@ -111,13 +118,18 @@ def from_web_mesh(doc: dict | None) -> tuple[list[Any], str]:
                 settings_raw.get("physics_based_meshing", settings_raw.get("physics_based", True))
             ),
             add_layers=bool(
-                settings_raw.get("automatic_boundary_layers", settings_raw.get("add_layers", False))
+                settings_raw.get("automatic_boundary_layers", settings_raw.get("add_layers", True))
             ),
             algorithm=_algo_from_web(str(settings_raw.get("algorithm") or "Standard")),  # type: ignore[arg-type]
             hex_element_core=bool(settings_raw.get("hex_element_core", True)),
         )
         adv = settings_raw.get("advanced") if isinstance(settings_raw.get("advanced"), dict) else {}
-        if str(adv.get("mesh_engine") or "").lower() == "cfmesh":
+        ui_engine = str(adv.get("mesh_engine") or "standard").strip().lower()
+        if ui_engine not in ("standard", "cfmesh"):
+            ui_engine = "standard"
+        # Explicit legacy Advanced=cfmesh only. Do not treat default hexcore_backend as
+        # product mesh_engine (that routed Standard generates off Cyclone gmsh-hexcore).
+        if ui_engine == "cfmesh":
             ms = dataclasses.replace(ms, hexcore_backend="cfmesh")
         runtime = settings_raw.get("maximum_meshing_runtime")
         if runtime is not None:
@@ -131,6 +143,7 @@ def from_web_mesh(doc: dict | None) -> tuple[list[Any], str]:
             for k, v in raw.items()
             if k not in ("id", "name", "settings", "meshes", "simulation_id", "n_cells", "n_points")
         }
+        meta["ui_mesh_engine"] = ui_engine
         if live is not None:
             meta["live_mesh_result"] = live
         n_cells = raw.get("n_cells")

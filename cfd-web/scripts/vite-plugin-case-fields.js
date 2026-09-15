@@ -40,7 +40,7 @@
  * W16 HARD: POST /api/project + GET /api/project persist under projects/;
  * POST /api/geometry/import STEPâ†’STL Body1; GET /api/geometry/stl serves CAD.
  * W20 HARD: POST /api/mesh + GET /api/mesh persist mesh.json (bank settings).
- * W23 HARD: POST /api/mesh/generate|/remesh uses W16 project source.step/Body1 + snappyHexMesh+eMesh; Job PID; real polyMesh counts; NOT checkMesh; NOT MTP1-silent-copy; no W15.1 stamp on generate.
+ * W23 HARD: POST /api/mesh/generate|/remesh uses W16 project source.step/Body1 + Standard/gmsh-hexcore (Hex-dominant=snappy); Job PID; real polyMesh counts; NOT checkMesh; NOT MTP1-silent-copy; no W15.1 stamp on generate.
  * W27: /api/run/* + /api/simulation-control — run catalog, simpleFoam start/stop/status, monitors.
  * W22: POST/GET /api/result-controls|/api/area-average persist optional area-average monitors (setup only).
  * FILTERS/attach/W15.1 kick unchanged.
@@ -308,7 +308,7 @@ function attachCaseDir(caseDirAbs, projectIdOpt) {
       meshExtra = {
         status: 'done',
         mode: 'mesh',
-        path_kind: live.path_kind || 'snappyHexMesh',
+        path_kind: live.path_kind || 'standard',
         generate_id: live.generate_id || null,
         kick_id: live.generate_id || null,
         exit_code: live.exit_code != null ? live.exit_code : 0,
@@ -1463,7 +1463,7 @@ function hydrateActiveMeshCase() {
     status: 'done',
     mode: 'mesh',
     attached_at: new Date().toISOString(),
-    path_kind: live.path_kind || 'snappyHexMesh',
+    path_kind: live.path_kind || 'standard',
     generate_id: live.generate_id || null,
     kick_id: live.generate_id || null,
     exit_code: live.exit_code != null ? live.exit_code : 0,
