@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from cfddesk.registry.analysis import AnalysisType, ResultField, schema_defaults
+from cfddesk.registry.analysis import (
+    AnalysisType,
+    DEFAULT_STEADY_KEY,
+    DEFAULT_TRANSIENT_KEY,
+    LEGACY_ANALYSIS_ALIAS,
+    ResultField,
+    default_analysis_key,
+    infer_time_dependency,
+    resolve_analysis_key,
+    schema_defaults,
+)
 from cfddesk.registry.base import Registry, RegistryError, Spec
 from cfddesk.registry.bc import validate_analysis_bc_refs
 from cfddesk.registry.discovery import (
@@ -25,7 +35,13 @@ from cfddesk.registry.solver import SolverApp, validate_analysis_solver_refs
 
 __all__ = [
     "AnalysisType",
+    "DEFAULT_STEADY_KEY",
+    "DEFAULT_TRANSIENT_KEY",
+    "LEGACY_ANALYSIS_ALIAS",
     "ResultField",
+    "default_analysis_key",
+    "infer_time_dependency",
+    "resolve_analysis_key",
     "SolverApp",
     "validate_analysis_solver_refs",
     "MeshBackend",

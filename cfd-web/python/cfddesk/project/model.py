@@ -83,6 +83,10 @@ from cfddesk.project.mesh_refinements import (
 )
 
 from cfddesk.units.pressure import kinematic_to_pa
+from cfddesk.registry.analysis import (
+    DEFAULT_STEADY_KEY,
+    resolve_analysis_key,
+)
 from cfddesk.project.settings import (
     LOCATION_FINGERPRINT_QUANTUM_M,
     BoundarySettings,
@@ -116,7 +120,9 @@ ROLES: tuple[FaceRole, ...] = ("unassigned", "inlet", "outlet", "walls")
 PROJECT_VERSION = 15
 
 PRIMARY_SIM_NAME = "Incompressible"
-PRIMARY_SIM_ANALYSIS = "incompressible"
+# Registered AnalysisType key (land11). Legacy free-string "incompressible"
+# remaps via resolve_analysis_key in _simulation_from_dict.
+PRIMARY_SIM_ANALYSIS = DEFAULT_STEADY_KEY
 
 # Fingerprint token for blockMesh sizing via ``shape_bbox`` /
 # ``BRepBndLib.Add(useTriangulation=False)``. Changing this is a mesher break.
@@ -354,10 +360,19 @@ def _simulation_from_dict(data: dict, *, geometry_id: str) -> Simulation:
     active_run_id = str(data.get("active_run_id") or "")
     if active_run_id and not any(r.id == active_run_id for r in runs):
         active_run_id = ""
+    solver = SolverSettings.from_dict(data.get("solver"))
+    simulation_control = copy.deepcopy(data.get("simulation_control") or {})
+    analysis_type = resolve_analysis_key(
+        data.get("analysis_type"),
+        solver_mode=solver.mode,
+        simulation_control=simulation_control
+        if isinstance(simulation_control, dict)
+        else None,
+    )
     return Simulation(
         id=str(data.get("id") or _new_id()),
         name=str(data.get("name") or PRIMARY_SIM_NAME),
-        analysis_type=str(data.get("analysis_type") or PRIMARY_SIM_ANALYSIS),
+        analysis_type=analysis_type,
         geometry_id=str(data.get("geometry_id") or geometry_id),
         boundary_conditions=[
             BoundaryCondition.from_dict(b)
@@ -365,13 +380,13 @@ def _simulation_from_dict(data: dict, *, geometry_id: str) -> Simulation:
         ],
         meshes=meshes,
         runs=runs,
-        solver=SolverSettings.from_dict(data.get("solver")),
+        solver=solver,
         boundary=BoundarySettings.from_dict(data.get("boundary")),
         materials=_normalize_materials_list(data.get("materials") or []),
         initial_conditions=copy.deepcopy(data.get("initial_conditions") or {}),
         advanced_concepts=copy.deepcopy(data.get("advanced_concepts") or {}),
         numerics=copy.deepcopy(data.get("numerics") or {}),
-        simulation_control=copy.deepcopy(data.get("simulation_control") or {}),
+        simulation_control=simulation_control,
         result_control=copy.deepcopy(data.get("result_control") or {}),
         active_mesh_id=active_mesh_id,
         active_run_id=active_run_id,

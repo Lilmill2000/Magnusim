@@ -898,7 +898,12 @@ def is_python_project_doc(doc: dict | None) -> bool:
 
 def load_or_synthesize_project(project_dir: str | Path) -> tuple[Any, str]:
     from cfddesk.project.hierarchy import Geometry, MeshNode, Simulation
-    from cfddesk.project.model import PROJECT_VERSION, Project
+    from cfddesk.project.model import (
+        PRIMARY_SIM_ANALYSIS,
+        PRIMARY_SIM_NAME,
+        PROJECT_VERSION,
+        Project,
+    )
     from cfddesk.project.settings import MeshSettings
 
     root = Path(project_dir)
@@ -921,8 +926,8 @@ def load_or_synthesize_project(project_dir: str | Path) -> tuple[Any, str]:
     geom = Geometry(id=gid, name="Geometry 1", step_path="", faces=[], bodies=[])
     sim = Simulation(
         id=sid,
-        name="Incompressible",
-        analysis_type="incompressible",
+        name=PRIMARY_SIM_NAME,
+        analysis_type=PRIMARY_SIM_ANALYSIS,
         geometry_id=gid,
         boundary_conditions=[],
         meshes=[MeshNode(id=mid, name="Mesh 1", settings=MeshSettings())],
