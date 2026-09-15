@@ -83,9 +83,9 @@ def _read_json(path: Path) -> dict | list | None:
 
 
 def sanitize_patch_name(label: str) -> str:
-    """Match w27 sanitizePatchName: non-alnum → _, collapse, trim."""
+    """Match w27 sanitizePatchName: non-alnum → _, collapse, trim, lowercase."""
     s = re.sub(r"[^A-Za-z0-9_]+", "_", str(label or ""))
-    s = re.sub(r"_+", "_", s).strip("_")
+    s = re.sub(r"_+", "_", s).strip("_").lower()
     if not s:
         return "patch"
     if s[0].isdigit():
@@ -224,14 +224,22 @@ def list_aa_faces(aa: dict | None) -> list[str]:
 
 
 def _parse_boundary_patches(boundary_path: Path) -> list[str]:
+    """Parse polyMesh/boundary patch names (w27 parseBoundaryPatches parity).
+
+    OpenFOAM writes indented names before a `{` / `type` block; binary format
+    headers are still ASCII for this section.
+    """
     if not boundary_path.is_file():
         return []
     text = boundary_path.read_text(encoding="utf-8", errors="replace")
-    # OpenFOAM boundary: patchName\n{\n    type ...
     names: list[str] = []
-    for m in re.finditer(r"(?m)^([A-Za-z_][\w]*)\s*\n\s*\{", text):
+    # Leading whitespace required (same as w27); FoamFile at column 0 is skipped.
+    for m in re.finditer(
+        r"(?m)^\s+([A-Za-z_][A-Za-z0-9_]*)\s*\r?\n\s*\{\s*\r?\n\s*type\s+(\S+);",
+        text,
+    ):
         name = m.group(1)
-        if name not in ("FoamFile",):
+        if name != "FoamFile":
             names.append(name)
     return names
 

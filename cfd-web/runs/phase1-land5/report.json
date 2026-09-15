@@ -1,0 +1,77 @@
+﻿{
+  "phase": "Phase 1",
+  "land": "land5",
+  "title": "Live/Playwright solve smoke for land4 wire; soft-pass keep writeSolveCase",
+  "result": "PASS",
+  "product": "Magnusim",
+  "python_package": "cfddesk",
+  "timestamp_local": "2026-09-14 23:58:24 CT",
+  "machine": "Timmy",
+  "port_8082": "up",
+  "land4_commit": "0e63da4",
+  "baseline_HEAD": "84dcf6b",
+  "live_prove": {
+    "project_id": "sample-project-steady-state-20260914220621-a75ad1",
+    "run_id": "96335f7c",
+    "name": "land5-smoke3",
+    "endTime": 10,
+    "writeInterval": 5,
+    "status": "done",
+    "exit_code": 0,
+    "iteration": 10,
+    "n_saved_times": 2,
+    "solve_protocol": "magnusim-jsonl",
+    "prepare_run_ok": true,
+    "prepare_patches": ["walls", "velocity_inlet_1", "pressure_1"],
+    "wsl_case": "cfddesk-w27-96335f7c",
+    "jsonl": "cfd-web/runs/phase1-land5/solve-96335f7c.jsonl",
+    "jsonl_kinds": {"spawn":1,"start":1,"stage":4,"log":181,"progress":10,"residual":70,"result":1,"exit":1},
+    "evidence": [
+      "cfd-web/runs/phase1-land5/start3.json",
+      "cfd-web/runs/phase1-land5/status3-live.json",
+      "cfd-web/runs/phase1-land5/solve-96335f7c.jsonl"
+    ]
+  },
+  "fixes_landed": [
+    "w27 startSolve passes single-segment wslCaseId to run_solve/stop_solve (was absolute path → InvalidWslCaseId)",
+    "web_adapter._parse_boundary_patches: indented OpenFOAM boundary names (w27 parity) — empty parse was inventing wrong patch names",
+    "web_adapter.sanitize_patch_name: lowercase to match w27 sanitizePatchName"
+  ],
+  "tests": {
+    "unit_suite": "84 passed",
+    "land5_focused": "25 passed (test_web_adapter + test_solve_run + test_job_events)",
+    "js_case_golden": "COMPARE OK (writeSolveCase still present)",
+    "wire_smoke": "PASS (runs/phase1-land5/smoke-w27-wire.mjs)",
+    "live_short_solve": "PASS (run 96335f7c done exit 0)"
+  },
+  "files_touched": {
+    "modified": [
+      "cfd-web/scripts/w27-solve.js (wslCaseId for Python tools; path only for sed fallback)",
+      "cfd-web/python/cfddesk/project/web_adapter.py (boundary parse + sanitize lowercase)",
+      "cfd-web/python/tests/unit/test_web_adapter.py"
+    ],
+    "added": [
+      "cfd-web/runs/phase1-land5/*"
+    ]
+  },
+  "landed": [
+    "Live prove: prepare_run writes case → job-runner run_solve → MAGNUSIM_EVENT stages/progress/residual/result → /api/run/status consumed (done)"
+  ],
+  "soft_pass_kill": "writeSolveCase / buildSolveScript / applyProgressLine STILL PRESENT. Live prove green, but capture-js-case.mjs / compare-js-case.mjs still import writeSolveCase — golden rewire required before delete. Dual applyJobEvent vs applyProgressLine converge deferred. Step 8 delete → land6.",
+  "NOT_yet_done": [
+    "Delete writeSolveCase + golden rewire (Step 8) — land6",
+    "Converge dual progress parsers (prefer applyJobEvent)",
+    "Playwright UI e2e that clicks Solve (API live prove used this land)",
+    "snappy hex-dominant (Step 6)",
+    "generate_* emit() --legacy-markers (Step 7 remainder)",
+    "Node project_cli / stop writing project JSON (Step 9)"
+  ],
+  "notes": [
+    "First live start failed: full /home/.../cfddesk-w27-<id> passed as --wsl-case.",
+    "Second failed: prepare_run wrote Pressure_1/Velocity_inlet_1 because boundary parse missed indented names.",
+    "Third short solve (endTime=10) green.",
+    "writer.py / web_case.py not grown as god-files; thin adapter + JS arg fix only.",
+    "Phase 3+ forbidden / not touched.",
+    ":8082 kept up (vite restarted once to load JS patch)."
+  ]
+}

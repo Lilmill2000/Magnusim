@@ -1,0 +1,269 @@
+{"ts":"2026-09-15T04:57:15.942Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"spawn","pid":25960,"script":"C:\\Users\\drmil\\Desktop\\Code\\CFD\\cfd-web\\python\\tools\\run_solve.py","args":["--case-dir","C:\\Users\\drmil\\Desktop\\Code\\CFD\\cfd-web\\projects\\sample-project-steady-state-20260914220621-a75ad1\\runs\\run-96335f7c","--wsl-case","cfddesk-w27-96335f7c","--n-procs","1","--app","simpleFoam","--run-id","96335f7c"]}
+{"ts":"2026-09-15T04:57:16.359Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"start","event":"start","run_id":"96335f7c","dst":"/home/drmil/cases/cfddesk-w27-96335f7c","n_procs":1,"app":"simpleFoam","increment":"phase1-land4"}
+{"ts":"2026-09-15T04:57:16.362Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"stage","event":"stage","stage":"copy_to_wsl"}
+{"ts":"2026-09-15T04:57:16.711Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"cwd=/home/drmil/cases/cfddesk-w27-96335f7c"}
+{"ts":"2026-09-15T04:57:16.712Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"stage","event":"stage","stage":"solve","parallel":false,"app":"simpleFoam"}
+{"ts":"2026-09-15T04:57:17.162Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"/*---------------------------------------------------------------------------*\\"}
+{"ts":"2026-09-15T04:57:17.163Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"| =========                 |                                                 |"}
+{"ts":"2026-09-15T04:57:17.163Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |"}
+{"ts":"2026-09-15T04:57:17.164Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"|  \\\\    /   O peration     | Version:  2606                                  |"}
+{"ts":"2026-09-15T04:57:17.165Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"|   \\\\  /    A nd           | Website:  www.openfoam.com                      |"}
+{"ts":"2026-09-15T04:57:17.165Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"|    \\\\/     M anipulation  |                                                 |"}
+{"ts":"2026-09-15T04:57:17.166Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"\\*---------------------------------------------------------------------------*/"}
+{"ts":"2026-09-15T04:57:17.167Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Build  : _481094f-20260618 OPENFOAM=2606 version=2606"}
+{"ts":"2026-09-15T04:57:17.167Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Arch   : \"LSB;label=32;scalar=64\""}
+{"ts":"2026-09-15T04:57:17.168Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Exec   : simpleFoam"}
+{"ts":"2026-09-15T04:57:17.168Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Date   : Sep 14 2026"}
+{"ts":"2026-09-15T04:57:17.169Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Time   : 23:57:17"}
+{"ts":"2026-09-15T04:57:17.170Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Host   : Timmy"}
+{"ts":"2026-09-15T04:57:17.170Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"PID    : 1350"}
+{"ts":"2026-09-15T04:57:17.171Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"I/O    : uncollated"}
+{"ts":"2026-09-15T04:57:17.172Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Case   : /home/drmil/cases/cfddesk-w27-96335f7c"}
+{"ts":"2026-09-15T04:57:17.172Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"nProcs : 1"}
+{"ts":"2026-09-15T04:57:17.173Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"trapFpe: Floating point exception trapping enabled (FOAM_SIGFPE)."}
+{"ts":"2026-09-15T04:57:17.173Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"memory pool : not available"}
+{"ts":"2026-09-15T04:57:17.174Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"fileModificationChecking : Monitoring run-time modified files using timeStampMaster (fileModificationSkew 5, maxFileModificationPolls 20)"}
+{"ts":"2026-09-15T04:57:17.175Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"--> FOAM Warning : allowSystemOperations : Allowing user-supplied system call operations."}
+{"ts":"2026-09-15T04:57:17.175Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"                   This can be a security risk if running untrusted cases"}
+{"ts":"2026-09-15T04:57:17.176Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"                   through e.g. 'coded' on-the-fly-compilation functionality."}
+{"ts":"2026-09-15T04:57:17.177Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //"}
+{"ts":"2026-09-15T04:57:17.177Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Create time"}
+{"ts":"2026-09-15T04:57:17.178Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Create mesh for time = 0"}
+{"ts":"2026-09-15T04:57:17.179Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"SIMPLE: convergence criteria"}
+{"ts":"2026-09-15T04:57:17.179Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    field p\t tolerance 0.0001"}
+{"ts":"2026-09-15T04:57:17.180Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    field U\t tolerance 0.0001"}
+{"ts":"2026-09-15T04:57:17.180Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    field \"(k|omega)\"\t tolerance 0.0001"}
+{"ts":"2026-09-15T04:57:17.181Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Reading field p"}
+{"ts":"2026-09-15T04:57:17.182Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Reading field U"}
+{"ts":"2026-09-15T04:57:17.182Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Reading/calculating face flux field phi"}
+{"ts":"2026-09-15T04:57:17.183Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Selecting incompressible transport model Newtonian"}
+{"ts":"2026-09-15T04:57:17.183Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Selecting turbulence model type RAS"}
+{"ts":"2026-09-15T04:57:17.184Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Selecting RAS turbulence model kOmegaSST"}
+{"ts":"2026-09-15T04:57:17.193Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Selecting patchDistMethod meshWave"}
+{"ts":"2026-09-15T04:57:17.215Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"RAS"}
+{"ts":"2026-09-15T04:57:17.216Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"{"}
+{"ts":"2026-09-15T04:57:17.217Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    RASModel        kOmegaSST;"}
+{"ts":"2026-09-15T04:57:17.217Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    turbulence      on;"}
+{"ts":"2026-09-15T04:57:17.218Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    printCoeffs     on;"}
+{"ts":"2026-09-15T04:57:17.219Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    alphaK1         0.85;"}
+{"ts":"2026-09-15T04:57:17.219Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    alphaK2         1;"}
+{"ts":"2026-09-15T04:57:17.220Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    alphaOmega1     0.5;"}
+{"ts":"2026-09-15T04:57:17.221Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    alphaOmega2     0.856;"}
+{"ts":"2026-09-15T04:57:17.221Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    gamma1          0.55555556;"}
+{"ts":"2026-09-15T04:57:17.222Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    gamma2          0.44;"}
+{"ts":"2026-09-15T04:57:17.223Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    beta1           0.075;"}
+{"ts":"2026-09-15T04:57:17.223Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    beta2           0.0828;"}
+{"ts":"2026-09-15T04:57:17.224Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    betaStar        0.09;"}
+{"ts":"2026-09-15T04:57:17.225Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    a1              0.31;"}
+{"ts":"2026-09-15T04:57:17.226Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    b1              1;"}
+{"ts":"2026-09-15T04:57:17.226Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    c1              10;"}
+{"ts":"2026-09-15T04:57:17.227Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    F3              false;"}
+{"ts":"2026-09-15T04:57:17.228Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    decayControl    false;"}
+{"ts":"2026-09-15T04:57:17.228Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    kInf            0;"}
+{"ts":"2026-09-15T04:57:17.229Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    omegaInf        0;"}
+{"ts":"2026-09-15T04:57:17.230Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"}"}
+{"ts":"2026-09-15T04:57:17.230Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"No MRF models present"}
+{"ts":"2026-09-15T04:57:17.231Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Creating finite-volume options from \"system/fvOptions\""}
+{"ts":"2026-09-15T04:57:17.232Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Selecting finite volume options type limitVelocity"}
+{"ts":"2026-09-15T04:57:17.232Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    Source: limitU"}
+{"ts":"2026-09-15T04:57:17.233Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    State: active"}
+{"ts":"2026-09-15T04:57:17.234Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    - selecting all cells"}
+{"ts":"2026-09-15T04:57:17.234Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    - selected 24321 cell(s) with volume 0.044723666"}
+{"ts":"2026-09-15T04:57:17.235Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"Starting time loop"}
+{"ts":"2026-09-15T04:57:17.280Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1:"}
+{"ts":"2026-09-15T04:57:17.281Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    operation     = areaAverage"}
+{"ts":"2026-09-15T04:57:17.281Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue flow_pressure_1:"}
+{"ts":"2026-09-15T04:57:17.282Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    operation     = sum"}
+{"ts":"2026-09-15T04:57:17.283Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1:"}
+{"ts":"2026-09-15T04:57:17.283Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    operation     = areaAverage"}
+{"ts":"2026-09-15T04:57:17.284Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue flow_velocity_inlet_1:"}
+{"ts":"2026-09-15T04:57:17.285Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    operation     = sum"}
+{"ts":"2026-09-15T04:57:17.285Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":1,"sim_time":1}
+{"ts":"2026-09-15T04:57:17.307Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":1,"field":"Ux","initial":1,"fields":{"Ux":1}}
+{"ts":"2026-09-15T04:57:17.308Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":1,"field":"Uy","initial":0,"fields":{"Uy":0}}
+{"ts":"2026-09-15T04:57:17.309Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":1,"field":"Uz","initial":0,"fields":{"Uz":0}}
+{"ts":"2026-09-15T04:57:17.309Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.322Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":1,"field":"p","initial":1,"fields":{"p":1}}
+{"ts":"2026-09-15T04:57:17.326Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":1,"field":"p","initial":0.30729563,"fields":{"p":0.30729563}}
+{"ts":"2026-09-15T04:57:17.327Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.26340371, global = -0.021549442, cumulative = -0.021549442"}
+{"ts":"2026-09-15T04:57:17.328Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.339Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":1,"field":"omega","initial":0.22364952,"fields":{"omega":0.22364952}}
+{"ts":"2026-09-15T04:57:17.342Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":1,"field":"k","initial":1,"fields":{"k":1}}
+{"ts":"2026-09-15T04:57:17.343Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.13 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.344Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.345Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    total faces   = 57"}
+{"ts":"2026-09-15T04:57:17.345Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    total area    = 0.0019967246"}
+{"ts":"2026-09-15T04:57:17.346Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (0.28108802 0.033854443 16.876898)"}
+{"ts":"2026-09-15T04:57:17.347Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.348Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.348Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    total faces   = 57"}
+{"ts":"2026-09-15T04:57:17.349Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    total area    = 0.0019967246"}
+{"ts":"2026-09-15T04:57:17.350Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.350Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = 3987.3308"}
+{"ts":"2026-09-15T04:57:17.351Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":2,"sim_time":2}
+{"ts":"2026-09-15T04:57:17.367Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":2,"field":"Ux","initial":0.30873145,"fields":{"Ux":0.30873145}}
+{"ts":"2026-09-15T04:57:17.368Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":2,"field":"Uy","initial":0.37823966,"fields":{"Uy":0.37823966}}
+{"ts":"2026-09-15T04:57:17.368Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":2,"field":"Uz","initial":0.28578333,"fields":{"Uz":0.28578333}}
+{"ts":"2026-09-15T04:57:17.369Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.378Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":2,"field":"p","initial":0.535386,"fields":{"p":0.535386}}
+{"ts":"2026-09-15T04:57:17.381Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":2,"field":"p","initial":0.22692353,"fields":{"p":0.22692353}}
+{"ts":"2026-09-15T04:57:17.382Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.18136557, global = -0.014878676, cumulative = -0.036428119"}
+{"ts":"2026-09-15T04:57:17.383Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.393Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":2,"field":"omega","initial":0.10302043,"fields":{"omega":0.10302043}}
+{"ts":"2026-09-15T04:57:17.397Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":2,"field":"k","initial":0.46564401,"fields":{"k":0.46564401}}
+{"ts":"2026-09-15T04:57:17.398Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.18 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.398Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.399Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (0.35322215 -0.18853612 30.38378)"}
+{"ts":"2026-09-15T04:57:17.400Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.400Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.401Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.402Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = 22853.939"}
+{"ts":"2026-09-15T04:57:17.402Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":3,"sim_time":3}
+{"ts":"2026-09-15T04:57:17.413Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":3,"field":"Ux","initial":0.27544237,"fields":{"Ux":0.27544237}}
+{"ts":"2026-09-15T04:57:17.414Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":3,"field":"Uy","initial":0.27360111,"fields":{"Uy":0.27360111}}
+{"ts":"2026-09-15T04:57:17.415Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":3,"field":"Uz","initial":0.29603615,"fields":{"Uz":0.29603615}}
+{"ts":"2026-09-15T04:57:17.416Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.422Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":3,"field":"p","initial":0.29317764,"fields":{"p":0.29317764}}
+{"ts":"2026-09-15T04:57:17.425Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":3,"field":"p","initial":0.33481402,"fields":{"p":0.33481402}}
+{"ts":"2026-09-15T04:57:17.426Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.092575983, global = 0.0049709954, cumulative = -0.031457123"}
+{"ts":"2026-09-15T04:57:17.427Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.437Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":3,"field":"omega","initial":0.072986881,"fields":{"omega":0.072986881}}
+{"ts":"2026-09-15T04:57:17.441Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":3,"field":"k","initial":0.26128178,"fields":{"k":0.26128178}}
+{"ts":"2026-09-15T04:57:17.442Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.22 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.442Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.443Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (0.37249916 -0.66096956 54.475823)"}
+{"ts":"2026-09-15T04:57:17.444Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.444Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.445Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.446Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = 17694.275"}
+{"ts":"2026-09-15T04:57:17.446Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":4,"sim_time":4}
+{"ts":"2026-09-15T04:57:17.457Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":4,"field":"Ux","initial":0.13214277,"fields":{"Ux":0.13214277}}
+{"ts":"2026-09-15T04:57:17.458Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":4,"field":"Uy","initial":0.15322354,"fields":{"Uy":0.15322354}}
+{"ts":"2026-09-15T04:57:17.459Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":4,"field":"Uz","initial":0.15784617,"fields":{"Uz":0.15784617}}
+{"ts":"2026-09-15T04:57:17.460Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.466Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":4,"field":"p","initial":0.32188916,"fields":{"p":0.32188916}}
+{"ts":"2026-09-15T04:57:17.470Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":4,"field":"p","initial":0.33805014,"fields":{"p":0.33805014}}
+{"ts":"2026-09-15T04:57:17.471Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.17883481, global = 0.0097086238, cumulative = -0.021748499"}
+{"ts":"2026-09-15T04:57:17.471Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.481Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":4,"field":"omega","initial":0.059614236,"fields":{"omega":0.059614236}}
+{"ts":"2026-09-15T04:57:17.484Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":4,"field":"k","initial":0.16420047,"fields":{"k":0.16420047}}
+{"ts":"2026-09-15T04:57:17.485Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.27 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.486Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.487Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (0.22329751 -0.38102105 66.333443)"}
+{"ts":"2026-09-15T04:57:17.487Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.488Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.489Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.489Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = 1906.1108"}
+{"ts":"2026-09-15T04:57:17.490Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":5,"sim_time":5}
+{"ts":"2026-09-15T04:57:17.501Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":5,"field":"Ux","initial":0.090401633,"fields":{"Ux":0.090401633}}
+{"ts":"2026-09-15T04:57:17.502Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":5,"field":"Uy","initial":0.21011671,"fields":{"Uy":0.21011671}}
+{"ts":"2026-09-15T04:57:17.503Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":5,"field":"Uz","initial":0.086394605,"fields":{"Uz":0.086394605}}
+{"ts":"2026-09-15T04:57:17.504Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.510Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":5,"field":"p","initial":0.44458643,"fields":{"p":0.44458643}}
+{"ts":"2026-09-15T04:57:17.514Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":5,"field":"p","initial":0.1984816,"fields":{"p":0.1984816}}
+{"ts":"2026-09-15T04:57:17.515Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.10858859, global = 0.0064872509, cumulative = -0.015261248"}
+{"ts":"2026-09-15T04:57:17.515Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.525Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":5,"field":"omega","initial":0.046180823,"fields":{"omega":0.046180823}}
+{"ts":"2026-09-15T04:57:17.528Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":5,"field":"k","initial":0.11681813,"fields":{"k":0.11681813}}
+{"ts":"2026-09-15T04:57:17.562Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.35 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.562Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.563Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (0.17066318 0.066021094 60.004462)"}
+{"ts":"2026-09-15T04:57:17.564Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.565Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.566Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.567Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = -6662.5541"}
+{"ts":"2026-09-15T04:57:17.567Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":6,"sim_time":6}
+{"ts":"2026-09-15T04:57:17.578Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":6,"field":"Ux","initial":0.1085395,"fields":{"Ux":0.1085395}}
+{"ts":"2026-09-15T04:57:17.579Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":6,"field":"Uy","initial":0.21214094,"fields":{"Uy":0.21214094}}
+{"ts":"2026-09-15T04:57:17.580Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":6,"field":"Uz","initial":0.13866461,"fields":{"Uz":0.13866461}}
+{"ts":"2026-09-15T04:57:17.581Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.586Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":6,"field":"p","initial":0.44132051,"fields":{"p":0.44132051}}
+{"ts":"2026-09-15T04:57:17.590Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":6,"field":"p","initial":0.24039351,"fields":{"p":0.24039351}}
+{"ts":"2026-09-15T04:57:17.590Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.11700755, global = -0.002521591, cumulative = -0.017782839"}
+{"ts":"2026-09-15T04:57:17.591Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.601Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":6,"field":"omega","initial":0.037800692,"fields":{"omega":0.037800692}}
+{"ts":"2026-09-15T04:57:17.605Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":6,"field":"k","initial":0.092029752,"fields":{"k":0.092029752}}
+{"ts":"2026-09-15T04:57:17.606Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.39 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.606Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.607Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (-0.16679056 0.97195901 47.976759)"}
+{"ts":"2026-09-15T04:57:17.608Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.609Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.609Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.610Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = -4194.9281"}
+{"ts":"2026-09-15T04:57:17.611Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":7,"sim_time":7}
+{"ts":"2026-09-15T04:57:17.621Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":7,"field":"Ux","initial":0.087102244,"fields":{"Ux":0.087102244}}
+{"ts":"2026-09-15T04:57:17.622Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":7,"field":"Uy","initial":0.15600114,"fields":{"Uy":0.15600114}}
+{"ts":"2026-09-15T04:57:17.623Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":7,"field":"Uz","initial":0.12332827,"fields":{"Uz":0.12332827}}
+{"ts":"2026-09-15T04:57:17.624Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.628Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":7,"field":"p","initial":0.42407557,"fields":{"p":0.42407557}}
+{"ts":"2026-09-15T04:57:17.632Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":7,"field":"p","initial":0.22163319,"fields":{"p":0.22163319}}
+{"ts":"2026-09-15T04:57:17.633Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.12705645, global = -0.023842644, cumulative = -0.041625483"}
+{"ts":"2026-09-15T04:57:17.634Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.643Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":7,"field":"omega","initial":0.029952474,"fields":{"omega":0.029952474}}
+{"ts":"2026-09-15T04:57:17.646Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":7,"field":"k","initial":0.074862218,"fields":{"k":0.074862218}}
+{"ts":"2026-09-15T04:57:17.647Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.43 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.648Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.648Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (0.16564213 1.0826259 43.144728)"}
+{"ts":"2026-09-15T04:57:17.649Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.650Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.651Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.651Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = 2548.8153"}
+{"ts":"2026-09-15T04:57:17.652Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":8,"sim_time":8}
+{"ts":"2026-09-15T04:57:17.662Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":8,"field":"Ux","initial":0.081365888,"fields":{"Ux":0.081365888}}
+{"ts":"2026-09-15T04:57:17.663Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":8,"field":"Uy","initial":0.15451178,"fields":{"Uy":0.15451178}}
+{"ts":"2026-09-15T04:57:17.664Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":8,"field":"Uz","initial":0.089946194,"fields":{"Uz":0.089946194}}
+{"ts":"2026-09-15T04:57:17.664Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.669Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":8,"field":"p","initial":0.39449287,"fields":{"p":0.39449287}}
+{"ts":"2026-09-15T04:57:17.673Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":8,"field":"p","initial":0.15677014,"fields":{"p":0.15677014}}
+{"ts":"2026-09-15T04:57:17.673Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.09075568, global = -0.021267656, cumulative = -0.062893139"}
+{"ts":"2026-09-15T04:57:17.674Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.683Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":8,"field":"omega","initial":0.024044086,"fields":{"omega":0.024044086}}
+{"ts":"2026-09-15T04:57:17.686Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":8,"field":"k","initial":0.066169505,"fields":{"k":0.066169505}}
+{"ts":"2026-09-15T04:57:17.687Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.47 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.688Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.689Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (0.52734087 0.93642525 46.837728)"}
+{"ts":"2026-09-15T04:57:17.689Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.690Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.691Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.691Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = 6763.4919"}
+{"ts":"2026-09-15T04:57:17.692Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":9,"sim_time":9}
+{"ts":"2026-09-15T04:57:17.703Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":9,"field":"Ux","initial":0.075153244,"fields":{"Ux":0.075153244}}
+{"ts":"2026-09-15T04:57:17.704Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":9,"field":"Uy","initial":0.14137077,"fields":{"Uy":0.14137077}}
+{"ts":"2026-09-15T04:57:17.705Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":9,"field":"Uz","initial":0.087784827,"fields":{"Uz":0.087784827}}
+{"ts":"2026-09-15T04:57:17.706Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.711Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":9,"field":"p","initial":0.35012033,"fields":{"p":0.35012033}}
+{"ts":"2026-09-15T04:57:17.714Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":9,"field":"p","initial":0.17010176,"fields":{"p":0.17010176}}
+{"ts":"2026-09-15T04:57:17.715Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.057446597, global = -0.0020616975, cumulative = -0.064954837"}
+{"ts":"2026-09-15T04:57:17.716Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.726Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":9,"field":"omega","initial":0.022572034,"fields":{"omega":0.022572034}}
+{"ts":"2026-09-15T04:57:17.728Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":9,"field":"k","initial":0.061229803,"fields":{"k":0.061229803}}
+{"ts":"2026-09-15T04:57:17.729Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.52 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.730Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.731Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (0.63846476 0.68535755 52.394349)"}
+{"ts":"2026-09-15T04:57:17.732Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.732Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.733Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.734Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = 6068.7766"}
+{"ts":"2026-09-15T04:57:17.734Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"progress","event":"progress","time":10,"sim_time":10}
+{"ts":"2026-09-15T04:57:17.744Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":10,"field":"Ux","initial":0.056940342,"fields":{"Ux":0.056940342}}
+{"ts":"2026-09-15T04:57:17.745Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":10,"field":"Uy","initial":0.11902973,"fields":{"Uy":0.11902973}}
+{"ts":"2026-09-15T04:57:17.746Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":10,"field":"Uz","initial":0.068155669,"fields":{"Uz":0.068155669}}
+{"ts":"2026-09-15T04:57:17.746Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.751Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":10,"field":"p","initial":0.32744168,"fields":{"p":0.32744168}}
+{"ts":"2026-09-15T04:57:17.755Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":10,"field":"p","initial":0.17357446,"fields":{"p":0.17357446}}
+{"ts":"2026-09-15T04:57:17.756Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"time step continuity errors : sum local = 0.058894018, global = 0.011487544, cumulative = -0.053467293"}
+{"ts":"2026-09-15T04:57:17.756Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"limitVelocity limitU Limited 0 (0%) of cells, with max limit 500"}
+{"ts":"2026-09-15T04:57:17.766Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":10,"field":"omega","initial":0.021564154,"fields":{"omega":0.021564154}}
+{"ts":"2026-09-15T04:57:17.769Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"residual","event":"residual","time":10,"field":"k","initial":0.058416632,"fields":{"k":0.058416632}}
+{"ts":"2026-09-15T04:57:17.802Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"ExecutionTime = 0.58 s  ClockTime = 0 s"}
+{"ts":"2026-09-15T04:57:17.803Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_pressure_1 write:"}
+{"ts":"2026-09-15T04:57:17.804Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of U = (0.53038064 0.61396497 54.153589)"}
+{"ts":"2026-09-15T04:57:17.804Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(pressure_1) of p = 0"}
+{"ts":"2026-09-15T04:57:17.805Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"surfaceFieldValue mon_velocity_inlet_1 write:"}
+{"ts":"2026-09-15T04:57:17.806Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of U = (-50 0 0)"}
+{"ts":"2026-09-15T04:57:17.806Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"    areaAverage(velocity_inlet_1) of p = 3309.121"}
+{"ts":"2026-09-15T04:57:17.807Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"log","event":"log","line":"End"}
+{"ts":"2026-09-15T04:57:18.714Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"stage","event":"stage","stage":"solve_end","exit_code":0}
+{"ts":"2026-09-15T04:57:18.715Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"stage","event":"stage","stage":"copy"}
+{"ts":"2026-09-15T04:57:18.965Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"result","event":"result","ok":true,"exit_code":0,"win_out":"/mnt/c/Users/drmil/Desktop/Code/CFD/cfd-web/projects/sample-project-steady-state-20260914220621-a75ad1/runs/run-96335f7c"}
+{"ts":"2026-09-15T04:57:18.979Z","kind":"solve","job_id":"96335f7c","level":"info","msg":"exit","code":0,"signal":null}

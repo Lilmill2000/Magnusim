@@ -2365,7 +2365,10 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     };
   }
 
-  const wslRunCase = wslCasePath(`cfddesk-w27-${runId}`);
+  // Phase 1 land5: Python run_solve/stop_solve expect a single-segment id
+  // (validate_wsl_case_id); wslCasePath() is only for legacy WSL sed fallbacks.
+  const wslCaseId = `cfddesk-w27-${runId}`;
+  const wslRunCasePath = wslCasePath(wslCaseId);
   const winLog = join(REPORT_DIR, `run-${runId}.log`);
   const started_at = new Date().toISOString();
   let logBuf = '';
@@ -2374,7 +2377,7 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     '--case-dir',
     winOut,
     '--wsl-case',
-    wslRunCase,
+    wslCaseId,
     '--n-procs',
     String(nProcs),
     '--app',
@@ -2453,7 +2456,8 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
   liveRun = {
     child,
     run_id: runId,
-    wsl_case: wslRunCase,
+    wsl_case: wslCaseId,
+    wsl_case_path: wslRunCasePath,
     project_id: id,
     progress,
     jobLog,
@@ -2484,7 +2488,8 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     log_path: winLog,
     log_jsonl_path: jobLog.path,
     log_excerpt: '',
-    wsl_case: wslRunCase,
+    wsl_case: wslCaseId,
+    wsl_case_path: wslRunCasePath,
     case_dir: winOut,
     n_procs: nProcs,
     endTime: et,
@@ -2536,7 +2541,8 @@ export function stopSolve({ projectId } = {}) {
       bodyExtra: { error: 'No run is in progress', increment: INCREMENT },
     };
   }
-  const caseQ = run.wsl_case || '';
+  const caseId = run.wsl_case || '';
+  const caseQ = caseId.startsWith('/') ? caseId : wslCasePath(caseId);
   if (run.stop_requested) {
     // Second click: the graceful stop is still draining — force it.
     killSolveNow(run);
@@ -2555,7 +2561,7 @@ export function stopSolve({ projectId } = {}) {
   try {
     spawn(
       PYTHON,
-      [pyTool('stop_solve.py'), '--wsl-case', caseQ, '--run-id', String(run.run_id || '')],
+      [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(run.run_id || '')],
       { windowsHide: true, stdio: 'ignore' }
     );
   } catch {
@@ -2596,14 +2602,15 @@ export function stopSolve({ projectId } = {}) {
 const STOP_GRACE_MS = 120000;
 
 function killSolveNow(run) {
-  const caseQ = run.wsl_case || '';
+  const caseId = run.wsl_case || '';
+  const caseQ = caseId.startsWith('/') ? caseId : wslCasePath(caseId);
   try {
     run.child.kill();
   } catch {}
   try {
     spawn(
       PYTHON,
-      [pyTool('stop_solve.py'), '--wsl-case', caseQ, '--run-id', String(run.run_id || ''), '--force'],
+      [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(run.run_id || ''), '--force'],
       { windowsHide: true, stdio: 'ignore' }
     );
   } catch {

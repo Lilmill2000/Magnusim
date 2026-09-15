@@ -16,7 +16,7 @@ FIX = Path(__file__).resolve().parents[1] / "fixtures" / "js-project"
 
 
 def test_sanitize_patch_name():
-    assert sanitize_patch_name("Velocity Inlet 1") == "Velocity_Inlet_1"
+    assert sanitize_patch_name("Velocity Inlet 1") == "velocity_inlet_1"
     assert sanitize_patch_name("pressure_1") == "pressure_1"
 
 
@@ -87,3 +87,16 @@ def test_load_run_spec_transient_fixture():
     assert spec.solver_app == "pimpleFoam"
     assert spec.transient is not None
     assert abs(spec.transient.write_interval - 0.1) < 1e-12
+
+
+def test_parse_boundary_patches_indented(tmp_path: Path):
+    from cfddesk.project.web_adapter import _parse_boundary_patches
+
+    boundary = tmp_path / "boundary"
+    boundary.write_text(
+        "FoamFile\n{\n    format ascii;\n}\n\n3\n(\n    walls\n    {\n        type            wall;\n    }\n"
+        "    velocity_inlet_1\n    {\n        type            patch;\n    }\n"
+        "    pressure_1\n    {\n        type            patch;\n    }\n)\n",
+        encoding="utf-8",
+    )
+    assert _parse_boundary_patches(boundary) == ["walls", "velocity_inlet_1", "pressure_1"]
