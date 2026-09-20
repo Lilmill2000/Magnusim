@@ -26,12 +26,13 @@ include = ["cfddesk*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".", "tools"]
 markers = [
   "wsl: needs WSL + OpenFOAM (deselect with -m 'not wsl')",
   "occt: needs cadquery-ocp and a STEP fixture",
   "slow: > 10 s",
 ]
-addopts = "-m 'not wsl'"
+addopts = ["-m", "not wsl"]
 
 [tool.ruff]
 line-length = 100

@@ -25,7 +25,7 @@ jobs:
       - name: Mypy
         run: mypy cfddesk
       - name: Pytest (including CAD, without WSL)
-        run: pytest -m "not wsl"
+        run: pytest --tb=short
   node:
     runs-on: ubuntu-latest
     defaults:

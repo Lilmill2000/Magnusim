@@ -40,7 +40,10 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 def _folders(dir_path: Path) -> list[Path]:
     if not dir_path.is_dir():
         return []
-    return [p for p in dir_path.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    return sorted(
+        (p for p in dir_path.iterdir() if p.is_dir() and not p.name.startswith(".")),
+        key=lambda p: p.name,
+    )
 
 
 def geometries_root(project_dir: Path) -> Path:

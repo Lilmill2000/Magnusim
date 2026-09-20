@@ -82,14 +82,16 @@ export function geometriesRoot(projectDirPath) {
 function listDirFolders(dir) {
   if (!dir || !existsSync(dir)) return [];
   try {
-    return readdirSync(dir).filter((n) => {
-      if (!n || n.startsWith('.')) return false;
-      try {
-        return statSync(join(dir, n)).isDirectory();
-      } catch {
-        return false;
-      }
-    });
+    return readdirSync(dir)
+      .filter((n) => {
+        if (!n || n.startsWith('.')) return false;
+        try {
+          return statSync(join(dir, n)).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .sort();
   } catch {
     return [];
   }

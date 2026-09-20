@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from cfddesk.registry.analysis import DEFAULT_STEADY_KEY
 
@@ -59,6 +62,8 @@ def test_w17_w20_import_registry_defaults():
 
 
 def test_node_prove_registry_defaults_smoke():
+    if shutil.which("node") is None:
+        pytest.skip("node is not on PATH")
     assert PROVE_JS.is_file()
     proc = subprocess.run(
         ["node", str(PROVE_JS)],
