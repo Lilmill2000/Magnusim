@@ -70,8 +70,8 @@ modals were removed; the functioning boundary-condition picker remains.
   and its solver templates inspected.
 
 Automated tests are in the repository. Disposable local evidence is under
-`cfd-web/.cache/` and Playwright's ignored output directories. The isolated UI
-project is under `cfd-web/.cache/audit-projects/`; normal user projects were not
+`magnusim-web/.cache/` and Playwright's ignored output directories. The isolated UI
+project is under `magnusim-web/.cache/audit-projects/`; normal user projects were not
 used as destructive test fixtures.
 
 ## Publication boundaries and remaining checks

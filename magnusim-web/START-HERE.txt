@@ -1,4 +1,4 @@
-This folder is the Magnusim app (cfd-web).
+This folder is the Magnusim app (magnusim-web).
 
 It has the app source and Setup.bat. It does not include your projects,
 node_modules, Python venv, WSL settings, or cache.

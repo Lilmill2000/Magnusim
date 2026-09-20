@@ -1,31 +1,31 @@
-# Repo root launchers plus cfd-web/. Generated share zips stay out of git.
+# Repo root launchers plus magnusim-web/. Generated share zips stay out of git.
 CFD-Desk/
 dist/
 Magnusim-*.zip
 /Magnusim V0.1.0.zip
 /Magnusim V0.1.0/
 
-cfd-web/node_modules/
-cfd-web/python/.venv/
-cfd-web/python/build/
-cfd-web/python/dist/
-cfd-web/python/**/__pycache__/
-cfd-web/python/cfddesk.egg-info/
+magnusim-web/node_modules/
+magnusim-web/python/.venv/
+magnusim-web/python/build/
+magnusim-web/python/dist/
+magnusim-web/python/**/__pycache__/
+magnusim-web/python/cfddesk.egg-info/
 **/__pycache__/
 *.py[cod]
 *.pyc
-cfd-web/.cache/
-cfd-web/projects/
-cfd-web/.magnusim-local.json
-cfd-web/.cfddesk-local.json
-cfd-web/.magnusim-ready
-cfd-web/.cfddesk-ready
-cfd-web/dist/
-cfd-web/test-results/
-cfd-web/e2e/.tmp-projects/
-cfd-web/playwright-report/
-cfd-web/blob-report/
-cfd-web/playwright/.cache/
+magnusim-web/.cache/
+magnusim-web/projects/
+magnusim-web/.magnusim-local.json
+magnusim-web/.cfddesk-local.json
+magnusim-web/.magnusim-ready
+magnusim-web/.cfddesk-ready
+magnusim-web/dist/
+magnusim-web/test-results/
+magnusim-web/e2e/.tmp-projects/
+magnusim-web/playwright-report/
+magnusim-web/blob-report/
+magnusim-web/playwright/.cache/
 
 .DS_Store
 Thumbs.db
@@ -42,8 +42,34 @@ Thumbs.db
 *.key
 *.pfx
 *.p12
+magnusim-web/e2e/.tmp-prefs.json
+magnusim-web/runs/
+.cursor/
+
+# Leftover local folder name. A junction may exist so old project/WSL
+# paths keep working on this PC; do not commit it or walk it as a second tree.
+/cfd-web
+/cfd-web/
+cfd-web/node_modules/
+cfd-web/python/.venv/
+cfd-web/python/build/
+cfd-web/python/dist/
+cfd-web/python/**/__pycache__/
+cfd-web/python/cfddesk.egg-info/
+cfd-web/.cache/
+cfd-web/projects/
+cfd-web/.magnusim-local.json
+cfd-web/.cfddesk-local.json
+cfd-web/.magnusim-ready
+cfd-web/.cfddesk-ready
+cfd-web/dist/
+cfd-web/test-results/
+cfd-web/e2e/.tmp-projects/
+cfd-web/playwright-report/
+cfd-web/blob-report/
+cfd-web/playwright/.cache/
 cfd-web/e2e/.tmp-prefs.json
 cfd-web/runs/
-.cursor/
+
 audit-edits*.py
 audit-inspect.py

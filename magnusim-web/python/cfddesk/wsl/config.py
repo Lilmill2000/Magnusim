@@ -1,6 +1,6 @@
 """WSL distro + case-root for this machine.
 
-Setup.bat writes ``cfd-web/.magnusim-local.json`` (legacy name still accepted). Override with
+Setup.bat writes ``magnusim-web/.magnusim-local.json`` (legacy name still accepted). Override with
 ``MAGNUSIM_WSL_DISTRO`` / ``MAGNUSIM_WSL_CASE_ROOT``.
 """
 
@@ -17,7 +17,7 @@ _LOCAL_NAME = ".cfddesk-local.json"
 
 
 def web_root() -> Path:
-    """``cfd-web/`` (this file lives at ``python/cfddesk/wsl/config.py``)."""
+    """``magnusim-web/`` (this file lives at ``python/cfddesk/wsl/config.py``)."""
     return Path(__file__).resolve().parents[3]
 
 

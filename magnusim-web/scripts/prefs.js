@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Machine prefs in ``cfd-web/.magnusim-local.json`` (also reads ``.cfddesk-local.json``).
+ * Machine prefs in ``magnusim-web/.magnusim-local.json`` (also reads ``.cfddesk-local.json``).
  * Merge-only writes so WSL paths are never wiped.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';

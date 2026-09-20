@@ -2,7 +2,7 @@
 
 Windows app for incompressible CFD (geometry → mesh → OpenFOAM solve) in the browser.
 
-The running app is **`cfd-web/`**. Clone this repo and run Setup.bat. Versioned zip downloads (for example Magnusim V0.1.0) are release packages, not this source tree.
+The running app is **`magnusim-web/`**. Clone this repo and run Setup.bat. Versioned zip downloads (for example Magnusim V0.1.0) are release packages, not this source tree.
 
 **Creator and maintainer:** Daniel Milligan ([@lilmill2000](https://x.com/lilmill2000) on X). This is an open-source project.
 
@@ -13,7 +13,7 @@ The running app is **`cfd-web/`**. Clone this repo and run Setup.bat. Versioned 
 3. Double-click **run.bat** (`start.bat` is the same launcher). The first time, a setup wizard asks for default units (metric or US customary), runs a hardware check that picks solver ranks for this PC, and lets you choose the local port (default 8082).
 4. Double-click **stop.bat** when you are done. Close the browser tab too. Change those choices later from **Preferences** on the home screen.
 
-The same Setup / run / stop files also live inside `cfd-web/` if you only opened that folder.
+The same Setup / run / stop files also live inside `magnusim-web/` if you only opened that folder.
 
 You need a 64-bit Intel/AMD Windows 10/11 PC with about 15 GB free and virtualization enabled in BIOS (required for WSL).
 
@@ -37,4 +37,4 @@ it remotely. The API does not provide user authentication.
 
 ## Layout
 
-The running app is **`cfd-web/`**. See `cfd-web/README.md` for how the web UI, Node API, and Python tools fit together.
+The running app is **`magnusim-web/`**. See `magnusim-web/README.md` for how the web UI, Node API, and Python tools fit together.

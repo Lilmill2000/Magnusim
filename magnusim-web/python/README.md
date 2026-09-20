@@ -1,4 +1,4 @@
-# cfd-web / python
+# magnusim-web / python
 
 Everything the web app runs through Python lives here. The Node API
 (`../scripts/*.js`) spawns `.venv/Scripts/python.exe` on scripts in `tools/`
@@ -25,7 +25,7 @@ Everything the web app runs through Python lives here. The Node API
 | `HEXCORE-PROCESS-BACKUP-2026-09-02/` | Frozen copy of the known-good cfMesh hexcore path. Do not edit or delete; see its README to restore. |
 
 Re-create the environment (only if `.venv` is lost). Prefer **Setup.bat** in
-`cfd-web/` (or the repo root) so Node, WSL, and OpenFOAM stay in sync. Manual:
+`magnusim-web/` (or the repo root) so Node, WSL, and OpenFOAM stay in sync. Manual:
 
 ```powershell
 py -3.12 -m venv .venv

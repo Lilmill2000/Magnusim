@@ -2,7 +2,7 @@ import { safeProjectPath } from './safe-path.js';
 // @ts-nocheck
 /**
  * W16 — project create + geometry import (filesystem persistence).
- * Projects live under cfd-web/projects/<id>/project.json + geometry/.
+ * Projects live under magnusim-web/projects/<id>/project.json + geometry/.
  * Each import is kept under geometry/parts/<id>/ (own STEP + CAD preview).
  * Only the active geometry is copied to geometry/source.step and shown in
  * the viewport. Separate files are never compounded. Multi-solid inside one

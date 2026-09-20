@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: cfd-web/python
+        working-directory: magnusim-web/python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,14 +30,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: cfd-web
+        working-directory: magnusim-web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: cfd-web/package-lock.json
+          cache-dependency-path: magnusim-web/package-lock.json
       - run: npm ci
       - uses: actions/setup-python@v5
         with:

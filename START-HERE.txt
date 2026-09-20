@@ -1,7 +1,7 @@
 This folder is Magnusim.
 
 The app you run and the tree you publish are the same.
-App source lives in cfd-web/. Projects, node_modules, the Python
+App source lives in magnusim-web/. Projects, node_modules, the Python
 venv, WSL settings, and cache stay on this machine and are not in git.
 
 1. Double-click Setup.bat (first run 30-90 minutes).

@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Python side of cfd-web, all under `cfd-web/python/`:
+ * Python side of magnusim-web, all under `magnusim-web/python/`:
  *
  *   python/.venv/      interpreter + deps (pyvista, gmsh, cadquery-ocp, …)
  *   python/cfddesk/    library package (import path kept as cfddesk during rename)

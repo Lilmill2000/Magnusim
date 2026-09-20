@@ -1,4 +1,4 @@
-# Magnusim — web app (`cfd-web`)
+# Magnusim — web app (`magnusim-web`)
 
 Vite + vtk.js single-page app. The dev server also hosts the `/api/*` backend as a Vite
 middleware (`scripts/server/index.ts`) with a persistent Python JSON-RPC worker in

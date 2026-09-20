@@ -9,7 +9,7 @@ grant permission to redistribute those dependencies under Apache-2.0.
 
 Gmsh 4.15.2 is GPL version 2 or later, with its upstream linking exception.
 Magnusim calls its Python API from the meshing backend, including
-`cfd-web/python/cfddesk/mesh/gmsh_standard.py` and `standard_hexcore.py`.
+`magnusim-web/python/cfddesk/mesh/gmsh_standard.py` and `standard_hexcore.py`.
 The official license statement is at [Gmsh licensing](https://gmsh.info/#Licensing).
 Retain Gmsh's complete license and exception when distributing Gmsh itself.
 
@@ -33,8 +33,8 @@ it does not relicense their implementations.
 
 ## Other dependencies
 
-The JavaScript dependency inventory is recorded in `cfd-web/package-lock.json`;
-Python requirements are in `cfd-web/python/pyproject.toml` and its lockfile.
+The JavaScript dependency inventory is recorded in `magnusim-web/package-lock.json`;
+Python requirements are in `magnusim-web/python/pyproject.toml` and its lockfile.
 React, vtk.js, PyVista, NumPy, SciPy, and Open CASCADE/cadquery-ocp retain their
 upstream licenses. An installed application bundle needs the notices for its
 actual dependency versions, including transitive dependencies. The frozen
