@@ -32,11 +32,10 @@ export function MeshForm(_props: IslandProps) {
         hex_element_core: hex ? hex.getAttribute('aria-pressed') !== 'false' : true,
         schema: mesherSchema() || null,
       };
-      const mid =
-        (window.__CFD_W20_STATE__ &&
-          (window.__CFD_W20_STATE__.active_id ||
-            (window.__CFD_W20_STATE__.mesh && window.__CFD_W20_STATE__.mesh.id))) ||
-        null;
+      const w20 = window.__CFD_W20_STATE__ as
+        | { active_id?: string; mesh?: { id?: string } }
+        | undefined;
+      const mid = (w20 && (w20.active_id || (w20.mesh && w20.mesh.id))) || null;
       if (mid) {
         window.__CFD_MESH_DRAFTS__ = window.__CFD_MESH_DRAFTS__ || {};
         window.__CFD_MESH_DRAFTS__[String(mid)] = {

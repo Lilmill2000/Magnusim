@@ -35,6 +35,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
+from cfddesk.cad.step import LoadedSolid
+from cfddesk.mesh.msh22 import HEX, PRISM, PYR, QUAD, TET, TRI
+from cfddesk.project.model import Project
+
 # HXT volume fill has no native abort. A 25.4 mm inflate hung here for hours.
 VOLUME_FILL_TIMEOUT_S = 480
 VOLUME_FILL_EXIT = 75
@@ -56,12 +62,6 @@ def generate_volume_or_timeout(gmsh, *, timeout_s: float = VOLUME_FILL_TIMEOUT_S
         gmsh.model.mesh.generate(3)
     finally:
         done.set()
-
-import numpy as np
-
-from cfddesk.cad.step import LoadedSolid
-from cfddesk.mesh.msh22 import HEX, PRISM, PYR, QUAD, TET, TRI
-from cfddesk.project.model import Project
 
 # ---------------------------------------------------------------- sizing ----
 
@@ -1199,7 +1199,8 @@ def _collect_surface(gmsh, surfs, tag_to_phys, *, as_tags: bool = False):
                 arr = np.asarray(c, dtype=np.int64).reshape(-1, 4)
                 t0 = arr[:, [0, 1, 2]]
                 t1 = arr[:, [0, 2, 3]]
-                tri_blocks.extend((t0, t1))
+                tri_blocks.append(t0)  # type: ignore[arg-type]
+                tri_blocks.append(t1)  # type: ignore[arg-type]
                 phys = int(tag_to_phys[int(s)])
                 phys_blocks.append(np.full(len(t0), phys, dtype=np.int64))
                 phys_blocks.append(np.full(len(t1), phys, dtype=np.int64))

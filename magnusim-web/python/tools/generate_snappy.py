@@ -21,8 +21,8 @@ CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
 from cfddesk.jobs import legacy_markers as _legacy  # noqa: E402
-from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case  # noqa: E402
 from cfddesk.jobs.events import emit  # noqa: E402
+from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case  # noqa: E402
 from cfddesk.mesh.snappy_hexdominant import (  # noqa: E402
     fineness_params,
     read_feature_marks,

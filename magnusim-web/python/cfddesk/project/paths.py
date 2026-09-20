@@ -440,9 +440,12 @@ def assemble_study_bc_defaults(project_dir: Path | str, sim_id: str | None) -> d
         doc = _read_json(root / "boundary_conditions.json") or {}
     if not isinstance(doc, dict):
         doc = {}
-    defaults = doc.get("defaults") if isinstance(doc.get("defaults"), dict) else {}
-    by_sim = doc.get("defaults_by_simulation") if isinstance(doc.get("defaults_by_simulation"), dict) else {}
-    scoped = by_sim.get(sid) if sid and isinstance(by_sim.get(sid), dict) else None
+    raw_defaults = doc.get("defaults")
+    defaults: dict[str, Any] = raw_defaults if isinstance(raw_defaults, dict) else {}
+    raw_by_sim = doc.get("defaults_by_simulation")
+    by_sim: dict[str, Any] = raw_by_sim if isinstance(raw_by_sim, dict) else {}
+    scoped_raw = by_sim.get(sid) if sid else None
+    scoped = scoped_raw if isinstance(scoped_raw, dict) else None
     if scoped and scoped.get("wall_type"):
         return {"wall_type": scoped.get("wall_type")}
     if defaults.get("wall_type"):

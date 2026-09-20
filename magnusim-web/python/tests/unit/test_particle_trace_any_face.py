@@ -19,7 +19,6 @@ from export_particle_trace import (  # noqa: E402
     sample_regular_grid_on_surface,
 )
 
-
 INLET = {
     "id": "face 4@Body1",
     "label": "face 4@Body1",

@@ -1,10 +1,12 @@
 """Worker volume LRU must keep cell-only U meshes for cutting planes."""
+# case_volume must import after volume_cache puts tools/ on sys.path.
+# ruff: noqa: I001
 from __future__ import annotations
 
 import pyvista as pv
 
 from cfddesk.worker import volume_cache
-import case_volume  # noqa: E402  — volume_cache puts tools/ on sys.path
+import case_volume  # noqa: E402, I001  — volume_cache puts tools/ on sys.path
 
 
 def test_get_prepared_caches_cell_only_u(tmp_path, monkeypatch):

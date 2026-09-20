@@ -52,7 +52,22 @@ const PATH_STANDARD = 'standard';
 const PATH_SNAPPY = 'snappyHexMesh';
 const SNAPPY_GENERATE_SCRIPT = pyTool('generate_snappy.py');
 
-/** @type {null | { child: import('node:child_process').ChildProcess, generate_id: string }} */
+/**
+ * @typedef {object} LiveMeshJob
+ * @property {import('node:child_process').ChildProcess} child
+ * @property {string} generate_id
+ * @property {string} [path_kind]
+ * @property {string|null} [project_id]
+ * @property {number} [started_at]
+ * @property {string|null} [mesh_id]
+ * @property {string|null} [wsl_dst]
+ * @property {string|null} [wsl_case]
+ * @property {Function} [onUpdate]
+ * @property {boolean} [stop_requested]
+ * @property {number} [stop_requested_at]
+ * @property {boolean} [cancelled_notified]
+ */
+/** @type {null | LiveMeshJob} */
 let liveJob = null;
 
 function stampId() {
@@ -393,6 +408,10 @@ export function isLiveMeshJobHeld() {
   return !!(liveJob && liveChildIsRunning(liveJob.child));
 }
 
+/**
+ * @param {LiveMeshJob | null | undefined} live
+ * @param {{ meshId?: string, projectId?: string }} [ids]
+ */
 export function meshStopMatchesLive(live, { meshId, projectId } = {}) {
   if (!live) return { match: false, reason: 'idle' };
   if (meshId && live.mesh_id && String(live.mesh_id) !== String(meshId)) {
@@ -404,6 +423,7 @@ export function meshStopMatchesLive(live, { meshId, projectId } = {}) {
   return { match: true, reason: 'ok' };
 }
 
+/** @param {{ stopRequested?: boolean, ok?: boolean }} [close] */
 export function meshCloseStatus({ stopRequested, ok } = {}) {
   if (stopRequested) return 'stopped';
   return ok ? 'done' : 'failed';
@@ -560,6 +580,7 @@ function notifyMeshStopped(job) {
 }
 
 /** Kill the live generate for this mesh so the next queued job can start. */
+/** @param {{ meshId?: string, projectId?: string }} [ids] */
 export function stopMeshGenerate({ meshId, projectId } = {}) {
   dropDeadLiveJob();
   const job = liveJob;
@@ -707,6 +728,7 @@ export function persistMeshResult(projectId, resultFields) {
   const simId =
     (resultFields && resultFields.simulation_id) ||
     studyIdForMesh(projectId, resultFields && resultFields.mesh_id);
+  /** @type {{ meshes?: any[], active_id?: string, id?: string, out_of_scope?: unknown, [k: string]: any }} */
   const existing = readMeshDoc(projectId, simId) || {};
   const now = new Date().toISOString();
   const pathKind = resultFields.path_kind || PATH_SNAPPY;

@@ -155,7 +155,6 @@ def apply_web_sibling_to_project(
 
     if kind == "simulations":
         entries, _active = from_web_simulations(doc if isinstance(doc, dict) else None)
-        by_id = {str(e.get("id")): e for e in entries}
         updated = []
         seen = set()
         for e in entries:

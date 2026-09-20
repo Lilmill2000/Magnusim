@@ -47,8 +47,8 @@ def test_study_web_bcs_reads_folder_bcs_when_aggregate_empty(tmp_path: Path):
         assemble_study_bcs,
         create_geometry_folder,
         create_study_folder,
-        persist_child_item,
         find_study,
+        persist_child_item,
     )
 
     create_geometry_folder(tmp_path, {"id": "g1", "name": "part.step", "original_filename": "part.step"})
@@ -95,8 +95,8 @@ def test_assemble_study_bc_defaults_reads_slip_when_folder_bcs_exist(tmp_path: P
         assemble_study_bc_defaults,
         create_geometry_folder,
         create_study_folder,
-        persist_child_item,
         find_study,
+        persist_child_item,
     )
 
     create_geometry_folder(tmp_path, {"id": "g1", "name": "part.step", "original_filename": "part.step"})
@@ -151,8 +151,8 @@ def test_build_field_patches_slip_default_writes_slip_walls():
         monitor_patches=[],
         face_props={},
     )
-    U, _p, _k, _omega, _nut = _build_field_patches(spec, ["walls"], k_str="1", w_str="1")
-    assert U["walls"]["type"] == "slip"
+    u_field, _p, _k, _omega, _nut = _build_field_patches(spec, ["walls"], k_str="1", w_str="1")
+    assert u_field["walls"]["type"] == "slip"
 
 
 def test_study_web_bcs_ignores_other_simulations(tmp_path: Path):

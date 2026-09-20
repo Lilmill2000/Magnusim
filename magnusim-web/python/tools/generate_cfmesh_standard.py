@@ -19,7 +19,6 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case
 from cfddesk.cad.location import find_location_in_mesh
 from cfddesk.cad.passage import check_passage_cells, measure_role_passages
 from cfddesk.cad.step import load_step
@@ -33,6 +32,7 @@ from cfddesk.mesh.cfmesh_standard import (
     inject_named_local_refinement,
     replace_boundary_layers_block,
 )
+from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case
 from cfddesk.mesh.gmsh_standard import (
     apply_boundary_patch_types,
     coerce_gmsh_leftover_walls,
@@ -41,11 +41,11 @@ from cfddesk.mesh.gmsh_standard import (
 from cfddesk.mesh.web_refinements import (
     bind_inflate_patches,
     bind_surface_custom_patches,
+    face_ids_from_web_bc,
     inflate_notes,
     leftover_faces,
     load_inflate_refs,
     load_surface_custom_sizes,
-    face_ids_from_web_bc,
 )
 from cfddesk.project.mesh_sizing import (
     characteristic_aabb_length_m,

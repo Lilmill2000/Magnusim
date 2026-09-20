@@ -1737,7 +1737,7 @@ async function renameCatalogRun(projectId, runId, name, simulationId) {
   };
 }
 
-/** @param {{projectId?: string, name?: string, simulationId?: string, runId?: string}} [opts] */
+/** @param {{projectId?: string, name?: string, simulationId?: string, runId?: string, meshId?: string}} [opts] */
 export async function createDraftRun({ projectId, name, simulationId, runId: requestedId, meshId } = {}) {
   const id = projectId || readActiveId();
   if (!id) return { ok: false, error: 'no active project' };
@@ -2284,7 +2284,6 @@ export function startSolve(opts = {}) {
     command: argv.join(' '),
     argv,
     started_at,
-    finished_at: null,
     log_path: winLog,
     log_jsonl_path: jobLog.path,
     log_excerpt: '',
@@ -2514,6 +2513,7 @@ function resolveStopTarget(projectId, runId) {
   return { run: null, rec: pick };
 }
 
+/** @param {{ projectId?: string, force?: boolean, runId?: string }} [opts] */
 export function stopSolve({ projectId, force, runId } = {}) {
   const id = projectId || readActiveId();
   const target = resolveStopTarget(id, runId);

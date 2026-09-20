@@ -221,6 +221,7 @@ export function readSetupTree(): SetupTreeModel {
       mesh_name?: string;
       status?: string;
       simulation_id?: string;
+      result_controls?: unknown;
     }>;
     runs_all?: Array<{
       id?: string;
@@ -230,6 +231,7 @@ export function readSetupTree(): SetupTreeModel {
       mesh_name?: string;
       status?: string;
       simulation_id?: string;
+      result_controls?: unknown;
     }>;
   } | undefined;
   const runsAll = (w27 && (w27.runs_all || w27.runs)) || [];
