@@ -42,7 +42,7 @@ $PythonDir = Join-Path $WebRoot 'python'
 
 $VenvPython = Join-Path $PythonDir '.venv\Scripts\python.exe'
 
-
+. (Join-Path $SetupDir 'Port-Settings.ps1')
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
@@ -388,7 +388,7 @@ function Install-PythonVenv([string[]]$PyLauncher) {
 
     if (Test-Path $VenvPython) {
 
-        & $VenvPython -c "import cfddesk, pyvista, gmsh" 2>$null
+        & $VenvPython -c "import cfddesk, pyvista, gmsh, scipy" 2>$null
 
         if ($LASTEXITCODE -eq 0) {
 
@@ -432,7 +432,7 @@ function Install-PythonVenv([string[]]$PyLauncher) {
 
         if ($LASTEXITCODE -ne 0) { throw 'pip install -r requirements.lock failed' }
 
-        & $VenvPython -m pip install -e . --no-deps
+        & $VenvPython -m pip install -e .
 
     } else {
 
@@ -440,9 +440,9 @@ function Install-PythonVenv([string[]]$PyLauncher) {
 
     }
 
-    if ($LASTEXITCODE -ne 0) { throw 'pip install -e . failed (cfddesk + pyvista + gmsh + cadquery-ocp)' }
+    if ($LASTEXITCODE -ne 0) { throw 'pip install -e . failed (cfddesk + pyvista + gmsh + scipy + cadquery-ocp)' }
 
-    & $VenvPython -c "import cfddesk, pyvista, gmsh; print('python-ok')"
+    & $VenvPython -c "import cfddesk, pyvista, gmsh, scipy; print('python-ok')"
 
     if ($LASTEXITCODE -ne 0) { throw 'Python packages imported with errors' }
 
@@ -680,7 +680,7 @@ function Invoke-WslBootstrap([string]$Distro) {
 
 function Write-LocalConfig($Distro, $Info) {
 
-    $doc = [ordered]@{
+    Save-SetupSettings $LocalJson @{
 
         wsl_distro       = $Distro
 
@@ -697,8 +697,6 @@ function Write-LocalConfig($Distro, $Info) {
         setup_completed  = (Get-Date).ToUniversalTime().ToString('o')
 
     }
-
-    $doc | ConvertTo-Json | Set-Content -Path $LocalJson -Encoding utf8
 
     Write-Ok "Wrote $LocalJson"
 
@@ -749,6 +747,8 @@ try {
     Write-Host "Log:        $LogPath"
 
     if ($Elevated) { Write-Host 'Running elevated (WSL install).' }
+
+    if (-not $Elevated) { Request-SetupPort $WebRoot }
 
 
 
@@ -804,7 +804,7 @@ try {
 
     Write-Host 'Setup finished.' -ForegroundColor Green
 
-    Write-Host 'Double-click run.bat. The first launch opens a short setup wizard (units, this PC, port).'
+    Write-Host 'Double-click run.bat. The first launch opens a short setup wizard (units and this PC).'
 
     Write-Host 'Double-click stop.bat when you are done.'
 

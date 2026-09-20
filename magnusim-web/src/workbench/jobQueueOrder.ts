@@ -686,14 +686,46 @@ export function selectedRunAfterCatalog(opts?: {
   return still ? selected : null;
 }
 
+export function runBelongsToOpenProject(
+  rec?: { project_id?: unknown } | null,
+  projectId?: unknown
+): boolean {
+  const cur = projectId != null && String(projectId) !== '' ? String(projectId) : '';
+  const pid = rec && rec.project_id != null && String(rec.project_id) !== '' ? String(rec.project_id) : '';
+  if (!cur || !pid) return true;
+  return pid === cur;
+}
+
+/** Workbench run lists are one project. A leftover row from another project must not stay. */
+export function catalogRowsForOpenProject<T extends { project_id?: unknown }>(
+  rows?: Array<T | null | undefined> | null,
+  projectId?: unknown
+): T[] {
+  const list = (Array.isArray(rows) ? rows : []).filter((r): r is T => !!r);
+  const cur = projectId != null && String(projectId) !== '' ? String(projectId) : '';
+  if (!cur) return list;
+  return list.filter((r) => runBelongsToOpenProject(r, cur));
+}
+
+export function pickHydrateLiveRunForProject<T extends LiveSolveRow & { project_id?: unknown }>(
+  rows?: Array<T | null | undefined> | null,
+  preferId?: unknown,
+  projectId?: unknown
+): T | null {
+  return pickLiveSolveFromCatalog(catalogRowsForOpenProject(rows, projectId), preferId);
+}
+
 /** Never show another run's live solve on this run's panel. */
 export function runPanelDoc<T extends Record<string, unknown>>(
   rec: T | null | undefined,
-  live?: { id?: unknown; run_id?: unknown; name?: unknown } | null
+  live?: { id?: unknown; run_id?: unknown; name?: unknown; project_id?: unknown } | null,
+  projectId?: unknown
 ): (T & { run_id: unknown }) | null {
   if (!rec) return null;
+  if (!runBelongsToOpenProject(rec, projectId)) return null;
   const rid = rec.id ?? rec.run_id;
-  if (live && String(live.run_id ?? live.id ?? '') === String(rid ?? '')) {
+  const sameId = !!(live && String(live.run_id ?? live.id ?? '') === String(rid ?? ''));
+  if (sameId && runBelongsToOpenProject(live, projectId)) {
     return { ...rec, ...live, name: rec.name || live.name, run_id: rid } as T & { run_id: unknown };
   }
   return { ...rec, run_id: rid } as T & { run_id: unknown };

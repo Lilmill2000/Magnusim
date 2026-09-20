@@ -62,8 +62,11 @@ import {
   keepResultsWhileStartingRun,
   mergeRunCatalogRow,
   catalogReplacesStudyRuns,
+  catalogRowsForOpenProject,
   selectedRunAfterCatalog,
+  pickHydrateLiveRunForProject,
   pickLiveSolveFromCatalog,
+  runBelongsToOpenProject,
   shouldKickQueueAfterLiveHandleLost,
   solveHandleStillLive,
   runDisplayedSimTime,
@@ -18287,6 +18290,8 @@ function resetEmptyWorkbench({ keepProject = true } = {}) {
     if (window.__CFD_W20_STATE__) window.__CFD_W20_STATE__.mesh = null;
   } catch (_) {}
   hideSetupPanels();
+  try { resetTreeCollapsed(); } catch (_) {}
+  try { resetW27WorkbenchCatalog(); } catch (_) {}
   try { syncGeometryTree(); } catch (_) {}
   try { syncSimulationTree(); } catch (_) {}
   applyWorkbenchStage();
@@ -18938,6 +18943,7 @@ let lastUnifiedProjectId = null;
 function prepareProjectSwitch(nextId) {
   const cur = w16State.project && w16State.project.id;
   if (cur && String(cur) === String(nextId)) return;
+  try { resetW27WorkbenchCatalog(); } catch (_) {}
   try { persistJobQueue(); } catch (_) {}
   try { cancelResultsPrefetch(); } catch (_) {}
   try { resetTreeCollapsed(); } catch (_) {}
@@ -29384,9 +29390,11 @@ function studyRunList() {
 function findRunRecord(runId) {
   if (!runId) return null;
   const sid = typeof currentStudyId === 'function' ? currentStudyId() : '';
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
   const match = (r, requireStudy) => {
     if (!r) return false;
     if (String(r.id) !== String(runId) && String(r.run_id) !== String(runId)) return false;
+    if (pid && typeof runBelongsToOpenProject === 'function' && !runBelongsToOpenProject(r, pid)) return false;
     if (requireStudy && sid && r.simulation_id && String(r.simulation_id) !== String(sid)) return false;
     return true;
   };
@@ -29405,9 +29413,11 @@ function findRunRecord(runId) {
 function projectRunList() {
   const seen = new Set();
   const out = [];
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
   for (const list of [w27State.runs_all, w27State.runs]) {
     for (const rec of list || []) {
       if (!rec || !rec.id) continue;
+      if (pid && typeof runBelongsToOpenProject === 'function' && !runBelongsToOpenProject(rec, pid)) continue;
       const id = String(rec.id);
       if (seen.has(id)) continue;
       seen.add(id);
@@ -29441,6 +29451,26 @@ function resultsCompareGroupLabel(rec) {
   const sim = studyNameForRun(rec);
   if (geo && sim) return geo + ' — ' + sim;
   return geo || sim || 'This project';
+}
+
+function resetW27WorkbenchCatalog() {
+  w27State.runs = [];
+  w27State.runs_all = [];
+  w27State.meshes = [];
+  w27State.run = null;
+  w27State.selected_run_id = null;
+  w27State.active_run_id = null;
+  w27State.rc_target_run_id = null;
+  w27State.transient_run_id = '';
+  w27State.transient = null;
+  w27State.transient_preview = null;
+  w27State.transient_preview_key = '';
+  w27State.attaching = false;
+  try { clearSolveUiLeak(); } catch (_) {}
+  try { stopSimElapsedClock(); } catch (_) {}
+  try { hideAllTreeDetails(); } catch (_) {}
+  try { syncSimControlPanel(); } catch (_) {}
+  try { syncViewportJobChip(); } catch (_) {}
 }
 
 function clearSolveUiLeak() {
@@ -29480,7 +29510,8 @@ function selectedRunRecord() {
 }
 
 function runDocForPanel() {
-  return runPanelDoc(selectedRunRecord(), w27State.run);
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  return runPanelDoc(selectedRunRecord(), w27State.run, pid);
 }
 
 function runRequestStudyIds(runId) {
@@ -29705,6 +29736,10 @@ function openRunRcsFolder(runId) {
 
 function pickHydrateLiveRun() {
   const rows = typeof projectRunList === 'function' ? projectRunList() : [].concat(w27State.runs_all || [], w27State.runs || []);
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  if (typeof pickHydrateLiveRunForProject === 'function') {
+    return pickHydrateLiveRunForProject(rows, w27State.live_run_id, pid);
+  }
   if (typeof pickLiveSolveFromCatalog === 'function') {
     return pickLiveSolveFromCatalog(rows, w27State.live_run_id);
   }
@@ -29734,12 +29769,19 @@ function revealRunInTree(runId, { activate = true } = {}) {
 function revealLiveRunAfterHydrate() {
   const rec = pickHydrateLiveRun();
   const rid = rec && (rec.id || rec.run_id);
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
   if (!rid) return;
+  if (typeof runBelongsToOpenProject === 'function' && !runBelongsToOpenProject(rec, pid)) return;
   revealRunInTree(rid, { activate: false });
 }
 
 function openRunPanel(runId) {
   if (!runId) return;
+  const recCheck = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  if (recCheck && typeof runBelongsToOpenProject === 'function' && !runBelongsToOpenProject(recCheck, pid)) {
+    return;
+  }
   leaveResultsForSetup();
   if (w27State.start_error_run_id && String(w27State.start_error_run_id) !== String(runId)) {
     w27State.start_error = null;
@@ -30829,16 +30871,54 @@ function runsTreeKey(list, activeId) {
   );
 }
 
+function stampRunProject(row, projectId) {
+  if (!row || !projectId || row.project_id) return row;
+  return { ...row, project_id: projectId };
+}
+
+function applyForeignLiveCatalog(j) {
+  const incomingLive = catalogRunningRun(j);
+  const nextLiveId = (j && j.live_run_id) || (incomingLive && (incomingLive.run_id || incomingLive.id)) || null;
+  if (nextLiveId) {
+    w27State.live_run_id = nextLiveId;
+    try { markLiveCompute('solve', { run_id: nextLiveId }); } catch (_) {}
+    if (incomingLive && sameRunId(incomingLive, nextLiveId)) {
+      const prev = w27State.live_run;
+      w27State.live_run = prev && sameRunId(prev, nextLiveId)
+        ? mergeRunProgress(prev, incomingLive)
+        : incomingLive;
+    }
+  }
+  try { syncViewportJobChip(); } catch (_) {}
+}
+
 function applyRunCatalog(j) {
+  const curPid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  const catalogPid = j && j.project_id;
+  if (curPid && catalogPid && String(curPid) !== String(catalogPid)) {
+    applyForeignLiveCatalog(j);
+    return;
+  }
   const before = runsTreeKey(w27State.runs, w27State.selected_run_id || w27State.active_run_id);
+  const pid = catalogPid || curPid || '';
   if (j && Array.isArray(j.runs)) {
     const curSid = typeof currentStudyId === 'function' ? currentStudyId() : '';
     const replaceStudyRuns = catalogReplacesStudyRuns(j, curSid);
+    const incomingRuns = j.runs.map((row) => stampRunProject(row, pid));
+    const scopedPrev = typeof catalogRowsForOpenProject === 'function'
+      ? catalogRowsForOpenProject(w27State.runs, pid)
+      : w27State.runs;
+    const scopedAll = typeof catalogRowsForOpenProject === 'function'
+      ? catalogRowsForOpenProject(w27State.runs_all, pid)
+      : w27State.runs_all;
     if (replaceStudyRuns) {
-      const prevById = new Map((w27State.runs || []).map((r) => [String((r && (r.id || r.run_id)) || ''), r]));
-      w27State.runs = j.runs.map((row) => {
+      const prevById = new Map((scopedPrev || []).map((r) => [String((r && (r.id || r.run_id)) || ''), r]));
+      w27State.runs = incomingRuns.map((row) => {
         const prev = prevById.get(String((row && (row.id || row.run_id)) || ''));
-        return (typeof mergeRunCatalogRow === 'function' ? mergeRunCatalogRow(prev, row) : row) || row;
+        return stampRunProject(
+          (typeof mergeRunCatalogRow === 'function' ? mergeRunCatalogRow(prev, row) : row) || row,
+          pid
+        );
       });
       const viewingRun = typeof viewingRunId === 'function' ? viewingRunId() : w27State.selected_run_id;
       if (viewingRun && w27State.runs.some((r) => r && String(r.id) === String(viewingRun))) {
@@ -30846,23 +30926,27 @@ function applyRunCatalog(j) {
       } else {
         w27State.selected_run_id = selectedRunAfterCatalog({
           selectedId: w27State.selected_run_id,
-          incomingRuns: j.runs,
+          incomingRuns,
           replaceStudyRuns: true,
         });
       }
     } else {
       const sid =
         (j && j.simulation_id) ||
-        ((j.runs[0] && j.runs[0].simulation_id) || null);
-      w27State.runs_all = mergeStudyTaggedList(w27State.runs_all, j.runs, sid);
+        ((incomingRuns[0] && incomingRuns[0].simulation_id) || null);
+      w27State.runs_all = mergeStudyTaggedList(scopedAll, incomingRuns, sid);
     }
     if (Array.isArray(j.runs_all)) {
-      const prevAll = new Map((w27State.runs_all || []).map((r) => [String((r && (r.id || r.run_id)) || ''), r]));
+      const incomingAll = j.runs_all.map((row) => stampRunProject(row, pid));
+      const prevAll = new Map((scopedAll || []).map((r) => [String((r && (r.id || r.run_id)) || ''), r]));
       w27State.runs_all = adoptStudyTaggedList(
-        w27State.runs_all,
-        j.runs_all.map((row) => {
+        scopedAll,
+        incomingAll.map((row) => {
           const prev = prevAll.get(String((row && (row.id || row.run_id)) || ''));
-          return (typeof mergeRunCatalogRow === 'function' ? mergeRunCatalogRow(prev, row) : row) || row;
+          return stampRunProject(
+            (typeof mergeRunCatalogRow === 'function' ? mergeRunCatalogRow(prev, row) : row) || row,
+            pid
+          );
         }),
         (j && j.simulation_id) || (typeof currentStudyId === 'function' ? currentStudyId() : null)
       );
@@ -30870,7 +30954,7 @@ function applyRunCatalog(j) {
       const sid =
         (j && j.simulation_id) ||
         (typeof currentStudyId === 'function' ? currentStudyId() : null);
-      w27State.runs_all = mergeStudyTaggedList(w27State.runs_all, w27State.runs, sid);
+      w27State.runs_all = mergeStudyTaggedList(scopedAll, w27State.runs, sid);
     }
   }
   if (j && Array.isArray(j.meshes)) w27State.meshes = j.meshes;
@@ -31021,6 +31105,11 @@ async function pollSimRunStatus() {
     const r = await fetch('/api/run/status' + hashProjectQs(), { cache: 'no-store' });
     const j = await r.json();
     if (j) applyRunCatalog(j);
+    const curPid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+    if (j && j.project_id && curPid && String(j.project_id) !== String(curPid)) {
+      try { syncViewportJobChip(); } catch (_) {}
+      return;
+    }
     if (j && j.run) {
       const runStudy = j.simulation_id || j.run.simulation_id;
       const sid = typeof currentStudyId === 'function' ? currentStudyId() : '';
@@ -31179,7 +31268,13 @@ async function refreshRunCatalog() {
   const r = await fetch('/api/run/status' + hashProjectQs(), { cache: 'no-store' });
   const j = await r.json();
   applyRunCatalog(j);
-  if (j && j.run && !w27State.selected_run_id) {
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  if (
+    j &&
+    j.run &&
+    !w27State.selected_run_id &&
+    (typeof runBelongsToOpenProject !== 'function' || runBelongsToOpenProject(j.run, pid))
+  ) {
     w27State.run = j.run;
   }
   return j;

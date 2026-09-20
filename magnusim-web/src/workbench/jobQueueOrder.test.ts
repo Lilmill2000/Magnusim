@@ -24,6 +24,8 @@ import {
   runOwnerStudyIds,
   orderedQueueItems,
   runHasVisibleResults,
+  catalogRowsForOpenProject,
+  pickHydrateLiveRunForProject,
   pickLiveSolveFromCatalog,
   shouldKickQueueAfterLiveHandleLost,
   solveHandleStillLive,
@@ -697,6 +699,75 @@ describe('runPanelDoc', () => {
     expect(runPanelDoc({ id: 'test-run', name: 'Run 1' }, { id: 'test-run', status: 'running' })?.status).toBe(
       'running'
     );
+  });
+
+  it('does not paint another project live solve onto this run even when ids match', () => {
+    expect(
+      runPanelDoc(
+        { id: 'r1', name: 'Run 1', project_id: 'transient', status: 'draft' },
+        { id: 'r1', status: 'running', pid: 32200, project_id: 'testss' },
+        'transient'
+      )
+    ).toEqual({
+      id: 'r1',
+      name: 'Run 1',
+      project_id: 'transient',
+      status: 'draft',
+      run_id: 'r1',
+    });
+    expect(
+      runPanelDoc(
+        { id: 'old', name: 'Run 1', project_id: 'testss', status: 'running' },
+        { id: 'old', status: 'running', project_id: 'testss' },
+        'transient'
+      )
+    ).toBe(null);
+  });
+});
+
+describe('catalogRowsForOpenProject', () => {
+  it('drops leftover rows from another project', () => {
+    expect(
+      catalogRowsForOpenProject(
+        [
+          { id: 'old', project_id: 'testss', status: 'running' },
+          { id: 'next', project_id: 'transient', status: 'draft' },
+        ],
+        'transient'
+      ).map((r) => r.id)
+    ).toEqual(['next']);
+  });
+
+  it('keeps untagged rows so a same-project poll still works', () => {
+    expect(catalogRowsForOpenProject([{ id: 'a' }], 'transient').map((r) => r.id)).toEqual(['a']);
+  });
+});
+
+describe('pickHydrateLiveRunForProject', () => {
+  it('does not open another project live solve', () => {
+    expect(
+      pickHydrateLiveRunForProject(
+        [
+          { id: 'old', project_id: 'testss', status: 'running' },
+          { id: 'next', project_id: 'transient', status: 'draft' },
+        ],
+        'old',
+        'transient'
+      )
+    ).toBe(null);
+  });
+
+  it('still opens this project live solve', () => {
+    expect(
+      pickHydrateLiveRunForProject(
+        [
+          { id: 'old', project_id: 'testss', status: 'running' },
+          { id: 'mine', project_id: 'transient', status: 'running' },
+        ],
+        null,
+        'transient'
+      )?.id
+    ).toBe('mine');
   });
 });
 

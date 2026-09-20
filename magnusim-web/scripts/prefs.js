@@ -54,10 +54,11 @@ export function clampPort(value) {
 }
 
 export function listenPort() {
+  const saved = clampPort(readLocalDoc().port);
+  if (saved != null) return saved;
   const env = clampPort(envGet('PORT'));
   if (env != null) return env;
-  const saved = clampPort(readLocalDoc().port);
-  return saved != null ? saved : DEFAULT_PORT;
+  return DEFAULT_PORT;
 }
 
 export function defaultUnits() {

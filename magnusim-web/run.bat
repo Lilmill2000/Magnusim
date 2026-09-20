@@ -31,9 +31,8 @@ if not exist "node_modules\vite" (
   )
 )
 
-set MAGNUSIM_PORT=8082
-set CFDDESK_PORT=8082
 for /f "usebackq delims=" %%P in (`node --input-type=module -e "import {listenPort} from './scripts/prefs.js'; process.stdout.write(String(listenPort()))"`) do set MAGNUSIM_PORT=%%P
+if not defined MAGNUSIM_PORT set MAGNUSIM_PORT=8082
 set CFDDESK_PORT=%MAGNUSIM_PORT%
 set MAGNUSIM_BOUND_PORT=%MAGNUSIM_PORT%
 set CFDDESK_BOUND_PORT=%MAGNUSIM_PORT%

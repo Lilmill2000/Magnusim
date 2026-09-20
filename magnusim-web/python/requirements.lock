@@ -70,6 +70,9 @@ numpy==2.2.6
     #   matplotlib
     #   pyvista
     #   pyvista-validation
+    #   scipy
+scipy==1.15.3
+    # via cfddesk (pyproject.toml)
 packaging==26.3
     # via
     #   build
