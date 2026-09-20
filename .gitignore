@@ -44,6 +44,6 @@ Thumbs.db
 *.p12
 cfd-web/e2e/.tmp-prefs.json
 cfd-web/runs/
-.cursor/Plans/
+.cursor/
 audit-edits*.py
 audit-inspect.py
