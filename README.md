@@ -12,6 +12,7 @@ The running app is **`magnusim-web/`**. Clone this repo and run Setup.bat. Versi
 2. Double-click **Setup.bat** and leave the window open. First run can take 30–90 minutes (it installs Node.js, Python, WSL Ubuntu, and OpenFOAM v2606). Approve the Administrator prompt if Windows asks. If it tells you to reboot, do that and double-click Setup.bat again.
 3. Double-click **run.bat** (`start.bat` is the same launcher). The first time, a setup wizard asks for default units (metric or US customary), runs a hardware check that picks solver ranks for this PC, and lets you choose the local port (default 8082).
 4. Double-click **stop.bat** when you are done. Close the browser tab too. Change those choices later from **Preferences** on the home screen.
+5. To uninstall, close Setup.bat, run.bat, and File Explorer windows on this folder, then double-click **uninstall.bat**. It asks you to type `DELETE MAGNUSIM` before it removes this entire folder (including local projects). Shared Node.js, Python, and WSL stay unless you confirm those optional removals.
 
 The same Setup / run / stop files also live inside `magnusim-web/` if you only opened that folder.
 
