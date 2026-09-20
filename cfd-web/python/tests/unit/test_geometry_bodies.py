@@ -13,7 +13,6 @@ from cfddesk.project.model import (
     _mesh_fingerprint_payload,
 )
 from cfddesk.registry import (
-    MeshBackend,
     load_all,
     reset_for_tests,
     validate_multi_region_meshing,

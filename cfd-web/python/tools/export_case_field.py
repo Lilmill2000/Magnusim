@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import case_density, pressure_meta, scale_pressure  # noqa: E402
@@ -167,7 +166,60 @@ def ensure_field_on_mesh(mesh, field: str):
         raise RuntimeError("mesh missing p")
 
 
-def export_field(case_dir: Path, time: str, field: str, out_dir: Path):
+_FOAM_TIME = re.compile(r"^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+
+
+def list_field_times(case_dir: Path, field: str) -> list[str]:
+    names: list[str] = []
+    field = "magU" if field == "magU" else "p"
+    foam_name = "U" if field == "magU" else "p"
+    try:
+        ents = list(Path(case_dir).iterdir())
+    except OSError:
+        return []
+    for p in ents:
+        if not p.is_dir() or not _FOAM_TIME.match(p.name):
+            continue
+        if (p / foam_name).is_file() or (p / f"{foam_name}.gz").is_file():
+            names.append(p.name)
+    names.sort(key=lambda s: float(s))
+    return names
+
+
+def series_field_range(case_dir: Path, field: str) -> dict:
+    """Overall foam min/max across every saved time. No VTK, no per-frame legend."""
+    field = "magU" if str(field).strip() == "magU" else "p"
+    case_dir = Path(case_dir).resolve()
+    times = list_field_times(case_dir, field)
+    kind = "vector" if field == "magU" else "scalar"
+    foam_name = "U" if field == "magU" else "p"
+    frames = []
+    lo = None
+    hi = None
+    for t in times:
+        path = case_dir / t / foam_name
+        if not path.is_file():
+            continue
+        stats = parse_foam_scalar_or_vector(path, kind)
+        a = float(stats["umin"] if field == "magU" else stats["pmin"])
+        b = float(stats["umax"] if field == "magU" else stats["pmax"])
+        frames.append({"time": t, "min": a, "max": b, "uniform": bool(stats.get("uniform"))})
+        lo = a if lo is None else min(lo, a)
+        hi = b if hi is None else max(hi, b)
+    return {
+        "ok": True,
+        "field": field,
+        "case_dir": str(case_dir),
+        "times": times,
+        "n_times": len(times),
+        "min": lo,
+        "max": hi,
+        "frames": frames,
+        "series": True,
+    }
+
+
+def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None, source_vtu=None):
     field = field.strip()
     if field not in ("magU", "p"):
         raise ValueError(f"unsupported field {field}; use magU or p")
@@ -189,12 +241,15 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path):
             raise FileNotFoundError(f"time_not_found: missing OpenFOAM p: {p_path}")
         foam_stats = parse_foam_scalar_or_vector(p_path, "scalar")
 
-    try:
-        mesh, source_vtu = load_volume(case_dir, time)
-    except Exception as exc:
-        raise FileNotFoundError(
-            f"missing prepared VTU and OpenFOAM read failed: {case_dir} ({exc})"
-        )
+    if mesh is None:
+        try:
+            mesh, source_vtu = load_volume(case_dir, time)
+        except Exception as exc:
+            raise FileNotFoundError(
+                f"missing prepared VTU and OpenFOAM read failed: {case_dir} ({exc})"
+            ) from exc
+    elif not source_vtu:
+        source_vtu = "worker-cache"
     ensure_field_on_mesh(mesh, field)
     rho = case_density(case_dir)
     if field == "p":
@@ -287,7 +342,11 @@ def main():
     ap.add_argument("--time", default="50")
     ap.add_argument("--field", default="magU")
     ap.add_argument("--out-dir", type=Path, default=None)
+    ap.add_argument("--series-range", action="store_true")
     args = ap.parse_args()
+    if args.series_range:
+        print(json.dumps(series_field_range(args.case, args.field)))
+        return
     out_dir = args.out_dir
     if out_dir is None:
         root = Path(__file__).resolve().parents[2]  # cfd-web/

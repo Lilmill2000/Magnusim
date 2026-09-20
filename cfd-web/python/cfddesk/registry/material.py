@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from cfddesk.registry.base import RegistryError
 from cfddesk.registry.schema import SchemaField
@@ -24,7 +25,7 @@ class MaterialModel:
     library: tuple[dict[str, Any], ...] = ()
 
 
-def validate_analysis_material_refs(hub: "RegistryHub") -> None:
+def validate_analysis_material_refs(hub: RegistryHub) -> None:
     """Fail if any AnalysisType.material_models key is not registered."""
     mat_keys = set(hub.registry("material").keys())
     for spec in hub.registry("analysis").items():

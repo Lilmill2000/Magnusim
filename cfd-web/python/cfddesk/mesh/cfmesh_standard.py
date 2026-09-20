@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import overload
 
 import numpy as np
 
@@ -190,7 +191,7 @@ def refine_triangles_max_edge(
     if max_edge <= 0:
         raise ValueError("max_edge must be > 0")
     pts = [np.asarray(p, dtype=np.float64) for p in points]
-    faces = [tuple(int(i) for i in t) for t in tris]
+    faces = [(int(a), int(b), int(c)) for a, b, c in tris]
     if not faces:
         return np.asarray(points, dtype=np.float64), np.asarray(tris, dtype=np.int64)
 
@@ -249,6 +250,14 @@ def refine_triangles_max_edge(
         tol=max(1e-9, max_edge * 1e-4),
     )
 
+
+@overload
+def _weld_and_drop_degenerate(points: np.ndarray, tris: np.ndarray, *, tol: float,
+                              face_ids: None = None) -> tuple[np.ndarray, np.ndarray]: ...
+
+@overload
+def _weld_and_drop_degenerate(points: np.ndarray, tris: np.ndarray, *, tol: float,
+                              face_ids: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
 
 def _weld_and_drop_degenerate(
     points: np.ndarray,
@@ -322,7 +331,7 @@ def _refine_with_face_ids(
     """Refine long edges while propagating per-triangle BREP face ids."""
     max_edge = float(max_edge)
     pts = [np.asarray(p, dtype=np.float64) for p in points_m]
-    faces = [tuple(int(i) for i in t) for t in tris]
+    faces = [(int(a), int(b), int(c)) for a, b, c in tris]
     fids = [int(f) for f in face_ids]
     edge_mid: dict[tuple[int, int], int] = {}
 
@@ -340,7 +349,7 @@ def _refine_with_face_ids(
         new_faces: list[tuple[int, int, int]] = []
         new_fids: list[int] = []
         split_any = False
-        for (a, b, c), fid in zip(faces, fids):
+        for (a, b, c), fid in zip(faces, fids, strict=False):
             lab = float(np.linalg.norm(pts[a] - pts[b]))
             lbc = float(np.linalg.norm(pts[b] - pts[c]))
             lca = float(np.linalg.norm(pts[c] - pts[a]))

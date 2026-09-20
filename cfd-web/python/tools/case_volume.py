@@ -4,7 +4,7 @@ Reads the OpenFOAM case at one time step through pyvista's OpenFOAMReader and
 keeps a binary VTU copy under ``cfd-web/.cache/volume`` so later exporters
 (cut plane, inspect point, particle trace, surface field) do not re-parse the
 ASCII case on every request. ``.cfddesk-prepared.vtu`` in the case directory
-still wins when present (legacy prepared cases).
+is used only for legacy prepared cases without native fields at the requested time.
 
 The cache key includes the U/p file stamps, so a re-run of the same case
 invalidates the cached volume.
@@ -41,9 +41,9 @@ def _internal_mesh(mesh):
 def _stamp(case_dir: Path, time: str) -> str:
     h = hashlib.sha1()
     h.update(str(case_dir).encode("utf-8"))
-    h.update(b"|")
+    h.update(b"|native-fields-v2|")
     h.update(str(time).encode("utf-8"))
-    for name in ("U", "p"):
+    for name in ("U", "p", "U.gz", "p.gz"):
         f = case_dir / str(time) / name
         if f.is_file():
             st = f.stat()
@@ -80,7 +80,11 @@ def load_volume(case_dir: Path, time: str, *, use_cache: bool = True):
     """Return (volume UnstructuredGrid, source description)."""
     case_dir = Path(case_dir).resolve()
     prepared = case_dir / ".cfddesk-prepared.vtu"
-    if prepared.is_file():
+    native_fields = any(
+        (case_dir / str(time) / name).is_file()
+        for name in ("U", "p", "U.gz", "p.gz")
+    )
+    if prepared.is_file() and not native_fields:
         mesh = pv.read(str(prepared))
         if mesh is not None and int(getattr(mesh, "n_cells", 0) or 0) > 0:
             return mesh, str(prepared)

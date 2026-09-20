@@ -6,27 +6,18 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createGeometryFolder, createStudyFolder, createMeshFolder, writeJsonAtomic } from '../scripts/project-layout.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = resolve(__dirname, '..');
 const FIXTURE_ID = 'sample-project-steady-state-e2e';
 const FIXTURE_SRC = join(__dirname, 'fixtures', 'sample-project-steady-state');
-
-function findLiveSample() {
-  const liveRoot = join(WEB_ROOT, 'projects');
-  if (!existsSync(liveRoot)) return null;
-  const names = readdirSync(liveRoot);
-  const hit = names.find((n) => n.startsWith('sample-project-steady-state') && n !== FIXTURE_ID);
-  if (!hit) return null;
-  const dir = join(liveRoot, hit);
-  return existsSync(join(dir, 'project.json')) ? dir : null;
-}
 
 export function prepareE2eProjectsRoot() {
   const destRoot = resolve(__dirname, '.tmp-projects');
@@ -35,22 +26,22 @@ export function prepareE2eProjectsRoot() {
   const dest = join(destRoot, FIXTURE_ID);
   cpSync(FIXTURE_SRC, dest, { recursive: true });
 
-  const wsl = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
-  if (wsl) {
-    const live = findLiveSample();
-    if (live) {
-      const geomSrc = join(live, 'geometry');
-      if (existsSync(geomSrc)) {
-        cpSync(geomSrc, join(dest, 'geometry'), { recursive: true });
-      }
-    } else {
-      const elbow = join(WEB_ROOT, 'python', 'tests', 'fixtures', 'elbow.step');
-      if (existsSync(elbow)) {
-        mkdirSync(join(dest, 'geometry'), { recursive: true });
-        cpSync(elbow, join(dest, 'geometry', 'source.step'));
-      }
-    }
+  const doc = JSON.parse(readFileSync(join(dest, 'project.json'), 'utf8'));
+  const sim = JSON.parse(readFileSync(join(dest, 'simulations.json'), 'utf8')).simulations[0];
+  const geometry = createGeometryFolder(dest, { ...doc.geometries[0], original_filename: 'elbow.step' });
+  const study = createStudyFolder(dest, geometry.id, sim);
+  const meshDoc = JSON.parse(readFileSync(join(dest, 'mesh.json'), 'utf8'));
+  const mesh = createMeshFolder(dest, sim.id, meshDoc.meshes[0]);
+  writeJsonAtomic(join(mesh.dir, 'mesh.json'), meshDoc.meshes[0]);
+  for (const name of ['materials.json', 'boundary_conditions.json']) {
+    cpSync(join(dest, name), join(study.dir, name));
   }
+  const elbow = join(WEB_ROOT, 'python', 'tests', 'fixtures', 'elbow.step');
+  cpSync(elbow, join(geometry.dir, 'source.step'));
+  for (const g of [doc.geometry, ...doc.geometries]) {
+    g.step_path = join(geometry.dir, 'source.step');
+  }
+  writeJsonAtomic(join(dest, 'project.json'), doc);
 
   writeFileSync(
     join(destRoot, 'active.json'),
@@ -60,7 +51,9 @@ export function prepareE2eProjectsRoot() {
   return destRoot;
 }
 
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || process.argv[1]?.endsWith('prepare-projects.js')) {
-  const root = prepareE2eProjectsRoot();
+if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` || process.argv[1]?.endsWith('prepare-projects.js')) {
+  const root = process.env.MAGNUSIM_E2E_PROJECTS_ROOT || prepareE2eProjectsRoot();
+  const prefs = process.env.MAGNUSIM_LOCAL_JSON || resolve(__dirname, '.tmp-prefs.json');
+  writeFileSync(prefs, JSON.stringify({ wizard_completed: true, units: 'Metric', port: Number(process.env.MAGNUSIM_PORT || 8083) }));
   process.stdout.write(root + '\n');
 }

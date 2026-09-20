@@ -1,3 +1,4 @@
+import { safeProjectPath } from './safe-path.js';
 /**
  * Mesh refinements — filesystem persistence.
  * GET/POST /api/mesh/refinements → projects/<id>/mesh_refinements.json
@@ -20,7 +21,15 @@ import { fileURLToPath } from 'node:url';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, writeActiveMirror } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
-import { pyJsonSync, writeProjectCli } from './py-json.js';
+import { pyJson, writeProjectCli } from './py-json.js';
+import {
+  assembleMeshDoc,
+  assembleRefinements,
+  deleteOneRefinement,
+  meshFolderOf,
+  persistOneRefinement,
+  writeMeshRefinements,
+} from './study-io.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -40,7 +49,6 @@ const TYPE_ALIASES = {
 };
 
 const SIZE_UNITS = ['mm', 'm', 'in'];
-const GRADATIONS = ['growth_rate', 'first_layer', 'first_and_total'];
 
 function readActiveId() {
   if (!existsSync(ACTIVE_PATH)) return null;
@@ -53,7 +61,7 @@ function readActiveId() {
 }
 
 function projectDir(id) {
-  return join(PROJECTS_ROOT, id);
+  return safeProjectPath(PROJECTS_ROOT, id);
 }
 
 function projectJsonPath(id) {
@@ -79,19 +87,18 @@ function writeProject(proj) {
   return writeProjectCli(projectDir(proj.id), proj, String((proj.simulation && proj.simulation.id) || proj.active_simulation_id || ''));
 }
 
-function readRefinementsFile(id) {
-  const p = refinementsJsonPath(id);
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, 'utf8'));
-  } catch {
-    return null;
-  }
+function readRefinementsFile(id, simId, meshId) {
+  if (!id || !simId) return null;
+  return assembleRefinements(id, simId, meshId);
 }
 
-function writeRefinementsFile(id, doc) {
+async function writeRefinementsFile(id, doc) {
   const simId = doc && doc.simulation_id;
-  pyJsonSync(
+  const meshId = doc && doc.mesh_id;
+  if (simId && meshId) {
+    return writeMeshRefinements(id, meshId, simId, doc);
+  }
+  await pyJson(
     'project_cli.py',
     ['set-refinements', '--project-dir', projectDir(id), '--sim-id', String(simId || '')],
     doc,
@@ -127,6 +134,16 @@ function normalizeFaces(raw) {
   return list.map(normalizeFace).filter(Boolean);
 }
 
+/** Empty faces on a sizing/fineness save must not wipe an assigned face. */
+export function resolveRefinementFaces(body, existing) {
+  const incoming = normalizeFaces(
+    body && (body.faces || body.face || body.assigned_faces)
+  );
+  const kept = normalizeFaces((existing && existing.faces) || (existing && existing.face) || []);
+  if (body && body.faces_explicit) return incoming;
+  return incoming.length ? incoming : kept;
+}
+
 function canonicalType(raw) {
   const t = String(raw || '').trim();
   if (REF_TYPES.includes(t)) return t;
@@ -150,21 +167,8 @@ function meshJsonPath(id) {
 }
 
 function fallbackMeshId(projectId, simId) {
-  const p = meshJsonPath(projectId);
-  if (!existsSync(p)) return null;
-  try {
-    const doc = JSON.parse(readFileSync(p, 'utf8'));
-    const meshes = Array.isArray(doc.meshes) ? doc.meshes : [];
-    const want = String(simId || '').trim();
-    const scoped = want
-      ? meshes.filter((m) => m && String(m.simulation_id || '') === want)
-      : meshes;
-    if (doc && doc.active_id && scoped.some((m) => m && m.id === doc.active_id)) return doc.active_id;
-    if (scoped[0] && scoped[0].id) return scoped[0].id;
-    return want ? null : (doc && doc.id) || null;
-  } catch {
-    return null;
-  }
+  const doc = assembleMeshDoc(projectId, simId);
+  return (doc && doc.active_id) || null;
 }
 
 function assignMissingMeshIds(projectId, list, simId) {
@@ -221,11 +225,7 @@ function buildRefinement(body, list) {
     body.mesh_id || body.meshId || (existing && existing.mesh_id) || ''
   ).trim() || null;
   const name = String(body.name || (existing && existing.name) || nextName(list, type, meshId)).trim();
-  const faces =
-    Object.prototype.hasOwnProperty.call(body || {}, 'faces') ||
-    Object.prototype.hasOwnProperty.call(body || {}, 'face')
-      ? normalizeFaces(body.faces || body.face || body.assigned_faces)
-      : normalizeFaces((existing && existing.faces) || []);
+  const faces = resolveRefinementFaces(body, existing);
   const now = new Date().toISOString();
   const rec = {
     id: (existing && existing.id) || body.id || newRefId(),
@@ -272,38 +272,15 @@ function buildRefinement(body, list) {
         asNumber(body.n_layers !== undefined ? body.n_layers : existing && existing.n_layers, 3)
       )
     );
-    rec.overall_relative_thickness = asNumber(
-      body.overall_relative_thickness !== undefined
-        ? body.overall_relative_thickness
-        : existing && existing.overall_relative_thickness,
-      0.4
-    );
-    const gradRaw = String(
-      body.gradation || (existing && existing.gradation) || 'growth_rate'
-    ).trim();
-    rec.gradation = GRADATIONS.includes(gradRaw) ? gradRaw : 'growth_rate';
-    rec.growth_rate = asNumber(
-      body.growth_rate !== undefined ? body.growth_rate : existing && existing.growth_rate,
-      1.5
-    );
-    rec.first_layer_thickness = asNumber(
-      body.first_layer_thickness !== undefined
-        ? body.first_layer_thickness
-        : existing && existing.first_layer_thickness,
-      0.1
-    );
-    rec.first_layer_unit = asUnit(
-      body.first_layer_unit || (existing && existing.first_layer_unit),
-      'mm'
-    );
     rec.total_thickness = asNumber(
       body.total_thickness !== undefined ? body.total_thickness : existing && existing.total_thickness,
       1
     );
     rec.total_thickness_unit = asUnit(
       body.total_thickness_unit || (existing && existing.total_thickness_unit),
-      rec.first_layer_unit
+      'mm'
     );
+    rec.gradation = 'total';
   }
 
   return { ok: true, refinement: rec };
@@ -331,36 +308,32 @@ function visibleRefs(projectId, proj, sim, refinements) {
   );
 }
 
-function persistDoc(projectId, sim, refinements) {
-  const path = refinementsJsonPath(projectId);
+async function persistDoc(projectId, sim, refinements, opts) {
   const now = new Date().toISOString();
-  for (const rec of refinements) {
-    rec.mesh_refinements_json = path;
-    rec.project_id = projectId;
+  const only = opts && opts.only;
+  const drop = opts && opts.drop;
+  for (const rec of drop || []) {
+    if (rec && rec.id) deleteOneRefinement(projectId, rec.mesh_id, sim.id, rec.id);
   }
+  let path = null;
+  const toWrite = only || [];
+  for (const rec of toWrite) {
+    if (!rec || !rec.id || !rec.mesh_id) continue;
+    rec.project_id = projectId;
+    rec.simulation_id = sim.id;
+    persistOneRefinement(projectId, rec.mesh_id, sim.id, rec);
+    path = rec.mesh_id;
+  }
+  const assembled = assembleRefinements(projectId, sim.id);
   const doc = {
     project_id: projectId,
     simulation_id: sim.id,
-    refinements,
+    refinements: assembled.refinements || refinements || [],
     updated_at: now,
     persistence: 'filesystem',
     mesh_refinements_json: path,
     increment: 'W26',
   };
-  writeRefinementsFile(projectId, doc);
-
-  const proj = readProject(projectId);
-  if (proj) {
-    proj.mesh_refinements = {
-      count: refinements.length,
-      names: refinements.map((r) => r.name),
-      types: refinements.map((r) => r.type),
-      mesh_refinements_json: path,
-      updated_at: now,
-    };
-    proj.updated_at = now;
-    writeProject(proj);
-  }
 
   try {
     const simDoc = { ...sim };
@@ -398,7 +371,7 @@ function requireProject(body) {
 }
 
 function currentList(projectId, simId) {
-  const existingDoc = readRefinementsFile(projectId);
+  const existingDoc = readRefinementsFile(projectId, simId);
   const raw =
     (existingDoc && Array.isArray(existingDoc.refinements) && existingDoc.refinements.slice()) ||
     [];
@@ -406,15 +379,7 @@ function currentList(projectId, simId) {
 }
 
 function readMeshEntry(projectId, meshId) {
-  try {
-    const p = join(projectDir(projectId), 'mesh.json');
-    if (!existsSync(p)) return null;
-    const doc = JSON.parse(readFileSync(p, 'utf8'));
-    const meshes = Array.isArray(doc.meshes) ? doc.meshes : [];
-    return meshes.find((m) => m && String(m.id) === String(meshId)) || null;
-  } catch {
-    return null;
-  }
+  return meshFolderOf(projectId, meshId);
 }
 
 function cloneRefinement(rec, meshId, dest) {
@@ -433,7 +398,7 @@ function cloneRefinement(rec, meshId, dest) {
   return out;
 }
 
-function copyRefinementsToMesh(body) {
+async function copyRefinementsToMesh(body) {
   const gate = requireProject(body);
   if (!gate.ok) return gate;
   const { projectId, sim } = gate;
@@ -444,7 +409,7 @@ function copyRefinementsToMesh(body) {
   }
   if (srcId === destId) {
     const list = currentList(projectId, sim.id);
-    const { doc, path } = persistDoc(projectId, sim, list);
+    const { doc, path } = await persistDoc(projectId, sim, list);
     return {
       ok: true,
       status: 200,
@@ -458,9 +423,12 @@ function copyRefinementsToMesh(body) {
   };
   const list = currentList(projectId, sim.id);
   const src = list.filter((r) => r && String(r.mesh_id) === srcId);
-  const kept = list.filter((r) => r && String(r.mesh_id) !== destId);
+  const destOld = list.filter((r) => r && String(r.mesh_id) === destId);
   const clones = src.map((r) => cloneRefinement(r, destId, destMeta));
-  const { doc, path } = persistDoc(projectId, sim, kept.concat(clones));
+  const { doc, path } = await persistDoc(projectId, sim, list.filter((r) => r && String(r.mesh_id) !== destId).concat(clones), {
+    only: clones,
+    drop: destOld,
+  });
   return {
     ok: true,
     status: 200,
@@ -476,11 +444,12 @@ function copyRefinementsToMesh(body) {
   };
 }
 
-function deleteRefinements(body) {
+async function deleteRefinements(body) {
   const gate = requireProject(body);
   if (!gate.ok) return gate;
   const { projectId, sim } = gate;
-  let list = currentList(projectId, sim.id);
+  const before = currentList(projectId, sim.id);
+  let list = before.slice();
   const which = String(body.delete || body.id || body.name || '').trim();
   if (which === 'all' || which === 'true') {
     const meshId = String((body && (body.mesh_id || body.meshId)) || '').trim();
@@ -491,7 +460,8 @@ function deleteRefinements(body) {
       return !matchesStudy(r, sim.id, legacyId);
     });
   } else list = list.filter((r) => r.id !== which && r.name !== which);
-  const { doc, path } = persistDoc(projectId, sim, list);
+  const drop = before.filter((r) => r && !list.some((x) => x && x.id === r.id));
+  const { doc, path } = await persistDoc(projectId, sim, list, { drop });
   return {
     ok: true,
     status: 200,
@@ -505,7 +475,7 @@ function deleteRefinements(body) {
   };
 }
 
-function upsertRefinements(body) {
+async function upsertRefinements(body) {
   if (body && (body.copy_from_mesh || (body.copy_from && body.mesh_id && !body.type))) {
     return copyRefinementsToMesh(body);
   }
@@ -515,6 +485,7 @@ function upsertRefinements(body) {
   let list = currentList(projectId, sim.id);
   const batch = (body && (body.refinements || body.items)) || null;
   let last = null;
+  const changed = [];
   if (Array.isArray(batch) && batch.length) {
     for (const item of batch) {
       const built = buildRefinement(item, list);
@@ -522,6 +493,7 @@ function upsertRefinements(body) {
       last = built.refinement;
       last.simulation_id = sim.id;
       list = mergeIntoList(list, built.refinement);
+      changed.push(last);
     }
   } else {
     const built = buildRefinement(body || {}, list);
@@ -529,8 +501,9 @@ function upsertRefinements(body) {
     last = built.refinement;
     last.simulation_id = sim.id;
     list = mergeIntoList(list, built.refinement);
+    changed.push(last);
   }
-  const { doc, path } = persistDoc(projectId, sim, list);
+  const { doc, path } = await persistDoc(projectId, sim, list, { only: changed });
   return {
     ok: true,
     status: 200,
@@ -545,7 +518,7 @@ function upsertRefinements(body) {
   };
 }
 
-function getRefinements(projectIdOpt, simIdOpt) {
+export function getRefinements(projectIdOpt, simIdOpt) {
   const projectId = projectIdOpt || readActiveId();
   if (!projectId) {
     return {
@@ -558,8 +531,8 @@ function getRefinements(projectIdOpt, simIdOpt) {
   if (!proj) {
     return { ok: false, status: 404, body: { error: 'project not found', project_id: projectId } };
   }
-  const doc = readRefinementsFile(projectId);
   const sim = getActiveSimulation(projectId, proj, simIdOpt);
+  const doc = readRefinementsFile(projectId, sim && sim.id);
   const list = ((doc && doc.refinements) || []).filter((r) =>
     matchesStudy(r, sim && sim.id, firstLegacySimId(projectId, proj))
   );
@@ -593,11 +566,11 @@ export async function handleW26Api(req, res, u, parts, helpers) {
       return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
     }
     if (body && (body.delete === true || body.action === 'delete' || body.delete)) {
-      const result = deleteRefinements(body);
+      const result = await deleteRefinements(body);
       res.setHeader('X-CFD-Source', 'refinements-delete');
       return sendJson(res, result.status, result.body);
     }
-    const result = upsertRefinements(body);
+    const result = await upsertRefinements(body);
     res.setHeader('X-CFD-Source', 'refinements-upsert');
     return sendJson(res, result.status, result.body);
   }

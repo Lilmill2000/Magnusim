@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from cfddesk.case.web_case import write_web_solve_case
 from cfddesk.project.web_adapter import load_run_spec
+from cfddesk.registry.analysis import write_run_case
 from tests.conftest import GOLDEN, normalize_foam
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "js-project"
@@ -132,7 +132,7 @@ def test_prepare_run_matches_js_golden(tmp_path, update_golden, mode):
         assert spec.transient is not None
 
     case = tmp_path / mode
-    result = write_web_solve_case(spec, case)
+    result = write_run_case(spec, case)
     assert result["ok"]
 
     gdir = GOLDEN / ("js_steady" if mode == "steady" else "js_transient")

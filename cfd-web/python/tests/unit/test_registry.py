@@ -13,7 +13,6 @@ from cfddesk.registry import (
     PluginManifest,
     Registry,
     RegistryError,
-    Requirement,
     SchemaField,
     check_requirements,
     get_registry,
@@ -424,7 +423,7 @@ def test_no_public_uimanifest_export():
 
     assert "UiManifest" not in reg.__all__
     assert not hasattr(reg, "UiManifest")
-    assert not hasattr(PluginManifest, "ui")
+    assert hasattr(PluginManifest, "ui")
 
 
 def test_reset_for_tests_clears_state():
@@ -441,7 +440,7 @@ def test_setting_field_alias_still_works():
     from cfddesk.registry.schema import SchemaField as SF
 
     assert SettingField is SF
-    assert len(BC_TYPES) >= 20
+    assert len(BC_TYPES) == 7
     f = SettingField("v", "V", "float", default=1.0, unit="m/s")
     assert f.key == "v"
     assert f.min is None

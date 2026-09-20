@@ -1,0 +1,7 @@
+.cursor/Plans export-ignore
+cfd-web/runs export-ignore
+.env* export-ignore
+*.pem export-ignore
+*.key export-ignore
+*.sh text eol=lf
+*.bat text eol=crlf

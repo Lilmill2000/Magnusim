@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-from OCP.TopAbs import TopAbs_SOLID
 from OCP.gp import gp_Pnt
+from OCP.TopAbs import TopAbs_SOLID
 
 from cfddesk.cad.io import (
     compound_shapes,

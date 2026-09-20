@@ -3,18 +3,23 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Any
 
-from cfddesk.jobs.events import EVENT_PREFIX, Event, emit, parse_line
+from cfddesk.jobs.events import EVENT_PREFIX, Event, parse_line
 from cfddesk.runner.case_id import validate_wsl_case_id, wsl_case_path
 from cfddesk.runner.parallel import kill_mpirun_tree
 from cfddesk.wsl.config import get_wsl_distro
 from cfddesk.wsl.mesh_run import windows_to_wsl_path
-from cfddesk.wsl.openfoam import escape_wsl_bash_dollars
+from cfddesk.wsl.openfoam import escape_wsl_bash_dollars, run_wsl_bash
+
+# controlDict may be flush-left or indented; runTimeModifiable re-reads this.
+WRITE_NOW_SED = r"s/^[[:space:]]*stopAt.*/stopAt          writeNow;/"
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 _SOLVE_SH = _TEMPLATES / "solve.sh"
@@ -87,6 +92,10 @@ class ProgressParser:
     saved_times: list[float] = field(default_factory=list)
     solve_started: bool = False
 
+    def _enter_solve(self) -> None:
+        if self.stage in ("starting", "decompose", "copy", ""):
+            self.stage = "solve"
+
     def feed(self, raw: str) -> list[Event]:
         line = _RE_MPI_PREFIX.sub("", str(raw or ""))
         out: list[Event] = []
@@ -111,17 +120,22 @@ class ProgressParser:
             if ev.event == "time_saved":
                 t = ev.fields.get("t")
                 try:
-                    tf = float(t)
+                    tf = float(t) if t is not None else None
                 except (TypeError, ValueError):
                     tf = None
                 if tf is not None and tf not in self.saved_times:
                     self.saved_times.append(tf)
+                if tf is not None:
+                    self._enter_solve()
+            if ev.event in ("progress", "residual", "courant"):
+                self._enter_solve()
             out.append(ev)
             return out
 
         # OpenFOAM progress lines → residual / courant / progress events
         tm = _RE_TIME.match(line)
         if tm:
+            self._enter_solve()
             if self.stage != "solve":
                 return out
             if self.current and isinstance(self.current.get("t"), (int, float)):
@@ -138,16 +152,17 @@ class ProgressParser:
                     self.current[k] = prev[k]
             if not self.solve_started and t > 0:
                 self.solve_started = True
-            fields = {"time": t, "sim_time": t}
+            fields: dict[str, Any] = {"time": t, "sim_time": t}
             for k in ("delta_t", "co_max", "co_mean"):
                 if k in self.current:
                     fields[k] = self.current[k]
             out.append(Event(event="progress", fields=fields))
             return out
 
-        if self.stage == "solve":
-            co = _RE_COURANT.match(line)
-            if co:
+        co = _RE_COURANT.match(line)
+        if co:
+            self._enter_solve()
+            if self.stage == "solve":
                 mean = float(co.group(1))
                 mx = float(co.group(2))
                 self.pending["co_mean"] = mean
@@ -156,8 +171,10 @@ class ProgressParser:
                     Event(event="courant", fields={"mean": mean, "max": mx})
                 )
                 return out
-            dt = _RE_DELTAT.match(line)
-            if dt:
+        dt = _RE_DELTAT.match(line)
+        if dt:
+            self._enter_solve()
+            if self.stage == "solve":
                 v = float(dt.group(1))
                 self.pending["delta_t"] = v
                 out.append(Event(event="courant", fields={"delta_t": v}))
@@ -223,6 +240,10 @@ def start_solve(
     if not case_dir.is_dir():
         raise FileNotFoundError(f"case_dir not found: {case_dir}")
     validate_wsl_case_id(wsl_case_id)
+    # A dead Windows wrapper used to leave pimpleFoam running; Start then
+    # spawned a second mpirun on the same case. Kill that leftover first.
+    if solve_is_live(wsl_case_id):
+        kill_solve(wsl_case_id, run_id)
     dst = wsl_case_path(wsl_case_id)
     win_out = windows_to_wsl_path(case_dir)
     if script_path is None:
@@ -254,8 +275,7 @@ def iter_events(proc: subprocess.Popen, *, parser: ProgressParser | None = None)
     progress = parser or ProgressParser()
     assert proc.stdout is not None
     for line in proc.stdout:
-        for ev in progress.feed(line.rstrip("\n")):
-            yield ev
+        yield from progress.feed(line.rstrip("\n"))
 
 
 def events_from_lines(lines: list[str] | Iterator[str]) -> list[Event]:
@@ -267,14 +287,31 @@ def events_from_lines(lines: list[str] | Iterator[str]) -> list[Event]:
     return out
 
 
+def solve_is_live(wsl_case_id: str) -> bool:
+    """True if mpirun / simpleFoam / pimpleFoam is still attached to this case."""
+    validate_wsl_case_id(wsl_case_id)
+    dest = wsl_case_path(wsl_case_id)
+    inner = (
+        f"CASE={shlex.quote(dest)}; "
+        "for pid in $(pgrep -x pimpleFoam; pgrep -x simpleFoam; pgrep -x mpirun; true); do "
+        '[ -d "/proc/$pid" ] || continue; '
+        'cmd=$(tr "\\0" " " < /proc/$pid/cmdline 2>/dev/null || true); '
+        'echo "$cmd" | grep -Eq "reconstructPar|live-frames|cfddesk-kill" && continue; '
+        'cwd=$(readlink -f /proc/$pid/cwd 2>/dev/null || true); '
+        'if [ "$cwd" = "$CASE" ] || echo "$cmd" | grep -Fq "$CASE"; then echo LIVE; exit 0; fi; '
+        "done; echo DEAD"
+    )
+    r = run_wsl_bash(inner, timeout=8.0)
+    return "LIVE" in ((r.stdout or "") + (r.stderr or ""))
+
+
 def stop_solve(wsl_case_id: str, *, graceful: bool = True) -> None:
     """Ask the solver to stopAt writeNow (graceful) or force-kill."""
     validate_wsl_case_id(wsl_case_id)
     dest = wsl_case_path(wsl_case_id)
     if graceful:
-        # controlDict is runTimeModifiable; same sed as w27 stopSolve.
         inner = (
-            f"sed -i 's/^stopAt .*/stopAt          writeNow;/' "
+            f"sed -i {shlex.quote(WRITE_NOW_SED)} "
             f"{json.dumps(dest + '/system/controlDict')} 2>/dev/null || true"
         )
         subprocess.run(

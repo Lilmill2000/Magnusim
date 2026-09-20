@@ -1,4 +1,4 @@
-# Stops Magnusim (Vite on the prefs port) and its npm / start.bat wrappers.
+# Stops Magnusim (Vite on the prefs port) and its npm / run.bat wrappers.
 # Does not touch other Node apps.
 $ErrorActionPreference = 'SilentlyContinue'
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cfddesk.project.web_mirrors._common import _primary_sim, _utc_now
+from cfddesk.project.web_mirrors._common import _all_sims, _primary_sim, _utc_now
 
 
 def to_web_simulations(
@@ -29,6 +29,14 @@ def to_web_simulations(
             for k, v in web.items():
                 entry.setdefault(k, v)
         sims_out.append(entry)
+    sims_out.sort(
+        key=lambda e: (
+            0 if isinstance(e.get("sort_index"), (int, float)) and not isinstance(e.get("sort_index"), bool) else 1,
+            float(e["sort_index"])
+            if isinstance(e.get("sort_index"), (int, float)) and not isinstance(e.get("sort_index"), bool)
+            else 0.0,
+        )
+    )
     aid = active_id or (sims_out[0]["id"] if sims_out else None)
     ts = updated_at or _utc_now()
     return {"active_id": aid, "simulations": sims_out, "updated_at": ts}
@@ -50,21 +58,31 @@ def to_web_runs_catalog(
 ) -> dict[str, Any]:
     sim = _primary_sim(project, sim_id)
     runs_out: list[dict[str, Any]] = []
-    active_id = None
-    if sim:
-        active_id = getattr(sim, "active_run_id", None) or None
-        for r in getattr(sim, "runs", None) or []:
+    for row in _all_sims(project):
+        sid = str(getattr(row, "id", "") or "")
+        for r in getattr(row, "runs", None) or []:
             snap = dict(getattr(r, "settings_snapshot", None) or {})
             entry = {**snap, "id": r.id, "name": r.name, "results_path": r.results_path}
             if r.mesh_id:
                 entry["mesh_id"] = r.mesh_id
+            if sid:
+                entry["simulation_id"] = sid
             runs_out.append(entry)
+    active_id = None
+    if sim:
+        active_id = getattr(sim, "active_run_id", None) or None
     ts = updated_at or _utc_now()
+    scoped = [
+        r
+        for r in runs_out
+        if sim is None or str(r.get("simulation_id") or "") == str(getattr(sim, "id", ""))
+    ]
     return {
         "runs": runs_out,
-        "active_id": active_id or (runs_out[0]["id"] if runs_out else None),
+        "active_id": active_id or (scoped[0]["id"] if scoped else (runs_out[0]["id"] if runs_out else None)),
         "updated_at": ts,
         "persistence": "filesystem",
+        **({"simulation_id": sim_id or str(sim.id)} if sim is not None and getattr(sim, "id", None) else {}),
     }
 
 

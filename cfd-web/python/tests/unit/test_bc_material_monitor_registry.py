@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from cfddesk.case.bc_registry import BC_TYPES, BcTypeSpec
 from cfddesk.case import function_objects as fo
+from cfddesk.case.bc_registry import BC_TYPES, BcTypeSpec
 from cfddesk.registry import (
     MaterialModel,
     MonitorType,
@@ -22,7 +22,6 @@ from cfddesk.registry import (
 )
 from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 from cfddesk.registry.discovery import get_hub
-
 
 EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"}
 EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate"}
@@ -47,7 +46,7 @@ def test_load_all_registers_bc_material_monitor_keys():
     hub = load_all()
     bc = get_registry("bc")
     assert set(bc.keys()) == set(BC_TYPES.keys())
-    assert len(bc.keys()) == 22
+    assert len(bc.keys()) == 7
     # Same objects as product registry (wrap, do not duplicate definitions)
     for key, spec in BC_TYPES.items():
         assert bc.get(key) is spec

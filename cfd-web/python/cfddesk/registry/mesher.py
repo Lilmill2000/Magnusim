@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
@@ -34,7 +35,7 @@ class MeshBackend:
     multi_region: bool = False
 
 
-def analysis_has_mesh_bags(hub: "RegistryHub") -> bool:
+def analysis_has_mesh_bags(hub: RegistryHub) -> bool:
     """True if any AnalysisType exposes mesh_backends / mesh_backend string bags.
 
     land4 soft-pass: AnalysisType currently has none — do not invent a bag.

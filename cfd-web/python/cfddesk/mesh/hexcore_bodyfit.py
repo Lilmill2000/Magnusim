@@ -178,7 +178,7 @@ def _extract_tets(gmsh) -> tuple[np.ndarray, np.ndarray]:
     tag_to_idx = {int(t): i for i, t in enumerate(ntags)}
     tets: list[list[int]] = []
     etypes, _etags, conn = gmsh.model.mesh.getElements(3)
-    for etype, cflat in zip(etypes, conn):
+    for etype, cflat in zip(etypes, conn, strict=False):
         cflat = np.asarray(cflat, dtype=np.int64)
         if int(etype) != TET:
             continue
@@ -670,11 +670,11 @@ def run_hexcore_bodyfit(
     for te in tets:
         volume_cells.append((TET, np.asarray(te, dtype=np.int64), 1))
 
-    boundary: list[tuple[int, np.ndarray, int, str]] = []
-    for face, pname in zip(cad_tri_global, surf.tri_patch):
+    boundary_faces: list[tuple[int, np.ndarray, int, str]] = []
+    for face, pname in zip(cad_tri_global, surf.tri_patch, strict=False):
         if not pname:
             continue
-        boundary.append(
+        boundary_faces.append(
             (TRI, np.asarray(face, dtype=np.int64), name_to_tag[pname], pname)
         )
 
@@ -683,7 +683,7 @@ def run_hexcore_bodyfit(
         msh_path,
         nodes,
         volume_cells=volume_cells,
-        boundary_faces=boundary,
+        boundary_faces=boundary_faces,
         physical_names=phys,
     )
     log.append(f"wrote {msh_path}")

@@ -56,7 +56,7 @@ def test_dump_registry_contains_builtin_keys():
     assert {row["key"] for row in payload["mesher"]} == EXPECTED_MESHER_KEYS
     assert {row["key"] for row in payload["filter"]} == EXPECTED_FILTER_KEYS
 
-    assert len(payload["bc"]) >= 20
+    assert len(payload["bc"]) == 7
     assert any(row["key"] == "newtonian_incompressible" for row in payload["material"])
     assert any(row["key"] == "area_average" for row in payload["monitor"])
     assert any(row["key"] == "flow_rate" for row in payload["monitor"])

@@ -6,14 +6,21 @@ consume. Do NOT swap to pInlet/pOutlet (legacy CLI path in surface_averages.py).
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Literal, Sequence
+from typing import Literal
 
 from cfddesk.project.transient import TransientControl
 from cfddesk.project.web_adapter import (
     bc_faces as _bc_faces_adapter,
+)
+from cfddesk.project.web_adapter import (
     is_pressure_bc as _is_pressure_bc_adapter,
+)
+from cfddesk.project.web_adapter import (
     is_velocity_inlet as _is_velocity_inlet_adapter,
+)
+from cfddesk.project.web_adapter import (
     is_velocity_outlet as _is_velocity_outlet_adapter,
 )
 
@@ -195,7 +202,7 @@ def monitor_patches_from_mapped(
         if isinstance(m, dict):
             items.append((m.get("bc") or m, str(m.get("patch") or "")))
         else:
-            items.append((m[0], str(m[1])))  # type: ignore[index]
+            items.append((m[0], str(m[1])))
 
     for bc, patch in items:
         if _is_velocity_inlet(bc) or _is_pressure_bc(bc) or _is_velocity_outlet(bc):

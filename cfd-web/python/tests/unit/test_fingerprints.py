@@ -6,7 +6,6 @@ from dataclasses import replace
 
 from cfddesk.project.model import Project
 from cfddesk.project.settings import LOCATION_FINGERPRINT_QUANTUM_M, quantize_location_m
-
 from tests.conftest import PROJECTS
 
 

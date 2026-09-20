@@ -3,8 +3,10 @@
 Volume: .cfddesk-prepared.vtu if present, otherwise OpenFOAMReader at the
 requested time (same path as the cutting plane).
 
-Seeds: this case's live polyMesh patches (not walls), labeled from
-w27-case.json / run bcs. Not a hardcoded MTP1 inlet/outlet list.
+Seeds: selected CAD faces. Inlet/outlet openings use the live polyMesh
+patch (mesh metres). Any other face uses the CAD preview tessellation,
+scaled to metres, including curved walls. Highlight in the UI is still
+only the openings.
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -32,8 +35,8 @@ from cfddesk.results.patches import (  # noqa: E402
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
-from export_cut_plane import read_volume_at_time  # noqa: E402
 from case_units import case_density, scale_pressure  # noqa: E402
+from export_cut_plane import read_volume_at_time  # noqa: E402
 
 SKIP_PATCH_TYPES = {
     "wall",
@@ -52,15 +55,16 @@ SEED_PLANE_DOC = (
 )
 
 FACE_SEED_DOC = (
-    "When seed_mode=faces, start points are an even cell-centered lattice "
-    "spanning each selected patch (half a cell in from the rim so seeds sit "
-    "in the fluid, not on wall vertices). An optional picker region (box or "
-    "circle on one face) restricts the lattice to that shape ∩ the face. "
-    "Default face is the inlet. Seeds are pushed along the patch normal into "
-    "the fluid and integrated with vtkStreamTracer (RK45) forward from inlet "
-    "faces and backward from outlet faces, so every seed yields a path "
-    "through the domain. Quantity mode count|# Seeds or density|Density(1/m^2)."
+    "When seed_mode=faces, start points sit on each selected CAD face — "
+    "inlet/outlet polyMesh patches when that face is an opening, otherwise "
+    "the CAD tessellation (curved walls included). An optional picker region "
+    "(box or circle on one face) restricts seeds to that shape ∩ the face. "
+    "Default face is the inlet. Seeds are pushed along the local surface "
+    "normal into the fluid and integrated with vtkStreamTracer (RK45). "
+    "Quantity mode count|# Seeds or density|Density(1/m^2)."
 )
+
+_CAD_FACE_RE = re.compile(r"^face\s*(\d+)(?:@Body(\d+))?$", re.I)
 
 
 def _patch_role(name: str, bc_type: str | None = None) -> str:
@@ -125,15 +129,24 @@ def _find_web_bc(web_bcs: list[dict], name, patch, cad: list[str]):
 
 def _load_seed_face_hints(case_dir: Path) -> tuple[list[dict], list[dict]]:
     project = _find_project_dir(case_dir)
-    bcs = _read_json(project / "boundary_conditions.json") or {}
-    project_bcs = [b for b in (bcs.get("boundary_conditions") or []) if isinstance(b, dict)]
-    mesh_doc = _read_json(project / "mesh.json") or {}
+    from cfddesk.project.paths import assemble_study_bcs, walk_all_meshes, walk_studies
+
+    project_bcs: list[dict] = []
+    for study in walk_studies(project):
+        project_bcs.extend(assemble_study_bcs(project, str(study.get("id"))))
+    if not project_bcs:
+        project_bcs = assemble_study_bcs(project, None)
     lives = []
-    if mesh_doc.get("live_mesh_result"):
-        lives.append(mesh_doc["live_mesh_result"])
-    for m in mesh_doc.get("meshes") or []:
+    for m in walk_all_meshes(project):
         if isinstance(m, dict) and m.get("live_mesh_result"):
             lives.append(m["live_mesh_result"])
+    if not lives:
+        mesh_doc = _read_json(project / "mesh.json") or {}
+        if mesh_doc.get("live_mesh_result"):
+            lives.append(mesh_doc["live_mesh_result"])
+        for m in mesh_doc.get("meshes") or []:
+            if isinstance(m, dict) and m.get("live_mesh_result"):
+                lives.append(m["live_mesh_result"])
     web_bcs: list[dict] = []
     seen: set[str] = set()
     for live in lives:
@@ -306,6 +319,140 @@ def catalog_entry(face_id: str, catalog: list[dict]) -> dict | None:
     return None
 
 
+def parse_cad_face_label(label: str | None) -> tuple[int, int] | None:
+    m = _CAD_FACE_RE.match(str(label or "").strip())
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2) or 1)
+
+
+def normalize_cad_face_label(label: str | None) -> str | None:
+    parsed = parse_cad_face_label(label)
+    if parsed is None:
+        return None
+    return f"face {parsed[0]}@Body{parsed[1]}"
+
+
+def find_cad_faces_vtp(case_dir: Path) -> Path | None:
+    cur = Path(case_dir).resolve()
+    for _ in range(12):
+        cand = cur / "cad_faces.vtp"
+        if cand.is_file():
+            return cand
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    root = Path(case_dir).resolve()
+    for _ in range(12):
+        if (root / "project.json").is_file():
+            try:
+                from cfddesk.project.paths import walk_geometries
+
+                for g in walk_geometries(root):
+                    cand = Path(g["dir"]) / "cad_faces.vtp"
+                    if cand.is_file():
+                        return cand
+            except Exception:
+                pass
+            legacy = root / "geometry" / "cad_faces.vtp"
+            if legacy.is_file():
+                return legacy
+            break
+        if root.parent == root:
+            break
+        root = root.parent
+    return None
+
+
+def cad_preview_scale_to_metres(vtp_path: Path) -> float:
+    meta = _read_json(vtp_path.with_name("cad_preview.json")) or {}
+    unit = str(meta.get("faces_length_unit") or meta.get("length_unit") or "mm").lower()
+    if unit in {"m", "metre", "meter", "metres", "meters"}:
+        return 1.0
+    if unit in {"in", "inch", "inches"}:
+        return 0.0254
+    return 0.001
+
+
+def _cell_scalar(mesh, name: str):
+    try:
+        data = getattr(mesh, "cell_data", None)
+        if data is None:
+            return None
+        if name in data:
+            return np.asarray(data[name]).ravel()
+        low = name.lower()
+        for key in data.keys():
+            if str(key).lower() == low:
+                return np.asarray(data[key]).ravel()
+    except Exception:
+        return None
+    return None
+
+
+def _as_poly(mesh) -> pv.PolyData | None:
+    if mesh is None:
+        return None
+    try:
+        if not isinstance(mesh, pv.PolyData):
+            mesh = mesh.extract_surface()
+        if int(getattr(mesh, "n_points", 0) or 0) < 1:
+            return None
+        return mesh
+    except Exception:
+        return None
+
+
+def load_split_wall_face(case_dir: Path, face_id: int) -> tuple[pv.PolyData | None, str]:
+    for name in (f"walls__f{face_id}", f"walls_f{face_id}"):
+        poly, src = load_bc_patch(case_dir, name)
+        if poly is not None:
+            return poly, src
+    return None, ""
+
+
+def load_cad_face_surface(case_dir: Path, label: str) -> tuple[pv.PolyData | None, str]:
+    parsed = parse_cad_face_label(label)
+    if parsed is None:
+        return None, ""
+    face_id, body_id = parsed
+    split, src = load_split_wall_face(case_dir, face_id)
+    if split is not None:
+        return split, src
+    vtp = find_cad_faces_vtp(case_dir)
+    if vtp is None:
+        return None, ""
+    try:
+        mesh = pv.read(str(vtp))
+    except Exception:
+        return None, ""
+    face_arr = _cell_scalar(mesh, "faceId")
+    if face_arr is None or face_arr.size == 0:
+        return None, ""
+    mask = face_arr.astype(int) == int(face_id)
+    solid = _cell_scalar(mesh, "solidId")
+    if solid is not None and solid.size == mask.size:
+        both = mask & (solid.astype(int) == int(body_id))
+        if np.any(both):
+            mask = both
+    ids = np.flatnonzero(mask)
+    if ids.size == 0:
+        return None, ""
+    try:
+        sub = _as_poly(mesh.extract_cells(ids))
+    except Exception:
+        return None, ""
+    if sub is None:
+        return None, ""
+    scale = cad_preview_scale_to_metres(vtp)
+    try:
+        sub = sub.copy()
+        sub.points = np.asarray(sub.points, dtype=float) * float(scale)
+    except Exception:
+        return None, ""
+    return sub, f"{vtp.name} face {face_id}@Body{body_id} (CAD × {scale:g} → mesh metres)"
+
+
 def available_face_ids(catalog: list[dict]) -> list[str]:
     return [e["id"] for e in catalog if e.get("available") and e.get("patch")]
 
@@ -325,7 +472,9 @@ def default_face_ids(catalog: list[dict]) -> list[str]:
 def resolve_face_ids(faces: list[str] | None, catalog: list[dict]) -> list[str]:
     """Normalize requested face ids; preserve order; drop unknowns; dedupe.
 
-    Explicit __none__ means no seeds. Stale (old MTP1) names fall back to the inlet.
+    Explicit __none__ means no seeds. CAD face labels (any face, not just
+    openings) are kept even when they are not in the inlet/outlet catalog.
+    Stale (old MTP1) names fall back to the inlet.
     """
     raw = [str(f).strip() for f in (faces or []) if str(f).strip()]
     if raw and all(x.lower() == "__none__" for x in raw):
@@ -336,12 +485,15 @@ def resolve_face_ids(faces: list[str] | None, catalog: list[dict]) -> list[str]:
         if f.lower() == "__none__":
             continue
         e = catalog_entry(f, catalog)
-        if e is None or not e.get("available") or not e.get("patch"):
+        if e is not None and e.get("available") and e.get("patch"):
+            if e["id"] not in seen:
+                seen.add(e["id"])
+                out.append(e["id"])
             continue
-        if e["id"] in seen:
-            continue
-        seen.add(e["id"])
-        out.append(e["id"])
+        cad = normalize_cad_face_label(f)
+        if cad and cad not in seen:
+            seen.add(cad)
+            out.append(cad)
     if out:
         return out
     return default_face_ids(catalog)
@@ -388,31 +540,48 @@ def load_selected_patches(
     skipped: list[dict] = []
     for fid in face_ids:
         e = catalog_entry(fid, catalog)
-        if e is None:
-            skipped.append({"id": fid, "reason": "unknown_face_id"})
-            continue
-        if not e["available"] or not e["patch"]:
-            skipped.append(
-                {
-                    "id": e["id"],
-                    "label": e["label"],
-                    "reason": e.get("reason") or "unavailable",
-                    "available": False,
-                }
-            )
-            continue
-        poly, src = load_bc_patch(case_dir, e["patch"])
-        if poly is None:
-            skipped.append(
-                {
-                    "id": e["id"],
-                    "label": e["label"],
-                    "patch": e["patch"],
-                    "reason": "patch_load_failed",
-                    "available": False,
-                }
-            )
-            continue
+        poly = None
+        src = ""
+        meta_id = str(fid)
+        meta_label = str(fid)
+        meta_patch = None
+        meta_role = "patch"
+        if e is not None and e.get("available") and e.get("patch"):
+            poly, src = load_bc_patch(case_dir, e["patch"])
+            meta_id = e["id"]
+            meta_label = e.get("label") or e["id"]
+            meta_patch = e.get("patch")
+            meta_role = e.get("role") or "patch"
+            if poly is None:
+                cad = normalize_cad_face_label(fid) or normalize_cad_face_label(e.get("id"))
+                if cad:
+                    poly, src = load_cad_face_surface(case_dir, cad)
+                if poly is None:
+                    skipped.append(
+                        {
+                            "id": e["id"],
+                            "label": e["label"],
+                            "patch": e["patch"],
+                            "reason": "patch_load_failed",
+                            "available": False,
+                        }
+                    )
+                    continue
+        else:
+            cad = normalize_cad_face_label(fid) or str(fid).strip()
+            meta_id = cad
+            meta_label = cad
+            poly, src = load_cad_face_surface(case_dir, cad)
+            if poly is None:
+                skipped.append(
+                    {
+                        "id": cad,
+                        "label": cad,
+                        "reason": "unknown_face_id" if e is None else (e.get("reason") or "unavailable"),
+                        "available": False,
+                    }
+                )
+                continue
         try:
             area = float(poly.area)
         except Exception:
@@ -421,10 +590,10 @@ def load_selected_patches(
         patches.append(poly)
         loaded.append(
             {
-                "id": e["id"],
-                "label": e["label"],
-                "patch": e["patch"],
-                "role": e["role"],
+                "id": meta_id,
+                "label": meta_label,
+                "patch": meta_patch,
+                "role": meta_role,
                 "n_points": int(poly.n_points),
                 "n_cells": int(poly.n_cells),
                 "area": area,
@@ -623,10 +792,10 @@ def build_face_seeds(
         ent = catalog_entry(region["face"], catalog)
         if ent is not None:
             region_id = ent["id"]
-            if region_id not in resolved:
-                resolved = [region_id]
-            else:
-                resolved = [region_id]
+        else:
+            region_id = normalize_cad_face_label(region["face"])
+        if region_id:
+            resolved = [region_id]
     patches, loaded, skipped = load_selected_patches(case_dir, resolved, catalog)
     face_source_doc = FACE_SEED_DOC
 
@@ -759,16 +928,16 @@ def build_face_seeds(
     chunks: list[np.ndarray] = []
     face_i_chunks: list[np.ndarray] = []
     inward_chunks: list[np.ndarray] = []
-    for face_i, (patch, c) in enumerate(zip(patches, per_face)):
+    for face_i, (patch, c) in enumerate(zip(patches, per_face, strict=False)):
         if c <= 0:
             continue
         pts_i = np.asarray(sample_regular_grid_on_surface(patch, c, region=region), dtype=float)
         if pts_i.size == 0:
             continue
-        nrm = _patch_inward_normal(patch, mid) if mid is not None else None
-        if nrm is not None:
-            pts_i = pts_i + nrm * eps
-            inward_chunks.append(np.tile(nrm, (pts_i.shape[0], 1)))
+        nrms = _inward_normals_at(patch, pts_i, mid) if mid is not None else None
+        if nrms is not None and nrms.shape[0] == pts_i.shape[0]:
+            pts_i = pts_i + nrms * eps
+            inward_chunks.append(nrms)
         else:
             inward_chunks.append(np.zeros((pts_i.shape[0], 3), dtype=float))
         chunks.append(pts_i)
@@ -863,6 +1032,87 @@ def _patch_inward_normal(patch: pv.PolyData, mid: np.ndarray) -> np.ndarray | No
     return _unit(nrm)
 
 
+def _closest_point_on_tri(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
+    ab = b - a
+    ac = c - a
+    ap = p - a
+    d1 = float(np.dot(ab, ap))
+    d2 = float(np.dot(ac, ap))
+    if d1 <= 0.0 and d2 <= 0.0:
+        return a
+    bp = p - b
+    d3 = float(np.dot(ab, bp))
+    d4 = float(np.dot(ac, bp))
+    if d3 >= 0.0 and d4 <= d3:
+        return b
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0.0 and d1 >= 0.0 and d3 <= 0.0:
+        v = d1 / (d1 - d3)
+        return a + v * ab
+    cp = p - c
+    d5 = float(np.dot(ab, cp))
+    d6 = float(np.dot(ac, cp))
+    if d6 >= 0.0 and d5 <= d6:
+        return c
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0.0 and d2 >= 0.0 and d6 <= 0.0:
+        w = d2 / (d2 - d6)
+        return a + w * ac
+    va = d3 * d6 - d5 * d4
+    if va <= 0.0 and (d4 - d3) >= 0.0 and (d5 - d6) >= 0.0:
+        w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+        return b + w * (c - b)
+    den = va + vb + vc
+    if abs(den) < 1e-18:
+        return a
+    v = vb / den
+    w = vc / den
+    return a + ab * v + ac * w
+
+
+def _inward_normals_at(patch: pv.PolyData, seed_pts: np.ndarray, mid: np.ndarray) -> np.ndarray | None:
+    mid = np.asarray(mid, dtype=float)
+    pts_i = np.asarray(seed_pts, dtype=float)
+    if pts_i.ndim != 2 or pts_i.shape[0] == 0:
+        return None
+    surf = patch
+    try:
+        if not isinstance(surf, pv.PolyData):
+            surf = surf.extract_surface()
+        surf = surf.triangulate()
+    except Exception:
+        pass
+    pts = np.asarray(getattr(surf, "points", []), dtype=float)
+    tris = _iter_tris(surf) if pts.shape[0] >= 3 else np.zeros((0, 3), dtype=np.int64)
+    fallback = _patch_inward_normal(patch, mid)
+    out = np.zeros((pts_i.shape[0], 3), dtype=float)
+    for i, p in enumerate(pts_i):
+        nrm = None
+        if tris.shape[0]:
+            best_d = float("inf")
+            best_n = None
+            for t in tris:
+                if int(t.max()) >= pts.shape[0]:
+                    continue
+                a, b, c = pts[int(t[0])], pts[int(t[1])], pts[int(t[2])]
+                q = _closest_point_on_tri(p, a, b, c)
+                d = float(np.sum((p - q) ** 2))
+                if d < best_d:
+                    best_d = d
+                    cr = np.cross(b - a, c - a)
+                    best_n = cr
+            nrm = _unit(best_n) if best_n is not None else None
+        if nrm is None:
+            nrm = fallback
+        if nrm is None:
+            nrm = _unit(mid - p)
+        if nrm is not None and float(np.dot(nrm, mid - p)) < 0:
+            nrm = -nrm
+        if nrm is not None:
+            out[i] = nrm
+    return out
+
+
 def _iter_tris(surf: pv.PolyData) -> np.ndarray:
     raw = np.asarray(getattr(surf, "faces", []), dtype=np.int64).ravel()
     tris: list[list[int]] = []
@@ -882,26 +1132,82 @@ def _iter_tris(surf: pv.PolyData) -> np.ndarray:
 
 
 def _point_in_tri_2d(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> bool:
+    return _barycentric_2d(p, a, b, c) is not None
+
+
+def _barycentric_2d(
+    p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray
+) -> tuple[float, float, float] | None:
     v0 = c - a
     v1 = b - a
     v2 = p - a
     den = float(v0[0] * v1[1] - v1[0] * v0[1])
     if abs(den) < 1e-18:
-        return False
+        return None
     u = float(v2[0] * v1[1] - v1[0] * v2[1]) / den
     v = float(v0[0] * v2[1] - v2[0] * v0[1]) / den
-    return u >= -1e-8 and v >= -1e-8 and (u + v) <= 1.0 + 1e-8
+    w = 1.0 - u - v
+    if u >= -1e-8 and v >= -1e-8 and w >= -1e-8:
+        return u, v, w
+    return None
+
+
+def _tri_even_points(a: np.ndarray, b: np.ndarray, c: np.ndarray, k: int) -> list[np.ndarray]:
+    k = max(1, int(k))
+    if k == 1:
+        return [(a + b + c) / 3.0]
+    res = max(2, int(math.ceil(math.sqrt(float(k) * 2.0))))
+    cands: list[np.ndarray] = []
+    for i in range(res):
+        for j in range(res - i):
+            u = (i + 1.0 / 3.0) / res
+            v = (j + 1.0 / 3.0) / res
+            w = 1.0 - u - v
+            if w <= 1e-12:
+                continue
+            cands.append(w * a + u * b + v * c)
+    if not cands:
+        return [(a + b + c) / 3.0]
+    picked = even_pick_pts(cands, k)
+    return [np.asarray(p, dtype=float) for p in picked]
+
+
+def _sample_on_triangles(
+    tris3: list[tuple[np.ndarray, np.ndarray, np.ndarray, float]],
+    n_seeds: int,
+    region: dict | None,
+) -> list[np.ndarray]:
+    if not tris3 or n_seeds < 1:
+        return []
+    areas = np.asarray([t[3] for t in tris3], dtype=float)
+    total = float(areas.sum())
+    if total <= 0:
+        return []
+    raw = areas / total * n_seeds
+    counts = np.floor(raw).astype(int)
+    rem = int(n_seeds) - int(counts.sum())
+    order = np.argsort(-(raw - counts))
+    for i in range(max(0, rem)):
+        counts[int(order[i % len(order)])] += 1
+    out: list[np.ndarray] = []
+    for (a, b, c, _area), k in zip(tris3, counts, strict=False):
+        if int(k) <= 0:
+            continue
+        for p in _tri_even_points(a, b, c, int(k)):
+            if region is not None and not point_in_region(p, region):
+                continue
+            out.append(p)
+    return out
 
 
 def sample_regular_grid_on_surface(
     patch: pv.PolyData, n_seeds: int, region: dict | None = None
 ) -> np.ndarray:
-    """Even lattice spanning the face, optionally clipped to a picker region.
+    """Even seeds on the actual face surface, optionally clipped to a region.
 
-    Cell-centered in the (region ∩ face) 2D AABB so the outer row sits half a
-    cell inside the rim. Triangle tests drop cells that miss a non-rectangular
-    patch. A previous 14% box inset plus 88% radial clip left empty bands
-    on tall inlets (Ball Test top/bottom).
+    A cell-centered lattice in the face's best-fit plane is lifted onto the
+    triangles (so a curved wall keeps its curvature). Strongly curved faces
+    also get area-weighted samples on the tessellation so folds still fill.
     """
     n_seeds = max(1, int(n_seeds))
     region = parse_region(region)
@@ -917,14 +1223,23 @@ def sample_regular_grid_on_surface(
         return np.zeros((0, 3), dtype=float)
     if pts.shape[0] == 1:
         return pts[:1].copy()
-    com, e0, e1, _nrm = _patch_frame(pts)
+    com, e0, e1, nrm = _patch_frame(pts)
     xy = np.column_stack(((pts - com) @ e0, (pts - com) @ e1))
     tris = _iter_tris(surf)
-    tris2 = []
+    tris2: list[np.ndarray] = []
+    tris3: list[tuple[np.ndarray, np.ndarray, np.ndarray, float]] = []
     for t in tris:
         if int(t.max()) >= pts.shape[0]:
             continue
+        a3, b3, c3 = pts[int(t[0])], pts[int(t[1])], pts[int(t[2])]
+        area = 0.5 * float(np.linalg.norm(np.cross(b3 - a3, c3 - a3)))
+        if area <= 1e-18:
+            continue
+        tris3.append((a3, b3, c3, area))
         tris2.append(np.stack([xy[int(t[0])], xy[int(t[1])], xy[int(t[2])]], axis=0))
+    residual = float(np.max(np.abs((pts - com) @ nrm))) if pts.size else 0.0
+    span3 = float(np.linalg.norm(pts.max(axis=0) - pts.min(axis=0))) if pts.size else 1.0
+    curved = residual > 0.12 * max(span3, 1e-12)
     lo = xy.min(axis=0)
     hi = xy.max(axis=0)
     if region is not None:
@@ -937,11 +1252,14 @@ def sample_regular_grid_on_surface(
     span = np.maximum(hi - lo, 1e-12)
     aspect = float(span[0]) / float(span[1])
 
-    def on_face(p2: np.ndarray) -> bool:
-        for tri in tris2:
-            if _point_in_tri_2d(p2, tri[0], tri[1], tri[2]):
-                return True
-        return False
+    def lift_on_face(p2: np.ndarray) -> np.ndarray | None:
+        for (a3, b3, c3, _area), tri in zip(tris3, tris2, strict=False):
+            bc = _barycentric_2d(p2, tri[0], tri[1], tri[2])
+            if bc is None:
+                continue
+            u, v, w = bc
+            return w * a3 + v * b3 + u * c3
+        return None
 
     def grid_points(nu: int, nv: int) -> list[np.ndarray]:
         nu = max(1, int(nu))
@@ -952,9 +1270,9 @@ def sample_regular_grid_on_surface(
         for u in us:
             for v in vs:
                 p2 = lo + np.array([float(u) * span[0], float(v) * span[1]])
-                if not on_face(p2):
+                p3 = lift_on_face(p2)
+                if p3 is None:
                     continue
-                p3 = com + p2[0] * e0 + p2[1] * e1
                 if region is not None and not point_in_region(p3, region):
                     continue
                 out.append(p3)
@@ -967,11 +1285,14 @@ def sample_regular_grid_on_surface(
         hits = grid_points(max(1, int(np.ceil(nu * scale))), max(1, int(np.ceil(nv * scale))))
         if len(hits) >= n_seeds:
             break
+    if curved or len(hits) < n_seeds:
+        extra = _sample_on_triangles(tris3, n_seeds, region)
+        hits.extend(extra)
     if not hits:
         if region is not None:
             inside = [p for p in pts if point_in_region(p, region)]
             return even_pick_pts(inside, n_seeds) if inside else np.zeros((0, 3), dtype=float)
-        hits = [com + 0.92 * (pts[i] - com) for i in np.linspace(0, pts.shape[0] - 1, n_seeds, dtype=int)]
+        hits = [pts[i] for i in np.linspace(0, pts.shape[0] - 1, n_seeds, dtype=int)]
     return even_pick_pts(hits, n_seeds)
 
 
@@ -1069,7 +1390,7 @@ def trace_from_seeds(
             max_step_length=1.0,
             max_steps=int(max(1000, max_steps)),
             terminal_speed=terminal,
-            max_error=1e-6,
+            max_error=1e-4,
             max_length=float(max_len),
             compute_vorticity=False,
             interpolator_type="cell",
@@ -1122,7 +1443,7 @@ def trace_from_seeds(
             continue
         if "ReasonForTermination" in stream.cell_data:
             r = np.asarray(stream.cell_data["ReasonForTermination"]).ravel()
-            for k, v in zip(*np.unique(r, return_counts=True)):
+            for k, v in zip(*np.unique(r, return_counts=True), strict=False):
                 reasons[int(k)] = reasons.get(int(k), 0) + int(v)
         part = pv.PolyData(
             np.asarray(stream.points, dtype=float),
@@ -1229,25 +1550,38 @@ def export_particle_trace(
     n_seeds: int = 40,
     density: float = 10000.0,
     region=None,
+    prepared_grid=None,
+    volume_source: str | None = None,
 ):
     case_dir = case_dir.resolve()
     u_path = case_dir / str(time) / "U"
     vtu_path = case_dir / ".cfddesk-prepared.vtu"
-    mesh, volume_source = read_volume_at_time(case_dir, str(time))
+    if prepared_grid is not None:
+        point_grid = prepared_grid
+        if volume_source is None:
+            volume_source = "worker-cache"
+        mesh = prepared_grid
+    else:
+        mesh, volume_source = read_volume_at_time(case_dir, str(time))
+        if mesh is None or int(getattr(mesh, "n_cells", 0) or 0) < 1:
+            raise RuntimeError(f"volume read failed: {case_dir}")
+        if "U" not in mesh.point_data and "U" not in mesh.cell_data:
+            if not u_path.is_file():
+                raise FileNotFoundError(f"missing OpenFOAM U: {u_path}")
+            raise RuntimeError("volume has no vector U for particle trace")
+        point_grid = point_data_grid(mesh)
+        if "U" not in point_grid.point_data:
+            raise RuntimeError(
+                "No point-data U for particle trace (need vector U, not magU alone)"
+            )
+        # Pressure coloring in Pa (simpleFoam p is kinematic).
+        scale_pressure(point_grid, case_density(case_dir))
     if mesh is None or int(getattr(mesh, "n_cells", 0) or 0) < 1:
         raise RuntimeError(f"volume read failed: {case_dir}")
-    if "U" not in mesh.point_data and "U" not in mesh.cell_data:
-        if not u_path.is_file():
-            raise FileNotFoundError(f"missing OpenFOAM U: {u_path}")
-        raise RuntimeError("volume has no vector U for particle trace")
-
-    point_grid = point_data_grid(mesh)
-    if "U" not in point_grid.point_data:
+    if "U" not in getattr(point_grid, "point_data", {}):
         raise RuntimeError(
             "No point-data U for particle trace (need vector U, not magU alone)"
         )
-    # Pressure coloring in Pa (simpleFoam p is kinematic).
-    scale_pressure(point_grid, case_density(case_dir))
     try:
         point_grid.set_active_vectors("U")
     except Exception:

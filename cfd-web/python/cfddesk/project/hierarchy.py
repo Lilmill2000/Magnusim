@@ -8,14 +8,14 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from cfddesk.project.mesh_refinements import (
+    MeshRefinementStub,
+    parse_refinement_stubs,
+)
 from cfddesk.project.settings import (
     BoundarySettings,
     MeshSettings,
     SolverSettings,
-)
-from cfddesk.project.mesh_refinements import (
-    MeshRefinementStub,
-    parse_refinement_stubs,
 )
 
 
@@ -77,7 +77,7 @@ class Body:
         }
 
     @staticmethod
-    def from_dict(data: dict[str, Any]) -> "Body":
+    def from_dict(data: dict[str, Any]) -> Body:
         role = str(data.get("role") or "fluid")
         if role not in ("fluid", "solid", "void"):
             role = "fluid"

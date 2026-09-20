@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
-
 from OCP.BRep import BRep_Builder
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeSolid,
@@ -20,13 +19,13 @@ from OCP.gp import gp_Trsf
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.IGESControl import IGESControl_Controller, IGESControl_Reader
 from OCP.Interface import Interface_Static
+from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import (
     STEPControl_AsIs,
     STEPControl_Controller,
     STEPControl_Reader,
     STEPControl_Writer,
 )
-from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.StlAPI import StlAPI_Reader
 from OCP.TopAbs import TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer

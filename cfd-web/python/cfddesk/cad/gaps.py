@@ -13,9 +13,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from OCP.Bnd import Bnd_Box
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
-from OCP.Bnd import Bnd_Box
 from OCP.GeomAbs import GeomAbs_Circle, GeomAbs_Cylinder, GeomAbs_Plane
 from OCP.TopAbs import TopAbs_EDGE
 from OCP.TopExp import TopExp_Explorer
@@ -221,8 +221,8 @@ def _gap_pair(
         gap_m=float(gap),
         r_inner_m=float(r0),
         r_outer_m=float(r1),
-        axis=tuple(a["axis"]),  # type: ignore[arg-type]
-        origin_m=tuple(a["origin_m"]),  # type: ignore[arg-type]
+        axis=tuple(a["axis"]),
+        origin_m=tuple(a["origin_m"]),
         kind=kind,
         s_min_m=float(min(a["s_min_m"], b["s_min_m"])),
         s_max_m=float(max(a["s_max_m"], b["s_max_m"])),

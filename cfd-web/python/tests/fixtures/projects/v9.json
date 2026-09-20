@@ -58,7 +58,7 @@
     {
       "id": "bb7e642d6f8d",
       "name": "Geometry 1",
-      "step_path": "C:\\Users\\drmil\\Desktop\\Code\\CFD\\cfd-web\\projects\\sample-project-steady-state-20260914220621-a75ad1\\geometry\\source.step",
+      "step_path": "C:\\Magnusim-fixture\\cfd-web\\projects\\sample-project-steady-state-20260914220621-a75ad1\\geometry\\source.step",
       "faces": [
         {
           "id": 0,

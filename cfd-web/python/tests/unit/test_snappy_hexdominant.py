@@ -31,7 +31,6 @@ def test_block_from_bounds():
 
 
 def test_write_dicts_and_counts(tmp_path: Path):
-    bounds = {"xmin": 0.0, "xmax": 0.05, "ymin": 0.0, "ymax": 0.04, "zmin": 0.0, "zmax": 0.03}
     # minimal ASCII STL
     stl = tmp_path / "Body1.stl"
     stl.write_text(

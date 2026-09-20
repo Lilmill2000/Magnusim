@@ -9,7 +9,7 @@ import { envGet } from './env-compat.js';
 export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBody }) {
   if (parts[0] !== 'api' || parts[1] !== 'prefs') return false;
 
-  if (req.method === 'GET' && !parts[2]) {
+  if ((req.method === 'GET' || req.method === 'HEAD') && !parts[2]) {
     return sendJson(res, 200, {
       ...publicPrefs(),
       listen_port: listenPort(),
@@ -44,6 +44,9 @@ export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBod
       patch.port = p;
     }
     if (body.wizard_completed != null) patch.wizard_completed = !!body.wizard_completed;
+    if (body.collapse_completed_sections != null) {
+      patch.collapse_completed_sections = !!body.collapse_completed_sections;
+    }
     writeLocalDoc(patch);
     const prefs = publicPrefs();
     const bound = clampPort(envGet('BOUND_PORT')) || listenPort();

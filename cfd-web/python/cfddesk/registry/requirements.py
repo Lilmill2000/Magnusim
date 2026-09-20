@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-
 RequirementKind = Literal["wsl_tool", "python", "gpu"]
 
 

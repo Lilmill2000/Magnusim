@@ -43,11 +43,11 @@ class ColorScale:
         if cmap not in ("coolwarm", "viridis", "jet", "gray"):
             cmap = DEFAULT_CMAP
         return ColorScale(
-            mode=mode,  # type: ignore[arg-type]
+            mode=mode,
             vmin=float(vmin) if vmin is not None else None,
             vmax=float(vmax) if vmax is not None else None,
             field=str(data.get("field", "magU")),
-            cmap=cmap,  # type: ignore[arg-type]
+            cmap=cmap,
         )
 
     def resolve(self, data_min: float, data_max: float) -> tuple[float, float]:

@@ -29,7 +29,7 @@ from typing import Any
 import numpy as np
 from scipy.spatial import cKDTree
 
-from cfddesk.cad.step import (LoadedSolid, extract_cad_edges, shape_diagonal, tessellate_faces)
+from cfddesk.cad.step import LoadedSolid, extract_cad_edges, shape_diagonal, tessellate_faces
 from cfddesk.project.model import Project
 
 
@@ -184,16 +184,21 @@ def _boundary_points(mesh_dir: Path) -> np.ndarray:
     if reader.time_values:
         reader.set_active_time_value(reader.time_values[0])
     mb = reader.read()
+    internal = mb["internalMesh"]
+    if not isinstance(internal, pv.DataSet):
+        raise RuntimeError("OpenFOAM internal mesh is missing")
     bnd = mb["boundary"]
+    if not isinstance(bnd, pv.MultiBlock):
+        raise RuntimeError("OpenFOAM boundary is not a block collection")
     pl: list[np.ndarray] = []
     for bi in range(bnd.n_blocks):
         b = bnd[bi]
-        if b is not None and getattr(b, "n_points", 0):
+        if isinstance(b, pv.DataSet) and b.n_points > 0:
             pl.append(np.asarray(b.points, dtype=np.float64))
     if pl:
         return np.unique(np.vstack(pl), axis=0)
     return np.asarray(
-        mb["internalMesh"].extract_surface().points, dtype=np.float64
+        internal.extract_surface().points, dtype=np.float64
     )
 
 
@@ -536,14 +541,19 @@ def _boundary_surface(mesh_dir: Path):
     if reader.time_values:
         reader.set_active_time_value(reader.time_values[0])
     mb = reader.read()
+    internal = mb["internalMesh"]
+    if not isinstance(internal, pv.DataSet):
+        raise RuntimeError("OpenFOAM internal mesh is missing")
     bnd = mb["boundary"]
+    if not isinstance(bnd, pv.MultiBlock):
+        raise RuntimeError("OpenFOAM boundary is not a block collection")
     surfs: list = []
     for bi in range(bnd.n_blocks):
         b = bnd[bi]
-        if b is not None and getattr(b, "n_points", 0):
+        if isinstance(b, pv.DataSet) and b.n_points > 0:
             surfs.append(b)
     if not surfs:
-        return mb["internalMesh"].extract_surface(
+        return internal.extract_surface(
             algorithm="dataset_surface"
         ).triangulate()
     surf = surfs[0]

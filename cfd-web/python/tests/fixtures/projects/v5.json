@@ -18,7 +18,7 @@
     "local_case": "case",
     "local_results": "results"
   },
-  "step_path": "C:\\Users\\drmil\\Desktop\\Code\\CFD\\cfd-web\\projects\\sample-project-steady-state-20260914220621-a75ad1\\geometry\\source.step",
+  "step_path": "C:\\Magnusim-fixture\\cfd-web\\projects\\sample-project-steady-state-20260914220621-a75ad1\\geometry\\source.step",
   "faces": [
     {
       "id": 0,

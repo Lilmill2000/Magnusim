@@ -1,7 +1,8 @@
-"""Bridge web-format project JSON (w18/w19/w20/w22/w27) → RunSpec.
+"""Bridge web-format sibling JSON (w18/w19/w20/w22/w27) → RunSpec.
 
-Throwaway for Phase 2 once Project schema absorbs the web files. Phase 1 needs
-this so prepare_run can delete the JS writer without rewriting UI persistence.
+Siblings are derived mirrors of Project (v15 write-through). prepare_run still
+reads those files so Start does not have to load the versioned project.json
+schema. Not a second writer — AnalysisType.write_case owns the OpenFOAM case.
 """
 
 from __future__ import annotations
@@ -156,7 +157,7 @@ def air_from_materials(
     air = next((m for m in scoped if re.search(r"air", str(m.get("name") or ""), re.I)), None)
     if not air:
         return None
-    vols = air.get("assigned_volumes") if isinstance(air.get("assigned_volumes"), list) else []
+    vols = checked if isinstance((checked := air.get("assigned_volumes")), list) else []
     nu = float(air.get("kinematic_viscosity") or 0)
     rho = float(air.get("density") or 0)
     return {
@@ -169,7 +170,16 @@ def air_from_materials(
 
 def load_face_props(project_dir: Path) -> dict[str, FaceProps]:
     """Port of w27 loadFaceProps (read-only; no STEP regen)."""
-    meta = _read_json(project_dir / "geometry" / "cad_preview.json")
+    from cfddesk.project.paths import walk_geometries
+
+    meta: dict | list | None = None
+    for g in walk_geometries(project_dir):
+        cand = _read_json(Path(g["dir"]) / "cad_preview.json")
+        if isinstance(cand, dict) and isinstance(cand.get("faces"), list) and cand["faces"]:
+            meta = cand
+            break
+    if meta is None:
+        meta = _read_json(project_dir / "geometry" / "cad_preview.json")
     out: dict[str, FaceProps] = {}
     if not isinstance(meta, dict) or not isinstance(meta.get("faces"), list):
         return out
@@ -187,12 +197,12 @@ def load_face_props(project_dir: Path) -> dict[str, FaceProps]:
         out[key] = FaceProps(
             area_m2=(float(area) * s * s) if area is not None else None,
             centroid=(
-                tuple(float(c) * s for c in cent)  # type: ignore[misc]
+                (float(cent[0]) * s, float(cent[1]) * s, float(cent[2]) * s)
                 if isinstance(cent, (list, tuple)) and len(cent) >= 3
                 else None
             ),
             normal=(
-                tuple(float(c) for c in norm)  # type: ignore[misc]
+                (float(norm[0]), float(norm[1]), float(norm[2]))
                 if isinstance(norm, (list, tuple)) and len(norm) >= 3
                 else None
             ),
@@ -252,11 +262,19 @@ def resolve_mesh(
     require_poly: bool = True,
 ) -> dict[str, Any]:
     """Subset of w27 resolveProjectMesh for prepare_run / validate."""
-    mesh_doc = _read_json(project_dir / "mesh.json")
-    if not isinstance(mesh_doc, dict):
-        return {"ok": False, "error": "mesh.json missing — generate a mesh first"}
-    meshes = mesh_doc.get("meshes") if isinstance(mesh_doc.get("meshes"), list) else []
-    scoped = [m for m in meshes if matches_study(m, simulation_id, None)]
+    from cfddesk.project.web_writes import assemble_mesh_doc
+
+    mesh_doc: dict | list | None
+    if simulation_id:
+        mesh_doc = assemble_mesh_doc(project_dir, str(simulation_id), mesh_id)
+        meshes = checked if isinstance((checked := mesh_doc.get("meshes")), list) else []
+        scoped = [m for m in meshes if matches_study(m, simulation_id, None)]
+    else:
+        mesh_doc = _read_json(project_dir / "mesh.json")
+        if not isinstance(mesh_doc, dict):
+            return {"ok": False, "error": "mesh.json missing — generate a mesh first"}
+        meshes = checked if isinstance((checked := mesh_doc.get("meshes")), list) else []
+        scoped = [m for m in meshes if matches_study(m, simulation_id, None)]
     wanted = None
     if mesh_id:
         wanted = next((m for m in scoped if str(m.get("id")) == str(mesh_id)), None)
@@ -269,13 +287,27 @@ def resolve_mesh(
             wanted = scoped[0]
 
     live = (wanted or {}).get("live_mesh_result") if wanted else None
-    case_dir = Path(live["case_dir"]) if isinstance(live, dict) and live.get("case_dir") else None
-    poly = None
-    if isinstance(live, dict):
-        if live.get("mesh_path"):
-            poly = Path(live["mesh_path"])
-        elif case_dir:
-            poly = case_dir / "constant" / "polyMesh"
+    case_dir = None
+    if wanted and wanted.get("case_dir"):
+        case_dir = Path(wanted["case_dir"])
+    elif isinstance(live, dict) and live.get("case_dir"):
+        case_dir = Path(live["case_dir"])
+    poly_from_case = (case_dir / "constant" / "polyMesh") if case_dir else None
+    poly_from_live = (
+        Path(live["mesh_path"]) if isinstance(live, dict) and live.get("mesh_path") else None
+    )
+
+    def _poly_complete(path: Path | None) -> bool:
+        return bool(path and (path / "owner").is_file() and (path / "points").is_file())
+
+    # Prefer the study folder's polyMesh. mesh.json still carries the path from
+    # before the study folder was renamed (Incompressible_Steady-state → _1).
+    if _poly_complete(poly_from_case):
+        poly = poly_from_case
+    elif _poly_complete(poly_from_live):
+        poly = poly_from_live
+    else:
+        poly = poly_from_case or poly_from_live
     if require_poly:
         if not case_dir or not case_dir.is_dir():
             return {
@@ -305,19 +337,22 @@ def resolve_mesh(
 
 def map_bc_to_patch(bc: dict, patch_names: set[str], web_bcs: list[dict] | None = None) -> str:
     want = sanitize_patch_name(str(bc.get("name") or ""))
-    if want in patch_names:
-        return want
+    hit = unique_numbered_patch(want, patch_names)
+    if hit:
+        return hit
     for f in bc_faces(bc):
         alt = sanitize_patch_name(f)
-        if alt in patch_names:
-            return alt
+        hit = unique_numbered_patch(alt, patch_names)
+        if hit:
+            return hit
     face_set = set(bc_faces(bc))
     for baked in web_bcs or []:
         baked_faces = set(bc_faces(baked))
         if face_set & baked_faces:
             from_baked = sanitize_patch_name(str(baked.get("name") or ""))
-            if from_baked in patch_names:
-                return from_baked
+            hit = unique_numbered_patch(from_baked, patch_names)
+            if hit:
+                return hit
     return want
 
 
@@ -341,7 +376,6 @@ def web_bc_to_registry(bc: WebBc | dict) -> tuple[str, dict[str, Any]]:
     else:
         d = dict(bc)
 
-    bct = str(d.get("bc_type") or "")
     unit = str(d.get("unit") or "")
     val = d.get("value")
     settings: dict[str, Any] = {}
@@ -384,16 +418,18 @@ def web_bc_to_registry(bc: WebBc | dict) -> tuple[str, dict[str, Any]]:
                 and _to("volumetric_flow", val, unit, "m³/s") is None
             ):
                 settings["mass_flow_rate"] = _to("mass_flow", val, unit, "kg/s") or 0.0
-                return "velocity_inlet_mass_flow", settings
+                return "velocity_inlet_mass", settings
             settings["volumetric_flow_rate"] = _to("volumetric_flow", val, unit, "m³/s") or 0.0
             return "velocity_inlet_volumetric", settings
         speed = _to("velocity", val, unit, "m/s")
         if speed is None:
             speed = 1.0
         if re.search(r"vector", str(d.get("direction") or ""), re.I) and isinstance(
-            d.get("vector"), (list, tuple)
+            (vector := d.get("vector")), (list, tuple)
         ):
-            vec = [float(x) for x in d["vector"][:3]]
+            vec = [float(x) for x in vector[:3]]
+            if len(vec) != 3 or not all(math.isfinite(x) for x in vec):
+                raise ValueError("Velocity direction requires three finite components")
             mag = math.hypot(*vec) or 1.0
             settings["direction_mode"] = "vector"
             settings["velocity"] = [speed * (vec[0] / mag), speed * (vec[1] / mag), speed * (vec[2] / mag)]
@@ -408,9 +444,6 @@ def web_bc_to_registry(bc: WebBc | dict) -> tuple[str, dict[str, Any]]:
     if is_pressure_bc(d):
         p = _to("pressure", val, unit, "Pa")
         settings["gauge_pressure"] = 0.0 if p is None else p
-        # Distinguish inlet vs outlet by type string when present
-        if re.search(r"inlet", bct, re.I):
-            return "pressure_inlet_gauge", settings
         return "pressure_outlet_gauge", settings
 
     # Fallback: wall
@@ -425,9 +458,87 @@ def _active_sim_id(project_dir: Path, simulation_id: str | None) -> str | None:
         return str(sim["id"])
     sims = _read_json(project_dir / "simulations.json")
     if isinstance(sims, dict):
+        if sims.get("active_id"):
+            return str(sims["active_id"])
         arr = sims.get("simulations")
         if isinstance(arr, list) and arr:
             return str(arr[0].get("id") or "") or None
+    return None
+
+
+def resolve_study_id(
+    project_dir: Path | str,
+    simulation_id: str | None = None,
+    mesh_id: str | None = None,
+) -> str | None:
+    """Active study for a generate/solve: explicit id, then the mesh record, then catalog."""
+    root = Path(project_dir)
+    if simulation_id:
+        return str(simulation_id)
+    mid = str(mesh_id or "").strip()
+    if mid:
+        from cfddesk.project.paths import find_mesh
+
+        found = find_mesh(root, mid)
+        if found and found.get("simulation_id"):
+            return str(found["simulation_id"])
+        mesh_doc = _read_json(root / "mesh.json")
+        if isinstance(mesh_doc, dict):
+            for m in mesh_doc.get("meshes") or []:
+                if isinstance(m, dict) and str(m.get("id") or "") == mid:
+                    sid = str(m.get("simulation_id") or "").strip()
+                    if sid:
+                        return sid
+            sid = str(mesh_doc.get("simulation_id") or "").strip()
+            if sid:
+                return sid
+    return _active_sim_id(root, None)
+
+
+def study_web_bcs(
+    project_dir: Path | str,
+    web_bcs: list | None,
+    *,
+    simulation_id: str | None = None,
+    mesh_id: str | None = None,
+) -> list[dict]:
+    """BCs that belong to one study. Other studies' Pressure 1/2 must not share this mesh.
+
+    Folder ``boundary_conditions/BC_*/bc.json`` rows win over an empty leftover
+    ``boundary_conditions.json`` list (the file generate used to read alone).
+    """
+    from cfddesk.project.paths import assemble_study_bcs
+
+    sim_id = resolve_study_id(project_dir, simulation_id, mesh_id)
+    assembled = assemble_study_bcs(project_dir, sim_id)
+    have = {str(b.get("id")) for b in assembled if isinstance(b, dict) and b.get("id") is not None}
+    names = {str(b.get("name")) for b in assembled if isinstance(b, dict) and b.get("name")}
+    for b in web_bcs or []:
+        if not isinstance(b, dict) or not matches_study(b, sim_id):
+            continue
+        bid = b.get("id")
+        if bid is not None and str(bid) in have:
+            continue
+        if bid is None and b.get("name") and str(b.get("name")) in names:
+            continue
+        assembled.append(b)
+        if bid is not None:
+            have.add(str(bid))
+        if b.get("name"):
+            names.add(str(b.get("name")))
+    return [b for b in assembled if isinstance(b, dict) and matches_study(b, sim_id)]
+
+
+def unique_numbered_patch(want: str, patch_names: set[str]) -> str | None:
+    """``pressure_1`` matches ``pressure_1`` or a unique ``pressure_1_3`` from name collisions."""
+    if want in patch_names:
+        return want
+    if not want:
+        return None
+    pat = re.compile(r"^" + re.escape(want) + r"(?:_\d+)?$")
+    hits = [p for p in patch_names if pat.match(p)]
+    if len(hits) == 1:
+        return hits[0]
     return None
 
 
@@ -467,12 +578,34 @@ def load_run_spec(
     """
     root = Path(project_dir)
     sim_id = _active_sim_id(root, simulation_id)
-    mats = _read_json(root / "materials.json")
-    bcs_doc = _read_json(root / "boundary_conditions.json")
-    aa = _read_json(root / "area_average.json") or _read_json(root / "result_controls.json")
+    from cfddesk.project.paths import study_json_path
+
+    def _study_or_root(name: str) -> dict:
+        path = study_json_path(root, sim_id, name) if sim_id else None
+        if path is not None:
+            data = _read_json(path)
+            if isinstance(data, dict):
+                return data
+        data = _read_json(root / name)
+        return data if isinstance(data, dict) else {}
+
+    mats = _study_or_root("materials.json")
+    from cfddesk.project.paths import assemble_study_bc_defaults, assemble_study_bcs
+
+    assembled_bcs = assemble_study_bcs(root, sim_id)
+    defaults = assemble_study_bc_defaults(root, sim_id)
+    leftover = _study_or_root("boundary_conditions.json") if not assembled_bcs else {}
+    if not isinstance(leftover, dict):
+        leftover = {}
+    bcs_doc = {
+        **leftover,
+        "boundary_conditions": assembled_bcs or leftover.get("boundary_conditions") or [],
+        "defaults": defaults,
+    }
+    aa = _study_or_root("result_controls.json") or _study_or_root("area_average.json")
     if not isinstance(aa, dict):
         aa = {}
-    ctrl = _read_json(root / "simulation_control.json")
+    ctrl = _study_or_root("simulation_control.json")
     if not isinstance(ctrl, dict):
         ctrl = {}
 
@@ -594,27 +727,71 @@ def load_run_spec(
 
 # Phase 2 land8 re-exports (Project <-> web sibling mirrors)
 from cfddesk.project.web_mirrors import (  # noqa: E402
-    WEB_SIBLING_RELS,
-    apply_web_sibling_to_project,
-    from_web_boundary_conditions,
-    from_web_materials,
-    from_web_mesh,
-    from_web_mesh_refinements,
-    from_web_result_controls,
-    from_web_runs_catalog,
-    from_web_simulation_control,
-    from_web_simulations,
-    ingest_web_siblings_if_newer,
-    is_python_project_doc,
-    load_or_synthesize_project,
-    mark_web_mirrors_derived,
-    regenerate_web_mirrors,
-    to_web_boundary_conditions,
-    to_web_materials,
-    to_web_mesh,
-    to_web_mesh_refinements,
-    to_web_result_controls,
-    to_web_runs_catalog,
-    to_web_simulation_control,
-    to_web_simulations,
+    WEB_SIBLING_RELS as WEB_SIBLING_RELS,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    apply_web_sibling_to_project as apply_web_sibling_to_project,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    from_web_boundary_conditions as from_web_boundary_conditions,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    from_web_materials as from_web_materials,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    from_web_mesh as from_web_mesh,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    from_web_mesh_refinements as from_web_mesh_refinements,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    from_web_result_controls as from_web_result_controls,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    from_web_runs_catalog as from_web_runs_catalog,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    from_web_simulation_control as from_web_simulation_control,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    from_web_simulations as from_web_simulations,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    ingest_web_siblings_if_newer as ingest_web_siblings_if_newer,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    is_python_project_doc as is_python_project_doc,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    load_or_synthesize_project as load_or_synthesize_project,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    mark_web_mirrors_derived as mark_web_mirrors_derived,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    regenerate_web_mirrors as regenerate_web_mirrors,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    to_web_boundary_conditions as to_web_boundary_conditions,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    to_web_materials as to_web_materials,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    to_web_mesh as to_web_mesh,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    to_web_mesh_refinements as to_web_mesh_refinements,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    to_web_result_controls as to_web_result_controls,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    to_web_runs_catalog as to_web_runs_catalog,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    to_web_simulation_control as to_web_simulation_control,
+)
+from cfddesk.project.web_mirrors import (  # noqa: E402 — public compatibility exports after local definitions
+    to_web_simulations as to_web_simulations,
 )

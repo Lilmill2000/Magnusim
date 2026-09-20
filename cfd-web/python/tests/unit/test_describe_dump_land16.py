@@ -64,6 +64,11 @@ def test_describe_emits_numerics_and_control_for_analysis():
 
     assert steady["numerics_schema"]["properties"]["ddt_default"]["default"] == "steadyState"
     assert transient["numerics_schema"]["properties"]["ddt_default"]["default"] == "Euler"
+    assert steady["time_dependency"] == "steady"
+    assert transient["time_dependency"] == "transient"
+    assert steady["default_turbulence"] == "kOmegaSST"
+    assert steady["default_solver"] == "simpleFoam"
+    assert transient["default_solver"] == "pimpleFoam"
 
 
 def test_dump_registry_analysis_includes_numerics_control():

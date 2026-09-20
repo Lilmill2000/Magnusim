@@ -2,8 +2,6 @@
 """RAS field writer coverage."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from cfddesk.case.ras import _ras_boundary_blocks, inlet_turbulence_scalars, write_ras_fields
 
 

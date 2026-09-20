@@ -66,7 +66,7 @@ def build_simple_foam_amgx() -> SolverApp:
     )
 
 
-def register_openfoam_solvers(hub: "RegistryHub") -> None:
+def register_openfoam_solvers(hub: RegistryHub) -> None:
     """Register simpleFoam / pimpleFoam / simpleFoam_amgx (idempotent same-plugin)."""
     reg = hub.registry("solver")
     reg.register(build_simple_foam(), plugin="builtin")

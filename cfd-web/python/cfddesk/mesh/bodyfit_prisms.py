@@ -44,12 +44,12 @@ def _inward_node_normals(
     """Area-weighted normals flipped so a short step lands inside the solid."""
     fn = _tri_normals(nodes, tris)
     acc = np.zeros_like(nodes)
-    wt = np.zeros(len(nodes))
+    wt: np.ndarray = np.zeros(len(nodes))
     p0 = nodes[tris[:, 0]]
     p1 = nodes[tris[:, 1]]
     p2 = nodes[tris[:, 2]]
     area = 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0), axis=1)
-    for t, a, nrm in zip(tris, area, fn):
+    for t, a, nrm in zip(tris, area, fn, strict=False):
         for i in t:
             acc[int(i)] += nrm * float(a)
             wt[int(i)] += float(a)
@@ -190,7 +190,7 @@ def _safe_heights(
     want = max(float(want_m), 1e-6)
     out = np.zeros(len(nodes))
     samples = (1.0, 0.75, 0.5, 0.35, 0.2)
-    for i, (p, n) in enumerate(zip(nodes, normals)):
+    for i, (p, n) in enumerate(zip(nodes, normals, strict=False)):
         ok = 0.0
         for frac in samples:
             h = want * frac

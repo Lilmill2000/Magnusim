@@ -62,6 +62,7 @@ def _manifest_row(manifest: Any) -> dict[str, Any]:
         "version": getattr(manifest, "version", "0.0.0"),
         "requires": _jsonable(getattr(manifest, "requires", None) or []),
         "provides": _jsonable(getattr(manifest, "provides", None) or {}),
+        "ui": getattr(manifest, "ui", None),
     }
 
 

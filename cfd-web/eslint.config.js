@@ -1,5 +1,6 @@
 import js from '@eslint/js';
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
 
 const phase0Rules = {
   'no-unused-vars': 'warn',
@@ -56,6 +57,7 @@ export default [
       'e2e/**',
       'scripts/diag-*.cjs',
       'scripts/prove-*.cjs',
+      'src/app/shell.html',
     ],
   },
   js.configs.recommended,
@@ -77,4 +79,16 @@ export default [
     },
     rules: phase0Rules,
   },
+  ...tseslint.configs.recommended.map((cfg) => ({
+    ...cfg,
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/home/controller.ts', 'src/wizard/controller.ts', 'src/workbench/**'],
+    rules: {
+      ...(cfg.rules || {}),
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+    },
+  })),
 ];

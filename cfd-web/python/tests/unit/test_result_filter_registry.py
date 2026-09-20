@@ -17,7 +17,6 @@ from cfddesk.registry import (
 from cfddesk.registry.analysis import AnalysisType
 from cfddesk.results import filters as rf
 
-
 EXPECTED_FILTER_KEYS = {
     "cut_plane",
     "streamlines",
@@ -84,7 +83,8 @@ def test_filter_specs_shape_and_tools():
     assert cut.cache_scope == "case_time"
     assert cut.output == "vtp"
     assert cut.model is rf.CutPlaneFilter
-    assert cut.params_schema == ()
+    assert len(cut.params_schema) >= 4
+    assert any(f.key == "field" for f in cut.params_schema)
 
     stream = reg.get("streamlines")
     assert stream.label == "Particle Trace"

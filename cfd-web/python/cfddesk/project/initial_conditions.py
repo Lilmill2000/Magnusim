@@ -19,8 +19,6 @@ DEFAULT_IC_UREF_M_S = 20.0
 _VELOCITY_MAG_INLET_KEYS = frozenset(
     {
         "velocity_inlet_fixed",
-        "velocity_inlet_mean",
-        "velocity_inlet_freestream",
     }
 )
 
@@ -103,8 +101,8 @@ def rebuild_initial_conditions(
     U_ref: float | None = None,
 ) -> dict[str, Any]:
     """Discard-and-default IC dict for the current turbulence model."""
-    model: TurbulenceModel = project.solver.turbulence  # type: ignore[assignment]
-    I = (
+    model: TurbulenceModel = project.solver.turbulence
+    intensity = (
         float(intensity_pct)
         if intensity_pct is not None
         else float(project.solver.turbulence_intensity_pct)
@@ -113,7 +111,7 @@ def rebuild_initial_conditions(
         U_ref, _reason = resolve_turbulence_uref(project)
     scalars: TurbulenceScalars | None = None
     if model != "laminar":
-        scalars = inlet_turbulence_scalars(U_ref, intensity_pct=I, D_h=D_h)
+        scalars = inlet_turbulence_scalars(U_ref, intensity_pct=intensity, D_h=D_h)
 
     prev = {}
     sim = project.primary_simulation()
@@ -150,7 +148,7 @@ def rebuild_initial_conditions(
     return ic
 
 
-def normalize_r_diag(value: object) -> float:
+def normalize_r_diag(value: Any) -> float:
     """Accept float or length-3 sequence from IC model → single diagonal scalar."""
     if isinstance(value, (list, tuple)):
         return float(value[0]) if value else 0.0

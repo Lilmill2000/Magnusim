@@ -1,3 +1,5 @@
+import { safeProjectPath } from './safe-path.js';
+// @ts-nocheck
 /**
  * Simulation Control — incompressible steady simpleFoam from the project mesh,
  * Air, and assigned BCs. Does not re-split polyMesh. No bank face57/71 gates.
@@ -18,8 +20,9 @@ import { fileURLToPath } from 'node:url';
 import { PYTHON, pyTool } from './python-env.js';
 import { wslCasePath, wslDistro } from './wsl-env.js';
 import { hardwarePrefs } from './prefs.js';
+import { probeWslMpiSlots } from './hardware-profile.js';
 import { matchesStudy } from './w16-geometry-scope.js';
-import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
+import { firstLegacySimId, getActiveSimulation, liveStudyRows } from './w17-sim-catalog.js';
 import {
   TRANSIENT_DEFAULTS,
   TRANSIENT_LARGE_MESH_CELLS,
@@ -31,7 +34,20 @@ import {
 import { createJobLogger } from './log.js';
 import { envGet } from './env-compat.js';
 import { spawnJob } from './job-runner.js';
-import { pyJsonSync } from './py-json.js';
+import { pyJson, pyJsonSync } from './py-json.js';
+import {
+  assembleAllRuns,
+  assembleMeshDoc,
+  assembleRuns,
+  persistRun,
+  readStudyJson,
+  runFolderOf,
+  studyFilePath,
+  writeStudyJson,
+} from './study-io.js';
+import { listFoamTimeDirs, walkGeometries } from './project-layout.js';
+import { solveStartBlockReason } from './solve-start-block.js';
+import { scheduleComputeQueueKick } from './server/compute-queue.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -76,11 +92,57 @@ function detectPhysicalCores() {
 }
 detectPhysicalCores();
 
-/** @type {null | { child: import('node:child_process').ChildProcess, run_id: string, wsl_case: string, project_id: string, progress: ReturnType<typeof newProgressState> }} */
+/** @type {null | { child: import('node:child_process').ChildProcess, run_id: string, wsl_case: string, project_id: string, progress: ReturnType<typeof newProgressState>, wsl_case_path?: string, jobLog?: object, protocol?: string, baseRunning?: Record<string, any>, stop_requested?: boolean, stop_requested_at?: number, stop_timer?: ReturnType<typeof setTimeout> }} */
 let liveRun = null;
 
 function newProgressState() {
   return { buf: '', series: [], stage: 'starting', current: null, pending: null, solve_started_at: null, saved_times: [] };
+}
+
+const LATE_SOLVE_STAGES = new Set(['reconstruct', 'stopping']);
+
+/** True when the run has already left "starting" even if stage was never stamped. */
+export function runHasSolveProgress(rec) {
+  if (!rec) return false;
+  const simT = Number(rec.sim_time != null ? rec.sim_time : rec.iteration);
+  if (Number.isFinite(simT) && simT > 0) return true;
+  if (Number(rec.n_steps) > 0) return true;
+  if (Number(rec.n_saved_times) > 0) return true;
+  if (Number(rec.last_saved_iteration) > 0) return true;
+  if (Array.isArray(rec.residuals) && rec.residuals.length) return true;
+  if (Array.isArray(rec.saved_times) && rec.saved_times.some((t) => Number(t) > 0)) return true;
+  if (Array.isArray(rec.live_saved_times) && rec.live_saved_times.length) return true;
+  if (Number.isFinite(Number(rec.co_max)) && Number(rec.co_max) > 0) return true;
+  return false;
+}
+
+/** Keep reconstruct/copy/stopping; promote starting/decompose once progress exists. */
+export function solveDisplayStage(rec) {
+  const stage = rec && rec.stage != null ? String(rec.stage) : '';
+  if (stage === 'reconstruct' || stage === 'copy' || stage === 'stopping') return stage;
+  if (runHasSolveProgress(rec) && (!stage || stage === 'starting' || stage === 'decompose')) return 'solve';
+  return stage || null;
+}
+
+function enterSolveStage(state) {
+  if (!state) return;
+  const st = String(state.stage || '');
+  if (LATE_SOLVE_STAGES.has(st)) return;
+  state.stage = 'solve';
+}
+
+function parseEventPayload(line) {
+  let raw = String(line || '').trim();
+  if (raw.startsWith('MAGNUSIM_EVENT ')) raw = raw.slice('MAGNUSIM_EVENT '.length).trim();
+  else if (raw.startsWith('CFDDESK_EVENT ')) raw = raw.slice('CFDDESK_EVENT '.length).trim();
+  if (!raw.startsWith('{')) return null;
+  try {
+    const ev = JSON.parse(raw);
+    if (ev && typeof ev === 'object' && ev.event) return ev;
+  } catch {
+    /* not JSON */
+  }
+  return null;
 }
 
 /**
@@ -91,6 +153,7 @@ function applyProgressLine(state, raw) {
   const line = String(raw || '').replace(/^\s*\[\d+\]\s*/, '');
   const tm = line.match(/^Time\s*=\s*([0-9.+-eE]+)\s*$/);
   if (tm) {
+    enterSolveStage(state);
     if (state.stage !== 'solve') return;
     if (state.current && Number.isFinite(state.current.t)) state.series.push(state.current);
     const t = Number(tm[1]);
@@ -107,22 +170,25 @@ function applyProgressLine(state, raw) {
     }
     return;
   }
-  if (state.stage === 'solve') {
+  const co = line.match(/^Courant Number mean:\s*([0-9.eE+-]+)\s+max:\s*([0-9.eE+-]+)/);
+  if (co) {
+    enterSolveStage(state);
+    if (state.stage !== 'solve') return;
     if (!state.pending) state.pending = {};
-    const co = line.match(/^Courant Number mean:\s*([0-9.eE+-]+)\s+max:\s*([0-9.eE+-]+)/);
-    if (co) {
-      const mean = Number(co[1]);
-      const v = Number(co[2]);
-      if (Number.isFinite(mean)) state.pending.co_mean = mean;
-      if (Number.isFinite(v)) state.pending.co_max = v;
-      return;
-    }
-    const dt = line.match(/^deltaT\s*=\s*([0-9.eE+-]+)/);
-    if (dt) {
-      const v = Number(dt[1]);
-      if (Number.isFinite(v)) state.pending.delta_t = v;
-      return;
-    }
+    const mean = Number(co[1]);
+    const v = Number(co[2]);
+    if (Number.isFinite(mean)) state.pending.co_mean = mean;
+    if (Number.isFinite(v)) state.pending.co_max = v;
+    return;
+  }
+  const dt = line.match(/^deltaT\s*=\s*([0-9.eE+-]+)/);
+  if (dt) {
+    enterSolveStage(state);
+    if (state.stage !== 'solve') return;
+    if (!state.pending) state.pending = {};
+    const v = Number(dt[1]);
+    if (Number.isFinite(v)) state.pending.delta_t = v;
+    return;
   }
   const rm = line.match(/Solving for (Ux|Uy|Uz|p|omega|k), Initial residual = ([0-9.eE+-]+)/);
   if (rm && state.current) {
@@ -150,6 +216,7 @@ function applyJobEvent(state, ev) {
     return;
   }
   if (kind === 'time_saved') {
+    enterSolveStage(state);
     const t = Number(ev.t);
     if (Number.isFinite(t) && !(state.saved_times || []).includes(t)) {
       if (!state.saved_times) state.saved_times = [];
@@ -158,6 +225,7 @@ function applyJobEvent(state, ev) {
     return;
   }
   if (kind === 'progress') {
+    enterSolveStage(state);
     if (state.stage !== 'solve') return;
     if (state.current && Number.isFinite(state.current.t)) state.series.push(state.current);
     const t = Number(ev.time != null ? ev.time : ev.sim_time);
@@ -176,6 +244,9 @@ function applyJobEvent(state, ev) {
     return;
   }
   if (kind === 'residual') {
+    enterSolveStage(state);
+    const t = Number(ev.time != null ? ev.time : ev.sim_time);
+    if (!state.current && Number.isFinite(t)) state.current = { t };
     if (!state.current) return;
     const field = ev.field;
     const initial = Number(ev.initial);
@@ -189,6 +260,7 @@ function applyJobEvent(state, ev) {
     return;
   }
   if (kind === 'courant') {
+    enterSolveStage(state);
     if (!state.pending) state.pending = {};
     if (Number.isFinite(Number(ev.mean))) state.pending.co_mean = Number(ev.mean);
     if (Number.isFinite(Number(ev.max))) state.pending.co_max = Number(ev.max);
@@ -278,80 +350,184 @@ function snapshotProgress(state) {
 export function parseSolveProgress(text) {
   const state = newProgressState();
   for (const line of String(text || '').split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('{')) {
-      try {
-        const ev = JSON.parse(trimmed);
-        if (ev && typeof ev === 'object' && ev.event) {
-          applyJobEvent(state, ev);
-          continue;
-        }
-      } catch {
-        /* fall through to raw OpenFOAM line */
-      }
+    const ev = parseEventPayload(line);
+    if (ev) {
+      applyJobEvent(state, ev);
+      continue;
     }
     applyProgressLine(state, line);
   }
   return snapshotProgress(state);
 }
 
-function enrichRunDoc(doc) {
+/** Catalog-sized run for first paint. No log re-parse, no residual series. */
+export function slimRunDoc(doc) {
   if (!doc) return doc;
+  return {
+    id: doc.id || doc.run_id || null,
+    run_id: doc.run_id || doc.id || null,
+    name: doc.name || null,
+    status: doc.status || null,
+    mode: doc.mode || null,
+    path_kind: doc.path_kind || null,
+    case_dir: doc.case_dir || null,
+    mesh_id: doc.mesh_id || null,
+    mesh_name: doc.mesh_name || null,
+    has_results: !!doc.has_results,
+    n_saved_times: doc.n_saved_times != null ? doc.n_saved_times : null,
+    last_saved_iteration: doc.last_saved_iteration != null ? doc.last_saved_iteration : null,
+    iteration: doc.iteration != null ? doc.iteration : null,
+    sim_time: doc.sim_time != null ? doc.sim_time : null,
+    n_steps: doc.n_steps != null ? doc.n_steps : null,
+    endTime: doc.endTime != null ? doc.endTime : null,
+    writeInterval: doc.writeInterval != null ? doc.writeInterval : null,
+    started_at: doc.started_at || null,
+    finished_at: doc.finished_at || null,
+    solve_started_at: doc.solve_started_at || null,
+    simulation_id: doc.simulation_id || null,
+    time_dependency: doc.time_dependency || null,
+    result_controls: Array.isArray(doc.result_controls) ? doc.result_controls : [],
+    pid: doc.pid != null ? doc.pid : null,
+    n_procs: doc.n_procs != null ? doc.n_procs : null,
+    stage: solveDisplayStage(doc) || doc.stage || null,
+    project_id: doc.project_id || null,
+    project_title: doc.project_title || null,
+    study_label: doc.study_label || null,
+  };
+}
+
+function progressSnapshotIsThin(progress) {
+  if (!progress) return true;
+  return !runHasSolveProgress(progress);
+}
+
+function enrichRunDoc(doc, opts) {
+  if (!doc) return doc;
+  if (opts && opts.slim) return slimRunDoc(doc);
   const sameLive =
     liveRun &&
     liveRun.progress &&
     String(liveRun.run_id) === String(doc.run_id || doc.id);
   let progress = sameLive ? snapshotProgress(liveRun.progress) : null;
   let fromLog = false;
-  if (!progress && doc.log_path && existsSync(doc.log_path)) {
-    try {
-      progress = parseSolveProgress(readFileSync(doc.log_path, 'utf8'));
-      fromLog = true;
-      // New JSONL path may leave a thin text log; keep stamped residuals.
-      if ((!progress.n_steps || progress.n_steps === 0) && Array.isArray(doc.residuals) && doc.residuals.length) {
-        progress = null;
-        fromLog = false;
+  if (progressSnapshotIsThin(progress)) {
+    for (const logPath of [doc.log_jsonl_path, doc.log_path]) {
+      if (!logPath || !existsSync(logPath)) continue;
+      try {
+        const parsed = parseSolveProgress(readFileSync(logPath, 'utf8'));
+        if (!progressSnapshotIsThin(parsed) || (parsed && parsed.stage && parsed.stage !== 'starting')) {
+          progress = parsed;
+          fromLog = true;
+          break;
+        }
+      } catch {
+        /* try the next log */
       }
-    } catch {
+    }
+    if (progressSnapshotIsThin(progress) && runHasSolveProgress(doc)) {
       progress = null;
+      fromLog = false;
     }
   }
-  if (!progress) return doc;
+  const saved = liveSavedFields(doc);
+  if (!progress) {
+    const next = { ...doc, ...saved };
+    const shown = solveDisplayStage(next);
+    if (shown) next.stage = shown;
+    return next;
+  }
   // A log re-parse stamps solve_started_at with the parse time, which is
   // meaningless for the ETA; fall back to the run's start time instead.
   const startedAt = fromLog
     ? doc.solve_started_at || doc.started_at || null
     : progress.solve_started_at || doc.solve_started_at || null;
-  return {
+  const simTime = Math.max(
+    Number(progress.sim_time) || 0,
+    Number(doc.sim_time) || 0,
+    Number(doc.iteration) || 0,
+    Number(saved.last_saved_iteration) || 0
+  );
+  const next = {
     ...doc,
-    stage: progress.stage,
-    iteration: progress.iteration,
-    sim_time: progress.sim_time,
-    n_steps: progress.n_steps,
+    stage: progress.stage || doc.stage,
+    iteration: Math.max(Number(progress.iteration) || 0, Number(doc.iteration) || 0, simTime),
+    sim_time: simTime,
+    n_steps: Math.max(Number(progress.n_steps) || 0, Number(doc.n_steps) || 0),
     ...(progress.co_max != null ? { co_max: progress.co_max } : {}),
     ...(progress.co_mean != null ? { co_mean: progress.co_mean } : {}),
     ...(progress.delta_t != null ? { delta_t: progress.delta_t } : {}),
-    residuals: progress.residuals,
+    residuals:
+      Array.isArray(progress.residuals) && progress.residuals.length
+        ? progress.residuals
+        : doc.residuals,
     solve_started_at: startedAt,
-    ...liveSavedFields(doc),
+    ...saved,
   };
+  const shown = solveDisplayStage(next);
+  if (shown) next.stage = shown;
+  return next;
 }
 
 /**
- * While a run is solving, the solve script copies each finished time
- * directory to the Windows run folder. Report what is there so Results can
- * open mid-run; finished runs keep the values stamped at exit.
+ * The solve script copies each finished time directory to the Windows run
+ * folder as it is written. Report what is on disk so Results can open mid-run
+ * and still open after an early stop, even if run.json still says
+ * has_results: false from the start stamp.
  */
 function liveSavedFields(doc) {
-  if (!doc || doc.status !== 'running' || !doc.case_dir) return {};
-  const times = listSavedTimes(doc.case_dir);
-  const last = times.length ? times[times.length - 1] : 0;
+  if (!doc) return {};
+  const caseDir = doc.case_dir || (doc.prepare_run && doc.prepare_run.case_dir);
+  if (!caseDir) return {};
+  const times = listSavedTimes(caseDir);
+  if (!times.length) return {};
+  const last = times[times.length - 1];
   return {
-    has_results: last > 0,
+    has_results: true,
     last_saved_iteration: last,
     n_saved_times: times.length,
     saved_times: times,
   };
+}
+
+function applySavedTimesFromDiskInPlace(rec) {
+  if (!rec) return false;
+  const extra = liveSavedFields(rec);
+  if (!extra.has_results) return false;
+  let dirty =
+    !rec.has_results ||
+    Number(rec.n_saved_times) !== extra.n_saved_times ||
+    rec.last_saved_iteration !== extra.last_saved_iteration;
+  rec.has_results = true;
+  rec.n_saved_times = extra.n_saved_times;
+  rec.last_saved_iteration = extra.last_saved_iteration;
+  if (!(Number(rec.sim_time) > extra.last_saved_iteration)) {
+    rec.sim_time = extra.last_saved_iteration;
+    dirty = true;
+  }
+  const shown = solveDisplayStage(rec);
+  if (shown && shown !== rec.stage) dirty = true;
+  if (shown) rec.stage = shown;
+  return dirty;
+}
+
+/** A restarted run used to keep stop_requested/stage from the previous Stop. */
+function overlayLiveRunFlags(doc) {
+  if (!doc || !liveRun) return doc;
+  if (String(liveRun.run_id) !== String(doc.run_id || doc.id)) return doc;
+  if (liveRun.stop_requested) {
+    doc.stop_requested = true;
+    return doc;
+  }
+  doc.stop_requested = false;
+  const liveStage = liveRun.progress && liveRun.progress.stage;
+  if (liveStage && liveStage !== 'copy' && liveStage !== 'reconstruct') {
+    doc.stage = liveStage;
+  } else if (doc.stage === 'stopping' || doc.stage === 'copy' || doc.stage === 'reconstruct') {
+    doc.stage = 'solve';
+  }
+  const shown = solveDisplayStage(doc);
+  if (shown) doc.stage = shown;
+  return doc;
 }
 
 function stampId() {
@@ -368,7 +544,7 @@ function readActiveId() {
 }
 
 function projectDir(id) {
-  return join(PROJECTS_ROOT, id);
+  return safeProjectPath(PROJECTS_ROOT, id);
 }
 
 function winToWsl(winPath) {
@@ -388,6 +564,35 @@ function readJsonSafe(p) {
 
 function readProject(id) {
   return id ? readJsonSafe(join(projectDir(id), 'project.json')) : null;
+}
+
+function projectTitleOf(projectId) {
+  const proj = readProject(projectId);
+  const t = proj && (proj.title || proj.name);
+  return t ? String(t) : '';
+}
+
+function studyLabelOf(projectId, simulationId) {
+  try {
+    const sim = getActiveSimulation(projectId, readProject(projectId), simulationId);
+    if (!sim) return '';
+    return String(sim.geometry_name || sim.name || '');
+  } catch {
+    return '';
+  }
+}
+
+function decorateJobOwner(doc, projectId) {
+  if (!doc) return doc;
+  const pid = projectId || doc.project_id || null;
+  const title = doc.project_title || projectTitleOf(pid);
+  const study = doc.study_label || studyLabelOf(pid, doc.simulation_id);
+  return {
+    ...doc,
+    project_id: pid || doc.project_id || null,
+    project_title: title || doc.project_title || null,
+    study_label: study || doc.study_label || null,
+  };
 }
 
 function activeStudy(id, explicitId) {
@@ -479,15 +684,26 @@ const CAD_PREVIEW_SCRIPT = pyTool('export_step_cad_preview.py');
 
 /**
  * CAD face properties in metres: { 'face 10@Body1': { area, centroid, normal } }.
- * Read from geometry/cad_preview.json; computed once for projects imported
- * before face properties were part of the preview.
+ * Read from geometries/Geometry_…/cad_preview.json (legacy geometry folder is fallback).
  */
 export function loadFaceProps(projectId) {
-  const geo = join(projectDir(projectId), 'geometry');
-  const metaPath = join(geo, 'cad_preview.json');
-  let meta = readJsonSafe(metaPath);
+  const root = projectDir(projectId);
+  const candidates = walkGeometries(root).map((g) => join(g.dir, 'cad_preview.json'));
+  candidates.push(join(root, 'geometry', 'cad_preview.json'));
+  let meta = null;
+  let metaPath = null;
+  for (const p of candidates) {
+    const j = readJsonSafe(p);
+    if (j && Array.isArray(j.faces) && j.faces.length) {
+      meta = j;
+      metaPath = p;
+      break;
+    }
+  }
   if (!(meta && Array.isArray(meta.faces) && meta.faces.length)) {
-    const step = join(geo, 'source.step');
+    const geom = walkGeometries(root)[0];
+    const step = geom ? join(geom.dir, 'source.step') : join(root, 'geometry', 'source.step');
+    metaPath = geom ? join(geom.dir, 'cad_preview.json') : join(root, 'geometry', 'cad_preview.json');
     if (existsSync(step) && existsSync(PYTHON) && existsSync(CAD_PREVIEW_SCRIPT)) {
       try {
         spawnSync(PYTHON, [CAD_PREVIEW_SCRIPT, '--step', step, '--meta', metaPath, '--faces-only'], {
@@ -537,8 +753,14 @@ export function parseBoundaryPatches(boundaryPath) {
 
 function meshRecordReady(rec) {
   const live = rec && rec.live_mesh_result;
-  const caseDir = live && live.case_dir;
-  const poly = (live && live.mesh_path) || (caseDir ? join(caseDir, 'constant', 'polyMesh') : null);
+  const caseDir = (live && live.case_dir) || (rec && rec.case_dir);
+  const polyFromCase = caseDir ? join(caseDir, 'constant', 'polyMesh') : null;
+  const poly =
+    (polyFromCase && existsSync(join(polyFromCase, 'owner')) && existsSync(join(polyFromCase, 'points'))
+      ? polyFromCase
+      : null) ||
+    (live && live.mesh_path) ||
+    polyFromCase;
   return !!(
     live &&
     live.status === 'done' &&
@@ -552,10 +774,10 @@ function meshRecordReady(rec) {
 
 export function listGeneratedMeshes(projectId, simulationId) {
   const id = projectId || readActiveId();
-  const mesh = id ? readJsonSafe(join(projectDir(id), 'mesh.json')) : null;
+  const sim = activeStudy(id, simulationId);
+  const mesh = id && sim ? assembleMeshDoc(id, sim.id) : null;
   if (!mesh) return [];
   const list = Array.isArray(mesh.meshes) && mesh.meshes.length ? mesh.meshes : [mesh];
-  const sim = activeStudy(id, simulationId);
   const legacy = legacyStudyId(id);
   return list
     .filter((m) => m && (m.id || m.name) && matchesStudy(m, sim && sim.id, legacy))
@@ -575,37 +797,46 @@ export function listGeneratedMeshes(projectId, simulationId) {
 export function resolveProjectMesh(projectId, meshId, simulationId) {
   const id = projectId || readActiveId();
   if (!id) return { ok: false, error: 'no active project' };
-  const mesh = readJsonSafe(join(projectDir(id), 'mesh.json'));
-  if (!mesh) return { ok: false, error: 'mesh.json missing — generate a mesh first', project_id: id };
+  const sim = activeStudy(id, simulationId);
+  const mesh = sim ? assembleMeshDoc(id, sim.id) : null;
+  if (!mesh || !(mesh.meshes || []).length) {
+    return {
+      ok: false,
+      error: 'mesh.json missing — generate a mesh first',
+      project_id: id,
+      fix: { go: 'mesh-hub' },
+    };
+  }
 
   const meshes = Array.isArray(mesh.meshes) ? mesh.meshes : [];
-  const sim = activeStudy(id, simulationId);
   const legacy = legacyStudyId(id);
   const scoped = meshes.filter((m) => m && matchesStudy(m, sim && sim.id, legacy));
   const wanted = meshId
     ? scoped.find((m) => String(m.id) === String(meshId))
     : scoped.find((m) => String(m.id) === String(mesh.active_id)) || null;
   if (meshId && !wanted) {
-    return { ok: false, error: 'mesh not found in this study', project_id: id, mesh_id: meshId };
+    return {
+      ok: false,
+      error: 'mesh not found in this study',
+      project_id: id,
+      mesh_id: meshId,
+      fix: { go: 'mesh-hub' },
+    };
   }
 
-  const candidates = [];
-  if (wanted && wanted.live_mesh_result) candidates.push(wanted.live_mesh_result);
-
-  let live = null;
-  for (const c of candidates) {
-    const caseDir = c && c.case_dir;
-    const poly = (c && c.mesh_path) || (caseDir ? join(caseDir, 'constant', 'polyMesh') : null);
-    if (caseDir && existsSync(caseDir) && poly && existsSync(join(poly, 'owner')) && existsSync(join(poly, 'points'))) {
-      live = c;
-      break;
-    }
-  }
-
-  const case_dir = (live && live.case_dir) || null;
-  const poly =
-    (live && live.mesh_path) ||
-    (case_dir ? join(case_dir, 'constant', 'polyMesh') : null);
+  const case_dir = (wanted && wanted.case_dir) || (wanted && wanted.live_mesh_result && wanted.live_mesh_result.case_dir) || null;
+  const stalePath = wanted && wanted.live_mesh_result && wanted.live_mesh_result.mesh_path;
+  const polyFromCase = case_dir ? join(case_dir, 'constant', 'polyMesh') : null;
+  const polyComplete = (p) => !!(p && existsSync(join(p, 'owner')) && existsSync(join(p, 'points')));
+  const poly = polyComplete(polyFromCase) ? polyFromCase : polyComplete(stalePath) ? stalePath : polyFromCase || stalePath;
+  const live =
+    wanted &&
+    wanted.live_mesh_result &&
+    case_dir &&
+    existsSync(case_dir) &&
+    polyComplete(poly)
+      ? { ...wanted.live_mesh_result, case_dir, mesh_path: poly }
+      : null;
 
   if (wanted && !live) {
     return {
@@ -613,13 +844,27 @@ export function resolveProjectMesh(projectId, meshId, simulationId) {
       error: 'Generate "' + (wanted.name || 'that mesh') + '" before using it on a run',
       project_id: id,
       mesh_id: wanted.id,
+      fix: { go: 'mesh', id: wanted.id, name: wanted.name || 'Mesh' },
     };
   }
   if (!case_dir || !existsSync(case_dir)) {
-    return { ok: false, error: 'Generated mesh case missing — generate a mesh first', project_id: id, case_dir };
+    return {
+      ok: false,
+      error: 'Generated mesh case missing — generate a mesh first',
+      project_id: id,
+      case_dir,
+      fix: { go: wanted && wanted.id ? 'mesh' : 'mesh-hub', id: wanted && wanted.id, name: wanted && wanted.name },
+    };
   }
   if (!poly || !existsSync(poly) || !existsSync(join(poly, 'owner')) || !existsSync(join(poly, 'points'))) {
-    return { ok: false, error: 'polyMesh incomplete (owner/points)', project_id: id, case_dir, mesh_path: poly };
+    return {
+      ok: false,
+      error: 'polyMesh incomplete (owner/points)',
+      project_id: id,
+      case_dir,
+      mesh_path: poly,
+      fix: { go: wanted && wanted.id ? 'mesh' : 'mesh-hub', id: wanted && wanted.id, name: wanted && wanted.name },
+    };
   }
   const bound = join(poly, 'boundary');
   const patches = parseBoundaryPatches(bound);
@@ -637,11 +882,15 @@ export function resolveProjectMesh(projectId, meshId, simulationId) {
   };
 }
 
-export function getSimulationControl(projectId) {
+export function getSimulationControl(projectId, simulationId) {
   const id = projectId || readActiveId();
   const defaults = { endTime: DEFAULT_END_TIME, writeInterval: DEFAULT_WRITE_INTERVAL };
   if (!id) return { ...defaults, project_id: null };
-  const doc = readJsonSafe(join(projectDir(id), 'simulation_control.json')) || {};
+  const sim = activeStudy(id, simulationId);
+  const doc =
+    (sim && readStudyJson(id, sim.id, 'control')) ||
+    readJsonSafe(join(projectDir(id), 'simulation_control.json')) ||
+    {};
   const endTime = Math.max(1, Math.round(Number(doc.endTime) || DEFAULT_END_TIME));
   const writeInterval = Math.max(1, Math.round(Number(doc.writeInterval) || DEFAULT_WRITE_INTERVAL));
   return {
@@ -654,12 +903,14 @@ export function getSimulationControl(projectId) {
   };
 }
 
-export function saveSimulationControl(projectId, partial) {
+export async function saveSimulationControl(projectId, partial, simulationId) {
   const id = projectId || readActiveId();
   if (!id) return { ok: false, error: 'no active project' };
-  const prev = getSimulationControl(id);
+  const sim = activeStudy(id, simulationId || (partial && partial.simulation_id));
+  const prev = getSimulationControl(id, sim && sim.id);
   const next = {
     project_id: id,
+    simulation_id: (sim && sim.id) || null,
     endTime: Math.max(1, Math.round(Number(partial.endTime != null ? partial.endTime : prev.endTime))),
     writeInterval: Math.max(
       1,
@@ -672,11 +923,18 @@ export function saveSimulationControl(projectId, partial) {
     updated_at: new Date().toISOString(),
     increment: INCREMENT,
   };
-  pyJsonSync(
-    'project_cli.py',
-    ['set-sim-control', '--project-dir', projectDir(id), '--sim-id', ''],
-    next,
-  );
+  try {
+    if (sim && sim.id) writeStudyJson(id, sim.id, 'control', next);
+    else {
+      await pyJson(
+        'project_cli.py',
+        ['set-sim-control', '--project-dir', projectDir(id), '--sim-id', String((sim && sim.id) || '')],
+        next,
+      );
+    }
+  } catch (e) {
+    console.warn('[CFD] save sim control', e);
+  }
   return { ok: true, ...next };
 }
 
@@ -706,6 +964,11 @@ function resolveNProcs(nCells, opts) {
   const hw = hardwarePrefs();
   const cap = hw && Number(hw.n_procs);
   if (Number.isFinite(cap) && cap >= 1) nProcs = Math.min(nProcs, Math.floor(cap));
+  // Windows CIM core counts can exceed Open MPI's WSL slot count (hybrid CPUs).
+  const savedSlots = hw && Number(hw.wsl_mpi_slots);
+  const liveSlots = probeWslMpiSlots(WSL_DISTRO);
+  const slots = liveSlots >= 1 ? liveSlots : Number.isFinite(savedSlots) && savedSlots >= 1 ? Math.floor(savedSlots) : 0;
+  if (slots >= 1) nProcs = Math.min(nProcs, slots);
   return Math.max(1, nProcs);
 }
 
@@ -744,6 +1007,7 @@ function inletSpeedMs(bc) {
   const unit = String((bc && bc.unit) || '').toLowerCase();
   if (unit === 'm/s' || unit === 'm s-1' || unit === '') return v;
   if (unit === 'ft/s') return v * 0.3048;
+  if (unit === 'ft/min' || unit === 'fpm') return (v * 0.3048) / 60;
   if (unit === 'km/h') return v / 3.6;
   if (unit === 'mph') return v * 0.44704;
   return v;
@@ -796,18 +1060,27 @@ function facesOverlap(a, b) {
   return bcFaces(b).some((f) => have.has(f));
 }
 
-function mapBcToPatch(bc, patchNames, webBcs) {
-  const want = sanitizePatchName(bc.name);
+export function uniqueNumberedPatch(want, patchNames) {
   if (patchNames.has(want)) return want;
+  if (!want) return null;
+  const re = new RegExp('^' + want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:_\\d+)?$');
+  const hits = [...patchNames].filter((p) => re.test(p));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+export function mapBcToPatch(bc, patchNames, webBcs) {
+  const want = sanitizePatchName(bc.name);
+  const exact = uniqueNumberedPatch(want, patchNames);
+  if (exact) return exact;
   const faces = bcFaces(bc);
   for (const f of faces) {
-    const alt = sanitizePatchName(f);
-    if (patchNames.has(alt)) return alt;
+    const alt = uniqueNumberedPatch(sanitizePatchName(f), patchNames);
+    if (alt) return alt;
   }
   for (const baked of webBcs || []) {
     if (!facesOverlap(bc, baked)) continue;
-    const fromBaked = sanitizePatchName(baked.name);
-    if (patchNames.has(fromBaked)) return fromBaked;
+    const fromBaked = uniqueNumberedPatch(sanitizePatchName(baked.name), patchNames);
+    if (fromBaked) return fromBaked;
   }
   return want;
 }
@@ -840,12 +1113,9 @@ export function validateSolveReady(projectId, opts) {
   const id = mesh.project_id;
   const sim = activeStudy(id, opts && opts.simulationId);
   const legacy = legacyStudyId(id);
-  const mats = readJsonSafe(join(projectDir(id), 'materials.json'));
-  const bcs = readJsonSafe(join(projectDir(id), 'boundary_conditions.json'));
-  const aa =
-    (opts && opts.aa) ||
-    readJsonSafe(join(projectDir(id), 'area_average.json')) ||
-    readJsonSafe(join(projectDir(id), 'result_controls.json'));
+  const mats = sim ? readStudyJson(id, sim.id, 'materials') : null;
+  const bcs = sim ? readStudyJson(id, sim.id, 'bcs') : null;
+  const aa = (opts && opts.aa) || (sim ? readStudyJson(id, sim.id, 'result_controls') : null);
   const air = airFromMaterials(mats, sim && sim.id, legacy);
   const records = listBcRecords(bcs).filter((b) => matchesStudy(b, sim && sim.id, legacy));
   const inlets = records.filter((b) => isVelocityInlet(b) && bcFaces(b).length);
@@ -853,16 +1123,31 @@ export function validateSolveReady(projectId, opts) {
   const patchNames = new Set((mesh.patches || []).map((p) => p.name));
   const webBcs = loadMeshWebBcs(mesh);
 
-  if (!sim) return { ok: false, error: 'Create an Incompressible simulation first', project_id: id };
-  if (!air || !air.assigned) return { ok: false, error: 'Assign Air to a volume first', project_id: id };
+  if (!sim) {
+    return { ok: false, error: 'Create an Incompressible simulation first', project_id: id, fix: { go: 'create-sim' } };
+  }
+  if (!air || !air.assigned) {
+    return { ok: false, error: 'Assign Air to a volume first', project_id: id, fix: { go: 'material' } };
+  }
   if (!inlets.length && pressures.length < 2) {
+    const incomplete = records.find((b) => !bcFaces(b).length);
     return {
       ok: false,
       error: 'Add a velocity inlet, or two pressure boundaries, each with an assigned face',
       project_id: id,
+      fix: incomplete
+        ? { go: 'bc', id: incomplete.id, name: incomplete.name }
+        : { go: 'bc-picker' },
     };
   }
-  if (!pressures.length) return { ok: false, error: 'Add a pressure boundary with an assigned face', project_id: id };
+  if (!pressures.length) {
+    return {
+      ok: false,
+      error: 'Add a pressure boundary with an assigned face',
+      project_id: id,
+      fix: { go: 'bc-picker' },
+    };
+  }
 
   const mapped = [];
   for (const bc of records) {
@@ -874,6 +1159,7 @@ export function validateSolveReady(projectId, opts) {
         error: `Mesh has no patch for "${bc.name}" (looked for ${patch}). Generate the mesh after assigning BCs.`,
         project_id: id,
         patches: Array.from(patchNames),
+        fix: { go: 'mesh', id: mesh.mesh_id, name: mesh.mesh_name },
       };
     }
     mapped.push({ bc, patch });
@@ -885,6 +1171,7 @@ export function validateSolveReady(projectId, opts) {
         ok: false,
         error: 'Both pressure boundaries have the same value, so nothing drives the flow. Give them different pressures or add a velocity inlet.',
         project_id: id,
+        fix: { go: 'bc', id: pressures[0].id, name: pressures[0].name },
       };
     }
   }
@@ -1054,6 +1341,8 @@ export function getRunMonitors(projectId, runId, simulationId) {
     project_id: id,
     run_id: rec.id,
     status: rec.status || null,
+    transient: runIsTransient(rec),
+    time_dependency: rec.time_dependency || null,
     rho,
     monitors: out,
     balance:
@@ -1247,7 +1536,19 @@ function scanRunFolders(projectId) {
   return found;
 }
 
-function loadCatalog(projectId) {
+function loadCatalog(projectId, opts) {
+  const sim = activeStudy(projectId, opts && opts.simulation_id);
+  if (sim && sim.id) {
+    const runs = assembleRuns(projectId, sim.id);
+    const saved = readStudyJson(projectId, sim.id, 'runs');
+    const wanted = (opts && opts.active_id) || (saved && saved.active_id);
+    const latest = [...runs].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))[0];
+    return {
+      runs,
+      active_id: (wanted && runs.some((r) => r.id === wanted) ? wanted : null) || (latest && latest.id) || null,
+      simulation_id: sim.id,
+    };
+  }
   const existing = readJsonSafe(catalogPath(projectId));
   const scanned = scanRunFolders(projectId);
   const byId = new Map();
@@ -1256,15 +1557,55 @@ function loadCatalog(projectId) {
       if (rec && rec.id) byId.set(String(rec.id), { ...rec });
     }
   }
+  let catalogDirty = false;
+  const study = activeStudy(projectId);
   for (const item of scanned) {
-    if (!byId.has(item.id)) continue;
+    if (!byId.has(item.id)) {
+      // A later catalog rewrite used to drop real case folders. Bring them back.
+      const doc = item.sidecar || {};
+      const inferred = inferRunStatus(item.case_dir, doc.endTime || item.meta.endTime);
+      const running = !!(liveRun && String(liveRun.run_id) === String(item.id));
+      const saved = listSavedTimes(item.case_dir);
+      const lastSaved = saved.length ? saved[saved.length - 1] : 0;
+      byId.set(
+        item.id,
+        catalogEntryFromDoc(
+          {
+            ...doc,
+            id: item.id,
+            run_id: item.id,
+            case_dir: doc.case_dir || item.case_dir,
+            status: running
+              ? doc.status || 'running'
+              : inferred || (doc.status === 'running' ? 'stopped' : doc.status) || 'done',
+            last_saved_iteration: lastSaved,
+            has_results: lastSaved > 0 || !!doc.has_results,
+            simulation_id:
+              doc.simulation_id ||
+              (existing && existing.simulation_id) ||
+              (study && study.id) ||
+              null,
+          },
+          doc.name,
+          null
+        )
+      );
+      catalogDirty = true;
+      continue;
+    }
     const prev = byId.get(item.id);
     const doc = item.sidecar || {};
+    const running = !!(liveRun && String(liveRun.run_id) === String(item.id));
+    const inferred = inferRunStatus(item.case_dir, doc.endTime || item.meta.endTime || (prev && prev.endTime));
+    const staleLive = !running && (doc.status === 'running' || doc.status === 'starting' || (prev && (prev.status === 'running' || prev.status === 'starting')));
+    const status = running
+      ? 'running'
+      : inferred || (staleLive ? 'stopped' : doc.status || (prev && prev.status) || null);
     byId.set(item.id, {
       ...(prev || {}),
       id: item.id,
       name: (prev && prev.name) || doc.name || null,
-      status: doc.status || (prev && prev.status) || inferRunStatus(item.case_dir, item.meta.endTime),
+      status,
       case_dir: doc.case_dir || item.case_dir,
       started_at: doc.started_at || (prev && prev.started_at) || null,
       finished_at: doc.finished_at || (prev && prev.finished_at) || null,
@@ -1293,10 +1634,17 @@ function loadCatalog(projectId) {
     // Older sidecars (before graceful stop) never recorded what was written;
     // fall back to the time directories on disk.
     const rec = byId.get(item.id);
-    if (rec.last_saved_iteration == null && rec.status !== 'running' && rec.status !== 'starting') {
+    if (!running) {
       const saved = listSavedTimes(item.case_dir);
-      rec.last_saved_iteration = saved.length ? saved[saved.length - 1] : 0;
-      rec.has_results = rec.has_results || rec.last_saved_iteration > 0;
+      const last = saved.length ? saved[saved.length - 1] : 0;
+      if (rec.last_saved_iteration == null || last > (Number(rec.last_saved_iteration) || 0)) {
+        rec.last_saved_iteration = last;
+        catalogDirty = true;
+      }
+      const had = !!rec.has_results;
+      rec.has_results = !!(rec.has_results || rec.last_saved_iteration > 0);
+      if (had !== rec.has_results) catalogDirty = true;
+      if (staleLive && rec.status !== doc.status) catalogDirty = true;
     }
   }
   const runs = Array.from(byId.values());
@@ -1310,24 +1658,53 @@ function loadCatalog(projectId) {
       ? String(existing.active_id)
       : null);
   const cat = { active_id, runs, updated_at: new Date().toISOString() };
+  if (catalogDirty && (!opts || opts.persist !== false)) {
+    try {
+      saveCatalog(projectId, cat);
+    } catch (e) {
+      console.warn('[CFD] heal run catalog', e);
+    }
+  }
   return cat;
 }
 
-function saveCatalog(projectId, cat) {
-  pyJsonSync(
-    'project_cli.py',
-    ['save-catalog', '--project-dir', projectDir(projectId), '--sim-id', ''],
-    {
-      active_id: cat.active_id || null,
-      runs: cat.runs || [],
-      updated_at: new Date().toISOString(),
-    },
-  );
+function saveCatalog(projectId, cat, opts) {
+  const sim = activeStudy(projectId, cat && cat.simulation_id);
+  if (sim && sim.id) {
+    const only = opts && (opts.onlyRunId || opts.only_run_id);
+    const skipRuns = !!(opts && opts.skipRuns);
+    if (!skipRuns) {
+      for (const rec of cat.runs || []) {
+        if (!rec || !(rec.id || rec.run_id)) continue;
+        if (only && String(rec.id || rec.run_id) !== String(only)) continue;
+        persistRun(projectId, sim.id, rec);
+      }
+    }
+    writeStudyJson(projectId, sim.id, 'runs', { active_id: cat.active_id || null });
+    return Promise.resolve({ ok: true });
+  }
+  try {
+    const write = pyJson(
+      'project_cli.py',
+      ['save-catalog', '--project-dir', projectDir(projectId), '--sim-id', String((sim && sim.id) || '')],
+      {
+        active_id: cat.active_id || null,
+        runs: cat.runs || [],
+        updated_at: new Date().toISOString(),
+      },
+    );
+    if (write && typeof write.then === 'function') {
+      write.catch((e) => console.warn('[CFD] save run catalog', e));
+    }
+    return write;
+  } catch (e) {
+    console.warn('[CFD] save run catalog', e);
+  }
 }
 
 function upsertCatalogRun(projectId, doc) {
   if (!projectId || !doc || !doc.run_id) return loadCatalog(projectId);
-  const cat = loadCatalog(projectId);
+  const cat = loadCatalog(projectId, { simulation_id: doc.simulation_id });
   const idx = cat.runs.findIndex((r) => String(r.id) === String(doc.run_id));
   const prev = idx >= 0 ? cat.runs[idx] : null;
   const name = (prev && prev.name) || doc.name || nextRunName(cat.runs);
@@ -1335,18 +1712,18 @@ function upsertCatalogRun(projectId, doc) {
   if (idx >= 0) cat.runs[idx] = { ...cat.runs[idx], ...entry };
   else cat.runs.push(entry);
   cat.active_id = doc.run_id;
-  saveCatalog(projectId, cat);
+  saveCatalog(projectId, cat, { onlyRunId: doc.run_id });
   return cat;
 }
 
-function renameCatalogRun(projectId, runId, name, simulationId) {
-  const cat = loadCatalog(projectId);
+async function renameCatalogRun(projectId, runId, name, simulationId) {
+  const cat = loadCatalog(projectId, { simulation_id: simulationId });
   const rec = cat.runs.find((r) => String(r.id) === String(runId));
   if (!rec) return { ok: false, error: 'Run not found' };
   const next = String(name || '').trim();
   if (!next) return { ok: false, error: 'Name is required' };
   rec.name = next.slice(0, 64);
-  saveCatalog(projectId, cat);
+  await saveCatalog(projectId, cat, { onlyRunId: runId });
   const side = readJsonSafe(runSidecarPath(projectId, runId));
   if (side) {
     side.name = rec.name;
@@ -1360,16 +1737,25 @@ function renameCatalogRun(projectId, runId, name, simulationId) {
   };
 }
 
-export function createDraftRun({ projectId, name, simulationId } = {}) {
+/** @param {{projectId?: string, name?: string, simulationId?: string, runId?: string}} [opts] */
+export async function createDraftRun({ projectId, name, simulationId, runId: requestedId, meshId } = {}) {
   const id = projectId || readActiveId();
   if (!id) return { ok: false, error: 'no active project' };
-  const cat = loadCatalog(id);
-  const runId = stampId();
   const sim = activeStudy(id, simulationId);
-  const meshes = listGeneratedMeshes(id, sim && sim.id);
-  const defaultMesh = meshes.find((m) => m.ready && m.active) || meshes.find((m) => m.ready) || null;
-  const ctrl = getSimulationControl(id);
-  const transient = projectIsTransient(id, sim && sim.id);
+  if (!sim || !sim.id) return { ok: false, error: 'Create a simulation first' };
+  const cat = loadCatalog(id, { simulation_id: sim.id });
+  const runId = String(requestedId || '').trim() || stampId();
+  const meshes = listGeneratedMeshes(id, sim.id);
+  const wantMesh = meshId != null && meshId !== '' ? String(meshId) : '';
+  const defaultMesh =
+    (wantMesh && meshes.find((m) => String(m.id) === wantMesh)) ||
+    meshes.find((m) => m.ready && m.active) ||
+    meshes.find((m) => m.ready) ||
+    meshes.find((m) => m.active) ||
+    meshes[0] ||
+    (wantMesh ? { id: wantMesh, name: 'Mesh' } : null);
+  const ctrl = getSimulationControl(id, sim.id);
+  const transient = projectIsTransient(id, sim.id);
   const rec = {
     id: runId,
     name: String(name || '').trim().slice(0, 64) || nextRunName(cat.runs),
@@ -1384,26 +1770,34 @@ export function createDraftRun({ projectId, name, simulationId } = {}) {
     transient: normalizeTransient(ctrl.transient),
     result_controls: [],
     case_dir: null,
-    simulation_id: (sim && sim.id) || null,
+    simulation_id: sim.id,
     created_at: new Date().toISOString(),
   };
+  persistRun(id, sim.id, rec);
   cat.runs.push(rec);
   cat.active_id = runId;
-  saveCatalog(id, cat);
-  writeRunSidecar(id, runId, {
+  await saveCatalog(id, cat, { onlyRunId: runId });
+  await writeRunSidecar(id, runId, {
     ...rec,
     run_id: runId,
     project_id: id,
     increment: INCREMENT,
   });
-  return { ok: true, run: rec, ...runListPayload(id, cat, { simulation_id: sim && sim.id }), meshes };
+  return { ok: true, run: rec, ...runListPayload(id, cat, { simulation_id: sim.id }), meshes };
 }
 
-export function updateRunSettings(projectId, partial) {
+function catalogForRun(projectId, runId, hintSimId) {
+  const folder = runFolderOf(projectId, runId, hintSimId) || runFolderOf(projectId, runId);
+  const sid = (folder && folder.simulation_id) || hintSimId || null;
+  return { cat: loadCatalog(projectId, { simulation_id: sid }), sid, folder };
+}
+
+export async function updateRunSettings(projectId, partial) {
   const id = projectId || readActiveId();
   const runId = partial && (partial.run_id || partial.id);
   if (!id || !runId) return { ok: false, error: 'run_id required' };
-  const cat = loadCatalog(id);
+  const found = catalogForRun(id, runId, partial && partial.simulation_id);
+  const cat = found.cat;
   const rec = cat.runs.find((r) => String(r.id) === String(runId));
   if (!rec) return { ok: false, error: 'Run not found' };
   if (partial.name != null) {
@@ -1418,14 +1812,14 @@ export function updateRunSettings(projectId, partial) {
   // Incompressible panel changed it); started runs keep what they solved with.
   if (partial.transient && typeof partial.transient === 'object') {
     rec.transient = normalizeTransient(partial.transient, rec.transient);
-    // Remember the latest transient settings as the project default for new runs.
-    saveSimulationControl(id, { transient: rec.transient });
+    // Remember the latest transient settings as the study default for new runs.
+    await saveSimulationControl(id, { transient: rec.transient }, rec.simulation_id || found.sid);
   }
   if (partial.time_dependency != null && (!rec.status || rec.status === 'draft')) {
     rec.time_dependency = /transient/i.test(String(partial.time_dependency)) ? 'Transient' : 'Steady-state';
   }
   if (partial.mesh_id != null) {
-    const meshes = listGeneratedMeshes(id);
+    const meshes = listGeneratedMeshes(id, (partial && partial.simulation_id) || rec.simulation_id);
     const picked = meshes.find((m) => String(m.id) === String(partial.mesh_id));
     rec.mesh_id = picked ? picked.id : partial.mesh_id || null;
     rec.mesh_name = picked ? picked.name : rec.mesh_name;
@@ -1436,44 +1830,40 @@ export function updateRunSettings(projectId, partial) {
   // reopen exactly as they were left.
   if (Array.isArray(partial.views)) rec.views = partial.views.slice(0, 50);
   if (partial.current_view !== undefined) rec.current_view = partial.current_view || null;
-  saveCatalog(id, cat);
+  await saveCatalog(id, cat, { onlyRunId: runId });
   const side = readJsonSafe(runSidecarPath(id, runId)) || { run_id: runId, project_id: id };
-  writeRunSidecar(id, runId, { ...side, ...rec, run_id: runId, project_id: id, increment: INCREMENT });
+  await writeRunSidecar(id, runId, { ...side, ...rec, run_id: runId, project_id: id, increment: INCREMENT });
   return {
     ok: true,
     run: rec,
-    ...runListPayload(id, cat, { simulation_id: (partial && partial.simulation_id) || rec.simulation_id }),
-    meshes: listGeneratedMeshes(id, (partial && partial.simulation_id) || rec.simulation_id),
+    ...runListPayload(id, cat, { simulation_id: rec.simulation_id || found.sid || (partial && partial.simulation_id) }),
+    meshes: listGeneratedMeshes(id, rec.simulation_id || found.sid || (partial && partial.simulation_id)),
   };
 }
 
-export function deleteCatalogRun(projectId, runId, simulationId) {
+export async function deleteCatalogRun(projectId, runId, simulationId) {
   const id = projectId || readActiveId();
   if (!id || !runId) return { ok: false, error: 'run_id required' };
   if (liveRun && String(liveRun.run_id) === String(runId)) {
     return { ok: false, error: 'Stop the run before deleting it' };
   }
-  const cat = loadCatalog(id);
-  const rec = cat.runs.find((r) => String(r.id) === String(runId));
-  if (!rec) return { ok: false, error: 'Run not found' };
-  cat.runs = cat.runs.filter((r) => String(r.id) !== String(runId));
-  if (String(cat.active_id) === String(runId)) {
-    const sibs = runsForActiveStudy(id, cat.runs);
-    cat.active_id = sibs.length ? sibs[sibs.length - 1].id : null;
+  const folder = runFolderOf(id, runId, simulationId) || runFolderOf(id, runId);
+  if (!folder) return { ok: false, error: 'Run not found' };
+  const sid = simulationId || folder.simulation_id || null;
+  try {
+    rmSync(folder.dir, { recursive: true, force: true });
+  } catch (e) {
+    return { ok: false, error: 'Could not delete run folder: ' + String((e && e.message) || e) };
   }
-  saveCatalog(id, cat);
   try {
     if (existsSync(runSidecarPath(id, runId))) rmSync(runSidecarPath(id, runId), { force: true });
   } catch {}
-  const caseDir = join(runsDir(id), `run-${runId}`);
-  try {
-    if (existsSync(caseDir)) rmSync(caseDir, { recursive: true, force: true });
-  } catch {}
+  const cat = loadCatalog(id, { simulation_id: sid });
   return {
     ok: true,
     deleted: true,
     run_id: runId,
-    ...runListPayload(id, cat, { simulation_id: simulationId || rec.simulation_id }),
+    ...runListPayload(id, cat, { simulation_id: sid }),
   };
 }
 
@@ -1500,45 +1890,83 @@ function loadRunDoc(projectId, runId) {
 
 function writeRunSidecar(projectId, runId, body) {
   const payload = { ...(body || {}), id: runId, run_id: runId, project_id: projectId };
-  pyJsonSync(
-    'project_cli.py',
-    ['run-upsert', '--project-dir', projectDir(projectId), '--run-id', String(runId), '--sim-id', String((body && body.simulation_id) || '')],
-    payload,
-  );
-}
-
-function persistRunDoc(projectId, doc) {
-  const cat = upsertCatalogRun(projectId, doc);
-  const named = (cat.runs.find((r) => String(r.id) === String(doc.run_id)) || {}).name;
-  const withName = named ? { ...doc, name: named } : doc;
-  if (doc.run_id) {
-    // Catalog already saved by upsertCatalogRun; stamp run_1 via run-upsert --stamp-project.
-    pyJsonSync(
+  try {
+    const write = pyJson(
       'project_cli.py',
-      [
-        'run-upsert',
-        '--project-dir',
-        projectDir(projectId),
-        '--run-id',
-        String(doc.run_id),
-        '--sim-id',
-        String(withName.simulation_id || ''),
-        '--stamp-project',
-      ],
-      { ...withName, id: doc.run_id, run_id: doc.run_id, project_id: projectId, increment: INCREMENT },
+      ['run-upsert', '--project-dir', projectDir(projectId), '--run-id', String(runId), '--sim-id', String((body && body.simulation_id) || '')],
+      payload,
     );
+    if (write && typeof write.then === 'function') {
+      write.catch((e) => console.warn('[CFD] write run sidecar', e));
+    }
+    return write;
+  } catch (e) {
+    console.warn('[CFD] write run sidecar', e);
   }
 }
 
-export function startSolve({ projectId, endTime, writeInterval, runId, transient: transientIn } = {}) {
+function persistRunDoc(projectId, doc) {
+  try {
+    const cat = upsertCatalogRun(projectId, doc);
+    const named = (cat.runs.find((r) => String(r.id) === String(doc.run_id)) || {}).name;
+    const withName = named ? { ...doc, name: named } : doc;
+    if (doc.run_id) {
+      // Catalog already saved by upsertCatalogRun; stamp run_1 via run-upsert --stamp-project.
+      pyJsonSync(
+        'project_cli.py',
+        [
+          'run-upsert',
+          '--project-dir',
+          projectDir(projectId),
+          '--run-id',
+          String(doc.run_id),
+          '--sim-id',
+          String(withName.simulation_id || ''),
+          '--stamp-project',
+        ],
+        { ...withName, id: doc.run_id, run_id: doc.run_id, project_id: projectId, increment: INCREMENT },
+      );
+    }
+  } catch (e) {
+    console.warn('[CFD] persist run doc', e);
+  }
+}
+
+/**
+ * @param {{
+ *   projectId?: string,
+ *   simulationId?: string,
+ *   endTime?: number,
+ *   writeInterval?: number,
+ *   runId?: string,
+ *   transient?: object,
+ *   onDone?: (result: { status: string, exit_code?: number, run_id?: string, project_id?: string, error?: string|null }) => void,
+ * }} [opts]
+ */
+export function startSolve(opts = {}) {
+  const { projectId, endTime, writeInterval, runId, transient: transientIn, onDone, simulationId } = opts;
   if (liveRun && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) {
+    if (!runId || String(liveRun.run_id) !== String(runId)) {
+      return {
+        ok: false,
+        status: 409,
+        bodyExtra: {
+          error: 'A run is already in progress',
+          pid: liveRun.child.pid || null,
+          run_id: liveRun.run_id,
+          increment: INCREMENT,
+        },
+      };
+    }
+  }
+  const otherLive = discoverLiveSolves().find((row) => row && String(row.run_id) !== String(runId || ''));
+  if (otherLive) {
     return {
       ok: false,
       status: 409,
       bodyExtra: {
         error: 'A run is already in progress',
-        pid: liveRun.child.pid || null,
-        run_id: liveRun.run_id,
+        run_id: otherLive.run_id,
         increment: INCREMENT,
       },
     };
@@ -1548,13 +1976,14 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     return {
       ok: false,
       status: 400,
-      bodyExtra: { error: 'Create a run first, then start it', increment: INCREMENT },
+      bodyExtra: { error: 'Create a run first, then start it', increment: INCREMENT, fix: { go: 'sim-hub' } },
     };
   }
 
   const id = projectId || readActiveId();
-  const cat = loadCatalog(id);
-  const draft = cat.runs.find((r) => String(r.id) === String(runId)) || null;
+  const found = runFolderOf(id, runId, simulationId) || runFolderOf(id, runId);
+  const cat = loadCatalog(id, { simulation_id: simulationId || (found && found.simulation_id) });
+  let draft = cat.runs.find((r) => String(r.id) === String(runId)) || found || null;
   if (!draft) {
     return { ok: false, status: 404, bodyExtra: { error: 'Run not found', increment: INCREMENT } };
   }
@@ -1562,11 +1991,34 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     return {
       ok: false,
       status: 409,
-      bodyExtra: { error: 'This run already finished. Create a new run to solve again.', increment: INCREMENT },
+      bodyExtra: {
+        error: 'This run already finished. Create a new run to solve again.',
+        increment: INCREMENT,
+        fix: { go: 'sim-hub' },
+      },
     };
   }
-  if (draft && draft.status === 'running') {
-    return { ok: false, status: 409, bodyExtra: { error: 'This run is already running', increment: INCREMENT } };
+  if (draft && (draft.status === 'running' || draft.status === 'starting')) {
+    const wslState = draft.wsl_case ? probeWslSolveSync(draft.wsl_case) : 'dead';
+    const block = solveStartBlockReason(draft, {
+      windowsLive: runProcessIsLive(draft),
+      wslLive: wslState === 'live' || wslState === 'unknown',
+    });
+    if (block === 'already_running') {
+      return {
+        ok: false,
+        status: 409,
+        bodyExtra: {
+          error: 'This run is already solving. Click Stop if you want to end it.',
+          increment: INCREMENT,
+        },
+      };
+    }
+    if (block === 'draining') {
+      forceKillDoc(draft, liveRun && String(liveRun.run_id) === String(draft.id || draft.run_id) ? liveRun : null);
+    } else {
+      draft = reapStaleRunningDoc(id, draft);
+    }
   }
 
   const ready = validateSolveReady(id, {
@@ -1599,13 +2051,22 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
       normalizeTransient(draft && draft.transient, getSimulationControl(id).transient)
     );
     transient = transientControlFor(ready, settings);
-    saveSimulationControl(id, { endTime: et, writeInterval: wi, transient: settings });
+    saveSimulationControl(id, { endTime: et, writeInterval: wi, transient: settings }, draft && draft.simulation_id);
   } else {
-    saveSimulationControl(id, { endTime: et, writeInterval: wi });
+    saveSimulationControl(id, { endTime: et, writeInterval: wi }, draft && draft.simulation_id);
   }
   const solver = isTransient ? 'pimpleFoam' : 'simpleFoam';
   const nProcs = resolveNProcs(ready.mesh.n_cells, { transient: isTransient });
-  const winOut = join(projectDir(id), 'runs', `run-${runId}`);
+  const simId = (draft && draft.simulation_id) || (ready.sim && ready.sim.id);
+  const stored = persistRun(id, simId, {
+    id: runId,
+    run_id: runId,
+    name: (draft && draft.name) || 'Run 1',
+    simulation_id: simId,
+    mesh_id: (draft && draft.mesh_id) || (ready.mesh && ready.mesh.mesh_id) || null,
+    status: 'running',
+  });
+  const winOut = stored.case_dir;
   mkdirSync(winOut, { recursive: true });
   mkdirSync(REPORT_DIR, { recursive: true });
 
@@ -1636,17 +2097,39 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
         (prepResult && (prepResult.error || prepResult.message)) ||
         String(prep.stderr || prep.stdout || '').slice(0, 800) ||
         `prepare_run exited ${prep.status}`;
+      const error = 'Failed to prepare solve case: ' + errMsg;
+      try {
+        persistRun(id, simId, {
+          ...stored,
+          status: 'failed',
+          error,
+          note: error,
+          finished_at: new Date().toISOString(),
+          pid: null,
+        });
+      } catch (_) {}
       return {
         ok: false,
         status: 500,
-        bodyExtra: { error: 'Failed to prepare solve case: ' + errMsg, increment: INCREMENT },
+        bodyExtra: { error, increment: INCREMENT, run_id: runId, simulation_id: simId },
       };
     }
   } catch (err) {
+    const error = 'Failed to prepare solve case: ' + String(err);
+    try {
+      persistRun(id, simId, {
+        ...stored,
+        status: 'failed',
+        error,
+        note: error,
+        finished_at: new Date().toISOString(),
+        pid: null,
+      });
+    } catch (_) {}
     return {
       ok: false,
       status: 500,
-      bodyExtra: { error: 'Failed to prepare solve case: ' + String(err), increment: INCREMENT },
+      bodyExtra: { error, increment: INCREMENT, run_id: runId, simulation_id: simId },
     };
   }
 
@@ -1717,6 +2200,10 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
               : 'Run stopped before the first saved ' + (isTransient ? 'time step.' : 'iteration.')
             : `${solver} failed (exit ${exit_code}${signal ? ' ' + signal : ''}).`,
     });
+    if (typeof onDone === 'function') {
+      onDone({ status, exit_code, run_id: runId, project_id: id, error: errMsg || null });
+    }
+    scheduleComputeQueueKick(250);
   };
 
   const { child, jobLog } = spawnJob({
@@ -1726,12 +2213,36 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     args: runSolveArgs,
     onEvent: (ev) => {
       if (liveRun && liveRun.progress) applyJobEvent(liveRun.progress, ev);
+      if (ev && ev.event === 'time_saved' && liveRun) {
+        const times = (liveRun.progress && liveRun.progress.saved_times) || [];
+        if (liveRun.baseRunning) {
+          liveRun.baseRunning.has_results = times.length > 0;
+          liveRun.baseRunning.n_saved_times = times.length;
+          liveRun.baseRunning.last_saved_iteration = times.length ? times[times.length - 1] : 0;
+          liveRun.baseRunning.stage = 'solve';
+        }
+        try {
+          const snap = liveRun.progress ? snapshotProgress(liveRun.progress) : null;
+          persistRun(id, simId, {
+            id: runId,
+            run_id: runId,
+            simulation_id: simId,
+            has_results: times.length > 0,
+            n_saved_times: times.length,
+            last_saved_iteration: times.length ? times[times.length - 1] : 0,
+            stage: 'solve',
+            sim_time: (snap && snap.sim_time) || (times.length ? times[times.length - 1] : 0),
+          });
+        } catch (e) {
+          console.warn('[CFD] stamp live results', e);
+        }
+      }
       try {
         const line =
           ev && ev.event === 'log' && ev.line
             ? String(ev.line) + '\n'
             : JSON.stringify(ev) + '\n';
-        logBuf += line;
+        logBuf = (logBuf + line).slice(-1024 * 1024);
         // Phase 1 land10: structured log via job-runner createJobLogger (.cache/logs), not projects/.
       } catch {}
     },
@@ -1749,6 +2260,7 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     protocol: 'magnusim-jsonl',
   };
   const baseRunning = {
+    simulation_id: simId,
     status: 'running',
     mode: 'solve',
     path_kind: solver,
@@ -1766,6 +2278,9 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
     has_results: false,
     last_saved_iteration: 0,
     n_saved_times: 0,
+    stop_requested: false,
+    stage: 'starting',
+    finished_at: null,
     command: argv.join(' '),
     argv,
     started_at,
@@ -1816,116 +2331,265 @@ export function startSolve({ projectId, endTime, writeInterval, runId, transient
   };
 }
 
-export function stopSolve({ projectId } = {}) {
+const STOP_GRACE_MS = 20000;
+const wslLiveCache = new Map();
+const wslProbeInflight = new Set();
+
+function runIdOf(doc) {
+  return doc && (doc.run_id || doc.id);
+}
+
+function wslCaseOf(doc, run) {
+  return (doc && (doc.wsl_case || doc.wsl_case_id)) || (run && run.wsl_case) || '';
+}
+
+function writeNowSed(controlDictPath) {
+  return `sed -i 's/^[[:space:]]*stopAt.*/stopAt          writeNow;/' ${JSON.stringify(controlDictPath)} 2>/dev/null || true`;
+}
+
+function cachedWslState(caseId) {
+  const id = String(caseId || '').trim();
+  if (!id) return null;
+  const hit = wslLiveCache.get(id);
+  if (!hit) return null;
+  if (Date.now() - hit.at > 30000 && hit.state === 'live') return null;
+  return hit.state;
+}
+
+function probeWslSolveSync(caseId) {
+  const id = String(caseId || '').trim();
+  if (!id) return 'dead';
+  try {
+    const r = spawnSync(PYTHON, [pyTool('stop_solve.py'), '--wsl-case', id, '--probe'], {
+      encoding: 'utf8',
+      timeout: 12000,
+      windowsHide: true,
+    });
+    const j = JSON.parse((r.stdout || '').trim().split('\n').pop() || '{}');
+    if (j && typeof j.live === 'boolean') {
+      wslLiveCache.set(id, { state: j.live ? 'live' : 'dead', at: Date.now() });
+      return j.live ? 'live' : 'dead';
+    }
+  } catch {
+    /* ignore */
+  }
+  return 'unknown';
+}
+
+function scheduleWslProbe(caseId) {
+  const id = String(caseId || '').trim();
+  if (!id || wslProbeInflight.has(id)) return;
+  wslProbeInflight.add(id);
+  try {
+    const child = spawn(PYTHON, [pyTool('stop_solve.py'), '--wsl-case', id, '--probe'], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    let out = '';
+    child.stdout.on('data', (d) => {
+      out += d;
+    });
+    child.on('close', () => {
+      wslProbeInflight.delete(id);
+      try {
+        const j = JSON.parse(out.trim().split('\n').pop() || '{}');
+        wslLiveCache.set(id, { state: j.live ? 'live' : 'dead', at: Date.now() });
+      } catch {
+        wslLiveCache.set(id, { state: 'unknown', at: Date.now() });
+      }
+    });
+    child.on('error', () => {
+      wslProbeInflight.delete(id);
+    });
+  } catch {
+    wslProbeInflight.delete(id);
+  }
+}
+
+function invalidateWslLive(caseId) {
+  if (caseId) wslLiveCache.delete(String(caseId));
+}
+
+function requestWriteNow(caseId, runId) {
+  if (!caseId) return;
+  const caseQ = caseId.startsWith('/') ? caseId : wslCasePath(caseId);
+  try {
+    spawn(PYTHON, [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(runId || '')], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+  } catch {
+    try {
+      spawn(
+        'wsl',
+        ['-d', WSL_DISTRO, '--', 'bash', '-lc', writeNowSed(caseQ + '/system/controlDict')],
+        { windowsHide: true, stdio: 'ignore' },
+      );
+    } catch {}
+  }
+}
+
+function forceKillDoc(rec, run) {
+  const caseId = wslCaseOf(rec, run);
+  const rid = runIdOf(rec) || (run && run.run_id);
+  invalidateWslLive(caseId);
+  if (run && run.child) {
+    try {
+      run.child.kill();
+    } catch {}
+  } else if (liveRun && String(liveRun.run_id) === String(rid) && liveRun.child) {
+    try {
+      liveRun.child.kill();
+    } catch {}
+  }
+  try {
+    spawn(
+      PYTHON,
+      [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(rid || ''), '--force'],
+      { windowsHide: true, stdio: 'ignore' },
+    );
+  } catch {
+    try {
+      const caseQ = caseId.startsWith('/') ? caseId : wslCasePath(caseId);
+      spawn(
+        'wsl',
+        [
+          '-d',
+          WSL_DISTRO,
+          '--',
+          'bash',
+          '-lc',
+          `pkill -f ${JSON.stringify(caseQ)} 2>/dev/null || true; pkill -f ${JSON.stringify('cfddesk-w27-' + rid)} 2>/dev/null || true`,
+        ],
+        { windowsHide: true, stdio: 'ignore' },
+      );
+    } catch {}
+  }
+}
+
+function persistStopping(projectId, rec, extra) {
+  if (!projectId || !rec) return;
+  persistRunDoc(projectId, {
+    ...rec,
+    status: rec.status === 'starting' ? 'starting' : 'running',
+    stage: 'stopping',
+    stop_requested: true,
+    note: (extra && extra.note) || 'Stopping — writing the current iteration.',
+    increment: INCREMENT,
+  });
+}
+
+function resolveStopTarget(projectId, runId) {
   const id = projectId || readActiveId();
-  const run = liveRun;
-  if (!run || !run.child) {
+  if (liveRun && liveRun.child && liveRun.child.exitCode == null) {
+    if (id && liveRun.project_id && String(liveRun.project_id) !== String(id)) {
+      return { error: 'The active solve belongs to another project' };
+    }
+    const rec = (id && liveRun.run_id && loadRunDoc(id, liveRun.run_id)) || {};
+    return {
+      run: liveRun,
+      rec: {
+        ...rec,
+        wsl_case: rec.wsl_case || liveRun.wsl_case,
+        run_id: liveRun.run_id,
+        id: liveRun.run_id,
+        project_id: liveRun.project_id || id,
+        stop_requested: !!(rec.stop_requested || liveRun.stop_requested),
+      },
+    };
+  }
+  if (!id) return null;
+  const rows = assembleAllRuns(id) || [];
+  const running = rows.filter((r) => r && (r.status === 'running' || r.status === 'starting'));
+  const pick = runId
+    ? running.find((r) => String(r.id || r.run_id) === String(runId)) || running[0]
+    : running[0];
+  if (!pick) return null;
+  const pidLive = pidIsAlive(pick.pid);
+  const wslState = cachedWslState(pick.wsl_case);
+  if (!pidLive && pick.wsl_case && wslState !== 'dead') scheduleWslProbe(pick.wsl_case);
+  if (!pidLive && wslState === 'dead') {
+    return { reaped: [reapStaleRunningDoc(id, pick)] };
+  }
+  return { run: null, rec: pick };
+}
+
+export function stopSolve({ projectId, force, runId } = {}) {
+  const id = projectId || readActiveId();
+  const target = resolveStopTarget(id, runId);
+  if (target && target.error) {
+    return { ok: false, status: 409, bodyExtra: { error: target.error, increment: INCREMENT } };
+  }
+  if (target && target.reaped) {
+    const rec = target.reaped[0] || {};
+    scheduleComputeQueueKick(250);
+    return {
+      ok: true,
+      status: 200,
+      bodyExtra: {
+        ok: true,
+        stopped: true,
+        stale: true,
+        run_id: rec.run_id || rec.id,
+        increment: INCREMENT,
+      },
+    };
+  }
+  if (!target || !target.rec) {
     return {
       ok: false,
       status: 409,
       bodyExtra: { error: 'No run is in progress', increment: INCREMENT },
     };
   }
-  const caseId = run.wsl_case || '';
-  const caseQ = run.wsl_case_path || (caseId.startsWith('/') ? caseId : wslCasePath(caseId));
-  if (run.stop_requested) {
-    // Second click: the graceful stop is still draining — force it.
-    killSolveNow(run);
+  const { run, rec } = target;
+  const already = !!(run && run.stop_requested) || !!rec.stop_requested;
+  if (force || already) {
+    if (run && run.stop_timer) {
+      try {
+        clearTimeout(run.stop_timer);
+      } catch {}
+    }
+    forceKillDoc(rec, run);
+    if (run) run.stop_requested = true;
+    persistStopping(id || rec.project_id, rec, { note: 'Force-stopping.' });
+    scheduleComputeQueueKick(250);
     return {
       ok: true,
       status: 200,
-      bodyExtra: { ok: true, stopped: true, forced: true, run_id: run.run_id, increment: INCREMENT },
+      bodyExtra: { ok: true, stopped: true, forced: true, run_id: rec.run_id || rec.id, increment: INCREMENT },
     };
   }
-  // Graceful stop, like cancelling a SimScale run: ask simpleFoam to write the
-  // current iteration and exit (controlDict is runTimeModifiable), so the solve
-  // script still reconstructs and copies the partial results back. If the
-  // solver has not exited after the grace period, kill it.
-  run.stop_requested = true;
-  run.stop_requested_at = Date.now();
-  try {
-    spawn(
-      PYTHON,
-      [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(run.run_id || '')],
-      { windowsHide: true, stdio: 'ignore' }
-    );
-  } catch {
-    try {
-      spawn(
-        'wsl',
-        [
-          '-d',
-          WSL_DISTRO,
-          '--',
-          'bash',
-          '-lc',
-          `sed -i 's/^stopAt .*/stopAt          writeNow;/' ${JSON.stringify(caseQ + '/system/controlDict')} 2>/dev/null || true`,
-        ],
-        { windowsHide: true, stdio: 'ignore' }
-      );
-    } catch {}
+  if (run) {
+    run.stop_requested = true;
+    run.stop_requested_at = Date.now();
   }
-  run.stop_timer = setTimeout(() => {
-    if (liveRun === run && run.child && run.child.exitCode == null) killSolveNow(run);
+  requestWriteNow(wslCaseOf(rec, run), rec.run_id || rec.id);
+  persistStopping(id || rec.project_id, rec);
+  const recSnap = { ...rec, stop_requested: true };
+  const timer = setTimeout(() => {
+    forceKillDoc(recSnap, run && liveRun === run ? run : null);
   }, STOP_GRACE_MS);
-  const doc = (id && run.run_id && loadRunDoc(id, run.run_id)) || {};
-  persistRunDoc(id || run.project_id, {
-    ...doc,
-    status: 'running',
-    stage: 'stopping',
-    stop_requested: true,
-    note: 'Stopping — writing the current iteration.',
-    increment: INCREMENT,
-  });
+  if (run) run.stop_timer = timer;
   return {
     ok: true,
     status: 200,
-    bodyExtra: { ok: true, stopping: true, run_id: run.run_id, increment: INCREMENT },
+    bodyExtra: { ok: true, stopping: true, run_id: rec.run_id || rec.id, increment: INCREMENT },
   };
 }
 
-const STOP_GRACE_MS = 120000;
-
 function killSolveNow(run) {
-  const caseId = run.wsl_case || '';
-  const caseQ = run.wsl_case_path || (caseId.startsWith('/') ? caseId : wslCasePath(caseId));
-  try {
-    run.child.kill();
-  } catch {}
-  try {
-    spawn(
-      PYTHON,
-      [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(run.run_id || ''), '--force'],
-      { windowsHide: true, stdio: 'ignore' }
-    );
-  } catch {
-    try {
-      spawn(
-        'wsl',
-        [
-          '-d',
-          WSL_DISTRO,
-          '--',
-          'bash',
-          '-lc',
-          `pkill -f ${JSON.stringify(caseQ)} 2>/dev/null || true; pkill -f ${JSON.stringify('cfddesk-w27-' + run.run_id)} 2>/dev/null || true`,
-        ],
-        { windowsHide: true, stdio: 'ignore' }
-      );
-    } catch {}
-  }
+  forceKillDoc(
+    { wsl_case: run && run.wsl_case, run_id: run && run.run_id, id: run && run.run_id },
+    run,
+  );
 }
 
 // Saved iteration folders (numeric, > 0) in the Windows-side run case.
 function listSavedTimes(caseDir) {
   try {
-    if (!caseDir || !existsSync(caseDir)) return [];
-    return readdirSync(caseDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && /^\d+(\.\d+)?(?:[eE][+-]?\d+)?$/.test(d.name))
-      // A directory is a saved time once its fields are in it (the live copy
-      // lands atomically, but a hand-copied folder may still be filling).
-      .filter((d) => existsSync(join(caseDir, d.name, 'U')) || existsSync(join(caseDir, d.name, 'p')))
-      .map((d) => Number(d.name))
+    return listFoamTimeDirs(caseDir, { complete: true })
+      .map((name) => Number(name))
       .filter((t) => Number.isFinite(t) && t > 0)
       .sort((a, b) => a - b);
   } catch {
@@ -1938,9 +2602,185 @@ export function runLivePid() {
   return null;
 }
 
-export function getRunStatus(projectId, runId, simulationId) {
+function pidIsAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  try {
+    process.kill(n, 0);
+    return true;
+  } catch (e) {
+    return !!(e && e.code === 'EPERM');
+  }
+}
+
+function runProcessIsLive(doc) {
+  const rid = doc && (doc.run_id || doc.id);
+  if (
+    rid &&
+    liveRun &&
+    String(liveRun.run_id) === String(rid) &&
+    liveRun.child &&
+    liveRun.child.exitCode == null &&
+    !liveRun.child.killed
+  ) {
+    return true;
+  }
+  return pidIsAlive(doc && doc.pid);
+}
+
+/** Vite/Node restart used to leave run.json at "running" forever. Persist stopped/failed. */
+function reapStaleRunningDoc(projectId, doc) {
+  if (!doc || !projectId) return doc;
+  const st = String(doc.status || '');
+  if (st !== 'running' && st !== 'starting') return doc;
+  if (runProcessIsLive(doc)) return doc;
+  // Windows pid can die after Vite/HMR while WSL pimpleFoam keeps going.
+  // Do not mark stopped until a probe says the case is dead.
+  if (doc.wsl_case) {
+    const wslState = cachedWslState(doc.wsl_case);
+    if (wslState !== 'dead') {
+      scheduleWslProbe(doc.wsl_case);
+      return doc;
+    }
+  }
+  const savedTimes = listSavedTimes(doc.case_dir);
+  const lastSaved = savedTimes.length ? savedTimes[savedTimes.length - 1] : 0;
+  const next = {
+    ...doc,
+    status: lastSaved > 0 ? 'stopped' : 'failed',
+    exit_code: doc.exit_code != null ? doc.exit_code : -1,
+    finished_at: doc.finished_at || new Date().toISOString(),
+    last_saved_iteration: lastSaved,
+    n_saved_times: savedTimes.length,
+    has_results: lastSaved > 0 || !!doc.has_results,
+    pid: null,
+    error: lastSaved > 0 ? null : 'Solver process exited before the first saved iteration.',
+    note:
+      lastSaved > 0
+        ? 'Solver process is gone. Results up to iteration ' + lastSaved + ' are available.'
+        : 'Solver process is gone. It never wrote a result frame — Start again to retry.',
+  };
+  if (next.simulation_id) {
+    try {
+      persistRun(projectId, next.simulation_id, next);
+    } catch (e) {
+      console.warn('[CFD] reap stale run', e);
+    }
+  }
+  return next;
+}
+
+function solvingScore(rec) {
+  const n = Number(rec && rec.n_saved_times) || 0;
+  const last = Number(rec && rec.last_saved_iteration) || 0;
+  const t = Number(rec && rec.sim_time) || 0;
+  return n * 1000 + Math.max(last > 0 ? last : 0, t > 0 ? t : 0);
+}
+
+let discoverLiveCache = { at: 0, found: [] };
+
+export function isLiveSolveHeld() {
+  if (liveRun && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) return true;
+  return discoverLiveSolves().length > 0;
+}
+
+export function liveSolveJobSnapshot() {
+  if (liveRun && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) {
+    return {
+      kind: 'solve',
+      run_id: liveRun.run_id || null,
+      project_id: liveRun.project_id || null,
+      pid: liveRun.child.pid || null,
+    };
+  }
+  const found = discoverLiveSolves();
+  if (!found.length) return null;
+  return {
+    kind: 'solve',
+    run_id: found[0].run_id || null,
+    project_id: found[0].project_id || null,
+    pid: null,
+  };
+}
+
+function discoverLiveSolves() {
+  if (Date.now() - discoverLiveCache.at < 4000) return discoverLiveCache.found;
+  const found = [];
+  try {
+    if (!existsSync(PROJECTS_ROOT)) {
+      discoverLiveCache = { at: Date.now(), found };
+      return found;
+    }
+    for (const name of readdirSync(PROJECTS_ROOT)) {
+      if (!existsSync(join(projectDir(name), 'project.json'))) continue;
+      for (const rec of assembleAllRuns(name) || []) {
+        if (!rec || (rec.status !== 'running' && rec.status !== 'starting')) continue;
+        if (!runProcessIsLive(rec)) continue;
+        found.push({ project_id: name, run_id: rec.id || rec.run_id, rec });
+      }
+    }
+  } catch {
+    discoverLiveCache = { at: Date.now(), found };
+    return found;
+  }
+  discoverLiveCache = { at: Date.now(), found };
+  return found;
+}
+
+function discoverLiveSolve() {
+  const found = discoverLiveSolves();
+  if (!found.length) return null;
+  found.sort((a, b) => solvingScore(b.rec) - solvingScore(a.rec));
+  return found[0];
+}
+
+export function projectSolveSummary(projectId) {
+  const empty = { simulating: false, has_run: false, run_status: null, run_started_at: null };
+  if (!projectId) return empty;
+  const rows = assembleAllRuns(projectId) || [];
+  const hasRun = rows.some((r) => r && (r.status || r.id || r.run_id));
+  let rec = null;
+  if (liveRun && String(liveRun.project_id) === String(projectId) && liveRun.run_id) {
+    rec = loadRunDoc(projectId, liveRun.run_id) || liveRun.baseRunning || null;
+  }
+  const ranked = (rows || [])
+    .filter((r) => r && (r.status === 'running' || r.status === 'starting'))
+    .slice()
+    .sort((a, b) => solvingScore(b) - solvingScore(a));
+  if (ranked[0] && (!rec || solvingScore(ranked[0]) > solvingScore(rec))) rec = ranked[0];
+  if (!rec) rec = ranked[0] || null;
+  if (!rec) {
+    return { ...empty, has_run: hasRun, run_status: (rows[0] && rows[0].status) || null };
+  }
+  const doc = reapStaleRunningDoc(projectId, rec);
+  const running = !!(doc && (doc.status === 'running' || doc.status === 'starting'));
+  if (!running) {
+    return {
+      simulating: false,
+      has_run: hasRun,
+      run_status: (doc && doc.status) || rec.status || null,
+      run_started_at: (doc && doc.started_at) || rec.started_at || null,
+    };
+  }
+  // Home cards must not readdir live time folders or parse the solve log.
+  // That used to block /api/projects for tens of seconds on a writing case.
+  return {
+    simulating: true,
+    has_run: true,
+    run_status: doc.status || 'running',
+    run_started_at: doc.started_at || rec.started_at || null,
+    solve_started_at: doc.solve_started_at || rec.solve_started_at || null,
+    sim_time: Number(doc.sim_time) || Number(doc.last_saved_iteration) || 0,
+    sim_end: Number(doc.transient && doc.transient.end_time) || Number(rec.transient && rec.transient.end_time) || 0,
+    time_dependency: doc.time_dependency || rec.time_dependency || null,
+    iteration: Number(doc.iteration) || 0,
+    endTime: Number(doc.endTime) || Number(rec.endTime) || 0,
+  };
+}
+
+export function getRunStatus(projectId, runId, simulationId, opts) {
   const id = projectId || readActiveId();
-  const ctrl = getSimulationControl(id);
+  const ctrl = getSimulationControl(id, simulationId);
   const meshes = id ? listGeneratedMeshes(id, simulationId) : [];
   if (!id) {
     return {
@@ -1957,14 +2797,21 @@ export function getRunStatus(projectId, runId, simulationId) {
       },
     };
   }
-  const cat = loadCatalog(id);
+  const slim = !!(opts && opts.slim);
+  const cat = loadCatalog(id, { ...opts, simulation_id: simulationId });
+  if (Array.isArray(cat.runs) && !slim) {
+    cat.runs = cat.runs.map((rec) => reapStaleRunningDoc(id, rec));
+  }
   for (const rec of cat.runs || []) {
+    overlayLiveRunFlags(rec);
     if (rec && rec.mesh_id && !rec.mesh_name) {
       const hit = meshes.find((m) => String(m.id) === String(rec.mesh_id));
       if (hit) rec.mesh_name = hit.name;
     }
   }
-  const liveId = liveRun && liveRun.run_id;
+  const discovered = liveRun && liveRun.run_id ? null : slim ? null : discoverLiveSolve();
+  const liveId = (liveRun && liveRun.run_id) || (discovered && discovered.run_id);
+  const livePid = (liveRun && liveRun.project_id) || (discovered && discovered.project_id) || null;
   const scopedRuns = runsForActiveStudy(id, cat.runs, simulationId);
   const inScope = (rid) =>
     rid && scopedRuns.some((r) => r && String(r.id) === String(rid));
@@ -1973,31 +2820,91 @@ export function getRunStatus(projectId, runId, simulationId) {
     (liveId && inScope(liveId) && liveId) ||
     (cat.active_id && inScope(cat.active_id) && cat.active_id) ||
     null;
-  const doc = wantId ? loadRunDoc(id, wantId) : null;
-  if (doc && doc.status === 'running' && runLivePid() == null && doc.finished_at == null) {
-    // process gone without exit handler — leave as-is; client will keep polling
-  }
+  const doc = wantId ? overlayLiveRunFlags(reapStaleRunningDoc(id, loadRunDoc(id, wantId))) : null;
   const rec = (cat.runs || []).find((r) => doc && String(r.id) === String(doc.run_id));
   const projTransient = projectIsTransient(id, simulationId);
-  const run = enrichRunDoc(doc ? { ...doc, name: (doc && doc.name) || (rec && rec.name) || null } : doc);
-  // The tree reads the catalog entry: mirror the live saved-frame count onto
-  // it so the Results node opens as soon as the first frame is copied.
-  if (rec && run && run.status === 'running' && run.n_saved_times != null) {
-    rec.has_results = !!run.has_results;
-    rec.last_saved_iteration = run.last_saved_iteration;
-    rec.n_saved_times = run.n_saved_times;
+  const run = enrichRunDoc(doc ? { ...doc, name: (doc && doc.name) || (rec && rec.name) || null } : doc, opts);
+  let liveDoc = null;
+  if (liveId && doc && String(doc.run_id) === String(liveId)) {
+    liveDoc = doc;
+  } else if (liveId) {
+    const raw =
+      (livePid && loadRunDoc(livePid, liveId)) ||
+      (liveRun && liveRun.baseRunning) ||
+      (discovered && discovered.rec) ||
+      null;
+    liveDoc = raw ? reapStaleRunningDoc(livePid || id, raw) : null;
   }
+  const liveRec = (cat.runs || []).find((r) => liveDoc && String(r.id) === String(liveDoc.run_id));
+  const live_run = liveDoc
+    ? decorateJobOwner(
+        enrichRunDoc({
+          ...liveDoc,
+          name:
+            (liveDoc && liveDoc.name) ||
+            (liveRec && liveRec.name) ||
+            (liveRun && liveRun.baseRunning && liveRun.baseRunning.name) ||
+            null,
+        }, opts),
+        livePid || (liveDoc && liveDoc.project_id) || id
+      )
+    : null;
+  // Hydrate/Home must not readdir live foam times. Poll only lists the
+  // open/live run so Results can light up without copying every case.
+  if (!slim) {
+    for (const row of scopedRuns) {
+      const rid = String((row && (row.id || row.run_id)) || '');
+      const watch = (liveId && rid === String(liveId)) || (wantId && rid === String(wantId));
+      if (watch) applySavedTimesFromDiskInPlace(row);
+      if (
+        watch &&
+        row &&
+        row.simulation_id &&
+        (row.status === 'running' || row.status === 'starting') &&
+        row.stage === 'solve'
+      ) {
+        const disk = loadRunDoc(id, row.id || row.run_id);
+        const diskStage = disk && disk.stage != null ? String(disk.stage) : '';
+        if (disk && (diskStage === 'starting' || diskStage === 'decompose' || !diskStage)) {
+          try {
+            persistRun(id, row.simulation_id, {
+              id: row.id || row.run_id,
+              run_id: row.id || row.run_id,
+              simulation_id: row.simulation_id,
+              stage: 'solve',
+              has_results: row.has_results,
+              n_saved_times: row.n_saved_times,
+              last_saved_iteration: row.last_saved_iteration,
+              ...(Number(row.sim_time) > 0 ? { sim_time: row.sim_time } : {}),
+            });
+          } catch (e) {
+            console.warn('[CFD] stamp live stage from disk', e);
+          }
+        }
+      }
+    }
+    if (rec && run) {
+      applySavedTimesFromDiskInPlace(run);
+      rec.has_results = !!(rec.has_results || run.has_results);
+      if (run.last_saved_iteration != null) rec.last_saved_iteration = run.last_saved_iteration;
+      if (run.n_saved_times != null) rec.n_saved_times = run.n_saved_times;
+    }
+  }
+  const allRuns = assembleAllRuns(id).map((row) => (slim ? row : reapStaleRunningDoc(id, row)));
   return {
     ok: true,
     status: 200,
     body: {
       ok: true,
       project_id: id,
+      simulation_id: simulationId || null,
       run,
-      runs: scopedRuns,
+      runs: slim ? scopedRuns.map((row) => slimRunDoc(row)) : scopedRuns,
+      runs_all: slim ? allRuns.map((row) => slimRunDoc(row)) : allRuns,
       meshes,
       active_run_id: wantId || null,
       live_run_id: liveId || null,
+      live_run,
       simulation_control: ctrl,
       time_dependency: projTransient ? 'Transient' : 'Steady-state',
       transient_defaults: TRANSIENT_DEFAULTS,
@@ -2047,7 +2954,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch {
         body = {};
       }
-      const saved = saveSimulationControl(body.project_id || u.searchParams.get('project_id'), body);
+      const saved = await saveSimulationControl(body.project_id || u.searchParams.get('project_id'), body);
       if (!saved.ok) return sendJson(res, 400, saved);
       return sendJson(res, 200, { ok: true, ...saved });
     }
@@ -2068,6 +2975,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         writeInterval: body.writeInterval || body.write_interval,
         runId: body.run_id || body.id,
         transient: body.transient,
+        simulationId: body.simulation_id || u.searchParams.get('simulation_id'),
       });
       if (!started.ok) {
         return sendJson(res, started.status, { ok: false, ...(started.bodyExtra || {}) });
@@ -2076,7 +2984,17 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       return sendJson(res, started.status, { ok: true, ...started.bodyExtra });
     }
     if (req.method === 'POST' && b === 'stop') {
-      const stopped = stopSolve({ projectId: u.searchParams.get('project_id') });
+      let body = {};
+      try {
+        body = (await readJsonBody(req)) || {};
+      } catch {
+        body = {};
+      }
+      const stopped = stopSolve({
+        projectId: body.project_id || u.searchParams.get('project_id'),
+        runId: body.run_id || body.id || u.searchParams.get('run_id'),
+        force: body.force === true || body.force === '1' || u.searchParams.get('force') === '1',
+      });
       return sendJson(res, stopped.status, { ok: stopped.ok, ...(stopped.bodyExtra || {}) });
     }
     if (req.method === 'GET' && (b === 'status' || b === '1' || b === undefined)) {
@@ -2118,10 +3036,12 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch {
         body = {};
       }
-      const created = createDraftRun({
+      const created = await createDraftRun({
         projectId: body.project_id || u.searchParams.get('project_id'),
         name: body.name,
         simulationId: body.simulation_id || u.searchParams.get('simulation_id'),
+        runId: body.run_id || body.id,
+        meshId: body.mesh_id || body.meshId,
       });
       if (!created.ok) return sendJson(res, 400, created);
       return sendJson(res, 200, { ok: true, ...created, increment: INCREMENT });
@@ -2134,7 +3054,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         body = {};
       }
       const id = body.project_id || u.searchParams.get('project_id') || readActiveId();
-      const updated = updateRunSettings(id, body);
+      const updated = await updateRunSettings(id, body);
       if (!updated.ok) return sendJson(res, 400, updated);
       return sendJson(res, 200, { ok: true, ...updated, increment: INCREMENT });
     }
@@ -2146,7 +3066,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         body = {};
       }
       const id = body.project_id || u.searchParams.get('project_id') || readActiveId();
-      const deleted = deleteCatalogRun(id, body.run_id || body.id, body.simulation_id);
+      const deleted = await deleteCatalogRun(id, body.run_id || body.id, body.simulation_id);
       if (!deleted.ok) return sendJson(res, deleted.error && /Stop the run/.test(deleted.error) ? 409 : 400, deleted);
       return sendJson(res, 200, { ok: true, ...deleted, increment: INCREMENT });
     }
@@ -2158,7 +3078,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         body = {};
       }
       const id = body.project_id || u.searchParams.get('project_id') || readActiveId();
-      const renamed = renameCatalogRun(id, body.run_id || body.id, body.name, body.simulation_id);
+      const renamed = await renameCatalogRun(id, body.run_id || body.id, body.name, body.simulation_id);
       if (!renamed.ok) return sendJson(res, 400, renamed);
       return sendJson(res, 200, {
         ok: true,
@@ -2178,13 +3098,14 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       }
       const id = body.project_id || u.searchParams.get('project_id') || readActiveId();
       const runId = body.run_id || body.id;
-      const cat = loadCatalog(id);
+      const found = catalogForRun(id, runId, body.simulation_id || u.searchParams.get('simulation_id'));
+      const cat = found.cat;
       if (!(cat.runs || []).some((r) => String(r.id) === String(runId))) {
         return sendJson(res, 404, { ok: false, error: 'Run not found', increment: INCREMENT });
       }
       cat.active_id = runId;
-      saveCatalog(id, cat);
-      const st = getRunStatus(id, runId, body.simulation_id || u.searchParams.get('simulation_id'));
+      await saveCatalog(id, cat, { skipRuns: true });
+      const st = getRunStatus(id, runId, found.sid || body.simulation_id || u.searchParams.get('simulation_id'));
       return sendJson(res, 200, st.body);
     }
     return false;

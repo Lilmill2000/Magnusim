@@ -4,9 +4,8 @@
  * Reads committed scripts/generated/registry.json so W17 / MESH_ENGINES
  * product keys come from the dump, not a parallel hard-coded dict.
  *
- * Does NOT invent FILTERS chrome, Node write ban, or prepare_run reroute.
- * Bank UI labels (analysis display name, k-omega SST) stay product strings
- * until describe/dump fill (OUT of this land).
+ * Bank UI still shows "Incompressible" / "k-omega SST"; those labels are
+ * derived from dump keys (analysis_type, default_turbulence, default_solver).
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -102,6 +101,43 @@ export function meshEngineKeys() {
 /** @type {Set<string>} */
 export const MESH_ENGINES = new Set(meshEngineKeys());
 
+/** @type {Readonly<Record<string, string>>} */
+export const TURBULENCE_LABELS = Object.freeze({
+  laminar: 'Laminar',
+  kEpsilon: 'k-epsilon',
+  kOmegaSST: 'k-omega SST',
+  LRR: 'LRR',
+  SSG: 'SSG',
+});
+
+/** @type {Readonly<Record<string, string>>} */
+const TIME_DEPENDENCY_LABELS = Object.freeze({
+  steady: 'Steady-state',
+  transient: 'Transient',
+});
+
+/** @type {Readonly<Record<string, string>>} */
+const ALGORITHM_FROM_SOLVER = Object.freeze({
+  simpleFoam: 'SIMPLE',
+  simpleFoam_amgx: 'SIMPLE',
+  pimpleFoam: 'PIMPLE',
+});
+
+export function turbulenceLabel(key) {
+  const k = String(key || '');
+  return TURBULENCE_LABELS[k] || k || 'k-omega SST';
+}
+
+export function timeDependencyLabel(key) {
+  const k = String(key || '').trim().toLowerCase();
+  return TIME_DEPENDENCY_LABELS[k] || 'Steady-state';
+}
+
+export function algorithmFromSolver(solverKey) {
+  const k = String(solverKey || '');
+  return ALGORITHM_FROM_SOLVER[k] || 'SIMPLE';
+}
+
 function _schemaDefault(entry, prop, fallback) {
   const props =
     entry &&
@@ -127,18 +163,24 @@ export function buildW17DefaultsFromRegistry() {
     );
   }
   const passive = _schemaDefault(steady, 'passive_species', 0);
+  const turbKey = String(
+    steady.default_turbulence || _schemaDefault(steady, 'turbulence_model', 'kOmegaSST')
+  );
+  const timeKey = String(steady.time_dependency || 'steady');
+  const solverKey = String(steady.default_solver || 'simpleFoam');
+  const category = String(steady.category || 'FLUID DYNAMICS');
   return Object.freeze({
     /** Registered AnalysisType key (dump). */
     analysis_type: String(steady.key),
-    /** Bank UI create-sim name (not a dump key — intentional carry). */
+    /** Bank UI create-sim name (label prefix; gate also accepts dump keys). */
     analysis: 'Incompressible',
     analysis_title: String(steady.label || 'Incompressible Fluid Flow'),
-    category: 'FLUID DYNAMICS',
+    category,
     flow_group: 'FLOW',
-    /** Bank turbulence label; schema default is kOmegaSST (label map carry). */
-    turbulence_model: 'k-omega SST',
-    time_dependency: 'Steady-state',
-    algorithm: 'SIMPLE',
+    turbulence_model_key: turbKey,
+    turbulence_model: turbulenceLabel(turbKey),
+    time_dependency: timeDependencyLabel(timeKey),
+    algorithm: algorithmFromSolver(solverKey),
     passive_species: String(passive),
   });
 }

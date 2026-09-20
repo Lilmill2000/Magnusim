@@ -17,7 +17,6 @@ from cfddesk.registry import (
 from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 from cfddesk.registry.discovery import get_hub
 
-
 EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "simpleFoam_amgx"}
 
 
@@ -97,8 +96,9 @@ def test_validate_analysis_solver_refs_raises_on_unknown():
     load_all()
     hub = get_hub()
     # Corrupt: inject analysis with unknown solver bag key
-    from cfddesk.builtin.incompressible import build_incompressible_steady
     from dataclasses import replace
+
+    from cfddesk.builtin.incompressible import build_incompressible_steady
 
     bad = replace(
         build_incompressible_steady(),

@@ -19,7 +19,7 @@ Quantity = Literal[
 
 # Multiplicative factors: value_si = value_display * factor  (temperature is affine — see convert.py)
 UNITS: dict[Quantity, dict[str, float]] = {
-    "velocity": {"m/s": 1.0, "km/h": 1.0 / 3.6, "mph": 0.44704, "ft/s": 0.3048},
+    "velocity": {"m/s": 1.0, "km/h": 1.0 / 3.6, "mph": 0.44704, "ft/s": 0.3048, "ft/min": 0.3048 / 60.0},
     "pressure": {
         "Pa": 1.0,
         "kPa": 1e3,

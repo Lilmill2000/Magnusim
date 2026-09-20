@@ -8,8 +8,9 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from cfddesk.registry.base import Registry
 from cfddesk.registry.manifest import PluginManifest
@@ -203,7 +204,7 @@ def _parse_simple_toml(text: str, *, source: str = "") -> dict[str, Any] | None:
         return None
 
     try:
-        import tomli  # type: ignore[import-not-found]
+        import tomli
 
         return tomli.loads(text)
     except ImportError:
@@ -264,6 +265,10 @@ def _load_folder_plugin(
         log.warning("Failing plugin import %s: %s â€” continuing", key, exc)
         return None, True
     if isinstance(result, PluginManifest):
+        if result.ui is None and isinstance(meta, dict) and meta.get("ui"):
+            result.ui = str(meta.get("ui"))
+        elif result.ui is None:
+            result.ui = "ui"
         return result, False
     # Build a minimal manifest from toml if register returned None
     from cfddesk.registry.requirements import Requirement
@@ -287,6 +292,7 @@ def _load_folder_plugin(
             version=str(meta.get("version") or "0.0.0"),
             requires=requires,
             provides={},
+            ui=str(meta.get("ui") or "ui") if meta.get("ui") is not False else None,
         ),
         False,
     )

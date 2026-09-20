@@ -1,8 +1,6 @@
 """Unit tests for cfddesk.project.transient (w30 parity)."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from cfddesk.case.writer import (
     write_control_dict_transient,
     write_fv_schemes_transient,
@@ -44,6 +42,11 @@ def test_normalize_aliases():
     assert t["end_time"] == 10
     assert t["time_scheme"] == "backward"
     assert t["n_non_orth_correctors"] == 2
+
+
+def test_normalize_keeps_user_max_co():
+    t = normalize_transient({"max_co": 200})
+    assert t["max_co"] == 200
 
 
 def test_estimate_delta_t_min_cell():

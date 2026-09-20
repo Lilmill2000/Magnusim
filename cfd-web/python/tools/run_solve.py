@@ -16,16 +16,15 @@ CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
 from cfddesk.jobs.events import EVENT_PREFIX
+from cfddesk.runner.case_id import wsl_case_path
+from cfddesk.wsl.mesh_run import windows_to_wsl_path
 from cfddesk.wsl.solve_run import (
-    ProgressParser,
     events_from_lines,
+    render_solve_script,
     start_solve,
     stream_events_to_stdout,
     write_solve_script,
-    render_solve_script,
 )
-from cfddesk.runner.case_id import wsl_case_path
-from cfddesk.wsl.mesh_run import windows_to_wsl_path
 
 
 def _parse_log(path: Path) -> int:
@@ -116,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         run_id=args.run_id,
     )
     rc, parser = stream_events_to_stdout(proc)
-    snap = parser.snapshot()
+    parser.snapshot()
     # Ensure a trailing result if the template somehow did not emit one
     # (stream already printed events; only add if missing — check via stage)
     return rc

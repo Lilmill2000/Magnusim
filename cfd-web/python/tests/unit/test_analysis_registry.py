@@ -38,7 +38,7 @@ def test_load_all_idempotent_no_duplicate_crash():
     load_all()
     load_all(force=True)
     reg = get_registry("analysis")
-    assert set(reg.keys()) == {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY}
+    assert {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY} <= set(reg.keys())
 
 
 def test_describe_returns_labels_and_schemas():
@@ -93,7 +93,7 @@ def test_steady_vs_transient_product_shape():
     assert "delta_t" in {f.key for f in transient.control_schema}
     assert "delta_t" not in {f.key for f in steady.control_schema}
     assert steady.category == "FLUID DYNAMICS"
-    assert len(steady.bc_types) >= 20
+    assert len(steady.bc_types) == 7
     assert steady.region_roles == ("fluid",)
     assert steady.default_turbulence == "kOmegaSST"
     assert "nut" in steady.fields

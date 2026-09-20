@@ -67,7 +67,7 @@ export function spawnJob(opts) {
   const child = spawn(python, [script, ...args], {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ...(opts.env || {}) },
+    env: { ...process.env, ...(opts.env || {}), PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
   });
   jobLog.info('spawn', { pid: child.pid || null, script, args });
 
@@ -100,12 +100,24 @@ export function spawnJob(opts) {
 
   child.on('error', (err) => {
     jobLog.error('spawn_error', { error: String(err) });
-    if (typeof opts.onExit === 'function') opts.onExit(-1, null);
+    if (typeof opts.onExit === 'function') {
+      try {
+        opts.onExit(-1, null);
+      } catch (e) {
+        console.error('[CFD] job onExit (spawn error)', e);
+      }
+    }
   });
   child.on('exit', (code, signal) => {
     if (buf.trim()) onChunk('\n');
     jobLog.info('exit', { code, signal });
-    if (typeof opts.onExit === 'function') opts.onExit(code, signal);
+    if (typeof opts.onExit === 'function') {
+      try {
+        opts.onExit(code, signal);
+      } catch (e) {
+        console.error('[CFD] job onExit', e);
+      }
+    }
   });
 
   return { child, jobLog, parseJobLine };

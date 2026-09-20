@@ -15,6 +15,7 @@ Isolated: never touches the cfMesh HEXCORE backup or another WSL case.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import math
 import re
@@ -26,10 +27,15 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.jobs import legacy_markers as _legacy
 from cfddesk.cad.step import load_step
 from cfddesk.cad.units import shape_bbox
-from cfddesk.mesh.gmsh_standard import apply_boundary_patch_types, emitted_patch_types
+from cfddesk.jobs import legacy_markers as _legacy
+from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case
+from cfddesk.mesh.gmsh_standard import (
+    apply_boundary_patch_types,
+    coerce_gmsh_leftover_walls,
+    emitted_patch_types,
+)
 from cfddesk.mesh.standard_hexcore import (
     StandardSizing,
     build_standard_msh,
@@ -38,19 +44,19 @@ from cfddesk.mesh.standard_hexcore import (
 )
 from cfddesk.mesh.web_refinements import (
     bind_inflate_patches,
+    face_ids_from_web_bc,
     inflate_notes,
     layer_specs_for_generate,
     leftover_faces,
     load_inflate_refs,
     load_surface_custom_sizes,
-    web_face_to_cfddesk,
 )
 from cfddesk.project.mesh_sizing import clamp_fineness
 from cfddesk.project.model import Project
+from cfddesk.project.web_adapter import study_web_bcs
 from cfddesk.runner.case_id import validate_wsl_case_id
-from cfddesk.runner.sync import RESULTS_MARKER, copy_back
+from cfddesk.runner.sync import RESULTS_MARKER, copy_back_mesh
 from cfddesk.wsl.mesh_run import run_standard_pipeline
-
 
 PATH_KIND = "standard"
 BACKEND = "gmsh-hexcore"
@@ -85,7 +91,7 @@ def _web_bc_kind(bc: dict) -> str:
         return "velocity_outlet"
     if raw.startswith("pressure"):
         return "outlet"
-    if raw in ("wall", "slip wall", "no-slip wall", "symmetry"):
+    if raw in ("wall", "slip wall", "no-slip wall"):
         return "wall"
     raise ValueError(f"unsupported boundary condition type: {bc.get('bc_type')!r}")
 
@@ -99,15 +105,7 @@ def _web_wall_reg_type(bc: dict) -> str:
 def _apply_web_bcs(project: Project, bcs: list[dict], n_faces: int) -> Project:
     assigned: set[int] = set()
     for bc in bcs:
-        labels = list(bc.get("faces") or [])
-        if bc.get("face") and bc["face"] not in labels:
-            labels.append(bc["face"])
-        fids = []
-        for lab in labels:
-            fid = web_face_to_cfddesk(lab)
-            if fid < 0 or fid >= n_faces:
-                raise ValueError(f"face {lab!r} maps to cfddesk id {fid} (n_faces={n_faces})")
-            fids.append(fid)
+        fids = face_ids_from_web_bc(bc, n_faces)
         if not fids:
             continue
         kind = _web_bc_kind(bc)
@@ -211,6 +209,7 @@ def main() -> int:
     p.add_argument("--gap-factor", type=float, default=0.05)
     p.add_argument("--gradation", type=float, default=1.22)
     p.add_argument("--mesh-id", default="", help="W20 mesh id — only that mesh's refinements")
+    p.add_argument("--simulation-id", default="", help="Only this study's BCs become mesh patches")
     p.add_argument("--timeout", type=float, default=18000.0)
     p.add_argument("--threads", type=int, default=16)
     p.add_argument(
@@ -229,12 +228,17 @@ def main() -> int:
     if "HEXCORE-PROCESS-BACKUP" in str(case_dir):
         return _result(False, error="refusing to write into HEXCORE-PROCESS-BACKUP")
 
-    step = project_dir / "geometry" / "source.step"
-    if not step.is_file():
-        geom = (_read_json(project_dir / "project.json").get("geometry") or {})
-        if geom.get("step_path"):
-            step = Path(geom["step_path"])
-    if not step.is_file():
+    claim_generate_case(case_dir, generate_id=str(args.generate_id), mesh_id=str(args.mesh_id or ""))
+    atexit.register(release_generate_case, case_dir, generate_id=str(args.generate_id))
+
+    from cfddesk.project.paths import resolve_step_for_study
+
+    step = resolve_step_for_study(
+        project_dir,
+        str(args.simulation_id or "") or None,
+        str(args.mesh_id or "") or None,
+    )
+    if step is None or not step.is_file():
         return _result(False, error=f"missing source.step: {step}")
 
     try:
@@ -250,8 +254,12 @@ def main() -> int:
         _progress("step_loaded", n_faces=n_faces, scale_to_metres=scale)
 
         project = Project.from_solid(solid, scale_to_metres=scale, units_confirmed=True)
-        bc_doc = _read_json(project_dir / "boundary_conditions.json")
-        web_bcs = list(bc_doc.get("boundary_conditions") or [])
+        web_bcs = study_web_bcs(
+            project_dir,
+            None,
+            simulation_id=str(args.simulation_id or "") or None,
+            mesh_id=str(args.mesh_id or "") or None,
+        )
         project = _apply_web_bcs(project, web_bcs, n_faces)
 
         bbox = shape_bbox(solid.shape, unit="native")
@@ -320,6 +328,17 @@ def main() -> int:
         def _log(msg: str) -> None:
             _progress("gmsh", msg=msg)
 
+        pre_types = emitted_patch_types(project)
+        wall_pre = [n for n, ty in pre_types.items() if ty == "wall"]
+        layer_specs = layer_specs_for_generate(
+            wall_patches=wall_pre,
+            inflate=inflates,
+            add_layers=add_layers,
+            default_n=sizing.n_layers,
+            default_thickness_m=sizing.layer_thickness_m,
+            default_expansion=sizing.layer_expansion,
+            default_min_m=sizing.layer_min_thickness_m,
+        )
         mesh = build_standard_msh(
             step,
             solid,
@@ -331,6 +350,7 @@ def main() -> int:
             physics_based=physics_based,
             extra_face_sizes=extra_face_sizes,
             extra_face_mins=extra_face_mins,
+            layer_specs=layer_specs,
             n_threads=max(1, int(args.threads)),
             log=_log,
         )
@@ -341,25 +361,20 @@ def main() -> int:
             n_tets=mesh.n_tets,
             n_hex=mesh.n_hex,
             n_pyr=mesh.n_pyr,
+            n_prism=mesh.n_prism,
             n_tris=mesh.n_tris,
             hex_core_applied=mesh.hex_core_applied,
             hex_core_note=mesh.hex_core_note,
             wall_s=mesh.wall_s,
+            gmsh_layer_patches=mesh.gmsh_layer_patches,
         )
 
         patch_types = emitted_patch_types(project)
         for name in mesh.patch_names:
             patch_types.setdefault(name, "wall")
         write_patch_types_txt(case_dir, patch_types)
-        layer_specs = layer_specs_for_generate(
-            wall_patches=mesh.wall_patches,
-            inflate=inflates,
-            add_layers=add_layers,
-            default_n=sizing.n_layers,
-            default_thickness_m=sizing.layer_thickness_m,
-            default_expansion=sizing.layer_expansion,
-            default_min_m=sizing.layer_min_thickness_m,
-        )
+        grown = set(mesh.gmsh_layer_patches)
+        layer_specs = [s for s in layer_specs if s.name not in grown]
         layers_requested = bool(layer_specs)
         write_layers_case(
             case_dir,
@@ -368,22 +383,25 @@ def main() -> int:
             add_layers=layers_requested,
             layer_specs=layer_specs,
         )
-        if layers_requested:
+        host_layers = bool(mesh.gmsh_layer_patches)
+        if layers_requested or host_layers:
+            infl = next((s for s in inflates if s.patch_name), None)
             _progress(
                 "boundary_layers",
                 wall_patches=mesh.wall_patches,
-                n_layers=sizing.n_layers,
-                total_thickness_m=sizing.layer_thickness_m,
-                expansion=sizing.layer_expansion,
+                n_layers=infl.n_layers if infl else sizing.n_layers,
+                total_thickness_m=infl.thickness_m if infl else sizing.layer_thickness_m,
+                expansion=infl.expansion if infl else sizing.layer_expansion,
                 inflate=inflate_notes(inflates),
-                layer_patches=[s.name for s in layer_specs],
+                layer_patches=[s.name for s in layer_specs] + list(mesh.gmsh_layer_patches),
+                gmsh_layer_patches=mesh.gmsh_layer_patches,
             )
 
         _progress("gmshToFoam", wsl_case=wsl_case, layers=layers_requested)
         result = run_standard_pipeline(
             case_dir, wsl_case_name=wsl_case, timeout_total=float(args.timeout), allow_skew=True
         )
-        layers_applied = layers_requested
+        layers_applied = host_layers or layers_requested
         if layers_requested and not result.check_ok:
             # Layers are an add-on: fall back to the layer-free mesh rather than
             # failing Generate. The retry reuses the host msh (no re-meshing).
@@ -392,7 +410,7 @@ def main() -> int:
             result = run_standard_pipeline(
                 case_dir, wsl_case_name=wsl_case, timeout_total=float(args.timeout), allow_skew=True
             )
-            layers_applied = False
+            layers_applied = host_layers
         (case_dir / "log.standard_generate.txt").write_text(
             result.detail_text(), encoding="utf-8", errors="replace"
         )
@@ -408,10 +426,11 @@ def main() -> int:
             )
 
         _progress("copy_back")
-        copy_back(wsl_case, case_dir)
+        copy_back_mesh(wsl_case, case_dir)
         bound = case_dir / "constant" / "polyMesh" / "boundary"
         if bound.is_file():
             apply_boundary_patch_types(bound, patch_types)
+            coerce_gmsh_leftover_walls(bound)
         (case_dir / "case.foam").write_text("", encoding="ascii")
 
         counts = _poly_counts(case_dir / "constant" / "polyMesh")
@@ -459,7 +478,9 @@ def main() -> int:
                 "n_tets": mesh.n_tets,
                 "n_hex": mesh.n_hex,
                 "n_pyr": mesh.n_pyr,
+                "n_prism": mesh.n_prism,
                 "n_tris": mesh.n_tris,
+                "gmsh_layer_patches": mesh.gmsh_layer_patches,
                 "volume_error_rel": mesh.volume_error_rel,
                 "wall_s": mesh.wall_s,
             },

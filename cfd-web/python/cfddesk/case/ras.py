@@ -30,7 +30,7 @@ RAS_MODELS: tuple[TurbulenceModel, ...] = (
     "LRR",
     "SSG",
 )
-ALL_TURBULENCE_MODELS: tuple[TurbulenceModel, ...] = ("laminar",) + RAS_MODELS
+ALL_TURBULENCE_MODELS: tuple[TurbulenceModel, ...] = ("laminar", *RAS_MODELS)
 RSM_MODELS: frozenset[str] = frozenset({"LRR", "SSG"})
 
 C_MU = 0.09
@@ -63,10 +63,10 @@ def inlet_turbulence_scalars(
 ) -> TurbulenceScalars:
     """Compute k, ε, ω, νt from inlet speed, intensity, and hydraulic diameter."""
     U = abs(float(U_ref))
-    I = max(float(intensity_pct), 0.01) / 100.0
+    intensity = max(float(intensity_pct), 0.01) / 100.0
     Dh = max(float(D_h), 1e-6)
     L = 0.07 * Dh
-    k = 1.5 * (U * I) ** 2
+    k = 1.5 * (U * intensity) ** 2
     k = max(k, 1e-12)
     eps = (C_MU**0.75) * (k**1.5) / L
     eps = max(eps, 1e-12)
@@ -78,7 +78,7 @@ def inlet_turbulence_scalars(
         epsilon=eps,
         omega=omega,
         nut=nut,
-        intensity=I,
+        intensity=intensity,
         L=L,
         U_ref=U,
         D_h=Dh,

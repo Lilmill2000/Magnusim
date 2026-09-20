@@ -1,3 +1,4 @@
+import { safeProjectPath } from './safe-path.js';
 /**
  * W18 — Materials → Air + Body1 assign (filesystem persistence).
  * Persists projects/<id>/materials.json via POST/GET /api/materials.
@@ -9,14 +10,17 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   unlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { activeGeometryId, matchesGeometry, matchesStudy, primaryGeometryId } from './w16-geometry-scope.js';
-import { firstLegacySimId, getActiveSimulation, writeActiveMirror } from './w17-sim-catalog.js';
+import { activeGeometryId, matchesGeometry, matchesStudy, primaryGeometryId, studyScopedGeometryId } from './w16-geometry-scope.js';
+import { firstLegacySimId, getActiveSimulation, liveStudyRows, writeActiveMirror } from './w17-sim-catalog.js';
+import { assembleAllMaterials, deleteOneMaterial, persistOneMaterial, readStudyJson, studyFilePath } from './study-io.js';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
-import { pyJsonSync } from './py-json.js';
+import { pyJson } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -47,15 +51,15 @@ function readActiveId() {
 }
 
 function projectDir(id) {
-  return join(PROJECTS_ROOT, id);
+  return safeProjectPath(PROJECTS_ROOT, id);
 }
 
 function projectJsonPath(id) {
   return join(projectDir(id), 'project.json');
 }
 
-function materialsJsonPath(id) {
-  return join(projectDir(id), 'materials.json');
+function materialsJsonPath(id, simId) {
+  return studyFilePath(id, simId, 'materials');
 }
 
 function simulationJsonPath(id) {
@@ -74,23 +78,86 @@ function writeProject(proj) {
   return proj;
 }
 
-function readMaterialsFile(id) {
-  const p = materialsJsonPath(id);
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, 'utf8'));
-  } catch {
-    return null;
+const MATERIALS_MAX_BYTES = 256 * 1024;
+
+function stripMaterialNotes(doc) {
+  if (!doc || typeof doc !== 'object') return doc;
+  const next = { ...doc };
+  delete next.note;
+  if (next.air && typeof next.air === 'object') {
+    next.air = { ...next.air };
+    delete next.air.note;
   }
+  if (Array.isArray(next.materials)) {
+    next.materials = next.materials.map((m) => {
+      if (!m || typeof m !== 'object') return m;
+      const row = { ...m };
+      delete row.note;
+      return row;
+    });
+  }
+  return next;
 }
 
-function writeMaterialsFile(id, doc, simId) {
-  const out = pyJsonSync(
-    'project_cli.py',
-    ['set-materials', '--project-dir', projectDir(id), '--sim-id', String(simId || '')],
-    doc,
-  );
-  return materialsJsonPath(id);
+function airFromProject(id) {
+  const proj = readProject(id);
+  const sim = getActiveSimulation(id, proj);
+  const ref = proj && proj.materials && proj.materials.air;
+  const air = {
+    id: (ref && ref.id) || `mat-${String(id).slice(-8)}`,
+    name: W18_AIR.name,
+    type: W18_AIR.type,
+    viscosity_model: W18_AIR.viscosity_model,
+    kinematic_viscosity: W18_AIR.kinematic_viscosity,
+    kinematic_viscosity_unit: W18_AIR.kinematic_viscosity_unit,
+    density: W18_AIR.density,
+    density_unit: W18_AIR.density_unit,
+    library: W18_AIR.library,
+    assigned_volumes: (ref && ref.assigned_volumes) || ['Body1'],
+    assigned_volume: ((ref && ref.assigned_volumes) || ['Body1'])[0] || 'Body1',
+    saved: true,
+    checkmark_saved: true,
+    persistence: 'filesystem',
+    increment: 'W18',
+    project_id: id,
+    simulation_id: (sim && sim.id) || null,
+    geometry_id: (sim && sim.geometry_id) || (proj && proj.active_geometry_id) || null,
+  };
+  return {
+    project_id: id,
+    simulation_id: air.simulation_id,
+    materials: [air],
+    air,
+    updated_at: new Date().toISOString(),
+    persistence: 'filesystem',
+    increment: 'W18',
+  };
+}
+
+function readMaterialsFile(id, simId) {
+  if (!simId) return null;
+  const fromStudy = readStudyJson(id, simId, 'materials');
+  return fromStudy ? stripMaterialNotes(fromStudy) : null;
+}
+
+async function writeMaterialsFile(id, doc, simId, only) {
+  const slim = stripMaterialNotes(doc);
+  const recs = only
+    ? (Array.isArray(only) ? only : [only]).filter(Boolean)
+    : (slim && slim.materials) || [];
+  for (const rec of recs) {
+    if (rec && rec.id) persistOneMaterial(id, simId, rec);
+  }
+  try {
+    await pyJson(
+      'project_cli.py',
+      ['set-materials', '--project-dir', projectDir(id), '--sim-id', String(simId || '')],
+      { ...slim, materials: recs, air: recs[0] || slim.air, only_id: recs[0] && recs[0].id },
+    );
+  } catch {
+    /* folders already written */
+  }
+  return materialsJsonPath(id, simId);
 }
 
 function readSimulationFile(id) {
@@ -164,13 +231,11 @@ function buildAirMaterial(body, existing) {
     materials_json: null,
     soft_pass_avoided: true,
     increment: 'W18',
-    note:
-      'Real Materials → Air (Newtonian) assigned to Body1 via checkmark/save. Persisted under projects/<id>/materials.json. No BCs/mesh/solves in this slice.',
   };
   return { ok: true, material };
 }
 
-function upsertMaterials(body) {
+async function upsertMaterials(body) {
   const projectId = (body && body.project_id) || readActiveId();
   if (!projectId) {
     return {
@@ -199,8 +264,8 @@ function upsertMaterials(body) {
     };
   }
 
-  const existingDoc = readMaterialsFile(projectId);
-  const geomId = activeGeometryId(proj, body && body.geometry_id);
+  const existingDoc = readMaterialsFile(projectId, sim.id);
+  const geomId = studyScopedGeometryId(proj, sim, body && body.geometry_id);
   const primaryId = primaryGeometryId(proj);
   const allMats = (existingDoc && Array.isArray(existingDoc.materials) && existingDoc.materials) || [];
   const legacyId = firstLegacySimId(projectId, proj);
@@ -216,16 +281,14 @@ function upsertMaterials(body) {
   const built = buildAirMaterial(body || {}, existingAir || null);
   if (!built.ok) return built;
 
-  const materialsPath = materialsJsonPath(projectId);
+  const materialsPath = materialsJsonPath(projectId, sim.id);
   built.material.materials_json = materialsPath;
   built.material.project_id = projectId;
   built.material.simulation_id = sim.id;
   if (geomId) built.material.geometry_id = geomId;
 
-  const kept = allMats.filter(
-    (m) => m && !(matchesGeometry(m, geomId, primaryId) && matchesStudy(m, sim.id, legacyId))
-  );
-  const materials = kept.concat([built.material]);
+  const mine = allMats.filter((m) => m && matchesStudy(m, sim.id, legacyId));
+  const materials = mine.filter((m) => m && m.name !== 'Air').concat([built.material]);
 
   const doc = {
     project_id: projectId,
@@ -242,10 +305,10 @@ function upsertMaterials(body) {
       mesh_form: false,
       solves: false,
     },
-    note: 'W18 Materials → Air assigned Body1 (✓ save). No BCs/mesh/solves.',
   };
 
-  writeMaterialsFile(projectId, doc);
+  await writeMaterialsFile(projectId, doc, sim.id, [built.material]);
+  // set_materials already stamps project.json.
 
   proj.materials = {
     air: {
@@ -300,7 +363,7 @@ function upsertMaterials(body) {
   };
 }
 
-function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
+async function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
   const projectId = projectIdOpt || readActiveId();
   if (!projectId) {
     return {
@@ -317,15 +380,20 @@ function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
       body: { error: 'project not found', project_id: projectId },
     };
   }
-  const p = materialsJsonPath(projectId);
-  const geomId = activeGeometryId(proj, geomIdOpt);
-  const primaryId = primaryGeometryId(proj);
-  const doc = readMaterialsFile(projectId);
   const sim = getActiveSimulation(projectId, proj, simIdOpt);
+  const p = materialsJsonPath(projectId, sim && sim.id);
+  const geomId = studyScopedGeometryId(proj, sim, geomIdOpt);
+  const primaryId = primaryGeometryId(proj);
+  const doc = readMaterialsFile(projectId, sim && sim.id);
   const legacyId = firstLegacySimId(projectId, proj);
-  const kept = ((doc && doc.materials) || []).filter(
+  const all = (doc && doc.materials) || [];
+  const kept = all.filter(
     (m) => m && !(matchesGeometry(m, geomId, primaryId) && matchesStudy(m, sim && sim.id, legacyId))
   );
+  const dropped = all.filter((m) => m && !kept.includes(m));
+  for (const m of dropped) {
+    if (m && m.id) deleteOneMaterial(projectId, sim && sim.id, m.id);
+  }
   if (!kept.length) {
     if (existsSync(p)) {
       try {
@@ -337,7 +405,7 @@ function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
     if (proj.materials) delete proj.materials;
   } else {
     const next = { ...doc, materials: kept, air: kept.find((m) => m.name === 'Air') || kept[0], updated_at: new Date().toISOString() };
-    writeMaterialsFile(projectId, next);
+    await writeMaterialsFile(projectId, next, sim && sim.id, []);
     proj.materials = {
       air: next.air
         ? {
@@ -378,7 +446,7 @@ function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
   };
 }
 
-function getMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
+export function getMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
   const projectId = projectIdOpt || readActiveId();
   if (!projectId) {
     return {
@@ -402,16 +470,17 @@ function getMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
       body: { error: 'project not found', project_id: projectId },
     };
   }
-  const doc = readMaterialsFile(projectId);
-  const geomId = activeGeometryId(proj, geomIdOpt);
-  const primaryId = primaryGeometryId(proj);
-  const all = (doc && doc.materials) || [];
   const sim = getActiveSimulation(projectId, proj, simIdOpt);
+  const geomId = studyScopedGeometryId(proj, sim, geomIdOpt);
+  const primaryId = primaryGeometryId(proj);
+  const doc = readMaterialsFile(projectId, sim && sim.id);
+  const all = (doc && doc.materials) || [];
   const legacyId = firstLegacySimId(projectId, proj);
   const materials = all.filter(
     (m) => matchesGeometry(m, geomId, primaryId) && matchesStudy(m, sim && sim.id, legacyId)
   );
   const air = materials.find((m) => m.name === 'Air') || null;
+  const matPath = materialsJsonPath(projectId, sim && sim.id);
   return {
     ok: true,
     status: 200,
@@ -420,9 +489,11 @@ function getMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
       active: true,
       project_id: projectId,
       materials,
+      materials_all: assembleAllMaterials(projectId),
       air,
-      materials_json_path: materialsJsonPath(projectId),
-      materials_json_exists: existsSync(materialsJsonPath(projectId)),
+      simulation_id: (sim && sim.id) || null,
+      materials_json_path: matPath,
+      materials_json_exists: !!(matPath && existsSync(matPath)),
       assigned_volumes: air ? air.assigned_volumes || [] : [],
       body1_assigned: !!(air && (air.assigned_volumes || []).includes('Body1')),
       project_materials_ref: proj.materials || null,
@@ -447,12 +518,12 @@ export async function handleW18Api(req, res, u, parts, helpers) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
       if (body && (body.delete === true || body.action === 'delete')) {
-        const result = deleteMaterials(body.project_id, body.geometry_id, body.simulation_id);
+        const result = await deleteMaterials(body.project_id, body.geometry_id, body.simulation_id);
         res.setHeader('X-CFD-Source', 'materials-delete');
         res.setHeader('X-CFD-Increment', 'W18');
         return sendJson(res, result.status, result.body);
       }
-      const result = upsertMaterials(body);
+      const result = await upsertMaterials(body);
       res.setHeader('X-CFD-Source', 'materials-upsert');
       res.setHeader('X-CFD-Increment', 'W18');
       if (result.ok && result.body.material) {
@@ -465,7 +536,7 @@ export async function handleW18Api(req, res, u, parts, helpers) {
     }
     if (req.method === 'DELETE' && !parts[2]) {
       const pid = u.searchParams.get('project_id') || undefined;
-      const result = deleteMaterials(
+      const result = await deleteMaterials(
         pid,
         u.searchParams.get('geometry_id') || undefined,
         u.searchParams.get('simulation_id') || undefined

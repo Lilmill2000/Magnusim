@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 
 from cfddesk.registry import (
-    CaseContext,
     DEFAULT_STEADY_KEY,
     DEFAULT_TRANSIENT_KEY,
+    CaseContext,
     get_registry,
     load_all,
     reset_for_tests,

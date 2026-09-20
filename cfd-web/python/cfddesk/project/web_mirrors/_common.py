@@ -94,3 +94,37 @@ def _primary_sim(project: Any, sim_id: str | None = None) -> Any:
                 return s
     return sims[0]
 
+
+def _all_sims(project: Any) -> list[Any]:
+    return list(getattr(project, "simulations", None) or [])
+
+
+def _legacy_sim_id(project: Any) -> str | None:
+    sims = _all_sims(project)
+    return str(sims[0].id) if len(sims) == 1 else None
+
+
+def _record_sim_id(rec: Any) -> str:
+    if not isinstance(rec, dict):
+        return ""
+    raw = rec.get("simulation_id")
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
+def _matches_study(rec: Any, sim_id: str | None, legacy_id: str | None) -> bool:
+    want = str(sim_id or "").strip()
+    if not want:
+        return False
+    sid = _record_sim_id(rec)
+    if not sid:
+        return bool(legacy_id) and want == str(legacy_id)
+    return sid == want
+
+
+def _filter_study_rows(rows: Any, sim_id: str | None, legacy_id: str | None) -> list[Any]:
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if isinstance(r, dict) and _matches_study(r, sim_id, legacy_id)]
+

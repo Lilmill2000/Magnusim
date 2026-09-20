@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 FilterType = Literal["cut_plane", "streamlines", "plot_over_path", "iso_surface", "iso_volume", "animation", "field_calculator"]
@@ -168,7 +168,7 @@ class CutPlaneFilter:
         return CutPlaneFilter(
             id=str(data.get("id") or _new_id()),
             visible=bool(data.get("visible", True)),
-            orientation=raw_orient,  # type: ignore[arg-type]
+            orientation=raw_orient,
             position=position,
             coloring=coloring,
             vectors=bool(data.get("vectors", CUTTING_PLANE_DEFAULT_VECTORS)),
@@ -181,7 +181,7 @@ class CutPlaneFilter:
     def normal(self) -> AxisName:
         """Axis used for live plane placement (Inverse → Y, flipped sign)."""
         if self.orientation in ("X", "Y", "Z"):
-            return self.orientation  # type: ignore[return-value]
+            return self.orientation
         return "Y"
 
     @normal.setter
@@ -894,8 +894,8 @@ class ResultsDisplay:
             rep = "step_solid"
         dens = data.get("density_kg_m3")
         return ResultsDisplay(
-            boundary_mode=mode,  # type: ignore[arg-type]
-            geometry_rep=rep,  # type: ignore[arg-type]
+            boundary_mode=mode,
+            geometry_rep=rep,
             density_kg_m3=float(dens) if dens is not None else None,
             field_unit=str(data.get("field_unit", "m/s")),
         )

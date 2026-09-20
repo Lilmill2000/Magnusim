@@ -6,6 +6,7 @@ from dataclasses import fields
 
 import pytest
 
+from cfddesk.project.mesh_refinements import REFINEMENT_MENU_BY_ALGORITHM
 from cfddesk.registry import (
     MeshBackend,
     analysis_has_mesh_bags,
@@ -14,9 +15,6 @@ from cfddesk.registry import (
     reset_for_tests,
 )
 from cfddesk.registry.analysis import AnalysisType
-from cfddesk.registry.discovery import get_hub
-from cfddesk.project.mesh_refinements import REFINEMENT_MENU_BY_ALGORITHM
-
 
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
 

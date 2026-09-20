@@ -59,7 +59,7 @@ def build_newtonian_incompressible() -> MaterialModel:
     )
 
 
-def register_materials(hub: "RegistryHub") -> None:
+def register_materials(hub: RegistryHub) -> None:
     """Register newtonian_incompressible (idempotent same-plugin)."""
     reg = hub.registry("material")
     reg.register(build_newtonian_incompressible(), plugin="builtin")

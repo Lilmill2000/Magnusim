@@ -72,7 +72,8 @@ if openfoam2606 bash -c 'command -v cartesianMesh' >/dev/null 2>&1; then
   CFMESH="yes"
 fi
 
-python3 - <<PY
+python3 - "$TARGET_USER" "$HOME_DIR" "$CFMESH" <<'PY'
+import sys
 import json
 import subprocess
 
@@ -103,11 +104,11 @@ def cfmesh_version(present):
     return "present"
 
 print(json.dumps({
-    "user": "$TARGET_USER",
-    "home": "$HOME_DIR",
-    "cases": "$HOME_DIR/cases",
-    "cartesianMesh": "$CFMESH",
+    "user": sys.argv[1],
+    "home": sys.argv[2],
+    "cases": sys.argv[2] + "/cases",
+    "cartesianMesh": sys.argv[3],
     "openfoam_version": openfoam_version(),
-    "cfmesh_version": cfmesh_version("$CFMESH"),
+    "cfmesh_version": cfmesh_version(sys.argv[3]),
 }))
 PY

@@ -14,4 +14,4 @@ class PluginManifest:
     version: str = "0.0.0"
     requires: list[Requirement] = field(default_factory=list)
     provides: dict[str, list[str]] = field(default_factory=dict)
-    # UiManifest / ui field deferred to Phase 3 GO — soft-pass is registries-only.
+    ui: str | None = None  # relative dir under the plugin folder, e.g. "ui"

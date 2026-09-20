@@ -1,10 +1,12 @@
 ﻿#!/usr/bin/env python3
 """W25b: Export polyMesh cutting-plane section as VTP for live SPA mesh inspect."""
 from __future__ import annotations
+
 import argparse
 import json
 import sys
 from pathlib import Path
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -16,7 +18,6 @@ def main():
     args = ap.parse_args()
 
     import pyvista as pv
-    import numpy as np
 
     case = Path(args.case)
     foam = case / "case.foam"

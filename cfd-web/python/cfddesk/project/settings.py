@@ -188,17 +188,17 @@ class MeshSettings:
             location_in_mesh=(
                 (float(loc[0]), float(loc[1]), float(loc[2])) if loc is not None else None
             ),
-            location_source=location_source,  # type: ignore[arg-type]
+            location_source=location_source,
             min_cells_across_passage=float(data.get("min_cells_across_passage", 3.0)),
             stl_facet_to_cell_ratio=float(
                 data.get("stl_facet_to_cell_ratio", 1.0 / 3.0)
             ),
             fineness=fineness,
-            sizing_mode=sizing_mode,  # type: ignore[arg-type]
+            sizing_mode=sizing_mode,
             physics_based=bool(data.get("physics_based", True)),
             add_layers=bool(data.get("add_layers", True)),
             max_meshing_runtime_s=float(data.get("max_meshing_runtime_s", 18_000.0)),
-            algorithm=algorithm,  # type: ignore[arg-type]
+            algorithm=algorithm,
             # Missing key → True (current Standard default). Explicit False kept.
             hex_element_core=bool(data.get("hex_element_core", True)),
             hexcore_backend=_parse_hexcore_backend(data.get("hexcore_backend")),
@@ -334,7 +334,7 @@ class BoundarySettings:
         vec = data.get("inlet_vector", [-1.0, 0.0, 0.0])
         return BoundarySettings(
             inlet_speed_m_s=float(data.get("inlet_speed_m_s", 0.5)),
-            inlet_direction_mode=mode,  # type: ignore[arg-type]
+            inlet_direction_mode=mode,
             inlet_vector=(float(vec[0]), float(vec[1]), float(vec[2])),
             outlet_p=float(data.get("outlet_p", 0.0)),
             walls_type=str(data.get("walls_type", "noSlip")),
@@ -392,13 +392,13 @@ class SolverSettings:
         if mode not in ("steady", "transient"):
             mode = "steady"
         return SolverSettings(
-            mode=mode,  # type: ignore[arg-type]
-            backend=backend,  # type: ignore[arg-type]
-            end_condition=end_condition,  # type: ignore[arg-type]
+            mode=mode,
+            backend=backend,
+            end_condition=end_condition,
             end_time=int(data.get("end_time", 1000)),
             residual_u=float(data.get("residual_u", 1e-6)),
             residual_p=float(data.get("residual_p", 1e-6)),
-            turbulence=turb,  # type: ignore[arg-type]
+            turbulence=turb,
             turbulence_intensity_pct=float(
                 data.get("turbulence_intensity_pct", 5.0)
             ),

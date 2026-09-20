@@ -2,19 +2,23 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 from pathlib import Path
 
 import pytest
 
 from cfddesk.jobs.events import EVENT_PREFIX, parse_line
 from cfddesk.wsl.solve_run import (
+    WRITE_NOW_SED,
     ProgressParser,
     events_from_lines,
     render_solve_script,
+    solve_is_live,
     solve_template_path,
+    start_solve,
+    stop_solve,
     write_solve_script,
 )
-
 
 SAMPLE_LOG = """\
 CFDDESK_EVENT {"event":"start","run_id":"run-1","n_procs":1,"app":"simpleFoam"}
@@ -55,13 +59,20 @@ def test_template_exists_and_has_placeholders():
     assert 'echo "MAGNUSIM_EVENT' in text  # emit preferred brand
     assert "openfoam2606" in text
     assert "decomposePar" in text
+    assert "mpirun --oversubscribe -np" in text
     assert "W27_" not in text
+    assert "reconstructPar -latestTime" in text
+    assert "reconstructPar -newTimes" not in text
+    assert "postProcessing" in text
+    assert "_latest_time" in text
+    assert "sync_live_frames" in text
+    assert "copy_saved_time" in text
 
 
 def test_render_substitutes_all_placeholders(tmp_path: Path):
     body = render_solve_script(
         dst="/home/cfddesk/cases/cfddesk-w27-run-1",
-        win_out="/mnt/c/Users/drmil/Desktop/Code/CFD/cfd-web/projects/x/runs/run-run-1",
+        win_out="/mnt/c/Magnusim-fixture/cfd-web/projects/x/runs/run-run-1",
         n_procs=4,
         app="pimpleFoam",
         run_id="run-1",
@@ -101,6 +112,25 @@ def test_events_from_steady_sample_log():
     assert saved and float(saved[0].fields.get("t")) == 2.0
     result = [e for e in events if e.event == "result"][-1]
     assert result.fields.get("ok") is True
+
+
+def test_time_line_promotes_without_stage_event():
+    log = """\
+Courant Number mean: 0.12 max: 0.98
+deltaT = 0.000123
+Time = 0.000123
+Smooth solver:  Solving for Ux, Initial residual = 0.5, Final residual = 1e-3, No Iterations 2
+DICPCG:  Solving for p, Initial residual = 0.4, Final residual = 1e-4, No Iterations 10
+"""
+    events = events_from_lines(log.splitlines())
+    kinds = [e.event for e in events]
+    assert "progress" in kinds
+    parser = ProgressParser()
+    for line in log.splitlines():
+        parser.feed(line)
+    assert parser.stage == "solve"
+    assert parser.current is not None
+    assert float(parser.current["t"]) == pytest.approx(0.000123)
 
 
 def test_events_from_transient_courant():
@@ -165,3 +195,30 @@ def test_magnusim_prefixed_sample():
     events = events_from_lines(log.splitlines())
     assert any(e.event == "residual" for e in events)
     assert any(e.event == "result" for e in events)
+
+
+def test_write_now_sed_matches_flush_and_indented():
+    assert "[[:space:]]*stopAt" in WRITE_NOW_SED
+    assert "writeNow" in WRITE_NOW_SED
+    src = inspect.getsource(stop_solve)
+    assert "WRITE_NOW_SED" in src
+
+
+def test_solve_is_live_targets_solver_names():
+    src = inspect.getsource(solve_is_live)
+    assert "pgrep -x pimpleFoam" in src
+    assert "pgrep -x simpleFoam" in src
+    assert "live-frames" in src
+
+
+def test_stop_solve_cli_has_probe():
+    path = Path(__file__).resolve().parents[2] / "tools" / "stop_solve.py"
+    text = path.read_text(encoding="utf-8")
+    assert "--probe" in text
+    assert "solve_is_live" in text
+
+
+def test_start_solve_kills_leftover_wsl_solver():
+    src = inspect.getsource(start_solve)
+    assert "solve_is_live" in src
+    assert "kill_solve" in src

@@ -8,8 +8,9 @@ fvSolution. Steady path is untouched.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 TimeScheme = Literal["Euler", "backward"]
 TimeStepMode = Literal["adjustable", "fixed"]
@@ -91,7 +92,7 @@ class TransientControl:
     estimate: Mapping[str, Any] | None = None
 
     @classmethod
-    def from_web(cls, d: dict | None, ctx: dict | None = None) -> "TransientControl":
+    def from_web(cls, d: dict | None, ctx: dict | None = None) -> TransientControl:
         """normalizeTransient + resolveTransientControl (w30)."""
         t = normalize_transient(d)
         return resolve_transient_control(t, ctx or {})
@@ -116,7 +117,7 @@ def normalize_transient(partial: dict | None, base: dict | None = None) -> dict[
         )
     if p.get("max_co") is not None:
         v = _num(p["max_co"], float(b["max_co"]))
-        out["max_co"] = min(v, 50.0) if v > 0 else float(b["max_co"])
+        out["max_co"] = v if v > 0 else float(b["max_co"])
     if "delta_t" in p:
         out["delta_t"] = _pos_or_none(p.get("delta_t"))
     if "max_delta_t" in p:
@@ -156,7 +157,7 @@ def estimate_delta_t(
     if min_vol > 0:
         h = min_vol ** (1.0 / 3.0)
         basis = "min_cell"
-    sz = meta.get("sizing") if isinstance(meta.get("sizing"), dict) else None
+    sz = checked if isinstance((checked := meta.get("sizing")), dict) else None
     if not (h and h > 0) and sz:
         cands = [
             _num(sz.get("surface_size_m"), float("nan")),
@@ -184,7 +185,7 @@ def estimate_delta_t(
 def flow_through_time(mesh_meta: dict | None, speed_ref: float | None) -> float | None:
     """Longest bbox side / reference speed (w30 flowThroughTime)."""
     meta = mesh_meta or {}
-    sz = meta.get("sizing") if isinstance(meta.get("sizing"), dict) else None
+    sz = checked if isinstance((checked := meta.get("sizing")), dict) else None
     U = _num(speed_ref, 0.0)
     if not sz or U <= 0:
         return None

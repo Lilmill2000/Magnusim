@@ -9,12 +9,16 @@ if TYPE_CHECKING:
         assert_boundary_patch_types,
         assert_guardrails,
         write_simplefoam_case,
+        write_solve_case,
+        write_web_solve_case,
     )
 
 __all__ = [
     "assert_boundary_patch_types",
     "assert_guardrails",
     "write_simplefoam_case",
+    "write_solve_case",
+    "write_web_solve_case",
 ]
 
 

@@ -1,3 +1,4 @@
+import { safeProjectPath } from './safe-path.js';
 /**
  * W22 — Area average setup (filesystem persistence).
  * Persists projects/<id>/result_controls.json (+ area_average.json mirror)
@@ -20,8 +21,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, writeActiveMirror } from './w17-sim-catalog.js';
+import { deleteOneResultControl, persistOneResultControl, readStudyJson, studyFilePath } from './study-io.js';
 import { envGet } from './env-compat.js';
-import { pyJsonSync, writeProjectCli } from './py-json.js';
+import { pyJson, writeProjectCli } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -53,19 +55,19 @@ function readActiveId() {
 }
 
 function projectDir(id) {
-  return join(PROJECTS_ROOT, id);
+  return safeProjectPath(PROJECTS_ROOT, id);
 }
 
 function projectJsonPath(id) {
   return join(projectDir(id), 'project.json');
 }
 
-function resultControlsJsonPath(id) {
-  return join(projectDir(id), 'result_controls.json');
+function resultControlsJsonPath(id, simId) {
+  return studyFilePath(id, simId, 'result_controls');
 }
 
-function areaAverageJsonPath(id) {
-  return join(projectDir(id), 'area_average.json');
+function areaAverageJsonPath(id, simId) {
+  return studyFilePath(id, simId, 'result_controls');
 }
 
 function simulationJsonPath(id) {
@@ -83,14 +85,9 @@ function writeProject(proj) {
   return writeProjectCli(projectDir(proj.id), proj, String((proj.simulation && proj.simulation.id) || proj.active_simulation_id || ''));
 }
 
-function readRcFile(id) {
-  const p = resultControlsJsonPath(id);
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, 'utf8'));
-  } catch {
-    return null;
-  }
+function readRcFile(id, simId) {
+  if (!simId) return null;
+  return readStudyJson(id, simId, 'result_controls');
 }
 
 function readSimulationFile(id) {
@@ -302,22 +299,21 @@ function buildAreaAverage(body, existing) {
   return { ok: true, rc };
 }
 
-function persistRcDoc(projectId, sim, aa) {
-  const rcPath = resultControlsJsonPath(projectId);
-  const aaPath = areaAverageJsonPath(projectId);
+async function persistRcDoc(projectId, sim, aa) {
+  const rcPath = resultControlsJsonPath(projectId, sim.id);
+  const aaPath = areaAverageJsonPath(projectId, sim.id);
   const now = new Date().toISOString();
 
   aa.result_controls_json = rcPath;
   aa.area_average_json = aaPath;
   aa.project_id = projectId;
   aa.simulation_id = sim.id;
+  persistOneResultControl(projectId, sim.id, aa);
 
-  const prev = readRcFile(projectId);
-  const legacyId = firstLegacySimId(projectId, readProject(projectId));
-  const kept = ((prev && prev.result_controls) || []).filter(
-    (r) => r && !matchesStudy(r, sim.id, legacyId)
-  );
-  const list = kept.concat([aa]);
+  const prev = readRcFile(projectId, sim.id);
+  const list = ((prev && prev.result_controls) || []).length
+    ? prev.result_controls
+    : [aa];
   const doc = {
     project_id: projectId,
     simulation_id: sim.id,
@@ -352,35 +348,12 @@ function persistRcDoc(projectId, sim, aa) {
     note: 'W22 Area average 1 setup — Write control Time step; faces face57+face71. No results/charts until run. No solves.',
   };
 
-  pyJsonSync(
+  await pyJson(
     'project_cli.py',
     ['set-result-controls', '--project-dir', projectDir(projectId), '--sim-id', String(sim.id || '')],
     doc,
   );
-  // set-result-controls writes rc + aa mirror and soft-stamps project.json.
-
-  const proj = readProject(projectId);
-  if (proj) {
-    proj.result_controls = {
-      count: list.length,
-      names: list.map((r) => r.name),
-      area_average_1: {
-        name: aa.name,
-        kind: aa.kind,
-        category: aa.category,
-        write_control: aa.write_control,
-        faces: aa.faces,
-        both_faces: true,
-        results_available: false,
-      },
-      result_controls_json: rcPath,
-      area_average_json: aaPath,
-      updated_at: now,
-    };
-    proj.updated_at = now;
-    proj.increment = 'W22';
-    writeProject(proj);
-  }
+  // set-result-controls writes rc + aa mirror and stamps project.json.
 
   try {
     const simDoc = { ...sim };
@@ -399,7 +372,7 @@ function persistRcDoc(projectId, sim, aa) {
   return { doc, rcPath, aaPath, aa };
 }
 
-function deleteAreaAverage(projectIdOpt, simIdOpt) {
+async function deleteAreaAverage(projectIdOpt, simIdOpt) {
   const projectId = projectIdOpt || readActiveId();
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project' } };
@@ -410,12 +383,18 @@ function deleteAreaAverage(projectIdOpt, simIdOpt) {
   }
   const sim = getActiveSimulation(projectId, proj, simIdOpt);
   const legacyId = firstLegacySimId(projectId, proj);
-  const prev = readRcFile(projectId);
-  const kept = ((prev && prev.result_controls) || []).filter(
+  const prev = readRcFile(projectId, sim && sim.id);
+  const all = (prev && prev.result_controls) || [];
+  const kept = all.filter(
     (r) => r && !matchesStudy(r, sim && sim.id, legacyId)
   );
+  for (const r of all) {
+    if (r && r.id && !kept.some((k) => k && k.id === r.id)) {
+      deleteOneResultControl(projectId, sim && sim.id, r.id);
+    }
+  }
   if (!kept.length) {
-    for (const p of [resultControlsJsonPath(projectId), areaAverageJsonPath(projectId)]) {
+    for (const p of [resultControlsJsonPath(projectId, sim && sim.id), areaAverageJsonPath(projectId, sim && sim.id)]) {
       if (existsSync(p)) {
         try {
           unlinkSync(p);
@@ -437,7 +416,7 @@ function deleteAreaAverage(projectIdOpt, simIdOpt) {
       simulation_id: nextAa && nextAa.simulation_id ? nextAa.simulation_id : null,
       updated_at: now,
     };
-    pyJsonSync(
+    await pyJson(
       'project_cli.py',
       ['set-result-controls', '--project-dir', projectDir(projectId), '--sim-id', String((sim && sim.id) || '')],
       doc,
@@ -457,7 +436,7 @@ function deleteAreaAverage(projectIdOpt, simIdOpt) {
   };
 }
 
-function upsertAreaAverage(body) {
+async function upsertAreaAverage(body) {
   const projectId = (body && body.project_id) || readActiveId();
   if (!projectId) {
     return {
@@ -486,7 +465,7 @@ function upsertAreaAverage(body) {
     };
   }
 
-  const existingDoc = readRcFile(projectId);
+  const existingDoc = readRcFile(projectId, sim.id);
   const legacyId = firstLegacySimId(projectId, proj);
   const existing =
     ((existingDoc && existingDoc.result_controls) || []).find(
@@ -504,7 +483,7 @@ function upsertAreaAverage(body) {
   const built = buildAreaAverage(body || {}, existing);
   if (!built.ok) return built;
 
-  const { doc, rcPath, aaPath, aa } = persistRcDoc(projectId, sim, built.rc);
+  const { doc, rcPath, aaPath, aa } = await persistRcDoc(projectId, sim, built.rc);
   const created = !existing;
 
   return {
@@ -529,7 +508,7 @@ function upsertAreaAverage(body) {
   };
 }
 
-function getResultControls(projectIdOpt, simIdOpt) {
+export function getResultControls(projectIdOpt, simIdOpt) {
   const projectId = projectIdOpt || readActiveId();
   if (!projectId) {
     return {
@@ -555,8 +534,8 @@ function getResultControls(projectIdOpt, simIdOpt) {
       body: { error: 'project not found', project_id: projectId },
     };
   }
-  const doc = readRcFile(projectId);
   const sim = getActiveSimulation(projectId, proj, simIdOpt);
+  const doc = readRcFile(projectId, sim && sim.id);
   const legacyId = firstLegacySimId(projectId, proj);
   const list = ((doc && doc.result_controls) || []).filter((r) =>
     matchesStudy(r, sim && sim.id, legacyId)
@@ -582,10 +561,10 @@ function getResultControls(projectIdOpt, simIdOpt) {
       project_id: projectId,
       result_controls: list,
       area_average_1: aa,
-      result_controls_json_path: resultControlsJsonPath(projectId),
-      result_controls_json_exists: existsSync(resultControlsJsonPath(projectId)),
-      area_average_json_path: areaAverageJsonPath(projectId),
-      area_average_json_exists: existsSync(areaAverageJsonPath(projectId)),
+      result_controls_json_path: resultControlsJsonPath(projectId, sim && sim.id),
+      result_controls_json_exists: !!(resultControlsJsonPath(projectId, sim && sim.id) && existsSync(resultControlsJsonPath(projectId, sim && sim.id))),
+      area_average_json_path: areaAverageJsonPath(projectId, sim && sim.id),
+      area_average_json_exists: !!(areaAverageJsonPath(projectId, sim && sim.id) && existsSync(areaAverageJsonPath(projectId, sim && sim.id))),
       both_faces: both,
       bank_exact: both && writeOk && noFake,
       results_available: false,
@@ -617,11 +596,11 @@ export async function handleW22Api(req, res, u, parts, helpers) {
       return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
     }
     if (body && (body.delete === true || body.action === 'delete')) {
-      const result = deleteAreaAverage(body.project_id, body.simulation_id);
+      const result = await deleteAreaAverage(body.project_id, body.simulation_id);
       res.setHeader('X-CFD-Source', 'result-controls-delete');
       return sendJson(res, result.status, result.body);
     }
-    const result = upsertAreaAverage(body);
+    const result = await upsertAreaAverage(body);
     res.setHeader('X-CFD-Source', 'result-controls-upsert');
     res.setHeader('X-CFD-Increment', 'W22');
     if (result.ok && result.body.project_id) {

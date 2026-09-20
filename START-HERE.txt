@@ -1,0 +1,9 @@
+This folder is Magnusim.
+
+The app you run and the tree you publish are the same.
+App source lives in cfd-web/. Projects, node_modules, the Python
+venv, WSL settings, and cache stay on this machine and are not in git.
+
+1. Double-click Setup.bat (first run 30-90 minutes).
+2. Double-click run.bat. The first-run wizard sets units, hardware, and port.
+3. Double-click stop.bat when you are done.

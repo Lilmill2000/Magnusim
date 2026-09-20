@@ -43,10 +43,16 @@ def test_registry_defaults_module_exists():
 def test_w17_w20_import_registry_defaults():
     w17 = (WEB_ROOT / "scripts" / "w17-simulation.js").read_text(encoding="utf-8")
     w20 = (WEB_ROOT / "scripts" / "w20-mesh.js").read_text(encoding="utf-8")
+    w21 = (WEB_ROOT / "scripts" / "w21-mesh-generate.js").read_text(encoding="utf-8")
     assert "registry-defaults.js" in w17
     assert "buildW17DefaultsFromRegistry" in w17
+    assert "acceptsW17Analysis" in w17
     assert "registry-defaults.js" in w20
     assert "MESH_ENGINES" in w20
+    assert "registry-defaults.js" in w21
+    assert "resolveMeshBackend" in w21
+    assert "mesherKeys" in w21
+    assert "stamp_project" in w20
     # No parallel hard-coded MESH_ENGINES set left in w20.
     assert "new Set(['standard', 'cfmesh'])" not in w20
     assert 'new Set(["standard", "cfmesh"])' not in w20

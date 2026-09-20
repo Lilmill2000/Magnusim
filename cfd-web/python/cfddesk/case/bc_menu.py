@@ -1,5 +1,6 @@
 """Nested BC type → variant → (sub-variant) menu over flat registry keys.
 
+Product menu: Velocity inlet, Velocity outlet, Pressure, Wall.
 Legacy flat keys (``velocity_inlet_fixed``, …) remain the resolved writer keys.
 On-disk v8 stores ``type`` (menu) + ``variant`` (+ optional ``subvariant``).
 """
@@ -47,7 +48,6 @@ def _build() -> None:
             "Velocity inlet",
             (
                 _mv("fixed_value", "Fixed value", "velocity_inlet_fixed"),
-                _mv("mean_value", "Mean value", "velocity_inlet_mean"),
                 _mv(
                     "flow_rate",
                     "Flow rate",
@@ -57,7 +57,6 @@ def _build() -> None:
                         ("mass", "Mass flow", "velocity_inlet_mass"),
                     ),
                 ),
-                _mv("freestream", "Freestream", "velocity_inlet_freestream"),
             ),
         ),
         MenuType(
@@ -66,21 +65,9 @@ def _build() -> None:
             (_mv("fixed_value", "Fixed value", "velocity_outlet"),),
         ),
         MenuType(
-            "pressure_inlet",
-            "Pressure inlet",
-            (
-                _mv("fixed_gauge", "Fixed gauge", "pressure_inlet_gauge"),
-                _mv("total_pressure", "Total pressure", "pressure_inlet_total"),
-            ),
-        ),
-        MenuType(
             "pressure_outlet",
-            "Pressure outlet",
-            (
-                _mv("fixed_gauge", "Fixed gauge", "pressure_outlet_gauge"),
-                _mv("total_pressure", "Total pressure", "pressure_outlet_total"),
-                _mv("mean_value", "Mean value", "pressure_outlet_mean"),
-            ),
+            "Pressure",
+            (_mv("fixed_gauge", "Fixed value", "pressure_outlet_gauge"),),
         ),
         MenuType(
             "wall",
@@ -88,45 +75,8 @@ def _build() -> None:
             (
                 _mv("noslip", "No-slip", "wall_noslip"),
                 _mv("slip", "Slip", "wall_slip"),
-                _mv("moving", "Moving", "wall_moving"),
-                _mv("rotating", "Rotating", "wall_rotating"),
             ),
         ),
-        MenuType("fan", "Fan", (_mv("default", "Fan", "fan"),)),
-        MenuType("symmetry", "Symmetry", (_mv("default", "Symmetry", "symmetry"),)),
-        MenuType(
-            "periodic",
-            "Periodic",
-            (_mv("default", "Periodic", "periodic"),),
-            supported=False,
-            unsupported_reason=(
-                "Periodic requires conformal opposite faces for createPatch cyclic "
-                "matching. The app meshes STEP geometry with snappyHexMesh, whose "
-                "opposite faces are not point-matched. Not supported until a "
-                "conformal mesh path exists."
-            ),
-        ),
-        MenuType(
-            "wedge",
-            "Wedge",
-            (_mv("default", "Wedge", "wedge"),),
-            supported=False,
-            unsupported_reason=(
-                "Wedge requires two patches at a small angle about an axis on an "
-                "axisymmetric mesh. Not supported in this release."
-            ),
-        ),
-        MenuType(
-            "empty",
-            "Empty 2D",
-            (_mv("default", "Empty", "empty"),),
-            supported=False,
-            unsupported_reason=(
-                "Empty requires a front/back patch pair on a one-cell-thick 2D mesh. "
-                "Not supported in this release."
-            ),
-        ),
-        MenuType("custom", "Custom", (_mv("default", "Custom (raw OpenFOAM)", "custom"),)),
     ]
     _LEGACY_MAP.clear()
     for mt in MENU:
@@ -136,8 +86,6 @@ def _build() -> None:
                     _LEGACY_MAP[reg] = (mt.key, var.key, sk)
             else:
                 _LEGACY_MAP[var.registry_key] = (mt.key, var.key, None)
-    # Keep natural_convection as legacy-only (not in SimScale menu)
-    _LEGACY_MAP["natural_convection"] = ("custom", "default", None)
 
 
 _build()
@@ -171,8 +119,7 @@ def legacy_from_nested(
 def nested_from_legacy(registry_key: str) -> tuple[str, str, str | None]:
     if registry_key in _LEGACY_MAP:
         return _LEGACY_MAP[registry_key]
-    # Unknown → treat as custom
-    return ("custom", "default", None)
+    raise KeyError(f"Unknown BC registry key {registry_key!r}")
 
 
 def resolve_spec(

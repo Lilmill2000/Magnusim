@@ -8,14 +8,20 @@
     "moduleResolution": "Bundler",
     "strict": false,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "allowImportingTsExtensions": true
   },
-  "include": ["scripts/**/*.js"],
+  "include": [
+    "scripts/**/*.js"
+  ],
   "exclude": [
     "scripts/__tests__/**",
     "scripts/vite-plugin-case-fields.js",
     "scripts/w16-project-geometry.js",
     "scripts/w21-mesh-generate.js",
-    "scripts/w27-solve.js"
+    "scripts/w27-solve.js",
+    "scripts/server/**"
   ]
 }

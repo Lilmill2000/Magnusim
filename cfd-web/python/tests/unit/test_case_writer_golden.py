@@ -14,7 +14,6 @@ import pytest
 
 from cfddesk.case.writer import assert_guardrails, write_simplefoam_case
 from cfddesk.project.model import Project
-
 from tests.conftest import GOLDEN, compare_or_update
 
 FILES = (

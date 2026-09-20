@@ -105,7 +105,7 @@ def parse_line(line: str) -> Event | None:
     if kind not in KNOWN_KINDS:
         return None
     fields = {k: v for k, v in data.items() if k != "event"}
-    return Event(event=kind, fields=fields)  # type: ignore[arg-type]
+    return Event(event=kind, fields=fields)
 
 
 def event_to_stdout_jsonl(ev: Event) -> None:

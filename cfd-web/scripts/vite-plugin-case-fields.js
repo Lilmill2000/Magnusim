@@ -7,6 +7,8 @@
  *   GET /api/particle-trace/meta?...      -> JSON (n_seeds, tube_proof, fingerprint)
  *   GET /api/plot-over-path?...           -> JSON series (sample_over_line on magU/p)
  *   GET /api/plot-over-path/meta?...      -> same JSON fingerprint
+ *   GET /api/volume/warmup?case=&time=    -> pin OpenFOAM volume in worker RAM
+ *   POST /api/volume/release              -> drop in-memory volumes (Home / idle)
  *   GET /api/cut-plane?...                -> volume cutting-plane slice VTP (pyvista slice)
  *   GET /api/iso-surface?...              -> iso contour VTP (volume VTU contour)
  *   GET /api/iso-surface/meta?...         -> JSON fingerprint (n_cells, empty, checksum)
@@ -30,36 +32,32 @@
  * GET /api/case returns it; /api/times + field APIs use active root when case=
  * omitted. No fake Running/0-100 progress. Attach-only is enough for W15.
  * W15.1 HARD: POST /api/case/mesh kicks real OpenFOAM checkMesh via WSL
- * (cfddesk ext4 case). Job status runningâ†’done/failed tracks real process PID.
- * On done: active case_dir â†’ new run-w151-* (time 0 only) so times/fp change.
+ * (cfddesk ext4 case). Job status runningÃ¢â€ â€™done/failed tracks real process PID.
+ * On done: active case_dir Ã¢â€ â€™ new run-w151-* (time 0 only) so times/fp change.
  * Same-origin on 8082.
  * W19 HARD: POST /api/bcs + GET /api/bcs persist boundary_conditions.json
  *   (Velocity inlet 1 @ face57 5 ft3/min + Pressure outlet 2 @ face71 0 Pa; NOT Velocity outlet).
- * W18 HARD: POST /api/materials + GET /api/materials persist materials.json (Airâ†’Body1).
+ * W18 HARD: POST /api/materials + GET /api/materials persist materials.json (AirÃ¢â€ â€™Body1).
  * W17 HARD: POST /api/simulation + GET /api/simulation persist simulation.json (Incompressible defaults).
  * W16 HARD: POST /api/project + GET /api/project persist under projects/;
- * POST /api/geometry/import STEPâ†’STL Body1; GET /api/geometry/stl serves CAD.
+ * POST /api/geometry/import STEPÃ¢â€ â€™STL Body1; GET /api/geometry/stl serves CAD.
  * W20 HARD: POST /api/mesh + GET /api/mesh persist mesh.json (bank settings).
  * W23 HARD: POST /api/mesh/generate|/remesh uses W16 project source.step/Body1 + Standard/gmsh-hexcore (Hex-dominant=snappy); Job PID; real polyMesh counts; NOT checkMesh; NOT MTP1-silent-copy; no W15.1 stamp on generate.
- * W27: /api/run/* + /api/simulation-control — run catalog, simpleFoam start/stop/status, monitors.
+ * W27: /api/run/* + /api/simulation-control â€” run catalog, simpleFoam start/stop/status, monitors.
  * W22: POST/GET /api/result-controls|/api/area-average persist optional area-average monitors (setup only).
  * FILTERS/attach/W15.1 kick unchanged.
  */
 import { spawn } from 'node:child_process';
-import { handleW16Api, attachLiveMeshJobReader, attachActiveProjectListener } from './w16-project-geometry.js';
-import { caseDirBelongsToProject, projectIdFromCaseDir } from './project-isolation.js';
-import { handleW17Api } from './w17-simulation.js';
-import { handleW18Api } from './w18-materials.js';
-import { handleW19Api } from './w19-boundary-conditions.js';
-import { handleW20Api } from './w20-mesh.js';
-import { startMeshGenerate, meshGenerateLivePid, liveMeshJobSnapshot, persistMeshResult } from './w21-mesh-generate.js';
+import { attachLiveMeshJobReader } from './w16-project-geometry.js';
+import { caseDirAllowedForAttach, caseDirBelongsToProject, caseDirBelongsToStudy, projectIdFromCaseDir } from './project-isolation.js';
+import { listFoamTimeDirs } from './project-layout.js';
+import { liveMeshJobSnapshot, meshGenerateLivePid, persistMeshResult, recoverStudyMeshesFromDisk } from './w21-mesh-generate.js';
 import { getActiveSimulation } from './w17-sim-catalog.js';
-import { handleW26Api } from './w26-mesh-refinements.js';
-import { handleW22Api } from './w22-area-average.js';
-import { handleW27Api, runLivePid as runLivePidW27 } from './w27-solve.js';
-import { handleW28Api } from './w28-media.js';
-import { handlePrefsApi } from './w32-prefs.js';
+import { assembleMeshDoc } from './study-io.js';
+import { runLivePid as runLivePidW27 } from './w27-solve.js';
 import { PYTHON, PY_TOOLS, pyTool } from './python-env.js';
+import { callWorker } from './py-json.js';
+import { fieldExportMaySpawnFallback } from './field-export-fallback.js';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -73,7 +71,7 @@ const ROOT = resolve(__dirname, '..');
 const CACHE_DIR = join(ROOT, '.cache');
 const DEFAULT_TIME = '50';
 
-/** W15/W15.1 active case root â€” set by attach or mesh kick; used when ?case= omitted. */
+/** W15/W15.1 active case root Ã¢â‚¬â€ set by attach or mesh kick; used when ?case= omitted. */
 let activeCaseState = {
   case_dir: null,
   status: 'idle', // idle | attached | running | done | failed
@@ -132,7 +130,7 @@ function resetActiveCaseIdle(note) {
     mode: 'attach-only',
     n_times: 0,
     times: [],
-    note: note || 'idle — add geometry',
+    note: note || 'idle â€” add geometry',
     pid: null,
     exit_code: null,
     command: null,
@@ -175,7 +173,7 @@ function syncActiveCaseToActiveProject() {
   if (id && activeCaseState.case_dir && caseDirBelongsToProject(activeCaseState.case_dir, id)) {
     return;
   }
-  resetActiveCaseIdle(id ? 'detached — switched project' : 'idle');
+  resetActiveCaseIdle(id ? 'detached â€” switched project' : 'idle');
   hydrateActiveMeshCase();
 }
 
@@ -225,6 +223,8 @@ function caseSnapshot() {
     wsl_case: activeCaseState.wsl_case,
     path_kind: activeCaseState.path_kind,
     kick_id: activeCaseState.kick_id,
+    mesh_id: activeCaseState.mesh_id || null,
+    simulation_id: activeCaseState.simulation_id || null,
     error: activeCaseState.error || null,
     n_cells: activeCaseState.n_cells ?? null,
     n_points: activeCaseState.n_points ?? null,
@@ -261,7 +261,7 @@ function applyKickUpdate(fields) {
   };
 }
 
-function attachCaseDir(caseDirAbs, projectIdOpt) {
+function attachCaseDir(caseDirAbs, projectIdOpt, simIdOpt) {
   const caseDir = String(caseDirAbs || '').trim();
   if (!caseDir) {
     return { ok: false, status: 400, body: { error: 'case_dir required (absolute path)', status: 'idle' } };
@@ -272,6 +272,21 @@ function attachCaseDir(caseDirAbs, projectIdOpt) {
       ok: false,
       status: 403,
       body: { error: 'case_dir is not in this project', case_dir: caseDir, project_id: want },
+    };
+  }
+  const sid = String(simIdOpt || '').trim();
+  if (want && /[/\\](geometries|simulations)[/\\]/i.test(caseDir) && !sid) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'simulation_id required', case_dir: caseDir, project_id: want },
+    };
+  }
+  if (want && sid && !caseDirAllowedForAttach(caseDir, want, sid)) {
+    return {
+      ok: false,
+      status: 403,
+      body: { error: 'case_dir is not in this study', case_dir: caseDir, project_id: want, simulation_id: sid },
     };
   }
   if (!caseDir || !existsSync(caseDir)) {
@@ -358,6 +373,38 @@ function attachCaseDir(caseDirAbs, projectIdOpt) {
     project_id: projectIdFromCaseDir(caseDir) || want || null,
   };
   return { ok: true, status: 200, body: caseSnapshot() };
+}
+
+function tryWarmVolume(caseDir, times) {
+  const list = Array.isArray(times) ? times : [];
+  const time = list.length ? String(list[list.length - 1]) : '0';
+  const rpc = warmVolume(caseDir, time);
+  if (rpc && typeof rpc.then === 'function') {
+    rpc.catch((err) => console.warn('[CFD] volume warmup', err && err.message ? err.message : err));
+  }
+}
+
+async function warmVolume(caseDir, time) {
+  const t = String(time || '0');
+  const rpc = callWorker(
+    'filter.warmup_volume',
+    { case_dir: caseDir, time: t },
+    20000,
+  );
+  if (!rpc || typeof rpc.then !== 'function') {
+    const err = new Error('worker unavailable');
+    err.status = 503;
+    throw err;
+  }
+  return rpc;
+}
+
+async function releaseVolume() {
+  const rpc = callWorker('filter.release_volume', {}, 15000);
+  if (!rpc || typeof rpc.then !== 'function') {
+    return { ok: true, released: false, worker: false };
+  }
+  return rpc;
 }
 
 // Python exporters live in python/tools (see python-env.js).
@@ -491,10 +538,292 @@ async function ensureExported(caseDir, time, field) {
     readFileSync(stampPath, 'utf8') === stamp;
   if (!fresh) {
     mkdirSync(dir, { recursive: true });
-    await runExport(caseDir, time, field, dir);
+    const rpc = callWorker(
+      'filter.case_field',
+      { case_dir: caseDir, time: String(time), field, out_dir: dir },
+      180000,
+    );
+    if (rpc && typeof rpc.then === 'function') {
+      try {
+        await rpc;
+      } catch (err) {
+        if (!fieldExportMaySpawnFallback(err)) {
+          throw err;
+        }
+        console.warn('[CFD] field worker export failed, spawning', err && err.message ? err.message : err);
+        await runExport(caseDir, time, field, dir);
+      }
+    } else {
+      await runExport(caseDir, time, field, dir);
+    }
     writeFileSync(stampPath, stamp, 'utf8');
   }
   return { vtp, meta, dir, stamp, from_cache: fresh };
+}
+
+const seriesRangeCache = new Map();
+
+function parseFoamVectorMags(text) {
+  const uni = /internalField\s+uniform\s+\(([^)]+)\)/.exec(text);
+  if (uni) {
+    const parts = uni[1].trim().split(/\s+/).map(Number);
+    if (parts.length === 3 && parts.every(Number.isFinite)) {
+      const mag = Math.hypot(parts[0], parts[1], parts[2]);
+      return [mag, mag];
+    }
+  }
+  let lo = Infinity;
+  let hi = -Infinity;
+  const re = /\(\s*(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s*\)/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const mag = Math.hypot(Number(m[1]), Number(m[2]), Number(m[3]));
+    if (!Number.isFinite(mag)) continue;
+    if (mag < lo) lo = mag;
+    if (mag > hi) hi = mag;
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+  return [lo, hi];
+}
+
+function parseFoamScalarRange(text) {
+  const uni = /internalField\s+uniform\s+([^\s;]+)/.exec(text);
+  if (uni) {
+    const val = Number(uni[1]);
+    return Number.isFinite(val) ? [val, val] : null;
+  }
+  const start = text.search(/internalField\s+nonuniform\s+List<scalar>/);
+  const chunk = start >= 0 ? text.slice(start) : text;
+  let lo = Infinity;
+  let hi = -Infinity;
+  const re = /(?<![(\w.-])(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?![\w.])/g;
+  let m;
+  while ((m = re.exec(chunk))) {
+    const val = Number(m[1]);
+    if (!Number.isFinite(val)) continue;
+    if (val < lo) lo = val;
+    if (val > hi) hi = val;
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+  return [lo, hi];
+}
+
+export function computeFoamSeriesRange(caseDir, field) {
+  const name = field === 'p' ? 'p' : 'magU';
+  const times = listCaseTimes(caseDir);
+  const stamp = times
+    .map((t) => {
+      const p = foamFieldPath(caseDir, t, name);
+      if (!existsSync(p)) return t;
+      const st = statSync(p);
+      return `${t}:${st.mtimeMs}:${st.size}`;
+    })
+    .join('|');
+  const key = `${caseDir}|${name}`;
+  const hit = seriesRangeCache.get(key);
+  if (hit && hit.stamp === stamp) return hit.body;
+  const frames = [];
+  let lo = null;
+  let hi = null;
+  for (const t of times) {
+    const p = foamFieldPath(caseDir, t, name);
+    if (!existsSync(p)) continue;
+    let pair = null;
+    try {
+      const text = readFileSync(p, 'utf8');
+      pair = name === 'p' ? parseFoamScalarRange(text) : parseFoamVectorMags(text);
+    } catch {
+      pair = null;
+    }
+    if (!pair) continue;
+    frames.push({ time: t, min: pair[0], max: pair[1] });
+    lo = lo == null ? pair[0] : Math.min(lo, pair[0]);
+    hi = hi == null ? pair[1] : Math.max(hi, pair[1]);
+  }
+  const body = {
+    ok: !!(lo != null && hi != null && hi >= lo),
+    field: name,
+    case_dir: caseDir,
+    times,
+    n_times: times.length,
+    min: lo,
+    max: hi,
+    frames,
+    series: true,
+  };
+  seriesRangeCache.set(key, { stamp, body });
+  return body;
+}
+
+function seriesRangeStamp(caseDir, field) {
+  const name = field === 'p' ? 'p' : 'magU';
+  return listCaseTimes(caseDir)
+    .map((t) => {
+      const p = foamFieldPath(caseDir, t, name);
+      if (!existsSync(p)) return t;
+      const st = statSync(p);
+      return `${t}:${st.mtimeMs}:${st.size}`;
+    })
+    .join('|');
+}
+
+function seriesRangeFromMetas(caseDir, field) {
+  const name = field === 'p' ? 'p' : 'magU';
+  const times = listCaseTimes(caseDir);
+  if (times.length < 2) return null;
+  let lo = null;
+  let hi = null;
+  let n = 0;
+  for (const t of times) {
+    const metaPath = join(cacheKey(caseDir, t, name), `${name}.meta.json`);
+    if (!existsSync(metaPath)) return null;
+    try {
+      const j = JSON.parse(readFileSync(metaPath, 'utf8'));
+      const foam = (j && (j.u_from_case || j.foam_proof)) || {};
+      const a = name === 'p' ? Number(foam.pmin) : Number(foam.umin);
+      const b = name === 'p' ? Number(foam.pmax) : Number(foam.umax);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+      lo = lo == null ? a : Math.min(lo, a);
+      hi = hi == null ? b : Math.max(hi, b);
+      n += 1;
+    } catch {
+      return null;
+    }
+  }
+  if (n !== times.length || lo == null || hi == null || !(hi >= lo)) return null;
+  return {
+    ok: true,
+    field: name,
+    case_dir: caseDir,
+    times,
+    n_times: n,
+    min: lo,
+    max: hi,
+    frames: [],
+    series: true,
+    from: 'meta',
+  };
+}
+
+function runSeriesRange(caseDir, field) {
+  return new Promise((resolveP, reject) => {
+    const child = spawn(PYTHON, [EXPORT_SCRIPT, '--case', caseDir, '--field', field, '--series-range'], {
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => {
+      stdout += d.toString();
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      const line = stdout.trim().split(/\r?\n/).filter(Boolean).pop() || '';
+      if (!line) {
+        reject(new Error(`series-range empty stdout (code=${code}): ${stderr.slice(0, 400)}`));
+        return;
+      }
+      try {
+        resolveP(JSON.parse(line));
+      } catch (err) {
+        reject(new Error(`series-range parse fail: ${line.slice(0, 200)}`));
+      }
+    });
+  });
+}
+
+async function ensureSeriesRange(caseDir, field) {
+  const name = field === 'p' ? 'p' : 'magU';
+  const stamp = seriesRangeStamp(caseDir, name);
+  const key = `${caseDir}|${name}`;
+  const hit = seriesRangeCache.get(key);
+  if (hit && hit.stamp === stamp && hit.body && hit.body.ok) return hit.body;
+  const fromMeta = seriesRangeFromMetas(caseDir, name);
+  if (fromMeta && fromMeta.ok) {
+    seriesRangeCache.set(key, { stamp, body: fromMeta });
+    return fromMeta;
+  }
+  try {
+    const j = await runSeriesRange(caseDir, name);
+    if (j && Number.isFinite(Number(j.min)) && Number.isFinite(Number(j.max))) {
+      const body = {
+        ok: true,
+        field: name,
+        case_dir: caseDir,
+        times: j.times || listCaseTimes(caseDir),
+        n_times: j.n_times || (j.times || []).length,
+        min: Number(j.min),
+        max: Number(j.max),
+        frames: j.frames || [],
+        series: true,
+        from: 'foam',
+      };
+      seriesRangeCache.set(key, { stamp, body });
+      return body;
+    }
+  } catch (err) {
+    console.warn('[CFD] series-range spawn failed', err && err.message ? err.message : err);
+  }
+  return {
+    ok: false,
+    field: name,
+    case_dir: caseDir,
+    times: listCaseTimes(caseDir),
+    n_times: 0,
+    min: null,
+    max: null,
+    frames: [],
+    series: true,
+  };
+}
+
+let fieldPrefetchGen = 0;
+
+function tryPrefetchFields(caseDir, times, field = 'magU') {
+  const list = Array.isArray(times) ? times.map(String) : [];
+  if (!caseDir || list.length < 2) return;
+  const name = field === 'p' ? 'p' : 'magU';
+  const gen = ++fieldPrefetchGen;
+  // Latest few only — walking every transient frame through get_prepared
+  // evicts the live volume and blocks cutting-plane RPCs for minutes.
+  const ordered = list.slice().reverse().slice(0, 3);
+  (async () => {
+    for (const t of ordered) {
+      if (gen !== fieldPrefetchGen) return;
+      const dir = cacheKey(caseDir, t, name);
+      const stamp = foamStamp(caseDir, t, name);
+      const vtp = join(dir, `${name}.vtp`);
+      const stampPath = join(dir, '.stamp');
+      if (
+        stamp &&
+        existsSync(vtp) &&
+        existsSync(stampPath) &&
+        readFileSync(stampPath, 'utf8') === stamp
+      ) {
+        continue;
+      }
+      const rpc = callWorker(
+        'filter.case_field',
+        { case_dir: caseDir, time: t, field: name, out_dir: dir },
+        180000,
+      );
+      if (!rpc || typeof rpc.then !== 'function') return;
+      try {
+        await rpc;
+        if (stamp) {
+          try {
+            writeFileSync(stampPath, stamp, 'utf8');
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch (err) {
+        console.warn('[CFD] field prefetch', t, err && err.message ? err.message : err);
+      }
+    }
+  })();
 }
 
 function normalizePtFaces(raw) {
@@ -532,10 +861,65 @@ function parseBoundaryPatchTypes(text) {
   return types;
 }
 
+function isVelocityInletBcType(bcType) {
+  return /velocity\s*inlet/i.test(String(bcType || ''));
+}
+
+function isPressureBcType(bcType) {
+  return /^pressure/i.test(String(bcType || ''));
+}
+
+function pressureValueFromBc(rec) {
+  if (!rec) return null;
+  const bags = [rec, rec.settings, rec.params].filter((x) => x && typeof x === 'object');
+  const keys = ['value', 'gauge_pressure', 'pressure'];
+  for (const bag of bags) {
+    for (const k of keys) {
+      const v = Number(bag[k]);
+      if (Number.isFinite(v)) return v;
+    }
+  }
+  return null;
+}
+
+function applyPressureInletRoles(faces) {
+  const rows = Array.isArray(faces) ? faces : [];
+  const pressures = rows.filter((f) => f && isPressureBcType(f.bc_type || f.kind === 'pressure' ? 'Pressure' : f.bc_type));
+  const typed = rows.filter((f) => f && (f.kind === 'pressure' || isPressureBcType(f.bc_type)));
+  const nums = typed
+    .map((f) => ({ f, p: Number(f.pressure) }))
+    .filter((x) => Number.isFinite(x.p));
+  if (nums.length >= 2) {
+    let maxP = -Infinity;
+    let minP = -Infinity;
+    minP = Infinity;
+    for (const x of nums) {
+      if (x.p > maxP) maxP = x.p;
+      if (x.p < minP) minP = x.p;
+    }
+    if (maxP > minP) {
+      for (const x of nums) {
+        if (x.p === maxP) x.f.role = 'inlet';
+        else if (x.p === minP) x.f.role = 'outlet';
+      }
+    }
+  }
+  return rows;
+}
+
 function ptPatchRole(name, bcType) {
-  const blob = `${name || ''} ${bcType || ''}`;
-  if (/inlet|inflow/i.test(blob)) return 'inlet';
-  if (/outlet|outflow|pressure/i.test(blob)) return 'outlet';
+  const type = String(bcType || '');
+  const blob = `${name || ''} ${type}`;
+  if (isVelocityInletBcType(type)) return 'inlet';
+  if (isPressureBcType(type)) return /inlet|inflow/i.test(blob) ? 'inlet' : 'outlet';
+  if (/inlet|inflow/i.test(blob) && !/pressure/i.test(blob)) return 'inlet';
+  if (/outlet|outflow/i.test(blob)) return 'outlet';
+  return 'patch';
+}
+
+function ptPatchKind(bcType) {
+  if (isVelocityInletBcType(bcType)) return 'velocity';
+  if (isPressureBcType(bcType)) return 'pressure';
   return 'patch';
 }
 
@@ -561,20 +945,19 @@ function recCadFaces(rec) {
   return out;
 }
 
-function findProjectDirFromCase(caseDir) {
+function findStudyDirFromCase(caseDir) {
   let dir = caseDir;
-  for (let i = 0; i < 5 && dir; i++) {
-    if (
-      existsSync(join(dir, 'boundary_conditions.json')) ||
-      existsSync(join(dir, 'project.json'))
-    ) {
+  for (let i = 0; i < 8 && dir; i++) {
+    const ident = readJsonFile(join(dir, 'id.json'));
+    if (ident && ident.kind === 'simulation' && ident.id) return dir;
+    if (existsSync(join(dir, 'boundary_conditions.json')) && existsSync(join(dir, 'id.json'))) {
       return dir;
     }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  return dirname(dirname(caseDir));
+  return null;
 }
 
 function findWebBc(webBcs, name, patch, cad) {
@@ -590,12 +973,13 @@ function findWebBc(webBcs, name, patch, cad) {
 }
 
 function loadSeedFaceHints(caseDir) {
-  const projectDir = findProjectDirFromCase(caseDir);
-  const bcs = readJsonFile(join(projectDir, 'boundary_conditions.json')) || {};
+  const studyDir = findStudyDirFromCase(caseDir);
+  const meshDir = dirname(caseDir);
+  const bcs = (studyDir && readJsonFile(join(studyDir, 'boundary_conditions.json'))) || {};
   const projectBcs = Array.isArray(bcs.boundary_conditions)
     ? bcs.boundary_conditions.filter(Boolean)
     : [];
-  const meshDoc = readJsonFile(join(projectDir, 'mesh.json')) || {};
+  const meshDoc = readJsonFile(join(meshDir, 'mesh.json')) || {};
   const lives = [];
   if (meshDoc.live_mesh_result) lives.push(meshDoc.live_mesh_result);
   for (const m of Array.isArray(meshDoc.meshes) ? meshDoc.meshes : []) {
@@ -627,9 +1011,14 @@ function enrichSeedRow(row, hints) {
   }
   const web = findWebBc(hints.webBcs, row.name || row.id, row.patch, cad);
   if (!cad.length && web) cad = recCadFaces(web);
-  const roleName = (web && web.name) || row.name || row.id || '';
-  const roleType = (web && web.bc_type) || row.bc_type;
+  const projectBc = (hints.projectBcs || []).find(
+    (b) => b && (b.name === row.name || b.name === row.id || recCadFaces(b).some((f) => cad.includes(f)))
+  );
+  const rec = web || projectBc || row;
+  const roleName = (rec && rec.name) || row.name || row.id || '';
+  const roleType = (rec && rec.bc_type) || row.bc_type;
   const primary = cad[0] || row.name || row.patch;
+  const pressure = isPressureBcType(roleType) ? pressureValueFromBc(rec) : null;
   return {
     id: primary,
     label: primary,
@@ -638,6 +1027,9 @@ function enrichSeedRow(row, hints) {
     faces: cad,
     available: true,
     role: ptPatchRole(roleName, roleType),
+    kind: ptPatchKind(roleType),
+    bc_type: roleType || null,
+    pressure,
   };
 }
 
@@ -768,7 +1160,7 @@ function ptCacheKey(caseDir, time, p) {
     p.pick,
     p.region || '',
     p.max_steps,
-    'seeds-region-v1',
+    'seeds-any-face-v1',
   ].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
   const root = p.seed_mode === 'faces' ? PT_CACHE_ROOT_W14 : PT_CACHE_ROOT_W8;
@@ -853,7 +1245,39 @@ async function ensureParticleTrace(caseDir, time, p) {
     readFileSync(stampPath, 'utf8') === paramStamp;
   if (!fresh) {
     mkdirSync(dir, { recursive: true });
-    await runPtExport(caseDir, time, dir, p);
+    const rpc = callWorker(
+      'filter.particle_trace',
+      {
+        case_dir: caseDir,
+        time: String(time),
+        out_dir: dir,
+        seeds_h: p.seeds_h,
+        seeds_v: p.seeds_v,
+        spacing: p.spacing,
+        size: p.size,
+        both: p.both,
+        pick: p.pick || '',
+        representation: p.representation || 'Cylinders',
+        max_steps: p.max_steps,
+        seed_mode: p.seed_mode || 'grid',
+        faces: p.faces || [],
+        quantity_mode: p.quantity_mode || 'count',
+        n_seeds: p.n_seeds ?? 40,
+        density: p.density ?? 10000,
+        region: p.region || '',
+      },
+      180000,
+    );
+    if (rpc && typeof rpc.then === 'function') {
+      try {
+        await rpc;
+      } catch (err) {
+        console.warn('[CFD] PT worker export failed, spawning', err && err.message ? err.message : err);
+        await runPtExport(caseDir, time, dir, p);
+      }
+    } else {
+      await runPtExport(caseDir, time, dir, p);
+    }
     writeFileSync(stampPath, paramStamp, 'utf8');
   }
   return { vtp, meta, dir, from_cache: fresh };
@@ -1024,6 +1448,7 @@ function cutParamsFromUrl(u) {
     return Number.isFinite(n) ? n : fallback;
   };
   const field = u.searchParams.get('field') === 'p' ? 'p' : 'magU';
+  const liveRaw = u.searchParams.get('live');
   return {
     ox: num('ox', 0),
     oy: num('oy', 0),
@@ -1032,7 +1457,14 @@ function cutParamsFromUrl(u) {
     ny: num('ny', 1),
     nz: num('nz', 0),
     field,
+    live: liveRaw === '1' || liveRaw === 'true',
   };
+}
+
+function liveCutCacheKey(caseDir, time, p) {
+  const raw = [caseDir, time, p.field, p.nx.toFixed(3), p.ny.toFixed(3), p.nz.toFixed(3)].join('|');
+  const h = createHash('sha1').update(raw).digest('hex').slice(0, 12);
+  return join(CUT_CACHE_ROOT, `live-${h}`);
 }
 
 function cutCacheKey(caseDir, time, p) {
@@ -1096,8 +1528,44 @@ function runCutExport(caseDir, time, outDir, p) {
   });
 }
 
+async function runWorkerCut(caseDir, time, dir, p) {
+  mkdirSync(dir, { recursive: true });
+  const rpc = callWorker(
+    'filter.cut_plane',
+    {
+      case_dir: caseDir,
+      time: String(time),
+      out_dir: dir,
+      ox: p.ox,
+      oy: p.oy,
+      oz: p.oz,
+      nx: p.nx,
+      ny: p.ny,
+      nz: p.nz,
+      field: p.field,
+    },
+    180000,
+  );
+  if (rpc && typeof rpc.then === 'function') {
+    try {
+      await rpc;
+      return;
+    } catch (err) {
+      console.warn('[CFD] cut worker export failed, spawning', err && err.message ? err.message : err);
+    }
+  }
+  await runCutExport(caseDir, time, dir, p);
+}
+
 async function ensureCutPlane(caseDir, time, p) {
   mkdirSync(CUT_CACHE_ROOT, { recursive: true });
+  if (p.live) {
+    const dir = liveCutCacheKey(caseDir, time, p);
+    const vtp = join(dir, 'cut_plane.vtp');
+    const meta = join(dir, 'cut_plane.meta.json');
+    await runWorkerCut(caseDir, time, dir, p);
+    return { vtp, meta, dir, from_cache: false, live: true };
+  }
   const dir = cutCacheKey(caseDir, time, p);
   const vtp = join(dir, 'cut_plane.vtp');
   const meta = join(dir, 'cut_plane.meta.json');
@@ -1106,15 +1574,14 @@ async function ensureCutPlane(caseDir, time, p) {
   if (!stamp) {
     throw new Error(`case foam files missing under ${caseDir}/${time}`);
   }
-  const paramStamp = `${stamp}|${p.field}|${p.ox.toFixed(5)}|${p.oy.toFixed(5)}|${p.oz.toFixed(5)}|${p.nx.toFixed(4)}|${p.ny.toFixed(4)}|${p.nz.toFixed(4)}`;
+  const paramStamp = `${stamp}|${p.field}|${p.ox.toFixed(5)}|${p.oy.toFixed(5)}|${p.oz.toFixed(5)}|${p.nx.toFixed(4)}|${p.ny.toFixed(4)}|${p.nz.toFixed(4)}|arrays=U,magU,p,T`;
   const fresh =
     existsSync(vtp) &&
     existsSync(meta) &&
     existsSync(stampPath) &&
     readFileSync(stampPath, 'utf8') === paramStamp;
   if (!fresh) {
-    mkdirSync(dir, { recursive: true });
-    await runCutExport(caseDir, time, dir, p);
+    await runWorkerCut(caseDir, time, dir, p);
     writeFileSync(stampPath, paramStamp, 'utf8');
   }
   return { vtp, meta, dir, from_cache: fresh };
@@ -1329,19 +1796,7 @@ async function ensureInspect(caseDir, time, p) {
 }
 
 function listCaseTimes(caseDir) {
-  if (!caseDir || !existsSync(caseDir)) return [];
-  const names = readdirSync(caseDir, { withFileTypes: true });
-  const times = [];
-  for (const ent of names) {
-    if (!ent.isDirectory()) continue;
-    const name = ent.name;
-    if (!/^\d+(?:\.\d+)?$/.test(name)) continue;
-    const u = join(caseDir, name, 'U');
-    const p = join(caseDir, name, 'p');
-    if (existsSync(u) || existsSync(p)) times.push(name);
-  }
-  times.sort((a, b) => Number(a) - Number(b));
-  return times;
+  return listFoamTimeDirs(caseDir, { complete: true });
 }
 
 function foamFieldPath(caseDir, time, field) {
@@ -1352,15 +1807,19 @@ function foamFieldPath(caseDir, time, field) {
 function readActiveProjectMeshDoc() {
   try {
     if (!existsSync(ACTIVE_PROJECT_PATH)) return null;
-    const active = JSON.parse(readFileSync(ACTIVE_PROJECT_PATH, 'utf8'));
+    const rawActive = readFileSync(ACTIVE_PROJECT_PATH, 'utf8').trim();
+    if (!rawActive) return null;
+    const active = JSON.parse(rawActive);
     const id = active && active.project_id;
     if (!id) return null;
-    const meshPath = join(PROJECTS_ROOT, id, 'mesh.json');
-    if (!existsSync(meshPath)) return null;
-    const doc = JSON.parse(readFileSync(meshPath, 'utf8'));
-    return { project_id: id, doc, meshPath };
+    const projPath = join(PROJECTS_ROOT, id, 'project.json');
+    const proj = existsSync(projPath) ? JSON.parse(readFileSync(projPath, 'utf8')) : null;
+    const sim = proj ? getActiveSimulation(id, proj) : null;
+    const doc = sim ? assembleMeshDoc(id, sim.id) : null;
+    if (!doc || !(doc.meshes || []).length) return null;
+    return { project_id: id, doc, meshPath: null };
   } catch (e) {
-    console.warn('[CFD W25b] readActiveProjectMeshDoc', e);
+    console.warn('[CFD W25b] readActiveProjectMeshDoc', String((e && e.message) || e));
     return null;
   }
 }
@@ -1378,19 +1837,30 @@ function liveMeshForOpenProject(projectId, doc) {
   if (sim && sim.id) {
     const scoped = meshes.filter((m) => m && String(m.simulation_id || '') === String(sim.id));
     entry =
+      scoped.find((m) => m && m.live_mesh_result && m.live_mesh_result.status === 'running') ||
       scoped.find((m) => m && String(m.id) === String(doc.active_id)) ||
       scoped.find((m) => m && m.live_mesh_result && m.live_mesh_result.case_dir) ||
       null;
   }
   const live = (entry && entry.live_mesh_result) || null;
-  if (live && live.case_dir && caseDirBelongsToProject(live.case_dir, projectId)) return live;
+  if (live && live.case_dir && caseDirBelongsToStudy(live.case_dir, projectId, sim && sim.id)) {
+    return { ...live, mesh_id: live.mesh_id || (entry && entry.id) || null };
+  }
   return null;
 }
 
 /** Prefer layered remesh case from mesh.json over MTP1 default (W25b live attach). */
 let lastHydratedCaseLogged = null;
 function hydrateActiveMeshCase() {
-  const info = readActiveProjectMeshDoc();
+  let info = readActiveProjectMeshDoc();
+  if (info && info.project_id && info.doc && info.doc.simulation_id) {
+    try {
+      recoverStudyMeshesFromDisk(info.project_id, info.doc.simulation_id);
+      info = readActiveProjectMeshDoc() || info;
+    } catch (e) {
+      console.warn('[CFD] recover generated mesh', e);
+    }
+  }
   if (!info || !info.doc) return false;
   const live = liveMeshForOpenProject(info.project_id, info.doc);
   if (!live) return false;
@@ -1400,7 +1870,7 @@ function hydrateActiveMeshCase() {
     !!liveSnap &&
     (!live.generate_id || !liveSnap.generate_id || live.generate_id === liveSnap.generate_id);
   if (live.status === 'running' && !jobAlive) {
-    // Vite/process restart lost the child — do not keep a ghost "meshing" card.
+    // Vite/process restart lost the child â€” do not keep a ghost "meshing" card.
     try {
       const before = live.fingerprint_before || {};
       const keepPrev = before.n_cells != null;
@@ -1413,7 +1883,7 @@ function hydrateActiveMeshCase() {
         exit_code: keepPrev ? 0 : live.exit_code != null ? live.exit_code : -1,
         finished_at: new Date().toISOString(),
         note: keepPrev
-          ? 'Previous mesh kept — a later generate was interrupted.'
+          ? 'Previous mesh kept â€” a later generate was interrupted.'
           : 'Meshing stopped when the server restarted.',
       });
     } catch (e) {
@@ -1427,6 +1897,7 @@ function hydrateActiveMeshCase() {
       case_dir: live.case_dir || null,
       status: 'running',
       mode: 'mesh',
+      mesh_id: live.mesh_id || liveSnap.mesh_id || null,
       attached_at: live.started_at || new Date().toISOString(),
       path_kind: live.path_kind || 'cartesianMesh',
       generate_id: live.generate_id || liveSnap.generate_id || null,
@@ -1500,8 +1971,26 @@ function hydrateActiveMeshCase() {
   return true;
 }
 
+function polyMeshCacheToken(caseDir) {
+  try {
+    const txt = readFileSync(join(caseDir, 'constant', 'polyMesh', 'owner'), 'utf8').slice(0, 1600);
+    const cells = /nCells:(\d+)/.exec(txt);
+    const pts = /nPoints:(\d+)/.exec(txt);
+    if (cells && pts) return `c${cells[1]}p${pts[1]}`;
+  } catch {}
+  try {
+    const st = statSync(join(caseDir, 'constant', 'polyMesh', 'points'));
+    return `t${st.mtimeMs}s${st.size}`;
+  } catch {
+    return '0';
+  }
+}
+
 function meshSectionCacheKey(caseDir, axis, frac) {
-  const h = createHash('sha256').update(String(caseDir) + '|' + axis + '|' + String(frac)).digest('hex').slice(0, 16);
+  const h = createHash('sha256')
+    .update(String(caseDir) + '|' + axis + '|' + String(frac) + '|' + polyMeshCacheToken(caseDir))
+    .digest('hex')
+    .slice(0, 16);
   return join(MESH_SECTION_CACHE_ROOT, `section-${axis}-${String(frac).replace('.', 'p')}-${h}.vtp`);
 }
 
@@ -1528,7 +2017,10 @@ function runMeshSectionExport(caseDir, axis, frac, outVtp, metaPath) {
 }
 
 function meshSurfaceCacheKey(caseDir) {
-  const h = createHash('sha256').update(String(caseDir)).digest('hex').slice(0, 16);
+  const h = createHash('sha256')
+    .update(String(caseDir) + '|' + polyMeshCacheToken(caseDir))
+    .digest('hex')
+    .slice(0, 16);
   return join(MESH_SURFACE_CACHE_ROOT, `surface-${h}.vtp`);
 }
 
@@ -1547,13 +2039,24 @@ function runMeshSurfaceExport(caseDir, outVtp, metaPath) {
   };
 }
 
+function meshCacheMetaMatchesCase(meta, caseDir) {
+  const tok = polyMeshCacheToken(caseDir);
+  const cells = /^c(\d+)p(\d+)$/.exec(tok);
+  if (!cells || !meta) return false;
+  const mc = Number(meta.n_cells_volume);
+  const mp = Number(meta.n_points_volume);
+  return mc === Number(cells[1]) && (!mp || mp === Number(cells[2]));
+}
+
 async function ensureMeshSurface(caseDir) {
   const outVtp = meshSurfaceCacheKey(caseDir);
   const metaPath = outVtp.replace(/\.vtp$/i, '.meta.json');
   if (existsSync(outVtp) && existsSync(metaPath)) {
     try {
       const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
-      return { ok: true, path: outVtp, meta, cached: true };
+      if (meshCacheMetaMatchesCase(meta, caseDir)) {
+        return { ok: true, path: outVtp, meta, cached: true };
+      }
     } catch {}
   }
   const run = runMeshSurfaceExport(caseDir, outVtp, metaPath);
@@ -1571,7 +2074,9 @@ async function ensureMeshSection(caseDir, axis, frac) {
   if (existsSync(outVtp) && existsSync(metaPath)) {
     try {
       const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
-      return { ok: true, path: outVtp, meta, cached: true };
+      if (meshCacheMetaMatchesCase(meta, caseDir)) {
+        return { ok: true, path: outVtp, meta, cached: true };
+      }
     } catch {}
   }
   const run = runMeshSectionExport(caseDir, axis, frac, outVtp, metaPath);
@@ -1584,670 +2089,44 @@ async function ensureMeshSection(caseDir, axis, frac) {
 }
 
 
-export function caseFieldsApiPlugin() {
+export function getCaseFieldApi() {
   return {
-    name: 'cfd-case-fields-api',
-    configureServer(server) {
-      hydrateActiveMeshCase();
-      attachActiveProjectListener(syncActiveCaseToActiveProject);
-      server.middlewares.use(async (req, res, next) => {
-        try {
-          if (!req.url || !req.url.startsWith('/api/')) {
-            return next();
-          }
-          const u = parseUrl(req.url);
-          const parts = u.pathname.split('/').filter(Boolean);
-
-          // ---- W15/W15.1 case attach / mesh kick / status ----
-          if (parts[0] === 'api' && parts[1] === 'case') {
-            if (parts[2] === 'attach' && req.method === 'POST') {
-              let body = {};
-              try {
-                body = await readJsonBody(req);
-              } catch (e) {
-                return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
-              }
-              const caseDir = body.case_dir || body.case || body.path || '';
-              const result = attachCaseDir(caseDir, body.project_id || body.projectId);
-              res.setHeader('X-CFD-Source', 'case-attach');
-              if (result.ok) res.setHeader('X-CFD-Case-Dir', result.body.case_dir || '');
-              return sendJson(res, result.status, result.body);
-            }
-            if ((parts[2] === undefined || parts[2] === '' || parts[2] === 'status') && (req.method === 'GET' || req.method === 'HEAD')) {
-              const pid = requestProjectId(u);
-              const snap = caseSnapshot();
-              if (pid && snap.case_dir && !caseDirBelongsToProject(snap.case_dir, pid)) {
-                return sendJson(res, 200, {
-                  ok: true,
-                  case_dir: null,
-                  status: 'idle',
-                  mode: 'idle',
-                  project_id: pid,
-                  n_times: 0,
-                  times: [],
-                  note: 'idle — attached case belongs to another project',
-                  pid: null,
-                  n_cells: null,
-                  n_points: null,
-                  n_faces: null,
-                });
-              }
-              res.setHeader('X-CFD-Source', 'case-status');
-              if (snap.case_dir) res.setHeader('X-CFD-Case-Dir', snap.case_dir);
-              res.setHeader('X-CFD-Case-Status', snap.status);
-              if (snap.pid != null) res.setHeader('X-CFD-Job-Pid', String(snap.pid));
-              return sendJson(res, 200, snap);
-            }
-            if (parts[2] === 'detach' && req.method === 'POST') {
-              await readJsonBody(req).catch(() => ({}));
-              activeCaseState = {
-                case_dir: null,
-                status: 'idle',
-                attached_at: null,
-                mode: 'attach-only',
-                n_times: 0,
-                times: [],
-                note: 'W15.1: detached; idle until next attach/kick. No fake progress.',
-                pid: null,
-                exit_code: null,
-                command: null,
-                argv: null,
-                started_at: null,
-                finished_at: null,
-                log_path: null,
-                log_excerpt: null,
-                wsl_case: null,
-                path_kind: null,
-                kick_id: null,
-                error: null,
-              };
-              return sendJson(res, 200, caseSnapshot());
-            }
-            return sendJson(res, 404, { error: 'unknown /api/case route', path: u.pathname });
-          }
-
-          // ---- Full mesh surface VTP (3D inspect, not a slice) ----
-          if (parts[0] === 'api' && (parts[1] === 'mesh-surface' || (parts[1] === 'mesh' && parts[2] === 'surface'))) {
-            const caseDir = resolveCaseDir(u);
-            if (!caseDir || !existsSync(caseDir)) {
-              return sendJson(res, 404, { error: 'case_dir not found', case_dir: caseDir });
-            }
-            const wantMeta = parts.includes('meta') || u.searchParams.get('meta') === '1';
-            const ensured = await ensureMeshSurface(caseDir);
-            if (!ensured.ok) {
-              return sendJson(res, 500, { error: 'mesh-surface failed', detail: ensured });
-            }
-            res.setHeader('X-CFD-Increment', 'W27');
-            res.setHeader('X-CFD-Case-Dir', caseDir);
-            res.setHeader('X-CFD-Mesh-Surface', '1');
-            if (wantMeta || req.method === 'HEAD') {
-              return sendJson(res, 200, {
-                ok: true,
-                increment: 'W27',
-                case_dir: caseDir,
-                vtp_url: `/api/mesh-surface?case=${encodeURIComponent(caseDir)}`,
-                meta: ensured.meta,
-                cached: !!ensured.cached,
-                n_cells_volume: ensured.meta && ensured.meta.n_cells_volume,
-                n_cells_surface: ensured.meta && ensured.meta.n_cells_surface,
-              });
-            }
-            const buf = readFileSync(ensured.path);
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Content-Disposition', 'inline; filename="mesh-surface.vtp"');
-            res.setHeader('Cache-Control', 'no-store');
-            res.setHeader('Content-Length', String(buf.length));
-            res.end(buf);
-            return;
-          }
-
-          // ---- W25b Mesh section VTP for live Cutting Plane mesh inspect ----
-          if (parts[0] === 'api' && (parts[1] === 'mesh-section' || (parts[1] === 'mesh' && parts[2] === 'section'))) {
-            const caseDir = resolveCaseDir(u);
-            if (!caseDir || !existsSync(caseDir)) {
-              return sendJson(res, 404, { error: 'case_dir not found', case_dir: caseDir });
-            }
-            const axis = (u.searchParams.get('axis') || 'x').toLowerCase();
-            const frac = Number(u.searchParams.get('frac') || '0.5');
-            const wantMeta = parts.includes('meta') || u.searchParams.get('meta') === '1';
-            const ensured = await ensureMeshSection(caseDir, axis, Number.isFinite(frac) ? frac : 0.5);
-            if (!ensured.ok) {
-              return sendJson(res, 500, { error: 'mesh-section failed', detail: ensured });
-            }
-            res.setHeader('X-CFD-Increment', 'W25b');
-            res.setHeader('X-CFD-Case-Dir', caseDir);
-            res.setHeader('X-CFD-Mesh-Section', '1');
-            if (wantMeta || req.method === 'HEAD') {
-              return sendJson(res, 200, {
-                ok: true,
-                increment: 'W25b',
-                case_dir: caseDir,
-                axis,
-                frac,
-                vtp_url: `/api/mesh-section?case=${encodeURIComponent(caseDir)}&axis=${axis}&frac=${frac}`,
-                meta: ensured.meta,
-                cached: !!ensured.cached,
-                n_cells_volume: ensured.meta && ensured.meta.n_cells_volume,
-                n_cells_slice: ensured.meta && ensured.meta.n_cells_slice,
-              });
-            }
-            const buf = readFileSync(ensured.path);
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Content-Disposition', 'inline; filename="mesh-section.vtp"');
-            res.setHeader('Cache-Control', 'no-store');
-            res.setHeader('Content-Length', String(buf.length));
-            res.end(buf);
-            return;
-          }
-
-          // ---- W23 Mesh Generate / remesh (W16 STEP/Body1 + snappyHexMesh; NOT checkMesh; no W15.1 stamp) ----
-          if (parts[0] === 'api' && parts[1] === 'mesh' && (parts[2] === 'generate' || parts[2] === 'remesh') && req.method === 'POST') {
-            let body = {};
-            try { body = await readJsonBody(req); } catch (e) {
-              return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
-            }
-            const kicked = startMeshGenerate({
-              settings: body.settings || null,
-              projectId: body.project_id || null,
-              meshId: body.mesh_id || body.id || null,
-              onUpdate: (fields) => { applyKickUpdate(fields); },
-            });
-            if (!kicked.ok) {
-              return sendJson(res, kicked.status, {
-                ...caseSnapshot(),
-                ...(kicked.bodyExtra || {}),
-                ok: false,
-                increment: 'W23',
-              });
-            }
-            applyKickUpdate(kicked.bodyExtra);
-            const snap = caseSnapshot();
-            res.setHeader('X-CFD-Source', 'mesh-generate');
-            res.setHeader('X-CFD-Increment', 'W23');
-            res.setHeader(
-              'X-CFD-Path-Kind',
-              (kicked.bodyExtra && kicked.bodyExtra.path_kind) || snap.path_kind || 'cartesianMesh'
-            );
-            res.setHeader('X-CFD-Case-Status', snap.status);
-            if (snap.case_dir) res.setHeader('X-CFD-Case-Dir', snap.case_dir);
-            if (snap.pid != null) res.setHeader('X-CFD-Job-Pid', String(snap.pid));
-            return sendJson(res, kicked.status, {
-              ...snap,
-              ok: true,
-              increment: 'W23',
-              step_path: (kicked.bodyExtra && kicked.bodyExtra.step_path) || snap.step_path || null,
-              body1_path: (kicked.bodyExtra && kicked.bodyExtra.body1_path) || snap.body1_path || null,
-              geometry: (kicked.bodyExtra && kicked.bodyExtra.geometry) || snap.geometry || null,
-              mtp1_silent_copy: false,
-            });
-          }
-
-
-          // ---- Machine prefs / first-run wizard ----
-          if (parts[0] === 'api' && parts[1] === 'prefs') {
-            const handled = await handlePrefsApi(req, res, u, parts, { sendJson, readJsonBody });
-            if (handled !== false) return;
-          }
-
-          // ---- W28 Media: screenshots + recordings per run / mesh ----
-          if (parts[0] === 'api' && parts[1] === 'media') {
-            const handled = await handleW28Api(req, res, u, parts, { sendJson, readJsonBody });
-            if (handled !== false) return;
-          }
-
-          // ---- W27 Simulation Control / simpleFoam start-stop ----
-          if (
-            parts[0] === 'api' &&
-            (parts[1] === 'simulation-control' ||
-              parts[1] === 'simulation_control' ||
-              parts[1] === 'run' ||
-              parts[1] === 'runs')
-          ) {
-            const handled = await handleW27Api(req, res, u, parts, { sendJson, readJsonBody });
-            if (handled !== false) return;
-          }
-
-          // ---- W22 Area average / result controls (setup only) ----
-          if (
-            parts[0] === 'api' &&
-            (parts[1] === 'result-controls' ||
-              parts[1] === 'result_controls' ||
-              parts[1] === 'area-average' ||
-              parts[1] === 'area_average')
-          ) {
-            const handled = await handleW22Api(req, res, u, parts, { sendJson, readJsonBody });
-            if (handled !== false) return;
-          }
-
-          // ---- W26 Mesh refinements (surface custom sizing + inflate BL) ----
-          if (
-            parts[0] === 'api' &&
-            ((parts[1] === 'mesh' && parts[2] === 'refinements') || parts[1] === 'mesh-refinements')
-          ) {
-            const handled = await handleW26Api(req, res, u, parts, { sendJson, readJsonBody });
-            if (handled !== false) return;
-          }
-
-          // ---- W20 Mesh form settings (bank defaults; generate via W21 above) ----
-          if (parts[0] === 'api' && parts[1] === 'mesh') {
-            const handled = await handleW20Api(req, res, u, parts, {
-              sendJson,
-              readJsonBody,
-              onGeneratedMeshDeleted({ deleted_runs }) {
-                const active = activeCaseState.case_dir;
-                const removed = (deleted_runs || []).map((p) => resolve(p).toLowerCase());
-                if (active) {
-                  const a = resolve(active).toLowerCase();
-                  const hit = removed.some(
-                    (p) => a === p || a.startsWith(p + '\\') || a.startsWith(p + '/')
-                  );
-                  if (hit || !existsSync(active)) {
-                    resetActiveCaseIdle('Generated mesh deleted');
-                  }
-                }
-                for (const p of deleted_runs || []) {
-                  try {
-                    const vtp = meshSurfaceCacheKey(p);
-                    const meta = vtp.replace(/\.vtp$/i, '.meta.json');
-                    if (existsSync(vtp)) rmSync(vtp, { force: true });
-                    if (existsSync(meta)) rmSync(meta, { force: true });
-                  } catch (_) {}
-                }
-              },
-            });
-            if (handled !== false) return;
-          }
-
-          // ---- W19 Boundary conditions (Velocity inlet 1 + Pressure outlet 2) ----
-          if (parts[0] === 'api' && parts[1] === 'bcs') {
-            const handled = await handleW19Api(req, res, u, parts, { sendJson, readJsonBody });
-            if (handled !== false) return;
-          }
-
-          // ---- W18 Materials â†’ Air + Body1 ----
-          if (parts[0] === 'api' && parts[1] === 'materials') {
-            const handled = await handleW18Api(req, res, u, parts, { sendJson, readJsonBody });
-            if (handled !== false) return;
-          }
-
-          // ---- W17 Create Simulation â†’ Incompressible ----
-          if (parts[0] === 'api' && parts[1] === 'simulation') {
-            const handled = await handleW17Api(req, res, u, parts, { sendJson, readJsonBody });
-            if (handled !== false) return;
-          }
-
-          // ---- W16 project create + geometry import ----
-          if (
-            (parts[0] === 'api' && parts[1] === 'project') ||
-            (parts[0] === 'api' && parts[1] === 'projects') ||
-            (parts[0] === 'api' && parts[1] === 'folders') ||
-            (parts[0] === 'api' && parts[1] === 'geometry')
-          ) {
-            const handled = await handleW16Api(req, res, u, parts, { sendJson, readJsonBody });
-            if (handled !== false) {
-              const projectSwitch =
-                req.method === 'POST' &&
-                parts[1] === 'project' &&
-                (!parts[2] || parts[2] === 'open' || parts[2] === 'delete');
-              if (projectSwitch) syncActiveCaseToActiveProject();
-              return;
-            }
-          }
-
-          if (req.method !== 'GET' && req.method !== 'HEAD') {
-            return sendJson(res, 405, { error: 'method not allowed' });
-          }
-
-          // ---- W12 times list (real dirs only; no invented frames) ----
-          if (parts[0] === 'api' && parts[1] === 'times') {
-            const caseDir = resolveCaseDir(u);
-            if (!caseDir || !existsSync(caseDir)) {
-              return sendJson(res, 404, { error: 'case_dir not found', case: caseDir, times: [], empty: true });
-            }
-            const times = listCaseTimes(caseDir);
-            res.setHeader('X-CFD-Source', 'case-tree-times');
-            res.setHeader('X-CFD-Case-Dir', caseDir);
-            res.setHeader('X-CFD-Not-Baked-Only', '1');
-            return sendJson(res, 200, {
-              increment: 'W12',
-              case_dir: caseDir,
-              times,
-              n_times: times.length,
-              start: times.length ? times[0] : null,
-              end: times.length ? times[times.length - 1] : null,
-              mapping_note:
-                'Animation Start/End/scrubber use these real OpenFOAM time directories only. Right-panel ITERATIONS 0-1000 chrome is not the animation timeline and is not W12 proof.',
-              proves_not_baked_only: true,
-              no_invented_frames: true,
-            });
-          }
-
-          // ---- W13 Inspect point ----
-          if (parts[0] === 'api' && parts[1] === 'inspect') {
-            const caseDir = resolveCaseDir(u);
-            const time = u.searchParams.get('time') || DEFAULT_TIME;
-            if (!caseDir || !existsSync(caseDir)) {
-              return sendJson(res, 404, { error: 'case_dir not found', case: caseDir, empty: true, hit: false });
-            }
-            const p = inspectParamsFromUrl(u);
-            if (![p.x, p.y, p.z].every((v) => Number.isFinite(v))) {
-              return sendJson(res, 400, {
-                error: 'x,y,z required as finite numbers',
-                empty: true,
-                hit: false,
-                no_fake_value: true,
-              });
-            }
-            const foamPath = foamFieldPath(caseDir, time, 'magU');
-            const foamP = foamFieldPath(caseDir, time, 'p');
-            if (!existsSync(foamPath) && !existsSync(foamP)) {
-              return sendJson(res, 404, {
-                error: 'time_not_found',
-                case: caseDir,
-                time: String(time),
-                empty: true,
-                hit: false,
-                available_times: listCaseTimes(caseDir),
-                proves_not_baked_only: true,
-                no_fake_value: true,
-              });
-            }
-            const exported = await ensureInspect(caseDir, time, p);
-            const metaObj = JSON.parse(readFileSync(exported.meta, 'utf8'));
-            res.setHeader('X-CFD-Source', 'case-tree-inspect-probe');
-            res.setHeader('X-CFD-Case-Dir', caseDir);
-            res.setHeader('X-CFD-Time', String(time));
-            res.setHeader('X-CFD-Not-Baked-Only', '1');
-            res.setHeader('X-CFD-Cache', exported.from_cache ? 'hit' : 'miss');
-            res.setHeader('X-CFD-Inspect-Hit', metaObj.hit ? '1' : '0');
-            return sendJson(res, 200, {
-              ...metaObj,
-              api_url: `/api/inspect?case=${encodeURIComponent(caseDir)}&time=${time}&x=${p.x}&y=${p.y}&z=${p.z}`,
-              from_cache: exported.from_cache,
-              proves_not_baked_only: true,
-            });
-          }
-
-          // ---- W11 Iso Volume ----
-          if (parts[0] === 'api' && parts[1] === 'iso-volume') {
-            const wantMeta = parts[2] === 'meta';
-            const caseDir = resolveCaseDir(u);
-            const time = u.searchParams.get('time') || DEFAULT_TIME;
-            if (!caseDir || !existsSync(caseDir)) {
-              return sendJson(res, 404, { error: 'case_dir not found', case: caseDir });
-            }
-            const p = isoVolParamsFromUrl(u);
-            const exported = await ensureIsoVolume(caseDir, time, p);
-            const metaObj = JSON.parse(readFileSync(exported.meta, 'utf8'));
-
-            res.setHeader('X-CFD-Source', 'case-tree-volume-threshold');
-            res.setHeader('X-CFD-Case-Dir', caseDir);
-            res.setHeader('X-CFD-Time', String(time));
-            res.setHeader('X-CFD-Field', metaObj.iso_field || 'magU');
-            res.setHeader('X-CFD-Not-Baked-Only', '1');
-            res.setHeader('X-CFD-Cache', exported.from_cache ? 'hit' : 'miss');
-            res.setHeader('X-CFD-N-Cells', String(metaObj.n_cells ?? ''));
-            res.setHeader('X-CFD-ISO-VOL-Empty', metaObj.empty ? '1' : '0');
-
-            if (wantMeta) {
-              return sendJson(res, 200, {
-                ...metaObj,
-                api_url: `/api/iso-volume?case=${encodeURIComponent(caseDir)}&time=${time}&iso_scalar=${encodeURIComponent(p.iso_scalar)}&iso_value_low=${p.iso_value_low}&iso_value_high=${p.iso_value_high}&coloring=${encodeURIComponent(p.coloring)}&opacity=${p.opacity}&vectors=${p.vectors}`,
-                from_cache: exported.from_cache,
-                proves_not_baked_only: true,
-              });
-            }
-
-            const buf = readFileSync(exported.vtp);
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Content-Length', String(buf.length));
-            res.setHeader('Content-Disposition', 'inline; filename="iso_volume.vtp"');
-            res.setHeader('Cache-Control', 'no-store');
-            if (req.method === 'HEAD') {
-              return res.end();
-            }
-            return res.end(buf);
-          }
-
-          if (parts[0] === 'api' && parts[1] === 'cut-plane') {
-            const wantMeta = parts[2] === 'meta';
-            const caseDir = resolveCaseDir(u);
-            const time = u.searchParams.get('time') || DEFAULT_TIME;
-            if (!caseDir || !existsSync(caseDir)) {
-              return sendJson(res, 404, { error: 'case_dir not found', case: caseDir, empty: true });
-            }
-            const p = cutParamsFromUrl(u);
-            const exported = await ensureCutPlane(caseDir, time, p);
-            const metaObj = JSON.parse(readFileSync(exported.meta, 'utf8'));
-            res.setHeader('X-CFD-Source', 'case-tree-volume-slice');
-            res.setHeader('X-CFD-Case-Dir', caseDir);
-            res.setHeader('X-CFD-Time', String(time));
-            res.setHeader('X-CFD-Field', p.field);
-            res.setHeader('X-CFD-Cache', exported.from_cache ? 'hit' : 'miss');
-            if (wantMeta) {
-              return sendJson(res, 200, {
-                ...metaObj,
-                api_url: `/api/cut-plane?case=${encodeURIComponent(caseDir)}&time=${time}&ox=${p.ox}&oy=${p.oy}&oz=${p.oz}&nx=${p.nx}&ny=${p.ny}&nz=${p.nz}&field=${p.field}`,
-                from_cache: exported.from_cache,
-              });
-            }
-            const buf = readFileSync(exported.vtp);
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Content-Length', String(buf.length));
-            res.setHeader('Content-Disposition', 'inline; filename="cut_plane.vtp"');
-            res.setHeader('Cache-Control', 'no-store');
-            if (req.method === 'HEAD') return res.end();
-            return res.end(buf);
-          }
-
-          // ---- W10 Iso Surface ----
-          if (parts[0] === 'api' && parts[1] === 'iso-surface') {
-            const wantMeta = parts[2] === 'meta';
-            const caseDir = resolveCaseDir(u);
-            const time = u.searchParams.get('time') || DEFAULT_TIME;
-            if (!caseDir || !existsSync(caseDir)) {
-              return sendJson(res, 404, { error: 'case_dir not found', case: caseDir });
-            }
-            const p = isoParamsFromUrl(u);
-            const exported = await ensureIsoSurface(caseDir, time, p);
-            const metaObj = JSON.parse(readFileSync(exported.meta, 'utf8'));
-
-            res.setHeader('X-CFD-Source', 'case-tree-volume-contour');
-            res.setHeader('X-CFD-Case-Dir', caseDir);
-            res.setHeader('X-CFD-Time', String(time));
-            res.setHeader('X-CFD-Field', metaObj.iso_field || 'magU');
-            res.setHeader('X-CFD-Not-Baked-Only', '1');
-            res.setHeader('X-CFD-Cache', exported.from_cache ? 'hit' : 'miss');
-            res.setHeader('X-CFD-N-Cells', String(metaObj.n_cells ?? ''));
-            res.setHeader('X-CFD-ISO-Empty', metaObj.empty ? '1' : '0');
-
-            if (wantMeta) {
-              return sendJson(res, 200, {
-                ...metaObj,
-                api_url: `/api/iso-surface?case=${encodeURIComponent(caseDir)}&time=${time}&iso_scalar=${encodeURIComponent(p.iso_scalar)}&iso_value=${p.iso_value}&coloring=${encodeURIComponent(p.coloring)}&opacity=${p.opacity}&vectors=${p.vectors}`,
-                from_cache: exported.from_cache,
-                proves_not_baked_only: true,
-              });
-            }
-
-            const buf = readFileSync(exported.vtp);
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Content-Length', String(buf.length));
-            res.setHeader('Content-Disposition', 'inline; filename="iso_surface.vtp"');
-            res.setHeader('Cache-Control', 'no-store');
-            if (req.method === 'HEAD') {
-              return res.end();
-            }
-            return res.end(buf);
-          }
-
-          // ---- W9 Plot-over-path ----
-          if (parts[0] === 'api' && parts[1] === 'plot-over-path') {
-            const wantMeta = parts[2] === 'meta';
-            const caseDir = resolveCaseDir(u);
-            const time = u.searchParams.get('time') || DEFAULT_TIME;
-            if (!caseDir || !existsSync(caseDir)) {
-              return sendJson(res, 404, { error: 'case_dir not found', case: caseDir });
-            }
-            const p = popParamsFromUrl(u);
-            const exported = await ensurePlotOverPath(caseDir, time, p);
-            const metaObj = JSON.parse(readFileSync(exported.meta, 'utf8'));
-
-            res.setHeader('X-CFD-Source', 'case-tree-sample-over-line');
-            res.setHeader('X-CFD-Case-Dir', caseDir);
-            res.setHeader('X-CFD-Time', String(time));
-            res.setHeader('X-CFD-Field', metaObj.field_name || 'magU');
-            res.setHeader('X-CFD-Not-Baked-Only', '1');
-            res.setHeader('X-CFD-Cache', exported.from_cache ? 'hit' : 'miss');
-            res.setHeader('X-CFD-N-Samples', String(metaObj.n_samples ?? ''));
-            res.setHeader('X-CFD-POP-Empty', metaObj.empty ? '1' : '0');
-
-            return sendJson(res, 200, {
-              ...metaObj,
-              api_url: `/api/plot-over-path?case=${encodeURIComponent(caseDir)}&time=${time}&points=${encodeURIComponent(p.points)}&subdivisions=${p.subdivisions}&field_variable=${encodeURIComponent(p.field_variable)}`,
-              from_cache: exported.from_cache,
-              proves_not_baked_only: true,
-              want_meta: wantMeta,
-            });
-          }
-
-          // ---- W14 Particle Trace face catalog ----
-          if (parts[0] === 'api' && parts[1] === 'particle-trace' && parts[2] === 'faces') {
-            const caseDir = resolveCaseDir(u);
-            const faces = listCaseSeedFaces(caseDir);
-            return sendJson(res, 200, {
-              increment: 'W14',
-              case_dir: caseDir,
-              face_source_doc:
-                'Live polyMesh patches (not walls) plus this run’s BC names. Seeds on those surfaces in mesh metres.',
-              faces,
-            });
-          }
-          // ---- W8/W14 Particle Trace ----
-          if (parts[0] === 'api' && parts[1] === 'particle-trace') {
-            const wantMeta = parts[2] === 'meta';
-            const caseDir = resolveCaseDir(u);
-            const time = u.searchParams.get('time') || DEFAULT_TIME;
-            if (!caseDir || !existsSync(caseDir)) {
-              return sendJson(res, 404, { error: 'case_dir not found', case: caseDir });
-            }
-            const p = ptParamsFromUrl(u);
-            const exported = await ensureParticleTrace(caseDir, time, p);
-            const metaObj = JSON.parse(readFileSync(exported.meta, 'utf8'));
-
-            res.setHeader('X-CFD-Source', 'case-tree-streamlines-U');
-            res.setHeader('X-CFD-Case-Dir', caseDir);
-            res.setHeader('X-CFD-Time', String(time));
-            res.setHeader('X-CFD-Field', 'U');
-            res.setHeader('X-CFD-Not-Baked-Only', '1');
-            res.setHeader('X-CFD-Cache', exported.from_cache ? 'hit' : 'miss');
-            res.setHeader('X-CFD-N-Seeds', String(metaObj.n_seeds ?? ''));
-            res.setHeader('X-CFD-PT-Empty', metaObj.empty ? '1' : '0');
-
-            if (wantMeta) {
-              return sendJson(res, 200, {
-                ...metaObj,
-                api_url: `/api/particle-trace?case=${encodeURIComponent(caseDir)}&time=${time}&seed_mode=${encodeURIComponent(p.seed_mode || 'grid')}&faces=${encodeURIComponent((p.faces || []).join(','))}&quantity_mode=${encodeURIComponent(p.quantity_mode || 'count')}&n_seeds=${p.n_seeds}&density=${p.density}&seeds_h=${p.seeds_h}&seeds_v=${p.seeds_v}&spacing=${p.spacing}&size=${p.size}&both=${p.both}&pick=${encodeURIComponent(p.pick)}&representation=${encodeURIComponent(p.representation)}`,
-                from_cache: exported.from_cache,
-                proves_not_baked_only: true,
-              });
-            }
-
-            const buf = readFileSync(exported.vtp);
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Content-Length', String(buf.length));
-            res.setHeader('Content-Disposition', 'inline; filename="particle_trace.vtp"');
-            res.setHeader('Cache-Control', 'no-store');
-            if (req.method === 'HEAD') {
-              return res.end();
-            }
-            return res.end(buf);
-          }
-
-          // ---- W6 fields ----
-          if (!req.url.startsWith('/api/fields/')) {
-            return next();
-          }
-          // /api/fields/:field[/meta]
-          if (parts.length < 3 || parts[0] !== 'api' || parts[1] !== 'fields') {
-            return next();
-          }
-          const field = parts[2];
-          const wantMeta = parts[3] === 'meta';
-          if (!ALLOWED_FIELDS.has(field)) {
-            return sendJson(res, 400, {
-              error: 'unsupported field',
-              allowed: [...ALLOWED_FIELDS],
-            });
-          }
-          const caseDir = resolveCaseDir(u);
-          const time = u.searchParams.get('time') || DEFAULT_TIME;
-          if (!caseDir || !existsSync(caseDir)) {
-            return sendJson(res, 404, { error: 'case_dir not found', case: caseDir, empty: true });
-          }
-          const foamPath = foamFieldPath(caseDir, time, field);
-          if (!existsSync(foamPath)) {
-            return sendJson(res, 404, {
-              error: 'time_not_found',
-              case: caseDir,
-              time: String(time),
-              field,
-              empty: true,
-              available_times: listCaseTimes(caseDir),
-              proves_not_baked_only: true,
-              note: 'Requested time has no OpenFOAM field on disk; no fake field returned',
-            });
-          }
-
-                    const exported = await ensureExported(caseDir, time, field);
-          const metaObj = JSON.parse(readFileSync(exported.meta, 'utf8'));
-
-          res.setHeader('X-CFD-Source', 'case-tree');
-          res.setHeader('X-CFD-Case-Dir', caseDir);
-          res.setHeader('X-CFD-Time', String(time));
-          res.setHeader('X-CFD-Field', field);
-          res.setHeader('X-CFD-Not-Baked-Only', '1');
-          res.setHeader('X-CFD-Cache', exported.from_cache ? 'hit' : 'miss');
-
-          if (wantMeta) {
-            return sendJson(res, 200, {
-              ...metaObj,
-              api_url: `/api/fields/${field}?case=${encodeURIComponent(caseDir)}&time=${time}`,
-              api_meta_url: `/api/fields/${field}/meta?case=${encodeURIComponent(caseDir)}&time=${time}`,
-              from_cache: exported.from_cache,
-              proves_not_baked_only: true,
-            });
-          }
-
-          const buf = readFileSync(exported.vtp);
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/octet-stream');
-          res.setHeader('Content-Length', String(buf.length));
-          res.setHeader('Content-Disposition', `inline; filename="${field}.vtp"`);
-          res.setHeader('Cache-Control', 'no-store');
-          if (req.method === 'HEAD') {
-            return res.end();
-          }
-          return res.end(buf);
-        } catch (err) {
-          const msg = String(err && err.message ? err.message : err);
-          const missing = /time_not_found|missing OpenFOAM|missing time dir|case foam files missing/i.test(msg);
-          return sendJson(res, missing ? 404 : 500, {
-            error: msg,
-            empty: !!missing,
-            proves_not_baked_only: true,
-            note: 'API reads case tree via pyvista export; not public/mtp1-fields.vtp',
-          });
-        }
-      });
-    },
+    sendJson,
+    readJsonBody,
+    parseUrl,
+    resolveCaseDir,
+    requestProjectId,
+    caseSnapshot,
+    attachCaseDir,
+    resetActiveCaseIdle,
+    applyKickUpdate,
+    hydrateActiveMeshCase,
+    syncActiveCaseToActiveProject,
+    listCaseTimes,
+    listCaseSeedFaces,
+    foamFieldPath,
+    ensureSeriesRange,
+    inspectParamsFromUrl,
+    cutParamsFromUrl,
+    isoParamsFromUrl,
+    isoVolParamsFromUrl,
+    popParamsFromUrl,
+    ptParamsFromUrl,
+    ensureExported,
+    ensureCutPlane,
+    warmVolume,
+    releaseVolume,
+    ensureIsoSurface,
+    ensureIsoVolume,
+    ensurePlotOverPath,
+    ensureParticleTrace,
+    ensureInspect,
+    ensureMeshSurface,
+    ensureMeshSection,
+    meshSurfaceCacheKey,
+    polyMeshCacheToken,
+    ALLOWED_FIELDS,
+    DEFAULT_TIME,
+    ACTIVE_PROJECT_PATH,
   };
 }
-
-export default caseFieldsApiPlugin;

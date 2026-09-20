@@ -1,3 +1,4 @@
+import { safeProjectPath } from './safe-path.js';
 /**
  * Boundary conditions — filesystem persistence.
  * POST/GET /api/bcs → projects/<id>/boundary_conditions.json
@@ -16,17 +17,25 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import {
-  activeGeometryId,
   filterByGeometry,
   filterByStudy,
   matchesGeometry,
   matchesStudy,
   primaryGeometryId,
+  studyScopedGeometryId,
 } from './w16-geometry-scope.js';
-import { firstLegacySimId, getActiveSimulation, writeActiveMirror } from './w17-sim-catalog.js';
+import { firstLegacySimId, getActiveSimulation, liveStudyRows, readCatalog, writeActiveMirror } from './w17-sim-catalog.js';
+import {
+  assembleAllBcs,
+  deleteOneBc,
+  persistBcDefaults,
+  persistOneBc,
+  readStudyJson,
+  studyFilePath,
+} from './study-io.js';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
-import { pyJsonSync, writeProjectCli } from './py-json.js';
+import { defaultUnits } from './prefs.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -106,23 +115,23 @@ function readActiveId() {
 }
 
 function projectDir(id) {
-  return join(PROJECTS_ROOT, id);
+  return safeProjectPath(PROJECTS_ROOT, id);
 }
 
 function projectJsonPath(id) {
   return join(projectDir(id), 'project.json');
 }
 
-function bcsJsonPath(id) {
-  return join(projectDir(id), 'boundary_conditions.json');
+function bcsJsonPath(id, simId) {
+  return studyFilePath(id, simId, 'bcs');
 }
 
 function simulationJsonPath(id) {
   return join(projectDir(id), 'simulation.json');
 }
 
-function materialsJsonPath(id) {
-  return join(projectDir(id), 'materials.json');
+function materialsJsonPath(id, simId) {
+  return studyFilePath(id, simId, 'materials');
 }
 
 function readProject(id) {
@@ -131,29 +140,31 @@ function readProject(id) {
   return JSON.parse(readFileSync(p, 'utf8'));
 }
 
-function writeProject(proj) {
-  // Phase 1 Step 9/land9: shared writeProjectCli helper.
-  return writeProjectCli(projectDir(proj.id), proj, String((proj.simulation && proj.simulation.id) || proj.active_simulation_id || ''));
+function readBcsFile(id, simId) {
+  if (!simId) return null;
+  return readStudyJson(id, simId, 'bcs');
 }
 
-function readBcsFile(id) {
-  const p = bcsJsonPath(id);
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function writeBcsFile(id, doc) {
+function writeBcsFile(id, doc, opts) {
   const simId = doc && doc.simulation_id;
-  pyJsonSync(
-    'project_cli.py',
-    ['set-bcs', '--project-dir', projectDir(id), '--sim-id', String(simId || '')],
-    doc,
-  );
-  return bcsJsonPath(id);
+  if (!simId) throw new Error('simulation_id required to write BCs');
+  const only = opts && opts.only;
+  const dropIds = (opts && opts.dropIds) || doc._drop_ids || [];
+  for (const rid of dropIds) {
+    if (rid) deleteOneBc(id, simId, rid);
+  }
+  const recs = only
+    ? (Array.isArray(only) ? only : [only]).filter(Boolean)
+    : [];
+  for (const rec of recs) {
+    if (rec && rec.id) persistOneBc(id, simId, rec);
+  }
+  persistBcDefaults(id, simId, doc.defaults, doc.defaults_by_simulation);
+  return studyBcsDirPath(id, simId);
+}
+
+function studyBcsDirPath(id, simId) {
+  return studyFilePath(id, simId, 'bcs');
 }
 
 function readSimulationFile(id) {
@@ -196,9 +207,13 @@ function isWallType(t) {
   return String(t || '') === 'Wall';
 }
 
-function nextName(list, bcType) {
+function nextName(list, bcType, simId, geomId) {
   let n = 1;
-  const names = new Set((list || []).map((b) => b.name));
+  const names = new Set(
+    (list || [])
+      .filter((b) => sameSimRec(b, simId) && sameGeomRec(b, geomId))
+      .map((b) => b.name)
+  );
   while (names.has(`${bcType} ${n}`)) n += 1;
   return `${bcType} ${n}`;
 }
@@ -208,18 +223,58 @@ function sameGeomRec(rec, geomId) {
   return String((rec && rec.geometry_id) || '') === String(geomId);
 }
 
+function sameSimRec(rec, simId) {
+  const want = String(simId || '').trim();
+  const sid = String((rec && rec.simulation_id) || '').trim();
+  if (!want) return !sid;
+  if (!sid) return false;
+  return sid === want;
+}
+
+function dedupeStudyBcs(list) {
+  const out = [];
+  const seen = new Map();
+  for (const b of list || []) {
+    if (!b) continue;
+    const key = `${String(b.name || '')}|${String(b.geometry_id || '')}`;
+    const prev = seen.get(key);
+    if (prev == null) {
+      seen.set(key, out.length);
+      out.push(b);
+      continue;
+    }
+    const cur = out[prev];
+    const curN = (cur.faces || []).length;
+    const nextN = (b.faces || []).length;
+    if (nextN > curN || (nextN === curN && String(b.updated_at || '') >= String(cur.updated_at || ''))) {
+      out[prev] = b;
+    }
+  }
+  return out;
+}
+
 function defaultVelocityUnit(velocityType, flowRateType) {
-  if (velocityType === 'Fixed') return 'm/s';
-  if (flowRateType === 'Mass flow') return 'kg/s';
-  return 'm³/s';
+  const imperial = /imperial/i.test(String(defaultUnits()));
+  if (velocityType === 'Fixed') return imperial ? 'ft/s' : 'm/s';
+  if (flowRateType === 'Mass flow') return imperial ? 'lb/s' : 'kg/s';
+  return imperial ? 'ft³/min' : 'm³/s';
+}
+
+function defaultPressureUnit() {
+  return /imperial/i.test(String(defaultUnits())) ? 'psi' : 'Pa';
 }
 
 function buildBc(body, list) {
   const geomId = body.geometry_id || null;
+  const simId = body.simulation_id || null;
   const existing =
     (list || []).find((b) => {
-      if (body.id && b.id === body.id) return true;
-      if (body.name && b.name === body.name && sameGeomRec(b, geomId)) return true;
+      if (body.id && b.id === body.id) {
+        const tagged = String((b && b.simulation_id) || '').trim();
+        if (!simId || !tagged || tagged === String(simId)) return true;
+        return false;
+      }
+      if (body.name && b.name === body.name && sameGeomRec(b, geomId) && sameSimRec(b, simId)) return true;
       return false;
     }) || null;
   const bcType = canonicalBcType(body.bc_type || body.type || (existing && existing.bc_type) || '');
@@ -230,8 +285,7 @@ function buildBc(body, list) {
       body: { error: 'Unsupported boundary condition type', got: bcType, allowed: BC_TYPES },
     };
   }
-  const namePool = (list || []).filter((b) => sameGeomRec(b, geomId));
-  const name = String(body.name || (existing && existing.name) || nextName(namePool, bcType)).trim();
+  const name = String(body.name || (existing && existing.name) || nextName(list, bcType, simId, geomId)).trim();
   const faces = Object.prototype.hasOwnProperty.call(body || {}, 'faces') ||
     Object.prototype.hasOwnProperty.call(body || {}, 'face')
     ? normalizeFaces(body.faces || body.face || body.assigned_faces)
@@ -248,6 +302,7 @@ function buildBc(body, list) {
     updated_at: now,
     persistence: 'filesystem',
     geometry_id: body.geometry_id || (existing && existing.geometry_id) || null,
+    simulation_id: simId || (existing && existing.simulation_id) || null,
   };
   if (isVelocityType(bcType)) {
     const velocityType = String(body.velocity_type || (existing && existing.velocity_type) || 'Fixed').trim();
@@ -274,7 +329,7 @@ function buildBc(body, list) {
     ).trim();
     const rawVal = body.value ?? (existing && existing.value);
     rec.value = rawVal == null || rawVal === '' ? 0 : Number(rawVal);
-    rec.unit = String(body.unit || (existing && existing.unit) || 'Pa').trim() || 'Pa';
+    rec.unit = String(body.unit || (existing && existing.unit) || defaultPressureUnit()).trim() || defaultPressureUnit();
   }
   return { ok: true, bc: rec };
 }
@@ -282,8 +337,18 @@ function buildBc(body, list) {
 function mergeBcIntoList(list, bc) {
   const next = Array.isArray(list) ? list.slice() : [];
   const idx = next.findIndex((b) => {
-    if (bc.id && b.id === bc.id) return true;
-    return !!(bc.name && b.name === bc.name && sameGeomRec(b, bc.geometry_id));
+    if (bc.id && b.id === bc.id) {
+      const tagged = String((b && b.simulation_id) || '').trim();
+      const want = String((bc && bc.simulation_id) || '').trim();
+      if (!want || !tagged || tagged === want) return true;
+      return false;
+    }
+    return !!(
+      bc.name &&
+      b.name === bc.name &&
+      sameGeomRec(b, bc.geometry_id) &&
+      sameSimRec(b, bc.simulation_id)
+    );
   });
   if (idx >= 0) next[idx] = bc;
   else next.push(bc);
@@ -291,28 +356,41 @@ function mergeBcIntoList(list, bc) {
   return next;
 }
 
-function persistBcsDoc(projectId, sim, bcsList, defaults) {
-  const materialsOk = existsSync(materialsJsonPath(projectId));
-  const bcsPath = bcsJsonPath(projectId);
+async function persistBcsDoc(projectId, sim, bcsList, defaults, dropIds, only) {
+  const materialsOk = existsSync(materialsJsonPath(projectId, sim.id));
+  const bcsPath = bcsJsonPath(projectId, sim.id);
   const now = new Date().toISOString();
-  const velocity = bcsList.find((b) => b.bc_type === 'Velocity inlet') || null;
-  const pressure = bcsList.find((b) => isPressureType(b.bc_type)) || null;
-  const prev = readBcsFile(projectId);
+  const proj = readProject(projectId);
+  const legacyId = firstLegacySimId(projectId, proj);
+  const mine = dedupeStudyBcs(
+    (bcsList || []).filter((b) => matchesStudy(b, sim.id, legacyId))
+  );
+  const velocity = mine.find((b) => b.bc_type === 'Velocity inlet') || null;
+  const pressure = mine.find((b) => isPressureType(b.bc_type)) || null;
+  const prev = readBcsFile(projectId, sim.id);
   const prevBySim = (prev && prev.defaults_by_simulation) || {};
   const defs = normalizeBcDefaults(
     defaults !== undefined ? defaults : (prevBySim[sim.id] || (prev && prev.defaults))
   );
-  const defaults_by_simulation = { ...prevBySim, [sim.id]: defs };
+  const live = new Set(
+    ((readCatalog(projectId) || {}).simulations || []).map((s) => s && String(s.id || '').trim()).filter(Boolean)
+  );
+  const defaults_by_simulation = {};
+  for (const [k, v] of Object.entries(prevBySim)) {
+    if (live.has(String(k))) defaults_by_simulation[k] = v;
+  }
+  defaults_by_simulation[sim.id] = defs;
 
-  for (const bc of bcsList) {
+  for (const bc of mine) {
     bc.boundary_conditions_json = bcsPath;
     bc.project_id = projectId;
+    bc.simulation_id = sim.id;
   }
 
   const doc = {
     project_id: projectId,
     simulation_id: sim.id,
-    boundary_conditions: bcsList,
+    boundary_conditions: mine,
     defaults: defs,
     defaults_by_simulation,
     velocity_inlet_1: velocity,
@@ -323,26 +401,15 @@ function persistBcsDoc(projectId, sim, bcsList, defaults) {
     materials_prerequisite: materialsOk,
     increment: 'W19',
   };
+  if (dropIds && dropIds.length) doc._drop_ids = dropIds;
 
-  writeBcsFile(projectId, doc);
-
-  const proj = readProject(projectId);
-  if (proj) {
-    proj.boundary_conditions = {
-      count: bcsList.length,
-      names: bcsList.map((b) => b.name),
-      types: bcsList.map((b) => b.bc_type),
-      boundary_conditions_json: bcsPath,
-      updated_at: now,
-    };
-    proj.updated_at = now;
-    writeProject(proj);
-  }
+  await writeBcsFile(projectId, doc, { only, dropIds });
+  const written = readBcsFile(projectId, sim.id) || doc;
 
   try {
     const simDoc = { ...sim };
     simDoc.boundary_conditions = {
-      names: bcsList.map((b) => b.name),
+      names: mine.map((b) => b.name),
       boundary_conditions_json: bcsPath,
     };
     simDoc.updated_at = now;
@@ -351,10 +418,10 @@ function persistBcsDoc(projectId, sim, bcsList, defaults) {
     /* non-fatal */
   }
 
-  return { doc, bcsPath, velocity, pressure };
+  return { doc: written, bcsPath, velocity, pressure };
 }
 
-function deleteBcs(body) {
+async function deleteBcs(body) {
   const projectId = (body && body.project_id) || readActiveId();
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project' } };
@@ -364,22 +431,29 @@ function deleteBcs(body) {
   if (!proj || !sim) {
     return { ok: false, status: 404, body: { error: 'project or simulation missing' } };
   }
-  const existingDoc = readBcsFile(projectId);
+  const existingDoc = readBcsFile(projectId, sim.id);
   let list =
     (existingDoc && Array.isArray(existingDoc.boundary_conditions) && existingDoc.boundary_conditions.slice()) ||
     [];
-  const geomId = activeGeometryId(proj, body && body.geometry_id);
+  const geomId = studyScopedGeometryId(proj, sim, body && body.geometry_id);
   const primaryId = primaryGeometryId(proj);
   const which = String(body.delete || body.id || body.name || '').trim();
   const legacyId = firstLegacySimId(projectId, proj);
+  const before = list.slice();
   if (which === 'all' || which === 'true') {
     list = list.filter(
       (b) => !(matchesGeometry(b, geomId, primaryId) && matchesStudy(b, sim.id, legacyId))
     );
   } else {
-    list = list.filter((b) => b.id !== which && b.name !== which);
+    list = list.filter((b) => {
+      if (!matchesStudy(b, sim.id, legacyId)) return true;
+      if (b.id === which) return false;
+      if (b.name === which) return false;
+      return true;
+    });
   }
-  const { doc, bcsPath } = persistBcsDoc(projectId, sim, list);
+  const dropIds = before.filter((b) => b && !list.includes(b)).map((b) => b.id).filter(Boolean);
+  const { doc, bcsPath } = await persistBcsDoc(projectId, sim, list, undefined, dropIds, []);
   const visible = filterByStudy(
     filterByGeometry(doc.boundary_conditions, geomId, primaryId),
     sim.id,
@@ -394,7 +468,10 @@ function deleteBcs(body) {
       ok: true,
       deleted: true,
       boundary_conditions: visible,
+      boundary_conditions_all: liveStudyRows(projectId, proj, doc.boundary_conditions || []),
       defaults: studyDefaults,
+      defaults_by_simulation: doc.defaults_by_simulation || {},
+      simulation_id: sim.id,
       velocity_inlet_1: visible.find((b) => b.bc_type === 'Velocity inlet') || null,
       pressure_outlet_2: visible.find((b) => isPressureType(b.bc_type)) || null,
       project_id: projectId,
@@ -403,7 +480,7 @@ function deleteBcs(body) {
   };
 }
 
-function upsertBcs(body) {
+async function upsertBcs(body) {
   const projectId = (body && body.project_id) || readActiveId();
   if (!projectId) {
     return {
@@ -425,17 +502,18 @@ function upsertBcs(body) {
     };
   }
 
-  const existingDoc = readBcsFile(projectId);
+  const existingDoc = readBcsFile(projectId, sim.id);
   let list =
     (existingDoc && Array.isArray(existingDoc.boundary_conditions) && existingDoc.boundary_conditions.slice()) ||
     [];
-  const geomId = activeGeometryId(proj, body && body.geometry_id);
+  const geomId = studyScopedGeometryId(proj, sim, body && body.geometry_id);
   if (geomId && body) body.geometry_id = geomId;
 
   const batch = (body && (body.bcs || body.boundary_conditions)) || null;
   const hasDefaults = !!(body && body.defaults && typeof body.defaults === 'object');
   const hasBcFields = !!(body && (body.bc_type || body.type || body.id || body.name));
   let lastBuilt = null;
+  const changed = [];
   if (Array.isArray(batch) && batch.length) {
     for (const item of batch) {
       const built = buildBc(item, list);
@@ -444,6 +522,7 @@ function upsertBcs(body) {
       if (geomId) lastBuilt.geometry_id = lastBuilt.geometry_id || geomId;
       lastBuilt.simulation_id = sim.id;
       list = mergeBcIntoList(list, lastBuilt);
+      changed.push(lastBuilt);
     }
   } else if (hasDefaults && !hasBcFields) {
     // Defaults-only save: { defaults: { wall_type } } — no BC record touched.
@@ -454,12 +533,13 @@ function upsertBcs(body) {
     if (geomId) lastBuilt.geometry_id = lastBuilt.geometry_id || geomId;
     lastBuilt.simulation_id = sim.id;
     list = mergeBcIntoList(list, lastBuilt);
+    changed.push(lastBuilt);
   }
 
   const nextDefaults = hasDefaults
     ? normalizeBcDefaults({ ...((existingDoc && existingDoc.defaults) || {}), ...body.defaults })
     : undefined;
-  const { doc, bcsPath } = persistBcsDoc(projectId, sim, list, nextDefaults);
+  const { doc, bcsPath } = await persistBcsDoc(projectId, sim, list, nextDefaults, undefined, changed);
   const visible = filterByStudy(
     filterByGeometry(doc.boundary_conditions, geomId, primaryGeometryId(proj)),
     sim.id,
@@ -474,7 +554,9 @@ function upsertBcs(body) {
       ok: true,
       bc: lastBuilt || visible.find((b) => b.name === (body && body.name)) || null,
       boundary_conditions: visible,
+      boundary_conditions_all: liveStudyRows(projectId, proj, doc.boundary_conditions || []),
       defaults: studyDefaults,
+      defaults_by_simulation: doc.defaults_by_simulation || {},
       velocity_inlet_1: visible.find((b) => b.bc_type === 'Velocity inlet') || null,
       pressure_outlet_2: visible.find((b) => isPressureType(b.bc_type)) || null,
       project_id: projectId,
@@ -484,7 +566,7 @@ function upsertBcs(body) {
   };
 }
 
-function getBcs(projectIdOpt, geomIdOpt, simIdOpt) {
+export function getBcs(projectIdOpt, geomIdOpt, simIdOpt) {
   const projectId = projectIdOpt || readActiveId();
   if (!projectId) {
     return {
@@ -505,14 +587,16 @@ function getBcs(projectIdOpt, geomIdOpt, simIdOpt) {
   if (!proj) {
     return { ok: false, status: 404, body: { error: 'project not found', project_id: projectId } };
   }
-  const doc = readBcsFile(projectId);
-  const all = ((doc && doc.boundary_conditions) || []).map(canonicalizeBcRecord);
-  const geomId = activeGeometryId(proj, geomIdOpt);
   const sim = getActiveSimulation(projectId, proj, simIdOpt);
-  const list = filterByStudy(
-    filterByGeometry(all, geomId, primaryGeometryId(proj)),
-    sim && sim.id,
-    firstLegacySimId(projectId, proj)
+  const doc = readBcsFile(projectId, sim && sim.id);
+  const all = ((doc && doc.boundary_conditions) || []).map(canonicalizeBcRecord);
+  const geomId = studyScopedGeometryId(proj, sim, geomIdOpt);
+  const list = dedupeStudyBcs(
+    filterByStudy(
+      filterByGeometry(all, geomId, primaryGeometryId(proj)),
+      sim && sim.id,
+      firstLegacySimId(projectId, proj)
+    )
   );
   const velocity = list.find((b) => b.bc_type === 'Velocity inlet') || null;
   const pressure = list.find((b) => isPressureType(b.bc_type)) || null;
@@ -527,11 +611,14 @@ function getBcs(projectIdOpt, geomIdOpt, simIdOpt) {
       active: true,
       project_id: projectId,
       boundary_conditions: list,
+      boundary_conditions_all: assembleAllBcs(projectId),
+      simulation_id: (sim && sim.id) || null,
       defaults: studyDefaults,
+      defaults_by_simulation: (doc && doc.defaults_by_simulation) || {},
       velocity_inlet_1: velocity,
       pressure_outlet_2: pressure,
-      boundary_conditions_json_path: bcsJsonPath(projectId),
-      boundary_conditions_json_exists: existsSync(bcsJsonPath(projectId)),
+      boundary_conditions_json_path: bcsJsonPath(projectId, sim && sim.id),
+      boundary_conditions_json_exists: existsSync(bcsJsonPath(projectId, sim && sim.id)),
       increment: 'W19',
     },
   };
@@ -549,11 +636,11 @@ export async function handleW19Api(req, res, u, parts, helpers) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
       if (body && (body.delete === true || body.action === 'delete' || body.delete)) {
-        const result = deleteBcs(body);
+        const result = await deleteBcs(body);
         res.setHeader('X-CFD-Source', 'bcs-delete');
         return sendJson(res, result.status, result.body);
       }
-      const result = upsertBcs(body);
+      const result = await upsertBcs(body);
       res.setHeader('X-CFD-Source', 'bcs-upsert');
       return sendJson(res, result.status, result.body);
     }

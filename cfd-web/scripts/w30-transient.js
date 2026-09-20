@@ -90,7 +90,7 @@ export function normalizeTransient(partial, base) {
   }
   if (p.max_co != null) {
     const v = num(p.max_co, b.max_co);
-    out.max_co = v > 0 ? Math.min(v, 50) : b.max_co;
+    out.max_co = v > 0 ? v : b.max_co;
   }
   if ('delta_t' in p) out.delta_t = posOrNull(p.delta_t);
   if ('max_delta_t' in p) out.max_delta_t = posOrNull(p.max_delta_t);

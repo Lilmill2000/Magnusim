@@ -8,8 +8,9 @@ Phase 1 FO type; keep both modules' names explicit.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from cfddesk.registry.base import RegistryError
 from cfddesk.registry.schema import SchemaField
@@ -33,7 +34,7 @@ class MonitorType:
     parse_dat: Callable[[str], Any] | None = None
 
 
-def validate_analysis_monitor_refs(hub: "RegistryHub") -> None:
+def validate_analysis_monitor_refs(hub: RegistryHub) -> None:
     """Fail if any AnalysisType.monitors key is not registered."""
     mon_keys = set(hub.registry("monitor").keys())
     for spec in hub.registry("analysis").items():

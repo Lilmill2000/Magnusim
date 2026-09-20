@@ -7,7 +7,8 @@ path is not moved this land (soft-pass: wrap/register only).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from cfddesk.registry.monitor import MonitorType
 from cfddesk.registry.schema import SchemaField
@@ -113,7 +114,7 @@ def build_flow_rate() -> MonitorType:
     )
 
 
-def register_monitors(hub: "RegistryHub") -> None:
+def register_monitors(hub: RegistryHub) -> None:
     """Register area_average + flow_rate (idempotent same-plugin)."""
     reg = hub.registry("monitor")
     reg.register(build_area_average(), plugin="builtin")

@@ -61,46 +61,43 @@ from cfddesk.project.hierarchy import (
     next_run_name,
 )
 from cfddesk.project.mesh_refinements import (
+    BB_LAYER_TYPE,
+    EXTRUSION_TYPE,
     FEATURE_REFINEMENT_TYPE,
     INFLATE_TYPE,
+    REGION_REFINEMENT_TYPE,
     SURFACE_CUSTOM_SIZING_TYPE,
     SURFACE_REFINEMENT_TYPE,
     VOLUME_CUSTOM_SIZING_TYPE,
-    REGION_REFINEMENT_TYPE,
-    BB_LAYER_TYPE,
-    EXTRUSION_TYPE,
     MeshRefinementStub,
+    bb_layer_fingerprint_payload,
+    extrusion_fingerprint_payload,
     feature_refinement_fingerprint_payload,
     inflate_fingerprint_payload,
     label_for_type,
     next_refinement_display_name,
     region_refinement_fingerprint_payload,
-    bb_layer_fingerprint_payload,
-    extrusion_fingerprint_payload,
     surface_custom_sizing_fingerprint_payload,
     surface_refinement_fingerprint_payload,
     volume_custom_sizing_fingerprint_payload,
 )
-
-from cfddesk.units.pressure import kinematic_to_pa
-from cfddesk.registry.analysis import (
-    DEFAULT_STEADY_KEY,
-    resolve_analysis_key,
-)
 from cfddesk.project.settings import (
-    LOCATION_FINGERPRINT_QUANTUM_M,
     BoundarySettings,
     MeshSettings,
     PathsSettings,
     SolverSettings,
     quantize_location_m,
 )
+from cfddesk.registry.analysis import (
+    DEFAULT_STEADY_KEY,
+    resolve_analysis_key,
+)
 from cfddesk.results.color_scale import ColorScale
 from cfddesk.results.filters import (
     FilterSpec,
+    RecordSettings,
     ResultsDisplay,
     SavedView,
-    RecordSettings,
     ScreenshotSettings,
     default_filter_stack,
     filters_from_list,
@@ -113,6 +110,7 @@ from cfddesk.results.filters import (
     views_to_list,
 )
 from cfddesk.results.window_geom import ResultsWindowGeom
+from cfddesk.units.pressure import kinematic_to_pa
 
 FaceRole = Literal["unassigned", "inlet", "outlet", "walls"]
 ROLES: tuple[FaceRole, ...] = ("unassigned", "inlet", "outlet", "walls")
@@ -132,9 +130,6 @@ BLOCK_AABB_FINGERPRINT = "brep_geom"
 _PRESSURE_SETTING_KEYS = (
     "gauge_pressure",
     "pressure",
-    "total_pressure",
-    "mean_pressure",
-    "freestream_pressure",
 )
 
 # Absolute tolerances in model native length units (as delivered by OCCT).
@@ -905,7 +900,7 @@ class Project:
         # Prefer stable role patch names when free; else sanitize.
         preferred = role if role in ("inlet", "outlet", "walls") else None
         if preferred is not None and preferred not in existing_patches:
-            patch = preferred
+            patch: str = preferred
         else:
             patch = sanitize_patch_name(display, existing_patches)
         level = 1
@@ -1236,9 +1231,8 @@ class Project:
             raise RuntimeError("No assigned material to snapshot onto Run")
         runs: list[RunNode] = []
         found = False
-        for run in (
-            self.primary_simulation().runs if self.primary_simulation() else []
-        ):
+        primary = self.primary_simulation()
+        for run in primary.runs if primary else []:
             if run.id == run_id:
                 found = True
                 snap = copy.deepcopy(run.settings_snapshot)
@@ -1322,7 +1316,7 @@ class Project:
         type_key: str,
         name: str | None = None,
         mesh_id: str | None = None,
-    ) -> tuple["Project", MeshRefinementStub]:
+    ) -> tuple[Project, MeshRefinementStub]:
         """Append a named Refinements stub on a mesh (type+name only; Inc 7a)."""
         sim = self.primary_simulation()
         if sim is None:
@@ -1394,7 +1388,7 @@ class Project:
         *,
         mesh_id: str | None = None,
         **changes: Any,
-    ) -> "Project":
+    ) -> Project:
         """Replace fields on a refinement stub (Inc 7b inflate payload)."""
         sim = self.primary_simulation()
         if sim is None:
@@ -2646,7 +2640,7 @@ class ProjectLoadResult:
 def _parse_role(value: object) -> FaceRole:
     s = str(value)
     if s in ROLES:
-        return s  # type: ignore[return-value]
+        return s
     return "unassigned"
 
 

@@ -1,10 +1,14 @@
-# This folder is the zip / GitHub root. App code lives in cfd-web/.
-# Fresh share copy (built by pack-portable.ps1) — regenerable; do not commit.
+# Repo root launchers plus cfd-web/. Generated share zips stay out of git.
 CFD-Desk/
 dist/
+Magnusim-*.zip
+/Magnusim V0.1.0.zip
+/Magnusim V0.1.0/
 
 cfd-web/node_modules/
 cfd-web/python/.venv/
+cfd-web/python/build/
+cfd-web/python/dist/
 cfd-web/python/**/__pycache__/
 cfd-web/python/cfddesk.egg-info/
 **/__pycache__/
@@ -29,3 +33,17 @@ Thumbs.db
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Local credentials, machine settings, and generated audit/test evidence.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+cfd-web/e2e/.tmp-prefs.json
+cfd-web/runs/
+.cursor/Plans/
+audit-edits*.py
+audit-inspect.py

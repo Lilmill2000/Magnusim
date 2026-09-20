@@ -14,11 +14,10 @@ from typing import TYPE_CHECKING
 from cfddesk.registry.base import RegistryError
 
 if TYPE_CHECKING:
-    from cfddesk.case.bc_registry import BcTypeSpec
     from cfddesk.registry.discovery import RegistryHub
 
 
-def register_builtin_bcs(hub: "RegistryHub") -> None:
+def register_builtin_bcs(hub: RegistryHub) -> None:
     """Register every BC_TYPES entry (idempotent same-plugin re-register)."""
     from cfddesk.case.bc_registry import BC_TYPES
 
@@ -27,7 +26,7 @@ def register_builtin_bcs(hub: "RegistryHub") -> None:
         reg.register(spec, plugin="builtin")
 
 
-def validate_analysis_bc_refs(hub: "RegistryHub") -> None:
+def validate_analysis_bc_refs(hub: RegistryHub) -> None:
     """Fail if any AnalysisType.bc_types key is not registered.
 
     Soft-pass: keep bc_types as tuple[str] wired to the bc registry ? no third list.

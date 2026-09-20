@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from cfddesk.registry.base import RegistryError
 from cfddesk.registry.requirements import Requirement
@@ -36,7 +37,7 @@ class SolverApp:
     requires: tuple[Requirement, ...] = ()
 
 
-def validate_analysis_solver_refs(hub: "RegistryHub") -> None:
+def validate_analysis_solver_refs(hub: RegistryHub) -> None:
     """Fail if any AnalysisType.solver_backends / default_solver is not registered.
 
     Keeps AnalysisType.solver_backends as tuple[str] (no third free-string list)

@@ -35,7 +35,7 @@ class ResultFilterType:
     model: type | None = None
 
 
-def analysis_has_filter_bags(hub: "RegistryHub") -> bool:
+def analysis_has_filter_bags(hub: RegistryHub) -> bool:
     """True if any AnalysisType exposes result_filters / filters string bags.
 
     land6 soft-pass: AnalysisType currently has none — do not invent a bag.

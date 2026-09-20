@@ -9,6 +9,32 @@ import { statfsSync } from 'node:fs';
 import { WEB_ROOT, writeLocalDoc } from './prefs.js';
 import { wslDistro } from './wsl-env.js';
 
+/** Open MPI slots as WSL reports them (cores, not hyperthreads). Hybrid Intel
+ *  CPUs often show fewer slots in WSL than Windows Win32_Processor.NumberOfCores. */
+export function probeWslMpiSlots(distro) {
+  const name = String(distro || '').trim();
+  if (!name) return 0;
+  try {
+    const r = spawnSync(
+      'wsl',
+      [
+        '-d',
+        name,
+        '--',
+        'bash',
+        '-lc',
+        "lscpu 2>/dev/null | awk -F: '/^Core\\(s\\) per socket/{gsub(/[ \\t]/,\"\",$2); c=$2} /^Socket\\(s\\)/{gsub(/[ \\t]/,\"\",$2); s=$2} END{v=(c+0)*(s+0); print v+0}'",
+      ],
+      { encoding: 'utf8', windowsHide: true, timeout: 20000 },
+    );
+    const n = Number(String(r.stdout || '').trim().split(/\s+/).pop());
+    if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+  } catch {
+    /* keep 0 */
+  }
+  return 0;
+}
+
 function physicalCoreCount() {
   if (process.platform === 'win32') {
     try {
@@ -55,12 +81,16 @@ function probeOpenFoam(distro) {
   }
 }
 
-export function computeProfile({ physical, logical, ram_gb: ramGb }) {
+export function computeProfile({ physical, logical, ram_gb: ramGb, wsl_slots: wslSlots }) {
   let n = physical >= 1 ? physical : logical >= 8 ? Math.floor(logical / 2) : logical;
   const reserve = n >= 4 ? 1 : 0;
   n = Math.max(1, n - reserve);
   const ramCap = Math.max(1, Math.floor(Number(ramGb) / 3.5) || 1);
   n = Math.min(n, ramCap);
+  const slots = Number(wslSlots);
+  if (Number.isFinite(slots) && slots >= 1 && n > slots) {
+    n = Math.floor(slots);
+  }
 
   let profile = 'standard';
   if (ramGb < 8 || physical <= 2) profile = 'light';
@@ -74,6 +104,9 @@ export function computeProfile({ physical, logical, ram_gb: ramGb }) {
   }
   if (reserve) {
     notes.push('Leaving one core free so the viewer stays responsive while a solve runs.');
+  }
+  if (Number.isFinite(slots) && slots >= 1) {
+    notes.push('Open MPI in WSL reports ' + Math.floor(slots) + ' core slots.');
   }
   notes.push('Solves will use ' + n + ' MPI rank' + (n === 1 ? '' : 's') + '.');
   if (ramGb < 8) {
@@ -89,7 +122,8 @@ export function runHardwareCheck() {
   const disk_free_gb = diskFreeGb();
   const distro = wslDistro();
   const openfoam_ok = probeOpenFoam(distro);
-  const tuned = computeProfile({ physical, logical, ram_gb });
+  const wsl_slots = probeWslMpiSlots(distro);
+  const tuned = computeProfile({ physical, logical, ram_gb, wsl_slots });
   const hardware = {
     checked_at: new Date().toISOString(),
     logical_cpus: logical,
@@ -97,6 +131,7 @@ export function runHardwareCheck() {
     ram_gb,
     disk_free_gb,
     wsl_distro: distro,
+    wsl_mpi_slots: wsl_slots || null,
     openfoam_ok,
     ...tuned,
   };

@@ -1,0 +1,4 @@
+key = "example"
+name = "Example plugin"
+version = "0.1.0"
+ui = "ui"

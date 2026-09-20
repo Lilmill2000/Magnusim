@@ -119,6 +119,25 @@ class Registry(Generic[T]):
                     r.__dict__ if hasattr(r, "__dict__") else r for r in list(requires)
                 ]
             if hasattr(spec, "supported"):
-                row["supported"] = bool(getattr(spec, "supported"))
+                row["supported"] = bool(spec.supported)
+            if self.kind == "filter":
+                for extra in ("tool", "cache_scope", "output"):
+                    if hasattr(spec, extra):
+                        row[extra] = getattr(spec, extra)
+            # AnalysisType product keys W17 reads from the dump (not a parallel JS dict).
+            if self.kind == "analysis":
+                for extra in (
+                    "time_dependency",
+                    "default_turbulence",
+                    "default_solver",
+                    "category",
+                    "turbulence_models",
+                ):
+                    if not hasattr(spec, extra):
+                        continue
+                    val = getattr(spec, extra)
+                    if val is None:
+                        continue
+                    row[extra] = list(val) if isinstance(val, tuple) else val
             out.append(row)
         return out

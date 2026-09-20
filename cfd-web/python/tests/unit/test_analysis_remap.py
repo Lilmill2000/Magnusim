@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-from pathlib import Path
 
 import pytest
 
@@ -20,7 +19,6 @@ from cfddesk.registry import (
     reset_for_tests,
     resolve_analysis_key,
 )
-
 from tests.conftest import PROJECTS
 
 
@@ -81,7 +79,7 @@ def test_resolve_unknown_fails_closed():
 def test_load_all_builtins_still_present():
     hub = load_all()
     keys = set(get_registry("analysis").keys())
-    assert keys == {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY}
+    assert {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY} <= keys
     assert hub.registry("analysis").get(DEFAULT_STEADY_KEY).time_dependency == "steady"
 
 

@@ -1,7 +1,7 @@
 """WSL distro + case-root for this machine.
 
-Setup.bat writes ``cfd-web/.cfddesk-local.json``. Override with
-``CFDDESK_WSL_DISTRO`` / ``CFDDESK_WSL_CASE_ROOT``.
+Setup.bat writes ``cfd-web/.magnusim-local.json`` (legacy name still accepted). Override with
+``MAGNUSIM_WSL_DISTRO`` / ``MAGNUSIM_WSL_CASE_ROOT``.
 """
 
 from __future__ import annotations
@@ -22,10 +22,12 @@ def web_root() -> Path:
 
 
 def local_json_path() -> Path:
-    override = (os.environ.get("CFDDESK_LOCAL_JSON") or "").strip()
+    override = (os.environ.get("MAGNUSIM_LOCAL_JSON") or os.environ.get("CFDDESK_LOCAL_JSON") or "").strip()
     if override:
         return Path(override)
-    return web_root() / _LOCAL_NAME
+    current = web_root() / ".magnusim-local.json"
+    legacy = web_root() / _LOCAL_NAME
+    return current if current.exists() or not legacy.exists() else legacy
 
 
 def _read_local() -> dict:
@@ -60,12 +62,12 @@ def _probe_wsl_home(distro: str) -> str | None:
 def wsl_settings() -> dict[str, str]:
     local = _read_local()
     distro = (
-        (os.environ.get("CFDDESK_WSL_DISTRO") or "").strip()
+        (os.environ.get("MAGNUSIM_WSL_DISTRO") or os.environ.get("CFDDESK_WSL_DISTRO") or "").strip()
         or str(local.get("wsl_distro") or "").strip()
         or DEFAULT_WSL_DISTRO
     )
     root = (
-        (os.environ.get("CFDDESK_WSL_CASE_ROOT") or "").strip()
+        (os.environ.get("MAGNUSIM_WSL_CASE_ROOT") or os.environ.get("CFDDESK_WSL_CASE_ROOT") or "").strip()
         or str(local.get("wsl_case_root") or "").strip()
     )
     if not root:

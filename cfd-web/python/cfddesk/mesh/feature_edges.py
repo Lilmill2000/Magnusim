@@ -38,7 +38,7 @@ def write_cad_feature_emesh(
         i += 1
         ids = [int(lines[i + k]) for k in range(count)]
         i += count
-        for a, b in zip(ids, ids[1:]):
+        for a, b in zip(ids, ids[1:], strict=False):
             if a == b:
                 continue
             edge_set.add((a, b) if a < b else (b, a))

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cfddesk.runner.case_id import assert_safe_wsl_case_dest, wsl_case_path
-
 from cfddesk.wsl.mesh_run import windows_to_wsl_path
 from cfddesk.wsl.openfoam import WslCommandResult, run_wsl_bash
 
@@ -15,6 +14,7 @@ from cfddesk.wsl.openfoam import WslCommandResult, run_wsl_bash
 _COPY_BACK_EXCLUDES = (
     "--exclude=VTK",
     "--exclude=processor*",
+    "--exclude=dynamicCode",
     "--exclude=*.gz.bak",
 )
 
@@ -258,6 +258,71 @@ def copy_back(
     if not cb.ok:
         raise RuntimeError(
             f"copy_back FAILED from {src} → {windows_results}\n"
+            f"rc={result.returncode}\nstdout={result.stdout[-2000:]}\n"
+            f"stderr={result.stderr[-2000:]}"
+        )
+    return cb
+
+
+def copy_back_mesh(
+    wsl_case_id: str,
+    windows_results: Path,
+    *,
+    timeout: float = 1800.0,
+) -> CopyBackResult:
+    """Copy only polyMesh + mesh logs to Windows. WSL remains the case source.
+
+    Does not wipe the host case directory (keeps the .msh / STL already there).
+    """
+    windows_results = assert_safe_results_dir(windows_results)
+    windows_results.mkdir(parents=True, exist_ok=True)
+    marker = windows_results / RESULTS_MARKER
+    if not marker.is_file():
+        marker.write_text(
+            "cfddesk results directory - safe for copy_back clear\n",
+            encoding="ascii",
+        )
+
+    dest = windows_to_wsl_path(windows_results)
+    src = wsl_case_path(wsl_case_id)
+    q = shlex.quote
+    marker_q = q(f"{dest}/{RESULTS_MARKER}")
+    cmd = (
+        f"test -d {q(src)} || {{ echo 'missing WSL case' >&2; exit 2; }}; "
+        f"test -d {q(src)}/constant/polyMesh || {{ echo 'missing polyMesh' >&2; exit 3; }}; "
+        f"mkdir -p {q(dest)}/constant; "
+        f"rm -rf {q(dest)}/constant/polyMesh; "
+        f"cp -a {q(src)}/constant/polyMesh {q(dest)}/constant/; "
+        f"shopt -s nullglob; "
+        f"for f in {q(src)}/log.*; do "
+        f"  [ -e \"$f\" ] && cp -f \"$f\" {q(dest)}/; "
+        f"done; "
+        f"touch {q(dest)}/case.foam; "
+        f"printf '%s\\n' 'cfddesk results directory - safe for copy_back clear' > {marker_q}"
+    )
+    result = run_wsl_bash(cmd, timeout=timeout)
+    bytes_copied: int | None = None
+    if result.returncode == 0:
+        total = 0
+        poly = windows_results / "constant" / "polyMesh"
+        if poly.is_dir():
+            for p in poly.rglob("*"):
+                try:
+                    if p.is_file():
+                        total += p.stat().st_size
+                except OSError:
+                    continue
+        bytes_copied = total
+
+    cb = CopyBackResult(
+        wsl_case=src,
+        windows_results=windows_results,
+        result=result,
+        bytes_copied=bytes_copied,
+    )
+    if not cb.ok:
+        raise RuntimeError(
+            f"copy_back_mesh FAILED from {src} → {windows_results}\n"
             f"rc={result.returncode}\nstdout={result.stdout[-2000:]}\n"
             f"stderr={result.stderr[-2000:]}"
         )

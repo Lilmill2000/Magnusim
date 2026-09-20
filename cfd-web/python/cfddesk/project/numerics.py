@@ -37,7 +37,7 @@ class PBiCGStabRowSettings:
         return asdict(self)
 
     @staticmethod
-    def from_dict(data: dict | None) -> "PBiCGStabRowSettings":
+    def from_dict(data: dict | None) -> PBiCGStabRowSettings:
         if not data:
             return PBiCGStabRowSettings()
         d = dict(data)
@@ -77,7 +77,7 @@ class GAMGRowSettings:
         return asdict(self)
 
     @staticmethod
-    def from_dict(data: dict | None) -> "GAMGRowSettings":
+    def from_dict(data: dict | None) -> GAMGRowSettings:
         if not data:
             return GAMGRowSettings()
         d = dict(data)
@@ -132,7 +132,7 @@ def map_gradient_scheme_ui_to_of(scheme: str, limiter_coefficient: float) -> str
     s = str(scheme or "").strip()
     lim = float(limiter_coefficient)
     # Prefer compact float repr (1.0 → 1, 0.5 → 0.5)
-    lim_s = ("%g" % lim)
+    lim_s = (f"{lim:g}")
     table = {
         "Celllimited leastSquares": f"cellLimited leastSquares {lim_s}",
         "Celllimited Gauss linear": f"cellLimited Gauss linear {lim_s}",
@@ -176,7 +176,7 @@ def map_divergence_scheme_ui_to_of(ui: str) -> str:
 def map_laplacian_scheme_ui_to_of(scheme: str, limiter_coefficient: float) -> str:
     """Laplacian UI scheme + limiter → laplacianSchemes entry value."""
     s = str(scheme or "").strip()
-    lim_s = ("%g" % float(limiter_coefficient))
+    lim_s = (f"{float(limiter_coefficient):g}")
     if s == "Gauss linear limited corrected":
         return f"Gauss linear limited corrected {lim_s}"
     if s == "Gauss linear corrected":
@@ -194,7 +194,7 @@ def map_interpolation_scheme_ui_to_of(ui: str) -> str:
 
 def map_sn_grad_scheme_ui_to_of(scheme: str, limiter_coefficient: float) -> str:
     s = str(scheme or "").strip()
-    lim_s = ("%g" % float(limiter_coefficient))
+    lim_s = (f"{float(limiter_coefficient):g}")
     if s == "Limited":
         return f"limited {lim_s}"
     if s in ("Corrected", "corrected"):
@@ -249,7 +249,7 @@ class GradientSchemeEntry:
         return asdict(self)
 
     @staticmethod
-    def from_dict(data: dict | None) -> "GradientSchemeEntry":
+    def from_dict(data: dict | None) -> GradientSchemeEntry:
         if not data:
             return GradientSchemeEntry()
         d = dict(data)
@@ -280,7 +280,7 @@ class LaplacianSchemeEntry:
         return asdict(self)
 
     @staticmethod
-    def from_dict(data: dict | None) -> "LaplacianSchemeEntry":
+    def from_dict(data: dict | None) -> LaplacianSchemeEntry:
         if not data:
             return LaplacianSchemeEntry()
         d = dict(data)
@@ -341,7 +341,7 @@ class SchemesSettings:
         return asdict(self)
 
     @staticmethod
-    def from_dict(data: dict | None) -> "SchemesSettings":
+    def from_dict(data: dict | None) -> SchemesSettings:
         if not data:
             return SchemesSettings()
         d = dict(data)
@@ -504,7 +504,7 @@ class NumericsSettings:
             self.turb_solver = kst  # type: ignore[assignment]
 
 
-    def sync_schemes_to_writer_flats(self) -> "NumericsSettings":
+    def sync_schemes_to_writer_flats(self) -> NumericsSettings:
         """Inc24a.1 — Schemes UI is authoritative; push mapped OF tokens into writer flats.
 
         Named entries (grad(p), laplacian(nuEff,U), …) are emitted by
@@ -595,9 +595,9 @@ class NumericsSettings:
             residual_k=residual_k,
             residual_omega=(float(d["residual_omega"]) if d.get("residual_omega") is not None else 1e-6) if "residual_omega" in d else 1e-6,
             residual_epsilon=_opt_float(d.get("residual_epsilon")),
-            u_solver=u_solver,  # type: ignore[arg-type]
-            p_solver=p_solver,  # type: ignore[arg-type]
-            turb_solver=turb_solver,  # type: ignore[arg-type]
+            u_solver=u_solver,
+            p_solver=p_solver,
+            turb_solver=turb_solver,
             relax_p=float(d.get("relax_p", 0.3)),
             relax_u=float(d.get("relax_u", 0.7)),
             relax_k=float(d.get("relax_k", 0.7)),
@@ -677,11 +677,11 @@ class SimulationControlSettings:
             delta_t=float(d.get("delta_t", 1.0)),
             write_control=wc,
             write_interval=int(d.get("write_interval", 1000)),
-            cpu_mode=cpu_mode,  # type: ignore[arg-type]
+            cpu_mode=cpu_mode,
             n_cpus=int(d.get("n_cpus", 16)),
             max_runtime_s=float(d.get("max_runtime_s", 20_000.0)),
             potential_flow_init=bool(d.get("potential_flow_init", False)),
-            decompose_method=method,  # type: ignore[arg-type]
+            decompose_method=method,
         )
 
     def resolve_n_cpus(self, *, backend: str) -> int:

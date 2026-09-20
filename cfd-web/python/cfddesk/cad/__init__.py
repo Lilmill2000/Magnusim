@@ -1,6 +1,8 @@
 """CAD / STEP import via OCP (cadquery-ocp)."""
 
+from cfddesk.cad.io import LoadedCad, load_cad, write_step
 from cfddesk.cad.normals import face_outward_normal, inlet_velocity_from_face
+from cfddesk.cad.preview import export_preview, write_com_into_meta, write_faces_into_meta
 from cfddesk.cad.step import (
     FaceRecord,
     LoadedSolid,
@@ -14,7 +16,6 @@ from cfddesk.cad.stl_quality import (
     measure_role_tessellation,
     verify_stl_chordal_deviation,
 )
-from cfddesk.cad.io import LoadedCad, load_cad, write_step
 from cfddesk.cad.units import UnitResolution, resolve_units
 from cfddesk.cad.volume import estimate_cell_count, solid_volume_native
 
@@ -37,4 +38,7 @@ __all__ = [
     "tessellate_faces",
     "verify_stl_chordal_deviation",
     "write_step",
+    "export_preview",
+    "write_com_into_meta",
+    "write_faces_into_meta",
 ]

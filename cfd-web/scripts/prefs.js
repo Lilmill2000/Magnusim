@@ -74,6 +74,11 @@ export function wizardCompleted() {
   return !!readLocalDoc().wizard_completed;
 }
 
+/** Fold a finished Materials / BC / Mesh / … folder when you leave it. Default on. */
+export function collapseCompletedSections() {
+  return readLocalDoc().collapse_completed_sections !== false;
+}
+
 export function hardwarePrefs() {
   const h = readLocalDoc().hardware;
   return h && typeof h === 'object' ? h : null;
@@ -87,6 +92,7 @@ export function publicPrefs() {
     length_unit: defaultLengthUnit(),
     port: listenPort(),
     wizard_completed: !!doc.wizard_completed,
+    collapse_completed_sections: collapseCompletedSections(),
     hardware: hardwarePrefs(),
     wsl_distro: doc.wsl_distro || null,
     wsl_case_root: doc.wsl_case_root || null,

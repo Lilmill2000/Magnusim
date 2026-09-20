@@ -9,8 +9,8 @@ import numpy as np
 from OCP.BRep import BRep_Builder
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
-from OCP.TopoDS import TopoDS_Compound
 from OCP.gp import gp_Pnt
+from OCP.TopoDS import TopoDS_Compound
 
 from cfddesk.cad.step import LoadedSolid
 
@@ -186,9 +186,11 @@ def boundary_vertex_to_brep(
     pts: list[np.ndarray] = []
     if "boundary" in mb.keys():
         bnd = mb["boundary"]
+        if not isinstance(bnd, pv.MultiBlock):
+            raise RuntimeError("OpenFOAM boundary is not a block collection")
         for i in range(bnd.n_blocks):
             b = bnd[i]
-            if b is not None and getattr(b, "n_points", 0):
+            if isinstance(b, pv.DataSet) and b.n_points > 0:
                 pts.append(np.asarray(b.points))
     if not pts:
         raise RuntimeError(f"no boundary points in {mesh_dir}")
@@ -218,6 +220,8 @@ def vf_wall_probe(mesh_dir: Path) -> VfWallProbe:
     if reader.time_values:
         reader.set_active_time_value(reader.time_values[0])
     internal = reader.read()["internalMesh"]
+    if not isinstance(internal, pv.DataSet):
+        raise RuntimeError("OpenFOAM internal mesh is missing")
     cc = np.asarray(internal.cell_centers().points)
     r = np.hypot(cc[:, 0], cc[:, 1])
     metal = (

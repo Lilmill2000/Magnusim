@@ -86,6 +86,32 @@ function Test-Admin {
 
 }
 
+function Enable-WinLongPaths {
+
+    try {
+
+        $cur = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -ErrorAction SilentlyContinue).LongPathsEnabled
+
+        if ([int]$cur -eq 1) { Write-Ok 'Windows long paths already enabled'; return }
+
+    } catch { }
+
+    if (-not (Test-Admin)) { Restart-Elevated }
+
+    try {
+
+        Set-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -Type DWord
+
+        Write-Ok 'Enabled Windows long paths (over 260 characters)'
+
+    } catch {
+
+        throw "Could not enable Windows long paths: $($_.Exception.Message)"
+
+    }
+
+}
+
 
 
 function Restart-Elevated {
@@ -170,7 +196,7 @@ function Install-Node {
 
     Refresh-Path
 
-    if (Test-Cmd 'node') {
+    if ((Test-Cmd 'node') -and ([version]((node -v).TrimStart('v')) -ge [version]'22.12.0')) {
 
         Write-Ok ("Node.js {0}" -f (node -v))
 
@@ -184,7 +210,7 @@ function Install-Node {
 
         Refresh-Path
 
-        if (Test-Cmd 'node') { Write-Ok ("Node.js {0}" -f (node -v)); return }
+        if ((Test-Cmd 'node') -and ([version]((node -v).TrimStart('v')) -ge [version]'22.12.0')) { Write-Ok ("Node.js {0}" -f (node -v)); return }
 
     }
 
@@ -394,7 +420,7 @@ function Install-PythonVenv([string[]]$PyLauncher) {
 
     }
 
-    & $VenvPython -m pip install --upgrade pip
+    & $VenvPython -m pip install --upgrade "pip>=26.2" "setuptools>=83"
 
     if ($LASTEXITCODE -ne 0) { throw 'pip upgrade failed' }
 
@@ -744,6 +770,8 @@ try {
 
 
 
+    Enable-WinLongPaths
+
     Install-Node
 
     $pyLauncher = @(Install-Python)
@@ -776,13 +804,13 @@ try {
 
     Write-Host 'Setup finished.' -ForegroundColor Green
 
-    Write-Host 'Double-click start.bat. The first launch opens a short setup wizard (units, this PC, port).'
+    Write-Host 'Double-click run.bat. The first launch opens a short setup wizard (units, this PC, port).'
 
     Write-Host 'Double-click stop.bat when you are done.'
 
-    if ($WebRoot -ne $RepoRoot -and (Test-Path (Join-Path $RepoRoot 'start.bat'))) {
+    if ($WebRoot -ne $RepoRoot -and (Test-Path (Join-Path $RepoRoot 'run.bat'))) {
 
-        Write-Host "(Those .bat files are in the cfd-web folder.)"
+        Write-Host '(Those .bat files are in the same folder as Setup.bat.)'
 
     }
 

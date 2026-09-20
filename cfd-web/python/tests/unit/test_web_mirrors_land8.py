@@ -24,7 +24,6 @@ from cfddesk.project.web_adapter import (
 )
 from cfddesk.project.web_mirrors import (
     apply_web_sibling_to_project,
-    ingest_web_siblings_if_newer,
     load_or_synthesize_project,
     mark_web_mirrors_derived,
 )
@@ -133,7 +132,6 @@ def test_v15_ingest_newer_sibling(tmp_path: Path):
     (tmp_path / "materials.json").write_text(json.dumps(mats), encoding="utf-8")
     # Save project with old updated_at
     proj = mark_web_mirrors_derived(proj)
-    object.__setattr__ if False else None
     import dataclasses
 
     proj = dataclasses.replace(proj, updated_at="2020-01-01T00:00:00Z")
@@ -163,6 +161,7 @@ def test_apply_and_regenerate_runs(tmp_path: Path):
     }
     proj = apply_web_sibling_to_project(proj, "runs", catalog)
     assert any(r.id == "run-abc" for r in proj.primary_simulation().runs)
-    regenerate_web_mirrors(proj, tmp_path, kinds=["runs"])
-    out = json.loads((tmp_path / "runs" / "catalog.json").read_text(encoding="utf-8"))
+    written = regenerate_web_mirrors(proj, tmp_path, kinds=["runs"])
+    out = json.loads(written["runs_catalog"].read_text(encoding="utf-8"))
+    assert not (tmp_path / "runs" / "catalog.json").exists()
     assert out["runs"][0]["id"] == "run-abc"

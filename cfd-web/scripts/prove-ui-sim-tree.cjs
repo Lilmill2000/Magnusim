@@ -2,12 +2,12 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-const BASE = (process.env.CFD_BASE || 'https://simulation.lilmill2000.com').replace(/\/$/, '');
+const BASE = (process.env.CFD_BASE || 'http://127.0.0.1:8082').replace(/\/$/, '');
 const outDir = path.join(__dirname, '..', 'runs', 'phase0-ui-sim-tree');
 fs.mkdirSync(outDir, { recursive: true });
 
 function stepFile() {
-  return 'C:\\Users\\drmil\\Desktop\\Code\\CFD\\cfd-web\\projects\\tester-phase0-ui-20260914-2154-20260915025538-22f74c\\geometry\\source.step';
+  return process.env.MAGNUSIM_TEST_STEP || path.join(__dirname, '..', 'python', 'tests', 'fixtures', 'elbow.step');
 }
 
 (async () => {

@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from cfddesk.registry.discovery import RegistryHub
 
 
-def register_builtins(hub: "RegistryHub") -> None:
+def register_builtins(hub: RegistryHub) -> None:
     """Register built-in specs into `hub`.
 
     Phase 2 land6: AnalysisType + SolverApps + MeshBackends + BC wrap +
@@ -17,11 +17,11 @@ def register_builtins(hub: "RegistryHub") -> None:
     Cross-ref validation (solver / bc / material / monitor bags) runs at end of
     load_all (after plugins).
     """
+    from cfddesk.builtin.filters import register_filters
     from cfddesk.builtin.incompressible import register_incompressible
     from cfddesk.builtin.materials import register_materials
     from cfddesk.builtin.meshers import register_meshers
     from cfddesk.builtin.monitors import register_monitors
-    from cfddesk.builtin.filters import register_filters
     from cfddesk.builtin.solvers_openfoam import register_openfoam_solvers
     from cfddesk.registry.bc import register_builtin_bcs
 

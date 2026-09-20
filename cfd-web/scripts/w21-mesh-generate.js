@@ -24,7 +24,13 @@ import { PYTHON, pyTool } from './python-env.js';
 import { wslCasePath, wslDistro } from './wsl-env.js';
 import { createJobLogger } from './log.js';
 import { envGet } from './env-compat.js';
-import { pyJsonSync } from './py-json.js';
+import { writeJsonCli } from './py-json.js';
+import { MESH_ENGINES, mesherKeys } from './registry-defaults.js';
+import { slimLiveMeshResult, slimMeshDoc } from './mesh-live-slim.js';
+import { assembleMeshDoc, persistMeshDoc, persistOneMesh, meshCasePath, meshFolderOf } from './study-io.js';
+import { findGeometry, findStudy, walkGeometries } from './project-layout.js';
+import { getActiveSimulation } from './w17-sim-catalog.js';
+import { scheduleComputeQueueKick } from './server/compute-queue.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -70,24 +76,26 @@ function projectJsonPath(projectId) {
   return join(PROJECTS_ROOT, projectId, 'project.json');
 }
 
-function readMeshDoc(projectId) {
-  const p = meshJsonPath(projectId);
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, 'utf8'));
-  } catch {
-    return null;
+function readMeshDoc(projectId, simId, meshId) {
+  if (!projectId || !simId) return null;
+  const doc = assembleMeshDoc(projectId, simId, meshId);
+  return doc && doc.meshes && doc.meshes.length ? doc : null;
+}
+
+/** Settings for meshId only. Never fall back to catalog/first-mesh settings. */
+export function settingsForMesh(meshDoc, meshId, posted) {
+  const meshes = (meshDoc && meshDoc.meshes) || [];
+  const rec = meshId ? meshes.find((m) => m && String(m.id) === String(meshId)) : null;
+  const disk = rec && rec.settings ? rec.settings : null;
+  if (posted && typeof posted === 'object' && !Array.isArray(posted)) {
+    return { ...(disk || {}), ...posted };
   }
+  return disk;
 }
 
 function writeMeshDoc(projectId, doc) {
-  // Phase 1 Step 9: mesh.json (+ project.mesh soft stamp) via project_cli.
   const simId = (doc && doc.simulation_id) || '';
-  pyJsonSync(
-    'project_cli.py',
-    ['set-mesh-settings', '--project-dir', join(PROJECTS_ROOT, projectId), '--sim-id', String(simId || '')],
-    doc,
-  );
+  persistMeshDoc(projectId, simId, slimMeshDoc(doc) || doc);
   return meshJsonPath(projectId);
 }
 
@@ -97,11 +105,15 @@ function winToWsl(winPath) {
   return m ? `/mnt/${m[1].toLowerCase()}/${m[2]}` : posix;
 }
 
+function existingFile(p) {
+  return p && existsSync(p) ? p : null;
+}
+
 /**
- * Resolve active W16 project geometry: source.step + Body1.stl.
- * HARD FAIL if missing — never silently fall back to MTP1 walls.stl.
+ * Resolve the active geometry STEP under geometries/Geometry_*.
+ * Body1.stl is optional (STEP import no longer tessellates on the way in).
  */
-export function resolveProjectGeometry(projectId) {
+export function resolveProjectGeometry(projectId, opts) {
   const id = projectId || readActiveId();
   if (!id) {
     return { ok: false, error: 'no active project; create W16 project + import STEP first' };
@@ -117,31 +129,41 @@ export function resolveProjectGeometry(projectId) {
     return { ok: false, error: 'project.json unreadable: ' + e, project_id: id };
   }
   const geom = proj.geometry || {};
+  const root = join(PROJECTS_ROOT, id);
+  const walked = walkGeometries(root);
+  const meshId = opts && opts.meshId;
+  let preferId = (opts && (opts.geometryId || opts.geomId)) || null;
+  if (!preferId && meshId) {
+    const simId = studyIdForMesh(id, meshId);
+    const study = simId ? findStudy(root, simId) : null;
+    if (study && study.geometry_id) preferId = String(study.geometry_id);
+  }
+  const part =
+    (proj.geometries || []).find((g) => g && g.id === (preferId || proj.active_geometry_id || (geom && geom.id))) ||
+    (proj.geometries || [])[0] ||
+    walked[0] ||
+    null;
+  const found = part && part.id ? findGeometry(root, part.id) : walked[0] || null;
+  const partDir = (found && found.dir) || null;
   const step_path =
-    geom.step_path || join(PROJECTS_ROOT, id, 'geometry', 'source.step');
+    existingFile(partDir && join(partDir, 'source.step')) ||
+    existingFile(part && part.step_path) ||
+    existingFile(geom.step_path);
   const body1_path =
-    geom.stl_path || join(PROJECTS_ROOT, id, 'geometry', 'Body1.stl');
-  if (!existsSync(step_path)) {
+    existingFile(partDir && join(partDir, 'Body1.stl')) ||
+    existingFile(part && part.stl_path) ||
+    existingFile(geom.stl_path);
+  if (!step_path) {
     return {
       ok: false,
       error: 'W16 source.step missing — import geometry first',
       project_id: id,
-      step_path,
-      body1_path,
-    };
-  }
-  if (!existsSync(body1_path)) {
-    return {
-      ok: false,
-      error: 'W16 Body1.stl missing — import geometry first',
-      project_id: id,
-      step_path,
+      step_path: (part && part.step_path) || (partDir && join(partDir, 'source.step')) || geom.step_path || null,
       body1_path,
     };
   }
   const stepSt = statSync(step_path);
-  const bodySt = statSync(body1_path);
-  if (stepSt.size < 32 || bodySt.size < 100) {
+  if (stepSt.size < 32) {
     return {
       ok: false,
       error: 'geometry files too small / empty',
@@ -149,26 +171,32 @@ export function resolveProjectGeometry(projectId) {
       step_path,
       body1_path,
       step_bytes: stepSt.size,
-      body1_bytes: bodySt.size,
     };
   }
-  const bodyBuf = readFileSync(body1_path);
-  const body1_sha256 = createHash('sha256').update(bodyBuf).digest('hex');
   const stepBuf = readFileSync(step_path);
   const step_sha256 = createHash('sha256').update(stepBuf).digest('hex');
+  let body1_bytes = 0;
+  let body1_sha256 = null;
+  if (body1_path) {
+    const bodySt = statSync(body1_path);
+    body1_bytes = bodySt.size;
+    if (bodySt.size >= 100) {
+      body1_sha256 = createHash('sha256').update(readFileSync(body1_path)).digest('hex');
+    }
+  }
   return {
     ok: true,
     project_id: id,
     step_path,
     body1_path,
     step_bytes: stepSt.size,
-    body1_bytes: bodySt.size,
+    body1_bytes,
     step_sha256,
     body1_sha256,
-    geometry_name: geom.name || null,
+    geometry_name: (part && part.name) || geom.name || null,
     wsl_step: winToWsl(step_path),
-    wsl_body1: winToWsl(body1_path),
-    cad_faces_path: join(PROJECTS_ROOT, id, 'geometry', 'cad_faces.vtp'),
+    wsl_body1: body1_path ? winToWsl(body1_path) : null,
+    cad_faces_path: partDir ? join(partDir, 'cad_faces.vtp') : null,
     bounds:
       (geom.fingerprint && geom.fingerprint.bounds) ||
       (geom.fingerprint &&
@@ -298,8 +326,26 @@ function fingerprintPolyMesh(polyMeshDir) {
   return { sha256: h.digest('hex'), ...counts };
 }
 
+function polyMeshCacheToken(caseDir) {
+  try {
+    const txt = readFileSync(join(caseDir, 'constant', 'polyMesh', 'owner'), 'utf8').slice(0, 1600);
+    const cells = /nCells:(\d+)/.exec(txt);
+    const pts = /nPoints:(\d+)/.exec(txt);
+    if (cells && pts) return `c${cells[1]}p${pts[1]}`;
+  } catch {}
+  try {
+    const st = statSync(join(caseDir, 'constant', 'polyMesh', 'points'));
+    return `t${st.mtimeMs}s${st.size}`;
+  } catch {
+    return '0';
+  }
+}
+
 function meshSurfaceCacheKey(caseDir) {
-  const h = createHash('sha256').update(String(caseDir)).digest('hex').slice(0, 16);
+  const h = createHash('sha256')
+    .update(String(caseDir) + '|' + polyMeshCacheToken(caseDir))
+    .digest('hex')
+    .slice(0, 16);
   return join(MESH_SURFACE_CACHE_ROOT, `surface-${h}.vtp`);
 }
 
@@ -318,10 +364,350 @@ function prewarmMeshSurface(winOut) {
   return { ok: r.status === 0 && existsSync(outVtp), path: outVtp, status: r.status };
 }
 
+export function pidIsAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isFinite(n) || n <= 0) return false;
+  try {
+    process.kill(n, 0);
+    return true;
+  } catch (e) {
+    if (e && (e.code === 'EPERM' || e.code === 'EACCES')) return true;
+    return false;
+  }
+}
+
+export function liveChildIsRunning(child) {
+  if (!child || child.killed) return false;
+  if (child.exitCode != null || child.signalCode) return false;
+  if (!child.pid) return false;
+  return pidIsAlive(child.pid);
+}
+
+function dropDeadLiveJob() {
+  if (!liveJob) return;
+  if (!liveChildIsRunning(liveJob.child)) liveJob = null;
+}
+
+export function isLiveMeshJobHeld() {
+  dropDeadLiveJob();
+  return !!(liveJob && liveChildIsRunning(liveJob.child));
+}
+
+export function meshStopMatchesLive(live, { meshId, projectId } = {}) {
+  if (!live) return { match: false, reason: 'idle' };
+  if (meshId && live.mesh_id && String(live.mesh_id) !== String(meshId)) {
+    return { match: false, reason: 'other_mesh' };
+  }
+  if (projectId && live.project_id && String(live.project_id) !== String(projectId)) {
+    return { match: false, reason: 'other_project' };
+  }
+  return { match: true, reason: 'ok' };
+}
+
+export function meshCloseStatus({ stopRequested, ok } = {}) {
+  if (stopRequested) return 'stopped';
+  return ok ? 'done' : 'failed';
+}
+
+function bindLiveMeshJob({
+  child,
+  generate_id,
+  path_kind,
+  project_id,
+  started_at,
+  mesh_id,
+  wsl_dst,
+  onUpdate,
+}) {
+  const job = {
+    child,
+    generate_id,
+    path_kind,
+    project_id,
+    started_at,
+    mesh_id: mesh_id || null,
+    wsl_dst: wsl_dst || null,
+    wsl_case: wsl_dst ? wslCasePath(wsl_dst) : null,
+    onUpdate: typeof onUpdate === 'function' ? onUpdate : () => {},
+    stop_requested: false,
+    cancelled_notified: false,
+  };
+  liveJob = job;
+  return job;
+}
+
+function killWindowsPidTree(pid) {
+  if (!pid) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        timeout: 8000,
+        stdio: 'ignore',
+      });
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Kill leftover generate_* processes still pointed at this mesh case folder. */
+function reapStaleMeshGenerators(caseDir) {
+  if (!caseDir) return;
+  const lockPath = join(caseDir, '.generate.lock');
+  try {
+    if (existsSync(lockPath)) {
+      const prev = JSON.parse(readFileSync(lockPath, 'utf8'));
+      if (prev && prev.pid) killWindowsPidTree(prev.pid);
+    }
+  } catch {
+    /* ignore */
+  }
+  if (process.platform !== 'win32') return;
+  const like = '*' + String(caseDir).replace(/'/g, "''") + '*';
+  try {
+    const r = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*generate_standard.py*' -or $_.CommandLine -like '*generate_snappy.py*' -or $_.CommandLine -like '*generate_cfmesh_standard.py*') -and $_.CommandLine -like '" +
+          like +
+          "' } | ForEach-Object { $_.ProcessId }",
+      ],
+      { encoding: 'utf8', timeout: 15000, windowsHide: true },
+    );
+    for (const tok of String(r.stdout || '').split(/\s+/)) {
+      const pid = Number(tok);
+      if (Number.isInteger(pid) && pid > 0) killWindowsPidTree(pid);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function killWslMeshCase(job) {
+  const needles = [];
+  if (job && job.wsl_dst) needles.push(String(job.wsl_dst));
+  if (job && job.generate_id) {
+    needles.push(`cfddesk-cfdweb-${job.generate_id}`);
+    needles.push(`cfddesk-w25-${job.generate_id}`);
+  }
+  if (job && job.wsl_case) {
+    const last = String(job.wsl_case)
+      .split('/')
+      .filter(Boolean)
+      .pop();
+    if (last) needles.push(last);
+  }
+  const cleaned = [
+    ...new Set(
+      needles
+        .map((s) => String(s || '').replace(/[^a-zA-Z0-9._-]/g, ''))
+        .filter(Boolean)
+    ),
+  ];
+  if (!cleaned.length) return;
+  try {
+    spawn(
+      'wsl',
+      ['-d', wslDistro(), '--', 'bash', '-lc', `pkill -f ${JSON.stringify(cleaned.join('|'))} || true`],
+      { windowsHide: true, stdio: 'ignore' }
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function notifyMeshStopped(job) {
+  if (!job || job.cancelled_notified) return;
+  job.cancelled_notified = true;
+  const terminal = {
+    status: 'stopped',
+    mode: 'mesh',
+    path_kind: job.path_kind || PATH_CFMESH,
+    generate_id: job.generate_id,
+    kick_id: job.generate_id,
+    pid: null,
+    exit_code: null,
+    finished_at: new Date().toISOString(),
+    project_id: job.project_id,
+    mesh_id: job.mesh_id,
+    wsl_case: job.wsl_case,
+    stage: 'stopped',
+    error: 'cancelled',
+    note: 'Mesh generate cancelled.',
+    increment: INCREMENT,
+  };
+  try {
+    persistMeshResult(job.project_id, terminal);
+  } catch {
+    /* ignore */
+  }
+  try {
+    job.onUpdate(terminal);
+  } catch {
+    /* ignore */
+  }
+  scheduleComputeQueueKick(250);
+}
+
+/** Kill the live generate for this mesh so the next queued job can start. */
+export function stopMeshGenerate({ meshId, projectId } = {}) {
+  dropDeadLiveJob();
+  const job = liveJob;
+  const match = meshStopMatchesLive(job, { meshId, projectId });
+  const id = projectId || (job && job.project_id) || readActiveId();
+  const mid = meshId || (job && job.mesh_id);
+  let caseDir = null;
+  if (id && mid) {
+    try {
+      caseDir = meshCasePath(id, mid, studyIdForMesh(id, mid));
+    } catch {
+      caseDir = null;
+    }
+  }
+  if (!match.match) {
+    reapStaleMeshGenerators(caseDir);
+    return {
+      ok: true,
+      status: 200,
+      bodyExtra: { ok: true, stopped: !!caseDir, reason: match.reason, increment: INCREMENT },
+    };
+  }
+  job.stop_requested = true;
+  job.stop_requested_at = Date.now();
+  const pid = job.child && job.child.pid;
+  try {
+    job.child.kill();
+  } catch {
+    /* ignore */
+  }
+  killWindowsPidTree(pid);
+  killWslMeshCase(job);
+  reapStaleMeshGenerators(caseDir);
+  notifyMeshStopped(job);
+  if (liveJob === job) liveJob = null;
+  return {
+    ok: true,
+    status: 200,
+    bodyExtra: {
+      ok: true,
+      stopped: true,
+      mesh_id: job.mesh_id || meshId || null,
+      generate_id: job.generate_id || null,
+      increment: INCREMENT,
+    },
+  };
+}
+
+/** Case on disk is a finished generate even if mesh.json never flipped. */
+export function inspectGeneratedCase(caseDir) {
+  if (!caseDir) return null;
+  const polyDir = join(caseDir, 'constant', 'polyMesh');
+  const points = join(polyDir, 'points');
+  if (!existsSync(points)) return null;
+  let n_cells = null;
+  let n_points = null;
+  let n_faces = null;
+  let source = null;
+  let generate_id = null;
+  const countsJson = join(caseDir, 'w21-counts.json');
+  if (existsSync(countsJson)) {
+    try {
+      const j = JSON.parse(readFileSync(countsJson, 'utf8'));
+      n_cells = j.n_cells ?? null;
+      n_points = j.n_points ?? null;
+      n_faces = j.n_faces ?? null;
+      generate_id = j.generate_id != null ? String(j.generate_id) : null;
+      source = j.source || 'w21-counts.json';
+    } catch {
+      /* ignore */
+    }
+  }
+  let script_ok = false;
+  for (const name of ['log.standard_generate.txt', 'log.cartesianMesh', 'log.snappyHexMesh']) {
+    const p = join(caseDir, name);
+    if (!existsSync(p)) continue;
+    try {
+      const t = readFileSync(p, 'utf8');
+      if (t.includes('MESH_SCRIPT_OK') || /mesh OK/i.test(t) || /End\b/.test(t)) {
+        script_ok = true;
+        break;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return {
+    ok: true,
+    case_dir: caseDir,
+    mesh_path: polyDir,
+    n_cells,
+    n_points,
+    n_faces,
+    counts_source: source || 'polyMesh/points',
+    generate_id,
+    script_ok,
+  };
+}
+
+export function recoverStudyMeshesFromDisk(projectId, simId) {
+  if (!projectId || !simId) return 0;
+  dropDeadLiveJob();
+  const doc = assembleMeshDoc(projectId, simId);
+  let n = 0;
+  for (const m of doc.meshes || []) {
+    if (!m || !m.id) continue;
+    if (isLiveMeshJobHeld() && liveJob.mesh_id && String(liveJob.mesh_id) === String(m.id)) continue;
+    const live = m.live_mesh_result;
+    if (live && (live.status === 'stopped' || live.status === 'cancelled')) continue;
+    if (m.generated && live && live.status === 'done') continue;
+    const caseDir = (live && live.case_dir) || m.case_dir || meshCasePath(projectId, m.id, simId);
+    const found = inspectGeneratedCase(caseDir);
+    if (!found) continue;
+    persistMeshResult(projectId, {
+      status: 'done',
+      mesh_id: m.id,
+      simulation_id: simId,
+      path_kind: (live && live.path_kind) || PATH_STANDARD,
+      generate_id: found.generate_id || (live && live.generate_id) || null,
+      case_dir: found.case_dir,
+      mesh_path: found.mesh_path,
+      n_cells: found.n_cells,
+      n_points: found.n_points,
+      n_faces: found.n_faces,
+      counts_source: found.counts_source,
+      finished_at: new Date().toISOString(),
+      note:
+        found.n_cells != null
+          ? `Recovered generated mesh from case (${found.n_cells} cells).`
+          : 'Recovered generated mesh from polyMesh on disk.',
+    });
+    n += 1;
+  }
+  return n;
+}
+
+
+function studyIdForMesh(projectId, meshId) {
+  const folder = meshId ? meshFolderOf(projectId, meshId) : null;
+  return folder && folder.simulation_id ? String(folder.simulation_id) : '';
+}
 
 export function persistMeshResult(projectId, resultFields) {
   if (!projectId) return null;
-  const existing = readMeshDoc(projectId) || {};
+  const simId =
+    (resultFields && resultFields.simulation_id) ||
+    studyIdForMesh(projectId, resultFields && resultFields.mesh_id);
+  const existing = readMeshDoc(projectId, simId) || {};
   const now = new Date().toISOString();
   const pathKind = resultFields.path_kind || PATH_SNAPPY;
   const increment = resultFields.increment || INCREMENT;
@@ -333,7 +719,7 @@ export function persistMeshResult(projectId, resultFields) {
     exit_code: resultFields.exit_code,
     command: resultFields.command,
     log_path: resultFields.log_path,
-    log_excerpt: resultFields.log_excerpt || null,
+    log_excerpt: slimLiveMeshResult({ log_excerpt: resultFields.log_excerpt || null }).log_excerpt,
     wsl_case: resultFields.wsl_case,
     case_dir: resultFields.case_dir,
     mesh_path:
@@ -368,36 +754,32 @@ export function persistMeshResult(projectId, resultFields) {
       ? `Mesh done: ${live.n_cells} cells, ${live.n_points} points.`
       : resultFields.status === 'failed'
         ? `Mesh failed (exit ${resultFields.exit_code}).`
-        : 'Mesh running.';
+        : resultFields.status === 'stopped'
+          ? 'Mesh generate cancelled.'
+          : 'Mesh running.';
   const generated = resultFields.status === 'done';
   const meshId = resultFields.mesh_id || null;
+  const ownedCase = meshId ? meshCasePath(projectId, meshId, simId) : null;
+  if (ownedCase) {
+    live.case_dir = ownedCase;
+    live.mesh_path = join(ownedCase, 'constant', 'polyMesh');
+  }
   let meshes = Array.isArray(existing.meshes) ? existing.meshes.slice() : null;
   if (meshes && meshes.length) {
-    let idx = meshId ? meshes.findIndex((m) => m && m.id === meshId) : -1;
-    if (idx < 0 && resultFields.generate_id) {
-      idx = meshes.findIndex(
-        (m) =>
-          m &&
-          m.live_mesh_result &&
-          String(m.live_mesh_result.generate_id || '') === String(resultFields.generate_id)
-      );
-    }
-    if (idx >= 0) {
-      const prev = meshes[idx] || {};
-      meshes[idx] = {
-        ...prev,
-        id: meshes[idx].id,
-        name: meshes[idx].name || existing.name,
-        settings: meshes[idx].settings || existing.settings || null,
+    if (!meshId) return existing;
+    const matchesLive = (m) => !!(m && String(m.id) === String(meshId));
+    let hit = 0;
+    meshes = meshes.map((m) => {
+      if (!matchesLive(m)) return m;
+      hit += 1;
+      return {
+        ...m,
         generated,
         live_mesh_result: live,
-        geometry_id: prev.geometry_id || null,
-        simulation_id: prev.simulation_id || null,
         updated_at: now,
       };
-    } else {
-      return existing;
-    }
+    });
+    if (!hit) return existing;
     const nextActive =
       (existing.active_id && meshes.some((m) => m && m.id === existing.active_id)
         ? existing.active_id
@@ -416,8 +798,9 @@ export function persistMeshResult(projectId, resultFields) {
       meshes,
     };
     delete doc.out_of_scope;
-    writeMeshDoc(projectId, doc);
-    return doc;
+    const updated = meshes.find((m) => m && String(m.id) === String(meshId));
+    if (updated) persistOneMesh(projectId, simId, { ...updated, simulation_id: simId });
+    return assembleMeshDoc(projectId, simId, meshId);
   }
   const doc = {
     ...existing,
@@ -430,15 +813,43 @@ export function persistMeshResult(projectId, resultFields) {
     active_id: existing.active_id || existing.id || meshId || null,
   };
   delete doc.out_of_scope;
-  writeMeshDoc(projectId, doc);
+  writeMeshDoc(projectId, slimMeshDoc(doc));
   return doc;
 }
 
-function wantsStandard(settings) {
+/**
+ * Resolve MeshBackend dump key from mesh.json settings.
+ * Explicit settings.mesh_backend / advanced.mesh_backend wins when registered.
+ * Else: Hex-dominant → snappy_hexdominant; Standard + cfmesh hex-core → cfmesh;
+ * otherwise standard. Migration for existing mesh.json (algorithm + mesh_engine).
+ */
+function resolveMeshBackend(settings) {
+  const keys = new Set(mesherKeys());
+  const adv = (settings && settings.advanced) || {};
+  const explicit = String(
+    (settings && settings.mesh_backend) || adv.mesh_backend || ''
+  ).trim();
+  if (explicit && keys.has(explicit)) return explicit;
+
   const algo = String((settings && settings.algorithm) || 'Standard')
     .trim()
     .toLowerCase();
-  return algo === 'standard' || algo === '';
+  if (algo.startsWith('hex-dominant') || algo === 'hexdominant') {
+    return keys.has('snappy_hexdominant') ? 'snappy_hexdominant' : 'snappy_hexdominant';
+  }
+  const eng = String(adv.mesh_engine || (settings && settings.mesh_engine) || 'standard')
+    .trim()
+    .toLowerCase();
+  if (eng === 'cfmesh' && wantsHexCore(settings) && keys.has('cfmesh') && MESH_ENGINES.has('cfmesh')) {
+    return 'cfmesh';
+  }
+  if (keys.has('standard')) return 'standard';
+  return MESH_ENGINES.values().next().value || 'standard';
+}
+
+function wantsStandard(settings) {
+  const backend = resolveMeshBackend(settings);
+  return backend === 'standard' || backend === 'cfmesh';
 }
 
 function wantsHexCore(settings) {
@@ -452,18 +863,12 @@ function wantsHexCore(settings) {
  * or 'cfmesh' (legacy cartesianMesh, hex core only). Chosen in Advanced settings.
  */
 function standardEngine(settings) {
-  const adv = (settings && settings.advanced) || {};
-  const eng = String(adv.mesh_engine || settings?.mesh_engine || 'standard')
-    .trim()
-    .toLowerCase();
-  return eng === 'cfmesh' && wantsHexCore(settings) ? 'cfmesh' : 'standard';
+  const backend = resolveMeshBackend(settings);
+  return backend === 'cfmesh' ? 'cfmesh' : 'standard';
 }
 
 function wantsHexDominant(settings) {
-  const algo = String((settings && settings.algorithm) || '')
-    .trim()
-    .toLowerCase();
-  return algo.startsWith('hex-dominant') || algo === 'hexdominant';
+  return resolveMeshBackend(settings) === 'snappy_hexdominant';
 }
 
 function parseCfmeshLine(line) {
@@ -498,30 +903,8 @@ function parseCfmeshLine(line) {
   return null;
 }
 
-function resolveProjectStep(projectId) {
-  const full = resolveProjectGeometry(projectId);
-  if (full.ok) return full;
-  const id = projectId || readActiveId();
-  if (!id) return full;
-  const step_path = join(PROJECTS_ROOT, id, 'geometry', 'source.step');
-  if (!existsSync(step_path)) return full;
-  const st = statSync(step_path);
-  if (st.size < 32) return full;
-  const stepBuf = readFileSync(step_path);
-  return {
-    ok: true,
-    project_id: id,
-    step_path,
-    body1_path: full.body1_path || join(PROJECTS_ROOT, id, 'geometry', 'Body1.stl'),
-    step_bytes: st.size,
-    body1_bytes: 0,
-    step_sha256: createHash('sha256').update(stepBuf).digest('hex'),
-    body1_sha256: null,
-    geometry_name: null,
-    wsl_step: winToWsl(step_path),
-    wsl_body1: null,
-    bounds: null,
-  };
+function resolveProjectStep(projectId, meshId) {
+  return resolveProjectGeometry(projectId, meshId ? { meshId } : undefined);
 }
 
 /**
@@ -538,7 +921,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
       bodyExtra: { error: 'mesh_id required', path_kind: pathKind },
     };
   }
-  const geometry = resolveProjectStep(projectId);
+  const geometry = resolveProjectStep(projectId, meshId);
   if (!geometry.ok) {
     return {
       ok: false,
@@ -554,8 +937,9 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
 
   const generateId = stampId();
   const project_id = geometry.project_id;
-  const meshDoc = project_id ? readMeshDoc(project_id) : null;
-  const settings_snapshot = settings || (meshDoc && meshDoc.settings) || null;
+  const simIdEarly = studyIdForMesh(project_id, meshId);
+  const meshDoc = project_id && simIdEarly ? readMeshDoc(project_id, simIdEarly, meshId) : null;
+  const settings_snapshot = settingsForMesh(meshDoc, meshId, settings) || settings || null;
   const fineness =
     settings_snapshot && settings_snapshot.fineness != null
       ? settings_snapshot.fineness
@@ -582,8 +966,16 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     : 1.22;
 
   const wslDst = `cfddesk-cfdweb-${generateId}`;
-  const winOut = join(PROJECTS_ROOT, project_id, 'mesh', `run-${generateId}`);
+  const winOut = meshCasePath(project_id, meshId, simIdEarly);
+  if (!winOut) {
+    return {
+      ok: false,
+      status: 400,
+      bodyExtra: { error: 'mesh folder missing — create Mesh first', mesh_id: meshId, path_kind: pathKind },
+    };
+  }
   mkdirSync(winOut, { recursive: true });
+  reapStaleMeshGenerators(winOut);
   // Phase 1 land10: job logs live under .cache (not projects/); job-runner/log.js owns JSONL.
   mkdirSync(REPORT_DIR, { recursive: true });
   const winLog = join(REPORT_DIR, `generate-${generateId}.log`);
@@ -591,14 +983,10 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
 
   let fingerprint_before = null;
   try {
-    const prev =
-      meshDoc &&
-      meshDoc.live_mesh_result &&
-      meshDoc.live_mesh_result.mesh_path &&
-      existsSync(meshDoc.live_mesh_result.mesh_path)
-        ? meshDoc.live_mesh_result.mesh_path
-        : null;
-    if (prev) fingerprint_before = fingerprintPolyMesh(prev);
+    const prev = join(winOut, 'constant', 'polyMesh');
+    if (existsSync(join(prev, 'owner')) && existsSync(join(prev, 'points'))) {
+      fingerprint_before = fingerprintPolyMesh(prev);
+    }
   } catch {
     fingerprint_before = null;
   }
@@ -637,6 +1025,9 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   if (scopedMeshId) {
     argv.push('--mesh-id', String(scopedMeshId));
   }
+  const meshRec = ((meshDoc && meshDoc.meshes) || []).find((m) => m && String(m.id) === String(meshId));
+  const simId = (meshRec && meshRec.simulation_id) || (meshDoc && meshDoc.simulation_id) || '';
+  if (simId) argv.push('--simulation-id', String(simId));
   const command = argv.join(' ');
   const started_at = new Date().toISOString();
   const engineLabel = engine === 'cfmesh' ? 'cfMesh cartesianMesh' : 'Standard';
@@ -649,8 +1040,20 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
   });
-  liveJob = { child, generate_id: generateId, path_kind: pathKind, project_id, started_at, mesh_id: meshId || null };
+  const job = bindLiveMeshJob({
+    child,
+    generate_id: generateId,
+    path_kind: pathKind,
+    project_id,
+    started_at,
+    mesh_id: meshId || null,
+    wsl_dst: wslDst,
+    onUpdate,
+  });
   jobLog.info('spawn', { pid: child.pid || null, path_kind: pathKind, engine });
+  try {
+    writeFileSync(winLog, '', 'utf8');
+  } catch {}
 
   const baseRunning = {
     status: 'running',
@@ -696,7 +1099,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     stage: 'starting',
     stage_detail: null,
     note: `${engineLabel} mesh on project STEP (fineness ${fineness}, hex core ${hexCore ? 'on' : 'off'}, layers ${addLayers ? 'on' : 'off'}).`,
-    mesh_id: liveJob.mesh_id,
+    mesh_id: job.mesh_id,
   };
   persistMeshResult(project_id, baseRunning);
 
@@ -748,6 +1151,12 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     try {
       writeFileSync(winLog, logBuf, 'utf8');
     } catch {}
+    if (job.stop_requested) {
+      if (liveJob && liveJob.child === child) liveJob = null;
+      notifyMeshStopped(job);
+      scheduleComputeQueueKick(250);
+      return;
+    }
     liveJob = null;
     const failed = {
       ...baseRunning,
@@ -760,12 +1169,18 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     };
     persistMeshResult(project_id, failed);
     onUpdate(failed);
+    scheduleComputeQueueKick(250);
   });
 
   // Decide on 'close' (not 'exit'): exit can fire while the final JSON result
   // chunk is still in the pipe; close waits until stdout/stderr are fully drained.
   child.on('close', (code, signal) => {
     flushLineCarry();
+    if (liveJob && liveJob.child === child) liveJob = null;
+    if (job.stop_requested) {
+      notifyMeshStopped(job);
+      return;
+    }
     const exit_code = code == null ? (signal ? -2 : -1) : code;
     const finished_at = new Date().toISOString();
     try {
@@ -773,16 +1188,14 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     } catch {}
     const polyDir = join(winOut, 'constant', 'polyMesh');
     let counts = { n_cells: null, n_points: null, n_faces: null, source: null };
-    let fingerprint_after = null;
+    const inspected = inspectGeneratedCase(winOut);
     try {
-      const countsJson = join(winOut, 'w21-counts.json');
-      if (existsSync(countsJson)) {
-        const j = JSON.parse(readFileSync(countsJson, 'utf8'));
+      if (inspected) {
         counts = {
-          n_cells: j.n_cells ?? null,
-          n_points: j.n_points ?? null,
-          n_faces: j.n_faces ?? null,
-          source: j.source || 'w21-counts.json',
+          n_cells: inspected.n_cells,
+          n_points: inspected.n_points,
+          n_faces: inspected.n_faces,
+          source: inspected.counts_source,
         };
       } else if (existsSync(polyDir)) {
         const c = readPolyMeshCounts(polyDir);
@@ -798,30 +1211,18 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
         if (counts.n_points == null) counts.n_points = lastResult.n_points ?? null;
         if (counts.n_faces == null) counts.n_faces = lastResult.n_faces ?? null;
       }
-      try {
-        if (existsSync(polyDir)) fingerprint_after = fingerprintPolyMesh(polyDir);
-      } catch (fpErr) {
-        fingerprint_after = { error: String(fpErr), ...counts };
-      }
     } catch (e) {
       logBuf += `\nCOUNT_PARSE_ERROR: ${e}\n`;
     }
-    try {
-      if (existsSync(polyDir)) prewarmMeshSurface(winOut);
-    } catch (_) {}
 
-    const scriptOk = lastResult && lastResult.ok === true;
-    const ok =
-      exit_code === 0 &&
-      scriptOk &&
-      counts.n_cells != null &&
-      counts.n_points != null &&
-      existsSync(join(polyDir, 'points'));
+    const scriptOk = (lastResult && lastResult.ok === true) || !!(inspected && inspected.script_ok);
+    const hasMesh = existsSync(join(polyDir, 'points')) && (counts.n_cells != null || !!(inspected && inspected.ok));
+    const ok = exit_code === 0 && scriptOk && hasMesh;
+    const status = meshCloseStatus({ stopRequested: job.stop_requested, ok });
 
-    liveJob = null;
     const terminal = {
       ...baseRunning,
-      status: ok ? 'done' : 'failed',
+      status,
       exit_code: ok ? 0 : exit_code === 0 && !ok ? 45 : exit_code,
       finished_at,
       log_excerpt: logBuf.slice(-4000),
@@ -831,21 +1232,51 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
       n_points: counts.n_points,
       n_faces: counts.n_faces,
       counts_source: counts.source,
-      fingerprint_after,
+      fingerprint_after: null,
       script_result: lastResult,
-      stage: ok ? 'done' : 'failed',
+      stage: status,
       stage_detail: null,
-      error: ok ? null : (lastResult && lastResult.error) || `exit ${exit_code}`,
+      error:
+        status === 'done'
+          ? null
+          : status === 'stopped'
+            ? 'cancelled'
+            : exit_code === 75
+              ? 'Volume fill timed out. Reduce inflate thickness or fineness and generate again.'
+              : (lastResult && lastResult.error) || `exit ${exit_code}`,
       hex_core_applied: lastResult && lastResult.hex_core != null ? !!lastResult.hex_core : hexCore,
       layers_applied: lastResult && lastResult.layers_applied != null ? !!lastResult.layers_applied : null,
       surface_size_m: (lastResult && lastResult.surface_size_m) || null,
       signal: signal || null,
-      note: ok
-        ? `${engineLabel} mesh done: ${counts.n_cells} cells, ${counts.n_points} points.`
-        : `${engineLabel} mesh failed (exit ${exit_code}${lastResult && lastResult.error ? ': ' + lastResult.error : ''}).`,
+      note:
+        status === 'done'
+          ? `${engineLabel} mesh done: ${counts.n_cells} cells, ${counts.n_points} points.`
+          : status === 'stopped'
+            ? 'Mesh generate cancelled.'
+            : exit_code === 75
+              ? 'Volume fill timed out. Reduce inflate thickness or fineness and generate again.'
+              : `${engineLabel} mesh failed (exit ${exit_code}${lastResult && lastResult.error ? ': ' + lastResult.error : ''}).`,
     };
     persistMeshResult(project_id, terminal);
     onUpdate(terminal);
+    scheduleComputeQueueKick(250);
+    setImmediate(() => {
+      if (job.stop_requested) return;
+      let fingerprint_after = null;
+      try {
+        if (existsSync(polyDir)) fingerprint_after = fingerprintPolyMesh(polyDir);
+      } catch (fpErr) {
+        fingerprint_after = { error: String(fpErr), ...counts };
+      }
+      try {
+        if (existsSync(polyDir)) prewarmMeshSurface(winOut);
+      } catch (_) {}
+      if (fingerprint_after) {
+        try {
+          persistMeshResult(project_id, { ...terminal, fingerprint_after });
+        } catch (_) {}
+      }
+    });
   });
 
   return {
@@ -856,7 +1287,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
 }
 
 export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
-  if (liveJob && liveJob.child && !liveJob.child.killed && liveJob.child.exitCode === null) {
+  if (isLiveMeshJobHeld()) {
     return {
       ok: false,
       status: 409,
@@ -869,10 +1300,26 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
       },
     };
   }
+  liveJob = null;
 
   const projectIdEarly = projectId || readActiveId();
-  const meshDocEarly = projectIdEarly ? readMeshDoc(projectIdEarly) : null;
-  const settingsEarly = settings || (meshDocEarly && meshDocEarly.settings) || null;
+  const meshDocEarly =
+    projectIdEarly && meshId
+      ? readMeshDoc(projectIdEarly, studyIdForMesh(projectIdEarly, meshId), meshId)
+      : null;
+  const settingsEarly = settingsForMesh(meshDocEarly, meshId, settings) || settings || null;
+  const backend = resolveMeshBackend(settingsEarly);
+  const knownBackends = new Set(mesherKeys());
+  if (!knownBackends.has(backend)) {
+    return {
+      ok: false,
+      status: 400,
+      bodyExtra: {
+        error: `Unknown mesh backend "${backend}" (algorithm "${settingsEarly && settingsEarly.algorithm}").`,
+        path_kind: null,
+      },
+    };
+  }
   if (wantsStandard(settingsEarly)) {
     return startStandardGenerate({
       settings: settingsEarly,
@@ -918,7 +1365,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     };
   }
 
-  const geometry = resolveProjectGeometry(projectId);
+  const geometry = resolveProjectGeometry(projectId, { meshId });
   if (!geometry.ok) {
     return {
       ok: false,
@@ -938,8 +1385,9 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
 
   const generateId = stampId();
   const project_id = geometry.project_id;
-  const meshDoc = project_id ? readMeshDoc(project_id) : null;
-  const settings_snapshot = settings || (meshDoc && meshDoc.settings) || null;
+  const simIdSnappy = studyIdForMesh(project_id, meshId);
+  const meshDoc = project_id && simIdSnappy ? readMeshDoc(project_id, simIdSnappy, meshId) : null;
+  const settings_snapshot = settingsForMesh(meshDoc, meshId, settings) || settings || null;
   const fineness =
     settings_snapshot && settings_snapshot.fineness != null ? settings_snapshot.fineness : 5;
   const addLayers =
@@ -953,23 +1401,25 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
       : !!settings_snapshot.physics_based_meshing;
   const wslDst = `cfddesk-w25-${generateId}`;
   mkdirSync(REPORT_DIR, { recursive: true });
-  const winOut = project_id
-    ? join(PROJECTS_ROOT, project_id, 'mesh', `run-w25-${generateId}`)
-    : join(REPORT_DIR, 'cases', `run-w25-${generateId}`);
+  const winOut = meshCasePath(project_id, meshId, simIdSnappy);
+  if (!winOut) {
+    return {
+      ok: false,
+      status: 400,
+      bodyExtra: { error: 'mesh folder missing — create Mesh first', mesh_id: meshId, path_kind: 'snappyHexMesh' },
+    };
+  }
   mkdirSync(winOut, { recursive: true });
+  reapStaleMeshGenerators(winOut);
   const winLog = join(REPORT_DIR, `generate-${generateId}.log`);
   const projectDir = join(PROJECTS_ROOT, project_id);
 
   let fingerprint_before = null;
   try {
-    const prev =
-      meshDoc &&
-      meshDoc.live_mesh_result &&
-      meshDoc.live_mesh_result.mesh_path &&
-      existsSync(meshDoc.live_mesh_result.mesh_path)
-        ? meshDoc.live_mesh_result.mesh_path
-        : null;
-    if (prev) fingerprint_before = fingerprintPolyMesh(prev);
+    const prev = join(winOut, 'constant', 'polyMesh');
+    if (existsSync(join(prev, 'owner')) && existsSync(join(prev, 'points'))) {
+      fingerprint_before = fingerprintPolyMesh(prev);
+    }
   } catch {
     fingerprint_before = null;
   }
@@ -993,6 +1443,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     physicsBased ? '1' : '0',
     '--legacy-markers',
   ];
+  if (simIdSnappy) argv.push('--simulation-id', String(simIdSnappy));
   const command = argv.join(' ');
   const started_at = new Date().toISOString();
 
@@ -1005,8 +1456,20 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
   });
 
-  liveJob = { child, generate_id: generateId, path_kind: PATH_SNAPPY, project_id, started_at };
+  const job = bindLiveMeshJob({
+    child,
+    generate_id: generateId,
+    path_kind: PATH_SNAPPY,
+    project_id,
+    started_at,
+    mesh_id: meshId || null,
+    wsl_dst: wslDst,
+    onUpdate,
+  });
   jobLog.info('spawn', { pid: child.pid || null, path_kind: PATH_SNAPPY });
+  try {
+    writeFileSync(winLog, '', 'utf8');
+  } catch {}
 
   const baseRunning = {
     status: 'running',
@@ -1035,6 +1498,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     fingerprint_before,
     fingerprint_after: null,
     project_id,
+    mesh_id: meshId || null,
     settings_snapshot,
     fineness_used: fineness,
     add_layers_used: addLayers,
@@ -1108,9 +1572,14 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
 
   child.on('close', (code) => {
     flushLineCarry();
+    if (liveJob && liveJob.child === child) liveJob = null;
+    if (job.stop_requested) {
+      notifyMeshStopped(job);
+      return;
+    }
     const exit_code = code == null ? 1 : code;
     const finished_at = new Date().toISOString();
-    if (liveJob && liveJob.child === child) liveJob = null;
+    const inspected = inspectGeneratedCase(winOut);
     const counts = lastResult
       ? {
           n_cells: lastResult.n_cells ?? null,
@@ -1118,17 +1587,22 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
           n_faces: lastResult.n_faces ?? null,
           counts_source: lastResult.counts_source || null,
         }
-      : readPolyMeshCounts(join(winOut, 'constant', 'polyMesh'));
-    let fingerprint_after = null;
-    try {
-      fingerprint_after = fingerprintPolyMesh(join(winOut, 'constant', 'polyMesh'));
-    } catch {
-      fingerprint_after = null;
-    }
-    const ok = exit_code === 0 && !(lastResult && lastResult.ok === false);
+      : inspected
+        ? {
+            n_cells: inspected.n_cells,
+            n_points: inspected.n_points,
+            n_faces: inspected.n_faces,
+            counts_source: inspected.counts_source,
+          }
+        : readPolyMeshCounts(join(winOut, 'constant', 'polyMesh'));
+    const ok =
+      exit_code === 0 &&
+      !(lastResult && lastResult.ok === false) &&
+      (!!inspected || counts.n_cells != null);
+    const status = meshCloseStatus({ stopRequested: job.stop_requested, ok });
     const terminal = {
       ...baseRunning,
-      status: ok ? 'done' : 'failed',
+      status,
       exit_code,
       finished_at,
       n_cells: counts.n_cells,
@@ -1136,25 +1610,48 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
       n_faces: counts.n_faces,
       counts_source: counts.counts_source || 'polyMesh/points+owner',
       feature_marks_total: lastResult && lastResult.feature_marks_total != null ? lastResult.feature_marks_total : null,
-      fingerprint_after,
+      fingerprint_after: null,
       snappy_geometry_rev: lastResult && lastResult.snappy_geometry_rev != null ? lastResult.snappy_geometry_rev : null,
       block_used: lastResult && lastResult.block != null ? lastResult.block : null,
       feature_level_used: lastResult && lastResult.feature_level != null ? lastResult.feature_level : null,
       walls_level_used: lastResult && lastResult.walls_level != null ? lastResult.walls_level : null,
       snap_used: lastResult && lastResult.snap != null ? lastResult.snap : null,
-      stage: ok ? 'done' : 'failed',
-      error: ok ? null : (lastResult && lastResult.error) || `generate_snappy exit ${exit_code}`,
-      note: ok
-        ? `Hex-dominant snappy done (exit ${exit_code}). cells=${counts.n_cells} points=${counts.n_points}.`
-        : `Hex-dominant snappy failed (exit ${exit_code}).`,
+      stage: status,
+      error:
+        status === 'done'
+          ? null
+          : status === 'stopped'
+            ? 'cancelled'
+            : (lastResult && lastResult.error) || `generate_snappy exit ${exit_code}`,
+      note:
+        status === 'done'
+          ? `Hex-dominant snappy done (exit ${exit_code}). cells=${counts.n_cells} points=${counts.n_points}.`
+          : status === 'stopped'
+            ? 'Mesh generate cancelled.'
+            : `Hex-dominant snappy failed (exit ${exit_code}).`,
       log_excerpt: logBuf.slice(-4000),
       mtp1_silent_copy: false,
     };
-    try {
-      prewarmMeshSurface(winOut);
-    } catch (_) {}
     persistMeshResult(project_id, terminal);
     onUpdate(terminal);
+    scheduleComputeQueueKick(250);
+    setImmediate(() => {
+      if (job.stop_requested) return;
+      let fingerprint_after = null;
+      try {
+        fingerprint_after = fingerprintPolyMesh(join(winOut, 'constant', 'polyMesh'));
+      } catch {
+        fingerprint_after = null;
+      }
+      try {
+        prewarmMeshSurface(winOut);
+      } catch (_) {}
+      if (fingerprint_after) {
+        try {
+          persistMeshResult(project_id, { ...terminal, fingerprint_after });
+        } catch (_) {}
+      }
+    });
   });
 
   return {
@@ -1165,19 +1662,30 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
 }
 
 export function meshGenerateLivePid() {
-  if (liveJob && liveJob.child && liveJob.child.exitCode === null) {
-    return liveJob.child.pid || null;
-  }
+  if (isLiveMeshJobHeld()) return liveJob.child.pid || null;
   return null;
 }
 
+export function reapOrphanMeshGeneratorsOnBoot() {
+  try {
+    spawnSync(PYTHON, [pyTool('reap_mesh_jobs.py')], {
+      windowsHide: true,
+      timeout: 20000,
+      stdio: 'ignore',
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 export function liveMeshJobSnapshot() {
-  if (liveJob && liveJob.child && liveJob.child.exitCode === null) {
+  if (isLiveMeshJobHeld()) {
     return {
       pid: liveJob.child.pid || null,
       generate_id: liveJob.generate_id || null,
       path_kind: liveJob.path_kind || PATH_CFMESH,
       project_id: liveJob.project_id || null,
+      mesh_id: liveJob.mesh_id || null,
       started_at: liveJob.started_at || null,
     };
   }

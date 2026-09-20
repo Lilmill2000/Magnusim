@@ -3,9 +3,9 @@
 Moves Body1 STL scaling + dict writes out of the former JS GENERATE_SH_TEMPLATE
 Python-inside-bash heredocs. Bash template only runs OpenFOAM tools.
 """
+
 from __future__ import annotations
 
-import json
 import math
 import re
 import struct
@@ -103,13 +103,22 @@ def scale_body1_stl(body1_src: Path, body1_dst: Path, *, scale: float = 0.001) -
             xs = vals[3], vals[6], vals[9]
             ys = vals[4], vals[7], vals[10]
             zs = vals[5], vals[8], vals[11]
-            xmin = min(xmin, *xs); xmax = max(xmax, *xs)
-            ymin = min(ymin, *ys); ymax = max(ymax, *ys)
-            zmin = min(zmin, *zs); zmax = max(zmax, *zs)
+            xmin = min(xmin, *xs)
+            xmax = max(xmax, *xs)
+            ymin = min(ymin, *ys)
+            ymax = max(ymax, *ys)
+            zmin = min(zmin, *zs)
+            zmax = max(zmax, *zs)
             off += 50
         return bytes(out), {
-            "xmin": xmin, "xmax": xmax, "ymin": ymin, "ymax": ymax,
-            "zmin": zmin, "zmax": zmax, "ntri": ntri, "scale": scale,
+            "xmin": xmin,
+            "xmax": xmax,
+            "ymin": ymin,
+            "ymax": ymax,
+            "zmin": zmin,
+            "zmax": zmax,
+            "ntri": ntri,
+            "scale": scale,
         }
 
     if is_bin:
@@ -125,9 +134,12 @@ def scale_body1_stl(body1_src: Path, body1_dst: Path, *, scale: float = 0.001) -
                 parts = s.split()
                 x, y, z = float(parts[1]) * scale, float(parts[2]) * scale, float(parts[3]) * scale
                 out_lines.append(f"  vertex {x} {y} {z}")
-                xmin = min(xmin, x); xmax = max(xmax, x)
-                ymin = min(ymin, y); ymax = max(ymax, y)
-                zmin = min(zmin, z); zmax = max(zmax, z)
+                xmin = min(xmin, x)
+                xmax = max(xmax, x)
+                ymin = min(ymin, y)
+                ymax = max(ymax, y)
+                zmin = min(zmin, z)
+                zmax = max(zmax, z)
             elif s.startswith("facet normal"):
                 parts = s.split()
                 nx, ny, nz = float(parts[2]), float(parts[3]), float(parts[4])
@@ -138,8 +150,14 @@ def scale_body1_stl(body1_src: Path, body1_dst: Path, *, scale: float = 0.001) -
         out_lines.append("endsolid Body1_W23")
         scaled = ("\\n".join(out_lines) + "\\n").encode("ascii")
         bounds = {
-            "xmin": xmin, "xmax": xmax, "ymin": ymin, "ymax": ymax,
-            "zmin": zmin, "zmax": zmax, "ntri": None, "scale": scale,
+            "xmin": xmin,
+            "xmax": xmax,
+            "ymin": ymin,
+            "ymax": ymax,
+            "zmin": zmin,
+            "zmax": zmax,
+            "ntri": None,
+            "scale": scale,
         }
 
     body1_dst.write_bytes(scaled)
@@ -341,7 +359,8 @@ def write_hexdominant_dicts(
     )
     (system / "controlDict").write_text(ctrl, encoding="utf-8")
     (system / "fvSchemes").write_text(
-        _foam_header("fvSchemes") + "ddtSchemes { default Euler; }\\n"
+        _foam_header("fvSchemes")
+        + "ddtSchemes { default Euler; }\\n"
         + "gradSchemes { default Gauss linear; }\\n"
         + "divSchemes { default none; }\\n"
         + "laplacianSchemes { default Gauss linear corrected; }\\n"
@@ -380,8 +399,8 @@ def read_polymesh_counts(case_dir: Path) -> dict[str, Any]:
             return None
         lines = path.read_text(errors="ignore").splitlines()
         past = False
-        for i, l in enumerate(lines):
-            s = l.strip()
+        for i, line in enumerate(lines):
+            s = line.strip()
             if not past:
                 if s == "}" or s.startswith("// *****"):
                     past = True
@@ -397,8 +416,8 @@ def read_polymesh_counts(case_dir: Path) -> dict[str, Any]:
         mode = "seek"
         vals: list[int] = []
         nfaces = None
-        for i, l in enumerate(lines):
-            s = l.strip()
+        for i, line in enumerate(lines):
+            s = line.strip()
             if mode == "seek":
                 if s.isdigit() and i > 10:
                     nfaces = int(s)
@@ -430,9 +449,7 @@ def read_feature_marks(log_path: Path) -> dict[str, Any]:
     text = Path(log_path).read_text(errors="ignore") if Path(log_path).is_file() else ""
     marks = [
         int(x)
-        for x in re.findall(
-            r"Marked for refinement due to explicit features\\s*:\\s*(\\d+)", text
-        )
+        for x in re.findall(r"Marked for refinement due to explicit features\\s*:\\s*(\\d+)", text)
     ]
     total = sum(marks) if marks else 0
     return {"marks": marks, "total": total}

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
@@ -25,26 +25,11 @@ _TURBULENCE_MODELS: tuple[str, ...] = (
 _INCOMPRESSIBLE_BC_TYPES: tuple[str, ...] = (
     "velocity_inlet_fixed",
     "velocity_inlet_volumetric",
-    "velocity_inlet_mean",
-    "velocity_inlet_freestream",
     "velocity_inlet_mass",
     "velocity_outlet",
-    "pressure_inlet_gauge",
-    "pressure_inlet_total",
     "pressure_outlet_gauge",
-    "pressure_outlet_total",
-    "pressure_outlet_mean",
     "wall_noslip",
     "wall_slip",
-    "wall_moving",
-    "wall_rotating",
-    "fan",
-    "periodic",
-    "natural_convection",
-    "symmetry",
-    "wedge",
-    "empty",
-    "custom",
 )
 
 _FIELDS: tuple[str, ...] = ("U", "p", "k", "omega", "nut")
@@ -240,42 +225,42 @@ def _validate_minimal(
     return errors
 
 
-def _write_web_solve_case(ctx: CaseContext) -> None:
-    """Delegate to Phase 1 web_case writer (steady + transient via RunSpec).
+def _write_web_solve_case(ctx: CaseContext) -> dict:
+    """Delegate to write_solve_case (steady + transient via RunSpec).
 
     Lazy-import so load_all / builtin registration does not pull OCP / web_adapter
     at registry bootstrap time.
     """
     from pathlib import Path as _Path
 
-    from cfddesk.case.web_case import write_web_solve_case
+    from cfddesk.case.writer import write_solve_case
 
     if ctx.run_spec is None:
         raise ValueError("CaseContext.run_spec is required for AnalysisType.write_case")
     out = ctx.out_dir
     if out is None:
         raise ValueError("CaseContext.out_dir is required for AnalysisType.write_case")
-    write_web_solve_case(ctx.run_spec, _Path(out))
+    return write_solve_case(ctx.run_spec, _Path(out))
 
 
-def _write_case_steady(ctx: CaseContext) -> None:
+def _write_case_steady(ctx: CaseContext) -> dict:
     """incompressible_steady write_case -> Phase 1 simpleFoam / web_case path."""
     spec = ctx.run_spec
     if spec is not None and getattr(spec, "transient", None) is not None:
         raise ValueError(
             "incompressible_steady.write_case requires RunSpec.transient is None"
         )
-    _write_web_solve_case(ctx)
+    return _write_web_solve_case(ctx)
 
 
-def _write_case_transient(ctx: CaseContext) -> None:
+def _write_case_transient(ctx: CaseContext) -> dict:
     """incompressible_transient write_case -> Phase 1 pimpleFoam / web_case path."""
     spec = ctx.run_spec
     if spec is None or getattr(spec, "transient", None) is None:
         raise ValueError(
             "incompressible_transient.write_case requires RunSpec.transient set"
         )
-    _write_web_solve_case(ctx)
+    return _write_web_solve_case(ctx)
 
 
 def build_incompressible_steady() -> AnalysisType:
@@ -330,7 +315,7 @@ def build_incompressible_transient() -> AnalysisType:
     )
 
 
-def register_incompressible(hub: "RegistryHub") -> None:
+def register_incompressible(hub: RegistryHub) -> None:
     """Register both incompressible AnalysisTypes (idempotent same-plugin)."""
     reg = hub.registry("analysis")
     reg.register(build_incompressible_steady(), plugin="builtin")

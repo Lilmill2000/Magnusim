@@ -8,9 +8,9 @@ Writes only to the caller-supplied case dir + ``cfddesk-cfdweb-*`` WSL id.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import math
-import re
 import sys
 import traceback
 from pathlib import Path
@@ -19,12 +19,12 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.jobs import legacy_markers as _legacy
-
+from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case
 from cfddesk.cad.location import find_location_in_mesh
 from cfddesk.cad.passage import check_passage_cells, measure_role_passages
 from cfddesk.cad.step import load_step
 from cfddesk.cad.units import shape_bbox
+from cfddesk.jobs import legacy_markers as _legacy
 from cfddesk.mesh.case_writer import prepare_standard_mesh_case
 from cfddesk.mesh.cfmesh_standard import (
     hexcore_first_layer_thickness_m,
@@ -33,6 +33,11 @@ from cfddesk.mesh.cfmesh_standard import (
     inject_named_local_refinement,
     replace_boundary_layers_block,
 )
+from cfddesk.mesh.gmsh_standard import (
+    apply_boundary_patch_types,
+    coerce_gmsh_leftover_walls,
+    emitted_patch_types,
+)
 from cfddesk.mesh.web_refinements import (
     bind_inflate_patches,
     bind_surface_custom_patches,
@@ -40,9 +45,8 @@ from cfddesk.mesh.web_refinements import (
     leftover_faces,
     load_inflate_refs,
     load_surface_custom_sizes,
-    web_face_to_cfddesk,
+    face_ids_from_web_bc,
 )
-from cfddesk.mesh.gmsh_standard import apply_boundary_patch_types, emitted_patch_types
 from cfddesk.project.mesh_sizing import (
     characteristic_aabb_length_m,
     clamp_fineness,
@@ -50,8 +54,9 @@ from cfddesk.project.mesh_sizing import (
 )
 from cfddesk.project.model import Project
 from cfddesk.project.settings import MeshRefinement, MeshSettings
+from cfddesk.project.web_adapter import study_web_bcs
 from cfddesk.runner.case_id import validate_wsl_case_id
-from cfddesk.runner.sync import RESULTS_MARKER, copy_back
+from cfddesk.runner.sync import RESULTS_MARKER, copy_back_mesh
 from cfddesk.wsl.mesh_run import run_cfmesh_pipeline
 
 # SimScale Standard tutorial: Automatic BL default is 3 layers.
@@ -105,17 +110,7 @@ def _web_wall_reg_type(bc: dict) -> str:
 def _apply_web_bcs(project: Project, bcs: list[dict], n_faces: int) -> Project:
     assigned: set[int] = set()
     for bc in bcs:
-        labels = list(bc.get("faces") or [])
-        if bc.get("face") and bc["face"] not in labels:
-            labels.append(bc["face"])
-        fids = []
-        for lab in labels:
-            fid = web_face_to_cfddesk(lab)
-            if fid < 0 or fid >= n_faces:
-                raise ValueError(
-                    f"face {lab!r} maps to cfddesk id {fid} (n_faces={n_faces})"
-                )
-            fids.append(fid)
+        fids = face_ids_from_web_bc(bc, n_faces)
         if not fids:
             continue
         kind = _web_bc_kind(bc)
@@ -239,6 +234,7 @@ def main() -> int:
     p.add_argument("--physics-based", type=int, default=1)
     p.add_argument("--timeout", type=float, default=18000.0)
     p.add_argument("--mesh-id", default="", help="W20 mesh id — only that mesh's refinements")
+    p.add_argument("--simulation-id", default="", help="Only this study's BCs become mesh patches")
     p.add_argument(
         "--legacy-markers",
         action="store_true",
@@ -255,14 +251,17 @@ def main() -> int:
     if "HEXCORE-PROCESS-BACKUP" in str(case_dir):
         return _result(False, error="refusing to write into HEXCORE-PROCESS-BACKUP")
 
-    step = project_dir / "geometry" / "source.step"
-    if not step.is_file():
-        proj = _read_json(project_dir / "project.json")
-        geom = (proj.get("geometry") or {}) if isinstance(proj, dict) else {}
-        alt = geom.get("step_path")
-        if alt:
-            step = Path(alt)
-    if not step.is_file():
+    claim_generate_case(case_dir, generate_id=str(args.generate_id), mesh_id=str(args.mesh_id or ""))
+    atexit.register(release_generate_case, case_dir, generate_id=str(args.generate_id))
+
+    from cfddesk.project.paths import resolve_step_for_study
+
+    step = resolve_step_for_study(
+        project_dir,
+        str(args.simulation_id or "") or None,
+        str(args.mesh_id or "") or None,
+    )
+    if step is None or not step.is_file():
         return _result(False, error=f"missing source.step: {step}")
 
     try:
@@ -280,8 +279,12 @@ def main() -> int:
         project = Project.from_solid(
             solid, scale_to_metres=scale, units_confirmed=True
         )
-        bc_doc = _read_json(project_dir / "boundary_conditions.json")
-        web_bcs = list(bc_doc.get("boundary_conditions") or [])
+        web_bcs = study_web_bcs(
+            project_dir,
+            None,
+            simulation_id=str(args.simulation_id or "") or None,
+            mesh_id=str(args.mesh_id or "") or None,
+        )
         project = _apply_web_bcs(project, web_bcs, n_faces)
 
         bbox = shape_bbox(solid.shape, unit="native")
@@ -456,10 +459,11 @@ def main() -> int:
             )
 
         _progress("copy_back")
-        copy_back(wsl_case, case_dir)
+        copy_back_mesh(wsl_case, case_dir)
         bound = case_dir / "constant" / "polyMesh" / "boundary"
         if bound.is_file():
             apply_boundary_patch_types(bound, emitted_patch_types(project))
+            coerce_gmsh_leftover_walls(bound)
         (case_dir / "case.foam").write_text("", encoding="ascii")
 
         counts = _poly_counts(case_dir / "constant" / "polyMesh")

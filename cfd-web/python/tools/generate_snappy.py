@@ -8,6 +8,7 @@ Host prep (scale Body1 + write dicts) then WSL bash template
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import shutil
 import subprocess
@@ -20,6 +21,8 @@ CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
 from cfddesk.jobs import legacy_markers as _legacy  # noqa: E402
+from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case  # noqa: E402
+from cfddesk.jobs.events import emit  # noqa: E402
 from cfddesk.mesh.snappy_hexdominant import (  # noqa: E402
     fineness_params,
     read_feature_marks,
@@ -88,11 +91,14 @@ def main() -> int:
         action="store_true",
         help="Host-prep + render bash only (no WSL).",
     )
+    p.add_argument("--simulation-id", default="")
     args = p.parse_args()
     _legacy.set_legacy_markers(bool(args.legacy_markers))
 
     project_dir = Path(args.project_dir).resolve()
     case_dir = Path(args.case_dir).resolve()
+    claim_generate_case(case_dir, generate_id=str(args.generate_id))
+    atexit.register(release_generate_case, case_dir, generate_id=str(args.generate_id))
     wsl_case = validate_wsl_case_id(str(args.wsl_case))
     generate_id = str(args.generate_id)
     add_layers = bool(int(args.add_layers))
@@ -103,17 +109,19 @@ def main() -> int:
     if "HEXCORE-PROCESS-BACKUP" in str(case_dir):
         return _result(False, error="refusing to write into HEXCORE-PROCESS-BACKUP")
 
-    step = project_dir / "geometry" / "source.step"
-    body1 = project_dir / "geometry" / "Body1.stl"
-    if not step.is_file():
-        geom = (_read_json(project_dir / "project.json").get("geometry") or {})
-        if geom.get("step_path"):
-            step = Path(geom["step_path"])
-        if geom.get("body1_path"):
-            body1 = Path(geom["body1_path"])
-    if not step.is_file():
+    from cfddesk.project.paths import find_study, resolve_step
+
+    geom_id = None
+    sid = str(getattr(args, "simulation_id", "") or "").strip()
+    if sid:
+        study = find_study(project_dir, sid)
+        if study:
+            geom_id = study.get("geometry_id")
+    step = resolve_step(project_dir, geom_id)
+    body1 = (step.parent / "Body1.stl") if step else None
+    if not step or not step.is_file():
         return _result(False, error=f"missing source.step: {step}")
-    if not body1.is_file():
+    if not body1 or not body1.is_file():
         return _result(False, error=f"missing Body1.stl: {body1}")
     if not _SNAPPY_SH.is_file():
         return _result(False, error=f"missing template: {_SNAPPY_SH}")

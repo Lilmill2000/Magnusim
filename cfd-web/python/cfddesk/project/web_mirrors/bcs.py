@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from cfddesk.project.web_mirrors._common import (
+    _all_sims,
     _face_id_to_label,
     _face_label_to_id,
     _primary_sim,
@@ -12,24 +13,17 @@ from cfddesk.project.web_mirrors._common import (
 )
 
 
-def to_web_boundary_conditions(
-    project: Any,
+def _bc_records_for_sim(
+    sim: Any,
     *,
-    sim_id: str | None = None,
     project_id: str | None = None,
-    defaults: dict | None = None,
     body_name: str = "Body1",
-    updated_at: str | None = None,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     from cfddesk.case.bc_menu import registry_key_for_bc
 
-    sim = _primary_sim(project, sim_id)
-    bcs = list(getattr(sim, "boundary_conditions", None) or []) if sim else []
-    wall_default = "No-slip"
-    if defaults and isinstance(defaults, dict):
-        wall_default = str(defaults.get("wall_type") or wall_default)
+    sid = str(getattr(sim, "id", "") or "")
     records: list[dict[str, Any]] = []
-    for bc in bcs:
+    for bc in list(getattr(sim, "boundary_conditions", None) or []):
         settings = dict(getattr(bc, "settings", None) or {})
         web = dict(settings.get("_web") or {})
         faces = list(web.get("faces") or [])
@@ -45,8 +39,6 @@ def to_web_boundary_conditions(
                 bc_type = "Velocity inlet"
             elif reg.startswith("velocity_outlet"):
                 bc_type = "Velocity outlet"
-            elif reg.startswith("pressure_inlet"):
-                bc_type = "Pressure inlet"
             elif reg.startswith("pressure"):
                 bc_type = "Pressure"
             elif "wall" in reg:
@@ -59,7 +51,7 @@ def to_web_boundary_conditions(
             "bc_type": bc_type,
             "faces": faces,
             "face": faces[0] if faces else None,
-            "simulation_id": sim_id or web.get("simulation_id"),
+            "simulation_id": sid or web.get("simulation_id"),
         }
         if project_id:
             rec["project_id"] = project_id
@@ -82,6 +74,27 @@ def to_web_boundary_conditions(
                 rec["value"] = settings["gauge_pressure"]
                 rec.setdefault("unit", "Pa")
         records.append(rec)
+    return records
+
+
+def to_web_boundary_conditions(
+    project: Any,
+    *,
+    sim_id: str | None = None,
+    project_id: str | None = None,
+    defaults: dict | None = None,
+    body_name: str = "Body1",
+    updated_at: str | None = None,
+) -> dict[str, Any]:
+    wall_default = "No-slip"
+    if defaults and isinstance(defaults, dict):
+        wall_default = str(defaults.get("wall_type") or wall_default)
+    records: list[dict[str, Any]] = []
+    for sim in _all_sims(project):
+        sid = str(getattr(sim, "id", "") or "")
+        if sim_id and sid != str(sim_id):
+            continue
+        records.extend(_bc_records_for_sim(sim, project_id=project_id, body_name=body_name))
     ts = updated_at or _utc_now()
     out: dict[str, Any] = {
         "boundary_conditions": records,
@@ -89,8 +102,9 @@ def to_web_boundary_conditions(
         "updated_at": ts,
         "persistence": "filesystem",
     }
-    if sim_id:
-        out["simulation_id"] = sim_id
+    active = _primary_sim(project, sim_id)
+    if sim_id or (active is not None and getattr(active, "id", None)):
+        out["simulation_id"] = sim_id or str(active.id)
     if project_id:
         out["project_id"] = project_id
     return out
@@ -102,7 +116,7 @@ def from_web_boundary_conditions(doc: dict | None) -> tuple[list[Any], dict[str,
     wa = _wa()
     if not isinstance(doc, dict):
         return [], {"wall_type": "No-slip"}
-    defaults = doc.get("defaults") if isinstance(doc.get("defaults"), dict) else {"wall_type": "No-slip"}
+    defaults = checked if isinstance((checked := doc.get("defaults")), dict) else {"wall_type": "No-slip"}
     out: list[BoundaryCondition] = []
     for rec in wa.list_bc_records(doc):
         faces = wa.bc_faces(rec)

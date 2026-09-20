@@ -453,7 +453,7 @@ def _feature_refinement_distance_levels(
     return rows if rows else None
 
 
-def _bb_layer_snappy_write(project: "Project") -> None:
+def _bb_layer_snappy_write(project: Project) -> None:
     """Inc 12a: Bounding box layer addition -> snappy (no invent).
 
     Parametric DA fields (Face Min X, Layers, Expansion ratio, Min thickness,
@@ -474,7 +474,7 @@ def _bb_layer_snappy_write(project: "Project") -> None:
 
 
 
-def _extrusion_mesh_write(project: "Project") -> None:
+def _extrusion_mesh_write(project: Project) -> None:
     """Inc 13a/15a: Extrusion mesh refinement -> mesher (no invent).
 
     Standard DA fields (Sweep sizing type, Thickness / Number of elements,
@@ -495,7 +495,7 @@ def _extrusion_mesh_write(project: "Project") -> None:
     return None
 
 
-def _region_refinement_snappy_regions(project: "Project") -> None:
+def _region_refinement_snappy_regions(project: Project) -> None:
     """Inc 11a/11b: Region persist fields -> snappy refinementRegions (no invent).
 
     Parametric (11a) DA fields (mode Inside, Level, Assigned Volumes,
@@ -526,7 +526,7 @@ def write_snappy_hex_mesh_dict(
     path: Path,
     *,
     location_m: tuple[float, float, float],
-    patches: list[tuple[str, int, str]] | None = None,
+    patches: list[tuple[str, int | tuple[int, int], str]] | None = None,
     refinement_inlet: int | None = None,
     refinement_outlet: int | None = None,
     refinement_walls: int | None = None,
@@ -1098,7 +1098,6 @@ def prepare_standard_mesh_case(
             hexcore_surface_cell_m,
             hexcore_uniform_cell_m,
             skin_thickness_m,
-            uniform_hex_sizing,
             write_cfmesh_face_merge_create_patch_dict,
             write_mesh_dict,
         )
@@ -1139,7 +1138,7 @@ def prepare_standard_mesh_case(
             split_wall_faces=False,
         )
         # Merge walls__f* → walls after cartesianMesh (no-op when not split).
-        wrote_merge = write_cfmesh_face_merge_create_patch_dict(
+        write_cfmesh_face_merge_create_patch_dict(
             system / "createPatchDict.cfmeshFaces",
             merge_map,
             patch_types=types,

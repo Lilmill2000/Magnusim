@@ -85,7 +85,7 @@ def mpirun_simplefoam_inner(
         "${FOAM_USER_LIBBIN}:${FOAM_LIBBIN}:/usr/local/cuda/lib64:"
         "${LD_LIBRARY_PATH}; "
         f"cd {shlex.quote(wsl_case)} && "
-        f"mpirun -np {int(n)} simpleFoam -parallel > {log_q} 2>&1"
+        f"mpirun --oversubscribe -np {int(n)} simpleFoam -parallel > {log_q} 2>&1"
     )
     return (
         f"cd {dest_q} && "

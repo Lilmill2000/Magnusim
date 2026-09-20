@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=83", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -13,6 +13,8 @@ dependencies = [
     "pyvista>=0.43",
     "psutil>=5.9",
     "gmsh>=4.12",
+    "numpy>=1.24",
+    "scipy>=1.10",
 ]
 
 [project.optional-dependencies]
@@ -44,3 +46,28 @@ python_version = "3.10"
 ignore_missing_imports = true
 check_untyped_defs = true
 warn_unused_ignores = true
+# Public OpenFOAM field names and conventional scientific symbols retain their case.
+[tool.ruff.lint.per-file-ignores]
+"cfddesk/case/bc_registry.py" = ["N802", "N815"]
+"cfddesk/case/ras.py" = ["N802", "N803", "N806"]
+"cfddesk/case/writer.py" = ["N802", "N806", "N815"]
+"cfddesk/mesh/standard_hexcore.py" = ["N803", "N806"]
+"cfddesk/project/initial_conditions.py" = ["N803", "N806"]
+"cfddesk/project/mesh_sizing.py" = ["N806"]
+"cfddesk/project/model.py" = ["N806"]
+"cfddesk/project/numerics.py" = ["N815"]
+"cfddesk/project/transient.py" = ["N806"]
+"cfddesk/runner/case_id.py" = ["N818"]
+"cfddesk/wsl/mesh_run.py" = ["N815"]
+"tests/unit/test_registry.py" = ["N817"]
+"tools/export_case_field.py" = ["N806"]
+"tools/export_cut_plane.py" = ["N806"]
+"tools/export_inspect_point.py" = ["N802", "N806"]
+"tools/export_iso_surface.py" = ["N806"]
+"tools/export_iso_volume.py" = ["N806"]
+"tools/export_particle_trace.py" = ["N806"]
+"tools/export_plot_over_path.py" = ["N806"]
+"tools/*.py" = ["E402"] # CLI bootstrap adds the package root before imports.
+
+[tool.setuptools.package-data]
+cfddesk = ["wsl/templates/*.sh", "wsl/templates/*.md"]

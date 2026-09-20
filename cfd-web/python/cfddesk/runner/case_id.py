@@ -12,6 +12,7 @@ import re
 
 from cfddesk.wsl.config import get_wsl_case_root
 
+
 # Re-export for ``from cfddesk.runner.case_id import WSL_CASE_ROOT``.
 # Value comes from ``.cfddesk-local.json`` / env (see ``cfddesk.wsl.config``).
 def __getattr__(name: str):

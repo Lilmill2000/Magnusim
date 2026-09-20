@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
@@ -102,7 +104,7 @@ class CaseContext:
     """Inputs for AnalysisType.write_case (Phase 1 prepare_run / web_case).
 
     Bundles what tools/prepare_run.py computed. Built-in write_case delegates
-    to cfddesk.case.web_case.write_web_solve_case via run_spec + out_dir
+    to cfddesk.case.writer.write_solve_case via run_spec + out_dir
     (other fields reserved for later lands).
     """
 
@@ -137,7 +139,7 @@ class AnalysisType:
     control_schema: tuple[SchemaField, ...]
     validate: Callable[..., list[str]]
     region_roles: tuple[str, ...] = ("fluid",)
-    write_case: Callable[[CaseContext], None] | None = None
+    write_case: Callable[[CaseContext], Any] | None = None
     parse_log_line: Callable[[str], Any] | None = None
     requires: tuple[Requirement, ...] = ()
 
@@ -151,6 +153,58 @@ def schema_defaults(fields: tuple[SchemaField, ...] | list[SchemaField]) -> dict
         elif f.kind == "bool":
             out[f.key] = False
     return out
+
+
+def write_run_case(
+    spec: Any,
+    out_dir: Path | str,
+    *,
+    analysis_key: str | None = None,
+) -> dict[str, Any]:
+    """Product writer: resolve AnalysisType and call write_case.
+
+    prepare_run / Start use this so plugins own the case files. Built-ins
+    delegate to write_solve_case and return its result dict.
+    """
+    from cfddesk.registry.discovery import get_registry, load_all
+
+    load_all()
+    key = (analysis_key or "").strip() or (
+        DEFAULT_TRANSIENT_KEY
+        if getattr(spec, "transient", None) is not None
+        else DEFAULT_STEADY_KEY
+    )
+    analysis = get_registry("analysis").get(key)
+    writer = analysis.write_case
+    if writer is None:
+        raise ValueError(f"{key}.write_case is None")
+    out = Path(out_dir)
+    ctx = CaseContext(
+        out_dir=out,
+        run_spec=spec,
+        mesh_case_dir=Path(spec.mesh_case_dir) if getattr(spec, "mesh_case_dir", None) else None,
+        n_procs=int(getattr(spec, "n_procs", 1) or 1),
+    )
+    result = writer(ctx)
+    if isinstance(result, dict):
+        return result
+    sidecar = out / "w27-case.json"
+    if sidecar.is_file():
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict):
+            return {
+                "ok": True,
+                "case_dir": str(out),
+                "solver": data.get("solver"),
+                "n_procs": data.get("nProcs", getattr(spec, "n_procs", 1)),
+                "patches": data.get("patches") or [],
+                "turbulence": data.get("turbulence"),
+                "polyMesh_copied": (out / "constant" / "polyMesh" / "owner").is_file(),
+            }
+    return {"ok": True, "case_dir": str(out)}
 
 
 def run_analysis_validate(

@@ -64,7 +64,7 @@ def build_snappy_hexdominant() -> MeshBackend:
     )
 
 
-def register_meshers(hub: "RegistryHub") -> None:
+def register_meshers(hub: RegistryHub) -> None:
     """Register standard / cfmesh / snappy_hexdominant (idempotent same-plugin)."""
     reg = hub.registry("mesher")
     reg.register(build_standard(), plugin="builtin")

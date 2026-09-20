@@ -1,10 +1,12 @@
 import { defineConfig } from 'vite';
-import { caseFieldsApiPlugin } from './scripts/vite-plugin-case-fields.js';
+import react from '@vitejs/plugin-react';
+import { createApiPlugin } from './scripts/server/index.ts';
 import { listenPort } from './scripts/prefs.js';
 import { verifyWslToolchain } from './scripts/wsl-env.js';
 verifyWslToolchain();
 
 const PORT = listenPort();
+const allowedHosts = (process.env.MAGNUSIM_ALLOWED_HOSTS || '').split(',').map((s) => s.trim()).filter(Boolean);
 process.env.MAGNUSIM_BOUND_PORT = String(PORT);
 process.env.CFDDESK_BOUND_PORT = String(PORT); // legacy alias
 
@@ -32,12 +34,15 @@ function isViteWatchIgnored(filePath) {
 }
 
 export default defineConfig({
-  plugins: [caseFieldsApiPlugin()],
+  plugins: [react(), createApiPlugin()],
   server: {
     host: '127.0.0.1',
     port: PORT,
     strictPort: true,
-    allowedHosts: ['simulation.lilmill2000.com', '.lilmill2000.com'],
+    allowedHosts,
+    fs: {
+      deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git/**', '**/projects/**', '**/.cache/**', '**/runs/**', '**/python/**', '**/.*-local.json'],
+    },
     watch: {
       usePolling: false,
       ignored: isViteWatchIgnored,
@@ -47,9 +52,10 @@ export default defineConfig({
     host: '127.0.0.1',
     port: PORT,
     strictPort: true,
-    allowedHosts: ['simulation.lilmill2000.com', '.lilmill2000.com'],
+    allowedHosts,
   },
   optimizeDeps: {
+    entries: ['index.html', 'src/app/main.tsx'],
     exclude: [],
   },
 });

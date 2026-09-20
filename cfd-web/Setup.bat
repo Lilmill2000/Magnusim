@@ -14,7 +14,7 @@ set ERR=%ERRORLEVEL%
 
 echo.
 if %ERR%==0 (
-  echo You can close this window and double-click start.bat
+  echo You can close this window and double-click run.bat
 ) else if %ERR%==2 (
   echo Restart Windows, then double-click Setup.bat again.
 ) else (

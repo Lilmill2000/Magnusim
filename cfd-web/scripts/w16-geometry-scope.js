@@ -25,6 +25,12 @@ export function activeGeometryId(proj, explicit) {
   return primaryGeometryId(proj);
 }
 
+/** Geometry this study lives on. Never the other CAD's active_geometry_id. */
+export function studyScopedGeometryId(proj, sim, explicit) {
+  if (sim && sim.geometry_id) return String(sim.geometry_id);
+  return activeGeometryId(proj, explicit);
+}
+
 export function matchesGeometry(rec, geomId, primaryId) {
   const want = String(geomId || '').trim();
   if (!want) return true;
@@ -37,7 +43,7 @@ export function filterByGeometry(list, geomId, primaryId) {
   return (list || []).filter((rec) => matchesGeometry(rec, geomId, primaryId));
 }
 
-/** Untagged records belong only to a singleton catalog study, never to a later or first-of-many study. */
+/** Untagged records belong to the first catalog study (legacySimId). */
 export function matchesStudy(rec, simId, legacySimId) {
   const want = String(simId || '').trim();
   if (!want) return false;

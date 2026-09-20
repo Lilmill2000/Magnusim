@@ -112,7 +112,7 @@ export function verifyWslToolchain() {
   try {
     const r = spawnSync(
       'wsl',
-      ['-d', distro, '--', 'openfoam2606', 'bash', '-c', 'foamVersion'],
+      ['-d', distro, '--', 'openfoam2606', 'bash', '-c', 'printenv WM_PROJECT_VERSION'],
       { encoding: 'utf8', timeout: 60000, windowsHide: true },
     );
     if (r.status !== 0) {

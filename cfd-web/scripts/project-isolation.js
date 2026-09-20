@@ -3,10 +3,12 @@
  * A case_dir may only be served for the project folder it lives under.
  * Home lists every project; workbench APIs must not leak another project's mesh.
  */
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
+import { pathIsWithin } from './safe-path.js';
 import { envGet } from './env-compat.js';
+import { caseUnderOwner, findStudy, runCaseDirCandidates, walkRuns } from './project-layout.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const _projectsRoot = envGet('PROJECTS_ROOT');
@@ -32,15 +34,45 @@ export function projectIdFromCaseDir(caseDir) {
   return id;
 }
 
+export function caseDirBelongsToStudy(caseDir, projectId, simId) {
+  if (!caseDirBelongsToProject(caseDir, projectId)) return false;
+  const want = String(simId || '').trim();
+  if (!want) return false;
+  const study = findStudy(join(PROJECTS_ROOT, basename(String(projectId || ''))), want);
+  return !!(study && caseUnderOwner(caseDir, study.dir));
+}
+
+/** Settings-copy can leave frames in a sibling study folder that this run still claims. */
+export function studyRunClaimsCaseDir(caseDir, projectId, simId, projectsRoot = PROJECTS_ROOT) {
+  if (!caseDir || !projectId || !simId) return false;
+  if (projectsRoot === PROJECTS_ROOT && !caseDirBelongsToProject(caseDir, projectId)) return false;
+  const projectDir = join(projectsRoot, basename(String(projectId || '')));
+  const claimed = normalizeFs(caseDir);
+  if (!claimed) return false;
+  const runs = walkRuns(projectDir, String(simId).trim()) || [];
+  for (const rec of runs) {
+    for (const c of runCaseDirCandidates(rec, rec && rec.dir)) {
+      if (normalizeFs(c) === claimed) return true;
+    }
+  }
+  return false;
+}
+
+export function caseDirAllowedForAttach(caseDir, projectId, simId) {
+  return (
+    caseDirBelongsToStudy(caseDir, projectId, simId) ||
+    studyRunClaimsCaseDir(caseDir, projectId, simId)
+  );
+}
+
 export function caseDirBelongsToProject(caseDir, projectId) {
   const want = String(projectId || '').trim();
   if (!want || !caseDir) return false;
-  const inferred = projectIdFromCaseDir(caseDir);
-  if (inferred) return inferred === want.toLowerCase();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(want)) return false;
   const root = resolve(PROJECTS_ROOT, basename(want));
   const abs = resolve(String(caseDir));
   const rel = relative(root, abs);
-  return Boolean(rel) && !rel.startsWith('..') && !rel.startsWith(sep);
+  return Boolean(rel) && !isAbsolute(rel) && rel !== '..' && !rel.startsWith('..' + sep) && pathIsWithin(abs, root);
 }
 
 export function idleCaseSnapshot(note, projectId) {

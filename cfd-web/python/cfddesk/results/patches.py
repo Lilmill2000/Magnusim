@@ -67,21 +67,21 @@ def sample_patch_seeds(
     n_seeds = max(1, int(n_seeds))
     pts = np.asarray(patch.points, dtype=float)
     if pts.shape[0] == 0:
-        raise RuntimeError("Patch has no points for seeding")
+        raise RuntimeError("Patch has no points for seeding") from None
     if pts.shape[0] <= n_seeds:
         chosen = pts
     else:
         idx = np.linspace(0, pts.shape[0] - 1, n_seeds, dtype=int)
         chosen = pts[idx]
     if mesh_bounds is not None:
-        b = mesh_bounds
+        bounds = mesh_bounds
         inside = (
-            (chosen[:, 0] >= b[0])
-            & (chosen[:, 0] <= b[1])
-            & (chosen[:, 1] >= b[2])
-            & (chosen[:, 1] <= b[3])
-            & (chosen[:, 2] >= b[4])
-            & (chosen[:, 2] <= b[5])
+            (chosen[:, 0] >= bounds[0])
+            & (chosen[:, 0] <= bounds[1])
+            & (chosen[:, 1] >= bounds[2])
+            & (chosen[:, 1] <= bounds[3])
+            & (chosen[:, 2] >= bounds[4])
+            & (chosen[:, 2] <= bounds[5])
         )
         if not np.any(inside):
             raise RuntimeError(
@@ -104,7 +104,7 @@ def sample_patch_seed_grid(
     nv = max(1, int(seeds_v))
     pts = np.asarray(patch.points, dtype=float)
     if pts.shape[0] == 0:
-        raise RuntimeError("Patch has no points for seeding")
+        raise RuntimeError("Patch has no points for seeding") from None
     lo = pts.min(axis=0)
     hi = pts.max(axis=0)
     span = hi - lo
@@ -128,14 +128,14 @@ def sample_patch_seed_grid(
         snapped.append(pts[int(np.argmin(d))])
     chosen_arr = np.asarray(snapped, dtype=float)
     if mesh_bounds is not None:
-        b = mesh_bounds
+        bounds = mesh_bounds
         inside = (
-            (chosen_arr[:, 0] >= b[0])
-            & (chosen_arr[:, 0] <= b[1])
-            & (chosen_arr[:, 1] >= b[2])
-            & (chosen_arr[:, 1] <= b[3])
-            & (chosen_arr[:, 2] >= b[4])
-            & (chosen_arr[:, 2] <= b[5])
+            (chosen_arr[:, 0] >= bounds[0])
+            & (chosen_arr[:, 0] <= bounds[1])
+            & (chosen_arr[:, 1] >= bounds[2])
+            & (chosen_arr[:, 1] <= bounds[3])
+            & (chosen_arr[:, 2] >= bounds[4])
+            & (chosen_arr[:, 2] <= bounds[5])
         )
         if not np.any(inside):
             raise RuntimeError(
@@ -160,7 +160,7 @@ def sample_even_on_surface(patch: pv.PolyData, n_seeds: int) -> np.ndarray:
     except Exception:
         pts = np.asarray(patch.points, dtype=float)
         if pts.shape[0] == 0:
-            raise RuntimeError("Patch has no points for seeding")
+            raise RuntimeError("Patch has no points for seeding") from None
         if pts.shape[0] <= n_seeds:
             return pts.copy()
         idx = np.linspace(0, pts.shape[0] - 1, n_seeds, dtype=int)
@@ -276,8 +276,8 @@ def even_distribute_across_patches(
             a = 0.0
         if a <= 0.0:
             # Degenerate: approximate by bbox face.
-            b = np.asarray(p.bounds, dtype=float)
-            a = max(abs(b[1] - b[0]) * abs(b[3] - b[2]), 1e-12)
+            local_bounds = np.asarray(p.bounds, dtype=float)
+            a = max(abs(local_bounds[1] - local_bounds[0]) * abs(local_bounds[3] - local_bounds[2]), 1e-12)
         usable.append(p)
         areas.append(a)
     if not usable:
@@ -294,7 +294,7 @@ def even_distribute_across_patches(
                     counts[i] = 1
     chunks: list[np.ndarray] = []
     face_i_chunks: list[np.ndarray] = []
-    for face_i, (patch, c) in enumerate(zip(usable, counts)):
+    for face_i, (patch, c) in enumerate(zip(usable, counts, strict=False)):
         if c <= 0:
             continue
         pts_i = sample_even_on_surface(patch, c)
@@ -308,15 +308,15 @@ def even_distribute_across_patches(
     chosen = np.vstack(chunks)
     face_i_arr = np.concatenate(face_i_chunks)
     if mesh_bounds is not None:
-        b = mesh_bounds
+        bounds = mesh_bounds
         inset = 1e-9
         inside = (
-            (chosen[:, 0] >= b[0] + inset)
-            & (chosen[:, 0] <= b[1] - inset)
-            & (chosen[:, 1] >= b[2] + inset)
-            & (chosen[:, 1] <= b[3] - inset)
-            & (chosen[:, 2] >= b[4] + inset)
-            & (chosen[:, 2] <= b[5] - inset)
+            (chosen[:, 0] >= bounds[0] + inset)
+            & (chosen[:, 0] <= bounds[1] - inset)
+            & (chosen[:, 1] >= bounds[2] + inset)
+            & (chosen[:, 1] <= bounds[3] - inset)
+            & (chosen[:, 2] >= bounds[4] + inset)
+            & (chosen[:, 2] <= bounds[5] - inset)
         )
         if np.any(inside):
             chosen = chosen[inside]
@@ -340,14 +340,14 @@ def assert_points_in_bounds(
     pts = np.asarray(points, dtype=float)
     if scale_to_metres is not None:
         pts = pts * float(scale_to_metres)
-    b = mesh_bounds
+    bounds = mesh_bounds
     inside = (
-        (pts[:, 0] >= b[0])
-        & (pts[:, 0] <= b[1])
-        & (pts[:, 1] >= b[2])
-        & (pts[:, 1] <= b[3])
-        & (pts[:, 2] >= b[4])
-        & (pts[:, 2] <= b[5])
+        (pts[:, 0] >= bounds[0])
+        & (pts[:, 0] <= bounds[1])
+        & (pts[:, 1] >= bounds[2])
+        & (pts[:, 1] <= bounds[3])
+        & (pts[:, 2] >= bounds[4])
+        & (pts[:, 2] <= bounds[5])
     )
     if not np.all(inside):
         raise RuntimeError(

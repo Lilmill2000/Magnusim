@@ -2,7 +2,7 @@
 """Prepare a complete OpenFOAM run case from web-format project JSON.
 
 CLI: tools/prepare_run.py --project-dir ... --run-id ... --out-dir ...
-Uses cfddesk.project.web_adapter + cfddesk.case.web_case (w27 writeSolveCase parity).
+Uses cfddesk.project.web_adapter + AnalysisType.write_case (write_run_case).
 Prints one JSON line: {"ok":true,"case_dir":...,"solver":...,"n_procs":...}
 """
 from __future__ import annotations
@@ -15,8 +15,8 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.case.web_case import write_web_solve_case
 from cfddesk.project.web_adapter import load_run_spec
+from cfddesk.registry.analysis import write_run_case
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    result = write_web_solve_case(spec, args.out_dir)
+    result = write_run_case(spec, args.out_dir)
     print(json.dumps(result), flush=True)
     return 0 if result.get("ok") else 1
 

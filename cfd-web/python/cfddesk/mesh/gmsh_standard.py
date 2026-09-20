@@ -100,7 +100,7 @@ def _match_surface_tag(
     best_i: int | None = None
     best_d = tol
     cx, cy, cz = com
-    for i, (fid, (tx, ty, tz)) in enumerate(targets):
+    for i, (_fid, (tx, ty, tz)) in enumerate(targets):
         d = math.sqrt((cx - tx) ** 2 + (cy - ty) ** 2 + (cz - tz) ** 2)
         if d < best_d:
             best_d = d
@@ -155,9 +155,9 @@ def _assign_faces_to_surfaces(
             break
         if tag in used_tags:
             continue
-        fid = _match_surface_tag(remaining, com, tol=tol)
-        if fid is not None:
-            out[fid] = tag
+        matched_fid = _match_surface_tag(remaining, com, tol=tol)
+        if matched_fid is not None:
+            out[matched_fid] = tag
             used_tags.add(tag)
     return out
 
@@ -232,11 +232,11 @@ def run_gmsh_volume_mesh(
         remaining = list(targets)
         for _dim, tag in surfs:
             com = gmsh.model.occ.getCenterOfMass(2, tag)
-            fid = _match_surface_tag(
+            matched_fid = _match_surface_tag(
                 remaining, (float(com[0]), float(com[1]), float(com[2])), tol=match_tol
             )
-            if fid is not None:
-                face_to_tag[fid] = int(tag)
+            if matched_fid is not None:
+                face_to_tag[matched_fid] = int(tag)
 
         missing = [fid for fid in face_to_patch if fid not in face_to_tag]
         if missing:
@@ -465,7 +465,7 @@ def _snap_open_vertices(
     from scipy.spatial import cKDTree
 
     tris = np.asarray(tris, dtype=np.int64)
-    edges: list[tuple[int, int]] = []
+    edges: list[tuple[int, ...]] = []
     for a, b, c in tris:
         edges.append(tuple(sorted((int(a), int(b)))))
         edges.append(tuple(sorted((int(b), int(c)))))
@@ -506,7 +506,7 @@ def _unique_triangles(
     seen: set[tuple[int, int, int]] = set()
     keep_t: list[np.ndarray] = []
     keep_f: list[int] = []
-    for t, fid in zip(np.asarray(tris, dtype=np.int64), face_ids):
+    for t, fid in zip(np.asarray(tris, dtype=np.int64), face_ids, strict=False):
         key = (int(t[0]), int(t[1]), int(t[2]))
         skey = tuple(sorted(key))
         if skey in seen:
@@ -529,14 +529,14 @@ def _fill_boundary_loops(
 
     tris = np.asarray(tris, dtype=np.int64)
     face_ids = np.asarray(face_ids, dtype=np.int64)
-    edges: list[tuple[int, int]] = []
-    edge_face: dict[tuple[int, int], int] = {}
+    edges: list[tuple[int, ...]] = []
+    edge_face: dict[tuple[int, ...], int] = {}
     for ti, (a, b, c) in enumerate(tris):
         fid = int(face_ids[ti])
         for u, v in ((int(a), int(b)), (int(b), int(c)), (int(c), int(a))):
             key = tuple(sorted((u, v)))
-            edges.append(key)  # type: ignore[arg-type]
-            edge_face.setdefault(key, fid)  # type: ignore[arg-type]
+            edges.append(key)
+            edge_face.setdefault(key, fid)
     open_e = [e for e, n in Counter(edges).items() if n == 1]
     if not open_e:
         return nodes, tris, face_ids, 0
@@ -583,7 +583,7 @@ def _fill_boundary_loops(
 
 def _occt_full_surface_mesh(
     solid: LoadedSolid,
-    project: "Project",
+    project: Project,
     *,
     lc_m: float,
     scale: float,
@@ -595,7 +595,7 @@ def _occt_full_surface_mesh(
     from cfddesk.cad.step import shape_diagonal, tessellate_faces
     from cfddesk.mesh.cfmesh_standard import _weld_and_drop_degenerate
 
-    lc = max(float(lc_m), 1e-6)
+    max(float(lc_m), 1e-6)
     diag_native = float(shape_diagonal(solid))
     diag_m = diag_native * float(scale)
     # Same recipe that closed V12 (0 open edges): ~0.523 mm native
@@ -650,7 +650,7 @@ def _occt_full_surface_mesh(
         name_to_tag = {name: i + 1 for i, name in enumerate(patch_names)}
         phys = {tag: (2, name) for name, tag in name_to_tag.items()}
         boundary = []
-        for tri, fid in zip(tris, fids):
+        for tri, fid in zip(tris, fids, strict=False):
             pname = face_to_patch.get(int(fid), "")
             ptag = name_to_tag.get(pname, 1)
             boundary.append((TRI, tri, ptag, pname))
@@ -682,7 +682,7 @@ def _heal_open_triangle_holes(
 
     for _ in range(max_passes):
         edge_count: Counter = Counter()
-        edge_face: dict[tuple[int, int], int] = {}
+        edge_face: dict[tuple[int, ...], int] = {}
         for ti, (a, b, c) in enumerate(tris):
             fid = int(face_ids[ti])
             for u, v in ((a, b), (b, c), (c, a)):
@@ -701,7 +701,7 @@ def _heal_open_triangle_holes(
 
         new_tris: list[list[int]] = []
         new_fids: list[int] = []
-        used_keys: set[tuple[int, int, int]] = set()
+        used_keys: set[tuple[int, ...]] = set()
 
         for e1 in open_set:
             a, b = int(e1[0]), int(e1[1])
@@ -735,7 +735,7 @@ def _heal_open_triangle_holes(
         if not new_tris:
             verts = sorted({v for e in open_set for v in e})
             if len(verts) >= 4:
-                for i, a in enumerate(verts):
+                for _i, a in enumerate(verts):
                     na = by_v.get(a, set())
                     if len(na) != 2:
                         continue
@@ -771,7 +771,7 @@ def _heal_open_triangle_holes(
 def _count_open_edges(tris: np.ndarray) -> int:
     from collections import Counter
 
-    edges: list[tuple[int, int]] = []
+    edges: list[tuple[int, ...]] = []
     for a, b, c in np.asarray(tris, dtype=np.int64):
         edges.append(tuple(sorted((int(a), int(b)))))
         edges.append(tuple(sorted((int(b), int(c)))))
@@ -785,11 +785,11 @@ def surface_mesh_watertight(tris: np.ndarray) -> bool:
         return False
     from collections import Counter
 
-    edges: list[tuple[int, int]] = []
+    edges: list[tuple[int, ...]] = []
     for a, b, c in np.asarray(tris, dtype=np.int64):
-        edges.append(tuple(sorted((int(a), int(b)))))  # type: ignore[arg-type]
-        edges.append(tuple(sorted((int(b), int(c)))))  # type: ignore[arg-type]
-        edges.append(tuple(sorted((int(c), int(a)))))  # type: ignore[arg-type]
+        edges.append(tuple(sorted((int(a), int(b)))))
+        edges.append(tuple(sorted((int(b), int(c)))))
+        edges.append(tuple(sorted((int(c), int(a)))))
     # Closed = no boundary. Count 4 (duplicate faces) is OK for hex flood;
     # IncrementalMesh stitch on huge CAD often leaves a few overlapping tris.
     return not any(n == 1 for n in Counter(edges).values())
@@ -823,7 +823,7 @@ def _extract_gmsh_tris(
         if fid is None or int(fid) in skip:
             continue
         etypes, _etags, conn = gmsh.model.mesh.getElements(2, tag)
-        for etype, cflat in zip(etypes, conn):
+        for etype, cflat in zip(etypes, conn, strict=False):
             cflat = np.asarray(cflat, dtype=np.int64)
             if int(etype) == 2:  # triangle
                 npp = 3
@@ -1178,6 +1178,15 @@ def parse_patch_types_txt(path: Path) -> dict[str, str]:
 def apply_patch_types_from_txt(boundary_path: Path, types_txt: Path) -> int:
     """Rewrite polyMesh/boundary types from the mesher's patch_types.txt."""
     return apply_boundary_patch_types(boundary_path, parse_patch_types_txt(types_txt))
+
+
+def coerce_gmsh_leftover_walls(boundary_path: Path) -> int:
+    """gmshToFoam leftover ``defaultFaces`` are prism / CAD caps — they are walls.
+
+    Wall functions require ``type wall``. Leaving them as ``patch`` aborts
+    pimpleFoam / simpleFoam at RAS setup.
+    """
+    return apply_boundary_patch_types(Path(boundary_path), {"defaultFaces": "wall"})
 
 
 def apply_boundary_patch_types(boundary_path: Path, patch_types: dict[str, str]) -> int:

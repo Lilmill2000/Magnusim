@@ -10,7 +10,7 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.wsl.solve_run import kill_solve, stop_solve
+from cfddesk.wsl.solve_run import kill_solve, solve_is_live, stop_solve
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,8 +18,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--wsl-case", required=True)
     p.add_argument("--run-id", default=None)
     p.add_argument("--force", action="store_true", help="Skip writeNow; kill immediately")
+    p.add_argument("--probe", action="store_true", help="Report whether the WSL solver is still live")
     args = p.parse_args(argv)
     try:
+        if args.probe:
+            live = solve_is_live(args.wsl_case)
+            print(json.dumps({"ok": True, "live": live, "wsl_case": args.wsl_case}), flush=True)
+            return 0
         if args.force:
             kill_solve(args.wsl_case, args.run_id)
         else:

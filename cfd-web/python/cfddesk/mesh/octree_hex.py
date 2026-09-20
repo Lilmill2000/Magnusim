@@ -235,7 +235,7 @@ def build_hex_core(
             node_list.append(np.asarray(p, dtype=float))
         return idx
 
-    for o, s in zip(origins_a, sizes):
+    for o, s in zip(origins_a, sizes, strict=False):
         hexes.append([nid(c) for c in hex_nodes(o, float(s))])
 
     return HexCore(
@@ -251,7 +251,7 @@ def build_hex_core(
 
 def hex_boundary_quads(hexes: np.ndarray) -> np.ndarray:
     """Unique quads used by exactly one hex (VTK outward winding)."""
-    count: dict[tuple[int, ...], tuple[int, int, int, int]] = {}
+    count: dict[tuple[int, ...], tuple[int, ...]] = {}
     nuse: dict[tuple[int, ...], int] = {}
     for hx in hexes:
         for f in HEX_FACES:

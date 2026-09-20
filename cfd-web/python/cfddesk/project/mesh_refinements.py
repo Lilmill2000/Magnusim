@@ -73,10 +73,9 @@ snappy/cfMesh extrusion grading write.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
-
-import uuid
 
 from cfddesk.project.settings import MeshAlgorithm
 
@@ -438,7 +437,7 @@ class MeshRefinementStub:
     Inc 9b: Feature refinement (hex-dominant): distance_lengths table
     (distance m / max_edge_length m) + face_ids/volume_ids. Persist-only;
     no Included angle / Level / snappy features.levels invent.
-    
+
     Inc 10a: Surface custom sizing (standard): sizing, fineness, curvature,
     face_ids. Persist-only; no snappy/cfMesh invent from Fineness.
     Inc 10b: Volume custom sizing (standard): sizing_mode, sizing, fineness,
@@ -738,7 +737,7 @@ class MeshRefinementStub:
             bb_face = BB_LAYER_DEFAULT_FACE
         # Accept legacy key if present; prefer final_thickness (DA label).
         if "final_thickness" in data:
-            final_thickness = float(data.get("final_thickness"))
+            final_thickness = float(data["final_thickness"])
         else:
             final_thickness = float(
                 data.get("final_thickness", BB_LAYER_DEFAULT_FINAL_THICKNESS)

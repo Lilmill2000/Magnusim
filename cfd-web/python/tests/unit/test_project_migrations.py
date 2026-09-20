@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -13,7 +12,6 @@ from cfddesk.project.model import (
     _mesh_input_fingerprint_v9_quantize,
     _upgrade_to_v10,
 )
-
 from tests.conftest import PROJECTS
 
 

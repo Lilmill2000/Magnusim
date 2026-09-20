@@ -84,6 +84,18 @@ def geometric_series_total(first: float, expansion: float, n: int) -> float:
     return float(first) * (float(expansion) ** n - 1.0) / (float(expansion) - 1.0)
 
 
+def first_layer_from_total(total: float, expansion: float, n: int) -> float:
+    """First-layer height for n layers that sum to ``total``."""
+    n = max(1, int(n))
+    t = float(total)
+    if t <= 0:
+        return 0.0
+    r = max(1.0, float(expansion))
+    if abs(r - 1.0) < 1e-12:
+        return t / n
+    return t * (r - 1.0) / (r**n - 1.0)
+
+
 # Snappy's displacementMedialAxis shoves the volume (and the wall) off the CAD
 # when the requested prism stack is thicker than the first volume cell. Cap
 # relative to the local surface size (surface custom on those faces, else h_s).
@@ -112,11 +124,14 @@ def fit_inflate_to_local(
     local_h: float,
     gradation: str,
 ) -> tuple[int, float, float, float | None, bool]:
-    """Keep the requested stack inside ~2× the local first volume cell.
+    """Keep first-layer / growth-rate stacks inside ~2× the local first cell.
 
+    Number of layers + total thickness is what the user typed — do not shrink it.
     Prefer dropping expansion toward 1.0, then layer count, then first layer.
     Returns ``(n, expansion, thickness_m, first_layer_m, capped)``.
     """
+    if str(gradation or "").strip().lower() in ("total", "total_thickness"):
+        return n, expansion, thickness_m, first_layer_m, False
     if not math.isfinite(local_h) or local_h <= 0:
         return n, expansion, thickness_m, first_layer_m, False
     max_total = INFLATE_MAX_TOTAL_VS_LOCAL * local_h
@@ -165,6 +180,12 @@ def _read_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _refinements_doc(project_dir: Path, mesh_id: str) -> dict:
+    from cfddesk.project.paths import assemble_mesh_refinements
+
+    return {"refinements": assemble_mesh_refinements(project_dir, mesh_id)}
+
+
 def _mesh_scoped(rec: dict, mesh_id: str) -> bool:
     want = str(mesh_id or "").strip()
     rid = str(rec.get("mesh_id") or "").strip()
@@ -193,6 +214,18 @@ def _labels_to_fids(labels: list[str], n_faces: int) -> tuple[list[int], list[st
     return fids, kept
 
 
+def face_ids_from_web_bc(bc: dict, n_faces: int) -> list[int]:
+    """Map a web BC's face labels onto this CAD. Drop faces the solid does not have."""
+    if not isinstance(bc, dict):
+        return []
+    labels = list(bc.get("faces") or [])
+    face = bc.get("face")
+    if face and face not in labels:
+        labels.append(face)
+    fids, _kept = _labels_to_fids(labels, n_faces)
+    return fids
+
+
 def is_surface_custom(rec: dict) -> bool:
     raw = str(rec.get("type") or rec.get("kind") or "").strip().lower()
     return raw in ("surface custom sizing", "surface_custom_sizing", "surface")
@@ -207,7 +240,7 @@ def load_surface_custom_sizes(
     project_dir: Path, mesh_id: str, n_faces: int, diag_m: float
 ) -> tuple[dict[int, float], dict[int, float], list[dict]]:
     """W26 surface custom sizing → (target_m, min_m, notes) keyed by cfddesk face_id."""
-    doc = _read_json(Path(project_dir) / "mesh_refinements.json")
+    doc = _refinements_doc(project_dir, mesh_id)
     extra: dict[int, float] = {}
     mins: dict[int, float] = {}
     notes: list[dict] = []
@@ -289,6 +322,8 @@ def inflate_from_record(
     # invent a geometric stack the user never typed.
     if grad == "first_layer":
         exp = 1.0
+    elif grad in ("total", "total_thickness"):
+        exp = 1.2
     else:
         exp = parse_float(rec.get("growth_rate"), 1.5)
         if exp < 1.0:
@@ -298,7 +333,15 @@ def inflate_from_record(
         rel = 0.25
     first_m: float | None = None
     thick_m: float
-    if grad == "first_layer":
+    if grad in ("total", "total_thickness"):
+        thick_m = size_to_metres(
+            rec.get("total_thickness") if rec.get("total_thickness") is not None else 1,
+            rec.get("total_thickness_unit") or "mm",
+        )
+        if not math.isfinite(thick_m) or thick_m <= 0:
+            return None
+        first_m = None
+    elif grad == "first_layer":
         first_m = size_to_metres(
             rec.get("first_layer_thickness") if rec.get("first_layer_thickness") is not None else 0.1,
             rec.get("first_layer_unit") or "mm",
@@ -326,7 +369,14 @@ def inflate_from_record(
     n, exp, thick_m, first_m, capped = fit_inflate_to_local(
         n, exp, thick_m, first_m, local_h, grad
     )
-    min_t = BL_MIN_THICKNESS_FRACTION * thick_m
+    if grad in ("total", "total_thickness"):
+        # Snappy drops a face when the next layer is below minThickness.
+        # 20% of the whole stack is thicker than layer 1, so a 25.4 mm
+        # request becomes one ~5 mm slab — or nothing.
+        first_est = first_layer_from_total(thick_m, exp, n)
+        min_t = max(1e-9, 0.05 * first_est)
+    else:
+        min_t = BL_MIN_THICKNESS_FRACTION * thick_m
     return InflateRef(
         name=str(rec.get("name") or "Inflate boundary layer"),
         face_ids=fids,
@@ -350,7 +400,7 @@ def load_inflate_refs(
     h_surface_m: float,
     extra_face_sizes: dict[int, float] | None = None,
 ) -> list[InflateRef]:
-    doc = _read_json(Path(project_dir) / "mesh_refinements.json")
+    doc = _refinements_doc(project_dir, mesh_id)
     out: list[InflateRef] = []
     for rec in doc.get("refinements") or []:
         if not is_inflate(rec) or not _mesh_scoped(rec, mesh_id):
@@ -528,8 +578,16 @@ def layer_specs_for_generate(
             specify = "first"
         elif grad in ("first_and_total", "first_and_total_thickness"):
             specify = "first_and_total"
+        elif grad in ("total", "total_thickness"):
+            specify = "total"
         else:
             specify = "total"
+        honor = grad in (
+            "total",
+            "total_thickness",
+            "first_and_total",
+            "first_and_total_thickness",
+        )
         out.append(
             LayerPatchSpec(
                 name=spec.patch_name,
@@ -539,6 +597,7 @@ def layer_specs_for_generate(
                 expansion=spec.expansion,
                 min_thickness_m=spec.min_thickness_m,
                 specify=specify,
+                honor_absolute=honor,
             )
         )
     return out

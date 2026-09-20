@@ -52,13 +52,18 @@ def export_cut_plane(
     ny: float,
     nz: float,
     field: str = "magU",
+    mesh=None,
+    source: str | None = None,
 ) -> dict:
     case_dir = Path(case_dir).resolve()
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     field = "p" if field == "p" else "magU"
 
-    mesh, source = read_volume_at_time(case_dir, str(time))
+    if mesh is None:
+        mesh, source = read_volume_at_time(case_dir, str(time))
+    elif not source:
+        source = "worker-cache"
     if mesh is None or int(getattr(mesh, "n_cells", 0) or 0) < 1:
         raise RuntimeError(f"volume read failed: {case_dir}")
     ensure_field(mesh, field)
@@ -78,23 +83,37 @@ def export_cut_plane(
         sliced = sliced.extract_surface() if hasattr(sliced, "extract_surface") else pv.PolyData(sliced)
 
     ensure_field(sliced, field)
+    try:
+        ensure_field(sliced, "magU")
+    except RuntimeError:
+        pass
     rho = case_density(case_dir)
-    if field == "p":
-        scale_pressure(sliced, rho)
-    if field in sliced.cell_data and field not in sliced.point_data:
+    if field == "p" or "p" in sliced.point_data or "p" in sliced.cell_data:
+        try:
+            scale_pressure(sliced, rho)
+        except Exception:
+            pass
+    keep = {field, "U", "magU", "p", "T", "TKelvin", "thermo:T"}
+    need_promote = any(
+        name in sliced.cell_data and name not in sliced.point_data
+        for name in keep
+    )
+    if need_promote:
         try:
             sliced = sliced.cell_data_to_point_data(pass_cell_data=True)
         except Exception:
             sliced = sliced.cell_data_to_point_data()
 
-    keep = [field]
-    if field == "magU" and "U" in sliced.point_data:
-        keep.append("U")
+    present = {
+        k for k in keep
+        if k in sliced.point_data or k in sliced.cell_data
+    }
+    present.add(field)
     for k in list(sliced.point_data.keys()):
-        if k not in keep:
+        if k not in present:
             del sliced.point_data[k]
     for k in list(sliced.cell_data.keys()):
-        if k != field:
+        if k not in present:
             del sliced.cell_data[k]
 
     out_vtp = out_dir / "cut_plane.vtp"
