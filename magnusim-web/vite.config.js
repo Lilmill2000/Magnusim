@@ -6,7 +6,11 @@ import { verifyWslToolchain } from './scripts/wsl-env.js';
 verifyWslToolchain();
 
 const PORT = listenPort();
-const allowedHosts = (process.env.MAGNUSIM_ALLOWED_HOSTS || '').split(',').map((s) => s.trim()).filter(Boolean);
+// Public tunnel host so box bots can open https://simulation.lilmill2000.com/
+// MAGNUSIM_ALLOWED_HOSTS still appends extra comma-separated hosts.
+const defaultAllowedHosts = ['simulation.lilmill2000.com', '.lilmill2000.com'];
+const envHosts = (process.env.MAGNUSIM_ALLOWED_HOSTS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const allowedHosts = [...new Set([...defaultAllowedHosts, ...envHosts])];
 process.env.MAGNUSIM_BOUND_PORT = String(PORT);
 process.env.CFDDESK_BOUND_PORT = String(PORT); // legacy alias
 
@@ -23,6 +27,8 @@ function isViteWatchIgnored(filePath) {
     p.endsWith('/node_modules') ||
     p.includes('/.git/') ||
     p.includes('/projects/') ||
+    // Playwright's projects root; a watched run folder blocks the live-sync rename from WSL.
+    p.includes('/.tmp-projects/') ||
     p.includes('/.cache/') ||
     p.includes('/python/') ||
     p.includes('/dist/') ||

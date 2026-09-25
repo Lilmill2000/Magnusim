@@ -29,7 +29,7 @@ def test_committed_registry_has_analysis_and_mesher_keys():
     m_keys = {row["key"] for row in doc["mesher"]}
     assert DEFAULT_STEADY_KEY in a_keys
     assert a_keys >= {DEFAULT_STEADY_KEY, "incompressible_transient"}
-    assert m_keys == EXPECTED_MESHER_KEYS
+    assert EXPECTED_MESHER_KEYS <= m_keys
     # Product mesh engines must be dump keys (no parallel invent).
     assert EXPECTED_MESH_ENGINES <= m_keys
 
@@ -49,7 +49,8 @@ def test_w17_w20_import_registry_defaults():
     w21 = (WEB_ROOT / "scripts" / "w21-mesh-generate.js").read_text(encoding="utf-8")
     assert "registry-defaults.js" in w17
     assert "buildW17DefaultsFromRegistry" in w17
-    assert "acceptsW17Analysis" in w17
+    assert "analysisKeys()" in w17
+    assert "acceptsW17Analysis" not in w17
     assert "registry-defaults.js" in w20
     assert "MESH_ENGINES" in w20
     assert "registry-defaults.js" in w21

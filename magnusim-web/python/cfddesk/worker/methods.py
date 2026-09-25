@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from cfddesk.project import web_writes as ww
 from cfddesk.registry import get_hub, load_all, reset_for_tests
+from cfddesk.registry.base import RegistryError
+from cfddesk.registry.discovery import plugin_catalog
 from cfddesk.registry.schema import validate as validate_schema
+from cfddesk.worker import (
+    volume_cache as _volume_cache,  # noqa: F401 — puts python/tools on sys.path for the export_* imports
+)
 from cfddesk.worker.paths import (
     active_id,
     project_dir,
@@ -131,6 +137,9 @@ def _folders() -> list[str]:
 
 
 def _reconcile_and_save(root: Path) -> bool:
+    from cfddesk.project.scope import migrate_root_siblings
+
+    migrate_root_siblings(root)
     from cfddesk.project.web_mirrors import (
         apply_web_sibling_to_project,
         is_python_project_doc,
@@ -190,7 +199,9 @@ def project_hydrate(id: str = "", project_id: str = "", simulation_id: str = "")
         sid = str(studies[0]["id"])
 
     def scoped(rel: str):
-        return read_sibling(pid, rel, sid) or read_sibling(pid, rel)
+        if not sid:
+            return None
+        return read_sibling(pid, rel, sid)
 
     mesh = scoped("mesh.json")
     if mesh:
@@ -201,13 +212,21 @@ def project_hydrate(id: str = "", project_id: str = "", simulation_id: str = "")
     if materials:
         materials = ww.strip_material_notes(materials)
     runs = scoped("runs/catalog.json")
+    bcs = scoped("boundary_conditions.json")
+    if sid and any(str(s.get("id")) == sid for s in studies):
+        from cfddesk.project.paths import assemble_study_bcs
+
+        # Folder rows plus legacy aggregate/root rows, with the ids the tree and GET /api/bcs use.
+        rows = assemble_study_bcs(root, sid)
+        if bcs is not None or rows:
+            bcs = {**(bcs or {}), "boundary_conditions": rows, "simulation_id": sid}
     return {
         "ok": True,
         "project_id": pid,
         "project": proj,
         "simulation": read_sibling(pid, "simulations.json") or read_sibling(pid, "simulation.json"),
         "materials": materials,
-        "bcs": scoped("boundary_conditions.json"),
+        "bcs": bcs,
         "mesh": mesh,
         "refinements": scoped("mesh_refinements.json"),
         "runs": runs,
@@ -217,6 +236,35 @@ def project_hydrate(id: str = "", project_id: str = "", simulation_id: str = "")
         "increment": "hydrate",
         "reconciled": True,
     }
+
+
+@rpc("project.tree")
+def project_tree(id: str = "", project_id: str = "") -> dict[str, Any]:
+    pid = str(id or project_id or "").strip()
+    if not pid:
+        raise RpcError(-32602, "project_id required")
+    root = _require_dir(pid)
+    from cfddesk.project.scope import build_project_tree, migrate_root_siblings
+
+    migrate_root_siblings(root)
+    tree = build_project_tree(root, pid)
+    extra: list[Any] = []
+    try:
+        from cfddesk.registry.hooks import get_hooks
+
+        load_all(web_root=web_root())
+        get_hooks().call("ui.tree.transform", nodes=extra, project_id=pid, tree=tree)
+    except Exception:
+        extra = []
+    tree["geometries"] = _filter_tree_nodes(tree.get("geometries"), pid, "geometries")
+    tree["plugin_nodes"] = [
+        node
+        for node in extra
+        if isinstance(node, dict)
+        and _node_project(node) == pid
+        and str(node.get("label") or node.get("name") or "").strip()
+    ]
+    return tree
 
 
 @rpc("project.list")
@@ -339,15 +387,67 @@ def folders_create(name: str = "", folder: str = "", title: str = "") -> dict[st
 # ---------------------------------------------------------------------------
 
 
+def _bound_project(id: str = "", project_id: str = "") -> str:
+    pid = str(id or project_id or "").strip()
+    if not pid:
+        raise RpcError(-32602, "project_id required")
+    return pid
+
+
+def _bound_study(sim_id: str = "", simulation_id: str = "") -> str:
+    sid = str(sim_id or simulation_id or "").strip()
+    if not sid:
+        raise RpcError(-32602, "simulation_id required")
+    return sid
+
+
+def _study_for_write(doc: dict | None, sim_id: str, extra: dict) -> str:
+    nested = str(doc.get("simulation_id") or "") if isinstance(doc, dict) else ""
+    return _bound_study(sim_id, nested or str(extra.get("simulation_id") or extra.get("sim_id") or ""))
+
+
+def _node_project(node: dict[str, Any]) -> str:
+    explicit = str(node.get("projectId") or node.get("project_id") or "").strip()
+    if explicit:
+        return explicit
+    key = str(node.get("key") or node.get("scope") or "")
+    for part in key.split("/"):
+        if part.startswith("p:"):
+            return part[2:]
+    return ""
+
+
+_TREE_CHILDREN = {
+    "geometries": ("studies",),
+    "studies": ("meshes", "runs", "bcs"),
+    "meshes": ("refinements",),
+    "runs": ("result_controls",),
+}
+
+
+def _filter_tree_nodes(nodes: Any, project_id: str, key: str) -> list[dict[str, Any]]:
+    """Drop a node whose scope names another project, or names no project."""
+    kept: list[dict[str, Any]] = []
+    if not isinstance(nodes, list):
+        return kept
+    for node in nodes:
+        if not isinstance(node, dict) or _node_project(node) != project_id:
+            continue
+        for child_key in _TREE_CHILDREN.get(key, ()):
+            node[child_key] = _filter_tree_nodes(node.get(child_key), project_id, child_key)
+        kept.append(node)
+    return kept
+
+
 @rpc("sim.get")
 def sim_get(id: str = "", project_id: str = "") -> Any:
-    pid = str(id or project_id or active_id() or "")
+    pid = _bound_project(id, project_id)
     return read_sibling(pid, "simulations.json") or read_sibling(pid, "simulation.json")
 
 
 @rpc("sim.set")
 def sim_set(id: str = "", project_id: str = "", body: dict | None = None, **extra: Any) -> Any:
-    pid = str(id or project_id or "")
+    pid = _bound_project(id, project_id)
     root = _require_dir(pid)
     doc = body if isinstance(body, dict) else extra
     return ww.write_simulation(root, doc, sim_id=str(doc.get("id") or extra.get("sim_id") or ""))
@@ -360,104 +460,177 @@ def sim_catalog_get(id: str = "", project_id: str = "") -> Any:
 
 @rpc("sim.catalog.set")
 def sim_catalog_set(id: str = "", project_id: str = "", body: dict | None = None, **extra: Any) -> Any:
-    pid = str(id or project_id or "")
+    pid = _bound_project(id, project_id)
     root = _require_dir(pid)
     doc = body if isinstance(body, dict) else extra
     return ww.save_sim_catalog(root, doc, sim_id=str(extra.get("sim_id") or ""))
 
 
 @rpc("materials.get")
-def materials_get(id: str = "", project_id: str = "") -> Any:
-    pid = str(id or project_id or active_id() or "")
-    return read_sibling(pid, "materials.json")
+def materials_get(
+    id: str = "",
+    project_id: str = "",
+    sim_id: str = "",
+    simulation_id: str = "",
+) -> Any:
+    pid = _bound_project(id, project_id)
+    return read_sibling(pid, "materials.json", _bound_study(sim_id, simulation_id))
 
 
 @rpc("materials.set")
 def materials_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_materials(root, doc, sim_id=sim_id)
+    return ww.set_materials(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
 
 
 @rpc("bcs.get")
-def bcs_get(id: str = "", project_id: str = "") -> Any:
-    pid = str(id or project_id or active_id() or "")
-    return read_sibling(pid, "boundary_conditions.json")
+def bcs_get(
+    id: str = "",
+    project_id: str = "",
+    sim_id: str = "",
+    simulation_id: str = "",
+) -> Any:
+    pid = _bound_project(id, project_id)
+    return read_sibling(pid, "boundary_conditions.json", _bound_study(sim_id, simulation_id))
 
 
 @rpc("bcs.set")
 def bcs_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_bcs(root, doc, sim_id=sim_id)
+    return ww.set_bcs(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
+
+
+@rpc("bc.menu")
+def bc_menu() -> dict[str, Any]:
+    from cfddesk.case.bc_menu import menu_types
+
+    types: list[dict[str, Any]] = []
+    for mt in menu_types():
+        variants = []
+        for var in mt.variants:
+            variants.append(
+                {
+                    "key": var.key,
+                    "label": var.label,
+                    "registry_key": var.registry_key,
+                    "subvariants": [
+                        {"key": sub[0], "label": sub[1], "registry_key": sub[2]} for sub in var.subvariants
+                    ],
+                }
+            )
+        types.append({"key": mt.key, "label": mt.label, "variants": variants})
+    return {"ok": True, "menu": types}
 
 
 @rpc("mesh.get")
-def mesh_get(id: str = "", project_id: str = "") -> Any:
-    pid = str(id or project_id or active_id() or "")
-    return read_sibling(pid, "mesh.json")
+def mesh_get(
+    id: str = "",
+    project_id: str = "",
+    sim_id: str = "",
+    simulation_id: str = "",
+) -> Any:
+    pid = _bound_project(id, project_id)
+    return read_sibling(pid, "mesh.json", _bound_study(sim_id, simulation_id))
 
 
 @rpc("mesh.set")
 def mesh_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_mesh_settings(root, doc, sim_id=sim_id)
+    return ww.set_mesh_settings(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
 
 
 @rpc("mesh.delete")
-def mesh_delete(id: str = "", project_id: str = "") -> dict[str, Any]:
-    pid = str(id or project_id or "")
+def mesh_delete(
+    id: str = "",
+    project_id: str = "",
+    sim_id: str = "",
+    simulation_id: str = "",
+    mesh_id: str = "",
+) -> dict[str, Any]:
+    import shutil
+
+    from cfddesk.project.paths import find_mesh
+
+    pid = _bound_project(id, project_id)
+    sid = _bound_study(sim_id, simulation_id)
+    mid = str(mesh_id or "").strip()
+    if not mid:
+        raise RpcError(-32602, "mesh_id required")
     root = _require_dir(pid)
-    path = root / "mesh.json"
-    if path.is_file():
-        path.unlink()
-    return {"ok": True, "deleted": "mesh.json"}
+    found = find_mesh(root, mid, sid)
+    if not found or not found.get("dir"):
+        raise RpcError(-32004, "mesh not found", {"mesh_id": mid, "simulation_id": sid})
+    shutil.rmtree(found["dir"], ignore_errors=True)
+    return {"ok": True, "deleted": mid, "simulation_id": sid}
 
 
 @rpc("refinements.get")
-def refinements_get(id: str = "", project_id: str = "") -> Any:
-    pid = str(id or project_id or active_id() or "")
-    return read_sibling(pid, "mesh_refinements.json")
+def refinements_get(
+    id: str = "",
+    project_id: str = "",
+    sim_id: str = "",
+    simulation_id: str = "",
+) -> Any:
+    pid = _bound_project(id, project_id)
+    return read_sibling(pid, "mesh_refinements.json", _bound_study(sim_id, simulation_id))
 
 
 @rpc("refinements.set")
 def refinements_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_refinements(root, doc, sim_id=sim_id)
+    return ww.set_refinements(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
 
 
 @rpc("result_controls.get")
-def result_controls_get(id: str = "", project_id: str = "") -> Any:
-    pid = str(id or project_id or active_id() or "")
-    return read_sibling(pid, "result_controls.json") or read_sibling(pid, "area_average.json")
+def result_controls_get(
+    id: str = "",
+    project_id: str = "",
+    sim_id: str = "",
+    simulation_id: str = "",
+) -> Any:
+    pid = _bound_project(id, project_id)
+    sid = _bound_study(sim_id, simulation_id)
+    return read_sibling(pid, "result_controls.json", sid) or read_sibling(pid, "area_average.json", sid)
 
 
 @rpc("result_controls.set")
 def result_controls_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_result_controls(root, doc, sim_id=sim_id)
+    return ww.set_result_controls(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
 
 
 @rpc("sim_control.get")
-def sim_control_get(id: str = "", project_id: str = "") -> Any:
-    pid = str(id or project_id or active_id() or "")
-    return read_sibling(pid, "simulation_control.json")
+def sim_control_get(
+    id: str = "",
+    project_id: str = "",
+    sim_id: str = "",
+    simulation_id: str = "",
+) -> Any:
+    pid = _bound_project(id, project_id)
+    return read_sibling(pid, "simulation_control.json", _bound_study(sim_id, simulation_id))
 
 
 @rpc("sim_control.set")
 def sim_control_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_sim_control(root, doc, sim_id=sim_id)
+    return ww.set_sim_control(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
 
 
 @rpc("runs.get")
-def runs_get(id: str = "", project_id: str = "") -> Any:
-    pid = str(id or project_id or active_id() or "")
-    return read_sibling(pid, "runs/catalog.json")
+def runs_get(
+    id: str = "",
+    project_id: str = "",
+    sim_id: str = "",
+    simulation_id: str = "",
+) -> Any:
+    pid = _bound_project(id, project_id)
+    return read_sibling(pid, "runs/catalog.json", _bound_study(sim_id, simulation_id))
 
 
 @rpc("runs.catalog.set")
@@ -471,7 +644,7 @@ def runs_catalog_set(
 ) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.save_catalog(root, doc, sim_id=sim_id)
+    return ww.save_catalog(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
 
 
 @rpc("runs.upsert")
@@ -601,6 +774,8 @@ def filter_validate(key: str, params: dict | None = None) -> dict[str, Any]:
         hard = [e for e in errs if not str(e).startswith("missing required field")]
         if hard:
             raise RpcError(-32602, "; ".join(hard), {"errors": hard})
+    plugin = hub.registry("filter").owner(spec.key)
+    tool_path = _package_tool(hub.plugin_dir(plugin), spec.tool)
     return {
         "ok": True,
         "key": spec.key,
@@ -608,7 +783,81 @@ def filter_validate(key: str, params: dict | None = None) -> dict[str, Any]:
         "cache_scope": spec.cache_scope,
         "output": spec.output,
         "params": values,
+        "plugin": plugin,
+        "args_from_params": list(getattr(spec, "args_from_params", ()) or ()),
+        "tool_path": tool_path,
     }
+
+
+def _package_tool(package: Path | None, tool: str) -> str:
+    if package is None:
+        return ""
+    candidate = (Path(package) / str(tool)).resolve()
+    if candidate.is_file():
+        return str(candidate)
+    return ""
+
+
+def _job_row(hub: Any, spec: Any) -> dict[str, Any]:
+    plugin = hub.registry("job").owner(spec.key)
+    return {
+        "key": spec.key,
+        "tool": spec.tool,
+        "scope": spec.scope,
+        "args_from_params": list(spec.args_from_params),
+        "plugin": plugin,
+        "tool_path": _package_tool(hub.job_package(spec.key), spec.tool),
+    }
+
+
+@rpc("jobs.describe")
+def jobs_describe(kind: str = "") -> dict[str, Any]:
+    hub = load_all(web_root=web_root())
+    reg = hub.registry("job")
+    wanted = str(kind or "").strip()
+    if wanted:
+        try:
+            spec = reg.get(wanted)
+        except RegistryError as exc:
+            raise RpcError(-32602, f"unknown job kind: {wanted}") from exc
+        return {"ok": True, "job": _job_row(hub, spec)}
+    return {"ok": True, "jobs": [_job_row(hub, spec) for spec in reg.items()]}
+
+
+_PLUGIN_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
+
+
+@rpc("plugin.dispatch")
+def plugin_dispatch(
+    key: str = "",
+    method: str = "",
+    params: dict | None = None,
+    scope: dict | None = None,
+) -> dict[str, Any]:
+    plugin_key = str(key or "").strip()
+    method_name = str(method or "").strip().lstrip("/")
+    if not _PLUGIN_KEY.match(plugin_key) or plugin_key.endswith(".") or plugin_key.endswith(" "):
+        raise RpcError(-32602, "invalid plugin key")
+    parts = method_name.split("/")
+    if not method_name or ".." in parts or "\\" in method_name:
+        raise RpcError(-32602, "invalid plugin method")
+    scope_in = dict(scope or {})
+    params_in = dict(params or {})
+    scope_pid = str(scope_in.get("project_id") or scope_in.get("projectId") or "").strip()
+    param_pid = str(params_in.get("project_id") or params_in.get("projectId") or "").strip()
+    if scope_pid and param_pid and scope_pid != param_pid:
+        raise RpcError(-32602, "project_id does not match this request")
+    if scope_pid:
+        params_in["project_id"] = scope_pid
+        scope_in["project_id"] = scope_pid
+    hub = load_all(web_root=web_root())
+    try:
+        result = hub.call_method(plugin_key, method_name, params_in, scope_in)
+    except RegistryError as exc:
+        raise RpcError(-32602, str(exc)) from exc
+    if isinstance(result, dict):
+        return result
+    return {"ok": True, "result": result}
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +871,7 @@ def cad_load(step_path: str) -> dict[str, Any]:
     from cfddesk.worker.cad_cache import load_shape
 
     path = Path(step_path)
-    if not path.is_file():
+    if not _geometry_exists(path):
         raise RpcError(-32004, "STEP not found", {"step_path": step_path})
     shape = load_shape(path)
     from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
@@ -638,15 +887,40 @@ def cad_load(step_path: str) -> dict[str, Any]:
     }
 
 
+def _geometry_exists(path: Path) -> bool:
+    """The STEP or its binary sidecar (mesh imports write the STEP later)."""
+    from cfddesk.cad.io import geometry_file_exists
+
+    return geometry_file_exists(path)
+
+
+@rpc("cad.normalize")
+def cad_normalize(src: str, dest: str, unit: str = "MM") -> dict[str, Any]:
+    """STL/STEP import on the warm worker so the UI does not pay a new Python startup."""
+    from cfddesk.cad.io import load_cad, write_geometry
+
+    path = Path(src)
+    if not path.is_file():
+        raise RpcError(-32004, "geometry file not found", {"src": src})
+    loaded = load_cad(path, length_unit=unit)
+    out = Path(dest)
+    # Mesh files (STL/OBJ/PLY): the binary sidecar now, the slow STEP in the background.
+    defer = write_geometry(loaded, out)
+    return {"ok": True, "step_path": str(out), "step_deferred": defer, **loaded.summary()}
+
+
 @rpc("cad.preview")
 def cad_preview(step_path: str, edges: str, faces: str, meta: str | None = None) -> dict[str, Any]:
     from cfddesk.cad.preview import export_preview
     from cfddesk.worker.cad_cache import load_shape
 
     path = Path(step_path)
-    if not path.is_file():
+    if not _geometry_exists(path):
         raise RpcError(-32004, "STEP not found", {"step_path": step_path})
-    shape = load_shape(path)
+    from cfddesk.cad.io import read_triangle_sidecar
+
+    # Mesh imports with a current triangle sidecar need no OCC shape for the preview.
+    shape = None if read_triangle_sidecar(path) is not None else load_shape(path)
     result = export_preview(path, Path(edges), Path(faces), Path(meta) if meta else None, shape=shape)
     return {"ok": True, **result}
 
@@ -657,7 +931,7 @@ def cad_faces(step_path: str, meta: str | None = None) -> dict[str, Any]:
     from cfddesk.worker.cad_cache import load_shape
 
     path = Path(step_path)
-    if not path.is_file():
+    if not _geometry_exists(path):
         raise RpcError(-32004, "STEP not found")
     load_shape(path)
     meta_path = Path(meta) if meta else path.with_name("cad_preview.json")
@@ -668,7 +942,7 @@ def cad_faces(step_path: str, meta: str | None = None) -> dict[str, Any]:
 @rpc("cad.stl")
 def cad_stl(step_path: str) -> dict[str, Any]:
     path = Path(step_path)
-    if not path.is_file():
+    if not _geometry_exists(path):
         raise RpcError(-32004, "STEP not found")
     from cfddesk.worker.cad_cache import load_shape
 
@@ -679,7 +953,7 @@ def cad_stl(step_path: str) -> dict[str, Any]:
 @rpc("cad.thumb")
 def cad_thumb(step_path: str) -> dict[str, Any]:
     path = Path(step_path)
-    if not path.is_file():
+    if not _geometry_exists(path):
         raise RpcError(-32004, "STEP not found")
     from cfddesk.worker.cad_cache import load_shape
 
@@ -719,42 +993,9 @@ def _disabled() -> list[str]:
 
 @rpc("plugins.list")
 def plugins_list() -> dict[str, Any]:
-    load_all(web_root=web_root())
-    hub = get_hub()
-    disabled = set(_disabled())
-    items = []
-    for m in hub.manifests.values():
-        items.append(
-            {
-                "key": m.key,
-                "name": m.name,
-                "version": getattr(m, "version", "0.0.0"),
-                "ui": getattr(m, "ui", None),
-                "provides": getattr(m, "provides", {}) or {},
-                "enabled": m.key not in disabled,
-            }
-        )
-    # Folder plugins that are disabled never register; still list from disk.
-    plugins_dir = web_root() / "plugins"
-    if plugins_dir.is_dir():
-        known = {i["key"] for i in items}
-        for child in sorted(plugins_dir.iterdir()):
-            if not child.is_dir() or child.name in known:
-                continue
-            manifest = child / "manifest.toml"
-            if not manifest.is_file():
-                continue
-            items.append(
-                {
-                    "key": child.name,
-                    "name": child.name,
-                    "version": "0.0.0",
-                    "ui": "ui",
-                    "provides": {},
-                    "enabled": child.name not in disabled,
-                }
-            )
-    return {"ok": True, "plugins": items}
+    root = web_root()
+    load_all(web_root=root)
+    return {"ok": True, "plugins": plugin_catalog(root)}
 
 
 def _set_plugin_enabled(key: str, enabled: bool) -> dict[str, Any]:

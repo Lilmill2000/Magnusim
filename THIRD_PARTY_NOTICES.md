@@ -1,9 +1,9 @@
 # Third-party software and distribution
 
-Magnusim's original source is offered under Apache-2.0 (see LICENSE). That license
-does not replace the licenses of dependencies or third-party source, assets, or
-executables. Setup downloads dependencies separately; this repository does not
-grant permission to redistribute those dependencies under Apache-2.0.
+Magnusim's original source is offered under GPL-3.0-or-later (see LICENSE).
+Releases published before that change remain available under Apache-2.0. The
+Magnusim license does not replace the licenses of dependencies or third-party
+source, assets, or executables. Setup downloads dependencies separately.
 
 ## Gmsh and the mesher
 
@@ -13,15 +13,11 @@ Magnusim calls its Python API from the meshing backend, including
 The official license statement is at [Gmsh licensing](https://gmsh.info/#Licensing).
 Retain Gmsh's complete license and exception when distributing Gmsh itself.
 
-Changing the license header of one adapter file to GPL-3.0 does not establish
-that the rest of a combined distribution is exempt from GPL obligations.
-Apache-2.0 source can participate in a GPLv3 combined work, but the combined
-distribution must satisfy the applicable GPL terms, including corresponding
-source and notices. See [Apache's compatibility guidance](https://www.apache.org/licenses/GPL-compatibility)
-and [GNU's GPLv3 guide](https://www.gnu.org/licenses/quick-guide-gplv3.html).
-Before publishing an executable or environment bundle containing Gmsh, decide
-the distribution boundary and complete its source/license package. This source
-repository's Apache notice is not an Apache-only license for such a bundle.
+Gmsh's "version 2 or later" terms are compatible with Magnusim's
+GPL-3.0-or-later license, so Magnusim and Gmsh combine as a GPLv3 work. See
+[GNU's GPLv3 guide](https://www.gnu.org/licenses/quick-guide-gplv3.html).
+An executable or environment bundle containing Gmsh must still ship Gmsh's
+license text and its corresponding source, or a written offer for it.
 
 ## OpenFOAM and cfMesh
 

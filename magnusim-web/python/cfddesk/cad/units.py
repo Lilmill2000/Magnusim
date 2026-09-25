@@ -122,12 +122,41 @@ def _normalize_unit_token(token: str) -> str:
     return aliases.get(t, t)
 
 
+_UNIT_WINDOW = 2 * 1024 * 1024
+
+
+def _step_unit_text(path: Path) -> str:
+    """Text of ``path`` where unit entities live: head and tail of a large STEP.
+
+    Writers put the unit context near the start (most CAD tools) or at the very
+    end (OCCT); reading a 300 MB faceted STEP whole just for units takes seconds.
+    Falls back to the whole file when neither window has a unit.
+    """
+    size = path.stat().st_size
+    if size <= 4 * _UNIT_WINDOW:
+        return path.read_text(encoding="utf-8", errors="replace")
+    with path.open("rb") as fh:
+        head = fh.read(_UNIT_WINDOW)
+        fh.seek(size - _UNIT_WINDOW)
+        tail = fh.read()
+    text = (head + b"\n" + tail).decode("utf-8", errors="replace")
+    if re.search(r"SI_UNIT|CONVERSION_BASED_UNIT", text, flags=re.IGNORECASE):
+        return text
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 def parse_step_header_units(path: Path) -> tuple[list[str], str | None, list[str]]:
     """Parse length-unit clues from STEP text.
 
     Returns (all_length_unit_labels, geometric_context_unit_or_None, notes).
     """
-    text = path.read_text(encoding="utf-8", errors="replace")
+    if not path.is_file():
+        from cfddesk.cad.io import step_sidecar_path
+
+        if step_sidecar_path(path).is_file():
+            # STEP not written yet (mesh import); imports are normalized to millimetres.
+            return ["MM (SI_UNIT MILLI METRE)"], "MM", ["units from import (STEP pending)"]
+    text = _step_unit_text(path)
     notes: list[str] = []
     found: list[str] = []
 
@@ -189,6 +218,14 @@ def parse_step_header_units(path: Path) -> tuple[list[str], str | None, list[str
 
 
 def cascade_unit_name() -> str:
+    # The STEP controller registers xstep.cascade.unit (default MM). Shapes read from
+    # the binary sidecar never touch the STEP reader, so initialise it explicitly.
+    try:
+        from OCP.STEPControl import STEPControl_Controller
+
+        STEPControl_Controller.Init_s()
+    except Exception:
+        pass
     raw = Interface_Static.CVal_s("xstep.cascade.unit") or ""
     raw = raw.strip().upper()
     return raw if raw else "UNKNOWN"

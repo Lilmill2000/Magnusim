@@ -3,6 +3,7 @@
  * Catalog: projects/<id>/simulations.json (active mirrored to simulation.json).
  */
 import { randomBytes } from 'node:crypto';
+import { projectIdOrActive } from './request-scope.js';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,7 @@ import {
   reorderSimulationsInCatalog,
 } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
+import { commitRpcSync } from './py-json.js';
 import {
   collectChildRecs,
   copyStudyTree,
@@ -82,7 +84,11 @@ function readProject(id) {
 }
 
 function writeProject(proj) {
-  writeJsonAtomic(projectJsonPath(proj.id), proj);
+  const written = commitRpcSync('project.write_project', {
+    project_dir: projectDir(proj.id),
+    doc: proj,
+  });
+  if (written && typeof written === 'object') Object.assign(proj, written);
   return proj;
 }
 
@@ -101,14 +107,12 @@ export const TIME_DEPENDENCIES = Object.freeze({
   Transient: _algorithmForAnalysisKey('incompressible_transient', 'PIMPLE'),
 });
 
-function acceptsW17Analysis(v) {
+function registeredAnalysis(v) {
   const s = String(v || '').trim();
   if (!s) return true;
+  if (analysisKeys().includes(s)) return true;
   if (s === W17_DEFAULTS.analysis || s === W17_DEFAULTS.analysis_type) return true;
   if (s === 'incompressible' || s === DEFAULT_ANALYSIS_KEY) return true;
-  if (s === 'incompressible_transient') return true;
-  const keys = analysisKeys();
-  if (keys.includes(s)) return s.startsWith('incompressible_');
   return false;
 }
 
@@ -174,7 +178,7 @@ function touchProjectSimRef(proj, sim) {
 
 function buildSimulation(body, project) {
   const analysis = String(body.analysis || body.analysis_type || body.type || W17_DEFAULTS.analysis).trim();
-  if (!acceptsW17Analysis(analysis)) {
+  if (!registeredAnalysis(analysis)) {
     return {
       ok: false,
       status: 400,
@@ -200,7 +204,6 @@ function buildSimulation(body, project) {
     turbulence_model: W17_DEFAULTS.turbulence_model,
     time_dependency: timeDependency,
     algorithm,
-    passive_species: W17_DEFAULTS.passive_species,
     defaults: {
       turbulence_model: W17_DEFAULTS.turbulence_model,
       time_dependency: timeDependency,
@@ -555,7 +558,7 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
 }
 
 function createSimulation(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project; create project first', soft_pass: false } };
   }
@@ -619,7 +622,7 @@ function createSimulation(body) {
 }
 
 function updateSimulation(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
   const proj = readProject(projectId);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found', project_id: projectId } };
@@ -635,6 +638,23 @@ function updateSimulation(body) {
     if (next) sim.name = next;
   }
   if (body.geometry_id != null) sim.geometry_id = String(body.geometry_id);
+  const skip = new Set([
+    'project_id',
+    'simulation_id',
+    'id',
+    'geometry_id',
+    'name',
+    'time_dependency',
+    'analysis',
+    'analysis_type',
+    'scope',
+    'kind',
+  ]);
+  for (const [key, value] of Object.entries(body || {})) {
+    if (skip.has(key)) continue;
+    if (value == null || typeof value === 'object') continue;
+    sim[key] = value;
+  }
   sim.updated_at = now;
   const cat = upsertSimulationInCatalog(projectId, proj, sim, true);
   const next = (cat.simulations || []).find((s) => s.id === sim.id) || sim;
@@ -644,7 +664,7 @@ function updateSimulation(body) {
 }
 
 function reorderSimulations(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
   const proj = readProject(projectId);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found', project_id: projectId } };
@@ -660,7 +680,7 @@ function reorderSimulations(body) {
 }
 
 function activateSimulation(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
   const proj = readProject(projectId);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found' } };
@@ -743,7 +763,7 @@ export function purgeOrphanSetupRecords(projectId, proj, liveSimIds) {
 }
 
 function deleteSimulation(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
   const proj = readProject(projectId);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found', project_id: projectId } };
@@ -781,7 +801,7 @@ function deleteSimulation(body) {
 }
 
 function copySimulation(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
   const proj = readProject(projectId);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found' } };
@@ -803,7 +823,7 @@ function copySimulation(body) {
 }
 
 export function getSimulation(projectIdOpt, simIdOpt) {
-  const projectId = projectIdOpt || readActiveId();
+  const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: true,

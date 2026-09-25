@@ -1,7 +1,8 @@
 """W11: on-demand Iso Volume live threshold from real OpenFOAM case volume fields.
 
 Server-side path (documented; match desktop Inc 29a):
-  case .cfddesk-prepared.vtu (volume UnstructuredGrid) -> ensure point-data
+  case volume at time (case_volume.load_volume; legacy .cfddesk-prepared.vtu
+  only as fallback) -> ensure point-data
   magU (derived from U when needed) / p -> map normalized low/high (defaults
   0.25/0.75) onto live scalar min/max -> pyvista threshold([lo, hi], scalars=iso_field)
   -> extract_surface binary VTP for vtk.js Geometry. Not an Iso Surface contour
@@ -24,9 +25,12 @@ from pathlib import Path
 import numpy as np
 import pyvista as pv
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from case_volume import load_volume  # noqa: E402
+
 APPROACH = (
     "server-side volume threshold: Vite /api/iso-volume -> export_iso_volume.py "
-    "reads case .cfddesk-prepared.vtu (volume UnstructuredGrid) point-data "
+    "reads the case volume at time (OpenFOAM fields; legacy prepared VTU fallback) point-data "
     "(magU derived from U when needed; p) -> map normalized low/high onto live "
     "scalar min/max -> pyvista threshold([mapped_lo, mapped_hi], scalars=iso_field) "
     "-> extract_surface binary VTP for vtk.js. Not an Iso Surface contour rebrand. "
@@ -286,14 +290,13 @@ def export_iso_volume(
     case_dir = Path(case_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    vtu_path = case_dir / ".cfddesk-prepared.vtu"
-    if not vtu_path.is_file():
-        raise FileNotFoundError(f"missing prepared VTU: {vtu_path}")
     u_path = case_dir / str(time) / "U"
     p_path = case_dir / str(time) / "p"
-    mesh = pv.read(str(vtu_path))
+    # Shared loader (see export_iso_surface): runs never write the legacy
+    # .cfddesk-prepared.vtu, so it is only a fallback, not a requirement.
+    mesh, vtu_path = load_volume(case_dir, str(time))
     if int(getattr(mesh, "n_cells", 0) or 0) == 0:
-        raise RuntimeError("prepared VTU has 0 cells; cannot threshold")
+        raise RuntimeError("volume has 0 cells; cannot threshold")
 
     surface, meta = threshold_iso_volume(
         mesh,

@@ -11,9 +11,10 @@ _cache: OrderedDict[tuple[str, float], Any] = OrderedDict()
 
 
 def cache_key(step_path: str | Path) -> tuple[str, float]:
+    from cfddesk.cad.io import geometry_mtime_ns
+
     path = Path(step_path).resolve()
-    mtime = path.stat().st_mtime if path.is_file() else 0.0
-    return (str(path), mtime)
+    return (str(path), float(geometry_mtime_ns(path)))
 
 
 def get(step_path: str | Path) -> Any | None:

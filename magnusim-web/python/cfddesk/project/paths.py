@@ -402,6 +402,56 @@ def assemble_mesh_refinements(project_dir: Path | str, mesh_id: str | None) -> l
     return folder_rows + extra
 
 
+def legacy_bc_id(index: int) -> str:
+    """Stable id for an id-less BC row in a leftover aggregate file: its 1-based
+    position in that list. Matches scripts/study-io.js legacyBcId, so the tree,
+    hydrate, GET /api/bcs and the adopted BC_* folder all agree on one id.
+    """
+    return f"bc-legacy-{index + 1}"
+
+
+def _aggregate_bc_rows(doc: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Aggregate rows, id-less ones given legacy_bc_id (index counts every row)."""
+    if not isinstance(doc, dict):
+        return []
+    raw: list[Any] = []
+    for key in ("boundary_conditions", "bcs", "bcs_all"):
+        if isinstance(doc.get(key), list):
+            raw = doc[key]
+            break
+    out: list[dict[str, Any]] = []
+    for i, row in enumerate(raw):
+        if not isinstance(row, dict):
+            continue
+        out.append(row if row.get("id") is not None else {**row, "id": legacy_bc_id(i)})
+    return out
+
+
+def _legacy_study_bc_rows(root: Path, study: dict[str, Any], have_folders: bool) -> list[dict[str, Any]]:
+    """BC rows of one study that live only in a leftover aggregate file.
+
+    The study's own boundary_conditions.json first (untagged rows belong to it).
+    A project from before study folders keeps its BCs in the root
+    boundary_conditions.json; that counts only while the study has neither an
+    aggregate nor a BC_* folder, and only for rows tagged with this study, or
+    untagged when it is the only study (the rule migrate_root_siblings copies by).
+    Matches scripts/study-io.js legacyBcRowsAt.
+    """
+    sid = str(study.get("id") or "")
+    own = _read_json(Path(study["dir"]) / "boundary_conditions.json")
+    if own is not None:
+        return [b if b.get("simulation_id") else {**b, "simulation_id": sid} for b in _aggregate_bc_rows(own)]
+    if have_folders:
+        return []
+    single = len(walk_studies(root)) == 1
+    out: list[dict[str, Any]] = []
+    for b in _aggregate_bc_rows(_read_json(root / "boundary_conditions.json")):
+        tagged = str(b.get("simulation_id") or "").strip()
+        if tagged == sid or (not tagged and single):
+            out.append({**b, "simulation_id": sid})
+    return out
+
+
 def assemble_study_bcs(project_dir: Path | str, sim_id: str | None) -> list[dict[str, Any]]:
     """Folder BCs first, leftover aggregate JSON only for ids not already on disk.
 
@@ -416,14 +466,36 @@ def assemble_study_bcs(project_dir: Path | str, sim_id: str | None) -> list[dict
     if study:
         for row in walk_child_items(Path(study["dir"]) / "boundary_conditions", "bc.json"):
             folder_rows.append(_strip_item_meta(row))
-        doc = _read_json(Path(study["dir"]) / "boundary_conditions.json") or {}
-        legacy = [b for b in (doc.get("boundary_conditions") or []) if isinstance(b, dict)]
+        legacy = _legacy_study_bc_rows(root, study, bool(folder_rows))
     else:
-        doc = _read_json(root / "boundary_conditions.json") or {}
-        legacy = [b for b in (doc.get("boundary_conditions") or []) if isinstance(b, dict)]
+        legacy = _aggregate_bc_rows(_read_json(root / "boundary_conditions.json"))
     have = {str(b.get("id")) for b in folder_rows if b.get("id") is not None}
-    extra = [b for b in legacy if b.get("id") is None or str(b.get("id")) not in have]
+    extra = [b for b in legacy if str(b.get("id")) not in have]
     return folder_rows + extra
+
+
+def adopt_legacy_bcs(project_dir: Path | str, sim_id: str | None) -> int:
+    """Give each leftover-aggregate BC row of this study its own BC_* folder.
+
+    Call before a write rebuilds boundary_conditions.json, or the first save
+    drops every legacy BC the tree was showing. Rows tagged for another study
+    stay where they are. Matches scripts/study-io.js adoptLegacyBcsAt.
+    """
+    root = Path(project_dir)
+    sid = str(sim_id or "").strip()
+    study = find_study(root, sid) if sid else None
+    if not study:
+        return 0
+    parent = Path(study["dir"]) / "boundary_conditions"
+    folders = walk_child_items(parent, "bc.json")
+    have = {str(r.get("id")) for r in folders}
+    adopted = 0
+    for rec in _legacy_study_bc_rows(root, study, bool(folders)):
+        if str(rec.get("id")) in have or str(rec.get("simulation_id")) != sid:
+            continue
+        persist_child_item(parent, "bc", rec)
+        adopted += 1
+    return adopted
 
 
 def assemble_study_bc_defaults(project_dir: Path | str, sim_id: str | None) -> dict[str, Any]:
@@ -535,6 +607,12 @@ def resolve_step_for_study(
     return resolve_step(project_dir, geom_id)
 
 
+def geometry_file_exists(step) -> bool:
+    from cfddesk.cad.io import geometry_file_exists as _exists
+
+    return _exists(step)
+
+
 def resolve_step(project_dir: Path, geom_id: str | None = None) -> Path | None:
     root = Path(project_dir)
     proj = _read_json(root / "project.json") or {}
@@ -544,16 +622,16 @@ def resolve_step(project_dir: Path, geom_id: str | None = None) -> Path | None:
         if not g:
             continue
         step = Path(g["dir"]) / "source.step"
-        if step.is_file():
+        if geometry_file_exists(step):
             return step
         part = (proj.get("geometries") or []) if isinstance(proj, dict) else []
         for row in part:
             if isinstance(row, dict) and str(row.get("id")) == str(g.get("id")) and row.get("step_path"):
                 p = Path(row["step_path"])
-                if p.is_file():
+                if geometry_file_exists(p):
                     return p
     listed = geom.get("step_path")
-    if listed and Path(listed).is_file():
+    if listed and geometry_file_exists(listed):
         return Path(listed)
     return None
 

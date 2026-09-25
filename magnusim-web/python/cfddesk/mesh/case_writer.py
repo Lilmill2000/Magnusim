@@ -1224,11 +1224,11 @@ def prepare_standard_mesh_case(
             "cfmesh_log": host_log,
         }
 
-    from cfddesk.mesh.gmsh_standard import run_gmsh_volume_mesh, write_scaled_step
+    from cfddesk.mesh.gmsh_standard import run_gmsh_volume_mesh, write_gmsh_brep
 
-    step_path = tri / "geometry_metres.step"
+    step_path = tri / "geometry_metres.brep"
     msh_path = tri / "geometry.msh"
-    write_scaled_step(solid, step_path, scale_to_metres=float(project.scale_to_metres))
+    write_gmsh_brep(solid.shape, step_path, scale_to_metres=float(project.scale_to_metres))
     gmsh_res = run_gmsh_volume_mesh(
         solid,
         project,

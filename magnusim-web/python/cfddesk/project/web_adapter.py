@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from cfddesk.project.study_physics import StudyPhysics, load_study_physics
 from cfddesk.project.transient import TransientControl, resolve_transient_control
 
 SolverAppName = Literal["simpleFoam", "pimpleFoam"]
@@ -70,6 +71,8 @@ class RunSpec:
     speed_for_k: float = 1.0
     aa: dict[str, Any] | None = None
     mapped: list[dict[str, Any]] = field(default_factory=list)
+    # Study panel physics (turbulence model + steady SIMPLE numerics).
+    physics: StudyPhysics = field(default_factory=StudyPhysics)
     ok: bool = True
     error: str | None = None
 
@@ -720,6 +723,7 @@ def load_run_spec(
         speed_for_k=1.0,
         aa=aa,
         mapped=mapped,
+        physics=load_study_physics(root, sim_id),
         ok=True,
         error=None,
     )

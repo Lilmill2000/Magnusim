@@ -21,8 +21,6 @@ from OCP.GeomAbs import (
     GeomAbs_Torus,
 )
 from OCP.GProp import GProp_GProps
-from OCP.IFSelect import IFSelect_RetDone
-from OCP.STEPControl import STEPControl_Reader
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
@@ -68,6 +66,9 @@ class LoadedSolid:
     faces: list[FaceRecord]
     units: UnitResolution
     volumes: list[VolumeRecord] = field(default_factory=list)
+    # Grouped mesh import: (points, triangles, surface id per triangle) in shape
+    # units. ``faces`` are then the surfaces, and ``shape`` face i is triangle i.
+    mesh_triangles: tuple | None = None
 
     @property
     def n_faces(self) -> int:
@@ -102,18 +103,18 @@ def _face_props(face: TopoDS_Face) -> tuple[float, tuple[float, float, float]]:
 
 def load_step(path: str | Path) -> LoadedSolid:
     """Read a STEP file and enumerate faces in OCCT explorer order."""
+    from cfddesk.cad.io import geometry_file_exists, read_step_shape
+
     path = Path(path).resolve()
-    if not path.is_file():
+    # A mesh import may have only the binary sidecar until source.step is written.
+    if not geometry_file_exists(path):
         raise FileNotFoundError(path)
 
-    reader = STEPControl_Reader()
-    status = reader.ReadFile(str(path))
-    if status != IFSelect_RetDone:
-        raise RuntimeError(f"STEP read failed ({status}): {path}")
-    if reader.TransferRoots() == 0:
-        raise RuntimeError(f"STEP transfer produced no shapes: {path}")
-
-    shape = reader.OneShape()
+    # Same faces in the same order as the STEP; uses the fast sidecar when fresh.
+    shape = read_step_shape(path)
+    grouped = _load_grouped(path, shape)
+    if grouped is not None:
+        return grouped
     faces: list[FaceRecord] = []
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
     idx = 0
@@ -140,32 +141,81 @@ def load_step(path: str | Path) -> LoadedSolid:
     return LoadedSolid(path=path, shape=shape, faces=faces, units=units, volumes=volumes)
 
 
+def _load_grouped(path: Path, shape: TopoDS_Shape) -> LoadedSolid | None:
+    """Faces of a closed mesh import are its surfaces (``cad.face_groups``), not its triangles.
+
+    Face ``g`` stands for every triangle in group ``g``; its ``face`` is the CAD
+    face of the group's largest triangle (orientation, and the plane of a flat
+    surface). None when the geometry has no current grouped triangle sidecar.
+    """
+    from cfddesk.cad.face_groups import group_properties
+    from cfddesk.cad.io import read_triangle_sidecar
+
+    sidecar = read_triangle_sidecar(path)
+    if sidecar is None or sidecar[2] is None:
+        return None
+    points, tris, groups = sidecar
+    cad_faces: list[TopoDS_Face] = []
+    explorer = TopExp_Explorer(shape, TopAbs_FACE)
+    while explorer.More():
+        cad_faces.append(TopoDS.Face_s(explorer.Current()))
+        explorer.Next()
+    if len(cad_faces) != len(tris):
+        return None
+    props = group_properties(points, tris, groups)
+    faces = [
+        FaceRecord(
+            face_id=g,
+            area=p["area"],
+            centroid=p["centroid"],
+            surface_type="Plane" if p["planar"] else "Mesh",
+            face=cad_faces[p["largest_triangle"]],
+        )
+        for g, p in enumerate(props)
+    ]
+    volumes = [VolumeRecord(volume_id="solid-0", name="Solid 1", face_ids=tuple(range(len(faces))))]
+    return LoadedSolid(
+        path=path,
+        shape=shape,
+        faces=faces,
+        units=resolve_units(path, shape),
+        volumes=volumes,
+        mesh_triangles=(points, tris, groups),
+    )
+
+
 def enumerate_volumes(
     shape: TopoDS_Shape, faces: list[FaceRecord]
 ) -> list[VolumeRecord]:
     """Map each TopAbs_SOLID to global face_ids (same indices as ``faces``)."""
-    face_list = [(fr.face_id, fr.face) for fr in faces]
+    from OCP.TopTools import TopTools_IndexedMapOfShape
+
+    # Hashed lookup (IsSame semantics): a linear scan per face is O(n^2), hours on a
+    # 100k-face faceted STL.
+    face_map = TopTools_IndexedMapOfShape()
+    ids: list[int] = []
+    for fr in faces:
+        if face_map.Add(fr.face) > len(ids):
+            ids.append(fr.face_id)
 
     def _face_id_of(face: TopoDS_Face) -> int | None:
-        for fid, f in face_list:
-            if f.IsSame(face):
-                return fid
-        return None
+        idx = face_map.FindIndex(face)
+        return ids[idx - 1] if idx > 0 else None
 
     volumes: list[VolumeRecord] = []
     explorer = TopExp_Explorer(shape, TopAbs_SOLID)
     vi = 0
     while explorer.More():
         solid = explorer.Current()
-        fids: list[int] = []
+        seen: set[int] = set()
         fexp = TopExp_Explorer(solid, TopAbs_FACE)
         while fexp.More():
             face = TopoDS.Face_s(fexp.Current())
             fid = _face_id_of(face)
-            if fid is not None and fid not in fids:
-                fids.append(fid)
+            if fid is not None:
+                seen.add(fid)
             fexp.Next()
-        fids.sort()
+        fids = sorted(seen)
         volumes.append(
             VolumeRecord(
                 volume_id=f"solid-{vi}",
@@ -253,7 +303,16 @@ def tessellate_faces(
     points : (N, 3) float64
     faces : (M, 3) int64 — triangle vertex indices (0-based)
     face_ids : (M,) int32 — CAD face index for each triangle
+
+    A grouped mesh import returns its own triangles with their surface ids.
     """
+    if solid.mesh_triangles is not None:
+        pts, tris, groups = solid.mesh_triangles
+        return (
+            np.asarray(pts, dtype=np.float64),
+            np.asarray(tris, dtype=np.int64),
+            np.asarray(groups, dtype=np.int32),
+        )
     lin_auto, ang_auto = mesh_deflection(
         solid, relative_linear=relative_linear, angular_deflection=0.08
     )

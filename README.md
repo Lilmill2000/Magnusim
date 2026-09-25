@@ -28,7 +28,8 @@ Do not zip an installed working tree: it can contain private projects, media, cr
 
 Existing Git history also needs review before a public push; ignore rules do not erase old commits.
 
-The original Magnusim source is licensed under [Apache 2.0](LICENSE). Dependencies
+Magnusim is licensed under the [GNU General Public License v3.0 or later](LICENSE).
+Releases published before this change remain available under Apache 2.0. Dependencies
 retain their own licenses; read [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 before distributing a combined application or environment bundle.
 Removed unfinished UI features are recorded in [ROADMAP.md](ROADMAP.md).

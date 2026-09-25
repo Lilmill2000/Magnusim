@@ -1,0 +1,6 @@
+key = "example-laminar"
+name = "Laminar example"
+version = "0.1.0"
+api_version = "1.0"
+description = "Steady laminar analysis using the built-in incompressible writer"
+authors = "Magnusim"

@@ -24,12 +24,10 @@ from OCP.BRepGProp import BRepGProp
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepTools import BRepTools
 from OCP.GProp import GProp_GProps
-from OCP.IFSelect import IFSelect_RetDone
 from OCP.IMeshTools import IMeshTools_Parameters
 from OCP.Precision import Precision
 from OCP.Prs3d import Prs3d, Prs3d_Drawer
 from OCP.StdPrs import StdPrs_ToolTriangulatedShape
-from OCP.STEPControl import STEPControl_Reader
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
@@ -44,12 +42,9 @@ PREVIEW_VERSION = 7
 
 
 def load_step(path: Path):
-    reader = STEPControl_Reader()
-    status = reader.ReadFile(str(path))
-    if status != IFSelect_RetDone:
-        raise RuntimeError(f"STEP read failed status={status} path={path}")
-    reader.TransferRoots()
-    return reader.OneShape()
+    from cfddesk.cad.io import read_step_shape
+
+    return read_step_shape(path)
 
 
 def count_sub(shape, kind) -> int:
@@ -140,14 +135,19 @@ def face_properties(shape):
 
 
 def write_faces_into_meta(step: Path, meta_path: Path) -> dict:
-    shape = load_step(step)
+    from cfddesk.cad.io import read_triangle_sidecar
+
+    triangles = read_triangle_sidecar(step)
     meta = {}
     if meta_path.is_file():
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             meta = {}
-    meta["faces"] = face_properties(shape)
+    if triangles is not None and triangles[2] is not None:
+        meta["faces"] = _grouped_face_entries(*triangles)
+    else:
+        meta["faces"] = face_properties(load_step(step))
     meta["faces_length_unit"] = "mm"
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta
@@ -322,73 +322,88 @@ def extract_display_edges(shape):
     return polylines
 
 
-def _write_ascii_vtp(path: Path, points, lines=None, polys=None, normals=None, cell_scalars=None):
-    lines = lines or []
-    polys = polys or []
-    npts = len(points)
+def _write_binary_vtp(
+    path: Path,
+    points,
+    *,
+    lines=None,
+    polys=None,
+    normals=None,
+    cell_scalars: dict | None = None,
+) -> None:
+    """VTK XML PolyData with appended raw binary arrays (UInt32 byte-count headers).
+
+    vtk.js and pyvista/VTK read it; it is ~3x smaller than ASCII and written with
+    numpy instead of a Python loop per point. ``lines`` / ``polys`` are
+    ``(connectivity, offsets)`` arrays.
+    """
+    import struct
+
+    import numpy as np
+
+    pts = np.ascontiguousarray(np.asarray(points, dtype=np.float32).reshape(-1, 3))
+    empty = (np.zeros(0, dtype=np.int32), np.zeros(0, dtype=np.int32))
+    line_conn, line_off = (np.asarray(a, dtype=np.int32) for a in (lines or empty))
+    poly_conn, poly_off = (np.asarray(a, dtype=np.int32) for a in (polys or empty))
+    blocks: list[bytes] = []
+    offset = 0
+
+    def array_xml(data, vtk_type: str, name: str | None = None, ncomp: int = 1) -> str:
+        nonlocal offset
+        raw = np.ascontiguousarray(data).tobytes()
+        attrs = f'type="{vtk_type}"' + (f' Name="{name}"' if name else "")
+        if ncomp != 1:
+            attrs += f' NumberOfComponents="{ncomp}"'
+        xml = f'<DataArray {attrs} format="appended" offset="{offset}"/>'
+        blocks.append(struct.pack("<I", len(raw)) + raw)
+        offset += 4 + len(raw)
+        return xml
+
+    head = [
+        '<?xml version="1.0"?>',
+        '<VTKFile type="PolyData" version="1.0" byte_order="LittleEndian" header_type="UInt32">',
+        "  <PolyData>",
+        f'    <Piece NumberOfPoints="{len(pts)}" NumberOfVerts="0" NumberOfLines="{len(line_off)}" '
+        f'NumberOfStrips="0" NumberOfPolys="{len(poly_off)}">',
+    ]
+    if normals is not None and len(normals) == len(pts):
+        nrm = np.asarray(normals, dtype=np.float32).reshape(-1, 3)
+        head += ['      <PointData Normals="Normals">', "        " + array_xml(nrm, "Float32", "Normals", 3), "      </PointData>"]
+    if cell_scalars:
+        head.append("      <CellData>")
+        for name, values in cell_scalars.items():
+            head.append("        " + array_xml(np.asarray(values, dtype=np.int32), "Int32", name))
+        head.append("      </CellData>")
+    head += ["      <Points>", "        " + array_xml(pts, "Float32", None, 3), "      </Points>"]
+    head += [
+        "      <Lines>",
+        "        " + array_xml(line_conn, "Int32", "connectivity"),
+        "        " + array_xml(line_off, "Int32", "offsets"),
+        "      </Lines>",
+        "      <Polys>",
+        "        " + array_xml(poly_conn, "Int32", "connectivity"),
+        "        " + array_xml(poly_off, "Int32", "offsets"),
+        "      </Polys>",
+        "    </Piece>",
+        "  </PolyData>",
+        '  <AppendedData encoding="raw">',
+        "   _",
+    ]
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="ascii", newline="\n") as f:
-        f.write('<?xml version="1.0"?>\n')
-        f.write('<VTKFile type="PolyData" version="0.1" byte_order="LittleEndian">\n')
-        f.write("  <PolyData>\n")
-        f.write(
-            f'    <Piece NumberOfPoints="{npts}" NumberOfVerts="0" '
-            f'NumberOfLines="{len(lines)}" NumberOfStrips="0" NumberOfPolys="{len(polys)}">\n'
-        )
-        f.write("      <Points>\n")
-        f.write('        <DataArray type="Float32" NumberOfComponents="3" format="ascii">\n')
-        for p in points:
-            f.write(f"          {p[0]:.8g} {p[1]:.8g} {p[2]:.8g}\n")
-        f.write("        </DataArray>\n")
-        f.write("      </Points>\n")
-        if normals and len(normals) == npts:
-            f.write('      <PointData Normals="Normals">\n')
-            f.write('        <DataArray type="Float32" Name="Normals" NumberOfComponents="3" format="ascii">\n')
-            for n in normals:
-                f.write(f"          {n[0]:.6g} {n[1]:.6g} {n[2]:.6g}\n")
-            f.write("        </DataArray>\n")
-            f.write("      </PointData>\n")
-        if cell_scalars:
-            f.write("      <CellData>\n")
-            for name, values in cell_scalars.items():
-                f.write(f'        <DataArray type="Int32" Name="{name}" format="ascii">\n')
-                chunk = []
-                for i, v in enumerate(values, 1):
-                    chunk.append(str(int(v)))
-                    if i % 24 == 0:
-                        f.write("          " + " ".join(chunk) + "\n")
-                        chunk = []
-                if chunk:
-                    f.write("          " + " ".join(chunk) + "\n")
-                f.write("        </DataArray>\n")
-            f.write("      </CellData>\n")
-        f.write("      <Lines>\n")
-        f.write('        <DataArray type="Int32" Name="connectivity" format="ascii">\n')
-        for line in lines:
-            f.write("          " + " ".join(str(i) for i in line) + "\n")
-        f.write("        </DataArray>\n")
-        f.write('        <DataArray type="Int32" Name="offsets" format="ascii">\n')
-        off = 0
-        for line in lines:
-            off += len(line)
-            f.write(f"          {off}\n")
-        f.write("        </DataArray>\n")
-        f.write("      </Lines>\n")
-        f.write("      <Polys>\n")
-        f.write('        <DataArray type="Int32" Name="connectivity" format="ascii">\n')
-        for poly in polys:
-            f.write("          " + " ".join(str(i) for i in poly) + "\n")
-        f.write("        </DataArray>\n")
-        f.write('        <DataArray type="Int32" Name="offsets" format="ascii">\n')
-        off = 0
-        for poly in polys:
-            off += len(poly)
-            f.write(f"          {off}\n")
-        f.write("        </DataArray>\n")
-        f.write("      </Polys>\n")
-        f.write("    </Piece>\n")
-        f.write("  </PolyData>\n")
-        f.write("</VTKFile>\n")
+    with path.open("wb") as f:
+        f.write("\n".join(head).encode("ascii"))
+        for block in blocks:
+            f.write(block)
+        f.write(b"\n  </AppendedData>\n</VTKFile>\n")
+
+
+def _flat(rows) -> tuple:
+    """Ragged index lists -> (connectivity, offsets)."""
+    import numpy as np
+
+    lengths = np.fromiter((len(r) for r in rows), dtype=np.int64, count=len(rows))
+    conn = np.fromiter((i for r in rows for i in r), dtype=np.int32, count=int(lengths.sum()))
+    return conn, np.cumsum(lengths).astype(np.int32)
 
 
 def save_edges_vtp(path: Path, polylines):
@@ -397,8 +412,8 @@ def save_edges_vtp(path: Path, polylines):
     for pl in polylines:
         start = len(points)
         points.extend(pl)
-        lines.append(list(range(start, start + len(pl))))
-    _write_ascii_vtp(path, points, lines=lines, polys=[])
+        lines.append(range(start, start + len(pl)))
+    _write_binary_vtp(path, points, lines=_flat(lines))
     return len(points)
 
 
@@ -408,19 +423,143 @@ def save_faces_vtp(path: Path, verts, normals, tris, solid_ids=None, face_ids=No
         cell_scalars["solidId"] = solid_ids
     if face_ids and len(face_ids) == len(tris):
         cell_scalars["faceId"] = face_ids
-    _write_ascii_vtp(
-        path,
-        verts,
-        lines=[],
-        polys=tris,
-        normals=normals,
-        cell_scalars=cell_scalars or None,
-    )
+    _write_binary_vtp(path, verts, polys=_flat(tris), normals=normals, cell_scalars=cell_scalars or None)
     return len(tris)
+
+
+FEATURE_ANGLE_DEG = 30.0
+
+
+def _grouped_face_entries(points, tris, groups) -> list[dict]:
+    """``faces[]`` for a grouped mesh import: one entry per surface (face id = group + 1)."""
+    from cfddesk.cad.face_groups import group_properties
+
+    return [
+        {
+            "id": g + 1,
+            "area": round(p["area"], 9),
+            "centroid": [round(v, 6) for v in p["centroid"]],
+            "normal": [round(v, 6) for v in p["normal"]],
+            "surface_type": "Plane" if p["planar"] else "Mesh",
+        }
+        for g, p in enumerate(group_properties(points, tris, groups))
+    ]
+
+
+def export_preview_from_triangles(
+    step: Path, edges: Path, faces: Path, meta: Path | None, points, tris, groups=None
+) -> dict:
+    """Preview for a mesh import from its triangles (see ``io.read_triangle_sidecar``).
+
+    Same outputs as ``export_preview`` without re-meshing the triangles: flat
+    triangles, per-face area/centroid/normal, and the volume centroid. With
+    ``groups`` (surface id per triangle) a face is a surface of triangles and the
+    edges are the surface boundaries; without, face i is triangle i and the edges
+    are folds over 30° and open borders.
+    """
+    import numpy as np
+
+    pts = np.asarray(points, dtype=np.float64)
+    tri = np.asarray(tris, dtype=np.int64)
+    m = len(tri)
+    corners = pts[tri]  # (m, 3, 3)
+    cross = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+    twice_area = np.linalg.norm(cross, axis=1)
+    normal = cross / np.where(twice_area > 0, twice_area, 1.0)[:, None]
+    centroid = corners.mean(axis=1)
+
+    _write_binary_vtp(
+        faces,
+        corners.reshape(-1, 3),
+        polys=(np.arange(3 * m, dtype=np.int32), np.arange(3, 3 * m + 1, 3, dtype=np.int32)),
+        normals=np.repeat(normal, 3, axis=0),
+        cell_scalars={
+            "solidId": np.ones(m, dtype=np.int32),
+            "faceId": (np.asarray(groups, dtype=np.int32) + 1) if groups is not None else np.arange(1, m + 1, dtype=np.int32),
+        },
+    )
+
+    # Feature edges: sort each triangle edge, pair the two faces that share it.
+    ends = np.sort(tri[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2), axis=1)
+    owner = np.repeat(np.arange(m), 3)
+    order = np.lexsort((ends[:, 1], ends[:, 0]))
+    ends, owner = ends[order], owner[order]
+    same = np.all(ends[1:] == ends[:-1], axis=1)
+    starts = np.concatenate(([True], ~same))
+    n_unique = int(starts.sum())
+    counts = np.diff(np.concatenate((np.nonzero(starts)[0], [len(ends)])))
+    first = np.nonzero(starts)[0]
+    border = first[counts == 1]
+    pair = first[counts == 2]
+    cos_fold = np.einsum("ij,ij->i", normal[owner[pair]], normal[owner[pair + 1]])
+    if groups is not None:
+        g = np.asarray(groups)
+        fold = pair[g[owner[pair]] != g[owner[pair + 1]]]
+    else:
+        fold = pair[cos_fold < np.cos(np.radians(FEATURE_ANGLE_DEG))]
+    feature = ends[np.concatenate((border, fold))]
+    k = len(feature)
+    _write_binary_vtp(
+        edges,
+        pts[feature].reshape(-1, 3),
+        lines=(np.arange(2 * k, dtype=np.int32), np.arange(2, 2 * k + 1, 2, dtype=np.int32)),
+    )
+
+    signed = np.einsum("ij,ij->i", corners[:, 0], np.cross(corners[:, 1], corners[:, 2])) / 6.0
+    total = float(signed.sum())
+    com = (signed[:, None] * corners.sum(axis=1) / 4.0).sum(axis=0) / total if abs(total) > 0 else centroid.mean(axis=0)
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    out = {
+        "preview_version": PREVIEW_VERSION,
+        "step_path": str(step),
+        "edges_vtp": str(edges),
+        "faces_vtp": str(faces),
+        "representation": "step",
+        "display": "mesh-triangles",
+        "tessellated": False,
+        "n_solids": 1,
+        "bodies": ["Body1"],
+        "n_faces": int(np.max(groups)) + 1 if groups is not None else m,
+        "n_edges": n_unique,
+        "n_edge_polylines": k,
+        "n_edge_points": 2 * k,
+        "n_display_tris": m,
+        "bounds": {
+            "xmin": float(lo[0]), "xmax": float(hi[0]),
+            "ymin": float(lo[1]), "ymax": float(hi[1]),
+            "zmin": float(lo[2]), "zmax": float(hi[2]),
+        },
+        "linear_deflection": 0.0,
+        "angular_deflection": 0.0,
+        "deviation_coefficient": VIS_DEVIATION_COEFFICIENT,
+        "deviation_angle_deg": VIS_DEVIATION_ANGLE_DEG,
+        "status": 0,
+        "center_of_mass": [float(v) for v in com],
+        "center_of_mass_kind": "volume",
+        "faces": _grouped_face_entries(pts, tri, groups) if groups is not None else [
+            {
+                "id": i + 1,
+                "area": round(float(twice_area[i] / 2.0), 9),
+                "centroid": [round(float(v), 6) for v in centroid[i]],
+                "normal": [round(float(v), 6) for v in normal[i]],
+                "surface_type": "Plane",
+            }
+            for i in range(m)
+        ],
+        "faces_length_unit": "mm",
+    }
+    meta_path = meta if meta is not None else edges.with_name("cad_preview.json")
+    meta_path.write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8")
+    return out
 
 
 def export_preview(step: Path, edges: Path, faces: Path, meta: Path | None = None, shape=None) -> dict:
     """Write edges/faces VTP + cad_preview.json. ``shape`` may be a cached OCCT shape."""
+    from cfddesk.cad.io import read_triangle_sidecar
+
+    triangles = read_triangle_sidecar(step)
+    if triangles is not None:
+        return export_preview_from_triangles(step, edges, faces, meta, *triangles)
     if shape is None:
         shape = load_step(step)
     bounds, box = shape_bounds(shape)
@@ -463,7 +602,10 @@ def export_preview(step: Path, edges: Path, faces: Path, meta: Path | None = Non
     except Exception:
         pass
     meta_path = meta if meta is not None else edges.with_name("cad_preview.json")
-    meta_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    compact = len(out.get("faces") or []) > 2000
+    meta_path.write_text(
+        json.dumps(out, separators=(",", ":")) if compact else json.dumps(out, indent=2), encoding="utf-8"
+    )
     return out
 
 
@@ -493,7 +635,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--faces-only", action="store_true", help="Write per-face area/centroid/normal into existing cad_preview.json")
     args = ap.parse_args(argv)
 
-    if not args.step.is_file():
+    from cfddesk.cad.io import geometry_file_exists
+
+    if not geometry_file_exists(args.step):
         print("MISSING STEP", args.step, file=sys.stderr)
         return 2
 

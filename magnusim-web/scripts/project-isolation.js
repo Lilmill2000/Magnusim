@@ -65,6 +65,15 @@ export function caseDirAllowedForAttach(caseDir, projectId, simId) {
   );
 }
 
+/**
+ * The attached case is server-global. A tab leaving project A must not detach
+ * a case another tab attached for project B.
+ */
+export function caseDetachAllowed(activeCaseDir, projectId) {
+  if (!activeCaseDir) return true;
+  return caseDirBelongsToProject(activeCaseDir, projectId);
+}
+
 export function caseDirBelongsToProject(caseDir, projectId) {
   const want = String(projectId || '').trim();
   if (!want || !caseDir) return false;

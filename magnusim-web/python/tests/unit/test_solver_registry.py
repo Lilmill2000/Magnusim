@@ -59,9 +59,11 @@ def test_solver_specs_shape():
     assert simple.time_dependency == "steady"
     assert simple.parallel == "mpirun"
     assert simple.stop_strategy == "stopAt_writeNow"
-    assert simple.residual_line is None
-    assert simple.write_fv_solution is None
-    assert simple.script_template == "solve.sh"
+    assert callable(simple.residual_line)
+    assert callable(simple.extra_lines)
+    assert callable(simple.write_fv_solution)
+    assert callable(simple.write_control_dict)
+    assert simple.script_template == "solve"
 
     pimple = reg.get("pimpleFoam")
     assert pimple.application == "pimpleFoam"

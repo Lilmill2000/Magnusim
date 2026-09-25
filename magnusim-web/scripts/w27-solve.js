@@ -1,4 +1,5 @@
 import { safeProjectPath } from './safe-path.js';
+import { projectIdOrActive } from './request-scope.js';
 // @ts-nocheck
 /**
  * Simulation Control — incompressible steady simpleFoam from the project mesh,
@@ -34,7 +35,7 @@ import {
 import { createJobLogger } from './log.js';
 import { envGet } from './env-compat.js';
 import { spawnJob } from './job-runner.js';
-import { pyJson, pyJsonSync } from './py-json.js';
+import { commitRpc, commitRpcSync } from './py-json.js';
 import {
   assembleAllRuns,
   assembleMeshDoc,
@@ -190,7 +191,7 @@ function applyProgressLine(state, raw) {
     if (Number.isFinite(v)) state.pending.delta_t = v;
     return;
   }
-  const rm = line.match(/Solving for (Ux|Uy|Uz|p|omega|k), Initial residual = ([0-9.eE+-]+)/);
+  const rm = line.match(/Solving for (Ux|Uy|Uz|p|omega|k|epsilon|R(?:xx|xy|xz|yy|yz|zz)), Initial residual = ([0-9.eE+-]+)/);
   if (rm && state.current) {
     const v = Number(rm[2]);
     if (Number.isFinite(v)) state.current[rm[1]] = v;
@@ -296,6 +297,10 @@ function compactResidual(row) {
   if (Number.isFinite(Number(row.p))) out.p = Number(row.p);
   if (Number.isFinite(Number(row.k))) out.k = Number(row.k);
   if (Number.isFinite(Number(row.omega))) out.omega = Number(row.omega);
+  if (Number.isFinite(Number(row.epsilon))) out.epsilon = Number(row.epsilon);
+  // Reynolds-stress models solve six R components; plot the largest, like U.
+  const rBits = ['Rxx', 'Rxy', 'Rxz', 'Ryy', 'Ryz', 'Rzz'].map((k) => Number(row[k])).filter(Number.isFinite);
+  if (rBits.length) out.R = Math.max(...rBits);
   // Transient runs: Courant number per step (drawn on the residual plot).
   if (Number.isFinite(Number(row.co_mean))) out.co_mean = Number(row.co_mean);
   if (Number.isFinite(Number(row.co_max))) out.co_max = Number(row.co_max);
@@ -316,7 +321,7 @@ function downsampleResiduals(series, maxPts = 200) {
 }
 
 function rowHasResidual(row) {
-  const n = ['Ux', 'Uy', 'Uz', 'p', 'k', 'omega'].filter((k) => Number.isFinite(Number(row && row[k]))).length;
+  const n = ['Ux', 'Uy', 'Uz', 'p', 'k', 'omega', 'epsilon', 'Rxx'].filter((k) => Number.isFinite(Number(row && row[k]))).length;
   return n >= 2;
 }
 
@@ -704,7 +709,9 @@ export function loadFaceProps(projectId) {
     const geom = walkGeometries(root)[0];
     const step = geom ? join(geom.dir, 'source.step') : join(root, 'geometry', 'source.step');
     metaPath = geom ? join(geom.dir, 'cad_preview.json') : join(root, 'geometry', 'cad_preview.json');
-    if (existsSync(step) && existsSync(PYTHON) && existsSync(CAD_PREVIEW_SCRIPT)) {
+    // Mesh imports may have only the binary sidecar until source.step is written.
+    const stepPresent = existsSync(step) || existsSync(step.replace(/\.[^.\\/]+$/, '') + '.bbrep');
+    if (stepPresent && existsSync(PYTHON) && existsSync(CAD_PREVIEW_SCRIPT)) {
       try {
         spawnSync(PYTHON, [CAD_PREVIEW_SCRIPT, '--step', step, '--meta', metaPath, '--faces-only'], {
           windowsHide: true,
@@ -773,7 +780,7 @@ function meshRecordReady(rec) {
 }
 
 export function listGeneratedMeshes(projectId, simulationId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   const sim = activeStudy(id, simulationId);
   const mesh = id && sim ? assembleMeshDoc(id, sim.id) : null;
   if (!mesh) return [];
@@ -795,7 +802,7 @@ export function listGeneratedMeshes(projectId, simulationId) {
 }
 
 export function resolveProjectMesh(projectId, meshId, simulationId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no active project' };
   const sim = activeStudy(id, simulationId);
   const mesh = sim ? assembleMeshDoc(id, sim.id) : null;
@@ -883,7 +890,7 @@ export function resolveProjectMesh(projectId, meshId, simulationId) {
 }
 
 export function getSimulationControl(projectId, simulationId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   const defaults = { endTime: DEFAULT_END_TIME, writeInterval: DEFAULT_WRITE_INTERVAL };
   if (!id) return { ...defaults, project_id: null };
   const sim = activeStudy(id, simulationId);
@@ -904,7 +911,7 @@ export function getSimulationControl(projectId, simulationId) {
 }
 
 export async function saveSimulationControl(projectId, partial, simulationId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no active project' };
   const sim = activeStudy(id, simulationId || (partial && partial.simulation_id));
   const prev = getSimulationControl(id, sim && sim.id);
@@ -926,11 +933,11 @@ export async function saveSimulationControl(projectId, partial, simulationId) {
   try {
     if (sim && sim.id) writeStudyJson(id, sim.id, 'control', next);
     else {
-      await pyJson(
-        'project_cli.py',
-        ['set-sim-control', '--project-dir', projectDir(id), '--sim-id', String((sim && sim.id) || '')],
-        next,
-      );
+      await commitRpc('sim_control.set', {
+        project_dir: projectDir(id),
+        sim_id: String((sim && sim.id) || ''),
+        body: next,
+      });
     }
   } catch (e) {
     console.warn('[CFD] save sim control', e);
@@ -940,7 +947,7 @@ export async function saveSimulationControl(projectId, partial, simulationId) {
 
 /** Active study time dependency. Do not read leftover simulation.json. */
 function projectIsTransient(projectId, simulationId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return false;
   const sim = activeStudy(id, simulationId);
   if (sim) return simIsTransient(sim);
@@ -1261,7 +1268,7 @@ function readMonitorDat(caseDir, name) {
  * A negative flow rate is flow INTO the domain (OpenFOAM face normals point out).
  */
 export function getRunMonitors(projectId, runId, simulationId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no active project' };
   const cat = loadCatalog(id);
   const scoped = runsForActiveStudy(id, cat.runs, simulationId);
@@ -1684,15 +1691,15 @@ function saveCatalog(projectId, cat, opts) {
     return Promise.resolve({ ok: true });
   }
   try {
-    const write = pyJson(
-      'project_cli.py',
-      ['save-catalog', '--project-dir', projectDir(projectId), '--sim-id', String((sim && sim.id) || '')],
-      {
+    const write = commitRpc('runs.catalog.set', {
+      project_dir: projectDir(projectId),
+      sim_id: String((sim && sim.id) || ''),
+      body: {
         active_id: cat.active_id || null,
         runs: cat.runs || [],
         updated_at: new Date().toISOString(),
       },
-    );
+    });
     if (write && typeof write.then === 'function') {
       write.catch((e) => console.warn('[CFD] save run catalog', e));
     }
@@ -1739,7 +1746,7 @@ async function renameCatalogRun(projectId, runId, name, simulationId) {
 
 /** @param {{projectId?: string, name?: string, simulationId?: string, runId?: string, meshId?: string}} [opts] */
 export async function createDraftRun({ projectId, name, simulationId, runId: requestedId, meshId } = {}) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no active project' };
   const sim = activeStudy(id, simulationId);
   if (!sim || !sim.id) return { ok: false, error: 'Create a simulation first' };
@@ -1793,7 +1800,7 @@ function catalogForRun(projectId, runId, hintSimId) {
 }
 
 export async function updateRunSettings(projectId, partial) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   const runId = partial && (partial.run_id || partial.id);
   if (!id || !runId) return { ok: false, error: 'run_id required' };
   const found = catalogForRun(id, runId, partial && partial.simulation_id);
@@ -1842,7 +1849,7 @@ export async function updateRunSettings(projectId, partial) {
 }
 
 export async function deleteCatalogRun(projectId, runId, simulationId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id || !runId) return { ok: false, error: 'run_id required' };
   if (liveRun && String(liveRun.run_id) === String(runId)) {
     return { ok: false, error: 'Stop the run before deleting it' };
@@ -1891,11 +1898,12 @@ function loadRunDoc(projectId, runId) {
 function writeRunSidecar(projectId, runId, body) {
   const payload = { ...(body || {}), id: runId, run_id: runId, project_id: projectId };
   try {
-    const write = pyJson(
-      'project_cli.py',
-      ['run-upsert', '--project-dir', projectDir(projectId), '--run-id', String(runId), '--sim-id', String((body && body.simulation_id) || '')],
-      payload,
-    );
+    const write = commitRpc('runs.upsert', {
+      project_dir: projectDir(projectId),
+      run_id: String(runId),
+      sim_id: String((body && body.simulation_id) || ''),
+      body: payload,
+    });
     if (write && typeof write.then === 'function') {
       write.catch((e) => console.warn('[CFD] write run sidecar', e));
     }
@@ -1912,20 +1920,13 @@ function persistRunDoc(projectId, doc) {
     const withName = named ? { ...doc, name: named } : doc;
     if (doc.run_id) {
       // Catalog already saved by upsertCatalogRun; stamp run_1 via run-upsert --stamp-project.
-      pyJsonSync(
-        'project_cli.py',
-        [
-          'run-upsert',
-          '--project-dir',
-          projectDir(projectId),
-          '--run-id',
-          String(doc.run_id),
-          '--sim-id',
-          String(withName.simulation_id || ''),
-          '--stamp-project',
-        ],
-        { ...withName, id: doc.run_id, run_id: doc.run_id, project_id: projectId, increment: INCREMENT },
-      );
+      commitRpcSync('runs.upsert', {
+        project_dir: projectDir(projectId),
+        run_id: String(doc.run_id),
+        sim_id: String(withName.simulation_id || ''),
+        stamp_project: true,
+        body: { ...withName, id: doc.run_id, run_id: doc.run_id, project_id: projectId, increment: INCREMENT },
+      });
     }
   } catch (e) {
     console.warn('[CFD] persist run doc', e);
@@ -1980,7 +1981,7 @@ export function startSolve(opts = {}) {
     };
   }
 
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   const found = runFolderOf(id, runId, simulationId) || runFolderOf(id, runId);
   const cat = loadCatalog(id, { simulation_id: simulationId || (found && found.simulation_id) });
   let draft = cat.runs.find((r) => String(r.id) === String(runId)) || found || null;
@@ -2479,7 +2480,7 @@ function persistStopping(projectId, rec, extra) {
 }
 
 function resolveStopTarget(projectId, runId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (liveRun && liveRun.child && liveRun.child.exitCode == null) {
     if (id && liveRun.project_id && String(liveRun.project_id) !== String(id)) {
       return { error: 'The active solve belongs to another project' };
@@ -2515,7 +2516,7 @@ function resolveStopTarget(projectId, runId) {
 
 /** @param {{ projectId?: string, force?: boolean, runId?: string }} [opts] */
 export function stopSolve({ projectId, force, runId } = {}) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   const target = resolveStopTarget(id, runId);
   if (target && target.error) {
     return { ok: false, status: 409, bodyExtra: { error: target.error, increment: INCREMENT } };
@@ -2779,7 +2780,7 @@ export function projectSolveSummary(projectId) {
 }
 
 export function getRunStatus(projectId, runId, simulationId, opts) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   const ctrl = getSimulationControl(id, simulationId);
   const meshes = id ? listGeneratedMeshes(id, simulationId) : [];
   if (!id) {
@@ -2920,7 +2921,7 @@ export function getRunStatus(projectId, runId, simulationId, opts) {
  * form values (unsaved edits included); the run's stored block fills the rest.
  */
 export function previewTransient(projectId, runId, settings, simulationId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no active project' };
   const cat = loadCatalog(id);
   const scoped = runsForActiveStudy(id, cat.runs, simulationId);
@@ -3020,7 +3021,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch {
         body = {};
       }
-      const id = body.project_id || u.searchParams.get('project_id') || readActiveId();
+      const id = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const pv = previewTransient(
         id,
         body.run_id || body.id,
@@ -3053,7 +3054,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch {
         body = {};
       }
-      const id = body.project_id || u.searchParams.get('project_id') || readActiveId();
+      const id = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const updated = await updateRunSettings(id, body);
       if (!updated.ok) return sendJson(res, 400, updated);
       return sendJson(res, 200, { ok: true, ...updated, increment: INCREMENT });
@@ -3065,7 +3066,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch {
         body = {};
       }
-      const id = body.project_id || u.searchParams.get('project_id') || readActiveId();
+      const id = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const deleted = await deleteCatalogRun(id, body.run_id || body.id, body.simulation_id);
       if (!deleted.ok) return sendJson(res, deleted.error && /Stop the run/.test(deleted.error) ? 409 : 400, deleted);
       return sendJson(res, 200, { ok: true, ...deleted, increment: INCREMENT });
@@ -3077,7 +3078,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch {
         body = {};
       }
-      const id = body.project_id || u.searchParams.get('project_id') || readActiveId();
+      const id = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const renamed = await renameCatalogRun(id, body.run_id || body.id, body.name, body.simulation_id);
       if (!renamed.ok) return sendJson(res, 400, renamed);
       return sendJson(res, 200, {
@@ -3096,7 +3097,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch {
         body = {};
       }
-      const id = body.project_id || u.searchParams.get('project_id') || readActiveId();
+      const id = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const runId = body.run_id || body.id;
       const found = catalogForRun(id, runId, body.simulation_id || u.searchParams.get('simulation_id'));
       const cat = found.cat;

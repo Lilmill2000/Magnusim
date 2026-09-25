@@ -47,7 +47,7 @@
  * W22: POST/GET /api/result-controls|/api/area-average persist optional area-average monitors (setup only).
  * FILTERS/attach/W15.1 kick unchanged.
  */
-import { spawn } from 'node:child_process';
+import { spawnFilter, runFilterTool } from './filter-spawn.js';
 import { attachLiveMeshJobReader } from './w16-project-geometry.js';
 import { caseDirAllowedForAttach, caseDirBelongsToProject, caseDirBelongsToStudy, projectIdFromCaseDir } from './project-isolation.js';
 import { listFoamTimeDirs } from './project-layout.js';
@@ -55,10 +55,9 @@ import { liveMeshJobSnapshot, meshGenerateLivePid, persistMeshResult, recoverStu
 import { getActiveSimulation } from './w17-sim-catalog.js';
 import { assembleMeshDoc } from './study-io.js';
 import { runLivePid as runLivePidW27 } from './w27-solve.js';
-import { PYTHON, PY_TOOLS, pyTool } from './python-env.js';
+import { PY_TOOLS, pyTool } from './python-env.js';
 import { callWorker } from './py-json.js';
 import { fieldExportMaySpawnFallback } from './field-export-fallback.js';
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -446,9 +445,14 @@ function parseUrl(reqUrl) {
   return new URL(reqUrl, 'http://127.0.0.1');
 }
 
+export function scopedCacheDir(root, caseDir) {
+  const projectId = String(projectIdFromCaseDir(caseDir) || '_').replace(/[^A-Za-z0-9._-]/g, '_');
+  return join(root, projectId);
+}
+
 function cacheKey(caseDir, time, field) {
   const h = createHash('sha1').update(`${caseDir}|${time}|${field}`).digest('hex').slice(0, 12);
-  return join(CACHE_ROOT, `${field}-${h}`);
+  return join(scopedCacheDir(CACHE_ROOT, caseDir), `${field}-${h}`);
 }
 
 function foamStamp(caseDir, time, field) {
@@ -501,7 +505,7 @@ function runExport(caseDir, time, field, outDir) {
       '--out-dir',
       outDir,
     ];
-    const child = spawn(PYTHON, args, { windowsHide: true });
+    const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => {
@@ -707,7 +711,7 @@ function seriesRangeFromMetas(caseDir, field) {
 
 function runSeriesRange(caseDir, field) {
   return new Promise((resolveP, reject) => {
-    const child = spawn(PYTHON, [EXPORT_SCRIPT, '--case', caseDir, '--field', field, '--series-range'], {
+    const child = spawnFilter([EXPORT_SCRIPT, '--case', caseDir, '--field', field, '--series-range'], {
       windowsHide: true,
     });
     let stdout = '';
@@ -1164,7 +1168,7 @@ function ptCacheKey(caseDir, time, p) {
   ].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
   const root = p.seed_mode === 'faces' ? PT_CACHE_ROOT_W14 : PT_CACHE_ROOT_W8;
-  return join(root, `pt-${h}`);
+  return join(scopedCacheDir(root, caseDir), `pt-${h}`);
 }
 
 function runPtExport(caseDir, time, outDir, p) {
@@ -1206,7 +1210,7 @@ function runPtExport(caseDir, time, outDir, p) {
       '--region',
       p.region || '',
     ];
-    const child = spawn(PYTHON, args, { windowsHide: true });
+    const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => {
@@ -1303,7 +1307,7 @@ function popParamsFromUrl(u) {
 function popCacheKey(caseDir, time, p) {
   const raw = [caseDir, time, p.subdivisions, p.field_variable, p.field, p.points].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
-  return join(POP_CACHE_ROOT, `pop-${h}`);
+  return join(scopedCacheDir(POP_CACHE_ROOT, caseDir), `pop-${h}`);
 }
 
 function runPopExport(caseDir, time, outDir, p) {
@@ -1326,7 +1330,7 @@ function runPopExport(caseDir, time, outDir, p) {
     if (p.field) {
       args.push('--field', p.field);
     }
-    const child = spawn(PYTHON, args, { windowsHide: true });
+    const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => {
@@ -1398,7 +1402,7 @@ function isoCacheKey(caseDir, time, p) {
     p.vectors,
   ].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
-  return join(ISO_CACHE_ROOT, `iso-${h}`);
+  return join(scopedCacheDir(ISO_CACHE_ROOT, caseDir), `iso-${h}`);
 }
 
 function runIsoExport(caseDir, time, outDir, p) {
@@ -1422,7 +1426,7 @@ function runIsoExport(caseDir, time, outDir, p) {
       '--vectors',
       String(p.vectors),
     ];
-    const child = spawn(PYTHON, args, { windowsHide: true });
+    const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => {
@@ -1464,7 +1468,7 @@ function cutParamsFromUrl(u) {
 function liveCutCacheKey(caseDir, time, p) {
   const raw = [caseDir, time, p.field, p.nx.toFixed(3), p.ny.toFixed(3), p.nz.toFixed(3)].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 12);
-  return join(CUT_CACHE_ROOT, `live-${h}`);
+  return join(scopedCacheDir(CUT_CACHE_ROOT, caseDir), `live-${h}`);
 }
 
 function cutCacheKey(caseDir, time, p) {
@@ -1480,7 +1484,7 @@ function cutCacheKey(caseDir, time, p) {
     p.nz.toFixed(4),
   ].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
-  return join(CUT_CACHE_ROOT, `cut-${h}`);
+  return join(scopedCacheDir(CUT_CACHE_ROOT, caseDir), `cut-${h}`);
 }
 
 function runCutExport(caseDir, time, outDir, p) {
@@ -1508,7 +1512,7 @@ function runCutExport(caseDir, time, outDir, p) {
       '--field',
       p.field,
     ];
-    const child = spawn(PYTHON, args, { windowsHide: true });
+    const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => {
@@ -1647,7 +1651,7 @@ function isoVolCacheKey(caseDir, time, p) {
     p.vectors,
   ].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
-  return join(ISO_VOL_CACHE_ROOT, `iv-${h}`);
+  return join(scopedCacheDir(ISO_VOL_CACHE_ROOT, caseDir), `iv-${h}`);
 }
 
 function runIsoVolExport(caseDir, time, outDir, p) {
@@ -1673,7 +1677,7 @@ function runIsoVolExport(caseDir, time, outDir, p) {
       '--vectors',
       String(p.vectors),
     ];
-    const child = spawn(PYTHON, args, { windowsHide: true });
+    const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => {
@@ -1733,7 +1737,7 @@ function inspectParamsFromUrl(u) {
 function inspectCacheKey(caseDir, time, p) {
   const raw = [caseDir, time, p.x, p.y, p.z].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
-  return join(INSPECT_CACHE_ROOT, `insp-${h}`);
+  return join(scopedCacheDir(INSPECT_CACHE_ROOT, caseDir), `insp-${h}`);
 }
 
 function runInspectExport(caseDir, time, outDir, p) {
@@ -1753,7 +1757,7 @@ function runInspectExport(caseDir, time, outDir, p) {
       '--z',
       String(p.z),
     ];
-    const child = spawn(PYTHON, args, { windowsHide: true });
+    const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => {
@@ -1991,13 +1995,15 @@ function meshSectionCacheKey(caseDir, axis, frac) {
     .update(String(caseDir) + '|' + axis + '|' + String(frac) + '|' + polyMeshCacheToken(caseDir))
     .digest('hex')
     .slice(0, 16);
-  return join(MESH_SECTION_CACHE_ROOT, `section-${axis}-${String(frac).replace('.', 'p')}-${h}.vtp`);
+  return join(
+    scopedCacheDir(MESH_SECTION_CACHE_ROOT, caseDir),
+    `section-${axis}-${String(frac).replace('.', 'p')}-${h}.vtp`,
+  );
 }
 
 function runMeshSectionExport(caseDir, axis, frac, outVtp, metaPath) {
-  mkdirSync(MESH_SECTION_CACHE_ROOT, { recursive: true });
-  const r = spawnSync(
-    PYTHON,
+  mkdirSync(dirname(outVtp), { recursive: true });
+  const r = runFilterTool(
     [
       MESH_SECTION_EXPORT_SCRIPT,
       '--case', caseDir,
@@ -2021,13 +2027,12 @@ function meshSurfaceCacheKey(caseDir) {
     .update(String(caseDir) + '|' + polyMeshCacheToken(caseDir))
     .digest('hex')
     .slice(0, 16);
-  return join(MESH_SURFACE_CACHE_ROOT, `surface-${h}.vtp`);
+  return join(scopedCacheDir(MESH_SURFACE_CACHE_ROOT, caseDir), `surface-${h}.vtp`);
 }
 
 function runMeshSurfaceExport(caseDir, outVtp, metaPath) {
-  mkdirSync(MESH_SURFACE_CACHE_ROOT, { recursive: true });
-  const r = spawnSync(
-    PYTHON,
+  mkdirSync(dirname(outVtp), { recursive: true });
+  const r = runFilterTool(
     [MESH_SURFACE_EXPORT_SCRIPT, '--case', caseDir, '--out', outVtp, '--meta', metaPath],
     { encoding: 'utf8', timeout: 180000, windowsHide: true }
   );

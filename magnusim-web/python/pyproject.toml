@@ -8,6 +8,7 @@ version = "0.2.0"
 description = "Python backend for the Magnusim web app: STEP -> mesh -> OpenFOAM (WSL) -> post-processing exports"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
+license = "GPL-3.0-or-later"
 dependencies = [
     "cadquery-ocp>=7.8",
     "pyvista>=0.43",

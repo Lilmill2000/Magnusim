@@ -53,7 +53,7 @@ def test_dump_registry_contains_builtin_keys():
     assert DEFAULT_TRANSIENT_KEY in analysis_keys
 
     assert {row["key"] for row in payload["solver"]} == EXPECTED_SOLVER_KEYS
-    assert {row["key"] for row in payload["mesher"]} == EXPECTED_MESHER_KEYS
+    assert EXPECTED_MESHER_KEYS <= {row["key"] for row in payload["mesher"]}
     assert {row["key"] for row in payload["filter"]} == EXPECTED_FILTER_KEYS
 
     assert len(payload["bc"]) == 7

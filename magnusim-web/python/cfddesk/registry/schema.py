@@ -28,6 +28,9 @@ class SchemaField:
     group: str = ""
     advanced: bool = False
     quantity: str | None = None  # Quantity name from units.quantities; str to avoid import cycles
+    description: str = ""  # Hover help shown by the UI next to the label
+    widget: str = ""  # UI widget override, e.g. "range"; empty picks by kind
+    choice_labels: tuple[str, ...] = ()  # Display text per choice (same order); values stay ``choices``
 
 
 _KIND_TO_JSON: dict[str, dict[str, Any]] = {
@@ -89,10 +92,16 @@ def to_json_schema(fields: list[SchemaField] | tuple[SchemaField, ...]) -> dict[
             x["energy_only"] = True
         if f.rate_kind and f.rate_kind != "none":
             x["rate_kind"] = f.rate_kind
+        if f.widget:
+            x["widget"] = f.widget
+        if f.kind == "choice" and f.choice_labels and len(f.choice_labels) == len(f.choices):
+            x["enum_labels"] = list(f.choice_labels)
         if x:
             prop["x-cfddesk"] = x
         # Always include title for UI
         prop["title"] = f.label
+        if f.description:
+            prop["description"] = f.description
         properties[f.key] = prop
         if _is_required_field(f):
             required.append(f.key)

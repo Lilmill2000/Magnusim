@@ -33,6 +33,7 @@ class ResultFilterType:
     output: FilterOutput
     # Soft-pass: point at results.filters persistence dataclass when one exists.
     model: type | None = None
+    args_from_params: tuple[str, ...] = ()
 
 
 def analysis_has_filter_bags(hub: RegistryHub) -> bool:

@@ -27,8 +27,9 @@ class MeshBackend:
     settings_schema: tuple[SchemaField, ...]
     refinement_types: tuple[str, ...]
     tool: str
-    # Soft-pass stubs — fingerprint / generate wiring stays in Phase 1 paths.
+    # Fingerprint delegates to the project model. multi_region stays false (soft-pass until CHT).
     fingerprint_payload: Callable[..., dict[str, Any]] | None = None
+    generate: Callable[..., str] | None = None
     supports_hex_core: bool = False
     requires: tuple[Requirement, ...] = ()
     frozen: bool = False  # cfmesh: True (hexcore-cfmesh-backup rule)

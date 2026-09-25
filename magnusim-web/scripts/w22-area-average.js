@@ -1,4 +1,5 @@
 import { safeProjectPath } from './safe-path.js';
+import { projectIdOrActive } from './request-scope.js';
 /**
  * W22 — Area average setup (filesystem persistence).
  * Persists projects/<id>/result_controls.json (+ area_average.json mirror)
@@ -23,7 +24,7 @@ import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, writeActiveMirror } from './w17-sim-catalog.js';
 import { deleteOneResultControl, persistOneResultControl, readStudyJson, studyFilePath } from './study-io.js';
 import { envGet } from './env-compat.js';
-import { pyJson, writeProjectCli } from './py-json.js';
+import { commitRpc, writeProjectCli } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -348,11 +349,11 @@ async function persistRcDoc(projectId, sim, aa) {
     note: 'W22 Area average 1 setup — Write control Time step; faces face57+face71. No results/charts until run. No solves.',
   };
 
-  await pyJson(
-    'project_cli.py',
-    ['set-result-controls', '--project-dir', projectDir(projectId), '--sim-id', String(sim.id || '')],
-    doc,
-  );
+  await commitRpc('result_controls.set', {
+    project_dir: projectDir(projectId),
+    sim_id: String(sim.id || ''),
+    body: doc,
+  });
   // set-result-controls writes rc + aa mirror and stamps project.json.
 
   try {
@@ -373,7 +374,7 @@ async function persistRcDoc(projectId, sim, aa) {
 }
 
 async function deleteAreaAverage(projectIdOpt, simIdOpt) {
-  const projectId = projectIdOpt || readActiveId();
+  const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project' } };
   }
@@ -416,11 +417,11 @@ async function deleteAreaAverage(projectIdOpt, simIdOpt) {
       simulation_id: nextAa && nextAa.simulation_id ? nextAa.simulation_id : null,
       updated_at: now,
     };
-    await pyJson(
-      'project_cli.py',
-      ['set-result-controls', '--project-dir', projectDir(projectId), '--sim-id', String((sim && sim.id) || '')],
-      doc,
-    );
+    await commitRpc('result_controls.set', {
+      project_dir: projectDir(projectId),
+      sim_id: String((sim && sim.id) || ''),
+      body: doc,
+    });
     if (proj.result_controls) {
       proj.result_controls.count = kept.length;
       proj.result_controls.names = kept.map((r) => r.name);
@@ -437,7 +438,7 @@ async function deleteAreaAverage(projectIdOpt, simIdOpt) {
 }
 
 async function upsertAreaAverage(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: false,
@@ -509,7 +510,7 @@ async function upsertAreaAverage(body) {
 }
 
 export function getResultControls(projectIdOpt, simIdOpt) {
-  const projectId = projectIdOpt || readActiveId();
+  const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: true,

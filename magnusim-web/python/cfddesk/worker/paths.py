@@ -58,14 +58,22 @@ def set_active_id(project_id: str | None) -> None:
 
 
 def read_sibling(project_id: str, rel: str, sim_id: str | None = None) -> dict[str, Any] | None:
-    from cfddesk.project.paths import study_json_path
+    from cfddesk.project.paths import find_study, study_json_path
     from cfddesk.project.web_writes import assemble_mesh_doc
 
     sid = str(sim_id or "").strip() or None
-    if rel == "mesh.json" and sid:
-        return assemble_mesh_doc(project_dir(project_id), sid)
-    study_path = study_json_path(project_dir(project_id), sid, rel) if sid else None
-    path = study_path if study_path is not None else project_dir(project_id) / rel
+    root = project_dir(project_id)
+    if sid:
+        # A study id that is not in this project must not read the project-root file.
+        if find_study(root, sid) is None:
+            return None
+        if rel == "mesh.json":
+            return assemble_mesh_doc(root, sid)
+        path = study_json_path(root, sid, rel)
+        if path is None:
+            return None
+    else:
+        path = root / rel
     if not path.is_file():
         return None
     try:

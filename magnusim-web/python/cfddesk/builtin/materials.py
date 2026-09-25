@@ -49,12 +49,18 @@ def _newtonian_properties_schema() -> tuple[SchemaField, ...]:
     )
 
 
+def _write_newtonian_files(path: Any, *, nu: float, **_kwargs: Any) -> None:
+    from cfddesk.case.writer import write_transport_properties
+
+    write_transport_properties(path, nu=float(nu))
+
+
 def build_newtonian_incompressible() -> MaterialModel:
     return MaterialModel(
         key="newtonian_incompressible",
         label="Newtonian (incompressible)",
         properties_schema=_newtonian_properties_schema(),
-        write_files=None,  # NOT_yet_done: transportProperties still Phase 1
+        write_files=_write_newtonian_files,
         library=_library_presets(),
     )
 

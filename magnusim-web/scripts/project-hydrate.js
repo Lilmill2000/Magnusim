@@ -1,57 +1,66 @@
 /**
- * One Node read of project + setup JSON. Open must not spawn project_cli.
+ * GET /api/project/hydrate — one hydrate worker call and one tree worker call.
+ * Disk reads stay in the worker.
  */
-import { getProjectById } from './w16-project-geometry.js';
-import { getSimulation } from './w17-simulation.js';
-import { getMaterials } from './w18-materials.js';
-import { getBcs } from './w19-boundary-conditions.js';
-import { getMesh } from './w20-mesh.js';
-import { getRefinements } from './w26-mesh-refinements.js';
-import { getResultControls } from './w22-area-average.js';
-import { getRunStatus, getSimulationControl } from './w27-solve.js';
 
-export function handleProjectHydrate(req, res, u, { sendJson }) {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    return sendJson(res, 405, { error: 'method not allowed for /api/project/hydrate' });
+function withActiveSimulation(raw, projectId) {
+  if (!raw || typeof raw !== 'object') return raw;
+  const simulations = Array.isArray(raw.simulations) ? raw.simulations : [];
+  const active =
+    raw.simulation ||
+    simulations.find((row) => row && String(row.id) === String(raw.active_id || '')) ||
+    simulations[0] ||
+    null;
+  return {
+    ...raw,
+    ok: raw.ok !== false,
+    simulation: active,
+    simulations,
+    active_id: (active && active.id) || raw.active_id || null,
+    project_id: raw.project_id || projectId,
+  };
+}
+
+function withAir(raw) {
+  if (!raw || typeof raw !== 'object' || raw.air) return raw;
+  const list = raw.materials_all || raw.materials;
+  const air = Array.isArray(list) ? list.find((row) => row && row.name) : null;
+  if (!air) return raw;
+  return { ...raw, air, materials_all: raw.materials_all || list };
+}
+
+function sendDefault(res, status, body) {
+  res.statusCode = status;
+  if (typeof res.setHeader === 'function') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
   }
-  const id = String(u.searchParams.get('project_id') || '').trim();
-  if (!id) return sendJson(res, 400, { error: 'project_id required' });
-  const proj = getProjectById(id);
-  if (!proj.ok) return sendJson(res, proj.status, proj.body);
-  const persist = { persist: false };
-  const wantSim = String(u.searchParams.get('simulation_id') || '').trim() || undefined;
-  const sim = getSimulation(id, wantSim);
-  const sid =
-    wantSim ||
-    (sim && sim.body && (sim.body.simulation && sim.body.simulation.id)) ||
-    undefined;
-  const simRec = sim && sim.body && sim.body.simulation;
-  const geom =
-    (simRec && simRec.geometry_id) ||
-    String(u.searchParams.get('geometry_id') || '').trim() ||
-    undefined;
-  const mat = getMaterials(id, geom, sid);
-  const bcs = getBcs(id, geom, sid);
-  const mesh = getMesh(id, geom, sid, {
-    ...persist,
-    meshId: String(u.searchParams.get('mesh_id') || '').trim() || undefined,
-  });
-  const refs = getRefinements(id, sid);
-  const rcs = getResultControls(id, sid);
-  const runs = getRunStatus(id, undefined, sid, { ...persist, slim: true });
-  const ctrl = getSimulationControl(id, sid);
-  return sendJson(res, 200, {
-    ok: true,
-    project_id: id,
-    project: proj.body && proj.body.project,
-    simulation: (sim && sim.body) || null,
-    materials: (mat && mat.body) || null,
-    bcs: (bcs && bcs.body) || null,
-    mesh: (mesh && mesh.body) || null,
-    refinements: (refs && refs.body) || null,
-    runs: (runs && runs.body) || null,
-    result_controls: (rcs && rcs.body) || null,
-    simulation_control: ctrl || null,
-    increment: 'hydrate',
-  });
+  res.end(JSON.stringify(body));
+}
+
+export async function handleProjectHydrate(req, res, url, opts = {}) {
+  const send = (opts && opts.sendJson) || sendDefault;
+  const id = String((url && url.searchParams && url.searchParams.get('project_id')) || '').trim();
+  if (!id) {
+    send(res, 400, { ok: false, error: 'project_id required' });
+    return;
+  }
+  const workerCall = opts && opts.workerCall;
+  if (typeof workerCall !== 'function') {
+    send(res, 503, { ok: false, error: 'worker offline' });
+    return;
+  }
+  const simulation_id = String(url.searchParams.get('simulation_id') || '');
+  try {
+    const hydrated = await workerCall('project.hydrate', { project_id: id, id, simulation_id });
+    const tree = await workerCall('project.tree', { project_id: id, id });
+    const body = hydrated && typeof hydrated === 'object' ? { ...hydrated } : {};
+    body.simulation = withActiveSimulation(body.simulation, id);
+    body.materials = withAir(body.materials);
+    body.tree = (tree && (tree.tree || tree)) || null;
+    send(res, 200, body);
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err);
+    const status = /not found/i.test(msg) ? 404 : /required/i.test(msg) ? 400 : 500;
+    send(res, status, { ok: false, error: msg });
+  }
 }

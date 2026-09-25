@@ -89,7 +89,7 @@ def scale_body1_stl(body1_src: Path, body1_dst: Path, *, scale: float = 0.001) -
         xmin = ymin = zmin = float("inf")
         xmax = ymax = zmax = float("-inf")
         off = 84
-        hdr = b"W23 Body1 from project source.step (mm->m)"[:80].ljust(80, b"\\0")
+        hdr = b"W23 Body1 from project source.step (mm->m)"[:80].ljust(80, b"\0")
         out = bytearray(hdr)
         out += struct.pack("<I", ntri)
         for _ in range(ntri):
@@ -148,7 +148,7 @@ def scale_body1_stl(body1_src: Path, body1_dst: Path, *, scale: float = 0.001) -
             elif s.startswith("outer") or s.startswith("endloop") or s.startswith("endfacet"):
                 out_lines.append(s)
         out_lines.append("endsolid Body1_W23")
-        scaled = ("\\n".join(out_lines) + "\\n").encode("ascii")
+        scaled = ("\n".join(out_lines) + "\n").encode("ascii")
         bounds = {
             "xmin": xmin,
             "xmax": xmax,
@@ -162,6 +162,42 @@ def scale_body1_stl(body1_src: Path, body1_dst: Path, *, scale: float = 0.001) -
 
     body1_dst.write_bytes(scaled)
     return {"bounds_m": bounds, "body1_bytes": len(scaled), "path": str(body1_dst)}
+
+
+def write_patch_stls(
+    tri_dir: Path, points_m, tris, face_ids, face_to_patch: dict[int, str], patch_types: dict[str, str]
+) -> list[dict[str, str]]:
+    """One binary STL per boundary patch (metres) in ``tri_dir``; returns the patch list.
+
+    snappyHexMesh names the patch of a single-region surface after the surface,
+    so each BC patch comes out under the name the solver writes it with. CAD
+    faces with no patch go to ``walls``.
+    """
+    import numpy as np
+
+    tri_dir = Path(tri_dir)
+    tri_dir.mkdir(parents=True, exist_ok=True)
+    pts = np.asarray(points_m, dtype=np.float64)
+    tri = np.asarray(tris, dtype=np.int64)
+    fid = np.asarray(face_ids, dtype=np.int64)
+    names = np.array([face_to_patch.get(int(f), "walls") for f in fid])
+    out: list[dict[str, str]] = []
+    for name in sorted(set(names.tolist())):
+        sel = tri[names == name]
+        c = pts[sel]
+        n = np.cross(c[:, 1] - c[:, 0], c[:, 2] - c[:, 0])
+        n /= np.maximum(np.linalg.norm(n, axis=1), 1e-300)[:, None]
+        rec = np.zeros(len(sel), dtype=np.dtype([("n", "<3f4"), ("v", "<9f4"), ("a", "<u2")]))
+        rec["n"] = n
+        rec["v"] = c.reshape(-1, 9)
+        fname = f"patch_{name}.stl"
+        with (tri_dir / fname).open("wb") as fh:
+            fh.write(f"Magnusim patch {name}".encode("ascii")[:80].ljust(80, b"\0"))
+            fh.write(struct.pack("<I", len(sel)))
+            fh.write(rec.tobytes())
+        ptype = patch_types.get(name, "wall")
+        out.append({"name": name, "type": "wall" if ptype == "wall" else "patch", "file": fname})
+    return out
 
 
 def _padded_box(bounds: dict[str, float]):
@@ -187,8 +223,8 @@ def _padded_box(bounds: dict[str, float]):
 
 def _foam_header(object_name: str) -> str:
     return (
-        "FoamFile\\n{\\n    version     2.0;\\n    format      ascii;\\n"
-        f"    class       dictionary;\\n    object      {object_name};\\n}}\\n"
+        "FoamFile\n{\n    version     2.0;\n    format      ascii;\n"
+        f"    class       dictionary;\n    object      {object_name};\n}}\n"
     )
 
 
@@ -201,22 +237,32 @@ def write_hexdominant_dicts(
     add_layers: bool,
     snap: dict[str, Any],
     bounds_m: dict[str, float],
+    patches: list[dict[str, str]] | None = None,
+    location_m: tuple[float, float, float] | None = None,
 ) -> dict[str, Any]:
-    """Write blockMeshDict / snappyHexMeshDict / surfaceFeatureExtractDict on host."""
+    """Write blockMeshDict / snappyHexMeshDict / surfaceFeatureExtractDict on host.
+
+    With ``patches`` (``write_patch_stls``) each boundary patch is its own
+    surface, so the mesh carries the BC patches; without, ``Body1.stl`` is one
+    wall. ``location_m`` is a point inside the fluid (``cad.location``); the
+    default is near the box centre, which can fall outside a hollow part.
+    """
     case_dir = Path(case_dir)
     system = case_dir / "system"
     system.mkdir(parents=True, exist_ok=True)
     (case_dir / "constant" / "triSurface").mkdir(parents=True, exist_ok=True)
 
     verts, loc = _padded_box(bounds_m)
-    vert_lines = "\\n".join(f"    ({v[0]:.8f} {v[1]:.8f} {v[2]:.8f})" for v in verts)
+    if location_m is not None:
+        loc = tuple(float(v) for v in location_m)
+    vert_lines = "\n".join(f"    ({v[0]:.8f} {v[1]:.8f} {v[2]:.8f})" for v in verts)
     bm = (
         _foam_header("blockMeshDict")
-        + "convertToMeters 1;\\n\\n"
-        + f"vertices\\n(\\n{vert_lines}\\n);\\n\\n"
-        + "blocks\\n(\\n"
-        + f"    hex (0 1 2 3 4 5 6 7) {block} simpleGrading (1 1 1)\\n"
-        + ");\\n\\nedges\\n(\\n);\\n\\nboundary\\n(\\n);\\n\\nmergePatchPairs\\n(\\n);\\n"
+        + "convertToMeters 1;\n\n"
+        + f"vertices\n(\n{vert_lines}\n);\n\n"
+        + "blocks\n(\n"
+        + f"    hex (0 1 2 3 4 5 6 7) {block} simpleGrading (1 1 1)\n"
+        + ");\n\nedges\n(\n);\n\nboundary\n(\n);\n\nmergePatchPairs\n(\n);\n"
     )
     (system / "blockMeshDict").write_text(bm, encoding="utf-8")
 
@@ -225,14 +271,30 @@ def write_hexdominant_dicts(
     snap_nsolve = int(snap.get("n_solve_iter", 100))
     snap_nrelax = int(snap.get("n_relax_iter", 5))
     snap_nfeat = int(snap.get("n_feature_snap_iter", 10))
+    surfaces = [(p["name"], p["file"], p["type"]) for p in patches] if patches else [("Body1", "Body1.stl", "wall")]
     layer_block = (
-        "        Body1\\n        {\\n            nSurfaceLayers 2;\\n        }\\n"
+        "".join(
+            f"        {name}\n        {{\n            nSurfaceLayers 2;\n        }}\n"
+            for name, _f, ptype in surfaces
+            if ptype == "wall"
+        )
         if add_layers
         else ""
     )
-    snap_txt = "\\n".join(
+    geometry_lines = []
+    refine_lines = []
+    for name, fname, ptype in surfaces:
+        geometry_lines += [f"    {fname}", "    {", "        type triSurfaceMesh;", f"        name {name};", "    }"]
+        refine_lines += [
+            f"        {name}",
+            "        {",
+            f"            level ({int(walls_level)} {int(walls_level)});",
+            f"            patchInfo {{ type {ptype}; }}",
+            "        }",
+        ]
+    snap_txt = "\n".join(
         [
-            _foam_header("snappyHexMeshDict").rstrip("\\n"),
+            _foam_header("snappyHexMeshDict").rstrip("\n"),
             "// Hex-dominant Body1 + snappy_policy (host-written)",
             "castellatedMesh true;",
             "snap            true;",
@@ -240,11 +302,7 @@ def write_hexdominant_dicts(
             "",
             "geometry",
             "{",
-            "    Body1.stl",
-            "    {",
-            "        type triSurfaceMesh;",
-            "        name Body1;",
-            "    }",
+            *geometry_lines,
             "}",
             "",
             "castellatedMeshControls",
@@ -265,11 +323,7 @@ def write_hexdominant_dicts(
             "",
             "    refinementSurfaces",
             "    {",
-            "        Body1",
-            "        {",
-            f"            level ({int(walls_level)} {int(walls_level)});",
-            "            patchInfo { type wall; }",
-            "        }",
+            *refine_lines,
             "    }",
             "",
             "    resolveFeatureAngle 20;",
@@ -295,7 +349,7 @@ def write_hexdominant_dicts(
             "    relativeSizes true;",
             "    layers",
             "    {",
-            layer_block.rstrip("\\n"),
+            layer_block.rstrip("\n"),
             "    }",
             f"    expansionRatio {1.1 if add_layers else 1.0};",
             "    finalLayerThickness 0.3;",
@@ -345,31 +399,31 @@ def write_hexdominant_dicts(
 
     sfe = (
         _foam_header("surfaceFeatureExtractDict")
-        + "Body1.stl\\n{\\n    extractionMethod    extractFromSurface;\\n"
-        + "    includedAngle       150;\\n    writeObj            yes;\\n}\\n"
+        + "Body1.stl\n{\n    extractionMethod    extractFromSurface;\n"
+        + "    includedAngle       150;\n    writeObj            yes;\n}\n"
     )
     (system / "surfaceFeatureExtractDict").write_text(sfe, encoding="utf-8")
 
     # Minimal controlDict so OF tools start.
     ctrl = (
         _foam_header("controlDict")
-        + "application     snappyHexMesh;\\nstartFrom       startTime;\\n"
-        + "startTime       0;\\nstopAt          endTime;\\nendTime         0;\\n"
-        + "deltaT          1;\\nwriteControl    timeStep;\\nwriteInterval   1;\\n"
+        + "application     snappyHexMesh;\nstartFrom       startTime;\n"
+        + "startTime       0;\nstopAt          endTime;\nendTime         0;\n"
+        + "deltaT          1;\nwriteControl    timeStep;\nwriteInterval   1;\n"
     )
     (system / "controlDict").write_text(ctrl, encoding="utf-8")
     (system / "fvSchemes").write_text(
         _foam_header("fvSchemes")
-        + "ddtSchemes { default Euler; }\\n"
-        + "gradSchemes { default Gauss linear; }\\n"
-        + "divSchemes { default none; }\\n"
-        + "laplacianSchemes { default Gauss linear corrected; }\\n"
-        + "interpolationSchemes { default linear; }\\n"
-        + "snGradSchemes { default corrected; }\\n",
+        + "ddtSchemes { default Euler; }\n"
+        + "gradSchemes { default Gauss linear; }\n"
+        + "divSchemes { default none; }\n"
+        + "laplacianSchemes { default Gauss linear corrected; }\n"
+        + "interpolationSchemes { default linear; }\n"
+        + "snGradSchemes { default corrected; }\n",
         encoding="utf-8",
     )
     (system / "fvSolution").write_text(
-        _foam_header("fvSolution") + "solvers {}\\n",
+        _foam_header("fvSolution") + "solvers {}\n",
         encoding="utf-8",
     )
 
@@ -387,6 +441,7 @@ def write_hexdominant_dicts(
             "n_feature_snap_iter": snap_nfeat,
         },
         "snappy_geometry_rev": int(SNAPPY_GEOMETRY_REV),
+        "patches": [{"name": n, "type": t} for n, _f, t in surfaces],
     }
 
 
@@ -449,7 +504,7 @@ def read_feature_marks(log_path: Path) -> dict[str, Any]:
     text = Path(log_path).read_text(errors="ignore") if Path(log_path).is_file() else ""
     marks = [
         int(x)
-        for x in re.findall(r"Marked for refinement due to explicit features\\s*:\\s*(\\d+)", text)
+        for x in re.findall(r"Marked for refinement due to explicit features\s*:\s*(\d+)", text)
     ]
     total = sum(marks) if marks else 0
     return {"marks": marks, "total": total}

@@ -89,7 +89,9 @@ export function mergeStudyOrder(walked, preferred) {
   for (const s of preferred || []) {
     const id = s && s.id != null ? String(s.id) : '';
     if (!id || seen.has(id) || !byId.has(id)) continue;
-    const w = byId.get(id);
+    const walkedRow = byId.get(id);
+    // A field the study folder does not record (undefined) must not blank the index value.
+    const w = Object.fromEntries(Object.entries(walkedRow).filter(([, v]) => v !== undefined));
     const preferredSort = Number(s.sort_index);
     const walkedSort = Number(w.sort_index);
     out.push({
@@ -151,38 +153,36 @@ export function assignStudyNames(list) {
 /** Shared-JSON claiming is gone; each study folder is created with its own files. */
 export function claimUntaggedRecords(_projectId, _simId, _geomId) {}
 
+/** Study fields kept in the study folder's id.json (the walked catalog reads these back). */
+function studyIdRecord(sim) {
+  return {
+    id: sim.id,
+    name: sim.name,
+    geometry_id: sim.geometry_id,
+    kind: 'simulation',
+    analysis: sim.analysis,
+    analysis_type: sim.analysis_type,
+    turbulence_model: sim.turbulence_model,
+    time_dependency: sim.time_dependency,
+    algorithm: sim.algorithm,
+    created_at: sim.created_at,
+    updated_at: sim.updated_at || new Date().toISOString(),
+    sort_index: Number.isFinite(Number(sim.sort_index)) ? Number(sim.sort_index) : undefined,
+  };
+}
+
 export function writeActiveMirror(projectId, sim) {
   if (!sim) return null;
   const walked = findStudy(projectDir(projectId), sim.id);
   if (walked && walked.dir) {
-    writeIdFile(walked.dir, {
-      id: sim.id,
-      name: sim.name,
-      geometry_id: sim.geometry_id,
-      kind: 'simulation',
-      analysis: sim.analysis,
-      analysis_type: sim.analysis_type,
-      turbulence_model: sim.turbulence_model,
-      time_dependency: sim.time_dependency,
-      algorithm: sim.algorithm,
-      created_at: sim.created_at,
-      updated_at: sim.updated_at || new Date().toISOString(),
-      sort_index: Number.isFinite(Number(sim.sort_index)) ? Number(sim.sort_index) : undefined,
-    });
+    writeIdFile(walked.dir, studyIdRecord(sim));
     if (sim.name && walked.folder !== undefined) {
       const parent = join(walked.geometry_dir, 'simulations');
       try {
+        // Same record after a rename; a shorter copy here used to drop analysis_type
+        // and turbulence_model, which then blanked them in the merged catalog.
         const nextDir = renameFolderTo(walked.dir, parent, sim.name);
-        writeIdFile(nextDir, {
-          id: sim.id,
-          name: sim.name,
-          geometry_id: sim.geometry_id,
-          kind: 'simulation',
-          analysis: sim.analysis,
-          time_dependency: sim.time_dependency,
-          algorithm: sim.algorithm,
-          sort_index: Number.isFinite(Number(sim.sort_index)) ? Number(sim.sort_index) : undefined,
-        });
+        writeIdFile(nextDir, studyIdRecord(sim));
       } catch (_) {}
     }
   }

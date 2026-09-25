@@ -15,3 +15,9 @@ class PluginManifest:
     requires: list[Requirement] = field(default_factory=list)
     provides: dict[str, list[str]] = field(default_factory=dict)
     ui: str | None = None  # relative dir under the plugin folder, e.g. "ui"
+    ui_entry: str = "index.js"  # file under `ui`, loaded as /plugins/<key>/ui/<entry>
+    authors: list[str] = field(default_factory=list)
+    description: str = ""
+    overrides: list[str] = field(default_factory=list)
+    api_version: str = "1.0"
+    source: str = ""  # "local" (plugins/) or "entry_point"

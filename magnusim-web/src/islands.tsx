@@ -1,19 +1,37 @@
 import { createRoot, type Root } from 'react-dom/client';
-import type { ComponentType } from 'react';
+import { Component, type ComponentType, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 export interface IslandProps {
   projectId?: string;
   simId?: string;
   itemId?: string;
+  /** ScopeId for this study or mesh. Islands do not read sibling catalogs. */
+  scope?: string;
   panelId: string;
 }
 
 type IslandComponent = ComponentType<IslandProps>;
 
+export class PanelBoundary extends Component<{ children: ReactNode }, { error: string }> {
+  state = { error: '' };
+
+  static getDerivedStateFromError(error: unknown): { error: string } {
+    return { error: error instanceof Error ? error.message : 'This panel failed to load.' };
+  }
+
+  render() {
+    if (this.state.error) {
+      return <p role="alert" data-panel-boundary="1">{this.state.error}</p>;
+    }
+    return this.props.children;
+  }
+}
+
 const registry = new Map<string, IslandComponent>();
 const roots = new Map<string, Root>();
 const queryClient = new QueryClient();
+let mountSerial = 0;
 
 export function registerIsland(panelId: string, Component: IslandComponent): void {
   registry.set(panelId, Component);
@@ -45,9 +63,12 @@ export function mountIsland(panelId: string, props: Omit<IslandProps, 'panelId'>
     root = createRoot(slot);
     roots.set(panelId, root);
   }
+  const serial = ++mountSerial;
   root.render(
     <QueryClientProvider client={queryClient}>
-      <Component {...props} panelId={panelId} />
+      <PanelBoundary key={serial}>
+        <Component {...props} panelId={panelId} />
+      </PanelBoundary>
     </QueryClientProvider>,
   );
 }
@@ -58,7 +79,8 @@ export function unmountIsland(panelId: string): void {
     root.unmount();
     roots.delete(panelId);
   }
-  document.getElementById(panelId)?.querySelector(':scope > .cfd-island')?.remove();
+  const host = document.getElementById(panelId);
+  host?.querySelector(':scope > .cfd-island')?.remove();
 }
 
 export function dispatchPanelDone(): void {

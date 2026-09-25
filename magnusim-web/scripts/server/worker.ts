@@ -27,6 +27,12 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
 }
 
+// The Python worker answers one request at a time, in the order sent, so the
+// oldest unanswered request is the one it is working on and the rest wait on
+// it. A request that timed out here is still unanswered there.
+const TRACE = process.env.MAGNUSIM_WORKER_TRACE === '1';
+const TRACE_SLOW_MS = 1000;
+
 export interface WorkerClientOptions {
   python?: string;
   cwd?: string;
@@ -34,9 +40,31 @@ export interface WorkerClientOptions {
   timeoutMs?: number;
   maxDeaths?: number;
   backoffMs?: number[];
+  /** Label for trace lines. */
+  name?: string;
+  /** Second worker that takes the slow calls (see isDataLaneMethod). */
+  dataLane?: WorkerClient | null;
 }
 
 const DEFAULT_BACKOFF = [250, 750, 2000];
+
+/**
+ * Result-volume and CAD calls load whole meshes or STEP files and can hold a
+ * worker for tens of seconds (opening a transient run's results prefetches
+ * every frame). They share in-process caches (volume_cache, cad_cache) with
+ * each other and nothing else, so they run in their own worker process and
+ * project reads and writes (runs.upsert, project.tree, filter.validate, …)
+ * never queue behind them.
+ */
+export function isDataLaneMethod(method: string): boolean {
+  return method.startsWith('cad.') || (method.startsWith('filter.') && method !== 'filter.validate');
+}
+
+/**
+ * Calls after which the registry in the calling worker changed. The data lane
+ * keeps its own registry (plugin result filters), so it reloads too.
+ */
+const REGISTRY_CHANGES = new Set(['registry.reload', 'plugins.enable', 'plugins.disable']);
 
 export class WorkerClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -55,9 +83,15 @@ export class WorkerClient extends EventEmitter {
   private readonly env: NodeJS.ProcessEnv;
   private queue: Array<() => void> = [];
   private draining = false;
+  private lastReplyAt = 0;
+  private readonly inFlight = new Map<number, { method: string; sentAt: number }>();
+  private readonly name: string;
+  private readonly dataLane: WorkerClient | null;
 
   constructor(opts: WorkerClientOptions = {}) {
     super();
+    this.name = opts.name || 'worker';
+    this.dataLane = opts.dataLane || null;
     this.python = opts.python || PYTHON;
     this.cwd = opts.cwd || PY_ROOT;
     this.timeoutMs = opts.timeoutMs ?? 30_000;
@@ -78,10 +112,13 @@ export class WorkerClient extends EventEmitter {
     this.stopping = false;
     this.deaths = 0;
     this.started = true;
+    // The data lane spawns on its first call.
+    if (this.dataLane) this.dataLane.stopping = false;
     if (!this.child) this.spawnChild();
   }
 
   stop(): void {
+    this.dataLane?.stop();
     this.stopping = true;
     this.started = false;
     if (this.restartTimer) {
@@ -105,6 +142,9 @@ export class WorkerClient extends EventEmitter {
   }
 
   async call(method: string, params: unknown = {}, timeoutMs?: number): Promise<unknown> {
+    if (this.dataLane && isDataLaneMethod(method)) {
+      return this.dataLane.call(method, params, timeoutMs);
+    }
     if (this.stopping) {
       throw new WorkerUnavailableError('worker stopped');
     }
@@ -117,12 +157,17 @@ export class WorkerClient extends EventEmitter {
     if (!this.alive) {
       this.spawnChild();
     }
-    return new Promise((resolve, reject) => {
+    if (TRACE) this.countCall(method);
+    const result = await new Promise((resolve, reject) => {
       this.queue.push(() => {
         this.send(method, params, timeoutMs).then(resolve, reject);
       });
       this.drain();
     });
+    if (this.dataLane && this.dataLane.alive && REGISTRY_CHANGES.has(method)) {
+      await this.dataLane.call('registry.reload', {}).catch(() => {});
+    }
+    return result;
   }
 
   private drain(): void {
@@ -166,10 +211,14 @@ export class WorkerClient extends EventEmitter {
       const id = this.nextId++;
       const wait = timeoutMs ?? this.timeoutMs;
       const timer = setTimeout(() => {
+        const note = this.busyNote(id);
         this.pending.delete(id);
-        reject(new Error(`worker RPC timeout: ${method}`));
+        const err = new Error(`worker RPC timeout: ${method} after ${wait} ms${note}`);
+        if (TRACE) console.warn(`[${this.name}]`, err.message);
+        reject(err);
       }, wait);
       this.pending.set(id, { resolve, reject, timer });
+      this.inFlight.set(id, { method, sentAt: Date.now() });
       const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params });
       try {
         child.stdin.write(msg + '\n', (err) => {
@@ -213,6 +262,7 @@ export class WorkerClient extends EventEmitter {
     child.on('close', () => {
       if (this.child && this.child !== child) return;
       this.child = null;
+      this.inFlight.clear();
       this.failPending(new WorkerUnavailableError('worker exited'));
       if (this.stopping) return;
       this.deaths += 1;
@@ -242,6 +292,30 @@ export class WorkerClient extends EventEmitter {
       /* ignore */
     }
     this.child = null;
+    this.inFlight.clear();
+  }
+
+  private callCounts = new Map<string, number>();
+  private countsSince = Date.now();
+
+  private countCall(method: string): void {
+    this.callCounts.set(method, (this.callCounts.get(method) || 0) + 1);
+    const now = Date.now();
+    if (now - this.countsSince < 30_000) return;
+    const rows = [...this.callCounts].sort((a, b) => b[1] - a[1]).map(([m, n]) => `${m}=${n}`);
+    console.warn(`[${this.name}] calls in last ${Math.round((now - this.countsSince) / 1000)} s: ${rows.join(' ')}; ${this.inFlight.size} in flight`);
+    this.callCounts.clear();
+    this.countsSince = now;
+  }
+
+  /** What the worker was doing while request `id` waited, for timeout errors. */
+  private busyNote(id: number): string {
+    const head = this.inFlight.entries().next().value;
+    if (!head) return '';
+    const [headId, p] = head;
+    const busyFor = Date.now() - Math.max(p.sentAt, this.lastReplyAt);
+    if (headId === id) return ` (worker busy with it for ${busyFor} ms)`;
+    return ` (worker busy with ${p.method} for ${busyFor} ms, ${this.inFlight.size - 1} request(s) queued behind it)`;
   }
 
   private failPending(err: Error): void {
@@ -268,6 +342,16 @@ export class WorkerClient extends EventEmitter {
       const id = msg.id;
       if (typeof id !== 'number') continue;
       const pending = this.pending.get(id);
+      const sent = this.inFlight.get(id);
+      this.inFlight.delete(id);
+      const now = Date.now();
+      if (TRACE && sent) {
+        const ran = now - Math.max(sent.sentAt, this.lastReplyAt);
+        if (ran >= TRACE_SLOW_MS) {
+          console.warn(`[${this.name}] ${sent.method}${pending ? '' : ' (timed out)'} ran ${ran} ms after waiting ${now - sent.sentAt - ran} ms`);
+        }
+      }
+      this.lastReplyAt = now;
       if (!pending) continue;
       clearTimeout(pending.timer);
       this.pending.delete(id);
@@ -298,7 +382,7 @@ export class WorkerClient extends EventEmitter {
 let singleton: WorkerClient | null = null;
 
 export function getWorker(): WorkerClient {
-  if (!singleton) singleton = new WorkerClient();
+  if (!singleton) singleton = new WorkerClient({ dataLane: new WorkerClient({ name: 'data-worker' }) });
   return singleton;
 }
 

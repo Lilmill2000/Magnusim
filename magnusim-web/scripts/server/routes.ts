@@ -5,6 +5,7 @@ import { sendBytes, weakEtag } from './http.ts';
 import { writeSse, type JobManager, type JobRecord } from './jobs.ts';
 import { canonicalFilterKey, LEGACY_FILTER_PATHS } from './legacy-aliases.ts';
 import type { RequestContext, Router } from './router.ts';
+import { serveRegisteredFilter, startRegisteredJob } from './registered-tool.js';
 import { RpcError, WorkerUnavailableError, type WorkerClient } from './worker.ts';
 
 export interface RouteDeps {
@@ -108,11 +109,17 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     ctx.url.searchParams.forEach((v, k) => {
       params[k] = v;
     });
+    let validated: { plugin?: string; key?: string } = {};
     try {
-      await deps.worker.call('filter.validate', { key, params });
+      validated = (await deps.worker.call('filter.validate', { key, params })) as { plugin?: string };
     } catch (err) {
       const { status, body } = rpcStatus(err);
       ctx.sendJson(status, body);
+      return;
+    }
+    const plugin = String(validated.plugin || 'builtin');
+    if (plugin !== 'builtin') {
+      serveRegisteredFilter(deps, ctx, { ...validated, key: String(validated.key || key) });
       return;
     }
     return deps.serveLegacyFilter(ctx, key);
@@ -134,6 +141,47 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     return filterHandler(ctx, 'fields');
   });
 
+  const setupRpc = new Set([
+    'materials.set',
+    'bcs.set',
+    'sim.set',
+    'sim.catalog.set',
+    'sim.get',
+    'mesh.set',
+    'bc.menu',
+    'registry.reload',
+  ]);
+
+  router.post('/api/worker', async (ctx) => {
+    let body: Record<string, unknown> = {};
+    try {
+      body = await ctx.readJsonBody();
+    } catch {
+      ctx.sendJson(400, { error: 'invalid JSON body', ok: false });
+      return;
+    }
+    const method = String(body.method || '');
+    if (!setupRpc.has(method)) {
+      ctx.sendJson(400, { error: 'method not allowed', ok: false });
+      return;
+    }
+    const raw = (body.params && typeof body.params === 'object' ? body.params : {}) as Record<string, unknown>;
+    if (method === 'bc.menu' || method === 'registry.reload') {
+      return workerJson(deps, ctx, method, {});
+    }
+    const project_id = String(raw.project_id || raw.id || ctx.scope.projectId || '');
+    if (!project_id) {
+      ctx.sendJson(400, { error: 'project_id required', ok: false });
+      return;
+    }
+    const params: Record<string, unknown> = { project_id };
+    if (method !== 'sim.get') {
+      params.sim_id = String(raw.sim_id || raw.simulation_id || ctx.scope.simulationId || '');
+      if (raw.body && typeof raw.body === 'object') params.body = raw.body;
+    }
+    return workerJson(deps, ctx, method, params);
+  });
+
   router.post('/api/jobs', async (ctx) => {
     let body: Record<string, unknown> = {};
     try {
@@ -143,32 +191,72 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       return;
     }
     const kind = String(body.kind || '');
-    if (kind !== 'mesh' && kind !== 'solve' && kind !== 'cad_import') {
-      ctx.sendJson(400, { error: 'kind must be mesh | solve | cad_import' });
-      return;
-    }
     const params = (body.params && typeof body.params === 'object' ? body.params : body) as Record<
       string,
       unknown
     >;
+    if (!params.project_id && ctx.scope.projectId) params.project_id = ctx.scope.projectId;
+    if (!params.simulation_id && ctx.scope.simulationId) params.simulation_id = ctx.scope.simulationId;
+    if (!params.geometry_id && ctx.scope.geometryId) params.geometry_id = ctx.scope.geometryId;
+    let spec: { tool?: string; scope?: string; tool_path?: string; args_from_params?: string[] } | null =
+      null;
+    try {
+      const described = (await deps.worker.call('jobs.describe', { kind })) as {
+        job?: { tool?: string; scope?: string; tool_path?: string; args_from_params?: string[] };
+      };
+      spec = described.job || null;
+    } catch (err) {
+      const { status, body: errBody } = rpcStatus(err);
+      const unknown = /unknown job/i.test(String(errBody.error || ''));
+      ctx.sendJson(unknown ? 400 : status, errBody);
+      return;
+    }
+    if (!spec || !spec.tool) {
+      ctx.sendJson(400, { error: 'unknown job kind' });
+      return;
+    }
     const project = String(params.project_id || params.projectId || body.project || '');
-    const job = deps.jobs.create(kind, params, project || undefined);
-    if (kind === 'mesh') deps.startMeshJob(params, job);
-    else if (kind === 'solve') deps.startSolveJob(params, job);
-    else deps.startCadImportJob(params, job);
+    let job;
+    try {
+      job = deps.jobs.create(kind, params, project || undefined, { scope: spec.scope });
+    } catch (e) {
+      ctx.sendJson(400, { error: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    const starters: Record<string, (p: Record<string, unknown>, started: JobRecord) => void> = {
+      'generate_standard.py': (p, started) => deps.startMeshJob(p, started),
+      'solve.sh': (p, started) => deps.startSolveJob(p, started),
+      'convert_step_to_stl.py': (p, started) => deps.startCadImportJob(p, started),
+    };
+    const start = starters[spec.tool];
+    if (start) start(params, job);
+    else startRegisteredJob(deps.jobs, spec, params, job);
     ctx.sendJson(202, { ok: true, job });
   });
 
   router.get('/api/jobs', (ctx) => {
     const kind = ctx.url.searchParams.get('kind') || undefined;
-    const project = ctx.url.searchParams.get('project') || undefined;
+    const project = ctx.scope.projectId || ctx.url.searchParams.get('project') || '';
+    if (!project) {
+      ctx.sendJson(400, { error: 'project_id required' });
+      return;
+    }
     ctx.sendJson(200, { ok: true, jobs: deps.jobs.list({ kind, project }) });
   });
 
   router.get('/api/jobs/:id/events', (ctx) => {
+    const project = ctx.scope.projectId;
     const job = deps.jobs.get(ctx.params.id);
+    if (!project) {
+      ctx.sendJson(400, { error: 'project_id required' });
+      return;
+    }
     if (!job) {
       ctx.sendJson(404, { error: 'job not found' });
+      return;
+    }
+    if (job.project !== project) {
+      ctx.sendJson(403, { error: 'job belongs to another project' });
       return;
     }
     ctx.res.statusCode = 200;
@@ -200,17 +288,36 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   });
 
   router.get('/api/jobs/:id', (ctx) => {
+    const project = ctx.scope.projectId;
     const job = deps.jobs.get(ctx.params.id);
+    if (!project) {
+      ctx.sendJson(400, { error: 'project_id required' });
+      return;
+    }
     if (!job) {
       ctx.sendJson(404, { error: 'job not found' });
+      return;
+    }
+    if (job.project !== project) {
+      ctx.sendJson(403, { error: 'job belongs to another project' });
       return;
     }
     ctx.sendJson(200, { ok: true, job });
   });
 
   router.post('/api/jobs/:id/stop', (ctx) => {
-    const job = deps.jobs.stop(ctx.params.id);
+    const project = ctx.scope.projectId;
+    if (!project) {
+      ctx.sendJson(400, { error: 'project_id required' });
+      return;
+    }
+    const existing = deps.jobs.get(ctx.params.id);
+    const job = deps.jobs.stop(ctx.params.id, project);
     if (!job) {
+      if (existing && existing.project !== project) {
+        ctx.sendJson(403, { error: 'job belongs to another project' });
+        return;
+      }
       ctx.sendJson(404, { error: 'job not found' });
       return;
     }
@@ -224,6 +331,51 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   router.post('/api/plugins/:key/disable', async (ctx) =>
     workerJson(deps, ctx, 'plugins.disable', { key: ctx.params.key }),
   );
+
+  const pluginDispatch = async (ctx: RequestContext) => {
+    const key = String(ctx.params.key || '');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(key) || /[. ]$/.test(key)) {
+      ctx.sendJson(400, { error: 'invalid plugin key' });
+      return;
+    }
+    const pluginsRoot = resolve(deps.webRoot, 'plugins');
+    const pluginRoot = resolve(pluginsRoot, key);
+    if (!pathIsWithin(pluginRoot, pluginsRoot)) {
+      ctx.sendJson(400, { error: 'plugin path escapes plugins root' });
+      return;
+    }
+    const rest = String(ctx.params.rest || '').replace(/^\/+/, '');
+    if (!rest || rest.split('/').includes('..') || rest.includes('\\')) {
+      ctx.sendJson(400, { error: 'invalid plugin method' });
+      return;
+    }
+    const params: Record<string, unknown> =
+      ctx.method === 'GET' ? {} : ((await ctx.readJsonBody().catch(() => ({}))) as Record<string, unknown>);
+    if (ctx.method === 'GET') {
+      ctx.url.searchParams.forEach((value, name) => {
+        params[name] = value;
+      });
+    }
+    try {
+      const result = await deps.worker.call('plugin.dispatch', {
+        key,
+        method: rest,
+        params,
+        scope: {
+          project_id: ctx.scope.projectId,
+          simulation_id: ctx.scope.simulationId,
+          geometry_id: ctx.scope.geometryId,
+          case_dir: ctx.scope.caseDir,
+        },
+      });
+      ctx.sendJson(200, result);
+    } catch (err) {
+      const { status, body } = rpcStatus(err);
+      ctx.sendJson(status, body);
+    }
+  };
+  router.get('/api/plugin/:key/**rest', pluginDispatch);
+  router.post('/api/plugin/:key/**rest', pluginDispatch);
 
   router.get('/plugins/:key/ui/**rest', async (ctx) => {
     let ui = 'ui';

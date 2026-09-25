@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -40,12 +41,34 @@ export function geometryFolderName(filenameOrName) {
   return 'Geometry_' + sanitizeFolderName(stem, 'Geometry');
 }
 
+// Windows refuses to rename over a file another process has open (the worker
+// reads these JSON files constantly). Retry briefly, as web_writes.atomic_write does.
+const RENAME_LOCK_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+let atomicSerial = 0;
+
 export function writeJsonAtomic(filePath, doc) {
   mkdirSync(dirname(filePath), { recursive: true });
-  const tmp = filePath + '.tmp';
+  // Unique per write so two writers of the same file never share a temp file.
+  atomicSerial = (atomicSerial + 1) % 1e9;
+  const tmp = `${filePath}.${process.pid}.${atomicSerial}.tmp`;
   writeFileSync(tmp, JSON.stringify(doc, null, 2), 'utf8');
-  renameSync(tmp, filePath);
-  return filePath;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      renameSync(tmp, filePath);
+      return filePath;
+    } catch (err) {
+      if (!RENAME_LOCK_CODES.has(err && err.code) || attempt >= 7) {
+        try {
+          unlinkSync(tmp);
+        } catch {
+          /* already gone */
+        }
+        throw err;
+      }
+      Atomics.wait(sleepCell, 0, 0, 50 * (attempt + 1));
+    }
+  }
 }
 
 export function readJsonFile(filePath) {

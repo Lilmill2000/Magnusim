@@ -49,10 +49,14 @@ def test_describe_emits_numerics_and_control_for_analysis():
     for row in (steady, transient):
         assert isinstance(row.get("schema"), dict)
         assert "turbulence_model" in row["schema"]["properties"]
+        # Energy / passive species never reached a solve; Phase 6 removed them.
+        assert set(row["schema"]["properties"]) == {"turbulence_model"}
         _assert_json_schema_bag(
             row["numerics_schema"],
-            required_props={"residual_u", "residual_p", "relax_u", "relax_p", "ddt_default"},
+            required_props=set(),
         )
+        # The time scheme lives on the run panel (a select); no free-text ddt field.
+        assert "ddt_default" not in row["numerics_schema"]["properties"]
         _assert_json_schema_bag(
             row["control_schema"],
             required_props={"end_time", "write_interval", "write_control"},
@@ -62,8 +66,14 @@ def test_describe_emits_numerics_and_control_for_analysis():
     assert "delta_t" in transient["control_schema"]["properties"]
     assert transient["control_schema"]["properties"]["delta_t"]["default"] == 0.001
 
-    assert steady["numerics_schema"]["properties"]["ddt_default"]["default"] == "steadyState"
-    assert transient["numerics_schema"]["properties"]["ddt_default"]["default"] == "Euler"
+    # Steady SIMPLE numerics the solve reads; defaults match the pre-Phase-6 writer.
+    steady_numerics = steady["numerics_schema"]["properties"]
+    assert set(steady_numerics) == {"residual_u", "residual_p", "relax_u", "relax_p", "n_non_orthogonal"}
+    assert steady_numerics["residual_u"]["default"] == 1e-4
+    assert steady_numerics["n_non_orthogonal"]["default"] == 3
+    assert all(prop.get("description") for prop in steady_numerics.values())
+    # PIMPLE settings come from the run panel, so the transient row has none.
+    assert transient["numerics_schema"]["properties"] == {}
     assert steady["time_dependency"] == "steady"
     assert transient["time_dependency"] == "transient"
     assert steady["default_turbulence"] == "kOmegaSST"
@@ -78,7 +88,8 @@ def test_dump_registry_analysis_includes_numerics_control():
     for key in (DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY):
         row = by_key[key]
         assert "numerics_schema" in row and "control_schema" in row
-        assert row["numerics_schema"]["properties"]["residual_u"]["default"] == 1e-6
+        if key == DEFAULT_STEADY_KEY:
+            assert row["numerics_schema"]["properties"]["residual_u"]["default"] == 1e-4
         assert "end_time" in row["control_schema"]["properties"]
 
     # Non-analysis kinds must not invent empty numerics/control keys.

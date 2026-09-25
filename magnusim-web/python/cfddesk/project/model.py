@@ -1776,11 +1776,13 @@ def _ensure_geometry_volumes(
     if geom.bodies:
         return geom, "present"
     step = Path(geom.step_path) if geom.step_path else None
-    if step is not None and not step.is_file() and project_dir is not None:
+    from cfddesk.cad.io import geometry_file_exists
+
+    if step is not None and not geometry_file_exists(step) and project_dir is not None:
         cand = Path(project_dir) / geom.step_path
-        if cand.is_file():
+        if geometry_file_exists(cand):
             step = cand
-    if step is not None and step.is_file():
+    if step is not None and geometry_file_exists(step):
         try:
             from cfddesk.cad.step import load_step
 

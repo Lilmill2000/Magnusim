@@ -1,20 +1,31 @@
-import { registerIsland, mountIsland, clearIslands } from '../islands';
-import { MeshForm } from './MeshPanels';
+import { clearIslands } from '../islands';
+import { replacePanel } from '../plugin-api';
+import { BcPanel } from './bcs/BcPanel';
+import { MaterialsPanel } from './materials/MaterialsPanel';
+import { GeometryPanel } from './geometry/GeometryPanel';
+import { MeshInspect, MeshSettings } from './mesh/MeshPanel';
+import { PluginsStep } from './prefs/PluginsStep';
+import { RunControl } from './run/RunControl';
+import { SimulationDefaults, SimulationHub } from './simulation/SimulationPanel';
 
-/** Live panels already have HTML chrome. Only mount islands that do not dump a second form. */
-const MAP: Record<string, Parameters<typeof registerIsland>[1]> = {
-  'panel-mesh-form': MeshForm,
-};
-
+/** Host flyouts register through the same function plugins will use. */
 export function registerAllIslands(): void {
   clearIslands();
-  for (const [id, Component] of Object.entries(MAP)) {
-    registerIsland(id, Component);
-  }
+  replacePanel('panel-incompressible-defaults', SimulationDefaults);
+  replacePanel('cs-type-list', SimulationHub);
+  replacePanel('panel-materials-hub', MaterialsPanel);
+  replacePanel('panel-material-picker', MaterialsPanel);
+  replacePanel('panel-air-material', MaterialsPanel);
+  replacePanel('panel-bcs-hub', BcPanel);
+  replacePanel('panel-bc-picker', BcPanel);
+  replacePanel('panel-bc-editor', BcPanel);
+  replacePanel('panel-mesh-form', MeshSettings);
+  replacePanel('panel-mesh-inspect', MeshInspect);
+  replacePanel('panel-sim-control', RunControl);
+  replacePanel('panel-geometry', GeometryPanel);
+  replacePanel('wiz-plugins', PluginsStep);
 }
 
 export function mountAllIslands(): void {
-  for (const id of Object.keys(MAP)) {
-    if (document.getElementById(id)) mountIsland(id, {});
-  }
+  /* Islands mount when the flyout opens, with that study's scope. */
 }

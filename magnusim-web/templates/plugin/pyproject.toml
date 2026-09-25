@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magnusim-plugin-template"
+version = "0.1.0"
+description = "Copy-paste Magnusim plugin"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+dependencies = ["cfddesk"]
+
+[project.entry-points."cfddesk.plugins"]
+template-demo = "plugin:register"

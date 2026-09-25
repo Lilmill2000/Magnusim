@@ -3,16 +3,29 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { PYTHON } from '../python-env.js';
 import {
+  closeAfterExit,
   inspectGeneratedCase,
   liveChildIsRunning,
   meshCloseStatus,
   meshStopMatchesLive,
   pidIsAlive,
+  resolveMeshBackend,
   settingsForMesh,
 } from '../w21-mesh-generate.js';
 
 describe('mesh generate handshake', () => {
+  it('runs the mesher picked in the panel engine select', () => {
+    // The panel writes the registry key to advanced.mesh_engine (settingsFrom in MeshPanel.tsx).
+    const pick = (engine) => resolveMeshBackend({ ui_mesh_engine: engine, advanced: { mesh_engine: engine } });
+    assert.equal(pick('snappy_hexdominant'), 'snappy_hexdominant');
+    assert.equal(pick('standard'), 'standard');
+    assert.equal(resolveMeshBackend({}), 'standard');
+    assert.equal(resolveMeshBackend({ algorithm: 'Hex-dominant' }), 'snappy_hexdominant');
+  });
+
   it('does not treat a dead child as a live lock', () => {
     assert.equal(liveChildIsRunning(null), false);
     assert.equal(liveChildIsRunning({ killed: true, pid: 1, exitCode: null }), false);
@@ -82,5 +95,78 @@ describe('mesh generate handshake', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('generator that dies abnormally', () => {
+  const hasPython = spawnSync(PYTHON, ['--version'], { windowsHide: true }).status === 0;
+
+  /**
+   * A python parent that leaves a child holding its stdout, then exits: what a
+   * killed venv launcher or a crashed generator looks like. 'close' only comes
+   * once the orphan exits, which for a gmsh/WSL child can be never.
+   */
+  function spawnOrphaningParent() {
+    const code =
+      'import subprocess, sys, time\n' +
+      "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n" +
+      "print('GRANDCHILD', g.pid, flush=True)\n" +
+      'time.sleep(0.2)\n' +
+      'sys.exit(3)\n';
+    return spawn(PYTHON, ['-c', code], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  }
+
+  it('frees the live lock and finishes the job even when orphans hold the pipes', { skip: !hasPython }, async () => {
+    const child = spawnOrphaningParent();
+    let out = '';
+    child.stdout.on('data', (b) => {
+      out += b.toString();
+    });
+    let orphaned = 0;
+    let grandchild = 0;
+    closeAfterExit(child, {
+      graceMs: 300,
+      onOrphaned: () => {
+        orphaned += 1;
+        grandchild = Number((out.match(/GRANDCHILD (\d+)/) || [])[1]) || 0;
+      },
+    });
+    let exitedAt = 0;
+    child.on('exit', () => {
+      exitedAt = Date.now();
+    });
+    try {
+      const closed = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(null), 15000);
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          resolve({ code, lagMs: Date.now() - exitedAt });
+        });
+      });
+      assert.equal(liveChildIsRunning(child), false, 'a dead generator is not "already running"');
+      assert.ok(closed, "'close' fires so the job is finalized and the queue kicked");
+      assert.equal(closed.code, 3);
+      assert.ok(closed.lagMs < 5000, `close came ${closed.lagMs} ms after exit`);
+      assert.equal(orphaned, 1);
+      assert.ok(grandchild > 0 && pidIsAlive(grandchild), 'the orphan was still holding the pipe');
+    } finally {
+      if (grandchild) {
+        try {
+          process.kill(grandchild);
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  });
+
+  it('leaves a normal exit alone', async () => {
+    const child = spawn(process.execPath, ['-e', "process.stdout.write('ok')"], { stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.resume();
+    let orphaned = 0;
+    closeAfterExit(child, { graceMs: 200, onOrphaned: () => (orphaned += 1) });
+    await new Promise((resolve) => child.on('close', resolve));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(orphaned, 0);
   });
 });

@@ -19,12 +19,15 @@ def register_builtins(hub: RegistryHub) -> None:
     """
     from cfddesk.builtin.filters import register_filters
     from cfddesk.builtin.incompressible import register_incompressible
+    from cfddesk.builtin.jobs import register_job_kinds
     from cfddesk.builtin.materials import register_materials
     from cfddesk.builtin.meshers import register_meshers
     from cfddesk.builtin.monitors import register_monitors
     from cfddesk.builtin.solvers_openfoam import register_openfoam_solvers
     from cfddesk.registry.bc import register_builtin_bcs
 
+    # Jobs first so mesher.generate can resolve them after load_all.
+    register_job_kinds(hub)
     # Solvers / meshers / bc / material / monitor first so analysis bag keys resolve.
     register_openfoam_solvers(hub)
     register_meshers(hub)

@@ -466,11 +466,18 @@ def set_materials(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") 
 
 
 def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dict[str, Any]:
-    from cfddesk.project.paths import assemble_study_bcs, find_study, persist_child_item
+    from cfddesk.project.paths import (
+        adopt_legacy_bcs,
+        assemble_study_bcs,
+        find_study,
+        persist_child_item,
+    )
 
     raw = body if isinstance(body, dict) else {"boundary_conditions": body}
     sid = str(sim_id or (raw.get("simulation_id") if isinstance(raw, dict) else "") or "").strip()
     path = _study_dest(project_dir, "boundary_conditions.json", sid)
+    # Legacy aggregate-only rows get folders first: the mirror rewrite below would drop them.
+    adopt_legacy_bcs(project_dir, sid)
     _proj, mode, mirror = write_through_project(
         project_dir, "boundary_conditions", raw, sim_id=sid
     )

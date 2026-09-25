@@ -44,17 +44,21 @@ import { prefersCollapseCompletedSections } from '../prefs';
 import { convertQuantity, preferredUnit, unitIsImperial } from '../units/convert';
 import { isIsland, mountIsland, unmountIsland } from '../islands';
 import { useProjectStore } from '../store/project';
+import { useJobsStore } from '../store/jobs';
+import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
+import { subscribeJobEvents } from '../api/client';
+import { scopeBelongsToProject, scopeKey, studyIdFromScope } from '../scope';
 import {
   bindJobQueuePointerDrag,
   canQueueSolveJob,
   dropMissingQueueJobs,
   JOB_QUEUE_STORAGE_KEY,
-  isJobQueueStorageKey,
   mergeStoredQueueItems,
   parseStoredQueueItems,
   dropQueueJobsForMesh,
   isTerminalJobStatus,
   meshGenerateButtonKind,
+  computeBusyLabel,
   meshIsQueuedOrGenerating,
   meshProgressPhase,
   resolveRunMeshId,
@@ -91,14 +95,18 @@ import {
   snapMatchesLiveMeshJob,
   viewportChipPrefersResultsLoad,
 } from './jobQueueOrder';
+import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
+import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
+import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js';
+import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId } from '../viewer/pick.ts';
 
 const jobQueue = { items: [], kicking: false, kickTimer: null };
 try { window.__CFD_JOB_QUEUE__ = jobQueue; } catch (_) {}
-const liveCompute = { kind: null, run_id: null, mesh_id: null };
+const liveCompute = { kind: null, run_id: null, mesh_id: null, project_id: null };
 
 function currentStudyId() {
   try {
-    return (typeof w17State !== 'undefined' && w17State.simulation && w17State.simulation.id) || '';
+    return (typeof studyCatalog !== 'undefined' && studyCatalog.simulation && studyCatalog.simulation.id) || '';
   } catch (_) {
     return '';
   }
@@ -139,7 +147,7 @@ function hashProjectQs(prefix = '?') {
     if (route.view === 'workbench' && route.projectId) {
       let qs = `${prefix}project_id=${encodeURIComponent(route.projectId)}`;
       const gid =
-        (typeof w17State !== 'undefined' && w17State.simulation && w17State.simulation.geometry_id) ||
+        (typeof studyCatalog !== 'undefined' && studyCatalog.simulation && studyCatalog.simulation.geometry_id) ||
         (typeof w16State !== 'undefined' &&
           (w16State.selectedGeomId || (w16State.geometry && w16State.geometry.id))) ||
         '';
@@ -147,8 +155,8 @@ function hashProjectQs(prefix = '?') {
       const sid = currentStudyId();
       if (sid) qs += `&simulation_id=${encodeURIComponent(sid)}`;
       const mid =
-        (typeof w20State !== 'undefined' &&
-          ((w20State && w20State.active_id) || (w20State && w20State.mesh && w20State.mesh.id))) ||
+        (typeof meshCatalog !== 'undefined' &&
+          ((meshCatalog && meshCatalog.active_id) || (meshCatalog && meshCatalog.mesh && meshCatalog.mesh.id))) ||
         '';
       if (mid) qs += `&mesh_id=${encodeURIComponent(mid)}`;
       return qs;
@@ -191,7 +199,8 @@ const CASE_DIR = {
   valueOf() { return getCaseDir(); },
   [Symbol.toPrimitive]() { return getCaseDir(); },
 };
-let currentTime = '50';
+// Only a real time directory of the attached case sets this — never a default.
+let currentTime = '';
 function getTime() { return String(currentTime); }
 const TIME = { toString() { return getTime(); }, valueOf() { return getTime(); } };
 
@@ -879,8 +888,11 @@ let popMeta = null;
 let popSeries = null;
 let popLoadToken = 0;
 
+// Off until the user adds the filter (its #iso-block ships hidden and
+// unchecked). An on default ran a hidden volume contour whenever the
+// results prefetch attached a case before resetPostFilters().
 const isoState = {
-  enabled: true,
+  enabled: false,
   iso_scalar: 'Velocity Magnitude',
   iso_value: 11.1,
   coloring: 'Pressure',
@@ -890,8 +902,9 @@ const isoState = {
 let isoMeta = null;
 let isoLoadToken = 0;
 
+// Off by default for the same reason as isoState.
 const ivState = {
-  enabled: true,
+  enabled: false,
   iso_scalar: 'Velocity Magnitude',
   iso_value_low: 0.25,
   iso_value_high: 0.75,
@@ -6351,10 +6364,13 @@ function confirmAction(opts) {
   if (heading) heading.textContent = o.title || 'Delete?';
   if (copy) copy.textContent = o.copy || '';
   if (yes) yes.textContent = o.yes || 'Delete';
+  // notice: an information dialog with one button (no Cancel).
+  if (no) no.hidden = !!o.notice;
   modal.hidden = false;
   return new Promise((resolve) => {
     const done = (ok) => {
       modal.hidden = true;
+      if (no) no.hidden = false;
       yes?.removeEventListener('click', onYes);
       no?.removeEventListener('click', onNo);
       backdrop?.removeEventListener('click', onNo);
@@ -7234,56 +7250,6 @@ async function loadField(field, opts) {
 }
 
 /** Prove helper: apply position/orientation/miss and return cut fingerprint delta */
-window.__CFD_W7_APPLY__ = async function applyW7( partial ) {
-  if (partial && typeof partial === 'object') {
-    if (partial.position != null) {
-      cutState.position = Number(partial.position);
-      cutState.positionUserSet = true;
-    }
-    if (partial.axis) cutState.axis = String(partial.axis).toUpperCase();
-    if (partial.inverse != null) cutState.inverse = !!partial.inverse;
-    if (partial.enabled != null) cutState.enabled = !!partial.enabled;
-    if (partial.opacity != null) cutState.opacity = Number(partial.opacity);
-    if (partial.clipModel != null) cutState.clipModel = !!partial.clipModel;
-    if (partial.partsColor != null) cutState.partsColor = !!partial.partsColor;
-    if (partial.partsStyle != null) cutState.partsStyle = partial.partsStyle === 'solid' ? 'solid' : 'field';
-    if (partial.partsSolid != null) cutState.partsSolid = String(partial.partsSolid);
-    if (partial.partsOpacity != null) cutState.partsOpacity = Number(partial.partsOpacity);
-    if (partial.vectors != null) {
-      const plane = resultPlanes.find((p) => resultPlaneOn(p)) || resultPlanes[0];
-      if (plane) {
-        if (partial.vectors && typeof partial.vectors === 'object') applyPlaneVectorState(plane, partial.vectors);
-        else plane.vectors = !!partial.vectors;
-        cutState.vectors = resultPlanes.some((p) => !!p.vectors);
-        try { renderResultPlaneList(); } catch (_) {}
-      }
-    }
-    // Multi-plane UI: mirror apply onto the first enabled result plane.
-    const plane = resultPlanes.find((p) => resultPlaneOn(p)) || resultPlanes[0];
-    if (plane) {
-      if (partial.position != null) plane.position = cutState.position;
-      if (partial.axis) plane.axis = cutState.axis;
-      if (partial.inverse != null) plane.inverse = cutState.inverse;
-      if (partial.enabled != null) plane.enabled = cutState.enabled;
-      if (partial.opacity != null) plane.opacity = cutState.opacity;
-      if (partial.clipModel != null) plane.clipModel = cutState.clipModel;
-      try { renderResultPlaneList(); } catch (_) {}
-    }
-    syncChromeFromState();
-  }
-  const miss = !!(partial && partial.miss);
-  updateCuttingPlane({ miss });
-  if (!miss) {
-    try { await loadCutPlane(); } catch (e) { console.error('[CFD] W7 apply cut', e); }
-  }
-  const fp = cutFingerprint(activeResultCutPolyData());
-  publishW7({
-    cut_fingerprint: fp,
-    last_apply: partial || null,
-    prove_ts: Date.now(),
-  });
-  return window.__CFD_W7__;
-};
 
 function applyPtPartialToState(partial) {
   if (!partial || typeof partial !== 'object') return;
@@ -7316,22 +7282,7 @@ function applyPtPartialToState(partial) {
   }
 }
 
-window.__CFD_W8_APPLY__ = async function applyW8(partial) {
-  applyPtPartialToState(partial);
-  syncPtChromeFromState();
-  await loadParticleTrace();
-  publishW8({ last_apply: partial || null, prove_ts: Date.now() });
-  return window.__CFD_W8__;
-};
 
-window.__CFD_W14_APPLY__ = async function applyW14(partial) {
-  applyPtPartialToState(partial || {});
-  if (!partial || partial.seed_mode == null) ptState.seed_mode = 'faces';
-  syncPtChromeFromState();
-  await loadParticleTrace();
-  publishW8({ last_apply: partial || null, prove_ts: Date.now() });
-  return window.__CFD_W14__;
-};
 
 // Pulses apply to Spheres and Comets; comet length only to Comets.
 function syncPtLookVisibility() {
@@ -7664,39 +7615,6 @@ async function loadPlotOverPath(overrides) {
   return window.__CFD_W9__;
 }
 
-window.__CFD_W9_APPLY__ = async function applyW9(partial) {
-  if (partial && typeof partial === 'object') {
-    if (partial.points) {
-      popState.points = partial.points.map((p) => [Number(p[0]), Number(p[1]), Number(p[2])]);
-    }
-    if (partial.subdivisions != null)
-      popState.subdivisions = Math.max(0, Math.floor(Number(partial.subdivisions) || 0));
-    if (partial.field_variable != null) popState.field_variable = String(partial.field_variable);
-    if (partial.enabled != null) popState.enabled = !!partial.enabled;
-    if (partial.pick != null) popState.pick = String(partial.pick || '');
-    if (partial.clear || partial.honest_empty_no_points) {
-      popState.points = [];
-    }
-    if (partial.miss_mesh) {
-      // far outside mesh bounds
-      popState.points = [
-        [50.15239776670933, 50.15240000188351, 50.30488109588623],
-        [100.15239776670933, 100.1524000018835, 100.30488109588623],
-      ];
-    }
-    syncPopChromeFromState();
-  }
-  // Generate only when points exist (matches Generate disabled gate); prove can force
-  const n = (popState.points || []).length;
-  if (n < 1) {
-    clearPopSeries();
-    publishW9({ last_apply: partial || null, generate_enabled: false, prove_ts: Date.now() });
-    return window.__CFD_W9__;
-  }
-  const out = await loadPlotOverPath();
-  publishW9({ last_apply: partial || null, prove_ts: Date.now() });
-  return window.__CFD_W9__;
-};
 
 
 
@@ -7752,7 +7670,7 @@ function publishW10(extra) {
     increment: 'W10',
     ready: !!(window.__CFD_W6__ && window.__CFD_W6__.ready && isoMeta),
     approach:
-      'server-side volume contour: Vite /api/iso-surface -> export_iso_surface.py reads case .cfddesk-prepared.vtu volume UnstructuredGrid -> pyvista contour([iso_value], scalars=iso_field) -> VTP; client loads real iso cells (not a solid colored shell)',
+      'server-side volume contour: Vite /api/iso-surface -> export_iso_surface.py reads the case volume at time (OpenFOAM fields; legacy prepared VTU fallback) -> pyvista contour([iso_value], scalars=iso_field) -> VTP; client loads real iso cells (not a solid colored shell)',
     api_url: apiIsoSurfaceUrl(),
     api_meta_url: apiIsoSurfaceMetaUrl(),
     iso_state: { ...isoState },
@@ -7863,27 +7781,6 @@ function syncIsoChromeFromState() {
   if (en) en.checked = !!isoState.enabled;
 }
 
-window.__CFD_W10_APPLY__ = async function applyW10(partial) {
-  if (partial && typeof partial === 'object') {
-    if (partial.iso_scalar != null) isoState.iso_scalar = String(partial.iso_scalar);
-    if (partial.iso_value != null) isoState.iso_value = Number(partial.iso_value);
-    if (partial.coloring != null) isoState.coloring = String(partial.coloring);
-    if (partial.opacity != null) isoState.opacity = Number(partial.opacity);
-    if (partial.vectors != null) isoState.vectors = !!partial.vectors;
-    if (partial.enabled != null) isoState.enabled = !!partial.enabled;
-    if (partial.honest_empty_default) {
-      isoState.iso_scalar = 'Velocity Magnitude';
-      isoState.iso_value = 11.1;
-      isoState.coloring = 'Pressure';
-      isoState.opacity = 1;
-      isoState.vectors = false;
-    }
-    syncIsoChromeFromState();
-  }
-  const out = await loadIsoSurface();
-  publishW10({ last_apply: partial || null, prove_ts: Date.now() });
-  return window.__CFD_W10__;
-};
 
 
 
@@ -7943,7 +7840,7 @@ function publishW11(extra) {
     increment: 'W11',
     ready: !!(window.__CFD_W6__ && window.__CFD_W6__.ready && ivMeta),
     approach:
-      'server-side volume threshold: Vite /api/iso-volume -> export_iso_volume.py reads case .cfddesk-prepared.vtu volume UnstructuredGrid -> map normalized low/high onto live scalar min/max -> pyvista threshold([lo,hi], scalars=iso_field) -> extract_surface VTP; client loads real threshold volume (not Iso Surface contour rebrand)',
+      'server-side volume threshold: Vite /api/iso-volume -> export_iso_volume.py reads the case volume at time (OpenFOAM fields; legacy prepared VTU fallback) -> map normalized low/high onto live scalar min/max -> pyvista threshold([lo,hi], scalars=iso_field) -> extract_surface VTP; client loads real threshold volume (not Iso Surface contour rebrand)',
     api_url: apiIsoVolumeUrl(),
     api_meta_url: apiIsoVolumeMetaUrl(),
     iv_state: { ...ivState },
@@ -8062,35 +7959,6 @@ async function loadIsoVolume(overrides) {
   return window.__CFD_W11__;
 }
 
-window.__CFD_W11_APPLY__ = async function applyW11(partial) {
-  if (partial && typeof partial === 'object') {
-    if (partial.iso_scalar != null) ivState.iso_scalar = String(partial.iso_scalar);
-    if (partial.iso_value_low != null) ivState.iso_value_low = Number(partial.iso_value_low);
-    if (partial.iso_value_high != null) ivState.iso_value_high = Number(partial.iso_value_high);
-    if (partial.coloring != null) ivState.coloring = String(partial.coloring);
-    if (partial.opacity != null) ivState.opacity = Number(partial.opacity);
-    if (partial.vectors != null) ivState.vectors = !!partial.vectors;
-    if (partial.enabled != null) ivState.enabled = !!partial.enabled;
-    if (partial.banked_defaults || partial.honest_empty_inverted) {
-      ivState.iso_scalar = 'Velocity Magnitude';
-      ivState.coloring = 'Pressure';
-      ivState.opacity = 1;
-      ivState.vectors = false;
-      ivState.enabled = true;
-      if (partial.honest_empty_inverted) {
-        ivState.iso_value_low = 0.9;
-        ivState.iso_value_high = 0.1;
-      } else {
-        ivState.iso_value_low = 0.25;
-        ivState.iso_value_high = 0.75;
-      }
-    }
-    syncIvChromeFromState();
-  }
-  const out = await loadIsoVolume();
-  publishW11({ last_apply: partial || null, prove_ts: Date.now() });
-  return window.__CFD_W11__;
-};
 
 
 /* Field surface loads after a real case attach — not on empty / new projects. */
@@ -8214,7 +8082,7 @@ function meshSectionFrac(raw) {
 
 function getLiveMeshDoc() {
   try {
-    if (window.__CFD_W20_STATE__) return window.__CFD_W20_STATE__.mesh || null;
+    if (meshCatalog) return meshCatalog.mesh || null;
   } catch (_) {}
   try {
     if (window.__CFD_W20__ && window.__CFD_W20__.mesh) return window.__CFD_W20__.mesh;
@@ -8230,7 +8098,7 @@ function getLiveMeshResult() {
 function meshBelongsToCurrentStudy(mesh) {
   if (!mesh) return false;
   try {
-    const study = typeof w17State !== 'undefined' ? w17State.simulation : null;
+    const study = typeof studyCatalog !== 'undefined' ? studyCatalog.simulation : null;
     if (study && mesh.simulation_id && String(mesh.simulation_id) !== String(study.id)) return false;
   } catch (_) {}
   return true;
@@ -8317,7 +8185,7 @@ function currentMeshOwnsJob() {
 function meshList() {
   let study = null;
   try {
-    study = (w17State && w17State.simulation) || null;
+    study = (studyCatalog && studyCatalog.simulation) || null;
   } catch (_) {
     study = null;
   }
@@ -8330,7 +8198,7 @@ function meshListAll() {
   // recurses when meshes_all is empty and blows the stack on hydrate/create,
   // leaving a geometry-only tree (Materials/BC/Mesh/Run never appear).
   try {
-    const st = window.__CFD_W20_STATE__;
+    const st = meshCatalog;
     if (st && Array.isArray(st.meshes_all)) return st.meshes_all;
     if (st && Array.isArray(st.meshes)) return st.meshes;
   } catch (_) {}
@@ -8342,7 +8210,7 @@ function geometryNameForMesh(m) {
   if (m.geometry_name) return String(m.geometry_name);
   const gid = m.geometry_id;
   if (!gid) return '';
-  const sims = (typeof w17State !== 'undefined' && w17State.simulations) || [];
+  const sims = (typeof studyCatalog !== 'undefined' && studyCatalog.simulations) || [];
   const study = sims.find((s) => s && String(s.geometry_id) === String(gid));
   if (study && study.geometry_name) return String(study.geometry_name);
   const geoms = typeof importedGeometries === 'function' ? importedGeometries() : [];
@@ -8367,7 +8235,7 @@ function meshDisplayName(mesh) {
   let m = mesh || null;
   let s = null;
   try {
-    const st = window.__CFD_W20_STATE__;
+    const st = meshCatalog;
     if (!m && st) m = st.mesh;
     s = (m && m.settings) || (st && st.settings) || null;
   } catch (_) {}
@@ -8417,7 +8285,7 @@ function withMeshCacheParams(params) {
 
 function clearIdleMeshJobCounts() {
   if (jobState.status === 'running') {
-    try { syncMeshFinishedChrome(); } catch (_) {}
+    try { publishMeshJobState(); } catch (_) {}
     return;
   }
   jobState.n_cells = null;
@@ -8439,16 +8307,16 @@ function clearIdleMeshJobCounts() {
     jobState.status = 'idle';
     jobState.mode = 'idle';
   }
-  try { syncMeshFinishedChrome(); } catch (_) {}
+  try { publishMeshJobState(); } catch (_) {}
 }
 
 function applyLiveMeshCountsToJob() {
   const live = getLiveMeshResult();
   if (!live) return;
   if (live.status !== 'running' && !isGeneratedMeshReady()) return;
-  const viewingId = w20State && w20State.mesh && w20State.mesh.id;
+  const viewingId = meshCatalog && meshCatalog.mesh && meshCatalog.mesh.id;
   if (jobState.mesh_id && viewingId && String(jobState.mesh_id) !== String(viewingId)) {
-    try { syncMeshFinishedChrome(); } catch (_) {}
+    try { publishMeshJobState(); } catch (_) {}
     return;
   }
   if (
@@ -8458,7 +8326,7 @@ function applyLiveMeshCountsToJob() {
     return;
   }
   if (meshGenerateJobIsLive() && viewingId && String(jobState.mesh_id) !== String(viewingId)) {
-    try { syncMeshFinishedChrome(); } catch (_) {}
+    try { publishMeshJobState(); } catch (_) {}
     return;
   }
   const generateHeld =
@@ -8466,7 +8334,7 @@ function applyLiveMeshCountsToJob() {
   if (generateHeld && live.status && live.status !== 'running') {
     const liveId = typeof liveMeshJobId === 'function' ? liveMeshJobId() : jobState.mesh_id;
     if (liveId && viewingId && String(liveId) !== String(viewingId)) {
-      try { syncMeshFinishedChrome(); } catch (_) {}
+      try { publishMeshJobState(); } catch (_) {}
       return;
     }
   }
@@ -8477,7 +8345,7 @@ function applyLiveMeshCountsToJob() {
     liveComputeSnap().kind === 'solve' ||
     (typeof liveSolveIsRunning === 'function' && liveSolveIsRunning());
   if (solveLive && !meshGenerateJobIsLive()) {
-    try { syncMeshFinishedChrome(); } catch (_) {}
+    try { publishMeshJobState(); } catch (_) {}
     return;
   }
   if (live.case_dir) {
@@ -8490,7 +8358,7 @@ function applyLiveMeshCountsToJob() {
   if (live.n_cells != null) jobState.n_cells = live.n_cells;
   if (live.n_points != null) jobState.n_points = live.n_points;
   if (live.n_faces != null) jobState.n_faces = live.n_faces;
-  if (w20State && w20State.mesh && w20State.mesh.id) jobState.mesh_id = w20State.mesh.id;
+  if (meshCatalog && meshCatalog.mesh && meshCatalog.mesh.id) jobState.mesh_id = meshCatalog.mesh.id;
   if (currentStudyId()) jobState.simulation_id = currentStudyId();
   if (live.counts_source) jobState.counts_source = live.counts_source;
   if (live.mesh_path) jobState.mesh_path = live.mesh_path;
@@ -8506,7 +8374,7 @@ function applyLiveMeshCountsToJob() {
     try { clearLiveCompute('mesh'); } catch (_) {}
     try { stopMeshElapsedClock(); } catch (_) {}
   }
-  try { syncMeshFinishedChrome(); } catch (_) {}
+  try { publishMeshJobState(); } catch (_) {}
 }
 
 function hasPostResults() {
@@ -8901,7 +8769,7 @@ async function openRunResults(runId) {
   if (!runId) return;
   const early = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
   if (!runHasStarted(early)) return;
-  w27State.selected_run_id = runId;
+  runCatalog.selected_run_id = runId;
   if (typeof expandRunFolders === 'function') expandRunFolders(runId);
   const selKey = 'runresults:' + runId;
   if (String(resultsOpeningRunId || '') === String(runId)) return;
@@ -8934,7 +8802,7 @@ async function openRunResults(runId) {
           rec.n_saved_times = times.length;
           rec.last_saved_iteration = Number(times[times.length - 1]) || rec.last_saved_iteration;
         }
-        try { syncSimulationTree(); } catch (_) {}
+        try { refreshSetupTree(); } catch (_) {}
       }
     } catch (_) {}
   }
@@ -9052,12 +8920,9 @@ function syncMeshInspectPanel(statusText) {
       line.textContent = statusText || '—';
     }
   }
-  const delForm = document.getElementById('mesh-delete');
   const delInspect = document.getElementById('mesh-inspect-delete');
   const chip = document.getElementById('mesh-inspect-chip');
   const showDel = isGeneratedMeshReady();
-  const hasMesh = !!(w20State && w20State.mesh && (w20State.mesh.id || w20State.active_id));
-  if (delForm) delForm.hidden = !hasMesh;
   if (delInspect) delInspect.hidden = !showDel;
   if (chip) {
     const fromRun = String((treeUi && treeUi.selectedKey) || '').startsWith('runmeshitem:');
@@ -9065,8 +8930,7 @@ function syncMeshInspectPanel(statusText) {
   }
   const chipTitle = document.querySelector('.mesh-chip-title');
   if (chipTitle) chipTitle.textContent = meshDisplayName();
-  const inspectTitle = document.querySelector('#panel-mesh-inspect .mat-panel-title');
-  if (inspectTitle) inspectTitle.textContent = meshDisplayName();
+  /* The #panel-mesh-inspect flyout is a React island; it reads cfd:mesh-job. */
 }
 
 /* Camera framing.
@@ -9918,7 +9782,7 @@ window.__CFD_HIDE_MESH_INSPECT__ = hideMeshInspect;
 
 function compareMeshPool() {
   try {
-    const st = window.__CFD_W20_STATE__;
+    const st = meshCatalog;
     if (st && Array.isArray(st.meshes_all) && st.meshes_all.length) return st.meshes_all;
   } catch (_) {}
   return meshList();
@@ -9946,7 +9810,7 @@ function meshByCompareId(id) {
 function defaultCompareIds() {
   const meshes = generatedMeshesForCompare();
   let activeId = null;
-  try { activeId = window.__CFD_W20_STATE__ && window.__CFD_W20_STATE__.active_id; } catch (_) {}
+  try { activeId = meshCatalog && meshCatalog.active_id; } catch (_) {}
   const left = meshes.find((m) => m.id === String(activeId || '')) || meshes[0] || null;
   const right = (left && meshes.find((m) => m.id !== left.id)) || meshes[1] || null;
   return {
@@ -12103,7 +11967,6 @@ async function loadMeshSectionForInspect(opts) {
   publishW7({ mesh_section: true, cut_fingerprint: cutFingerprint(pd), source_fingerprint: fp });
   return window.__CFD_W25B__;
 }
-window.__CFD_W25B_LOAD_MESH_SECTION__ = loadMeshSectionForInspect;
 
 function applyRightOrthoWallZoom() {
   const cam = renderer.getActiveCamera();
@@ -12133,7 +11996,6 @@ function applyRightOrthoWallZoom() {
   renderWindow.render();
   return { ox, cy, cz, parallel_scale: scale, face: 'RIGHT', bounds: b.slice() };
 }
-window.__CFD_W25B_RIGHT_WALL_ZOOM__ = applyRightOrthoWallZoom;
 
 
 const filtersPanel = document.getElementById('filters-panel');
@@ -14004,9 +13866,17 @@ function apiTimesUrl() {
 }
 
 async function ensureAnimTimes() {
-  const r = await fetch(apiTimesUrl());
-  const j = await r.json();
+  let j = { times: [] };
+  if (hasAttachedCase()) {
+    const r = await fetch(apiTimesUrl());
+    j = await r.json();
+  } else {
+    // No case attached: no times, and /api/times?case=null would only 404.
+    // Still yield so the module-init call publishes after init, as before.
+    await null;
+  }
   const times = Array.isArray(j.times) ? j.times.map(String) : [];
+  if (!times.length) currentTime = '';
   const prevStart = animState.start;
   const prevEnd = animState.end;
   animState.times = times;
@@ -15689,40 +15559,6 @@ function clearInspect(keepArmed) {
   return publishW13({ cleared: true });
 }
 
-window.__CFD_W13_APPLY__ = async function applyW13(partial) {
-  const p = partial || {};
-  if (p.arm === true || p.armed === true) {
-    inspectState.armed = true;
-    inspectState.enabled = true;
-    syncInspectReadout();
-    publishW13();
-  }
-  if (p.arm === false || p.disarm === true || p.armed === false) {
-    inspectState.armed = false;
-    if (p.clear !== false && !p.x && p.position == null) {
-      // disarm without forcing clear unless asked
-    }
-    syncInspectReadout();
-    publishW13();
-  }
-  if (p.clear === true) {
-    return clearInspect(!!p.keep_armed || !!inspectState.armed);
-  }
-  if (p.miss_mesh === true) {
-    inspectState.armed = true;
-    return runInspectAt(10, 10, 10, { time: p.time });
-  }
-  let xyz = null;
-  if (Array.isArray(p.position) && p.position.length >= 3) xyz = p.position;
-  else if (p.x != null && p.y != null && p.z != null) xyz = [p.x, p.y, p.z];
-  if (xyz) {
-    inspectState.armed = true;
-    inspectState.enabled = true;
-    return runInspectAt(xyz[0], xyz[1], xyz[2], { time: p.time, additive: !!p.additive });
-  }
-  syncInspectReadout();
-  return publishW13({ last_apply: p });
-};
 
 function inspectClickIgnored(target) {
   if (!target || !target.closest) return false;
@@ -15992,7 +15828,7 @@ function sameRunId(a, b) {
 }
 
 function solveEtaMs(run) {
-  const rec = run || (window.__CFD_W27_STATE__ && window.__CFD_W27_STATE__.run);
+  const rec = run || (runCatalog && runCatalog.run);
   if (!rec || rec.status !== 'running') return null;
   const etaStage = typeof solveDisplayStage === 'function' ? solveDisplayStage(rec) : rec.stage;
   if (etaStage && etaStage !== 'solve') return null;
@@ -16004,7 +15840,7 @@ function solveEtaMs(run) {
   if (!Number.isFinite(start)) return null;
   const elapsed = Date.now() - start;
   if (elapsed < 2500) return null;
-  const w27 = window.__CFD_W27_STATE__;
+  const w27 = runCatalog;
   const viewed = w27 && w27.run;
   const sameViewed = sameRunId(rec, viewed);
   const transientRun = typeof runRecIsTransient === 'function'
@@ -16047,7 +15883,7 @@ function stopMeshElapsedClock() {
 function startMeshElapsedClock() {
   stopMeshElapsedClock();
   jobState.elapsed_timer = setInterval(() => {
-    try { syncMeshFinishedChrome(); } catch (_) {}
+    try { publishMeshJobState(); } catch (_) {}
   }, 1000);
 }
 
@@ -16082,7 +15918,7 @@ function syncJobStatusChrome() {
   if (pathEl) pathEl.textContent = jobState.path_kind || jobState.mode || '-';
   if (note) note.textContent = jobState.note || '';
   try { syncJobQueueChrome(); } catch (_) {}
-  syncMeshFinishedChrome();
+  publishMeshJobState();
 }
 
 const MESH_STAGE_LABELS = {
@@ -16124,27 +15960,49 @@ function formatMetres(m) {
   return (v * 1e6).toFixed(0) + ' µm';
 }
 
-function syncMeshFinishedChrome() {
-  const wrap = document.getElementById('mesh-finished');
-  const title = document.getElementById('mesh-status-title');
-  const line = document.getElementById('mesh-finished-line');
-  const meta = document.getElementById('mesh-finished-meta');
-  const meshJob = isMeshJobKind(jobState.path_kind) || jobState.mode === 'mesh';
-  const mine = currentMeshOwnsJob();
-  let liveId = jobState.mesh_id;
+function meshGenerateKindNow(meshId) {
+  try {
+    const foreign = meshJobInOtherProject();
+    return meshGenerateButtonKind({
+      viewingMeshId: meshId,
+      liveMeshId: liveMeshJobId(),
+      generateLive: !foreign && (meshGenerateJobIsLive() || liveComputeSnap().kind === 'mesh'),
+      computeBusy: serverBusyForOtherJob(meshId) || (!foreign && anyComputeJobRunning()),
+      queued: !!(meshId && jobQueueHas('mesh', meshId)),
+    });
+  } catch (_) {
+    return 'generate';
+  }
+}
+
+/**
+ * Mesh panel state. The React MeshSettings island renders this; the runtime
+ * no longer writes the panel's progress DOM. Dispatched as `cfd:mesh-job`
+ * on window every time job state changes and once a second while running.
+ */
+function publishMeshJobState() {
+  // The tab keeps another project's job while you look elsewhere; it is not this panel's job.
+  let foreign = false;
+  try { foreign = meshJobInOtherProject(); } catch (_) {}
+  const jobStatus = foreign ? 'idle' : jobState.status;
+  const meshJob = !foreign && (isMeshJobKind(jobState.path_kind) || jobState.mode === 'mesh');
+  const mine = !foreign && currentMeshOwnsJob();
+  let liveId = foreign ? null : jobState.mesh_id;
   let viewId = null;
   let computeLive = false;
-  try { if (typeof liveMeshJobId === 'function') liveId = liveMeshJobId() || liveId; } catch (_) {}
+  try { if (!foreign && typeof liveMeshJobId === 'function') liveId = liveMeshJobId() || liveId; } catch (_) {}
   try { if (typeof viewingMeshId === 'function') viewId = viewingMeshId(); } catch (_) {}
-  try { computeLive = !!(typeof liveComputeSnap === 'function' && liveComputeSnap().kind === 'mesh'); } catch (_) {}
+  try { computeLive = !foreign && !!(typeof liveComputeSnap === 'function' && liveComputeSnap().kind === 'mesh'); } catch (_) {}
   const thisLive = !!(liveId && ((viewId && String(liveId) === String(viewId)) || (jobState.mesh_id && String(liveId) === String(jobState.mesh_id))));
   const meshReady = isGeneratedMeshReady();
-  const failed = jobState.status === 'failed' && meshJob && mine;
+  const failed = jobStatus === 'failed' && meshJob && mine;
+  const queuedRow = queuedMeshRow(viewId || (!foreign && jobState.mesh_id) || null);
   const phase = meshProgressPhase({
-    jobStatus: jobState.status,
+    jobStatus,
     computeLive: computeLive && (mine || thisLive),
     meshReady,
     failed,
+    queued: !!queuedRow,
   });
   const running = phase === 'generating';
   const finishing = phase === 'finishing';
@@ -16156,66 +16014,59 @@ function syncMeshFinishedChrome() {
     ? ((live && live.n_points) != null ? live.n_points : (mine ? jobState.n_points : null))
     : (running || failed ? jobState.n_points : null);
   const countsReady = cells != null && pts != null;
-  const elapsedEl = document.getElementById('mesh-elapsed');
-  const elapsedMs = mine || running || finishing ? meshElapsedMs() : null;
-  const elapsedTxt = elapsedMs != null ? formatElapsed(elapsedMs) : null;
+  const elapsedMs = !foreign && (mine || running || finishing) ? meshElapsedMs() : null;
   const ready = meshReady && countsReady;
-  if (wrap) wrap.hidden = !(running || failed || finishing || ready);
-  if (title) {
-    if (failed) title.textContent = 'Mesh failed';
-    else if (running) title.textContent = 'Generating mesh';
-    else if (finishing) title.textContent = 'Finishing mesh';
-    else if (ready) title.textContent = 'Mesh ready';
-    else title.textContent = 'Mesh';
+  const bits = [];
+  if (ready) {
+    const engine = String(
+      (live && (live.engine || live.path_kind)) || (mine && (jobState.engine || jobState.path_kind)) || '',
+    );
+    if (engine === 'cfmesh' || engine === 'cartesianMesh') bits.push('cfMesh');
+    else if (engine === 'snappyHexMesh') bits.push('Hex-dominant');
+    else if (engine) bits.push('Standard');
+    const hex = live && live.hex_core_applied != null ? live.hex_core_applied : mine ? jobState.hex_core_applied : null;
+    const layers = live && live.layers_applied != null ? live.layers_applied : mine ? jobState.layers_applied : null;
+    const surface = live && live.surface_size_m != null ? live.surface_size_m : mine ? jobState.surface_size_m : null;
+    if (hex === true) bits.push('hex element core');
+    if (layers === true) bits.push('boundary layers');
+    else if (layers === false) bits.push('no boundary layers');
+    const h = formatMetres(surface);
+    if (h) bits.push('surface size ' + h);
   }
-  if (line) {
-    if (failed) {
-      const err = jobState.error ? String(jobState.error).split('\n')[0].slice(0, 160) : '';
-      line.textContent = err ? err : 'Generate failed. Open Job / debug for the log.';
-    } else if (running) {
-      line.textContent = meshStageText() + '...' + (elapsedTxt ? ' ' + elapsedTxt : '');
-    } else if (finishing) {
-      line.textContent = 'Writing the mesh into the project...';
-    } else if (ready) {
-      line.textContent = Number(cells).toLocaleString() + ' cells / ' + Number(pts).toLocaleString() + ' nodes';
-      line.setAttribute('data-n-cells', String(cells));
-      line.setAttribute('data-n-points', String(pts));
-      line.setAttribute('data-source', jobState.counts_source || 'polyMesh');
-    } else {
-      line.textContent = '-';
-    }
-  }
-  if (meta) {
-    const bits = [];
-    if (ready) {
-      const engine = String(
-        (live && (live.engine || live.path_kind)) || (mine && (jobState.engine || jobState.path_kind)) || '',
-      );
-      if (engine === 'cfmesh' || engine === 'cartesianMesh') bits.push('cfMesh');
-      else if (engine === 'snappyHexMesh') bits.push('Hex-dominant');
-      else if (engine) bits.push('Standard');
-      const hex = live && live.hex_core_applied != null ? live.hex_core_applied : mine ? jobState.hex_core_applied : null;
-      const layers = live && live.layers_applied != null ? live.layers_applied : mine ? jobState.layers_applied : null;
-      const surface = live && live.surface_size_m != null ? live.surface_size_m : mine ? jobState.surface_size_m : null;
-      if (hex === true) bits.push('hex element core');
-      if (layers === true) bits.push('boundary layers');
-      else if (layers === false) bits.push('no boundary layers');
-      const h = formatMetres(surface);
-      if (h) bits.push('surface size ' + h);
-    }
-    if (elapsedTxt && (ready || failed)) bits.push(elapsedTxt);
-    meta.textContent = bits.join(' · ');
-  }
-  if (elapsedEl) {
-    const showClock = !!(running || finishing) && elapsedTxt;
-    elapsedEl.hidden = !showClock;
-    if (showClock) elapsedEl.textContent = elapsedTxt;
-  }
+  const err = failed && jobState.error ? String(jobState.error).split('\n')[0].slice(0, 160) : '';
+  const startMs = jobState.started_at ? Date.parse(jobState.started_at) : NaN;
+  const endMs = jobState.finished_at ? Date.parse(jobState.finished_at) : NaN;
+  const detail = {
+    mesh_id: viewId || jobState.mesh_id || null,
+    job_mesh_id: jobState.mesh_id || null,
+    name: (typeof meshDisplayName === 'function' && meshDisplayName()) || '',
+    can_delete: !!(meshCatalog && meshCatalog.mesh && (meshCatalog.mesh.id || meshCatalog.active_id)),
+    mine: !!(mine || thisLive),
+    phase,
+    status: jobStatus || 'idle',
+    stage_text: running ? meshStageText() : '',
+    error: err || (failed ? 'Generate failed. Open Job / debug for the log.' : ''),
+    n_cells: ready || running || failed ? (cells != null ? Number(cells) : null) : null,
+    n_points: ready || running || failed ? (pts != null ? Number(pts) : null) : null,
+    counts_source: jobState.counts_source || 'polyMesh',
+    meta_bits: bits,
+    started_at: !foreign && (mine || running || finishing) && Number.isFinite(startMs) ? startMs : null,
+    finished_at: !running && Number.isFinite(endMs) ? endMs : null,
+    elapsed_ms: elapsedMs,
+    generate_kind: meshGenerateKindNow(viewId || jobState.mesh_id || null),
+    queue: queuedRow
+      ? { position: queuedRow.position != null ? Number(queuedRow.position) : null, behind: queueBehindLabel() }
+      : null,
+  };
+  window.__CFD_MESH_JOB__ = detail;
+  try {
+    window.dispatchEvent(new CustomEvent('cfd:mesh-job', { detail }));
+  } catch (_) {}
   syncViewportJobChip();
 }
 
 function solveElapsedMs(run) {
-  const rec = run || (window.__CFD_W27_STATE__ && window.__CFD_W27_STATE__.run);
+  const rec = run || (runCatalog && runCatalog.run);
   const start = rec && rec.started_at ? Date.parse(rec.started_at) : NaN;
   if (!Number.isFinite(start)) return null;
   const live = rec.status === 'running' || rec.status === 'starting';
@@ -16225,7 +16076,7 @@ function solveElapsedMs(run) {
 }
 
 function liveSolveRecord() {
-  const w27 = window.__CFD_W27_STATE__;
+  const w27 = runCatalog;
   const snap = w27 && w27.live_run;
   const viewed = w27 && w27.run;
   const id =
@@ -16281,7 +16132,7 @@ function jobChipProjectLabel(rec) {
 function jobChipStudyLabel(sid) {
   if (!sid) return '';
   try {
-    const sims = (typeof w17State !== 'undefined' && w17State.simulations) || [];
+    const sims = (typeof studyCatalog !== 'undefined' && studyCatalog.simulations) || [];
     const s = sims.find((x) => x && String(x.id) === String(sid));
     if (s && s.geometry_name) return String(s.geometry_name);
     if (s && s.name) return String(s.name);
@@ -16429,7 +16280,7 @@ function syncViewportJobChip() {
   if (!jobChip) return;
   const meshLive = typeof meshGenerateJobIsLive === 'function' && meshGenerateJobIsLive();
   const liveRun = typeof liveSolveRecord === 'function' ? liveSolveRecord() : null;
-  const attaching = !!(window.__CFD_W27_STATE__ && window.__CFD_W27_STATE__.attaching);
+  const attaching = !!(runCatalog && runCatalog.attaching);
   let show = false;
   let label = '';
   let time = '';
@@ -16466,6 +16317,7 @@ function syncViewportJobChip() {
       meshName
     );
     label = who ? 'Meshing ' + who : 'Meshing';
+    if (jobState.stage) label += ' · ' + jobState.stage;
     const elapsedMs = meshElapsedMs();
     time = elapsedMs != null ? formatElapsed(elapsedMs) : '0:00';
   } else if (liveRun) {
@@ -16520,7 +16372,7 @@ function syncViewportJobChip() {
   const jobStillExpected = !!(
     liveRun ||
     meshLive ||
-    (window.__CFD_W27_STATE__ && window.__CFD_W27_STATE__.live_run_id) ||
+    (runCatalog && runCatalog.live_run_id) ||
     computeKind
   );
   if (show) {
@@ -16633,7 +16485,7 @@ async function warmResultVolume(time, ctx) {
   const c = (ctx && ctx.case) || getCaseDir();
   const t = String(time != null ? time : getTime() || '');
   if (!c || !t) return null;
-  const attaching = !!(window.__CFD_W27_STATE__ && window.__CFD_W27_STATE__.attaching);
+  const attaching = !!(runCatalog && runCatalog.attaching);
   const quiet = !!(ctx && ctx.quiet);
   const hold = !quiet && viewportBusy.results < 1 && !attaching;
   const timeoutMs = (ctx && ctx.timeoutMs) != null ? Number(ctx.timeoutMs) : RESULTS_WARMUP_MS;
@@ -16662,7 +16514,13 @@ async function refreshFieldsAfterAttach(ctx) {
   if (!hasAttachedCase()) return;
   const times = resultTimesForFallback();
   const ready = pickReadyResultTime(times);
-  if (ready) currentTime = ready;
+  // A bare mesh case has no time directories, so there are no fields to load.
+  if (!ready) {
+    currentTime = '';
+    jobState.field_fingerprint = { empty: true, no_times: true };
+    return;
+  }
+  currentTime = ready;
   try {
     if (window.__CFD_W12_APPLY__) {
       await window.__CFD_W12_APPLY__({ time: getTime() });
@@ -16698,6 +16556,7 @@ async function refreshFieldsAfterAttach(ctx) {
 
 async function bindResultsCaseLocally(case_dir, opts, extra) {
   const wantFields = !(opts && opts.fields === false);
+  if (!sameCasePath(caseDir, case_dir)) currentTime = '';
   caseDir = case_dir;
   if (!(extra && extra.keep_job)) {
     jobState.case_dir = case_dir;
@@ -16790,6 +16649,8 @@ async function attachCaseDirClient(path, opts) {
   if (jobState.times.length) {
     const last = jobState.times[jobState.times.length - 1];
     currentTime = String(last);
+  } else {
+    currentTime = '';
   }
 
   if (wantFields) {
@@ -16805,18 +16666,35 @@ async function attachCaseDirClient(path, opts) {
   return window.__CFD_W15__;
 }
 
-window.__CFD_W15_ATTACH__ = attachCaseDirClient;
+function projectIdFromCasePath(dir) {
+  const m = /[\\/]projects[\\/]([^\\/]+)[\\/]/i.exec(String(dir || ''));
+  return m ? m[1] : null;
+}
+
+/**
+ * /api/case/detach is strictly scoped: send the project that owns the attached
+ * case (the old project while switching), else the open project. No project,
+ * nothing of ours to detach.
+ */
+function postCaseDetach(dir) {
+  const project_id = projectIdFromCasePath(dir) || currentProjectId();
+  if (!project_id) return Promise.resolve(null);
+  return fetch('/api/case/detach', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id }),
+  });
+}
+
 window.__CFD_W15_APPLY__ = async function applyW15(partial) {
   if (partial && partial.case_dir) {
     return attachCaseDirClient(partial.case_dir);
   }
   if (partial && partial.detach) {
     try { releaseResultVolume(); } catch (_) {}
-    await fetch('/api/case/detach', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    });
+    await postCaseDetach(caseDir || jobState.case_dir);
+    caseDir = null;
+    currentTime = '';
     jobState.status = 'idle';
     jobState.case_dir = null;
     jobState.times = [];
@@ -16906,10 +16784,43 @@ function stopJobPoll() {
   }
 }
 
+function runStatusPollEnabled() {
+  return window.__CFD_DISABLE_RUN_STATUS_POLL__ !== true;
+}
+
+function watchJobEvents(jobId) {
+  if (window.__CFD_JOB_EVENTS_UNSUB__) {
+    try { window.__CFD_JOB_EVENTS_UNSUB__(); } catch (_) {}
+    window.__CFD_JOB_EVENTS_UNSUB__ = null;
+  }
+  if (!jobId) return;
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  window.__CFD_JOB_EVENTS_UNSUB__ = subscribeJobEvents(String(jobId), (ev) => {
+    let data = {};
+    try { data = JSON.parse(ev.data || '{}'); } catch (_) { data = {}; }
+    const fields = data.fields && typeof data.fields === 'object' ? data.fields : data;
+    const stage = fields.stage || data.stage || '';
+    if (stage) jobState.stage = String(stage);
+    if (stage || data.status === 'running' || fields.status === 'running' || data.event === 'progress') {
+      jobState.status = 'running';
+      jobState.mode = 'mesh';
+    }
+    if (data.event === 'result' || data.status === 'done' || fields.status === 'done') {
+      jobState.status = 'done';
+    }
+    try { syncViewportJobChip(); } catch (_) {}
+  }, pid);
+}
+window.__CFD_WATCH_JOB__ = watchJobEvents;
+
 function startJobPoll() {
+  if (!runStatusPollEnabled()) return;
   stopJobPoll();
   jobState.poll_timer = setInterval(async () => {
     try {
+      // Another project's job: this project's /api/case cannot describe it, and its
+      // mesh_1 would match by id. releaseForeignMeshJob ends it from the queue poll.
+      if (meshJobInOtherProject()) return;
       let snap = await fetchActiveCase();
       applyCaseSnapToJob(snap);
       if (
@@ -16996,7 +16907,7 @@ function startJobPoll() {
           snap.case_dir
         ) {
           const genStudy = typeof currentStudyId === 'function' ? currentStudyId() : '';
-          const viewingId = (w20State && w20State.mesh && w20State.mesh.id) || null;
+          const viewingId = (meshCatalog && meshCatalog.mesh && meshCatalog.mesh.id) || null;
           try {
             if (!viewingId || String(viewingId) === String(jobState.mesh_id)) {
               if (String(snap.case_dir) !== String(getCaseDir())) {
@@ -17049,7 +16960,7 @@ function startJobPoll() {
         publishW15({ kick_finished: true, api: snap });
         try { clearLiveCompute('mesh'); } catch (_) {}
         try { publishJobActivity(); } catch (_) {}
-        try { if (typeof syncSimulationTree === 'function') syncSimulationTree(); } catch (_) {}
+        try { if (typeof refreshSetupTree === 'function') refreshSetupTree(); } catch (_) {}
         try { scheduleKickNextQueuedJob(400); } catch (_) {}
       }
     } catch (e) {
@@ -17058,10 +16969,6 @@ function startJobPoll() {
   }, 750);
 }
 
-window.__CFD_W15_1_APPLY__ = async function applyW151(partial) {
-  if (partial && partial.case_dir) return attachCaseDirClient(partial.case_dir);
-  return window.__CFD_W15_APPLY__(partial || {});
-};
 
 (function wireJobStatusAttach() {
   const btn = document.getElementById('btn-attach-case');
@@ -17094,23 +17001,28 @@ window.__CFD_W15_1_APPLY__ = async function applyW151(partial) {
         if (!dir.includes(`/projects/${String(hashId).toLowerCase()}/`)) snap = null;
       }
       let live = null;
-      let scopedCases = [];
+      let liveSimId = '';
+      let scopedMeshes = [];
       try {
         const meshQs = hashProjectQs() || (hashId ? `?project_id=${encodeURIComponent(hashId)}` : '');
         const mr = await fetch('/api/mesh' + meshQs);
         const mj = await mr.json();
         live = mj && mj.mesh && mj.mesh.live_mesh_result;
-        scopedCases = (mj && Array.isArray(mj.meshes) ? mj.meshes : [])
-          .map((m) => (m && m.live_mesh_result && m.live_mesh_result.case_dir) || (m && m.case_dir) || '')
-          .filter(Boolean);
+        liveSimId = String((mj && mj.mesh && mj.mesh.simulation_id) || (mj && mj.simulation_id) || '');
+        scopedMeshes = (mj && Array.isArray(mj.meshes) ? mj.meshes : [])
+          .map((m) => ({
+            case_dir: (m && m.live_mesh_result && m.live_mesh_result.case_dir) || (m && m.case_dir) || '',
+            simulation_id: String((m && m.simulation_id) || ''),
+          }))
+          .filter((m) => m.case_dir);
         if (mj && mj.mesh && typeof applyMeshRecord === 'function') {
           applyMeshRecord(mj, mj.project_id);
         }
       } catch (e) {
         console.warn('[CFD W25b] boot mesh prefer', e);
       }
-      if (snap && snap.case_dir && scopedCases.length) {
-        const ok = scopedCases.some((d) => sameCasePath(d, snap.case_dir));
+      if (snap && snap.case_dir && scopedMeshes.length) {
+        const ok = scopedMeshes.some((m) => sameCasePath(m.case_dir, snap.case_dir));
         if (!ok) snap = null;
       } else if (snap && snap.case_dir && live && live.case_dir) {
         if (!sameCasePath(snap.case_dir, live.case_dir)) snap = null;
@@ -17132,6 +17044,8 @@ window.__CFD_W15_1_APPLY__ = async function applyW151(partial) {
           n_cells: null,
           n_points: null,
         });
+        // Mesh ids repeat across projects; remember whose job this is (see meshJobInOtherProject).
+        jobState.project_id = hashId || (typeof currentProjectId === 'function' ? currentProjectId() : null) || null;
         startMeshElapsedClock();
         startJobPoll();
         syncJobStatusChrome();
@@ -17160,7 +17074,14 @@ window.__CFD_W15_1_APPLY__ = async function applyW151(partial) {
         else if (window.__CFD_APPLY_WB_STAGE__) window.__CFD_APPLY_WB_STAGE__();
         return;
       }
-      await attachCaseDirClient(prefer);
+      // The study catalog is not loaded yet, so scope the attach to the mesh's
+      // own study. A finished mesh has no time directories: attach it for the
+      // mesh view and counts, but request no fields (results attach per run).
+      const preferMesh = scopedMeshes.find((m) => sameCasePath(m.case_dir, prefer));
+      await attachCaseDirClient(prefer, {
+        fields: false,
+        simulation_id: (preferMesh && preferMesh.simulation_id) || liveSimId || undefined,
+      });
       applyLiveMeshCountsToJob();
       if (typeof applyWorkbenchStage === 'function') applyWorkbenchStage();
       else if (window.__CFD_APPLY_WB_STAGE__) window.__CFD_APPLY_WB_STAGE__();
@@ -17367,6 +17288,8 @@ function geometryBodies() {
   if (g && Array.isArray(g.bodies) && g.bodies.length) return g.bodies.slice();
   return g ? ['Body1'] : [];
 }
+
+window.__CFD_GEOMETRY_BODIES__ = geometryBodies;
 
 function bodyNameFromIndex(idx) {
   const bodies = geometryBodies();
@@ -17741,7 +17664,7 @@ function expandTreeFolder(folder, simId) {
   const sid = String(
     simId ||
       (typeof currentStudyId === 'function' ? currentStudyId() : '') ||
-      (typeof w17State !== 'undefined' && (w17State.activeId || (w17State.simulation && w17State.simulation.id))) ||
+      (typeof studyCatalog !== 'undefined' && (studyCatalog.activeId || (studyCatalog.simulation && studyCatalog.simulation.id))) ||
       ''
   ).trim();
   treeUi.expanded[folder] = true;
@@ -17759,12 +17682,22 @@ function collapseTreeFolder(folder, simId) {
 
 function expandActiveStudyTree() {
   const gid = w16State.selectedGeomId || (w16State.geometry && w16State.geometry.id);
-  const sid = w17State.activeId || (w17State.simulation && w17State.simulation.id);
+  const sid = studyCatalog.activeId || (studyCatalog.simulation && studyCatalog.simulation.id);
+  const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
   if (gid) {
     treeUi.expanded['geom:' + gid] = true;
     treeUi.expanded.Geometry = true;
+    if (pid) treeUi.expanded[scopeKey({ projectId: pid, geometryId: String(gid) })] = true;
   }
   if (sid) treeUi.expanded['study:' + sid] = true;
+  if (pid && gid && sid) {
+    const studyScope = scopeKey({ projectId: pid, geometryId: String(gid), studyId: String(sid) });
+    treeUi.expanded[studyScope] = true;
+    treeUi.expanded[studyScope + '/item:materials'] = true;
+    treeUi.expanded[studyScope + '/item:bcs'] = true;
+    treeUi.expanded[studyScope + '/item:mesh'] = true;
+    treeUi.expanded[studyScope + '/item:simulation'] = true;
+  }
   expandTreeFolder('Mesh', sid);
   expandTreeFolder('Materials', sid);
   expandTreeFolder('Boundary conditions', sid);
@@ -17772,7 +17705,17 @@ function expandActiveStudyTree() {
   try {
     const listed = typeof meshList === 'function' ? meshList() : [];
     for (const m of listed) {
-      if (m && m.id) treeUi.expanded['mesh:' + m.id] = true;
+      if (m && m.id) {
+        treeUi.expanded['mesh:' + m.id] = true;
+        if (pid && gid && sid) {
+          treeUi.expanded[scopeKey({
+            projectId: pid,
+            geometryId: String(gid),
+            studyId: String(sid),
+            meshId: String(m.id),
+          })] = true;
+        }
+      }
     }
   } catch (_) {}
 }
@@ -17850,18 +17793,18 @@ function isSetupSectionComplete(section) {
     return !!(g && (g.id || g.step_path || g.faces_url || g.name));
   }
   if (section === 'Materials') {
-    const m = window.__CFD_W18_STATE__ && window.__CFD_W18_STATE__.material;
+    const m = materialCatalog && materialCatalog.material;
     return !!(m && Array.isArray(m.assigned_volumes) && m.assigned_volumes.length);
   }
   if (section === 'Boundary conditions') {
-    const bcs = window.__CFD_W19_STATE__ && window.__CFD_W19_STATE__.bcs;
+    const bcs = bcCatalog && bcCatalog.bcs;
     return !!(Array.isArray(bcs) && bcs.length);
   }
   if (section === 'Mesh') {
     return typeof anyGeneratedMeshReady === 'function' && anyGeneratedMeshReady();
   }
   if (section === 'Simulation') {
-    const runs = window.__CFD_W27_STATE__ && window.__CFD_W27_STATE__.runs;
+    const runs = runCatalog && runCatalog.runs;
     return !!(
       Array.isArray(runs) &&
       runs.some((r) => r && (r.status === 'done' || (typeof runHasResults === 'function' && runHasResults(r))))
@@ -17878,7 +17821,7 @@ function applyCollapseSetupSection(section) {
     collapseTreeFolder('Air');
   }
   if (section === 'Boundary conditions') {
-    const bcs = window.__CFD_W19_STATE__ && window.__CFD_W19_STATE__.bcs;
+    const bcs = bcCatalog && bcCatalog.bcs;
     if (Array.isArray(bcs)) {
       for (const bc of bcs) if (bc && bc.name) treeUi.expanded[bc.name] = false;
     }
@@ -17923,7 +17866,7 @@ function collapseCompletedIfLeaving(nextSection) {
   expandTreeFolder(nextSection);
   lastSetupSection = nextSection;
   if (changed) {
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
   }
 }
 
@@ -17957,10 +17900,10 @@ function dismissTreeDetail() {
   // Closing Graphs / Screenshots / Recordings leaves the open view selected.
   if (wasMedia) {
     if (resultsViewOpen && resultsRunId) markTreeSelected('runresults:' + resultsRunId);
-    else if (meshInspectOpen && w20State && w20State.active_id) markTreeSelected('meshid:' + w20State.active_id);
+    else if (meshInspectOpen && meshCatalog && meshCatalog.active_id) markTreeSelected('meshid:' + meshCatalog.active_id);
   }
   try {
-    if (typeof w19State !== 'undefined') w19State.activeId = null;
+    if (typeof bcCatalog !== 'undefined') bcCatalog.activeId = null;
   } catch (_) {}
 }
 
@@ -18012,16 +17955,21 @@ function hideAllTreeDetails() {
     try { clearCadSelection(); } catch (_) {}
   }
   try {
-    if (typeof w20State !== 'undefined') w20State.panel_open = false;
+    if (typeof meshCatalog !== 'undefined') meshCatalog.panel_open = false;
   } catch (_) {}
   try {
-    if (typeof w22State !== 'undefined') w22State.panel_open = false;
+    if (typeof resultCatalog !== 'undefined') resultCatalog.panel_open = false;
   } catch (_) {}
   syncAssignCursor();
   try { requestAnimationFrame(syncFiltersPanelOffset); } catch (_) {}
 }
 
-function openTreeDetail(key, { toggle = true } = {}) {
+function openTreeDetail(key, opts) {
+  const toggle = !opts || opts.toggle !== false;
+  const gen = opts && opts.gen;
+  const detailScope = opts && opts.scopeKey;
+  if (gen != null && gen !== studySwitchGen) return false;
+  if (detailScope && !scopeBelongsToProject(detailScope, String(currentProjectId() || ''))) return false;
   if (!key) {
     hideAllTreeDetails();
     return false;
@@ -18047,13 +17995,13 @@ function openTreeDetail(key, { toggle = true } = {}) {
   }
   if (key === 'mesh') {
     try {
-      if (typeof w20State !== 'undefined') w20State.panel_open = true;
+      if (typeof meshCatalog !== 'undefined') meshCatalog.panel_open = true;
       const mid = typeof viewingMeshId === 'function' ? viewingMeshId() : null;
       if (mid && typeof selectMeshLocally === 'function') selectMeshLocally(mid);
       else if (typeof applySettingsToForm === 'function') {
         applySettingsToForm(
           (typeof settingsOwnedByMesh === 'function' && settingsOwnedByMesh(mid)) ||
-            (w20State && w20State.settings) ||
+            (meshCatalog && meshCatalog.settings) ||
             (typeof W20_DEFAULTS !== 'undefined' ? W20_DEFAULTS : null),
           { force: true }
         );
@@ -18062,7 +18010,7 @@ function openTreeDetail(key, { toggle = true } = {}) {
   }
   if (key === 'aa') {
     try {
-      if (typeof w22State !== 'undefined') w22State.panel_open = true;
+      if (typeof resultCatalog !== 'undefined') resultCatalog.panel_open = true;
     } catch (_) {}
   }
   if (key === 'geometry' && typeof fillGeometryDetail === 'function') fillGeometryDetail();
@@ -18085,10 +18033,28 @@ function openTreeDetail(key, { toggle = true } = {}) {
   if (key === 'run-mesh' && typeof syncRunMeshHub === 'function') syncRunMeshHub();
   if (id && isIsland(id)) {
     try {
-      mountIsland(id, {
-        projectId: typeof currentProjectId === 'function' ? currentProjectId() : '',
-        simId: typeof currentStudyId === 'function' ? currentStudyId() : '',
-      });
+      const projectId = typeof currentProjectId === 'function' ? currentProjectId() : '';
+      const simId = typeof currentStudyId === 'function' ? currentStudyId() : '';
+      const meshKey = key === 'mesh' || key === 'mesh1' || key === 'mesh-hub';
+      const bcKey = key === 'bc' || key === 'vi' || key === 'po' || key === 'vo' || key === 'pi';
+      const runKey = key === 'sim-control';
+      let itemId = '';
+      if (meshKey && typeof viewingMeshId === 'function') itemId = String(viewingMeshId() || '');
+      else if (bcKey && typeof viewingBcId === 'function') itemId = String(viewingBcId() || '');
+      else if (runKey && typeof viewingRunId === 'function') itemId = String(viewingRunId() || '');
+      const geomId =
+        (w16State && (w16State.selectedGeomId || (w16State.geometry && w16State.geometry.id))) || '';
+      const scope = [
+        projectId ? 'p:' + projectId : '',
+        geomId ? 'g:' + geomId : '',
+        simId ? 's:' + simId : '',
+        meshKey && itemId ? 'mesh:' + itemId : '',
+        runKey && itemId ? 'run:' + itemId : '',
+        bcKey && itemId ? 'item:' + itemId : '',
+      ]
+        .filter(Boolean)
+        .join('/');
+      mountIsland(id, { scope, itemId });
     } catch (e) {
       console.warn('[CFD] island', e);
     }
@@ -18097,6 +18063,8 @@ function openTreeDetail(key, { toggle = true } = {}) {
   try { requestAnimationFrame(syncFiltersPanelOffset); } catch (_) {}
   return true;
 }
+
+window.__CFD_OPEN_TREE_DETAIL__ = openTreeDetail;
 
 function isAssigningMaterial() {
   return treeUi.openPanel === 'mat-picker' || treeUi.openPanel === 'air';
@@ -18193,7 +18161,9 @@ function setStageChrome(stage) {
 }
 
 function detachResultsCase() {
+  const detachDir = caseDir || jobState.case_dir;
   caseDir = null;
+  currentTime = '';
   jobState.status = 'idle';
   jobState.mode = 'idle';
   jobState.case_dir = null;
@@ -18206,11 +18176,7 @@ function detachResultsCase() {
   clearResultActors();
   try { syncJobStatusChrome(); } catch (_) {}
   try { releaseResultVolume(); } catch (_) {}
-  fetch('/api/case/detach', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}',
-  }).catch(() => {});
+  postCaseDetach(detachDir).catch(() => {});
 }
 
 function resetEmptyWorkbench({ keepProject = true } = {}) {
@@ -18245,55 +18211,55 @@ function resetEmptyWorkbench({ keepProject = true } = {}) {
   w16State.stl_url = null;
   w16State.mode = keepProject && w16State.project ? 'project' : 'idle';
   try {
-    if (typeof w17State !== 'undefined') {
-      w17State.simulation = null;
-      w17State.defaults = null;
-      w17State.ready = false;
-      w17State.created = false;
+    if (typeof studyCatalog !== 'undefined') {
+      studyCatalog.simulation = null;
+      studyCatalog.defaults = null;
+      studyCatalog.ready = false;
+      studyCatalog.created = false;
     }
   } catch (_) {}
   try {
-    if (typeof w18State !== 'undefined') {
-      w18State.material = null;
-      w18State.draft_volumes = [];
-      w18State.materials_all = [];
-      w18State.ready = false;
-      w18State.created = false;
+    if (typeof materialCatalog !== 'undefined') {
+      materialCatalog.material = null;
+      materialCatalog.draft_volumes = [];
+      materialCatalog.materials_all = [];
+      materialCatalog.ready = false;
+      materialCatalog.created = false;
     }
   } catch (_) {}
   try {
-    if (typeof w19State !== 'undefined') {
-      w19State.ready = false;
-      w19State.created = false;
-      w19State.bcs = [];
-      w19State.activeId = null;
-      w19State.draft_faces = [];
-      w19State.velocity_inlet_1 = null;
-      w19State.pressure_outlet_2 = null;
+    if (typeof bcCatalog !== 'undefined') {
+      bcCatalog.ready = false;
+      bcCatalog.created = false;
+      bcCatalog.bcs = [];
+      bcCatalog.activeId = null;
+      bcCatalog.draft_faces = [];
+      bcCatalog.velocity_inlet_1 = null;
+      bcCatalog.pressure_outlet_2 = null;
     }
   } catch (_) {}
   try {
-    if (typeof w20State !== 'undefined') {
-      w20State.mesh = null;
-      w20State.settings = null;
-      w20State.meshes = [];
-      w20State.meshes_all = [];
-      w20State.active_id = null;
-      w20State.ready = false;
-      w20State.created = false;
-      w20State.live_mesh_result = null;
+    if (typeof meshCatalog !== 'undefined') {
+      meshCatalog.mesh = null;
+      meshCatalog.settings = null;
+      meshCatalog.meshes = [];
+      meshCatalog.meshes_all = [];
+      meshCatalog.active_id = null;
+      meshCatalog.ready = false;
+      meshCatalog.created = false;
+      meshCatalog.live_mesh_result = null;
     }
   } catch (_) {}
   try {
     if (window.__CFD_W17__) window.__CFD_W17__.simulation = null;
     if (window.__CFD_W20__) window.__CFD_W20__.mesh = null;
-    if (window.__CFD_W20_STATE__) window.__CFD_W20_STATE__.mesh = null;
+    if (meshCatalog) meshCatalog.mesh = null;
   } catch (_) {}
   hideSetupPanels();
   try { resetTreeCollapsed(); } catch (_) {}
   try { resetW27WorkbenchCatalog(); } catch (_) {}
   try { syncGeometryTree(); } catch (_) {}
-  try { syncSimulationTree(); } catch (_) {}
+  try { refreshSetupTree(); } catch (_) {}
   applyWorkbenchStage();
   try { renderWindow.render(); } catch (_) {}
 }
@@ -18398,8 +18364,7 @@ function syncGeometryTree() {
         .join('');
     }
   }
-  const del = document.getElementById('geo-delete');
-  if (del) del.hidden = !w16State.selectedGeomId;
+  publishGeometryState();
 }
 
 function escapeHtml(s) {
@@ -18410,26 +18375,54 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-function fillGeometryDetail() {
+/** Geometry panel state (V0.1.0 rows: title, Name, Representation, Volume). React renders it. */
+function computeGeometryState() {
   const assembly = w16State.geometry;
   const part = (w16State.geometries || []).find((g) => g && g.id === w16State.selectedGeomId) || null;
   const g = part || assembly;
-  const bodies = (part && (part.assembly_bodies || part.bodies)) || ((assembly && assembly.bodies) || []);
-  const selected = (w16State.selectedBodies && w16State.selectedBodies.length)
+  if (!g) return { has_geometry: false };
+  const bodies = (part && (part.assembly_bodies || part.bodies)) || (assembly && assembly.bodies) || [];
+  const volume = w16State.selectedBodies && w16State.selectedBodies.length
     ? w16State.selectedBodies.map((n) => 'Body' + n).join(', ')
-    : (bodies.join(', ') || '—');
-  const name = (g && g.name) || '—';
-  const title = document.getElementById('geo-detail-title');
-  const nameEl = document.getElementById('geo-detail-name');
-  const repr = document.getElementById('geo-detail-repr');
-  const body = document.getElementById('geo-detail-body');
-  if (title) title.textContent = part ? part.name : (w16State.selectedBody ? selected : 'Geometry');
-  if (nameEl) nameEl.textContent = name;
-  if (repr) repr.textContent = geometryReprLabel(part || assembly);
-  if (body) body.textContent = selected;
-  const del = document.getElementById('geo-delete');
-  if (del) del.hidden = !w16State.selectedGeomId;
+    : bodies.join(', ') || '—';
+  return {
+    has_geometry: true,
+    id: String(g.id || ''),
+    title: part ? String(part.name || 'Geometry') : w16State.selectedBody ? volume : 'Geometry',
+    name: String(g.name || '—'),
+    representation: geometryReprLabel(g),
+    volume,
+    can_delete: !!w16State.selectedGeomId,
+  };
 }
+
+function publishGeometryState() {
+  const detail = computeGeometryState();
+  window.__CFD_GEOMETRY_STATE__ = detail;
+  try {
+    window.dispatchEvent(new CustomEvent('cfd:geometry', { detail }));
+  } catch (_) {}
+  return detail;
+}
+
+function fillGeometryDetail() {
+  publishGeometryState();
+}
+
+window.__CFD_GEOMETRY_STATE_NOW__ = computeGeometryState;
+/** Remove the selected geometry after the same confirm V0.1.0 showed. Resolves true when removed. */
+window.__CFD_GEOMETRY_DELETE__ = async () => {
+  const id = w16State.selectedGeomId;
+  if (!id) return false;
+  const ok = await confirmAction({
+    title: 'Remove this geometry?',
+    copy: 'Only the CAD is removed. Simulations stay so you can delete them separately.',
+    yes: 'Remove',
+  });
+  if (!ok) return false;
+  await removeGeometryClient(id);
+  return true;
+};
 
 async function createProjectClient(fields) {
   const body = {
@@ -18610,7 +18603,7 @@ async function reloadGeometryScopedSetup() {
   try {
     const sid = currentStudyId();
     const gid =
-      (typeof w17State !== 'undefined' && w17State.simulation && w17State.simulation.geometry_id) ||
+      (typeof studyCatalog !== 'undefined' && studyCatalog.simulation && studyCatalog.simulation.geometry_id) ||
       '';
     const qs =
       '?project_id=' +
@@ -18636,16 +18629,16 @@ async function reloadGeometryScopedSetup() {
         materials_all: mat.materials_all || mat.materials,
         simulation_id: mat.simulation_id,
       });
-    } else if (typeof w18State !== 'undefined') {
-      w18State.material = null;
-      w18State.draft_volumes = [];
-      w18State.materials_all = adoptStudyTaggedList(
-        w18State.materials_all,
+    } else if (typeof materialCatalog !== 'undefined') {
+      materialCatalog.material = null;
+      materialCatalog.draft_volumes = [];
+      materialCatalog.materials_all = adoptStudyTaggedList(
+        materialCatalog.materials_all,
         (mat && (mat.materials_all || mat.materials)) || [],
         (mat && mat.simulation_id) || sid
       );
-      w18State.ready = false;
-      w18State.created = false;
+      materialCatalog.ready = false;
+      materialCatalog.created = false;
     }
     if (bcs && typeof applyBcRecords === 'function') {
       applyBcRecords(bcs, bcs.project_id || pid);
@@ -18669,7 +18662,7 @@ async function reloadGeometryScopedSetup() {
         sims,
       );
     }
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     try { if (typeof fillCompareSelects === 'function') fillCompareSelects(); } catch (_) {}
   } catch (e) {
     console.warn('[CFD] reload geometry setup', e);
@@ -18717,7 +18710,7 @@ async function activateGeometryClient(geomId, opts) {
     syncGeometryTree();
     try { if (typeof hideMeshInspect === 'function') hideMeshInspect({ silent: true }); } catch (_) {}
     try { if (typeof hideRunResultsView === 'function') hideRunResultsView({ silent: true }); } catch (_) {}
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     const loaded = await loadGeometryCad(applied.faces_url, applied.edges_url);
     if (token !== studySwitchGen) return { stale: true };
     w16State.fingerprint = loaded.fp;
@@ -18739,16 +18732,30 @@ function selectImportedGeometry(geomId) {
   return activateGeometryClient(geomId);
 }
 
-async function importGeometryClient(opts) {
+async function importGeometryClient(opts, upload) {
   const payload = opts || {};
   if (w16State.project && w16State.project.id) {
     payload.project_id = payload.project_id || w16State.project.id;
   }
-  const r = await fetch('/api/geometry/import', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
-    body: JSON.stringify(payload),
-  });
+  // A picked file goes up as raw bytes (no base64 / JSON size cap); a path import stays JSON.
+  let r;
+  if (upload && upload.file) {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(payload)) {
+      if (v != null && v !== '') qs.set(k, String(v));
+    }
+    r = await fetch('/api/geometry/import?' + qs.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: upload.file,
+    });
+  } else {
+    r = await fetch('/api/geometry/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(payload),
+    });
+  }
   const j = await r.json();
   if (!r.ok) {
     publishW16({ ready: false, note: j.error || 'geometry import failed', last_import_error: j });
@@ -18775,7 +18782,7 @@ async function importGeometryClient(opts) {
   w16State.mode = 'geometry';
   syncProjectChrome();
   syncGeometryTree();
-  try { syncSimulationTree(); } catch (_) {}
+  try { refreshSetupTree(); } catch (_) {}
   const loaded = await loadGeometryCad(applied.faces_url, applied.edges_url);
   w16State.fingerprint = loaded.fp;
   w16State.ready = !!(loaded.fp && loaded.fp.empty === false);
@@ -18811,7 +18818,7 @@ async function removeGeometryClient(geomId) {
     const applied = applyImportedGeometry(j.geometry, pid, j.geometries || (j.project && j.project.geometries));
     syncProjectChrome();
     syncGeometryTree();
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     const loaded = await loadGeometryCad(applied.faces_url, applied.edges_url);
     w16State.fingerprint = loaded.fp;
     w16State.ready = !!(loaded.fp && loaded.fp.empty === false);
@@ -18825,7 +18832,7 @@ async function removeGeometryClient(geomId) {
     w16State.mode = 'project';
     try { setGeomVisible(false); } catch (_) {}
     syncGeometryTree();
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     try { dismissTreeDetail(); } catch (_) {}
   }
   publishW16({ imported: !!w16State.geometry });
@@ -18896,20 +18903,38 @@ function promptGeomLengthUnit(filename) {
 }
 
 async function importGeometryFile(file, extra) {
-  const buf = await file.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
-  const b64 = btoa(binary);
-  const payload = {
-    filename: file.name,
-    step_base64: b64,
-  };
+  const payload = { filename: file.name };
   if (extra && extra.length_unit) payload.length_unit = extra.length_unit;
-  return importGeometryClient(payload);
+  return importGeometryClient(payload, { file });
+}
+
+/** Show the user that an import is running, and why it failed if it did. */
+async function runGeometryImport(label, work) {
+  const btns = ['btn-import-geometry', 'btn-add-geometry']
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
+  const before = btns.map((b) => b.textContent);
+  btns.forEach((b) => {
+    b.disabled = true;
+    b.textContent = 'Importing…';
+  });
+  try {
+    return await work();
+  } catch (e) {
+    console.error('[CFD W16] import', e);
+    confirmAction({
+      title: 'Could not import ' + label,
+      copy: (e && e.message) || String(e),
+      yes: 'OK',
+      notice: true,
+    });
+    return null;
+  } finally {
+    btns.forEach((b, i) => {
+      b.disabled = false;
+      b.textContent = before[i];
+    });
+  }
 }
 
 function openNewProjectModal(existing, opts) {
@@ -18928,25 +18953,123 @@ function closeNewProjectModal() {
 }
 
 window.__CFD_W16_CREATE__ = createProjectClient;
-window.__CFD_W16_IMPORT__ = importGeometryClient;
-window.__CFD_W16_APPLY__ = async function applyW16(partial) {
-  if (partial && partial.create) return createProjectClient(partial);
-  if (partial && (partial.step_path || partial.step_base64 || partial.filename)) {
-    return importGeometryClient(partial);
-  }
-  return publishW16();
-};
 
 let projectHydrateGen = 0;
 let lastUnifiedProjectId = null;
+let preparedProjectId = null;
 
-function prepareProjectSwitch(nextId) {
-  const cur = w16State.project && w16State.project.id;
-  if (cur && String(cur) === String(nextId)) return;
+function persistTreeExpanded() {
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  if (!pid) return;
+  try {
+    localStorage.setItem('cfd-tree-expanded:' + pid, JSON.stringify(treeUi.expanded || {}));
+  } catch (_) {}
+}
+
+function restoreTreeExpanded(projectId) {
+  treeUi.expanded = {};
+  treeUi.selectedKey = null;
+  if (!projectId) return;
+  try {
+    const raw = localStorage.getItem('cfd-tree-expanded:' + projectId);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === 'object') treeUi.expanded = parsed;
+  } catch (_) {}
+}
+
+function loadStoredJobQueue(projectId) {
+  if (!projectId) {
+    jobQueue.items = [];
+    return;
+  }
+  const key = 'cfd-job-queue:' + projectId;
+  try {
+    jobQueue.items = parseStoredQueueItems(sessionStorage.getItem(key)).filter(
+      (row) => queueRowProject(row) === String(projectId),
+    );
+  } catch (_) {
+    jobQueue.items = [];
+  }
+}
+
+function resetWorkbenchCatalogs() {
   try { resetW27WorkbenchCatalog(); } catch (_) {}
+  w16State.project = null;
+  w16State.geometry = null;
+  w16State.geometries = [];
+  w16State.selectedGeomId = null;
+  w16State.selectedBody = null;
+  w16State.selectedBodies = null;
+  w16State.selectedFaces = [];
+  w16State.fingerprint = null;
+  w16State.stl_url = null;
+  studyCatalog.simulation = null;
+  studyCatalog.simulations = [];
+  studyCatalog.activeId = null;
+  studyCatalog.project_id = null;
+  materialCatalog.material = null;
+  materialCatalog.materials_all = [];
+  materialCatalog.project_id = null;
+  materialCatalog.hydrated = false;
+  bcCatalog.bcs = [];
+  bcCatalog.bcs_all = [];
+  bcCatalog.defaults_by_simulation = {};
+  bcCatalog.project_id = null;
+  bcCatalog.hydrated = false;
+  meshCatalog.mesh = null;
+  meshCatalog.meshes = [];
+  meshCatalog.meshes_all = [];
+  meshCatalog.active_id = null;
+  meshCatalog.settings = null;
+  meshCatalog.project_id = null;
+  meshCatalog.hydrated = false;
+  refinementCatalog.refinements = [];
+  refinementCatalog.meshId = null;
+  refinementCatalog.activeId = null;
+  refinementCatalog.project_id = null;
+  resultCatalog.area_average_1 = null;
+  resultCatalog.project_id = null;
+  resultCatalog.hydrated = false;
+  try { jobQueue.items = []; } catch (_) {}
+  window.__CFD_JOB_ACTIVITY__ = {
+    kind: null,
+    mesh_id: null,
+    run_id: null,
+    queue: [],
+    project_id: null,
+    simulation_id: null,
+  };
+  window.__CFD_MESH_DRAFTS__ = {};
+}
+
+function resetWorkbenchScope(nextId) {
+  const switching = nextId != null && String(nextId) !== '';
+  if (!switching) projectHydrateGen += 1;
+  studySwitchGen += 1;
   try { persistJobQueue(); } catch (_) {}
-  try { cancelResultsPrefetch(); } catch (_) {}
+  try { persistTreeExpanded(); } catch (_) {}
+  try { resetWorkbenchCatalogs(); } catch (_) {}
   try { resetTreeCollapsed(); } catch (_) {}
+  try { useProjectStore.getState().resetScope(); } catch (_) {}
+  try { useJobsStore.getState().clear(); } catch (_) {}
+  try { delete window.__CFD_RUN_SCOPE__; } catch (_) {}
+  try { if (window.__CFD_JOB_EVENTS_UNSUB__) window.__CFD_JOB_EVENTS_UNSUB__(); } catch (_) {}
+  window.__CFD_JOB_EVENTS_UNSUB__ = null;
+  if (switching) {
+    try { restoreTreeExpanded(nextId); } catch (_) {}
+    try { loadStoredJobQueue(nextId); } catch (_) {}
+    try {
+      applyTreeSession({
+        projectId: String(nextId || ''),
+        expanded: { ...(treeUi.expanded || {}) },
+        selectedKey: null,
+        activity: null,
+      });
+    } catch (_) {}
+  } else {
+    preparedProjectId = null;
+  }
+  try { cancelResultsPrefetch(); } catch (_) {}
   try { hideAllTreeDetails(); } catch (_) {}
   try { if (typeof hideRunResultsView === 'function') hideRunResultsView({ silent: true }); } catch (_) {}
   try { if (typeof hideMeshInspect === 'function') hideMeshInspect({ silent: true }); } catch (_) {}
@@ -18958,6 +19081,18 @@ function prepareProjectSwitch(nextId) {
   try { if (typeof clearResultActors === 'function') clearResultActors(); } catch (_) {}
   try { if (typeof detachResultsCase === 'function') detachResultsCase(); } catch (_) {}
   try { renderWindow.render(); } catch (_) {}
+  if (!switching) {
+    cancelVolumeIdleRelease();
+    try { endProjectOpen(); } catch (_) {}
+  }
+}
+
+function prepareProjectSwitch(nextId) {
+  const cur = w16State.project && w16State.project.id;
+  if (cur && String(cur) === String(nextId)) return;
+  if (!cur && preparedProjectId && String(preparedProjectId) === String(nextId || '')) return;
+  preparedProjectId = String(nextId || '');
+  resetWorkbenchScope(nextId);
 }
 
 function applyProjectShell(j) {
@@ -19022,43 +19157,43 @@ function applyFetchedSetup({ sims, mat, bcs, mesh, refs, runs, rcs, ctrl }, pid)
       materials_all: mat.materials_all || mat.materials,
       simulation_id: mat.simulation_id,
     });
-    if (typeof w18State !== 'undefined') w18State.hydrated = true;
-  } else if (typeof w18State !== 'undefined') {
-    w18State.material = null;
-    w18State.draft_volumes = [];
-    w18State.materials_all = adoptStudyTaggedList(
-      w18State.materials_all,
+    if (typeof materialCatalog !== 'undefined') materialCatalog.hydrated = true;
+  } else if (typeof materialCatalog !== 'undefined') {
+    materialCatalog.material = null;
+    materialCatalog.draft_volumes = [];
+    materialCatalog.materials_all = adoptStudyTaggedList(
+      materialCatalog.materials_all,
       (mat && (mat.materials_all || mat.materials)) || [],
       (mat && mat.simulation_id) || (typeof currentStudyId === 'function' ? currentStudyId() : null)
     );
-    w18State.ready = false;
-    w18State.created = false;
-    w18State.hydrated = true;
+    materialCatalog.ready = false;
+    materialCatalog.created = false;
+    materialCatalog.hydrated = true;
   }
   if (typeof applyBcRecords === 'function') {
     applyBcRecords(bcs || { boundary_conditions: [] }, (bcs && bcs.project_id) || pid);
-    if (typeof w19State !== 'undefined') w19State.hydrated = true;
+    if (typeof bcCatalog !== 'undefined') bcCatalog.hydrated = true;
   }
   if (typeof applyMeshRecord === 'function') {
     applyMeshRecord(mesh || {}, (mesh && mesh.project_id) || pid, { skipTree: true });
-    if (typeof w20State !== 'undefined') w20State.hydrated = true;
+    if (typeof meshCatalog !== 'undefined') meshCatalog.hydrated = true;
   }
   if (typeof applyRefRecords === 'function') {
     applyRefRecords(refs || { refinements: [] }, (refs && refs.project_id) || pid);
-    if (typeof w26State !== 'undefined') w26State.hydrated = true;
+    if (typeof refinementCatalog !== 'undefined') refinementCatalog.hydrated = true;
   }
   if (typeof applyAaRecord === 'function') {
     applyAaRecord(rcs || { area_average_1: null, result_controls: [] }, (rcs && rcs.project_id) || pid);
-    if (window.__CFD_W22_STATE__) window.__CFD_W22_STATE__.hydrated = true;
+    if (resultCatalog) resultCatalog.hydrated = true;
   }
   if (typeof applyRunCatalog === 'function') {
-    if (window.__CFD_W27_STATE__) window.__CFD_W27_STATE__.selected_run_id = null;
+    if (runCatalog) runCatalog.selected_run_id = null;
     try { clearSolveUiLeak(); } catch (_) {}
     applyRunCatalog(runs || { runs: [] });
   }
-  if (ctrl && window.__CFD_W27_STATE__) {
-    if (ctrl.endTime) window.__CFD_W27_STATE__.endTime = ctrl.endTime;
-    if (ctrl.writeInterval) window.__CFD_W27_STATE__.writeInterval = ctrl.writeInterval;
+  if (ctrl && runCatalog) {
+    if (ctrl.endTime) runCatalog.endTime = ctrl.endTime;
+    if (ctrl.writeInterval) runCatalog.writeInterval = ctrl.writeInterval;
     try { syncSimControlPanel(); } catch (_) {}
   }
 }
@@ -19075,7 +19210,6 @@ async function hydrateOpenProject(projectId, opts) {
   let handedToCad = false;
   try {
     prepareProjectSwitch(id);
-    resetTreeCollapsed();
     if (o.show !== false && typeof showWorkbench === 'function') showWorkbench();
 
     const qs = '?project_id=' + encodeURIComponent(id);
@@ -19084,7 +19218,14 @@ async function hydrateOpenProject(projectId, opts) {
       .catch(() => null);
     if (gen !== projectHydrateGen) return null;
     const geom = applyProjectShell(j && j.project ? j : { project: j && j.project });
-    try { syncSimulationTree(); } catch (_) {}
+    try {
+      loadJobQueue()
+        .then(() => {
+          try { scheduleKickNextQueuedJob(0); } catch (_) {}
+        })
+        .catch(() => {});
+    } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     try { applyWorkbenchStage(); } catch (_) {}
     const cadP = beginCadLoad(geom);
     handedToCad = true;
@@ -19114,7 +19255,7 @@ async function hydrateOpenProject(projectId, opts) {
     }
     expandActiveStudyTree();
     try { revealLiveRunAfterHydrate(); } catch (_) {}
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     try { applyWorkbenchStage(); } catch (_) {}
     try {
       await applyPreferredUnitsToOpenProject();
@@ -19137,17 +19278,23 @@ async function hydrateOpenProject(projectId, opts) {
 
 window.__CFD_HYDRATE_PROJECT__ = hydrateOpenProject;
 window.__CFD_PREPARE_PROJECT_SWITCH__ = prepareProjectSwitch;
+window.__CFD_RESET_WORKBENCH_SCOPE__ = resetWorkbenchScope;
+setTreeActionHandler((scopeKey, action) => {
+  if (!scopeBelongsToProject(scopeKey, String(currentProjectId() || ''))) return;
+  const sid = studyIdFromScope(scopeKey);
+  if (action === 'add-material' && typeof window.__CFD_ADD_MATERIAL__ === 'function') {
+    window.__CFD_ADD_MATERIAL__(sid);
+  }
+  if (action === 'add-bc' && typeof window.__CFD_ADD_BC__ === 'function') {
+    window.__CFD_ADD_BC__(sid);
+  }
+});
 
 (function wireW16Ui() {
   window.__CFD_OPEN_NEW_PROJECT_MODAL__ = openNewProjectModal;
   document.getElementById('wb-home')?.addEventListener('click', () => showHome());
   window.__CFD_LEAVE_WORKBENCH__ = function leaveWorkbench() {
-    cancelVolumeIdleRelease();
-    try { endProjectOpen(); } catch (_) {}
-    try { cancelResultsPrefetch(); } catch (_) {}
-    try { if (typeof stopAnimationPlay === 'function') stopAnimationPlay(); } catch (_) {}
-    try { if (typeof hideRunResultsView === 'function') hideRunResultsView({ silent: true }); } catch (_) {}
-    try { detachResultsCase(); } catch (_) {}
+    resetWorkbenchScope(null);
   };
   document.getElementById('folder-chip')?.addEventListener('click', () => {
     goHomeFromWorkbench(w16State.project && w16State.project.folder);
@@ -19196,7 +19343,7 @@ window.__CFD_PREPARE_PROJECT_SWITCH__ = prepareProjectSwitch;
           unit = await promptGeomLengthUnit(f.name);
           if (!unit) continue;
         }
-        await importGeometryFile(f, unit ? { length_unit: unit } : undefined);
+        await runGeometryImport(f.name, () => importGeometryFile(f, unit ? { length_unit: unit } : undefined));
       }
     })().catch((e) => console.error('[CFD W16] import file', e));
   });
@@ -19232,7 +19379,7 @@ window.__CFD_PREPARE_PROJECT_SWITCH__ = prepareProjectSwitch;
       const j = await r.json();
       if (j && j.project) {
         applyProjectShell(j);
-        try { syncSimulationTree(); } catch (_) {}
+        try { refreshSetupTree(); } catch (_) {}
         // Home: keep metadata only. CAD waits until the project is opened.
       }
       publishW16({ hydrated: true });
@@ -19264,34 +19411,23 @@ const W17_DEFAULTS = new Proxy(W17_DEFAULTS_FALLBACK, {
   },
 });
 
-const w17State = {
-  increment: 'W17',
-  ready: false,
-  simulation: null,
-  simulations: [],
-  activeId: null,
-  defaults: null,
-  project_id: null,
-  note: 'W17: Create Simulation → Incompressible with bank defaults',
-  soft_pass_avoided: true,
-};
-window.__CFD_W17_STATE__ = w17State;
+
 
 function publishW17(extra) {
-  if (extra) Object.assign(w17State, extra);
+  if (extra) Object.assign(studyCatalog, extra);
   const payload = {
     increment: 'W17',
-    ready: !!w17State.ready,
-    simulation: w17State.simulation,
-    simulations: w17State.simulations,
-    activeId: w17State.activeId,
-    defaults: w17State.defaults,
-    project_id: w17State.project_id,
-    note: w17State.note,
+    ready: !!studyCatalog.ready,
+    simulation: studyCatalog.simulation,
+    simulations: studyCatalog.simulations,
+    activeId: studyCatalog.activeId,
+    defaults: studyCatalog.defaults,
+    project_id: studyCatalog.project_id,
+    note: studyCatalog.note,
     soft_pass_avoided: true,
     persistence: 'filesystem',
-    hydrated: !!w17State.hydrated,
-    created: !!w17State.created,
+    hydrated: !!studyCatalog.hydrated,
+    created: !!studyCatalog.created,
   };
   window.__CFD_W17__ = payload;
   return payload;
@@ -19372,7 +19508,7 @@ function meshesForStudy(study) {
       .map((g) => String((g && g.id) || '').trim())
       .filter(Boolean)
   );
-  const studies = ((typeof w17State !== 'undefined' && w17State.simulations) || []).filter((s) => {
+  const studies = ((typeof studyCatalog !== 'undefined' && studyCatalog.simulations) || []).filter((s) => {
     if (!s || !s.geometry_id) return false;
     return !liveGeomIds.size || liveGeomIds.has(String(s.geometry_id));
   });
@@ -19549,25 +19685,35 @@ function renderBrowseStudyInner(study, sel) {
   );
 }
 
-function syncSimulationTree() {
+window.__CFD_REFRESH_TREE__ = refreshSetupTree;
+
+function refreshSetupTree() {
   const keep =
     Date.now() < holdTreeScrollUntil && heldTreeScroll ? heldTreeScroll : captureTreeScroll();
   const countLabel = document.getElementById('simulations-count-label');
   const tree = document.getElementById('simulations-tree');
-  const panel = document.getElementById('panel-incompressible-defaults');
-  const sim = w17State.simulation;
+  const sim = studyCatalog.simulation;
   const liveGeomIds = new Set(
     importedGeometries()
       .map((g) => String((g && g.id) || '').trim())
       .filter(Boolean)
   );
-  const studyList = (Array.isArray(w17State.simulations) ? w17State.simulations : []).filter((s) => {
+  const studyList = (Array.isArray(studyCatalog.simulations) ? studyCatalog.simulations : []).filter((s) => {
     if (!s || !s.geometry_id) return false;
     return liveGeomIds.has(String(s.geometry_id));
   });
   if (countLabel) countLabel.textContent = 'SIMULATIONS (' + studyList.length + ')';
   if (tree) {
     if (document.getElementById('left-tree')?.getAttribute('data-react-tree') === '1') {
+      try { persistTreeExpanded(); } catch (_) {}
+      try {
+        applyTreeSession({
+          projectId: String(currentProjectId() || ''),
+          expanded: { ...(treeUi.expanded || {}) },
+          selectedKey: treeUi.selectedKey || null,
+          activity: window.__CFD_JOB_ACTIVITY__ || null,
+        });
+      } catch (_) {}
       window.dispatchEvent(new CustomEvent('cfd:tree-sync'));
       setTimeout(() => {
         try { if (typeof wireMaterialsTreeHandlers === 'function') wireMaterialsTreeHandlers(); } catch (_) {}
@@ -19587,8 +19733,8 @@ function syncSimulationTree() {
           ? w16State.geometry.bodies
           : ['Body1'])
         : [];
-      const _w18 = window.__CFD_W18_STATE__ || null;
-      const _w19 = window.__CFD_W19_STATE__ || null;
+      const _w18 = materialCatalog || null;
+      const _w19 = bcCatalog || null;
       const assignedVols =
         (_w18 && _w18.material && Array.isArray(_w18.material.assigned_volumes)
           ? _w18.material.assigned_volumes
@@ -19596,7 +19742,7 @@ function syncSimulationTree() {
       const airSaved = assignedVols.length > 0;
       const showAir = !!(_w18 && _w18.material);
       let materialsChildren = '';
-      const stBcs = window.__CFD_W19_STATE__;
+      const stBcs = bcCatalog;
       const bcRecords = stBcs && Array.isArray(stBcs.bcs) ? stBcs.bcs : [];
       const showBcs = bcRecords.length > 0;
       const sel = (key) => (treeUi.selectedKey === key ? ' selected' : '');
@@ -19774,7 +19920,7 @@ function syncSimulationTree() {
         meshKids +
         '</li>' +
         (function () {
-          const _w27 = window.__CFD_W27_STATE__ || null;
+          const _w27 = runCatalog || null;
           const meshIds = new Set(
             meshList()
               .map((m) => String((m && m.id) || ''))
@@ -20082,24 +20228,8 @@ function syncSimulationTree() {
       if (typeof wireRcTreeHandlers === 'function') wireRcTreeHandlers();
     }
   }
-  if (panel && sim) {
-    const title = document.getElementById('study-panel-title');
-    const renameIn = document.getElementById('study-rename-input');
-    const a = document.getElementById('sim-analysis');
-    const t = document.getElementById('sim-turbulence');
-    const tm = document.getElementById('sim-time');
-    const tsel = document.getElementById('sim-time-select');
-    const al = document.getElementById('sim-algorithm');
-    const td = sim.time_dependency || W17_DEFAULTS.time_dependency;
-    if (title && document.activeElement !== renameIn) title.textContent = sim.name || 'Incompressible';
-    if (a) a.textContent = sim.analysis || W17_DEFAULTS.analysis;
-    if (t) t.textContent = sim.turbulence_model || W17_DEFAULTS.turbulence_model;
-    if (tm) tm.textContent = td;
-    if (tsel && document.activeElement !== tsel) tsel.value = /transient/i.test(td) ? 'Transient' : 'Steady-state';
-    if (al) al.textContent = sim.algorithm || (/transient/i.test(td) ? 'PIMPLE' : W17_DEFAULTS.algorithm);
-  }
+  publishStudyState();
   fillGeometryDetail();
-  if (typeof syncAirAssignList === 'function') syncAirAssignList();
   if (typeof syncBcAssignList === 'function') syncBcAssignList();
   if (typeof syncViAssignList === 'function') syncViAssignList();
   if (typeof syncPoAssignList === 'function') syncPoAssignList();
@@ -20109,13 +20239,13 @@ function syncSimulationTree() {
 }
 
 function studyOrderStorageKey(projectId) {
-  const pid = String(projectId || (w17State && w17State.project_id) || (typeof currentProjectId === 'function' ? currentProjectId() : '') || '').trim();
+  const pid = String(projectId || (studyCatalog && studyCatalog.project_id) || (typeof currentProjectId === 'function' ? currentProjectId() : '') || '').trim();
   return pid ? 'cfd-study-order:' + pid : '';
 }
 
 function readStudyOrderLock(projectId) {
-  if (Array.isArray(w17State.studyOrder) && w17State.studyOrder.length) {
-    return w17State.studyOrder.map(String);
+  if (Array.isArray(studyCatalog.studyOrder) && studyCatalog.studyOrder.length) {
+    return studyCatalog.studyOrder.map(String);
   }
   const key = studyOrderStorageKey(projectId);
   if (!key) return null;
@@ -20130,7 +20260,7 @@ function readStudyOrderLock(projectId) {
 
 function writeStudyOrderLock(ids, projectId) {
   const next = (ids || []).map((id) => String(id || '').trim()).filter(Boolean);
-  w17State.studyOrder = next;
+  studyCatalog.studyOrder = next;
   const key = studyOrderStorageKey(projectId);
   if (!key) return next;
   try {
@@ -20176,34 +20306,36 @@ function applyStudyOrderLock(list, projectId) {
 }
 
 function persistLockedStudyOrder(list, projectId) {
-  if (w17State._applyingReorder || w17State._orderPersist || studySwitchBusy) return;
+  if (studyCatalog._applyingReorder || studyCatalog._orderPersist || studySwitchBusy) return;
   const ids = (list || []).map((s) => String(s && s.id || '')).filter(Boolean);
   if (ids.length < 2) return;
   const gid = list[0] && list[0].geometry_id;
-  w17State._orderPersist = true;
+  studyCatalog._orderPersist = true;
   reorderStudiesClient(ids, gid).finally(() => {
-    w17State._orderPersist = false;
+    studyCatalog._orderPersist = false;
   });
 }
 
 function applySimulationRecord(sim, projectId, extra) {
   if (!sim) {
-    w17State.simulation = null;
-    w17State.activeId = null;
-    w17State.defaults = null;
-    w17State.ready = false;
-    w17State.created = false;
+    studyCatalog.simulation = null;
+    studyCatalog.activeId = null;
+    studyCatalog.defaults = null;
+    studyCatalog.ready = false;
+    studyCatalog.created = false;
     if (extra && Array.isArray(extra.simulations)) {
-      w17State.simulations = applyStudyOrderLock(extra.simulations, projectId);
+      studyCatalog.simulations = applyStudyOrderLock(extra.simulations, projectId);
     } else if (extra && extra.deleted) {
-      w17State.simulations = [];
+      studyCatalog.simulations = [];
       writeStudyOrderLock([], projectId);
     }
-    syncSimulationTree();
+    refreshSetupTree();
     publishW17({ created: false });
     return window.__CFD_W17__;
   }
-  w17State.simulation = {
+  studyCatalog.simulation = {
+    // Keep every saved field (physics keys the study panel shows and the solve reads).
+    ...sim,
     id: sim.id,
     project_id: sim.project_id || projectId,
     name: sim.name || 'Incompressible',
@@ -20219,27 +20351,27 @@ function applySimulationRecord(sim, projectId, extra) {
   };
   if (extra && Array.isArray(extra.simulations)) {
     const serverIds = extra.simulations.map((s) => String(s && s.id || '')).filter(Boolean);
-    w17State.simulations = applyStudyOrderLock(extra.simulations, projectId || (sim && sim.project_id));
-    const localIds = (w17State.simulations || []).map((s) => String(s && s.id || '')).filter(Boolean);
+    studyCatalog.simulations = applyStudyOrderLock(extra.simulations, projectId || (sim && sim.project_id));
+    const localIds = (studyCatalog.simulations || []).map((s) => String(s && s.id || '')).filter(Boolean);
     if (serverIds.join('\0') !== localIds.join('\0')) {
-      persistLockedStudyOrder(w17State.simulations, projectId || (sim && sim.project_id));
+      persistLockedStudyOrder(studyCatalog.simulations, projectId || (sim && sim.project_id));
     }
   } else {
-    w17State.simulations = (w17State.simulations || []).map((s) =>
-      s.id === sim.id ? { ...s, ...w17State.simulation } : s
+    studyCatalog.simulations = (studyCatalog.simulations || []).map((s) =>
+      s.id === sim.id ? { ...s, ...studyCatalog.simulation } : s
     );
   }
-  w17State.activeId = sim.id;
-  w17State.defaults = {
-    turbulence_model: w17State.simulation.turbulence_model,
-    time_dependency: w17State.simulation.time_dependency,
-    algorithm: w17State.simulation.algorithm,
+  studyCatalog.activeId = sim.id;
+  studyCatalog.defaults = {
+    turbulence_model: studyCatalog.simulation.turbulence_model,
+    time_dependency: studyCatalog.simulation.time_dependency,
+    algorithm: studyCatalog.simulation.algorithm,
   };
-  w17State.project_id = w17State.simulation.project_id;
-  w17State.ready = true;
-  w17State.note =
+  studyCatalog.project_id = studyCatalog.simulation.project_id;
+  studyCatalog.ready = true;
+  studyCatalog.note =
     'W17 HARD: Incompressible persisted with k-omega SST / Steady-state / SIMPLE';
-  syncSimulationTree();
+  refreshSetupTree();
   publishW17({ created: true });
   return window.__CFD_W17__;
 }
@@ -20259,6 +20391,7 @@ async function createSimulationClient(opts) {
     (w16State.geometry && w16State.geometry.id) ||
     '';
   if (gid) payload.geometry_id = gid;
+  if (opts && opts.analysis_type) payload.analysis_type = opts.analysis_type;
   if (opts && opts.copy_from) payload.copy_from = opts.copy_from;
   if (opts && opts.copy_mode) payload.copy_mode = opts.copy_mode;
   if (opts && opts.include) payload.include = opts.include;
@@ -20282,7 +20415,7 @@ async function createSimulationClient(opts) {
     await reloadGeometryScopedSetup();
   }
   const cloned = String((opts && opts.copy_mode) || '') === 'clone';
-  const listed = typeof meshesForStudy === 'function' ? meshesForStudy(w17State.simulation) : [];
+  const listed = typeof meshesForStudy === 'function' ? meshesForStudy(studyCatalog.simulation) : [];
   const ready = listed.find((m) => typeof isGeneratedMeshReady === 'function' && isGeneratedMeshReady(m));
   if (cloned && ready && typeof showMeshInspect === 'function') {
     try {
@@ -20302,8 +20435,8 @@ async function createSimulationClient(opts) {
 async function selectStudyClient(simId) {
   const id = String(simId || '').trim();
   if (!id) return;
-  if (w17State.activeId === id && w17State.simulation && w17State.simulation.id === id) {
-    try { syncMeshFinishedChrome(); } catch (_) {}
+  if (studyCatalog.activeId === id && studyCatalog.simulation && studyCatalog.simulation.id === id) {
+    try { publishMeshJobState(); } catch (_) {}
     return window.__CFD_W17__;
   }
   const token = ++studySwitchGen;
@@ -20317,14 +20450,14 @@ async function selectStudyClient(simId) {
       if (typeof hideMeshInspect === 'function') hideMeshInspect({ silent: true });
     } catch (_) {}
     try {
-      if (typeof w26State !== 'undefined') {
-        w26State.activeId = null;
-        w26State.draft_faces = [];
+      if (typeof refinementCatalog !== 'undefined') {
+        refinementCatalog.activeId = null;
+        refinementCatalog.draft_faces = [];
       }
     } catch (_) {}
-    if (window.__CFD_W27_STATE__) {
-      window.__CFD_W27_STATE__.selected_run_id = null;
-      window.__CFD_W27_STATE__.run = null;
+    if (runCatalog) {
+      runCatalog.selected_run_id = null;
+      runCatalog.run = null;
       try { clearSolveUiLeak(); } catch (_) {}
     }
     if (treeUi) {
@@ -20352,7 +20485,7 @@ async function selectStudyClient(simId) {
       await reloadGeometryScopedSetup();
     }
     if (token !== studySwitchGen) return { stale: true };
-    const homeMesh = meshesForStudy(w17State.simulation || j.simulation);
+    const homeMesh = meshesForStudy(studyCatalog.simulation || j.simulation);
     const keepCase = homeMesh.some((m) => {
       if (!isGeneratedMeshReady(m)) return false;
       const dir = (m && m.live_mesh_result && m.live_mesh_result.case_dir) || (m && m.case_dir);
@@ -20364,7 +20497,7 @@ async function selectStudyClient(simId) {
       clearIdleMeshJobCounts();
     }
     try { await applyPreferredUnitsToOpenProject(); } catch (e) { console.warn('[CFD] preferred units', e); }
-    try { syncMeshFinishedChrome(); } catch (_) {}
+    try { publishMeshJobState(); } catch (_) {}
     try { syncMeshInspectPanel(); } catch (_) {}
     try { if (typeof syncSimHubPanel === 'function') syncSimHubPanel(); } catch (_) {}
     applyWorkbenchStage();
@@ -20376,9 +20509,9 @@ async function selectStudyClient(simId) {
 }
 
 async function deleteStudyClient(simId) {
-  const id = String(simId || w17State.activeId || '').trim();
+  const id = String(simId || studyCatalog.activeId || '').trim();
   if (!id) return;
-  const rec = (w17State.simulations || []).find((s) => s && String(s.id) === id);
+  const rec = (studyCatalog.simulations || []).find((s) => s && String(s.id) === id);
   const label = (rec && rec.name) || 'this simulation';
   const ok = await confirmAction({
     title: 'Delete ' + label + '?',
@@ -20411,7 +20544,7 @@ async function deleteStudyClient(simId) {
 
 /** W30: is the project's simulation transient (pimpleFoam over real time)? */
 function simIsTransientClient() {
-  const sim = w17State && w17State.simulation;
+  const sim = studyCatalog && studyCatalog.simulation;
   return !!(sim && /transient/i.test(String(sim.time_dependency || '')));
 }
 
@@ -20428,7 +20561,7 @@ async function renameStudyClient(name) {
     body: JSON.stringify({
       name: next,
       project_id: currentProjectId() || undefined,
-      simulation_id: w17State.activeId || (w17State.simulation && w17State.simulation.id) || undefined,
+      simulation_id: studyCatalog.activeId || (studyCatalog.simulation && studyCatalog.simulation.id) || undefined,
     }),
   });
   const j = await r.json();
@@ -20441,7 +20574,7 @@ async function reorderStudiesClient(ids, geometryId) {
   const next = (ids || []).map((id) => String(id || '').trim()).filter(Boolean);
   if (next.length < 2) return null;
   writeStudyOrderLock(next);
-  w17State._applyingReorder = true;
+  studyCatalog._applyingReorder = true;
   try {
     const r = await fetch('/api/simulation/reorder', {
       method: 'POST',
@@ -20457,7 +20590,7 @@ async function reorderStudiesClient(ids, geometryId) {
     applySimulationRecord(j.simulation, j.project_id, j);
     return j;
   } finally {
-    w17State._applyingReorder = false;
+    studyCatalog._applyingReorder = false;
   }
 }
 
@@ -20468,15 +20601,15 @@ async function updateSimulationTimeDependency(value) {
     body: JSON.stringify({
       time_dependency: value,
       project_id: currentProjectId() || undefined,
-      simulation_id: w17State.activeId || (w17State.simulation && w17State.simulation.id) || undefined,
+      simulation_id: studyCatalog.activeId || (studyCatalog.simulation && studyCatalog.simulation.id) || undefined,
     }),
   });
   const j = await r.json();
   if (!r.ok || !j || j.ok === false) throw new Error((j && j.error) || 'Could not change time dependency');
   applySimulationRecord(j.simulation, j.project_id, j);
   // Draft runs follow the simulation: stamp them so the run panel switches too.
-  if (typeof w27State !== 'undefined' && Array.isArray(w27State.runs)) {
-    const drafts = w27State.runs.filter((rec) => rec && (!rec.status || rec.status === 'draft'));
+  if (typeof runCatalog !== 'undefined' && Array.isArray(runCatalog.runs)) {
+    const drafts = runCatalog.runs.filter((rec) => rec && (!rec.status || rec.status === 'draft'));
     for (const rec of drafts) {
       try {
         await persistRunSettings({ run_id: rec.id, time_dependency: j.simulation.time_dependency });
@@ -20486,6 +20619,64 @@ async function updateSimulationTimeDependency(value) {
   try { if (typeof syncSimControlPanel === 'function') syncSimControlPanel(); } catch (_) {}
   return j;
 }
+
+/** Study panel state for the React island (cfd:study). The runtime owns the record. */
+function computeStudyState() {
+  const sim = studyCatalog && studyCatalog.simulation;
+  if (!sim) return { has_study: false };
+  const td = /transient/i.test(String(sim.time_dependency || W17_DEFAULTS.time_dependency))
+    ? 'Transient'
+    : 'Steady-state';
+  return {
+    has_study: true,
+    id: String(sim.id || studyCatalog.activeId || ''),
+    project_id: String(studyCatalog.project_id || currentProjectId() || ''),
+    name: String(sim.name || 'Incompressible'),
+    analysis: String(sim.analysis || W17_DEFAULTS.analysis),
+    analysis_type: String(sim.analysis_type || 'incompressible_steady'),
+    time_dependency: td,
+    algorithm: String(sim.algorithm || (td === 'Transient' ? 'PIMPLE' : W17_DEFAULTS.algorithm)),
+    record: { ...sim },
+  };
+}
+
+function publishStudyState() {
+  const detail = computeStudyState();
+  window.__CFD_STUDY_STATE__ = detail;
+  try {
+    window.dispatchEvent(new CustomEvent('cfd:study', { detail }));
+  } catch (_) {}
+  return detail;
+}
+
+/** Save study fields (physics from the panel) through the same merge route rename uses. */
+async function updateStudyClient(patch) {
+  const r = await fetch('/api/simulation/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({
+      ...(patch || {}),
+      project_id: currentProjectId() || undefined,
+      simulation_id: studyCatalog.activeId || (studyCatalog.simulation && studyCatalog.simulation.id) || undefined,
+    }),
+  });
+  const j = await r.json();
+  if (!r.ok || !j || j.ok === false) throw new Error((j && j.error) || 'Could not save simulation settings');
+  applySimulationRecord(j.simulation, j.project_id, j);
+  return j;
+}
+
+window.__CFD_STUDY_STATE_NOW__ = computeStudyState;
+window.__CFD_STUDY_UPDATE__ = (patch) => updateStudyClient(patch);
+window.__CFD_STUDY_TIME__ = async (value) => {
+  try {
+    return await updateSimulationTimeDependency(value === 'Transient' ? 'Transient' : 'Steady-state');
+  } catch (err) {
+    publishStudyState();
+    throw err;
+  }
+};
+window.__CFD_STUDY_DELETE__ = () => deleteStudyClient();
 
 function selectedCreateTimeDependency() {
   const sel = document.querySelector('#cs-time-dep .cs-time-opt.is-selected');
@@ -20523,7 +20714,7 @@ function fillCreateSimulationExtras() {
       })
       .join('');
   }
-  const studies = (w17State.simulations || []).filter((s) => s && String(s.id || '').trim());
+  const studies = (studyCatalog.simulations || []).filter((s) => s && String(s.id || '').trim());
   const copyWrap = document.getElementById('cs-copy-wrap');
   const copySel = document.getElementById('cs-copy-from');
   if (copyWrap && copySel) {
@@ -20572,7 +20763,7 @@ function applyCreateStartFromDefaults() {
   const sel = document.getElementById('cs-copy-from');
   const fromId = sel && String(sel.value || '').trim();
   if (!fromId) return;
-  const src = (w17State.simulations || []).find((s) => String(s.id) === fromId);
+  const src = (studyCatalog.simulations || []).find((s) => String(s.id) === fromId);
   if (!src) return;
   setCreateTimeDependency(createStudyTimeDependency(src));
 }
@@ -20608,9 +20799,15 @@ function openCreateSimulationModal() {
   if (!modal) return;
   setCreateSimulationError('');
   modal.hidden = false;
-  document.querySelectorAll('#cs-type-list .cs-type').forEach((el) => {
-    el.classList.toggle('is-selected', el.getAttribute('data-type') === 'Incompressible');
-  });
+  const typeList = document.getElementById('cs-type-list');
+  if (typeList) {
+    typeList.querySelectorAll(':scope > :not(.cfd-island)').forEach((el) => el.remove());
+  }
+  const projectId = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  const geomId =
+    (w16State && (w16State.selectedGeomId || (w16State.geometry && w16State.geometry.id))) || '';
+  const scope = [projectId ? 'p:' + projectId : '', geomId ? 'g:' + geomId : ''].filter(Boolean).join('/');
+  if (typeof mountIsland === 'function') mountIsland('cs-type-list', { scope, itemId: '' });
   setCreateTimeDependency('Steady-state');
   fillCreateSimulationExtras();
 }
@@ -20620,12 +20817,6 @@ function closeCreateSimulationModal() {
 }
 
 window.__CFD_W17_CREATE__ = createSimulationClient;
-window.__CFD_W17_APPLY__ = async function applyW17(partial) {
-  if (partial && (partial.create || partial.analysis)) {
-    return createSimulationClient(partial);
-  }
-  return publishW17();
-};
 
 (function wireW17Ui() {
   document.getElementById('btn-create-simulation')?.addEventListener('click', openCreateSimulationModal);
@@ -20635,57 +20826,6 @@ window.__CFD_W17_APPLY__ = async function applyW17(partial) {
   document.getElementById('sim-defaults-close')?.addEventListener('click', () => {
     hideAllTreeDetails();
   });
-  document.getElementById('sim-delete')?.addEventListener('click', () => {
-    deleteStudyClient().catch((e) => console.error('[CFD] delete study', e));
-  });
-  const studyTitle = document.getElementById('study-panel-title');
-  const studyRenameBtn = document.getElementById('study-rename');
-  const studyRenameIn = document.getElementById('study-rename-input');
-  const stopStudyRename = (commit) => {
-    if (!studyRenameIn || !studyTitle || !studyRenameBtn) return;
-    if (commit) {
-      const fallback =
-        (w17State.simulation && w17State.simulation.name) || 'Incompressible Steady-state';
-      const next = String(studyRenameIn.value || '').trim() || fallback;
-      studyTitle.textContent = next;
-      if (w17State.simulation) w17State.simulation.name = next;
-      renameStudyClient(next).catch((e) => console.warn('[CFD] study rename', e));
-    }
-    studyRenameIn.hidden = true;
-    studyTitle.hidden = false;
-    studyRenameBtn.hidden = false;
-  };
-  const startStudyRename = () => {
-    if (!studyRenameIn || !studyTitle || !studyRenameBtn) return;
-    const listed = (w17State.simulations || []).find(
-      (s) => s && String(s.id) === String(w17State.activeId || (w17State.simulation && w17State.simulation.id) || '')
-    );
-    studyRenameIn.value =
-      (listed && listed.name) ||
-      (w17State.simulation && w17State.simulation.name) ||
-      studyTitle.textContent ||
-      '';
-    studyTitle.hidden = true;
-    studyRenameBtn.hidden = true;
-    studyRenameIn.hidden = false;
-    studyRenameIn.focus();
-    studyRenameIn.select();
-  };
-  studyRenameBtn?.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    startStudyRename();
-  });
-  studyRenameIn?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      stopStudyRename(true);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      stopStudyRename(false);
-    }
-  });
-  studyRenameIn?.addEventListener('blur', () => stopStudyRename(true));
   document.getElementById('cs-copy-from')?.addEventListener('change', () => {
     applyCreateStartFromDefaults();
     syncCreateCopyModeWrap();
@@ -20701,15 +20841,23 @@ window.__CFD_W17_APPLY__ = async function applyW17(partial) {
       btn.disabled = true;
       btn.textContent = 'Creating…';
     }
+    const picked = document.querySelector('#cs-type-list [data-analysis-key].is-selected');
     createSimulationClient({
       analysis: 'Incompressible',
+      analysis_type: (picked && picked.getAttribute('data-analysis-key')) || 'incompressible_steady',
       time_dependency: selectedCreateTimeDependency(),
       geometry_id: (document.getElementById('cs-geometry') || {}).value || undefined,
       copy_from: copyFrom,
       copy_mode: copyFrom ? selectedCreateCopyMode() : undefined,
     })
-      .then(() => {
+      .then(async () => {
         closeCreateSimulationModal();
+        // Unfold the new study so Run 1, Mesh and the other folders are in view.
+        try { expandActiveStudyTree(); } catch (_) {}
+        // Land on the run with Start and the reasons it cannot start yet (Simulation → Run 1).
+        const runs = typeof studyRunList === 'function' ? studyRunList() : [];
+        if (!runs.length) await createRunClient();
+        else openRunPanel(runs[0].id || runs[0].run_id);
       })
       .catch((e) => {
         console.error('[CFD W17] create', e);
@@ -20725,28 +20873,21 @@ window.__CFD_W17_APPLY__ = async function applyW17(partial) {
   document.querySelectorAll('#cs-time-dep .cs-time-opt').forEach((el) => {
     el.addEventListener('click', () => setCreateTimeDependency(el.getAttribute('data-time-dep') || 'Steady-state'));
   });
-  document.getElementById('sim-time-select')?.addEventListener('change', (e) => {
-    const v = e.target.value === 'Transient' ? 'Transient' : 'Steady-state';
-    updateSimulationTimeDependency(v).catch((err) => {
-      console.error('[CFD W30] time dependency', err);
-      syncSimulationTree();
-    });
-  });
 
   // Clear sim chrome when a brand-new project is created (W16)
   const prevCreate = window.__CFD_W16_CREATE__;
   if (typeof prevCreate === 'function') {
     window.__CFD_W16_CREATE__ = async function wrappedCreate(fields) {
       const out = await prevCreate(fields);
-      w17State.simulation = null;
-      w17State.simulations = [];
-      w17State.studyOrder = [];
-      w17State.activeId = null;
-      w17State.defaults = null;
-      w17State.ready = false;
-      w17State.created = false;
-      w17State.project_id = (out && out.project && out.project.id) || null;
-      syncSimulationTree();
+      studyCatalog.simulation = null;
+      studyCatalog.simulations = [];
+      studyCatalog.studyOrder = [];
+      studyCatalog.activeId = null;
+      studyCatalog.defaults = null;
+      studyCatalog.ready = false;
+      studyCatalog.created = false;
+      studyCatalog.project_id = (out && out.project && out.project.id) || null;
+      refreshSetupTree();
       publishW17({ ready: false, note: 'W17: waiting for Create Simulation' });
       return out;
     };
@@ -20777,7 +20918,7 @@ window.__CFD_W17_APPLY__ = async function applyW17(partial) {
     })
     .catch((e) => {
       console.warn('[CFD W17] hydrate', e);
-      syncSimulationTree();
+      refreshSetupTree();
       publishW17({ ready: false });
     });
 })();
@@ -20795,38 +20936,26 @@ const W18_AIR_DEFAULTS = {
   density_unit: 'kg/m3',
 };
 
-const w18State = {
-  ready: false,
-  hydrated: false,
-  created: false,
-  libraryApplied: false,
-  project_id: null,
-  material: null,
-  materials_all: [],
-  draft_volumes: [],
-  materials_json: null,
-  note: 'W18: Materials → Air + Body1 assign (checkmark save)',
-};
-window.__CFD_W18_STATE__ = w18State;
+
 
 function publishW18(extra) {
   const payload = {
-    ready: w18State.ready,
-    hydrated: w18State.hydrated,
-    created: w18State.created,
-    libraryApplied: w18State.libraryApplied,
-    project_id: w18State.project_id,
-    material: w18State.material,
-    air: w18State.material,
-    assigned_volumes: w18State.material
-      ? w18State.material.assigned_volumes || []
-      : w18State.draft_volumes.slice(),
+    ready: materialCatalog.ready,
+    hydrated: materialCatalog.hydrated,
+    created: materialCatalog.created,
+    libraryApplied: materialCatalog.libraryApplied,
+    project_id: materialCatalog.project_id,
+    material: materialCatalog.material,
+    air: materialCatalog.material,
+    assigned_volumes: materialCatalog.material
+      ? materialCatalog.material.assigned_volumes || []
+      : materialCatalog.draft_volumes.slice(),
     body1_assigned: !!(
-      w18State.material &&
-      (w18State.material.assigned_volumes || []).includes('Body1')
+      materialCatalog.material &&
+      (materialCatalog.material.assigned_volumes || []).includes('Body1')
     ),
-    materials_json: w18State.materials_json,
-    note: w18State.note,
+    materials_json: materialCatalog.materials_json,
+    note: materialCatalog.note,
     increment: 'W18',
     soft_pass_avoided: true,
     ...(extra || {}),
@@ -20835,59 +20964,8 @@ function publishW18(extra) {
   return payload;
 }
 
-function syncMatPickerAssign() {
-  const list = document.getElementById('mat-picker-bodies');
-  const hint = document.getElementById('mat-picker-hint');
-  const apply = document.getElementById('mat-picker-apply');
-  const vols = w18State.draft_volumes || [];
-  if (list) {
-    list.innerHTML = vols
-      .map(
-        (v) =>
-          '<li data-volume="' +
-          escapeHtml(v) +
-          '">' +
-          escapeHtml(v) +
-          '</li>'
-      )
-      .join('');
-  }
-  if (apply) apply.disabled = vols.length === 0;
-  if (hint) hint.classList.toggle('is-warn', false);
-}
-
-function syncAirAssignList() {
-  const list = document.getElementById('air-assign-list');
-  const count = document.getElementById('air-assign-count');
-  const vols =
-    treeUi.openPanel === 'air'
-      ? w18State.draft_volumes || []
-      : w18State.material
-        ? w18State.material.assigned_volumes || []
-        : w18State.draft_volumes;
-  if (count) count.textContent = String(vols.length);
-  if (list) {
-    list.innerHTML = vols
-      .map(
-        (v) =>
-          '<li data-volume="' +
-          escapeHtml(v) +
-          '">' +
-          escapeHtml(v) +
-          '</li>'
-      )
-      .join('');
-  }
-  syncMatPickerAssign();
-}
-
 function openAirPanel() {
-  if (w18State.material && Array.isArray(w18State.material.assigned_volumes)) {
-    w18State.draft_volumes = w18State.material.assigned_volumes.slice();
-  }
   openTreeDetail('air', { toggle: false });
-  syncAirAssignList();
-  try { syncAirPropertyLabels(); } catch (_) {}
 }
 
 function closeAirPanel() {
@@ -20895,18 +20973,13 @@ function closeAirPanel() {
 }
 
 function openMaterialLibrary() {
-  if (!w17State.simulation) {
+  if (!studyCatalog.simulation) {
     console.warn('[CFD W18] Create Simulation first');
     return;
   }
   const modal = document.getElementById('modal-material-library');
   if (modal) modal.hidden = true;
-  w18State.draft_volumes = [];
   openTreeDetail('mat-picker', { toggle: false });
-  document.querySelectorAll('#panel-material-picker .ml-type').forEach((el) => {
-    el.classList.toggle('is-selected', el.getAttribute('data-material') === 'Air');
-  });
-  syncMatPickerAssign();
 }
 
 function openMaterialsHub() {
@@ -20914,61 +20987,14 @@ function openMaterialsHub() {
   syncMaterialsHub();
 }
 
+/** The React materials panel renders the hub; it reloads on `cfd:material`. */
 function syncMaterialsHub() {
-  const list = document.getElementById('materials-hub-list');
-  if (!list) return;
-  const mat = w18State.material;
-  if (!mat) {
-    list.innerHTML = '<li class="hub-empty">No materials yet</li>';
-    return;
-  }
-  const vols = (mat.assigned_volumes || []).join(', ') || 'none';
-  list.innerHTML =
-    '<li>' +
-    '<button type="button" class="hub-item" data-open-air="1">' +
-    '<span class="hub-item-main"><span class="hub-item-name">' +
-    escapeHtml(mat.name || 'Air') +
-    '</span><span class="hub-item-sub">' +
-    escapeHtml(vols) +
-    '</span></span></button>' +
-    '<button type="button" class="hub-item-del" data-del-air="1">Delete</button>' +
-    '</li>';
+  try { window.dispatchEvent(new CustomEvent('cfd:material')); } catch (_) {}
 }
 
+/** The React BC hub renders from `cfd:bcs`; nothing here writes panel DOM. */
 function syncBcsHub() {
-  const list = document.getElementById('bcs-hub-list');
-  if (!list) return;
-  const st = window.__CFD_W19_STATE__ || {};
-  const rows = Array.isArray(st.bcs) ? st.bcs : [];
-  list.innerHTML = rows.length
-    ? rows
-        .map((bc) => {
-          const faces = (bc.faces || []).join(', ') || 'no faces';
-          const typeLabel =
-            bc.bc_type === 'Wall'
-              ? 'Wall · ' + (String(bc.wall_type || '').toLowerCase() === 'slip' ? 'Slip' : 'No-slip')
-              : bc.bc_type;
-          return (
-            '<li>' +
-            '<button type="button" class="hub-item" data-open-bc="' +
-            escapeHtml(bc.id) +
-            '">' +
-            '<span class="hub-item-main"><span class="hub-swatch hub-swatch-' +
-            bcKind(bc) +
-            '"></span><span class="hub-item-name">' +
-            escapeHtml(bc.name) +
-            '</span><span class="hub-item-sub">' +
-            escapeHtml(typeLabel + ' · ' + faces) +
-            '</span></span></button>' +
-            '<button type="button" class="hub-item-del" data-del-bc="' +
-            escapeHtml(bc.id) +
-            '">Delete</button>' +
-            '</li>'
-          );
-        })
-        .join('')
-    : '<li class="hub-empty">No boundary conditions yet</li>';
-  if (typeof syncBcDefaultsLabels === 'function') syncBcDefaultsLabels();
+  publishBcState();
 }
 
 function closeMaterialLibrary() {
@@ -20982,7 +21008,7 @@ function addMaterialForStudy(simId) {
   const go = () => {
     try { openMaterialLibrary(); } catch (_) {}
   };
-  if (sid && String(w17State.activeId || '') !== sid) {
+  if (sid && String(studyCatalog.activeId || '') !== sid) {
     return selectStudyClient(sid).then(go).catch((err) => console.warn('[CFD] study', err));
   }
   go();
@@ -20993,7 +21019,7 @@ function addBcForStudy(simId) {
   const go = () => {
     try { openBcTypeModal(); } catch (_) {}
   };
-  if (sid && String(w17State.activeId || '') !== sid) {
+  if (sid && String(studyCatalog.activeId || '') !== sid) {
     return selectStudyClient(sid).then(go).catch((err) => console.warn('[CFD] study', err));
   }
   go();
@@ -21024,7 +21050,7 @@ function applyMaterialRecord(mat, projectId, opts) {
     (typeof currentStudyId === 'function' ? currentStudyId() : null);
   const viewingMat =
     (typeof treeSelectedAfter === 'function' && (treeSelectedAfter('matid:') || treeSelectedAfter('air:'))) ||
-    (w18State.material && w18State.material.id) ||
+    (materialCatalog.material && materialCatalog.material.id) ||
     null;
   const incomingId = mat && mat.id;
   const sameMat = !viewingMat || !incomingId || String(viewingMat) === String(incomingId);
@@ -21041,62 +21067,57 @@ function applyMaterialRecord(mat, projectId, opts) {
     simulation_id: sid,
   };
   if (opts && Array.isArray(opts.materials_all)) {
-    w18State.materials_all = adoptStudyTaggedList(w18State.materials_all, opts.materials_all, sid);
+    materialCatalog.materials_all = adoptStudyTaggedList(materialCatalog.materials_all, opts.materials_all, sid);
   } else if (mat && Array.isArray(mat.materials_all)) {
-    w18State.materials_all = adoptStudyTaggedList(w18State.materials_all, mat.materials_all, sid);
+    materialCatalog.materials_all = adoptStudyTaggedList(materialCatalog.materials_all, mat.materials_all, sid);
   } else {
-    w18State.materials_all = mergeStudyTaggedList(w18State.materials_all, [row], sid);
+    materialCatalog.materials_all = mergeStudyTaggedList(materialCatalog.materials_all, [row], sid);
   }
   if (!sameMat) {
-    w18State.project_id = projectId || mat.project_id || w18State.project_id;
-    if (typeof syncSimulationTree === 'function') syncSimulationTree();
+    materialCatalog.project_id = projectId || mat.project_id || materialCatalog.project_id;
+    if (typeof refreshSetupTree === 'function') refreshSetupTree();
     publishW18();
     return window.__CFD_W18__;
   }
-  w18State.material = row;
-  w18State.draft_volumes = (row.assigned_volumes || []).slice();
-  w18State.project_id = projectId || mat.project_id || w18State.project_id;
-  w18State.materials_json = row.materials_json;
-  w18State.ready = true;
-  w18State.created = true;
-  w18State.libraryApplied = true;
-  w18State.note = 'Air assigned to ' + ((row.assigned_volumes || []).join(', ') || '—');
+  materialCatalog.material = row;
+  materialCatalog.draft_volumes = (row.assigned_volumes || []).slice();
+  materialCatalog.project_id = projectId || mat.project_id || materialCatalog.project_id;
+  materialCatalog.materials_json = row.materials_json;
+  materialCatalog.ready = true;
+  materialCatalog.created = true;
+  materialCatalog.libraryApplied = true;
+  materialCatalog.note = 'Air assigned to ' + ((row.assigned_volumes || []).join(', ') || '—');
   if (!opts || opts.openPanel !== false) {
     expandTreeFolder('Materials', sid);
     expandTreeFolder('Air', sid);
     openAirPanel();
-  } else {
-    try { syncAirPropertyLabels(); } catch (_) {}
   }
-  syncSimulationTree();
+  refreshSetupTree();
   publishW18({ created: true });
+  try { window.dispatchEvent(new CustomEvent('cfd:material')); } catch (_) {}
   return window.__CFD_W18__;
-}
-
-function persistAirAssignment() {
-  if (!w18State.material && !w18State.draft_volumes.length) return;
-  saveAirMaterialClient({
-    assigned_volumes: (w18State.draft_volumes || []).slice(),
-    openPanel: false,
-  }).catch((e) => console.error('[CFD W18] persist', e));
 }
 
 async function saveAirMaterialClient(opts) {
   const volumes = Array.isArray(opts && opts.assigned_volumes)
     ? opts.assigned_volumes
-    : (w18State.draft_volumes || []).slice();
-  if (!volumes.length && !w18State.material) {
+    : (materialCatalog.draft_volumes || []).slice();
+  if (!volumes.length && !materialCatalog.material) {
     publishW18({ ready: false, note: 'Assign a body first' });
     throw new Error('Assign a body first');
   }
+  const current = materialCatalog.material || {};
   const payload = {
-    name: 'Air',
-    material: 'Air',
+    id: current.id,
+    name: current.name || 'Air',
+    material: current.name || 'Air',
     viscosity_model: 'Newtonian',
+    kinematic_viscosity: current.kinematic_viscosity,
+    density: current.density,
     assigned_volumes: volumes,
   };
   if (w16State.project && w16State.project.id) payload.project_id = w16State.project.id;
-  if (w17State.project_id) payload.project_id = w17State.project_id;
+  if (studyCatalog.project_id) payload.project_id = studyCatalog.project_id;
   if (opts && opts.project_id) payload.project_id = opts.project_id;
   if (typeof currentMeshStudyIds === 'function') Object.assign(payload, currentMeshStudyIds());
 
@@ -21118,23 +21139,25 @@ async function saveAirMaterialClient(opts) {
   return snap;
 }
 
+/**
+ * A body clicked in the viewport or the tree while the materials panel is
+ * open. The React panel owns the assignment and saves it (materials.set);
+ * this only highlights the body and tells the panel which one was clicked.
+ */
 function toggleAssignVolume(name, idx) {
   const vol = String(name || '').trim();
   if (!vol) return;
-  const i = w18State.draft_volumes.indexOf(vol);
-  if (i >= 0) {
-    w18State.draft_volumes.splice(i, 1);
-    if (w16State.selectedBody === idx) highlightGeomBody(null);
-    markTreeSelected(treeUi.openPanel === 'air' ? 'air' : 'materials');
-  } else {
-    w18State.draft_volumes.push(vol);
-    highlightGeomBody(idx);
-    markTreeSelected('body-' + idx);
-  }
-  syncAirAssignList();
-  publishW18({ draft: true });
-  if (treeUi.openPanel === 'air' || w18State.material) persistAirAssignment();
+  highlightGeomBody(idx);
+  markTreeSelected('body-' + idx);
+  publishBodySelection([{ name: vol, idx: Number(idx) || 0 }]);
 }
+
+/** The React panel saved a material; mirror it for the tree ✓, the Start gate and the viewport. */
+window.__CFD_MATERIAL_APPLY__ = function applySavedMaterial(mat, projectId) {
+  if (!mat) return null;
+  return applyMaterialRecord(mat, projectId || mat.project_id, { openPanel: false });
+};
+window.__CFD_MATERIAL_DELETE__ = () => deleteAirMaterialClient();
 
 function vtkView() {
   try {
@@ -22925,6 +22948,9 @@ function showAllCadFaces() {
 }
 
 function applyCadSelectionDisplay() {
+  if (treeUi.openPanel === 'bc-picker') {
+    try { publishBcState(); } catch (_) {}
+  }
   try { applyGeomHighlight(); } catch (_) {}
   try { applyHiddenMeshDisplay(); } catch (_) {}
   try { applyEdgeSelectionDisplay(); } catch (_) {}
@@ -24066,7 +24092,7 @@ function showBcOverview() {
 
 function updateBcGlyphsInner() {
   const bc = typeof activeBc === 'function' ? activeBc() : null;
-  const faces = (w19State && w19State.draft_faces) || [];
+  const faces = (bcCatalog && bcCatalog.draft_faces) || [];
   if (!isAssigningBcFace() || !bc || !faces.length) {
     clearBcGlyphs();
     return;
@@ -24203,6 +24229,7 @@ function assignFromViewportEvent(e) {
 async function deleteAirMaterialClient() {
   const payload = { delete: true };
   if (w16State.project && w16State.project.id) payload.project_id = w16State.project.id;
+  if (typeof currentMeshStudyIds === 'function') Object.assign(payload, currentMeshStudyIds());
   const r = await fetch('/api/materials', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -24210,15 +24237,15 @@ async function deleteAirMaterialClient() {
   });
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || 'delete failed');
-  w18State.material = null;
-  w18State.draft_volumes = [];
-  w18State.ready = false;
-  w18State.created = false;
-  w18State.libraryApplied = false;
-  w18State.materials_json = null;
+  materialCatalog.material = null;
+  materialCatalog.draft_volumes = [];
+  materialCatalog.ready = false;
+  materialCatalog.created = false;
+  materialCatalog.libraryApplied = false;
+  materialCatalog.materials_json = null;
   highlightGeomBody(null);
   hideAllTreeDetails();
-  syncSimulationTree();
+  refreshSetupTree();
   publishW18({ deleted: true, ready: false });
   return j;
 }
@@ -24228,14 +24255,14 @@ function assignBody1Draft() {
 }
 
 async function applyMaterialFromLibrary() {
-  if (!w18State.draft_volumes.length) {
+  if (!materialCatalog.draft_volumes.length) {
     const hint = document.getElementById('mat-picker-hint');
     if (hint) hint.classList.add('is-warn');
     return;
   }
   try {
     await saveAirMaterialClient({
-      assigned_volumes: w18State.draft_volumes.slice(),
+      assigned_volumes: materialCatalog.draft_volumes.slice(),
       openPanel: false,
     });
     highlightGeomBody(null);
@@ -24247,79 +24274,12 @@ async function applyMaterialFromLibrary() {
   }
 }
 
-window.__CFD_W18_SAVE__ = saveAirMaterialClient;
-window.__CFD_W18_APPLY__ = async function applyW18(partial) {
-  if (partial && (partial.save || partial.assign || partial.assigned_volumes || partial.name)) {
-    if (partial.assigned_volumes) {
-      w18State.draft_volumes = Array.isArray(partial.assigned_volumes)
-        ? partial.assigned_volumes.slice()
-        : [String(partial.assigned_volumes)];
-    } else if (partial.assign === 'Body1' || partial.body === 'Body1') {
-      w18State.draft_volumes = ['Body1'];
-    } else if (!w18State.draft_volumes.length) {
-      w18State.draft_volumes = ['Body1'];
-    }
-    w18State.libraryApplied = true;
-    return saveAirMaterialClient(partial);
-  }
-  return publishW18();
-};
-window.__CFD_W18_ASSIGN__ = function assignW18(vol) {
-  if (vol === 'Body1' || !vol) assignBody1Draft();
-  return publishW18({ draft: true });
-};
 
 (function wireW18Ui() {
   document.getElementById('ml-cancel')?.addEventListener('click', closeMaterialLibrary);
   document.getElementById('ml-cancel-x')?.addEventListener('click', closeMaterialLibrary);
   document.getElementById('ml-backdrop')?.addEventListener('click', closeMaterialLibrary);
   document.getElementById('ml-apply')?.addEventListener('click', () => applyMaterialFromLibrary());
-  document.getElementById('air-clear-assign')?.addEventListener('click', () => {
-    w18State.draft_volumes = [];
-    highlightGeomBody(null);
-    syncAirAssignList();
-    publishW18({ draft: true });
-    persistAirAssignment();
-  });
-  document.getElementById('air-delete')?.addEventListener('click', () => {
-    deleteAirMaterialClient().catch((e) => console.error('[CFD W18] delete', e));
-  });
-  document.getElementById('btn-add-material')?.addEventListener('click', () => openMaterialLibrary());
-  document.getElementById('materials-hub-close')?.addEventListener('click', () => hideAllTreeDetails());
-  document.getElementById('materials-hub-list')?.addEventListener('click', (e) => {
-    if (e.target.closest('[data-del-air]')) {
-      e.preventDefault();
-      deleteAirMaterialClient().catch((err) => console.error('[CFD W18] delete', err));
-      return;
-    }
-    if (e.target.closest('[data-open-air]')) {
-      markTreeSelected('air');
-      openAirPanel();
-    }
-  });
-  document.getElementById('btn-add-bc')?.addEventListener('click', () => openBcTypeModal());
-  document.getElementById('bcs-hub-close')?.addEventListener('click', () => hideAllTreeDetails());
-  document.getElementById('bcs-hub-list')?.addEventListener('click', (e) => {
-    const del = e.target.closest('[data-del-bc]');
-    if (del) {
-      e.preventDefault();
-      const id = del.getAttribute('data-del-bc');
-      if (id && typeof deleteBcClient === 'function') {
-        deleteBcClient(id).catch((err) => console.error('[CFD] BC delete', err));
-      }
-      return;
-    }
-    const btn = e.target.closest('[data-open-bc]');
-    if (!btn) return;
-    const k = btn.getAttribute('data-open-bc');
-    const list = (window.__CFD_W19_STATE__ && window.__CFD_W19_STATE__.bcs) || [];
-    const hit =
-      list.find((b) => b.id === k) ||
-      (k === 'vi' && list.find((b) => b.bc_type === 'Velocity inlet')) ||
-      (k === 'po' && list.find((b) => String(b.bc_type || '').startsWith('Pressure')));
-    if (hit && typeof showBcEditor === 'function') showBcEditor(hit);
-    else if (typeof showBcPanel === 'function') showBcPanel(k);
-  });
   if (container && !container._assignPickWired) {
     container._assignPickWired = true;
     let down = null;
@@ -24343,20 +24303,20 @@ window.__CFD_W18_ASSIGN__ = function assignW18(vol) {
     window.__CFD_ASSIGN_BODY__ = function assignBody(idx) {
     const n = Number(idx) || 1;
     toggleAssignVolume(bodyNameFromIndex(n), n);
-    return (w18State.draft_volumes || []).slice();
+    return (materialCatalog.draft_volumes || []).slice();
   };
 
   const prevCreate = window.__CFD_W16_CREATE__;
   if (typeof prevCreate === 'function') {
     window.__CFD_W16_CREATE__ = async function wrappedCreateW18(fields) {
       const out = await prevCreate(fields);
-      w18State.material = null;
-      w18State.draft_volumes = [];
-      w18State.ready = false;
-      w18State.created = false;
-      w18State.libraryApplied = false;
-      w18State.materials_json = null;
-      w18State.project_id = (out && out.project && out.project.id) || null;
+      materialCatalog.material = null;
+      materialCatalog.draft_volumes = [];
+      materialCatalog.ready = false;
+      materialCatalog.created = false;
+      materialCatalog.libraryApplied = false;
+      materialCatalog.materials_json = null;
+      materialCatalog.project_id = (out && out.project && out.project.id) || null;
       closeAirPanel();
       publishW18({ ready: false, note: 'W18: waiting for Materials → Air' });
       return out;
@@ -24367,11 +24327,11 @@ window.__CFD_W18_ASSIGN__ = function assignW18(vol) {
   if (typeof prevW17Create === 'function') {
     window.__CFD_W17_CREATE__ = async function wrappedW17Create(opts) {
       const out = await prevW17Create(opts);
-      w18State.material = null;
-      w18State.draft_volumes = [];
-      w18State.ready = false;
-      w18State.libraryApplied = false;
-      syncSimulationTree();
+      materialCatalog.material = null;
+      materialCatalog.draft_volumes = [];
+      materialCatalog.ready = false;
+      materialCatalog.libraryApplied = false;
+      refreshSetupTree();
       publishW18({ ready: false, note: 'W18: Materials + → Air available' });
       return out;
     };
@@ -24380,20 +24340,20 @@ window.__CFD_W18_ASSIGN__ = function assignW18(vol) {
   fetch('/api/materials' + hashProjectQs())
     .then((r) => r.json())
     .then((j) => {
-      w18State.hydrated = true;
+      materialCatalog.hydrated = true;
       const sid = currentStudyId();
       if (j && j.air && sid) {
         applyMaterialRecord(j.air, j.project_id, { openPanel: false });
         publishW18({ hydrated: true, created: false });
       } else {
-        syncSimulationTree();
+        refreshSetupTree();
         publishW18({ hydrated: true, ready: false });
       }
     })
     .catch((e) => {
       console.warn('[CFD W18] hydrate', e);
-      w18State.hydrated = true;
-      syncSimulationTree();
+      materialCatalog.hydrated = true;
+      refreshSetupTree();
       publishW18({ ready: false });
     });
 })();
@@ -24403,40 +24363,23 @@ window.__CFD_W18_ASSIGN__ = function assignW18(vol) {
 /**
  * Boundary conditions: Velocity inlet / outlet, Pressure, Wall (slip / no-slip).
  * Click a CAD face in the viewport to assign it. Settings save automatically.
- * Faces no BC claims follow the project defaults (`w19State.defaults`):
+ * Faces no BC claims follow the project defaults (`bcCatalog.defaults`):
  * no-slip walls unless the user switches the default to slip.
  */
 const BC_TYPE_LIST = ['Velocity inlet', 'Velocity outlet', 'Pressure', 'Wall'];
 const WALL_TYPE_LIST = ['No-slip', 'Slip'];
 const BC_DEFAULTS_FALLBACK = { wall_type: 'No-slip' };
 
-const w19State = {
-  ready: false,
-  hydrated: false,
-  created: false,
-  project_id: null,
-  bcs: [],
-  bcs_all: [],
-  defaults: { ...BC_DEFAULTS_FALLBACK },
-  defaults_by_simulation: {},
-  activeId: null,
-  draft_faces: [],
-  focusFace: null,
-  velocity_inlet_1: null,
-  pressure_outlet_2: null,
-  boundary_conditions_json: null,
-  note: 'Boundary conditions',
-};
-window.__CFD_W19_STATE__ = w19State;
+
 
 function bcList() {
-  return Array.isArray(w19State.bcs) ? w19State.bcs : [];
+  return Array.isArray(bcCatalog.bcs) ? bcCatalog.bcs : [];
 }
 
 function findBcRecord(id) {
   const want = String(id || '');
   if (!want) return null;
-  const lists = [w19State.bcs, w19State.bcs_all];
+  const lists = [bcCatalog.bcs, bcCatalog.bcs_all];
   for (const list of lists) {
     if (!Array.isArray(list)) continue;
     const hit = list.find((b) => b && String(b.id) === want);
@@ -24447,9 +24390,9 @@ function findBcRecord(id) {
 
 function ensureBcInActiveList(bc) {
   if (!bc || !bc.id) return;
-  if (!Array.isArray(w19State.bcs)) w19State.bcs = [];
-  if (!w19State.bcs.some((b) => b && String(b.id) === String(bc.id))) {
-    w19State.bcs = w19State.bcs.concat([bc]);
+  if (!Array.isArray(bcCatalog.bcs)) bcCatalog.bcs = [];
+  if (!bcCatalog.bcs.some((b) => b && String(b.id) === String(bc.id))) {
+    bcCatalog.bcs = bcCatalog.bcs.concat([bc]);
   }
 }
 
@@ -24465,7 +24408,7 @@ function solveHasFlowDriver() {
 }
 
 function activeBc() {
-  return bcList().find((b) => b.id === w19State.activeId) || null;
+  return bcList().find((b) => b.id === bcCatalog.activeId) || null;
 }
 
 function normalizeWallType(raw) {
@@ -24476,8 +24419,8 @@ function normalizeWallType(raw) {
 function bcDefaults() {
   const sid = typeof currentStudyId === 'function' ? currentStudyId() : null;
   const bySim =
-    sid && w19State.defaults_by_simulation && w19State.defaults_by_simulation[sid];
-  const d = bySim || w19State.defaults || {};
+    sid && bcCatalog.defaults_by_simulation && bcCatalog.defaults_by_simulation[sid];
+  const d = bySim || bcCatalog.defaults || {};
   return { wall_type: normalizeWallType(d.wall_type) };
 }
 
@@ -24507,10 +24450,10 @@ function isWallBc(bc) {
 function currentProjectId() {
   return (
     (w16State.project && w16State.project.id) ||
-    (typeof w17State !== 'undefined' && w17State.project_id) ||
-    w19State.project_id ||
-    (typeof w20State !== 'undefined' && w20State.project_id) ||
-    (typeof w26State !== 'undefined' && w26State.project_id) ||
+    (typeof studyCatalog !== 'undefined' && studyCatalog.project_id) ||
+    bcCatalog.project_id ||
+    (typeof meshCatalog !== 'undefined' && meshCatalog.project_id) ||
+    (typeof refinementCatalog !== 'undefined' && refinementCatalog.project_id) ||
     null
   );
 }
@@ -24519,20 +24462,20 @@ function publishW19(extra) {
   const list = bcList();
   const vi = list.find((b) => b.bc_type === 'Velocity inlet') || null;
   const po = list.find((b) => String(b.bc_type || '').startsWith('Pressure')) || null;
-  w19State.velocity_inlet_1 = vi;
-  w19State.pressure_outlet_2 = po;
+  bcCatalog.velocity_inlet_1 = vi;
+  bcCatalog.pressure_outlet_2 = po;
   const payload = {
     ready: list.length > 0,
-    hydrated: w19State.hydrated,
-    created: w19State.created,
-    project_id: w19State.project_id,
+    hydrated: bcCatalog.hydrated,
+    created: bcCatalog.created,
+    project_id: bcCatalog.project_id,
     boundary_conditions: list,
     defaults: bcDefaults(),
     velocity_inlet_1: vi,
     pressure_outlet_2: po,
-    activeId: w19State.activeId,
-    boundary_conditions_json: w19State.boundary_conditions_json,
-    note: w19State.note,
+    activeId: bcCatalog.activeId,
+    boundary_conditions_json: bcCatalog.boundary_conditions_json,
+    note: bcCatalog.note,
     increment: 'W19',
     ...(extra || {}),
   };
@@ -24572,36 +24515,6 @@ function unitsForVelocity(vt, fr) {
 
 function unitsForPressure() {
   return ['Pa', 'kPa', 'psi'];
-}
-
-function fillUnitSelect(sel, units, current, imperial) {
-  if (!sel) return current;
-  const fallback = imperial
-    ? units.find((u) => unitIsImperial(u)) || units[units.length - 1]
-    : units.find((u) => !unitIsImperial(u)) || units[0];
-  const chosen = units.includes(current) ? current : fallback;
-  sel.innerHTML = units
-    .map((u) => '<option value="' + escapeHtml(u) + '"' + (u === chosen ? ' selected' : '') + '>' + escapeHtml(u) + '</option>')
-    .join('');
-  return chosen;
-}
-
-function fillBcUnitSelect(vt, fr, current) {
-  return fillUnitSelect(
-    document.getElementById('bc-unit'),
-    unitsForVelocity(vt, fr),
-    current,
-    prefersImperialUnits(),
-  );
-}
-
-function fillBcPressureUnitSelect(current) {
-  return fillUnitSelect(
-    document.getElementById('bc-p-unit'),
-    unitsForPressure(),
-    current,
-    prefersImperialUnits(),
-  );
 }
 
 function convertBcRecord(bc, imperial) {
@@ -24654,7 +24567,7 @@ function convertRefRecord(ref, imperial) {
 function allProjectBcs() {
   const seen = new Set();
   const out = [];
-  for (const list of [w19State.bcs_all, w19State.bcs]) {
+  for (const list of [bcCatalog.bcs_all, bcCatalog.bcs]) {
     for (const bc of list || []) {
       if (!bc || !bc.id || seen.has(String(bc.id))) continue;
       seen.add(String(bc.id));
@@ -24662,34 +24575,6 @@ function allProjectBcs() {
     }
   }
   return out;
-}
-
-function syncAirPropertyLabels() {
-  const mat = (typeof w18State !== 'undefined' && w18State.material) || W18_AIR_DEFAULTS;
-  const imperial = prefersImperialUnits();
-  const nuSi = Number(mat.kinematic_viscosity ?? W18_AIR_DEFAULTS.kinematic_viscosity);
-  const rhoSi = Number(mat.density ?? W18_AIR_DEFAULTS.density);
-  const nuEl = document.getElementById('air-nu');
-  const rhoEl = document.getElementById('air-rho');
-  if (nuEl && Number.isFinite(nuSi)) {
-    if (imperial) {
-      nuEl.textContent = formatConvertedNumber(convertQuantity('kinematic_viscosity', nuSi, 'm²/s', 'ft²/s')) + ' ft²/s';
-    } else {
-      nuEl.textContent = nuSi.toExponential(4).replace(/e\+?/, 'e') + ' m²/s';
-    }
-  }
-  if (rhoEl && Number.isFinite(rhoSi)) {
-    if (imperial) {
-      rhoEl.textContent = formatConvertedNumber(convertQuantity('density', rhoSi, 'kg/m³', 'lb/ft³')) + ' lb/ft³';
-    } else {
-      rhoEl.textContent = formatConvertedNumber(rhoSi) + ' kg/m³';
-    }
-  }
-}
-
-function syncMeshLengthUnitLabel() {
-  const el = document.getElementById('mesh-sfs-unit');
-  if (el) el.textContent = prefersImperialUnits() ? 'in' : 'm';
 }
 
 async function persistConvertedBcs(changed) {
@@ -24727,16 +24612,13 @@ async function persistConvertedRefs(changed) {
   }
   let last = null;
   for (const [sid, list] of groups) {
-    const r = await fetch('/api/mesh/refinements', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        refinements: list,
-        project_id: currentProjectId() || undefined,
-        simulation_id: sid || undefined,
-      }),
+    const posted = await postRefinements({
+      refinements: list,
+      project_id: currentProjectId() || undefined,
+      simulation_id: sid || undefined,
     });
-    const j = await r.json().catch(() => null);
+    const r = posted.response;
+    const j = posted.json;
     if (r.ok && j && j.ok) last = j;
   }
   if (last && typeof applyRefRecords === 'function') applyRefRecords(last, last.project_id);
@@ -24768,7 +24650,7 @@ async function applyPreferredUnitsToOpenProject() {
     if (convertBcRecord(bc, imperial)) changedBcs.push(bc);
   }
   const changedRefs = [];
-  for (const ref of (typeof w26State !== 'undefined' && w26State.refinements) || []) {
+  for (const ref of (typeof refinementCatalog !== 'undefined' && refinementCatalog.refinements) || []) {
     if (convertRefRecord(ref, imperial)) changedRefs.push(ref);
   }
   try { await persistConvertedBcs(changedBcs); } catch (e) { console.warn('[CFD] convert BCs', e); }
@@ -24776,120 +24658,58 @@ async function applyPreferredUnitsToOpenProject() {
   try { await persistProjectUnits(imperial); } catch (_) {}
   try { syncBcEditorFields(); } catch (_) {}
   try { if (typeof syncRefEditorFields === 'function') syncRefEditorFields(); } catch (_) {}
-  try { syncAirPropertyLabels(); } catch (_) {}
+  try { window.dispatchEvent(new CustomEvent('cfd:material')); } catch (_) {}
   try {
     if (typeof selectMeshLocally === 'function' && typeof viewingMeshId === 'function' && viewingMeshId()) {
       selectMeshLocally(viewingMeshId());
     } else if (typeof applySettingsToForm === 'function') {
-      applySettingsToForm((w20State && w20State.settings) || null, { force: true });
+      applySettingsToForm((meshCatalog && meshCatalog.settings) || null, { force: true });
     }
   } catch (_) {}
-  try { syncMeshLengthUnitLabel(); } catch (_) {}
   return changedBcs.length + changedRefs.length > 0;
 }
 
 window.__CFD_APPLY_PREFERRED_UNITS__ = applyPreferredUnitsToOpenProject;
 
 function syncBcAssignList() {
-  const list = document.getElementById('bc-assign-list');
-  const count = document.getElementById('bc-assign-count');
-  const faces = w19State.draft_faces || [];
-  if (w19State.focusFace && !faces.includes(w19State.focusFace)) w19State.focusFace = null;
-  if (list) {
-    list.innerHTML = faces
-      .map((f) => {
-        const on = w19State.focusFace === f ? ' is-focus' : '';
-        return (
-          '<li class="bc-assign-item' +
-          on +
-          '" data-w19-face="' +
-          escapeHtml(f) +
-          '">' +
-          '<button type="button" class="bc-assign-pick" data-focus-face="' +
-          escapeHtml(f) +
-          '">' +
-          escapeHtml(f) +
-          '</button>' +
-          '<button type="button" class="bc-assign-x" data-unassign-face="' +
-          escapeHtml(f) +
-          '" aria-label="Remove ' +
-          escapeHtml(f) +
-          '">×</button>' +
-          '</li>'
-        );
-      })
-      .join('');
-  }
-  if (count) count.textContent = String(faces.length);
+  const faces = bcCatalog.draft_faces || [];
+  if (bcCatalog.focusFace && !faces.includes(bcCatalog.focusFace)) bcCatalog.focusFace = null;
   if (isAssigningBcFace()) {
     const bc = typeof activeBc === 'function' ? activeBc() : null;
     const paint = bc ? paintForBcFaces(faces, bcKind(bc)) : null;
-    highlightGeomFaces(faces, w19State.focusFace, paint);
+    highlightGeomFaces(faces, bcCatalog.focusFace, paint);
   }
-  if (typeof updateBcPerFaceHint === 'function') updateBcPerFaceHint();
   if (typeof updateBcGlyphs === 'function') updateBcGlyphs();
+  publishBcState();
+}
+
+/**
+ * Boundary-condition state for the React hub, picker and editor
+ * (src/panels/bcs). Dispatched as `cfd:bcs` on window whenever records,
+ * the open BC, its faces, the defaults, or the picker's face selection change.
+ */
+function publishBcState() {
+  const d = bcDefaults();
+  const detail = {
+    simulation_id: (typeof currentStudyId === 'function' && currentStudyId()) || null,
+    bcs: bcList().map((b) => ({ ...b, faces: (b.faces || []).slice() })),
+    active_id: bcCatalog.activeId || null,
+    draft_faces: (bcCatalog.draft_faces || []).slice(),
+    focus_face: bcCatalog.focusFace || null,
+    defaults: { wall_type: d.wall_type },
+    defaults_summary: bcDefaultsSummary(),
+    pending_faces: treeUi.openPanel === 'bc-picker' ? pendingCadFaceLabels() : [],
+    imperial: prefersImperialUnits(),
+  };
+  window.__CFD_BCS__ = detail;
+  try {
+    window.dispatchEvent(new CustomEvent('cfd:bcs', { detail }));
+  } catch (_) {}
+  return detail;
 }
 
 function syncBcEditorFields() {
-  const bc = activeBc();
-  const velBox = document.getElementById('bc-vel-fields');
-  const pBox = document.getElementById('bc-p-fields');
-  const wallBox = document.getElementById('bc-wall-fields');
-  const title = document.getElementById('bc-editor-title');
-  const typeEl = document.getElementById('bc-editor-type');
-  if (!bc) return;
-  if (title) title.textContent = bc.name;
-  if (typeEl) typeEl.value = bc.bc_type || 'Velocity inlet';
-  const vel = isVelocityBc(bc);
-  const wall = isWallBc(bc);
-  if (velBox) velBox.hidden = !vel;
-  if (pBox) pBox.hidden = vel || wall;
-  if (wallBox) wallBox.hidden = !wall;
-  if (wall) {
-    const wt = normalizeWallType(bc.wall_type);
-    const wtEl = document.getElementById('bc-wall-type');
-    if (wtEl) wtEl.value = wt;
-    const hint = document.getElementById('bc-wall-hint');
-    if (hint) hint.textContent = wallTypeHint(wt);
-  } else if (vel) {
-    const vt = bc.velocity_type || 'Fixed';
-    const fr = bc.flow_rate_type || 'Volumetric flow';
-    const vtEl = document.getElementById('bc-velocity-type');
-    const frEl = document.getElementById('bc-flow-rate-type');
-    const valEl = document.getElementById('bc-value');
-    const dirEl = document.getElementById('bc-direction');
-    if (vtEl) vtEl.value = vt;
-    if (frEl) frEl.value = fr;
-    if (valEl) valEl.value = bc.value == null ? '' : String(bc.value);
-    fillBcUnitSelect(vt, fr, bc.unit);
-    if (dirEl) dirEl.value = bc.direction || 'Normal to face';
-    const vec = bc.vector || [0, 0, 1];
-    const x = document.getElementById('bc-vec-x');
-    const y = document.getElementById('bc-vec-y');
-    const z = document.getElementById('bc-vec-z');
-    if (x) x.value = String(vec[0] ?? 0);
-    if (y) y.value = String(vec[1] ?? 0);
-    if (z) z.value = String(vec[2] ?? 1);
-    const frRow = document.getElementById('bc-flow-rate-type-row');
-    const dirRow = document.getElementById('bc-direction-row');
-    const vecRow = document.getElementById('bc-vector-row');
-    const lab = document.getElementById('bc-vel-value-label');
-    if (frRow) frRow.hidden = vt !== 'Flow rate';
-    if (dirRow) dirRow.hidden = vt !== 'Fixed';
-    if (vecRow) vecRow.hidden = vt !== 'Fixed' || (bc.direction || 'Normal to face') !== 'Vector';
-    const vecHint = document.getElementById('bc-vector-hint');
-    if (vecHint) vecHint.hidden = !vecRow || vecRow.hidden;
-    if (lab) {
-      lab.textContent =
-        vt === 'Flow rate' ? (fr === 'Mass flow' ? 'Mass flow' : 'Volumetric flow') : 'Velocity';
-    }
-  } else {
-    const pVal = document.getElementById('bc-p-value');
-    if (pVal) pVal.value = bc.value == null ? '0' : String(bc.value);
-    const pUnit = fillBcPressureUnitSelect(bc.unit || (prefersImperialUnits() ? 'psi' : 'Pa'));
-    if (pUnit && !bc.unit) bc.unit = pUnit;
-  }
-  updateBcPerFaceHint();
+  if (!activeBc()) return;
   syncBcAssignList();
 }
 
@@ -24899,88 +24719,106 @@ function wallTypeHint(wt) {
     : 'Air sticks to the wall (zero velocity at the surface). This is the usual CFD wall.';
 }
 
-function updateBcPerFaceHint() {
-  const per = document.getElementById('bc-per-face-hint');
-  if (!per) return;
-  const bc = activeBc();
-  if (!isVelocityBc(bc)) {
-    per.hidden = true;
-    return;
-  }
-  const unit =
-    (document.getElementById('bc-unit') && document.getElementById('bc-unit').value) || bc.unit || '';
-  const n = (w19State.draft_faces || []).length;
-  const val = bc.value == null ? '' : bc.value;
-  per.hidden = false;
-  per.textContent =
-    n > 1 && val !== ''
-      ? 'Each face gets this value on its own. ' +
-        n +
-        ' faces × ' +
-        val +
-        ' ' +
-        unit +
-        ' = ' +
-        n * Number(val) +
-        ' ' +
-        unit +
-        ' total.'
-      : 'Each assigned face gets this value on its own. Two faces at 5 means 10 total.';
-}
-
+/** The open BC as saved: its record plus the faces being assigned. No DOM is read. */
 function readBcEditorDraft() {
   const bc = activeBc();
   if (!bc) return null;
-  const out = {
-    id: bc.id,
-    name: bc.name,
-    bc_type:
-      (document.getElementById('bc-editor-type') && document.getElementById('bc-editor-type').value) ||
-      bc.bc_type,
-    faces: (w19State.draft_faces || []).slice(),
-  };
+  const out = { ...bc, faces: (bcCatalog.draft_faces || []).slice() };
+  out.face = out.faces[0] || null;
   const pid = currentProjectId();
   if (pid) out.project_id = pid;
   if (String(out.bc_type || '').startsWith('Velocity')) {
-    out.velocity_type = document.getElementById('bc-velocity-type')
-      ? document.getElementById('bc-velocity-type').value
-      : 'Fixed';
-    out.flow_rate_type = document.getElementById('bc-flow-rate-type')
-      ? document.getElementById('bc-flow-rate-type').value
-      : 'Volumetric flow';
-    const n = Number(document.getElementById('bc-value') && document.getElementById('bc-value').value);
+    out.velocity_type = out.velocity_type || 'Fixed';
+    out.flow_rate_type = out.flow_rate_type || 'Volumetric flow';
+    const n = Number(out.value);
     out.value = Number.isFinite(n) ? n : out.velocity_type === 'Fixed' ? 5 : 0.01;
-    const unitEl = document.getElementById('bc-unit');
-    out.unit =
-      (unitEl && unitEl.value) ||
-      preferredUnit(quantityForBc(out), prefersImperialUnits());
-    out.direction = document.getElementById('bc-direction')
-      ? document.getElementById('bc-direction').value
-      : 'Normal to face';
+    out.unit = out.unit || preferredUnit(quantityForBc(out), prefersImperialUnits());
+    out.direction = out.direction || 'Normal to face';
     out.apply_per_face = true;
-    out.vector = [
-      Number(document.getElementById('bc-vec-x') && document.getElementById('bc-vec-x').value) || 0,
-      Number(document.getElementById('bc-vec-y') && document.getElementById('bc-vec-y').value) || 0,
-      Number(document.getElementById('bc-vec-z') && document.getElementById('bc-vec-z').value) || 0,
-    ];
+    out.vector = Array.isArray(out.vector) ? out.vector.map((v) => Number(v) || 0) : [0, 0, 1];
   } else if (isWallBcType(out.bc_type)) {
-    const wtEl = document.getElementById('bc-wall-type');
-    out.wall_type = normalizeWallType((wtEl && wtEl.value) || bc.wall_type);
+    out.wall_type = normalizeWallType(out.wall_type);
   } else {
     out.pressure_type = 'Fixed value';
-    const n = Number(document.getElementById('bc-p-value') && document.getElementById('bc-p-value').value);
+    const n = Number(out.value);
     out.value = Number.isFinite(n) ? n : 0;
-    const pUnitEl = document.getElementById('bc-p-unit');
-    out.unit = (pUnitEl && pUnitEl.value) || bc.unit || (prefersImperialUnits() ? 'psi' : 'Pa');
+    out.unit = out.unit || (prefersImperialUnits() ? 'psi' : 'Pa');
   }
   if (typeof currentMeshStudyIds === 'function') Object.assign(out, currentMeshStudyIds());
   return out;
 }
 
+const BC_FLOW_UNIT_RE = /m\/s|ft\/s|ft\/min|kg\/s|lb\/s|m³|ft³/i;
+
+/**
+ * Apply an edit from the React editor to one BC and save it. A type change
+ * renames "Pressure 1" style names and seeds that type's fields; a unit
+ * change alone converts the value so the physical quantity is unchanged.
+ */
+function updateBcClient(id, patch) {
+  const bc = findBcRecord(id) || activeBc();
+  if (!bc || !patch) return Promise.resolve(null);
+  const next = { ...patch };
+  if (next.bc_type && next.bc_type !== bc.bc_type) {
+    const nextType = next.bc_type;
+    const oldName = bc.name;
+    bc.bc_type = nextType;
+    bc.name = renameBcForType(bc, nextType);
+    if (String(nextType).startsWith('Velocity')) {
+      if (!bc.velocity_type) bc.velocity_type = 'Fixed';
+      if (bc.value == null || !BC_FLOW_UNIT_RE.test(String(bc.unit || ''))) {
+        bc.value = 5;
+        bc.unit = prefersImperialUnits() ? 'ft/s' : 'm/s';
+      }
+      if (!bc.direction) bc.direction = 'Normal to face';
+      if (!bc.vector) bc.vector = [0, 0, 1];
+      bc.apply_per_face = true;
+    } else if (isWallBcType(nextType)) {
+      if (!bc.wall_type) bc.wall_type = bcDefaults().wall_type === 'Slip' ? 'No-slip' : 'Slip';
+    } else {
+      if (bc.value == null) bc.value = 0;
+      if (!bc.unit || BC_FLOW_UNIT_RE.test(String(bc.unit))) {
+        bc.unit = prefersImperialUnits() ? 'psi' : 'Pa';
+        bc.value = 0;
+      }
+      bc.pressure_type = 'Fixed value';
+    }
+    if (oldName !== bc.name) {
+      delete treeUi.expanded[oldName];
+      treeUi.expanded[bc.name] = true;
+      treeUi.expanded['bcid:' + bc.id] = true;
+    }
+    delete next.bc_type;
+  }
+  if (next.unit && bc.unit && next.unit !== bc.unit && next.value === undefined) {
+    const qty = quantityForBc(bc);
+    const n = Number(bc.value);
+    if (qty && Number.isFinite(n)) {
+      try {
+        bc.value = formatConvertedNumber(convertQuantity(qty, n, bc.unit, next.unit));
+      } catch (_) {}
+    }
+  }
+  const flowChanged =
+    (next.velocity_type && next.velocity_type !== bc.velocity_type) ||
+    (next.flow_rate_type && next.flow_rate_type !== bc.flow_rate_type);
+  Object.assign(bc, next);
+  if (flowChanged && next.unit === undefined) {
+    const units = unitsForVelocity(bc.velocity_type, bc.flow_rate_type);
+    if (!units.includes(bc.unit)) {
+      bc.unit = units.find((u) => unitIsImperial(u) === prefersImperialUnits()) || units[0];
+    }
+  }
+  if (String(bcCatalog.activeId) === String(bc.id)) syncBcEditorFields();
+  else publishBcState();
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
+  return saveBoundary(bc.id);
+}
+
 function showBcEditor(bc) {
   if (!bc) return;
-  w19State.activeId = bc.id;
-  w19State.draft_faces = (bc.faces || []).slice();
+  bcCatalog.activeId = bc.id;
+  bcCatalog.draft_faces = (bc.faces || []).slice();
   expandTreeFolder('Boundary conditions');
   treeUi.expanded[bc.name] = true;
   treeUi.expanded['bcid:' + bc.id] = true;
@@ -24989,15 +24827,45 @@ function showBcEditor(bc) {
   markTreeSelected('bcid:' + bc.id);
 }
 
+window.__CFD_OPEN_BC__ = function openBcById(id) {
+  const bc = findBcRecord(id);
+  if (bc) showBcEditor(bc);
+  return !!bc;
+};
+
+/* React BC panels act only through these (src/panels/legacyBridge.ts). */
+window.__CFD_BC_STATE__ = publishBcState;
+window.__CFD_BC_OPEN_PICKER__ = () => openBcTypeModal();
+window.__CFD_BC_OPEN_DEFAULTS__ = () => showBcDefaultsPanel();
+window.__CFD_BC_CREATE__ = function createBcFromPicker(bcType) {
+  return createBcClient(bcType, { faces: pendingCadFaceLabels() });
+};
+window.__CFD_BC_UPDATE__ = updateBcClient;
+window.__CFD_BC_DELETE__ = (id) => deleteBcClient(id);
+window.__CFD_BC_UNASSIGN_FACE__ = (face) => unassignFace(face);
+window.__CFD_BC_FOCUS_FACE__ = (face) => focusAssignedFace(face);
+window.__CFD_BC_CLEAR_FACES__ = function clearBcFaces() {
+  bcCatalog.draft_faces = [];
+  const bc = activeBc();
+  if (bc) {
+    bc.faces = [];
+    bc.face = null;
+  }
+  syncBcAssignList();
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
+  publishFaceSelection([]);
+  return saveBoundary((bc && bc.id) || viewingBcId());
+};
+
 function hideBcPanels() {
-  w19State.activeId = null;
+  bcCatalog.activeId = null;
   if (treeUi.openPanel === 'bc' || treeUi.openPanel === 'vi' || treeUi.openPanel === 'po') {
     hideAllTreeDetails();
   }
 }
 
 function openBcTypeModal() {
-  if (!w17State.simulation) {
+  if (!studyCatalog.simulation) {
     console.warn('[CFD] Create Simulation first');
     return;
   }
@@ -25024,59 +24892,63 @@ function wireBcTreeHandlers() {
   });
 }
 
-function canonicalBcRecord(record) {
+function canonicalBcRecord(record, index) {
   const type = String(record.bc_type || record.type || '').toLowerCase().replace(/[\s_-]+/g, '');
   const bc_type = { velocityinlet: 'Velocity inlet', velocityoutlet: 'Velocity outlet', pressure: 'Pressure', pressureinlet: 'Pressure', pressureoutlet: 'Pressure', wall: 'Wall' }[type];
-  return bc_type ? { ...record, bc_type } : record;
+  const out = bc_type ? { ...record, bc_type } : record;
+  // Older projects saved BCs without ids; the editor and hub address records by id.
+  if (out.id) return out;
+  const slug = String(out.name || out.bc_type || 'bc').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return { ...out, id: 'bc-' + (slug || 'bc') + '-' + (Number(index) || 0) };
 }
 
 function applyBcRecords(doc, projectId) {
   const prev = activeBc();
   const list = ((doc && doc.boundary_conditions) || []).filter(Boolean).map(canonicalBcRecord);
-  w19State.bcs = list;
+  bcCatalog.bcs = list;
   const sid =
     (doc && doc.simulation_id) ||
     (typeof currentStudyId === 'function' ? currentStudyId() : null) ||
-    (typeof w17State !== 'undefined' && w17State.activeId);
+    (typeof studyCatalog !== 'undefined' && studyCatalog.activeId);
   if (doc && Array.isArray(doc.boundary_conditions_all)) {
-    w19State.bcs_all = adoptStudyTaggedList(w19State.bcs_all, doc.boundary_conditions_all.filter(Boolean).map(canonicalBcRecord), sid);
+    bcCatalog.bcs_all = adoptStudyTaggedList(bcCatalog.bcs_all, doc.boundary_conditions_all.filter(Boolean).map(canonicalBcRecord), sid);
   } else {
-    w19State.bcs_all = mergeStudyTaggedList(w19State.bcs_all, list, sid);
+    bcCatalog.bcs_all = mergeStudyTaggedList(bcCatalog.bcs_all, list, sid);
   }
   if (doc && doc.defaults_by_simulation && typeof doc.defaults_by_simulation === 'object') {
-    w19State.defaults_by_simulation = { ...doc.defaults_by_simulation };
+    bcCatalog.defaults_by_simulation = { ...doc.defaults_by_simulation };
   } else if (sid && doc && doc.defaults) {
-    w19State.defaults_by_simulation = {
-      ...(w19State.defaults_by_simulation || {}),
+    bcCatalog.defaults_by_simulation = {
+      ...(bcCatalog.defaults_by_simulation || {}),
       [sid]: { wall_type: normalizeWallType(doc.defaults.wall_type) },
     };
   }
   if (doc && doc.defaults && typeof doc.defaults === 'object') {
-    w19State.defaults = { wall_type: normalizeWallType(doc.defaults.wall_type) };
+    bcCatalog.defaults = { wall_type: normalizeWallType(doc.defaults.wall_type) };
   } else if (doc && !doc.defaults && Array.isArray(doc.boundary_conditions)) {
-    w19State.defaults = { ...BC_DEFAULTS_FALLBACK };
+    bcCatalog.defaults = { ...BC_DEFAULTS_FALLBACK };
   }
-  w19State.project_id = projectId || (doc && doc.project_id) || w19State.project_id;
-  w19State.boundary_conditions_json = (doc && doc.boundary_conditions_json) || null;
-  w19State.ready = list.length > 0;
-  w19State.created = list.length > 0;
-  const viewing = typeof viewingBcId === 'function' ? viewingBcId() : w19State.activeId;
+  bcCatalog.project_id = projectId || (doc && doc.project_id) || bcCatalog.project_id;
+  bcCatalog.boundary_conditions_json = (doc && doc.boundary_conditions_json) || null;
+  bcCatalog.ready = list.length > 0;
+  bcCatalog.created = list.length > 0;
+  const viewing = typeof viewingBcId === 'function' ? viewingBcId() : bcCatalog.activeId;
   if (viewing && list.some((b) => String(b.id) === String(viewing))) {
-    w19State.activeId = viewing;
-  } else if (w19State.activeId && !list.some((b) => b.id === w19State.activeId)) {
+    bcCatalog.activeId = viewing;
+  } else if (bcCatalog.activeId && !list.some((b) => b.id === bcCatalog.activeId)) {
     const fallback = (prev && list.find((b) => b.name === prev.name)) || null;
-    w19State.activeId = fallback ? fallback.id : null;
+    bcCatalog.activeId = fallback ? fallback.id : null;
   }
   const active = viewing
     ? list.find((b) => String(b.id) === String(viewing)) || null
     : activeBc();
   if (active && (!viewing || String(active.id) === String(viewing))) {
-    w19State.draft_faces = (active.faces || []).slice();
+    bcCatalog.draft_faces = (active.faces || []).slice();
   } else if (!active) {
-    w19State.draft_faces = [];
+    bcCatalog.draft_faces = [];
   }
   publishW19({ created: true });
-  if (typeof syncSimulationTree === 'function') syncSimulationTree();
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
   if (typeof syncBcsHub === 'function') syncBcsHub();
   if (treeUi.openPanel === 'bc' && active && (!viewing || String(active.id) === String(viewing))) {
     syncBcEditorFields();
@@ -25106,11 +24978,7 @@ function bcUnassignedFaces() {
 }
 
 function syncBcDefaultsLabels() {
-  const text = bcDefaultsSummary();
-  const a = document.getElementById('bc-picker-defaults-sub');
-  const b = document.getElementById('bc-defaults-hub-sub');
-  if (a) a.textContent = text;
-  if (b) b.textContent = text;
+  publishBcState();
 }
 
 function syncBcDefaultsPanel() {
@@ -25137,11 +25005,11 @@ function syncBcDefaultsPanel() {
 }
 
 function showBcDefaultsPanel() {
-  if (!w17State.simulation) {
+  if (!studyCatalog.simulation) {
     console.warn('[CFD] Create Simulation first');
     return;
   }
-  w19State.activeId = null;
+  bcCatalog.activeId = null;
   expandTreeFolder('Boundary conditions');
   openTreeDetail('bc-defaults', { toggle: false });
   markTreeSelected('bc-defaults');
@@ -25151,9 +25019,9 @@ function showBcDefaultsPanel() {
 async function persistBcDefaults(partial) {
   const next = { ...bcDefaults(), ...(partial || {}) };
   next.wall_type = normalizeWallType(next.wall_type);
-  w19State.defaults = next;
+  bcCatalog.defaults = next;
   syncBcDefaultsPanel();
-  if (typeof syncSimulationTree === 'function') syncSimulationTree();
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
   const body = { defaults: next };
   const pid = currentProjectId();
   if (pid) body.project_id = pid;
@@ -25169,76 +25037,44 @@ async function persistBcDefaults(partial) {
   return j;
 }
 
-async function persistActiveBc(expectedId) {
-  if (w19State._createWait) {
-    try { await w19State._createWait; } catch (_) {}
-  }
-  const viewId = expectedId || viewingBcId();
-  const draft = readBcEditorDraft();
-  if (!draft) return null;
-  if (viewId && draft.id && String(draft.id) !== String(viewId)) return null;
-  const live = activeBc();
-  if (live && draft.id && live.id === draft.id) {
-    live.faces = (draft.faces || []).slice();
-    live.face = live.faces[0] || null;
-  }
-  const gen = (w19State._persistGen = (w19State._persistGen || 0) + 1);
-  const ownerId = draft.id;
-  const r = await fetch('/api/bcs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(draft),
-  });
-  const j = await r.json();
-  if (!r.ok || !j.ok) throw new Error(j.error || 'BC save failed');
-  if (gen !== w19State._persistGen) return j;
-  if (viewingBcId() && ownerId && String(viewingBcId()) !== String(ownerId)) return j;
-  applyBcRecords(j, j.project_id);
-  return j;
-}
 
 function toggleAssignFace(label) {
   const name = String(label || '').trim();
   if (!name || !activeBc()) return;
-  const i = w19State.draft_faces.indexOf(name);
-  if (i >= 0) {
-    w19State.draft_faces.splice(i, 1);
-    if (w19State.focusFace === name) w19State.focusFace = w19State.draft_faces[0] || null;
-  } else {
-    w19State.draft_faces.push(name);
-    w19State.focusFace = name;
-  }
+  bcCatalog.draft_faces = toggleFaceId(bcCatalog.draft_faces || [], name);
+  bcCatalog.focusFace = bcCatalog.draft_faces.includes(name) ? name : bcCatalog.draft_faces[0] || null;
   const bc = activeBc();
   if (bc) {
-    bc.faces = w19State.draft_faces.slice();
+    bc.faces = bcCatalog.draft_faces.slice();
     bc.face = bc.faces[0] || null;
   }
   syncBcAssignList();
-  if (typeof syncSimulationTree === 'function') syncSimulationTree();
-  persistActiveBc((bc && bc.id) || viewingBcId()).catch((e) => console.error('[CFD] BC face', e));
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
+  publishFaceSelection(bcCatalog.draft_faces);
+  saveBoundary((bc && bc.id) || viewingBcId()).catch((e) => console.error('[CFD] BC face', e));
 }
 
 function unassignFace(label) {
   const name = String(label || '').trim();
-  const i = w19State.draft_faces.indexOf(name);
-  if (i < 0) return;
-  w19State.draft_faces.splice(i, 1);
-  if (w19State.focusFace === name) w19State.focusFace = w19State.draft_faces[0] || null;
+  if (!bcCatalog.draft_faces.includes(name)) return;
+  bcCatalog.draft_faces = removeFaceId(bcCatalog.draft_faces || [], name);
+  if (bcCatalog.focusFace === name) bcCatalog.focusFace = bcCatalog.draft_faces[0] || null;
   const bc = activeBc();
   if (bc) {
-    bc.faces = w19State.draft_faces.slice();
+    bc.faces = bcCatalog.draft_faces.slice();
     bc.face = bc.faces[0] || null;
   }
   syncBcAssignList();
-  if (typeof syncSimulationTree === 'function') syncSimulationTree();
-  persistActiveBc((bc && bc.id) || viewingBcId()).catch((e) => console.error('[CFD] BC face', e));
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
+  publishFaceSelection(bcCatalog.draft_faces);
+  saveBoundary((bc && bc.id) || viewingBcId()).catch((e) => console.error('[CFD] BC face', e));
 }
 
 function focusAssignedFace(label, opts) {
   const name = String(label || '').trim();
-  if (!name || !w19State.draft_faces.includes(name)) return;
-  if (opts && opts.toggle === false) w19State.focusFace = name;
-  else w19State.focusFace = w19State.focusFace === name ? null : name;
+  if (!name || !bcCatalog.draft_faces.includes(name)) return;
+  if (opts && opts.toggle === false) bcCatalog.focusFace = name;
+  else bcCatalog.focusFace = bcCatalog.focusFace === name ? null : name;
   syncBcAssignList();
 }
 
@@ -25328,8 +25164,8 @@ async function createBcClient(bcType, opts) {
       (j.boundary_conditions || []).find((b) => b.id === local.id) ||
       (j.boundary_conditions || []).find((b) => b.bc_type === bcType && !(b.faces || []).length) ||
       (j.boundary_conditions || []).filter((b) => b.bc_type === bcType).slice(-1)[0];
-    if (created && w19State.activeId === local.id) {
-      w19State.activeId = created.id;
+    if (created && bcCatalog.activeId === local.id) {
+      bcCatalog.activeId = created.id;
       if (treeUi.openPanel === 'bc') {
         syncBcEditorFields();
         markTreeSelected('bcid:' + created.id);
@@ -25337,7 +25173,7 @@ async function createBcClient(bcType, opts) {
     }
     return j;
   })();
-  w19State._createWait = pending.catch(() => {});
+  bcCatalog._createWait = pending.catch(() => {});
   return pending;
 }
 
@@ -25352,8 +25188,8 @@ async function deleteBcClient(id) {
   });
   const j = await r.json();
   if (!r.ok || !j.ok) throw new Error(j.error || 'BC delete failed');
-  w19State.activeId = null;
-  w19State.draft_faces = [];
+  bcCatalog.activeId = null;
+  bcCatalog.draft_faces = [];
   highlightGeomFaces([]);
   if (typeof clearBcGlyphs === 'function') clearBcGlyphs();
   applyBcRecords(j, j.project_id);
@@ -25385,7 +25221,6 @@ function syncPoAssignList() {
   syncBcAssignList();
 }
 
-window.__CFD_W19_CREATE__ = createBcClient;
 window.__CFD_SHOW_BC__ = showBcEditor;
 window.__CFD_PENDING_CAD_FACES__ = pendingCadFaceLabels;
 window.__CFD_ASSIGN_FACE__ = function assignFace(faceOrId, bodyId) {
@@ -25394,152 +25229,20 @@ window.__CFD_ASSIGN_FACE__ = function assignFace(faceOrId, bodyId) {
       ? faceOrId
       : faceLabel(faceOrId, bodyId || 1);
   toggleAssignFace(label);
-  return (w19State.draft_faces || []).slice();
-};
-window.__CFD_W19_SAVE_VI__ = function saveViCompat(partial) {
-  return createBcClient('Velocity inlet').then(() => {
-    if (partial && partial.faces) w19State.draft_faces = partial.faces.slice();
-    return persistActiveBc();
-  });
-};
-window.__CFD_W19_SAVE_PO__ = function savePoCompat(partial) {
-  return createBcClient('Pressure').then(() => {
-    if (partial && partial.faces) w19State.draft_faces = partial.faces.slice();
-    return persistActiveBc();
-  });
-};
-window.__CFD_W19_APPLY__ = async function applyW19(partial) {
-  if (partial && partial.bcs) {
-    const r = await fetch('/api/bcs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        bcs: partial.bcs,
-        project_id: currentProjectId(),
-        ...(typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {}),
-      }),
-    });
-    const j = await r.json();
-    if (!r.ok || !j.ok) throw new Error(j.error || 'bcs batch save failed');
-    applyBcRecords(j, j.project_id);
-    return window.__CFD_W19__;
-  }
-  return publishW19();
+  return (bcCatalog.draft_faces || []).slice();
 };
 
 (function wireW19Ui() {
-  const persist = () =>
-    persistActiveBc((activeBc() && activeBc().id) || viewingBcId()).catch((e) =>
-      console.error('[CFD] BC persist', e)
-    );
-  document.getElementById('bc-assign-list')?.addEventListener('click', (e) => {
-    const drop = e.target.closest('[data-unassign-face]');
-    if (drop) {
-      e.preventDefault();
-      e.stopPropagation();
-      unassignFace(drop.getAttribute('data-unassign-face'));
-      return;
-    }
-    const pick = e.target.closest('[data-focus-face]');
-    if (pick) {
-      e.preventDefault();
-      focusAssignedFace(pick.getAttribute('data-focus-face'));
-    }
-  });
-  document.getElementById('bc-editor-type')?.addEventListener('change', () => {
-    const bc = activeBc();
-    const typeEl = document.getElementById('bc-editor-type');
-    if (!bc || !typeEl) return;
-    const nextType = typeEl.value;
-    const oldName = bc.name;
-    bc.bc_type = nextType;
-    bc.name = renameBcForType(bc, nextType);
-    if (String(nextType).startsWith('Velocity')) {
-      if (!bc.velocity_type) bc.velocity_type = 'Fixed';
-      if (bc.value == null) bc.value = 5;
-      if (!bc.unit) bc.unit = prefersImperialUnits() ? 'ft/s' : 'm/s';
-      if (!bc.direction) bc.direction = 'Normal to face';
-      if (!bc.vector) bc.vector = [0, 0, 1];
-      bc.apply_per_face = true;
-    } else if (isWallBcType(nextType)) {
-      if (!bc.wall_type) bc.wall_type = bcDefaults().wall_type === 'Slip' ? 'No-slip' : 'Slip';
-    } else {
-      if (bc.value == null) bc.value = 0;
-      if (!bc.unit || /m\/s|ft\/s|ft\/min|kg\/s|lb\/s|m³|ft³/i.test(String(bc.unit))) {
-        bc.unit = prefersImperialUnits() ? 'psi' : 'Pa';
-      }
-      bc.pressure_type = 'Fixed value';
-    }
-    if (oldName !== bc.name) {
-      delete treeUi.expanded[oldName];
-      treeUi.expanded[bc.name] = true;
-      treeUi.expanded['bcid:' + bc.id] = true;
-    }
-    syncBcEditorFields();
-    persist();
-  });
-  ['bc-velocity-type', 'bc-flow-rate-type', 'bc-value', 'bc-unit', 'bc-direction', 'bc-vec-x', 'bc-vec-y', 'bc-vec-z', 'bc-p-value', 'bc-p-unit', 'bc-wall-type'].forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('change', () => {
-      if (id === 'bc-unit' || id === 'bc-p-unit') {
-        const bc = activeBc();
-        const qty = quantityForBc(bc);
-        const valEl = document.getElementById(id === 'bc-p-unit' ? 'bc-p-value' : 'bc-value');
-        const from = bc && bc.unit;
-        const to = el.value;
-        if (bc && qty && valEl && from && to && from !== to) {
-          const n = Number(valEl.value);
-          if (Number.isFinite(n)) {
-            const next = formatConvertedNumber(convertQuantity(qty, n, from, to));
-            valEl.value = String(next);
-            bc.value = next;
-          }
-          bc.unit = to;
-        }
-      }
-      if (id === 'bc-velocity-type' || id === 'bc-flow-rate-type' || id === 'bc-direction' || id === 'bc-wall-type') {
-        const draft = readBcEditorDraft();
-        if (draft) {
-          const i = w19State.bcs.findIndex((b) => b.id === draft.id);
-          if (i >= 0) Object.assign(w19State.bcs[i], draft);
-          syncBcEditorFields();
-        }
-      }
-      persist();
-    });
-  });
-  document.getElementById('bc-clear-assign')?.addEventListener('click', () => {
-    w19State.draft_faces = [];
-    const bc = activeBc();
-    if (bc) {
-      bc.faces = [];
-      bc.face = null;
-    }
-    syncBcAssignList();
-    if (typeof syncSimulationTree === 'function') syncSimulationTree();
-    persist();
-  });
-  // Defaults: reachable from the "+" picker, the BC overview, and the tree row.
-  document.getElementById('bc-picker-defaults')?.addEventListener('click', () => {
-    closeBcTypeModal();
-    showBcDefaultsPanel();
-  });
-  document.getElementById('btn-bc-defaults-hub')?.addEventListener('click', () => showBcDefaultsPanel());
   document.getElementById('bc-default-wall-type')?.addEventListener('change', (e) => {
     persistBcDefaults({ wall_type: e.target.value }).catch((err) => console.error('[CFD] BC defaults', err));
-  });
-  document.getElementById('bc-delete')?.addEventListener('click', () => {
-    const bc = activeBc();
-    if (bc) deleteBcClient(bc.id).catch((e) => console.error('[CFD] BC delete', e));
   });
   const prevCreate = window.__CFD_W16_CREATE__;
   if (typeof prevCreate === 'function') {
     window.__CFD_W16_CREATE__ = async function wrappedCreateW19(fields) {
       const out = await prevCreate(fields);
-      w19State.bcs = [];
-      w19State.activeId = null;
-      w19State.draft_faces = [];
+      bcCatalog.bcs = [];
+      bcCatalog.activeId = null;
+      bcCatalog.draft_faces = [];
       hideBcPanels();
       publishW19({ ready: false });
       return out;
@@ -25550,7 +25253,7 @@ window.__CFD_W19_APPLY__ = async function applyW19(partial) {
     .then((r) => r.json())
     .then((j) => {
       if (!currentStudyId()) return;
-      w19State.hydrated = true;
+      bcCatalog.hydrated = true;
       applyBcRecords(j || { boundary_conditions: [] }, j && j.project_id);
       publishW19({ hydrated: true, ready: bcList().length > 0 });
     })
@@ -25584,45 +25287,30 @@ const W20_DEFAULTS = {
   },
 };
 
-const w20State = {
-  ready: false,
-  hydrated: false,
-  created: false,
-  project_id: null,
-  mesh: null,
-  settings: null,
-  meshes: [],
-  meshes_all: [],
-  active_id: null,
-  mesh_json: null,
-  bank_exact: false,
-  panel_open: false,
-  note: 'W20: Mesh form settings only (bank defaults)',
-};
-window.__CFD_W20_STATE__ = w20State;
+
 
 function publishW20(extra) {
-  const settings = w20State.settings || null;
+  const settings = meshCatalog.settings || null;
   const payload = {
-    ready: w20State.ready,
-    hydrated: w20State.hydrated,
-    created: w20State.created,
-    project_id: w20State.project_id,
-    mesh: w20State.mesh,
-    meshes: w20State.meshes,
-    meshes_all: w20State.meshes_all,
-    active_id: w20State.active_id,
+    ready: meshCatalog.ready,
+    hydrated: meshCatalog.hydrated,
+    created: meshCatalog.created,
+    project_id: meshCatalog.project_id,
+    mesh: meshCatalog.mesh,
+    meshes: meshCatalog.meshes,
+    meshes_all: meshCatalog.meshes_all,
+    active_id: meshCatalog.active_id,
     settings,
     defaults: { ...W20_DEFAULTS, advanced: { ...W20_DEFAULTS.advanced } },
-    bank_exact: w20State.bank_exact,
-    mesh_json: w20State.mesh_json,
-    generated: isGeneratedMeshReady(w20State.mesh),
-    generate_button_present: !!document.getElementById('btn-generate-mesh'),
-    live_mesh_result: (w20State.mesh && w20State.mesh.live_mesh_result) || null,
+    bank_exact: meshCatalog.bank_exact,
+    mesh_json: meshCatalog.mesh_json,
+    generated: isGeneratedMeshReady(meshCatalog.mesh),
+    generate_button_present: !!document.querySelector('#panel-mesh-form [data-mesh-generate]'),
+    live_mesh_result: (meshCatalog.mesh && meshCatalog.mesh.live_mesh_result) || null,
     n_cells: jobState.n_cells,
     n_points: jobState.n_points,
-    panel_open: w20State.panel_open,
-    note: w20State.note,
+    panel_open: meshCatalog.panel_open,
+    note: meshCatalog.note,
     soft_pass_avoided: true,
     increment: 'W21',
     path_kind: jobState.path_kind,
@@ -25630,34 +25318,6 @@ function publishW20(extra) {
   };
   window.__CFD_W20__ = payload;
   return payload;
-}
-
-function setToggleEl(el, on) {
-  if (!el) return;
-  el.classList.toggle('is-on', !!on);
-  el.classList.toggle('is-off', !on);
-  el.setAttribute('aria-pressed', on ? 'true' : 'false');
-  el.textContent = on ? 'ON' : 'OFF';
-}
-
-function readToggleEl(el, fallback) {
-  if (!el) return fallback;
-  return el.classList.contains('is-on') || el.getAttribute('aria-pressed') === 'true';
-}
-
-function readMeshSfsMetres() {
-  const el = document.getElementById('mesh-sfs');
-  const raw = String((el && el.value) || '').trim();
-  if (!raw) return '';
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return raw;
-  const display = (el && el.dataset.displayUnit) || (prefersImperialUnits() ? 'in' : 'm');
-  if (display === 'm') return raw;
-  try {
-    return String(convertQuantity('length', n, display, 'm'));
-  } catch (_) {
-    return raw;
-  }
 }
 
 let applyingMeshForm = false;
@@ -25680,18 +25340,18 @@ function viewingMeshId() {
     }
   } catch (_) {}
   try {
-    return (w20State && w20State.active_id) || (w20State && w20State.mesh && w20State.mesh.id) || null;
+    return (meshCatalog && meshCatalog.active_id) || (meshCatalog && meshCatalog.mesh && meshCatalog.mesh.id) || null;
   } catch (_) {
     return null;
   }
 }
 
 function viewingBcId() {
-  return treeSelectedAfter('bcid:') || (typeof w19State !== 'undefined' && w19State.activeId) || null;
+  return treeSelectedAfter('bcid:') || (typeof bcCatalog !== 'undefined' && bcCatalog.activeId) || null;
 }
 
 function viewingRefId() {
-  return treeSelectedAfter('refid:') || (typeof w26State !== 'undefined' && w26State.activeId) || null;
+  return treeSelectedAfter('refid:') || (typeof refinementCatalog !== 'undefined' && refinementCatalog.activeId) || null;
 }
 
 function viewingRunId() {
@@ -25700,7 +25360,7 @@ function viewingRunId() {
     treeSelectedAfter('runresults:') ||
     treeSelectedAfter('runrcs:') ||
     treeSelectedAfter('runmesh:') ||
-    (typeof w27State !== 'undefined' && (w27State.selected_run_id || w27State.active_run_id)) ||
+    (typeof runCatalog !== 'undefined' && (runCatalog.selected_run_id || runCatalog.active_run_id)) ||
     null
   );
 }
@@ -25708,7 +25368,7 @@ function viewingRunId() {
 function viewingRcId() {
   return (
     treeSelectedAfter('aaid:') ||
-    (typeof w22State !== 'undefined' && w22State.editing_rc_id) ||
+    (typeof resultCatalog !== 'undefined' && resultCatalog.editing_rc_id) ||
     null
   );
 }
@@ -25730,64 +25390,27 @@ function settingsOwnedByMesh(meshId) {
   const draft = id ? drafts[id] : null;
   if (rec && rec.settings) return cloneMeshSettings(rec.settings, rec.name);
   if (draft && Object.keys(draft).length) return cloneMeshSettings(draft, rec && rec.name);
-  if (id && w20State && w20State.mesh && String(w20State.mesh.id) === String(id) && w20State.settings) {
-    return cloneMeshSettings(w20State.settings, rec && rec.name);
+  if (id && meshCatalog && meshCatalog.mesh && String(meshCatalog.mesh.id) === String(id) && meshCatalog.settings) {
+    return cloneMeshSettings(meshCatalog.settings, rec && rec.name);
   }
   return cloneMeshSettings(null, rec && rec.name);
 }
 
-function applySettingsToForm(settings, opts) {
-  const force = !!(opts && opts.force);
+/**
+ * The mesh form is a React island now; the runtime only tells it that the
+ * settings it should show changed. The one legacy label left is the
+ * selection name outside the panel.
+ */
+function applySettingsToForm(settings, _opts) {
   applyingMeshForm = true;
   try {
     const s = settings || W20_DEFAULTS;
-    const adv = s.advanced || W20_DEFAULTS.advanced;
-    const setVal = (id, v) => {
-      const el = document.getElementById(id);
-      if (el) el.value = v;
-    };
-    const finEl = document.getElementById('mesh-fineness');
-    const dragging = !force && finEl && document.activeElement === finEl;
-    if (!dragging) {
-      setVal('mesh-fineness', String(s.fineness != null ? s.fineness : W20_DEFAULTS.fineness));
-      const fv = document.getElementById('mesh-fineness-val');
-      if (fv) fv.textContent = String(s.fineness != null ? s.fineness : W20_DEFAULTS.fineness);
-    }
-    setToggleEl(document.getElementById('mesh-toggle-bl'), s.automatic_boundary_layers !== false);
-    setToggleEl(document.getElementById('mesh-toggle-physics'), s.physics_based_meshing !== false);
-    setToggleEl(document.getElementById('mesh-toggle-hex'), s.hex_element_core !== false);
-    const sfs = adv && adv.small_feature_suppression != null ? String(adv.small_feature_suppression) : '';
-    // Legacy projects stored the old fixed default; treat it as automatic.
-    const sfsEl = document.getElementById('mesh-sfs');
-    const displayUnit = prefersImperialUnits() ? 'in' : 'm';
-    const rawSfs = sfs === '4.227e-6' ? '' : sfs;
-    if (sfsEl) {
-      if (!rawSfs) {
-        sfsEl.value = '';
-      } else {
-        const n = Number(rawSfs);
-        if (Number.isFinite(n) && displayUnit !== 'm') {
-          try {
-            sfsEl.value = String(formatConvertedNumber(convertQuantity('length', n, 'm', displayUnit)));
-          } catch (_) {
-            sfsEl.value = rawSfs;
-          }
-        } else {
-          sfsEl.value = rawSfs;
-        }
-      }
-      sfsEl.dataset.displayUnit = displayUnit;
-    }
-    syncMeshLengthUnitLabel();
-    setVal('mesh-gap', String((adv && adv.gap_refinement_factor) != null ? adv.gap_refinement_factor : W20_DEFAULTS.advanced.gap_refinement_factor));
-    setVal('mesh-gradation', String((adv && adv.global_gradation_rate) != null ? adv.global_gradation_rate : W20_DEFAULTS.advanced.global_gradation_rate));
-    setVal('mesh-engine', (adv && adv.mesh_engine) || W20_DEFAULTS.advanced.mesh_engine);
-    const title = document.getElementById('mesh-panel-title');
-    if (title) title.textContent = s.name || 'Mesh 1';
     const sel = document.getElementById('mesh-selection-name');
     if (sel) sel.textContent = s.name || 'Mesh 1';
-    const renameIn = document.getElementById('mesh-rename-input');
-    if (renameIn) renameIn.value = s.name || 'Mesh 1';
+    const meshId = (typeof viewingMeshId === 'function' && viewingMeshId()) || (meshCatalog && meshCatalog.active_id) || null;
+    try {
+      window.dispatchEvent(new CustomEvent('cfd:mesh-settings', { detail: { mesh_id: meshId, settings: s } }));
+    } catch (_) {}
   } finally {
     applyingMeshForm = false;
   }
@@ -25815,9 +25438,9 @@ function selectMeshLocally(meshId) {
   if (!meshId) return null;
   const rec = typeof findMeshRecord === 'function' ? findMeshRecord(meshId) : null;
   const settings = settingsOwnedByMesh(meshId);
-  w20State.active_id = meshId;
-  w20State.settings = settings;
-  w20State.mesh = rec
+  meshCatalog.active_id = meshId;
+  meshCatalog.settings = settings;
+  meshCatalog.mesh = rec
     ? { ...rec, id: meshId, name: settings.name || rec.name, settings }
     : { id: meshId, name: settings.name, settings, generated: false, live_mesh_result: null };
   rememberMeshDraft(meshId, settings);
@@ -25828,47 +25451,17 @@ function selectMeshLocally(meshId) {
   return settings;
 }
 
-function readSettingsFromForm() {
-  const draft = meshDraftFor();
-  const slider = document.getElementById('mesh-fineness');
-  const sliderVal = slider && slider.value !== '' ? Number(slider.value) : NaN;
-  const fineness = Number.isFinite(sliderVal)
-    ? sliderVal
-    : Number(draft.fineness != null ? draft.fineness : W20_DEFAULTS.fineness);
-  return {
-    name: meshDisplayName(),
-    algorithm: W20_DEFAULTS.algorithm,
-    sizing: W20_DEFAULTS.sizing,
-    fineness,
-    curvature: W20_DEFAULTS.curvature,
-    automatic_boundary_layers: readToggleEl(document.getElementById('mesh-toggle-bl'), true),
-    physics_based_meshing: readToggleEl(document.getElementById('mesh-toggle-physics'), true),
-    hex_element_core: readToggleEl(document.getElementById('mesh-toggle-hex'), true),
-    automatic_extrusion_meshing: false,
-    preferred_cpus: 'all',
-    maximum_meshing_runtime: W20_DEFAULTS.maximum_meshing_runtime,
-    maximum_meshing_runtime_unit: W20_DEFAULTS.maximum_meshing_runtime_unit,
-    advanced: {
-      small_feature_suppression: readMeshSfsMetres(),
-      small_feature_suppression_unit: 'm',
-      gap_refinement_factor: Number((document.getElementById('mesh-gap') || {}).value || W20_DEFAULTS.advanced.gap_refinement_factor),
-      global_gradation_rate: Number((document.getElementById('mesh-gradation') || {}).value || W20_DEFAULTS.advanced.global_gradation_rate),
-      mesh_engine: (document.getElementById('mesh-engine') || {}).value || W20_DEFAULTS.advanced.mesh_engine,
-    },
-  };
-}
-
 function showMeshPanel() {
   const id = viewingMeshId();
   if (id) selectMeshLocally(id);
-  else applySettingsToForm(w20State.settings || W20_DEFAULTS, { force: true });
+  else applySettingsToForm(meshCatalog.settings || W20_DEFAULTS, { force: true });
   openTreeDetail('mesh', { toggle: false });
   try { syncMeshCopyUi(); } catch (_) {}
   try {
     const rec = id && typeof findMeshRecord === 'function' ? findMeshRecord(id) : null;
     if (rec && isGeneratedMeshReady(rec)) applyLiveMeshCountsToJob();
   } catch (_) {}
-  try { syncMeshFinishedChrome(); } catch (_) {}
+  try { publishMeshJobState(); } catch (_) {}
   publishW20({ panel_open: true });
 }
 
@@ -25877,7 +25470,7 @@ function hideMeshPanel() {
   else {
     const panel = document.getElementById('panel-mesh-form');
     if (panel) panel.hidden = true;
-    w20State.panel_open = false;
+    meshCatalog.panel_open = false;
   }
   publishW20({ panel_open: false });
 }
@@ -25892,13 +25485,13 @@ function updateMeshListEntry(meshId, patch) {
         : m.live_mesh_result;
       return { ...m, ...patch, live_mesh_result: live };
     });
-  if (Array.isArray(w20State.meshes)) w20State.meshes = apply(w20State.meshes);
-  if (Array.isArray(w20State.meshes_all)) w20State.meshes_all = apply(w20State.meshes_all);
-  if (w20State.mesh && String(w20State.mesh.id) === String(meshId)) {
+  if (Array.isArray(meshCatalog.meshes)) meshCatalog.meshes = apply(meshCatalog.meshes);
+  if (Array.isArray(meshCatalog.meshes_all)) meshCatalog.meshes_all = apply(meshCatalog.meshes_all);
+  if (meshCatalog.mesh && String(meshCatalog.mesh.id) === String(meshId)) {
     const live = patch.live_mesh_result
-      ? { ...(w20State.mesh.live_mesh_result || {}), ...patch.live_mesh_result }
-      : w20State.mesh.live_mesh_result;
-    w20State.mesh = { ...w20State.mesh, ...patch, live_mesh_result: live };
+      ? { ...(meshCatalog.mesh.live_mesh_result || {}), ...patch.live_mesh_result }
+      : meshCatalog.mesh.live_mesh_result;
+    meshCatalog.mesh = { ...meshCatalog.mesh, ...patch, live_mesh_result: live };
   }
 }
 
@@ -25934,7 +25527,7 @@ function mapListedMeshes(listed) {
 
 function applyMeshRecord(doc, projectId, opts) {
   try {
-    if (!w20State) return;
+    if (!meshCatalog) return;
   } catch (_) {
     return;
   }
@@ -25943,8 +25536,8 @@ function applyMeshRecord(doc, projectId, opts) {
     (doc && doc.simulation_id) ||
     (typeof currentStudyId === 'function' ? currentStudyId() : null);
   if (listedAll) {
-    w20State.meshes_all = adoptStudyTaggedList(
-      w20State.meshes_all,
+    meshCatalog.meshes_all = adoptStudyTaggedList(
+      meshCatalog.meshes_all,
       mapListedMeshes(listedAll),
       meshSid
     );
@@ -25957,9 +25550,9 @@ function applyMeshRecord(doc, projectId, opts) {
     ? doc.meshes
     : (mesh && Array.isArray(mesh.meshes) && mesh.meshes.length ? mesh.meshes : null);
   if (listed) {
-    w20State.meshes = mapListedMeshes(listed);
+    meshCatalog.meshes = mapListedMeshes(listed);
   } else if (mesh && incomingId && String(viewing) === String(incomingId)) {
-    w20State.meshes = [{
+    meshCatalog.meshes = [{
       id: mesh.id,
       name: mesh.name || (settings && settings.name) || 'Mesh 1',
       generated: isGeneratedMeshReady(mesh),
@@ -25970,10 +25563,10 @@ function applyMeshRecord(doc, projectId, opts) {
     }];
   }
   if (!listedAll && (listed || (mesh && incomingId && String(viewing) === String(incomingId)))) {
-    w20State.meshes_all = mergeStudyTaggedList(w20State.meshes_all, w20State.meshes, meshSid);
+    meshCatalog.meshes_all = mergeStudyTaggedList(meshCatalog.meshes_all, meshCatalog.meshes, meshSid);
   }
-  const study = typeof w17State !== 'undefined' ? w17State.simulation : null;
-  if (study) w20State.meshes = meshesForStudy(study);
+  const study = typeof studyCatalog !== 'undefined' ? studyCatalog.simulation : null;
+  if (study) meshCatalog.meshes = meshesForStudy(study);
 
   if (incomingId && settings) {
     const owned = cloneMeshSettings(settings, settings.name || (mesh && mesh.name));
@@ -25985,7 +25578,7 @@ function applyMeshRecord(doc, projectId, opts) {
   if (skipForm) {
     publishW20();
     try { syncMeshInspectPanel(); } catch (_) {}
-    if (!(opts && opts.skipTree) && typeof syncSimulationTree === 'function') syncSimulationTree();
+    if (!(opts && opts.skipTree) && typeof refreshSetupTree === 'function') refreshSetupTree();
     try { refreshCompareIfOpen(); } catch (_) {}
     return window.__CFD_W20__;
   }
@@ -25994,39 +25587,39 @@ function applyMeshRecord(doc, projectId, opts) {
     if (viewing && findMeshRecord(viewing)) {
       publishW20();
       try { syncMeshInspectPanel(); } catch (_) {}
-      if (!(opts && opts.skipTree) && typeof syncSimulationTree === 'function') syncSimulationTree();
+      if (!(opts && opts.skipTree) && typeof refreshSetupTree === 'function') refreshSetupTree();
       return window.__CFD_W20__;
     }
-    w20State.mesh = null;
-    w20State.settings = { ...W20_DEFAULTS, advanced: { ...W20_DEFAULTS.advanced } };
-    w20State.meshes = [];
+    meshCatalog.mesh = null;
+    meshCatalog.settings = { ...W20_DEFAULTS, advanced: { ...W20_DEFAULTS.advanced } };
+    meshCatalog.meshes = [];
     if (!listedAll) {
-      w20State.meshes_all = mergeStudyTaggedList(w20State.meshes_all, [], meshSid);
+      meshCatalog.meshes_all = mergeStudyTaggedList(meshCatalog.meshes_all, [], meshSid);
     }
-    w20State.active_id = null;
-    w20State.ready = false;
-    w20State.created = false;
-    w20State.project_id = projectId || (doc && doc.project_id) || w20State.project_id;
+    meshCatalog.active_id = null;
+    meshCatalog.ready = false;
+    meshCatalog.created = false;
+    meshCatalog.project_id = projectId || (doc && doc.project_id) || meshCatalog.project_id;
     applySettingsToForm(W20_DEFAULTS, { force: true });
     clearIdleMeshJobCounts();
     try { syncMeshInspectPanel(); } catch (_) {}
-    if (typeof syncSimulationTree === 'function') syncSimulationTree();
+    if (typeof refreshSetupTree === 'function') refreshSetupTree();
     publishW20({ ready: false });
     return;
   }
-  w20State.project_id = projectId || (doc && doc.project_id) || w20State.project_id;
-  w20State.mesh_json = (mesh && mesh.mesh_json) || (doc && doc.mesh_json) || w20State.mesh_json;
-  w20State.bank_exact = !!(doc && doc.bank_exact) || !!(mesh && mesh.bank_exact);
-  w20State.active_id = incomingId || viewing || null;
-  w20State.settings = cloneMeshSettings(settings, settings.name || (mesh && mesh.name));
-  const studyMeshes = study ? meshesForStudy(study) : w20State.meshes || [];
-  if (study) w20State.meshes = studyMeshes;
+  meshCatalog.project_id = projectId || (doc && doc.project_id) || meshCatalog.project_id;
+  meshCatalog.mesh_json = (mesh && mesh.mesh_json) || (doc && doc.mesh_json) || meshCatalog.mesh_json;
+  meshCatalog.bank_exact = !!(doc && doc.bank_exact) || !!(mesh && mesh.bank_exact);
+  meshCatalog.active_id = incomingId || viewing || null;
+  meshCatalog.settings = cloneMeshSettings(settings, settings.name || (mesh && mesh.name));
+  const studyMeshes = study ? meshesForStudy(study) : meshCatalog.meshes || [];
+  if (study) meshCatalog.meshes = studyMeshes;
   const home =
-    (studyMeshes.find((m) => String(m.id) === String(w20State.active_id)) ||
+    (studyMeshes.find((m) => String(m.id) === String(meshCatalog.active_id)) ||
       studyMeshes.find((m) => mesh && String(m.id) === String(mesh.id || mesh.active_id)) ||
       null);
   if (home) {
-    w20State.active_id = home.id;
+    meshCatalog.active_id = home.id;
     const full = findMeshRecord(home.id) || home;
     const homeLive = home.live_mesh_result || full.live_mesh_result || null;
     const homeReady = isGeneratedMeshReady({
@@ -26041,13 +25634,13 @@ function applyMeshRecord(doc, projectId, opts) {
       (incomingId && String(incomingId) === String(home.id) && settings) ||
       full.settings ||
       home.settings ||
-      w20State.settings;
-    w20State.settings = cloneMeshSettings(homeSettings, home.name || (homeSettings && homeSettings.name));
-    w20State.mesh = {
+      meshCatalog.settings;
+    meshCatalog.settings = cloneMeshSettings(homeSettings, home.name || (homeSettings && homeSettings.name));
+    meshCatalog.mesh = {
       ...full,
       generated: !!homeReady,
-      settings: w20State.settings,
-      name: w20State.settings.name || full.name || home.name,
+      settings: meshCatalog.settings,
+      name: meshCatalog.settings.name || full.name || home.name,
       live_mesh_result: keepLive ? homeLive : null,
       case_dir: keepLive
         ? home.case_dir || (homeLive && homeLive.case_dir) || full.case_dir || null
@@ -26057,45 +25650,45 @@ function applyMeshRecord(doc, projectId, opts) {
   } else if (study) {
     const keep = viewing && findMeshRecord(viewing);
     if (keep) {
-      w20State.mesh = keep;
-      w20State.active_id = keep.id;
-      w20State.settings = settingsOwnedByMesh(keep.id);
-      applySettingsToForm(w20State.settings, { force: true });
+      meshCatalog.mesh = keep;
+      meshCatalog.active_id = keep.id;
+      meshCatalog.settings = settingsOwnedByMesh(keep.id);
+      applySettingsToForm(meshCatalog.settings, { force: true });
       publishW20();
       try { syncMeshInspectPanel(); } catch (_) {}
-      if (!(opts && opts.skipTree) && typeof syncSimulationTree === 'function') syncSimulationTree();
+      if (!(opts && opts.skipTree) && typeof refreshSetupTree === 'function') refreshSetupTree();
       return window.__CFD_W20__;
     }
-    w20State.mesh = null;
-    w20State.active_id = null;
-    w20State.settings = { ...W20_DEFAULTS, advanced: { ...W20_DEFAULTS.advanced } };
+    meshCatalog.mesh = null;
+    meshCatalog.active_id = null;
+    meshCatalog.settings = { ...W20_DEFAULTS, advanced: { ...W20_DEFAULTS.advanced } };
     applySettingsToForm(W20_DEFAULTS, { force: true });
     clearIdleMeshJobCounts();
     try { syncMeshInspectPanel(); } catch (_) {}
     publishW20({ ready: false });
-    if (!(opts && opts.skipTree) && typeof syncSimulationTree === 'function') syncSimulationTree();
+    if (!(opts && opts.skipTree) && typeof refreshSetupTree === 'function') refreshSetupTree();
     return;
   } else {
-    w20State.mesh = {
+    meshCatalog.mesh = {
       ...mesh,
-      settings: w20State.settings,
-      name: w20State.settings.name || mesh.name,
+      settings: meshCatalog.settings,
+      name: meshCatalog.settings.name || mesh.name,
     };
   }
-  const liveMesh = w20State.mesh;
-  w20State.ready = !!w20State.settings;
-  w20State.created = !!liveMesh;
-  w20State.note = w20State.bank_exact
+  const liveMesh = meshCatalog.mesh;
+  meshCatalog.ready = !!meshCatalog.settings;
+  meshCatalog.created = !!liveMesh;
+  meshCatalog.note = meshCatalog.bank_exact
     ? 'W20 HARD: Mesh settings bank-exact persisted'
     : 'W20: Mesh settings loaded';
-  applySettingsToForm(w20State.settings, { force: true });
+  applySettingsToForm(meshCatalog.settings, { force: true });
   const heldId = typeof liveMeshJobId === 'function' ? liveMeshJobId() : jobState.mesh_id;
   const recordId = liveMesh && liveMesh.id;
   const holdLiveCounts =
     (typeof meshGenerateJobIsLive === 'function' && meshGenerateJobIsLive()) ||
     (typeof liveComputeSnap === 'function' && liveComputeSnap().kind === 'mesh');
   if (holdLiveCounts && heldId && recordId && String(heldId) === String(recordId)) {
-    try { syncMeshFinishedChrome(); } catch (_) {}
+    try { publishMeshJobState(); } catch (_) {}
   } else if (isGeneratedMeshReady(liveMesh)) {
     applyLiveMeshCountsToJob();
   } else {
@@ -26105,8 +25698,8 @@ function applyMeshRecord(doc, projectId, opts) {
   }
   publishW20();
   syncMeshInspectPanel();
-  try { syncMeshFinishedChrome(); } catch (_) {}
-  if (!(opts && opts.skipTree) && typeof syncSimulationTree === 'function') syncSimulationTree();
+  try { publishMeshJobState(); } catch (_) {}
+  if (!(opts && opts.skipTree) && typeof refreshSetupTree === 'function') refreshSetupTree();
   try { refreshCompareIfOpen(); } catch (_) {}
   return window.__CFD_W20__;
 }
@@ -26117,10 +25710,10 @@ function clearGeneratedMeshClientState() {
   window.__CFD_MESH_INSPECT__ = false;
   window.__CFD_MESH_VIEW__ = null;
   meshChipDismissed = false;
-  if (w20State.mesh) {
-    w20State.mesh.generated = false;
-    w20State.mesh.live_mesh_result = null;
-    if ('last_generate' in w20State.mesh) w20State.mesh.last_generate = null;
+  if (meshCatalog.mesh) {
+    meshCatalog.mesh.generated = false;
+    meshCatalog.mesh.live_mesh_result = null;
+    if ('last_generate' in meshCatalog.mesh) meshCatalog.mesh.last_generate = null;
   }
   if (window.__CFD_W20__) {
     if (window.__CFD_W20__.mesh) {
@@ -26149,15 +25742,15 @@ function clearGeneratedMeshClientState() {
       markTreeSelected(null);
     }
   } catch (_) {}
-  try { syncMeshFinishedChrome(); } catch (_) {}
+  try { publishMeshJobState(); } catch (_) {}
 }
 
 async function deleteGeneratedMeshClient() {
   const pid =
-    (w20State && w20State.project_id) ||
+    (meshCatalog && meshCatalog.project_id) ||
     (w16State.project && w16State.project.id) ||
     undefined;
-  const meshId = (w20State && w20State.active_id) || (w20State.mesh && w20State.mesh.id) || undefined;
+  const meshId = (meshCatalog && meshCatalog.active_id) || (meshCatalog.mesh && meshCatalog.mesh.id) || undefined;
   const r = await fetch('/api/mesh', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -26178,17 +25771,16 @@ async function deleteGeneratedMeshClient() {
   applyMeshRecord(j, j.project_id);
   clearGeneratedMeshClientState();
   publishW20({ deleted: true, generated: false, live_mesh_result: null });
-  if (typeof syncSimulationTree === 'function') syncSimulationTree();
-  try { syncMeshFinishedChrome(); } catch (_) {}
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
+  try { publishMeshJobState(); } catch (_) {}
   dismissTreeDetail();
   applyWorkbenchStage();
   afterMeshDeleted(meshId);
   return j;
 }
-window.__CFD_W20_DELETE_MESH__ = deleteGeneratedMeshClient;
 
 async function deleteMeshClient() {
-  const rec = w20State && w20State.mesh;
+  const rec = meshCatalog && meshCatalog.mesh;
   const name = meshDisplayName() || 'this mesh';
   if (isGeneratedMeshReady(rec)) {
     const ok = await confirmAction({
@@ -26206,10 +25798,10 @@ async function deleteMeshClient() {
   });
   if (!ok) return;
   const pid =
-    (w20State && w20State.project_id) ||
+    (meshCatalog && meshCatalog.project_id) ||
     (w16State.project && w16State.project.id) ||
     undefined;
-  const meshId = (w20State && w20State.active_id) || (rec && rec.id) || undefined;
+  const meshId = (meshCatalog && meshCatalog.active_id) || (rec && rec.id) || undefined;
   const r = await fetch('/api/mesh', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -26228,8 +25820,8 @@ async function deleteMeshClient() {
   clearIdleMeshJobCounts();
   applyMeshRecord(j, j.project_id);
   publishW20({ deleted: true, deleted_record: true });
-  if (typeof syncSimulationTree === 'function') syncSimulationTree();
-  try { syncMeshFinishedChrome(); } catch (_) {}
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
+  try { publishMeshJobState(); } catch (_) {}
   const leftover = (j.meshes || []).length;
   if (!leftover) {
     markTreeSelected('mesh');
@@ -26251,7 +25843,10 @@ function dropJobsForDeletedMesh(meshId) {
   jobQueue.items = next;
   persistJobQueue();
   syncJobQueueChrome();
-  fetchComputeQueue('/api/compute-queue', { method: 'POST', body: { action: 'drop-mesh', mesh_id: meshId } })
+  fetchComputeQueue('/api/compute-queue', {
+    method: 'POST',
+    body: { action: 'drop-mesh', mesh_id: meshId, project_id: typeof currentProjectId === 'function' ? currentProjectId() : null },
+  })
     .then(applyServerQueue)
     .catch((e) => console.warn('[CFD] queue drop mesh', e));
 }
@@ -26277,14 +25872,14 @@ function afterMeshDeleted(meshId) {
 
 function currentMeshProjectId() {
   return (
-    (w20State && w20State.project_id) ||
+    (meshCatalog && meshCatalog.project_id) ||
     (w16State.project && w16State.project.id) ||
     undefined
   );
 }
 
 function currentMeshStudyIds() {
-  const sim = typeof w17State !== 'undefined' ? w17State.simulation : null;
+  const sim = typeof studyCatalog !== 'undefined' ? studyCatalog.simulation : null;
   return {
     simulation_id: (sim && sim.id) || undefined,
     geometry_id: (sim && sim.geometry_id) || undefined,
@@ -26352,16 +25947,16 @@ async function createMeshClient() {
     live_mesh_result: null,
     geometry_id:
       study.geometry_id ||
-      (typeof w17State !== 'undefined' && w17State.simulation && w17State.simulation.geometry_id) ||
+      (typeof studyCatalog !== 'undefined' && studyCatalog.simulation && studyCatalog.simulation.geometry_id) ||
       null,
     simulation_id:
       study.simulation_id ||
-      (typeof w17State !== 'undefined' && w17State.simulation && w17State.simulation.id) ||
+      (typeof studyCatalog !== 'undefined' && studyCatalog.simulation && studyCatalog.simulation.id) ||
       null,
   };
   const meshes = [...meshList(), local];
   if (nameEl) nameEl.value = '';
-  w26State.meshId = id;
+  refinementCatalog.meshId = id;
   expandTreeFolder('Mesh');
   treeUi.expanded['mesh:' + id] = true;
   markTreeSelected('meshid:' + id);
@@ -26379,10 +25974,10 @@ async function createMeshClient() {
   showMeshPanel();
   const pending = postMeshApi({ create: true, name, id }).then((j) => {
     const newId = (j && (j.active_id || (j.mesh && j.mesh.id))) || id;
-    if (newId) w26State.meshId = newId;
+    if (newId) refinementCatalog.meshId = newId;
     return j;
   });
-  w20State._createWait = pending.catch(() => {});
+  meshCatalog._createWait = pending.catch(() => {});
   return pending;
 }
 
@@ -26404,6 +25999,7 @@ function meshCopyOptionLabel(m, destId) {
   return bits.join(' · ');
 }
 
+/** Options for the refinements copy picker (#ref-copy-mesh). The mesh island gets its list via cfd:mesh-copy. */
 function fillMeshCopySelect(sel, destId) {
   if (!sel || document.activeElement === sel) return;
   const others = destId ? otherMeshesForCopy(destId) : [];
@@ -26430,10 +26026,6 @@ function endMeshCopyPick() {
   const tree = document.getElementById('simulations-tree');
   if (tree) tree.classList.remove('is-mesh-copy-pick');
   tree && tree.querySelectorAll('[data-w20-mesh-item].is-copy-dest').forEach((el) => el.classList.remove('is-copy-dest'));
-  const picker = document.getElementById('mesh-copy-picker');
-  const openBtn = document.getElementById('mesh-copy-open');
-  if (picker) picker.hidden = true;
-  if (openBtn) openBtn.hidden = false;
   const refPicker = document.getElementById('ref-copy-picker');
   const refOpen = document.getElementById('ref-copy-open');
   if (refPicker) refPicker.hidden = true;
@@ -26441,7 +26033,7 @@ function endMeshCopyPick() {
 }
 
 function startMeshCopyPick(destId, mode) {
-  const dest = destId || (w20State && w20State.active_id) || currentRefMeshId();
+  const dest = destId || (meshCatalog && meshCatalog.active_id) || currentRefMeshId();
   if (!dest || !otherMeshesForCopy(dest).length) return;
   meshCopyPick = { destId: dest, mode: mode === 'refs' ? 'refs' : 'all' };
   meshCopyNote = '';
@@ -26449,19 +26041,21 @@ function startMeshCopyPick(destId, mode) {
   try { syncRefCopyUi(); } catch (_) {}
 }
 
+function publishMeshCopyState(detail) {
+  window.__CFD_MESH_COPY__ = detail;
+  try {
+    window.dispatchEvent(new CustomEvent('cfd:mesh-copy', { detail }));
+  } catch (_) {}
+}
+
+/** Copy-from-another-mesh state; the React mesh island renders it. */
 function syncMeshCopyUi() {
-  const wrap = document.getElementById('mesh-copy-from');
-  const openBtn = document.getElementById('mesh-copy-open');
-  const picker = document.getElementById('mesh-copy-picker');
-  const sel = document.getElementById('mesh-copy-mesh');
-  const done = document.getElementById('mesh-copy-done');
-  const destId = (w20State && w20State.active_id) || (w20State.mesh && w20State.mesh.id);
+  const destId = (meshCatalog && meshCatalog.active_id) || (meshCatalog.mesh && meshCatalog.mesh.id);
   const others = destId ? otherMeshesForCopy(destId) : [];
   const show = !!(destId && others.length);
-  if (wrap) wrap.hidden = !show;
   if (!show) {
     endMeshCopyPick();
-    if (done) { done.hidden = true; done.textContent = ''; }
+    publishMeshCopyState({ dest_id: destId || null, available: false, picking: false, note: '', sources: [] });
     return;
   }
   const picking = !!(
@@ -26469,13 +26063,13 @@ function syncMeshCopyUi() {
     String(meshCopyPick.destId) === String(destId) &&
     meshCopyPick.mode !== 'refs'
   );
-  if (openBtn) openBtn.hidden = picking;
-  if (picker) picker.hidden = !picking;
-  fillMeshCopySelect(sel, destId);
-  if (done) {
-    done.hidden = !meshCopyNote;
-    done.textContent = meshCopyNote;
-  }
+  publishMeshCopyState({
+    dest_id: String(destId),
+    available: true,
+    picking,
+    note: meshCopyNote || '',
+    sources: others.slice().reverse().map((m) => ({ id: String(m.id), label: meshCopyOptionLabel(m, destId) })),
+  });
   const tree = document.getElementById('simulations-tree');
   if (tree) {
     tree.classList.toggle('is-mesh-copy-pick', picking);
@@ -26502,23 +26096,20 @@ function applyCopiedMeshSource(srcId) {
 }
 
 async function postCopyRefinements(destId, srcId) {
-  const rr = await fetch('/api/mesh/refinements', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      project_id: currentMeshProjectId(),
-      ...currentMeshStudyIds(),
-      mesh_id: destId,
-      copy_from_mesh: srcId,
-    }),
+  const copied = await postRefinements({
+    project_id: currentMeshProjectId(),
+    ...currentMeshStudyIds(),
+    mesh_id: destId,
+    copy_from_mesh: srcId,
   });
-  const refs = await rr.json();
+  const rr = copied.response;
+  const refs = copied.json;
   if (rr.ok && refs && refs.ok) applyRefRecords(refs, refs.project_id);
   return refs;
 }
 
 async function copyMeshSettingsFrom(srcId) {
-  const destId = (w20State && w20State.active_id) || (w20State.mesh && w20State.mesh.id);
+  const destId = (meshCatalog && meshCatalog.active_id) || (meshCatalog.mesh && meshCatalog.mesh.id);
   if (!destId || !srcId || String(srcId) === String(destId)) return;
   const j = await postMeshApi({ mesh_id: destId, copy_from: srcId });
   try {
@@ -26528,9 +26119,9 @@ async function copyMeshSettingsFrom(srcId) {
   }
   meshCopyNote = 'Copied from ' + applyCopiedMeshSource(srcId) + '. Change anything you want.';
   endMeshCopyPick();
-  w26State.meshId = destId;
-  try { syncSimulationTree(); } catch (_) {}
-  applySettingsToForm((j && j.settings) || w20State.settings);
+  refinementCatalog.meshId = destId;
+  try { refreshSetupTree(); } catch (_) {}
+  applySettingsToForm((j && j.settings) || meshCatalog.settings);
   showMeshPanel();
   syncMeshCopyUi();
   try { syncRefCopyUi(); } catch (_) {}
@@ -26539,14 +26130,14 @@ async function copyMeshSettingsFrom(srcId) {
 async function copyRefinementsFrom(srcId) {
   const destId =
     currentRefMeshId() ||
-    (w20State && w20State.active_id) ||
-    (w20State && w20State.mesh && w20State.mesh.id);
+    (meshCatalog && meshCatalog.active_id) ||
+    (meshCatalog && meshCatalog.mesh && meshCatalog.mesh.id);
   if (!destId || !srcId || String(srcId) === String(destId)) return;
   await postCopyRefinements(destId, srcId);
   meshCopyNote = 'Copied refinements from ' + applyCopiedMeshSource(srcId) + '.';
   endMeshCopyPick();
-  w26State.meshId = destId;
-  try { syncSimulationTree(); } catch (_) {}
+  refinementCatalog.meshId = destId;
+  try { refreshSetupTree(); } catch (_) {}
   try { syncRefsHub(); } catch (_) {}
   try { showRefsOverview(); } catch (_) {}
   try { syncRefCopyUi(); } catch (_) {}
@@ -26570,8 +26161,8 @@ function syncRefCopyUi() {
   const done = document.getElementById('ref-copy-done');
   const destId =
     currentRefMeshId() ||
-    (w20State && w20State.active_id) ||
-    (w20State && w20State.mesh && w20State.mesh.id);
+    (meshCatalog && meshCatalog.active_id) ||
+    (meshCatalog && meshCatalog.mesh && meshCatalog.mesh.id);
   const others = destId ? otherMeshesForCopy(destId) : [];
   const show = !!(destId && others.length);
   if (wrap) wrap.hidden = !show;
@@ -26601,182 +26192,48 @@ async function activateMeshClient(id, opts) {
   try { markTreeSelected('meshid:' + id); } catch (_) {}
   selectMeshLocally(id);
   const j = await postMeshApi({ activate: id }, opts);
-  if (window.__CFD_W26_STATE__) window.__CFD_W26_STATE__.meshId = id;
+  if (refinementCatalog) refinementCatalog.meshId = id;
   publishW20({ activated: true });
   return j;
 }
 
-async function saveMeshSettingsClient(partial) {
-  if (w20State._createWait) {
-    try { await w20State._createWait; } catch (_) {}
-  }
-  const fromForm = !(partial && (partial.use_bank_defaults || partial.reset_defaults || partial.nameOnly));
-  const meshId =
-    (partial && partial.mesh_id) ||
-    viewingMeshId() ||
-    (w20State && w20State.active_id) ||
-    (w20State && w20State.mesh && w20State.mesh.id) ||
-    undefined;
-  const body = {
-    use_bank_defaults: !!(partial && partial.use_bank_defaults),
-    force_bank: !!(partial && (partial.force_bank || partial.use_bank_defaults)),
-    project_id: currentMeshProjectId(),
-    mesh_id: meshId,
-    ...(fromForm && String(viewingMeshId() || '') === String(meshId || '') ? readSettingsFromForm() : {}),
-    ...(partial || {}),
-  };
-  if (body.mesh_id && body.fineness != null) {
-    const rec = typeof findMeshRecord === 'function' ? findMeshRecord(body.mesh_id) : null;
-    const owned = cloneMeshSettings(
-      { ...((rec && rec.settings) || {}), ...body, advanced: body.advanced || ((rec && rec.settings && rec.settings.advanced) || {}) },
-      body.name || (rec && rec.name)
-    );
-    updateMeshListEntry(body.mesh_id, { settings: owned, name: owned.name });
-    rememberMeshDraft(body.mesh_id, owned);
-  }
-  // Never send generate flags
-  delete body.generate;
-  delete body.remesh;
-  delete body.kick;
-  delete body.allowDuringGenerate;
-  const r = await fetch('/api/mesh', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...currentMeshStudyIds(), ...body }),
-  });
-  const j = await r.json();
-  if (!r.ok || !j.ok) {
-    w20State.note = (j && j.error) || 'Mesh save failed';
-    publishW20({ ready: false, note: w20State.note });
-    throw new Error(w20State.note);
-  }
-  applyMeshRecord(j, j.project_id);
-  w20State.bank_exact = !!j.bank_exact;
-  publishW20({ saved: true });
-  return window.__CFD_W20__;
-}
 
-window.__CFD_W20_SAVE__ = saveMeshSettingsClient;
-window.__CFD_W20_APPLY__ = async function applyW20(partial) {
-  const opts = { use_bank_defaults: true, force_bank: true, ...(partial || {}) };
-  await saveMeshSettingsClient(opts);
-  showMeshPanel();
-  return window.__CFD_W20__;
-};
-window.__CFD_W20_OPEN__ = function openW20() {
-  showMeshPanel();
-  return window.__CFD_W20__;
-};
 window.__CFD_W20_DEFAULTS__ = W20_DEFAULTS;
 
 function wireMeshTreeHandlers() {
   /* Mesh / Mesh 1 clicks are handled by wireTreeItemClicks. */
 }
 
+/*
+ * Mesh panel bridge. The React MeshSettings island owns the form, the
+ * Generate button and the progress block; it reaches the runtime through
+ * these and listens for `cfd:mesh-job` / `cfd:mesh-settings`.
+ */
+window.__CFD_MESH_RENAME__ = async function renameMesh(name) {
+  const next = String(name || '').trim() || meshDisplayName();
+  if (meshCatalog.settings) meshCatalog.settings.name = next;
+  if (meshCatalog.mesh) meshCatalog.mesh.name = next;
+  await saveMeshSettings({ name: next, nameOnly: true });
+  try { refreshSetupTree(); } catch (_) {}
+  return next;
+};
+window.__CFD_MESH_RESTORE_DEFAULTS__ = function restoreMeshDefaults() {
+  return saveMeshSettings({
+    reset_defaults: true,
+    use_bank_defaults: true,
+    force_bank: true,
+    name: meshDisplayName(),
+  });
+};
+window.__CFD_MESH_COPY_PICK__ = function meshCopyPickToggle(on, destId) {
+  if (on) startMeshCopyPick(destId, 'all');
+  else endMeshCopyPick();
+  try { syncMeshCopyUi(); } catch (_) {}
+  try { syncRefCopyUi(); } catch (_) {}
+};
+window.__CFD_COPY_MESH_SETTINGS__ = copyMeshSettingsFrom;
+
 (function wireW20Ui() {
-  const fineness = document.getElementById('mesh-fineness');
-  let finenessSaveTimer = 0;
-  const persistForm = () => {
-    if (applyingMeshForm) return;
-    const meshId = viewingMeshId();
-    if (!w20State.hydrated && !meshId) return;
-    saveMeshSettingsClient({ mesh_id: meshId || undefined, allowDuringGenerate: true }).catch((e) =>
-      console.warn('[CFD] mesh settings save', e)
-    );
-  };
-  if (fineness) {
-    fineness.addEventListener('input', () => {
-      if (applyingMeshForm) return;
-      const fv = document.getElementById('mesh-fineness-val');
-      const n = Number(fineness.value);
-      const meshId = viewingMeshId();
-      if (fv) fv.textContent = String(fineness.value);
-      if (w20State.settings) w20State.settings.fineness = n;
-      if (w20State.mesh && w20State.mesh.settings) w20State.mesh.settings.fineness = n;
-      rememberMeshDraft(meshId, { fineness: n });
-      if (meshId) {
-        const rec = typeof findMeshRecord === 'function' ? findMeshRecord(meshId) : null;
-        const base = (rec && rec.settings) || w20State.settings || {};
-        updateMeshListEntry(meshId, {
-          settings: cloneMeshSettings({ ...base, fineness: n }, rec && rec.name),
-        });
-      }
-      if (finenessSaveTimer) clearTimeout(finenessSaveTimer);
-      finenessSaveTimer = setTimeout(() => {
-        const rec = typeof findMeshRecord === 'function' ? findMeshRecord(meshId) : null;
-        saveMeshSettingsClient({
-          fineness: n,
-          mesh_id: meshId || undefined,
-          name: (rec && rec.name) || (w20State.mesh && w20State.mesh.name) || undefined,
-          allowDuringGenerate: true,
-        }).catch((e) => console.warn('[CFD] mesh settings save', e));
-      }, 200);
-    });
-  }
-  ['mesh-toggle-bl', 'mesh-toggle-physics', 'mesh-toggle-hex'].forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('click', () => {
-      const on = !readToggleEl(el, false);
-      setToggleEl(el, on);
-      persistForm();
-    });
-  });
-  // Field edits (fineness, advanced settings, engine) persist on change.
-  document.getElementById('mesh-form')?.addEventListener('change', persistForm);
-
-  const titleEl = document.getElementById('mesh-panel-title');
-  const renameBtn = document.getElementById('mesh-rename');
-  const renameIn = document.getElementById('mesh-rename-input');
-  const stopRename = (commit) => {
-    if (!renameIn || !titleEl || !renameBtn) return;
-    if (commit) {
-      const next = String(renameIn.value || '').trim() || meshDisplayName();
-      if (w20State.settings) w20State.settings.name = next;
-      if (w20State.mesh) w20State.mesh.name = next;
-      titleEl.textContent = next;
-      saveMeshSettingsClient({ name: next, nameOnly: true }).catch((e) =>
-        console.warn('[CFD] mesh rename', e)
-      );
-    }
-    renameIn.hidden = true;
-    titleEl.hidden = false;
-    renameBtn.hidden = false;
-  };
-  const startRename = () => {
-    if (!renameIn || !titleEl || !renameBtn) return;
-    renameIn.value = meshDisplayName();
-    titleEl.hidden = true;
-    renameBtn.hidden = true;
-    renameIn.hidden = false;
-    renameIn.focus();
-    renameIn.select();
-  };
-  renameBtn?.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    startRename();
-  });
-  renameIn?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      stopRename(true);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      stopRename(false);
-    }
-  });
-  renameIn?.addEventListener('blur', () => stopRename(true));
-  document.getElementById('mesh-restore-defaults')?.addEventListener('click', () => {
-    const name = meshDisplayName();
-    saveMeshSettingsClient({
-      reset_defaults: true,
-      use_bank_defaults: true,
-      force_bank: true,
-      name,
-    }).catch((e) => console.error('[CFD] restore mesh defaults', e));
-  });
-
   const closeBtn = document.getElementById('mesh-close');
   if (closeBtn) {
     closeBtn.addEventListener('click', () => hideMeshPanel());
@@ -26784,17 +26241,21 @@ function wireMeshTreeHandlers() {
   const onDeleteMesh = () => {
     deleteMeshClient().catch((e) => console.error('[CFD W20] delete mesh', e));
   };
-  document.getElementById('mesh-delete')?.addEventListener('click', onDeleteMesh);
+  window.__CFD_DELETE_MESH__ = () => deleteMeshClient();
   document.getElementById('mesh-inspect-delete')?.addEventListener('click', onDeleteMesh);
   // Open the settings of the mesh being inspected. Generate from there
   // re-meshes this mesh in place with the edited settings.
-  document.getElementById('mesh-inspect-settings')?.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const mid = viewingMeshId() || w20State.active_id || (w20State.mesh && w20State.mesh.id) || null;
+  const openMeshSettings = (meshId) => {
+    const mid = meshId || viewingMeshId() || meshCatalog.active_id || (meshCatalog.mesh && meshCatalog.mesh.id) || null;
     try { markTreeSelected(mid ? 'meshid:' + mid : 'mesh'); } catch (_) {}
     if (mid) selectMeshLocally(mid);
     showMeshPanel();
+  };
+  window.__CFD_MESH_OPEN_SETTINGS__ = openMeshSettings;
+  document.getElementById('mesh-inspect-settings')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openMeshSettings();
   });
   document.getElementById('mesh-chip-close')?.addEventListener('click', (e) => {
     e.preventDefault();
@@ -26812,22 +26273,6 @@ function wireMeshTreeHandlers() {
       createMeshClient().catch((err) => console.error('[CFD] create mesh', err));
     }
   });
-  document.getElementById('mesh-copy-open')?.addEventListener('click', () => {
-    const dest = (w20State && w20State.active_id) || (w20State.mesh && w20State.mesh.id);
-    if (dest) startMeshCopyPick(dest, 'all');
-  });
-  document.getElementById('mesh-copy-cancel')?.addEventListener('click', () => {
-    endMeshCopyPick();
-    try { syncMeshCopyUi(); } catch (_) {}
-    try { syncRefCopyUi(); } catch (_) {}
-  });
-  const meshCopySel = document.getElementById('mesh-copy-mesh');
-  const onMeshCopySel = (e) => {
-    const id = e.target && e.target.value;
-    if (id) copyMeshSettingsFrom(id).catch((err) => console.warn('[CFD] copy mesh', err));
-  };
-  meshCopySel?.addEventListener('change', onMeshCopySel);
-  meshCopySel?.addEventListener('input', onMeshCopySel);
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !meshCopyPick) return;
     endMeshCopyPick();
@@ -26893,16 +26338,16 @@ function wireMeshTreeHandlers() {
     const prev = window.__CFD_W16_CREATE__;
     window.__CFD_W16_CREATE__ = async function wrappedCreateW20(fields) {
       const out = await prev(fields);
-      w20State.mesh = null;
-      w20State.settings = null;
-      w20State.meshes = [];
-      w20State.meshes_all = [];
-      w20State.active_id = null;
-      w20State.ready = false;
-      w20State.created = false;
-      w20State.bank_exact = false;
-      w20State.mesh_json = null;
-      w20State.project_id = (out && out.project && out.project.id) || null;
+      meshCatalog.mesh = null;
+      meshCatalog.settings = null;
+      meshCatalog.meshes = [];
+      meshCatalog.meshes_all = [];
+      meshCatalog.active_id = null;
+      meshCatalog.ready = false;
+      meshCatalog.created = false;
+      meshCatalog.bank_exact = false;
+      meshCatalog.mesh_json = null;
+      meshCatalog.project_id = (out && out.project && out.project.id) || null;
       hideMeshPanel();
       publishW20({ ready: false, note: 'W20: waiting for Mesh settings' });
       return out;
@@ -26913,14 +26358,14 @@ function wireMeshTreeHandlers() {
     .then((r) => r.json())
     .then((j) => {
       if (!currentStudyId()) return;
-      w20State.hydrated = true;
+      meshCatalog.hydrated = true;
       if (j && j.mesh && j.settings) {
         applyMeshRecord(j, j.project_id);
         publishW20({ hydrated: true });
       } else {
         applyMeshRecord(j || {}, j && j.project_id);
         applySettingsToForm(W20_DEFAULTS);
-        if (typeof syncSimulationTree === 'function') syncSimulationTree();
+        if (typeof refreshSetupTree === 'function') refreshSetupTree();
         publishW20({ hydrated: true, ready: false });
       }
       applyWorkbenchStage();
@@ -26936,45 +26381,31 @@ const REF_KIND_RGB = {
   surface: [13, 148, 136],
   inflate: [217, 119, 6],
 };
-
-const w26State = {
-  ready: false,
-  hydrated: false,
-  project_id: null,
-  refinements: [],
-  activeId: null,
-  meshId: null,
-  draft_faces: [],
-  focusFace: null,
-  note: '',
-};
-window.__CFD_W26_STATE__ = w26State;
-
 function refList() {
-  return Array.isArray(w26State.refinements) ? w26State.refinements : [];
+  return Array.isArray(refinementCatalog.refinements) ? refinementCatalog.refinements : [];
 }
 
 function currentRefMeshId() {
   const fromRefs = typeof treeSelectedAfter === 'function' ? treeSelectedAfter('refs:') : null;
   if (fromRefs) return fromRefs;
-  const st = window.__CFD_W26_STATE__ || {};
+  const st = refinementCatalog || {};
   if (st.meshId) return st.meshId;
   const view = typeof viewingMeshId === 'function' ? viewingMeshId() : null;
   if (view) return view;
-  const w20 = window.__CFD_W20_STATE__ || {};
+  const w20 = meshCatalog || {};
   return w20.active_id || (w20.mesh && w20.mesh.id) || null;
 }
 
 function refsForMesh(meshId) {
   const mid = meshId || currentRefMeshId();
-  const st = window.__CFD_W26_STATE__ || {};
+  const st = refinementCatalog || {};
   const all = Array.isArray(st.refinements) ? st.refinements : [];
   if (!mid) return [];
   return all.filter((r) => r && String(r.mesh_id || '') === String(mid));
 }
 
 function activeRef() {
-  return refList().find((r) => r.id === w26State.activeId) || null;
+  return refList().find((r) => r.id === refinementCatalog.activeId) || null;
 }
 
 function refKind(ref) {
@@ -26992,47 +26423,46 @@ function paintForRefFaces(faces, kind) {
 
 function publishW26(extra) {
   const payload = {
-    ready: w26State.ready,
-    hydrated: w26State.hydrated,
-    project_id: w26State.project_id,
+    ready: refinementCatalog.ready,
+    hydrated: refinementCatalog.hydrated,
+    project_id: refinementCatalog.project_id,
     refinements: refList(),
-    activeId: w26State.activeId,
-    note: w26State.note,
+    activeId: refinementCatalog.activeId,
+    note: refinementCatalog.note,
     increment: 'W26',
     ...(extra || {}),
   };
   window.__CFD_W26__ = payload;
-  window.__CFD_W26_STATE__ = w26State;
   return payload;
 }
 
 function applyRefRecords(doc, projectId) {
   const list = ((doc && doc.refinements) || []).filter(Boolean);
-  w26State.refinements = list;
-  w26State.project_id = projectId || (doc && doc.project_id) || w26State.project_id;
-  w26State.ready = list.length > 0;
-  const viewing = typeof viewingRefId === 'function' ? viewingRefId() : w26State.activeId;
+  refinementCatalog.refinements = list;
+  refinementCatalog.project_id = projectId || (doc && doc.project_id) || refinementCatalog.project_id;
+  refinementCatalog.ready = list.length > 0;
+  const viewing = typeof viewingRefId === 'function' ? viewingRefId() : refinementCatalog.activeId;
   if (viewing && list.some((r) => String(r.id) === String(viewing))) {
-    w26State.activeId = viewing;
-  } else if (w26State.activeId && !list.some((r) => r.id === w26State.activeId)) {
-    w26State.activeId = null;
+    refinementCatalog.activeId = viewing;
+  } else if (refinementCatalog.activeId && !list.some((r) => r.id === refinementCatalog.activeId)) {
+    refinementCatalog.activeId = null;
   }
   const active = viewing
     ? list.find((r) => String(r.id) === String(viewing)) || null
     : activeRef();
   if (active && (!viewing || String(active.id) === String(viewing))) {
     const nextFaces = (active.faces || []).slice();
-    if (!nextFaces.length && (w26State.draft_faces || []).length) {
-      active.faces = w26State.draft_faces.slice();
-      active.face = w26State.draft_faces[0] || null;
+    if (!nextFaces.length && (refinementCatalog.draft_faces || []).length) {
+      active.faces = refinementCatalog.draft_faces.slice();
+      active.face = refinementCatalog.draft_faces[0] || null;
     } else {
-      w26State.draft_faces = nextFaces;
+      refinementCatalog.draft_faces = nextFaces;
     }
   } else if (!active) {
-    w26State.draft_faces = [];
+    refinementCatalog.draft_faces = [];
   }
   publishW26({ created: true });
-  if (typeof syncSimulationTree === 'function') syncSimulationTree();
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
   if (typeof syncRefsHub === 'function') syncRefsHub();
   if (treeUi.openPanel === 'ref' && active && (!viewing || String(active.id) === String(viewing))) {
     syncRefEditorFields();
@@ -27093,7 +26523,7 @@ function showRefsOverview() {
 }
 
 function openRefTypeModal() {
-  if (!w17State.simulation) {
+  if (!studyCatalog.simulation) {
     console.warn('[CFD] Create Simulation first');
     return;
   }
@@ -27110,10 +26540,10 @@ function wireRefTreeHandlers() {
 
 async function scopeRefsToMesh(meshId, opts) {
   const mid = meshId || currentRefMeshId();
-  if (mid) w26State.meshId = mid;
+  if (mid) refinementCatalog.meshId = mid;
   if (mid && (!opts || opts.activate !== false)) {
     try {
-      if (String((w20State && w20State.active_id) || '') !== String(mid)) {
+      if (String((meshCatalog && meshCatalog.active_id) || '') !== String(mid)) {
         await activateMeshClient(mid, { skipTree: true });
       }
     } catch (e) {
@@ -27126,12 +26556,12 @@ async function scopeRefsToMesh(meshId, opts) {
 function syncRefAssignList() {
   const list = document.getElementById('ref-assign-list');
   const count = document.getElementById('ref-assign-count');
-  const faces = w26State.draft_faces || [];
-  if (w26State.focusFace && !faces.includes(w26State.focusFace)) w26State.focusFace = null;
+  const faces = refinementCatalog.draft_faces || [];
+  if (refinementCatalog.focusFace && !faces.includes(refinementCatalog.focusFace)) refinementCatalog.focusFace = null;
   if (list) {
     list.innerHTML = faces
       .map((f) => {
-        const on = w26State.focusFace === f ? ' is-focus' : '';
+        const on = refinementCatalog.focusFace === f ? ' is-focus' : '';
         return (
           '<li class="bc-assign-item' +
           on +
@@ -27157,7 +26587,7 @@ function syncRefAssignList() {
   if (isAssigningRefFace()) {
     const ref = activeRef();
     const paint = ref ? paintForRefFaces(faces, refKind(ref)) : null;
-    highlightGeomFaces(faces, w26State.focusFace, paint);
+    highlightGeomFaces(faces, refinementCatalog.focusFace, paint);
   }
 }
 
@@ -27224,7 +26654,7 @@ function readRefEditorDraft() {
     name: ref.name,
     type: ref.type,
     mesh_id: ref.mesh_id || currentRefMeshId() || undefined,
-    faces: (w26State.draft_faces || []).slice(),
+    faces: (refinementCatalog.draft_faces || []).slice(),
   };
   const pid = currentProjectId();
   if (pid) out.project_id = pid;
@@ -27251,9 +26681,9 @@ function readRefEditorDraft() {
 
 function showRefEditor(ref) {
   if (!ref) return;
-  w26State.activeId = ref.id;
-  if (ref.mesh_id) w26State.meshId = ref.mesh_id;
-  w26State.draft_faces = (ref.faces || []).slice();
+  refinementCatalog.activeId = ref.id;
+  if (ref.mesh_id) refinementCatalog.meshId = ref.mesh_id;
+  refinementCatalog.draft_faces = (ref.faces || []).slice();
   const mid = currentRefMeshId();
   expandTreeFolder('Mesh');
   if (mid) {
@@ -27267,8 +26697,8 @@ function showRefEditor(ref) {
 }
 
 async function persistActiveRef(expectedId, opts) {
-  if (w26State._createWait) {
-    try { await w26State._createWait; } catch (_) {}
+  if (refinementCatalog._createWait) {
+    try { await refinementCatalog._createWait; } catch (_) {}
   }
   const viewId = expectedId || viewingRefId();
   const draft = readRefEditorDraft();
@@ -27283,16 +26713,13 @@ async function persistActiveRef(expectedId, opts) {
   }
   if (opts && opts.facesExplicit) draft.faces_explicit = true;
   else if (!(draft.faces || []).length) delete draft.faces;
-  const gen = (w26State._persistGen = (w26State._persistGen || 0) + 1);
+  const gen = (refinementCatalog._persistGen = (refinementCatalog._persistGen || 0) + 1);
   const ownerId = draft.id;
-  const r = await fetch('/api/mesh/refinements', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(draft),
-  });
-  const j = await r.json();
+  const posted = await postRefinements(draft);
+  const r = posted.response;
+  const j = posted.json;
   if (!r.ok || !j.ok) throw new Error(j.error || 'Refinement save failed');
-  if (gen !== w26State._persistGen) return j;
+  if (gen !== refinementCatalog._persistGen) return j;
   if (viewingRefId() && ownerId && String(viewingRefId()) !== String(ownerId)) return j;
   applyRefRecords(j, j.project_id);
   return j;
@@ -27301,13 +26728,13 @@ async function persistActiveRef(expectedId, opts) {
 function toggleAssignRefFace(label) {
   const name = String(label || '').trim();
   if (!name || !activeRef()) return;
-  const i = w26State.draft_faces.indexOf(name);
+  const i = refinementCatalog.draft_faces.indexOf(name);
   if (i >= 0) {
-    w26State.draft_faces.splice(i, 1);
-    if (w26State.focusFace === name) w26State.focusFace = w26State.draft_faces[0] || null;
+    refinementCatalog.draft_faces.splice(i, 1);
+    if (refinementCatalog.focusFace === name) refinementCatalog.focusFace = refinementCatalog.draft_faces[0] || null;
   } else {
-    w26State.draft_faces.push(name);
-    w26State.focusFace = name;
+    refinementCatalog.draft_faces.push(name);
+    refinementCatalog.focusFace = name;
   }
   syncRefAssignList();
   persistActiveRef((activeRef() && activeRef().id) || viewingRefId(), { facesExplicit: true }).catch((e) =>
@@ -27317,10 +26744,10 @@ function toggleAssignRefFace(label) {
 
 function unassignRefFace(label) {
   const name = String(label || '').trim();
-  const i = w26State.draft_faces.indexOf(name);
+  const i = refinementCatalog.draft_faces.indexOf(name);
   if (i < 0) return;
-  w26State.draft_faces.splice(i, 1);
-  if (w26State.focusFace === name) w26State.focusFace = w26State.draft_faces[0] || null;
+  refinementCatalog.draft_faces.splice(i, 1);
+  if (refinementCatalog.focusFace === name) refinementCatalog.focusFace = refinementCatalog.draft_faces[0] || null;
   syncRefAssignList();
   persistActiveRef((activeRef() && activeRef().id) || viewingRefId(), { facesExplicit: true }).catch((e) =>
     console.error('[CFD] refinement face', e)
@@ -27329,15 +26756,15 @@ function unassignRefFace(label) {
 
 function focusAssignedRefFace(label, opts) {
   const name = String(label || '').trim();
-  if (!name || !w26State.draft_faces.includes(name)) return;
-  if (opts && opts.toggle === false) w26State.focusFace = name;
-  else w26State.focusFace = w26State.focusFace === name ? null : name;
+  if (!name || !refinementCatalog.draft_faces.includes(name)) return;
+  if (opts && opts.toggle === false) refinementCatalog.focusFace = name;
+  else refinementCatalog.focusFace = refinementCatalog.focusFace === name ? null : name;
   syncRefAssignList();
 }
 
 function nextClientRefName(type) {
   let n = 1;
-  const names = new Set((w26State.refinements || []).map((r) => r.name));
+  const names = new Set((refinementCatalog.refinements || []).map((r) => r.name));
   while (names.has(`${type} ${n}`)) n += 1;
   return `${type} ${n}`;
 }
@@ -27384,28 +26811,25 @@ async function createRefClient(type, opts) {
   }
   if (prefersImperialUnits()) convertRefRecord(local, true);
   applyRefRecords(
-    { refinements: [...(w26State.refinements || []), local], project_id: pid },
+    { refinements: [...(refinementCatalog.refinements || []), local], project_id: pid },
     pid,
   );
   showRefEditor(local);
   const pending = (async () => {
-    const r = await fetch('/api/mesh/refinements', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(local),
-    });
-    const j = await r.json();
+    const posted = await postRefinements(local);
+    const r = posted.response;
+    const j = posted.json;
     if (!r.ok || !j.ok) throw new Error(j.error || 'Refinement create failed');
     applyRefRecords(j, j.project_id);
     const created =
       j.refinement ||
       (j.refinements || []).find((x) => x.id === local.id) ||
       (j.refinements || []).filter((x) => x.type === type).slice(-1)[0];
-    if (created && w26State.activeId === local.id) {
-      w26State.activeId = created.id;
+    if (created && refinementCatalog.activeId === local.id) {
+      refinementCatalog.activeId = created.id;
     }
     if (created && pendingFaces.length && !((created.faces || []).length)) {
-      w26State.draft_faces = pendingFaces.slice();
+      refinementCatalog.draft_faces = pendingFaces.slice();
       const rec = refList().find((x) => x && String(x.id) === String(created.id));
       if (rec) {
         rec.faces = pendingFaces.slice();
@@ -27413,13 +26837,13 @@ async function createRefClient(type, opts) {
       }
       await persistActiveRef(created.id, { facesExplicit: true });
     }
-    if (created && w26State.activeId === created.id && treeUi.openPanel === 'ref') {
+    if (created && refinementCatalog.activeId === created.id && treeUi.openPanel === 'ref') {
       syncRefEditorFields();
       markTreeSelected('refid:' + created.id);
     }
     return j;
   })();
-  w26State._createWait = pending.catch(() => {});
+  refinementCatalog._createWait = pending.catch(() => {});
   return pending;
 }
 
@@ -27427,15 +26851,12 @@ async function deleteRefClient(id) {
   const body = { delete: id };
   const pid = currentProjectId();
   if (pid) body.project_id = pid;
-  const r = await fetch('/api/mesh/refinements', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const j = await r.json();
+  const posted = await postRefinements(body);
+  const r = posted.response;
+  const j = posted.json;
   if (!r.ok || !j.ok) throw new Error(j.error || 'Refinement delete failed');
-  w26State.activeId = null;
-  w26State.draft_faces = [];
+  refinementCatalog.activeId = null;
+  refinementCatalog.draft_faces = [];
   highlightGeomFaces([]);
   applyRefRecords(j, j.project_id);
   hideAllTreeDetails();
@@ -27443,9 +26864,7 @@ async function deleteRefClient(id) {
   return j;
 }
 
-window.__CFD_W26_CREATE__ = createRefClient;
 window.__CFD_SHOW_REF__ = showRefEditor;
-window.__CFD_W26_APPLY__ = applyRefRecords;
 
 (function wireW26Ui() {
   const persist = () =>
@@ -27467,7 +26886,7 @@ window.__CFD_W26_APPLY__ = applyRefRecords;
     }
   });
   document.getElementById('ref-clear-assign')?.addEventListener('click', () => {
-    w26State.draft_faces = [];
+    refinementCatalog.draft_faces = [];
     syncRefAssignList();
     persistActiveRef((activeRef() && activeRef().id) || viewingRefId(), { facesExplicit: true }).catch((e) =>
       console.error('[CFD] refinement persist', e)
@@ -27540,11 +26959,11 @@ window.__CFD_W26_APPLY__ = applyRefRecords;
   if (typeof prevCreate === 'function') {
     window.__CFD_W16_CREATE__ = async function wrappedCreateW26(fields) {
       const out = await prevCreate(fields);
-      w26State.refinements = [];
-      w26State.activeId = null;
-      w26State.draft_faces = [];
-      w26State.ready = false;
-      w26State.project_id = (out && out.project && out.project.id) || null;
+      refinementCatalog.refinements = [];
+      refinementCatalog.activeId = null;
+      refinementCatalog.draft_faces = [];
+      refinementCatalog.ready = false;
+      refinementCatalog.project_id = (out && out.project && out.project.id) || null;
       publishW26({ ready: false });
       return out;
     };
@@ -27554,7 +26973,7 @@ window.__CFD_W26_APPLY__ = applyRefRecords;
     .then((r) => r.json())
     .then((j) => {
       if (!currentStudyId()) return;
-      w26State.hydrated = true;
+      refinementCatalog.hydrated = true;
       applyRefRecords(j || { refinements: [] }, j && j.project_id);
       publishW26({ hydrated: true, ready: refList().length > 0 });
     })
@@ -27569,6 +26988,8 @@ function markLiveCompute(kind, ids) {
   liveCompute.kind = kind || null;
   liveCompute.run_id = (ids && ids.run_id) || null;
   liveCompute.mesh_id = (ids && ids.mesh_id) || null;
+  liveCompute.project_id =
+    (ids && ids.project_id) || (typeof currentProjectId === 'function' ? currentProjectId() : null) || null;
 }
 
 function clearLiveCompute(kind) {
@@ -27576,37 +26997,49 @@ function clearLiveCompute(kind) {
   liveCompute.kind = null;
   liveCompute.run_id = null;
   liveCompute.mesh_id = null;
+  liveCompute.project_id = null;
+}
+
+/**
+ * The tab's mesh job was started in another project. Mesh ids repeat across
+ * projects (each has a mesh_1), so a bare id match must not make this
+ * project's panel show that job.
+ */
+function meshJobInOtherProject() {
+  const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
+  const owner = String(jobState.project_id || liveCompute.project_id || '');
+  return !!(pid && owner && pid !== owner);
 }
 
 function liveSolveCatalogRows() {
-  return [].concat((w27State && w27State.runs_all) || [], (w27State && w27State.runs) || []);
+  return [].concat((runCatalog && runCatalog.runs_all) || [], (runCatalog && runCatalog.runs) || []);
 }
 
 function liveSolveHandleOpts() {
   return {
     liveKind: liveCompute.kind,
-    liveRunId: liveSolveRunId() || (w27State && w27State.live_run_id) || liveCompute.run_id,
-    starting: !!(w27State && w27State.starting),
+    liveRunId: liveSolveRunId() || (runCatalog && runCatalog.live_run_id) || liveCompute.run_id,
+    starting: !!(runCatalog && runCatalog.starting),
     catalogRows: liveSolveCatalogRows(),
   };
 }
 
 function liveSolveIsRunning() {
   if (typeof solveHandleStillLive === 'function' && solveHandleStillLive(liveSolveHandleOpts())) return true;
-  if (w27State && w27State.starting) return true;
+  if (runCatalog && runCatalog.starting) return true;
   if (jobState.status === 'running') {
     if (jobState.mode === 'solve' || jobState.path_kind === 'simpleFoam' || jobState.path_kind === 'pimpleFoam') {
       return true;
     }
   }
-  if (w27State && w27State.live_run_id && jobState.status === 'running' && String(jobState.run_id) === String(w27State.live_run_id)) {
+  if (runCatalog && runCatalog.live_run_id && jobState.status === 'running' && String(jobState.run_id) === String(runCatalog.live_run_id)) {
     return true;
   }
   return false;
 }
 
 function catalogHasLiveSolve(exceptRunId) {
-  const rows = [].concat((w27State && w27State.runs_all) || [], (w27State && w27State.runs) || []);
+  const rows = [].concat((runCatalog && runCatalog.runs_all) || [], (runCatalog && runCatalog.runs) || []);
   return rows.some((r) => {
     if (!r || !runStatusIsSolving(r.status)) return false;
     if (!exceptRunId) return true;
@@ -27615,10 +27048,10 @@ function catalogHasLiveSolve(exceptRunId) {
 }
 
 function anyComputeJobRunning() {
-  if (w27State && w27State.starting) return true;
+  if (runCatalog && runCatalog.starting) return true;
   if (typeof solveHandleStillLive === 'function' && solveHandleStillLive(liveSolveHandleOpts())) return true;
   if (liveCompute.kind === 'mesh' && (meshGenerateJobIsLive() || jobState.status === 'running')) return true;
-  if (w27State && w27State.live_run_id && jobState.status === 'running' && jobState.mode === 'solve') {
+  if (runCatalog && runCatalog.live_run_id && jobState.status === 'running' && jobState.mode === 'solve') {
     return true;
   }
   if (catalogHasLiveSolve()) return true;
@@ -27637,9 +27070,9 @@ function clearStaleSolveLive(runId) {
   const liveId = liveSolveRunId();
   if (!liveId || String(liveId) !== String(runId)) return false;
   try { clearLiveCompute('solve'); } catch (_) {}
-  if (w27State) {
-    w27State.live_run_id = null;
-    w27State.live_run = null;
+  if (runCatalog) {
+    runCatalog.live_run_id = null;
+    runCatalog.live_run = null;
   }
   if (jobState && jobState.mode === 'solve' && String(jobState.run_id || '') === String(runId)) {
     jobState.status = (rec && rec.status) || 'idle';
@@ -27657,8 +27090,8 @@ function computeJobBlocksStart(exceptRunId) {
     }
     return true;
   }
-  if (w27State && w27State.live_run_id && jobState.status === 'running' && jobState.mode === 'solve') {
-    if (exceptRunId && String(w27State.live_run_id) === String(exceptRunId)) {
+  if (runCatalog && runCatalog.live_run_id && jobState.status === 'running' && jobState.mode === 'solve') {
+    if (exceptRunId && String(runCatalog.live_run_id) === String(exceptRunId)) {
       return runStatusIsSolving(typeof findRunRecord === 'function' ? findRunRecord(exceptRunId) : null);
     }
     return true;
@@ -27669,16 +27102,16 @@ function computeJobBlocksStart(exceptRunId) {
 
 function releaseStaleComputeFlags() {
   let dirty = false;
-  const liveId = liveSolveRunId() || (w27State && w27State.live_run_id) || liveCompute.run_id;
-  const hasSolveHandle = liveCompute.kind === 'solve' || !!(w27State && w27State.live_run_id);
+  const liveId = liveSolveRunId() || (runCatalog && runCatalog.live_run_id) || liveCompute.run_id;
+  const hasSolveHandle = liveCompute.kind === 'solve' || !!(runCatalog && runCatalog.live_run_id);
   if (hasSolveHandle && typeof solveHandleStillLive === 'function' && !solveHandleStillLive(liveSolveHandleOpts())) {
     if (liveId) {
       try { clearStaleSolveLive(liveId); } catch (_) {}
     }
     try { clearLiveCompute('solve'); } catch (_) {}
-    if (w27State) {
-      w27State.live_run_id = null;
-      w27State.live_run = null;
+    if (runCatalog) {
+      runCatalog.live_run_id = null;
+      runCatalog.live_run = null;
     }
     dirty = true;
   }
@@ -27698,23 +27131,32 @@ function releaseStaleComputeFlags() {
 }
 
 function jobQueueStorageKey() {
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  if (pid) return 'cfd-job-queue:' + pid;
   return typeof JOB_QUEUE_STORAGE_KEY === 'string' ? JOB_QUEUE_STORAGE_KEY : 'cfd-job-queue';
 }
 
 function leftoverSessionQueueItems() {
   try {
-    const shards = [parseStoredQueueItems(sessionStorage.getItem(jobQueueStorageKey()))];
-    const stale = [jobQueueStorageKey()];
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const key = sessionStorage.key(i);
-      if (!key || key === jobQueueStorageKey()) continue;
-      if (typeof isJobQueueStorageKey === 'function' ? !isJobQueueStorageKey(key) : key.indexOf('cfd-job-queue:') !== 0) {
-        continue;
+    const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
+    const mine = jobQueueStorageKey();
+    const own = parseStoredQueueItems(sessionStorage.getItem(mine)).filter((row) => pid && queueRowProject(row) === pid);
+    if (pid && mine !== 'cfd-job-queue') {
+      const legacy = parseStoredQueueItems(sessionStorage.getItem('cfd-job-queue'));
+      const keep = [];
+      const take = [];
+      for (const row of legacy) {
+        if (queueRowProject(row) === pid) take.push(row);
+        else keep.push(row);
       }
-      shards.push(parseStoredQueueItems(sessionStorage.getItem(key)));
-      stale.push(key);
+      if (take.length) {
+        own.push(...take);
+        if (keep.length) sessionStorage.setItem('cfd-job-queue', JSON.stringify(keep));
+        else sessionStorage.removeItem('cfd-job-queue');
+      }
     }
-    return { items: mergeStoredQueueItems.apply(null, shards), stale };
+    // Merged into the server queue once, then dropped (see persistJobQueue).
+    return { items: mergeStoredQueueItems(own), stale: [mine] };
   } catch (_) {
     return { items: [], stale: [] };
   }
@@ -27726,19 +27168,163 @@ function clearLeftoverSessionQueue(keys) {
   });
 }
 
-function applyServerQueue(j) {
+function applyServerQueue(j, opts) {
   if (!j) return j;
+  const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
+  const before = queueSignature();
   if (Array.isArray(j.items) && !jobQueue._dragging) {
-    jobQueue.items = j.items;
+    jobQueue.items = pid ? j.items.filter((row) => queueRowProject(row) === pid) : [];
   }
-  if (j.live && j.live.kind) {
+  let adopted = false;
+  if (Object.prototype.hasOwnProperty.call(j, 'busy')) {
+    jobQueue.busy = j.busy && j.busy.kind ? j.busy : null;
+    try { adopted = releaseForeignMeshJob(jobQueue.busy); } catch (_) {}
+  }
+  if (j.live && j.live.kind && pid && queueRowProject(j.live) === pid) {
+    if (j.live.kind === 'mesh') {
+      try { adopted = adoptServerMeshJob(j.live); } catch (e) { console.warn('[CFD] follow server mesh', e); }
+    }
     try {
-      markLiveCompute(j.live.kind, { mesh_id: j.live.mesh_id || null, run_id: j.live.run_id || null });
+      markLiveCompute(j.live.kind, { mesh_id: j.live.mesh_id || null, run_id: j.live.run_id || null, project_id: pid });
     } catch (_) {}
   }
+  try { watchComputeQueue(); } catch (_) {}
+  if (opts && opts.quiet && !adopted && queueSignature() === before) return j;
   try { persistJobQueue(); } catch (_) {}
   try { syncJobQueueChrome(); } catch (_) {}
   return j;
+}
+
+function queueSignature() {
+  try {
+    return JSON.stringify([jobQueue.items || [], jobQueue.busy || null]);
+  } catch (_) {
+    return '';
+  }
+}
+
+/**
+ * The tab still tracks a mesh it started in another project, but the server
+ * no longer runs it. This project's poll cannot see that job end, so stop
+ * following it here; its own project reads the result from disk when opened.
+ */
+function releaseForeignMeshJob(busy) {
+  if (!meshJobInOtherProject() || !meshGenerateJobIsLive()) return false;
+  const stillLive =
+    busy &&
+    busy.kind === 'mesh' &&
+    String(busy.project_id || '') === String(jobState.project_id || '') &&
+    String(busy.mesh_id || '') === String(jobState.mesh_id || '');
+  if (stillLive) return false;
+  stopJobPoll();
+  stopMeshElapsedClock();
+  jobState.status = 'idle';
+  jobState.finished_at = jobState.finished_at || new Date().toISOString();
+  clearLiveCompute('mesh');
+  try { syncJobStatusChrome(); } catch (_) {}
+  return true;
+}
+
+/** This project's queue row for a mesh, with its place in the server-wide queue. */
+function queuedMeshRow(meshId) {
+  if (!meshId) return null;
+  return (jobQueue.items || []).find((r) => r && r.kind === 'mesh' && String(r.mesh_id) === String(meshId)) || null;
+}
+
+/** Another job (any project) holds the one compute slot. */
+function serverBusyForOtherJob(meshId) {
+  const busy = jobQueue.busy;
+  if (!busy || !busy.kind) return false;
+  const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
+  const thisMesh =
+    busy.kind === 'mesh' && meshId && String(busy.mesh_id || '') === String(meshId) && String(busy.project_id || '') === pid;
+  return !thisMesh;
+}
+
+/** "Mesh 1 in Sample project" for the job a queued row waits on. */
+function queueBehindLabel() {
+  return computeBusyLabel(jobQueue.busy, {
+    currentProjectId: typeof currentProjectId === 'function' ? currentProjectId() : '',
+    lookupName: (kind, id) => {
+      if (kind === 'mesh') {
+        const rec = typeof findMeshRecord === 'function' ? findMeshRecord(id) : null;
+        return rec ? meshDisplayName(rec) : '';
+      }
+      const run = typeof findRunRecord === 'function' ? findRunRecord(id) : null;
+      return (run && run.name) || '';
+    },
+    projectTitle: (id) => jobChipProjectLabel({ project_id: id }),
+  });
+}
+
+/**
+ * Poll the server queue while this project has queued rows or any job holds
+ * the slot: the server starts queued work on its own, and the panel must flip
+ * from Queued to Generating (or to Generate) without a click.
+ */
+function watchComputeQueue() {
+  const want = !!((jobQueue.items && jobQueue.items.length) || jobQueue.busy);
+  if (!want) {
+    if (jobQueue.watchTimer) clearInterval(jobQueue.watchTimer);
+    jobQueue.watchTimer = null;
+    return;
+  }
+  if (jobQueue.watchTimer) return;
+  jobQueue.watchTimer = setInterval(() => {
+    const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+    if (!pid || jobQueue._dragging || document.hidden) return;
+    fetchComputeQueue('/api/compute-queue?project_id=' + encodeURIComponent(pid))
+      .then((j) => applyServerQueue(j, { quiet: true }))
+      .catch(() => {});
+  }, 2000);
+}
+
+/**
+ * The server started this project's mesh without this tab (a queued job, or
+ * one started before a reload or project switch). Track it like a local
+ * Generate so the panel, chip and tree show it and the job poll sees it end.
+ */
+function adoptServerMeshJob(live) {
+  if (!live || live.kind !== 'mesh' || !live.mesh_id) return false;
+  const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
+  if (!pid || String(live.project_id || '') !== pid) return false;
+  if (meshGenerateJobIsLive() && !meshJobInOtherProject() && String(jobState.mesh_id || '') === String(live.mesh_id)) {
+    return false;
+  }
+  const rec = typeof findMeshRecord === 'function' ? findMeshRecord(live.mesh_id) : null;
+  jobState.status = 'running';
+  jobState.mode = 'mesh';
+  jobState.path_kind = live.path_kind || 'standard';
+  jobState.mesh_id = String(live.mesh_id);
+  jobState.run_id = null;
+  jobState.project_id = pid;
+  jobState.project_title = live.project_title || (w16State.project && w16State.project.title) || '';
+  jobState.simulation_id = (rec && rec.simulation_id) || (typeof currentStudyId === 'function' ? currentStudyId() : null) || null;
+  jobState.mesh_name = (rec && meshDisplayName(rec)) || live.mesh_name || 'Mesh';
+  jobState.geometry_name = (rec && typeof geometryNameForMesh === 'function' && geometryNameForMesh(rec)) || '';
+  jobState.kick_id = live.generate_id || null;
+  jobState.generate_id = live.generate_id || null;
+  jobState.case_dir = null;
+  jobState.pid = null;
+  jobState.exit_code = null;
+  jobState.error = null;
+  jobState.n_cells = null;
+  jobState.n_points = null;
+  jobState.n_faces = null;
+  jobState.stage = 'starting';
+  jobState.stage_detail = null;
+  jobState.started_at = live.started_at || new Date().toISOString();
+  jobState.finished_at = null;
+  jobState.note = 'Generating mesh...';
+  if (jobState.project_title) rememberProjectTitle(pid, jobState.project_title);
+  markLiveCompute('mesh', { mesh_id: jobState.mesh_id, project_id: pid });
+  updateMeshListEntry(jobState.mesh_id, { generated: false, live_mesh_result: { status: 'running' } });
+  startMeshElapsedClock();
+  startJobPoll();
+  try { publishW20(); } catch (_) {}
+  try { syncJobStatusChrome(); } catch (_) {}
+  try { publishJobActivity(); } catch (_) {}
+  return true;
 }
 
 async function fetchComputeQueue(path, opts) {
@@ -27751,16 +27337,27 @@ async function fetchComputeQueue(path, opts) {
   return j;
 }
 
+function queueRowProject(row) {
+  return row && row.project_id != null ? String(row.project_id).trim() : '';
+}
+
+/**
+ * The disk-backed server queue is the only copy. The per-tab shadow this used
+ * to write was merged back on the next project open and re-added jobs that
+ * had already started or been removed, so drop it instead.
+ */
 function persistJobQueue() {
   try {
-    sessionStorage.setItem(jobQueueStorageKey(), JSON.stringify(jobQueue.items));
+    const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
+    if (pid) sessionStorage.removeItem(jobQueueStorageKey());
   } catch (_) {}
 }
 
 async function loadJobQueue() {
   try {
     const leftover = leftoverSessionQueueItems();
-    const j = await fetchComputeQueue('/api/compute-queue');
+    const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
+    const j = await fetchComputeQueue('/api/compute-queue?project_id=' + encodeURIComponent(pid));
     applyServerQueue(j);
     if (leftover.items && leftover.items.length) {
       const merged = await fetchComputeQueue('/api/compute-queue', {
@@ -27768,8 +27365,8 @@ async function loadJobQueue() {
         body: { action: 'merge', items: leftover.items },
       });
       applyServerQueue(merged);
-      clearLeftoverSessionQueue(leftover.stale);
     }
+    clearLeftoverSessionQueue(leftover.stale);
   } catch (_) {}
 }
 
@@ -27782,12 +27379,12 @@ function currentQueueMeshId() {
     }
   } catch (_) {}
   try {
-    if (w20State && w20State.active_id) return w20State.active_id;
-    if (w20State && w20State.mesh && w20State.mesh.id) return w20State.mesh.id;
+    if (meshCatalog && meshCatalog.active_id) return meshCatalog.active_id;
+    if (meshCatalog && meshCatalog.mesh && meshCatalog.mesh.id) return meshCatalog.mesh.id;
   } catch (_) {}
   try {
-    if (window.__CFD_W26_STATE__ && window.__CFD_W26_STATE__.meshId) {
-      return window.__CFD_W26_STATE__.meshId;
+    if (refinementCatalog && refinementCatalog.meshId) {
+      return refinementCatalog.meshId;
     }
   } catch (_) {}
   return null;
@@ -27805,6 +27402,7 @@ function jobQueueHas(kind, id) {
 
 function liveMeshJobId() {
   if (isTerminalJobStatus(jobState.status)) return '';
+  if (meshJobInOtherProject()) return '';
   if (liveCompute.kind === 'mesh' && liveCompute.mesh_id) return String(liveCompute.mesh_id);
   if (meshGenerateJobIsLive() && jobState.mesh_id) return String(jobState.mesh_id);
   if (jobState.status === 'running' && jobState.mode === 'mesh' && jobState.mesh_id) {
@@ -27814,7 +27412,7 @@ function liveMeshJobId() {
 }
 
 function meshIsGeneratingNow(meshId) {
-  if (!meshId) return false;
+  if (!meshId || meshJobInOtherProject()) return false;
   const id = String(meshId);
   const liveId = liveMeshJobId();
   if (liveId && liveId === id) return true;
@@ -27825,7 +27423,7 @@ function meshIsGeneratingNow(meshId) {
   if (meshJobLive && !liveId) {
     const active =
       (typeof currentQueueMeshId === 'function' && currentQueueMeshId()) ||
-      (w20State && (w20State.active_id || (w20State.mesh && w20State.mesh.id))) ||
+      (meshCatalog && (meshCatalog.active_id || (meshCatalog.mesh && meshCatalog.mesh.id))) ||
       '';
     if (active && String(active) === id) return true;
     const study = (typeof meshList === 'function' ? meshList() : []).filter((m) => m && m.id);
@@ -27861,8 +27459,8 @@ function rememberRunMesh(rec, meshId) {
   rec.mesh_id = meshId;
   const mesh = typeof findMeshRecord === 'function' ? findMeshRecord(meshId) : null;
   if (mesh && mesh.name) rec.mesh_name = mesh.name;
-  if (w27State.run && String(w27State.run.run_id || w27State.run.id) === String(id)) {
-    w27State.run = { ...w27State.run, mesh_id: meshId, mesh_name: rec.mesh_name };
+  if (runCatalog.run && String(runCatalog.run.run_id || runCatalog.run.id) === String(id)) {
+    runCatalog.run = { ...runCatalog.run, mesh_id: meshId, mesh_name: rec.mesh_name };
   }
   if (id && !rec._meshAssigning) {
     rec._meshAssigning = true;
@@ -27891,21 +27489,21 @@ function queueItemLabel(item) {
   return (run && run.name) || 'Run';
 }
 
-function enqueueMeshJob(meshId) {
+function enqueueMeshJob(meshId, explicitSettings) {
   const id = String(meshId || currentQueueMeshId() || '').trim();
   if (!id) return null;
-  if (meshGenerateJobIsLive() && String(jobState.mesh_id) === id) return null;
+  if (meshGenerateJobIsLive() && !meshJobInOtherProject() && String(jobState.mesh_id) === id) return null;
   if (jobQueueHas('mesh', id)) return jobQueue.items.find((r) => r.kind === 'mesh' && String(r.mesh_id) === id);
   const mesh = typeof findMeshRecord === 'function' ? findMeshRecord(id) : null;
   const viewing = viewingMeshId() || currentQueueMeshId();
   const owned = typeof settingsOwnedByMesh === 'function' ? settingsOwnedByMesh(id) : (mesh && mesh.settings) || {};
-  const settings =
-    viewing && String(viewing) === String(id)
-      ? { ...owned, ...readSettingsFromForm(), name: owned.name || (mesh && mesh.name) }
-      : cloneMeshSettings(owned, (mesh && mesh.name) || owned.name);
+  // The React panel passes what it shows; otherwise the mesh's own record.
+  const settings = explicitSettings
+    ? cloneMeshSettings({ ...owned, ...explicitSettings }, owned.name || (mesh && mesh.name))
+    : cloneMeshSettings(owned, (mesh && mesh.name) || owned.name);
   if (String(viewing) === String(id)) {
-    if (w20State.settings) w20State.settings.fineness = settings.fineness;
-    if (w20State.mesh && w20State.mesh.settings) w20State.mesh.settings.fineness = settings.fineness;
+    if (meshCatalog.settings) meshCatalog.settings.fineness = settings.fineness;
+    if (meshCatalog.mesh && meshCatalog.mesh.settings) meshCatalog.mesh.settings.fineness = settings.fineness;
     rememberMeshDraft(id, settings);
     updateMeshListEntry(id, { settings, name: settings.name });
   }
@@ -27919,7 +27517,7 @@ function enqueueMeshJob(meshId) {
     name: (mesh && mesh.name) || meshDisplayName(mesh) || 'Mesh',
     settings,
   };
-  saveMeshSettingsClient({ ...settings, mesh_id: id, allowDuringGenerate: true }).catch((e) =>
+  saveMeshSettings({ ...settings, mesh_id: id, allowDuringGenerate: true }).catch((e) =>
     console.warn('[CFD] queue mesh settings save', e)
   );
   return fetchComputeQueue('/api/compute-queue', { method: 'POST', body: item })
@@ -27937,7 +27535,7 @@ function enqueueMeshJob(meshId) {
 function liveSolveRunId() {
   return (
     liveCompute.run_id ||
-    (w27State && w27State.live_run_id) ||
+    (runCatalog && runCatalog.live_run_id) ||
     (jobState && jobState.mode === 'solve' && jobState.run_id) ||
     null
   );
@@ -28012,7 +27610,10 @@ function removeQueuedJob(kind, id) {
     persistJobQueue();
     syncJobQueueChrome();
   }
-  fetchComputeQueue('/api/compute-queue', { method: 'POST', body: { action: 'remove', kind, id } })
+  fetchComputeQueue('/api/compute-queue', {
+    method: 'POST',
+    body: { action: 'remove', kind, id, project_id: typeof currentProjectId === 'function' ? currentProjectId() : null },
+  })
     .then(applyServerQueue)
     .catch((e) => console.warn('[CFD] queue remove', e));
 }
@@ -28059,28 +27660,8 @@ function syncJobQueueChrome() {
     if (list.innerHTML !== html) list.innerHTML = html;
   }
   if (chip) chip.hidden = !jobQueue.items.length;
-  const genBtn = document.getElementById('btn-generate-mesh');
-  if (genBtn) {
-    const mid = currentQueueMeshId();
-    const kind = meshGenerateButtonKind({
-      viewingMeshId: mid,
-      liveMeshId: liveMeshJobId(),
-      generateLive: meshGenerateJobIsLive() || liveComputeSnap().kind === 'mesh',
-      computeBusy: anyComputeJobRunning(),
-      queued: !!(mid && jobQueueHas('mesh', mid)),
-    });
-    const next =
-      kind === 'generating'
-        ? { disabled: true, text: 'Generating…', title: 'This mesh is generating' }
-        : kind === 'queued'
-          ? { disabled: false, text: 'Remove from queue', title: 'Remove this mesh from the queue' }
-          : kind === 'queue'
-            ? { disabled: false, text: 'Add to queue', title: 'Generate this mesh when the current job finishes' }
-            : { disabled: false, text: 'Generate', title: 'Generate the mesh' };
-    if (genBtn.disabled !== next.disabled) genBtn.disabled = next.disabled;
-    if (genBtn.textContent !== next.text) genBtn.textContent = next.text;
-    if (genBtn.title !== next.title) genBtn.title = next.title;
-  }
+  /* The Generate button's queue state reaches the React island through cfd:mesh-job. */
+  try { publishMeshJobState(); } catch (_) {}
   try { if (typeof syncSimControlPanel === 'function') syncSimControlPanel(); } catch (_) {}
   publishJobActivity();
   } finally {
@@ -28102,7 +27683,7 @@ function runningSolveId() {
   if (jobState.mode === 'solve' && jobState.run_id && jobState.status === 'running') {
     return String(jobState.run_id);
   }
-  const w27 = window.__CFD_W27_STATE__;
+  const w27 = runCatalog;
   if (w27 && w27.live_run_id) return String(w27.live_run_id);
   const rows = []
     .concat((w27 && w27.runs_all) || [])
@@ -28116,12 +27697,12 @@ function publishJobActivity() {
   let kind = null;
   let mesh_id = null;
   let run_id = null;
-  const w27 = window.__CFD_W27_STATE__;
+  const w27 = runCatalog;
   const solveId = runningSolveId();
   if (solveId) {
     kind = 'solve';
     run_id = solveId;
-  } else if (meshGenerateJobIsLive() || liveComputeSnap().kind === 'mesh') {
+  } else if (!meshJobInOtherProject() && (meshGenerateJobIsLive() || liveComputeSnap().kind === 'mesh')) {
     kind = 'mesh';
     mesh_id = liveComputeSnap().mesh_id || jobState.mesh_id || null;
   } else if (w27 && w27.starting) {
@@ -28132,10 +27713,14 @@ function publishJobActivity() {
     kind,
     mesh_id,
     run_id,
+    project_id: typeof currentProjectId === 'function' ? currentProjectId() : null,
+    simulation_id: typeof currentStudyId === 'function' ? currentStudyId() : null,
     queue: (jobQueue.items || []).map((r) => ({
       kind: r.kind,
       mesh_id: r.mesh_id || null,
       run_id: r.run_id || null,
+      project_id: r.project_id || null,
+      simulation_id: r.simulation_id || null,
     })),
   };
   const prev = window.__CFD_JOB_ACTIVITY__;
@@ -28144,7 +27729,7 @@ function publishJobActivity() {
     if (prev && JSON.stringify(prev) === JSON.stringify(snap)) return;
   } catch (_) {}
   try {
-    if (typeof syncSimulationTree === 'function') syncSimulationTree();
+    if (typeof refreshSetupTree === 'function') refreshSetupTree();
   } catch (_) {}
 }
 
@@ -28260,7 +27845,10 @@ async function kickNextQueuedJob() {
   try { releaseStaleComputeFlags(); } catch (_) {}
   jobQueue.kicking = true;
   try {
-    const j = await fetchComputeQueue('/api/compute-queue/kick', { method: 'POST', body: {} });
+    const j = await fetchComputeQueue('/api/compute-queue/kick', {
+      method: 'POST',
+      body: { project_id: typeof currentProjectId === 'function' ? currentProjectId() : '' },
+    });
     applyServerQueue(j);
   } catch (e) {
     console.warn('[CFD] queue kick', e);
@@ -28269,18 +27857,24 @@ async function kickNextQueuedJob() {
   }
 }
 
-async function onGenerateMeshClick() {
-  const mid = currentQueueMeshId();
-  if (meshGenerateJobIsLive() && mid && String(jobState.mesh_id) === String(mid)) return;
+/**
+ * Generate / Add to queue / Remove from queue, in one place. The React mesh
+ * island calls this with the mesh it shows and the settings it holds.
+ */
+async function onGenerateMeshClick(opts) {
+  const mid = (opts && opts.mesh_id) || currentQueueMeshId();
+  const settings = opts && opts.settings ? opts.settings : undefined;
+  const foreign = meshJobInOtherProject();
+  if (!foreign && meshGenerateJobIsLive() && mid && String(jobState.mesh_id) === String(mid)) return { generating: true };
   if (mid && jobQueueHas('mesh', mid)) {
     removeQueuedJob('mesh', mid);
-    return;
+    return { dequeued: true };
   }
-  if (anyComputeJobRunning()) {
-    enqueueMeshJob(mid);
-    return;
+  if (!foreign && anyComputeJobRunning()) {
+    enqueueMeshJob(mid, settings);
+    return { queued: true };
   }
-  await generateMeshClient();
+  return generateMeshClient({ mesh_id: mid || undefined, settings });
 }
 
 async function onSimStartClick() {
@@ -28339,9 +27933,53 @@ async function onSimStartClick() {
 })();
 
 /* ---- W23 — Mesh Generate on W16 STEP/Body1 (snappyHexMesh + eMesh; no W15.1 stamp) ---- */
+const GENERATE_UNDO_KEYS = [
+  'status', 'mode', 'path_kind', 'n_cells', 'n_points', 'n_faces', 'pid', 'exit_code', 'mesh_id', 'run_id',
+  'simulation_id', 'project_id', 'project_title', 'mesh_name', 'geometry_name', 'started_at', 'finished_at', 'note',
+];
+
+function snapshotGenerateOptimism(meshId) {
+  const job = {};
+  GENERATE_UNDO_KEYS.forEach((k) => { job[k] = jobState[k]; });
+  const rec = meshId && typeof findMeshRecord === 'function' ? findMeshRecord(meshId) : null;
+  const cat = meshCatalog.mesh && meshId && String(meshCatalog.mesh.id) === String(meshId) ? meshCatalog.mesh : null;
+  return {
+    job,
+    live: { ...liveCompute },
+    meshId: meshId || null,
+    mesh: rec ? { generated: rec.generated, live_mesh_result: rec.live_mesh_result } : null,
+    catalogMesh: cat ? { generated: cat.generated, live_mesh_result: cat.live_mesh_result } : null,
+    clock: !!jobState.elapsed_timer,
+  };
+}
+
+/** The server queued this Generate behind another job: put back what the click assumed. */
+function restoreGenerateOptimism(undo) {
+  if (!undo) return;
+  Object.assign(jobState, undo.job);
+  Object.assign(liveCompute, undo.live);
+  if (undo.meshId && undo.mesh) {
+    const put = (m) =>
+      m && String(m.id) === String(undo.meshId)
+        ? { ...m, generated: undo.mesh.generated, live_mesh_result: undo.mesh.live_mesh_result }
+        : m;
+    if (Array.isArray(meshCatalog.meshes)) meshCatalog.meshes = meshCatalog.meshes.map(put);
+    if (Array.isArray(meshCatalog.meshes_all)) meshCatalog.meshes_all = meshCatalog.meshes_all.map(put);
+  }
+  if (undo.catalogMesh && meshCatalog.mesh && String(meshCatalog.mesh.id) === String(undo.meshId)) {
+    meshCatalog.mesh = { ...meshCatalog.mesh, ...undo.catalogMesh };
+  }
+  if (undo.clock && jobState.status === 'running') startMeshElapsedClock();
+  else stopMeshElapsedClock();
+  try { publishW20(); } catch (_) {}
+  try { syncJobStatusChrome(); } catch (_) {}
+  try { publishJobActivity(); } catch (_) {}
+}
+
 async function generateMeshClient(opts) {
   opts = opts || {};
   const meshId = opts.mesh_id || currentQueueMeshId();
+  const undo = snapshotGenerateOptimism(meshId);
   jobState.status = 'running';
   jobState.mode = 'mesh';
   jobState.path_kind = 'standard';
@@ -28369,16 +28007,16 @@ async function generateMeshClient(opts) {
   jobState.finished_at = null;
   jobState.note = 'Generating mesh...';
   startMeshElapsedClock();
-  try { if (typeof syncSimulationTree === 'function') syncSimulationTree(); } catch (_) {}
+  try { if (typeof refreshSetupTree === 'function') refreshSetupTree(); } catch (_) {}
   try { syncJobStatusChrome(); } catch (_) {}
+  // Explicit settings from the React panel win; otherwise the mesh's own record.
   const liveSettings =
     (opts && opts.settings) ||
     (meshId && typeof settingsOwnedByMesh === 'function' ? settingsOwnedByMesh(meshId) : null) ||
-    (meshId && String(viewingMeshId() || '') === String(meshId) ? readSettingsFromForm() : null) ||
-    readSettingsFromForm();
+    settingsOwnedByMesh(viewingMeshId());
   // Persist this mesh's settings first. Explicit queue/form values win over a stale draft.
   try {
-    await saveMeshSettingsClient({
+    await saveMeshSettings({
       allowDuringGenerate: true,
       mesh_id: meshId || undefined,
       ...liveSettings,
@@ -28386,17 +28024,17 @@ async function generateMeshClient(opts) {
   } catch (e) {
     console.warn('[CFD W23] save before generate', e);
   }
-  if (w20State.mesh && meshId && String(w20State.mesh.id) === String(meshId)) {
-    w20State.mesh.generated = false;
-    w20State.mesh.live_mesh_result = {
-      ...(w20State.mesh.live_mesh_result || {}),
+  if (meshCatalog.mesh && meshId && String(meshCatalog.mesh.id) === String(meshId)) {
+    meshCatalog.mesh.generated = false;
+    meshCatalog.mesh.live_mesh_result = {
+      ...(meshCatalog.mesh.live_mesh_result || {}),
       status: 'running',
     };
   }
   if (meshId) updateMeshListEntry(meshId, { generated: false, live_mesh_result: { status: 'running' } });
   try { publishW20(); } catch (_) {}
   try { publishJobActivity(); } catch (_) {}
-  const kickMeshId = meshId || (w20State && w20State.active_id) || (w20State.mesh && w20State.mesh.id) || undefined;
+  const kickMeshId = meshId || (meshCatalog && meshCatalog.active_id) || (meshCatalog.mesh && meshCatalog.mesh.id) || undefined;
   const r = await fetch('/api/mesh/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -28405,33 +28043,46 @@ async function generateMeshClient(opts) {
       ...currentMeshStudyIds(),
       mesh_id: kickMeshId,
       settings: liveSettings,
+      name: jobState.mesh_name || undefined,
+      // Another project's job may hold the slot; the server queues this and starts it later.
+      queue_if_busy: !opts.fromQueue,
     }),
   });
   const j = await r.json();
+  if (j && j.queued) {
+    restoreGenerateOptimism(undo);
+    applyServerQueue(j);
+    publishW21({ generate_queued: true, api: j });
+    return { queued: true, mesh_id: kickMeshId };
+  }
+  if (r.status === 409 && /already running/i.test(String((j && j.error) || ''))) {
+    // This very mesh is already the live job (another tab, or the queue started it): follow it.
+    restoreGenerateOptimism(undo);
+    publishW21({ generate_started: false, api: j });
+    const snap = await fetchComputeQueue(
+      '/api/compute-queue?project_id=' + encodeURIComponent(currentProjectId() || ''),
+    ).catch(() => null);
+    applyServerQueue(snap);
+    const followed = !!(snap && snap.live && snap.live.kind === 'mesh' && String(snap.live.mesh_id) === String(kickMeshId));
+    if (opts.fromQueue || followed) return { busy: true, mesh_id: kickMeshId };
+    if (kickMeshId) enqueueMeshJob(kickMeshId, liveSettings);
+    return { busy: true, queued: true, mesh_id: kickMeshId };
+  }
+  if (j && j.job_id) watchJobEvents(j.job_id);
   jobState.last_kick = { ok: r.ok || r.status === 202, status: r.status, body: j, kind: 'generate' };
   applyCaseSnapToJob(j);
   syncJobStatusChrome();
   publishW21({ generate_started: true, api: j });
   if (!(r.ok || r.status === 202)) {
-    const busy = r.status === 409 && /already running/i.test(String((j && j.error) || ''));
     stopMeshElapsedClock();
-    if (busy) {
-      jobState.status = 'running';
-      if (j && j.mesh_id) jobState.mesh_id = j.mesh_id;
-      markLiveCompute('mesh', { mesh_id: jobState.mesh_id || kickMeshId });
-      try { syncJobStatusChrome(); } catch (_) {}
-      if (opts.fromQueue) return { busy: true, mesh_id: kickMeshId };
-      if (kickMeshId) enqueueMeshJob(kickMeshId);
-      return { busy: true, queued: true, mesh_id: kickMeshId };
-    }
     jobState.status = 'failed';
     jobState.finished_at = new Date().toISOString();
     clearLiveCompute('mesh');
-    w20State.note = (j && j.error) || 'Generate failed to start';
-    publishW20({ note: w20State.note });
+    meshCatalog.note = (j && j.error) || 'Generate failed to start';
+    publishW20({ note: meshCatalog.note });
     try { syncJobStatusChrome(); } catch (_) {}
     if (!opts.fromQueue) scheduleKickNextQueuedJob(400);
-    throw new Error(w20State.note);
+    throw new Error(meshCatalog.note);
   }
   startJobPoll();
   return window.__CFD_W21__;
@@ -28476,47 +28127,10 @@ function publishW21(extra) {
 }
 
 window.__CFD_W21_GENERATE__ = generateMeshClient;
-window.__CFD_W21_APPLY__ = async function applyW21(partial) {
-  if (partial && partial.generate === false) {
-    return publishW21({ skipped: true });
-  }
-  await generateMeshClient();
-  // poll until terminal already via startJobPoll; wait briefly for prove convenience
-  const t0 = Date.now();
-  while (Date.now() - t0 < 300000) {
-    const snap = await fetchActiveCase();
-    applyCaseSnapToJob(snap);
-    syncJobStatusChrome();
-    publishW21({ polled: true, api: snap });
-    if (isTerminalJobStatus(snap.status)) break;
-    await new Promise((r) => setTimeout(r, 750));
-  }
-  // refresh mesh.json into w20 state
-  try {
-    const mr = await fetch('/api/mesh' + hashProjectQs());
-    const mj = await mr.json();
-    if (mj && mj.mesh) applyMeshRecord(mj, mj.project_id, { preserveActive: true });
-  } catch (e) {
-    console.warn('[CFD W23] mesh refresh', e);
-  }
-  showMeshPanel();
-  return publishW21({ applied: true });
-};
-window.__CFD_W21_OPEN__ = function openW21() {
-  showMeshPanel();
-  return publishW21({ opened: true });
-};
 
-(function wireW21Ui() {
-  const gen = document.getElementById('btn-generate-mesh');
-  if (gen && !gen._w21Wired) {
-    gen._w21Wired = true;
-    gen.addEventListener('click', () => {
-      onGenerateMeshClick().catch((e) => console.error('[CFD W23] generate', e));
-    });
-  }
-  publishW21({ wired: true });
-})();
+/* Generate lives on the React mesh island; it calls this so queue, chip and tree stay in one path. */
+window.__CFD_MESH_GENERATE_CLICK__ = onGenerateMeshClick;
+publishW21({ wired: true });
 
 /**
  * W22 — Area average setup (Result control → Surface data → Area average 1)
@@ -28531,37 +28145,18 @@ const W22_AA = {
   write_control: 'Time step',
   faces: [],
 };
-
-const w22State = {
-  ready: false,
-  hydrated: false,
-  created: false,
-  project_id: null,
-  area_average_1: null,
-  draft_faces: [],
-  focusFace: null,
-  panel_open: false,
-  editing_run_id: null,
-  editing_rc_id: null,
-  read_only: false,
-  result_controls_json: null,
-  area_average_json: null,
-  note: 'Area average setup',
-};
-window.__CFD_W22_STATE__ = w22State;
-
 function publishW22(extra) {
-  const aa = w22State.area_average_1;
+  const aa = resultCatalog.area_average_1;
   const payload = {
-    ready: !!w22State.ready,
-    hydrated: !!w22State.hydrated,
-    created: !!w22State.created,
-    project_id: w22State.project_id,
+    ready: !!resultCatalog.ready,
+    hydrated: !!resultCatalog.hydrated,
+    created: !!resultCatalog.created,
+    project_id: resultCatalog.project_id,
     area_average_1: aa,
     result_controls: aa ? [aa] : [],
-    result_controls_json: w22State.result_controls_json,
-    area_average_json: w22State.area_average_json,
-    note: w22State.note,
+    result_controls_json: resultCatalog.result_controls_json,
+    area_average_json: resultCatalog.area_average_json,
+    note: resultCatalog.note,
     increment: 'W22',
     soft_pass_avoided: true,
     ...(extra || {}),
@@ -28584,7 +28179,7 @@ function paintForAaFaces(faces) {
 
 function highlightAaFaces(faces, focus) {
   const list = Array.isArray(faces) ? faces.filter(Boolean) : [];
-  highlightGeomFaces(list, focus === undefined ? w22State.focusFace : focus, paintForAaFaces(list));
+  highlightGeomFaces(list, focus === undefined ? resultCatalog.focusFace : focus, paintForAaFaces(list));
 }
 
 function showRunAaOverview() {
@@ -28602,14 +28197,14 @@ function showRunAaOverview() {
 function syncAaAssignList() {
   const list = document.getElementById('aa-assign-list');
   const count = document.getElementById('aa-assign-count');
-  const faces = Array.isArray(w22State.draft_faces)
-    ? w22State.draft_faces
-    : (w22State.area_average_1 && w22State.area_average_1.faces) || [];
-  if (w22State.focusFace && !faces.includes(w22State.focusFace)) w22State.focusFace = null;
+  const faces = Array.isArray(resultCatalog.draft_faces)
+    ? resultCatalog.draft_faces
+    : (resultCatalog.area_average_1 && resultCatalog.area_average_1.faces) || [];
+  if (resultCatalog.focusFace && !faces.includes(resultCatalog.focusFace)) resultCatalog.focusFace = null;
   if (list) {
     list.innerHTML = faces
       .map((f) => {
-        const on = w22State.focusFace === f ? ' is-focus' : '';
+        const on = resultCatalog.focusFace === f ? ' is-focus' : '';
         return (
           '<li class="bc-assign-item' +
           on +
@@ -28632,15 +28227,15 @@ function syncAaAssignList() {
       .join('');
   }
   if (count) count.textContent = String(faces.length);
-  if (isAssigningAaFace() || w22State.panel_open) {
-    highlightAaFaces(faces, w22State.focusFace);
+  if (isAssigningAaFace() || resultCatalog.panel_open) {
+    highlightAaFaces(faces, resultCatalog.focusFace);
   }
 }
 
 function hideAaPanel() {
   const panel = document.getElementById('panel-area-average');
   if (panel) panel.hidden = true;
-  w22State.panel_open = false;
+  resultCatalog.panel_open = false;
 }
 
 function showAaPanel() {
@@ -28655,26 +28250,26 @@ function showAaPanel() {
   openTreeDetail('aa', { toggle: false });
   const wc = document.getElementById('aa-write-control');
   const title = document.getElementById('aa-panel-title');
-  const aa = w22State.area_average_1;
+  const aa = resultCatalog.area_average_1;
   if (title) title.textContent = (aa && aa.name) || 'Area average 1';
   if (wc) {
     wc.value = (aa && aa.write_control) || 'Time step';
-    wc.disabled = !!w22State.read_only;
+    wc.disabled = !!resultCatalog.read_only;
   }
   const clearBtn = document.getElementById('aa-clear-assign');
   const delBtn = document.getElementById('aa-delete');
-  if (clearBtn) clearBtn.hidden = !!w22State.read_only;
-  if (delBtn) delBtn.hidden = !!w22State.read_only;
+  if (clearBtn) clearBtn.hidden = !!resultCatalog.read_only;
+  if (delBtn) delBtn.hidden = !!resultCatalog.read_only;
   syncAaAssignList();
   publishW22({ panel_open: true });
 }
 
 function openRcTypeModal(runId) {
-  if (!w17State.simulation) {
+  if (!studyCatalog.simulation) {
     console.warn('[CFD W22] Create Simulation first');
     return;
   }
-  if (runId) w27State.rc_target_run_id = runId;
+  if (runId) runCatalog.rc_target_run_id = runId;
   const modal = document.getElementById('modal-result-control');
   if (modal) modal.hidden = false;
 }
@@ -28717,7 +28312,7 @@ function wireRcTreeHandlers() {
   document.getElementById('btn-rc-plus')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    openRcTypeModal(w27State.selected_run_id || w27State.active_run_id);
+    openRcTypeModal(runCatalog.selected_run_id || runCatalog.active_run_id);
   });
   document.querySelectorAll('[data-w27-run-plus]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
@@ -28731,11 +28326,11 @@ function wireRcTreeHandlers() {
 function applyAaRecord(doc, projectId) {
   const list = (doc && doc.result_controls) || [];
   const fromFile = doc && doc.area_average_1;
-  const viewing = typeof viewingRcId === 'function' ? viewingRcId() : w22State.editing_rc_id;
-  const viewingRun = typeof viewingRunId === 'function' ? viewingRunId() : w22State.editing_run_id;
+  const viewing = typeof viewingRcId === 'function' ? viewingRcId() : resultCatalog.editing_rc_id;
+  const viewingRun = typeof viewingRunId === 'function' ? viewingRunId() : resultCatalog.editing_run_id;
   if (viewingRun && doc && doc.run_id && String(doc.run_id) !== String(viewingRun)) {
-    w22State.project_id = projectId || (doc && doc.project_id) || w22State.project_id;
-    if (typeof syncSimulationTree === 'function') syncSimulationTree();
+    resultCatalog.project_id = projectId || (doc && doc.project_id) || resultCatalog.project_id;
+    if (typeof refreshSetupTree === 'function') refreshSetupTree();
     return window.__CFD_W22__;
   }
   const aa = viewing
@@ -28745,30 +28340,30 @@ function applyAaRecord(doc, projectId) {
       list.find((r) => r && r.name === W22_AA.name) ||
       null;
   if (viewing && (!aa || String(aa.id) !== String(viewing))) {
-    w22State.project_id = projectId || (doc && doc.project_id) || w22State.project_id;
-    if (typeof syncSimulationTree === 'function') syncSimulationTree();
+    resultCatalog.project_id = projectId || (doc && doc.project_id) || resultCatalog.project_id;
+    if (typeof refreshSetupTree === 'function') refreshSetupTree();
     return window.__CFD_W22__;
   }
-  w22State.area_average_1 = aa;
-  w22State.draft_faces = aa ? (aa.faces || []).slice() : [];
-  w22State.project_id = projectId || (doc && doc.project_id) || w22State.project_id;
-  w22State.result_controls_json =
+  resultCatalog.area_average_1 = aa;
+  resultCatalog.draft_faces = aa ? (aa.faces || []).slice() : [];
+  resultCatalog.project_id = projectId || (doc && doc.project_id) || resultCatalog.project_id;
+  resultCatalog.result_controls_json =
     (doc && doc.result_controls_json) ||
     (doc && doc.result_controls_json_path) ||
     (aa && aa.result_controls_json) ||
     null;
-  w22State.area_average_json =
+  resultCatalog.area_average_json =
     (doc && doc.area_average_json) ||
     (doc && doc.area_average_json_path) ||
     (aa && aa.area_average_json) ||
     null;
-  w22State.ready = !!aa;
-  w22State.created = !!aa;
-  w22State.note = aa
+  resultCatalog.ready = !!aa;
+  resultCatalog.created = !!aa;
+  resultCatalog.note = aa
     ? 'Area average 1 saved'
     : 'No monitors';
   syncAaAssignList();
-  if (typeof syncSimulationTree === 'function') syncSimulationTree();
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
   publishW22({ created: !!aa });
   return window.__CFD_W22__;
 }
@@ -28776,35 +28371,35 @@ function applyAaRecord(doc, projectId) {
 async function saveAreaAverageClient(partial) {
   const faces = Array.isArray(partial && partial.faces)
     ? partial.faces
-    : (w22State.draft_faces || []).slice();
+    : (resultCatalog.draft_faces || []).slice();
   const wcEl = document.getElementById('aa-write-control');
   const runId =
     (partial && partial.run_id) ||
-    w22State.editing_run_id ||
-    w27State.rc_target_run_id ||
-    w27State.selected_run_id ||
-    w27State.active_run_id;
+    resultCatalog.editing_run_id ||
+    runCatalog.rc_target_run_id ||
+    runCatalog.selected_run_id ||
+    runCatalog.active_run_id;
   if (!runId) {
-    w22State.note = 'Create a run first, then add a result control on that run';
-    publishW22({ ready: false, note: w22State.note });
-    throw new Error(w22State.note);
+    resultCatalog.note = 'Create a run first, then add a result control on that run';
+    publishW22({ ready: false, note: resultCatalog.note });
+    throw new Error(resultCatalog.note);
   }
   const rec = findRunRecord(runId);
-  const viewRun = typeof viewingRunId === 'function' ? viewingRunId() : w22State.editing_run_id;
+  const viewRun = typeof viewingRunId === 'function' ? viewingRunId() : resultCatalog.editing_run_id;
   if (viewRun && String(viewRun) !== String(runId)) {
     return window.__CFD_W22__;
   }
   const rcs = ((rec && rec.result_controls) || []).map((r) => ({ ...r }));
   const name =
     (partial && partial.name) ||
-    (w22State.area_average_1 && w22State.area_average_1.name) ||
+    (resultCatalog.area_average_1 && resultCatalog.area_average_1.name) ||
     nextAaName(rcs);
   const rcId =
     (partial && partial.rc_id) ||
-    w22State.editing_rc_id ||
-    (w22State.area_average_1 && w22State.area_average_1.id) ||
+    resultCatalog.editing_rc_id ||
+    (resultCatalog.area_average_1 && resultCatalog.area_average_1.id) ||
     stampRcId();
-  const viewRc = typeof viewingRcId === 'function' ? viewingRcId() : w22State.editing_rc_id;
+  const viewRc = typeof viewingRcId === 'function' ? viewingRcId() : resultCatalog.editing_rc_id;
   if (viewRc && String(viewRc) !== String(rcId)) {
     return window.__CFD_W22__;
   }
@@ -28825,76 +28420,58 @@ async function saveAreaAverageClient(partial) {
   else rcs.push(nextRc);
   const j = await persistRunSettings({ run_id: runId, result_controls: rcs });
   if (!j || j.ok === false) {
-    w22State.note = (j && j.error) || 'Area average save failed';
-    publishW22({ ready: false, note: w22State.note, api: j });
-    throw new Error(w22State.note);
+    resultCatalog.note = (j && j.error) || 'Area average save failed';
+    publishW22({ ready: false, note: resultCatalog.note, api: j });
+    throw new Error(resultCatalog.note);
   }
-  w22State.editing_run_id = runId;
-  w22State.editing_rc_id = rcId;
-  w22State.area_average_1 = nextRc;
-  w22State.draft_faces = faces.slice();
-  w22State.ready = true;
-  w22State.created = true;
-  w22State.note = name + ' saved';
+  resultCatalog.editing_run_id = runId;
+  resultCatalog.editing_rc_id = rcId;
+  resultCatalog.area_average_1 = nextRc;
+  resultCatalog.draft_faces = faces.slice();
+  resultCatalog.ready = true;
+  resultCatalog.created = true;
+  resultCatalog.note = name + ' saved';
   syncAaAssignList();
   expandRunFolders(runId, 'rcs');
-  if (typeof syncSimulationTree === 'function') syncSimulationTree();
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
   if (typeof syncResultsHub === 'function') syncResultsHub();
   publishW22({ saved: true, api: j, created: true });
   return window.__CFD_W22__;
 }
 
-window.__CFD_W22_SAVE__ = saveAreaAverageClient;
-window.__CFD_W22_APPLY__ = async function applyW22(partial) {
-  if (partial && partial.open) {
-    showAaPanel();
-  }
-  if (partial && (partial.faces || partial.save !== false)) {
-    if (partial.faces) w22State.draft_faces = partial.faces.slice();
-    await saveAreaAverageClient({
-      faces: w22State.draft_faces,
-      ...(partial || {}),
-    });
-  }
-  return window.__CFD_W22__;
-};
-window.__CFD_W22_OPEN__ = function openW22() {
-  showAaPanel();
-  return publishW22({ opened: true });
-};
 
 function focusAssignedAaFace(label, opts) {
   const name = String(label || '').trim();
-  if (!name || !(w22State.draft_faces || []).includes(name)) return;
-  if (opts && opts.toggle === false) w22State.focusFace = name;
-  else w22State.focusFace = w22State.focusFace === name ? null : name;
+  if (!name || !(resultCatalog.draft_faces || []).includes(name)) return;
+  if (opts && opts.toggle === false) resultCatalog.focusFace = name;
+  else resultCatalog.focusFace = resultCatalog.focusFace === name ? null : name;
   syncAaAssignList();
 }
 
 function addDraftFace(face) {
   const f = String(face || '').trim();
-  if (!f || w22State.read_only) return;
-  if (!w22State.draft_faces.includes(f)) w22State.draft_faces.push(f);
-  w22State.focusFace = f;
-  if (w22State.area_average_1) w22State.area_average_1.faces = w22State.draft_faces.slice();
+  if (!f || resultCatalog.read_only) return;
+  if (!resultCatalog.draft_faces.includes(f)) resultCatalog.draft_faces.push(f);
+  resultCatalog.focusFace = f;
+  if (resultCatalog.area_average_1) resultCatalog.area_average_1.faces = resultCatalog.draft_faces.slice();
   syncAaAssignList();
   publishW22({ draft: true });
-  saveAreaAverageClient({ faces: w22State.draft_faces.slice() }).catch((e) =>
+  saveAreaAverageClient({ faces: resultCatalog.draft_faces.slice() }).catch((e) =>
     console.error('[CFD W22] persist', e)
   );
 }
 
 function toggleAssignAaFace(face) {
   const f = String(face || '').trim();
-  if (!f || w22State.read_only) return;
-  const i = w22State.draft_faces.indexOf(f);
-  if (i >= 0) w22State.draft_faces.splice(i, 1);
-  else w22State.draft_faces.push(f);
-  w22State.focusFace = i >= 0 ? null : f;
-  if (w22State.area_average_1) w22State.area_average_1.faces = w22State.draft_faces.slice();
+  if (!f || resultCatalog.read_only) return;
+  const i = resultCatalog.draft_faces.indexOf(f);
+  if (i >= 0) resultCatalog.draft_faces.splice(i, 1);
+  else resultCatalog.draft_faces.push(f);
+  resultCatalog.focusFace = i >= 0 ? null : f;
+  if (resultCatalog.area_average_1) resultCatalog.area_average_1.faces = resultCatalog.draft_faces.slice();
   syncAaAssignList();
   publishW22({ draft: true });
-  saveAreaAverageClient({ faces: w22State.draft_faces.slice() }).catch((e) =>
+  saveAreaAverageClient({ faces: resultCatalog.draft_faces.slice() }).catch((e) =>
     console.error('[CFD W22] persist', e)
   );
 }
@@ -28915,33 +28492,33 @@ function toggleAssignAaFace(face) {
     }
   });
   document.getElementById('aa-clear-assign')?.addEventListener('click', () => {
-    if (w22State.read_only) return;
-    w22State.draft_faces = [];
+    if (resultCatalog.read_only) return;
+    resultCatalog.draft_faces = [];
     syncAaAssignList();
     publishW22({ draft: true });
-    if (w22State.area_average_1) {
+    if (resultCatalog.area_average_1) {
       saveAreaAverageClient({ faces: [] }).catch((e) =>
         console.error('[CFD W22] clear', e)
       );
     }
   });
   document.getElementById('aa-delete')?.addEventListener('click', () => {
-    if (w22State.read_only) return;
-    const runId = w22State.editing_run_id || w27State.selected_run_id;
-    const rcId = w22State.editing_rc_id;
+    if (resultCatalog.read_only) return;
+    const runId = resultCatalog.editing_run_id || runCatalog.selected_run_id;
+    const rcId = resultCatalog.editing_rc_id;
     const rec = findRunRecord(runId);
     const next = ((rec && rec.result_controls) || []).filter(
-      (r) => String(r.id) !== String(rcId) && r.name !== (w22State.area_average_1 && w22State.area_average_1.name)
+      (r) => String(r.id) !== String(rcId) && r.name !== (resultCatalog.area_average_1 && resultCatalog.area_average_1.name)
     );
     persistRunSettings({ run_id: runId, result_controls: next })
       .then((j) => {
         if (!j || j.ok === false) throw new Error((j && j.error) || 'AA delete failed');
-        w22State.area_average_1 = null;
-        w22State.draft_faces = [];
-        w22State.editing_rc_id = null;
+        resultCatalog.area_average_1 = null;
+        resultCatalog.draft_faces = [];
+        resultCatalog.editing_rc_id = null;
         hideAaPanel();
         expandRunFolders(runId, 'rcs');
-        syncSimulationTree();
+        refreshSetupTree();
         if (typeof syncResultsHub === 'function') syncResultsHub();
         if (runId && typeof openRunRcsFolder === 'function') openRunRcsFolder(runId);
         publishW22({ deleted: true });
@@ -28963,12 +28540,12 @@ function toggleAssignAaFace(face) {
   document.getElementById('btn-add-result')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    openRcTypeModal(w27State.selected_run_id || w27State.active_run_id);
+    openRcTypeModal(runCatalog.selected_run_id || runCatalog.active_run_id);
   });
   document.getElementById('btn-add-result-graphs')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    openRcTypeModal(w27State.selected_run_id || w27State.active_run_id);
+    openRcTypeModal(runCatalog.selected_run_id || runCatalog.active_run_id);
   });
   document.getElementById('results-hub-list')?.addEventListener('click', openHubCustomMonitor);
   document.getElementById('run-graphs-custom-list')?.addEventListener('click', openHubCustomMonitor);
@@ -28976,7 +28553,7 @@ function toggleAssignAaFace(face) {
   document.getElementById('rc-cancel-x')?.addEventListener('click', () => closeRcTypeModal());
   document.getElementById('rc-backdrop')?.addEventListener('click', () => closeRcTypeModal());
   document.getElementById('rc-apply')?.addEventListener('click', () => {
-    const runId = w27State.rc_target_run_id || w27State.selected_run_id || w27State.active_run_id;
+    const runId = runCatalog.rc_target_run_id || runCatalog.selected_run_id || runCatalog.active_run_id;
     if (!runId) {
       closeRcTypeModal();
       console.warn('[CFD] Create a run first');
@@ -29001,13 +28578,13 @@ function toggleAssignAaFace(face) {
     };
     rcs.push(nextRc);
     if (rec) rec.result_controls = rcs;
-    w22State.draft_faces = [];
-    w22State.editing_run_id = runId;
-    w22State.editing_rc_id = rcId;
-    w22State.read_only = false;
-    w22State.area_average_1 = nextRc;
+    resultCatalog.draft_faces = [];
+    resultCatalog.editing_run_id = runId;
+    resultCatalog.editing_rc_id = rcId;
+    resultCatalog.read_only = false;
+    resultCatalog.area_average_1 = nextRc;
     showAaPanel();
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     syncResultsHub();
     publishW22({ modal_applied: true });
     saveAreaAverageClient({
@@ -29023,16 +28600,16 @@ function toggleAssignAaFace(face) {
     const prev = window.__CFD_W16_CREATE__;
     window.__CFD_W16_CREATE__ = async function wrappedCreateW22(fields) {
       const out = await prev(fields);
-      w22State.area_average_1 = null;
-      w22State.draft_faces = [];
-      w22State.ready = false;
-      w22State.created = false;
-      w22State.result_controls_json = null;
-      w22State.area_average_json = null;
-      w22State.note = 'W22: waiting for Area average setup';
+      resultCatalog.area_average_1 = null;
+      resultCatalog.draft_faces = [];
+      resultCatalog.ready = false;
+      resultCatalog.created = false;
+      resultCatalog.result_controls_json = null;
+      resultCatalog.area_average_json = null;
+      resultCatalog.note = 'W22: waiting for Area average setup';
       hideAaPanel();
       publishW22({ ready: false });
-      if (typeof syncSimulationTree === 'function') syncSimulationTree();
+      if (typeof refreshSetupTree === 'function') refreshSetupTree();
       return out;
     };
     window.__CFD_W16_CREATE__._w22Wrapped = true;
@@ -29043,18 +28620,18 @@ function toggleAssignAaFace(face) {
     .then((r) => r.json())
     .then((j) => {
       if (!currentStudyId()) return;
-      w22State.hydrated = true;
+      resultCatalog.hydrated = true;
       if (j && j.area_average_1) {
         applyAaRecord(j, j.project_id);
         publishW22({ hydrated: true, created: !!j.area_average_1 });
       } else {
-        if (typeof syncSimulationTree === 'function') syncSimulationTree();
+        if (typeof refreshSetupTree === 'function') refreshSetupTree();
         publishW22({ hydrated: true, ready: false });
       }
     })
     .catch((e) => {
       console.warn('[CFD W22] hydrate', e);
-      if (typeof syncSimulationTree === 'function') syncSimulationTree();
+      if (typeof refreshSetupTree === 'function') refreshSetupTree();
       publishW22({ ready: false });
     });
 
@@ -29063,35 +28640,6 @@ function toggleAssignAaFace(face) {
 
 
 /* ---- Simulation Control: Start / Stop simpleFoam from project mesh + BCs ---- */
-const w27State = {
-  endTime: 200,
-  writeInterval: 50,
-  run: null,
-  runs: [],
-  runs_all: [],
-  meshes: [],
-  selected_run_id: null,
-  active_run_id: null,
-  live_run_id: null,
-  live_run: null,
-  rc_target_run_id: null,
-  poll_timer: null,
-  elapsed_timer: null,
-  attaching: false,
-  start_error: null,
-  start_error_run_id: null,
-  start_error_study_id: null,
-  starting: false,
-  // W30 transient: the form model for the selected draft, the server's
-  // resolved numbers for it (auto Δt, frame interval, step estimate), and the
-  // preview request bookkeeping.
-  transient: null,
-  transient_preview: null,
-  transient_preview_key: '',
-  transient_preview_timer: null,
-};
-window.__CFD_W27_STATE__ = w27State;
-
 /* ---- W30 Transient: settings model, form, preview ---- */
 
 const TRANSIENT_DEFAULTS_CLIENT = Object.freeze({
@@ -29145,46 +28693,29 @@ function formatSimTime(v, opts) {
   return s + unit;
 }
 
-const TRANSIENT_FORM_IDS = {
-  end_time: 'sim-tr-end-time',
-  write_count: 'sim-tr-write-count',
-  time_step_mode: 'sim-tr-step-mode',
-  max_co: 'sim-tr-max-co',
-  delta_t: 'sim-tr-delta-t',
-  max_delta_t: 'sim-tr-max-dt',
-  time_scheme: 'sim-tr-scheme',
-  n_outer_correctors: 'sim-tr-outer',
-  n_correctors: 'sim-tr-corr',
-  n_non_orth_correctors: 'sim-tr-nonorth',
-};
-
-function readTransientForm() {
-  const base = w27State.transient ? { ...w27State.transient } : { ...TRANSIENT_DEFAULTS_CLIENT };
-  const numOr = (id, prev, opts) => {
-    const el = document.getElementById(id);
-    if (!el) return prev;
-    const raw = String(el.value == null ? '' : el.value).trim();
-    if (raw === '') return opts && opts.nullable ? null : prev;
-    const n = Number(raw);
+/** Clamp and fill a transient settings object the way the form used to. */
+function normalizeTransient(raw) {
+  const base = runCatalog.transient ? { ...runCatalog.transient } : { ...TRANSIENT_DEFAULTS_CLIENT };
+  const src = raw || {};
+  const num = (v, prev, opts) => {
+    if (v === undefined) return prev;
+    if (v === null || String(v).trim() === '') return opts && opts.nullable ? null : prev;
+    const n = Number(v);
     if (!Number.isFinite(n)) return prev;
-    if (opts && opts.int) return Math.round(n);
-    return n;
+    return opts && opts.int ? Math.round(n) : n;
   };
-  const strOr = (id, prev) => {
-    const el = document.getElementById(id);
-    return el && el.value ? el.value : prev;
-  };
+  const str = (v, prev) => (v ? String(v) : prev);
   const out = {
-    end_time: numOr(TRANSIENT_FORM_IDS.end_time, base.end_time),
-    write_count: numOr(TRANSIENT_FORM_IDS.write_count, base.write_count, { int: true }),
-    time_step_mode: strOr(TRANSIENT_FORM_IDS.time_step_mode, base.time_step_mode),
-    max_co: numOr(TRANSIENT_FORM_IDS.max_co, base.max_co),
-    delta_t: numOr(TRANSIENT_FORM_IDS.delta_t, base.delta_t, { nullable: true }),
-    max_delta_t: numOr(TRANSIENT_FORM_IDS.max_delta_t, base.max_delta_t, { nullable: true }),
-    time_scheme: strOr(TRANSIENT_FORM_IDS.time_scheme, base.time_scheme),
-    n_outer_correctors: numOr(TRANSIENT_FORM_IDS.n_outer_correctors, base.n_outer_correctors, { int: true }),
-    n_correctors: numOr(TRANSIENT_FORM_IDS.n_correctors, base.n_correctors, { int: true }),
-    n_non_orth_correctors: numOr(TRANSIENT_FORM_IDS.n_non_orth_correctors, base.n_non_orth_correctors, { int: true }),
+    end_time: num(src.end_time, base.end_time),
+    write_count: num(src.write_count, base.write_count, { int: true }),
+    time_step_mode: str(src.time_step_mode, base.time_step_mode) === 'fixed' ? 'fixed' : 'adjustable',
+    max_co: num(src.max_co, base.max_co),
+    delta_t: num(src.delta_t, base.delta_t, { nullable: true }),
+    max_delta_t: num(src.max_delta_t, base.max_delta_t, { nullable: true }),
+    time_scheme: str(src.time_scheme, base.time_scheme) === 'backward' ? 'backward' : 'Euler',
+    n_outer_correctors: num(src.n_outer_correctors, base.n_outer_correctors, { int: true }),
+    n_correctors: num(src.n_correctors, base.n_correctors, { int: true }),
+    n_non_orth_correctors: num(src.n_non_orth_correctors, base.n_non_orth_correctors, { int: true }),
   };
   if (!(out.end_time > 0)) out.end_time = base.end_time > 0 ? base.end_time : TRANSIENT_DEFAULTS_CLIENT.end_time;
   if (!(out.write_count >= 1)) out.write_count = TRANSIENT_DEFAULTS_CLIENT.write_count;
@@ -29207,55 +28738,11 @@ function transientFrameInterval(t) {
   return end > 0 ? end / frames : 0;
 }
 
-function syncTransientMaxDtField(t) {
-  const el = document.getElementById(TRANSIENT_FORM_IDS.max_delta_t);
-  if (!el) return;
-  const interval = transientFrameInterval(t);
-  el.placeholder = interval > 0 ? String(Number(interval.toPrecision(6))) : 'auto';
-  if (document.activeElement === el) return;
-  const raw = String(el.value == null ? '' : el.value).trim();
-  if (!raw) return;
-  const n = Number(raw);
-  if (interval > 0 && Number.isFinite(n) && n > interval) {
-    el.value = String(Number(interval.toPrecision(8)));
-  }
-}
-
-function fillTransientForm(t, locked) {
-  const set = (id, v) => {
-    const el = document.getElementById(id);
-    if (!el || document.activeElement === el) return;
-    el.value = v == null ? '' : String(v);
-    el.disabled = !!locked;
-  };
-  set(TRANSIENT_FORM_IDS.end_time, t.end_time);
-  set(TRANSIENT_FORM_IDS.write_count, t.write_count);
-  set(TRANSIENT_FORM_IDS.time_step_mode, t.time_step_mode === 'fixed' ? 'fixed' : 'adjustable');
-  set(TRANSIENT_FORM_IDS.max_co, t.max_co);
-  set(TRANSIENT_FORM_IDS.delta_t, t.delta_t);
-  set(TRANSIENT_FORM_IDS.max_delta_t, t.max_delta_t);
-  syncTransientMaxDtField(t);
-  set(TRANSIENT_FORM_IDS.time_scheme, t.time_scheme === 'backward' ? 'backward' : 'Euler');
-  set(TRANSIENT_FORM_IDS.n_outer_correctors, t.n_outer_correctors);
-  set(TRANSIENT_FORM_IDS.n_correctors, t.n_correctors);
-  set(TRANSIENT_FORM_IDS.n_non_orth_correctors, t.n_non_orth_correctors);
-  const fixed = t.time_step_mode === 'fixed';
-  const coRow = document.getElementById('sim-tr-max-co-row');
-  const maxDtRow = document.getElementById('sim-tr-max-dt-row');
-  const dtLabel = document.getElementById('sim-tr-delta-t-label');
-  if (coRow) coRow.hidden = fixed;
-  if (maxDtRow) maxDtRow.hidden = fixed;
-  if (dtLabel) dtLabel.textContent = fixed ? 'Time step Δt' : 'Initial Δt';
-  const reset = document.getElementById('sim-tr-reset');
-  if (reset) reset.hidden = !!locked;
-}
-
 /** Hint under the transient inputs: frame interval, auto Δt, steps, flow-through. */
-function renderTransientHint() {
-  const hint = document.getElementById('sim-tr-hint');
-  if (!hint) return;
-  const t = w27State.transient || TRANSIENT_DEFAULTS_CLIENT;
-  const pv = w27State.transient_preview;
+/** Hint under the transient inputs: frame interval, auto Δt, steps, flow-through. */
+function transientHint() {
+  const t = runCatalog.transient || TRANSIENT_DEFAULTS_CLIENT;
+  const pv = runCatalog.transient_preview;
   const ctrl = pv && pv.control;
   const frames = Math.max(1, Math.round(Number(t.write_count) || 1));
   const interval = Number(t.end_time) / frames;
@@ -29285,42 +28772,37 @@ function renderTransientHint() {
       bits.push('one flow-through of the domain ≈ ' + formatSimTime(est.flow_through_s));
     }
   }
-  let html = escapeHtml(bits.join(' · ') + '.');
+  let warn = '';
   if (ctrl && ctrl.estimate && Number.isFinite(ctrl.estimate.steps) && ctrl.estimate.steps > 200000) {
-    html +=
-      ' <span class="sim-tr-warn">That is a long run — a shorter simulation time, a coarser mesh or a higher Courant number (Advanced) will finish sooner.</span>';
+    warn = 'That is a long run — a shorter simulation time, a coarser mesh or a higher Courant number (Advanced) will finish sooner.';
   } else if (pv && pv.partial) {
-    html += ' <span>Assign a mesh and boundary conditions to see the calculated time step.</span>';
+    warn = 'Assign a mesh and boundary conditions to see the calculated time step.';
   }
-  hint.innerHTML = html;
+  return { text: bits.join(' · ') + '.', warn };
 }
 
 /** Ask the server for the resolved transient numbers (debounced, deduped). */
 function refreshTransientPreview(opts) {
   const rec = selectedRunRecord();
   if (!rec || !runRecIsTransient(rec)) return;
-  const t = w27State.transient || transientSettingsFor(rec);
+  const t = runCatalog.transient || transientSettingsFor(rec);
   const key = String(rec.id) + '|' + String(rec.mesh_id || '') + '|' + JSON.stringify(t);
-  if (!(opts && opts.force) && key === w27State.transient_preview_key) return;
-  if (w27State.transient_preview_timer) clearTimeout(w27State.transient_preview_timer);
-  w27State.transient_preview_timer = setTimeout(async () => {
-    w27State.transient_preview_timer = null;
-    w27State.transient_preview_key = key;
+  if (!(opts && opts.force) && key === runCatalog.transient_preview_key) return;
+  if (runCatalog.transient_preview_timer) clearTimeout(runCatalog.transient_preview_timer);
+  runCatalog.transient_preview_timer = setTimeout(async () => {
+    runCatalog.transient_preview_timer = null;
+    runCatalog.transient_preview_key = key;
     try {
-      const r = await fetch('/api/run/transient-preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          run_id: rec.id,
-          project_id: currentProjectId() || undefined,
-          transient: t,
-          ...runRequestStudyIds(rec.id),
-        }),
+      const posted = await postJson('/api/run/transient-preview', {
+        run_id: rec.id,
+        project_id: currentProjectId() || undefined,
+        transient: t,
+        ...runRequestStudyIds(rec.id),
       });
-      const j = await r.json();
-      if (j && j.ok && w27State.transient_preview_key === key) {
-        w27State.transient_preview = j;
-        renderTransientHint();
+      const j = posted.json;
+      if (j && j.ok && runCatalog.transient_preview_key === key) {
+        runCatalog.transient_preview = j;
+        publishRunState();
       }
     } catch (e) {
       console.warn('[CFD W30] transient preview', e);
@@ -29328,13 +28810,12 @@ function refreshTransientPreview(opts) {
   }, opts && opts.now ? 0 : 250);
 }
 
-async function persistTransientSettings() {
+async function persistTransientSettings(next) {
   const rec = selectedRunRecord();
-  const t = readTransientForm();
-  w27State.transient = t;
-  syncTransientMaxDtField(t);
-  renderTransientHint();
+  const t = normalizeTransient(next || runCatalog.transient);
+  runCatalog.transient = t;
   refreshTransientPreview();
+  publishRunState();
   if (rec && !runIsLocked(rec)) {
     try {
       await persistRunSettings({ run_id: rec.id, transient: t });
@@ -29376,15 +28857,15 @@ function stampRcId() {
 
 function studyRunList() {
   const sid = typeof currentStudyId === 'function' ? currentStudyId() : '';
-  const all = w27State.runs_all || [];
+  const all = runCatalog.runs_all || [];
   if (sid) {
     const tagged = all.filter((r) => r && String(r.simulation_id || '') === String(sid));
     if (tagged.length) return tagged;
-    const scoped = w27State.runs || [];
+    const scoped = runCatalog.runs || [];
     if (scoped.every((r) => !r.simulation_id || String(r.simulation_id) === String(sid))) return scoped;
     return tagged;
   }
-  return w27State.runs || [];
+  return runCatalog.runs || [];
 }
 
 function findRunRecord(runId) {
@@ -29398,7 +28879,7 @@ function findRunRecord(runId) {
     if (requireStudy && sid && r.simulation_id && String(r.simulation_id) !== String(sid)) return false;
     return true;
   };
-  const lists = [studyRunList(), w27State.runs, w27State.runs_all];
+  const lists = [studyRunList(), runCatalog.runs, runCatalog.runs_all];
   for (const list of lists) {
     const hit = (list || []).find((r) => match(r, true));
     if (hit) return hit;
@@ -29414,7 +28895,7 @@ function projectRunList() {
   const seen = new Set();
   const out = [];
   const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
-  for (const list of [w27State.runs_all, w27State.runs]) {
+  for (const list of [runCatalog.runs_all, runCatalog.runs]) {
     for (const rec of list || []) {
       if (!rec || !rec.id) continue;
       if (pid && typeof runBelongsToOpenProject === 'function' && !runBelongsToOpenProject(rec, pid)) continue;
@@ -29429,7 +28910,7 @@ function projectRunList() {
 
 function studyNameForRun(rec) {
   const sid = rec && rec.simulation_id;
-  const sims = (typeof w17State !== 'undefined' && w17State.simulations) || [];
+  const sims = (typeof studyCatalog !== 'undefined' && studyCatalog.simulations) || [];
   const study = sims.find((s) => s && String(s.id) === String(sid));
   return (study && study.name) || rec.simulation_name || '';
 }
@@ -29437,7 +28918,7 @@ function studyNameForRun(rec) {
 function geometryNameForRun(rec) {
   if (rec && rec.geometry_name) return String(rec.geometry_name);
   const sid = rec && rec.simulation_id;
-  const sims = (typeof w17State !== 'undefined' && w17State.simulations) || [];
+  const sims = (typeof studyCatalog !== 'undefined' && studyCatalog.simulations) || [];
   const study = sims.find((s) => s && String(s.id) === String(sid));
   if (study && study.geometry_name) return String(study.geometry_name);
   const gid = study && study.geometry_id;
@@ -29454,18 +28935,18 @@ function resultsCompareGroupLabel(rec) {
 }
 
 function resetW27WorkbenchCatalog() {
-  w27State.runs = [];
-  w27State.runs_all = [];
-  w27State.meshes = [];
-  w27State.run = null;
-  w27State.selected_run_id = null;
-  w27State.active_run_id = null;
-  w27State.rc_target_run_id = null;
-  w27State.transient_run_id = '';
-  w27State.transient = null;
-  w27State.transient_preview = null;
-  w27State.transient_preview_key = '';
-  w27State.attaching = false;
+  runCatalog.runs = [];
+  runCatalog.runs_all = [];
+  runCatalog.meshes = [];
+  runCatalog.run = null;
+  runCatalog.selected_run_id = null;
+  runCatalog.active_run_id = null;
+  runCatalog.rc_target_run_id = null;
+  runCatalog.transient_run_id = '';
+  runCatalog.transient = null;
+  runCatalog.transient_preview = null;
+  runCatalog.transient_preview_key = '';
+  runCatalog.attaching = false;
   try { clearSolveUiLeak(); } catch (_) {}
   try { stopSimElapsedClock(); } catch (_) {}
   try { hideAllTreeDetails(); } catch (_) {}
@@ -29474,11 +28955,11 @@ function resetW27WorkbenchCatalog() {
 }
 
 function clearSolveUiLeak() {
-  w27State.start_error = null;
-  w27State.start_error_run_id = null;
-  w27State.start_error_study_id = null;
-  w27State.start_fix = null;
-  w27State.starting = false;
+  runCatalog.start_error = null;
+  runCatalog.start_error_run_id = null;
+  runCatalog.start_error_study_id = null;
+  runCatalog.start_fix = null;
+  runCatalog.starting = false;
   try { setRunHint(''); } catch (_) {}
   if (typeof jobState !== 'undefined' && jobState && jobState.mode === 'solve' && liveCompute.kind !== 'solve') {
     jobState.status = 'idle';
@@ -29491,27 +28972,27 @@ function clearSolveUiLeak() {
 }
 
 function startErrorForSelectedRun() {
-  const msg = w27State.start_error;
+  const msg = runCatalog.start_error;
   if (!msg) return null;
   const sid = typeof currentStudyId === 'function' ? currentStudyId() : '';
-  if (w27State.start_error_study_id && sid && String(w27State.start_error_study_id) !== String(sid)) {
+  if (runCatalog.start_error_study_id && sid && String(runCatalog.start_error_study_id) !== String(sid)) {
     return null;
   }
   const rec = selectedRunRecord();
   const rid = rec && (rec.id || rec.run_id);
-  if (w27State.start_error_run_id && rid && String(w27State.start_error_run_id) !== String(rid)) {
+  if (runCatalog.start_error_run_id && rid && String(runCatalog.start_error_run_id) !== String(rid)) {
     return null;
   }
   return msg;
 }
 
 function selectedRunRecord() {
-  return findRunRecord(w27State.selected_run_id || w27State.active_run_id);
+  return findRunRecord(runCatalog.selected_run_id || runCatalog.active_run_id);
 }
 
 function runDocForPanel() {
   const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
-  return runPanelDoc(selectedRunRecord(), w27State.run, pid);
+  return runPanelDoc(selectedRunRecord(), runCatalog.run, pid);
 }
 
 function runRequestStudyIds(runId) {
@@ -29543,7 +29024,7 @@ function generatedMeshOptions() {
     name: m.name || 'Mesh',
     ready: isGeneratedMeshReady(m),
     n_cells: m.live_mesh_result && m.live_mesh_result.n_cells,
-    active: String(m.id) === String(window.__CFD_W20_STATE__ && window.__CFD_W20_STATE__.active_id),
+    active: String(m.id) === String(meshCatalog && meshCatalog.active_id),
   }));
 }
 
@@ -29555,10 +29036,10 @@ function syncSimHubPanel() {
 }
 
 async function persistRunSettings(partial) {
-  if (w27State._createWait) {
-    try { await w27State._createWait; } catch (_) {}
+  if (runCatalog._createWait) {
+    try { await runCatalog._createWait; } catch (_) {}
   }
-  const runId = (partial && (partial.run_id || partial.id)) || w27State.selected_run_id || w27State.active_run_id;
+  const runId = (partial && (partial.run_id || partial.id)) || runCatalog.selected_run_id || runCatalog.active_run_id;
   if (!runId) return { ok: false, error: 'No run selected' };
   const body = {
     run_id: runId,
@@ -29576,17 +29057,14 @@ async function persistRunSettings(partial) {
   // Post-processing state (saved filter-set views + the live filter set).
   if (partial && Array.isArray(partial.views)) body.views = partial.views;
   if (partial && partial.current_view !== undefined) body.current_view = partial.current_view;
-  const r = await fetch('/api/run/update', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const j = await r.json();
+  const posted = await postRunUpdate(body);
+  const r = posted.response;
+  const j = posted.json;
   if (j && j.ok) {
     applyRunCatalog(j);
     const rec = findRunRecord(runId);
-    if (rec && (!w27State.run || String(w27State.run.run_id || w27State.run.id) === String(runId))) {
-      w27State.run = { ...(w27State.run || {}), ...rec, run_id: rec.id };
+    if (rec && (!runCatalog.run || String(runCatalog.run.run_id || runCatalog.run.id) === String(runId))) {
+      runCatalog.run = { ...(runCatalog.run || {}), ...rec, run_id: rec.id };
     }
   }
   return j;
@@ -29658,19 +29136,19 @@ function syncRunResultList() {
 function openRunResultControl(runId, rcId) {
   const rec = findRunRecord(runId);
   if (!rec) return;
-  w27State.selected_run_id = runId;
-  w27State.rc_target_run_id = runId;
+  runCatalog.selected_run_id = runId;
+  runCatalog.rc_target_run_id = runId;
   const rc = ((rec.result_controls || []).find(
     (r) => String(r.id) === String(rcId) || String(r.name) === String(rcId)
   )) || null;
   if (!rc) return;
-  w22State.editing_run_id = runId;
-  w22State.editing_rc_id = rc.id;
-  w22State.area_average_1 = rc;
-  w22State.draft_faces = (rc.faces || []).slice();
-  w22State.read_only = runIsLocked(rec);
-  w22State.ready = true;
-  w22State.created = true;
+  resultCatalog.editing_run_id = runId;
+  resultCatalog.editing_rc_id = rc.id;
+  resultCatalog.area_average_1 = rc;
+  resultCatalog.draft_faces = (rc.faces || []).slice();
+  resultCatalog.read_only = runIsLocked(rec);
+  resultCatalog.ready = true;
+  resultCatalog.created = true;
   markTreeSelected('aaid:' + rc.id);
   showAaPanel();
 }
@@ -29678,6 +29156,11 @@ function openRunResultControl(runId, rcId) {
 function expandRunFolders(runId, extra) {
   if (!runId) return;
   treeUi.expanded['run:' + runId] = true;
+  // The React tree keys a run by its scope key; without it the next render
+  // drops the 'expanded' class the legacy key just added.
+  const runNode = document.querySelector('#simulations-tree [data-w27-run="' + CSS.escape(String(runId)) + '"]');
+  const runLabel = runNode && runNode.getAttribute('data-label');
+  if (runLabel) treeUi.expanded[runLabel] = true;
   if (extra === 'mesh' || extra === true) treeUi.expanded['run-mesh:' + runId] = true;
   if (extra === 'rcs' || extra === true) treeUi.expanded['run-rc:' + runId] = true;
 }
@@ -29690,7 +29173,10 @@ function syncRunMeshHub() {
   const meshes = generatedMeshOptions();
   const cur = rec && rec.mesh_id ? String(rec.mesh_id) : '';
   if (!meshes.length) {
-    list.innerHTML = '<li class="hub-empty">Generate a mesh first</li>';
+    // Not a dead end: offer the way to make the mesh this run needs.
+    list.innerHTML =
+      '<li class="hub-empty">No mesh yet. ' +
+      '<button type="button" class="mat-clear-link" data-run-mesh-create="1">Create a mesh</button></li>';
     return;
   }
   list.innerHTML = meshes
@@ -29716,8 +29202,8 @@ function syncRunMeshHub() {
 
 function openRunMeshFolder(runId) {
   if (!runId) return;
-  w27State.selected_run_id = runId;
-  w27State.rc_target_run_id = runId;
+  runCatalog.selected_run_id = runId;
+  runCatalog.rc_target_run_id = runId;
   expandRunFolders(runId);
   markTreeSelected('runmesh:' + runId);
   openTreeDetail('run-mesh', { toggle: false });
@@ -29726,8 +29212,8 @@ function openRunMeshFolder(runId) {
 
 function openRunRcsFolder(runId) {
   if (!runId) return;
-  w27State.selected_run_id = runId;
-  w27State.rc_target_run_id = runId;
+  runCatalog.selected_run_id = runId;
+  runCatalog.rc_target_run_id = runId;
   expandRunFolders(runId);
   markTreeSelected('runrcs:' + runId);
   openTreeDetail('rc', { toggle: false });
@@ -29735,13 +29221,13 @@ function openRunRcsFolder(runId) {
 }
 
 function pickHydrateLiveRun() {
-  const rows = typeof projectRunList === 'function' ? projectRunList() : [].concat(w27State.runs_all || [], w27State.runs || []);
+  const rows = typeof projectRunList === 'function' ? projectRunList() : [].concat(runCatalog.runs_all || [], runCatalog.runs || []);
   const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
   if (typeof pickHydrateLiveRunForProject === 'function') {
-    return pickHydrateLiveRunForProject(rows, w27State.live_run_id, pid);
+    return pickHydrateLiveRunForProject(rows, runCatalog.live_run_id, pid);
   }
   if (typeof pickLiveSolveFromCatalog === 'function') {
-    return pickLiveSolveFromCatalog(rows, w27State.live_run_id);
+    return pickLiveSolveFromCatalog(rows, runCatalog.live_run_id);
   }
   return rows.find((r) => r && runStatusIsSolving(r.status)) || null;
 }
@@ -29783,26 +29269,26 @@ function openRunPanel(runId) {
     return;
   }
   leaveResultsForSetup();
-  if (w27State.start_error_run_id && String(w27State.start_error_run_id) !== String(runId)) {
-    w27State.start_error = null;
-    w27State.start_error_run_id = null;
-    w27State.start_error_study_id = null;
-    w27State.start_fix = null;
+  if (runCatalog.start_error_run_id && String(runCatalog.start_error_run_id) !== String(runId)) {
+    runCatalog.start_error = null;
+    runCatalog.start_error_run_id = null;
+    runCatalog.start_error_study_id = null;
+    runCatalog.start_fix = null;
   }
-  w27State.selected_run_id = runId;
-  w27State.rc_target_run_id = runId;
+  runCatalog.selected_run_id = runId;
+  runCatalog.rc_target_run_id = runId;
   const rec = findRunRecord(runId);
   if (rec) {
-    w27State.run = { ...(w27State.run && String(w27State.run.run_id) === String(runId) ? w27State.run : {}), ...rec, run_id: rec.id };
-    if (rec.endTime) w27State.endTime = rec.endTime;
-    if (rec.writeInterval) w27State.writeInterval = rec.writeInterval;
+    runCatalog.run = { ...(runCatalog.run && String(runCatalog.run.run_id) === String(runId) ? runCatalog.run : {}), ...rec, run_id: rec.id };
+    if (rec.endTime) runCatalog.endTime = rec.endTime;
+    if (rec.writeInterval) runCatalog.writeInterval = rec.writeInterval;
   }
   if (runCopyPick && String(runCopyPick.destId) !== String(runId)) endRunCopyPick();
   expandTreeFolder('Simulation');
   expandRunFolders(runId);
   markTreeSelected('runid:' + runId);
   openTreeDetail('sim-control', { toggle: false });
-  try { syncSimulationTree(); } catch (_) {}
+  try { refreshSetupTree(); } catch (_) {}
   const runNode = document.querySelector(
     '#simulations-tree [data-w27-run="' + CSS.escape(String(runId)) + '"]'
   );
@@ -29841,10 +29327,6 @@ function endRunCopyPick() {
   const tree = document.getElementById('simulations-tree');
   if (tree) tree.classList.remove('is-run-copy-pick');
   tree && tree.querySelectorAll('[data-w27-run].is-copy-dest').forEach((el) => el.classList.remove('is-copy-dest'));
-  const picker = document.getElementById('sim-copy-picker');
-  const openBtn = document.getElementById('sim-copy-open');
-  if (picker) picker.hidden = true;
-  if (openBtn) openBtn.hidden = false;
 }
 
 function startRunCopyPick(destId) {
@@ -29855,56 +29337,43 @@ function startRunCopyPick(destId) {
   syncRunCopyUi();
 }
 
-function syncRunCopyUi() {
-  const wrap = document.getElementById('sim-copy-from');
-  const openBtn = document.getElementById('sim-copy-open');
-  const picker = document.getElementById('sim-copy-picker');
-  const sel = document.getElementById('sim-copy-run');
-  const done = document.getElementById('sim-copy-done');
+/** Copy-from-run state for the React panel; the tree marks the destination while picking. */
+function runCopyState() {
   const rec = selectedRunRecord();
   const destId = rec && rec.id;
   const others = destId ? otherRunsForCopy(destId) : [];
-  const show = !!(rec && !runIsLocked(rec) && others.length);
-  if (wrap) wrap.hidden = !show;
-  if (!show) {
-    endRunCopyPick();
-    if (done) { done.hidden = true; done.textContent = ''; }
-    return;
+  const available = !!(rec && !runIsLocked(rec) && others.length);
+  const picking = !!(available && runCopyPick && String(runCopyPick.destId) === String(destId));
+  return {
+    available,
+    picking,
+    note: available ? runCopyNote || '' : '',
+    sources: others
+      .slice()
+      .reverse()
+      .map((r) => {
+        const bits = [r.name || 'Run'];
+        if (r.status && r.status !== 'draft') bits.push(r.status);
+        return { id: String(r.id), label: bits.join(' · ') };
+      }),
+  };
+}
+
+function syncRunCopyUi() {
+  const st = runCopyState();
+  if (!st.available) {
+    if (runCopyPick) endRunCopyPick();
+    runCopyNote = st.available ? runCopyNote : '';
   }
-  const picking = !!(runCopyPick && String(runCopyPick.destId) === String(destId));
-  if (openBtn) openBtn.hidden = picking;
-  if (picker) picker.hidden = !picking;
-  if (sel && document.activeElement !== sel) {
-    sel.innerHTML =
-      '<option value="">Select a run…</option>' +
-      others
-        .slice()
-        .reverse()
-        .map((r) => {
-          const bits = [r.name || 'Run'];
-          if (r.status && r.status !== 'draft') bits.push(r.status);
-          return (
-            '<option value="' +
-            escapeHtml(String(r.id)) +
-            '">' +
-            escapeHtml(bits.join(' · ')) +
-            '</option>'
-          );
-        })
-        .join('');
-    sel.value = '';
-  }
-  if (done) {
-    done.hidden = !runCopyNote;
-    done.textContent = runCopyNote;
-  }
+  const rec = selectedRunRecord();
   const tree = document.getElementById('simulations-tree');
   if (tree) {
-    tree.classList.toggle('is-run-copy-pick', picking);
+    tree.classList.toggle('is-run-copy-pick', st.picking);
     tree.querySelectorAll('[data-w27-run]').forEach((el) => {
-      el.classList.toggle('is-copy-dest', picking && String(el.getAttribute('data-w27-run')) === String(destId));
+      el.classList.toggle('is-copy-dest', st.picking && String(el.getAttribute('data-w27-run')) === String(rec && rec.id));
     });
   }
+  publishRunState();
 }
 
 async function copyRunSettingsFrom(srcId) {
@@ -29916,8 +29385,8 @@ async function copyRunSettingsFrom(srcId) {
   const body = {
     run_id: dest.id,
     mesh_id: src.mesh_id || '',
-    endTime: src.endTime != null ? src.endTime : w27State.endTime,
-    writeInterval: src.writeInterval != null ? src.writeInterval : w27State.writeInterval,
+    endTime: src.endTime != null ? src.endTime : runCatalog.endTime,
+    writeInterval: src.writeInterval != null ? src.writeInterval : runCatalog.writeInterval,
     time_dependency: src.time_dependency || (runRecIsTransient(src) ? 'Transient' : 'Steady-state'),
     transient,
     result_controls: cloneRunResultControls(src.result_controls),
@@ -29927,16 +29396,16 @@ async function copyRunSettingsFrom(srcId) {
     console.warn('[CFD] copy run settings', j && j.error);
     return;
   }
-  w27State.endTime = body.endTime;
-  w27State.writeInterval = body.writeInterval;
-  w27State.transient_run_id = '';
-  w27State.transient = transient;
-  w27State.transient_preview = null;
-  w27State.transient_preview_key = '';
+  runCatalog.endTime = body.endTime;
+  runCatalog.writeInterval = body.writeInterval;
+  runCatalog.transient_run_id = '';
+  runCatalog.transient = transient;
+  runCatalog.transient_preview = null;
+  runCatalog.transient_preview_key = '';
   runCopyNote = 'Copied from ' + (src.name || 'previous run') + '. Change anything you want.';
   endRunCopyPick();
   expandRunFolders(dest.id, true);
-  try { syncSimulationTree(); } catch (_) {}
+  try { refreshSetupTree(); } catch (_) {}
   syncSimControlPanel();
   try { syncRunMeshHub(); } catch (_) {}
   try { if (typeof syncResultsHub === 'function') syncResultsHub(); } catch (_) {}
@@ -29956,13 +29425,13 @@ function runIdFromCopyTreeNode(node) {
 }
 
 async function assignMeshToSelectedRun(meshId) {
-  const runId = w27State.selected_run_id || w27State.active_run_id;
+  const runId = runCatalog.selected_run_id || runCatalog.active_run_id;
   if (!runId || !meshId) return;
   const rec = findRunRecord(runId);
   if (runIsLocked(rec)) return;
   await persistRunSettings({ run_id: runId, mesh_id: meshId });
   expandRunFolders(runId, 'mesh');
-  try { syncSimulationTree(); } catch (_) {}
+  try { refreshSetupTree(); } catch (_) {}
   syncRunMeshHub();
   syncSimControlPanel();
 }
@@ -29980,7 +29449,7 @@ async function createRunClient(opts) {
   const name = String((nameEl && nameEl.value) || '').trim() || nextClientRunName();
   const id = newClientRunId();
   const studyId =
-    (typeof w17State !== 'undefined' && w17State.simulation && w17State.simulation.id) || null;
+    (typeof studyCatalog !== 'undefined' && studyCatalog.simulation && studyCatalog.simulation.id) || null;
   const meshes = generatedMeshOptions();
   const defaultMesh =
     meshes.find((m) => m.active) || meshes.find((m) => m.ready) || meshes[0] || null;
@@ -30003,38 +29472,35 @@ async function createRunClient(opts) {
     runs: [...studyRunList(), local],
     active_run_id: id,
     simulation_id: studyId,
-    meshes: w27State.meshes,
+    meshes: runCatalog.meshes,
   });
-  w27State.selected_run_id = id;
-  w27State.active_run_id = id;
-  w27State.run = { ...local, run_id: id };
+  runCatalog.selected_run_id = id;
+  runCatalog.active_run_id = id;
+  runCatalog.run = { ...local, run_id: id };
   expandTreeFolder('Simulation');
   expandRunFolders(id);
-  try { syncSimulationTree(); } catch (_) {}
+  try { refreshSetupTree(); } catch (_) {}
   openRunPanel(id);
   const pending = (async () => {
-    const r = await fetch('/api/run/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        id,
-        run_id: id,
-        project_id: currentProjectId() || undefined,
-        simulation_id: studyId || undefined,
-        mesh_id: local.mesh_id || undefined,
-      }),
+    const posted = await postJson('/api/run/create', {
+      name,
+      id,
+      run_id: id,
+      project_id: currentProjectId() || undefined,
+      simulation_id: studyId || undefined,
+      mesh_id: local.mesh_id || undefined,
     });
-    const j = await r.json();
+    const r = posted.response;
+    const j = posted.json;
     if (!r.ok || !j || j.ok === false) {
       throw new Error((j && j.error) || 'Could not create run');
     }
     applyRunCatalog(j);
     const newId = (j.run && (j.run.id || j.run.run_id)) || j.active_run_id || id;
-    if (w27State.selected_run_id === id) {
-      w27State.selected_run_id = newId;
-      w27State.active_run_id = newId;
-      w27State.run = j.run ? { ...j.run, run_id: j.run.id || j.run.run_id } : w27State.run;
+    if (runCatalog.selected_run_id === id) {
+      runCatalog.selected_run_id = newId;
+      runCatalog.active_run_id = newId;
+      runCatalog.run = j.run ? { ...j.run, run_id: j.run.id || j.run.run_id } : runCatalog.run;
     }
     const created = typeof findRunRecord === 'function' ? findRunRecord(newId) : null;
     if (local.mesh_id && created && !created.mesh_id) rememberRunMesh(created, local.mesh_id);
@@ -30043,12 +29509,12 @@ async function createRunClient(opts) {
     }
     return j;
   })();
-  w27State._createWait = pending.catch(() => {});
+  runCatalog._createWait = pending.catch(() => {});
   return pending;
 }
 
 async function deleteSelectedRunClient() {
-  const runId = w27State.selected_run_id || (w27State.run && (w27State.run.run_id || w27State.run.id));
+  const runId = runCatalog.selected_run_id || (runCatalog.run && (runCatalog.run.run_id || runCatalog.run.id));
   if (!runId) {
     setRunHint('Select a run first, then delete it.');
     return;
@@ -30059,28 +29525,25 @@ async function deleteSelectedRunClient() {
     return;
   }
   const study = typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {};
-  const r = await fetch('/api/run/delete', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      run_id: runId,
-      project_id: currentProjectId() || undefined,
-      ...study,
-      simulation_id: (rec && rec.simulation_id) || study.simulation_id,
-    }),
+  const posted = await postJson('/api/run/delete', {
+    run_id: runId,
+    project_id: currentProjectId() || undefined,
+    ...study,
+    simulation_id: (rec && rec.simulation_id) || study.simulation_id,
   });
-  const j = await r.json();
+  const r = posted.response;
+  const j = posted.json;
   if (!r.ok || !j || j.ok === false) {
     const msg = (j && j.error) || 'Could not delete run';
     setRunHint(msg);
     throw new Error(msg);
   }
-  if (w27State.selected_run_id && String(w27State.selected_run_id) === String(runId)) {
-    w27State.selected_run_id = j.active_run_id || null;
-    w27State.run = null;
+  if (runCatalog.selected_run_id && String(runCatalog.selected_run_id) === String(runId)) {
+    runCatalog.selected_run_id = j.active_run_id || null;
+    runCatalog.run = null;
   }
-  if (Array.isArray(w27State.runs_all)) {
-    w27State.runs_all = w27State.runs_all.filter(
+  if (Array.isArray(runCatalog.runs_all)) {
+    runCatalog.runs_all = runCatalog.runs_all.filter(
       (row) => row && String(row.id || row.run_id) !== String(runId)
     );
   }
@@ -30101,272 +29564,27 @@ const SIM_STAGE_LABELS = {
   copy: 'Copying results',
 };
 
-const SIM_RES_SERIES = [
-  { key: 'U', color: '#1570ef' },
-  { key: 'p', color: '#6941c6' },
-  { key: 'k', color: '#12b76a' },
-  { key: 'omega', color: '#f79009' },
-];
-
 function stopSimElapsedClock() {
-  if (w27State.elapsed_timer) {
-    clearInterval(w27State.elapsed_timer);
-    w27State.elapsed_timer = null;
+  if (runCatalog.elapsed_timer) {
+    clearInterval(runCatalog.elapsed_timer);
+    runCatalog.elapsed_timer = null;
   }
 }
 
 function startSimElapsedClock() {
   stopSimElapsedClock();
-  w27State.elapsed_timer = setInterval(() => {
+  runCatalog.elapsed_timer = setInterval(() => {
     try { syncSimControlPanel(); } catch (_) {}
   }, 1000);
-}
-
-// W31: mean Courant number of a transient run, drawn on the residual plot
-// (same log axis — Co sits around 0.1–1) as a dashed line.
-const SIM_CO_SERIES = { key: 'co_mean', color: '#d92d20' };
-
-// Geometry of the last drawn residual plot, for the hover readout.
-let simPlotHover = null;
-
-function drawResidualPlot(svg, series, endTime, opts) {
-  const wrap = document.getElementById('sim-residual-wrap');
-  if (!svg) return;
-  const transientAxis = !!(opts && opts.transient);
-  const rows = Array.isArray(series) ? series : [];
-  const coLegend = document.getElementById('sim-legend-co');
-  if (!rows.length) {
-    svg.innerHTML = '';
-    simPlotHover = null;
-    hideSimPlotTip();
-    if (wrap) {
-      wrap.hidden = true;
-      wrap.setAttribute('hidden', '');
-    }
-    if (coLegend) coLegend.hidden = true;
-    return;
-  }
-  const w = 280;
-  const h = 132;
-  const padL = 36;
-  const padR = 8;
-  const padT = 10;
-  const padB = 18;
-  let dataMax = 0;
-  for (const r of rows) {
-    const t = Number(r.t);
-    if (Number.isFinite(t) && t > dataMax) dataMax = t;
-  }
-  const planned = Number(endTime) || 0;
-  // Transient: scale to the planned simulation time (0.5 s must not become
-  // a 1 s axis — that leftover floor made short runs look cut off). Include
-  // a tiny data overshoot so the last sample is not clipped. Steady still
-  // floors at 1 iteration so an empty-ish plot has a usable axis.
-  const xmax = transientAxis
-    ? planned > 0
-      ? Math.max(planned, dataMax)
-      : dataMax > 0
-        ? dataMax
-        : 1e-3
-    : Math.max(planned, dataMax, 1);
-  const hasCo = transientAxis && rows.some((r) => Number.isFinite(Number(r.co_mean)) && Number(r.co_mean) > 0);
-  if (coLegend) coLegend.hidden = !hasCo;
-  const drawn = hasCo ? SIM_RES_SERIES.concat([SIM_CO_SERIES]) : SIM_RES_SERIES;
-  const logs = [];
-  for (const row of rows) {
-    for (const s of drawn) {
-      const v = Number(row[s.key]);
-      if (Number.isFinite(v) && v > 0) logs.push(Math.log10(v));
-    }
-  }
-  if (!logs.length) {
-    svg.hidden = true;
-    svg.innerHTML = '';
-    simPlotHover = null;
-    hideSimPlotTip();
-    return;
-  }
-  let y0 = Math.min(...logs);
-  let y1 = Math.max(...logs);
-  if (y1 === y0) {
-    y0 -= 1;
-    y1 += 1;
-  }
-  const yPad = (y1 - y0) * 0.08;
-  y0 -= yPad;
-  y1 += yPad;
-  const xOf = (t) => padL + (Number(t) / xmax) * (w - padL - padR);
-  const yOf = (v) => {
-    const lg = Math.log10(Math.max(v, 1e-16));
-    return padT + (1 - (lg - y0) / (y1 - y0)) * (h - padT - padB);
-  };
-  let html = '';
-  const dec0 = Math.ceil(y0);
-  const dec1 = Math.floor(y1);
-  for (let d = dec0; d <= dec1; d++) {
-    const y = padT + (1 - (d - y0) / (y1 - y0)) * (h - padT - padB);
-    html +=
-      '<line x1="' +
-      padL +
-      '" y1="' +
-      y.toFixed(1) +
-      '" x2="' +
-      (w - padR) +
-      '" y2="' +
-      y.toFixed(1) +
-      '" stroke="#eaecf0" stroke-width="1"/>';
-    const lab = d === 0 ? '1' : d === 1 ? '10' : '1e' + d;
-    html +=
-      '<text x="' +
-      (padL - 4) +
-      '" y="' +
-      (y + 3).toFixed(1) +
-      '" text-anchor="end" font-size="8" fill="#98a2b3">' +
-      lab +
-      '</text>';
-  }
-  html +=
-    '<text x="' + padL + '" y="' + (h - 4) + '" font-size="8" fill="#98a2b3">' +
-    (transientAxis ? '0 s' : '1') +
-    '</text>';
-  html +=
-    '<text x="' +
-    (w - padR) +
-    '" y="' +
-    (h - 4) +
-    '" text-anchor="end" font-size="8" fill="#98a2b3">' +
-    (transientAxis ? escapeHtml(formatSimTime(xmax)) : String(Math.round(xmax))) +
-    '</text>';
-  for (const s of drawn) {
-    const pts = [];
-    for (const row of rows) {
-      const v = Number(row[s.key]);
-      if (!Number.isFinite(v) || v <= 0) continue;
-      pts.push(xOf(row.t).toFixed(1) + ',' + yOf(v).toFixed(1));
-    }
-    if (pts.length) {
-      html +=
-        '<polyline fill="none" stroke="' +
-        s.color +
-        '" stroke-width="1.5" stroke-linejoin="round"' +
-        (s === SIM_CO_SERIES ? ' stroke-dasharray="4 2"' : '') +
-        ' points="' +
-        pts.join(' ') +
-        '"/>';
-    }
-  }
-  svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
-  svg.innerHTML = html;
-  svg.removeAttribute('hidden');
-  if (wrap) {
-    wrap.hidden = false;
-    wrap.removeAttribute('hidden');
-  }
-  const lastClientX = simPlotHover ? simPlotHover.lastClientX : null;
-  simPlotHover = { rows, w, h, padL, padR, xmax, transient: transientAxis, hasCo, xOf, yOf, lastClientX };
-  // The plot redraws every second while solving: keep an open readout current.
-  if (lastClientX != null) updateSimPlotTip(lastClientX);
-}
-
-function hideSimPlotTip() {
-  const tip = document.getElementById('sim-plot-tip');
-  const cur = document.getElementById('sim-plot-cursor');
-  if (tip) tip.hidden = true;
-  if (cur) cur.hidden = true;
-}
-
-function simPlotNum(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '—';
-  if (n === 0) return '0';
-  const a = Math.abs(n);
-  if (a >= 100) return n.toFixed(0);
-  if (a >= 1) return n.toFixed(2);
-  if (a >= 0.01) return n.toFixed(3);
-  return n.toExponential(2);
-}
-
-/**
- * Hover readout for the residual plot: nearest sample to the pointer, with
- * the exact mean / max Courant number (transient) and the residuals.
- */
-function updateSimPlotTip(clientX) {
-  const g = simPlotHover;
-  const svg = document.getElementById('sim-residual-plot');
-  const wrap = document.getElementById('sim-residual-wrap');
-  const tip = document.getElementById('sim-plot-tip');
-  const cur = document.getElementById('sim-plot-cursor');
-  if (!g || !svg || !wrap || !tip || !cur || !g.rows.length) {
-    hideSimPlotTip();
-    return;
-  }
-  const r = svg.getBoundingClientRect();
-  if (!r.width) return;
-  const sx = ((clientX - r.left) / r.width) * g.w;
-  const t = ((sx - g.padL) / (g.w - g.padL - g.padR)) * g.xmax;
-  let best = 0;
-  let bd = Infinity;
-  for (let i = 0; i < g.rows.length; i++) {
-    const d = Math.abs(Number(g.rows[i].t) - t);
-    if (d < bd) {
-      bd = d;
-      best = i;
-    }
-  }
-  const row = g.rows[best];
-  const xPx = (g.xOf(row.t) / g.w) * r.width;
-  cur.style.left = xPx.toFixed(1) + 'px';
-  cur.hidden = false;
-  const lines = [];
-  lines.push('<b>' + escapeHtml(g.transient ? 't = ' + formatSimTime(row.t) : 'Iteration ' + Math.round(Number(row.t))) + '</b>');
-  if (g.hasCo && Number.isFinite(Number(row.co_mean))) {
-    lines.push(
-      '<span class="co">Co mean ' +
-        escapeHtml(simPlotNum(row.co_mean)) +
-        (Number.isFinite(Number(row.co_max)) ? ' · max ' + escapeHtml(simPlotNum(row.co_max)) : '') +
-        '</span>'
-    );
-  }
-  const res = [];
-  for (const s of SIM_RES_SERIES) {
-    const v = Number(row[s.key]);
-    if (Number.isFinite(v) && v > 0) {
-      res.push('<span style="color:' + s.color + '">' + (s.key === 'omega' ? 'ω' : s.key) + '</span> ' + escapeHtml(v.toExponential(1)));
-    }
-  }
-  if (res.length) lines.push(res.join(' · '));
-  tip.innerHTML = lines.join('<br>');
-  tip.hidden = false;
-  // Flip the box to the other side of the cursor near the right edge.
-  const tw = tip.offsetWidth || 120;
-  let left = xPx + 8;
-  if (left + tw > r.width - 4) left = xPx - tw - 8;
-  if (left < 2) left = 2;
-  tip.style.left = left.toFixed(1) + 'px';
-}
-
-function wireSimPlotHover() {
-  const wrap = document.getElementById('sim-residual-wrap');
-  if (!wrap || wrap.dataset.hoverWired) return;
-  wrap.dataset.hoverWired = '1';
-  wrap.addEventListener('pointermove', (e) => {
-    if (!simPlotHover) return;
-    simPlotHover.lastClientX = e.clientX;
-    updateSimPlotTip(e.clientX);
-  });
-  wrap.addEventListener('pointerleave', () => {
-    if (simPlotHover) simPlotHover.lastClientX = null;
-    hideSimPlotTip();
-  });
 }
 
 function solveHasAssignedMaterial() {
   const sid = typeof currentStudyId === 'function' ? currentStudyId() : '';
   const rows = [];
   try {
-    if (typeof w18State !== 'undefined') {
-      if (w18State.material) rows.push(w18State.material);
-      if (Array.isArray(w18State.materials_all)) rows.push(...w18State.materials_all);
+    if (typeof materialCatalog !== 'undefined') {
+      if (materialCatalog.material) rows.push(materialCatalog.material);
+      if (Array.isArray(materialCatalog.materials_all)) rows.push(...materialCatalog.materials_all);
     }
   } catch (_) {}
   return rows.some((mat) => {
@@ -30410,7 +29628,15 @@ function inferSetupFix(msg) {
   return null;
 }
 
+/** "Assign a mesh" needs a mesh to pick; with none in the study, the fix is to create one. */
+function resolveSetupFix(fix) {
+  if (!fix || fix.go !== 'run-mesh') return fix;
+  const meshes = typeof meshList === 'function' ? meshList() : [];
+  return meshes.length ? fix : { ...fix, go: 'mesh-hub' };
+}
+
 function setupFixLabel(fix) {
+  fix = resolveSetupFix(fix);
   if (!fix || !fix.go) return '';
   if (fix.go === 'create-sim') return 'Create Simulation';
   if (fix.go === 'add-run') return 'Add run';
@@ -30425,8 +29651,11 @@ function setupFixLabel(fix) {
 }
 
 function openSetupFix(fix) {
+  fix = resolveSetupFix(fix);
   if (!fix || !fix.go) return;
   try { leaveResultsForSetup(); } catch (_) {}
+  // The fix opens a panel for a tree item; unfold the study so that item is visible.
+  try { expandActiveStudyTree(); } catch (_) {}
   expandTreeFolder('Simulation');
   if (fix.go === 'create-sim') {
     openCreateSimulationModal();
@@ -30442,23 +29671,23 @@ function openSetupFix(fix) {
     markTreeSelected('sim-hub');
     return;
   }
-  if (fix.go === 'mat-picker' || ((fix.go === 'material' || fix.go === 'materials') && !(w18State && w18State.material))) {
+  if (fix.go === 'mat-picker' || ((fix.go === 'material' || fix.go === 'materials') && !(materialCatalog && materialCatalog.material))) {
     expandTreeFolder('Materials');
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     openMaterialLibrary();
     markTreeSelected('materials');
     return;
   }
   if (fix.go === 'material' || fix.go === 'materials') {
     expandTreeFolder('Materials');
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     openAirPanel();
     markTreeSelected('air');
     return;
   }
   if (fix.go === 'bc-picker' || fix.go === 'bcs') {
     expandTreeFolder('Boundary conditions');
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     openBcTypeModal();
     return;
   }
@@ -30474,30 +29703,30 @@ function openSetupFix(fix) {
     return;
   }
   if (fix.go === 'run-mesh') {
-    const runId = w27State.selected_run_id || w27State.active_run_id;
+    const runId = runCatalog.selected_run_id || runCatalog.active_run_id;
     if (runId) {
       expandRunFolders(runId, 'mesh');
-      try { syncSimulationTree(); } catch (_) {}
+      try { refreshSetupTree(); } catch (_) {}
       openRunMeshFolder(runId);
     } else {
       expandTreeFolder('Mesh');
-      try { syncSimulationTree(); } catch (_) {}
+      try { refreshSetupTree(); } catch (_) {}
       openTreeDetail('mesh-hub', { toggle: false });
     }
     return;
   }
   if (fix.go === 'mesh-hub') {
     expandTreeFolder('Mesh');
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     openTreeDetail('mesh-hub', { toggle: false });
     markTreeSelected('mesh');
     return;
   }
   if (fix.go === 'mesh') {
-    const id = fix.id || (w20State && w20State.active_id);
+    const id = fix.id || (meshCatalog && meshCatalog.active_id);
     expandTreeFolder('Mesh');
     if (id) treeUi.expanded['mesh:' + id] = true;
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
     markTreeSelected(id ? 'meshid:' + id : 'mesh');
     if (id && typeof selectMeshLocally === 'function') selectMeshLocally(id);
     if (id && typeof activateMeshClient === 'function') {
@@ -30510,79 +29739,30 @@ function openSetupFix(fix) {
   }
 }
 
+/** The reason Start cannot run (or what it is doing), with a fix link. Rendered by React. */
 function setRunHint(msg, fix) {
-  const hint = document.getElementById('sim-run-hint');
-  if (!hint) return;
   const text = String(msg || '').trim();
   if (!text) {
-    hint.hidden = true;
-    hint.innerHTML = '';
-    w27State.start_fix = null;
+    runCatalog.hint = null;
+    runCatalog.start_fix = null;
     return;
   }
   const resolved = fix && fix.go ? fix : inferSetupFix(text);
-  w27State.start_fix = resolved;
-  const label = setupFixLabel(resolved);
-  hint.hidden = false;
-  hint.innerHTML =
-    '<span class="sim-run-hint-msg">' +
-    escapeHtml(text) +
-    '</span>' +
-    (label
-      ? '<button type="button" class="sim-fix-go" data-setup-fix="1">' + escapeHtml(label) + '</button>'
-      : '');
+  runCatalog.start_fix = resolved;
+  runCatalog.hint = { text, fix_label: setupFixLabel(resolved) };
 }
 
-function syncSimControlPanel() {
-  const endEl = document.getElementById('sim-end-time');
-  const wiEl = document.getElementById('sim-write-interval');
-  const startBtn = document.getElementById('btn-sim-start');
-  const stopBtn = document.getElementById('btn-sim-stop');
-  const delBtn = document.getElementById('sim-run-delete');
-  const hint = document.getElementById('sim-run-hint');
+
+/**
+ * Everything the React run panel (src/panels/run/RunControl.tsx) renders:
+ * the Start gate and its reason, settings, transient hint, progress and
+ * residuals, copy-from. Pure: reads catalogs, writes nothing.
+ */
+function computeRunState() {
   const rec = selectedRunRecord();
   const run = rec ? runDocForPanel() : null;
   const locked = runIsLocked(rec);
-  try { syncRunCopyUi(); } catch (_) {}
-  if (rec && rec.endTime && endEl && document.activeElement !== endEl) {
-    w27State.endTime = rec.endTime;
-  }
-  if (rec && rec.writeInterval && wiEl && document.activeElement !== wiEl) {
-    w27State.writeInterval = rec.writeInterval;
-  }
-  if (endEl && document.activeElement !== endEl) {
-    endEl.value = String((rec && rec.endTime) || w27State.endTime);
-    endEl.disabled = !!locked;
-  }
-  if (wiEl && document.activeElement !== wiEl) {
-    wiEl.value = String((rec && rec.writeInterval) || w27State.writeInterval);
-    wiEl.disabled = !!locked;
-  }
-  // W30: steady rows vs transient rows follow the run's time dependency.
   const transient = !!rec && runRecIsTransient(rec);
-  const steadyBox = document.getElementById('sim-steady-fields');
-  const trBox = document.getElementById('sim-transient-fields');
-  const modeEl = document.getElementById('sim-run-mode');
-  if (steadyBox) steadyBox.hidden = transient;
-  if (trBox) trBox.hidden = !transient;
-  if (modeEl) modeEl.textContent = transient ? 'Transient' : 'Steady-state';
-  if (transient) {
-    const recId = String(rec.id || rec.run_id || '');
-    if (w27State.transient_run_id !== recId || !w27State.transient) {
-      w27State.transient_run_id = recId;
-      w27State.transient = transientSettingsFor(rec);
-      w27State.transient_preview = null;
-      w27State.transient_preview_key = '';
-    }
-    if (locked && rec.transient) {
-      // A started run shows what it solved with (the resolved numbers).
-      w27State.transient = transientSettingsFor(rec);
-      if (rec.transient.write_interval != null) w27State.transient_preview = { ok: true, control: rec.transient };
-    }
-    fillTransientForm(w27State.transient, locked);
-    renderTransientHint();
-    if (!locked) refreshTransientPreview();
-  }
   const running = !!(run && run.status === 'running');
   const done = !!(rec && rec.status === 'done');
   const meshes = generatedMeshOptions();
@@ -30594,9 +29774,10 @@ function syncSimControlPanel() {
     if (local && isGeneratedMeshReady(local)) meshReady = true;
   }
   const computeBusy = typeof anyComputeJobRunning === 'function' && anyComputeJobRunning();
-  const queuedHere = rec && typeof jobQueueHas === 'function' && jobQueueHas('solve', rec.id || rec.run_id);
+  const queuedHere = !!(rec && typeof jobQueueHas === 'function' && jobQueueHas('solve', rec.id || rec.run_id));
   const meshSoon = !!(meshId && meshWillBeReadySoon(meshId));
   const hasMaterial = typeof solveHasAssignedMaterial === 'function' && solveHasAssignedMaterial();
+  const hasFlow = typeof solveHasFlowDriver === 'function' && solveHasFlowDriver();
   const canQueue = canQueueSolveJob({
     hasRun: !!(rec && (rec.id || rec.run_id)),
     running,
@@ -30605,182 +29786,104 @@ function syncSimControlPanel() {
     meshSoon,
     hasMaterial,
   });
-  const canStart = !!(rec && (rec.id || rec.run_id) && !running && !done && meshReady && !computeBusy && hasMaterial);
-  if (startBtn) {
-    startBtn.hidden = done || running;
-    if (queuedHere) {
-      startBtn.disabled = false;
-      startBtn.textContent = 'Remove from queue';
-      startBtn.title = 'Remove this run from the queue';
-    } else if (canQueue && (computeBusy || meshSoon)) {
-      startBtn.disabled = false;
-      startBtn.textContent = 'Add to queue';
-      startBtn.title = meshSoon && !meshReady
-        ? 'Start this run after its mesh finishes'
-        : 'Start this run when the current job finishes';
-    } else {
-      startBtn.disabled = w27State.starting || !canStart;
-      startBtn.textContent = 'Start';
-      startBtn.title = !hasMaterial
-        ? 'Assign Air to a volume first'
-        : 'Start simpleFoam on this run';
-    }
+  const canStart = !!(rec && (rec.id || rec.run_id) && !running && !done && meshReady && !computeBusy && hasMaterial && hasFlow);
+
+  const start = { visible: !!rec && !done && !running, enabled: false, label: 'Start', title: 'Start the solver on this run' };
+  if (queuedHere) {
+    Object.assign(start, { enabled: true, label: 'Remove from queue', title: 'Remove this run from the queue' });
+  } else if (canQueue && (computeBusy || meshSoon)) {
+    Object.assign(start, {
+      enabled: true,
+      label: 'Add to queue',
+      title: meshSoon && !meshReady ? 'Start this run after its mesh finishes' : 'Start this run when the current job finishes',
+    });
+  } else {
+    start.enabled = !runCatalog.starting && canStart;
   }
-  if (stopBtn) {
-    stopBtn.hidden = !running;
-    stopBtn.disabled = !running;
-    const stopping = !!(running && run && run.stop_requested);
-    stopBtn.textContent = stopping ? 'Force stop' : 'Stop';
-    stopBtn.title = stopping
+  const stopping = !!(running && run && run.stop_requested);
+  const stop = {
+    visible: running,
+    label: stopping ? 'Force stop' : 'Stop',
+    title: stopping
       ? 'The solver is writing the current iteration. Click again to kill it without saving.'
-      : 'Write the current iteration and stop. Results up to this point stay available.';
-  }
-  if (delBtn) delBtn.hidden = running;
-  if (hint) {
-    if (w27State.starting) {
-      setRunHint(w27State.start_error || 'Starting…', null);
-    } else if (queuedHere && !hasMaterial) {
-      setRunHint('Assign Air to a volume first.', { go: 'material' });
-    } else if (queuedHere) {
-      setRunHint(
-        meshSoon && !meshReady
-          ? 'Queued. Starts after its mesh finishes.'
-          : 'Queued. Starts when the current job finishes.'
-      );
-    } else if (canQueue && (computeBusy || meshSoon)) {
-      setRunHint(
-        meshSoon && !meshReady
-          ? 'This run will start after its mesh finishes.'
-          : 'A job is running. This run will start when that job finishes.'
-      );
-    } else if (rec && !meshId) {
-      setRunHint('This run needs a mesh before it can start.', { go: 'run-mesh' });
-    } else if (rec && meshId && !meshReady && !meshSoon) {
-      const meshName = (meshRec && meshRec.name) || rec.mesh_name || 'that mesh';
-      setRunHint('Generate "' + meshName + '" before starting.', {
-        go: 'mesh',
-        id: meshId,
-        name: meshName,
-      });
-    } else if (rec && !solveHasAssignedMaterial()) {
-      setRunHint('Assign Air to a volume first.', { go: 'material' });
-    } else if (rec && !solveHasFlowDriver()) {
-      const incomplete = bcList().find((b) => !bcHasAssignedFace(b));
-      setRunHint(
-        'Add a velocity inlet, or two pressure boundaries, each with an assigned face.',
-        incomplete ? { go: 'bc', id: incomplete.id, name: incomplete.name } : { go: 'bc-picker' },
-      );
-    } else if (rec && rec.status === 'failed' && (rec.error || rec.note)) {
-      setRunHint(rec.error || rec.note, inferSetupFix(rec.error || rec.note));
-    } else if (startErrorForSelectedRun()) {
-      setRunHint(w27State.start_error, w27State.start_fix);
-    } else if (rec && rec.status === 'done') {
-      setRunHint('This run finished. Add a run to change settings.', { go: 'add-run', id: rec.id });
-    } else {
-      setRunHint('');
-    }
-  }
-  syncRunMeshSelect();
-  syncRunResultList();
+      : 'Write the current iteration and stop. Results up to this point stay available.',
+  };
 
-  const wrap = document.getElementById('sim-finished');
-  const title = document.getElementById('sim-status-title');
-  const line = document.getElementById('sim-finished-line');
-  const elapsedEl = document.getElementById('sim-elapsed');
-  const etaEl = document.getElementById('sim-eta');
-  const titleEl = document.getElementById('run-panel-title');
-  const renameBtn = document.getElementById('sim-rename');
-  const meta = document.getElementById('sim-finished-meta');
-  const plot = document.getElementById('sim-residual-plot');
-  const plotWrap = document.getElementById('sim-residual-wrap');
-  const legend = document.getElementById('sim-residual-legend');
+  // Reason, in priority order (first match wins).
+  let reason = null;
+  const want = (text, fix) => {
+    if (!reason) reason = { text, fix: fix || null };
+  };
+  if (runCatalog.starting) want(runCatalog.start_error || 'Starting…', null);
+  else if (queuedHere && !hasMaterial) want('Assign Air to a volume first.', { go: 'material' });
+  else if (queuedHere) want(meshSoon && !meshReady ? 'Queued. Starts after its mesh finishes.' : 'Queued. Starts when the current job finishes.');
+  else if (canQueue && (computeBusy || meshSoon)) {
+    want(meshSoon && !meshReady ? 'This run will start after its mesh finishes.' : 'A job is running. This run will start when that job finishes.');
+  } else if (rec && !meshId) want('This run needs a mesh before it can start.', { go: 'run-mesh' });
+  else if (rec && meshId && !meshReady && !meshSoon) {
+    const meshName = (meshRec && meshRec.name) || rec.mesh_name || 'that mesh';
+    want('Generate "' + meshName + '" before starting.', { go: 'mesh', id: meshId, name: meshName });
+  } else if (rec && !hasMaterial) want('Assign Air to a volume first.', { go: 'material' });
+  else if (rec && !hasFlow) {
+    const incomplete = bcList().find((b) => !bcHasAssignedFace(b));
+    want(
+      'Add a velocity inlet, or two pressure boundaries, each with an assigned face.',
+      incomplete ? { go: 'bc', id: incomplete.id, name: incomplete.name } : { go: 'bc-picker' },
+    );
+  } else if (rec && rec.status === 'failed' && (rec.error || rec.note)) {
+    want(rec.error || rec.note, inferSetupFix(rec.error || rec.note));
+  } else if (startErrorForSelectedRun()) want(runCatalog.start_error, runCatalog.start_fix);
+  else if (rec && rec.status === 'done') want('This run finished. Add a run to change settings.', { go: 'add-run', id: rec.id });
+
+  // Progress block (V0.1.0 #sim-finished).
   const hasProgress = !!(run && ['running', 'done', 'failed', 'stopped'].includes(run.status));
-  if (wrap) wrap.hidden = !hasProgress;
-  if (!hasProgress) {
-    if (titleEl && document.activeElement !== document.getElementById('sim-rename-input')) {
-      titleEl.textContent = (rec && rec.name) || (run && run.name) || 'Run';
-    }
-    if (renameBtn) renameBtn.hidden = !rec;
-    if (etaEl) etaEl.hidden = true;
-    if (plot) plot.innerHTML = '';
-    if (plotWrap) {
-      plotWrap.hidden = true;
-      plotWrap.setAttribute('hidden', '');
-    }
-    if (legend) legend.hidden = true;
-    syncViewportJobChip();
-    return;
-  }
-
-  const it = Number(run.iteration) || 0;
-  const runTransient = runRecIsTransient(run);
-  const trEnd = runTransient
-    ? Number(run.transient && run.transient.end_time) ||
-      Number(w27State.transient && w27State.transient.end_time) ||
-      0
-    : 0;
-  const end = runTransient ? trEnd : Number(run.endTime) || w27State.endTime || 0;
-  const elapsedMs = solveElapsedMs();
-  const elapsedTxt = elapsedMs != null ? formatElapsed(elapsedMs) : null;
-  const failed = run.status === 'failed';
-  const stopped = run.status === 'stopped';
-
-    if (titleEl && document.activeElement !== document.getElementById('sim-rename-input')) {
-      titleEl.textContent = (rec && rec.name) || (run && run.name) || 'Run';
-    }
-    if (renameBtn) renameBtn.hidden = !rec;
-  if (title) {
-    if (w27State.attaching) title.textContent = 'Loading results';
-    else if (failed) title.textContent = 'Run failed';
-    else if (stopped) title.textContent = 'Run stopped';
-    else if (running && run.stop_requested) title.textContent = 'Stopping';
-    else if (running) title.textContent = SIM_STAGE_LABELS[solveDisplayStage(run) || run.stage] || 'Solving';
-    else if (done) title.textContent = 'Run finished';
-    else title.textContent = 'Run';
-  }
-  if (line) {
+  const progress = { show: hasProgress, title: 'Run', line: '', elapsed: '', eta: '', meta: '', residuals: [], end: 0 };
+  if (hasProgress) {
+    const it = Number(run.iteration) || 0;
+    const runTransient = runRecIsTransient(run);
+    const trEnd = runTransient
+      ? Number(run.transient && run.transient.end_time) || Number(runCatalog.transient && runCatalog.transient.end_time) || 0
+      : 0;
+    const end = runTransient ? trEnd : Number(run.endTime) || runCatalog.endTime || 0;
+    const elapsedMs = solveElapsedMs();
+    const elapsedTxt = elapsedMs != null ? formatElapsed(elapsedMs) : null;
+    const failed = run.status === 'failed';
+    const stopped = run.status === 'stopped';
+    if (runCatalog.attaching) progress.title = 'Loading results';
+    else if (failed) progress.title = 'Run failed';
+    else if (stopped) progress.title = 'Run stopped';
+    else if (running && run.stop_requested) progress.title = 'Stopping';
+    else if (running) progress.title = SIM_STAGE_LABELS[solveDisplayStage(run) || run.stage] || 'Solving';
+    else if (done) progress.title = 'Run finished';
     const simT = Number(run.sim_time != null ? run.sim_time : run.iteration) || Number(run.last_saved_iteration) || 0;
     const stage = solveDisplayStage(run) || run.stage;
+    let line = '-';
     if (failed) {
       const err = run.error || run.note || '';
-      line.textContent = err ? String(err).split('\n')[0].slice(0, 160) : 'Solve failed. Open Job / debug for the log.';
+      line = err ? String(err).split('\n')[0].slice(0, 160) : 'Solve failed. Open Job / debug for the log.';
     } else if (running && runTransient) {
-      if (run.stop_requested && stage === 'solve') {
-        line.textContent = 'Writing t = ' + formatSimTime(simT) + ', then reconstructing…';
-      } else if (stage === 'solve' && (simT > 0 || runLiveFrameCount(run) > 0)) {
-        line.textContent = transientProgressText(run, end);
-      } else if (stage === 'solve') {
+      if (run.stop_requested && stage === 'solve') line = 'Writing t = ' + formatSimTime(simT) + ', then reconstructing…';
+      else if (stage === 'solve' && (simT > 0 || runLiveFrameCount(run) > 0)) line = transientProgressText(run, end);
+      else if (stage === 'solve') {
         const frames = runFrameCountLabel(run);
-        line.textContent = frames ? 'Solving · ' + frames : 'Solving...';
-      } else {
-        line.textContent = (SIM_STAGE_LABELS[stage] || 'Starting') + '...';
-      }
+        line = frames ? 'Solving · ' + frames : 'Solving...';
+      } else line = (SIM_STAGE_LABELS[stage] || 'Starting') + '...';
     } else if (running) {
-      if (run.stop_requested && stage === 'solve') {
-        line.textContent = 'Writing iteration ' + (it || '—') + ', then reconstructing…';
-      } else if (stage === 'solve' && it > 0) {
-        line.textContent = 'Iteration ' + it + ' / ' + (end || '—');
-      } else if (stage === 'solve') {
-        line.textContent = 'Solving...';
-      } else {
-        line.textContent = (SIM_STAGE_LABELS[stage] || 'Starting') + '...';
-      }
+      if (run.stop_requested && stage === 'solve') line = 'Writing iteration ' + (it || '—') + ', then reconstructing…';
+      else if (stage === 'solve' && it > 0) line = 'Iteration ' + it + ' / ' + (end || '—');
+      else if (stage === 'solve') line = 'Solving...';
+      else line = (SIM_STAGE_LABELS[stage] || 'Starting') + '...';
     } else if (stopped && runTransient) {
       const saved = Number(run.last_saved_iteration) || 0;
-      line.textContent =
+      line =
         saved > 0
-          ? 'Stopped at t = ' +
-            formatSimTime(simT || saved) +
-            ' · ' +
-            (runFrameCountLabel(run) || 'frames') +
-            ' saved to t = ' +
-            formatSimTime(saved)
+          ? 'Stopped at t = ' + formatSimTime(simT || saved) + ' · ' + (runFrameCountLabel(run) || 'frames') + ' saved to t = ' + formatSimTime(saved)
           : simT > 0
             ? 'Stopped at t = ' + formatSimTime(simT) + ' · nothing saved yet'
             : 'Stopped';
     } else if (stopped) {
       const saved = Number(run.last_saved_iteration) || 0;
-      line.textContent =
+      line =
         saved > 0
           ? 'Stopped at iteration ' + (it || saved) + ' · results saved to iteration ' + saved
           : it > 0
@@ -30789,66 +29892,129 @@ function syncSimControlPanel() {
     } else if (done && runTransient) {
       const frames = Number(run.n_saved_times) || 0;
       const steps = Number(run.n_steps) || 0;
-      line.textContent =
+      line =
         formatSimTime(simT || end) +
         ' simulated' +
         (frames ? ' · ' + frames + ' frames' : '') +
         (steps ? ' · ' + steps.toLocaleString() + ' time steps' : '');
     } else if (done) {
-      line.textContent = (it || end) + ' iterations';
-    } else {
-      line.textContent = '-';
+      line = (it || end) + ' iterations';
     }
-  }
-  if (elapsedEl) {
-    const showClock = (running || w27State.attaching) && elapsedTxt;
-    elapsedEl.hidden = !showClock;
-    if (showClock) elapsedEl.textContent = elapsedTxt;
-  }
-  if (etaEl) {
-    const liveEta = typeof liveSolveRecord === 'function' ? liveSolveRecord() : null;
-    const etaSrc = liveEta && sameRunId(liveEta, run) ? liveEta : run;
-    const etaTxt = running ? formatEta(solveEtaMs(etaSrc)) : null;
-    etaEl.hidden = !etaTxt;
-    if (etaTxt) etaEl.textContent = etaTxt;
-  }
-  if (meta) {
+    progress.line = line;
+    if ((running || runCatalog.attaching) && elapsedTxt) progress.elapsed = elapsedTxt;
+    if (running) {
+      const liveEta = typeof liveSolveRecord === 'function' ? liveSolveRecord() : null;
+      const etaSrc = liveEta && sameRunId(liveEta, run) ? liveEta : run;
+      progress.eta = formatEta(solveEtaMs(etaSrc)) || '';
+    }
     const bits = [];
     if (run.n_procs > 1) bits.push(run.n_procs + ' ranks');
     else if (run.n_procs === 1) bits.push('serial');
     if (elapsedTxt && !running) bits.push(elapsedTxt);
     if (running && run.pid != null) bits.push('PID ' + run.pid);
-    meta.textContent = bits.join(' · ');
+    progress.meta = bits.join(' · ');
+    progress.residuals = Array.isArray(run.residuals) ? run.residuals : [];
+    progress.end = end;
   }
-  const series = Array.isArray(run.residuals) ? run.residuals : [];
-  drawResidualPlot(plot, series, end, { transient: runTransient });
-  if (legend) legend.hidden = !series.length;
-  if (running && !w27State.elapsed_timer) startSimElapsedClock();
+
+  const trSettings = transient ? runCatalog.transient || transientSettingsFor(rec) : transientSettingsFor(rec);
+  return {
+    has_run: !!rec,
+    run_id: rec ? String(rec.id || rec.run_id || '') : '',
+    name: (rec && rec.name) || (run && run.name) || 'Run',
+    status: (run && run.status) || (rec && rec.status) || (queuedHere ? 'queued' : 'draft'),
+    transient,
+    locked: !!locked,
+    running,
+    done,
+    can_start: canStart,
+    queued: queuedHere,
+    start,
+    stop,
+    can_delete: !!rec && !running,
+    reason: reason ? { text: reason.text, fix_label: setupFixLabel(reason.fix) } : null,
+    reason_fix: reason ? reason.fix : null,
+    settings: {
+      end_time: Number((rec && rec.endTime) || runCatalog.endTime) || 200,
+      write_interval: Number((rec && rec.writeInterval) || runCatalog.writeInterval) || 50,
+    },
+    transient_settings: trSettings,
+    frame_interval: transientFrameInterval(trSettings),
+    transient_hint: transient ? transientHint() : null,
+    progress,
+    copy: runCopyState(),
+    mesh_ready: meshReady,
+    has_material: hasMaterial,
+    has_flow_driver: hasFlow,
+  };
+}
+
+/** Dispatch `cfd:run-state` (and keep `__CFD_RUN_STATE__`) for the React run panel. */
+function publishRunState() {
+  let detail;
+  try {
+    detail = computeRunState();
+  } catch (e) {
+    console.warn('[CFD] run state', e);
+    return null;
+  }
+  runCatalog.start_fix = detail.reason_fix;
+  runCatalog.hint = detail.reason;
+  window.__CFD_RUN_STATE__ = detail;
+  try {
+    window.dispatchEvent(new CustomEvent('cfd:run-state', { detail }));
+  } catch (_) {}
+  return detail;
+}
+
+function syncSimControlPanel() {
+  const rec = selectedRunRecord();
+  const locked = runIsLocked(rec);
+  if (rec && rec.endTime) runCatalog.endTime = rec.endTime;
+  if (rec && rec.writeInterval) runCatalog.writeInterval = rec.writeInterval;
+  if (rec && runRecIsTransient(rec)) {
+    const recId = String(rec.id || rec.run_id || '');
+    if (runCatalog.transient_run_id !== recId || !runCatalog.transient) {
+      runCatalog.transient_run_id = recId;
+      runCatalog.transient = transientSettingsFor(rec);
+      runCatalog.transient_preview = null;
+      runCatalog.transient_preview_key = '';
+    }
+    if (locked && rec.transient) {
+      // A started run shows what it solved with (the resolved numbers).
+      runCatalog.transient = transientSettingsFor(rec);
+      if (rec.transient.write_interval != null) runCatalog.transient_preview = { ok: true, control: rec.transient };
+    }
+    if (!locked) refreshTransientPreview();
+  }
+  const run = rec ? runDocForPanel() : null;
+  const running = !!(run && run.status === 'running');
+  try { syncRunMeshSelect(); } catch (_) {}
+  try { syncRunResultList(); } catch (_) {}
+  if (running && !runCatalog.elapsed_timer) startSimElapsedClock();
   if (!running) stopSimElapsedClock();
+  if (runCopyPick && !runCopyState().picking) endRunCopyPick();
+  publishRunState();
   syncViewportJobChip();
 }
 
 async function persistSimControl(opts) {
-  const endEl = document.getElementById('sim-end-time');
-  const wiEl = document.getElementById('sim-write-interval');
-  const endTime = Math.max(1, Math.round(Number(endEl && endEl.value) || w27State.endTime));
-  const writeInterval = Math.max(1, Math.round(Number(wiEl && wiEl.value) || w27State.writeInterval));
-  w27State.endTime = endTime;
-  w27State.writeInterval = writeInterval;
+  const o = opts || {};
+  const endTime = Math.max(1, Math.round(Number(o.end_time) || runCatalog.endTime));
+  const writeInterval = Math.max(1, Math.round(Number(o.write_interval) || runCatalog.writeInterval));
+  runCatalog.endTime = endTime;
+  runCatalog.writeInterval = writeInterval;
   const rec = selectedRunRecord();
   if (rec && !runIsLocked(rec)) {
     const body = { run_id: rec.id, endTime, writeInterval };
-    if (runRecIsTransient(rec)) {
-      w27State.transient = readTransientForm();
-      body.transient = w27State.transient;
-    }
+    if (runRecIsTransient(rec)) body.transient = normalizeTransient(runCatalog.transient);
     try {
       await persistRunSettings(body);
     } catch (e) {
       console.warn('[CFD] run settings save', e);
     }
   }
-  if (!(opts && opts.skipSync)) syncSimControlPanel();
+  if (!o.skipSync) syncSimControlPanel();
 }
 
 function runsTreeKey(list, activeId) {
@@ -30880,11 +30046,11 @@ function applyForeignLiveCatalog(j) {
   const incomingLive = catalogRunningRun(j);
   const nextLiveId = (j && j.live_run_id) || (incomingLive && (incomingLive.run_id || incomingLive.id)) || null;
   if (nextLiveId) {
-    w27State.live_run_id = nextLiveId;
+    runCatalog.live_run_id = nextLiveId;
     try { markLiveCompute('solve', { run_id: nextLiveId }); } catch (_) {}
     if (incomingLive && sameRunId(incomingLive, nextLiveId)) {
-      const prev = w27State.live_run;
-      w27State.live_run = prev && sameRunId(prev, nextLiveId)
+      const prev = runCatalog.live_run;
+      runCatalog.live_run = prev && sameRunId(prev, nextLiveId)
         ? mergeRunProgress(prev, incomingLive)
         : incomingLive;
     }
@@ -30899,33 +30065,33 @@ function applyRunCatalog(j) {
     applyForeignLiveCatalog(j);
     return;
   }
-  const before = runsTreeKey(w27State.runs, w27State.selected_run_id || w27State.active_run_id);
+  const before = runsTreeKey(runCatalog.runs, runCatalog.selected_run_id || runCatalog.active_run_id);
   const pid = catalogPid || curPid || '';
   if (j && Array.isArray(j.runs)) {
     const curSid = typeof currentStudyId === 'function' ? currentStudyId() : '';
     const replaceStudyRuns = catalogReplacesStudyRuns(j, curSid);
     const incomingRuns = j.runs.map((row) => stampRunProject(row, pid));
     const scopedPrev = typeof catalogRowsForOpenProject === 'function'
-      ? catalogRowsForOpenProject(w27State.runs, pid)
-      : w27State.runs;
+      ? catalogRowsForOpenProject(runCatalog.runs, pid)
+      : runCatalog.runs;
     const scopedAll = typeof catalogRowsForOpenProject === 'function'
-      ? catalogRowsForOpenProject(w27State.runs_all, pid)
-      : w27State.runs_all;
+      ? catalogRowsForOpenProject(runCatalog.runs_all, pid)
+      : runCatalog.runs_all;
     if (replaceStudyRuns) {
       const prevById = new Map((scopedPrev || []).map((r) => [String((r && (r.id || r.run_id)) || ''), r]));
-      w27State.runs = incomingRuns.map((row) => {
+      runCatalog.runs = incomingRuns.map((row) => {
         const prev = prevById.get(String((row && (row.id || row.run_id)) || ''));
         return stampRunProject(
           (typeof mergeRunCatalogRow === 'function' ? mergeRunCatalogRow(prev, row) : row) || row,
           pid
         );
       });
-      const viewingRun = typeof viewingRunId === 'function' ? viewingRunId() : w27State.selected_run_id;
-      if (viewingRun && w27State.runs.some((r) => r && String(r.id) === String(viewingRun))) {
-        w27State.selected_run_id = viewingRun;
+      const viewingRun = typeof viewingRunId === 'function' ? viewingRunId() : runCatalog.selected_run_id;
+      if (viewingRun && runCatalog.runs.some((r) => r && String(r.id) === String(viewingRun))) {
+        runCatalog.selected_run_id = viewingRun;
       } else {
-        w27State.selected_run_id = selectedRunAfterCatalog({
-          selectedId: w27State.selected_run_id,
+        runCatalog.selected_run_id = selectedRunAfterCatalog({
+          selectedId: runCatalog.selected_run_id,
           incomingRuns,
           replaceStudyRuns: true,
         });
@@ -30934,12 +30100,12 @@ function applyRunCatalog(j) {
       const sid =
         (j && j.simulation_id) ||
         ((incomingRuns[0] && incomingRuns[0].simulation_id) || null);
-      w27State.runs_all = mergeStudyTaggedList(scopedAll, incomingRuns, sid);
+      runCatalog.runs_all = mergeStudyTaggedList(scopedAll, incomingRuns, sid);
     }
     if (Array.isArray(j.runs_all)) {
       const incomingAll = j.runs_all.map((row) => stampRunProject(row, pid));
       const prevAll = new Map((scopedAll || []).map((r) => [String((r && (r.id || r.run_id)) || ''), r]));
-      w27State.runs_all = adoptStudyTaggedList(
+      runCatalog.runs_all = adoptStudyTaggedList(
         scopedAll,
         incomingAll.map((row) => {
           const prev = prevAll.get(String((row && (row.id || row.run_id)) || ''));
@@ -30954,25 +30120,25 @@ function applyRunCatalog(j) {
       const sid =
         (j && j.simulation_id) ||
         (typeof currentStudyId === 'function' ? currentStudyId() : null);
-      w27State.runs_all = mergeStudyTaggedList(scopedAll, w27State.runs, sid);
+      runCatalog.runs_all = mergeStudyTaggedList(scopedAll, runCatalog.runs, sid);
     }
   }
-  if (j && Array.isArray(j.meshes)) w27State.meshes = j.meshes;
+  if (j && Array.isArray(j.meshes)) runCatalog.meshes = j.meshes;
   const incomingLive = catalogRunningRun(j);
   const incomingLiveId = incomingLive && (incomingLive.run_id || incomingLive.id);
   const catalogRows = [].concat(
     (j && j.runs_all) || [],
     (j && j.runs) || [],
     incomingLive ? [incomingLive] : [],
-    (w27State.runs_all || []),
-    (w27State.runs || [])
+    (runCatalog.runs_all || []),
+    (runCatalog.runs || [])
   );
   let nextLiveId =
     (j && j.live_run_id) ||
     incomingLiveId ||
     null;
   if (!nextLiveId && typeof pickLiveSolveFromCatalog === 'function') {
-    const kept = pickLiveSolveFromCatalog(catalogRows, w27State.live_run_id);
+    const kept = pickLiveSolveFromCatalog(catalogRows, runCatalog.live_run_id);
     if (kept) nextLiveId = kept.run_id || kept.id || null;
   }
   if (nextLiveId && typeof solveHandleStillLive === 'function' && !solveHandleStillLive({
@@ -30982,31 +30148,31 @@ function applyRunCatalog(j) {
   })) {
     nextLiveId = null;
     if (typeof pickLiveSolveFromCatalog === 'function') {
-      const kept = pickLiveSolveFromCatalog(catalogRows, w27State.live_run_id);
+      const kept = pickLiveSolveFromCatalog(catalogRows, runCatalog.live_run_id);
       if (kept) nextLiveId = kept.run_id || kept.id || null;
     }
   }
   if (j && (Object.prototype.hasOwnProperty.call(j, 'live_run_id') || incomingLive || nextLiveId)) {
-    const prevLive = w27State.live_run_id;
-    const prevDoc = w27State.live_run;
+    const prevLive = runCatalog.live_run_id;
+    const prevDoc = runCatalog.live_run;
     if (nextLiveId) {
-      w27State.live_run_id = nextLiveId;
+      runCatalog.live_run_id = nextLiveId;
       markLiveCompute('solve', { run_id: nextLiveId });
     } else if (Object.prototype.hasOwnProperty.call(j, 'live_run_id')) {
       if (prevDoc && (prevDoc.status === 'running' || prevDoc.status === 'starting')) {
         try { showJobFinishToast('solve', prevDoc, prevDoc.status === 'failed' ? 'failed' : 'done'); } catch (_) {}
       }
-      w27State.live_run_id = null;
-      w27State.live_run = null;
+      runCatalog.live_run_id = null;
+      runCatalog.live_run = null;
       if (liveCompute.kind === 'solve') clearLiveCompute('solve');
     }
     const kickLost = typeof shouldKickQueueAfterLiveHandleLost === 'function'
       ? shouldKickQueueAfterLiveHandleLost({
           hadLiveId: prevLive,
-          nextLiveId: w27State.live_run_id,
+          nextLiveId: runCatalog.live_run_id,
           catalogRows,
         })
-      : !!(prevLive && !w27State.live_run_id);
+      : !!(prevLive && !runCatalog.live_run_id);
     if (kickLost) {
       try { scheduleKickNextQueuedJob(400); } catch (_) {}
     }
@@ -31018,26 +30184,26 @@ function applyRunCatalog(j) {
       (incomingLive && sameRunId(incomingLive, nextLiveId) && incomingLive) ||
       null;
     if (incoming) {
-      const prev = w27State.live_run;
-      w27State.live_run = prev && sameRunId(prev, nextLiveId)
+      const prev = runCatalog.live_run;
+      runCatalog.live_run = prev && sameRunId(prev, nextLiveId)
         ? mergeRunProgress(prev, incoming)
         : incoming;
     }
   }
-  if (nextLiveId && !w27State.poll_timer && typeof startSimPoll === 'function') {
+  if (nextLiveId && !runCatalog.poll_timer && typeof startSimPoll === 'function') {
     try { startSimPoll(); } catch (_) {}
   }
   try { syncViewportJobChip(); } catch (_) {}
   if (j && Array.isArray(j.runs)) {
     const aid = j.active_run_id || (j.run && (j.run.run_id || j.run.id)) || null;
     if (catalogReplacesStudyRuns(j, typeof currentStudyId === 'function' ? currentStudyId() : '')) {
-      w27State.active_run_id =
-        aid && w27State.runs.some((r) => r && String(r.id) === String(aid)) ? aid : w27State.active_run_id;
+      runCatalog.active_run_id =
+        aid && runCatalog.runs.some((r) => r && String(r.id) === String(aid)) ? aid : runCatalog.active_run_id;
     }
   }
-  const after = runsTreeKey(w27State.runs, w27State.selected_run_id || w27State.active_run_id);
+  const after = runsTreeKey(runCatalog.runs, runCatalog.selected_run_id || runCatalog.active_run_id);
   if (before !== after) {
-    try { syncSimulationTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
   }
   try { syncSimHubPanel(); } catch (_) {}
   try { scheduleResultsPrefetch(); } catch (_) {}
@@ -31063,10 +30229,10 @@ async function attachSolveCase(nextDir, opts) {
   if (!nextDir) return;
   const sameCase = sameCasePath(getCaseDir(), nextDir);
   const waitMs = resultsAttachWaitMs({
-    sameCaseAlreadyAttaching: !!(w27State.attaching && sameCase),
+    sameCaseAlreadyAttaching: !!(runCatalog.attaching && sameCase),
   });
   const t0 = Date.now();
-  while (w27State.attaching && Date.now() - t0 < waitMs) {
+  while (runCatalog.attaching && Date.now() - t0 < waitMs) {
     if (resultsCaseAlreadyAttached(nextDir)) break;
     await new Promise((resolve) => setTimeout(resolve, 40));
   }
@@ -31074,33 +30240,34 @@ async function attachSolveCase(nextDir, opts) {
     await refreshFieldsAfterAttach();
     return;
   }
-  const myGen = (w27State.attach_gen = (Number(w27State.attach_gen) || 0) + 1);
-  w27State.attaching = true;
+  const myGen = (runCatalog.attach_gen = (Number(runCatalog.attach_gen) || 0) + 1);
+  runCatalog.attaching = true;
   try { syncSimControlPanel(); } catch (_) {}
   try { syncViewportJobChip(); } catch (_) {}
   await waitForViewerPaint();
   try {
     await attachCaseDirClient(nextDir, opts);
-    if (w27State.attach_gen !== myGen) return;
+    if (runCatalog.attach_gen !== myGen) return;
     try { applyWorkbenchStage(); } catch (_) {}
   } catch (e) {
     console.warn('[CFD] attach solve case', e);
     throw e;
   } finally {
-    if (w27State.attach_gen === myGen) w27State.attaching = false;
+    if (runCatalog.attach_gen === myGen) runCatalog.attaching = false;
     try { syncSimControlPanel(); } catch (_) {}
     try { syncViewportJobChip(); } catch (_) {}
   }
 }
 
 function stopSimPoll() {
-  if (w27State.poll_timer) {
-    clearInterval(w27State.poll_timer);
-    w27State.poll_timer = null;
+  if (runCatalog.poll_timer) {
+    clearInterval(runCatalog.poll_timer);
+    runCatalog.poll_timer = null;
   }
 }
 
 async function pollSimRunStatus() {
+  if (!runStatusPollEnabled()) return;
   try {
     const r = await fetch('/api/run/status' + hashProjectQs(), { cache: 'no-store' });
     const j = await r.json();
@@ -31117,17 +30284,17 @@ async function pollSimRunStatus() {
         syncSimControlPanel();
         return;
       }
-      const prev = w27State.run && w27State.run.status;
-      const selectedId = w27State.selected_run_id;
+      const prev = runCatalog.run && runCatalog.run.status;
+      const selectedId = runCatalog.selected_run_id;
       const runId = j.run.run_id || j.run.id;
       const viewing = (typeof viewingRunId === 'function' ? viewingRunId() : null) || selectedId;
       const inCatalog =
         Array.isArray(j.runs) && j.runs.some((r) => r && String(r.id) === String(runId));
       if (inCatalog && viewing && String(runId) === String(viewing)) {
-        w27State.run = j.run;
+        runCatalog.run = j.run;
       }
       const selectedMatches = !!(viewing && String(runId) === String(viewing));
-      const liveId = j.live_run_id || w27State.live_run_id;
+      const liveId = j.live_run_id || runCatalog.live_run_id;
       const thisIsLive = !!(liveId && String(liveId) === String(runId));
       if (selectedMatches && (thisIsLive || !liveId)) {
         jobState.status = j.run.status || jobState.status;
@@ -31149,11 +30316,11 @@ async function pollSimRunStatus() {
         j.live_run ||
         (j.live_run_id && String(j.run.run_id || j.run.id) === String(j.live_run_id) ? j.run : null);
       if (live && (live.status === 'running' || live.status === 'starting')) {
-        const prevLive = w27State.live_run;
-        w27State.live_run = prevLive && sameRunId(prevLive, live)
+        const prevLive = runCatalog.live_run;
+        runCatalog.live_run = prevLive && sameRunId(prevLive, live)
           ? mergeRunProgress(prevLive, live)
           : live;
-        w27State.live_run_id = live.run_id || live.id || w27State.live_run_id;
+        runCatalog.live_run_id = live.run_id || live.id || runCatalog.live_run_id;
       }
       const liveFinished = !!(live && ['done', 'failed', 'stopped'].includes(live.status));
       if (liveFinished) stopSimPoll();
@@ -31167,8 +30334,8 @@ async function pollSimRunStatus() {
           refreshLiveResultsFrames(finalRun, true).catch((e) => console.warn('[CFD] live frames', e));
         }, 2500);
         try { clearLiveCompute('solve'); } catch (_) {}
-        w27State.live_run_id = null;
-        w27State.live_run = null;
+        runCatalog.live_run_id = null;
+        runCatalog.live_run = null;
         try { scheduleKickNextQueuedJob(400); } catch (_) {}
       }
     }
@@ -31225,7 +30392,7 @@ async function refreshLiveResultsFrames(run, justFinished) {
   if (run.status !== 'running' && !justFinished) return;
   const n = Number(run.n_saved_times) || 0;
   if (!justFinished && liveFramesSeen != null && n === liveFramesSeen) return;
-  if (liveFramesBusy || w27State.attaching) {
+  if (liveFramesBusy || runCatalog.attaching) {
     // Polling stops once the run is done, so a request that lands while a
     // frame is still loading must not be dropped — run it afterwards.
     liveFramesQueued = { run, justFinished: !!justFinished || (liveFramesQueued && liveFramesQueued.justFinished) };
@@ -31260,11 +30427,13 @@ async function refreshLiveResultsFrames(run, justFinished) {
 }
 
 function startSimPoll() {
+  if (!runStatusPollEnabled()) return;
   stopSimPoll();
-  w27State.poll_timer = setInterval(pollSimRunStatus, 1500);
+  runCatalog.poll_timer = setInterval(pollSimRunStatus, 1500);
 }
 
 async function refreshRunCatalog() {
+  if (!runStatusPollEnabled()) return { ok: true, runs: [] };
   const r = await fetch('/api/run/status' + hashProjectQs(), { cache: 'no-store' });
   const j = await r.json();
   applyRunCatalog(j);
@@ -31272,76 +30441,74 @@ async function refreshRunCatalog() {
   if (
     j &&
     j.run &&
-    !w27State.selected_run_id &&
+    !runCatalog.selected_run_id &&
     (typeof runBelongsToOpenProject !== 'function' || runBelongsToOpenProject(j.run, pid))
   ) {
-    w27State.run = j.run;
+    runCatalog.run = j.run;
   }
   return j;
 }
 
 async function startSolveClient(opts) {
   opts = opts || {};
-  const startingId = opts.run_id || w27State.selected_run_id;
+  const startingId = opts.run_id || runCatalog.selected_run_id;
   if (!keepResultsWhileStartingRun({
     resultsOpen: !!resultsViewOpen,
     resultsRunId,
-    selectedRunId: w27State.selected_run_id,
+    selectedRunId: runCatalog.selected_run_id,
     startingRunId: startingId,
   })) {
     leaveResultsForSetup();
   }
-  const startBtn = document.getElementById('btn-sim-start');
   const showHint = (msg, fix) => {
-    w27State.start_error = msg || w27State.start_error;
+    runCatalog.start_error = msg || runCatalog.start_error;
     setRunHint(msg || '', fix);
   };
   const failStart = (msg, extra) => {
-    w27State.starting = false;
-    w27State.start_error = msg;
-    w27State.start_error_run_id = runId || w27State.selected_run_id || (extra && extra.run_id) || null;
-    w27State.start_error_study_id =
+    runCatalog.starting = false;
+    runCatalog.start_error = msg;
+    runCatalog.start_error_run_id = runId || runCatalog.selected_run_id || (extra && extra.run_id) || null;
+    runCatalog.start_error_study_id =
       (extra && extra.simulation_id) ||
       (typeof currentStudyId === 'function' ? currentStudyId() : null);
     jobState.status = 'failed';
     jobState.note = msg;
     jobState.mode = 'solve';
     jobState.path_kind = 'simpleFoam';
-    jobState.simulation_id = w27State.start_error_study_id;
-    const rec = findRunRecord(w27State.start_error_run_id);
+    jobState.simulation_id = runCatalog.start_error_study_id;
+    const rec = findRunRecord(runCatalog.start_error_run_id);
     if (rec) {
       rec.status = 'failed';
       rec.error = msg;
       rec.note = msg;
     }
-    if (w27State.run && String(w27State.run.run_id || w27State.run.id) === String(w27State.start_error_run_id)) {
-      w27State.run = { ...w27State.run, status: 'failed', error: msg, note: msg };
+    if (runCatalog.run && String(runCatalog.run.run_id || runCatalog.run.id) === String(runCatalog.start_error_run_id)) {
+      runCatalog.run = { ...runCatalog.run, status: 'failed', error: msg, note: msg };
     }
     showHint(msg, extra && extra.fix);
     syncJobStatusChrome();
     syncSimControlPanel();
-    if (startBtn) startBtn.disabled = false;
     return extra || { ok: false, error: msg };
   };
-  if (opts.run_id) w27State.selected_run_id = opts.run_id;
-  w27State.starting = true;
-  w27State.start_error = 'Starting…';
-  w27State.start_error_run_id = w27State.selected_run_id;
-  w27State.start_error_study_id = typeof currentStudyId === 'function' ? currentStudyId() : null;
-  if (startBtn) startBtn.disabled = true;
+  if (opts.run_id) runCatalog.selected_run_id = opts.run_id;
+  runCatalog.starting = true;
+  runCatalog.start_error = 'Starting…';
+  runCatalog.start_error_run_id = runCatalog.selected_run_id;
+  runCatalog.start_error_study_id = typeof currentStudyId === 'function' ? currentStudyId() : null;
   showHint('Starting…');
+  try { publishRunState(); } catch (_) {}
   try { syncJobStatusChrome(); } catch (_) {}
   try {
     await persistSimControl({ skipSync: true });
   } catch (_) {}
-  if (!w27State.selected_run_id || !findRunRecord(w27State.selected_run_id)) {
+  if (!runCatalog.selected_run_id || !findRunRecord(runCatalog.selected_run_id)) {
     try { await refreshRunCatalog(); } catch (_) {}
   }
-  let runId = opts.run_id || w27State.selected_run_id;
+  let runId = opts.run_id || runCatalog.selected_run_id;
   if (!runId) {
-    const draft = (w27State.runs || []).find((r) => r.status === 'draft' || r.status === 'failed' || r.status === 'stopped');
+    const draft = (runCatalog.runs || []).find((r) => r.status === 'draft' || r.status === 'failed' || r.status === 'stopped');
     runId = draft && (draft.id || draft.run_id);
-    if (runId) w27State.selected_run_id = runId;
+    if (runId) runCatalog.selected_run_id = runId;
   }
   if (!runId) {
     return failStart('Create a run first, then start it.');
@@ -31352,8 +30519,7 @@ async function startSolveClient(opts) {
   }
   try { clearStaleSolveLive(runId); } catch (_) {}
   if (opts.fromQueue && computeJobBlocksStart(runId)) {
-    w27State.starting = false;
-    if (startBtn) startBtn.disabled = false;
+    runCatalog.starting = false;
     return { ok: false, busy: true, run_id: runId };
   }
   if (!opts.fromQueue) {
@@ -31368,9 +30534,8 @@ async function startSolveClient(opts) {
         })
       : computeJobBlocksStart(runId) || waitForMesh || sameRunStillSolving;
     if (shouldQueue) {
-      w27State.starting = false;
-      if (startBtn) startBtn.disabled = false;
-      if (sameRunStillSolving) {
+      runCatalog.starting = false;
+        if (sameRunStillSolving) {
         if (rec && rec.stop_requested) {
           return failStart('This run is still stopping. Wait for it to finish, then Start again.');
         }
@@ -31404,28 +30569,25 @@ async function startSolveClient(opts) {
     }
   }
   try {
-    const r = await fetch('/api/run/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        run_id: runId,
-        project_id: currentProjectId() || undefined,
-        endTime: w27State.endTime,
-        writeInterval: w27State.writeInterval,
-        ...(typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {}),
-        ...(rec && runRecIsTransient(rec) ? { transient: w27State.transient || readTransientForm() } : {}),
-      }),
+    const posted = await postRunStart({
+      run_id: runId,
+      project_id: currentProjectId() || undefined,
+      endTime: runCatalog.endTime,
+      writeInterval: runCatalog.writeInterval,
+      scope: window.__CFD_RUN_SCOPE__ || undefined,
+      ...(typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {}),
+      ...(rec && runRecIsTransient(rec) ? { transient: normalizeTransient(runCatalog.transient) } : {}),
     });
-    const j = await r.json();
+    const r = posted.response;
+    const j = posted.json;
     if (!(r.ok || r.status === 202) || !j || j.ok === false) {
       const err = String((j && j.error) || '');
       const busy = r.status === 409 && /already in progress|already running/i.test(err);
       if (busy) {
         if (j && j.run_id) markLiveCompute('solve', { run_id: j.run_id });
-        w27State.starting = false;
-        w27State.start_error = null;
-        w27State.start_error_run_id = null;
-        if (startBtn) startBtn.disabled = false;
+        runCatalog.starting = false;
+        runCatalog.start_error = null;
+        runCatalog.start_error_run_id = null;
         if (opts.fromQueue) return { ok: false, busy: true, run_id: runId };
         const queued = await enqueueSolveJob(runId);
         if (!queued) {
@@ -31438,14 +30600,14 @@ async function startSolveClient(opts) {
       }
       return failStart((j && j.error) || 'Start failed', j);
     }
-    w27State.starting = false;
-    w27State.start_error = null;
-    w27State.run = j;
-    w27State.live_run_id = runId;
+    runCatalog.starting = false;
+    runCatalog.start_error = null;
+    runCatalog.run = j;
+    runCatalog.live_run_id = runId;
     applyRunCatalog(j);
     markLiveCompute('solve', { run_id: runId });
-    w27State.live_run_id = runId;
-    w27State.live_run = j.run || j;
+    runCatalog.live_run_id = runId;
+    runCatalog.live_run = j.run || j;
     jobState.status = 'running';
     jobState.mode = 'solve';
     jobState.run_id = runId;
@@ -31469,30 +30631,23 @@ async function startSolveClient(opts) {
 }
 
 async function stopSolveClient() {
-  const rec = selectedRunRecord() || w27State.run;
+  const rec = selectedRunRecord() || runCatalog.run;
   const force = !!(rec && rec.stop_requested);
   try {
-    const r = await fetch('/api/run/stop' + hashProjectQs(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_id: currentProjectId() || undefined,
-        run_id: rec && (rec.id || rec.run_id),
-        force,
-      }),
+    const posted = await postJson('/api/run/stop' + hashProjectQs(), {
+      project_id: currentProjectId() || undefined,
+      run_id: rec && (rec.id || rec.run_id),
+      scope: window.__CFD_RUN_SCOPE__ || undefined,
+      force,
     });
-    let j = {};
-    try {
-      j = await r.json();
-    } catch {
-      j = {};
-    }
+    const r = posted.response;
+    const j = posted.json || {};
     if (!r.ok || j.ok === false) {
       try {
         setRunHint((j && j.error) || 'Could not stop the run.');
       } catch (_) {}
-    } else if (w27State.run) {
-      w27State.run.stop_requested = true;
+    } else if (runCatalog.run) {
+      runCatalog.run.stop_requested = true;
     }
   } catch (e) {
     console.warn('[CFD] sim stop', e);
@@ -31500,26 +30655,21 @@ async function stopSolveClient() {
   await pollSimRunStatus();
 }
 
-window.__CFD_W27_START__ = startSolveClient;
-window.__CFD_W27_STOP__ = stopSolveClient;
 
 async function activateRunClient(runId) {
   if (!runId) return null;
-  const r = await fetch('/api/run/activate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      run_id: runId,
-      project_id: currentProjectId() || undefined,
-      ...runRequestStudyIds(runId),
-    }),
+  const posted = await postJson('/api/run/activate', {
+    run_id: runId,
+    project_id: currentProjectId() || undefined,
+    ...runRequestStudyIds(runId),
   });
-  const j = await r.json();
+  const r = posted.response;
+  const j = posted.json;
   if (!r.ok || (j && j.ok === false)) {
     throw new Error((j && j.error) || 'Could not open run');
   }
-  w27State.selected_run_id = runId;
-  if (j && j.run) w27State.run = j.run;
+  runCatalog.selected_run_id = runId;
+  if (j && j.run) runCatalog.run = j.run;
   applyRunCatalog(j);
   syncSimControlPanel();
   return j;
@@ -31527,133 +30677,64 @@ async function activateRunClient(runId) {
 
 async function renameActiveRunClient(name) {
   const runId =
-    w27State.selected_run_id ||
-    (w27State.run && (w27State.run.run_id || w27State.run.id)) ||
-    w27State.active_run_id;
+    runCatalog.selected_run_id ||
+    (runCatalog.run && (runCatalog.run.run_id || runCatalog.run.id)) ||
+    runCatalog.active_run_id;
   if (!runId) return;
   const next = String(name || '').trim();
   if (!next) return;
-  if (w27State.run) w27State.run.name = next;
-  const r = await fetch('/api/run/rename', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      run_id: runId,
-      name: next,
-      project_id: currentProjectId() || undefined,
-      ...runRequestStudyIds(runId),
-    }),
+  if (runCatalog.run) runCatalog.run.name = next;
+  const posted = await postRunRename({
+    run_id: runId,
+    name: next,
+    project_id: currentProjectId() || undefined,
+    ...runRequestStudyIds(runId),
   });
-  const j = await r.json();
+  const r = posted.response;
+  const j = posted.json;
   if (j && j.ok) applyRunCatalog(j);
   syncSimControlPanel();
 }
 
 (function wireSimControlPanel() {
-  const endEl = document.getElementById('sim-end-time');
-  const wiEl = document.getElementById('sim-write-interval');
-  const startBtn = document.getElementById('btn-sim-start');
-  const stopBtn = document.getElementById('btn-sim-stop');
-  document.getElementById('sim-run-hint')?.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-setup-fix]');
-    if (!btn) return;
-    e.preventDefault();
-    openSetupFix(w27State.start_fix);
-  });
-  wireSimPlotHover();
-  const persist = () => { persistSimControl().catch(() => {}); };
-  endEl?.addEventListener('change', persist);
-  wiEl?.addEventListener('change', persist);
-  // W30 transient inputs: save on change (like the steady rows); the hint's
-  // frame interval follows keystrokes so the user sees it before committing.
-  const persistTr = () => { persistTransientSettings().catch(() => {}); };
-  for (const id of Object.values(TRANSIENT_FORM_IDS)) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    el.addEventListener('change', persistTr);
-    if (el.tagName === 'INPUT') {
-      el.addEventListener('input', () => {
-        w27State.transient = readTransientForm();
-        if (id === TRANSIENT_FORM_IDS.end_time || id === TRANSIENT_FORM_IDS.write_count) {
-          syncTransientMaxDtField(w27State.transient);
-        }
-        renderTransientHint();
-      });
-    }
-  }
-  document.getElementById('sim-tr-step-mode')?.addEventListener('change', () => {
-    fillTransientForm(readTransientForm(), false);
-  });
-  document.getElementById('sim-tr-reset')?.addEventListener('click', () => {
-    const cur = readTransientForm();
-    const next = { ...TRANSIENT_DEFAULTS_CLIENT, end_time: cur.end_time, write_count: cur.write_count };
-    w27State.transient = next;
-    fillTransientForm(next, false);
-    persistTr();
-  });
-  startBtn?.addEventListener('click', () => {
-    onSimStartClick().catch((e) => console.error('[CFD] start', e));
-  });
-  stopBtn?.addEventListener('click', () => {
-    stopSolveClient().catch((e) => console.error('[CFD] stop', e));
-  });
-  const titleEl = document.getElementById('run-panel-title');
-  const renameBtn = document.getElementById('sim-rename');
-  const renameIn = document.getElementById('sim-rename-input');
-  const stopRename = (commit) => {
-    if (!renameIn || !titleEl || !renameBtn) return;
-    if (commit) {
-      const next = String(renameIn.value || '').trim() || (w27State.run && w27State.run.name) || 'Run 1';
-      titleEl.textContent = next;
-      renameActiveRunClient(next).catch((e) => console.warn('[CFD] run rename', e));
-    }
-    renameIn.hidden = true;
-    titleEl.hidden = false;
-    renameBtn.hidden = !selectedRunRecord();
+  window.__CFD_SIM_START__ = onSimStartClick;
+  window.__CFD_SIM_STOP__ = stopSolveClient;
+  /* React run panel (src/panels/run/RunControl.tsx) acts only through these. */
+  window.__CFD_RUN_STATE_NOW__ = () => window.__CFD_RUN_STATE__ || publishRunState();
+  window.__CFD_RUN_GATE__ = () => {
+    const st = computeRunState();
+    return {
+      run_id: st.run_id,
+      canStart: st.can_start,
+      running: st.running,
+      done: st.done,
+      failed: st.status === 'failed',
+      transient: st.transient,
+      reasons: st.reason ? [st.reason.text] : [],
+    };
   };
-  const startRename = () => {
-    const rec = selectedRunRecord() || w27State.run;
-    if (!renameIn || !titleEl || !renameBtn || !rec) return;
-    renameIn.value = rec.name || 'Run 1';
-    titleEl.hidden = true;
-    renameBtn.hidden = true;
-    renameIn.hidden = false;
-    renameIn.focus();
-    renameIn.select();
+  window.__CFD_RUN_SAVE__ = (patch) => persistSimControl(patch || {});
+  window.__CFD_RUN_TRANSIENT_SAVE__ = (t) => persistTransientSettings(t);
+  window.__CFD_RUN_TRANSIENT_RESET__ = () => {
+    const cur = normalizeTransient(runCatalog.transient);
+    return persistTransientSettings({ ...TRANSIENT_DEFAULTS_CLIENT, end_time: cur.end_time, write_count: cur.write_count });
   };
-  renameBtn?.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    startRename();
-  });
-  renameIn?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      stopRename(true);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      stopRename(false);
+  window.__CFD_RUN_RENAME__ = (name) => renameActiveRunClient(String(name || '').trim() || 'Run 1');
+  window.__CFD_RUN_DELETE__ = () => deleteSelectedRunClient();
+  window.__CFD_RUN_COPY_PICK__ = (on) => {
+    if (on) {
+      const rec = selectedRunRecord();
+      if (rec) startRunCopyPick(rec.id);
+    } else {
+      endRunCopyPick();
+      syncRunCopyUi();
     }
-  });
-  renameIn?.addEventListener('blur', () => stopRename(true));
+  };
+  window.__CFD_RUN_COPY_FROM__ = (id) => copyRunSettingsFrom(id);
+  window.__CFD_RUN_SETUP_FIX__ = () => openSetupFix(runCatalog.start_fix);
   document.getElementById('btn-create-run')?.addEventListener('click', () => {
     createRunClient().catch((e) => console.error('[CFD] create run', e));
   });
-  document.getElementById('sim-copy-open')?.addEventListener('click', () => {
-    const rec = selectedRunRecord();
-    if (rec) startRunCopyPick(rec.id);
-  });
-  document.getElementById('sim-copy-cancel')?.addEventListener('click', () => {
-    endRunCopyPick();
-    try { syncRunCopyUi(); } catch (_) {}
-  });
-  const copySel = document.getElementById('sim-copy-run');
-  const onCopySel = (e) => {
-    const id = e.target && e.target.value;
-    if (id) copyRunSettingsFrom(id).catch((err) => console.warn('[CFD] copy run', err));
-  };
-  copySel?.addEventListener('change', onCopySel);
-  copySel?.addEventListener('input', onCopySel);
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !runCopyPick) return;
     endRunCopyPick();
@@ -31665,10 +30746,11 @@ async function renameActiveRunClient(name) {
       createRunClient().catch((err) => console.error('[CFD] create run', err));
     }
   });
-  document.getElementById('sim-run-delete')?.addEventListener('click', () => {
-    deleteSelectedRunClient().catch((e) => console.error('[CFD] delete run', e));
-  });
   document.getElementById('run-mesh-hub-list')?.addEventListener('click', (e) => {
+    if (e.target.closest('[data-run-mesh-create]')) {
+      openSetupFix({ go: 'mesh-hub' });
+      return;
+    }
     const btn = e.target.closest('[data-assign-run-mesh]');
     if (!btn || btn.disabled) return;
     const mid = btn.getAttribute('data-assign-run-mesh');
@@ -31684,12 +30766,12 @@ async function renameActiveRunClient(name) {
   fetch('/api/simulation-control' + hashProjectQs())
     .then((r) => r.json())
     .then((j) => {
-      if (j && j.endTime) w27State.endTime = j.endTime;
-      if (j && j.writeInterval) w27State.writeInterval = j.writeInterval;
+      if (j && j.endTime) runCatalog.endTime = j.endTime;
+      if (j && j.writeInterval) runCatalog.writeInterval = j.writeInterval;
       syncSimControlPanel();
     })
     .catch(() => {});
-  fetch('/api/run/status' + hashProjectQs(), { cache: 'no-store' })
+  if (runStatusPollEnabled()) fetch('/api/run/status' + hashProjectQs(), { cache: 'no-store' })
     .then((r) => r.json())
     .then((j) => {
       if (j) applyRunCatalog(j);
@@ -31698,20 +30780,20 @@ async function renameActiveRunClient(name) {
         return;
       }
       if (j && j.run) {
-        w27State.run = j.run;
-        if (!w27State.selected_run_id && (j.active_run_id || j.run.run_id || j.run.id)) {
-          w27State.selected_run_id = j.active_run_id || j.run.run_id || j.run.id;
+        runCatalog.run = j.run;
+        if (!runCatalog.selected_run_id && (j.active_run_id || j.run.run_id || j.run.id)) {
+          runCatalog.selected_run_id = j.active_run_id || j.run.run_id || j.run.id;
         }
         if (j.run.status === 'running' || j.live_run_id) {
           startSimElapsedClock();
           startSimPoll();
         }
-      } else if (!w27State.selected_run_id && j && j.active_run_id) {
-        w27State.selected_run_id = j.active_run_id;
+      } else if (!runCatalog.selected_run_id && j && j.active_run_id) {
+        runCatalog.selected_run_id = j.active_run_id;
       }
       if (j && j.simulation_control) {
-        if (j.simulation_control.endTime) w27State.endTime = j.simulation_control.endTime;
-        if (j.simulation_control.writeInterval) w27State.writeInterval = j.simulation_control.writeInterval;
+        if (j.simulation_control.endTime) runCatalog.endTime = j.simulation_control.endTime;
+        if (j.simulation_control.writeInterval) runCatalog.writeInterval = j.simulation_control.writeInterval;
       }
       syncSimControlPanel();
     })
@@ -32040,7 +31122,7 @@ async function renameActiveRunClient(name) {
   function findMonitorByPatch(patch) {
     if (patch == null || patch === '') return null;
     const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
-    const runId = (rec && rec.id) || (typeof w22State !== 'undefined' && w22State.editing_run_id) || null;
+    const runId = (rec && rec.id) || (typeof resultCatalog !== 'undefined' && resultCatalog.editing_run_id) || null;
     const data = runId ? monState.byRun[runId] : null;
     const hit = ((data && data.monitors) || []).find((x) => String(x.patch) === String(patch));
     if (hit) return hit;
@@ -32053,7 +31135,7 @@ async function renameActiveRunClient(name) {
 
   function monitorRunRecord() {
     const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
-    const runId = (rec && rec.id) || (typeof w22State !== 'undefined' && w22State.editing_run_id) || null;
+    const runId = (rec && rec.id) || (typeof resultCatalog !== 'undefined' && resultCatalog.editing_run_id) || null;
     const data = runId ? monState.byRun[runId] : null;
     if (data && data.run_id && typeof findRunRecord === 'function') {
       const fromData = findRunRecord(data.run_id);
@@ -32383,7 +31465,7 @@ async function renameActiveRunClient(name) {
   }
 
   function pendingCards() {
-    const bcs = (typeof w19State !== 'undefined' && Array.isArray(w19State.bcs) ? w19State.bcs : []).filter((bc) =>
+    const bcs = (typeof bcCatalog !== 'undefined' && Array.isArray(bcCatalog.bcs) ? bcCatalog.bcs : []).filter((bc) =>
       Array.isArray(bc.faces) && bc.faces.length
     );
     if (!bcs.length) return '<div class="mon-empty">Add a velocity inlet and a pressure outlet first.</div>';
@@ -32476,9 +31558,9 @@ async function renameActiveRunClient(name) {
     if (!wrap || !list) return;
     wireMonPlotHover(list);
     wireMonCardControls(list);
-    const runId = (typeof w22State !== 'undefined' && w22State.editing_run_id) || (w27State && w27State.selected_run_id);
+    const runId = (typeof resultCatalog !== 'undefined' && resultCatalog.editing_run_id) || (runCatalog && runCatalog.selected_run_id);
     const data = runId ? monState.byRun[runId] : null;
-    const faces = new Set(((typeof w22State !== 'undefined' && w22State.draft_faces) || []).map(String));
+    const faces = new Set(((typeof resultCatalog !== 'undefined' && resultCatalog.draft_faces) || []).map(String));
     const mons = ((data && data.monitors) || []).filter((m) => (m.faces || []).some((f) => faces.has(String(f))));
     if (!mons.length) {
       wrap.hidden = true;
@@ -32535,7 +31617,7 @@ async function renameActiveRunClient(name) {
   showAaPanel = function patchedShowAaPanelMonitors() {
     _prevShowAaPanel();
     renderAaMonitorValues();
-    const runId = w22State.editing_run_id || w27State.selected_run_id;
+    const runId = resultCatalog.editing_run_id || runCatalog.selected_run_id;
     if (runId && !monState.byRun[runId]) refreshRunMonitors(runId);
   };
 
@@ -32578,6 +31660,20 @@ function mediaItems(owner) {
   return rec && Array.isArray(rec.items) ? rec.items : [];
 }
 
+function mediaStudyId(owner) {
+  const id = String(owner || '');
+  if (id.startsWith('run-')) {
+    const rec = typeof findRunRecord === 'function' ? findRunRecord(id.slice(4)) : null;
+    if (rec && rec.simulation_id) return rec.simulation_id;
+  }
+  if (id.startsWith('mesh-')) {
+    const meshes = typeof meshList === 'function' ? meshList() : [];
+    const mesh = meshes.find((x) => x && String(x.id) === id.slice(5));
+    if (mesh && mesh.simulation_id) return mesh.simulation_id;
+  }
+  return typeof currentStudyId === 'function' ? currentStudyId() : null;
+}
+
 async function ensureMediaLoaded(owner, opts) {
   const o = opts || {};
   const st = mediaStore();
@@ -32587,8 +31683,10 @@ async function ensureMediaLoaded(owner, opts) {
   rec.inflight = true;
   try {
     const pid = typeof currentProjectId === 'function' ? currentProjectId() : null;
+    const sid = mediaStudyId(owner);
     const qs = new URLSearchParams({ owner });
     if (pid) qs.set('project_id', pid);
+    if (sid) qs.set('simulation_id', sid);
     const r = await fetch('/api/media/list?' + qs.toString(), { cache: 'no-store' });
     const j = await r.json();
     const before = rec.items.length;
@@ -32596,7 +31694,7 @@ async function ensureMediaLoaded(owner, opts) {
     rec.loaded = true;
     rec.at = Date.now();
     if (rec.items.length !== before || o.force) {
-      try { syncSimulationTree(); } catch (_) {}
+      try { refreshSetupTree(); } catch (_) {}
     }
     const p = st.panel;
     if (p && mediaOwnerKey(p.ownerKind, p.id) === owner) renderMediaPanel();
@@ -32653,7 +31751,7 @@ function openMediaTreeNode(key) {
   const kind = bits[bits.length - 1];
   const id = bits.slice(2, -1).join(':');
   if (ownerKind === 'run') {
-    w27State.selected_run_id = id;
+    runCatalog.selected_run_id = id;
     treeUi.expanded['run:' + id] = true;
     treeUi.expanded['run-results:' + id] = true;
   } else {
@@ -32755,10 +31853,11 @@ async function deleteMediaItem(owner, item) {
   });
   if (!ok) return false;
   const pid = typeof currentProjectId === 'function' ? currentProjectId() : null;
+  const sid = mediaStudyId(owner);
   const r = await fetch('/api/media/delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ project_id: pid, owner, id: item.id }),
+    body: JSON.stringify({ project_id: pid, simulation_id: sid, owner, id: item.id }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.ok) {
@@ -32778,10 +31877,11 @@ async function renameMediaItem(owner, item) {
   });
   if (!name || name === item.name) return false;
   const pid = typeof currentProjectId === 'function' ? currentProjectId() : null;
+  const sid = mediaStudyId(owner);
   const r = await fetch('/api/media/rename', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ project_id: pid, owner, id: item.id, name }),
+    body: JSON.stringify({ project_id: pid, simulation_id: sid, owner, id: item.id, name }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.ok) return false;
@@ -32867,7 +31967,7 @@ function openMediaView(owner, item) {
           markTreeSelected('runresults:' + p.id);
           await openRunResults(p.id);
         }
-      } else if (!meshInspectOpen || String((w20State && w20State.active_id) || '') !== String(p.id)) {
+      } else if (!meshInspectOpen || String((meshCatalog && meshCatalog.active_id) || '') !== String(p.id)) {
         if (resultsViewOpen) hideRunResultsView({ silent: true });
         markTreeSelected('meshid:' + p.id);
         await activateMeshClient(p.id);
@@ -33083,9 +32183,9 @@ function captureOwnerForMesh(meshId) {
 function captureOwner() {
   if (resultsViewOpen && resultsRunId && !meshCompareOn()) return captureOwnerForRun(resultsRunId);
   if (meshCompareOn()) {
-    return captureOwnerForMesh(compareState.leftId || (w20State && w20State.active_id));
+    return captureOwnerForMesh(compareState.leftId || (meshCatalog && meshCatalog.active_id));
   }
-  const mid = meshInspectOpen && w20State ? w20State.active_id : null;
+  const mid = meshInspectOpen && meshCatalog ? meshCatalog.active_id : null;
   if (mid) return captureOwnerForMesh(mid);
   return null;
 }
@@ -33118,8 +32218,10 @@ function captureOwners() {
 
 async function uploadCaptureToOwner(own, cap, nm) {
   const pid = typeof currentProjectId === 'function' ? currentProjectId() : null;
+  const sid = mediaStudyId(own.owner);
   const qs = new URLSearchParams({ owner: own.owner, kind: cap.kind, name: nm, ext: cap.ext });
   if (pid) qs.set('project_id', pid);
+  if (sid) qs.set('simulation_id', sid);
   if (cap.width) qs.set('width', String(cap.width));
   if (cap.height) qs.set('height', String(cap.height));
   if (cap.duration) qs.set('duration', String(Math.round(cap.duration * 10) / 10));
@@ -34099,7 +33201,7 @@ function renderGraphsPanel(runId) {
     st.graphs.timer = 0;
   }
   st.graphs = { runId, timer: 0 };
-  if (typeof w27State !== 'undefined' && runId) w27State.selected_run_id = runId;
+  if (typeof runCatalog !== 'undefined' && runId) runCatalog.selected_run_id = runId;
   if (typeof syncResultsHub === 'function') syncResultsHub();
   const rec = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
   if (rec && runHasStarted(rec) && typeof window.__CFD_REFRESH_MONITORS__ === 'function') {
@@ -34259,7 +33361,7 @@ function cssSelAttr(value) {
 }
 
 function activeStudyScopeSel() {
-  const sid = typeof w17State !== 'undefined' && w17State.activeId;
+  const sid = typeof studyCatalog !== 'undefined' && studyCatalog.activeId;
   if (!sid) return '';
   return '[data-w17-sim-id="' + cssSelAttr(sid) + '"] ';
 }
@@ -34279,8 +33381,8 @@ function markTreeSelected(key) {
   if (!key) return;
   const studyScope = activeStudyScopeSel();
   const map = {
-    incompressible: w17State.activeId
-      ? '[data-w17-sim-id="' + cssSelAttr(w17State.activeId) + '"]'
+    incompressible: studyCatalog.activeId
+      ? '[data-w17-sim-id="' + cssSelAttr(studyCatalog.activeId) + '"]'
       : '[data-w17-sim="1"]',
     geometry: '[data-w17-geo="1"]',
     materials: studyScope + '[data-w18-materials="1"]',
@@ -34456,7 +33558,7 @@ async function applyTreeIntent(intent) {
       try { await scopeRefsToMesh(intent.meshId); } catch (_) {}
     }
     if (intent.gen != null && intent.gen !== studySwitchGen) return;
-    const hit = ((w26State && w26State.refinements) || []).find(
+    const hit = ((refinementCatalog && refinementCatalog.refinements) || []).find(
       (r) => r && String(r.id) === String(intent.id)
     );
     if (hit && typeof showRefEditor === 'function') showRefEditor(hit);
@@ -34471,7 +33573,7 @@ async function applyTreeIntent(intent) {
     }
     if (intent.gen != null && intent.gen !== studySwitchGen) return;
     markTreeSelected(intent.meshId ? 'refs:' + intent.meshId : 'refs');
-    openTreeDetail('refs-hub', { toggle: false });
+    openTreeDetail('refs-hub', { toggle: false, gen: intent.gen });
     if (typeof showRefsOverview === 'function') showRefsOverview();
     try { syncRefCopyUi(); } catch (_) {}
     return;
@@ -34562,7 +33664,7 @@ function studyOrderFromPointer(clientY, nodes, dragId) {
 }
 
 function applyStudyOrderLocal(ids, geometryId) {
-  const list = ((w17State && w17State.simulations) || []).slice();
+  const list = ((studyCatalog && studyCatalog.simulations) || []).slice();
   if (!list.length) return false;
   const gid = geometryId != null && String(geometryId).trim() ? String(geometryId) : '';
   const byId = new Map(list.map((s) => [String(s.id), s]));
@@ -34587,9 +33689,9 @@ function applyStudyOrderLocal(ids, geometryId) {
     }
     if (!inserted) next.push(...ordered);
   }
-  w17State.simulations = next.map((s, i) => ({ ...s, sort_index: i }));
-  writeStudyOrderLock(w17State.simulations.map((s) => String(s.id)));
-  try { syncSimulationTree(); } catch (_) {}
+  studyCatalog.simulations = next.map((s, i) => ({ ...s, sort_index: i }));
+  writeStudyOrderLock(studyCatalog.simulations.map((s) => String(s.id)));
+  try { refreshSetupTree(); } catch (_) {}
   return true;
 }
 
@@ -34653,12 +33755,15 @@ function applyStudyDropOrder(ids, geometryId) {
       const insert =
         dragInsert ||
         studyOrderFromPointer(e.clientY, studyDragSiblings(dragStudyNode), dragStudyId);
-      const rec = (w17State.simulations || []).find((s) => s && String(s.id) === String(dragStudyId));
+      const rec = (studyCatalog.simulations || []).find((s) => s && String(s.id) === String(dragStudyId));
       const ids = insert && !insert.unchanged ? insert.ids : null;
       clearStudyDrag();
       if (ids) applyStudyDropOrder(ids, rec && rec.geometry_id);
     });
     tree.addEventListener('click', (e) => {
+      const scopedNode = e.target.closest && e.target.closest('[data-scope-key]');
+      const rowScope = scopedNode && scopedNode.getAttribute('data-scope-key');
+      if (rowScope && !scopeBelongsToProject(rowScope, String(currentProjectId() || ''))) return;
       const refsPlus = e.target.closest('[data-refs-plus]');
       if (refsPlus) {
         e.preventDefault();
@@ -34681,7 +33786,7 @@ function applyStudyDropOrder(ids, geometryId) {
         const go = () => {
           try { openBcTypeModal(); } catch (_) {}
         };
-        if (sid && String(w17State.activeId || '') !== String(sid)) {
+        if (sid && String(studyCatalog.activeId || '') !== String(sid)) {
           selectStudyClient(sid).then(go).catch((err) => console.warn('[CFD] study', err));
         } else {
           go();
@@ -34696,7 +33801,7 @@ function applyStudyDropOrder(ids, geometryId) {
         const go = () => {
           try { openMaterialLibrary(); } catch (_) {}
         };
-        if (sid && String(w17State.activeId || '') !== String(sid)) {
+        if (sid && String(studyCatalog.activeId || '') !== String(sid)) {
           selectStudyClient(sid).then(go).catch((err) => console.warn('[CFD] study', err));
         } else {
           go();
@@ -34707,7 +33812,7 @@ function applyStudyDropOrder(ids, geometryId) {
       if (rcPlus) {
         e.preventDefault();
         e.stopPropagation();
-        const rid = rcPlus.getAttribute('data-w27-run-plus') || w27State.selected_run_id || w27State.active_run_id;
+        const rid = rcPlus.getAttribute('data-w27-run-plus') || runCatalog.selected_run_id || runCatalog.active_run_id;
         try { openRcTypeModal(rid); } catch (_) {}
         return;
       }
@@ -34734,6 +33839,13 @@ function applyStudyDropOrder(ids, geometryId) {
         node.classList.toggle('expanded', next);
         treeUi.expanded[label] = next;
         tw.textContent = next ? '-' : '+';
+        try { persistTreeExpanded(); } catch (_) {}
+        try {
+          applyTreeSession({
+            expanded: { ...(treeUi.expanded || {}) },
+            selectedKey: treeUi.selectedKey || null,
+          });
+        } catch (_) {}
         return;
       }
       // Prefer the tree-node that owns the clicked .tree-row so a click on
@@ -34745,6 +33857,9 @@ function applyStudyDropOrder(ids, geometryId) {
           ? clickedRow.parentElement
           : e.target.closest('.tree-node');
       if (!node) return;
+      const scopeNode = node.closest ? node.closest('[data-scope-key]') : null;
+      const rowScopeKey = (scopeNode && scopeNode.getAttribute('data-scope-key')) || '';
+      if (!rowScopeKey || !scopeBelongsToProject(rowScopeKey, String(currentProjectId() || ''))) return;
       e.stopPropagation();
       if (runCopyPick && runCopyPick.destId) {
         const srcId = runIdFromCopyTreeNode(node);
@@ -34786,7 +33901,7 @@ function applyStudyDropOrder(ids, geometryId) {
             node.matches(
               '[data-w27-run-results], [data-w17-sim-id], [data-w17-sim="1"], [data-w16-geom]'
             ) ||
-            !!(leaveSid && String(w17State.activeId || '') !== String(leaveSid)),
+            !!(leaveSid && String(studyCatalog.activeId || '') !== String(leaveSid)),
         });
       }
       if (!node.matches('[data-w27-run-results]') && resultsViewOpen) {
@@ -34801,7 +33916,7 @@ function applyStudyDropOrder(ids, geometryId) {
         const sid = node.getAttribute('data-w17-sim-id');
         if (e.target.closest('.tw')) return;
         const go = () => activateTreePanel('incompressible', 'incompressible');
-        if (sid && w17State.activeId !== sid) {
+        if (sid && studyCatalog.activeId !== sid) {
           selectStudyClient(sid).then(go).catch((err) => console.warn('[CFD] study', err));
         } else {
           go();
@@ -34810,7 +33925,7 @@ function applyStudyDropOrder(ids, geometryId) {
       }
       const otherStudy = node.closest('[data-w17-sim-id]');
       const otherSid = otherStudy && otherStudy.getAttribute('data-w17-sim-id');
-      if (otherSid && String(w17State.activeId || '') !== String(otherSid)) {
+      if (otherSid && String(studyCatalog.activeId || '') !== String(otherSid)) {
         if (meshCopyPick && applyMeshCopyFromTree(meshIdFromCopyTreeNode(node))) {
           e.preventDefault();
           return;
@@ -34883,7 +33998,7 @@ function applyStudyDropOrder(ids, geometryId) {
       }
       if (node.matches('[data-w18-materials="1"]')) {
         if (closeIfTreeItemOpen('materials')) return;
-        const hasAir = !!(window.__CFD_W18_STATE__ && window.__CFD_W18_STATE__.material);
+        const hasAir = !!(materialCatalog && materialCatalog.material);
         if (hasAir) {
           markTreeSelected('materials');
           openMaterialsHub();
@@ -34901,9 +34016,7 @@ function applyStudyDropOrder(ids, geometryId) {
           ensureBcInActiveList(hit);
           showBcEditor(hit);
         }
-        if (faceName && typeof focusAssignedFace === 'function') {
-          focusAssignedFace(faceName, { toggle: false });
-        }
+        if (faceName && typeof toggleAssignFace === 'function') toggleAssignFace(faceName);
         return;
       }
       if (node.matches('[data-w19-defaults]')) {
@@ -34914,7 +34027,17 @@ function applyStudyDropOrder(ids, geometryId) {
       if (node.matches('[data-w19-bc]')) {
         const id = node.getAttribute('data-w19-bc');
         if (closeIfTreeItemOpen('bcid:' + id)) return;
-        const hit = findBcRecord(id);
+        let hit = findBcRecord(id);
+        if (!hit) {
+          const label = node.querySelector(':scope > .tree-row .tl');
+          const name = label && String(label.textContent || '').trim();
+          const lists = [bcCatalog.bcs, bcCatalog.bcs_all];
+          for (const list of lists) {
+            if (!Array.isArray(list)) continue;
+            hit = list.find((b) => b && name && String(b.name) === name) || null;
+            if (hit) break;
+          }
+        }
         if (hit && typeof showBcEditor === 'function') {
           ensureBcInActiveList(hit);
           showBcEditor(hit);
@@ -34922,21 +34045,21 @@ function applyStudyDropOrder(ids, geometryId) {
         return;
       }
       if (node.matches('[data-w19-vi="1"]')) {
-        const list = (window.__CFD_W19_STATE__ && window.__CFD_W19_STATE__.bcs) || [];
+        const list = (bcCatalog && bcCatalog.bcs) || [];
         const hit = list.find((b) => b.bc_type === 'Velocity inlet');
         if (hit && typeof showBcEditor === 'function') showBcEditor(hit);
         else if (typeof showBcPanel === 'function') showBcPanel('vi');
         return;
       }
       if (node.matches('[data-w19-po="1"]')) {
-        const list = (window.__CFD_W19_STATE__ && window.__CFD_W19_STATE__.bcs) || [];
+        const list = (bcCatalog && bcCatalog.bcs) || [];
         const hit = list.find((b) => String(b.bc_type || '').startsWith('Pressure'));
         if (hit && typeof showBcEditor === 'function') showBcEditor(hit);
         else if (typeof showBcPanel === 'function') showBcPanel('po');
         return;
       }
       if (node.matches('[data-w19-bcs="1"]')) {
-        const st = window.__CFD_W19_STATE__ || {};
+        const st = bcCatalog || {};
         const hasAny = Array.isArray(st.bcs) && st.bcs.length > 0;
         const bcOpen =
           treeUi.openPanel === 'bc-picker' ||
@@ -34961,7 +34084,7 @@ function applyStudyDropOrder(ids, geometryId) {
       if (node.matches('[data-w26-face]')) {
         const parentId = node.getAttribute('data-w26-parent');
         const faceName = node.getAttribute('data-w26-face') || node.getAttribute('data-label');
-        const list = (window.__CFD_W26_STATE__ && window.__CFD_W26_STATE__.refinements) || [];
+        const list = (refinementCatalog && refinementCatalog.refinements) || [];
         const hit = list.find((r) => r.id === parentId);
         if (hit && typeof showRefEditor === 'function') showRefEditor(hit);
         if (faceName && typeof focusAssignedRefFace === 'function') {
@@ -34972,7 +34095,7 @@ function applyStudyDropOrder(ids, geometryId) {
       if (node.matches('[data-w26-ref]')) {
         const id = node.getAttribute('data-w26-ref');
         if (closeIfTreeItemOpen('refid:' + id)) return;
-        const list = (window.__CFD_W26_STATE__ && window.__CFD_W26_STATE__.refinements) || [];
+        const list = (refinementCatalog && refinementCatalog.refinements) || [];
         const hit = list.find((r) => r.id === id);
         if (hit && typeof showRefEditor === 'function') showRefEditor(hit);
         return;
@@ -35050,7 +34173,7 @@ function applyStudyDropOrder(ids, geometryId) {
           return;
         }
         if (rid) {
-          w27State.selected_run_id = rid;
+          runCatalog.selected_run_id = rid;
           expandRunFolders(rid, 'mesh');
         }
         holdTreeScroll(2500);
@@ -35144,18 +34267,18 @@ function applyStudyDropOrder(ids, geometryId) {
       if (resultsViewOpen) hideRunResultsView();
       if (item && item.dataset.geomId) {
         const gid = item.dataset.geomId;
-        const studies = (w17State.simulations || []).filter(
+        const studies = (studyCatalog.simulations || []).filter(
           (s) => s && String(s.geometry_id || '') === String(gid)
         );
         const pick =
-          studies.find((s) => String(s.id) === String(w17State.activeId || '')) || studies[0] || null;
+          studies.find((s) => String(s.id) === String(studyCatalog.activeId || '')) || studies[0] || null;
         treeUi.expanded['geom:' + gid] = true;
         if (pick) {
           selectStudyClient(pick.id)
             .then(() => {
               treeUi.expanded['study:' + pick.id] = true;
               markTreeSelected('incompressible');
-              if (typeof syncSimulationTree === 'function') syncSimulationTree();
+              if (typeof refreshSetupTree === 'function') refreshSetupTree();
             })
             .catch((err) => console.warn('[CFD] geom study', err));
           return;
@@ -35180,46 +34303,6 @@ function applyStudyDropOrder(ids, geometryId) {
   window.addEventListener('cfd:panel-done', () => {
     try { dismissTreeDetail(); } catch (_) {}
   });
-  document.getElementById('geo-detail-close')?.addEventListener('click', () => {
-    dismissTreeDetail();
-  });
-  document.getElementById('geo-delete')?.addEventListener('click', () => {
-    const id = w16State.selectedGeomId;
-    if (!id) return;
-    confirmAction({
-      title: 'Remove this geometry?',
-      copy: 'Only the CAD is removed. Simulations stay so you can delete them separately.',
-      yes: 'Remove',
-    }).then((ok) => {
-      if (ok) removeGeometryClient(id).catch((e) => console.error('[CFD W16] remove geometry', e));
-    });
-  });
-  document.getElementById('mat-picker-close')?.addEventListener('click', () => closeMaterialLibrary());
-  document.getElementById('mat-picker-apply')?.addEventListener('click', () => applyMaterialFromLibrary());
-  document.querySelectorAll('#panel-material-picker .ml-type:not([disabled])').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#panel-material-picker .ml-type').forEach((b) => b.classList.remove('is-selected'));
-      btn.classList.add('is-selected');
-    });
-  });
-  document.getElementById('bc-picker-close')?.addEventListener('click', () => closeBcTypeModal());
-  document.getElementById('bc-picker-apply')?.addEventListener('click', () => {
-    const sel = document.querySelector('#panel-bc-picker .ml-type.is-selected');
-    const t = sel ? sel.getAttribute('data-bc-type') : 'Velocity inlet';
-    const faces = typeof pendingCadFaceLabels === 'function' ? pendingCadFaceLabels() : [];
-    closeBcTypeModal();
-    if (typeof createBcClient === 'function') {
-      createBcClient(t, { faces }).catch((e) => console.error('[CFD] BC create', e));
-    } else if (typeof showBcPanel === 'function') {
-      showBcPanel(t);
-    }
-  });
-  document.querySelectorAll('#panel-bc-picker .ml-type:not([disabled])').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#panel-bc-picker .ml-type').forEach((b) => b.classList.remove('is-selected'));
-      btn.classList.add('is-selected');
-    });
-  });
   document.getElementById('ref-picker-close')?.addEventListener('click', () => closeRefTypeModal());
   document.getElementById('ref-picker-apply')?.addEventListener('click', () => {
     const sel = document.querySelector('#panel-ref-picker .ml-type.is-selected');
@@ -35237,3 +34320,68 @@ function applyStudyDropOrder(ids, geometryId) {
     });
   });
 })();
+
+async function compareProjectRuns(runA, runB) {
+  const runs = typeof projectRunList === 'function' ? projectRunList() : [];
+  const a = runs.find((rec) => rec && String(rec.id) === String(runA));
+  const b = runs.find((rec) => rec && String(rec.id) === String(runB));
+  if (!a || !b || String(runA) === String(runB)) {
+    throw new Error('Both runs must belong to the open project');
+  }
+  if ((a.case_dir && !caseBelongsToCurrentProject(a.case_dir)) || (b.case_dir && !caseBelongsToCurrentProject(b.case_dir))) {
+    throw new Error('case_dir is outside this project');
+  }
+  if (!resultsViewOpen || String(resultsRunId) !== String(a.id)) {
+    await openRunResults(a.id);
+  }
+  compareState.savedCam = snapshotCamera(renderer.getActiveCamera());
+  compareState.on = true;
+  compareState.mode = 'results';
+  compareState.resA = String(a.id) + '|';
+  compareState.resB = String(b.id) + '|';
+  fillResultsCompareSelects();
+  const bar = document.getElementById('compare-bar');
+  if (bar) bar.hidden = false;
+  setCompareButtonOn(true);
+  applyCompareLayout(true);
+  await waitForViewerPaint();
+  ensureCompareViewer();
+  ensureCompareResults();
+  bindCompareCameraSync();
+  await loadResultsCompareB();
+  syncCompareCamerasFromLeft();
+}
+
+window.__CFD_HOST_SURFACES__ = {
+  setLegendRange(lo, hi) {
+    setScaleOverride('magU', Number(lo), Number(hi));
+  },
+  setTimeline(time) {
+    return setAnimationTime(String(time));
+  },
+  timelineTimes() {
+    return (animState.times || []).map(String);
+  },
+  inspect(casePos) {
+    return addInspectPoint({ casePos: casePos.slice(), additive: false });
+  },
+  compareRuns: compareProjectRuns,
+};
+
+bindSetupHost({
+  viewingBcId,
+  readBcEditorDraft,
+  applyBcRecords,
+  currentStudyId,
+  viewingMeshId,
+  settingsOwnedByMesh,
+  meshDisplayName,
+  currentMeshProjectId,
+  currentMeshStudyIds,
+  findMeshRecord,
+  cloneMeshSettings,
+  updateMeshListEntry,
+  rememberMeshDraft,
+  applyMeshRecord,
+  publishMesh: publishW20,
+});

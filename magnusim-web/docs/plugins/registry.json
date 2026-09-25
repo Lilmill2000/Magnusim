@@ -1,0 +1,1610 @@
+{
+  "analysis": [
+    {
+      "key": "incompressible_steady",
+      "label": "Incompressible Fluid Flow",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "turbulence_model": {
+            "type": "string",
+            "default": "kOmegaSST",
+            "enum": [
+              "laminar",
+              "kEpsilon",
+              "kOmegaSST",
+              "LRR",
+              "SSG"
+            ],
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Turbulence model"
+          },
+          "passive_species": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 20,
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Passive species"
+          },
+          "energy": {
+            "type": "boolean",
+            "default": false,
+            "x-cfddesk": {
+              "group": "flow",
+              "advanced": true
+            },
+            "title": "Energy"
+          }
+        },
+        "additionalProperties": false
+      },
+      "numerics_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "residual_u": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual U"
+          },
+          "residual_p": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual p"
+          },
+          "relax_u": {
+            "type": "number",
+            "default": 0.7,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation U"
+          },
+          "relax_p": {
+            "type": "number",
+            "default": 0.3,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation p"
+          },
+          "n_non_orthogonal": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 0,
+            "x-cfddesk": {
+              "group": "solution"
+            },
+            "title": "Non-orthogonal correctors"
+          },
+          "ddt_default": {
+            "type": "string",
+            "default": "steadyState",
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true
+            },
+            "title": "Time scheme"
+          }
+        },
+        "additionalProperties": false
+      },
+      "control_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "end_time": {
+            "type": "number",
+            "default": 1000.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "End time"
+          },
+          "write_interval": {
+            "type": "integer",
+            "default": 1000,
+            "minimum": 1,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write interval"
+          },
+          "write_control": {
+            "type": "string",
+            "default": "timeStep",
+            "enum": [
+              "timeStep",
+              "runTime",
+              "adjustableRunTime"
+            ],
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write control"
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "simpleFoam",
+          "version_spec": ""
+        }
+      ],
+      "time_dependency": "steady",
+      "default_turbulence": "kOmegaSST",
+      "default_solver": "simpleFoam",
+      "category": "FLUID DYNAMICS",
+      "turbulence_models": [
+        "laminar",
+        "kEpsilon",
+        "kOmegaSST",
+        "LRR",
+        "SSG"
+      ]
+    },
+    {
+      "key": "incompressible_transient",
+      "label": "Incompressible Fluid Flow (Transient)",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "turbulence_model": {
+            "type": "string",
+            "default": "kOmegaSST",
+            "enum": [
+              "laminar",
+              "kEpsilon",
+              "kOmegaSST",
+              "LRR",
+              "SSG"
+            ],
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Turbulence model"
+          },
+          "passive_species": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 20,
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Passive species"
+          },
+          "energy": {
+            "type": "boolean",
+            "default": false,
+            "x-cfddesk": {
+              "group": "flow",
+              "advanced": true
+            },
+            "title": "Energy"
+          }
+        },
+        "additionalProperties": false
+      },
+      "numerics_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "residual_u": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual U"
+          },
+          "residual_p": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual p"
+          },
+          "relax_u": {
+            "type": "number",
+            "default": 0.7,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation U"
+          },
+          "relax_p": {
+            "type": "number",
+            "default": 0.3,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation p"
+          },
+          "n_non_orthogonal": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 0,
+            "x-cfddesk": {
+              "group": "solution"
+            },
+            "title": "Non-orthogonal correctors"
+          },
+          "ddt_default": {
+            "type": "string",
+            "default": "Euler",
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true
+            },
+            "title": "Time scheme"
+          }
+        },
+        "additionalProperties": false
+      },
+      "control_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "end_time": {
+            "type": "number",
+            "default": 1.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "End time"
+          },
+          "delta_t": {
+            "type": "number",
+            "default": 0.001,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Time step"
+          },
+          "write_interval": {
+            "type": "integer",
+            "default": 50,
+            "minimum": 1,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write interval"
+          },
+          "write_control": {
+            "type": "string",
+            "default": "timeStep",
+            "enum": [
+              "timeStep",
+              "runTime",
+              "adjustableRunTime"
+            ],
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write control"
+          },
+          "max_co": {
+            "type": "number",
+            "default": 1.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true
+            },
+            "title": "Max Courant"
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "pimpleFoam",
+          "version_spec": ""
+        }
+      ],
+      "time_dependency": "transient",
+      "default_turbulence": "kOmegaSST",
+      "default_solver": "pimpleFoam",
+      "category": "FLUID DYNAMICS",
+      "turbulence_models": [
+        "laminar",
+        "kEpsilon",
+        "kOmegaSST",
+        "LRR",
+        "SSG"
+      ]
+    },
+    {
+      "key": "laminar_steady",
+      "label": "Laminar",
+      "plugin": "example-laminar",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "turbulence_model": {
+            "type": "string",
+            "default": "laminar",
+            "enum": [
+              "laminar"
+            ],
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Turbulence model"
+          },
+          "passive_species": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 20,
+            "x-cfddesk": {
+              "group": "flow"
+            },
+            "title": "Passive species"
+          },
+          "energy": {
+            "type": "boolean",
+            "default": false,
+            "x-cfddesk": {
+              "group": "flow",
+              "advanced": true
+            },
+            "title": "Energy"
+          }
+        },
+        "additionalProperties": false
+      },
+      "numerics_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "residual_u": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual U"
+          },
+          "residual_p": {
+            "type": "number",
+            "default": 1e-06,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual p"
+          },
+          "relax_u": {
+            "type": "number",
+            "default": 0.7,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation U"
+          },
+          "relax_p": {
+            "type": "number",
+            "default": 0.3,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation p"
+          },
+          "n_non_orthogonal": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 0,
+            "x-cfddesk": {
+              "group": "solution"
+            },
+            "title": "Non-orthogonal correctors"
+          },
+          "ddt_default": {
+            "type": "string",
+            "default": "steadyState",
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true
+            },
+            "title": "Time scheme"
+          }
+        },
+        "additionalProperties": false
+      },
+      "control_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "end_time": {
+            "type": "number",
+            "default": 1000.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "End time"
+          },
+          "write_interval": {
+            "type": "integer",
+            "default": 1000,
+            "minimum": 1,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write interval"
+          },
+          "write_control": {
+            "type": "string",
+            "default": "timeStep",
+            "enum": [
+              "timeStep",
+              "runTime",
+              "adjustableRunTime"
+            ],
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write control"
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "simpleFoam",
+          "version_spec": ""
+        }
+      ],
+      "time_dependency": "steady",
+      "default_turbulence": "laminar",
+      "default_solver": "simpleFoam",
+      "category": "FLUID DYNAMICS",
+      "turbulence_models": [
+        "laminar"
+      ]
+    }
+  ],
+  "solver": [
+    {
+      "key": "simpleFoam",
+      "label": "simpleFoam (SIMPLE steady)",
+      "plugin": "builtin",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "simpleFoam",
+          "version_spec": ""
+        }
+      ]
+    },
+    {
+      "key": "pimpleFoam",
+      "label": "pimpleFoam (PIMPLE transient)",
+      "plugin": "builtin",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "pimpleFoam",
+          "version_spec": ""
+        }
+      ]
+    },
+    {
+      "key": "simpleFoam_amgx",
+      "label": "simpleFoam + AmgX (p)",
+      "plugin": "builtin",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "simpleFoam",
+          "version_spec": ""
+        },
+        {
+          "kind": "gpu",
+          "name": "cuda",
+          "version_spec": ""
+        }
+      ]
+    }
+  ],
+  "mesher": [
+    {
+      "key": "standard",
+      "label": "Standard",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fineness": {
+            "type": "integer",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Fineness"
+          },
+          "hex_element_core": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Hex element core"
+          },
+          "add_layers": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Add layers"
+          },
+          "sizing_mode": {
+            "type": "string",
+            "default": "automatic",
+            "enum": [
+              "automatic",
+              "manual"
+            ],
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Sizing"
+          },
+          "physics_based": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Physics-based sizing"
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": []
+    },
+    {
+      "key": "cfmesh",
+      "label": "cfMesh cartesianMesh (legacy)",
+      "plugin": "builtin",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "cartesianMesh",
+          "version_spec": ""
+        }
+      ]
+    },
+    {
+      "key": "snappy_hexdominant",
+      "label": "Hex-dominant",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fineness": {
+            "type": "integer",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Fineness"
+          },
+          "add_layers": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Add layers"
+          },
+          "sizing_mode": {
+            "type": "string",
+            "default": "automatic",
+            "enum": [
+              "automatic",
+              "manual"
+            ],
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Sizing"
+          },
+          "physics_based": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Physics-based sizing"
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "snappyHexMesh",
+          "version_spec": ""
+        }
+      ]
+    },
+    {
+      "key": "example_extra_mesher",
+      "label": "Extra mesher",
+      "plugin": "example-extra-mesher",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fineness": {
+            "type": "integer",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Fineness"
+          },
+          "hex_element_core": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Hex element core"
+          },
+          "add_layers": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Add layers"
+          },
+          "sizing_mode": {
+            "type": "string",
+            "default": "automatic",
+            "enum": [
+              "automatic",
+              "manual"
+            ],
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Sizing"
+          },
+          "physics_based": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Physics-based sizing"
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": []
+    }
+  ],
+  "bc": [
+    {
+      "key": "velocity_inlet_fixed",
+      "label": "Velocity inlet",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "direction_mode": {
+            "type": "string",
+            "default": "normal",
+            "enum": [
+              "normal",
+              "vector"
+            ],
+            "title": "Direction"
+          },
+          "speed_m_s": {
+            "type": "number",
+            "default": 20.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Speed"
+          },
+          "velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Velocity vector"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "velocity_inlet_volumetric",
+      "label": "Velocity inlet",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "volumetric_flow_m3_s": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "m\u00b3/s",
+              "rate_kind": "extensive"
+            },
+            "title": "Volumetric flow"
+          },
+          "flow_kind": {
+            "type": "string",
+            "default": "volumetric",
+            "enum": [
+              "volumetric"
+            ],
+            "title": "Kind"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "velocity_inlet_mass",
+      "label": "Velocity inlet",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "mass_flow_kg_s": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "kg/s",
+              "rate_kind": "extensive"
+            },
+            "title": "Mass flow"
+          },
+          "rho": {
+            "type": "number",
+            "default": 1.0,
+            "x-cfddesk": {
+              "unit": "kg/m\u00b3"
+            },
+            "title": "Density"
+          },
+          "flow_kind": {
+            "type": "string",
+            "default": "mass",
+            "enum": [
+              "mass"
+            ],
+            "title": "Kind"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Inlet temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "velocity_outlet",
+      "label": "Velocity outlet",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Velocity vector"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "pressure_outlet_gauge",
+      "label": "Pressure",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gauge_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa",
+              "rate_kind": "intensive"
+            },
+            "title": "Gauge pressure"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "wall_noslip",
+      "label": "Wall",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "thermal_mode": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "fixed_temperature",
+              "fixed_heat_flux",
+              "external_heat_transfer"
+            ],
+            "x-cfddesk": {
+              "energy_only": true
+            },
+            "title": "Thermal"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Temperature"
+          },
+          "heat_flux_W_m2": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2",
+              "energy_only": true,
+              "rate_kind": "extensive"
+            },
+            "title": "Heat flux"
+          },
+          "htc_W_m2K": {
+            "type": "number",
+            "default": 10.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2K",
+              "energy_only": true
+            },
+            "title": "HTC"
+          },
+          "ambient_T_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true
+            },
+            "title": "Ambient T"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    },
+    {
+      "key": "wall_slip",
+      "label": "Wall",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "thermal_mode": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "fixed_temperature",
+              "fixed_heat_flux",
+              "external_heat_transfer"
+            ],
+            "x-cfddesk": {
+              "energy_only": true
+            },
+            "title": "Thermal"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Temperature"
+          },
+          "heat_flux_W_m2": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2",
+              "energy_only": true,
+              "rate_kind": "extensive"
+            },
+            "title": "Heat flux"
+          },
+          "htc_W_m2K": {
+            "type": "number",
+            "default": 10.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2K",
+              "energy_only": true
+            },
+            "title": "HTC"
+          },
+          "ambient_T_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true
+            },
+            "title": "Ambient T"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true
+    }
+  ],
+  "material": [
+    {
+      "key": "newtonian_incompressible",
+      "label": "Newtonian (incompressible)",
+      "plugin": "builtin"
+    }
+  ],
+  "monitor": [
+    {
+      "key": "area_average",
+      "label": "Area average",
+      "plugin": "builtin"
+    },
+    {
+      "key": "flow_rate",
+      "label": "Flow rate",
+      "plugin": "builtin"
+    }
+  ],
+  "filter": [
+    {
+      "key": "cut_plane",
+      "label": "Cutting Plane",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "orientation": {
+            "type": "string",
+            "default": "Y",
+            "enum": [
+              "X",
+              "Y",
+              "Z",
+              "Inverse"
+            ],
+            "title": "Orientation"
+          },
+          "position": {
+            "type": "number",
+            "default": 0.5,
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Position"
+          },
+          "ox": {
+            "type": "number",
+            "default": 0.0,
+            "title": "Origin X"
+          },
+          "oy": {
+            "type": "number",
+            "default": 0.0,
+            "title": "Origin Y"
+          },
+          "oz": {
+            "type": "number",
+            "default": 0.0,
+            "title": "Origin Z"
+          },
+          "nx": {
+            "type": "number",
+            "default": 0.0,
+            "title": "Normal X"
+          },
+          "ny": {
+            "type": "number",
+            "default": 1.0,
+            "title": "Normal Y"
+          },
+          "nz": {
+            "type": "number",
+            "default": 0.0,
+            "title": "Normal Z"
+          },
+          "field": {
+            "type": "string",
+            "default": "magU",
+            "enum": [
+              "magU",
+              "p"
+            ],
+            "title": "Field"
+          },
+          "opacity": {
+            "type": "number",
+            "default": 0.9,
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Opacity"
+          },
+          "case": {
+            "type": "string",
+            "default": "",
+            "title": "Case directory"
+          },
+          "time": {
+            "type": "string",
+            "default": "50",
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tool": "export_cut_plane.py",
+      "cache_scope": "case_time",
+      "output": "vtp"
+    },
+    {
+      "key": "streamlines",
+      "label": "Particle Trace",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "seed_mode": {
+            "type": "string",
+            "default": "grid",
+            "enum": [
+              "grid",
+              "faces"
+            ],
+            "title": "Seed mode"
+          },
+          "faces": {
+            "type": "string",
+            "default": "",
+            "title": "Faces"
+          },
+          "quantity_mode": {
+            "type": "string",
+            "default": "count",
+            "enum": [
+              "count",
+              "density"
+            ],
+            "title": "Quantity mode"
+          },
+          "n_seeds": {
+            "type": "integer",
+            "default": 40,
+            "minimum": 1,
+            "title": "Seed count"
+          },
+          "density": {
+            "type": "number",
+            "default": 5000.0,
+            "minimum": 0,
+            "title": "Density"
+          },
+          "seeds_h": {
+            "type": "integer",
+            "default": 10,
+            "minimum": 1,
+            "title": "Seeds H"
+          },
+          "seeds_v": {
+            "type": "integer",
+            "default": 10,
+            "minimum": 1,
+            "title": "Seeds V"
+          },
+          "size": {
+            "type": "number",
+            "default": 0.0037,
+            "minimum": 0,
+            "title": "Size"
+          },
+          "representation": {
+            "type": "string",
+            "default": "Cylinders",
+            "enum": [
+              "Cylinders",
+              "Spheres",
+              "Comets"
+            ],
+            "title": "Representation"
+          },
+          "case": {
+            "type": "string",
+            "default": "",
+            "title": "Case directory"
+          },
+          "time": {
+            "type": "string",
+            "default": "50",
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tool": "export_particle_trace.py",
+      "cache_scope": "case_time",
+      "output": "vtp"
+    },
+    {
+      "key": "plot_over_path",
+      "label": "Plot-over-path",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "string",
+            "default": "",
+            "title": "Points"
+          },
+          "subdivisions": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "title": "Subdivisions"
+          },
+          "field_variable": {
+            "type": "string",
+            "default": "Velocity Magnitude",
+            "title": "Field"
+          },
+          "case": {
+            "type": "string",
+            "default": "",
+            "title": "Case directory"
+          },
+          "time": {
+            "type": "string",
+            "default": "50",
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tool": "export_plot_over_path.py",
+      "cache_scope": "case_time",
+      "output": "json"
+    },
+    {
+      "key": "iso_surface",
+      "label": "Iso Surface",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "iso_scalar": {
+            "type": "string",
+            "default": "Velocity Magnitude",
+            "title": "Iso scalar"
+          },
+          "iso_value": {
+            "type": "number",
+            "default": 11.1,
+            "title": "Iso value"
+          },
+          "coloring": {
+            "type": "string",
+            "default": "Pressure",
+            "title": "Coloring"
+          },
+          "opacity": {
+            "type": "number",
+            "default": 1.0,
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Opacity"
+          },
+          "vectors": {
+            "type": "boolean",
+            "default": false,
+            "title": "Vectors"
+          },
+          "case": {
+            "type": "string",
+            "default": "",
+            "title": "Case directory"
+          },
+          "time": {
+            "type": "string",
+            "default": "50",
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tool": "export_iso_surface.py",
+      "cache_scope": "case_time",
+      "output": "vtp"
+    },
+    {
+      "key": "iso_volume",
+      "label": "Iso Volume",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "iso_scalar": {
+            "type": "string",
+            "default": "Velocity Magnitude",
+            "title": "Iso scalar"
+          },
+          "iso_value_low": {
+            "type": "number",
+            "default": 0.25,
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Iso low"
+          },
+          "iso_value_high": {
+            "type": "number",
+            "default": 0.75,
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Iso high"
+          },
+          "coloring": {
+            "type": "string",
+            "default": "Pressure",
+            "title": "Coloring"
+          },
+          "opacity": {
+            "type": "number",
+            "default": 1.0,
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Opacity"
+          },
+          "vectors": {
+            "type": "boolean",
+            "default": false,
+            "title": "Vectors"
+          },
+          "case": {
+            "type": "string",
+            "default": "",
+            "title": "Case directory"
+          },
+          "time": {
+            "type": "string",
+            "default": "50",
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tool": "export_iso_volume.py",
+      "cache_scope": "case_time",
+      "output": "vtp"
+    },
+    {
+      "key": "inspect_point",
+      "label": "Inspect point",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number",
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "title": "Y"
+          },
+          "z": {
+            "type": "number",
+            "title": "Z"
+          },
+          "case": {
+            "type": "string",
+            "default": "",
+            "title": "Case directory"
+          },
+          "time": {
+            "type": "string",
+            "default": "50",
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "tool": "export_inspect_point.py",
+      "cache_scope": "case_time",
+      "output": "json"
+    },
+    {
+      "key": "surface_field",
+      "label": "Surface field",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string",
+            "default": "magU",
+            "enum": [
+              "magU",
+              "p"
+            ],
+            "title": "Field"
+          },
+          "case": {
+            "type": "string",
+            "default": "",
+            "title": "Case directory"
+          },
+          "time": {
+            "type": "string",
+            "default": "50",
+            "title": "Time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tool": "export_case_field.py",
+      "cache_scope": "case_time",
+      "output": "vtp"
+    },
+    {
+      "key": "mesh_surface",
+      "label": "Mesh surface",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "case": {
+            "type": "string",
+            "default": "",
+            "title": "Case directory"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tool": "export_mesh_surface_vtp.py",
+      "cache_scope": "case",
+      "output": "vtp"
+    },
+    {
+      "key": "mesh_section",
+      "label": "Mesh section",
+      "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "axis": {
+            "type": "string",
+            "default": "x",
+            "enum": [
+              "x",
+              "y",
+              "z"
+            ],
+            "title": "Axis"
+          },
+          "frac": {
+            "type": "number",
+            "default": 0.5,
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Fraction"
+          },
+          "case": {
+            "type": "string",
+            "default": "",
+            "title": "Case directory"
+          }
+        },
+        "additionalProperties": false
+      },
+      "tool": "export_mesh_section_vtp.py",
+      "cache_scope": "case",
+      "output": "vtp"
+    }
+  ],
+  "plugins": [
+    {
+      "key": "example-extra-mesher",
+      "name": "Extra mesher",
+      "version": "0.1.0",
+      "requires": [],
+      "provides": {},
+      "ui": null,
+      "ui_entry": "index.js",
+      "authors": [
+        "Magnusim"
+      ],
+      "description": "Standard mesher with a different fineness default",
+      "source": "local",
+      "api_version": "1.0",
+      "overrides": []
+    },
+    {
+      "key": "example-hook-monitor",
+      "name": "Hook monitor",
+      "version": "0.1.0",
+      "requires": [],
+      "provides": {},
+      "ui": "ui",
+      "ui_entry": "index.js",
+      "authors": [
+        "Magnusim"
+      ],
+      "description": "Appends one function object after a case is written",
+      "source": "local",
+      "api_version": "1.0",
+      "overrides": []
+    },
+    {
+      "key": "example-laminar",
+      "name": "Laminar example",
+      "version": "0.1.0",
+      "requires": [],
+      "provides": {},
+      "ui": null,
+      "ui_entry": "index.js",
+      "authors": [
+        "Magnusim"
+      ],
+      "description": "Steady laminar analysis using the built-in incompressible writer",
+      "source": "local",
+      "api_version": "1.0",
+      "overrides": []
+    }
+  ],
+  "missing": []
+}

@@ -1,8 +1,8 @@
 /**
  * W28 Media — screenshots and screen recordings saved per run (Results) or per
- * mesh, under projects/<project>/media/<owner>/ with an index.json sidecar.
+ * mesh. simulation_id is required. Files live in that mesh or run folder's media/.
  *
- *   GET    /api/media/list?project_id=&owner=run-<id>|mesh-<id>
+ *   GET    /api/media/list?project_id=&simulation_id=&owner=run-<id>|mesh-<id>
  *   POST   /api/media/upload?project_id=&owner=&kind=screenshot|recording&name=&ext=png|mp4|webm
  *          (raw binary body; optional &width=&height=&duration=&meta=<json>)
  *   GET    /api/media/file?project_id=&owner=&id=            → the bytes (inline)
@@ -11,6 +11,7 @@
  *   POST   /api/media/rename { project_id, owner, id, name }
  */
 import { safeProjectPath, pathIsWithin } from './safe-path.js';
+import { projectIdOrActive } from './request-scope.js';
 import { readBinaryBody } from './server/http.ts';
 import { randomBytes } from 'node:crypto';
 import {
@@ -20,9 +21,11 @@ import {
   writeFileSync,
   statSync,
   rmSync,
+  cpSync,
   createReadStream,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { findMesh, findRun } from './project-layout.js';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
 
@@ -60,38 +63,64 @@ function activeProjectId() {
 
 function resolveProjectId(u) {
   const q = u.searchParams.get('project_id') ?? u.searchParams.get('project');
-  return q !== null ? safeId(q) : safeId(activeProjectId());
+  if (q !== null) return safeId(q);
+  return safeId(projectIdOrActive('', activeProjectId));
 }
 
-function mediaDir(projectId, owner) {
+function requestSim(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return { error: 'simulation_id required' };
+  const id = safeId(raw);
+  if (!id) return { error: 'invalid simulation_id' };
+  return { id };
+}
+
+function locateOwnerDir(projectId, owner, simId) {
   const project = safeProjectPath(PROJECTS_ROOT, projectId);
-  const dir = safeProjectPath(join(project, 'media'), owner);
+  if (owner.startsWith('run-')) {
+    const rec = findRun(project, owner.slice(4), simId);
+    return rec && rec.dir ? rec.dir : null;
+  }
+  if (owner.startsWith('mesh-')) {
+    const rec = findMesh(project, owner.slice(5), simId);
+    return rec && rec.dir ? rec.dir : null;
+  }
+  return null;
+}
+
+function mediaDir(projectId, owner, simId) {
+  const project = safeProjectPath(PROJECTS_ROOT, projectId);
+  const legacy = safeProjectPath(join(project, 'media'), owner);
+  if (!pathIsWithin(legacy, project)) throw Object.assign(new Error('media outside project'), { status: 400 });
+  if (!simId) return legacy;
+  const owned = locateOwnerDir(projectId, owner, simId);
+  if (!owned) return null;
+  const dir = join(owned, 'media');
   if (!pathIsWithin(dir, project)) throw Object.assign(new Error('media outside project'), { status: 400 });
+  if (!existsSync(join(dir, 'index.json')) && existsSync(join(legacy, 'index.json'))) {
+    mkdirSync(dir, { recursive: true });
+    cpSync(legacy, dir, { recursive: true });
+  }
   return dir;
 }
 
-function indexPath(projectId, owner) {
-  return join(mediaDir(projectId, owner), 'index.json');
-}
-
-function readIndex(projectId, owner) {
-  const p = indexPath(projectId, owner);
-  if (!existsSync(p)) return [];
+function readIndex(projectId, owner, simId) {
+  const dir = mediaDir(projectId, owner, simId);
+  const p = dir ? join(dir, 'index.json') : null;
+  if (!dir || !p || !existsSync(p)) return [];
   try {
     const raw = JSON.parse(readFileSync(p, 'utf8'));
     const items = Array.isArray(raw) ? raw : Array.isArray(raw.items) ? raw.items : [];
-    // Drop entries whose file vanished.
-    const dir = mediaDir(projectId, owner);
     return items.filter((it) => it && safeId(it.id) && safeId(it.file) && pathIsWithin(join(dir, it.file), dir) && existsSync(join(dir, it.file)));
   } catch {
     return [];
   }
 }
 
-function writeIndex(projectId, owner, items) {
-  const dir = mediaDir(projectId, owner);
+function writeIndex(projectId, owner, items, simId) {
+  const dir = mediaDir(projectId, owner, simId);
+  if (!dir) throw Object.assign(new Error('media owner is not in this study'), { status: 404 });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(indexPath(projectId, owner), JSON.stringify({ items, increment: INCREMENT }, null, 2));
+  writeFileSync(join(dir, 'index.json'), JSON.stringify({ items, increment: INCREMENT }, null, 2));
 }
 
 function cleanName(name, fallback) {
@@ -107,8 +136,9 @@ function newId() {
   return randomBytes(4).toString('hex');
 }
 
-function publicItem(projectId, owner, it) {
-  const q = `project_id=${encodeURIComponent(projectId)}&owner=${encodeURIComponent(owner)}&id=${encodeURIComponent(it.id)}`;
+function publicItem(projectId, owner, it, simId) {
+  const sim = simId ? `&simulation_id=${encodeURIComponent(simId)}` : '';
+  const q = `project_id=${encodeURIComponent(projectId)}&owner=${encodeURIComponent(owner)}${sim}&id=${encodeURIComponent(it.id)}`;
   return {
     ...it,
     url: `/api/media/file?${q}`,
@@ -116,8 +146,8 @@ function publicItem(projectId, owner, it) {
   };
 }
 
-function listBody(projectId, owner) {
-  const items = readIndex(projectId, owner)
+function listBody(projectId, owner, simId) {
+  const items = readIndex(projectId, owner, simId)
     .slice()
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
   return {
@@ -125,7 +155,8 @@ function listBody(projectId, owner) {
     increment: INCREMENT,
     project_id: projectId,
     owner,
-    items: items.map((it) => publicItem(projectId, owner, it)),
+    simulation_id: simId || null,
+    items: items.map((it) => publicItem(projectId, owner, it, simId)),
   };
 }
 
@@ -140,18 +171,23 @@ export async function handleW28Api(req, res, u, parts, helpers) {
   if (action === 'list' && (req.method === 'GET' || req.method === 'HEAD')) {
     const projectId = resolveProjectId(u);
     const owner = safeId(u.searchParams.get('owner'));
+    const sim = requestSim(u.searchParams.get('simulation_id'));
+    if (sim.error) return sendJson(res, 400, { error: sim.error });
     if (!projectId || !owner) return sendJson(res, 400, { error: 'project_id and owner required' });
-    return sendJson(res, 200, listBody(projectId, owner));
+    return sendJson(res, 200, listBody(projectId, owner, sim.id));
   }
 
   if (action === 'file' && (req.method === 'GET' || req.method === 'HEAD')) {
     const projectId = resolveProjectId(u);
     const owner = safeId(u.searchParams.get('owner'));
     const id = safeId(u.searchParams.get('id'));
+    const sim = requestSim(u.searchParams.get('simulation_id'));
+    if (sim.error) return sendJson(res, 400, { error: sim.error });
     if (!projectId || !owner || !id) return sendJson(res, 400, { error: 'project_id, owner, id required' });
-    const it = readIndex(projectId, owner).find((x) => x.id === id);
-    if (!it) return sendJson(res, 404, { error: 'media not found', id });
-    const full = join(mediaDir(projectId, owner), it.file);
+    const dir = mediaDir(projectId, owner, sim.id);
+    const it = dir ? readIndex(projectId, owner, sim.id).find((x) => x.id === id) : null;
+    if (!dir || !it) return sendJson(res, 404, { error: 'media not found', id });
+    const full = join(dir, it.file);
     const st = statSync(full);
     const ext = String(it.ext || '').toLowerCase();
     res.statusCode = 200;
@@ -193,9 +229,12 @@ export async function handleW28Api(req, res, u, parts, helpers) {
   if (action === 'upload' && req.method === 'POST') {
     const projectId = resolveProjectId(u);
     const owner = safeId(u.searchParams.get('owner'));
+    const sim = requestSim(u.searchParams.get('simulation_id'));
     const kind = u.searchParams.get('kind') === 'recording' ? 'recording' : 'screenshot';
     const ext = String(u.searchParams.get('ext') || (kind === 'recording' ? 'webm' : 'png')).toLowerCase();
+    if (sim.error) return sendJson(res, 400, { error: sim.error });
     if (!projectId || !owner) return sendJson(res, 400, { error: 'project_id and owner required' });
+    if (sim.id && !mediaDir(projectId, owner, sim.id)) return sendJson(res, 404, { error: 'media owner is not in this study' });
     if (!MIME[ext]) return sendJson(res, 400, { error: `unsupported extension ${ext}` });
     let buf;
     try {
@@ -204,12 +243,12 @@ export async function handleW28Api(req, res, u, parts, helpers) {
       return sendJson(res, 413, { error: 'upload failed', detail: String(e) });
     }
     if (!buf.length) return sendJson(res, 400, { error: 'empty body' });
-    const items = readIndex(projectId, owner);
+    const items = readIndex(projectId, owner, sim.id);
     if (items.length >= MAX_ITEMS) return sendJson(res, 409, { error: `too many items (max ${MAX_ITEMS})` });
     const id = newId();
     const name = cleanName(u.searchParams.get('name'), `${kind}-${id}`);
     const file = `${id}.${ext}`;
-    const dir = mediaDir(projectId, owner);
+    const dir = mediaDir(projectId, owner, sim.id);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, file), buf);
     let meta = null;
@@ -237,8 +276,8 @@ export async function handleW28Api(req, res, u, parts, helpers) {
       meta,
     };
     items.push(item);
-    writeIndex(projectId, owner, items);
-    return sendJson(res, 200, { ok: true, increment: INCREMENT, item: publicItem(projectId, owner, item), count: items.length });
+    writeIndex(projectId, owner, items, sim.id);
+    return sendJson(res, 200, { ok: true, increment: INCREMENT, item: publicItem(projectId, owner, item, sim.id), count: items.length });
   }
 
   if ((action === 'delete' || action === 'rename') && req.method === 'POST') {
@@ -248,27 +287,33 @@ export async function handleW28Api(req, res, u, parts, helpers) {
     } catch (e) {
       return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
     }
-    const projectId = body.project_id !== undefined && body.project_id !== null ? safeId(body.project_id) : safeId(activeProjectId());
+    const projectId =
+      body.project_id !== undefined && body.project_id !== null
+        ? safeId(body.project_id)
+        : safeId(projectIdOrActive('', activeProjectId));
     const owner = safeId(body.owner);
     const id = safeId(body.id);
+    const sim = requestSim(body.simulation_id);
+    if (sim.error) return sendJson(res, 400, { error: sim.error });
     if (!projectId || !owner || !id) return sendJson(res, 400, { error: 'project_id, owner, id required' });
-    const items = readIndex(projectId, owner);
+    const dir = mediaDir(projectId, owner, sim.id);
+    const items = readIndex(projectId, owner, sim.id);
     const idx = items.findIndex((x) => x.id === id);
-    if (idx < 0) return sendJson(res, 404, { error: 'media not found', id });
+    if (!dir || idx < 0) return sendJson(res, 404, { error: 'media not found', id });
     if (action === 'delete') {
-      const full = join(mediaDir(projectId, owner), items[idx].file);
+      const full = join(dir, items[idx].file);
       try {
         rmSync(full, { force: true });
       } catch {
         /* ignore */
       }
       items.splice(idx, 1);
-      writeIndex(projectId, owner, items);
+      writeIndex(projectId, owner, items, sim.id);
       return sendJson(res, 200, { ok: true, increment: INCREMENT, deleted: id, count: items.length });
     }
     items[idx].name = cleanName(body.name, items[idx].name);
-    writeIndex(projectId, owner, items);
-    return sendJson(res, 200, { ok: true, increment: INCREMENT, item: publicItem(projectId, owner, items[idx]) });
+    writeIndex(projectId, owner, items, sim.id);
+    return sendJson(res, 200, { ok: true, increment: INCREMENT, item: publicItem(projectId, owner, items[idx], sim.id) });
   }
 
   return sendJson(res, 404, { error: `unknown media route ${u.pathname}` });

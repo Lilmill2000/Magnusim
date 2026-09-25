@@ -2,13 +2,55 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.solver import SolverApp
 
 if TYPE_CHECKING:
     from cfddesk.registry.discovery import RegistryHub
+
+
+def _residual_line(line: str) -> dict[str, Any] | None:
+    from cfddesk.wsl.solve_run import parse_residual_line
+
+    return parse_residual_line(line)
+
+
+def _extra_lines(line: str) -> dict[str, Any] | None:
+    from cfddesk.wsl.solve_run import parse_extra_line
+
+    return parse_extra_line(line)
+
+
+def _write_fv_cpu(*args: Any, **kwargs: Any) -> None:
+    from cfddesk.case.writer import write_fv_solution_cpu
+
+    write_fv_solution_cpu(*args, **kwargs)
+
+
+def _write_fv_amgx(*args: Any, **kwargs: Any) -> None:
+    from cfddesk.case.writer import write_fv_solution_amgx
+
+    write_fv_solution_amgx(*args, **kwargs)
+
+
+def _write_fv_pimple(*args: Any, **kwargs: Any) -> None:
+    from cfddesk.case.writer import write_fv_solution_pimple
+
+    write_fv_solution_pimple(*args, **kwargs)
+
+
+def _write_control(*args: Any, **kwargs: Any) -> None:
+    from cfddesk.case.writer import write_control_dict
+
+    write_control_dict(*args, **kwargs)
+
+
+def _write_control_transient(*args: Any, **kwargs: Any) -> None:
+    from cfddesk.case.writer import write_control_dict_transient
+
+    write_control_dict_transient(*args, **kwargs)
 
 
 def build_simple_foam() -> SolverApp:
@@ -19,11 +61,11 @@ def build_simple_foam() -> SolverApp:
         time_dependency="steady",
         parallel="mpirun",
         stop_strategy="stopAt_writeNow",
-        residual_line=None,  # NOT_yet_done: still in wsl/solve_run Phase 1 parsers
-        extra_lines=None,
-        write_fv_solution=None,  # NOT_yet_done: case/writer + web_case remain authoritative
-        write_control_dict=None,
-        script_template="solve.sh",
+        residual_line=_residual_line,
+        extra_lines=_extra_lines,
+        write_fv_solution=_write_fv_cpu,
+        write_control_dict=_write_control,
+        script_template="solve",
         requires=(Requirement("wsl_tool", "simpleFoam"),),
     )
 
@@ -36,11 +78,11 @@ def build_pimple_foam() -> SolverApp:
         time_dependency="transient",
         parallel="mpirun",
         stop_strategy="stopAt_writeNow",
-        residual_line=None,
-        extra_lines=None,
-        write_fv_solution=None,
-        write_control_dict=None,
-        script_template="solve.sh",
+        residual_line=_residual_line,
+        extra_lines=_extra_lines,
+        write_fv_solution=_write_fv_pimple,
+        write_control_dict=_write_control_transient,
+        script_template="solve",
         requires=(Requirement("wsl_tool", "pimpleFoam"),),
     )
 
@@ -54,11 +96,11 @@ def build_simple_foam_amgx() -> SolverApp:
         time_dependency="steady",
         parallel="none",  # AmgX path is serial-only (N=1) in runner/parallel.py
         stop_strategy="stopAt_writeNow",
-        residual_line=None,
-        extra_lines=None,
-        write_fv_solution=None,
-        write_control_dict=None,
-        script_template="solve.sh",
+        residual_line=_residual_line,
+        extra_lines=_extra_lines,
+        write_fv_solution=_write_fv_amgx,
+        write_control_dict=_write_control,
+        script_template="solve",
         requires=(
             Requirement("wsl_tool", "simpleFoam"),
             Requirement("gpu", "cuda"),

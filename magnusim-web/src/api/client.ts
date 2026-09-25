@@ -41,8 +41,10 @@ export async function apiPost<T = Record<string, unknown>>(
 export function subscribeJobEvents(
   jobId: string,
   onEvent: (ev: MessageEvent) => void,
+  projectId?: string,
 ): () => void {
-  const es = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events`);
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  const es = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events${query}`);
   es.onmessage = onEvent;
   es.addEventListener('snapshot', onEvent);
   es.addEventListener('event', onEvent);

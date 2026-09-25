@@ -12,6 +12,7 @@ invalidates the cached volume.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pyvista as pv
@@ -111,7 +112,9 @@ def load_volume(case_dir: Path, time: str, *, use_cache: bool = True):
     if cache_path is not None:
         try:
             CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-            tmp = cache_path.with_suffix(".tmp.vtu")
+            # Per-process tmp: iso surface/volume exporters and the worker
+            # warmup can all build the same cold entry concurrently.
+            tmp = cache_path.with_name(f"{cache_path.stem}.{os.getpid()}.tmp.vtu")
             mesh.save(str(tmp), binary=True)
             tmp.replace(cache_path)
         except Exception:

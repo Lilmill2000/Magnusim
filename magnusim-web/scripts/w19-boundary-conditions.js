@@ -1,4 +1,5 @@
 import { safeProjectPath } from './safe-path.js';
+import { projectIdOrActive } from './request-scope.js';
 /**
  * Boundary conditions — filesystem persistence.
  * POST/GET /api/bcs → projects/<id>/boundary_conditions.json
@@ -422,7 +423,7 @@ async function persistBcsDoc(projectId, sim, bcsList, defaults, dropIds, only) {
 }
 
 async function deleteBcs(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project' } };
   }
@@ -481,7 +482,7 @@ async function deleteBcs(body) {
 }
 
 async function upsertBcs(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: false,
@@ -567,7 +568,7 @@ async function upsertBcs(body) {
 }
 
 export function getBcs(projectIdOpt, geomIdOpt, simIdOpt) {
-  const projectId = projectIdOpt || readActiveId();
+  const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: true,

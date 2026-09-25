@@ -4,7 +4,7 @@
  * Used by Phase 1 Step 9 project_cli routing.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { PYTHON, pyTool } from './python-env.js';
+import { PYTHON, PY_ROOT, pyTool } from './python-env.js';
 
 /** @type {null | ((method: string, params: unknown, timeoutMs?: number) => Promise<unknown>)} */
 let workerCall = null;
@@ -41,9 +41,12 @@ function forbidProjectCli(scriptName) {
  */
 export function pyJson(scriptName, args, stdinObj = null) {
   forbidProjectCli(scriptName);
-  if (workerCall && scriptName === 'project_cli.py') {
+  if (scriptName === 'project_cli.py') {
     const mapped = mapProjectCliToRpc(args, stdinObj);
-    if (mapped) return workerCall(mapped[0], mapped[1]);
+    if (!mapped) throw new Error('unmapped project command');
+    const pending = viaWorker(mapped[0], mapped[1]);
+    if (pending) return pending;
+    return Promise.resolve(dispatchMethod(mapped[0], mapped[1]));
   }
   const script = pyTool(scriptName);
   const argv = [script, ...args];
@@ -125,8 +128,71 @@ function mapProjectCliToRpc(args, stdinObj) {
   return table[cmd] || null;
 }
 
+function dispatchMethod(method, params) {
+  const stdin = JSON.stringify({ method, params: params || {} });
+  const code = [
+    'import json, sys',
+    'import cfddesk.worker.methods',
+    'from cfddesk.worker.rpc import dispatch',
+    'req = json.loads(sys.stdin.read())',
+    'print(json.dumps(dispatch(req["method"], req.get("params") or {}), default=str))',
+  ].join('\n');
+  const r = spawnSync(PYTHON, ['-c', code], {
+    cwd: PY_ROOT,
+    windowsHide: true,
+    encoding: 'utf8',
+    input: stdin,
+    env: {
+      ...process.env,
+      PYTHONPATH: PY_ROOT,
+      PYTHONUNBUFFERED: '1',
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
+    },
+  });
+  const line = String(r.stdout || '')
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .pop() || '';
+  if (!line) {
+    throw new Error(
+      'project rpc empty stdout (status=' +
+        String(r.status) +
+        '): ' +
+        String(r.stderr || '').slice(0, 500),
+    );
+  }
+  const doc = JSON.parse(line);
+  if (r.status && r.status !== 0 && !(doc && doc.ok === false)) {
+    throw new Error('project rpc exit ' + String(r.status) + ': ' + String(r.stderr || line).slice(0, 500));
+  }
+  return doc;
+}
+
+/**
+ * Project JSON through the worker when it is attached, otherwise the same RPC function.
+ * @param {string} method
+ * @param {object} params
+ */
+export function commitRpc(method, params) {
+  const pending = viaWorker(method, params);
+  if (pending) return pending;
+  return Promise.resolve(dispatchMethod(method, params));
+}
+
+/** Synchronous project write. Does not wait on the worker stdio pipe. */
+export function commitRpcSync(method, params) {
+  return dispatchMethod(method, params);
+}
+
 export function pyJsonSync(scriptName, args, stdinObj = null) {
   forbidProjectCli(scriptName);
+  if (scriptName === 'project_cli.py') {
+    const mapped = mapProjectCliToRpc(args, stdinObj);
+    if (!mapped) throw new Error('unmapped project command');
+    return dispatchMethod(mapped[0], mapped[1]);
+  }
   const script = pyTool(scriptName);
   const argv = [script, ...args];
   const stdin =
@@ -170,11 +236,11 @@ export function writeProjectCli(projectDirPath, proj, simId = '') {
     sim_id: String(simId || ''),
   });
   if (w) return w;
-  return pyJsonSync(
-    'project_cli.py',
-    ['write-project', '--project-dir', projectDirPath, '--sim-id', String(simId || '')],
-    proj,
-  );
+  return dispatchMethod('project.write_project', {
+    project_dir: projectDirPath,
+    doc: proj,
+    sim_id: String(simId || ''),
+  });
 }
 
 /**
@@ -190,17 +256,11 @@ export function writeSimulationCli(projectDirPath, sim, simId = '') {
     sim_id: String(simId || (sim && sim.id) || ''),
   });
   if (w) return w;
-  return pyJsonSync(
-    'project_cli.py',
-    [
-      'write-simulation',
-      '--project-dir',
-      projectDirPath,
-      '--sim-id',
-      String(simId || (sim && sim.id) || ''),
-    ],
-    sim,
-  );
+  return dispatchMethod('project.write_simulation', {
+    project_dir: projectDirPath,
+    doc: sim,
+    sim_id: String(simId || (sim && sim.id) || ''),
+  });
 }
 
 /**
@@ -216,11 +276,11 @@ export function saveSimCatalogCli(projectDirPath, catalog, simId = '') {
     sim_id: String(simId || ''),
   });
   if (w) return w;
-  return pyJsonSync(
-    'project_cli.py',
-    ['save-sim-catalog', '--project-dir', projectDirPath, '--sim-id', String(simId || '')],
-    catalog,
-  );
+  return dispatchMethod('project.save_sim_catalog', {
+    project_dir: projectDirPath,
+    doc: catalog,
+    sim_id: String(simId || ''),
+  });
 }
 
 /**
@@ -238,18 +298,11 @@ export function writeJsonCli(projectDirPath, rel, doc, simId = '') {
     sim_id: String(simId || ''),
   });
   if (w) return w;
-  return pyJsonSync(
-    'project_cli.py',
-    [
-      'write-json',
-      '--project-dir',
-      projectDirPath,
-      '--rel',
-      String(rel),
-      '--sim-id',
-      String(simId || ''),
-    ],
+  return dispatchMethod('project.write_json', {
+    project_dir: projectDirPath,
+    rel: String(rel),
     doc,
-  );
+    sim_id: String(simId || ''),
+  });
 }
 

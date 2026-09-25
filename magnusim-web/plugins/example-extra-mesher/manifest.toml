@@ -1,0 +1,6 @@
+key = "example-extra-mesher"
+name = "Extra mesher"
+version = "0.1.0"
+api_version = "1.0"
+description = "Standard mesher with a different fineness default"
+authors = "Magnusim"

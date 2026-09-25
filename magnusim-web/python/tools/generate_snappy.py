@@ -71,6 +71,41 @@ def render_snappy_script(*, dst: str, win_out: str, generate_id: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def boundary_patches(project_dir: Path, step: Path, tri_dir: Path, simulation_id: str = ""):
+    """BC patches as one STL each in ``tri_dir``, and a point inside the fluid.
+
+    Same face -> patch map as the Standard mesher (``generate_standard``): the
+    study's BCs, then every other face on ``walls``. Returns
+    ``(patches, location_m)`` for ``write_hexdominant_dicts``.
+    """
+    from generate_standard import _add_default_walls, _apply_web_bcs
+
+    from cfddesk.cad.location import find_location_in_mesh
+    from cfddesk.cad.step import load_step, tessellate_faces
+    from cfddesk.mesh.gmsh_standard import _face_to_patch_map, emitted_patch_types
+    from cfddesk.mesh.snappy_hexdominant import write_patch_stls
+    from cfddesk.mesh.web_refinements import leftover_faces
+    from cfddesk.project.model import Project
+    from cfddesk.project.web_adapter import study_web_bcs
+
+    solid = load_step(step)
+    units = solid.units
+    scale = float(
+        getattr(units, "proposed_scale_to_metres", None) or getattr(units, "scale_to_metres", None) or 0.001
+    )
+    n_faces = len(solid.faces)
+    project = Project.from_solid(solid, scale_to_metres=scale, units_confirmed=True)
+    web_bcs = study_web_bcs(project_dir, None, simulation_id=simulation_id or None)
+    project = _apply_web_bcs(project, web_bcs, n_faces)
+    project = _add_default_walls(project, leftover_faces(project, n_faces))
+    pts, tris, fids = tessellate_faces(solid)
+    patches = write_patch_stls(
+        tri_dir, pts * scale, tris, fids, _face_to_patch_map(project), emitted_patch_types(project)
+    )
+    location = find_location_in_mesh(solid, scale)
+    return patches, location.point_metres
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Hex-dominant snappyHexMesh generate")
     p.add_argument("--project-dir", required=True)
@@ -119,7 +154,9 @@ def main() -> int:
             geom_id = study.get("geometry_id")
     step = resolve_step(project_dir, geom_id)
     body1 = (step.parent / "Body1.stl") if step else None
-    if not step or not step.is_file():
+    from cfddesk.cad.io import geometry_file_exists
+
+    if not step or not geometry_file_exists(step):
         return _result(False, error=f"missing source.step: {step}")
     if not body1 or not body1.is_file():
         return _result(False, error=f"missing Body1.stl: {body1}")
@@ -142,6 +179,10 @@ def main() -> int:
 
         scaled = scale_body1_stl(body1, tri / "Body1.stl")
         bounds = scaled["bounds_m"]
+        # Body1.stl stays the source of feature edges; the mesh itself is built
+        # from one surface per BC patch so the solver finds its patches.
+        patches, location_m = boundary_patches(project_dir, step, tri, sid)
+        _progress("patches", patches=[p["name"] for p in patches], location_m=list(location_m))
         params = fineness_params(
             int(args.fineness), physics_based=physics_based, bounds_m=bounds
         )
@@ -161,6 +202,8 @@ def main() -> int:
             add_layers=add_layers,
             snap=params["snap"],
             bounds_m=bounds,
+            patches=patches,
+            location_m=location_m,
         )
         meta_doc = {
             "increment": "W25",

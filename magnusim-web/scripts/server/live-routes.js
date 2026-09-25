@@ -5,12 +5,18 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { handleW16Api, attachLiveMeshJobReader, attachActiveProjectListener, importGeometry } from '../w16-project-geometry.js';
 import { handleProjectHydrate } from '../project-hydrate.js';
-import { caseDirBelongsToProject } from '../project-isolation.js';
+import { caseDetachAllowed, caseDirBelongsToProject } from '../project-isolation.js';
 import { handleW17Api } from '../w17-simulation.js';
 import { handleW18Api } from '../w18-materials.js';
 import { handleW19Api } from '../w19-boundary-conditions.js';
 import { handleW20Api } from '../w20-mesh.js';
-import { startMeshGenerate, liveMeshJobSnapshot, isLiveMeshJobHeld, reapOrphanMeshGeneratorsOnBoot } from '../w21-mesh-generate.js';
+import {
+  startMeshGenerate,
+  liveMeshJobSnapshot,
+  isLiveMeshJobHeld,
+  reapOrphanMeshGeneratorsOnBoot,
+  projectTitleOf,
+} from '../w21-mesh-generate.js';
 import { handleW26Api } from '../w26-mesh-refinements.js';
 import { handleW22Api } from '../w22-area-average.js';
 import { handleW27Api, startSolve, isLiveSolveHeld, liveSolveJobSnapshot } from '../w27-solve.js';
@@ -18,6 +24,7 @@ import {
   configureComputeQueue,
   snapshotComputeQueue,
   enqueueComputeJob,
+  enqueueMeshWhenBusy,
   mergeComputeQueueItems,
   removeComputeJob,
   dropComputeJobsForMesh,
@@ -35,12 +42,21 @@ import { WorkerUnavailableError } from './worker.ts';
 function wrap(handler) {
   return async (ctx) => {
     const parts = ctx.pathname.split('/').filter(Boolean);
-    const handled = await handler(ctx.req, ctx.res, ctx.url, parts, {
-      sendJson,
-      readJsonBody,
-      readBinaryBody,
-    });
-    return handled !== false;
+    try {
+      const handled = await handler(ctx.req, ctx.res, ctx.url, parts, {
+        sendJson,
+        readJsonBody,
+        readBinaryBody,
+      });
+      return handled !== false;
+    } catch (err) {
+      const status = err && err.status;
+      if (status === 400 || status === 403 || status === 404) {
+        sendJson(ctx.res, status, { error: (err && err.message) || 'request rejected' });
+        return true;
+      }
+      throw err;
+    }
   };
 }
 
@@ -52,6 +68,11 @@ function computeQueueLive() {
       mesh_id: mesh.mesh_id || null,
       run_id: null,
       project_id: mesh.project_id || null,
+      project_title: mesh.project_title || null,
+      mesh_name: mesh.mesh_name || null,
+      generate_id: mesh.generate_id || null,
+      path_kind: mesh.path_kind || null,
+      started_at: mesh.started_at || null,
     };
   }
   if (isLiveSolveHeld()) {
@@ -61,6 +82,7 @@ function computeQueueLive() {
       mesh_id: null,
       run_id: solve.run_id || null,
       project_id: solve.project_id || null,
+      project_title: projectTitleOf(solve.project_id),
     };
   }
   return null;
@@ -69,9 +91,10 @@ function computeQueueLive() {
 function wireComputeQueue(api) {
   configureComputeQueue({
     isBusy: () => isLiveMeshJobHeld() || isLiveSolveHeld(),
-    meshIsGenerating: (meshId) => {
+    meshIsGenerating: (meshId, projectId) => {
       const snap = liveMeshJobSnapshot();
-      return !!(snap && meshId && String(snap.mesh_id || '') === String(meshId));
+      if (!snap || !meshId || String(snap.mesh_id || '') !== String(meshId)) return false;
+      return !projectId || String(snap.project_id || '') === String(projectId);
     },
     startMesh: (item) => {
       const kicked = startMeshGenerate({
@@ -102,7 +125,8 @@ export function registerLiveRoutes(router, { worker, jobs }) {
   wireComputeQueue(api);
 
   router.get('/api/compute-queue', (ctx) => {
-    ctx.sendJson(200, snapshotComputeQueue());
+    const project = ctx.url.searchParams.get('project_id') || ctx.url.searchParams.get('project') || '';
+    ctx.sendJson(200, snapshotComputeQueue(project));
   });
 
   router.post('/api/compute-queue', async (ctx) => {
@@ -119,11 +143,11 @@ export function registerLiveRoutes(router, { worker, jobs }) {
       return;
     }
     if (action === 'drop-mesh') {
-      ctx.sendJson(200, dropComputeJobsForMesh(body.mesh_id));
+      ctx.sendJson(200, dropComputeJobsForMesh(body.mesh_id, body.project_id));
       return;
     }
     if (action === 'remove') {
-      ctx.sendJson(200, removeComputeJob(body.kind, body.id));
+      ctx.sendJson(200, removeComputeJob(body.kind, body.id, body.project_id));
       return;
     }
     const enqueued = enqueueComputeJob(body.item || body, {
@@ -150,28 +174,38 @@ export function registerLiveRoutes(router, { worker, jobs }) {
   });
 
   router.add('DELETE', '/api/compute-queue/:id', (ctx) => {
-    ctx.sendJson(200, removeComputeJob(ctx.url.searchParams.get('kind'), ctx.params.id));
+    ctx.sendJson(
+      200,
+      removeComputeJob(ctx.url.searchParams.get('kind'), ctx.params.id, ctx.url.searchParams.get('project_id')),
+    );
   });
 
   router.post('/api/compute-queue/kick', async (ctx) => {
-    await ctx.readJsonBody().catch(() => ({}));
-    ctx.sendJson(200, await kickComputeQueue());
+    const body = await ctx.readJsonBody().catch(() => ({}));
+    const project = String((body && (body.project_id || body.projectId)) || ctx.url.searchParams.get('project_id') || '');
+    ctx.sendJson(200, await kickComputeQueue(project));
   });
 
-  router.get('/api/project/hydrate', async (ctx) => {
+  router.get('/api/project/tree', async (ctx) => {
     const id = String(ctx.url.searchParams.get('project_id') || '').trim();
     if (!id) {
       sendJson(ctx.res, 400, { error: 'project_id required' });
       return;
     }
-    // Reconcile orphan run folders in the background. Awaiting the worker
-    // here queued behind volume release / field export and left the
-    // workbench blank for tens of seconds with no geometry.
-    worker
-      .call('project.hydrate', { id, simulation_id: ctx.url.searchParams.get('simulation_id') || '' })
-      .catch(() => {});
-    return handleProjectHydrate(ctx.req, ctx.res, ctx.url, { sendJson });
+    try {
+      const doc = await worker.call('project.tree', { id });
+      ctx.sendJson(200, doc);
+    } catch (e) {
+      ctx.sendJson(500, { error: 'project tree failed', detail: String(e && e.message ? e.message : e) });
+    }
   });
+
+  router.get('/api/project/hydrate', (ctx) =>
+    handleProjectHydrate(ctx.req, ctx.res, ctx.url, {
+      sendJson,
+      workerCall: (method, params) => worker.call(method, params),
+    }),
+  );
 
   router.add(['GET', 'HEAD', 'POST'], '/api/prefs', wrap(handlePrefsApi));
   router.add(['GET', 'HEAD', 'POST'], '/api/prefs/**rest', wrap(handlePrefsApi));
@@ -229,6 +263,11 @@ export function registerLiveRoutes(router, { worker, jobs }) {
 
   router.post('/api/case/detach', async (ctx) => {
     await ctx.readJsonBody().catch(() => ({}));
+    const active = api.caseSnapshot();
+    if (!caseDetachAllowed(active.case_dir, ctx.scope.projectId)) {
+      ctx.sendJson(200, { ...active, detach_skipped: 'attached case belongs to another project' });
+      return;
+    }
     api.resetActiveCaseIdle('W15.1: detached; idle until next attach/kick. No fake progress.');
     try {
       await api.releaseVolume();
@@ -238,8 +277,8 @@ export function registerLiveRoutes(router, { worker, jobs }) {
     ctx.sendJson(200, api.caseSnapshot());
   });
 
-  router.post('/api/mesh/generate', (ctx) => kickMesh(ctx, api));
-  router.post('/api/mesh/remesh', (ctx) => kickMesh(ctx, api));
+  router.post('/api/mesh/generate', (ctx) => kickMesh(ctx, api, jobs));
+  router.post('/api/mesh/remesh', (ctx) => kickMesh(ctx, api, jobs));
 
   router.add(['GET', 'HEAD', 'POST'], '/api/mesh', async (ctx) => {
     if (/\/(generate|remesh|surface|section|refinements)(\/|$)/.test(ctx.pathname)) return false;
@@ -521,6 +560,14 @@ export function registerLiveRoutes(router, { worker, jobs }) {
         meshId: params.mesh_id || params.id || null,
         onUpdate: (fields) => {
           api.applyKickUpdate(fields);
+          if (fields && (fields.stage || fields.status)) {
+            jobs.pushEvent(job.id, {
+              event: 'progress',
+              stage: fields.stage || null,
+              stage_detail: fields.stage_detail || null,
+              status: fields.status || null,
+            });
+          }
           if (fields && fields.status === 'done') jobs.finish(job.id, 'done', api.caseSnapshot());
           if (fields && (fields.status === 'failed' || fields.status === 'stopped')) {
             jobs.finish(job.id, fields.status, fields, fields.error || 'mesh failed');
@@ -602,7 +649,7 @@ function sendCaseStatus(ctx, api) {
   ctx.sendJson(200, snap);
 }
 
-async function kickMesh(ctx, api) {
+async function kickMesh(ctx, api, jobs) {
   let body;
   try {
     body = await ctx.readJsonBody();
@@ -610,18 +657,88 @@ async function kickMesh(ctx, api) {
     ctx.sendJson(400, { error: 'invalid JSON body', detail: String(e) });
     return;
   }
+  const projectId = body.project_id || (ctx.scope && ctx.scope.projectId) || null;
+  const simulationId = body.simulation_id || (ctx.scope && ctx.scope.simulationId) || null;
+  const queued = body.queue_if_busy
+    ? enqueueMeshWhenBusy(
+        {
+          mesh_id: body.mesh_id || body.id || null,
+          project_id: projectId,
+          simulation_id: simulationId,
+          name: body.name || null,
+          settings: body.settings || null,
+        },
+        computeQueueLive(),
+      )
+    : null;
+  if (queued) {
+    ctx.sendJson(queued.status, queued.body);
+    return;
+  }
+  let job = null;
+  if (jobs && projectId && simulationId) {
+    try {
+      job = jobs.create(
+        'mesh',
+        {
+          project_id: projectId,
+          simulation_id: simulationId,
+          mesh_id: body.mesh_id || body.id || null,
+          geometry_id: body.geometry_id || (ctx.scope && ctx.scope.geometryId) || null,
+        },
+        projectId,
+        { scope: 'study' },
+      );
+    } catch {
+      job = null;
+    }
+  }
+  let settled = false;
   const kicked = startMeshGenerate({
     settings: body.settings || null,
-    projectId: body.project_id || null,
+    projectId: projectId,
     meshId: body.mesh_id || body.id || null,
-    onUpdate: (fields) => api.applyKickUpdate(fields),
+    onUpdate: (fields) => {
+      api.applyKickUpdate(fields);
+      if (!job || !jobs || !fields) return;
+      if (fields.stage || fields.status) {
+        jobs.pushEvent(job.id, {
+          event: 'progress',
+          stage: fields.stage || null,
+          stage_detail: fields.stage_detail || null,
+          status: fields.status || null,
+        });
+      }
+      if (settled) return;
+      if (fields.status === 'done') {
+        settled = true;
+        jobs.finish(job.id, 'done', fields);
+      } else if (fields.status === 'failed' || fields.status === 'stopped') {
+        settled = true;
+        jobs.finish(job.id, fields.status, fields, fields.error || 'mesh failed');
+      }
+    },
   });
   if (!kicked.ok) {
-    ctx.sendJson(kicked.status, { ...api.caseSnapshot(), ...(kicked.bodyExtra || {}), ok: false, increment: 'W23' });
+    if (job && jobs && !settled) {
+      settled = true;
+      jobs.finish(job.id, 'failed', kicked.bodyExtra, (kicked.bodyExtra && kicked.bodyExtra.error) || 'mesh failed');
+    }
+    ctx.sendJson(kicked.status, { ...api.caseSnapshot(), ...(kicked.bodyExtra || {}), ok: false, increment: 'W23', job_id: job && job.id });
     return;
   }
   api.applyKickUpdate(kicked.bodyExtra);
+  if (job && jobs) {
+    const pid = kicked.bodyExtra && kicked.bodyExtra.pid;
+    jobs.attachChild(job.id, { pid: pid || null });
+  }
   const snap = api.caseSnapshot();
   ctx.res.setHeader('X-CFD-Source', 'mesh-generate');
-  ctx.sendJson(kicked.status, { ...snap, ok: true, increment: 'W23', mtp1_silent_copy: false });
+  ctx.sendJson(kicked.status, {
+    ...snap,
+    ok: true,
+    increment: 'W23',
+    mtp1_silent_copy: false,
+    job_id: job && job.id,
+  });
 }

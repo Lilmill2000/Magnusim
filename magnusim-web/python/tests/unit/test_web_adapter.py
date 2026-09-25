@@ -151,7 +151,9 @@ def test_build_field_patches_slip_default_writes_slip_walls():
         monitor_patches=[],
         face_props={},
     )
-    u_field, _p, _k, _omega, _nut = _build_field_patches(spec, ["walls"], k_str="1", w_str="1")
+    u_field, _p, _turb = _build_field_patches(
+        spec, ["walls"], turb_values={"k": "1", "omega": "1", "epsilon": "1", "R": "(1 0 0 1 0 1)"}
+    )
     assert u_field["walls"]["type"] == "slip"
 
 

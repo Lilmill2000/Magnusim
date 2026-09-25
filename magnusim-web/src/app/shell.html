@@ -13,7 +13,7 @@
           <input type="search" id="home-search" placeholder="Search projects" autocomplete="off" />
         </div>
         <div class="home-top-actions">
-          <button type="button" class="home-btn" id="home-prefs">Preferences</button>
+          <button type="button" class="home-btn" id="home-prefs">Settings</button>
           <button type="button" class="home-btn" id="home-new-folder">New folder</button>
           <button type="button" class="home-btn-primary" id="home-new-project">New project</button>
         </div>
@@ -86,7 +86,7 @@
           <span class="project-name">Project</span>
         </div>
         <div class="top-right">
-          <button type="button" class="home-btn" id="wb-prefs">Preferences</button>
+          <button type="button" class="home-btn" id="wb-prefs">Settings</button>
         </div>
       </header>
 
@@ -220,98 +220,15 @@
               <path d="M15 6L9 12l6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
-          <div id="panel-geometry" class="sim-defaults-panel geo-detail-panel" hidden aria-label="Geometry">
-            <div class="sim-def-head">
-              <span class="sim-def-title" id="geo-detail-title">Geometry</span>
-            </div>
-            <div class="sim-def-row"><span class="sim-def-k">Name</span><span class="sim-def-v" id="geo-detail-name">—</span></div>
-            <div class="sim-def-row"><span class="sim-def-k">Representation</span><span class="sim-def-v" id="geo-detail-repr">STEP</span></div>
-            <div class="sim-def-row"><span class="sim-def-k">Volume</span><span class="sim-def-v" id="geo-detail-body">Body1</span></div>
-            <div class="sim-def-note" id="geo-detail-note">Click a body in the tree to highlight it in the viewport.</div>
-            <div class="sim-def-foot">
-              <button type="button" class="js-btn tree-panel-done">Done</button>
-              <button type="button" class="mat-clear-link" id="geo-delete" hidden title="Remove this geometry from the project">Delete</button>
-            </div>
-          </div>
+          <div id="panel-geometry" class="sim-defaults-panel geo-detail-panel" hidden aria-label="Geometry"></div>
 
-          <div id="panel-material-picker" class="sim-defaults-panel picker-panel" hidden aria-label="Materials">
-            <div class="sim-def-head">
-              <span class="sim-def-title">Materials</span>
-              <button type="button" class="fp-close" id="mat-picker-close" aria-label="Close">x</button>
-            </div>
-            <button type="button" class="ml-type is-selected" data-material="Air" id="mat-pick-air">
-              <span class="ml-type-name">Air</span>
-            </button>
-            <div class="picker-assign">
-              <div class="picker-assign-head">Assigned volumes</div>
-              <ul class="mat-assign-list" id="mat-picker-bodies" aria-label="Assigned volumes"></ul>
-              <p class="picker-assign-hint" id="mat-picker-hint">Select a material, then click a body in the viewport.</p>
-            </div>
-            <div class="picker-actions">
-              <button type="button" class="js-btn js-btn-kick" id="mat-picker-apply" disabled>Apply</button>
-            </div>
-          </div>
+          <div id="panel-material-picker" class="sim-defaults-panel picker-panel" hidden aria-label="Materials"></div>
 
-          <div id="panel-materials-hub" class="sim-defaults-panel picker-panel hub-panel" hidden aria-label="Materials">
-            <div class="sim-def-head">
-              <span class="sim-def-title">Materials</span>
-            </div>
-            <ul class="hub-list" id="materials-hub-list"></ul>
-            <button type="button" class="js-btn" id="btn-add-material">Add new material</button>
-            <div class="sim-def-foot">
-              <button type="button" class="js-btn tree-panel-done">Done</button>
-            </div>
-          </div>
+          <div id="panel-materials-hub" class="sim-defaults-panel picker-panel hub-panel" hidden aria-label="Materials"></div>
 
-          <div id="panel-bcs-hub" class="sim-defaults-panel picker-panel hub-panel" hidden aria-label="Boundary conditions">
-            <div class="sim-def-head">
-              <span class="sim-def-title">Boundary conditions</span>
-            </div>
-            <div class="bc-legend" id="bc-overview-legend">
-              <span><i class="hub-swatch hub-swatch-inlet"></i> Velocity inlet</span>
-              <span><i class="hub-swatch hub-swatch-outlet"></i> Velocity outlet</span>
-              <span><i class="hub-swatch hub-swatch-pressure"></i> Pressure</span>
-              <span><i class="hub-swatch hub-swatch-wall"></i> Wall</span>
-            </div>
-            <p class="mat-assign-hint">Every assigned face is shown on the model, color-coded by type.</p>
-            <ul class="hub-list" id="bcs-hub-list"></ul>
-            <button type="button" class="hub-item hub-item-defaults" id="btn-bc-defaults-hub">
-              <span class="hub-item-main"><span class="hub-swatch hub-swatch-default"></span><span class="hub-item-name">Defaults</span><span class="hub-item-sub" id="bc-defaults-hub-sub">Unassigned faces: no-slip walls</span></span>
-            </button>
-            <button type="button" class="js-btn" id="btn-add-bc">Add boundary condition</button>
-            <div class="sim-def-foot">
-              <button type="button" class="js-btn tree-panel-done">Done</button>
-            </div>
-          </div>
+          <div id="panel-bcs-hub" class="sim-defaults-panel picker-panel hub-panel" hidden aria-label="Boundary conditions"></div>
 
-          <div id="panel-bc-picker" class="sim-defaults-panel picker-panel" hidden aria-label="Boundary conditions">
-            <div class="sim-def-head">
-              <span class="sim-def-title">Boundary conditions</span>
-              <button type="button" class="fp-close" id="bc-picker-close" aria-label="Close">x</button>
-            </div>
-            <button type="button" class="ml-type ml-type-defaults" id="bc-picker-defaults">
-              <span class="ml-type-name">Defaults</span>
-              <span class="ml-type-sub" id="bc-picker-defaults-sub">Unassigned faces: no-slip walls</span>
-            </button>
-            <div class="picker-divider"></div>
-            <button type="button" class="ml-type is-selected" data-bc-type="Velocity inlet">
-              <span class="ml-type-name">Velocity inlet</span>
-            </button>
-            <button type="button" class="ml-type" data-bc-type="Velocity outlet">
-              <span class="ml-type-name">Velocity outlet</span>
-            </button>
-            <button type="button" class="ml-type" data-bc-type="Pressure">
-              <span class="ml-type-name">Pressure</span>
-            </button>
-            <button type="button" class="ml-type" data-bc-type="Wall">
-              <span class="ml-type-name">Wall</span>
-              <span class="ml-type-sub">Slip or no-slip, face by face</span>
-            </button>
-            <p class="mat-assign-hint">Click a face in the viewport to select it. Add assigns that face to the new boundary condition.</p>
-            <div class="picker-actions">
-              <button type="button" class="js-btn js-btn-kick" id="bc-picker-apply">Add</button>
-            </div>
-          </div>
+          <div id="panel-bc-picker" class="sim-defaults-panel picker-panel" hidden aria-label="Boundary conditions"></div>
 
           <!-- Boundary-condition defaults: what every face without a BC gets -->
           <div id="panel-bc-defaults" class="mat-panel bc-panel" hidden aria-label="Boundary condition defaults">
@@ -344,170 +261,12 @@
           </div>
 
           <!-- W17 Incompressible defaults chrome (exact bank labels) -->
-          <div id="panel-incompressible-defaults" class="sim-defaults-panel" hidden aria-label="Incompressible defaults">
-            <div class="sim-def-head">
-              <div class="mesh-title-row">
-                <span class="sim-def-title" id="study-panel-title">Incompressible</span>
-                <button type="button" class="mesh-rename" id="study-rename" title="Rename simulation" aria-label="Rename simulation">
-                  <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">
-                    <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M4 16.8V20h3.2L18.4 8.8l-3.2-3.2L4 16.8z"/>
-                      <path d="M13.8 6.9l3.2 3.2"/>
-                    </g>
-                  </svg>
-                </button>
-                <input type="text" class="mesh-rename-input" id="study-rename-input" maxlength="64" hidden aria-label="Simulation name" />
-              </div>
-            </div>
-            <div class="sim-def-row"><span class="sim-def-k">Analysis</span><span class="sim-def-v" id="sim-analysis">Incompressible</span></div>
-            <div class="sim-def-row"><span class="sim-def-k">Turbulence model</span><span class="sim-def-v" id="sim-turbulence">k-omega SST</span></div>
-            <div class="sim-def-row">
-              <span class="sim-def-k">Time dependency</span>
-              <span class="sim-def-v">
-                <select id="sim-time-select" class="bc-select sim-def-select" aria-label="Time dependency">
-                  <option value="Steady-state">Steady-state</option>
-                  <option value="Transient">Transient</option>
-                </select>
-                <span id="sim-time" hidden>Steady-state</span>
-              </span>
-            </div>
-            <div class="sim-def-row"><span class="sim-def-k">Algorithm</span><span class="sim-def-v" id="sim-algorithm">SIMPLE</span></div>
-            <p class="mat-assign-hint sim-def-hint" id="sim-time-hint">Steady-state solves for the converged flow with simpleFoam. Transient marches through real time with pimpleFoam and writes frames you can animate.</p>
-            <div class="sim-def-note" hidden data-w241-hide="w17-foot">W17 defaults from bank</div>
-            <div class="sim-def-foot">
-              <button type="button" class="mat-clear-link" id="sim-delete" title="Delete this simulation">Delete</button>
-              <button type="button" class="js-btn tree-panel-done">Done</button>
-            </div>
-          </div>
+          <div id="panel-incompressible-defaults" class="sim-defaults-panel" hidden aria-label="Simulation"></div>
 
-          <!-- W18 Materials → Air assign panel (checkmark paradigm) -->
-          <div id="panel-air-material" class="mat-panel" hidden aria-label="Air material">
-            <div class="mat-panel-head">
-              <span class="mat-panel-title">Air</span>
-            </div>
-            <div class="mat-panel-body">
-              <div class="mat-row">
-                <span class="mat-k">Viscosity model</span>
-                <span class="mat-v" id="air-viscosity-model">Newtonian</span>
-              </div>
-              <div class="mat-row">
-                <span class="mat-k">(ν) Kinematic viscosity</span>
-                <span class="mat-v" id="air-nu">1.529e-5 m2/s</span>
-              </div>
-              <div class="mat-row">
-                <span class="mat-k">(ρ) Density</span>
-                <span class="mat-v" id="air-rho">1.196 kg/m3</span>
-              </div>
-              <div class="mat-assign-block">
-                <div class="mat-assign-head">
-                  <span class="mat-k">Assigned volumes (<span id="air-assign-count">0</span>)</span>
-                  <button type="button" class="mat-clear-link" id="air-clear-assign">Clear list</button>
-                </div>
-                <ul class="mat-assign-list" id="air-assign-list" aria-label="Assigned volumes"></ul>
-                <div class="mat-assign-hint">Click a body in the viewport to assign it. Changes save automatically.</div>
-              </div>
-              <div class="mat-panel-foot">
-                <button type="button" class="mat-clear-link" id="air-delete" title="Delete material">Delete</button>
-                <button type="button" class="js-btn tree-panel-done">Done</button>
-              </div>
-            </div>
-          </div>
+          <div id="panel-air-material" class="mat-panel" hidden aria-label="Air material"></div>
 
 
-          <div id="panel-bc-editor" class="mat-panel bc-panel" hidden aria-label="Boundary condition">
-            <div class="mat-panel-head">
-              <span class="mat-panel-title" id="bc-editor-title">Boundary condition</span>
-            </div>
-            <div class="mat-panel-body">
-              <div class="mat-row">
-                <span class="mat-k">Type</span>
-                <span class="mat-v">
-                  <select id="bc-editor-type" class="bc-select" aria-label="Boundary condition type">
-                    <option value="Velocity inlet">Velocity inlet</option>
-                    <option value="Velocity outlet">Velocity outlet</option>
-                    <option value="Pressure">Pressure</option>
-                    <option value="Wall">Wall</option>
-                  </select>
-                </span>
-              </div>
-              <div class="bc-vel-fields" id="bc-vel-fields" hidden>
-                <div class="mat-row">
-                  <span class="mat-k">Velocity type</span>
-                  <select id="bc-velocity-type" class="bc-select">
-                    <option value="Fixed">Fixed</option>
-                    <option value="Flow rate">Flow rate</option>
-                  </select>
-                </div>
-                <div class="mat-row" id="bc-flow-rate-type-row" hidden>
-                  <span class="mat-k">Flow rate type</span>
-                  <select id="bc-flow-rate-type" class="bc-select">
-                    <option value="Volumetric flow">Volumetric flow</option>
-                    <option value="Mass flow">Mass flow</option>
-                  </select>
-                </div>
-                <div class="mat-row" id="bc-vel-value-row">
-                  <span class="mat-k" id="bc-vel-value-label">Velocity</span>
-                  <span class="mat-v bc-value-row">
-                    <input type="number" id="bc-value" class="bc-input" value="5" step="any" />
-                    <select id="bc-unit" class="bc-select"></select>
-                  </span>
-                </div>
-                <div class="mat-row" id="bc-direction-row">
-                  <span class="mat-k">Direction</span>
-                  <select id="bc-direction" class="bc-select">
-                    <option value="Normal to face">Normal to face</option>
-                    <option value="Vector">Vector</option>
-                  </select>
-                </div>
-                <div class="mat-row" id="bc-vector-row" hidden>
-                  <span class="mat-k">Vector (X Y Z)</span>
-                  <span class="mat-v bc-value-row bc-vector-row">
-                    <input type="number" id="bc-vec-x" class="bc-input bc-vec" value="0" step="any" aria-label="X" />
-                    <input type="number" id="bc-vec-y" class="bc-input bc-vec" value="0" step="any" aria-label="Y" />
-                    <input type="number" id="bc-vec-z" class="bc-input bc-vec" value="1" step="any" aria-label="Z" />
-                  </span>
-                </div>
-                <div class="mat-assign-hint" id="bc-vector-hint" hidden>Air enters at this speed moving along the vector.</div>
-              </div>
-              <div class="bc-p-fields" id="bc-p-fields" hidden>
-                <div class="mat-row">
-                  <span class="mat-k">Pressure type</span>
-                  <span class="mat-v">Fixed value</span>
-                </div>
-                <div class="mat-row">
-                  <span class="mat-k">Fixed value</span>
-                  <span class="mat-v bc-value-row">
-                    <input type="number" id="bc-p-value" class="bc-input" value="0" step="any" />
-                    <select id="bc-p-unit" class="bc-select" aria-label="Pressure unit"></select>
-                  </span>
-                </div>
-                <div class="mat-assign-hint">Sets pressure on the face. Flow can enter or leave depending on the rest of the case.</div>
-              </div>
-              <div class="bc-wall-fields" id="bc-wall-fields" hidden>
-                <div class="mat-row">
-                  <span class="mat-k">Wall type</span>
-                  <select id="bc-wall-type" class="bc-select" aria-label="Wall type">
-                    <option value="No-slip">No-slip</option>
-                    <option value="Slip">Slip</option>
-                  </select>
-                </div>
-                <div class="mat-assign-hint" id="bc-wall-hint">Air sticks to the wall (zero velocity at the surface). This is the usual CFD wall.</div>
-              </div>
-              <div class="mat-assign-block">
-                <div class="mat-assign-head">
-                  <span class="mat-k">Assigned faces (<span id="bc-assign-count">0</span>)</span>
-                  <button type="button" class="mat-clear-link" id="bc-clear-assign">Clear list</button>
-                </div>
-                <ul class="mat-assign-list" id="bc-assign-list" aria-label="Assigned faces"></ul>
-                <div class="mat-assign-hint">Click a face in the viewport to assign it. It highlights when selected.</div>
-                <div class="mat-assign-hint" id="bc-per-face-hint" hidden>Each assigned face gets this value on its own. Two faces at 5 means 10 total.</div>
-              </div>
-              <div class="mat-panel-foot">
-                <button type="button" class="mat-clear-link" id="bc-delete" title="Delete boundary condition">Delete</button>
-                <button type="button" class="js-btn tree-panel-done">Done</button>
-              </div>
-            </div>
-          </div>
+          <div id="panel-bc-editor" class="mat-panel bc-panel" hidden aria-label="Boundary condition"></div>
 
           <div id="panel-mesh-hub" class="sim-defaults-panel picker-panel hub-panel" hidden aria-label="Mesh">
             <div class="sim-def-head">
@@ -524,121 +283,10 @@
             </div>
           </div>
 
-          <!-- W23 Mesh form + Generate (W16 STEP/Body1 + snappyHexMesh; W20 settings) -->
-          <div id="panel-mesh-form" class="mat-panel mesh-panel" hidden aria-label="Mesh 1 settings">
-            <div class="mat-panel-head">
-              <div class="mesh-title-row">
-                <span class="mat-panel-title" id="mesh-panel-title">Mesh 1</span>
-                <button type="button" class="mesh-rename" id="mesh-rename" title="Rename mesh" aria-label="Rename mesh">
-                  <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">
-                    <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M4 16.8V20h3.2L18.4 8.8l-3.2-3.2L4 16.8z"/>
-                      <path d="M13.8 6.9l3.2 3.2"/>
-                    </g>
-                  </svg>
-                </button>
-                <input type="text" class="mesh-rename-input" id="mesh-rename-input" maxlength="64" hidden aria-label="Mesh name" />
-              </div>
-            </div>
-            <div class="mat-panel-body" id="mesh-form" data-w20-mesh-form="1">
-              <div class="sim-copy-from" id="mesh-copy-from" hidden>
-                <button type="button" class="fp-btn" id="mesh-copy-open">Copy from another mesh</button>
-                <div class="sim-copy-picker" id="mesh-copy-picker" hidden>
-                  <label class="mat-k" for="mesh-copy-mesh">Copy settings from</label>
-                  <select id="mesh-copy-mesh" class="bc-select" aria-label="Mesh to copy settings from">
-                    <option value="">Select a mesh…</option>
-                  </select>
-                  <p class="mat-assign-hint">Includes meshes on other geometries. Or click a mesh in the tree.</p>
-                  <button type="button" class="mat-clear-link" id="mesh-copy-cancel">Cancel</button>
-                </div>
-                <p class="mat-assign-hint" id="mesh-copy-done" hidden></p>
-              </div>
-              <div class="mat-row">
-                <span class="mat-k">Algorithm</span>
-                <span class="mat-v">Standard</span>
-              </div>
-              <div class="mat-row">
-                <span class="mat-k">Sizing</span>
-                <span class="mat-v">Automatic</span>
-              </div>
-              <div class="mat-row mesh-fineness-row">
-                <span class="mat-k">Fineness</span>
-                <span class="mat-v mesh-fineness-wrap">
-                  <span class="mesh-fineness-ends"><span>COARSE</span><span>FINE</span></span>
-                  <input type="range" id="mesh-fineness" min="1" max="10" step="1" value="5" aria-label="Fineness" />
-                  <span class="mesh-fineness-val" id="mesh-fineness-val">5</span>
-                </span>
-              </div>
+          <!-- Mesh settings and inspect are React islands (src/panels/mesh/MeshPanel.tsx); the hosts stay for openTreeDetail. -->
+          <div id="panel-mesh-form" class="mat-panel mesh-panel" hidden aria-label="Mesh settings"></div>
 
-              <div class="mat-row mesh-toggle-row">
-                <span class="mat-k" title="Automatic boundary layers">Automatic boundary layers</span>
-                <button type="button" class="mesh-toggle is-on" id="mesh-toggle-bl" data-key="automatic_boundary_layers" aria-pressed="true" aria-label="Automatic boundary layers">ON</button>
-              </div>
-              <div class="mat-row mesh-toggle-row">
-                <span class="mat-k">Physics-based meshing</span>
-                <button type="button" class="mesh-toggle is-on" id="mesh-toggle-physics" data-key="physics_based_meshing" aria-pressed="true" aria-label="Physics-based meshing">ON</button>
-              </div>
-              <div class="mat-row mesh-toggle-row">
-                <span class="mat-k">Hex element core</span>
-                <button type="button" class="mesh-toggle is-on" id="mesh-toggle-hex" data-key="hex_element_core" aria-pressed="true" aria-label="Hex element core">ON</button>
-              </div>
-
-              <details class="mesh-advanced" id="mesh-advanced">
-                <summary>Advanced settings</summary>
-                <div class="mat-row">
-                  <span class="mat-k" title="Edges and sliver faces shorter than this are merged before meshing. Leave empty for automatic (from the geometry size).">Small feature suppression</span>
-                  <span class="mat-v bc-value-row">
-                    <input type="text" id="mesh-sfs" class="bc-input" value="" placeholder="Automatic" spellcheck="false" aria-label="Small feature suppression" />
-                    <span class="bc-unit-label" id="mesh-sfs-unit">m</span>
-                  </span>
-                </div>
-                <div class="mat-row">
-                  <span class="mat-k" title="Gap thickness divided by the edge length in the gap. Above 1 it is the number of cells across a gap.">Gap refinement factor</span>
-                  <input type="number" id="mesh-gap" class="bc-input" value="0.05" step="any" min="0" aria-label="Gap refinement factor" />
-                </div>
-                <div class="mat-row">
-                  <span class="mat-k" title="Size ratio between neighbouring cells when growing away from the surface (hex element core off).">Global gradation rate</span>
-                  <input type="number" id="mesh-gradation" class="bc-input" value="1.22" step="any" min="1" max="3" aria-label="Global gradation rate" />
-                </div>
-                <div class="mat-row">
-                  <span class="mat-k" title="Standard: CAD-fitted surface, hex element core and boundary layers. cfMesh: legacy cartesianMesh (hex element core only).">Mesh engine</span>
-                  <select id="mesh-engine" class="bc-input" aria-label="Mesh engine">
-                    <option value="standard" selected>Standard</option>
-                    <option value="cfmesh">cfMesh (legacy)</option>
-                  </select>
-                </div>
-              </details>
-
-              <div class="mesh-generate-row" id="mesh-generate-row">
-                <button type="button" class="fp-btn fp-btn-primary" id="btn-generate-mesh" data-w21-generate="1" title="Generate the mesh">Generate</button>
-              </div>
-              <div class="mesh-finished" id="mesh-finished" data-w21-finished="1" hidden>
-                <div class="mat-k" id="mesh-status-title">Mesh</div>
-                <div class="mesh-finished-line" id="mesh-finished-line">-</div>
-                <div class="mesh-elapsed" id="mesh-elapsed" hidden>0:00</div>
-                <div class="mesh-finished-meta" id="mesh-finished-meta"></div>
-              </div>
-              <div class="mat-panel-foot">
-                <div class="mesh-foot-left">
-                  <button type="button" class="mat-clear-link" id="mesh-restore-defaults" title="Reset meshing settings to defaults">Restore defaults</button>
-                  <button type="button" class="mat-clear-link" id="mesh-delete" hidden title="Delete mesh">Delete</button>
-                </div>
-                <button type="button" class="js-btn tree-panel-done">Done</button>
-              </div>
-            </div>
-          </div>
-
-          <div id="panel-mesh-inspect" class="mat-panel mesh-panel" hidden aria-label="Mesh 1">
-            <div class="mat-panel-head">
-              <span class="mat-panel-title">Mesh 1</span>
-            </div>
-            <div class="mat-panel-body">
-              <div class="mat-assign-hint">Mesh 1 inspect lives under the tree. Click Mesh 1 in the sidebar to view it.</div>
-              <div class="mat-panel-foot foot-end">
-                <button type="button" class="js-btn tree-panel-done">Done</button>
-              </div>
-            </div>
-          </div>
+          <div id="panel-mesh-inspect" class="mat-panel mesh-panel" hidden aria-label="Mesh"></div>
 
           <div id="panel-refs-hub" class="sim-defaults-panel picker-panel hub-panel" hidden aria-label="Refinements">
             <div class="sim-def-head">
@@ -865,140 +513,7 @@
             </div>
           </div>
 
-          <div id="panel-sim-control" class="mat-panel sim-control-panel" hidden aria-label="Run">
-            <div class="mat-panel-head">
-              <div class="mesh-title-row">
-                <span class="mat-panel-title" id="run-panel-title">Run</span>
-                <button type="button" class="mesh-rename" id="sim-rename" title="Rename run" aria-label="Rename run">
-                  <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">
-                    <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M4 16.8V20h3.2L18.4 8.8l-3.2-3.2L4 16.8z"/>
-                      <path d="M13.8 6.9l3.2 3.2"/>
-                    </g>
-                  </svg>
-                </button>
-                <input type="text" class="mesh-rename-input" id="sim-rename-input" maxlength="64" hidden aria-label="Run name" />
-              </div>
-            </div>
-            <div class="mat-panel-body">
-              <div class="sim-copy-from" id="sim-copy-from" hidden>
-                <button type="button" class="fp-btn" id="sim-copy-open">Copy from previous run</button>
-                <div class="sim-copy-picker" id="sim-copy-picker" hidden>
-                  <label class="mat-k" for="sim-copy-run">Copy settings from</label>
-                  <select id="sim-copy-run" class="bc-select" aria-label="Run to copy settings from">
-                    <option value="">Select a run…</option>
-                  </select>
-                  <p class="mat-assign-hint">Or click a run in the tree.</p>
-                  <button type="button" class="mat-clear-link" id="sim-copy-cancel">Cancel</button>
-                </div>
-                <p class="mat-assign-hint" id="sim-copy-done" hidden></p>
-              </div>
-              <div class="mat-row sim-mode-row">
-                <span class="mat-k">Time dependency</span>
-                <span class="mat-v" id="sim-run-mode">Steady-state</span>
-              </div>
-              <div id="sim-steady-fields">
-                <div class="mat-row">
-                  <span class="mat-k" title="SIMPLE iteration count. Not seconds — this is a steady run (deltaT = 1).">Iterations</span>
-                  <input type="number" id="sim-end-time" class="bc-input" min="1" step="1" value="200" aria-label="Iterations" />
-                </div>
-                <div class="mat-row">
-                  <span class="mat-k" title="Write a results folder every N iterations">Write interval</span>
-                  <input type="number" id="sim-write-interval" class="bc-input" min="1" step="1" value="50" aria-label="Write interval" />
-                </div>
-              </div>
-              <div id="sim-transient-fields" hidden>
-                <div class="mat-row">
-                  <span class="mat-k" title="Physical time to simulate (seconds).">Simulation time</span>
-                  <span class="mat-v bc-value-row">
-                    <input type="number" id="sim-tr-end-time" class="bc-input" min="0" step="any" value="5" aria-label="Simulation time in seconds" />
-                    <span class="bc-unit-label">s</span>
-                  </span>
-                </div>
-                <div class="mat-row">
-                  <span class="mat-k" title="How many result frames to write over the simulation time. The interval between frames is calculated.">Result frames</span>
-                  <input type="number" id="sim-tr-write-count" class="bc-input" min="1" step="1" value="50" aria-label="Number of result frames" />
-                </div>
-                <p class="mat-assign-hint sim-tr-hint" id="sim-tr-hint"></p>
-                <details class="mesh-advanced" id="sim-tr-advanced">
-                  <summary>Advanced settings</summary>
-                  <div class="mat-row">
-                    <span class="mat-k" title="Adjustable: the step follows the flow to hold the Courant number below the limit. Fixed: one constant step.">Time step</span>
-                    <select id="sim-tr-step-mode" class="bc-select" aria-label="Time step mode">
-                      <option value="adjustable">Adjustable (Courant-limited)</option>
-                      <option value="fixed">Fixed</option>
-                    </select>
-                  </div>
-                  <div class="mat-row" id="sim-tr-max-co-row">
-                    <span class="mat-k" title="Largest cell Courant number allowed. 1 is time-accurate; up to ~5 runs faster with more outer correctors.">Max Courant number</span>
-                    <input type="number" id="sim-tr-max-co" class="bc-input" min="0.05" step="any" value="1" aria-label="Maximum Courant number" />
-                  </div>
-                  <div class="mat-row">
-                    <span class="mat-k" id="sim-tr-delta-t-label" title="Leave blank to calculate from the mesh size and inlet speed.">Initial Δt</span>
-                    <span class="mat-v bc-value-row">
-                      <input type="number" id="sim-tr-delta-t" class="bc-input" min="0" step="any" placeholder="auto" aria-label="Time step in seconds" />
-                      <span class="bc-unit-label">s</span>
-                    </span>
-                  </div>
-                  <div class="mat-row" id="sim-tr-max-dt-row">
-                    <span class="mat-k" title="Cap for the adjustable step. Blank uses simulation time ÷ result frames. Never larger than that interval, so every result frame is written.">Max Δt</span>
-                    <span class="mat-v bc-value-row">
-                      <input type="number" id="sim-tr-max-dt" class="bc-input" min="0" step="any" placeholder="auto" aria-label="Maximum time step in seconds" />
-                      <span class="bc-unit-label">s</span>
-                    </span>
-                  </div>
-                  <div class="mat-row">
-                    <span class="mat-k" title="Euler is first order and robust. Backward is second order in time.">Time scheme</span>
-                    <select id="sim-tr-scheme" class="bc-select" aria-label="Time scheme">
-                      <option value="Euler">Euler (1st order)</option>
-                      <option value="backward">Backward (2nd order)</option>
-                    </select>
-                  </div>
-                  <div class="mat-row">
-                    <span class="mat-k" title="PIMPLE outer loops per time step. 1 = PISO; 2–3 allow a higher Courant number.">Outer correctors</span>
-                    <input type="number" id="sim-tr-outer" class="bc-input" min="1" max="50" step="1" value="1" aria-label="Outer correctors" />
-                  </div>
-                  <div class="mat-row">
-                    <span class="mat-k" title="Pressure corrections per outer loop.">Pressure correctors</span>
-                    <input type="number" id="sim-tr-corr" class="bc-input" min="1" max="10" step="1" value="2" aria-label="Pressure correctors" />
-                  </div>
-                  <div class="mat-row">
-                    <span class="mat-k" title="Extra non-orthogonal corrections for skewed cells.">Non-orthogonal correctors</span>
-                    <input type="number" id="sim-tr-nonorth" class="bc-input" min="0" max="5" step="1" value="0" aria-label="Non-orthogonal correctors" />
-                  </div>
-                  <button type="button" class="mat-clear-link sim-tr-reset" id="sim-tr-reset">Reset advanced to defaults</button>
-                </details>
-              </div>
-              <div class="sim-run-row">
-                <button type="button" class="fp-btn fp-btn-primary" id="btn-sim-start" title="Start simpleFoam on this run">Start</button>
-                <button type="button" class="fp-btn" id="btn-sim-stop" hidden title="Stop the running solve">Stop</button>
-              </div>
-              <div class="mat-assign-hint sim-run-hint" id="sim-run-hint" hidden></div>
-              <div class="sim-finished" id="sim-finished" hidden>
-                <div class="mat-k" id="sim-status-title">Run</div>
-                <div class="mesh-finished-line" id="sim-finished-line">-</div>
-                <div class="mesh-elapsed" id="sim-elapsed" hidden>0:00</div>
-                <div class="sim-eta" id="sim-eta" hidden></div>
-                <div class="sim-residual-wrap" id="sim-residual-wrap" hidden>
-                  <svg class="sim-residual-plot" id="sim-residual-plot" viewBox="0 0 280 132" preserveAspectRatio="none" role="img" aria-label="Residuals"></svg>
-                  <div class="sim-plot-cursor" id="sim-plot-cursor" hidden></div>
-                  <div class="sim-plot-tip" id="sim-plot-tip" hidden></div>
-                </div>
-                <div class="sim-residual-legend" id="sim-residual-legend" hidden>
-                  <span><i class="sim-swatch sim-swatch-u"></i>U</span>
-                  <span><i class="sim-swatch sim-swatch-p"></i>p</span>
-                  <span><i class="sim-swatch sim-swatch-k"></i>k</span>
-                  <span><i class="sim-swatch sim-swatch-w"></i>ω</span>
-                  <span id="sim-legend-co" hidden><i class="sim-swatch sim-swatch-co"></i>Co mean</span>
-                </div>
-                <div class="mesh-finished-meta" id="sim-finished-meta"></div>
-              </div>
-            </div>
-            <div class="mat-panel-foot">
-              <button type="button" class="mat-clear-link" id="sim-run-delete" title="Delete run">Delete</button>
-              <button type="button" class="js-btn tree-panel-done">Done</button>
-            </div>
-          </div>
+          <div id="panel-sim-control" class="mat-panel sim-control-panel" hidden aria-label="Run"></div>
 
           <div id="panel-area-average" class="mat-panel aa-panel" hidden aria-label="Area average 1" data-w22-aa-panel="1" data-w24-aa-panel="1">
             <div class="mat-panel-head">
@@ -1610,17 +1125,18 @@
     </div>
     <div id="setup-wizard" class="wiz" hidden>
       <div class="wiz-card" role="dialog" aria-modal="true" aria-labelledby="wiz-heading">
-        <ol class="wiz-rail" id="wiz-rail" aria-label="Setup steps">
+        <ol class="wiz-rail" id="wiz-rail" aria-label="Settings steps">
           <li data-wiz-dot="0" class="is-on" role="button" tabindex="0">Welcome</li>
           <li data-wiz-dot="1" role="button" tabindex="0">Units</li>
           <li data-wiz-dot="2" role="button" tabindex="0">This PC</li>
           <li data-wiz-dot="3" role="button" tabindex="0">Port</li>
           <li data-wiz-dot="4" role="button" tabindex="0">Workspace</li>
+          <li data-wiz-dot="5" role="button" tabindex="0">Plugins</li>
         </ol>
         <div class="wiz-main">
           <section class="wiz-pane" data-wiz-step="0">
             <h2 id="wiz-heading">Set up Magnusim on this PC</h2>
-            <p class="wiz-copy">A few choices so new projects and solves match how you work. You can change them later from Preferences.</p>
+            <p class="wiz-copy">A few choices so new projects and solves match how you work. You can change them later from Settings.</p>
           </section>
           <section class="wiz-pane" data-wiz-step="1" hidden>
             <h2>Default units</h2>
@@ -1664,6 +1180,11 @@
                 <span class="slider"></span>
               </label>
             </div>
+          </section>
+          <section class="wiz-pane" data-wiz-step="5" hidden>
+            <h2>Plugins</h2>
+            <p class="wiz-copy">Plugins add analyses, meshers and panels from the plugins folder. Turning one off removes what it adds right away.</p>
+            <div id="wiz-plugins"></div>
           </section>
           <div class="wiz-foot">
             <button type="button" class="home-btn" id="wiz-back">Back</button>
@@ -1838,13 +1359,7 @@
           <button type="button" class="fp-close" id="cs-cancel-x" aria-label="Close">x</button>
         </div>
         <div class="cs-modal-body">
-          <div class="cs-types" id="cs-type-list">
-            <div class="cs-group-label">FLOW</div>
-            <div class="cs-group-sub">FLUID DYNAMICS</div>
-            <button type="button" class="cs-type is-selected" data-type="Incompressible" id="cs-type-incompressible">
-              <span class="cs-type-name">Incompressible</span>
-            </button>
-          </div>
+          <div class="cs-types" id="cs-type-list"></div>
           <div class="cs-detail" id="cs-detail">
             <div class="cs-detail-title">Incompressible Fluid Flow</div>
             <p class="cs-detail-desc">Simulate flow of a single fluid for which the maximum Mach number is lower than 0.3. Density variations are negligible — approximated as incompressible.</p>

@@ -28,6 +28,8 @@ jobs:
         run: pytest --tb=short
   node:
     runs-on: ubuntu-latest
+    env:
+      MAGNUSIM_STRICT_SCOPE: "1"
     defaults:
       run:
         working-directory: magnusim-web

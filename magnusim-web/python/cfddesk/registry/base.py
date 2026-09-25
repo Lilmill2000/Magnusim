@@ -22,6 +22,24 @@ class Spec(Protocol):
 
 T = TypeVar("T")
 
+# Built-ins a plugin may replace only when manifest.overrides names them,
+# and may not drop unless a test passes allow_protected=True.
+PROTECTED_KEYS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("mesher", "cfmesh"),
+        ("mesher", "standard"),
+        ("analysis", "incompressible_steady"),
+        ("solver", "simpleFoam"),
+    }
+)
+
+
+def _manifest_overrides(plugin: str) -> list[str]:
+    """Overrides stashed for ``plugin`` on the live hub (manifest or in-flight load)."""
+    from cfddesk.registry.discovery import get_hub
+
+    return get_hub().current_overrides(plugin)
+
 
 def _schema_to_json(schema: Any, *, kind: str, key: str, bag: str) -> Any:
     """Convert SchemaField bags to JSON Schema; warn + None on failure."""
@@ -48,6 +66,7 @@ class Registry(Generic[T]):
         self.kind = kind
         self._items: dict[str, T] = {}
         self._plugins: dict[str, str] = {}
+        self._baseline: dict[str, tuple[T, str]] = {}
 
     def register(self, spec: T, *, plugin: str = "builtin") -> None:
         key = getattr(spec, "key", None)
@@ -69,6 +88,62 @@ class Registry(Generic[T]):
             except (AttributeError, TypeError):
                 pass
 
+    def replace(self, spec: T, *, plugin: str) -> None:
+        """Swap an existing spec. The plugin manifest must list ``kind:key``."""
+        key = getattr(spec, "key", None)
+        if not isinstance(key, str) or not key:
+            raise RegistryError(f"{self.kind}: spec missing non-empty key")
+        token = f"{self.kind}:{key}"
+        if token not in set(_manifest_overrides(plugin)):
+            raise RegistryError(
+                f"{self.kind}: replace {key!r} refused; {token} is not in manifest.overrides"
+            )
+        if key not in self._items:
+            raise RegistryError(f"{self.kind}: cannot replace unknown key {key!r}")
+        if key not in self._baseline:
+            self._baseline[key] = (self._items[key], self._plugins.get(key, "builtin"))
+        self._items[key] = spec
+        self._plugins[key] = plugin
+        if not hasattr(spec, "plugin"):
+            try:
+                object.__setattr__(spec, "plugin", plugin)
+            except (AttributeError, TypeError):
+                pass
+
+    def unregister(
+        self,
+        key: str,
+        *,
+        plugin: str,
+        allow_protected: bool = False,
+    ) -> None:
+        """Drop a spec. Protected built-ins stay unless a test explicitly allows it."""
+        token = f"{self.kind}:{key}"
+        protected = (self.kind, key) in PROTECTED_KEYS
+        named = token in set(_manifest_overrides(plugin))
+        if protected and not (named and allow_protected):
+            raise RegistryError(f"{self.kind}: refusing to unregister protected key {key!r}")
+        if key not in self._items:
+            raise RegistryError(f"{self.kind}: unknown key {key!r}")
+        if key in self._baseline:
+            spec, owner = self._baseline.pop(key)
+            self._items[key] = spec
+            self._plugins[key] = owner
+            return
+        if protected:
+            raise RegistryError(f"{self.kind}: protected key {key!r} stays registered")
+        if not named and plugin != self._plugins.get(key):
+            raise RegistryError(
+                f"{self.kind}: unregister {key!r} refused for plugin {plugin!r}"
+            )
+        del self._items[key]
+        self._plugins.pop(key, None)
+
+    def owner(self, key: str) -> str:
+        if key not in self._items:
+            raise RegistryError(f"{self.kind}: unknown key {key!r}")
+        return self._plugins.get(key, "builtin")
+
     def get(self, key: str) -> T:
         try:
             return self._items[key]
@@ -84,6 +159,7 @@ class Registry(Generic[T]):
     def clear(self) -> None:
         self._items.clear()
         self._plugins.clear()
+        self._baseline.clear()
 
     def describe(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []

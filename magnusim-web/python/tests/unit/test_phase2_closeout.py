@@ -1,4 +1,4 @@
-"""Phase 2 closeout: write_run_case, sibling write-through, example plugin."""
+"""Phase 2 closeout: write_run_case, sibling write-through, laminar demo."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 WEB_ROOT = Path(__file__).resolve().parents[3]
 TOOLS = WEB_ROOT / "python" / "tools"
 CLI = TOOLS / "project_cli.py"
-EXAMPLE_KEY = "example_passthrough"
+EXAMPLE_KEY = "laminar_steady"
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "js-project"
 
 
@@ -31,9 +31,10 @@ def test_example_folder_plugin_registers_analysis():
     keys = set(get_registry("analysis").keys())
     assert {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY} <= keys
     spec = get_registry("analysis").get(EXAMPLE_KEY)
-    assert spec.label.startswith("Example")
+    assert spec.label == "Laminar"
+    assert spec.default_turbulence == "laminar"
     assert spec.write_case is not None
-    assert get_hub().manifests["example"].key == "example"
+    assert get_hub().manifests["example-laminar"].key == "example-laminar"
 
 
 def test_write_run_case_uses_registry_write_case(tmp_path):

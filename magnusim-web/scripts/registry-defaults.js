@@ -162,7 +162,6 @@ export function buildW17DefaultsFromRegistry() {
       `registry.json analysis[] missing default key ${DEFAULT_ANALYSIS_KEY}`
     );
   }
-  const passive = _schemaDefault(steady, 'passive_species', 0);
   const turbKey = String(
     steady.default_turbulence || _schemaDefault(steady, 'turbulence_model', 'kOmegaSST')
   );
@@ -181,7 +180,6 @@ export function buildW17DefaultsFromRegistry() {
     turbulence_model: turbulenceLabel(turbKey),
     time_dependency: timeDependencyLabel(timeKey),
     algorithm: algorithmFromSolver(solverKey),
-    passive_species: String(passive),
   });
 }
 

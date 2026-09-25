@@ -1,0 +1,6 @@
+key = "template-demo"
+name = "Template demo"
+version = "0.1.0"
+api_version = "1.0"
+description = "Copy-paste plugin that clones the registered steady analysis"
+authors = "Magnusim"

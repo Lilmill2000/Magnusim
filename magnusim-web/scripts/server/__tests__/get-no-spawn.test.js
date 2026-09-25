@@ -31,7 +31,7 @@ describe('GET-no-spawn', () => {
       { sendJson },
     );
     assert.equal(sent.length, 1);
-    assert.ok(sent[0].status === 404 || sent[0].status === 400);
+    assert.equal(sent[0].status, 503);
 
     assert.doesNotThrow(() => getMaterials('no-such-project'));
     assert.doesNotThrow(() => getSimulation('no-such-project'));

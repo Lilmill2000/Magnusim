@@ -62,7 +62,7 @@ def test_analysis_type_has_no_mesh_bags():
 def test_load_all_registers_mesher_keys():
     hub = load_all()
     reg = get_registry("mesher")
-    assert set(reg.keys()) == EXPECTED_MESHER_KEYS
+    assert EXPECTED_MESHER_KEYS <= set(reg.keys())
     assert hub.registry("mesher") is reg
     assert analysis_has_mesh_bags(hub) is False
 
@@ -74,17 +74,26 @@ def test_mesher_specs_shape():
     standard = reg.get("standard")
     assert isinstance(standard, MeshBackend)
     assert standard.label == "Standard"
-    assert standard.tool == "generate_standard.py"
+    assert standard.tool == "mesh"
+    assert standard.generate is not None
+    assert standard.generate() == "generate_standard.py"
     assert standard.supports_hex_core is True
     assert standard.frozen is False
-    assert standard.fingerprint_payload is None
-    assert standard.settings_schema == ()
+    assert callable(standard.fingerprint_payload)
+    assert {field.key for field in standard.settings_schema} >= {
+        "fineness",
+        "hex_element_core",
+        "add_layers",
+    }
     assert standard.refinement_types == REFINEMENT_MENU_BY_ALGORITHM["standard"]
     assert standard.multi_region is False
 
     cfmesh = reg.get("cfmesh")
     assert cfmesh.label == "cfMesh cartesianMesh (legacy)"
-    assert cfmesh.tool == "generate_cfmesh_standard.py"
+    assert cfmesh.tool == "mesh"
+    assert cfmesh.generate is not None
+    assert cfmesh.generate() == "generate_cfmesh_standard.py"
+    assert cfmesh.settings_schema == ()
     assert cfmesh.frozen is True
     assert cfmesh.supports_hex_core is True
     assert any(r.name == "cartesianMesh" for r in cfmesh.requires)
@@ -92,7 +101,10 @@ def test_mesher_specs_shape():
 
     snappy = reg.get("snappy_hexdominant")
     assert snappy.label == "Hex-dominant"
-    assert snappy.tool == "generate_snappy.py"
+    assert snappy.tool == "mesh"
+    assert snappy.generate is not None
+    assert snappy.generate() == "generate_snappy.py"
+    assert "hex_element_core" not in {field.key for field in snappy.settings_schema}
     assert snappy.supports_hex_core is False
     assert snappy.frozen is False
     assert any(r.name == "snappyHexMesh" for r in snappy.requires)
@@ -111,7 +123,7 @@ def test_load_all_idempotent_meshers():
     load_all()
     load_all()
     load_all(force=True)
-    assert set(get_registry("mesher").keys()) == EXPECTED_MESHER_KEYS
+    assert EXPECTED_MESHER_KEYS <= set(get_registry("mesher").keys())
 
 
 def test_hexcore_backup_tree_not_referenced_by_meshers_module():

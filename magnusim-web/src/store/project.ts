@@ -4,19 +4,22 @@ import type { RegistryDescribe, RegistryRow } from '../api/registry.gen';
 
 export interface ProjectState {
   projectId: string | null;
+  generation: number;
   hydrate: Record<string, unknown> | null;
   registry: RegistryDescribe | null;
   activeSimId: string | null;
   activeGeometryId: string | null;
   setHydrate: (projectId: string, payload: Record<string, unknown>) => void;
+  resetScope: () => void;
   setActiveSim: (id: string | null) => void;
   setActiveGeometry: (id: string | null) => void;
-  loadRegistry: () => Promise<RegistryDescribe>;
+  loadRegistry: (force?: boolean) => Promise<RegistryDescribe>;
   refreshHydrate: (projectId: string) => Promise<Record<string, unknown>>;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projectId: null,
+  generation: 0,
   hydrate: null,
   registry: null,
   activeSimId: null,
@@ -24,7 +27,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setHydrate(projectId, payload) {
     const catalog = payload.simulation as { id?: string; active_id?: string; simulation?: {id?: string} } | undefined;
     const project = payload.project as {active_geometry_id?: string} | undefined;
-    set({
+    set((state) => ({
+      generation: state.generation + 1,
       projectId,
       hydrate: payload,
       activeSimId: String(
@@ -33,8 +37,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           '',
       ) || null,
       activeGeometryId: project?.active_geometry_id || null,
-    });
+    }));
     window.__cfdProject = { projectId, hydrate: payload };
+  },
+  resetScope() {
+    set((state) => ({
+      generation: state.generation + 1,
+      projectId: null,
+      hydrate: null,
+      activeSimId: null,
+      activeGeometryId: null,
+    }));
+    delete window.__cfdProject;
   },
   setActiveSim(id) {
     set({ activeSimId: id });
@@ -42,8 +56,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setActiveGeometry(id) {
     set({ activeGeometryId: id });
   },
-  async loadRegistry() {
-    if (get().registry) return get().registry as RegistryDescribe;
+  async loadRegistry(force = false) {
+    if (!force && get().registry) return get().registry as RegistryDescribe;
     const data = await apiGet<RegistryDescribe>('/api/registry');
     set({ registry: data });
     const analyses = (data.analysis || []) as RegistryRow[];

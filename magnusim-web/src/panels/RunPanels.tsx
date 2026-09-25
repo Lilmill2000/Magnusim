@@ -2,9 +2,7 @@ import { useJobsStore } from '../store/jobs';
 import type { IslandProps } from '../islands';
 import { PanelChrome } from './PanelChrome';
 
-export function RunControl(_props: IslandProps) {
-  return null;
-}
+export { RunControl } from './run/RunControl';
 
 export function RunResults(_props: IslandProps) {
   return (
@@ -40,13 +38,7 @@ export function RunMesh(_props: IslandProps) {
   );
 }
 
-export function GeometryPanel(_props: IslandProps) {
-  return (
-    <PanelChrome title="Geometry">
-      <p className="mat-assign-hint">Click a body in the tree to highlight it. Import is a job with progress.</p>
-    </PanelChrome>
-  );
-}
+export { GeometryPanel } from './geometry/GeometryPanel';
 
 export function JobDrawer(_props: IslandProps) {
   const jobs = useJobsStore((s) => s.jobs);

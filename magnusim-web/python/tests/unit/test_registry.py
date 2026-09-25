@@ -138,6 +138,30 @@ def test_to_json_schema_and_validate_roundtrip():
     assert any("dir" in e for e in errs)
 
 
+def test_to_json_schema_emits_description_and_widget():
+    fields = [
+        SchemaField(
+            "fineness",
+            "Fineness",
+            "int",
+            default=5,
+            min=1,
+            max=10,
+            description="How small the cells get.",
+            widget="range",
+        ),
+        SchemaField("plain", "Plain", "int", default=1),
+    ]
+    schema = to_json_schema(fields)
+    fine = schema["properties"]["fineness"]
+    assert fine["description"] == "How small the cells get."
+    assert fine["x-cfddesk"]["widget"] == "range"
+    # Absent metadata stays out of the payload so the UI can test for it.
+    plain = schema["properties"]["plain"]
+    assert "description" not in plain
+    assert "x-cfddesk" not in plain
+
+
 def test_required_fields_in_schema_and_validate():
     fields = [
         SchemaField("name", "Name", "text"),  # default None → required

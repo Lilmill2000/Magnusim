@@ -10,6 +10,7 @@ import {
   dropQueueJobsForMesh,
   isTerminalJobStatus,
   meshGenerateButtonKind,
+  computeBusyLabel,
   meshIsQueuedOrGenerating,
   meshProgressPhase,
   resolveRunMeshId,
@@ -510,6 +511,54 @@ describe('meshProgressPhase', () => {
     expect(meshProgressPhase({ jobStatus: 'failed', failed: true, computeLive: true })).toBe(
       'failed'
     );
+  });
+});
+
+describe('meshProgressPhase queued', () => {
+  it('reads queued, not generating, while the mesh waits behind another job', () => {
+    expect(meshProgressPhase({ jobStatus: 'idle', queued: true })).toBe('queued');
+    // A ready mesh queued to regenerate still reads queued.
+    expect(meshProgressPhase({ jobStatus: 'done', meshReady: true, queued: true })).toBe('queued');
+  });
+
+  it('a running job wins over a stale queue row', () => {
+    expect(meshProgressPhase({ jobStatus: 'running', queued: true })).toBe('generating');
+    expect(meshProgressPhase({ jobStatus: 'idle', computeLive: true, queued: true })).toBe('generating');
+  });
+});
+
+describe('computeBusyLabel', () => {
+  const names = (kind: string, id: string) => (kind === 'mesh' && id === 'mesh_1' ? 'Coarse mesh' : null);
+
+  it('names a job in another project with that project', () => {
+    expect(
+      computeBusyLabel(
+        { kind: 'mesh', mesh_id: 'mesh_1', project_id: 'pA', project_title: 'Project A', mesh_name: 'Mesh 1' },
+        { currentProjectId: 'pB', lookupName: names },
+      ),
+    ).toBe('Mesh 1 in Project A');
+  });
+
+  it("does not borrow this project's mesh name for another project's mesh_1", () => {
+    expect(
+      computeBusyLabel({ kind: 'mesh', mesh_id: 'mesh_1', project_id: 'pA' }, { currentProjectId: 'pB', lookupName: names }),
+    ).toBe('a mesh in another project');
+  });
+
+  it("uses this project's own names for its own job", () => {
+    expect(
+      computeBusyLabel({ kind: 'mesh', mesh_id: 'mesh_1', project_id: 'pB' }, { currentProjectId: 'pB', lookupName: names }),
+    ).toBe('Coarse mesh');
+    expect(
+      computeBusyLabel(
+        { kind: 'solve', run_id: 'r1', project_id: 'pA' },
+        { currentProjectId: 'pB', projectTitle: () => 'Project A' },
+      ),
+    ).toBe('a run in Project A');
+  });
+
+  it('is empty when nothing runs', () => {
+    expect(computeBusyLabel(null)).toBe('');
   });
 });
 

@@ -1,7 +1,7 @@
 """W9: on-demand Plot-over-path live sample from real OpenFOAM case fields.
 
 Server-side path (documented):
-  case .cfddesk-prepared.vtu (point-data magU / p / U) -> polyline vertices
+  case volume at time via case_volume.load_volume (point-data magU / p / U) -> polyline vertices
   -> pyvista sample_over_line per segment (resolution = subdivisions+1)
   -> JSON series (distance, value). Not a chrome-only / made-up chart.
 
@@ -20,9 +20,12 @@ from pathlib import Path
 import numpy as np
 import pyvista as pv
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from case_volume import load_volume  # noqa: E402
+
 APPROACH = (
     "server-side sample_over_line: Vite /api/plot-over-path -> "
-    "export_plot_over_path.py reads case .cfddesk-prepared.vtu "
+    "export_plot_over_path.py reads the case volume at time "
     "point-data (magU/p/U) -> sample along polyline "
     "(resolution=subdivisions+1 per segment) -> JSON series. "
     "Not a chrome path line with a made-up chart."
@@ -262,13 +265,12 @@ def export_plot_over_path(
     case_dir = Path(case_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    vtu_path = case_dir / ".cfddesk-prepared.vtu"
-    if not vtu_path.is_file():
-        raise FileNotFoundError(f"missing prepared VTU: {vtu_path}")
     # Prefer magU foam stamp proof
     u_path = case_dir / str(time) / "U"
     p_path = case_dir / str(time) / "p"
-    mesh = pv.read(str(vtu_path))
+    # Shared loader (see export_iso_surface): the legacy prepared VTU is only
+    # a fallback for times without native fields.
+    mesh, vtu_path = load_volume(case_dir, str(time))
     label = field_variable
     if field and not field_variable:
         label = "Velocity Magnitude" if field == "magU" else ("Pressure" if field == "p" else field)

@@ -26,13 +26,43 @@ _SOLVE_SH = _TEMPLATES / "solve.sh"
 
 _RE_TIME = re.compile(r"^Time\s*=\s*([0-9.+-eE]+)\s*$")
 _RE_RESIDUAL = re.compile(
-    r"Solving for (Ux|Uy|Uz|p|omega|k), Initial residual = ([0-9.eE+-]+)"
+    r"Solving for (Ux|Uy|Uz|p|omega|k|epsilon|R(?:xx|xy|xz|yy|yz|zz)), Initial residual = ([0-9.eE+-]+)"
 )
 _RE_COURANT = re.compile(
     r"^Courant Number mean:\s*([0-9.eE+-]+)\s+max:\s*([0-9.eE+-]+)"
 )
 _RE_DELTAT = re.compile(r"^deltaT\s*=\s*([0-9.eE+-]+)")
 _RE_MPI_PREFIX = re.compile(r"^\s*\[\d+\]\s*")
+
+
+def parse_residual_line(line: str) -> dict[str, Any] | None:
+    """One OpenFOAM 'Solving for … Initial residual' line, or None."""
+    cleaned = _RE_MPI_PREFIX.sub("", str(line or ""))
+    match = _RE_RESIDUAL.search(cleaned)
+    if not match:
+        return None
+    try:
+        value = float(match.group(2))
+    except ValueError:
+        return None
+    name = match.group(1)
+    return {"field": name, "initial": value, "fields": {name: value}}
+
+
+def parse_extra_line(line: str) -> dict[str, Any] | None:
+    """Courant or deltaT line, or None. Same patterns ProgressParser uses."""
+    cleaned = _RE_MPI_PREFIX.sub("", str(line or ""))
+    courant = _RE_COURANT.match(cleaned)
+    if courant:
+        return {
+            "kind": "courant",
+            "mean": float(courant.group(1)),
+            "max": float(courant.group(2)),
+        }
+    delta = _RE_DELTAT.match(cleaned)
+    if delta:
+        return {"kind": "delta_t", "delta_t": float(delta.group(1))}
+    return None
 
 
 def solve_template_path() -> Path:
@@ -159,34 +189,30 @@ class ProgressParser:
             out.append(Event(event="progress", fields=fields))
             return out
 
-        co = _RE_COURANT.match(line)
-        if co:
+        extra = parse_extra_line(line)
+        if extra is not None and extra.get("kind") == "courant":
             self._enter_solve()
             if self.stage == "solve":
-                mean = float(co.group(1))
-                mx = float(co.group(2))
+                mean = float(extra["mean"])
+                mx = float(extra["max"])
                 self.pending["co_mean"] = mean
                 self.pending["co_max"] = mx
                 out.append(
                     Event(event="courant", fields={"mean": mean, "max": mx})
                 )
-                return out
-        dt = _RE_DELTAT.match(line)
-        if dt:
+            return out
+        if extra is not None and extra.get("kind") == "delta_t":
             self._enter_solve()
             if self.stage == "solve":
-                v = float(dt.group(1))
+                v = float(extra["delta_t"])
                 self.pending["delta_t"] = v
                 out.append(Event(event="courant", fields={"delta_t": v}))
-                return out
+            return out
 
-        rm = _RE_RESIDUAL.search(line)
-        if rm and self.current is not None:
-            name, val_s = rm.group(1), rm.group(2)
-            try:
-                val = float(val_s)
-            except ValueError:
-                return out
+        residual = parse_residual_line(line)
+        if residual and self.current is not None:
+            name = str(residual["field"])
+            val = float(residual["initial"])
             self.current[name] = val
             fields = {
                 "time": self.current.get("t"),

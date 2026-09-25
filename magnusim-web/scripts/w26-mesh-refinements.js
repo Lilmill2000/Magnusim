@@ -1,4 +1,5 @@
 import { safeProjectPath } from './safe-path.js';
+import { projectIdOrActive } from './request-scope.js';
 /**
  * Mesh refinements — filesystem persistence.
  * GET/POST /api/mesh/refinements → projects/<id>/mesh_refinements.json
@@ -21,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, writeActiveMirror } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
-import { pyJson, writeProjectCli } from './py-json.js';
+import { commitRpc, writeProjectCli } from './py-json.js';
 import {
   assembleMeshDoc,
   assembleRefinements,
@@ -98,11 +99,11 @@ async function writeRefinementsFile(id, doc) {
   if (simId && meshId) {
     return writeMeshRefinements(id, meshId, simId, doc);
   }
-  await pyJson(
-    'project_cli.py',
-    ['set-refinements', '--project-dir', projectDir(id), '--sim-id', String(simId || '')],
-    doc,
-  );
+  await commitRpc('refinements.set', {
+    project_dir: projectDir(id),
+    sim_id: String(simId || ''),
+    body: doc,
+  });
   return refinementsJsonPath(id);
 }
 
@@ -351,7 +352,7 @@ async function persistDoc(projectId, sim, refinements, opts) {
 }
 
 function requireProject(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project; create project first' } };
   }
@@ -519,7 +520,7 @@ async function upsertRefinements(body) {
 }
 
 export function getRefinements(projectIdOpt, simIdOpt) {
-  const projectId = projectIdOpt || readActiveId();
+  const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: true,

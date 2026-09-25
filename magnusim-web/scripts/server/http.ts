@@ -19,16 +19,26 @@ export class HttpError extends Error {
   constructor(status: number, message: string) { super(message); this.status = status; }
 }
 
+const jsonBodies = new WeakMap<IncomingMessage, Record<string, unknown>>();
+
 export async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const cached = jsonBodies.get(req);
+  if (cached) return cached;
   const raw = (await readBinaryBody(req, 2 * 1024 * 1024)).toString('utf8');
-  if (!raw.trim()) return {};
+  if (!raw.trim()) {
+    const empty = {};
+    jsonBodies.set(req, empty);
+    return empty;
+  }
   let parsed: unknown;
   try { parsed = JSON.parse(raw); }
   catch { throw new HttpError(400, 'invalid JSON body'); }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new HttpError(400, 'JSON body must be an object');
   }
-  return parsed as Record<string, unknown>;
+  const body = parsed as Record<string, unknown>;
+  jsonBodies.set(req, body);
+  return body;
 }
 
 export function readBinaryBody(req: IncomingMessage, limit = 256 * 1024 * 1024): Promise<Buffer> {

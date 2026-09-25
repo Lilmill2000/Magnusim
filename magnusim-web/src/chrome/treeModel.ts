@@ -1,6 +1,6 @@
+import { scopeBelongsToProject } from '../scope';
 import { runHasVisibleResults } from '../workbench/jobQueueOrder';
-
-export type TreeRec = Record<string, unknown>;
+import type { TreeActivity } from './treeSession';
 
 export interface MeshNode {
   id: string;
@@ -8,7 +8,8 @@ export interface MeshNode {
   ready: boolean;
   busy?: boolean;
   queuePos?: number;
-  refinements?: Array<{ id: string; name: string; faces: string[] }>;
+  scopeKey?: string;
+  refinements?: Array<{ id: string; name: string; faces: string[]; scopeKey?: string }>;
 }
 
 export interface StudyNode {
@@ -16,10 +17,12 @@ export interface StudyNode {
   name: string;
   geometryId: string;
   active: boolean;
+  scopeKey?: string;
   meshes: MeshNode[];
   materialsAssigned: boolean;
+  materialName?: string;
   materialVolumes: string[];
-  bcs: Array<{ id: string; name: string; faces: string[] }>;
+  bcs: Array<{ id: string; name: string; faces: string[]; scopeKey?: string }>;
   wallDefault: string;
   runs: Array<{
     id: string;
@@ -30,7 +33,8 @@ export interface StudyNode {
     hasResults?: boolean;
     busy?: boolean;
     queuePos?: number;
-    resultControls?: Array<{ id: string; name: string; faces: string[] }>;
+    scopeKey?: string;
+    resultControls?: Array<{ id: string; name: string; faces: string[]; scopeKey?: string }>;
   }>;
 }
 
@@ -38,6 +42,7 @@ export interface GeomNode {
   id: string;
   name: string;
   bodies: string[];
+  scopeKey?: string;
   studies: StudyNode[];
 }
 
@@ -46,264 +51,216 @@ export interface SetupTreeModel {
   selectedKey: string | null;
 }
 
-function recs(v: unknown): TreeRec[] {
-  return Array.isArray(v) ? (v as TreeRec[]) : [];
+export interface ProjectTreeDoc {
+  project_id?: string;
+  geometries?: ProjectTreeGeom[];
+  plugin_nodes?: Array<{ label?: string; name?: string; key?: string; scope?: string; projectId?: string; project_id?: string }>;
 }
+
+interface ProjectTreeGeom {
+  id?: string;
+  name?: string;
+  key?: string;
+  bodies?: string[];
+  studies?: ProjectTreeStudy[];
+}
+
+interface ProjectTreeStudy {
+  id?: string;
+  name?: string;
+  geometry_id?: string;
+  key?: string;
+  sort_index?: number;
+  active?: boolean;
+  wall_default?: string;
+  material_volumes?: string[];
+  material_name?: string;
+  bcs?: Array<{ id?: string; name?: string; faces?: string[]; key?: string }>;
+  meshes?: ProjectTreeMesh[];
+  runs?: ProjectTreeRun[];
+}
+
+interface ProjectTreeMesh {
+  id?: string;
+  name?: string;
+  key?: string;
+  generated?: boolean;
+  case_dir?: string;
+  n_cells?: number | null;
+  live_status?: string;
+  refinements?: Array<{ id?: string; name?: string; faces?: string[]; key?: string }>;
+}
+
+interface ProjectTreeRun {
+  id?: string;
+  name?: string;
+  key?: string;
+  mesh_id?: string;
+  mesh_name?: string;
+  status?: string;
+  case_dir?: string;
+  n_saved_times?: number;
+  last_saved_iteration?: number;
+  has_results?: boolean;
+  result_controls?: Array<{ id?: string; name?: string; faces?: string[]; key?: string }>;
+}
+
+type QueueRow = NonNullable<TreeActivity['queue']>[number];
 
 function str(v: unknown, fallback = ''): string {
-  return v == null ? fallback : String(v);
+  return v == null || v === '' ? fallback : String(v);
 }
 
-function expandedMap(): Record<string, boolean> {
-  const ui = window.__CFD_TREE_UI__;
-  return (ui && ui.expanded) || {};
+function scopedActivity(activity: TreeActivity | null | undefined, projectId: string): TreeActivity | null {
+  if (!activity || !activity.project_id || String(activity.project_id) !== String(projectId)) return null;
+  return activity;
 }
 
-export function treeExpanded(label: string, fallback = false): boolean {
-  const exp = expandedMap();
-  if (Object.prototype.hasOwnProperty.call(exp, label)) return !!exp[label];
-  return fallback;
+function forStudy(activity: TreeActivity | null, studyId: string): boolean {
+  return !!activity && !!activity.simulation_id && String(activity.simulation_id) === String(studyId);
 }
 
-type JobActivity = {
-  kind?: string | null;
-  mesh_id?: string | null;
-  run_id?: string | null;
-  queue?: Array<{ kind?: string; mesh_id?: string | null; run_id?: string | null }>;
-};
-
-function jobActivity(): JobActivity {
-  return (window.__CFD_JOB_ACTIVITY__ as JobActivity) || {};
+function queuePos(
+  activity: TreeActivity | null,
+  projectId: string,
+  studyId: string,
+  kind: 'mesh' | 'solve',
+  id: string,
+): number {
+  if (!activity || !id) return 0;
+  const queue = activity.queue || [];
+  const index = queue.findIndex((row) => queueMatches(row, projectId, studyId, kind, id));
+  return index >= 0 ? index + 1 : 0;
 }
 
-function activityQueuePos(kind: 'mesh' | 'solve', id: string): number {
-  if (!id) return 0;
-  const q = jobActivity().queue || [];
-  const i = q.findIndex((r) => {
-    if (!r || r.kind !== kind) return false;
-    return kind === 'mesh' ? String(r.mesh_id) === id : String(r.run_id) === id;
-  });
-  return i >= 0 ? i + 1 : 0;
+function queueMatches(
+  row: QueueRow | undefined,
+  projectId: string,
+  studyId: string,
+  kind: 'mesh' | 'solve',
+  id: string,
+): boolean {
+  if (!row || row.kind !== kind) return false;
+  if (row.project_id && String(row.project_id) !== String(projectId)) return false;
+  if (!row.simulation_id || String(row.simulation_id) !== String(studyId)) return false;
+  return kind === 'mesh' ? String(row.mesh_id) === id : String(row.run_id) === id;
 }
 
-function meshBusy(mesh: TreeRec | null | undefined, id: string): boolean {
-  if (meshReady(mesh)) return false;
-  const act = jobActivity();
-  if (act.kind === 'mesh' && !!id && String(act.mesh_id) === id) return true;
-  if (act.kind && act.kind !== 'mesh') return false;
-  const live = mesh && (mesh.live_mesh_result as TreeRec | undefined);
-  return !!(live && live.status === 'running' && (!act.mesh_id || String(act.mesh_id) === id));
-}
-
-function runBusy(rec: { status?: string; id?: string; run_id?: string }, id: string): boolean {
-  const st = String(rec.status || '');
-  if (st === 'done' || st === 'failed' || st === 'stopped') return false;
-  if (st === 'running' || st === 'starting') return true;
-  const act = jobActivity();
-  return act.kind === 'solve' && !!id && String(act.run_id) === id;
-}
-
-function meshReady(mesh: TreeRec | null | undefined): boolean {
-  if (!mesh) return false;
-  const live = mesh.live_mesh_result as TreeRec | undefined;
-  const act = jobActivity();
+function meshReady(mesh: ProjectTreeMesh, activity: TreeActivity | null, studyId: string, id: string): boolean {
   const thisGenerating =
-    act.kind === 'mesh' && !!mesh.id && String(act.mesh_id) === String(mesh.id);
-  if (live && live.status === 'running' && thisGenerating) return false;
-  const caseDir = (live && live.case_dir) || mesh.case_dir;
-  const cells = Number(live && live.n_cells != null ? live.n_cells : mesh.n_cells);
+    forStudy(activity, studyId) && activity?.kind === 'mesh' && !!id && String(activity.mesh_id) === id;
+  if (mesh.live_status === 'running' && thisGenerating) return false;
+  const caseDir = mesh.case_dir;
+  const cells = Number(mesh.n_cells);
   const hasCells = Number.isFinite(cells) && cells > 0;
-  if (live && live.status === 'done' && (caseDir || hasCells)) return true;
+  if (mesh.live_status === 'done' && (caseDir || hasCells)) return true;
   if (mesh.generated && caseDir) return true;
   if (caseDir && hasCells) return true;
   return false;
 }
 
-function allMeshes(): TreeRec[] {
-  const st = window.__CFD_W20_STATE__ as { meshes_all?: TreeRec[]; meshes?: TreeRec[] } | undefined;
-  if (st && Array.isArray(st.meshes_all)) return st.meshes_all;
-  if (st && Array.isArray(st.meshes)) return st.meshes;
-  const pub = window.__CFD_W20__ as { meshes?: TreeRec[] } | undefined;
-  return recs(pub?.meshes);
+function meshBusy(
+  mesh: ProjectTreeMesh,
+  activity: TreeActivity | null,
+  studyId: string,
+  id: string,
+  ready: boolean,
+): boolean {
+  if (ready) return false;
+  if (!forStudy(activity, studyId)) return mesh.live_status === 'running' && !activity;
+  if (activity?.kind === 'mesh' && !!id && String(activity.mesh_id) === id) return true;
+  if (activity?.kind && activity.kind !== 'mesh') return false;
+  return mesh.live_status === 'running' && (!activity?.mesh_id || String(activity.mesh_id) === id);
 }
 
-function meshesForStudy(study: TreeRec, _geoms: TreeRec[], studies: TreeRec[]): MeshNode[] {
-  const all = allMeshes();
-  const sid = str(study.id);
-  if (!sid) return [];
-  const tagged = all.filter((m) => m && m.simulation_id && String(m.simulation_id) === sid);
-  const source = tagged.length
-    ? tagged
-    : studies.length === 1 && String(studies[0].id) === sid
-      ? all.filter(
-          (m) =>
-            m &&
-            !m.simulation_id &&
-            (!m.geometry_id || !study.geometry_id || String(m.geometry_id) === String(study.geometry_id)),
-        )
-      : [];
-  return source.map((m, i) => {
-    const id = str(m.id || m.name, `mesh_${i + 1}`);
-    return {
-      id,
-      name: str(m.name, `Mesh ${i + 1}`),
-      ready: meshReady(m),
-      busy: meshBusy(m, id),
-      queuePos: activityQueuePos('mesh', id),
-      refinements: refsForMesh(id),
-    };
-  });
+function runBusy(run: ProjectTreeRun, activity: TreeActivity | null, studyId: string, id: string): boolean {
+  const status = String(run.status || '');
+  if (status === 'done' || status === 'failed' || status === 'stopped') return false;
+  if (status === 'running' || status === 'starting') return true;
+  return forStudy(activity, studyId) && activity?.kind === 'solve' && !!id && String(activity.run_id) === id;
 }
 
-function refsForMesh(meshId: string): Array<{ id: string; name: string; faces: string[] }> {
-  const st = window.__CFD_W26_STATE__ as { refinements?: TreeRec[] } | undefined;
-  return recs(st && st.refinements)
-    .filter((r) => String(r.mesh_id || '') === String(meshId))
-    .map((r, i) => ({
-      id: str(r.id, `ref_${i}`),
-      name: str(r.name, 'Refinement'),
-      faces: Array.isArray(r.faces) ? r.faces.map(String) : [],
-    }));
-}
-
-export function readSetupTree(): SetupTreeModel {
-  const w16 = (window.__CFD_W16_STATE__ || window.__CFD_W16__ || {}) as TreeRec;
-  const w17 = (window.__CFD_W17_STATE__ || window.__CFD_W17__ || {}) as TreeRec;
-  const w17sims = recs((w17 as { simulations?: TreeRec[] }).simulations);
-  const w16geoms = recs(w16.geometries);
-  const geomOne = w16.geometry as TreeRec | undefined;
-  const geomsRaw =
-    w16geoms.length > 0
-      ? w16geoms
-      : geomOne && (geomOne.id || geomOne.name || geomOne.step_path || geomOne.faces_url)
-        ? [geomOne]
-        : [];
-  const liveIds = new Set(geomsRaw.map((g) => str(g.id)).filter(Boolean));
-  const studies = (
-    w17sims.length
-      ? w17sims
-      : w17.simulation
-        ? [w17.simulation as TreeRec]
-        : []
-  )
-    .filter((s) => s && s.geometry_id && (!liveIds.size || liveIds.has(str(s.geometry_id))))
-    .slice()
-    .sort((a, b) => {
-      const ai = Number(a.sort_index);
-      const bi = Number(b.sort_index);
-      if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
-      return 0;
-    });
-  const activeSid = str((w17.simulation as TreeRec | undefined)?.id || w17.activeId);
-  const w18 = window.__CFD_W18_STATE__ as {
-    material?: { assigned_volumes?: string[]; simulation_id?: string };
-    materials_all?: Array<{
-      name?: string;
-      assigned_volumes?: string[];
-      simulation_id?: string;
-    }>;
-  } | undefined;
-  const matsAll = recs(w18 && w18.materials_all);
-  const w19 = window.__CFD_W19_STATE__ as {
-    bcs?: Array<{ id?: string; name?: string; faces?: string[]; simulation_id?: string }>;
-    bcs_all?: Array<{ id?: string; name?: string; faces?: string[]; simulation_id?: string }>;
-    defaults?: { wall_type?: string };
-    defaults_by_simulation?: Record<string, { wall_type?: string }>;
-  } | undefined;
-  const bcsAll = (w19 && (w19.bcs_all || w19.bcs)) || [];
-  const defsBy = (w19 && w19.defaults_by_simulation) || {};
-  const w27 = window.__CFD_W27_STATE__ as {
-    runs?: Array<{
-      id?: string;
-      run_id?: string;
-      name?: string;
-      mesh_id?: string;
-      mesh_name?: string;
-      status?: string;
-      simulation_id?: string;
-      result_controls?: unknown;
-    }>;
-    runs_all?: Array<{
-      id?: string;
-      run_id?: string;
-      name?: string;
-      mesh_id?: string;
-      mesh_name?: string;
-      status?: string;
-      simulation_id?: string;
-      result_controls?: unknown;
-    }>;
-  } | undefined;
-  const runsAll = (w27 && (w27.runs_all || w27.runs)) || [];
-  const ui = window.__CFD_TREE_UI__;
-
-  function rowsForStudy<T extends { simulation_id?: string }>(rows: T[], sid: string): T[] {
-    const tagged = rows.filter((r) => r && r.simulation_id && String(r.simulation_id) === sid);
-    if (tagged.length) return tagged;
-    if (studies.length === 1 && String(studies[0].id) === sid) {
-      return rows.filter((r) => r && !r.simulation_id);
-    }
-    return [];
-  }
-
-  function wallForStudy(sid: string, isActive: boolean): string {
-    const raw = (defsBy[sid] && defsBy[sid].wall_type) || (isActive ? w19?.defaults?.wall_type : '');
-    return String(raw || '').trim().toLowerCase() === 'slip' ? 'Slip' : 'No-slip';
-  }
-
-  const geoms: GeomNode[] = geomsRaw.map((g) => {
-    const gid = str(g.id);
-    const bodies = recs(g.bodies).map((b) => (typeof b === 'string' ? b : str((b as TreeRec).name)))
-      .filter(Boolean);
-    const bodyList =
-      bodies.length > 0
-        ? bodies
-        : recs(g.assembly_bodies).map((b) => str(b)).filter(Boolean);
-    const mine = studies.filter((s) => String(s.geometry_id) === gid);
+export function readSetupTree(
+  doc?: ProjectTreeDoc | null,
+  activity?: TreeActivity | null,
+  selectedKey: string | null = null,
+): SetupTreeModel {
+  const projectId = str(doc?.project_id);
+  const act = scopedActivity(activity, projectId);
+  const owned = <T extends { key?: string }>(nodes: T[] | undefined): T[] =>
+    (nodes || []).filter((node) => !node?.key || !projectId || scopeBelongsToProject(String(node.key), projectId));
+  const geoms: GeomNode[] = owned(doc?.geometries).map((geom) => {
+    const gid = str(geom.id);
+    const studies = owned(geom.studies)
+      .filter((study) => study && str(study.geometry_id) === gid)
+      .slice()
+      .sort((a, b) => {
+        const ai = Number(a.sort_index);
+        const bi = Number(b.sort_index);
+        if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
+        return 0;
+      });
     return {
       id: gid,
-      name: str(g.name || g.original_filename, 'Geometry'),
-      bodies: bodyList.length ? bodyList : geomOne && String(geomOne.id) === gid ? ['Body1'] : [],
-      studies: mine.map((s) => {
-        const sid = str(s.id);
-        const isActive = !!(activeSid && sid === activeSid);
-        const studyMeshes = meshesForStudy(s, geomsRaw, studies);
-        const air =
-          rowsForStudy(matsAll, sid).find((m) => String(m.name || 'Air') === 'Air') ||
-          (isActive && w18 && w18.material ? w18.material : null);
-        const vols = Array.isArray(air?.assigned_volumes) ? air.assigned_volumes : [];
-        const studyBcs = rowsForStudy(bcsAll, sid);
-        const studyRuns = rowsForStudy(runsAll, sid);
+      name: str(geom.name, 'Geometry'),
+      scopeKey: geom.key,
+      bodies: (geom.bodies || []).map((body) => str(body)).filter(Boolean),
+      studies: studies.map((study) => {
+        const sid = str(study.id);
+        const studyAct = forStudy(act, sid) ? act : null;
+        const volumes = (study.material_volumes || []).map((v) => str(v)).filter(Boolean);
         return {
           id: sid,
-          name: str(s.name, 'Incompressible'),
-          geometryId: str(s.geometry_id),
-          active: isActive,
-          meshes: studyMeshes,
-          materialsAssigned: vols.length > 0,
-          materialVolumes: vols.map((v) => String(v)),
-          bcs: studyBcs.map((bc, i) => ({
+          name: str(study.name, 'Incompressible'),
+          geometryId: str(study.geometry_id),
+          scopeKey: study.key,
+          active: !!study.active,
+          materialsAssigned: volumes.length > 0,
+          materialName: str(study.material_name, 'Air'),
+          materialVolumes: volumes,
+          wallDefault: str(study.wall_default, 'No-slip'),
+          bcs: owned(study.bcs).map((bc, i) => ({
             id: str(bc.id, `bc_${i}`),
             name: str(bc.name, 'BC'),
-            faces: Array.isArray(bc.faces) ? bc.faces.map(String) : [],
+            faces: (bc.faces || []).map((face) => str(face)).filter(Boolean),
+            scopeKey: bc.key,
           })),
-          wallDefault: wallForStudy(sid, isActive),
-          runs: studyRuns.map((r) => {
-            const rid = str(r.id || r.run_id);
-            const done = r.status === 'done';
+          meshes: owned(study.meshes).map((mesh, i) => {
+            const id = str(mesh.id || mesh.name, `mesh_${i + 1}`);
+            const ready = meshReady(mesh, studyAct, sid, id);
             return {
-              id: rid,
-              name: str(r.name, 'Run'),
-              meshId: r.mesh_id ? String(r.mesh_id) : undefined,
-              meshName: r.mesh_name ? String(r.mesh_name) : undefined,
+              id,
+              name: str(mesh.name, `Mesh ${i + 1}`),
+              scopeKey: mesh.key,
+              ready,
+              busy: meshBusy(mesh, studyAct, sid, id, ready),
+              queuePos: queuePos(studyAct, projectId, sid, 'mesh', id),
+              refinements: owned(mesh.refinements).map((ref, refIndex) => ({
+                id: str(ref.id, `ref_${refIndex}`),
+                name: str(ref.name, 'Refinement'),
+                faces: (ref.faces || []).map((face) => str(face)).filter(Boolean),
+                scopeKey: ref.key,
+              })),
+            };
+          }),
+          runs: owned(study.runs).map((run) => {
+            const id = str(run.id);
+            const done = run.status === 'done';
+            return {
+              id,
+              name: str(run.name, 'Run'),
+              scopeKey: run.key,
+              meshId: run.mesh_id ? String(run.mesh_id) : undefined,
+              meshName: run.mesh_name ? String(run.mesh_name) : undefined,
               ready: done,
-              hasResults: done || runHasVisibleResults(r),
-              busy: runBusy(r, rid),
-              queuePos: activityQueuePos('solve', rid),
-              resultControls: recs(r.result_controls).map((rc, i) => ({
+              hasResults: done || runHasVisibleResults(run),
+              busy: runBusy(run, studyAct, sid, id),
+              queuePos: queuePos(studyAct, projectId, sid, 'solve', id),
+              resultControls: owned(run.result_controls).map((rc, i) => ({
                 id: str(rc.id || rc.name, `rc_${i}`),
-                name: str(rc.name || rc.kind, 'Result'),
-                faces: Array.isArray(rc.faces) ? rc.faces.map(String) : [],
+                name: str(rc.name, 'Result'),
+                faces: (rc.faces || []).map((face) => str(face)).filter(Boolean),
+                scopeKey: rc.key,
               })),
             };
           }),
@@ -311,6 +268,5 @@ export function readSetupTree(): SetupTreeModel {
       }),
     };
   });
-
-  return { geoms, selectedKey: (ui && ui.selectedKey) || null };
+  return { geoms, selectedKey };
 }

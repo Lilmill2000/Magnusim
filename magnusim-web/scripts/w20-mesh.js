@@ -1,4 +1,5 @@
 import { safeProjectPath } from './safe-path.js';
+import { projectIdOrActive } from './request-scope.js';
 /**
  * W20 — Mesh form settings only (filesystem persistence).
  * Persists projects/<id>/mesh.json via POST/GET /api/mesh.
@@ -868,7 +869,7 @@ function buildSettings(body, existing) {
 }
 
 function requireProjectSim(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: false,
@@ -1075,7 +1076,7 @@ async function upsertMesh(body) {
 
 export function getMesh(projectIdOpt, geomIdOpt, simIdOpt, opts) {
   const wantId = (opts && (opts.meshId || opts.mesh_id)) || null;
-  const projectId = projectIdOpt || readActiveId();
+  const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: true,

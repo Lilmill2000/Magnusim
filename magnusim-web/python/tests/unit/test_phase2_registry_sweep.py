@@ -82,7 +82,7 @@ def test_builtin_keys_match_land2_through_land6():
     load_all(force=True)
     assert EXPECTED_ANALYSIS_KEYS <= set(get_registry("analysis").keys())
     assert set(get_registry("solver").keys()) == EXPECTED_SOLVER_KEYS
-    assert set(get_registry("mesher").keys()) == EXPECTED_MESHER_KEYS
+    assert EXPECTED_MESHER_KEYS <= set(get_registry("mesher").keys())
     assert set(get_registry("bc").keys()) == set(BC_TYPES.keys())
     assert len(get_registry("bc").keys()) == 7
     assert set(get_registry("material").keys()) == EXPECTED_MATERIAL_KEYS
@@ -98,7 +98,7 @@ def test_dump_and_describe_smoke_across_kinds():
 
     assert EXPECTED_ANALYSIS_KEYS <= {row["key"] for row in payload["analysis"]}
     assert {row["key"] for row in payload["solver"]} == EXPECTED_SOLVER_KEYS
-    assert {row["key"] for row in payload["mesher"]} == EXPECTED_MESHER_KEYS
+    assert EXPECTED_MESHER_KEYS <= {row["key"] for row in payload["mesher"]}
     assert {row["key"] for row in payload["bc"]} == set(BC_TYPES.keys())
     assert {row["key"] for row in payload["material"]} == EXPECTED_MATERIAL_KEYS
     assert {row["key"] for row in payload["monitor"]} == EXPECTED_MONITOR_KEYS
@@ -120,7 +120,9 @@ def test_analysis_schema_defaults_validate():
         assert isinstance(spec, AnalysisType)
         for schema_name in ("settings_schema", "numerics_schema", "control_schema"):
             fields = getattr(spec, schema_name)
-            assert isinstance(fields, tuple) and len(fields) > 0
+            # Transient PIMPLE numerics live on the run panel, so that bag is empty.
+            may_be_empty = key == DEFAULT_TRANSIENT_KEY and schema_name == "numerics_schema"
+            assert isinstance(fields, tuple) and (may_be_empty or len(fields) > 0)
             assert all(isinstance(f, SchemaField) for f in fields)
             defaults = schema_defaults(fields)
             errors = validate(defaults, fields)

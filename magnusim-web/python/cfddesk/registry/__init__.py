@@ -26,6 +26,8 @@ from cfddesk.registry.discovery import (
     load_all,
     reset_for_tests,
 )
+from cfddesk.registry.hooks import get_hooks
+from cfddesk.registry.jobs import JobKind, ensure_tool_in_package
 from cfddesk.registry.manifest import PluginManifest
 from cfddesk.registry.material import MaterialModel, validate_analysis_material_refs
 from cfddesk.registry.mesher import (
@@ -39,7 +41,10 @@ from cfddesk.registry.result_filter import ResultFilterType, analysis_has_filter
 from cfddesk.registry.schema import SchemaField, to_json_schema, validate
 from cfddesk.registry.solver import SolverApp, validate_analysis_solver_refs
 
+API_VERSION = "1.0"
+
 __all__ = [
+    "API_VERSION",
     "AnalysisType",
     "CaseContext",
     "DEFAULT_STEADY_KEY",
@@ -77,6 +82,9 @@ __all__ = [
     "check_requirements",
     "get_registry",
     "get_hub",
+    "get_hooks",
+    "JobKind",
+    "ensure_tool_in_package",
     "load_all",
     "reset_for_tests",
 ]

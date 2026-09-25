@@ -64,8 +64,19 @@ def _sort_functions_blocks(text: str) -> str:
     return text[: m.start()] + head + new_mid + tail + text[m.end() :]
 
 
+def _strip_demo_hooks(text: str) -> str:
+    """Drop the shipped example hook so product goldens stay the builtin writer."""
+    return re.sub(
+        r"\n[ \t]*exampleHookMonitor\s*\n[ \t]*\{.*?\n[ \t]*\}",
+        "",
+        text,
+        flags=re.S,
+    )
+
+
 def normalize_prepare_run(text: str) -> str:
-    t = normalize_foam(text)
+    t = _strip_demo_hooks(text)
+    t = normalize_foam(t)
     t = _sort_functions_blocks(t)
     return _collapse_ws(t)
 

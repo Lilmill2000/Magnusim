@@ -64,7 +64,7 @@ def test_material_spec_shape_and_library():
     spec = get_registry("material").get("newtonian_incompressible")
     assert isinstance(spec, MaterialModel)
     assert spec.label == "Newtonian (incompressible)"
-    assert spec.write_files is None
+    assert callable(spec.write_files)
     keys = {f.key for f in spec.properties_schema}
     assert "nu" in keys and "rho" in keys
     lib_keys = {row["key"] for row in spec.library}

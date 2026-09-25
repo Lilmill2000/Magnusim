@@ -10,10 +10,11 @@ import struct
 import sys
 from pathlib import Path
 
+# Run by the server as a plain script: cfddesk lives one level up.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from OCP.BRep import BRep_Tool
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.IFSelect import IFSelect_RetDone
-from OCP.STEPControl import STEPControl_Reader
 from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
@@ -27,12 +28,9 @@ CAD_DEVIATION_ANGLE_DEG = 5.0
 
 
 def load_step(path: Path):
-    reader = STEPControl_Reader()
-    status = reader.ReadFile(str(path))
-    if status != IFSelect_RetDone:
-        raise RuntimeError(f"STEP read failed status={status} path={path}")
-    reader.TransferRoots()
-    return reader.OneShape()
+    from cfddesk.cad.io import read_step_shape
+
+    return read_step_shape(path)
 
 
 def tessellate_cad_quality(shape):
@@ -184,7 +182,7 @@ def write_binary_stl(path: Path, verts, tris, header: bytes = b"mtp1 from Vortex
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Convert STEP to binary STL via OCP")
-    ap.add_argument("--step", type=Path, required=True, help="Input STEP path")
+    ap.add_argument("--step", type=Path, default=None, help="Input STEP path (not needed with --from-vtp)")
     ap.add_argument("--out", type=Path, required=True, help="Output STL path")
     ap.add_argument("--meta", type=Path, default=None, help="Optional meta JSON path (default: out with .json)")
     ap.add_argument("--lin", type=float, default=LINEAR_DEFLECTION)
@@ -199,8 +197,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.from_vtp is not None:
         return write_stl_from_vtp(args.from_vtp, out, meta_path)
+    if step is None:
+        ap.error("--step is required unless --from-vtp is given")
 
-    if not step.is_file():
+    from cfddesk.cad.io import geometry_file_exists
+
+    if not geometry_file_exists(step):
         print("MISSING STEP", step, file=sys.stderr)
         return 2
     print("Loading", step)

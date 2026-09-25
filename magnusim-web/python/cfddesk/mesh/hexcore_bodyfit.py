@@ -20,7 +20,7 @@ from cfddesk.mesh.bodyfit_prisms import (
     prism_height_budget_m,
 )
 from cfddesk.mesh.cfmesh_standard import sizing_from_base_cell, skin_thickness_m
-from cfddesk.mesh.gmsh_standard import run_gmsh_surface_mesh, write_scaled_step
+from cfddesk.mesh.gmsh_standard import initialize_gmsh, run_gmsh_surface_mesh, write_gmsh_brep
 from cfddesk.mesh.msh22 import HEX, PRISM, PYR, TET, TRI, write_msh22
 from cfddesk.mesh.octree_hex import (
     HexCore,
@@ -220,7 +220,7 @@ def _fill_cavity_tets(
     def _try(flip_inner: bool) -> tuple[np.ndarray, np.ndarray]:
         tris_in = inner_shift[:, [0, 2, 1]] if flip_inner else inner_shift
         all_tris = np.vstack([cad_tris, tris_in])
-        gmsh.initialize(interruptible=False)
+        initialize_gmsh(gmsh, interruptible=False)
         try:
             gmsh.model.add("cfddesk_cavity")
             gmsh.option.setNumber("General.Terminal", 1)
@@ -431,9 +431,9 @@ def run_hexcore_bodyfit(
         f"tet_lc={tet_lc:.8g} prism_h={prism_h:.8g} gap_faces={len(extra)}",
     ]
 
-    step_path = tri_dir / "geometry_metres.step"
+    step_path = tri_dir / "geometry_metres.brep"
     surf_msh = tri_dir / "cad_surface.msh"
-    write_scaled_step(solid, step_path, scale_to_metres=scale)
+    write_gmsh_brep(solid.shape, step_path, scale_to_metres=scale)
     # Surface lc = skin; gap faces get extra_face_sizes.
     surf = run_gmsh_surface_mesh(
         solid,

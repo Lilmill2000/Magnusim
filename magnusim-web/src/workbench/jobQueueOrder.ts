@@ -839,13 +839,23 @@ export function isTerminalJobStatus(status: unknown): boolean {
   return s === 'done' || s === 'failed' || s === 'stopped';
 }
 
-/** Mesh panel clock. A leftover liveCompute flag must not keep "Generating". */
+/**
+ * Mesh panel clock. A leftover liveCompute flag must not keep "Generating".
+ * A mesh waiting in the compute queue reads "queued", not "generating", even
+ * though its Generate click already went out.
+ */
 export function meshProgressPhase(opts?: {
   jobStatus?: unknown;
   computeLive?: boolean;
   meshReady?: boolean;
   failed?: boolean;
-}): 'failed' | 'generating' | 'finishing' | 'ready' | 'idle' {
+  queued?: boolean;
+}): 'failed' | 'generating' | 'finishing' | 'ready' | 'idle' | 'queued' {
+  if (opts && opts.queued) {
+    const st = opts.jobStatus;
+    const running = String(st || '') === 'running' || (!!opts.computeLive && !isTerminalJobStatus(st));
+    if (!running) return 'queued';
+  }
   if (opts && opts.failed) return 'failed';
   if (opts && opts.meshReady) return 'ready';
   const status = opts && opts.jobStatus;
@@ -873,6 +883,40 @@ export function snapMatchesLiveMeshJob(opts?: {
   if (snapKick && liveKick) return snapKick === liveKick;
   if (liveMesh || liveKick) return false;
   return true;
+}
+
+export type ComputeBusySnap = {
+  kind?: unknown;
+  mesh_id?: unknown;
+  run_id?: unknown;
+  project_id?: unknown;
+  project_title?: unknown;
+  mesh_name?: unknown;
+};
+
+/**
+ * What a queued row waits on, e.g. "Mesh 1 in Sample project". Names from this
+ * project come from its own records (lookup); another project's job is named
+ * from the server snapshot.
+ */
+export function computeBusyLabel(
+  busy: ComputeBusySnap | null | undefined,
+  opts?: {
+    currentProjectId?: unknown;
+    lookupName?: (kind: string, id: string) => string | null | undefined;
+    projectTitle?: (projectId: string) => string | null | undefined;
+  },
+): string {
+  if (!busy || (busy.kind !== 'mesh' && busy.kind !== 'solve')) return '';
+  const kind = String(busy.kind);
+  const pid = normId(busy.project_id);
+  const same = !!pid && pid === normId(opts && opts.currentProjectId);
+  const id = normId(kind === 'mesh' ? busy.mesh_id : busy.run_id);
+  const own = same && id && opts && opts.lookupName ? opts.lookupName(kind, id) : '';
+  const name = String(own || (kind === 'mesh' ? busy.mesh_name : '') || (kind === 'mesh' ? 'a mesh' : 'a run'));
+  if (same || !pid) return name;
+  const title = normId(busy.project_title) || normId(opts && opts.projectTitle ? opts.projectTitle(pid) : '');
+  return title ? `${name} in ${title}` : `${name} in another project`;
 }
 
 /** Keep Generate vs Add to queue stable while this mesh is the live job. */

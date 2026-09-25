@@ -185,7 +185,23 @@ def write_run_case(
         mesh_case_dir=Path(spec.mesh_case_dir) if getattr(spec, "mesh_case_dir", None) else None,
         n_procs=int(getattr(spec, "n_procs", 1) or 1),
     )
-    result = writer(ctx)
+    from cfddesk.registry.hooks import get_hooks
+
+    written_ctx = ctx
+
+    def _write(**kw: Any) -> Any:
+        nonlocal written_ctx
+        written_ctx = kw.get("ctx", ctx)
+        return writer(written_ctx)
+
+    raw = get_hooks().apply("case.write", _write, ctx=ctx)
+    written_out = Path(getattr(written_ctx, "out_dir", out))
+    normalized = _normalize_case_result(raw, written_out, spec)
+    get_hooks().call("case.written", ctx=written_ctx, result=normalized)
+    return normalized
+
+
+def _normalize_case_result(result: Any, out: Path, spec: Any) -> dict[str, Any]:
     if isinstance(result, dict):
         return result
     sidecar = out / "w27-case.json"

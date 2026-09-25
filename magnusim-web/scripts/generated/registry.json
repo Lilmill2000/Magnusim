@@ -19,28 +19,17 @@
               "SSG"
             ],
             "x-cfddesk": {
-              "group": "flow"
-            },
-            "title": "Turbulence model"
-          },
-          "passive_species": {
-            "type": "integer",
-            "default": 0,
-            "minimum": 0,
-            "maximum": 20,
-            "x-cfddesk": {
-              "group": "flow"
-            },
-            "title": "Passive species"
-          },
-          "energy": {
-            "type": "boolean",
-            "default": false,
-            "x-cfddesk": {
               "group": "flow",
-              "advanced": true
+              "enum_labels": [
+                "Laminar",
+                "k-epsilon",
+                "k-omega SST",
+                "LRR (Reynolds stress)",
+                "SSG (Reynolds stress)"
+              ]
             },
-            "title": "Energy"
+            "title": "Turbulence model",
+            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
           }
         },
         "additionalProperties": false
@@ -51,21 +40,23 @@
         "properties": {
           "residual_u": {
             "type": "number",
-            "default": 1e-06,
+            "default": 0.0001,
             "minimum": 0.0,
             "x-cfddesk": {
               "group": "residuals"
             },
-            "title": "Residual U"
+            "title": "Residual U",
+            "description": "Convergence target for the velocity and turbulence equations. The run stops early once every residual is below its target; otherwise it runs to the iteration limit."
           },
           "residual_p": {
             "type": "number",
-            "default": 1e-06,
+            "default": 0.0001,
             "minimum": 0.0,
             "x-cfddesk": {
               "group": "residuals"
             },
-            "title": "Residual p"
+            "title": "Residual p",
+            "description": "Convergence target for the pressure equation. The run stops early once every residual is below its target."
           },
           "relax_u": {
             "type": "number",
@@ -75,7 +66,8 @@
             "x-cfddesk": {
               "group": "relaxation"
             },
-            "title": "Relaxation U"
+            "title": "Relaxation U",
+            "description": "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is more stable but converges more slowly."
           },
           "relax_p": {
             "type": "number",
@@ -85,25 +77,19 @@
             "x-cfddesk": {
               "group": "relaxation"
             },
-            "title": "Relaxation p"
+            "title": "Relaxation p",
+            "description": "Under-relaxation for pressure (0 to 1). SIMPLE usually needs about 0.3; lower it if the solve oscillates or diverges."
           },
           "n_non_orthogonal": {
             "type": "integer",
-            "default": 1,
+            "default": 3,
             "minimum": 0,
+            "maximum": 20,
             "x-cfddesk": {
               "group": "solution"
             },
-            "title": "Non-orthogonal correctors"
-          },
-          "ddt_default": {
-            "type": "string",
-            "default": "steadyState",
-            "x-cfddesk": {
-              "group": "schemes",
-              "advanced": true
-            },
-            "title": "Time scheme"
+            "title": "Non-orthogonal correctors",
+            "description": "Extra pressure corrections per iteration for skewed or non-orthogonal cells. 0 is enough for clean hex meshes; tetrahedral meshes usually need 1 to 3."
           }
         },
         "additionalProperties": false
@@ -119,7 +105,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "End time"
+            "title": "End time",
+            "description": "Transient: simulated time to stop at, in seconds. Steady: the iteration limit."
           },
           "write_interval": {
             "type": "integer",
@@ -128,7 +115,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "Write interval"
+            "title": "Write interval",
+            "description": "How often results are saved, counted in the unit Write control sets."
           },
           "write_control": {
             "type": "string",
@@ -141,7 +129,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "Write control"
+            "title": "Write control",
+            "description": "What Write interval counts: time steps, simulated seconds, or simulated seconds with the time step adjusted to land on each write."
           }
         },
         "additionalProperties": false
@@ -184,28 +173,17 @@
               "SSG"
             ],
             "x-cfddesk": {
-              "group": "flow"
-            },
-            "title": "Turbulence model"
-          },
-          "passive_species": {
-            "type": "integer",
-            "default": 0,
-            "minimum": 0,
-            "maximum": 20,
-            "x-cfddesk": {
-              "group": "flow"
-            },
-            "title": "Passive species"
-          },
-          "energy": {
-            "type": "boolean",
-            "default": false,
-            "x-cfddesk": {
               "group": "flow",
-              "advanced": true
+              "enum_labels": [
+                "Laminar",
+                "k-epsilon",
+                "k-omega SST",
+                "LRR (Reynolds stress)",
+                "SSG (Reynolds stress)"
+              ]
             },
-            "title": "Energy"
+            "title": "Turbulence model",
+            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
           }
         },
         "additionalProperties": false
@@ -213,64 +191,7 @@
       "numerics_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
-        "properties": {
-          "residual_u": {
-            "type": "number",
-            "default": 1e-06,
-            "minimum": 0.0,
-            "x-cfddesk": {
-              "group": "residuals"
-            },
-            "title": "Residual U"
-          },
-          "residual_p": {
-            "type": "number",
-            "default": 1e-06,
-            "minimum": 0.0,
-            "x-cfddesk": {
-              "group": "residuals"
-            },
-            "title": "Residual p"
-          },
-          "relax_u": {
-            "type": "number",
-            "default": 0.7,
-            "minimum": 0.0,
-            "maximum": 1.0,
-            "x-cfddesk": {
-              "group": "relaxation"
-            },
-            "title": "Relaxation U"
-          },
-          "relax_p": {
-            "type": "number",
-            "default": 0.3,
-            "minimum": 0.0,
-            "maximum": 1.0,
-            "x-cfddesk": {
-              "group": "relaxation"
-            },
-            "title": "Relaxation p"
-          },
-          "n_non_orthogonal": {
-            "type": "integer",
-            "default": 1,
-            "minimum": 0,
-            "x-cfddesk": {
-              "group": "solution"
-            },
-            "title": "Non-orthogonal correctors"
-          },
-          "ddt_default": {
-            "type": "string",
-            "default": "Euler",
-            "x-cfddesk": {
-              "group": "schemes",
-              "advanced": true
-            },
-            "title": "Time scheme"
-          }
-        },
+        "properties": {},
         "additionalProperties": false
       },
       "control_schema": {
@@ -284,7 +205,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "End time"
+            "title": "End time",
+            "description": "Transient: simulated time to stop at, in seconds. Steady: the iteration limit."
           },
           "delta_t": {
             "type": "number",
@@ -293,7 +215,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "Time step"
+            "title": "Time step",
+            "description": "Simulated seconds per step (the first step when the step adjusts)."
           },
           "write_interval": {
             "type": "integer",
@@ -302,7 +225,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "Write interval"
+            "title": "Write interval",
+            "description": "How often results are saved, counted in the unit Write control sets."
           },
           "write_control": {
             "type": "string",
@@ -315,7 +239,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "Write control"
+            "title": "Write control",
+            "description": "What Write interval counts: time steps, simulated seconds, or simulated seconds with the time step adjusted to land on each write."
           },
           "max_co": {
             "type": "number",
@@ -325,7 +250,8 @@
               "group": "control",
               "advanced": true
             },
-            "title": "Max Courant"
+            "title": "Max Courant",
+            "description": "Largest Courant number allowed when the time step adjusts: how many cells flow may cross in one step. Keep at or below 1 for stability."
           }
         },
         "additionalProperties": false
@@ -350,46 +276,27 @@
       ]
     },
     {
-      "key": "example_passthrough",
-      "label": "Example plugin (passthrough)",
-      "plugin": "example",
+      "key": "laminar_steady",
+      "label": "Laminar",
+      "plugin": "example-laminar",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "turbulence_model": {
             "type": "string",
-            "default": "kOmegaSST",
+            "default": "laminar",
             "enum": [
-              "laminar",
-              "kEpsilon",
-              "kOmegaSST",
-              "LRR",
-              "SSG"
+              "laminar"
             ],
             "x-cfddesk": {
-              "group": "flow"
-            },
-            "title": "Turbulence model"
-          },
-          "passive_species": {
-            "type": "integer",
-            "default": 0,
-            "minimum": 0,
-            "maximum": 20,
-            "x-cfddesk": {
-              "group": "flow"
-            },
-            "title": "Passive species"
-          },
-          "energy": {
-            "type": "boolean",
-            "default": false,
-            "x-cfddesk": {
               "group": "flow",
-              "advanced": true
+              "enum_labels": [
+                "Laminar"
+              ]
             },
-            "title": "Energy"
+            "title": "Turbulence model",
+            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
           }
         },
         "additionalProperties": false
@@ -400,21 +307,23 @@
         "properties": {
           "residual_u": {
             "type": "number",
-            "default": 1e-06,
+            "default": 0.0001,
             "minimum": 0.0,
             "x-cfddesk": {
               "group": "residuals"
             },
-            "title": "Residual U"
+            "title": "Residual U",
+            "description": "Convergence target for the velocity and turbulence equations. The run stops early once every residual is below its target; otherwise it runs to the iteration limit."
           },
           "residual_p": {
             "type": "number",
-            "default": 1e-06,
+            "default": 0.0001,
             "minimum": 0.0,
             "x-cfddesk": {
               "group": "residuals"
             },
-            "title": "Residual p"
+            "title": "Residual p",
+            "description": "Convergence target for the pressure equation. The run stops early once every residual is below its target."
           },
           "relax_u": {
             "type": "number",
@@ -424,7 +333,8 @@
             "x-cfddesk": {
               "group": "relaxation"
             },
-            "title": "Relaxation U"
+            "title": "Relaxation U",
+            "description": "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is more stable but converges more slowly."
           },
           "relax_p": {
             "type": "number",
@@ -434,25 +344,19 @@
             "x-cfddesk": {
               "group": "relaxation"
             },
-            "title": "Relaxation p"
+            "title": "Relaxation p",
+            "description": "Under-relaxation for pressure (0 to 1). SIMPLE usually needs about 0.3; lower it if the solve oscillates or diverges."
           },
           "n_non_orthogonal": {
             "type": "integer",
-            "default": 1,
+            "default": 3,
             "minimum": 0,
+            "maximum": 20,
             "x-cfddesk": {
               "group": "solution"
             },
-            "title": "Non-orthogonal correctors"
-          },
-          "ddt_default": {
-            "type": "string",
-            "default": "steadyState",
-            "x-cfddesk": {
-              "group": "schemes",
-              "advanced": true
-            },
-            "title": "Time scheme"
+            "title": "Non-orthogonal correctors",
+            "description": "Extra pressure corrections per iteration for skewed or non-orthogonal cells. 0 is enough for clean hex meshes; tetrahedral meshes usually need 1 to 3."
           }
         },
         "additionalProperties": false
@@ -468,7 +372,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "End time"
+            "title": "End time",
+            "description": "Transient: simulated time to stop at, in seconds. Steady: the iteration limit."
           },
           "write_interval": {
             "type": "integer",
@@ -477,7 +382,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "Write interval"
+            "title": "Write interval",
+            "description": "How often results are saved, counted in the unit Write control sets."
           },
           "write_control": {
             "type": "string",
@@ -490,7 +396,8 @@
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "Write control"
+            "title": "Write control",
+            "description": "What Write interval counts: time steps, simulated seconds, or simulated seconds with the time step adjusted to land on each write."
           }
         },
         "additionalProperties": false
@@ -503,15 +410,11 @@
         }
       ],
       "time_dependency": "steady",
-      "default_turbulence": "kOmegaSST",
+      "default_turbulence": "laminar",
       "default_solver": "simpleFoam",
       "category": "FLUID DYNAMICS",
       "turbulence_models": [
-        "laminar",
-        "kEpsilon",
-        "kOmegaSST",
-        "LRR",
-        "SSG"
+        "laminar"
       ]
     }
   ],
@@ -563,6 +466,86 @@
       "key": "standard",
       "label": "Standard",
       "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fineness": {
+            "type": "integer",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "mesh",
+              "widget": "range"
+            },
+            "title": "Fineness",
+            "description": "Coarse meshes solve fast; fine meshes resolve more detail. 5 is the default."
+          },
+          "add_layers": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Automatic boundary layers",
+            "description": "Grow thin cell layers along walls to capture the near-wall velocity profile."
+          },
+          "physics_based": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Physics-based meshing",
+            "description": "Refine where the flow needs it: inlets, outlets and narrow gaps."
+          },
+          "hex_element_core": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Hex element core",
+            "description": "Fill the interior with hexahedra and keep tetrahedra to a thin skin at the surface."
+          },
+          "small_feature_suppression": {
+            "type": "string",
+            "default": "",
+            "x-cfddesk": {
+              "unit": "m",
+              "group": "advanced",
+              "advanced": true
+            },
+            "title": "Small feature suppression",
+            "description": "Edges and sliver faces shorter than this (metres) are merged before meshing. Leave empty for automatic."
+          },
+          "gap_refinement_factor": {
+            "type": "number",
+            "default": 0.05,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "advanced",
+              "advanced": true
+            },
+            "title": "Gap refinement factor",
+            "description": "Gap thickness divided by the edge length in the gap. Above 1 it is the number of cells across a gap."
+          },
+          "global_gradation_rate": {
+            "type": "number",
+            "default": 1.22,
+            "minimum": 1.0,
+            "maximum": 3.0,
+            "x-cfddesk": {
+              "group": "advanced",
+              "advanced": true
+            },
+            "title": "Global gradation rate",
+            "description": "Size ratio between neighbouring cells when growing away from the surface."
+          }
+        },
+        "additionalProperties": false
+      },
       "requires": []
     },
     {
@@ -581,6 +564,77 @@
       "key": "snappy_hexdominant",
       "label": "Hex-dominant",
       "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fineness": {
+            "type": "integer",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "mesh",
+              "widget": "range"
+            },
+            "title": "Fineness",
+            "description": "Coarse meshes solve fast; fine meshes resolve more detail. 5 is the default."
+          },
+          "add_layers": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Automatic boundary layers",
+            "description": "Grow thin cell layers along walls to capture the near-wall velocity profile."
+          },
+          "physics_based": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Physics-based meshing",
+            "description": "Refine where the flow needs it: inlets, outlets and narrow gaps."
+          },
+          "small_feature_suppression": {
+            "type": "string",
+            "default": "",
+            "x-cfddesk": {
+              "unit": "m",
+              "group": "advanced",
+              "advanced": true
+            },
+            "title": "Small feature suppression",
+            "description": "Edges and sliver faces shorter than this (metres) are merged before meshing. Leave empty for automatic."
+          },
+          "gap_refinement_factor": {
+            "type": "number",
+            "default": 0.05,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "advanced",
+              "advanced": true
+            },
+            "title": "Gap refinement factor",
+            "description": "Gap thickness divided by the edge length in the gap. Above 1 it is the number of cells across a gap."
+          },
+          "global_gradation_rate": {
+            "type": "number",
+            "default": 1.22,
+            "minimum": 1.0,
+            "maximum": 3.0,
+            "x-cfddesk": {
+              "group": "advanced",
+              "advanced": true
+            },
+            "title": "Global gradation rate",
+            "description": "Size ratio between neighbouring cells when growing away from the surface."
+          }
+        },
+        "additionalProperties": false
+      },
       "requires": [
         {
           "kind": "wsl_tool",
@@ -588,6 +642,92 @@
           "version_spec": ""
         }
       ]
+    },
+    {
+      "key": "example_extra_mesher",
+      "label": "Extra mesher",
+      "plugin": "example-extra-mesher",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fineness": {
+            "type": "integer",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "mesh",
+              "widget": "range"
+            },
+            "title": "Fineness",
+            "description": "Coarse meshes solve fast; fine meshes resolve more detail. 5 is the default."
+          },
+          "add_layers": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Automatic boundary layers",
+            "description": "Grow thin cell layers along walls to capture the near-wall velocity profile."
+          },
+          "physics_based": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Physics-based meshing",
+            "description": "Refine where the flow needs it: inlets, outlets and narrow gaps."
+          },
+          "hex_element_core": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Hex element core",
+            "description": "Fill the interior with hexahedra and keep tetrahedra to a thin skin at the surface."
+          },
+          "small_feature_suppression": {
+            "type": "string",
+            "default": "",
+            "x-cfddesk": {
+              "unit": "m",
+              "group": "advanced",
+              "advanced": true
+            },
+            "title": "Small feature suppression",
+            "description": "Edges and sliver faces shorter than this (metres) are merged before meshing. Leave empty for automatic."
+          },
+          "gap_refinement_factor": {
+            "type": "number",
+            "default": 0.05,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "advanced",
+              "advanced": true
+            },
+            "title": "Gap refinement factor",
+            "description": "Gap thickness divided by the edge length in the gap. Above 1 it is the number of cells across a gap."
+          },
+          "global_gradation_rate": {
+            "type": "number",
+            "default": 1.22,
+            "minimum": 1.0,
+            "maximum": 3.0,
+            "x-cfddesk": {
+              "group": "advanced",
+              "advanced": true
+            },
+            "title": "Global gradation rate",
+            "description": "Size ratio between neighbouring cells when growing away from the surface."
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": []
     }
   ],
   "bc": [
@@ -1409,16 +1549,52 @@
   ],
   "plugins": [
     {
-      "key": "example",
-      "name": "Example plugin",
+      "key": "example-extra-mesher",
+      "name": "Extra mesher",
       "version": "0.1.0",
       "requires": [],
-      "provides": {
-        "analysis": [
-          "example_passthrough"
-        ]
-      },
-      "ui": "ui"
+      "provides": {},
+      "ui": null,
+      "ui_entry": "index.js",
+      "authors": [
+        "Magnusim"
+      ],
+      "description": "Standard mesher with a different fineness default",
+      "source": "local",
+      "api_version": "1.0",
+      "overrides": []
+    },
+    {
+      "key": "example-hook-monitor",
+      "name": "Hook monitor",
+      "version": "0.1.0",
+      "requires": [],
+      "provides": {},
+      "ui": "ui",
+      "ui_entry": "index.js",
+      "authors": [
+        "Magnusim"
+      ],
+      "description": "Appends one function object after a case is written",
+      "source": "local",
+      "api_version": "1.0",
+      "overrides": []
+    },
+    {
+      "key": "example-laminar",
+      "name": "Laminar example",
+      "version": "0.1.0",
+      "requires": [],
+      "provides": {},
+      "ui": null,
+      "ui_entry": "index.js",
+      "authors": [
+        "Magnusim"
+      ],
+      "description": "Steady laminar analysis using the built-in incompressible writer",
+      "source": "local",
+      "api_version": "1.0",
+      "overrides": []
     }
   ],
   "missing": []

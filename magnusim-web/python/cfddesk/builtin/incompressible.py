@@ -48,8 +48,17 @@ _MONITORS: tuple[str, ...] = ("area_average", "flow_rate")
 _MATERIAL_MODELS: tuple[str, ...] = ("newtonian_incompressible",)
 
 
+_TURBULENCE_LABELS: tuple[str, ...] = (
+    "Laminar",
+    "k-epsilon",
+    "k-omega SST",
+    "LRR (Reynolds stress)",
+    "SSG (Reynolds stress)",
+)
+
+
 def _settings_schema() -> tuple[SchemaField, ...]:
-    """Per-analysis settings aligned with W17_DEFAULTS + TurbulenceModel."""
+    """Per-analysis settings the solve reads (cfddesk.project.study_physics)."""
     return (
         SchemaField(
             "turbulence_model",
@@ -57,46 +66,52 @@ def _settings_schema() -> tuple[SchemaField, ...]:
             "choice",
             default="kOmegaSST",
             choices=_TURBULENCE_MODELS,
+            choice_labels=_TURBULENCE_LABELS,
             group="flow",
-        ),
-        SchemaField(
-            "passive_species",
-            "Passive species",
-            "int",
-            default=0,
-            min=0,
-            max=20,
-            group="flow",
-        ),
-        SchemaField(
-            "energy",
-            "Energy",
-            "bool",
-            default=False,
-            group="flow",
-            advanced=True,
+            description=(
+                "Which turbulence closure the solver uses. k-omega SST is the general-purpose "
+                "default and handles walls at any y+. k-epsilon and the Reynolds-stress models "
+                "(LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models "
+                "suit strong swirl but may need a converged k-epsilon run first. Laminar solves "
+                "no turbulence at all."
+            ),
         ),
     )
 
 
 def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
-    ddt_default = "Euler" if transient else "steadyState"
+    """Steady SIMPLE numerics. Transient runs take PIMPLE settings from the run panel.
+
+    Defaults are the values the solve used before these fields were wired, so
+    untouched studies solve unchanged.
+    """
+    if transient:
+        return ()
     return (
         SchemaField(
             "residual_u",
             "Residual U",
             "float",
-            default=1e-6,
+            default=1e-4,
             min=0.0,
             group="residuals",
+            description=(
+                "Convergence target for the velocity and turbulence equations. The run stops "
+                "early once every residual is below its target; otherwise it runs to the "
+                "iteration limit."
+            ),
         ),
         SchemaField(
             "residual_p",
             "Residual p",
             "float",
-            default=1e-6,
+            default=1e-4,
             min=0.0,
             group="residuals",
+            description=(
+                "Convergence target for the pressure equation. The run stops early once every "
+                "residual is below its target."
+            ),
         ),
         SchemaField(
             "relax_u",
@@ -106,6 +121,10 @@ def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             min=0.0,
             max=1.0,
             group="relaxation",
+            description=(
+                "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is "
+                "more stable but converges more slowly."
+            ),
         ),
         SchemaField(
             "relax_p",
@@ -115,22 +134,23 @@ def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             min=0.0,
             max=1.0,
             group="relaxation",
+            description=(
+                "Under-relaxation for pressure (0 to 1). SIMPLE usually needs about 0.3; lower it "
+                "if the solve oscillates or diverges."
+            ),
         ),
         SchemaField(
             "n_non_orthogonal",
             "Non-orthogonal correctors",
             "int",
-            default=1,
+            default=3,
             min=0,
+            max=20,
             group="solution",
-        ),
-        SchemaField(
-            "ddt_default",
-            "Time scheme",
-            "text",
-            default=ddt_default,
-            group="schemes",
-            advanced=True,
+            description=(
+                "Extra pressure corrections per iteration for skewed or non-orthogonal cells. "
+                "0 is enough for clean hex meshes; tetrahedral meshes usually need 1 to 3."
+            ),
         ),
     )
 
@@ -144,6 +164,9 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             default=1000.0 if not transient else 1.0,
             min=0.0,
             group="control",
+            description=(
+                "Transient: simulated time to stop at, in seconds. Steady: the iteration limit."
+            ),
         ),
         SchemaField(
             "write_interval",
@@ -152,6 +175,7 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             default=1000 if not transient else 50,
             min=1,
             group="control",
+            description="How often results are saved, counted in the unit Write control sets.",
         ),
         SchemaField(
             "write_control",
@@ -160,6 +184,10 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             default="timeStep",
             choices=("timeStep", "runTime", "adjustableRunTime"),
             group="control",
+            description=(
+                "What Write interval counts: time steps, simulated seconds, or simulated seconds "
+                "with the time step adjusted to land on each write."
+            ),
         ),
     ]
     if transient:
@@ -172,6 +200,7 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
                 default=0.001,
                 min=0.0,
                 group="control",
+                description="Simulated seconds per step (the first step when the step adjusts).",
             ),
         )
         fields.append(
@@ -183,6 +212,10 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
                 min=0.0,
                 group="control",
                 advanced=True,
+                description=(
+                    "Largest Courant number allowed when the time step adjusts: how many cells "
+                    "flow may cross in one step. Keep at or below 1 for stability."
+                ),
             )
         )
     return tuple(fields)

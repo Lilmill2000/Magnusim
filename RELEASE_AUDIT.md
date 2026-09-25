@@ -76,10 +76,10 @@ used as destructive test fixtures.
 
 ## Publication boundaries and remaining checks
 
-- The source license is Apache-2.0. Gmsh/OpenFOAM and other dependencies retain
-  their licenses. **A bundle containing those dependencies is a separate
-  distribution decision**, described in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-  Relicensing a single mesher adapter does not settle combined-work obligations.
+- The source license is GPL-3.0-or-later (earlier releases were Apache-2.0).
+  Gmsh/OpenFOAM and other dependencies retain their licenses. **A bundle
+  containing those dependencies must ship their license texts and corresponding
+  source**, as described in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - High-confidence credential-pattern scans found no hits in scanned working
   text files or Git-history blobs. This does not certify binary files or
   unknown secret formats. Old history still contains personal filesystem paths

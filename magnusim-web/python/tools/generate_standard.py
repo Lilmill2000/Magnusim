@@ -238,7 +238,9 @@ def main() -> int:
         str(args.simulation_id or "") or None,
         str(args.mesh_id or "") or None,
     )
-    if step is None or not step.is_file():
+    from cfddesk.cad.io import geometry_file_exists
+
+    if step is None or not geometry_file_exists(step):
         return _result(False, error=f"missing source.step: {step}")
 
     try:
@@ -482,6 +484,7 @@ def main() -> int:
                 "n_tris": mesh.n_tris,
                 "gmsh_layer_patches": mesh.gmsh_layer_patches,
                 "volume_error_rel": mesh.volume_error_rel,
+                "assembly_error_rel": mesh.assembly_error_rel,
                 "wall_s": mesh.wall_s,
             },
             "patches": {"names": mesh.patch_names, "walls": mesh.wall_patches, "types": patch_types},

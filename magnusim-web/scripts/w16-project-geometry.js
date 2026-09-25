@@ -1,4 +1,5 @@
 import { safeProjectPath } from './safe-path.js';
+import { projectIdOrActive } from './request-scope.js';
 // @ts-nocheck
 /**
  * W16 — project create + geometry import (filesystem persistence).
@@ -37,7 +38,7 @@ import {
 import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
 import { projectSolveSummary } from './w27-solve.js';
 import { envGet } from './env-compat.js';
-import { callWorker } from './py-json.js';
+import { callWorker, commitRpcSync } from './py-json.js';
 import {
   LAYOUT_VERSION,
   createGeometryFolder,
@@ -55,6 +56,41 @@ const CONVERT_SCRIPT = pyTool('convert_step_to_stl.py');
 const CAD_PREVIEW_SCRIPT = pyTool('export_step_cad_preview.py');
 const NORMALIZE_SCRIPT = pyTool('normalize_cad_import.py');
 const THUMB_SCRIPT = pyTool('render_geometry_thumb.py');
+const DEFERRED_STEP_SCRIPT = pyTool('write_deferred_step.py');
+
+/**
+ * Mesh imports (STL/OBJ/PLY) store the geometry as a binary sidecar
+ * (source.bbrep) first and write source.step in the background. The geometry
+ * is present as soon as either file exists; its age is the newer of the two.
+ */
+function geometrySidecarPath(stepPath) {
+  return String(stepPath || '').replace(/\.[^.\\/]+$/, '') + '.bbrep';
+}
+
+function geomFileExists(stepPath) {
+  if (!stepPath) return false;
+  return existsSync(stepPath) || existsSync(geometrySidecarPath(stepPath));
+}
+
+function geomMtimeMs(stepPath) {
+  let out = 0;
+  for (const f of [stepPath, geometrySidecarPath(stepPath)]) {
+    try {
+      if (f && existsSync(f)) out = Math.max(out, statSync(f).mtimeMs);
+    } catch {
+      /* ignore */
+    }
+  }
+  return out;
+}
+
+/** Write the deferred source.step off the request path (readers use the sidecar meanwhile). */
+function writeDeferredStepLater(stepPath) {
+  if (!stepPath || existsSync(stepPath) || !existsSync(DEFERRED_STEP_SCRIPT)) return;
+  runPython([DEFERRED_STEP_SCRIPT, '--step', stepPath]).catch((e) =>
+    console.warn('[W16] deferred STEP write failed (sidecar still serves readers)', String(e)),
+  );
+}
 const DEFAULT_STEP = String(envGet('DEFAULT_STEP') || '').trim();
 const thumbJobs = new Map();
 
@@ -113,7 +149,8 @@ function writeProject(proj) {
   const dir = projectDir(proj.id);
   mkdirSync(geometriesRoot(dir), { recursive: true });
   if (proj.layout_version == null) proj.layout_version = LAYOUT_VERSION;
-  writeFileSync(projectJsonPath(proj.id), JSON.stringify(proj, null, 2), 'utf8');
+  const written = commitRpcSync('project.write_project', { project_dir: dir, doc: proj });
+  if (written && typeof written === 'object') Object.assign(proj, written);
   invalidateProjectsListCache();
   return proj;
 }
@@ -597,12 +634,12 @@ function resolveStepPath(proj) {
   const aid = activeGeometryId(proj);
   if (aid) {
     const part = geometriesOf(proj).find((g) => g.id === aid);
-    if (part && part.step_path && existsSync(part.step_path)) return part.step_path;
+    if (part && part.step_path && geomFileExists(part.step_path)) return part.step_path;
     const partStep = join(partDirFor(proj.id, aid), 'source.step');
-    if (existsSync(partStep)) return partStep;
+    if (geomFileExists(partStep)) return partStep;
   }
   const listed = proj.geometry && proj.geometry.step_path;
-  if (listed && existsSync(listed)) return listed;
+  if (listed && geomFileExists(listed)) return listed;
   return null;
 }
 
@@ -735,7 +772,7 @@ function findModifierOnPart(part, modId) {
 function hasImportedGeometry(proj, geomDir) {
   if (geometriesOf(proj).length) return true;
   if (proj && proj.geometry && (proj.geometry.step_path || proj.geometry.name)) return true;
-  return !!(geomDir && existsSync(join(geomDir, 'source.step')));
+  return !!(geomDir && geomFileExists(join(geomDir, 'source.step')));
 }
 
 function partDirFor(projectId, geomId) {
@@ -873,13 +910,13 @@ function cadPreviewFreshAt(paths, stepPath) {
   } catch {
     return false;
   }
-  if (!stepPath || !existsSync(stepPath)) return true;
-  const stepM = statSync(stepPath).mtimeMs;
+  if (!stepPath || !geomFileExists(stepPath)) return true;
+  const stepM = geomMtimeMs(stepPath);
   return statSync(paths.faces).mtimeMs >= stepM && statSync(paths.edges).mtimeMs >= stepM;
 }
 
 async function ensureCadPreviewAt(projectId, stepPath, paths) {
-  if (!stepPath || !existsSync(stepPath)) {
+  if (!stepPath || !geomFileExists(stepPath)) {
     return { ok: false, status: 404, body: { error: 'no STEP imported', project_id: projectId } };
   }
   if (cadPreviewFilesReady(paths)) {
@@ -930,13 +967,13 @@ async function ensureCadPreviewAt(projectId, stepPath, paths) {
 }
 
 async function ensureCadPreview(projectId, geomId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
   const proj = readProject(id);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found', project_id: id } };
   const aid = geomId || activeGeometryId(proj);
   const part = aid ? geometriesOf(proj).find((g) => g.id === aid) : null;
-  const stepPath = (part && part.step_path && existsSync(part.step_path) && part.step_path) || resolveStepPath(proj);
+  const stepPath = (part && part.step_path && geomFileExists(part.step_path) && part.step_path) || resolveStepPath(proj);
   const paths = cadPaths(id, part ? part.id : null);
   const preview = await ensureCadPreviewAt(id, stepPath, paths);
   if (!preview.ok) return { ...preview, project: proj };
@@ -970,7 +1007,7 @@ function geometryRecordFromPart(projectId, part, preview, cadMeta, stepSource) {
     bodies,
     volume: bodies[0] || 'Body1',
     step_path:
-      (part.step_path && existsSync(part.step_path) && part.step_path) ||
+      (part.step_path && geomFileExists(part.step_path) && part.step_path) ||
       join(partDirFor(projectId, part.id), 'source.step'),
     step_source: stepSource || part.step_source || 'part',
     original_filename: part.original_filename || null,
@@ -1038,7 +1075,7 @@ function syncMeshActiveToGeometry(projectId, geomId) {
 
 async function persistActiveGeometry(proj, parts, activeId, stepSource) {
   const projectId = proj.id;
-  const live = parts.filter((p) => p && p.id && p.step_path && existsSync(p.step_path));
+  const live = parts.filter((p) => p && p.id && p.step_path && geomFileExists(p.step_path));
   if (!live.length) {
     proj.geometry = null;
     proj.geometries = [];
@@ -1071,11 +1108,11 @@ async function persistActiveGeometry(proj, parts, activeId, stepSource) {
   writeProject(proj);
   writeActiveId(projectId);
   syncMeshActiveToGeometry(projectId, active.id);
-  try {
-    await ensureGeometryThumb(projectId);
-  } catch {
+  // Best-effort and not needed by the workbench: render the home-card thumbnail after
+  // replying (/api/geometry/thumb also renders on demand if it is not there yet).
+  ensureGeometryThumb(projectId).catch(() => {
     /* thumb is best-effort */
-  }
+  });
   return {
     ok: true,
     empty: false,
@@ -1104,7 +1141,7 @@ function stlNeedsCadRefresh(outStl) {
 }
 
 export function ensureBody1Stl(projectId, opts) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no project' };
   const proj = readProject(id);
   if (!proj) return { ok: false, error: 'project not found', project_id: id };
@@ -1162,7 +1199,7 @@ function thumbIsFresh(thumb, source) {
 }
 
 async function renderGeometryThumb(projectId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
   const proj = readProject(id);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found', project_id: id } };
@@ -1196,7 +1233,7 @@ async function renderGeometryThumb(projectId) {
 }
 
 function ensureGeometryThumb(projectId) {
-  const id = projectId || readActiveId() || '';
+  const id = projectId || projectIdOrActive('', readActiveId) || '';
   if (thumbJobs.has(id)) return thumbJobs.get(id);
   const job = renderGeometryThumb(id).finally(() => thumbJobs.delete(id));
   thumbJobs.set(id, job);
@@ -1246,28 +1283,44 @@ async function materializePartStep(opts, destDir, originalName, kind, lengthUnit
       return { ok: false, status: 500, body: { error: 'normalize script missing', path: NORMALIZE_SCRIPT } };
     }
     try {
-      const ran = await runPython([
-        NORMALIZE_SCRIPT,
-        '--in',
-        srcPath,
-        '--out',
-        dest,
-        '--unit',
-        lengthUnit,
-      ]);
-      normalizeInfo = parseNormalizeStdout(ran.stdout);
+      const rpc = callWorker('cad.normalize', { src: srcPath, dest, unit: lengthUnit }, 180000);
+      if (rpc) {
+        try {
+          normalizeInfo = await rpc;
+        } catch {
+          normalizeInfo = null;
+        }
+      }
+      if (!normalizeInfo || !normalizeInfo.ok) {
+        const ran = await runPython([
+          NORMALIZE_SCRIPT,
+          '--in',
+          srcPath,
+          '--out',
+          dest,
+          '--unit',
+          lengthUnit,
+        ]);
+        normalizeInfo = parseNormalizeStdout(ran.stdout);
+      }
     } catch (e) {
       return { ok: false, status: 400, body: { error: 'could not read geometry', detail: String(e), filename: originalName } };
     }
-    if (!existsSync(dest) || statSync(dest).size < 32) {
+    const deferred = !!(normalizeInfo && normalizeInfo.step_deferred);
+    const present = deferred
+      ? existsSync(geometrySidecarPath(dest))
+      : existsSync(dest) && statSync(dest).size >= 32;
+    if (!present) {
       return { ok: false, status: 500, body: { error: 'STEP missing after convert', dest } };
     }
-    return { ok: true, dest };
+    return { ok: true, dest, deferred };
   };
 
-  if (opts.step_base64 || opts.file_base64) {
+  if (opts.file_bytes || opts.step_base64 || opts.file_base64) {
     stepSource = 'upload';
-    const raw = Buffer.from(String(opts.step_base64 || opts.file_base64), 'base64');
+    const raw = opts.file_bytes
+      ? Buffer.from(opts.file_bytes)
+      : Buffer.from(String(opts.step_base64 || opts.file_base64), 'base64');
     if (raw.length < 32) {
       return { ok: false, status: 400, body: { error: 'uploaded file too small / empty' } };
     }
@@ -1334,7 +1387,7 @@ export async function importGeometry(opts) {
     return importModifier(opts);
   }
   ensureProjectsRoot();
-  const projectId = String(opts.project_id || readActiveId() || '').trim();
+  const projectId = String(opts.project_id || projectIdOrActive('', readActiveId) || '').trim();
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project; create project first', soft_pass: false } };
   }
@@ -1421,6 +1474,7 @@ export async function importGeometry(opts) {
     }
     return persisted;
   }
+  if (wrote.normalizeInfo && wrote.normalizeInfo.step_deferred) writeDeferredStepLater(wrote.stepPath);
 
   return {
     ok: true,
@@ -1443,7 +1497,7 @@ export async function importGeometry(opts) {
 
 async function importModifier(opts) {
   ensureProjectsRoot();
-  const projectId = String((opts && opts.project_id) || readActiveId() || '').trim();
+  const projectId = String((opts && opts.project_id) || projectIdOrActive('', readActiveId) || '').trim();
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project; create project first' } };
   }
@@ -1530,6 +1584,7 @@ async function importModifier(opts) {
     }
     return persisted;
   }
+  if (wrote.normalizeInfo && wrote.normalizeInfo.step_deferred) writeDeferredStepLater(wrote.stepPath);
   return {
     ok: true,
     status: 200,
@@ -1550,7 +1605,7 @@ async function importModifier(opts) {
 
 function transformModifier(opts) {
   ensureProjectsRoot();
-  const projectId = String((opts && opts.project_id) || readActiveId() || '').trim();
+  const projectId = String((opts && opts.project_id) || projectIdOrActive('', readActiveId) || '').trim();
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project' } };
   }
@@ -1589,7 +1644,7 @@ function transformModifier(opts) {
 
 function removeModifier(opts) {
   ensureProjectsRoot();
-  const projectId = String((opts && opts.project_id) || readActiveId() || '').trim();
+  const projectId = String((opts && opts.project_id) || projectIdOrActive('', readActiveId) || '').trim();
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project' } };
   }
@@ -1630,7 +1685,7 @@ function removeModifier(opts) {
 
 async function removeGeometry(opts) {
   ensureProjectsRoot();
-  const projectId = String((opts && opts.project_id) || readActiveId() || '').trim();
+  const projectId = String((opts && opts.project_id) || projectIdOrActive('', readActiveId) || '').trim();
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project' } };
   }
@@ -1689,7 +1744,7 @@ async function removeGeometry(opts) {
 
 async function activateGeometry(opts) {
   ensureProjectsRoot();
-  const projectId = String((opts && opts.project_id) || readActiveId() || '').trim();
+  const projectId = String((opts && opts.project_id) || projectIdOrActive('', readActiveId) || '').trim();
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project' } };
   }
@@ -1722,7 +1777,7 @@ async function activateGeometry(opts) {
 }
 
 async function readCadForModifier(projectId, geomId, modId, part) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
   const proj = readProject(id);
   const aid = geomId || (proj && activeGeometryId(proj));
@@ -1747,7 +1802,7 @@ async function readCadForModifier(projectId, geomId, modId, part) {
 }
 
 function readCadForProject(projectId, part, geomId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
   const proj = readProject(id);
   const aid = geomId || (proj && activeGeometryId(proj));
@@ -1761,7 +1816,7 @@ function readCadForProject(projectId, part, geomId) {
 }
 
 function readStlForProject(projectId) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
   const proj = readProject(id);
   if (!proj || !proj.geometry || !proj.geometry.stl_path) {
@@ -1937,18 +1992,29 @@ export async function handleW16Api(req, res, u, parts, helpers) {
         if (ctype.includes('application/json')) {
           opts = await readJsonBody(req);
         } else if (ctype.includes('application/octet-stream') || ctype.includes('application/step')) {
+          // The file itself is the body (no base64); options ride on the query string.
+          const q = u.searchParams;
+          const opt = (key, header) => q.get(key) || (header ? req.headers[header] : undefined) || undefined;
           const buf = await readBinaryBody(req);
           opts = {
-            project_id: req.headers['x-cfd-project-id'] || undefined,
-            filename: req.headers['x-cfd-filename'] || 'upload.step',
-            step_base64: buf.toString('base64'),
+            project_id: opt('project_id', 'x-cfd-project-id'),
+            filename: opt('filename', 'x-cfd-filename') || 'upload.step',
+            length_unit: opt('length_unit'),
+            mode: opt('mode'),
+            role: opt('role'),
+            host_geometry_id: opt('host_geometry_id'),
+            file_bytes: buf,
           };
         } else {
           // try JSON anyway
           opts = await readJsonBody(req);
         }
       } catch (e) {
-        return sendJson(res, 400, { error: 'invalid body', detail: String(e) });
+        const tooBig = e && e.status === 413;
+        return sendJson(res, tooBig ? 413 : 400, {
+          error: tooBig ? 'file too large to upload' : 'invalid body',
+          detail: String(e),
+        });
       }
       const result = await importGeometry(opts);
       res.setHeader('X-CFD-Source', 'geometry-import');
@@ -1999,7 +2065,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       return sendJson(res, result.status, result.body);
     }
     if (parts[2] === 'cad' && (req.method === 'GET' || req.method === 'HEAD')) {
-      const pid = u.searchParams.get('project_id') || readActiveId();
+      const pid = u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const geomId = String(u.searchParams.get('geometry_id') || '').trim() || undefined;
       const modId = String(u.searchParams.get('modifier_id') || '').trim();
       const partRaw = String(u.searchParams.get('part') || 'faces').toLowerCase();
@@ -2059,7 +2125,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       return true;
     }
     if (parts[2] === 'stl' && (req.method === 'GET' || req.method === 'HEAD')) {
-      const pid = u.searchParams.get('project_id') || readActiveId();
+      const pid = u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const got = readStlForProject(pid);
       if (!got.ok) return sendJson(res, got.status, got.body);
       res.statusCode = 200;
@@ -2076,7 +2142,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       return true;
     }
     if (parts[2] === 'thumb' && (req.method === 'GET' || req.method === 'HEAD')) {
-      const pid = u.searchParams.get('project_id') || readActiveId();
+      const pid = u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const got = await ensureGeometryThumb(pid);
       if (!got.ok) return sendJson(res, got.status, got.body);
       res.statusCode = 200;

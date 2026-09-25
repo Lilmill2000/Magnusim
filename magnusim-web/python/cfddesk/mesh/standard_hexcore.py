@@ -89,6 +89,14 @@ BL_MIN_THICKNESS_FRACTION = 0.2
 _SFS_PER_DIAG = 1.0e-4
 # Global gradation (hex core OFF): tets grow linearly to this multiple of h_s.
 _GRADATION_MAX_SIZE_HS = 6.0
+# Assembly check: cells vs the volume their own boundary triangles enclose.
+# A conforming mesh agrees to round-off; an overlapping or missing hex core /
+# shell region is off by whole cells (several percent).
+_ASSEMBLY_TOL_REL = 1.0e-3
+# Mesh vs CAD volume is chord error, not assembly: only noted in the log. At
+# coarse fineness the 0.5·h floor caps curvature refinement, so a 20 mm radius
+# at h = 4 mm loses ~0.6%.
+_CAD_VOLUME_NOTE_REL = 5.0e-3
 
 
 def standard_surface_size_m(diag_m: float, fineness: int) -> float:
@@ -183,6 +191,7 @@ class StandardMeshResult:
     patch_names: list[str] = field(default_factory=list)
     wall_patches: list[str] = field(default_factory=list)
     volume_error_rel: float | None = None
+    assembly_error_rel: float | None = None
     wall_s: float = 0.0
     gmsh_layer_patches: list[str] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
@@ -651,16 +660,38 @@ def _remove_volumes(gmsh, tags: list[int], *, occ: bool) -> None:
         gmsh.model.occ.remove(dim_tags, recursive=False)
         gmsh.model.occ.synchronize()
         return
+    _remove_entities(gmsh, dim_tags, recursive=False, occ=False)
+
+
+def _remove_entities(gmsh, dim_tags, *, recursive: bool, occ: bool) -> None:
+    """Remove CAD entities from the OCC kernel, or from the model for discrete geometry."""
+    dim_tags = [(int(d), int(t)) for d, t in dim_tags]
+    if not dim_tags:
+        return
+    if occ:
+        gmsh.model.occ.remove(dim_tags, recursive=recursive)
+        gmsh.model.occ.synchronize()
+        return
+    # Discrete geometry is exported to the built-in kernel: remove it there too, or
+    # the next geo.synchronize() brings it back (a second volume HXT cannot mesh).
     try:
-        gmsh.model.removeEntities(dim_tags, recursive=False)
+        gmsh.model.geo.remove(dim_tags, recursive=recursive)
+        gmsh.model.geo.synchronize()
     except Exception:
         pass
+    present = {(int(d), int(t)) for d, t in gmsh.model.getEntities()}
+    left = [dt for dt in dim_tags if dt in present]
+    if left:
+        gmsh.model.removeEntities(left, recursive=recursive)
 
 
 def apply_inward_boundary_layers(
-    gmsh, patch_tags: dict[str, list[int]], specs: list, solid, scale, log
-) -> tuple[list[str], list[int], list[int], float]:
+    gmsh, patch_tags: dict[str, list[int]], specs: list, solid, scale, log, *, occ: bool = True
+) -> tuple[list[str], list[int], dict[int, int], float]:
     """Grow typed Inflate stacks into the solid. Wall faces stay on the CAD.
+
+    Returns (grown patch names, cap surfaces, {boundary prism side surface:
+    CAD face it lies on}, max stack thickness).
 
     ``geo.extrudeBoundaryLayer`` follows the CAD normal. On a hole that normal
     points into the opening, so positive heights move the wall. Probe the
@@ -668,7 +699,7 @@ def apply_inward_boundary_layers(
     tets do not fill the stack.
     """
     honor = [s for s in (specs or []) if getattr(s, "honor_absolute", False)]
-    empty: tuple[list[str], list[int], list[int], float] = ([], [], [], 0.0)
+    empty: tuple[list[str], list[int], dict[int, int], float] = ([], [], {}, 0.0)
     if not honor:
         return empty
     try:
@@ -740,6 +771,20 @@ def apply_inward_boundary_layers(
         cap_curves: set[int] = set()
         for cap in cap_tags:
             cap_curves |= _surface_curves(gmsh, cap)
+        # A prism side extruded from the rim of a non-inflated CAD face lies on
+        # that face: domain boundary, same patch. One extruded from a curve
+        # between two inflated faces (a CAD seam) is inside the stack.
+        side_faces: dict[int, int] = {}
+        for side in side_tags:
+            side_src = _surface_curves(gmsh, side) & source_curves
+            face = next(
+                (f for f in adjacent if _surface_curves(gmsh, f) & side_src), None
+            )
+            if face is not None:
+                side_faces[int(side)] = int(face)
+        n_inner = len(side_tags) - len(side_faces)
+        if n_inner:
+            log(f"boundary layers: {n_inner} prism side surface(s) inside the stack, not boundary")
         # Extruded geo curves have no OCC eval. Pair each cap rim with the
         # CAD face that already shares a curve with that prism side.
         for side in side_tags:
@@ -760,12 +805,12 @@ def apply_inward_boundary_layers(
         sl = gmsh.model.geo.addSurfaceLoop(loop)
         gmsh.model.geo.addVolume([sl])
         gmsh.model.geo.synchronize()
-        _remove_volumes(gmsh, orig_vols, occ=True)
+        _remove_volumes(gmsh, orig_vols, occ=occ)
     except Exception as exc:
         log(f"inward boundary layers rolled back: {str(exc)[:200]}")
         _remove_volumes(gmsh, layer_vols, occ=False)
         return empty
-    return applied, cap_tags, side_tags, max_thickness
+    return applied, cap_tags, side_faces, max_thickness
 
 
 # ------------------------------------------------------------- main -----------
@@ -805,7 +850,26 @@ def build_standard_msh(
 
     t0 = time.monotonic()
     h = float(sizing.h_surface_m)
-    gmsh.initialize()
+    from cfddesk.mesh.gmsh_standard import (
+        import_grouped_triangles,
+        initialize_gmsh,
+        surface_tags_of,
+        write_gmsh_brep,
+    )
+
+    # A closed mesh import (STL/OBJ/PLY) is meshed from its surfaces of triangles as
+    # discrete gmsh geometry; OCC CAD would be one plane per triangle.
+    discrete = solid.mesh_triangles is not None
+    occ = not discrete
+    if discrete:
+        gmsh_geometry = None
+        _log(f"gmsh geometry: {solid.n_faces} surface(s) of {len(solid.mesh_triangles[1])} triangles from {Path(step_path).name}")
+    else:
+        # gmsh reads the loaded solid as BREP (unscaled; OCCScaling below applies), not
+        # source.step: same surfaces, and seconds instead of minutes for faceted STLs.
+        gmsh_geometry = write_gmsh_brep(solid.shape, Path(out_msh).with_name("geometry_mm.brep"))
+        _log(f"gmsh geometry {gmsh_geometry.name} from {Path(step_path).name}")
+    initialize_gmsh(gmsh)
     try:
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.option.setNumber("General.NumThreads", int(n_threads))
@@ -815,7 +879,7 @@ def build_standard_msh(
 
         def _import(heal_tol: float):
             gmsh.model.add("standard")
-            gmsh.model.occ.importShapes(str(step_path))
+            gmsh.model.occ.importShapes(str(gmsh_geometry))
             gmsh.model.occ.synchronize()
             if heal_tol > 0:
                 # Small feature suppression: heal tiny edges / sliver faces
@@ -842,20 +906,30 @@ def build_standard_msh(
             )
 
         sfs = float(sizing.small_feature_m)
-        try:
-            face_to_tag, patch_tags, vols, _tol = _import(sfs)
-            if sfs > 0:
-                _log(f"small feature suppression: features below {sfs:.3g} m suppressed")
-        except Exception as exc:
-            if sfs <= 0:
-                raise
-            _log(f"small feature suppression skipped ({str(exc)[:160]})")
-            gmsh.model.remove()
-            face_to_tag, patch_tags, vols, _tol = _import(0.0)
-        try:
-            cad_vol = float(sum(gmsh.model.occ.getMass(3, t) for _, t in vols))
-        except Exception:
-            cad_vol = None
+        if discrete:
+            t_imp = time.monotonic()
+            face_to_tag, patch_tags, vols, _tol = import_grouped_triangles(
+                gmsh, solid, project, scale=float(scale_to_metres), lc=h, log=_log
+            )
+            n_pieces = len(gmsh.model.getEntities(2))
+            _log(f"discrete surfaces: {n_pieces} parametrized piece(s) ({time.monotonic() - t_imp:.1f}s)")
+            pts_m = np.asarray(solid.mesh_triangles[0], dtype=float)[np.asarray(solid.mesh_triangles[1])] * float(scale_to_metres)
+            cad_vol = abs(float(np.einsum("ij,ij->i", pts_m[:, 0], np.cross(pts_m[:, 1], pts_m[:, 2])).sum()) / 6.0)
+        else:
+            try:
+                face_to_tag, patch_tags, vols, _tol = _import(sfs)
+                if sfs > 0:
+                    _log(f"small feature suppression: features below {sfs:.3g} m suppressed")
+            except Exception as exc:
+                if sfs <= 0:
+                    raise
+                _log(f"small feature suppression skipped ({str(exc)[:160]})")
+                gmsh.model.remove()
+                face_to_tag, patch_tags, vols, _tol = _import(0.0)
+            try:
+                cad_vol = float(sum(gmsh.model.occ.getMass(3, t) for _, t in vols))
+            except Exception:
+                cad_vol = None
         patch_types = emitted_patch_types(project)
         # only the surfaces bounding the fluid volume(s) are meshed
         surfs = sorted(
@@ -896,7 +970,12 @@ def build_standard_msh(
         h_max = max([h] + extra_vals) if extra_vals else h
         gmsh.option.setNumber("Mesh.MeshSizeMin", max(h_min, 1e-6))
         gmsh.option.setNumber("Mesh.MeshSizeMax", h_max)
-        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", _CURVATURE_NODES_PER_2PI)
+        # Discrete surfaces (mesh imports) are sized by h only. gmsh cannot evaluate
+        # their curvature: it spends minutes on failed lookups and seeds tiny
+        # triangles that make the volume fill 30x slower. A facet-fold size field
+        # (PostView, or a size callback) was tried too: minutes per surface mesh.
+        # The facets already carry the curvature at the file's own resolution.
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0 if discrete else _CURVATURE_NODES_PER_2PI)
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
         gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
         gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay (uniform tris)
@@ -920,11 +999,11 @@ def build_standard_msh(
             groups: dict[float, list[int]] = {}
             skipped = 0
             for fid, sz in extra_face_sizes.items():
-                tag = face_to_tag.get(int(fid))
-                if tag is None:
+                tags = surface_tags_of(face_to_tag, fid)
+                if not tags:
                     skipped += 1
                     continue
-                groups.setdefault(round(float(sz), 9), []).append(int(tag))
+                groups.setdefault(round(float(sz), 9), []).extend(tags)
             for sz, tags in groups.items():
                 f = gmsh.model.mesh.field.add("Constant")
                 gmsh.model.mesh.field.setNumbers(f, "SurfacesList", tags)
@@ -959,8 +1038,23 @@ def build_standard_msh(
         nodes, tris, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys)
         _log(f"surface: {len(tris)} triangles, {len(nodes)} nodes at h={h:.4g} m ({time.monotonic()-t0:.1f}s)")
 
+        # Sliver edges on a faceted STL collapse onto the closed surface.
+        # healShapes would remove the same edges but leaves the shell open,
+        # so HXT cannot fill it. Do this before gap refinement: those "gaps"
+        # are the slivers.
+        stitch_tol = min(3.0e-4, 0.05 * h)
+        nodes, tris, tri_phys, n_short = _collapse_short_edges(
+            nodes, tris, tri_phys, stitch_tol
+        )
+        if n_short:
+            _log(
+                f"collapsed {n_short} surface edge(s) shorter than {stitch_tol:.3g} m"
+            )
+
         # --- gap refinement (SimScale gap refinement factor)
-        gap = _gap_sizes(nodes, tris, h=h, gap_factor=sizing.gap_refinement_factor, log=_log)
+        gap = None if n_short else _gap_sizes(
+            nodes, tris, h=h, gap_factor=sizing.gap_refinement_factor, log=_log
+        )
         if gap is not None:
             view = gmsh.view.add("gap_size")
             P = nodes[tris]
@@ -995,24 +1089,49 @@ def build_standard_msh(
 
         tets: np.ndarray
         prisms = np.zeros((0, 6), dtype=np.int64)
+        footprint = None
         grown: list[str] = []
         side_tags: list[int] = []
         layer_thickness = 0.0
         if core is None and layer_specs:
-            grown, _caps, side_tags, layer_thickness = apply_inward_boundary_layers(
-                gmsh, patch_tags, layer_specs, solid, float(scale_to_metres), _log
+            grown, _caps, side_faces, layer_thickness = apply_inward_boundary_layers(
+                gmsh, patch_tags, layer_specs, solid, float(scale_to_metres), _log, occ=occ
             )
             vols = gmsh.model.getEntities(3)
-            walls_phys = next(
-                (phys_of_patch[n] for n in ("walls",) if n in phys_of_patch),
-                phys_of_patch[wall_patches[0]] if wall_patches else None,
-            )
-            for s in side_tags:
-                if int(s) not in tag_to_phys and walls_phys is not None:
-                    tag_to_phys[int(s)] = int(walls_phys)
+            # The stack's end faces take the patch of the CAD face they lie on.
+            for s, face in side_faces.items():
+                if int(s) not in tag_to_phys and int(face) in tag_to_phys:
+                    tag_to_phys[int(s)] = tag_to_phys[int(face)]
+                    side_tags.append(int(s))
         if core is not None:
             core_xyz = core.xyz()
             inner_nodes = np.unique(core.inner_tris.ravel())
+            ds_outer = None
+            phys_of_outer: dict[tuple[int, int, int], int] | None = None
+            if n_short:
+                # The OCC surface still carries the sliver triangulation, which
+                # is what makes the tet shell skew. Mesh the collapsed shell
+                # as its own discrete boundary instead.
+                _remove_entities(gmsh, list(vols), recursive=True, occ=occ)
+                leftover = gmsh.model.getEntities(2)
+                if leftover:
+                    _remove_entities(gmsh, leftover, recursive=True, occ=occ)
+                vols = []
+                ds_outer = gmsh.model.addDiscreteEntity(2)
+                outer_tags = np.arange(1, len(nodes) + 1, dtype=np.int64)
+                gmsh.model.mesh.addNodes(
+                    2, ds_outer, outer_tags.tolist(),
+                    np.asarray(nodes, dtype=float).ravel().tolist(),
+                )
+                phys_of_outer = {
+                    tuple(sorted(int(outer_tags[i]) for i in tri)): int(p)
+                    for tri, p in zip(tris, tri_phys, strict=False)
+                }
+                gmsh.model.mesh.addElementsByType(
+                    ds_outer, TRI,
+                    list(range(1, len(tris) + 1)),
+                    outer_tags[np.asarray(tris, dtype=np.int64)].ravel().tolist(),
+                )
             base_tag = int(gmsh.model.mesh.getMaxNodeTag()) + 1
             row2tag = np.zeros(len(core.keys), dtype=np.int64)
             row2tag[inner_nodes] = base_tag + np.arange(len(inner_nodes), dtype=np.int64)
@@ -1026,9 +1145,11 @@ def build_standard_msh(
             gmsh.model.mesh.addElementsByType(
                 ds, TRI, list(range(e0, e0 + len(core.inner_tris))), flat.tolist()
             )
-            gmsh.model.occ.remove(list(vols))
-            gmsh.model.occ.synchronize()
-            outer_loop = gmsh.model.geo.addSurfaceLoop(surfs)
+            if vols:
+                _remove_entities(gmsh, list(vols), recursive=False, occ=occ)
+            outer_loop = gmsh.model.geo.addSurfaceLoop(
+                [ds_outer] if ds_outer is not None else surfs
+            )
             inner_loop = gmsh.model.geo.addSurfaceLoop([ds])
             vol = gmsh.model.geo.addVolume([outer_loop, inner_loop])
             gmsh.model.geo.synchronize()
@@ -1077,7 +1198,15 @@ def build_standard_msh(
             # surface tris were collected before the 3D pass by node *tag*; the
             # 2D nodes keep their tags through generate(3) only if we re-read
             # them, so re-collect from gmsh now.
-            _, tris_tags, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys, as_tags=True)
+            if ds_outer is not None and phys_of_outer is not None:
+                walls_id = int(phys_of_patch.get("walls", 0))
+                tris_tags, tri_phys, n_lost = _discrete_boundary(
+                    gmsh, ds_outer, phys_of_outer, walls_id
+                )
+                if n_lost:
+                    _log(f"boundary: {n_lost} triangle(s) reassigned to walls")
+            else:
+                _, tris_tags, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys, as_tags=True)
             tris = remap[tris_tags]
             final_nodes = all_xyz
         else:
@@ -1112,16 +1241,17 @@ def build_standard_msh(
             remap[g_tags] = np.arange(len(g_tags))
             tets = remap[tet_tags] if len(tet_tags) else tet_tags
             prisms = remap[prism_tags] if len(prism_tags) else prism_tags
-            surf_tags = list(surfs) + [int(s) for s in side_tags if int(s) in tag_to_phys]
-            _, tris_tags, tri_phys = _collect_surface(gmsh, surf_tags, tag_to_phys, as_tags=True)
+            _, tris_tags, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys, as_tags=True)
             tris = remap[tris_tags]
             if grown and layer_thickness > 0:
-                inflate_phys = {
-                    int(phys_of_patch[n]) for n in grown if n in phys_of_patch
-                }
-                tris, tri_phys = _drop_footprint_tris(
-                    g_xyz, tris, tri_phys, inflate_phys, layer_thickness
+                footprint = tris
+                tris, tri_phys = _drop_footprint_tris(tris, tri_phys, [tets, prisms])
+                _, side_tris, side_phys = _collect_surface(
+                    gmsh, side_tags, tag_to_phys, as_tags=True
                 )
+                if len(side_tris):
+                    tris = np.vstack([tris, remap[side_tris]])
+                    tri_phys = np.concatenate([tri_phys, side_phys])
             hexes = np.zeros((0, 8), dtype=np.int64)
             pyrs = np.zeros((0, 5), dtype=np.int64)
             final_nodes = g_xyz
@@ -1136,14 +1266,18 @@ def build_standard_msh(
             raise RuntimeError("node remap failed (unknown node tag)")
 
         # --- volume conservation check (catches overlap / missing regions)
+        asm_err = check_volume_assembly(
+            final_nodes, tris, tets, hexes, pyrs, prisms, extra_tris=footprint, log=_log
+        )
         vol_err = None
         mesh_vol = _total_volume(final_nodes, tets, hexes, pyrs, prisms)
         if cad_vol and cad_vol > 0:
             vol_err = abs(mesh_vol - cad_vol) / cad_vol
             _log(f"volume check: mesh {mesh_vol:.6g} m³ vs CAD {cad_vol:.6g} m³ (rel err {vol_err:.2e})")
-            if vol_err > 5e-3:
-                raise RuntimeError(
-                    f"volume mismatch {vol_err:.3e} — hex core / shell assembly is inconsistent"
+            if vol_err > _CAD_VOLUME_NOTE_REL:
+                _log(
+                    f"note: mesh volume is {vol_err:.2%} off the CAD — the surface at "
+                    f"h={h:.4g} m cuts across curved faces; a higher fineness follows them closer"
                 )
     finally:
         gmsh.finalize()
@@ -1176,10 +1310,89 @@ def build_standard_msh(
         patch_names=patch_names,
         wall_patches=wall_patches,
         volume_error_rel=vol_err,
+        assembly_error_rel=asm_err,
         wall_s=wall,
         gmsh_layer_patches=list(grown),
         log=lines,
     )
+
+
+def _collapse_short_edges(nodes, tris, tri_phys, tol: float):
+    """Merge endpoints of edges shorter than ``tol``. Returns collapsed count.
+
+    Only existing mesh edges are collapsed, so a watertight surface stays
+    watertight. Degenerate and duplicate triangles are dropped.
+    """
+    nodes = np.asarray(nodes, dtype=float)
+    tris = np.asarray(tris, dtype=np.int64)
+    tri_phys = np.asarray(tri_phys, dtype=np.int64)
+    n = int(len(nodes))
+    if n == 0 or len(tris) == 0 or tol <= 0:
+        return nodes, tris, tri_phys, 0
+    parent = np.arange(n, dtype=np.int64)
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = int(parent[a])
+        return a
+
+    n_collapsed = 0
+    for a, b, c in tris:
+        for u, v in ((int(a), int(b)), (int(b), int(c)), (int(c), int(a))):
+            if float(np.linalg.norm(nodes[u] - nodes[v])) > tol:
+                continue
+            ru, rv = find(u), find(v)
+            if ru != rv:
+                parent[rv] = ru
+                n_collapsed += 1
+    if n_collapsed == 0:
+        return nodes, tris, tri_phys, 0
+    root = np.fromiter((find(i) for i in range(n)), dtype=np.int64, count=n)
+    kept_tris: list[list[int]] = []
+    kept_phys: list[int] = []
+    seen: set[tuple[int, int, int]] = set()
+    for tri, phys in zip(tris, tri_phys, strict=False):
+        r = [int(root[int(i)]) for i in tri]
+        if len(set(r)) < 3:
+            continue
+        key = tuple(sorted(r))
+        if key in seen:
+            continue
+        seen.add(key)
+        kept_tris.append(r)
+        kept_phys.append(int(phys))
+    used = sorted({i for t in kept_tris for i in t})
+    remap = {old: i for i, old in enumerate(used)}
+    new_nodes = nodes[np.asarray(used, dtype=np.int64)]
+    new_tris = np.asarray([[remap[i] for i in t] for t in kept_tris], dtype=np.int64)
+    new_phys = np.asarray(kept_phys, dtype=np.int64)
+    return new_nodes, new_tris, new_phys, n_collapsed
+
+
+def _discrete_boundary(gmsh, entity: int, phys_of: dict, fallback: int):
+    """Triangles of a discrete surface, with patch ids keyed by node tags."""
+    etypes, _etags, conn = gmsh.model.mesh.getElements(2, entity)
+    blocks = []
+    phys_blocks = []
+    missing = 0
+    for et, c in zip(etypes, conn, strict=False):
+        if int(et) != TRI:
+            continue
+        arr = np.asarray(c, dtype=np.int64).reshape(-1, 3)
+        blocks.append(arr)
+        pp = np.empty(len(arr), dtype=np.int64)
+        for i, tri in enumerate(arr):
+            key = tuple(sorted((int(tri[0]), int(tri[1]), int(tri[2]))))
+            found = phys_of.get(key)
+            if found is None:
+                missing += 1
+                found = fallback
+            pp[i] = found
+        phys_blocks.append(pp)
+    if not blocks:
+        raise RuntimeError("discrete outer surface has no triangles after volume meshing")
+    return np.vstack(blocks), np.concatenate(phys_blocks), missing
 
 
 def _collect_surface(gmsh, surfs, tag_to_phys, *, as_tags: bool = False):
@@ -1221,24 +1434,36 @@ def _collect_surface(gmsh, surfs, tag_to_phys, *, as_tags: bool = False):
 
 
 def _drop_footprint_tris(
-    nodes: np.ndarray,
-    tris: np.ndarray,
-    tri_phys: np.ndarray,
-    inflate_phys: set[int],
-    thickness: float,
+    tris: np.ndarray, tri_phys: np.ndarray, cells: list[np.ndarray]
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Drop wall tris that sit on the prism end-caps (same CAD faces as the stack)."""
-    if not len(tris) or not inflate_phys or thickness <= 0:
-        return tris, tri_phys
-    mask = np.isin(tri_phys, list(inflate_phys))
-    if not bool(mask.any()):
-        return tris, tri_phys
-    from scipy.spatial import cKDTree
+    """Drop CAD tris on no triangular cell face.
 
-    pts = nodes[np.unique(tris[mask].ravel())]
-    tree = cKDTree(pts)
-    dist = tree.query(nodes[tris].mean(axis=1), k=1)[0]
-    keep = mask | (dist >= float(thickness) + 2.0e-4)
+    Those are the footprint where a non-inflated face (inlet, outlet) meets the
+    inflate stack: they duplicate the prism side quads, which carry that patch
+    instead. Tet faces and prism caps are whole cell triangles and stay.
+    """
+    tris = np.asarray(tris, dtype=np.int64).reshape(-1, 3)
+    if not len(tris):
+        return tris, tri_phys
+    n = int(max([tris.max()] + [int(c.max()) for c in cells if len(c)])) + 1
+    on_b = np.zeros(n, dtype=bool)
+    on_b[tris.ravel()] = True
+    faces = []
+    for arr in cells:
+        arr = np.asarray(arr, dtype=np.int64)
+        if not len(arr):
+            continue
+        near = arr[on_b[arr].sum(axis=1) >= 3]
+        for f in _CELL_FACES[arr.shape[1]]:
+            if len(f) == 3:
+                rows = near[:, list(f)]
+                faces.append(rows[on_b[rows].all(axis=1)])
+    face_rows = np.sort(np.vstack(faces), axis=1) if faces else np.zeros((0, 3), np.int64)
+    _u, inv = np.unique(
+        np.vstack([face_rows, np.sort(tris, axis=1)]), axis=0, return_inverse=True
+    )
+    inv = np.asarray(inv).ravel()
+    keep = np.isin(inv[len(face_rows):], inv[: len(face_rows)])
     return tris[keep], tri_phys[keep]
 
 
@@ -1259,19 +1484,26 @@ def _tet_vol(a, b, c, d) -> np.ndarray:
     return np.einsum("ij,ij->i", np.cross(b - a, c - a), d - a) / 6.0
 
 
+def _cone6(o, a, b, c) -> np.ndarray:
+    """6 × signed volume of the cone from ``o`` over triangle ``a b c``."""
+    return np.einsum("ij,ij->i", a - o, np.cross(b - o, c - o))
+
+
 def _prism_volume(P: np.ndarray, prisms) -> float:
+    """Exact volume with bilinear side faces, so neighbours and tets agree."""
     if not len(prisms):
         return 0.0
-    a, b, c, d, e, f = (P[prisms[:, k]] for k in range(6))
-    base = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1)
-    top = 0.5 * np.linalg.norm(np.cross(e - d, f - d), axis=1)
-    nrm = np.cross(b - a, c - a)
-    ln = np.maximum(np.linalg.norm(nrm, axis=1), 1e-18)
-    nrm = nrm / ln[:, None]
-    mid_b = (a + b + c) / 3.0
-    mid_t = (d + e + f) / 3.0
-    height = np.einsum("ij,ij->i", mid_t - mid_b, nrm)
-    return float(np.abs((base + top) * 0.5 * height).sum())
+    p = [P[prisms[:, k]] for k in range(6)]
+    o = sum(p) / 6.0
+    v6 = _cone6(o, p[0], p[2], p[1]) + _cone6(o, p[3], p[4], p[5])
+    for i, j, k, m in ((0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)):
+        a, b, c, d = p[i], p[j], p[k], p[m]
+        # a bilinear patch halves the tet between its two diagonal splits
+        v6 = v6 + 0.5 * (
+            _cone6(o, a, b, c) + _cone6(o, a, c, d)
+            + _cone6(o, a, b, d) + _cone6(o, b, c, d)
+        )
+    return float(np.abs(v6).sum() / 6.0)
 
 
 def _total_volume(P: np.ndarray, tets, hexes, pyrs, prisms=None) -> float:
@@ -1296,6 +1528,155 @@ def _total_volume(P: np.ndarray, tets, hexes, pyrs, prisms=None) -> float:
     if prisms is not None and len(prisms):
         v += _prism_volume(P, prisms)
     return v
+
+
+def _face_triples(face: tuple[int, ...]) -> list[tuple[int, ...]]:
+    if len(face) == 3:
+        return [face]
+    a, b, c, d = face
+    return [(a, b, c), (a, c, d), (a, b, d), (b, c, d)]
+
+
+_CELL_FACES = {
+    4: ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
+    5: ((0, 1, 2, 3), (0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4)),
+    6: ((0, 1, 2), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)),
+    8: ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)),
+}
+# (node triple, is a whole triangle face) per cell face, gmsh node order. A
+# boundary triangle may be half of a split quad, so any 3 corners of a quad count.
+_CELL_FACE_TRIPLES = {
+    n: [(t, len(f) == 3) for f in faces for t in _face_triples(f)]
+    for n, faces in _CELL_FACES.items()
+}
+
+
+@dataclass(frozen=True)
+class BoundaryVolume:
+    volume: float
+    orphans: int  # boundary triangles on no cell face
+    two_sided: int  # boundary triangles with a cell on both sides
+    uncovered: int  # extra triangles counted as boundary (gmshToFoam defaultFaces)
+
+
+def boundary_enclosed_volume(
+    P: np.ndarray, tris, cells, *, extra_tris=None
+) -> BoundaryVolume:
+    """Volume inside the boundary triangles, each turned outward from its cell.
+
+    Orphan and two-sided triangles bound nothing and are left out of the sum.
+    ``extra_tris`` are triangles left out of the written boundary (inflate
+    footprints). Those on a whole triangle cell face are still boundary faces
+    (gmshToFoam puts them in ``defaultFaces``) and count; those on no cell
+    face or on a prism side quad duplicate a written face and are skipped.
+    """
+    P = np.asarray(P, dtype=float)
+    tris = np.asarray(tris, dtype=np.int64).reshape(-1, 3)
+    extra = np.asarray(
+        extra_tris if extra_tris is not None else np.zeros((0, 3)), dtype=np.int64
+    ).reshape(-1, 3)
+    if not len(tris) and not len(extra):
+        return BoundaryVolume(0.0, 0, 0, 0)
+    on_b = np.zeros(len(P), dtype=bool)
+    on_b[tris.ravel()] = True
+    on_b[extra.ravel()] = True
+    faces: list[np.ndarray] = []
+    centres: list[np.ndarray] = []
+    whole: list[np.ndarray] = []
+    for arr in cells:
+        arr = np.asarray(arr, dtype=np.int64)
+        if not arr.size:
+            continue
+        near = arr[on_b[arr].sum(axis=1) >= 3]
+        if not len(near):
+            continue
+        centre = P[near].mean(axis=1)
+        for t, is_tri in _CELL_FACE_TRIPLES[arr.shape[1]]:
+            f = near[:, list(t)]
+            keep = on_b[f].all(axis=1)
+            faces.append(np.sort(f[keep], axis=1))
+            centres.append(centre[keep])
+            whole.append(np.full(int(keep.sum()), is_tri))
+    face_rows = np.vstack(faces) if faces else np.zeros((0, 3), np.int64)
+    face_centre = np.vstack(centres) if centres else np.zeros((0, 3))
+    face_whole = np.concatenate(whole) if whole else np.zeros(0, dtype=bool)
+    nf, nt = len(face_rows), len(tris)
+    _u, inv = np.unique(
+        np.vstack([face_rows, np.sort(tris, axis=1), np.sort(extra, axis=1)]),
+        axis=0,
+        return_inverse=True,
+    )
+    inv = np.asarray(inv).ravel()
+    n_ids = int(inv.max()) + 1
+    n_cells_on = np.bincount(inv[:nf], minlength=n_ids)
+    cell_of = np.full(n_ids, -1, dtype=np.int64)
+    cell_of[inv[:nf]] = np.arange(nf)
+    tri_ids = inv[nf : nf + nt]
+    extra_ids = inv[nf + nt :]
+    extra_cell = cell_of[extra_ids]
+    take = extra_cell >= 0
+    take[take] = face_whole[extra_cell[take]]
+    take &= ~np.isin(extra_ids, tri_ids)
+    extra_ids, first = np.unique(extra_ids[take], return_index=True)
+    extra = extra[np.flatnonzero(take)[first]]
+    rows = np.vstack([tris, extra])
+    ids = np.concatenate([tri_ids, extra_ids])
+    owner = cell_of[ids]
+    two_sided = n_cells_on[ids] >= 2
+    found = (owner >= 0) & ~two_sided
+    a, b, c = (P[rows[found, k]] for k in range(3))
+    out = np.einsum(
+        "ij,ij->i", np.cross(b - a, c - a), (a + b + c) / 3.0 - face_centre[owner[found]]
+    )
+    o = P[rows.ravel()].mean(axis=0)
+    v6 = np.where(out >= 0.0, 1.0, -1.0) * _cone6(o, a, b, c)
+    return BoundaryVolume(
+        volume=float(v6.sum() / 6.0),
+        orphans=int((owner < 0).sum()),
+        two_sided=int(two_sided.sum()),
+        uncovered=int(len(extra)),
+    )
+
+
+def check_volume_assembly(
+    P: np.ndarray, tris, tets, hexes, pyrs, prisms=None, *, extra_tris=None, log=None
+) -> float:
+    """Raise unless the cells fill exactly what their boundary triangles enclose.
+
+    Chord error cancels out (both sides share one boundary), so this holds to
+    round-off for a sound mesh however coarse its surface. Overlapping or
+    missing hex core / shell regions show up as whole cells of difference.
+    A boundary triangle on no cell is a hole and raises too; two-sided ones
+    (inflate stack seams) are only logged.
+    """
+    cells = [c for c in (tets, hexes, pyrs, prisms) if c is not None]
+    cell_vol = _total_volume(P, tets, hexes, pyrs, prisms)
+    bnd = boundary_enclosed_volume(P, tris, cells, extra_tris=extra_tris)
+    ref = max(abs(bnd.volume), abs(cell_vol), 1e-30)
+    err = abs(cell_vol - bnd.volume) / ref
+    if log is not None:
+        log(
+            f"volume assembly: cells {cell_vol:.6g} m³ vs boundary {bnd.volume:.6g} m³ "
+            f"(rel err {err:.2e})"
+        )
+    notes = []
+    if bnd.uncovered:
+        notes.append(f"{bnd.uncovered} boundary face(s) in no patch (defaultFaces)")
+    if bnd.orphans:
+        notes.append(f"{bnd.orphans} boundary triangle(s) on no cell")
+    if bnd.two_sided:
+        notes.append(f"{bnd.two_sided} boundary triangle(s) with cells on both sides")
+    if log is not None:
+        for s in notes:
+            log(f"volume assembly: {s}")
+    if err > _ASSEMBLY_TOL_REL or bnd.orphans:
+        raise RuntimeError(
+            f"volume mismatch {err:.3e} between the cells and the volume their boundary "
+            f"encloses ({cell_vol:.6g} vs {bnd.volume:.6g} m³"
+            + "".join(f"; {s}" for s in notes)
+            + ") — hex core / shell assembly is inconsistent"
+        )
+    return err
 
 
 # ------------------------------------------------- OpenFOAM case files --------
@@ -1465,7 +1846,10 @@ addLayersControls
     thickness {global_thick:.6g};
     minThickness {global_min:.6g};
     nGrow 0;
-    featureAngle 180;
+    // Do not extrude round corners sharper than this. At 180 layers wrapped the
+    // 90-degree rim where a wall meets a port and inverted a tet there (118k-facet
+    // STL, hex core); 130 keeps them off that corner and thickness stays at 97%.
+    featureAngle 130;
     slipFeatureAngle 30;
     nRelaxIter 5;
     nSmoothSurfaceNormals 1;

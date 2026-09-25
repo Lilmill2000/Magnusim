@@ -8,17 +8,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from OCP.BinTools import BinTools
 from OCP.BRep import BRep_Builder
 from OCP.BRepBuilderAPI import (
+    BRepBuilderAPI_MakeShapeOnMesh,
     BRepBuilderAPI_MakeSolid,
     BRepBuilderAPI_Sewing,
     BRepBuilderAPI_Transform,
 )
+from OCP.BRepLib import BRepLib
 from OCP.BRepTools import BRepTools
 from OCP.gp import gp_Trsf
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.IGESControl import IGESControl_Controller, IGESControl_Reader
 from OCP.Interface import Interface_Static
+from OCP.RWStl import RWStl
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import (
     STEPControl_AsIs,
@@ -27,9 +31,10 @@ from OCP.STEPControl import (
     STEPControl_Writer,
 )
 from OCP.StlAPI import StlAPI_Reader
-from OCP.TopAbs import TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
-from OCP.TopExp import TopExp_Explorer
-from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
+from OCP.TopExp import TopExp, TopExp_Explorer
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape, TopoDS_Shell
+from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 
 from cfddesk.cad.units import UNIT_TO_METRES, _normalize_unit_token
 
@@ -108,6 +113,11 @@ class LoadedCad:
     n_shells: int
     watertight: bool
     unified: bool = False
+    # (points Nx3 mm, triangles Mx3) when face i of ``shape`` is exactly triangle i
+    # (closed mesh, no coplanar merge): the preview is then built from these directly.
+    triangles: tuple | None = None
+    # Surface id per triangle (``face_groups``): the geometry's face ids for a closed mesh.
+    groups: np.ndarray | None = None
 
     def summary(self) -> dict:
         return {
@@ -189,10 +199,67 @@ def _load_stl(path: Path) -> TopoDS_Shape:
     return shape
 
 
-def _load_mesh(path: Path) -> TopoDS_Shape:
-    ext = path.suffix.lower()
-    if ext == ".stl":
-        return _load_stl(path)
+def _has_degenerate_triangles(tri) -> bool:
+    """True if any triangle repeats a node or has (near) zero area."""
+    nodes = np.array(
+        [(p.X(), p.Y(), p.Z()) for p in (tri.Node(i) for i in range(1, tri.NbNodes() + 1))],
+        dtype=np.float64,
+    )
+    idx = np.array([tri.Triangle(i).Get() for i in range(1, tri.NbTriangles() + 1)], dtype=np.int64) - 1
+    if np.any((idx[:, 0] == idx[:, 1]) | (idx[:, 1] == idx[:, 2]) | (idx[:, 0] == idx[:, 2])):
+        return True
+    a, b, c = nodes[idx[:, 0]], nodes[idx[:, 1]], nodes[idx[:, 2]]
+    doubled_area = np.linalg.norm(np.cross(b - a, c - a), axis=1)
+    span = float(np.ptp(nodes, axis=0).max()) or 1.0
+    return bool(np.any(doubled_area <= (span * 1e-9) ** 2))
+
+
+def _closed_solid_from_stl(path: Path) -> TopoDS_Shape | None:
+    """Watertight STL -> solid with shared edges, without sewing.
+
+    RWStl merges coincident nodes and MakeShapeOnMesh gives adjacent triangles
+    the same edge, so a closed surface is already connected: put the faces in
+    one shell and make the solid. Sewing the same faces is O(minutes) on a
+    100k-triangle STL. Returns None for an open or non-manifold surface (some
+    edge not shared by exactly two faces) or one with degenerate triangles;
+    the caller then sews with tolerance, which also drops zero-area faces the
+    mesher could not match.
+    """
+    tri = RWStl.ReadFile_s(str(path))
+    if tri is None or tri.NbTriangles() == 0:
+        return None
+    if _has_degenerate_triangles(tri):
+        return None
+    maker = BRepBuilderAPI_MakeShapeOnMesh(tri)
+    maker.Build()
+    faces = maker.Shape()
+    if faces is None or faces.IsNull():
+        return None
+    builder = BRep_Builder()
+    shell = TopoDS_Shell()
+    builder.MakeShell(shell)
+    exp = TopExp_Explorer(faces, TopAbs_FACE)
+    while exp.More():
+        builder.Add(shell, exp.Current())
+        exp.Next()
+    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shell, TopAbs_EDGE, TopAbs_FACE, edge_faces)
+    for i in range(1, edge_faces.Extent() + 1):
+        if edge_faces.FindFromIndex(i).Size() != 2:
+            return None
+    shell.Closed(True)
+    made = BRepBuilderAPI_MakeSolid(shell)
+    if not made.IsDone():
+        return None
+    solid = made.Solid()
+    BRepLib.OrientClosedSolid_s(solid)
+    return solid
+
+
+def _with_stl(path: Path, use):
+    """Call ``use(stl_path)`` on the mesh file, converting OBJ/PLY to a temp STL first."""
+    if path.suffix.lower() == ".stl":
+        return use(path)
     pts, tris = _triangles_from_meshio(path)
     fd, name = tempfile.mkstemp(prefix="cfd-mesh-", suffix=".stl")
     os.close(fd)
@@ -201,12 +268,34 @@ def _load_mesh(path: Path) -> TopoDS_Shape:
         import meshio
 
         meshio.Mesh(pts, [("triangle", tris)]).write(str(tmp))
-        return _load_stl(tmp)
+        return use(tmp)
     finally:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _load_mesh(path: Path) -> tuple[TopoDS_Shape, tuple | None]:
+    """Closed meshes become a solid directly; anything else is read as faces for sewing.
+
+    Returns ``(shape, (points, triangles))`` on the direct path, where face i of the
+    shape is triangle i; ``(shape, None)`` when the faces were read for sewing.
+    """
+
+    def read(stl: Path):
+        solid = _closed_solid_from_stl(stl)
+        if solid is None:
+            return _load_stl(stl), None
+        tri = RWStl.ReadFile_s(str(stl))
+        nodes = np.array(
+            [(q.X(), q.Y(), q.Z()) for q in (tri.Node(i) for i in range(1, tri.NbNodes() + 1))],
+            dtype=np.float64,
+        )
+        idx = np.array([tri.Triangle(i).Get() for i in range(1, tri.NbTriangles() + 1)], dtype=np.int64) - 1
+        return solid, (nodes, idx)
+
+    return _with_stl(path, read)
 
 
 def heal_to_solid(shape: TopoDS_Shape) -> tuple[TopoDS_Shape, bool]:
@@ -275,16 +364,32 @@ def load_cad(path: str | Path, *, length_unit: str | None = None) -> LoadedCad:
     elif kind == "brep":
         shape = _load_brep(path)
     else:
-        shape = _load_mesh(path)
-        shape = _scale_shape(shape, _MESH_TO_MM.get(unit, 1.0))
+        shape, triangles = _load_mesh(path)
+        factor = _MESH_TO_MM.get(unit, 1.0)
+        shape = _scale_shape(shape, factor)
+        if triangles is not None:
+            triangles = (triangles[0] * factor, triangles[1])
     unified = False
+    groups = None
     shape, watertight = heal_to_solid(shape)
     if kind == "mesh":
-        shape = unify_planar_faces(shape)
-        unified = True
+        if triangles is not None:
+            # Closed mesh: its faces are surfaces of triangles grouped by feature
+            # angle (face_groups); the shape keeps one face per triangle.
+            from cfddesk.cad.face_groups import group_triangles, orient_outward
+
+            triangles = (triangles[0], orient_outward(triangles[0], triangles[1]))
+            groups = group_triangles(*triangles)
+        elif count_sub(shape, TopAbs_FACE) <= 8000:
+            # Sewn (open or defective) mesh: coplanar merge, which dominates import
+            # time on a large one.
+            shape = unify_planar_faces(shape)
+            unified = True
         watertight = count_sub(shape, TopAbs_SOLID) > 0
+    if kind != "mesh" or unified:
+        triangles = None
     n_solids = count_sub(shape, TopAbs_SOLID)
-    n_faces = count_sub(shape, TopAbs_FACE)
+    n_faces = int(groups.max()) + 1 if groups is not None else count_sub(shape, TopAbs_FACE)
     n_shells = count_sub(shape, TopAbs_SHELL)
     if n_faces < 1:
         raise RuntimeError(f"No faces in {path}")
@@ -298,6 +403,8 @@ def load_cad(path: str | Path, *, length_unit: str | None = None) -> LoadedCad:
         n_shells=n_shells,
         watertight=watertight or n_solids > 0,
         unified=unified,
+        triangles=triangles,
+        groups=groups,
     )
 
 
@@ -354,9 +461,29 @@ def compound_step_files(paths: list[str | Path]) -> LoadedCad:
     )
 
 
-def write_step(shape: TopoDS_Shape, dest: str | Path, *, length_unit: str = "MM") -> Path:
+def write_step(
+    shape: TopoDS_Shape, dest: str | Path, *, length_unit: str = "MM", defer: bool = False
+) -> Path:
+    """Write ``dest`` (STEP) and its binary sidecar.
+
+    ``defer=True`` writes only the sidecar now; ``write_deferred_step`` writes the
+    STEP later (a faceted 100k-triangle STL takes ~20 s as STEP). Every reader in
+    the app goes through ``read_step_shape`` / ``geometry_file_exists``, which work
+    from the sidecar alone.
+    """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    if defer:
+        normalize_length_unit(length_unit)
+        if write_step_sidecar(shape, dest) is None:
+            raise RuntimeError(f"geometry sidecar write failed: {step_sidecar_path(dest)}")
+        return dest
+    _write_step_file(shape, dest, length_unit=length_unit)
+    write_step_sidecar(shape, dest)
+    return dest
+
+
+def _write_step_file(shape: TopoDS_Shape, dest: Path, *, length_unit: str = "MM") -> Path:
     normalize_length_unit(length_unit)
     try:
         STEPControl_Controller.Init_s()
@@ -374,6 +501,136 @@ def write_step(shape: TopoDS_Shape, dest: str | Path, *, length_unit: str = "MM"
     if not dest.is_file() or dest.stat().st_size < 32:
         raise RuntimeError(f"STEP missing after write: {dest}")
     return dest
+
+
+def write_deferred_step(step: str | Path) -> Path:
+    """Write the STEP for a sidecar-only geometry (see ``write_step(defer=True)``).
+
+    The STEP gets the sidecar's mtime so the sidecar stays the file readers use and
+    previews built from it stay fresh. Written to a temp name, then replaced.
+    """
+    step = Path(step)
+    side = step_sidecar_path(step)
+    if not side.is_file():
+        raise FileNotFoundError(side)
+    shape = TopoDS_Shape()
+    BinTools.Read_s(shape, str(side))
+    if shape.IsNull():
+        raise RuntimeError(f"empty geometry sidecar: {side}")
+    tmp = step.with_name(f"{step.stem}.{os.getpid()}.tmp.step")
+    try:
+        _write_step_file(shape, tmp)
+        stamp = side.stat().st_mtime_ns
+        os.utime(tmp, ns=(stamp, stamp))
+        os.replace(tmp, step)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return step
+
+
+def triangle_sidecar_path(step: str | Path) -> Path:
+    return Path(step).with_suffix(".tris.npz")
+
+
+def write_geometry(loaded: LoadedCad, dest: str | Path) -> bool:
+    """Store an imported shape at ``dest`` (source.step). Returns True when the STEP is deferred.
+
+    Mesh files write the binary sidecar now and the STEP later; when face i is
+    triangle i the triangles are kept too, so the preview needs no re-meshing.
+    """
+    dest = Path(dest)
+    defer = loaded.kind == "mesh"
+    write_step(loaded.shape, dest, length_unit=loaded.length_unit, defer=defer)
+    tris = triangle_sidecar_path(dest)
+    if loaded.triangles is not None:
+        points, faces = loaded.triangles
+        arrays = {"points": np.asarray(points, dtype=np.float64), "triangles": np.asarray(faces, dtype=np.int32)}
+        if loaded.groups is not None:
+            arrays["groups"] = np.asarray(loaded.groups, dtype=np.int32)
+        # Written after the sidecar, so it is at least as new as the geometry.
+        with tris.open("wb") as fh:
+            np.savez(fh, **arrays)
+    else:
+        tris.unlink(missing_ok=True)
+    return defer
+
+
+def read_triangle_sidecar(step: str | Path):
+    """(points, triangles, groups) for ``step`` when its triangle sidecar is current, else None.
+
+    ``groups`` (surface id per triangle) is None for a sidecar written before
+    surfaces were grouped; face i is then triangle i.
+    """
+    tris = triangle_sidecar_path(step)
+    try:
+        if not tris.is_file() or tris.stat().st_mtime_ns < geometry_mtime_ns(step):
+            return None
+        with np.load(tris) as data:
+            groups = np.array(data["groups"]) if "groups" in data.files else None
+            return np.array(data["points"]), np.array(data["triangles"]), groups
+    except Exception:
+        return None
+
+
+def geometry_file_exists(step: str | Path) -> bool:
+    """True when the geometry at ``step`` can be read: the STEP or its sidecar."""
+    step = Path(step)
+    return step.is_file() or step_sidecar_path(step).is_file()
+
+
+def geometry_mtime_ns(step: str | Path) -> int:
+    """Newest of the STEP and its sidecar (0 when neither exists)."""
+    step = Path(step)
+    out = 0
+    for path in (step, step_sidecar_path(step)):
+        try:
+            out = max(out, path.stat().st_mtime_ns)
+        except OSError:
+            pass
+    return out
+
+
+def step_sidecar_path(step: str | Path) -> Path:
+    return Path(step).with_suffix(".bbrep")
+
+
+def write_step_sidecar(shape: TopoDS_Shape, step: str | Path) -> Path | None:
+    """Binary BREP copy of the shape next to ``step`` (written after it, so it is newer).
+
+    Reading a STEP of a faceted STL (100k+ faces) takes ~40 s; this reads in
+    under a second with the same faces in the same order.
+    """
+    dest = step_sidecar_path(step)
+    try:
+        if BinTools.Write_s(shape, str(dest)):
+            return dest
+    except Exception:
+        pass
+    try:
+        dest.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return None
+
+
+def read_step_shape(step: str | Path) -> TopoDS_Shape:
+    """Shape of ``step``: its binary sidecar when that is at least as new, else the STEP.
+
+    Anything that rewrites the STEP later makes it newer than the sidecar, so a
+    stale sidecar is never used.
+    """
+    step = Path(step)
+    side = step_sidecar_path(step)
+    try:
+        step_ns = step.stat().st_mtime_ns if step.is_file() else -1
+        if side.is_file() and side.stat().st_mtime_ns >= step_ns:
+            shape = TopoDS_Shape()
+            BinTools.Read_s(shape, str(side))
+            if not shape.IsNull():
+                return shape
+    except Exception:
+        pass
+    return _load_step(step)
 
 
 def unit_scale_to_metres(unit: str) -> float | None:

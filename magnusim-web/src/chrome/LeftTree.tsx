@@ -1,7 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { apiGet } from '../api/client';
+import { pluginTreeNodes, type PluginTreeNode } from '../plugin-api';
 import { useProjectStore } from '../store/project';
-import { readSetupTree, treeExpanded, type GeomNode, type MeshNode, type StudyNode } from './treeModel';
+import { scopeBelongsToProject } from '../scope';
+import { readSetupTree, type GeomNode, type MeshNode, type ProjectTreeDoc, type StudyNode } from './treeModel';
+import { getTreeSession, onTreeAction, subscribeTreeSession, treeExpanded } from './treeSession';
 
 function Mark({ ok, busy, queuePos }: { ok?: boolean; busy?: boolean; queuePos?: number }) {
   if (ok) return <span className="tree-check" aria-hidden="true">✓</span>;
@@ -73,12 +77,20 @@ function MediaNodes({ ownerKind, id, selectedKey }: { ownerKind: 'run' | 'mesh';
     : [['screenshot', 'Screenshots'], ['recording', 'Recordings']];
   return <>{rows.map(([kind, label]) => {
     const key = `media:${ownerKind}:${id}:${kind}`;
-    return <Node key={key} label={label} expandedLabel={key} selected={selectedKey === key} attrs={{ 'data-w28-key': key }} />;
+    return (
+      <Node
+        key={key}
+        label={label}
+        expandedLabel={key}
+        selected={selectedKey === key}
+        attrs={{ 'data-w28-key': key, 'data-media-owner': `${ownerKind}-${id}` }}
+      />
+    );
   })}</>;
 }
 
 function MeshItem({ mesh, selected, selectedKey }: { mesh: MeshNode; selected: boolean; selectedKey: string | null }) {
-  const meshKey = `mesh:${mesh.id}`;
+  const meshKey = mesh.scopeKey || `mesh:${mesh.id}`;
   const refs = mesh.refinements || [];
   return (
     <Node
@@ -87,6 +99,7 @@ function MeshItem({ mesh, selected, selectedKey }: { mesh: MeshNode; selected: b
       selected={selected}
       attrs={{
         'data-w20-mesh-item': mesh.id,
+        'data-scope-key': mesh.scopeKey,
         ...(mesh.ready ? { 'data-w20-mesh1': '1' } : {}),
       }}
       mark={mesh.ready}
@@ -129,24 +142,24 @@ function MeshItem({ mesh, selected, selectedKey }: { mesh: MeshNode; selected: b
 }
 
 function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: string | null }) {
-  const skey = `study:${study.id}`;
-  const matKey = `Materials:${study.id}`;
-  const airKey = `Air:${study.id}`;
-  const bcKey = `Boundary conditions:${study.id}`;
-  const meshKey = `Mesh:${study.id}`;
-  const simKey = `Simulation:${study.id}`;
+  const skey = study.scopeKey || `study:${study.id}`;
+  const matKey = study.scopeKey ? `${study.scopeKey}/item:materials` : `Materials:${study.id}`;
+  const airKey = study.scopeKey ? `${study.scopeKey}/item:air` : `Air:${study.id}`;
+  const bcKey = study.scopeKey ? `${study.scopeKey}/item:bcs` : `Boundary conditions:${study.id}`;
+  const meshKey = study.scopeKey ? `${study.scopeKey}/item:mesh` : `Mesh:${study.id}`;
+  const simKey = study.scopeKey ? `${study.scopeKey}/item:simulation` : `Simulation:${study.id}`;
   const meshKids = study.meshes.map((m) => (
     <MeshItem key={m.id} mesh={m} selectedKey={selectedKey} selected={study.active && selectedKey === `meshid:${m.id}`} />
   ));
   const runKids = study.runs.map((r) => {
-    const runKey = `run:${r.id}`;
+    const runKey = r.scopeKey || `run:${r.id}`;
     return (
       <Node
         key={r.id}
         label={r.name}
         expandedLabel={runKey}
         selected={study.active && selectedKey === `runid:${r.id}`}
-        attrs={{ 'data-w27-run': r.id }}
+        attrs={{ 'data-w27-run': r.id, 'data-scope-key': r.scopeKey }}
         mark={r.ready}
         busy={r.busy}
         queuePos={r.queuePos}
@@ -203,7 +216,7 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
       label={study.name}
       expandedLabel={skey}
       selected={study.active && selectedKey === 'incompressible'}
-      attrs={{ 'data-w17-sim-id': study.id, 'data-w17-sim': '1' }}
+      attrs={{ 'data-w17-sim-id': study.id, 'data-w17-sim': '1', 'data-scope-key': study.scopeKey }}
     >
       <Node
         label="Materials"
@@ -222,8 +235,7 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                const add = window.__CFD_ADD_MATERIAL__;
-                if (typeof add === 'function') add(study.id);
+                if (study.scopeKey) onTreeAction(study.scopeKey, 'add-material');
               }}
             >
               +
@@ -232,7 +244,7 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
         }
       >
         {study.materialVolumes.length ? (
-          <Node label="Air" expandedLabel={airKey} attrs={{ 'data-w18-air': '1' }}>
+          <Node label={study.materialName || 'Air'} expandedLabel={airKey} attrs={{ 'data-w18-air': '1' }}>
             {study.materialVolumes.map((v, i) => (
               <Node
                 key={v}
@@ -259,8 +271,7 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              const add = window.__CFD_ADD_BC__;
-              if (typeof add === 'function') add(study.id);
+              if (study.scopeKey) onTreeAction(study.scopeKey, 'add-bc');
             }}
           >
             +
@@ -278,9 +289,9 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
           <Node
             key={bc.id}
             label={bc.name}
-            expandedLabel={`bcid:${bc.id}`}
+            expandedLabel={bc.scopeKey || `bcid:${bc.id}`}
             selected={study.active && selectedKey === `bcid:${bc.id}`}
-            attrs={{ 'data-w19-bc': bc.id }}
+            attrs={{ 'data-w19-bc': bc.id, 'data-scope-key': bc.scopeKey }}
           >
             {bc.faces.map((f) => (
               <Node key={f} label={f} attrs={{ 'data-w19-face': f, 'data-w19-parent': bc.id }} />
@@ -310,13 +321,13 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
 }
 
 function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string | null }) {
-  const gkey = `geom:${geom.id}`;
+  const gkey = geom.scopeKey || `geom:${geom.id}`;
   return (
     <Node
       label={geom.name}
       expandedLabel={gkey}
       selected={selectedKey === gkey}
-      attrs={{ 'data-w16-geom': geom.id }}
+      attrs={{ 'data-w16-geom': geom.id, 'data-scope-key': geom.scopeKey }}
       mark={!!geom.id}
     >
       {geom.bodies.length ? (
@@ -338,8 +349,14 @@ function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string 
   );
 }
 
-export function SetupTreeView({ model }: { model: ReturnType<typeof readSetupTree> }) {
-  if (!model.geoms.length) {
+export function SetupTreeView({
+  model,
+  pluginNodes = [],
+}: {
+  model: ReturnType<typeof readSetupTree>;
+  pluginNodes?: PluginTreeNode[];
+}) {
+  if (!model.geoms.length && !pluginNodes.length) {
     return (
       <li className="sim-empty" id="sim-empty">
         No simulation yet
@@ -351,15 +368,45 @@ export function SetupTreeView({ model }: { model: ReturnType<typeof readSetupTre
       {model.geoms.map((g: GeomNode) => (
         <GeomBlock key={g.id || g.name} geom={g} selectedKey={model.selectedKey} />
       ))}
+      {pluginNodes.map((node, index) => (
+        <li key={`${node.label}:${index}`} data-plugin-node={node.label}>
+          {node.label}
+        </li>
+      ))}
     </>
   );
 }
 
 /** React setup tree. Same collapse keys and [data-w20-mesh-item] as the runtime tree. */
 export function LeftTree() {
-  const hydrate = useProjectStore((s) => s.hydrate);
-  const [model, setModel] = useState(() => readSetupTree());
+  const projectId = useProjectStore((s) => s.projectId);
+  const generation = useProjectStore((s) => s.generation);
+  const docRef = useRef<ProjectTreeDoc | null>(null);
+  const [model, setModel] = useState(() => readSetupTree(null));
+  const [pluginNodes, setPluginNodes] = useState<PluginTreeNode[]>([]);
   const [host, setHost] = useState<HTMLElement | null>(null);
+
+  function paint() {
+    const session = getTreeSession();
+    const projectId = useProjectStore.getState().projectId || '';
+    setModel(readSetupTree(docRef.current, session.activity, session.selectedKey));
+    const fromServer = (docRef.current?.plugin_nodes || [])
+      .map((node) => ({
+        label: String(node.label || node.name || ''),
+        scope: node.scope || node.key,
+        projectId: node.projectId || node.project_id,
+      }))
+      .filter((node) => {
+        if (!node.label) return false;
+        const pid = node.projectId || '';
+        if (pid && pid !== projectId) return false;
+        if (node.scope && !scopeBelongsToProject(node.scope, projectId)) return false;
+        return !!(pid || node.scope);
+      });
+    setPluginNodes([...pluginTreeNodes(projectId), ...fromServer]);
+  }
+
+  useEffect(() => subscribeTreeSession(paint), []);
 
   useEffect(() => {
     const left = document.getElementById('left-tree');
@@ -369,16 +416,37 @@ export function LeftTree() {
       tree.replaceChildren();
       setHost(tree);
     }
-    const refresh = () => setModel(readSetupTree());
-    window.addEventListener('cfd:tree-sync', refresh);
-    refresh();
-    return () => window.removeEventListener('cfd:tree-sync', refresh);
   }, []);
 
   useEffect(() => {
-    setModel(readSetupTree());
-  }, [hydrate]);
+    let dead = false;
+    const gen = generation;
+    const refresh = () => {
+      if (!projectId) {
+        docRef.current = null;
+        paint();
+        return;
+      }
+      apiGet<ProjectTreeDoc>('/api/project/tree', { project_id: projectId })
+        .then((doc) => {
+          if (dead) return;
+          const live = useProjectStore.getState();
+          if (live.generation !== gen || live.projectId !== projectId) return;
+          docRef.current = doc;
+          paint();
+        })
+        .catch(() => {
+          if (!dead) paint();
+        });
+    };
+    window.addEventListener('cfd:tree-sync', refresh);
+    refresh();
+    return () => {
+      dead = true;
+      window.removeEventListener('cfd:tree-sync', refresh);
+    };
+  }, [projectId, generation]);
 
   if (!host) return null;
-  return createPortal(<SetupTreeView model={model} />, host);
+  return createPortal(<SetupTreeView model={model} pluginNodes={pluginNodes} />, host);
 }

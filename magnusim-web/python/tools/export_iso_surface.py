@@ -1,7 +1,8 @@
 """W10: on-demand Iso Surface live contour from real OpenFOAM case volume fields.
 
 Server-side path (documented):
-  case .cfddesk-prepared.vtu (volume UnstructuredGrid) -> ensure point-data
+  case volume at time (case_volume.load_volume; legacy .cfddesk-prepared.vtu
+  only as fallback) -> ensure point-data
   magU (derived from U when needed) / p -> pyvista contour([iso_value], scalars=iso_field)
   -> binary VTP PolyData for vtk.js. Not a solid colored shell; not surface-only
   magU (surface-only may not contour). Coloring array carried on iso when present.
@@ -23,9 +24,12 @@ from pathlib import Path
 import numpy as np
 import pyvista as pv
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from case_volume import load_volume  # noqa: E402
+
 APPROACH = (
     "server-side volume contour: Vite /api/iso-surface -> export_iso_surface.py "
-    "reads case .cfddesk-prepared.vtu (volume UnstructuredGrid) point-data "
+    "reads the case volume at time (OpenFOAM fields; legacy prepared VTU fallback) point-data "
     "(magU derived from U when needed; p) -> pyvista contour([iso_value], scalars=iso_field) "
     "-> binary VTP. Not a solid colored shell; surface-only magU may not contour. "
     "U is copied onto the contour so the viewport can draw live vector glyphs."
@@ -242,14 +246,14 @@ def export_iso_surface(
     case_dir = Path(case_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    vtu_path = case_dir / ".cfddesk-prepared.vtu"
-    if not vtu_path.is_file():
-        raise FileNotFoundError(f"missing prepared VTU: {vtu_path}")
     u_path = case_dir / str(time) / "U"
     p_path = case_dir / str(time) / "p"
-    mesh = pv.read(str(vtu_path))
+    # Same loader as cut plane / inspect: native fields at this time, the
+    # legacy .cfddesk-prepared.vtu only when the time has none. Runs never
+    # write the prepared VTU, so requiring it 500'd every fresh result.
+    mesh, vtu_path = load_volume(case_dir, str(time))
     if int(getattr(mesh, "n_cells", 0) or 0) == 0:
-        raise RuntimeError("prepared VTU has 0 cells; cannot contour")
+        raise RuntimeError("volume has 0 cells; cannot contour")
 
     iso, meta = contour_iso(
         mesh,

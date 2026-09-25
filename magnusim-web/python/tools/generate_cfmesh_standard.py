@@ -261,7 +261,9 @@ def main() -> int:
         str(args.simulation_id or "") or None,
         str(args.mesh_id or "") or None,
     )
-    if step is None or not step.is_file():
+    from cfddesk.cad.io import geometry_file_exists
+
+    if step is None or not geometry_file_exists(step):
         return _result(False, error=f"missing source.step: {step}")
 
     try:

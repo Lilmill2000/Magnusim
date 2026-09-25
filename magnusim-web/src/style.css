@@ -1669,12 +1669,16 @@ body,
 }
 
 .legend {
+  /* Left edge of the free band: the viewer's left, or further right when an open
+     flyout reaches down into the legend's band (the viewer keeps its width on a
+     narrow window, so --vp-viewer-left alone would put the legend over it). */
+  --vp-legend-l: max(var(--vp-viewer-left, 0px), var(--vp-legend-left-inset, var(--vp-left-inset, 0px)));
   position: absolute;
-  left: calc(var(--vp-viewer-left, var(--vp-legend-left-inset, var(--vp-left-inset, 0px))) + (100% - var(--vp-viewer-left, var(--vp-legend-left-inset, var(--vp-left-inset, 0px))) - var(--vp-viewer-right, var(--vp-right-inset, 0px))) / 2);
+  left: calc(var(--vp-legend-l) + (100% - var(--vp-legend-l) - var(--vp-viewer-right, var(--vp-right-inset, 0px))) / 2);
   bottom: 14px;
   transform: translateX(-50%);
   box-sizing: border-box;
-  width: min(420px, max(0px, calc(100% - var(--vp-viewer-left, var(--vp-legend-left-inset, var(--vp-left-inset, 0px))) - var(--vp-viewer-right, var(--vp-right-inset, 0px)) - 24px)));
+  width: min(420px, max(0px, calc(100% - var(--vp-legend-l) - var(--vp-viewer-right, var(--vp-right-inset, 0px)) - 24px)));
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid #cfd3db;
   border-radius: 6px;
@@ -2021,6 +2025,8 @@ select.fp-select {
 .sim-swatch-p { background: #6941c6; }
 .sim-swatch-k { background: #12b76a; }
 .sim-swatch-w { background: #f79009; }
+.sim-swatch-epsilon { background: #0ba5ec; }
+.sim-swatch-r { background: #dd2590; }
 .sim-swatch-co {
   background: repeating-linear-gradient(90deg, #d92d20 0 4px, transparent 4px 6px);
 }
@@ -2601,6 +2607,13 @@ select.fp-select {
 .sim-def-v { color: #1f2430; font-weight: 600; text-align: right; }
 .sim-def-note { margin-top: 8px; font-size: 10px; color: #8a93a3; }
 .sim-def-select { font-weight: 600; max-width: 140px; }
+/* Study panel: schema selects (turbulence model) look like the V0.1.0 Time dependency select. */
+.sim-study-panel .schema-form select {
+  font-size: 12px; font-weight: 600; padding: 2px 4px;
+  border: 1px solid #d0d5dd; border-radius: 4px; background: #fff; color: #101828;
+  width: auto; max-width: 170px;
+}
+.sim-study-settings .mat-row { border-bottom: 1px solid #eef1f5; }
 .sim-def-hint { margin-top: 8px; }
 .sim-copy-from {
   margin: 0 0 10px;
@@ -2647,7 +2660,7 @@ select.fp-select {
 .sim-tr-hint { margin: 4px 0 2px; line-height: 1.45; }
 .sim-tr-hint .sim-tr-warn { color: #b54708; }
 .sim-tr-reset { display: block; margin-top: 8px; }
-#sim-tr-advanced .mat-row .bc-select { max-width: 150px; }
+[data-run-transient] .mesh-advanced .mat-row .bc-select { max-width: 150px; }
 .sim-hub-name {
   width: 100%;
   max-width: 220px;
@@ -2659,13 +2672,15 @@ select.fp-select {
   width: 160px;
   max-width: 70%;
 }
-#sim-run-hint {
+.run-monitors { list-style: none; margin: 6px 0 0; padding: 0; }
+.run-monitors li { margin: 2px 0; }
+.mat-assign-hint[data-run-reason] {
   color: #b42318;
 }
-#sim-run-hint .sim-run-hint-msg {
+[data-run-reason] .sim-run-hint-msg {
   display: block;
 }
-#sim-run-hint .sim-fix-go {
+[data-run-reason] .sim-fix-go {
   display: inline-block;
   margin-top: 6px;
   padding: 0;
@@ -2678,7 +2693,7 @@ select.fp-select {
   text-underline-offset: 2px;
   cursor: pointer;
 }
-#sim-run-hint .sim-fix-go:hover {
+[data-run-reason] .sim-fix-go:hover {
   color: #1849a9;
 }
 .ml-type-soon {
@@ -2827,11 +2842,42 @@ select.fp-select {
   box-shadow: 0 1px 3px rgba(16,24,40,0.06);
 }
 .mat-panel[hidden] { display: none !important; }
-/* Islands append after the live HTML. Hide leftover schema dumps (End time / Write control). */
-.mat-panel > .cfd-island,
-.sim-defaults-panel > .cfd-island {
-  display: none !important;
+.schema-form { padding: 4px 2px 0; }
+.schema-form .schema-field { align-items: center; }
+.schema-form select,
+.schema-form .bc-input {
+  width: 100%;
+  max-width: 220px;
+  box-sizing: border-box;
 }
+.schema-form .field-description,
+.schema-form .error-detail { display: none; }
+.schema-form .mesh-fineness-wrap input[type="range"] { width: 100%; }
+.schema-form .mesh-fineness-row > .mat-v { flex: 1; min-width: 0; display: flex; margin-left: 12px; }
+/* Mesh flyout keeps one width while its status line changes (generating vs ready). */
+.tree-detail > #panel-mesh-form { width: min(360px, 40vw); box-sizing: border-box; }
+.schema-form .mesh-advanced { width: 100%; }
+.mat-k-help {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; margin-left: 5px; border-radius: 999px;
+  border: 1px solid #d0d5dd; color: #667085; background: #fff;
+  font-size: 9px; font-weight: 700; line-height: 1; cursor: help;
+  vertical-align: middle;
+}
+/* Field help: shown on hovering the label or focusing its "?" (native title tips can't be read quickly). */
+.mat-k[data-help] { position: relative; cursor: help; }
+.mat-k-tip {
+  display: none;
+  position: absolute; left: 0; top: calc(100% + 4px); z-index: 40;
+  width: 260px; max-width: 70vw; box-sizing: border-box;
+  padding: 7px 9px; border-radius: 5px;
+  background: #1f2430; color: #f5f6f8;
+  font-size: 12px; font-weight: 400; line-height: 1.45; text-align: left; white-space: normal;
+  box-shadow: 0 6px 18px rgba(16, 24, 40, 0.25);
+  pointer-events: none;
+}
+.mat-k[data-help]:hover .mat-k-tip,
+.mat-k-help:focus-visible + .mat-k-tip { display: block; }
 #panel-sim-control {
   max-height: min(78vh, 760px);
   overflow: auto;
@@ -3019,6 +3065,8 @@ select.fp-select {
   line-height: 1;
   cursor: pointer;
 }
+.mat-assign-state { margin-left: auto; padding-right: 8px; font-size: 11px; color: #667085; white-space: nowrap; }
+.bc-assign-item.is-focus .mat-assign-state { color: #1d4ed8; }
 .bc-assign-x:hover {
   background: #fee4e2;
   color: #b42318;
@@ -4710,7 +4758,7 @@ body.is-recording #viewport-gizmo {
 .graph-svg .gtip rect { fill: rgba(255, 255, 255, 0.95); stroke: #cfd3db; }
 .graph-svg .gtip text { fill: #1f2430; font-size: 11px; }
 
-/* ---- First-run / Preferences wizard ---- */
+/* ---- First-run setup / Settings wizard ---- */
 .wiz[hidden] { display: none !important; }
 .wiz {
   position: fixed;
@@ -4836,3 +4884,32 @@ body.is-recording #viewport-gizmo {
   padding-top: 16px;
 }
 .wiz-foot-spacer { flex: 1; }
+.wiz-main { overflow-y: auto; }
+.wiz-plugin-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wiz-plugin-meta { font-size: 12px; font-weight: 400; color: #667085; }
+.wiz-plugin-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.wiz-plugin-status { font-size: 12px; color: #667085; min-width: 28px; text-align: right; }
+.wiz-plugin-status[data-state="enabled"] { color: #3f6b4a; }
+.wiz-plugin-status[data-state="error"] { color: #b42318; }
+.wiz-pref-copy .wiz-plugin-error { color: #b42318; }
+.wiz-plugin-panel { display: block; margin-top: 6px; }
+.wiz-plugin-panel p { margin: 6px 0 0; font-size: 12px; line-height: 1.45; color: #5b6575; }
+.wiz-plugin-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.wiz-plugin-note { font-size: 12px; color: #4b5563; }

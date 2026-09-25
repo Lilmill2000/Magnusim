@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from cfddesk.cad.io import load_cad, write_step  # noqa: E402
+from cfddesk.cad.io import load_cad, write_geometry  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,12 +27,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         loaded = load_cad(args.src, length_unit=args.unit)
-        write_step(loaded.shape, args.dest, length_unit=loaded.length_unit)
+        defer = write_geometry(loaded, args.dest)
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         print(json.dumps({"ok": False, "error": str(exc)}))
         return 1
-    payload = {"ok": True, "step_path": str(args.dest), **loaded.summary()}
+    payload = {"ok": True, "step_path": str(args.dest), "step_deferred": defer, **loaded.summary()}
     print("CAD_NORMALIZE_OK", json.dumps(payload))
     return 0
 

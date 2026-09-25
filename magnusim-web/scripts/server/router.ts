@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { caseDirAllowedForAttach } from '../project-isolation.js';
+import { scopeIsStrict } from '../request-scope.js';
 import { HttpError, parseUrl, readJsonBody, sendJson } from './http.ts';
 
 export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
@@ -10,6 +12,12 @@ export interface RequestContext {
   method: string;
   params: Record<string, string>;
   pathname: string;
+  scope: {
+    projectId: string;
+    simulationId: string;
+    geometryId: string;
+    caseDir: string;
+  };
   sendJson: (status: number, body: unknown) => void;
   readJsonBody: () => Promise<Record<string, unknown>>;
 }
@@ -158,6 +166,68 @@ export class Router {
   }
 }
 
+const SCOPED_PREFIXES = [
+  '/api/mesh',
+  '/api/run',
+  '/api/runs',
+  '/api/bcs',
+  '/api/materials',
+  '/api/simulation',
+  '/api/simulation-control',
+  '/api/case',
+  '/api/filter',
+  '/api/result-controls',
+  '/api/area-average',
+  '/api/media',
+  '/api/jobs',
+];
+
+let missingProjectWarned = false;
+
+function bodyTexts(body: Record<string, unknown> | null, names: string[]): string[] {
+  if (!body) return [];
+  const bags: Record<string, unknown>[] = [body];
+  const nested = body.params;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    bags.push(nested as Record<string, unknown>);
+  }
+  const found: string[] = [];
+  for (const bag of bags) {
+    for (const name of names) {
+      const value = bag[name];
+      if (value == null) continue;
+      const text = String(value).trim();
+      if (text && !found.includes(text)) found.push(text);
+    }
+  }
+  return found;
+}
+
+function scopedField(
+  url: URL,
+  body: Record<string, unknown> | null,
+  names: string[],
+): { value: string; mismatch: boolean } {
+  const fromBody = bodyTexts(body, names);
+  if (fromBody.length > 1) return { value: '', mismatch: true };
+  const fromQuery = queryValue(url, ...names);
+  const bodyValue = fromBody[0] || '';
+  if (fromQuery && bodyValue && fromQuery !== bodyValue) return { value: '', mismatch: true };
+  return { value: fromQuery || bodyValue, mismatch: false };
+}
+
+function pathNeedsProject(pathname: string): boolean {
+  return SCOPED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'));
+}
+
+function queryValue(url: URL, ...names: string[]): string {
+  for (const name of names) {
+    const value = String(url.searchParams.get(name) || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
 export async function dispatch(
   router: Router,
   req: IncomingMessage,
@@ -172,6 +242,47 @@ export async function dispatch(
     sendJson(res, 405, { error: 'method not allowed', path: url.pathname, allow: found.allow });
     return true;
   }
+  let parsedBody: Record<string, unknown> | null = null;
+  const contentType = String((req.headers && (req.headers['content-type'] || req.headers['Content-Type'])) || '');
+  if (method !== 'GET' && method !== 'HEAD' && contentType.includes('application/json')) {
+    try {
+      parsedBody = await readJsonBody(req);
+    } catch (err) {
+      const status = err instanceof HttpError ? err.status : 400;
+      sendJson(res, status, { error: err instanceof Error ? err.message : 'invalid JSON body' });
+      return true;
+    }
+  }
+  const projectField = scopedField(url, parsedBody, ['project_id', 'projectId']);
+  const simulationField = scopedField(url, parsedBody, ['simulation_id', 'simulationId']);
+  const geometryField = scopedField(url, parsedBody, ['geometry_id', 'geometryId']);
+  const caseField = scopedField(url, parsedBody, ['case_dir', 'caseDir']);
+  if (projectField.mismatch || simulationField.mismatch || geometryField.mismatch || caseField.mismatch) {
+    sendJson(res, 400, { error: 'scope fields disagree' });
+    return true;
+  }
+  const projectId = projectField.value;
+  const simulationId = simulationField.value;
+  const geometryId = geometryField.value;
+  const caseDir = caseField.value;
+  if (pathNeedsProject(url.pathname) && !projectId) {
+    if (scopeIsStrict()) {
+      sendJson(res, 400, { error: 'project_id required' });
+      return true;
+    }
+    if (!missingProjectWarned) {
+      missingProjectWarned = true;
+      console.warn(`[scope] ${url.pathname} has no project_id`);
+    }
+  }
+  if (caseDir && projectId && !caseDirAllowedForAttach(caseDir, projectId, simulationId)) {
+    sendJson(res, 403, { error: 'case_dir is outside this study' });
+    return true;
+  }
+  if (caseDir && !projectId && scopeIsStrict()) {
+    sendJson(res, 400, { error: 'project_id required' });
+    return true;
+  }
   const ctx: RequestContext = {
     req,
     res,
@@ -179,9 +290,21 @@ export async function dispatch(
     method,
     params: found.params,
     pathname: url.pathname,
+    scope: { projectId, simulationId, geometryId, caseDir },
     sendJson: (status, body) => sendJson(res, status, body),
     readJsonBody: () => readJsonBody(req),
   };
-  const out = await found.route.handler(ctx);
-  return out !== false;
+  try {
+    const out = await found.route.handler(ctx);
+    return out !== false;
+  } catch (err) {
+    const status =
+      typeof err === 'object' && err && 'status' in err ? Number((err as { status?: number }).status) : 0;
+    const message = err instanceof Error ? err.message : 'request rejected';
+    if (status === 400 || status === 403 || status === 404) {
+      sendJson(res, status, { error: message });
+      return true;
+    }
+    throw err;
+  }
 }

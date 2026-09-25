@@ -1,4 +1,5 @@
 import { safeProjectPath } from './safe-path.js';
+import { projectIdOrActive } from './request-scope.js';
 /**
  * W18 — Materials → Air + Body1 assign (filesystem persistence).
  * Persists projects/<id>/materials.json via POST/GET /api/materials.
@@ -20,7 +21,7 @@ import { firstLegacySimId, getActiveSimulation, liveStudyRows, writeActiveMirror
 import { assembleAllMaterials, deleteOneMaterial, persistOneMaterial, readStudyJson, studyFilePath } from './study-io.js';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
-import { pyJson } from './py-json.js';
+import { commitRpc } from './py-json.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -149,11 +150,11 @@ async function writeMaterialsFile(id, doc, simId, only) {
     if (rec && rec.id) persistOneMaterial(id, simId, rec);
   }
   try {
-    await pyJson(
-      'project_cli.py',
-      ['set-materials', '--project-dir', projectDir(id), '--sim-id', String(simId || '')],
-      { ...slim, materials: recs, air: recs[0] || slim.air, only_id: recs[0] && recs[0].id },
-    );
+    await commitRpc('materials.set', {
+      project_dir: projectDir(id),
+      sim_id: String(simId || ''),
+      body: { ...slim, materials: recs, air: recs[0] || slim.air, only_id: recs[0] && recs[0].id },
+    });
   } catch {
     /* folders already written */
   }
@@ -182,23 +183,24 @@ function normalizeAssignedVolumes(raw) {
     .filter(Boolean);
 }
 
+const FLUID_PRESETS = {
+  Air: { kinematic_viscosity: 1.529e-5, density: 1.196 },
+  Water: { kinematic_viscosity: 1.004e-6, density: 998.2 },
+};
+
+function fluidNumber(raw, fallback) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 function buildAirMaterial(body, existing) {
-  const name = String(body.name || body.material || W18_AIR.name).trim();
-  if (name !== 'Air') {
-    return {
-      ok: false,
-      status: 400,
-      body: {
-        error: 'W18 supports Air only in this slice',
-        got: name,
-        soft_pass: false,
-      },
-    };
-  }
+  const name = String(body.name || body.material || (existing && existing.name) || W18_AIR.name).trim() || W18_AIR.name;
+  const preset = FLUID_PRESETS[name] || FLUID_PRESETS.Air;
   const assigned = normalizeAssignedVolumes(
     body.assigned_volumes || body.volumes || body.assign || body.body
   );
-  if (!assigned.length && !existing) {
+  const kept = assigned.length ? assigned : normalizeAssignedVolumes(existing && existing.assigned_volumes);
+  if (!kept.length && !existing) {
     return {
       ok: false,
       status: 400,
@@ -211,18 +213,28 @@ function buildAirMaterial(body, existing) {
   }
   const now = new Date().toISOString();
   const id = (existing && existing.id) || body.id || newMaterialId();
+  const nu = fluidNumber(
+    body.kinematic_viscosity != null ? body.kinematic_viscosity : body.nu,
+    existing && existing.kinematic_viscosity != null ? Number(existing.kinematic_viscosity) : preset.kinematic_viscosity,
+  );
+  const rho = fluidNumber(
+    body.density != null ? body.density : body.rho,
+    existing && existing.density != null ? Number(existing.density) : preset.density,
+  );
   const material = {
     id,
-    name: W18_AIR.name,
-    type: W18_AIR.type,
-    viscosity_model: W18_AIR.viscosity_model,
-    kinematic_viscosity: W18_AIR.kinematic_viscosity,
-    kinematic_viscosity_unit: W18_AIR.kinematic_viscosity_unit,
-    density: W18_AIR.density,
-    density_unit: W18_AIR.density_unit,
-    library: W18_AIR.library,
-    assigned_volumes: assigned,
-    assigned_volume: assigned[0],
+    name,
+    type: 'Newtonian',
+    viscosity_model: 'Newtonian',
+    kinematic_viscosity: nu,
+    nu,
+    kinematic_viscosity_unit: 'm2/s',
+    density: rho,
+    rho,
+    density_unit: 'kg/m3',
+    library: name === 'Air' || name === 'Water' ? name.toUpperCase() : 'CUSTOM',
+    assigned_volumes: kept,
+    assigned_volume: kept[0],
     saved: true,
     checkmark_saved: true,
     created_at: (existing && existing.created_at) || now,
@@ -236,7 +248,7 @@ function buildAirMaterial(body, existing) {
 }
 
 async function upsertMaterials(body) {
-  const projectId = (body && body.project_id) || readActiveId();
+  const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: false,
@@ -269,13 +281,11 @@ async function upsertMaterials(body) {
   const primaryId = primaryGeometryId(proj);
   const allMats = (existingDoc && Array.isArray(existingDoc.materials) && existingDoc.materials) || [];
   const legacyId = firstLegacySimId(projectId, proj);
+  const onStudy = (m) =>
+    m && matchesGeometry(m, geomId, primaryId) && matchesStudy(m, sim.id, legacyId);
   const existingAir =
-    allMats.find(
-      (m) =>
-        m.name === 'Air' &&
-        matchesGeometry(m, geomId, primaryId) &&
-        matchesStudy(m, sim.id, legacyId)
-    ) ||
+    (body && body.id && allMats.find((m) => m && m.id === body.id && onStudy(m))) ||
+    allMats.find(onStudy) ||
     null;
 
   const built = buildAirMaterial(body || {}, existingAir || null);
@@ -288,7 +298,7 @@ async function upsertMaterials(body) {
   if (geomId) built.material.geometry_id = geomId;
 
   const mine = allMats.filter((m) => m && matchesStudy(m, sim.id, legacyId));
-  const materials = mine.filter((m) => m && m.name !== 'Air').concat([built.material]);
+  const materials = mine.filter((m) => m && m.id !== built.material.id).concat([built.material]);
 
   const doc = {
     project_id: projectId,
@@ -313,8 +323,10 @@ async function upsertMaterials(body) {
   proj.materials = {
     air: {
       id: built.material.id,
-      name: 'Air',
+      name: built.material.name,
       viscosity_model: 'Newtonian',
+      kinematic_viscosity: built.material.kinematic_viscosity,
+      density: built.material.density,
       assigned_volumes: built.material.assigned_volumes,
       materials_json: materialsPath,
       updated_at: built.material.updated_at,
@@ -332,7 +344,9 @@ async function upsertMaterials(body) {
     simDoc.materials = {
       air: {
         id: built.material.id,
-        name: 'Air',
+        name: built.material.name,
+        kinematic_viscosity: built.material.kinematic_viscosity,
+        density: built.material.density,
         assigned_volumes: built.material.assigned_volumes,
       },
       materials_json: materialsPath,
@@ -364,7 +378,7 @@ async function upsertMaterials(body) {
 }
 
 async function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
-  const projectId = projectIdOpt || readActiveId();
+  const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: false,
@@ -447,7 +461,7 @@ async function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
 }
 
 export function getMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
-  const projectId = projectIdOpt || readActiveId();
+  const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return {
       ok: true,

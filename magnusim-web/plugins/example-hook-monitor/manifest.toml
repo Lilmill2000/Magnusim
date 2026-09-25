@@ -1,0 +1,8 @@
+key = "example-hook-monitor"
+name = "Hook monitor"
+version = "0.1.0"
+api_version = "1.0"
+description = "Appends one function object after a case is written"
+authors = "Magnusim"
+ui = "ui"
+ui_entry = "index.js"

@@ -28,7 +28,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--faces-only", action="store_true")
     args = ap.parse_args(argv)
 
-    if not args.step.is_file():
+    from cfddesk.cad.io import geometry_file_exists
+
+    if not geometry_file_exists(args.step):
         print("MISSING STEP", args.step, file=sys.stderr)
         return 2
 

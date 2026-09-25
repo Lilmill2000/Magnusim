@@ -20,7 +20,7 @@ class MaterialModel:
     key: str
     label: str
     properties_schema: tuple[SchemaField, ...]
-    # Soft-pass stub — transportProperties write stays in Phase 1 paths this land.
+    # Built-in newtonian_incompressible delegates to write_transport_properties.
     write_files: Callable[..., None] | None = None
     library: tuple[dict[str, Any], ...] = ()
 

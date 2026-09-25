@@ -54,7 +54,8 @@ def test_describe_returns_labels_and_schemas():
         assert "properties" in row["schema"]
         assert "turbulence_model" in row["schema"]["properties"]
         assert isinstance(row.get("numerics_schema"), dict)
-        assert "residual_u" in row["numerics_schema"]["properties"]
+        # Steady SIMPLE numerics only; transient PIMPLE settings are on the run panel.
+        assert ("residual_u" in row["numerics_schema"]["properties"]) == (key == DEFAULT_STEADY_KEY)
         assert isinstance(row.get("control_schema"), dict)
         assert "end_time" in row["control_schema"]["properties"]
         assert row.get("requires")
@@ -73,7 +74,8 @@ def test_get_defaults_validate_via_schemafield():
         assert spec.validate() == []
         for schema_name in ("settings_schema", "numerics_schema", "control_schema"):
             fields = getattr(spec, schema_name)
-            assert isinstance(fields, tuple) and len(fields) > 0
+            may_be_empty = key == DEFAULT_TRANSIENT_KEY and schema_name == "numerics_schema"
+            assert isinstance(fields, tuple) and (may_be_empty or len(fields) > 0)
             assert all(isinstance(f, SchemaField) for f in fields)
             defaults = schema_defaults(fields)
             errors = validate(defaults, fields)

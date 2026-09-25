@@ -3,8 +3,9 @@
  * Study / mesh / run file I/O. Writers for study N may only touch that folder.
  */
 import { rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { projectDir } from './w17-sim-catalog.js';
+import { basename, join } from 'node:path';
+import { matchesStudy } from './w16-geometry-scope.js';
+import { firstLegacySimId, projectDir } from './w17-sim-catalog.js';
 import {
   caseUnderOwner,
   bindMeshCasePaths,
@@ -61,6 +62,68 @@ function stripDirMeta(rec) {
   return next;
 }
 
+/**
+ * Stable id for an id-less BC row in a leftover aggregate file: its 1-based
+ * position in that list. Matches cfddesk/project/paths.py legacy_bc_id, so the
+ * tree, hydrate, GET /api/bcs and the adopted BC_* folder all agree on one id.
+ */
+export function legacyBcId(index) {
+  return `bc-legacy-${index + 1}`;
+}
+
+function aggregateBcRows(doc) {
+  if (!doc || typeof doc !== 'object') return [];
+  for (const key of ['boundary_conditions', 'bcs', 'bcs_all']) {
+    if (Array.isArray(doc[key])) return doc[key];
+  }
+  return [];
+}
+
+/**
+ * BC rows of one study that live only in a leftover aggregate file (no BC_*
+ * folder yet). The study's own boundary_conditions.json first. A project from
+ * before study folders keeps its BCs in the root boundary_conditions.json; that
+ * file counts only while the study has neither an aggregate nor a BC_* folder,
+ * and only for rows matchesStudy gives this study (untagged rows need a single
+ * study — the rule migrate_root_siblings copies by).
+ */
+function legacyBcRowsAt(projectDirPath, s, haveFolders) {
+  const withIds = (list) =>
+    list
+      .map((r, i) => (r && typeof r === 'object' && r.id == null ? { ...r, id: legacyBcId(i) } : r))
+      .filter((r) => r && typeof r === 'object');
+  const own = readJsonFile(studyBcsPath(s.dir));
+  if (own) {
+    return withIds(aggregateBcRows(own)).map((r) => (r.simulation_id ? r : { ...r, simulation_id: s.id }));
+  }
+  if (haveFolders) return [];
+  const rootDoc = readJsonFile(join(projectDirPath, 'boundary_conditions.json'));
+  if (!rootDoc) return [];
+  const legacySimId =
+    firstLegacySimId(basename(projectDirPath), null) || (walkStudies(projectDirPath).length === 1 ? s.id : null);
+  return withIds(aggregateBcRows(rootDoc))
+    .filter((r) => matchesStudy(r, s.id, legacySimId))
+    .map((r) => ({ ...r, simulation_id: s.id }));
+}
+
+/**
+ * Give each leftover-aggregate BC row of this study its own BC_* folder before a
+ * write rebuilds boundary_conditions.json from the folders. Without this the
+ * first POST /api/bcs create wiped every legacy BC the tree was showing.
+ */
+function adoptLegacyBcsAt(projectDirPath, s) {
+  const parent = studyBcsDir(s.dir);
+  const folders = walkChildItems(parent, 'bc.json');
+  const have = new Set(folders.map((r) => String(r.id)));
+  let adopted = 0;
+  for (const rec of legacyBcRowsAt(projectDirPath, s, folders.length > 0)) {
+    if (have.has(String(rec.id)) || String(rec.simulation_id) !== String(s.id)) continue;
+    persistChildItem(parent, 'bc', rec);
+    adopted += 1;
+  }
+  return adopted;
+}
+
 function mergeFolderRows(folderRows, legacyList) {
   const have = new Set((folderRows || []).map((r) => String(r && r.id)));
   const extra = (legacyList || []).filter((r) => r && r.id != null && !have.has(String(r.id)));
@@ -86,7 +149,7 @@ function assembleStudyCollection(projectId, simId, which) {
     const defaultsDoc = readJsonFile(join(studyBcsDir(s.dir), 'defaults.json'));
     return {
       ...(legacy || {}),
-      boundary_conditions: mergeFolderRows(rows, legacy && legacy.boundary_conditions),
+      boundary_conditions: mergeFolderRows(rows, legacyBcRowsAt(projectDir(projectId), s, rows.length > 0)),
       defaults: (defaultsDoc && defaultsDoc.defaults) || (legacy && legacy.defaults) || null,
       defaults_by_simulation:
         (defaultsDoc && defaultsDoc.defaults_by_simulation) ||
@@ -127,9 +190,18 @@ export function persistOneMaterial(projectId, simId, rec) {
 function mirrorStudyBcsJson(studyDir, simId) {
   const rows = walkChildItems(studyBcsDir(studyDir), 'bc.json').map(stripDirMeta);
   const legacy = readJsonFile(studyBcsPath(studyDir)) || {};
+  const have = new Set(rows.map((r) => String(r.id)));
+  // Rows tagged for another study are never adopted here; keep them on disk rather than drop them unseen.
+  const foreign = aggregateBcRows(legacy).filter(
+    (r) =>
+      r &&
+      r.simulation_id &&
+      String(r.simulation_id) !== String(simId) &&
+      !(r.id != null && have.has(String(r.id)))
+  );
   writeJsonAtomic(studyBcsPath(studyDir), {
     ...legacy,
-    boundary_conditions: rows,
+    boundary_conditions: [...rows, ...foreign],
     simulation_id: simId || legacy.simulation_id || null,
     updated_at: new Date().toISOString(),
   });
@@ -138,6 +210,7 @@ function mirrorStudyBcsJson(studyDir, simId) {
 export function persistOneBcAt(projectDirPath, simId, rec) {
   const s = findStudy(projectDirPath, String(simId));
   if (!s) throw new Error('study folder missing for ' + simId);
+  adoptLegacyBcsAt(projectDirPath, s);
   const out = persistChildItem(studyBcsDir(s.dir), 'bc', { ...rec, simulation_id: simId });
   mirrorStudyBcsJson(s.dir, simId);
   return out;
@@ -213,8 +286,10 @@ export function deleteOneMaterial(projectId, simId, id) {
 
 export function deleteOneBc(projectId, simId, id) {
   const s = studyOf(projectId, simId);
-  const ok = !!(s && removeChildItem(studyBcsDir(s.dir), 'bc.json', id));
-  if (ok && s) mirrorStudyBcsJson(s.dir, simId);
+  if (!s) return false;
+  const adopted = adoptLegacyBcsAt(projectDir(projectId), s);
+  const ok = removeChildItem(studyBcsDir(s.dir), 'bc.json', id);
+  if (ok || adopted) mirrorStudyBcsJson(s.dir, simId);
   return ok;
 }
 

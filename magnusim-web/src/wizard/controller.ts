@@ -1,10 +1,13 @@
 // @ts-nocheck
 /**
- * First-run / Preferences wizard: units, hardware profile, listen port, workspace.
+ * First-run setup and Settings wizard: units, hardware profile, listen port, workspace, plugins.
  */
+import { mountIsland, unmountIsland } from '../islands';
 
 const COLLAPSE_PREF_KEY = 'magnusim.collapseCompletedSections';
-const WIZ_LAST_STEP = 4;
+const WIZ_WORKSPACE_STEP = 4;
+const WIZ_PLUGINS_STEP = 5;
+const WIZ_LAST_STEP = WIZ_PLUGINS_STEP;
 
 function $(id) {
   return document.getElementById(id);
@@ -86,6 +89,7 @@ function setStep(n) {
   if (next) next.textContent = wizard.step === WIZ_LAST_STEP ? 'Finish' : 'Next';
   if (skip) skip.hidden = wizard.required;
   if (wizard.step === 2) startHardwareCheck();
+  if (wizard.step === WIZ_PLUGINS_STEP) mountIsland('wiz-plugins', { scope: '' });
 }
 
 function paintUnits() {
@@ -209,7 +213,7 @@ async function saveWizard(completed) {
     }),
   });
   const j = await r.json();
-  if (!r.ok || !j.ok) throw new Error((j && j.error) || 'Could not save preferences');
+  if (!r.ok || !j.ok) throw new Error((j && j.error) || 'Could not save settings');
   window.__CFD_PREFS__ = j.prefs;
   syncCollapsePrefStore(j.prefs);
   await applyPreferredUnitsNow();
@@ -238,6 +242,7 @@ function hideWizard() {
   const el = $('setup-wizard');
   if (el) el.hidden = true;
   wizard.open = false;
+  unmountIsland('wiz-plugins');
 }
 
 export function openSetupWizard(opts) {
@@ -262,7 +267,8 @@ export function openSetupWizard(opts) {
   paintWorkspace();
   const el = $('setup-wizard');
   if (el) el.hidden = false;
-  setStep(!required && prefs.wizard_completed ? WIZ_LAST_STEP : 0);
+  // Settings (after first run) opens on Workspace, as V0.1.0 did; Plugins is one step on.
+  setStep(!required && prefs.wizard_completed ? WIZ_WORKSPACE_STEP : 0);
 }
 
 async function onNext() {

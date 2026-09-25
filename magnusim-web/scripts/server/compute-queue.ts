@@ -3,10 +3,11 @@
  * the next mesh/solve after the live slot frees. Closing a tab does not
  * drop queued work while the Magnusim window stays open.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { WEB_ROOT } from '../python-env.js';
+import { PROJECTS_ROOT } from '../project-isolation.js';
 
 export type ComputeQueueKind = 'mesh' | 'solve';
 
@@ -33,11 +34,16 @@ export type ComputeLiveSnap = {
   mesh_id?: string | null;
   run_id?: string | null;
   project_id?: string | null;
+  project_title?: string | null;
+  mesh_name?: string | null;
+  generate_id?: string | null;
+  path_kind?: string | null;
+  started_at?: string | null;
 };
 
 export type ComputeQueueDeps = {
   isBusy?: () => boolean;
-  meshIsGenerating?: (meshId: string) => boolean;
+  meshIsGenerating?: (meshId: string, projectId: string) => boolean;
   startMesh?: (item: ComputeQueueItem) => ComputeStartResult | Promise<ComputeStartResult>;
   startSolve?: (item: ComputeQueueItem) => ComputeStartResult | Promise<ComputeStartResult>;
   live?: () => ComputeLiveSnap | null;
@@ -45,11 +51,27 @@ export type ComputeQueueDeps = {
 
 export type ComputeQueueSnapshot = {
   ok: boolean;
-  items: ComputeQueueItem[];
+  items: Array<ComputeQueueItem & { position?: number }>;
+  /** The running job, only when it belongs to the asked project. */
   live: ComputeLiveSnap | null;
+  /** The running job in any project: what a queued row is waiting on. */
+  busy?: ComputeLiveSnap | null;
 };
 
-const DEFAULT_PATH = join(WEB_ROOT, '.cache', 'compute-queue.json');
+/**
+ * Queue rows name projects under one projects root, so each root gets its own
+ * file: an e2e or scratch server must not start (or drop) the dev server's jobs.
+ */
+export function computeQueueFileFor(projectsRoot: string): string {
+  const root = resolve(projectsRoot);
+  if (root.toLowerCase() === resolve(WEB_ROOT, 'projects').toLowerCase()) {
+    return join(WEB_ROOT, '.cache', 'compute-queue.json');
+  }
+  const tag = createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 10);
+  return join(WEB_ROOT, '.cache', `compute-queue-${tag}.json`);
+}
+
+const DEFAULT_PATH = computeQueueFileFor(PROJECTS_ROOT);
 
 let filePath = DEFAULT_PATH;
 let items: ComputeQueueItem[] = [];
@@ -62,11 +84,20 @@ function normId(value: unknown): string {
   return value == null || value === '' ? '' : String(value);
 }
 
-function jobKey(item: { kind?: unknown; mesh_id?: unknown; run_id?: unknown } | null | undefined): string {
+/** Mesh and run ids repeat across projects (every project has a mesh_1), so the project is part of the key. */
+function jobKey(
+  item: { kind?: unknown; mesh_id?: unknown; run_id?: unknown; project_id?: unknown } | null | undefined,
+): string {
   if (!item) return '';
   const kind = item.kind === 'mesh' || item.kind === 'solve' ? item.kind : '';
   const id = kind === 'mesh' ? normId(item.mesh_id) : normId(item.run_id);
-  return kind && id ? `${kind}:${id}` : '';
+  return kind && id ? `${kind}:${normId(item.project_id)}:${id}` : '';
+}
+
+/** No projectId means any project (older callers). */
+function sameProject(row: { project_id?: unknown }, projectId: unknown): boolean {
+  const want = normId(projectId);
+  return !want || normId(row.project_id) === want;
 }
 
 function newQueueId(): string {
@@ -84,10 +115,12 @@ export function queueKickAfterStart(
   return 'hold';
 }
 
-function queueIndexOfMesh(list: ComputeQueueItem[], meshId: unknown): number {
+function queueIndexOfMesh(list: ComputeQueueItem[], meshId: unknown, projectId?: unknown): number {
   const want = normId(meshId);
   if (!want) return -1;
-  return list.findIndex((row) => row && row.kind === 'mesh' && normId(row.mesh_id) === want);
+  return list.findIndex(
+    (row) => row && row.kind === 'mesh' && normId(row.mesh_id) === want && sameProject(row, projectId),
+  );
 }
 
 export function queueHasMeshDepViolation(list: ComputeQueueItem[] | null | undefined): boolean {
@@ -95,7 +128,7 @@ export function queueHasMeshDepViolation(list: ComputeQueueItem[] | null | undef
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (!row || row.kind !== 'solve' || !normId(row.mesh_id)) continue;
-    const meshAt = queueIndexOfMesh(rows, row.mesh_id);
+    const meshAt = queueIndexOfMesh(rows, row.mesh_id, row.project_id);
     if (meshAt >= 0 && i < meshAt) return true;
   }
   return false;
@@ -103,7 +136,7 @@ export function queueHasMeshDepViolation(list: ComputeQueueItem[] | null | undef
 
 function insertSolveAfterMesh(list: ComputeQueueItem[], item: ComputeQueueItem): ComputeQueueItem[] {
   const next = list.slice();
-  const at = queueIndexOfMesh(next, item.mesh_id);
+  const at = queueIndexOfMesh(next, item.mesh_id, item.project_id);
   if (at < 0) next.push(item);
   else next.splice(at + 1, 0, item);
   return next;
@@ -113,7 +146,9 @@ function insertMeshBeforeDependentSolves(list: ComputeQueueItem[], item: Compute
   const next = list.slice();
   const meshId = normId(item.mesh_id);
   const firstSolve = meshId
-    ? next.findIndex((row) => row && row.kind === 'solve' && normId(row.mesh_id) === meshId)
+    ? next.findIndex(
+        (row) => row && row.kind === 'solve' && normId(row.mesh_id) === meshId && sameProject(row, item.project_id),
+      )
     : -1;
   if (firstSolve < 0) next.push(item);
   else next.splice(firstSolve, 0, item);
@@ -148,14 +183,10 @@ function mergeStoredQueueItems(...lists: Array<ComputeQueueItem[] | null | undef
   return out;
 }
 
-function dropQueueJobsForMesh(list: ComputeQueueItem[], meshId: unknown): ComputeQueueItem[] {
+function dropQueueJobsForMesh(list: ComputeQueueItem[], meshId: unknown, projectId?: unknown): ComputeQueueItem[] {
   const id = normId(meshId);
   if (!id) return list.slice();
-  return list.filter((row) => {
-    if (row.kind === 'mesh' && normId(row.mesh_id) === id) return false;
-    if (row.kind === 'solve' && normId(row.mesh_id) === id) return false;
-    return true;
-  });
+  return list.filter((row) => !(normId(row.mesh_id) === id && sameProject(row, projectId)));
 }
 
 function orderedQueueItems(list: ComputeQueueItem[], ids: unknown): ComputeQueueItem[] {
@@ -280,14 +311,19 @@ export function resetComputeQueueForTests(opts?: {
   persist();
 }
 
-export function snapshotComputeQueue(): ComputeQueueSnapshot {
+export function snapshotComputeQueue(projectId?: string | null): ComputeQueueSnapshot {
   ensureLoaded();
-  const live = deps.live ? deps.live() : null;
-  return {
-    ok: true,
-    items: items.slice(),
-    live: live && live.kind ? live : null,
-  };
+  const raw = deps.live ? deps.live() : null;
+  const live = raw && raw.kind ? raw : null;
+  if (projectId === undefined) {
+    return { ok: true, items: items.slice(), live, busy: live };
+  }
+  const want = normId(projectId);
+  const rows = want
+    ? items.map((row, i) => ({ ...row, position: i + 1 })).filter((row) => normId(row.project_id) === want)
+    : [];
+  const liveOk = live && want && normId(live.project_id) === want ? live : null;
+  return { ok: true, items: rows, live: liveOk, busy: live };
 }
 
 export function enqueueComputeJob(
@@ -312,7 +348,7 @@ export function enqueueComputeJob(
   if (item.kind === 'mesh') {
     items = insertMeshBeforeDependentSolves(items, item);
   } else if (opts && opts.meshGenerating) {
-    const meshAlreadyQueued = items.some((row) => row.kind === 'mesh' && normId(row.mesh_id) === normId(item.mesh_id));
+    const meshAlreadyQueued = queueIndexOfMesh(items, item.mesh_id, item.project_id) >= 0;
     items = meshAlreadyQueued ? insertSolveAfterMesh(items, item) : [item, ...items];
   } else {
     items = insertSolveAfterMesh(items, item);
@@ -321,20 +357,62 @@ export function enqueueComputeJob(
   return { ok: true, item, items: items.slice() };
 }
 
+/**
+ * POST /api/mesh/generate with queue_if_busy. When another mesh or solve holds
+ * the one compute slot (possibly in another project), queue this mesh instead
+ * of answering 409; the queue starts it when the slot frees, even with no tab
+ * open on that project. Returns null when the request should start as usual
+ * (slot free, or this very mesh is the live job).
+ */
+export function enqueueMeshWhenBusy(
+  req: {
+    mesh_id?: unknown;
+    project_id?: unknown;
+    simulation_id?: unknown;
+    name?: unknown;
+    settings?: Record<string, unknown> | null;
+  },
+  live: ComputeLiveSnap | null,
+): { status: number; body: Record<string, unknown> } | null {
+  const meshId = normId(req.mesh_id);
+  const projectId = normId(req.project_id);
+  if (!meshId || !projectId || !live || !live.kind) return null;
+  if (live.kind === 'mesh' && normId(live.mesh_id) === meshId && normId(live.project_id) === projectId) return null;
+  const enqueued = enqueueComputeJob({
+    kind: 'mesh',
+    mesh_id: meshId,
+    project_id: projectId,
+    simulation_id: normId(req.simulation_id) || null,
+    name: req.name ? String(req.name) : undefined,
+    settings: req.settings || null,
+  });
+  if (!enqueued.ok) return { status: 400, body: { ok: false, error: enqueued.error } };
+  return {
+    status: 202,
+    body: { ...snapshotComputeQueue(projectId), ok: true, queued: true, item: enqueued.item },
+  };
+}
+
+/** Leftover browser-side rows. A row for the job running right now is already done being queued. */
 export function mergeComputeQueueItems(incoming: unknown): ComputeQueueSnapshot {
   ensureLoaded();
-  items = mergeStoredQueueItems(items, parseStoredQueueItems(incoming));
+  const live = deps.live ? deps.live() : null;
+  const liveKey = live && live.kind ? jobKey(live) : '';
+  const rows = parseStoredQueueItems(incoming).filter((row) => !liveKey || jobKey(row) !== liveKey);
+  items = mergeStoredQueueItems(items, rows);
   persist();
   return snapshotComputeQueue();
 }
 
-export function removeComputeJob(kind: unknown, id: unknown): ComputeQueueSnapshot {
+/** Remove by queue row id, or by mesh/run id within projectId. */
+export function removeComputeJob(kind: unknown, id: unknown, projectId?: unknown): ComputeQueueSnapshot {
   ensureLoaded();
   const want = normId(id);
   if (!want) return snapshotComputeQueue();
   const before = items.length;
   items = items.filter((row) => {
     if (row.id === want) return false;
+    if (!sameProject(row, projectId)) return true;
     if (kind === 'mesh') return !(row.kind === 'mesh' && normId(row.mesh_id) === want);
     if (kind === 'solve') return !(row.kind === 'solve' && normId(row.run_id) === want);
     if (!kind) {
@@ -346,9 +424,9 @@ export function removeComputeJob(kind: unknown, id: unknown): ComputeQueueSnapsh
   return snapshotComputeQueue();
 }
 
-export function dropComputeJobsForMesh(meshId: unknown): ComputeQueueSnapshot {
+export function dropComputeJobsForMesh(meshId: unknown, projectId?: unknown): ComputeQueueSnapshot {
   ensureLoaded();
-  const next = dropQueueJobsForMesh(items, meshId);
+  const next = dropQueueJobsForMesh(items, meshId, projectId);
   if (next.length !== items.length) {
     items = next;
     persist();
@@ -372,23 +450,26 @@ function slotBusy(): boolean {
   return !!(deps.isBusy && deps.isBusy());
 }
 
-function meshGenerating(meshId: unknown): boolean {
+function meshGenerating(meshId: unknown, projectId: unknown): boolean {
   const id = normId(meshId);
   if (!id || !deps.meshIsGenerating) return false;
-  return !!deps.meshIsGenerating(id);
+  return !!deps.meshIsGenerating(id, normId(projectId));
 }
 
-export async function kickComputeQueue(): Promise<ComputeQueueSnapshot> {
+export async function kickComputeQueue(projectId?: string | null): Promise<ComputeQueueSnapshot> {
   ensureLoaded();
-  if (kicking) return snapshotComputeQueue();
+  const scoped = projectId !== undefined;
+  const want = scoped ? normId(projectId) : '';
+  const snap = () => (scoped ? snapshotComputeQueue(want) : snapshotComputeQueue());
+  if (kicking) return snap();
   kicking = true;
   try {
     for (;;) {
-      if (slotBusy()) return snapshotComputeQueue();
-      const next = items[0];
-      if (!next) return snapshotComputeQueue();
-      if (next.kind === 'solve' && meshGenerating(next.mesh_id)) {
-        return snapshotComputeQueue();
+      if (slotBusy()) return snap();
+      const next = scoped ? items.find((row) => normId(row.project_id) === want) : items[0];
+      if (!next) return snap();
+      if (next.kind === 'solve' && meshGenerating(next.mesh_id, next.project_id)) {
+        return snap();
       }
       const started =
         next.kind === 'mesh'
@@ -410,10 +491,10 @@ export async function kickComputeQueue(): Promise<ComputeQueueSnapshot> {
       } else if (action === 'retry') {
         scheduleComputeQueueKick(1500);
       }
-      return snapshotComputeQueue();
+      return snap();
     }
   } catch {
-    return snapshotComputeQueue();
+    return snap();
   } finally {
     kicking = false;
   }

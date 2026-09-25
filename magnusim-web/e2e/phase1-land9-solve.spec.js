@@ -58,14 +58,12 @@ test.describe('Phase1 land9 UI Solve (public)', () => {
     expect(runId, 'new run id').toBeTruthy();
 
     // Copy mesh/settings from a prior done run (UI path).
-    const copyFrom = page.locator('#sim-copy-from');
+    const runPanel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
+    const copyFrom = runPanel.locator('[data-run-copy="1"]');
     await expect(copyFrom).toBeVisible({ timeout: 15_000 });
-    // createRunClient already starts pick mode; ensure picker visible
-    if (await page.locator('#sim-copy-open').isVisible()) {
-      await page.locator('#sim-copy-open').click();
-    }
-    await expect(page.locator('#sim-copy-picker')).toBeVisible({ timeout: 10_000 });
-    await page.locator('#sim-copy-run').selectOption(COPY_FROM_RUN);
+    const openCopy = copyFrom.getByRole('button', { name: 'Copy from previous run' });
+    if (await openCopy.isVisible()) await openCopy.click();
+    await copyFrom.getByLabel('Run to copy settings from').selectOption(COPY_FROM_RUN);
     await page.waitForTimeout(1000);
 
     // Confirm mesh landed on the draft run via status API
@@ -81,13 +79,15 @@ test.describe('Phase1 land9 UI Solve (public)', () => {
       }, { timeout: 30_000 })
       .not.toEqual('');
 
-    await page.locator('#sim-end-time').fill('20');
-    await page.locator('#sim-end-time').dispatchEvent('change');
-    await page.locator('#sim-write-interval').fill('10');
-    await page.locator('#sim-write-interval').dispatchEvent('change');
+    const iterations = runPanel.getByLabel('Iterations', { exact: true });
+    await iterations.fill('20');
+    await iterations.press('Enter');
+    const writeInterval = runPanel.getByLabel('Write interval', { exact: true });
+    await writeInterval.fill('10');
+    await writeInterval.press('Enter');
     await page.waitForTimeout(500);
 
-    const startBtn = page.locator('#btn-sim-start');
+    const startBtn = runPanel.locator('[data-run-start]');
     await expect(startBtn).toBeVisible({ timeout: 15_000 });
     await expect(startBtn).toBeEnabled({ timeout: 60_000 });
     await startBtn.click();
@@ -137,8 +137,8 @@ test.describe('Phase1 land9 UI Solve (public)', () => {
       n_saved_times: nSaved,
       solve_protocol: run.solve_protocol,
       prepare_run_ok: !!(run.prepare_run && run.prepare_run.ok),
-      clicked: '#btn-sim-start',
-      ui_copy: '#sim-copy-run',
+      clicked: '[data-run-start]',
+      ui_copy: '[data-run-copy]',
     };
     fs.mkdirSync(path.dirname(EVIDENCE), { recursive: true });
     fs.writeFileSync(EVIDENCE, JSON.stringify(evidence, null, 2));

@@ -40,7 +40,8 @@ def test_hydrate_includes_reconciled_orphan_run(tmp_path, monkeypatch):
     mid = str(mesh.get("active_id") or "")
     if not mid:
         meshes = mesh.get("meshes") or []
-        mid = str((meshes[0] or {}).get("id") or "mesh_1")
+        first_mesh = meshes[0] if meshes else {}
+        mid = str((first_mesh or {}).get("id") or "mesh_1")
 
     orphan = proj / "results" / f"mesh-{mid}" / "run-orphan99"
     (orphan / "constant" / "polyMesh").mkdir(parents=True)

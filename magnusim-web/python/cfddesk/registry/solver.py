@@ -27,13 +27,13 @@ class SolverApp:
     time_dependency: TimeDependency
     parallel: ParallelMode
     stop_strategy: StopStrategy
-    # Optional stubs this land — residual/Courant parsers + writers stay in
-    # Phase 1 paths until a later land moves them (soft-pass).
+    # Built-ins delegate to solve_run / writer. None remains valid for a plugin
+    # that has not filled a parser yet (soft-pass).
     residual_line: Callable[[str], dict[str, Any] | None] | None = None
     extra_lines: Callable[[str], dict[str, Any] | None] | None = None
     write_fv_solution: Callable[..., None] | None = None
     write_control_dict: Callable[..., None] | None = None
-    script_template: str = "solve.sh"
+    script_template: str = "solve"
     requires: tuple[Requirement, ...] = ()
 
 

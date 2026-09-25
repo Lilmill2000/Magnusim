@@ -6,7 +6,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { PYTHON } from '../python-env.js';
 import { parseJobLine, spawnJob } from '../job-runner.js';
 
-export type JobKind = 'mesh' | 'solve' | 'cad_import' | 'filter';
+export type JobKind = string;
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'stopped';
 
 export interface JobRecord {
@@ -123,12 +123,28 @@ export class JobManager extends EventEmitter {
     return out;
   }
 
-  create(kind: JobKind, params: Record<string, unknown>, project?: string): JobRecord {
+  create(
+    kind: JobKind,
+    params: Record<string, unknown>,
+    project?: string,
+    opts?: { scope?: string },
+  ): JobRecord {
+    const projectId = String(project || params.project_id || params.projectId || '').trim();
+    if (!projectId) throw new Error('project_id required');
+    const scope = String(opts?.scope || '');
+    const sim = String(params.simulation_id || params.simulationId || '').trim();
+    const geom = String(params.geometry_id || params.geometryId || '').trim();
+    if (scope === 'study' || kind === 'mesh' || kind === 'solve') {
+      if (!sim) throw new Error('simulation_id required');
+    }
+    if (scope === 'geometry' || kind === 'cad_import') {
+      if (!geom) throw new Error('geometry_id required');
+    }
     const job: JobRecord = {
       id: newId(),
       kind,
       status: 'queued',
-      project,
+      project: projectId,
       params,
       pid: null,
       created_at: nowIso(),
@@ -177,9 +193,11 @@ export class JobManager extends EventEmitter {
     this.bus(id).emit('end', job);
   }
 
-  stop(id: string): JobRecord | null {
+  stop(id: string, projectId?: string): JobRecord | null {
     const job = this.jobs.get(id);
     if (!job) return null;
+    const want = String(projectId || '').trim();
+    if (want && job.project !== want) return null;
     const child = this.children.get(id);
     if (child && child.exitCode == null) {
       try {

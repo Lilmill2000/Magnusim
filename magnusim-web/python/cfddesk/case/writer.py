@@ -27,6 +27,7 @@ from cfddesk.case.ras import (
 )
 from cfddesk.materials.library import NU_AIR
 from cfddesk.mesh.case_writer import _foam_header, _write_foam
+from cfddesk.project.study_physics import DEFAULT_PHYSICS, StudyPhysics, turbulence_fields
 from cfddesk.units.pressure import pa_to_kinematic
 
 # Runtime imports stay lazy; static analysis sees the real exported types.
@@ -456,7 +457,7 @@ def write_fv_schemes(
     (Euler|backward ddt, no bounded div) via ``write_fv_schemes_transient``.
     """
     if transient is not None:
-        write_fv_schemes_transient(path, ctrl=transient)
+        write_fv_schemes_transient(path, ctrl=transient, turbulence=turbulence)
         return
     from cfddesk.project.numerics import (
         NumericsSettings,
@@ -985,20 +986,21 @@ def write_fv_solution_pimple(
     n_outer = max(1, int(round(ctrl.n_outer_correctors)))
     n_corr = max(1, int(round(ctrl.n_correctors)))
     n_non_orth = max(0, int(round(ctrl.n_non_orthogonal_correctors)))
+    eq = _equation_regex(str(turbulence))
     if n_outer > 1:
-        relax = """relaxationFactors
-{
+        relax = f"""relaxationFactors
+{{
     fields
-    {
+    {{
         p               0.3;
         pFinal          1;
-    }
+    }}
     equations
-    {
-        "(U|k|omega)"   0.7;
-        "(U|k|omega)Final" 1;
-    }
-}"""
+    {{
+        {eq}   0.7;
+        {_final_regex(eq)} 1;
+    }}
+}}"""
     else:
         relax = """relaxationFactors
 {
@@ -1007,8 +1009,8 @@ def write_fv_solution_pimple(
         ".*"            1;
     }
 }"""
-    # turbulence / numerics reserved for Phase 2 unification; w30 hard-codes U|k|omega.
-    _ = (turbulence, numerics)
+    # PIMPLE numerics come from the run panel (TransientControl), not the study panel.
+    _ = numerics
     _write_foam(
         path,
         _foam_header("fvSolution")
@@ -1029,7 +1031,7 @@ solvers
         $p;
         relTol          0;
     }}
-    "(U|k|omega)"
+    {eq}
     {{
         solver          smoothSolver;
         smoother        symGaussSeidel;
@@ -1037,7 +1039,7 @@ solvers
         relTol          0.1;
         maxIter         50;
     }}
-    "(U|k|omega)Final"
+    {_final_regex(eq)}
     {{
         $U;
         relTol          0;
@@ -1059,11 +1061,13 @@ PIMPLE
     )
 
 
-def write_fv_schemes_transient(path: Path, *, ctrl: TransientControl) -> None:
+def write_fv_schemes_transient(
+    path: Path, *, ctrl: TransientControl, turbulence: str = "kOmegaSST"
+) -> None:
     """Compact transient fvSchemes matching w30.transientFvSchemes / js_transient golden."""
-    from cfddesk.project.transient import foam_num  # noqa: F401 — unused; scheme is token
-
     ddt = "backward" if ctrl.time_scheme == "backward" else "Euler"
+    grads = _grad_lines(turbulence)
+    divs = _div_lines(turbulence, "Gauss limitedLinear 1")
     _write_foam(
         path,
         _foam_header("fvSchemes")
@@ -1073,17 +1077,12 @@ gradSchemes
 {{
     default         Gauss linear;
     grad(U)         cellLimited Gauss linear 1;
-    grad(k)         cellLimited Gauss linear 1;
-    grad(omega)     cellLimited Gauss linear 1;
-}}
+{grads}}}
 divSchemes
 {{
     default         none;
     div(phi,U)      Gauss linearUpwind grad(U);
-    div(phi,k)      Gauss limitedLinear 1;
-    div(phi,omega)  Gauss limitedLinear 1;
-    div((nuEff*dev2(T(grad(U))))) Gauss linear;
-}}
+{divs}}}
 laplacianSchemes {{ default Gauss linear limited corrected 0.5; }}
 interpolationSchemes {{ default linear; }}
 snGradSchemes {{ default limited corrected 0.5; }}
@@ -1931,9 +1930,49 @@ def _patch_names(spec: RunSpec, poly_dst: Path | None) -> list[str]:
 
 
 def _build_field_patches(
-    spec: RunSpec, patch_names: list[str], *, k_str: str, w_str: str
-) -> tuple[dict, dict, dict, dict, dict]:
+    spec: RunSpec, patch_names: list[str], *, turb_values: dict[str, str]
+) -> tuple[dict, dict, dict[str, dict]]:
+    """U, p and one patch dict per turbulence field the study's model reads.
+
+    ``turb_values`` holds the inlet value string for k, omega, epsilon and R.
+    """
     _ensure_web_imports()
+    model = getattr(getattr(spec, "physics", None), "turbulence_model", "kOmegaSST")
+    names = turbulence_fields(model)
+    turb: dict[str, dict[str, dict[str, str]]] = {name: {} for name in names}
+
+    def set_turb(patch: str, make) -> None:
+        for name in names:
+            turb[name][patch] = make(name)
+
+    def fixed(name: str) -> dict[str, str]:
+        if name == "nut":
+            return {"type": "calculated", "value": "uniform 0"}
+        return {"type": "fixedValue", "value": f"uniform {turb_values[name]}"}
+
+    def inlet_outlet(name: str) -> dict[str, str]:
+        if name == "nut":
+            return {"type": "calculated", "value": "uniform 0"}
+        v = turb_values[name]
+        return {"type": "inletOutlet", "inletValue": f"uniform {v}", "value": f"uniform {v}"}
+
+    def slip(name: str) -> dict[str, str]:
+        if name == "nut":
+            return {"type": "calculated", "value": "uniform 0"}
+        return {"type": "zeroGradient"}
+
+    wall_fn = {
+        "k": "kqRWallFunction",
+        "R": "kqRWallFunction",
+        "omega": "omegaWallFunction",
+        "epsilon": "epsilonWallFunction",
+        "nut": "nutkWallFunction",
+    }
+
+    def no_slip(name: str) -> dict[str, str]:
+        value = "0" if name == "nut" else turb_values[name]
+        return {"type": wall_fn[name], "value": f"uniform {value}"}
+
     rho = float(spec.rho) or 1.196
     wall_default = spec.wall_default or "No-slip"
     props = spec.face_props or {}
@@ -1955,9 +1994,6 @@ def _build_field_patches(
 
     U: dict[str, dict[str, str]] = {}
     p: dict[str, dict[str, str]] = {}
-    k: dict[str, dict[str, str]] = {}
-    omega: dict[str, dict[str, str]] = {}
-    nut: dict[str, dict[str, str]] = {}
 
     for name in patch_names:
         r = role.get(name)
@@ -1998,24 +2034,12 @@ def _build_field_patches(
                         "value": "uniform (0 0 0)",
                     }
             p[name] = {"type": "zeroGradient"}
-            k[name] = {"type": "fixedValue", "value": f"uniform {k_str}"}
-            omega[name] = {"type": "fixedValue", "value": f"uniform {w_str}"}
-            nut[name] = {"type": "calculated", "value": "uniform 0"}
+            set_turb(name, fixed)
         elif kind == "pressure":
             p_kin = pressure_pa(r["bc"]) / rho  # type: ignore[index]
             U[name] = {"type": "pressureInletOutletVelocity", "value": "uniform (0 0 0)"}
             p[name] = {"type": "fixedValue", "value": f"uniform {js_to_precision(p_kin, 8)}"}
-            k[name] = {
-                "type": "inletOutlet",
-                "inletValue": f"uniform {k_str}",
-                "value": f"uniform {k_str}",
-            }
-            omega[name] = {
-                "type": "inletOutlet",
-                "inletValue": f"uniform {w_str}",
-                "value": f"uniform {w_str}",
-            }
-            nut[name] = {"type": "calculated", "value": "uniform 0"}
+            set_turb(name, inlet_outlet)
         elif kind == "velOutlet":
             U[name] = {
                 "type": "inletOutlet",
@@ -2023,32 +2047,18 @@ def _build_field_patches(
                 "value": "uniform (0 0 0)",
             }
             p[name] = {"type": "zeroGradient"}
-            k[name] = {
-                "type": "inletOutlet",
-                "inletValue": f"uniform {k_str}",
-                "value": f"uniform {k_str}",
-            }
-            omega[name] = {
-                "type": "inletOutlet",
-                "inletValue": f"uniform {w_str}",
-                "value": f"uniform {w_str}",
-            }
-            nut[name] = {"type": "calculated", "value": "uniform 0"}
+            set_turb(name, inlet_outlet)
         else:
             treatment = r["treatment"] if r and r.get("kind") == "wall" else wall_default
             if treatment == "Slip":
                 U[name] = {"type": "slip"}
                 p[name] = {"type": "zeroGradient"}
-                k[name] = {"type": "zeroGradient"}
-                omega[name] = {"type": "zeroGradient"}
-                nut[name] = {"type": "calculated", "value": "uniform 0"}
+                set_turb(name, slip)
             else:
                 U[name] = {"type": "noSlip"}
                 p[name] = {"type": "zeroGradient"}
-                k[name] = {"type": "kqRWallFunction", "value": f"uniform {k_str}"}
-                omega[name] = {"type": "omegaWallFunction", "value": f"uniform {w_str}"}
-                nut[name] = {"type": "nutkWallFunction", "value": "uniform 0"}
-    return U, p, k, omega, nut
+                set_turb(name, no_slip)
+    return U, p, turb
 
 
 def _steady_control_dict_body(end_time: float, write_interval: float, functions_text: str) -> str:
@@ -2074,69 +2084,122 @@ functions
 }}"""
 
 
-def _steady_fv_schemes_body() -> str:
-    return """ddtSchemes { default steadyState; }
+def _equation_regex(model: str) -> str:
+    """fvSolution key for U plus the turbulence equations the model solves."""
+    from cfddesk.project.study_physics import solved_turbulence_fields
+
+    extra = solved_turbulence_fields(model)
+    return '"(' + "|".join(("U", *extra)) + ')"' if extra else "U"
+
+
+def _final_regex(eq: str) -> str:
+    return eq[:-1] + 'Final"' if eq.endswith('"') else eq + "Final"
+
+
+def _grad_lines(model: str) -> str:
+    from cfddesk.project.study_physics import solved_turbulence_fields
+
+    out = ""
+    for name in solved_turbulence_fields(model):
+        if name == "R":
+            continue
+        out += f"    {'grad(' + name + ')':<15} cellLimited Gauss linear 1;\n"
+    return out
+
+
+def _div_lines(model: str, turb_scheme: str) -> str:
+    """div(phi,<field>) for each solved turbulence field plus the momentum stress terms."""
+    from cfddesk.project.study_physics import RSM_MODELS, solved_turbulence_fields
+
+    out = ""
+    for name in solved_turbulence_fields(model):
+        out += f"    {'div(phi,' + name + ')':<15} {turb_scheme};\n"
+    if model in RSM_MODELS:
+        # Reynolds-stress momentum source: div(R) plus the laminar deviatoric part.
+        out += "    div(R)          Gauss linear;\n"
+        out += "    div((nu*dev2(T(grad(U))))) Gauss linear;\n"
+    out += "    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n"
+    return out
+
+
+def _foam_float(x: float) -> str:
+    """1e-4 -> '1e-4', 0.7 -> '0.7' (matches the committed js goldens)."""
+    x = float(x)
+    if x != 0 and abs(x) < 1e-3:
+        mant, exp = f"{x:.6e}".split("e")
+        mant = mant.rstrip("0").rstrip(".")
+        return f"{mant}e{int(exp)}"
+    return f"{x:g}"
+
+
+def _steady_fv_schemes_body(physics: StudyPhysics | None = None) -> str:
+    model = (physics or DEFAULT_PHYSICS).turbulence_model
+    return f"""ddtSchemes {{ default steadyState; }}
 gradSchemes
-{
+{{
     default         Gauss linear;
     grad(U)         cellLimited Gauss linear 1;
-    grad(k)         cellLimited Gauss linear 1;
-    grad(omega)     cellLimited Gauss linear 1;
-}
+{_grad_lines(model)}}}
 divSchemes
-{
+{{
     default         none;
     div(phi,U)      bounded Gauss linearUpwind grad(U);
-    div(phi,k)      bounded Gauss upwind;
-    div(phi,omega)  bounded Gauss upwind;
-    div((nuEff*dev2(T(grad(U))))) Gauss linear;
-}
-laplacianSchemes { default Gauss linear limited corrected 0.5; }
-interpolationSchemes { default linear; }
-snGradSchemes { default limited corrected 0.5; }
-wallDist { method meshWave; }"""
+{_div_lines(model, "bounded Gauss upwind")}}}
+laplacianSchemes {{ default Gauss linear limited corrected 0.5; }}
+interpolationSchemes {{ default linear; }}
+snGradSchemes {{ default limited corrected 0.5; }}
+wallDist {{ method meshWave; }}"""
 
 
-def _steady_fv_solution_body() -> str:
-    return """solvers
-{
+def _steady_fv_solution_body(physics: StudyPhysics | None = None) -> str:
+    from cfddesk.project.study_physics import solved_turbulence_fields
+
+    ph = physics or DEFAULT_PHYSICS
+    turb = solved_turbulence_fields(ph.turbulence_model)
+    ru = _foam_float(ph.residual_u)
+    residual = f"p {_foam_float(ph.residual_p)}; U {ru};"
+    if turb:
+        residual += ' "(' + "|".join(turb) + f')" {ru};'
+    relax_u = _foam_float(ph.relax_u)
+    equations = f"        U               {relax_u};\n"
+    for name in turb:
+        equations += f"        {name:<15} {relax_u};\n"
+    return f"""solvers
+{{
     p
-    {
+    {{
         solver          GAMG;
         tolerance       1e-7;
         relTol          0.01;
         smoother        GaussSeidel;
         nCellsInCoarsestLevel 20;
         maxIter         200;
-    }
-    "(U|k|omega)"
-    {
+    }}
+    {_equation_regex(ph.turbulence_model)}
+    {{
         solver          smoothSolver;
         smoother        symGaussSeidel;
         tolerance       1e-8;
         relTol          0.1;
         maxIter         50;
-    }
-}
+    }}
+}}
 SIMPLE
-{
-    nNonOrthogonalCorrectors 1;
+{{
+    nNonOrthogonalCorrectors {int(ph.n_non_orthogonal)};
     consistent      no;
-    residualControl { p 1e-4; U 1e-4; "(k|omega)" 1e-4; }
-}
+    residualControl {{ {residual} }}
+}}
 relaxationFactors
-{
+{{
     fields
-    {
-        p               0.3;
-    }
+    {{
+        p               {_foam_float(ph.relax_p)};
+    }}
     equations
-    {
-        U               0.7;
-        k               0.7;
-        omega           0.7;
-    }
-}"""
+    {{
+{equations}    }}
+}}"""
 
 
 def _copy_polymesh(src_case: Path, out_dir: Path) -> Path | None:
@@ -2203,11 +2266,20 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str) -> dict[str, Any]:
     # Prefer RunSpec.speed_for_k when caller already resolved it (> default)
     if spec.speed_for_k and spec.speed_for_k != 1.0:
         speed_ref = float(spec.speed_for_k)
+    physics: StudyPhysics = getattr(spec, "physics", None) or DEFAULT_PHYSICS
+    model = physics.turbulence_model
     turb = k_omega_from_scales(speed_ref, d_hyd)
-    k_str = js_to_precision(turb["k"], 6)
-    w_str = js_to_precision(turb["omega"], 6)
+    # epsilon = Cmu * k * omega; isotropic Reynolds stress R = (2/3) k I.
+    epsilon = 0.09 * turb["k"] * turb["omega"]
+    r_diag = js_to_precision(2.0 * turb["k"] / 3.0, 6)
+    turb_values = {
+        "k": js_to_precision(turb["k"], 6),
+        "omega": js_to_precision(turb["omega"], 6),
+        "epsilon": js_to_precision(epsilon, 6),
+        "R": f"({r_diag} 0 0 {r_diag} 0 {r_diag})",
+    }
 
-    U, p, k, omega, nut = _build_field_patches(spec, patch_names, k_str=k_str, w_str=w_str)
+    U, p, turb_patches = _build_field_patches(spec, patch_names, turb_values=turb_values)
     write_vol_field(
         out / "0" / "U",
         object_name="U",
@@ -2224,30 +2296,27 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str) -> dict[str, Any]:
         internal="uniform 0",
         patches=p,
     )
-    write_vol_field(
-        out / "0" / "k",
-        object_name="k",
-        cls="volScalarField",
-        dims="[0 2 -2 0 0 0 0]",
-        internal=f"uniform {k_str}",
-        patches=k,
-    )
-    write_vol_field(
-        out / "0" / "omega",
-        object_name="omega",
-        cls="volScalarField",
-        dims="[0 0 -1 0 0 0 0]",
-        internal=f"uniform {w_str}",
-        patches=omega,
-    )
-    write_vol_field(
-        out / "0" / "nut",
-        object_name="nut",
-        cls="volScalarField",
-        dims="[0 2 -1 0 0 0 0]",
-        internal="uniform 0",
-        patches=nut,
-    )
+    # Drop turbulence fields left by a previous model in this run folder.
+    for stale in ("k", "omega", "epsilon", "R", "nut"):
+        (out / "0" / stale).unlink(missing_ok=True)
+    field_meta = {
+        "k": ("volScalarField", "[0 2 -2 0 0 0 0]"),
+        "omega": ("volScalarField", "[0 0 -1 0 0 0 0]"),
+        "epsilon": ("volScalarField", "[0 2 -3 0 0 0 0]"),
+        "R": ("volSymmTensorField", "[0 2 -2 0 0 0 0]"),
+        "nut": ("volScalarField", "[0 2 -1 0 0 0 0]"),
+    }
+    for name, patches in turb_patches.items():
+        cls, dims = field_meta[name]
+        internal = "uniform 0" if name == "nut" else f"uniform {turb_values[name]}"
+        write_vol_field(
+            out / "0" / name,
+            object_name=name,
+            cls=cls,
+            dims=dims,
+            internal=internal,
+            patches=patches,
+        )
 
     # Wall functions require polyMesh type wall. gmshToFoam leftover
     # defaultFaces (prism end-caps) stay type patch unless we rewrite them.
@@ -2256,7 +2325,7 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str) -> dict[str, Any]:
 
         wall_names = {
             n
-            for n, spec in nut.items()
+            for n, spec in turb_patches.get("nut", {}).items()
             if "WallFunction" in str((spec or {}).get("type") or "")
         }
         wall_names.update(
@@ -2277,13 +2346,15 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str) -> dict[str, Any]:
         out / "constant" / "turbulenceProperties",
         "dictionary",
         "turbulenceProperties",
-        """simulationType  RAS;
+        "simulationType  laminar;"
+        if model == "laminar"
+        else f"""simulationType  RAS;
 RAS
-{
-    RASModel        kOmegaSST;
+{{
+    RASModel        {model};
     turbulence      on;
     printCoeffs     on;
-}""",
+}}""",
     )
 
     mon_patches = list(spec.monitor_patches or [])
@@ -2296,8 +2367,12 @@ RAS
             ctrl=spec.transient,  # type: ignore[arg-type]
             functions_text=functions_text,
         )
-        write_fv_schemes_transient(out / "system" / "fvSchemes", ctrl=spec.transient)  # type: ignore[arg-type]
-        write_fv_solution_pimple(out / "system" / "fvSolution", ctrl=spec.transient)  # type: ignore[arg-type]
+        write_fv_schemes_transient(
+            out / "system" / "fvSchemes", ctrl=spec.transient, turbulence=model  # type: ignore[arg-type]
+        )
+        write_fv_solution_pimple(
+            out / "system" / "fvSolution", ctrl=spec.transient, turbulence=model  # type: ignore[arg-type]
+        )
     else:
         write_foam_dict(
             out / "system" / "controlDict",
@@ -2309,13 +2384,13 @@ RAS
             out / "system" / "fvSchemes",
             "dictionary",
             "fvSchemes",
-            _steady_fv_schemes_body(),
+            _steady_fv_schemes_body(physics),
         )
         write_foam_dict(
             out / "system" / "fvSolution",
             "dictionary",
             "fvSolution",
-            _steady_fv_solution_body(),
+            _steady_fv_solution_body(physics),
         )
 
     u_max = max(50.0, 10.0 * abs(speed_ref))
@@ -2361,13 +2436,21 @@ RAS
         "mapped": mapped_meta,
         "monitors": mon_patches,
         "turbulence": {
-            "model": "kOmegaSST",
+            "model": model,
             "intensity": turb["I"],
             "length_scale_m": turb["L"],
             "hydraulic_diameter_m": d_hyd,
             "speed_ref_m_s": speed_ref,
             "k": turb["k"],
             "omega": turb["omega"],
+            "epsilon": epsilon,
+        },
+        "numerics": {
+            "residual_u": physics.residual_u,
+            "residual_p": physics.residual_p,
+            "relax_u": physics.relax_u,
+            "relax_p": physics.relax_p,
+            "n_non_orthogonal": physics.n_non_orthogonal,
         },
         "n_cells": spec.n_cells,
         "mesh_id": spec.mesh_id,

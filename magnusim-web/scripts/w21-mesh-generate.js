@@ -8,6 +8,8 @@
  * Cell/point counts always come from the produced polyMesh.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { spawnJob } from './job-runner.js';
+import { projectIdOrActive } from './request-scope.js';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   existsSync,
@@ -60,6 +62,8 @@ const SNAPPY_GENERATE_SCRIPT = pyTool('generate_snappy.py');
  * @property {string|null} [project_id]
  * @property {number} [started_at]
  * @property {string|null} [mesh_id]
+ * @property {string|null} [mesh_name]
+ * @property {string|null} [case_dir]
  * @property {string|null} [wsl_dst]
  * @property {string|null} [wsl_case]
  * @property {Function} [onUpdate]
@@ -89,6 +93,17 @@ function meshJsonPath(projectId) {
 
 function projectJsonPath(projectId) {
   return join(PROJECTS_ROOT, projectId, 'project.json');
+}
+
+/** Title for the queue chip / "queued behind" line; null when unreadable. */
+export function projectTitleOf(projectId) {
+  if (!projectId) return null;
+  try {
+    const doc = JSON.parse(readFileSync(projectJsonPath(projectId), 'utf8'));
+    return doc && doc.title ? String(doc.title) : null;
+  } catch {
+    return null;
+  }
 }
 
 function readMeshDoc(projectId, simId, meshId) {
@@ -129,7 +144,7 @@ function existingFile(p) {
  * Body1.stl is optional (STEP import no longer tessellates on the way in).
  */
 export function resolveProjectGeometry(projectId, opts) {
-  const id = projectId || readActiveId();
+  const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) {
     return { ok: false, error: 'no active project; create W16 project + import STEP first' };
   }
@@ -408,6 +423,51 @@ export function isLiveMeshJobHeld() {
   return !!(liveJob && liveChildIsRunning(liveJob.child));
 }
 
+/** How long 'close' may trail 'exit' before the pipes count as held by orphans. */
+const ORPHAN_PIPE_GRACE_MS = 4000;
+
+/**
+ * A generator that is killed or crashes can leave its own children (the real
+ * python behind the venv launcher, gmsh, wsl.exe) holding stdout. Then 'close'
+ * never fires: mesh.json stays "running" and the queue is never kicked. After
+ * 'exit', give 'close' a short grace, then call onOrphaned (reap the leftovers)
+ * and drop the pipes so 'close' runs and the job finishes as failed.
+ * @param {import('node:child_process').ChildProcess} child
+ * @param {{ graceMs?: number, onOrphaned?: () => void }} [opts]
+ */
+export function closeAfterExit(child, { graceMs = ORPHAN_PIPE_GRACE_MS, onOrphaned } = {}) {
+  let closed = false;
+  child.once('close', () => {
+    closed = true;
+  });
+  child.once('exit', () => {
+    const timer = setTimeout(() => {
+      if (closed) return;
+      try {
+        if (onOrphaned) onOrphaned();
+      } catch {
+        /* ignore */
+      }
+      for (const stream of [child.stdout, child.stderr]) {
+        try {
+          if (stream) stream.destroy();
+        } catch {
+          /* ignore */
+        }
+      }
+    }, graceMs);
+    if (timer.unref) timer.unref();
+  });
+}
+
+/** Kill what a dead generator left behind, unless a new generate already owns that case folder. */
+function reapAfterDeadGenerator(job, caseDir) {
+  if (!(liveJob && liveJob !== job && liveJob.case_dir && caseDir && liveJob.case_dir === caseDir)) {
+    reapStaleMeshGenerators(caseDir);
+  }
+  killWslMeshCase(job);
+}
+
 /**
  * @param {LiveMeshJob | null | undefined} live
  * @param {{ meshId?: string, projectId?: string }} [ids]
@@ -436,6 +496,8 @@ function bindLiveMeshJob({
   project_id,
   started_at,
   mesh_id,
+  mesh_name,
+  case_dir,
   wsl_dst,
   onUpdate,
 }) {
@@ -446,6 +508,8 @@ function bindLiveMeshJob({
     project_id,
     started_at,
     mesh_id: mesh_id || null,
+    mesh_name: mesh_name || null,
+    case_dir: case_dir || null,
     wsl_dst: wsl_dst || null,
     wsl_case: wsl_dst ? wslCasePath(wsl_dst) : null,
     onUpdate: typeof onUpdate === 'function' ? onUpdate : () => {},
@@ -585,7 +649,7 @@ export function stopMeshGenerate({ meshId, projectId } = {}) {
   dropDeadLiveJob();
   const job = liveJob;
   const match = meshStopMatchesLive(job, { meshId, projectId });
-  const id = projectId || (job && job.project_id) || readActiveId();
+  const id = projectId || (job && job.project_id) || projectIdOrActive('', readActiveId);
   const mid = meshId || (job && job.mesh_id);
   let caseDir = null;
   if (id && mid) {
@@ -845,7 +909,7 @@ export function persistMeshResult(projectId, resultFields) {
  * Else: Hex-dominant → snappy_hexdominant; Standard + cfmesh hex-core → cfmesh;
  * otherwise standard. Migration for existing mesh.json (algorithm + mesh_engine).
  */
-function resolveMeshBackend(settings) {
+export function resolveMeshBackend(settings) {
   const keys = new Set(mesherKeys());
   const adv = (settings && settings.advanced) || {};
   const explicit = String(
@@ -862,6 +926,9 @@ function resolveMeshBackend(settings) {
   const eng = String(adv.mesh_engine || (settings && settings.mesh_engine) || 'standard')
     .trim()
     .toLowerCase();
+  // The mesh panel's engine select writes the registry key here: Hex-dominant
+  // (snappy_hexdominant) or a plugin mesher must run as picked, not fall to Standard.
+  if (eng && eng !== 'standard' && eng !== 'cfmesh' && keys.has(eng)) return eng;
   if (eng === 'cfmesh' && wantsHexCore(settings) && keys.has('cfmesh') && MESH_ENGINES.has('cfmesh')) {
     return 'cfmesh';
   }
@@ -951,7 +1018,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
       bodyExtra: {
         error: geometry.error,
         step_path: geometry.step_path || null,
-        project_id: geometry.project_id || projectId || readActiveId(),
+        project_id: geometry.project_id || projectId || projectIdOrActive('', readActiveId),
         path_kind: pathKind,
       },
     };
@@ -1057,10 +1124,12 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   let logBuf = '';
   let lastResult = null;
   const jobLog = createJobLogger('mesh', generateId);
-  const child = spawn(argv[0], argv.slice(1), {
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+  const { child } = spawnJob({
+    kind: 'mesh',
+    jobId: generateId,
+    script: argv[1],
+    args: argv.slice(2),
+    env: { PYTHONUNBUFFERED: '1' },
   });
   const job = bindLiveMeshJob({
     child,
@@ -1069,9 +1138,12 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     project_id,
     started_at,
     mesh_id: meshId || null,
+    mesh_name: (meshRec && (meshRec.name || (meshRec.settings && meshRec.settings.name))) || null,
+    case_dir: winOut,
     wsl_dst: wslDst,
     onUpdate,
   });
+  closeAfterExit(child, { onOrphaned: () => reapAfterDeadGenerator(job, winOut) });
   jobLog.info('spawn', { pid: child.pid || null, path_kind: pathKind, engine });
   try {
     writeFileSync(winLog, '', 'utf8');
@@ -1324,7 +1396,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
   }
   liveJob = null;
 
-  const projectIdEarly = projectId || readActiveId();
+  const projectIdEarly = projectId || projectIdOrActive('', readActiveId);
   const meshDocEarly =
     projectIdEarly && meshId
       ? readMeshDoc(projectIdEarly, studyIdForMesh(projectIdEarly, meshId), meshId)
@@ -1378,7 +1450,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
         error: stlReady.error || 'could not tessellate STEP for mesh generate',
         detail: stlReady.detail || null,
         step_path: stlReady.step_path || null,
-        project_id: stlReady.project_id || projectId || readActiveId(),
+        project_id: stlReady.project_id || projectId || projectIdOrActive('', readActiveId),
         path_kind: 'snappyHexMesh',
         mtp1_silent_copy: false,
         soft_pass_avoided: true,
@@ -1396,7 +1468,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
         error: geometry.error,
         step_path: geometry.step_path || null,
         body1_path: geometry.body1_path || null,
-        project_id: geometry.project_id || projectId || readActiveId(),
+        project_id: geometry.project_id || projectId || projectIdOrActive('', readActiveId),
         path_kind: 'snappyHexMesh',
         mtp1_silent_copy: false,
         soft_pass_avoided: true,
@@ -1472,10 +1544,12 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
   let logBuf = '';
   let lastResult = null;
   const jobLog = createJobLogger('mesh', generateId);
-  const child = spawn(argv[0], argv.slice(1), {
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+  const { child } = spawnJob({
+    kind: 'mesh',
+    jobId: generateId,
+    script: argv[1],
+    args: argv.slice(2),
+    env: { PYTHONUNBUFFERED: '1' },
   });
 
   const job = bindLiveMeshJob({
@@ -1485,9 +1559,12 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     project_id,
     started_at,
     mesh_id: meshId || null,
+    mesh_name: null,
+    case_dir: winOut,
     wsl_dst: wslDst,
     onUpdate,
   });
+  closeAfterExit(child, { onOrphaned: () => reapAfterDeadGenerator(job, winOut) });
   jobLog.info('spawn', { pid: child.pid || null, path_kind: PATH_SNAPPY });
   try {
     writeFileSync(winLog, '', 'utf8');
@@ -1707,7 +1784,9 @@ export function liveMeshJobSnapshot() {
       generate_id: liveJob.generate_id || null,
       path_kind: liveJob.path_kind || PATH_CFMESH,
       project_id: liveJob.project_id || null,
+      project_title: projectTitleOf(liveJob.project_id),
       mesh_id: liveJob.mesh_id || null,
+      mesh_name: liveJob.mesh_name || null,
       started_at: liveJob.started_at || null,
     };
   }
