@@ -16,6 +16,8 @@ dependencies = [
     "gmsh>=4.12",
     "numpy>=1.24",
     "scipy>=1.10",
+    # OBJ / PLY geometry import (cfddesk.cad.io)
+    "meshio>=5.3",
 ]
 
 [project.optional-dependencies]
