@@ -44,7 +44,6 @@ Thumbs.db
 *.p12
 magnusim-web/e2e/.tmp-prefs.json
 magnusim-web/runs/
-.cursor/
 
 # Leftover local folder name. A junction may exist so old project/WSL
 # paths keep working on this PC; do not commit it or walk it as a second tree.
