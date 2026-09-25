@@ -654,11 +654,21 @@ function Invoke-WslBootstrap([string]$Distro) {
 
 
 
-    & wsl.exe -d $Distro -u root -- bash $wslSh $preferred 2>&1 | Tee-Object -FilePath $outLog | Out-Host
+    # apt and the installer print warnings on stderr. Windows PowerShell 5.1 turns each
+    # redirected stderr line into an error record, and with 'Stop' the first warning
+    # (e.g. a legacy apt key) failed Setup. Judge the run by its exit code instead.
+    $prevPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & wsl.exe -d $Distro -u root -- bash $wslSh $preferred 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $outLog | Out-Host
+        $bootstrapExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevPref
+    }
 
-    if ($LASTEXITCODE -ne 0) {
+    if ($bootstrapExit -ne 0) {
 
-        throw "OpenFOAM install inside WSL failed (exit $LASTEXITCODE). See $outLog"
+        throw "OpenFOAM install inside WSL failed (exit $bootstrapExit). See $outLog"
 
     }
 
