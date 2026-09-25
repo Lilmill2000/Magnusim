@@ -1,0 +1,33 @@
+Magnusim 0.2.0
+
+Install and run exactly as before: Setup.bat, then run.bat (see START-HERE.txt).
+
+What changed since 0.1.0
+
+- Panels rebuilt to match the 0.1.0 look: Mesh (fineness slider, Generate,
+  progress and timers), Boundary conditions (pick a type, then Add, then click
+  faces), Materials (click the body in the viewport), Run (Start with the reason
+  it cannot start yet, live residuals).
+- Settings (was Preferences) opens the Setup wizard, with a Plugins step.
+- Turbulence models: all five run. Energy and passive species were removed
+  (they were never read by the solver).
+- Geometry: every format in the Add geometry picker imports and meshes (STEP,
+  STP, IGES, IGS, BREP, BRP, STL, OBJ, PLY).
+- STL / OBJ / PLY:
+  - much faster to load (a 118k-triangle STL in about 10 s);
+  - grouped into real faces (the vortex part has about 10 selectable faces,
+    not one per triangle);
+  - mesh cleanly with the Standard mesher (checkMesh passes; an STL solve
+    matches the STEP result).
+- Hex-dominant (snappyHexMesh) works from the app and keeps your boundary
+  conditions.
+- Meshes queue across projects: start a mesh while another project is
+  meshing and it runs when that one finishes.
+
+Things worth trying
+
+1. New project -> Add geometry -> an STL. Pick the unit, and check that the
+   faces are whole surfaces (click one).
+2. Create Simulation -> add two Pressure BCs on the ports -> Materials + ->
+   click the body -> Mesh -> Generate -> Run 1 -> Start.
+3. The same with Mesh -> Advanced -> engine Hex-dominant.
