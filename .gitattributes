@@ -6,6 +6,6 @@ magnusim-web/runs export-ignore
 *.sh text eol=lf
 *.bat text eol=crlf
 # Internal review notes and regression screenshots stay out of release zips.
-_ui-regression-*/** export-ignore
+_ui-regression-* export-ignore
 App?Review*.txt export-ignore
 Magnusim_Findings_*.md export-ignore
