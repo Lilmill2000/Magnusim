@@ -984,6 +984,7 @@ body,
   white-space: nowrap;
 }
 .compare-sync input { margin: 0; }
+.compare-pane-note { color: #b54708; font-weight: 500; }
 .compare-sync[hidden] { display: none !important; }
 #btn-compare,
 #btn-cad-edges {
@@ -2819,6 +2820,9 @@ select.fp-select {
 .cs-time-opt-name { font-size: 13px; font-weight: 650; }
 .cs-time-opt.is-selected .cs-time-opt-name { color: #1a4fbf; }
 .cs-time-opt-desc { font-size: 11px; color: #5b6575; line-height: 1.4; }
+.cs-time-opt:disabled { opacity: 0.5; cursor: not-allowed; }
+.cs-time-opt:disabled:hover { border-color: #d0d5dd; }
+.cs-copy-geom-note { margin: 8px 0 0; font-size: 11px; color: #5b6575; line-height: 1.4; }
 .cs-modal-foot {
   display: flex;
   justify-content: flex-end;

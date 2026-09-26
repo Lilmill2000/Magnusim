@@ -38,6 +38,7 @@ import {
 import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
 import { projectSolveSummary } from './w27-solve.js';
 import { envGet } from './env-compat.js';
+import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
 import { callWorker, commitRpcSync } from './py-json.js';
 import {
   LAYOUT_VERSION,
@@ -2051,6 +2052,21 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       const result = transformModifier(opts);
       res.setHeader('X-CFD-Source', 'geometry-modifier-transform');
       return sendJson(res, result.status, result.body);
+    }
+    // Faces that are the same surface on two geometries of the project (source id -> target id).
+    if (parts[2] === 'face-map' && (req.method === 'GET' || req.method === 'HEAD')) {
+      const pid = u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
+      const from = String(u.searchParams.get('from') || '').trim();
+      const to = String(u.searchParams.get('to') || '').trim();
+      if (!pid || !from || !to) return sendJson(res, 400, { error: 'project_id, from and to required' });
+      const proj = readProject(pid);
+      const ids = new Set(geometriesOf(proj).map((g) => String(g.id)));
+      if (!ids.has(from) || !ids.has(to)) {
+        return sendJson(res, 404, { error: 'geometry not in project', from, to });
+      }
+      const map = matchFaces(readPreviewFaces(cadPaths(pid, from).dir), readPreviewFaces(cadPaths(pid, to).dir));
+      res.setHeader('X-CFD-Source', 'geometry-face-map');
+      return sendJson(res, 200, { ok: true, project_id: pid, from, to, map: Object.fromEntries(map) });
     }
     if (parts[2] === 'activate' && req.method === 'POST') {
       let opts = {};

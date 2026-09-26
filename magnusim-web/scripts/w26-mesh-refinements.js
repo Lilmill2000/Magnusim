@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, writeActiveMirror } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
+import { matchFaces, readPreviewFaces, remapRecordFaces } from './geometry-face-match.js';
+import { findStudy, walkMeshes, walkStudies } from './project-layout.js';
 import { commitRpc, writeProjectCli } from './py-json.js';
 import {
   assembleMeshDoc,
@@ -383,6 +385,15 @@ function readMeshEntry(projectId, meshId) {
   return meshFolderOf(projectId, meshId);
 }
 
+/** The study a mesh belongs to (any geometry of the project). */
+function meshStudy(projectId, meshId) {
+  const root = projectDir(projectId);
+  for (const s of walkStudies(root)) {
+    if (walkMeshes(root, s.id).some((m) => String(m.id) === String(meshId))) return s;
+  }
+  return null;
+}
+
 function cloneRefinement(rec, meshId, dest) {
   const now = new Date().toISOString();
   const out = {
@@ -423,9 +434,27 @@ async function copyRefinementsToMesh(body) {
     geometry_id: (destMesh && destMesh.geometry_id) || sim.geometry_id || null,
   };
   const list = currentList(projectId, sim.id);
-  const src = list.filter((r) => r && String(r.mesh_id) === srcId);
+  // The source mesh may be in another study, on this geometry or another one.
+  const home = meshStudy(projectId, srcId);
+  const srcList = home && String(home.id) !== String(sim.id) ? currentList(projectId, home.id) : list;
+  const src = srcList.filter((r) => r && String(r.mesh_id) === srcId);
   const destOld = list.filter((r) => r && String(r.mesh_id) === destId);
-  const clones = src.map((r) => cloneRefinement(r, destId, destMeta));
+  const destStudy = findStudy(projectDir(projectId), sim.id);
+  const srcGeom = String((home && home.geometry_id) || destMeta.geometry_id || '');
+  const sameGeom = !srcGeom || !destMeta.geometry_id || srcGeom === String(destMeta.geometry_id);
+  // Faces carry over as-is on the same geometry; on another one only to the same surface there.
+  const faceMap = sameGeom
+    ? null
+    : matchFaces(readPreviewFaces(home && home.geometry_dir), readPreviewFaces(destStudy && destStudy.geometry_dir));
+  const lost = [];
+  const clones = src.map((r) => {
+    const faces = normalizeFaces((r && r.faces) || (r && r.face) || []);
+    const out = cloneRefinement(r, destId, destMeta);
+    if (sameGeom) return { ...out, faces };
+    const mapped = remapRecordFaces({ ...r, faces }, faceMap);
+    if (mapped.lost.length) lost.push({ kind: 'refinement', name: String(r.name || r.type || 'Refinement'), faces: mapped.lost });
+    return { ...out, faces: mapped.rec.faces };
+  });
   const { doc, path } = await persistDoc(projectId, sim, list.filter((r) => r && String(r.mesh_id) !== destId).concat(clones), {
     only: clones,
     drop: destOld,
@@ -438,6 +467,9 @@ async function copyRefinementsToMesh(body) {
       copied: true,
       copy_from_mesh: srcId,
       mesh_id: destId,
+      copied_count: clones.length,
+      other_geometry: !sameGeom,
+      lost_faces: lost,
       refinements: visibleRefs(projectId, gate.proj, sim, doc.refinements),
       project_id: projectId,
       mesh_refinements_json: path,

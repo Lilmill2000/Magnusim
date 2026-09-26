@@ -23,6 +23,16 @@ What changed since 0.1.0
   conditions.
 - Meshes queue across projects: start a mesh while another project is
   meshing and it runs when that one finishes.
+- Several geometries in one project: clicking a geometry shows it with its
+  own simulation (or none yet); an open editor or face pick never carries over
+  to the other one. Create Simulation -> Start from a study on the other
+  geometry copies its settings, and its BCs, monitors and refinements land on
+  the faces that are the same surface there; any face without a match is
+  listed so you can pick it again. Its mesh and results stay with its own
+  geometry. Compare shows which geometry each side is, and with Sync filters
+  on, the other side draws the same cutting planes and coloring, with its
+  particle trace seeded from its own matching faces (it says so if a seed
+  face has no match there).
 
 Things worth trying
 
@@ -31,3 +41,7 @@ Things worth trying
 2. Create Simulation -> add two Pressure BCs on the ports -> Materials + ->
    click the body -> Mesh -> Generate -> Run 1 -> Start.
 3. The same with Mesh -> Advanced -> engine Hex-dominant.
+4. One project, two geometries (for example the round-hole and teardrop-hole
+   plates): set up the first, click the second, Create Simulation -> Start
+   from the first -> Copy settings. Mesh and run both, open one run's
+   Results, then Compare and pick the other.

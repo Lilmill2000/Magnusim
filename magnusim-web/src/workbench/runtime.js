@@ -103,6 +103,8 @@ import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId 
 const jobQueue = { items: [], kicking: false, kickTimer: null };
 try { window.__CFD_JOB_QUEUE__ = jobQueue; } catch (_) {}
 const liveCompute = { kind: null, run_id: null, mesh_id: null, project_id: null };
+// Last study used on each geometry ("<project>|<geometry>"), so switching back returns to it.
+const lastStudyByGeometry = Object.create(null);
 
 function currentStudyId() {
   try {
@@ -10741,11 +10743,16 @@ function fillResultsCompareSelects() {
   const ob = resultsCompareOptionByValue(compareState.resB);
   const la = document.getElementById('compare-label-a');
   const lb = document.getElementById('compare-label-b');
-  // Run names repeat across studies ("Run 1"): name the study when there is more than one.
+  // Run names repeat across studies ("Run 1"): name the study when there is more than one,
+  // and its geometry too when the project has several.
   const multi = new Set(opts.map((o) => o.group || '')).size > 1;
+  const severalGeoms = importedGeometries().length > 1;
   const withStudy = (o, text) => {
-    const study = multi && o && o.rec && typeof studyNameForRun === 'function' ? studyNameForRun(o.rec) : '';
-    return study ? study + ' / ' + text : text;
+    if (!multi || !o || !o.rec) return text;
+    const where = severalGeoms
+      ? [geometryNameForRun(o.rec), studyNameForRun(o.rec)].filter(Boolean).join(' / ')
+      : studyNameForRun(o.rec);
+    return where ? where + ' / ' + text : text;
   };
   if (la) la.textContent = oa ? withStudy(oa, oa.label) : '';
   if (lb) {
@@ -10894,6 +10901,71 @@ function teardownResultsCompare() {
   if (lb) { lb.classList.add('is-hidden'); lb.hidden = true; }
   document.getElementById('legend')?.classList.remove('is-split-a');
   try { if (compareState.viewer) compareState.viewer.renderWindow.render(); } catch (_) {}
+}
+
+// Face numbers differ between geometries: a synced set's particle-trace seed
+// faces are carried to pane B's geometry by surface match (same place, direction, size).
+const compareFaceMaps = new Map();
+
+async function faceMapBetween(fromGeom, toGeom) {
+  const pid = String(currentProjectId() || '');
+  const key = pid + '|' + fromGeom + '>' + toGeom;
+  if (compareFaceMaps.has(key)) return compareFaceMaps.get(key);
+  let map = null;
+  try {
+    const r = await fetch(
+      '/api/geometry/face-map?' + new URLSearchParams({ project_id: pid, from: fromGeom, to: toGeom }).toString(),
+      { cache: 'no-store' }
+    );
+    const j = await r.json();
+    if (r.ok && j && j.map) map = j.map;
+  } catch (_) {}
+  if (map) compareFaceMaps.set(key, map);
+  return map;
+}
+
+function runGeometryId(rec) {
+  const sid = rec && rec.simulation_id;
+  const study = (studyCatalog.simulations || []).find((s) => s && String(s.id) === String(sid));
+  return study ? studyGeometryId(study) : '';
+}
+
+function mapFaceLabelTo(label, map) {
+  const m = /^face\s*(\d+)(@Body\d+)?$/i.exec(String(label || '').trim());
+  const to = m && map ? map[m[1]] : undefined;
+  return to == null ? null : 'face ' + to + (m[2] || '@Body1');
+}
+
+/** Pane A's set for a run on another geometry: seed faces moved to the matching faces there. */
+async function compareSetOnGeometry(set, fromGeom, toGeom) {
+  const pt = set && set.pt;
+  if (!pt || !fromGeom || !toGeom || fromGeom === toGeom) return { set, lost: [] };
+  const map = (await faceMapBetween(fromGeom, toGeom)) || {};
+  const lost = [];
+  const faces = [];
+  for (const f of Array.isArray(pt.faces) ? pt.faces : []) {
+    const to = mapFaceLabelTo(f, map);
+    if (to) faces.push(to);
+    else lost.push(String(f));
+  }
+  let region = pt.region || null;
+  if (region && region.face) {
+    const to = mapFaceLabelTo(region.face, map);
+    if (to) region = { ...region, face: to };
+    else {
+      lost.push(String(region.face));
+      region = null;
+    }
+  }
+  return { set: { ...set, pt: { ...pt, faces, region, geometry_mapped: true } }, lost };
+}
+
+/** Pane B's set; synced onto a run of another geometry it seeds from that geometry's own faces. */
+async function resultsCompareSetForB(opt) {
+  const set = resultsCompareSetFor(opt) || {};
+  if (!resultsCompareSyncOn() || !opt || !opt.rec) return { set, lost: [] };
+  const aRec = findRunRecord(resultsRunId);
+  return compareSetOnGeometry(set, (aRec && runGeometryId(aRec)) || shownGeometryId(), runGeometryId(opt.rec));
 }
 
 // Filter set pane B should draw for an option: the saved view, or the run's
@@ -11688,6 +11760,25 @@ function compareResultsRangeFor(field) {
   return R.range;
 }
 
+/** Pane B's label says when a synced particle trace has seed faces with no match on its geometry. */
+function showComparePaneBNote(R) {
+  const lb = document.getElementById('compare-label-b');
+  if (!lb) return;
+  let note = document.getElementById('compare-note-b');
+  const lost = (R && R.ptLost) || [];
+  if (!lost.length) {
+    if (note) note.remove();
+    return;
+  }
+  if (!note) {
+    note = document.createElement('span');
+    note.id = 'compare-note-b';
+    note.className = 'compare-pane-note';
+  }
+  note.textContent = ' · Particle trace: no matching face here for ' + lost.join(', ');
+  lb.appendChild(note);
+}
+
 async function loadResultsCompareB() {
   if (!resultsCompareOn()) return;
   const R = ensureCompareResults();
@@ -11718,7 +11809,11 @@ async function loadResultsCompareB() {
     R.runId = opt.runId;
     R.viewId = opt.viewId;
     R.caseDir = casePath;
-    R.set = resultsCompareSetFor(opt) || {};
+    const synced = await resultsCompareSetForB(opt);
+    if (token !== R.loadToken) return;
+    R.set = synced.set;
+    R.ptLost = synced.lost;
+    showComparePaneBNote(R);
     R.field = R.set.field === 'p' ? 'p' : 'magU';
     R.times = await timesForCase(R.caseDir);
     if (token !== R.loadToken) return;
@@ -11755,8 +11850,11 @@ async function loadResultsCompareB() {
     R.pt.st = null;
     if (ptDef.open && ptDef.enabled) {
       const st = { ...ptState, ...ptDef };
-      if (!Array.isArray(st.faces) || !st.faces.length) st.faces = Array.isArray(ptState.faces) ? ptState.faces.slice() : [];
-      R.pt.st = st;
+      // A set moved to another geometry keeps only its matched faces (A's would seed the wrong surface).
+      if (!ptDef.geometry_mapped && (!Array.isArray(st.faces) || !st.faces.length)) {
+        st.faces = Array.isArray(ptState.faces) ? ptState.faces.slice() : [];
+      }
+      if (!ptDef.geometry_mapped || st.faces.length || regionIsUsable(st.region)) R.pt.st = st;
     }
     const jobs = R.planes.map((p) => loadCompareResultsPlane(R, p, token, { live: true }));
     if (R.pt.st) {
@@ -11876,15 +11974,22 @@ let compareRefreshTimer = 0;
 function refreshResultsCompareAfterAutosave() {
   if (!paneBMirrorsA()) return;
   if (compareRefreshTimer) clearTimeout(compareRefreshTimer);
-  compareRefreshTimer = setTimeout(() => {
+  compareRefreshTimer = setTimeout(async () => {
     compareRefreshTimer = 0;
     if (!paneBMirrorsA()) return;
     const R = compareState.res;
     const opt = resultsCompareOptionByValue(compareState.resB);
-    const next = resultsCompareSetFor(opt) || {};
+    const token = R && R.loadToken;
+    const synced = await resultsCompareSetForB(opt);
+    if (!paneBMirrorsA() || (R && R.loadToken !== token)) return;
+    const next = synced.set;
     const field = next.field === 'p' ? 'p' : 'magU';
-    if (R && R.on && R.pd && R.caseDir && field === R.field) {
+    // Planes and parts redraw in place; a changed particle trace needs pane B's own trace.
+    const samePt = JSON.stringify(next.pt || null) === JSON.stringify((R && R.set && R.set.pt) || null);
+    if (R && R.on && R.pd && R.caseDir && field === R.field && samePt) {
       R.set = next;
+      R.ptLost = synced.lost;
+      showComparePaneBNote(R);
       applyCompareResultsParts(R);
       scheduleLiveComparePlanes();
       return;
@@ -18798,8 +18903,91 @@ async function activateGeometryClient(geomId, opts) {
   }
 }
 
+function shownGeometryId() {
+  return String((w16State.geometry && w16State.geometry.id) || '');
+}
+
+/** Geometry a study lives on. Untagged studies belong to the first geometry. */
+function studyGeometryId(sim) {
+  if (sim && sim.geometry_id) return String(sim.geometry_id);
+  const first = importedGeometries()[0];
+  return String((first && first.id) || '');
+}
+
+function studyOnShownGeometry(sim) {
+  const shown = shownGeometryId();
+  return !shown || !sim || studyGeometryId(sim) === shown;
+}
+
+/** The study to open with a geometry: the last one used on it, else its first. */
+function studyForGeometry(geomId) {
+  const id = String(geomId || '');
+  const own = (studyCatalog.simulations || []).filter((s) => s && studyGeometryId(s) === id);
+  if (!own.length) return null;
+  const pid = String(currentProjectId() || '');
+  const last = lastStudyByGeometry[pid + '|' + id];
+  return (
+    own.find((s) => String(s.id) === String(studyCatalog.activeId || '')) ||
+    own.find((s) => String(s.id) === String(last || '')) ||
+    own[0]
+  );
+}
+
+/**
+ * Nothing of another geometry's study stays loaded: no open editor, no copy pick,
+ * no materials, BCs, meshes or runs, so a face picked on this CAD cannot land there.
+ */
+function clearStudyScope() {
+  const pid = String(currentProjectId() || '');
+  try { hideAllTreeDetails(); } catch (_) {}
+  try { if (typeof endRunCopyPick === 'function') endRunCopyPick(); } catch (_) {}
+  try { if (typeof endMeshCopyPick === 'function') endMeshCopyPick(); } catch (_) {}
+  try { if (meshInspectOpen) hideMeshInspect({ silent: true }); } catch (_) {}
+  try { if (resultsViewOpen) hideRunResultsView({ silent: true }); } catch (_) {}
+  applyFetchedSetup({ sims: { simulation: null, simulations: studyCatalog.simulations || [], project_id: pid } }, pid);
+  caseDir = null;
+  if (jobState.status !== 'running') jobState.case_dir = null;
+  try { clearIdleMeshJobCounts(); } catch (_) {}
+  try { publishMeshJobState(); } catch (_) {}
+  try { refreshSetupTree(); } catch (_) {}
+  try { applyWorkbenchStage(); } catch (_) {}
+}
+
+/** The active study always lives on the geometry in the viewport, or there is none. */
+async function alignStudyToShownGeometry() {
+  const shown = shownGeometryId();
+  const sim = studyCatalog.simulation;
+  if (!shown || studyOnShownGeometry(sim)) return false;
+  const pick = studyForGeometry(shown);
+  if (pick) {
+    await selectStudyClient(pick.id);
+    return true;
+  }
+  if (sim) clearStudyScope();
+  return true;
+}
+
+/** Show another geometry, with its own study (or none), unfolded in the tree. */
+async function switchGeometryClient(geomId) {
+  const id = String(geomId || '').trim();
+  if (!id) return null;
+  const pick = studyForGeometry(id);
+  let out;
+  if (pick) {
+    out = await selectStudyClient(pick.id);
+  } else {
+    if (studyCatalog.simulation) clearStudyScope();
+    out = await activateGeometryClient(id);
+  }
+  if (!out || !out.stale) {
+    try { expandActiveStudyTree(); } catch (_) {}
+    try { refreshSetupTree(); } catch (_) {}
+  }
+  return out;
+}
+
 function selectImportedGeometry(geomId) {
-  return activateGeometryClient(geomId);
+  return switchGeometryClient(geomId);
 }
 
 async function importGeometryClient(opts, upload) {
@@ -18864,7 +19052,8 @@ async function importGeometryClient(opts, upload) {
     : 'Import returned but viewport CAD preview empty';
   publishW16({ imported: true });
   applyWorkbenchStage();
-  await reloadGeometryScopedSetup();
+  // A new geometry has no study yet; the previous geometry's study must not stay active on it.
+  if (!(await alignStudyToShownGeometry())) await reloadGeometryScopedSetup();
   return window.__CFD_W16__;
 }
 
@@ -18907,7 +19096,7 @@ async function removeGeometryClient(geomId) {
   }
   publishW16({ imported: !!w16State.geometry });
   applyWorkbenchStage();
-  if (w16State.geometry) await reloadGeometryScopedSetup();
+  if (w16State.geometry && !(await alignStudyToShownGeometry())) await reloadGeometryScopedSetup();
   return window.__CFD_W16__;
 }
 
@@ -19322,6 +19511,13 @@ async function hydrateOpenProject(projectId, opts) {
         rcs: j.result_controls,
         ctrl: j.simulation_control,
       }, id);
+      // The project reopens on the geometry it was left on; a study of another geometry does not come along.
+      try {
+        await alignStudyToShownGeometry();
+      } catch (e) {
+        console.warn('[CFD] align study to geometry', e);
+      }
+      if (gen !== projectHydrateGen) return null;
     }
     expandActiveStudyTree();
     try { revealLiveRunAfterHydrate(); } catch (_) {}
@@ -20432,6 +20628,9 @@ function applySimulationRecord(sim, projectId, extra) {
     );
   }
   studyCatalog.activeId = sim.id;
+  if (studyCatalog.simulation.geometry_id) {
+    lastStudyByGeometry[studyCatalog.simulation.project_id + '|' + studyCatalog.simulation.geometry_id] = sim.id;
+  }
   studyCatalog.defaults = {
     turbulence_model: studyCatalog.simulation.turbulence_model,
     time_dependency: studyCatalog.simulation.time_dependency,
@@ -20475,6 +20674,7 @@ async function createSimulationClient(opts) {
     publishW17({ ready: false, note: j.error || 'simulation create failed' });
     throw new Error(j.error || 'simulation create failed');
   }
+  studyCatalog.lastCopyReport = j.copy_report || null;
   const out = applySimulationRecord(j.simulation, j.project_id, j);
   const wantGeom = (j.simulation && j.simulation.geometry_id) || gid;
   if (wantGeom) treeUi.expanded['geom:' + wantGeom] = true;
@@ -20505,7 +20705,12 @@ async function createSimulationClient(opts) {
 async function selectStudyClient(simId) {
   const id = String(simId || '').trim();
   if (!id) return;
-  if (studyCatalog.activeId === id && studyCatalog.simulation && studyCatalog.simulation.id === id) {
+  if (
+    studyCatalog.activeId === id &&
+    studyCatalog.simulation &&
+    studyCatalog.simulation.id === id &&
+    studyOnShownGeometry(studyCatalog.simulation)
+  ) {
     try { publishMeshJobState(); } catch (_) {}
     return window.__CFD_W17__;
   }
@@ -20549,7 +20754,7 @@ async function selectStudyClient(simId) {
     if (token !== studySwitchGen) return { stale: true };
     applySimulationRecord(j.simulation, j.project_id, j);
     const wantGeom = j.simulation && j.simulation.geometry_id;
-    if (wantGeom && w16State.selectedGeomId !== wantGeom) {
+    if (wantGeom && (w16State.selectedGeomId !== wantGeom || shownGeometryId() !== wantGeom)) {
       await activateGeometryClient(wantGeom, { token });
     } else {
       await reloadGeometryScopedSetup();
@@ -20861,6 +21066,46 @@ function syncCreateCopyModeWrap() {
   const copyWrap = document.getElementById('cs-copy-wrap');
   const hasSource = !!(sel && String(sel.value || '').trim());
   if (wrap) wrap.hidden = !hasSource || !!(copyWrap && copyWrap.hidden);
+  // From a study on another geometry only settings copy: its mesh and results stay with that CAD.
+  const src = hasSource ? (studyCatalog.simulations || []).find((s) => String(s.id) === String(sel.value)) : null;
+  const geomSel = document.getElementById('cs-geometry');
+  const dest = String((geomSel && geomSel.value) || shownGeometryId());
+  const other = !!(src && dest && studyGeometryId(src) !== dest);
+  const clone = document.querySelector('#cs-copy-mode .cs-time-opt[data-copy-mode="clone"]');
+  if (clone) {
+    clone.disabled = other;
+    clone.title = other ? 'The generated mesh and results belong to the other geometry' : '';
+  }
+  if (other && selectedCreateCopyMode() === 'clone') setCreateCopyMode('settings');
+  const note = document.getElementById('cs-copy-geom-note');
+  if (note) {
+    const geo = importedGeometries().find((g) => String(g.id) === studyGeometryId(src));
+    note.hidden = !other;
+    note.textContent = other
+      ? 'This study is on ' + ((geo && geo.name) || 'another geometry') +
+        '. Settings are copied onto the faces that are the same here (same place, direction and size). ' +
+        'Its mesh and results stay with that geometry.'
+      : '';
+  }
+}
+
+/** After copying a study onto another geometry: what came across and which faces need picking again. */
+function noticeCopyReport(report) {
+  if (!report || !report.other_geometry) return Promise.resolve();
+  const kinds = { bc: 'Boundary condition', monitor: 'Monitor', refinement: 'Refinement' };
+  const lost = Array.isArray(report.lost_faces) ? report.lost_faces : [];
+  let copy =
+    'Materials, boundary conditions, mesh settings, monitors and run settings were copied. ' +
+    'Faces were matched by position, direction and size.';
+  if (report.clone_refused) {
+    copy = 'The generated mesh and results belong to the other geometry, so only settings were copied. ' + copy;
+  }
+  copy += lost.length
+    ? ' These faces have no match on this geometry, so pick them again: ' +
+      lost.map((l) => (kinds[l.kind] || 'Item') + ' "' + l.name + '" (' + (l.faces || []).join(', ') + ')').join('; ') +
+      '.'
+    : ' Every face has its match here.';
+  return confirmAction({ title: 'Copied to this geometry', copy, yes: 'OK', notice: true });
 }
 
 function setCreateSimulationError(msg) {
@@ -20917,6 +21162,7 @@ window.__CFD_W17_CREATE__ = createSimulationClient;
     applyCreateStartFromDefaults();
     syncCreateCopyModeWrap();
   });
+  document.getElementById('cs-geometry')?.addEventListener('change', () => syncCreateCopyModeWrap());
   document.querySelectorAll('#cs-copy-mode .cs-time-opt').forEach((el) => {
     el.addEventListener('click', () => setCreateCopyMode(el.getAttribute('data-copy-mode') || 'settings'));
   });
@@ -20954,6 +21200,7 @@ window.__CFD_W17_CREATE__ = createSimulationClient;
         }
         if (!runs.length) await createRunClient();
         else openRunPanel(runs[0].id || runs[0].run_id);
+        await noticeCopyReport(studyCatalog.lastCopyReport);
       })
       .catch((e) => {
         console.error('[CFD W17] create', e);
@@ -26253,16 +26500,29 @@ async function postCopyRefinements(destId, srcId) {
   return refs;
 }
 
+/** Refinement faces a copy from another geometry could not place, for the copy note. */
+function lostRefinementFacesNote(refs) {
+  const lost = (refs && Array.isArray(refs.lost_faces) && refs.lost_faces) || [];
+  if (!lost.length) return '';
+  return (
+    ' No matching face on this geometry for ' +
+    lost.map((l) => l.name + ' (' + (l.faces || []).join(', ') + ')').join('; ') +
+    '; pick those again.'
+  );
+}
+
 async function copyMeshSettingsFrom(srcId) {
   const destId = (meshCatalog && meshCatalog.active_id) || (meshCatalog.mesh && meshCatalog.mesh.id);
   if (!destId || !srcId || String(srcId) === String(destId)) return;
   const j = await postMeshApi({ mesh_id: destId, copy_from: srcId });
+  let refs = null;
   try {
-    await postCopyRefinements(destId, srcId);
+    refs = await postCopyRefinements(destId, srcId);
   } catch (e) {
     console.warn('[CFD] copy mesh refinements', e);
   }
-  meshCopyNote = 'Copied from ' + applyCopiedMeshSource(srcId) + '. Change anything you want.';
+  meshCopyNote =
+    'Copied from ' + applyCopiedMeshSource(srcId) + '. Change anything you want.' + lostRefinementFacesNote(refs);
   meshCopyNoteFor = { destId: String(destId), mode: 'all' };
   endMeshCopyPick();
   refinementCatalog.meshId = destId;
@@ -26279,8 +26539,8 @@ async function copyRefinementsFrom(srcId) {
     (meshCatalog && meshCatalog.active_id) ||
     (meshCatalog && meshCatalog.mesh && meshCatalog.mesh.id);
   if (!destId || !srcId || String(srcId) === String(destId)) return;
-  await postCopyRefinements(destId, srcId);
-  meshCopyNote = 'Copied refinements from ' + applyCopiedMeshSource(srcId) + '.';
+  const refs = await postCopyRefinements(destId, srcId);
+  meshCopyNote = 'Copied refinements from ' + applyCopiedMeshSource(srcId) + '.' + lostRefinementFacesNote(refs);
   meshCopyNoteFor = { destId: String(destId), mode: 'refs' };
   endMeshCopyPick();
   refinementCatalog.meshId = destId;
@@ -29662,14 +29922,18 @@ async function copyRunSettingsFrom(srcId, opts) {
   if (!dest || !src || runIsLocked(dest)) return;
   if (String(src.id) === String(dest.id)) return;
   const transient = transientSettingsFor(src);
+  // A run of another study keeps its mesh and monitors (they are that study's, maybe
+  // another geometry's); only the time settings come across.
+  const sid = currentStudyId();
+  const otherStudy = !!(src.simulation_id && sid && String(src.simulation_id) !== String(sid));
   const body = {
     run_id: dest.id,
-    mesh_id: src.mesh_id || '',
+    mesh_id: otherStudy ? dest.mesh_id || '' : src.mesh_id || '',
     endTime: src.endTime != null ? src.endTime : runCatalog.endTime,
     writeInterval: src.writeInterval != null ? src.writeInterval : runCatalog.writeInterval,
     time_dependency: src.time_dependency || (runRecIsTransient(src) ? 'Transient' : 'Steady-state'),
     transient,
-    result_controls: cloneRunResultControls(src.result_controls),
+    result_controls: otherStudy ? dest.result_controls || [] : cloneRunResultControls(src.result_controls),
   };
   const j = await persistRunSettings(body, opts);
   if (!j || j.ok === false) {
@@ -29682,7 +29946,9 @@ async function copyRunSettingsFrom(srcId, opts) {
   runCatalog.transient = transient;
   runCatalog.transient_preview = null;
   runCatalog.transient_preview_key = '';
-  runCopyNote = 'Copied from ' + (src.name || 'previous run') + '. Change anything you want.';
+  runCopyNote = otherStudy
+    ? 'Copied the time settings from ' + (src.name || 'that run') + ' of another study. Its mesh and monitors stay there.'
+    : 'Copied from ' + (src.name || 'previous run') + '. Change anything you want.';
   endRunCopyPick();
   expandRunFolders(dest.id, true);
   try { refreshSetupTree(); } catch (_) {}
@@ -34317,10 +34583,33 @@ function applyStudyDropOrder(ids, geometryId) {
       }
       if (node.matches('[data-w16-geom]')) {
         const gid = node.getAttribute('data-w16-geom');
-        if (gid && typeof activateGeometryClient === 'function') {
-          activateGeometryClient(gid).catch((err) => console.warn('[CFD] geom', err));
+        if (gid) {
+          switchGeometryClient(gid)
+            .then((out) => {
+              if (!out || out.stale) return;
+              activateTreePanel('geometry', 'geometry');
+            })
+            .catch((err) => console.warn('[CFD] geom', err));
+          return;
         }
         activateTreePanel('geometry', 'geometry');
+        return;
+      }
+      // Geometry / body rows of a geometry that is not in the viewport: show it first.
+      const geomRow = node.closest('[data-w16-geom]');
+      const rowGeom = geomRow && geomRow.getAttribute('data-w16-geom');
+      if (rowGeom && rowGeom !== shownGeometryId() && node.matches('[data-w17-geo="1"], [data-w16-body="1"]')) {
+        const replay = node.matches('[data-w16-body="1"]')
+          ? '[data-w16-geom="' + cssSelAttr(rowGeom) + '"] [data-w16-body="1"][data-body-index="' +
+            cssSelAttr(node.getAttribute('data-body-index')) + '"]'
+          : null;
+        switchGeometryClient(rowGeom)
+          .then((out) => {
+            if (!out || out.stale) return;
+            if (replay) replayTreeClick(replay);
+            else activateTreePanel('geometry', 'geometry');
+          })
+          .catch((err) => console.warn('[CFD] geom', err));
         return;
       }
       if (node.matches('[data-w16-body="1"]')) {
@@ -34635,23 +34924,16 @@ function applyStudyDropOrder(ids, geometryId) {
       if (resultsViewOpen) hideRunResultsView();
       if (item && item.dataset.geomId) {
         const gid = item.dataset.geomId;
-        const studies = (studyCatalog.simulations || []).filter(
-          (s) => s && String(s.geometry_id || '') === String(gid)
-        );
-        const pick =
-          studies.find((s) => String(s.id) === String(studyCatalog.activeId || '')) || studies[0] || null;
-        treeUi.expanded['geom:' + gid] = true;
-        if (pick) {
-          selectStudyClient(pick.id)
-            .then(() => {
-              treeUi.expanded['study:' + pick.id] = true;
+        if (studyForGeometry(gid)) {
+          switchGeometryClient(gid)
+            .then((out) => {
+              if (out && out.stale) return;
               markTreeSelected('incompressible');
-              if (typeof refreshSetupTree === 'function') refreshSetupTree();
             })
             .catch((err) => console.warn('[CFD] geom study', err));
           return;
         }
-        activateGeometryClient(gid).catch((err) => console.warn('[CFD] activate geometry', err));
+        switchGeometryClient(gid).catch((err) => console.warn('[CFD] activate geometry', err));
       }
       activateTreePanel('geometry', 'geometry');
     });

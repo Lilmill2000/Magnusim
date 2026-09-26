@@ -22,6 +22,7 @@ import {
   reorderSimulationsInCatalog,
 } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
+import { matchFaces, readPreviewFaces, remapRecordFaces } from './geometry-face-match.js';
 import { commitRpcSync } from './py-json.js';
 import {
   collectChildRecs,
@@ -313,7 +314,7 @@ function rematerializeRunResultControls(destDir, toId, stamp, dropFaces) {
     const mapped = collectChildRecs(runRcsDir(dir), 'result_control.json', run.result_controls).map((r) => {
       n += 1;
       return {
-        ...dropFaces(r),
+        ...dropFaces(r, 'monitor'),
         id: r && r.id ? `rc-run-copy-${stamp}-${n}` : r && r.id,
         run_id: runId,
         simulation_id: toId,
@@ -405,7 +406,20 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
   const srcGeom = String(options.sourceGeometryId || '').trim();
   const destGeom = String(toGeom || '').trim();
   const sameCad = !srcGeom || !destGeom || srcGeom === destGeom;
-  const dropFaces = (rec) => (sameCad || !rec ? rec : { ...rec, faces: [], face: null });
+  // On another geometry a face keeps its setting only where the same surface exists
+  // there (face numbers differ between geometries); the rest are listed in `lost`.
+  const faceMap = sameCad ? null : options.faceMap || new Map();
+  const lost = new Map();
+  const dropFaces = (rec, kind) => {
+    if (sameCad || !rec) return rec;
+    const out = remapRecordFaces(rec, faceMap);
+    if (out.lost.length) {
+      const name = String(rec.name || rec.type || rec.bc_type || kind);
+      lost.set(`${kind}|${name}`, { kind, name, faces: out.lost });
+    }
+    return out.rec;
+  };
+  const report = () => [...lost.values()];
   const stamp = Date.now().toString(36);
   const ident = readJsonFile(join(destDir, 'id.json')) || {};
   writeIdFile(destDir, {
@@ -449,7 +463,7 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
     'bc.json',
     bcLegacy && bcLegacy.boundary_conditions
   ).map((b, i) => ({
-    ...dropFaces(b),
+    ...dropFaces(b, 'bc'),
     id: `bc-copy-${stamp}-${i}`,
     simulation_id: toId,
     geometry_id: toGeom || b.geometry_id,
@@ -467,7 +481,7 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
     'result_control.json',
     rcLegacy && rcLegacy.result_controls
   ).map((r, i) => ({
-    ...dropFaces(r),
+    ...dropFaces(r, 'monitor'),
     id: `rc-copy-${stamp}-${i}`,
     simulation_id: toId,
   }));
@@ -515,7 +529,7 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
         'refinement.json',
         refs && refs.refinements
       ).map((r, i) => ({
-        ...dropFaces(r),
+        ...dropFaces(r, 'refinement'),
         id: r && r.id ? `ref-copy-${stamp}-${name}-${i}` : r && r.id,
         mesh_id: newId,
         simulation_id: toId,
@@ -532,7 +546,7 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
   }
   rekey(join(destDir, 'mesh_refinements.json'), (doc) => {
     doc.refinements = (doc.refinements || []).map((r, i) => ({
-      ...dropFaces(r),
+      ...dropFaces(r, 'refinement'),
       id: r && r.id ? `ref-copy-${stamp}-${i}` : r && r.id,
       simulation_id: toId,
       geometry_id: toGeom || (r && r.geometry_id),
@@ -542,19 +556,19 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
   const runRoot = join(destDir, 'simulation_runs');
   if (!copyRuns) {
     clearRunFolders(runRoot);
-    return { meshIdMap };
+    return { meshIdMap, lost_faces: report() };
   }
   if (cloneCases) {
     remapClonedRuns(destDir, toId, stamp, meshIdMap, destTimeDep);
     rematerializeRunResultControls(destDir, toId, stamp, dropFaces);
-    return { meshIdMap };
+    return { meshIdMap, lost_faces: report() };
   }
   clearRunFolders(runRoot);
   if (projectDirPath) {
     seedDraftRunsFromSource(projectDirPath, fromId, toId, destTimeDep, meshIdMap);
     rematerializeRunResultControls(destDir, toId, stamp, dropFaces);
   }
-  return { meshIdMap };
+  return { meshIdMap, lost_faces: report() };
 }
 
 const STUDY_IDENTITY_KEYS = new Set([
@@ -617,9 +631,10 @@ function createSimulation(body) {
   } catch (e) {
     return { ok: false, status: 400, body: { error: String((e && e.message) || e) } };
   }
+  let copyReport = null;
   try {
     if (body && body.copy_from) {
-      copySimulationSettings(
+      copyReport = copySimulationSettings(
         projectId,
         proj,
         body.copy_from,
@@ -658,7 +673,12 @@ function createSimulation(body) {
   return {
     ok: true,
     status: 201,
-    body: { ...catalogPayload(projectId, proj, cat), simulation: saved, soft_pass_avoided: true },
+    body: {
+      ...catalogPayload(projectId, proj, cat),
+      simulation: saved,
+      ...(copyReport ? { copy_report: copyReport } : {}),
+      soft_pass_avoided: true,
+    },
   };
 }
 
@@ -767,21 +787,35 @@ function copySimulationSettings(projectId, proj, fromId, toId, include, copyMode
   );
   const srcTd = normalizeTimeDependency(fromStudy.time_dependency, 'Steady-state');
   const copyRuns = timeDependenciesMatch(srcTd, destTd);
-  const cloneCases = mode === 'clone';
+  const srcGeom = String(fromStudy.geometry_id || '');
+  const destGeom = String(toStudy.geometry_id || srcGeom);
+  const otherGeometry = !!srcGeom && srcGeom !== destGeom;
+  // A generated mesh or a result belongs to its own geometry: onto another one, only settings copy.
+  const cloneCases = mode === 'clone' && !otherGeometry;
+  const faceMap = otherGeometry
+    ? matchFaces(readPreviewFaces(fromStudy.geometry_dir), readPreviewFaces(toStudy.geometry_dir))
+    : null;
   const destParent = join(toStudy.geometry_dir, 'simulations');
   const destName = toStudy.folder || toStudy.name;
   try {
     rmSync(toStudy.dir, { recursive: true, force: true });
   } catch (_) {}
   const copied = copyStudyTree(fromStudy.dir, destParent, destName, { cloneCases });
-  rewriteCopiedStudy(copied, from, to, toStudy.geometry_id || fromStudy.geometry_id, {
+  const out = rewriteCopiedStudy(copied, from, to, destGeom, {
     cloneCases,
     copyRuns,
     destTimeDependency: destTd,
     destAlgorithm: TIME_DEPENDENCIES[destTd] || toStudy.algorithm,
     projectDirPath: root,
-    sourceGeometryId: fromStudy.geometry_id,
+    sourceGeometryId: srcGeom,
+    faceMap,
   });
+  return {
+    mode: cloneCases ? 'clone' : 'settings',
+    other_geometry: otherGeometry,
+    clone_refused: mode === 'clone' && otherGeometry,
+    lost_faces: (out && out.lost_faces) || [],
+  };
 }
 
 export function purgeStudyRecords(projectId, simId, _geomId) {
@@ -850,7 +884,7 @@ function copySimulation(body) {
   const to = body && (body.to || body.simulation_id);
   if (!from || !to) return { ok: false, status: 400, body: { error: 'from and to study ids required' } };
   const dest = findStudy(projectDir(projectId), to);
-  copySimulationSettings(
+  const copyReport = copySimulationSettings(
     projectId,
     proj,
     from,
@@ -860,7 +894,11 @@ function copySimulation(body) {
     (body && body.time_dependency) || (dest && dest.time_dependency)
   );
   const cat = ensureCatalog(projectId, proj);
-  return { ok: true, status: 200, body: { ...catalogPayload(projectId, proj, cat), copied: true } };
+  return {
+    ok: true,
+    status: 200,
+    body: { ...catalogPayload(projectId, proj, cat), copied: true, copy_report: copyReport || null },
+  };
 }
 
 export function getSimulation(projectIdOpt, simIdOpt) {
