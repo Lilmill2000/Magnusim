@@ -1232,13 +1232,47 @@ body,
 .job-finish-toast[hidden] {
   display: none !important;
 }
+.queue-menu {
+  position: relative;
+}
+.queue-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.queue-btn[aria-expanded="true"] {
+  background: #eef0f4;
+}
+.queue-btn.is-running::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #12b76a;
+}
+.queue-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #1a4fbf;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 18px;
+  text-align: center;
+}
+.queue-count[hidden] {
+  display: none;
+}
+/* The queue drops down from its button in the top bar, over the workbench. */
 .job-queue-chip {
   position: absolute;
-  top: 16px;
-  left: calc(16px + var(--vp-viewer-left, var(--vp-left-inset, 0px)));
-  z-index: 8;
-  min-width: 160px;
-  max-width: 260px;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1000;
+  min-width: 260px;
+  max-width: 360px;
   pointer-events: auto;
   background: #fff;
   border: 1px solid #d0d5dd;
@@ -1269,6 +1303,30 @@ body,
   color: #475467;
   font-weight: 650;
   margin-bottom: 4px;
+}
+.job-queue-now {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: #101828;
+}
+.job-queue-now::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #12b76a;
+}
+.job-queue-empty {
+  color: #667085;
+  font-weight: 500;
+}
+.job-queue-now[hidden],
+.job-queue-head[hidden],
+.job-queue-empty[hidden] {
+  display: none;
 }
 .job-queue-list {
   margin: 0;

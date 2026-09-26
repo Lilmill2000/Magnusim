@@ -22,17 +22,21 @@ What changed since 0.1.0
 - Hex-dominant (snappyHexMesh) works from the app and keeps your boundary
   conditions.
 - Meshes queue across projects: start a mesh while another project is
-  meshing and it runs when that one finishes.
-- Several geometries in one project: clicking a geometry shows it with its
-  own simulation (or none yet); an open editor or face pick never carries over
-  to the other one. Create Simulation -> Start from a study on the other
+  meshing and it runs when that one finishes. The Queue button in the top
+  bar (next to Settings) shows what is running and what waits; drag to
+  reorder, x to remove. A waiting mesh says Queued, not the other mesh's
+  timer.
+- Several geometries in one project: clicking a geometry shows it with its own
+  simulation (or none yet) in a fraction of a second, keeping the view when
+  both fill about the same space; an open editor or face pick never carries
+  over to the other one. Create Simulation -> Start from a study on the other
   geometry copies its settings, and its BCs, monitors and refinements land on
   the faces that are the same surface there; any face without a match is
   listed so you can pick it again. Its mesh and results stay with its own
   geometry. Compare shows which geometry each side is, and with Sync filters
   on, the other side draws the same cutting planes and coloring, with its
-  particle trace seeded from its own matching faces (it says so if a seed
-  face has no match there).
+  particle trace seeded from its own matching faces (it says so if a seed face
+  has no match there).
 - uninstall.bat removes the Magnusim folder and the solver folders its
   projects used inside Ubuntu (other folders there are kept). It offers to
   remove Node.js, Python or Ubuntu only if this Setup installed them, each

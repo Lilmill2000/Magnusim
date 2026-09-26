@@ -39,7 +39,7 @@ import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
 import { projectSolveSummary } from './w27-solve.js';
 import { envGet } from './env-compat.js';
 import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
-import { callWorker, commitRpcSync } from './py-json.js';
+import { callWorker, commitRpc, commitRpcSync } from './py-json.js';
 import {
   LAYOUT_VERSION,
   createGeometryFolder,
@@ -151,6 +151,17 @@ function writeProject(proj) {
   mkdirSync(geometriesRoot(dir), { recursive: true });
   if (proj.layout_version == null) proj.layout_version = LAYOUT_VERSION;
   const written = commitRpcSync('project.write_project', { project_dir: dir, doc: proj });
+  if (written && typeof written === 'object') Object.assign(proj, written);
+  invalidateProjectsListCache();
+  return proj;
+}
+
+/** writeProject through the long-lived worker, so a geometry switch does not hold the server. */
+async function writeProjectAsync(proj) {
+  const dir = projectDir(proj.id);
+  mkdirSync(geometriesRoot(dir), { recursive: true });
+  if (proj.layout_version == null) proj.layout_version = LAYOUT_VERSION;
+  const written = await commitRpc('project.write_project', { project_dir: dir, doc: proj });
   if (written && typeof written === 'object') Object.assign(proj, written);
   invalidateProjectsListCache();
   return proj;
@@ -1082,7 +1093,7 @@ async function persistActiveGeometry(proj, parts, activeId, stepSource) {
     proj.geometries = [];
     proj.active_geometry_id = null;
     proj.updated_at = new Date().toISOString();
-    writeProject(proj);
+    await writeProjectAsync(proj);
     return { ok: true, empty: true, project: proj, geometry: null, geometries: [] };
   }
   const want = String(activeId || proj.active_geometry_id || live[0].id);
@@ -1106,7 +1117,7 @@ async function persistActiveGeometry(proj, parts, activeId, stepSource) {
   proj.geometries = live;
   proj.active_geometry_id = active.id;
   proj.updated_at = new Date().toISOString();
-  writeProject(proj);
+  await writeProjectAsync(proj);
   writeActiveId(projectId);
   syncMeshActiveToGeometry(projectId, active.id);
   // Best-effort and not needed by the workbench: render the home-card thumbnail after

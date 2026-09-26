@@ -86,6 +86,17 @@
           <span class="project-name">Project</span>
         </div>
         <div class="top-right">
+          <div class="queue-menu" id="queue-menu">
+            <button type="button" class="home-btn queue-btn" id="btn-queue" aria-haspopup="true" aria-expanded="false" aria-controls="job-queue-chip" title="Meshes and runs: what is running and what waits for it">
+              Queue<span class="queue-count" id="queue-count" hidden>0</span>
+            </button>
+            <div id="job-queue-chip" class="job-queue-chip" role="dialog" aria-label="Queue" hidden>
+              <div class="job-queue-now" id="job-queue-now" hidden></div>
+              <div class="job-queue-head" id="job-queue-head" title="Drag to reorder" hidden>Waiting</div>
+              <ol id="job-queue-list" class="job-queue-list"></ol>
+              <div class="job-queue-empty" id="job-queue-empty">Nothing running or queued.</div>
+            </div>
+          </div>
           <button type="button" class="home-btn" id="wb-prefs">Settings</button>
         </div>
       </header>
@@ -631,10 +642,6 @@
                 </div>
               </div>
             </div>
-          </div>
-          <div id="job-queue-chip" class="job-queue-chip" hidden>
-            <div class="job-queue-head" title="Drag to reorder">Queue</div>
-            <ol id="job-queue-list" class="job-queue-list"></ol>
           </div>
           <div id="viewport-gizmo" class="viewport-gizmo">
             <div class="viewport-gizmo-row">

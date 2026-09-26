@@ -16156,7 +16156,12 @@ function publishMeshJobState() {
   try { if (!foreign && typeof liveMeshJobId === 'function') liveId = liveMeshJobId() || liveId; } catch (_) {}
   try { if (typeof viewingMeshId === 'function') viewId = viewingMeshId(); } catch (_) {}
   try { computeLive = !foreign && !!(typeof liveComputeSnap === 'function' && liveComputeSnap().kind === 'mesh'); } catch (_) {}
-  const thisLive = !!(liveId && ((viewId && String(liveId) === String(viewId)) || (jobState.mesh_id && String(liveId) === String(jobState.mesh_id))));
+  // The live job is this panel's only when it is the mesh shown (another mesh, maybe on
+  // another geometry, may be generating while this one waits in the queue).
+  const thisLive = !!(
+    liveId &&
+    (viewId ? String(liveId) === String(viewId) : jobState.mesh_id && String(liveId) === String(jobState.mesh_id))
+  );
   const meshReady = isGeneratedMeshReady();
   const failed = jobStatus === 'failed' && meshJob && mine;
   const queuedRow = queuedMeshRow(viewId || (!foreign && jobState.mesh_id) || null);
@@ -18661,8 +18666,11 @@ function bindCadEdgesForToken(token) {
   return true;
 }
 
-async function loadGeometryCad(facesUrl, edgesUrl) {
+async function loadGeometryCad(facesUrl, edgesUrl, opts) {
   const token = ++cadLoadToken;
+  // Switching geometry keeps the view when the new one fills about the same box, so the
+  // same face can be compared on both.
+  const keepCamera = !!(opts && opts.keepCamera);
   clearCadEdgeDisplay();
   loadOfficialCadCom().catch(() => {});
   const facesP = geomCadFaceReader.setUrl(facesUrl);
@@ -18677,7 +18685,7 @@ async function loadGeometryCad(facesUrl, edgesUrl) {
     try {
       surfaceActor.getProperty().setOpacity(0.15);
     } catch (_) {}
-    frameSceneCamera(true);
+    frameSceneCamera(!keepCamera);
     resizeViewer();
     highlightGeomBody(null);
   }
@@ -18886,7 +18894,7 @@ async function activateGeometryClient(geomId, opts) {
     try { if (typeof hideMeshInspect === 'function') hideMeshInspect({ silent: true }); } catch (_) {}
     try { if (typeof hideRunResultsView === 'function') hideRunResultsView({ silent: true }); } catch (_) {}
     try { refreshSetupTree(); } catch (_) {}
-    const loaded = await loadGeometryCad(applied.faces_url, applied.edges_url);
+    const loaded = await loadGeometryCad(applied.faces_url, applied.edges_url, { keepCamera: true });
     if (token !== studySwitchGen) return { stale: true };
     w16State.fingerprint = loaded.fp;
     w16State.ready = !!(loaded.fp && loaded.fp.empty === false);
@@ -27726,13 +27734,19 @@ function serverBusyForOtherJob(meshId) {
 function queueBehindLabel() {
   return computeBusyLabel(jobQueue.busy, {
     currentProjectId: typeof currentProjectId === 'function' ? currentProjectId() : '',
+    // "Mesh 1" is on every geometry: name the geometry when the job is on another one.
     lookupName: (kind, id) => {
+      const several = importedGeometries().length > 1;
       if (kind === 'mesh') {
         const rec = typeof findMeshRecord === 'function' ? findMeshRecord(id) : null;
-        return rec ? meshDisplayName(rec) : '';
+        if (!rec) return '';
+        const geo = several && rec.geometry_id && String(rec.geometry_id) !== shownGeometryId() ? geometryNameForMesh(rec) : '';
+        return geo ? meshDisplayName(rec) + ' on ' + geo : meshDisplayName(rec);
       }
       const run = typeof findRunRecord === 'function' ? findRunRecord(id) : null;
-      return (run && run.name) || '';
+      if (!run) return '';
+      const geo = several && runGeometryId(run) && runGeometryId(run) !== shownGeometryId() ? geometryNameForRun(run) : '';
+      return geo ? (run.name || 'Run') + ' on ' + geo : run.name || '';
     },
     projectTitle: (id) => jobChipProjectLabel({ project_id: id }),
   });
@@ -27973,11 +27987,20 @@ function queueItemLabel(item) {
     const run = typeof findRunRecord === 'function' ? findRunRecord(item.run_id) : null;
     name = (run && run.name) || '';
   }
-  // "Coarse" and "Run 1" repeat in every study: say it is a mesh, and which study.
-  const base = item.kind === 'mesh' ? (name ? name + ' mesh' : 'Mesh') : name || 'Run';
+  // "Coarse" and "Run 1" repeat in every study: say it is a mesh, and where it is (the
+  // geometry when there are several, the study when its geometry has several).
+  const base = item.kind === 'mesh' ? (name ? (/\bmesh\b/i.test(name) ? name : name + ' mesh') : 'Mesh') : name || 'Run';
   const sims = (typeof studyCatalog !== 'undefined' && studyCatalog.simulations) || [];
-  const study = sims.length > 1 && item.simulation_id ? studyNameForRun({ simulation_id: item.simulation_id }) : '';
-  return study ? base + ' · ' + study : base;
+  const study = item.simulation_id ? sims.find((s) => s && String(s.id) === String(item.simulation_id)) : null;
+  if (!study) return base;
+  const gid = studyGeometryId(study);
+  const where = [];
+  if (importedGeometries().length > 1) {
+    const geo = importedGeometries().find((g) => String(g.id) === gid);
+    if (geo && geo.name) where.push(String(geo.name));
+  }
+  if (sims.filter((s) => s && studyGeometryId(s) === gid).length > 1) where.push(study.name || 'Study');
+  return where.length ? base + ' · ' + where.join(' / ') : base;
 }
 
 function enqueueMeshJob(meshId, explicitSettings) {
@@ -28125,6 +28148,67 @@ function applyQueuedJobOrder(ids) {
   return true;
 }
 
+/** Top-bar Queue button: count of waiting jobs, a dot while one runs, the list when open. */
+function syncQueueMenu(chip) {
+  const waiting = (jobQueue.items || []).length;
+  let running = '';
+  try {
+    if (jobQueue.busy && jobQueue.busy.kind) running = queueBehindLabel();
+    else if (anyComputeJobRunning()) running = jobState.mesh_name || (jobState.mode === 'solve' ? 'a run' : 'a mesh');
+  } catch (_) {}
+  const btn = document.getElementById('btn-queue');
+  const count = document.getElementById('queue-count');
+  const now = document.getElementById('job-queue-now');
+  const head = document.getElementById('job-queue-head');
+  const empty = document.getElementById('job-queue-empty');
+  if (count) {
+    count.hidden = !waiting;
+    count.textContent = String(waiting);
+  }
+  if (btn) {
+    btn.classList.toggle('is-running', !!running);
+    btn.setAttribute('aria-expanded', jobQueue.menuOpen ? 'true' : 'false');
+    btn.title = running
+      ? 'Running: ' + running + (waiting ? '. ' + waiting + ' waiting.' : '.')
+      : waiting
+        ? waiting + ' waiting.'
+        : 'Nothing running or queued.';
+  }
+  if (now) {
+    now.hidden = !running;
+    now.textContent = running ? 'Running: ' + running : '';
+  }
+  if (head) head.hidden = !waiting;
+  if (empty) empty.hidden = !!(waiting || running);
+  if (chip) chip.hidden = !jobQueue.menuOpen;
+}
+
+function setQueueMenuOpen(open) {
+  jobQueue.menuOpen = !!open;
+  if (open) {
+    // Show the server's queue as it is now (other projects' jobs too).
+    Promise.resolve(loadJobQueue())
+      .then(() => syncJobQueueChrome())
+      .catch(() => {});
+  }
+  syncQueueMenu(document.getElementById('job-queue-chip'));
+}
+
+(function wireQueueMenu() {
+  const btn = document.getElementById('btn-queue');
+  if (!btn || btn._qMenuWired) return;
+  btn._qMenuWired = true;
+  btn.addEventListener('click', () => setQueueMenuOpen(!jobQueue.menuOpen));
+  document.addEventListener('pointerdown', (e) => {
+    if (!jobQueue.menuOpen || jobQueue._dragging) return;
+    if (e.target && e.target.closest && e.target.closest('#queue-menu')) return;
+    setQueueMenuOpen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && jobQueue.menuOpen) setQueueMenuOpen(false);
+  });
+})();
+
 function syncJobQueueChrome() {
   if (jobQueue._chromeBusy) return;
   jobQueue._chromeBusy = true;
@@ -28153,7 +28237,7 @@ function syncJobQueueChrome() {
           .join('');
     if (list.innerHTML !== html) list.innerHTML = html;
   }
-  if (chip) chip.hidden = !jobQueue.items.length;
+  syncQueueMenu(chip);
   /* The Generate button's queue state reaches the React island through cfd:mesh-job. */
   try { publishMeshJobState(); } catch (_) {}
   try { if (typeof syncSimControlPanel === 'function') syncSimControlPanel(); } catch (_) {}
@@ -28219,6 +28303,7 @@ function publishJobActivity() {
   };
   const prev = window.__CFD_JOB_ACTIVITY__;
   window.__CFD_JOB_ACTIVITY__ = snap;
+  try { syncQueueMenu(document.getElementById('job-queue-chip')); } catch (_) {}
   try {
     if (prev && JSON.stringify(prev) === JSON.stringify(snap)) return;
   } catch (_) {}

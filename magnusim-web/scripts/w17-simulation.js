@@ -23,7 +23,7 @@ import {
 } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
 import { matchFaces, readPreviewFaces, remapRecordFaces } from './geometry-face-match.js';
-import { commitRpcSync } from './py-json.js';
+import { commitRpc, commitRpcSync } from './py-json.js';
 import {
   collectChildRecs,
   copyStudyTree,
@@ -89,6 +89,16 @@ function writeProject(proj) {
     project_dir: projectDir(proj.id),
     doc: proj,
   });
+  if (written && typeof written === 'object') Object.assign(proj, written);
+  return proj;
+}
+
+/**
+ * The same write through the long-lived worker. Switching study must not hold the whole
+ * server while a new Python process starts (about a second each time).
+ */
+async function writeProjectAsync(proj) {
+  const written = await commitRpc('project.write_project', { project_dir: projectDir(proj.id), doc: proj });
   if (written && typeof written === 'object') Object.assign(proj, written);
   return proj;
 }
@@ -740,7 +750,7 @@ function reorderSimulations(body) {
   return { ok: true, status: 200, body: catalogPayload(projectId, proj, cat) };
 }
 
-function activateSimulation(body) {
+async function activateSimulation(body) {
   const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
   const proj = readProject(projectId);
@@ -751,7 +761,7 @@ function activateSimulation(body) {
   if (sim) {
     touchProjectSimRef(proj, sim);
     if (sim.geometry_id) proj.active_geometry_id = sim.geometry_id;
-    writeProject(proj);
+    await writeProjectAsync(proj);
   }
   return { ok: true, status: 200, body: catalogPayload(projectId, proj, cat) };
 }
@@ -965,7 +975,7 @@ export async function handleW17Api(req, res, u, parts, helpers) {
       } catch (e) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
-      const result = activateSimulation(body || {});
+      const result = await activateSimulation(body || {});
       return sendJson(res, result.status, result.body);
     }
     if (req.method === 'POST' && (parts[2] === 'delete' || parts[2] === 'remove')) {

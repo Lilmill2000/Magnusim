@@ -66,7 +66,21 @@ async function setup(page, request, title) {
     await page.locator(`#geometries-list .geo-item[data-geom-id="${g.id}"]`).click();
     await expect.poll(shown, { timeout: 30_000 }).toBe(g.id);
   };
-  return { pid, q, json, shown, study, stage, shot, round, tear, pickGeometry };
+  // Switching is quick: the geometry and its own study (or none) within a moment.
+  const timedSwitch = async (g) => {
+    const t0 = Date.now();
+    await page.locator(`#geometries-list .geo-item[data-geom-id="${g.id}"]`).click();
+    await page.waitForFunction(
+      (id) => {
+        const sim = window.__CFD_W17__ && window.__CFD_W17__.simulation;
+        return window.__CFD_W16__?.geometry?.id === id && (!sim || sim.geometry_id === id);
+      },
+      g.id,
+      { timeout: 30_000 },
+    );
+    return Date.now() - t0;
+  };
+  return { pid, q, json, shown, study, stage, shot, round, tear, pickGeometry, timedSwitch };
 }
 
 async function createStudy(page, { geometryId, copyFrom } = {}) {
@@ -139,7 +153,11 @@ test('two geometries: each keeps its own study, and a copied study lands on the 
   const after = JSON.stringify((await s.json(bcsOf(tearStudy)())).boundary_conditions.map((b) => [b.name, b.faces]));
   expect(after).toBe(before);
 
-  // Back and forth: each click shows that plate, with its own study (or none).
+  // Back and forth: each click shows that plate, with its own study (or none), and quickly.
+  const times = [];
+  for (const g of [tear, round, tear, round]) times.push(await s.timedSwitch(g));
+  s.stage(`switch times ${times.join(', ')} ms`);
+  expect(Math.max(...times)).toBeLessThan(1500);
   await s.pickGeometry(tear);
   await expect.poll(s.study).toEqual({ id: tearStudy, geom: tear.id });
   await s.pickGeometry(round);
@@ -204,25 +222,51 @@ test('two geometries meshed, solved and compared side by side', async ({ page, r
   const roundStudy = (await s.study()).id;
   s.stage('both studies set up');
 
-  // Mesh and solve each, one after the other, from its own study.
+  // Mesh both: the teardrop's starts, the round plate's waits in the queue. Its panel says
+  // Queued (no timer, not the teardrop's progress), and the top-bar Queue lists both.
+  const form = page.locator('#panel-mesh-form .cfd-island');
+  const startMesh = async (g, sid) => {
+    await s.pickGeometry(g);
+    await expect.poll(s.study).toEqual({ id: sid, geom: g.id });
+    await page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w20-mesh="1"] > .tree-row .tl`).first().click();
+    await page.locator('#btn-create-mesh').click();
+    await form.locator('[data-mesh-generate="1"]').click();
+  };
+  await startMesh(tear, tearStudy);
+  await expect.poll(() => page.evaluate(() => window.__CFD_MESH_JOB__?.phase), { timeout: 30_000 }).toBe('generating');
+  await startMesh(round, roundStudy);
+  await expect
+    .poll(() => page.evaluate(() => {
+      const j = window.__CFD_MESH_JOB__ || {};
+      return `${j.phase}|${j.started_at == null}|${j.elapsed_ms == null}`;
+    }), { timeout: 30_000 })
+    .toBe('queued|true|true');
+  await expect(form.locator('[data-mesh-status="queued"]')).toContainText('transient-test-teardrop');
+  await page.locator('#btn-queue').click();
+  await expect(page.locator('#job-queue-now')).toContainText('Running: Mesh 1 on transient-test-teardrop');
+  await expect(page.locator('#job-queue-list li')).toHaveCount(1);
+  await expect(page.locator('#job-queue-list li').first()).toContainText('transient-test');
+  await s.shot('queue');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#job-queue-chip')).toBeHidden();
+  s.stage('second mesh queued behind the first');
+  const meshesDone = async () => {
+    const tree = await s.json(s.q('/api/project/tree'));
+    const studies = (tree.geometries || []).flatMap((g) => g.studies || []);
+    const st = [tearStudy, roundStudy].map((sid) => {
+      const m = ((studies.find((x) => x.id === sid) || {}).meshes || [])[0] || {};
+      return m.live_status || (m.generated ? 'done' : 'none');
+    });
+    s.stage(`meshes ${st.join(', ')}`);
+    return st.join(',');
+  };
+  await expect.poll(meshesDone, { timeout: 1_800_000, intervals: [10_000] }).toBe('done,done');
+
+  // Solve each from its own study.
   const runs = {};
   for (const [g, sid] of [[tear, tearStudy], [round, roundStudy]]) {
     await s.pickGeometry(g);
     await expect.poll(s.study).toEqual({ id: sid, geom: g.id });
-    const meshFolder = page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w20-mesh="1"] > .tree-row`).first();
-    await meshFolder.locator('.tl').click();
-    await page.locator('#btn-create-mesh').click();
-    const form = page.locator('#panel-mesh-form .cfd-island');
-    await form.locator('[data-mesh-generate="1"]').click();
-    const meshOf = async () => (await s.json(s.q('/api/case', { simulation_id: sid })));
-    await expect
-      .poll(async () => {
-        const c = await meshOf();
-        const st = c.status || c.live_mesh_result?.status || 'none';
-        s.stage(`${g.name} mesh ${st}`);
-        return /done|failed/.test(st) ? st : 'waiting';
-      }, { timeout: 900_000, intervals: [10_000] })
-      .toBe('done');
     const run = page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w27-run] > .tree-row .tl`).first();
     await run.click();
     const panel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
