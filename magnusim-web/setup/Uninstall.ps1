@@ -65,6 +65,48 @@ function Get-RemovalCandidates($Record) {
     return $result
 }
 
+# Solver folders this release's own projects used inside Ubuntu (their records name them).
+# Only cfddesk-* folders directly under the configured case root; other installs' and
+# other programs' folders are never listed.
+function Get-WslCaseFolders {
+    $local = @('.magnusim-local.json', '.cfddesk-local.json') |
+        ForEach-Object { Join-Path $webRoot $_ } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $local) { return $null }
+    try { $cfg = Get-Content -LiteralPath $local -Raw | ConvertFrom-Json } catch { return $null }
+    $distro = [string]$cfg.wsl_distro
+    $root = ([string]$cfg.wsl_case_root).TrimEnd('/')
+    if ($distro -notmatch '^[A-Za-z0-9._-]+$' -or $root -notmatch '^/home/[a-z_][a-z0-9_-]*/cases$') { return $null }
+    $pattern = [regex]::new([regex]::Escape($root) + '/(cfddesk-[A-Za-z0-9._-]+)')
+    $names = New-Object 'System.Collections.Generic.SortedSet[string]'
+    foreach ($dir in @('projects', '.cache', 'e2e\.tmp-projects')) {
+        $path = Join-Path $webRoot $dir
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        foreach ($file in @(Get-ChildItem -LiteralPath $path -Recurse -File -Include '*.json', '*.jsonl' -ErrorAction SilentlyContinue)) {
+            try { $text = [IO.File]::ReadAllText($file.FullName) } catch { continue }
+            foreach ($m in $pattern.Matches($text)) { [void]$names.Add($m.Groups[1].Value) }
+        }
+    }
+    return @{ distro = $distro; root = $root; names = @($names) }
+}
+
+function Remove-WslCaseFolders($Cases) {
+    if (-not $Cases -or -not $Cases.names.Count) { return }
+    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { Write-Warning 'wsl.exe not found; Ubuntu case folders were kept.'; return }
+    # No shell between PowerShell and sh (--exec), names on stdin, and only cfddesk-* names reach rm.
+    $script = 'tr -cd ''A-Za-z0-9._\n-'' | while read -r d; do case $d in cfddesk-?*) if [ -d ./$d ]; then rm -rf -- ./$d && echo removed $d; fi;; esac; done'
+    Add-Content -LiteralPath $script:CommandLog -Value "[$((Get-Date).ToString('o'))] REMOVE in $($Cases.distro):$($Cases.root): $($Cases.names -join ' ')" -Encoding UTF8
+    $oldPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $out = @(($Cases.names -join "`n") | & wsl.exe -d $Cases.distro --cd $Cases.root --exec sh -c $script 2>&1 | ForEach-Object { "$_" })
+        $code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $oldPreference }
+    Add-Content -LiteralPath $script:CommandLog -Value (@($out) + "EXIT CODE: $code") -Encoding UTF8
+    $removed = @($out | Where-Object { $_ -like 'removed *' }).Count
+    if ($code -ne 0) { Write-Warning "Removing Ubuntu case folders stopped (exit $code); see the command log." }
+    Write-Host "Removed $removed of $($Cases.names.Count) solver folders in $($Cases.distro):$($Cases.root) (the rest were already gone)."
+}
+
 function Get-ReleaseHolders([string]$Root) {
     $self = $PID
     $parent = 0
@@ -111,8 +153,12 @@ try {
         catch { Write-Warning 'Installation record is unreadable; shared software will be kept.' }
     }
     $candidates = @(Get-RemovalCandidates $record)
+    $cases = Get-WslCaseFolders
     Write-Host "Magnusim uninstall: $releaseRoot"
     Write-Host 'This removes this entire folder, including ALL local projects, results, settings, source, and private dependencies.'
+    if ($cases -and $cases.names.Count) {
+        Write-Host "It also removes the $($cases.names.Count) solver folders these projects used inside $($cases.distro) (under $($cases.root)); other folders there are kept."
+    }
     Write-Host 'Back up projects first. Data stored outside this folder is not removed automatically.'
     Write-Host 'Shared Node.js, Python, WSL and Ubuntu are KEPT unless you explicitly select an eligible component below.'
     Write-Host 'The Windows WSL platform is always retained because other applications may depend on it.'
@@ -129,6 +175,8 @@ try {
     New-Item -ItemType Directory -Path $auditDir | Out-Null
     $script:CommandLog = Join-Path $auditDir 'commands.log'
     if ($record) { Copy-Item -LiteralPath $recordPath -Destination (Join-Path $auditDir 'installation.json') }
+    # Before any distro removal below, and before the folder that names them is gone.
+    Remove-WslCaseFolders $cases
     foreach ($candidate in $candidates) {
         Write-Host "Optional: $($candidate.name). Setup did not detect it before installation, but other programs may use it NOW."
         if ($candidate.kind -eq 'distro') {
@@ -145,7 +193,7 @@ try {
             Invoke-LoggedCommand 'winget.exe' @('uninstall','--id',$candidate.id,'--exact','--accept-source-agreements','--disable-interactivity') | Out-Null
         }
     }
-    Write-Host 'Any retained Linux distribution still contains its OpenFOAM packages and case data. External projects and system package caches are retained.'
+    Write-Host 'Any retained Linux distribution still contains its OpenFOAM packages and data from other programs. External projects and system package caches are retained.'
     Write-Host "Uninstall record and command logs: $auditDir"
     # Verify the absolute boundary again immediately before removing only this release.
     Assert-RemovalRoot

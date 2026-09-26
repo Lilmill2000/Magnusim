@@ -43,10 +43,35 @@ $PythonDir = Join-Path $WebRoot 'python'
 $VenvPython = Join-Path $PythonDir '.venv\Scripts\python.exe'
 
 . (Join-Path $SetupDir 'Port-Settings.ps1')
+. (Join-Path $SetupDir 'Install-State.ps1')
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 Start-Transcript -Path $LogPath -Append | Out-Null
+
+# What Setup found and what it installed (.cache\setup\installation.json), so uninstall.bat
+# can offer to remove only the shared software Setup itself added. A failure here never
+# fails Setup: uninstall then keeps all shared software.
+$script:RecordOn = $true
+function Invoke-Record([scriptblock]$Action) {
+    if (-not $script:RecordOn) { return }
+    try { . $Action } catch {
+        $script:RecordOn = $false
+        Write-Host "    Install record not written: $($_.Exception.Message). Uninstall will keep shared software." -ForegroundColor Yellow
+    }
+}
+function Get-DistroObservation {
+    $distros = @()
+    $lxss = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+    if (Test-Path $lxss) {
+        foreach ($key in @(Get-ChildItem $lxss -ErrorAction SilentlyContinue)) {
+            $name = (Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue).DistributionName
+            if ($name) { $distros += @{ name = [string]$name; id = [string]$key.PSChildName } }
+        }
+    }
+    return @{ state = 'observed'; distros = $distros }
+}
+Invoke-Record { Initialize-InstallState (Join-Path $LogDir 'installation.json') $WebRoot }
 
 
 
@@ -196,6 +221,8 @@ function Install-Node {
 
     Refresh-Path
 
+    Invoke-Record { Begin-Component 'node' (Get-SharedObservation 'node') }
+
     if ((Test-Cmd 'node') -and ([version]((node -v).TrimStart('v')) -ge [version]'22.12.0')) {
 
         Write-Ok ("Node.js {0}" -f (node -v))
@@ -206,11 +233,16 @@ function Install-Node {
 
     Write-Step 'Installing Node.js LTS'
 
+    Invoke-Record { Set-ComponentAttempt 'node' }
+
     if (Install-WingetId 'OpenJS.NodeJS.LTS') {
 
         Refresh-Path
 
-        if ((Test-Cmd 'node') -and ([version]((node -v).TrimStart('v')) -ge [version]'22.12.0')) { Write-Ok ("Node.js {0}" -f (node -v)); return }
+        if ((Test-Cmd 'node') -and ([version]((node -v).TrimStart('v')) -ge [version]'22.12.0')) {
+            Invoke-Record { Complete-Component 'node' (Get-SharedObservation 'node') }
+            Write-Ok ("Node.js {0}" -f (node -v)); return
+        }
 
     }
 
@@ -233,6 +265,8 @@ function Install-Node {
         throw 'Node.js installed but is not on PATH. Close this window, open a new one, and run Setup.bat again.'
 
     }
+
+    Invoke-Record { Complete-Component 'node' (Get-SharedObservation 'node') }
 
     Write-Ok ("Node.js {0}" -f (node -v))
 
@@ -296,6 +330,8 @@ function Resolve-PythonLauncher {
 
 function Install-Python {
 
+    Invoke-Record { Begin-Component 'python' (Get-SharedObservation 'python') }
+
     $found = Resolve-PythonLauncher
 
     if ($found) {
@@ -308,13 +344,18 @@ function Install-Python {
 
     Write-Step 'Installing Python 3.12'
 
+    Invoke-Record { Set-ComponentAttempt 'python' }
+
     if (Install-WingetId 'Python.Python.3.12') {
 
         Refresh-Path
 
         $found = Resolve-PythonLauncher
 
-        if ($found) { Write-Ok 'Python 3.12'; return $found }
+        if ($found) {
+            Invoke-Record { Complete-Component 'python' (Get-SharedObservation 'python') }
+            Write-Ok 'Python 3.12'; return $found
+        }
 
     }
 
@@ -339,6 +380,8 @@ function Install-Python {
         throw 'Python installed but is not on PATH. Close this window and run Setup.bat again.'
 
     }
+
+    Invoke-Record { Complete-Component 'python' (Get-SharedObservation 'python') }
 
     Write-Ok 'Python 3.12'
 
@@ -539,6 +582,7 @@ function Ensure-WslUbuntu {
 
 
     try { & wsl.exe --status | Out-Host } catch {}
+    Invoke-Record { Begin-Component 'ubuntu' (Get-DistroObservation) }
 
 
 
@@ -557,6 +601,7 @@ function Ensure-WslUbuntu {
     if (-not (Test-Admin)) { Restart-Elevated }
 
     Write-Step "Installing $wanted (one-time, needs Administrator)"
+    Invoke-Record { Set-ComponentAttempt 'ubuntu' }
 
     & wsl.exe --install -d $wanted --no-launch
 
@@ -574,6 +619,7 @@ function Ensure-WslUbuntu {
 
     if (Test-HasDistro $wanted $names) {
 
+        Invoke-Record { Complete-Component 'ubuntu' (Get-DistroObservation) }
         Write-Ok "$wanted installed"
 
         return $wanted
