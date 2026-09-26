@@ -346,8 +346,17 @@ function wireWizard() {
   });
 }
 
-export async function initSetupWizard() {
-  wireWizard();
-  const prefs = await loadPrefs();
-  if (!prefs.wizard_completed) openSetupWizard({ required: true });
+// Home and the SetupWizard island both start it; the second start used to arrive after
+// the user had moved on and put the wizard back on its first step.
+let wizardInit: Promise<void> | null = null;
+
+export function initSetupWizard(): Promise<void> {
+  if (!wizardInit) {
+    wizardInit = (async () => {
+      wireWizard();
+      const prefs = await loadPrefs();
+      if (!prefs.wizard_completed) openSetupWizard({ required: true });
+    })();
+  }
+  return wizardInit;
 }
