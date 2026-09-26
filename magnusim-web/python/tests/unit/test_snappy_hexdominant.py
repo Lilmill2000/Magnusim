@@ -11,10 +11,13 @@ from cfddesk.mesh.snappy_hexdominant import (
     fineness_params,
     read_feature_marks,
     read_polymesh_counts,
+    refinement_level_for_size,
     scale_body1_stl,
     write_hexdominant_dicts,
+    write_refine_stls,
 )
 from cfddesk.mesh.snappy_policy import SNAPPY_GEOMETRY_REV
+from cfddesk.mesh.standard_hexcore import LayerPatchSpec
 
 # Two triangles in mm spanning x 0..10, y -5..20, z 3..40.
 _TRIS_MM = [
@@ -204,3 +207,48 @@ def test_snappy_template_exists():
     text = sh.read_text(encoding="utf-8")
     assert "__DST__" in text and "MAGNUSIM_EVENT" in text
     assert "python3" not in text  # no embedded python heredocs
+
+
+def test_refinement_level_meets_requested_size():
+    assert refinement_level_for_size(0.02, 0.02) == 0
+    assert refinement_level_for_size(0.02, 0.011) == 1
+    assert refinement_level_for_size(0.02, 0.005) == 2
+    assert refinement_level_for_size(0.02, 0.0049) == 3
+    assert refinement_level_for_size(0.02, 1e-9) == 8
+
+
+def test_refinements_reach_snappy_dict(tmp_path: Path):
+    """Surface custom sizing -> refinementRegions; Inflate -> its own absolute layers."""
+    tri_dir = tmp_path / "constant" / "triSurface"
+    tri_dir.mkdir(parents=True)
+    pts = [(0, 0, 0), (0.01, 0, 0), (0, 0.01, 0), (0, 0, 0.01)]
+    tris = [(0, 1, 2), (0, 1, 3)]
+    regions = write_refine_stls(
+        tri_dir, pts, tris, [4, 7], [{"face_ids": [7], "level": 4, "distance_m": 0.006}, {"face_ids": [99]}]
+    )
+    assert [r["name"] for r in regions] == ["refine_1"]
+    assert struct.unpack("<I", (tri_dir / "refine_1.stl").read_bytes()[80:84])[0] == 1
+    params = fineness_params(5, bounds_m=_BOUNDS_M)
+    meta = write_hexdominant_dicts(
+        tmp_path,
+        block=params["block"],
+        feature_level=params["feature_level"],
+        walls_level=params["walls_level"],
+        add_layers=False,
+        snap=params["snap"],
+        bounds_m=_BOUNDS_M,
+        patches=[{"name": "walls", "type": "wall", "file": "patch_walls.stl"}],
+        layer_specs=[
+            LayerPatchSpec(name="inflate_1", n_layers=5, thickness_m=0.004, expansion=1.2, honor_absolute=True)
+        ],
+        refine_regions=regions,
+    )
+    text = (tmp_path / "system" / "snappyHexMeshDict").read_text(encoding="utf-8")
+    assert "addLayers       true;" in text
+    assert "mode distance;" in text and "levels ((0.006 4));" in text
+    block = text.split("inflate_1", 1)[1].split("}", 1)[0]
+    assert "nSurfaceLayers 5;" in block and "relativeSizes false;" in block and "thickness 0.004;" in block
+    # Without an explicit model snappy keeps the global finalLayerThickness model and drops ``thickness``.
+    assert "thicknessModel overallAndExpansion;" in block and "minThickness 0.0004;" in block
+    assert "nSurfaceLayers 2;" not in text  # Automatic BL off: plain walls get no layers
+    assert meta["refinement_regions"] == [{"name": "refine_1", "level": 4, "distance_m": 0.006}]

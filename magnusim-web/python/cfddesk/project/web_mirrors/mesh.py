@@ -12,6 +12,9 @@ from cfddesk.project.web_mirrors._common import (
     _utc_now,
 )
 
+# Mesh engines a user can pick (Advanced → Mesh engine). Hex-dominant is snappyHexMesh.
+PRODUCT_MESH_ENGINES = ("standard", "cfmesh", "snappy_hexdominant")
+
 
 def _mesh_entry(m: Any, *, sim_id: str | None) -> dict[str, Any]:
     settings = m.settings.to_dict() if hasattr(m.settings, "to_dict") else {}
@@ -23,7 +26,7 @@ def _mesh_entry(m: Any, *, sim_id: str | None) -> dict[str, Any]:
     # Standard hex-core impl hint (cfmesh|bodyfit), not the generate path picker.
     # Mapping it flipped new meshes onto legacy cfMesh / away from Cyclone path.
     ui_engine = str(meta.get("ui_mesh_engine") or "standard").strip().lower()
-    if ui_engine not in ("standard", "cfmesh"):
+    if ui_engine not in PRODUCT_MESH_ENGINES:
         ui_engine = "standard"
     web_settings = {
         "name": m.name,
@@ -163,10 +166,10 @@ def from_web_mesh(doc: dict | None) -> tuple[list[Any], str]:
             ui_engine = str(meta.get("ui_mesh_engine") or "standard").strip().lower()
         else:
             adv_engine = str(adv.get("mesh_engine") or "standard").strip().lower()
-            if adv_engine not in ("standard", "cfmesh"):
+            if adv_engine not in PRODUCT_MESH_ENGINES:
                 adv_engine = "standard"
             ui_engine = "standard" if adv_engine == "cfmesh" else adv_engine
-        if ui_engine not in ("standard", "cfmesh"):
+        if ui_engine not in PRODUCT_MESH_ENGINES:
             ui_engine = "standard"
         # Explicit legacy Advanced=cfmesh only. Do not treat default hexcore_backend as
         # product mesh_engine (that routed Standard generates off Cyclone gmsh-hexcore).

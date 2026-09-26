@@ -27,7 +27,10 @@ describe('gate:h4-renders', () => {
             control_schema: filterSchema,
           },
         ],
-        filter: [{ key: 'cut_plane', label: 'Cut plane', schema: filterSchema }],
+        filter: [
+          { key: 'cut_plane', label: 'Cut plane', plugin: 'builtin', schema: filterSchema },
+          { key: 'probe_line', label: 'Probe line', plugin: 'demo-plugin', schema: filterSchema },
+        ],
       },
     });
   });
@@ -83,7 +86,9 @@ describe('gate:h4-renders', () => {
         <PluginsStep />
       </>,
     );
-    expect(screen.getByText('Cut plane')).toBeInTheDocument();
+    // Built-in filters keep their own FILTERS panel controls; only plugin filters get a form.
+    expect(screen.queryByText('Cut plane')).toBeNull();
+    expect(screen.getByText('Probe line')).toBeInTheDocument();
     expect(screen.getByText('Legend')).toBeInTheDocument();
     expect(screen.getByText('Timeline')).toBeInTheDocument();
     expect(screen.getByLabelText('Compare run A')).toBeInTheDocument();

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { publishBodySelection } from '../../viewer/pick';
-import { MaterialsPanel, airRecord, toggleVolume } from './MaterialsPanel';
+import { MaterialsPanel, airRecord, fluidKindOf, studyFluid, toggleVolume } from './MaterialsPanel';
 
 type Rpc = (method: string, params?: { body?: { air?: Record<string, unknown> } }) => Promise<unknown>;
 const workerRpc = vi.fn<Rpc>(async (_method, params) => ({ air: params?.body?.air, materials: [params?.body?.air] }));
@@ -51,6 +51,16 @@ function lastSavedAir(): Record<string, unknown> {
 }
 
 describe('helpers', () => {
+  it('tells Air, Water and custom fluids apart and finds the study fluid', () => {
+    expect(fluidKindOf({ name: 'Air' })).toBe('Air');
+    expect(fluidKindOf({ name: 'Water' })).toBe('Water');
+    expect(fluidKindOf({ name: 'Oil', library: 'CUSTOM' })).toBe('Custom');
+    expect(fluidKindOf({ name: 'Oil' })).toBe('Custom');
+    expect(fluidKindOf(null)).toBe('Air');
+    expect(studyFluid([{ name: 'Air' }, { name: 'Water', assigned_volumes: ['Body1'] }])?.name).toBe('Water');
+    expect(studyFluid([{ name: 'X' }, { name: 'Air' }])?.name).toBe('Air');
+  });
+
   it('toggles one body', () => {
     expect(toggleVolume(['Body1'], 'Body1')).toEqual([]);
     expect(toggleVolume(['Body1'], 'Body2')).toEqual(['Body1', 'Body2']);
@@ -73,13 +83,50 @@ describe('helpers', () => {
 });
 
 describe('MaterialsPanel', () => {
-  it('shows tiny viscosity in scientific notation and Air as the only fluid', async () => {
+  it('shows tiny viscosity in scientific notation and offers Air, Water and a custom fluid', async () => {
     renderPanel();
     const nu = screen.getByLabelText('Kinematic viscosity') as HTMLInputElement;
     await waitFor(() => expect(nu.value).toBe('1.5290e-5'));
-    expect(screen.queryByText('Water')).toBeNull();
-    expect(screen.queryByText('Custom')).toBeNull();
+    const fluid = screen.getByLabelText('Fluid') as HTMLSelectElement;
+    expect(fluid.value).toBe('Air');
+    expect([...fluid.options].map((o) => o.text)).toEqual(['Air', 'Water', 'Custom fluid']);
     expect(screen.getByText(/Picking bodies: click a body in the viewport/)).toBeInTheDocument();
+  });
+
+  it('choosing Water saves water properties under that name', async () => {
+    renderPanel();
+    await waitFor(() => expect((screen.getByLabelText('Kinematic viscosity') as HTMLInputElement).value).toBe('1.5290e-5'));
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Fluid'), { target: { value: 'Water' } });
+    });
+    await waitFor(() => expect(workerRpc).toHaveBeenCalled());
+    expect(lastSavedAir()).toMatchObject({
+      id: 'mat1',
+      name: 'Water',
+      library: 'WATER',
+      kinematic_viscosity: 1.004e-6,
+      density: 998.2,
+      assigned_volumes: ['Body1'],
+    });
+  });
+
+  it('a custom fluid keeps its name and typed properties', async () => {
+    renderPanel();
+    await waitFor(() => expect((screen.getByLabelText('Kinematic viscosity') as HTMLInputElement).value).toBe('1.5290e-5'));
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Fluid'), { target: { value: 'Custom' } });
+    });
+    const name = screen.getByLabelText('Fluid name') as HTMLInputElement;
+    fireEvent.change(name, { target: { value: 'Glycol mix' } });
+    await act(async () => {
+      fireEvent.blur(name);
+    });
+    const rho = screen.getByLabelText('Density') as HTMLInputElement;
+    fireEvent.change(rho, { target: { value: '1070' } });
+    await act(async () => {
+      fireEvent.blur(rho);
+    });
+    await waitFor(() => expect(lastSavedAir()).toMatchObject({ name: 'Glycol mix', library: 'CUSTOM', density: 1070 }));
   });
 
   it('saves a typed viscosity through materials.set and hands it to the runtime', async () => {

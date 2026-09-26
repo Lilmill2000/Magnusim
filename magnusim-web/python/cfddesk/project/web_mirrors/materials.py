@@ -1,7 +1,6 @@
 """Materials sibling mirror converters."""
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from cfddesk.project.web_mirrors._common import _all_sims, _matches_study, _primary_sim, _utc_now
@@ -42,17 +41,10 @@ def to_web_materials(
         for m in list(getattr(sim, "materials", None) or []):
             if isinstance(m, dict):
                 out_mats.append(_material_row(m, sim_id=sid, project_id=project_id))
-    air = next(
-        (
-            m
-            for m in out_mats
-            if re.search(r"air", str(m.get("name") or ""), re.I)
-            and _matches_study(m, sim_id, sim_id)
-        ),
-        None,
-    )
-    if air is None:
-        air = next((m for m in out_mats if re.search(r"air", str(m.get("name") or ""), re.I)), None)
+    # "air" is the study's fluid (Air, Water or custom), whatever its name.
+    from cfddesk.project.web_adapter import study_fluid
+
+    air = study_fluid([m for m in out_mats if _matches_study(m, sim_id, sim_id)]) or study_fluid(out_mats)
     ts = updated_at or _utc_now()
     doc: dict[str, Any] = {
         "materials": out_mats,

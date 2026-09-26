@@ -9,7 +9,8 @@ export function formatSci(value: number | null | undefined): string {
   if (value === 0) return '0';
   const magnitude = Math.abs(value);
   if (magnitude < SMALL || magnitude >= LARGE) return value.toExponential(4);
-  return String(value);
+  // Converted units (62.31559031… lb/ft³) read as 62.3156; typed values keep their digits.
+  return String(Number(value.toPrecision(6)));
 }
 
 export function parseSci(text: string): number | null {
@@ -59,6 +60,11 @@ export function SciNumberInput({
 
   function commit() {
     setEditing(false);
+    // Leaving the field untouched must not save the rounded text over the stored value.
+    if (text.trim() === formatSci(lastValue.current)) {
+      setText(formatSci(lastValue.current));
+      return;
+    }
     const next = parseSci(text);
     if (next == null) {
       setText(formatSci(lastValue.current));

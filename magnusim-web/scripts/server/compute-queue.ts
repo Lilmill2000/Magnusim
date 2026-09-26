@@ -27,6 +27,8 @@ export type ComputeStartResult = {
   busy?: boolean;
   missing?: boolean;
   skip?: boolean;
+  /** Why the start was refused (shown to the user when the job leaves the queue). */
+  error?: string;
 };
 
 export type ComputeLiveSnap = {
@@ -56,6 +58,21 @@ export type ComputeQueueSnapshot = {
   live: ComputeLiveSnap | null;
   /** The running job in any project: what a queued row is waiting on. */
   busy?: ComputeLiveSnap | null;
+  /** Jobs that left the queue because they could not start (newest last). */
+  failed?: ComputeQueueFailure[];
+};
+
+/** A queued job that could not start; it is taken off the queue so the rest can run. */
+export type ComputeQueueFailure = {
+  id: string;
+  kind: ComputeQueueKind;
+  mesh_id: string | null;
+  run_id: string | null;
+  simulation_id: string | null;
+  project_id: string | null;
+  name: string;
+  error: string;
+  at: number;
 };
 
 /**
@@ -79,6 +96,12 @@ let loaded = false;
 let kicking = false;
 let kickTimer: ReturnType<typeof setTimeout> | null = null;
 let deps: ComputeQueueDeps = {};
+let failures: ComputeQueueFailure[] = [];
+/** Refused starts per queue row: a refusal right after its mesh finished is a race, not a failure. */
+const holdTries = new Map<string, number>();
+const HOLD_RETRIES = 3;
+let holdRetryMs = 2000;
+const FAILURE_KEEP_MS = 15 * 60 * 1000;
 
 function normId(value: unknown): string {
   return value == null || value === '' ? '' : String(value);
@@ -132,14 +155,6 @@ export function queueHasMeshDepViolation(list: ComputeQueueItem[] | null | undef
     if (meshAt >= 0 && i < meshAt) return true;
   }
   return false;
-}
-
-function insertSolveAfterMesh(list: ComputeQueueItem[], item: ComputeQueueItem): ComputeQueueItem[] {
-  const next = list.slice();
-  const at = queueIndexOfMesh(next, item.mesh_id, item.project_id);
-  if (at < 0) next.push(item);
-  else next.splice(at + 1, 0, item);
-  return next;
 }
 
 function insertMeshBeforeDependentSolves(list: ComputeQueueItem[], item: ComputeQueueItem): ComputeQueueItem[] {
@@ -221,14 +236,14 @@ export function startResultFromEngine(started: {
   const status = started && started.status;
   const err = String((started && started.bodyExtra && started.bodyExtra.error) || '');
   if (status === 409 || /already running|already in progress|already solving/i.test(err)) {
-    if (/already finished/i.test(err)) return { ok: false, skip: true };
-    if (/already solving/i.test(err)) return { ok: false, skip: true };
-    return { ok: false, busy: true };
+    if (/already finished/i.test(err)) return { ok: false, skip: true, error: err };
+    if (/already solving/i.test(err)) return { ok: false, skip: true, error: err };
+    return { ok: false, busy: true, error: err };
   }
   if (status === 404 || /not found|was deleted|mesh_id required/i.test(err)) {
-    return { ok: false, missing: true };
+    return { ok: false, missing: true, error: err };
   }
-  return { ok: false };
+  return { ok: false, error: err };
 }
 
 function normalizeItem(raw: unknown): ComputeQueueItem | null {
@@ -292,7 +307,11 @@ export function resetComputeQueueForTests(opts?: {
   items?: ComputeQueueItem[] | null;
   deps?: ComputeQueueDeps;
   reload?: boolean;
+  holdRetryMs?: number;
 }): void {
+  holdTries.clear();
+  failures = [];
+  holdRetryMs = opts && opts.holdRetryMs != null ? opts.holdRetryMs : 2000;
   if (kickTimer) {
     clearTimeout(kickTimer);
     kickTimer = null;
@@ -315,15 +334,27 @@ export function snapshotComputeQueue(projectId?: string | null): ComputeQueueSna
   ensureLoaded();
   const raw = deps.live ? deps.live() : null;
   const live = raw && raw.kind ? raw : null;
-  if (projectId === undefined) {
-    return { ok: true, items: items.slice(), live, busy: live };
+  const now = Date.now();
+  failures = failures.filter((f) => now - f.at < FAILURE_KEEP_MS);
+  if (projectId === undefined || projectId === null || projectId === '') {
+    return {
+      ok: true,
+      items: items.map((row, i) => ({ ...row, position: i + 1 })),
+      live,
+      busy: live,
+      failed: failures.slice(),
+    };
   }
   const want = normId(projectId);
-  const rows = want
-    ? items.map((row, i) => ({ ...row, position: i + 1 })).filter((row) => normId(row.project_id) === want)
-    : [];
-  const liveOk = live && want && normId(live.project_id) === want ? live : null;
-  return { ok: true, items: rows, live: liveOk, busy: live };
+  const rows = items.map((row, i) => ({ ...row, position: i + 1 })).filter((row) => normId(row.project_id) === want);
+  const liveOk = live && normId(live.project_id) === want ? live : null;
+  return {
+    ok: true,
+    items: rows,
+    live: liveOk,
+    busy: live,
+    failed: failures.filter((f) => normId(f.project_id) === want),
+  };
 }
 
 export function enqueueComputeJob(
@@ -339,7 +370,7 @@ export function enqueueComputeJob(
     return { ok: false, error: 'project_id required', items: items.slice() };
   }
   if (item.kind === 'solve' && opts && opts.hasMaterial === false) {
-    return { ok: false, error: 'Assign Air to a volume first', items: items.slice() };
+    return { ok: false, error: 'Assign a fluid to a volume first', items: items.slice() };
   }
   const existing = items.find((row) => jobKey(row) === jobKey(item));
   if (existing) {
@@ -347,11 +378,13 @@ export function enqueueComputeJob(
   }
   if (item.kind === 'mesh') {
     items = insertMeshBeforeDependentSolves(items, item);
-  } else if (opts && opts.meshGenerating) {
-    const meshAlreadyQueued = queueIndexOfMesh(items, item.mesh_id, item.project_id) >= 0;
-    items = meshAlreadyQueued ? insertSolveAfterMesh(items, item) : [item, ...items];
   } else {
-    items = insertSolveAfterMesh(items, item);
+    // First come, first served. A run whose mesh is queued goes to the back,
+    // which is behind that mesh anyway; one whose mesh is generating right now
+    // waits for it at the head (kick checks meshGenerating). Putting it right
+    // after its mesh, or at the front, let it jump jobs queued before it,
+    // including other projects' jobs.
+    items = [...items, item];
   }
   persist();
   return { ok: true, item, items: items.slice() };
@@ -410,6 +443,7 @@ export function removeComputeJob(kind: unknown, id: unknown, projectId?: unknown
   const want = normId(id);
   if (!want) return snapshotComputeQueue();
   const before = items.length;
+  const was = items.slice();
   items = items.filter((row) => {
     if (row.id === want) return false;
     if (!sameProject(row, projectId)) return true;
@@ -420,7 +454,10 @@ export function removeComputeJob(kind: unknown, id: unknown, projectId?: unknown
     }
     return true;
   });
-  if (items.length !== before) persist();
+  if (items.length !== before) {
+    persist();
+    for (const row of was) if (!items.includes(row)) logQueue('removed', row, `request ${String(kind || '')} ${want}`);
+  }
   return snapshotComputeQueue();
 }
 
@@ -434,9 +471,24 @@ export function dropComputeJobsForMesh(meshId: unknown, projectId?: unknown): Co
   return snapshotComputeQueue();
 }
 
+/**
+ * A tab only lists (and drags) its own project's rows. Reorder just those rows
+ * among the places they already hold, so another project's job keeps its place
+ * instead of dropping to the back.
+ */
+function reorderWithinSlots(list: ComputeQueueItem[], ids: unknown): ComputeQueueItem[] {
+  const want = (Array.isArray(ids) ? ids : []).map((x) => String(x || '')).filter(Boolean);
+  const inSet = new Set(want);
+  const moving = list.filter((row) => row.id && inSet.has(row.id));
+  if (moving.length < 2) return list.slice();
+  const ordered = orderedQueueItems(moving, want);
+  let k = 0;
+  return list.map((row) => (row.id && inSet.has(row.id) ? ordered[k++] : row));
+}
+
 export function reorderComputeQueue(ids: unknown): ComputeQueueSnapshot & { error?: string } {
   ensureLoaded();
-  const next = orderedQueueItems(items, ids);
+  const next = reorderWithinSlots(items, ids);
   if (queueHasMeshDepViolation(next)) {
     const snap = snapshotComputeQueue();
     return { ...snap, ok: false, error: 'A run cannot sit above the mesh it uses' };
@@ -444,6 +496,13 @@ export function reorderComputeQueue(ids: unknown): ComputeQueueSnapshot & { erro
   items = next;
   persist();
   return snapshotComputeQueue();
+}
+
+/** One line per queue decision, so a job that vanished can be traced. */
+function logQueue(what: string, row: ComputeQueueItem | null | undefined, extra?: string): void {
+  if (process.env.MAGNUSIM_QUEUE_QUIET === '1') return;
+  const id = row ? `${row.kind} ${row.kind === 'mesh' ? row.mesh_id : row.run_id} (${row.project_id})` : '';
+  console.info(`[CFD queue] ${what} ${id}${extra ? ' — ' + extra : ''}`);
 }
 
 function slotBusy(): boolean {
@@ -458,7 +517,10 @@ function meshGenerating(meshId: unknown, projectId: unknown): boolean {
 
 export async function kickComputeQueue(projectId?: string | null): Promise<ComputeQueueSnapshot> {
   ensureLoaded();
-  const scoped = projectId !== undefined;
+  // Any tab may ask for a kick, but the queue runs in its own order across
+  // projects: the head starts, whichever project asked. projectId only scopes
+  // the snapshot sent back.
+  const scoped = projectId !== undefined && projectId !== null && projectId !== '';
   const want = scoped ? normId(projectId) : '';
   const snap = () => (scoped ? snapshotComputeQueue(want) : snapshotComputeQueue());
   if (kicking) return snap();
@@ -466,7 +528,7 @@ export async function kickComputeQueue(projectId?: string | null): Promise<Compu
   try {
     for (;;) {
       if (slotBusy()) return snap();
-      const next = scoped ? items.find((row) => normId(row.project_id) === want) : items[0];
+      const next = items[0];
       if (!next) return snap();
       if (next.kind === 'solve' && meshGenerating(next.mesh_id, next.project_id)) {
         return snap();
@@ -480,11 +542,42 @@ export async function kickComputeQueue(projectId?: string | null): Promise<Compu
             ? await deps.startSolve(next)
             : { ok: false };
       const action = queueKickAfterStart(started, slotBusy() || !!(started && started.ok));
+      logQueue(`start -> ${action}`, next, started && started.error ? String(started.error) : '');
       if (action === 'skip') {
         items = items.filter((row) => row.id !== next.id);
         persist();
         continue;
       }
+      if (action === 'hold') {
+        // Refused (mesh not ready, no fluid, bad settings…). Right after its mesh
+        // finishes a run can be refused for a moment, so try again a few times
+        // while it keeps its place at the head. If it still cannot start, holding
+        // it there would stall every job behind it in every project: take it off,
+        // say why, and start the next one.
+        const tries = (holdTries.get(next.id) || 0) + 1;
+        if (tries <= HOLD_RETRIES) {
+          holdTries.set(next.id, tries);
+          scheduleComputeQueueKick(holdRetryMs * tries);
+          return snap();
+        }
+        holdTries.delete(next.id);
+        items = items.filter((row) => row.id !== next.id);
+        failures.push({
+          id: next.id,
+          kind: next.kind,
+          mesh_id: next.mesh_id ?? null,
+          run_id: next.run_id ?? null,
+          simulation_id: next.simulation_id ?? null,
+          project_id: next.project_id ?? null,
+          name: next.name || (next.kind === 'mesh' ? 'Mesh' : 'Run'),
+          error: (started && started.error) || 'Could not start',
+          at: Date.now(),
+        });
+        if (failures.length > 50) failures = failures.slice(-50);
+        persist();
+        continue;
+      }
+      holdTries.delete(next.id);
       if (action === 'dequeue') {
         items = items.filter((row) => row.id !== next.id);
         persist();

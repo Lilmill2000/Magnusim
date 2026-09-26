@@ -97,12 +97,20 @@ function FilterSection({ row, projectId }: { row: RegistryRow; projectId: string
   );
 }
 
-/** One section per registry filter, plus plugin sections for this place. */
+/**
+ * Plugin sections for the FILTERS panel. Built-in filters (cutting plane, particle
+ * trace, iso, plot, inspect, mesh views) already have their own controls in that
+ * panel, so only filters a plugin adds get a generated form here.
+ */
+export function pluginFilterRows(rows: RegistryRow[]): RegistryRow[] {
+  return rows.filter((row) => row.plugin && row.plugin !== 'builtin');
+}
+
 export function FiltersPanel() {
   useViewer();
   usePanelTick();
   const projectId = useProjectStore((s) => s.projectId);
-  const filters = (useProjectStore((s) => s.registry?.filter) || []) as RegistryRow[];
+  const filters = pluginFilterRows((useProjectStore((s) => s.registry?.filter) || []) as RegistryRow[]);
   if (!projectId) return null;
   const placed = panelsFor('filters');
   const widgets = filterWidgetEntries();

@@ -93,6 +93,51 @@ export function velocityUnits(velocityType?: string, flowRateType?: string): str
   return ['m/s', 'ft/s', 'ft/min'];
 }
 
+/** SI factor for each inlet/outlet unit: m/s, m³/s or kg/s. */
+const TO_SI: Record<string, number> = {
+  'm/s': 1,
+  'ft/s': 0.3048,
+  'ft/min': 0.00508,
+  'm³/s': 1,
+  'ft³/min': 0.00047194745,
+  'kg/s': 1,
+  'lb/s': 0.45359237,
+};
+
+type FlowKind = 'velocity' | 'volume' | 'mass';
+
+function flowKind(velocityType?: string, flowRateType?: string): FlowKind {
+  if (velocityType !== 'Flow rate') return 'velocity';
+  return flowRateType === 'Mass flow' ? 'mass' : 'volume';
+}
+
+function roundSig(n: number): number {
+  return Number(n.toPrecision(6));
+}
+
+/**
+ * The same physical flow in another quantity: switching Velocity type or Flow rate
+ * type converts the number (per face, v·A = Q, ρ·Q = ṁ) instead of reusing it, so
+ * 5 m/s never silently becomes 5 m³/s. Without a face area it falls back to a
+ * safe 1 m/s-equivalent through a 0.01 m² face.
+ */
+export function convertFlowValue(
+  value: unknown,
+  from: { velocityType?: string; flowRateType?: string; unit: string },
+  to: { velocityType?: string; flowRateType?: string; unit: string },
+  basis: { face_area_m2: number | null; density: number },
+): number {
+  const fromKind = flowKind(from.velocityType, from.flowRateType);
+  const toKind = flowKind(to.velocityType, to.flowRateType);
+  const area = basis.face_area_m2 && basis.face_area_m2 > 0 ? basis.face_area_m2 : 0.01;
+  const rho = basis.density > 0 ? basis.density : 1.196;
+  let si = Number(value) * (TO_SI[from.unit] ?? 1);
+  if (!Number.isFinite(si)) si = fromKind === 'velocity' ? 1 : fromKind === 'volume' ? area : rho * area;
+  const velocity = fromKind === 'velocity' ? si : fromKind === 'volume' ? si / area : si / (rho * area);
+  const out = toKind === 'velocity' ? velocity : toKind === 'volume' ? velocity * area : velocity * area * rho;
+  return roundSig(out / (TO_SI[to.unit] ?? 1));
+}
+
 const PRESSURE_UNITS = ['Pa', 'kPa', 'psi'];
 
 function unitFor(current: string | undefined, units: string[], imperial: boolean): string {
@@ -393,10 +438,22 @@ export function BcEditor() {
     const direction = bc.direction || 'Normal to face';
     const vec = Array.isArray(bc.vector) ? bc.vector : [0, 0, 1];
     const valueLabel = vt === 'Flow rate' ? (fr === 'Mass flow' ? 'Mass flow' : 'Volumetric flow') : 'Velocity';
+    // Changing what the number means converts it to the same physical flow.
+    const switchKind = (nextVt: string, nextFr: string) => {
+      const nextUnit = unitFor(undefined, velocityUnits(nextVt, nextFr), imperial);
+      const basis = window.__CFD_BC_FLOW_BASIS__?.(bc.faces || []) || { face_area_m2: null, density: 1.196 };
+      const value = convertFlowValue(
+        bc.value,
+        { velocityType: vt, flowRateType: fr, unit },
+        { velocityType: nextVt, flowRateType: nextFr, unit: nextUnit },
+        basis,
+      );
+      save({ velocity_type: nextVt, flow_rate_type: nextFr, value, unit: nextUnit });
+    };
     fields = (
       <>
         <Row label="Velocity type">
-          <Select label="Velocity type" value={vt} options={['Fixed', 'Flow rate']} onChange={(v) => save({ velocity_type: v })} />
+          <Select label="Velocity type" value={vt} options={['Fixed', 'Flow rate']} onChange={(v) => switchKind(v, fr)} />
         </Row>
         {vt === 'Flow rate' ? (
           <Row label="Flow rate type">
@@ -404,7 +461,7 @@ export function BcEditor() {
               label="Flow rate type"
               value={fr}
               options={['Volumetric flow', 'Mass flow']}
-              onChange={(v) => save({ flow_rate_type: v })}
+              onChange={(v) => switchKind(vt, v)}
             />
           </Row>
         ) : null}

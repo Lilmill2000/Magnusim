@@ -85,6 +85,10 @@ declare global {
     __CFD_STUDY_UPDATE__?: (patch: Record<string, unknown>) => Promise<unknown>;
     __CFD_STUDY_TIME__?: (value: import('../panels/legacyBridge').TimeDependency) => Promise<unknown>;
     __CFD_STUDY_DELETE__?: () => Promise<unknown>;
+    __CFD_MESH_SAVE__?: (meshId: string | undefined, settings: Record<string, unknown>) => Promise<unknown>;
+    __CFD_PROJECT_UNITS__?: () => string | null;
+    __CFD_BC_FLOW_BASIS__?: (faces: string[]) => { face_area_m2: number | null; density: number };
+    __CFD_CREATE_PICK_ANALYSIS__?: (row: { label?: string; time_dependency?: string }) => void;
     __CFD_MATERIAL_APPLY__?: (material: Record<string, unknown>, projectId?: string) => unknown;
     __CFD_MATERIAL_DELETE__?: () => Promise<unknown>;
     __CFD_GEOMETRY_BODIES__?: () => string[];

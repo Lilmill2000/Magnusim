@@ -19,7 +19,8 @@ PROVE_JS = WEB_ROOT / "scripts" / "__tests__" / "prove-registry-defaults.mjs"
 TOOLS = WEB_ROOT / "python" / "tools"
 
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
-EXPECTED_MESH_ENGINES = {"standard", "cfmesh"}
+# Hex-dominant is a product engine too: its choice persists (mesh_engine) like the others.
+EXPECTED_MESH_ENGINES = {"standard", "cfmesh", "snappy_hexdominant"}
 
 
 def test_committed_registry_has_analysis_and_mesher_keys():

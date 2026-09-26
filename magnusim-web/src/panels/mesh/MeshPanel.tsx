@@ -376,6 +376,12 @@ export function MeshSettings(props: IslandProps) {
     const scoped = ids();
     const settings = settingsFrom(values, nextEngine);
     const mesh = scoped.mesh_id || meshId || undefined;
+    // The runtime path merges into the stored mesh and keeps its catalog current.
+    const viaRuntime = window.__CFD_MESH_SAVE__;
+    if (viaRuntime) {
+      await viaRuntime(mesh, settings);
+      return settings;
+    }
     await workerRpc('mesh.set', {
       project_id: scoped.project_id,
       sim_id: scoped.simulation_id,

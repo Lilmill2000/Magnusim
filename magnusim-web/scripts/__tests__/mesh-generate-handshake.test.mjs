@@ -41,7 +41,9 @@ describe('mesh generate handshake', () => {
     try {
       const caseDir = join(root, 'case');
       mkdirSync(join(caseDir, 'constant', 'polyMesh'), { recursive: true });
-      writeFileSync(join(caseDir, 'constant', 'polyMesh', 'points'), 'FoamFile\n{\n}\n307529\n(\n)\n', 'utf8');
+      for (const name of ['points', 'faces', 'owner', 'neighbour', 'boundary']) {
+        writeFileSync(join(caseDir, 'constant', 'polyMesh', name), 'FoamFile\n{\n}\n307529\n(\n)\n', 'utf8');
+      }
       writeFileSync(
         join(caseDir, 'w21-counts.json'),
         JSON.stringify({ n_cells: 700209, n_points: 307529, n_faces: 1668556, generate_id: '846f4ad1' }),
@@ -53,6 +55,21 @@ describe('mesh generate handshake', () => {
       assert.equal(found.n_cells, 700209);
       assert.equal(found.generate_id, '846f4ad1');
       assert.equal(found.script_ok, true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not take a half-copied polyMesh (no neighbour/boundary) for a finished mesh', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cfd-mesh-hs-'));
+    try {
+      const caseDir = join(root, 'case');
+      mkdirSync(join(caseDir, 'constant', 'polyMesh'), { recursive: true });
+      for (const name of ['points', 'faces', 'owner']) {
+        writeFileSync(join(caseDir, 'constant', 'polyMesh', name), 'FoamFile\n{\n}\n1\n(\n)\n', 'utf8');
+      }
+      writeFileSync(join(caseDir, 'w21-counts.json'), JSON.stringify({ n_cells: 633201 }), 'utf8');
+      assert.equal(inspectGeneratedCase(caseDir), null);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -141,6 +141,17 @@ function adoptStudyTaggedList(prev, incoming, simId) {
  * "active project" is shared by all tabs and races with /api/project/open,
  * so reading it can hand this tab another project's settings.
  */
+/**
+ * Boot-time hydrates of each runtime module. They only mean something with a
+ * project open: on Home an unscoped call just answers 400 (strict scope), so
+ * return a promise that never settles and skip the request.
+ */
+function bootHydrateFetch(path, init) {
+  const qs = hashProjectQs();
+  if (!qs) return new Promise(() => {});
+  return fetch(path + qs, init);
+}
+
 function hashProjectQs(prefix = '?') {
   try {
     const route = parseHomeRoute();
@@ -1572,6 +1583,15 @@ document.addEventListener('visibilitychange', () => {
   }
   cancelVolumeIdleRelease();
   try { if (viewportOrient) viewportOrient.setEnabled(true); } catch (_) {}
+  // The queue watch skips hidden tabs; catch up now, not on its next tick.
+  try {
+    const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+    if (pid && typeof fetchComputeQueue === 'function') {
+      fetchComputeQueue('/api/compute-queue?project_id=' + encodeURIComponent(pid))
+        .then((j) => applyServerQueue(j, { quiet: true }))
+        .catch(() => {});
+    }
+  } catch (_) {}
   lastViewerCssSize = { w: -1, h: -1, pw: -1, ph: -1 };
   lastChromeInsetKey = '';
   scheduleViewerResize();
@@ -5062,6 +5082,8 @@ function bindParticleTrace(pd) {
   else {
     hidePtActors();
   }
+  // The Animation panel may have opened while the trace was still computing.
+  try { syncAnimChromeFromState(); } catch (_) {}
 }
 
 function ptFaceIsVelocityInlet(row) {
@@ -8443,6 +8465,15 @@ function hideRunResultsView(opts) {
       resetCameraClippingRangeLoose();
       renderWindow.render();
     } catch (_) {}
+  } else {
+    // Silent callers set their own view (mesh inspect, another run's results…);
+    // some (the mesh settings panel) never recompute the stage, which left the
+    // results toolbar and Iterations panel up over setup. Settle it next frame.
+    try {
+      requestAnimationFrame(() => {
+        try { applyWorkbenchStage(); } catch (_) {}
+      });
+    } catch (_) {}
   }
   try { scheduleResultsPrefetch(); } catch (_) {}
 }
@@ -8767,8 +8798,14 @@ function syncRunResultsPanel(statusText) {
 
 async function openRunResults(runId) {
   if (!runId) return;
-  const early = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
-  if (!runHasStarted(early)) return;
+  let early = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
+  if (!runHasStarted(early)) {
+    // After a reload the tree can list a finished run before its status is read;
+    // ask the server once instead of ignoring the click.
+    try { await refreshRunCatalog(); } catch (_) {}
+    early = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
+    if (!runHasStarted(early)) return;
+  }
   runCatalog.selected_run_id = runId;
   if (typeof expandRunFolders === 'function') expandRunFolders(runId);
   const selKey = 'runresults:' + runId;
@@ -10704,10 +10741,16 @@ function fillResultsCompareSelects() {
   const ob = resultsCompareOptionByValue(compareState.resB);
   const la = document.getElementById('compare-label-a');
   const lb = document.getElementById('compare-label-b');
-  if (la) la.textContent = oa ? oa.label : '';
+  // Run names repeat across studies ("Run 1"): name the study when there is more than one.
+  const multi = new Set(opts.map((o) => o.group || '')).size > 1;
+  const withStudy = (o, text) => {
+    const study = multi && o && o.rec && typeof studyNameForRun === 'function' ? studyNameForRun(o.rec) : '';
+    return study ? study + ' / ' + text : text;
+  };
+  if (la) la.textContent = oa ? withStudy(oa, oa.label) : '';
   if (lb) {
     lb.textContent = ob
-      ? (sync ? ((ob.rec && ob.rec.name) || ob.label) + ' · same filters as A' : ob.label)
+      ? withStudy(ob, sync ? ((ob.rec && ob.rec.name) || ob.label) + ' · same filters as A' : ob.label)
       : '';
   }
 }
@@ -11746,8 +11789,12 @@ async function loadResultsCompareB() {
 function defaultResultsCompareB(aValue) {
   const opts = resultsCompareOptions();
   const a = resultsCompareOptionByValue(aValue);
-  // Prefer another run (same kind of view), then another view of this run,
-  // then the run's live filters.
+  // Prefer another run of the same study, then any other run (same kind of
+  // view), then another view of this run, then the run's live filters.
+  const sameStudy = opts.find(
+    (o) => a && o.runId !== a.runId && o.viewId === '' && (o.group || '') === (a.group || '')
+  );
+  if (sameStudy) return sameStudy.value;
   const otherRun = opts.find((o) => a && o.runId !== a.runId && o.viewId === '');
   if (otherRun) return otherRun.value;
   const otherView = opts.find((o) => o.value !== aValue && o.viewId !== '');
@@ -11768,6 +11815,11 @@ async function startResultsCompare() {
   const bar = document.getElementById('compare-bar');
   if (bar) bar.hidden = false;
   setCompareButtonOn(true);
+  // The Results info flyout sits over pane A's run picker; fold it away.
+  const detail = document.getElementById('tree-detail');
+  if (detail && !detail.hidden && !detail.classList.contains('is-min')) {
+    document.getElementById('btn-min-tree-detail')?.click();
+  }
   applyCompareLayout(true);
   await waitForViewerPaint();
   const v = ensureCompareViewer();
@@ -13967,9 +14019,11 @@ function syncAnimChromeFromState() {
   if (note) {
     if (ptMode) {
       const rep = String(ptState.representation || 'Cylinders');
-      note.textContent = !ptLinePd || !ptState.enabled
+      note.textContent = !ptState.enabled
         ? 'Add a Particle Trace first — the animation moves its Spheres or Comets along the flow.'
-        : rep === 'Cylinders'
+        : !ptLinePd
+          ? 'The Particle Trace is still computing — press Play once its paths are drawn.'
+          : rep === 'Cylinders'
           ? 'Cylinders show the whole path. Play switches the trace to Comets so the motion is visible.'
           : 'Particles travel at the local flow speed; Pulses and Relative comet length are set on the Particle Trace.';
     } else {
@@ -14367,7 +14421,11 @@ function startPtAnimationPlay() {
   stopAnimationPlay();
   const hint = document.getElementById('anim-map-note');
   if (!ptLinePd || !ptState.enabled) {
-    if (hint) hint.textContent = 'Add a Particle Trace first — the animation moves its Spheres or Comets along the flow.';
+    if (hint) {
+      hint.textContent = ptState.enabled
+        ? 'The Particle Trace is still computing — press Play once its paths are drawn.'
+        : 'Add a Particle Trace first — the animation moves its Spheres or Comets along the flow.';
+    }
     publishW12({ note: 'no particle trace to animate' });
     return;
   }
@@ -15997,8 +16055,11 @@ function publishMeshJobState() {
   const meshReady = isGeneratedMeshReady();
   const failed = jobStatus === 'failed' && meshJob && mine;
   const queuedRow = queuedMeshRow(viewId || (!foreign && jobState.mesh_id) || null);
+  // jobState also carries solves: a finished run must not read as "Finishing mesh"
+  // on a mesh that was never generated. Only this mesh's own mesh job counts.
+  const ownJobStatus = meshJob && (mine || thisLive) ? jobStatus : 'idle';
   const phase = meshProgressPhase({
-    jobStatus,
+    jobStatus: ownJobStatus,
     computeLive: computeLive && (mine || thisLive),
     meshReady,
     failed,
@@ -16987,6 +17048,9 @@ function startJobPoll() {
       } catch (e) {
         console.warn('[CFD] boot hash project', e);
       }
+      // Home has no project: nothing to resume, and unscoped /api/case and
+      // /api/mesh calls only answer 400.
+      if (!hashId && !hashProjectQs()) return;
       let snap = null;
       try {
         snap = await fetchActiveCase();
@@ -17910,6 +17974,10 @@ function dismissTreeDetail() {
 /** Clicking the same sidebar row again closes its flyout. Use this for every new tree item. */
 function closeIfTreeItemOpen(selectKey) {
   if (!treeUi.openPanel || treeUi.selectedKey !== selectKey) return false;
+  // A restored selection (after a reload or project switch) can name a panel that
+  // is not on screen; the click must open it, not "close" nothing.
+  const detail = document.getElementById('tree-detail');
+  if (!detail || detail.hidden) return false;
   dismissTreeDetail();
   return true;
 }
@@ -17954,6 +18022,8 @@ function hideAllTreeDetails() {
     } catch (_) {}
     try { clearCadSelection(); } catch (_) {}
   }
+  // The monitor face picker shows the CAD over the results; give the view back.
+  if (wasAa) restoreResultsAfterFacePick();
   try {
     if (typeof meshCatalog !== 'undefined') meshCatalog.panel_open = false;
   } catch (_) {}
@@ -19778,7 +19848,7 @@ function refreshSetupTree() {
           '" data-label="Air" data-w18-air="1">' +
           '<div class="tree-row">' +
           (airKids ? '<span class="tw">' + treeTw('Air') + '</span>' : '') +
-          '<span class="tl">Air</span></div>' +
+          '<span class="tl">' + escapeHtml(String((_w18.material && _w18.material.name) || 'Air')) + '</span></div>' +
           airKids +
           '</li></ul>';
       }
@@ -20504,7 +20574,12 @@ async function selectStudyClient(simId) {
     try { syncViewportJobChip(); } catch (_) {}
     return window.__CFD_W17__;
   } finally {
-    if (token === studySwitchGen) studySwitchBusy = false;
+    if (token === studySwitchGen) {
+      studySwitchBusy = false;
+      // Panels closed during the switch skip repainting the CAD (a monitor's
+      // face colour stayed on); paint the current selection now.
+      try { applyGeomHighlight(); } catch (_) {}
+    }
   }
 }
 
@@ -20683,13 +20758,25 @@ function selectedCreateTimeDependency() {
   return (sel && sel.getAttribute('data-time-dep')) || 'Steady-state';
 }
 
-function setCreateTimeDependency(value) {
+function setCreateTimeDependency(value, opts) {
   document.querySelectorAll('#cs-time-dep .cs-time-opt').forEach((el) => {
     const on = el.getAttribute('data-time-dep') === value;
     el.classList.toggle('is-selected', on);
     el.setAttribute('aria-checked', on ? 'true' : 'false');
   });
+  // The analysis list (React) follows the toggle so the two never disagree.
+  if (!(opts && opts.fromList)) {
+    try { window.dispatchEvent(new CustomEvent('cfd:create-time-dep', { detail: { value } })); } catch (_) {}
+  }
 }
+
+/** The analysis list picked a row: show its name and match the time dependency toggle. */
+window.__CFD_CREATE_PICK_ANALYSIS__ = function pickCreateAnalysis(row) {
+  const title = document.querySelector('#cs-detail .cs-detail-title');
+  if (title && row && row.label) title.textContent = String(row.label);
+  const transient = /transient/i.test(String((row && row.time_dependency) || ''));
+  setCreateTimeDependency(transient ? 'Transient' : 'Steady-state', { fromList: true });
+};
 
 function fillCreateSimulationExtras() {
   const geoms = importedGeometries();
@@ -20855,7 +20942,16 @@ window.__CFD_W17_CREATE__ = createSimulationClient;
         // Unfold the new study so Run 1, Mesh and the other folders are in view.
         try { expandActiveStudyTree(); } catch (_) {}
         // Land on the run with Start and the reasons it cannot start yet (Simulation → Run 1).
-        const runs = typeof studyRunList === 'function' ? studyRunList() : [];
+        // A copied or cloned study already has runs on disk; hydrate does not list them,
+        // so read the run catalog before deciding to add a first run.
+        let runs = typeof studyRunList === 'function' ? studyRunList() : [];
+        if (!runs.length && copyFrom) {
+          try {
+            await refreshRunCatalog();
+            refreshSetupTree();
+          } catch (_) {}
+          runs = typeof studyRunList === 'function' ? studyRunList() : [];
+        }
         if (!runs.length) await createRunClient();
         else openRunPanel(runs[0].id || runs[0].run_id);
       })
@@ -20893,7 +20989,7 @@ window.__CFD_W17_CREATE__ = createSimulationClient;
     };
   }
 
-  fetch('/api/simulation' + hashProjectQs())
+  bootHydrateFetch('/api/simulation')
     .then((r) => r.json())
     .then(async (j) => {
       if (lastUnifiedProjectId) return;
@@ -21086,7 +21182,7 @@ function applyMaterialRecord(mat, projectId, opts) {
   materialCatalog.ready = true;
   materialCatalog.created = true;
   materialCatalog.libraryApplied = true;
-  materialCatalog.note = 'Air assigned to ' + ((row.assigned_volumes || []).join(', ') || '—');
+  materialCatalog.note = (row.name || 'Air') + ' assigned to ' + ((row.assigned_volumes || []).join(', ') || '—');
   if (!opts || opts.openPanel !== false) {
     expandTreeFolder('Materials', sid);
     expandTreeFolder('Air', sid);
@@ -21736,6 +21832,22 @@ function faceAreaOf(faceId) {
   }
   return area;
 }
+
+/**
+ * What a BC editor needs to turn a velocity into a flow rate and back: the mean
+ * area of one assigned face (m², the viewer works in mm) and the fluid density.
+ */
+window.__CFD_BC_FLOW_BASIS__ = function bcFlowBasis(faces) {
+  const ids = (Array.isArray(faces) ? faces : []).map(parseFaceId).filter((n) => n > 0);
+  let total = 0;
+  for (const id of ids) total += faceAreaOf(id);
+  const mat = (typeof materialCatalog !== 'undefined' && materialCatalog && materialCatalog.material) || null;
+  const rho = Number(mat && mat.density);
+  return {
+    face_area_m2: ids.length && total > 0 ? (total / ids.length) * 1e-6 : null,
+    density: Number.isFinite(rho) && rho > 0 ? rho : W18_AIR_DEFAULTS.density,
+  };
+};
 
 function minFaceDistance(idA, idB) {
   if (!cadTriCache.length) rebuildCadTriCache();
@@ -22951,6 +23063,7 @@ function applyCadSelectionDisplay() {
   if (treeUi.openPanel === 'bc-picker') {
     try { publishBcState(); } catch (_) {}
   }
+  try { syncRefPickerSelected(); } catch (_) {}
   try { applyGeomHighlight(); } catch (_) {}
   try { applyHiddenMeshDisplay(); } catch (_) {}
   try { applyEdgeSelectionDisplay(); } catch (_) {}
@@ -24337,7 +24450,7 @@ async function applyMaterialFromLibrary() {
     };
   }
 
-  fetch('/api/materials' + hashProjectQs())
+  bootHydrateFetch('/api/materials')
     .then((r) => r.json())
     .then((j) => {
       materialCatalog.hydrated = true;
@@ -24483,8 +24596,23 @@ function publishW19(extra) {
   return payload;
 }
 
-function prefersImperialUnits() {
+function globalPrefersImperialUnits() {
   return !!(window.__CFD_PREFS__ && /imperial/i.test(String(window.__CFD_PREFS__.units || '')));
+}
+
+/** Units of the open project (its own choice), or null when none is open or it has none. */
+function openProjectUnits() {
+  const p = w16State && w16State.project;
+  const u = p && p.id && String(p.units || '').trim();
+  return u || null;
+}
+window.__CFD_PROJECT_UNITS__ = openProjectUnits;
+
+/** The open project's units win; Settings only sets the default for new projects. */
+function prefersImperialUnits() {
+  const u = openProjectUnits();
+  if (u) return /imperial/i.test(u);
+  return globalPrefersImperialUnits();
 }
 
 function formatConvertedNumber(n) {
@@ -24642,9 +24770,15 @@ async function persistProjectUnits(imperial) {
   }
 }
 
-async function applyPreferredUnitsToOpenProject() {
+/**
+ * Bring the open project's entered values to one unit system. On open that is the
+ * project's own units. From the Settings wizard (fromPrefs) it is the new global
+ * choice, and the project is switched to it, as the wizard's Units step says.
+ */
+async function applyPreferredUnitsToOpenProject(opts) {
   if (!currentProjectId()) return false;
-  const imperial = prefersImperialUnits();
+  const fromPrefs = !!(opts && opts.fromPrefs);
+  const imperial = fromPrefs ? globalPrefersImperialUnits() : prefersImperialUnits();
   const changedBcs = [];
   for (const bc of allProjectBcs()) {
     if (convertBcRecord(bc, imperial)) changedBcs.push(bc);
@@ -24655,7 +24789,9 @@ async function applyPreferredUnitsToOpenProject() {
   }
   try { await persistConvertedBcs(changedBcs); } catch (e) { console.warn('[CFD] convert BCs', e); }
   try { await persistConvertedRefs(changedRefs); } catch (e) { console.warn('[CFD] convert refs', e); }
-  try { await persistProjectUnits(imperial); } catch (_) {}
+  if (fromPrefs) {
+    try { await persistProjectUnits(imperial); } catch (_) {}
+  }
   try { syncBcEditorFields(); } catch (_) {}
   try { if (typeof syncRefEditorFields === 'function') syncRefEditorFields(); } catch (_) {}
   try { window.dispatchEvent(new CustomEvent('cfd:material')); } catch (_) {}
@@ -24669,7 +24805,7 @@ async function applyPreferredUnitsToOpenProject() {
   return changedBcs.length + changedRefs.length > 0;
 }
 
-window.__CFD_APPLY_PREFERRED_UNITS__ = applyPreferredUnitsToOpenProject;
+window.__CFD_APPLY_PREFERRED_UNITS__ = () => applyPreferredUnitsToOpenProject({ fromPrefs: true });
 
 function syncBcAssignList() {
   const faces = bcCatalog.draft_faces || [];
@@ -25112,7 +25248,8 @@ function newClientBcId() {
 async function createBcClient(bcType, opts) {
   const pendingFaces = Array.isArray(opts && opts.faces) ? opts.faces.slice() : pendingCadFaceLabels();
   const pid = currentProjectId();
-  const imperial = !!(window.__CFD_PREFS__ && /imperial/i.test(String(window.__CFD_PREFS__.units || '')));
+  // New BCs start in the open project's units.
+  const imperial = prefersImperialUnits();
   const local = {
     id: newClientBcId(),
     name: nextClientBcName(bcType),
@@ -25249,7 +25386,7 @@ window.__CFD_ASSIGN_FACE__ = function assignFace(faceOrId, bodyId) {
     };
   }
 
-  fetch('/api/bcs' + hashProjectQs())
+  bootHydrateFetch('/api/bcs')
     .then((r) => r.json())
     .then((j) => {
       if (!currentStudyId()) return;
@@ -25983,6 +26120,8 @@ async function createMeshClient() {
 
 let meshCopyPick = null;
 let meshCopyNote = '';
+// Which mesh and which copy (settings 'all' / 'refs') the note is about.
+let meshCopyNoteFor = { destId: '', mode: '' };
 
 function otherMeshesForCopy(destId) {
   return meshListAll().filter((m) => m && m.id && String(m.id) !== String(destId));
@@ -26041,6 +26180,12 @@ function startMeshCopyPick(destId, mode) {
   try { syncRefCopyUi(); } catch (_) {}
 }
 
+/** The copy note only on the panel and mesh it was written for. */
+function meshCopyNoteShown(destId, mode) {
+  if (!meshCopyNote || meshCopyNoteFor.mode !== mode) return '';
+  return String(meshCopyNoteFor.destId) === String(destId || '') ? meshCopyNote : '';
+}
+
 function publishMeshCopyState(detail) {
   window.__CFD_MESH_COPY__ = detail;
   try {
@@ -26067,7 +26212,7 @@ function syncMeshCopyUi() {
     dest_id: String(destId),
     available: true,
     picking,
-    note: meshCopyNote || '',
+    note: meshCopyNoteShown(destId, 'all'),
     sources: others.slice().reverse().map((m) => ({ id: String(m.id), label: meshCopyOptionLabel(m, destId) })),
   });
   const tree = document.getElementById('simulations-tree');
@@ -26118,6 +26263,7 @@ async function copyMeshSettingsFrom(srcId) {
     console.warn('[CFD] copy mesh refinements', e);
   }
   meshCopyNote = 'Copied from ' + applyCopiedMeshSource(srcId) + '. Change anything you want.';
+  meshCopyNoteFor = { destId: String(destId), mode: 'all' };
   endMeshCopyPick();
   refinementCatalog.meshId = destId;
   try { refreshSetupTree(); } catch (_) {}
@@ -26135,6 +26281,7 @@ async function copyRefinementsFrom(srcId) {
   if (!destId || !srcId || String(srcId) === String(destId)) return;
   await postCopyRefinements(destId, srcId);
   meshCopyNote = 'Copied refinements from ' + applyCopiedMeshSource(srcId) + '.';
+  meshCopyNoteFor = { destId: String(destId), mode: 'refs' };
   endMeshCopyPick();
   refinementCatalog.meshId = destId;
   try { refreshSetupTree(); } catch (_) {}
@@ -26182,8 +26329,9 @@ function syncRefCopyUi() {
   if (picker) picker.hidden = !picking;
   fillMeshCopySelect(sel, destId);
   if (done) {
-    done.hidden = !meshCopyNote || !/refinements/i.test(meshCopyNote);
-    done.textContent = done.hidden ? '' : meshCopyNote;
+    const note = meshCopyNoteShown(destId, 'refs');
+    done.hidden = !note;
+    done.textContent = note;
   }
 }
 
@@ -26354,7 +26502,7 @@ window.__CFD_COPY_MESH_SETTINGS__ = copyMeshSettingsFrom;
     };
   }
 
-  fetch('/api/mesh' + hashProjectQs())
+  bootHydrateFetch('/api/mesh')
     .then((r) => r.json())
     .then((j) => {
       if (!currentStudyId()) return;
@@ -26528,6 +26676,16 @@ function openRefTypeModal() {
     return;
   }
   openTreeDetail('ref-picker', { toggle: false });
+  syncRefPickerSelected();
+}
+
+/** "Selected: face N" under the refinement types, like the BC picker. */
+function syncRefPickerSelected() {
+  const el = document.getElementById('ref-picker-selected');
+  if (!el) return;
+  const faces = treeUi.openPanel === 'ref-picker' ? pendingCadFaceLabels() : [];
+  el.hidden = !faces.length;
+  el.textContent = faces.length ? 'Selected: ' + faces.join(', ') : '';
 }
 
 function closeRefTypeModal() {
@@ -26969,7 +27127,7 @@ window.__CFD_SHOW_REF__ = showRefEditor;
     };
   }
 
-  fetch('/api/mesh/refinements' + hashProjectQs())
+  bootHydrateFetch('/api/mesh/refinements')
     .then((r) => r.json())
     .then((j) => {
       if (!currentStudyId()) return;
@@ -27168,25 +27326,88 @@ function clearLeftoverSessionQueue(keys) {
   });
 }
 
+/**
+ * A queued job that could not start left the queue (server side). Say so once
+ * per tab: a toast, and on the run's own panel the reason it gave.
+ */
+function noticeQueueFailures(list, pid) {
+  if (!Array.isArray(list) || !list.length) return;
+  if (!jobQueue.seenFailures) jobQueue.seenFailures = new Set();
+  const firstLook = !jobQueue.failuresPrimed;
+  jobQueue.failuresPrimed = true;
+  for (const f of list) {
+    if (!f || !f.id || jobQueue.seenFailures.has(f.id)) continue;
+    jobQueue.seenFailures.add(f.id);
+    if (pid && String(f.project_id || '') !== pid) continue;
+    // After a reload only recent ones: an old failure was already shown.
+    if (firstLook && Date.now() - Number(f.at || 0) > 60000) continue;
+    const name = f.name || (f.kind === 'mesh' ? 'Mesh' : 'Run');
+    const msg = name + ' could not start from the queue: ' + (f.error || 'unknown reason') + '.';
+    const el = document.getElementById('job-finish-toast');
+    if (el) {
+      el.textContent = msg;
+      el.classList.add('is-fail');
+      el.hidden = false;
+      requestAnimationFrame(() => el.classList.add('is-on'));
+      if (finishToastTimer) clearTimeout(finishToastTimer);
+      finishToastTimer = setTimeout(() => {
+        el.classList.remove('is-on');
+        finishToastTimer = setTimeout(() => { el.hidden = true; }, 280);
+      }, 9000);
+    }
+    if (f.kind === 'solve' && f.run_id) {
+      runCatalog.start_error = f.error || 'Could not start';
+      runCatalog.start_error_run_id = f.run_id;
+      runCatalog.start_error_study_id = f.simulation_id || null;
+      try { syncSimControlPanel(); } catch (_) {}
+    }
+  }
+}
+
 function applyServerQueue(j, opts) {
   if (!j) return j;
   const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
+  try { noticeQueueFailures(j.failed, pid); } catch (_) {}
   const before = queueSignature();
   if (Array.isArray(j.items) && !jobQueue._dragging) {
     jobQueue.items = pid ? j.items.filter((row) => queueRowProject(row) === pid) : [];
   }
   let adopted = false;
+  // A solve this tab showed as live (often one the server started from the queue).
+  const prevSolveRun =
+    liveCompute.kind === 'solve' && pid && String(liveCompute.project_id || '') === pid
+      ? String(liveCompute.run_id || '')
+      : '';
   if (Object.prototype.hasOwnProperty.call(j, 'busy')) {
     jobQueue.busy = j.busy && j.busy.kind ? j.busy : null;
     try { adopted = releaseForeignMeshJob(jobQueue.busy); } catch (_) {}
   }
+  let liveSolveRun = '';
   if (j.live && j.live.kind && pid && queueRowProject(j.live) === pid) {
     if (j.live.kind === 'mesh') {
       try { adopted = adoptServerMeshJob(j.live); } catch (e) { console.warn('[CFD] follow server mesh', e); }
     }
+    if (j.live.kind === 'solve') {
+      liveSolveRun = String(j.live.run_id || '');
+      // Follow it like a Start from this tab: progress, residuals, finish and results.
+      try { if (!runCatalog.poll_timer) startSimPoll(); } catch (_) {}
+    }
     try {
       markLiveCompute(j.live.kind, { mesh_id: j.live.mesh_id || null, run_id: j.live.run_id || null, project_id: pid });
     } catch (_) {}
+  }
+  if (prevSolveRun && prevSolveRun !== liveSolveRun) {
+    // It ended while this tab was not following it (hidden tab, or started by the
+    // server): drop the spinner and read the finished run from the server.
+    adopted = true;
+    try { clearLiveCompute('solve'); } catch (_) {}
+    refreshRunCatalog()
+      .then(() => {
+        try { syncSimControlPanel(); } catch (_) {}
+        try { if (typeof refreshSetupTree === 'function') refreshSetupTree(); } catch (_) {}
+        try { syncViewportJobChip(); } catch (_) {}
+      })
+      .catch((e) => console.warn('[CFD] refresh finished run', e));
   }
   try { watchComputeQueue(); } catch (_) {}
   if (opts && opts.quiet && !adopted && queueSignature() === before) return j;
@@ -27263,20 +27484,21 @@ function queueBehindLabel() {
  * from Queued to Generating (or to Generate) without a click.
  */
 function watchComputeQueue() {
+  // Every 2 s while something is queued or running; every 10 s while idle, so a
+  // job started from another project or tab still turns this tab's Generate /
+  // Start into "Add to queue" and shows what it waits on. The reply is tiny.
   const want = !!((jobQueue.items && jobQueue.items.length) || jobQueue.busy);
-  if (!want) {
-    if (jobQueue.watchTimer) clearInterval(jobQueue.watchTimer);
-    jobQueue.watchTimer = null;
-    return;
-  }
-  if (jobQueue.watchTimer) return;
+  const every = want ? 2000 : 10000;
+  if (jobQueue.watchTimer && jobQueue.watchEvery === every) return;
+  if (jobQueue.watchTimer) clearInterval(jobQueue.watchTimer);
+  jobQueue.watchEvery = every;
   jobQueue.watchTimer = setInterval(() => {
     const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
     if (!pid || jobQueue._dragging || document.hidden) return;
     fetchComputeQueue('/api/compute-queue?project_id=' + encodeURIComponent(pid))
       .then((j) => applyServerQueue(j, { quiet: true }))
       .catch(() => {});
-  }, 2000);
+  }, every);
 }
 
 /**
@@ -27311,7 +27533,10 @@ function adoptServerMeshJob(live) {
   jobState.n_cells = null;
   jobState.n_points = null;
   jobState.n_faces = null;
-  jobState.stage = 'starting';
+  // After a reload the mesh record already knows how far the job got (e.g. gmshToFoam).
+  const recLive = rec && rec.live_mesh_result;
+  jobState.stage =
+    (recLive && recLive.status === 'running' && recLive.stage) || live.stage || 'starting';
   jobState.stage_detail = null;
   jobState.started_at = live.started_at || new Date().toISOString();
   jobState.finished_at = null;
@@ -27480,13 +27705,19 @@ function runMeshIsReady(meshId) {
 
 function queueItemLabel(item) {
   if (!item) return 'Job';
-  if (item.name) return item.name;
-  if (item.kind === 'mesh') {
+  let name = item.name;
+  if (!name && item.kind === 'mesh') {
     const mesh = typeof findMeshRecord === 'function' ? findMeshRecord(item.mesh_id) : null;
-    return meshDisplayName(mesh) || 'Mesh';
+    name = meshDisplayName(mesh) || '';
+  } else if (!name) {
+    const run = typeof findRunRecord === 'function' ? findRunRecord(item.run_id) : null;
+    name = (run && run.name) || '';
   }
-  const run = typeof findRunRecord === 'function' ? findRunRecord(item.run_id) : null;
-  return (run && run.name) || 'Run';
+  // "Coarse" and "Run 1" repeat in every study: say it is a mesh, and which study.
+  const base = item.kind === 'mesh' ? (name ? name + ' mesh' : 'Mesh') : name || 'Run';
+  const sims = (typeof studyCatalog !== 'undefined' && studyCatalog.simulations) || [];
+  const study = sims.length > 1 && item.simulation_id ? studyNameForRun({ simulation_id: item.simulation_id }) : '';
+  return study ? base + ' · ' + study : base;
 }
 
 function enqueueMeshJob(meshId, explicitSettings) {
@@ -27553,7 +27784,7 @@ function enqueueSolveJob(runId) {
   if (jobQueueHas('solve', id)) return jobQueue.items.find((r) => r.kind === 'solve' && String(r.run_id) === id);
   if (typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial()) {
     try {
-      setRunHint('Assign Air to a volume first.', { go: 'material' });
+      setRunHint('Assign a fluid to a volume first.', { go: 'material' });
     } catch (_) {}
     try { syncSimControlPanel(); } catch (_) {}
     return null;
@@ -27645,7 +27876,10 @@ function syncJobQueueChrome() {
       ? ''
       : jobQueue.items
           .map((item, i) => {
-            const label = escapeHtml((i + 1) + '. ' + queueItemLabel(item));
+            // The queue is shared by every project: number rows by their place in
+            // it (other projects' jobs can be ahead), as the mesh / run panels do.
+            const pos = Number(item.position) > 0 ? Number(item.position) : i + 1;
+            const label = escapeHtml(pos + '. ' + queueItemLabel(item));
             return (
               '<li data-q-id="' +
               escapeHtml(item.id) +
@@ -27841,7 +28075,9 @@ function dequeueQueuedItem(item) {
 
 async function kickNextQueuedJob() {
   if (jobQueue.kicking || jobQueue._dragging) return;
-  try { pruneJobQueue(); } catch (_) {}
+  // No client-side pruning here: this tab's catalog can lag a run another tab
+  // just created and queued. The server drops a job whose run or mesh is gone
+  // when it reaches the head.
   try { releaseStaleComputeFlags(); } catch (_) {}
   jobQueue.kicking = true;
   try {
@@ -27858,6 +28094,23 @@ async function kickNextQueuedJob() {
 }
 
 /**
+ * "Add to queue" turns into "Remove from queue" as soon as the add lands, so
+ * the second click of a double-click would take the job straight back off.
+ * Clicks on the same job just after adding it are ignored.
+ */
+const QUEUE_CLICK_SETTLE_MS = 700;
+function queueClickTooSoon(kind, id) {
+  if (!id) return false;
+  const at = jobQueue.clickedAt && jobQueue.clickedAt[kind + ':' + id];
+  return !!(at && Date.now() - at < QUEUE_CLICK_SETTLE_MS);
+}
+function noteQueueClick(kind, id) {
+  if (!id) return;
+  if (!jobQueue.clickedAt) jobQueue.clickedAt = {};
+  jobQueue.clickedAt[kind + ':' + id] = Date.now();
+}
+
+/**
  * Generate / Add to queue / Remove from queue, in one place. The React mesh
  * island calls this with the mesh it shows and the settings it holds.
  */
@@ -27866,11 +28119,13 @@ async function onGenerateMeshClick(opts) {
   const settings = opts && opts.settings ? opts.settings : undefined;
   const foreign = meshJobInOtherProject();
   if (!foreign && meshGenerateJobIsLive() && mid && String(jobState.mesh_id) === String(mid)) return { generating: true };
+  if (mid && queueClickTooSoon('mesh', mid)) return { queued: true };
   if (mid && jobQueueHas('mesh', mid)) {
     removeQueuedJob('mesh', mid);
     return { dequeued: true };
   }
   if (!foreign && anyComputeJobRunning()) {
+    noteQueueClick('mesh', mid);
     enqueueMeshJob(mid, settings);
     return { queued: true };
   }
@@ -27880,6 +28135,7 @@ async function onGenerateMeshClick(opts) {
 async function onSimStartClick() {
   const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
   const runId = rec && (rec.id || rec.run_id);
+  if (queueClickTooSoon('solve', runId)) return;
   if (runId && jobQueueHas('solve', runId)) {
     removeQueuedJob('solve', runId);
     return;
@@ -27891,10 +28147,11 @@ async function onSimStartClick() {
   const waitForMesh = !!(meshId && !runMeshIsReady(meshId) && meshWillBeReadySoon(meshId));
   if (anyComputeJobRunning() || waitForMesh) {
     if (typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial()) {
-      try { setRunHint('Assign Air to a volume first.', { go: 'material' }); } catch (_) {}
+      try { setRunHint('Assign a fluid to a volume first.', { go: 'material' }); } catch (_) {}
       try { syncSimControlPanel(); } catch (_) {}
       return;
     }
+    noteQueueClick('solve', runId);
     enqueueSolveJob(runId);
     try { syncSimControlPanel(); } catch (_) {}
     return;
@@ -28128,6 +28385,18 @@ function publishW21(extra) {
 
 window.__CFD_W21_GENERATE__ = generateMeshClient;
 
+/*
+ * Mesh settings from the React mesh island. They go through POST /api/mesh, which
+ * merges into the stored mesh (name, generated result and all), and the reply
+ * refreshes this runtime's catalog — so a later Generate or refresh never
+ * publishes stale settings (e.g. the engine) back over what the user picked.
+ */
+window.__CFD_MESH_SAVE__ = function saveMeshSettingsFromPanel(meshId, settings) {
+  const body = { ...(settings || {}) };
+  if (meshId) body.mesh_id = meshId;
+  return postMeshApi(body, { skipTree: true });
+};
+
 /* Generate lives on the React mesh island; it calls this so queue, chip and tree stay in one path. */
 window.__CFD_MESH_GENERATE_CLICK__ = onGenerateMeshClick;
 publishW21({ wired: true });
@@ -28234,8 +28503,17 @@ function syncAaAssignList() {
 
 function hideAaPanel() {
   const panel = document.getElementById('panel-area-average');
+  const wasOpen = !!(panel && !panel.hidden);
   if (panel) panel.hidden = true;
   resultCatalog.panel_open = false;
+  if (wasOpen) restoreResultsAfterFacePick();
+}
+
+/** Picking monitor faces turns the CAD on; in Results, bring the field and planes back. */
+function restoreResultsAfterFacePick() {
+  if (typeof resultsViewOpen === 'undefined' || !resultsViewOpen) return;
+  try { revealResultSurface(); } catch (_) {}
+  try { renderWindow.render(); } catch (_) {}
 }
 
 function showAaPanel() {
@@ -28616,7 +28894,7 @@ function toggleAssignAaFace(face) {
   }
 
   // Hydrate from disk
-  fetch('/api/result-controls' + hashProjectQs())
+  bootHydrateFetch('/api/result-controls')
     .then((r) => r.json())
     .then((j) => {
       if (!currentStudyId()) return;
@@ -29035,8 +29313,10 @@ function syncSimHubPanel() {
   }
 }
 
-async function persistRunSettings(partial) {
-  if (runCatalog._createWait) {
+async function persistRunSettings(partial, opts) {
+  // Wait for a run still being created — except from inside that create
+  // (Add run copies the previous run's settings), which would wait on itself.
+  if (runCatalog._createWait && !(opts && opts.insideCreate)) {
     try { await runCatalog._createWait; } catch (_) {}
   }
   const runId = (partial && (partial.run_id || partial.id)) || runCatalog.selected_run_id || runCatalog.active_run_id;
@@ -29376,7 +29656,7 @@ function syncRunCopyUi() {
   publishRunState();
 }
 
-async function copyRunSettingsFrom(srcId) {
+async function copyRunSettingsFrom(srcId, opts) {
   const dest = selectedRunRecord();
   const src = findRunRecord(srcId);
   if (!dest || !src || runIsLocked(dest)) return;
@@ -29391,7 +29671,7 @@ async function copyRunSettingsFrom(srcId) {
     transient,
     result_controls: cloneRunResultControls(src.result_controls),
   };
-  const j = await persistRunSettings(body);
+  const j = await persistRunSettings(body, opts);
   if (!j || j.ok === false) {
     console.warn('[CFD] copy run settings', j && j.error);
     return;
@@ -29451,8 +29731,14 @@ async function createRunClient(opts) {
   const studyId =
     (typeof studyCatalog !== 'undefined' && studyCatalog.simulation && studyCatalog.simulation.id) || null;
   const meshes = generatedMeshOptions();
+  // A new run lands on a mesh it can start with: the open mesh when it is generated,
+  // else any generated one; an ungenerated open mesh only when nothing is generated.
   const defaultMesh =
-    meshes.find((m) => m.active) || meshes.find((m) => m.ready) || meshes[0] || null;
+    meshes.find((m) => m.active && m.ready) ||
+    meshes.find((m) => m.ready) ||
+    meshes.find((m) => m.active) ||
+    meshes[0] ||
+    null;
   const local = {
     id,
     name,
@@ -29505,7 +29791,11 @@ async function createRunClient(opts) {
     const created = typeof findRunRecord === 'function' ? findRunRecord(newId) : null;
     if (local.mesh_id && created && !created.mesh_id) rememberRunMesh(created, local.mesh_id);
     if (copyFrom) {
-      try { await copyRunSettingsFrom(copyFrom); } catch (e) { console.warn('[CFD] copy new run', e); }
+      try {
+        await copyRunSettingsFrom(copyFrom, { insideCreate: true });
+      } catch (e) {
+        console.warn('[CFD] copy new run', e);
+      }
     }
     return j;
   })();
@@ -29590,7 +29880,7 @@ function solveHasAssignedMaterial() {
   return rows.some((mat) => {
     if (!mat) return false;
     if (sid && mat.simulation_id && String(mat.simulation_id) !== String(sid)) return false;
-    if (mat.name && !/air/i.test(String(mat.name))) return false;
+    // Any fluid counts (Air, Water or custom); the solver uses the assigned one.
     const vols = Array.isArray(mat.assigned_volumes) ? mat.assigned_volumes : [];
     return vols.length > 0 || !!mat.assigned_volume;
   });
@@ -29601,7 +29891,7 @@ function inferSetupFix(msg) {
   if (/Create an Incompressible simulation/i.test(s)) return { go: 'create-sim' };
   if (/Add a run to change settings/i.test(s)) return { go: 'add-run' };
   if (/Create a run first|already finished/i.test(s)) return { go: 'sim-hub' };
-  if (/Assign Air|assign a material|material/i.test(s) && !/boundary/i.test(s)) return { go: 'material' };
+  if (/Assign Air|Assign a fluid|assign a material|material/i.test(s) && !/boundary/i.test(s)) return { go: 'material' };
   if (/velocity inlet|pressure boundar|boundary condition|assigned face/i.test(s)) {
     const list = typeof bcList === 'function' ? bcList() : [];
     const incomplete = list.find((b) => !bcHasAssignedFace(b));
@@ -29815,15 +30105,27 @@ function computeRunState() {
     if (!reason) reason = { text, fix: fix || null };
   };
   if (runCatalog.starting) want(runCatalog.start_error || 'Starting…', null);
-  else if (queuedHere && !hasMaterial) want('Assign Air to a volume first.', { go: 'material' });
-  else if (queuedHere) want(meshSoon && !meshReady ? 'Queued. Starts after its mesh finishes.' : 'Queued. Starts when the current job finishes.');
+  else if (queuedHere && !hasMaterial) want('Assign a fluid to a volume first.', { go: 'material' });
+  else if (queuedHere) {
+    // Say where it is: the queue is shared by every project, and its own mesh
+    // may be (re)generating ahead of it.
+    const runKey = String((rec && (rec.id || rec.run_id)) || '');
+    const qRow = (jobQueue.items || []).find((r) => r && r.kind === 'solve' && String(r.run_id) === runKey);
+    const place = qRow && Number(qRow.position) > 1 ? ' Number ' + qRow.position + ' in the queue.' : '';
+    const meshName = (meshRec && meshRec.name) || (rec && rec.mesh_name) || '';
+    want(
+      (meshSoon
+        ? 'Queued. Starts after its mesh' + (meshName ? ' "' + meshName + '"' : '') + ' is generated.'
+        : 'Queued. Starts when the current job finishes.') + place,
+    );
+  }
   else if (canQueue && (computeBusy || meshSoon)) {
     want(meshSoon && !meshReady ? 'This run will start after its mesh finishes.' : 'A job is running. This run will start when that job finishes.');
   } else if (rec && !meshId) want('This run needs a mesh before it can start.', { go: 'run-mesh' });
   else if (rec && meshId && !meshReady && !meshSoon) {
     const meshName = (meshRec && meshRec.name) || rec.mesh_name || 'that mesh';
     want('Generate "' + meshName + '" before starting.', { go: 'mesh', id: meshId, name: meshName });
-  } else if (rec && !hasMaterial) want('Assign Air to a volume first.', { go: 'material' });
+  } else if (rec && !hasMaterial) want('Assign a fluid to a volume first.', { go: 'material' });
   else if (rec && !hasFlow) {
     const incomplete = bcList().find((b) => !bcHasAssignedFace(b));
     want(
@@ -30272,6 +30574,11 @@ async function pollSimRunStatus() {
     const r = await fetch('/api/run/status' + hashProjectQs(), { cache: 'no-store' });
     const j = await r.json();
     if (j) applyRunCatalog(j);
+    // Nothing solving any more (the queue watcher can clear the live run before
+    // this poll sees it finish): stop after this tick instead of pulling every
+    // run's residuals every 1.5 s while idle. Start and the queue watcher restart it.
+    const active = (x) => !!(x && (x.status === 'running' || x.status === 'starting'));
+    if (j && !j.live_run_id && !active(j.live_run) && !active(j.run) && !runCatalog.starting) stopSimPoll();
     const curPid = typeof currentProjectId === 'function' ? currentProjectId() : '';
     if (j && j.project_id && curPid && String(j.project_id) !== String(curPid)) {
       try { syncViewportJobChip(); } catch (_) {}
@@ -30544,7 +30851,7 @@ async function startSolveClient(opts) {
       if (!meshId) {
         return failStart(
           (typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial())
-            ? 'Assign Air to a volume first'
+            ? 'Assign a fluid to a volume first'
             : 'This run needs a mesh before it can start.',
           { fix: { go: typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial() ? 'material' : 'run-mesh' } }
         );
@@ -30553,7 +30860,7 @@ async function startSolveClient(opts) {
       if (!queued) {
         return failStart(
           (typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial())
-            ? 'Assign Air to a volume first'
+            ? 'Assign a fluid to a volume first'
             : 'This run needs a mesh before it can start.',
           { fix: { go: typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial() ? 'material' : 'run-mesh' } }
         );
@@ -30591,7 +30898,7 @@ async function startSolveClient(opts) {
         if (opts.fromQueue) return { ok: false, busy: true, run_id: runId };
         const queued = await enqueueSolveJob(runId);
         if (!queued) {
-          return failStart('Assign Air to a volume first', { fix: { go: 'material' } });
+          return failStart('Assign a fluid to a volume first', { fix: { go: 'material' } });
         }
         showHint('Queued. Starts when the current job finishes.');
         try { syncJobQueueChrome(); } catch (_) {}
@@ -30763,7 +31070,7 @@ async function renameActiveRunClient(name) {
     if (!rec) return;
     openRunResultControl(rec.id, btn.getAttribute('data-open-run-rc'));
   });
-  fetch('/api/simulation-control' + hashProjectQs())
+  bootHydrateFetch('/api/simulation-control')
     .then((r) => r.json())
     .then((j) => {
       if (j && j.endTime) runCatalog.endTime = j.endTime;
@@ -30771,7 +31078,7 @@ async function renameActiveRunClient(name) {
       syncSimControlPanel();
     })
     .catch(() => {});
-  if (runStatusPollEnabled()) fetch('/api/run/status' + hashProjectQs(), { cache: 'no-store' })
+  if (runStatusPollEnabled()) bootHydrateFetch('/api/run/status', { cache: 'no-store' })
     .then((r) => r.json())
     .then((j) => {
       if (j) applyRunCatalog(j);
@@ -30897,7 +31204,8 @@ async function renameActiveRunClient(name) {
     const patch = m && m.patch;
     const saved = patch != null ? monState.qtyByPatch[patch] : null;
     if (saved && MON_QTY[saved]) return saved;
-    return isPressureMon(m) ? 'p' : 'Umag';
+    // Custom monitors are usually on walls, where the mean velocity is zero.
+    return isPressureMon(m) || (m && m.custom) ? 'p' : 'Umag';
   }
 
   function qtySample(m) {
@@ -31124,10 +31432,11 @@ async function renameActiveRunClient(name) {
     const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
     const runId = (rec && rec.id) || (typeof resultCatalog !== 'undefined' && resultCatalog.editing_run_id) || null;
     const data = runId ? monState.byRun[runId] : null;
-    const hit = ((data && data.monitors) || []).find((x) => String(x.patch) === String(patch));
+    const all = (d) => ((d && d.monitors) || []).concat((d && d.custom) || []);
+    const hit = all(data).find((x) => String(x.patch) === String(patch));
     if (hit) return hit;
     for (const id of Object.keys(monState.byRun || {})) {
-      const row = ((monState.byRun[id] && monState.byRun[id].monitors) || []).find((x) => String(x.patch) === String(patch));
+      const row = all(monState.byRun[id]).find((x) => String(x.patch) === String(patch));
       if (row) return row;
     }
     return null;
@@ -31538,7 +31847,42 @@ async function renameActiveRunClient(name) {
     restoreMonFocus(list);
   }
 
+  /** Custom (Area average) monitors: a chart card each, or why there is no data. */
+  function fillCustomMonitorCards(root) {
+    if (!root) return;
+    wireMonPlotHover(root);
+    wireMonCardControls(root);
+    const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
+    const rcs = ((rec && rec.result_controls) || []).filter(
+      (rc) => rc && Array.isArray(rc.faces) && rc.faces.length && /area average|surface data/i.test(
+        [rc.kind, rc.type, rc.name, rc.category].filter(Boolean).join(' ')
+      )
+    );
+    if (!rec || !rcs.length) {
+      root.innerHTML = '';
+      return;
+    }
+    const data = monState.byRun[rec.id];
+    const custom = (data && data.custom) || [];
+    const solved = rec.status === 'done' || rec.status === 'failed' || rec.status === 'stopped';
+    root.innerHTML = rcs
+      .map((rc) => {
+        const m = custom.find((c) => (rc.id && String(c.id) === String(rc.id)) || c.name === rc.name);
+        if (m) return monitorCard(m);
+        if (!solved) return '';
+        return (
+          '<div class="mon-card"><div class="mon-card-head"><span class="mon-card-name">' +
+          escapeHtml(rc.name || 'Monitor') +
+          '</span></div><div class="mon-empty">No data was recorded for this monitor in this run. Add a run to record it.</div></div>'
+        );
+      })
+      .join('');
+    restoreMonPlotTip(root);
+  }
+
   function renderRunMonitorsHub() {
+    fillCustomMonitorCards(document.getElementById('run-monitors-custom-cards'));
+    fillCustomMonitorCards(document.getElementById('run-graphs-custom-cards'));
     fillMonitorList(
       document.getElementById('run-monitors-list'),
       document.getElementById('run-monitors-hint'),
@@ -31582,7 +31926,11 @@ async function renameActiveRunClient(name) {
       if (pid) qs.set('project_id', pid);
       const r = await fetch('/api/run/monitors?' + qs.toString(), { cache: 'no-store' });
       const j = await r.json();
-      if (j && j.ok) monState.byRun[rec.id] = j;
+      if (j && j.ok) {
+        // Custom monitors share the card code; their key is the card id.
+        j.custom = (j.custom || []).map((c) => ({ ...c, patch: c.key, custom: true }));
+        monState.byRun[rec.id] = j;
+      }
       renderRunMonitorsHub();
       renderAaMonitorValues();
       return j;
@@ -31744,7 +32092,7 @@ function mediaTreeChildren(ownerKind, id, opts) {
   );
 }
 
-function openMediaTreeNode(key) {
+function openMediaTreeNode(key, opts) {
   const bits = String(key || '').split(':');
   if (bits.length < 4 || bits[0] !== 'media') return;
   const ownerKind = bits[1];
@@ -31761,7 +32109,19 @@ function openMediaTreeNode(key) {
   const st = mediaStore();
   if (kind === 'graphs') {
     const rec = typeof findRunRecord === 'function' ? findRunRecord(id) : null;
-    if (ownerKind === 'run' && !runHasStarted(rec)) return;
+    if (ownerKind === 'run' && !runHasStarted(rec)) {
+      // The tree can list a finished run before the client catalog has read it
+      // (after a reload, or while another study's job runs): read it once, retry.
+      if (!(opts && opts.retried)) {
+        refreshRunCatalog()
+          .then(() => {
+            const again = typeof findRunRecord === 'function' ? findRunRecord(id) : null;
+            if (runHasStarted(again)) openMediaTreeNode(key, { retried: true });
+          })
+          .catch(() => {});
+      }
+      return;
+    }
     st.panel = null;
     openTreeDetail('run-graphs', { toggle: false });
     markTreeSelected(key);
@@ -32128,7 +32488,14 @@ function restoreTreePanelAfterCapture() {
   }
 }
 
+/**
+ * The box the capture frame is positioned in. The layer sits beside a docked
+ * tree / filters panel, so frame coordinates (drawn and captured) are relative
+ * to it, not to the whole viewport-wrap.
+ */
 function captureWrap() {
+  const layer = document.getElementById('capture-layer');
+  if (layer && !layer.hidden && layer.clientWidth > 0) return layer;
   return document.querySelector('.viewport-wrap');
 }
 
@@ -32430,9 +32797,10 @@ function startCapture(mode) {
   if (!captureState.open) {
     // A tree flyout (Recordings, Graphs, Monitors…) would sit inside the frame — park it.
     stashTreePanelForCapture();
+    // Show the layer first: the frame is measured inside it.
+    els.layer.hidden = false;
     captureState.frame = loadSavedFrame() || defaultFrame();
     captureState.open = true;
-    els.layer.hidden = false;
   }
   applyFrameToDom();
   if (els.title) els.title.textContent = captureState.mode === 'rec' ? 'Record' : 'Screenshot';
@@ -33224,7 +33592,7 @@ function downloadTextFile(name, text, mime) {
 function graphsCsv(runId) {
   const data = graphsData(runId);
   if (!data || !Array.isArray(data.monitors)) return '';
-  const mons = data.monitors;
+  const mons = data.monitors.concat(Array.isArray(data.custom) ? data.custom : []);
   const iters = new Set();
   for (const m of mons) for (const s of m.series || []) iters.add(Number(s.t));
   const sorted = [...iters].filter(Number.isFinite).sort((a, b) => a - b);

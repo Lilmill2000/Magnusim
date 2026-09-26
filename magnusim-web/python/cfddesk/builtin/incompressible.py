@@ -123,7 +123,8 @@ def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             group="relaxation",
             description=(
                 "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is "
-                "more stable but converges more slowly."
+                "more stable but converges more slowly. Reynolds-stress models (LRR, SSG) start "
+                "at 0.5."
             ),
         ),
         SchemaField(

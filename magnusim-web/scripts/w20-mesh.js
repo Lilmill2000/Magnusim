@@ -27,6 +27,8 @@ import {
 import { firstLegacySimId, getActiveSimulation, listSimulations, writeActiveMirror } from './w17-sim-catalog.js';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
+import { polyMeshComplete } from './poly-mesh.js';
+import { dropComputeJobsForMesh } from './server/compute-queue.ts';
 import { writeJsonCli, writeProjectCli } from './py-json.js';
 import {
   MESH_ENGINES,
@@ -265,7 +267,7 @@ function migrateMeshEngineEntry(entry) {
     const advEngine = String(adv.mesh_engine || 'standard').trim().toLowerCase();
     ui = advEngine === 'cfmesh' ? 'standard' : advEngine;
   }
-  if (ui !== 'standard' && ui !== 'cfmesh') ui = 'standard';
+  if (!MESH_ENGINES.has(ui)) ui = 'standard';
   let changed = false;
   if (!hasUi || String(entry.ui_mesh_engine) !== ui) changed = true;
   if (String(adv.mesh_engine || '') !== ui) {
@@ -355,8 +357,35 @@ function isRunningMesh(entry) {
   return !!(live && live.status === 'running');
 }
 
+/**
+ * A record says "done" but its polyMesh on disk is not whole (a generate killed
+ * during copy-back). Report it as failed so no panel shows "Mesh ready" and no
+ * run tries to use it.
+ */
+function withDiskTruth(m) {
+  const live = m && m.live_mesh_result;
+  if (!live || live.status !== 'done') return m;
+  const caseDir = live.case_dir || m.case_dir;
+  if (!caseDir || !existsSync(caseDir)) return m;
+  const poly = live.mesh_path && existsSync(live.mesh_path) ? live.mesh_path : join(caseDir, 'constant', 'polyMesh');
+  if (polyMeshComplete(poly)) return m;
+  return {
+    ...m,
+    generated: false,
+    live_mesh_result: {
+      ...live,
+      status: 'failed',
+      n_cells: null,
+      n_points: null,
+      n_faces: null,
+      error: 'The mesh files are incomplete (meshing was interrupted). Generate it again.',
+      note: 'The mesh files are incomplete (meshing was interrupted). Generate it again.',
+    },
+  };
+}
+
 function listPayload(meshes, activeId, nameByGeom) {
-  return (meshes || []).map((m) => ({
+  return (meshes || []).map(withDiskTruth).map((m) => ({
     id: m.id,
     name: m.name,
     generated: isGeneratedDoc(m),
@@ -630,6 +659,12 @@ async function deleteMeshRecord(body) {
     stopMeshGenerate({ meshId: target.id, projectId });
   } catch {
     /* best-effort — delete still proceeds */
+  }
+  // A queued generate of this mesh, and runs queued on it, can never start now.
+  try {
+    dropComputeJobsForMesh(target.id, projectId);
+  } catch {
+    /* best-effort */
   }
   const live = target.live_mesh_result || {};
   const removed = removeGeneratedMeshRuns(projectId, live.case_dir || null, target.id);

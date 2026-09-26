@@ -73,6 +73,8 @@ class RunSpec:
     mapped: list[dict[str, Any]] = field(default_factory=list)
     # Study panel physics (turbulence model + steady SIMPLE numerics).
     physics: StudyPhysics = field(default_factory=StudyPhysics)
+    # This run's custom monitors: {"name", "faces"} (area average on any faces).
+    custom_monitors: list[dict[str, Any]] = field(default_factory=list)
     ok: bool = True
     error: str | None = None
 
@@ -149,6 +151,22 @@ def matches_study(rec: dict | None, sim_id: str | None, legacy_id: str | None = 
     return False
 
 
+def _material_assigned(m: dict) -> bool:
+    vols = m.get("assigned_volumes")
+    return (isinstance(vols, list) and len(vols) > 0) or bool(m.get("assigned_volume"))
+
+
+def study_fluid(materials: list) -> dict | None:
+    """The study's one fluid (Air, Water or a custom fluid): the material assigned
+    to a volume, else one named Air (older studies), else the first."""
+    rows = [m for m in materials if isinstance(m, dict)]
+    return (
+        next((m for m in rows if _material_assigned(m)), None)
+        or next((m for m in rows if re.search(r"air", str(m.get("name") or ""), re.I)), None)
+        or (rows[0] if rows else None)
+    )
+
+
 def air_from_materials(
     mats: dict | None, sim_id: str | None = None, legacy_id: str | None = None
 ) -> dict[str, Any] | None:
@@ -157,7 +175,7 @@ def air_from_materials(
     if not isinstance(lst, list):
         return None
     scoped = [m for m in lst if matches_study(m, sim_id, legacy_id)]
-    air = next((m for m in scoped if re.search(r"air", str(m.get("name") or ""), re.I)), None)
+    air = study_fluid(scoped)
     if not air:
         return None
     vols = checked if isinstance((checked := air.get("assigned_volumes")), list) else []
@@ -234,6 +252,21 @@ def list_aa_faces(aa: dict | None) -> list[str]:
             if f and f not in faces:
                 faces.append(f)
     return faces
+
+
+def run_custom_monitors(result_controls: list | None) -> list[dict[str, Any]]:
+    """Area-average monitors a run carries (name + assigned faces), in order."""
+    out: list[dict[str, Any]] = []
+    for rec in result_controls or []:
+        if not isinstance(rec, dict):
+            continue
+        label = " ".join(str(rec.get(k) or "") for k in ("kind", "type", "name", "category"))
+        if not re.search(r"area average|surface data", label, re.I):
+            continue
+        faces = [str(f) for f in (rec.get("faces") or []) if f]
+        if faces:
+            out.append({"id": rec.get("id"), "name": str(rec.get("name") or "Monitor"), "faces": faces})
+    return out
 
 
 def _parse_boundary_patches(boundary_path: Path) -> list[str]:
@@ -724,9 +757,20 @@ def load_run_spec(
         aa=aa,
         mapped=mapped,
         physics=load_study_physics(root, sim_id),
+        custom_monitors=_run_custom_monitors(root, run_id, sim_id),
         ok=True,
         error=None,
     )
+
+
+def _run_custom_monitors(root: Path, run_id: str, sim_id: str | None) -> list[dict[str, Any]]:
+    from cfddesk.project.paths import find_run
+
+    try:
+        rec = find_run(root, run_id, sim_id) or {}
+    except Exception:
+        rec = {}
+    return run_custom_monitors(rec.get("result_controls"))
 
 
 # Phase 2 land8 re-exports (Project <-> web sibling mirrors)

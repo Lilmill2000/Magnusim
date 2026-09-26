@@ -254,18 +254,19 @@ function dedupeStudyBcs(list) {
   return out;
 }
 
-function defaultVelocityUnit(velocityType, flowRateType) {
-  const imperial = /imperial/i.test(String(defaultUnits()));
+/** Units for a new BC value: the project's own, else the Settings default. */
+function defaultVelocityUnit(velocityType, flowRateType, units) {
+  const imperial = /imperial/i.test(String(units || defaultUnits()));
   if (velocityType === 'Fixed') return imperial ? 'ft/s' : 'm/s';
   if (flowRateType === 'Mass flow') return imperial ? 'lb/s' : 'kg/s';
   return imperial ? 'ft³/min' : 'm³/s';
 }
 
-function defaultPressureUnit() {
-  return /imperial/i.test(String(defaultUnits())) ? 'psi' : 'Pa';
+function defaultPressureUnit(units) {
+  return /imperial/i.test(String(units || defaultUnits())) ? 'psi' : 'Pa';
 }
 
-function buildBc(body, list) {
+function buildBc(body, list, units) {
   const geomId = body.geometry_id || null;
   const simId = body.simulation_id || null;
   const existing =
@@ -315,7 +316,7 @@ function buildBc(body, list) {
     const rawVal = body.value ?? (existing && existing.value);
     rec.value = rawVal == null || rawVal === '' ? (rec.velocity_type === 'Fixed' ? 5 : 0.01) : Number(rawVal);
     rec.unit = String(
-      body.unit || (existing && existing.unit) || defaultVelocityUnit(rec.velocity_type, rec.flow_rate_type)
+      body.unit || (existing && existing.unit) || defaultVelocityUnit(rec.velocity_type, rec.flow_rate_type, units)
     ).trim();
     rec.direction = String(body.direction || (existing && existing.direction) || 'Normal to face').trim();
     if (rec.direction !== 'Vector') rec.direction = 'Normal to face';
@@ -330,7 +331,7 @@ function buildBc(body, list) {
     ).trim();
     const rawVal = body.value ?? (existing && existing.value);
     rec.value = rawVal == null || rawVal === '' ? 0 : Number(rawVal);
-    rec.unit = String(body.unit || (existing && existing.unit) || defaultPressureUnit()).trim() || defaultPressureUnit();
+    rec.unit = String(body.unit || (existing && existing.unit) || defaultPressureUnit(units)).trim() || defaultPressureUnit(units);
   }
   return { ok: true, bc: rec };
 }
@@ -517,7 +518,7 @@ async function upsertBcs(body) {
   const changed = [];
   if (Array.isArray(batch) && batch.length) {
     for (const item of batch) {
-      const built = buildBc(item, list);
+      const built = buildBc(item, list, proj && proj.units);
       if (!built.ok) return built;
       lastBuilt = built.bc;
       if (geomId) lastBuilt.geometry_id = lastBuilt.geometry_id || geomId;
@@ -528,7 +529,7 @@ async function upsertBcs(body) {
   } else if (hasDefaults && !hasBcFields) {
     // Defaults-only save: { defaults: { wall_type } } — no BC record touched.
   } else {
-    const built = buildBc(body || {}, list);
+    const built = buildBc(body || {}, list, proj && proj.units);
     if (!built.ok) return built;
     lastBuilt = built.bc;
     if (geomId) lastBuilt.geometry_id = lastBuilt.geometry_id || geomId;

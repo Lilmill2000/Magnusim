@@ -125,7 +125,8 @@ export function registerLiveRoutes(router, { worker, jobs }) {
   wireComputeQueue(api);
 
   router.get('/api/compute-queue', (ctx) => {
-    const project = ctx.url.searchParams.get('project_id') || ctx.url.searchParams.get('project') || '';
+    // No project: the whole queue (every project), with each row's position.
+    const project = ctx.url.searchParams.get('project_id') || ctx.url.searchParams.get('project') || undefined;
     ctx.sendJson(200, snapshotComputeQueue(project));
   });
 
@@ -158,6 +159,9 @@ export function registerLiveRoutes(router, { worker, jobs }) {
       ctx.sendJson(400, { ok: false, error: enqueued.error, items: enqueued.items, live: computeQueueLive() });
       return;
     }
+    // Tabs kick after they enqueue, but a tab can close (or a job finish) in
+    // between; the queue must not sit idle with work in it.
+    scheduleComputeQueueKick(250);
     ctx.sendJson(200, { ...snapshotComputeQueue(), item: enqueued.item });
   });
 

@@ -212,3 +212,22 @@ describe('copy study runs when time dependency matches', () => {
     assert.equal(destRuns[0].status, 'done');
   });
 });
+
+describe('copied study keeps the source physics', () => {
+  it('carries the turbulence model but not identity or analysis', async () => {
+    const { studyPhysicsFrom } = await import('../w17-simulation.js');
+    const got = studyPhysicsFrom({
+      id: 'sim-a',
+      name: 'SSG',
+      geometry_id: 'g1',
+      time_dependency: 'Steady-state',
+      algorithm: 'SIMPLE',
+      analysis_type: 'incompressible_steady',
+      turbulence_model: 'SSG',
+      turbulence_model_key: 'ssg',
+      defaults: { turbulence_model: 'k-omega SST' },
+      sort_index: 3,
+    });
+    assert.deepEqual(got, { turbulence_model: 'SSG', turbulence_model_key: 'ssg' });
+  });
+});

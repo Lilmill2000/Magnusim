@@ -330,6 +330,7 @@
               <span class="hub-item-sub">Prism layers — set count and total thickness</span>
             </button>
             <p class="mat-assign-hint">Click a face in the viewport to assign it. Add keeps the faces you already selected.</p>
+            <p class="mat-assign-hint" id="ref-picker-selected" hidden></p>
             <div class="picker-actions">
               <button type="button" class="js-btn js-btn-kick" id="ref-picker-apply">Add</button>
             </div>
@@ -434,6 +435,7 @@
             <div class="mon-section">
               <div class="mat-k">Custom monitors</div>
               <ul class="hub-list" id="results-hub-list"></ul>
+              <div id="run-monitors-custom-cards" class="mon-list"></div>
               <button type="button" class="js-btn" id="btn-add-result">Add</button>
             </div>
             <div class="sim-def-foot">
@@ -479,6 +481,7 @@
             <div class="mon-section">
               <div class="mat-k">Custom monitors</div>
               <ul class="hub-list" id="run-graphs-custom-list"></ul>
+              <div id="run-graphs-custom-cards" class="mon-list"></div>
               <button type="button" class="js-btn" id="btn-add-result-graphs">Add</button>
             </div>
             <div class="sim-def-foot">
@@ -1016,7 +1019,7 @@
                   <span class="opacity-val" id="anim-time-val">50</span>
                 </div>
               </div>
-              <div class="fp-row" style="gap:8px;align-items:center;">
+              <div class="fp-row orient-btns" style="gap:8px;align-items:center;">
                 <button type="button" id="anim-play" class="orient">Play</button>
                 <button type="button" id="anim-pause" class="orient">Pause</button>
               </div>

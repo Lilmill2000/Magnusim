@@ -6,6 +6,7 @@ consume. Do NOT swap to pInlet/pOutlet (legacy CLI path in surface_averages.py).
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -148,6 +149,59 @@ def monitors_functions_text(
             )
         )
     return "\n".join(blocks) if blocks else "    // no area-average probes"
+
+
+def custom_monitor_key(name: str, taken: set[str]) -> str:
+    """``rc_<slug>`` function-object / postProcessing name for a custom monitor."""
+    slug = re.sub(r"[^a-z0-9]+", "_", str(name or "").lower()).strip("_") or "monitor"
+    key = f"rc_{slug}"
+    n = 2
+    while key in taken:
+        key = f"rc_{slug}_{n}"
+        n += 1
+    taken.add(key)
+    return key
+
+
+def sampled_surface_block(key: str, surface_file: str, *, write_control_text: str) -> str:
+    """Area-average U and p over a surface cut from the CAD faces a monitor names.
+
+    The surface (constant/triSurface/<file>) samples the nearest boundary
+    faces, so a monitor works on any faces — not only a whole BC patch.
+    """
+    return f"""    {key}
+    {{
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        {write_control_text}
+        log             true;
+        writeFields     false;
+        regionType      sampledSurface;
+        name            {key};
+        sampledSurfaceDict
+        {{
+            type        meshedSurface;
+            surface     {surface_file};
+            source      boundaryFaces;
+            interpolate false;
+        }}
+        operation       areaAverage;
+        fields          ( U p );
+    }}"""
+
+
+def custom_monitors_functions_text(
+    monitors: Iterable[dict],
+    *,
+    transient: TransientControl | None = None,
+) -> str:
+    """One sampledSurface block per written custom monitor (``key`` + ``surface``)."""
+    write = monitor_write_control_text(transient=transient)
+    return "\n".join(
+        sampled_surface_block(str(m["key"]), str(m["surface"]), write_control_text=write)
+        for m in monitors
+        if m.get("key") and m.get("surface")
+    )
 
 
 def _bc_faces(bc: object) -> list[str]:

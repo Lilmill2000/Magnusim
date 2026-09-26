@@ -18,7 +18,9 @@ export const REGISTRY_JSON_PATH = join(__dirname, 'generated', 'registry.json');
 export const DEFAULT_ANALYSIS_KEY = 'incompressible_steady';
 
 /** Mesher keys used as W20 advanced.mesh_engine (not algorithm-only backends). */
-const MESH_ENGINE_PRODUCT_KEYS = Object.freeze(['standard', 'cfmesh']);
+// Hex-dominant (snappyHexMesh) is a product engine too; leaving it out coerced a
+// saved Hex-dominant pick back to Standard.
+const MESH_ENGINE_PRODUCT_KEYS = Object.freeze(['standard', 'cfmesh', 'snappy_hexdominant']);
 
 let _cache = null;
 

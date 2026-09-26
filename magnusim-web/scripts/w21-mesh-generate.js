@@ -33,6 +33,7 @@ import { assembleMeshDoc, persistMeshDoc, persistOneMesh, meshCasePath, meshFold
 import { findGeometry, findStudy, walkGeometries } from './project-layout.js';
 import { getActiveSimulation } from './w17-sim-catalog.js';
 import { scheduleComputeQueueKick } from './server/compute-queue.ts';
+import { polyMeshComplete } from './poly-mesh.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -697,8 +698,8 @@ export function stopMeshGenerate({ meshId, projectId } = {}) {
 export function inspectGeneratedCase(caseDir) {
   if (!caseDir) return null;
   const polyDir = join(caseDir, 'constant', 'polyMesh');
-  const points = join(polyDir, 'points');
-  if (!existsSync(points)) return null;
+  // A generate killed mid copy-back leaves a partial polyMesh: not a mesh.
+  if (!polyMeshComplete(polyDir)) return null;
   let n_cells = null;
   let n_points = null;
   let n_faces = null;
@@ -1538,6 +1539,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     '--legacy-markers',
   ];
   if (simIdSnappy) argv.push('--simulation-id', String(simIdSnappy));
+  if (meshId) argv.push('--mesh-id', String(meshId));
   const command = argv.join(' ');
   const started_at = new Date().toISOString();
 

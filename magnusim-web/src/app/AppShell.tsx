@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
-import { CompareLayout, FiltersPanel, InspectPoint, Legend, SavedViews, Timeline } from '../chrome/FiltersPanel';
+import { FiltersPanel } from '../chrome/FiltersPanel';
 import { LeftTree } from '../chrome/LeftTree';
 import { TopToolbar } from '../chrome/TopToolbar';
 import { Home } from '../home/Home';
@@ -74,12 +74,9 @@ export function AppShell() {
       <SetupWizard />
       <LeftTree />
       <TopToolbar />
+      {/* Legend, timeline, compare, saved views and inspect point are owned by the
+          FILTERS panel and viewport chrome; only plugin filter sections mount here. */}
       <FiltersPanel />
-      <Legend />
-      <Timeline />
-      <CompareLayout />
-      <SavedViews />
-      <InspectPoint />
     </>
   );
 }

@@ -96,6 +96,14 @@ def test_bad_numbers_fall_back_instead_of_writing_nonsense():
     assert (ph.residual_u, ph.relax_p, ph.relax_u, ph.n_non_orthogonal) == (1e-4, 0.3, 0.7, 3)
 
 
+@pytest.mark.parametrize("model", ["LRR", "SSG"])
+def test_reynolds_stress_models_default_to_lower_relaxation(model):
+    # LRR diverged (epsilon blow-up, FPE at iteration 17-24) at 0.7 on a cold start.
+    assert physics_from_record({"turbulence_model": model}).relax_u == 0.5
+    # A value the user typed still wins.
+    assert physics_from_record({"turbulence_model": model, "relax_u": 0.8}).relax_u == 0.8
+
+
 @pytest.mark.parametrize("model", TURBULENCE_MODELS)
 def test_steady_case_is_written_for_model(tmp_path, model):
     case = _write(tmp_path, {"turbulence_model": model})
@@ -114,7 +122,8 @@ def test_steady_case_is_written_for_model(tmp_path, model):
     solution = _text(case, "system/fvSolution")
     for name in SOLVED[model]:
         assert re.search(rf"div\(phi,{name}\)\s+bounded Gauss upwind;", schemes), name
-        assert re.search(rf"^\s+{name}\s+0\.7;", solution, re.M), f"relaxation for {name}"
+        relax = r"0\.5" if model in ("LRR", "SSG") else r"0\.7"
+        assert re.search(rf"^\s+{name}\s+{relax};", solution, re.M), f"relaxation for {name}"
     for name in {"k", "omega", "epsilon", "R"} - set(SOLVED[model]):
         assert f"div(phi,{name})" not in schemes, f"{model} must not ask for div(phi,{name})"
     if model in ("LRR", "SSG"):

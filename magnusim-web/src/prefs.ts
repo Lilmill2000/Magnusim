@@ -1,6 +1,9 @@
 const COLLAPSE_PREF_KEY = 'magnusim.collapseCompletedSections';
 
+/** The open project's units win; the Settings choice is the default for new projects. */
 export function prefersImperial(): boolean {
+  const projectUnits = window.__CFD_PROJECT_UNITS__?.();
+  if (projectUnits) return /imperial/i.test(projectUnits);
   const p = window.__CFD_PREFS__;
   return !!(p && /imperial/i.test(String(p.units || '')));
 }

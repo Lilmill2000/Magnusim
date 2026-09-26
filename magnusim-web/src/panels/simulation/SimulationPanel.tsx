@@ -32,10 +32,33 @@ export function SimulationHub(props: IslandProps) {
   const rows = visibleAnalyses((registry?.analysis || []) as RegistryRow[]);
 
   const [selected, setSelected] = useState('');
+  const creating = props.panelId === 'cs-type-list';
+
+  function pick(row: RegistryRow) {
+    setSelected(row.key);
+    // Create Simulation: the detail title and Steady/Transient toggle follow the picked analysis.
+    if (creating) window.__CFD_CREATE_PICK_ANALYSIS__?.(row);
+  }
+
   useEffect(() => {
     if (selected || !rows.length) return;
-    setSelected(rows.find((row) => row.key === 'incompressible_steady')?.key || rows[0].key);
+    pick(rows.find((row) => row.key === 'incompressible_steady') || rows[0]);
   }, [rows, selected]);
+
+  useEffect(() => {
+    if (!creating) return undefined;
+    // The Steady/Transient toggle picks the analysis with that time dependency.
+    const onTimeDep = (ev: Event) => {
+      const value = String((ev as CustomEvent<{ value?: string }>).detail?.value || '');
+      const want = /transient/i.test(value) ? 'transient' : 'steady';
+      const current = rows.find((row) => row.key === selected);
+      if (current && String(current.time_dependency || 'steady') === want) return;
+      const hit = rows.find((row) => String(row.time_dependency || 'steady') === want);
+      if (hit) pick(hit);
+    };
+    window.addEventListener('cfd:create-time-dep', onTimeDep);
+    return () => window.removeEventListener('cfd:create-time-dep', onTimeDep);
+  }, [rows, selected, creating]);
 
   const list = (
     <ul className="ml-list" data-scope={props.scope || ''}>
@@ -45,7 +68,7 @@ export function SimulationHub(props: IslandProps) {
             type="button"
             className={selected === row.key ? 'ml-type is-selected' : 'ml-type'}
             data-analysis-key={row.key}
-            onClick={() => setSelected(row.key)}
+            onClick={() => pick(row)}
           >
             <span className="ml-type-name">{analysisLabel(row)}</span>
           </button>
@@ -95,6 +118,22 @@ const TIME_HINT =
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** Reynolds-stress models solve with Relaxation U 0.5 unless the study sets one (study_physics.default_relax_u). */
+export const RSM_RELAX_U = 0.5;
+
+export function numericsData(
+  record: Record<string, unknown>,
+  schema: RJSFSchema,
+  turbKey: string | null | undefined,
+): Record<string, unknown> {
+  const data = pickSchemaValues(record, schema);
+  const hasRelax = typeof data.relax_u === 'number' && Number.isFinite(data.relax_u);
+  if (!hasRelax && (turbKey === 'LRR' || turbKey === 'SSG') && schema.properties && 'relax_u' in schema.properties) {
+    data.relax_u = RSM_RELAX_U;
+  }
+  return data;
 }
 
 /**
@@ -192,7 +231,7 @@ export function SimulationDefaults(_props: IslandProps) {
         <SchemaForm
           className="schema-form sim-study-numerics"
           schema={numericsSchema}
-          formData={pickSchemaValues(record, numericsSchema)}
+          formData={numericsData(record, numericsSchema, turbKey)}
           hideFooter
           onCommit={(values) => {
             const patch = pickSchemaValues(values, numericsSchema);

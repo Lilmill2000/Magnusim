@@ -2541,6 +2541,7 @@ select.fp-select {
 .np-field input,
 .np-field textarea,
 .np-field select {
+  font-family: inherit;
   font-size: 13px;
   padding: 6px 8px;
   border: 1px solid #b8c0cc;
@@ -3395,6 +3396,10 @@ select.fp-select {
   padding: 2px 6px;
   border: 1px solid #d0d5dd;
   border-radius: 4px;
+}
+/* Materials: fluid picker and custom fluid name need room for "Custom fluid". */
+.bc-input.mat-wide-input {
+  width: 128px;
 }
 .bc-value-row {
   display: inline-flex;

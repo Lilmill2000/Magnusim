@@ -48,7 +48,9 @@ import {
 } from './study-io.js';
 import { listFoamTimeDirs, walkGeometries } from './project-layout.js';
 import { solveStartBlockReason } from './solve-start-block.js';
-import { scheduleComputeQueueKick } from './server/compute-queue.ts';
+import { turbulenceLabel } from './registry-defaults.js';
+import { removeComputeJob, scheduleComputeQueueKick } from './server/compute-queue.ts';
+import { polyMeshComplete } from './poly-mesh.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -671,7 +673,11 @@ export function wallTreatment(rec) {
 function airFromMaterials(mats, simId, legacyId) {
   const list = (mats && Array.isArray(mats.materials) && mats.materials) || [];
   const scoped = list.filter((m) => matchesStudy(m, simId, legacyId));
-  const air = scoped.find((m) => /air/i.test(String(m.name || ''))) || null;
+  // The study's one fluid (Air, Water or custom): the assigned material, else an
+  // older study's Air, else the first.
+  const assigned = (m) => (Array.isArray(m.assigned_volumes) && m.assigned_volumes.length > 0) || !!m.assigned_volume;
+  const air =
+    scoped.find(assigned) || scoped.find((m) => /air/i.test(String(m.name || ''))) || scoped[0] || null;
   if (!air) return null;
   const vols = Array.isArray(air.assigned_volumes) ? air.assigned_volumes : [];
   const nu = Number(air.kinematic_viscosity);
@@ -762,21 +768,8 @@ function meshRecordReady(rec) {
   const live = rec && rec.live_mesh_result;
   const caseDir = (live && live.case_dir) || (rec && rec.case_dir);
   const polyFromCase = caseDir ? join(caseDir, 'constant', 'polyMesh') : null;
-  const poly =
-    (polyFromCase && existsSync(join(polyFromCase, 'owner')) && existsSync(join(polyFromCase, 'points'))
-      ? polyFromCase
-      : null) ||
-    (live && live.mesh_path) ||
-    polyFromCase;
-  return !!(
-    live &&
-    live.status === 'done' &&
-    caseDir &&
-    existsSync(caseDir) &&
-    poly &&
-    existsSync(join(poly, 'owner')) &&
-    existsSync(join(poly, 'points'))
-  );
+  const poly = (polyMeshComplete(polyFromCase) ? polyFromCase : null) || (live && live.mesh_path) || polyFromCase;
+  return !!(live && live.status === 'done' && caseDir && existsSync(caseDir) && polyMeshComplete(poly));
 }
 
 export function listGeneratedMeshes(projectId, simulationId) {
@@ -834,7 +827,7 @@ export function resolveProjectMesh(projectId, meshId, simulationId) {
   const case_dir = (wanted && wanted.case_dir) || (wanted && wanted.live_mesh_result && wanted.live_mesh_result.case_dir) || null;
   const stalePath = wanted && wanted.live_mesh_result && wanted.live_mesh_result.mesh_path;
   const polyFromCase = case_dir ? join(case_dir, 'constant', 'polyMesh') : null;
-  const polyComplete = (p) => !!(p && existsSync(join(p, 'owner')) && existsSync(join(p, 'points')));
+  const polyComplete = (p) => polyMeshComplete(p);
   const poly = polyComplete(polyFromCase) ? polyFromCase : polyComplete(stalePath) ? stalePath : polyFromCase || stalePath;
   const live =
     wanted &&
@@ -863,10 +856,10 @@ export function resolveProjectMesh(projectId, meshId, simulationId) {
       fix: { go: wanted && wanted.id ? 'mesh' : 'mesh-hub', id: wanted && wanted.id, name: wanted && wanted.name },
     };
   }
-  if (!poly || !existsSync(poly) || !existsSync(join(poly, 'owner')) || !existsSync(join(poly, 'points'))) {
+  if (!polyMeshComplete(poly)) {
     return {
       ok: false,
-      error: 'polyMesh incomplete (owner/points)',
+      error: 'The mesh files are incomplete — generate the mesh again',
       project_id: id,
       case_dir,
       mesh_path: poly,
@@ -1134,7 +1127,7 @@ export function validateSolveReady(projectId, opts) {
     return { ok: false, error: 'Create an Incompressible simulation first', project_id: id, fix: { go: 'create-sim' } };
   }
   if (!air || !air.assigned) {
-    return { ok: false, error: 'Assign Air to a volume first', project_id: id, fix: { go: 'material' } };
+    return { ok: false, error: 'Assign a fluid to a volume first', project_id: id, fix: { go: 'material' } };
   }
   if (!inlets.length && pressures.length < 2) {
     const incomplete = records.find((b) => !bcFaces(b).length);
@@ -1334,6 +1327,48 @@ export function getRunMonitors(projectId, runId, simulationId) {
       series,
     });
   }
+  // Custom monitors: area average over the faces a Monitor names (any faces,
+  // sampled from the CAD surface), written as rc_<name>.
+  const custom = [];
+  for (const cm of Array.isArray(meta.custom_monitors) ? meta.custom_monitors : []) {
+    if (!cm || !cm.key) continue;
+    const mon = readMonitorDat(caseDir, String(cm.key));
+    if (!mon) continue;
+    const uCol = mon.columns.findIndex((c) => /areaAverage\(U\)/.test(c));
+    const pCol = mon.columns.findIndex((c) => /areaAverage\(p\)/.test(c));
+    const series = mon.rows.map((r) => {
+      const U = uCol >= 0 && Array.isArray(r[1 + uCol]) ? r[1 + uCol] : null;
+      const pKin = pCol >= 0 && Number.isFinite(r[1 + pCol]) ? r[1 + pCol] : null;
+      return {
+        t: r[0],
+        U,
+        Umag: U ? Math.hypot(U[0], U[1], U[2]) : null,
+        p_Pa: pKin != null ? pKin * rho : null,
+        Q_m3s: null,
+        Un_m_s: null,
+      };
+    });
+    const last = series[series.length - 1] || null;
+    custom.push({
+      id: cm.id || null,
+      key: cm.key,
+      name: cm.name || cm.key,
+      faces: Array.isArray(cm.faces) ? cm.faces : [],
+      area_m2: (mon && mon.area) || cm.area_m2 || null,
+      n_faces: mon.faces != null ? mon.faces : null,
+      rho,
+      last,
+      final: last
+        ? {
+            iteration: last.t,
+            mean_velocity_vector: last.U,
+            mean_velocity_magnitude: last.Umag,
+            pressure_Pa: last.p_Pa,
+          }
+        : null,
+      series,
+    });
+  }
   // mass balance across all monitored openings
   let sumIn = 0;
   let sumOut = 0;
@@ -1352,6 +1387,7 @@ export function getRunMonitors(projectId, runId, simulationId) {
     time_dependency: rec.time_dependency || null,
     rho,
     monitors: out,
+    custom,
     balance:
       out.length && (sumIn > 0 || sumOut > 0)
         ? {
@@ -1855,7 +1891,12 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
     return { ok: false, error: 'Stop the run before deleting it' };
   }
   const folder = runFolderOf(id, runId, simulationId) || runFolderOf(id, runId);
-  if (!folder) return { ok: false, error: 'Run not found' };
+  if (!folder) {
+    try {
+      removeComputeJob('solve', runId, id);
+    } catch {}
+    return { ok: false, error: 'Run not found' };
+  }
   const sid = simulationId || folder.simulation_id || null;
   try {
     rmSync(folder.dir, { recursive: true, force: true });
@@ -1864,6 +1905,10 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
   }
   try {
     if (existsSync(runSidecarPath(id, runId))) rmSync(runSidecarPath(id, runId), { force: true });
+  } catch {}
+  // Off the compute queue now, not when it reaches the head and fails to start.
+  try {
+    removeComputeJob('solve', runId, id);
   } catch {}
   const cat = loadCatalog(id, { simulation_id: sid });
   return {
@@ -1944,6 +1989,15 @@ function persistRunDoc(projectId, doc) {
  *   onDone?: (result: { status: string, exit_code?: number, run_id?: string, project_id?: string, error?: string|null }) => void,
  * }} [opts]
  */
+/** "k-epsilon", "Laminar"… for a study record that stores a model key or its label. */
+function runTurbulenceLabel(sim) {
+  const raw = String((sim && (sim.turbulence_model_key || sim.turbulence_model)) || '').trim();
+  const key = raw.toLowerCase().replace(/[\s_-]+/g, '');
+  const byKey = { laminar: 'laminar', kepsilon: 'kEpsilon', komegasst: 'kOmegaSST', sst: 'kOmegaSST', lrr: 'LRR', ssg: 'SSG' };
+  const stripped = key.replace(/\(.*\)/, '').replace(/reynoldsstress/, '');
+  return turbulenceLabel(byKey[stripped] || byKey[key] || raw || 'kOmegaSST');
+}
+
 export function startSolve(opts = {}) {
   const { projectId, endTime, writeInterval, runId, transient: transientIn, onDone, simulationId } = opts;
   if (liveRun && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) {
@@ -2313,9 +2367,10 @@ export function startSolve(opts = {}) {
     })),
     wall_default: ready.wallDefault || 'No-slip',
     project_id: id,
+    // The study's own model, not a fixed label (a k-epsilon run used to read "k-ω SST").
     note: isTransient
-      ? `pimpleFoam ${nProcs > 1 ? nProcs + ' ranks' : 'serial'} — Incompressible / k-ω SST / PIMPLE · ${describeTransient(transient)}`
-      : `simpleFoam ${nProcs > 1 ? nProcs + ' ranks' : 'serial'} — Incompressible / k-ω SST / SIMPLE`,
+      ? `pimpleFoam ${nProcs > 1 ? nProcs + ' ranks' : 'serial'} — Incompressible / ${runTurbulenceLabel(ready.sim)} / PIMPLE · ${describeTransient(transient)}`
+      : `simpleFoam ${nProcs > 1 ? nProcs + ' ranks' : 'serial'} — Incompressible / ${runTurbulenceLabel(ready.sim)} / SIMPLE`,
     increment: INCREMENT,
   };
   liveRun.baseRunning = baseRunning;

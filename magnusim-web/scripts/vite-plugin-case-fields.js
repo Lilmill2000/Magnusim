@@ -63,6 +63,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
+import { polyMeshComplete } from './poly-mesh.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -525,7 +526,25 @@ function runExport(caseDir, time, field, outDir) {
   });
 }
 
-async function ensureExported(caseDir, time, field) {
+/**
+ * One export per cache folder at a time. Opening Results fires several field
+ * requests (latest frame, animation preload, prefetch) for the same time; two
+ * exports writing one folder let a reader see a half-written VTP and answer 500.
+ */
+const fieldExportInflight = new Map();
+
+function ensureExported(caseDir, time, field) {
+  const key = cacheKey(caseDir, time, field);
+  const running = fieldExportInflight.get(key);
+  if (running) return running;
+  const job = ensureExportedOnce(caseDir, time, field).finally(() => {
+    fieldExportInflight.delete(key);
+  });
+  fieldExportInflight.set(key, job);
+  return job;
+}
+
+async function ensureExportedOnce(caseDir, time, field) {
   mkdirSync(CACHE_ROOT, { recursive: true });
   const dir = cacheKey(caseDir, time, field);
   const vtp = join(dir, `${field}.vtp`);
@@ -808,21 +827,9 @@ function tryPrefetchFields(caseDir, times, field = 'magU') {
       ) {
         continue;
       }
-      const rpc = callWorker(
-        'filter.case_field',
-        { case_dir: caseDir, time: t, field: name, out_dir: dir },
-        180000,
-      );
-      if (!rpc || typeof rpc.then !== 'function') return;
+      // Same in-flight export as a user request for this frame, never a second writer.
       try {
-        await rpc;
-        if (stamp) {
-          try {
-            writeFileSync(stampPath, stamp, 'utf8');
-          } catch {
-            /* ignore */
-          }
-        }
+        await ensureExported(caseDir, t, name);
       } catch (err) {
         console.warn('[CFD] field prefetch', t, err && err.message ? err.message : err);
       }
@@ -1877,7 +1884,10 @@ function hydrateActiveMeshCase() {
     // Vite/process restart lost the child â€” do not keep a ghost "meshing" card.
     try {
       const before = live.fingerprint_before || {};
-      const keepPrev = before.n_cells != null;
+      // "Previous mesh kept" only when that mesh is still whole on disk: the
+      // interrupted generate may already have overwritten part of it.
+      const polyDir = live.mesh_path || (live.case_dir ? join(live.case_dir, 'constant', 'polyMesh') : null);
+      const keepPrev = before.n_cells != null && polyMeshComplete(polyDir);
       persistMeshResult(info.project_id, {
         ...live,
         status: keepPrev ? 'done' : 'failed',

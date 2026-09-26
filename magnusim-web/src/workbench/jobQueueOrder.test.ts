@@ -231,7 +231,7 @@ describe('meshIsQueuedOrGenerating', () => {
 
 describe('queueKickAfterStart', () => {
   it('holds the front job when start fails validation so the next mesh cannot skip it', () => {
-    expect(queueKickAfterStart({ ok: false, error: 'Assign Air to a volume first' }, false)).toBe('hold');
+    expect(queueKickAfterStart({ ok: false, error: 'Assign a fluid to a volume first' }, false)).toBe('hold');
   });
 
   it('retries later only when the machine is busy', () => {

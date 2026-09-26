@@ -557,6 +557,40 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
   return { meshIdMap };
 }
 
+const STUDY_IDENTITY_KEYS = new Set([
+  'id',
+  'project_id',
+  'name',
+  'kind',
+  'geometry_id',
+  'geometry_name',
+  'geometry_body',
+  'time_dependency',
+  'algorithm',
+  // The analysis follows the new study's time dependency.
+  'analysis',
+  'analysis_type',
+  'analysis_title',
+  'created_at',
+  'updated_at',
+  'sort_index',
+  'persistence',
+  'increment',
+  'folder',
+  'dir',
+]);
+
+/** Scalar study settings (turbulence model and the like) to carry into a copy. */
+export function studyPhysicsFrom(src) {
+  const out = {};
+  for (const [key, value] of Object.entries(src || {})) {
+    if (STUDY_IDENTITY_KEYS.has(key)) continue;
+    if (value == null || typeof value === 'object') continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 function createSimulation(body) {
   const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
@@ -569,7 +603,14 @@ function createSimulation(body) {
   const built = buildSimulation(body || {}, proj);
   if (!built.ok) return built;
   const root = projectDir(projectId);
-  const named = assignStudyNames([...(ensureCatalog(projectId, proj).simulations || []), built.sim]);
+  const known = ensureCatalog(projectId, proj).simulations || [];
+  if (body && body.copy_from) {
+    // Copy / clone keeps the source study's physics (turbulence model and the other
+    // study-level settings), not the new-study defaults: cloned results were solved with them.
+    const src = known.find((s) => s && String(s.id) === String(body.copy_from));
+    if (src) Object.assign(built.sim, studyPhysicsFrom(src));
+  }
+  const named = assignStudyNames([...known, built.sim]);
   const sim = named.find((s) => s.id === built.sim.id) || built.sim;
   try {
     createStudyFolder(root, sim.geometry_id, sim);

@@ -12,12 +12,38 @@ import { applyMaterial, deleteMaterial, geometryBodies } from '../legacyBridge';
 import { PanelChrome } from '../PanelChrome';
 import { scopeIds } from '../scope';
 
-/**
- * Air at about 20 °C. The case writer finds the fluid by name (/air/), so Air
- * is the one fluid; Water and custom fluids stay off until ROADMAP.md's
- * restore criteria are met.
- */
+/** Air at about 20 °C. */
 export const AIR = { name: 'Air', nu: 1.529e-5, rho: 1.196 } as const;
+/** Fresh water at 20 °C. */
+export const WATER = { name: 'Water', nu: 1.004e-6, rho: 998.2 } as const;
+
+/**
+ * A study solves one incompressible fluid: Air, Water, or a custom fluid with
+ * its own name, viscosity and density. The solver reads the assigned one.
+ */
+export type FluidKind = 'Air' | 'Water' | 'Custom';
+export const FLUID_OPTIONS: Array<{ kind: FluidKind; label: string }> = [
+  { kind: 'Air', label: 'Air' },
+  { kind: 'Water', label: 'Water' },
+  { kind: 'Custom', label: 'Custom fluid' },
+];
+
+export function fluidKindOf(m: { name?: unknown; library?: unknown } | null | undefined): FluidKind {
+  const lib = String(m?.library || '').toUpperCase();
+  const name = String(m?.name || '').trim();
+  if (lib === 'WATER' || /^water$/i.test(name)) return 'Water';
+  if (lib === 'CUSTOM') return 'Custom';
+  if (!name || lib === 'AIR' || /^air$/i.test(name)) return 'Air';
+  return 'Custom';
+}
+
+/** The study's fluid among its saved materials: the assigned one, else an older study's Air, else the first. */
+export function studyFluid(rows: SavedMaterial[]): SavedMaterial | null {
+  const assigned = rows.find(
+    (m) => (Array.isArray(m.assigned_volumes) && m.assigned_volumes.length > 0) || !!m.assigned_volume,
+  );
+  return assigned || rows.find((m) => /air/i.test(String(m.name || ''))) || rows[0] || null;
+}
 
 export interface SavedMaterial {
   id?: string;
@@ -51,15 +77,21 @@ function newMaterialId(): string {
 /** The on-disk record the case writer reads (same keys POST /api/materials writes). */
 export function airRecord(
   base: SavedMaterial | null,
-  fields: { nu: number; rho: number; volumes: string[] },
+  fields: { nu: number; rho: number; volumes: string[]; name?: string; kind?: FluidKind },
   ids: { simulation_id?: string; geometry_id?: string; project_id?: string },
   now: string,
 ): SavedMaterial {
   const volumes = fields.volumes.map(String);
+  const kind = fields.kind || fluidKindOf(base);
+  const name =
+    kind === 'Custom'
+      ? String(fields.name || (fluidKindOf(base) === 'Custom' ? base?.name : '') || 'Custom fluid').trim() ||
+        'Custom fluid'
+      : kind;
   return {
     ...(base || {}),
     id: base?.id || newMaterialId(),
-    name: AIR.name,
+    name,
     type: 'Newtonian',
     viscosity_model: 'Newtonian',
     kinematic_viscosity: fields.nu,
@@ -68,7 +100,7 @@ export function airRecord(
     density: fields.rho,
     rho: fields.rho,
     density_unit: 'kg/m3',
-    library: String(base?.library || 'DEFAULT'),
+    library: kind === 'Custom' ? 'CUSTOM' : kind.toUpperCase(),
     assigned_volumes: volumes,
     assigned_volume: volumes[0] || null,
     // The Python material model reads body_ids first; keep the aliases in step.
@@ -89,12 +121,15 @@ export function toggleVolume(volumes: string[], body: string): string[] {
 }
 
 /**
- * Materials → Air. Density and kinematic viscosity save on change; a body
- * clicked here, in the viewport or in the tree toggles its assignment.
+ * Materials → the study's fluid (Air, Water or custom). Fluid, name, density
+ * and kinematic viscosity save on change; a body clicked here, in the viewport
+ * or in the tree toggles its assignment.
  */
 export function MaterialsPanel(props: IslandProps) {
   const [material, setMaterial] = useState<SavedMaterial | null>(null);
   const [others, setOthers] = useState<SavedMaterial[]>([]);
+  const [kind, setKind] = useState<FluidKind>('Air');
+  const [name, setName] = useState<string>(AIR.name);
   const [nu, setNu] = useState<number>(AIR.nu);
   const [rho, setRho] = useState<number>(AIR.rho);
   const [volumes, setVolumes] = useState<string[]>([]);
@@ -102,8 +137,8 @@ export function MaterialsPanel(props: IslandProps) {
   const [note, setNote] = useState('');
   const imperial = prefersImperial();
   // Saves and body picks read the latest values, not the render they were created in.
-  const live = useRef({ material, others, nu, rho, volumes });
-  live.current = { material, others, nu, rho, volumes };
+  const live = useRef({ material, others, kind, name, nu, rho, volumes });
+  live.current = { material, others, kind, name, nu, rho, volumes };
   const queue = useRef<Promise<unknown>>(Promise.resolve());
 
   function ids() {
@@ -114,14 +149,18 @@ export function MaterialsPanel(props: IslandProps) {
   }
 
   function applySaved(rows: SavedMaterial[]) {
-    const air = rows.find((m) => /air/i.test(String(m.name || ''))) || null;
-    setMaterial(air);
-    setOthers(rows.filter((m) => m !== air));
-    const savedNu = Number(air?.kinematic_viscosity ?? air?.nu);
-    const savedRho = Number(air?.density ?? air?.rho);
-    setNu(Number.isFinite(savedNu) && savedNu > 0 ? savedNu : AIR.nu);
-    setRho(Number.isFinite(savedRho) && savedRho > 0 ? savedRho : AIR.rho);
-    setVolumes(Array.isArray(air?.assigned_volumes) ? air.assigned_volumes.map(String) : []);
+    const fluid = studyFluid(rows);
+    const k = fluidKindOf(fluid);
+    const preset = k === 'Water' ? WATER : AIR;
+    setMaterial(fluid);
+    setOthers(rows.filter((m) => m !== fluid));
+    setKind(k);
+    setName(k === 'Custom' ? String(fluid?.name || 'Custom fluid') : k);
+    const savedNu = Number(fluid?.kinematic_viscosity ?? fluid?.nu);
+    const savedRho = Number(fluid?.density ?? fluid?.rho);
+    setNu(Number.isFinite(savedNu) && savedNu > 0 ? savedNu : preset.nu);
+    setRho(Number.isFinite(savedRho) && savedRho > 0 ? savedRho : preset.rho);
+    setVolumes(Array.isArray(fluid?.assigned_volumes) ? fluid.assigned_volumes.map(String) : []);
   }
 
   function load() {
@@ -146,14 +185,22 @@ export function MaterialsPanel(props: IslandProps) {
     return () => window.removeEventListener('cfd:material', onMaterial);
   }, [props.projectId, props.simId, props.scope]);
 
-  /** Write Air through the worker (materials.set) and tell the runtime. Saves run one at a time. */
-  function save(next: Partial<{ nu: number; rho: number; volumes: string[] }>) {
+  /** Write the fluid through the worker (materials.set) and tell the runtime. Saves run one at a time. */
+  function save(next: Partial<{ nu: number; rho: number; volumes: string[]; kind: FluidKind; name: string }>) {
     const cur = live.current;
-    const fields = { nu: next.nu ?? cur.nu, rho: next.rho ?? cur.rho, volumes: next.volumes ?? cur.volumes };
+    const fields = {
+      nu: next.nu ?? cur.nu,
+      rho: next.rho ?? cur.rho,
+      volumes: next.volumes ?? cur.volumes,
+      kind: next.kind ?? cur.kind,
+      name: next.name ?? cur.name,
+    };
     live.current = { ...cur, ...fields };
     if (next.nu !== undefined) setNu(fields.nu);
     if (next.rho !== undefined) setRho(fields.rho);
     if (next.volumes !== undefined) setVolumes(fields.volumes);
+    if (next.kind !== undefined) setKind(fields.kind);
+    if (next.name !== undefined) setName(fields.name);
     const run = async () => {
       const scoped = ids();
       if (!scoped.project_id || !scoped.simulation_id) {
@@ -186,6 +233,14 @@ export function MaterialsPanel(props: IslandProps) {
     return p;
   }
 
+  /** Air and Water load their property values; Custom keeps the numbers to edit. */
+  function pickFluid(next: FluidKind) {
+    if (next === live.current.kind) return;
+    if (next === 'Air') return save({ kind: 'Air', name: AIR.name, nu: AIR.nu, rho: AIR.rho });
+    if (next === 'Water') return save({ kind: 'Water', name: WATER.name, nu: WATER.nu, rho: WATER.rho });
+    return save({ kind: 'Custom', name: 'Custom fluid' });
+  }
+
   function toggleBody(body: string) {
     return save({ volumes: toggleVolume(live.current.volumes, body) });
   }
@@ -205,9 +260,46 @@ export function MaterialsPanel(props: IslandProps) {
 
   return (
     <PanelChrome
-      title={AIR.name}
+      title={name || AIR.name}
       onDelete={material ? () => void deleteMaterial().catch((e) => setNote(e instanceof Error ? e.message : 'Delete failed')) : undefined}
     >
+      <div className="mat-row">
+        <span className="mat-k">Fluid</span>
+        <span className="mat-v">
+          <select
+            className="bc-input mat-wide-input"
+            aria-label="Fluid"
+            value={kind}
+            onChange={(e) => void pickFluid(e.target.value as FluidKind)}
+          >
+            {FLUID_OPTIONS.map((o) => (
+              <option key={o.kind} value={o.kind}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </span>
+      </div>
+      {kind === 'Custom' ? (
+        <div className="mat-row">
+          <span className="mat-k">Name</span>
+          <span className="mat-v">
+            <input
+              className="bc-input mat-wide-input"
+              aria-label="Fluid name"
+              defaultValue={name}
+              key={`name-${material?.id || ''}-${name}`}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                if (v && v !== live.current.name) void save({ name: v });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+            />
+          </span>
+        </div>
+      ) : null}
       <div className="mat-row">
         <span className="mat-k">Viscosity model</span>
         <span className="mat-v">Newtonian</span>
@@ -256,7 +348,7 @@ export function MaterialsPanel(props: IslandProps) {
                   type="button"
                   className="bc-assign-pick"
                   aria-pressed={on}
-                  title={on ? `Unassign ${body}` : `Assign Air to ${body}`}
+                  title={on ? `Unassign ${body}` : `Assign ${name || AIR.name} to ${body}`}
                   onClick={() => void toggleBody(body)}
                 >
                   {body}

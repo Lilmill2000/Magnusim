@@ -24,6 +24,7 @@ from cfddesk.jobs import legacy_markers as _legacy  # noqa: E402
 from cfddesk.jobs.events import emit  # noqa: E402
 from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case  # noqa: E402
 from cfddesk.mesh.snappy_hexdominant import (  # noqa: E402
+    base_cell_size,
     fineness_params,
     read_feature_marks,
     read_polymesh_counts,
@@ -71,20 +72,46 @@ def render_snappy_script(*, dst: str, win_out: str, generate_id: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def boundary_patches(project_dir: Path, step: Path, tri_dir: Path, simulation_id: str = ""):
-    """BC patches as one STL each in ``tri_dir``, and a point inside the fluid.
+def boundary_patches(
+    project_dir: Path,
+    step: Path,
+    tri_dir: Path,
+    simulation_id: str = "",
+    *,
+    mesh_id: str = "",
+    base_m: float | None = None,
+    walls_level: int = 1,
+    add_layers: bool = False,
+) -> dict:
+    """BC patches as one STL each in ``tri_dir``, a point inside the fluid, and
+    the mesh's refinements.
 
     Same face -> patch map as the Standard mesher (``generate_standard``): the
-    study's BCs, then every other face on ``walls``. Returns
-    ``(patches, location_m)`` for ``write_hexdominant_dicts``.
+    study's BCs, each Inflate boundary layer's faces on their own wall patch,
+    then every other face on ``walls``. Surface custom sizing faces get a
+    refinement-only STL each. Returns ``patches`` / ``location_m`` /
+    ``layer_specs`` / ``refine_regions`` for ``write_hexdominant_dicts``, plus
+    notes for the log.
     """
+    import numpy as np
     from generate_standard import _add_default_walls, _apply_web_bcs
 
     from cfddesk.cad.location import find_location_in_mesh
     from cfddesk.cad.step import load_step, tessellate_faces
     from cfddesk.mesh.gmsh_standard import _face_to_patch_map, emitted_patch_types
-    from cfddesk.mesh.snappy_hexdominant import write_patch_stls
-    from cfddesk.mesh.web_refinements import leftover_faces
+    from cfddesk.mesh.snappy_hexdominant import (
+        refinement_level_for_size,
+        write_patch_stls,
+        write_refine_stls,
+    )
+    from cfddesk.mesh.web_refinements import (
+        bind_inflate_patches,
+        inflate_notes,
+        layer_specs_for_generate,
+        leftover_faces,
+        load_inflate_refs,
+        load_surface_custom_sizes,
+    )
     from cfddesk.project.model import Project
     from cfddesk.project.web_adapter import study_web_bcs
 
@@ -94,16 +121,76 @@ def boundary_patches(project_dir: Path, step: Path, tri_dir: Path, simulation_id
         getattr(units, "proposed_scale_to_metres", None) or getattr(units, "scale_to_metres", None) or 0.001
     )
     n_faces = len(solid.faces)
+    pts, tris, fids = tessellate_faces(solid)
+    pts_m = np.asarray(pts, dtype=np.float64) * scale
+    diag_m = float(np.linalg.norm(pts_m.max(axis=0) - pts_m.min(axis=0))) if len(pts_m) else 1.0
+    h_wall_m = (base_m or diag_m / 20.0) / (2 ** max(0, int(walls_level)))
+
     project = Project.from_solid(solid, scale_to_metres=scale, units_confirmed=True)
     web_bcs = study_web_bcs(project_dir, None, simulation_id=simulation_id or None)
     project = _apply_web_bcs(project, web_bcs, n_faces)
+    sizes, _mins, size_notes = load_surface_custom_sizes(project_dir, mesh_id, n_faces, diag_m)
+    inflates = load_inflate_refs(project_dir, mesh_id, n_faces, h_wall_m, extra_face_sizes=sizes)
+    project, inflates = bind_inflate_patches(project, inflates, n_faces)
     project = _add_default_walls(project, leftover_faces(project, n_faces))
-    pts, tris, fids = tessellate_faces(solid)
-    patches = write_patch_stls(
-        tri_dir, pts * scale, tris, fids, _face_to_patch_map(project), emitted_patch_types(project)
-    )
+    patch_types = emitted_patch_types(project)
+    patches = write_patch_stls(tri_dir, pts_m, tris, fids, _face_to_patch_map(project), patch_types)
+
+    layer_specs = None
+    if inflates or add_layers:
+        wall_patches = [p["name"] for p in patches if p["type"] == "wall"]
+        automatic = [] if not add_layers else [_AutoLayers(name) for name in wall_patches]
+        inflate_names = {s.patch_name for s in inflates if s.patch_name}
+        layer_specs = [a for a in automatic if a.name not in inflate_names] + layer_specs_for_generate(
+            wall_patches=wall_patches,
+            inflate=inflates,
+            add_layers=False,
+            default_n=2,
+            default_thickness_m=0.0,
+            default_expansion=1.1,
+            default_min_m=0.0,
+        )
+
+    regions = []
+    if base_m:
+        groups = [
+            {
+                "face_ids": n["face_ids"],
+                "size_m": float(n["size_m"]),
+                "level": refinement_level_for_size(base_m, float(n["size_m"])),
+                # Refine about three target cells out from the faces.
+                "distance_m": 3.0 * float(n["size_m"]),
+                "source": n.get("name"),
+            }
+            for n in size_notes
+        ]
+        regions = write_refine_stls(tri_dir, pts_m, tris, fids, groups)
     location = find_location_in_mesh(solid, scale)
-    return patches, location.point_metres
+    return {
+        "patches": patches,
+        "location_m": location.point_metres,
+        "layer_specs": layer_specs,
+        "refine_regions": regions,
+        "inflate": inflate_notes(inflates),
+        "surface_custom": [
+            {"name": r.get("source"), "size_m": r["size_m"], "level": r["level"], "faces": len(r["face_ids"])}
+            for r in regions
+        ],
+    }
+
+
+class _AutoLayers:
+    """Automatic BL on a wall patch: two layers sized relative to the local cell."""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.n_layers = 2
+        self.thickness_m = None
+        self.first_layer_m = None
+        self.expansion = None
+        self.min_thickness_m = None
+        self.specify = "total"
+        self.honor_absolute = False
 
 
 def main() -> int:
@@ -127,6 +214,7 @@ def main() -> int:
         help="Host-prep + render bash only (no WSL).",
     )
     p.add_argument("--simulation-id", default="")
+    p.add_argument("--mesh-id", default="")
     args = p.parse_args()
     _legacy.set_legacy_markers(bool(args.legacy_markers))
 
@@ -181,10 +269,26 @@ def main() -> int:
         bounds = scaled["bounds_m"]
         # Body1.stl stays the source of feature edges; the mesh itself is built
         # from one surface per BC patch so the solver finds its patches.
-        patches, location_m = boundary_patches(project_dir, step, tri, sid)
-        _progress("patches", patches=[p["name"] for p in patches], location_m=list(location_m))
         params = fineness_params(
             int(args.fineness), physics_based=physics_based, bounds_m=bounds
+        )
+        prep = boundary_patches(
+            project_dir,
+            step,
+            tri,
+            sid,
+            mesh_id=str(args.mesh_id or ""),
+            base_m=base_cell_size(int(args.fineness), bounds),
+            walls_level=params["walls_level"],
+            add_layers=add_layers,
+        )
+        patches, location_m = prep["patches"], prep["location_m"]
+        _progress(
+            "patches",
+            patches=[p["name"] for p in patches],
+            location_m=list(location_m),
+            surface_custom=prep["surface_custom"],
+            inflate=prep["inflate"],
         )
         _progress(
             "write_dicts",
@@ -204,6 +308,8 @@ def main() -> int:
             bounds_m=bounds,
             patches=patches,
             location_m=location_m,
+            layer_specs=prep["layer_specs"],
+            refine_regions=prep["refine_regions"],
         )
         meta_doc = {
             "increment": "W25",

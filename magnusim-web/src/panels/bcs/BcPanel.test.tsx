@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BcState } from '../legacyBridge';
-import { BcPanel, bcCardSub, bcKind, perFaceHint, velocityUnits } from './BcPanel';
+import { BcPanel, bcCardSub, bcKind, convertFlowValue, perFaceHint, velocityUnits } from './BcPanel';
 
 const workerRpc = vi.fn(async (_method: string, _params?: unknown) => ({ menu: [] as unknown[] }));
 vi.mock('../../api/workerRpc', () => ({
@@ -183,7 +183,23 @@ describe('editor', () => {
     expect(screen.getByLabelText('Z')).toBeInTheDocument();
     expect(screen.getByText('Each face gets this value on its own. 2 faces × 5 m/s = 10 m/s total.')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Velocity type'), { target: { value: 'Flow rate' } });
-    expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('v1', { velocity_type: 'Flow rate' });
+    // 5 m/s is converted to the same flow, not reused as 5 m³/s (no face area here → 0.01 m² fallback).
+    expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('v1', {
+      velocity_type: 'Flow rate',
+      flow_rate_type: 'Volumetric flow',
+      value: 0.05,
+      unit: 'm³/s',
+    });
+  });
+
+  it('converts between velocity, volumetric flow and mass flow per face', () => {
+    const basis = { face_area_m2: 0.002, density: 1.2 };
+    const q = convertFlowValue(10, { velocityType: 'Fixed', unit: 'm/s' }, { velocityType: 'Flow rate', flowRateType: 'Volumetric flow', unit: 'm³/s' }, basis);
+    expect(q).toBeCloseTo(0.02, 10);
+    const m = convertFlowValue(q, { velocityType: 'Flow rate', flowRateType: 'Volumetric flow', unit: 'm³/s' }, { velocityType: 'Flow rate', flowRateType: 'Mass flow', unit: 'kg/s' }, basis);
+    expect(m).toBeCloseTo(0.024, 10);
+    const v = convertFlowValue(m, { velocityType: 'Flow rate', flowRateType: 'Mass flow', unit: 'kg/s' }, { velocityType: 'Fixed', unit: 'ft/s' }, basis);
+    expect(v).toBeCloseTo(10 / 0.3048, 3);
   });
 
   it('says so when no BC is open', () => {

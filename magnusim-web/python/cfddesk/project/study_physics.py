@@ -71,6 +71,15 @@ class StudyPhysics:
 
 DEFAULT_PHYSICS = StudyPhysics()
 
+# Reynolds-stress models blow up epsilon within a few dozen SIMPLE iterations
+# at 0.7 on a cold start; 0.5 keeps them stable (the Study panel shows it).
+RSM_RELAX_U = 0.5
+
+
+def default_relax_u(model: str) -> float:
+    """Relaxation U when the study has not set one: lower for Reynolds-stress models."""
+    return RSM_RELAX_U if model in RSM_MODELS else DEFAULT_PHYSICS.relax_u
+
 
 def _num(value: Any) -> float | None:
     try:
@@ -106,7 +115,7 @@ def physics_from_record(rec: dict[str, Any] | None) -> StudyPhysics:
         turbulence_model=model,
         residual_u=positive("residual_u", d.residual_u),
         residual_p=positive("residual_p", d.residual_p),
-        relax_u=fraction("relax_u", d.relax_u),
+        relax_u=fraction("relax_u", default_relax_u(model)),
         relax_p=fraction("relax_p", d.relax_p),
         n_non_orthogonal=n_non_orth,
     )

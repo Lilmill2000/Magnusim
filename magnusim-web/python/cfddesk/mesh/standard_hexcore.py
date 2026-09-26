@@ -330,6 +330,9 @@ class _HexCore:
     pyrs: np.ndarray  # (N_pyr, 5) node rows
     inner_tris: np.ndarray  # (N_tri, 3) node rows — closed inner surface
     n_removed: int
+    # Connected core piece of each inner triangle. HXT tells regions apart by the
+    # surfaces that bound them, so every piece needs its own surface entity.
+    inner_comp: np.ndarray | None = None
 
     def xyz(self) -> np.ndarray:
         return self.origin[None, :] + self.keys.astype(float) * (self.hc / 2.0)
@@ -409,6 +412,13 @@ def _build_hex_core(
     if n_core == 0:
         return None
 
+    from scipy import ndimage
+
+    # Separate core pieces (e.g. a cylinder and a cone joined by a neck too thin
+    # for core cells). Face-connected labels; the manifold repair keeps pieces
+    # from touching at an edge or a vertex.
+    comp_of, n_comp = ndimage.label(core)
+
     # --- hexes
     cells = np.argwhere(core).astype(np.int64)  # (N,3)
     base2 = cells * 2
@@ -424,6 +434,7 @@ def _build_hex_core(
     # --- boundary quads → pyramids
     core_p = np.pad(core, 1, constant_values=False)
     pyr_keys_list = []
+    pyr_comp_list = []
     for axis in range(3):
         for sign in (-1, 1):
             neigh = np.roll(core_p, -sign, axis=axis)
@@ -437,7 +448,9 @@ def _build_hex_core(
                 [b2[:, None, :] + q[None, :, :], (b2 + a[None, :])[:, None, :]], axis=1
             )  # (M,5,3)
             pyr_keys_list.append(keys)
+            pyr_comp_list.append(comp_of[idx[:, 0], idx[:, 1], idx[:, 2]])
     pyr_keys = np.concatenate(pyr_keys_list, axis=0) if pyr_keys_list else np.zeros((0, 5, 3), np.int64)
+    pyr_comp = np.concatenate(pyr_comp_list) if pyr_comp_list else np.zeros(0, np.int64)
 
     # --- unique nodes
     all_keys = np.concatenate([hex_keys.reshape(-1, 3), pyr_keys.reshape(-1, 3)], axis=0)
@@ -460,8 +473,9 @@ def _build_hex_core(
     ).reshape(-1, 3)
     skey = np.sort(tris, axis=1)
     _, first, counts = np.unique(skey, axis=0, return_index=True, return_counts=True)
-    keep_rows = first[counts == 1]
-    inner = tris[np.sort(keep_rows)]
+    keep_rows = np.sort(first[counts == 1])
+    inner = tris[keep_rows]
+    inner_comp = np.repeat(pyr_comp, 4)[keep_rows]
     n_shared = int((counts == 2).sum())
     if (counts > 2).any():
         raise RuntimeError("hexcore: inner surface has a triangle shared by >2 pyramids")
@@ -476,7 +490,7 @@ def _build_hex_core(
     log(
         f"hexcore: {n_core} hexes, {len(pyrs)} pyramids, {len(inner)} inner tris "
         f"({n_shared} shared faces dropped, {n_removed} cells removed in repair, "
-        f"{time.monotonic()-t0:.1f}s)"
+        f"{n_comp} core piece(s), {time.monotonic()-t0:.1f}s)"
     )
     return _HexCore(
         origin=np.asarray(origin, dtype=float),
@@ -486,6 +500,7 @@ def _build_hex_core(
         pyrs=pyrs,
         inner_tris=inner,
         n_removed=n_removed,
+        inner_comp=np.asarray(inner_comp, dtype=np.int64),
     )
 
 
@@ -1135,23 +1150,43 @@ def build_standard_msh(
             base_tag = int(gmsh.model.mesh.getMaxNodeTag()) + 1
             row2tag = np.zeros(len(core.keys), dtype=np.int64)
             row2tag[inner_nodes] = base_tag + np.arange(len(inner_nodes), dtype=np.int64)
-            ds = gmsh.model.addDiscreteEntity(2)
-            gmsh.model.mesh.addNodes(
-                2, ds, row2tag[inner_nodes].tolist(),
-                core_xyz[inner_nodes].ravel().tolist(),
-            )
+            # One discrete surface (and inner surface loop) per core piece: HXT
+            # identifies regions by their bounding surfaces, and two pieces on
+            # one surface read as duplicate volumes ("HXT 3D mesh failed").
+            comps = core.inner_comp
+            if comps is None or len(comps) != len(core.inner_tris):
+                comps = np.zeros(len(core.inner_tris), dtype=np.int64)
+            pieces = [core.inner_tris[comps == c] for c in np.unique(comps)]
+            seen: set[int] = set()
+            for piece in pieces:
+                rows = set(np.unique(piece).tolist())
+                if seen & rows:  # pieces sharing a node cannot be split
+                    pieces = [core.inner_tris]
+                    break
+                seen |= rows
+            ds_list: list[int] = []
             e0 = int(gmsh.model.mesh.getMaxElementTag()) + 1
-            flat = row2tag[core.inner_tris].ravel()
-            gmsh.model.mesh.addElementsByType(
-                ds, TRI, list(range(e0, e0 + len(core.inner_tris))), flat.tolist()
-            )
+            for piece in pieces:
+                piece_nodes = np.unique(piece.ravel())
+                ds_piece = gmsh.model.addDiscreteEntity(2)
+                gmsh.model.mesh.addNodes(
+                    2, ds_piece, row2tag[piece_nodes].tolist(),
+                    core_xyz[piece_nodes].ravel().tolist(),
+                )
+                gmsh.model.mesh.addElementsByType(
+                    ds_piece, TRI, list(range(e0, e0 + len(piece))), row2tag[piece].ravel().tolist()
+                )
+                e0 += len(piece)
+                ds_list.append(ds_piece)
+            if len(ds_list) > 1:
+                _log(f"hexcore: {len(ds_list)} core pieces, one inner surface each")
             if vols:
                 _remove_entities(gmsh, list(vols), recursive=False, occ=occ)
             outer_loop = gmsh.model.geo.addSurfaceLoop(
                 [ds_outer] if ds_outer is not None else surfs
             )
-            inner_loop = gmsh.model.geo.addSurfaceLoop([ds])
-            vol = gmsh.model.geo.addVolume([outer_loop, inner_loop])
+            inner_loops = [gmsh.model.geo.addSurfaceLoop([d]) for d in ds_list]
+            vol = gmsh.model.geo.addVolume([outer_loop, *inner_loops])
             gmsh.model.geo.synchronize()
             gmsh.model.addPhysicalGroup(3, [vol], 100, "fluid")
             t3 = time.monotonic()
@@ -1164,11 +1199,14 @@ def build_standard_msh(
             g_xyz = np.asarray(g_xyz, dtype=float).reshape(-1, 3)
             # gmsh renumbers nodes during the 3D pass — recover inner-surface
             # tags by exact half-lattice key.
-            ds_tags, ds_xyz, _ = gmsh.model.mesh.getNodes(2, ds, includeBoundary=True)
-            ds_tags = np.asarray(ds_tags, dtype=np.int64)
-            ds_keys = np.rint(
-                (np.asarray(ds_xyz).reshape(-1, 3) - core.origin) / (core.hc / 2.0)
-            ).astype(np.int64)
+            tag_parts, xyz_parts = [], []
+            for d in ds_list:
+                t_d, x_d, _ = gmsh.model.mesh.getNodes(2, d, includeBoundary=True)
+                tag_parts.append(np.asarray(t_d, dtype=np.int64))
+                xyz_parts.append(np.asarray(x_d, dtype=float).reshape(-1, 3))
+            ds_tags = np.concatenate(tag_parts) if tag_parts else np.zeros(0, dtype=np.int64)
+            ds_xyz = np.vstack(xyz_parts) if xyz_parts else np.zeros((0, 3))
+            ds_keys = np.rint((ds_xyz - core.origin) / (core.hc / 2.0)).astype(np.int64)
             key2gtag = {tuple(k): int(t) for k, t in zip(ds_keys.tolist(), ds_tags.tolist(), strict=False)}
             gmax = int(g_tags.max())
             row_tag = np.zeros(len(core.keys), dtype=np.int64)
@@ -1321,7 +1359,7 @@ def _collapse_short_edges(nodes, tris, tri_phys, tol: float):
     """Merge endpoints of edges shorter than ``tol``. Returns collapsed count.
 
     Only existing mesh edges are collapsed, so a watertight surface stays
-    watertight. Degenerate and duplicate triangles are dropped.
+    watertight. Degenerate triangles and coincident pairs are dropped.
     """
     nodes = np.asarray(nodes, dtype=float)
     tris = np.asarray(tris, dtype=np.int64)
@@ -1349,19 +1387,28 @@ def _collapse_short_edges(nodes, tris, tri_phys, tol: float):
     if n_collapsed == 0:
         return nodes, tris, tri_phys, 0
     root = np.fromiter((find(i) for i in range(n)), dtype=np.int64, count=n)
-    kept_tris: list[list[int]] = []
-    kept_phys: list[int] = []
-    seen: set[tuple[int, int, int]] = set()
+    merged: list[tuple[list[int], int]] = []
+    count: dict[tuple[int, int, int], int] = {}
     for tri, phys in zip(tris, tri_phys, strict=False):
         r = [int(root[int(i)]) for i in tri]
         if len(set(r)) < 3:
             continue
         key = tuple(sorted(r))
-        if key in seen:
+        count[key] = count.get(key, 0) + 1
+        merged.append((r, int(phys)))
+    # Two triangles on the same three nodes are a sheet folded onto itself: it
+    # encloses nothing, so both go. Keeping one left a fin inside the fluid that
+    # no cell uses ("boundary triangle on no cell" on fine meshes).
+    kept_tris: list[list[int]] = []
+    kept_phys: list[int] = []
+    seen: set[tuple[int, int, int]] = set()
+    for r, phys in merged:
+        key = tuple(sorted(r))
+        if count[key] % 2 == 0 or key in seen:
             continue
         seen.add(key)
         kept_tris.append(r)
-        kept_phys.append(int(phys))
+        kept_phys.append(phys)
     used = sorted({i for t in kept_tris for i in t})
     remap = {old: i for i, old in enumerate(used)}
     new_nodes = nodes[np.asarray(used, dtype=np.int64)]
@@ -1703,6 +1750,20 @@ def _layer_patch_block(spec: LayerPatchSpec) -> str:
         "        {",
         f"            nSurfaceLayers {int(spec.n_layers)};",
     ]
+
+    def _pos(v: float | None) -> bool:
+        return v is not None and v > 0
+
+    # Without an explicit thicknessModel snappyHexMesh only reads the per-patch
+    # keys of the *global* model, so a patch asking for first layer + growth
+    # under a global total + growth silently keeps the global sizes.
+    model = {
+        "first": ("firstAndExpansion", _pos(spec.first_layer_m) and _pos(spec.expansion)),
+        "total": ("overallAndExpansion", _pos(spec.thickness_m) and _pos(spec.expansion)),
+        "first_and_total": ("firstAndOverall", _pos(spec.first_layer_m) and _pos(spec.thickness_m)),
+    }[specify]
+    if model[1] and _pos(spec.min_thickness_m):
+        lines.append(f"            thicknessModel {model[0]};")
     if write_exp and spec.expansion is not None and spec.expansion > 0:
         lines.append(f"            expansionRatio {float(spec.expansion):.6g};")
     if write_first and spec.first_layer_m is not None and spec.first_layer_m > 0:

@@ -1,6 +1,8 @@
 """Unit tests for mon_/flow_ surfaceFieldValue emitters."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from cfddesk.case.function_objects import (
     js_to_precision,
     monitor_patches_from_mapped,
@@ -73,3 +75,39 @@ def test_surface_field_value_block_shape():
     )
     assert 'libs            ("libfieldFunctionObjects.so");' in block
     assert "regionType      patch;" in block
+
+
+def test_custom_monitor_on_any_faces_is_a_sampled_surface(tmp_path, monkeypatch):
+    """A Monitor on a plain wall face (no BC patch of its own) still records data."""
+    from types import SimpleNamespace
+
+    import cfddesk.project.paths as paths
+    from cfddesk.case.function_objects import custom_monitor_key, custom_monitors_functions_text
+    from cfddesk.case.writer import write_custom_monitor_surfaces
+    from cfddesk.project.web_adapter import run_custom_monitors
+
+    rcs = [
+        {"id": "rc1", "name": "Area average 1", "category": "Surface data", "faces": ["face 15@Body1"]},
+        {"id": "rc2", "name": "Area average 2", "category": "Surface data", "faces": []},
+        {"id": "rc3", "name": "Probe", "kind": "probe", "faces": ["face 1@Body1"]},
+    ]
+    mons = run_custom_monitors(rcs)
+    assert [m["name"] for m in mons] == ["Area average 1"]
+
+    taken: set[str] = set()
+    assert custom_monitor_key("Area average 1", taken) == "rc_area_average_1"
+    assert custom_monitor_key("Area average 1", taken) == "rc_area_average_1_2"
+
+    step = Path(__file__).resolve().parents[1] / "fixtures" / "geometry" / "elbow.step"
+    monkeypatch.setattr(paths, "resolve_step_for_study", lambda *a, **k: step)
+    spec = SimpleNamespace(project_dir=tmp_path, simulation_id="s", mesh_id="m", custom_monitors=mons)
+    written = write_custom_monitor_surfaces(tmp_path, spec)
+    assert len(written) == 1 and written[0]["key"] == "rc_area_average_1"
+    stl = tmp_path / "constant" / "triSurface" / "rc_area_average_1.stl"
+    assert stl.is_file() and stl.stat().st_size > 84
+    assert written[0]["area_m2"] > 0
+
+    text = custom_monitors_functions_text(written)
+    assert "regionType      sampledSurface;" in text
+    assert "type        meshedSurface;" in text and "surface     rc_area_average_1.stl;" in text
+    assert "operation       areaAverage;" in text

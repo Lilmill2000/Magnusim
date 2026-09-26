@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudyState } from '../legacyBridge';
 import { useProjectStore } from '../../store/project';
-import { SimulationDefaults, turbulenceKey } from './SimulationPanel';
+import { SimulationDefaults, numericsData, turbulenceKey } from './SimulationPanel';
 
 const settingsSchema = {
   type: 'object',
@@ -78,6 +78,16 @@ describe('turbulenceKey', () => {
     expect(turbulenceKey({ turbulence_model: 'kEpsilon', turbulence_model_key: 'kOmegaSST' })).toBe('kEpsilon');
     expect(turbulenceKey({ defaults: { turbulence_model: 'Laminar' } })).toBe('laminar');
     expect(turbulenceKey({})).toBeUndefined();
+  });
+});
+
+describe('numericsData', () => {
+  const schema = { type: 'object' as const, properties: { relax_u: { type: 'number' as const }, relax_p: { type: 'number' as const } } };
+  it('shows Relaxation U 0.5 for Reynolds-stress models the study has not set', () => {
+    expect(numericsData({}, schema, 'LRR').relax_u).toBe(0.5);
+    expect(numericsData({}, schema, 'SSG').relax_u).toBe(0.5);
+    expect(numericsData({}, schema, 'kOmegaSST').relax_u).toBeUndefined();
+    expect(numericsData({ relax_u: 0.8 }, schema, 'LRR').relax_u).toBe(0.8);
   });
 });
 

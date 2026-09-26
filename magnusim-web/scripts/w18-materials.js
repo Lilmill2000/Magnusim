@@ -135,6 +135,13 @@ function airFromProject(id) {
   };
 }
 
+/** The study's one fluid (Air, Water or custom): assigned first, else an older study's Air, else the first. */
+function studyFluid(list) {
+  const rows = (Array.isArray(list) ? list : []).filter(Boolean);
+  const assigned = (m) => (Array.isArray(m.assigned_volumes) && m.assigned_volumes.length > 0) || !!m.assigned_volume;
+  return rows.find(assigned) || rows.find((m) => m.name === 'Air') || rows[0] || null;
+}
+
 function readMaterialsFile(id, simId) {
   if (!simId) return null;
   const fromStudy = readStudyJson(id, simId, 'materials');
@@ -418,7 +425,7 @@ async function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
     }
     if (proj.materials) delete proj.materials;
   } else {
-    const next = { ...doc, materials: kept, air: kept.find((m) => m.name === 'Air') || kept[0], updated_at: new Date().toISOString() };
+    const next = { ...doc, materials: kept, air: studyFluid(kept), updated_at: new Date().toISOString() };
     await writeMaterialsFile(projectId, next, sim && sim.id, []);
     proj.materials = {
       air: next.air
@@ -493,7 +500,7 @@ export function getMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
   const materials = all.filter(
     (m) => matchesGeometry(m, geomId, primaryId) && matchesStudy(m, sim && sim.id, legacyId)
   );
-  const air = materials.find((m) => m.name === 'Air') || null;
+  const air = studyFluid(materials);
   const matPath = materialsJsonPath(projectId, sim && sim.id);
   return {
     ok: true,

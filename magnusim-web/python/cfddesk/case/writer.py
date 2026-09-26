@@ -2202,6 +2202,69 @@ relaxationFactors
 }}"""
 
 
+def write_custom_monitor_surfaces(out: Path, spec: Any) -> list[dict[str, Any]]:
+    """One constant/triSurface/rc_<name>.stl (metres) per custom monitor.
+
+    Cut from the study's CAD faces with the same scale the mesher uses, so the
+    sampled surface lies on the mesh boundary. Monitors whose faces are not on
+    this geometry are skipped (nothing to sample).
+    """
+    mons = list(getattr(spec, "custom_monitors", None) or [])
+    if not mons:
+        return []
+    import numpy as np
+
+    from cfddesk.case.function_objects import custom_monitor_key
+    from cfddesk.mesh.snappy_hexdominant import write_binary_stl
+    from cfddesk.mesh.web_refinements import web_face_to_cfddesk
+    from cfddesk.project.paths import resolve_step_for_study
+
+    step = resolve_step_for_study(Path(spec.project_dir), spec.simulation_id, spec.mesh_id)
+    if not step:
+        return []
+    from cfddesk.cad.step import load_step, tessellate_faces
+
+    solid = load_step(step)
+    units = solid.units
+    scale = float(
+        getattr(units, "proposed_scale_to_metres", None) or getattr(units, "scale_to_metres", None) or 0.001
+    )
+    pts, tris, fids = tessellate_faces(solid)
+    pts_m = np.asarray(pts, dtype=np.float64) * scale
+    tri = np.asarray(tris, dtype=np.int64)
+    fid = np.asarray(fids, dtype=np.int64)
+    tri_dir = Path(out) / "constant" / "triSurface"
+    taken: set[str] = set()
+    written: list[dict[str, Any]] = []
+    for m in mons:
+        ids: list[int] = []
+        for lab in m.get("faces") or []:
+            try:
+                ids.append(web_face_to_cfddesk(str(lab)))
+            except ValueError:
+                continue
+        sel = tri[np.isin(fid, np.asarray(ids, dtype=np.int64))] if ids else tri[:0]
+        if not len(sel):
+            continue
+        key = custom_monitor_key(str(m.get("name") or "monitor"), taken)
+        fname = key + ".stl"
+        tri_dir.mkdir(parents=True, exist_ok=True)
+        write_binary_stl(tri_dir / fname, pts_m, sel, f"Magnusim monitor {m.get('name') or key}")
+        c = pts_m[sel]
+        area = float(0.5 * np.linalg.norm(np.cross(c[:, 1] - c[:, 0], c[:, 2] - c[:, 0]), axis=1).sum())
+        written.append(
+            {
+                "id": m.get("id"),
+                "name": str(m.get("name") or key),
+                "key": key,
+                "surface": fname,
+                "faces": list(m.get("faces") or []),
+                "area_m2": area,
+            }
+        )
+    return written
+
+
 def _copy_polymesh(src_case: Path, out_dir: Path) -> Path | None:
     """Copy constant/polyMesh from mesh case. Returns poly dst or None if absent."""
     candidates = [
@@ -2359,6 +2422,12 @@ RAS
 
     mon_patches = list(spec.monitor_patches or [])
     functions_text = monitors_functions_text(mon_patches, transient=spec.transient)
+    custom_meta = write_custom_monitor_surfaces(out, spec)
+    if custom_meta:
+        from cfddesk.case.function_objects import custom_monitors_functions_text
+
+        extra = custom_monitors_functions_text(custom_meta, transient=spec.transient)
+        functions_text = extra if not mon_patches else functions_text + "\n" + extra
     is_transient = spec.transient is not None
 
     if is_transient:
@@ -2435,6 +2504,7 @@ RAS
         "wall_default": spec.wall_default,
         "mapped": mapped_meta,
         "monitors": mon_patches,
+        "custom_monitors": custom_meta,
         "turbulence": {
             "model": model,
             "intensity": turb["I"],

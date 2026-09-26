@@ -67,7 +67,7 @@
               "group": "relaxation"
             },
             "title": "Relaxation U",
-            "description": "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is more stable but converges more slowly."
+            "description": "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is more stable but converges more slowly. Reynolds-stress models (LRR, SSG) start at 0.5."
           },
           "relax_p": {
             "type": "number",

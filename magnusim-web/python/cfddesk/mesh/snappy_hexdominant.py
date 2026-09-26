@@ -33,14 +33,31 @@ def walls_level_for_settings(fineness: int, *, physics_based: bool = True) -> in
     return int(physics_refinement_for_fineness(f).walls)
 
 
+def base_cell_size(fineness: int, bounds_m: dict[str, float] | None) -> float | None:
+    """Background (level 0) cell size in metres, or None without bounds."""
+    if not bounds_m or not all(k in bounds_m for k in ("xmin", "xmax", "ymin", "ymax", "zmin", "zmax")):
+        return None
+    dx = abs(float(bounds_m["xmax"]) - float(bounds_m["xmin"]))
+    dy = abs(float(bounds_m["ymax"]) - float(bounds_m["ymin"]))
+    dz = abs(float(bounds_m["zmax"]) - float(bounds_m["zmin"]))
+    diag = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
+    return max(1e-5, min(1.0, diag / cells_across(clamp_fineness(fineness))))
+
+
+def refinement_level_for_size(base_m: float, size_m: float, *, max_level: int = 8) -> int:
+    """Smallest snappy level whose cells (base / 2**level) are no larger than ``size_m``."""
+    if not (base_m > 0 and size_m > 0):
+        return 0
+    return max(0, min(int(max_level), math.ceil(math.log2(base_m / size_m) - 1e-9)))
+
+
 def block_from_fineness(fineness: int, bounds_m: dict[str, float] | None) -> str:
     f = clamp_fineness(fineness)
-    if bounds_m and all(k in bounds_m for k in ("xmin", "xmax", "ymin", "ymax", "zmin", "zmax")):
+    base = base_cell_size(f, bounds_m)
+    if base is not None and bounds_m:
         dx = abs(float(bounds_m["xmax"]) - float(bounds_m["xmin"]))
         dy = abs(float(bounds_m["ymax"]) - float(bounds_m["ymin"]))
         dz = abs(float(bounds_m["zmax"]) - float(bounds_m["zmin"]))
-        diag = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
-        base = max(1e-5, min(1.0, diag / cells_across(f)))
         nx = max(8, round((dx * _PAD) / base))
         ny = max(8, round((dy * _PAD) / base))
         nz = max(12, round((dz * _PAD) / base))
@@ -177,27 +194,75 @@ def write_patch_stls(
 
     tri_dir = Path(tri_dir)
     tri_dir.mkdir(parents=True, exist_ok=True)
-    pts = np.asarray(points_m, dtype=np.float64)
     tri = np.asarray(tris, dtype=np.int64)
     fid = np.asarray(face_ids, dtype=np.int64)
     names = np.array([face_to_patch.get(int(f), "walls") for f in fid])
     out: list[dict[str, str]] = []
     for name in sorted(set(names.tolist())):
-        sel = tri[names == name]
-        c = pts[sel]
-        n = np.cross(c[:, 1] - c[:, 0], c[:, 2] - c[:, 0])
-        n /= np.maximum(np.linalg.norm(n, axis=1), 1e-300)[:, None]
-        rec = np.zeros(len(sel), dtype=np.dtype([("n", "<3f4"), ("v", "<9f4"), ("a", "<u2")]))
-        rec["n"] = n
-        rec["v"] = c.reshape(-1, 9)
         fname = f"patch_{name}.stl"
-        with (tri_dir / fname).open("wb") as fh:
-            fh.write(f"Magnusim patch {name}".encode("ascii")[:80].ljust(80, b"\0"))
-            fh.write(struct.pack("<I", len(sel)))
-            fh.write(rec.tobytes())
+        write_binary_stl(tri_dir / fname, points_m, tri[names == name], f"Magnusim patch {name}")
         ptype = patch_types.get(name, "wall")
         out.append({"name": name, "type": "wall" if ptype == "wall" else "patch", "file": fname})
     return out
+
+
+def write_binary_stl(path: Path, points_m, tris, header: str) -> None:
+    import numpy as np
+
+    pts = np.asarray(points_m, dtype=np.float64)
+    sel = np.asarray(tris, dtype=np.int64).reshape(-1, 3)
+    c = pts[sel]
+    n = np.cross(c[:, 1] - c[:, 0], c[:, 2] - c[:, 0])
+    n /= np.maximum(np.linalg.norm(n, axis=1), 1e-300)[:, None]
+    rec = np.zeros(len(sel), dtype=np.dtype([("n", "<3f4"), ("v", "<9f4"), ("a", "<u2")]))
+    rec["n"] = n
+    rec["v"] = c.reshape(-1, 9)
+    with Path(path).open("wb") as fh:
+        fh.write(header.encode("ascii", "replace")[:80].ljust(80, b"\0"))
+        fh.write(struct.pack("<I", len(sel)))
+        fh.write(rec.tobytes())
+
+
+def write_refine_stls(
+    tri_dir: Path, points_m, tris, face_ids, groups: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """One refinement-only STL per Surface custom sizing group.
+
+    ``groups`` rows carry ``face_ids``, ``level`` and ``distance_m``; the
+    returned rows add ``name`` / ``file`` for ``write_hexdominant_dicts``.
+    These surfaces only drive ``refinementRegions``; they make no patch.
+    """
+    import numpy as np
+
+    tri = np.asarray(tris, dtype=np.int64)
+    fid = np.asarray(face_ids, dtype=np.int64)
+    out: list[dict[str, Any]] = []
+    for i, g in enumerate(groups, start=1):
+        want = np.isin(fid, np.asarray(sorted({int(f) for f in g.get("face_ids") or []}), dtype=np.int64))
+        if not want.any():
+            continue
+        name = f"refine_{i}"
+        fname = f"{name}.stl"
+        write_binary_stl(Path(tri_dir) / fname, points_m, tri[want], f"Magnusim refinement {i}")
+        out.append({**g, "name": name, "file": fname})
+    return out
+
+
+def _layers_entry(spec: Any) -> str:
+    """One ``layers`` entry. Specs with a typed thickness use absolute sizes on that patch."""
+    import dataclasses
+
+    from cfddesk.mesh.standard_hexcore import _layer_patch_block
+
+    sizes = [getattr(spec, k, None) for k in ("thickness_m", "first_layer_m")]
+    absolute = any(v is not None and float(v) > 0 for v in sizes)
+    if absolute and not (spec.min_thickness_m and spec.min_thickness_m > 0) and dataclasses.is_dataclass(spec):
+        # The explicit thicknessModel needs a minThickness; keep a tenth of the stack.
+        spec = dataclasses.replace(spec, min_thickness_m=0.1 * max(float(v or 0) for v in sizes))
+    lines = _layer_patch_block(spec).split("\n")
+    if absolute:
+        lines.insert(3, "            relativeSizes false;")
+    return "\n".join(lines)
 
 
 def _padded_box(bounds: dict[str, float]):
@@ -239,6 +304,8 @@ def write_hexdominant_dicts(
     bounds_m: dict[str, float],
     patches: list[dict[str, str]] | None = None,
     location_m: tuple[float, float, float] | None = None,
+    layer_specs: list[Any] | None = None,
+    refine_regions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Write blockMeshDict / snappyHexMeshDict / surfaceFeatureExtractDict on host.
 
@@ -246,6 +313,11 @@ def write_hexdominant_dicts(
     surface, so the mesh carries the BC patches; without, ``Body1.stl`` is one
     wall. ``location_m`` is a point inside the fluid (``cad.location``); the
     default is near the box centre, which can fall outside a hollow part.
+
+    ``layer_specs`` (``LayerPatchSpec``) replaces the uniform two-layer
+    request with per-patch layers (Inflate boundary layer + Automatic BL);
+    ``refine_regions`` (``write_refine_stls``) refines cells near Surface
+    custom sizing faces to the level that meets the requested size.
     """
     case_dir = Path(case_dir)
     system = case_dir / "system"
@@ -272,15 +344,24 @@ def write_hexdominant_dicts(
     snap_nrelax = int(snap.get("n_relax_iter", 5))
     snap_nfeat = int(snap.get("n_feature_snap_iter", 10))
     surfaces = [(p["name"], p["file"], p["type"]) for p in patches] if patches else [("Body1", "Body1.stl", "wall")]
-    layer_block = (
-        "".join(
-            f"        {name}\n        {{\n            nSurfaceLayers 2;\n        }}\n"
-            for name, _f, ptype in surfaces
-            if ptype == "wall"
+    if layer_specs is not None:
+        specs = [s for s in layer_specs if int(getattr(s, "n_layers", 0) or 0) > 0 and getattr(s, "name", "")]
+        layer_block = "".join(_layers_entry(s) + "\n" for s in specs)
+        honor = any(bool(getattr(s, "honor_absolute", False)) for s in specs)
+    else:
+        specs = []
+        layer_block = (
+            "".join(
+                f"        {name}\n        {{\n            nSurfaceLayers 2;\n        }}\n"
+                for name, _f, ptype in surfaces
+                if ptype == "wall"
+            )
+            if add_layers
+            else ""
         )
-        if add_layers
-        else ""
-    )
+        honor = False
+    layers_on = bool(layer_block)
+    regions = list(refine_regions or [])
     geometry_lines = []
     refine_lines = []
     for name, fname, ptype in surfaces:
@@ -292,13 +373,24 @@ def write_hexdominant_dicts(
             f"            patchInfo {{ type {ptype}; }}",
             "        }",
         ]
+    region_lines = []
+    for r in regions:
+        geometry_lines += [f"    {r['file']}", "    {", "        type triSurfaceMesh;", f"        name {r['name']};", "    }"]
+        region_lines += [
+            f"        {r['name']}",
+            "        {",
+            "            mode distance;",
+            f"            levels (({float(r['distance_m']):.6g} {int(r['level'])}));",
+            "        }",
+        ]
+    region_txt = ["    refinementRegions", "    {", *region_lines, "    }"] if region_lines else ["    refinementRegions {}"]
     snap_txt = "\n".join(
         [
             _foam_header("snappyHexMeshDict").rstrip("\n"),
             "// Hex-dominant Body1 + snappy_policy (host-written)",
             "castellatedMesh true;",
             "snap            true;",
-            f"addLayers       {'true' if add_layers else 'false'};",
+            f"addLayers       {'true' if layers_on else 'false'};",
             "",
             "geometry",
             "{",
@@ -327,7 +419,7 @@ def write_hexdominant_dicts(
             "    }",
             "",
             "    resolveFeatureAngle 20;",
-            "    refinementRegions {}",
+            *region_txt,
             f"    locationInMesh ({loc[0]:.8f} {loc[1]:.8f} {loc[2]:.8f});",
             "    allowFreeStandingZoneFaces true;",
             "}",
@@ -351,21 +443,23 @@ def write_hexdominant_dicts(
             "    {",
             layer_block.rstrip("\n"),
             "    }",
-            f"    expansionRatio {1.1 if add_layers else 1.0};",
+            f"    expansionRatio {1.1 if layers_on else 1.0};",
             "    finalLayerThickness 0.3;",
-            f"    minThickness {0.2 if add_layers else 0.1};",
+            f"    minThickness {0.2 if layers_on else 0.1};",
             "    nGrow 0;",
-            f"    featureAngle {130 if add_layers else 60};",
+            f"    featureAngle {130 if layers_on else 60};",
             "    slipFeatureAngle 30;",
-            f"    nRelaxIter {5 if add_layers else 3};",
-            f"    nSmoothSurfaceNormals {3 if add_layers else 1};",
-            f"    nSmoothNormals {10 if add_layers else 3};",
+            f"    nRelaxIter {5 if layers_on else 3};",
+            f"    nSmoothSurfaceNormals {3 if layers_on else 1};",
+            f"    nSmoothNormals {10 if layers_on else 3};",
             "    nSmoothThickness 10;",
-            "    maxFaceThicknessRatio 0.5;",
-            "    maxThicknessToMedialRatio 0.3;",
+            # A typed Inflate thickness has to get past the default limits,
+            # which stop extrusion around one local cell.
+            f"    maxFaceThicknessRatio {10.0 if honor else 0.5};",
+            f"    maxThicknessToMedialRatio {3.0 if honor else 0.3};",
             "    minMedialAxisAngle 90;",
             "    nBufferCellsNoExtrude 0;",
-            "    nLayerIter 50;",
+            f"    nLayerIter {100 if honor else 50};",
             "}",
             "",
             "meshQualityControls",
@@ -433,6 +527,12 @@ def write_hexdominant_dicts(
         "feature_level": int(feature_level),
         "walls_level": int(walls_level),
         "add_layers": bool(add_layers),
+        "layers": [
+            {"patch": getattr(s, "name", ""), "n_layers": int(getattr(s, "n_layers", 0) or 0)} for s in specs
+        ],
+        "refinement_regions": [
+            {"name": r["name"], "level": int(r["level"]), "distance_m": float(r["distance_m"])} for r in regions
+        ],
         "snap": {
             "n_smooth_patch": snap_nsmooth,
             "tolerance": snap_tol,

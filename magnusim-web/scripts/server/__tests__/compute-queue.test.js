@@ -19,6 +19,8 @@ import {
   computeQueueFileFor,
 } from '../compute-queue.ts';
 
+process.env.MAGNUSIM_QUEUE_QUIET = '1';
+
 const dir = mkdtempSync(join(tmpdir(), 'cfd-compute-queue-'));
 const filePath = join(dir, 'compute-queue.json');
 
@@ -100,10 +102,10 @@ describe('compute-queue order', () => {
     );
   });
 
-  it('refuses a solve enqueue when Air is not assigned', () => {
+  it('refuses a solve enqueue when no fluid is assigned', () => {
     const out = enqueueComputeJob(solve('r1'), { hasMaterial: false });
     assert.equal(out.ok, false);
-    assert.match(String(out.error), /Air/);
+    assert.match(String(out.error), /Assign a fluid/);
     assert.equal(snapshotComputeQueue().items.length, 0);
   });
 });
@@ -147,20 +149,118 @@ describe('compute-queue kick', () => {
     );
   });
 
-  it('holds on ok:false so later jobs cannot jump', async () => {
+  it('a job that still cannot start after its retries leaves the queue with its reason, and the next one starts', async () => {
+    // Holding it at the head forever stalled every job behind it in every
+    // project, with the slot idle and nothing telling the user why.
+    let busy = false;
+    let refusals = 0;
+    const started = [];
     resetComputeQueueForTests({
       filePath,
-      items: [mesh('m1'), mesh('m2')],
+      holdRetryMs: 5,
+      items: [solve('r-bad', { mesh_id: 'm-ungenerated' }), mesh('m2', { project_id: 'p2' })],
       deps: {
-        isBusy: () => false,
-        startMesh: () => ({ ok: false }),
+        isBusy: () => busy,
+        startSolve: () => {
+          refusals += 1;
+          return { ok: false, error: 'Generate "Fine" before using it on a run' };
+        },
+        startMesh: (item) => {
+          started.push(item.mesh_id);
+          busy = true;
+          return { ok: true };
+        },
       },
     });
     await kickComputeQueue();
+    assert.deepEqual(started, [], 'first refusal keeps its place and retries');
+    assert.deepEqual(snapshotComputeQueue().items.map((r) => r.run_id || r.mesh_id), ['r-bad', 'm2']);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(refusals, 4);
+    assert.deepEqual(started, ['m2']);
+    const snap = snapshotComputeQueue();
+    assert.deepEqual(snap.items, []);
+    assert.equal(snap.failed.length, 1);
+    assert.equal(snap.failed[0].run_id, 'r-bad');
+    assert.match(snap.failed[0].error, /Generate "Fine"/);
+    assert.deepEqual(snapshotComputeQueue('p1').failed.map((f) => f.run_id), ['r-bad']);
+    assert.deepEqual(snapshotComputeQueue('p2').failed, []);
+  });
+
+  it('a run refused for a moment right after its mesh finished starts on a retry', async () => {
+    let meshReady = false;
+    const started = [];
+    resetComputeQueueForTests({
+      filePath,
+      holdRetryMs: 5,
+      items: [solve('r1', { mesh_id: 'm1' }), mesh('m9')],
+      deps: {
+        isBusy: () => started.length > 0,
+        startSolve: (item) => {
+          if (!meshReady) return { ok: false, error: 'Generate "m1" before using it on a run' };
+          started.push(item.run_id);
+          return { ok: true };
+        },
+        startMesh: (item) => {
+          started.push(item.mesh_id);
+          return { ok: true };
+        },
+      },
+    });
+    await kickComputeQueue();
+    meshReady = true;
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(started, ['r1']);
+    assert.deepEqual(snapshotComputeQueue().failed, []);
+  });
+
+  it('a kick from one project still starts the head of the whole queue', async () => {
+    const started = [];
+    resetComputeQueueForTests({
+      filePath,
+      items: [mesh('mA', { project_id: 'pA' }), mesh('mB', { project_id: 'pB' })],
+      deps: {
+        isBusy: () => started.length > 0,
+        startMesh: (item) => {
+          started.push(item.mesh_id);
+          return { ok: true };
+        },
+      },
+    });
+    const snap = await kickComputeQueue('pB');
+    assert.deepEqual(started, ['mA']);
+    assert.deepEqual(snap.items.map((r) => [r.mesh_id, r.position]), [['mB', 1]]);
+  });
+
+  it('reordering one project keeps the other project jobs where they were', () => {
+    resetComputeQueueForTests({
+      filePath,
+      items: [mesh('mB', { project_id: 'pB' }), mesh('mA1', { project_id: 'pA' }), mesh('mA2', { project_id: 'pA' })],
+    });
+    const [, a1, a2] = snapshotComputeQueue().items;
+    reorderComputeQueue([a2.id, a1.id]);
+    assert.deepEqual(snapshotComputeQueue().items.map((r) => r.mesh_id), ['mB', 'mA2', 'mA1']);
+  });
+
+  it('runs queue first come, first served, and still behind their own queued mesh', () => {
+    resetComputeQueueForTests({ filePath, items: [] });
+    enqueueComputeJob(mesh('mB', { project_id: 'pB' }));
+    enqueueComputeJob(mesh('m1'));
+    enqueueComputeJob(solve('r-early', { mesh_id: 'm1' }));
+    enqueueComputeJob(mesh('mB2', { project_id: 'pB' }));
+    enqueueComputeJob(solve('r-late', { mesh_id: 'm1' }));
+    enqueueComputeJob(solve('r-gen', { mesh_id: 'm-generating-now' }), { meshGenerating: true });
     assert.deepEqual(
-      snapshotComputeQueue().items.map((r) => r.mesh_id),
-      ['m1', 'm2'],
+      snapshotComputeQueue().items.map((r) => r.run_id || r.mesh_id),
+      ['mB', 'm1', 'r-early', 'mB2', 'r-late', 'r-gen'],
     );
+  });
+
+  it('without a project the snapshot lists every row with its position', () => {
+    resetComputeQueueForTests({ filePath, items: [mesh('m1', { project_id: 'pA' }), mesh('m2', { project_id: 'pB' })] });
+    for (const arg of [undefined, null, '']) {
+      assert.deepEqual(snapshotComputeQueue(arg).items.map((r) => [r.mesh_id, r.position]), [['m1', 1], ['m2', 2]]);
+    }
   });
 
   it('skips a missing job and starts the next', async () => {
@@ -216,10 +316,11 @@ describe('startResultFromEngine', () => {
     assert.deepEqual(startResultFromEngine({ ok: false, status: 409, bodyExtra: { error: 'already running' } }), {
       ok: false,
       busy: true,
+      error: 'already running',
     });
     assert.deepEqual(
       startResultFromEngine({ ok: false, status: 409, bodyExtra: { error: 'This run already finished.' } }),
-      { ok: false, skip: true },
+      { ok: false, skip: true, error: 'This run already finished.' },
     );
   });
 
@@ -227,6 +328,7 @@ describe('startResultFromEngine', () => {
     assert.deepEqual(startResultFromEngine({ ok: false, status: 404, bodyExtra: { error: 'Run not found' } }), {
       ok: false,
       missing: true,
+      error: 'Run not found',
     });
   });
 });
