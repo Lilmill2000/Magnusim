@@ -33,6 +33,10 @@ What changed since 0.1.0
   on, the other side draws the same cutting planes and coloring, with its
   particle trace seeded from its own matching faces (it says so if a seed
   face has no match there).
+- uninstall.bat removes the Magnusim folder and the solver folders its
+  projects used inside Ubuntu (other folders there are kept). It offers to
+  remove Node.js, Python or Ubuntu only if this Setup installed them, each
+  after its own typed confirmation; otherwise they are kept.
 
 Things worth trying
 
