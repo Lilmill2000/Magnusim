@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { NO_WSL } from './toolchain.js';
 
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 
@@ -258,7 +259,7 @@ test.describe('Magnusim smoke', () => {
   });
 
   test('transient pimpleFoam run writes real result frames', async ({ page, request }) => {
-    test.skip(!WSL, 'Requires MAGNUSIM_E2E_WSL=1 and the mesh test above');
+    test.skip(!WSL, NO_WSL);
     const id = 'sample-project-steady-state-e2e';
     const changed = await request.post('/api/simulation/update', {
       data: { project_id: id, simulation_id: 'sim_1', time_dependency: 'Transient' },
@@ -520,7 +521,7 @@ test.describe('Magnusim smoke', () => {
   });
 
   test('saved result screenshot, gallery, and every graph / media export format', async ({ page, request }) => {
-    test.skip(!WSL, 'Requires saved results from the WSL workflow');
+    test.skip(!WSL, NO_WSL);
     const projectId = 'sample-project-steady-state-e2e';
     const status = await (await request.get(`/api/run/status?project_id=${projectId}&simulation_id=sim_1`)).json();
     const run = status.runs.find((entry) => entry.status === 'done' && entry.has_results);
@@ -659,7 +660,7 @@ test.describe('Magnusim smoke', () => {
   });
 
   test('physics panel choice reaches the solve (k-epsilon, relaxation 0.5)', async ({ page, request }) => {
-    test.skip(!WSL, 'Requires MAGNUSIM_E2E_WSL=1 and the mesh test above');
+    test.skip(!WSL, NO_WSL);
     test.setTimeout(600_000);
     const readSim = async () => (await (await request.get(studyUrl)).json()).simulation || {};
     const panel = await openStudyPanel(page);

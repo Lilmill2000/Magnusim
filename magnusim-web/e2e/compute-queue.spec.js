@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { NO_WSL } from './toolchain.js';
 
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 // Its own projects (prepare-projects.js): meshing the shared sample would change what later specs read.
@@ -38,7 +39,7 @@ test.describe('compute queue across projects', () => {
     page,
     request,
   }) => {
-    test.skip(!WSL, 'Requires MAGNUSIM_E2E_WSL=1 (real meshes)');
+    test.skip(!WSL, NO_WSL);
 
     // A: a fine mesh so it is still running while B is queued behind it.
     let gen = await openMeshForm(page, A);

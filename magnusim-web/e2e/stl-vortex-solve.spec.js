@@ -2,12 +2,13 @@ import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { NO_HEAVY } from './toolchain.js';
 
 // Step 2 acceptance (docs/STL-STEP-mesh-handoff.md): the faceted STL of the vortex
 // part is grouped into real surfaces, its two ports take pressure BCs, the Standard
 // mesh builds, and a steady solve runs the right way: in at the 0 Pa port, out at
-// the -15 kPa port, at the same speed through both. Opt-in: a full mesh and a
-// 200-iteration solve take tens of minutes.
+// the -15 kPa port, at the same speed through both. Runs by default where WSL has
+// OpenFOAM (see toolchain.js); a full mesh and a 200-iteration solve take minutes.
 const HEAVY = process.env.MAGNUSIM_E2E_HEAVY === '1';
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 const STL = join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry', 'elbow.stl');
@@ -21,7 +22,7 @@ const MESHERS = [
 
 for (const mesher of MESHERS) {
 test(`faceted STL: grouped faces, port BCs, ${mesher.label}, steady solve flows the right way`, async ({ page, request }) => {
-  test.skip(!HEAVY || !WSL, 'Requires MAGNUSIM_E2E_HEAVY=1 and MAGNUSIM_E2E_WSL=1');
+  test.skip(!HEAVY || !WSL, NO_HEAVY);
   test.setTimeout(3_600_000);
   // No action waits forever for an element that is not coming.
   page.setDefaultTimeout(30_000);

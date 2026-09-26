@@ -1,13 +1,14 @@
 import { expect, test } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { NO_HEAVY } from './toolchain.js';
 
 // Two geometries in one project, set up alike to compare them: the round-hole and the
 // teardrop-hole test plates (same box, flow in one short end and out the other).
 // Each geometry keeps its own study; switching never leaves the other one's study,
 // editor or face picks active; a study copied across lands its BCs on the faces that
-// are the same surface there. With WSL and MAGNUSIM_E2E_HEAVY=1 both are meshed, solved
-// and put side by side in Compare.
+// are the same surface there. Where WSL has OpenFOAM (the default, see toolchain.js)
+// both are meshed, solved and put side by side in Compare.
 const HEAVY = process.env.MAGNUSIM_E2E_HEAVY === '1';
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 const GEOM = join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry');
@@ -204,7 +205,7 @@ test('two geometries: each keeps its own study, and a copied study lands on the 
 });
 
 test('two geometries meshed, solved and compared side by side', async ({ page, request }) => {
-  test.skip(!HEAVY || !WSL, 'Requires MAGNUSIM_E2E_HEAVY=1 and MAGNUSIM_E2E_WSL=1');
+  test.skip(!HEAVY || !WSL, NO_HEAVY);
   test.setTimeout(3_600_000);
   page.setDefaultTimeout(30_000);
   const s = await setup(page, request, 'e2e two geometries compare');

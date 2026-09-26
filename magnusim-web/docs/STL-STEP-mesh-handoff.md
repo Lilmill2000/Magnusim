@@ -6,7 +6,7 @@
 > - Import groups its facets into surfaces by a 30° feature angle (`cfddesk/cad/face_groups.py`). Those surfaces are the geometry's face ids, e.g. 8 faces for the 24k-facet vortex instead of 24k.
 > - The Standard mesher meshes those surfaces as discrete gmsh geometry (`gmsh_standard.import_grouped_triangles`). Beforehand it collapses sliver-cap edges, splits CAD needle strips and flips/smooths them in their plane (`cfddesk/mesh/stl_refine.py`), and merges wall surfaces under half the mesh size into a neighbour. There is no OCC heal, face matching or rollback on this path.
 > - Results: every vortex STL meshes (4k to 118k facets, hex core on and off) and checkMesh passes. On the 24k STL: 0-3 faces over 70° and max skewness 3.0-3.6, against the 2053 faces and 17.6 above.
-> - The opt-in `e2e/stl-vortex-solve.spec.js` (MAGNUSIM_E2E_HEAVY=1) solves the ports case and checks the flow direction.
+> - `e2e/stl-vortex-solve.spec.js` (runs by default where WSL has OpenFOAM) solves the ports case and checks the flow direction.
 > - The finished-mesh UI attach bug below is a separate issue and is not covered by this.
 
 Date of investigation: 2026-09-21. No code was changed. This note is for the maintainer’s agent. Fix both bugs below. Do not treat the STEP mesh as a failed generate, and do not “fix” the STL solve by adding non-orthogonal correctors. The STEP solve is the reference. The STL solve is bad because the mesh is bad.
