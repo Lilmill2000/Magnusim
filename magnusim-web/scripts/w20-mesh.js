@@ -971,7 +971,7 @@ async function createMesh(body) {
   const requested = String((body && (body.name || body.mesh_name)) || '').trim();
   const name = requested || nextMeshName(scoped);
   const srcId = body && (body.copy_from || body.copy_from_id);
-  const src = srcId ? findMeshById(meshes, srcId) : null;
+  const src = srcId ? findMeshById(meshes, srcId) || findMeshById(assembleAllMeshes(projectId), srcId) : null;
   const settings = src
     ? cloneSettings(src.settings, name)
     : body && body.fineness != null
@@ -1082,7 +1082,11 @@ async function upsertMesh(body) {
   }
   const copyFrom = body && (body.copy_from || body.copy_from_id);
   if (copyFrom) {
-    const src = findMeshById(meshes, copyFrom);
+    // The source may be in another study, on this geometry or another one.
+    const src = findMeshById(meshes, copyFrom) || findMeshById(assembleAllMeshes(projectId), copyFrom);
+    if (!src) {
+      return { ok: false, status: 404, body: { error: 'mesh to copy from not found', copy_from: copyFrom } };
+    }
     if (src && src.id !== active.id) {
       active.settings = cloneSettings(src.settings, active.name);
       active.updated_at = now;

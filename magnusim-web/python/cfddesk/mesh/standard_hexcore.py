@@ -667,6 +667,33 @@ def _surface_curves(gmsh, tag: int) -> set[int]:
         return set()
 
 
+def rim_is_smooth(gmsh, tags: list[int]) -> bool:
+    """True when every rim of these faces is a closed curve (a pipe wall's or a hole's
+    circles). Extruded into the solid, such a stack meets the faces beside it along a
+    smooth seam. A rim with corners (a flat face's edges) leaves the prism sides and the
+    cap meeting those faces in a shell the tet fill cannot close: it runs to its timeout
+    or crashes gmsh. Those faces get their layers from snappy addLayers instead.
+    A seam of a periodic face (the same curve twice in its boundary) is not a rim."""
+    from collections import Counter
+
+    for t in tags:
+        try:
+            bnd = gmsh.model.getBoundary([(2, int(t))], combined=False, oriented=True, recursive=False)
+        except Exception:
+            return False
+        counts = Counter(abs(int(c)) for _d, c in bnd)
+        for curve, n in counts.items():
+            if n > 1:
+                continue
+            try:
+                ends = gmsh.model.getBoundary([(1, curve)], combined=False, oriented=False, recursive=False)
+            except Exception:
+                return False
+            if len({abs(int(p)) for _d, p in ends}) > 1:
+                return False
+    return True
+
+
 def _remove_volumes(gmsh, tags: list[int], *, occ: bool) -> None:
     dim_tags = [(3, int(t)) for t in tags]
     if not dim_tags:
@@ -733,6 +760,12 @@ def apply_inward_boundary_layers(
         for spec in honor:
             tags = [int(t) for t in (patch_tags.get(spec.name) or [])]
             if not tags or int(spec.n_layers) < 1 or not spec.thickness_m or spec.thickness_m <= 0:
+                continue
+            if not rim_is_smooth(gmsh, tags):
+                log(
+                    f"boundary layers: {spec.name} has corners on its rim; "
+                    "its layers are grown by snappy addLayers instead"
+                )
                 continue
             source_curves = set()
             for t in tags:

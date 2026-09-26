@@ -8270,7 +8270,9 @@ function caseBelongsToCurrentProject(casePath) {
   const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
   if (!pid || !casePath) return false;
   const n = String(casePath).replace(/\\/g, '/').toLowerCase();
-  return n.includes('/projects/' + String(pid).toLowerCase() + '/');
+  // The project's own folder, under whatever projects root is set (MAGNUSIM_PROJECTS_ROOT,
+  // the e2e tmp root): the id is a unique folder name, "projects/" is not guaranteed.
+  return n.includes('/' + String(pid).toLowerCase() + '/');
 }
 
 function caseBelongsToCurrentStudy(casePath) {
@@ -18594,9 +18596,15 @@ window.__CFD_GEOMETRY_STATE_NOW__ = computeGeometryState;
 window.__CFD_GEOMETRY_DELETE__ = async () => {
   const id = w16State.selectedGeomId;
   if (!id) return false;
+  // The server removes the geometry's simulations with it (their meshes, boundary
+  // conditions, runs and results): say so, with how many.
+  const n = (studyCatalog.simulations || []).filter((s) => s && studyGeometryId(s) === String(id)).length;
   const ok = await confirmAction({
     title: 'Remove this geometry?',
-    copy: 'Only the CAD is removed. Simulations stay so you can delete them separately.',
+    copy: n
+      ? 'Its ' + (n === 1 ? 'simulation' : n + ' simulations') +
+        ' (meshes, boundary conditions, runs and results) will be removed with it.'
+      : 'The CAD is removed from this project.',
     yes: 'Remove',
   });
   if (!ok) return false;
@@ -26522,7 +26530,20 @@ function lostRefinementFacesNote(refs) {
 async function copyMeshSettingsFrom(srcId) {
   const destId = (meshCatalog && meshCatalog.active_id) || (meshCatalog.mesh && meshCatalog.mesh.id);
   if (!destId || !srcId || String(srcId) === String(destId)) return;
-  const j = await postMeshApi({ mesh_id: destId, copy_from: srcId });
+  let j = null;
+  try {
+    j = await postMeshApi({ mesh_id: destId, copy_from: srcId });
+  } catch (e) {
+    j = { error: (e && e.message) || String(e) };
+  }
+  if (!j || j.copied !== true) {
+    // Nothing was copied: say so instead of "Copied from".
+    meshCopyNote = 'Could not copy from ' + applyCopiedMeshSource(srcId) + ': ' + ((j && j.error) || 'no reply') + '.';
+    meshCopyNoteFor = { destId: String(destId), mode: 'all' };
+    endMeshCopyPick();
+    syncMeshCopyUi();
+    return;
+  }
   let refs = null;
   try {
     refs = await postCopyRefinements(destId, srcId);

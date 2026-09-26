@@ -29,7 +29,17 @@ async function setup(page, request, title) {
   await expect(page.locator('#app.workbench')).toBeVisible({ timeout: 60_000 });
   const q = (path, extra = {}) =>
     `${path}?${new URLSearchParams({ project_id: pid, ...extra }).toString()}`;
-  const json = async (url) => (await request.get(url)).json();
+  const json = async (url) => {
+    // A poll can reuse a keep-alive socket just as the server closes it (5 s idle): retry
+    // the read, as a browser does.
+    for (let i = 0; ; i++) {
+      try {
+        return await (await request.get(url)).json();
+      } catch (e) {
+        if (i >= 2 || !/ECONNRESET|socket hang up/i.test(String(e))) throw e;
+      }
+    }
+  };
   const shown = () => page.evaluate(() => window.__CFD_W16__?.geometry?.id || null);
   const study = () =>
     page.evaluate(() => {

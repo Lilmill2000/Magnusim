@@ -29,11 +29,11 @@ class PassageMeasure:
 @dataclass(frozen=True)
 class PassageMeshCheck:
     passages: list[PassageMeasure]
-    min_passage_m: float
+    min_passage_m: float | None
     base_cell_m: float
     refinement_level: int
     refined_cell_m: float
-    cells_across_min: float
+    cells_across_min: float | None
     min_required: float
     ok: bool
     message: str
@@ -95,8 +95,21 @@ def check_passage_cells(
     min_cells: float = MESH_MIN_CELLS_ACROSS_PASSAGE,
 ) -> PassageMeshCheck:
     """Assert refined cell size gives ≥ min_cells across the smallest passage."""
-    min_passage = min(p.diameter_m for p in passages)
     refined = base_cell_m / (2**refinement_level)
+    if not passages:
+        # No inlet or outlet yet (a mesh before its BCs): nothing to measure across.
+        return PassageMeshCheck(
+            passages=[],
+            min_passage_m=None,
+            base_cell_m=base_cell_m,
+            refinement_level=refinement_level,
+            refined_cell_m=refined,
+            cells_across_min=None,
+            min_required=min_cells,
+            ok=True,
+            message="no inlet or outlet boundary condition yet: passage check skipped",
+        )
+    min_passage = min(p.diameter_m for p in passages)
     cells_across = min_passage / refined
     ok = cells_across >= min_cells
     msg = (

@@ -41,11 +41,13 @@ $seeds = New-Object 'System.Collections.Generic.HashSet[int]'
 Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
   ForEach-Object { [void]$seeds.Add([int]$_.OwningProcess) }
 
-$here = [regex]::Escape($PSScriptRoot)
+# Only this folder's Vite: another Magnusim copy on this PC (a dev tree, another
+# release) runs the same command from its own folder and must keep running.
+$here = $PSScriptRoot.TrimEnd('\') + '\'
 Get-CimInstance Win32_Process | ForEach-Object {
   $cl = [string]$_.CommandLine
   if (-not $cl) { return }
-  if ($cl -match "$here\\node_modules\\(vite|\\@esbuild)" -or $cl -match 'vite --host 127\.0\.0\.1') {
+  if ($cl.IndexOf($here, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $cl -match '(vite|@esbuild)') {
     [void]$seeds.Add([int]$_.ProcessId)
   }
 }

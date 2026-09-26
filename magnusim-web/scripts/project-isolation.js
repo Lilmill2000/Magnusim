@@ -25,10 +25,15 @@ export function normalizeFs(p) {
 export function projectIdFromCaseDir(caseDir) {
   const n = normalizeFs(caseDir);
   if (!n) return null;
-  const marker = '/projects/';
-  const i = n.lastIndexOf(marker);
-  if (i < 0) return null;
-  const rest = n.slice(i + marker.length);
+  // Under the configured projects root first (MAGNUSIM_PROJECTS_ROOT need not be "projects").
+  const root = normalizeFs(PROJECTS_ROOT) + '/';
+  let rest = n.startsWith(root) ? n.slice(root.length) : null;
+  if (rest == null) {
+    const marker = '/projects/';
+    const i = n.lastIndexOf(marker);
+    if (i < 0) return null;
+    rest = n.slice(i + marker.length);
+  }
   const id = rest.split('/')[0];
   if (!id || id === 'active.json' || id === 'folders.json') return null;
   return id;

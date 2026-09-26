@@ -42,6 +42,19 @@ What changed since 0.1.0
   remove Node.js, Python or Ubuntu only if this Setup installed them, each
   after its own typed confirmation; otherwise they are kept.
 
+- Inflate boundary layer refinements on flat faces (a wall, an inlet end) now
+  mesh; they used to hang for 8 minutes or crash the mesher. Round faces
+  (holes, pipes) keep their exact layer thickness.
+- A steady run with fewer iterations than its write interval now saves its
+  last iteration instead of failing with no results.
+- cfMesh meshes before any inlet/outlet boundary condition is set.
+- Mesh 'Copy from another mesh' works from a mesh in another simulation or on
+  another geometry (it used to say 'Copied' and copy nothing).
+- Removing a geometry says that its simulations are removed with it (they
+  are).
+- stop.bat stops only its own Magnusim; it used to stop every copy running on
+  the PC.
+
 Things worth trying
 
 1. New project -> Add geometry -> an STL. Pick the unit, and check that the

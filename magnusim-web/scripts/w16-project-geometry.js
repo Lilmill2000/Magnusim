@@ -349,6 +349,8 @@ function createFolder(name) {
     return { ok: true, status: 200, body: { ok: true, folder, folders: listFolders(), root: ROOT_FOLDER } };
   }
   const folders = writeStoredFolders([...readStoredFolders(), folder]);
+  // The project list carries the folders: a cached one would not offer the new folder yet.
+  invalidateProjectsListCache();
   return { ok: true, status: 201, body: { ok: true, folder, folders, root: ROOT_FOLDER } };
 }
 

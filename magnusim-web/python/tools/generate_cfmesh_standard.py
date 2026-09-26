@@ -349,7 +349,13 @@ def main() -> int:
         loc = find_location_in_mesh(solid, scale)
         if not loc.ok:
             return _result(False, error="locationInMesh not inside solid")
-        passages = measure_role_passages(solid, project)
+        try:
+            passages = measure_role_passages(solid, project)
+        except RuntimeError as exc:
+            # Meshing before the BCs are set is fine; there is just no port to check.
+            if "no inlet/outlet faces" not in str(exc):
+                raise
+            passages = []
         passage = check_passage_cells(
             passages,
             base_cell_m=base_cell,

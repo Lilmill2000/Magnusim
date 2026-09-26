@@ -2062,6 +2062,10 @@ def _build_field_patches(
 
 
 def _steady_control_dict_body(end_time: float, write_interval: float, functions_text: str) -> str:
+    # A run shorter than its write interval would write no result at all (the solve
+    # "fails" with nothing to reconstruct): the last iteration is always written.
+    if float(end_time) > 0:
+        write_interval = min(float(write_interval), float(end_time))
     return f"""application     simpleFoam;
 startFrom       startTime;
 startTime       0;
