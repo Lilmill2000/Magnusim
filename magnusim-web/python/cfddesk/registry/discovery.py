@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import os
 import re
 import sys
 from collections.abc import Callable
@@ -517,6 +518,12 @@ def _load_folder_plugin(
     )
 
 
+def plugins_dir_for(root: Path | str) -> Path:
+    """Plugin folders: ``root/plugins``, or ``MAGNUSIM_PLUGINS_DIR`` when set (the tests use it)."""
+    override = (os.environ.get("MAGNUSIM_PLUGINS_DIR") or "").strip()
+    return Path(override) if override else Path(root) / "plugins"
+
+
 def discover_folder_plugins(
     hub: RegistryHub,
     *,
@@ -526,7 +533,7 @@ def discover_folder_plugins(
     root = _resolve_web_root(web_root)
     if root is None:
         return [], False
-    plugins_dir = Path(root) / "plugins"
+    plugins_dir = plugins_dir_for(root)
     if not plugins_dir.is_dir():
         return [], False
     disabled = _disabled_plugins(Path(root))
@@ -749,7 +756,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 error=str(row.get("error") or ""),
             )
         )
-    plugins_dir = (Path(root) / "plugins") if root is not None else None
+    plugins_dir = plugins_dir_for(root) if root is not None else None
     if plugins_dir is not None and plugins_dir.is_dir():
         for child in sorted(plugins_dir.iterdir()):
             if not child.is_dir():

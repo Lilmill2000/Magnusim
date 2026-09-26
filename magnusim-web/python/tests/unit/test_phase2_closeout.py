@@ -26,7 +26,9 @@ def _clean_registry():
     reset_for_tests()
 
 
-def test_example_folder_plugin_registers_analysis():
+def test_example_folder_plugin_registers_analysis(monkeypatch):
+    # The app ships no plugins: load the laminar test plugin from the fixtures.
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(Path(__file__).resolve().parents[1] / "fixtures" / "plugins"))
     load_all(force=True)
     keys = set(get_registry("analysis").keys())
     assert {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY} <= keys

@@ -18,7 +18,8 @@ from cfddesk.registry.discovery import plugin_catalog
 
 WEB_ROOT = Path(__file__).resolve().parents[3]
 PYTHON_ROOT = WEB_ROOT / "python"
-PLUGINS = WEB_ROOT / "plugins"
+# The app ships no plugins; these test plugins exercise the plugin host.
+PLUGINS = Path(__file__).resolve().parents[1] / "fixtures" / "plugins"
 TEMPLATE = WEB_ROOT / "templates" / "plugin"
 TEMPLATE_TEST = TEMPLATE / "tests" / "test_register.py"
 DEMOS = ("example-laminar", "example-extra-mesher", "example-hook-monitor")
@@ -64,7 +65,8 @@ def test_gate_h5_zero_core_edits_static():
             assert not bad, f"{path} imports {bad}"
 
 
-def test_gate_h5_demos_register():
+def test_gate_h5_demos_register(monkeypatch):
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(PLUGINS))
     load_all(force=True)
     laminar = get_registry("analysis").get("laminar_steady")
     assert laminar.label == "Laminar"
@@ -87,7 +89,8 @@ def test_gate_h5_demos_register():
     assert rows["example-hook-monitor"]["authors"] == ["Magnusim"]
 
 
-def test_gate_h5_hook_monitor_writes_control_dict(tmp_path: Path):
+def test_gate_h5_hook_monitor_writes_control_dict(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(PLUGINS))
     if not (FIX / "boundary_conditions.json").is_file():
         pytest.skip("js-project fixture missing")
     from cfddesk.project.web_adapter import load_run_spec

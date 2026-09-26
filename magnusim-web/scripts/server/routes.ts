@@ -51,10 +51,16 @@ async function workerJson(
   }
 }
 
+/** Plugin folders: webRoot/plugins, or MAGNUSIM_PLUGINS_DIR (the e2e tests point it at their fixture plugins). */
+export function pluginsRootFor(webRoot: string): string {
+  const override = String(process.env.MAGNUSIM_PLUGINS_DIR || '').trim();
+  return override ? resolve(override) : resolve(webRoot, 'plugins');
+}
+
 export function safePluginFile(webRoot: string, key: string, uiRel: string, rest: string): string | null {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(key) || /[. ]$/.test(key)) return null;
   try {
-    const pluginsRoot = resolve(webRoot, 'plugins');
+    const pluginsRoot = pluginsRootFor(webRoot);
     const pluginRoot = resolve(pluginsRoot, key);
     const uiRoot = resolve(pluginRoot, uiRel || 'ui');
     const target = resolve(uiRoot, rest || 'index.js');
@@ -338,7 +344,7 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       ctx.sendJson(400, { error: 'invalid plugin key' });
       return;
     }
-    const pluginsRoot = resolve(deps.webRoot, 'plugins');
+    const pluginsRoot = pluginsRootFor(deps.webRoot);
     const pluginRoot = resolve(pluginsRoot, key);
     if (!pathIsWithin(pluginRoot, pluginsRoot)) {
       ctx.sendJson(400, { error: 'plugin path escapes plugins root' });

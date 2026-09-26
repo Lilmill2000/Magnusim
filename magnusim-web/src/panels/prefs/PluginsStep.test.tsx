@@ -67,7 +67,7 @@ describe('PluginsStep', () => {
   it('shows a plugin panel inside its own row, only while the plugin is on', async () => {
     registerPanel({
       key: 'example-hook-monitor',
-      title: 'Hook monitor (demo)',
+      title: 'Test panel',
       place: 'prefs',
       Component: () => <button type="button" data-plugin-hook="1">What does this hook do?</button>,
     });

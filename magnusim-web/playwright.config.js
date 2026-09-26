@@ -29,6 +29,8 @@ export default defineConfig({
       MAGNUSIM_PROJECTS_ROOT: projectsRoot,
       MAGNUSIM_LOCAL_JSON: prefsPath,
       MAGNUSIM_PORT: String(PORT),
+      // The app ships no plugins; the plugin gates load test plugins from here.
+      MAGNUSIM_PLUGINS_DIR: resolve('python/tests/fixtures/plugins'),
       MAGNUSIM_BOUND_PORT: String(PORT),
     },
   },
