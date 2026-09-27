@@ -1899,7 +1899,8 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
   }
   const sid = simulationId || folder.simulation_id || null;
   try {
-    rmSync(folder.dir, { recursive: true, force: true });
+    // Windows can hold a just-written file for a moment (indexer, antivirus): retry.
+    rmSync(folder.dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
   } catch (e) {
     return { ok: false, error: 'Could not delete run folder: ' + String((e && e.message) || e) };
   }

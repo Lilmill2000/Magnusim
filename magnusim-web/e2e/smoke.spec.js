@@ -6,6 +6,17 @@ import { NO_WSL } from './toolchain.js';
 
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 
+/** GET json; a poll can reuse a keep-alive socket just as the server closes it, so retry that. */
+const getJson = async (request, url) => {
+  for (let i = 0; ; i++) {
+    try {
+      return await (await request.get(url)).json();
+    } catch (e) {
+      if (i >= 2 || !/ECONNRESET|socket hang up/i.test(String(e))) throw e;
+    }
+  }
+};
+
 /** Click a mesh form toggle until aria-pressed/checked is the wanted state. */
 async function setIslandToggle(page, label, on) {
   const el = page.locator(`#panel-mesh-form .cfd-island button[aria-label="${label}"]`);
@@ -140,8 +151,8 @@ test.describe('Magnusim smoke', () => {
     await expect
       .poll(
         async () => {
-          const r = await request.get(`/api/case?project_id=${encodeURIComponent(id)}`);
-          if (!r.ok()) return 'wait';
+          const r = await request.get(`/api/case?project_id=${encodeURIComponent(id)}`).catch(() => null);
+          if (!r || !r.ok()) return 'wait';
           const j = await r.json();
           return j.status || j.live_mesh_result?.status || 'wait';
         },
@@ -235,8 +246,8 @@ test.describe('Magnusim smoke', () => {
     await expect
       .poll(
         async () => {
-          const r = await request.get(`/api/run/status?project_id=${encodeURIComponent(id)}&simulation_id=sim_1`);
-          if (!r.ok()) return 'wait';
+          const r = await request.get(`/api/run/status?project_id=${encodeURIComponent(id)}&simulation_id=sim_1`).catch(() => null);
+          if (!r || !r.ok()) return 'wait';
           const j = await r.json();
           const run = j.run || j;
           return run.status || 'wait';
@@ -273,22 +284,22 @@ test.describe('Magnusim smoke', () => {
     // no limited cells and a Courant-limited Δt, so the test still proves
     // adjustable-Δt pimpleFoam, 2 saved frames, residuals and openable results.
     const bcsUrl = `/api/bcs?project_id=${id}&simulation_id=sim_1`;
-    const fixtureInlet = ((await (await request.get(bcsUrl)).json()).boundary_conditions || []).find((b) => /velocity inlet/i.test(b.bc_type));
+    const fixtureInlet = ((await getJson(request, bcsUrl)).boundary_conditions || []).find((b) => /velocity inlet/i.test(b.bc_type));
     expect(fixtureInlet, 'fixture velocity inlet').toBeTruthy();
     // The fixture stores the legacy "Velocity Inlet" spelling; writes take the canonical one.
     const inlet = { ...fixtureInlet, bc_type: 'Velocity inlet', project_id: id, simulation_id: 'sim_1' };
     const slowed = await request.post('/api/bcs', { data: { ...inlet, value: 2 } });
     expect(slowed.ok(), await slowed.text()).toBeTruthy();
-    expect(((await (await request.get(bcsUrl)).json()).boundary_conditions || []).find((b) => b.id === inlet.id)?.value).toBe(2);
+    expect(((await getJson(request, bcsUrl)).boundary_conditions || []).find((b) => b.id === inlet.id)?.value).toBe(2);
     await page.goto(`/#/p/${id}`);
     await expect(page.locator('#left-tree [data-w27-sim-control="1"] > .tree-row').first()).toBeVisible({ timeout: 30_000 });
     await page.locator('#left-tree [data-w27-sim-control="1"] > .tree-row').first().click();
-    const previousRuns = (await (await request.get(`/api/run/status?project_id=${id}&simulation_id=sim_1`)).json()).runs || [];
+    const previousRuns = (await getJson(request, `/api/run/status?project_id=${id}&simulation_id=sim_1`)).runs || [];
     const previousIds = new Set(previousRuns.map((run) => run.id));
     await page.locator('#btn-create-run').click();
     let createdId;
     await expect.poll(async () => {
-      const body = await (await request.get(`/api/run/status?project_id=${id}&simulation_id=sim_1`)).json();
+      const body = await getJson(request, `/api/run/status?project_id=${id}&simulation_id=sim_1`);
       createdId = body.run?.id;
       return !!createdId && !previousIds.has(createdId);
       // Run creation is a worker round trip; 5 s (the default) failed once on a loaded machine.
@@ -306,8 +317,7 @@ test.describe('Magnusim smoke', () => {
     await trPanel.locator('[data-run-start]').click();
     let completed;
     await expect.poll(async () => {
-      const res = await request.get(`/api/run/status?project_id=${id}&simulation_id=sim_1`);
-      const body = await res.json();
+      const body = await getJson(request, `/api/run/status?project_id=${id}&simulation_id=sim_1`);
       completed = body.run;
       return completed?.id === createdId && completed?.time_dependency === 'Transient' ? completed.status : 'waiting';
     }, { timeout: 300_000 }).toMatch(/done|failed|stopped/);
@@ -316,7 +326,7 @@ test.describe('Magnusim smoke', () => {
     expect(completed.has_results).toBe(true);
     expect(completed.n_saved_times).toBeGreaterThanOrEqual(2);
     expect(completed.residuals.length).toBeGreaterThan(0);
-    const runs = (await (await request.get(`/api/run/status?project_id=${id}&simulation_id=sim_1`)).json()).runs;
+    const runs = (await getJson(request, `/api/run/status?project_id=${id}&simulation_id=sim_1`)).runs;
     expect(runs.some((run) => run.time_dependency === 'Steady-state' && run.status === 'done')).toBe(true);
     await page.reload();
     const runNode = page.locator(`[data-w27-run="${completed.id}"] > .tree-row`).first();
@@ -363,13 +373,14 @@ test.describe('Magnusim smoke', () => {
     await pickerDefaults.click();
     await page.locator('#bc-default-wall-type').selectOption('Slip');
     await expect(page.locator('#bc-default-wall-hint')).toContainText('slip wall');
+    await expect(page.locator('#left-tree [data-w19-defaults] .tree-sub')).toHaveText('Slip walls');
     await bcPlus.click();
     await expect(pickerDefaults.locator('.ml-type-sub')).toHaveText('Unassigned faces: slip walls');
     await pickerDefaults.click();
     await page.locator('#bc-default-wall-type').selectOption('No-slip');
     await bcPlus.click();
     await expect(pickerDefaults.locator('.ml-type-sub')).toHaveText('Unassigned faces: no-slip walls');
-    await expect(page.locator('#left-tree [data-w19-defaults]')).toContainText('No-slip');
+    await expect(page.locator('#left-tree [data-w19-defaults] .tree-sub')).toHaveText('No-slip walls');
     await page.reload();
     await expect(page.locator('#left-tree [data-w19-defaults]')).toContainText('No-slip', { timeout: 30_000 });
 
@@ -523,7 +534,7 @@ test.describe('Magnusim smoke', () => {
   test('saved result screenshot, gallery, and every graph / media export format', async ({ page, request }) => {
     test.skip(!WSL, NO_WSL);
     const projectId = 'sample-project-steady-state-e2e';
-    const status = await (await request.get(`/api/run/status?project_id=${projectId}&simulation_id=sim_1`)).json();
+    const status = await getJson(request, `/api/run/status?project_id=${projectId}&simulation_id=sim_1`);
     const run = status.runs.find((entry) => entry.status === 'done' && entry.has_results);
     expect(run).toBeTruthy();
     await page.goto(`/#/p/${projectId}`);
@@ -613,7 +624,7 @@ test.describe('Magnusim smoke', () => {
   }
 
   test('study panel: V0.1.0 rows, field help, time dependency and rename persist', async ({ page, request }) => {
-    const readSim = async () => (await (await request.get(studyUrl)).json()).simulation || {};
+    const readSim = async () => (await getJson(request, studyUrl)).simulation || {};
     const original = await readSim();
     const panel = await openStudyPanel(page);
     try {
@@ -662,7 +673,7 @@ test.describe('Magnusim smoke', () => {
   test('physics panel choice reaches the solve (k-epsilon, relaxation 0.5)', async ({ page, request }) => {
     test.skip(!WSL, NO_WSL);
     test.setTimeout(600_000);
-    const readSim = async () => (await (await request.get(studyUrl)).json()).simulation || {};
+    const readSim = async () => (await getJson(request, studyUrl)).simulation || {};
     const panel = await openStudyPanel(page);
     await panel.getByLabel('Time dependency').selectOption('Steady-state');
     await expect.poll(async () => (await readSim()).time_dependency).toBe('Steady-state');
@@ -674,7 +685,7 @@ test.describe('Magnusim smoke', () => {
     await expect.poll(async () => (await readSim()).relax_u).toBe(0.5);
 
     const statusUrl = `/api/run/status?project_id=${STUDY_PROJECT}&simulation_id=sim_1`;
-    const before = new Set(((await (await request.get(statusUrl)).json()).runs || []).map((r) => r.id));
+    const before = new Set(((await getJson(request, statusUrl)).runs || []).map((r) => r.id));
     await page.locator('#left-tree [data-w27-sim-control="1"] > .tree-row').first().click();
     await page.locator('#btn-create-run').click();
     const runPanel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
@@ -683,7 +694,7 @@ test.describe('Magnusim smoke', () => {
     await expect
       .poll(
         async () => {
-          runId = (await (await request.get(statusUrl)).json()).run?.id;
+          runId = (await getJson(request, statusUrl)).run?.id;
           return !!runId && !before.has(runId);
         },
         { timeout: 30_000 },
@@ -701,7 +712,7 @@ test.describe('Magnusim smoke', () => {
     await expect
       .poll(
         async () => {
-          const j = await (await request.get(statusUrl)).json();
+          const j = await getJson(request, statusUrl);
           run = (j.runs || []).find((r) => r.id === runId) || j.run;
           return run && run.status;
         },

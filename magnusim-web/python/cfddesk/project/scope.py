@@ -238,19 +238,14 @@ def _bcs(root: Path, scope: ScopeId) -> list[dict[str, Any]]:
 
 
 def _wall(study_dir: Path, study_id: str) -> str:
-    defaults_doc = _read_json(study_dir / "boundary_conditions" / "defaults.json") or {}
-    file_doc = _read_json(study_dir / "boundary_conditions.json") or {}
-    by: dict[str, Any] = {}
-    for src in (defaults_doc, file_doc):
-        raw = src.get("defaults_by_simulation")
-        if isinstance(raw, dict):
-            by.update(raw)
-    row = _dict(by.get(study_id))
-    wall = row.get("wall_type")
-    if not wall:
-        wall = _dict(defaults_doc.get("defaults")).get("wall_type")
-    if not wall:
-        wall = _dict(file_doc.get("defaults")).get("wall_type")
+    """The same rule as the solve (paths.assemble_study_bc_defaults): the folder's
+    defaults.json wins; the legacy boundary_conditions.json only when it is missing.
+    The legacy file can still hold the old No-slip after the default is changed."""
+    doc = _read_json(study_dir / "boundary_conditions" / "defaults.json") or {}
+    if not doc:
+        doc = _read_json(study_dir / "boundary_conditions.json") or {}
+    row = _dict(_dict(doc.get("defaults_by_simulation")).get(study_id))
+    wall = row.get("wall_type") or _dict(doc.get("defaults")).get("wall_type")
     return "Slip" if str(wall or "").strip().lower() == "slip" else "No-slip"
 
 

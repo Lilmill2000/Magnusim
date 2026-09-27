@@ -25433,6 +25433,8 @@ async function persistBcDefaults(partial) {
   const j = await r.json();
   if (!r.ok || !j.ok) throw new Error(j.error || 'BC defaults save failed');
   applyBcRecords(j, j.project_id);
+  // The tree reads the saved default: refresh it now that the save has landed.
+  if (typeof refreshSetupTree === 'function') refreshSetupTree();
   return j;
 }
 

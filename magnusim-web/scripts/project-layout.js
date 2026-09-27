@@ -709,7 +709,7 @@ export function persistChildItem(parentDir, kind, rec) {
 export function removeChildItem(parentDir, jsonFile, id) {
   const folder = findChildItem(parentDir, jsonFile, id);
   if (!folder || !folder.dir) return false;
-  rmSync(folder.dir, { recursive: true, force: true });
+  rmSync(folder.dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
   return true;
 }
 
@@ -803,7 +803,7 @@ export function caseUnderOwner(casePath, ownerDir) {
 export function removeStudyFolder(projectDirPath, simId) {
   const study = findStudy(projectDirPath, simId);
   if (!study || !study.dir) return false;
-  rmSync(study.dir, { recursive: true, force: true });
+  rmSync(study.dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
   return true;
 }
 

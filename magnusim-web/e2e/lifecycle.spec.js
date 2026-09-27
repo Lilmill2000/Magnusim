@@ -145,6 +145,15 @@ test('workbench: a study renamed, cloned and deleted; meshes and runs added, ren
   await page.evaluate((id) => window.__CFD_ASSIGN_FACE__(id), inlet.id);
   await expect.poll(async () => (await bcs(sid))[0].faces).toEqual([`face ${inlet.id}@Body1`]);
 
+  // Wall default: Slip in the Defaults panel shows in the tree too.
+  await page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w19-defaults] > .tree-row`).first().click();
+  await page.locator('#bc-default-wall-type').selectOption('Slip');
+  await page.getByRole('button', { name: 'Done' }).first().click();
+  await expect(page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w19-defaults] .tree-sub`)).toHaveText('Slip walls');
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
+  await expect(page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w19-defaults] .tree-sub`)).toHaveText('Slip walls');
+
   // Clone it on the same geometry: the BC comes along on the same face.
   const clone = await createStudy(page, { copyFrom: sid, mode: 'clone' });
   expect(clone).not.toBe(sid);
