@@ -64,3 +64,16 @@ def compare_or_update(got: Path, golden: Path, *, update: bool) -> None:
         return
     assert golden.is_file(), f"missing golden {golden}"
     assert text == golden.read_text(encoding="utf-8"), f"mismatch vs {golden.name}"
+
+
+def pytest_runtest_logreport(report):
+    """On GitHub Actions, a failed test is also written as an error annotation, readable
+    on the run page and through the API without signing in (the step log is not)."""
+    if not os.environ.get("GITHUB_ACTIONS") or not report.failed:
+        return
+    path, line = report.location[0], (report.location[1] or 0) + 1
+    text = str(report.longrepr)
+    last = [ln for ln in text.splitlines() if ln.strip()][-1:] or [""]
+    msg = f"{report.nodeid} ({report.when}): {last[0]}"
+    msg = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"\n::error file=magnusim-web/python/{path},line={line}::{msg}", flush=True)

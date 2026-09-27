@@ -17,6 +17,9 @@ export default defineConfig({
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: 0,
+  // On GitHub Actions each failure also becomes an annotation, which anyone can read
+  // on the run page and through the API (the step log needs a signed-in account).
+  reporter: process.env.GITHUB_ACTIONS ? [['github'], ['list']] : 'list',
   use: {
     baseURL,
     headless: true,

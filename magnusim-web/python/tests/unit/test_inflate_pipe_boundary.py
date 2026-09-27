@@ -92,8 +92,10 @@ def test_inflate_pipe_boundary_is_closed_and_patched(tmp_path, monkeypatch, fine
         pt = tris[tri_phys == phys_of[patch]]
         a, b, c = (pts[pt[:, k]] for k in range(3))
         # gmsh tilts the layer normals at the rim, so the stack's end-face
-        # nodes sit up to ~0.07 mm off the end plane. Measure in that plane.
-        assert np.ptp(pts[pt.ravel(), 2]) < 1e-4
+        # nodes sit a little off the end plane: 0.07-0.09 mm on Windows and
+        # 0.11 mm on Linux at fineness 2 (same gmsh version, different builds).
+        # Allow a tenth of the 2 mm stack, then measure in that plane.
+        assert np.ptp(pts[pt.ravel(), 2]) < 0.1 * specs[0].thickness_m
         area = float(0.5 * np.abs(np.cross(b - a, c - a)[:, 2]).sum())
         # Rim of the patch (edges used once): the pipe's own circle, r = 20 mm,
         # not the 18 mm stack cap, and no hole inside.
