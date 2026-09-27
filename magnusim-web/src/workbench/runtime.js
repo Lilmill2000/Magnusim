@@ -6486,6 +6486,7 @@ function dismissAnimation() {
   const block = document.getElementById('anim-block');
   if (block) block.hidden = true;
   btnAnimation?.classList.remove('is-active');
+  try { syncAnimLoadChip(); } catch (_) {}
 }
 
 async function hydratePtFaceCatalog() {
@@ -11036,6 +11037,8 @@ function mapTimeToCaseTimes(tstr, times) {
 
 const compareFrameExtra = { cuts: new Map(), pt: new Map(), inflight: new Map() };
 let animPreloadA = { done: 0, total: 0 };
+let animPreloadFailed = 0; // frames still missing after the preload's retries
+let animWaitSince = 0; // Play is waiting on a frame since then (0 = not waiting)
 let animPreloadB = { done: 0, total: 0 };
 
 function clearCompareFrameExtra() {
@@ -13086,7 +13089,11 @@ function enableParticleTraceFilter(opts) {
 
 function isSteadyAnimationRun() {
   try {
-    return !runRecIsTransient(selectedRunRecord());
+    // The run whose results are open, not the one selected in the tree (that can be
+    // another run, e.g. one that is solving).
+    const open = resultsRunId || resultsOpeningRunId;
+    const rec = (open && findRunRecord(open)) || selectedRunRecord();
+    return !runRecIsTransient(rec);
   } catch (_) {
     return true;
   }
@@ -13706,9 +13713,9 @@ btnAnimation?.addEventListener('click', () => {
     return;
   }
   const fresh = !block || block.hidden;
-  if (fresh && isSteadyAnimationRun()) {
-    animState.type = 'Particle Trace';
-  }
+  // Steady runs animate the particle trace; a transient run steps through its saved
+  // times and keeps its coloring (Particle Trace stays one click away).
+  if (fresh) animState.type = isSteadyAnimationRun() ? 'Particle Trace' : 'Time Step';
   revealPostFilter('anim-block', { collapseOthers: !!fresh });
   syncAnimChromeFromState();
   btnAnimation.classList.add('is-active');
@@ -13719,10 +13726,6 @@ btnAnimation?.addEventListener('click', () => {
     : Promise.resolve();
   Promise.all([boot, ensureAnimTimes()])
     .then(() => {
-      if (fresh && isSteadyAnimationRun()) {
-        animState.type = 'Particle Trace';
-        syncAnimChromeFromState();
-      }
       publishW12({ animation_opened: true });
       if (!isPtAnimation()) warmAnimFrameCache();
     })
@@ -14381,6 +14384,27 @@ function animTimeIsCached(field, t, wantPt) {
 function setAnimFrameHint(done, total) {
   animPreloadA = { done: Number(done) || 0, total: Number(total) || 0 };
   renderAnimFrameHint();
+  syncAnimLoadChip();
+}
+
+/* Frames still loading (opening Animation, or Play waiting on the next frame) show
+ * in their own chip over the viewport: the toolbar job chip may be busy with a solve. */
+function syncAnimLoadChip() {
+  const chip = document.getElementById('viewport-anim-chip');
+  if (!chip) return;
+  const block = document.getElementById('anim-block');
+  const open = !!(block && !block.hidden) && !isPtAnimation();
+  const a = animPreloadA;
+  const preloading = !!(a.total && a.done < a.total && !animPreloadFailed);
+  const waiting = !!(animState.playing && animWaitSince && Date.now() - animWaitSince > 250);
+  const show = open && resultsViewOpen && (preloading || waiting);
+  if (show) {
+    const lab = document.getElementById('viewport-anim-label');
+    const cnt = document.getElementById('viewport-anim-count');
+    if (lab) lab.textContent = 'Loading animation frames';
+    if (cnt) cnt.textContent = a.total ? a.done + ' / ' + a.total : '';
+  }
+  if (chip.hidden !== !show) chip.hidden = !show;
 }
 
 function renderAnimFrameHint() {
@@ -14396,6 +14420,11 @@ function renderAnimFrameHint() {
     note.textContent = bOn
       ? 'Loading frames A ' + a.done + ' / ' + a.total + ' · B ' + b.done + ' / ' + b.total + '…'
       : 'Loading frames ' + a.done + ' / ' + a.total + extras + '…';
+    return;
+  }
+  if (a.total && a.done < a.total && animPreloadFailed) {
+    note.textContent = a.done + ' / ' + a.total + ' frames loaded; ' + animPreloadFailed +
+      ' could not load (the server is busy). Play fetches them again as it reaches them.';
     return;
   }
   if (a.total && a.done >= a.total) {
@@ -14424,13 +14453,17 @@ async function preloadAnimFrames(times, field, onProgress) {
   // Count simulation times, not cache entries. With traces on, each time
   // still needs a field frame and a PT frame — that used to report 122
   // for a 61-time run (t = 0 plus 60 writes).
-  const missing = list.filter((t) => !animTimeIsCached(field, t, wantPt));
-  const center = Number(animState.index) || 0;
-  missing.sort((a, b) => Math.abs(list.indexOf(a) - center) - Math.abs(list.indexOf(b) - center));
   const total = list.length;
-  let done = total - missing.length;
-  if (onProgress) onProgress(done, total);
-  if (missing.length) {
+  const inMemory = () => list.filter((t) => animTimeIsCached(field, t, wantPt)).length;
+  const center = Number(animState.index) || 0;
+  animPreloadFailed = 0;
+  if (onProgress) onProgress(inMemory(), total);
+  // A frame counts once it is in memory: a failed fetch (a busy server) is tried again.
+  for (let pass = 0; pass < 3; pass++) {
+    const missing = list.filter((t) => !animTimeIsCached(field, t, wantPt));
+    if (!missing.length) break;
+    if (pass) await new Promise((r) => setTimeout(r, 1000 * pass));
+    missing.sort((a, b) => Math.abs(list.indexOf(a) - center) - Math.abs(list.indexOf(b) - center));
     let cursor = 0;
     const limit = Math.min(8, missing.length);
     await Promise.all(Array.from({ length: limit }, async () => {
@@ -14449,16 +14482,22 @@ async function preloadAnimFrames(times, field, onProgress) {
         } catch (e) {
           console.warn('[CFD] anim preload', t, e);
         }
-        done += 1;
-        if (onProgress) onProgress(done, total);
+        if (onProgress) onProgress(inMemory(), total);
       }
     }));
   }
+  animPreloadFailed = total - inMemory();
+  if (onProgress) onProgress(inMemory(), total);
   if (list.length >= 2) {
     try { lockSeriesLutFromCachedFoam(field); } catch (_) {}
     try { applyLockedSeriesLegend(field); } catch (_) {}
   }
 }
+
+window.__CFD_ANIM_DROP_FRAMES__ = () => {
+  fieldFrameCache.clear();
+  setAnimFrameHint(0, 0);
+};
 
 function warmAnimFrameCache() {
   if (isPtAnimation()) return;
@@ -14483,6 +14522,8 @@ function stopAnimationPlay() {
     ptAnimRaf = 0;
   }
   ptAnimLastTs = 0;
+  animWaitSince = 0;
+  try { syncAnimLoadChip(); } catch (_) {}
   const play = document.getElementById('anim-play');
   if (play) play.textContent = 'Play';
   syncAnimPlayButtons();
@@ -14624,7 +14665,13 @@ function startAnimationPlay() {
     const cached = fieldFrameCache.get(fieldFrameKey(field, tstr));
     if (!(cached && cached.pd)) {
       prefetchFieldFrame(field, tstr).catch(() => {});
+      if (!animWaitSince) animWaitSince = Date.now();
+      syncAnimLoadChip();
       return false;
+    }
+    if (animWaitSince) {
+      animWaitSince = 0;
+      syncAnimLoadChip();
     }
     currentTime = String(tstr);
     const idx = times.indexOf(String(tstr));
@@ -14647,6 +14694,13 @@ function startAnimationPlay() {
       if (next > endIdx || next < startIdx) next = startIdx;
       prefetchAhead(next);
       if (!applyPlayFrame(times[next])) {
+        // A frame that is slow to come (a busy server) is passed over after a few
+        // seconds so the loop keeps moving; it goes on loading and plays once it is in.
+        if (animWaitSince && Date.now() - animWaitSince > 3000 &&
+            windowTimes.some((t) => fieldFrameCache.has(fieldFrameKey(field, t)))) {
+          animState.index = next;
+          animWaitSince = Date.now();
+        }
         animTimer = setTimeout(tick, 50);
         return;
       }
@@ -16547,7 +16601,8 @@ function syncViewportJobChip() {
     } else {
       progress = it > 0 && end > 0 ? it + '/' + end : 'Solving';
     }
-    label = (progress === 'Solving' || (stage && stage !== 'solve') ? progress : 'Solving ' + progress) +
+    // "Solving · 3 / 20 frames" already leads with the word: do not say it twice.
+    label = (/^Solving\b/.test(progress) || (stage && stage !== 'solve') ? progress : 'Solving ' + progress) +
       (who ? ' · ' + who : '');
     const elapsedMs = solveElapsedMs(liveRun);
     time = elapsedMs != null ? formatElapsed(elapsedMs) : '0:00';
@@ -29337,6 +29392,7 @@ const TRANSIENT_DEFAULTS_CLIENT = Object.freeze({
  */
 function runRecIsTransient(rec) {
   if (rec && rec.time_dependency) return /transient/i.test(String(rec.time_dependency));
+  if (rec && /pimple/i.test(String(rec.path_kind || ''))) return true;
   if (rec && rec.status && rec.status !== 'draft') return false;
   return simIsTransientClient();
 }

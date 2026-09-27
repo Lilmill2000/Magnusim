@@ -9,9 +9,14 @@ import { WorkerClient, isDataLaneMethod } from '../worker.ts';
 // and takes `sleep` seconds on the slow volume/CAD methods.
 const FAKE_WORKER = `
 import json, os, sys, time
+seen = set()
 for line in sys.stdin:
     req = json.loads(line)
     m = req["method"]
+    # "drop": the first copy of this request is lost on the way in (never answered).
+    if (req.get("params") or {}).get("drop") and req["id"] not in seen:
+        seen.add(req["id"])
+        continue
     if m.startswith("cad.") or (m.startswith("filter.") and m != "filter.validate"):
         time.sleep(float((req.get("params") or {}).get("sleep", 0)))
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": {"method": m, "pid": os.getpid()}}) + "\\n")
@@ -97,6 +102,50 @@ describe('worker lanes', () => {
       await slow;
     } finally {
       worker.stop();
+    }
+  });
+
+  it('a request the worker never received is sent again once a later one is answered', async () => {
+    const lane = new WorkerClient({ cwd: dir, name: 'data-worker', timeoutMs: 20_000 });
+    try {
+      await lane.call('worker.ping');
+      const t0 = Date.now();
+      const lost = lane.call('filter.case_field', { drop: true });
+      const later = await lane.call('filter.case_field', {});
+      assert.equal(later.method, 'filter.case_field');
+      const got = await lost;
+      assert.equal(got.method, 'filter.case_field');
+      assert.ok(Date.now() - t0 < 5000, 'answered after a resend, not at the timeout');
+    } finally {
+      lane.stop();
+    }
+  });
+
+  it('a lost request with nothing sent after it is found by a ping and sent again', async () => {
+    const lane = new WorkerClient({ cwd: dir, name: 'data-worker', timeoutMs: 20_000 });
+    try {
+      await lane.call('worker.ping');
+      const t0 = Date.now();
+      const got = await lane.call('filter.case_field', { drop: true });
+      assert.equal(got.method, 'filter.case_field');
+      assert.ok(Date.now() - t0 < 8000, 'answered after the probe, not at the timeout');
+    } finally {
+      lane.stop();
+    }
+  });
+
+  it('a data lane call that never answers restarts that worker, so later calls are not stuck behind it', async () => {
+    const lane = new WorkerClient({ cwd: dir, name: 'data-worker', restartOnTimeout: true, backoffMs: [50] });
+    try {
+      const first = await lane.call('filter.case_field', {});
+      // Stuck far past its timeout (a result file rewritten under the reader).
+      await assert.rejects(lane.call('filter.case_field', { sleep: 60 }, 800), /worker RPC timeout: filter\.case_field/);
+      const t0 = Date.now();
+      const next = await lane.call('filter.case_field', {}, 10_000);
+      assert.ok(Date.now() - t0 < 8000, 'the next export did not wait out the stuck one');
+      assert.notEqual(next.pid, first.pid, 'a fresh worker process answered');
+    } finally {
+      lane.stop();
     }
   });
 });

@@ -35,13 +35,21 @@ EC=0
 
 # ---- Live results: graphs + completed volume frames ------------------------
 SYNC_EVERY=10
+# A frame goes to Windows once, whole: copied beside it, then renamed into place.
+# The app reads frames as they land (live results, animation), so a frame already
+# there is never rewritten and a half-copied one is never visible.
 copy_saved_time() {
-  local t="$1"
+  local t="$1" tmp
   if [ -f "$DST/$t/U" ] || [ -f "$DST/$t/p" ]; then
-    rm -rf "$WIN_OUT/$t"
-    if cp -a "$DST/$t" "$WIN_OUT/"; then
+    if [ -f "$WIN_OUT/$t/U" ] || [ -f "$WIN_OUT/$t/p" ]; then
+      return 0
+    fi
+    tmp="$WIN_OUT/.frame-$t.part"
+    rm -rf "$tmp"
+    if cp -a "$DST/$t" "$tmp" && rm -rf "$WIN_OUT/$t" && mv "$tmp" "$WIN_OUT/$t"; then
       _evt "{\"event\":\"time_saved\",\"t\":$t}"
     else
+      rm -rf "$tmp" 2>/dev/null
       [ "$EC" -ne 0 ] || EC=48
       _evt "{\"event\":\"error\",\"code\":48,\"error\":\"result frame copy failed\"}"
     fi

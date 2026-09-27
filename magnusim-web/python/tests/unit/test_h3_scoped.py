@@ -160,7 +160,17 @@ def test_gate_h3_two_studies_stay_isolated(tmp_path: Path, monkeypatch) -> None:
     after = project_hydrate(id="p1", simulation_id="b")
     assert after["materials"] == before["materials"]
     assert after["bcs"] == before["bcs"]
-    assert after["mesh"] == before["mesh"]
+    # Hydrate stamps updated_at when it reads (the files above are byte-identical);
+    # a second boundary between the two reads is not a change to study b.
+    def unstamped(doc):
+        if not isinstance(doc, dict):
+            return doc
+        out = {k: v for k, v in doc.items() if k != "updated_at"}
+        if isinstance(out.get("meshes"), list):
+            out["meshes"] = [{k: v for k, v in m.items() if k != "updated_at"} for m in out["meshes"]]
+        return out
+
+    assert unstamped(after["mesh"]) == unstamped(before["mesh"])
     saved = [row for row in after["simulation"]["simulations"] if row["id"] == "b"]
     assert saved == [row for row in before["simulation"]["simulations"] if row["id"] == "b"]
     changed = [row for row in after["simulation"]["simulations"] if row["id"] == "a"]

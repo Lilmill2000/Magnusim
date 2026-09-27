@@ -228,6 +228,18 @@ function queryValue(url: URL, ...names: string[]): string {
   return '';
 }
 
+// MAGNUSIM_HTTP_TRACE=1: every 10 s, list API requests still unanswered after 10 s.
+const HTTP_TRACE = process.env.MAGNUSIM_HTTP_TRACE === '1';
+const openRequests = new Map<ServerResponse, { at: number; what: string }>();
+if (HTTP_TRACE) {
+  setInterval(() => {
+    const now = Date.now();
+    for (const { at, what } of openRequests.values()) {
+      if (now - at > 10_000) console.warn(`[http] still open after ${Math.round((now - at) / 1000)} s: ${what}`);
+    }
+  }, 10_000).unref();
+}
+
 export async function dispatch(
   router: Router,
   req: IncomingMessage,
@@ -237,6 +249,12 @@ export async function dispatch(
   const method = String(req.method || 'GET').toUpperCase();
   const found = router.match(method, url.pathname);
   if (!found) return false;
+  if (HTTP_TRACE && !url.pathname.endsWith('/events')) {
+    openRequests.set(res, { at: Date.now(), what: `${method} ${url.pathname}?time=${url.searchParams.get('time') || ''}` });
+    const done = () => openRequests.delete(res);
+    res.on('finish', done);
+    res.on('close', done);
+  }
   if ('allow' in found) {
     res.setHeader('Allow', found.allow.join(', '));
     sendJson(res, 405, { error: 'method not allowed', path: url.pathname, allow: found.allow });

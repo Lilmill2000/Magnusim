@@ -44,6 +44,12 @@ export interface WorkerClientOptions {
   name?: string;
   /** Second worker that takes the slow calls (see isDataLaneMethod). */
   dataLane?: WorkerClient | null;
+  /**
+   * Restart the process when a call times out. Only for the data lane: its calls
+   * read results and write caches, so a stuck one (a result file being rewritten
+   * under it) can be killed; left alone, every later call would queue behind it.
+   */
+  restartOnTimeout?: boolean;
 }
 
 const DEFAULT_BACKOFF = [250, 750, 2000];
@@ -84,14 +90,19 @@ export class WorkerClient extends EventEmitter {
   private queue: Array<() => void> = [];
   private draining = false;
   private lastReplyAt = 0;
-  private readonly inFlight = new Map<number, { method: string; sentAt: number }>();
+  private readonly inFlight = new Map<number, { method: string; sentAt: number; line: string; resent: number; seq: number }>();
+  private sendSeq = 0;
+  private probeTimer: ReturnType<typeof setTimeout> | null = null;
+  private probing = false;
   private readonly name: string;
   private readonly dataLane: WorkerClient | null;
+  private readonly restartOnTimeout: boolean;
 
   constructor(opts: WorkerClientOptions = {}) {
     super();
     this.name = opts.name || 'worker';
     this.dataLane = opts.dataLane || null;
+    this.restartOnTimeout = !!opts.restartOnTimeout;
     this.python = opts.python || PYTHON;
     this.cwd = opts.cwd || PY_ROOT;
     this.timeoutMs = opts.timeoutMs ?? 30_000;
@@ -216,10 +227,18 @@ export class WorkerClient extends EventEmitter {
         const err = new Error(`worker RPC timeout: ${method} after ${wait} ms${note}`);
         if (TRACE) console.warn(`[${this.name}]`, err.message);
         reject(err);
+        if (this.restartOnTimeout && this.child === child) {
+          console.warn(`[${this.name}] ${method} did not answer in ${wait} ms: restarting the worker`);
+          // Detach it now so new calls wait for the fresh process, not this one.
+          this.failPending(new WorkerUnavailableError('worker restarted after a timeout'));
+          this.killChild();
+          this.spawnChild();
+        }
       }, wait);
       this.pending.set(id, { resolve, reject, timer });
-      this.inFlight.set(id, { method, sentAt: Date.now() });
       const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params });
+      this.inFlight.set(id, { method, sentAt: Date.now(), line: msg, resent: 0, seq: ++this.sendSeq });
+      if (method !== 'worker.ping') this.scheduleProbe();
       try {
         child.stdin.write(msg + '\n', (err) => {
           if (!err) return;
@@ -309,6 +328,54 @@ export class WorkerClient extends EventEmitter {
   }
 
   /** What the worker was doing while request `id` waited, for timeout errors. */
+  /**
+   * The worker answers in the order it reads, so a request sent before the one just
+   * answered and still unanswered never reached it: its line was lost on the way in
+   * (seen on the data lane at the end of a solve). Send it again, twice at most, so
+   * the caller gets an answer instead of waiting out its timeout.
+   */
+  private resendSkipped(answeredSeq: number): void {
+    const child = this.child;
+    for (const [id, sent] of [...this.inFlight]) {
+      if (sent.seq >= answeredSeq) break;
+      this.inFlight.delete(id);
+      if (!this.pending.has(id) || !child || sent.resent >= 2) continue;
+      console.warn(`[${this.name}] ${sent.method} (id ${id}) was not received by the worker: sending it again`);
+      this.inFlight.set(id, { ...sent, sentAt: Date.now(), resent: sent.resent + 1, seq: ++this.sendSeq });
+      try {
+        child.stdin.write(sent.line + '\n');
+      } catch {
+        /* the close handler fails it */
+      }
+    }
+  }
+
+  /**
+   * A lost request that is the last one sent has no later answer to reveal it. A few
+   * seconds after a send that is still unanswered, ping: the worker answers in order,
+   * so a ping answered first means the older request never arrived (resendSkipped).
+   * A slow request that did arrive answers before the ping, so nothing is resent.
+   */
+  private scheduleProbe(): void {
+    if (this.probeTimer || this.probing) return;
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      if (!this.inFlight.size || !this.alive) return;
+      // One ping at a time: behind a long request it just waits its turn.
+      this.probing = true;
+      this.send('worker.ping', {}, 600_000).then(
+        () => {
+          this.probing = false;
+          if (this.inFlight.size) this.scheduleProbe();
+        },
+        () => {
+          this.probing = false;
+        },
+      );
+    }, 3000);
+    this.probeTimer.unref?.();
+  }
+
   private busyNote(id: number): string {
     const head = this.inFlight.entries().next().value;
     if (!head) return '';
@@ -344,6 +411,7 @@ export class WorkerClient extends EventEmitter {
       const pending = this.pending.get(id);
       const sent = this.inFlight.get(id);
       this.inFlight.delete(id);
+      if (sent) this.resendSkipped(sent.seq);
       const now = Date.now();
       if (TRACE && sent) {
         const ran = now - Math.max(sent.sentAt, this.lastReplyAt);
@@ -382,7 +450,9 @@ export class WorkerClient extends EventEmitter {
 let singleton: WorkerClient | null = null;
 
 export function getWorker(): WorkerClient {
-  if (!singleton) singleton = new WorkerClient({ dataLane: new WorkerClient({ name: 'data-worker' }) });
+  if (!singleton) {
+    singleton = new WorkerClient({ dataLane: new WorkerClient({ name: 'data-worker', restartOnTimeout: true }) });
+  }
   return singleton;
 }
 

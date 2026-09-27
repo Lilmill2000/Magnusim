@@ -612,6 +612,11 @@
               <div class="compare-pane-label" id="compare-label-a" hidden></div>
               <div id="viewer" class="viewer" aria-label="VTK viewer"></div>
               <div id="pt-region-handles" class="pt-region-handles" hidden></div>
+              <!-- Animation frames loading: its own chip, so a running job keeps the toolbar one. -->
+              <div id="viewport-anim-chip" class="viewport-job-chip compare-b-job-chip viewport-anim-chip" role="status" hidden>
+                <span class="viewport-job-label" id="viewport-anim-label">Loading animation frames</span>
+                <span class="viewport-job-time" id="viewport-anim-count"></span>
+              </div>
             </div>
             <div class="compare-pane" id="compare-pane-b" hidden>
               <div class="compare-pane-label" id="compare-label-b"></div>

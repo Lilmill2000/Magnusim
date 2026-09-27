@@ -2293,7 +2293,8 @@ def _clean_prior_run(out_dir: Path) -> None:
     for child in list(out_dir.iterdir()):
         name = child.name
         is_time = child.is_dir() and re.match(r"^\d+(\.\d+)?(?:[eE][+-]?\d+)?$", name) and float(name) > 0
-        is_tmp = child.is_dir() and name.startswith(".sync_")
+        # .frame-<t>.part: a result frame solve.sh was still copying in.
+        is_tmp = child.is_dir() and (name.startswith(".sync_") or name.startswith(".frame-"))
         if is_time or is_tmp:
             shutil.rmtree(child, ignore_errors=True)
     for stale in (
