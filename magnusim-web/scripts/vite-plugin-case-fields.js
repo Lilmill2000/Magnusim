@@ -51,7 +51,7 @@ import { spawnFilter, runFilterTool } from './filter-spawn.js';
 import { attachLiveMeshJobReader } from './w16-project-geometry.js';
 import { caseDirAllowedForAttach, caseDirBelongsToProject, caseDirBelongsToStudy, projectIdFromCaseDir } from './project-isolation.js';
 import { listFoamTimeDirs } from './project-layout.js';
-import { liveMeshJobSnapshot, meshGenerateLivePid, persistMeshResult, recoverStudyMeshesFromDisk } from './w21-mesh-generate.js';
+import { liveMeshJobSnapshot, meshGenerateLivePid, recoverStudyMeshesFromDisk, watchUnownedMeshGenerate } from './w21-mesh-generate.js';
 import { getActiveSimulation } from './w17-sim-catalog.js';
 import { assembleMeshDoc } from './study-io.js';
 import { runLivePid as runLivePidW27 } from './w27-solve.js';
@@ -63,7 +63,6 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
-import { polyMeshComplete } from './poly-mesh.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -1881,28 +1880,10 @@ function hydrateActiveMeshCase() {
     !!liveSnap &&
     (!live.generate_id || !liveSnap.generate_id || live.generate_id === liveSnap.generate_id);
   if (live.status === 'running' && !jobAlive) {
-    // Vite/process restart lost the child â€” do not keep a ghost "meshing" card.
-    try {
-      const before = live.fingerprint_before || {};
-      // "Previous mesh kept" only when that mesh is still whole on disk: the
-      // interrupted generate may already have overwritten part of it.
-      const polyDir = live.mesh_path || (live.case_dir ? join(live.case_dir, 'constant', 'polyMesh') : null);
-      const keepPrev = before.n_cells != null && polyMeshComplete(polyDir);
-      persistMeshResult(info.project_id, {
-        ...live,
-        status: keepPrev ? 'done' : 'failed',
-        n_cells: keepPrev ? before.n_cells : live.n_cells,
-        n_points: keepPrev ? before.n_points : live.n_points,
-        n_faces: keepPrev ? before.n_faces : live.n_faces,
-        exit_code: keepPrev ? 0 : live.exit_code != null ? live.exit_code : -1,
-        finished_at: new Date().toISOString(),
-        note: keepPrev
-          ? 'Previous mesh kept â€” a later generate was interrupted.'
-          : 'Meshing stopped when the server restarted.',
-      });
-    } catch (e) {
-      console.warn('[CFD] mark interrupted mesh job', e);
-    }
+    // Not this server's generate: a Vite/process restart lost the child, or another
+    // server on this projects folder runs it. Only its generator going away makes it
+    // interrupted, so follow it until it exits (no ghost card, no false "failed").
+    watchUnownedMeshGenerate(info.project_id, live);
     return false;
   }
   if (live.status === 'running' && jobAlive) {

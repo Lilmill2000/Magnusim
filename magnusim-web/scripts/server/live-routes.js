@@ -615,12 +615,14 @@ export function registerLiveRoutes(router, { worker, jobs }) {
         .catch((err) => jobs.finish(job.id, 'failed', null, String(err)));
     },
     boot() {
-      api.hydrateActiveMeshCase();
+      // Reap first: a generator the last server left behind is then gone, and
+      // hydrate marks its record interrupted instead of following it.
       try {
         reapOrphanMeshGeneratorsOnBoot();
       } catch {
         /* ignore */
       }
+      api.hydrateActiveMeshCase();
       try {
         scheduleComputeQueueKick(400);
       } catch {

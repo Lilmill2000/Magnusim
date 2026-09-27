@@ -10,6 +10,7 @@ import {
   inspectGeneratedCase,
   liveChildIsRunning,
   meshCloseStatus,
+  meshGeneratorAlive,
   meshStopMatchesLive,
   pidIsAlive,
   resolveMeshBackend,
@@ -185,5 +186,25 @@ describe('generator that dies abnormally', () => {
     await new Promise((resolve) => child.on('close', resolve));
     await new Promise((resolve) => setTimeout(resolve, 400));
     assert.equal(orphaned, 0);
+  });
+});
+
+describe('a running mesh this server did not start', () => {
+  it('is alive while its generator holds the case lock, and only then', () => {
+    const caseDir = mkdtempSync(join(tmpdir(), 'mesh-unowned-'));
+    try {
+      const live = { case_dir: caseDir, generate_id: 'g1', pid: null };
+      assert.equal(meshGeneratorAlive(live), false, 'no lock, no launcher pid');
+      assert.equal(meshGeneratorAlive({ ...live, pid: process.pid }), true, 'not claimed yet: the launcher pid decides');
+      writeFileSync(join(caseDir, '.generate.lock'), JSON.stringify({ pid: process.pid, generate_id: 'g1' }));
+      assert.equal(meshGeneratorAlive(live), true, 'its own lock, live pid');
+      writeFileSync(join(caseDir, '.generate.lock'), JSON.stringify({ pid: 2 ** 31 - 2, generate_id: 'g1' }));
+      assert.equal(meshGeneratorAlive({ ...live, pid: process.pid }), false, 'its own lock names a dead pid');
+      writeFileSync(join(caseDir, '.generate.lock'), JSON.stringify({ pid: process.pid, generate_id: 'older' }));
+      assert.equal(meshGeneratorAlive(live), false, 'a lock from another generate is not this one');
+      assert.equal(meshGeneratorAlive(null), false);
+    } finally {
+      rmSync(caseDir, { recursive: true, force: true });
+    }
   });
 });

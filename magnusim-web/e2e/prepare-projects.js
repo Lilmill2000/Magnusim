@@ -26,6 +26,8 @@ const FIXTURE_SRC = join(__dirname, 'fixtures', 'sample-project-steady-state');
  */
 export const QUEUE_PROJECT_A = 'queue-project-a-e2e';
 export const QUEUE_PROJECT_B = 'queue-project-b-e2e';
+/** Own elbow project for mesh-unowned-generate.spec.js: it fakes a mesh another process generates. */
+export const UNOWNED_MESH_PROJECT = 'unowned-mesh-e2e';
 
 /** Copy the elbow fixture into destRoot/<id> laid out the way the app stores it. */
 function seedElbowProject(destRoot, id, title) {
@@ -76,6 +78,7 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
   seedElbowProject(destRoot, FIXTURE_ID);
   seedElbowProject(destRoot, QUEUE_PROJECT_A, 'Queue project A');
   seedElbowProject(destRoot, QUEUE_PROJECT_B, 'Queue project B');
+  seedElbowProject(destRoot, UNOWNED_MESH_PROJECT, 'Unowned mesh');
 
   const emptyId = 'sample-project-empty-e2e';
   const emptyDir = join(destRoot, emptyId);

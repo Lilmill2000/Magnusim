@@ -1779,6 +1779,104 @@ export function reapOrphanMeshGeneratorsOnBoot() {
   }
 }
 
+/**
+ * Is the generator behind a "running" mesh record still at work? A server that did
+ * not start it (another server on the same projects folder, or the instance a Vite
+ * restart replaced, whose child keeps running) cannot ask its own liveJob. The case
+ * lock names the generate and the real python's pid; before the generator claims the
+ * case, the pid we spawned (the venv launcher) stands in.
+ * @param {{ case_dir?: string | null, generate_id?: string | null, pid?: number | null } | null | undefined} live
+ */
+export function meshGeneratorAlive(live) {
+  if (!live) return false;
+  if (live.case_dir && live.generate_id) {
+    try {
+      const lock = JSON.parse(readFileSync(join(live.case_dir, '.generate.lock'), 'utf8'));
+      if (lock && String(lock.generate_id || '') === String(live.generate_id)) return pidIsAlive(lock.pid);
+    } catch {
+      /* not claimed yet, or released: the launcher pid decides */
+    }
+  }
+  return pidIsAlive(live.pid);
+}
+
+const INTERRUPTED_NOTE = 'Meshing stopped when the server restarted.';
+
+/** Close a "running" record whose generator died with no server watching it. */
+export function markMeshGenerateInterrupted(projectId, live) {
+  const before = live.fingerprint_before || {};
+  // "Previous mesh kept" only when that mesh is still whole on disk: the
+  // interrupted generate may already have overwritten part of it.
+  const polyDir = live.mesh_path || (live.case_dir ? join(live.case_dir, 'constant', 'polyMesh') : null);
+  const keepPrev = before.n_cells != null && polyMeshComplete(polyDir);
+  return persistMeshResult(projectId, {
+    ...live,
+    status: keepPrev ? 'done' : 'failed',
+    n_cells: keepPrev ? before.n_cells : live.n_cells,
+    n_points: keepPrev ? before.n_points : live.n_points,
+    n_faces: keepPrev ? before.n_faces : live.n_faces,
+    exit_code: keepPrev ? 0 : live.exit_code != null ? live.exit_code : -1,
+    finished_at: new Date().toISOString(),
+    stage: keepPrev ? 'done' : 'failed',
+    error: keepPrev ? null : INTERRUPTED_NOTE,
+    note: keepPrev ? 'Previous mesh kept — a later generate was interrupted.' : INTERRUPTED_NOTE,
+  });
+}
+
+function meshLiveRecord(projectId, meshId) {
+  const doc = readMeshDoc(projectId, studyIdForMesh(projectId, meshId), meshId);
+  const rec = doc && (doc.meshes || []).find((m) => m && String(m.id) === String(meshId));
+  return (rec && rec.live_mesh_result) || null;
+}
+
+const UNOWNED_MESH_POLL_MS = 2000;
+// The owner writes its result on 'close', at most ORPHAN_PIPE_GRACE_MS after exit.
+const UNOWNED_MESH_GRACE_MS = ORPHAN_PIPE_GRACE_MS + 2000;
+const unownedMeshWatches = new Map();
+
+/**
+ * Follow a "running" mesh this server did not start until its generator exits, and
+ * only then, if no owner wrote a result, mark it interrupted: no ghost "meshing"
+ * card after a restart, and never "failed" while the mesher is still working.
+ * @param {string} projectId
+ * @param {{ mesh_id?: string | null, generate_id?: string | null }} live
+ */
+export function watchUnownedMeshGenerate(projectId, live) {
+  const meshId = live && live.mesh_id ? String(live.mesh_id) : '';
+  const generateId = String((live && live.generate_id) || '');
+  const key = `${projectId}|${meshId}|${generateId}`;
+  if (!projectId || !meshId || unownedMeshWatches.has(key)) return;
+  let deadAt = 0;
+  const tick = () => {
+    unownedMeshWatches.delete(key);
+    let rec = null;
+    try {
+      rec = meshLiveRecord(projectId, meshId);
+    } catch {
+      rec = null;
+    }
+    if (!rec || rec.status !== 'running' || String(rec.generate_id || '') !== generateId) return;
+    if (liveJob && String(liveJob.generate_id || '') === generateId) return;
+    if (meshGeneratorAlive(rec)) {
+      deadAt = 0;
+    } else if (!deadAt) {
+      deadAt = Date.now();
+    } else if (Date.now() - deadAt >= UNOWNED_MESH_GRACE_MS) {
+      try {
+        markMeshGenerateInterrupted(projectId, { ...rec, mesh_id: meshId });
+      } catch (e) {
+        console.warn('[CFD] mark interrupted mesh job', e);
+      }
+      return;
+    }
+    // Keyed while pending so a second hydrate does not start a second watch.
+    const timer = setTimeout(tick, UNOWNED_MESH_POLL_MS);
+    if (timer.unref) timer.unref();
+    unownedMeshWatches.set(key, timer);
+  };
+  tick();
+}
+
 export function liveMeshJobSnapshot() {
   if (isLiveMeshJobHeld()) {
     return {
