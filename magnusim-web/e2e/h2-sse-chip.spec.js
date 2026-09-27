@@ -21,10 +21,15 @@ test('gate:h2-sse-chip mesh progress reaches the viewport chip', async ({ page }
   await page.goto(`/#/p/${encodeURIComponent(PROJECT_A)}`);
   await expect(page.locator('#app.workbench')).toBeVisible({ timeout: 60_000 });
   await page.waitForFunction(() => typeof window.__CFD_WATCH_JOB__ === 'function');
-  await page.waitForFunction(() => {
+  // Wait until the project is open: ready, and its "Opening project" chip gone. Before
+  // the open starts, the hidden label still reads its default text, so checking the
+  // text alone passed too early (on a slower machine the open then swallowed the event).
+  await page.waitForFunction((id) => {
+    const chip = document.getElementById('viewport-job-chip');
     const label = document.getElementById('viewport-job-label');
-    return !!label && !String(label.textContent || '').includes('Opening');
-  }, null, { timeout: 60_000 });
+    const opening = !!chip && !chip.hidden && String((label && label.textContent) || '').includes('Opening');
+    return window.__CFD_PROJECT_READY__ === id && !opening;
+  }, PROJECT_A, { timeout: 60_000 });
   await page.evaluate(() => window.__CFD_WATCH_JOB__('job-h2'));
   await expect(page.locator('#viewport-job-label')).toContainText('gmsh', { timeout: 15_000 });
   expect(statusPolls).toEqual([]);

@@ -79,6 +79,18 @@ test('home: a folder, a project renamed and moved into it, then both deleted', a
   // Rename the project and move it into the folder from its edit dialog.
   await page.goto('/#/');
   const card = page.locator(`.home-card[data-project-id="${pid}"]`);
+  if (!(await card.waitFor({ timeout: 30_000 }).then(() => true, () => false))) {
+    // Say what the home page showed instead (CI only shows this message, not the page).
+    const seen = await page.evaluate((id) => ({
+      hash: location.hash,
+      cards: [...document.querySelectorAll('.home-card')].map((c) => c.getAttribute('data-project-id')).slice(0, 12),
+      filterActive: document.querySelector('.home-nav .is-active')?.textContent?.trim() || null,
+      inList: !!document.querySelector(`[data-project-id="${id}"]`),
+      loading: document.body.innerText.includes('Loading'),
+    }), pid);
+    const server = await json(request, '/api/projects');
+    throw new Error(`card for ${pid} not shown: page ${JSON.stringify(seen)}; server lists it: ${(server.projects || []).some((p) => p.id === pid)}`);
+  }
   await card.click();
   await page.locator('#home-edit-project').click();
   await expect(page.locator('#np-heading')).toHaveText(/Edit project/);

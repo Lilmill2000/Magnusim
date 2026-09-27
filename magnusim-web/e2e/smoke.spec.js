@@ -415,7 +415,9 @@ test.describe('Magnusim smoke', () => {
     await expect(runPanel.locator('[data-run-title]')).toHaveText('Run 1');
     await expect(runPanel.locator('[data-run-start]')).toBeDisabled();
     await expect(runPanel.locator('[data-run-reason]')).toBeVisible();
-    await expect(page.locator('#left-tree')).toContainText('Run 1');
+    // The tree reloads from the server's project tree, which can take several seconds
+    // on a loaded machine (the panel above already shows the run).
+    await expect(page.locator('#left-tree')).toContainText('Run 1', { timeout: 30_000 });
   });
 
   test('Air: sci-notation viscosity saves; a viewport body click assigns and unassigns', async ({ page, request }) => {
