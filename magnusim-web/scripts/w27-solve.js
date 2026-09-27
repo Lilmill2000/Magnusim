@@ -1770,7 +1770,9 @@ async function renameCatalogRun(projectId, runId, name, simulationId) {
   const side = readJsonSafe(runSidecarPath(projectId, runId));
   if (side) {
     side.name = rec.name;
-    writeRunSidecar(projectId, runId, side);
+    // Wait for it: a Delete right after a rename otherwise races this write
+    // into the folder being removed (EPERM, or the folder comes back).
+    await writeRunSidecar(projectId, runId, side);
   }
   return {
     ok: true,
@@ -1898,6 +1900,8 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
     return { ok: false, error: 'Run not found' };
   }
   const sid = simulationId || folder.simulation_id || null;
+  const inFlight = pendingRunWrites.get(String(runId));
+  if (inFlight) await inFlight;
   try {
     // Windows can hold a just-written file for a moment (indexer, antivirus): retry.
     rmSync(folder.dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
@@ -1941,6 +1945,9 @@ function loadRunDoc(projectId, runId) {
   return merged;
 }
 
+/** run.json writes still in flight on the worker, per run: delete waits for them. */
+const pendingRunWrites = new Map();
+
 function writeRunSidecar(projectId, runId, body) {
   const payload = { ...(body || {}), id: runId, run_id: runId, project_id: projectId };
   try {
@@ -1952,6 +1959,12 @@ function writeRunSidecar(projectId, runId, body) {
     });
     if (write && typeof write.then === 'function') {
       write.catch((e) => console.warn('[CFD] write run sidecar', e));
+      const key = String(runId);
+      const settled = write.then(() => {}, () => {});
+      pendingRunWrites.set(key, settled);
+      settled.then(() => {
+        if (pendingRunWrites.get(key) === settled) pendingRunWrites.delete(key);
+      });
     }
     return write;
   } catch (e) {

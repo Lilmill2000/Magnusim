@@ -1313,6 +1313,10 @@ async function createFolderFromModal() {
   });
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || 'Could not create folder');
+  // The server has it: offer it right away (Edit project's folder list), not only
+  // once the catalog reload lands.
+  if (!state.folders.includes(name)) state.folders = [...state.folders, name];
+  persistCatalogCache();
   closeFolderModal();
   setFilter(`folder:${name}`);
   await refreshHome();

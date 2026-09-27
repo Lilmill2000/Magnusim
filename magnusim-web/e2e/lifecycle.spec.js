@@ -196,12 +196,55 @@ test('workbench: a study renamed, cloned and deleted; meshes and runs added, ren
   await runPanel.locator('button.mat-clear-link[title="Delete run"]').click();
   await expect.poll(runs).not.toContain('Run Beta');
 
+  // Delete straight after a rename: the rename's run.json write used to land in
+  // the folder being deleted (EPERM, or the run came back).
+  const post = async (path, data) => (await request.post(q(path), { data: { project_id: pid, simulation_id: clone, ...data } })).json();
+  for (let i = 0; i < 3; i++) {
+    const made = await post('/api/run/create', { name: `Race ${i}` });
+    const rid = made.run && made.run.id;
+    expect(rid).toBeTruthy();
+    expect((await post('/api/run/rename', { run_id: rid, name: `Race ${i} renamed` })).ok).toBe(true);
+    const del = await post('/api/run/delete', { run_id: rid });
+    expect(del.ok, JSON.stringify(del)).toBe(true);
+  }
+  await page.waitForTimeout(1500);
+  expect((await runs()).filter((n) => n.startsWith('Race'))).toEqual([]);
+
   // Delete the clone; the original stays with its BC.
   await studyRow(page, clone).click();
   await studyPanel.locator('button.mat-clear-link[title="Delete this simulation"]').click();
   await page.locator('#cf-confirm').click();
   await expect.poll(async () => (await studies()).map((s) => s.id)).toEqual([sid]);
   expect((await bcs(sid)).length).toBe(1);
+
+  // A Wall BC has its own wall type: editing it leaves the Slip default alone
+  // (it used to overwrite the default with the Wall's No-slip).
+  await page.locator('#btn-bcs-plus').click();
+  await page.locator('#panel-bc-picker .cfd-island [data-bc-key="wall"]').click();
+  await page.locator('#panel-bc-picker .cfd-island [data-bc-add="1"]').click();
+  const wallEditor = page.locator('#panel-bc-editor .cfd-island [data-bc-editor="1"]');
+  await expect(wallEditor).toBeVisible();
+  const wallRec = async () => (await bcs(sid)).find((b) => b.bc_type === 'Wall');
+  await expect.poll(async () => (await wallRec())?.wall_type).toBe('No-slip');
+  const wallType = wallEditor.getByLabel('Wall type');
+  await expect(wallType).toHaveValue('No-slip');
+  await wallType.selectOption('Slip');
+  await expect.poll(async () => (await wallRec())?.wall_type).toBe('Slip');
+  await wallType.selectOption('No-slip');
+  await expect.poll(async () => (await wallRec())?.wall_type).toBe('No-slip');
+  await wallEditor.getByRole('button', { name: 'Done' }).click();
+  const defaultsNow = async () => (await json(request, q('/api/bcs', { simulation_id: sid }))).defaults?.wall_type;
+  expect(await defaultsNow()).toBe('Slip');
+  const defaultsRow = page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w19-defaults]`);
+  await expect(defaultsRow.locator('.tree-sub')).toHaveText('Slip walls');
+  await defaultsRow.locator(':scope > .tree-row').first().click();
+  await expect(page.locator('#bc-default-wall-type')).toHaveValue('Slip');
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
+  await expect(defaultsRow.locator('.tree-sub')).toHaveText('Slip walls');
+  await defaultsRow.locator(':scope > .tree-row').first().click();
+  await expect(page.locator('#bc-default-wall-type')).toHaveValue('Slip');
+  expect((await wallRec())?.wall_type).toBe('No-slip');
 });
 
 test('deleting a geometry says its studies go too, and removes only those', async ({ page, request }) => {

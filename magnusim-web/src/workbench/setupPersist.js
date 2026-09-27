@@ -56,9 +56,9 @@ export async function saveBoundary(expectedId) {
   const doc = await workerRpc('bcs.set', {
     project_id: draft.project_id,
     sim_id: simId,
+    // BC records only: the wall default is saved by the Defaults panel alone.
     body: {
       boundary_conditions: list,
-      defaults: bcCatalog.defaults,
       simulation_id: simId,
     },
   });

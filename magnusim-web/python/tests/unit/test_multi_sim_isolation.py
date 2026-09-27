@@ -338,3 +338,35 @@ def test_materials_do_not_union_across_studies(tmp_path: Path):
     assert {m["id"] for m in a["materials"]} == {"mat-a"}
     assert {m["id"] for m in b["materials"]} == {"mat-b"}
     assert not (root / "materials.json").exists()
+
+
+def test_saving_a_wall_bc_keeps_the_slip_default(tmp_path: Path):
+    """A Wall BC's own wall type never overwrites the Defaults panel's wall type,
+    even when the legacy aggregate still holds the old No-slip."""
+    from cfddesk.project.paths import assemble_study_bc_defaults
+
+    root = tmp_path / "proj"
+    dirs = _tree(root, ["sim-a"])
+    bcs_dir = dirs["sim-a"] / "boundary_conditions"
+    bcs_dir.mkdir(parents=True, exist_ok=True)
+    (bcs_dir / "defaults.json").write_text(
+        json.dumps({"defaults": {"wall_type": "Slip"}, "defaults_by_simulation": {"sim-a": {"wall_type": "Slip"}}}),
+        encoding="utf-8",
+    )
+    (dirs["sim-a"] / "boundary_conditions.json").write_text(
+        json.dumps({"defaults": {"wall_type": "No-slip"}, "defaults_by_simulation": {"sim-a": {"wall_type": "No-slip"}}}),
+        encoding="utf-8",
+    )
+    wall = {"id": "bc-wall-1", "name": "Wall 1", "bc_type": "Wall", "wall_type": "No-slip",
+            "faces": ["face 3@Body1"], "simulation_id": "sim-a"}
+    for body in (
+        {"simulation_id": "sim-a", "boundary_conditions": [wall]},
+        # An older client also sent its (possibly stale) defaults: ignored.
+        {"simulation_id": "sim-a", "boundary_conditions": [wall], "defaults": {"wall_type": "No-slip"}},
+    ):
+        doc = set_bcs(root, body, sim_id="sim-a")
+        assert doc["defaults"] == {"wall_type": "Slip"}
+        assert doc["defaults_by_simulation"] == {"sim-a": {"wall_type": "Slip"}}
+        assert assemble_study_bc_defaults(root, "sim-a") == {"wall_type": "Slip"}
+    walls = [b for b in _read_study_bcs(root, "sim-a")["boundary_conditions"] if b["bc_type"] == "Wall"]
+    assert [w["wall_type"] for w in walls] == ["No-slip"]

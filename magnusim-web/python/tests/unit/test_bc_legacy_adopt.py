@@ -76,3 +76,21 @@ def test_bcs_set_keeps_legacy_root_bcs(tmp_path, monkeypatch, copy_into_study):
 
     hydrated = dispatch("project.hydrate", {"id": root.name, "simulation_id": "sim_1"})
     assert sorted((b["id"], b["name"]) for b in hydrated["bcs"]["boundary_conditions"]) == want
+
+
+def test_hydrate_gives_the_saved_wall_default_not_the_legacy_one(tmp_path, monkeypatch):
+    """Switching back to a study hydrates its BCs; the wall default must be the saved
+    one (defaults.json), not the old No-slip the legacy aggregate still holds."""
+    root, study_dir = _seed(tmp_path, monkeypatch, copy_into_study=True)
+    legacy = json.loads((study_dir / "boundary_conditions.json").read_text(encoding="utf-8"))
+    legacy["defaults"] = {"wall_type": "No-slip"}
+    legacy["defaults_by_simulation"] = {"sim_1": {"wall_type": "No-slip"}}
+    (study_dir / "boundary_conditions.json").write_text(json.dumps(legacy), encoding="utf-8")
+    (study_dir / "boundary_conditions").mkdir(exist_ok=True)
+    (study_dir / "boundary_conditions" / "defaults.json").write_text(
+        json.dumps({"defaults": {"wall_type": "Slip"}, "defaults_by_simulation": {"sim_1": {"wall_type": "Slip"}}}),
+        encoding="utf-8",
+    )
+    hydrated = dispatch("project.hydrate", {"id": root.name, "simulation_id": "sim_1"})
+    assert hydrated["bcs"]["defaults"] == {"wall_type": "Slip"}
+    assert hydrated["bcs"]["defaults_by_simulation"] == {"sim_1": {"wall_type": "Slip"}}

@@ -214,12 +214,20 @@ def project_hydrate(id: str = "", project_id: str = "", simulation_id: str = "")
     runs = scoped("runs/catalog.json")
     bcs = scoped("boundary_conditions.json")
     if sid and any(str(s.get("id")) == sid for s in studies):
-        from cfddesk.project.paths import assemble_study_bcs
+        from cfddesk.project.paths import assemble_study_bc_defaults, assemble_study_bcs
 
         # Folder rows plus legacy aggregate/root rows, with the ids the tree and GET /api/bcs use.
         rows = assemble_study_bcs(root, sid)
         if bcs is not None or rows:
-            bcs = {**(bcs or {}), "boundary_conditions": rows, "simulation_id": sid}
+            # The wall default as the solve reads it: the legacy aggregate can hold an old one.
+            defaults = assemble_study_bc_defaults(root, sid)
+            bcs = {
+                **(bcs or {}),
+                "boundary_conditions": rows,
+                "defaults": defaults,
+                "defaults_by_simulation": {sid: dict(defaults)},
+                "simulation_id": sid,
+            }
     return {
         "ok": True,
         "project_id": pid,

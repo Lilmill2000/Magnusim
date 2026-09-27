@@ -9748,7 +9748,25 @@ function hideMeshInspect(opts) {
   syncMeshInspectPanel();
 }
 
-async function showMeshInspect(meshId) {
+/* The viewport chip says Loading mesh from the click until the mesh and its
+ * tools are up: activating it on the server can take a while on a big mesh. */
+let meshLoadName = '';
+async function withMeshLoading(meshId, work) {
+  const rec = meshId ? findMeshRecord(meshId) : null;
+  meshLoadName = (rec && rec.name) || meshLoadName || '';
+  beginViewportBusy('mesh');
+  try {
+    return await work();
+  } finally {
+    endViewportBusy('mesh');
+  }
+}
+
+function showMeshInspect(meshId) {
+  return withMeshLoading(meshId, () => loadMeshInspect(meshId));
+}
+
+async function loadMeshInspect(meshId) {
   const token = ++meshInspectLoadToken;
   const rec =
     (meshId && findMeshRecord(meshId)) ||
@@ -11046,6 +11064,7 @@ function endCompareBusy(kind) {
   const need =
     viewportBusy.results ||
     viewportBusy.cut ||
+    viewportBusy.mesh ||
     compareState.busy.results ||
     compareState.busy.frames;
   if (!need) {
@@ -16388,8 +16407,8 @@ function syncToolbarPresence() {
   toolbar.classList.toggle('toolbar-job-on', jobOn);
 }
 
-const viewportBusy = { results: 0, cut: 0 };
-const viewportBusyStarted = { results: 0, cut: 0 };
+const viewportBusy = { results: 0, cut: 0, mesh: 0 };
+const viewportBusyStarted = { results: 0, cut: 0, mesh: 0 };
 let projectOpenCount = 0;
 let projectOpenStarted = 0;
 let viewportChipTimer = 0;
@@ -16413,14 +16432,14 @@ window.__CFD_PROJECT_OPEN_BEGIN__ = beginProjectOpen;
 window.__CFD_PROJECT_OPEN_END__ = endProjectOpen;
 
 function beginViewportBusy(kind) {
-  const key = kind === 'cut' ? 'cut' : 'results';
+  const key = kind === 'cut' || kind === 'mesh' ? kind : 'results';
   if (!viewportBusy[key]) viewportBusyStarted[key] = Date.now();
   viewportBusy[key] = (viewportBusy[key] || 0) + 1;
   try { syncViewportJobChip(); } catch (_) {}
 }
 
 function endViewportBusy(kind) {
-  const key = kind === 'cut' ? 'cut' : 'results';
+  const key = kind === 'cut' || kind === 'mesh' ? kind : 'results';
   viewportBusy[key] = Math.max(0, (viewportBusy[key] || 0) - 1);
   if (!viewportBusy[key]) viewportBusyStarted[key] = 0;
   try { syncViewportJobChip(); } catch (_) {}
@@ -16458,6 +16477,7 @@ function syncViewportJobChip() {
   let label = '';
   let time = '';
   let eta = '';
+  let holdAfter = true;
   const stage = workbenchStage();
   const post = stage === 'results' || stage === 'mesh';
   if (projectOpenCount > 0) {
@@ -16474,6 +16494,11 @@ function syncViewportJobChip() {
     label = 'Loading results';
     if (!viewportBusyStarted.results) viewportBusyStarted.results = Date.now();
     time = formatElapsed(busyElapsedMs('results'));
+  } else if (viewportBusy.mesh > 0) {
+    show = true;
+    label = meshLoadName ? 'Loading mesh · ' + meshLoadName : 'Loading mesh';
+    time = formatElapsed(busyElapsedMs('mesh'));
+    holdAfter = false;
   } else if (meshLive) {
     show = true;
     const mid = jobState.mesh_id || liveComputeSnap().mesh_id;
@@ -16540,6 +16565,7 @@ function syncViewportJobChip() {
   }
   if (!attaching && !viewportBusy.results) viewportBusyStarted.results = 0;
   if (!viewportBusy.cut) viewportBusyStarted.cut = 0;
+  if (!viewportBusy.mesh) viewportBusyStarted.mesh = 0;
   let computeKind = '';
   try { computeKind = (typeof liveComputeSnap === 'function' && liveComputeSnap().kind) || ''; } catch (_) {}
   const jobStillExpected = !!(
@@ -16548,7 +16574,10 @@ function syncViewportJobChip() {
     (runCatalog && runCatalog.live_run_id) ||
     computeKind
   );
-  if (show) {
+  if (show && !holdAfter) {
+    // A load is over when it is over; only jobs linger through a status gap.
+    lastJobChip.show = false;
+  } else if (show) {
     lastJobChip = { show: true, label, time, eta, until: Date.now() + 8000 };
     jobChipStickyUntil = lastJobChip.until;
   } else if (jobStillExpected && lastJobChip.show && Date.now() < lastJobChip.until) {
@@ -34900,8 +34929,7 @@ function applyStudyDropOrder(ids, geometryId) {
           markTreeSelected(selKey);
           selectMeshLocally(mid);
           showMeshPanel();
-          activateMeshClient(mid)
-            .then(() => showMeshInspect(mid))
+          withMeshLoading(mid, () => activateMeshClient(mid).then(() => showMeshInspect(mid)))
             .catch((err) => console.warn('[CFD] mesh inspect', err));
           return;
         }
@@ -34944,11 +34972,12 @@ function applyStudyDropOrder(ids, geometryId) {
         holdTreeScroll(2500);
         if (treeUi.openPanel) hideAllTreeDetails();
         markTreeSelected(selKey);
-        activateMeshClient(mid, { skipTree: true })
-          .then(() => {
+        withMeshLoading(mid, () =>
+          activateMeshClient(mid, { skipTree: true }).then(() => {
             holdTreeScroll(2500);
             return showMeshInspect(mid);
           })
+        )
           .then(() => holdTreeScroll(2500))
           .catch((err) => console.warn('[CFD] run mesh inspect', err));
         return;

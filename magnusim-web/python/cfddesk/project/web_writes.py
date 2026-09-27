@@ -468,6 +468,7 @@ def set_materials(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") 
 def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dict[str, Any]:
     from cfddesk.project.paths import (
         adopt_legacy_bcs,
+        assemble_study_bc_defaults,
         assemble_study_bcs,
         find_study,
         persist_child_item,
@@ -476,6 +477,9 @@ def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dic
     raw = body if isinstance(body, dict) else {"boundary_conditions": body}
     sid = str(sim_id or (raw.get("simulation_id") if isinstance(raw, dict) else "") or "").strip()
     path = _study_dest(project_dir, "boundary_conditions.json", sid)
+    # Saving BC records never changes the wall default (the Defaults panel owns it):
+    # keep what is saved, read by the same rule as the solve.
+    kept_defaults = assemble_study_bc_defaults(project_dir, sid)
     # Legacy aggregate-only rows get folders first: the mirror rewrite below would drop them.
     adopt_legacy_bcs(project_dir, sid)
     _proj, mode, mirror = write_through_project(
@@ -487,6 +491,8 @@ def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dic
         else raw
     )
     doc = _scope_doc_to_study(stamp(src, sim_id=sid, increment="W19"), "boundary_conditions", sid)
+    doc["defaults"] = dict(kept_defaults)
+    doc["defaults_by_simulation"] = {sid: dict(kept_defaults)} if sid else {}
     only = str(raw.get("only_id") or "").strip()
     study = find_study(project_dir, sid)
     if study:

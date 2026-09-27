@@ -150,11 +150,26 @@ test('mesh settings, refinements, engines, inspect, delete and stop, and copy ac
   expect(JSON.stringify(meta.inflate_boundary_layer || [])).toContain(roundInlet);
 
   // 3. Inspect it: counts in the chip, and a mesh cutting plane.
-  // Clicking the selected mesh again closes the view, so click only when it is not open.
-  if (!(await page.evaluate(() => window.__CFD_MESH_INSPECT__ === true))) {
-    await page.locator(`#left-tree [data-w20-mesh-item="${refined}"] > .tree-row .tl`).first().click();
+  // Clicking the selected mesh again closes the view, so close it first if it is open.
+  const refinedRow = page.locator(`#left-tree [data-w20-mesh-item="${refined}"] > .tree-row .tl`).first();
+  if (await page.evaluate(() => window.__CFD_MESH_INSPECT__ === true)) {
+    await refinedRow.click();
+    await expect.poll(() => page.evaluate(() => window.__CFD_MESH_INSPECT__ === true)).toBe(false);
   }
+  // Opening a mesh says so until it is up (a busy server can take many seconds):
+  // slow the mesh requests so the chip is there long enough to see.
+  const slow = async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue().catch(() => {});
+  };
+  await page.route(/\/api\/(mesh|case)/, slow);
+  await refinedRow.click();
+  const jobChip = page.locator('#viewport-job-chip');
+  await expect(jobChip).toBeVisible({ timeout: 5_000 });
+  await expect(jobChip).toContainText('Loading mesh · Refined');
   await expect.poll(() => page.evaluate(() => window.__CFD_MESH_INSPECT__ === true), { timeout: 60_000 }).toBe(true);
+  await expect(jobChip).toBeHidden({ timeout: 60_000 });
+  await page.unroute(/\/api\/(mesh|case)/, slow);
   await expect(page.locator('#mesh-inspect-line')).toContainText('cells', { timeout: 60_000 });
   const section = page.waitForResponse((res) => /\/api\/mesh-section/.test(res.url()) && res.ok(), { timeout: 120_000 });
   await page.locator('.tb-btn[data-label="Cutting Plane"]').click();
