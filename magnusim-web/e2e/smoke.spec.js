@@ -385,7 +385,7 @@ test.describe('Magnusim smoke', () => {
     await expect(page.locator('#left-tree [data-w19-defaults]')).toContainText('No-slip', { timeout: 30_000 });
 
   });
-  test('fresh STL: Create Simulation appears without reload and lands on Run 1 with its reason', async ({ page }) => {
+  test('fresh STL: Create Simulation appears without reload and lands on Run 1 with its reason', async ({ page, request }) => {
     // A 1 cm cube as ASCII STL, written per run so the test needs no binary fixture.
     const v = [[0, 0, 0], [0.01, 0, 0], [0.01, 0.01, 0], [0, 0.01, 0], [0, 0, 0.01], [0.01, 0, 0.01], [0.01, 0.01, 0.01], [0, 0.01, 0.01]];
     const tris = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6], [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3]];
@@ -417,7 +417,18 @@ test.describe('Magnusim smoke', () => {
     await expect(runPanel.locator('[data-run-reason]')).toBeVisible();
     // The tree reloads from the server's project tree, which can take several seconds
     // on a loaded machine (the panel above already shows the run).
-    await expect(page.locator('#left-tree')).toContainText('Run 1', { timeout: 30_000 });
+    const treeHasRun = await expect(page.locator('#left-tree'))
+      .toContainText('Run 1', { timeout: 30_000 })
+      .then(() => true, () => false);
+    if (!treeHasRun) {
+      // Say which side is missing it (CI shows only this message, not the page).
+      const sid = await page.evaluate(() => window.__CFD_W17__ && window.__CFD_W17__.activeId);
+      const q = (path) => `${path}?project_id=${encodeURIComponent(pid)}&simulation_id=${encodeURIComponent(sid || '')}`;
+      const runs = ((await getJson(request, q('/api/run/status'))).runs || []).map((r) => `${r.name}:${r.status}`);
+      const tree = await getJson(request, `/api/project/tree?project_id=${encodeURIComponent(pid)}`);
+      const treeRuns = (tree.geometries || []).flatMap((g) => g.studies || []).map((s) => `${s.id}:[${(s.runs || []).map((r) => r.name).join(',')}]`);
+      throw new Error(`tree never showed Run 1. study ${sid}; server runs ${JSON.stringify(runs)}; server tree ${JSON.stringify(treeRuns)}`);
+    }
   });
 
   test('Air: sci-notation viscosity saves; a viewport body click assigns and unassigns', async ({ page, request }) => {

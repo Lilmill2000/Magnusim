@@ -421,17 +421,23 @@ export function LeftTree() {
   useEffect(() => {
     let dead = false;
     const gen = generation;
+    // Refreshes overlap (a slow server tree call, then a newer one): paint an answer only
+    // if no later request has already painted, or a stale tree replaces the new run.
+    let sent = 0;
+    let painted = 0;
     const refresh = () => {
       if (!projectId) {
         docRef.current = null;
         paint();
         return;
       }
+      const mine = ++sent;
       apiGet<ProjectTreeDoc>('/api/project/tree', { project_id: projectId })
         .then((doc) => {
-          if (dead) return;
+          if (dead || mine < painted) return;
           const live = useProjectStore.getState();
           if (live.generation !== gen || live.projectId !== projectId) return;
+          painted = mine;
           docRef.current = doc;
           paint();
         })

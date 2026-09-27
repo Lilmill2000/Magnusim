@@ -75,6 +75,9 @@ test('home: a folder, a project renamed and moved into it, then both deleted', a
   await page.locator('#nf-name').fill(folder);
   await page.locator('#nf-create').click();
   await expect.poll(async () => JSON.stringify((await json(request, '/api/folders')).folders)).toContain(folder);
+  // The app then opens the new folder. Wait for that before leaving: on a slow machine it
+  // landed after the next navigation and took the page back into the (empty) folder.
+  await page.waitForFunction(() => location.hash.startsWith('#/folder/'), null, { timeout: 30_000 });
 
   // Rename the project and move it into the folder from its edit dialog.
   await page.goto('/#/');

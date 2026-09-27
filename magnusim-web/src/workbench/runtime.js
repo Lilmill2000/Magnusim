@@ -30248,6 +30248,10 @@ async function createRunClient(opts) {
       throw new Error((j && j.error) || 'Could not create run');
     }
     applyRunCatalog(j);
+    // The tree reads the server's project tree. Its refresh above went out before the
+    // server had this run, and applyRunCatalog only refreshes when this page's run list
+    // changed (it already held the run): refresh now, or the new run can stay missing.
+    try { refreshSetupTree(); } catch (_) {}
     const newId = (j.run && (j.run.id || j.run.run_id)) || j.active_run_id || id;
     if (runCatalog.selected_run_id === id) {
       runCatalog.selected_run_id = newId;
