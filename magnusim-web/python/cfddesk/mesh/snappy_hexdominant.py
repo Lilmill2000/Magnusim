@@ -256,7 +256,12 @@ def _layers_entry(spec: Any) -> str:
 
     sizes = [getattr(spec, k, None) for k in ("thickness_m", "first_layer_m")]
     absolute = any(v is not None and float(v) > 0 for v in sizes)
-    if absolute and not (spec.min_thickness_m and spec.min_thickness_m > 0) and dataclasses.is_dataclass(spec):
+    if (
+        absolute
+        and not (spec.min_thickness_m and spec.min_thickness_m > 0)
+        and dataclasses.is_dataclass(spec)
+        and not isinstance(spec, type)
+    ):
         # The explicit thicknessModel needs a minThickness; keep a tenth of the stack.
         spec = dataclasses.replace(spec, min_thickness_m=0.1 * max(float(v or 0) for v in sizes))
     lines = _layer_patch_block(spec).split("\n")
@@ -345,7 +350,7 @@ def write_hexdominant_dicts(
     snap_nfeat = int(snap.get("n_feature_snap_iter", 10))
     surfaces = [(p["name"], p["file"], p["type"]) for p in patches] if patches else [("Body1", "Body1.stl", "wall")]
     if layer_specs is not None:
-        specs = [s for s in layer_specs if int(getattr(s, "n_layers", 0) or 0) > 0 and getattr(s, "name", "")]
+        specs = [s for s in layer_specs if int(getattr(s, "n_layers", 0) or 0) > 0 and bool(getattr(s, "name", ""))]
         layer_block = "".join(_layers_entry(s) + "\n" for s in specs)
         honor = any(bool(getattr(s, "honor_absolute", False)) for s in specs)
     else:

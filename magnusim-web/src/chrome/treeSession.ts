@@ -10,6 +10,8 @@ export interface TreeActivity {
     run_id?: string | null;
     project_id?: string | null;
     simulation_id?: string | null;
+    /** 1-based place in the whole queue (all projects); the list itself is this project's rows. */
+    position?: number | null;
   }>;
 }
 

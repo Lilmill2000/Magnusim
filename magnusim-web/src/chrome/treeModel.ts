@@ -130,7 +130,11 @@ function queuePos(
   if (!activity || !id) return 0;
   const queue = activity.queue || [];
   const index = queue.findIndex((row) => queueMatches(row, projectId, studyId, kind, id));
-  return index >= 0 ? index + 1 : 0;
+  if (index < 0) return 0;
+  // The queue is shared by every project: show the place in the whole queue, not
+  // among this project's rows (other projects' jobs can be ahead).
+  const overall = Number(queue[index].position);
+  return overall > 0 ? overall : index + 1;
 }
 
 function queueMatches(

@@ -2497,7 +2497,7 @@ RAS
             entry["wall_type"] = wall_treatment(bc)
         mapped_meta.append(entry)
 
-    sidecar = {
+    sidecar: dict[str, Any] = {
         "endTime": spec.end_time,
         "writeInterval": spec.write_interval,
         "nProcs": int(spec.n_procs),

@@ -19819,7 +19819,9 @@ function activityQueuePos(kind, id) {
   const act = window.__CFD_JOB_ACTIVITY__ || {};
   const q = Array.isArray(act.queue) ? act.queue : [];
   const i = q.findIndex((r) => r && r.kind === kind && String(kind === 'mesh' ? r.mesh_id : r.run_id) === String(id));
-  return i >= 0 ? i + 1 : 0;
+  if (i < 0) return 0;
+  // Place in the whole queue (other projects' jobs can be ahead), as the Queue menu shows.
+  return Number(q[i].position) > 0 ? Number(q[i].position) : i + 1;
 }
 
 function treeJobMark(busy, queuePos, ok) {
@@ -28246,7 +28248,10 @@ function applyQueuedJobOrder(ids) {
     next.length === jobQueue.items.length &&
     next.every((r, i) => r && jobQueue.items[i] && String(r.id) === String(jobQueue.items[i].id));
   if (same) return false;
-  jobQueue.items = next;
+  // This project's jobs trade places among the same slots of the whole queue:
+  // renumber them now, so the tree and menu do not wait on the server's reply.
+  const slots = jobQueue.items.map((r) => Number(r && r.position)).filter((n) => n > 0).sort((a, b) => a - b);
+  jobQueue.items = slots.length === next.length ? next.map((r, i) => ({ ...r, position: slots[i] })) : next;
   persistJobQueue();
   syncJobQueueChrome();
   fetchComputeQueue('/api/compute-queue', { method: 'PATCH', body: { ids } })
@@ -28406,6 +28411,8 @@ function publishJobActivity() {
       run_id: r.run_id || null,
       project_id: r.project_id || null,
       simulation_id: r.simulation_id || null,
+      // Place in the whole queue (every project), as the Queue menu numbers it.
+      position: Number(r.position) > 0 ? Number(r.position) : null,
     })),
   };
   const prev = window.__CFD_JOB_ACTIVITY__;

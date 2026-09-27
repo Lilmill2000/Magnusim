@@ -503,6 +503,8 @@ def import_grouped_triangles(gmsh, solid: LoadedSolid, project: Project, *, scal
     face_to_patch = _face_to_patch_map(project)
     if not face_to_patch:
         raise RuntimeError("no emitted patches for Standard mesh")
+    if solid.mesh_triangles is None:
+        raise RuntimeError("grouped triangles need a mesh import (STL/OBJ/PLY)")
     points, tris, groups = solid.mesh_triangles
     pts = np.asarray(points, dtype=np.float64) * float(scale)
     tris = np.asarray(tris, dtype=np.int64)

@@ -82,6 +82,31 @@ test.describe('compute queue across projects', () => {
     });
     await expect(gen).toHaveText('Remove from queue');
 
+    // A second mesh in A queues behind B's. A's tree numbers it by its place in the
+    // whole queue (2), not among A's own queued jobs (where it is the first).
+    await openMeshForm(page, A);
+    await page.locator('#left-tree [data-w20-mesh="1"] > .tree-row .tl').first().click();
+    await page.locator('#mesh-new-name').fill('Mesh 2');
+    await page.locator('#btn-create-mesh').click();
+    const meshesA = async () => (await (await request.get(`/api/mesh?project_id=${A}`)).json()).meshes || [];
+    await expect.poll(async () => (await meshesA()).map((m) => m.name)).toContain('Mesh 2');
+    const mesh2 = (await meshesA()).find((m) => m.name === 'Mesh 2').id;
+    const gen2 = page.locator('#panel-mesh-form [data-mesh-generate="1"]');
+    await expect(gen2).toHaveText('Add to queue', { timeout: 15_000 });
+    expect(await busyProject(request), 'A must still be meshing for this step to mean anything').toBe(A);
+    await gen2.click();
+    await expect
+      .poll(async () => (await queueFor(request, A)).items.map((r) => [r.mesh_id, r.position]))
+      .toEqual([[mesh2, 2]]);
+    await expect(page.locator(`#left-tree [data-w20-mesh-item="${mesh2}"] > .tree-row .tree-queue`)).toHaveText('2', {
+      timeout: 15_000,
+    });
+    // A click right after "Add to queue" is ignored (700 ms, so a double-click does not undo it).
+    await page.waitForTimeout(1_000);
+    await gen2.click();
+    await expect(gen2).toHaveText('Add to queue', { timeout: 10_000 });
+    await expect.poll(async () => (await queueFor(request, A)).items.length).toBe(0);
+
     // Switch away to A. No tab is on B when A finishes; the server starts B by itself.
     await openMeshForm(page, A);
     await expect.poll(() => busyProject(request), { timeout: 850_000, intervals: [2_000] }).toBe(B);

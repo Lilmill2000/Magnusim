@@ -133,9 +133,9 @@ def group_properties(points, tris, groups) -> list[dict]:
     g_area = np.bincount(groups, weights=area, minlength=k)
     g_cent = np.stack([np.bincount(groups, weights=area * centroid[:, j], minlength=k) for j in range(3)], axis=1)
     g_norm = np.stack([np.bincount(groups, weights=area * normal[:, j], minlength=k) for j in range(3)], axis=1)
-    g_cent /= np.where(g_area > 0, g_area, 1.0)[:, None]
+    g_cent = g_cent / np.where(g_area > 0, g_area, 1.0)[:, None]
     nlen = np.linalg.norm(g_norm, axis=1)
-    g_norm /= np.where(nlen > 0, nlen, 1.0)[:, None]
+    g_norm = g_norm / np.where(nlen > 0, nlen, 1.0)[:, None]
     # Largest triangle per group (its CAD face stands for the surface's orientation).
     order = np.lexsort((-area, groups))
     starts = np.r_[0, np.nonzero(np.diff(groups[order]))[0] + 1]

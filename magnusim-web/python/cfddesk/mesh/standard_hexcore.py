@@ -204,6 +204,12 @@ class StandardMeshResult:
 # ------------------------------------------------------------ hex core -------
 
 
+def _tri_key(ids) -> tuple[int, int, int]:
+    """A triangle's three node ids, sorted: the same key whichever way it winds."""
+    a, b, c = sorted(int(i) for i in ids)
+    return (a, b, c)
+
+
 def _manifold_lut() -> np.ndarray:
     """256-entry table: is the 2×2×2 in/out block around a lattice vertex a
     manifold configuration (in-set and out-set each 6-connected)?"""
@@ -911,7 +917,8 @@ def build_standard_msh(
     occ = not discrete
     if discrete:
         gmsh_geometry = None
-        _log(f"gmsh geometry: {solid.n_faces} surface(s) of {len(solid.mesh_triangles[1])} triangles from {Path(step_path).name}")
+        n_tri = len(solid.mesh_triangles[1]) if solid.mesh_triangles is not None else 0
+        _log(f"gmsh geometry: {solid.n_faces} surface(s) of {n_tri} triangles from {Path(step_path).name}")
     else:
         # gmsh reads the loaded solid as BREP (unscaled; OCCScaling below applies), not
         # source.step: same surfaces, and seconds instead of minutes for faceted STLs.
@@ -961,7 +968,10 @@ def build_standard_msh(
             )
             n_pieces = len(gmsh.model.getEntities(2))
             _log(f"discrete surfaces: {n_pieces} parametrized piece(s) ({time.monotonic() - t_imp:.1f}s)")
-            pts_m = np.asarray(solid.mesh_triangles[0], dtype=float)[np.asarray(solid.mesh_triangles[1])] * float(scale_to_metres)
+            if solid.mesh_triangles is None:
+                raise RuntimeError("mesh import without its triangles")
+            tri_pts, tri_ids = solid.mesh_triangles[0], solid.mesh_triangles[1]
+            pts_m = np.asarray(tri_pts, dtype=np.float64)[np.asarray(tri_ids)] * float(scale_to_metres)
             cad_vol = abs(float(np.einsum("ij,ij->i", pts_m[:, 0], np.cross(pts_m[:, 1], pts_m[:, 2])).sum()) / 6.0)
         else:
             try:
@@ -1172,7 +1182,7 @@ def build_standard_msh(
                     np.asarray(nodes, dtype=float).ravel().tolist(),
                 )
                 phys_of_outer = {
-                    tuple(sorted(int(outer_tags[i]) for i in tri)): int(p)
+                    _tri_key(int(outer_tags[i]) for i in tri): int(p)
                     for tri, p in zip(tris, tri_phys, strict=False)
                 }
                 gmsh.model.mesh.addElementsByType(
@@ -1426,7 +1436,7 @@ def _collapse_short_edges(nodes, tris, tri_phys, tol: float):
         r = [int(root[int(i)]) for i in tri]
         if len(set(r)) < 3:
             continue
-        key = tuple(sorted(r))
+        key = _tri_key(r)
         count[key] = count.get(key, 0) + 1
         merged.append((r, int(phys)))
     # Two triangles on the same three nodes are a sheet folded onto itself: it
@@ -1436,7 +1446,7 @@ def _collapse_short_edges(nodes, tris, tri_phys, tol: float):
     kept_phys: list[int] = []
     seen: set[tuple[int, int, int]] = set()
     for r, phys in merged:
-        key = tuple(sorted(r))
+        key = _tri_key(r)
         if count[key] % 2 == 0 or key in seen:
             continue
         seen.add(key)
@@ -1698,8 +1708,8 @@ def boundary_enclosed_volume(
     take[take] = face_whole[extra_cell[take]]
     take &= ~np.isin(extra_ids, tri_ids)
     extra_ids, first = np.unique(extra_ids[take], return_index=True)
-    extra = extra[np.flatnonzero(take)[first]]
-    rows = np.vstack([tris, extra])
+    extra_rows = extra[np.flatnonzero(take)[first]]
+    rows = np.vstack([tris, extra_rows])
     ids = np.concatenate([tri_ids, extra_ids])
     owner = cell_of[ids]
     two_sided = n_cells_on[ids] >= 2
@@ -1714,7 +1724,7 @@ def boundary_enclosed_volume(
         volume=float(v6.sum() / 6.0),
         orphans=int((owner < 0).sum()),
         two_sided=int(two_sided.sum()),
-        uncovered=int(len(extra)),
+        uncovered=int(len(extra_rows)),
     )
 
 

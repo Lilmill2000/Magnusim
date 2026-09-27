@@ -544,12 +544,14 @@ def write_geometry(loaded: LoadedCad, dest: str | Path) -> bool:
     tris = triangle_sidecar_path(dest)
     if loaded.triangles is not None:
         points, faces = loaded.triangles
-        arrays = {"points": np.asarray(points, dtype=np.float64), "triangles": np.asarray(faces, dtype=np.int32)}
-        if loaded.groups is not None:
-            arrays["groups"] = np.asarray(loaded.groups, dtype=np.int32)
+        pts = np.asarray(points, dtype=np.float64)
+        tri = np.asarray(faces, dtype=np.int32)
         # Written after the sidecar, so it is at least as new as the geometry.
         with tris.open("wb") as fh:
-            np.savez(fh, **arrays)
+            if loaded.groups is not None:
+                np.savez(fh, points=pts, triangles=tri, groups=np.asarray(loaded.groups, dtype=np.int32))
+            else:
+                np.savez(fh, points=pts, triangles=tri)
     else:
         tris.unlink(missing_ok=True)
     return defer

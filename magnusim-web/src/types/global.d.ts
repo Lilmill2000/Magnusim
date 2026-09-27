@@ -125,7 +125,7 @@ declare global {
       kind?: string | null;
       mesh_id?: string | null;
       run_id?: string | null;
-      queue?: Array<{ kind?: string; mesh_id?: string | null; run_id?: string | null }>;
+      queue?: Array<{ kind?: string; mesh_id?: string | null; run_id?: string | null; position?: number | null }>;
     };
     __CFD_MESH_DRAFT__?: Record<string, unknown>;
     __CFD_MESH_DRAFTS__?: Record<string, Record<string, unknown>>;

@@ -116,6 +116,21 @@ describe('readSetupTree job marks', () => {
     expect(study.runs.find((r) => r.id === 'run1')).toMatchObject({ queuePos: 2 });
   });
 
+  it('numbers queued jobs by their place in the whole queue, not among this project', () => {
+    // Three jobs from other projects wait ahead of this project's two.
+    const study = readSetupTree(
+      treeDoc(),
+      activity({
+        queue: [
+          { kind: 'mesh', mesh_id: 'mesh_1', run_id: null, project_id: 'p1', simulation_id: 's1', position: 4 },
+          { kind: 'solve', run_id: 'run1', mesh_id: 'mesh_1', project_id: 'p1', simulation_id: 's1', position: 5 },
+        ],
+      }),
+    ).geoms[0].studies[0];
+    expect(study.meshes.find((m) => m.id === 'mesh_1')).toMatchObject({ queuePos: 4 });
+    expect(study.runs.find((r) => r.id === 'run1')).toMatchObject({ queuePos: 5 });
+  });
+
   it('replaces a leftover generating mark with a check when that mesh is done', () => {
     const doc = treeDoc();
     doc.geometries![0].studies![0].meshes![1] = {

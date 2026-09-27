@@ -92,7 +92,8 @@ def _num(value: Any) -> float | None:
 def physics_from_record(rec: dict[str, Any] | None) -> StudyPhysics:
     """Read panel keys from one study record; bad or missing values keep the default."""
     rec = rec if isinstance(rec, dict) else {}
-    defaults = rec.get("defaults") if isinstance(rec.get("defaults"), dict) else {}
+    raw_defaults = rec.get("defaults")
+    defaults: dict[str, Any] = raw_defaults if isinstance(raw_defaults, dict) else {}
     model = (
         normalize_turbulence(rec.get("turbulence_model"))
         or normalize_turbulence(rec.get("turbulence_model_key"))

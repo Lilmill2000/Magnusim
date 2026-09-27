@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGeometryFolder, createStudyFolder, createMeshFolder, writeJsonAtomic } from '../scripts/project-layout.js';
@@ -74,6 +75,11 @@ function seedElbowProject(destRoot, id, title) {
 
 export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-projects')) {
   rmSync(destRoot, { recursive: true, force: true });
+  // The server keeps this root's compute queue beside it (computeQueueFileFor in
+  // scripts/server/compute-queue.ts). The projects are seeded fresh, so their queue
+  // starts empty too: rows left by an interrupted run would queue ahead of the tests'.
+  const tag = createHash('sha1').update(resolve(destRoot).toLowerCase()).digest('hex').slice(0, 10);
+  rmSync(join(WEB_ROOT, '.cache', `compute-queue-${tag}.json`), { force: true });
   mkdirSync(destRoot, { recursive: true });
   seedElbowProject(destRoot, FIXTURE_ID);
   seedElbowProject(destRoot, QUEUE_PROJECT_A, 'Queue project A');
