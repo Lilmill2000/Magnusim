@@ -262,6 +262,15 @@ function applyJobEvent(state, ev) {
     }
     return;
   }
+  if (kind === 'phase') {
+    // Wall-clock seconds of one solve phase (copy_in, decompose, solve, reconstruct, copy_back).
+    const secs = Number(ev.seconds);
+    if (ev.phase && Number.isFinite(secs)) {
+      if (!state.phases) state.phases = {};
+      state.phases[String(ev.phase)] = secs;
+    }
+    return;
+  }
   if (kind === 'courant') {
     enterSolveStage(state);
     if (!state.pending) state.pending = {};
@@ -351,6 +360,7 @@ function snapshotProgress(state) {
     const times = state.saved_times.slice().sort((a, b) => a - b);
     out.live_saved_times = times;
   }
+  if (state.phases && Object.keys(state.phases).length) out.phases = { ...state.phases };
   return out;
 }
 
@@ -2154,6 +2164,7 @@ export function startSolve(opts = {}) {
   if (draft && draft.mesh_id) prepArgs.push('--mesh-id', String(draft.mesh_id));
   if (draft && draft.simulation_id) prepArgs.push('--simulation-id', String(draft.simulation_id));
   let prepResult = null;
+  const prepT0 = Date.now();
   try {
     const prep = spawnSync(PYTHON, prepArgs, {
       windowsHide: true,
@@ -2210,6 +2221,8 @@ export function startSolve(opts = {}) {
   const started_at = new Date().toISOString();
   let logBuf = '';
   const progress = newProgressState();
+  // Seconds per phase of this solve, so where the time goes is on record.
+  progress.phases = { prepare: Math.round(Date.now() - prepT0) / 1000 };
   const runSolveArgs = [
     '--case-dir',
     winOut,
@@ -2255,6 +2268,7 @@ export function startSolve(opts = {}) {
       ...(snap.co_max != null ? { co_max: snap.co_max } : {}),
       ...(snap.co_mean != null ? { co_mean: snap.co_mean } : {}),
       ...(snap.delta_t != null ? { delta_t: snap.delta_t } : {}),
+      ...(snap.phases ? { phases: snap.phases } : {}),
       last_saved_iteration: lastSaved,
       n_saved_times: savedTimes.length,
       has_results: lastSaved > 0,

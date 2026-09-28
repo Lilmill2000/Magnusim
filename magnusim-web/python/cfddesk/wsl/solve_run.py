@@ -34,6 +34,15 @@ _RE_COURANT = re.compile(
 _RE_DELTAT = re.compile(r"^deltaT\s*=\s*([0-9.eE+-]+)")
 _RE_MPI_PREFIX = re.compile(r"^\s*\[\d+\]\s*")
 
+# solve.sh stage that starts each timed phase; any later stage/result ends it.
+_PHASE_OF_STAGE = {
+    "copy_to_wsl": "copy_in",
+    "decompose": "decompose",
+    "solve": "solve",
+    "reconstruct": "reconstruct",
+    "copy": "copy_back",
+}
+
 
 def parse_residual_line(line: str) -> dict[str, Any] | None:
     """One OpenFOAM 'Solving for … Initial residual' line, or None."""
@@ -121,6 +130,28 @@ class ProgressParser:
     series: list[dict] = field(default_factory=list)
     saved_times: list[float] = field(default_factory=list)
     solve_started: bool = False
+    phases: dict = field(default_factory=dict)
+    _phase: str | None = None
+    _phase_t0: float | None = None
+
+    def _clock_phase(self, ev: Event) -> Event | None:
+        """Close the running phase at this stage/result event; start the next one."""
+        raw = ev.fields.get("t_wall")
+        try:
+            t = float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            t = None
+        if t is None:
+            return None
+        done = None
+        if self._phase is not None and self._phase_t0 is not None:
+            secs = round(max(0.0, t - self._phase_t0), 3)
+            self.phases[self._phase] = secs
+            done = Event(event="phase", fields={"phase": self._phase, "seconds": secs})
+        nxt = _PHASE_OF_STAGE.get(str(ev.fields.get("stage") or "")) if ev.event == "stage" else None
+        self._phase = nxt
+        self._phase_t0 = t if nxt else None
+        return done
 
     def _enter_solve(self) -> None:
         if self.stage in ("starting", "decompose", "copy", ""):
@@ -133,6 +164,10 @@ class ProgressParser:
         # Prefer explicit protocol events from the bash template.
         ev = parse_line(line)
         if ev is not None:
+            if ev.event in ("stage", "result"):
+                phase = self._clock_phase(ev)
+                if phase is not None:
+                    out.append(phase)
             if ev.event == "stage":
                 st = str(ev.fields.get("stage") or "")
                 if st == "decompose":
@@ -244,6 +279,7 @@ class ProgressParser:
             "saved_times": list(self.saved_times),
             "co_max": cur.get("co_max"),
             "delta_t": cur.get("delta_t"),
+            "phases": dict(self.phases),
         }
 
 

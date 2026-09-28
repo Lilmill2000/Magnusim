@@ -1234,6 +1234,60 @@ def filter_cut_plane(
     }
 
 
+@rpc("filter.inspect")
+def filter_inspect(
+    case_dir: str = "",
+    time: str = "",
+    out_dir: str = "",
+    x: Any = None,
+    y: Any = None,
+    z: Any = None,
+    **_extra: Any,
+) -> dict[str, Any]:
+    """Probe magU/p at a point on the cached volume (writes inspect.meta.json)."""
+    case = str(case_dir or "").strip()
+    dest = str(out_dir or "").strip()
+    if not case:
+        raise RpcError(-32602, "case_dir required")
+    if not dest:
+        raise RpcError(-32602, "out_dir required")
+    try:
+        px, py, pz = float(x), float(y), float(z)
+    except (TypeError, ValueError) as exc:
+        raise RpcError(-32602, "x, y, z required") from exc
+    from export_inspect_point import export_inspect
+
+    from cfddesk.worker.volume_cache import get_prepared
+
+    t = str(time or "0")
+    try:
+        entry = get_prepared(case, t)
+        result = export_inspect(
+            Path(case),
+            t,
+            Path(dest),
+            px,
+            py,
+            pz,
+            mesh=entry.get("slice") or entry.get("grid") or entry.get("mesh"),
+            source=str(entry.get("source") or "worker-cache"),
+        )
+    except RpcError:
+        raise
+    except Exception as exc:
+        raise RpcError(-32004, str(exc), {"case_dir": case, "time": t}) from exc
+    return {
+        "ok": True,
+        "case_dir": case,
+        "time": t,
+        "out_dir": dest,
+        "hit": result["hit"],
+        "magU": result["magU"],
+        "p": result["p"],
+        "volume_cached": True,
+    }
+
+
 @rpc("filter.particle_trace")
 def filter_particle_trace(
     case_dir: str = "",

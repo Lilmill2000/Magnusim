@@ -550,57 +550,61 @@ def write_hexdominant_dicts(
     }
 
 
-def read_polymesh_counts(case_dir: Path) -> dict[str, Any]:
-    """Read n_points/n_cells/n_faces from constant/polyMesh (host)."""
-    pm = Path(case_dir) / "constant" / "polyMesh"
+def _foam_head(path: Path, size: int = 8192) -> bytes:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(size)
+    except OSError:
+        return b""
 
-    def first_int(path: Path):
-        if not path.is_file():
-            return None
-        lines = path.read_text(errors="ignore").splitlines()
-        past = False
-        for i, line in enumerate(lines):
-            s = line.strip()
-            if not past:
-                if s == "}" or s.startswith("// *****"):
-                    past = True
-                continue
-            if s.isdigit() and i > 5:
-                return int(s)
+
+def _foam_list_start(head: bytes) -> tuple[int, int] | None:
+    """(declared length, offset past the opening "(") of a FoamFile list."""
+    close = head.find(b"}")
+    if close < 0:
         return None
+    m = re.compile(rb"(\d+)\s*\(").search(head, close)
+    return (int(m.group(1)), m.end()) if m else None
 
-    def n_cells_owner(path: Path):
-        if not path.is_file():
-            return None, None
-        lines = path.read_text(errors="ignore").splitlines()
-        mode = "seek"
-        vals: list[int] = []
-        nfaces = None
-        for i, line in enumerate(lines):
-            s = line.strip()
-            if mode == "seek":
-                if s.isdigit() and i > 10:
-                    nfaces = int(s)
-                    mode = "paren"
-                continue
-            if mode == "paren":
-                if s == "(":
-                    mode = "vals"
-                continue
-            if mode == "vals":
-                if s == ")":
-                    break
-                if s.lstrip("-").isdigit():
-                    vals.append(int(s))
-        return (max(vals) + 1 if vals else None), (nfaces if nfaces is not None else len(vals))
 
-    n_points = first_int(pm / "points")
-    n_cells, n_faces = n_cells_owner(pm / "owner")
+def read_polymesh_counts(case_dir: Path) -> dict[str, Any]:
+    """Read n_points/n_cells/n_faces from constant/polyMesh (host).
+
+    OpenFOAM's owner header note carries all three; without it the owner list is
+    read in its own format (a text parse of a binary list gave nonsense counts).
+    """
+    pm = Path(case_dir) / "constant" / "polyMesh"
+    owner = pm / "owner"
+    head = _foam_head(owner) if owner.is_file() else b""
+    note = re.search(rb"nPoints:\s*(\d+)\s+nCells:\s*(\d+)\s+nFaces:\s*(\d+)", head)
+    n_points = n_cells = n_faces = None
+    source = "polyMesh/points+owner"
+    if note:
+        n_points, n_cells, n_faces = (int(g) for g in note.groups())
+        source = "polyMesh/owner note"
+    else:
+        pts = _foam_list_start(_foam_head(pm / "points")) if (pm / "points").is_file() else None
+        n_points = pts[0] if pts else None
+        lst = _foam_list_start(head) if head else None
+        if lst:
+            n_faces, at = lst
+            data = owner.read_bytes()
+            vals: list[int] | memoryview
+            if re.search(rb"format\s+binary", head):
+                width = 8 if re.search(rb"label\s*=\s*64", head) else 4
+                raw = memoryview(data)[at : at + n_faces * width]
+                usable = len(raw) - len(raw) % width
+                vals = raw[:usable].cast("q" if width == 8 else "i")  # little-endian host
+            else:
+                body = data[at:]
+                stop = body.find(b")")
+                vals = [int(t) for t in (body[:stop] if stop >= 0 else body).split()]
+            n_cells = max(vals) + 1 if len(vals) else None
     return {
         "n_points": n_points,
         "n_cells": n_cells,
         "n_faces": n_faces,
-        "source": "polyMesh/points+owner",
+        "source": source,
         "polyMesh": str(pm.resolve()) if pm.is_dir() else str(pm),
     }
 

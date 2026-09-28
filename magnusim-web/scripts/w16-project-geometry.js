@@ -64,11 +64,11 @@ const DEFERRED_STEP_SCRIPT = pyTool('write_deferred_step.py');
  * (source.bbrep) first and write source.step in the background. The geometry
  * is present as soon as either file exists; its age is the newer of the two.
  */
-function geometrySidecarPath(stepPath) {
+export function geometrySidecarPath(stepPath) {
   return String(stepPath || '').replace(/\.[^.\\/]+$/, '') + '.bbrep';
 }
 
-function geomFileExists(stepPath) {
+export function geomFileExists(stepPath) {
   if (!stepPath) return false;
   return existsSync(stepPath) || existsSync(geometrySidecarPath(stepPath));
 }

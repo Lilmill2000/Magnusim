@@ -66,7 +66,6 @@ def _evict() -> None:
 
 
 def get_prepared(case_dir: str, time: str, *, pin: bool = True) -> dict[str, Any]:
-    from case_units import case_density, scale_pressure
     from case_volume import load_volume
     from export_particle_trace import point_data_grid
 
@@ -88,7 +87,9 @@ def get_prepared(case_dir: str, time: str, *, pin: bool = True) -> dict[str, Any
     # skip the LRU and reload the volume on every axis change.
     grid = point_data_grid(mesh)
     slice_src = grid if grid is not None else mesh
-    # Bake magU (and scale p) once so live slices skip per-cut promotion.
+    # Bake magU once so live slices skip per-cut promotion. Pressure stays
+    # kinematic here: every export scales its own output to Pa exactly once.
+    # (Scaling the shared cache made worker exports p*rho^2 and compounding.)
     try:
         from export_cut_plane import ensure_field
 
@@ -103,11 +104,6 @@ def get_prepared(case_dir: str, time: str, *, pin: bool = True) -> dict[str, Any
                 pass
     except Exception:
         pass
-    if "U" in getattr(slice_src, "point_data", {}) or "p" in getattr(slice_src, "point_data", {}):
-        try:
-            scale_pressure(slice_src, case_density(case))
-        except Exception:
-            pass
     if "U" in getattr(slice_src, "point_data", {}):
         try:
             slice_src.set_active_vectors("U")

@@ -14,7 +14,13 @@ RUN_ID="__RUN_ID__"
 APP="__APP__"
 
 _evt() {
-  echo "MAGNUSIM_EVENT $1"
+  local j="$1"
+  # Stage and result events carry the WSL wall clock so the run records how
+  # long each phase (copy in, decompose, solve, reconstruct, copy back) took.
+  case "$j" in
+    *'"event":"stage"'*|*'"event":"result"'*) j="${j%\}},\"t_wall\":$(date +%s.%3N)}" ;;
+  esac
+  echo "MAGNUSIM_EVENT $j"
 }
 
 _evt "{\"event\":\"start\",\"run_id\":\"$RUN_ID\",\"dst\":\"$DST\",\"n_procs\":$NPROCS,\"app\":\"$APP\",\"increment\":\"phase1-lean-copy\"}"
@@ -99,11 +105,22 @@ sync_live_frames() {
     rm -f "$DST/.live_frame_lock"
     return 0
   fi
+  # One reconstructPar for every finished frame not yet rebuilt: each run reads
+  # all processor meshes, so one per frame cost that read once per frame.
+  local pending=()
+  if [ "$NPROCS" -gt 1 ]; then
+    for t in $(_list_times "$src_root"); do
+      [ "$t" = "$latest" ] && continue
+      if [ ! -f "$DST/$t/U" ] && [ ! -f "$DST/$t/p" ]; then pending+=("$t"); fi
+    done
+  fi
+  if [ "${#pending[@]}" -gt 0 ]; then
+    local times
+    times=$(IFS=,; echo "${pending[*]}")
+    openfoam2606 bash -c "cd '$DST' && reconstructPar -noZero -time '$times'" >> log.reconstructPar.live 2>&1 || true
+  fi
   for t in $(_list_times "$src_root"); do
     [ "$t" = "$latest" ] && continue
-    if [ "$NPROCS" -gt 1 ] && [ ! -f "$DST/$t/U" ] && [ ! -f "$DST/$t/p" ]; then
-      openfoam2606 bash -c "cd '$DST' && reconstructPar -time $t -noZero" >> log.reconstructPar.live 2>&1 || true
-    fi
     if [ ! -f "$WIN_OUT/$t/U" ] && [ ! -f "$WIN_OUT/$t/p" ]; then
       copy_saved_time "$t"
     fi
@@ -138,7 +155,16 @@ if [ "$NPROCS" -gt 1 ]; then
   EC=$?
   _evt "{\"event\":\"stage\",\"stage\":\"reconstruct\",\"exit_code\":$EC}"
   if [ "$APP" = "pimpleFoam" ]; then
-    openfoam2606 bash -c "cd '$DST' && reconstructPar -noZero" 2>&1 | tee log.reconstructPar
+    # The live sync already rebuilt most frames. A frame it left incomplete is
+    # removed so -newTimes rebuilds it; complete ones are not redone.
+    for t in $(_list_times "$DST/processor0"); do
+      [ -d "$DST/$t" ] || continue
+      for f in "$DST/processor0/$t"/*; do
+        [ -f "$f" ] || continue
+        if [ ! -f "$DST/$t/$(basename "$f")" ]; then rm -rf "${DST:?}/$t"; break; fi
+      done
+    done
+    openfoam2606 bash -c "cd '$DST' && reconstructPar -noZero -newTimes" 2>&1 | tee log.reconstructPar
   else
     openfoam2606 bash -c "cd '$DST' && reconstructPar -latestTime" 2>&1 | tee log.reconstructPar
   fi

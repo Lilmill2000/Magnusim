@@ -62,7 +62,13 @@ def test_template_exists_and_has_placeholders():
     assert "mpirun --oversubscribe -np" in text
     assert "W27_" not in text
     assert "reconstructPar -latestTime" in text
-    assert "reconstructPar -newTimes" not in text
+    # Transient: frames the live sync already rebuilt are not rebuilt again at the
+    # end (-newTimes); a frame it left incomplete is removed first so it is redone.
+    assert "reconstructPar -noZero -newTimes" in text
+    assert 'rm -rf "${DST:?}/$t"' in text
+    # Live frames are rebuilt in one reconstructPar per tick, not one per frame.
+    assert "reconstructPar -noZero -time '$times'" in text
+    assert "reconstructPar -time $t" not in text
     assert "postProcessing" in text
     assert "_latest_time" in text
     assert "sync_live_frames" in text
@@ -222,3 +228,42 @@ def test_start_solve_kills_leftover_wsl_solver():
     src = inspect.getsource(start_solve)
     assert "solve_is_live" in src
     assert "kill_solve" in src
+
+
+def test_stage_wall_clock_becomes_phase_durations():
+    lines = [
+        'MAGNUSIM_EVENT {"event":"stage","stage":"copy_to_wsl","t_wall":100.0}',
+        'MAGNUSIM_EVENT {"event":"stage","stage":"decompose","t_wall":102.5}',
+        'MAGNUSIM_EVENT {"event":"stage","stage":"decompose_end","exit_code":0,"t_wall":106.0}',
+        'MAGNUSIM_EVENT {"event":"stage","stage":"solve","parallel":true,"t_wall":106.1}',
+        "Time = 1",
+        'MAGNUSIM_EVENT {"event":"stage","stage":"reconstruct","exit_code":0,"t_wall":200.1}',
+        'MAGNUSIM_EVENT {"event":"stage","stage":"copy","t_wall":219.1}',
+        'MAGNUSIM_EVENT {"event":"result","ok":true,"exit_code":0,"t_wall":220.0}',
+    ]
+    parser = ProgressParser()
+    phases = [ev for line in lines for ev in parser.feed(line) if ev.event == "phase"]
+    assert [(ev.fields["phase"], ev.fields["seconds"]) for ev in phases] == [
+        ("copy_in", 2.5),
+        ("decompose", 3.5),
+        ("solve", 94.0),
+        ("reconstruct", 19.0),
+        ("copy_back", 0.9),
+    ]
+    assert parser.snapshot()["phases"] == {
+        "copy_in": 2.5,
+        "decompose": 3.5,
+        "solve": 94.0,
+        "reconstruct": 19.0,
+        "copy_back": 0.9,
+    }
+    # The phase events survive the JSONL round trip Node reads.
+    assert parse_line(EVENT_PREFIX + phases[0].to_json()).event == "phase"
+
+
+def test_stage_events_without_wall_clock_record_no_phases():
+    parser = ProgressParser()
+    for line in SAMPLE_LOG.splitlines():
+        parser.feed(line)
+    assert parser.snapshot()["phases"] == {}
+

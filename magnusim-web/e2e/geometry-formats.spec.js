@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Every extension the Add geometry picker lists must import, show its faces, and
@@ -11,6 +11,14 @@ const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry');
 const FORMATS = ['step', 'stp', 'iges', 'igs', 'brep', 'brp', 'stl', 'obj', 'ply'];
 const MESH_KINDS = new Set(['stl', 'obj', 'ply']);
+// Same projects root playwright.config.js gives the server.
+const PROJECTS = process.env.MAGNUSIM_PROJECTS_ROOT || resolve('e2e/.tmp-projects');
+
+function geometryDir(pid) {
+  const root = join(PROJECTS, pid, 'geometries');
+  const dir = readdirSync(root).find((d) => existsSync(join(root, d, 'source.bbrep')));
+  return dir ? join(root, dir) : null;
+}
 // One mesh per loader: .stp/.igs/.brp read through the same code as .step/.iges/.brep.
 const MESHED = new Set(['step', 'iges', 'brep', 'stl', 'obj', 'ply']);
 const REPR = {
@@ -119,6 +127,16 @@ for (const ext of FORMATS) {
     for (const label of ['Hex element core', 'Automatic boundary layers']) {
       const toggle = form.locator(`button[aria-label="${label}"]`);
       if ((await toggle.count()) && (await toggle.getAttribute('aria-pressed')) === 'true') await toggle.click();
+    }
+    if (ext === 'stl') {
+      // A mesh file's STEP is written in the background after import; Generate must
+      // not wait for it (meshing reads the BREP sidecar). It used to fail with
+      // "W16 source.step missing". Recreate that moment: sidecar only, no STEP.
+      const gdir = geometryDir(pid);
+      expect(gdir, 'geometry folder with source.bbrep').toBeTruthy();
+      await expect.poll(() => existsSync(join(gdir, 'source.step')), { timeout: 120_000 }).toBe(true);
+      rmSync(join(gdir, 'source.step'));
+      expect(existsSync(join(gdir, 'source.step'))).toBe(false);
     }
     await form.locator('[data-mesh-generate="1"]').click();
     let final;

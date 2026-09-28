@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test';
+import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NO_WSL } from './toolchain.js';
+import { PYTHON } from '../scripts/python-env.js';
 
 // Post-processing on a real solve, through the UI: cutting planes (add, second plane,
 // axis, vectors, delete), coloring by pressure, the legend's typed range and reset,
@@ -10,6 +12,77 @@ import { NO_WSL } from './toolchain.js';
 // viewport) that reports values, and a third run that is stopped while it solves.
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 const ROUND = join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry', 'transient-test.step');
+const PY_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'python');
+
+// Surface pressure range in Pa from a fresh read of the case, the way a spawned exporter
+// does it (no worker cache): extract_surface of the volume, point p x rho.
+function pressureTruth(caseDir, time) {
+  const code = [
+    'import json, sys',
+    'sys.path.insert(0, "tools")',
+    'import numpy as np',
+    'from pathlib import Path',
+    'from case_volume import load_volume',
+    'from case_units import case_density',
+    'case = Path(sys.argv[1])',
+    'mesh, _ = load_volume(case, sys.argv[2])',
+    'surf = mesh.extract_surface()',
+    'if "p" in surf.cell_data and "p" not in surf.point_data:',
+    '    surf = surf.cell_data_to_point_data(pass_cell_data=True)',
+    'rho = case_density(case)',
+    'p = np.asarray(surf.point_data["p"], dtype=float) * rho',
+    'print(json.dumps({"min": float(p.min()), "max": float(p.max()), "rho": rho}))',
+  ].join('\n');
+  const r = spawnSync(PYTHON, ['-c', code, caseDir, time], { cwd: PY_DIR, encoding: 'utf8', timeout: 300_000 });
+  if (r.status !== 0) throw new Error(`pressure truth failed: ${r.stderr || r.error}`);
+  return JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
+}
+
+// A point certainly inside the fluid: the centre of the volume's middle cell.
+function interiorPoint(caseDir, time) {
+  const code = [
+    'import json, sys',
+    'sys.path.insert(0, "tools")',
+    'from pathlib import Path',
+    'from case_volume import load_volume',
+    'mesh, _ = load_volume(Path(sys.argv[1]), sys.argv[2])',
+    'c = mesh.cell_centers().points[mesh.n_cells // 2]',
+    'print(json.dumps([float(v) for v in c]))',
+  ].join('\n');
+  const r = spawnSync(PYTHON, ['-c', code, caseDir, time], { cwd: PY_DIR, encoding: 'utf8', timeout: 300_000 });
+  if (r.status !== 0) throw new Error(`interior point failed: ${r.stderr || r.error}`);
+  return JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
+}
+
+// magU and p (Pa) at a case point from a fresh read of the volume (no worker cache).
+function probeTruth(caseDir, time, [x, y, z]) {
+  const code = [
+    'import json, sys',
+    'sys.path.insert(0, "tools")',
+    'import numpy as np, pyvista as pv',
+    'from pathlib import Path',
+    'from case_volume import load_volume',
+    'from case_units import case_density',
+    'case = Path(sys.argv[1])',
+    'mesh, _ = load_volume(case, sys.argv[2])',
+    'if "p" not in mesh.point_data or "U" not in mesh.point_data:',
+    '    mesh = mesh.cell_data_to_point_data(pass_cell_data=True)',
+    'mesh.point_data["magU"] = np.linalg.norm(np.asarray(mesh.point_data["U"])[:, :3], axis=1)',
+    'pt = [float(v) for v in sys.argv[3:6]]',
+    's = pv.PolyData(np.asarray([pt])).sample(mesh)',
+    'hit = bool(int(np.asarray(s.point_data["vtkValidPointMask"])[0]))',
+    'mag = float(np.asarray(s.point_data["magU"])[0])',
+    'p = float(np.asarray(s.point_data["p"])[0]) * case_density(case)',
+    'print(json.dumps({"hit": hit, "magU": mag, "p": p}))',
+  ].join('\n');
+  const r = spawnSync(PYTHON, ['-c', code, caseDir, time, String(x), String(y), String(z)], {
+    cwd: PY_DIR,
+    encoding: 'utf8',
+    timeout: 300_000,
+  });
+  if (r.status !== 0) throw new Error(`probe truth failed: ${r.stderr || r.error}`);
+  return JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
+}
 
 test('results tools on a solved run, monitors, copied run settings, and stopping a solve', async ({ page, request }) => {
   test.skip(!WSL, NO_WSL);
@@ -189,6 +262,22 @@ test('results tools on a solved run, monitors, copied run settings, and stopping
   await page.locator('#cp-coloring').selectOption('p');
   await expect.poll(() => page.evaluate(() => window.__CFD_W6__?.field), { timeout: 60_000 }).toBe('p');
   await expect(page.locator('#legend .legend-title')).toContainText('Pressure');
+  // The pressure the viewport shows is Pa exactly once: its range matches a fresh,
+  // independent read of the case (kinematic p x rho). The worker path used to show
+  // p x rho^2 (20% high for Air) and compound on every export.
+  await expect.poll(() => page.evaluate(() => window.__CFD_W6__?.fingerprint?.umax ?? null), { timeout: 60_000 }).not.toBeNull();
+  const shown = await page.evaluate(() => ({
+    case_dir: window.__CFD_W6__.case_dir,
+    time: String(window.__CFD_W6__.time),
+    lo: window.__CFD_W6__.fingerprint.umin,
+    hi: window.__CFD_W6__.fingerprint.umax,
+  }));
+  const truth = pressureTruth(shown.case_dir, shown.time);
+  stage(`pressure shown ${shown.lo}..${shown.hi} Pa; independent ${truth.min}..${truth.max} Pa (rho ${truth.rho})`);
+  expect(truth.rho, 'Air density in w27-case.json').toBeGreaterThan(1.1);
+  const span = Math.max(Math.abs(truth.max), Math.abs(truth.min), 1e-9);
+  expect(Math.abs(shown.hi - truth.max) / span).toBeLessThan(0.005);
+  expect(Math.abs(shown.lo - truth.min) / span).toBeLessThan(0.005);
   await page.locator('#legend .legend-bar-val-hi').click();
   const max = page.locator('#legend input[aria-label="Scale maximum"]');
   await max.fill('0.5');
@@ -247,6 +336,33 @@ test('results tools on a solved run, monitors, copied run settings, and stopping
     .poll(() => page.evaluate(() => (window.__CFD_W13__?.points || []).some((p) => p.hit && p.magU != null)), { timeout: 60_000 })
     .toBe(true);
   await shot('results-tools');
+  // The values shown match a fresh, independent probe of the case at that point.
+  const picked = await page.evaluate(() => {
+    const w = window.__CFD_W13__;
+    const pt = (w.points || []).filter((q) => q.hit).pop();
+    return { casePos: pt.casePos, magU: pt.magU, p: pt.p, time: String(w.time), case_dir: window.__CFD_W6__.case_dir };
+  });
+  const truthAt = probeTruth(picked.case_dir, picked.time, picked.casePos);
+  stage(`inspect shows magU ${picked.magU} p ${picked.p}; independent magU ${truthAt.magU} p ${truthAt.p}`);
+  expect(truthAt.hit).toBe(true);
+  const close = (a, b, rel) => Math.abs(a - b) <= rel * Math.max(Math.abs(b), 1e-6);
+  expect(close(picked.magU, truthAt.magU, 0.02), 'shown magU vs probe').toBe(true);
+  if (picked.p != null) expect(close(picked.p, truthAt.p, 0.02), 'shown p vs probe').toBe(true);
+  // The server probe (used when the clicked surface lacks a value) runs on the worker's
+  // cached volume, not a new Python process, and gives the same values exactly.
+  const probeAt = interiorPoint(picked.case_dir, picked.time);
+  const apiT0 = Date.now();
+  const api = await page.evaluate(async ([c, t, x, y, z]) => {
+    const q = new URLSearchParams({ case: c, time: t, x: String(x), y: String(y), z: String(z) });
+    return (await fetch(`/api/inspect?${q}`, { cache: 'no-store' })).json();
+  }, [picked.case_dir, picked.time, ...probeAt]);
+  const apiMs = Date.now() - apiT0;
+  const truthApi = probeTruth(picked.case_dir, picked.time, probeAt);
+  stage(`inspect API ${apiMs} ms via ${api.volume_from}: magU ${api.magU} p ${api.p}`);
+  expect(api.hit).toBe(true);
+  expect(api.volume_from).toBe('worker-cache');
+  expect(close(api.magU, truthApi.magU, 1e-6)).toBe(true);
+  expect(close(api.p, truthApi.p, 1e-6)).toBe(true);
   await page.locator('#btn-inspect-point').click();
   stage('inspect point');
 

@@ -41,6 +41,18 @@ describe('parseSolveProgress', () => {
     assert.equal(snap.stage, 'solve');
     assert.equal(snap.sim_time, 0.02);
   });
+
+  it('keeps the seconds of each solve phase', () => {
+    const snap = parseSolveProgress(
+      [
+        'MAGNUSIM_EVENT {"event":"phase","phase":"copy_in","seconds":2.5}',
+        'MAGNUSIM_EVENT {"event":"phase","phase":"solve","seconds":94}',
+        'MAGNUSIM_EVENT {"event":"phase","phase":"reconstruct","seconds":19}',
+      ].join('\n'),
+    );
+    assert.deepEqual(snap.phases, { copy_in: 2.5, solve: 94, reconstruct: 19 });
+    assert.equal(parseSolveProgress(PREFIXED).phases, undefined);
+  });
 });
 
 describe('solveDisplayStage', () => {

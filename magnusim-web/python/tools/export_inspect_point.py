@@ -22,7 +22,7 @@ import numpy as np
 import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from case_units import case_density, pressure_meta, scale_pressure  # noqa: E402
+from case_units import case_density, pressure_meta  # noqa: E402
 from case_volume import load_volume  # noqa: E402
 
 APPROACH = (
@@ -67,50 +67,6 @@ def ensure_magU(grid: pv.DataSet) -> pv.DataSet:
     return src
 
 
-def apply_uniform_foam(grid: pv.DataSet, case_dir: Path, time: str) -> dict:
-    """If this time's U/p are uniform foam, overwrite volume scalars (W12 honesty)."""
-    proof = {"uniform_U": False, "uniform_p": False, "U": None, "p": None}
-    u_path = case_dir / str(time) / "U"
-    p_path = case_dir / str(time) / "p"
-    if u_path.is_file():
-        uv = parse_foam_uniform_vector(u_path)
-        if uv is not None:
-            mag = float(np.linalg.norm(uv))
-            proof["uniform_U"] = True
-            proof["U"] = uv
-            proof["magU"] = mag
-            n_pt = int(grid.n_points)
-            n_cell = int(grid.n_cells)
-            if "U" in grid.point_data:
-                grid.point_data["U"][:] = np.tile(uv, (n_pt, 1))
-            if "U" in grid.cell_data:
-                grid.cell_data["U"][:] = np.tile(uv, (n_cell, 1))
-            if "magU" in grid.point_data:
-                grid.point_data["magU"][:] = mag
-            elif n_pt:
-                grid.point_data["magU"] = np.full(n_pt, mag, dtype=np.float64)
-            if "magU" in grid.cell_data:
-                grid.cell_data["magU"][:] = mag
-            elif n_cell:
-                grid.cell_data["magU"] = np.full(n_cell, mag, dtype=np.float64)
-    if p_path.is_file():
-        pv_ = parse_foam_uniform_scalar(p_path)
-        if pv_ is not None:
-            proof["uniform_p"] = True
-            proof["p"] = float(pv_)
-            n_pt = int(grid.n_points)
-            n_cell = int(grid.n_cells)
-            if "p" in grid.point_data:
-                grid.point_data["p"][:] = float(pv_)
-            elif n_pt:
-                grid.point_data["p"] = np.full(n_pt, float(pv_), dtype=np.float64)
-            if "p" in grid.cell_data:
-                grid.cell_data["p"][:] = float(pv_)
-            elif n_cell:
-                grid.cell_data["p"] = np.full(n_cell, float(pv_), dtype=np.float64)
-    return proof
-
-
 def scalar_at(sampled: pv.DataSet, name: str):
     if name in sampled.point_data:
         arr = np.asarray(sampled.point_data[name], dtype=float).reshape(-1)
@@ -124,6 +80,14 @@ def scalar_at(sampled: pv.DataSet, name: str):
             return None
         return float(np.linalg.norm(U[0, :3]))
     return None
+
+
+def _checksum(mag_u, p, pt) -> float:
+    if mag_u is not None and p is not None:
+        return float(mag_u) * 1_000_003.0 + float(p) * 17.0 + pt[0] * 3.0 + pt[1] * 5.0 + pt[2] * 7.0
+    if mag_u is not None:
+        return float(mag_u) * 1_000_003.0 + pt[0] * 3.0 + pt[1] * 5.0 + pt[2] * 7.0
+    return 0.0
 
 
 def probe_point(grid: pv.DataSet, xyz):
@@ -143,12 +107,7 @@ def probe_point(grid: pv.DataSet, xyz):
     if hit and magU is None and "U" in sampled.point_data:
         magU = scalar_at(sampled, "magU")
 
-    if hit and magU is not None and p is not None:
-        checksum = float(magU) * 1_000_003.0 + float(p) * 17.0 + pt[0] * 3.0 + pt[1] * 5.0 + pt[2] * 7.0
-    elif hit and magU is not None:
-        checksum = float(magU) * 1_000_003.0 + pt[0] * 3.0 + pt[1] * 5.0 + pt[2] * 7.0
-    else:
-        checksum = 0.0
+    checksum = _checksum(magU, p, pt) if hit else 0.0
 
     return {
         "hit": bool(hit),
@@ -161,7 +120,48 @@ def probe_point(grid: pv.DataSet, xyz):
     }
 
 
-def export_inspect(case_dir: Path, time: str, out_dir: Path, x: float, y: float, z: float) -> dict:
+def uniform_foam_values(case_dir: Path, time: str) -> dict:
+    """This time's uniform U/p (e.g. 0/U = (0 0 0)) without touching any volume."""
+    proof = {"uniform_U": False, "uniform_p": False, "U": None, "p": None}
+    u_path = case_dir / str(time) / "U"
+    p_path = case_dir / str(time) / "p"
+    if u_path.is_file():
+        uv = parse_foam_uniform_vector(u_path)
+        if uv is not None:
+            proof["uniform_U"] = True
+            proof["U"] = uv
+            proof["magU"] = float(np.linalg.norm(uv))
+    if p_path.is_file():
+        pv_ = parse_foam_uniform_scalar(p_path)
+        if pv_ is not None:
+            proof["uniform_p"] = True
+            proof["p"] = float(pv_)
+    return proof
+
+
+def _point_grid(mesh: pv.DataSet) -> pv.DataSet:
+    mesh = ensure_magU(mesh)
+    if "magU" not in mesh.point_data and "magU" in mesh.cell_data:
+        mesh = mesh.cell_data_to_point_data(pass_cell_data=True)
+    elif "p" not in mesh.point_data and "p" in mesh.cell_data:
+        mesh = mesh.cell_data_to_point_data(pass_cell_data=True)
+    return ensure_magU(mesh)
+
+
+def export_inspect(
+    case_dir: Path,
+    time: str,
+    out_dir: Path,
+    x: float,
+    y: float,
+    z: float,
+    *,
+    mesh=None,
+    source: str | None = None,
+) -> dict:
+    """Probe magU/p at a point. ``mesh`` is the worker's shared kinematic volume:
+    it is only read — uniform-foam overrides and Pa scaling apply to the probed
+    values, never to the volume."""
     case_dir = case_dir.resolve()
     time = str(time)
     time_dir = case_dir / time
@@ -173,20 +173,27 @@ def export_inspect(case_dir: Path, time: str, out_dir: Path, x: float, y: float,
     if not u_path.is_file() and not p_path.is_file():
         raise FileNotFoundError(f"time_not_found: missing OpenFOAM U/p under {time_dir}")
 
-    mesh, vtu_path = load_volume(case_dir, time)
-    mesh = ensure_magU(mesh)
-    if "magU" not in mesh.point_data and "magU" in mesh.cell_data:
-        mesh = mesh.cell_data_to_point_data(pass_cell_data=True)
-    elif "p" not in mesh.point_data and "p" in mesh.cell_data:
-        mesh = mesh.cell_data_to_point_data(pass_cell_data=True)
-    mesh = ensure_magU(mesh)
+    if mesh is None:
+        mesh, vtu_path = load_volume(case_dir, time)
+        volume_from = "fresh-load"
+    else:
+        vtu_path = source or "worker-cache"
+        volume_from = "worker-cache"
+    grid = mesh if ("magU" in mesh.point_data and "p" in mesh.point_data) else _point_grid(mesh)
 
-    foam_proof = apply_uniform_foam(mesh, case_dir, time)
-    mesh = ensure_magU(mesh)
+    foam_proof = uniform_foam_values(case_dir, time)
     rho = case_density(case_dir)
-    scale_pressure(mesh, rho)
 
-    probed = probe_point(mesh, [x, y, z])
+    probed = probe_point(grid, [x, y, z])
+    if probed["hit"]:
+        if foam_proof["uniform_U"]:
+            probed["magU"] = float(foam_proof["magU"])
+        if foam_proof["uniform_p"]:
+            probed["p"] = float(foam_proof["p"])
+        if probed["p"] is not None:
+            probed["p"] = float(probed["p"]) * rho
+        probed["value_checksum"] = _checksum(probed["magU"], probed["p"], [x, y, z])
+    mesh = grid
     fp = {
         "x": float(x),
         "y": float(y),
@@ -218,6 +225,7 @@ def export_inspect(case_dir: Path, time: str, out_dir: Path, x: float, y: float,
         "method": "pyvista PolyData.sample (sample_over_point / probe)",
         "approach": APPROACH,
         "source_vtu": str(vtu_path),
+        "volume_from": volume_from,
         "source_foam_U": str(u_path) if u_path.is_file() else None,
         "source_foam_p": str(p_path) if p_path.is_file() else None,
         "foam_uniform": foam_proof,

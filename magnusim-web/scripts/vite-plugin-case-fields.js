@@ -47,7 +47,7 @@
  * W22: POST/GET /api/result-controls|/api/area-average persist optional area-average monitors (setup only).
  * FILTERS/attach/W15.1 kick unchanged.
  */
-import { spawnFilter, runFilterTool } from './filter-spawn.js';
+import { spawnFilter, runFilterToolAsync } from './filter-spawn.js';
 import { attachLiveMeshJobReader } from './w16-project-geometry.js';
 import { caseDirAllowedForAttach, caseDirBelongsToProject, caseDirBelongsToStudy, projectIdFromCaseDir } from './project-isolation.js';
 import { listFoamTimeDirs } from './project-layout.js';
@@ -59,7 +59,7 @@ import { PY_TOOLS, pyTool } from './python-env.js';
 import { callWorker } from './py-json.js';
 import { fieldExportMaySpawnFallback } from './field-export-fallback.js';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
@@ -585,98 +585,6 @@ async function ensureExportedOnce(caseDir, time, field) {
 
 const seriesRangeCache = new Map();
 
-function parseFoamVectorMags(text) {
-  const uni = /internalField\s+uniform\s+\(([^)]+)\)/.exec(text);
-  if (uni) {
-    const parts = uni[1].trim().split(/\s+/).map(Number);
-    if (parts.length === 3 && parts.every(Number.isFinite)) {
-      const mag = Math.hypot(parts[0], parts[1], parts[2]);
-      return [mag, mag];
-    }
-  }
-  let lo = Infinity;
-  let hi = -Infinity;
-  const re = /\(\s*(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s*\)/g;
-  let m;
-  while ((m = re.exec(text))) {
-    const mag = Math.hypot(Number(m[1]), Number(m[2]), Number(m[3]));
-    if (!Number.isFinite(mag)) continue;
-    if (mag < lo) lo = mag;
-    if (mag > hi) hi = mag;
-  }
-  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
-  return [lo, hi];
-}
-
-function parseFoamScalarRange(text) {
-  const uni = /internalField\s+uniform\s+([^\s;]+)/.exec(text);
-  if (uni) {
-    const val = Number(uni[1]);
-    return Number.isFinite(val) ? [val, val] : null;
-  }
-  const start = text.search(/internalField\s+nonuniform\s+List<scalar>/);
-  const chunk = start >= 0 ? text.slice(start) : text;
-  let lo = Infinity;
-  let hi = -Infinity;
-  const re = /(?<![(\w.-])(-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?![\w.])/g;
-  let m;
-  while ((m = re.exec(chunk))) {
-    const val = Number(m[1]);
-    if (!Number.isFinite(val)) continue;
-    if (val < lo) lo = val;
-    if (val > hi) hi = val;
-  }
-  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
-  return [lo, hi];
-}
-
-export function computeFoamSeriesRange(caseDir, field) {
-  const name = field === 'p' ? 'p' : 'magU';
-  const times = listCaseTimes(caseDir);
-  const stamp = times
-    .map((t) => {
-      const p = foamFieldPath(caseDir, t, name);
-      if (!existsSync(p)) return t;
-      const st = statSync(p);
-      return `${t}:${st.mtimeMs}:${st.size}`;
-    })
-    .join('|');
-  const key = `${caseDir}|${name}`;
-  const hit = seriesRangeCache.get(key);
-  if (hit && hit.stamp === stamp) return hit.body;
-  const frames = [];
-  let lo = null;
-  let hi = null;
-  for (const t of times) {
-    const p = foamFieldPath(caseDir, t, name);
-    if (!existsSync(p)) continue;
-    let pair = null;
-    try {
-      const text = readFileSync(p, 'utf8');
-      pair = name === 'p' ? parseFoamScalarRange(text) : parseFoamVectorMags(text);
-    } catch {
-      pair = null;
-    }
-    if (!pair) continue;
-    frames.push({ time: t, min: pair[0], max: pair[1] });
-    lo = lo == null ? pair[0] : Math.min(lo, pair[0]);
-    hi = hi == null ? pair[1] : Math.max(hi, pair[1]);
-  }
-  const body = {
-    ok: !!(lo != null && hi != null && hi >= lo),
-    field: name,
-    case_dir: caseDir,
-    times,
-    n_times: times.length,
-    min: lo,
-    max: hi,
-    frames,
-    series: true,
-  };
-  seriesRangeCache.set(key, { stamp, body });
-  return body;
-}
-
 function seriesRangeStamp(caseDir, field) {
   const name = field === 'p' ? 'p' : 'magU';
   return listCaseTimes(caseDir)
@@ -701,6 +609,8 @@ function seriesRangeFromMetas(caseDir, field) {
     if (!existsSync(metaPath)) return null;
     try {
       const j = JSON.parse(readFileSync(metaPath, 'utf8'));
+      // Older metas kept kinematic p (m^2/s^2) while surfaces are Pa.
+      if (name === 'p' && !(j && j.pressure_range_unit === 'Pa')) return null;
       const foam = (j && (j.u_from_case || j.foam_proof)) || {};
       const a = name === 'p' ? Number(foam.pmin) : Number(foam.umin);
       const b = name === 'p' ? Number(foam.pmax) : Number(foam.umax);
@@ -756,6 +666,39 @@ function runSeriesRange(caseDir, field) {
   });
 }
 
+/** True when this case's saved frames are OpenFOAM binary (every solve since fields went binary). */
+function caseFieldsBinary(caseDir, name) {
+  const times = listCaseTimes(caseDir);
+  const first = times.length ? foamFieldPath(caseDir, times[times.length - 1], name) : null;
+  if (!first || !existsSync(first)) return false;
+  let fd = null;
+  try {
+    fd = openSync(first, 'r');
+    const buf = Buffer.alloc(2048);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    return /format\s+binary/.test(buf.subarray(0, n).toString('latin1'));
+  } catch {
+    return false;
+  } finally {
+    if (fd != null) closeSync(fd);
+  }
+}
+
+async function seriesRangeFromWorker(caseDir, name) {
+  // Binary frames read in well under a second on the data lane (no Python start-up).
+  // Old ascii runs take seconds to parse, which would hold up cuts and probes there,
+  // so they keep their own process.
+  if (!caseFieldsBinary(caseDir, name)) return null;
+  const rpc = callWorker('filter.series_range', { case_dir: caseDir, field: name }, 60000);
+  if (!rpc || typeof rpc.then !== 'function') return null;
+  try {
+    return await rpc;
+  } catch (err) {
+    if (!fieldExportMaySpawnFallback(err)) throw err;
+    return null;
+  }
+}
+
 async function ensureSeriesRange(caseDir, field) {
   const name = field === 'p' ? 'p' : 'magU';
   const stamp = seriesRangeStamp(caseDir, name);
@@ -768,7 +711,7 @@ async function ensureSeriesRange(caseDir, field) {
     return fromMeta;
   }
   try {
-    const j = await runSeriesRange(caseDir, name);
+    const j = (await seriesRangeFromWorker(caseDir, name)) || (await runSeriesRange(caseDir, name));
     if (j && Number.isFinite(Number(j.min)) && Number.isFinite(Number(j.max))) {
       const body = {
         ok: true,
@@ -1282,6 +1225,9 @@ async function ensureParticleTrace(caseDir, time, p) {
       try {
         await rpc;
       } catch (err) {
+        // A timed-out or restarted worker may still be tracing: a spawn would run the
+        // same trace again and load the volume a second time.
+        if (!fieldExportMaySpawnFallback(err)) throw err;
         console.warn('[CFD] PT worker export failed, spawning', err && err.message ? err.message : err);
         await runPtExport(caseDir, time, dir, p);
       }
@@ -1561,6 +1507,7 @@ async function runWorkerCut(caseDir, time, dir, p) {
       await rpc;
       return;
     } catch (err) {
+      if (!fieldExportMaySpawnFallback(err)) throw err;
       console.warn('[CFD] cut worker export failed, spawning', err && err.message ? err.message : err);
     }
   }
@@ -1799,7 +1746,24 @@ async function ensureInspect(caseDir, time, p) {
     readFileSync(stampPath, 'utf8') === paramStamp;
   if (!fresh) {
     mkdirSync(dir, { recursive: true });
-    await runInspectExport(caseDir, time, dir, p);
+    // The data-lane worker probes its cached volume in milliseconds; a spawn pays
+    // Python start-up plus a full volume read (~1-2 s) on every click.
+    const rpc = callWorker(
+      'filter.inspect',
+      { case_dir: caseDir, time: String(time), out_dir: dir, x: p.x, y: p.y, z: p.z },
+      60000,
+    );
+    if (rpc && typeof rpc.then === 'function') {
+      try {
+        await rpc;
+      } catch (err) {
+        if (!fieldExportMaySpawnFallback(err)) throw err;
+        console.warn('[CFD] inspect worker probe failed, spawning', err && err.message ? err.message : err);
+        await runInspectExport(caseDir, time, dir, p);
+      }
+    } else {
+      await runInspectExport(caseDir, time, dir, p);
+    }
     writeFileSync(stampPath, paramStamp, 'utf8');
   }
   return { meta, dir, from_cache: fresh };
@@ -1992,9 +1956,9 @@ function meshSectionCacheKey(caseDir, axis, frac) {
   );
 }
 
-function runMeshSectionExport(caseDir, axis, frac, outVtp, metaPath) {
+async function runMeshSectionExport(caseDir, axis, frac, outVtp, metaPath) {
   mkdirSync(dirname(outVtp), { recursive: true });
-  const r = runFilterTool(
+  const r = await runFilterToolAsync(
     [
       MESH_SECTION_EXPORT_SCRIPT,
       '--case', caseDir,
@@ -2003,7 +1967,7 @@ function runMeshSectionExport(caseDir, axis, frac, outVtp, metaPath) {
       '--frac', String(frac),
       '--meta', metaPath,
     ],
-    { encoding: 'utf8', timeout: 180000, windowsHide: true }
+    { timeout: 180000, caseDir }
   );
   return {
     status: r.status,
@@ -2021,11 +1985,11 @@ function meshSurfaceCacheKey(caseDir) {
   return join(scopedCacheDir(MESH_SURFACE_CACHE_ROOT, caseDir), `surface-${h}.vtp`);
 }
 
-function runMeshSurfaceExport(caseDir, outVtp, metaPath) {
+async function runMeshSurfaceExport(caseDir, outVtp, metaPath) {
   mkdirSync(dirname(outVtp), { recursive: true });
-  const r = runFilterTool(
+  const r = await runFilterToolAsync(
     [MESH_SURFACE_EXPORT_SCRIPT, '--case', caseDir, '--out', outVtp, '--meta', metaPath],
-    { encoding: 'utf8', timeout: 180000, windowsHide: true }
+    { timeout: 180000, caseDir }
   );
   return {
     status: r.status,
@@ -2033,6 +1997,18 @@ function runMeshSurfaceExport(caseDir, outVtp, metaPath) {
     stderr: (r.stderr || '').slice(-2000),
     out_exists: existsSync(outVtp),
   };
+}
+
+// One Python run per output file: concurrent requests for the same mesh surface or
+// section share it instead of writing the same VTP twice.
+const meshExportInflight = new Map();
+function meshExportOnce(outVtp, run) {
+  let p = meshExportInflight.get(outVtp);
+  if (!p) {
+    p = run().finally(() => meshExportInflight.delete(outVtp));
+    meshExportInflight.set(outVtp, p);
+  }
+  return p;
 }
 
 function meshCacheMetaMatchesCase(meta, caseDir) {
@@ -2055,7 +2031,7 @@ async function ensureMeshSurface(caseDir) {
       }
     } catch {}
   }
-  const run = runMeshSurfaceExport(caseDir, outVtp, metaPath);
+  const run = await meshExportOnce(outVtp, () => runMeshSurfaceExport(caseDir, outVtp, metaPath));
   if (!run.out_exists) {
     return { ok: false, error: 'mesh-surface export failed', run };
   }
@@ -2075,7 +2051,7 @@ async function ensureMeshSection(caseDir, axis, frac) {
       }
     } catch {}
   }
-  const run = runMeshSectionExport(caseDir, axis, frac, outVtp, metaPath);
+  const run = await meshExportOnce(outVtp, () => runMeshSectionExport(caseDir, axis, frac, outVtp, metaPath));
   if (!run.out_exists) {
     return { ok: false, error: 'mesh-section export failed', run };
   }

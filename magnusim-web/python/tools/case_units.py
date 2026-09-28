@@ -42,6 +42,19 @@ def scale_pressure(dataset, rho: float, names=("p",)) -> None:
                 data[name] = arr * float(rho)
 
 
+def pressure_stats_in_pa(stats: dict, rho: float) -> dict:
+    """Copy of parsed foam p stats with every pressure value in Pa."""
+    out = dict(stats)
+    for key in ("pmin", "pmax", "pmean", "uniform_scalar"):
+        if out.get(key) is not None:
+            out[key] = float(out[key]) * float(rho)
+    for key in ("sample_head", "sample_tail"):
+        if isinstance(out.get(key), list):
+            out[key] = [float(v) * float(rho) for v in out[key]]
+    out["pressure_range_unit"] = PRESSURE_UNIT
+    return out
+
+
 def pressure_meta(rho: float) -> dict:
     return {
         "pressure_unit": PRESSURE_UNIT,

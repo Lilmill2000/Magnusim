@@ -28,6 +28,7 @@ import { firstLegacySimId, getActiveSimulation, listSimulations, writeActiveMirr
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
 import { polyMeshComplete } from './poly-mesh.js';
+import { stopFilterToolsFor } from './filter-spawn.js';
 import { dropComputeJobsForMesh } from './server/compute-queue.ts';
 import { writeJsonCli, writeProjectCli } from './py-json.js';
 import {
@@ -219,7 +220,8 @@ function removeGeneratedMeshRuns(projectId, caseDir, exceptMeshId) {
   const tryRm = (p, ownerDir) => {
     if (!p || !existsSync(p)) return;
     if (ownerDir && !pathInside(ownerDir, p)) return;
-    rmSync(p, { recursive: true, force: true });
+    // A reader that just let go (Windows) can hold a file for a moment.
+    rmSync(p, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     removed.push(p);
   };
   if (caseDir) {
@@ -597,6 +599,9 @@ async function deleteGeneratedMesh(body) {
     /* best-effort — delete still proceeds */
   }
   const live = target.live_mesh_result || {};
+  // Opening the mesh may still be exporting its surface or a section from these
+  // files; stop that first or Windows refuses to delete them.
+  await stopFilterToolsFor(live.case_dir);
   const removed = removeGeneratedMeshRuns(projectId, live.case_dir || null, target.id);
   const now = new Date().toISOString();
   target.generated = false;
@@ -667,6 +672,7 @@ async function deleteMeshRecord(body) {
     /* best-effort */
   }
   const live = target.live_mesh_result || {};
+  await stopFilterToolsFor(live.case_dir);
   const removed = removeGeneratedMeshRuns(projectId, live.case_dir || null, target.id);
   const now = new Date().toISOString();
   dropRefsForMesh(projectId, target.id, sim.id);

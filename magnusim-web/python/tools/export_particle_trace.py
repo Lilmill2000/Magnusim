@@ -1557,7 +1557,10 @@ def export_particle_trace(
     u_path = case_dir / str(time) / "U"
     vtu_path = case_dir / ".cfddesk-prepared.vtu"
     if prepared_grid is not None:
-        point_grid = prepared_grid
+        # Worker cache is shared and kinematic: scale a shallow copy so the
+        # cached arrays are never touched and p is Pa exactly once.
+        point_grid = prepared_grid.copy(deep=False)
+        scale_pressure(point_grid, case_density(case_dir))
         if volume_source is None:
             volume_source = "worker-cache"
         mesh = prepared_grid

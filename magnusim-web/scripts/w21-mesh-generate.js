@@ -12,15 +12,18 @@ import { spawnJob } from './job-runner.js';
 import { projectIdOrActive } from './request-scope.js';
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   writeFileSync,
   statSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensureBody1Stl } from './w16-project-geometry.js';
+import { ensureBody1Stl, geomFileExists, geometrySidecarPath } from './w16-project-geometry.js';
 import { activeGeometryId } from './w16-geometry-scope.js';
 import { PYTHON, pyTool } from './python-env.js';
 import { wslCasePath, wslDistro } from './wsl-env.js';
@@ -176,10 +179,12 @@ export function resolveProjectGeometry(projectId, opts) {
     null;
   const found = part && part.id ? findGeometry(root, part.id) : walked[0] || null;
   const partDir = (found && found.dir) || null;
+  // A mesh import (STL/OBJ/PLY) has its binary BREP sidecar at once and writes
+  // source.step in the background; meshing reads the sidecar, so it need not wait.
   const step_path =
-    existingFile(partDir && join(partDir, 'source.step')) ||
-    existingFile(part && part.step_path) ||
-    existingFile(geom.step_path);
+    [partDir && join(partDir, 'source.step'), part && part.step_path, geom.step_path].find(
+      (p) => p && geomFileExists(p),
+    ) || null;
   const body1_path =
     existingFile(partDir && join(partDir, 'Body1.stl')) ||
     existingFile(part && part.stl_path) ||
@@ -193,7 +198,9 @@ export function resolveProjectGeometry(projectId, opts) {
       body1_path,
     };
   }
-  const stepSt = statSync(step_path);
+  const stepOnDisk = existsSync(step_path);
+  const geomFile = stepOnDisk ? step_path : geometrySidecarPath(step_path);
+  const stepSt = statSync(geomFile);
   if (stepSt.size < 32) {
     return {
       ok: false,
@@ -204,8 +211,13 @@ export function resolveProjectGeometry(projectId, opts) {
       step_bytes: stepSt.size,
     };
   }
-  const stepBuf = readFileSync(step_path);
-  const step_sha256 = createHash('sha256').update(stepBuf).digest('hex');
+  // Only a record in the mesh metadata: hash small STEPs, never read a large one
+  // (a 118k-triangle STL makes a ~290 MB STEP) just to fingerprint it.
+  const step_sha256 =
+    stepOnDisk && stepSt.size <= 32 * 1024 * 1024
+      ? createHash('sha256').update(readFileSync(step_path)).digest('hex')
+      : null;
+  const geometry_stamp = { file: geomFile, bytes: stepSt.size, mtime_ms: stepSt.mtimeMs };
   let body1_bytes = 0;
   let body1_sha256 = null;
   if (body1_path) {
@@ -223,6 +235,7 @@ export function resolveProjectGeometry(projectId, opts) {
     step_bytes: stepSt.size,
     body1_bytes,
     step_sha256,
+    geometry_stamp,
     body1_sha256,
     geometry_name: (part && part.name) || geom.name || null,
     wsl_step: winToWsl(step_path),
@@ -243,6 +256,36 @@ function clampFineness(fineness) {
   return Math.max(1, Math.min(10, f));
 }
 
+/** Leading bytes of a file as latin1 text (one char per byte), or '' when unreadable. */
+function readFileHead(path, bytes = 8192) {
+  let fd = null;
+  try {
+    fd = openSync(path, 'r');
+    const buf = Buffer.alloc(bytes);
+    const n = readSync(fd, buf, 0, bytes, 0);
+    return buf.subarray(0, n).toString('latin1');
+  } catch {
+    return '';
+  } finally {
+    if (fd != null) closeSync(fd);
+  }
+}
+
+/** Offset just past the "(" that opens a FoamFile's list, and its declared length. */
+function foamListStart(head) {
+  const close = head.indexOf('}');
+  if (close < 0) return null;
+  const re = /(\d+)\s*\(/g;
+  re.lastIndex = close;
+  const m = re.exec(head);
+  return m ? { count: Number(m[1]), offset: m.index + m[0].length } : null;
+}
+
+/**
+ * Point/cell/face counts of a polyMesh. OpenFOAM's header note has all three
+ * (checkMesh-free); otherwise the owner list is read in its own format. Mesh
+ * writers here use binary, which a text parse got wrong (8 cells for 677k).
+ */
 export function readPolyMeshCounts(polyMeshDir) {
   const pointsPath = join(polyMeshDir, 'points');
   const ownerPath = join(polyMeshDir, 'owner');
@@ -255,55 +298,50 @@ export function readPolyMeshCounts(polyMeshDir) {
       owner_path: ownerPath,
     };
   }
-  const pointsTxt = readFileSync(pointsPath, 'utf8');
-  const ownerTxt = readFileSync(ownerPath, 'utf8');
-
-  function firstIntAfterHeader(txt) {
-    const lines = txt.split(/\r?\n/);
-    let past = false;
-    for (let i = 0; i < lines.length; i++) {
-      const s = lines[i].trim();
-      if (!past) {
-        if (s === '}' || s.startsWith('// *****')) past = true;
-        continue;
-      }
-      if (/^\d+$/.test(s) && i > 5) return parseInt(s, 10);
-    }
-    return null;
+  const ownerHead = readFileHead(ownerPath);
+  const note = /nPoints:\s*(\d+)\s+nCells:\s*(\d+)\s+nFaces:\s*(\d+)/.exec(ownerHead);
+  if (note) {
+    return {
+      n_points: Number(note[1]),
+      n_cells: Number(note[2]),
+      n_faces: Number(note[3]),
+      points_path: pointsPath,
+      owner_path: ownerPath,
+      source: 'polyMesh/owner note',
+    };
   }
-
-  const n_points = firstIntAfterHeader(pointsTxt);
-  const ownerLines = ownerTxt.split(/\r?\n/);
-  let mode = 'seek';
-  const vals = [];
+  const pointsList = foamListStart(readFileHead(pointsPath));
+  const n_points = pointsList ? pointsList.count : null;
   let n_faces = null;
-  for (let i = 0; i < ownerLines.length; i++) {
-    const s = ownerLines[i].trim();
-    if (mode === 'seek') {
-      if (/^\d+$/.test(s) && i > 10) {
-        n_faces = parseInt(s, 10);
-        mode = 'paren';
+  let n_cells = null;
+  const list = foamListStart(ownerHead);
+  if (list) {
+    n_faces = list.count;
+    const buf = readFileSync(ownerPath);
+    let maxOwner = -1;
+    if (/format\s+binary/.test(ownerHead)) {
+      const wide = /label\s*=\s*64/.test(ownerHead);
+      const size = wide ? 8 : 4;
+      const end = Math.min(buf.length, list.offset + list.count * size);
+      for (let at = list.offset; at + size <= end; at += size) {
+        const v = wide ? Number(buf.readBigInt64LE(at)) : buf.readInt32LE(at);
+        if (v > maxOwner) maxOwner = v;
       }
-      continue;
+    } else {
+      const body = buf.toString('latin1', list.offset);
+      const stop = body.indexOf(')');
+      for (const tok of (stop >= 0 ? body.slice(0, stop) : body).split(/\s+/)) {
+        if (!tok) continue;
+        const v = Number(tok);
+        if (Number.isInteger(v) && v > maxOwner) maxOwner = v;
+      }
     }
-    if (mode === 'paren') {
-      if (s === '(') mode = 'vals';
-      continue;
-    }
-    if (mode === 'vals') {
-      if (s === ')') break;
-      if (/^-?\d+$/.test(s)) vals.push(parseInt(s, 10));
-    }
+    n_cells = maxOwner >= 0 ? maxOwner + 1 : null;
   }
-  let maxOwner = -1;
-  for (let i = 0; i < vals.length; i++) {
-    if (vals[i] > maxOwner) maxOwner = vals[i];
-  }
-  const n_cells = vals.length ? maxOwner + 1 : null;
   return {
     n_points,
     n_cells,
-    n_faces: n_faces != null ? n_faces : vals.length,
+    n_faces,
     points_path: pointsPath,
     owner_path: ownerPath,
     source: 'polyMesh/points+owner',

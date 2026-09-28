@@ -344,6 +344,52 @@ class _HexCore:
         return self.origin[None, :] + self.keys.astype(float) * (self.hc / 2.0)
 
 
+def _lattice_inside(surf_nodes, surf_tris, gx, gy, gz, h: float) -> np.ndarray:
+    """Inside mask of a closed triangulated surface on the lattice gx×gy×gz.
+
+    One ray per (x, y) column along +z: a lattice vertex is inside when an odd
+    number of surface crossings lie below it. The columns are shifted by a tiny
+    irrational fraction of the spacing so no ray runs exactly through a vertex
+    or along an edge; faces parallel to z are never crossed.
+    """
+    nx, ny, nz = len(gx), len(gy), len(gz)
+    h = float(h)
+    x0 = float(gx[0]) + 0.123456789e-6 * h
+    y0 = float(gy[0]) + 0.234567891e-6 * h
+    P = np.asarray(surf_nodes, dtype=float)[np.asarray(surf_tris, dtype=np.int64)]
+    a, b, c = P[:, 0], P[:, 1], P[:, 2]
+    det = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (c[:, 0] - a[:, 0]) * (b[:, 1] - a[:, 1])
+    ok = np.abs(det) > 1e-30
+    a, b, c, det = a[ok], b[ok], c[ok], det[ok]
+    lo = np.minimum(np.minimum(a, b), c)
+    hi = np.maximum(np.maximum(a, b), c)
+    i0 = np.clip(np.ceil((lo[:, 0] - x0) / h).astype(np.int64), 0, nx)
+    i1 = np.clip(np.floor((hi[:, 0] - x0) / h).astype(np.int64), -1, nx - 1)
+    j0 = np.clip(np.ceil((lo[:, 1] - y0) / h).astype(np.int64), 0, ny)
+    j1 = np.clip(np.floor((hi[:, 1] - y0) / h).astype(np.int64), -1, ny - 1)
+    ni = np.maximum(i1 - i0 + 1, 0)
+    nj = np.maximum(j1 - j0 + 1, 0)
+    cnt = ni * nj
+    tri = np.repeat(np.arange(len(a)), cnt)
+    k = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+    ci = i0[tri] + k // nj[tri]
+    cj = j0[tri] + k % nj[tri]
+    px = x0 + ci * h
+    py = y0 + cj * h
+    at, bt, ct, dt = a[tri], b[tri], c[tri], det[tri]
+    l1 = ((px - at[:, 0]) * (ct[:, 1] - at[:, 1]) - (ct[:, 0] - at[:, 0]) * (py - at[:, 1])) / dt
+    l2 = ((bt[:, 0] - at[:, 0]) * (py - at[:, 1]) - (px - at[:, 0]) * (bt[:, 1] - at[:, 1])) / dt
+    hit = (l1 >= 0) & (l2 >= 0) & (l1 + l2 <= 1)
+    zc = at[hit, 2] + l1[hit] * (bt[hit, 2] - at[hit, 2]) + l2[hit] * (ct[hit, 2] - at[hit, 2])
+    col = ci[hit] * ny + cj[hit]
+    # A crossing flips inside/outside for every lattice vertex above it.
+    first_above = np.clip(np.ceil((zc - float(gz[0])) / h).astype(np.int64), 0, nz)
+    flips = np.zeros((nx * ny, nz + 1), dtype=np.uint8)
+    np.add.at(flips, (col, first_above), 1)
+    parity = np.bitwise_xor.accumulate(flips[:, :nz] & 1, axis=1)
+    return parity.astype(bool).reshape(nx, ny, nz)
+
+
 def _build_hex_core(
     surf_nodes: np.ndarray,
     surf_tris: np.ndarray,
@@ -353,7 +399,6 @@ def _build_hex_core(
     log,
 ) -> _HexCore | None:
     """Cartesian core inside the closed triangulated surface, capped with pyramids."""
-    import pyvista as pv
     from scipy.spatial import cKDTree
 
     t0 = time.monotonic()
@@ -375,26 +420,17 @@ def _build_hex_core(
     GX, GY, GZ = np.meshgrid(gx, gy, gz, indexing="ij")
     pts = np.column_stack([GX.ravel(), GY.ravel(), GZ.ravel()])
 
-    # distance lower bound: centroid distance minus max centroid→vertex radius
-    tree = cKDTree(cent)
-    d_c, _ = tree.query(pts, workers=-1)
-    d_lb = d_c - r_max
+    # distance lower bound: centroid distance minus max centroid→vertex radius.
+    # Only "within clearance or not" matters, so the query stops at that bound
+    # (an unbounded query took ~65 s on an 11M-vertex lattice; bounded ~0.5 s).
     clear = _CORE_CLEARANCE_HS * h_s + 0.5 * h_c
-    near = d_lb < clear
-    # inside test only for vertices that pass the clearance (cheaper)
-    cand = np.flatnonzero(~near)
-    inside = np.zeros(len(pts), dtype=bool)
-    if len(cand):
-        faces = np.hstack(
-            [np.full((len(surf_tris), 1), 3, dtype=np.int64), surf_tris.astype(np.int64)]
-        ).ravel()
-        surf_pd = pv.PolyData(surf_nodes.copy(), faces)
-        cloud = pv.PolyData(pts[cand])
-        try:
-            enc = cloud.select_enclosed_points(surf_pd, tolerance=0.0, check_surface=False)
-        except TypeError:  # older pyvista
-            enc = cloud.select_enclosed_points(surf_pd, tolerance=0.0)
-        inside[cand] = np.asarray(enc["SelectedPoints"], dtype=bool)
+    tree = cKDTree(cent)
+    d_c, _ = tree.query(pts, workers=-1, distance_upper_bound=clear + r_max)
+    near = d_c - r_max < clear
+    # Inside/outside by ray parity along z for the whole lattice (vectorized; the
+    # per-point VTK enclosed-points test took ~100 s at fineness 10). Vertices
+    # near the surface are excluded above, so on-surface ambiguity never counts.
+    inside = ~near & _lattice_inside(surf_nodes, surf_tris, gx, gy, gz, h_c).ravel()
     good = inside.reshape(tuple(n))
     core = (
         good[:-1, :-1, :-1]
@@ -1110,7 +1146,12 @@ def build_standard_msh(
             )
 
         # --- gap refinement (SimScale gap refinement factor)
-        gap = None if n_short else _gap_sizes(
+        # Remeshing for gaps rebuilds the surface and brings the slivers back, so
+        # it is skipped only when the collapsed shell becomes the hex-core
+        # boundary (core on, one volume). Otherwise the collapsed triangles are
+        # not used and the gaps still need their refinement.
+        shell_used = bool(n_short and use_core and len(vols) == 1)
+        gap = None if shell_used else _gap_sizes(
             nodes, tris, h=h, gap_factor=sizing.gap_refinement_factor, log=_log
         )
         if gap is not None:
@@ -1398,18 +1439,36 @@ def build_standard_msh(
     )
 
 
-def _collapse_short_edges(nodes, tris, tri_phys, tol: float):
+def _collapse_short_edges(nodes, tris, tri_phys, tol: float, *, respect_patches: bool = True):
     """Merge endpoints of edges shorter than ``tol``. Returns collapsed count.
 
     Only existing mesh edges are collapsed, so a watertight surface stays
     watertight. Degenerate triangles and coincident pairs are dropped.
+
+    With ``respect_patches`` a collapse happens only when one end's patches
+    contain the other's, and that end is kept: a patch rim (e.g. a pressure
+    port) never moves into the patch beside it, and two patches never merge.
     """
     nodes = np.asarray(nodes, dtype=float)
-    tris = np.asarray(tris, dtype=np.int64)
+    tris = np.asarray(tris, dtype=np.int64).reshape(-1, 3)
     tri_phys = np.asarray(tri_phys, dtype=np.int64)
     n = int(len(nodes))
     if n == 0 or len(tris) == 0 or tol <= 0:
         return nodes, tris, tri_phys, 0
+    # Every triangle edge, in the order the triangles list them.
+    edges = tris[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+    length = np.linalg.norm(nodes[edges[:, 0]] - nodes[edges[:, 1]], axis=1)
+    short = edges[length <= tol]
+    if len(short) == 0:
+        return nodes, tris, tri_phys, 0
+
+    patches: dict[int, set[int]] = {}
+    if respect_patches:
+        ends = np.unique(short)
+        on_end = np.isin(tris, ends)
+        for t_idx, col in zip(*np.nonzero(on_end), strict=False):
+            patches.setdefault(int(tris[t_idx, col]), set()).add(int(tri_phys[t_idx]))
+
     parent = np.arange(n, dtype=np.int64)
 
     def find(a: int) -> int:
@@ -1419,45 +1478,39 @@ def _collapse_short_edges(nodes, tris, tri_phys, tol: float):
         return a
 
     n_collapsed = 0
-    for a, b, c in tris:
-        for u, v in ((int(a), int(b)), (int(b), int(c)), (int(c), int(a))):
-            if float(np.linalg.norm(nodes[u] - nodes[v])) > tol:
-                continue
-            ru, rv = find(u), find(v)
-            if ru != rv:
-                parent[rv] = ru
-                n_collapsed += 1
+    for u, v in short:
+        ru, rv = find(int(u)), find(int(v))
+        if ru == rv:
+            continue
+        if respect_patches:
+            pu, pv = patches.get(ru, set()), patches.get(rv, set())
+            if pv > pu:
+                ru, rv = rv, ru  # keep the end on more patches (a rim)
+            elif not pv <= pu:
+                continue  # different patches: never merge them
+        parent[rv] = ru
+        n_collapsed += 1
     if n_collapsed == 0:
         return nodes, tris, tri_phys, 0
-    root = np.fromiter((find(i) for i in range(n)), dtype=np.int64, count=n)
-    merged: list[tuple[list[int], int]] = []
-    count: dict[tuple[int, int, int], int] = {}
-    for tri, phys in zip(tris, tri_phys, strict=False):
-        r = [int(root[int(i)]) for i in tri]
-        if len(set(r)) < 3:
-            continue
-        key = _tri_key(r)
-        count[key] = count.get(key, 0) + 1
-        merged.append((r, int(phys)))
+
+    root: np.ndarray = parent.copy()
+    while True:
+        nxt = root[root]
+        if np.array_equal(nxt, root):
+            break
+        root = nxt
+    r = root[tris]
+    keep = (r[:, 0] != r[:, 1]) & (r[:, 1] != r[:, 2]) & (r[:, 0] != r[:, 2])
+    r, phys = r[keep], tri_phys[keep]
     # Two triangles on the same three nodes are a sheet folded onto itself: it
     # encloses nothing, so both go. Keeping one left a fin inside the fluid that
     # no cell uses ("boundary triangle on no cell" on fine meshes).
-    kept_tris: list[list[int]] = []
-    kept_phys: list[int] = []
-    seen: set[tuple[int, int, int]] = set()
-    for r, phys in merged:
-        key = _tri_key(r)
-        if count[key] % 2 == 0 or key in seen:
-            continue
-        seen.add(key)
-        kept_tris.append(r)
-        kept_phys.append(phys)
-    used = sorted({i for t in kept_tris for i in t})
-    remap = {old: i for i, old in enumerate(used)}
-    new_nodes = nodes[np.asarray(used, dtype=np.int64)]
-    new_tris = np.asarray([[remap[i] for i in t] for t in kept_tris], dtype=np.int64)
-    new_phys = np.asarray(kept_phys, dtype=np.int64)
-    return new_nodes, new_tris, new_phys, n_collapsed
+    _keys, first, counts = np.unique(np.sort(r, axis=1), axis=0, return_index=True, return_counts=True)
+    kept = np.sort(first[counts % 2 == 1])
+    r, phys = r[kept], phys[kept]
+    used = np.unique(r)
+    new_tris = np.searchsorted(used, r).astype(np.int64)
+    return nodes[used], new_tris, phys.astype(np.int64), n_collapsed
 
 
 def _discrete_boundary(gmsh, entity: int, phys_of: dict, fallback: int):

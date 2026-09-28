@@ -27,6 +27,7 @@ EventKind = Literal[
     "courant",
     "time_saved",
     "counts",
+    "phase",
     "result",
     "error",
 ]
@@ -41,6 +42,7 @@ KNOWN_KINDS = frozenset(
         "courant",
         "time_saved",
         "counts",
+        "phase",
         "result",
         "error",
     }

@@ -252,3 +252,40 @@ def test_refinements_reach_snappy_dict(tmp_path: Path):
     assert "thicknessModel overallAndExpansion;" in block and "minThickness 0.0004;" in block
     assert "nSurfaceLayers 2;" not in text  # Automatic BL off: plain walls get no layers
     assert meta["refinement_regions"] == [{"name": "refine_1", "level": 4, "distance_m": 0.006}]
+
+def _foam_header(fmt: str, extra: str = "") -> bytes:
+    return (
+        "FoamFile\n{\n    version     2.0;\n    format      " + fmt + ";\n"
+        '    arch        "LSB;label=32;scalar=64";\n    class       labelList;\n' + extra
+        + "    object      owner;\n}\n// * * * * * * * * * * //\n\n"
+    ).encode("latin1")
+
+
+def _poly(tmp: Path, owner: bytes) -> Path:
+    pm = tmp / "constant" / "polyMesh"
+    pm.mkdir(parents=True)
+    (pm / "owner").write_bytes(owner)
+    points = b"5\n(\n(0 0 0)\n(1 0 0)\n(0 1 0)\n(0 0 1)\n(1 1 1)\n)\n"
+    (pm / "points").write_bytes(_foam_header("ascii") + points)
+    return tmp
+
+
+def test_polymesh_counts_from_header_note(tmp_path: Path):
+    note = '    note        "nPoints:296017  nCells:677353  nFaces:1611171  nInternalFaces:1552507";\n'
+    c = read_polymesh_counts(_poly(tmp_path, _foam_header("binary", note) + b"1611171\n("))
+    assert (c["n_points"], c["n_cells"], c["n_faces"]) == (296017, 677353, 1611171)
+
+
+def test_polymesh_counts_binary_owner_without_note(tmp_path: Path):
+    # Mesh writers here use binary; a text parse of it gave nonsense counts.
+    import struct
+
+    owner = _foam_header("binary") + b"6\n(" + struct.pack("<6i", 0, 3, 1, 2, 3, 0) + b")\n"
+    c = read_polymesh_counts(_poly(tmp_path, owner))
+    assert (c["n_points"], c["n_cells"], c["n_faces"]) == (5, 4, 6)
+
+
+def test_polymesh_counts_ascii_owner_without_note(tmp_path: Path):
+    owner = _foam_header("ascii") + b"5\n(\n0\n2\n1\n0\n2\n)\n"
+    c = read_polymesh_counts(_poly(tmp_path, owner))
+    assert (c["n_points"], c["n_cells"], c["n_faces"]) == (5, 3, 5)

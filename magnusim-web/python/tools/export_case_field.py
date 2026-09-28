@@ -17,19 +17,66 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from case_units import case_density, pressure_meta, scale_pressure  # noqa: E402
+from case_units import (  # noqa: E402
+    case_density,
+    pressure_meta,
+    pressure_stats_in_pa,
+    scale_pressure,
+)
 from case_volume import load_volume  # noqa: E402
 
 
-def parse_foam_scalar_or_vector(path: Path, kind: str):
-    """Parse OpenFOAM ascii internalField; kind in ('vector','scalar')."""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if kind == "vector":
-        m_u = re.search(r"internalField\s+uniform\s+\(([^)]+)\)", text)
+def read_internal_field(path: Path, kind: str):
+    """``("uniform", value)`` or ``("nonuniform", array)`` for a field's internalField.
+
+    Reads ascii and binary OpenFOAM files (``format binary;`` with the ``arch``
+    scalar width). ``value`` is a float (scalar) or 3-list (vector); ``array`` is
+    ``(n,)`` or ``(n, 3)`` float64.
+    """
+    raw = path.read_bytes()
+    comp = "vector" if kind == "vector" else "scalar"
+    if comp == "vector":
+        m_u = re.search(rb"internalField\s+uniform\s+\(([^)]+)\)", raw)
         if m_u:
             parts = [float(x) for x in m_u.group(1).split()]
             if len(parts) != 3:
                 raise RuntimeError(f"{path.name} uniform vector malformed")
+            return "uniform", parts
+    else:
+        m_u = re.search(rb"internalField\s+uniform\s+([^\s;]+)", raw)
+        if m_u:
+            return "uniform", float(m_u.group(1))
+    m = re.search(rb"internalField\s+nonuniform\s+List<" + comp.encode() + rb">\s*(\d+)\s*\(", raw)
+    if not m:
+        raise RuntimeError(f"{path.name} internalField not found ({comp})")
+    n = int(m.group(1))
+    width = 3 if comp == "vector" else 1
+    head = raw[: m.start()]
+    if re.search(rb"format\s+binary", head):
+        dtype = "<f4" if re.search(rb"scalar\s*=\s*32", head) else "<f8"
+        count = n * width
+        if len(raw) < m.end() + count * np.dtype(dtype).itemsize:
+            raise RuntimeError(f"{path.name} internalField truncated")
+        arr = np.frombuffer(raw, dtype=dtype, count=count, offset=m.end()).astype(np.float64)
+    else:
+        body = raw[m.end() :]
+        stop = body.find(b"\n)") if comp == "vector" else body.find(b")")
+        if stop < 0:
+            raise RuntimeError(f"{path.name} internalField terminator not found")
+        # Vector rows are "(x y z)": drop the brackets, parse every number at once.
+        arr = np.array(body[:stop].translate(None, b"()").split(), dtype=np.float64)
+    if arr.size != n * width:
+        name = "U" if comp == "vector" else "p"
+        raise RuntimeError(f"{name} count mismatch {arr.size // width} != {n}")
+    return "nonuniform", arr.reshape(n, 3) if comp == "vector" else arr
+
+
+def parse_foam_scalar_or_vector(path: Path, kind: str):
+    """Stats of an OpenFOAM internalField (ascii or binary); kind in ('vector','scalar')."""
+    shape, data = read_internal_field(path, kind)
+    if kind == "vector":
+        if shape == "uniform":
+            parts = [float(x) for x in data]
             mag = float(np.linalg.norm(parts))
             sample = np.asarray([mag] * 8, dtype=np.float64)
             h = hashlib.sha256()
@@ -49,27 +96,8 @@ def parse_foam_scalar_or_vector(path: Path, kind: str):
                 "sample_tail": [float(x) for x in sample[:8]],
                 "source_path": str(path),
             }
-        pat = r"internalField\s+nonuniform\s+List<vector>\s*\n\s*(\d+)\s*\n\("
-        m = re.search(pat, text)
-        if not m:
-            raise RuntimeError(f"{path.name} internalField not found (vector)")
-        n = int(m.group(1))
-        body = text[m.end() :]
-        end = body.find("\n)")
-        if end < 0:
-            raise RuntimeError(f"{path.name} internalField terminator not found")
-        chunk = body[:end]
-        vecs = []
-        for line in chunk.splitlines():
-            line = line.strip()
-            if line.startswith("(") and line.endswith(")"):
-                parts = line[1:-1].split()
-                if len(parts) == 3:
-                    vecs.append((float(parts[0]), float(parts[1]), float(parts[2])))
-        arr = np.asarray(vecs, dtype=np.float64)
-        if arr.shape[0] != n:
-            raise RuntimeError(f"U count mismatch {arr.shape[0]} != {n}")
-        mag = np.linalg.norm(arr, axis=1)
+        n = int(data.shape[0])
+        mag = np.linalg.norm(data, axis=1)
         sample = np.concatenate([mag[:64], mag[-64:]])
         h = hashlib.sha256()
         h.update(n.to_bytes(8, "little"))
@@ -77,7 +105,7 @@ def parse_foam_scalar_or_vector(path: Path, kind: str):
         return {
             "foam_object": "U",
             "uniform": False,
-            "n_cells_internal": int(n),
+            "n_cells_internal": n,
             "umin": float(mag.min()),
             "umax": float(mag.max()),
             "umean": float(mag.mean()),
@@ -87,67 +115,45 @@ def parse_foam_scalar_or_vector(path: Path, kind: str):
             "sample_tail": [float(x) for x in mag[-8:]],
             "source_path": str(path),
         }
-    else:
-        m_u = re.search(r"internalField\s+uniform\s+([^\s;]+)", text)
-        if m_u:
-            val = float(m_u.group(1))
-            sample = np.asarray([val] * 8, dtype=np.float64)
-            h = hashlib.sha256()
-            h.update(b"uniform-scalar")
-            h.update(np.asarray([val], dtype="<f8").tobytes())
-            return {
-                "foam_object": "p",
-                "uniform": True,
-                "uniform_scalar": val,
-                "n_cells_internal": 0,
-                "pmin": val,
-                "pmax": val,
-                "pmean": val,
-                "nonzero": 0 if val == 0 else 1,
-                "sample_checksum_sha256": h.hexdigest(),
-                "sample_head": [float(x) for x in sample[:8]],
-                "sample_tail": [float(x) for x in sample[:8]],
-                "source_path": str(path),
-            }
-        pat = r"internalField\s+nonuniform\s+List<scalar>\s*\n\s*(\d+)\s*\n\("
-        m = re.search(pat, text)
-        if not m:
-            raise RuntimeError(f"{path.name} internalField not found (scalar)")
-        n = int(m.group(1))
-        body = text[m.end() :]
-        end = body.find("\n)")
-        if end < 0:
-            raise RuntimeError(f"{path.name} internalField terminator not found")
-        chunk = body[:end]
-        vals = []
-        for line in chunk.splitlines():
-            line = line.strip()
-            if not line or line.startswith("/"):
-                continue
-            try:
-                vals.append(float(line))
-            except ValueError:
-                continue
-        arr = np.asarray(vals, dtype=np.float64)
-        if arr.shape[0] != n:
-            raise RuntimeError(f"p count mismatch {arr.shape[0]} != {n}")
-        sample = np.concatenate([arr[:64], arr[-64:]])
+    if shape == "uniform":
+        val = float(data)
+        sample = np.asarray([val] * 8, dtype=np.float64)
         h = hashlib.sha256()
-        h.update(n.to_bytes(8, "little"))
-        h.update(sample.astype("<f8").tobytes())
+        h.update(b"uniform-scalar")
+        h.update(np.asarray([val], dtype="<f8").tobytes())
         return {
             "foam_object": "p",
-            "uniform": False,
-            "n_cells_internal": int(n),
-            "pmin": float(arr.min()),
-            "pmax": float(arr.max()),
-            "pmean": float(arr.mean()),
-            "nonzero": int(np.count_nonzero(arr != 0)),
+            "uniform": True,
+            "uniform_scalar": val,
+            "n_cells_internal": 0,
+            "pmin": val,
+            "pmax": val,
+            "pmean": val,
+            "nonzero": 0 if val == 0 else 1,
             "sample_checksum_sha256": h.hexdigest(),
-            "sample_head": [float(x) for x in arr[:8]],
-            "sample_tail": [float(x) for x in arr[-8:]],
+            "sample_head": [float(x) for x in sample[:8]],
+            "sample_tail": [float(x) for x in sample[:8]],
             "source_path": str(path),
         }
+    arr = data
+    n = int(arr.shape[0])
+    sample = np.concatenate([arr[:64], arr[-64:]])
+    h = hashlib.sha256()
+    h.update(n.to_bytes(8, "little"))
+    h.update(sample.astype("<f8").tobytes())
+    return {
+        "foam_object": "p",
+        "uniform": False,
+        "n_cells_internal": n,
+        "pmin": float(arr.min()),
+        "pmax": float(arr.max()),
+        "pmean": float(arr.mean()),
+        "nonzero": int(np.count_nonzero(arr != 0)),
+        "sample_checksum_sha256": h.hexdigest(),
+        "sample_head": [float(x) for x in arr[:8]],
+        "sample_tail": [float(x) for x in arr[-8:]],
+        "source_path": str(path),
+    }
 
 
 def ensure_field_on_mesh(mesh, field: str):
@@ -193,6 +199,8 @@ def series_field_range(case_dir: Path, field: str) -> dict:
     times = list_field_times(case_dir, field)
     kind = "vector" if field == "magU" else "scalar"
     foam_name = "U" if field == "magU" else "p"
+    # Surfaces show p in Pa, so the whole-run legend range must be Pa too.
+    scale = 1.0 if field == "magU" else case_density(case_dir)
     frames = []
     lo = None
     hi = None
@@ -201,8 +209,8 @@ def series_field_range(case_dir: Path, field: str) -> dict:
         if not path.is_file():
             continue
         stats = parse_foam_scalar_or_vector(path, kind)
-        a = float(stats["umin"] if field == "magU" else stats["pmin"])
-        b = float(stats["umax"] if field == "magU" else stats["pmax"])
+        a = float(stats["umin"] if field == "magU" else stats["pmin"]) * scale
+        b = float(stats["umax"] if field == "magU" else stats["pmax"]) * scale
         frames.append({"time": t, "min": a, "max": b, "uniform": bool(stats.get("uniform"))})
         lo = a if lo is None else min(lo, a)
         hi = b if hi is None else max(hi, b)
@@ -216,6 +224,7 @@ def series_field_range(case_dir: Path, field: str) -> dict:
         "max": hi,
         "frames": frames,
         "series": True,
+        "unit": "m/s" if field == "magU" else "Pa",
     }
 
 
@@ -252,10 +261,12 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
         source_vtu = "worker-cache"
     ensure_field_on_mesh(mesh, field)
     rho = case_density(case_dir)
-    if field == "p":
-        scale_pressure(mesh, rho)
 
+    # The volume may be the worker's shared cache: scale only the extracted
+    # surface (its own arrays), never the volume, so p is Pa exactly once.
     surf = mesh.extract_surface()
+    if field == "p":
+        scale_pressure(surf, rho)
     if field in surf.cell_data and field not in surf.point_data:
         surf = surf.cell_data_to_point_data(pass_cell_data=True)
 
@@ -317,7 +328,7 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
         "n_points": int(surf.n_points),
         "n_cells": int(surf.n_cells),
         "bounds": list(map(float, surf.bounds)),
-        "foam_proof": foam_stats,
+        "foam_proof": pressure_stats_in_pa(foam_stats, rho) if field == "p" else foam_stats,
         "surface_field": {
             "name": field,
             "min": surf_min,
@@ -329,6 +340,7 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
         "no_simscale_22_2": True,
         "uniform_foam": bool(foam_stats.get("uniform")),
         "field_unit": "Pa" if field == "p" else "m/s",
+        "pressure_range_unit": "Pa",
         **pressure_meta(rho),
     }
     out_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
