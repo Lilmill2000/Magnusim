@@ -11,13 +11,14 @@ key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
 api_version = "1.0"
+license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
 ui = "ui"
 ui_entry = "index.js"
 ```
 
-`api_version` must share the host major version (`1`). A different major is listed as `incompatible` and is not registered. `authors` is a comma-separated list when you have more than one. Omit `ui` when the plugin has no browser bundle.
+`api_version` must share the host major version (`1`). A different major is listed as `incompatible` and is not registered. `authors` is a comma-separated list when you have more than one. Omit `ui` when the plugin has no browser bundle. `license` is an SPDX identifier and is shown in Settings → Plugins. The manifest `key` may differ from the folder name; the UI is still served from the folder.
 
 `overrides` is a comma-separated list of `kind:key` tokens. A plugin may replace a protected builtin only when that token is listed. New keys do not need an override.
 
@@ -25,8 +26,10 @@ A wheel's entry point belongs in `pyproject.toml` once the register function is 
 
 ```toml
 [project.entry-points."cfddesk.plugins"]
-my-plugin = "my_plugin:register"
+my-plugin = "my_plugin.plugin:register"
 ```
+
+Use your own package name (the template maps its folder to `magnusim_plugin_template`). A bare `plugin:register` would collide with every other plugin built the same way.
 
 Folder discovery loads `plugins/<folder>/plugin.py` and does not need that table.
 
@@ -53,7 +56,7 @@ Do not import `cfddesk.builtin`, `scripts`, or `src.workbench`. Those are host i
 
 ## UI
 
-Build the browser bundle with `react`, `react-dom`, and `@cfddesk/plugin-ui` marked external. The host passes one React and one plugin-ui object:
+Build the browser bundle with `react`, `react-dom`, and `@cfddesk/plugin-api` marked external. The host passes one React and one plugin API object:
 
 ```javascript
 export function register(host) {
@@ -71,11 +74,17 @@ export function register(host) {
 
 `host` is `{ React, ReactDOM, pluginUi, scope }`. `scope` is the open project's scope id. There is no import map. A thrown `register` or a thrown panel is a Plugins-tab row and a toast. Builtins stay loaded.
 
-`pluginUi` can register a panel, replace a host panel, add a filter widget, or add a tree transform. Tree nodes must carry the current project scope or the tree drops them.
+`pluginUi` can register a panel, replace a host panel, add a filter widget, add a schema field widget, or add a tree transform. Tree nodes must carry the current project scope or the tree drops them.
+
+A panel's `place` is `"filters"` (the Filters panel) or `"prefs"` (your row in Settings → Plugins). Those are the only places the app draws. The older names `tree`, `toolbar`, `results` and `geometry` were never shown; registering there now fails and your plugin shows an error row.
+
+`registerFieldWidget(name, Component)` renders any schema field whose `x-cfddesk.widget` is `name` with your component.
+
+Everything your `register(host)` adds is recorded under your plugin key. Disabling the plugin removes it at once, and reloading replaces it instead of adding a second copy.
 
 ## Plugins tab
 
-Preferences lists each plugin's key, name, version, source (`local` or `entry_point`), and status (`enabled`, `disabled`, `incompatible`, `missing requirement`, or `error`). Enable and Disable call the plugin routes and reload the registry. Reload runs `registry.reload` and loads UI bundles again.
+Settings → Plugins lists each plugin's key, name, version, source (`local` or `entry_point`), and status (`enabled`, `disabled`, `incompatible`, `missing requirement`, or `error`). Enable and Disable call the plugin routes and reload the registry. Reload runs `registry.reload` and loads UI bundles again.
 
 ## License
 
@@ -83,4 +92,4 @@ Magnusim is GPL-3.0-or-later. A plugin runs inside the Magnusim Python worker an
 
 ## Registry reference
 
-`docs/plugins/registry.json` is the committed `registry_dump` output: analysis, solver, mesher, boundary condition, material, monitor, and filter keys, plus the loaded plugin manifests. Regenerate it with `npm run gen:registry` from `magnusim-web/` after a plugin changes `describe()`, then copy that file here.
+`docs/plugins/registry.json` lists the keys Magnusim itself registers: analysis, solver, mesher, boundary condition, material, monitor, and filter. It holds builtins only; your plugin's keys never appear in it, and the app reads them from the live registry while it runs. `npm run gen:registry` (from `magnusim-web/`) regenerates it together with `scripts/generated/registry.json`.

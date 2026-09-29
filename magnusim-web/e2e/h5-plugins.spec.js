@@ -50,7 +50,7 @@ async function enableDemo(request, key) {
   await request.post(`/api/plugins/${key}/enable`);
 }
 
-test('gate:h5-demos-visible laminar, extra mesher, and one React copy', async ({ page }) => {
+test('@plugins gate:h5-demos-visible laminar, extra mesher, and one React copy', async ({ page }) => {
   test.setTimeout(90_000);
   await openProject(page);
   await page.waitForFunction(() => window.__CFD_PLUGINS_READY__ === true);
@@ -66,7 +66,12 @@ test('gate:h5-demos-visible laminar, extra mesher, and one React copy', async ({
   await expect(page.locator('[data-mesh-engine="1"] option', { hasText: 'Extra mesher' })).toHaveCount(1);
 
   const step = await openSettingsPlugins(page);
-  await expect(step.locator('[data-plugin-key]')).toHaveCount(3, { timeout: 15_000 });
+  await expect(step.locator('[data-plugin-key]')).toHaveCount(4, { timeout: 15_000 });
+  // gate:h6-key-folder: a plugin whose manifest key is not its folder name still loads its UI.
+  await expect(step.locator('[data-plugin-key="key-not-folder"] [data-plugin-keyfolder="1"]')).toHaveText(
+    'UI loaded from the plugin folder.',
+    { timeout: 15_000 },
+  );
   const hook = step.locator('[data-plugin-key="example-hook-monitor"] [data-plugin-hook="1"]');
   await expect(hook).toBeVisible({ timeout: 15_000 });
   await expect(hook).toHaveText('What does this hook do?');
@@ -77,7 +82,7 @@ test('gate:h5-demos-visible laminar, extra mesher, and one React copy', async ({
   await expect(page.locator('#setup-wizard')).toBeHidden();
 });
 
-test('gate:h5-disable-removes demo rows after reload', async ({ page, request }) => {
+test('@plugins gate:h5-disable-removes demo rows after reload', async ({ page, request }) => {
   test.setTimeout(90_000);
   try {
     await openProject(page);
@@ -108,7 +113,7 @@ test('gate:h5-disable-removes demo rows after reload', async ({ page, request })
   }
 });
 
-test('gate:h5-broken-plugin surfaces a thrown UI and the workbench stays up', async ({ page }) => {
+test('@plugins gate:h5-broken-plugin surfaces a thrown UI and the workbench stays up', async ({ page }) => {
   test.setTimeout(90_000);
   await page.goto('/');
   await page.waitForFunction(() => typeof window.__CFD_LOAD_PLUGIN_UI__ === 'function');

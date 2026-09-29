@@ -6,6 +6,7 @@ import { fromSi, toSi, unitLabels, type Quantity } from '../units/convert';
 import { prefersImperial } from '../prefs';
 import { subscribeFacePicks } from '../viewer/pick';
 import { SciNumberInput } from './SciNumberInput';
+import { hasFieldWidget, pluginFieldWidgets, pluginWidgetName } from '../plugin-api/fieldWidgets';
 
 export interface SchemaFormProps {
   schema: RJSFSchema;
@@ -271,7 +272,10 @@ function buildUiSchema(schema: RJSFSchema): UiSchema {
     const x = prop['x-cfddesk'] || {};
     const field: UiSchema = {};
     const widget = String(x.widget || x.x_widget || '');
-    if (widget === 'faces' || widget === 'body' || widget === 'patch') {
+    if (widget && hasFieldWidget(widget)) {
+      // A plugin registered this widget (pluginUi.registerFieldWidget).
+      field['ui:widget'] = pluginWidgetName(widget);
+    } else if (widget === 'faces' || widget === 'body' || widget === 'patch') {
       field['ui:widget'] = 'FacePickerWidget';
       field['ui:options'] = { ...(field['ui:options'] as object), pick: widget };
     } else if (widget === 'range') {
@@ -366,7 +370,7 @@ export function SchemaForm({
         uiSchema={uiSchema}
         validator={validator}
         formData={live}
-        widgets={widgets}
+        widgets={{ ...widgets, ...pluginFieldWidgets() }}
         templates={{ FieldTemplate, ObjectFieldTemplate }}
         formContext={{ advancedExtra } satisfies SchemaFormContext}
         showErrorList={false}

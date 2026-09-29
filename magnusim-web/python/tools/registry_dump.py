@@ -11,6 +11,11 @@ land13: W17 / MESH_ENGINES consumers read scripts/generated/registry.json via re
 
 --check: dump live registry and fail (exit 1) if committed
 scripts/generated/registry.json differs (stale golden).
+
+--builtins-only: dump only what core registers (no entry points, no plugins/
+folder). The committed golden uses it, so a plugin installed on this PC (or a
+user's disabled-plugin list) never changes it. Node reads plugin keys from the
+live worker registry instead.
 """
 
 from __future__ import annotations
@@ -97,15 +102,25 @@ def _missing_rows(hub: RegistryHub, env: dict[str, Any] | None) -> list[dict[str
     return out
 
 
+def builtin_hub() -> RegistryHub:
+    """A fresh hub holding only the core builtins (no plugin discovery)."""
+    from cfddesk.builtin import register_builtins
+
+    hub = RegistryHub()
+    register_builtins(hub)
+    return hub
+
+
 def dump_registry(
     *,
     web_root: Path | str | None = None,
     check_reqs: bool = False,
     env: dict[str, Any] | None = None,
     force: bool = False,
+    builtins_only: bool = False,
 ) -> dict[str, Any]:
     """Build the registry dump dict (testable without CLI I/O)."""
-    hub = load_all(web_root=web_root, force=force)
+    hub = builtin_hub() if builtins_only else load_all(web_root=web_root, force=force)
     payload: dict[str, Any] = {}
     for kind in DUMP_KINDS:
         payload[kind] = hub.registry(kind).describe()
@@ -123,6 +138,7 @@ def check_committed_registry(
     web_root: Path | str | None = None,
     force: bool = True,
     env: dict[str, Any] | None = None,
+    builtins_only: bool = False,
 ) -> tuple[bool, str]:
     """Compare live dump_registry() to the committed scripts/generated/registry.json.
 
@@ -143,6 +159,7 @@ def check_committed_registry(
         check_reqs=False,
         env=env,
         force=force,
+        builtins_only=builtins_only,
     )
     # describe() may keep tuple defaults; committed JSON has lists — canonicalize.
     fresh_canon = json.loads(json.dumps(fresh))
@@ -230,6 +247,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force load_all(force=True) re-discovery.",
     )
+    p.add_argument(
+        "--builtins-only",
+        action="store_true",
+        help="Dump core builtins only (no plugin discovery); used for the committed golden.",
+    )
     return p
 
 
@@ -253,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
                 web_root=args.web_root,
                 force=True,  # always force for stale check
                 env=env,
+                builtins_only=args.builtins_only,
             )
         except Exception as exc:
             print(json.dumps({"ok": False, "error": str(exc)}), flush=True)
@@ -266,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
             check_reqs=args.check_requirements,
             env=env,
             force=args.force,
+            builtins_only=args.builtins_only,
         )
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), flush=True)

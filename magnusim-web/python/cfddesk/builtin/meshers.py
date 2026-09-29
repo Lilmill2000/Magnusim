@@ -139,6 +139,7 @@ def build_standard() -> MeshBackend:
         requires=(),
         frozen=False,
         multi_region=False,
+        engine="standard",
     )
 
 
@@ -157,6 +158,7 @@ def build_cfmesh() -> MeshBackend:
         requires=(Requirement("wsl_tool", "cartesianMesh"),),
         frozen=True,
         multi_region=False,
+        engine="cfmesh",
     )
 
 
@@ -173,6 +175,7 @@ def build_snappy_hexdominant() -> MeshBackend:
         requires=(Requirement("wsl_tool", "snappyHexMesh"),),
         frozen=False,
         multi_region=False,
+        engine="snappy_hexdominant",
     )
 
 

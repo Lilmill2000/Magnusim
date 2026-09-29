@@ -107,3 +107,18 @@ def test_cli_subprocess_smoke():
     assert set(DUMP_KINDS).issubset(data.keys())
     keys = {r["key"] for r in data["analysis"]}
     assert DEFAULT_STEADY_KEY in keys
+
+
+def test_builtins_only_dump_ignores_installed_plugins(monkeypatch: pytest.MonkeyPatch):
+    """gate:h6-registry-builtins-only: plugins on this PC never change the golden."""
+    fixtures = Path(__file__).resolve().parents[1] / "fixtures" / "plugins"
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(fixtures))
+    with_plugins = dump_registry(force=True)
+    assert "example_extra_mesher" in {row["key"] for row in with_plugins["mesher"]}
+    builtins = dump_registry(builtins_only=True)
+    assert "example_extra_mesher" not in {row["key"] for row in builtins["mesher"]}
+    assert "laminar_steady" not in {row["key"] for row in builtins["analysis"]}
+    assert builtins["plugins"] == []
+    assert {row["plugin"] for kind in DUMP_KINDS for row in builtins[kind]} <= {"builtin"}
+    monkeypatch.delenv("MAGNUSIM_PLUGINS_DIR")
+    assert json.loads(json.dumps(builtins)) == json.loads(json.dumps(dump_registry(builtins_only=True)))

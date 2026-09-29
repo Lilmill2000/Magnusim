@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathIsWithin } from '../safe-path.js';
-import { sendBytes, weakEtag } from './http.ts';
+import { isLocalOperator, sendBytes, weakEtag } from './http.ts';
 import { writeSse, type JobManager, type JobRecord } from './jobs.ts';
 import { canonicalFilterKey, LEGACY_FILTER_PATHS } from './legacy-aliases.ts';
 import type { RequestContext, Router } from './router.ts';
@@ -172,6 +172,10 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       return;
     }
     const raw = (body.params && typeof body.params === 'object' ? body.params : {}) as Record<string, unknown>;
+    if (method === 'registry.reload' && !isLocalOperator(ctx.req)) {
+      ctx.sendJson(403, { error: 'Plugin management is only available on this PC.', ok: false });
+      return;
+    }
     if (method === 'bc.menu' || method === 'registry.reload') {
       return workerJson(deps, ctx, method, {});
     }
@@ -204,11 +208,16 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     if (!params.project_id && ctx.scope.projectId) params.project_id = ctx.scope.projectId;
     if (!params.simulation_id && ctx.scope.simulationId) params.simulation_id = ctx.scope.simulationId;
     if (!params.geometry_id && ctx.scope.geometryId) params.geometry_id = ctx.scope.geometryId;
-    let spec: { tool?: string; scope?: string; tool_path?: string; args_from_params?: string[] } | null =
-      null;
+    let spec: {
+      tool?: string;
+      scope?: string;
+      tool_path?: string;
+      args_from_params?: string[];
+      plugin?: string;
+    } | null = null;
     try {
       const described = (await deps.worker.call('jobs.describe', { kind })) as {
-        job?: { tool?: string; scope?: string; tool_path?: string; args_from_params?: string[] };
+        job?: { tool?: string; scope?: string; tool_path?: string; args_from_params?: string[]; plugin?: string };
       };
       spec = described.job || null;
     } catch (err) {
@@ -234,7 +243,10 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       'solve.sh': (p, started) => deps.startSolveJob(p, started),
       'convert_step_to_stl.py': (p, started) => deps.startCadImportJob(p, started),
     };
-    const start = starters[spec.tool];
+    // Only builtin job kinds reach the builtin starters; a plugin job named like a
+    // core tool still runs its own script from its own folder.
+    const builtin = String(spec.plugin || 'builtin') === 'builtin';
+    const start = builtin ? starters[spec.tool] : undefined;
     if (start) start(params, job);
     else startRegisteredJob(deps.jobs, spec, params, job);
     ctx.sendJson(202, { ok: true, job });
@@ -330,13 +342,16 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     ctx.sendJson(200, { ok: true, job });
   });
 
+  const LOCAL_ONLY = 'Plugin management is only available on this PC.';
   router.get('/api/plugins', async (ctx) => workerJson(deps, ctx, 'plugins.list', {}));
-  router.post('/api/plugins/:key/enable', async (ctx) =>
-    workerJson(deps, ctx, 'plugins.enable', { key: ctx.params.key }),
-  );
-  router.post('/api/plugins/:key/disable', async (ctx) =>
-    workerJson(deps, ctx, 'plugins.disable', { key: ctx.params.key }),
-  );
+  router.post('/api/plugins/:key/enable', async (ctx) => {
+    if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    return workerJson(deps, ctx, 'plugins.enable', { key: ctx.params.key });
+  });
+  router.post('/api/plugins/:key/disable', async (ctx) => {
+    if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    return workerJson(deps, ctx, 'plugins.disable', { key: ctx.params.key });
+  });
 
   const pluginDispatch = async (ctx: RequestContext) => {
     const key = String(ctx.params.key || '');
@@ -385,14 +400,19 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
 
   router.get('/plugins/:key/ui/**rest', async (ctx) => {
     let ui = 'ui';
+    // The manifest key may differ from the plugin's folder name; files live in the folder.
+    let folder = String(ctx.params.key || '');
     try {
-      const listed = (await deps.worker.call('plugins.list')) as { plugins?: Array<{ key: string; ui?: string }> };
+      const listed = (await deps.worker.call('plugins.list')) as {
+        plugins?: Array<{ key: string; ui?: string; dir?: string | null }>;
+      };
       const hit = (listed.plugins || []).find((p) => p.key === ctx.params.key);
       if (hit && hit.ui) ui = hit.ui;
+      if (hit && hit.dir) folder = String(hit.dir);
     } catch {
       /* serve from default ui/ */
     }
-    const file = safePluginFile(deps.webRoot, ctx.params.key, ui, ctx.params.rest || 'index.js');
+    const file = safePluginFile(deps.webRoot, folder, ui, ctx.params.rest || 'index.js');
     if (!file) {
       ctx.sendJson(404, { error: 'plugin ui not found' });
       return;

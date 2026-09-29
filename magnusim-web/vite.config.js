@@ -31,6 +31,9 @@ function isViteWatchIgnored(filePath) {
     p.includes('/.tmp-projects/') ||
     p.includes('/.cache/') ||
     p.includes('/python/') ||
+    // A plugin's own virtual environment or bytecode (plugins/<key>/.venv).
+    p.includes('/.venv/') ||
+    p.includes('/__pycache__/') ||
     p.includes('/dist/') ||
     p.includes('hexcore-process-backup')
   ) {

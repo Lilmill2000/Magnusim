@@ -114,7 +114,8 @@ test('gate:h3-replace-panel', () => {
   const api = text('src/plugin-api/index.ts');
   const register = text('src/panels/register.ts');
   assert.match(api, /replacePanel/);
-  assert.match(api, /'results' \| 'prefs' \| 'geometry'/);
+  // H6: only places the host renders are typed; the unrendered 1.0 places are an error row.
+  assert.match(api, /export type PanelPlace = 'filters' \| 'prefs';/);
   assert.match(register, /replacePanel\('panel-incompressible-defaults'/);
   assert.match(register, /replacePanel\('panel-mesh-form'/);
   assert.match(register, /replacePanel\('panel-bc-editor'/);

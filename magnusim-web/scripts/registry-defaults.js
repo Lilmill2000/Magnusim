@@ -1,8 +1,10 @@
 // @ts-check
 /**
  * Phase 2 land13 — thin dual-defaults consumer.
- * Reads committed scripts/generated/registry.json so W17 / MESH_ENGINES
- * product keys come from the dump, not a parallel hard-coded dict.
+ * Reads the live registry (worker registry.describe, set by the API server at
+ * boot and after every plugin change). Until that arrives, and for offline
+ * tooling, it falls back to the committed scripts/generated/registry.json,
+ * which lists builtins only. Plugin keys therefore exist only in the live doc.
  *
  * Bank UI still shows "Incompressible" / "k-omega SST"; those labels are
  * derived from dump keys (analysis_type, default_turbulence, default_solver).
@@ -23,6 +25,8 @@ export const DEFAULT_ANALYSIS_KEY = 'incompressible_steady';
 const MESH_ENGINE_PRODUCT_KEYS = Object.freeze(['standard', 'cfmesh', 'snappy_hexdominant']);
 
 let _cache = null;
+/** Live registry.describe doc from the worker (builtins + loaded plugins). */
+let _live = null;
 
 /**
  * Load committed registry dump (cached). Throws if missing/invalid.
@@ -44,10 +48,36 @@ export function loadCommittedRegistry() {
 /** Test helper: clear module cache so a swapped file is re-read. */
 export function resetRegistryCache() {
   _cache = null;
+  _live = null;
+  _syncMeshEngines();
+}
+
+/**
+ * Install the live registry (worker registry.describe). Called by the API
+ * server at boot and after registry.reload / plugins.enable / plugins.disable.
+ * @param {unknown} doc
+ * @returns {boolean} true when the doc was accepted
+ */
+export function setLiveRegistry(doc) {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return false;
+  const d = /** @type {Record<string, unknown>} */ (doc);
+  if (!Array.isArray(d.mesher) || !Array.isArray(d.analysis)) return false;
+  _live = d;
+  _syncMeshEngines();
+  return true;
+}
+
+/** True once the live registry has been installed. */
+export function liveRegistryLoaded() {
+  return _live !== null;
+}
+
+function _registryDoc() {
+  return _live || loadCommittedRegistry();
 }
 
 function _rows(kind) {
-  const doc = loadCommittedRegistry();
+  const doc = _registryDoc();
   const rows = doc[kind];
   return Array.isArray(rows) ? rows : [];
 }
@@ -83,14 +113,32 @@ export function mesherByKey(key) {
 }
 
 /**
- * Advanced mesh_engine allow-list derived from dump mesher keys.
- * Product engines are the dump keys that intersect the historical W20 set
- * (standard / cfmesh). snappy_hexdominant stays a Hex-dominant algorithm path.
- * Every accepted key is guaranteed present in the dump (no silent parallel dict).
+ * Host run path for a mesher key ("standard" / "cfmesh" / "snappy_hexdominant"),
+ * from the registry row's engine. A plugin mesher that clones a builtin runs
+ * through that builtin's path. Unregistered keys return ''.
+ * @param {string} key
+ */
+export function mesherEngineOf(key) {
+  const row = mesherByKey(key);
+  if (!row) return '';
+  return String(row.engine || row.key || '');
+}
+
+/**
+ * Advanced mesh_engine allow-list derived from registry mesher keys.
+ * Builtin product engines are the keys that intersect the historical W20 set;
+ * every mesher a plugin registers is a product engine too, so a plugin mesher
+ * picked in the Mesh panel is saved and run as picked.
+ * Every accepted key is guaranteed present in the registry (no parallel dict).
  */
 export function meshEngineKeys() {
   const dump = new Set(mesherKeys());
   const keys = MESH_ENGINE_PRODUCT_KEYS.filter((k) => dump.has(k));
+  for (const row of mesherEntries()) {
+    const key = row && row.key != null ? String(row.key) : '';
+    const plugin = row && row.plugin != null ? String(row.plugin) : 'builtin';
+    if (key && plugin !== 'builtin' && !keys.includes(key)) keys.push(key);
+  }
   if (keys.length === 0) {
     throw new Error(
       'registry.json mesher[] has no product mesh_engine keys ' +
@@ -100,8 +148,23 @@ export function meshEngineKeys() {
   return keys;
 }
 
-/** @type {Set<string>} */
+/**
+ * Live set: its contents are replaced in place whenever the registry changes,
+ * so modules that imported it see plugin meshers without re-importing.
+ * @type {Set<string>}
+ */
 export const MESH_ENGINES = new Set(meshEngineKeys());
+
+function _syncMeshEngines() {
+  let keys;
+  try {
+    keys = meshEngineKeys();
+  } catch {
+    return;
+  }
+  MESH_ENGINES.clear();
+  for (const k of keys) MESH_ENGINES.add(k);
+}
 
 /** @type {Readonly<Record<string, string>>} */
 export const TURBULENCE_LABELS = Object.freeze({

@@ -40,8 +40,21 @@ export function resetPrefsCache() {
   mem = null;
 }
 
+function readLocalDocFromDisk() {
+  if (!existsSync(LOCAL_JSON)) return {};
+  try {
+    const data = JSON.parse(readFileSync(LOCAL_JSON, 'utf8'));
+    return data && typeof data === 'object' ? data : {};
+  } catch {
+    return {};
+  }
+}
+
 export function writeLocalDoc(partial) {
-  const next = { ...readLocalDoc(), ...(partial || {}) };
+  // Merge onto the file as it is now, not the cached copy: the Python worker is
+  // the only writer of the plugin on/off list, and a stale cache would write an
+  // old list back (a plugin turned off comes back on after a units save).
+  const next = { ...readLocalDocFromDisk(), ...(partial || {}) };
   writeFileSync(LOCAL_JSON, JSON.stringify(next, null, 2) + '\n', 'utf8');
   mem = next;
   return { ...next };

@@ -5,12 +5,19 @@ import { pyTool } from '../python-env.js';
 
 /**
  * @param {import('./jobs.ts').JobManager} jobs
- * @param {{ tool?: string, tool_path?: string, args_from_params?: string[] }} spec
+ * @param {{ tool?: string, tool_path?: string, args_from_params?: string[], plugin?: string }} spec
  * @param {Record<string, unknown>} params
  * @param {{ id: string }} job
  */
 export function startRegisteredJob(jobs, spec, params, job) {
-  const script = spec.tool_path || pyTool(String(spec.tool || ''));
+  // Plugin jobs run their own tool (tool_path, resolved inside the plugin folder
+  // by jobs.describe); never a core script of the same name.
+  const builtin = String(spec.plugin || 'builtin') === 'builtin';
+  const script = spec.tool_path || (builtin ? pyTool(String(spec.tool || '')) : '');
+  if (!script) {
+    jobs.finish(job.id, 'failed', undefined, `plugin job tool ${String(spec.tool || '')} is not in the plugin folder`);
+    return;
+  }
   const args = [];
   for (const name of spec.args_from_params || []) {
     const value = params[name];
@@ -41,7 +48,12 @@ export function serveRegisteredFilter(deps, ctx, spec) {
   const fileName = spec.output === 'vtp' ? 'result.vtp' : 'result.json';
   const out = join(dir, fileName);
   if (!existsSync(out)) {
-    const script = spec.tool_path || pyTool(String(spec.tool || ''));
+    // Plugin filters only reach here (filter.validate refuses a missing tool); no core fallback.
+    const script = spec.tool_path || '';
+    if (!script) {
+      ctx.sendJson(400, { error: `plugin filter tool ${String(spec.tool || '')} is not in the plugin folder` });
+      return;
+    }
     const args = ['--out', out];
     for (const name of spec.args_from_params || []) {
       if (params[name] != null && params[name] !== '') {

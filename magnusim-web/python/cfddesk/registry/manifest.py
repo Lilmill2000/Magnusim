@@ -21,3 +21,6 @@ class PluginManifest:
     overrides: list[str] = field(default_factory=list)
     api_version: str = "1.0"
     source: str = ""  # "local" (plugins/) or "entry_point"
+    # SPDX identifier. Magnusim is GPL-3.0-or-later; a distributed plugin must be
+    # GPL-3.0-or-later or GPL-compatible (docs/plugins/authoring.md).
+    license: str = ""

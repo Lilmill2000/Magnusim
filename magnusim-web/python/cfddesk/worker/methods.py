@@ -784,6 +784,9 @@ def filter_validate(key: str, params: dict | None = None) -> dict[str, Any]:
             raise RpcError(-32602, "; ".join(hard), {"errors": hard})
     plugin = hub.registry("filter").owner(spec.key)
     tool_path = _package_tool(hub.plugin_dir(plugin), spec.tool)
+    if plugin != "builtin" and not tool_path:
+        # Never fall back to a core tool of the same name.
+        raise RpcError(-32602, f"plugin filter {spec.key}: tool {spec.tool!r} is not in the plugin folder")
     return {
         "ok": True,
         "key": spec.key,
@@ -798,9 +801,13 @@ def filter_validate(key: str, params: dict | None = None) -> dict[str, Any]:
 
 
 def _package_tool(package: Path | None, tool: str) -> str:
+    """Absolute path of a plugin tool inside its package, or '' (missing or escaping)."""
     if package is None:
         return ""
-    candidate = (Path(package) / str(tool)).resolve()
+    root = Path(package).resolve()
+    candidate = (root / str(tool)).resolve()
+    if candidate != root and root not in candidate.parents:
+        return ""
     if candidate.is_file():
         return str(candidate)
     return ""
@@ -828,7 +835,11 @@ def jobs_describe(kind: str = "") -> dict[str, Any]:
             spec = reg.get(wanted)
         except RegistryError as exc:
             raise RpcError(-32602, f"unknown job kind: {wanted}") from exc
-        return {"ok": True, "job": _job_row(hub, spec)}
+        row = _job_row(hub, spec)
+        if row["plugin"] != "builtin" and not row["tool_path"]:
+            # A plugin job runs only its own tool, never a core tool of the same name.
+            raise RpcError(-32602, f"plugin job {wanted}: tool {spec.tool!r} is not in the plugin folder")
+        return {"ok": True, "job": row}
     return {"ok": True, "jobs": [_job_row(hub, spec) for spec in reg.items()]}
 
 
@@ -1020,8 +1031,39 @@ def _set_plugin_enabled(key: str, enabled: bool) -> dict[str, Any]:
     plugins["disabled"] = disabled
     doc["plugins"] = plugins
     _write_local(doc)
+    if enabled:
+        _drop_from_legacy_disabled(key)
     registry_reload()
     return plugins_list()
+
+
+def _drop_from_legacy_disabled(key: str) -> None:
+    """Discovery also reads the legacy web-root .cfddesk-local.json; a key disabled
+    there would stay disabled forever, since Enable edits only the current file."""
+    legacy = web_root() / ".cfddesk-local.json"
+    try:
+        if not legacy.is_file() or legacy.resolve() == local_json_path().resolve():
+            return
+        data = json.loads(legacy.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    changed = False
+    plugins = data.get("plugins")
+    if isinstance(plugins, dict) and isinstance(plugins.get("disabled"), list):
+        kept = [str(x) for x in plugins["disabled"] if str(x) != key]
+        if len(kept) != len(plugins["disabled"]):
+            plugins["disabled"] = kept
+            changed = True
+    flat = data.get("plugins.disabled")
+    if isinstance(flat, list):
+        kept = [str(x) for x in flat if str(x) != key]
+        if len(kept) != len(flat):
+            data["plugins.disabled"] = kept
+            changed = True
+    if changed:
+        ww.atomic_write(legacy, data)
 
 
 @rpc("plugins.enable")

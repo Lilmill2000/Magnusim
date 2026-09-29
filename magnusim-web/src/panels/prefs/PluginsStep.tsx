@@ -88,6 +88,8 @@ export function PluginsStep() {
       });
       if (!response.ok) throw new Error(`server answered ${response.status}`);
       await reloadRegistry();
+      // Load (or remove) its UI now, not after a manual Reload.
+      await loadPluginUi(scopeNow());
       await refresh();
     } catch (e) {
       setNote(`Could not ${enabled ? 'enable' : 'disable'} ${key}: ${e instanceof Error ? e.message : String(e)}`);

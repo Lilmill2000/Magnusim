@@ -91,6 +91,25 @@ export function weakEtag(payload: string): string {
   return `W/"${(h >>> 0).toString(16)}-${payload.length.toString(16)}"`;
 }
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+const LOOPBACK_ADDRS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+/**
+ * True only for a browser on this PC talking to the app directly. Turning plugins
+ * on or off changes what code the app runs, so it is refused through the public
+ * tunnel or any reverse proxy (their requests carry a public Host or X-Forwarded-*).
+ */
+export function isLocalOperator(req: IncomingMessage): boolean {
+  for (const name of Object.keys(req.headers)) {
+    if (name.startsWith('x-forwarded-') || name === 'forwarded' || name.startsWith('cf-')) return false;
+  }
+  const host = String(req.headers.host || '').trim().toLowerCase();
+  const hostname = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.replace(/:\d+$/, '');
+  if (!LOOPBACK_HOSTS.has(hostname)) return false;
+  const remote = String(req.socket?.remoteAddress || '');
+  return LOOPBACK_ADDRS.has(remote);
+}
+
 /** Browser requests must come from the app origin, including localhost deployments. */
 export function assertSameOrigin(req: IncomingMessage): void {
   const origin = req.headers.origin;

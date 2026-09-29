@@ -37,6 +37,17 @@ export function registerIsland(panelId: string, Component: IslandComponent): voi
   registry.set(panelId, Component);
 }
 
+/** The component registered for a panel host, if any (plugins restore it on disable). */
+export function islandComponent(panelId: string): IslandComponent | undefined {
+  return registry.get(panelId);
+}
+
+/** Drop a panel host's component and unmount it. */
+export function unregisterIsland(panelId: string): void {
+  unmountIsland(panelId);
+  registry.delete(panelId);
+}
+
 export function clearIslands(): void {
   for (const panelId of [...roots.keys()]) {
     unmountIsland(panelId);

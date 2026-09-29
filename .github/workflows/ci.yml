@@ -63,3 +63,42 @@ jobs:
         env:
           CI: "1"
 
+  # The app ships no plugins. Prove the core suites pass with no user plugin
+  # folder at all (the plugin-host gates are tagged @plugins and run in "node").
+  core-without-user-plugins:
+    runs-on: ubuntu-latest
+    env:
+      MAGNUSIM_STRICT_SCOPE: "1"
+    defaults:
+      run:
+        working-directory: magnusim-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: magnusim-web/package-lock.json
+      - run: npm ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglu1-mesa libxrender1 libxext6
+          python -m pip install --upgrade "pip>=26.2" "setuptools>=83"
+          python -m pip install -r python/requirements.lock
+          python -m pip install -e "python[dev]"
+      - name: Empty plugins folder
+        run: |
+          mkdir -p "$RUNNER_TEMP/no-plugins"
+          echo "MAGNUSIM_E2E_PLUGINS_DIR=$RUNNER_TEMP/no-plugins" >> "$GITHUB_ENV"
+      - run: npm run test:server
+      - run: npm run test:unit
+      - run: npm run gen:registry:check
+      - run: cd python && pytest --tb=short
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --grep-invert @plugins e2e/smoke.spec.js e2e/lifecycle.spec.js
+        env:
+          CI: "1"

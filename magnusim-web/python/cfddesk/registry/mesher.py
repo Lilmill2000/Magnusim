@@ -34,6 +34,11 @@ class MeshBackend:
     requires: tuple[Requirement, ...] = ()
     frozen: bool = False  # cfmesh: True (hexcore-cfmesh-backup rule)
     multi_region: bool = False
+    # Which host mesh run path executes this backend: "standard", "cfmesh" or
+    # "snappy_hexdominant". A plugin that clones a builtin (dataclasses.replace)
+    # inherits it, so its mesher runs through that path with its own key and
+    # defaults. Empty = the key itself.
+    engine: str = ""
 
 
 def analysis_has_mesh_bags(hub: RegistryHub) -> bool:

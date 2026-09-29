@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { WorkerClient, isDataLaneMethod } from '../worker.ts';
+import { WorkerClient, isDataLaneMethod, isPluginLaneMethod } from '../worker.ts';
 
 // A stand-in for `python -m cfddesk.worker`: answers in order, one at a time,
 // and takes `sleep` seconds on the slow volume/CAD methods.
@@ -17,7 +17,7 @@ for line in sys.stdin:
     if (req.get("params") or {}).get("drop") and req["id"] not in seen:
         seen.add(req["id"])
         continue
-    if m.startswith("cad.") or (m.startswith("filter.") and m != "filter.validate"):
+    if m.startswith("cad.") or (m.startswith("filter.") and m != "filter.validate") or m == "plugin.dispatch":
         time.sleep(float((req.get("params") or {}).get("sleep", 0)))
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": {"method": m, "pid": os.getpid()}}) + "\\n")
     sys.stdout.flush()
@@ -68,6 +68,32 @@ describe('worker lanes', () => {
       assert.ok(Date.now() - t0 < 1500, 'runs.upsert answered while the export was still running');
       const exported = await slow;
       assert.notEqual(exported.pid, write.pid, 'export ran in a separate process');
+    } finally {
+      worker.stop();
+    }
+  });
+
+  // gate:h6-plugin-lane
+  it('a slow plugin method does not delay project.tree', async () => {
+    assert.equal(isPluginLaneMethod('plugin.dispatch'), true);
+    assert.equal(isPluginLaneMethod('project.tree'), false);
+    const worker = new WorkerClient({
+      cwd: dir,
+      timeoutMs: 1500,
+      dataLane: new WorkerClient({ cwd: dir, name: 'data-worker' }),
+      pluginLane: new WorkerClient({ cwd: dir, name: 'plugin-worker' }),
+    });
+    try {
+      // Warm the main worker so the timing below is not a Python start-up.
+      await worker.call('project.tree', {});
+      const slow = worker.call('plugin.dispatch', { sleep: 5 }, 10_000);
+      await new Promise((r) => setTimeout(r, 100));
+      const t0 = Date.now();
+      const tree = await worker.call('project.tree', {});
+      assert.equal(tree.method, 'project.tree');
+      assert.ok(Date.now() - t0 < 200, `project.tree took ${Date.now() - t0} ms behind a slow plugin method`);
+      const plugin = await slow;
+      assert.notEqual(plugin.pid, tree.pid, 'plugin method ran in a separate process');
     } finally {
       worker.stop();
     }

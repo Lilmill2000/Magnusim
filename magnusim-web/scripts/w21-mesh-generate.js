@@ -30,7 +30,7 @@ import { wslCasePath, wslDistro } from './wsl-env.js';
 import { createJobLogger } from './log.js';
 import { envGet } from './env-compat.js';
 import { writeJsonCli } from './py-json.js';
-import { MESH_ENGINES, mesherKeys } from './registry-defaults.js';
+import { MESH_ENGINES, mesherEngineOf, mesherKeys } from './registry-defaults.js';
 import { slimLiveMeshResult, slimMeshDoc } from './mesh-live-slim.js';
 import { assembleMeshDoc, persistMeshDoc, persistOneMesh, meshCasePath, meshFolderOf } from './study-io.js';
 import { findGeometry, findStudy, walkGeometries } from './project-layout.js';
@@ -954,7 +954,9 @@ export function resolveMeshBackend(settings) {
   const explicit = String(
     (settings && settings.mesh_backend) || adv.mesh_backend || ''
   ).trim();
-  if (explicit && keys.has(explicit)) return explicit;
+  // An explicit backend that is not installed is returned as-is so Generate can
+  // say so; never mesh with a different engine than the one picked.
+  if (explicit) return explicit;
 
   const algo = String((settings && settings.algorithm) || 'Standard')
     .trim()
@@ -967,7 +969,7 @@ export function resolveMeshBackend(settings) {
     .toLowerCase();
   // The mesh panel's engine select writes the registry key here: Hex-dominant
   // (snappy_hexdominant) or a plugin mesher must run as picked, not fall to Standard.
-  if (eng && eng !== 'standard' && eng !== 'cfmesh' && keys.has(eng)) return eng;
+  if (eng && eng !== 'standard' && eng !== 'cfmesh') return eng;
   if (eng === 'cfmesh' && wantsHexCore(settings) && keys.has('cfmesh') && MESH_ENGINES.has('cfmesh')) {
     return 'cfmesh';
   }
@@ -976,8 +978,8 @@ export function resolveMeshBackend(settings) {
 }
 
 function wantsStandard(settings) {
-  const backend = resolveMeshBackend(settings);
-  return backend === 'standard' || backend === 'cfmesh';
+  const engine = mesherEngineOf(resolveMeshBackend(settings));
+  return engine === 'standard' || engine === 'cfmesh';
 }
 
 function wantsHexCore(settings) {
@@ -991,12 +993,11 @@ function wantsHexCore(settings) {
  * or 'cfmesh' (legacy cartesianMesh, hex core only). Chosen in Advanced settings.
  */
 function standardEngine(settings) {
-  const backend = resolveMeshBackend(settings);
-  return backend === 'cfmesh' ? 'cfmesh' : 'standard';
+  return mesherEngineOf(resolveMeshBackend(settings)) === 'cfmesh' ? 'cfmesh' : 'standard';
 }
 
 function wantsHexDominant(settings) {
-  return resolveMeshBackend(settings) === 'snappy_hexdominant';
+  return mesherEngineOf(resolveMeshBackend(settings)) === 'snappy_hexdominant';
 }
 
 function parseCfmeshLine(line) {
@@ -1183,7 +1184,9 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     onUpdate,
   });
   closeAfterExit(child, { onOrphaned: () => reapAfterDeadGenerator(job, winOut) });
-  jobLog.info('spawn', { pid: child.pid || null, path_kind: pathKind, engine });
+  // The registry key that was picked (a plugin mesher runs through its engine's path).
+  const meshBackend = resolveMeshBackend(settings);
+  jobLog.info('spawn', { pid: child.pid || null, path_kind: pathKind, engine, mesh_backend: meshBackend });
   try {
     writeFileSync(winLog, '', 'utf8');
   } catch {}
@@ -1193,6 +1196,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     mode: 'mesh',
     path_kind: pathKind,
     engine,
+    mesh_backend: meshBackend,
     generate_id: generateId,
     kick_id: generateId,
     pid: child.pid || null,
@@ -1448,7 +1452,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
       ok: false,
       status: 400,
       bodyExtra: {
-        error: `Unknown mesh backend "${backend}" (algorithm "${settingsEarly && settingsEarly.algorithm}").`,
+        error: `Mesher "${backend}" is not installed or is turned off. Turn it on in Settings → Plugins, or pick another mesh engine.`,
         path_kind: null,
       },
     };
@@ -1467,7 +1471,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
       ok: false,
       status: 400,
       bodyExtra: {
-        error: `Unknown mesh algorithm "${settingsEarly && settingsEarly.algorithm}".`,
+        error: `Mesher "${backend}" has no run path in this version of Magnusim.`,
         path_kind: null,
       },
     };
@@ -1605,7 +1609,8 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     onUpdate,
   });
   closeAfterExit(child, { onOrphaned: () => reapAfterDeadGenerator(job, winOut) });
-  jobLog.info('spawn', { pid: child.pid || null, path_kind: PATH_SNAPPY });
+  const meshBackend = resolveMeshBackend(settingsEarly);
+  jobLog.info('spawn', { pid: child.pid || null, path_kind: PATH_SNAPPY, mesh_backend: meshBackend });
   try {
     writeFileSync(winLog, '', 'utf8');
   } catch {}
@@ -1614,6 +1619,7 @@ export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
     status: 'running',
     mode: 'mesh',
     path_kind: 'snappyHexMesh',
+    mesh_backend: meshBackend,
     generate_id: generateId,
     kick_id: generateId,
     pid: child.pid || null,

@@ -67,7 +67,7 @@
               "group": "relaxation"
             },
             "title": "Relaxation U",
-            "description": "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is more stable but converges more slowly."
+            "description": "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is more stable but converges more slowly. Reynolds-stress models (LRR, SSG) start at 0.5."
           },
           "relax_p": {
             "type": "number",
@@ -404,7 +404,8 @@
         },
         "additionalProperties": false
       },
-      "requires": []
+      "requires": [],
+      "engine": "standard"
     },
     {
       "key": "cfmesh",
@@ -416,7 +417,8 @@
           "name": "cartesianMesh",
           "version_spec": ""
         }
-      ]
+      ],
+      "engine": "cfmesh"
     },
     {
       "key": "snappy_hexdominant",
@@ -499,7 +501,8 @@
           "name": "snappyHexMesh",
           "version_spec": ""
         }
-      ]
+      ],
+      "engine": "snappy_hexdominant"
     }
   ],
   "bc": [

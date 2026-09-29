@@ -63,6 +63,16 @@ export function AppShell() {
         window.__CFD_PLUGINS_READY__ = true;
       });
     bindLegacyViewer();
+    // Plugins register with the open project's scope; re-run them when it changes
+    // (loadOnePlugin removes each plugin's previous registrations first).
+    let lastProject = projectId;
+    const unsubscribe = useProjectStore.subscribe((state) => {
+      const next = state.projectId || '';
+      if (next === lastProject) return;
+      lastProject = next;
+      void loadPluginUi(next ? `p:${next}` : '').catch(() => undefined);
+    });
+    return unsubscribe;
   }, []);
 
   return (

@@ -7,6 +7,7 @@ import { persistJobToWorker, registerPhase3Routes } from './routes.ts';
 import { getWorker } from './worker.ts';
 import { attachWorkerBridge } from '../py-json.js';
 import { registerLiveRoutes } from './live-routes.js';
+import { setLiveRegistry } from '../registry-defaults.js';
 
 export { Router, dispatch } from './router.ts';
 export { WorkerClient, getWorker, WorkerUnavailableError, RpcError } from './worker.ts';
@@ -38,6 +39,22 @@ export function createApiPlugin() {
       httpServer?: { on: (ev: string, fn: () => void) => void };
     }) {
       worker.start();
+      // Node validates mesher / analysis keys against the live registry (plugins
+      // included); the committed registry.json holds builtins only.
+      const refreshRegistry = () =>
+        worker
+          .call('registry.describe', {}, 60_000)
+          .then((doc: unknown) => {
+            if (!setLiveRegistry(doc)) console.warn('[registry] worker returned an unusable registry doc');
+          })
+          .catch((err: unknown) => console.warn('[registry] live registry load failed:', String(err)));
+      let registrySettled = false;
+      const registryReady = refreshRegistry().finally(() => {
+        registrySettled = true;
+      });
+      worker.on('registry-changed', () => {
+        void refreshRegistry();
+      });
       attachWorkerBridge((method: string, params: unknown, timeoutMs?: number) =>
         worker.call(method, params, timeoutMs),
       );
@@ -56,7 +73,8 @@ export function createApiPlugin() {
         attachCaseDir: live.attachCaseDir,
         resetCaseIdle: live.resetCaseIdle,
       });
-      live.boot();
+      // The boot queue kick may start a plugin mesher; wait for the live registry.
+      void registryReady.finally(() => live.boot());
 
       server.middlewares.use(async (req, res, next) => {
         try {
@@ -66,6 +84,12 @@ export function createApiPlugin() {
             return;
           }
           assertSameOrigin(req);
+          if (!registrySettled) {
+            // First requests after boot: bounded wait so plugin keys resolve.
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            await Promise.race([registryReady, new Promise((r) => (timer = setTimeout(r, 20_000)))]);
+            if (timer) clearTimeout(timer);
+          }
           const handled = await dispatch(router, req, res);
           if (!handled) sendJson(res, 404, { error: 'route not found' });
         } catch (err) {

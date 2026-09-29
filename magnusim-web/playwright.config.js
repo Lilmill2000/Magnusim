@@ -36,7 +36,11 @@ export default defineConfig({
       MAGNUSIM_LOCAL_JSON: prefsPath,
       MAGNUSIM_PORT: String(PORT),
       // The app ships no plugins; the plugin gates load test plugins from here.
-      MAGNUSIM_PLUGINS_DIR: resolve('python/tests/fixtures/plugins'),
+      // MAGNUSIM_E2E_PLUGINS_DIR overrides it (CI's core-without-user-plugins job
+      // points it at an empty folder and skips the @plugins tests).
+      MAGNUSIM_PLUGINS_DIR: process.env.MAGNUSIM_E2E_PLUGINS_DIR
+        ? resolve(process.env.MAGNUSIM_E2E_PLUGINS_DIR)
+        : resolve('python/tests/fixtures/plugins'),
       MAGNUSIM_BOUND_PORT: String(PORT),
     },
   },

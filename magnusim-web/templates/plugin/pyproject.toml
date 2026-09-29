@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=83"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,5 +10,11 @@ requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
 dependencies = ["cfddesk"]
 
+# The plugin folder itself is the package, so the entry point is namespaced and
+# two plugins built from this template never collide on a top-level "plugin".
+[tool.setuptools]
+package-dir = { "magnusim_plugin_template" = "." }
+packages = ["magnusim_plugin_template"]
+
 [project.entry-points."cfddesk.plugins"]
-template-demo = "plugin:register"
+template-demo = "magnusim_plugin_template.plugin:register"

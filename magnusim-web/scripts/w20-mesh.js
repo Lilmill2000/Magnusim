@@ -94,9 +94,14 @@ function asSfs(v, fallback) {
   return Number.isFinite(Number(s)) && Number(s) > 0 ? s : fallback;
 }
 
+/* A mesher key that is not installed right now (plugin off or removed) is kept
+   as saved, so turning the plugin back on restores the pick; Generate reports
+   it as not installed instead of silently meshing with Standard. */
+const ENGINE_KEY_RE = /^[a-z][a-z0-9_]*$/;
+
 function asEngine(v, fallback) {
   const s = String(v == null ? '' : v).trim().toLowerCase();
-  return MESH_ENGINES.has(s) ? s : fallback;
+  return MESH_ENGINES.has(s) || ENGINE_KEY_RE.test(s) ? s : fallback;
 }
 
 function readActiveId() {
@@ -269,7 +274,7 @@ function migrateMeshEngineEntry(entry) {
     const advEngine = String(adv.mesh_engine || 'standard').trim().toLowerCase();
     ui = advEngine === 'cfmesh' ? 'standard' : advEngine;
   }
-  if (!MESH_ENGINES.has(ui)) ui = 'standard';
+  if (!MESH_ENGINES.has(ui) && !ENGINE_KEY_RE.test(ui)) ui = 'standard';
   let changed = false;
   if (!hasUi || String(entry.ui_mesh_engine) !== ui) changed = true;
   if (String(adv.mesh_engine || '') !== ui) {

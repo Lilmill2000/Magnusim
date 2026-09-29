@@ -15,7 +15,7 @@ from cfddesk.registry import (
     validate_analysis_solver_refs,
 )
 from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
-from cfddesk.registry.discovery import get_hub
+from cfddesk.registry.discovery import get_hub, plugin_catalog
 
 EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "simpleFoam_amgx"}
 
@@ -113,10 +113,10 @@ def test_validate_analysis_solver_refs_raises_on_unknown():
         validate_analysis_solver_refs(hub)
 
 
-def test_load_all_rejects_plugin_analysis_with_unknown_solver(
+def test_load_all_isolates_plugin_analysis_with_unknown_solver(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Post-builtin plugin AnalysisType with unknown solver key fails on load_all."""
+    """A plugin AnalysisType with an unknown solver key unloads that plugin only."""
     plugins = tmp_path / "plugins" / "badsolver"
     plugins.mkdir(parents=True)
     (plugins / "manifest.toml").write_text(
@@ -150,9 +150,18 @@ def register(hub):
         encoding="utf-8",
     )
     monkeypatch.setenv("CFDDESK_WEB_ROOT", str(tmp_path))
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(tmp_path / "plugins"))
     reset_for_tests()
-    with pytest.raises(RegistryError, match="unknown solver"):
-        load_all(web_root=tmp_path)
+    # gate:h6-bad-plugin-isolated: the bad plugin is unloaded and listed as an
+    # error; builtins keep loading instead of the whole registry failing.
+    hub = load_all(web_root=tmp_path)
+    assert "plugin_bad_analysis" not in hub.registry("analysis").keys()
+    assert "incompressible_steady" in hub.registry("analysis").keys()
+    assert "badsolver" not in hub.manifests
+    failed = {row["key"]: row for row in hub.failures}
+    assert "unknown solver" in failed["badsolver"]["error"]
+    rows = {row["key"]: row for row in plugin_catalog(tmp_path)}
+    assert rows["badsolver"]["status"] == "error"
 
 
 def test_describe_solver_includes_requires():

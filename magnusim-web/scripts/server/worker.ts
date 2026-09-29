@@ -44,6 +44,8 @@ export interface WorkerClientOptions {
   name?: string;
   /** Second worker that takes the slow calls (see isDataLaneMethod). */
   dataLane?: WorkerClient | null;
+  /** Worker that runs plugin methods (see isPluginLaneMethod). */
+  pluginLane?: WorkerClient | null;
   /**
    * Restart the process when a call times out. Only for the data lane: its calls
    * read results and write caches, so a stuck one (a result file being rewritten
@@ -64,6 +66,15 @@ const DEFAULT_BACKOFF = [250, 750, 2000];
  */
 export function isDataLaneMethod(method: string): boolean {
   return method.startsWith('cad.') || (method.startsWith('filter.') && method !== 'filter.validate');
+}
+
+/**
+ * Plugin methods (/api/plugin/:key/**) run third-party code of unknown speed, so
+ * they get their own worker process: a slow or stuck plugin method never makes
+ * project reads and writes (project.tree, runs.upsert, …) wait behind it.
+ */
+export function isPluginLaneMethod(method: string): boolean {
+  return method === 'plugin.dispatch';
 }
 
 /**
@@ -96,12 +107,14 @@ export class WorkerClient extends EventEmitter {
   private probing = false;
   private readonly name: string;
   private readonly dataLane: WorkerClient | null;
+  private readonly pluginLane: WorkerClient | null;
   private readonly restartOnTimeout: boolean;
 
   constructor(opts: WorkerClientOptions = {}) {
     super();
     this.name = opts.name || 'worker';
     this.dataLane = opts.dataLane || null;
+    this.pluginLane = opts.pluginLane || null;
     this.restartOnTimeout = !!opts.restartOnTimeout;
     this.python = opts.python || PYTHON;
     this.cwd = opts.cwd || PY_ROOT;
@@ -123,13 +136,15 @@ export class WorkerClient extends EventEmitter {
     this.stopping = false;
     this.deaths = 0;
     this.started = true;
-    // The data lane spawns on its first call.
+    // The data and plugin lanes spawn on their first call.
     if (this.dataLane) this.dataLane.stopping = false;
+    if (this.pluginLane) this.pluginLane.stopping = false;
     if (!this.child) this.spawnChild();
   }
 
   stop(): void {
     this.dataLane?.stop();
+    this.pluginLane?.stop();
     this.stopping = true;
     this.started = false;
     if (this.restartTimer) {
@@ -156,6 +171,9 @@ export class WorkerClient extends EventEmitter {
     if (this.dataLane && isDataLaneMethod(method)) {
       return this.dataLane.call(method, params, timeoutMs);
     }
+    if (this.pluginLane && isPluginLaneMethod(method)) {
+      return this.pluginLane.call(method, params, timeoutMs);
+    }
     if (this.stopping) {
       throw new WorkerUnavailableError('worker stopped');
     }
@@ -178,6 +196,11 @@ export class WorkerClient extends EventEmitter {
     if (this.dataLane && this.dataLane.alive && REGISTRY_CHANGES.has(method)) {
       await this.dataLane.call('registry.reload', {}).catch(() => {});
     }
+    if (this.pluginLane && this.pluginLane.alive && REGISTRY_CHANGES.has(method)) {
+      await this.pluginLane.call('registry.reload', {}).catch(() => {});
+    }
+    // Node keeps its own copy of the registry (mesher / analysis keys); tell it.
+    if (REGISTRY_CHANGES.has(method)) this.emit('registry-changed');
     return result;
   }
 
@@ -451,7 +474,10 @@ let singleton: WorkerClient | null = null;
 
 export function getWorker(): WorkerClient {
   if (!singleton) {
-    singleton = new WorkerClient({ dataLane: new WorkerClient({ name: 'data-worker', restartOnTimeout: true }) });
+    singleton = new WorkerClient({
+      dataLane: new WorkerClient({ name: 'data-worker', restartOnTimeout: true }),
+      pluginLane: new WorkerClient({ name: 'plugin-worker', restartOnTimeout: true }),
+    });
   }
   return singleton;
 }

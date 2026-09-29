@@ -22,7 +22,7 @@ PYTHON_ROOT = WEB_ROOT / "python"
 PLUGINS = Path(__file__).resolve().parents[1] / "fixtures" / "plugins"
 TEMPLATE = WEB_ROOT / "templates" / "plugin"
 TEMPLATE_TEST = TEMPLATE / "tests" / "test_register.py"
-DEMOS = ("example-laminar", "example-extra-mesher", "example-hook-monitor")
+DEMOS = ("example-laminar", "example-extra-mesher", "example-hook-monitor", "ui-folder-name")
 FORBIDDEN = ("cfddesk.builtin", "scripts", "src.workbench")
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "js-project"
 
@@ -87,6 +87,11 @@ def test_gate_h5_demos_register(monkeypatch):
     assert rows["example-laminar"]["source"] == "local"
     assert rows["example-hook-monitor"]["ui"] == "ui"
     assert rows["example-hook-monitor"]["authors"] == ["Magnusim"]
+    # A plugin mesher that clones a builtin runs through that builtin's path.
+    assert extra.engine == "standard"
+    # The UI is served from the plugin's folder, which may differ from its key.
+    assert rows["key-not-folder"]["dir"] == "ui-folder-name"
+    assert rows["example-hook-monitor"]["dir"] == "example-hook-monitor"
 
 
 def test_gate_h5_hook_monitor_writes_control_dict(tmp_path: Path, monkeypatch):

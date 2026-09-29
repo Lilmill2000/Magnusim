@@ -139,6 +139,22 @@ class Registry(Generic[T]):
         del self._items[key]
         self._plugins.pop(key, None)
 
+    def drop_plugin(self, plugin: str) -> list[str]:
+        """Remove every spec ``plugin`` registered; restore any builtin it replaced."""
+        dropped: list[str] = []
+        for key, owner in list(self._plugins.items()):
+            if owner != plugin:
+                continue
+            if key in self._baseline:
+                spec, base_owner = self._baseline.pop(key)
+                self._items[key] = spec
+                self._plugins[key] = base_owner
+            else:
+                self._items.pop(key, None)
+                self._plugins.pop(key, None)
+            dropped.append(key)
+        return dropped
+
     def owner(self, key: str) -> str:
         if key not in self._items:
             raise RegistryError(f"{self.kind}: unknown key {key!r}")
@@ -196,6 +212,8 @@ class Registry(Generic[T]):
                 ]
             if hasattr(spec, "supported"):
                 row["supported"] = bool(spec.supported)
+            if self.kind == "mesher":
+                row["engine"] = str(getattr(spec, "engine", "") or key)
             if self.kind == "filter":
                 for extra in ("tool", "cache_scope", "output"):
                     if hasattr(spec, extra):

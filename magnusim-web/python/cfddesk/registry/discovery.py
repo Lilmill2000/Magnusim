@@ -104,6 +104,8 @@ class RegistryHub:
             if package_dir is None:
                 raise RegistryError("plugin JobKind requires package_dir")
             ensure_tool_in_package(spec.tool, Path(package_dir))
+            if not (Path(package_dir) / spec.tool).is_file():
+                raise RegistryError(f"plugin JobKind tool {spec.tool!r} is not in the plugin folder")
         self.registry("job").register(spec, plugin=plugin)
         if package_dir is not None:
             self._job_packages[str(spec.key)] = Path(package_dir)
@@ -197,7 +199,7 @@ def _resolve_web_root(web_root: Path | str | None = None) -> Path | None:
         return Path(web_root)
     import os
 
-    env = (os.environ.get("CFDDESK_WEB_ROOT") or "").strip()
+    env = (os.environ.get("MAGNUSIM_WEB_ROOT") or os.environ.get("CFDDESK_WEB_ROOT") or "").strip()
     if env:
         return Path(env)
     try:
@@ -390,6 +392,62 @@ def _apply_disk_meta(
         result.api_version = api
     if not result.source:
         result.source = source
+    if not result.license:
+        result.license = str(meta.get("license") or "")
+
+
+_REF_ANALYSIS = re.compile(r"analysis '([^']+)'")
+
+
+def _drop_failed_plugin(hub: RegistryHub, plugin: str, error: str) -> None:
+    """Unload one plugin whose specs broke cross-reference validation."""
+    for kind in hub.kinds():
+        hub.registry(kind).drop_plugin(plugin)
+    get_hooks().clear_plugin(plugin)
+    manifest = hub.manifests.pop(plugin, None)
+    meta: dict[str, Any] = {}
+    if manifest is not None:
+        meta = {
+            "name": manifest.name,
+            "version": manifest.version,
+            "description": manifest.description,
+            "authors": list(manifest.authors or []),
+            "ui": manifest.ui,
+            "ui_entry": manifest.ui_entry,
+        }
+    hub.failures.append(_failure_row(plugin, error, meta))
+    log.warning("plugin %s unloaded: %s", plugin, error)
+
+
+def _validate_cross_refs(hub: RegistryHub) -> None:
+    """Every AnalysisType bag key must resolve. A plugin that breaks this is unloaded
+    and listed as an error; builtins and the other plugins keep loading. A builtin
+    that breaks it is a core bug and still raises."""
+    from cfddesk.registry.bc import validate_analysis_bc_refs
+    from cfddesk.registry.material import validate_analysis_material_refs
+    from cfddesk.registry.monitor import validate_analysis_monitor_refs
+    from cfddesk.registry.solver import validate_analysis_solver_refs
+
+    checks = (
+        validate_analysis_solver_refs,
+        validate_analysis_bc_refs,
+        validate_analysis_material_refs,
+        validate_analysis_monitor_refs,
+    )
+    for _ in range(64):
+        try:
+            for check in checks:
+                check(hub)
+            return
+        except RegistryError as exc:
+            match = _REF_ANALYSIS.search(str(exc))
+            analyses = hub.registry("analysis")
+            key = match.group(1) if match else ""
+            owner = analyses.owner(key) if key in analyses.keys() else "builtin"
+            if owner == "builtin":
+                raise
+            _drop_failed_plugin(hub, owner, str(exc))
+    raise RegistryError("cross-reference validation did not settle after unloading plugins")
 
 
 def _failure_row(key: str, error: str, meta: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -513,6 +571,7 @@ def _load_folder_plugin(
             overrides=list(overrides),
             api_version=api,
             source="local",
+            license=str(meta.get("license") or ""),
         ),
         False,
     )
@@ -633,15 +692,7 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
     _, ep_fail = discover_entry_points(hub, disabled)
     _, folder_fail = discover_folder_plugins(hub, web_root=web_root)
     # After plugins: every AnalysisType bag key must resolve (solver/bc/material/monitor).
-    from cfddesk.registry.bc import validate_analysis_bc_refs
-    from cfddesk.registry.material import validate_analysis_material_refs
-    from cfddesk.registry.monitor import validate_analysis_monitor_refs
-    from cfddesk.registry.solver import validate_analysis_solver_refs
-
-    validate_analysis_solver_refs(hub)
-    validate_analysis_bc_refs(hub)
-    validate_analysis_material_refs(hub)
-    validate_analysis_monitor_refs(hub)
+    _validate_cross_refs(hub)
     from cfddesk.registry.tools import sync_tool_kinds
 
     sync_tool_kinds(hub)
@@ -664,9 +715,15 @@ def _catalog_row(
     enabled: bool = True,
     error: str = "",
     missing: list[str] | None = None,
+    dir: str | None = None,
+    license: str = "",
 ) -> dict[str, Any]:
     return {
         "key": key,
+        # Folder name under the plugins root (never a full path); a manifest key
+        # may differ from it, and the UI files are served from the folder.
+        "dir": dir,
+        "license": license,
         "name": name,
         "version": version or "0.0.0",
         "description": description,
@@ -709,6 +766,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
         else:
             status = "enabled"
         source = manifest.source or ("local" if hub.plugin_dir(manifest.key) else "entry_point")
+        folder = hub.plugin_dir(manifest.key)
         add(
             _catalog_row(
                 key=manifest.key,
@@ -723,6 +781,8 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 status=status,
                 enabled=status == "enabled",
                 missing=reasons,
+                dir=folder.name if folder is not None else None,
+                license=str(manifest.license or ""),
             )
         )
     for row in hub.incompatible:
@@ -787,6 +847,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                     source="local",
                     status="disabled",
                     enabled=False,
+                    dir=child.name,
                 )
             )
     return items

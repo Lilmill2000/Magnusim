@@ -272,6 +272,7 @@ def test_gate_h1_api_version(tmp_path):
 def test_job_tool_stays_inside_plugin_package(tmp_path):
     pkg = tmp_path / "pkg"
     pkg.mkdir()
+    (pkg / "probe.py").write_text("print('ok')\n", encoding="utf-8")
     ensure_tool_in_package("probe.py", pkg)
     hub = load_all()
     hub.register_job(
@@ -283,6 +284,14 @@ def test_job_tool_stays_inside_plugin_package(tmp_path):
     with pytest.raises(RegistryError, match="outside"):
         hub.register_job(
             JobKind("h1_escape", "../outside.py", "project"),
+            plugin="h1",
+            package_dir=pkg,
+        )
+    # gate:h6-job-containment: a plugin job named like a core tool, but not in its
+    # own folder, is refused (it would otherwise run the core solve.sh).
+    with pytest.raises(RegistryError, match="not in the plugin folder"):
+        hub.register_job(
+            JobKind("h6_core_name", "solve.sh", "project"),
             plugin="h1",
             package_dir=pkg,
         )

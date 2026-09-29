@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { pluginUi } from '../plugin-api';
+import { pluginUiFor, registeredPluginKeys, unregisterPlugin } from '../plugin-api';
 
 export type ListedPlugin = {
   key: string;
@@ -19,7 +19,7 @@ export type ListedPlugin = {
 export type PluginHost = {
   React: typeof React;
   ReactDOM: typeof ReactDOM;
-  pluginUi: typeof pluginUi;
+  pluginUi: ReturnType<typeof pluginUiFor>;
   scope: string;
 };
 
@@ -57,15 +57,24 @@ function recordClientError(plugin: ListedPlugin, message: string): void {
   }
 }
 
-export function pluginHost(scope: string): PluginHost {
-  return { React, ReactDOM, pluginUi, scope };
+/** The host object one plugin's register() receives; what it registers is recorded under its key. */
+export function pluginHost(scope: string, pluginKey = ''): PluginHost {
+  return { React, ReactDOM, pluginUi: pluginUiFor(pluginKey), scope };
 }
 
-/** Load one UI entry. A thrown register is recorded and rethrown. */
+function clearClientError(key: string): void {
+  if (clientErrors.some((item) => item.key === key)) publish(clientErrors.filter((item) => item.key !== key));
+}
+
+/**
+ * Load one UI entry. What the plugin registered before is removed first, so a
+ * reload or a scope change never doubles its panels or tree rows. A disabled
+ * plugin's UI is removed. A thrown register is recorded and rethrown.
+ */
 export async function loadOnePlugin(plugin: ListedPlugin, scope: string): Promise<void> {
+  unregisterPlugin(plugin.key);
+  if (plugin.enabled === false || (plugin.status && plugin.status !== 'enabled')) return;
   if (!plugin.ui && !plugin.url) return;
-  if (plugin.enabled === false) return;
-  if (plugin.status && plugin.status !== 'enabled') return;
   const url = plugin.url || `/plugins/${plugin.key}/ui/${plugin.ui_entry || 'index.js'}`;
   try {
     const mod = (await import(/* @vite-ignore */ url)) as {
@@ -74,8 +83,11 @@ export async function loadOnePlugin(plugin: ListedPlugin, scope: string): Promis
     };
     const register = mod.register || mod.default;
     if (typeof register !== 'function') return;
-    register(pluginHost(scope));
+    register(pluginHost(scope, plugin.key));
+    clearClientError(plugin.key);
   } catch (error) {
+    // Half a registration is worse than none: drop what it managed to add.
+    unregisterPlugin(plugin.key);
     const message = error instanceof Error ? error.message : String(error);
     recordClientError(plugin, message);
     throw error;
@@ -91,6 +103,11 @@ export async function loadPluginUi(scope: string): Promise<void> {
     plugins = body.plugins || [];
   } catch {
     return;
+  }
+  // A plugin that is no longer listed (removed, or its load now fails server-side) loses its UI.
+  const listed = new Set(plugins.map((plugin) => plugin.key));
+  for (const key of registeredPluginKeys()) {
+    if (!listed.has(key)) unregisterPlugin(key);
   }
   for (const plugin of plugins) {
     try {

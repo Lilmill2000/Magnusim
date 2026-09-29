@@ -154,7 +154,7 @@ def test_validate_monitor_refs_raises_on_unknown():
         validate_analysis_monitor_refs(hub)
 
 
-def test_load_all_rejects_plugin_analysis_with_unknown_bc(
+def test_load_all_isolates_plugin_analysis_with_unknown_bc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     plugins = tmp_path / "plugins" / "badbc"
@@ -192,9 +192,14 @@ def register(hub):
         encoding="utf-8",
     )
     monkeypatch.setenv("CFDDESK_WEB_ROOT", str(tmp_path))
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(tmp_path / "plugins"))
     reset_for_tests()
-    with pytest.raises(RegistryError, match="unknown bc"):
-        load_all(web_root=tmp_path)
+    # gate:h6-bad-plugin-isolated: only the bad plugin is unloaded and listed.
+    hub = load_all(web_root=tmp_path)
+    assert "plugin_bad_bc_analysis" not in hub.registry("analysis").keys()
+    assert "incompressible_steady" in hub.registry("analysis").keys()
+    failed = {row["key"]: row for row in hub.failures}
+    assert "unknown bc" in failed["badbc"]["error"]
 
 
 def test_existing_bc_registry_api_still_works():
