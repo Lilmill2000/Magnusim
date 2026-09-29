@@ -16,7 +16,7 @@ from typing import Any
 from cfddesk.registry.base import Registry, RegistryError
 from cfddesk.registry.bc_extend import BcExtensions
 from cfddesk.registry.hooks import get_hooks
-from cfddesk.registry.manifest import PluginManifest
+from cfddesk.registry.manifest import PluginManifest, StudyKind
 
 log = logging.getLogger(__name__)
 
@@ -503,6 +503,44 @@ def _read_manifest(plugin_dir: Path, hub: RegistryHub) -> tuple[dict[str, Any] |
     return meta, False
 
 
+_ICON_PATH_RE = re.compile(r"^[MmLlHhVvCcSsQqTtAaZz0-9 ,.\-eE]{0,4000}$")
+
+
+def study_kinds_from_meta(meta: dict[str, Any]) -> list[StudyKind]:
+    """Validate ``[[study_kinds]]``: key, title, icon (one SVG path), workspace."""
+    from cfddesk.registry.plugin_data import KIND_KEY_RE
+
+    raw = meta.get("study_kinds") or []
+    if not isinstance(raw, list):
+        raise ValueError("must be an array of tables")
+    out: list[StudyKind] = []
+    seen: set[str] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            raise ValueError("each study kind is a table")
+        key = str(row.get("key") or "")
+        if not KIND_KEY_RE.match(key):
+            raise ValueError(f"key {key!r} must be lower_snake_case")
+        if key in seen:
+            raise ValueError(f"key {key!r} is declared twice")
+        seen.add(key)
+        title = str(row.get("title") or "").strip()
+        if not title:
+            raise ValueError(f"{key}: needs a title")
+        icon = str(row.get("icon") or "")
+        if not _ICON_PATH_RE.match(icon):
+            raise ValueError(f"{key}: icon must be one SVG path (d attribute)")
+        workspace = str(row.get("workspace") or "")
+        if workspace and not KIND_KEY_RE.match(workspace):
+            raise ValueError(f"{key}: workspace {workspace!r} must be lower_snake_case")
+        try:
+            schema_version = int(row.get("schema_version", 1))
+        except (TypeError, ValueError):
+            raise ValueError(f"{key}: schema_version must be an integer") from None
+        out.append(StudyKind(key, title[:80], icon, workspace, max(1, schema_version)))
+    return out
+
+
 def _str_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [part.strip() for part in value.split(",") if part.strip()]
@@ -553,6 +591,11 @@ def _load_folder_plugin(
             _host_api_version(),
         )
         return None, False
+    try:
+        kinds = study_kinds_from_meta(meta)
+    except ValueError as exc:
+        hub.failures.append(_failure_row(key, f"manifest [[study_kinds]]: {exc}", meta))
+        return None, True
     overrides = _overrides_from_meta(meta)
     hub.note_overrides(key, overrides)
     source = "bundled" if tier == "bundled" else "local"
@@ -581,6 +624,7 @@ def _load_folder_plugin(
     if isinstance(result, PluginManifest):
         _apply_disk_meta(result, meta, api, overrides, source)
         _apply_tier_meta(result, meta, tier)
+        result.study_kinds = kinds
         hub._loading_overrides.pop(key, None)
         return result, False
     # Build a minimal manifest from toml if register returned None
@@ -614,6 +658,7 @@ def _load_folder_plugin(
         api_version=api,
         source=source,
         license=str(meta.get("license") or ""),
+        study_kinds=kinds,
     )
     _apply_tier_meta(manifest, meta, tier)
     return manifest, False

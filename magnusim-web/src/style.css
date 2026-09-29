@@ -4984,3 +4984,27 @@ body.is-recording #viewport-gizmo {
   margin-top: 12px;
 }
 .wiz-plugin-note { font-size: 12px; color: #4b5563; }
+
+/* Plugin studies (H11): project-level studies a plugin owns, below SIMULATIONS.
+   Shown in every stage (an empty project too); the simulations section's rules are untouched. */
+.plugin-studies-section {
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding: 8px 10px;
+  border-top: 1px solid #eef1f5;
+  border-bottom: 1px solid #d5dae3;
+}
+.plugin-studies-section[hidden] { display: none !important; }
+.plugin-studies-section .tree-root {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.plugin-studies-section .plugin-study-new { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.plugin-study > .tree-row { display: flex; align-items: center; gap: 6px; }
+.plugin-study > .tree-row .tl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-study-icon { flex: 0 0 auto; color: #475467; }
+.plugin-study-tag { font-size: 10px; color: #667085; border: 1px solid #d0d5dd; border-radius: 4px; padding: 0 4px; }
+.plugin-study.is-unavailable > .tree-row { opacity: 0.55; }
+.plugin-study.is-unavailable > .tree-row [data-plugin-study-act="delete"] { opacity: 1; }
+.plugin-study-reason { font-size: 11px; color: #667085; padding: 2px 0 4px 21px; }

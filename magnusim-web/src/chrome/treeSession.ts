@@ -22,7 +22,8 @@ export interface TreeSession {
   activity: TreeActivity | null;
 }
 
-type TreeActionHandler = (scopeKey: string, action: string) => void;
+/** A tree row's action: its scope key, the action, and what the row shows (a plugin study's title and rev). */
+type TreeActionHandler = (scopeKey: string, action: string, detail?: Record<string, unknown>) => void;
 
 let session: TreeSession = {
   projectId: '',
@@ -62,6 +63,6 @@ export function setTreeActionHandler(fn: TreeActionHandler | null): void {
   actionHandler = fn;
 }
 
-export function onTreeAction(scopeKey: string, action: string): void {
-  if (actionHandler) actionHandler(scopeKey, action);
+export function onTreeAction(scopeKey: string, action: string, detail?: Record<string, unknown>): void {
+  if (actionHandler) actionHandler(scopeKey, action, detail);
 }

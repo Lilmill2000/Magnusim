@@ -37,6 +37,8 @@ export const RUN_SETTINGS_PROJECT = 'run-settings-e2e';
 export const H8_PROJECT = 'h8-contract-e2e';
 /** Own elbow project for h10-ui-parity.spec.js: it solves a steady and a transient run to compare the panels. */
 export const H10_PROJECT = 'h10-ui-parity-e2e';
+/** A project with no geometry at all (h11-plugin-studies.spec.js: plugin studies in the empty stage). */
+export const NO_GEOMETRY_PROJECT = 'no-geometry-e2e';
 
 /** Copy the elbow fixture into destRoot/<id> laid out the way the app stores it. */
 function seedElbowProject(destRoot, id, title) {
@@ -97,6 +99,19 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
   seedElbowProject(destRoot, RUN_SETTINGS_PROJECT, 'Run settings');
   seedElbowProject(destRoot, H8_PROJECT, 'Analysis contract');
   seedElbowProject(destRoot, H10_PROJECT, 'UI parity');
+  mkdirSync(join(destRoot, NO_GEOMETRY_PROJECT), { recursive: true });
+  writeJsonAtomic(join(destRoot, NO_GEOMETRY_PROJECT, 'project.json'), {
+    id: NO_GEOMETRY_PROJECT,
+    title: 'No geometry',
+    description: 'A new project before any geometry is added',
+    category: 'Other',
+    units: 'Metric',
+    folder: 'My Projects',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    geometries: [],
+    increment: 'W16',
+  });
 
   const emptyId = 'sample-project-empty-e2e';
   const emptyDir = join(destRoot, emptyId);

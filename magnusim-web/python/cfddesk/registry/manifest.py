@@ -7,6 +7,19 @@ from dataclasses import dataclass, field
 from cfddesk.registry.requirements import Requirement
 
 
+@dataclass(frozen=True)
+class StudyKind:
+    """A project-level study a plugin owns (manifest ``[[study_kinds]]``, API 1.1)."""
+
+    key: str
+    title: str
+    # One SVG path (``d``) drawn in a 24x24 box with the tree's stroke icons.
+    icon: str = ""
+    # The workspace that opens it (H13); empty until the plugin has one.
+    workspace: str = ""
+    schema_version: int = 1
+
+
 @dataclass
 class PluginManifest:
     key: str
@@ -32,3 +45,5 @@ class PluginManifest:
     requires_plugins: list[str] = field(default_factory=list)
     # "kind:key" specs of this plugin that other plugins may not drop.
     protected: list[str] = field(default_factory=list)
+    # Project-level studies it owns (plugins/<key>/studies/<sid>).
+    study_kinds: list[StudyKind] = field(default_factory=list)

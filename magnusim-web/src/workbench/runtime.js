@@ -41,6 +41,7 @@ import vtkCellArray from '@kitware/vtk.js/Common/Core/CellArray';
 import { ColorMode, ScalarMode } from '@kitware/vtk.js/Rendering/Core/Mapper/Constants';
 import { initHome, showHome, showWorkbench, goHomeFromWorkbench, prepareCreateModal, submitProjectModal, activateHashProject, parseHomeRoute } from '../home/controller';
 import { prefersCollapseCompletedSections } from '../prefs';
+import { openSetupWizard } from '../wizard/controller';
 import { convertQuantity, preferredUnit, unitIsImperial } from '../units/convert';
 import { isIsland, mountIsland, unmountIsland } from '../islands';
 import { useProjectStore } from '../store/project';
@@ -48,7 +49,7 @@ import { DEFAULT_ANALYSIS_KEY, analysisRow, runAnalysisKey, runDefaults, sibling
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
 import { subscribeJobEvents } from '../api/client';
-import { scopeBelongsToProject, scopeKey, studyIdFromScope } from '../scope';
+import { parsePluginScope, scopeBelongsToProject, scopeKey, studyIdFromScope } from '../scope';
 import {
   bindJobQueuePointerDrag,
   canQueueSolveJob,
@@ -6377,6 +6378,60 @@ function onPtRegionPointerUp(e) {
 
 // ---- Small modal helpers (confirm / name prompt) ----
 // Resolve true when confirmed. Used before any filter / view is deleted.
+/**
+ * New / rename / delete a plugin study (plugins/<key>/studies) from its tree
+ * row, with the app's own dialogs. A rename sends the rev the row showed: a
+ * study another tab changed meanwhile is refused (409) and the message says so.
+ */
+// The app's own dialogs, for the plugin study actions and the workspace bridge (H13).
+window.__CFD_CONFIRM__ = (opts) => confirmAction(opts);
+window.__CFD_PROMPT_NAME__ = (opts) => promptName(opts);
+
+async function handlePluginStudyAction(ps, action, detail) {
+  const pid = String(currentProjectId() || '');
+  if (!pid || ps.projectId !== pid) return;
+  const post = (what, body) => postJson('/api/plugin-studies/' + what, { project_id: pid, plugin: ps.plugin, ...body });
+  const sync = () => window.dispatchEvent(new CustomEvent('cfd:tree-sync'));
+  const notice = (title, copy) => confirmAction({ title, copy, yes: 'OK', notice: true });
+  if (action === 'open-plugin-settings') {
+    openSetupWizard({ required: false, step: 'plugins' });
+    return;
+  }
+  if (action === 'plugin-study-new') {
+    const kindTitle = String(detail.title || 'study');
+    const title = await promptName({ title: 'New ' + kindTitle, label: 'Name', value: kindTitle + ' 1', yes: 'Create' });
+    if (!title || !String(title).trim()) return;
+    const r = await post('create', { kind: String(detail.kind || ''), title: String(title).trim() });
+    if (!r.json || !r.json.ok) await notice('Could not create the study', (r.json && r.json.error) || 'The study was not created.');
+    sync();
+    return;
+  }
+  if (action === 'plugin-study-rename') {
+    const title = await promptName({ title: 'Rename study', label: 'Name', value: String(detail.title || ''), yes: 'Rename' });
+    if (!title || !String(title).trim() || String(title).trim() === String(detail.title || '')) return;
+    const r = await post('rename', { study_id: ps.studyId, title: String(title).trim(), rev: detail.rev });
+    if (!r.json || !r.json.ok) await notice('Rename failed', (r.json && r.json.error) || 'The study was not renamed.');
+    sync();
+    return;
+  }
+  if (action === 'plugin-study-delete') {
+    const missing = detail.available === false;
+    const ok = await confirmAction({
+      title: 'Delete study?',
+      copy:
+        '"' +
+        String(detail.title || 'This study') +
+        '" and everything saved with it will be deleted.' +
+        (missing ? ' Its plugin (' + String(detail.plugin_name || ps.plugin) + ') is not available, so it cannot be opened first.' : ''),
+      yes: 'Delete',
+    });
+    if (!ok) return;
+    const r = await post('delete', { study_id: ps.studyId });
+    if (!r.json || !r.json.ok) await notice('Delete failed', (r.json && r.json.error) || 'The study was not deleted.');
+    sync();
+  }
+}
+
 function confirmAction(opts) {
   const o = opts || {};
   const modal = document.getElementById('modal-confirm');
@@ -19646,8 +19701,15 @@ async function hydrateOpenProject(projectId, opts) {
 window.__CFD_HYDRATE_PROJECT__ = hydrateOpenProject;
 window.__CFD_PREPARE_PROJECT_SWITCH__ = prepareProjectSwitch;
 window.__CFD_RESET_WORKBENCH_SCOPE__ = resetWorkbenchScope;
-setTreeActionHandler((scopeKey, action) => {
+setTreeActionHandler((scopeKey, action, detail) => {
   if (!scopeBelongsToProject(scopeKey, String(currentProjectId() || ''))) return;
+  const pluginScope = parsePluginScope(scopeKey);
+  if (pluginScope) {
+    // Plugin studies are the project's, not a geometry's: they never touch the
+    // active core study (the multi-geometry invariant).
+    handlePluginStudyAction(pluginScope, action, detail || {}).catch((e) => console.warn('[CFD] plugin study', e));
+    return;
+  }
   const sid = studyIdFromScope(scopeKey);
   if (action === 'add-material' && typeof window.__CFD_ADD_MATERIAL__ === 'function') {
     window.__CFD_ADD_MATERIAL__(sid);

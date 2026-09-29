@@ -179,6 +179,25 @@ test('two geometries: each keeps its own study, and a copied study lands on the 
   await expect.poll(s.study).toEqual({ id: tearStudy, geom: tear.id });
   s.stage('switching keeps geometry and study together');
 
+  // gate:h11-multi-geometry-untouched: a plugin study belongs to the project, not a
+  // geometry. Clicking it or switching geometry never moves the active core study.
+  const made = await request.post('/api/plugin-studies/create', {
+    data: { project_id: s.pid, plugin: 'study-demo', kind: 'demo_analysis', title: 'Demo 1' },
+  });
+  expect(made.ok(), await made.text()).toBe(true);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('cfd:tree-sync')));
+  const pluginStudy = page.locator('#plugin-studies-section [data-plugin-study] .tl', { hasText: 'Demo 1' });
+  await expect(pluginStudy).toBeVisible();
+  await pluginStudy.click();
+  await expect.poll(s.study).toEqual({ id: tearStudy, geom: tear.id });
+  await s.pickGeometry(round);
+  await expect.poll(s.study).toEqual({ id: null, geom: null });
+  await expect(pluginStudy).toBeVisible();
+  await s.pickGeometry(tear);
+  await expect.poll(s.study).toEqual({ id: tearStudy, geom: tear.id });
+  await expect(pluginStudy).toBeVisible();
+  s.stage('a plugin study leaves the geometry and study invariant alone');
+
   // Copy the teardrop study onto the round plate. Clone is off (its mesh and results
   // belong to the teardrop); the BCs land on the round plate's own end faces.
   await s.pickGeometry(round);

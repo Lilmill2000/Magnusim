@@ -268,7 +268,9 @@ export function openSetupWizard(opts) {
   const el = $('setup-wizard');
   if (el) el.hidden = false;
   // Settings (after first run) opens on Workspace, as V0.1.0 did; Plugins is one step on.
-  setStep(!required && prefs.wizard_completed ? WIZ_WORKSPACE_STEP : 0);
+  // A link that is about plugins (a study whose plugin is off) opens on Plugins.
+  if (!required && opts && opts.step === 'plugins') setStep(WIZ_PLUGINS_STEP);
+  else setStep(!required && prefs.wizard_completed ? WIZ_WORKSPACE_STEP : 0);
 }
 
 async function onNext() {

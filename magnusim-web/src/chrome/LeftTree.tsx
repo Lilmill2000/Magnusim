@@ -3,8 +3,16 @@ import { createPortal } from 'react-dom';
 import { apiGet } from '../api/client';
 import { pluginTreeNodes, type PluginTreeNode } from '../plugin-api';
 import { useProjectStore } from '../store/project';
-import { scopeBelongsToProject } from '../scope';
-import { readSetupTree, type GeomNode, type MeshNode, type ProjectTreeDoc, type StudyNode } from './treeModel';
+import { pluginStudyScope, scopeBelongsToProject } from '../scope';
+import {
+  readSetupTree,
+  type GeomNode,
+  type MeshNode,
+  type PluginStudyKind,
+  type PluginStudyRow,
+  type ProjectTreeDoc,
+  type StudyNode,
+} from './treeModel';
 import { getTreeSession, onTreeAction, subscribeTreeSession, treeExpanded } from './treeSession';
 
 function Mark({ ok, busy, queuePos }: { ok?: boolean; busy?: boolean; queuePos?: number }) {
@@ -377,6 +385,144 @@ export function SetupTreeView({
   );
 }
 
+function StudyIcon({ path }: { path: string }) {
+  return (
+    <svg className="plugin-study-icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">
+      <path
+        d={path || 'M5 4h10l4 4v12H5z M15 4v4h4'}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function stop(e: { preventDefault(): void; stopPropagation(): void }) {
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+/**
+ * Project-level studies plugins own (plugins/<key>/studies). Not bound to a
+ * geometry: shown in every stage, the empty project included. A study whose
+ * plugin is off or missing stays, greyed, with the reason and a link to
+ * Settings → Plugins; it can be deleted but not opened or renamed.
+ */
+export function PluginStudiesView({
+  projectId,
+  studies,
+  kinds,
+}: {
+  projectId: string;
+  studies: PluginStudyRow[];
+  kinds: PluginStudyKind[];
+}) {
+  return (
+    <>
+      <div className="geo-head">
+        <span data-plugin-studies-count="1">STUDIES ({studies.length})</span>
+        <span className="plugin-study-new">
+          {kinds.map((k) => (
+            <button
+              key={`${k.plugin}:${k.key}`}
+              type="button"
+              className="js-btn"
+              data-plugin-study-new={`${k.plugin}:${k.key}`}
+              title={`New ${k.title} (${k.plugin_name})`}
+              onClick={() => onTreeAction(pluginStudyScope(projectId, k.plugin), 'plugin-study-new', { kind: k.key, title: k.title })}
+            >
+              + New {k.title}
+            </button>
+          ))}
+        </span>
+      </div>
+      <ul className="tree-root" data-plugin-studies-tree="1">
+        {studies.length ? null : (
+          <li className="sim-empty" data-plugin-studies-empty="1">
+            No study yet
+          </li>
+        )}
+        {studies.map((st) => (
+          <li
+            key={st.scope_key}
+            className={['tree-node', 'plugin-study', st.available ? '' : 'is-unavailable'].filter(Boolean).join(' ')}
+            data-label={st.scope_key}
+            data-scope-key={st.scope_key}
+            data-plugin-study={st.id}
+            data-plugin={st.plugin}
+            data-unavailable={st.available ? undefined : '1'}
+          >
+            <div className="tree-row" title={st.available ? `${st.kind_title} (${st.plugin_name})` : st.reason}>
+              <StudyIcon path={st.icon} />
+              <span className="tl">{st.title}</span>
+              {st.read_only ? <span className="plugin-study-tag">read-only</span> : null}
+              {st.available && !st.read_only ? (
+                <button
+                  type="button"
+                  className="mesh-rename"
+                  title="Rename study"
+                  aria-label={`Rename ${st.title}`}
+                  data-plugin-study-act="rename"
+                  onClick={(e) => {
+                    stop(e);
+                    onTreeAction(st.scope_key, 'plugin-study-rename', { title: st.title, rev: st.rev });
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false">
+                    <g fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 16.8V20h3.2L18.4 8.8l-3.2-3.2L4 16.8z" />
+                      <path d="M13.8 6.9l3.2 3.2" />
+                    </g>
+                  </svg>
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="mesh-rename"
+                title="Delete study"
+                aria-label={`Delete ${st.title}`}
+                data-plugin-study-act="delete"
+                onClick={(e) => {
+                  stop(e);
+                  onTreeAction(st.scope_key, 'plugin-study-delete', {
+                    title: st.title,
+                    available: st.available,
+                    plugin_name: st.plugin_name,
+                  });
+                }}
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false">
+                  <g fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13" />
+                  </g>
+                </svg>
+              </button>
+            </div>
+            {st.available ? null : (
+              <div className="plugin-study-reason" data-plugin-study-reason="1">
+                {st.reason}.{' '}
+                <button
+                  type="button"
+                  className="sim-fix-go"
+                  onClick={(e) => {
+                    stop(e);
+                    onTreeAction(st.scope_key, 'open-plugin-settings');
+                  }}
+                >
+                  Open Settings → Plugins
+                </button>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 /** React setup tree. Same collapse keys and [data-w20-mesh-item] as the runtime tree. */
 export function LeftTree() {
   const projectId = useProjectStore((s) => s.projectId);
@@ -384,7 +530,9 @@ export function LeftTree() {
   const docRef = useRef<ProjectTreeDoc | null>(null);
   const [model, setModel] = useState(() => readSetupTree(null));
   const [pluginNodes, setPluginNodes] = useState<PluginTreeNode[]>([]);
+  const [studies, setStudies] = useState<{ rows: PluginStudyRow[]; kinds: PluginStudyKind[] }>({ rows: [], kinds: [] });
   const [host, setHost] = useState<HTMLElement | null>(null);
+  const [studiesHost, setStudiesHost] = useState<HTMLElement | null>(null);
 
   function paint() {
     const session = getTreeSession();
@@ -404,6 +552,12 @@ export function LeftTree() {
         return !!(pid || node.scope);
       });
     setPluginNodes([...pluginTreeNodes(projectId), ...fromServer]);
+    const doc = docRef.current;
+    const own = (row: { scope_key?: string }) => !!row.scope_key && scopeBelongsToProject(row.scope_key, projectId);
+    setStudies({
+      rows: projectId ? (doc?.plugin_studies || []).filter(own) : [],
+      kinds: projectId ? doc?.plugin_study_kinds || [] : [],
+    });
   }
 
   useEffect(() => subscribeTreeSession(paint), []);
@@ -416,7 +570,14 @@ export function LeftTree() {
       tree.replaceChildren();
       setHost(tree);
     }
+    setStudiesHost(document.getElementById('plugin-studies-section'));
   }, []);
+
+  // The section shows when the project has a plugin study or a plugin that can make one.
+  const showStudies = !!projectId && (studies.rows.length > 0 || studies.kinds.length > 0);
+  useEffect(() => {
+    if (studiesHost) studiesHost.hidden = !showStudies;
+  }, [studiesHost, showStudies]);
 
   useEffect(() => {
     let dead = false;
@@ -454,5 +615,12 @@ export function LeftTree() {
   }, [projectId, generation]);
 
   if (!host) return null;
-  return createPortal(<SetupTreeView model={model} pluginNodes={pluginNodes} />, host);
+  return (
+    <>
+      {createPortal(<SetupTreeView model={model} pluginNodes={pluginNodes} />, host)}
+      {studiesHost && showStudies
+        ? createPortal(<PluginStudiesView projectId={projectId || ''} studies={studies.rows} kinds={studies.kinds} />, studiesHost)
+        : null}
+    </>
+  );
 }

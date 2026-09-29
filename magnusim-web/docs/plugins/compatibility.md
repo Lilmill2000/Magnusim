@@ -33,6 +33,10 @@ Worker RPCs: `analysis.describe`, `analysis.defaults`, `analysis.validate_ready`
 
 **TypeScript UI.** A manifest's `ui_entry` may be `.tsx`/`.ts`/`.jsx`: the host bundles it when it serves it, into one ES module on the host's React (`react` and the JSX runtime resolve to the page's single copy). A plugin UI may import only `react` and files inside its `ui` folder; type-only imports of the host API types are erased. Bundled plugins' UI is served from `bundled-plugins/<folder>/<ui>`.
 
+**Plugin data and studies.** Each plugin has a folder in each project, `projects/<pid>/plugins/<key>/`, created on first write. A plugin method gets it as `scope["data"]` (`cfddesk.registry.plugin_data.PluginData`: `read_json`, `write_json`, `delete`, and the study helpers), bound to the calling plugin and project; a path outside it is refused. These writes are the one exception to "only the worker writes project files".
+
+A manifest's `[[study_kinds]]` (`key`, `title`, `icon` as one SVG path, `workspace`, `schema_version`) declares project-level studies the plugin owns, stored at `plugins/<key>/studies/<sid>/study.json` (`id, kind, title, schema_version, rev, plugin, plugin_name, plugin_version, created_at, updated_at`). The tree shows them in a STUDIES section in every stage, with New / Rename / Delete. RPCs `plugin_studies.list|create|rename|delete` (routes `/api/plugin-studies`); a rename with an old `rev` is refused with HTTP 409 ("This study changed in another tab. Reload to continue."). A study saved by a newer plugin version is read-only. A study whose plugin is off or missing stays on disk untouched, greyed in the tree ("Requires the <Name> plugin", with a link to Settings → Plugins); it can be deleted but not opened or renamed. Scope key: `p:<pid>/plugin:<key>/study:<sid>` (`plugin_study_scope` / `pluginStudyScope`).
+
 ## 1.0
 
 The first plugin host API: `register(hub)`, `manifest.toml`, registry kinds (analysis, solver, mesher, bc, material, monitor, filter, job), hooks, UI panels in `filters` and `prefs`, plugin methods at `/api/plugin/<key>/<method>`.

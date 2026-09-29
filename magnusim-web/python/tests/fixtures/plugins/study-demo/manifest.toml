@@ -1,0 +1,12 @@
+key = "study-demo"
+name = "Study demo"
+version = "1.0.0"
+api_version = "1.1"
+license = "GPL-3.0-or-later"
+description = "Test plugin that owns project-level studies (H11)"
+authors = "Magnusim"
+
+[[study_kinds]]
+key = "demo_analysis"
+title = "Demo analysis"
+icon = "M4 18c3-8 13-8 16 0 M8 14l2 2 M12 13v3 M16 14l-2 2"

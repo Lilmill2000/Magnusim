@@ -40,6 +40,10 @@ declare global {
     __CFD_LOAD_PLUGIN_UI__?: (plugin: import('../plugins/loader').ListedPlugin) => Promise<void>;
     __CFD_SINGLE_REACT__?: boolean;
     __CFD_PLUGINS_READY__?: boolean;
+    /** The app's confirm dialog (title, copy, yes, notice): resolves true on yes. */
+    __CFD_CONFIRM__?: (opts: { title?: string; copy?: string; yes?: string; notice?: boolean }) => Promise<boolean>;
+    /** The app's name prompt (title, copy, label, value, yes): resolves the name, or null. */
+    __CFD_PROMPT_NAME__?: (opts: { title?: string; copy?: string; label?: string; value?: string; yes?: string }) => Promise<string | null>;
     __CFD_REPLACE_PANEL__?: (panelId: string, mode: 'ok' | 'throw') => void;
     __CFD_REGISTER_FILTER__?: (title: string) => void;
     __CFD_TREE_TRANSFORM__?: (fn: (nodes: import('../plugin-api').PluginTreeNode[]) => import('../plugin-api').PluginTreeNode[]) => void;

@@ -16,6 +16,9 @@ from typing import Any
 _WIN_LOCK_ERRNOS = {13, 16}
 _WIN_LOCK_WINERRORS = {5, 32}
 
+# Project JSON the worker writes. A plugin's own folder (plugins/<key>/) is
+# written only through cfddesk.registry.plugin_data.PluginData, bound to that
+# plugin and project: the one exception to "only the worker writes".
 ALLOWED_WRITE_JSON_RELS = frozenset(
     {
         "materials.json",

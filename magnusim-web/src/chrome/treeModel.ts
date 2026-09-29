@@ -55,6 +55,36 @@ export interface ProjectTreeDoc {
   project_id?: string;
   geometries?: ProjectTreeGeom[];
   plugin_nodes?: Array<{ label?: string; name?: string; key?: string; scope?: string; projectId?: string; project_id?: string }>;
+  plugin_studies?: PluginStudyRow[];
+  plugin_study_kinds?: PluginStudyKind[];
+}
+
+/** A project-level study a plugin owns (plugin_studies.list). */
+export interface PluginStudyRow {
+  id: string;
+  plugin: string;
+  plugin_name: string;
+  kind: string;
+  kind_title: string;
+  icon: string;
+  workspace: string;
+  title: string;
+  rev: number;
+  /** False when its plugin is off or missing: greyed, cannot open or rename. */
+  available: boolean;
+  /** Saved by a newer plugin version: opens read-only. */
+  read_only: boolean;
+  reason: string;
+  scope_key: string;
+}
+
+/** A study kind an enabled plugin declares (manifest [[study_kinds]]). */
+export interface PluginStudyKind {
+  plugin: string;
+  plugin_name: string;
+  key: string;
+  title: string;
+  icon: string;
 }
 
 interface ProjectTreeGeom {

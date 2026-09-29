@@ -28,7 +28,8 @@ function rpcStatus(err: unknown): { status: number; body: Record<string, unknown
     return { status: 503, body: { error: err.message, ok: false } };
   }
   if (err instanceof RpcError) {
-    const status = err.code === -32004 ? 404 : err.code === -32602 ? 400 : 500;
+    // -32009: the record changed since the caller read it (a plugin study's rev).
+    const status = err.code === -32004 ? 404 : err.code === -32602 ? 400 : err.code === -32009 ? 409 : 500;
     return { status, body: { error: err.message, code: err.code, ok: false } };
   }
   return { status: 500, body: { error: String(err instanceof Error ? err.message : err), ok: false } };
@@ -363,6 +364,24 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
 
   const LOCAL_ONLY = 'Plugin management is only available on this PC.';
   router.get('/api/plugins', async (ctx) => workerJson(deps, ctx, 'plugins.list', {}));
+
+  // Plugin studies: project-level records a plugin owns (plugins/<key>/studies).
+  router.get('/api/plugin-studies', async (ctx) =>
+    workerJson(deps, ctx, 'plugin_studies.list', { project_id: ctx.url.searchParams.get('project_id') || '' }),
+  );
+  for (const action of ['create', 'rename', 'delete'] as const) {
+    router.post(`/api/plugin-studies/${action}`, async (ctx) => {
+      const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
+      const pick = (k: string) => (body[k] == null ? undefined : body[k]);
+      return workerJson(deps, ctx, `plugin_studies.${action}`, {
+        project_id: String(pick('project_id') || ''),
+        plugin: String(pick('plugin') || ''),
+        ...(action === 'create' ? { kind: String(pick('kind') || ''), title: String(pick('title') || '') } : {}),
+        ...(action !== 'create' ? { study_id: String(pick('study_id') || '') } : {}),
+        ...(action === 'rename' ? { title: String(pick('title') || ''), rev: pick('rev') } : {}),
+      });
+    });
+  }
   router.post('/api/plugins/:key/enable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
     return workerJson(deps, ctx, 'plugins.enable', { key: ctx.params.key });

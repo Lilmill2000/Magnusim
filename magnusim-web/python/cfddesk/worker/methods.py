@@ -277,6 +277,12 @@ def project_tree(id: str = "", project_id: str = "") -> dict[str, Any]:
         and _node_project(node) == pid
         and str(node.get("label") or node.get("name") or "").strip()
     ]
+    try:
+        studies, kinds = _plugin_study_catalog(root, pid)
+    except Exception:
+        studies, kinds = [], []
+    tree["plugin_studies"] = studies
+    tree["plugin_study_kinds"] = kinds
     return tree
 
 
@@ -981,6 +987,143 @@ def jobs_describe(kind: str = "") -> dict[str, Any]:
 _PLUGIN_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
 
 
+# ---------------------------------------------------------------------------
+# Plugin studies (project-level records a plugin owns; API 1.1)
+# ---------------------------------------------------------------------------
+
+# A study changed since the caller read it: HTTP 409.
+RPC_CONFLICT = -32009
+
+
+def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Every plugin study in the project (enabled plugin or not) and the kinds that can be created."""
+    from cfddesk.project.scope import plugin_study_scope
+    from cfddesk.registry.plugin_data import PluginData, plugin_data_folders, version_tuple
+
+    hub = load_all(web_root=web_root())
+    catalog = {str(r.get("key")): r for r in plugin_catalog(web_root())}
+    enabled = {
+        key: m
+        for key, m in hub.manifests.items()
+        if str((catalog.get(key) or {}).get("status") or "enabled") == "enabled"
+    }
+    studies: list[dict[str, Any]] = []
+    for key in plugin_data_folders(root):
+        manifest = enabled.get(key)
+        kinds = {k.key: k for k in (manifest.study_kinds if manifest is not None else [])}
+        for rec in PluginData(root, key).studies():
+            kind = kinds.get(str(rec.get("kind") or ""))
+            name = str((catalog.get(key) or {}).get("name") or rec.get("plugin_name") or key)
+            newer = (
+                manifest is not None
+                and version_tuple(str(rec.get("plugin_version") or "0")) > version_tuple(manifest.version)
+            )
+            studies.append(
+                {
+                    "id": rec["id"],
+                    "plugin": key,
+                    "plugin_name": name,
+                    "kind": rec.get("kind"),
+                    "kind_title": kind.title if kind else "",
+                    "icon": kind.icon if kind else "",
+                    "workspace": kind.workspace if kind else "",
+                    "title": rec.get("title") or rec["id"],
+                    "rev": int(rec.get("rev") or 0),
+                    "available": kind is not None,
+                    "read_only": bool(newer),
+                    "reason": "" if kind is not None else f"Requires the {name} plugin",
+                    "scope_key": plugin_study_scope(pid, key, rec["id"]),
+                }
+            )
+    kinds_out = [
+        {"plugin": key, "plugin_name": m.name, "key": k.key, "title": k.title, "icon": k.icon}
+        for key, m in sorted(enabled.items())
+        for k in m.study_kinds
+    ]
+    return studies, kinds_out
+
+
+def _plugin_data_for(project_id: str, plugin: str):
+    from cfddesk.registry.plugin_data import PluginData, PluginDataError
+
+    try:
+        return PluginData(_require_dir(project_id), plugin)
+    except PluginDataError as exc:
+        raise RpcError(-32602, str(exc)) from exc
+
+
+def _study_call(fn, *args: Any, **kwargs: Any) -> Any:
+    from cfddesk.registry.plugin_data import PluginDataError, StaleRevisionError
+
+    try:
+        return fn(*args, **kwargs)
+    except StaleRevisionError as exc:
+        raise RpcError(RPC_CONFLICT, str(exc), {"rev": exc.current}) from exc
+    except PluginDataError as exc:
+        raise RpcError(-32602, str(exc)) from exc
+
+
+def _study_row(project_id: str, plugin: str, study_id: str) -> dict[str, Any]:
+    rows, _kinds = _plugin_study_catalog(_require_dir(project_id), project_id)
+    hit = next((r for r in rows if r["plugin"] == plugin and r["id"] == study_id), None)
+    if hit is None:
+        raise RpcError(-32004, "study not found")
+    return hit
+
+
+@rpc("plugin_studies.list")
+def plugin_studies_list(project_id: str = "") -> dict[str, Any]:
+    """The project's plugin studies (greyed when their plugin is off or missing) and the kinds to create."""
+    pid = str(project_id or "").strip()
+    studies, kinds = _plugin_study_catalog(_require_dir(pid), pid)
+    return {"ok": True, "project_id": pid, "studies": studies, "kinds": kinds}
+
+
+@rpc("plugin_studies.create")
+def plugin_studies_create(project_id: str = "", plugin: str = "", kind: str = "", title: str = "") -> dict[str, Any]:
+    pid = str(project_id or "").strip()
+    data = _plugin_data_for(pid, plugin)
+    _rows, kinds = _plugin_study_catalog(_require_dir(pid), pid)
+    decl = next((k for k in kinds if k["plugin"] == data.plugin and k["key"] == kind), None)
+    if decl is None:
+        raise RpcError(-32602, f"{plugin} has no study kind {kind!r} (is the plugin on?)")
+    manifest = load_all(web_root=web_root()).manifests[data.plugin]
+    schema = next(k.schema_version for k in manifest.study_kinds if k.key == kind)
+    rec = _study_call(
+        data.create_study,
+        kind,
+        title or decl["title"],
+        plugin_name=manifest.name,
+        plugin_version=manifest.version,
+        schema_version=schema,
+    )
+    return {"ok": True, "study": _study_row(pid, data.plugin, rec["id"])}
+
+
+@rpc("plugin_studies.rename")
+def plugin_studies_rename(
+    project_id: str = "", plugin: str = "", study_id: str = "", title: str = "", rev: int | None = None
+) -> dict[str, Any]:
+    pid = str(project_id or "").strip()
+    data = _plugin_data_for(pid, plugin)
+    row = _study_row(pid, data.plugin, study_id)
+    if not row["available"]:
+        raise RpcError(-32602, row["reason"])
+    if row["read_only"]:
+        raise RpcError(-32602, "This study was saved by a newer version of the plugin; it opens read-only.")
+    _study_call(data.rename_study, study_id, title, rev)
+    return {"ok": True, "study": _study_row(pid, data.plugin, study_id)}
+
+
+@rpc("plugin_studies.delete")
+def plugin_studies_delete(project_id: str = "", plugin: str = "", study_id: str = "") -> dict[str, Any]:
+    """Remove a study (also when its plugin is off or missing: the user confirmed it)."""
+    pid = str(project_id or "").strip()
+    data = _plugin_data_for(pid, plugin)
+    _study_call(data.delete_study, study_id)
+    return {"ok": True, "deleted": study_id}
+
+
 @rpc("plugin.dispatch")
 def plugin_dispatch(
     key: str = "",
@@ -1004,6 +1147,12 @@ def plugin_dispatch(
     if scope_pid:
         params_in["project_id"] = scope_pid
         scope_in["project_id"] = scope_pid
+    pid = scope_pid or param_pid
+    if pid and (project_dir(pid) / "project.json").is_file():
+        # The plugin's own folder in this project, and nothing else.
+        from cfddesk.registry.plugin_data import PluginData
+
+        scope_in["data"] = PluginData(project_dir(pid), plugin_key)
     hub = load_all(web_root=web_root())
     try:
         result = hub.call_method(plugin_key, method_name, params_in, scope_in)

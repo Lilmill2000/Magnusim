@@ -37,6 +37,11 @@ async function domOf(locator) {
     // Numbers vary run to run (step counts, times): mask them, and a list of them to one.
     const mask = (s) =>
       String(s)
+        // Generated ids (mesh-…, sim-…, run-…, st-…) differ run to run.
+        .replace(/\b(?:mesh|sim|run|st|geom|mat|bc|rc)-[a-z0-9-]{4,}/gi, '<id>')
+        .replace(/\b(run|mesh):[^/\s"]+/g, '$1:<id>')
+        // Bare hex run ids (not colors: those follow '#').
+        .replace(/(?<!#)\b[0-9a-f]{6,}\b/gi, '<id>')
         .replace(/-?\d+(?:[.,]\d+)*(?:e[-+]?\d+)?/gi, '#')
         .replace(/#(?:[\s,]+#)+/g, '#')
         .replace(/\s+/g, ' ')
@@ -225,6 +230,10 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   const results = page.locator(`[data-w27-run-results="${transient}"]`);
   await results.locator(':scope > .tree-row .tl').click();
   await capture(page, 'results-hint-transient', page.locator('#run-results-hint'));
+
+  // The core's setup tree after all of it (H11: plugin studies sit in their own
+  // section below, and the simulations tree itself is unchanged).
+  await capture(page, 'tree-simulations', page.locator('#simulations-section'));
 
   if (UPDATE || !existsSync(BASELINE)) {
     writeFileSync(BASELINE, JSON.stringify(captured, null, 1) + '\n', 'utf8');

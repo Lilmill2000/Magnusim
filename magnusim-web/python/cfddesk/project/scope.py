@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,27 @@ class ScopeId:
         if self.item_id:
             parts.append(f"item:{self.item_id}")
         return "/".join(parts)
+
+
+def plugin_study_scope(project_id: str, plugin: str, study_id: str = "") -> str:
+    """``p:<pid>/plugin:<key>[/study:<sid>]``: a plugin's project-level data or one of its studies.
+
+    Plugin studies belong to the project, not to a geometry, so this is its
+    own key shape and not part of the positional :class:`ScopeId` chain.
+    """
+    key = f"p:{project_id}/plugin:{plugin}"
+    return f"{key}/study:{study_id}" if study_id else key
+
+
+_PLUGIN_SCOPE_RE = re.compile(r"^p:([^/]+)/plugin:([^/]+)(?:/study:([^/]+))?$")
+
+
+def parse_plugin_scope(key: str) -> dict[str, str] | None:
+    """``{project_id, plugin, study_id}`` of a plugin scope key, or None for any other key."""
+    m = _PLUGIN_SCOPE_RE.match(str(key or ""))
+    if not m:
+        return None
+    return {"project_id": m.group(1), "plugin": m.group(2), "study_id": m.group(3) or ""}
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
