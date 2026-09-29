@@ -62,7 +62,8 @@ def foam_num(v: float | int | None) -> str:
         mant, exp = s.lower().split("e")
         if "." in mant:
             mant = mant.rstrip("0").rstrip(".")
-        return f"{mant}e{exp}"
+        # JS writes the exponent unpadded with its sign: 1e-4, 2.5e+6.
+        return f"{mant}e{int(exp):+d}"
     return s
 
 
@@ -336,3 +337,18 @@ def control_to_web(tc: TransientControl, settings: dict | None = None) -> dict[s
         "source": dict(tc.source or {}),
         "estimate": dict(tc.estimate or {}),
     }
+
+
+def describe_transient(ctrl: dict[str, Any] | None) -> str:
+    """The run note's summary: "5 s · 50 frames · Co ≤ 1" (or "· fixed Δt 1e-4 s")."""
+    c = ctrl or {}
+    bits: list[str] = []
+    if c.get("end_time") is not None:
+        bits.append(f"{foam_num(c['end_time'])} s")
+    if c.get("write_count") is not None:
+        bits.append(f"{c['write_count']} frames")
+    if c.get("adjust_time_step") is False:
+        bits.append(f"fixed Δt {foam_num(c.get('delta_t'))} s")
+    elif c.get("max_co") is not None:
+        bits.append(f"Co ≤ {foam_num(c['max_co'])}")
+    return " · ".join(bits)

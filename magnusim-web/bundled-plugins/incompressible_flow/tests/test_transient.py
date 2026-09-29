@@ -23,6 +23,10 @@ def test_foam_num_basic():
     assert foam_num(5) == "5"
     assert foam_num(0.001) == "0.001"
     assert foam_num(0.1) == "0.1"
+    # Small and large steps as the JS writer (w30 foamNum) wrote them: unpadded exponent.
+    assert foam_num(1e-4) == "1e-4"
+    assert foam_num(1.2090338e-5) == "1.209034e-5"
+    assert foam_num(2.5e6) == "2.5e+6"
 
 
 def test_normalize_and_resolve_defaults():

@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --strictPort",
     "lint": "eslint scripts src --max-warnings 10000",
-    "typecheck": "tsc -p tsconfig.json && tsc -p scripts/server/tsconfig.json && tsc -p tsconfig.src.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p scripts/server/tsconfig.json && tsc -p tsconfig.src.json && tsc -p tsconfig.plugins.json",
     "test:server": "node --experimental-strip-types --test scripts/server/__tests__/*.test.js scripts/__tests__/*.test.mjs",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",

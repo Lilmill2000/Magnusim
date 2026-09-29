@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseSolveProgress, solveDisplayStage } from '../w27-solve.js';
+import { compactResidual, parseSolveProgress, solveDisplayStage } from '../w27-solve.js';
 
 // What the analysis's log parser (Python) emits for one step: Courant, the
 // time, and two residuals. gate:h8-single-parser: Node reads only these events.
@@ -34,7 +34,7 @@ CFDDESK_EVENT {"event":"time_saved","t":0.02}
 
 describe('parseSolveProgress', () => {
   it('builds the step from the parser events (residuals, Courant, time step)', () => {
-    const snap = parseSolveProgress(STEP_EVENTS);
+    const snap = parseSolveProgress(STEP_EVENTS, 'incompressible_transient');
     assert.equal(snap.stage, 'solve');
     assert.equal(snap.sim_time, 0.000123);
     assert.equal(snap.n_steps, 1);
@@ -43,6 +43,17 @@ describe('parseSolveProgress', () => {
     assert.equal(snap.residuals.length, 1);
     assert.equal(snap.residuals[0].U, 0.5); // U = max of Ux, Uy, Uz
     assert.equal(snap.residuals[0].p, 0.4);
+  });
+
+  it('plots what the analysis declares (residual_series), else every number as it came', () => {
+    const series = [
+      { key: 'U', fields: ['Ux', 'Uy', 'Uz'] },
+      { key: 'T' },
+      { key: 'co_mean', dashed: true, max_key: 'co_max' },
+    ];
+    const row = { t: 2, Ux: 0.1, Uy: 0.3, Uz: 0.2, T: 0.05, junk: 9, co_mean: 0.2, co_max: 0.7 };
+    assert.deepEqual(compactResidual(row, series), { t: 2, U: 0.3, T: 0.05, co_mean: 0.2, co_max: 0.7 });
+    assert.deepEqual(compactResidual({ t: 1, T: 0.5, s: 'x' }, []), { t: 1, T: 0.5 });
   });
 
   it('does not parse raw solver output (one parser, in Python)', () => {

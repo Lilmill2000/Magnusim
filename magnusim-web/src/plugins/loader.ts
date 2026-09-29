@@ -79,6 +79,7 @@ export async function loadOnePlugin(plugin: ListedPlugin, scope: string): Promis
   if (plugin.enabled === false || (plugin.status && plugin.status !== 'enabled')) return;
   if (!plugin.ui && !plugin.url) return;
   const url = plugin.url || `/plugins/${plugin.key}/ui/${plugin.ui_entry || 'index.js'}`;
+  (globalThis as { __MAGNUSIM_HOST_REACT__?: typeof React }).__MAGNUSIM_HOST_REACT__ = React;
   try {
     const mod = (await import(/* @vite-ignore */ url)) as {
       register?: (host: PluginHost) => void;

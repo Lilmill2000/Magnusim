@@ -1,4 +1,4 @@
-"""gate:h9-no-core-physics: the core names no incompressible physics in code."""
+"""gate:h9-no-core-physics and gate:h10-no-core-physics-ui: the core names no incompressible physics in code."""
 
 from __future__ import annotations
 
@@ -21,6 +21,12 @@ def test_scan_catches_a_literal_and_a_stale_allowlist_entry(tmp_path: Path):
     (web / "python" / "cfddesk").mkdir(parents=True)
     (web / "python" / "tools").mkdir(parents=True)
     (web / "scripts").mkdir()
+    (web / "src" / "panels").mkdir(parents=True)
+    (web / "src" / "panels" / "Panel.tsx").write_text(
+        "// PIMPLE in a comment\nexport const A = () => <span>{'PIMPLE'}</span>;\n", encoding="utf-8"
+    )
+    (web / "src" / "panels" / "Panel.test.tsx").write_text("expect('SIMPLE');\n", encoding="utf-8")
+    (web / "src" / "shell.html").write_text("<!-- simpleFoam -->\n<p>k-omega SST</p>\n", encoding="utf-8")
     (web / "python" / "cfddesk" / "leak.py").write_text(
         '"""Mentions simpleFoam in a docstring: fine."""\nAPP = "pimpleFoam"  # simpleFoam in a comment: fine\n',
         encoding="utf-8",
@@ -34,5 +40,7 @@ def test_scan_catches_a_literal_and_a_stale_allowlist_entry(tmp_path: Path):
     assert got == {
         ("python/cfddesk/leak.py", 2, "pimpleFoam"),
         ("scripts/leak.js", 5, "kEpsilon"),
+        ("src/panels/Panel.tsx", 2, "PIMPLE"),
+        ("src/shell.html", 2, "k-omega"),
         ("python/tools/gone.py", 0, ""),
     }

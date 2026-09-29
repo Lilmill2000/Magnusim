@@ -7,6 +7,9 @@ required = true
 license = "GPL-3.0-or-later"
 description = "Steady-state and transient incompressible flow of one fluid (simpleFoam, pimpleFoam)."
 authors = ["Magnusim"]
+# The study and run panels' settings (TSX, bundled by the host when served).
+ui = "ui"
+ui_entry = "index.tsx"
 protected = [
   "analysis:incompressible_steady",
   "analysis:incompressible_transient",

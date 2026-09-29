@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathIsWithin } from '../safe-path.js';
+import { BUNDLED_UI, bundlePluginUi } from './plugin-ui-bundle.ts';
 import { isLocalOperator, sendBytes, weakEtag } from './http.ts';
 import { writeSse, type JobManager, type JobRecord } from './jobs.ts';
 import { canonicalFilterKey, LEGACY_FILTER_PATHS } from './legacy-aliases.ts';
@@ -57,10 +58,28 @@ export function pluginsRootFor(webRoot: string): string {
   return override ? resolve(override) : resolve(webRoot, 'plugins');
 }
 
-export function safePluginFile(webRoot: string, key: string, uiRel: string, rest: string): string | null {
+/** Plugins that ship with the app: webRoot/bundled-plugins, or MAGNUSIM_BUNDLED_DIR (tests). */
+export function bundledRootFor(webRoot: string): string {
+  const override = String(process.env.MAGNUSIM_BUNDLED_DIR || '').trim();
+  return override ? resolve(override) : resolve(webRoot, 'bundled-plugins');
+}
+
+/** The plugin's UI folder (the file route already checked it lies inside the plugin). */
+export function pluginUiRoot(webRoot: string, key: string, uiRel: string, tier: string = 'user'): string {
+  const pluginsRoot = tier === 'bundled' ? bundledRootFor(webRoot) : pluginsRootFor(webRoot);
+  return resolve(pluginsRoot, key, uiRel || 'ui');
+}
+
+export function safePluginFile(
+  webRoot: string,
+  key: string,
+  uiRel: string,
+  rest: string,
+  tier: string = 'user',
+): string | null {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(key) || /[. ]$/.test(key)) return null;
   try {
-    const pluginsRoot = pluginsRootFor(webRoot);
+    const pluginsRoot = tier === 'bundled' ? bundledRootFor(webRoot) : pluginsRootFor(webRoot);
     const pluginRoot = resolve(pluginsRoot, key);
     const uiRoot = resolve(pluginRoot, uiRel || 'ui');
     const target = resolve(uiRoot, rest || 'index.js');
@@ -402,19 +421,31 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     let ui = 'ui';
     // The manifest key may differ from the plugin's folder name; files live in the folder.
     let folder = String(ctx.params.key || '');
+    let tier = 'user';
     try {
       const listed = (await deps.worker.call('plugins.list')) as {
-        plugins?: Array<{ key: string; ui?: string; dir?: string | null }>;
+        plugins?: Array<{ key: string; ui?: string; dir?: string | null; tier?: string }>;
       };
       const hit = (listed.plugins || []).find((p) => p.key === ctx.params.key);
       if (hit && hit.ui) ui = hit.ui;
       if (hit && hit.dir) folder = String(hit.dir);
+      if (hit && hit.tier) tier = String(hit.tier);
     } catch {
       /* serve from default ui/ */
     }
-    const file = safePluginFile(deps.webRoot, folder, ui, ctx.params.rest || 'index.js');
+    const file = safePluginFile(deps.webRoot, folder, ui, ctx.params.rest || 'index.js', tier);
     if (!file) {
       ctx.sendJson(404, { error: 'plugin ui not found' });
+      return;
+    }
+    if (BUNDLED_UI.test(file)) {
+      // TypeScript/TSX UI: one bundled ES module on the host's React.
+      try {
+        const code = await bundlePluginUi(file, pluginUiRoot(deps.webRoot, folder, ui, tier));
+        sendBytes(ctx.res, Buffer.from(code, 'utf8'), { 'Content-Type': 'text/javascript; charset=utf-8' }, ctx.method === 'HEAD');
+      } catch (err) {
+        ctx.sendJson(500, { error: `plugin ui build failed: ${err instanceof Error ? err.message : String(err)}` });
+      }
       return;
     }
     const buf = readFileSync(file);

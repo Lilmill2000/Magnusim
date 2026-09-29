@@ -161,6 +161,93 @@
         "epsilon",
         "R"
       ],
+      "residual_series": [
+        {
+          "key": "U",
+          "label": "U",
+          "color": "#1570ef",
+          "fields": [
+            "Ux",
+            "Uy",
+            "Uz"
+          ],
+          "always": true,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "u"
+        },
+        {
+          "key": "p",
+          "label": "p",
+          "color": "#6941c6",
+          "fields": [
+            "p"
+          ],
+          "always": true,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "p"
+        },
+        {
+          "key": "k",
+          "label": "k",
+          "color": "#12b76a",
+          "fields": [
+            "k"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "k"
+        },
+        {
+          "key": "omega",
+          "label": "\u03c9",
+          "color": "#f79009",
+          "fields": [
+            "omega"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "w"
+        },
+        {
+          "key": "epsilon",
+          "label": "\u03b5",
+          "color": "#0ba5ec",
+          "fields": [
+            "epsilon"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "epsilon"
+        },
+        {
+          "key": "R",
+          "label": "R",
+          "color": "#dd2590",
+          "fields": [
+            "Rxx",
+            "Rxy",
+            "Rxz",
+            "Ryy",
+            "Ryz",
+            "Rzz"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "r"
+        }
+      ],
       "x_axis": "iterations",
       "result_fields": [
         {
@@ -195,8 +282,8 @@
         }
       ],
       "ui": {
-        "study_panel": "SimulationPanel",
-        "run_panel": "RunControl"
+        "study_settings": "incompressible_flow.study",
+        "run_settings": "incompressible_flow.run"
       },
       "study_defaults": {
         "analysis_type": "incompressible_steady",
@@ -432,6 +519,106 @@
         "epsilon",
         "R"
       ],
+      "residual_series": [
+        {
+          "key": "U",
+          "label": "U",
+          "color": "#1570ef",
+          "fields": [
+            "Ux",
+            "Uy",
+            "Uz"
+          ],
+          "always": true,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "u"
+        },
+        {
+          "key": "p",
+          "label": "p",
+          "color": "#6941c6",
+          "fields": [
+            "p"
+          ],
+          "always": true,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "p"
+        },
+        {
+          "key": "k",
+          "label": "k",
+          "color": "#12b76a",
+          "fields": [
+            "k"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "k"
+        },
+        {
+          "key": "omega",
+          "label": "\u03c9",
+          "color": "#f79009",
+          "fields": [
+            "omega"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "w"
+        },
+        {
+          "key": "epsilon",
+          "label": "\u03b5",
+          "color": "#0ba5ec",
+          "fields": [
+            "epsilon"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "epsilon"
+        },
+        {
+          "key": "R",
+          "label": "R",
+          "color": "#dd2590",
+          "fields": [
+            "Rxx",
+            "Rxy",
+            "Rxz",
+            "Ryy",
+            "Ryz",
+            "Rzz"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "r"
+        },
+        {
+          "key": "co_mean",
+          "label": "Co mean",
+          "color": "#d92d20",
+          "fields": [
+            "co_mean"
+          ],
+          "always": false,
+          "dashed": true,
+          "max_key": "co_max",
+          "max_label": "max",
+          "swatch": "co"
+        }
+      ],
       "x_axis": "seconds",
       "result_fields": [
         {
@@ -466,8 +653,8 @@
         }
       ],
       "ui": {
-        "study_panel": "SimulationPanel",
-        "run_panel": "RunControl"
+        "study_settings": "incompressible_flow.study",
+        "run_settings": "incompressible_flow.run"
       },
       "study_defaults": {
         "analysis_type": "incompressible_transient",
@@ -1538,8 +1725,8 @@
       "version": "1.0.0",
       "requires": [],
       "provides": {},
-      "ui": null,
-      "ui_entry": "index.js",
+      "ui": "ui",
+      "ui_entry": "index.tsx",
       "authors": [
         "Magnusim"
       ],

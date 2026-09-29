@@ -48,17 +48,10 @@ declare global {
     __CFD_TREE_UI__?: { openPanel?: string | null; expanded?: Record<string, boolean>; selectedKey?: string | null };
     __CFD_EXPAND_HYDRATED_TREE__?: () => void;
     __CFD_W20_STATE__?: Record<string, unknown>;
-    __CFD_TRANSIENT_DEFAULTS__?: Record<string, unknown>;
-    __CFD_STEADY_DEFAULTS__?: Record<string, unknown>;
     /** Create Simulation: disable Create with this reason ('' re-enables it). */
     __CFD_CREATE_BLOCK__?: (reason: string) => void;
-    __CFD_W17_DEFAULTS__?: {
-      analysis: string;
-      analysis_type?: string;
-      turbulence_model: string;
-      time_dependency: string;
-      algorithm: string;
-    };
+    /** A new study's settings: the default analysis's study_defaults (registry). */
+    __CFD_W17_DEFAULTS__?: Record<string, unknown>;
     __CFD_W17__?: unknown;
     __CFD_W17_STATE__?: Record<string, unknown>;
     __CFD_W18_STATE__?: unknown;
@@ -75,7 +68,6 @@ declare global {
     __CFD_RUN_STATE_NOW__?: () => import('../panels/legacyBridge').RunState | null;
     __CFD_RUN_SAVE__?: (patch: { end_time?: number; write_interval?: number }) => Promise<unknown>;
     __CFD_RUN_TRANSIENT_SAVE__?: (t: import('../panels/legacyBridge').TransientSettings) => Promise<unknown>;
-    __CFD_RUN_TRANSIENT_RESET__?: () => Promise<unknown>;
     __CFD_RUN_RENAME__?: (name: string) => Promise<unknown>;
     __CFD_RUN_DELETE__?: () => Promise<unknown>;
     __CFD_RUN_COPY_PICK__?: (on: boolean) => void;

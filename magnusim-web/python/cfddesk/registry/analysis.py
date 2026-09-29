@@ -194,6 +194,9 @@ class AnalysisType:
     family: Any = None  # AnalysisFamily shared with the sibling analysis
     algorithm_label: str = ""  # "SIMPLE" / "PIMPLE"
     residual_keys: tuple[str, ...] = ()  # residual series the run panel plots
+    # How the run panel draws them: {key, label, color, fields?, always?, dashed?,
+    # max_key?, max_label?, swatch?} per series (contract.residual_series).
+    residual_series: tuple[dict[str, Any], ...] = ()
     x_axis: str = ""  # "iterations" | "seconds" ("" = from time_dependency)
     study_defaults: Callable[[str], dict[str, Any]] | None = None
     validate_ready: Callable[[Any], list[Any]] | None = None  # (ReadyContext) -> issues

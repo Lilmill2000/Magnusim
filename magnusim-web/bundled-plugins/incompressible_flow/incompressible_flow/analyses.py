@@ -355,7 +355,7 @@ def _decision(spec: Any, ctx: CaseContext) -> dict:
     from magnusim_sdk.study import bc_faces, is_wall_bc, wall_treatment
 
     from .contract import TURBULENCE_LABELS, algorithm_label
-    from .transient import control_to_web
+    from .transient import control_to_web, describe_transient
 
     rows = []
     for m in spec.mapped or []:
@@ -373,10 +373,13 @@ def _decision(spec: Any, ctx: CaseContext) -> dict:
         rows.append(row)
     override = getattr(ctx.inputs, "transient_override", None) if ctx.inputs is not None else None
     model = spec.physics.turbulence_model
+    control = control_to_web(spec.transient, override) if spec.transient is not None else None
     return {
         "bcs": rows,
         "wall_default": spec.wall_default,
-        "transient_control": control_to_web(spec.transient, override) if spec.transient is not None else None,
+        "transient_control": control,
+        # The run note's detail after the physics ("5 s · 50 frames · Co ≤ 1").
+        "note_detail": describe_transient(control) if control is not None else "",
         "physics_label": TURBULENCE_LABELS.get(model, model),
         "algorithm": algorithm_label(spec.time_dependency),
         "n_procs": spec.n_procs,
@@ -431,6 +434,7 @@ def _contract_fields(td: str, *, key: str, label: str) -> dict:
         "family": ic.FAMILY,
         "algorithm_label": ic.algorithm_label(td),
         "residual_keys": ic.RESIDUAL_KEYS,
+        "residual_series": ic.residual_series(td),
         "x_axis": "seconds" if td == "transient" else "iterations",
         "study_defaults": ic.make_study_defaults(
             key=key, label=label, category="FLUID DYNAMICS", default_turbulence="kOmegaSST"

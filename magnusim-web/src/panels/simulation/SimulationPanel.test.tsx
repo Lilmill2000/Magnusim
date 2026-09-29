@@ -1,161 +1,127 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudyState } from '../legacyBridge';
+import { pluginUiFor, unregisterPlugin, type StudySettingsProps } from '../../plugin-api';
 import { useProjectStore } from '../../store/project';
-import { SimulationDefaults, numericsData, turbulenceKey } from './SimulationPanel';
+import { SimulationDefaults } from './SimulationPanel';
 
-const settingsSchema = {
-  type: 'object',
-  properties: {
-    turbulence_model: {
-      type: 'string',
-      title: 'Turbulence model',
-      enum: ['laminar', 'kEpsilon', 'kOmegaSST', 'LRR', 'SSG'],
-      default: 'kOmegaSST',
-      description: 'Which turbulence closure the solver uses.',
-      'x-cfddesk': {
-        enum_labels: ['Laminar', 'k-epsilon', 'k-omega SST', 'LRR (Reynolds stress)', 'SSG (Reynolds stress)'],
-      },
-    },
-  },
-};
-const numericsSchema = {
-  type: 'object',
-  properties: {
-    residual_u: { type: 'number', title: 'Residual U', default: 1e-4, description: 'Convergence target for velocity.' },
-    relax_p: { type: 'number', title: 'Relaxation p', default: 0.3, description: 'Under-relaxation for pressure.' },
+// The study panel is core chrome around the analysis's own settings (H10).
+const diffusion = {
+  key: 'toy_steady',
+  label: 'Toy diffusion',
+  time_dependency: 'steady',
+  family: { key: 'toy', label: 'Toy', title: 'Toy', description: '', tags: [] },
+  algorithm_label: 'Laplacian',
+  schema: {
+    type: 'object',
+    properties: { diffusivity: { type: 'number', title: 'Diffusivity', default: 0 } },
   },
 };
 
-function study(overrides: Partial<StudyState> = {}, record: Record<string, unknown> = {}): StudyState {
+function study(overrides: Partial<StudyState> = {}): StudyState {
   return {
     has_study: true,
     id: 'sim_1',
-    name: 'Incompressible Steady-state 2',
-    analysis: 'Incompressible',
-    analysis_type: 'incompressible_steady',
+    name: 'Toy study',
+    analysis: 'Toy',
+    analysis_type: 'toy_steady',
     time_dependency: 'Steady-state',
-    algorithm: 'SIMPLE',
-    record: { id: 'sim_1', turbulence_model: 'k-omega SST', turbulence_model_key: 'kOmegaSST', ...record },
+    algorithm: '',
+    record: { id: 'sim_1', diffusivity: 0.5 },
     ...overrides,
   };
 }
 
-function publish(state: StudyState) {
-  window.__CFD_STUDY_STATE__ = state;
-  act(() => {
-    window.dispatchEvent(new CustomEvent('cfd:study', { detail: state }));
-  });
+function setRows(rows: Array<Record<string, unknown>>) {
+  useProjectStore.setState({ projectId: 'proj', registry: { analysis: rows } as never });
 }
 
 beforeEach(() => {
-  useProjectStore.setState({
-    projectId: 'proj',
-    registry: {
-      analysis: [
-        { key: 'incompressible_steady', label: 'Incompressible Fluid Flow', schema: settingsSchema, numerics_schema: numericsSchema },
-      ],
-    },
-  });
   window.__CFD_STUDY_STATE__ = study();
   window.__CFD_STUDY_UPDATE__ = vi.fn(async () => ({}));
   window.__CFD_STUDY_TIME__ = vi.fn(async () => ({}));
   window.__CFD_STUDY_DELETE__ = vi.fn(async () => ({}));
+  window.__CFD_PLUGINS_READY__ = true;
 });
 
 afterEach(() => {
   cleanup();
+  unregisterPlugin('toy');
   delete window.__CFD_STUDY_STATE__;
+  delete window.__CFD_PLUGINS_READY__;
 });
 
-function renderPanel() {
-  return render(<SimulationDefaults panelId="panel-incompressible-defaults" scope="p:proj/s:sim_1" />);
-}
+const renderPanel = () => render(<SimulationDefaults panelId="panel-incompressible-defaults" scope="p:proj/s:sim_1" />);
 
-describe('turbulenceKey', () => {
-  it('reads display text, keys and defaults', () => {
-    expect(turbulenceKey({ turbulence_model: 'k-omega SST' })).toBe('kOmegaSST');
-    expect(turbulenceKey({ turbulence_model: 'kEpsilon', turbulence_model_key: 'kOmegaSST' })).toBe('kEpsilon');
-    expect(turbulenceKey({ defaults: { turbulence_model: 'Laminar' } })).toBe('laminar');
-    expect(turbulenceKey({})).toBeUndefined();
-  });
-});
-
-describe('numericsData', () => {
-  const schema = { type: 'object' as const, properties: { relax_u: { type: 'number' as const }, relax_p: { type: 'number' as const } } };
-  it('shows Relaxation U 0.5 for Reynolds-stress models the study has not set', () => {
-    expect(numericsData({}, schema, 'LRR').relax_u).toBe(0.5);
-    expect(numericsData({}, schema, 'SSG').relax_u).toBe(0.5);
-    expect(numericsData({}, schema, 'kOmegaSST').relax_u).toBeUndefined();
-    expect(numericsData({ relax_u: 0.8 }, schema, 'LRR').relax_u).toBe(0.8);
-  });
-});
-
-describe('SimulationDefaults (study panel)', () => {
-  it('shows the V0.1.0 rows and the SIMPLE numerics, with no dead controls', () => {
+describe('study panel settings slot', () => {
+  it('draws an analysis without its own settings from its schemas', async () => {
+    setRows([diffusion]);
     renderPanel();
-    expect(screen.getByText('Incompressible Steady-state 2')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Rename simulation' })).toBeInTheDocument();
-    expect(screen.getByText('Analysis').nextSibling).toHaveTextContent('Incompressible');
-    const turb = screen.getByLabelText('Turbulence model', { selector: 'select' }) as HTMLSelectElement;
-    expect([...turb.options].map((o) => o.text)).toEqual([
-      'Laminar',
-      'k-epsilon',
-      'k-omega SST',
-      'LRR (Reynolds stress)',
-      'SSG (Reynolds stress)',
-    ]);
-    expect(turb.options[turb.selectedIndex].text).toBe('k-omega SST');
-    expect((screen.getByLabelText('Time dependency') as HTMLSelectElement).value).toBe('Steady-state');
-    expect(screen.getByText('SIMPLE')).toBeInTheDocument();
-    expect(screen.getByText(/simpleFoam/)).toBeInTheDocument();
-    expect(screen.getByText('Residual U')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'About Residual U' })).toBeInTheDocument();
-    for (const gone of [/Energy/, /Passive species/, /Time scheme/]) expect(screen.queryByText(gone)).toBeNull();
+    expect(screen.getByText('Toy study')).toBeInTheDocument();
+    expect(screen.getByText('Laplacian')).toBeInTheDocument();
+    // No steady/transient sibling in its family: no Time dependency switch.
+    expect(screen.queryByLabelText('Time dependency')).toBeNull();
+    const field = screen.getByRole('textbox');
+    fireEvent.change(field, { target: { value: '0.75' } });
+    fireEvent.blur(field);
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ diffusivity: 0.75 }));
   });
 
-  it('saves a new turbulence model as both the model and its key', async () => {
-    renderPanel();
-    const turb = screen.getByLabelText('Turbulence model', { selector: 'select' }) as HTMLSelectElement;
-    const kEps = [...turb.options].find((o) => o.text === 'k-epsilon')!;
-    fireEvent.change(turb, { target: { value: kEps.value } });
-    await waitFor(() =>
-      expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ turbulence_model: 'kEpsilon', turbulence_model_key: 'kEpsilon' }),
-    );
-  });
-
-  it('switches time dependency through the runtime, and a transient study hides SIMPLE numerics', async () => {
+  it('offers the time dependency when the family has both', () => {
+    setRows([diffusion, { ...diffusion, key: 'toy_transient', time_dependency: 'transient' }]);
     renderPanel();
     fireEvent.change(screen.getByLabelText('Time dependency'), { target: { value: 'Transient' } });
     expect(window.__CFD_STUDY_TIME__).toHaveBeenCalledWith('Transient');
-    publish(study({ time_dependency: 'Transient', algorithm: 'PIMPLE' }));
-    expect(screen.getByText('PIMPLE')).toBeInTheDocument();
-    expect(screen.queryByText('Residual U')).toBeNull();
-    expect(screen.getByText(/PIMPLE correctors from each run/)).toBeInTheDocument();
   });
 
-  it('renames and deletes through the runtime, and shows a failed save', async () => {
+  it('shows the plugin component the analysis names, with the study and a save', async () => {
+    setRows([{ ...diffusion, ui: { study_settings: 'toy.study' } }]);
+    function ToySettings({ study: s, row, save }: StudySettingsProps) {
+      return (
+        <button type="button" data-toy="1" onClick={() => void save({ diffusivity: 2 })}>
+          {String(row?.key)} {String((s.record || {}).diffusivity)}
+        </button>
+      );
+    }
+    pluginUiFor('toy').registerStudySettings('toy.study', ToySettings);
     renderPanel();
-    fireEvent.click(screen.getByRole('button', { name: 'Rename simulation' }));
-    const input = screen.getByLabelText('Simulation name');
-    fireEvent.change(input, { target: { value: 'Swirl study' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ name: 'Swirl study' }));
+    const own = screen.getByText('toy_steady 0.5');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.click(own);
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ diffusivity: 2 }));
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(window.__CFD_STUDY_DELETE__).toHaveBeenCalled();
-
-    window.__CFD_STUDY_TIME__ = vi.fn(async () => {
-      throw new Error('Could not change time dependency');
+  it('waits for plugin UIs instead of flashing the generic form, then falls back', () => {
+    setRows([{ ...diffusion, ui: { study_settings: 'toy.missing' } }]);
+    delete window.__CFD_PLUGINS_READY__;
+    renderPanel();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    act(() => {
+      window.__CFD_PLUGINS_READY__ = true;
+      window.dispatchEvent(new Event('cfd:plugins-ready'));
     });
-    fireEvent.change(screen.getByLabelText('Time dependency'), { target: { value: 'Transient' } });
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not change time dependency');
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
   });
 
-  it('keeps the saved numbers the solve will use', () => {
-    window.__CFD_STUDY_STATE__ = study({}, { residual_u: 2e-5, relax_p: 0.2 });
+  it('removes a disabled plugin component (its ledger), leaving the generic form', () => {
+    setRows([{ ...diffusion, ui: { study_settings: 'toy.study' } }]);
+    pluginUiFor('toy').registerStudySettings('toy.study', () => <span>own settings</span>);
     renderPanel();
-    const row = screen.getByText('Residual U').closest('[data-schema-key]') as HTMLElement;
-    expect(within(row).getByRole('textbox')).toHaveValue('2.0000e-5');
+    expect(screen.getByText('own settings')).toBeInTheDocument();
+    act(() => unregisterPlugin('toy'));
+    expect(screen.queryByText('own settings')).toBeNull();
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+  });
+
+  it('shows a failed save under the settings', async () => {
+    setRows([diffusion]);
+    window.__CFD_STUDY_UPDATE__ = vi.fn(async () => {
+      throw new Error('Could not save');
+    });
+    renderPanel();
+    const field = screen.getByRole('textbox');
+    fireEvent.change(field, { target: { value: '0.9' } });
+    fireEvent.blur(field);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save');
   });
 });

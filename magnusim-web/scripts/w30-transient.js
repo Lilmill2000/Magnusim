@@ -1,11 +1,14 @@
 /**
- * W30 — Transient time dependency (pimpleFoam).
+ * W30 — Transient runs on the server: which studies and runs are transient,
+ * and the stored transient settings.
  *
- * The steady stack (w27-solve.js) writes a simpleFoam case with pseudo-time
- * iterations. This module holds everything that differs for a transient run:
- * the settings model with sensible defaults, the auto-calculated numbers
- * (time step, write interval), and the pimpleFoam system/ dictionaries.
- * The 0/ fields, constant/ and BC mapping are shared with the steady writer.
+ * A transient run's settings are its analysis's run model (Incompressible
+ * Flow: incompressible_flow.transient). The run panel edits them through the
+ * plugin's run-settings component, and the plugin normalizes them again when
+ * it writes the case (prepare_run) or previews it (analysis.run_preview).
+ * normalizeTransient below keeps what the server stores inside the same
+ * limits, so a settings save that bypasses the panel (the API) is not stored
+ * out of range. Defaults: the analysis's run_defaults (registry).
  *
  * Model (stored on the run record and in simulation_control.json):
  *   transient: {
@@ -21,16 +24,6 @@
  *     n_correctors: 2,
  *     n_non_orth_correctors: 0,
  *   }
- *
- * The time step and write numbers are resolved in Python (cfddesk.project.
- * transient, via prepare_run and the worker's run.transient_preview), so the
- * Run panel shows exactly what is written to controlDict.
- *
- * Defaults follow what SimScale exposes for a transient incompressible run
- * (End time, Delta t, Adjustable time step + Maximal Courant number, Maximal
- * step, Write control "Adjustable runtime" + Write interval) and the standard
- * OpenFOAM pimpleFoam tutorials (PIMPLE nOuterCorrectors 1 / nCorrectors 2,
- * adjustTimeStep yes, writeControl adjustableRunTime).
  */
 
 import { transientDefaultsFromRegistry } from './registry-defaults.js';
@@ -110,28 +103,4 @@ export function normalizeTransient(partial, base) {
     out.n_non_orth_correctors = Math.min(Math.max(v, 0), 5);
   }
   return out;
-}
-
-/** Physical time in seconds → the shortest string OpenFOAM reads back. */
-export function foamNum(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '0';
-  if (n === 0) return '0';
-  const a = Math.abs(n);
-  if (a >= 1e-3 && a < 1e6) {
-    // up to 8 significant digits, trailing zeros trimmed
-    return String(Number(n.toPrecision(8)));
-  }
-  return n.toExponential(6).replace(/\.?0+e/, 'e');
-}
-
-/** Human summary for notes / hints. */
-export function describeTransient(ctrl) {
-  const c = ctrl || {};
-  const bits = [];
-  if (c.end_time != null) bits.push(`${foamNum(c.end_time)} s`);
-  if (c.write_count != null) bits.push(`${c.write_count} frames`);
-  if (c.adjust_time_step === false) bits.push(`fixed Δt ${foamNum(c.delta_t)} s`);
-  else if (c.max_co != null) bits.push(`Co ≤ ${foamNum(c.max_co)}`);
-  return bits.join(' · ');
 }

@@ -5,7 +5,8 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // Bundled plugins' UI tests run with the core's (their components live in the core's panels).
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'bundled-plugins/*/ui/**/*.test.tsx'],
     setupFiles: ['src/test/setup.ts'],
   },
 });

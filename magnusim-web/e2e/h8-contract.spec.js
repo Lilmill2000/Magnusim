@@ -182,9 +182,36 @@ test('gate:h8-stub-analysis a simulation type the core does not know runs throug
   expect((await runRow()).status).toBe('draft');
   stage(t0, 'blocked by its own readiness message');
 
-  // Set it; now the stub writes its case and the core launches laplacianFoam.
-  const upd = await request.post('/api/simulation/update', { data: { project_id: PROJECT, simulation_id: sid, diffusivity: 0.001 } });
-  expect(upd.ok()).toBe(true);
+  // gate:h10-plugin-owned-ui: the study and run panels show the stub's OWN
+  // settings components (its ui/index.tsx) inside the core's chrome, and none
+  // of Incompressible Flow's. The diffusivity is set in the stub's own field.
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PROJECT, { timeout: 60_000 });
+  await page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first().click();
+  const studyPanel = page.locator('#panel-incompressible-defaults .cfd-island [data-study-panel="1"]');
+  await expect(studyPanel.locator('[data-stub-study-settings="1"]')).toBeVisible({ timeout: 15_000 });
+  await expect(studyPanel.locator('[data-study-analysis="1"]')).toBeVisible();
+  await expect(studyPanel).not.toContainText(/simpleFoam|Turbulence model|SIMPLE/);
+  await studyPanel.getByLabel('Diffusivity').fill('0.001');
+  await studyPanel.getByLabel('Diffusivity').press('Enter');
+  await expect
+    .poll(async () => (await getJson(request, `/api/simulation?project_id=${PROJECT}&simulation_id=${encodeURIComponent(sid)}`)).simulation?.diffusivity)
+    .toBe(0.001);
+  const runPanel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
+  const openRun = async () => {
+    const folder = page.locator(`#left-tree [data-w17-sim-id="${sid}"] li[data-w27-sim-control="1"]`).first();
+    if (!(await folder.evaluate((el) => el.classList.contains('expanded')))) {
+      await folder.locator(':scope > .tree-row .tw').click();
+    }
+    await page.locator(`#left-tree [data-w27-run="${rid}"] > .tree-row .tl`).first().click();
+    await expect(runPanel).toHaveAttribute('data-run-id', rid);
+  };
+  await openRun();
+  await expect(runPanel.locator('[data-stub-run-settings="1"] [data-stub-iterations="1"]')).toHaveText('5');
+  await expect(runPanel.locator('[data-run-steady="1"], [data-run-transient="1"]')).toHaveCount(0);
+  stage(t0, 'the stub draws its own study and run settings');
+
+  // Now the stub writes its case and the core launches laplacianFoam.
   const ok = await start();
   expect(ok.status(), JSON.stringify(await ok.json())).toBe(202);
   await expect
@@ -204,5 +231,11 @@ test('gate:h8-stub-analysis a simulation type the core does not know runs throug
   expect(frames.length, `frames in ${caseDir}`).toBeGreaterThan(0);
   expect(frames.some((f) => existsSync(join(caseDir, f, 'T')))).toBe(true);
   expect(frames).toContain('5');
+  // Its residual plot draws the series it declares (T), not U and p.
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PROJECT, { timeout: 60_000 });
+  await openRun();
+  await expect(runPanel.locator('[data-residual-plot="1"]')).toBeVisible({ timeout: 60_000 });
+  await expect(runPanel.locator('.sim-residual-legend')).toHaveText('T');
   stage(t0, `stub run done: laplacianFoam, frames ${frames.join(',')}`);
 });

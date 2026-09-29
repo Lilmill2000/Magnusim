@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""No-core-physics scan (gate:h9-no-core-physics, CI job ``plugin-boundary``).
+"""No-core-physics scan (gate:h9-no-core-physics, gate:h10-no-core-physics-ui;
+CI job ``plugin-boundary``).
 
 Incompressible Flow lives in its bundled plugin. The core's Python
-(``python/cfddesk``, ``python/tools``) and its Node server (``scripts/``) must
-not name its solvers, turbulence models or fvSolution algorithm keywords in
-code: no ``simpleFoam`` / ``pimpleFoam`` literals, no turbulence model lists,
-no SIMPLE/PIMPLE dictionary bodies. Comments and docstrings may mention them.
+(``python/cfddesk``, ``python/tools``), its Node server (``scripts/``) and its
+page (``src/``, the app shell included) must not name its solvers, turbulence
+models or fvSolution algorithm keywords in code: no ``simpleFoam`` /
+``pimpleFoam`` literals, no turbulence model lists, no SIMPLE/PIMPLE
+dictionary bodies or labels. Comments and docstrings may mention them.
 
 Each exception is a file in ``core_physics_allowlist.json`` with its reason;
 an entry whose file no longer has a hit is reported too (stale allowlist).
@@ -30,7 +32,8 @@ PHYSICS = re.compile(
     r"|k-omega|k-epsilon"
 )
 
-SKIP_PARTS = {"__pycache__", "__tests__", "generated", "build", "node_modules"}
+SKIP_PARTS = {"__pycache__", "__tests__", "generated", "build", "node_modules", "test"}
+TEST_FILE = re.compile(r"\.test\.(ts|tsx|js|mjs)$")
 
 
 def _docstring_nodes(tree: ast.AST) -> set[int]:
@@ -98,8 +101,14 @@ def strip_js_comments(src: str) -> str:
     return "".join(out)
 
 
+def strip_html_comments(src: str) -> str:
+    """The page with <!-- --> comments blanked (lines kept)."""
+    return re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), src, flags=re.S)
+
+
 def js_hits(path: Path) -> list[tuple[int, str]]:
-    code = strip_js_comments(path.read_text(encoding="utf-8-sig"))
+    raw = path.read_text(encoding="utf-8-sig")
+    code = strip_html_comments(raw) if path.suffix == ".html" else strip_js_comments(raw)
     return [(code.count("\n", 0, m.start()) + 1, m.group(0)) for m in PHYSICS.finditer(code)]
 
 
@@ -109,9 +118,14 @@ def core_files(web_root: Path) -> list[Path]:
         (web_root / "python" / "cfddesk", ("*.py",)),
         (web_root / "python" / "tools", ("*.py",)),
         (web_root / "scripts", ("*.js", "*.mjs", "*.ts")),
+        (web_root / "src", ("*.js", "*.ts", "*.tsx", "*.html")),
     ):
         for g in globs:
-            files += [p for p in folder.rglob(g) if not SKIP_PARTS & set(p.relative_to(folder).parts)]
+            files += [
+                p
+                for p in folder.rglob(g)
+                if not SKIP_PARTS & set(p.relative_to(folder).parts) and not TEST_FILE.search(p.name)
+            ]
     return sorted(files)
 
 

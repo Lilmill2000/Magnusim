@@ -165,8 +165,11 @@ def register(hub: Any) -> None:
             family=FAMILY,
             algorithm_label="Laplacian",
             residual_keys=("T",),
+            residual_series=({"key": "T", "label": "T", "color": "#b42318", "always": True},),
             x_axis="iterations",
             validate_ready=validate_ready,
+            # Its own study and run settings (ui/index.tsx), in the core's panels.
+            ui={"study_settings": "stub-analysis.study", "run_settings": "stub-analysis.run"},
         ),
         plugin=PLUGIN,
     )

@@ -18,6 +18,9 @@ import { PanelChrome } from '../PanelChrome';
 import { RenameTitle } from '../RenameTitle';
 import { mergeObjectSchemas, pickSchemaValues, scopeIds, useRegistryReady } from '../scope';
 import { requiredPluginMessage } from '../../app/RequiredPluginError';
+import { DEFAULT_ANALYSIS_KEY } from '../../analysis';
+import type { StudySettingsProps } from '../../plugin-api';
+import { useSettingsSlot } from '../../plugin-api/slots';
 
 /** Every enabled analysis. Disabled plugins are already absent from the registry list. */
 export function visibleAnalyses(rows: RegistryRow[]): RegistryRow[] {
@@ -45,7 +48,7 @@ export function SimulationHub(props: IslandProps) {
 
   useEffect(() => {
     if (selected || !rows.length) return;
-    pick(rows.find((row) => row.key === 'incompressible_steady') || rows[0]);
+    pick(rows.find((row) => row.key === DEFAULT_ANALYSIS_KEY) || rows[0]);
   }, [rows, selected]);
 
   // Without its required plugin the app cannot create a study: Create stays off and says why.
@@ -97,26 +100,7 @@ function rowFor(key: string | undefined, rows: RegistryRow[]): RegistryRow | und
     const hit = rows.find((row) => row.key === key);
     if (hit) return hit;
   }
-  return rows.find((row) => row.key === 'incompressible_steady') || rows[0];
-}
-
-const TURBULENCE_ALIASES: Record<string, string> = {
-  laminar: 'laminar',
-  kepsilon: 'kEpsilon',
-  komegasst: 'kOmegaSST',
-  sst: 'kOmegaSST',
-  lrr: 'LRR',
-  ssg: 'SSG',
-};
-
-/** Model key from a study record. Created studies store "k-omega SST" as display text. */
-export function turbulenceKey(record: Record<string, unknown> | undefined): string | undefined {
-  const defaults = (record?.defaults || {}) as Record<string, unknown>;
-  for (const raw of [record?.turbulence_model, record?.turbulence_model_key, defaults.turbulence_model]) {
-    const key = TURBULENCE_ALIASES[String(raw || '').toLowerCase().replace(/[^a-z]/g, '')];
-    if (key) return key;
-  }
-  return undefined;
+  return rows.find((row) => row.key === DEFAULT_ANALYSIS_KEY) || rows[0];
 }
 
 function useStudyState(): StudyState | null {
@@ -125,56 +109,101 @@ function useStudyState(): StudyState | null {
   return state;
 }
 
-const TIME_HINT =
-  'Steady-state solves for the converged flow with simpleFoam. Transient marches through real time with pimpleFoam and writes frames you can animate.';
-
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Reynolds-stress models solve with Relaxation U 0.5 unless the study sets one (incompressible_flow.physics.default_relax_u). */
-export const RSM_RELAX_U = 0.5;
-
-export function numericsData(
-  record: Record<string, unknown>,
-  schema: RJSFSchema,
-  turbKey: string | null | undefined,
-): Record<string, unknown> {
-  const data = pickSchemaValues(record, schema);
-  const hasRelax = typeof data.relax_u === 'number' && Number.isFinite(data.relax_u);
-  if (!hasRelax && (turbKey === 'LRR' || turbKey === 'SSG') && schema.properties && 'relax_u' in schema.properties) {
-    data.relax_u = RSM_RELAX_U;
-  }
-  return data;
+/** An analysis without its own study settings: its settings, time dependency and numerics, from its schemas. */
+export function GenericStudySettings({ study, row, rows, save, setTimeDependency }: StudySettingsProps) {
+  const record = (study.record || {}) as Record<string, unknown>;
+  const transient = study.time_dependency === 'Transient';
+  const settingsSchema = mergeObjectSchemas([(row?.schema || row?.settings_schema) as RJSFSchema | undefined]);
+  const numericsSchema = mergeObjectSchemas([row?.numerics_schema as RJSFSchema | undefined]);
+  const hasSettings = Object.keys(settingsSchema.properties || {}).length > 0;
+  const hasNumerics = !transient && Object.keys(numericsSchema.properties || {}).length > 0;
+  const family = row?.family?.key;
+  const hasSibling =
+    !!family && rows.filter((r) => r.family?.key === family).some((r) => r.time_dependency !== row?.time_dependency);
+  const algorithm = study.algorithm || row?.algorithm_label || '';
+  const commit = (schema: RJSFSchema) => (values: Record<string, unknown>) => {
+    const patch = pickSchemaValues(values, schema);
+    const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => record[k] !== v));
+    if (Object.keys(changed).length) void save(changed);
+  };
+  return (
+    <>
+      {hasSettings ? (
+        <SchemaForm
+          className="schema-form sim-study-settings"
+          schema={settingsSchema}
+          formData={pickSchemaValues(record, settingsSchema)}
+          hideFooter
+          onCommit={commit(settingsSchema)}
+        />
+      ) : null}
+      {hasSibling ? (
+        <div className="sim-def-row">
+          <span className="sim-def-k">Time dependency</span>
+          <span className="sim-def-v">
+            <select
+              className="bc-select sim-def-select"
+              aria-label="Time dependency"
+              value={transient ? 'Transient' : 'Steady-state'}
+              onChange={(e) => void setTimeDependency(e.target.value as TimeDependency)}
+            >
+              <option value="Steady-state">Steady-state</option>
+              <option value="Transient">Transient</option>
+            </select>
+          </span>
+        </div>
+      ) : null}
+      {algorithm ? (
+        <div className="sim-def-row">
+          <span className="sim-def-k">Algorithm</span>
+          <span className="sim-def-v" data-study-algorithm="1">
+            {algorithm}
+          </span>
+        </div>
+      ) : null}
+      {hasNumerics ? (
+        <SchemaForm
+          className="schema-form sim-study-numerics"
+          schema={numericsSchema}
+          formData={pickSchemaValues(record, numericsSchema)}
+          hideFooter
+          onCommit={commit(numericsSchema)}
+        />
+      ) : null}
+    </>
+  );
 }
 
 /**
- * Study panel: the V0.1.0 rows (title, Analysis, Turbulence model, Time dependency,
- * Algorithm, note) plus the steady SIMPLE numerics. Every value here reaches the
- * written case (incompressible_flow.physics).
+ * Study panel: the core's chrome (title and rename, Analysis, Done/Delete, a
+ * failed save's message) around the analysis's own settings (its plugin's
+ * study-settings component, else the generic form from its schemas).
  */
 export function SimulationDefaults(_props: IslandProps) {
   const registry = useRegistryReady();
   const study = useStudyState();
   const [error, setError] = useState('');
   const rows = visibleAnalyses((registry?.analysis || []) as RegistryRow[]);
-  const record = (study?.record || {}) as Record<string, unknown>;
   const row = rowFor(study?.analysis_type, rows);
-  const transient = study?.time_dependency === 'Transient';
-  const settingsSchema = mergeObjectSchemas([(row?.schema || row?.settings_schema) as RJSFSchema | undefined]);
-  const numericsSchema = mergeObjectSchemas([row?.numerics_schema as RJSFSchema | undefined]);
-  const turbKey = turbulenceKey(record);
-  const settingsData = {
-    ...pickSchemaValues(record, settingsSchema),
-    ...(turbKey ? { turbulence_model: turbKey } : {}),
-  };
-  const hasSettings = Object.keys(settingsSchema.properties || {}).length > 0;
-  const hasNumerics = !transient && Object.keys(numericsSchema.properties || {}).length > 0;
+  const { Component: Settings, waiting } = useSettingsSlot<StudySettingsProps>('study-settings', row);
 
   async function save(patch: Record<string, unknown>) {
     setError('');
     try {
       await saveStudy(patch);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  async function setTimeDependency(value: TimeDependency) {
+    setError('');
+    try {
+      await setStudyTimeDependency(value);
     } catch (e) {
       setError(errorText(e));
     }
@@ -188,74 +217,17 @@ export function SimulationDefaults(_props: IslandProps) {
     );
   }
 
+  const settingsProps: StudySettingsProps = { study, row, rows, save, setTimeDependency };
   return (
     <div className="sim-study-panel" data-study-panel="1">
       <RenameTitle name={study.name || 'Simulation'} label="simulation" onRename={(next) => save({ name: next })} />
       <div className="sim-def-row">
         <span className="sim-def-k">Analysis</span>
         <span className="sim-def-v" data-study-analysis="1">
-          {study.analysis || (row ? analysisLabel(row) : 'Incompressible')}
+          {study.analysis || (row ? analysisLabel(row) : '')}
         </span>
       </div>
-      {hasSettings ? (
-        <SchemaForm
-          className="schema-form sim-study-settings"
-          schema={settingsSchema}
-          formData={settingsData}
-          hideFooter
-          onCommit={(values) => {
-            const patch = pickSchemaValues(values, settingsSchema);
-            if (typeof patch.turbulence_model === 'string') {
-              if (patch.turbulence_model === turbKey) delete patch.turbulence_model;
-              else patch.turbulence_model_key = patch.turbulence_model;
-            }
-            if (Object.keys(patch).length) void save(patch);
-          }}
-        />
-      ) : null}
-      <div className="sim-def-row">
-        <span className="sim-def-k" title="Steady-state solves for the converged flow. Transient marches through real time.">
-          Time dependency
-        </span>
-        <span className="sim-def-v">
-          <select
-            className="bc-select sim-def-select"
-            aria-label="Time dependency"
-            value={transient ? 'Transient' : 'Steady-state'}
-            onChange={(e) => {
-              setError('');
-              setStudyTimeDependency(e.target.value as TimeDependency).catch((err) => setError(errorText(err)));
-            }}
-          >
-            <option value="Steady-state">Steady-state</option>
-            <option value="Transient">Transient</option>
-          </select>
-        </span>
-      </div>
-      <div className="sim-def-row">
-        <span className="sim-def-k">Algorithm</span>
-        <span className="sim-def-v" data-study-algorithm="1">
-          {study.algorithm || (transient ? 'PIMPLE' : 'SIMPLE')}
-        </span>
-      </div>
-      <p className="mat-assign-hint sim-def-hint">{TIME_HINT}</p>
-      {hasNumerics ? (
-        <SchemaForm
-          className="schema-form sim-study-numerics"
-          schema={numericsSchema}
-          formData={numericsData(record, numericsSchema, turbKey)}
-          hideFooter
-          onCommit={(values) => {
-            const patch = pickSchemaValues(values, numericsSchema);
-            const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => record[k] !== v));
-            if (Object.keys(changed).length) void save(changed);
-          }}
-        />
-      ) : transient ? (
-        <p className="mat-assign-hint sim-def-hint" data-study-transient-note="1">
-          Transient runs take their time step, time scheme and PIMPLE correctors from each run&apos;s panel.
-        </p>
-      ) : null}
+      {waiting ? null : Settings ? <Settings {...settingsProps} /> : <GenericStudySettings {...settingsProps} />}
       {error ? (
         <p className="mat-assign-hint" data-run-reason="1" role="alert">
           {error}
@@ -274,14 +246,7 @@ export function SimulationDefaults(_props: IslandProps) {
             Delete
           </button>
         </div>
-        <button
-          type="button"
-          className="js-btn tree-panel-done"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent('cfd:panel-done'));
-            dispatchPanelDone();
-          }}
-        >
+        <button type="button" className="js-btn tree-panel-done" onClick={() => dispatchPanelDone()}>
           Done
         </button>
       </div>

@@ -10,20 +10,28 @@ The host loads a plugin whose `api_version` has the same major version as its ow
 |---|---|
 | `family` (`AnalysisFamily`) | Create Simulation title, description, tags; the study's name |
 | `study_defaults(time_dependency)` | A new study's settings (published in `registry.describe` as `study_defaults`) |
-| `algorithm_label`, `residual_keys`, `x_axis`, `ui` | What the study and run panels show |
+| `algorithm_label`, `x_axis` | The study panel's Algorithm row; the residual plot's x axis (`seconds` / `iterations`) |
+| `residual_series` | The residual plot: per series `key`, `label`, `color`, `fields` (solver-log fields a point takes the largest of), `always` (in the legend before it has values), `dashed` (a per-step metric such as the Courant number, with `max_key`), `swatch` (a legend class). Defaults to one series per `residual_keys` entry |
+| `ui` | `study_settings` / `run_settings`: the names of the components the plugin's UI registers for the study and run panels' settings slots (below) |
+| `run_monitors(case_dir)` | A run's monitor results for the Graphs panel: `{rho, monitors, custom, balance}` |
+| `plan_case(ctx)` | What `write_case` would report, without writing (`prepare_run --validate-only`) |
 | `validate_ready(ctx)` | What blocks a run: `[{"message", "fix"}]`, checked before the run is marked running |
 | `run_model` (`RunModel`) | Run settings `defaults()`, `normalize()`, `preview()` (the Run panel preview) |
 | `launch` (returns `LaunchSpec`) | Program, `keep_frames` (`all` / `latest`), `process_names`, `stop_strategy`, `frame_fields`, `log_parser` |
 | `log_parser` (`LogParserRef`) | The one solver-output parser; Node only aggregates its events |
 | `frame_fields` | Fields that mark a written result frame (default: `fields`) |
 
-Worker RPCs: `analysis.describe`, `analysis.defaults`, `analysis.validate_ready`, `analysis.run_preview`, `analysis.launch_spec`. `run.transient_preview` is gone; `analysis.run_preview` replaces it.
+Worker RPCs: `analysis.describe`, `analysis.defaults`, `analysis.validate_ready`, `analysis.run_preview`, `analysis.launch_spec`, `analysis.run_monitors`. `run.transient_preview` is gone; `analysis.run_preview` replaces it.
 
 `prepare_run` reports `app` as the program to run (the solver's `application`, not its registry key), plus `launch` and the boundary-to-patch mapping `bcs`. It refuses a run that is not ready (`{"ok": false, "not_ready": true, "error", "fix"}`) and writes nothing.
 
 **Bundled tier.** `bundled-plugins/` ships with the app and loads after the core builtins and before entry points and user plugins, in dependency order. New manifest fields: `tier = "bundled"`, `required`, `requires_plugins` (also for user plugins), `protected`. A required plugin that does not load blocks creating and running simulations with a message (`registry.describe` → `required_missing`); it cannot be turned off. Incompressible Flow (`incompressible_steady`, `incompressible_transient`, `simpleFoam`, `pimpleFoam`, `simpleFoam_amgx`) is the required bundled plugin; the keys are unchanged, so projects need no migration. `MAGNUSIM_BUNDLED_DIR` moves the bundled folder (tests); `MAGNUSIM_PLUGINS_DIR` still moves only the user plugins.
 
 **`magnusim_sdk`** (`python/sdk`, standard library only): `events`, `units`, `foam`, `gmsh_helpers`, `msh22` (numpy imported when used), `proc`. Plugins may import `magnusim_sdk` and `cfddesk.registry` only (`tools/plugin_boundary.py`).
+
+**Settings slots (in-page UI).** The study panel and the run panel are core chrome (title and rename, Done/Delete, the Start gate, progress, residuals, monitors). The analysis's settings sit inside, drawn by its plugin: `host.pluginUi.registerStudySettings(name, Component)` and `registerRunSettings(name, Component)`, named by the contract's `ui.study_settings` / `ui.run_settings`. A study-settings component gets `{study, row, rows, save, setTimeDependency}`, a run-settings component `{run, row, saveSteady, saveTransient}` (types: `src/plugin-api/slots.ts`). An analysis that names none gets a generic form from its `settings_schema`, `numerics_schema` and `control_schema`. Disabling the plugin removes its components.
+
+**TypeScript UI.** A manifest's `ui_entry` may be `.tsx`/`.ts`/`.jsx`: the host bundles it when it serves it, into one ES module on the host's React (`react` and the JSX runtime resolve to the page's single copy). A plugin UI may import only `react` and files inside its `ui` folder; type-only imports of the host API types are erased. Bundled plugins' UI is served from `bundled-plugins/<folder>/<ui>`.
 
 ## 1.0
 

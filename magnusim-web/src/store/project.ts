@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { apiGet, apiPost } from '../api/client';
 import type { RegistryDescribe, RegistryRow } from '../api/registry.gen';
+import { DEFAULT_ANALYSIS_KEY } from '../analysis';
 
 export interface ProjectState {
   projectId: string | null;
@@ -60,33 +61,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!force && get().registry) return get().registry as RegistryDescribe;
     const data = await apiGet<RegistryDescribe>('/api/registry');
     set({ registry: data });
+    // A new study's settings when none is picked: the default analysis's
+    // study_defaults (its contract). Run defaults are each analysis's run_defaults.
     const analyses = (data.analysis || []) as RegistryRow[];
-    const inc = analyses.find((a) => a.key === 'incompressible_steady') || analyses[0];
-    if (inc) {
-      window.__CFD_W17_DEFAULTS__ = {
-        analysis: String(inc.label || 'Incompressible'),
-        analysis_type: String(inc.key || 'incompressible_steady'),
-        turbulence_model: String(inc.default_turbulence || 'k-omega SST'),
-        time_dependency: /transient/i.test(String(inc.time_dependency || ''))
-          ? 'Transient'
-          : 'Steady-state',
-        algorithm: /pimple/i.test(String(inc.default_solver || '')) ? 'PIMPLE' : 'SIMPLE',
-      };
+    const def = analyses.find((a) => a.key === DEFAULT_ANALYSIS_KEY) || analyses[0];
+    if (def && def.study_defaults) {
+      window.__CFD_W17_DEFAULTS__ = { ...def.study_defaults };
     }
-    // Run settings defaults: the registered control_schemas (one copy,
-    // incompressible_flow.transient TRANSIENT_DEFAULTS / STEADY_DEFAULTS). null = calculate for me.
-    const controlDefaults = (key: string): Record<string, unknown> | null => {
-      const row = analyses.find((a) => a.key === key);
-      const props = (row?.control_schema as { properties?: Record<string, { default?: unknown }> } | null | undefined)
-        ?.properties;
-      return props
-        ? Object.fromEntries(Object.entries(props).map(([k, prop]) => [k, prop && 'default' in prop ? prop.default : null]))
-        : null;
-    };
-    const transientDefaults = controlDefaults('incompressible_transient');
-    if (transientDefaults) window.__CFD_TRANSIENT_DEFAULTS__ = transientDefaults;
-    const steadyDefaults = controlDefaults('incompressible_steady');
-    if (steadyDefaults) window.__CFD_STEADY_DEFAULTS__ = steadyDefaults;
     return data;
   },
   async refreshHydrate(projectId) {

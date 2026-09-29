@@ -35,9 +35,9 @@ describe('run-control defaults have one source', () => {
   it('the page keeps no copy of its own and Node no time-step estimate', () => {
     const runtime = text('src/workbench/runtime.js');
     assert.equal(runtime.includes('TRANSIENT_DEFAULTS_CLIENT'), false);
-    assert.match(runtime, /window\.__CFD_TRANSIENT_DEFAULTS__/);
-    // Nor of the steady iterations / write interval (200 / 50).
-    assert.match(runtime, /window\.__CFD_STEADY_DEFAULTS__/);
+    // Run defaults are the run's analysis's run_defaults (registry.describe), steady
+    // iterations / write interval (200 / 50) included.
+    assert.match(runtime, /runDefaults\(/);
     const page = runtime + text('src/workbench/catalogs.js');
     assert.equal(/endTime:\s*200\b|writeInterval:\s*50\b|\|\|\s*200,|\|\|\s*50,/.test(page), false);
     const w30 = text('scripts/w30-transient.js');

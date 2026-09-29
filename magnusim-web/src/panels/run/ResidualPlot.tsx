@@ -1,16 +1,32 @@
-import { useMemo, useRef, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import type { ResidualRow } from './residuals';
 
-/** V0.1.0 residual colors (runtime SIM_RES_SERIES / SIM_CO_SERIES). */
-export const RES_SERIES = [
-  { key: 'U', label: 'U', color: '#1570ef' },
-  { key: 'p', label: 'p', color: '#6941c6' },
-  { key: 'k', label: 'k', color: '#12b76a' },
-  { key: 'omega', label: 'ω', color: '#f79009' },
-  { key: 'epsilon', label: 'ε', color: '#0ba5ec' },
-  { key: 'R', label: 'R', color: '#dd2590' },
-] as const;
-const CO_SERIES = { key: 'co_mean', label: 'Co mean', color: '#d92d20' } as const;
+/**
+ * One plotted series, as the run's analysis declares it (contract
+ * residual_series): its color and legend swatch, whether the legend always
+ * lists it, and for a dashed per-step metric its max column in the readout.
+ */
+export interface ResidualSeries {
+  key: string;
+  label: string;
+  color: string;
+  always?: boolean;
+  dashed?: boolean;
+  max_key?: string;
+  max_label?: string;
+  swatch?: string;
+}
+
+/** Colors for series an analysis did not declare (a run read before the registry). */
+const FALLBACK_COLORS = ['#1570ef', '#6941c6', '#12b76a', '#f79009', '#0ba5ec', '#dd2590', '#667085'];
+
+/** The declared series, else one per number the rows carry. */
+export function seriesFor(rows: Array<Record<string, number | undefined>>, declared: ResidualSeries[]): ResidualSeries[] {
+  if (declared.length) return declared;
+  const keys: string[] = [];
+  for (const row of rows) for (const k of Object.keys(row)) if (k !== 't' && !keys.includes(k)) keys.push(k);
+  return keys.map((key, i) => ({ key, label: key, color: FALLBACK_COLORS[i % FALLBACK_COLORS.length], always: true }));
+}
 
 const W = 280;
 const H = 132;
@@ -19,7 +35,7 @@ const PAD_R = 8;
 const PAD_T = 10;
 const PAD_B = 18;
 
-type Row = ResidualRow & { co_max?: number; [key: string]: number | undefined };
+type Row = ResidualRow & { [key: string]: number | undefined };
 
 /** Seconds → short label (5 s, 0.1 s, 2.5e-4 s), as the runtime's formatSimTime. */
 export function formatSimTime(v: number): string {
@@ -48,14 +64,15 @@ function plotNum(v: number): string {
 
 export interface PlotGeometry {
   xmax: number;
-  hasCo: boolean;
+  /** The dashed per-step metrics that have values (drawn, and read out on hover). */
+  metrics: ResidualSeries[];
   decades: Array<{ y: number; label: string }>;
   lines: Array<{ key: string; color: string; dashed: boolean; points: string }>;
   xOf: (t: number) => number;
 }
 
 /** Log-scale residual plot geometry; null when nothing positive has been written yet. */
-export function plotGeometry(rows: Row[], endTime: number, transient: boolean): PlotGeometry | null {
+export function plotGeometry(rows: Row[], endTime: number, seconds: boolean, series: ResidualSeries[]): PlotGeometry | null {
   if (!rows.length) return null;
   let dataMax = 0;
   for (const r of rows) {
@@ -63,9 +80,9 @@ export function plotGeometry(rows: Row[], endTime: number, transient: boolean): 
     if (Number.isFinite(t) && t > dataMax) dataMax = t;
   }
   const planned = Number(endTime) || 0;
-  const xmax = transient ? (planned > 0 ? Math.max(planned, dataMax) : dataMax > 0 ? dataMax : 1e-3) : Math.max(planned, dataMax, 1);
-  const hasCo = transient && rows.some((r) => Number(r.co_mean) > 0);
-  const drawn = hasCo ? [...RES_SERIES, CO_SERIES] : [...RES_SERIES];
+  const xmax = seconds ? (planned > 0 ? Math.max(planned, dataMax) : dataMax > 0 ? dataMax : 1e-3) : Math.max(planned, dataMax, 1);
+  const metrics = series.filter((s) => s.dashed && rows.some((r) => Number(r[s.key]) > 0));
+  const drawn = [...series.filter((s) => !s.dashed), ...metrics];
   const logs: number[] = [];
   for (const row of rows) {
     for (const s of drawn) {
@@ -96,19 +113,38 @@ export function plotGeometry(rows: Row[], endTime: number, transient: boolean): 
       const v = Number(row[s.key]);
       if (Number.isFinite(v) && v > 0) pts.push(`${xOf(Number(row.t)).toFixed(1)},${yOf(v).toFixed(1)}`);
     }
-    if (pts.length) lines.push({ key: s.key, color: s.color, dashed: s === CO_SERIES, points: pts.join(' ') });
+    if (pts.length) lines.push({ key: s.key, color: s.color, dashed: !!s.dashed, points: pts.join(' ') });
   }
-  return { xmax, hasCo, decades, lines, xOf };
+  return { xmax, metrics, decades, lines, xOf };
 }
 
-/** U and p always; turbulence series only when this run solves them (laminar has none). */
-export function legendSeries(rows: Row[]) {
-  return RES_SERIES.filter((s) => s.key === 'U' || s.key === 'p' || rows.some((r) => Number(r[s.key]) > 0));
+/** The legend: series the analysis always lists, and the others once the run solves them. */
+export function legendSeries(rows: Row[], series: ResidualSeries[]) {
+  return series.filter((s) => !s.dashed && (s.always || rows.some((r) => Number(r[s.key]) > 0)));
 }
 
-/** Residuals (log scale) with the V0.1.0 legend and hover readout. */
-export function ResidualPlot({ rows, endTime, transient }: { rows: Row[]; endTime: number; transient: boolean }) {
-  const geo = useMemo(() => plotGeometry(rows, endTime, transient), [rows, endTime, transient]);
+function Swatch({ s }: { s: ResidualSeries }) {
+  return s.swatch ? (
+    <i className={`sim-swatch sim-swatch-${s.swatch}`} />
+  ) : (
+    <i className="sim-swatch" style={{ background: s.color }} />
+  );
+}
+
+/** Residuals (log scale) with the V0.1.0 legend and hover readout; x in seconds or iterations. */
+export function ResidualPlot({
+  rows,
+  endTime,
+  seconds,
+  series: declared,
+}: {
+  rows: Row[];
+  endTime: number;
+  seconds: boolean;
+  series: ResidualSeries[];
+}) {
+  const series = useMemo(() => seriesFor(rows, declared), [rows, declared]);
+  const geo = useMemo(() => plotGeometry(rows, endTime, seconds, series), [rows, endTime, seconds, series]);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [hover, setHover] = useState<{ row: Row; x: number } | null>(null);
   if (!geo) return null;
@@ -154,10 +190,10 @@ export function ResidualPlot({ rows, endTime, transient }: { rows: Row[]; endTim
             </g>
           ))}
           <text x={PAD_L} y={H - 4} fontSize="8" fill="#98a2b3">
-            {transient ? '0 s' : '1'}
+            {seconds ? '0 s' : '1'}
           </text>
           <text x={W - PAD_R} y={H - 4} textAnchor="end" fontSize="8" fill="#98a2b3">
-            {transient ? formatSimTime(geo.xmax) : String(Math.round(geo.xmax))}
+            {seconds ? formatSimTime(geo.xmax) : String(Math.round(geo.xmax))}
           </text>
           {geo.lines.map((l) => (
             <polyline
@@ -175,18 +211,22 @@ export function ResidualPlot({ rows, endTime, transient }: { rows: Row[]; endTim
           <>
             <div className="sim-plot-cursor" style={{ left: `${hover.x.toFixed(1)}px` }} />
             <div className="sim-plot-tip" style={{ left: `${tipLeft.toFixed(1)}px` }}>
-              <b>{transient ? `t = ${formatSimTime(Number(hover.row.t))}` : `Iteration ${Math.round(Number(hover.row.t))}`}</b>
-              {geo.hasCo && Number.isFinite(Number(hover.row.co_mean)) ? (
-                <>
-                  <br />
-                  <span className="co">
-                    Co mean {plotNum(Number(hover.row.co_mean))}
-                    {Number.isFinite(Number(hover.row.co_max)) ? ` · max ${plotNum(Number(hover.row.co_max))}` : ''}
-                  </span>
-                </>
-              ) : null}
+              <b>{seconds ? `t = ${formatSimTime(Number(hover.row.t))}` : `Iteration ${Math.round(Number(hover.row.t))}`}</b>
+              {geo.metrics
+                .filter((m) => Number.isFinite(Number(hover.row[m.key])))
+                .map((m) => (
+                  <Fragment key={m.key}>
+                    <br />
+                    <span className={m.swatch || 'metric'}>
+                      {m.label} {plotNum(Number(hover.row[m.key]))}
+                      {m.max_key && Number.isFinite(Number(hover.row[m.max_key]))
+                        ? ` · ${m.max_label || 'max'} ${plotNum(Number(hover.row[m.max_key]))}`
+                        : ''}
+                    </span>
+                  </Fragment>
+                ))}
               <br />
-              {RES_SERIES.filter((s) => Number(hover.row[s.key]) > 0).map((s, i) => (
+              {series.filter((s) => !s.dashed && Number(hover.row[s.key]) > 0).map((s, i) => (
                 <span key={s.key}>
                   {i ? ' · ' : ''}
                   <span style={{ color: s.color }}>{s.label}</span> {Number(hover.row[s.key]).toExponential(1)}
@@ -197,18 +237,12 @@ export function ResidualPlot({ rows, endTime, transient }: { rows: Row[]; endTim
         ) : null}
       </div>
       <div className="sim-residual-legend">
-        {legendSeries(rows).map((s) => (
+        {[...legendSeries(rows, series), ...geo.metrics].map((s) => (
           <span key={s.key}>
-            <i className={`sim-swatch sim-swatch-${s.key === 'omega' ? 'w' : s.key.toLowerCase()}`} />
+            <Swatch s={s} />
             {s.label}
           </span>
         ))}
-        {geo.hasCo ? (
-          <span>
-            <i className="sim-swatch sim-swatch-co" />
-            Co mean
-          </span>
-        ) : null}
       </div>
     </>
   );

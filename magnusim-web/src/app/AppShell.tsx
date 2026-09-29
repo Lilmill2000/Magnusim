@@ -62,6 +62,7 @@ export function AppShell() {
       .catch(() => undefined)
       .finally(() => {
         window.__CFD_PLUGINS_READY__ = true;
+        window.dispatchEvent(new Event('cfd:plugins-ready'));
       });
     bindLegacyViewer();
     // Plugins register with the open project's scope; re-run them when it changes

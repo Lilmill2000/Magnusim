@@ -30,7 +30,6 @@ import {
   TRANSIENT_LARGE_MESH_CELLS,
   simIsTransient,
   normalizeTransient,
-  describeTransient,
 } from './w30-transient.js';
 import { createJobLogger } from './log.js';
 import { envGet } from './env-compat.js';
@@ -51,6 +50,8 @@ import { solveStartBlockReason } from './solve-start-block.js';
 import {
   algorithmLabelFor,
   analysisByKey,
+  analysisKeyFor,
+  DEFAULT_ANALYSIS_KEY,
   requiredPluginError,
   steadyDefaultsFromRegistry,
 } from './registry-defaults.js';
@@ -253,29 +254,45 @@ function parsePrepareRunStdout(stdout) {
   return null;
 }
 
-function compactResidual(row) {
-  const ux = Number(row.Ux);
-  const uy = Number(row.Uy);
-  const uz = Number(row.Uz);
-  const uBits = [ux, uy, uz].filter(Number.isFinite);
+/** The residual series a run's analysis plots (its contract's residual_series). */
+function residualSeriesFor(analysisKey) {
+  const row = analysisKey ? analysisByKey(analysisKey) : null;
+  return row && Array.isArray(row.residual_series) ? row.residual_series : [];
+}
+
+/**
+ * The analysis a run solved with. Runs from before runs were stamped with it
+ * are the default analysis family's; its transient sibling plots the steady
+ * series plus the Courant number, so it reads either kind of old run.
+ */
+function runAnalysisKeyOf(doc) {
+  return (doc && doc.analysis_key) || analysisKeyFor(DEFAULT_ANALYSIS_KEY, 'Transient');
+}
+
+/**
+ * One plotted point: each series takes the largest of its solver fields (U of
+ * Ux/Uy/Uz, say), plus a per-step metric's max. An analysis that declares no
+ * series keeps every number as it came.
+ */
+export function compactResidual(row, series) {
+  if (!series || !series.length) {
+    const out = { t: row.t };
+    for (const [k, v] of Object.entries(row)) if (k !== 't' && Number.isFinite(Number(v))) out[k] = Number(v);
+    return out;
+  }
   const out = { t: row.t };
-  if (uBits.length) out.U = Math.max(...uBits);
-  if (Number.isFinite(Number(row.p))) out.p = Number(row.p);
-  if (Number.isFinite(Number(row.k))) out.k = Number(row.k);
-  if (Number.isFinite(Number(row.omega))) out.omega = Number(row.omega);
-  if (Number.isFinite(Number(row.epsilon))) out.epsilon = Number(row.epsilon);
-  // Reynolds-stress models solve six R components; plot the largest, like U.
-  const rBits = ['Rxx', 'Rxy', 'Rxz', 'Ryy', 'Ryz', 'Rzz'].map((k) => Number(row[k])).filter(Number.isFinite);
-  if (rBits.length) out.R = Math.max(...rBits);
-  // Transient runs: Courant number per step (drawn on the residual plot).
-  if (Number.isFinite(Number(row.co_mean))) out.co_mean = Number(row.co_mean);
-  if (Number.isFinite(Number(row.co_max))) out.co_max = Number(row.co_max);
+  for (const s of series) {
+    const fields = s.fields && s.fields.length ? s.fields : [s.key];
+    const bits = fields.map((k) => Number(row[k])).filter(Number.isFinite);
+    if (bits.length) out[s.key] = Math.max(...bits);
+    if (s.max_key && Number.isFinite(Number(row[s.max_key]))) out[s.max_key] = Number(row[s.max_key]);
+  }
   return out;
 }
 
-function downsampleResiduals(series, maxPts = 200) {
+function downsampleResiduals(series, maxPts = 200, spec = []) {
   if (!Array.isArray(series) || !series.length) return [];
-  const compact = series.map(compactResidual);
+  const compact = series.map((row) => compactResidual(row, spec));
   if (compact.length <= maxPts) return compact;
   const out = [];
   const last = compact.length - 1;
@@ -286,9 +303,17 @@ function downsampleResiduals(series, maxPts = 200) {
   return out;
 }
 
-function rowHasResidual(row) {
-  const n = ['Ux', 'Uy', 'Uz', 'p', 'k', 'omega', 'epsilon', 'Rxx'].filter((k) => Number.isFinite(Number(row && row[k]))).length;
-  return n >= 2;
+/**
+ * A solver iteration's row, not a lone metric line: two of its residual fields
+ * (or every one, for an analysis that solves a single field).
+ */
+function rowHasResidual(row, spec = []) {
+  const solved = spec.filter((s) => !s.dashed);
+  const fields = solved.length
+    ? solved.flatMap((s) => (s.fields && s.fields.length ? s.fields : [s.key]))
+    : Object.keys(row || {}).filter((k) => k !== 't');
+  const n = fields.filter((k) => Number.isFinite(Number(row && row[k]))).length;
+  return n >= Math.min(2, fields.length);
 }
 
 function snapshotProgress(state) {
@@ -305,7 +330,11 @@ function snapshotProgress(state) {
     // Physical time for transient runs (same number as iteration for steady).
     sim_time: last && Number.isFinite(last.t) ? last.t : 0,
     n_steps: series.length,
-    residuals: downsampleResiduals(series.filter(rowHasResidual)),
+    residuals: downsampleResiduals(
+      series.filter((row) => rowHasResidual(row, state.residual_series || [])),
+      200,
+      state.residual_series || [],
+    ),
     solve_started_at: state.solve_started_at || null,
   };
   if (last && Number.isFinite(last.co_max)) out.co_max = last.co_max;
@@ -324,8 +353,9 @@ function snapshotProgress(state) {
  * MAGNUSIM_EVENT prefix). Raw solver lines are not parsed here: that is the
  * analysis's log parser's job, and it already turned them into these events.
  */
-export function parseSolveProgress(text) {
+export function parseSolveProgress(text, analysisKey) {
   const state = newProgressState();
+  state.residual_series = residualSeriesFor(analysisKey);
   for (const line of String(text || '').split(/\r?\n/)) {
     const ev = parseEventPayload(line);
     if (ev) applyJobEvent(state, ev);
@@ -387,7 +417,7 @@ function enrichRunDoc(doc, opts) {
     for (const logPath of [doc.log_jsonl_path, doc.log_path]) {
       if (!logPath || !existsSync(logPath)) continue;
       try {
-        const parsed = parseSolveProgress(readFileSync(logPath, 'utf8'));
+        const parsed = parseSolveProgress(readFileSync(logPath, 'utf8'), runAnalysisKeyOf(doc));
         if (!progressSnapshotIsThin(parsed) || (parsed && parsed.stage && parsed.stage !== 'starting')) {
           progress = parsed;
           fromLog = true;
@@ -869,17 +899,19 @@ export async function getRunMonitors(projectId, runId, simulationId) {
 }
 
 /**
- * "<app> 4 ranks — <family> / <physics> / <algorithm>[ · <transient summary>]".
- * The physics and algorithm are what the analysis wrote the case with
- * (prepare_run's physics_label / algorithm); an analysis without them names none.
+ * "<app> 4 ranks — <family> / <physics> / <algorithm>[ · <detail>]". The
+ * physics, algorithm and detail (a transient run's time, frames and Courant
+ * limit) are what the analysis wrote the case with: prepare_run's
+ * physics_label / algorithm / note_detail. An analysis without them names none.
  */
-function runNote({ app, nProcs, analysisKey, sim, prep, transient }) {
+function runNote({ app, nProcs, analysisKey, sim, prep }) {
   const row = analysisByKey(analysisKey);
   const family = (row && row.family && row.family.label) || (sim && sim.analysis) || '';
   const algorithm = (prep && prep.algorithm) || algorithmLabelFor(analysisKey) || '';
   const parts = [family, (prep && prep.physics_label) || '', algorithm].filter(Boolean).join(' / ');
   const head = `${app} ${nProcs > 1 ? nProcs + ' ranks' : 'serial'}` + (parts ? ` — ${parts}` : '');
-  return transient ? `${head} · ${describeTransient(transient)}` : head;
+  const detail = (prep && prep.note_detail) || '';
+  return detail ? `${head} · ${detail}` : head;
 }
 
 function runsDir(projectId) {
@@ -1738,6 +1770,7 @@ export async function startSolve(opts = {}) {
   const started_at = new Date().toISOString();
   let logBuf = '';
   const progress = newProgressState();
+  progress.residual_series = residualSeriesFor((prepResult && prepResult.analysis_key) || '');
   // Seconds per phase of this solve, so where the time goes is on record.
   progress.phases = { prepare: Math.round(Date.now() - prepT0) / 1000 };
   const runSolveArgs = [
@@ -1766,7 +1799,7 @@ export async function startSolve(opts = {}) {
     if (runFinished) return;
     runFinished = true;
     const exit_code = code == null ? (signal ? -2 : -1) : code;
-    const snap = liveRun && liveRun.progress ? snapshotProgress(liveRun.progress) : parseSolveProgress(logBuf);
+    const snap = liveRun && liveRun.progress ? snapshotProgress(liveRun.progress) : parseSolveProgress(logBuf, (prepResult && prepResult.analysis_key) || '');
     const stopRequested = !!(liveRun && liveRun.stop_requested);
     if (liveRun && liveRun.stop_timer) clearTimeout(liveRun.stop_timer);
     const base = (liveRun && liveRun.baseRunning) || {};
@@ -1922,7 +1955,6 @@ export async function startSolve(opts = {}) {
       analysisKey: (prepResult && prepResult.analysis_key) || '',
       sim: ready.sim,
       prep: prepResult,
-      transient: isTransient ? transient : null,
     }),
     increment: INCREMENT,
   };

@@ -31,9 +31,32 @@ FAMILY = AnalysisFamily(
     study_name="Incompressible",
 )
 
-# The residual series the run panel plots (U = max of Ux/Uy/Uz, R = max of the
-# Reynolds-stress components; see scripts/w27-solve.js compactResidual).
-RESIDUAL_KEYS = ("U", "p", "k", "omega", "epsilon", "R")
+# The residual series the run panel plots, with the V0.1.0 colors: U is the
+# largest of Ux/Uy/Uz, R the largest Reynolds-stress component. U and p are
+# always in the legend; turbulence series only when the run solves them.
+RESIDUAL_SERIES: tuple[dict, ...] = (
+    {"key": "U", "label": "U", "color": "#1570ef", "fields": ["Ux", "Uy", "Uz"], "always": True, "swatch": "u"},
+    {"key": "p", "label": "p", "color": "#6941c6", "always": True, "swatch": "p"},
+    {"key": "k", "label": "k", "color": "#12b76a", "swatch": "k"},
+    {"key": "omega", "label": "ω", "color": "#f79009", "swatch": "w"},
+    {"key": "epsilon", "label": "ε", "color": "#0ba5ec", "swatch": "epsilon"},
+    {"key": "R", "label": "R", "color": "#dd2590", "fields": ["Rxx", "Rxy", "Rxz", "Ryy", "Ryz", "Rzz"], "swatch": "r"},
+)
+# Transient runs also plot the mean Courant number per time step (dashed).
+COURANT_SERIES = {
+    "key": "co_mean",
+    "label": "Co mean",
+    "color": "#d92d20",
+    "dashed": True,
+    "max_key": "co_max",
+    "max_label": "max",
+    "swatch": "co",
+}
+RESIDUAL_KEYS = tuple(s["key"] for s in RESIDUAL_SERIES)
+
+
+def residual_series(td: str) -> tuple[dict, ...]:
+    return (*RESIDUAL_SERIES, COURANT_SERIES) if td == "transient" else RESIDUAL_SERIES
 
 # The solver-output parser lives in this package; the runner imports it from
 # the plugin folder (``path``).
@@ -41,7 +64,9 @@ LOG_PARSER = LogParserRef(
     "incompressible_flow.parser", "IncompressibleParser", str(Path(__file__).resolve().parents[1])
 )
 
-UI = {"study_panel": "SimulationPanel", "run_panel": "RunControl"}
+# The components this plugin's UI (ui/index.tsx) registers for the study and
+# run panels' settings slots.
+UI = {"study_settings": "incompressible_flow.study", "run_settings": "incompressible_flow.run"}
 
 TURBULENCE_LABELS = {
     "laminar": "Laminar",

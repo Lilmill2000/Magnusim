@@ -7,6 +7,11 @@ import { SchemaForm } from '../forms/SchemaForm';
 import { islandComponent, registerIsland, unregisterIsland, type IslandProps } from '../islands';
 import { bindLegacyViewer, type ViewerApi } from '../viewer/index';
 import { deleteFieldWidget, setFieldWidget } from './fieldWidgets';
+import { SciNumberInput } from '../forms/SciNumberInput';
+import { mergeObjectSchemas, pickSchemaValues } from '../panels/scope';
+import { registerSlotFor, unregisterSlot, type RunSettingsProps, type StudySettingsProps } from './slots';
+
+export type { RunSettingsProps, StudySettingsProps } from './slots';
 
 /**
  * Places the host actually renders: the Filters panel and the plugin's row in
@@ -30,6 +35,7 @@ interface Ledger {
   filterWidgets: Set<string>;
   fieldWidgets: Set<string>;
   islands: Map<string, ComponentType<IslandProps> | undefined>;
+  slots: Set<string>;
 }
 
 const HOST = '';
@@ -41,7 +47,7 @@ const ledgers = new Map<string, Ledger>();
 function ledgerFor(owner: string): Ledger {
   let ledger = ledgers.get(owner);
   if (!ledger) {
-    ledger = { panels: new Set(), filterWidgets: new Set(), fieldWidgets: new Set(), islands: new Map() };
+    ledger = { panels: new Set(), filterWidgets: new Set(), fieldWidgets: new Set(), islands: new Map(), slots: new Set() };
     ledgers.set(owner, ledger);
   }
   return ledger;
@@ -108,6 +114,7 @@ export function unregisterPlugin(owner: string): void {
     }
     for (const key of ledger.filterWidgets) filterWidgets.delete(key);
     for (const name of ledger.fieldWidgets) deleteFieldWidget(name);
+    for (const key of ledger.slots) unregisterSlot(key, owner);
     for (const [panelId, previous] of ledger.islands) {
       if (previous) registerIsland(panelId, previous);
       else unregisterIsland(panelId);
@@ -215,9 +222,25 @@ export function pluginTreeNodes(projectId: string): PluginTreeNode[] {
   });
 }
 
+/** An analysis's study settings, drawn in the study panel (its contract's ui.study_settings). */
+function registerStudySettingsFor(owner: string, name: string, Component: ComponentType<StudySettingsProps>): void {
+  ledgerFor(owner).slots.add(registerSlotFor(owner, 'study-settings', name, Component as ComponentType<never>));
+}
+
+/** An analysis's run settings, drawn in the run panel (its contract's ui.run_settings). */
+function registerRunSettingsFor(owner: string, name: string, Component: ComponentType<RunSettingsProps>): void {
+  ledgerFor(owner).slots.add(registerSlotFor(owner, 'run-settings', name, Component as ComponentType<never>));
+}
+
 /** The API object one plugin's register(host) receives; its registrations are recorded under its key. */
 export function pluginUiFor(owner: string) {
   return {
+    registerStudySettings: (name: string, Component: ComponentType<StudySettingsProps>) =>
+      registerStudySettingsFor(owner, name, Component),
+    registerRunSettings: (name: string, Component: ComponentType<RunSettingsProps>) =>
+      registerRunSettingsFor(owner, name, Component),
+    SciNumberInput,
+    schema: { mergeObjectSchemas, pickSchemaValues },
     registerPanel: (opts: RegisterPanelOpts) => registerPanelFor(owner, opts),
     replacePanel: (panelId: string, Component: ComponentType<IslandProps>) => replacePanelFor(owner, panelId, Component),
     registerFilterWidget: (key: string, Component: ComponentType<Record<string, unknown>>) =>

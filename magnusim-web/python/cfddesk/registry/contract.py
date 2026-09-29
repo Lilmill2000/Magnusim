@@ -165,12 +165,50 @@ def describe_extra(spec: Any) -> dict[str, Any]:
         ),
         "algorithm_label": str(_hook(spec, "algorithm_label") or ""),
         "residual_keys": list(_hook(spec, "residual_keys") or ()),
+        "residual_series": residual_series(spec),
         "x_axis": str(_hook(spec, "x_axis") or ("seconds" if _td(spec.time_dependency) == "transient" else "iterations")),
         "result_fields": result_fields,
         "ui": dict(_hook(spec, "ui") or {}),
         "study_defaults": study_defaults(spec),
         "run_defaults": run_defaults(spec),
     }
+
+
+_SERIES_KEYS = ("key", "label", "color", "fields", "always", "dashed", "max_key", "max_label", "swatch")
+
+
+def residual_series(spec: Any) -> list[dict[str, Any]]:
+    """The series the run panel plots, in order: the analysis's own, else one per residual key.
+
+    ``fields`` are the solver-log fields a point takes the largest of (default
+    the key itself). A ``dashed`` series is a per-step metric drawn on the same
+    log axis, with its own line in the hover readout (``max_key`` adds its max).
+    """
+    raw = list(_hook(spec, "residual_series") or ())
+    if not raw:
+        raw = [{"key": k} for k in (_hook(spec, "residual_keys") or ())]
+    out: list[dict[str, Any]] = []
+    for row in raw:
+        if not isinstance(row, dict) or not str(row.get("key") or "").strip():
+            raise ContractError(f"{spec.key}.residual_series rows need a key: {row!r}")
+        bad = set(row) - set(_SERIES_KEYS)
+        if bad:
+            raise ContractError(f"{spec.key}.residual_series: unknown field(s) {sorted(bad)}")
+        key = str(row["key"])
+        out.append(
+            {
+                "key": key,
+                "label": str(row.get("label") or key),
+                "color": str(row.get("color") or "#667085"),
+                "fields": [str(f) for f in (row.get("fields") or [key])],
+                "always": bool(row.get("always", False)),
+                "dashed": bool(row.get("dashed", False)),
+                "max_key": str(row.get("max_key") or ""),
+                "max_label": str(row.get("max_label") or ""),
+                "swatch": str(row.get("swatch") or ""),
+            }
+        )
+    return out
 
 
 def study_defaults(spec: Any, time_dependency: str | None = None) -> dict[str, Any]:

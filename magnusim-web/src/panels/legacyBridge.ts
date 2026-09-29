@@ -196,17 +196,15 @@ export interface RunGateState {
   reasons: string[];
 }
 
-export interface TransientSettings {
-  end_time: number;
-  write_count: number;
-  time_step_mode: string;
-  max_co: number;
-  delta_t: number | null;
-  max_delta_t: number | null;
-  time_scheme: string;
-  n_outer_correctors: number;
-  n_correctors: number;
-  n_non_orth_correctors: number;
+/** A transient run's control block. Its fields are the analysis's run model's (run_defaults). */
+export type TransientSettings = Record<string, unknown>;
+
+/** What the analysis's run model resolves for a run now (analysis.run_preview). */
+export interface RunPreview {
+  ok?: boolean;
+  partial?: boolean;
+  reason?: string | null;
+  control?: Record<string, unknown>;
 }
 
 /** What runtime.publishRunState dispatches as `cfd:run-state` for the selected run. */
@@ -229,10 +227,11 @@ export interface RunState {
   reason: { text: string; fix_label: string } | null;
   /** Steady iterations / write interval (null only before the registry has loaded). */
   settings: { end_time: number | null; write_interval: number | null };
+  /** The analysis the run solves with (its settings component and residual series). */
+  analysis_key: string;
   transient_settings: TransientSettings;
-  /** Simulation time ÷ result frames; the Max Δt placeholder. */
-  frame_interval: number;
-  transient_hint: { text: string; warn: string } | null;
+  /** A transient run's resolved numbers (null until the preview arrives, or steady). */
+  run_preview: RunPreview | null;
   progress: {
     show: boolean;
     title: string;
@@ -274,10 +273,6 @@ export async function saveTransientSettings(t: TransientSettings): Promise<unkno
   const fn = window.__CFD_RUN_TRANSIENT_SAVE__;
   if (!fn) throw new Error('Run settings are not ready yet.');
   return fn(t);
-}
-
-export async function resetTransientAdvanced(): Promise<unknown> {
-  return window.__CFD_RUN_TRANSIENT_RESET__?.();
 }
 
 export async function renameRun(name: string): Promise<unknown> {
@@ -352,14 +347,14 @@ export function studyStateNow(): StudyState | null {
   return window.__CFD_STUDY_STATE__ || window.__CFD_STUDY_STATE_NOW__?.() || null;
 }
 
-/** Save study fields (turbulence model, SIMPLE numerics) on the active study. */
+/** Save study fields (the analysis's settings and numerics) on the active study. */
 export async function saveStudy(patch: Record<string, unknown>): Promise<unknown> {
   const fn = window.__CFD_STUDY_UPDATE__;
   if (!fn) throw new Error('Simulation settings are not ready yet.');
   return fn(patch);
 }
 
-/** Switch the study between steady (SIMPLE) and transient (PIMPLE); draft runs follow. */
+/** Switch the study to its analysis family's steady or transient sibling; draft runs follow. */
 export async function setStudyTimeDependency(value: TimeDependency): Promise<unknown> {
   const fn = window.__CFD_STUDY_TIME__;
   if (!fn) throw new Error('Time dependency is not ready yet.');

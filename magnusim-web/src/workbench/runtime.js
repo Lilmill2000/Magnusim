@@ -44,6 +44,7 @@ import { prefersCollapseCompletedSections } from '../prefs';
 import { convertQuantity, preferredUnit, unitIsImperial } from '../units/convert';
 import { isIsland, mountIsland, unmountIsland } from '../islands';
 import { useProjectStore } from '../store/project';
+import { DEFAULT_ANALYSIS_KEY, analysisRow, runAnalysisKey, runDefaults, siblingKey, transientSolverApps } from '../analysis';
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
 import { subscribeJobEvents } from '../api/client';
@@ -8147,7 +8148,7 @@ function isGeneratedMeshReady(mesh) {
 
 function meshGenerateJobIsLive() {
   if (jobState.status !== 'running') return false;
-  if (jobState.mode === 'solve' || jobState.path_kind === 'simpleFoam' || jobState.path_kind === 'pimpleFoam') {
+  if (jobState.mode === 'solve') {
     return false;
   }
   return jobState.mode === 'mesh' || isMeshJobKind(jobState.path_kind);
@@ -19760,14 +19761,14 @@ setTreeActionHandler((scopeKey, action) => {
 
 
 /* ========================================================================
- * W17 — Create Simulation → Incompressible (persist simulation.json)
- * Defaults: k-omega SST / Steady-state / SIMPLE. No mesh/Air/BCs/solves.
+ * W17 — Create Simulation (persist simulation.json)
+ * A new study's settings are its analysis's study_defaults (registry.describe),
+ * published by the project store. No mesh/Air/BCs/solves.
  * ======================================================================== */
 const W17_DEFAULTS_FALLBACK = {
-  analysis: 'Incompressible',
-  turbulence_model: 'k-omega SST',
+  analysis: '',
   time_dependency: 'Steady-state',
-  algorithm: 'SIMPLE',
+  algorithm: '',
 };
 const W17_DEFAULTS = new Proxy(W17_DEFAULTS_FALLBACK, {
   get(target, prop) {
@@ -20740,8 +20741,7 @@ function applySimulationRecord(sim, projectId, extra) {
   };
   studyCatalog.project_id = studyCatalog.simulation.project_id;
   studyCatalog.ready = true;
-  studyCatalog.note =
-    'W17 HARD: Incompressible persisted with k-omega SST / Steady-state / SIMPLE';
+  studyCatalog.note = 'W17: study persisted with its analysis defaults';
   refreshSetupTree();
   publishW17({ created: true });
   return window.__CFD_W17__;
@@ -20924,7 +20924,7 @@ async function deleteStudyClient(simId) {
   return j;
 }
 
-/** W30: is the project's simulation transient (pimpleFoam over real time)? */
+/** W30: is the project's simulation transient (marching through real time)? */
 function simIsTransientClient() {
   const sim = studyCatalog && studyCatalog.simulation;
   return !!(sim && /transient/i.test(String(sim.time_dependency || '')));
@@ -21015,9 +21015,13 @@ function computeStudyState() {
     project_id: String(studyCatalog.project_id || currentProjectId() || ''),
     name: String(sim.name || 'Incompressible'),
     analysis: String(sim.analysis || W17_DEFAULTS.analysis),
-    analysis_type: String(sim.analysis_type || 'incompressible_steady'),
+    analysis_type: String(sim.analysis_type || DEFAULT_ANALYSIS_KEY),
     time_dependency: td,
-    algorithm: String(sim.algorithm || (td === 'Transient' ? 'PIMPLE' : W17_DEFAULTS.algorithm)),
+    algorithm: String(
+      sim.algorithm ||
+        (analysisRow(siblingKey(sim.analysis_type || DEFAULT_ANALYSIS_KEY, td)) || {}).algorithm_label ||
+        W17_DEFAULTS.algorithm,
+    ),
     record: { ...sim },
   };
 }
@@ -21081,6 +21085,16 @@ function setCreateTimeDependency(value, opts) {
 window.__CFD_CREATE_PICK_ANALYSIS__ = function pickCreateAnalysis(row) {
   const title = document.querySelector('#cs-detail .cs-detail-title');
   if (title && row && row.label) title.textContent = String(row.label);
+  // What the analysis is: its family's description and tags (contract).
+  const family = (row && row.family) || {};
+  const desc = document.querySelector('#cs-detail .cs-detail-desc');
+  if (desc) desc.textContent = String(family.description || '');
+  const tags = document.querySelector('#cs-detail .cs-tags');
+  if (tags) {
+    tags.innerHTML = (Array.isArray(family.tags) ? family.tags : [])
+      .map((t) => '<span class="cs-tag">' + escapeHtml(String(t)) + '</span>')
+      .join('');
+  }
   const transient = /transient/i.test(String((row && row.time_dependency) || ''));
   setCreateTimeDependency(transient ? 'Transient' : 'Steady-state', { fromList: true });
 };
@@ -27572,7 +27586,7 @@ function liveSolveIsRunning() {
   if (typeof solveHandleStillLive === 'function' && solveHandleStillLive(liveSolveHandleOpts())) return true;
   if (runCatalog && runCatalog.starting) return true;
   if (jobState.status === 'running') {
-    if (jobState.mode === 'solve' || jobState.path_kind === 'simpleFoam' || jobState.path_kind === 'pimpleFoam') {
+    if (jobState.mode === 'solve') {
       return true;
     }
   }
@@ -29385,23 +29399,33 @@ function toggleAssignAaFace(face) {
 })();
 
 
-/* ---- Simulation Control: Start / Stop simpleFoam from project mesh + BCs ---- */
+/* ---- Simulation Control: Start / Stop the run's solver from project mesh + BCs ---- */
 /* ---- W30 Transient: settings model, form, preview ---- */
 
-/**
- * Transient settings defaults. No copy lives here: they are the registered
- * control_schema of incompressible_transient (incompressible_flow.transient
- * TRANSIENT_DEFAULTS), published by the project store when the registry loads
- * and echoed by /api/run/status.
- */
-function transientDefaultsClient() {
-  return window.__CFD_TRANSIENT_DEFAULTS__ || (runCatalog && runCatalog.transient_defaults) || {};
+/** The open study's analysis (the family its runs solve with). */
+function studyAnalysisType() {
+  return (studyCatalog && studyCatalog.simulation && studyCatalog.simulation.analysis_type) || DEFAULT_ANALYSIS_KEY;
 }
 
-/** Steady defaults (iterations, write interval): the registered control_schema of
- * incompressible_steady (incompressible_flow.transient STEADY_DEFAULTS). No copy here. */
-function steadyDefaultsClient() {
-  return window.__CFD_STEADY_DEFAULTS__ || (runCatalog && runCatalog.steady_defaults) || {};
+/** The analysis a run solves with: its stamp, else its study's family at its time dependency. */
+function runAnalysisKeyOf(rec) {
+  return runAnalysisKey(rec, studyAnalysisType(), runRecIsTransient(rec));
+}
+
+/**
+ * A new transient run's settings. No copy lives here: they are the run
+ * model defaults of the study's transient analysis (registry.describe
+ * run_defaults), else what /api/run/status echoed.
+ */
+function transientDefaultsClient(analysisKey) {
+  const d = runDefaults(analysisKey || siblingKey(studyAnalysisType(), 'transient'));
+  return Object.keys(d).length ? d : (runCatalog && runCatalog.transient_defaults) || {};
+}
+
+/** A new steady run's iterations and write interval (its analysis's run_defaults). */
+function steadyDefaultsClient(analysisKey) {
+  const d = runDefaults(analysisKey || siblingKey(studyAnalysisType(), 'steady'));
+  return Object.keys(d).length ? d : (runCatalog && runCatalog.steady_defaults) || {};
 }
 
 /**
@@ -29442,13 +29466,13 @@ function queueRunSettingsSave(runId, fn) {
  */
 function runRecIsTransient(rec) {
   if (rec && rec.time_dependency) return /transient/i.test(String(rec.time_dependency));
-  if (rec && /pimple/i.test(String(rec.path_kind || ''))) return true;
+  if (rec && rec.path_kind && transientSolverApps().includes(String(rec.path_kind))) return true;
   if (rec && rec.status && rec.status !== 'draft') return false;
   return simIsTransientClient();
 }
 
 function transientSettingsFor(rec) {
-  const base = { ...transientDefaultsClient() };
+  const base = { ...transientDefaultsClient(rec && rec.analysis_key ? runAnalysisKeyOf(rec) : '') };
   const src = rec && rec.transient && typeof rec.transient === 'object' ? rec.transient : null;
   if (!src) return base;
   for (const k of Object.keys(base)) {
@@ -29474,93 +29498,14 @@ function formatSimTime(v, opts) {
   return s + unit;
 }
 
-/** Clamp and fill a transient settings object the way the form used to. */
-function normalizeTransient(raw) {
+/**
+ * A transient run's control block: the one on record with what the run panel
+ * changed. Its analysis's run-settings component keeps the values valid, and
+ * its run model normalizes them again when the case is written.
+ */
+function mergeTransient(raw) {
   const base = runCatalog.transient ? { ...runCatalog.transient } : { ...transientDefaultsClient() };
-  const src = raw || {};
-  const num = (v, prev, opts) => {
-    if (v === undefined) return prev;
-    if (v === null || String(v).trim() === '') return opts && opts.nullable ? null : prev;
-    const n = Number(v);
-    if (!Number.isFinite(n)) return prev;
-    return opts && opts.int ? Math.round(n) : n;
-  };
-  const str = (v, prev) => (v ? String(v) : prev);
-  const out = {
-    end_time: num(src.end_time, base.end_time),
-    write_count: num(src.write_count, base.write_count, { int: true }),
-    time_step_mode: str(src.time_step_mode, base.time_step_mode) === 'fixed' ? 'fixed' : 'adjustable',
-    max_co: num(src.max_co, base.max_co),
-    delta_t: num(src.delta_t, base.delta_t, { nullable: true }),
-    max_delta_t: num(src.max_delta_t, base.max_delta_t, { nullable: true }),
-    time_scheme: str(src.time_scheme, base.time_scheme) === 'backward' ? 'backward' : 'Euler',
-    n_outer_correctors: num(src.n_outer_correctors, base.n_outer_correctors, { int: true }),
-    n_correctors: num(src.n_correctors, base.n_correctors, { int: true }),
-    n_non_orth_correctors: num(src.n_non_orth_correctors, base.n_non_orth_correctors, { int: true }),
-  };
-  const defaults = transientDefaultsClient();
-  if (!(out.end_time > 0)) out.end_time = base.end_time > 0 ? base.end_time : defaults.end_time;
-  if (!(out.write_count >= 1)) out.write_count = defaults.write_count;
-  if (!(out.max_co > 0)) out.max_co = defaults.max_co;
-  if (out.delta_t != null && !(out.delta_t > 0)) out.delta_t = null;
-  if (out.max_delta_t != null && !(out.max_delta_t > 0)) out.max_delta_t = null;
-  const frameInterval = transientFrameInterval(out);
-  if (out.max_delta_t != null && frameInterval > 0 && out.max_delta_t > frameInterval) {
-    out.max_delta_t = frameInterval;
-  }
-  out.n_outer_correctors = Math.min(Math.max(out.n_outer_correctors || 1, 1), 50);
-  out.n_correctors = Math.min(Math.max(out.n_correctors || 1, 1), 10);
-  out.n_non_orth_correctors = Math.min(Math.max(out.n_non_orth_correctors || 0, 0), 5);
-  return out;
-}
-
-function transientFrameInterval(t) {
-  const frames = Math.max(1, Math.round(Number(t && t.write_count) || 1));
-  const end = Number(t && t.end_time);
-  return end > 0 ? end / frames : 0;
-}
-
-/** Hint under the transient inputs: frame interval, auto Δt, steps, flow-through. */
-/** Hint under the transient inputs: frame interval, auto Δt, steps, flow-through. */
-function transientHint() {
-  const t = runCatalog.transient || transientDefaultsClient();
-  const pv = runCatalog.transient_preview;
-  const ctrl = pv && pv.control;
-  const frames = Math.max(1, Math.round(Number(t.write_count) || 1));
-  const interval = Number(t.end_time) / frames;
-  const bits = [];
-  bits.push('A result frame every ' + formatSimTime(interval) + ' (' + frames + ' frames)');
-  if ((t.time_step_mode || 'adjustable') !== 'fixed') {
-    bits.push('max Δt limited to that interval so every frame is written');
-  }
-  if (ctrl) {
-    const dtAuto = ctrl.source && ctrl.source.delta_t === 'auto';
-    if (ctrl.adjust_time_step) {
-      bits.push(
-        (dtAuto ? 'starting Δt ≈ ' : 'starting Δt ') +
-          formatSimTime(ctrl.delta_t) +
-          (dtAuto ? ' (auto)' : '') +
-          ', adjusted to keep Co ≤ ' +
-          String(Number(ctrl.max_co))
-      );
-    } else {
-      bits.push('fixed Δt ' + formatSimTime(ctrl.delta_t) + (dtAuto ? ' (auto)' : ''));
-    }
-    const est = ctrl.estimate || {};
-    if (Number.isFinite(est.steps) && est.steps > 0) {
-      bits.push('roughly ' + Number(est.steps).toLocaleString() + ' time steps');
-    }
-    if (Number.isFinite(est.flow_through_s) && est.flow_through_s > 0) {
-      bits.push('one flow-through of the domain ≈ ' + formatSimTime(est.flow_through_s));
-    }
-  }
-  let warn = '';
-  if (ctrl && ctrl.estimate && Number.isFinite(ctrl.estimate.steps) && ctrl.estimate.steps > 200000) {
-    warn = 'That is a long run — a shorter simulation time, a coarser mesh or a higher Courant number (Advanced) will finish sooner.';
-  } else if (pv && pv.partial) {
-    warn = 'Assign a mesh and boundary conditions to see the calculated time step.';
-  }
-  return { text: bits.join(' · ') + '.', warn };
+  return { ...base, ...(raw || {}) };
 }
 
 /** Ask the server for the resolved transient numbers (debounced, deduped). */
@@ -29594,7 +29539,7 @@ function refreshTransientPreview(opts) {
 
 async function persistTransientSettings(next) {
   const rec = selectedRunRecord();
-  const t = normalizeTransient(next || runCatalog.transient);
+  const t = mergeTransient(next);
   runCatalog.transient = t;
   refreshTransientPreview();
   publishRunState();
@@ -30762,9 +30707,11 @@ function computeRunState() {
       end_time: control.endTime,
       write_interval: control.writeInterval,
     },
+    // The run's analysis and, for a transient run, the numbers its run model
+    // resolves now (analysis.run_preview): its run-settings component shows them.
+    analysis_key: rec ? runAnalysisKeyOf(rec) : '',
     transient_settings: trSettings,
-    frame_interval: transientFrameInterval(trSettings),
-    transient_hint: transient ? transientHint() : null,
+    run_preview: transient ? runCatalog.transient_preview || null : null,
     progress,
     copy: runCopyState(),
     mesh_ready: meshReady,
@@ -30846,7 +30793,7 @@ async function persistSimControl(opts) {
       try { publishRunState(); } catch (_) {}
     }
     const body = { run_id: rec.id, endTime, writeInterval };
-    if (runRecIsTransient(rec)) body.transient = normalizeTransient(runCatalog.transient);
+    if (runRecIsTransient(rec)) body.transient = mergeTransient();
     try {
       await persistRunSettings(body);
     } catch (e) {
@@ -31147,7 +31094,7 @@ async function pollSimRunStatus() {
       if (selectedMatches && (thisIsLive || !liveId)) {
         jobState.status = j.run.status || jobState.status;
         jobState.mode = j.run.mode || 'solve';
-        jobState.path_kind = j.run.path_kind || 'simpleFoam';
+        jobState.path_kind = j.run.path_kind || 'solve';
         jobState.pid = j.run.pid != null ? j.run.pid : jobState.pid;
         jobState.exit_code = j.run.exit_code;
         jobState.command = j.run.command || jobState.command;
@@ -31322,7 +31269,7 @@ async function startSolveClient(opts) {
     jobState.status = 'failed';
     jobState.note = msg;
     jobState.mode = 'solve';
-    jobState.path_kind = 'simpleFoam';
+    jobState.path_kind = 'solve';
     jobState.simulation_id = runCatalog.start_error_study_id;
     const rec = findRunRecord(runCatalog.start_error_run_id);
     if (rec) {
@@ -31424,7 +31371,7 @@ async function startSolveClient(opts) {
       writeInterval: runCatalog.writeInterval,
       scope: window.__CFD_RUN_SCOPE__ || undefined,
       ...(typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {}),
-      ...(rec && runRecIsTransient(rec) ? { transient: normalizeTransient(runCatalog.transient) } : {}),
+      ...(rec && runRecIsTransient(rec) ? { transient: mergeTransient() } : {}),
     });
     const r = posted.response;
     const j = posted.json;
@@ -31460,11 +31407,11 @@ async function startSolveClient(opts) {
     jobState.mode = 'solve';
     jobState.run_id = runId;
     jobState.mesh_id = null;
-    jobState.path_kind = j.path_kind || 'simpleFoam';
+    jobState.path_kind = j.path_kind || 'solve';
     jobState.pid = j.pid || null;
     jobState.case_dir = j.case_dir || null;
     jobState.log_path = j.log_path || null;
-    jobState.note = j.note || (j.path_kind || 'simpleFoam') + ' running';
+    jobState.note = j.note || (j.path_kind || 'solver') + ' running';
     jobState.started_at = j.started_at || new Date().toISOString();
     jobState.finished_at = null;
     syncJobStatusChrome();
@@ -31563,10 +31510,6 @@ async function renameActiveRunClient(name) {
   };
   window.__CFD_RUN_SAVE__ = (patch) => persistSimControl(patch || {});
   window.__CFD_RUN_TRANSIENT_SAVE__ = (t) => persistTransientSettings(t);
-  window.__CFD_RUN_TRANSIENT_RESET__ = () => {
-    const cur = normalizeTransient(runCatalog.transient);
-    return persistTransientSettings({ ...transientDefaultsClient(), end_time: cur.end_time, write_count: cur.write_count });
-  };
   window.__CFD_RUN_RENAME__ = (name) => renameActiveRunClient(String(name || '').trim() || 'Run 1');
   window.__CFD_RUN_DELETE__ = () => deleteSelectedRunClient();
   window.__CFD_RUN_COPY_PICK__ = (on) => {

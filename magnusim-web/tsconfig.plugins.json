@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.src.json",
+  "include": [
+    "bundled-plugins/*/ui/**/*.ts",
+    "bundled-plugins/*/ui/**/*.tsx",
+    "python/tests/fixtures/plugins/*/ui/**/*.ts",
+    "python/tests/fixtures/plugins/*/ui/**/*.tsx",
+    "src/**/*.d.ts"
+  ],
+  "exclude": ["**/*.test.ts", "**/*.test.tsx"]
+}

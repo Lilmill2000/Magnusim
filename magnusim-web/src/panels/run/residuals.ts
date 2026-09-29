@@ -1,19 +1,19 @@
+/** One plotted point: its x (`t`) and a value per series the run's analysis declares. */
 export interface ResidualRow {
   t?: number;
-  U?: number;
-  p?: number;
-  k?: number;
-  omega?: number;
-  epsilon?: number;
-  R?: number;
-  co_mean?: number;
+  [series: string]: number | undefined;
 }
 
-const KEYS = ['U', 'p', 'k', 'omega', 'epsilon', 'R', 'co_mean'] as const;
+function seriesKeys(rows: ResidualRow[]): string[] {
+  const keys: string[] = [];
+  for (const row of rows) for (const k of Object.keys(row)) if (k !== 't' && !keys.includes(k)) keys.push(k);
+  return keys;
+}
 
 export function residualPaths(series: ResidualRow[], width = 280, height = 120): string[] {
   const rows = series.filter((row) => Number.isFinite(Number(row.t)));
   if (!rows.length) return [];
+  const KEYS = seriesKeys(rows);
   const times = rows.map((row) => Number(row.t));
   const xmax = Math.max(...times, 1);
   const logs: number[] = [];

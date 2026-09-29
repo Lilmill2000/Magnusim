@@ -52,6 +52,17 @@ export interface RegistryRow {
   family?: AnalysisFamily | null;
   algorithm_label?: string;
   residual_keys?: string[];
+  residual_series?: Array<{
+    key: string;
+    label: string;
+    color: string;
+    fields: string[];
+    always: boolean;
+    dashed: boolean;
+    max_key: string;
+    max_label: string;
+    swatch: string;
+  }>;
   x_axis?: string;
   study_defaults?: Record<string, unknown>;
   run_defaults?: Record<string, unknown>;
