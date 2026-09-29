@@ -19,14 +19,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run-id", default=None)
     p.add_argument("--force", action="store_true", help="Skip writeNow; kill immediately")
     p.add_argument("--probe", action="store_true", help="Report whether the WSL solver is still live")
+    p.add_argument("--process-names", default="", help="Comma-separated solver process names of the run")
     args = p.parse_args(argv)
+    names = tuple(n.strip() for n in args.process_names.split(",") if n.strip()) or None
     try:
         if args.probe:
-            live = solve_is_live(args.wsl_case)
+            live = solve_is_live(args.wsl_case, names)
             print(json.dumps({"ok": True, "live": live, "wsl_case": args.wsl_case}), flush=True)
             return 0
         if args.force:
-            kill_solve(args.wsl_case, args.run_id)
+            kill_solve(args.wsl_case, args.run_id, names)
         else:
             stop_solve(args.wsl_case, graceful=True)
         print(json.dumps({"ok": True, "wsl_case": args.wsl_case, "forced": bool(args.force)}), flush=True)

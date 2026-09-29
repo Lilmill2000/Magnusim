@@ -118,7 +118,8 @@ def test_builtins_only_dump_ignores_installed_plugins(monkeypatch: pytest.Monkey
     builtins = dump_registry(builtins_only=True)
     assert "example_extra_mesher" not in {row["key"] for row in builtins["mesher"]}
     assert "laminar_steady" not in {row["key"] for row in builtins["analysis"]}
-    assert builtins["plugins"] == []
-    assert {row["plugin"] for kind in DUMP_KINDS for row in builtins[kind]} <= {"builtin"}
+    # What ships: the core plus the bundled plugins, never a user plugin.
+    assert [p["key"] for p in builtins["plugins"]] == ["incompressible_flow"]
+    assert {row["plugin"] for kind in DUMP_KINDS for row in builtins[kind]} <= {"builtin", "incompressible_flow"}
     monkeypatch.delenv("MAGNUSIM_PLUGINS_DIR")
     assert json.loads(json.dumps(builtins)) == json.loads(json.dumps(dump_registry(builtins_only=True)))

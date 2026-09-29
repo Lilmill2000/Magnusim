@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -185,6 +185,19 @@ class AnalysisType:
     write_case: Callable[[CaseContext], Any] | None = None
     parse_log_line: Callable[[str], Any] | None = None
     requires: tuple[Requirement, ...] = ()
+    # Contract 1.1 (cfddesk.registry.contract). All optional: the core falls
+    # back to a neutral default for any hook an analysis leaves out.
+    family: Any = None  # AnalysisFamily shared with the sibling analysis
+    algorithm_label: str = ""  # "SIMPLE" / "PIMPLE"
+    residual_keys: tuple[str, ...] = ()  # residual series the run panel plots
+    x_axis: str = ""  # "iterations" | "seconds" ("" = from time_dependency)
+    study_defaults: Callable[[str], dict[str, Any]] | None = None
+    validate_ready: Callable[[Any], list[Any]] | None = None  # (ReadyContext) -> issues
+    run_model: Any = None  # RunModel: defaults / normalize / preview
+    launch: Callable[..., Any] | None = None  # (solver_key=...) -> LaunchSpec
+    log_parser: Any = None  # LogParserRef to the solver-output parser
+    frame_fields: tuple[str, ...] = ()  # fields that mark a written frame ("" = fields)
+    ui: dict[str, str] = field(default_factory=dict)  # panel ids the plugin provides
 
 
 def schema_defaults(fields: tuple[SchemaField, ...] | list[SchemaField]) -> dict[str, Any]:
@@ -223,9 +236,15 @@ def write_run_case(
     if writer is None:
         raise ValueError(f"{key}.write_case is None")
     out = Path(out_dir)
+    study: dict[str, Any] = {}
+    if getattr(spec, "project_dir", None) and getattr(spec, "simulation_id", ""):
+        from cfddesk.project.readiness import study_doc
+
+        study = study_doc(spec.project_dir, spec.simulation_id)
     ctx = CaseContext(
         out_dir=out,
         run_spec=spec,
+        simulation=study,
         mesh_case_dir=Path(spec.mesh_case_dir) if getattr(spec, "mesh_case_dir", None) else None,
         n_procs=int(getattr(spec, "n_procs", 1) or 1),
     )

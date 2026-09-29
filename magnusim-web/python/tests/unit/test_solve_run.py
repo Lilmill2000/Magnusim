@@ -210,11 +210,41 @@ def test_write_now_sed_matches_flush_and_indented():
     assert "WRITE_NOW_SED" in src
 
 
-def test_solve_is_live_targets_solver_names():
-    src = inspect.getsource(solve_is_live)
-    assert "pgrep -x pimpleFoam" in src
-    assert "pgrep -x simpleFoam" in src
-    assert "live-frames" in src
+def test_solve_is_live_targets_the_runs_solver_names(monkeypatch):
+    """The run's own process names (from its launch spec); legacy runs fall back."""
+    import cfddesk.wsl.solve_run as sr
+
+    seen: list[str] = []
+
+    class _R:
+        stdout = "DEAD"
+        stderr = ""
+
+    monkeypatch.setattr(sr, "run_wsl_bash", lambda inner, timeout=8.0: seen.append(inner) or _R())
+    assert solve_is_live("cfddesk-w27-x", ("laplacianFoam",)) is False
+    assert "pgrep -x laplacianFoam" in seen[-1] and "pgrep -x mpirun" in seen[-1]
+    assert "simpleFoam" not in seen[-1]
+    solve_is_live("cfddesk-w27-x")
+    assert "pgrep -x pimpleFoam" in seen[-1] and "pgrep -x simpleFoam" in seen[-1]
+    assert "live-frames" in seen[-1]
+    with pytest.raises(ValueError):
+        solve_is_live("cfddesk-w27-x", ("rm -rf /",))
+
+
+def test_render_solve_script_uses_the_launch_spec():
+    from cfddesk.wsl.solve_run import render_solve_script
+
+    kw = {"dst": "/d", "win_out": "/w", "n_procs": 2, "run_id": "r1"}
+    body = render_solve_script(app="laplacianFoam", keep_frames="all", **kw)
+    assert 'APP="laplacianFoam"' in body and 'KEEP_FRAMES="all"' in body
+    assert '[ "$KEEP_FRAMES" = "all" ]' in body and "pimpleFoam" not in body
+    assert "__" not in body.split("set -uo pipefail", 1)[1].split("_evt()", 1)[0]
+    assert 'KEEP_FRAMES="latest"' in render_solve_script(app="simpleFoam", **kw)
+    for bad in ("simple Foam", "a;b", "$(x)", ""):
+        with pytest.raises(ValueError):
+            render_solve_script(app=bad, **kw)
+    with pytest.raises(ValueError):
+        render_solve_script(app="simpleFoam", keep_frames="some", **kw)
 
 
 def test_stop_solve_cli_has_probe():

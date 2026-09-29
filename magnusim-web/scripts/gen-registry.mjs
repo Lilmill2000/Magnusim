@@ -1,7 +1,8 @@
 /**
  * Regenerate scripts/generated/registry.json (and its docs copy) from
- * python/tools/registry_dump.py --builtins-only. Plugins never change it: Node
- * reads plugin keys from the live worker registry (scripts/registry-defaults.js).
+ * python/tools/registry_dump.py --shipped: the core builtins plus the bundled
+ * plugins, i.e. what ships. User plugins never change it: Node reads their keys
+ * from the live worker registry (scripts/registry-defaults.js).
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -16,8 +17,8 @@ mkdirSync(dirname(outPath), { recursive: true });
 
 const check = process.argv.includes('--check');
 const argv = check
-  ? [pyTool('registry_dump.py'), '--builtins-only', '--check', '--committed', outPath]
-  : [pyTool('registry_dump.py'), '--builtins-only', '--force', '--out', outPath];
+  ? [pyTool('registry_dump.py'), '--shipped', '--check', '--committed', outPath]
+  : [pyTool('registry_dump.py'), '--shipped', '--force', '--out', outPath];
 const r = spawnSync(PYTHON, argv, {
   encoding: 'utf8',
   cwd: WEB_ROOT,

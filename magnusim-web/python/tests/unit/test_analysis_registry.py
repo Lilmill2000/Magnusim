@@ -49,7 +49,8 @@ def test_describe_returns_labels_and_schemas():
     assert "Transient" in by_key[DEFAULT_TRANSIENT_KEY]["label"]
     for key in (DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY):
         row = by_key[key]
-        assert row["plugin"] == "builtin"
+        # Incompressible Flow is the required bundled plugin (H8).
+        assert row["plugin"] == "incompressible_flow"
         assert isinstance(row.get("schema"), dict)
         assert "properties" in row["schema"]
         assert "turbulence_model" in row["schema"]["properties"]

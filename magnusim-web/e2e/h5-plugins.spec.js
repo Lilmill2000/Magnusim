@@ -66,7 +66,13 @@ test('@plugins gate:h5-demos-visible laminar, extra mesher, and one React copy',
   await expect(page.locator('[data-mesh-engine="1"] option', { hasText: 'Extra mesher' })).toHaveCount(1);
 
   const step = await openSettingsPlugins(page);
-  await expect(step.locator('[data-plugin-key]')).toHaveCount(4, { timeout: 15_000 });
+  // The four example plugins, the stub analysis, and the bundled Incompressible Flow.
+  await expect(step.locator('[data-plugin-key]')).toHaveCount(6, { timeout: 15_000 });
+  // gate:h8-required-row: a required bundled plugin reads "Required" and has no switch.
+  const required = step.locator('[data-plugin-key="incompressible_flow"]');
+  await expect(required).toHaveAttribute('data-plugin-required', '1');
+  await expect(required.locator('.wiz-plugin-status')).toHaveText('Required');
+  await expect(required.locator('[data-plugin-toggle]')).toHaveCount(0);
   // gate:h6-key-folder: a plugin whose manifest key is not its folder name still loads its UI.
   await expect(step.locator('[data-plugin-key="key-not-folder"] [data-plugin-keyfolder="1"]')).toHaveText(
     'UI loaded from the plugin folder.',

@@ -29,7 +29,7 @@ include = ["cfddesk*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = [".", "tools"]
+pythonpath = [".", "tools", "sdk"]
 markers = [
   "wsl: needs WSL + OpenFOAM (deselect with -m 'not wsl')",
   "occt: needs cadquery-ocp and a STEP fixture",
@@ -50,6 +50,7 @@ python_version = "3.10"
 ignore_missing_imports = true
 check_untyped_defs = true
 warn_unused_ignores = true
+mypy_path = "sdk"
 # Public OpenFOAM field names and conventional scientific symbols retain their case.
 [tool.ruff.lint.per-file-ignores]
 "cfddesk/case/bc_registry.py" = ["N802", "N815"]

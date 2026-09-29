@@ -54,10 +54,15 @@ def registry_describe() -> dict[str, Any]:
             "version": getattr(m, "version", "0.0.0"),
             "ui": getattr(m, "ui", None),
             "provides": getattr(m, "provides", {}) or {},
+            "tier": getattr(m, "tier", "user"),
+            "required": bool(getattr(m, "required", False)),
         }
         for m in hub.manifests.values()
     ]
     out["missing"] = []
+    # Required bundled plugins that did not load: the page blocks creating and
+    # running simulations and says why (never an empty picker).
+    out["required_missing"] = [dict(row) for row in hub.required_failures]
     return out
 
 
@@ -655,52 +660,109 @@ def runs_catalog_set(
     return ww.save_catalog(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
 
 
-@rpc("run.transient_preview")
-def run_transient_preview(
+def _analysis_spec(key: str) -> Any:
+    from cfddesk.registry import load_all
+    from cfddesk.registry.discovery import get_registry
+
+    load_all()
+    reg = get_registry("analysis")
+    if key not in set(reg.keys()):
+        raise ValueError(f"analysis {key!r} is not installed")
+    return reg.get(key)
+
+
+def _run_analysis_key(root: Path, simulation_id: str, run_id: str, time_dependency: str = "") -> str:
+    """The analysis a run solves with: its study's family, at the run's time dependency."""
+    from cfddesk.project.web_adapter import _analysis_and_app, _td, run_time_dependency
+
+    td = _td(time_dependency) if time_dependency else run_time_dependency(root, run_id or None, simulation_id or None)
+    key, _app = _analysis_and_app(root, simulation_id or None, td)
+    return key
+
+
+@rpc("analysis.describe")
+def analysis_describe(key: str = "") -> dict[str, Any]:
+    """One analysis row of registry.describe (with its contract fields)."""
+    from cfddesk.registry.discovery import get_registry
+
+    _analysis_spec(key)
+    rows = {r["key"]: r for r in get_registry("analysis").describe()}
+    return {"ok": True, "analysis": rows[key]}
+
+
+@rpc("analysis.defaults")
+def analysis_defaults(key: str = "", time_dependency: str = "") -> dict[str, Any]:
+    """A new study's settings and a new run's settings for this analysis."""
+    from cfddesk.registry import contract
+
+    spec = _analysis_spec(key)
+    return {
+        "ok": True,
+        "key": key,
+        "sibling": contract.sibling(spec, time_dependency or spec.time_dependency),
+        "study": contract.study_defaults(spec, time_dependency or None),
+        "run": contract.run_defaults(spec),
+    }
+
+
+@rpc("analysis.validate_ready")
+def analysis_validate_ready(
+    project_id: str = "",
+    project_dir: str = "",
+    simulation_id: str = "",
+    run_id: str = "",
+    mesh_id: str = "",
+    time_dependency: str = "",
+) -> dict[str, Any]:
+    """What blocks this run, as the analysis sees it (``issues`` empty = ready)."""
+    from cfddesk.project.readiness import ready_context
+    from cfddesk.registry import contract
+
+    root = _root(project_id, project_dir)
+    key = _run_analysis_key(root, simulation_id, run_id, time_dependency)
+    ctx = ready_context(root, simulation_id=simulation_id or None, run_id=run_id, mesh_id=mesh_id)
+    issues = contract.validate_ready(_analysis_spec(key), ctx)
+    return {"ok": True, "analysis_key": key, "ready": not issues, "issues": issues}
+
+
+@rpc("analysis.run_preview")
+def analysis_run_preview(
     project_id: str = "",
     project_dir: str = "",
     run_id: str = "",
     simulation_id: str = "",
     mesh_id: str = "",
+    time_dependency: str = "",
     settings: dict | None = None,
 ) -> dict[str, Any]:
-    """The numbers a transient run would be written with right now.
+    """The numbers a run would be written with right now (the Run panel preview).
 
-    Same call as prepare_run (load_run_spec → resolve_transient_control, with
-    the run's mesh metadata and reference speed), so the Run panel shows the Δt
-    that lands in controlDict. Partial (settings only) until the run has a
-    mesh and a flow-driving boundary condition.
+    The analysis's own run model computes them with the same code prepare_run
+    writes the case with, so the preview and controlDict cannot differ.
     """
-    from cfddesk.project.transient import control_to_web, resolve_transient_control
-    from cfddesk.project.web_adapter import is_pressure_bc, is_velocity_inlet, load_run_spec
+    from cfddesk.registry import contract
 
     root = _root(project_id, project_dir)
-    raw = settings if isinstance(settings, dict) else {}
-    spec = load_run_spec(
-        root,
-        run_id=run_id or "preview",
-        mesh_id=mesh_id or None,
-        simulation_id=simulation_id or None,
-        require_mesh=True,
-        transient_override=raw,
-        time_dependency="transient",
+    key = _run_analysis_key(root, simulation_id, run_id, time_dependency)
+    out = contract.run_preview(
+        _analysis_spec(key),
+        project_dir=str(root),
+        run_id=run_id,
+        simulation_id=simulation_id,
+        mesh_id=mesh_id,
+        settings=settings if isinstance(settings, dict) else {},
     )
-    bcs = [m.get("bc") for m in (spec.mapped or [])]
-    driven = any(is_velocity_inlet(b) for b in bcs) or sum(1 for b in bcs if is_pressure_bc(b)) >= 2
-    if not spec.ok or spec.transient is None or not driven:
-        reason = spec.error if not spec.ok else ("no flow-driving boundary condition" if not driven else None)
-        return {
-            "ok": True,
-            "partial": True,
-            "reason": reason,
-            "control": control_to_web(resolve_transient_control(raw, {}), raw),
-        }
-    return {
-        "ok": True,
-        "partial": False,
-        "control": control_to_web(spec.transient, raw),
-        "n_cells": spec.n_cells,
-    }
+    return {**out, "analysis_key": key}
+
+
+@rpc("analysis.launch_spec")
+def analysis_launch_spec(key: str = "") -> dict[str, Any]:
+    """How a case of this analysis is run (app, frames kept, processes, stop)."""
+    from cfddesk.registry import contract
+    from cfddesk.registry.discovery import get_registry
+
+    spec = _analysis_spec(key)
+    return {"ok": True, "launch": contract.launch_spec(spec, get_registry("solver")).to_json()}
 
 
 @rpc("runs.upsert")
@@ -1066,6 +1128,13 @@ def plugins_list() -> dict[str, Any]:
 
 
 def _set_plugin_enabled(key: str, enabled: bool) -> dict[str, Any]:
+    from cfddesk.registry.discovery import REQUIRED_BUNDLED
+
+    hub = load_all(web_root=web_root())
+    manifest = hub.manifests.get(str(key))
+    if not enabled and (str(key) in REQUIRED_BUNDLED or bool(getattr(manifest, "required", False))):
+        name = REQUIRED_BUNDLED.get(str(key)) or getattr(manifest, "name", key)
+        raise RpcError(-32602, f"{name} is required and cannot be turned off")
     doc = _local_doc()
     plugins = doc.get("plugins")
     if not isinstance(plugins, dict):

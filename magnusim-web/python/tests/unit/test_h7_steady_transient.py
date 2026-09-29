@@ -155,7 +155,7 @@ def test_preview_rpc_shows_the_delta_t_prepare_run_writes(tmp_path: Path, monkey
         return load_run_spec(*args, **kwargs)
 
     monkeypatch.setattr("cfddesk.project.web_adapter.load_run_spec", _spec_without_mesh)
-    pv = methods.run_transient_preview(project_dir=str(root), run_id="run-dt", settings=settings)
+    pv = methods.analysis_run_preview(project_dir=str(root), run_id="run-dt", time_dependency="Transient", settings=settings)
     assert pv["partial"] is False
     assert pv["control"]["delta_t"] == pytest.approx(written["delta_t"], rel=1e-12)
     assert pv["control"]["max_delta_t"] == pytest.approx(written["max_delta_t"], rel=1e-12)

@@ -4,16 +4,17 @@ A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins
 
 Copy `templates/plugin/` to start. That folder has `pyproject.toml`, `manifest.toml`, `register()`, and a pytest that loads the copy from a temporary `plugins/` directory.
 
-## Manifest 1.0
+## Manifest 1.1
 
 ```toml
 key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
-api_version = "1.0"
+api_version = "1.1"
 license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
+requires_plugins = ["incompressible_flow>=1.0"]
 ui = "ui"
 ui_entry = "index.js"
 ```
@@ -21,6 +22,10 @@ ui_entry = "index.js"
 `api_version` must share the host major version (`1`). A different major is listed as `incompatible` and is not registered. `authors` is a comma-separated list when you have more than one. Omit `ui` when the plugin has no browser bundle. `license` is an SPDX identifier and is shown in Settings → Plugins. The manifest `key` may differ from the folder name; the UI is still served from the folder.
 
 `overrides` is a comma-separated list of `kind:key` tokens. A plugin may replace a protected builtin only when that token is listed. New keys do not need an override.
+
+`requires_plugins` lists the plugins yours builds on, as `key` or `key>=version`. They load first; when one is missing, off, or too old, your plugin is not loaded and Settings → Plugins says which one it needs. Declare `incompressible_flow` when you clone or extend `incompressible_steady` / `incompressible_transient`: those simulation types come from the bundled Incompressible Flow plugin, not from the core.
+
+Plugins that ship with the app live in `bundled-plugins/` and add `tier = "bundled"`, `required = true|false` and `protected = ["kind:key", ...]` (specs other plugins may not drop). A required plugin cannot be turned off. See `compatibility.md` for what changed in each API version.
 
 A wheel's entry point belongs in `pyproject.toml` once the register function is importable:
 
@@ -35,7 +40,7 @@ Folder discovery loads `plugins/<folder>/plugin.py` and does not need that table
 
 ## Register
 
-`register(hub)` runs after the builtins. Clone a spec that is already on the hub and register it under a new key:
+`register(hub)` runs after the builtins and the bundled plugins. Clone a spec that is already on the hub and register it under a new key:
 
 ```python
 from dataclasses import replace
@@ -52,7 +57,21 @@ def register(hub):
 
 Hooks use the same module. `get_hooks().on("case.written", fn, plugin="my-plugin")` runs after the case files exist. `ctx.out_dir` is the case directory.
 
-Do not import `cfddesk.builtin`, `scripts`, or `src.workbench`. Those are host internals. The public surface is `cfddesk.registry`.
+Do not import `cfddesk.builtin`, `scripts`, or `src.workbench`. Those are host internals. The public surface is `cfddesk.registry` and `magnusim_sdk` (OpenFOAM dictionary and field writers, units, job events, gmsh helpers, the MSH 2.2 writer, and `run_exe` for programs with a timeout). `tools/plugin_boundary.py` checks this.
+
+## Simulation types (analysis contract 1.1)
+
+An `AnalysisType` tells the core everything it needs through optional contract fields (`cfddesk.registry.contract`), so the core never reaches into its physics:
+
+- `family`: the Create Simulation title, description and tags, shared with a sibling analysis (steady and transient of the same physics).
+- `study_defaults(time_dependency)`, `algorithm_label`, `residual_keys`, `x_axis`, `ui`.
+- `validate_ready(ctx)`: what still blocks a run, as `[{"message", "fix"}]`. The Run panel shows the message.
+- `run_model`: run settings defaults, clean-up and the preview numbers (for example the time step).
+- `write_case(ctx)`: writes the case; `ctx.simulation` holds the study's settings.
+- `launch` (or the default solver's `SolverApp`): the program, which frames to keep (`all` or `latest`), the process names Stop looks for, and `frame_fields` (fields that mark a written frame).
+- `log_parser`: `module:factory` of the parser that turns the solver's output into job events.
+
+`python/tests/fixtures/plugins/stub-analysis` is a complete example: a steady scalar-diffusion analysis on `laplacianFoam`, written with `magnusim_sdk` only.
 
 ## UI
 

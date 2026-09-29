@@ -4,10 +4,13 @@
  * Reads the live registry (worker registry.describe, set by the API server at
  * boot and after every plugin change). Until that arrives, and for offline
  * tooling, it falls back to the committed scripts/generated/registry.json,
- * which lists builtins only. Plugin keys therefore exist only in the live doc.
+ * which lists what ships (core builtins + bundled plugins). User plugin keys
+ * therefore exist only in the live doc.
  *
- * Bank UI still shows "Incompressible" / "k-omega SST"; those labels are
- * derived from dump keys (analysis_type, default_turbulence, default_solver).
+ * Study defaults, algorithm labels and run defaults are the analysis's own
+ * (the analysis contract publishes them in its registry row). Nothing here
+ * throws when an analysis is missing: a missing required plugin is reported
+ * by requiredPluginError() instead.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -72,6 +75,29 @@ export function setLiveRegistry(doc) {
 /** True once the live registry has been installed. */
 export function liveRegistryLoaded() {
   return _live !== null;
+}
+
+/**
+ * The required bundled plugins that did not load (registry.describe
+ * required_missing): [{ key, name, error, folder, log }].
+ * @returns {Array<Record<string, string>>}
+ */
+export function requiredPluginsMissing() {
+  const rows = _live && Array.isArray(_live.required_missing) ? _live.required_missing : [];
+  return rows.filter((r) => r && typeof r === 'object');
+}
+
+/**
+ * The blocking error while a required plugin is missing, else null:
+ * "Incompressible Flow failed to load: <why>. Magnusim can't create or run
+ * simulations. Details: <log>".
+ * @returns {string | null}
+ */
+export function requiredPluginError() {
+  const row = requiredPluginsMissing()[0];
+  if (!row) return null;
+  const log = row.log ? ` Details: ${row.log}` : '';
+  return `${row.name || row.key} failed to load: ${row.error || 'unknown error'}. Magnusim can't create or run simulations.${log}`;
 }
 
 function _registryDoc() {
@@ -166,22 +192,38 @@ export function controlDefaults(key) {
   return out;
 }
 
-/** Transient run-control defaults (end_time, write_count, max_co, …) from the registry. */
+/** Transient run-control defaults (end_time, write_count, max_co, …) from the registry ({} if not installed). */
 export function transientDefaultsFromRegistry() {
-  const d = controlDefaults(DEFAULT_TRANSIENT_ANALYSIS_KEY);
-  if (!Object.keys(d).length) {
-    throw new Error(`registry.json analysis ${DEFAULT_TRANSIENT_ANALYSIS_KEY} has no control_schema defaults`);
-  }
-  return Object.freeze(d);
+  return Object.freeze(controlDefaults(DEFAULT_TRANSIENT_ANALYSIS_KEY));
 }
 
-/** Steady run-control defaults ({ end_time, write_interval } in iterations) from the registry. */
+/** Steady run-control defaults ({ end_time, write_interval } in iterations) from the registry ({} if not installed). */
 export function steadyDefaultsFromRegistry() {
-  const d = controlDefaults(DEFAULT_ANALYSIS_KEY);
-  if (!Object.keys(d).length) {
-    throw new Error(`registry.json analysis ${DEFAULT_ANALYSIS_KEY} has no control_schema defaults`);
-  }
-  return Object.freeze(d);
+  return Object.freeze(controlDefaults(DEFAULT_ANALYSIS_KEY));
+}
+
+/**
+ * A new study's settings for an analysis: the record its contract publishes
+ * (analysis_type, analysis, analysis_title, turbulence, time_dependency,
+ * algorithm, …), or null when the analysis is not installed.
+ * @param {string} key
+ * @returns {Record<string, any> | null}
+ */
+export function studyDefaultsFor(key) {
+  const row = analysisByKey(key);
+  const d = row && row.study_defaults;
+  return d && typeof d === 'object' ? /** @type {Record<string, any>} */ (d) : null;
+}
+
+/**
+ * The algorithm label an analysis shows ("SIMPLE", "PIMPLE"): its contract's
+ * algorithm_label, else the one its default solver implies.
+ * @param {string} key
+ */
+export function algorithmLabelFor(key) {
+  const row = analysisByKey(key);
+  if (!row) return '';
+  return String(row.algorithm_label || '') || algorithmFromSolver(row.default_solver);
 }
 
 export function mesherByKey(key) {
@@ -293,17 +335,15 @@ function _schemaDefault(entry, prop, fallback) {
 }
 
 /**
- * W17 product defaults with dump-backed analysis key + label + schema defaults.
- * Bank display name `analysis: 'Incompressible'` remains for the create-sim gate
- * (UI bank string; not a registry key — alias carry until full string replace).
+ * A new study's defaults for the default analysis: the study_defaults its
+ * contract publishes (the Create modal's pick without an explicit analysis).
+ * Null when it is not installed (a required plugin failed to load).
  */
 export function buildW17DefaultsFromRegistry() {
   const steady = analysisByKey(DEFAULT_ANALYSIS_KEY);
-  if (!steady) {
-    throw new Error(
-      `registry.json analysis[] missing default key ${DEFAULT_ANALYSIS_KEY}`
-    );
-  }
+  if (!steady) return null;
+  const published = studyDefaultsFor(DEFAULT_ANALYSIS_KEY);
+  if (published) return Object.freeze({ ...published });
   const turbKey = String(
     steady.default_turbulence || _schemaDefault(steady, 'turbulence_model', 'kOmegaSST')
   );

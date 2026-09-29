@@ -48,7 +48,13 @@ import {
 } from './study-io.js';
 import { listFoamTimeDirs, walkGeometries } from './project-layout.js';
 import { solveStartBlockReason } from './solve-start-block.js';
-import { steadyDefaultsFromRegistry, turbulenceLabel } from './registry-defaults.js';
+import {
+  algorithmLabelFor,
+  analysisByKey,
+  requiredPluginError,
+  steadyDefaultsFromRegistry,
+  turbulenceLabel,
+} from './registry-defaults.js';
 import { removeComputeJob, scheduleComputeQueueKick } from './server/compute-queue.ts';
 import { polyMeshComplete } from './poly-mesh.js';
 
@@ -152,62 +158,9 @@ function parseEventPayload(line) {
 }
 
 /**
- * Raw OpenFOAM log-line progress (residuals / Time / Courant). W27_* bash
- * markers removed with legacy bash solve script (land6). Live runs use applyJobEvent.
- */
-function applyProgressLine(state, raw) {
-  const line = String(raw || '').replace(/^\s*\[\d+\]\s*/, '');
-  const tm = line.match(/^Time\s*=\s*([0-9.+-eE]+)\s*$/);
-  if (tm) {
-    enterSolveStage(state);
-    if (state.stage !== 'solve') return;
-    if (state.current && Number.isFinite(state.current.t)) state.series.push(state.current);
-    const t = Number(tm[1]);
-    const prev = state.current || {};
-    const pend = state.pending || {};
-    state.pending = null;
-    state.current = { t };
-    for (const k of ['delta_t', 'co_max', 'co_mean']) {
-      if (Number.isFinite(pend[k])) state.current[k] = pend[k];
-      else if (Number.isFinite(prev[k])) state.current[k] = prev[k];
-    }
-    if (!state.solve_started_at && Number.isFinite(t) && t > 0) {
-      state.solve_started_at = new Date().toISOString();
-    }
-    return;
-  }
-  const co = line.match(/^Courant Number mean:\s*([0-9.eE+-]+)\s+max:\s*([0-9.eE+-]+)/);
-  if (co) {
-    enterSolveStage(state);
-    if (state.stage !== 'solve') return;
-    if (!state.pending) state.pending = {};
-    const mean = Number(co[1]);
-    const v = Number(co[2]);
-    if (Number.isFinite(mean)) state.pending.co_mean = mean;
-    if (Number.isFinite(v)) state.pending.co_max = v;
-    return;
-  }
-  const dt = line.match(/^deltaT\s*=\s*([0-9.eE+-]+)/);
-  if (dt) {
-    enterSolveStage(state);
-    if (state.stage !== 'solve') return;
-    if (!state.pending) state.pending = {};
-    const v = Number(dt[1]);
-    if (Number.isFinite(v)) state.pending.delta_t = v;
-    return;
-  }
-  const rm = line.match(/Solving for (Ux|Uy|Uz|p|omega|k|epsilon|R(?:xx|xy|xz|yy|yz|zz)), Initial residual = ([0-9.eE+-]+)/);
-  if (rm && state.current) {
-    const v = Number(rm[2]);
-    if (Number.isFinite(v)) state.current[rm[1]] = v;
-  }
-}
-
-
-
-/**
  * Apply one MAGNUSIM_EVENT / CFDDESK_EVENT JSONL object to the live progress
- * state (twin of cfddesk.wsl.solve_run.ProgressParser event handling).
+ * state. The solver's output is parsed once, in Python (the analysis's log
+ * parser, named by its launch spec); Node only aggregates the events.
  * Keeps snapshotProgress / enrichRunDoc shape unchanged for /api/run/status.
  */
 function applyJobEvent(state, ev) {
@@ -367,15 +320,16 @@ function snapshotProgress(state) {
   return out;
 }
 
+/**
+ * Progress snapshot from a run's recorded job events (JSONL, with or without the
+ * MAGNUSIM_EVENT prefix). Raw solver lines are not parsed here: that is the
+ * analysis's log parser's job, and it already turned them into these events.
+ */
 export function parseSolveProgress(text) {
   const state = newProgressState();
   for (const line of String(text || '').split(/\r?\n/)) {
     const ev = parseEventPayload(line);
-    if (ev) {
-      applyJobEvent(state, ev);
-      continue;
-    }
-    applyProgressLine(state, line);
+    if (ev) applyJobEvent(state, ev);
   }
   return snapshotProgress(state);
 }
@@ -683,27 +637,6 @@ export function wallTreatment(rec) {
   return t === 'slip' ? 'Slip' : 'No-slip';
 }
 
-function airFromMaterials(mats, simId, legacyId) {
-  const list = (mats && Array.isArray(mats.materials) && mats.materials) || [];
-  const scoped = list.filter((m) => matchesStudy(m, simId, legacyId));
-  // The study's one fluid (Air, Water or custom): the assigned material, else an
-  // older study's Air, else the first.
-  const assigned = (m) => (Array.isArray(m.assigned_volumes) && m.assigned_volumes.length > 0) || !!m.assigned_volume;
-  const air =
-    scoped.find(assigned) || scoped.find((m) => /air/i.test(String(m.name || ''))) || scoped[0] || null;
-  if (!air) return null;
-  const vols = Array.isArray(air.assigned_volumes) ? air.assigned_volumes : [];
-  const nu = Number(air.kinematic_viscosity);
-  const rho = Number(air.density);
-  return {
-    name: air.name || 'Air',
-    nu: Number.isFinite(nu) && nu > 0 ? nu : 1.529e-5,
-    // simpleFoam works with kinematic pressure (p/rho); rho converts Pa <-> m2/s2
-    rho: Number.isFinite(rho) && rho > 0 ? rho : 1.196,
-    assigned: vols.length > 0 || !!air.assigned_volume,
-  };
-}
-
 const CAD_PREVIEW_SCRIPT = pyTool('export_step_cad_preview.py');
 
 /**
@@ -976,27 +909,6 @@ function resolveNProcs(nCells, opts) {
   return Math.max(1, nProcs);
 }
 
-/** Static pressure in Pa (gauge) for a Pressure boundary. */
-function pressurePa(bc) {
-  const v = Number(bc && bc.value);
-  if (!Number.isFinite(v)) return 0;
-  const unit = String((bc && bc.unit) || 'Pa').toLowerCase();
-  if (unit === 'pa' || unit === '') return v;
-  if (unit === 'kpa') return v * 1e3;
-  if (unit === 'bar') return v * 1e5;
-  if (unit === 'psi') return v * 6894.757;
-  if (unit === 'inh2o' || unit === 'in h2o' || unit === 'inwc') return v * 249.089;
-  if (unit === 'mmh2o') return v * 9.80665;
-  return v;
-}
-
-function loadMeshWebBcs(mesh) {
-  const caseDir = mesh && mesh.case_dir;
-  if (!caseDir) return [];
-  const meta = readJsonSafe(join(caseDir, 'standard-meta.json'));
-  return meta && Array.isArray(meta.web_bcs) ? meta.web_bcs : [];
-}
-
 function facesOverlap(a, b) {
   const have = new Set(bcFaces(a));
   if (!have.size) return false;
@@ -1028,111 +940,23 @@ export function mapBcToPatch(bc, patchNames, webBcs) {
   return want;
 }
 
-function isAreaAverageRc(rec) {
-  if (!rec) return false;
-  return /area average/i.test(String(rec.kind || '')) || /area average/i.test(String(rec.name || ''));
-}
-
-function listAaFaces(aa) {
-  const recs = [];
-  if (aa && aa.area_average_1) recs.push(aa.area_average_1);
-  if (aa && Array.isArray(aa.result_controls)) {
-    for (const rec of aa.result_controls) {
-      if (isAreaAverageRc(rec)) recs.push(rec);
-    }
-  }
-  const faces = [];
-  for (const rec of recs) {
-    for (const f of Array.isArray(rec && rec.faces) ? rec.faces : []) {
-      if (f && !faces.includes(f)) faces.push(f);
-    }
-  }
-  return faces;
-}
-
+/**
+ * What every analysis needs before a run can start: its study's mesh, the
+ * study itself, and the required plugins. What else blocks a run (materials,
+ * boundary conditions, the analysis's own settings) is the analysis's call:
+ * startSolve asks it through the worker (analysis.validate_ready).
+ */
 export function validateSolveReady(projectId, opts) {
   const mesh = resolveProjectMesh(projectId, opts && opts.meshId, opts && opts.simulationId);
   if (!mesh.ok) return mesh;
   const id = mesh.project_id;
+  const blocked = requiredPluginError();
+  if (blocked) return { ok: false, error: blocked, project_id: id, required_plugin_missing: true };
   const sim = activeStudy(id, opts && opts.simulationId);
-  const legacy = legacyStudyId(id);
-  const mats = sim ? readStudyJson(id, sim.id, 'materials') : null;
-  const bcs = sim ? readStudyJson(id, sim.id, 'bcs') : null;
-  const aa = (opts && opts.aa) || (sim ? readStudyJson(id, sim.id, 'result_controls') : null);
-  const air = airFromMaterials(mats, sim && sim.id, legacy);
-  const records = listBcRecords(bcs).filter((b) => matchesStudy(b, sim && sim.id, legacy));
-  const inlets = records.filter((b) => isVelocityInlet(b) && bcFaces(b).length);
-  const pressures = records.filter((b) => isPressureBc(b) && bcFaces(b).length);
-  const patchNames = new Set((mesh.patches || []).map((p) => p.name));
-  const webBcs = loadMeshWebBcs(mesh);
-
   if (!sim) {
     return { ok: false, error: 'Create an Incompressible simulation first', project_id: id, fix: { go: 'create-sim' } };
   }
-  if (!air || !air.assigned) {
-    return { ok: false, error: 'Assign a fluid to a volume first', project_id: id, fix: { go: 'material' } };
-  }
-  if (!inlets.length && pressures.length < 2) {
-    const incomplete = records.find((b) => !bcFaces(b).length);
-    return {
-      ok: false,
-      error: 'Add a velocity inlet, or two pressure boundaries, each with an assigned face',
-      project_id: id,
-      fix: incomplete
-        ? { go: 'bc', id: incomplete.id, name: incomplete.name }
-        : { go: 'bc-picker' },
-    };
-  }
-  if (!pressures.length) {
-    return {
-      ok: false,
-      error: 'Add a pressure boundary with an assigned face',
-      project_id: id,
-      fix: { go: 'bc-picker' },
-    };
-  }
-
-  const mapped = [];
-  for (const bc of records) {
-    if (!bcFaces(bc).length) continue;
-    const patch = mapBcToPatch(bc, patchNames, webBcs);
-    if (!patchNames.has(patch)) {
-      return {
-        ok: false,
-        error: `Mesh has no patch for "${bc.name}" (looked for ${patch}). Generate the mesh after assigning BCs.`,
-        project_id: id,
-        patches: Array.from(patchNames),
-        fix: { go: 'mesh', id: mesh.mesh_id, name: mesh.mesh_name },
-      };
-    }
-    mapped.push({ bc, patch });
-  }
-  if (!inlets.length && pressures.length >= 2) {
-    const vals = pressures.map((b) => pressurePa(b));
-    if (Math.max(...vals) - Math.min(...vals) === 0) {
-      return {
-        ok: false,
-        error: 'Both pressure boundaries have the same value, so nothing drives the flow. Give them different pressures or add a velocity inlet.',
-        project_id: id,
-        fix: { go: 'bc', id: pressures[0].id, name: pressures[0].name },
-      };
-    }
-  }
-  return {
-    ok: true,
-    project_id: id,
-    mesh,
-    sim,
-    air,
-    bcs: records,
-    // Faces no BC claims end up in the mesh's `walls` patch; this decides
-    // whether that patch is no-slip (default) or slip.
-    wallDefault: wallTreatment(bcs && bcs.defaults),
-    mapped,
-    aa,
-    patchNames,
-    faceProps: loadFaceProps(id),
-  };
+  return { ok: true, project_id: id, mesh, sim };
 }
 
 // ---------------------------------------------------------------------------
@@ -1340,6 +1164,18 @@ export function getRunMonitors(projectId, runId, simulationId) {
           }
         : null,
   };
+}
+
+/** "simpleFoam 4 ranks — Incompressible / k-omega SST / SIMPLE[ · <transient summary>]". */
+function runNote({ app, nProcs, analysisKey, sim, transient }) {
+  const row = analysisByKey(analysisKey);
+  const family = (row && row.family && row.family.label) || (sim && sim.analysis) || '';
+  const algorithm = algorithmLabelFor(analysisKey) || (sim && sim.algorithm) || '';
+  // Only an analysis with turbulence models has one to name.
+  const turbulent = !row || (Array.isArray(row.turbulence_models) && row.turbulence_models.length > 0);
+  const parts = [family, turbulent ? runTurbulenceLabel(sim) : '', algorithm].filter(Boolean).join(' / ');
+  const head = `${app} ${nProcs > 1 ? nProcs + ' ranks' : 'serial'}` + (parts ? ` — ${parts}` : '');
+  return transient ? `${head} · ${describeTransient(transient)}` : head;
 }
 
 function runsDir(projectId) {
@@ -1680,14 +1516,18 @@ export async function createDraftRun({ projectId, name, simulationId, runId: req
     (wantMesh ? { id: wantMesh, name: 'Mesh' } : null);
   const ctrl = getSimulationControl(id, sim.id);
   const transient = projectIsTransient(id, sim.id);
+  const studyRow = analysisByKey(sim.analysis_type);
+  const runDefaults = (studyRow && studyRow.run_defaults) || {};
   const rec = {
     id: runId,
     name: String(name || '').trim().slice(0, 64) || nextRunName(cat.runs),
     status: 'draft',
     mesh_id: defaultMesh && defaultMesh.id,
     mesh_name: defaultMesh && defaultMesh.name,
-    endTime: DEFAULT_END_TIME,
-    writeInterval: DEFAULT_WRITE_INTERVAL,
+    // The study's analysis's own run defaults (analysis contract run_defaults).
+    endTime: Number(runDefaults.end_time) > 0 && !transient ? Math.round(Number(runDefaults.end_time)) : DEFAULT_END_TIME,
+    writeInterval:
+      Number(runDefaults.write_interval) > 0 && !transient ? Math.round(Number(runDefaults.write_interval)) : DEFAULT_WRITE_INTERVAL,
     // A draft follows the simulation's time dependency; the choice is frozen
     // onto the run when it starts.
     time_dependency: transient ? 'Transient' : 'Steady-state',
@@ -1797,9 +1637,17 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
   const sid = simulationId || folder.simulation_id || null;
   const inFlight = pendingRunWrites.get(String(runId));
   if (inFlight) await inFlight;
+  // A settings save still queued for this run would write into the folder being removed.
+  const queued = runSettingsUpdates.get(`${id} ${runId}`);
+  if (queued) {
+    try {
+      await queued;
+    } catch (_) {}
+  }
   try {
-    // Windows can hold a just-written file for a moment (indexer, antivirus): retry.
-    rmSync(folder.dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+    // Windows can hold a just-written file for a moment (indexer, antivirus): retry
+    // (linear back-off, about 5 s in all).
+    rmSync(folder.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   } catch (e) {
     return { ok: false, error: 'Could not delete run folder: ' + String((e && e.message) || e) };
   }
@@ -1907,7 +1755,7 @@ function runTurbulenceLabel(sim) {
   return turbulenceLabel(byKey[stripped] || byKey[key] || raw || 'kOmegaSST');
 }
 
-export function startSolve(opts = {}) {
+export async function startSolve(opts = {}) {
   const { projectId, endTime, writeInterval, runId, transient: transientIn, onDone, simulationId } = opts;
   if (liveRun && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) {
     if (!runId || String(liveRun.run_id) !== String(runId)) {
@@ -1963,7 +1811,7 @@ export function startSolve(opts = {}) {
     };
   }
   if (draft && (draft.status === 'running' || draft.status === 'starting')) {
-    const wslState = draft.wsl_case ? probeWslSolveSync(draft.wsl_case) : 'dead';
+    const wslState = draft.wsl_case ? probeWslSolveSync(draft.wsl_case, draft) : 'dead';
     const block = solveStartBlockReason(draft, {
       windowsLive: runProcessIsLive(draft),
       wslLive: wslState === 'live' || wslState === 'unknown',
@@ -1992,6 +1840,49 @@ export function startSolve(opts = {}) {
   });
   if (!ready.ok) {
     return { ok: false, status: 400, bodyExtra: { ...ready, increment: INCREMENT } };
+  }
+  // The rest of what blocks this run is its analysis's call (analysis contract:
+  // materials, boundary conditions, its own settings), asked before the run is
+  // marked running so a refused Start leaves it as it was.
+  const readyTd = draft && draft.time_dependency ? draft.time_dependency : ready.sim && ready.sim.time_dependency;
+  let verdict = null;
+  try {
+    verdict = await commitRpc('analysis.validate_ready', {
+      project_id: id,
+      simulation_id: (draft && draft.simulation_id) || (ready.sim && ready.sim.id) || '',
+      run_id: String(runId),
+      mesh_id: (draft && draft.mesh_id) || (ready.mesh && ready.mesh.mesh_id) || '',
+      time_dependency: runIsTransient({ time_dependency: readyTd }) ? 'Transient' : 'Steady-state',
+    });
+  } catch (e) {
+    return {
+      ok: false,
+      status: 500,
+      bodyExtra: { error: 'Could not check whether this run can start: ' + String((e && e.message) || e), increment: INCREMENT },
+    };
+  }
+  const issue = verdict && verdict.ready === false && Array.isArray(verdict.issues) ? verdict.issues[0] : null;
+  if (issue) {
+    return {
+      ok: false,
+      status: 400,
+      bodyExtra: {
+        ok: false,
+        error: String(issue.message || 'This run is not ready to start'),
+        project_id: id,
+        ...(issue.fix ? { fix: issue.fix } : {}),
+        ...(Array.isArray(issue.patches) ? { patches: issue.patches } : {}),
+        increment: INCREMENT,
+      },
+    };
+  }
+  // A second Start of this run arrived while the check ran: the first one has it.
+  if (liveRun && String(liveRun.run_id) === String(runId) && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) {
+    return {
+      ok: false,
+      status: 409,
+      bodyExtra: { error: 'This run is already solving. Click Stop if you want to end it.', increment: INCREMENT },
+    };
   }
   const et = Math.max(
     1,
@@ -2134,6 +2025,14 @@ export function startSolve(opts = {}) {
   // The numbers written to controlDict (Δt, max Δt, write interval), recorded on
   // the run so the Run panel shows what the solver really uses.
   if (isTransient) transient = (prepResult && prepResult.transient_control) || null;
+  // How the analysis runs this case (launch spec): frames kept, the solver's
+  // process names (for Stop and the live probe) and its log parser.
+  const launch = (prepResult && prepResult.launch) || {
+    app: solver,
+    keep_frames: isTransient ? 'all' : 'latest',
+    process_names: [solver],
+    log_parser: null,
+  };
 
   // Phase 1 land5: Python run_solve/stop_solve expect a single-segment id
   // (validate_wsl_case_id); wslCasePath() is only for legacy WSL sed fallbacks.
@@ -2154,6 +2053,13 @@ export function startSolve(opts = {}) {
     String(nProcs),
     '--app',
     solver,
+    '--keep-frames',
+    String(launch.keep_frames || 'latest'),
+    '--process-names',
+    (Array.isArray(launch.process_names) && launch.process_names.length ? launch.process_names : [solver]).join(','),
+    '--frame-fields',
+    (Array.isArray(launch.frame_fields) && launch.frame_fields.length ? launch.frame_fields : ['U', 'p']).join(','),
+    ...(launch.log_parser ? ['--log-parser', JSON.stringify(launch.log_parser)] : []),
     '--run-id',
     String(runId),
   ];
@@ -2269,6 +2175,8 @@ export function startSolve(opts = {}) {
     status: 'running',
     mode: 'solve',
     path_kind: solver,
+    analysis_key: (prepResult && prepResult.analysis_key) || null,
+    launch,
     time_dependency: timeDependency,
     ...(isTransient ? { transient } : {}),
     run_id: runId,
@@ -2306,21 +2214,19 @@ export function startSolve(opts = {}) {
       n_cells: ready.mesh.n_cells,
       n_points: ready.mesh.n_points,
     },
-    bcs: ready.mapped.map((m) => ({
-      name: m.bc.name,
-      bc_type: m.bc.bc_type,
-      patch: m.patch,
-      faces: bcFaces(m.bc),
-      value: m.bc.value,
-      unit: m.bc.unit || null,
-      ...(isWallBc(m.bc) ? { wall_type: wallTreatment(m.bc) } : {}),
-    })),
-    wall_default: ready.wallDefault || 'No-slip',
+    // The boundary-to-patch mapping the case was written with (prepare_run).
+    bcs: Array.isArray(prepResult && prepResult.bcs) ? prepResult.bcs : [],
+    wall_default: (prepResult && prepResult.wall_default) || 'No-slip',
     project_id: id,
-    // The study's own model, not a fixed label (a k-epsilon run used to read "k-ω SST").
-    note: isTransient
-      ? `pimpleFoam ${nProcs > 1 ? nProcs + ' ranks' : 'serial'} — Incompressible / ${runTurbulenceLabel(ready.sim)} / PIMPLE · ${describeTransient(transient)}`
-      : `simpleFoam ${nProcs > 1 ? nProcs + ' ranks' : 'serial'} — Incompressible / ${runTurbulenceLabel(ready.sim)} / SIMPLE`,
+    // The app, the analysis family, the study's own turbulence model and the
+    // analysis's algorithm (a k-epsilon run used to read "k-ω SST").
+    note: runNote({
+      app: solver,
+      nProcs,
+      analysisKey: (prepResult && prepResult.analysis_key) || '',
+      sim: ready.sim,
+      transient: isTransient ? transient : null,
+    }),
     increment: INCREMENT,
   };
   liveRun.baseRunning = baseRunning;
@@ -2361,11 +2267,21 @@ function cachedWslState(caseId) {
   return hit.state;
 }
 
-function probeWslSolveSync(caseId) {
+/**
+ * `--process-names a,b` for stop_solve.py: the solver processes the run's launch
+ * spec names (runs from before H8 have none; stop_solve then uses the legacy set).
+ */
+function processNamesArgs(doc) {
+  const names = doc && doc.launch && Array.isArray(doc.launch.process_names) ? doc.launch.process_names : [];
+  const clean = names.map((n) => String(n || '')).filter((n) => /^[A-Za-z][A-Za-z0-9]*$/.test(n));
+  return clean.length ? ['--process-names', clean.join(',')] : [];
+}
+
+function probeWslSolveSync(caseId, doc) {
   const id = String(caseId || '').trim();
   if (!id) return 'dead';
   try {
-    const r = spawnSync(PYTHON, [pyTool('stop_solve.py'), '--wsl-case', id, '--probe'], {
+    const r = spawnSync(PYTHON, [pyTool('stop_solve.py'), '--wsl-case', id, '--probe', ...processNamesArgs(doc)], {
       encoding: 'utf8',
       timeout: 12000,
       windowsHide: true,
@@ -2381,12 +2297,12 @@ function probeWslSolveSync(caseId) {
   return 'unknown';
 }
 
-function scheduleWslProbe(caseId) {
+function scheduleWslProbe(caseId, doc) {
   const id = String(caseId || '').trim();
   if (!id || wslProbeInflight.has(id)) return;
   wslProbeInflight.add(id);
   try {
-    const child = spawn(PYTHON, [pyTool('stop_solve.py'), '--wsl-case', id, '--probe'], {
+    const child = spawn(PYTHON, [pyTool('stop_solve.py'), '--wsl-case', id, '--probe', ...processNamesArgs(doc)], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
@@ -2450,7 +2366,7 @@ function forceKillDoc(rec, run) {
   try {
     spawn(
       PYTHON,
-      [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(rid || ''), '--force'],
+      [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(rid || ''), '--force', ...processNamesArgs(rec || run)],
       { windowsHide: true, stdio: 'ignore' },
     );
   } catch {
@@ -2512,7 +2428,7 @@ function resolveStopTarget(projectId, runId) {
   if (!pick) return null;
   const pidLive = pidIsAlive(pick.pid);
   const wslState = cachedWslState(pick.wsl_case);
-  if (!pidLive && pick.wsl_case && wslState !== 'dead') scheduleWslProbe(pick.wsl_case);
+  if (!pidLive && pick.wsl_case && wslState !== 'dead') scheduleWslProbe(pick.wsl_case, pick);
   if (!pidLive && wslState === 'dead') {
     return { reaped: [reapStaleRunningDoc(id, pick)] };
   }
@@ -2645,7 +2561,7 @@ function reapStaleRunningDoc(projectId, doc) {
   if (doc.wsl_case) {
     const wslState = cachedWslState(doc.wsl_case);
     if (wslState !== 'dead') {
-      scheduleWslProbe(doc.wsl_case);
+      scheduleWslProbe(doc.wsl_case, doc);
       return doc;
     }
   }
@@ -2935,13 +2851,15 @@ export async function previewTransient(projectId, runId, settings, simulationId)
   const sid = (rec && rec.simulation_id) || simulationId || null;
   const ctrl = getSimulationControl(id, sid);
   const merged = normalizeTransient(settings, normalizeTransient(rec && rec.transient, ctrl.transient));
-  // Same call prepare_run makes (cfddesk.project.web_adapter.load_run_spec with
-  // the run's mesh and reference speed), so the Δt shown is the Δt written.
-  const pv = await commitRpc('run.transient_preview', {
+  // The analysis's run model computes it with the same code prepare_run writes
+  // the case with (load_run_spec, the run's mesh and reference speed), so the
+  // Δt shown is the Δt written.
+  const pv = await commitRpc('analysis.run_preview', {
     project_id: id,
     run_id: runId || '',
     simulation_id: sid || '',
     mesh_id: (rec && rec.mesh_id) || '',
+    time_dependency: 'Transient',
     settings: merged,
   });
   return pv && typeof pv === 'object' ? pv : { ok: false, error: 'transient preview failed' };
@@ -2977,7 +2895,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch {
         body = {};
       }
-      const started = startSolve({
+      const started = await startSolve({
         projectId: body.project_id,
         endTime: body.endTime || body.end_time,
         writeInterval: body.writeInterval || body.write_interval,

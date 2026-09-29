@@ -50,6 +50,8 @@ declare global {
     __CFD_W20_STATE__?: Record<string, unknown>;
     __CFD_TRANSIENT_DEFAULTS__?: Record<string, unknown>;
     __CFD_STEADY_DEFAULTS__?: Record<string, unknown>;
+    /** Create Simulation: disable Create with this reason ('' re-enables it). */
+    __CFD_CREATE_BLOCK__?: (reason: string) => void;
     __CFD_W17_DEFAULTS__?: {
       analysis: string;
       analysis_type?: string;

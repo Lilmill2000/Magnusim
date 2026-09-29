@@ -376,6 +376,26 @@ def _write_case_transient(ctx: CaseContext) -> dict:
     return _write_web_solve_case(ctx)
 
 
+def _contract_fields(td: str, *, key: str, label: str) -> dict:
+    """Contract 1.1 hooks (cfddesk.builtin.incompressible_contract)."""
+    from cfddesk.builtin import incompressible_contract as ic
+
+    return {
+        "family": ic.FAMILY,
+        "algorithm_label": ic.algorithm_label(td),
+        "residual_keys": ic.RESIDUAL_KEYS,
+        "x_axis": "seconds" if td == "transient" else "iterations",
+        "study_defaults": ic.make_study_defaults(
+            key=key, label=label, category="FLUID DYNAMICS", default_turbulence="kOmegaSST"
+        ),
+        "validate_ready": ic.validate_ready,
+        "run_model": ic.TRANSIENT_RUN_MODEL if td == "transient" else ic.STEADY_RUN_MODEL,
+        "log_parser": ic.LOG_PARSER,
+        "frame_fields": ("U", "p"),
+        "ui": dict(ic.UI),
+    }
+
+
 def build_incompressible_steady() -> AnalysisType:
     return AnalysisType(
         key="incompressible_steady",
@@ -399,6 +419,7 @@ def build_incompressible_steady() -> AnalysisType:
         write_case=_write_case_steady,
         parse_log_line=None,
         requires=(Requirement("wsl_tool", "simpleFoam"),),
+        **_contract_fields("steady", key="incompressible_steady", label="Incompressible Fluid Flow"),
     )
 
 
@@ -425,6 +446,7 @@ def build_incompressible_transient() -> AnalysisType:
         write_case=_write_case_transient,
         parse_log_line=None,
         requires=(Requirement("wsl_tool", "pimpleFoam"),),
+        **_contract_fields("transient", key="incompressible_transient", label="Incompressible Fluid Flow (Transient)"),
     )
 
 

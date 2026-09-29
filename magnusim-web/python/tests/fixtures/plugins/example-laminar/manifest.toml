@@ -5,3 +5,4 @@ api_version = "1.0"
 license = "GPL-3.0-or-later"
 description = "Steady laminar analysis using the built-in incompressible writer"
 authors = "Magnusim"
+requires_plugins = ["incompressible_flow>=1.0"]

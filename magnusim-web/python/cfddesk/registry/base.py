@@ -22,16 +22,31 @@ class Spec(Protocol):
 
 T = TypeVar("T")
 
-# Built-ins a plugin may replace only when manifest.overrides names them,
+# Core specs a plugin may replace only when manifest.overrides names them,
 # and may not drop unless a test passes allow_protected=True.
 PROTECTED_KEYS: frozenset[tuple[str, str]] = frozenset(
     {
         ("mesher", "cfmesh"),
         ("mesher", "standard"),
-        ("analysis", "incompressible_steady"),
-        ("solver", "simpleFoam"),
     }
 )
+
+# The same protection for specs a bundled plugin owns: its manifest lists them
+# (``protected = ["analysis:incompressible_steady", ...]``) and discovery adds
+# them here while it is loaded.
+_PLUGIN_PROTECTED: set[tuple[str, str]] = set()
+
+
+def protect(kind: str, key: str) -> None:
+    _PLUGIN_PROTECTED.add((str(kind), str(key)))
+
+
+def clear_plugin_protected() -> None:
+    _PLUGIN_PROTECTED.clear()
+
+
+def is_protected(kind: str, key: str) -> bool:
+    return (kind, key) in PROTECTED_KEYS or (kind, key) in _PLUGIN_PROTECTED
 
 
 def _manifest_overrides(plugin: str) -> list[str]:
@@ -119,7 +134,7 @@ class Registry(Generic[T]):
     ) -> None:
         """Drop a spec. Protected built-ins stay unless a test explicitly allows it."""
         token = f"{self.kind}:{key}"
-        protected = (self.kind, key) in PROTECTED_KEYS
+        protected = is_protected(self.kind, key)
         named = token in set(_manifest_overrides(plugin))
         if protected and not (named and allow_protected):
             raise RegistryError(f"{self.kind}: refusing to unregister protected key {key!r}")
@@ -233,5 +248,12 @@ class Registry(Generic[T]):
                     if val is None:
                         continue
                     row[extra] = list(val) if isinstance(val, tuple) else val
+                from cfddesk.registry.contract import describe_extra
+
+                row.update(describe_extra(spec))
+            if self.kind == "solver":
+                for extra in ("application", "time_dependency", "parallel", "stop_strategy"):
+                    if hasattr(spec, extra):
+                        row[extra] = getattr(spec, extra)
             out.append(row)
         return out

@@ -485,7 +485,11 @@ function Install-PythonVenv([string[]]$PyLauncher) {
 
     if ($LASTEXITCODE -ne 0) { throw 'pip install -e . failed (cfddesk + pyvista + gmsh + scipy + cadquery-ocp)' }
 
-    & $VenvPython -c "import cfddesk, pyvista, gmsh, scipy; print('python-ok')"
+    & $VenvPython -m pip install -e sdk
+
+    if ($LASTEXITCODE -ne 0) { throw 'pip install -e sdk failed (magnusim_sdk)' }
+
+    & $VenvPython -c "import cfddesk, magnusim_sdk, pyvista, gmsh, scipy; print('python-ok')"
 
     if ($LASTEXITCODE -ne 0) { throw 'Python packages imported with errors' }
 

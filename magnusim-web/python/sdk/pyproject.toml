@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=83"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magnusim-sdk"
+version = "1.1.0"
+description = "Helpers for Magnusim plugins (standard library only)"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["magnusim_sdk*"]

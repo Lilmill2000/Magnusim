@@ -40,6 +40,8 @@ class RegistryHub:
         self._plugin_dirs: dict[str, Path] = {}
         self._job_packages: dict[str, Path] = {}
         self._methods: dict[tuple[str, str], Callable[..., Any]] = {}
+        # Required bundled plugins that did not load: {key, name, error}.
+        self.required_failures: list[dict[str, Any]] = []
 
     def registry(self, kind: str) -> Registry[Any]:
         if kind not in self._regs:
@@ -62,6 +64,7 @@ class RegistryHub:
         self._plugin_dirs.clear()
         self._job_packages.clear()
         self._methods.clear()
+        self.required_failures.clear()
         get_hooks().clear()
 
     def current_overrides(self, plugin: str) -> list[str]:
@@ -366,7 +369,7 @@ def _ui_fields(meta: dict[str, Any]) -> tuple[str | None, str]:
 
 def _purge_plugin_modules() -> None:
     for name in list(sys.modules):
-        if name.startswith("cfddesk._plugins."):
+        if name.startswith(("cfddesk._plugins.", "cfddesk._bundled.")):
             del sys.modules[name]
 
 
@@ -450,7 +453,9 @@ def _validate_cross_refs(hub: RegistryHub) -> None:
     raise RegistryError("cross-reference validation did not settle after unloading plugins")
 
 
-def _failure_row(key: str, error: str, meta: dict[str, Any] | None = None) -> dict[str, Any]:
+def _failure_row(
+    key: str, error: str, meta: dict[str, Any] | None = None, *, source: str = "local"
+) -> dict[str, Any]:
     meta = meta or {}
     ui, entry = _ui_fields(meta) if meta else (None, "index.js")
     return {
@@ -462,16 +467,12 @@ def _failure_row(key: str, error: str, meta: dict[str, Any] | None = None) -> di
         "ui": ui,
         "ui_entry": entry,
         "error": error,
-        "source": "local",
+        "source": source,
     }
 
 
-def _load_folder_plugin(
-    plugin_dir: Path,
-    hub: RegistryHub,
-    disabled: set[str],
-) -> tuple[PluginManifest | None, bool]:
-    """Load one folder plugin. Returns (manifest_or_None, load_failed)."""
+def _read_manifest(plugin_dir: Path, hub: RegistryHub) -> tuple[dict[str, Any] | None, bool]:
+    """(manifest dict, failed). None and not failed when the folder is not a plugin."""
     manifest_path = plugin_dir / "manifest.toml"
     plugin_py = plugin_dir / "plugin.py"
     if not manifest_path.is_file() or not plugin_py.is_file():
@@ -489,8 +490,34 @@ def _load_folder_plugin(
         # Already warned inside _parse_simple_toml (parse fail or fail-closed fallback).
         hub.failures.append(_failure_row(plugin_dir.name, "bad manifest"))
         return None, True
+    return meta, False
+
+
+def _str_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _load_folder_plugin(
+    plugin_dir: Path,
+    hub: RegistryHub,
+    disabled: set[str],
+    *,
+    meta: dict[str, Any] | None = None,
+    tier: str = "user",
+) -> tuple[PluginManifest | None, bool]:
+    """Load one folder plugin. Returns (manifest_or_None, load_failed)."""
+    plugin_py = plugin_dir / "plugin.py"
+    if meta is None:
+        meta, failed = _read_manifest(plugin_dir, hub)
+        if meta is None:
+            return None, failed
     key = str(meta.get("key") or plugin_dir.name)
-    if key in disabled:
+    required = tier == "bundled" and bool(meta.get("required"))
+    if key in disabled and not required:
         log.info("Plugin %s disabled via .cfddesk-local.json", key)
         return None, False
     api = str(meta.get("api_version") or "1.0")
@@ -518,7 +545,8 @@ def _load_folder_plugin(
         return None, False
     overrides = _overrides_from_meta(meta)
     hub.note_overrides(key, overrides)
-    mod_name = f"cfddesk._plugins.{plugin_dir.name}"
+    source = "bundled" if tier == "bundled" else "local"
+    mod_name = f"cfddesk.{'_bundled' if tier == 'bundled' else '_plugins'}.{plugin_dir.name}"
     try:
         spec = importlib.util.spec_from_file_location(mod_name, plugin_py)
         if spec is None or spec.loader is None:
@@ -533,11 +561,12 @@ def _load_folder_plugin(
     except Exception as exc:
         log.warning("Failing plugin import %s: %s — continuing", key, exc)
         hub._loading_overrides.pop(key, None)
-        hub.failures.append(_failure_row(key, str(exc), meta))
+        hub.failures.append(_failure_row(key, str(exc), meta, source=source))
         sys.modules.pop(mod_name, None)
         return None, True
     if isinstance(result, PluginManifest):
-        _apply_disk_meta(result, meta, api, overrides, "local")
+        _apply_disk_meta(result, meta, api, overrides, source)
+        _apply_tier_meta(result, meta, tier)
         hub._loading_overrides.pop(key, None)
         return result, False
     # Build a minimal manifest from toml if register returned None
@@ -557,30 +586,227 @@ def _load_folder_plugin(
                 )
     hub._loading_overrides.pop(key, None)
     ui, entry = _ui_fields(meta)
-    return (
-        PluginManifest(
-            key=key,
-            name=str(meta.get("name") or key),
-            version=str(meta.get("version") or "0.0.0"),
-            requires=requires,
-            provides={},
-            ui=ui,
-            ui_entry=entry,
-            authors=_authors(meta.get("authors")),
-            description=str(meta.get("description") or ""),
-            overrides=list(overrides),
-            api_version=api,
-            source="local",
-            license=str(meta.get("license") or ""),
-        ),
-        False,
+    manifest = PluginManifest(
+        key=key,
+        name=str(meta.get("name") or key),
+        version=str(meta.get("version") or "0.0.0"),
+        requires=requires,
+        provides={},
+        ui=ui,
+        ui_entry=entry,
+        authors=_authors(meta.get("authors")),
+        description=str(meta.get("description") or ""),
+        overrides=list(overrides),
+        api_version=api,
+        source=source,
+        license=str(meta.get("license") or ""),
     )
+    _apply_tier_meta(manifest, meta, tier)
+    return manifest, False
+
+
+def _apply_tier_meta(result: PluginManifest, meta: dict[str, Any], tier: str) -> None:
+    """Tier, required, dependencies and protected keys from manifest.toml."""
+    from cfddesk.registry.base import protect
+
+    result.tier = "bundled" if tier == "bundled" else "user"
+    result.required = result.tier == "bundled" and bool(meta.get("required"))
+    result.requires_plugins = _str_list(meta.get("requires_plugins"))
+    result.protected = _str_list(meta.get("protected")) if result.tier == "bundled" else []
+    for token in result.protected:
+        kind, _, key = token.partition(":")
+        if kind and key:
+            protect(kind, key)
 
 
 def plugins_dir_for(root: Path | str) -> Path:
-    """Plugin folders: ``root/plugins``, or ``MAGNUSIM_PLUGINS_DIR`` when set (the tests use it)."""
+    """User plugin folders: ``root/plugins``, or ``MAGNUSIM_PLUGINS_DIR`` when set (the tests use it)."""
     override = (os.environ.get("MAGNUSIM_PLUGINS_DIR") or "").strip()
     return Path(override) if override else Path(root) / "plugins"
+
+
+# The bundled plugins the product cannot work without (key -> display name).
+# Missing, broken or failing one of these blocks creating and running
+# simulations with an honest error instead of an empty picker.
+REQUIRED_BUNDLED: dict[str, str] = {"incompressible_flow": "Incompressible Flow"}
+
+
+def bundled_dir_for(root: Path | str | None = None) -> Path | None:
+    """The bundled plugins ship with the app: ``<app>/bundled-plugins``.
+
+    ``MAGNUSIM_BUNDLED_DIR`` overrides it (tests). A ``web_root`` given to
+    load_all moves the user plugins folder only, never the bundled ones.
+    """
+    override = (os.environ.get("MAGNUSIM_BUNDLED_DIR") or "").strip()
+    if override:
+        return Path(override)
+    try:
+        from cfddesk.wsl.config import web_root as _app_root
+
+        return Path(_app_root()) / "bundled-plugins"
+    except Exception:
+        return Path(root) / "bundled-plugins" if root is not None else None
+
+
+_REQ_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*(?:(>=|==|>|<=|<)\s*([0-9][0-9.]*))?\s*$")
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    out: list[int] = []
+    for part in str(v or "0").split("."):
+        m = re.match(r"\d+", part)
+        out.append(int(m.group(0)) if m else 0)
+    return tuple(out)
+
+
+def _requirement_met(req: str, manifests: dict[str, PluginManifest]) -> str | None:
+    """None when ``req`` ("key" or "key>=1.0") is satisfied, else why not."""
+    m = _REQ_RE.match(req)
+    if not m:
+        return f"bad plugin requirement {req!r}"
+    key, op, want = m.group(1), m.group(2), m.group(3)
+    have = manifests.get(key)
+    if have is None:
+        return f"needs the {key} plugin"
+    if op:
+        a, b = _version_tuple(have.version), _version_tuple(want or "0")
+        ok = {">=": a >= b, ">": a > b, "==": a == b, "<=": a <= b, "<": a < b}[op]
+        if not ok:
+            return f"needs {key} {op} {want} (installed: {have.version})"
+    return None
+
+
+def _dependency_order(
+    found: list[tuple[Path, dict[str, Any]]], hub: RegistryHub, *, source: str
+) -> list[tuple[Path, dict[str, Any]]]:
+    """Plugins ordered so each loads after the plugins it requires (sorted within a level).
+
+    A cycle is an error: every plugin in it gets a failure row and is skipped.
+    """
+    by_key = {str(meta.get("key") or d.name): (d, meta) for d, meta in found}
+    deps = {
+        k: [r for r in (_REQ_RE.match(x) for x in _str_list(meta.get("requires_plugins"))) if r]
+        for k, (_d, meta) in by_key.items()
+    }
+    order: list[str] = []
+    state: dict[str, int] = {}  # 1 = visiting, 2 = done
+    cyclic: set[str] = set()
+
+    def visit(k: str, path: list[str]) -> None:
+        if state.get(k) == 2:
+            return
+        if state.get(k) == 1:
+            cyclic.update(path[path.index(k):])
+            return
+        state[k] = 1
+        for r in deps.get(k, []):
+            dep = r.group(1)
+            if dep in by_key:
+                visit(dep, [*path, dep])
+        state[k] = 2
+        order.append(k)
+
+    for k in sorted(by_key):
+        visit(k, [k])
+    for k in sorted(cyclic):
+        d, meta = by_key[k]
+        hub.failures.append(
+            _failure_row(k, f"plugin dependency cycle: {' -> '.join(sorted(cyclic))}", meta, source=source)
+        )
+    return [by_key[k] for k in order if k not in cyclic]
+
+
+def _load_ordered(
+    found: list[tuple[Path, dict[str, Any]]],
+    hub: RegistryHub,
+    disabled: set[str],
+    *,
+    tier: str,
+) -> tuple[list[PluginManifest], bool]:
+    source = "bundled" if tier == "bundled" else "local"
+    manifests: list[PluginManifest] = []
+    had_failures = False
+    for child, meta in _dependency_order(found, hub, source=source):
+        key = str(meta.get("key") or child.name)
+        unmet = [why for req in _str_list(meta.get("requires_plugins")) if (why := _requirement_met(req, hub.manifests))]
+        if unmet:
+            required = tier == "bundled" and bool(meta.get("required"))
+            if key in disabled and not required:
+                continue
+            hub.failures.append(_failure_row(key, "; ".join(unmet), meta, source=source))
+            had_failures = True
+            continue
+        m, failed = _load_folder_plugin(child, hub, disabled, meta=meta, tier=tier)
+        if failed:
+            had_failures = True
+        if m is not None:
+            hub.manifests[m.key] = m
+            hub.note_plugin_dir(m.key, child)
+            manifests.append(m)
+    return manifests, had_failures
+
+
+def _scan_plugin_dir(folder: Path | None, hub: RegistryHub) -> tuple[list[tuple[Path, dict[str, Any]]], bool]:
+    if folder is None or not folder.is_dir():
+        return [], False
+    found: list[tuple[Path, dict[str, Any]]] = []
+    had_failures = False
+    for child in sorted(folder.iterdir()):
+        if not child.is_dir():
+            continue
+        meta, failed = _read_manifest(child, hub)
+        had_failures = had_failures or failed
+        if meta is not None:
+            found.append((child, meta))
+    return found, had_failures
+
+
+def discover_bundled_plugins(
+    hub: RegistryHub,
+    *,
+    web_root: Path | str | None = None,
+) -> tuple[list[PluginManifest], bool]:
+    """Load the plugins that ship with the app, in dependency order.
+
+    A required one (``required = true``) ignores the off list. Every key in
+    :data:`REQUIRED_BUNDLED` that did not load is recorded in
+    ``hub.required_failures`` with the reason.
+    """
+    folder = bundled_dir_for(_resolve_web_root(web_root))
+    found, scan_failed = _scan_plugin_dir(folder, hub)
+    disabled = _disabled_plugins(_resolve_web_root(web_root))
+    manifests, failed = _load_ordered(found, hub, disabled, tier="bundled")
+    hub.required_failures.clear()
+    for key, name in REQUIRED_BUNDLED.items():
+        if key in hub.manifests:
+            continue
+        err = next((f.get("error") for f in hub.failures if f.get("key") == key), None)
+        row = {
+            "key": key,
+            "name": name,
+            "error": str(err or f"not found in {folder}"),
+            "folder": str(folder) if folder is not None else "",
+        }
+        row["log"] = _log_required_failure(row)
+        hub.required_failures.append(row)
+    return manifests, (scan_failed or failed)
+
+
+def _log_required_failure(row: dict[str, Any]) -> str:
+    """Append a required plugin's load failure to .cache/logs/plugins.log; return the path."""
+    import datetime
+
+    try:
+        from cfddesk.wsl.config import web_root as _app_root
+
+        path = Path(_app_root()) / ".cache" / "logs" / "plugins.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {row['name']} ({row['key']}) failed to load: {row['error']}\n")
+        return str(path)
+    except OSError:
+        return ""
 
 
 def discover_folder_plugins(
@@ -592,23 +818,9 @@ def discover_folder_plugins(
     root = _resolve_web_root(web_root)
     if root is None:
         return [], False
-    plugins_dir = plugins_dir_for(root)
-    if not plugins_dir.is_dir():
-        return [], False
-    disabled = _disabled_plugins(Path(root))
-    manifests: list[PluginManifest] = []
-    had_failures = False
-    for child in sorted(plugins_dir.iterdir()):
-        if not child.is_dir():
-            continue
-        m, failed = _load_folder_plugin(child, hub, disabled)
-        if failed:
-            had_failures = True
-        if m is not None:
-            hub.manifests[m.key] = m
-            hub.note_plugin_dir(m.key, child)
-            manifests.append(m)
-    return manifests, had_failures
+    found, scan_failed = _scan_plugin_dir(plugins_dir_for(root), hub)
+    manifests, failed = _load_ordered(found, hub, _disabled_plugins(Path(root)), tier="user")
+    return manifests, (scan_failed or failed)
 
 
 def discover_entry_points(
@@ -688,7 +900,13 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
     hub._loading_overrides.clear()
     _purge_plugin_modules()
     get_hooks().clear()
+    from cfddesk.registry.base import clear_plugin_protected
+
+    clear_plugin_protected()
     disabled = _disabled_plugins(_resolve_web_root(web_root))
+    # Order: core builtins, the bundled plugins (in dependency order), entry
+    # points, then the user's plugins folder.
+    _, bundled_fail = discover_bundled_plugins(hub, web_root=web_root)
     _, ep_fail = discover_entry_points(hub, disabled)
     _, folder_fail = discover_folder_plugins(hub, web_root=web_root)
     # After plugins: every AnalysisType bag key must resolve (solver/bc/material/monitor).
@@ -696,7 +914,7 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
     from cfddesk.registry.tools import sync_tool_kinds
 
     sync_tool_kinds(hub)
-    _LOADED = not (ep_fail or folder_fail)
+    _LOADED = not (bundled_fail or ep_fail or folder_fail)
     return hub
 
 
@@ -717,8 +935,13 @@ def _catalog_row(
     missing: list[str] | None = None,
     dir: str | None = None,
     license: str = "",
+    tier: str = "user",
+    required: bool = False,
 ) -> dict[str, Any]:
     return {
+        # "bundled" ships with the app; a required one cannot be turned off.
+        "tier": tier,
+        "required": required,
         "key": key,
         # Folder name under the plugins root (never a full path); a manifest key
         # may differ from it, and the UI files are served from the folder.
@@ -759,7 +982,8 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
     for manifest in hub.manifests.values():
         missing = check_requirements(manifest, {})
         reasons = [str(item.reason) for item in missing]
-        if manifest.key in disabled:
+        required = bool(getattr(manifest, "required", False))
+        if manifest.key in disabled and not required:
             status = "disabled"
         elif reasons:
             status = "missing requirement"
@@ -783,6 +1007,21 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 missing=reasons,
                 dir=folder.name if folder is not None else None,
                 license=str(manifest.license or ""),
+                tier=str(getattr(manifest, "tier", "user") or "user"),
+                required=required,
+            )
+        )
+    for row in hub.required_failures:
+        add(
+            _catalog_row(
+                key=str(row.get("key") or ""),
+                name=str(row.get("name") or row.get("key") or ""),
+                source="bundled",
+                status="error",
+                enabled=False,
+                error=str(row.get("error") or ""),
+                tier="bundled",
+                required=True,
             )
         )
     for row in hub.incompatible:

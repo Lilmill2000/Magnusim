@@ -20,7 +20,15 @@ class PluginManifest:
     description: str = ""
     overrides: list[str] = field(default_factory=list)
     api_version: str = "1.0"
-    source: str = ""  # "local" (plugins/) or "entry_point"
+    source: str = ""  # "bundled" (bundled-plugins/), "local" (plugins/) or "entry_point"
     # SPDX identifier. Magnusim is GPL-3.0-or-later; a distributed plugin must be
     # GPL-3.0-or-later or GPL-compatible (docs/plugins/authoring.md).
     license: str = ""
+    # Bundled tier (API 1.1). A required plugin cannot be turned off, and the
+    # app refuses to create or run simulations without it.
+    tier: str = "user"  # "bundled" | "user"
+    required: bool = False
+    # Plugins this one needs loaded first: "key" or "key>=1.0".
+    requires_plugins: list[str] = field(default_factory=list)
+    # "kind:key" specs of this plugin that other plugins may not drop.
+    protected: list[str] = field(default_factory=list)

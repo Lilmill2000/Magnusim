@@ -15,6 +15,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from magnusim_sdk.foam import (
+    foam_header,  # noqa: F401  (re-exported by case.web_case)
+    js_plain_float,
+    write_foam_dict,
+    write_vol_field,
+)
+from magnusim_sdk.foam import (
+    write_decompose_par_dict as _write_decompose_par_dict_sdk,
+)
+
 from cfddesk.case.bc_registry import get_type
 from cfddesk.case.ras import (
     DEFAULT_HYDRAULIC_DIAMETER_M,
@@ -1599,67 +1609,8 @@ def _ensure_web_imports() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write_bytes(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
-
-
-def foam_header(cls: str, obj: str) -> str:
-    return (
-        "FoamFile\n"
-        "{\n"
-        "    version     2.0;\n"
-        "    format      ascii;\n"
-        f"    class       {cls};\n"
-        f"    object      {obj};\n"
-        "}\n"
-    )
-
-
-def write_foam_dict(path: Path, cls: str, obj: str, body: str) -> None:
-    _write_bytes(path, foam_header(cls, obj) + "\n" + body.strip() + "\n")
-
-
-def write_vol_field(
-    path: Path,
-    *,
-    object_name: str,
-    cls: str,
-    dims: str,
-    internal: str,
-    patches: dict[str, dict[str, str]],
-) -> None:
-    lines = [
-        foam_header(cls, object_name).rstrip("\n"),
-        "",
-        f"dimensions      {dims};",
-        "",
-        f"internalField   {internal};",
-        "",
-        "boundaryField",
-        "{",
-    ]
-    for name, block in patches.items():
-        lines.append(f"    {name}")
-        lines.append("    {")
-        for k, v in block.items():
-            lines.append(f"        {k}          {v};")
-        lines.append("    }")
-    lines.append("}")
-    lines.append("")
-    _write_bytes(path, "\n".join(lines))
-
-
-def js_plain_float(v: float) -> str:
-    """Approximate Node's default number→string for Foam dict values."""
-    if not math.isfinite(v):
-        return "0"
-    if v == 0:
-        return "0"
-    s = format(float(v), ".15f")
-    if "." in s:
-        s = s.rstrip("0").rstrip(".")
-    return s or "0"
+# foam_header, write_foam_dict, write_vol_field and js_plain_float are
+# magnusim_sdk.foam's (imported above): one copy for the core and plugins.
 
 
 # ---------------------------------------------------------------------------
@@ -2471,12 +2422,7 @@ RAS
     write_fv_options_limit_u(out / "system" / "fvOptions", max_u=u_max)
 
     if int(spec.n_procs) > 1:
-        write_foam_dict(
-            out / "system" / "decomposeParDict",
-            "dictionary",
-            "decomposeParDict",
-            f"numberOfSubdomains {int(spec.n_procs)};\nmethod          scotch;",
-        )
+        _write_decompose_par_dict_sdk(out / "system" / "decomposeParDict", int(spec.n_procs))
 
     (out / "case.foam").write_text("", encoding="ascii")
 

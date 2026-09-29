@@ -3,7 +3,7 @@
     {
       "key": "incompressible_steady",
       "label": "Incompressible Fluid Flow",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -138,12 +138,86 @@
         "kOmegaSST",
         "LRR",
         "SSG"
-      ]
+      ],
+      "contract": "1.1",
+      "family": {
+        "key": "incompressible",
+        "label": "Incompressible",
+        "title": "Incompressible Fluid Flow",
+        "description": "Simulate flow of a single fluid for which the maximum Mach number is lower than 0.3. Density variations are negligible \u2014 approximated as incompressible.",
+        "tags": [
+          "FLUID FLOW (GAS OR LIQUID)",
+          "MACH<0.3 (100 M/S)",
+          "NEGLIGIBLE DENSITY VARIATION"
+        ],
+        "study_name": "Incompressible"
+      },
+      "algorithm_label": "SIMPLE",
+      "residual_keys": [
+        "U",
+        "p",
+        "k",
+        "omega",
+        "epsilon",
+        "R"
+      ],
+      "x_axis": "iterations",
+      "result_fields": [
+        {
+          "key": "U",
+          "label": "Velocity",
+          "unit_quantity": "velocity",
+          "kind": "vector"
+        },
+        {
+          "key": "p",
+          "label": "Pressure",
+          "unit_quantity": "pressure",
+          "kind": "scalar"
+        },
+        {
+          "key": "k",
+          "label": "Turbulent kinetic energy",
+          "unit_quantity": "specific_energy",
+          "kind": "scalar"
+        },
+        {
+          "key": "omega",
+          "label": "Specific dissipation rate",
+          "unit_quantity": "specific_dissipation_rate",
+          "kind": "scalar"
+        },
+        {
+          "key": "nut",
+          "label": "Turbulent viscosity",
+          "unit_quantity": "kinematic_viscosity",
+          "kind": "scalar"
+        }
+      ],
+      "ui": {
+        "study_panel": "SimulationPanel",
+        "run_panel": "RunControl"
+      },
+      "study_defaults": {
+        "analysis_type": "incompressible_steady",
+        "analysis": "Incompressible",
+        "analysis_title": "Incompressible Fluid Flow",
+        "category": "FLUID DYNAMICS",
+        "flow_group": "FLOW",
+        "turbulence_model_key": "kOmegaSST",
+        "turbulence_model": "k-omega SST",
+        "time_dependency": "Steady-state",
+        "algorithm": "SIMPLE"
+      },
+      "run_defaults": {
+        "end_time": 200,
+        "write_interval": 50
+      }
     },
     {
       "key": "incompressible_transient",
       "label": "Incompressible Fluid Flow (Transient)",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -335,38 +409,128 @@
         "kOmegaSST",
         "LRR",
         "SSG"
-      ]
+      ],
+      "contract": "1.1",
+      "family": {
+        "key": "incompressible",
+        "label": "Incompressible",
+        "title": "Incompressible Fluid Flow",
+        "description": "Simulate flow of a single fluid for which the maximum Mach number is lower than 0.3. Density variations are negligible \u2014 approximated as incompressible.",
+        "tags": [
+          "FLUID FLOW (GAS OR LIQUID)",
+          "MACH<0.3 (100 M/S)",
+          "NEGLIGIBLE DENSITY VARIATION"
+        ],
+        "study_name": "Incompressible"
+      },
+      "algorithm_label": "PIMPLE",
+      "residual_keys": [
+        "U",
+        "p",
+        "k",
+        "omega",
+        "epsilon",
+        "R"
+      ],
+      "x_axis": "seconds",
+      "result_fields": [
+        {
+          "key": "U",
+          "label": "Velocity",
+          "unit_quantity": "velocity",
+          "kind": "vector"
+        },
+        {
+          "key": "p",
+          "label": "Pressure",
+          "unit_quantity": "pressure",
+          "kind": "scalar"
+        },
+        {
+          "key": "k",
+          "label": "Turbulent kinetic energy",
+          "unit_quantity": "specific_energy",
+          "kind": "scalar"
+        },
+        {
+          "key": "omega",
+          "label": "Specific dissipation rate",
+          "unit_quantity": "specific_dissipation_rate",
+          "kind": "scalar"
+        },
+        {
+          "key": "nut",
+          "label": "Turbulent viscosity",
+          "unit_quantity": "kinematic_viscosity",
+          "kind": "scalar"
+        }
+      ],
+      "ui": {
+        "study_panel": "SimulationPanel",
+        "run_panel": "RunControl"
+      },
+      "study_defaults": {
+        "analysis_type": "incompressible_transient",
+        "analysis": "Incompressible",
+        "analysis_title": "Incompressible Fluid Flow",
+        "category": "FLUID DYNAMICS",
+        "flow_group": "FLOW",
+        "turbulence_model_key": "kOmegaSST",
+        "turbulence_model": "k-omega SST",
+        "time_dependency": "Transient",
+        "algorithm": "PIMPLE"
+      },
+      "run_defaults": {
+        "end_time": 5.0,
+        "write_count": 50,
+        "time_step_mode": "adjustable",
+        "max_co": 1.0,
+        "delta_t": null,
+        "max_delta_t": null,
+        "time_scheme": "Euler",
+        "n_outer_correctors": 1,
+        "n_correctors": 2,
+        "n_non_orth_correctors": 0
+      }
     }
   ],
   "solver": [
     {
       "key": "simpleFoam",
       "label": "simpleFoam (SIMPLE steady)",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "requires": [
         {
           "kind": "wsl_tool",
           "name": "simpleFoam",
           "version_spec": ""
         }
-      ]
+      ],
+      "application": "simpleFoam",
+      "time_dependency": "steady",
+      "parallel": "mpirun",
+      "stop_strategy": "stopAt_writeNow"
     },
     {
       "key": "pimpleFoam",
       "label": "pimpleFoam (PIMPLE transient)",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "requires": [
         {
           "kind": "wsl_tool",
           "name": "pimpleFoam",
           "version_spec": ""
         }
-      ]
+      ],
+      "application": "pimpleFoam",
+      "time_dependency": "transient",
+      "parallel": "mpirun",
+      "stop_strategy": "stopAt_writeNow"
     },
     {
       "key": "simpleFoam_amgx",
       "label": "simpleFoam + AmgX (p)",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "requires": [
         {
           "kind": "wsl_tool",
@@ -378,7 +542,11 @@
           "name": "cuda",
           "version_spec": ""
         }
-      ]
+      ],
+      "application": "simpleFoam",
+      "time_dependency": "steady",
+      "parallel": "none",
+      "stop_strategy": "stopAt_writeNow"
     }
   ],
   "mesher": [
@@ -1384,6 +1552,26 @@
       "output": "vtp"
     }
   ],
-  "plugins": [],
+  "plugins": [
+    {
+      "key": "incompressible_flow",
+      "name": "Incompressible Flow",
+      "version": "1.0.0",
+      "requires": [],
+      "provides": {},
+      "ui": null,
+      "ui_entry": "index.js",
+      "authors": [
+        "Magnusim"
+      ],
+      "description": "Steady-state and transient incompressible flow of one fluid (simpleFoam, pimpleFoam).",
+      "source": "bundled",
+      "api_version": "1.1",
+      "overrides": [],
+      "tier": "bundled",
+      "required": true,
+      "requires_plugins": []
+    }
+  ],
   "missing": []
 }

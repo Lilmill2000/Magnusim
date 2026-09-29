@@ -33,6 +33,8 @@ export const UNOWNED_MESH_PROJECT = 'unowned-mesh-e2e';
 export const H7_PROJECT = 'h7-steady-transient-e2e';
 /** Own elbow project for run-settings-save.spec.js: it edits a draft run's settings. */
 export const RUN_SETTINGS_PROJECT = 'run-settings-e2e';
+/** Own elbow project for h8-contract.spec.js: a study of the stub analysis plugin. */
+export const H8_PROJECT = 'h8-contract-e2e';
 
 /** Copy the elbow fixture into destRoot/<id> laid out the way the app stores it. */
 function seedElbowProject(destRoot, id, title) {
@@ -91,6 +93,7 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
   seedElbowProject(destRoot, UNOWNED_MESH_PROJECT, 'Unowned mesh');
   seedElbowProject(destRoot, H7_PROJECT, 'Steady and transient');
   seedElbowProject(destRoot, RUN_SETTINGS_PROJECT, 'Run settings');
+  seedElbowProject(destRoot, H8_PROJECT, 'Analysis contract');
 
   const emptyId = 'sample-project-empty-e2e';
   const emptyDir = join(destRoot, emptyId);

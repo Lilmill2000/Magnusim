@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { RequiredPluginError } from './RequiredPluginError';
 import ReactDOM from 'react-dom/client';
 import { FiltersPanel } from '../chrome/FiltersPanel';
 import { LeftTree } from '../chrome/LeftTree';
@@ -80,6 +81,7 @@ export function AppShell() {
       <div data-plugin-toast role="status" hidden={!toast}>
         {toast}
       </div>
+      <RequiredPluginError />
       <Home />
       <SetupWizard />
       <LeftTree />

@@ -46,7 +46,7 @@ describe('run-control defaults have one source', () => {
     assert.equal(w27.includes('transientControlFor'), false);
     assert.match(w27, /'--time-dependency'/);
     assert.match(w27, /'--transient-json'/);
-    assert.match(w27, /run\.transient_preview/);
+    assert.match(w27, /analysis\.run_preview/);
   });
 });
 

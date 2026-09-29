@@ -4971,6 +4971,10 @@ body.is-recording #viewport-gizmo {
 .wiz-plugin-status[data-state="enabled"] { color: #3f6b4a; }
 .wiz-plugin-status[data-state="error"] { color: #b42318; }
 .wiz-pref-copy .wiz-plugin-error { color: #b42318; }
+/* A required bundled plugin failed to load: creating and running are refused. */
+.required-plugin-error { position: fixed; top: 0; left: 0; right: 0; z-index: 10000; margin: 0; padding: 10px 16px; background: #fef3f2; border-bottom: 1px solid #fda29b; color: #b42318; font-size: 13px; }
+.required-plugin-error p { margin: 0; }
+.required-plugin-picker { color: #b42318; margin: 12px; }
 .wiz-plugin-panel { display: block; margin-top: 6px; }
 .wiz-plugin-panel p { margin: 6px 0 0; font-size: 12px; line-height: 1.45; color: #5b6575; }
 .wiz-plugin-actions {

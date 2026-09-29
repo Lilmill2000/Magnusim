@@ -44,10 +44,14 @@ _PHASE_OF_STAGE = {
 }
 
 
-def parse_residual_line(line: str) -> dict[str, Any] | None:
+# Any solver's residual line (GenericParser): the field is whatever it solves for.
+_RE_RESIDUAL_ANY = re.compile(r"Solving for (\w+), Initial residual = ([0-9.eE+-]+)")
+
+
+def parse_residual_line(line: str, pattern: re.Pattern[str] = _RE_RESIDUAL) -> dict[str, Any] | None:
     """One OpenFOAM 'Solving for … Initial residual' line, or None."""
     cleaned = _RE_MPI_PREFIX.sub("", str(line or ""))
-    match = _RE_RESIDUAL.search(cleaned)
+    match = pattern.search(cleaned)
     if not match:
         return None
     try:
@@ -78,6 +82,19 @@ def solve_template_path() -> Path:
     return _SOLVE_SH
 
 
+# Runs recorded before launch specs (H8) name no processes: these were the
+# only solver apps then.
+LEGACY_PROCESS_NAMES = ("simpleFoam", "pimpleFoam")
+
+
+def _check_names(app: str, process_names: tuple[str, ...] | list[str] | None = None) -> None:
+    from cfddesk.registry.contract import APP_NAME_RE
+
+    for name in (app, *(process_names or ())):
+        if not APP_NAME_RE.match(str(name or "")):
+            raise ValueError(f"not a plain program name: {name!r}")
+
+
 def render_solve_script(
     *,
     dst: str,
@@ -85,18 +102,31 @@ def render_solve_script(
     n_procs: int,
     app: str,
     run_id: str,
+    keep_frames: str = "latest",
+    frame_fields: tuple[str, ...] | list[str] = ("U", "p"),
 ) -> str:
-    """Substitute placeholders in ``templates/solve.sh`` (LF, no BOM)."""
+    """Substitute placeholders in ``templates/solve.sh`` (LF, no BOM).
+
+    ``app`` is the program the analysis's launch spec names; ``keep_frames``
+    (``all`` | ``latest``) which result frames come back to Windows.
+    """
+    _check_names(app)
+    if keep_frames not in ("all", "latest"):
+        raise ValueError(f"keep_frames must be 'all' or 'latest', got {keep_frames!r}")
+    fields = [str(f) for f in frame_fields]
+    if not fields or not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", f) for f in fields):
+        raise ValueError(f"frame_fields must be plain field names, got {frame_fields!r}")
     raw = _SOLVE_SH.read_text(encoding="utf-8")
     if raw.startswith("\ufeff"):
         raw = raw.lstrip("\ufeff")
     n = max(1, int(n_procs))
-    solver = "pimpleFoam" if app == "pimpleFoam" else "simpleFoam"
     text = (
         raw.replace("__DST__", str(dst))
         .replace("__WIN_OUT__", str(win_out))
         .replace("__NPROCS__", str(n))
-        .replace("__APP__", solver)
+        .replace("__APP__", app)
+        .replace("__KEEP_FRAMES__", keep_frames)
+        .replace("__FRAME_FIELDS__", " ".join(fields))
         .replace("__RUN_ID__", str(run_id))
     )
     return text.replace("\r\n", "\n").replace("\r", "\n")
@@ -110,11 +140,19 @@ def write_solve_script(
     n_procs: int,
     app: str,
     run_id: str,
+    keep_frames: str = "latest",
+    frame_fields: tuple[str, ...] | list[str] = ("U", "p"),
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     body = render_solve_script(
-        dst=dst, win_out=win_out, n_procs=n_procs, app=app, run_id=run_id
+        dst=dst,
+        win_out=win_out,
+        n_procs=n_procs,
+        app=app,
+        run_id=run_id,
+        keep_frames=keep_frames,
+        frame_fields=frame_fields,
     )
     path.write_bytes(body.encode("utf-8"))
     return path
@@ -122,7 +160,16 @@ def write_solve_script(
 
 @dataclass
 class ProgressParser:
-    """Port of w27 ``applyProgressLine`` + w30 ``transientProgressFromLine``."""
+    """Solver output → job events: the one parser (Node only aggregates events).
+
+    solve.sh protocol events pass through (stage and result events also close
+    the timed ``phase``); OpenFOAM ``Time =`` lines become ``progress``, Courant
+    and deltaT lines ``courant``, and ``Solving for`` lines of the incompressible
+    fields ``residual``. Incompressible Flow's log parser (its launch spec
+    names this class).
+    """
+
+    residual_re = _RE_RESIDUAL
 
     stage: str = "starting"
     current: dict | None = None
@@ -244,7 +291,7 @@ class ProgressParser:
                 out.append(Event(event="courant", fields={"delta_t": v}))
             return out
 
-        residual = parse_residual_line(line)
+        residual = parse_residual_line(line, self.residual_re)
         if residual and self.current is not None:
             name = str(residual["field"])
             val = float(residual["initial"])
@@ -283,13 +330,24 @@ class ProgressParser:
         }
 
 
+@dataclass
+class GenericParser(ProgressParser):
+    """The core's parser for an analysis without one of its own: the same
+    events, with a residual for any field the solver reports."""
+
+    residual_re = _RE_RESIDUAL_ANY
+
+
 def start_solve(
     case_dir: Path,
     *,
     wsl_case_id: str,
     n_procs: int = 1,
-    app: str = "simpleFoam",
+    app: str,
     run_id: str = "run-1",
+    keep_frames: str = "latest",
+    process_names: tuple[str, ...] | None = None,
+    frame_fields: tuple[str, ...] = ("U", "p"),
     script_path: Path | None = None,
 ) -> subprocess.Popen:
     """Render solve.sh and spawn ``wsl -d <distro> -- bash <script>``.
@@ -304,8 +362,10 @@ def start_solve(
     validate_wsl_case_id(wsl_case_id)
     # A dead Windows wrapper used to leave pimpleFoam running; Start then
     # spawned a second mpirun on the same case. Kill that leftover first.
-    if solve_is_live(wsl_case_id):
-        kill_solve(wsl_case_id, run_id)
+    names = tuple(process_names or (app,))
+    _check_names(app, names)
+    if solve_is_live(wsl_case_id, names):
+        kill_solve(wsl_case_id, run_id, names)
     dst = wsl_case_path(wsl_case_id)
     win_out = windows_to_wsl_path(case_dir)
     if script_path is None:
@@ -318,6 +378,8 @@ def start_solve(
         n_procs=n_procs,
         app=app,
         run_id=run_id,
+        keep_frames=keep_frames,
+        frame_fields=frame_fields,
     )
     sh_wsl = windows_to_wsl_path(script_path)
     argv = ["wsl", "-d", get_wsl_distro(), "--", "bash", sh_wsl]
@@ -349,13 +411,16 @@ def events_from_lines(lines: list[str] | Iterator[str]) -> list[Event]:
     return out
 
 
-def solve_is_live(wsl_case_id: str) -> bool:
-    """True if mpirun / simpleFoam / pimpleFoam is still attached to this case."""
+def solve_is_live(wsl_case_id: str, process_names: tuple[str, ...] | None = None) -> bool:
+    """True if mpirun or one of the run's solver processes is still attached to this case."""
     validate_wsl_case_id(wsl_case_id)
+    names = tuple(process_names or LEGACY_PROCESS_NAMES)
+    _check_names(names[0], names)
     dest = wsl_case_path(wsl_case_id)
+    pgreps = "; ".join(f"pgrep -x {n}" for n in (*names, "mpirun"))
     inner = (
         f"CASE={shlex.quote(dest)}; "
-        "for pid in $(pgrep -x pimpleFoam; pgrep -x simpleFoam; pgrep -x mpirun; true); do "
+        f"for pid in $({pgreps}; true); do "
         '[ -d "/proc/$pid" ] || continue; '
         'cmd=$(tr "\\0" " " < /proc/$pid/cmdline 2>/dev/null || true); '
         'echo "$cmd" | grep -Eq "reconstructPar|live-frames|cfddesk-kill" && continue; '
@@ -395,16 +460,21 @@ def stop_solve(wsl_case_id: str, *, graceful: bool = True) -> None:
         kill_solve(wsl_case_id)
 
 
-def kill_solve(wsl_case_id: str, run_id: str | None = None) -> None:
-    """Force-kill mpirun / simpleFoam / pimpleFoam for this WSL case."""
+def kill_solve(
+    wsl_case_id: str, run_id: str | None = None, process_names: tuple[str, ...] | None = None
+) -> None:
+    """Force-kill mpirun and the run's solver processes for this WSL case."""
     validate_wsl_case_id(wsl_case_id)
+    names = tuple(process_names or LEGACY_PROCESS_NAMES)
+    _check_names(names[0], names)
     dest = wsl_case_path(wsl_case_id)
-    kill_mpirun_tree(dest)
-    # Also match pimpleFoam + historic cfddesk-w27-<runId> pattern.
+    kill_mpirun_tree(dest, names)
+    # Also match the historic cfddesk-w27-<runId> pattern.
     extra = []
     if run_id:
         extra.append(f"pkill -f {json.dumps('cfddesk-w27-' + str(run_id))} 2>/dev/null || true")
-    extra.append(f"pkill -f {json.dumps('pimpleFoam.*' + dest)} 2>/dev/null || true")
+    for name in names:
+        extra.append(f"pkill -f {json.dumps(name + '.*' + dest)} 2>/dev/null || true")
     inner = "; ".join(extra) if extra else "true"
     subprocess.run(
         ["wsl", "-d", get_wsl_distro(), "--", "bash", "-lc", escape_wsl_bash_dollars(inner)],
@@ -415,9 +485,13 @@ def kill_solve(wsl_case_id: str, run_id: str | None = None) -> None:
     )
 
 
-def stream_events_to_stdout(proc: subprocess.Popen) -> tuple[int, ProgressParser]:
-    """Relay events as ``MAGNUSIM_EVENT`` JSONL; return (exit_code, parser)."""
-    parser = ProgressParser()
+def stream_events_to_stdout(proc: subprocess.Popen, parser: Any = None) -> tuple[int, Any]:
+    """Relay events as ``MAGNUSIM_EVENT`` JSONL; return (exit_code, parser).
+
+    ``parser`` is the analysis's log parser (its launch spec names it);
+    :class:`ProgressParser` when none is given.
+    """
+    parser = parser if parser is not None else ProgressParser()
     for ev in iter_events(proc, parser=parser):
         # Re-emit with prefix so Node parse_line works uniformly.
         print(EVENT_PREFIX + ev.to_json(), flush=True)

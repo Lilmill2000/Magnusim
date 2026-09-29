@@ -21228,6 +21228,15 @@ function setCreateSimulationError(msg) {
   note.textContent = msg;
 }
 
+/** Create stays off while a required plugin is missing (the picker says why). */
+window.__CFD_CREATE_BLOCK__ = (reason) => {
+  const btn = document.getElementById('cs-create');
+  if (btn && btn.textContent !== 'Creating…') {
+    btn.disabled = !!reason;
+    btn.title = reason || '';
+  }
+};
+
 function openCreateSimulationModal() {
   const modal = document.getElementById('modal-create-simulation');
   if (!modal) return;
@@ -30320,6 +30329,11 @@ async function deleteSelectedRunClient() {
   if (rec && rec.status === 'running') {
     setRunHint('Stop the run before deleting it.');
     return;
+  }
+  // A save of this run still on its way would land in the folder being deleted.
+  const saving = runCatalog.settings_saves[String(runId)];
+  if (saving) {
+    try { await saving; } catch (_) {}
   }
   const study = typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {};
   const posted = await postJson('/api/run/delete', {

@@ -167,7 +167,7 @@ def register(hub):
 def test_describe_solver_includes_requires():
     load_all()
     desc = {d["key"]: d for d in get_registry("solver").describe()}
-    assert desc["simpleFoam"]["plugin"] == "builtin"
+    assert desc["simpleFoam"]["plugin"] == "incompressible_flow"
     assert desc["simpleFoam"]["label"]
     assert desc["simpleFoam"].get("requires")
 

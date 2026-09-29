@@ -280,6 +280,8 @@ def test_gate_h5_zero_core_wheel(tmp_path: Path):
     )
     env = os.environ.copy()
     env["PYTHONPATH"] = str(site)
+    # The bundled plugins ship beside the app, not inside the cfddesk wheel.
+    env["MAGNUSIM_BUNDLED_DIR"] = str(Path(__file__).resolve().parents[3] / "bundled-plugins")
     proc = subprocess.run(
         [sys.executable, str(runner), str(web), str(site)],
         capture_output=True,

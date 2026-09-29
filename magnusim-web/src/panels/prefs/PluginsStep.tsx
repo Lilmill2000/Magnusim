@@ -123,6 +123,7 @@ export function PluginsStep() {
               data-plugin-key={row.key}
               data-plugin-status={status}
               data-plugin-source={row.source || ''}
+              data-plugin-required={row.required ? '1' : undefined}
             >
               <span className="wiz-pref-copy">
                 <strong>
@@ -148,9 +149,9 @@ export function PluginsStep() {
               </span>
               <span className="wiz-plugin-side">
                 <span className="wiz-plugin-status" data-state={status}>
-                  {statusLabel(status)}
+                  {row.required && status === 'enabled' ? 'Required' : statusLabel(status)}
                 </span>
-                {row.client ? null : (
+                {row.client || row.required ? null : (
                   <button
                     type="button"
                     className="home-btn"

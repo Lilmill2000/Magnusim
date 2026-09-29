@@ -17,6 +17,7 @@ import {
 import { PanelChrome } from '../PanelChrome';
 import { RenameTitle } from '../RenameTitle';
 import { mergeObjectSchemas, pickSchemaValues, scopeIds, useRegistryReady } from '../scope';
+import { requiredPluginMessage } from '../../app/RequiredPluginError';
 
 /** Every enabled analysis. Disabled plugins are already absent from the registry list. */
 export function visibleAnalyses(rows: RegistryRow[]): RegistryRow[] {
@@ -30,6 +31,8 @@ function analysisRows(): RegistryRow[] {
 export function SimulationHub(props: IslandProps) {
   const registry = useRegistryReady();
   const rows = visibleAnalyses((registry?.analysis || []) as RegistryRow[]);
+  const missing = registry?.required_missing || [];
+  const blocked = missing.length ? requiredPluginMessage(missing[0]) : '';
 
   const [selected, setSelected] = useState('');
   const creating = props.panelId === 'cs-type-list';
@@ -44,6 +47,11 @@ export function SimulationHub(props: IslandProps) {
     if (selected || !rows.length) return;
     pick(rows.find((row) => row.key === 'incompressible_steady') || rows[0]);
   }, [rows, selected]);
+
+  // Without its required plugin the app cannot create a study: Create stays off and says why.
+  useEffect(() => {
+    if (creating) window.__CFD_CREATE_BLOCK__?.(blocked);
+  }, [creating, blocked]);
 
   useEffect(() => {
     if (!creating) return undefined;
@@ -60,7 +68,11 @@ export function SimulationHub(props: IslandProps) {
     return () => window.removeEventListener('cfd:create-time-dep', onTimeDep);
   }, [rows, selected, creating]);
 
-  const list = (
+  const list = blocked ? (
+    <p className="mat-assign-hint required-plugin-picker" role="alert" data-required-plugin-error="picker">
+      {blocked}
+    </p>
+  ) : (
     <ul className="ml-list" data-scope={props.scope || ''}>
       {rows.map((row) => (
         <li key={row.key}>

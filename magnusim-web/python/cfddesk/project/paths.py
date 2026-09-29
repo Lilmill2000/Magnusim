@@ -474,6 +474,24 @@ def assemble_study_bcs(project_dir: Path | str, sim_id: str | None) -> list[dict
     return folder_rows + extra
 
 
+def assemble_study_materials(project_dir: Path | str, sim_id: str | None) -> list[dict[str, Any]]:
+    """Folder materials first, then materials.json rows whose id is not already on disk.
+
+    Matches scripts/study-io.js assembleStudyCollection('materials').
+    """
+    root = Path(project_dir)
+    sid = str(sim_id or "").strip() or None
+    study = find_study(root, sid) if sid else None
+    if not study:
+        return []
+    folder_rows = [_strip_item_meta(r) for r in walk_child_items(Path(study["dir"]) / "materials", "material.json")]
+    doc = _read_json(Path(study["dir"]) / "materials.json") or {}
+    legacy = [m for m in (doc.get("materials") or []) if isinstance(m, dict)]
+    have = {str(r.get("id")) for r in folder_rows}
+    extra = [m for m in legacy if m.get("id") is not None and str(m.get("id")) not in have]
+    return folder_rows + extra
+
+
 def adopt_legacy_bcs(project_dir: Path | str, sim_id: str | None) -> int:
     """Give each leftover-aggregate BC row of this study its own BC_* folder.
 

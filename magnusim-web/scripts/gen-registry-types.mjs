@@ -47,16 +47,47 @@ export interface RegistryRow {
   default_turbulence?: string;
   default_solver?: string;
   turbulence_models?: string[];
+  /** Analysis contract (API 1.1): what the core shows about an analysis. */
+  contract?: string;
+  family?: AnalysisFamily | null;
+  algorithm_label?: string;
+  residual_keys?: string[];
+  x_axis?: string;
+  study_defaults?: Record<string, unknown>;
+  run_defaults?: Record<string, unknown>;
+  ui?: Record<string, string>;
+  /** Solver apps: the program a case runs. */
+  application?: string;
+}
+
+export interface AnalysisFamily {
+  key: string;
+  label: string;
+  title: string;
+  description: string;
+  tags: string[];
+  study_name: string;
+}
+
+/** A required bundled plugin that did not load (the app blocks creating and running). */
+export interface RequiredPluginMissing {
+  key: string;
+  name: string;
+  error: string;
+  folder?: string;
+  log?: string;
 }
 
 export interface RegistryDescribe {
   analysis?: RegistryRow[];
+  solver?: RegistryRow[];
   filter?: RegistryRow[];
   mesher?: RegistryRow[];
   material?: RegistryRow[];
   bc?: RegistryRow[];
   monitor?: RegistryRow[];
   plugins?: Array<Record<string, unknown>>;
+  required_missing?: RequiredPluginMissing[];
 }
 `;
 

@@ -238,7 +238,7 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       ctx.sendJson(400, { error: e instanceof Error ? e.message : String(e) });
       return;
     }
-    const starters: Record<string, (p: Record<string, unknown>, started: JobRecord) => void> = {
+    const starters: Record<string, (p: Record<string, unknown>, started: JobRecord) => void | Promise<void>> = {
       'generate_standard.py': (p, started) => deps.startMeshJob(p, started),
       'solve.sh': (p, started) => deps.startSolveJob(p, started),
       'convert_step_to_stl.py': (p, started) => deps.startCadImportJob(p, started),

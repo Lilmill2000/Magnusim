@@ -182,7 +182,7 @@ def test_gate_h1_override(tmp_path):
     load_all(web_root=web)
     restored = dump_registry(web_root=web, force=False)
     owners = {row["key"]: row["plugin"] for row in restored["solver"]}
-    assert owners["simpleFoam"] == "builtin"
+    assert owners["simpleFoam"] == "incompressible_flow"
     assert get_registry("mesher").owner("cfmesh") == "builtin"
 
 
@@ -262,10 +262,10 @@ def test_gate_h1_api_version(tmp_path):
         encoding="utf-8",
     )
     hub = load_all(web_root=web)
-    assert API_VERSION == "1.0"
+    assert API_VERSION == "1.1"
     assert any(row["key"] == "h1_future" and row["api_version"] == "2.0" for row in hub.incompatible)
     assert "h1_future" not in hub.manifests
-    assert get_registry("solver").owner("simpleFoam") == "builtin"
+    assert get_registry("solver").owner("simpleFoam") == "incompressible_flow"
     assert get_registry("mesher").get("cfmesh").frozen is True
 
 
@@ -359,4 +359,4 @@ def test_replace_requires_override_token():
             replace(current, label="nope"),
             plugin="stranger",
         )
-    assert get_registry("solver").owner("simpleFoam") == "builtin"
+    assert get_registry("solver").owner("simpleFoam") == "incompressible_flow"

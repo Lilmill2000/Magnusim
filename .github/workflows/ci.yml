@@ -20,6 +20,7 @@ jobs:
           python -m pip install --upgrade "pip>=26.2" "setuptools>=83"
           if [ -f requirements.lock ]; then pip install -r requirements.lock; fi
           pip install -e ".[dev]"
+          pip install -e sdk
       - name: Ruff
         run: ruff check cfddesk tools tests
       - name: Mypy
@@ -51,6 +52,7 @@ jobs:
           python -m pip install --upgrade "pip>=26.2" "setuptools>=83"
           python -m pip install -r python/requirements.lock
           python -m pip install -e "python[dev]"
+          python -m pip install -e python/sdk
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:server
@@ -62,6 +64,27 @@ jobs:
       - run: npx playwright test
         env:
           CI: "1"
+
+  # The analysis contract's boundary: the core never imports a bundled plugin,
+  # plugins import only magnusim_sdk, cfddesk.registry and the standard library,
+  # and magnusim_sdk imports with nothing else installed.
+  plugin-boundary:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: magnusim-web/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Import boundary
+        run: python tools/plugin_boundary.py
+      - name: magnusim_sdk alone
+        run: |
+          python -m venv "$RUNNER_TEMP/sdk-only"
+          "$RUNNER_TEMP/sdk-only/bin/pip" install ./sdk
+          "$RUNNER_TEMP/sdk-only/bin/python" -c "import sys, magnusim_sdk, magnusim_sdk.events, magnusim_sdk.units, magnusim_sdk.foam, magnusim_sdk.gmsh_helpers, magnusim_sdk.msh22, magnusim_sdk.proc; bad = [m for m in sys.modules if m.split('.')[0] in {'OCP', 'pyvista', 'gmsh', 'numpy', 'cfddesk'}]; assert not bad, bad; print('magnusim_sdk imports alone')"
 
   # The app ships no plugins. Prove the core suites pass with no user plugin
   # folder at all (the plugin-host gates are tagged @plugins and run in "node").
@@ -90,6 +113,7 @@ jobs:
           python -m pip install --upgrade "pip>=26.2" "setuptools>=83"
           python -m pip install -r python/requirements.lock
           python -m pip install -e "python[dev]"
+          python -m pip install -e python/sdk
       - name: Empty plugins folder
         run: |
           mkdir -p "$RUNNER_TEMP/no-plugins"

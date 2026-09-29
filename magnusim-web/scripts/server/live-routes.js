@@ -106,8 +106,8 @@ function wireComputeQueue(api) {
       if (kicked.ok) api.applyKickUpdate(kicked.bodyExtra);
       return startResultFromEngine(kicked);
     },
-    startSolve: (item) => startResultFromEngine(
-      startSolve({
+    startSolve: async (item) => startResultFromEngine(
+      await startSolve({
         projectId: item.project_id || null,
         runId: item.run_id || null,
         simulationId: item.simulation_id || null,
@@ -587,18 +587,24 @@ export function registerLiveRoutes(router, { worker, jobs }) {
       jobs.attachChild(job.id, { pid: snap.pid });
       job.result = snap;
     },
-    startSolveJob(params, job) {
-      const started = startSolve({
-        projectId: params.project_id || params.projectId,
-        endTime: params.endTime || params.end_time,
-        writeInterval: params.writeInterval || params.write_interval,
-        runId: params.runId || params.run_id,
-        transient: params.transient,
-        onDone: (result) => {
-          const status = result && result.status === 'done' ? 'done' : result && result.status === 'stopped' ? 'stopped' : 'failed';
-          jobs.finish(job.id, status, result, result && result.error);
-        },
-      });
+    async startSolveJob(params, job) {
+      let started;
+      try {
+        started = await startSolve({
+          projectId: params.project_id || params.projectId,
+          endTime: params.endTime || params.end_time,
+          writeInterval: params.writeInterval || params.write_interval,
+          runId: params.runId || params.run_id,
+          transient: params.transient,
+          onDone: (result) => {
+            const status = result && result.status === 'done' ? 'done' : result && result.status === 'stopped' ? 'stopped' : 'failed';
+            jobs.finish(job.id, status, result, result && result.error);
+          },
+        });
+      } catch (e) {
+        jobs.finish(job.id, 'failed', null, e instanceof Error ? e.message : String(e));
+        return;
+      }
       if (!started.ok) {
         jobs.finish(job.id, 'failed', started.bodyExtra, (started.bodyExtra && started.bodyExtra.error) || 'solve failed');
         return;

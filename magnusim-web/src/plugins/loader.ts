@@ -14,6 +14,9 @@ export type ListedPlugin = {
   error?: string;
   url?: string;
   client?: boolean;
+  /** "bundled" ships with the app; a required one cannot be turned off. */
+  tier?: string;
+  required?: boolean;
 };
 
 export type PluginHost = {

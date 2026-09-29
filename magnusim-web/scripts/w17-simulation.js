@@ -52,9 +52,11 @@ import {
   analysisKeyFor,
   analysisKeys,
   analysisSupportsTimeDependency,
-  algorithmFromSolver,
+  algorithmLabelFor,
   buildW17DefaultsFromRegistry,
   DEFAULT_ANALYSIS_KEY,
+  requiredPluginError,
+  studyDefaultsFor,
 } from './registry-defaults.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -63,8 +65,13 @@ const _projectsRoot = envGet('PROJECTS_ROOT');
 const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
-/** Dump-backed defaults (scripts/generated/registry.json). */
-export const W17_DEFAULTS = buildW17DefaultsFromRegistry();
+/**
+ * The default analysis's study defaults, as its contract publishes them
+ * (committed registry until the live one loads). A new study takes the picked
+ * analysis's own (studyDefaultsFor), these only fill what that leaves out.
+ * @type {Readonly<Record<string, any>>}
+ */
+export const W17_DEFAULTS = buildW17DefaultsFromRegistry() || Object.freeze({});
 
 function readActiveId() {
   if (!existsSync(ACTIVE_PATH)) return null;
@@ -109,15 +116,20 @@ function newSimId() {
   return `sim-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
 }
 
-function _algorithmForAnalysisKey(key, fallback) {
-  const row = analysisByKey(key);
-  if (row && row.default_solver) return algorithmFromSolver(row.default_solver);
-  return fallback;
+/**
+ * The algorithm label of an analysis family at a time dependency (its sibling's
+ * contract algorithm_label: "SIMPLE" / "PIMPLE" for Incompressible Flow).
+ * @param {string} timeDependency
+ * @param {string} [analysisKey]
+ */
+export function algorithmForTimeDependency(timeDependency, analysisKey) {
+  return algorithmLabelFor(analysisKeyFor(analysisKey || DEFAULT_ANALYSIS_KEY, timeDependency));
 }
 
+/** The default family's labels (kept for scripts that print them). */
 export const TIME_DEPENDENCIES = Object.freeze({
-  'Steady-state': _algorithmForAnalysisKey(DEFAULT_ANALYSIS_KEY, 'SIMPLE'),
-  Transient: _algorithmForAnalysisKey('incompressible_transient', 'PIMPLE'),
+  'Steady-state': algorithmForTimeDependency('Steady-state'),
+  Transient: algorithmForTimeDependency('Transient'),
 });
 
 function registeredAnalysis(v) {
@@ -190,6 +202,9 @@ function touchProjectSimRef(proj, sim) {
 }
 
 function buildSimulation(body, project) {
+  // A required plugin that failed to load: say so, never create a study that cannot run.
+  const blocked = requiredPluginError();
+  if (blocked) return { ok: false, status: 503, body: { error: blocked, required_plugin_missing: true } };
   const analysis = String(body.analysis || body.analysis_type || body.type || W17_DEFAULTS.analysis).trim();
   if (!registeredAnalysis(analysis)) {
     return {
@@ -202,7 +217,6 @@ function buildSimulation(body, project) {
   const id = body.id || newSimId();
   const geomId = activeGeometryId(project, body.geometry_id);
   const timeDependency = normalizeTimeDependency(body.time_dependency, W17_DEFAULTS.time_dependency);
-  const algorithm = TIME_DEPENDENCIES[timeDependency] || W17_DEFAULTS.algorithm;
   // The analysis the Create modal picked, resolved against the chosen time
   // dependency (the Transient choice solves as incompressible_transient).
   const picked =
@@ -221,21 +235,25 @@ function buildSimulation(body, project) {
     };
   }
   const geom = (project.geometries || []).find((g) => g && g.id === geomId) || project.geometry || null;
+  // The picked analysis's own new-study settings (analysis contract).
+  /** @type {Record<string, any>} */
+  const d = { ...W17_DEFAULTS, ...(studyDefaultsFor(analysisType) || {}) };
+  const algorithm = d.algorithm || algorithmLabelFor(analysisType);
   const sim = {
     id,
     project_id: project.id,
     name: studyBaseName({ time_dependency: timeDependency }),
-    analysis: W17_DEFAULTS.analysis,
+    analysis: d.analysis,
     analysis_type: analysisType,
-    analysis_title: W17_DEFAULTS.analysis_title,
-    turbulence_model_key: W17_DEFAULTS.turbulence_model_key,
-    category: W17_DEFAULTS.category,
-    flow_group: W17_DEFAULTS.flow_group,
-    turbulence_model: W17_DEFAULTS.turbulence_model,
+    analysis_title: d.analysis_title,
+    turbulence_model_key: d.turbulence_model_key,
+    category: d.category,
+    flow_group: d.flow_group,
+    turbulence_model: d.turbulence_model,
     time_dependency: timeDependency,
     algorithm,
     defaults: {
-      turbulence_model: W17_DEFAULTS.turbulence_model,
+      turbulence_model: d.turbulence_model,
       time_dependency: timeDependency,
       algorithm,
     },
@@ -430,7 +448,7 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
   const destTimeDep = options.destTimeDependency
     ? normalizeTimeDependency(options.destTimeDependency, null)
     : null;
-  const destAlgorithm = options.destAlgorithm || (destTimeDep && TIME_DEPENDENCIES[destTimeDep]) || null;
+  const destAlgorithm = options.destAlgorithm || (destTimeDep && algorithmForTimeDependency(destTimeDep)) || null;
   const projectDirPath = options.projectDirPath || null;
   const srcGeom = String(options.sourceGeometryId || '').trim();
   const destGeom = String(toGeom || '').trim();
@@ -733,7 +751,7 @@ function updateSimulation(body) {
     }
     sim.time_dependency = nextTd;
     sim.analysis_type = nextKey;
-    sim.algorithm = TIME_DEPENDENCIES[sim.time_dependency] || sim.algorithm;
+    sim.algorithm = algorithmLabelFor(nextKey) || sim.algorithm;
   }
   if (body.name != null) {
     const next = String(body.name).trim().slice(0, 64);
@@ -846,7 +864,7 @@ function copySimulationSettings(projectId, proj, fromId, toId, include, copyMode
     cloneCases,
     copyRuns,
     destTimeDependency: destTd,
-    destAlgorithm: TIME_DEPENDENCIES[destTd] || toStudy.algorithm,
+    destAlgorithm: algorithmForTimeDependency(destTd, toStudy.analysis_type) || toStudy.algorithm,
     projectDirPath: root,
     sourceGeometryId: srcGeom,
     faceMap,

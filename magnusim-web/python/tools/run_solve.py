@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Stream a WSL OpenFOAM solve as MAGNUSIM_EVENT JSONL (Phase 1 Step 5).
 
-CLI: tools/run_solve.py --case-dir ... --wsl-case ... --n-procs N --app simpleFoam|pimpleFoam --run-id ...
+CLI: tools/run_solve.py --case-dir ... --wsl-case ... --n-procs N --app <program> --run-id ...
+     [--keep-frames all|latest] [--process-names a,b] [--log-parser JSON]
+
+The app, frames kept, process names and log parser come from the analysis's
+launch spec (prepare_run reports it; Node passes it on).
 
 Also supports --parse-log PATH for offline JSONL parsing tests (no WSL).
 """
@@ -57,6 +61,7 @@ def _render_only(args: argparse.Namespace) -> int:
         n_procs=args.n_procs,
         app=args.app,
         run_id=args.run_id,
+        keep_frames=args.keep_frames,
     )
     out = Path(args.render_out) if args.render_out else None
     if out:
@@ -67,6 +72,7 @@ def _render_only(args: argparse.Namespace) -> int:
             n_procs=args.n_procs,
             app=args.app,
             run_id=args.run_id,
+            keep_frames=args.keep_frames,
         )
         print(
             json.dumps({"ok": True, "script": str(out), "bytes": len(body.encode("utf-8"))}),
@@ -82,7 +88,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--case-dir", type=Path, help="Windows run case directory (0/ constant/ system/)")
     p.add_argument("--wsl-case", default=None, help="WSL case id, e.g. cfddesk-w27-run-1")
     p.add_argument("--n-procs", type=int, default=1)
-    p.add_argument("--app", default="simpleFoam", choices=("simpleFoam", "pimpleFoam"))
+    p.add_argument("--app", default="simpleFoam", help="Program to run (a registered solver application)")
+    p.add_argument("--keep-frames", default="latest", choices=("all", "latest"))
+    p.add_argument("--frame-fields", default="U,p", help="Comma-separated fields that mark a written result frame")
+    p.add_argument("--process-names", default="", help="Comma-separated solver process names (default: the app)")
+    p.add_argument("--log-parser", default="", help="Launch spec log_parser as JSON {module, factory, path}")
     p.add_argument("--run-id", default="run-1")
     p.add_argument("--parse-log", type=Path, default=None, help="Offline: parse a captured log to JSONL")
     p.add_argument("--render-only", action="store_true", help="Render solve.sh and exit (no WSL)")
@@ -107,14 +117,24 @@ def main(argv: list[str] | None = None) -> int:
         # soft check: allow missing polyMesh only if system exists (error will come from bash)
         pass
 
+    from cfddesk.registry.contract import APP_NAME_RE, load_log_parser
+
+    if not APP_NAME_RE.match(args.app or ""):
+        print(json.dumps({"ok": False, "error": f"not a plain program name: {args.app!r}"}), flush=True)
+        return 2
+    names = tuple(n.strip() for n in args.process_names.split(",") if n.strip()) or (args.app,)
+    parser = load_log_parser(json.loads(args.log_parser) if args.log_parser else None)
     proc = start_solve(
         case_dir,
         wsl_case_id=args.wsl_case,
         n_procs=args.n_procs,
         app=args.app,
         run_id=args.run_id,
+        keep_frames=args.keep_frames,
+        process_names=names,
+        frame_fields=tuple(f.strip() for f in args.frame_fields.split(",") if f.strip()) or ("U", "p"),
     )
-    rc, parser = stream_events_to_stdout(proc)
+    rc, parser = stream_events_to_stdout(proc, parser)
     parser.snapshot()
     # Ensure a trailing result if the template somehow did not emit one
     # (stream already printed events; only add if missing — check via stage)

@@ -96,7 +96,9 @@ def mpirun_simplefoam_inner(
     )
 
 
-def kill_mpirun_tree(wsl_case: str) -> ParallelStepResult:
+def kill_mpirun_tree(
+    wsl_case: str, process_names: tuple[str, ...] = ("simpleFoam", "pimpleFoam")
+) -> ParallelStepResult:
     """Kill mpirun + solver/mesh ranks for this case (Force Stop).
 
     Covers simpleFoam/pimpleFoam (solve) and snappyHexMesh (parallel mesh) plus mpirun.
@@ -105,20 +107,21 @@ def kill_mpirun_tree(wsl_case: str) -> ParallelStepResult:
     ``pkill -f run_snappy_parallel.sh`` (that self-matches the killer cmdline).
     """
     import hashlib
+    import re
     import tempfile
     from pathlib import Path
 
+    names = [n for n in (*process_names, "mpirun", "snappyHexMesh") if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", n)]
     case_q = shlex.quote(wsl_case)
+    pkills = "\n".join(f'  pkill -$sig -f "{n}.*$CASE" 2>/dev/null || true' for n in names)
+    alt = "|".join(names)
     script = f"""#!/usr/bin/env bash
 set -uo pipefail
 CASE={case_q}
 kill_case_procs() {{
   local sig="$1"
-  pkill -$sig -f "simpleFoam.*$CASE" 2>/dev/null || true
-  pkill -$sig -f "pimpleFoam.*$CASE" 2>/dev/null || true
-  pkill -$sig -f "mpirun.*$CASE" 2>/dev/null || true
-  pkill -$sig -f "snappyHexMesh.*$CASE" 2>/dev/null || true
-  for pid in $(pgrep -f 'simpleFoam|pimpleFoam|snappyHexMesh|mpirun' 2>/dev/null || true); do
+{pkills}
+  for pid in $(pgrep -f '{alt}' 2>/dev/null || true); do
     [ -d "/proc/$pid" ] || continue
     cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
     if [ "$cwd" = "$CASE" ]; then

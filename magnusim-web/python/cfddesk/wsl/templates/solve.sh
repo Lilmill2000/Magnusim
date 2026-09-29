@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # cfddesk solve pipeline (Phase 1). Placeholders replaced by solve_run.render_solve_script:
-#   __DST__ __WIN_OUT__ __NPROCS__ __APP__ __RUN_ID__
+#   __DST__ __WIN_OUT__ __NPROCS__ __APP__ __RUN_ID__ __KEEP_FRAMES__ __FRAME_FIELDS__
 # Ext4 ($DST) is the case source of truth. Windows gets residuals/postProcessing,
 # viewer VTPs, logs, and saved fields as each write interval completes so
-# Results can open mid-run. Transient runs keep every result frame; steady
-# runs only need the latest converged field.
+# Results can open mid-run. KEEP_FRAMES=all keeps every result frame (a
+# transient run); latest keeps only the last one (a steady run). The analysis's
+# launch spec decides.
 # Emits MAGNUSIM_EVENT JSON lines (CFDDESK_EVENT still accepted by parsers); OpenFOAM stdout passes through.
 set -uo pipefail
 DST="__DST__"
@@ -12,6 +13,15 @@ WIN_OUT="__WIN_OUT__"
 NPROCS="__NPROCS__"
 RUN_ID="__RUN_ID__"
 APP="__APP__"
+KEEP_FRAMES="__KEEP_FRAMES__"
+# Fields whose file in a time folder means that result frame was written (launch spec).
+FRAME_FIELDS="__FRAME_FIELDS__"
+
+_has_frame() {
+  local f
+  for f in $FRAME_FIELDS; do [ -f "$1/$f" ] && return 0; done
+  return 1
+}
 
 _evt() {
   local j="$1"
@@ -46,8 +56,8 @@ SYNC_EVERY=10
 # there is never rewritten and a half-copied one is never visible.
 copy_saved_time() {
   local t="$1" tmp
-  if [ -f "$DST/$t/U" ] || [ -f "$DST/$t/p" ]; then
-    if [ -f "$WIN_OUT/$t/U" ] || [ -f "$WIN_OUT/$t/p" ]; then
+  if _has_frame "$DST/$t"; then
+    if _has_frame "$WIN_OUT/$t"; then
       return 0
     fi
     tmp="$WIN_OUT/.frame-$t.part"
@@ -111,7 +121,7 @@ sync_live_frames() {
   if [ "$NPROCS" -gt 1 ]; then
     for t in $(_list_times "$src_root"); do
       [ "$t" = "$latest" ] && continue
-      if [ ! -f "$DST/$t/U" ] && [ ! -f "$DST/$t/p" ]; then pending+=("$t"); fi
+      if ! _has_frame "$DST/$t"; then pending+=("$t"); fi
     done
   fi
   if [ "${#pending[@]}" -gt 0 ]; then
@@ -121,7 +131,7 @@ sync_live_frames() {
   fi
   for t in $(_list_times "$src_root"); do
     [ "$t" = "$latest" ] && continue
-    if [ ! -f "$WIN_OUT/$t/U" ] && [ ! -f "$WIN_OUT/$t/p" ]; then
+    if ! _has_frame "$WIN_OUT/$t"; then
       copy_saved_time "$t"
     fi
   done
@@ -154,7 +164,7 @@ if [ "$NPROCS" -gt 1 ]; then
   wait "$SOLVER_PID"
   EC=$?
   _evt "{\"event\":\"stage\",\"stage\":\"reconstruct\",\"exit_code\":$EC}"
-  if [ "$APP" = "pimpleFoam" ]; then
+  if [ "$KEEP_FRAMES" = "all" ]; then
     # The live sync already rebuilt most frames. A frame it left incomplete is
     # removed so -newTimes rebuilds it; complete ones are not redone.
     for t in $(_list_times "$DST/processor0"); do
@@ -191,7 +201,7 @@ shopt -s nullglob
 for f in *.vtp *.vtu *.vtk; do
   [ -e "$f" ] && cp -f "$f" "$WIN_OUT/" 2>/dev/null || true
 done
-if [ "$APP" = "pimpleFoam" ]; then
+if [ "$KEEP_FRAMES" = "all" ]; then
   for frame in "$DST"/[0-9]*; do
     [ -d "$frame" ] || continue
     t=$(basename "$frame")
