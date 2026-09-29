@@ -49,7 +49,9 @@ import {
 } from './project-layout.js';
 import {
   analysisByKey,
+  analysisKeyFor,
   analysisKeys,
+  analysisSupportsTimeDependency,
   algorithmFromSolver,
   buildW17DefaultsFromRegistry,
   DEFAULT_ANALYSIS_KEY,
@@ -201,13 +203,30 @@ function buildSimulation(body, project) {
   const geomId = activeGeometryId(project, body.geometry_id);
   const timeDependency = normalizeTimeDependency(body.time_dependency, W17_DEFAULTS.time_dependency);
   const algorithm = TIME_DEPENDENCIES[timeDependency] || W17_DEFAULTS.algorithm;
+  // The analysis the Create modal picked, resolved against the chosen time
+  // dependency (the Transient choice solves as incompressible_transient).
+  const picked =
+    String(body.analysis_type || '').trim() || (analysisKeys().includes(analysis) ? analysis : W17_DEFAULTS.analysis_type);
+  const analysisType = analysisKeyFor(picked, timeDependency);
+  if (!analysisSupportsTimeDependency(analysisType, timeDependency)) {
+    const row = analysisByKey(analysisType);
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: `${(row && row.label) || analysisType} has no ${timeDependency} version.`,
+        got: analysisType,
+        time_dependency: timeDependency,
+      },
+    };
+  }
   const geom = (project.geometries || []).find((g) => g && g.id === geomId) || project.geometry || null;
   const sim = {
     id,
     project_id: project.id,
     name: studyBaseName({ time_dependency: timeDependency }),
     analysis: W17_DEFAULTS.analysis,
-    analysis_type: W17_DEFAULTS.analysis_type,
+    analysis_type: analysisType,
     analysis_title: W17_DEFAULTS.analysis_title,
     turbulence_model_key: W17_DEFAULTS.turbulence_model_key,
     category: W17_DEFAULTS.category,
@@ -701,7 +720,19 @@ function updateSimulation(body) {
   if (!sim) return { ok: false, status: 404, body: { error: 'no simulation yet; create one first', project_id: projectId } };
   const now = new Date().toISOString();
   if (body.time_dependency != null) {
-    sim.time_dependency = normalizeTimeDependency(body.time_dependency, sim.time_dependency);
+    const nextTd = normalizeTimeDependency(body.time_dependency, sim.time_dependency);
+    // The analysis key follows: Steady ↔ Transient swaps to the sibling key.
+    const nextKey = analysisKeyFor(sim.analysis_type || W17_DEFAULTS.analysis_type, nextTd);
+    if (!analysisSupportsTimeDependency(nextKey, nextTd)) {
+      const row = analysisByKey(nextKey);
+      return {
+        ok: false,
+        status: 400,
+        body: { error: `${(row && row.label) || nextKey} has no ${nextTd} version.`, project_id: projectId },
+      };
+    }
+    sim.time_dependency = nextTd;
+    sim.analysis_type = nextKey;
     sim.algorithm = TIME_DEPENDENCIES[sim.time_dependency] || sim.algorithm;
   }
   if (body.name != null) {

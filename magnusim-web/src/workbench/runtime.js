@@ -29379,18 +29379,52 @@ function toggleAssignAaFace(face) {
 /* ---- Simulation Control: Start / Stop simpleFoam from project mesh + BCs ---- */
 /* ---- W30 Transient: settings model, form, preview ---- */
 
-const TRANSIENT_DEFAULTS_CLIENT = Object.freeze({
-  end_time: 5,
-  write_count: 50,
-  time_step_mode: 'adjustable',
-  max_co: 1,
-  delta_t: null,
-  max_delta_t: null,
-  time_scheme: 'Euler',
-  n_outer_correctors: 1,
-  n_correctors: 2,
-  n_non_orth_correctors: 0,
-});
+/**
+ * Transient settings defaults. No copy lives here: they are the registered
+ * control_schema of incompressible_transient (cfddesk.project.transient
+ * TRANSIENT_DEFAULTS), published by the project store when the registry loads
+ * and echoed by /api/run/status.
+ */
+function transientDefaultsClient() {
+  return window.__CFD_TRANSIENT_DEFAULTS__ || (runCatalog && runCatalog.transient_defaults) || {};
+}
+
+/** Steady defaults (iterations, write interval): the registered control_schema of
+ * incompressible_steady (cfddesk.project.transient STEADY_DEFAULTS). No copy here. */
+function steadyDefaultsClient() {
+  return window.__CFD_STEADY_DEFAULTS__ || (runCatalog && runCatalog.steady_defaults) || {};
+}
+
+/**
+ * A run's steady settings as the user last set them. An edit whose save has not
+ * landed yet wins over the run record: polls, live events and the reply to an
+ * older save carry the saved values and must not undo what was just typed (or
+ * what Start then sends).
+ */
+function runControlFor(rec) {
+  const id = rec ? String(rec.id || rec.run_id || '') : '';
+  const edit = id ? runCatalog.pending_control[id] : null;
+  const d = steadyDefaultsClient();
+  return {
+    endTime: Number((edit && edit.endTime) || (rec && rec.endTime) || runCatalog.endTime || d.end_time) || null,
+    writeInterval:
+      Number((edit && edit.writeInterval) || (rec && rec.writeInterval) || runCatalog.writeInterval || d.write_interval) || null,
+  };
+}
+
+/** Run-settings saves go out one at a time per run, in the order they were made,
+ * so the server never applies an older save over a newer one. */
+function queueRunSettingsSave(runId, fn) {
+  const key = String(runId);
+  const saves = runCatalog.settings_saves;
+  const next = (saves[key] || Promise.resolve()).then(fn, fn);
+  saves[key] = next;
+  const settle = () => {
+    if (saves[key] === next) delete saves[key];
+  };
+  next.then(settle, settle);
+  return next;
+}
 
 /**
  * A run is transient when it was stamped so. Unstamped runs that already
@@ -29405,7 +29439,7 @@ function runRecIsTransient(rec) {
 }
 
 function transientSettingsFor(rec) {
-  const base = { ...TRANSIENT_DEFAULTS_CLIENT };
+  const base = { ...transientDefaultsClient() };
   const src = rec && rec.transient && typeof rec.transient === 'object' ? rec.transient : null;
   if (!src) return base;
   for (const k of Object.keys(base)) {
@@ -29433,7 +29467,7 @@ function formatSimTime(v, opts) {
 
 /** Clamp and fill a transient settings object the way the form used to. */
 function normalizeTransient(raw) {
-  const base = runCatalog.transient ? { ...runCatalog.transient } : { ...TRANSIENT_DEFAULTS_CLIENT };
+  const base = runCatalog.transient ? { ...runCatalog.transient } : { ...transientDefaultsClient() };
   const src = raw || {};
   const num = (v, prev, opts) => {
     if (v === undefined) return prev;
@@ -29455,9 +29489,10 @@ function normalizeTransient(raw) {
     n_correctors: num(src.n_correctors, base.n_correctors, { int: true }),
     n_non_orth_correctors: num(src.n_non_orth_correctors, base.n_non_orth_correctors, { int: true }),
   };
-  if (!(out.end_time > 0)) out.end_time = base.end_time > 0 ? base.end_time : TRANSIENT_DEFAULTS_CLIENT.end_time;
-  if (!(out.write_count >= 1)) out.write_count = TRANSIENT_DEFAULTS_CLIENT.write_count;
-  if (!(out.max_co > 0)) out.max_co = TRANSIENT_DEFAULTS_CLIENT.max_co;
+  const defaults = transientDefaultsClient();
+  if (!(out.end_time > 0)) out.end_time = base.end_time > 0 ? base.end_time : defaults.end_time;
+  if (!(out.write_count >= 1)) out.write_count = defaults.write_count;
+  if (!(out.max_co > 0)) out.max_co = defaults.max_co;
   if (out.delta_t != null && !(out.delta_t > 0)) out.delta_t = null;
   if (out.max_delta_t != null && !(out.max_delta_t > 0)) out.max_delta_t = null;
   const frameInterval = transientFrameInterval(out);
@@ -29479,7 +29514,7 @@ function transientFrameInterval(t) {
 /** Hint under the transient inputs: frame interval, auto Δt, steps, flow-through. */
 /** Hint under the transient inputs: frame interval, auto Δt, steps, flow-through. */
 function transientHint() {
-  const t = runCatalog.transient || TRANSIENT_DEFAULTS_CLIENT;
+  const t = runCatalog.transient || transientDefaultsClient();
   const pv = runCatalog.transient_preview;
   const ctrl = pv && pv.control;
   const frames = Math.max(1, Math.round(Number(t.write_count) || 1));
@@ -29797,17 +29832,18 @@ async function persistRunSettings(partial, opts) {
   // Post-processing state (saved filter-set views + the live filter set).
   if (partial && Array.isArray(partial.views)) body.views = partial.views;
   if (partial && partial.current_view !== undefined) body.current_view = partial.current_view;
-  const posted = await postRunUpdate(body);
-  const r = posted.response;
-  const j = posted.json;
-  if (j && j.ok) {
-    applyRunCatalog(j);
-    const rec = findRunRecord(runId);
-    if (rec && (!runCatalog.run || String(runCatalog.run.run_id || runCatalog.run.id) === String(runId))) {
-      runCatalog.run = { ...(runCatalog.run || {}), ...rec, run_id: rec.id };
+  return queueRunSettingsSave(runId, async () => {
+    const posted = await postRunUpdate(body);
+    const j = posted.json;
+    if (j && j.ok) {
+      applyRunCatalog(j);
+      const rec = findRunRecord(runId);
+      if (rec && (!runCatalog.run || String(runCatalog.run.run_id || runCatalog.run.id) === String(runId))) {
+        runCatalog.run = { ...(runCatalog.run || {}), ...rec, run_id: rec.id };
+      }
     }
-  }
-  return j;
+    return j;
+  });
 }
 
 function syncRunMeshSelect() {
@@ -30020,8 +30056,9 @@ function openRunPanel(runId) {
   const rec = findRunRecord(runId);
   if (rec) {
     runCatalog.run = { ...(runCatalog.run && String(runCatalog.run.run_id) === String(runId) ? runCatalog.run : {}), ...rec, run_id: rec.id };
-    if (rec.endTime) runCatalog.endTime = rec.endTime;
-    if (rec.writeInterval) runCatalog.writeInterval = rec.writeInterval;
+    const control = runControlFor(rec);
+    if (control.endTime) runCatalog.endTime = control.endTime;
+    if (control.writeInterval) runCatalog.writeInterval = control.writeInterval;
   }
   if (runCopyPick && String(runCopyPick.destId) !== String(runId)) endRunCopyPick();
   expandTreeFolder('Simulation');
@@ -30211,8 +30248,8 @@ async function createRunClient(opts) {
     status: 'draft',
     mesh_id: defaultMesh && defaultMesh.id,
     mesh_name: defaultMesh && defaultMesh.name,
-    endTime: 200,
-    writeInterval: 50,
+    endTime: Number(steadyDefaultsClient().end_time) || null,
+    writeInterval: Number(steadyDefaultsClient().write_interval) || null,
     result_controls: [],
     case_dir: null,
     simulation_id: studyId,
@@ -30520,6 +30557,7 @@ function setRunHint(msg, fix) {
  */
 function computeRunState() {
   const rec = selectedRunRecord();
+  const control = runControlFor(rec);
   const run = rec ? runDocForPanel() : null;
   const locked = runIsLocked(rec);
   const transient = !!rec && runRecIsTransient(rec);
@@ -30707,8 +30745,8 @@ function computeRunState() {
     reason: reason ? { text: reason.text, fix_label: setupFixLabel(reason.fix) } : null,
     reason_fix: reason ? reason.fix : null,
     settings: {
-      end_time: Number((rec && rec.endTime) || runCatalog.endTime) || 200,
-      write_interval: Number((rec && rec.writeInterval) || runCatalog.writeInterval) || 50,
+      end_time: control.endTime,
+      write_interval: control.writeInterval,
     },
     transient_settings: trSettings,
     frame_interval: transientFrameInterval(trSettings),
@@ -30742,8 +30780,11 @@ function publishRunState() {
 function syncSimControlPanel() {
   const rec = selectedRunRecord();
   const locked = runIsLocked(rec);
-  if (rec && rec.endTime) runCatalog.endTime = rec.endTime;
-  if (rec && rec.writeInterval) runCatalog.writeInterval = rec.writeInterval;
+  if (rec) {
+    const control = runControlFor(rec);
+    if (control.endTime) runCatalog.endTime = control.endTime;
+    if (control.writeInterval) runCatalog.writeInterval = control.writeInterval;
+  }
   if (rec && runRecIsTransient(rec)) {
     const recId = String(rec.id || rec.run_id || '');
     if (runCatalog.transient_run_id !== recId || !runCatalog.transient) {
@@ -30772,18 +30813,32 @@ function syncSimControlPanel() {
 
 async function persistSimControl(opts) {
   const o = opts || {};
-  const endTime = Math.max(1, Math.round(Number(o.end_time) || runCatalog.endTime));
-  const writeInterval = Math.max(1, Math.round(Number(o.write_interval) || runCatalog.writeInterval));
+  const rec = selectedRunRecord();
+  const cur = runControlFor(rec);
+  const endTime = Math.max(1, Math.round(Number(o.end_time) || cur.endTime));
+  const writeInterval = Math.max(1, Math.round(Number(o.write_interval) || cur.writeInterval));
   runCatalog.endTime = endTime;
   runCatalog.writeInterval = writeInterval;
-  const rec = selectedRunRecord();
   if (rec && !runIsLocked(rec)) {
+    // Writers before readers: from here on this is the run's value for the form,
+    // for Start and for every sync, until the save carrying it has landed.
+    const runId = String(rec.id || rec.run_id);
+    const edit = { endTime, writeInterval };
+    runCatalog.pending_control[runId] = edit;
+    rec.endTime = endTime;
+    rec.writeInterval = writeInterval;
+    // Show it now, not when the save (which may wait behind another) lands.
+    if (!o.skipSync) {
+      try { publishRunState(); } catch (_) {}
+    }
     const body = { run_id: rec.id, endTime, writeInterval };
     if (runRecIsTransient(rec)) body.transient = normalizeTransient(runCatalog.transient);
     try {
       await persistRunSettings(body);
     } catch (e) {
       console.warn('[CFD] run settings save', e);
+    } finally {
+      if (runCatalog.pending_control[runId] === edit) delete runCatalog.pending_control[runId];
     }
   }
   if (!o.skipSync) syncSimControlPanel();
@@ -30831,6 +30886,8 @@ function applyForeignLiveCatalog(j) {
 }
 
 function applyRunCatalog(j) {
+  if (j && j.transient_defaults && typeof j.transient_defaults === 'object') runCatalog.transient_defaults = j.transient_defaults;
+  if (j && j.steady_defaults && typeof j.steady_defaults === 'object') runCatalog.steady_defaults = j.steady_defaults;
   const curPid = typeof currentProjectId === 'function' ? currentProjectId() : '';
   const catalogPid = j && j.project_id;
   if (curPid && catalogPid && String(curPid) !== String(catalogPid)) {
@@ -31494,7 +31551,7 @@ async function renameActiveRunClient(name) {
   window.__CFD_RUN_TRANSIENT_SAVE__ = (t) => persistTransientSettings(t);
   window.__CFD_RUN_TRANSIENT_RESET__ = () => {
     const cur = normalizeTransient(runCatalog.transient);
-    return persistTransientSettings({ ...TRANSIENT_DEFAULTS_CLIENT, end_time: cur.end_time, write_count: cur.write_count });
+    return persistTransientSettings({ ...transientDefaultsClient(), end_time: cur.end_time, write_count: cur.write_count });
   };
   window.__CFD_RUN_RENAME__ = (name) => renameActiveRunClient(String(name || '').trim() || 'Run 1');
   window.__CFD_RUN_DELETE__ = () => deleteSelectedRunClient();

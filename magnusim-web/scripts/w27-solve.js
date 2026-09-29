@@ -15,6 +15,7 @@ import {
   readdirSync,
   statSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +30,6 @@ import {
   TRANSIENT_LARGE_MESH_CELLS,
   simIsTransient,
   normalizeTransient,
-  resolveTransientControl,
   describeTransient,
 } from './w30-transient.js';
 import { createJobLogger } from './log.js';
@@ -48,7 +48,7 @@ import {
 } from './study-io.js';
 import { listFoamTimeDirs, walkGeometries } from './project-layout.js';
 import { solveStartBlockReason } from './solve-start-block.js';
-import { turbulenceLabel } from './registry-defaults.js';
+import { steadyDefaultsFromRegistry, turbulenceLabel } from './registry-defaults.js';
 import { removeComputeJob, scheduleComputeQueueKick } from './server/compute-queue.ts';
 import { polyMeshComplete } from './poly-mesh.js';
 
@@ -60,8 +60,11 @@ const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const REPORT_DIR = join(ROOT, '.cache', 'jobs', 'run');
 const WSL_DISTRO = wslDistro();
 const INCREMENT = 'W27';
-const DEFAULT_END_TIME = 200;
-const DEFAULT_WRITE_INTERVAL = 50;
+// Steady iteration limit / write interval: one copy, cfddesk.project.transient
+// STEADY_DEFAULTS, published through the registered control_schema.
+const STEADY_CONTROL_DEFAULTS = steadyDefaultsFromRegistry();
+const DEFAULT_END_TIME = Number(STEADY_CONTROL_DEFAULTS.end_time);
+const DEFAULT_WRITE_INTERVAL = Number(STEADY_CONTROL_DEFAULTS.write_interval);
 const LARGE_MESH_CELLS = 200000;
 
 /**
@@ -753,15 +756,6 @@ export function loadFaceProps(projectId) {
   return out;
 }
 
-function facesArea(faces, props) {
-  let a = 0;
-  for (const f of faces || []) {
-    const p = props && props[f];
-    if (p && Number.isFinite(p.area)) a += p.area;
-  }
-  return a;
-}
-
 export function parseBoundaryPatches(boundaryPath) {
   if (!boundaryPath || !existsSync(boundaryPath)) return [];
   const text = readFileSync(boundaryPath, 'utf8');
@@ -982,47 +976,6 @@ function resolveNProcs(nCells, opts) {
   return Math.max(1, nProcs);
 }
 
-/** Volumetric flow rate in m³/s for a Flow rate → Volumetric flow inlet. */
-function volumetricM3s(bc) {
-  const v = Number(bc && bc.value);
-  if (!Number.isFinite(v)) return null;
-  const unit = String((bc && bc.unit) || '').toLowerCase();
-  if (unit.includes('ft') && unit.includes('min')) return v * 0.00047194745;
-  if (unit.includes('l/min')) return v / 60000;
-  if (unit.includes('l/s')) return v / 1000;
-  if (unit.includes('m3') || unit.includes('m³') || unit.includes('m^3')) return v;
-  return null;
-}
-
-/** Mass flow rate in kg/s for a Flow rate → Mass flow inlet. */
-function massFlowKgs(bc) {
-  const v = Number(bc && bc.value);
-  if (!Number.isFinite(v)) return null;
-  const unit = String((bc && bc.unit) || '').toLowerCase();
-  if (unit === 'kg/s') return v;
-  if (unit === 'lb/s') return v * 0.45359237;
-  if (unit === 'kg/h') return v / 3600;
-  return null;
-}
-
-function isMassFlow(bc) {
-  if (/mass/i.test(String((bc && bc.flow_rate_type) || ''))) return true;
-  return massFlowKgs(bc) != null && volumetricM3s(bc) == null;
-}
-
-/** Inlet speed in m/s for a Fixed velocity inlet. */
-function inletSpeedMs(bc) {
-  const v = Number(bc && bc.value);
-  if (!Number.isFinite(v)) return 1;
-  const unit = String((bc && bc.unit) || '').toLowerCase();
-  if (unit === 'm/s' || unit === 'm s-1' || unit === '') return v;
-  if (unit === 'ft/s') return v * 0.3048;
-  if (unit === 'ft/min' || unit === 'fpm') return (v * 0.3048) / 60;
-  if (unit === 'km/h') return v / 3.6;
-  if (unit === 'mph') return v * 0.44704;
-  return v;
-}
-
 /** Static pressure in Pa (gauge) for a Pressure boundary. */
 function pressurePa(bc) {
   const v = Number(bc && bc.value);
@@ -1035,26 +988,6 @@ function pressurePa(bc) {
   if (unit === 'inh2o' || unit === 'in h2o' || unit === 'inwc') return v * 249.089;
   if (unit === 'mmh2o') return v * 9.80665;
   return v;
-}
-
-function usesFlowRate(bc) {
-  if (/flow\s*rate/i.test(String((bc && bc.velocity_type) || ''))) return true;
-  const unit = String((bc && bc.unit) || '');
-  return /ft³\/min|ft3\/min|m³\/s|m3\/s|kg\/s|lb\/s/i.test(unit);
-}
-
-/**
- * Representative speed of an inlet in m/s (for turbulence and the velocity
- * guard). Flow-rate inlets use the assigned face area when it is known.
- */
-function inletRefSpeed(bc, faceArea, rho) {
-  if (usesFlowRate(bc)) {
-    const q = isMassFlow(bc) ? (massFlowKgs(bc) || 0) / (rho || 1.2) : volumetricM3s(bc) || 0;
-    const n = Math.max(1, bcFaces(bc).length);
-    const a = faceArea > 0 ? faceArea : null;
-    return a ? (Math.abs(q) * n) / a : Math.max(1, Math.abs(q) * 1000);
-  }
-  return Math.abs(inletSpeedMs(bc));
 }
 
 function loadMeshWebBcs(mesh) {
@@ -1407,70 +1340,6 @@ export function getRunMonitors(projectId, runId, simulationId) {
           }
         : null,
   };
-}
-
-/**
- * Mesh-generation metadata (standard-meta.json) for the mesh a run uses; the
- * transient time-step estimate reads the recorded cell sizes from it.
- */
-function loadMeshMeta(mesh) {
-  const caseDir = mesh && mesh.case_dir;
-  if (!caseDir) return null;
-  const meta = readJsonSafe(join(caseDir, 'standard-meta.json')) || {};
-  // checkMesh's smallest cell is what limits the Courant number.
-  try {
-    const logPath = join(caseDir, 'log.checkMesh');
-    if (existsSync(logPath)) {
-      const txt = readFileSync(logPath, 'utf8');
-      // "Min volume = 4.97e-09. Max volume = ..." — the sentence period must
-      // not be swallowed into the number.
-      const numRe = '([0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)';
-      const mv = txt.match(new RegExp('Min volume\\s*=\\s*' + numRe));
-      const tv = txt.match(new RegExp('Total volume\\s*=\\s*' + numRe));
-      if (mv && Number(mv[1]) > 0) meta.min_cell_volume_m3 = Number(mv[1]);
-      if (tv && Number(tv[1]) > 0) meta.total_volume_m3 = Number(tv[1]);
-    }
-  } catch {}
-  return meta;
-}
-
-/**
- * Reference speed for the case: the fastest velocity inlet, or the Bernoulli
- * speed of the pressure difference for a pressure-driven case. Shared by the
- * turbulence scales (steady + transient) and the transient time-step estimate.
- */
-function referenceSpeed(ready, faceProps) {
-  const rho = (ready.air && ready.air.rho) || 1.196;
-  const inletsMapped = ready.mapped.filter((m) => isVelocityInlet(m.bc));
-  if (inletsMapped.length) {
-    let best = 0;
-    for (const m of inletsMapped) {
-      const a = facesArea(bcFaces(m.bc), faceProps);
-      const s = inletRefSpeed(m.bc, a / Math.max(1, bcFaces(m.bc).length), rho);
-      if (s > best) best = s;
-    }
-    return Math.max(best, 0.1);
-  }
-  const pvals = ready.mapped.filter((m) => isPressureBc(m.bc)).map((m) => pressurePa(m.bc));
-  if (pvals.length >= 2) {
-    const dp = Math.max(...pvals) - Math.min(...pvals);
-    return Math.max(1, Math.sqrt((2 * Math.abs(dp)) / rho));
-  }
-  return 1;
-}
-
-/**
- * Transient numbers for a run: user settings + the mesh/flow it will solve.
- * Used both by the writer and by /api/run/status (so the panel can show the
- * calculated time step / frame interval before the run starts).
- */
-export function transientControlFor(ready, settings) {
-  const faceProps = ready.faceProps || loadFaceProps(ready.project_id);
-  return resolveTransientControl(settings, {
-    meshMeta: loadMeshMeta(ready.mesh),
-    nCells: ready.mesh && ready.mesh.n_cells,
-    speedRef: referenceSpeed(ready, faceProps),
-  });
 }
 
 function runsDir(projectId) {
@@ -1847,10 +1716,26 @@ function catalogForRun(projectId, runId, hintSimId) {
   return { cat: loadCatalog(projectId, { simulation_id: sid }), sid, folder };
 }
 
-export async function updateRunSettings(projectId, partial) {
+/** Settings updates in flight per run: each read-modify-write of a run waits for
+ * the one before, so two quick edits (or two tabs) never undo each other. */
+const runSettingsUpdates = new Map();
+
+export function updateRunSettings(projectId, partial) {
   const id = projectId || projectIdOrActive('', readActiveId);
   const runId = partial && (partial.run_id || partial.id);
-  if (!id || !runId) return { ok: false, error: 'run_id required' };
+  if (!id || !runId) return Promise.resolve({ ok: false, error: 'run_id required' });
+  const key = `${id}\u0000${runId}`;
+  const apply = () => applyRunSettings(id, runId, partial);
+  const next = (runSettingsUpdates.get(key) || Promise.resolve()).then(apply, apply);
+  runSettingsUpdates.set(key, next);
+  const settle = () => {
+    if (runSettingsUpdates.get(key) === next) runSettingsUpdates.delete(key);
+  };
+  next.then(settle, settle);
+  return next;
+}
+
+async function applyRunSettings(id, runId, partial) {
   const found = catalogForRun(id, runId, partial && partial.simulation_id);
   const cat = found.cat;
   const rec = cat.runs.find((r) => String(r.id) === String(runId));
@@ -2119,22 +2004,24 @@ export function startSolve(opts = {}) {
         getSimulationControl(id).writeInterval
     )
   );
-  // W30: a transient simulation solves with pimpleFoam over physical time. The
-  // run's own time_dependency wins when set (a draft made while the simulation
-  // was steady stays steady); otherwise follow simulation.json.
+  // The one time-dependency decision for this run, by the rule the Run panel
+  // shows: the run's own stamp (a started run keeps the mode it solved with;
+  // drafts follow their study), else its study. prepare_run is told this
+  // explicitly and reports the solver its case was written for; Node launches
+  // exactly that, never a second guess of its own.
   const isTransient = draft && draft.time_dependency ? runIsTransient(draft) : simIsTransient(ready.sim);
   let transient = null;
+  let transientSettings = null;
   if (isTransient) {
-    const settings = normalizeTransient(
+    transientSettings = normalizeTransient(
       transientIn && typeof transientIn === 'object' ? transientIn : null,
-      normalizeTransient(draft && draft.transient, getSimulationControl(id).transient)
+      normalizeTransient(draft && draft.transient, getSimulationControl(id, draft && draft.simulation_id).transient)
     );
-    transient = transientControlFor(ready, settings);
-    saveSimulationControl(id, { endTime: et, writeInterval: wi, transient: settings }, draft && draft.simulation_id);
+    saveSimulationControl(id, { endTime: et, writeInterval: wi, transient: transientSettings }, draft && draft.simulation_id);
   } else {
     saveSimulationControl(id, { endTime: et, writeInterval: wi }, draft && draft.simulation_id);
   }
-  const solver = isTransient ? 'pimpleFoam' : 'simpleFoam';
+  const timeDependency = isTransient ? 'Transient' : 'Steady-state';
   const nProcs = resolveNProcs(ready.mesh.n_cells, { transient: isTransient });
   const simId = (draft && draft.simulation_id) || (ready.sim && ready.sim.id);
   const stored = persistRun(id, simId, {
@@ -2163,6 +2050,14 @@ export function startSolve(opts = {}) {
   ];
   if (draft && draft.mesh_id) prepArgs.push('--mesh-id', String(draft.mesh_id));
   if (draft && draft.simulation_id) prepArgs.push('--simulation-id', String(draft.simulation_id));
+  prepArgs.push('--time-dependency', timeDependency);
+  if (isTransient && transientSettings) {
+    // The settings this run solves with; Python resolves the time step from them
+    // with the mesh and reference speed, and reports the numbers it wrote.
+    const settingsPath = join(REPORT_DIR, `transient-${runId}.json`);
+    writeFileSync(settingsPath, JSON.stringify(transientSettings), 'utf8');
+    prepArgs.push('--transient-json', settingsPath);
+  }
   let prepResult = null;
   const prepT0 = Date.now();
   try {
@@ -2212,6 +2107,33 @@ export function startSolve(opts = {}) {
       bodyExtra: { error, increment: INCREMENT, run_id: runId, simulation_id: simId },
     };
   }
+
+  // The solver this run launches is the one prepare_run wrote the case for
+  // (the registered analysis's app). prepare_run was told the time dependency,
+  // so a case written for the other one is a bug: fail rather than solve it.
+  const solver = String((prepResult && prepResult.app) || '');
+  const preparedTd = String((prepResult && prepResult.time_dependency) || '');
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(solver) || preparedTd !== timeDependency) {
+    const error = !solver
+      ? 'Preparing the case did not name the solver to run.'
+      : preparedTd !== timeDependency
+        ? `The case was written for a ${preparedTd || 'different'} run (${solver}), but this run is ${timeDependency}.`
+        : `The case names an invalid solver (${solver}).`;
+    try {
+      persistRun(id, simId, {
+        ...stored,
+        status: 'failed',
+        error,
+        note: error,
+        finished_at: new Date().toISOString(),
+        pid: null,
+      });
+    } catch (_) {}
+    return { ok: false, status: 500, bodyExtra: { error, increment: INCREMENT, run_id: runId, simulation_id: simId } };
+  }
+  // The numbers written to controlDict (Δt, max Δt, write interval), recorded on
+  // the run so the Run panel shows what the solver really uses.
+  if (isTransient) transient = (prepResult && prepResult.transient_control) || null;
 
   // Phase 1 land5: Python run_solve/stop_solve expect a single-segment id
   // (validate_wsl_case_id); wslCasePath() is only for legacy WSL sed fallbacks.
@@ -2347,7 +2269,7 @@ export function startSolve(opts = {}) {
     status: 'running',
     mode: 'solve',
     path_kind: solver,
-    time_dependency: isTransient ? 'Transient' : 'Steady-state',
+    time_dependency: timeDependency,
     ...(isTransient ? { transient } : {}),
     run_id: runId,
     name: (draft && draft.name) || null,
@@ -2992,6 +2914,7 @@ export function getRunStatus(projectId, runId, simulationId, opts) {
       simulation_control: ctrl,
       time_dependency: projTransient ? 'Transient' : 'Steady-state',
       transient_defaults: TRANSIENT_DEFAULTS,
+      steady_defaults: STEADY_CONTROL_DEFAULTS,
       live_pid: runLivePid(),
       increment: INCREMENT,
     },
@@ -3003,24 +2926,25 @@ export function getRunStatus(projectId, runId, simulationId, opts) {
  * step, frame interval, step estimate, flow-through time. `settings` are the
  * form values (unsaved edits included); the run's stored block fills the rest.
  */
-export function previewTransient(projectId, runId, settings, simulationId) {
+export async function previewTransient(projectId, runId, settings, simulationId) {
   const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no active project' };
   const cat = loadCatalog(id);
   const scoped = runsForActiveStudy(id, cat.runs, simulationId);
   const rec = runId ? scoped.find((r) => String(r.id) === String(runId)) : null;
-  const ctrl = getSimulationControl(id);
+  const sid = (rec && rec.simulation_id) || simulationId || null;
+  const ctrl = getSimulationControl(id, sid);
   const merged = normalizeTransient(settings, normalizeTransient(rec && rec.transient, ctrl.transient));
-  const ready = validateSolveReady(id, {
-    meshId: rec && rec.mesh_id,
-    aa: { result_controls: (rec && rec.result_controls) || [] },
-    simulationId: rec && rec.simulation_id,
+  // Same call prepare_run makes (cfddesk.project.web_adapter.load_run_spec with
+  // the run's mesh and reference speed), so the Δt shown is the Δt written.
+  const pv = await commitRpc('run.transient_preview', {
+    project_id: id,
+    run_id: runId || '',
+    simulation_id: sid || '',
+    mesh_id: (rec && rec.mesh_id) || '',
+    settings: merged,
   });
-  if (!ready.ok) {
-    // No mesh / BCs yet: still resolve what does not need the case.
-    return { ok: true, partial: true, reason: ready.error || null, control: resolveTransientControl(merged, {}) };
-  }
-  return { ok: true, partial: false, control: transientControlFor(ready, merged), n_cells: ready.mesh.n_cells };
+  return pv && typeof pv === 'object' ? pv : { ok: false, error: 'transient preview failed' };
 }
 
 export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody }) {
@@ -3105,7 +3029,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         body = {};
       }
       const id = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
-      const pv = previewTransient(
+      const pv = await previewTransient(
         id,
         body.run_id || body.id,
         body.transient || body,

@@ -157,69 +157,148 @@ def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
 
 
 def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
-    fields: list[SchemaField] = [
+    """Run control fields. Defaults come from cfddesk.project.transient
+    (TRANSIENT_DEFAULTS / STEADY_DEFAULTS), the one copy: Node and the page read
+    them back from the registry, so every layer starts a run from the same values.
+    A default of None means "calculate for me" (the auto time step)."""
+    from cfddesk.project.transient import STEADY_DEFAULTS, TRANSIENT_DEFAULTS
+
+    if not transient:
+        return (
+            SchemaField(
+                "end_time",
+                "Number of iterations",
+                "int",
+                default=int(STEADY_DEFAULTS["end_time"]),
+                min=1,
+                group="control",
+                description="Iterations to run. The run stops earlier when the residuals reach their targets.",
+            ),
+            SchemaField(
+                "write_interval",
+                "Write interval",
+                "int",
+                default=int(STEADY_DEFAULTS["write_interval"]),
+                min=1,
+                group="control",
+                description="How often results are saved, in iterations.",
+            ),
+        )
+    d = TRANSIENT_DEFAULTS
+    return (
         SchemaField(
             "end_time",
-            "End time",
+            "Simulation time",
             "float",
-            default=1000.0 if not transient else 1.0,
+            default=float(d["end_time"]),
+            min=0.0,
+            unit="s",
+            group="control",
+            description="Simulated time to stop at, in seconds.",
+        ),
+        SchemaField(
+            "write_count",
+            "Result frames",
+            "int",
+            default=int(d["write_count"]),
+            min=1,
+            max=5000,
+            group="control",
+            description="Result frames saved over the simulation time.",
+        ),
+        SchemaField(
+            "time_step_mode",
+            "Time step",
+            "choice",
+            default=str(d["time_step_mode"]),
+            choices=("adjustable", "fixed"),
+            choice_labels=("Adjustable", "Fixed"),
+            group="control",
+            advanced=True,
+            description="Adjustable keeps the Courant number at or below the maximum; fixed uses one step throughout.",
+        ),
+        SchemaField(
+            "max_co",
+            "Max Courant",
+            "float",
+            default=float(d["max_co"]),
             min=0.0,
             group="control",
+            advanced=True,
             description=(
-                "Transient: simulated time to stop at, in seconds. Steady: the iteration limit."
+                "Largest Courant number allowed when the time step adjusts: how many cells "
+                "flow may cross in one step. Keep at or below 1 for stability."
             ),
         ),
         SchemaField(
-            "write_interval",
-            "Write interval",
-            "int",
-            default=1000 if not transient else 50,
-            min=1,
+            "delta_t",
+            "Initial time step",
+            "float",
+            default=d["delta_t"],
+            min=0.0,
+            unit="s",
             group="control",
-            description="How often results are saved, counted in the unit Write control sets.",
+            advanced=True,
+            optional=True,
+            description="Blank calculates it from the smallest cell and the inlet speed.",
         ),
         SchemaField(
-            "write_control",
-            "Write control",
+            "max_delta_t",
+            "Max time step",
+            "float",
+            default=d["max_delta_t"],
+            min=0.0,
+            unit="s",
+            group="control",
+            advanced=True,
+            optional=True,
+            description="Blank uses the frame interval, so every frame is written.",
+        ),
+        SchemaField(
+            "time_scheme",
+            "Time scheme",
             "choice",
-            default="timeStep",
-            choices=("timeStep", "runTime", "adjustableRunTime"),
+            default=str(d["time_scheme"]),
+            choices=("Euler", "backward"),
+            choice_labels=("Euler (1st order)", "Backward (2nd order)"),
             group="control",
-            description=(
-                "What Write interval counts: time steps, simulated seconds, or simulated seconds "
-                "with the time step adjusted to land on each write."
-            ),
+            advanced=True,
+            description="Euler is robust; backward is more accurate in time.",
         ),
-    ]
-    if transient:
-        fields.insert(
-            1,
-            SchemaField(
-                "delta_t",
-                "Time step",
-                "float",
-                default=0.001,
-                min=0.0,
-                group="control",
-                description="Simulated seconds per step (the first step when the step adjusts).",
-            ),
-        )
-        fields.append(
-            SchemaField(
-                "max_co",
-                "Max Courant",
-                "float",
-                default=1.0,
-                min=0.0,
-                group="control",
-                advanced=True,
-                description=(
-                    "Largest Courant number allowed when the time step adjusts: how many cells "
-                    "flow may cross in one step. Keep at or below 1 for stability."
-                ),
-            )
-        )
-    return tuple(fields)
+        SchemaField(
+            "n_outer_correctors",
+            "Outer correctors",
+            "int",
+            default=int(d["n_outer_correctors"]),
+            min=1,
+            max=50,
+            group="control",
+            advanced=True,
+            description="PIMPLE outer loops per time step. 1 is PISO mode.",
+        ),
+        SchemaField(
+            "n_correctors",
+            "Pressure correctors",
+            "int",
+            default=int(d["n_correctors"]),
+            min=1,
+            max=10,
+            group="control",
+            advanced=True,
+            description="Pressure corrections per outer loop.",
+        ),
+        SchemaField(
+            "n_non_orth_correctors",
+            "Non-orthogonal correctors",
+            "int",
+            default=int(d["n_non_orth_correctors"]),
+            min=0,
+            max=5,
+            group="control",
+            advanced=True,
+            description="Extra pressure corrections for skewed or non-orthogonal cells.",
+        ),
+    )
 
 
 def _validate_region_roles(project: Any, region_roles: tuple[str, ...]) -> list[str]:

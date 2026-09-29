@@ -18,6 +18,8 @@ export const REGISTRY_JSON_PATH = join(__dirname, 'generated', 'registry.json');
 
 /** Default AnalysisType key (matches cfddesk.registry.analysis.DEFAULT_STEADY_KEY). */
 export const DEFAULT_ANALYSIS_KEY = 'incompressible_steady';
+/** Transient sibling (cfddesk.registry.analysis.DEFAULT_TRANSIENT_KEY). */
+export const DEFAULT_TRANSIENT_ANALYSIS_KEY = 'incompressible_transient';
 
 /** Mesher keys used as W20 advanced.mesh_engine (not algorithm-only backends). */
 // Hex-dominant (snappyHexMesh) is a product engine too; leaving it out coerced a
@@ -105,6 +107,81 @@ export function mesherKeys() {
 export function analysisByKey(key) {
   const want = String(key || '');
   return analysisEntries().find((r) => r && String(r.key) === want) || null;
+}
+
+function timeDependencyKey(td) {
+  return /transient/i.test(String(td || '')) ? 'transient' : 'steady';
+}
+
+/**
+ * The registered AnalysisType for an analysis family and a time dependency
+ * (same rule as cfddesk.registry.analysis.analysis_key_for): the key itself
+ * when it already has that time dependency, else its registered sibling
+ * (`_steady` ↔ `_transient`), else the key unchanged. Blank or the legacy
+ * "incompressible" / "Incompressible" name maps to the builtin pair.
+ * @param {string | null | undefined} key
+ * @param {string | null | undefined} timeDependency
+ */
+export function analysisKeyFor(key, timeDependency) {
+  const td = timeDependencyKey(timeDependency);
+  const raw = String(key || '').trim();
+  if (!raw || raw.toLowerCase() === 'incompressible') {
+    return td === 'transient' ? DEFAULT_TRANSIENT_ANALYSIS_KEY : DEFAULT_ANALYSIS_KEY;
+  }
+  const row = analysisByKey(raw);
+  if (row && String(row.time_dependency || '') === td) return raw;
+  const m = raw.match(/^(.*)_(steady|transient)$/);
+  if (m) {
+    const sibling = `${m[1]}_${td}`;
+    if (analysisByKey(sibling)) return sibling;
+  }
+  return raw;
+}
+
+/** True when `key` (or its sibling) is registered for that time dependency. */
+export function analysisSupportsTimeDependency(key, timeDependency) {
+  const resolved = analysisKeyFor(key, timeDependency);
+  const row = analysisByKey(resolved);
+  return !!row && String(row.time_dependency || '') === timeDependencyKey(timeDependency);
+}
+
+/**
+ * Run-control defaults of an analysis, from its registered control_schema
+ * (built from cfddesk.project.transient STEADY_DEFAULTS / TRANSIENT_DEFAULTS,
+ * the one copy). A null default means "calculate for me" (the auto time step).
+ * @param {string} key
+ * @returns {Record<string, unknown>}
+ */
+export function controlDefaults(key) {
+  const row = analysisByKey(key);
+  const props =
+    row && row.control_schema && row.control_schema.properties && typeof row.control_schema.properties === 'object'
+      ? row.control_schema.properties
+      : {};
+  /** @type {Record<string, unknown>} */
+  const out = {};
+  for (const [k, p] of Object.entries(props)) {
+    out[k] = p && typeof p === 'object' && 'default' in p ? p.default : null;
+  }
+  return out;
+}
+
+/** Transient run-control defaults (end_time, write_count, max_co, …) from the registry. */
+export function transientDefaultsFromRegistry() {
+  const d = controlDefaults(DEFAULT_TRANSIENT_ANALYSIS_KEY);
+  if (!Object.keys(d).length) {
+    throw new Error(`registry.json analysis ${DEFAULT_TRANSIENT_ANALYSIS_KEY} has no control_schema defaults`);
+  }
+  return Object.freeze(d);
+}
+
+/** Steady run-control defaults ({ end_time, write_interval } in iterations) from the registry. */
+export function steadyDefaultsFromRegistry() {
+  const d = controlDefaults(DEFAULT_ANALYSIS_KEY);
+  if (!Object.keys(d).length) {
+    throw new Error(`registry.json analysis ${DEFAULT_ANALYSIS_KEY} has no control_schema defaults`);
+  }
+  return Object.freeze(d);
 }
 
 export function mesherByKey(key) {

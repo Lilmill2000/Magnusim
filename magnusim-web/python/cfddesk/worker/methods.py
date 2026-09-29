@@ -655,6 +655,54 @@ def runs_catalog_set(
     return ww.save_catalog(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
 
 
+@rpc("run.transient_preview")
+def run_transient_preview(
+    project_id: str = "",
+    project_dir: str = "",
+    run_id: str = "",
+    simulation_id: str = "",
+    mesh_id: str = "",
+    settings: dict | None = None,
+) -> dict[str, Any]:
+    """The numbers a transient run would be written with right now.
+
+    Same call as prepare_run (load_run_spec → resolve_transient_control, with
+    the run's mesh metadata and reference speed), so the Run panel shows the Δt
+    that lands in controlDict. Partial (settings only) until the run has a
+    mesh and a flow-driving boundary condition.
+    """
+    from cfddesk.project.transient import control_to_web, resolve_transient_control
+    from cfddesk.project.web_adapter import is_pressure_bc, is_velocity_inlet, load_run_spec
+
+    root = _root(project_id, project_dir)
+    raw = settings if isinstance(settings, dict) else {}
+    spec = load_run_spec(
+        root,
+        run_id=run_id or "preview",
+        mesh_id=mesh_id or None,
+        simulation_id=simulation_id or None,
+        require_mesh=True,
+        transient_override=raw,
+        time_dependency="transient",
+    )
+    bcs = [m.get("bc") for m in (spec.mapped or [])]
+    driven = any(is_velocity_inlet(b) for b in bcs) or sum(1 for b in bcs if is_pressure_bc(b)) >= 2
+    if not spec.ok or spec.transient is None or not driven:
+        reason = spec.error if not spec.ok else ("no flow-driving boundary condition" if not driven else None)
+        return {
+            "ok": True,
+            "partial": True,
+            "reason": reason,
+            "control": control_to_web(resolve_transient_control(raw, {}), raw),
+        }
+    return {
+        "ok": True,
+        "partial": False,
+        "control": control_to_web(spec.transient, raw),
+        "n_cells": spec.n_cells,
+    }
+
+
 @rpc("runs.upsert")
 def runs_upsert(
     id: str = "",

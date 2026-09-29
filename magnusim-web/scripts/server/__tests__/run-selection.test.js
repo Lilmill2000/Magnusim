@@ -61,4 +61,25 @@ describe('study run selection', () => {
     const row = tear.runs.find((r) => r.id === 'tear-run');
     assert.equal(row.transient.max_co, 200);
   });
+
+  it('two quick saves of one run both land', async () => {
+    const project = join(root, 'quick-saves');
+    mkdirSync(project);
+    writeJsonAtomic(join(project, 'project.json'), {id: 'quick-saves', title: 'Test'});
+    createGeometryFolder(project, {id: 'geo', name: 'elbow.step'});
+    const study = {id: 'sim', name: 'sim', geometry_id: 'geo', time_dependency: 'Transient'};
+    createStudyFolder(project, 'geo', study);
+    writeJsonAtomic(join(project, 'simulations.json'), {active_id: 'sim', simulations: [study]});
+    await createDraftRun({projectId: 'quick-saves', simulationId: 'sim', runId: 'run'});
+    // The transient save writes the study defaults between reading the run and
+    // writing it back; the second save must not start from the record before it.
+    const first = updateRunSettings('quick-saves', {run_id: 'run', transient: {end_time: 2, write_count: 20}});
+    const second = updateRunSettings('quick-saves', {run_id: 'run', endTime: 123, writeInterval: 7});
+    assert.equal((await first).ok, true);
+    assert.equal((await second).ok, true);
+    const row = getRunStatus('quick-saves', 'run', 'sim').body.runs.find((r) => r.id === 'run');
+    assert.equal(row.transient.end_time, 2);
+    assert.equal(row.endTime, 123);
+    assert.equal(row.writeInterval, 7);
+  });
 });

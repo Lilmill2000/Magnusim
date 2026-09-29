@@ -99,38 +99,24 @@
         "type": "object",
         "properties": {
           "end_time": {
-            "type": "number",
-            "default": 1000.0,
-            "minimum": 0.0,
+            "type": "integer",
+            "default": 200,
+            "minimum": 1,
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "End time",
-            "description": "Transient: simulated time to stop at, in seconds. Steady: the iteration limit."
+            "title": "Number of iterations",
+            "description": "Iterations to run. The run stops earlier when the residuals reach their targets."
           },
           "write_interval": {
             "type": "integer",
-            "default": 1000,
+            "default": 50,
             "minimum": 1,
             "x-cfddesk": {
               "group": "control"
             },
             "title": "Write interval",
-            "description": "How often results are saved, counted in the unit Write control sets."
-          },
-          "write_control": {
-            "type": "string",
-            "default": "timeStep",
-            "enum": [
-              "timeStep",
-              "runTime",
-              "adjustableRunTime"
-            ],
-            "x-cfddesk": {
-              "group": "control"
-            },
-            "title": "Write control",
-            "description": "What Write interval counts: time steps, simulated seconds, or simulated seconds with the time step adjusted to land on each write."
+            "description": "How often results are saved, in iterations."
           }
         },
         "additionalProperties": false
@@ -200,47 +186,43 @@
         "properties": {
           "end_time": {
             "type": "number",
-            "default": 1.0,
+            "default": 5.0,
             "minimum": 0.0,
             "x-cfddesk": {
+              "unit": "s",
               "group": "control"
             },
-            "title": "End time",
-            "description": "Transient: simulated time to stop at, in seconds. Steady: the iteration limit."
+            "title": "Simulation time",
+            "description": "Simulated time to stop at, in seconds."
           },
-          "delta_t": {
-            "type": "number",
-            "default": 0.001,
-            "minimum": 0.0,
-            "x-cfddesk": {
-              "group": "control"
-            },
-            "title": "Time step",
-            "description": "Simulated seconds per step (the first step when the step adjusts)."
-          },
-          "write_interval": {
+          "write_count": {
             "type": "integer",
             "default": 50,
             "minimum": 1,
+            "maximum": 5000,
             "x-cfddesk": {
               "group": "control"
             },
-            "title": "Write interval",
-            "description": "How often results are saved, counted in the unit Write control sets."
+            "title": "Result frames",
+            "description": "Result frames saved over the simulation time."
           },
-          "write_control": {
+          "time_step_mode": {
             "type": "string",
-            "default": "timeStep",
+            "default": "adjustable",
             "enum": [
-              "timeStep",
-              "runTime",
-              "adjustableRunTime"
+              "adjustable",
+              "fixed"
             ],
             "x-cfddesk": {
-              "group": "control"
+              "group": "control",
+              "advanced": true,
+              "enum_labels": [
+                "Adjustable",
+                "Fixed"
+              ]
             },
-            "title": "Write control",
-            "description": "What Write interval counts: time steps, simulated seconds, or simulated seconds with the time step adjusted to land on each write."
+            "title": "Time step",
+            "description": "Adjustable keeps the Courant number at or below the maximum; fixed uses one step throughout."
           },
           "max_co": {
             "type": "number",
@@ -252,6 +234,86 @@
             },
             "title": "Max Courant",
             "description": "Largest Courant number allowed when the time step adjusts: how many cells flow may cross in one step. Keep at or below 1 for stability."
+          },
+          "delta_t": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "unit": "s",
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Initial time step",
+            "description": "Blank calculates it from the smallest cell and the inlet speed."
+          },
+          "max_delta_t": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "unit": "s",
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Max time step",
+            "description": "Blank uses the frame interval, so every frame is written."
+          },
+          "time_scheme": {
+            "type": "string",
+            "default": "Euler",
+            "enum": [
+              "Euler",
+              "backward"
+            ],
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true,
+              "enum_labels": [
+                "Euler (1st order)",
+                "Backward (2nd order)"
+              ]
+            },
+            "title": "Time scheme",
+            "description": "Euler is robust; backward is more accurate in time."
+          },
+          "n_outer_correctors": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 50,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true
+            },
+            "title": "Outer correctors",
+            "description": "PIMPLE outer loops per time step. 1 is PISO mode."
+          },
+          "n_correctors": {
+            "type": "integer",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true
+            },
+            "title": "Pressure correctors",
+            "description": "Pressure corrections per outer loop."
+          },
+          "n_non_orth_correctors": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 5,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true
+            },
+            "title": "Non-orthogonal correctors",
+            "description": "Extra pressure corrections for skewed or non-orthogonal cells."
           }
         },
         "additionalProperties": false

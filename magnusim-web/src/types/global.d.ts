@@ -48,6 +48,8 @@ declare global {
     __CFD_TREE_UI__?: { openPanel?: string | null; expanded?: Record<string, boolean>; selectedKey?: string | null };
     __CFD_EXPAND_HYDRATED_TREE__?: () => void;
     __CFD_W20_STATE__?: Record<string, unknown>;
+    __CFD_TRANSIENT_DEFAULTS__?: Record<string, unknown>;
+    __CFD_STEADY_DEFAULTS__?: Record<string, unknown>;
     __CFD_W17_DEFAULTS__?: {
       analysis: string;
       analysis_type?: string;

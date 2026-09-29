@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,6 +89,48 @@ def resolve_analysis_key(
     return resolved
 
 
+def analysis_key_for(key: str | None, time_dependency: str | None, registry: Any | None = None) -> str:
+    """The registered AnalysisType for a study's analysis family and time dependency.
+
+    The stored key and the time dependency must agree: a study switched to
+    Transient solves as ``incompressible_transient``. The sibling of a key is
+    the same name with ``_steady`` / ``_transient`` swapped, when that key is
+    registered. A key with no sibling for the asked time dependency is
+    returned unchanged; callers that must refuse that check
+    :func:`analysis_supports_time_dependency`.
+    """
+    td = "transient" if re.search(r"transient", str(time_dependency or ""), re.I) else "steady"
+    raw = (key or "").strip()
+    if not raw or raw.lower() == LEGACY_ANALYSIS_ALIAS:
+        return default_analysis_key(time_dependency=td)
+    reg = registry
+    if reg is None:
+        from cfddesk.registry.discovery import get_registry
+
+        reg = get_registry("analysis")
+    keys = set(reg.keys())
+    if raw in keys and str(getattr(reg.get(raw), "time_dependency", "")) == td:
+        return raw
+    m = re.match(r"^(.*)_(steady|transient)$", raw)
+    if m:
+        sibling = f"{m.group(1)}_{td}"
+        if sibling in keys:
+            return sibling
+    return raw
+
+
+def analysis_supports_time_dependency(key: str, time_dependency: str | None, registry: Any | None = None) -> bool:
+    """True when ``key`` (or its sibling) is registered for that time dependency."""
+    reg = registry
+    if reg is None:
+        from cfddesk.registry.discovery import get_registry
+
+        reg = get_registry("analysis")
+    td = "transient" if re.search(r"transient", str(time_dependency or ""), re.I) else "steady"
+    resolved = analysis_key_for(key, td, reg)
+    return resolved in set(reg.keys()) and str(getattr(reg.get(resolved), "time_dependency", "")) == td
+
+
 @dataclass(frozen=True)
 class ResultField:
     """A field exposed in results / post for an analysis."""
@@ -169,11 +212,12 @@ def write_run_case(
     from cfddesk.registry.discovery import get_registry, load_all
 
     load_all()
-    key = (analysis_key or "").strip() or (
-        DEFAULT_TRANSIENT_KEY
-        if getattr(spec, "transient", None) is not None
-        else DEFAULT_STEADY_KEY
-    )
+    # The key load_run_spec resolved from the study and the run's time
+    # dependency; an explicit argument wins. Specs built by hand (tests)
+    # without one fall back on their solver app.
+    key = (analysis_key or "").strip() or str(getattr(spec, "analysis_key", "") or "").strip()
+    if not key:
+        key = DEFAULT_TRANSIENT_KEY if getattr(spec, "solver_app", "") == "pimpleFoam" else DEFAULT_STEADY_KEY
     analysis = get_registry("analysis").get(key)
     writer = analysis.write_case
     if writer is None:

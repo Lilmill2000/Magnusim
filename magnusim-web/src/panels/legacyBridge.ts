@@ -227,7 +227,8 @@ export interface RunState {
   can_delete: boolean;
   /** Why Start is off (or what it is doing), with the label of the fix link. */
   reason: { text: string; fix_label: string } | null;
-  settings: { end_time: number; write_interval: number };
+  /** Steady iterations / write interval (null only before the registry has loaded). */
+  settings: { end_time: number | null; write_interval: number | null };
   transient_settings: TransientSettings;
   /** Simulation time ÷ result frames; the Max Δt placeholder. */
   frame_interval: number;

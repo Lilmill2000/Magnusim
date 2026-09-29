@@ -57,14 +57,22 @@ def test_describe_emits_numerics_and_control_for_analysis():
         )
         # The time scheme lives on the run panel (a select); no free-text ddt field.
         assert "ddt_default" not in row["numerics_schema"]["properties"]
-        _assert_json_schema_bag(
-            row["control_schema"],
-            required_props={"end_time", "write_interval", "write_control"},
-        )
+    _assert_json_schema_bag(steady["control_schema"], required_props={"end_time", "write_interval"})
+    _assert_json_schema_bag(
+        transient["control_schema"],
+        required_props={"end_time", "write_count", "time_step_mode", "max_co", "delta_t", "max_delta_t"},
+    )
 
     assert "delta_t" not in steady["control_schema"]["properties"]
-    assert "delta_t" in transient["control_schema"]["properties"]
-    assert transient["control_schema"]["properties"]["delta_t"]["default"] == 0.001
+    # H7: the control schema is the one copy of the run-control defaults
+    # (cfddesk.project.transient); a blank time step is "auto" (null), not 0.001.
+    from cfddesk.project.transient import STEADY_DEFAULTS, TRANSIENT_DEFAULTS
+
+    transient_defaults = {k: p.get("default") for k, p in transient["control_schema"]["properties"].items()}
+    assert transient_defaults == TRANSIENT_DEFAULTS
+    steady_defaults = {k: p.get("default") for k, p in steady["control_schema"]["properties"].items()}
+    assert steady_defaults == STEADY_DEFAULTS
+    assert "delta_t" not in transient["control_schema"].get("required", [])
 
     # Steady SIMPLE numerics the solve reads; defaults match the pre-Phase-6 writer.
     steady_numerics = steady["numerics_schema"]["properties"]

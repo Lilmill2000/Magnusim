@@ -31,6 +31,9 @@ class SchemaField:
     description: str = ""  # Hover help shown by the UI next to the label
     widget: str = ""  # UI widget override, e.g. "range"; empty picks by kind
     choice_labels: tuple[str, ...] = ()  # Display text per choice (same order); values stay ``choices``
+    # Blank is a real value ("calculate for me", e.g. the auto time step): never
+    # required, and a default of None is written out as null.
+    optional: bool = False
 
 
 _KIND_TO_JSON: dict[str, dict[str, Any]] = {
@@ -50,8 +53,8 @@ _KIND_TO_JSON: dict[str, dict[str, Any]] = {
 
 
 def _is_required_field(f: SchemaField) -> bool:
-    """Fields with no default are required (bool/raw_dict stay optional when omitted)."""
-    return f.default is None and f.kind not in ("raw_dict", "bool")
+    """Fields with no default are required (bool/raw_dict/optional stay optional when omitted)."""
+    return f.default is None and not f.optional and f.kind not in ("raw_dict", "bool")
 
 
 def _depends_active(f: SchemaField, values: dict[str, Any]) -> bool:
@@ -68,6 +71,8 @@ def to_json_schema(fields: list[SchemaField] | tuple[SchemaField, ...]) -> dict[
         prop: dict[str, Any] = dict(_KIND_TO_JSON.get(f.kind, {"type": "string"}))
         if f.default is not None:
             prop["default"] = f.default
+        elif f.optional:
+            prop["default"] = None
         if f.kind == "choice" and f.choices:
             prop["enum"] = list(f.choices)
         if f.kind in ("float", "int"):
@@ -94,6 +99,8 @@ def to_json_schema(fields: list[SchemaField] | tuple[SchemaField, ...]) -> dict[
             x["rate_kind"] = f.rate_kind
         if f.widget:
             x["widget"] = f.widget
+        if f.optional:
+            x["optional"] = True
         if f.kind == "choice" and f.choice_labels and len(f.choice_labels) == len(f.choices):
             x["enum_labels"] = list(f.choice_labels)
         if x:

@@ -1,19 +1,32 @@
-"""Transient (pimpleFoam) control model — port of w30-transient.js.
+"""Run control: the transient (pimpleFoam) model and the steady defaults.
 
-Mirrors normalizeTransient / resolveTransientControl / estimateDeltaT /
-flowThroughTime and the numbers writers need for controlDict / fvSchemes /
-fvSolution. Steady path is untouched.
+The one place the time-step estimate is computed. The written case
+(prepare_run → load_run_spec) and the Run panel preview (worker RPC
+run.transient_preview) both call resolve_transient_control with the same
+mesh metadata and reference speed, so the Δt a user is shown is the Δt that is
+written. TRANSIENT_DEFAULTS / STEADY_DEFAULTS are the only copies of the
+defaults: the registered control_schema is built from them and Node and the
+page read them from the registry.
 """
 
 from __future__ import annotations
 
+import json
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 TimeScheme = Literal["Euler", "backward"]
 TimeStepMode = Literal["adjustable", "fixed"]
+
+# Steady runs: iteration limit and write interval (in iterations).
+STEADY_DEFAULTS: dict[str, Any] = {
+    "end_time": 200,
+    "write_interval": 50,
+}
 
 TRANSIENT_DEFAULTS: dict[str, Any] = {
     "end_time": 5.0,
@@ -266,3 +279,60 @@ def resolve_transient_control(
         source=source,
         estimate=estimate,
     )
+
+
+_NUM = r"([0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)"
+_MIN_VOLUME = re.compile(r"Min volume\s*=\s*" + _NUM)
+_TOTAL_VOLUME = re.compile(r"Total volume\s*=\s*" + _NUM)
+
+
+def load_mesh_meta(case_dir: str | Path | None) -> dict[str, Any] | None:
+    """Mesh-generation metadata the time-step estimate reads.
+
+    standard-meta.json (recorded cell sizes, bounding box) plus checkMesh's
+    smallest and total cell volume from log.checkMesh. None without a case dir.
+    """
+    if not case_dir:
+        return None
+    root = Path(case_dir)
+    meta: dict[str, Any] = {}
+    try:
+        raw = json.loads((root / "standard-meta.json").read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            meta = raw
+    except (OSError, ValueError):
+        meta = {}
+    try:
+        txt = (root / "log.checkMesh").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        txt = ""
+    if txt:
+        # "Min volume = 4.97e-09. Max volume = ..." — the sentence period is not part of the number.
+        mv = _MIN_VOLUME.search(txt)
+        tv = _TOTAL_VOLUME.search(txt)
+        if mv and float(mv.group(1)) > 0:
+            meta["min_cell_volume_m3"] = float(mv.group(1))
+        if tv and float(tv.group(1)) > 0:
+            meta["total_volume_m3"] = float(tv.group(1))
+    return meta
+
+
+def control_to_web(tc: TransientControl, settings: dict | None = None) -> dict[str, Any]:
+    """The resolved control in the shape the run record and the Run panel use.
+
+    The user's settings (normalized) first, then the resolved numbers: Δt and
+    max Δt as written, the write interval, adjust flag, which values were
+    calculated (source) and the estimate behind them.
+    """
+    t = normalize_transient(settings)
+    return {
+        **t,
+        "end_time": tc.end_time,
+        "write_count": tc.write_count,
+        "write_interval": tc.write_interval,
+        "delta_t": tc.delta_t,
+        "max_delta_t": tc.max_delta_t,
+        "adjust_time_step": tc.adjust_time_step,
+        "source": dict(tc.source or {}),
+        "estimate": dict(tc.estimate or {}),
+    }

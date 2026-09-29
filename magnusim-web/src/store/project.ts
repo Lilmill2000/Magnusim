@@ -73,6 +73,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         algorithm: /pimple/i.test(String(inc.default_solver || '')) ? 'PIMPLE' : 'SIMPLE',
       };
     }
+    // Run settings defaults: the registered control_schemas (one copy,
+    // cfddesk.project.transient TRANSIENT_DEFAULTS / STEADY_DEFAULTS). null = calculate for me.
+    const controlDefaults = (key: string): Record<string, unknown> | null => {
+      const row = analyses.find((a) => a.key === key);
+      const props = (row?.control_schema as { properties?: Record<string, { default?: unknown }> } | null | undefined)
+        ?.properties;
+      return props
+        ? Object.fromEntries(Object.entries(props).map(([k, prop]) => [k, prop && 'default' in prop ? prop.default : null]))
+        : null;
+    };
+    const transientDefaults = controlDefaults('incompressible_transient');
+    if (transientDefaults) window.__CFD_TRANSIENT_DEFAULTS__ = transientDefaults;
+    const steadyDefaults = controlDefaults('incompressible_steady');
+    if (steadyDefaults) window.__CFD_STEADY_DEFAULTS__ = steadyDefaults;
     return data;
   },
   async refreshHydrate(projectId) {

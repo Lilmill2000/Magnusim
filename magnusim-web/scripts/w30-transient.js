@@ -22,6 +22,10 @@
  *     n_non_orth_correctors: 0,
  *   }
  *
+ * The time step and write numbers are resolved in Python (cfddesk.project.
+ * transient, via prepare_run and the worker's run.transient_preview), so the
+ * Run panel shows exactly what is written to controlDict.
+ *
  * Defaults follow what SimScale exposes for a transient incompressible run
  * (End time, Delta t, Adjustable time step + Maximal Courant number, Maximal
  * step, Write control "Adjustable runtime" + Write interval) and the standard
@@ -29,21 +33,17 @@
  * adjustTimeStep yes, writeControl adjustableRunTime).
  */
 
+import { transientDefaultsFromRegistry } from './registry-defaults.js';
+
 export const TRANSIENT_LABEL = 'Transient';
 export const STEADY_LABEL = 'Steady-state';
 
-export const TRANSIENT_DEFAULTS = Object.freeze({
-  end_time: 5,
-  write_count: 50,
-  time_step_mode: 'adjustable',
-  max_co: 1,
-  delta_t: null,
-  max_delta_t: null,
-  time_scheme: 'Euler',
-  n_outer_correctors: 1,
-  n_correctors: 2,
-  n_non_orth_correctors: 0,
-});
+/**
+ * The transient settings defaults. One copy: cfddesk.project.transient
+ * TRANSIENT_DEFAULTS, published through the registered control_schema of
+ * incompressible_transient. delta_t / max_delta_t null = calculate for me.
+ */
+export const TRANSIENT_DEFAULTS = transientDefaultsFromRegistry();
 
 /** Transient runs are long: go parallel from a smaller mesh than steady. */
 export const TRANSIENT_LARGE_MESH_CELLS = 50000;
@@ -124,123 +124,6 @@ export function foamNum(v) {
   }
   return n.toExponential(6).replace(/\.?0+e/, 'e');
 }
-
-/**
- * Time-step estimate for the mesh + flow: Co ≈ maxCo on the smallest cell.
- *   dt ≈ 0.5 · maxCo · h_min / U
- * h_min is the cube root of checkMesh's smallest cell volume when the mesh
- * log is available, else the recorded surface size (standard-meta.json
- * sizing), else a uniform-cell estimate from the bounding box. The 0.5 covers
- * the flow speeding up past the inlet speed and cell anisotropy; measured
- * against the ball test it lands within ~2× of the step pimpleFoam settles
- * on. Returns null when nothing is known.
- */
-export function estimateDeltaT({ meshMeta, nCells, speedRef, maxCo }) {
-  const U = Math.max(num(speedRef, 0), 0.05);
-  let h = null;
-  let basis = null;
-  const minVol = meshMeta && num(meshMeta.min_cell_volume_m3, NaN);
-  if (minVol > 0) {
-    h = Math.cbrt(minVol);
-    basis = 'min_cell';
-  }
-  const sz = meshMeta && meshMeta.sizing;
-  if (!(h > 0) && sz) {
-    const cands = [sz.surface_size_m, sz.core_size_m].map((v) => num(v, NaN)).filter((v) => v > 0);
-    if (cands.length) {
-      h = Math.min(...cands);
-      basis = 'surface_size';
-    }
-  }
-  if (!(h > 0) && sz && Array.isArray(sz.bbox_m) && sz.bbox_m.length === 3 && nCells > 0) {
-    const vol = sz.bbox_m.reduce((a, b) => a * Math.max(num(b, 0), 1e-9), 1);
-    // The fluid rarely fills the box; assume ~40 % fill.
-    h = Math.cbrt((0.4 * vol) / nCells);
-    basis = 'bbox';
-  }
-  if (!(h > 0)) return null;
-  const co = num(maxCo, TRANSIENT_DEFAULTS.max_co) || 1;
-  const dt = 0.5 * co * (h / U);
-  return { delta_t: dt, h_m: h, u_ref: U, basis };
-}
-
-/**
- * Domain flow-through time (longest bbox side / reference speed) — a hint for
- * choosing the simulation time. Null without a bbox.
- */
-export function flowThroughTime(meshMeta, speedRef) {
-  const sz = meshMeta && meshMeta.sizing;
-  const U = num(speedRef, 0);
-  if (!sz || !Array.isArray(sz.bbox_m) || !(U > 0)) return null;
-  const L = Math.max(...sz.bbox_m.map((v) => num(v, 0)));
-  return L > 0 ? L / U : null;
-}
-
-/**
- * Resolve every number the writer needs from the user's settings plus the
- * case (mesh metadata, reference speed). `source` records which values were
- * calculated so the UI can show "auto".
- */
-export function resolveTransientControl(settings, ctx) {
-  const t = normalizeTransient(settings);
-  const c = ctx || {};
-  const endTime = t.end_time;
-  const writeInterval = endTime / Math.max(1, t.write_count);
-  const est = estimateDeltaT({
-    meshMeta: c.meshMeta,
-    nCells: c.nCells,
-    speedRef: c.speedRef,
-    maxCo: t.max_co,
-  });
-  const source = {};
-  let deltaT = t.delta_t;
-  if (!(deltaT > 0)) {
-    // Fallback when the mesh is unknown: 1/100 of a write interval.
-    deltaT = est ? est.delta_t : writeInterval / 100;
-    source.delta_t = 'auto';
-  } else {
-    source.delta_t = 'user';
-  }
-  // Never start with a step longer than a write interval.
-  deltaT = Math.min(deltaT, writeInterval);
-  let maxDeltaT = t.max_delta_t;
-  if (!(maxDeltaT > 0)) {
-    maxDeltaT = writeInterval;
-    source.max_delta_t = 'auto';
-  } else {
-    source.max_delta_t = 'user';
-  }
-  // A leftover or typed max Δt bigger than the frame interval (simulation
-  // time ÷ frames) can skip result writes, especially after someone raises
-  // the frame count. Always keep the cap at or below one interval.
-  if (maxDeltaT > writeInterval) {
-    maxDeltaT = writeInterval;
-    if (source.max_delta_t === 'user') source.max_delta_t = 'capped';
-  }
-  const adjust = t.time_step_mode !== 'fixed';
-  // Adjustable: the solver settles near the estimate (the 0.5 in the estimate
-  // is the safety margin, not a prediction); fixed: exact.
-  const stepsEst = adjust ? (est ? Math.round(endTime / Math.max(est.delta_t, 1e-12)) : null) : Math.round(endTime / deltaT);
-  return {
-    ...t,
-    end_time: endTime,
-    write_interval: writeInterval,
-    delta_t: deltaT,
-    max_delta_t: maxDeltaT,
-    adjust_time_step: adjust,
-    source,
-    estimate: {
-      delta_t: est ? est.delta_t : null,
-      h_m: est ? est.h_m : null,
-      basis: est ? est.basis : null,
-      u_ref: est ? est.u_ref : c.speedRef != null ? Number(c.speedRef) : null,
-      steps: stepsEst,
-      flow_through_s: flowThroughTime(c.meshMeta, c.speedRef),
-    },
-  };
-}
-
-
 
 /** Human summary for notes / hints. */
 export function describeTransient(ctrl) {

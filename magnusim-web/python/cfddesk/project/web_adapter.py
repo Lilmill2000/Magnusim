@@ -10,12 +10,17 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from cfddesk.project.study_physics import StudyPhysics, load_study_physics
-from cfddesk.project.transient import TransientControl, resolve_transient_control
+from cfddesk.project.study_physics import StudyPhysics, load_study_physics, study_record
+from cfddesk.project.transient import (
+    STEADY_DEFAULTS,
+    TransientControl,
+    load_mesh_meta,
+    resolve_transient_control,
+)
 
 SolverAppName = Literal["simpleFoam", "pimpleFoam"]
 
@@ -75,6 +80,11 @@ class RunSpec:
     physics: StudyPhysics = field(default_factory=StudyPhysics)
     # This run's custom monitors: {"name", "faces"} (area average on any faces).
     custom_monitors: list[dict[str, Any]] = field(default_factory=list)
+    # The registered AnalysisType this run writes and the time dependency it
+    # solves with. The solver app, the case writer and the transient control
+    # all follow these; prepare_run reports them so Node launches the same app.
+    analysis_key: str = ""
+    time_dependency: Literal["steady", "transient"] = "steady"
     ok: bool = True
     error: str | None = None
 
@@ -578,23 +588,57 @@ def unique_numbered_patch(want: str, patch_names: set[str]) -> str | None:
     return None
 
 
-def _sim_is_transient(project_dir: Path, sim_id: str | None) -> bool:
-    sim = _read_json(project_dir / "simulation.json")
-    if isinstance(sim, dict):
-        if re.search(r"transient", str(sim.get("time_dependency") or ""), re.I):
-            return True
-    ctrl = _read_json(project_dir / "simulation_control.json")
-    if isinstance(ctrl, dict) and ctrl.get("transient"):
-        # presence alone is not enough; check sim label above first
-        pass
-    sims = _read_json(project_dir / "simulations.json")
-    if isinstance(sims, dict) and isinstance(sims.get("simulations"), list):
-        for s in sims["simulations"]:
-            if sim_id and str(s.get("id")) != str(sim_id):
-                continue
-            if re.search(r"transient", str(s.get("time_dependency") or ""), re.I):
-                return True
-    return False
+def _td(value: Any) -> Literal["steady", "transient"]:
+    return "transient" if re.search(r"transient", str(value or ""), re.I) else "steady"
+
+
+def run_time_dependency(
+    project_dir: Path | str, run_id: str | None, sim_id: str | None
+) -> Literal["steady", "transient"]:
+    """The time dependency a run solves with (the same rule Node and the Run panel use).
+
+    The run's own stamp wins: a run that has started keeps the mode it solved
+    with, and draft runs are restamped when their study changes. A run without
+    one follows its study. Never another study's: the project-level
+    simulation.json mirror is the *active* study, which is only used for a
+    legacy single-study project with no study id.
+    """
+    from cfddesk.project.paths import find_run, find_study
+
+    root = Path(project_dir)
+    run = find_run(root, run_id, sim_id) if run_id else None
+    stamped = str((run or {}).get("time_dependency") or "").strip()
+    if stamped:
+        return _td(stamped)
+    if sim_id:
+        study = find_study(root, sim_id) or study_record(root, sim_id)
+        return _td((study or {}).get("time_dependency"))
+    mirror = _read_json(root / "simulation.json")
+    return _td(mirror.get("time_dependency") if isinstance(mirror, dict) else "")
+
+
+def _study_analysis_type(root: Path, sim_id: str | None) -> str:
+    from cfddesk.project.paths import find_study
+
+    study = (find_study(root, sim_id) if sim_id else None) or study_record(root, sim_id) or {}
+    return str(study.get("analysis_type") or study.get("analysis") or "")
+
+
+def _analysis_and_app(root: Path, sim_id: str | None, td: str) -> tuple[str, str]:
+    """AnalysisType key (study family + time dependency) and its solver app."""
+    from cfddesk.registry.analysis import analysis_key_for
+    from cfddesk.registry.discovery import get_registry, load_all
+
+    load_all()
+    reg = get_registry("analysis")
+    key = analysis_key_for(_study_analysis_type(root, sim_id), td, reg)
+    try:
+        app = str(getattr(reg.get(key), "default_solver", "") or "")
+    except Exception:
+        app = ""
+    if not app:
+        app = "pimpleFoam" if td == "transient" else "simpleFoam"
+    return key, app
 
 
 def load_run_spec(
@@ -606,11 +650,16 @@ def load_run_spec(
     simulation_id: str | None = None,
     require_mesh: bool = True,
     transient_override: dict | None = None,
+    time_dependency: str | None = None,
 ) -> RunSpec:
     """Build a RunSpec from web JSON files under ``project_dir``.
 
     Mirrors the data gathering in w27 validateSolveReady + writeSolveCase
     preamble (materials, BCs, mesh, monitors, transient).
+
+    ``time_dependency`` is the decision the caller already made (Node passes
+    the run's). Without it: transient when transient settings are given, else
+    :func:`run_time_dependency`.
     """
     root = Path(project_dir)
     sim_id = _active_sim_id(root, simulation_id)
@@ -660,8 +709,8 @@ def load_run_spec(
             mesh_case_dir=Path("."),
             n_procs=n_procs,
             solver_app="simpleFoam",
-            end_time=float(ctrl.get("endTime") or 200),
-            write_interval=float(ctrl.get("writeInterval") or 50),
+            end_time=float(ctrl.get("endTime") or STEADY_DEFAULTS["end_time"]),
+            write_interval=float(ctrl.get("writeInterval") or STEADY_DEFAULTS["write_interval"]),
             transient=None,
             nu=(air or {}).get("nu", 1.529e-5),
             rho=(air or {}).get("rho", 1.196),
@@ -711,21 +760,16 @@ def load_run_spec(
         patch_names=list(patch_names),
     )
 
-    is_trans = _sim_is_transient(root, sim_id) or bool(transient_override)
-    transient: TransientControl | None = None
-    end_time = float(ctrl.get("endTime") or 200)
-    write_interval = float(ctrl.get("writeInterval") or 50)
-    if is_trans:
-        t_raw = transient_override if transient_override is not None else ctrl.get("transient")
-        transient = resolve_transient_control(
-            t_raw if isinstance(t_raw, dict) else {},
-            {
-                "n_cells": mesh.get("n_cells"),
-                "speed_ref": 1.0,
-            },
-        )
-        end_time = transient.end_time
-        write_interval = transient.write_interval
+    if time_dependency:
+        td = _td(time_dependency)
+    elif transient_override is not None:
+        td = "transient"
+    else:
+        td = run_time_dependency(root, run_id, sim_id)
+    is_trans = td == "transient"
+    analysis_key, solver_app = _analysis_and_app(root, sim_id, td)
+    end_time = float(ctrl.get("endTime") or STEADY_DEFAULTS["end_time"])
+    write_interval = float(ctrl.get("writeInterval") or STEADY_DEFAULTS["write_interval"])
 
     wall_default = wall_treatment(
         (bcs_doc or {}).get("defaults") if isinstance(bcs_doc, dict) else None
@@ -734,15 +778,15 @@ def load_run_spec(
     if not isinstance(case_dir, Path):
         case_dir = Path(case_dir)
 
-    return RunSpec(
+    spec = RunSpec(
         project_dir=root,
         run_id=run_id,
         mesh_case_dir=case_dir,
         n_procs=int(n_procs),
-        solver_app="pimpleFoam" if is_trans else "simpleFoam",
+        solver_app=solver_app,  # type: ignore[arg-type]
         end_time=end_time,
         write_interval=write_interval,
-        transient=transient,
+        transient=None,
         nu=float((air or {}).get("nu", 1.529e-5)),
         rho=float((air or {}).get("rho", 1.196)),
         wall_default=wall_default,
@@ -758,9 +802,37 @@ def load_run_spec(
         mapped=mapped,
         physics=load_study_physics(root, sim_id),
         custom_monitors=_run_custom_monitors(root, run_id, sim_id),
+        analysis_key=analysis_key,
+        time_dependency=td,
         ok=True,
         error=None,
     )
+    if not is_trans:
+        return spec
+    t_raw = transient_override if transient_override is not None else ctrl.get("transient")
+    transient = resolve_transient_control(
+        t_raw if isinstance(t_raw, dict) else {},
+        transient_context(spec),
+    )
+    return replace(
+        spec,
+        transient=transient,
+        end_time=transient.end_time,
+        write_interval=transient.write_interval,
+    )
+
+
+def transient_context(spec: RunSpec) -> dict[str, Any]:
+    """What the time-step estimate needs: the mesh this run solves on and the
+    case's reference speed (the same speed the turbulence inlet values use)."""
+    from cfddesk.case.writer import resolve_speed_and_dhyd
+
+    speed_ref, _d_hyd = resolve_speed_and_dhyd(spec)
+    return {
+        "mesh_meta": load_mesh_meta(spec.mesh_case_dir),
+        "n_cells": spec.n_cells,
+        "speed_ref": speed_ref,
+    }
 
 
 def _run_custom_monitors(root: Path, run_id: str, sim_id: str | None) -> list[dict[str, Any]]:

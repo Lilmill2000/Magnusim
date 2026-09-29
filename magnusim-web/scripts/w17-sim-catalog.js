@@ -16,6 +16,22 @@ import {
   writeIdFile,
   writeJsonAtomic,
 } from './project-layout.js';
+import { analysisKeyFor } from './registry-defaults.js';
+
+/**
+ * The AnalysisType a study solves as: its analysis family resolved against its
+ * time dependency (incompressible_transient for a Transient study). Every write
+ * of a study record stores this, so the key and the time dependency never disagree.
+ */
+export function studyAnalysisKey(sim) {
+  return analysisKeyFor(sim && sim.analysis_type, sim && sim.time_dependency);
+}
+
+function withStudyAnalysisKey(sim) {
+  if (!sim || !sim.time_dependency) return sim;
+  const key = studyAnalysisKey(sim);
+  return key === sim.analysis_type ? sim : { ...sim, analysis_type: key };
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -161,7 +177,7 @@ function studyIdRecord(sim) {
     geometry_id: sim.geometry_id,
     kind: 'simulation',
     analysis: sim.analysis,
-    analysis_type: sim.analysis_type,
+    analysis_type: sim.time_dependency ? studyAnalysisKey(sim) : sim.analysis_type,
     turbulence_model: sim.turbulence_model,
     time_dependency: sim.time_dependency,
     algorithm: sim.algorithm,
@@ -199,7 +215,7 @@ export function persistStudyNames(list) {
 }
 
 export function saveCatalog(projectId, catalog) {
-  const simulations = stampStudyOrder(persistStudyNames(catalog.simulations || []));
+  const simulations = stampStudyOrder(persistStudyNames(catalog.simulations || [])).map(withStudyAnalysisKey);
   const active_id =
     catalog.active_id && simulations.some((s) => s.id === catalog.active_id)
       ? catalog.active_id
@@ -228,8 +244,29 @@ export function saveCatalog(projectId, catalog) {
 }
 
 /** Disk catalog only. GET paths must not spawn project_cli. */
+/**
+ * Studies saved before the key followed the time dependency stored
+ * incompressible_steady for Transient studies. Fix each study folder's id.json
+ * once (atomic write) when the project is read; later reads find it consistent.
+ */
+function normalizeWalkedAnalysisKeys(walked) {
+  for (const s of walked.simulations || []) {
+    const fixed = withStudyAnalysisKey(s);
+    if (fixed === s || !s.dir) continue;
+    try {
+      const idPath = join(s.dir, 'id.json');
+      const doc = existsSync(idPath) ? JSON.parse(readFileSync(idPath, 'utf8')) : null;
+      if (doc && typeof doc === 'object') writeIdFile(s.dir, { ...doc, analysis_type: fixed.analysis_type });
+    } catch (e) {
+      console.warn('[CFD W17] study analysis key', e);
+    }
+    s.analysis_type = fixed.analysis_type;
+  }
+  return walked;
+}
+
 export function readCatalog(projectId) {
-  const walked = catalogFromWalk(projectDir(projectId), null);
+  const walked = normalizeWalkedAnalysisKeys(catalogFromWalk(projectDir(projectId), null));
   if (walked.simulations.length) {
     const index = readJson(simulationsJsonPath(projectId));
     const active_id =
