@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cfddesk.case.writer import parse_boundary_patch_types
+from magnusim_sdk.foam import parse_boundary_patch_types
+
 from cfddesk.mesh.gmsh_standard import apply_boundary_patch_types, coerce_gmsh_leftover_walls
 
 _BOUNDARY = """\

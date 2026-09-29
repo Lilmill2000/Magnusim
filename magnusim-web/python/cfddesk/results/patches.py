@@ -358,7 +358,7 @@ def assert_points_in_bounds(
 
 def list_inlet_outlet_patch_names(case_dir: Path | str) -> list[str]:
     """polyMesh boundary names that look like inlet/outlet (not walls)."""
-    from cfddesk.case.writer import parse_boundary_patch_types
+    from magnusim_sdk.foam import parse_boundary_patch_types
 
     boundary = Path(case_dir) / "constant" / "polyMesh" / "boundary"
     if not boundary.is_file():

@@ -367,9 +367,19 @@ def _ui_fields(meta: dict[str, Any]) -> tuple[str | None, str]:
     return None, entry
 
 
+# Folders of loaded plugins: each is on sys.path so a plugin can import its own
+# package (``import incompressible_flow.writer``).
+_PLUGIN_ROOTS: set[str] = set()
+
+
 def _purge_plugin_modules() -> None:
-    for name in list(sys.modules):
+    roots = tuple(str(Path(r).resolve()) for r in _PLUGIN_ROOTS)
+    for name, mod in list(sys.modules.items()):
         if name.startswith(("cfddesk._plugins.", "cfddesk._bundled.")):
+            del sys.modules[name]
+            continue
+        file = getattr(mod, "__file__", None) if roots else None
+        if file and str(Path(file).resolve()).startswith(roots):
             del sys.modules[name]
 
 
@@ -547,6 +557,10 @@ def _load_folder_plugin(
     hub.note_overrides(key, overrides)
     source = "bundled" if tier == "bundled" else "local"
     mod_name = f"cfddesk.{'_bundled' if tier == 'bundled' else '_plugins'}.{plugin_dir.name}"
+    root = str(plugin_dir.resolve())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    _PLUGIN_ROOTS.add(root)
     try:
         spec = importlib.util.spec_from_file_location(mod_name, plugin_py)
         if spec is None or spec.loader is None:

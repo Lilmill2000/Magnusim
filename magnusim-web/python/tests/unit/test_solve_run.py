@@ -6,11 +6,11 @@ import inspect
 from pathlib import Path
 
 import pytest
+from incompressible_flow.parser import IncompressibleParser as ProgressParser
 
 from cfddesk.jobs.events import EVENT_PREFIX, parse_line
 from cfddesk.wsl.solve_run import (
     WRITE_NOW_SED,
-    ProgressParser,
     events_from_lines,
     render_solve_script,
     solve_is_live,

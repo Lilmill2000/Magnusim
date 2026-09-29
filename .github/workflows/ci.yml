@@ -22,9 +22,10 @@ jobs:
           pip install -e ".[dev]"
           pip install -e sdk
       - name: Ruff
-        run: ruff check cfddesk tools tests
+        run: ruff check cfddesk tools tests ../bundled-plugins
       - name: Mypy
-        run: mypy cfddesk
+        run: mypy cfddesk ../bundled-plugins/incompressible_flow/incompressible_flow
+      # testpaths: the core's tests and Incompressible Flow's (its goldens).
       - name: Pytest (including CAD, without WSL)
         run: pytest --tb=short
   node:
@@ -67,7 +68,8 @@ jobs:
 
   # The analysis contract's boundary: the core never imports a bundled plugin,
   # plugins import only magnusim_sdk, cfddesk.registry and the standard library,
-  # and magnusim_sdk imports with nothing else installed.
+  # the core names no incompressible physics, and magnusim_sdk imports with
+  # nothing else installed.
   plugin-boundary:
     runs-on: ubuntu-latest
     defaults:
@@ -80,6 +82,8 @@ jobs:
           python-version: "3.12"
       - name: Import boundary
         run: python tools/plugin_boundary.py
+      - name: No core physics
+        run: python tools/core_physics_scan.py
       - name: magnusim_sdk alone
         run: |
           python -m venv "$RUNNER_TEMP/sdk-only"

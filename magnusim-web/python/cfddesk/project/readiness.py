@@ -18,7 +18,6 @@ def study_doc(project_dir: Path | str, sim_id: str | None) -> dict[str, Any]:
     """The study's settings: its catalog row (every field the study panel saved)
     with its folder's id.json on top (the identity), without folder paths."""
     from cfddesk.project.paths import find_study
-    from cfddesk.project.study_physics import study_record
 
     sid = str(sim_id or "").strip()
     if not sid:
@@ -36,7 +35,7 @@ def ready_context(
     mesh_id: str = "",
 ) -> ReadyContext:
     """The study, its mesh and its JSON documents, as :func:`validate_ready` sees them."""
-    from cfddesk.project.paths import study_json_path
+    from cfddesk.project.paths import assemble_study_bcs, assemble_study_materials, study_json_path
     from cfddesk.project.web_adapter import resolve_mesh, resolve_study_id
 
     root = Path(project_dir)
@@ -65,4 +64,30 @@ def ready_context(
         study=study,
         read_study=read_study,
         mesh={"mesh_id": mesh.get("mesh_id"), "mesh_name": mesh.get("mesh_name"), "ok": bool(mesh.get("ok"))},
+        materials=tuple(assemble_study_materials(root, sid)) if sid else (),
+        bcs=tuple(assemble_study_bcs(root, sid)) if sid else (),
     )
+
+
+def _read(path: Path) -> Any:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def study_record(project_dir: Path | str, sim_id: str | None) -> dict[str, Any] | None:
+    """The study's record: its ``simulations.json`` entry, else a matching ``simulation.json``."""
+    root = Path(project_dir)
+    catalog = _read(root / "simulations.json")
+    if isinstance(catalog, dict) and isinstance(catalog.get("simulations"), list):
+        want = sim_id or catalog.get("active_id")
+        for rec in catalog["simulations"]:
+            if isinstance(rec, dict) and want and str(rec.get("id")) == str(want):
+                return rec
+    single = _read(root / "simulation.json")
+    if isinstance(single, dict) and (not sim_id or str(single.get("id") or "") == str(sim_id)):
+        return single
+    return None

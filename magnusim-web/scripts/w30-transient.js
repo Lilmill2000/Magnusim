@@ -39,7 +39,7 @@ export const TRANSIENT_LABEL = 'Transient';
 export const STEADY_LABEL = 'Steady-state';
 
 /**
- * The transient settings defaults. One copy: cfddesk.project.transient
+ * The transient settings defaults. One copy: incompressible_flow.transient
  * TRANSIENT_DEFAULTS, published through the registered control_schema of
  * incompressible_transient. delta_t / max_delta_t null = calculate for me.
  */

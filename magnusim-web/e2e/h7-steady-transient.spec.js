@@ -236,6 +236,13 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
     return j.control;
   };
   const sig4 = (v) => Number(Number(v).toPrecision(4));
+  // The run's note: the app, the analysis family, and the physics and algorithm
+  // the case was written with (from prepare_run since H9; before, Node's tables).
+  const runNote = async (rid) => {
+    const j = await getJson(request, `${statusUrl(SIM)}&run_id=${encodeURIComponent(rid)}`);
+    const r = (j.run && String(j.run.run_id || j.run.id) === String(rid) ? j.run : null) || (await runRow(rid));
+    return String(r.note || '');
+  };
   // The Δt the Run panel shows the user: "starting Δt ≈ 1.2e-5 s (auto)".
   const shownDt = async () => {
     const text = String(await runPanel.locator('[data-run-transient-hint]').textContent());
@@ -262,6 +269,9 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   await runPanel.locator('[data-run-start]').click();
   await waitStatus(runA, /^running$/, 300_000);
   await expect.poll(() => controlDict(runA)?.application, { timeout: 120_000 }).toBe('pimpleFoam');
+  // While it runs, the note names the physics the case was written with (the
+  // finished note replaces it).
+  expect(await runNote(runA)).toMatch(/^pimpleFoam (serial|\d+ ranks) — Incompressible \/ k-omega SST \/ PIMPLE · /);
   const written = controlDict(runA);
   expect(sig4(written.endTime)).toBe(sig4(dt * 2000));
   expect(sig4(written.deltaT)).toBe(sig4(ctlLong.delta_t));
@@ -301,6 +311,7 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   await runPanel.locator('[data-run-start]').click();
   await waitStatus(runB, /^running$/, 300_000);
   await expect.poll(() => controlDict(runB)?.application, { timeout: 120_000 }).toBe('simpleFoam');
+  expect(await runNote(runB)).toMatch(/^simpleFoam (serial|\d+ ranks) — Incompressible \/ k-omega SST \/ SIMPLE$/);
   expect(controlDict(runB)).toMatchObject({ endTime: 5000, writeInterval: 1000 });
   await waitSolving(runB);
   await runPanel.locator('[data-run-stop="1"]').click();

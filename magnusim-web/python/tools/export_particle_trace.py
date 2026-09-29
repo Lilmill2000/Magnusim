@@ -26,7 +26,8 @@ CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 if str(CFDDESK_ROOT) not in sys.path:
     sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.case.writer import parse_boundary_patch_types  # noqa: E402
+from magnusim_sdk.foam import parse_boundary_patch_types  # noqa: E402
+
 from cfddesk.results.patches import (  # noqa: E402
     load_patch_surface,
     n_seeds_from_density,

@@ -69,39 +69,11 @@ def run_reconstruct_par(
     return ParallelStepResult("reconstructPar", ok, text)
 
 
-def mpirun_simplefoam_inner(
-    wsl_case: str, *, n: int, log_name: str, backend: str
-) -> str:
-    """Bash fragment: prepare fvSolution + mpirun simpleFoam -parallel → log file."""
-    log_q = shlex.quote(log_name)
-    dest_q = shlex.quote(wsl_case)
-    foam_inner = (
-        "export AMGX_DIR=${AMGX_DIR:-$HOME/cfd/builds/amgx-install}; "
-        "export PETSC_DIR=${PETSC_DIR:-$HOME/cfd/builds/petsc}; "
-        "export PETSC_ARCH=${PETSC_ARCH:-linux-gnu-cuda-opt}; "
-        "export PETSC_OPTIONS='-use_gpu_aware_mpi 0'; "
-        "export LD_LIBRARY_PATH=$AMGX_DIR/lib:"
-        "$PETSC_DIR/$PETSC_ARCH/lib:"
-        "${FOAM_USER_LIBBIN}:${FOAM_LIBBIN}:/usr/local/cuda/lib64:"
-        "${LD_LIBRARY_PATH}; "
-        f"cd {shlex.quote(wsl_case)} && "
-        f"mpirun --oversubscribe -np {int(n)} simpleFoam -parallel > {log_q} 2>&1"
-    )
-    return (
-        f"cd {dest_q} && "
-        f"if [[ -f system/fvSolution.{backend} ]]; then "
-        f"cp -f system/fvSolution.{backend} system/fvSolution; fi; "
-        f": > {log_q}; "
-        f"openfoam2606 bash -c {shlex.quote(foam_inner)}"
-    )
-
-
-def kill_mpirun_tree(
-    wsl_case: str, process_names: tuple[str, ...] = ("simpleFoam", "pimpleFoam")
-) -> ParallelStepResult:
+def kill_mpirun_tree(wsl_case: str, process_names: tuple[str, ...]) -> ParallelStepResult:
     """Kill mpirun + solver/mesh ranks for this case (Force Stop).
 
-    Covers simpleFoam/pimpleFoam (solve) and snappyHexMesh (parallel mesh) plus mpirun.
+    Covers the run's solver processes (its launch spec's process names) and
+    snappyHexMesh (parallel mesh) plus mpirun.
     Matches by cmdline *or* /proc/PID/cwd == case (snappy argv often omits the
     case path). Writes a real ``.sh`` under /tmp and runs it — never inline
     ``pkill -f run_snappy_parallel.sh`` (that self-matches the killer cmdline).

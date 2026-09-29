@@ -42,7 +42,7 @@ def test_example_folder_plugin_registers_analysis(monkeypatch):
 def test_write_run_case_uses_registry_write_case(tmp_path):
     if not (FIX / "boundary_conditions.json").is_file():
         pytest.skip("js-project fixture missing")
-    from cfddesk.project.web_adapter import load_run_spec
+    from tests.conftest import run_spec as load_run_spec
 
     spec = load_run_spec(FIX, run_id="run-closeout-steady", require_mesh=False, n_procs=1)
     assert spec.ok, spec.error

@@ -42,14 +42,14 @@ def _plugin(parent: Path, name: str, body: str) -> Path:
 
 def test_boundary_catches_core_imports_in_a_plugin(tmp_path: Path):
     web = _web(tmp_path)
-    _plugin(web / "bundled-plugins", "bad", "from cfddesk.case.writer import write_solve_case\n")
+    _plugin(web / "bundled-plugins", "bad", "from cfddesk.project.web_adapter import resolve_mesh\n")
     _plugin(web / "bundled-plugins", "eager", "import numpy\n")
     _plugin(web / "bundled-plugins", "lazy", "def f():\n    import numpy\n    return numpy\n")
     _plugin(web / "bundled-plugins", "fine", "import json\nfrom magnusim_sdk.foam import foam_header\nfrom cfddesk.registry.contract import AnalysisFamily\n")
     report = plugin_boundary.run(web)
     bad = {Path(p["file"]).parent.name: p["problem"] for p in report["problems"]}
     assert set(bad) == {"bad", "eager"}
-    assert "cfddesk.case.writer" in bad["bad"] and "inside the function" in bad["eager"]
+    assert "cfddesk.project.web_adapter" in bad["bad"] and "inside the function" in bad["eager"]
 
 
 def test_boundary_catches_the_core_importing_a_bundled_plugin(tmp_path: Path):

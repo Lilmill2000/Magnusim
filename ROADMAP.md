@@ -19,6 +19,14 @@ September 2026 readiness audit. This list preserves the intended work.
   and prove it with a WSL solve. Passive temperature ignores buoyancy; hot air
   rising needs the buoyant solver family, which is a separate, larger feature.
 
+- **GPU pressure solve (AmgX):** the old command-line case writer could put
+  AmgX on the pressure equation, but nothing in the app used it, and the
+  `simpleFoam_amgx` solver option wrote the same CPU case. Both were removed in
+  2026-09 (Plugin Host H9). To restore: add it to the Incompressible Flow
+  plugin's case writer as a real option (fvSolution `p` solver, `amgxpOptions`,
+  the AmgX library in the WSL toolchain), show it only when a CUDA GPU is found,
+  and prove it with a WSL solve against the CPU result.
+
 Each restored control should have a persistence check and a successful
 end-to-end simulation or result-generation test. Do not expose placeholder
 buttons marked “coming soon.”

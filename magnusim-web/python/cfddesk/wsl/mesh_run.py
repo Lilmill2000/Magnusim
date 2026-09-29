@@ -474,15 +474,10 @@ def run_snappy_pipeline(
         ) or _snappy_explicit_features_enabled(windows_case)
 
     if n > 1:
-        # Lazy import — cfddesk.case.writer pulls ras → mesh → runner → this module.
-        from cfddesk.case.writer import write_decompose_par_dict
+        from magnusim_sdk.foam import write_decompose_par_dict
 
         # Bake N into case before sync so the script and decomposeParDict land on ext4.
-        write_decompose_par_dict(
-            windows_case / "system" / "decomposeParDict",
-            n_subdomains=n,
-            method=method,
-        )
+        write_decompose_par_dict(windows_case / "system" / "decomposeParDict", n, method)
         write_run_snappy_parallel_sh(
             windows_case / _SNAPPY_PARALLEL_SH,
             n_cpus=n,

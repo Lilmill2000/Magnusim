@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+from magnusim_sdk.foam import dictionary_header, write_foam_text
+
 from cfddesk.cad.location import LocationInMesh
 from cfddesk.cad.passage import PassageMeshCheck
 from cfddesk.cad.step import LoadedSolid
@@ -29,23 +31,9 @@ LAYER_FINAL_THICKNESS = 0.3  # relativeSizes true
 LAYER_MIN_THICKNESS = 0.2
 
 
-def _write_foam(path: Path, text: str) -> None:
-    """Write OpenFOAM dict with Unix newlines (CRLF breaks Foam parsers)."""
-    path.write_bytes(text.replace("\r\n", "\n").encode("ascii", errors="strict"))
-
-
-def _foam_header(object_name: str) -> str:
-    # No C++ banner: a trailing '\\' on the banner line comments out FoamFile.
-    return (
-        "FoamFile\n"
-        "{\n"
-        "    version     2.0;\n"
-        "    format      ascii;\n"
-        "    class       dictionary;\n"
-        f"    object      {object_name};\n"
-        "}\n"
-        "// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //\n"
-    )
+# One copy of the dictionary header and writer, in magnusim_sdk.foam.
+_write_foam = write_foam_text
+_foam_header = dictionary_header
 
 
 def _refinement_level_for_patch(

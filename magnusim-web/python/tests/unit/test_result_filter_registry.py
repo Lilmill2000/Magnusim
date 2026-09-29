@@ -158,7 +158,7 @@ def test_fo_monitor_kind_flow_vs_flow_rate_unchanged():
     """Carry: FO MonitorKind still 'flow'; registry monitor key still flow_rate.
     No third name invented this land.
     """
-    from cfddesk.case import function_objects as fo
+    from incompressible_flow import function_objects as fo
 
     assert fo.MonitorKind.__args__ == ("area_average", "flow")
     load_all()

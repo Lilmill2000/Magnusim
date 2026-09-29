@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from cfddesk.project.paths import assemble_study_bcs, assemble_study_materials
 from cfddesk.registry import contract, load_all, reset_for_tests
 from cfddesk.registry.contract import ContractError, LaunchSpec, ReadyContext
 from cfddesk.registry.discovery import get_registry
@@ -57,7 +58,7 @@ def test_study_defaults_are_the_old_w17_record():
 
 
 def test_run_model_defaults_and_normalize():
-    from cfddesk.project.transient import STEADY_DEFAULTS, TRANSIENT_DEFAULTS
+    from incompressible_flow.transient import STEADY_DEFAULTS, TRANSIENT_DEFAULTS
 
     assert contract.run_defaults(_analysis("incompressible_steady")) == STEADY_DEFAULTS
     assert contract.run_defaults(_analysis("incompressible_transient")) == TRANSIENT_DEFAULTS
@@ -71,10 +72,7 @@ def test_launch_specs():
     assert (s.app, s.keep_frames, s.process_names, s.parallel) == ("simpleFoam", "latest", ("simpleFoam",), True)
     t = contract.launch_spec(_analysis("incompressible_transient"), solvers)
     assert (t.app, t.keep_frames) == ("pimpleFoam", "all")
-    assert t.log_parser.module == "cfddesk.wsl.solve_run" and t.log_parser.factory == "ProgressParser"
-    # The AmgX solver key runs the simpleFoam program (its application), serially.
-    amgx = contract.launch_spec(_analysis("incompressible_steady"), solvers, solver_key="simpleFoam_amgx")
-    assert (amgx.app, amgx.parallel) == ("simpleFoam", False)
+    assert t.log_parser.module == "incompressible_flow.parser" and t.log_parser.factory == "IncompressibleParser"
 
 
 def test_launch_spec_refuses_what_solve_sh_cannot_run():
@@ -91,12 +89,14 @@ def test_launch_spec_refuses_what_solve_sh_cannot_run():
 
 
 def test_log_parsers():
-    from cfddesk.wsl.solve_run import GenericParser, ProgressParser
+    from incompressible_flow.parser import IncompressibleParser as ProgressParser
+    from magnusim_sdk.progress import ProgressParser as GenericParser
 
     ic = contract.load_log_parser(contract.launch_spec(_analysis("incompressible_steady"), get_registry("solver")).log_parser.to_json())
-    assert isinstance(ic, ProgressParser) and not isinstance(ic, GenericParser)
+    assert isinstance(ic, ProgressParser)
     gen = contract.load_log_parser(None)
-    assert isinstance(gen, GenericParser)
+    assert type(gen) is GenericParser
+    assert ic.residual_re.pattern != gen.residual_re.pattern  # incompressible fields only vs any field
     lines = ['MAGNUSIM_EVENT {"event":"stage","stage":"solve"}', "Time = 1", "DILUPBiCGStab:  Solving for T, Initial residual = 0.5, Final residual = 1e-6, No Iterations 3"]
     got = [e for line in lines for e in gen.feed(line)]
     assert any(e.event == "residual" and e.fields["field"] == "T" for e in got)
@@ -138,6 +138,8 @@ def _ready(root: Path, patches: tuple[str, ...] = ("inlet", "outlet", "walls")) 
         study={"id": "s1"},
         read_study=lambda _n: None,
         mesh={"mesh_id": "m", "mesh_name": "Mesh 1"},
+        materials=tuple(assemble_study_materials(root, "s1")),
+        bcs=tuple(assemble_study_bcs(root, "s1")),
     )
     return contract.validate_ready(_analysis("incompressible_steady"), ctx)
 

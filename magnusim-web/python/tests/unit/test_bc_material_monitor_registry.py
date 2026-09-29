@@ -6,8 +6,8 @@ from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
+from incompressible_flow import function_objects as fo
 
-from cfddesk.case import function_objects as fo
 from cfddesk.case.bc_registry import BC_TYPES, BcTypeSpec
 from cfddesk.registry import (
     MaterialModel,
@@ -64,7 +64,6 @@ def test_material_spec_shape_and_library():
     spec = get_registry("material").get("newtonian_incompressible")
     assert isinstance(spec, MaterialModel)
     assert spec.label == "Newtonian (incompressible)"
-    assert callable(spec.write_files)
     keys = {f.key for f in spec.properties_schema}
     assert "nu" in keys and "rho" in keys
     lib_keys = {row["key"] for row in spec.library}
@@ -112,7 +111,7 @@ def test_analysis_bags_resolve_from_registries():
 def test_validate_bc_refs_raises_on_unknown():
     load_all()
     hub = get_hub()
-    from cfddesk.builtin.incompressible import build_incompressible_steady
+    from incompressible_flow.analyses import build_incompressible_steady
 
     bad = replace(
         build_incompressible_steady(),
@@ -127,7 +126,7 @@ def test_validate_bc_refs_raises_on_unknown():
 def test_validate_material_refs_raises_on_unknown():
     load_all()
     hub = get_hub()
-    from cfddesk.builtin.incompressible import build_incompressible_steady
+    from incompressible_flow.analyses import build_incompressible_steady
 
     bad = replace(
         build_incompressible_steady(),
@@ -142,7 +141,7 @@ def test_validate_material_refs_raises_on_unknown():
 def test_validate_monitor_refs_raises_on_unknown():
     load_all()
     hub = get_hub()
-    from cfddesk.builtin.incompressible import build_incompressible_steady
+    from incompressible_flow.analyses import build_incompressible_steady
 
     bad = replace(
         build_incompressible_steady(),

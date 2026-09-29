@@ -1,0 +1,13 @@
+# Incompressible Flow's own tests: `pytest bundled-plugins/incompressible_flow/tests`.
+# They use the core's shared project fixtures (python/tests), so the core is on
+# the path here; the plugin package itself imports only magnusim_sdk and
+# cfddesk.registry (python/tools/plugin_boundary.py).
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "../../python", "../../python/tools", "../../python/sdk"]
+markers = [
+  "wsl: needs WSL + OpenFOAM (deselect with -m 'not wsl')",
+  "occt: needs cadquery-ocp and a STEP fixture",
+  "slow: > 10 s",
+]
+addopts = ["-m", "not wsl"]

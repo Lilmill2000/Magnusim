@@ -7,11 +7,13 @@ import shlex
 import subprocess
 import tempfile
 from collections.abc import Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cfddesk.jobs.events import EVENT_PREFIX, Event, parse_line
+from magnusim_sdk.progress import ProgressParser as GenericParser
+from magnusim_sdk.progress import parse_extra_line, parse_residual_line  # noqa: F401
+
+from cfddesk.jobs.events import EVENT_PREFIX, Event
 from cfddesk.runner.case_id import validate_wsl_case_id, wsl_case_path
 from cfddesk.runner.parallel import kill_mpirun_tree
 from cfddesk.wsl.config import get_wsl_distro
@@ -24,58 +26,10 @@ WRITE_NOW_SED = r"s/^[[:space:]]*stopAt.*/stopAt          writeNow;/"
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 _SOLVE_SH = _TEMPLATES / "solve.sh"
 
-_RE_TIME = re.compile(r"^Time\s*=\s*([0-9.+-eE]+)\s*$")
-_RE_RESIDUAL = re.compile(
-    r"Solving for (Ux|Uy|Uz|p|omega|k|epsilon|R(?:xx|xy|xz|yy|yz|zz)), Initial residual = ([0-9.eE+-]+)"
-)
-_RE_COURANT = re.compile(
-    r"^Courant Number mean:\s*([0-9.eE+-]+)\s+max:\s*([0-9.eE+-]+)"
-)
-_RE_DELTAT = re.compile(r"^deltaT\s*=\s*([0-9.eE+-]+)")
-_RE_MPI_PREFIX = re.compile(r"^\s*\[\d+\]\s*")
-
 # solve.sh stage that starts each timed phase; any later stage/result ends it.
-_PHASE_OF_STAGE = {
-    "copy_to_wsl": "copy_in",
-    "decompose": "decompose",
-    "solve": "solve",
-    "reconstruct": "reconstruct",
-    "copy": "copy_back",
-}
 
 
 # Any solver's residual line (GenericParser): the field is whatever it solves for.
-_RE_RESIDUAL_ANY = re.compile(r"Solving for (\w+), Initial residual = ([0-9.eE+-]+)")
-
-
-def parse_residual_line(line: str, pattern: re.Pattern[str] = _RE_RESIDUAL) -> dict[str, Any] | None:
-    """One OpenFOAM 'Solving for … Initial residual' line, or None."""
-    cleaned = _RE_MPI_PREFIX.sub("", str(line or ""))
-    match = pattern.search(cleaned)
-    if not match:
-        return None
-    try:
-        value = float(match.group(2))
-    except ValueError:
-        return None
-    name = match.group(1)
-    return {"field": name, "initial": value, "fields": {name: value}}
-
-
-def parse_extra_line(line: str) -> dict[str, Any] | None:
-    """Courant or deltaT line, or None. Same patterns ProgressParser uses."""
-    cleaned = _RE_MPI_PREFIX.sub("", str(line or ""))
-    courant = _RE_COURANT.match(cleaned)
-    if courant:
-        return {
-            "kind": "courant",
-            "mean": float(courant.group(1)),
-            "max": float(courant.group(2)),
-        }
-    delta = _RE_DELTAT.match(cleaned)
-    if delta:
-        return {"kind": "delta_t", "delta_t": float(delta.group(1))}
-    return None
 
 
 def solve_template_path() -> Path:
@@ -158,186 +112,6 @@ def write_solve_script(
     return path
 
 
-@dataclass
-class ProgressParser:
-    """Solver output → job events: the one parser (Node only aggregates events).
-
-    solve.sh protocol events pass through (stage and result events also close
-    the timed ``phase``); OpenFOAM ``Time =`` lines become ``progress``, Courant
-    and deltaT lines ``courant``, and ``Solving for`` lines of the incompressible
-    fields ``residual``. Incompressible Flow's log parser (its launch spec
-    names this class).
-    """
-
-    residual_re = _RE_RESIDUAL
-
-    stage: str = "starting"
-    current: dict | None = None
-    pending: dict = field(default_factory=dict)
-    series: list[dict] = field(default_factory=list)
-    saved_times: list[float] = field(default_factory=list)
-    solve_started: bool = False
-    phases: dict = field(default_factory=dict)
-    _phase: str | None = None
-    _phase_t0: float | None = None
-
-    def _clock_phase(self, ev: Event) -> Event | None:
-        """Close the running phase at this stage/result event; start the next one."""
-        raw = ev.fields.get("t_wall")
-        try:
-            t = float(raw) if raw is not None else None
-        except (TypeError, ValueError):
-            t = None
-        if t is None:
-            return None
-        done = None
-        if self._phase is not None and self._phase_t0 is not None:
-            secs = round(max(0.0, t - self._phase_t0), 3)
-            self.phases[self._phase] = secs
-            done = Event(event="phase", fields={"phase": self._phase, "seconds": secs})
-        nxt = _PHASE_OF_STAGE.get(str(ev.fields.get("stage") or "")) if ev.event == "stage" else None
-        self._phase = nxt
-        self._phase_t0 = t if nxt else None
-        return done
-
-    def _enter_solve(self) -> None:
-        if self.stage in ("starting", "decompose", "copy", ""):
-            self.stage = "solve"
-
-    def feed(self, raw: str) -> list[Event]:
-        line = _RE_MPI_PREFIX.sub("", str(raw or ""))
-        out: list[Event] = []
-
-        # Prefer explicit protocol events from the bash template.
-        ev = parse_line(line)
-        if ev is not None:
-            if ev.event in ("stage", "result"):
-                phase = self._clock_phase(ev)
-                if phase is not None:
-                    out.append(phase)
-            if ev.event == "stage":
-                st = str(ev.fields.get("stage") or "")
-                if st == "decompose":
-                    self.stage = "decompose"
-                elif st == "solve":
-                    self.stage = "solve"
-                elif st in ("reconstruct", "solve_end"):
-                    self.stage = "reconstruct" if st == "reconstruct" else self.stage
-                    if st == "solve_end":
-                        self.stage = "reconstruct"
-                elif st == "copy":
-                    self.stage = "copy"
-                elif st == "copy_to_wsl":
-                    self.stage = "copy"
-            if ev.event == "time_saved":
-                t = ev.fields.get("t")
-                try:
-                    tf = float(t) if t is not None else None
-                except (TypeError, ValueError):
-                    tf = None
-                if tf is not None and tf not in self.saved_times:
-                    self.saved_times.append(tf)
-                if tf is not None:
-                    self._enter_solve()
-            if ev.event in ("progress", "residual", "courant"):
-                self._enter_solve()
-            out.append(ev)
-            return out
-
-        # OpenFOAM progress lines → residual / courant / progress events
-        tm = _RE_TIME.match(line)
-        if tm:
-            self._enter_solve()
-            if self.stage != "solve":
-                return out
-            if self.current and isinstance(self.current.get("t"), (int, float)):
-                self.series.append(dict(self.current))
-            t = float(tm.group(1))
-            prev = self.current or {}
-            pend = self.pending or {}
-            self.pending = {}
-            self.current = {"t": t}
-            for k in ("delta_t", "co_max", "co_mean"):
-                if isinstance(pend.get(k), (int, float)):
-                    self.current[k] = pend[k]
-                elif isinstance(prev.get(k), (int, float)):
-                    self.current[k] = prev[k]
-            if not self.solve_started and t > 0:
-                self.solve_started = True
-            fields: dict[str, Any] = {"time": t, "sim_time": t}
-            for k in ("delta_t", "co_max", "co_mean"):
-                if k in self.current:
-                    fields[k] = self.current[k]
-            out.append(Event(event="progress", fields=fields))
-            return out
-
-        extra = parse_extra_line(line)
-        if extra is not None and extra.get("kind") == "courant":
-            self._enter_solve()
-            if self.stage == "solve":
-                mean = float(extra["mean"])
-                mx = float(extra["max"])
-                self.pending["co_mean"] = mean
-                self.pending["co_max"] = mx
-                out.append(
-                    Event(event="courant", fields={"mean": mean, "max": mx})
-                )
-            return out
-        if extra is not None and extra.get("kind") == "delta_t":
-            self._enter_solve()
-            if self.stage == "solve":
-                v = float(extra["delta_t"])
-                self.pending["delta_t"] = v
-                out.append(Event(event="courant", fields={"delta_t": v}))
-            return out
-
-        residual = parse_residual_line(line, self.residual_re)
-        if residual and self.current is not None:
-            name = str(residual["field"])
-            val = float(residual["initial"])
-            self.current[name] = val
-            fields = {
-                "time": self.current.get("t"),
-                "field": name,
-                "initial": val,
-                "fields": {name: val},
-            }
-            out.append(Event(event="residual", fields=fields))
-            return out
-
-        # Pass through non-empty solver lines as log (skip blank)
-        if line.strip():
-            out.append(Event(event="log", fields={"line": line[:2000]}))
-        return out
-
-    def snapshot(self) -> dict:
-        cur = self.current or {}
-        residuals = []
-        for s in self.series:
-            residuals.append(dict(s))
-        if cur and "t" in cur:
-            residuals.append(dict(cur))
-        return {
-            "stage": self.stage,
-            "iteration": cur.get("t"),
-            "sim_time": cur.get("t"),
-            "n_steps": len(self.series) + (1 if cur else 0),
-            "residuals": residuals,
-            "saved_times": list(self.saved_times),
-            "co_max": cur.get("co_max"),
-            "delta_t": cur.get("delta_t"),
-            "phases": dict(self.phases),
-        }
-
-
-@dataclass
-class GenericParser(ProgressParser):
-    """The core's parser for an analysis without one of its own: the same
-    events, with a residual for any field the solver reports."""
-
-    residual_re = _RE_RESIDUAL_ANY
-
-
 def start_solve(
     case_dir: Path,
     *,
@@ -394,9 +168,9 @@ def start_solve(
     )
 
 
-def iter_events(proc: subprocess.Popen, *, parser: ProgressParser | None = None) -> Iterator[Event]:
+def iter_events(proc: subprocess.Popen, *, parser: Any = None) -> Iterator[Event]:
     """Yield protocol events from a running solve process."""
-    progress = parser or ProgressParser()
+    progress = parser or GenericParser()
     assert proc.stdout is not None
     for line in proc.stdout:
         yield from progress.feed(line.rstrip("\n"))
@@ -404,7 +178,7 @@ def iter_events(proc: subprocess.Popen, *, parser: ProgressParser | None = None)
 
 def events_from_lines(lines: list[str] | Iterator[str]) -> list[Event]:
     """Parse a captured log (unit tests / dry-run)."""
-    progress = ProgressParser()
+    progress = GenericParser()
     out: list[Event] = []
     for line in lines:
         out.extend(progress.feed(line.rstrip("\n")))
@@ -489,9 +263,9 @@ def stream_events_to_stdout(proc: subprocess.Popen, parser: Any = None) -> tuple
     """Relay events as ``MAGNUSIM_EVENT`` JSONL; return (exit_code, parser).
 
     ``parser`` is the analysis's log parser (its launch spec names it);
-    :class:`ProgressParser` when none is given.
+    :class:`GenericParser` when none is given.
     """
-    parser = parser if parser is not None else ProgressParser()
+    parser = parser if parser is not None else GenericParser()
     for ev in iter_events(proc, parser=parser):
         # Re-emit with prefix so Node parse_line works uniformly.
         print(EVENT_PREFIX + ev.to_json(), flush=True)

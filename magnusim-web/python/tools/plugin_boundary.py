@@ -8,9 +8,8 @@
 
 Checked plugins: every folder in ``bundled-plugins/``, the fixture plugins in
 ``python/tests/fixtures/plugins/`` (the stub analysis among them) and the
-plugin template. The one allowed exception, until H9 moves its code into the
-plugin: the Incompressible Flow shell imports the core modules that still hold
-its implementation (:data:`H9_EXCEPTIONS`).
+plugin template. There are no exceptions: Incompressible Flow's code lives in
+its plugin (H9).
 
 CLI: tools/plugin_boundary.py [--web-root PATH]. Prints a JSON report; exit 1 on a violation.
 """
@@ -27,9 +26,6 @@ WEB_ROOT = Path(__file__).resolve().parents[2]
 
 ALLOWED = ("magnusim_sdk", "cfddesk.registry")
 LAZY_ONLY = ("numpy",)
-H9_EXCEPTIONS: dict[str, tuple[str, ...]] = {
-    "incompressible_flow": ("cfddesk.builtin.incompressible", "cfddesk.builtin.solvers_openfoam"),
-}
 
 
 def _stdlib() -> set[str]:
@@ -66,7 +62,6 @@ def _own_modules(plugin_dir: Path) -> set[str]:
 def check_plugin(plugin_dir: Path, key: str) -> list[dict[str, object]]:
     stdlib = _stdlib()
     own = _own_modules(plugin_dir)
-    allowed_extra = H9_EXCEPTIONS.get(key, ())
     problems: list[dict[str, object]] = []
     for py in sorted(plugin_dir.rglob("*.py")):
         if "tests" in py.relative_to(plugin_dir).parts:
@@ -75,7 +70,7 @@ def check_plugin(plugin_dir: Path, key: str) -> list[dict[str, object]]:
             root = mod.split(".")[0]
             if root in stdlib or root in own:
                 continue
-            if any(_under(mod, a) for a in ALLOWED) or any(_under(mod, a) for a in allowed_extra):
+            if any(_under(mod, a) for a in ALLOWED):
                 continue
             if any(_under(mod, lazy) for lazy in LAZY_ONLY):
                 if not top:
@@ -134,7 +129,6 @@ def run(web_root: Path) -> dict[str, object]:
     return {
         "ok": not problems,
         "plugins": [d.relative_to(web_root).as_posix() for d in plugin_dirs],
-        "exceptions": {k: list(v) for k, v in H9_EXCEPTIONS.items()},
         "problems": problems,
     }
 

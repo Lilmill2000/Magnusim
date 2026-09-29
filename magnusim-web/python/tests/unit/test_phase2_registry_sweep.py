@@ -45,7 +45,7 @@ from registry_dump import (  # noqa: E402
 )
 
 EXPECTED_ANALYSIS_KEYS = {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY}
-EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "simpleFoam_amgx"}
+EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"}
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
 EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"}
 EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate"}

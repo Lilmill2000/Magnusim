@@ -1,30 +1,3 @@
-"""OpenFOAM case writers and BC registry."""
-
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from cfddesk.case.writer import (
-        assert_boundary_patch_types,
-        assert_guardrails,
-        write_simplefoam_case,
-        write_solve_case,
-        write_web_solve_case,
-    )
-
-__all__ = [
-    "assert_boundary_patch_types",
-    "assert_guardrails",
-    "write_simplefoam_case",
-    "write_solve_case",
-    "write_web_solve_case",
-]
-
-
-def __getattr__(name: str):
-    if name in __all__:
-        from cfddesk.case import writer as _writer
-
-        return getattr(_writer, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+"""Boundary-condition catalog (bc_registry, bc_menu) and the RANS helpers of the
+legacy Project model. The case writer belongs to the analysis that owns it
+(Incompressible Flow: bundled-plugins/incompressible_flow)."""

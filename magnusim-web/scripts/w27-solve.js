@@ -46,14 +46,13 @@ import {
   studyFilePath,
   writeStudyJson,
 } from './study-io.js';
-import { listFoamTimeDirs, walkGeometries } from './project-layout.js';
+import { listFoamTimeDirs } from './project-layout.js';
 import { solveStartBlockReason } from './solve-start-block.js';
 import {
   algorithmLabelFor,
   analysisByKey,
   requiredPluginError,
   steadyDefaultsFromRegistry,
-  turbulenceLabel,
 } from './registry-defaults.js';
 import { removeComputeJob, scheduleComputeQueueKick } from './server/compute-queue.ts';
 import { polyMeshComplete } from './poly-mesh.js';
@@ -66,7 +65,7 @@ const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const REPORT_DIR = join(ROOT, '.cache', 'jobs', 'run');
 const WSL_DISTRO = wslDistro();
 const INCREMENT = 'W27';
-// Steady iteration limit / write interval: one copy, cfddesk.project.transient
+// Steady iteration limit / write interval: one copy, incompressible_flow.transient
 // STEADY_DEFAULTS, published through the registered control_schema.
 const STEADY_CONTROL_DEFAULTS = steadyDefaultsFromRegistry();
 const DEFAULT_END_TIME = Number(STEADY_CONTROL_DEFAULTS.end_time);
@@ -593,102 +592,6 @@ function runListPayload(projectId, cat, extra) {
 }
 
 
-export function sanitizePatchName(label) {
-  let base = String(label || '')
-    .trim()
-    .replace(/[^A-Za-z0-9_]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .toLowerCase() || 'patch';
-  if (/^\d/.test(base)) base = 'p_' + base;
-  return base;
-}
-
-export function listBcRecords(bcs) {
-  if (!bcs) return [];
-  if (Array.isArray(bcs.boundary_conditions)) return bcs.boundary_conditions.filter(Boolean);
-  return [];
-}
-
-export function bcFaces(bc) {
-  const faces = Array.isArray(bc && bc.faces) ? bc.faces.slice() : [];
-  if (bc && bc.face && !faces.includes(bc.face)) faces.push(bc.face);
-  return faces.filter(Boolean);
-}
-
-export function isVelocityInlet(bc) {
-  return /velocity\s*inlet/i.test(String((bc && bc.bc_type) || ''));
-}
-
-export function isVelocityOutlet(bc) {
-  return /velocity\s*outlet/i.test(String((bc && bc.bc_type) || ''));
-}
-
-export function isPressureBc(bc) {
-  return /^pressure/i.test(String((bc && bc.bc_type) || ''));
-}
-
-export function isWallBc(bc) {
-  return /^wall$/i.test(String((bc && bc.bc_type) || '').trim());
-}
-
-/** 'Slip' | 'No-slip' for a wall BC record or a defaults object. */
-export function wallTreatment(rec) {
-  const t = String((rec && rec.wall_type) || '').toLowerCase().replace(/[\s_-]+/g, '');
-  return t === 'slip' ? 'Slip' : 'No-slip';
-}
-
-const CAD_PREVIEW_SCRIPT = pyTool('export_step_cad_preview.py');
-
-/**
- * CAD face properties in metres: { 'face 10@Body1': { area, centroid, normal } }.
- * Read from geometries/Geometry_…/cad_preview.json (legacy geometry folder is fallback).
- */
-export function loadFaceProps(projectId) {
-  const root = projectDir(projectId);
-  const candidates = walkGeometries(root).map((g) => join(g.dir, 'cad_preview.json'));
-  candidates.push(join(root, 'geometry', 'cad_preview.json'));
-  let meta = null;
-  let metaPath = null;
-  for (const p of candidates) {
-    const j = readJsonSafe(p);
-    if (j && Array.isArray(j.faces) && j.faces.length) {
-      meta = j;
-      metaPath = p;
-      break;
-    }
-  }
-  if (!(meta && Array.isArray(meta.faces) && meta.faces.length)) {
-    const geom = walkGeometries(root)[0];
-    const step = geom ? join(geom.dir, 'source.step') : join(root, 'geometry', 'source.step');
-    metaPath = geom ? join(geom.dir, 'cad_preview.json') : join(root, 'geometry', 'cad_preview.json');
-    // Mesh imports may have only the binary sidecar until source.step is written.
-    const stepPresent = existsSync(step) || existsSync(step.replace(/\.[^.\\/]+$/, '') + '.bbrep');
-    if (stepPresent && existsSync(PYTHON) && existsSync(CAD_PREVIEW_SCRIPT)) {
-      try {
-        spawnSync(PYTHON, [CAD_PREVIEW_SCRIPT, '--step', step, '--meta', metaPath, '--faces-only'], {
-          windowsHide: true,
-          timeout: 120000,
-        });
-      } catch {}
-      meta = readJsonSafe(metaPath);
-    }
-  }
-  const out = {};
-  if (!(meta && Array.isArray(meta.faces))) return out;
-  const unit = String(meta.faces_length_unit || 'mm').toLowerCase();
-  const s = unit === 'm' ? 1 : unit === 'in' ? 0.0254 : 0.001;
-  const body = (Array.isArray(meta.bodies) && meta.bodies[0]) || 'Body1';
-  for (const f of meta.faces) {
-    if (!f || f.id == null) continue;
-    out[`face ${f.id}@${body}`] = {
-      area: Number(f.area) * s * s,
-      centroid: Array.isArray(f.centroid) ? f.centroid.map((c) => Number(c) * s) : null,
-      normal: Array.isArray(f.normal) ? f.normal.map(Number) : null,
-    };
-  }
-  return out;
-}
-
 export function parseBoundaryPatches(boundaryPath) {
   if (!boundaryPath || !existsSync(boundaryPath)) return [];
   const text = readFileSync(boundaryPath, 'utf8');
@@ -909,37 +812,6 @@ function resolveNProcs(nCells, opts) {
   return Math.max(1, nProcs);
 }
 
-function facesOverlap(a, b) {
-  const have = new Set(bcFaces(a));
-  if (!have.size) return false;
-  return bcFaces(b).some((f) => have.has(f));
-}
-
-export function uniqueNumberedPatch(want, patchNames) {
-  if (patchNames.has(want)) return want;
-  if (!want) return null;
-  const re = new RegExp('^' + want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:_\\d+)?$');
-  const hits = [...patchNames].filter((p) => re.test(p));
-  return hits.length === 1 ? hits[0] : null;
-}
-
-export function mapBcToPatch(bc, patchNames, webBcs) {
-  const want = sanitizePatchName(bc.name);
-  const exact = uniqueNumberedPatch(want, patchNames);
-  if (exact) return exact;
-  const faces = bcFaces(bc);
-  for (const f of faces) {
-    const alt = uniqueNumberedPatch(sanitizePatchName(f), patchNames);
-    if (alt) return alt;
-  }
-  for (const baked of webBcs || []) {
-    if (!facesOverlap(bc, baked)) continue;
-    const fromBaked = uniqueNumberedPatch(sanitizePatchName(baked.name), patchNames);
-    if (fromBaked) return fromBaked;
-  }
-  return want;
-}
-
 /**
  * What every analysis needs before a run can start: its study's mesh, the
  * study itself, and the required plugins. What else blocks a run (materials,
@@ -959,75 +831,12 @@ export function validateSolveReady(projectId, opts) {
   return { ok: true, project_id: id, mesh, sim };
 }
 
-// ---------------------------------------------------------------------------
-// Monitor results: postProcessing/<mon_|flow_><patch>/<time>/surfaceFieldValue.dat
-
-function parseSurfaceFieldValueDat(text) {
-  const out = { area: null, faces: null, columns: [], rows: [] };
-  for (const raw of String(text || '').split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    if (line.startsWith('#')) {
-      let m = line.match(/^#\s*Area\s*:\s*([0-9.eE+-]+)/);
-      if (m) out.area = Number(m[1]);
-      m = line.match(/^#\s*Faces\s*:\s*(\d+)/);
-      if (m) out.faces = Number(m[1]);
-      m = line.match(/^#\s*Time\s+(.*)$/);
-      if (m) out.columns = m[1].trim().split(/\s+/);
-      continue;
-    }
-    // tokens: numbers or "(a b c)" vectors
-    const toks = [];
-    const re = /\(([^)]*)\)|([0-9.eE+-]+)/g;
-    let t;
-    while ((t = re.exec(line))) {
-      if (t[1] != null) toks.push(t[1].trim().split(/\s+/).map(Number));
-      else toks.push(Number(t[2]));
-    }
-    if (!toks.length || !Number.isFinite(toks[0])) continue;
-    out.rows.push(toks);
-  }
-  return out;
-}
-
-function readMonitorDat(caseDir, name) {
-  const dir = join(caseDir, 'postProcessing', name);
-  if (!existsSync(dir)) return null;
-  let merged = null;
-  let times = [];
-  try {
-    times = readdirSync(dir)
-      .filter((d) => /^\d+(\.\d+)?$/.test(d))
-      .sort((a, b) => Number(a) - Number(b));
-  } catch {
-    return null;
-  }
-  for (const t of times) {
-    const f = join(dir, t, 'surfaceFieldValue.dat');
-    if (!existsSync(f)) continue;
-    let parsed;
-    try {
-      parsed = parseSurfaceFieldValueDat(readFileSync(f, 'utf8'));
-    } catch {
-      continue;
-    }
-    if (!merged) merged = parsed;
-    else {
-      // restarts append a new time folder; later rows supersede earlier ones
-      const firstT = parsed.rows.length ? parsed.rows[0][0] : Infinity;
-      merged.rows = merged.rows.filter((r) => r[0] < firstT).concat(parsed.rows);
-      if (parsed.area != null) merged.area = parsed.area;
-    }
-  }
-  return merged;
-}
-
 /**
- * Per-patch monitor summary for a finished or running run.
- * Velocities in m/s, pressure in Pa (kinematic × rho), flow in m³/s and kg/s.
- * A negative flow rate is flow INTO the domain (OpenFOAM face normals point out).
+ * A run's monitor results, read by the analysis the run solves with
+ * (analysis.run_monitors): per-patch and custom monitors in display units, and
+ * the mass balance across the monitored openings.
  */
-export function getRunMonitors(projectId, runId, simulationId) {
+export async function getRunMonitors(projectId, runId, simulationId) {
   const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no active project' };
   const cat = loadCatalog(id);
@@ -1037,114 +846,14 @@ export function getRunMonitors(projectId, runId, simulationId) {
     (cat.active_id && scoped.find((r) => String(r.id) === String(cat.active_id))) ||
     null;
   if (!rec) return { ok: false, error: 'Run not found', ...runListPayload(id, cat, { simulation_id: simulationId }) };
-  const caseDir = rec.case_dir || join(runsDir(id), `run-${rec.id}`);
-  const meta = readJsonSafe(join(caseDir, 'w27-case.json')) || {};
-  const rho = Number(meta.rho) || 1.196;
-  const mapped = Array.isArray(meta.mapped) ? meta.mapped : [];
-  const patches = Array.isArray(meta.monitors) && meta.monitors.length ? meta.monitors : mapped.map((m) => m.patch);
-  const out = [];
-  for (const patch of patches) {
-    const mon = readMonitorDat(caseDir, `mon_${patch}`) || readMonitorDat(caseDir, `aa_${patch}`);
-    const flow = readMonitorDat(caseDir, `flow_${patch}`);
-    if (!mon && !flow) continue;
-    const bc = mapped.find((m) => m.patch === patch) || null;
-    const area = (mon && mon.area) || (flow && flow.area) || (bc && bc.face_area_m2) || null;
-    const uCol = mon ? mon.columns.findIndex((c) => /areaAverage\(U\)/.test(c)) : -1;
-    const pCol = mon ? mon.columns.findIndex((c) => /areaAverage\(p\)/.test(c)) : -1;
-    const series = [];
-    const flowByT = new Map();
-    if (flow) for (const r of flow.rows) flowByT.set(r[0], r[1]);
-    const rows = mon ? mon.rows : flow ? flow.rows : [];
-    for (const r of rows) {
-      const t = r[0];
-      const U = mon && uCol >= 0 && Array.isArray(r[1 + uCol]) ? r[1 + uCol] : null;
-      const pKin = mon && pCol >= 0 && Number.isFinite(r[1 + pCol]) ? r[1 + pCol] : null;
-      const q = flowByT.has(t) ? flowByT.get(t) : null;
-      series.push({
-        t,
-        U,
-        Umag: U ? Math.hypot(U[0], U[1], U[2]) : null,
-        p_Pa: pKin != null ? pKin * rho : null,
-        Q_m3s: q,
-        Un_m_s: q != null && area ? q / area : null,
-      });
-    }
-    const last = series[series.length - 1] || null;
-    out.push({
-      patch,
-      name: (bc && bc.name) || patch,
-      bc_type: (bc && bc.bc_type) || null,
-      faces: (bc && bc.faces) || [],
-      area_m2: area,
-      n_faces: mon && mon.faces != null ? mon.faces : flow ? flow.faces : null,
-      rho,
-      last,
-      // final values in display units
-      final: last
-        ? {
-            iteration: last.t,
-            mean_velocity_vector: last.U,
-            mean_velocity_magnitude: last.Umag,
-            mean_normal_velocity: last.Un_m_s,
-            pressure_Pa: last.p_Pa,
-            volumetric_flow_m3s: last.Q_m3s,
-            mass_flow_kgs: last.Q_m3s != null ? last.Q_m3s * rho : null,
-          }
-        : null,
-      series,
-    });
-  }
-  // Custom monitors: area average over the faces a Monitor names (any faces,
-  // sampled from the CAD surface), written as rc_<name>.
-  const custom = [];
-  for (const cm of Array.isArray(meta.custom_monitors) ? meta.custom_monitors : []) {
-    if (!cm || !cm.key) continue;
-    const mon = readMonitorDat(caseDir, String(cm.key));
-    if (!mon) continue;
-    const uCol = mon.columns.findIndex((c) => /areaAverage\(U\)/.test(c));
-    const pCol = mon.columns.findIndex((c) => /areaAverage\(p\)/.test(c));
-    const series = mon.rows.map((r) => {
-      const U = uCol >= 0 && Array.isArray(r[1 + uCol]) ? r[1 + uCol] : null;
-      const pKin = pCol >= 0 && Number.isFinite(r[1 + pCol]) ? r[1 + pCol] : null;
-      return {
-        t: r[0],
-        U,
-        Umag: U ? Math.hypot(U[0], U[1], U[2]) : null,
-        p_Pa: pKin != null ? pKin * rho : null,
-        Q_m3s: null,
-        Un_m_s: null,
-      };
-    });
-    const last = series[series.length - 1] || null;
-    custom.push({
-      id: cm.id || null,
-      key: cm.key,
-      name: cm.name || cm.key,
-      faces: Array.isArray(cm.faces) ? cm.faces : [],
-      area_m2: (mon && mon.area) || cm.area_m2 || null,
-      n_faces: mon.faces != null ? mon.faces : null,
-      rho,
-      last,
-      final: last
-        ? {
-            iteration: last.t,
-            mean_velocity_vector: last.U,
-            mean_velocity_magnitude: last.Umag,
-            pressure_Pa: last.p_Pa,
-          }
-        : null,
-      series,
-    });
-  }
-  // mass balance across all monitored openings
-  let sumIn = 0;
-  let sumOut = 0;
-  for (const m of out) {
-    const q = m.last && m.last.Q_m3s;
-    if (!Number.isFinite(q)) continue;
-    if (q < 0) sumIn += -q;
-    else sumOut += q;
-  }
+  const res = await commitRpc('analysis.run_monitors', {
+    project_id: id,
+    run_id: String(rec.id),
+    simulation_id: rec.simulation_id || simulationId || '',
+    case_dir: rec.case_dir || join(runsDir(id), `run-${rec.id}`),
+    time_dependency: rec.time_dependency || '',
+  });
+  if (!res || res.ok === false) return { ok: false, error: (res && res.error) || 'monitor results failed' };
   return {
     ok: true,
     project_id: id,
@@ -1152,28 +861,23 @@ export function getRunMonitors(projectId, runId, simulationId) {
     status: rec.status || null,
     transient: runIsTransient(rec),
     time_dependency: rec.time_dependency || null,
-    rho,
-    monitors: out,
-    custom,
-    balance:
-      out.length && (sumIn > 0 || sumOut > 0)
-        ? {
-            in_m3s: sumIn,
-            out_m3s: sumOut,
-            imbalance: sumIn > 0 ? (sumOut - sumIn) / sumIn : null,
-          }
-        : null,
+    rho: res.rho,
+    monitors: res.monitors || [],
+    custom: res.custom || [],
+    balance: res.balance || null,
   };
 }
 
-/** "simpleFoam 4 ranks — Incompressible / k-omega SST / SIMPLE[ · <transient summary>]". */
-function runNote({ app, nProcs, analysisKey, sim, transient }) {
+/**
+ * "<app> 4 ranks — <family> / <physics> / <algorithm>[ · <transient summary>]".
+ * The physics and algorithm are what the analysis wrote the case with
+ * (prepare_run's physics_label / algorithm); an analysis without them names none.
+ */
+function runNote({ app, nProcs, analysisKey, sim, prep, transient }) {
   const row = analysisByKey(analysisKey);
   const family = (row && row.family && row.family.label) || (sim && sim.analysis) || '';
-  const algorithm = algorithmLabelFor(analysisKey) || (sim && sim.algorithm) || '';
-  // Only an analysis with turbulence models has one to name.
-  const turbulent = !row || (Array.isArray(row.turbulence_models) && row.turbulence_models.length > 0);
-  const parts = [family, turbulent ? runTurbulenceLabel(sim) : '', algorithm].filter(Boolean).join(' / ');
+  const algorithm = (prep && prep.algorithm) || algorithmLabelFor(analysisKey) || '';
+  const parts = [family, (prep && prep.physics_label) || '', algorithm].filter(Boolean).join(' / ');
   const head = `${app} ${nProcs > 1 ? nProcs + ' ranks' : 'serial'}` + (parts ? ` — ${parts}` : '');
   return transient ? `${head} · ${describeTransient(transient)}` : head;
 }
@@ -1746,14 +1450,6 @@ function persistRunDoc(projectId, doc) {
  *   onDone?: (result: { status: string, exit_code?: number, run_id?: string, project_id?: string, error?: string|null }) => void,
  * }} [opts]
  */
-/** "k-epsilon", "Laminar"… for a study record that stores a model key or its label. */
-function runTurbulenceLabel(sim) {
-  const raw = String((sim && (sim.turbulence_model_key || sim.turbulence_model)) || '').trim();
-  const key = raw.toLowerCase().replace(/[\s_-]+/g, '');
-  const byKey = { laminar: 'laminar', kepsilon: 'kEpsilon', komegasst: 'kOmegaSST', sst: 'kOmegaSST', lrr: 'LRR', ssg: 'SSG' };
-  const stripped = key.replace(/\(.*\)/, '').replace(/reynoldsstress/, '');
-  return turbulenceLabel(byKey[stripped] || byKey[key] || raw || 'kOmegaSST');
-}
 
 export async function startSolve(opts = {}) {
   const { projectId, endTime, writeInterval, runId, transient: transientIn, onDone, simulationId } = opts;
@@ -2218,13 +1914,14 @@ export async function startSolve(opts = {}) {
     bcs: Array.isArray(prepResult && prepResult.bcs) ? prepResult.bcs : [],
     wall_default: (prepResult && prepResult.wall_default) || 'No-slip',
     project_id: id,
-    // The app, the analysis family, the study's own turbulence model and the
-    // analysis's algorithm (a k-epsilon run used to read "k-ω SST").
+    // The app, the analysis family, and the physics and algorithm the case was
+    // written with (a k-epsilon run used to read "k-ω SST").
     note: runNote({
       app: solver,
       nProcs,
       analysisKey: (prepResult && prepResult.analysis_key) || '',
       sim: ready.sim,
+      prep: prepResult,
       transient: isTransient ? transient : null,
     }),
     increment: INCREMENT,
@@ -2932,7 +2629,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       return sendJson(res, st.status, st.body);
     }
     if (req.method === 'GET' && b === 'monitors') {
-      const mon = getRunMonitors(
+      const mon = await getRunMonitors(
         u.searchParams.get('project_id'),
         u.searchParams.get('run_id'),
         u.searchParams.get('simulation_id')

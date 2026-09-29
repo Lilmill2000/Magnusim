@@ -575,6 +575,11 @@ test.describe('Magnusim smoke', () => {
     await page.locator('#mv-close').click();
     await page.locator(`[data-w28-key="media:run:${run.id}:graphs"] > .tree-row`).click();
     await expect(page.locator('#run-graphs-list svg').first()).toBeVisible({ timeout: 30_000 });
+    // The monitor results are read by the run's analysis (analysis.run_monitors,
+    // Incompressible Flow since H9): the inlet and outlet cards and the mass balance.
+    expect(await page.locator('#run-graphs-list .mon-card').count()).toBeGreaterThanOrEqual(2);
+    await expect(page.locator('#run-graphs-balance')).toHaveText(/^Flow in .+ · out .+ · imbalance .+/);
+    await expect(page.locator('#run-graphs-list .mon-card').first()).toContainText(/m\/s|Pa|m³\/s/);
     // Every export button the Graphs panel shows produces a real file of its type.
     const all = await download(page, () => page.locator('#run-graphs-csv').click());
     expect(all.name).toMatch(/monitors\.csv$/);

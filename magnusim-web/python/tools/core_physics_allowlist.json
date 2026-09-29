@@ -1,0 +1,33 @@
+{
+  "about": "Core files allowed to name incompressible physics (gate:h9-no-core-physics). Each entry says why; tools/core_physics_scan.py fails on an entry with no hit.",
+  "files": [
+    {
+      "file": "python/cfddesk/case/ras.py",
+      "reason": "Legacy versioned Project model (project.json): its turbulence settings still load and migrate. It is not on the run path, because runs are written by the analysis plugin."
+    },
+    {
+      "file": "python/cfddesk/project/initial_conditions.py",
+      "reason": "Legacy versioned Project model (project.json) initial conditions, used by project load and migrations. It is not on the run path."
+    },
+    {
+      "file": "python/cfddesk/project/numerics.py",
+      "reason": "Legacy versioned Project model (project.json) numerics, used by project load and migrations. It is not on the run path."
+    },
+    {
+      "file": "python/cfddesk/project/settings.py",
+      "reason": "Legacy versioned Project model (project.json) settings. Its TurbulenceModel literal validates old project files."
+    },
+    {
+      "file": "python/cfddesk/wsl/openfoam.py",
+      "reason": "OpenFOAM install probe (Gate A0 smoke: simpleFoam -help). It checks that the WSL OpenFOAM has its solvers, not physics."
+    },
+    {
+      "file": "scripts/hardware-profile.js",
+      "reason": "OpenFOAM install probe (simpleFoam -help), the same check as python/cfddesk/wsl/openfoam.py."
+    },
+    {
+      "file": "python/cfddesk/wsl/solve_run.py",
+      "reason": "LEGACY_PROCESS_NAMES: the process names of runs started before launch specs (v0.2.0 and earlier), so Stop and Force stop still find them."
+    }
+  ]
+}

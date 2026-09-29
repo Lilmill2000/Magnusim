@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--case-dir", type=Path, help="Windows run case directory (0/ constant/ system/)")
     p.add_argument("--wsl-case", default=None, help="WSL case id, e.g. cfddesk-w27-run-1")
     p.add_argument("--n-procs", type=int, default=1)
-    p.add_argument("--app", default="simpleFoam", help="Program to run (a registered solver application)")
+    p.add_argument("--app", default="", help="Program to run: the launch spec's app (a registered solver application)")
     p.add_argument("--keep-frames", default="latest", choices=("all", "latest"))
     p.add_argument("--frame-fields", default="U,p", help="Comma-separated fields that mark a written result frame")
     p.add_argument("--process-names", default="", help="Comma-separated solver process names (default: the app)")
@@ -107,6 +107,10 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps({"ok": False, "error": "--case-dir and --wsl-case required (unless --parse-log)"}),
             flush=True,
         )
+        return 2
+
+    if not args.app:
+        print(json.dumps({"ok": False, "error": "--app required (the analysis launch spec's app)"}), flush=True)
         return 2
 
     if args.render_only:

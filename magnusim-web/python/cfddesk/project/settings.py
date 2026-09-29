@@ -350,9 +350,8 @@ class SolverSettings:
     end_condition: SolverEndCondition = "residual"
     end_time: int = 1000  # still / Simulation control End time (inc21a)
     residual_u: float = 1e-6  # still Numerics Abs tol (inc21b)
-    # Ignored on the amgx branch when writing fvSolution: AmgX reports the p
-    # residual as 0 (TRANSLATION §3), so residualControl keys on U only —
-    # see cfddesk.case.writer.write_fv_solution_amgx / write_simplefoam_case.
+    # Legacy Project-model field; the run's case is written by its analysis
+    # (Incompressible Flow reads the web study files, not this model).
     residual_p: float = 1e-6  # still Numerics Abs tol (inc21b)
     turbulence: TurbulenceModel = "laminar"
     turbulence_intensity_pct: float = 5.0

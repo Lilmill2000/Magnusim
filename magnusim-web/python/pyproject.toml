@@ -28,8 +28,8 @@ where = ["."]
 include = ["cfddesk*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = [".", "tools", "sdk"]
+testpaths = ["tests", "../bundled-plugins/incompressible_flow/tests"]
+pythonpath = [".", "tools", "sdk", "../bundled-plugins/incompressible_flow"]
 markers = [
   "wsl: needs WSL + OpenFOAM (deselect with -m 'not wsl')",
   "occt: needs cadquery-ocp and a STEP fixture",
@@ -55,7 +55,6 @@ mypy_path = "sdk"
 [tool.ruff.lint.per-file-ignores]
 "cfddesk/case/bc_registry.py" = ["N802", "N815"]
 "cfddesk/case/ras.py" = ["N802", "N803", "N806"]
-"cfddesk/case/writer.py" = ["N802", "N806", "N815"]
 "cfddesk/mesh/standard_hexcore.py" = ["N803", "N806"]
 "cfddesk/project/initial_conditions.py" = ["N803", "N806"]
 "cfddesk/project/mesh_sizing.py" = ["N806"]

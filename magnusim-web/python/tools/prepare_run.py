@@ -2,7 +2,8 @@
 """Prepare a complete OpenFOAM run case from web-format project JSON.
 
 CLI: tools/prepare_run.py --project-dir ... --run-id ... --out-dir ...
-Uses cfddesk.project.web_adapter + AnalysisType.write_case (write_run_case).
+The core gathers the run's inputs (cfddesk.project.run_inputs); the run's
+analysis checks readiness and writes the case (analysis contract).
 Prints one JSON line: {"ok":true,"case_dir":...,"solver":...,"n_procs":...,
 "app":..., "time_dependency":..., "analysis_key":..., "transient_control":...}
 
@@ -20,9 +21,8 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
-from cfddesk.project.transient import control_to_web
-from cfddesk.project.web_adapter import load_run_spec
-from cfddesk.registry.analysis import write_run_case
+from cfddesk.project.run_inputs import gather_run_inputs
+from cfddesk.registry.analysis import plan_run_case, write_run_case
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": False, "error": "transient-json must be an object"}), flush=True)
             return 2
 
-    spec = load_run_spec(
+    inputs = gather_run_inputs(
         args.project_dir,
         run_id=args.run_id,
         mesh_id=args.mesh_id,
@@ -65,14 +65,14 @@ def main(argv: list[str] | None = None) -> int:
         transient_override=transient_override,
         time_dependency=args.time_dependency,
     )
-    if not spec.ok:
-        print(json.dumps({"ok": False, "error": spec.error or "load_run_spec failed"}), flush=True)
+    if args.require_mesh and not inputs.mesh.get("ok"):
+        print(json.dumps({"ok": False, "error": str(inputs.mesh.get("error") or "mesh not ready")}), flush=True)
         return 1
 
     from cfddesk.registry import contract
     from cfddesk.registry.discovery import get_registry
 
-    analysis = get_registry("analysis").get(spec.analysis_key)
+    analysis = get_registry("analysis").get(inputs.analysis_key)
     if args.require_mesh:
         # What blocks this run, as its analysis sees it (the core checked the
         # study and the mesh). Nothing is written when a run is not ready.
@@ -92,68 +92,21 @@ def main(argv: list[str] | None = None) -> int:
                 out["patches"] = first["patches"]
             print(json.dumps(out), flush=True)
             return 3
-    launch = contract.launch_spec(analysis, get_registry("solver"), solver_key=spec.solver_app)
-
-    if args.validate_only:
-        print(
-            json.dumps(
-                {
-                    "ok": True,
-                    "run_id": spec.run_id,
-                    "solver": spec.solver_app,
-                    "n_procs": spec.n_procs,
-                    "end_time": spec.end_time,
-                    "write_interval": spec.write_interval,
-                    "nu": spec.nu,
-                    "rho": spec.rho,
-                    "monitor_patches": spec.monitor_patches,
-                    "patches": spec.patches,
-                    "transient": spec.transient is not None,
-                    **_decision(spec, transient_override, launch),
-                }
-            ),
-            flush=True,
-        )
-        return 0
-
-    result = write_run_case(spec, args.out_dir, analysis_key=spec.analysis_key)
-    print(json.dumps({**result, **_decision(spec, transient_override, launch)}), flush=True)
-    return 0 if result.get("ok") else 1
-
-
-def _decision(spec, settings, launch) -> dict:
-    """What this case was written for: Node launches ``launch`` and records the rest.
-
-    ``app`` is the program the analysis's launch spec names (a registered
-    solver application); ``bcs`` is the boundary-to-patch mapping the case was
-    written with.
-    """
-    return {
+    launch = contract.launch_spec(analysis, get_registry("solver"), solver_key=inputs.solver_key)
+    decision = {
         "app": launch.app,
         "launch": launch.to_json(),
-        "time_dependency": "Transient" if spec.time_dependency == "transient" else "Steady-state",
-        "analysis_key": spec.analysis_key,
-        "transient_control": control_to_web(spec.transient, settings) if spec.transient is not None else None,
-        "bcs": [_mapped_bc(m) for m in (spec.mapped or [])],
-        "wall_default": spec.wall_default,
+        "time_dependency": "Transient" if inputs.time_dependency == "transient" else "Steady-state",
+        "analysis_key": inputs.analysis_key,
     }
+    if args.validate_only:
+        planned = plan_run_case(inputs, analysis_key=inputs.analysis_key)
+        print(json.dumps({**planned, **decision}), flush=True)
+        return 0 if planned.get("ok") else 1
 
-
-def _mapped_bc(m: dict) -> dict:
-    from cfddesk.project.web_adapter import bc_faces, is_wall_bc, wall_treatment
-
-    bc = m.get("bc") or {}
-    row = {
-        "name": bc.get("name"),
-        "bc_type": bc.get("bc_type"),
-        "patch": m.get("patch"),
-        "faces": bc_faces(bc),
-        "value": bc.get("value"),
-        "unit": bc.get("unit") or None,
-    }
-    if is_wall_bc(bc):
-        row["wall_type"] = wall_treatment(bc)
-    return row
+    result = write_run_case(inputs, args.out_dir, analysis_key=inputs.analysis_key)
+    print(json.dumps({**result, **decision}), flush=True)
+    return 0 if result.get("ok") else 1
 
 
 if __name__ == "__main__":

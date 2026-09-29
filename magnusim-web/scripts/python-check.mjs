@@ -5,8 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { PY_ROOT, PYTHON } from './python-env.js';
 
 const STEPS = {
-  ruff: ['-m', 'ruff', 'check', 'cfddesk', 'tools', 'tests'],
-  mypy: ['-m', 'mypy', 'cfddesk'],
+  ruff: ['-m', 'ruff', 'check', 'cfddesk', 'tools', 'tests', '../bundled-plugins'],
+  mypy: ['-m', 'mypy', 'cfddesk', '../bundled-plugins/incompressible_flow/incompressible_flow'],
   pytest: ['-m', 'pytest', '-q', '-p', 'no:cacheprovider'],
 };
 

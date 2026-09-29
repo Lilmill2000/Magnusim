@@ -5,17 +5,16 @@ import json
 from pathlib import Path
 
 import pytest
+from incompressible_flow.runspec import RunSpec, air_from_materials
 
 from cfddesk.project.web_adapter import (
-    RunSpec,
-    air_from_materials,
-    load_run_spec,
     map_bc_to_patch,
     sanitize_patch_name,
     study_web_bcs,
     unique_numbered_patch,
     web_bc_to_registry,
 )
+from tests.conftest import run_spec as load_run_spec
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "js-project"
 
@@ -133,7 +132,7 @@ def test_assemble_study_bc_defaults_reads_slip_when_folder_bcs_exist(tmp_path: P
 
 
 def test_build_field_patches_slip_default_writes_slip_walls():
-    from cfddesk.case.writer import _build_field_patches
+    from incompressible_flow.writer import _build_field_patches
 
     spec = RunSpec(
         project_dir=Path("."),
@@ -254,7 +253,7 @@ def test_load_run_spec_transient_fixture():
 
 
 def test_parse_boundary_patches_indented(tmp_path: Path):
-    from cfddesk.project.web_adapter import _parse_boundary_patches
+    from magnusim_sdk.foam import boundary_patch_names as _parse_boundary_patches
 
     boundary = tmp_path / "boundary"
     boundary.write_text(

@@ -74,7 +74,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       };
     }
     // Run settings defaults: the registered control_schemas (one copy,
-    // cfddesk.project.transient TRANSIENT_DEFAULTS / STEADY_DEFAULTS). null = calculate for me.
+    // incompressible_flow.transient TRANSIENT_DEFAULTS / STEADY_DEFAULTS). null = calculate for me.
     const controlDefaults = (key: string): Record<string, unknown> | null => {
       const row = analyses.find((a) => a.key === key);
       const props = (row?.control_schema as { properties?: Record<string, { default?: unknown }> } | null | undefined)

@@ -17,7 +17,7 @@ from cfddesk.registry import (
 from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 from cfddesk.registry.discovery import get_hub, plugin_catalog
 
-EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "simpleFoam_amgx"}
+EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"}
 
 
 @pytest.fixture(autouse=True)
@@ -59,21 +59,12 @@ def test_solver_specs_shape():
     assert simple.time_dependency == "steady"
     assert simple.parallel == "mpirun"
     assert simple.stop_strategy == "stopAt_writeNow"
-    assert callable(simple.residual_line)
-    assert callable(simple.extra_lines)
-    assert callable(simple.write_fv_solution)
-    assert callable(simple.write_control_dict)
     assert simple.script_template == "solve"
 
     pimple = reg.get("pimpleFoam")
     assert pimple.application == "pimpleFoam"
     assert pimple.time_dependency == "transient"
     assert pimple.parallel == "mpirun"
-
-    amgx = reg.get("simpleFoam_amgx")
-    assert amgx.application == "simpleFoam"
-    assert amgx.parallel == "none"
-    assert any(r.kind == "gpu" for r in amgx.requires)
 
 
 def test_analysis_solver_backends_resolve_from_registry():
@@ -90,7 +81,7 @@ def test_analysis_solver_backends_resolve_from_registry():
     assert transient.default_solver in solver_keys
     # Explicit product mapping from land2
     assert "simpleFoam" in steady.solver_backends
-    assert "simpleFoam_amgx" in steady.solver_backends
+    assert steady.solver_backends == ("simpleFoam",)
     assert transient.solver_backends == ("pimpleFoam",)
 
 
@@ -100,7 +91,7 @@ def test_validate_analysis_solver_refs_raises_on_unknown():
     # Corrupt: inject analysis with unknown solver bag key
     from dataclasses import replace
 
-    from cfddesk.builtin.incompressible import build_incompressible_steady
+    from incompressible_flow.analyses import build_incompressible_steady
 
     bad = replace(
         build_incompressible_steady(),
@@ -179,8 +170,9 @@ def test_load_all_idempotent_solvers():
     assert set(get_registry("solver").keys()) == EXPECTED_SOLVER_KEYS
 
 def test_web_adapter_solver_app_name_no_collision():
-    """land3-fix2: web_adapter Literal is SolverAppName; registry class stays SolverApp."""
-    import cfddesk.project.web_adapter as wa
+    """land3-fix2: the run spec's Literal is SolverAppName; registry class stays SolverApp."""
+    import incompressible_flow.runspec as wa
+
     from cfddesk.registry.solver import SolverApp as RegSolverApp
 
     assert hasattr(wa, "SolverAppName")

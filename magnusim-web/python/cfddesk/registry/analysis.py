@@ -147,17 +147,21 @@ class CaseContext:
     """Inputs for AnalysisType.write_case (Phase 1 prepare_run / web_case).
 
     Bundles what tools/prepare_run.py computed. Built-in write_case delegates
-    to cfddesk.case.writer.write_solve_case via run_spec + out_dir
+    to the analysis writer (incompressible_flow.writer.write_solve_case) via run_spec + out_dir
     (other fields reserved for later lands).
     """
 
-    out_dir: Path
-    run_spec: Any
+    out_dir: Path | None
+    run_spec: Any = None
     project: Any = None
     simulation: Any = None
     geometry: Any = None
     mesh_case_dir: Path | None = None
     n_procs: int = 1
+    # What the core gathered for the run (cfddesk.project.run_inputs.RunInputs)
+    # and the geometry services it offers (cfddesk.project.case_services).
+    inputs: Any = None
+    services: Any = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +201,8 @@ class AnalysisType:
     launch: Callable[..., Any] | None = None  # (solver_key=...) -> LaunchSpec
     log_parser: Any = None  # LogParserRef to the solver-output parser
     frame_fields: tuple[str, ...] = ()  # fields that mark a written frame ("" = fields)
+    plan_case: Callable[[Any], dict[str, Any]] | None = None  # write_case's report, without writing
+    run_monitors: Callable[[Any], dict[str, Any]] | None = None  # (case_dir) -> {rho, monitors, custom, balance}
     ui: dict[str, str] = field(default_factory=dict)  # panel ids the plugin provides
 
 
@@ -211,43 +217,57 @@ def schema_defaults(fields: tuple[SchemaField, ...] | list[SchemaField]) -> dict
     return out
 
 
-def write_run_case(
-    spec: Any,
-    out_dir: Path | str,
-    *,
-    analysis_key: str | None = None,
-) -> dict[str, Any]:
-    """Product writer: resolve AnalysisType and call write_case.
+def _case_context(inputs: Any, out_dir: Path | str | None) -> tuple[str, CaseContext]:
+    """(analysis key, context) for a run: RunInputs from the core, or a spec built by hand (tests)."""
+    key = str(getattr(inputs, "analysis_key", "") or "").strip()
+    if hasattr(inputs, "require_mesh") and hasattr(inputs, "materials"):
+        from cfddesk.project.case_services import CaseServices
 
-    prepare_run / Start use this so plugins own the case files. Built-ins
-    delegate to write_solve_case and return its result dict.
-    """
-    from cfddesk.registry.discovery import get_registry, load_all
-
-    load_all()
-    # The key load_run_spec resolved from the study and the run's time
-    # dependency; an explicit argument wins. Specs built by hand (tests)
-    # without one fall back on their solver app.
-    key = (analysis_key or "").strip() or str(getattr(spec, "analysis_key", "") or "").strip()
-    if not key:
-        key = DEFAULT_TRANSIENT_KEY if getattr(spec, "solver_app", "") == "pimpleFoam" else DEFAULT_STEADY_KEY
-    analysis = get_registry("analysis").get(key)
-    writer = analysis.write_case
-    if writer is None:
-        raise ValueError(f"{key}.write_case is None")
-    out = Path(out_dir)
+        mesh = getattr(inputs, "mesh", None) or {}
+        case_dir = mesh.get("case_dir")
+        return key, CaseContext(
+            out_dir=Path(out_dir) if out_dir is not None else None,
+            inputs=inputs,
+            simulation=dict(getattr(inputs, "study", None) or {}),
+            mesh_case_dir=Path(case_dir) if case_dir else None,
+            n_procs=int(getattr(inputs, "n_procs", 1) or 1),
+            services=CaseServices(inputs.project_dir, inputs.simulation_id, getattr(inputs, "mesh_id", None)),
+        )
+    spec = inputs
     study: dict[str, Any] = {}
     if getattr(spec, "project_dir", None) and getattr(spec, "simulation_id", ""):
         from cfddesk.project.readiness import study_doc
 
         study = study_doc(spec.project_dir, spec.simulation_id)
-    ctx = CaseContext(
-        out_dir=out,
+    return key, CaseContext(
+        out_dir=Path(out_dir) if out_dir is not None else None,
         run_spec=spec,
         simulation=study,
         mesh_case_dir=Path(spec.mesh_case_dir) if getattr(spec, "mesh_case_dir", None) else None,
         n_procs=int(getattr(spec, "n_procs", 1) or 1),
     )
+
+
+def write_run_case(
+    inputs: Any,
+    out_dir: Path | str,
+    *,
+    analysis_key: str | None = None,
+) -> dict[str, Any]:
+    """Write a run's case: the run's AnalysisType.write_case, inside the case.write hooks.
+
+    ``inputs`` is the core's RunInputs (prepare_run), or a spec an analysis
+    built itself (its own tests).
+    """
+    from cfddesk.registry.discovery import get_registry, load_all
+
+    load_all()
+    key0, ctx = _case_context(inputs, out_dir)
+    key = (analysis_key or "").strip() or key0 or DEFAULT_STEADY_KEY
+    analysis = get_registry("analysis").get(key)
+    writer = analysis.write_case
+    if writer is None:
+        raise ValueError(f"{key}.write_case is None")
     from cfddesk.registry.hooks import get_hooks
 
     written_ctx = ctx
@@ -258,10 +278,24 @@ def write_run_case(
         return writer(written_ctx)
 
     raw = get_hooks().apply("case.write", _write, ctx=ctx)
-    written_out = Path(getattr(written_ctx, "out_dir", out))
-    normalized = _normalize_case_result(raw, written_out, spec)
+    written_out = Path(getattr(written_ctx, "out_dir", None) or out_dir)
+    normalized = _normalize_case_result(raw, written_out, inputs)
     get_hooks().call("case.written", ctx=written_ctx, result=normalized)
     return normalized
+
+
+def plan_run_case(inputs: Any, *, analysis_key: str | None = None) -> dict[str, Any]:
+    """What write_run_case would report, without writing (the analysis's plan_case)."""
+    from cfddesk.registry.discovery import get_registry, load_all
+
+    load_all()
+    key0, ctx = _case_context(inputs, None)
+    key = (analysis_key or "").strip() or key0 or DEFAULT_STEADY_KEY
+    analysis = get_registry("analysis").get(key)
+    plan = getattr(analysis, "plan_case", None)
+    if not callable(plan):
+        return {"ok": True}
+    return dict(plan(ctx) or {})
 
 
 def _normalize_case_result(result: Any, out: Path, spec: Any) -> dict[str, Any]:

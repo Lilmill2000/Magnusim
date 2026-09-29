@@ -507,9 +507,9 @@ class NumericsSettings:
     def sync_schemes_to_writer_flats(self) -> NumericsSettings:
         """Inc24a.1 — Schemes UI is authoritative; push mapped OF tokens into writer flats.
 
-        Named entries (grad(p), laplacian(nuEff,U), …) are emitted by
-        :func:`cfddesk.case.writer.write_fv_schemes` from ``self.schemes`` directly;
-        flats cover the historical default slots the writer already consumed.
+        Named entries (grad(p), laplacian(nuEff,U), …) live in ``self.schemes``;
+        flats cover the historical default slots. Legacy Project model only: the
+        run's case is written by its analysis.
         """
         s = self.schemes if isinstance(self.schemes, SchemesSettings) else SchemesSettings()
         self.schemes = s

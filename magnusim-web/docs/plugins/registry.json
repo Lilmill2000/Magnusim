@@ -526,27 +526,6 @@
       "time_dependency": "transient",
       "parallel": "mpirun",
       "stop_strategy": "stopAt_writeNow"
-    },
-    {
-      "key": "simpleFoam_amgx",
-      "label": "simpleFoam + AmgX (p)",
-      "plugin": "incompressible_flow",
-      "requires": [
-        {
-          "kind": "wsl_tool",
-          "name": "simpleFoam",
-          "version_spec": ""
-        },
-        {
-          "kind": "gpu",
-          "name": "cuda",
-          "version_spec": ""
-        }
-      ],
-      "application": "simpleFoam",
-      "time_dependency": "steady",
-      "parallel": "none",
-      "stop_strategy": "stopAt_writeNow"
     }
   ],
   "mesher": [
@@ -1071,19 +1050,19 @@
     {
       "key": "newtonian_incompressible",
       "label": "Newtonian (incompressible)",
-      "plugin": "builtin"
+      "plugin": "incompressible_flow"
     }
   ],
   "monitor": [
     {
       "key": "area_average",
       "label": "Area average",
-      "plugin": "builtin"
+      "plugin": "incompressible_flow"
     },
     {
       "key": "flow_rate",
       "label": "Flow rate",
-      "plugin": "builtin"
+      "plugin": "incompressible_flow"
     }
   ],
   "filter": [

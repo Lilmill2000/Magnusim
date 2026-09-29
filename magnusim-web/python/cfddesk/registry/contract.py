@@ -70,6 +70,8 @@ class ReadyContext:
     study: dict[str, Any]
     read_study: Callable[[str], Any]
     mesh: dict[str, Any] = field(default_factory=dict)
+    materials: tuple[dict[str, Any], ...] = ()  # the study's material records
+    bcs: tuple[dict[str, Any], ...] = ()  # the study's boundary-condition records
 
 
 @dataclass(frozen=True)
@@ -249,6 +251,20 @@ def run_preview(spec: Any, **kwargs: Any) -> dict[str, Any]:
     if model is None or model.preview is None:
         return {"ok": True, "partial": True, "reason": None, "control": run_normalize(spec, kwargs.get("settings"))}
     return dict(model.preview(**kwargs) or {})
+
+
+NO_MONITORS: dict[str, Any] = {"rho": None, "monitors": [], "custom": [], "balance": None}
+
+
+def run_monitors(spec: Any, case_dir: Path) -> dict[str, Any]:
+    """A run's monitor results as its analysis reads them (none for an analysis without monitors)."""
+    fn = _hook(spec, "run_monitors")
+    if not callable(fn):
+        return dict(NO_MONITORS)
+    out = fn(case_dir)
+    if not isinstance(out, dict):
+        raise ContractError(f"{spec.key}.run_monitors must return a dict, got {type(out).__name__}")
+    return {**NO_MONITORS, **out}
 
 
 def launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = None) -> LaunchSpec:

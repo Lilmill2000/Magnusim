@@ -51,8 +51,8 @@ def test_core_uses_the_sdk_copy():
     import magnusim_sdk.gmsh_helpers as sdk_gmsh
     import magnusim_sdk.msh22 as sdk_msh22
     import magnusim_sdk.units as sdk_units
+    from incompressible_flow import writer
 
-    from cfddesk.case import writer
     from cfddesk.jobs import events
     from cfddesk.mesh import gmsh_standard, msh22
     from cfddesk.units import convert, pressure

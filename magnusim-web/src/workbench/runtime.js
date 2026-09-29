@@ -29390,7 +29390,7 @@ function toggleAssignAaFace(face) {
 
 /**
  * Transient settings defaults. No copy lives here: they are the registered
- * control_schema of incompressible_transient (cfddesk.project.transient
+ * control_schema of incompressible_transient (incompressible_flow.transient
  * TRANSIENT_DEFAULTS), published by the project store when the registry loads
  * and echoed by /api/run/status.
  */
@@ -29399,7 +29399,7 @@ function transientDefaultsClient() {
 }
 
 /** Steady defaults (iterations, write interval): the registered control_schema of
- * incompressible_steady (cfddesk.project.transient STEADY_DEFAULTS). No copy here. */
+ * incompressible_steady (incompressible_flow.transient STEADY_DEFAULTS). No copy here. */
 function steadyDefaultsClient() {
   return window.__CFD_STEADY_DEFAULTS__ || (runCatalog && runCatalog.steady_defaults) || {};
 }

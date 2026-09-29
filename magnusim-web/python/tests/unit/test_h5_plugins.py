@@ -98,8 +98,8 @@ def test_gate_h5_hook_monitor_writes_control_dict(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(PLUGINS))
     if not (FIX / "boundary_conditions.json").is_file():
         pytest.skip("js-project fixture missing")
-    from cfddesk.project.web_adapter import load_run_spec
     from cfddesk.registry import write_run_case
+    from tests.conftest import run_spec as load_run_spec
 
     load_all(force=True)
     spec = load_run_spec(FIX, run_id="run-h5-hook", require_mesh=False, n_procs=1)

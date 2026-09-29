@@ -19,7 +19,7 @@ sys.path.insert(0, str(TOOLS))
 
 from registry_dump import DUMP_KINDS, dump_registry, main  # noqa: E402
 
-EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "simpleFoam_amgx"}
+EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"}
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
 EXPECTED_FILTER_KEYS = {
     "cut_plane",

@@ -740,19 +740,44 @@ def analysis_run_preview(
     The analysis's own run model computes them with the same code prepare_run
     writes the case with, so the preview and controlDict cannot differ.
     """
+    from cfddesk.project.run_inputs import gather_run_inputs
     from cfddesk.registry import contract
 
     root = _root(project_id, project_dir)
     key = _run_analysis_key(root, simulation_id, run_id, time_dependency)
-    out = contract.run_preview(
-        _analysis_spec(key),
-        project_dir=str(root),
-        run_id=run_id,
-        simulation_id=simulation_id,
-        mesh_id=mesh_id,
-        settings=settings if isinstance(settings, dict) else {},
+    spec = _analysis_spec(key)
+    raw = settings if isinstance(settings, dict) else {}
+    inputs = gather_run_inputs(
+        root,
+        run_id=run_id or "preview",
+        mesh_id=mesh_id or None,
+        simulation_id=simulation_id or None,
+        require_mesh=True,
+        transient_override=raw if spec.time_dependency == "transient" else None,
+        time_dependency=spec.time_dependency,
     )
+    out = contract.run_preview(spec, inputs=inputs, settings=raw)
     return {**out, "analysis_key": key}
+
+
+@rpc("analysis.run_monitors")
+def analysis_run_monitors(
+    project_id: str = "",
+    project_dir: str = "",
+    run_id: str = "",
+    simulation_id: str = "",
+    case_dir: str = "",
+    time_dependency: str = "",
+) -> dict[str, Any]:
+    """A run's monitor results, read by the analysis the run solves with."""
+    from cfddesk.registry import contract
+
+    root = _root(project_id, project_dir)
+    case = Path(case_dir).resolve() if case_dir else (root / "runs" / f"run-{run_id}").resolve()
+    if not case.is_relative_to(root.resolve()):
+        raise RpcError(-32602, "case_dir is outside the project", {"case_dir": case_dir})
+    key = _run_analysis_key(root, simulation_id, run_id, time_dependency)
+    return {"ok": True, "analysis_key": key, **contract.run_monitors(_analysis_spec(key), case)}
 
 
 @rpc("analysis.launch_spec")

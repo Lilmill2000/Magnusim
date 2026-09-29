@@ -173,7 +173,7 @@ export function analysisSupportsTimeDependency(key, timeDependency) {
 
 /**
  * Run-control defaults of an analysis, from its registered control_schema
- * (built from cfddesk.project.transient STEADY_DEFAULTS / TRANSIENT_DEFAULTS,
+ * (built from incompressible_flow.transient STEADY_DEFAULTS / TRANSIENT_DEFAULTS,
  * the one copy). A null default means "calculate for me" (the auto time step).
  * @param {string} key
  * @returns {Record<string, unknown>}
@@ -217,13 +217,13 @@ export function studyDefaultsFor(key) {
 
 /**
  * The algorithm label an analysis shows ("SIMPLE", "PIMPLE"): its contract's
- * algorithm_label, else the one its default solver implies.
+ * algorithm_label ('' when it publishes none).
  * @param {string} key
  */
 export function algorithmLabelFor(key) {
   const row = analysisByKey(key);
   if (!row) return '';
-  return String(row.algorithm_label || '') || algorithmFromSolver(row.default_solver);
+  return String(row.algorithm_label || '');
 }
 
 export function mesherByKey(key) {
@@ -286,52 +286,14 @@ function _syncMeshEngines() {
 }
 
 /** @type {Readonly<Record<string, string>>} */
-export const TURBULENCE_LABELS = Object.freeze({
-  laminar: 'Laminar',
-  kEpsilon: 'k-epsilon',
-  kOmegaSST: 'k-omega SST',
-  LRR: 'LRR',
-  SSG: 'SSG',
-});
-
-/** @type {Readonly<Record<string, string>>} */
 const TIME_DEPENDENCY_LABELS = Object.freeze({
   steady: 'Steady-state',
   transient: 'Transient',
 });
 
-/** @type {Readonly<Record<string, string>>} */
-const ALGORITHM_FROM_SOLVER = Object.freeze({
-  simpleFoam: 'SIMPLE',
-  simpleFoam_amgx: 'SIMPLE',
-  pimpleFoam: 'PIMPLE',
-});
-
-export function turbulenceLabel(key) {
-  const k = String(key || '');
-  return TURBULENCE_LABELS[k] || k || 'k-omega SST';
-}
-
 export function timeDependencyLabel(key) {
   const k = String(key || '').trim().toLowerCase();
   return TIME_DEPENDENCY_LABELS[k] || 'Steady-state';
-}
-
-export function algorithmFromSolver(solverKey) {
-  const k = String(solverKey || '');
-  return ALGORITHM_FROM_SOLVER[k] || 'SIMPLE';
-}
-
-function _schemaDefault(entry, prop, fallback) {
-  const props =
-    entry &&
-    entry.schema &&
-    entry.schema.properties &&
-    typeof entry.schema.properties === 'object'
-      ? entry.schema.properties
-      : null;
-  if (!props || !props[prop] || props[prop].default === undefined) return fallback;
-  return props[prop].default;
 }
 
 /**
@@ -344,24 +306,15 @@ export function buildW17DefaultsFromRegistry() {
   if (!steady) return null;
   const published = studyDefaultsFor(DEFAULT_ANALYSIS_KEY);
   if (published) return Object.freeze({ ...published });
-  const turbKey = String(
-    steady.default_turbulence || _schemaDefault(steady, 'turbulence_model', 'kOmegaSST')
-  );
-  const timeKey = String(steady.time_dependency || 'steady');
-  const solverKey = String(steady.default_solver || 'simpleFoam');
-  const category = String(steady.category || 'FLUID DYNAMICS');
+  // An analysis that publishes no study_defaults: only what its row says.
   return Object.freeze({
     /** Registered AnalysisType key (dump). */
     analysis_type: String(steady.key),
-    /** Bank UI create-sim name (label prefix; gate also accepts dump keys). */
-    analysis: 'Incompressible',
-    analysis_title: String(steady.label || 'Incompressible Fluid Flow'),
-    category,
-    flow_group: 'FLOW',
-    turbulence_model_key: turbKey,
-    turbulence_model: turbulenceLabel(turbKey),
-    time_dependency: timeDependencyLabel(timeKey),
-    algorithm: algorithmFromSolver(solverKey),
+    analysis: String((steady.family && steady.family.label) || steady.label || steady.key),
+    analysis_title: String(steady.label || steady.key),
+    category: String(steady.category || ''),
+    time_dependency: timeDependencyLabel(String(steady.time_dependency || 'steady')),
+    algorithm: algorithmLabelFor(String(steady.key)),
   });
 }
 

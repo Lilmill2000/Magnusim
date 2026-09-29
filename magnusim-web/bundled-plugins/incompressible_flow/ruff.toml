@@ -1,0 +1,6 @@
+extend = "../../python/pyproject.toml"
+
+[lint.per-file-ignores]
+# OpenFOAM field names (U, p) and scientific symbols keep their case.
+"incompressible_flow/writer.py" = ["N802", "N806", "N815"]
+"incompressible_flow/transient.py" = ["N806"]

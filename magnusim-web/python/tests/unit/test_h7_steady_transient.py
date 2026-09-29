@@ -9,17 +9,18 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from cfddesk.project.transient import (
+from incompressible_flow.transient import (
     TRANSIENT_DEFAULTS,
     control_to_web,
     estimate_delta_t,
     load_mesh_meta,
 )
-from cfddesk.project.web_adapter import load_run_spec, run_time_dependency
+
+from cfddesk.project.web_adapter import run_time_dependency
 from cfddesk.registry import load_all, reset_for_tests
 from cfddesk.registry.analysis import analysis_key_for, analysis_supports_time_dependency
 from cfddesk.registry.discovery import get_registry
+from tests.conftest import run_spec as load_run_spec
 
 PYTHON_ROOT = Path(__file__).resolve().parents[2]
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "js-project"
@@ -150,11 +151,15 @@ def test_preview_rpc_shows_the_delta_t_prepare_run_writes(tmp_path: Path, monkey
     written = control_to_web(spec.transient, settings)
 
     # The fixture has no generated mesh; solve on the project folder like prepare_run --no-require-mesh.
-    def _spec_without_mesh(*args, **kwargs):
-        kwargs["require_mesh"] = False
-        return load_run_spec(*args, **kwargs)
+    from cfddesk.project import run_inputs
 
-    monkeypatch.setattr("cfddesk.project.web_adapter.load_run_spec", _spec_without_mesh)
+    real_gather = run_inputs.gather_run_inputs
+
+    def _inputs_without_mesh(*args, **kwargs):
+        kwargs["require_mesh"] = False
+        return real_gather(*args, **kwargs)
+
+    monkeypatch.setattr(run_inputs, "gather_run_inputs", _inputs_without_mesh)
     pv = methods.analysis_run_preview(project_dir=str(root), run_id="run-dt", time_dependency="Transient", settings=settings)
     assert pv["partial"] is False
     assert pv["control"]["delta_t"] == pytest.approx(written["delta_t"], rel=1e-12)

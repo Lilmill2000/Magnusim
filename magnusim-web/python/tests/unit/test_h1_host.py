@@ -19,7 +19,6 @@ from cfddesk.project.model import Project, _mesh_fingerprint_payload
 from cfddesk.registry import API_VERSION, RegistryError, get_hooks, get_hub, get_registry, load_all
 from cfddesk.registry.discovery import reset_for_tests
 from cfddesk.registry.jobs import JobKind, ensure_tool_in_package
-from tests.conftest import GOLDEN
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "js-project"
 BUILTIN = Path(__file__).resolve().parents[2] / "cfddesk" / "builtin"
@@ -33,7 +32,7 @@ def _clean_registry():
 
 
 def _steady_spec():
-    from cfddesk.project.web_adapter import load_run_spec
+    from tests.conftest import run_spec as load_run_spec
 
     spec = load_run_spec(
         FIX,
@@ -48,20 +47,9 @@ def _steady_spec():
 def test_gate_h1_no_stubs(tmp_path, sample_project_dict):
     """gate:h1-no-stubs"""
     load_all()
+    # A SolverApp names the program; the analysis writes the case (H9).
     for spec in get_registry("solver").items():
-        assert spec.residual_line is not None
-        assert spec.extra_lines is not None
-        assert spec.write_fv_solution is not None
-        assert spec.write_control_dict is not None
-        assert spec.script_template == "solve"
-    parsed = get_registry("solver").get("simpleFoam").residual_line(
-        "Solving for Ux, Initial residual = 0.25, Final residual = 1e-6, No Iterations 5"
-    )
-    assert parsed is not None
-    assert parsed["field"] == "Ux"
-    fv = tmp_path / "fvSolution"
-    get_registry("solver").get("simpleFoam").write_fv_solution(fv)
-    assert "SIMPLE" in fv.read_text(encoding="utf-8")
+        assert spec.application and spec.script_template == "solve"
 
     project = Project.from_dict(sample_project_dict)
     expected = _mesh_fingerprint_payload(project)
@@ -80,46 +68,16 @@ def test_gate_h1_no_stubs(tmp_path, sample_project_dict):
     assert get_registry("job").get("solve").tool == "solve.sh"
     assert get_registry("job").get(standard.tool).scope == "study"
 
-    mat = get_registry("material").get("newtonian_incompressible")
-    assert mat.write_files is not None
-    transport = tmp_path / "transportProperties"
-    mat.write_files(transport, nu=1.5e-5)
-    body = transport.read_text(encoding="utf-8")
-    assert "Newtonian" in body
-    assert "nu" in body
 
-    for name in ("solvers_openfoam.py", "meshers.py", "materials.py"):
-        text = (BUILTIN / name).read_text(encoding="utf-8")
+    plugin = Path(__file__).resolve().parents[3] / "bundled-plugins" / "incompressible_flow" / "incompressible_flow"
+    for path in (plugin / "solvers.py", BUILTIN / "meshers.py", plugin / "materials.py"):
+        text = path.read_text(encoding="utf-8")
         assert "NOT_yet_done" not in text
     # The word soft-pass is allowed in comments and must not fail this gate.
     solver_src = (
         Path(__file__).resolve().parents[2] / "cfddesk" / "registry" / "solver.py"
     ).read_text(encoding="utf-8")
     assert "soft-pass" in solver_src
-
-
-def test_gate_h1_goldens(tmp_path, sample_project_dict):
-    """gate:h1-goldens — steady_cpu, steady_amgx, js_steady, js_transient stay byte-identical."""
-    from tests.unit.test_case_writer_golden import test_write_simplefoam_matches_golden_no_occt
-    from tests.unit.test_prepare_run_golden import test_prepare_run_matches_js_golden
-    from tests.unit.test_write_case_golden import (
-        test_registry_write_case_matches_phase1_js_golden,
-    )
-
-    for backend, folder in (("cpu", "steady_cpu"), ("amgx", "steady_amgx")):
-        case = tmp_path / folder
-        case.mkdir()
-        test_write_simplefoam_matches_golden_no_occt(
-            case, sample_project_dict, False, backend, folder
-        )
-    for mode, key in (
-        ("steady", "incompressible_steady"),
-        ("transient", "incompressible_transient"),
-    ):
-        test_prepare_run_matches_js_golden(tmp_path, False, mode)
-        test_registry_write_case_matches_phase1_js_golden(tmp_path, False, mode, key)
-    assert (GOLDEN / "steady_cpu").is_dir()
-    assert (GOLDEN / "js_transient").is_dir()
 
 
 def test_gate_h1_override(tmp_path):
@@ -190,8 +148,6 @@ def test_gate_h1_hook(tmp_path):
     """gate:h1-hook"""
     if not (FIX / "boundary_conditions.json").is_file():
         pytest.skip("js-project fixture missing")
-    from tests.unit.test_prepare_run_golden import _assert_golden
-
     web = tmp_path / "web"
     plug = web / "plugins" / "h1_hook"
     plug.mkdir(parents=True)
@@ -244,8 +200,18 @@ def test_gate_h1_hook(tmp_path):
     result = write_run_case(spec, plain)
     assert result["ok"]
     assert "h1Probe" not in (plain / "system" / "controlDict").read_text(encoding="utf-8")
-    diffs = _assert_golden(plain, GOLDEN / "js_steady", update=False)
-    assert not diffs, diffs
+    # Disabled means no effect: the same bytes as with no plugin folder at all
+    # (Incompressible Flow's goldens pin those bytes, in its own tests).
+    reset_for_tests()
+    load_all(web_root=tmp_path / "no-plugins")
+    base = tmp_path / "base"
+    assert write_run_case(spec, base)["ok"]
+    written = sorted(p.relative_to(plain) for p in plain.rglob("*") if p.is_file())
+    assert written == sorted(p.relative_to(base) for p in base.rglob("*") if p.is_file())
+    for rel in written:
+        if rel.name == "w27-case.json":
+            continue  # records the absolute case folder
+        assert (plain / rel).read_bytes() == (base / rel).read_bytes(), rel
 
 
 def test_gate_h1_api_version(tmp_path):

@@ -132,7 +132,7 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Reynolds-stress models solve with Relaxation U 0.5 unless the study sets one (study_physics.default_relax_u). */
+/** Reynolds-stress models solve with Relaxation U 0.5 unless the study sets one (incompressible_flow.physics.default_relax_u). */
 export const RSM_RELAX_U = 0.5;
 
 export function numericsData(
@@ -151,7 +151,7 @@ export function numericsData(
 /**
  * Study panel: the V0.1.0 rows (title, Analysis, Turbulence model, Time dependency,
  * Algorithm, note) plus the steady SIMPLE numerics. Every value here reaches the
- * written case (cfddesk.project.study_physics).
+ * written case (incompressible_flow.physics).
  */
 export function SimulationDefaults(_props: IslandProps) {
   const registry = useRegistryReady();

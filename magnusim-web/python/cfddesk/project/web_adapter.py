@@ -1,8 +1,8 @@
-"""Bridge web-format sibling JSON (w18/w19/w20/w22/w27) → RunSpec.
+"""Reading the web-format project files: meshes, studies, runs, face properties.
 
-Siblings are derived mirrors of Project (v15 write-through). prepare_run still
-reads those files so Start does not have to load the versioned project.json
-schema. Not a second writer — AnalysisType.write_case owns the OpenFOAM case.
+The core's side of a run: which mesh and study it uses, its time dependency
+and analysis (``cfddesk.project.run_inputs`` gathers the rest). The analysis
+owns the case (``AnalysisType.write_case``).
 """
 
 from __future__ import annotations
@@ -10,83 +10,28 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from cfddesk.project.study_physics import StudyPhysics, load_study_physics, study_record
-from cfddesk.project.transient import (
-    STEADY_DEFAULTS,
-    TransientControl,
-    load_mesh_meta,
-    resolve_transient_control,
+from magnusim_sdk.foam import boundary_patch_names as _parse_boundary_patches
+from magnusim_sdk.study import (  # noqa: F401  (the core's BC-record helpers; one copy in the SDK)
+    bc_faces,
+    is_pressure_bc,
+    is_velocity_inlet,
+    is_velocity_outlet,
+    is_wall_bc,
+    list_aa_faces,
+    list_bc_records,
+    map_bc_to_patch,
+    matches_study,
+    run_custom_monitors,
+    sanitize_patch_name,
+    study_fluid,
+    unique_numbered_patch,
+    wall_treatment,
 )
 
-SolverAppName = Literal["simpleFoam", "pimpleFoam"]
-
-
-@dataclass
-class FaceProps:
-    area_m2: float | None = None
-    normal: tuple[float, float, float] | None = None
-    centroid: tuple[float, float, float] | None = None
-
-
-@dataclass
-class WebBc:
-    """One boundary_conditions.json record (+ resolved patch name)."""
-
-    name: str
-    bc_type: str
-    faces: list[str] = field(default_factory=list)
-    value: float | None = None
-    unit: str = ""
-    velocity_type: str = ""
-    flow_rate_type: str = ""
-    direction: str = ""
-    vector: list[float] | None = None
-    wall_type: str = ""
-    patch: str = ""
-    simulation_id: str | None = None
-    raw: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class RunSpec:
-    """Inputs prepare_run needs to write a complete OpenFOAM case."""
-
-    project_dir: Path
-    run_id: str
-    mesh_case_dir: Path
-    n_procs: int
-    solver_app: SolverAppName
-    end_time: float
-    write_interval: float
-    transient: TransientControl | None
-    nu: float
-    rho: float
-    wall_default: str
-    bcs: list[WebBc]
-    monitor_patches: list[str]
-    face_props: dict[str, FaceProps]
-    mesh_id: str | None = None
-    simulation_id: str | None = None
-    n_cells: int | None = None
-    patches: list[str] = field(default_factory=list)
-    speed_for_k: float = 1.0
-    aa: dict[str, Any] | None = None
-    mapped: list[dict[str, Any]] = field(default_factory=list)
-    # Study panel physics (turbulence model + steady SIMPLE numerics).
-    physics: StudyPhysics = field(default_factory=StudyPhysics)
-    # This run's custom monitors: {"name", "faces"} (area average on any faces).
-    custom_monitors: list[dict[str, Any]] = field(default_factory=list)
-    # The registered AnalysisType this run writes and the time dependency it
-    # solves with. The solver app, the case writer and the transient control
-    # all follow these; prepare_run reports them so Node launches the same app.
-    analysis_key: str = ""
-    time_dependency: Literal["steady", "transient"] = "steady"
-    ok: bool = True
-    error: str | None = None
+from cfddesk.project.readiness import study_record
 
 
 def _read_json(path: Path) -> dict | list | None:
@@ -98,108 +43,31 @@ def _read_json(path: Path) -> dict | list | None:
         return None
 
 
-def sanitize_patch_name(label: str) -> str:
-    """Match w27 sanitizePatchName: non-alnum → _, collapse, trim, lowercase."""
-    s = re.sub(r"[^A-Za-z0-9_]+", "_", str(label or ""))
-    s = re.sub(r"_+", "_", s).strip("_").lower()
-    if not s:
-        return "patch"
-    if s[0].isdigit():
-        s = "p_" + s
-    return s
 
 
-def list_bc_records(bcs: dict | None) -> list[dict]:
-    if not bcs:
-        return []
-    arr = bcs.get("boundary_conditions")
-    if not isinstance(arr, list):
-        return []
-    return [b for b in arr if b]
 
 
-def bc_faces(bc: dict | None) -> list[str]:
-    if not bc:
-        return []
-    faces = list(bc.get("faces") or [])
-    if bc.get("face") and bc["face"] not in faces:
-        faces.append(bc["face"])
-    return [f for f in faces if f]
 
 
-def is_velocity_inlet(bc: dict | None) -> bool:
-    return bool(re.search(r"velocity\s*inlet", str((bc or {}).get("bc_type") or ""), re.I))
 
 
-def is_velocity_outlet(bc: dict | None) -> bool:
-    return bool(re.search(r"velocity\s*outlet", str((bc or {}).get("bc_type") or ""), re.I))
 
 
-def is_pressure_bc(bc: dict | None) -> bool:
-    return bool(re.match(r"pressure", str((bc or {}).get("bc_type") or ""), re.I))
 
 
-def is_wall_bc(bc: dict | None) -> bool:
-    return bool(re.match(r"^wall$", str((bc or {}).get("bc_type") or "").strip(), re.I))
 
 
-def wall_treatment(rec: dict | None) -> str:
-    t = re.sub(r"[\s_-]+", "", str((rec or {}).get("wall_type") or "").lower())
-    return "Slip" if t == "slip" else "No-slip"
 
 
-def matches_study(rec: dict | None, sim_id: str | None, legacy_id: str | None = None) -> bool:
-    if not rec:
-        return False
-    sid = rec.get("simulation_id") or rec.get("study_id")
-    if sid is None or sid == "":
-        return True
-    if sim_id is not None and str(sid) == str(sim_id):
-        return True
-    if legacy_id is not None and str(sid) == str(legacy_id):
-        return True
-    return False
 
 
-def _material_assigned(m: dict) -> bool:
-    vols = m.get("assigned_volumes")
-    return (isinstance(vols, list) and len(vols) > 0) or bool(m.get("assigned_volume"))
 
 
-def study_fluid(materials: list) -> dict | None:
-    """The study's one fluid (Air, Water or a custom fluid): the material assigned
-    to a volume, else one named Air (older studies), else the first."""
-    rows = [m for m in materials if isinstance(m, dict)]
-    return (
-        next((m for m in rows if _material_assigned(m)), None)
-        or next((m for m in rows if re.search(r"air", str(m.get("name") or ""), re.I)), None)
-        or (rows[0] if rows else None)
-    )
 
 
-def air_from_materials(
-    mats: dict | None, sim_id: str | None = None, legacy_id: str | None = None
-) -> dict[str, Any] | None:
-    """Port of w27 airFromMaterials."""
-    lst = (mats or {}).get("materials") if isinstance(mats, dict) else None
-    if not isinstance(lst, list):
-        return None
-    scoped = [m for m in lst if matches_study(m, sim_id, legacy_id)]
-    air = study_fluid(scoped)
-    if not air:
-        return None
-    vols = checked if isinstance((checked := air.get("assigned_volumes")), list) else []
-    nu = float(air.get("kinematic_viscosity") or 0)
-    rho = float(air.get("density") or 0)
-    return {
-        "name": air.get("name") or "Air",
-        "nu": nu if math.isfinite(nu) and nu > 0 else 1.529e-5,
-        "rho": rho if math.isfinite(rho) and rho > 0 else 1.196,
-        "assigned": len(vols) > 0 or bool(air.get("assigned_volume")),
-    }
 
 
-def load_face_props(project_dir: Path) -> dict[str, FaceProps]:
+def load_face_props(project_dir: Path) -> dict[str, dict[str, Any]]:
     """Port of w27 loadFaceProps (read-only; no STEP regen)."""
     from cfddesk.project.paths import walk_geometries
 
@@ -211,7 +79,7 @@ def load_face_props(project_dir: Path) -> dict[str, FaceProps]:
             break
     if meta is None:
         meta = _read_json(project_dir / "geometry" / "cad_preview.json")
-    out: dict[str, FaceProps] = {}
+    out: dict[str, dict[str, Any]] = {}
     if not isinstance(meta, dict) or not isinstance(meta.get("faces"), list):
         return out
     unit = str(meta.get("faces_length_unit") or "mm").lower()
@@ -225,7 +93,7 @@ def load_face_props(project_dir: Path) -> dict[str, FaceProps]:
         area = f.get("area")
         cent = f.get("centroid")
         norm = f.get("normal")
-        out[key] = FaceProps(
+        out[key] = dict(
             area_m2=(float(area) * s * s) if area is not None else None,
             centroid=(
                 (float(cent[0]) * s, float(cent[1]) * s, float(cent[2]) * s)
@@ -241,63 +109,10 @@ def load_face_props(project_dir: Path) -> dict[str, FaceProps]:
     return out
 
 
-def list_aa_faces(aa: dict | None) -> list[str]:
-    """Faces named by area-average result controls (w27 listAaFaces)."""
-    if not aa:
-        return []
-    recs: list[dict] = []
-    if aa.get("area_average_1"):
-        recs.append(aa["area_average_1"])
-    if isinstance(aa.get("result_controls"), list):
-        for rec in aa["result_controls"]:
-            if not rec:
-                continue
-            kind = str(rec.get("kind") or "")
-            name = str(rec.get("name") or "")
-            if re.search(r"area average", kind, re.I) or re.search(r"area average", name, re.I):
-                recs.append(rec)
-    faces: list[str] = []
-    for rec in recs:
-        for f in rec.get("faces") or []:
-            if f and f not in faces:
-                faces.append(f)
-    return faces
 
 
-def run_custom_monitors(result_controls: list | None) -> list[dict[str, Any]]:
-    """Area-average monitors a run carries (name + assigned faces), in order."""
-    out: list[dict[str, Any]] = []
-    for rec in result_controls or []:
-        if not isinstance(rec, dict):
-            continue
-        label = " ".join(str(rec.get(k) or "") for k in ("kind", "type", "name", "category"))
-        if not re.search(r"area average|surface data", label, re.I):
-            continue
-        faces = [str(f) for f in (rec.get("faces") or []) if f]
-        if faces:
-            out.append({"id": rec.get("id"), "name": str(rec.get("name") or "Monitor"), "faces": faces})
-    return out
 
 
-def _parse_boundary_patches(boundary_path: Path) -> list[str]:
-    """Parse polyMesh/boundary patch names (w27 parseBoundaryPatches parity).
-
-    OpenFOAM writes indented names before a `{` / `type` block; binary format
-    headers are still ASCII for this section.
-    """
-    if not boundary_path.is_file():
-        return []
-    text = boundary_path.read_text(encoding="utf-8", errors="replace")
-    names: list[str] = []
-    # Leading whitespace required (same as w27); FoamFile at column 0 is skipped.
-    for m in re.finditer(
-        r"(?m)^\s+([A-Za-z_][A-Za-z0-9_]*)\s*\r?\n\s*\{\s*\r?\n\s*type\s+(\S+);",
-        text,
-    ):
-        name = m.group(1)
-        if name != "FoamFile":
-            names.append(name)
-    return names
 
 
 def resolve_mesh(
@@ -381,33 +196,14 @@ def resolve_mesh(
     }
 
 
-def map_bc_to_patch(bc: dict, patch_names: set[str], web_bcs: list[dict] | None = None) -> str:
-    want = sanitize_patch_name(str(bc.get("name") or ""))
-    hit = unique_numbered_patch(want, patch_names)
-    if hit:
-        return hit
-    for f in bc_faces(bc):
-        alt = sanitize_patch_name(f)
-        hit = unique_numbered_patch(alt, patch_names)
-        if hit:
-            return hit
-    face_set = set(bc_faces(bc))
-    for baked in web_bcs or []:
-        baked_faces = set(bc_faces(baked))
-        if face_set & baked_faces:
-            from_baked = sanitize_patch_name(str(baked.get("name") or ""))
-            hit = unique_numbered_patch(from_baked, patch_names)
-            if hit:
-                return hit
-    return want
 
 
-def web_bc_to_registry(bc: WebBc | dict) -> tuple[str, dict[str, Any]]:
+def web_bc_to_registry(bc: Any) -> tuple[str, dict[str, Any]]:
     """Map web BC record → (bc_registry key, settings dict).
 
     Values are converted to SI using the record's ``unit`` field where possible.
     """
-    if isinstance(bc, WebBc):
+    if not isinstance(bc, dict):
         d = {
             "bc_type": bc.bc_type,
             "value": bc.value,
@@ -575,17 +371,6 @@ def study_web_bcs(
     return [b for b in assembled if isinstance(b, dict) and matches_study(b, sim_id)]
 
 
-def unique_numbered_patch(want: str, patch_names: set[str]) -> str | None:
-    """``pressure_1`` matches ``pressure_1`` or a unique ``pressure_1_3`` from name collisions."""
-    if want in patch_names:
-        return want
-    if not want:
-        return None
-    pat = re.compile(r"^" + re.escape(want) + r"(?:_\d+)?$")
-    hits = [p for p in patch_names if pat.match(p)]
-    if len(hits) == 1:
-        return hits[0]
-    return None
 
 
 def _td(value: Any) -> Literal["steady", "transient"]:
@@ -636,213 +421,13 @@ def _analysis_and_app(root: Path, sim_id: str | None, td: str) -> tuple[str, str
         app = str(getattr(reg.get(key), "default_solver", "") or "")
     except Exception:
         app = ""
-    if not app:
-        app = "pimpleFoam" if td == "transient" else "simpleFoam"
     return key, app
 
 
-def load_run_spec(
-    project_dir: str | Path,
-    *,
-    run_id: str = "run-1",
-    mesh_id: str | None = None,
-    n_procs: int = 1,
-    simulation_id: str | None = None,
-    require_mesh: bool = True,
-    transient_override: dict | None = None,
-    time_dependency: str | None = None,
-) -> RunSpec:
-    """Build a RunSpec from web JSON files under ``project_dir``.
-
-    Mirrors the data gathering in w27 validateSolveReady + writeSolveCase
-    preamble (materials, BCs, mesh, monitors, transient).
-
-    ``time_dependency`` is the decision the caller already made (Node passes
-    the run's). Without it: transient when transient settings are given, else
-    :func:`run_time_dependency`.
-    """
-    root = Path(project_dir)
-    sim_id = _active_sim_id(root, simulation_id)
-    from cfddesk.project.paths import study_json_path
-
-    def _study_or_root(name: str) -> dict:
-        path = study_json_path(root, sim_id, name) if sim_id else None
-        if path is not None:
-            data = _read_json(path)
-            if isinstance(data, dict):
-                return data
-        data = _read_json(root / name)
-        return data if isinstance(data, dict) else {}
-
-    mats = _study_or_root("materials.json")
-    from cfddesk.project.paths import assemble_study_bc_defaults, assemble_study_bcs
-
-    assembled_bcs = assemble_study_bcs(root, sim_id)
-    defaults = assemble_study_bc_defaults(root, sim_id)
-    leftover = _study_or_root("boundary_conditions.json") if not assembled_bcs else {}
-    if not isinstance(leftover, dict):
-        leftover = {}
-    bcs_doc = {
-        **leftover,
-        "boundary_conditions": assembled_bcs or leftover.get("boundary_conditions") or [],
-        "defaults": defaults,
-    }
-    aa = _study_or_root("result_controls.json") or _study_or_root("area_average.json")
-    if not isinstance(aa, dict):
-        aa = {}
-    ctrl = _study_or_root("simulation_control.json")
-    if not isinstance(ctrl, dict):
-        ctrl = {}
-
-    air = air_from_materials(mats if isinstance(mats, dict) else None, sim_id)
-    records = [
-        b
-        for b in list_bc_records(bcs_doc if isinstance(bcs_doc, dict) else None)
-        if matches_study(b, sim_id, None)
-    ]
-
-    mesh = resolve_mesh(root, mesh_id=mesh_id, simulation_id=sim_id, require_poly=require_mesh)
-    if not mesh.get("ok") and require_mesh:
-        return RunSpec(
-            project_dir=root,
-            run_id=run_id,
-            mesh_case_dir=Path("."),
-            n_procs=n_procs,
-            solver_app="simpleFoam",
-            end_time=float(ctrl.get("endTime") or STEADY_DEFAULTS["end_time"]),
-            write_interval=float(ctrl.get("writeInterval") or STEADY_DEFAULTS["write_interval"]),
-            transient=None,
-            nu=(air or {}).get("nu", 1.529e-5),
-            rho=(air or {}).get("rho", 1.196),
-            wall_default=wall_treatment((bcs_doc or {}).get("defaults") if isinstance(bcs_doc, dict) else None),
-            bcs=[],
-            monitor_patches=[],
-            face_props={},
-            ok=False,
-            error=str(mesh.get("error") or "mesh not ready"),
-        )
-
-    patch_names = set(mesh.get("patches") or [])
-    # When mesh not required / empty patches, invent from BC names so monitors work in unit tests
-    if not patch_names:
-        patch_names = {sanitize_patch_name(str(b.get("name") or "")) for b in records if bc_faces(b)}
-
-    mapped: list[dict[str, Any]] = []
-    web_bcs: list[WebBc] = []
-    for bc in records:
-        if not bc_faces(bc):
-            continue
-        patch = map_bc_to_patch(bc, patch_names)
-        mapped.append({"bc": bc, "patch": patch})
-        web_bcs.append(
-            WebBc(
-                name=str(bc.get("name") or patch),
-                bc_type=str(bc.get("bc_type") or ""),
-                faces=bc_faces(bc),
-                value=float(bc["value"]) if bc.get("value") is not None else None,
-                unit=str(bc.get("unit") or ""),
-                velocity_type=str(bc.get("velocity_type") or ""),
-                flow_rate_type=str(bc.get("flow_rate_type") or ""),
-                direction=str(bc.get("direction") or ""),
-                vector=list(bc["vector"]) if isinstance(bc.get("vector"), list) else None,
-                wall_type=str(bc.get("wall_type") or ""),
-                patch=patch,
-                simulation_id=str(bc["simulation_id"]) if bc.get("simulation_id") is not None else None,
-                raw=dict(bc),
-            )
-        )
-
-    from cfddesk.case.function_objects import monitor_patches_from_mapped
-
-    mon = monitor_patches_from_mapped(
-        mapped,
-        aa_faces=list_aa_faces(aa),
-        patch_names=list(patch_names),
-    )
-
-    if time_dependency:
-        td = _td(time_dependency)
-    elif transient_override is not None:
-        td = "transient"
-    else:
-        td = run_time_dependency(root, run_id, sim_id)
-    is_trans = td == "transient"
-    analysis_key, solver_app = _analysis_and_app(root, sim_id, td)
-    end_time = float(ctrl.get("endTime") or STEADY_DEFAULTS["end_time"])
-    write_interval = float(ctrl.get("writeInterval") or STEADY_DEFAULTS["write_interval"])
-
-    wall_default = wall_treatment(
-        (bcs_doc or {}).get("defaults") if isinstance(bcs_doc, dict) else None
-    )
-    case_dir = mesh.get("case_dir") or root
-    if not isinstance(case_dir, Path):
-        case_dir = Path(case_dir)
-
-    spec = RunSpec(
-        project_dir=root,
-        run_id=run_id,
-        mesh_case_dir=case_dir,
-        n_procs=int(n_procs),
-        solver_app=solver_app,  # type: ignore[arg-type]
-        end_time=end_time,
-        write_interval=write_interval,
-        transient=None,
-        nu=float((air or {}).get("nu", 1.529e-5)),
-        rho=float((air or {}).get("rho", 1.196)),
-        wall_default=wall_default,
-        bcs=web_bcs,
-        monitor_patches=mon,
-        face_props=load_face_props(root),
-        mesh_id=mesh.get("mesh_id"),
-        simulation_id=sim_id,
-        n_cells=mesh.get("n_cells"),
-        patches=list(patch_names),
-        speed_for_k=1.0,
-        aa=aa,
-        mapped=mapped,
-        physics=load_study_physics(root, sim_id),
-        custom_monitors=_run_custom_monitors(root, run_id, sim_id),
-        analysis_key=analysis_key,
-        time_dependency=td,
-        ok=True,
-        error=None,
-    )
-    if not is_trans:
-        return spec
-    t_raw = transient_override if transient_override is not None else ctrl.get("transient")
-    transient = resolve_transient_control(
-        t_raw if isinstance(t_raw, dict) else {},
-        transient_context(spec),
-    )
-    return replace(
-        spec,
-        transient=transient,
-        end_time=transient.end_time,
-        write_interval=transient.write_interval,
-    )
 
 
-def transient_context(spec: RunSpec) -> dict[str, Any]:
-    """What the time-step estimate needs: the mesh this run solves on and the
-    case's reference speed (the same speed the turbulence inlet values use)."""
-    from cfddesk.case.writer import resolve_speed_and_dhyd
-
-    speed_ref, _d_hyd = resolve_speed_and_dhyd(spec)
-    return {
-        "mesh_meta": load_mesh_meta(spec.mesh_case_dir),
-        "n_cells": spec.n_cells,
-        "speed_ref": speed_ref,
-    }
 
 
-def _run_custom_monitors(root: Path, run_id: str, sim_id: str | None) -> list[dict[str, Any]]:
-    from cfddesk.project.paths import find_run
-
-    try:
-        rec = find_run(root, run_id, sim_id) or {}
-    except Exception:
-        rec = {}
-    return run_custom_monitors(rec.get("result_controls"))
 
 
 # Phase 2 land8 re-exports (Project <-> web sibling mirrors)

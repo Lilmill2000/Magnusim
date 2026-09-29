@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PYTHON, PY_ROOT } from '../python-env.js';
 import { analysisKeyFor, analysisSupportsTimeDependency, steadyDefaultsFromRegistry } from '../registry-defaults.js';
@@ -16,9 +16,9 @@ function pythonDefaults() {
     PYTHON,
     [
       '-c',
-      'import json; from cfddesk.project.transient import TRANSIENT_DEFAULTS, STEADY_DEFAULTS; print(json.dumps({"t": TRANSIENT_DEFAULTS, "s": STEADY_DEFAULTS}))',
+      'import json; from incompressible_flow.transient import TRANSIENT_DEFAULTS, STEADY_DEFAULTS; print(json.dumps({"t": TRANSIENT_DEFAULTS, "s": STEADY_DEFAULTS}))',
     ],
-    { cwd: PY_ROOT, encoding: 'utf8', env: { ...process.env, PYTHONPATH: PY_ROOT } },
+    { cwd: PY_ROOT, encoding: 'utf8', env: { ...process.env, PYTHONPATH: [PY_ROOT, join(root, 'bundled-plugins', 'incompressible_flow')].join(delimiter) } },
   );
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
