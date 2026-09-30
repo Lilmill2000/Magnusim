@@ -19016,9 +19016,15 @@ function applyImportedGeometry(geom, projectId, geometries) {
   return w16State.geometry;
 }
 
-async function reloadGeometryScopedSetup() {
+async function reloadGeometryScopedSetup(opts) {
   const pid = (w16State.project && w16State.project.id) || '';
   if (!pid) return;
+  // The switch this reload belongs to (opts.token), else whatever is shown now. Its
+  // answer can land after the user picked another geometry or study; applied then, it
+  // put the older study back on the geometry in the viewport (a plate with no study
+  // kept the other plate's study as the active one).
+  const gen = opts && opts.token != null ? opts.token : studySwitchGen;
+  if (gen !== studySwitchGen) return { stale: true };
   try {
     const sid = currentStudyId();
     const gid =
@@ -19032,6 +19038,9 @@ async function reloadGeometryScopedSetup() {
     const j = await fetch('/api/project/hydrate' + qs)
       .then((r) => r.json())
       .catch(() => null);
+    if (gen !== studySwitchGen || currentStudyId() !== sid || String(currentProjectId() || '') !== pid) {
+      return { stale: true };
+    }
     if (!sid || !j || !j.ok) return;
     const mat = j.materials;
     const bcs = j.bcs;
@@ -19138,7 +19147,7 @@ async function activateGeometryClient(geomId, opts) {
       ? (applied.note || 'CAD geometry in viewport')
       : 'Activate returned but viewport CAD preview empty';
     publishW16({ imported: true });
-    await reloadGeometryScopedSetup();
+    await reloadGeometryScopedSetup({ token });
     if (token !== studySwitchGen) return { stale: true };
     applyWorkbenchStage();
     return window.__CFD_W16__;
@@ -21009,7 +21018,7 @@ async function selectStudyClient(simId) {
     if (wantGeom && (w16State.selectedGeomId !== wantGeom || shownGeometryId() !== wantGeom)) {
       await activateGeometryClient(wantGeom, { token });
     } else {
-      await reloadGeometryScopedSetup();
+      await reloadGeometryScopedSetup({ token });
     }
     if (token !== studySwitchGen) return { stale: true };
     const homeMesh = meshesForStudy(studyCatalog.simulation || j.simulation);

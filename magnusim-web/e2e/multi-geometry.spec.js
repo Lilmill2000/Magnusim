@@ -81,14 +81,24 @@ async function setup(page, request, title) {
   const timedSwitch = async (g) => {
     const t0 = Date.now();
     await page.locator(`#geometries-list .geo-item[data-geom-id="${g.id}"]`).click();
-    await page.waitForFunction(
-      (id) => {
-        const sim = window.__CFD_W17__ && window.__CFD_W17__.simulation;
-        return window.__CFD_W16__?.geometry?.id === id && (!sim || sim.geometry_id === id);
-      },
-      g.id,
-      { timeout: 30_000 },
-    );
+    await page
+      .waitForFunction(
+        (id) => {
+          const sim = window.__CFD_W17__ && window.__CFD_W17__.simulation;
+          return window.__CFD_W16__?.geometry?.id === id && (!sim || sim.geometry_id === id);
+        },
+        g.id,
+        { timeout: 30_000 },
+      )
+      .catch(async (e) => {
+        // Say what the page shows instead: which plate, and which study.
+        const now = await page.evaluate(() => ({
+          shown: window.__CFD_W16__?.geometry?.id || null,
+          study: window.__CFD_W17__?.simulation?.id || null,
+          studyGeometry: window.__CFD_W17__?.simulation?.geometry_id || null,
+        }));
+        throw new Error(`switch to ${g.name} (${g.id}) did not settle: ${JSON.stringify(now)}\n${e.message}`);
+      });
     return Date.now() - t0;
   };
   return { pid, q, json, shown, study, stage, shot, round, tear, pickGeometry, timedSwitch };
@@ -171,6 +181,39 @@ test('two geometries: each keeps its own study, and a copied study lands on the 
   // "Near-instant" is measured on a real PC (a few hundred ms). A CI runner has two slow
   // cores and a cold cache, so it only has to stay clearly interactive there.
   expect(Math.max(...times), `switch times ${times.join(', ')} ms`).toBeLessThan(process.env.CI ? 5000 : 1500);
+
+  // A quick second click: the teardrop's setup (GET /api/project/hydrate for its study)
+  // is still on its way when the round plate is clicked. Held here until the round plate
+  // is up, that late answer must not put the teardrop's study back on the round plate. It
+  // did (a full run hit it by chance): the round plate kept the teardrop's study as the
+  // active one, and the switch never settled.
+  const studyHydrate = /\/api\/project\/hydrate\?.*simulation_id=/;
+  let release = () => {};
+  const held = new Promise((r) => {
+    release = r;
+  });
+  const heldUrls = [];
+  const hold = async (route) => {
+    heldUrls.push(route.request().url());
+    await held;
+    await route.continue().catch(() => {});
+  };
+  await page.route(studyHydrate, hold);
+  await s.timedSwitch(tear);
+  await expect.poll(() => heldUrls.length).toBe(1);
+  expect(heldUrls[0]).toContain(`simulation_id=${encodeURIComponent(tearStudy)}`);
+  await s.timedSwitch(round);
+  const landed = page.waitForResponse(studyHydrate);
+  release();
+  await landed;
+  await page.unroute(studyHydrate, hold);
+  for (let i = 0; i < 10; i++) {
+    expect(await s.study(), `round plate after the late answer, check ${i}`).toEqual({ id: null, geom: null });
+    await page.waitForTimeout(150);
+  }
+  expect(await s.shown()).toBe(round.id);
+  await expect(page.locator('#geometries-list .geo-item.is-selected')).toHaveAttribute('data-geom-id', round.id);
+  s.stage('a late setup answer leaves the round plate without a study');
   await s.pickGeometry(tear);
   await expect.poll(s.study).toEqual({ id: tearStudy, geom: tear.id });
   await s.pickGeometry(round);
