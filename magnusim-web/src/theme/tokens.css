@@ -1,0 +1,81 @@
+/*
+ * Design tokens (Plugin Host H13). The one set of colour roles, type, spacing,
+ * radii, shadows, layers and motion. Values are the dominant ones the app
+ * already uses; the core imports this file without rewriting its own
+ * selectors (no visual change), and plugin workspaces get it as
+ * /plugin-sdk/theme.css with base styles. The primary blue is proposed and
+ * signed off in H14.
+ */
+:root {
+  /* Colour roles */
+  --mg-text: #101828;
+  --mg-text-strong: #1a1d24;
+  --mg-text-muted: #667085;
+  --mg-text-subtle: #98a2b3;
+  --mg-bg: #ffffff;
+  --mg-surface: #f9fafb;
+  --mg-surface-muted: #f2f4f7;
+  --mg-border: #d0d5dd;
+  --mg-border-subtle: #eaecf0;
+  --mg-header-border: #d5d8de;
+  --mg-primary: #1570ef;
+  --mg-primary-hover: #175cd3;
+  --mg-primary-text: #ffffff;
+  --mg-selected-bg: #eff4ff;
+  --mg-selected-border: #b2ccff;
+  --mg-danger: #b42318;
+  --mg-danger-bg: #fef3f2;
+  --mg-danger-border: #fda29b;
+  --mg-success: #027a48;
+  --mg-success-bg: #ecfdf3;
+  --mg-warning: #b54708;
+  --mg-warning-bg: #fffaeb;
+  --mg-focus: rgba(21, 112, 239, 0.35);
+
+  /* Type */
+  --mg-font: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --mg-font-mono: ui-monospace, Consolas, monospace;
+  --mg-text-xs: 11px;
+  --mg-text-sm: 12px;
+  --mg-text-md: 13px;
+  --mg-text-lg: 14px;
+  --mg-text-xl: 16px;
+  --mg-text-2xl: 18px;
+  --mg-weight-regular: 400;
+  --mg-weight-medium: 500;
+  --mg-weight-semibold: 600;
+  --mg-line: 1.45;
+
+  /* Spacing (4 px steps) */
+  --mg-space-1: 4px;
+  --mg-space-2: 8px;
+  --mg-space-3: 12px;
+  --mg-space-4: 16px;
+  --mg-space-5: 20px;
+  --mg-space-6: 24px;
+  --mg-space-8: 32px;
+
+  /* Radii */
+  --mg-radius-sm: 4px;
+  --mg-radius-md: 6px;
+  --mg-radius-lg: 8px;
+  --mg-radius-pill: 999px;
+
+  /* Shadows */
+  --mg-shadow-sm: 0 4px 14px rgba(16, 24, 40, 0.08);
+  --mg-shadow-md: 0 8px 24px rgba(20, 24, 40, 0.12);
+
+  /* Layers (the app's own: dropdowns, the workspace overlay, dialogs, Settings) */
+  --mg-z-dropdown: 1000;
+  --mg-z-workspace: 1500;
+  --mg-z-modal: 9999;
+  --mg-z-settings: 10050;
+
+  /* Motion */
+  --mg-duration-fast: 120ms;
+  --mg-duration: 200ms;
+  --mg-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Chrome */
+  --mg-header-height: 44px;
+}

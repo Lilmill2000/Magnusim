@@ -6,6 +6,8 @@ import { JobManager } from './jobs.ts';
 import { persistJobToWorker, registerPhase3Routes } from './routes.ts';
 import { getWorker } from './worker.ts';
 import { PluginServiceHost } from './plugin-services.ts';
+import type { SdkVariant } from './plugin-sdk.ts';
+import { isFrameAssetRequest } from './workspace-files.ts';
 import { attachWorkerBridge } from '../py-json.js';
 import { registerLiveRoutes } from './live-routes.js';
 import { setLiveRegistry } from '../registry-defaults.js';
@@ -36,10 +38,13 @@ export function createApiPlugin() {
     onPersist: (job) => persistJobToWorker(worker, job),
   });
 
-  function install(server: {
+  function install(
+    server: {
       middlewares: { use: (fn: (req: any, res: any, next: () => void) => void) => void };
       httpServer?: { on: (ev: string, fn: () => void) => void };
-    }) {
+    },
+    sdkVariant: SdkVariant,
+  ) {
       worker.start();
       // Node validates mesher / analysis keys against the live registry (plugins
       // included); the committed registry.json holds builtins only.
@@ -75,6 +80,7 @@ export function createApiPlugin() {
         attachCaseDir: live.attachCaseDir,
         resetCaseIdle: live.resetCaseIdle,
         services,
+        sdkVariant,
       });
       // The boot queue kick may start a plugin mesher; wait for the live registry.
       void registryReady.finally(() => live.boot());
@@ -82,11 +88,13 @@ export function createApiPlugin() {
       server.middlewares.use(async (req, res, next) => {
         try {
           const url = String(req.url || '');
-          if (!url.startsWith('/api/') && !url.startsWith('/plugins/')) {
+          if (!url.startsWith('/api/') && !url.startsWith('/plugins/') && !url.startsWith('/plugin-sdk/')) {
             next();
             return;
           }
-          assertSameOrigin(req);
+          // Plugin workspace frames have an opaque origin (Origin: null); they may GET
+          // the SDK and their own workspace files, and nothing else.
+          if (!isFrameAssetRequest(req.method, url)) assertSameOrigin(req);
           if (!registrySettled) {
             // First requests after boot: bounded wait so plugin keys resolve.
             let timer: ReturnType<typeof setTimeout> | undefined;
@@ -120,7 +128,11 @@ export function createApiPlugin() {
         server.httpServer.on('close', stop);
       }
   }
-  return { name: 'cfd-case-fields-api', configureServer: install, configurePreviewServer: install };
+  return {
+    name: 'cfd-case-fields-api',
+    configureServer: (server: Parameters<typeof install>[0]) => install(server, 'dev'),
+    configurePreviewServer: (server: Parameters<typeof install>[0]) => install(server, 'prod'),
+  };
 }
 
 export default createApiPlugin;

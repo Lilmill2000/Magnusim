@@ -17,6 +17,8 @@ import {
   type PluginEnv,
 } from './plugin-services.ts';
 import { RpcError, WorkerUnavailableError, type WorkerClient } from './worker.ts';
+import { pluginSdkFile, type SdkVariant } from './plugin-sdk.ts';
+import { FRAME_ASSET_HEADERS, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
 
 export interface RouteDeps {
   worker: WorkerClient;
@@ -33,7 +35,11 @@ export interface RouteDeps {
   /** Plugin services (their own environments); made here when not given. */
   services?: PluginServiceHost;
   envInstaller?: PluginEnvInstaller;
+  /** The workspace SDK build the frames get: dev (npm run dev) or prod (preview). */
+  sdkVariant?: SdkVariant;
 }
+
+type ListedPluginRow = { key: string; ui?: string; dir?: string | null; tier?: string; status?: string };
 
 /** What a page may see of a plugin environment (no local paths). */
 function publicEnv(env: PluginEnv | null): Record<string, unknown> | null {
@@ -244,7 +250,10 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       ctx.sendJson(403, { error: 'Plugin management is only available on this PC.', ok: false });
       return;
     }
-    if (method === 'registry.reload') services.resetAll('stopped for a plugin reload');
+    if (method === 'registry.reload') {
+      services.resetAll('stopped for a plugin reload');
+      listedCache = null;
+    }
     if (method === 'bc.menu' || method === 'registry.reload') {
       return workerJson(deps, ctx, method, {});
     }
@@ -300,6 +309,11 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     }
     if (!spec || !spec.tool) {
       ctx.sendJson(400, { error: 'unknown job kind' });
+      return;
+    }
+    // A workspace starts only its own plugin's jobs (its bridge names the plugin).
+    if (body.plugin != null && String(spec.plugin || 'builtin') !== String(body.plugin)) {
+      ctx.sendJson(403, { error: `not allowed: ${kind} is not a job of ${String(body.plugin)}`, ok: false });
       return;
     }
     if (spec.python_error) {
@@ -451,14 +465,47 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       });
     });
   }
+  // A study's whole record, and saving its own fields (a workspace's bridge uses these).
+  router.get('/api/plugin-studies/get', async (ctx) =>
+    workerJson(deps, ctx, 'plugin_studies.get', {
+      project_id: ctx.url.searchParams.get('project_id') || '',
+      plugin: ctx.url.searchParams.get('plugin') || '',
+      study_id: ctx.url.searchParams.get('study_id') || '',
+    }),
+  );
+  router.post('/api/plugin-studies/update', async (ctx) => {
+    const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
+    return workerJson(deps, ctx, 'plugin_studies.update', {
+      project_id: String(body.project_id || ''),
+      plugin: String(body.plugin || ''),
+      study_id: String(body.study_id || ''),
+      rev: body.rev,
+      patch: body.patch && typeof body.patch === 'object' ? body.patch : null,
+    });
+  });
+  // A plugin's own JSON files in the project (plugins/<key>/...).
+  for (const action of ['read', 'write'] as const) {
+    router.post(`/api/plugin-data/${action}`, async (ctx) => {
+      const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
+      return workerJson(deps, ctx, `plugin_data.${action}`, {
+        project_id: String(body.project_id || ''),
+        plugin: String(body.plugin || ''),
+        rel: String(body.rel || ''),
+        ...(action === 'write' ? { doc: body.doc ?? null } : {}),
+      });
+    });
+  }
+
   router.post('/api/plugins/:key/enable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
     services.reset(String(ctx.params.key || ''), 'restarted');
+    listedCache = null;
     return workerJson(deps, ctx, 'plugins.enable', { key: ctx.params.key });
   });
   router.post('/api/plugins/:key/disable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
     services.reset(String(ctx.params.key || ''), 'stopped: the plugin was turned off');
+    listedCache = null;
     return workerJson(deps, ctx, 'plugins.disable', { key: ctx.params.key });
   });
 
@@ -566,6 +613,75 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   router.get('/api/plugin/:key/**rest', pluginDispatch);
   router.post('/api/plugin/:key/**rest', pluginDispatch);
 
+  // The plugin list, briefly cached: a workspace page loads many files at once.
+  let listedCache: { at: number; rows: Promise<ListedPluginRow[]> } | null = null;
+  const listedPlugins = (): Promise<ListedPluginRow[]> => {
+    if (listedCache && Date.now() - listedCache.at < 2000) return listedCache.rows;
+    const rows = deps.worker
+      .call('plugins.list')
+      .then((r) => ((r as { plugins?: ListedPluginRow[] }).plugins || []) as ListedPluginRow[]);
+    listedCache = { at: Date.now(), rows };
+    rows.catch(() => {
+      listedCache = null;
+    });
+    return rows;
+  };
+
+  // The workspace SDK for plugin frames (React as ES modules, the bridge, the theme).
+  router.get('/plugin-sdk/:file', async (ctx) => {
+    const name = String(ctx.params.file || '');
+    let text: string | null = null;
+    try {
+      text = await pluginSdkFile(deps.webRoot, deps.sdkVariant || 'dev', name);
+    } catch (err) {
+      ctx.sendJson(500, { error: `plugin SDK build failed: ${err instanceof Error ? err.message : String(err)}` });
+      return;
+    }
+    if (text == null) {
+      ctx.sendJson(404, { error: 'no such SDK file' });
+      return;
+    }
+    const ext = name.split('.').pop() || '';
+    sendBytes(
+      ctx.res,
+      Buffer.from(text, 'utf8'),
+      { ...FRAME_ASSET_HEADERS, 'Content-Type': SDK_TYPES[ext] || 'application/octet-stream' },
+      ctx.method === 'HEAD',
+    );
+  });
+
+  // A plugin's workspace files, for its sandboxed frame (only while the plugin is on).
+  router.get('/plugins/:key/workspace/**rest', async (ctx) => {
+    const key = String(ctx.params.key || '');
+    if (!validPluginKey(key)) {
+      ctx.sendJson(400, { error: 'invalid plugin key' });
+      return;
+    }
+    let hit: ListedPluginRow | undefined;
+    try {
+      hit = (await listedPlugins()).find((p) => p.key === key);
+    } catch {
+      hit = undefined;
+    }
+    if (!hit || hit.status !== 'enabled') {
+      ctx.sendJson(404, { error: 'this plugin is not on, or has no workspace' });
+      return;
+    }
+    const file = safePluginFile(deps.webRoot, String(hit.dir || key), 'workspace', ctx.params.rest || 'index.html', hit.tier || 'user');
+    if (!file) {
+      ctx.sendJson(404, { error: 'workspace file not found' });
+      return;
+    }
+    const ext = (file.split('.').pop() || '').toLowerCase();
+    const headers: Record<string, string> = { ...FRAME_ASSET_HEADERS, 'Content-Type': WORKSPACE_TYPES[ext] || 'application/octet-stream' };
+    let buf = readFileSync(file);
+    if (ext === 'html') {
+      buf = Buffer.from(injectWorkspaceHead(buf.toString('utf8')), 'utf8');
+      headers['Content-Security-Policy'] = workspaceCsp(String(ctx.req.headers.host || ''), key);
+    }
+    sendBytes(ctx.res, buf, headers, ctx.method === 'HEAD');
+  });
+
   router.get('/plugins/:key/ui/**rest', async (ctx) => {
     let ui = 'ui';
     // The manifest key may differ from the plugin's folder name; files live in the folder.
@@ -599,15 +715,7 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     }
     const buf = readFileSync(file);
     const ext = file.split('.').pop() || '';
-    const types: Record<string, string> = {
-      js: 'text/javascript; charset=utf-8',
-      mjs: 'text/javascript; charset=utf-8',
-      css: 'text/css; charset=utf-8',
-      json: 'application/json; charset=utf-8',
-      html: 'text/html; charset=utf-8',
-      svg: 'image/svg+xml',
-    };
-    sendBytes(ctx.res, buf, { 'Content-Type': types[ext] || 'application/octet-stream' }, ctx.method === 'HEAD');
+    sendBytes(ctx.res, buf, { 'Content-Type': WORKSPACE_TYPES[ext] || 'application/octet-stream' }, ctx.method === 'HEAD');
   });
 }
 

@@ -455,7 +455,15 @@ export function PluginStudiesView({
             data-plugin={st.plugin}
             data-unavailable={st.available ? undefined : '1'}
           >
-            <div className="tree-row" title={st.available ? `${st.kind_title} (${st.plugin_name})` : st.reason}>
+            <div
+              className="tree-row"
+              title={st.available ? `${st.kind_title} (${st.plugin_name})` : st.reason}
+              data-plugin-study-open={st.available && st.workspace ? '1' : undefined}
+              onClick={() => {
+                // A study opens in its plugin's workspace (a sandboxed frame over the workbench).
+                if (st.available && st.workspace) onTreeAction(st.scope_key, 'plugin-study-open', { workspace: st.workspace });
+              }}
+            >
               <StudyIcon path={st.icon} />
               <span className="tl">{st.title}</span>
               {st.read_only ? <span className="plugin-study-tag">read-only</span> : null}

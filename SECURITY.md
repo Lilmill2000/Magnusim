@@ -31,6 +31,19 @@ hashed lock, wheels only, the app's packages untouched). It separates
 dependencies, not permissions: its service and jobs still run with your
 account's rights.
 
+A plugin's workspace page runs in a sandboxed frame without
+`allow-same-origin`, so it has an opaque origin. It cannot read or script the
+app's page, call the app's API, or use the app's storage or cookies. Its
+Content-Security-Policy limits what it loads and fetches to the plugin SDK
+(`/plugin-sdk/`) and its own `workspace/` folder. Everything else it does goes
+through the host's bridge, which accepts an allowlist of calls scoped to that
+plugin, project and study and logs the rest. Because the frame's origin is
+opaque, GET requests for those two folders are answered to any origin
+(`Access-Control-Allow-Origin: *`). They hold only the SDK and the plugin's
+shipped files, never project data. The sandbox isolates crashes, styles and the
+app's data from workspace code. It is not a defence against a malicious
+plugin, whose Python already runs with your rights.
+
 Keep projects, `.cache`, local preferences, environment files, keys, recordings,
 and generated run reports out of source releases. `.gitignore` prevents new
 tracking; it does not remove files from old commits. Review existing history

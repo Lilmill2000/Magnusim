@@ -45,6 +45,7 @@ import { openSetupWizard } from '../wizard/controller';
 import { convertQuantity, preferredUnit, siUnitLabel, unitIsImperial } from '../units/convert';
 import { isIsland, mountIsland, unmountIsland } from '../islands';
 import { useProjectStore } from '../store/project';
+import { workspaceHash } from '../workspace/route';
 import {
   DEFAULT_ANALYSIS_KEY,
   analysisRow,
@@ -6443,6 +6444,10 @@ function onPtRegionPointerUp(e) {
  */
 // The app's own dialogs, for the plugin study actions and the workspace bridge (H13).
 window.__CFD_CONFIRM__ = (opts) => confirmAction(opts);
+// A plugin workspace covers the viewport: stop playback and the particle trace animation.
+window.addEventListener('cfd:workspace-open', () => {
+  try { stopAnimationPlay(); } catch (_) {}
+});
 window.__CFD_PROMPT_NAME__ = (opts) => promptName(opts);
 
 async function handlePluginStudyAction(ps, action, detail) {
@@ -6455,6 +6460,13 @@ async function handlePluginStudyAction(ps, action, detail) {
     openSetupWizard({ required: false, step: 'plugins' });
     return;
   }
+  if (action === 'plugin-study-open') {
+    // Its plugin's workspace, over the workbench (#/p/<pid>/ws/<plugin>/<ws>/<sid>).
+    const ws = String(detail.workspace || '');
+    if (!ws || !ps.studyId) return;
+    location.hash = workspaceHash({ projectId: pid, plugin: ps.plugin, workspace: ws, studyId: ps.studyId });
+    return;
+  }
   if (action === 'plugin-study-new') {
     const kindTitle = String(detail.title || 'study');
     const title = await promptName({ title: 'New ' + kindTitle, label: 'Name', value: kindTitle + ' 1', yes: 'Create' });
@@ -6462,6 +6474,11 @@ async function handlePluginStudyAction(ps, action, detail) {
     const r = await post('create', { kind: String(detail.kind || ''), title: String(title).trim() });
     if (!r.json || !r.json.ok) await notice('Could not create the study', (r.json && r.json.error) || 'The study was not created.');
     sync();
+    // From the Workspaces menu: open the new study in its workspace.
+    const made = r.json && r.json.ok ? r.json.study : null;
+    if (detail.open && made && made.workspace && made.id) {
+      location.hash = workspaceHash({ projectId: pid, plugin: ps.plugin, workspace: String(made.workspace), studyId: String(made.id) });
+    }
     return;
   }
   if (action === 'plugin-study-rename') {

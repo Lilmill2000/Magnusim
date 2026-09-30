@@ -87,6 +87,8 @@ export interface PluginStudyKind {
   key: string;
   title: string;
   icon: string;
+  /** The workspace a study of this kind opens in ("" when none). */
+  workspace?: string;
 }
 
 interface ProjectTreeGeom {

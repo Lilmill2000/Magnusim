@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { caseDirAllowedForAttach } from '../project-isolation.js';
 import { scopeIsStrict } from '../request-scope.js';
-import { HttpError, parseUrl, readJsonBody, sendJson } from './http.ts';
+import { HttpError, jsonBodyLimit, parseUrl, readJsonBody, sendJson } from './http.ts';
 
 export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
@@ -264,7 +264,7 @@ export async function dispatch(
   const contentType = String((req.headers && (req.headers['content-type'] || req.headers['Content-Type'])) || '');
   if (method !== 'GET' && method !== 'HEAD' && contentType.includes('application/json')) {
     try {
-      parsedBody = await readJsonBody(req);
+      parsedBody = await readJsonBody(req, jsonBodyLimit(url.pathname));
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 400;
       sendJson(res, status, { error: err instanceof Error ? err.message : 'invalid JSON body' });
@@ -310,7 +310,7 @@ export async function dispatch(
     pathname: url.pathname,
     scope: { projectId, simulationId, geometryId, caseDir },
     sendJson: (status, body) => sendJson(res, status, body),
-    readJsonBody: () => readJsonBody(req),
+    readJsonBody: () => readJsonBody(req, jsonBodyLimit(url.pathname)),
   };
   try {
     const out = await found.route.handler(ctx);

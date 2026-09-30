@@ -325,7 +325,9 @@ def register(hub):
 
 
 def test_load_all_retries_after_ep_load_failure(monkeypatch):
-    """Failed EP import leaves _LOADED False so a later load_all() retries without force."""
+    """Failed EP import leaves _LOADED False so a later load_all() retries without force
+    (once the retry window has passed: nothing on disk changes for an entry point)."""
+    monkeypatch.setattr(discovery_mod, "_RETRY_AFTER_S", 0.0)
     calls = {"n": 0}
 
     class FlakyEP:
@@ -367,6 +369,53 @@ def test_load_all_retries_after_ep_load_failure(monkeypatch):
     assert discovery_mod._LOADED is True
     assert "from_ep" in hub2.registry("analysis").keys()
     assert "kept" in hub2.registry("demo").keys()
+
+
+def _broken_plugin(tmp_path: Path, monkeypatch) -> Path:
+    """A user plugin whose import fails; each import appends to the returned file."""
+    plugins = tmp_path / "plugins" / "broken"
+    plugins.mkdir(parents=True)
+    (plugins / "manifest.toml").write_text('key = "broken"\nname = "Broken"\nversion = "0.1.0"\n', encoding="utf-8")
+    count = tmp_path / "imports.txt"
+    (plugins / "plugin.py").write_text(f"open({str(count)!r}, 'a').write('x')\nraise RuntimeError('boom')\n", encoding="utf-8")
+    monkeypatch.setenv("CFDDESK_WEB_ROOT", str(tmp_path))
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(tmp_path / "plugins"))
+    reset_for_tests()
+    return count
+
+
+def test_a_broken_plugin_is_not_reimported_on_every_call(tmp_path: Path, monkeypatch):
+    """After a partial load, load_all() does not rediscover on each call (it cost
+    ~0.3 s per tree read and study save): only when the plugin folders change on
+    disk, or after the retry window."""
+    count = _broken_plugin(tmp_path, monkeypatch)
+    load_all(web_root=tmp_path)
+    assert discovery_mod._LOADED is False
+    assert count.read_text() == "x"
+    for _ in range(3):
+        load_all(web_root=tmp_path)
+    assert count.read_text() == "x"
+    # A fix on disk is picked up by the next call.
+    (tmp_path / "plugins" / "broken" / "plugin.py").write_text(
+        f"open({str(count)!r}, 'a').write('y')\ndef register(hub):\n    return None\n", encoding="utf-8"
+    )
+    sys.modules.pop("cfddesk._plugins.broken", None)
+    load_all(web_root=tmp_path)
+    assert count.read_text() == "xy"
+    assert discovery_mod._LOADED is True
+    # And force always rediscovers.
+    load_all(web_root=tmp_path, force=True)
+    assert count.read_text() == "xyy"
+
+
+def test_a_failed_load_retries_after_the_window(tmp_path: Path, monkeypatch):
+    count = _broken_plugin(tmp_path, monkeypatch)
+    load_all(web_root=tmp_path)
+    load_all(web_root=tmp_path)
+    assert count.read_text() == "x"
+    monkeypatch.setattr(discovery_mod, "_FAILED_AT", discovery_mod._FAILED_AT - discovery_mod._RETRY_AFTER_S - 1)
+    load_all(web_root=tmp_path)
+    assert count.read_text() == "xx"
 
 
 def test_ep_non_callable_feeds_had_failures(monkeypatch):

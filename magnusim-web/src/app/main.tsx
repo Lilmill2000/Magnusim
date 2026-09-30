@@ -1,6 +1,8 @@
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import shellHtml from './shell.html?raw';
+// Design tokens (custom properties only: no core selector changes).
+import '../theme/tokens.css';
 import { AppShell } from './AppShell';
 import { parseHomeRoute } from '../home/controller';
 

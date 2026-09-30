@@ -1107,7 +1107,15 @@ def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], l
                 }
             )
     kinds_out = [
-        {"plugin": key, "plugin_name": m.name, "key": k.key, "title": k.title, "icon": k.icon}
+        {
+            "plugin": key,
+            "plugin_name": m.name,
+            "key": k.key,
+            "title": k.title,
+            "icon": k.icon,
+            # The workspace a study of this kind opens in ("" when it has none).
+            "workspace": k.workspace,
+        }
         for key, m in sorted(enabled.items())
         for k in m.study_kinds
     ]
@@ -1124,12 +1132,14 @@ def _plugin_data_for(project_id: str, plugin: str):
 
 
 def _study_call(fn, *args: Any, **kwargs: Any) -> Any:
-    from cfddesk.registry.plugin_data import PluginDataError, StaleRevisionError
+    from cfddesk.registry.plugin_data import PluginDataError, StaleRevisionError, StudyNotFoundError
 
     try:
         return fn(*args, **kwargs)
     except StaleRevisionError as exc:
         raise RpcError(RPC_CONFLICT, str(exc), {"rev": exc.current}) from exc
+    except StudyNotFoundError as exc:
+        raise RpcError(-32004, "study not found") from exc
     except PluginDataError as exc:
         raise RpcError(-32602, str(exc)) from exc
 
@@ -1201,6 +1211,78 @@ def plugin_studies_get(project_id: str = "", plugin: str = "", study_id: str = "
     pid = str(project_id or "").strip()
     data = _plugin_data_for(pid, plugin)
     return {"ok": True, "study": _study_call(data.study, study_id)}
+
+
+# What a study update may not change: the host keeps these.
+_STUDY_FIXED = {"id", "kind", "plugin", "plugin_name", "plugin_version", "schema_version", "created_at", "updated_at", "rev"}
+
+
+@rpc("plugin_studies.update")
+def plugin_studies_update(
+    project_id: str = "", plugin: str = "", study_id: str = "", rev: int | None = None, patch: dict | None = None
+) -> dict[str, Any]:
+    """Change a study's own fields (its workspace saves it), refused for a stale rev."""
+    pid = str(project_id or "").strip()
+    data = _plugin_data_for(pid, plugin)
+    row = _study_row(pid, data.plugin, study_id)
+    if not row["available"]:
+        raise RpcError(-32602, row["reason"])
+    if row["read_only"]:
+        raise RpcError(-32602, "This study was saved by a newer version of the plugin; it opens read-only.")
+    if not isinstance(patch, dict):
+        raise RpcError(-32602, "patch must be an object")
+    rec = _study_call(data.update_study, study_id, {k: v for k, v in patch.items() if k not in _STUDY_FIXED}, rev)
+    return {"ok": True, "study": rec}
+
+
+# `:` (drive letters, NTFS streams) and `~` (8.3 short names) can alias another file on Windows.
+_DATA_PART_BAD = re.compile(r"[:~\x00-\x1f]")
+_STUDY_RECORD_WRITE = "a study's record changes only through the study calls"
+
+
+def _is_study_record(parts: list[str] | tuple[str, ...]) -> bool:
+    """studies/<sid>/study.json in any spelling Windows opens as that file."""
+    norm = [str(p).rstrip(" .").lower() for p in parts]
+    return len(norm) >= 3 and norm[0] == "studies" and norm[-1] == "study.json"
+
+
+def _plugin_data_rel(rel: str, *, write: bool) -> str:
+    """A path in the plugin's data folder as a workspace may name it: relative,
+    no `..` and no Windows aliases. A write never reaches a study's record, which
+    changes only through the study calls (they check its rev)."""
+    text = str(rel or "").replace("\\", "/").strip()
+    parts = [part for part in text.split("/") if part not in ("", ".")]
+    if not parts or text.startswith("/") or any(part == ".." or _DATA_PART_BAD.search(part) for part in parts):
+        raise RpcError(-32602, "a path inside the plugin's data folder is required")
+    if write and _is_study_record(parts):
+        raise RpcError(-32602, _STUDY_RECORD_WRITE)
+    return "/".join(parts)
+
+
+_PLUGIN_DATA_MAX = 8 * 1024 * 1024
+
+
+@rpc("plugin_data.read")
+def plugin_data_read(project_id: str = "", plugin: str = "", rel: str = "") -> dict[str, Any]:
+    """A JSON file from the plugin's own folder in the project (null when there is none)."""
+    data = _plugin_data_for(str(project_id or "").strip(), plugin)
+    path = _plugin_data_rel(rel, write=False)
+    return {"ok": True, "doc": _study_call(data.read_json, path)}
+
+
+@rpc("plugin_data.write")
+def plugin_data_write(project_id: str = "", plugin: str = "", rel: str = "", doc: Any = None) -> dict[str, Any]:
+    """Save a JSON file in the plugin's own folder in the project (8 MB at most)."""
+    data = _plugin_data_for(str(project_id or "").strip(), plugin)
+    path = _plugin_data_rel(rel, write=True)
+    # Checked again where it lands (the resolved path has Windows' long, real names).
+    target = _study_call(data.path, path)
+    if _is_study_record(target.relative_to(data.root.resolve()).parts):
+        raise RpcError(-32602, _STUDY_RECORD_WRITE)
+    if len(json.dumps(doc)) > _PLUGIN_DATA_MAX:
+        raise RpcError(-32602, "that file is larger than 8 MB")
+    _study_call(data.write_json, path, doc)
+    return {"ok": True}
 
 
 @rpc("plugin_studies.migrated")

@@ -59,6 +59,7 @@ jobs:
       - run: npm run test:server
       - run: npm run test:unit
       - run: npm run gen:registry:check
+      - run: npm run gen:plugin-sdk:check
       - run: npm run test:js-case
       - run: npm run build
       - run: npx playwright install --with-deps chromium

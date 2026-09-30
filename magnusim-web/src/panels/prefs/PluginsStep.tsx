@@ -157,6 +157,8 @@ export function PluginsStep() {
   async function reloadRegistry() {
     await workerRpc('registry.reload', {});
     await useProjectStore.getState().loadRegistry(true);
+    // The plugins changed: the tree's STUDIES and the Workspaces menu read again.
+    window.dispatchEvent(new Event('cfd:tree-sync'));
   }
 
   async function reload() {

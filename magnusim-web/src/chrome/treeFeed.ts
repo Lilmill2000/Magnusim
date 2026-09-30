@@ -27,6 +27,8 @@ interface Feed {
   dirty: boolean;
   /** Each reader, with the first request it hears: one sent after it started listening. */
   readers: Map<Reader, number>;
+  /** The request that is out (its seq), while busy. */
+  current: number;
 }
 
 const feeds = new Map<string, Feed>();
@@ -36,7 +38,7 @@ let listening = false;
 function feedFor(projectId: string): Feed {
   let feed = feeds.get(projectId);
   if (!feed) {
-    feed = { busy: false, dirty: false, readers: new Map() };
+    feed = { busy: false, dirty: false, readers: new Map(), current: 0 };
     feeds.set(projectId, feed);
   }
   return feed;
@@ -51,6 +53,7 @@ function send(projectId: string, feed: Feed): void {
   feed.busy = true;
   feed.dirty = false;
   const seq = ++sent;
+  feed.current = seq;
   const land = (answer: TreeAnswer) => {
     try {
       for (const [reader, first] of [...feed.readers]) {
@@ -98,4 +101,17 @@ export function onProjectTree(projectId: string, reader: Reader): () => void {
     feed.readers.delete(reader);
     forget(projectId, feed);
   };
+}
+
+/**
+ * Like onProjectTree, for a reader that only needs the project's current tree (the
+ * header's Workspaces menu): it also hears the request that is out, and reads only
+ * when none is, so starting it never costs a follow-up read of the tree.
+ */
+export function followProjectTree(projectId: string, reader: Reader): () => void {
+  const stop = onProjectTree(projectId, reader);
+  const feed = feedFor(projectId);
+  if (feed.busy) feed.readers.set(reader, feed.current);
+  else send(projectId, feed);
+  return stop;
 }

@@ -176,6 +176,8 @@ async function applyPreferredUnitsNow() {
       console.warn('[CFD] preferred units', e);
     }
   }
+  // An open plugin workspace follows the units live (workspace bridge).
+  window.dispatchEvent(new CustomEvent('cfd:units'));
 }
 
 async function persistWizardUnits() {

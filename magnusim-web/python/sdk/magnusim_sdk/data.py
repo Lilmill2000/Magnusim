@@ -52,6 +52,10 @@ class StaleRevisionError(PluginDataError):
         self.current = current
 
 
+class StudyNotFoundError(PluginDataError):
+    """No such study in this plugin's folder (deleted, or never made)."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -150,7 +154,7 @@ class PluginData:
     def study(self, sid: str) -> dict[str, Any]:
         rec = self.read_json(self._study_rel(sid))
         if not isinstance(rec, dict):
-            raise PluginDataError(f"no study {sid!r}")
+            raise StudyNotFoundError(f"no study {sid!r}")
         return rec
 
     def create_study(

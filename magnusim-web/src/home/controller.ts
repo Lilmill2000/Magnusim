@@ -6,6 +6,7 @@
  */
 
 import { initSetupWizard } from '../wizard/controller';
+import { hashIsProject, parseWorkspaceHash } from '../workspace/route';
 
 function $(id) {
   return document.getElementById(id);
@@ -141,7 +142,10 @@ function projectHash(id) {
 export function parseHomeRoute() {
   const h = String(location.hash || '').replace(/^#/, '');
   const proj = h.match(/^\/p\/([^/]+)$/);
-  if (proj) return { view: 'workbench', projectId: decodeURIComponent(proj[1]), filter: null };
+  if (proj) return { view: 'workbench', projectId: decodeURIComponent(proj[1]), filter: null, workspace: null };
+  // A plugin workspace opens over its project's workbench.
+  const ws = parseWorkspaceHash(h);
+  if (ws) return { view: 'workbench', projectId: ws.projectId, filter: null, workspace: ws };
   const folder = h.match(/^\/folder\/(.+)$/);
   if (folder) {
     return { view: 'home', projectId: null, filter: `folder:${decodeURIComponent(folder[1])}` };
@@ -356,7 +360,8 @@ export async function openProject(id, { reloadIfNeeded = true } = {}) {
     }
     showWorkbench();
     const nextHash = projectHash(want);
-    if (location.hash !== nextHash) location.hash = nextHash;
+    // Keep a deep link into one of its workspaces (#/p/<id>/ws/...).
+    if (!hashIsProject(location.hash, want)) location.hash = nextHash;
 
     const openP = fetch('/api/project/open', {
       method: 'POST',

@@ -21,6 +21,22 @@ class StudyKind:
 
 
 @dataclass(frozen=True)
+class WorkspaceSpec:
+    """A full workspace a plugin draws itself (manifest ``[[workspaces]]``, API 1.1).
+
+    It runs in a sandboxed frame (opaque origin) inside the host's chrome and
+    talks to the app only through the workspace bridge. ``entry`` is an HTML
+    file in the plugin's ``workspace/`` folder, which the host serves at
+    ``/plugins/<key>/workspace/``. A study kind opens it (``workspace = key``).
+    """
+
+    key: str
+    title: str
+    icon: str = ""
+    entry: str = "workspace/index.html"
+
+
+@dataclass(frozen=True)
 class PythonEnvSpec:
     """A plugin's own Python environment (manifest ``[python]``, API 1.1).
 
@@ -62,5 +78,7 @@ class PluginManifest:
     protected: list[str] = field(default_factory=list)
     # Project-level studies it owns (plugins/<key>/studies/<sid>).
     study_kinds: list[StudyKind] = field(default_factory=list)
+    # Full workspaces it draws in a sandboxed frame ([[workspaces]]).
+    workspaces: list[WorkspaceSpec] = field(default_factory=list)
     # Its own environment and service ([python]); None runs in the core (bundled, no extra packages).
     python_env: PythonEnvSpec | None = None

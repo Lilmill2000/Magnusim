@@ -1,0 +1,105 @@
+/*
+ * Base styles for plugin workspaces (served with the tokens as
+ * /plugin-sdk/theme.css). They make a plain workspace page look like the app:
+ * font, colours, form controls, buttons and focus. The plugin UI kit (H14)
+ * builds its components on the same tokens.
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--mg-font);
+  font-size: var(--mg-text-md);
+  line-height: var(--mg-line);
+  color: var(--mg-text);
+  background: var(--mg-bg);
+}
+
+h1,
+h2,
+h3 {
+  color: var(--mg-text-strong);
+  font-weight: var(--mg-weight-semibold);
+  margin: 0 0 var(--mg-space-2);
+}
+
+h1 {
+  font-size: var(--mg-text-2xl);
+}
+
+h2 {
+  font-size: var(--mg-text-xl);
+}
+
+h3 {
+  font-size: var(--mg-text-lg);
+}
+
+p {
+  margin: 0 0 var(--mg-space-2);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+select,
+textarea {
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm);
+  padding: 5px 8px;
+  background: var(--mg-bg);
+}
+
+button {
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-md);
+  padding: 5px 12px;
+  background: var(--mg-bg);
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--mg-surface);
+}
+
+button.primary {
+  background: var(--mg-primary);
+  border-color: var(--mg-primary);
+  color: var(--mg-primary-text);
+}
+
+button.primary:hover {
+  background: var(--mg-primary-hover);
+  border-color: var(--mg-primary-hover);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--mg-focus);
+  outline-offset: 1px;
+}
+
+code,
+pre {
+  font-family: var(--mg-font-mono);
+  font-size: var(--mg-text-sm);
+}

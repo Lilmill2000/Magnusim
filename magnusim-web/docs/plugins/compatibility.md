@@ -50,6 +50,25 @@ A manifest's `[[study_kinds]]` (`key`, `title`, `icon` as one SVG path, `workspa
 
 **`magnusim_sdk` 1.1** adds `data` (`PluginData`, the one copy; `cfddesk.registry.plugin_data` re-exports it) and `service`.
 
+**Workspaces.** A manifest's `[[workspaces]]` (`key`, `title`, `icon` as one SVG path, `entry`: an `.html` file in the plugin's `workspace/` folder, `workspace/index.html` by default) declares a full page the plugin draws. A study kind's `workspace` names one; it must be declared, or the plugin fails to load with that message. A study of that kind opens in it at `#/p/<pid>/ws/<plugin>/<workspace>/<sid>`, over the project's workbench: the tree and the active study stay as they were, and Back, reload, browser history and deep links work. The host draws the header: Back to project, `<Plugin> › <Study>` (click to rename), Queue and Settings. The header's Workspaces menu (shown only while an enabled plugin has a workspace) names a new study and opens it. `plugins.list` rows add `workspaces`; study kinds and study rows add `workspace` (`""` when there is none).
+
+The page runs in a sandboxed frame (`sandbox="allow-scripts allow-downloads"`, an opaque origin), served from `/plugins/<key>/workspace/` while the plugin is on. Its Content-Security-Policy allows scripts, styles and fonts from `/plugin-sdk/` and its own folder, `fetch` to its own folder only, images and media from its own folder plus `data:` and `blob:`, workers from `blob:`, WebAssembly, and no inline script but the host's import map. It cannot reach the app's page, the app's API, `localStorage`, IndexedDB or cookies.
+
+**Workspace SDK 1.0** (`/plugin-sdk/`). The host puts an import map and `/plugin-sdk/theme.css` (the `--mg-*` design tokens and base styles) first in every workspace page. The import map names `react`, `react-dom/client`, `react/jsx-runtime` and `react/jsx-dev-runtime` (the app's React as ES modules, one copy), and `@magnusim/workspace` (the bridge). `docs/plugins/plugin-sdk.json` gives the versions and the import map; `docs/plugins/workspace-sdk.d.ts` (also served as `/plugin-sdk/workspace.d.ts`) gives the bridge's types. `npm run gen:plugin-sdk` regenerates both, and CI checks they are current. `connect()` says hello and gets the context (plugin, workspace, project, study, units, theme) and a private port; every call then goes over that port, scoped to the plugin, the project and the study:
+
+| Call | What it does |
+|---|---|
+| `service(method, params)` | Its own backend (`/api/plugin/<key>/<method>`), never another plugin's |
+| `jobs.start(kind, params)`, `jobs.events(id, fn)`, `jobs.stop(id)` | Its own job kinds (a start that names another plugin's kind is refused, 403); events and Stop only for jobs this workspace started |
+| `study.get()`, `study.update(patch, rev)` | Its study; a stale `rev` is refused. The host keeps `id`, `kind`, `plugin`, `plugin_name`, `plugin_version`, `schema_version`, `created_at`, `updated_at` and `rev` |
+| `data.read(rel)`, `data.write(rel, doc)` | JSON in its own folder of the project (8 MB at most, the one request allowed past the app's 2 MB JSON limit). `..`, `:` and `~` are refused, and so is a study's record (`studies/<sid>/study.json`, any spelling) |
+| `project.info()`, `call('prefs.units')`, `call('theme')` | Read-only project title and units, the theme |
+| `ui.toast`, `ui.confirm`, `ui.prompt`, `nav.back` | The app's toast and dialogs; close the workspace |
+| `on('units' \| 'theme' \| 'study', fn)` | Changes the host pushes while it is open. `study` carries the record after a rename in the header or a save, so the next `study.update` uses its `rev` (`context.study` follows too) |
+| `spawnWorker(url)` | A worker running your module (the sandbox refuses `new Worker(url)`); messages posted before your module has loaded are held and delivered to it in order |
+
+Anything else answers `not allowed: …`, and the host logs it. A page that has not connected 5 s after it started loading gets an error card (Open Settings → Plugins, Try again). A study deleted while it is open, or a link to one, shows "This study no longer exists." with Back to project. Worker RPCs `plugin_studies.get|update` and `plugin_data.read|write` (routes `/api/plugin-studies/get|update`, `/api/plugin-data/read|write`); a missing study answers 404 `study not found` (`magnusim_sdk.data.StudyNotFoundError`).
+
 ## 1.0
 
 The first plugin host API: `register(hub)`, `manifest.toml`, registry kinds (analysis, solver, mesher, bc, material, monitor, filter, job), hooks, UI panels in `filters` and `prefs`, plugin methods at `/api/plugin/<key>/<method>`.

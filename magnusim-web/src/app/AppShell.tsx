@@ -12,6 +12,8 @@ import { registerAllIslands } from '../panels/register';
 import { useProjectStore } from '../store/project';
 import { bindLegacyViewer } from '../viewer/index';
 import { SetupWizard } from '../wizard/SetupWizard';
+import { WorkspaceOverlay } from '../workspace/WorkspaceOverlay';
+import { WorkspacesMenu } from '../workspace/WorkspacesMenu';
 
 export function AppShell() {
   const [toast, setToast] = useState('');
@@ -90,6 +92,10 @@ export function AppShell() {
       {/* Legend, timeline, compare, saved views and inspect point are owned by the
           FILTERS panel and viewport chrome; only plugin filter sections mount here. */}
       <FiltersPanel />
+      {/* After <LeftTree />: sibling effects run in order, so the menu joins the tree's
+          first read (followProjectTree) instead of queueing a second one (h11 stale-rev). */}
+      <WorkspacesMenu />
+      <WorkspaceOverlay />
     </>
   );
 }

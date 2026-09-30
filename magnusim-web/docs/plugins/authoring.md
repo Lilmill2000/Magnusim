@@ -124,7 +124,7 @@ export function register(host) {
 }
 ```
 
-`host` is `{ React, ReactDOM, pluginUi, scope }`. `scope` is the open project's scope id. There is no import map. A thrown `register` or a thrown panel is a Plugins-tab row and a toast. Builtins stay loaded.
+`host` is `{ React, ReactDOM, pluginUi, scope }`. `scope` is the open project's scope id. In-page UI has no import map (workspaces do, below). A thrown `register` or a thrown panel is a Plugins-tab row and a toast. Builtins stay loaded.
 
 `pluginUi` can register a panel, replace a host panel, add a filter widget, add a schema field widget, or add a tree transform. Tree nodes must carry the current project scope or the tree drops them.
 
@@ -133,6 +133,65 @@ A panel's `place` is `"filters"` (the Filters panel) or `"prefs"` (your row in S
 `registerFieldWidget(name, Component)` renders any schema field whose `x-cfddesk.widget` is `name` with your component.
 
 Everything your `register(host)` adds is recorded under your plugin key. Disabling the plugin removes it at once, and reloading replaces it instead of adding a second copy.
+
+## Workspaces (1.1)
+
+A panel fits in the workbench; a tool with its own screens (an airfoil polar bench, a sketcher) gets a **workspace**: a full page you draw yourself, opened from one of your study kinds. The app keeps the header (Back to project, `<Your plugin> › <Study>` with rename, Queue, Settings) and puts your page under it, over the project's workbench.
+
+```toml
+[[workspaces]]
+key = "bench"
+title = "Bench"
+icon = "M4 5h16v14H4z M4 9h16"      # one SVG path, 24 x 24
+entry = "workspace/index.html"      # an .html file in workspace/
+
+[[study_kinds]]
+key = "bench_case"
+title = "Bench case"
+icon = "M5 19V5h14v14z"
+workspace = "bench"                 # a study of this kind opens there
+```
+
+The host serves your `workspace/` folder, and only that folder, to the frame. The study's row in the tree opens it, and so does the header's Workspaces menu (New Bench case). The link `#/p/<project>/ws/<plugin>/<workspace>/<study>` reopens it after a reload.
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="./bench.css" />
+    <script type="module" src="./main.js"></script>
+  </head>
+  <body><div id="root"></div></body>
+</html>
+```
+
+```javascript
+// main.js
+import { connect } from '@magnusim/workspace';
+import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+
+const ws = await connect();                     // context: plugin, project, study, units, theme
+const study = await ws.study.get();
+createRoot(document.getElementById('root')).render(createElement('h1', null, study.title));
+const polar = await ws.service('polar', { alpha: 4 });  // your backend
+await ws.data.write(`studies/${study.id}/polar.json`, polar);
+await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab saved first
+```
+
+- **Imports.** The host puts an import map in your page for `react`, `react-dom/client`, `react/jsx-runtime` and `@magnusim/workspace`. Import those names; do not ship your own React. If you bundle your code, mark them external and emit ES modules. The versions are in `docs/plugins/plugin-sdk.json`. For types, copy `docs/plugins/workspace-sdk.d.ts` into your plugin.
+- **Styles.** `/plugin-sdk/theme.css` is loaded before your own CSS: use its `--mg-*` tokens (colours, type, spacing, radii, shadows) so the page matches the app.
+- **The sandbox.** The page runs in a sandboxed frame with an opaque origin. Its Content-Security-Policy allows scripts, styles, fonts, images and `fetch` only from `/plugin-sdk/` and your own `workspace/` folder, plus `data:` and `blob:` images:
+  - No inline `<script>`: put code in module files.
+  - No `/api/`: use `ws.service`, `ws.data`, `ws.study` and `ws.jobs`.
+  - No `localStorage`, IndexedDB or cookies: keep state in `ws.data` (JSON, 8 MB a file) or the study.
+  - Workers: `ws.spawnWorker(new URL('./worker.js', import.meta.url))`. You can post to it at once; messages are held until your module has loaded.
+  - WebAssembly from your folder: `WebAssembly.instantiateStreaming(fetch(new URL('./x.wasm', import.meta.url)))`.
+- **Bridge calls** are allowed only for your plugin, this project and this study; `compatibility.md` lists them all. Anything else is refused with "not allowed: …". `ws.on('units', fn)` follows the user's unit choice; `ws.on('study', fn)` gets the study after a rename in the header (save next with its `rev`, or with `ws.context.study.rev`, which follows); `ws.ui.toast`, `ws.ui.confirm` and `ws.ui.prompt` use the app's own; `ws.nav.back()` closes the workspace.
+- **Starting.** Call `connect()` as soon as the page loads. A page that has not connected within 5 s shows the user "<Your plugin> didn't start." with Try again.
+
+`python/tests/fixtures/workspace-plugins/ws-demo` is a complete example (modules, React, WebAssembly, a worker, service calls, data and study saves), driven by `e2e/h13-workspace.spec.js`.
 
 ## Plugins tab
 

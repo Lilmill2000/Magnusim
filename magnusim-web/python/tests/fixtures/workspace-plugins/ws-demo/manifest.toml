@@ -1,0 +1,31 @@
+key = "ws-demo"
+name = "Workspace demo"
+version = "1.0.0"
+api_version = "1.1"
+license = "GPL-3.0-or-later"
+description = "Test plugin with full workspaces in a sandboxed frame (H13)"
+authors = "Magnusim"
+
+[[workspaces]]
+key = "bench"
+title = "Bench"
+icon = "M4 5h16v14H4z M4 9h16"
+entry = "workspace/index.html"
+
+[[workspaces]]
+key = "silent"
+title = "Silent"
+icon = "M4 5h16v14H4z"
+entry = "workspace/silent.html"
+
+[[study_kinds]]
+key = "bench_case"
+title = "Bench case"
+icon = "M5 19V5h14v14z M9 9h6v6H9z"
+workspace = "bench"
+
+[[study_kinds]]
+key = "silent_case"
+title = "Silent case"
+icon = "M5 19V5h14v14z"
+workspace = "silent"

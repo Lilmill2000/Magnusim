@@ -54,6 +54,9 @@ describe('PluginsStep', () => {
   });
 
   it('disables a plugin, reloads the registry and shows the new state', async () => {
+    let syncs = 0;
+    const onSync = () => void (syncs += 1);
+    window.addEventListener('cfd:tree-sync', onSync);
     render(<PluginsStep />);
     await screen.findByText('example-laminar does a thing');
     fireEvent.click(screen.getAllByRole('button', { name: 'Disable' })[0]);
@@ -62,6 +65,9 @@ describe('PluginsStep', () => {
     );
     expect(workerRpc).toHaveBeenCalledWith('registry.reload');
     expect(screen.getByRole('button', { name: 'Enable' })).toBeInTheDocument();
+    // The tree (its STUDIES) and the Workspaces menu read the plugins' state again.
+    expect(syncs).toBeGreaterThan(0);
+    window.removeEventListener('cfd:tree-sync', onSync);
   });
 
   it('shows a plugin panel inside its own row, only while the plugin is on', async () => {

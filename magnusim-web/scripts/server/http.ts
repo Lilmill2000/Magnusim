@@ -21,10 +21,22 @@ export class HttpError extends Error {
 
 const jsonBodies = new WeakMap<IncomingMessage, Record<string, unknown>>();
 
-export async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+/** A JSON request body's size limit. */
+export const JSON_BODY_LIMIT = 2 * 1024 * 1024;
+/**
+ * A plugin's data file may be 8 MB (plugin_data.write refuses more); its request
+ * carries it plus the project, plugin and path.
+ */
+export const PLUGIN_DATA_BODY_LIMIT = 9 * 1024 * 1024;
+
+export function jsonBodyLimit(pathname: string): number {
+  return pathname === '/api/plugin-data/write' ? PLUGIN_DATA_BODY_LIMIT : JSON_BODY_LIMIT;
+}
+
+export async function readJsonBody(req: IncomingMessage, limit = JSON_BODY_LIMIT): Promise<Record<string, unknown>> {
   const cached = jsonBodies.get(req);
   if (cached) return cached;
-  const raw = (await readBinaryBody(req, 2 * 1024 * 1024)).toString('utf8');
+  const raw = (await readBinaryBody(req, limit)).toString('utf8');
   if (!raw.trim()) {
     const empty = {};
     jsonBodies.set(req, empty);

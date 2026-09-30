@@ -16,7 +16,7 @@ from typing import Any
 from cfddesk.registry.base import Registry, RegistryError
 from cfddesk.registry.bc_extend import BcExtensions
 from cfddesk.registry.hooks import get_hooks
-from cfddesk.registry.manifest import PluginManifest, StudyKind
+from cfddesk.registry.manifest import PluginManifest, StudyKind, WorkspaceSpec
 
 log = logging.getLogger(__name__)
 
@@ -141,6 +141,13 @@ class RegistryHub:
 _HUB: RegistryHub | None = None
 _LOADED = False
 _BUILTINS_REGISTERED = False
+# After a load with a failed plugin, load_all() retries discovery only when the
+# plugin folders changed on disk or this long has passed (an entry point may
+# have been mid-install). Every call re-importing every plugin cost ~0.3 s on
+# each tree read and study save while one plugin was broken.
+_RETRY_AFTER_S = 30.0
+_FAILED_AT: float | None = None
+_FAILED_SIG: tuple[Any, ...] | None = None
 
 
 def get_hub() -> RegistryHub:
@@ -156,7 +163,7 @@ def get_registry(kind: str) -> Registry[Any]:
 
 def reset_for_tests() -> None:
     """Clear all registries and load state (unit tests)."""
-    global _HUB, _LOADED, _BUILTINS_REGISTERED
+    global _HUB, _LOADED, _BUILTINS_REGISTERED, _FAILED_AT, _FAILED_SIG
     if _HUB is not None:
         _HUB.clear()
     else:
@@ -165,6 +172,33 @@ def reset_for_tests() -> None:
     _HUB = RegistryHub()
     _LOADED = False
     _BUILTINS_REGISTERED = False
+    _FAILED_AT = None
+    _FAILED_SIG = None
+
+
+_SIG_SKIP_DIRS = {"__pycache__", "node_modules", ".venv", ".git", "wheels"}
+
+
+def _plugin_sources_signature(web_root: Path | str | None) -> tuple[Any, ...]:
+    """What a fix to a failed plugin changes: the plugin folders there are, and
+    the size and time of each manifest, lock and Python file in them."""
+    root = _resolve_web_root(web_root)
+    out: list[Any] = []
+    for folder in (bundled_dir_for(root), plugins_dir_for(root) if root is not None else None):
+        if folder is None or not Path(folder).is_dir():
+            out.append((str(folder), None))
+            continue
+        for dirpath, dirnames, filenames in os.walk(folder):
+            dirnames[:] = sorted(d for d in dirnames if d not in _SIG_SKIP_DIRS)
+            for name in sorted(filenames):
+                if name.endswith(".py") or name in ("manifest.toml", "requirements.lock"):
+                    try:
+                        st = os.stat(os.path.join(dirpath, name))
+                    except OSError:
+                        continue
+                    out.append((os.path.join(dirpath, name), st.st_mtime_ns, st.st_size))
+            out.append((dirpath, tuple(dirnames)))
+    return tuple(out)
 
 
 def _disabled_plugins(web_root: Path | None) -> set[str]:
@@ -541,6 +575,42 @@ def study_kinds_from_meta(meta: dict[str, Any]) -> list[StudyKind]:
     return out
 
 
+def workspaces_from_meta(meta: dict[str, Any], plugin_dir: Path) -> list[WorkspaceSpec]:
+    """Validate ``[[workspaces]]``: key, title, icon (one SVG path), entry (an HTML
+    file in the plugin's ``workspace/`` folder, which is all the host serves)."""
+    from cfddesk.registry.plugin_data import KIND_KEY_RE
+
+    raw = meta.get("workspaces") or []
+    if not isinstance(raw, list):
+        raise ValueError("must be an array of tables")
+    folder = (plugin_dir / "workspace").resolve()
+    out: list[WorkspaceSpec] = []
+    seen: set[str] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            raise ValueError("each workspace is a table")
+        key = str(row.get("key") or "")
+        if not KIND_KEY_RE.match(key):
+            raise ValueError(f"key {key!r} must be lower_snake_case")
+        if key in seen:
+            raise ValueError(f"key {key!r} is declared twice")
+        seen.add(key)
+        title = str(row.get("title") or "").strip()
+        if not title:
+            raise ValueError(f"{key}: needs a title")
+        icon = str(row.get("icon") or "")
+        if not _ICON_PATH_RE.match(icon):
+            raise ValueError(f"{key}: icon must be one SVG path (d attribute)")
+        entry = str(row.get("entry") or "workspace/index.html").replace("\\", "/")
+        target = (plugin_dir / entry).resolve()
+        if not entry.startswith("workspace/") or folder not in target.parents or target.suffix.lower() != ".html":
+            raise ValueError(f"{key}: entry {entry!r} must be an .html file in the plugin's workspace/ folder")
+        if not target.is_file():
+            raise ValueError(f"{key}: entry {entry!r} is missing")
+        out.append(WorkspaceSpec(key, title[:80], icon, entry))
+    return out
+
+
 def _str_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [part.strip() for part in value.split(",") if part.strip()]
@@ -596,6 +666,15 @@ def _load_folder_plugin(
     except ValueError as exc:
         hub.failures.append(_failure_row(key, f"manifest [[study_kinds]]: {exc}", meta))
         return None, True
+    try:
+        workspaces = workspaces_from_meta(meta, plugin_dir)
+        declared = {w.key for w in workspaces}
+        for kind in kinds:
+            if kind.workspace and kind.workspace not in declared:
+                raise ValueError(f"study kind {kind.key}: workspace {kind.workspace!r} is not declared")
+    except ValueError as exc:
+        hub.failures.append(_failure_row(key, f"manifest [[workspaces]]: {exc}", meta))
+        return None, True
     from cfddesk.registry.plugin_env import python_env_from_meta
 
     try:
@@ -632,6 +711,7 @@ def _load_folder_plugin(
         _apply_disk_meta(result, meta, api, overrides, source)
         _apply_tier_meta(result, meta, tier)
         result.study_kinds = kinds
+        result.workspaces = workspaces
         result.python_env = python_env
         hub._loading_overrides.pop(key, None)
         return result, False
@@ -667,6 +747,7 @@ def _load_folder_plugin(
         source=source,
         license=str(meta.get("license") or ""),
         study_kinds=kinds,
+        workspaces=workspaces,
         python_env=python_env,
     )
     _apply_tier_meta(manifest, meta, tier)
@@ -942,14 +1023,20 @@ def discover_entry_points(
 def load_all(*, web_root: Path | str | None = None, force: bool = False) -> RegistryHub:
     """Register builtins then discover plugins, then validate analysis bag refs.
 
-    Sets _LOADED True only when discovery completed without plugin-load failures,
-    so a later load_all() without force=True retries discovery after a partial load.
-    Builtins stay registered across retries (not wiped).
+    Sets _LOADED True only when discovery completed without plugin-load failures.
+    After a partial load, a later load_all() without force=True retries discovery
+    once the plugin folders change on disk or _RETRY_AFTER_S has passed (not on
+    every call). Builtins stay registered across retries (not wiped).
     """
-    global _LOADED, _BUILTINS_REGISTERED
+    global _LOADED, _BUILTINS_REGISTERED, _FAILED_AT, _FAILED_SIG
     hub = get_hub()
     if _LOADED and not force:
         return hub
+    if not force and _FAILED_AT is not None:
+        import time
+
+        if time.monotonic() - _FAILED_AT < _RETRY_AFTER_S and _plugin_sources_signature(web_root) == _FAILED_SIG:
+            return hub
     # Built-ins first â€” never skip even if plugins fail; do not re-stamp on retry
     # unless force (same-plugin re-register is idempotent).
     if not _BUILTINS_REGISTERED or force:
@@ -983,6 +1070,14 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
 
     sync_tool_kinds(hub)
     _LOADED = not (bundled_fail or ep_fail or folder_fail)
+    if _LOADED:
+        _FAILED_AT = None
+        _FAILED_SIG = None
+    else:
+        import time
+
+        _FAILED_AT = time.monotonic()
+        _FAILED_SIG = _plugin_sources_signature(web_root)
     return hub
 
 
@@ -1007,6 +1102,7 @@ def _catalog_row(
     required: bool = False,
     python_env: dict[str, Any] | None = None,
     notes: list[str] | None = None,
+    workspaces: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         # "bundled" ships with the app; a required one cannot be turned off.
@@ -1033,6 +1129,8 @@ def _catalog_row(
         "python_env": python_env,
         # What is only reported (a GPU the plugin can do without).
         "notes": list(notes or []),
+        # Full workspaces it draws in a sandboxed frame.
+        "workspaces": list(workspaces or []),
     }
 
 
@@ -1122,6 +1220,10 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 required=required,
                 python_env=_env_row_public(env_row),
                 notes=notes,
+                workspaces=[
+                    {"key": w.key, "title": w.title, "icon": w.icon, "entry": w.entry}
+                    for w in (manifest.workspaces or [])
+                ],
             )
         )
     for row in hub.required_failures:

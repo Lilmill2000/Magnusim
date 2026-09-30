@@ -135,7 +135,15 @@ def test_studies_create_list_rename_delete_and_stale_rev(env):
     listed = methods.plugin_studies_list(project_id="proj-a")
     assert [s["title"] for s in listed["studies"]] == ["Wing 1"]
     assert listed["kinds"] == [
-        {"plugin": "study-demo", "plugin_name": "Study demo", "key": "demo_analysis", "title": "Demo analysis", "icon": st["icon"]}
+        {
+            "plugin": "study-demo",
+            "plugin_name": "Study demo",
+            "key": "demo_analysis",
+            "title": "Demo analysis",
+            "icon": st["icon"],
+            # No workspace declared: its studies do not open in one (H13).
+            "workspace": "",
+        }
     ]
     assert methods.plugin_studies_list(project_id="proj-b")["studies"] == []
 

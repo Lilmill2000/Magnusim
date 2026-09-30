@@ -14,6 +14,7 @@ from magnusim_sdk.data import (
     PluginData,
     PluginDataError,
     StaleRevisionError,
+    StudyNotFoundError,
     plugin_data_folders,
     version_tuple,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "PluginData",
     "PluginDataError",
     "StaleRevisionError",
+    "StudyNotFoundError",
     "plugin_data_folders",
     "version_tuple",
 ]

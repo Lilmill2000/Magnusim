@@ -1,0 +1,11 @@
+{
+  "sdk_version": "1.0.0",
+  "react_version": "19.3.0",
+  "imports": {
+    "react": "/plugin-sdk/react.js",
+    "react-dom/client": "/plugin-sdk/react-dom-client.js",
+    "react/jsx-runtime": "/plugin-sdk/jsx-runtime.js",
+    "react/jsx-dev-runtime": "/plugin-sdk/jsx-dev-runtime.js",
+    "@magnusim/workspace": "/plugin-sdk/workspace.js"
+  }
+}

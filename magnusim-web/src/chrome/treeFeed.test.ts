@@ -6,7 +6,7 @@ vi.mock('../api/client', () => ({
 }));
 
 import { apiGet } from '../api/client';
-import { onProjectTree, readProjectTree, type TreeAnswer } from './treeFeed';
+import { followProjectTree, onProjectTree, readProjectTree, type TreeAnswer } from './treeFeed';
 
 const reads = () => vi.mocked(apiGet).mock.calls;
 const answer = async (doc: unknown) => {
@@ -57,6 +57,33 @@ describe('treeFeed', () => {
     expect(early[1].seq).toBeGreaterThan(early[0].seq);
     stopEarly();
     stopLate();
+  });
+
+  it('a follower joins the request that is out, or sends one: never a follow-up read of its own', async () => {
+    const tree: TreeAnswer[] = [];
+    const menu: TreeAnswer[] = [];
+    const stopTree = onProjectTree('p1', (a) => tree.push(a));
+    readProjectTree('p1');
+    const stopMenu = followProjectTree('p1', (a) => menu.push(a));
+    expect(reads()).toHaveLength(1);
+    await answer({ n: 1 });
+    expect(reads()).toHaveLength(1);
+    expect(tree.map((a) => a.doc)).toEqual([{ n: 1 }]);
+    expect(menu.map((a) => a.doc)).toEqual([{ n: 1 }]);
+    // Later syncs reach both from one request.
+    sync();
+    await answer({ n: 2 });
+    expect(reads()).toHaveLength(2);
+    expect(menu.map((a) => a.doc)).toEqual([{ n: 1 }, { n: 2 }]);
+    stopTree();
+    stopMenu();
+    // With nothing out, following reads at once.
+    const heard: TreeAnswer[] = [];
+    const stop = followProjectTree('p2', (a) => heard.push(a));
+    expect(reads()).toHaveLength(3);
+    await answer({ n: 3 });
+    expect(heard.map((a) => a.doc)).toEqual([{ n: 3 }]);
+    stop();
   });
 
   it('a reader that stopped hears nothing more', async () => {
