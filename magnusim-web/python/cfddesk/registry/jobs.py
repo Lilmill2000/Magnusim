@@ -9,6 +9,9 @@ from typing import Literal
 from cfddesk.registry.base import RegistryError
 
 JobScope = Literal["project", "geometry", "study"]
+# "plugin": the tool runs on its plugin's own environment ([python], API 1.1),
+# in the plugin's folder; "core": on the app's interpreter.
+JobRuntime = Literal["core", "plugin"]
 
 
 @dataclass(frozen=True)
@@ -19,6 +22,7 @@ class JobKind:
     tool: str
     scope: JobScope
     args_from_params: tuple[str, ...] = ()
+    python: JobRuntime = "core"
 
 
 def ensure_tool_in_package(tool: str, package_dir: Path) -> None:

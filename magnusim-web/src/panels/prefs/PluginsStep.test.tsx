@@ -79,6 +79,61 @@ describe('PluginsStep', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'What does this hook do?' })).toBeNull());
   });
 
+  it('sets up a plugin with its own environment: needs setup, installing, ready', async () => {
+    let installed = false;
+    let polls = 0;
+    const envRow = () => ({
+      ...row('env-demo', true),
+      status: installed ? 'enabled' : 'needs setup',
+      enabled: installed,
+      python_env: { state: installed ? 'ready' : 'needs_setup', service: true },
+    });
+    plugins = [envRow()];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/plugins/env-demo/env/install') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true, install: { state: 'installing', label: 'Creating the environment' } }), { status: 202 });
+      }
+      if (url.endsWith('/api/plugins/env-demo/env')) {
+        polls += 1;
+        installed = polls >= 1;
+        plugins = [envRow()];
+        return new Response(JSON.stringify({ ok: true, install: { state: 'ready', label: 'Ready' } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true, plugins }), { status: 200 });
+    });
+    render(<PluginsStep />);
+    const li = (await screen.findByText('env-demo does a thing')).closest('li') as HTMLElement;
+    expect(li).toHaveAttribute('data-plugin-status', 'needs setup');
+    expect(within(li).getByText('Needs setup')).toBeInTheDocument();
+    expect(within(li).getByText('Needs setup: its dependencies are not installed yet.')).toBeInTheDocument();
+    // It is on (not disabled): its toggle turns it off.
+    expect(within(li).getByRole('button', { name: 'Disable' })).toBeInTheDocument();
+    fireEvent.click(within(li).getByRole('button', { name: 'Install dependencies' }));
+    expect(await within(li).findByText(/Installing dependencies… Creating the environment/)).toBeInTheDocument();
+    expect(within(li).getByRole('button', { name: 'Installing…' })).toBeDisabled();
+    await waitFor(() => expect(li).toHaveAttribute('data-plugin-status', 'enabled'), { timeout: 4000 });
+    expect(within(li).getByText('On')).toBeInTheDocument();
+    expect(within(li).queryByRole('button', { name: 'Install dependencies' })).toBeNull();
+    expect(workerRpc).toHaveBeenCalledWith('registry.reload');
+  });
+
+  it("shows why a setup failed, with pip's last lines", async () => {
+    plugins = [
+      {
+        ...row('env-demo', true),
+        status: 'needs setup',
+        enabled: false,
+        python_env: { state: 'failed', error: 'Installing dependencies failed', tail: ['ERROR: THESE PACKAGES DO NOT MATCH THE HASHES'] },
+      },
+    ];
+    render(<PluginsStep />);
+    const li = (await screen.findByText('env-demo does a thing')).closest('li') as HTMLElement;
+    expect(within(li).getByRole('alert')).toHaveTextContent('Setup failed: Installing dependencies failed');
+    expect(within(li).getByText('ERROR: THESE PACKAGES DO NOT MATCH THE HASHES')).toBeInTheDocument();
+    expect(within(li).getByRole('button', { name: 'Install dependencies' })).toBeEnabled();
+  });
+
   it('says so when a toggle fails instead of failing silently', async () => {
     render(<PluginsStep />);
     await screen.findByText('example-laminar does a thing');

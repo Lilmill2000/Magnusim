@@ -596,6 +596,13 @@ def _load_folder_plugin(
     except ValueError as exc:
         hub.failures.append(_failure_row(key, f"manifest [[study_kinds]]: {exc}", meta))
         return None, True
+    from cfddesk.registry.plugin_env import python_env_from_meta
+
+    try:
+        python_env = python_env_from_meta(meta, plugin_dir)
+    except ValueError as exc:
+        hub.failures.append(_failure_row(key, f"manifest [python]: {exc}", meta))
+        return None, True
     overrides = _overrides_from_meta(meta)
     hub.note_overrides(key, overrides)
     source = "bundled" if tier == "bundled" else "local"
@@ -625,6 +632,7 @@ def _load_folder_plugin(
         _apply_disk_meta(result, meta, api, overrides, source)
         _apply_tier_meta(result, meta, tier)
         result.study_kinds = kinds
+        result.python_env = python_env
         hub._loading_overrides.pop(key, None)
         return result, False
     # Build a minimal manifest from toml if register returned None
@@ -659,6 +667,7 @@ def _load_folder_plugin(
         source=source,
         license=str(meta.get("license") or ""),
         study_kinds=kinds,
+        python_env=python_env,
     )
     _apply_tier_meta(manifest, meta, tier)
     return manifest, False
@@ -996,6 +1005,8 @@ def _catalog_row(
     license: str = "",
     tier: str = "user",
     required: bool = False,
+    python_env: dict[str, Any] | None = None,
+    notes: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         # "bundled" ships with the app; a required one cannot be turned off.
@@ -1018,16 +1029,48 @@ def _catalog_row(
         "enabled": enabled,
         "error": error,
         "missing": list(missing or []),
+        # Its own environment ([python]): state ready / needs_setup / failed.
+        "python_env": python_env,
+        # What is only reported (a GPU the plugin can do without).
+        "notes": list(notes or []),
+    }
+
+
+def _env_row_public(env_row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """What the Plugins settings row shows of an environment (no local paths)."""
+    if env_row is None:
+        return None
+    return {
+        "state": env_row.get("state"),
+        "error": env_row.get("error") or "",
+        "tail": list(env_row.get("tail") or [])[-8:],
+        "lock_hash": env_row.get("lock_hash") or "",
+        "service": bool(env_row.get("service")),
+        "python_version": env_row.get("python_version") or "",
     }
 
 
 def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
     """Rows for plugins.list: loaded, disabled, incompatible, and load failures."""
+    import shutil
+
+    from cfddesk.registry import wsl_tools
+    from cfddesk.registry.plugin_env import env_status
     from cfddesk.registry.requirements import check_requirements
 
     hub = get_hub()
     root = _resolve_web_root(web_root)
     disabled = _disabled_plugins(root)
+    # The real environment: programs in WSL (cached probe; None until it answers),
+    # each plugin's own packages (its environment's stamp), an NVIDIA GPU.
+    wsl_names = {
+        str(r.name)
+        for m in hub.manifests.values()
+        for r in (m.requires or [])
+        if getattr(r, "kind", "") == "wsl_tool"
+    }
+    have_wsl = wsl_tools.available(wsl_names, root) if wsl_names else set()
+    gpu = shutil.which("nvidia-smi") is not None
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -1039,11 +1082,20 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
         items.append(row)
 
     for manifest in hub.manifests.values():
-        missing = check_requirements(manifest, {})
-        reasons = [str(item.reason) for item in missing]
+        env_row: dict[str, Any] | None = None
+        if manifest.python_env is not None and root is not None:
+            env_row = env_status(root, manifest.key, manifest.python_env)
+        missing = check_requirements(
+            manifest,
+            {"wsl_tools": have_wsl, "python_packages": (env_row or {}).get("installed") or [], "gpu": gpu},
+        )
+        reasons = [str(item.reason) for item in missing if item.blocking]
+        notes = [str(item.reason) for item in missing if not item.blocking]
         required = bool(getattr(manifest, "required", False))
         if manifest.key in disabled and not required:
             status = "disabled"
+        elif env_row is not None and env_row.get("state") != "ready":
+            status = "needs setup"
         elif reasons:
             status = "missing requirement"
         else:
@@ -1068,6 +1120,8 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 license=str(manifest.license or ""),
                 tier=str(getattr(manifest, "tier", "user") or "user"),
                 required=required,
+                python_env=_env_row_public(env_row),
+                notes=notes,
             )
         )
     for row in hub.required_failures:

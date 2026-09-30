@@ -10,6 +10,7 @@
  * the next land once run_solve is proven end-to-end from startSolve.
  */
 import { spawn } from 'node:child_process';
+import { isolatedPythonEnv, ownProcessGroup } from './proc-tree.js';
 import { createJobLogger } from './log.js';
 import { PYTHON } from './python-env.js';
 
@@ -55,6 +56,7 @@ export function parseJobLine(line) {
  *   onEvent?: (ev: object) => void,
  *   onExit?: (code: number|null, signal: NodeJS.Signals|null) => void,
  *   python?: string,
+ *   cwd?: string,
  * }} opts
  */
 export function spawnJob(opts) {
@@ -64,10 +66,15 @@ export function spawnJob(opts) {
   const args = Array.isArray(opts.args) ? opts.args : [];
   const python = opts.python || PYTHON;
   const jobLog = createJobLogger(kind, jobId);
+  const base = { ...process.env, ...(opts.env || {}), PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
   const child = spawn(python, [script, ...args], {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ...(opts.env || {}), PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    // Another interpreter (a plugin's own environment) sees nothing of the core's.
+    env: opts.python && opts.python !== PYTHON ? isolatedPythonEnv(base) : base,
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    // Stop ends what the tool started too (POSIX: its own process group).
+    ...ownProcessGroup(),
   });
   jobLog.info('spawn', { pid: child.pid || null, script, args });
 

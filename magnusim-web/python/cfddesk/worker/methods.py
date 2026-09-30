@@ -951,7 +951,7 @@ def filter_validate(key: str, params: dict | None = None) -> dict[str, Any]:
     if plugin != "builtin" and not tool_path:
         # Never fall back to a core tool of the same name.
         raise RpcError(-32602, f"plugin filter {spec.key}: tool {spec.tool!r} is not in the plugin folder")
-    return {
+    out = {
         "ok": True,
         "key": spec.key,
         "tool": spec.tool,
@@ -962,6 +962,10 @@ def filter_validate(key: str, params: dict | None = None) -> dict[str, Any]:
         "args_from_params": list(getattr(spec, "args_from_params", ()) or ()),
         "tool_path": tool_path,
     }
+    if plugin != "builtin":
+        # A plugin with its own environment runs its filter tools there.
+        out.update(_plugin_runtime(hub, plugin, required=False))
+    return out
 
 
 def _package_tool(package: Path | None, tool: str) -> str:
@@ -979,14 +983,47 @@ def _package_tool(package: Path | None, tool: str) -> str:
 
 def _job_row(hub: Any, spec: Any) -> dict[str, Any]:
     plugin = hub.registry("job").owner(spec.key)
-    return {
+    runtime = str(getattr(spec, "python", "core") or "core")
+    row: dict[str, Any] = {
         "key": spec.key,
         "tool": spec.tool,
         "scope": spec.scope,
         "args_from_params": list(spec.args_from_params),
         "plugin": plugin,
         "tool_path": _package_tool(hub.job_package(spec.key), spec.tool),
+        "runtime": runtime,
+        # The interpreter and folder it runs in (None: the app's own).
+        "python": None,
+        "cwd": None,
     }
+    if runtime == "plugin" and plugin != "builtin":
+        row.update(_plugin_runtime(hub, plugin, required=True))
+    return row
+
+
+def _plugin_runtime(hub: Any, plugin: str, *, required: bool) -> dict[str, Any]:
+    """Where a plugin's tool runs: its own environment's interpreter and its folder.
+
+    ``python`` stays None (the app's interpreter) for a plugin without an
+    environment, unless ``required``; ``python_error`` says why it cannot run yet.
+    """
+    from cfddesk.registry.plugin_env import env_status
+
+    manifest = hub.manifests.get(plugin)
+    folder = hub.plugin_dir(plugin)
+    out: dict[str, Any] = {"python": None, "cwd": str(folder) if folder is not None else None}
+    spec_env = manifest.python_env if manifest is not None else None
+    if spec_env is None:
+        if required:
+            out["python_error"] = f"{plugin} declares no [python] environment"
+        return out
+    state = env_status(web_root(), plugin, spec_env)
+    if state["state"] == "ready":
+        out["python"] = state["python"]
+    else:
+        name = manifest.name if manifest is not None else plugin
+        out["python_error"] = f"{name} needs setup: install its dependencies in Settings > Plugins"
+    return out
 
 
 @rpc("jobs.describe")
@@ -1037,10 +1074,17 @@ def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], l
         for rec in PluginData(root, key).studies():
             kind = kinds.get(str(rec.get("kind") or ""))
             name = str((catalog.get(key) or {}).get("name") or rec.get("plugin_name") or key)
+            needs_setup = str((catalog.get(key) or {}).get("status") or "") == "needs setup"
+            why = (
+                f"{name} needs setup: install its dependencies in Settings > Plugins"
+                if needs_setup
+                else f"Requires the {name} plugin"
+            )
             newer = (
                 manifest is not None
                 and version_tuple(str(rec.get("plugin_version") or "0")) > version_tuple(manifest.version)
             )
+            schema = int(rec.get("schema_version") or 1)
             studies.append(
                 {
                     "id": rec["id"],
@@ -1054,7 +1098,11 @@ def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], l
                     "rev": int(rec.get("rev") or 0),
                     "available": kind is not None,
                     "read_only": bool(newer),
-                    "reason": "" if kind is not None else f"Requires the {name} plugin",
+                    # Saved with an older schema of its kind: its plugin's service upgrades it.
+                    "schema_version": schema,
+                    "kind_schema_version": int(kind.schema_version) if kind else None,
+                    "needs_migration": kind is not None and not newer and schema < int(kind.schema_version),
+                    "reason": "" if kind is not None else why,
                     "scope_key": plugin_study_scope(pid, key, rec["id"]),
                 }
             )
@@ -1145,6 +1193,39 @@ def plugin_studies_delete(project_id: str = "", plugin: str = "", study_id: str 
     data = _plugin_data_for(pid, plugin)
     _study_call(data.delete_study, study_id)
     return {"ok": True, "deleted": study_id}
+
+
+@rpc("plugin_studies.get")
+def plugin_studies_get(project_id: str = "", plugin: str = "", study_id: str = "") -> dict[str, Any]:
+    """One study's whole record (what the plugin's migrate_study gets)."""
+    pid = str(project_id or "").strip()
+    data = _plugin_data_for(pid, plugin)
+    return {"ok": True, "study": _study_call(data.study, study_id)}
+
+
+@rpc("plugin_studies.migrated")
+def plugin_studies_migrated(
+    project_id: str = "", plugin: str = "", study_id: str = "", rev: int | None = None, study: dict | None = None
+) -> dict[str, Any]:
+    """Store a study its plugin's migrate_study upgraded: the kind's current
+    schema_version and the plugin's version, over the record it returned."""
+    pid = str(project_id or "").strip()
+    data = _plugin_data_for(pid, plugin)
+    if not isinstance(study, dict):
+        raise RpcError(-32602, "migrate_study returned no study record")
+    manifest = load_all(web_root=web_root()).manifests.get(data.plugin)
+    if manifest is None:
+        raise RpcError(-32602, f"{plugin} is not loaded")
+    current = _study_call(data.study, study_id)
+    kind = next((k for k in manifest.study_kinds if k.key == current.get("kind")), None)
+    if kind is None:
+        raise RpcError(-32602, f"{plugin} has no study kind {current.get('kind')!r}")
+    if int(current.get("schema_version") or 1) < int(kind.schema_version):
+        patch = {k: v for k, v in study.items() if k not in {"id", "kind", "plugin", "created_at", "rev", "updated_at"}}
+        patch["schema_version"] = int(kind.schema_version)
+        patch["plugin_version"] = manifest.version
+        _study_call(data.update_study, study_id, patch, rev)
+    return {"ok": True, "study": _study_row(pid, data.plugin, study_id)}
 
 
 @rpc("plugin.dispatch")
@@ -1378,6 +1459,41 @@ def _drop_from_legacy_disabled(key: str) -> None:
             changed = True
     if changed:
         ww.atomic_write(legacy, data)
+
+
+@rpc("plugins.env")
+def plugins_env(key: str = "") -> dict[str, Any]:
+    """A loaded plugin's own environment: its state and, when ready, its
+    interpreter, service module and folder (for the host; not for pages)."""
+    from cfddesk.registry.plugin_env import env_status
+
+    hub = load_all(web_root=web_root())
+    manifest = hub.manifests.get(str(key))
+    if manifest is None:
+        raise RpcError(-32004, f"plugin {key!r} is not loaded (off, missing or failed)")
+    spec = manifest.python_env
+    if spec is None:
+        return {"ok": True, "key": manifest.key, "name": manifest.name, "env": None}
+    folder = hub.plugin_dir(manifest.key)
+    state = env_status(web_root(), manifest.key, spec)
+    return {
+        "ok": True,
+        "key": manifest.key,
+        "name": manifest.name,
+        "env": {**state, "service": spec.service, "plugin_dir": str(folder) if folder is not None else None},
+    }
+
+
+@rpc("plugins.env_remove")
+def plugins_env_remove(key: str = "") -> dict[str, Any]:
+    """Delete a plugin's environments (its studies and data stay)."""
+    from cfddesk.registry.plugin_env import remove_envs
+
+    try:
+        removed = remove_envs(web_root(), str(key))
+    except ValueError as exc:
+        raise RpcError(-32602, str(exc)) from exc
+    return {"ok": True, "removed": removed}
 
 
 @rpc("plugins.enable")

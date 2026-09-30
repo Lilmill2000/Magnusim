@@ -5,6 +5,7 @@ import { HttpError, assertSameOrigin, sendJson } from './http.ts';
 import { JobManager } from './jobs.ts';
 import { persistJobToWorker, registerPhase3Routes } from './routes.ts';
 import { getWorker } from './worker.ts';
+import { PluginServiceHost } from './plugin-services.ts';
 import { attachWorkerBridge } from '../py-json.js';
 import { registerLiveRoutes } from './live-routes.js';
 import { setLiveRegistry } from '../registry-defaults.js';
@@ -28,6 +29,7 @@ function installProcessGuards(): void {
 export function createApiPlugin() {
   installProcessGuards();
   const worker = getWorker();
+  const services = new PluginServiceHost(worker);
   const cacheDir = join(WEB_ROOT, '.cache');
   const jobs = new JobManager({
     cacheDir,
@@ -59,7 +61,7 @@ export function createApiPlugin() {
         worker.call(method, params, timeoutMs),
       );
       const router = new Router();
-      const live = registerLiveRoutes(router, { worker, jobs, webRoot: WEB_ROOT, cacheDir });
+      const live = registerLiveRoutes(router, { worker, jobs, webRoot: WEB_ROOT, cacheDir, services });
       registerPhase3Routes(router, {
         worker,
         jobs,
@@ -72,6 +74,7 @@ export function createApiPlugin() {
         caseSnapshot: live.caseSnapshot,
         attachCaseDir: live.attachCaseDir,
         resetCaseIdle: live.resetCaseIdle,
+        services,
       });
       // The boot queue kick may start a plugin mesher; wait for the live registry.
       void registryReady.finally(() => live.boot());

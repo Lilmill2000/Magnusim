@@ -1,0 +1,18 @@
+key = "env-demo"
+name = "Env demo"
+version = "2.0.0"
+api_version = "1.1"
+license = "GPL-3.0-or-later"
+description = "Test plugin with its own environment, service and job (H12)"
+authors = "Magnusim"
+
+[python]
+requirements = "requirements.lock"
+python = ">=3.10,<3.15"
+service = "env_demo_service"
+
+[[study_kinds]]
+key = "demo_case"
+title = "Demo case"
+icon = "M5 19V5h14v14z M9 9h6v6H9z"
+schema_version = 2

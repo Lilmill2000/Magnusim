@@ -586,6 +586,9 @@ export function LeftTree() {
     // if no later request has already painted, or a stale tree replaces the new run.
     let sent = 0;
     let painted = 0;
+    // While plugin studies are being upgraded, read the tree again (a while at most).
+    let followUps = 0;
+    let followTimer: ReturnType<typeof setTimeout> | null = null;
     const refresh = () => {
       if (!projectId) {
         docRef.current = null;
@@ -601,6 +604,13 @@ export function LeftTree() {
           painted = mine;
           docRef.current = doc;
           paint();
+          if (doc && doc.plugin_studies_migrating && followUps < 30 && !followTimer) {
+            followUps += 1;
+            followTimer = setTimeout(() => {
+              followTimer = null;
+              if (!dead) refresh();
+            }, 1000);
+          }
         })
         .catch(() => {
           if (!dead) paint();
@@ -610,6 +620,7 @@ export function LeftTree() {
     refresh();
     return () => {
       dead = true;
+      if (followTimer) clearTimeout(followTimer);
       window.removeEventListener('cfd:tree-sync', refresh);
     };
   }, [projectId, generation]);

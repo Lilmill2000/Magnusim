@@ -23,7 +23,13 @@ Turning plugins on or off and reloading them changes what code the app runs, so
 those requests are accepted only from a browser on the same PC talking to
 Magnusim directly (a loopback Host and no `X-Forwarded-*` headers). Through a
 reverse proxy or the public tunnel they answer 403 "Plugin management is only
-available on this PC."
+available on this PC." Installing or removing a plugin's dependencies (its own
+environment) is managed the same way.
+
+A plugin's own environment keeps its packages apart from the app's (pinned and
+hashed lock, wheels only, the app's packages untouched). It separates
+dependencies, not permissions: its service and jobs still run with your
+account's rights.
 
 Keep projects, `.cache`, local preferences, environment files, keys, recordings,
 and generated run reports out of source releases. `.gitignore` prevents new

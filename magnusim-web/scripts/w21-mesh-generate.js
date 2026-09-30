@@ -9,6 +9,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { spawnJob } from './job-runner.js';
+import { killProcessTree } from './proc-tree.js';
 import { projectIdOrActive } from './request-scope.js';
 import { createHash, randomBytes } from 'node:crypto';
 import {
@@ -559,26 +560,7 @@ function bindLiveMeshJob({
   return job;
 }
 
-function killWindowsPidTree(pid) {
-  if (!pid) return;
-  if (process.platform === 'win32') {
-    try {
-      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
-        windowsHide: true,
-        timeout: 8000,
-        stdio: 'ignore',
-      });
-    } catch {
-      /* ignore */
-    }
-    return;
-  }
-  try {
-    process.kill(pid, 'SIGKILL');
-  } catch {
-    /* ignore */
-  }
-}
+const killWindowsPidTree = killProcessTree;
 
 /** Kill leftover generate_* processes still pointed at this mesh case folder. */
 function reapStaleMeshGenerators(caseDir) {

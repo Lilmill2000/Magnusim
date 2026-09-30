@@ -7,6 +7,15 @@ import { writeSse, type JobManager, type JobRecord } from './jobs.ts';
 import { canonicalFilterKey, LEGACY_FILTER_PATHS } from './legacy-aliases.ts';
 import type { RequestContext, Router } from './router.ts';
 import { serveRegisteredFilter, startRegisteredJob } from './registered-tool.js';
+import {
+  startStudyMigrations,
+  PluginEnvInstaller,
+  PluginServiceError,
+  PluginServiceHost,
+  serviceScope,
+  type EnvInstall,
+  type PluginEnv,
+} from './plugin-services.ts';
 import { RpcError, WorkerUnavailableError, type WorkerClient } from './worker.ts';
 
 export interface RouteDeps {
@@ -21,6 +30,42 @@ export interface RouteDeps {
   caseSnapshot: () => Record<string, unknown>;
   attachCaseDir: (caseDir: string, projectId?: string) => { ok: boolean; status: number; body: unknown };
   resetCaseIdle: (note?: string) => void;
+  /** Plugin services (their own environments); made here when not given. */
+  services?: PluginServiceHost;
+  envInstaller?: PluginEnvInstaller;
+}
+
+/** What a page may see of a plugin environment (no local paths). */
+function publicEnv(env: PluginEnv | null): Record<string, unknown> | null {
+  if (!env) return null;
+  return {
+    state: env.state,
+    error: env.error || '',
+    tail: (env.tail || []).slice(-8),
+    lock_hash: env.lock_hash || '',
+    service: !!env.service,
+    python_version: env.python_version || '',
+  };
+}
+
+function publicInstall(run: EnvInstall | null): Record<string, unknown> | null {
+  if (!run) return null;
+  return {
+    state: run.state,
+    stage: run.stage,
+    label: run.label,
+    error: run.error || '',
+    tail: (run.tail || []).slice(-8),
+    log: run.log.slice(-12),
+    started_at: run.started_at,
+    finished_at: run.finished_at || null,
+  };
+}
+
+const PLUGIN_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
+
+function validPluginKey(key: string): boolean {
+  return PLUGIN_KEY_RE.test(key) && !/[. ]$/.test(key);
 }
 
 function rpcStatus(err: unknown): { status: number; body: Record<string, unknown> } {
@@ -92,6 +137,9 @@ export function safePluginFile(
 }
 
 export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
+  const services = deps.services || new PluginServiceHost(deps.worker);
+  // A rebuilt environment replaces the running service (and its cached state).
+  const envInstaller = deps.envInstaller || new PluginEnvInstaller((key) => services.reset(key, 'restarted on its new environment'));
   router.get('/api/_routes', (ctx) => {
     ctx.sendJson(200, {
       ok: true,
@@ -196,6 +244,7 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       ctx.sendJson(403, { error: 'Plugin management is only available on this PC.', ok: false });
       return;
     }
+    if (method === 'registry.reload') services.resetAll('stopped for a plugin reload');
     if (method === 'bc.menu' || method === 'registry.reload') {
       return workerJson(deps, ctx, method, {});
     }
@@ -228,17 +277,20 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     if (!params.project_id && ctx.scope.projectId) params.project_id = ctx.scope.projectId;
     if (!params.simulation_id && ctx.scope.simulationId) params.simulation_id = ctx.scope.simulationId;
     if (!params.geometry_id && ctx.scope.geometryId) params.geometry_id = ctx.scope.geometryId;
-    let spec: {
+    type DescribedJob = {
       tool?: string;
       scope?: string;
       tool_path?: string;
       args_from_params?: string[];
       plugin?: string;
-    } | null = null;
+      // A plugin job on its plugin's own environment: its interpreter and folder.
+      python?: string | null;
+      cwd?: string | null;
+      python_error?: string;
+    };
+    let spec: DescribedJob | null = null;
     try {
-      const described = (await deps.worker.call('jobs.describe', { kind })) as {
-        job?: { tool?: string; scope?: string; tool_path?: string; args_from_params?: string[]; plugin?: string };
-      };
+      const described = (await deps.worker.call('jobs.describe', { kind })) as { job?: DescribedJob };
       spec = described.job || null;
     } catch (err) {
       const { status, body: errBody } = rpcStatus(err);
@@ -248,6 +300,10 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     }
     if (!spec || !spec.tool) {
       ctx.sendJson(400, { error: 'unknown job kind' });
+      return;
+    }
+    if (spec.python_error) {
+      ctx.sendJson(409, { error: spec.python_error, ok: false });
       return;
     }
     const project = String(params.project_id || params.projectId || body.project || '');
@@ -366,9 +422,22 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   router.get('/api/plugins', async (ctx) => workerJson(deps, ctx, 'plugins.list', {}));
 
   // Plugin studies: project-level records a plugin owns (plugins/<key>/studies).
-  router.get('/api/plugin-studies', async (ctx) =>
-    workerJson(deps, ctx, 'plugin_studies.list', { project_id: ctx.url.searchParams.get('project_id') || '' }),
-  );
+  router.get('/api/plugin-studies', async (ctx) => {
+    const projectId = ctx.url.searchParams.get('project_id') || '';
+    try {
+      const listed = (await deps.worker.call('plugin_studies.list', { project_id: projectId })) as {
+        studies?: Parameters<typeof startStudyMigrations>[3];
+        migrating?: boolean;
+      };
+      // Studies saved with an older schema: their plugin's service upgrades them
+      // in the background; the list says so and the page reads it again.
+      listed.migrating = startStudyMigrations(deps.worker, services, projectId, listed.studies);
+      ctx.sendJson(200, listed);
+    } catch (err) {
+      const { status, body } = rpcStatus(err);
+      ctx.sendJson(status, body);
+    }
+  });
   for (const action of ['create', 'rename', 'delete'] as const) {
     router.post(`/api/plugin-studies/${action}`, async (ctx) => {
       const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
@@ -384,11 +453,48 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   }
   router.post('/api/plugins/:key/enable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    services.reset(String(ctx.params.key || ''), 'restarted');
     return workerJson(deps, ctx, 'plugins.enable', { key: ctx.params.key });
   });
   router.post('/api/plugins/:key/disable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    services.reset(String(ctx.params.key || ''), 'stopped: the plugin was turned off');
     return workerJson(deps, ctx, 'plugins.disable', { key: ctx.params.key });
+  });
+
+  // A plugin's own environment ([python]): its state, and building or removing it.
+  router.get('/api/plugins/:key/env', async (ctx) => {
+    const key = String(ctx.params.key || '');
+    if (!validPluginKey(key)) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
+    try {
+      services.forgetEnv(key);
+      const { name, env } = await services.envOf(key);
+      ctx.sendJson(200, { ok: true, key, name, env: publicEnv(env), install: publicInstall(envInstaller.get(key)) });
+    } catch (err) {
+      const { status, body } = rpcStatus(err);
+      ctx.sendJson(status, body);
+    }
+  });
+  router.post('/api/plugins/:key/env/install', async (ctx) => {
+    if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    const key = String(ctx.params.key || '');
+    if (!validPluginKey(key)) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
+    try {
+      const { name, env } = await services.envOf(key);
+      if (!env) return ctx.sendJson(400, { error: `${name} has no environment to set up`, ok: false });
+      services.reset(key, 'stopped while its environment is rebuilt');
+      ctx.sendJson(202, { ok: true, key, install: publicInstall(envInstaller.start(key)) });
+    } catch (err) {
+      const { status, body } = rpcStatus(err);
+      ctx.sendJson(status, body);
+    }
+  });
+  router.post('/api/plugins/:key/env/remove', async (ctx) => {
+    if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    const key = String(ctx.params.key || '');
+    if (!validPluginKey(key)) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
+    services.reset(key, 'stopped: its environment was removed');
+    return workerJson(deps, ctx, 'plugins.env_remove', { key });
   });
 
   const pluginDispatch = async (ctx: RequestContext) => {
@@ -414,6 +520,30 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       ctx.url.searchParams.forEach((value, name) => {
         params[name] = value;
       });
+    }
+    // A plugin with its own environment answers from its service process.
+    let service = null;
+    try {
+      service = await services.serviceFor(key);
+    } catch (err) {
+      if (err instanceof PluginServiceError) return ctx.sendJson(err.status, { error: err.message, ok: false });
+      const { status, body } = rpcStatus(err);
+      return ctx.sendJson(status, body);
+    }
+    if (service) {
+      const scopePid = String(ctx.scope.projectId || '');
+      const paramPid = String(params.project_id || params.projectId || '');
+      if (scopePid && paramPid && scopePid !== paramPid) {
+        return ctx.sendJson(400, { error: 'project_id does not match this request', ok: false });
+      }
+      try {
+        const result = await service.call(rest, params, serviceScope(key, ctx.scope));
+        const body = result && typeof result === 'object' && !Array.isArray(result) ? result : { ok: true, result };
+        return ctx.sendJson(200, body);
+      } catch (err) {
+        const status = err instanceof PluginServiceError ? err.status : 500;
+        return ctx.sendJson(status, { error: err instanceof Error ? err.message : String(err), ok: false });
+      }
     }
     try {
       const result = await deps.worker.call('plugin.dispatch', {

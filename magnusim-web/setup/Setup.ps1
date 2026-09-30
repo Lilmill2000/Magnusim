@@ -4,7 +4,11 @@
 
 param(
 
-    [switch]$Elevated
+    [switch]$Elevated,
+
+    # Also build the own Python environments of bundled plugins that declare [python].
+
+    [switch]$Plugins
 
 )
 
@@ -148,6 +152,8 @@ function Restart-Elevated {
     Write-Host 'Approve the UAC prompt, then this window will finish (or ask you to reboot).' -ForegroundColor Yellow
 
     $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated"
+
+    if ($Plugins) { $arg += ' -Plugins' }
 
     $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
 
@@ -839,6 +845,18 @@ try {
     Install-NpmPackages
 
     Install-PythonVenv -PyLauncher $pyLauncher
+
+    if ($Plugins) {
+
+        Write-Step 'Plugin environments (bundled plugins with their own Python packages)'
+
+        & $VenvPython (Join-Path $PythonDir 'tools\plugin_env.py') create-bundled
+
+        if ($LASTEXITCODE -ne 0) { throw 'A bundled plugin environment did not build (its error is above)' }
+
+        Write-Ok 'Plugin environments ready'
+
+    }
 
 
 

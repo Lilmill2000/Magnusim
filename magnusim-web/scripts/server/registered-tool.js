@@ -5,11 +5,15 @@ import { pyTool } from '../python-env.js';
 
 /**
  * @param {import('./jobs.ts').JobManager} jobs
- * @param {{ tool?: string, tool_path?: string, args_from_params?: string[], plugin?: string }} spec
+ * @param {{ tool?: string, tool_path?: string, args_from_params?: string[], plugin?: string, python?: string | null, cwd?: string | null, python_error?: string }} spec
  * @param {Record<string, unknown>} params
  * @param {{ id: string }} job
  */
 export function startRegisteredJob(jobs, spec, params, job) {
+  if (spec.python_error) {
+    jobs.finish(job.id, 'failed', undefined, spec.python_error);
+    return;
+  }
   // Plugin jobs run their own tool (tool_path, resolved inside the plugin folder
   // by jobs.describe); never a core script of the same name.
   const builtin = String(spec.plugin || 'builtin') === 'builtin';
@@ -25,13 +29,14 @@ export function startRegisteredJob(jobs, spec, params, job) {
       args.push('--' + String(name).replace(/_/g, '-'), String(value));
     }
   }
-  jobs.spawnPython(job.id, script, args);
+  // A plugin job on its plugin's environment runs there, in the plugin's folder.
+  jobs.spawnPython(job.id, script, args, { python: spec.python || null, cwd: spec.python ? spec.cwd || null : null });
 }
 
 /**
  * @param {{ cacheDir: string, jobs: { runSync: Function } }} deps
  * @param {import('./router.ts').RequestContext} ctx
- * @param {{ key: string, tool?: string, tool_path?: string, args_from_params?: string[], output?: string }} spec
+ * @param {{ key: string, tool?: string, tool_path?: string, args_from_params?: string[], output?: string, python?: string | null, cwd?: string | null, python_error?: string }} spec
  */
 export function serveRegisteredFilter(deps, ctx, spec) {
   const params = {};
@@ -60,7 +65,12 @@ export function serveRegisteredFilter(deps, ctx, spec) {
         args.push('--' + String(name).replace(/_/g, '-'), String(params[name]));
       }
     }
-    const ran = deps.jobs.runSync(script, args);
+    if (spec.python_error) {
+      ctx.sendJson(409, { error: spec.python_error });
+      return;
+    }
+    // The owning plugin's interpreter when it has its own environment.
+    const ran = deps.jobs.runSync(script, args, spec.python ? { python: spec.python, cwd: spec.cwd || null } : undefined);
     if (!existsSync(out) && spec.output !== 'vtp' && ran.stdout) {
       writeFileSync(out, ran.stdout, 'utf8');
     }

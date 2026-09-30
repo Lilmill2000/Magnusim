@@ -15,6 +15,7 @@ sys.path.insert(0, SDK_ROOT)
 import magnusim_sdk
 import magnusim_sdk.events, magnusim_sdk.units, magnusim_sdk.foam
 import magnusim_sdk.gmsh_helpers, magnusim_sdk.msh22, magnusim_sdk.proc
+import magnusim_sdk.data, magnusim_sdk.service
 heavy = sorted(m for m in sys.modules if m.split(".")[0] in {"OCP", "pyvista", "gmsh", "numpy", "vtk", "cfddesk", "scipy"})
 print("HEAVY", heavy)
 try:

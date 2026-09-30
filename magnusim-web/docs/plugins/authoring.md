@@ -59,6 +59,39 @@ Hooks use the same module. `get_hooks().on("case.written", fn, plugin="my-plugin
 
 Do not import `cfddesk.builtin`, `scripts`, or `src.workbench`. Those are host internals. The public surface is `cfddesk.registry` and `magnusim_sdk` (OpenFOAM dictionary and field writers, units, job events, gmsh helpers, the MSH 2.2 writer, and `run_exe` for programs with a timeout). `tools/plugin_boundary.py` checks this.
 
+## Own environment and service (1.1)
+
+A plugin that needs Python packages the app does not ship (NeuralFoil, a CAD kernel, ...) declares its own environment. Its backend then runs there, in its own process, and never in the core:
+
+```toml
+[python]
+requirements = "requirements.lock"   # pinned, with hashes
+python = ">=3.10,<3.13"              # the interpreters it supports
+service = "my_plugin_service"        # its backend module (optional)
+find_links = "wheels"                # a folder of wheels in the plugin, to install offline (optional)
+```
+
+- **The lock** lists every package, pinned and hashed (`pip-compile --generate-hashes`, or `name==1.2.3 --hash=sha256:...` lines); pip installs it with `--require-hashes`, wheels only. Editing the lock changes its hash, and the plugin shows "Needs setup" again.
+- **Settings → Plugins** shows the plugin as "Needs setup" until someone clicks **Install dependencies** (on this PC only). The environment is built from the app's interpreter into `.cache/plugin-envs/<key>-<lock hash>/` and gets `magnusim_sdk` and nothing of the core: `import cfddesk` fails there, and the app's own packages never change. `Setup.bat -Plugins` builds the environments of bundled plugins.
+- **The service module** registers its methods; the page reaches them at `/api/plugin/<key>/<method>`:
+
+```python
+from magnusim_sdk.data import PluginData
+from magnusim_sdk.service import method
+
+
+@method("polar", timeout_s=120)
+def polar(params, scope):
+    data = PluginData(scope["project_dir"], scope["plugin"])  # its own folder in the project
+    ...
+    return {"cl": cl}
+```
+
+  A method gets the request's `params` and a `scope` (`plugin`, `project_id`, `project_dir`, `simulation_id`, `geometry_id`), returns something JSON can carry, and raises to fail the call with its message. Calls run one at a time; each has 30 s unless `timeout_s` says otherwise (600 at most). A call that runs longer ends the service and everything it started; a crash is reported and the next call starts it again; it stops after 10 minutes without calls. Print freely: the service's stdout goes to the log, not into replies.
+- **Jobs** run on the plugin's environment when their `JobKind` says `python="plugin"` (in the plugin's folder); filter tools of a plugin with an environment run there too. Stopping a job stops everything its tool started.
+- **Studies**: when a `[[study_kinds]]` entry's `schema_version` goes up, a service method `migrate_study` gets `{"study", "from_version", "to_version"}` for each older study and returns the upgraded record; the host stores it (rev-checked) with the new `schema_version`. It runs in the background: the tree shows the study as it was until the upgrade lands.
+- **register()** still runs in the core, to declare specs, jobs and study kinds. Keep it free of your environment's packages: they are not importable there.
+
 ## Simulation types (analysis contract 1.1)
 
 An `AnalysisType` tells the core everything it needs through optional contract fields (`cfddesk.registry.contract`), so the core never reaches into its physics:

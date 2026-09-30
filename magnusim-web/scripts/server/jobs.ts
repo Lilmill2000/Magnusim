@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { PYTHON } from '../python-env.js';
 import { parseJobLine, spawnJob } from '../job-runner.js';
+import { isolatedPythonEnv, killProcessTree } from '../proc-tree.js';
 
 export type JobKind = string;
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'stopped';
@@ -200,11 +201,8 @@ export class JobManager extends EventEmitter {
     if (want && job.project !== want) return null;
     const child = this.children.get(id);
     if (child && child.exitCode == null) {
-      try {
-        child.kill();
-      } catch {
-        /* ignore */
-      }
+      // The tool and everything it started (child.kill() would leave its children).
+      killProcessTree(child.pid);
     }
     if (job.status === 'running' || job.status === 'queued') {
       this.finish(id, 'stopped', job.result, 'stopped');
@@ -216,13 +214,21 @@ export class JobManager extends EventEmitter {
     return this.bus(id);
   }
 
-  spawnPython(id: string, script: string, args: string[] = [], extra?: { env?: NodeJS.ProcessEnv }): ChildProcess {
+  spawnPython(
+    id: string,
+    script: string,
+    args: string[] = [],
+    extra?: { env?: NodeJS.ProcessEnv; python?: string | null; cwd?: string | null },
+  ): ChildProcess {
     const { child } = spawnJob({
       kind: this.jobs.get(id)?.kind || 'job',
       jobId: id,
       script,
       args,
       env: extra?.env,
+      // A plugin tool runs on its plugin's own environment, in its folder.
+      python: extra?.python || undefined,
+      cwd: extra?.cwd || undefined,
       onEvent: (ev: object) => this.pushEvent(id, ev),
       onExit: (code: number | null, signal: NodeJS.Signals | null) => {
         const job = this.jobs.get(id);
@@ -238,13 +244,16 @@ export class JobManager extends EventEmitter {
   runSync(
     script: string,
     args: string[] = [],
-    opts?: { timeoutMs?: number; env?: NodeJS.ProcessEnv },
+    opts?: { timeoutMs?: number; env?: NodeJS.ProcessEnv; python?: string | null; cwd?: string | null },
   ): { status: number | null; stdout: string; stderr: string } {
-    const r = spawnSync(PYTHON, [script, ...args], {
+    const python = opts?.python || PYTHON;
+    const base = { ...process.env, PYTHONUNBUFFERED: '1', ...(opts?.env || {}) };
+    const r = spawnSync(python, [script, ...args], {
       windowsHide: true,
       encoding: 'utf8',
       timeout: opts?.timeoutMs ?? 180_000,
-      env: { ...process.env, PYTHONUNBUFFERED: '1', ...(opts?.env || {}) },
+      env: python !== PYTHON ? isolatedPythonEnv(base) : base,
+      ...(opts?.cwd ? { cwd: opts.cwd } : {}),
     });
     return {
       status: r.status,

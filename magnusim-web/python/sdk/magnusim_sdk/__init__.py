@@ -7,7 +7,9 @@ each helper has one copy.
 
 Modules: ``events`` (job event lines), ``units`` (unit conversion), ``foam``
 (OpenFOAM dictionary and field writers), ``gmsh_helpers``, ``msh22`` (MSH 2.2
-writer) and ``proc`` (run a program with a timeout, killing its whole tree).
+writer), ``proc`` (run a program with a timeout, killing its whole tree),
+``data`` (a plugin's own folder in a project, and its studies) and ``service``
+(a plugin's backend in its own environment: ``python -m magnusim_sdk.service``).
 """
 
 SDK_VERSION = "1.1.0"

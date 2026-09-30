@@ -57,6 +57,8 @@ export interface ProjectTreeDoc {
   plugin_nodes?: Array<{ label?: string; name?: string; key?: string; scope?: string; projectId?: string; project_id?: string }>;
   plugin_studies?: PluginStudyRow[];
   plugin_study_kinds?: PluginStudyKind[];
+  /** Some plugin studies are being upgraded by their plugin: read the tree again soon. */
+  plugin_studies_migrating?: boolean;
 }
 
 /** A project-level study a plugin owns (plugin_studies.list). */

@@ -4971,6 +4971,12 @@ body.is-recording #viewport-gizmo {
 .wiz-plugin-status[data-state="enabled"] { color: #3f6b4a; }
 .wiz-plugin-status[data-state="error"] { color: #b42318; }
 .wiz-pref-copy .wiz-plugin-error { color: #b42318; }
+.wiz-plugin-status[data-state="needs setup"] { color: #b54708; }
+/* A plugin's own environment: needs setup, installing (last pip line), failed (details). */
+.wiz-pref-copy .wiz-plugin-env { font-size: 12px; color: #b54708; }
+.wiz-plugin-env-log { display: block; margin-top: 2px; color: #667085; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+.wiz-plugin-env-details { margin-top: 4px; font-size: 11px; color: #475467; }
+.wiz-plugin-env-details pre { margin: 4px 0 0; max-height: 140px; overflow: auto; white-space: pre-wrap; background: #f9fafb; border: 1px solid #eaecf0; border-radius: 4px; padding: 6px; }
 /* A required bundled plugin failed to load: creating and running are refused. */
 .required-plugin-error { position: fixed; top: 0; left: 0; right: 0; z-index: 10000; margin: 0; padding: 10px 16px; background: #fef3f2; border-bottom: 1px solid #fda29b; color: #b42318; font-size: 13px; }
 .required-plugin-error p { margin: 0; }

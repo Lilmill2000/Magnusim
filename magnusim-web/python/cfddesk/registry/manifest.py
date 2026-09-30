@@ -20,6 +20,21 @@ class StudyKind:
     schema_version: int = 1
 
 
+@dataclass(frozen=True)
+class PythonEnvSpec:
+    """A plugin's own Python environment (manifest ``[python]``, API 1.1).
+
+    Paths are relative to the plugin folder. ``lock_hash`` is the lock file's
+    content hash: a new one means a new environment ("Needs setup").
+    """
+
+    requirements: str = "requirements.lock"
+    python: str = ""  # supported interpreter range, e.g. ">=3.10,<3.13"
+    service: str = ""  # module run by magnusim_sdk.service (its backend)
+    find_links: str = ""  # a folder of wheels in the plugin (offline installs)
+    lock_hash: str = ""
+
+
 @dataclass
 class PluginManifest:
     key: str
@@ -47,3 +62,5 @@ class PluginManifest:
     protected: list[str] = field(default_factory=list)
     # Project-level studies it owns (plugins/<key>/studies/<sid>).
     study_kinds: list[StudyKind] = field(default_factory=list)
+    # Its own environment and service ([python]); None runs in the core (bundled, no extra packages).
+    python_env: PythonEnvSpec | None = None

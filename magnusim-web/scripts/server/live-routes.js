@@ -35,6 +35,7 @@ import {
 } from './compute-queue.ts';
 import { handleW28Api } from '../w28-media.js';
 import { handlePrefsApi } from '../w32-prefs.js';
+import { startStudyMigrations } from './plugin-services.ts';
 import { getCaseFieldApi } from '../vite-plugin-case-fields.js';
 import { readBinaryBody, readJsonBody, sendJson } from './http.ts';
 import { WorkerUnavailableError } from './worker.ts';
@@ -117,7 +118,7 @@ function wireComputeQueue(api) {
   });
 }
 
-export function registerLiveRoutes(router, { worker, jobs }) {
+export function registerLiveRoutes(router, { worker, jobs, services }) {
   const api = getCaseFieldApi();
 
   attachLiveMeshJobReader(liveMeshJobSnapshot);
@@ -198,6 +199,12 @@ export function registerLiveRoutes(router, { worker, jobs }) {
     }
     try {
       const doc = await worker.call('project.tree', { id });
+      // Plugin studies saved with an older schema: their plugin's service upgrades
+      // them in the background (the tree never waits for a plugin); the page reads
+      // the tree again while this says so.
+      if (services && doc && typeof doc === 'object') {
+        doc.plugin_studies_migrating = startStudyMigrations(worker, services, id, doc.plugin_studies);
+      }
       ctx.sendJson(200, doc);
     } catch (e) {
       ctx.sendJson(500, { error: 'project tree failed', detail: String(e && e.message ? e.message : e) });

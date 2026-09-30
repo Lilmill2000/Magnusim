@@ -27,6 +27,13 @@ September 2026 readiness audit. This list preserves the intended work.
   the AmgX library in the WSL toolchain), show it only when a CUDA GPU is found,
   and prove it with a WSL solve against the CPU result.
 
+- **Plugin environments, next steps (Plugin Host H12):** a plugin's own
+  environment comes from a `[python]` table in a folder plugin's manifest; a
+  plugin installed as a wheel (entry point) has none yet. The `gpu`
+  requirement is checked only for an NVIDIA GPU (`nvidia-smi`). A service
+  answers one call at a time. To add: environments for wheel plugins, other GPU
+  vendors, and concurrent calls for services that declare they are safe.
+
 Each restored control should have a persistence check and a successful
 end-to-end simulation or result-generation test. Do not expose placeholder
 buttons marked “coming soon.”
