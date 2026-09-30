@@ -39,6 +39,13 @@ export const H8_PROJECT = 'h8-contract-e2e';
 export const H10_PROJECT = 'h10-ui-parity-e2e';
 /** A project with no geometry at all (h11-plugin-studies.spec.js: plugin studies in the empty stage). */
 export const NO_GEOMETRY_PROJECT = 'no-geometry-e2e';
+/**
+ * Own elbow project for lifecycle.spec.js, saved before a study delete dropped the study
+ * from simulations.json: the index still lists the deleted study, as active_id, and
+ * simulation.json is a copy of it. Its folder is gone.
+ */
+export const MISSING_STUDY_PROJECT = 'missing-study-e2e';
+export const MISSING_STUDY_ID = 'sim-deleted-e2e';
 
 /** Copy the elbow fixture into destRoot/<id> laid out the way the app stores it. */
 function seedElbowProject(destRoot, id, title) {
@@ -99,6 +106,22 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
   seedElbowProject(destRoot, RUN_SETTINGS_PROJECT, 'Run settings');
   seedElbowProject(destRoot, H8_PROJECT, 'Analysis contract');
   seedElbowProject(destRoot, H10_PROJECT, 'UI parity');
+  seedElbowProject(destRoot, MISSING_STUDY_PROJECT, 'Deleted study still listed');
+  const missingDir = join(destRoot, MISSING_STUDY_PROJECT);
+  const index = JSON.parse(readFileSync(join(missingDir, 'simulations.json'), 'utf8'));
+  const deleted = {
+    ...index.simulations[0],
+    id: MISSING_STUDY_ID,
+    name: 'Deleted study',
+    time_dependency: 'Transient',
+    algorithm: 'PIMPLE',
+  };
+  writeJsonAtomic(join(missingDir, 'simulations.json'), {
+    ...index,
+    active_id: MISSING_STUDY_ID,
+    simulations: [...index.simulations, deleted],
+  });
+  writeJsonAtomic(join(missingDir, 'simulation.json'), deleted);
   mkdirSync(join(destRoot, NO_GEOMETRY_PROJECT), { recursive: true });
   writeJsonAtomic(join(destRoot, NO_GEOMETRY_PROJECT, 'project.json'), {
     id: NO_GEOMETRY_PROJECT,

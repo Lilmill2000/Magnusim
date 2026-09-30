@@ -195,10 +195,14 @@ def project_hydrate(id: str = "", project_id: str = "", simulation_id: str = "")
     proj = ww.read_json(root / "project.json")
     if not proj:
         raise RpcError(-32004, "project not found", {"project_id": pid})
-    from cfddesk.project.paths import walk_studies
+    from cfddesk.project.paths import drop_missing_studies, walk_studies
 
+    # The index before the walk (see paths.drop_missing_studies): a row whose study
+    # folder is gone is neither listed nor opened as the active study.
+    index = read_sibling(pid, "simulations.json")
     studies = walk_studies(root)
-    catalog = read_sibling(pid, "simulations.json") or {}
+    listed = drop_missing_studies(index, studies)
+    catalog = listed or {}
     sid = simulation_id or str(catalog.get("active_id") or "")
     if not sid and len(studies) == 1:
         sid = str(studies[0]["id"])
@@ -237,7 +241,7 @@ def project_hydrate(id: str = "", project_id: str = "", simulation_id: str = "")
         "ok": True,
         "project_id": pid,
         "project": proj,
-        "simulation": read_sibling(pid, "simulations.json") or read_sibling(pid, "simulation.json"),
+        "simulation": listed or read_sibling(pid, "simulation.json"),
         "materials": materials,
         "bcs": bcs,
         "mesh": mesh,
@@ -460,8 +464,12 @@ def _filter_tree_nodes(nodes: Any, project_id: str, key: str) -> list[dict[str, 
 
 @rpc("sim.get")
 def sim_get(id: str = "", project_id: str = "") -> Any:
+    from cfddesk.project.paths import drop_missing_studies, walk_studies
+
     pid = _bound_project(id, project_id)
-    return read_sibling(pid, "simulations.json") or read_sibling(pid, "simulation.json")
+    index = read_sibling(pid, "simulations.json")
+    listed = drop_missing_studies(index, walk_studies(project_dir(pid)))
+    return listed or read_sibling(pid, "simulation.json")
 
 
 @rpc("sim.set")

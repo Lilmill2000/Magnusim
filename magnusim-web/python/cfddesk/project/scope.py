@@ -13,6 +13,7 @@ from cfddesk.project.paths import (
     assemble_study_bcs,
     create_mesh_folder,
     create_run_folder,
+    drop_missing_studies,
     walk_child_items,
     walk_geometries,
     walk_meshes,
@@ -363,7 +364,7 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
     proj = _read_json(root / "project.json") or {}
     catalog = _read_json(root / "simulations.json") or {}
     studies = walk_studies(root)
-    active = str(catalog.get("active_id") or "")
+    active = str((drop_missing_studies(catalog, studies) or {}).get("active_id") or "")
     if not active and len(studies) == 1:
         active = str(studies[0].get("id") or "")
     geometries = []

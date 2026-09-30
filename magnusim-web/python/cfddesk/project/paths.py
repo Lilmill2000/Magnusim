@@ -111,6 +111,33 @@ def find_study(project_dir: Path, sim_id: str | None) -> dict[str, Any] | None:
     return None
 
 
+def drop_missing_studies(
+    catalog: dict[str, Any] | None, studies: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """``simulations.json`` without rows whose study folder is gone.
+
+    A project saved before a study delete dropped the study from the index (the delete
+    saved it while the folder was still there) can list the deleted study, even as
+    ``active_id``. Such a row goes, and an ``active_id`` on it moves to the first study
+    left. ``studies`` is a ``walk_studies`` taken after reading the index: Node makes a
+    study's folder before its row, so that walk finds every study the index may name.
+    Only this answer changes. Node's catalog read writes the fixed index
+    (``dropMissingStudies``, scripts/w17-sim-catalog.js); the worker runs beside
+    Node's writes to that file, and a write here could undo one.
+    """
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("simulations"), list):
+        return catalog
+    on_disk = {str(s.get("id")) for s in studies if s.get("id")}
+    rows = catalog["simulations"]
+    kept = [r for r in rows if isinstance(r, dict) and str(r.get("id") or "") in on_disk]
+    active = str(catalog.get("active_id") or "")
+    active_gone = bool(active) and active not in on_disk
+    if len(kept) == len(rows) and not active_gone:
+        return catalog
+    active_id = (kept[0].get("id") if kept else None) if active_gone else catalog.get("active_id")
+    return {**catalog, "simulations": kept, "active_id": active_id}
+
+
 def bind_mesh_case_paths(rec: dict[str, Any], folder: Path) -> dict[str, Any]:
     """Pin case_dir / mesh_path to this mesh folder. Folder renames leave stale paths in mesh.json."""
     case_dir = str(folder / "case")

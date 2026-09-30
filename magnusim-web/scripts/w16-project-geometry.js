@@ -1720,7 +1720,9 @@ async function removeGeometry(opts) {
   parts = parts.filter((p) => p.id !== geomId);
   const destDir = partDirFor(projectId, geomId);
   try {
-    rmSync(destDir, { recursive: true, force: true });
+    // Before the catalog save below: its walk must not find this geometry's studies.
+    // Retried as a study folder's remove is: the worker may be reading a file in it.
+    rmSync(destDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
   } catch {
     /* folder may already be gone */
   }

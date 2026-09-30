@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MISSING_STUDY_ID, MISSING_STUDY_PROJECT } from './prepare-projects.js';
 
 // Everything a user creates can be renamed, moved and deleted again, through the UI:
 // folders and projects on Home; studies (rename, clone, delete), meshes and runs
@@ -51,6 +52,16 @@ async function createStudy(page, opts = {}) {
 }
 
 const studyRow = (page, sid) => page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first();
+
+/** The studies Create Simulation offers under "Start from" ("" is "None — empty study"). */
+async function startFromChoices(page) {
+  await page.locator('#btn-create-simulation').click();
+  await expect(page.locator('#modal-create-simulation')).toBeVisible();
+  const values = await page.locator('#cs-copy-from option').evaluateAll((opts) => opts.map((o) => o.value));
+  await page.locator('#cs-cancel').click();
+  await expect(page.locator('#modal-create-simulation')).toBeHidden();
+  return values;
+}
 const json = async (request, url) => {
   // A poll can reuse a keep-alive socket just as the server closes it: retry the read.
   for (let i = 0; ; i++) {
@@ -296,6 +307,37 @@ test('workbench: a study renamed, cloned and deleted; meshes and runs added, ren
   expect((await wallRec())?.wall_type).toBe('No-slip');
 });
 
+test('a study deleted before its delete left the index is not counted, offered or opened', async ({ page, request }) => {
+  test.setTimeout(180_000);
+  page.setDefaultTimeout(30_000);
+  // Seeded by prepare-projects.js: simulations.json lists a deleted study (no folder) as
+  // the active one. Opening the project counted it, offered it under Start from and
+  // opened it, with an empty setup, instead of the study that is there.
+  const pid = MISSING_STUDY_PROJECT;
+  const q = (path) => `${path}?project_id=${encodeURIComponent(pid)}`;
+  const shown = async () => {
+    await expect(page.locator('#btn-create-simulation')).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator('#simulations-count-label')).toHaveText('SIMULATIONS (1)');
+    await expect.poll(() => page.evaluate(() => window.__CFD_W17__.activeId)).toBe('sim_1');
+    await expect(page.locator(`#left-tree [data-w17-sim-id="${MISSING_STUDY_ID}"]`)).toHaveCount(0);
+    await expect(page.locator('#left-tree [data-w17-sim-id="sim_1"] #btn-bcs-plus')).toHaveCount(1);
+    expect(await startFromChoices(page)).toEqual(['', 'sim_1']);
+  };
+  await openProject(page, pid);
+  await shown();
+  // Asked for by id (an old tab, a queued job), it is not opened.
+  const activated = await (
+    await request.post(q('/api/simulation/activate'), { data: { project_id: pid, simulation_id: MISSING_STUDY_ID } })
+  ).json();
+  expect(activated.active_id).toBe('sim_1');
+  const hydrated = await json(request, q('/api/project/hydrate'));
+  expect(hydrated.simulation.simulations.map((s) => s.id)).toEqual(['sim_1']);
+  expect(hydrated.simulation.active_id).toBe('sim_1');
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
+  await shown();
+});
+
 test('deleting a geometry says its studies go too, and removes only those', async ({ page, request }) => {
   test.setTimeout(180_000);
   page.setDefaultTimeout(30_000);
@@ -307,7 +349,7 @@ test('deleting a geometry says its studies go too, and removes only those', asyn
   const geoms = (await json(request, q('/api/project'))).project.geometries;
   const round = geoms.find((g) => g.name === 'transient-test');
   const tear = geoms.find((g) => g.name === 'transient-test-teardrop');
-  await createStudy(page, { geometryId: round.id });
+  const roundStudy = await createStudy(page, { geometryId: round.id });
   const tearStudy = await createStudy(page, { geometryId: tear.id });
 
   await page.locator(`#left-tree li[data-w16-geom="${tear.id}"] > .tree-row`).click();
@@ -327,6 +369,19 @@ test('deleting a geometry says its studies go too, and removes only those', asyn
   await expect.poll(() => page.evaluate(() => window.__CFD_W16__?.geometry?.id)).toBe(round.id);
   await expect.poll(() => page.evaluate(() => window.__CFD_W17__?.simulation?.geometry_id)).toBe(round.id);
   await expect(page.locator('#geometries-list .geo-item')).toHaveCount(1);
+  // Nothing of the removed geometry's study is left to count, copy from or open, now or
+  // after a reload (hydrate reads simulations.json).
+  const onlyRound = async () => {
+    await expect(page.locator('#simulations-count-label')).toHaveText('SIMULATIONS (1)');
+    await expect.poll(() => page.evaluate(() => window.__CFD_W17__?.activeId)).toBe(roundStudy);
+    expect(await startFromChoices(page)).toEqual(['', roundStudy]);
+  };
+  await onlyRound();
+  const hydrated = await json(request, q('/api/project/hydrate'));
+  expect(hydrated.simulation.simulations.map((s) => s.id)).toEqual([roundStudy]);
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
+  await onlyRound();
 });
 
 test('an Imperial project shows imperial units', async ({ page, request }) => {

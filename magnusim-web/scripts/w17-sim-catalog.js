@@ -294,13 +294,51 @@ export function readCatalog(projectId) {
   return { active_id: null, simulations: [], updated_at: null };
 }
 
+/**
+ * The index without rows whose study folder is gone. A project saved before a study
+ * delete dropped the study from the index (the delete saved it while the folder was
+ * still there) can list the deleted study, even as active_id: activating it wrote it
+ * back. The folders are the studies, so such a row goes, and an active_id on it moves
+ * to the first study left. The fixed index is written back once (atomic replace).
+ * Node writes this file, synchronously, and makes a study's folder before its row, so
+ * a walk right after the read finds every folder the index may name. The worker only
+ * filters (paths.drop_missing_studies): it runs beside these writes.
+ */
+function dropMissingStudies(projectId, index, onDisk) {
+  const rows = index.simulations;
+  const kept = rows.filter((s) => s && s.id != null && onDisk.has(String(s.id)));
+  const active = index.active_id != null ? String(index.active_id) : '';
+  const activeGone = !!active && !onDisk.has(active);
+  if (kept.length === rows.length && !activeGone) return { catalog: index, dropped: [] };
+  const fixed = {
+    ...index,
+    active_id: activeGone ? (kept[0] && kept[0].id) || null : index.active_id,
+    simulations: kept,
+    updated_at: new Date().toISOString(),
+  };
+  try {
+    writeJsonAtomic(simulationsJsonPath(projectId), fixed);
+    // Activating the missing study also made simulation.json a copy of it.
+    const mirror = readJson(simulationJsonPath(projectId));
+    const next = kept.find((s) => String(s.id) === String(fixed.active_id));
+    if (mirror && mirror.id != null && !onDisk.has(String(mirror.id)) && next) {
+      writeJsonAtomic(simulationJsonPath(projectId), { ...next, simulation_json: simulationJsonPath(projectId) });
+    }
+  } catch (e) {
+    // This answer is fixed all the same; the next read writes it.
+    console.warn('[CFD W17] drop missing studies', e);
+  }
+  return { catalog: fixed, dropped: rows.filter((s) => s && !kept.includes(s)) };
+}
+
 export function pruneOrphanStudies(projectId, proj) {
   const existing = readJson(simulationsJsonPath(projectId));
   if (!existing || !Array.isArray(existing.simulations)) {
     return { catalog: existing || { active_id: null, simulations: [] }, dropped: [] };
   }
+  const onDisk = new Set(catalogFromWalk(projectDir(projectId), null).simulations.map((s) => String(s.id)));
   if (!proj || !Array.isArray(proj.geometries)) {
-    return { catalog: existing, dropped: [] };
+    return dropMissingStudies(projectId, existing, onDisk);
   }
   const live = new Set(
     geometriesOf(proj)
@@ -314,10 +352,11 @@ export function pruneOrphanStudies(projectId, proj) {
     else if (s) dropped.push(s);
   }
   if (!dropped.length) {
-    return { catalog: existing, dropped: [] };
+    return dropMissingStudies(projectId, existing, onDisk);
   }
+  // The save lists only studies the walk finds; the active one comes from those left.
   return {
-    catalog: saveCatalog(projectId, { ...existing, simulations: kept }),
+    catalog: saveCatalog(projectId, { ...existing, simulations: kept.filter((s) => onDisk.has(String(s.id))) }),
     dropped,
   };
 }
