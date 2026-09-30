@@ -975,7 +975,7 @@
   "            <span class=\"mat-k\" title=\"Extra non-orthogonal corrections for skewed cells.\"> Non-orthogonal correctors",
   "            <input aria-label=\"Non-orthogonal correctors\" class=\"<id>\" disabled=\"\" inputmode=\"decimal\" type=\"text\" value=\"#\">",
   "      <div class=\"<id>\">",
-  "        <button class=\"fp-btn\" data-run-stop=\"#\" title=\"Write the current iteration and stop. Results up to this point stay available.\" type=\"button\"> Stop",
+  "        <button class=\"fp-btn\" data-run-stop=\"#\" title=\"Write the current time step and stop. Results up to this point stay available.\" type=\"button\"> Stop",
   "      <div class=\"<id>\" data-run-status=\"running\">",
   "        <div class=\"mat-k\"> Solving",
   "        <div class=\"<id>\" data-run-line=\"#\"> t = # s / # s (#%) · # / # frames · Δt # s · Co # (max #)",

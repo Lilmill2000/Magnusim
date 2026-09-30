@@ -30784,12 +30784,14 @@ function computeRunState() {
     start.enabled = !runCatalog.starting && canStart;
   }
   const stopping = !!(running && run && run.stop_requested);
+  // A run on a seconds axis writes its current time step, else its iteration.
+  const stepName = running && runXAxisIsSeconds(run) ? 'time step' : 'iteration';
   const stop = {
     visible: running,
     label: stopping ? 'Force stop' : 'Stop',
     title: stopping
-      ? 'The solver is writing the current iteration. Click again to kill it without saving.'
-      : 'Write the current iteration and stop. Results up to this point stay available.',
+      ? 'The solver is writing the current ' + stepName + '. Click again to kill it without saving.'
+      : 'Write the current ' + stepName + ' and stop. Results up to this point stay available.',
   };
 
   // Reason, in priority order (first match wins).

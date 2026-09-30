@@ -287,13 +287,15 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   // still growing, and the time left comes and goes: not compared) and its
   // project's card on Home. Each is stopped and deleted afterwards.
   const homeJob = page.locator(`#home-grid .home-card[data-project-id="${PROJECT}"] .home-card-job`);
-  const whileSolving = async (label, fields, runLine, homeLine, homeParity) => {
+  const whileSolving = async (label, fields, runLine, stopTitle, homeLine, homeParity) => {
     const rid = await createRun(`Parity live ${label}`);
     await openRun(rid);
     for (const [field, value] of fields) await setField(field, value);
     await expect(runControl.locator('[data-run-start]')).toBeEnabled({ timeout: 60_000 });
     await runControl.locator('[data-run-start]').click();
     await expect(runControl.locator('[data-run-line="1"]')).toHaveText(runLine, { timeout: 600_000 });
+    // Stop says what it writes: a transient run's time step, a steady run's iteration.
+    await expect(runControl.locator('[data-run-stop="1"]')).toHaveAttribute('title', stopTitle);
     await capture(page, `run-running-${label}`, runPanel, {
       live: true,
       settle: true,
@@ -323,6 +325,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
     'transient',
     [['Simulation time', Number((dt * 100_000).toPrecision(4))], ['Result frames', 1000]],
     /^t = \S+ s \/ \S+ s \(\d+%\)/,
+    'Write the current time step and stop. Results up to this point stay available.',
     /^\S+ s \/ \S+ s/,
     true,
   );
@@ -335,6 +338,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
     'steady',
     [['Iterations', 100_000], ['Write interval', 50_000]],
     /^Iteration \d+ \/ \d+$/,
+    'Write the current iteration and stop. Results up to this point stay available.',
     /^\d+ \/ 100000\b/,
     false,
   );
