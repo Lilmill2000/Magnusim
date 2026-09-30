@@ -46,6 +46,20 @@ export const NO_GEOMETRY_PROJECT = 'no-geometry-e2e';
  */
 export const MISSING_STUDY_PROJECT = 'missing-study-e2e';
 export const MISSING_STUDY_ID = 'sim-deleted-e2e';
+/**
+ * The round and the teardrop hole plate, for lifecycle.spec.js; the teardrop has no study.
+ * A study's folder is made before its row in simulations.json, and a server stopped in
+ * between leaves a study the tree shows (it walks the folders) and the index does not
+ * list: here the round plate's second study. Removing the teardrop deleted every study
+ * folder the index did not list.
+ */
+export const GEOMETRY_REMOVE_PROJECT = 'geometry-remove-e2e';
+export const GEOMETRY_REMOVE_IDS = Object.freeze({
+  round: 'geom-round-e2e',
+  tear: 'geom-tear-e2e',
+  roundStudy: 'sim-round-e2e',
+  unlistedStudy: 'sim-round-unlisted-e2e',
+});
 
 /** Copy the elbow fixture into destRoot/<id> laid out the way the app stores it. */
 function seedElbowProject(destRoot, id, title) {
@@ -90,6 +104,75 @@ function seedElbowProject(destRoot, id, title) {
   writeJsonAtomic(join(dest, 'project.json'), doc);
 }
 
+function seedGeometryRemoveProject(destRoot) {
+  const id = GEOMETRY_REMOVE_PROJECT;
+  const ids = GEOMETRY_REMOVE_IDS;
+  const dest = join(destRoot, id);
+  mkdirSync(dest, { recursive: true });
+  const fixtures = join(WEB_ROOT, 'python', 'tests', 'fixtures', 'geometry');
+  const parts = [
+    [ids.round, 'transient-test.step'],
+    [ids.tear, 'transient-test-teardrop.step'],
+  ].map(([gid, file]) => {
+    const name = file.replace(/\.step$/, '');
+    const folder = createGeometryFolder(dest, { id: gid, name, original_filename: file });
+    const stepPath = join(folder.dir, 'source.step');
+    cpSync(join(fixtures, file), stepPath);
+    return {
+      id: gid,
+      name,
+      original_filename: file,
+      step_path: stepPath,
+      source_kind: 'step',
+      representation: 'step',
+      n_solids: 1,
+      assembly_bodies: ['Body1'],
+    };
+  });
+  const study = (sid, gid, name) => ({
+    id: sid,
+    name,
+    analysis: 'Incompressible',
+    time_dependency: 'Steady-state',
+    algorithm: 'SIMPLE',
+    turbulence_model: 'k-omega SST',
+    geometry_id: gid,
+  });
+  const listed = study(ids.roundStudy, ids.round, 'Round baseline');
+  createStudyFolder(dest, ids.round, listed);
+  createStudyFolder(dest, ids.round, study(ids.unlistedStudy, ids.round, 'Round fine'));
+  writeJsonAtomic(join(dest, 'simulations.json'), {
+    active_id: listed.id,
+    simulations: [listed],
+    updated_at: '2026-01-01T00:00:00.000Z',
+  });
+  writeJsonAtomic(join(dest, 'simulation.json'), listed);
+  const [round] = parts;
+  writeJsonAtomic(join(dest, 'project.json'), {
+    id,
+    title: 'Geometry removed, unlisted study kept',
+    description: 'Two geometries; simulations.json lists one of the two round plate studies',
+    category: 'Other',
+    units: 'Metric',
+    folder: 'My Projects',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    geometry: {
+      id: round.id,
+      name: round.name,
+      bodies: ['Body1'],
+      volume: 'Body1',
+      step_path: round.step_path,
+      source_kind: 'step',
+      representation: 'step',
+      tessellated: false,
+    },
+    geometries: parts,
+    active_geometry_id: round.id,
+    increment: 'W16',
+  });
+}
+
 export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-projects')) {
   rmSync(destRoot, { recursive: true, force: true });
   // The server keeps this root's compute queue beside it (computeQueueFileFor in
@@ -122,6 +205,7 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
     simulations: [...index.simulations, deleted],
   });
   writeJsonAtomic(join(missingDir, 'simulation.json'), deleted);
+  seedGeometryRemoveProject(destRoot);
   mkdirSync(join(destRoot, NO_GEOMETRY_PROJECT), { recursive: true });
   writeJsonAtomic(join(destRoot, NO_GEOMETRY_PROJECT, 'project.json'), {
     id: NO_GEOMETRY_PROJECT,

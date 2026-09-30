@@ -13,6 +13,7 @@ import {
   ensureCatalog,
   getActiveSimulation,
   projectDir,
+  pruneOrphanStudies,
   readCatalog,
   setActiveSimulation,
   simulationJsonPath,
@@ -33,7 +34,6 @@ import {
   meshRefsDir,
   readJsonFile,
   replaceChildItems,
-  removeStudyFolder,
   runRcsDir,
   studyBcsDir,
   studyBcsPath,
@@ -881,23 +881,46 @@ function copySimulationSettings(projectId, proj, fromId, toId, include, copyMode
   };
 }
 
-export function purgeStudyRecords(projectId, simId, _geomId) {
-  const want = String(simId || '').trim();
-  if (!want) return;
-  removeStudyFolder(projectDir(projectId), want);
-}
-
-export function purgeOrphanSetupRecords(projectId, proj, liveSimIds) {
+/**
+ * Removes the folders of studies that were removed, and no others: every folder of a
+ * study in simIds (a copy can leave two with one id) and every study folder on a
+ * geometry in geometryIds. Never "every folder not in a list": a list read from
+ * simulations.json misses a study with no row there (no index, an unreadable one, a
+ * row never written), and removing one geometry then deleted every other geometry's
+ * studies. Tries every such folder, then throws the first failure.
+ */
+export function purgeRemovedStudies(projectId, { simIds = [], geometryIds = [] } = {}) {
   if (!projectId) return;
-  const liveSims = new Set((liveSimIds || []).map((id) => String(id || '').trim()).filter(Boolean));
-  const root = projectDir(projectId);
-  for (const s of walkStudies(root)) {
-    if (s && s.id && !liveSims.has(String(s.id))) {
-      try {
-        rmSync(s.dir, { recursive: true, force: true });
-      } catch (_) {}
+  const clean = (list) => new Set(list.map((id) => String(id || '').trim()).filter(Boolean));
+  const sims = clean(simIds);
+  const geoms = clean(geometryIds);
+  if (!sims.size && !geoms.size) return;
+  let failed = null;
+  for (const s of walkStudies(projectDir(projectId))) {
+    if (!s || !s.dir) continue;
+    if (!sims.has(String(s.id)) && !geoms.has(String(s.geometry_id || ''))) continue;
+    try {
+      // Retried: the worker may be reading a file in it.
+      rmSync(s.dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+    } catch (e) {
+      failed = failed || e;
     }
   }
+  if (failed) throw failed;
+}
+
+/**
+ * After removeGeometry (w16) has taken the geometry's folder away: whatever is left of
+ * its studies' folders goes (before the catalog save, whose walk must not list them),
+ * then their rows. Returns pruneOrphanStudies' answer.
+ */
+export function dropGeometryStudies(projectId, proj, geomId) {
+  try {
+    purgeRemovedStudies(projectId, { geometryIds: [geomId] });
+  } catch (e) {
+    console.warn('[CFD W17] geometry remove: a study folder is still there', e);
+  }
+  return pruneOrphanStudies(projectId, proj);
 }
 
 function deleteSimulation(body) {
@@ -921,12 +944,7 @@ function deleteSimulation(body) {
   }
   proj.updated_at = new Date().toISOString();
   writeProject(proj);
-  purgeStudyRecords(projectId, simId, doomed.geometry_id);
-  purgeOrphanSetupRecords(
-    projectId,
-    proj,
-    (next.simulations || []).map((s) => s && s.id).filter(Boolean)
-  );
+  purgeRemovedStudies(projectId, { simIds: [simId] });
   return {
     ok: true,
     status: 200,

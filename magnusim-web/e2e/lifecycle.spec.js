@@ -1,7 +1,12 @@
 import { expect, test } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MISSING_STUDY_ID, MISSING_STUDY_PROJECT } from './prepare-projects.js';
+import {
+  GEOMETRY_REMOVE_IDS,
+  GEOMETRY_REMOVE_PROJECT,
+  MISSING_STUDY_ID,
+  MISSING_STUDY_PROJECT,
+} from './prepare-projects.js';
 
 // Everything a user creates can be renamed, moved and deleted again, through the UI:
 // folders and projects on Home; studies (rename, clone, delete), meshes and runs
@@ -379,6 +384,48 @@ test('deleting a geometry says its studies go too, and removes only those', asyn
   await onlyRound();
   const hydrated = await json(request, q('/api/project/hydrate'));
   expect(hydrated.simulation.simulations.map((s) => s.id)).toEqual([roundStudy]);
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
+  await onlyRound();
+});
+
+test("deleting a geometry keeps another geometry's study that simulations.json does not list", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  page.setDefaultTimeout(30_000);
+  // Seeded by prepare-projects.js: the round plate has two studies, and simulations.json
+  // lists only the first; the teardrop has none. Removing the teardrop deleted every study
+  // folder the index did not list: "Round fine" left the tree, and the disk, for good.
+  const pid = GEOMETRY_REMOVE_PROJECT;
+  const ids = GEOMETRY_REMOVE_IDS;
+  const q = (path) => `${path}?project_id=${encodeURIComponent(pid)}`;
+  const inTree = (sid) => page.locator(`#left-tree [data-w17-sim-id="${sid}"]`);
+  const roundStudies = async () => {
+    await expect(inTree(ids.roundStudy)).toHaveCount(1, { timeout: 30_000 });
+    await expect(inTree(ids.unlistedStudy)).toHaveCount(1, { timeout: 30_000 });
+    await expect(studyRow(page, ids.roundStudy)).toContainText('Round baseline');
+    await expect(studyRow(page, ids.unlistedStudy)).toContainText('Round fine');
+  };
+  await openProject(page, pid);
+  await expect(page.locator('#geometries-list .geo-item')).toHaveCount(2, { timeout: 60_000 });
+  await roundStudies();
+
+  await page.locator(`#left-tree li[data-w16-geom="${ids.tear}"] > .tree-row`).click();
+  await expect.poll(() => page.evaluate(() => window.__CFD_W16__?.geometry?.id)).toBe(ids.tear);
+  await page.locator('#panel-geometry').locator('.mat-clear-link', { hasText: 'Delete' }).click();
+  await expect(page.locator('#modal-confirm')).toBeVisible();
+  await expect(page.locator('#cf-copy')).toHaveText('The CAD is removed from this project.');
+  await page.locator('#cf-confirm').click();
+  await expect.poll(async () => (await json(request, q('/api/project'))).project.geometries.map((g) => g.id)).toEqual([ids.round]);
+
+  // Only the teardrop went: the round plate is shown with both its studies, now and after
+  // a reload (the tree walks the study folders).
+  const onlyRound = async () => {
+    await expect(page.locator('#geometries-list .geo-item')).toHaveCount(1, { timeout: 30_000 });
+    await expect(page.locator(`#left-tree li[data-w16-geom="${ids.tear}"]`)).toHaveCount(0, { timeout: 30_000 });
+    await expect.poll(() => page.evaluate(() => window.__CFD_W16__?.geometry?.id)).toBe(ids.round);
+    await roundStudies();
+  };
+  await onlyRound();
   await page.reload();
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
   await onlyRound();

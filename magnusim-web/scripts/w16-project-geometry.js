@@ -1733,16 +1733,8 @@ async function removeGeometry(opts) {
   const persisted = await persistActiveGeometry(proj, parts, nextActive, 'removed');
   if (!persisted.ok) return persisted;
   try {
-    const { pruneOrphanStudies } = await import('./w17-sim-catalog.js');
-    const { purgeOrphanSetupRecords, purgeStudyRecords } = await import('./w17-simulation.js');
-    const pruned = pruneOrphanStudies(projectId, persisted.project);
-    for (const s of pruned.dropped || []) {
-      try {
-        purgeStudyRecords(projectId, s.id, s.geometry_id);
-      } catch (_) {}
-    }
-    const live = ((pruned.catalog && pruned.catalog.simulations) || []).map((s) => s && s.id).filter(Boolean);
-    purgeOrphanSetupRecords(projectId, persisted.project, live);
+    const { dropGeometryStudies } = await import('./w17-simulation.js');
+    dropGeometryStudies(projectId, persisted.project, geomId);
   } catch (_) {}
   return {
     ok: true,
