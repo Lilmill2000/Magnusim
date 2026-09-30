@@ -25,6 +25,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PYTHON, pyTool } from './python-env.js';
@@ -1207,13 +1208,37 @@ function thumbPathFor(id) {
   return join(geometriesRoot(projectDir(id)), 'thumb.png');
 }
 
+const renderThumbWithPython = (args) => runPython([THUMB_SCRIPT, ...args]);
+let renderThumb = renderThumbWithPython;
+
+/** Tests hold the thumbnail render with a stand-in (null puts render_geometry_thumb.py back). */
+export function setThumbRendererForTests(fn) {
+  renderThumb = fn || renderThumbWithPython;
+}
+
 function thumbIsFresh(thumb, source) {
   if (!existsSync(thumb) || statSync(thumb).size < 80) return false;
   if (!source || !existsSync(source)) return true;
   return statSync(thumb).mtimeMs >= statSync(source).mtimeMs;
 }
 
-async function renderGeometryThumb(projectId) {
+/**
+ * Move a thumbnail rendered outside the project to `out`, unless `out` is no longer the
+ * project's thumbnail: its geometry (or the project) was removed while it rendered, and
+ * writing there would make the removed folder again. All synchronous, so a remove (an
+ * rmSync on this thread) cannot land between the check and the copy.
+ */
+function placeThumb(id, out, rendered) {
+  if (!readProject(id) || thumbPathFor(id) !== out || !existsSync(dirname(out))) return false;
+  try {
+    copyFileSync(rendered, out);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function renderGeometryThumb(projectId, retried = false) {
   const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
   const proj = readProject(id);
@@ -1229,20 +1254,32 @@ async function renderGeometryThumb(projectId) {
   if (!existsSync(THUMB_SCRIPT)) {
     return { ok: false, status: 500, body: { error: 'thumb script missing', path: THUMB_SCRIPT } };
   }
+  // Rendered outside the project, then moved in by placeThumb: render_geometry_thumb.py
+  // makes the folder it writes to.
+  const rendered = join(tmpdir(), `magnusim-thumb-${process.pid}-${randomBytes(6).toString('hex')}.png`);
   try {
     if (preview.ok) {
-      await runPython([THUMB_SCRIPT, '--vtp', preview.faces, '--edges', preview.edges, '--out', out]);
+      await renderThumb(['--vtp', preview.faces, '--edges', preview.edges, '--out', rendered]);
     } else {
-      await runPython([THUMB_SCRIPT, '--stl', source, '--out', out]);
+      await renderThumb(['--stl', source, '--out', rendered]);
     }
   } catch (e) {
+    rmSync(rendered, { force: true });
     if (existsSync(out) && statSync(out).size > 80) {
       return { ok: true, path: out, bytes: readFileSync(out), stale: true, project: proj };
     }
     return { ok: false, status: 500, body: { error: 'thumb render failed', detail: String(e), project_id: id } };
   }
-  if (!existsSync(out) || statSync(out).size < 80) {
+  const made = existsSync(rendered) && statSync(rendered).size >= 80;
+  const placed = made && placeThumb(id, out, rendered);
+  rmSync(rendered, { force: true });
+  if (!made) {
     return { ok: false, status: 500, body: { error: 'thumb missing after render', path: out } };
+  }
+  if (!placed) {
+    // Render what the project shows now (once); a removed project answers 404.
+    if (!retried) return renderGeometryThumb(id, true);
+    return { ok: false, status: 409, body: { error: 'geometry changed while its thumbnail rendered', project_id: id } };
   }
   return { ok: true, path: out, bytes: readFileSync(out), cached: false, project: proj };
 }

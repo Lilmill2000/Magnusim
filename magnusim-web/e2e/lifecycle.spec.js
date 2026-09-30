@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
-import { dirname, join } from 'node:path';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   GEOMETRY_REMOVE_IDS,
@@ -357,7 +358,17 @@ test('deleting a geometry says its studies go too, and removes only those', asyn
   const roundStudy = await createStudy(page, { geometryId: round.id });
   const tearStudy = await createStudy(page, { geometryId: tear.id });
 
-  await page.locator(`#left-tree li[data-w16-geom="${tear.id}"] > .tree-row`).click();
+  // Showing a geometry renders its Home card thumbnail after the reply, and a geometry
+  // deleted while that ran came back as a folder holding only thumb.png. Show the round
+  // plate, then the teardrop with no thumbnail (so one renders), and delete it at once.
+  const tearDir = dirname(tear.step_path);
+  const geomRow = (gid) => page.locator(`#left-tree li[data-w16-geom="${gid}"] > .tree-row`);
+  await geomRow(round.id).click();
+  await expect.poll(() => page.evaluate(() => window.__CFD_W16__?.geometry?.id)).toBe(round.id);
+  // Joins the project's thumbnail render, if one runs, so the teardrop gets its own.
+  await request.get(q('/api/geometry/thumb'));
+  rmSync(join(tearDir, 'thumb.png'), { force: true });
+  await geomRow(tear.id).click();
   await expect.poll(() => page.evaluate(() => window.__CFD_W16__?.geometry?.id)).toBe(tear.id);
   const geoPanel = page.locator('#panel-geometry');
   await geoPanel.locator('.mat-clear-link', { hasText: 'Delete' }).click();
@@ -367,6 +378,10 @@ test('deleting a geometry says its studies go too, and removes only those', asyn
   await page.locator('#cf-confirm').click();
 
   await expect.poll(async () => (await json(request, q('/api/project'))).project.geometries.map((g) => g.id)).toEqual([round.id]);
+  // Joins the teardrop's render if it still runs, so it has written what it will.
+  await request.get(q('/api/geometry/thumb'));
+  expect(existsSync(tearDir)).toBe(false);
+  expect(readdirSync(dirname(tearDir))).toEqual([basename(dirname(round.step_path))]);
   const left = (await json(request, q('/api/simulation'))).simulations || [];
   expect(left.map((s) => s.geometry_id)).toEqual([round.id]);
   expect(left.some((s) => s.id === tearStudy)).toBe(false);
@@ -408,6 +423,9 @@ test("deleting a geometry keeps another geometry's study that simulations.json d
   await openProject(page, pid);
   await expect(page.locator('#geometries-list .geo-item')).toHaveCount(2, { timeout: 60_000 });
   await roundStudies();
+  const folders = Object.fromEntries(
+    (await json(request, q('/api/project'))).project.geometries.map((g) => [g.id, dirname(g.step_path)]),
+  );
 
   await page.locator(`#left-tree li[data-w16-geom="${ids.tear}"] > .tree-row`).click();
   await expect.poll(() => page.evaluate(() => window.__CFD_W16__?.geometry?.id)).toBe(ids.tear);
@@ -416,6 +434,11 @@ test("deleting a geometry keeps another geometry's study that simulations.json d
   await expect(page.locator('#cf-copy')).toHaveText('The CAD is removed from this project.');
   await page.locator('#cf-confirm').click();
   await expect.poll(async () => (await json(request, q('/api/project'))).project.geometries.map((g) => g.id)).toEqual([ids.round]);
+  // Showing the teardrop started its Home card thumbnail render; this joins it if it still
+  // runs. A render that ended after the delete wrote thumb.png into the removed folder.
+  await request.get(q('/api/geometry/thumb'));
+  expect(existsSync(folders[ids.tear])).toBe(false);
+  expect(readdirSync(dirname(folders[ids.round]))).toEqual([basename(folders[ids.round])]);
 
   // Only the teardrop went: the round plate is shown with both its studies, now and after
   // a reload (the tree walks the study folders).
