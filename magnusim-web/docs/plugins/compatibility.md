@@ -10,18 +10,21 @@ The host loads a plugin whose `api_version` has the same major version as its ow
 |---|---|
 | `family` (`AnalysisFamily`) | Create Simulation title, description, tags; the study's name |
 | `study_defaults(time_dependency)` | A new study's settings (published in `registry.describe` as `study_defaults`) |
-| `algorithm_label`, `x_axis` | The study panel's Algorithm row; the residual plot's x axis (`seconds` / `iterations`) |
+| `algorithm_label`, `x_axis` | The study panel's Algorithm row; the run's progress axis (`seconds` / `iterations`): the residual and monitor plots, the results timeline, and progress and time left in the Run panel, the job chip and the Home card |
 | `residual_series` | The residual plot: per series `key`, `label`, `color`, `fields` (solver-log fields a point takes the largest of), `always` (in the legend before it has values), `dashed` (a per-step metric such as the Courant number, with `max_key`), `swatch` (a legend class). Defaults to one series per `residual_keys` entry |
 | `ui` | `study_settings` / `run_settings`: the names of the components the plugin's UI registers for the study and run panels' settings slots (below) |
 | `run_monitors(case_dir)` | A run's monitor results for the Graphs panel: `{rho, monitors, custom, balance}` |
 | `plan_case(ctx)` | What `write_case` would report, without writing (`prepare_run --validate-only`) |
-| `validate_ready(ctx)` | What blocks a run: `[{"message", "fix"}]`, checked before the run is marked running |
-| `run_model` (`RunModel`) | Run settings `defaults()`, `normalize()`, `preview()` (the Run panel preview) |
+| `validate_ready(ctx)` | What blocks a run: `[{"message", "fix"}]`. The Run panel's Start button stays off with the first issue as its reason (`GET /api/run/ready`), and it is checked again before the run is marked running |
+| `run_model` (`RunModel`) | Run settings: `defaults()` (a new run's, `run_defaults`), `normalize()` (every save of a run's settings is stored as it returns them, `analysis.run_normalize`; the core keeps no limits of its own; a value it rejects falls back to its default), `preview()` (the Run panel preview) |
+| `result_fields` (`ResultField`) | What results colour by, in order: `key`, `label`, `unit_quantity`, `kind` (`scalar` / `vector`). A scalar is shown by its name, a vector `X` by its magnitude `magX` (label "<label> Magnitude"). The Coloring picker lists those the run wrote (a laminar run has no `k`); results open on the first. Names are plain identifiers (a letter, then letters, digits or `_`, 64 at most) |
 | `launch` (returns `LaunchSpec`) | Program, `keep_frames` (`all` / `latest`), `process_names`, `stop_strategy`, `frame_fields`, `log_parser` |
 | `log_parser` (`LogParserRef`) | The one solver-output parser; Node only aggregates its events |
 | `frame_fields` | Fields that mark a written result frame (default: `fields`) |
 
-Worker RPCs: `analysis.describe`, `analysis.defaults`, `analysis.validate_ready`, `analysis.run_preview`, `analysis.launch_spec`, `analysis.run_monitors`. `run.transient_preview` is gone; `analysis.run_preview` replaces it.
+Worker RPCs: `analysis.describe`, `analysis.defaults`, `analysis.validate_ready`, `analysis.run_normalize`, `analysis.run_preview`, `analysis.launch_spec`, `analysis.run_monitors`. `run.transient_preview` is gone; `analysis.run_preview` replaces it.
+
+**Case sidecar.** `write_case` writes `w27-case.json` in the case folder. Besides `rho`, it lists in `kinematic_fields` the fields the case stores divided by density (pressure in an incompressible case); every results view shows those times `rho`: surface, series range, cut plane, iso surface and plot over path. A case without the list is read as `["p"]` (cases written before 1.1). After `write_case`, the core adds `analysis_key` and `frame_fields` (the launch spec's): results list a saved time only when every frame field is written in it (`U` and `p` for cases without the list).
 
 `prepare_run` reports `app` as the program to run (the solver's `application`, not its registry key), plus `launch` and the boundary-to-patch mapping `bcs`. It refuses a run that is not ready (`{"ok": false, "not_ready": true, "error", "fix"}`) and writes nothing.
 

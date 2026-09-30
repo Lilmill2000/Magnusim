@@ -26,6 +26,7 @@ import numpy as np
 import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from case_units import scale_kinematic  # noqa: E402
 from case_volume import load_volume  # noqa: E402
 
 APPROACH = (
@@ -297,6 +298,10 @@ def export_iso_volume(
     mesh, vtu_path = load_volume(case_dir, str(time))
     if int(getattr(mesh, "n_cells", 0) or 0) == 0:
         raise RuntimeError("volume has 0 cells; cannot threshold")
+    # Kinematic fields (p) in Pa, like every other result view: the iso value
+    # the page sends is in the units its legend shows. This process loaded its
+    # own copy of the volume, so scaling it in place is safe.
+    scale_kinematic(mesh, case_dir)
 
     surface, meta = threshold_iso_volume(
         mesh,

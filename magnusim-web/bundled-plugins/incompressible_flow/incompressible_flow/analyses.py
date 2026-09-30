@@ -39,6 +39,7 @@ _RESULT_FIELDS: tuple[ResultField, ...] = (
     ResultField("p", "Pressure", "pressure", "scalar"),
     ResultField("k", "Turbulent kinetic energy", "specific_energy", "scalar"),
     ResultField("omega", "Specific dissipation rate", "specific_dissipation_rate", "scalar"),
+    ResultField("epsilon", "Turbulent dissipation rate", "dissipation_rate", "scalar"),
     ResultField("nut", "Turbulent viscosity", "kinematic_viscosity", "scalar"),
 )
 

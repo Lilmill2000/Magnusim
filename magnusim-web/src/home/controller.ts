@@ -74,6 +74,12 @@ function formatHomeSimTime(v) {
   return s + ' s';
 }
 
+/** The run's progress is in simulated seconds (its analysis's x axis), else iterations. */
+function homeAxisIsSeconds(p) {
+  if (p && (p.x_axis === 'seconds' || p.x_axis === 'iterations')) return p.x_axis === 'seconds';
+  return /transient/i.test(String((p && p.time_dependency) || ''));
+}
+
 function homeSolveEtaMs(p) {
   if (!p || !p.simulating) return null;
   const start = p.solve_started_at
@@ -84,7 +90,7 @@ function homeSolveEtaMs(p) {
   if (!Number.isFinite(start)) return null;
   const elapsed = Date.now() - start;
   if (elapsed < 2500) return null;
-  if (/transient/i.test(String(p.time_dependency || ''))) {
+  if (homeAxisIsSeconds(p)) {
     const t = Number(p.sim_time) || 0;
     const end = Number(p.sim_end) || 0;
     if (!(t > 0) || !(end > t)) return null;
@@ -99,10 +105,10 @@ function homeSolveEtaMs(p) {
   return (end - it) * per;
 }
 
-function formatHomeSolveLine(p) {
+export function formatHomeSolveLine(p) {
   if (!p || !p.simulating) return '';
   const bits = [];
-  if (/transient/i.test(String(p.time_dependency || ''))) {
+  if (homeAxisIsSeconds(p)) {
     const t = Number(p.sim_time) || 0;
     const end = Number(p.sim_end) || 0;
     if (t > 0 && end > 0) bits.push(formatHomeSimTime(t) + ' / ' + formatHomeSimTime(end));

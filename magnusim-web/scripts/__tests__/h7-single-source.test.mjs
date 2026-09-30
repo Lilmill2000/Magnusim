@@ -5,8 +5,12 @@ import { readFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PYTHON, PY_ROOT } from '../python-env.js';
-import { analysisKeyFor, analysisSupportsTimeDependency, steadyDefaultsFromRegistry } from '../registry-defaults.js';
-import { TRANSIENT_DEFAULTS } from '../w30-transient.js';
+import {
+  analysisKeyFor,
+  analysisSupportsTimeDependency,
+  runDefaultsFor,
+  steadyDefaultsFromRegistry,
+} from '../registry-defaults.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const text = (rel) => readFileSync(join(root, rel), 'utf8');
@@ -28,7 +32,8 @@ function pythonDefaults() {
 describe('run-control defaults have one source', () => {
   it('Node reads the transient and steady defaults Python defines', () => {
     const py = pythonDefaults();
-    assert.deepEqual({ ...TRANSIENT_DEFAULTS }, py.t);
+    assert.deepEqual(runDefaultsFor('incompressible_transient'), py.t);
+    assert.deepEqual(runDefaultsFor('incompressible_steady'), py.s);
     assert.deepEqual({ ...steadyDefaultsFromRegistry() }, py.s);
   });
 

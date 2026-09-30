@@ -192,9 +192,16 @@ export function controlDefaults(key) {
   return out;
 }
 
-/** Transient run-control defaults (end_time, write_count, max_co, …) from the registry ({} if not installed). */
-export function transientDefaultsFromRegistry() {
-  return Object.freeze(controlDefaults(DEFAULT_TRANSIENT_ANALYSIS_KEY));
+/**
+ * The settings a new run of this analysis starts with: its contract's
+ * run_defaults ({} when it is not installed). A fresh copy.
+ * @param {string} key
+ * @returns {Record<string, unknown>}
+ */
+export function runDefaultsFor(key) {
+  const row = analysisByKey(key);
+  const d = row && row.run_defaults;
+  return d && typeof d === 'object' ? { .../** @type {Record<string, unknown>} */ (d) } : {};
 }
 
 /** Steady run-control defaults ({ end_time, write_interval } in iterations) from the registry ({} if not installed). */

@@ -54,6 +54,7 @@ describe('study catalog order', () => {
       {
         id: 'sim-2',
         name: 'Incompressible Steady-state 1',
+        analysis: 'Incompressible',
         geometry_id: 'g1',
         time_dependency: 'Steady-state',
       },
@@ -70,12 +71,26 @@ describe('study catalog order', () => {
 
   it('numbers new default studies only at create time', () => {
     const rows = [
-      { id: 'a', name: 'Incompressible Steady-state', geometry_id: 'g1', time_dependency: 'Steady-state' },
-      { id: 'b', name: 'Incompressible Steady-state', geometry_id: 'g1', time_dependency: 'Steady-state' },
+      { id: 'a', name: 'Incompressible Steady-state', analysis: 'Incompressible', geometry_id: 'g1', time_dependency: 'Steady-state' },
+      { id: 'b', name: 'Incompressible Steady-state', analysis: 'Incompressible', geometry_id: 'g1', time_dependency: 'Steady-state' },
     ];
     assert.deepEqual(assignStudyNames(rows).map((s) => s.name), [
       'Incompressible Steady-state 1',
       'Incompressible Steady-state 2',
+    ]);
+  });
+
+  it("names a study after its own analysis, and renumbers only that analysis's defaults", () => {
+    const rows = [
+      { id: 'a', name: '', analysis: 'Scalar diffusion', geometry_id: 'g1', time_dependency: 'Steady-state' },
+      { id: 'b', name: 'Scalar diffusion Steady-state', analysis: 'Scalar diffusion', geometry_id: 'g1', time_dependency: 'Steady-state' },
+      // Another analysis's default-style name is a typed name for this one.
+      { id: 'c', name: 'Incompressible Steady-state', analysis: 'Scalar diffusion', geometry_id: 'g2', time_dependency: 'Steady-state' },
+    ];
+    assert.deepEqual(assignStudyNames(rows).map((s) => s.name), [
+      'Scalar diffusion Steady-state 1',
+      'Scalar diffusion Steady-state 2',
+      'Incompressible Steady-state',
     ]);
   });
 

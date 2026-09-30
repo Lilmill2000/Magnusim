@@ -282,6 +282,7 @@ def write_run_case(
 
     raw = get_hooks().apply("case.write", _write, ctx=ctx)
     written_out = Path(getattr(written_ctx, "out_dir", None) or out_dir)
+    _stamp_case(written_out, key, analysis)
     normalized = _normalize_case_result(raw, written_out, inputs)
     get_hooks().call("case.written", ctx=written_ctx, result=normalized)
     return normalized
@@ -299,6 +300,29 @@ def plan_run_case(inputs: Any, *, analysis_key: str | None = None) -> dict[str, 
     if not callable(plan):
         return {"ok": True}
     return dict(plan(ctx) or {})
+
+
+def _stamp_case(out: Path, key: str, spec: Any) -> None:
+    """Record in the case's sidecar (``w27-case.json``) what readers of the case
+    need from its analysis: its key, and the fields whose files mark a written
+    result frame (results list only complete times). The analysis's own keys
+    stay as it wrote them."""
+    from cfddesk.registry import contract
+
+    if not out.is_dir():
+        return
+    sidecar = out / "w27-case.json"
+    doc: dict[str, Any] = {}
+    if sidecar.is_file():
+        try:
+            loaded = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            doc = loaded
+    doc.setdefault("analysis_key", key)
+    doc["frame_fields"] = list(contract.frame_fields(spec))
+    sidecar.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 
 def _normalize_case_result(result: Any, out: Path, spec: Any) -> dict[str, Any]:

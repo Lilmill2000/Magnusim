@@ -42,6 +42,16 @@ export function siblingKey(key: string | undefined | null, timeDependency: unkno
 }
 
 /** The analysis a run solves with: its stamp, else its study's family at the run's time dependency. */
+/**
+ * Whether a run's progress axis is simulated seconds: its analysis's x_axis
+ * (contract), else its time dependency (an analysis that is not installed).
+ */
+export function xAxisIsSeconds(key: string | undefined | null, transient: boolean): boolean {
+  const axis = analysisRow(key)?.x_axis;
+  if (axis === 'seconds' || axis === 'iterations') return axis === 'seconds';
+  return transient;
+}
+
 export function runAnalysisKey(
   rec: { analysis_key?: unknown } | null | undefined,
   studyAnalysisType: string | undefined,

@@ -937,7 +937,7 @@ function requireProjectSim(body) {
       ok: false,
       status: 400,
       body: {
-        error: 'no simulation; Create Simulation → Incompressible first (W17)',
+        error: 'no simulation; create a simulation first',
         soft_pass: false,
       },
     };

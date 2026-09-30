@@ -2,8 +2,9 @@ import { safeProjectPath } from './safe-path.js';
 import { projectIdOrActive } from './request-scope.js';
 // @ts-nocheck
 /**
- * Simulation Control — incompressible steady simpleFoam from the project mesh,
- * Air, and assigned BCs. Does not re-split polyMesh. No bank face57/71 gates.
+ * Simulation Control — runs: a study's case, written by its analysis
+ * (prepare_run) from the project mesh, materials and boundary conditions, and
+ * solved with the program its launch spec names. Does not re-split polyMesh.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { cpus } from 'node:os';
@@ -25,12 +26,7 @@ import { hardwarePrefs } from './prefs.js';
 import { probeWslMpiSlots } from './hardware-profile.js';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, liveStudyRows } from './w17-sim-catalog.js';
-import {
-  TRANSIENT_DEFAULTS,
-  TRANSIENT_LARGE_MESH_CELLS,
-  simIsTransient,
-  normalizeTransient,
-} from './w30-transient.js';
+import { TRANSIENT_LARGE_MESH_CELLS, simIsTransient } from './w30-transient.js';
 import { createJobLogger } from './log.js';
 import { envGet } from './env-compat.js';
 import { spawnJob } from './job-runner.js';
@@ -51,8 +47,10 @@ import {
   algorithmLabelFor,
   analysisByKey,
   analysisKeyFor,
+  analysisSupportsTimeDependency,
   DEFAULT_ANALYSIS_KEY,
   requiredPluginError,
+  runDefaultsFor,
   steadyDefaultsFromRegistry,
 } from './registry-defaults.js';
 import { removeComputeJob, scheduleComputeQueueKick } from './server/compute-queue.ts';
@@ -767,10 +765,54 @@ export function getSimulationControl(projectId, simulationId) {
     project_id: id,
     endTime,
     writeInterval,
-    // Transient defaults for new runs (W30); steady fields above are untouched.
-    transient: normalizeTransient(doc.transient),
+    // A new transient run's settings: the last saved (its analysis cleaned
+    // them when they were stored) over its analysis's run defaults.
+    transient: {
+      ...transientRunDefaults(sim),
+      ...(doc.transient && typeof doc.transient === 'object' ? doc.transient : {}),
+    },
     updated_at: doc.updated_at || null,
   };
+}
+
+/**
+ * The run defaults of a study's transient analysis (its contract's
+ * run_defaults), or {} when its family has none.
+ */
+function transientRunDefaults(sim) {
+  const type = sim && sim.analysis_type;
+  if (!analysisSupportsTimeDependency(type, 'Transient')) return {};
+  return runDefaultsFor(analysisKeyFor(type, 'Transient'));
+}
+
+/** The run defaults of a study's steady analysis, or {} when its family has none. */
+function steadyRunDefaults(sim) {
+  const type = sim && sim.analysis_type;
+  if (!analysisSupportsTimeDependency(type, 'Steady-state')) return {};
+  return runDefaultsFor(analysisKeyFor(type, 'Steady-state'));
+}
+
+/**
+ * Transient run settings as the run's analysis stores them: the edits over
+ * what is stored, cleaned up by its run model (analysis.run_normalize). The
+ * limits (frame count, correctors, …) are the analysis's own, not the core's.
+ * Throws when the worker cannot answer.
+ * @param {string} projectId
+ * @param {{ simulationId?: string, runId?: string, settings?: object, base?: object }} opts
+ */
+async function normalizeTransientSettings(projectId, { simulationId, runId, settings, base }) {
+  const out = await commitRpc('analysis.run_normalize', {
+    project_id: projectId,
+    simulation_id: simulationId || '',
+    run_id: runId ? String(runId) : '',
+    time_dependency: 'Transient',
+    settings: settings && typeof settings === 'object' ? settings : {},
+    base: base && typeof base === 'object' ? base : {},
+  });
+  if (!out || !out.settings || typeof out.settings !== 'object') {
+    throw new Error((out && out.error) || 'the analysis returned no run settings');
+  }
+  return out.settings;
 }
 
 export async function saveSimulationControl(projectId, partial, simulationId) {
@@ -786,9 +828,10 @@ export async function saveSimulationControl(projectId, partial, simulationId) {
       1,
       Math.round(Number(partial.writeInterval != null ? partial.writeInterval : prev.writeInterval))
     ),
+    // Callers pass a block its analysis already cleaned (normalizeTransientSettings).
     transient:
       partial.transient && typeof partial.transient === 'object'
-        ? normalizeTransient(partial.transient, prev.transient)
+        ? { ...prev.transient, ...partial.transient }
         : prev.transient,
     updated_at: new Date().toISOString(),
     increment: INCREMENT,
@@ -856,7 +899,7 @@ export function validateSolveReady(projectId, opts) {
   if (blocked) return { ok: false, error: blocked, project_id: id, required_plugin_missing: true };
   const sim = activeStudy(id, opts && opts.simulationId);
   if (!sim) {
-    return { ok: false, error: 'Create an Incompressible simulation first', project_id: id, fix: { go: 'create-sim' } };
+    return { ok: false, error: 'Create a simulation first', project_id: id, fix: { go: 'create-sim' } };
   }
   return { ok: true, project_id: id, mesh, sim };
 }
@@ -1267,7 +1310,7 @@ export async function createDraftRun({ projectId, name, simulationId, runId: req
     // A draft follows the simulation's time dependency; the choice is frozen
     // onto the run when it starts.
     time_dependency: transient ? 'Transient' : 'Steady-state',
-    transient: normalizeTransient(ctrl.transient),
+    transient: { ...ctrl.transient },
     result_controls: [],
     case_dir: null,
     simulation_id: sim.id,
@@ -1327,7 +1370,16 @@ async function applyRunSettings(id, runId, partial) {
   // W30 transient settings. Drafts may also switch time dependency (the
   // Incompressible panel changed it); started runs keep what they solved with.
   if (partial.transient && typeof partial.transient === 'object') {
-    rec.transient = normalizeTransient(partial.transient, rec.transient);
+    try {
+      rec.transient = await normalizeTransientSettings(id, {
+        simulationId: rec.simulation_id || found.sid,
+        runId,
+        settings: partial.transient,
+        base: rec.transient,
+      });
+    } catch (e) {
+      return { ok: false, error: 'Run settings not saved: ' + String((e && e.message) || e) };
+    }
     // Remember the latest transient settings as the study default for new runs.
     await saveSimulationControl(id, { transient: rec.transient }, rec.simulation_id || found.sid);
   }
@@ -1604,6 +1656,33 @@ export async function startSolve(opts = {}) {
       },
     };
   }
+  // The one time-dependency decision for this run, by the rule the Run panel
+  // shows: the run's own stamp (a started run keeps the mode it solved with;
+  // drafts follow their study), else its study. prepare_run is told this
+  // explicitly and reports the solver its case was written for; Node launches
+  // exactly that, never a second guess of its own.
+  const isTransient = draft && draft.time_dependency ? runIsTransient(draft) : simIsTransient(ready.sim);
+  // A transient run solves with its settings as its analysis cleans them.
+  let transientSettings = null;
+  if (isTransient) {
+    try {
+      transientSettings = await normalizeTransientSettings(id, {
+        simulationId: (draft && draft.simulation_id) || (ready.sim && ready.sim.id),
+        runId,
+        settings: transientIn,
+        base: {
+          ...getSimulationControl(id, draft && draft.simulation_id).transient,
+          ...((draft && draft.transient) || {}),
+        },
+      });
+    } catch (e) {
+      return {
+        ok: false,
+        status: 500,
+        bodyExtra: { error: 'Could not read this run\'s settings: ' + String((e && e.message) || e), increment: INCREMENT },
+      };
+    }
+  }
   // A second Start of this run arrived while the check ran: the first one has it.
   if (liveRun && String(liveRun.run_id) === String(runId) && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) {
     return {
@@ -1623,19 +1702,8 @@ export async function startSolve(opts = {}) {
         getSimulationControl(id).writeInterval
     )
   );
-  // The one time-dependency decision for this run, by the rule the Run panel
-  // shows: the run's own stamp (a started run keeps the mode it solved with;
-  // drafts follow their study), else its study. prepare_run is told this
-  // explicitly and reports the solver its case was written for; Node launches
-  // exactly that, never a second guess of its own.
-  const isTransient = draft && draft.time_dependency ? runIsTransient(draft) : simIsTransient(ready.sim);
   let transient = null;
-  let transientSettings = null;
   if (isTransient) {
-    transientSettings = normalizeTransient(
-      transientIn && typeof transientIn === 'object' ? transientIn : null,
-      normalizeTransient(draft && draft.transient, getSimulationControl(id, draft && draft.simulation_id).transient)
-    );
     saveSimulationControl(id, { endTime: et, writeInterval: wi, transient: transientSettings }, draft && draft.simulation_id);
   } else {
     saveSimulationControl(id, { endTime: et, writeInterval: wi }, draft && draft.simulation_id);
@@ -2285,7 +2353,7 @@ function reapStaleRunningDoc(projectId, doc) {
   const st = String(doc.status || '');
   if (st !== 'running' && st !== 'starting') return doc;
   if (runProcessIsLive(doc)) return doc;
-  // Windows pid can die after Vite/HMR while WSL pimpleFoam keeps going.
+  // Windows pid can die after Vite/HMR while the WSL solver keeps going.
   // Do not mark stopped until a probe says the case is dead.
   if (doc.wsl_case) {
     const wslState = cachedWslState(doc.wsl_case);
@@ -2385,6 +2453,26 @@ function discoverLiveSolve() {
   return found[0];
 }
 
+/**
+ * The latest point of a run solving in this server (its solver's events, kept
+ * in memory): { t, solve_started_at }, or null. No disk or log read.
+ */
+function liveProgressPoint(state) {
+  if (!state) return null;
+  const cur = state.current && Number.isFinite(state.current.t) ? state.current : null;
+  const last = cur || (Array.isArray(state.series) ? state.series[state.series.length - 1] : null);
+  if (!last || !Number.isFinite(last.t)) return null;
+  return { t: last.t, solve_started_at: state.solve_started_at || null };
+}
+
+/** A run's progress axis, its analysis's x_axis (contract): 'seconds' or 'iterations'. */
+function runXAxis(doc) {
+  const row = doc && doc.analysis_key ? analysisByKey(doc.analysis_key) : null;
+  const axis = row && row.x_axis;
+  if (axis === 'seconds' || axis === 'iterations') return axis;
+  return runIsTransient(doc) ? 'seconds' : 'iterations';
+}
+
 export function projectSolveSummary(projectId) {
   const empty = { simulating: false, has_run: false, run_status: null, run_started_at: null };
   if (!projectId) return empty;
@@ -2415,16 +2503,25 @@ export function projectSolveSummary(projectId) {
   }
   // Home cards must not readdir live time folders or parse the solve log.
   // That used to block /api/projects for tens of seconds on a writing case.
+  // A run solving in this server has its progress in memory: its saved doc
+  // has its time only at each saved frame and its iteration only at the end.
+  const docRunId = String(doc.run_id || doc.id || rec.run_id || rec.id || '');
+  const live =
+    liveRun && String(liveRun.project_id) === String(projectId) && String(liveRun.run_id) === docRunId
+      ? liveProgressPoint(liveRun.progress)
+      : null;
+  const liveT = live ? live.t : 0;
   return {
     simulating: true,
     has_run: true,
     run_status: doc.status || 'running',
     run_started_at: doc.started_at || rec.started_at || null,
-    solve_started_at: doc.solve_started_at || rec.solve_started_at || null,
-    sim_time: Number(doc.sim_time) || Number(doc.last_saved_iteration) || 0,
+    solve_started_at: doc.solve_started_at || rec.solve_started_at || (live && live.solve_started_at) || null,
+    sim_time: Math.max(liveT, Number(doc.sim_time) || 0) || Number(doc.last_saved_iteration) || 0,
     sim_end: Number(doc.transient && doc.transient.end_time) || Number(rec.transient && rec.transient.end_time) || 0,
     time_dependency: doc.time_dependency || rec.time_dependency || null,
-    iteration: Number(doc.iteration) || 0,
+    x_axis: runXAxis({ ...rec, ...doc }),
+    iteration: Math.max(Math.round(liveT), Number(doc.iteration) || 0),
     endTime: Number(doc.endTime) || Number(rec.endTime) || 0,
   };
 }
@@ -2558,8 +2655,8 @@ export function getRunStatus(projectId, runId, simulationId, opts) {
       live_run,
       simulation_control: ctrl,
       time_dependency: projTransient ? 'Transient' : 'Steady-state',
-      transient_defaults: TRANSIENT_DEFAULTS,
-      steady_defaults: STEADY_CONTROL_DEFAULTS,
+      transient_defaults: transientRunDefaults(activeStudy(id, simulationId)),
+      steady_defaults: steadyRunDefaults(activeStudy(id, simulationId)),
       live_pid: runLivePid(),
       increment: INCREMENT,
     },
@@ -2579,7 +2676,13 @@ export async function previewTransient(projectId, runId, settings, simulationId)
   const rec = runId ? scoped.find((r) => String(r.id) === String(runId)) : null;
   const sid = (rec && rec.simulation_id) || simulationId || null;
   const ctrl = getSimulationControl(id, sid);
-  const merged = normalizeTransient(settings, normalizeTransient(rec && rec.transient, ctrl.transient));
+  // The form's values over the run's stored ones; the analysis's run model
+  // cleans them as it previews (the same clean-up a save applies).
+  const merged = {
+    ...ctrl.transient,
+    ...((rec && rec.transient) || {}),
+    ...(settings && typeof settings === 'object' ? settings : {}),
+  };
   // The analysis's run model computes it with the same code prepare_run writes
   // the case with (load_run_spec, the run's mesh and reference speed), so the
   // Δt shown is the Δt written.
@@ -2609,7 +2712,19 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch {
         body = {};
       }
-      const saved = await saveSimulationControl(body.project_id || u.searchParams.get('project_id'), body);
+      const pid = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
+      if (body.transient && typeof body.transient === 'object') {
+        try {
+          body.transient = await normalizeTransientSettings(pid, {
+            simulationId: body.simulation_id,
+            settings: body.transient,
+            base: getSimulationControl(pid, body.simulation_id).transient,
+          });
+        } catch (e) {
+          return sendJson(res, 500, { ok: false, error: 'Settings not saved: ' + String((e && e.message) || e) });
+        }
+      }
+      const saved = await saveSimulationControl(pid, body);
       if (!saved.ok) return sendJson(res, 400, saved);
       return sendJson(res, 200, { ok: true, ...saved });
     }
@@ -2659,6 +2774,22 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         u.searchParams.get('simulation_id')
       );
       return sendJson(res, st.status, st.body);
+    }
+    if (req.method === 'GET' && b === 'ready') {
+      // What blocks this run, as its analysis sees it (the page's Start gate).
+      const pid = u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
+      try {
+        const verdict = await commitRpc('analysis.validate_ready', {
+          project_id: pid,
+          simulation_id: u.searchParams.get('simulation_id') || '',
+          run_id: u.searchParams.get('run_id') || '',
+          mesh_id: u.searchParams.get('mesh_id') || '',
+          time_dependency: u.searchParams.get('time_dependency') || '',
+        });
+        return sendJson(res, 200, { ok: true, ...(verdict || {}), increment: INCREMENT });
+      } catch (e) {
+        return sendJson(res, 500, { ok: false, error: String((e && e.message) || e) });
+      }
     }
     if (req.method === 'GET' && b === 'monitors') {
       const mon = await getRunMonitors(

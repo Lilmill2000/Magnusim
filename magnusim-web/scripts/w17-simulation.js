@@ -205,12 +205,15 @@ function buildSimulation(body, project) {
   // A required plugin that failed to load: say so, never create a study that cannot run.
   const blocked = requiredPluginError();
   if (blocked) return { ok: false, status: 503, body: { error: blocked, required_plugin_missing: true } };
-  const analysis = String(body.analysis || body.analysis_type || body.type || W17_DEFAULTS.analysis).trim();
+  // The analysis is picked by its registry key (analysis_type). A display name
+  // (analysis: "Incompressible") stands in for the key only when none is sent;
+  // the study's own name comes from the picked analysis below.
+  const analysis = String(body.analysis_type || body.analysis || body.type || W17_DEFAULTS.analysis).trim();
   if (!registeredAnalysis(analysis)) {
     return {
       ok: false,
       status: 400,
-      body: { error: 'W17 supports Incompressible only in this slice', got: analysis, soft_pass: false },
+      body: { error: `"${analysis}" is not an installed simulation type`, got: analysis, soft_pass: false },
     };
   }
   const now = new Date().toISOString();
@@ -242,7 +245,8 @@ function buildSimulation(body, project) {
   const sim = {
     id,
     project_id: project.id,
-    name: studyBaseName({ time_dependency: timeDependency }),
+    // Named after its own analysis ("Scalar diffusion Steady-state"), not a fixed one.
+    name: studyBaseName({ time_dependency: timeDependency, analysis: d.analysis }),
     analysis: d.analysis,
     analysis_type: analysisType,
     analysis_title: d.analysis_title,

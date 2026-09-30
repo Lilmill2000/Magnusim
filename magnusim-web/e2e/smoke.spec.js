@@ -750,6 +750,27 @@ test.describe('Magnusim smoke', () => {
     expect(read('system/fvSchemes')).toMatch(/div\(phi,epsilon\)/);
     expect(read('log.simpleFoam')).toMatch(/Solving for epsilon/);
     expect(JSON.parse(read('w27-case.json')).turbulence.model).toBe('kEpsilon');
+
+    // Its results colour by what this run wrote, from the analysis's result
+    // fields: k and epsilon, not omega (a k-omega SST field this run has none of).
+    const runNode = page.locator(`#left-tree [data-w27-run="${runId}"]`).first();
+    const resultsRow = page.locator(`#left-tree [data-w27-run-results="${runId}"] > .tree-row .tl`).first();
+    if (!(await resultsRow.isVisible())) await runNode.locator(':scope > .tree-row .tw').first().click();
+    await resultsRow.click();
+    await expect(page.locator('#parts-block')).toBeVisible({ timeout: 60_000 });
+    // The field is picked in the Cutting planes block, as in V0.1.0.
+    await page.locator('.tb-btn[data-label="Cutting Plane"]').click();
+    await expect(page.locator('#cp-coloring')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('#cp-coloring option:not([hidden])')).toHaveText(
+      ['Velocity Magnitude', 'Pressure', 'Turbulent kinetic energy', 'Turbulent dissipation rate', 'Turbulent viscosity'],
+      { timeout: 60_000 },
+    );
+    await page.locator('#cp-coloring').selectOption('epsilon');
+    await expect.poll(() => page.evaluate(() => window.__CFD_W6__?.field), { timeout: 60_000 }).toBe('epsilon');
+    await expect(page.locator('#legend .legend-title')).toHaveText('Turbulent dissipation rate');
+    await expect(page.locator('#legend .legend-units')).toHaveText('m²/s³');
+    const eps = await page.evaluate(() => window.__CFD_W6__?.foam_proof);
+    expect(eps && Number(eps.max) > 0, JSON.stringify(eps)).toBe(true);
   });
 
 });

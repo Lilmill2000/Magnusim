@@ -731,6 +731,29 @@ def analysis_validate_ready(
     return {"ok": True, "analysis_key": key, "ready": not issues, "issues": issues}
 
 
+@rpc("analysis.run_normalize")
+def analysis_run_normalize(
+    project_id: str = "",
+    project_dir: str = "",
+    simulation_id: str = "",
+    run_id: str = "",
+    time_dependency: str = "",
+    key: str = "",
+    settings: dict | None = None,
+    base: dict | None = None,
+) -> dict[str, Any]:
+    """A run's settings as its analysis stores them: the edits over what is
+    stored, cleaned up by its run model (its limits, not the core's)."""
+    from cfddesk.registry import contract
+
+    if not key:
+        key = _run_analysis_key(_root(project_id, project_dir), simulation_id, run_id, time_dependency)
+    spec = _analysis_spec(key)
+    edits = settings if isinstance(settings, dict) else {}
+    stored = base if isinstance(base, dict) else None
+    return {"ok": True, "analysis_key": key, "settings": contract.run_normalize(spec, edits, stored)}
+
+
 @rpc("analysis.run_preview")
 def analysis_run_preview(
     project_id: str = "",
@@ -1393,6 +1416,17 @@ def filter_series_range(case_dir: str = "", field: str = "magU") -> dict[str, An
         raise RpcError(-32004, str(exc), {"case_dir": case, "field": str(field or "magU")}) from exc
 
 
+_FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
+
+def _field_name(field: str | None) -> str:
+    """A result field to colour by: a scalar's name, or ``mag<X>`` for vector X (default magU)."""
+    name = str(field or "magU").strip()
+    if not _FIELD_NAME.match(name):
+        raise RpcError(-32602, f"invalid field name {name!r}")
+    return name
+
+
 @rpc("filter.case_field")
 def filter_case_field(
     case_dir: str = "",
@@ -1412,7 +1446,7 @@ def filter_case_field(
     from cfddesk.worker.volume_cache import get_prepared
 
     t = str(time or "0")
-    name = "magU" if str(field or "magU") == "magU" else "p"
+    name = _field_name(field)
     try:
         entry = get_prepared(case, t, pin=False)
         export_field(
@@ -1447,7 +1481,7 @@ def filter_prefetch_fields(
     case = str(case_dir or "").strip()
     if not case:
         raise RpcError(-32602, "case_dir required")
-    name = "magU" if str(field or "magU") == "magU" else "p"
+    name = _field_name(field)
     rows = jobs if isinstance(jobs, list) else []
     done: list[str] = []
     errors: list[dict[str, str]] = []
@@ -1526,7 +1560,7 @@ def filter_cut_plane(
     from export_cut_plane import export_cut_plane
 
     t = str(time or "0")
-    name = "p" if str(field or "magU") == "p" else "magU"
+    name = _field_name(field)
     mesh = None
     source = None
     try:

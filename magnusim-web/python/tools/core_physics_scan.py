@@ -29,7 +29,7 @@ ALLOWLIST = Path(__file__).resolve().parent / "core_physics_allowlist.json"
 PHYSICS = re.compile(
     r"\b(simpleFoam|pimpleFoam|kOmegaSST|kOmega|kEpsilon|realizableKE|LaunderSharmaKE|"
     r"nOuterCorrectors|nCorrectors|nNonOrthogonalCorrectors|residualControl|PIMPLE|SIMPLE)\b"
-    r"|k-omega|k-epsilon"
+    r"|k-omega|k-epsilon|\bIncompressible\b"
 )
 
 SKIP_PARTS = {"__pycache__", "__tests__", "generated", "build", "node_modules", "test"}
@@ -129,12 +129,18 @@ def core_files(web_root: Path) -> list[Path]:
     return sorted(files)
 
 
-def load_allowlist(path: Path = ALLOWLIST) -> dict[str, str]:
+def load_allowlist(path: Path = ALLOWLIST) -> dict[str, str | list[str]]:
+    """``{file: reason}`` for whole files, or ``{file: [line substrings]}`` when an
+    entry allows only the lines that contain one of its ``line_contains``."""
     doc = json.loads(path.read_text(encoding="utf-8"))
-    return {str(e["file"]): str(e["reason"]) for e in doc["files"]}
+    out: dict[str, str | list[str]] = {}
+    for e in doc["files"]:
+        lines = e.get("line_contains")
+        out[str(e["file"])] = [str(x) for x in lines] if lines else str(e["reason"])
+    return out
 
 
-def run(web_root: Path, allowlist: dict[str, str] | None = None) -> dict[str, object]:
+def run(web_root: Path, allowlist: dict[str, str | list[str]] | None = None) -> dict[str, object]:
     allowed = load_allowlist() if allowlist is None else allowlist
     problems: list[dict[str, object]] = []
     allowed_hits: dict[str, int] = {}
@@ -145,7 +151,15 @@ def run(web_root: Path, allowlist: dict[str, str] | None = None) -> dict[str, ob
         hits = python_hits(path) if path.suffix == ".py" else js_hits(path)
         if not hits:
             continue
-        if rel in allowed:
+        rule = allowed.get(rel)
+        if isinstance(rule, list):
+            # Only the named lines are allowed; any other hit in the file is a problem.
+            text = path.read_text(encoding="utf-8-sig").splitlines()
+            ok = [(n, w) for n, w in hits if 0 < n <= len(text) and any(sub in text[n - 1] for sub in rule)]
+            if ok:
+                allowed_hits[rel] = len(ok)
+            hits = [h for h in hits if h not in ok]
+        elif rule is not None:
             allowed_hits[rel] = len(hits)
             continue
         problems += [

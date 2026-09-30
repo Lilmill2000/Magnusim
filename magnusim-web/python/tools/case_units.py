@@ -1,9 +1,11 @@
 """Unit conventions shared by the result exporters.
 
-simpleFoam solves kinematic pressure (m^2/s^2). Every result exporter turns
-that into static gauge pressure in Pa by multiplying with the fluid density
-recorded in the run's ``w27-case.json`` (``rho``). Cases without that file
-(legacy / mesh-only) fall back to rho = 1, i.e. no scaling.
+Incompressible solvers store pressure divided by density (kinematic, m^2/s^2).
+The analysis that writes a case lists those fields in its ``w27-case.json``
+(``kinematic_fields``, with ``rho``); every result exporter multiplies them by
+``rho`` so the viewer shows Pa. Cases written before the analysis recorded the
+list are Incompressible Flow's, whose kinematic field is ``p``. Cases without
+the file (legacy / mesh-only) fall back to rho = 1, i.e. no scaling.
 """
 from __future__ import annotations
 
@@ -26,6 +28,36 @@ def case_density(case_dir: Path) -> float:
     except Exception:
         pass
     return 1.0
+
+
+# Cases written before analyses recorded their kinematic fields (all Incompressible Flow).
+LEGACY_KINEMATIC_FIELDS: tuple[str, ...] = ("p",)
+
+
+def _sidecar(case_dir: Path) -> dict:
+    try:
+        doc = json.loads((Path(case_dir) / "w27-case.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def kinematic_fields(case_dir: Path) -> tuple[str, ...]:
+    """Fields the case stores divided by density (its analysis's ``kinematic_fields``)."""
+    listed = _sidecar(case_dir).get("kinematic_fields")
+    if isinstance(listed, list):
+        return tuple(str(x) for x in listed if str(x))
+    return LEGACY_KINEMATIC_FIELDS
+
+
+def field_scale(case_dir: Path, foam_name: str) -> float:
+    """Factor from the stored field to what the viewer shows: rho for a kinematic field, else 1."""
+    return case_density(case_dir) if foam_name in kinematic_fields(case_dir) else 1.0
+
+
+def scale_kinematic(dataset, case_dir: Path) -> None:
+    """Multiply every kinematic field on ``dataset`` by the case's density, in place."""
+    scale_pressure(dataset, case_density(case_dir), names=kinematic_fields(case_dir))
 
 
 def scale_pressure(dataset, rho: float, names=("p",)) -> None:

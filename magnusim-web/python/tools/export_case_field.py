@@ -18,7 +18,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import (  # noqa: E402
+    PRESSURE_UNIT,
     case_density,
+    field_scale,
     pressure_meta,
     pressure_stats_in_pa,
     scale_pressure,
@@ -156,20 +158,58 @@ def parse_foam_scalar_or_vector(path: Path, kind: str):
     }
 
 
+FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
+
+def foam_kind(path: Path) -> str:
+    """'vector' or 'scalar' from the file's FoamFile class (or its internalField)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4096).decode("latin1", errors="replace")
+    except OSError:
+        return "scalar"
+    m = re.search(r"\bclass\s+(\w+)", head)
+    if m:
+        return "vector" if "Vector" in m.group(1) else "scalar"
+    if re.search(r"internalField\s+uniform\s*\(", head) or "List<vector>" in head:
+        return "vector"
+    return "scalar"
+
+
+def foam_source(time_dir: Path, field: str) -> tuple[str, str] | None:
+    """(file, kind) a shown field reads: the field's own file, or for ``mag<X>`` the vector ``X``."""
+    if (time_dir / field).is_file():
+        return field, foam_kind(time_dir / field)
+    if field.startswith("mag") and len(field) > 3 and (time_dir / field[3:]).is_file():
+        return field[3:], "vector"
+    return None
+
+
+def shown_fields(time_dir: Path) -> list[str]:
+    """Every field a time folder can colour by: scalars by name, vectors as ``mag<name>``."""
+    out: list[str] = []
+    try:
+        entries = sorted(time_dir.iterdir())
+    except OSError:
+        return out
+    for f in entries:
+        if not f.is_file() or not FIELD_NAME.match(f.name):
+            continue
+        out.append(("mag" + f.name) if foam_kind(f) == "vector" else f.name)
+    return out
+
+
 def ensure_field_on_mesh(mesh, field: str):
-    if field == "magU":
-        if "magU" not in mesh.cell_data and "magU" not in mesh.point_data:
-            if "U" in mesh.cell_data:
-                U = np.asarray(mesh.cell_data["U"])
-                mesh.cell_data["magU"] = np.linalg.norm(U, axis=1)
-            elif "U" in mesh.point_data:
-                U = np.asarray(mesh.point_data["U"])
-                mesh.point_data["magU"] = np.linalg.norm(U, axis=1)
-            else:
-                raise RuntimeError("mesh missing magU/U")
+    """The shown field on the mesh: as read, or a vector's magnitude for ``mag<X>``."""
+    if field in mesh.cell_data or field in mesh.point_data:
         return
-    if "p" not in mesh.cell_data and "p" not in mesh.point_data:
-        raise RuntimeError("mesh missing p")
+    base = field[3:] if field.startswith("mag") and len(field) > 3 else ""
+    if base:
+        for data in (mesh.cell_data, mesh.point_data):
+            if base in data:
+                data[field] = np.linalg.norm(np.asarray(data[base]), axis=1)
+                return
+    raise RuntimeError(f"mesh missing {field}")
 
 
 _FOAM_TIME = re.compile(r"^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
@@ -177,8 +217,7 @@ _FOAM_TIME = re.compile(r"^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
 
 def list_field_times(case_dir: Path, field: str) -> list[str]:
     names: list[str] = []
-    field = "magU" if field == "magU" else "p"
-    foam_name = "U" if field == "magU" else "p"
+    field = str(field).strip()
     try:
         ents = list(Path(case_dir).iterdir())
     except OSError:
@@ -186,31 +225,38 @@ def list_field_times(case_dir: Path, field: str) -> list[str]:
     for p in ents:
         if not p.is_dir() or not _FOAM_TIME.match(p.name):
             continue
-        if (p / foam_name).is_file() or (p / f"{foam_name}.gz").is_file():
+        if foam_source(p, field) is not None:
             names.append(p.name)
     names.sort(key=lambda s: float(s))
     return names
 
 
 def series_field_range(case_dir: Path, field: str) -> dict:
-    """Overall foam min/max across every saved time. No VTK, no per-frame legend."""
-    field = "magU" if str(field).strip() == "magU" else "p"
+    """Overall foam min/max across every saved time. No VTK, no per-frame legend.
+
+    Kinematic fields (the case's ``kinematic_fields``) are scaled by rho, as
+    every surface shows them.
+    """
+    field = str(field).strip()
+    if not FIELD_NAME.match(field):
+        raise ValueError(f"unsupported field name {field!r}")
     case_dir = Path(case_dir).resolve()
     times = list_field_times(case_dir, field)
-    kind = "vector" if field == "magU" else "scalar"
-    foam_name = "U" if field == "magU" else "p"
-    # Surfaces show p in Pa, so the whole-run legend range must be Pa too.
-    scale = 1.0 if field == "magU" else case_density(case_dir)
     frames = []
     lo = None
     hi = None
+    scaled = False
     for t in times:
-        path = case_dir / t / foam_name
-        if not path.is_file():
+        src = foam_source(case_dir / t, field)
+        if src is None:
             continue
+        foam_name, kind = src
+        path = case_dir / t / foam_name
+        scale = field_scale(case_dir, foam_name)
+        scaled = scaled or scale != 1.0
         stats = parse_foam_scalar_or_vector(path, kind)
-        a = float(stats["umin"] if field == "magU" else stats["pmin"]) * scale
-        b = float(stats["umax"] if field == "magU" else stats["pmax"]) * scale
+        a = float(stats["umin"] if kind == "vector" else stats["pmin"]) * scale
+        b = float(stats["umax"] if kind == "vector" else stats["pmax"]) * scale
         frames.append({"time": t, "min": a, "max": b, "uniform": bool(stats.get("uniform"))})
         lo = a if lo is None else min(lo, a)
         hi = b if hi is None else max(hi, b)
@@ -224,31 +270,26 @@ def series_field_range(case_dir: Path, field: str) -> dict:
         "max": hi,
         "frames": frames,
         "series": True,
-        "unit": "m/s" if field == "magU" else "Pa",
+        "scaled_by_density": scaled,
+        **({"unit": PRESSURE_UNIT} if scaled else {}),
     }
 
 
 def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None, source_vtu=None):
     field = field.strip()
-    if field not in ("magU", "p"):
-        raise ValueError(f"unsupported field {field}; use magU or p")
+    if not FIELD_NAME.match(field):
+        raise ValueError(f"unsupported field name {field!r}")
     case_dir = case_dir.resolve()
     time = str(time)
     time_dir = case_dir / time
     if not time_dir.is_dir():
         raise FileNotFoundError(f"time_not_found: missing time dir {time_dir}")
 
-    foam_stats = None
-    if field == "magU":
-        u_path = time_dir / "U"
-        if not u_path.is_file():
-            raise FileNotFoundError(f"time_not_found: missing OpenFOAM U: {u_path}")
-        foam_stats = parse_foam_scalar_or_vector(u_path, "vector")
-    else:
-        p_path = time_dir / "p"
-        if not p_path.is_file():
-            raise FileNotFoundError(f"time_not_found: missing OpenFOAM p: {p_path}")
-        foam_stats = parse_foam_scalar_or_vector(p_path, "scalar")
+    src = foam_source(time_dir, field)
+    if src is None:
+        raise FileNotFoundError(f"time_not_found: missing OpenFOAM {field}: {time_dir / field}")
+    foam_name, kind = src
+    foam_stats = parse_foam_scalar_or_vector(time_dir / foam_name, kind)
 
     if mesh is None:
         try:
@@ -261,21 +302,20 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
         source_vtu = "worker-cache"
     ensure_field_on_mesh(mesh, field)
     rho = case_density(case_dir)
+    scale = field_scale(case_dir, foam_name)
 
     # The volume may be the worker's shared cache: scale only the extracted
-    # surface (its own arrays), never the volume, so p is Pa exactly once.
+    # surface (its own arrays), never the volume, so a kinematic field is
+    # scaled exactly once.
     surf = mesh.extract_surface()
-    if field == "p":
-        scale_pressure(surf, rho)
+    if scale != 1.0:
+        scale_pressure(surf, rho, names=(field,))
     if field in surf.cell_data and field not in surf.point_data:
         surf = surf.cell_data_to_point_data(pass_cell_data=True)
 
     # W12: uniform foam at this time (e.g. 0/U = (0,0,0)) -> honest surface fill
     if foam_stats.get("uniform"):
-        if field == "magU":
-            fill = float(foam_stats["umin"])
-        else:
-            fill = float(foam_stats["pmin"]) * rho
+        fill = float(foam_stats["umin"] if kind == "vector" else foam_stats["pmin"]) * scale
         if field in surf.point_data:
             surf.point_data[field][:] = fill
         else:
@@ -283,12 +323,9 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
         if field in surf.cell_data:
             surf.cell_data[field][:] = fill
 
-    if field == "magU":
-        keep_point = [k for k in ("magU", "U") if k in surf.point_data]
-        keep_cell = [k for k in ("magU",) if k in surf.cell_data]
-    else:
-        keep_point = [k for k in ("p",) if k in surf.point_data]
-        keep_cell = [k for k in ("p",) if k in surf.cell_data]
+    # A magnitude keeps its vector on the points too (glyphs, inspect).
+    keep_point = [k for k in (field, foam_name if kind == "vector" else "") if k and k in surf.point_data]
+    keep_cell = [k for k in (field,) if k in surf.cell_data]
     for k in list(surf.point_data.keys()):
         if k not in keep_point:
             del surf.point_data[k]
@@ -307,18 +344,25 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
     surf_min = float(np.nanmin(arr_pt)) if arr_pt is not None else None
     surf_max = float(np.nanmax(arr_pt)) if arr_pt is not None else None
 
+    if kind == "vector":
+        proof = dict(foam_stats)
+        proof.update({"min": proof.get("umin"), "max": proof.get("umax"), "mean": proof.get("umean")})
+    else:
+        proof = pressure_stats_in_pa(foam_stats, rho) if scale != 1.0 else dict(foam_stats)
+        proof.update({"min": proof.get("pmin"), "max": proof.get("pmax"), "mean": proof.get("pmean")})
+
     meta = {
         "increment": "W12",
         "case_dir": str(case_dir),
         "time": time,
         "field": field,
-        "fields_available": ["magU", "p"],
+        "fields_available": shown_fields(time_dir),
         "source_vtu": source_vtu,
         "convert_method": (
             "on-demand pyvista: read .cfddesk-prepared.vtu or OpenFOAMReader "
             "at the requested time -> extract_surface -> cell_data_to_point_data "
             "-> binary VTP; fingerprint from OpenFOAM "
-            f"{time}/{'U' if field == 'magU' else 'p'} ascii; uniform foam times "
+            f"{time}/{foam_name}; uniform foam times "
             "overwrite surface scalars (W12 animation live; not baked public/)"
         ),
         "proves_not_baked_only": True,
@@ -328,20 +372,22 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
         "n_points": int(surf.n_points),
         "n_cells": int(surf.n_cells),
         "bounds": list(map(float, surf.bounds)),
-        "foam_proof": pressure_stats_in_pa(foam_stats, rho) if field == "p" else foam_stats,
+        "foam_proof": proof,
         "surface_field": {
             "name": field,
             "min": surf_min,
             "max": surf_max,
             "n_samples": int(arr_pt.size) if arr_pt is not None else 0,
         },
-        "u_from_case": foam_stats if field == "magU" else None,
+        "u_from_case": proof if kind == "vector" else None,
         "no_fake_solve": True,
         "no_simscale_22_2": True,
         "uniform_foam": bool(foam_stats.get("uniform")),
-        "field_unit": "Pa" if field == "p" else "m/s",
-        "pressure_range_unit": "Pa",
-        **pressure_meta(rho),
+        "foam_kind": kind,
+        # The range (min / max) is in what the surface shows (a kinematic field x rho).
+        "range_scaled": True,
+        "scaled_by_density": scale != 1.0,
+        **({"pressure_range_unit": PRESSURE_UNIT, **pressure_meta(rho)} if scale != 1.0 else {}),
     }
     out_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"ok": True, "vtp": str(out_vtp), "meta": str(out_meta), "bytes": len(vtp_bytes)}))

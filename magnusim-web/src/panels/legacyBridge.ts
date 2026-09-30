@@ -244,8 +244,8 @@ export interface RunState {
   };
   copy: { available: boolean; picking: boolean; note: string; sources: Array<{ id: string; label: string }> };
   mesh_ready: boolean;
-  has_material: boolean;
-  has_flow_driver: boolean;
+  /** The run's analysis reports no setup issue (null until it answers). */
+  setup_ready: boolean | null;
 }
 
 export function subscribeRunState(onState: (state: RunState) => void): () => void {
@@ -465,7 +465,7 @@ export async function clearBcFaces(): Promise<unknown> {
 
 /**
  * Hand a material saved through `materials.set` to the runtime so the tree
- * checkmark, the Start gate (`solveHasAssignedMaterial`) and the viewport agree.
+ * checkmark, the Start gate (the analysis's readiness) and the viewport agree.
  */
 export function applyMaterial(material: Record<string, unknown>, projectId?: string): boolean {
   const fn = window.__CFD_MATERIAL_APPLY__;

@@ -256,6 +256,19 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   const runA = await createRun('H7 transient');
   await openRun(runA);
   await expect(runPanel.locator('[data-run-transient]')).toBeVisible();
+  // A transient run's settings are its analysis's: a save that bypasses the
+  // panel (the API) is cleaned by the plugin's run model, not stored as sent.
+  const bypass = await request.post('/api/run/update', {
+    data: { project_id: PROJECT, simulation_id: SIM, run_id: runA, transient: { n_correctors: 99 } },
+  });
+  expect(bypass.ok(), await bypass.text()).toBe(true);
+  await openRun(runA);
+  await runPanel.locator('summary', { hasText: 'Advanced settings' }).click();
+  await expect(runPanel.getByLabel('Pressure correctors', { exact: true })).toHaveValue('10');
+  await setField('Pressure correctors', 2);
+  await expect.poll(async () => ((await runRow(runA)).transient || {}).n_correctors).toBe(2);
+  await runPanel.locator('summary', { hasText: 'Advanced settings' }).click();
+  stage(t0, 'stored settings cleaned by the analysis');
   const ctl = await previewDt(runA);
   expect(ctl.source.delta_t).toBe('auto');
   const dt = Number(ctl.delta_t);
@@ -288,6 +301,28 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   const panel2 = await openStudyPanel(page, SIM);
   await panel2.getByLabel('Time dependency').selectOption('Steady-state');
   await expect.poll(async () => (await getJson(request, simUrl(SIM))).simulation?.analysis_type).toBe('incompressible_steady');
+  await openRun(runA);
+  await expect(runPanel.locator('[data-run-transient]')).toBeVisible();
+  // It says so, and offers the study's other mode as a new run (decided with
+  // Daniel 2026-09-29: a started run keeps its mode; the toggle is for new runs).
+  const reason = runPanel.locator('[data-run-reason="1"]');
+  await expect(reason).toContainText('This run solved Transient, so a restart continues Transient. Add a run to solve Steady-state.');
+  await expect(runPanel.locator('[data-run-start]')).toBeEnabled();
+  const runsBefore = new Set((await runs()).map((r) => String(r.id)));
+  await reason.getByRole('button', { name: 'Add run' }).click();
+  let added = '';
+  await expect
+    .poll(async () => {
+      added = (await runs()).map((r) => String(r.id)).find((id) => !runsBefore.has(id)) || '';
+      return added;
+    })
+    .not.toBe('');
+  await expect(runPanel).toHaveAttribute('data-run-id', added);
+  await expect(runPanel.locator('[data-run-mode="1"]')).toHaveText('Steady-state');
+  await expect(runPanel.locator('[data-run-transient]')).toHaveCount(0);
+  await expect.poll(async () => (await runRow(added)).time_dependency).toBe('Steady-state');
+  await request.post('/api/run/delete', { data: { project_id: PROJECT, simulation_id: SIM, run_id: added } });
+  stage(t0, 'stopped transient run offers a Steady-state run');
   await openRun(runA);
   await expect(runPanel.locator('[data-run-transient]')).toBeVisible();
   await setField('Simulation time', sig4(dt * 10));

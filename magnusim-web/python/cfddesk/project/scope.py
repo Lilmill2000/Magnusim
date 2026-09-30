@@ -378,7 +378,7 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
             study_nodes.append(
                 {
                     "id": sid,
-                    "name": str(study.get("name") or "Incompressible"),
+                    "name": str(study.get("name") or "Simulation"),
                     "geometry_id": gid,
                     "key": sscope.key(),
                     "sort_index": study.get("sort_index"),

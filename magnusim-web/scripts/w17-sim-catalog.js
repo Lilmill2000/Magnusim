@@ -59,17 +59,27 @@ function readJson(p) {
   }
 }
 
+/** The study's analysis name: what its contract's study_defaults call it ("Incompressible"). */
+function studyAnalysisName(sim) {
+  return String((sim && sim.analysis) || '').trim() || 'Simulation';
+}
+
+/** A study's default name: its analysis's name and time dependency ("Incompressible Transient"). */
 export function studyBaseName(sim) {
   const time = /transient/i.test(String((sim && sim.time_dependency) || ''))
     ? 'Transient'
     : 'Steady-state';
-  return 'Incompressible ' + time;
+  return studyAnalysisName(sim) + ' ' + time;
 }
 
-const DEFAULT_STUDY_NAME = /^Incompressible (Steady-state|Transient)(?:\s+\d+)?$/i;
+const escapeRe = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-export function isDefaultStudyName(name) {
-  return !String(name || '').trim() || DEFAULT_STUDY_NAME.test(String(name).trim());
+/** Still the default name of this study's analysis (numbered or not), so it may be renumbered. */
+export function isDefaultStudyName(name, sim) {
+  const text = String(name || '').trim();
+  if (!text) return true;
+  const base = escapeRe(studyAnalysisName(sim));
+  return new RegExp('^' + base + ' (Steady-state|Transient)(?:\\s+\\d+)?$', 'i').test(text);
 }
 
 export function sortStudies(list) {
@@ -141,7 +151,7 @@ export function assignStudyNames(list) {
     groups.get(key).push(s);
   }
   for (const siblings of groups.values()) {
-    const auto = siblings.filter((s) => isDefaultStudyName(s.name));
+    const auto = siblings.filter((s) => isDefaultStudyName(s.name, s));
     if (!auto.length) continue;
     const base = studyBaseName(auto[0]);
     if (siblings.length === 1) {
@@ -149,7 +159,7 @@ export function assignStudyNames(list) {
       continue;
     }
     const taken = new Set(
-      siblings.filter((s) => !isDefaultStudyName(s.name)).map((s) => String(s.name).trim())
+      siblings.filter((s) => !isDefaultStudyName(s.name, s)).map((s) => String(s.name).trim())
     );
     let n = 1;
     for (const s of auto) {

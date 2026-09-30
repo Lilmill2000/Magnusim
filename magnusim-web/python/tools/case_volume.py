@@ -39,16 +39,23 @@ def _internal_mesh(mesh):
     return mesh
 
 
+def time_field_files(case_dir: Path, time: str) -> list[Path]:
+    """Every field file a time folder holds (whatever the analysis solved), sorted."""
+    folder = Path(case_dir) / str(time)
+    try:
+        return sorted(f for f in folder.iterdir() if f.is_file() and not f.name.startswith("."))
+    except OSError:
+        return []
+
+
 def _stamp(case_dir: Path, time: str) -> str:
     h = hashlib.sha1()
     h.update(str(case_dir).encode("utf-8"))
-    h.update(b"|native-fields-v2|")
+    h.update(b"|native-fields-v3|")
     h.update(str(time).encode("utf-8"))
-    for name in ("U", "p", "U.gz", "p.gz"):
-        f = case_dir / str(time) / name
-        if f.is_file():
-            st = f.stat()
-            h.update(f"|{name}:{st.st_mtime_ns}:{st.st_size}".encode("ascii"))
+    for f in time_field_files(case_dir, time):
+        st = f.stat()
+        h.update(f"|{f.name}:{st.st_mtime_ns}:{st.st_size}".encode())
     pts = case_dir / "constant" / "polyMesh" / "points"
     if pts.is_file():
         st = pts.stat()
@@ -81,10 +88,7 @@ def load_volume(case_dir: Path, time: str, *, use_cache: bool = True):
     """Return (volume UnstructuredGrid, source description)."""
     case_dir = Path(case_dir).resolve()
     prepared = case_dir / ".cfddesk-prepared.vtu"
-    native_fields = any(
-        (case_dir / str(time) / name).is_file()
-        for name in ("U", "p", "U.gz", "p.gz")
-    )
+    native_fields = bool(time_field_files(case_dir, time))
     if prepared.is_file() and not native_fields:
         mesh = pv.read(str(prepared))
         if mesh is not None and int(getattr(mesh, "n_cells", 0) or 0) > 0:

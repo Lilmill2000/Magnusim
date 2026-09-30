@@ -58,8 +58,7 @@ describe('gate:h4-renders', () => {
       progress: { show: false, title: 'Run', line: '', elapsed: '', eta: '', meta: '', residuals: [], end: 0 },
       copy: { available: false, picking: false, note: '', sources: [] },
       mesh_ready: true,
-      has_material: true,
-      has_flow_driver: true,
+      setup_ready: true,
     };
     window.__CFD_GEOMETRY_STATE__ = {
       has_geometry: true,

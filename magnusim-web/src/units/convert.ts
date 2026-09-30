@@ -143,3 +143,21 @@ export function fromSi(quantity: Quantity, valueSi: number, unit: string): numbe
   if (!(resolved in table)) throw new Error(`unknown ${quantity} unit ${unit}`);
   return valueSi / table[resolved];
 }
+
+/** SI labels of quantities results carry that no input uses (turbulence fields). */
+const RESULT_SI: Record<string, string> = {
+  specific_energy: 'm²/s²',
+  specific_dissipation_rate: '1/s',
+  dissipation_rate: 'm²/s³',
+};
+
+/**
+ * The SI unit label a result field of this quantity is shown in ('' when the
+ * quantity is unknown). Results are drawn in SI; a kinematic field has already
+ * been scaled to its quantity (Pa for pressure) by the exporter.
+ */
+export function siUnitLabel(quantity: string): string {
+  const q = String(quantity || '');
+  if (q in SI_DEFAULT) return SI_DEFAULT[q as Quantity];
+  return RESULT_SI[q] || '';
+}

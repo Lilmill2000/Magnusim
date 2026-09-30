@@ -102,10 +102,10 @@ describe('compute-queue order', () => {
     );
   });
 
-  it('refuses a solve enqueue when no fluid is assigned', () => {
-    const out = enqueueComputeJob(solve('r1'), { hasMaterial: false });
+  it("refuses a solve enqueue its analysis reports a setup issue for (with that message)", () => {
+    const out = enqueueComputeJob(solve('r1'), { setupIssue: 'Set the diffusivity above 0 m²/s' });
     assert.equal(out.ok, false);
-    assert.match(String(out.error), /Assign a fluid/);
+    assert.equal(out.error, 'Set the diffusivity above 0 m²/s');
     assert.equal(snapshotComputeQueue().items.length, 0);
   });
 });

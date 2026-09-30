@@ -16,7 +16,7 @@ from typing import Any
 
 from magnusim_sdk.foam import write_decompose_par_dict, write_foam_dict, write_vol_field
 
-from cfddesk.registry.analysis import AnalysisType
+from cfddesk.registry.analysis import AnalysisType, ResultField
 from cfddesk.registry.contract import AnalysisFamily
 from cfddesk.registry.schema import SchemaField
 from cfddesk.registry.solver import SolverApp
@@ -151,7 +151,8 @@ def register(hub: Any) -> None:
             solver_backends=("laplacianFoam",),
             default_solver="laplacianFoam",
             monitors=(),
-            result_fields=(),
+            # The results viewer colours by T (in K), the field this analysis writes.
+            result_fields=(ResultField("T", "Temperature", "temperature", "scalar"),),
             settings_schema=(
                 SchemaField("diffusivity", "Diffusivity", "float", default=0.0, min=0.0, unit="m²/s"),
             ),

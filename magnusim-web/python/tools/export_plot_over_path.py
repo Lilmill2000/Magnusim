@@ -21,6 +21,7 @@ import numpy as np
 import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from case_units import scale_kinematic  # noqa: E402
 from case_volume import load_volume  # noqa: E402
 
 APPROACH = (
@@ -271,6 +272,8 @@ def export_plot_over_path(
     # Shared loader (see export_iso_surface): the legacy prepared VTU is only
     # a fallback for times without native fields.
     mesh, vtu_path = load_volume(case_dir, str(time))
+    # Kinematic fields (p) in Pa, as the cut planes and surfaces show them.
+    scale_kinematic(mesh, case_dir)
     label = field_variable
     if field and not field_variable:
         label = "Velocity Magnitude" if field == "magU" else ("Pressure" if field == "p" else field)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import numpy as np
 import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from case_units import case_density, pressure_meta, scale_pressure  # noqa: E402
+from case_units import case_density, pressure_meta, scale_kinematic  # noqa: E402
 from case_volume import load_volume  # noqa: E402
 
 
@@ -24,20 +25,21 @@ def read_volume_at_time(case_dir: Path, time: str):
     return load_volume(case_dir, time)
 
 
+FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
+
 def ensure_field(mesh, field: str):
-    if field == "magU":
-        if "magU" not in mesh.point_data and "magU" not in mesh.cell_data:
-            if "U" in mesh.point_data:
-                U = np.asarray(mesh.point_data["U"])
-                mesh.point_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-            elif "U" in mesh.cell_data:
-                U = np.asarray(mesh.cell_data["U"])
-                mesh.cell_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-            else:
-                raise RuntimeError("mesh missing magU/U")
+    """The coloured field on the mesh: as read, or a vector's magnitude for ``mag<X>``."""
+    if field in mesh.point_data or field in mesh.cell_data:
         return
-    if "p" not in mesh.point_data and "p" not in mesh.cell_data:
-        raise RuntimeError("mesh missing p")
+    base = field[3:] if field.startswith("mag") and len(field) > 3 else ""
+    if base:
+        for data in (mesh.point_data, mesh.cell_data):
+            if base in data:
+                vec = np.asarray(data[base])
+                data[field] = np.linalg.norm(vec[:, :3], axis=1)
+                return
+    raise RuntimeError(f"mesh missing {field}")
 
 
 def export_cut_plane(
@@ -58,7 +60,9 @@ def export_cut_plane(
     case_dir = Path(case_dir).resolve()
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    field = "p" if field == "p" else "magU"
+    field = str(field or "magU").strip()
+    if not FIELD_NAME.match(field):
+        raise ValueError(f"unsupported field name {field!r}")
 
     if mesh is None:
         mesh, source = read_volume_at_time(case_dir, str(time))
@@ -88,12 +92,14 @@ def export_cut_plane(
     except RuntimeError:
         pass
     rho = case_density(case_dir)
-    if field == "p" or "p" in sliced.point_data or "p" in sliced.cell_data:
-        try:
-            scale_pressure(sliced, rho)
-        except Exception:
-            pass
-    keep = {field, "U", "magU", "p", "T", "TKelvin", "thermo:T"}
+    # Kinematic fields (the case's kinematic_fields) show in Pa; the slice owns
+    # its arrays, so the shared volume stays as read.
+    try:
+        scale_kinematic(sliced, case_dir)
+    except Exception:
+        pass
+    base = field[3:] if field.startswith("mag") and len(field) > 3 else ""
+    keep = {field, base, "U", "magU", "p", "T", "TKelvin", "thermo:T"} - {""}
     need_promote = any(
         name in sliced.cell_data and name not in sliced.point_data
         for name in keep
@@ -149,7 +155,6 @@ def export_cut_plane(
         "asset_sha256": h.hexdigest(),
         "vtp": str(out_vtp),
         "method": "pyvista DataSet.slice on volume",
-        "field_unit": "Pa" if field == "p" else "m/s",
         **pressure_meta(rho),
     }
     out_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")

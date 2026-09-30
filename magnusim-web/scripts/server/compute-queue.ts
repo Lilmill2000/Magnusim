@@ -359,7 +359,7 @@ export function snapshotComputeQueue(projectId?: string | null): ComputeQueueSna
 
 export function enqueueComputeJob(
   raw: unknown,
-  opts?: { hasMaterial?: boolean; meshGenerating?: boolean },
+  opts?: { setupIssue?: string; meshGenerating?: boolean },
 ): { ok: boolean; error?: string; item?: ComputeQueueItem; items: ComputeQueueItem[] } {
   ensureLoaded();
   const item = normalizeItem(raw);
@@ -369,8 +369,9 @@ export function enqueueComputeJob(
   if (!normId(item.project_id)) {
     return { ok: false, error: 'project_id required', items: items.slice() };
   }
-  if (item.kind === 'solve' && opts && opts.hasMaterial === false) {
-    return { ok: false, error: 'Assign a fluid to a volume first', items: items.slice() };
+  // A run whose analysis reports a setup issue (other than its mesh) is not queued.
+  if (item.kind === 'solve' && opts && opts.setupIssue) {
+    return { ok: false, error: String(opts.setupIssue), items: items.slice() };
   }
   const existing = items.find((row) => jobKey(row) === jobKey(item));
   if (existing) {

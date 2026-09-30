@@ -152,7 +152,7 @@ export function registerLiveRoutes(router, { worker, jobs }) {
       return;
     }
     const enqueued = enqueueComputeJob(body.item || body, {
-      hasMaterial: body.has_material,
+      setupIssue: body.setup_issue ? String(body.setup_issue) : '',
       meshGenerating: !!body.mesh_generating,
     });
     if (!enqueued.ok) {
@@ -317,8 +317,8 @@ export function registerLiveRoutes(router, { worker, jobs }) {
 
   router.get('/api/fields/:field/series-range', async (ctx) => {
     const field = ctx.params.field;
-    if (!api.ALLOWED_FIELDS.has(field)) {
-      ctx.sendJson(400, { error: 'unsupported field', allowed: [...api.ALLOWED_FIELDS] });
+    if (!api.isFieldName(field)) {
+      ctx.sendJson(400, { error: 'unsupported field name' });
       return;
     }
     const caseDir = api.resolveCaseDir(ctx.url);
@@ -430,8 +430,8 @@ export function registerLiveRoutes(router, { worker, jobs }) {
 
     if (key === 'fields') {
       const field = ctx.url.searchParams.get('field') || ctx.params.field;
-      if (!api.ALLOWED_FIELDS.has(field)) {
-        ctx.sendJson(400, { error: 'unsupported field', allowed: [...api.ALLOWED_FIELDS] });
+      if (!api.isFieldName(field)) {
+        ctx.sendJson(400, { error: 'unsupported field name' });
         return;
       }
       const foamPath = api.foamFieldPath(caseDir, time, field);

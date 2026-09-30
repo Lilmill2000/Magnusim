@@ -44,3 +44,19 @@ def test_scan_catches_a_literal_and_a_stale_allowlist_entry(tmp_path: Path):
         ("src/shell.html", 2, "k-omega"),
         ("python/tools/gone.py", 0, ""),
     }
+
+
+def test_scan_allows_only_the_named_lines_of_a_line_entry(tmp_path: Path):
+    web = tmp_path / "web"
+    (web / "python" / "cfddesk").mkdir(parents=True)
+    (web / "python" / "tools").mkdir(parents=True)
+    (web / "scripts").mkdir()
+    (web / "src").mkdir()
+    (web / "python" / "cfddesk" / "req.py").write_text(
+        'REQUIRED = {"flow": "Incompressible Flow"}\nNAME = "Incompressible"\n', encoding="utf-8"
+    )
+    report = core_physics_scan.run(web, {"python/cfddesk/req.py": ["REQUIRED ="]})
+    assert [(p["file"], p["line"], p["word"]) for p in report["problems"]] == [
+        ("python/cfddesk/req.py", 2, "Incompressible")
+    ]
+    assert report["allowed"] == {"python/cfddesk/req.py": 1}

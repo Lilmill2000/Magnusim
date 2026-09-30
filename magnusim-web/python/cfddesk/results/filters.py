@@ -934,7 +934,7 @@ def filters_from_list(data: list | None) -> list[FilterSpec]:
     return out or default_filter_stack()
 
 # Inc 16i RESULT Save view ? Researcher stills + DA unlock (persist name+description only).
-SAVE_VIEW_DEFAULT_NAME: str = "Incompressible - Run 1"
+SAVE_VIEW_DEFAULT_NAME: str = "Saved view"
 SAVE_VIEW_DEFAULT_DESCRIPTION: str = ""
 
 # Inc 17d RESULT Manage views empty dialog — Researcher stills + DA unlock.

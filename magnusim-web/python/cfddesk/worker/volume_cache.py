@@ -19,12 +19,15 @@ if str(_TOOLS) not in sys.path:
 def _foam_stamp(case_dir: Path, time: str) -> tuple[float, int]:
     best_m = 0.0
     best_n = 0
-    for name in ("U", "p"):
-        f = case_dir / str(time) / name
-        if f.is_file():
-            st = f.stat()
-            best_m = max(best_m, float(st.st_mtime))
-            best_n += int(st.st_size)
+    # Every field the time folder holds (U / p for Incompressible Flow, T for another analysis).
+    try:
+        files = [f for f in (case_dir / str(time)).iterdir() if f.is_file() and not f.name.startswith(".")]
+    except OSError:
+        files = []
+    for f in files:
+        st = f.stat()
+        best_m = max(best_m, float(st.st_mtime))
+        best_n += int(st.st_size)
     prepared = case_dir / ".cfddesk-prepared.vtu"
     if prepared.is_file():
         st = prepared.stat()

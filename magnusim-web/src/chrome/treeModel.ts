@@ -245,7 +245,7 @@ export function readSetupTree(
         const volumes = (study.material_volumes || []).map((v) => str(v)).filter(Boolean);
         return {
           id: sid,
-          name: str(study.name, 'Incompressible'),
+          name: str(study.name, 'Simulation'),
           geometryId: str(study.geometry_id),
           scopeKey: study.key,
           active: !!study.active,

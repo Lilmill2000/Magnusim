@@ -2,6 +2,10 @@
   "about": "Core files allowed to name incompressible physics (gate:h9-no-core-physics). Each entry says why; tools/core_physics_scan.py fails on an entry with no hit.",
   "files": [
     {
+      "file": "python/cfddesk/project/model.py",
+      "reason": "Legacy versioned Project model (project.json): PRIMARY_SIM_NAME names the one study old project files carry. It is not on the run path."
+    },
+    {
       "file": "python/cfddesk/case/ras.py",
       "reason": "Legacy versioned Project model (project.json): its turbulence settings still load and migrate. It is not on the run path, because runs are written by the analysis plugin."
     },
@@ -28,6 +32,13 @@
     {
       "file": "python/cfddesk/wsl/solve_run.py",
       "reason": "LEGACY_PROCESS_NAMES: the process names of runs started before launch specs (v0.2.0 and earlier), so Stop and Force stop still find them."
+    },
+    {
+      "file": "python/cfddesk/registry/discovery.py",
+      "line_contains": [
+        "REQUIRED_BUNDLED"
+      ],
+      "reason": "The product's required bundled plugin, by key and display name, so the app can say which plugin is missing when it cannot load it. Only that line is allowed."
     }
   ]
 }

@@ -195,3 +195,28 @@ def test_analysis_rpcs(tmp_path: Path):
     assert d["sibling"] == "incompressible_transient" and d["run"]["end_time"] == 200
     assert methods.analysis_launch_spec(key="incompressible_transient")["launch"]["keep_frames"] == "all"
     assert methods.analysis_describe(key="incompressible_steady")["analysis"]["contract"] == "1.1"
+
+
+def test_run_settings_are_cleaned_by_the_run_analysis(tmp_path: Path):
+    """What Node stores for a transient run is its analysis's clean-up, not the core's."""
+    from cfddesk.worker import methods
+
+    root = _study(tmp_path, fluid_assigned=True, bcs=[INLET, OUTLET])
+    out = methods.analysis_run_normalize(
+        project_dir=str(root),
+        simulation_id="s1",
+        run_id="r1",
+        time_dependency="Transient",
+        settings={"n_correctors": 99, "write_count": "80", "delta_t": ""},
+        base={"end_time": 2.5, "max_co": 0.5},
+    )
+    assert out["analysis_key"] == "incompressible_transient"
+    t = out["settings"]
+    # The analysis's limits (correctors at most 10), the stored values kept, blanks = auto.
+    assert (t["n_correctors"], t["write_count"], t["end_time"], t["max_co"], t["delta_t"]) == (10, 80, 2.5, 0.5, None)
+    # A value its model rejects falls back to the analysis's default.
+    bad = methods.analysis_run_normalize(key="incompressible_transient", settings={"max_co": 0}, base={"max_co": 0.5})
+    assert bad["settings"]["max_co"] == 1.0
+    # A steady analysis cleans its own settings.
+    steady = methods.analysis_run_normalize(key="incompressible_steady", settings={"end_time": "12.4"})
+    assert steady["settings"] == {"end_time": 12, "write_interval": 50}

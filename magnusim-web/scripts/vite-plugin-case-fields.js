@@ -374,15 +374,6 @@ function attachCaseDir(caseDirAbs, projectIdOpt, simIdOpt) {
   return { ok: true, status: 200, body: caseSnapshot() };
 }
 
-function tryWarmVolume(caseDir, times) {
-  const list = Array.isArray(times) ? times : [];
-  const time = list.length ? String(list[list.length - 1]) : '0';
-  const rpc = warmVolume(caseDir, time);
-  if (rpc && typeof rpc.then === 'function') {
-    rpc.catch((err) => console.warn('[CFD] volume warmup', err && err.message ? err.message : err));
-  }
-}
-
 async function warmVolume(caseDir, time) {
   const t = String(time || '0');
   const rpc = callWorker(
@@ -431,7 +422,24 @@ const _projectsRoot = envGet('PROJECTS_ROOT');
 const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PROJECT_PATH = join(PROJECTS_ROOT, 'active.json');
 
-const ALLOWED_FIELDS = new Set(['magU', 'p']);
+/**
+ * A result field to colour by: whatever the run's analysis writes. A scalar is
+ * shown by its own name, a vector X by its magnitude, magX. The name becomes
+ * part of cache paths, so only plain identifiers pass.
+ */
+const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+export function isFieldName(field) {
+  return FIELD_NAME_RE.test(String(field || ''));
+}
+
+/** The OpenFOAM file a shown field reads at a time: itself, or for magX the vector X. */
+function foamNameFor(caseDir, time, field) {
+  const name = String(field || '');
+  if (existsSync(join(caseDir, String(time), name))) return name;
+  if (/^mag[A-Za-z]/.test(name) && existsSync(join(caseDir, String(time), name.slice(3)))) return name.slice(3);
+  return name;
+}
 
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj, null, 2);
@@ -455,8 +463,42 @@ function cacheKey(caseDir, time, field) {
   return join(scopedCacheDir(CACHE_ROOT, caseDir), `${field}-${h}`);
 }
 
+/** Every field file a time folder holds, for the volume tools' cache stamps. */
+function timeFolderStamp(caseDir, time) {
+  const dir = join(caseDir, String(time));
+  let names = [];
+  try {
+    names = readdirSync(dir).filter((n) => !n.startsWith('.')).sort();
+  } catch {
+    return null;
+  }
+  const parts = [];
+  for (const n of names) {
+    const f = join(dir, n);
+    try {
+      const st = statSync(f);
+      if (st.isFile()) parts.push(`${n}:${st.mtimeMs}:${st.size}`);
+    } catch {
+      /* gone meanwhile */
+    }
+  }
+  if (!parts.length) return null;
+  const points = join(caseDir, 'constant', 'polyMesh', 'points');
+  if (existsSync(points)) {
+    const ps = statSync(points);
+    parts.push(`${points}:${ps.mtimeMs}:${ps.size}`);
+  }
+  const vtu = join(caseDir, '.cfddesk-prepared.vtu');
+  if (existsSync(vtu)) {
+    const vs = statSync(vtu);
+    parts.push(`${vtu}:${vs.mtimeMs}:${vs.size}`);
+  }
+  parts.push(exporterStamp());
+  return `${dir}|` + parts.join('|');
+}
+
 function foamStamp(caseDir, time, field) {
-  const foam = field === 'magU' ? join(caseDir, time, 'U') : join(caseDir, time, 'p');
+  const foam = foamFieldPath(caseDir, time, field);
   if (!existsSync(foam)) return null;
   const parts = [];
   const st = statSync(foam);
@@ -586,7 +628,7 @@ async function ensureExportedOnce(caseDir, time, field) {
 const seriesRangeCache = new Map();
 
 function seriesRangeStamp(caseDir, field) {
-  const name = field === 'p' ? 'p' : 'magU';
+  const name = String(field);
   return listCaseTimes(caseDir)
     .map((t) => {
       const p = foamFieldPath(caseDir, t, name);
@@ -598,7 +640,7 @@ function seriesRangeStamp(caseDir, field) {
 }
 
 function seriesRangeFromMetas(caseDir, field) {
-  const name = field === 'p' ? 'p' : 'magU';
+  const name = String(field);
   const times = listCaseTimes(caseDir);
   if (times.length < 2) return null;
   let lo = null;
@@ -609,11 +651,12 @@ function seriesRangeFromMetas(caseDir, field) {
     if (!existsSync(metaPath)) return null;
     try {
       const j = JSON.parse(readFileSync(metaPath, 'utf8'));
-      // Older metas kept kinematic p (m^2/s^2) while surfaces are Pa.
-      if (name === 'p' && !(j && j.pressure_range_unit === 'Pa')) return null;
+      // Only metas whose range is in what the surface shows (a kinematic field
+      // times rho); older ones kept kinematic p (m^2/s^2) while surfaces are Pa.
+      if (!(j && j.range_scaled === true)) return null;
       const foam = (j && (j.u_from_case || j.foam_proof)) || {};
-      const a = name === 'p' ? Number(foam.pmin) : Number(foam.umin);
-      const b = name === 'p' ? Number(foam.pmax) : Number(foam.umax);
+      const a = Number(foam.min);
+      const b = Number(foam.max);
       if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
       lo = lo == null ? a : Math.min(lo, a);
       hi = hi == null ? b : Math.max(hi, b);
@@ -700,7 +743,7 @@ async function seriesRangeFromWorker(caseDir, name) {
 }
 
 async function ensureSeriesRange(caseDir, field) {
-  const name = field === 'p' ? 'p' : 'magU';
+  const name = String(field);
   const stamp = seriesRangeStamp(caseDir, name);
   const key = `${caseDir}|${name}`;
   const hit = seriesRangeCache.get(key);
@@ -742,41 +785,6 @@ async function ensureSeriesRange(caseDir, field) {
     frames: [],
     series: true,
   };
-}
-
-let fieldPrefetchGen = 0;
-
-function tryPrefetchFields(caseDir, times, field = 'magU') {
-  const list = Array.isArray(times) ? times.map(String) : [];
-  if (!caseDir || list.length < 2) return;
-  const name = field === 'p' ? 'p' : 'magU';
-  const gen = ++fieldPrefetchGen;
-  // Latest few only — walking every transient frame through get_prepared
-  // evicts the live volume and blocks cutting-plane RPCs for minutes.
-  const ordered = list.slice().reverse().slice(0, 3);
-  (async () => {
-    for (const t of ordered) {
-      if (gen !== fieldPrefetchGen) return;
-      const dir = cacheKey(caseDir, t, name);
-      const stamp = foamStamp(caseDir, t, name);
-      const vtp = join(dir, `${name}.vtp`);
-      const stampPath = join(dir, '.stamp');
-      if (
-        stamp &&
-        existsSync(vtp) &&
-        existsSync(stampPath) &&
-        readFileSync(stampPath, 'utf8') === stamp
-      ) {
-        continue;
-      }
-      // Same in-flight export as a user request for this frame, never a second writer.
-      try {
-        await ensureExported(caseDir, t, name);
-      } catch (err) {
-        console.warn('[CFD] field prefetch', t, err && err.message ? err.message : err);
-      }
-    }
-  })();
 }
 
 function normalizePtFaces(raw) {
@@ -1307,7 +1315,7 @@ async function ensurePlotOverPath(caseDir, time, p) {
   const dir = popCacheKey(caseDir, time, p);
   const meta = join(dir, 'plot_over_path.meta.json');
   const stampPath = join(dir, '.stamp');
-  const stamp = foamStamp(caseDir, time, 'magU');
+  const stamp = timeFolderStamp(caseDir, time);
   if (!stamp) {
     throw new Error(`case foam files missing under ${caseDir}/${time}`);
   }
@@ -1403,7 +1411,8 @@ function cutParamsFromUrl(u) {
     const n = Number(u.searchParams.get(key));
     return Number.isFinite(n) ? n : fallback;
   };
-  const field = u.searchParams.get('field') === 'p' ? 'p' : 'magU';
+  const asked = u.searchParams.get('field') || 'magU';
+  const field = isFieldName(asked) ? asked : 'magU';
   const liveRaw = u.searchParams.get('live');
   return {
     ox: num('ox', 0),
@@ -1527,7 +1536,7 @@ async function ensureCutPlane(caseDir, time, p) {
   const vtp = join(dir, 'cut_plane.vtp');
   const meta = join(dir, 'cut_plane.meta.json');
   const stampPath = join(dir, '.stamp');
-  const stamp = foamStamp(caseDir, time, p.field === 'p' ? 'p' : 'magU');
+  const stamp = foamStamp(caseDir, time, p.field);
   if (!stamp) {
     throw new Error(`case foam files missing under ${caseDir}/${time}`);
   }
@@ -1550,7 +1559,7 @@ async function ensureIsoSurface(caseDir, time, p) {
   const vtp = join(dir, 'iso_surface.vtp');
   const meta = join(dir, 'iso_surface.meta.json');
   const stampPath = join(dir, '.stamp');
-  const stamp = foamStamp(caseDir, time, 'magU');
+  const stamp = timeFolderStamp(caseDir, time);
   if (!stamp) {
     throw new Error(`case foam files missing under ${caseDir}/${time}`);
   }
@@ -1656,7 +1665,7 @@ async function ensureIsoVolume(caseDir, time, p) {
   const vtp = join(dir, 'iso_volume.vtp');
   const meta = join(dir, 'iso_volume.meta.json');
   const stampPath = join(dir, '.stamp');
-  const stamp = foamStamp(caseDir, time, 'magU');
+  const stamp = timeFolderStamp(caseDir, time);
   if (!stamp) {
     throw new Error(`case foam files missing under ${caseDir}/${time}`);
   }
@@ -1735,7 +1744,7 @@ async function ensureInspect(caseDir, time, p) {
   const dir = inspectCacheKey(caseDir, time, p);
   const meta = join(dir, 'inspect.meta.json');
   const stampPath = join(dir, '.stamp');
-  const stamp = foamStamp(caseDir, time, 'magU') || foamStamp(caseDir, time, 'p');
+  const stamp = timeFolderStamp(caseDir, time);
   if (!stamp) {
     throw new Error(`case foam files missing under ${caseDir}/${time}`);
   }
@@ -1774,7 +1783,7 @@ function listCaseTimes(caseDir) {
 }
 
 function foamFieldPath(caseDir, time, field) {
-  return field === 'magU' ? join(caseDir, String(time), 'U') : join(caseDir, String(time), 'p');
+  return join(caseDir, String(time), foamNameFor(caseDir, time, field));
 }
 
 
@@ -2097,7 +2106,7 @@ export function getCaseFieldApi() {
     ensureMeshSection,
     meshSurfaceCacheKey,
     polyMeshCacheToken,
-    ALLOWED_FIELDS,
+    isFieldName,
     DEFAULT_TIME,
     ACTIVE_PROJECT_PATH,
   };

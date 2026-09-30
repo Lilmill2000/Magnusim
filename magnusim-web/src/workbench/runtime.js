@@ -42,10 +42,18 @@ import { ColorMode, ScalarMode } from '@kitware/vtk.js/Rendering/Core/Mapper/Con
 import { initHome, showHome, showWorkbench, goHomeFromWorkbench, prepareCreateModal, submitProjectModal, activateHashProject, parseHomeRoute } from '../home/controller';
 import { prefersCollapseCompletedSections } from '../prefs';
 import { openSetupWizard } from '../wizard/controller';
-import { convertQuantity, preferredUnit, unitIsImperial } from '../units/convert';
+import { convertQuantity, preferredUnit, siUnitLabel, unitIsImperial } from '../units/convert';
 import { isIsland, mountIsland, unmountIsland } from '../islands';
 import { useProjectStore } from '../store/project';
-import { DEFAULT_ANALYSIS_KEY, analysisRow, runAnalysisKey, runDefaults, siblingKey, transientSolverApps } from '../analysis';
+import {
+  DEFAULT_ANALYSIS_KEY,
+  analysisRow,
+  runAnalysisKey,
+  runDefaults,
+  siblingKey,
+  transientSolverApps,
+  xAxisIsSeconds,
+} from '../analysis';
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
 import { subscribeJobEvents } from '../api/client';
@@ -370,7 +378,7 @@ function apiCutPlaneUrl(origin, normal, field, ctx) {
     nx: String(n[0]),
     ny: String(n[1]),
     nz: String(n[2]),
-    field: field === 'p' ? 'p' : 'magU',
+    field: fieldKey(field),
   });
   if (ctx && ctx.live) q.set('live', '1');
   return `/api/cut-plane?${q.toString()}`;
@@ -453,6 +461,57 @@ function apiInspectUrl(x, y, z, time) {
 
 
 
+/**
+ * Result fields: what the run's analysis writes (its contract's result_fields).
+ * A scalar colours by its own name; a vector X by its magnitude, magX. Labels
+ * and units come from the analysis; a kinematic field arrives already scaled
+ * by the exporter (Pa for pressure).
+ */
+const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+function fieldKey(field) {
+  const name = String(field || '');
+  return FIELD_NAME_RE.test(name) ? name : 'magU';
+}
+
+function resultFieldRows() {
+  const row = analysisRow(studyAnalysisType());
+  return row && Array.isArray(row.result_fields) ? row.result_fields : [];
+}
+
+/** The fields the open study's analysis can colour by, in its declared order. */
+function resultFieldNames() {
+  return resultFieldRows()
+    .filter((r) => r && r.key)
+    .map((r) => (r.kind === 'vector' ? 'mag' + r.key : r.key));
+}
+
+/** { name, label, unit } of a shown field (label: its analysis's, else the name). */
+function fieldInfo(field) {
+  const name = fieldKey(field);
+  for (const r of resultFieldRows()) {
+    if (!r || !r.key) continue;
+    if (r.kind === 'vector' && 'mag' + r.key === name) {
+      return { name, label: String(r.label || r.key) + ' Magnitude', unit: siUnitLabel(r.unit_quantity) };
+    }
+    if (r.kind !== 'vector' && r.key === name) {
+      return { name, label: String(r.label || r.key), unit: siUnitLabel(r.unit_quantity) };
+    }
+  }
+  return { name, label: name, unit: '' };
+}
+
+/** The field results open on: the current one if the analysis has it, else its first. */
+function defaultResultField() {
+  const names = resultFieldNames();
+  if (!names.length || names.includes(activeField)) return fieldKey(activeField);
+  return names[0];
+}
+
+function clearKeys(obj) {
+  for (const k of Object.keys(obj)) delete obj[k];
+}
+
 let activeField = 'magU';
 let sourcePolyData = null;
 let sourceBounds = null;
@@ -464,24 +523,22 @@ let lutRange = [0, 0.79];
 // lock is computed from every cached time.
 const seriesLut = {
   case: null,
-  magU: null,
-  p: null,
-  held: { magU: null, p: null },
-  locked: { magU: false, p: false },
+  // Per field: the whole-run range, the frame range held until it locks, locked.
+  range: {},
+  held: {},
+  locked: {},
 };
 
 function seriesLutKey(field) {
-  return field === 'p' ? 'p' : 'magU';
+  return fieldKey(field);
 }
 
 function resetSeriesLut() {
   seriesLut.case = getCaseDir();
-  seriesLut.magU = null;
-  seriesLut.p = null;
-  seriesLut.held = { magU: null, p: null };
-  seriesLut.locked = { magU: false, p: false };
-  legendAutoExtents.magU = null;
-  legendAutoExtents.p = null;
+  seriesLut.range = {};
+  seriesLut.held = {};
+  seriesLut.locked = {};
+  clearKeys(legendAutoExtents);
 }
 
 function ensureSeriesLutCase() {
@@ -495,16 +552,19 @@ function unionLutRange(a, b) {
   return [Math.min(a[0], b[0]), Math.max(a[1], b[1])];
 }
 
+/** [min, max] the exporter measured for this frame (legacy metas: umin / pmin). */
+function foamMetaRange(field, foam) {
+  if (!foam) return [null, null];
+  if (foam.min != null || foam.max != null) return [foam.min, foam.max];
+  return field === 'p' ? [foam.pmin, foam.pmax] : [foam.umin, foam.umax];
+}
+
 function rangeFromFoamMeta(field, meta) {
   const foam = meta && (meta.u_from_case || meta.foam_proof);
   if (!foam) return null;
-  if (field === 'p') {
-    const lo = Number(foam.pmin);
-    const hi = Number(foam.pmax);
-    return Number.isFinite(lo) && Number.isFinite(hi) && hi > lo ? [lo, hi] : null;
-  }
-  const lo = Number(foam.umin);
-  const hi = Number(foam.umax);
+  const [a, b] = foamMetaRange(field, foam);
+  const lo = Number(a);
+  const hi = Number(b);
   return Number.isFinite(lo) && Number.isFinite(hi) && hi > lo ? [lo, hi] : null;
 }
 
@@ -512,8 +572,8 @@ function absorbSeriesRange(field, lo, hi) {
   ensureSeriesLutCase();
   const key = seriesLutKey(field);
   if (seriesLut.locked[key]) return;
-  const next = unionLutRange(seriesLut[key], [lo, hi]);
-  if (next) seriesLut[key] = next;
+  const next = unionLutRange(seriesLut.range[key], [lo, hi]);
+  if (next) seriesLut.range[key] = next;
 }
 
 function absorbSeriesFromEntry(field, entry) {
@@ -563,12 +623,12 @@ function lockSeriesLut(field, opts) {
     const entry = fieldFrameCache.get(fieldFrameKey(field, times[i]));
     if (entry) absorbSeriesFromEntry(field, entry);
   }
-  const ready = !!(seriesLut[key] && (seriesTimesComplete(field) || (opts && opts.force)));
+  const ready = !!(seriesLut.range[key] && (seriesTimesComplete(field) || (opts && opts.force)));
   if (ready) {
     seriesLut.locked[key] = true;
-    seriesLut.held[key] = seriesLut[key].slice();
+    seriesLut.held[key] = seriesLut.range[key].slice();
   }
-  return seriesLut[key];
+  return seriesLut.range[key];
 }
 
 function resolveFieldLutRange(field, frameLo, frameHi) {
@@ -581,8 +641,8 @@ function resolveFieldLutRange(field, frameLo, frameHi) {
   let times = [];
   try { times = animState.times || []; } catch (_) { times = []; }
   if (times.length >= 2) {
-    if (seriesLut.locked[key] && seriesLut[key]) return seriesLut[key].slice();
-    if (seriesLut[key] && seriesLut[key][1] > seriesLut[key][0]) return seriesLut[key].slice();
+    if (seriesLut.locked[key] && seriesLut.range[key]) return seriesLut.range[key].slice();
+    if (seriesLut.range[key] && seriesLut.range[key][1] > seriesLut.range[key][0]) return seriesLut.range[key].slice();
     if (seriesLut.held[key]) return seriesLut.held[key].slice();
     if (Number.isFinite(frameLo) && Number.isFinite(frameHi) && frameHi > frameLo) {
       seriesLut.held[key] = [frameLo, frameHi];
@@ -606,8 +666,8 @@ function applyLockedSeriesLegend(field) {
   const name = field || activeField || 'magU';
   if ((animState.times || []).length < 2) return;
   const r =
-    (seriesLut.locked[seriesLutKey(name)] && seriesLut[seriesLutKey(name)]) ||
-    seriesLut[seriesLutKey(name)] ||
+    (seriesLut.locked[seriesLutKey(name)] && seriesLut.range[seriesLutKey(name)]) ||
+    seriesLut.range[seriesLutKey(name)] ||
     seriesLut.held[seriesLutKey(name)];
   if (!r || legendIsCustom(name)) return;
   applySeriesLegendRange(name, r[0], r[1]);
@@ -636,7 +696,7 @@ function applyWholeRunLegend(field, lo, hi) {
   const name = seriesLutKey(field);
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return null;
   ensureSeriesLutCase();
-  seriesLut[name] = [lo, hi];
+  seriesLut.range[name] = [lo, hi];
   seriesLut.locked[name] = true;
   seriesLut.held[name] = [lo, hi];
   applySeriesLegendRange(name, lo, hi);
@@ -648,7 +708,7 @@ function lockSeriesLutFromCachedFoam(field) {
   const name = seriesLutKey(field);
   if ((animState.times || []).length < 2) return null;
   ensureSeriesLutCase();
-  if (seriesLut.locked[name] && seriesLut[name]) return seriesLut[name].slice();
+  if (seriesLut.locked[name] && seriesLut.range[name]) return seriesLut.range[name].slice();
   const r = seriesRangeFromCachedFrames(name);
   if (!r) return null;
   return applyWholeRunLegend(name, r[0], r[1]);
@@ -658,7 +718,7 @@ async function lockSeriesLutFromServer(field) {
   const name = seriesLutKey(field);
   if ((animState.times || []).length < 2 || !getCaseDir()) return null;
   ensureSeriesLutCase();
-  if (seriesLut.locked[name] && seriesLut[name]) return seriesLut[name].slice();
+  if (seriesLut.locked[name] && seriesLut.range[name]) return seriesLut.range[name].slice();
   try {
     const r = await fetch(
       '/api/fields/' + encodeURIComponent(name) + '/series-range?case=' + encodeURIComponent(getCaseDir()),
@@ -682,23 +742,23 @@ async function lockSeriesLutFromServer(field) {
  * values get the full rainbow (below the window clamps to the first colour,
  * above it to the last).
  */
-const scaleOverride = { magU: null, p: null };
-const legendScale = { magU: null, p: null };
-const legendAutoExtents = { magU: null, p: null };
+const scaleOverride = {};
+const legendScale = {};
+const legendAutoExtents = {};
 
 function seriesRangeForLegend(field) {
   const key = seriesLutKey(field);
   let times = [];
   try { times = animState.times || []; } catch (_) { times = []; }
   if (times.length < 2) return null;
-  if (seriesLut.locked[key] && seriesLut[key]) return seriesLut[key].slice();
+  if (seriesLut.locked[key] && seriesLut.range[key]) return seriesLut.range[key].slice();
   if (seriesLut.held[key]) return seriesLut.held[key].slice();
-  if (seriesLut[key]) return seriesLut[key].slice();
+  if (seriesLut.range[key]) return seriesLut.range[key].slice();
   return null;
 }
 
 function setLegendAutoExtents(field, lo, hi, opts) {
-  const key = field === 'p' ? 'p' : 'magU';
+  const key = fieldKey(field);
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return;
   const prev = legendAutoExtents[key];
   if (opts && opts.replace) {
@@ -713,11 +773,11 @@ function setLegendAutoExtents(field, lo, hi, opts) {
 }
 
 function legendAutoRange(field) {
-  const key = field === 'p' ? 'p' : 'magU';
+  const key = fieldKey(field);
   const stored = legendAutoExtents[key];
   if (stored && stored.hi > stored.lo) return [stored.lo, stored.hi];
   const sk = seriesLutKey(key);
-  if (seriesLut[sk] && seriesLut[sk][1] > seriesLut[sk][0]) return seriesLut[sk].slice();
+  if (seriesLut.range[sk] && seriesLut.range[sk][1] > seriesLut.range[sk][0]) return seriesLut.range[sk].slice();
   if (seriesLut.held[sk] && seriesLut.held[sk][1] > seriesLut.held[sk][0]) return seriesLut.held[sk].slice();
   if (ptOwnRange && (ptOwnRange.field === key || (key === 'magU' && ptOwnRange.field !== 'p'))) {
     return [ptOwnRange.lo, ptOwnRange.hi];
@@ -726,7 +786,7 @@ function legendAutoRange(field) {
 }
 
 function legendScaleFor(field) {
-  const o = legendScale[field === 'p' ? 'p' : 'magU'];
+  const o = legendScale[fieldKey(field)];
   return o && Number.isFinite(o.lo) && Number.isFinite(o.hi) && o.hi > o.lo ? o : null;
 }
 
@@ -747,12 +807,12 @@ function sanitizeLegendRange(lo, hi) {
 }
 
 function scaleOverrideFor(field) {
-  const o = scaleOverride[field === 'p' ? 'p' : 'magU'];
+  const o = scaleOverride[fieldKey(field)];
   return o && Number.isFinite(o.lo) && Number.isFinite(o.hi) && o.hi > o.lo ? o : null;
 }
 
 function setScaleOverride(field, lo, hi) {
-  const key = field === 'p' ? 'p' : 'magU';
+  const key = fieldKey(field);
   if (lo == null || hi == null) {
     scaleOverride[key] = null;
   } else {
@@ -766,7 +826,7 @@ function setScaleOverride(field, lo, hi) {
 }
 
 function setLegendScale(field, lo, hi) {
-  const key = field === 'p' ? 'p' : 'magU';
+  const key = fieldKey(field);
   if (lo == null || hi == null) {
     legendScale[key] = null;
   } else {
@@ -785,7 +845,7 @@ function legendIsCustom(field) {
 }
 
 function clearLegendCustom(field) {
-  const key = field === 'p' ? 'p' : 'magU';
+  const key = fieldKey(field);
   scaleOverride[key] = null;
   legendScale[key] = null;
   try { syncSharedLegend(); } catch (_) {}
@@ -794,10 +854,8 @@ function clearLegendCustom(field) {
 }
 
 function clearScaleOverrides() {
-  scaleOverride.magU = null;
-  scaleOverride.p = null;
-  legendScale.magU = null;
-  legendScale.p = null;
+  clearKeys(scaleOverride);
+  clearKeys(legendScale);
 }
 
 function persistLegendScaleState(field) {
@@ -815,7 +873,7 @@ function persistLegendScaleState(field) {
 }
 
 function restoreLegendScaleState(field, saved) {
-  const key = field === 'p' ? 'p' : 'magU';
+  const key = fieldKey(field);
   scaleOverride[key] = null;
   legendScale[key] = null;
   if (!saved || typeof saved !== 'object') return;
@@ -3223,7 +3281,7 @@ function styleCutSliceActor() {
   try {
     cutMapper.setScalarVisibility(true);
     cutMapper.setScalarMode(ScalarMode.USE_POINT_FIELD_DATA);
-    cutMapper.setColorByArrayName(activeField === 'p' ? 'p' : 'magU');
+    cutMapper.setColorByArrayName(fieldKey(activeField));
     cutMapper.setColorMode(ColorMode.MAP_SCALARS);
     cutMapper.setInterpolateScalarsBeforeMapping(true);
     cutMapper.setUseLookupTableScalarRange(true);
@@ -3412,7 +3470,7 @@ function resultPlaneGeom(plane) {
 
 function styleResultPlaneMapper(mapper, field) {
   if (!mapper) return;
-  const name = field === 'p' ? 'p' : 'magU';
+  const name = fieldKey(field);
   try {
     mapper.setScalarVisibility(true);
     mapper.setScalarMode(ScalarMode.USE_POINT_FIELD_DATA);
@@ -3853,21 +3911,17 @@ function updateLegend(field, lo, hi) {
   paintLegendTrackTicks(document.getElementById('legend'), lo, hi);
   const title = document.querySelector('#legend .legend-title');
   const units = document.querySelector('#legend .legend-units');
-  if (field === 'p') {
-    if (title) title.textContent = 'Pressure';
-    if (units) units.textContent = 'Pa';
-  } else {
-    if (title) title.textContent = 'Velocity Magnitude';
-    if (units) units.textContent = 'm/s';
-  }
+  const info = fieldInfo(field);
+  if (title) title.textContent = info.label;
+  if (units) units.textContent = info.unit;
   const coloring = document.getElementById('cp-coloring') || document.getElementById('coloring-select');
   if (coloring && coloring.tagName === 'SELECT') {
-    coloring.value = field;
+    syncColoringOptions();
+    coloring.value = info.name;
   }
   const iterColor = document.getElementById('iter-coloring') || document.querySelector('.iter-coloring');
   if (iterColor) {
-    iterColor.textContent =
-      field === 'p' ? 'Coloring: Pressure' : 'Coloring: Velocity Magnitude';
+    iterColor.textContent = 'Coloring: ' + info.label;
   }
 }
 
@@ -4524,8 +4578,8 @@ function updatePtLegend(field, lo, hi) {
   if (!show) return;
   const title = el.querySelector('.legend-title');
   const units = el.querySelector('.legend-units');
-  if (title) title.textContent = field === 'p' ? 'Particle trace · Pressure' : 'Particle trace · Velocity Magnitude';
-  if (units) units.textContent = field === 'p' ? 'Pa' : 'm/s';
+  if (title) title.textContent = 'Particle trace · ' + fieldInfo(field).label;
+  if (units) units.textContent = fieldInfo(field).unit;
   paintLegendTrackTicks(el, lo, hi);
 }
 
@@ -4548,7 +4602,7 @@ function syncSharedLegend() {
   try {
     const transient = (animState.times || []).length >= 2;
     if (!transient || !seriesBase) {
-      const fname = activeField === 'p' ? 'p' : 'magU';
+      const fname = fieldKey(activeField);
       const arr = sourcePolyData && sourcePolyData.getPointData
         ? sourcePolyData.getPointData().getArrayByName(fname)
         : null;
@@ -4660,7 +4714,7 @@ function legendScaleTarget(legendEl) {
   if (id === 'legend-b') {
     const R = compareState.res;
     if (!R || !R.lut) return null;
-    return { field: R.field === 'p' ? 'p' : 'magU', lut: R.lut };
+    return { field: fieldKey(R.field), lut: R.lut };
   }
   if (id === 'legend-pt') {
     if (!ptOwnRange) return null;
@@ -4669,7 +4723,7 @@ function legendScaleTarget(legendEl) {
   if (!mainLegendIsSurfaceField() && ptOwnRange) {
     return { field: ptOwnRange.field === 'p' ? 'p' : 'magU', lut: ptLut };
   }
-  return { field: activeField === 'p' ? 'p' : 'magU', lut };
+  return { field: fieldKey(activeField), lut };
 }
 
 function legendScaleRange(target) {
@@ -6990,7 +7044,7 @@ function applyCutPlaneEntry(plane, entry) {
   }
   let pd = entry.pd;
   if (!polyDataHasPolys(pd)) pd = triangulateCut(pd);
-  const field = activeField === 'p' ? 'p' : 'magU';
+  const field = fieldKey(activeField);
   try {
     plane.mapper.setInputData(pd);
     try { pd.modified(); } catch (_) {}
@@ -7022,7 +7076,7 @@ async function prefetchCutPlaneFrame(plane, time, opts) {
   const key = cutFrameKey(plane, tstr);
   if (cutFrameCache.has(key)) return cutFrameCache.get(key);
   if (cutFrameInflight.has(key)) return cutFrameInflight.get(key);
-  const field = activeField === 'p' ? 'p' : 'magU';
+  const field = fieldKey(activeField);
   const live = !!(opts && opts.live);
   const ctx = { time: tstr, live };
   const work = (async () => {
@@ -7195,21 +7249,20 @@ function applyLoadedField(field, entry, token, opts) {
   const meta = entry && entry.meta;
   const assetUrl = apiFieldUrl(field);
   const foam = meta && (meta.u_from_case || meta.foam_proof);
+  noteCaseFields(meta);
   let lo = 0;
   let hi = 1;
-  if (field === 'magU') {
-    lo = foam && foam.umin != null ? foam.umin : 0;
-    hi = foam && foam.umax != null ? foam.umax : 0.79;
-  } else if (foam) {
-    lo = foam.pmin != null ? foam.pmin : 0;
-    hi = foam.pmax != null ? foam.pmax : 1;
+  if (foam) {
+    const [a, b] = foamMetaRange(field, foam);
+    lo = a != null ? a : 0;
+    hi = b != null ? b : 1;
   }
   surfaceMapper.setColorByArrayName(field);
   cutMapper.setColorByArrayName(field);
   bindFieldSurface(pd);
   try {
     const fieldOpt = document.querySelector('#parts-style option[value="field"]');
-    if (fieldOpt) fieldOpt.textContent = field === 'p' ? 'Pressure' : 'Velocity Magnitude';
+    if (fieldOpt) fieldOpt.textContent = fieldInfo(field).label;
   } catch (_) {}
   sourcePolyData = pd;
   cutBins = null;
@@ -8592,7 +8645,7 @@ async function resolveRunResultsCasePath(rec) {
         const t = times[times.length - 1];
         if (!t) return;
         const meta = await fetch(
-          '/api/fields/magU/meta?case=' + encodeURIComponent(c) + '&time=' + encodeURIComponent(t),
+          '/api/fields/' + encodeURIComponent(defaultResultField()) + '/meta?case=' + encodeURIComponent(c) + '&time=' + encodeURIComponent(t),
           { cache: 'no-store' }
         );
         const body = await meta.json().catch(() => null);
@@ -8699,8 +8752,11 @@ async function prefetchOneRun(rec, gen, attach) {
         try { await warmResultVolume(t, { case: casePath, quiet: true }); } catch (e) {
           console.warn('[CFD] results prefetch warm', e);
         }
-        try { await prefetchFieldFrame('magU', t, { case: casePath }); } catch (_) {}
-        try { await prefetchFieldFrame('p', t, { case: casePath }); } catch (_) {}
+        // The field it opens on first, then the analysis's other declared fields' first two.
+        const warm = [defaultResultField(), ...resultFieldNames()].filter((f, i, all) => all.indexOf(f) === i).slice(0, 2);
+        for (const f of warm) {
+          try { await prefetchFieldFrame(f, t, { case: casePath }); } catch (_) {}
+        }
       }
     }
     if (gen === resultsPrefetch.gen) resultsPrefetch.warmed.add(runId);
@@ -11630,7 +11686,7 @@ function pullComparePlanesFromA() {
   const R = compareState.res;
   if (!R || !paneBMirrorsA()) return false;
   R.set = serializeFilterSet({ camera: false });
-  R.field = R.set.field === 'p' ? 'p' : 'magU';
+  R.field = fieldKey(R.set.field);
   syncCompareResultsPlanes(R);
   return true;
 }
@@ -11803,8 +11859,8 @@ function syncCompareResultsLegend() {
       legendB.hidden = hideB;
       const title = legendB.querySelector('.legend-title');
       const units = legendB.querySelector('.legend-units');
-      if (title) title.textContent = R.field === 'p' ? 'Pressure' : 'Velocity Magnitude';
-      if (units) units.textContent = R.field === 'p' ? 'Pa' : 'm/s';
+      if (title) title.textContent = fieldInfo(R.field).label;
+      if (units) units.textContent = fieldInfo(R.field).unit;
       paintLegendTrackTicks(legendB, rb[0], rb[1]);
     }
   }
@@ -11894,7 +11950,7 @@ async function loadResultsCompareB() {
     R.set = synced.set;
     R.ptLost = synced.lost;
     showComparePaneBNote(R);
-    R.field = R.set.field === 'p' ? 'p' : 'magU';
+    R.field = fieldKey(R.set.field);
     R.times = await timesForCase(R.caseDir);
     if (token !== R.loadToken) return;
     R.time = mapTimeToCaseTimes(getTime(), R.times);
@@ -12063,7 +12119,7 @@ function refreshResultsCompareAfterAutosave() {
     const synced = await resultsCompareSetForB(opt);
     if (!paneBMirrorsA() || (R && R.loadToken !== token)) return;
     const next = synced.set;
-    const field = next.field === 'p' ? 'p' : 'magU';
+    const field = fieldKey(next.field);
     // Planes and parts redraw in place; a changed particle trace needs pane B's own trace.
     const samePt = JSON.stringify(next.pt || null) === JSON.stringify((R && R.set && R.set.pt) || null);
     if (R && R.on && R.pd && R.caseDir && field === R.field && samePt) {
@@ -12417,7 +12473,7 @@ function serializeFilterSet(opts) {
   const animBlock = document.getElementById('anim-block');
   const set = {
     v: 1,
-    field: activeField === 'p' ? 'p' : 'magU',
+    field: fieldKey(activeField),
     parts: {
       on: !!cutState.partsColor,
       style: cutState.partsStyle === 'solid' ? 'solid' : 'field',
@@ -12571,7 +12627,7 @@ async function applyFilterSet(set, opts) {
       setFilterBlockCollapsed(el, collapsedFilterBlocks.has(filterBlockKey(el)));
     });
     // Coloring field (reloads the surface when it differs).
-    const field = set.field === 'p' ? 'p' : 'magU';
+    const field = fieldKey(set.field);
     const colorSel = document.getElementById('cp-coloring');
     if (colorSel && colorSel.tagName === 'SELECT') colorSel.value = field;
     try { syncChromeFromState(); } catch (_) {}
@@ -13585,6 +13641,42 @@ function syncChromeFromState() {
   syncChromeFromState();
 })();
 
+/**
+ * The Coloring picker lists the fields the open study's analysis writes
+ * (a vector as its magnitude), plus the hidden mesh-quality entry.
+ */
+/** The shown fields the open case's frames hold (the exporter's fields_available). */
+const caseFieldsAvailable = { case: null, names: null };
+
+function noteCaseFields(meta) {
+  const names = meta && Array.isArray(meta.fields_available) ? meta.fields_available.map(String) : null;
+  if (!names || !names.length) return;
+  const c = getCaseDir();
+  if (caseFieldsAvailable.case === c && (caseFieldsAvailable.names || []).join('|') === names.join('|')) return;
+  caseFieldsAvailable.case = c;
+  caseFieldsAvailable.names = names;
+  syncColoringOptions();
+}
+
+function syncColoringOptions() {
+  const sel = document.getElementById('cp-coloring');
+  if (!sel || sel.tagName !== 'SELECT') return;
+  const names = resultFieldNames();
+  // Only what this run wrote: a laminar run has no k or omega to colour by.
+  const have = caseFieldsAvailable.case === getCaseDir() ? caseFieldsAvailable.names : null;
+  const wrote = have ? names.filter((n) => have.includes(n)) : names;
+  const list = wrote.length ? wrote : names.length ? names : ['magU', 'p'];
+  const current = fieldKey(activeField);
+  if (current !== 'cellVolume' && !list.includes(current)) list.push(current);
+  const want = list.join('|');
+  if (sel.dataset.fields === want) return;
+  sel.dataset.fields = want;
+  sel.innerHTML =
+    list.map((n) => '<option value="' + escapeHtml(n) + '">' + escapeHtml(fieldInfo(n).label) + '</option>').join('') +
+    '<option value="cellVolume" hidden disabled>Cell Volume</option>';
+  sel.value = fieldKey(activeField);
+}
+
 (function wireColoringSelect() {
   const host =
     document.getElementById('cp-coloring') ||
@@ -13595,16 +13687,15 @@ function syncChromeFromState() {
   sel.id = 'cp-coloring';
   sel.className = 'fp-select';
   sel.setAttribute('aria-label', 'Coloring');
-  sel.innerHTML =
-    '<option value="magU">Velocity Magnitude</option><option value="p">Pressure</option><option value="cellVolume" hidden disabled>Cell Volume</option>';
-  sel.value = 'magU';
   host.replaceWith(sel);
+  syncColoringOptions();
+  sel.value = fieldKey(activeField);
   sel.addEventListener('change', () => {
     if (sel.value === 'cellVolume') {
       if (typeof setFiltersToolbarMode === 'function') setFiltersToolbarMode('mesh');
       return;
     }
-    const f = sel.value === 'p' ? 'p' : 'magU';
+    const f = fieldKey(sel.value);
     if (typeof setFiltersToolbarMode === 'function' && window.__CFD_FILTERS_MODE__ === 'mesh') {
       setFiltersToolbarMode('post');
     }
@@ -13959,7 +14050,7 @@ function animWindowRange() {
 
 function animTimesAreSeconds() {
   try {
-    return runRecIsTransient(selectedRunRecord());
+    return runXAxisIsSeconds(selectedRunRecord());
   } catch (_) {
     return false;
   }
@@ -14383,7 +14474,8 @@ async function setAnimationTime(time, opts) {
     if (idx >= 0) animState.index = idx;
   }
   syncAnimChromeFromState();
-  const field = activeField || 'magU';
+  // The field on screen, or the analysis's first when this run's analysis does not write it.
+  const field = activeField === 'cellVolume' ? activeField : defaultResultField();
   const skipHeavy = !!(opts && (opts.playing || opts.skipExtras));
   try { ensureFieldCacheCase(); } catch (_) {}
   const cached = fieldFrameCache.get(fieldFrameKey(field, tstr));
@@ -14812,7 +14904,7 @@ window.__CFD_W12_APPLY__ = async function applyW12(partial) {
     }
     if (partial.honest_missing) {
       const miss = partial.missing_time != null ? String(partial.missing_time) : '999';
-      const url = `/api/fields/magU/meta?case=${encodeURIComponent(CASE_DIR)}&time=${encodeURIComponent(miss)}`;
+      const url = `/api/fields/${encodeURIComponent(defaultResultField())}/meta?case=${encodeURIComponent(CASE_DIR)}&time=${encodeURIComponent(miss)}`;
       const r = await fetch(url);
       const body = await r.json().catch(() => ({ error: 'parse_failed' }));
       publishW12({
@@ -16137,9 +16229,7 @@ function solveEtaMs(run) {
   const w27 = runCatalog;
   const viewed = w27 && w27.run;
   const sameViewed = sameRunId(rec, viewed);
-  const transientRun = typeof runRecIsTransient === 'function'
-    ? runRecIsTransient(rec)
-    : /transient/i.test(String(rec.time_dependency || ''));
+  const transientRun = runXAxisIsSeconds(rec);
   // W30 transient: progress is physical time / simulation time. The step
   // size adapts, so this is a rolling estimate rather than a count.
   if (transientRun) {
@@ -16635,9 +16725,7 @@ function syncViewportJobChip() {
     const it = Number(liveRun.iteration) || 0;
     const end = Number(liveRun.endTime) || 0;
     const stage = typeof solveDisplayStage === 'function' ? solveDisplayStage(liveRun) : liveRun.stage;
-    const transientRun = typeof runRecIsTransient === 'function'
-      ? runRecIsTransient(liveRun)
-      : /transient/i.test(String(liveRun.time_dependency || ''));
+    const transientRun = runXAxisIsSeconds(liveRun);
     let progress = '';
     if (stage && stage !== 'solve') {
       progress = (typeof SIM_STAGE_LABELS !== 'undefined' && SIM_STAGE_LABELS[stage]) || 'Solving';
@@ -16852,7 +16940,7 @@ async function refreshFieldsAfterAttach(ctx) {
     }
   }
   try {
-    const metaUrl = apiMetaUrl('magU');
+    const metaUrl = apiMetaUrl(defaultResultField());
     const r = await fetch(metaUrl);
     if (r.ok) {
       jobState.field_fingerprint = await r.json();
@@ -20594,7 +20682,7 @@ function refreshSetupTree() {
           const studyHtml = mine
             .map((s) => {
               const on = !!(activeSid && s.id === activeSid);
-              const label = s.name || 'Incompressible';
+              const label = s.name || 'Simulation';
               const skey = 'study:' + s.id;
               const kids = on ? setupInner : renderBrowseStudyInner(s, sel);
               return (
@@ -20769,7 +20857,7 @@ function applySimulationRecord(sim, projectId, extra) {
     ...sim,
     id: sim.id,
     project_id: sim.project_id || projectId,
-    name: sim.name || 'Incompressible',
+    name: sim.name || 'Simulation',
     analysis: sim.analysis || W17_DEFAULTS.analysis,
     turbulence_model: sim.turbulence_model || W17_DEFAULTS.turbulence_model,
     time_dependency: sim.time_dependency || W17_DEFAULTS.time_dependency,
@@ -20811,7 +20899,7 @@ function applySimulationRecord(sim, projectId, extra) {
 
 async function createSimulationClient(opts) {
   const payload = {
-    analysis: (opts && opts.analysis) || 'Incompressible',
+    analysis: (opts && opts.analysis) || W17_DEFAULTS.analysis,
     time_dependency: (opts && opts.time_dependency) || 'Steady-state',
   };
   if (w16State.project && w16State.project.id) {
@@ -21075,7 +21163,7 @@ function computeStudyState() {
     has_study: true,
     id: String(sim.id || studyCatalog.activeId || ''),
     project_id: String(studyCatalog.project_id || currentProjectId() || ''),
-    name: String(sim.name || 'Incompressible'),
+    name: String(sim.name || 'Simulation'),
     analysis: String(sim.analysis || W17_DEFAULTS.analysis),
     analysis_type: String(sim.analysis_type || DEFAULT_ANALYSIS_KEY),
     time_dependency: td,
@@ -21199,7 +21287,7 @@ function fillCreateSimulationExtras() {
               '<option value="' +
               escapeHtml(s.id) +
               '">' +
-              escapeHtml((s.name || 'Incompressible') + ' (' + td + ')') +
+              escapeHtml((s.name || 'Simulation') + ' (' + td + ')') +
               '</option>'
             );
           })
@@ -21362,9 +21450,12 @@ window.__CFD_W17_CREATE__ = createSimulationClient;
       btn.textContent = 'Creating…';
     }
     const picked = document.querySelector('#cs-type-list [data-analysis-key].is-selected');
+    const pickedKey = (picked && picked.getAttribute('data-analysis-key')) || DEFAULT_ANALYSIS_KEY;
+    const pickedRow = analysisRow(pickedKey);
     createSimulationClient({
-      analysis: 'Incompressible',
-      analysis_type: (picked && picked.getAttribute('data-analysis-key')) || 'incompressible_steady',
+      // The picked analysis's name, as its contract publishes it.
+      analysis: (pickedRow && pickedRow.family && pickedRow.family.study_name) || (pickedRow && pickedRow.label) || W17_DEFAULTS.analysis,
+      analysis_type: pickedKey,
       time_dependency: selectedCreateTimeDependency(),
       geometry_id: (document.getElementById('cs-geometry') || {}).value || undefined,
       copy_from: copyFrom,
@@ -24947,13 +25038,6 @@ function bcHasAssignedFace(b) {
   return !!(b && ((Array.isArray(b.faces) && b.faces.length) || b.face));
 }
 
-function solveHasFlowDriver() {
-  const list = bcList();
-  const inlets = list.filter((b) => String((b && b.bc_type) || '') === 'Velocity inlet' && bcHasAssignedFace(b));
-  const pressures = list.filter((b) => String((b && b.bc_type) || '') === 'Pressure' && bcHasAssignedFace(b));
-  return (inlets.length > 0 && pressures.length > 0) || pressures.length >= 2;
-}
-
 function activeBc() {
   return bcList().find((b) => b.id === bcCatalog.activeId) || null;
 }
@@ -28259,9 +28343,10 @@ function enqueueSolveJob(runId) {
     if (st === 'running' || st === 'starting') return null;
   }
   if (jobQueueHas('solve', id)) return jobQueue.items.find((r) => r.kind === 'solve' && String(r.run_id) === id);
-  if (typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial()) {
+  const blocking = runSetupIssue(rec, { mesh: false });
+  if (blocking) {
     try {
-      setRunHint('Assign a fluid to a volume first.', { go: 'material' });
+      setRunHint(setupIssueText(blocking), blocking.fix || null);
     } catch (_) {}
     try { syncSimControlPanel(); } catch (_) {}
     return null;
@@ -28293,7 +28378,7 @@ function enqueueSolveJob(runId) {
   };
   return fetchComputeQueue('/api/compute-queue', {
     method: 'POST',
-    body: { ...item, has_material: true, mesh_generating: meshIsGeneratingNow(meshId) },
+    body: { ...item, mesh_generating: meshIsGeneratingNow(meshId) },
   })
     .then((j) => {
       applyServerQueue(j);
@@ -28690,8 +28775,9 @@ async function onSimStartClick() {
   if (rec && meshId && String(rec.mesh_id || '') !== String(meshId)) rememberRunMesh(rec, meshId);
   const waitForMesh = !!(meshId && !runMeshIsReady(meshId) && meshWillBeReadySoon(meshId));
   if (anyComputeJobRunning() || waitForMesh) {
-    if (typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial()) {
-      try { setRunHint('Assign a fluid to a volume first.', { go: 'material' }); } catch (_) {}
+    const blocking = runSetupIssue(rec, { mesh: false });
+    if (blocking) {
+      try { setRunHint(setupIssueText(blocking), blocking.fix || null); } catch (_) {}
       try { syncSimControlPanel(); } catch (_) {}
       return;
     }
@@ -29533,6 +29619,14 @@ function runRecIsTransient(rec) {
   return simIsTransientClient();
 }
 
+/**
+ * A run's progress is in simulated seconds (its analysis's x_axis), else in
+ * iterations: the results timeline, the monitor plots, progress and time left.
+ */
+function runXAxisIsSeconds(rec) {
+  return xAxisIsSeconds(runAnalysisKeyOf(rec), runRecIsTransient(rec));
+}
+
 function transientSettingsFor(rec) {
   const base = { ...transientDefaultsClient(rec && rec.analysis_key ? runAnalysisKeyOf(rec) : '') };
   const src = rec && rec.transient && typeof rec.transient === 'object' ? rec.transient : null;
@@ -30184,7 +30278,14 @@ async function copyRunSettingsFrom(srcId, opts) {
     mesh_id: otherStudy ? dest.mesh_id || '' : src.mesh_id || '',
     endTime: src.endTime != null ? src.endTime : runCatalog.endTime,
     writeInterval: src.writeInterval != null ? src.writeInterval : runCatalog.writeInterval,
-    time_dependency: src.time_dependency || (runRecIsTransient(src) ? 'Transient' : 'Steady-state'),
+    // A new run (Add run) follows the study, like any draft; copying onto an
+    // existing draft takes the source run's time dependency with its settings.
+    time_dependency:
+      opts && opts.insideCreate
+        ? simIsTransientClient()
+          ? 'Transient'
+          : 'Steady-state'
+        : src.time_dependency || (runRecIsTransient(src) ? 'Transient' : 'Steady-state'),
     transient,
     result_controls: otherStudy ? dest.result_controls || [] : cloneRunResultControls(src.result_controls),
   };
@@ -30396,27 +30497,87 @@ function startSimElapsedClock() {
   }, 1000);
 }
 
-function solveHasAssignedMaterial() {
-  const sid = typeof currentStudyId === 'function' ? currentStudyId() : '';
-  const rows = [];
+/**
+ * What blocks the selected run, as its analysis sees it (analysis.validate_ready
+ * through /api/run/ready): the same check the server makes before it starts a
+ * run, so the Start gate and Start agree for every simulation type. Asked again
+ * when anything it reads changes (materials, boundary conditions, the mesh, the
+ * study, the run's mode); until the answer arrives Start stays off.
+ */
+const runReady = { run_id: '', stamp: '', issues: null, pending: '', timer: null };
+
+function runReadyStamp(rec, meshReady) {
+  const mats = [];
   try {
-    if (typeof materialCatalog !== 'undefined') {
-      if (materialCatalog.material) rows.push(materialCatalog.material);
-      if (Array.isArray(materialCatalog.materials_all)) rows.push(...materialCatalog.materials_all);
-    }
+    if (materialCatalog.material) mats.push(materialCatalog.material);
+    if (Array.isArray(materialCatalog.materials_all)) mats.push(...materialCatalog.materials_all);
   } catch (_) {}
-  return rows.some((mat) => {
-    if (!mat) return false;
-    if (sid && mat.simulation_id && String(mat.simulation_id) !== String(sid)) return false;
-    // Any fluid counts (Air, Water or custom); the solver uses the assigned one.
-    const vols = Array.isArray(mat.assigned_volumes) ? mat.assigned_volumes : [];
-    return vols.length > 0 || !!mat.assigned_volume;
-  });
+  return JSON.stringify([
+    currentProjectId() || '',
+    currentStudyId() || '',
+    rec ? String(rec.id || rec.run_id || '') : '',
+    rec ? String(rec.mesh_id || '') : '',
+    !!meshReady,
+    runRecIsTransient(rec),
+    mats.map((m) => [m && m.id, m && m.simulation_id, m && m.assigned_volumes, m && m.assigned_volume]),
+    bcList(),
+    (studyCatalog && studyCatalog.simulation) || null,
+  ]);
+}
+
+function refreshRunReady(rec, meshReady) {
+  if (!rec) return;
+  const id = String(rec.id || rec.run_id || '');
+  const stamp = runReadyStamp(rec, meshReady);
+  if ((runReady.run_id === id && stamp === runReady.stamp) || stamp === runReady.pending) return;
+  runReady.pending = stamp;
+  if (runReady.timer) clearTimeout(runReady.timer);
+  runReady.timer = setTimeout(async () => {
+    runReady.timer = null;
+    const qs = new URLSearchParams({
+      project_id: String(currentProjectId() || ''),
+      simulation_id: String((rec && rec.simulation_id) || currentStudyId() || ''),
+      run_id: id,
+      mesh_id: String(resolveRunMeshForQueue(rec) || rec.mesh_id || ''),
+      time_dependency: runRecIsTransient(rec) ? 'Transient' : 'Steady-state',
+    });
+    try {
+      const r = await fetch('/api/run/ready?' + qs.toString(), { cache: 'no-store' });
+      const j = await r.json();
+      if (runReady.pending !== stamp) return;
+      runReady.pending = '';
+      if (!j || j.ok === false) return;
+      runReady.run_id = id;
+      runReady.stamp = stamp;
+      runReady.issues = Array.isArray(j.issues) ? j.issues : [];
+      publishRunState();
+    } catch (e) {
+      if (runReady.pending === stamp) runReady.pending = '';
+      console.warn('[CFD] run readiness', e);
+    }
+  }, 120);
+}
+
+/**
+ * The first setup issue the run's analysis reports for this run (null: none),
+ * or undefined while it has not answered yet. `mesh: false` skips issues whose
+ * fix is to generate the mesh (a run may queue behind its mesh).
+ */
+function runSetupIssue(rec, opts) {
+  const id = rec ? String(rec.id || rec.run_id || '') : '';
+  if (!id || runReady.run_id !== id || !Array.isArray(runReady.issues)) return undefined;
+  const withMesh = !(opts && opts.mesh === false);
+  return runReady.issues.find((i) => i && (withMesh || !(i.fix && i.fix.go === 'mesh'))) || null;
+}
+
+function setupIssueText(issue) {
+  const text = String((issue && issue.message) || '').trim();
+  return /[.!?]$/.test(text) ? text : text + '.';
 }
 
 function inferSetupFix(msg) {
   const s = String(msg || '');
-  if (/Create an Incompressible simulation/i.test(s)) return { go: 'create-sim' };
+  if (/Create a simulation first/i.test(s)) return { go: 'create-sim' };
   if (/Add a run to change settings/i.test(s)) return { go: 'add-run' };
   if (/Create a run first|already finished/i.test(s)) return { go: 'sim-hub' };
   if (/Assign Air|Assign a fluid|assign a material|material/i.test(s) && !/boundary/i.test(s)) return { go: 'material' };
@@ -30574,7 +30735,8 @@ function setRunHint(msg, fix) {
 /**
  * Everything the React run panel (src/panels/run/RunControl.tsx) renders:
  * the Start gate and its reason, settings, transient hint, progress and
- * residuals, copy-from. Pure: reads catalogs, writes nothing.
+ * residuals, copy-from. Reads catalogs and writes nothing; it only asks the
+ * run's analysis for its readiness again when what that reads has changed.
  */
 function computeRunState() {
   const rec = selectedRunRecord();
@@ -30595,17 +30757,19 @@ function computeRunState() {
   const computeBusy = typeof anyComputeJobRunning === 'function' && anyComputeJobRunning();
   const queuedHere = !!(rec && typeof jobQueueHas === 'function' && jobQueueHas('solve', rec.id || rec.run_id));
   const meshSoon = !!(meshId && meshWillBeReadySoon(meshId));
-  const hasMaterial = typeof solveHasAssignedMaterial === 'function' && solveHasAssignedMaterial();
-  const hasFlow = typeof solveHasFlowDriver === 'function' && solveHasFlowDriver();
+  refreshRunReady(rec, meshReady);
+  // The run's analysis's own readiness (undefined until it answers).
+  const setupIssue = runSetupIssue(rec);
+  const setupIssueNoMesh = runSetupIssue(rec, { mesh: false });
   const canQueue = canQueueSolveJob({
     hasRun: !!(rec && (rec.id || rec.run_id)),
     running,
     done,
     meshReady,
     meshSoon,
-    hasMaterial,
+    setupOk: setupIssueNoMesh === null,
   });
-  const canStart = !!(rec && (rec.id || rec.run_id) && !running && !done && meshReady && !computeBusy && hasMaterial && hasFlow);
+  const canStart = !!(rec && (rec.id || rec.run_id) && !running && !done && meshReady && !computeBusy && setupIssue === null);
 
   const start = { visible: !!rec && !done && !running, enabled: false, label: 'Start', title: 'Start the solver on this run' };
   if (queuedHere) {
@@ -30634,7 +30798,7 @@ function computeRunState() {
     if (!reason) reason = { text, fix: fix || null };
   };
   if (runCatalog.starting) want(runCatalog.start_error || 'Starting…', null);
-  else if (queuedHere && !hasMaterial) want('Assign a fluid to a volume first.', { go: 'material' });
+  else if (queuedHere && setupIssueNoMesh) want(setupIssueText(setupIssueNoMesh), setupIssueNoMesh.fix || null);
   else if (queuedHere) {
     // Say where it is: the queue is shared by every project, and its own mesh
     // may be (re)generating ahead of it.
@@ -30654,24 +30818,28 @@ function computeRunState() {
   else if (rec && meshId && !meshReady && !meshSoon) {
     const meshName = (meshRec && meshRec.name) || rec.mesh_name || 'that mesh';
     want('Generate "' + meshName + '" before starting.', { go: 'mesh', id: meshId, name: meshName });
-  } else if (rec && !hasMaterial) want('Assign a fluid to a volume first.', { go: 'material' });
-  else if (rec && !hasFlow) {
-    const incomplete = bcList().find((b) => !bcHasAssignedFace(b));
-    want(
-      'Add a velocity inlet, or two pressure boundaries, each with an assigned face.',
-      incomplete ? { go: 'bc', id: incomplete.id, name: incomplete.name } : { go: 'bc-picker' },
-    );
-  } else if (rec && rec.status === 'failed' && (rec.error || rec.note)) {
+  } else if (rec && setupIssue) want(setupIssueText(setupIssue), setupIssue.fix || null);
+  else if (rec && rec.status === 'failed' && (rec.error || rec.note)) {
     want(rec.error || rec.note, inferSetupFix(rec.error || rec.note));
   } else if (startErrorForSelectedRun()) want(runCatalog.start_error, runCatalog.start_fix);
   else if (rec && rec.status === 'done') want('This run finished. Add a run to change settings.', { go: 'add-run', id: rec.id });
+  else if (rec && rec.status === 'stopped' && runRecIsTransient(rec) !== simIsTransientClient()) {
+    // A started run keeps the mode it solved with (its frames are in that mode);
+    // the study's other mode is a new run away.
+    const kept = runRecIsTransient(rec) ? 'Transient' : 'Steady-state';
+    const other = kept === 'Transient' ? 'Steady-state' : 'Transient';
+    want('This run solved ' + kept + ', so a restart continues ' + kept + '. Add a run to solve ' + other + '.', {
+      go: 'add-run',
+      id: rec.id,
+    });
+  }
 
   // Progress block (V0.1.0 #sim-finished).
   const hasProgress = !!(run && ['running', 'done', 'failed', 'stopped'].includes(run.status));
   const progress = { show: hasProgress, title: 'Run', line: '', elapsed: '', eta: '', meta: '', residuals: [], end: 0 };
   if (hasProgress) {
     const it = Number(run.iteration) || 0;
-    const runTransient = runRecIsTransient(run);
+    const runTransient = runXAxisIsSeconds(run);
     const trEnd = runTransient
       ? Number(run.transient && run.transient.end_time) || Number(runCatalog.transient && runCatalog.transient.end_time) || 0
       : 0;
@@ -30777,8 +30945,8 @@ function computeRunState() {
     progress,
     copy: runCopyState(),
     mesh_ready: meshReady,
-    has_material: hasMaterial,
-    has_flow_driver: hasFlow,
+    // The analysis's readiness: true, false, or null while it has not answered.
+    setup_ready: setupIssue === undefined ? null : setupIssue === null,
   };
 }
 
@@ -31398,21 +31566,19 @@ async function startSolveClient(opts) {
         }
         return failStart('This run is already solving.');
       }
-      if (!meshId) {
+      const blocking = runSetupIssue(rec, { mesh: false });
+      if (!meshId || blocking) {
         return failStart(
-          (typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial())
-            ? 'Assign a fluid to a volume first'
-            : 'This run needs a mesh before it can start.',
-          { fix: { go: typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial() ? 'material' : 'run-mesh' } }
+          blocking ? String(blocking.message || '') : 'This run needs a mesh before it can start.',
+          { fix: blocking ? blocking.fix || null : { go: 'run-mesh' } }
         );
       }
       const queued = await enqueueSolveJob(runId);
       if (!queued) {
+        const again = runSetupIssue(rec, { mesh: false });
         return failStart(
-          (typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial())
-            ? 'Assign a fluid to a volume first'
-            : 'This run needs a mesh before it can start.',
-          { fix: { go: typeof solveHasAssignedMaterial === 'function' && !solveHasAssignedMaterial() ? 'material' : 'run-mesh' } }
+          again ? String(again.message || '') : 'This run needs a mesh before it can start.',
+          { fix: again ? again.fix || null : { go: 'run-mesh' } }
         );
       }
       showHint(
@@ -32012,7 +32178,7 @@ async function renameActiveRunClient(name) {
 
   function monTimeAxis() {
     const rec = monitorRunRecord();
-    if (rec && typeof runRecIsTransient === 'function' && runRecIsTransient(rec)) return true;
+    if (rec && runXAxisIsSeconds(rec)) return true;
     const runId = rec && rec.id;
     const data = runId ? monState.byRun[runId] : null;
     if (data && data.transient != null) return !!data.transient;

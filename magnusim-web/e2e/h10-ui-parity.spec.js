@@ -31,9 +31,12 @@ async function getJson(request, url) {
   }
 }
 
-/** The element as indented lines: tag, sorted attributes, own text; numbers masked. */
-async function domOf(locator) {
-  return locator.evaluate((root) => {
+/**
+ * The element as indented lines: tag, sorted attributes, own text; numbers
+ * masked. Parts matching `skip` (live ones: a plot still growing) are left out.
+ */
+async function domOf(locator, skip = '') {
+  return locator.evaluate((root, skipSel) => {
     // Numbers vary run to run (step counts, times): mask them, and a list of them to one.
     const mask = (s) =>
       String(s)
@@ -48,6 +51,7 @@ async function domOf(locator) {
         .trim();
     const out = [];
     const walk = (el, depth) => {
+      if (skipSel && el !== root && el.matches(skipSel)) return;
       const attrs = [...el.attributes]
         // An emptied inline style (left by focus handling) is no style.
         .filter((a) => !(a.name === 'style' && !a.value.trim()))
@@ -65,15 +69,35 @@ async function domOf(locator) {
     };
     walk(root, 0);
     return out;
-  });
+  }, skip);
+}
+
+// While a run solves, its time left comes and goes with its speed and its
+// frame count changes: they are compared by form, not by value.
+function liveMask(line) {
+  return line.replace(/ · (?:~#(?::#)+|< #s) left/g, '').replace(/# frames?\b/g, '# frames');
 }
 
 const captured = {};
-async function capture(page, name, locator) {
+async function capture(page, name, locator, opts = {}) {
   await expect(locator).toBeVisible();
   // Let React settle (a preview or registry reply can re-render once more).
   await page.waitForTimeout(400);
-  captured[name] = await domOf(locator);
+  const read = async () => {
+    const lines = await domOf(locator, opts.skip || '');
+    return opts.live ? lines.map(liveMask) : lines;
+  };
+  let lines = await read();
+  // A panel still loading or solving: take it once two reads a second apart agree.
+  if (opts.settle) {
+    for (let i = 0; i < 30; i++) {
+      await page.waitForTimeout(1000);
+      const again = await read();
+      if (again.join('\n') === lines.join('\n')) break;
+      lines = again;
+    }
+  }
+  captured[name] = lines;
   if (SHOTS) {
     mkdirSync(SHOTS, { recursive: true });
     await locator.screenshot({ path: join(SHOTS, `${name}.png`), animations: 'disabled', caret: 'hide' });
@@ -156,6 +180,11 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
     }
     await page.locator(`#left-tree [data-w27-run="${rid}"] > .tree-row .tl`).first().click();
     await expect(runControl).toHaveAttribute('data-run-id', rid);
+    // The Start gate is the analysis's answer (null until it comes).
+    await page.waitForFunction(() => {
+      const s = window.__CFD_RUN_STATE__;
+      return !!s && s.setup_ready !== null;
+    });
   };
   const createRun = async (name) => {
     const r = await request.post('/api/run/create', { data: { project_id: PROJECT, simulation_id: SIM, name } });
@@ -234,6 +263,81 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   // The core's setup tree after all of it (H11: plugin studies sit in their own
   // section below, and the simulations tree itself is unchanged).
   await capture(page, 'tree-simulations', page.locator('#simulations-section'));
+
+  // The results timeline (Animation) runs on each run's x axis: the transient
+  // run's in seconds, the steady run's in iterations.
+  const animBlock = page.locator('#anim-block');
+  const openTimeline = async (rid) => {
+    await page.locator(`#left-tree [data-w27-run="${rid}"] > .tree-row .tl`).first().click();
+    await page.locator(`#left-tree [data-w27-run-results="${rid}"] > .tree-row .tl`).first().click();
+    await page.waitForFunction(() => window.__CFD_RESULTS_VIEW__ === true, null, { timeout: 180_000 });
+    if (!(await animBlock.isVisible())) await page.locator('.tb-btn[data-label="Animation"]').click();
+    await expect(animBlock).toBeVisible();
+  };
+  await openTimeline(transient);
+  await expect(page.locator('#anim-window-label')).toHaveText('Start / End', { timeout: 60_000 });
+  await expect(page.locator('#anim-time-val')).toHaveText(/ s$/, { timeout: 60_000 });
+  await capture(page, 'results-timeline-transient', animBlock, { settle: true });
+  await openTimeline(steady);
+  await expect(page.locator('#anim-window-label')).toHaveText('Start / End iteration', { timeout: 60_000 });
+  await capture(page, 'results-timeline-steady', animBlock, { settle: true });
+  stage(t0, 'results timelines');
+
+  // A run while it solves, on its x axis: its Run panel (the residual plot is
+  // still growing, and the time left comes and goes: not compared) and its
+  // project's card on Home. Each is stopped and deleted afterwards.
+  const homeJob = page.locator(`#home-grid .home-card[data-project-id="${PROJECT}"] .home-card-job`);
+  const whileSolving = async (label, fields, runLine, homeLine, homeParity) => {
+    const rid = await createRun(`Parity live ${label}`);
+    await openRun(rid);
+    for (const [field, value] of fields) await setField(field, value);
+    await expect(runControl.locator('[data-run-start]')).toBeEnabled({ timeout: 60_000 });
+    await runControl.locator('[data-run-start]').click();
+    await expect(runControl.locator('[data-run-line="1"]')).toHaveText(runLine, { timeout: 600_000 });
+    await capture(page, `run-running-${label}`, runPanel, {
+      live: true,
+      settle: true,
+      skip: '[data-residual-wrap="1"], .sim-eta',
+    });
+    await page.goto('/#/');
+    if (homeParity) {
+      await expect(homeJob).toHaveText(homeLine, { timeout: 180_000 });
+      await capture(page, `home-card-running-${label}`, homeJob, { live: true, settle: true });
+    } else if (!UPDATE) {
+      // Not compared with the baseline: the code it is recorded on showed no
+      // progress on the card while a steady run solved (its iteration reached
+      // the saved run only at the end). The card now reads the live run.
+      await expect(homeJob).toHaveText(homeLine, { timeout: 120_000 });
+    }
+    const stop = await request.post('/api/run/stop', { data: { project_id: PROJECT, run_id: rid } });
+    expect(stop.ok(), await stop.text()).toBe(true);
+    await waitStatus(rid, /^(stopped|done)$/, 300_000);
+    const del = await request.post('/api/run/delete', { data: { project_id: PROJECT, simulation_id: SIM, run_id: rid } });
+    expect(del.ok(), await del.text()).toBe(true);
+    stage(t0, `live ${label} captured`);
+  };
+  // Transient (the study is transient now): a long run, stopped once captured.
+  // It saves a frame every 100 steps: the baseline's code showed the card's
+  // progress only from the first saved frame on.
+  await whileSolving(
+    'transient',
+    [['Simulation time', Number((dt * 100_000).toPrecision(4))], ['Result frames', 1000]],
+    /^t = \S+ s \/ \S+ s \(\d+%\)/,
+    /^\S+ s \/ \S+ s/,
+    true,
+  );
+  // Steady-state.
+  await openProject();
+  await openStudy();
+  await studyPanel.getByLabel('Time dependency').selectOption('Steady-state');
+  await expect.poll(async () => (await getJson(request, simUrl)).simulation?.analysis_type).toBe('incompressible_steady');
+  await whileSolving(
+    'steady',
+    [['Iterations', 100_000], ['Write interval', 50_000]],
+    /^Iteration \d+ \/ \d+$/,
+    /^\d+ \/ 100000\b/,
+    false,
+  );
 
   if (UPDATE || !existsSync(BASELINE)) {
     writeFileSync(BASELINE, JSON.stringify(captured, null, 1) + '\n', 'utf8');

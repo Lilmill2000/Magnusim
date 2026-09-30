@@ -275,6 +275,12 @@
           "kind": "scalar"
         },
         {
+          "key": "epsilon",
+          "label": "Turbulent dissipation rate",
+          "unit_quantity": "dissipation_rate",
+          "kind": "scalar"
+        },
+        {
           "key": "nut",
           "label": "Turbulent viscosity",
           "unit_quantity": "kinematic_viscosity",
@@ -643,6 +649,12 @@
           "key": "omega",
           "label": "Specific dissipation rate",
           "unit_quantity": "specific_dissipation_rate",
+          "kind": "scalar"
+        },
+        {
+          "key": "epsilon",
+          "label": "Turbulent dissipation rate",
+          "unit_quantity": "dissipation_rate",
           "kind": "scalar"
         },
         {
@@ -1312,10 +1324,6 @@
           "field": {
             "type": "string",
             "default": "magU",
-            "enum": [
-              "magU",
-              "p"
-            ],
             "title": "Field"
           },
           "opacity": {
@@ -1637,10 +1645,6 @@
           "field": {
             "type": "string",
             "default": "magU",
-            "enum": [
-              "magU",
-              "p"
-            ],
             "title": "Field"
           },
           "case": {

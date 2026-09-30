@@ -275,9 +275,14 @@ def run_defaults(spec: Any) -> dict[str, Any]:
     return schema_defaults(getattr(spec, "control_schema", ()) or ())
 
 
-def run_normalize(spec: Any, settings: dict[str, Any] | None) -> dict[str, Any]:
+def run_normalize(
+    spec: Any, settings: dict[str, Any] | None, base: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Run settings as the analysis stores them: ``settings`` (edits) over
+    ``base`` (what is stored), cleaned up by its run model. A value the model
+    rejects falls back to its default."""
     model = run_model(spec)
-    raw = dict(settings or {})
+    raw = {**(base or {}), **(settings or {})}
     if model is not None:
         return dict(model.normalize(raw) or {})
     return {**run_defaults(spec), **raw}

@@ -259,7 +259,8 @@ export function canQueueSolveJob(opts: {
   done?: boolean;
   meshReady?: boolean;
   meshSoon?: boolean;
-  hasMaterial?: boolean;
+  /** The run's analysis reports no setup issue other than the mesh. */
+  setupOk?: boolean;
 }): boolean {
   return !!(
     opts &&
@@ -267,7 +268,7 @@ export function canQueueSolveJob(opts: {
     !opts.running &&
     !opts.done &&
     (opts.meshReady || opts.meshSoon) &&
-    opts.hasMaterial
+    opts.setupOk
   );
 }
 

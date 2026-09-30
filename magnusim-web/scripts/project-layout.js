@@ -208,10 +208,50 @@ export function foamTimeHasField(base, field) {
   return existsSync(join(base, field)) || existsSync(join(base, field + '.gz'));
 }
 
-/** Viewer/API times require both U and p so a half-copied live write is skipped. */
+/** Cases written before the sidecar listed its analysis's frame fields. */
+const LEGACY_FRAME_FIELDS = Object.freeze(['U', 'p']);
+const FRAME_FIELD_RE = /^[A-Za-z_][A-Za-z0-9_.]*$/;
+/** caseDir|sidecar mtime → frame fields (a sidecar is rewritten only when its case is). */
+const frameFieldsCache = new Map();
+
+/**
+ * The fields whose files mark a written result frame in this case: the case
+ * sidecar's frame_fields (its analysis's launch spec, stamped by prepare_run),
+ * else U and p.
+ * @param {string} caseDir
+ * @returns {readonly string[]}
+ */
+export function caseFrameFields(caseDir) {
+  const sidecar = join(caseDir, 'w27-case.json');
+  let mtime = 0;
+  try {
+    mtime = statSync(sidecar).mtimeMs;
+  } catch {
+    return LEGACY_FRAME_FIELDS;
+  }
+  const key = caseDir + '|' + mtime;
+  const hit = frameFieldsCache.get(key);
+  if (hit) return hit;
+  /** @type {readonly string[]} */
+  let fields = LEGACY_FRAME_FIELDS;
+  try {
+    const doc = JSON.parse(readFileSync(sidecar, 'utf8'));
+    const list = Array.isArray(doc && doc.frame_fields)
+      ? doc.frame_fields.map(String).filter((f) => FRAME_FIELD_RE.test(f))
+      : [];
+    if (list.length) fields = Object.freeze(list);
+  } catch {
+    /* unreadable: the legacy pair */
+  }
+  if (frameFieldsCache.size > 500) frameFieldsCache.clear();
+  frameFieldsCache.set(key, fields);
+  return fields;
+}
+
+/** Viewer/API times need every frame field, so a half-copied live write is skipped. */
 export function foamTimeDirIsComplete(caseDir, name) {
   const base = join(caseDir, String(name));
-  return foamTimeHasField(base, 'U') && foamTimeHasField(base, 'p');
+  return caseFrameFields(caseDir).every((f) => foamTimeHasField(base, f));
 }
 
 export function listFoamTimeDirs(caseDir, opts) {
@@ -239,7 +279,7 @@ export function listFoamTimeDirs(caseDir, opts) {
     const base = join(caseDir, name);
     const ok = needComplete
       ? foamTimeDirIsComplete(caseDir, name)
-      : foamTimeHasField(base, 'U') || foamTimeHasField(base, 'p');
+      : caseFrameFields(caseDir).some((f) => foamTimeHasField(base, f));
     if (ok) times.push(name);
   }
   times.sort((a, b) => Number(a) - Number(b));

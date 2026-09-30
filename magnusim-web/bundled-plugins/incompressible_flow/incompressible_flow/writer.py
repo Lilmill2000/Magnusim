@@ -1092,6 +1092,8 @@ RAS
         "time_dependency": "Transient" if is_transient else "Steady-state",
         "nu": float(spec.nu),
         "rho": float(spec.rho),
+        # Fields stored divided by rho: the results viewer shows them times rho (Pa).
+        "kinematic_fields": ["p"],
         "patches": patch_names,
         "wall_default": spec.wall_default,
         "mapped": mapped_meta,

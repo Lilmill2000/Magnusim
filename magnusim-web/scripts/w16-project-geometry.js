@@ -300,6 +300,7 @@ function summarizeProject(proj) {
     sim_time: solve.sim_time,
     sim_end: solve.sim_end,
     time_dependency: solve.time_dependency || null,
+    x_axis: solve.x_axis || null,
     iteration: solve.iteration,
     endTime: solve.endTime,
   };

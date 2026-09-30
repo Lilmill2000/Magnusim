@@ -198,13 +198,14 @@ describe('bindJobQueuePointerDrag', () => {
 describe('canQueueSolveJob', () => {
   const ready = { hasRun: true, running: false, done: false, meshReady: true, meshSoon: false };
 
-  it('refuses a solve when no material is assigned', () => {
-    expect(canQueueSolveJob({ ...ready, hasMaterial: false })).toBe(false);
+  it("refuses a solve while the run's analysis reports a setup issue (or has not answered)", () => {
+    expect(canQueueSolveJob({ ...ready, setupOk: false })).toBe(false);
+    expect(canQueueSolveJob({ ...ready })).toBe(false);
   });
 
-  it('allows a solve when Air is assigned and the mesh is ready or coming', () => {
-    expect(canQueueSolveJob({ ...ready, hasMaterial: true })).toBe(true);
-    expect(canQueueSolveJob({ ...ready, meshReady: false, meshSoon: true, hasMaterial: true })).toBe(true);
+  it('allows a solve when the setup is ready and the mesh is ready or coming', () => {
+    expect(canQueueSolveJob({ ...ready, setupOk: true })).toBe(true);
+    expect(canQueueSolveJob({ ...ready, meshReady: false, meshSoon: true, setupOk: true })).toBe(true);
   });
 });
 
