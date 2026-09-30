@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { apiGet } from '../api/client';
 import { pluginTreeNodes, type PluginTreeNode } from '../plugin-api';
 import { useProjectStore } from '../store/project';
 import { pluginStudyScope, scopeBelongsToProject } from '../scope';
@@ -13,6 +12,7 @@ import {
   type ProjectTreeDoc,
   type StudyNode,
 } from './treeModel';
+import { onProjectTree, readProjectTree } from './treeFeed';
 import { getTreeSession, onTreeAction, subscribeTreeSession, treeExpanded } from './treeSession';
 
 function Mark({ ok, busy, queuePos }: { ok?: boolean; busy?: boolean; queuePos?: number }) {
@@ -580,48 +580,47 @@ export function LeftTree() {
   }, [studiesHost, showStudies]);
 
   useEffect(() => {
+    if (!projectId) {
+      docRef.current = null;
+      paint();
+      window.addEventListener('cfd:tree-sync', paint);
+      return () => window.removeEventListener('cfd:tree-sync', paint);
+    }
     let dead = false;
     const gen = generation;
-    // Refreshes overlap (a slow server tree call, then a newer one): paint an answer only
-    // if no later request has already painted, or a stale tree replaces the new run.
-    let sent = 0;
+    // One tree read per project at a time (treeFeed.ts), so answers land in order; still,
+    // paint an answer only if no later one has painted, or a stale tree replaces the new run.
     let painted = 0;
     // While plugin studies are being upgraded, read the tree again (a while at most).
     let followUps = 0;
     let followTimer: ReturnType<typeof setTimeout> | null = null;
-    const refresh = () => {
-      if (!projectId) {
-        docRef.current = null;
+    // Read now and on every cfd:tree-sync. Hears only reads sent from here on: not one
+    // sent for the project's previous load.
+    const stop = onProjectTree(projectId, ({ seq, doc, error }) => {
+      if (dead) return;
+      if (error) {
         paint();
         return;
       }
-      const mine = ++sent;
-      apiGet<ProjectTreeDoc>('/api/project/tree', { project_id: projectId })
-        .then((doc) => {
-          if (dead || mine < painted) return;
-          const live = useProjectStore.getState();
-          if (live.generation !== gen || live.projectId !== projectId) return;
-          painted = mine;
-          docRef.current = doc;
-          paint();
-          if (doc && doc.plugin_studies_migrating && followUps < 30 && !followTimer) {
-            followUps += 1;
-            followTimer = setTimeout(() => {
-              followTimer = null;
-              if (!dead) refresh();
-            }, 1000);
-          }
-        })
-        .catch(() => {
-          if (!dead) paint();
-        });
-    };
-    window.addEventListener('cfd:tree-sync', refresh);
-    refresh();
+      if (seq < painted) return;
+      const live = useProjectStore.getState();
+      if (live.generation !== gen || live.projectId !== projectId) return;
+      painted = seq;
+      docRef.current = doc;
+      paint();
+      if (doc && doc.plugin_studies_migrating && followUps < 30 && !followTimer) {
+        followUps += 1;
+        followTimer = setTimeout(() => {
+          followTimer = null;
+          if (!dead) readProjectTree(projectId);
+        }, 1000);
+      }
+    });
+    readProjectTree(projectId);
     return () => {
       dead = true;
+      stop();
       if (followTimer) clearTimeout(followTimer);
-      window.removeEventListener('cfd:tree-sync', refresh);
     };
   }, [projectId, generation]);
 

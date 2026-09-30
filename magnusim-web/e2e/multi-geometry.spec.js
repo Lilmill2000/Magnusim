@@ -40,6 +40,29 @@ async function setup(page, request, title) {
       }
     }
   };
+  // The tree reads (GET /api/project/tree) the page has sent, and how many are still out.
+  const treeReads = { sent: 0, open: 0, last: Date.now() };
+  const isTreeRead = (r) => new URL(r.url()).pathname === '/api/project/tree';
+  page.on('request', (r) => {
+    if (!isTreeRead(r)) return;
+    treeReads.sent += 1;
+    treeReads.open += 1;
+    treeReads.last = Date.now();
+  });
+  const treeReadDone = (r) => {
+    if (!isTreeRead(r)) return;
+    treeReads.open -= 1;
+    treeReads.last = Date.now();
+  };
+  page.on('requestfinished', treeReadDone);
+  page.on('requestfailed', treeReadDone);
+  // Once no tree read is out and none has come or gone for a second: the count so far.
+  const treeReadsSettled = async () => {
+    await expect
+      .poll(() => treeReads.open === 0 && Date.now() - treeReads.last > 1000, { timeout: 30_000 })
+      .toBe(true);
+    return treeReads.sent;
+  };
   const shown = () => page.evaluate(() => window.__CFD_W16__?.geometry?.id || null);
   const study = () =>
     page.evaluate(() => {
@@ -101,7 +124,7 @@ async function setup(page, request, title) {
       });
     return Date.now() - t0;
   };
-  return { pid, q, json, shown, study, stage, shot, round, tear, pickGeometry, timedSwitch };
+  return { pid, q, json, shown, study, stage, shot, round, tear, pickGeometry, timedSwitch, treeReadsSettled };
 }
 
 async function createStudy(page, { geometryId, copyFrom } = {}) {
@@ -214,6 +237,22 @@ test('two geometries: each keeps its own study, and a copied study lands on the 
   expect(await s.shown()).toBe(round.id);
   await expect(page.locator('#geometries-list .geo-item.is-selected')).toHaveAttribute('data-geom-id', round.id);
   s.stage('a late setup answer leaves the round plate without a study');
+  // A switch syncs the tree in three bursts (on the click or the study's activate answer,
+  // on the geometry's activate answer, on the hydrate answer); one of them has several
+  // syncs. A sync reads the tree at once when no read is out; the syncs that come while one
+  // is out share one follow-up when it lands. So one switch reads the tree 4 times at most.
+  // It used to send 8-10 reads, each waiting its turn on the one Python worker ahead of the
+  // switch's hydrate. Both ways: onto the plate with a study and onto the one without.
+  for (const g of [tear, round]) {
+    const before = await s.treeReadsSettled();
+    await s.pickGeometry(g);
+    const reads = (await s.treeReadsSettled()) - before;
+    s.stage(`switch to ${g.name}: ${reads} tree reads`);
+    expect(reads, `tree reads for one switch to ${g.name}`).toBeGreaterThanOrEqual(1);
+    expect(reads, `tree reads for one switch to ${g.name}`).toBeLessThanOrEqual(4);
+    // The last read painted: onto the teardrop, its study is the active one in the tree.
+    if (g === tear) await expect(page.locator(`#left-tree [data-w17-sim-id="${tearStudy}"] #btn-bcs-plus`)).toHaveCount(1);
+  }
   await s.pickGeometry(tear);
   await expect.poll(s.study).toEqual({ id: tearStudy, geom: tear.id });
   await s.pickGeometry(round);
