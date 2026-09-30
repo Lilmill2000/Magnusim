@@ -71,6 +71,12 @@ _SIBLING_LIST_KEY = {
 MATERIALS_MAX_BYTES = 256 * 1024
 MESH_LOG_EXCERPT_MAX = 4000
 
+# project.json key set only by cfddesk.project.scope.migrate_root_siblings.
+# write_project keeps the value on disk: Node writes project.json back from
+# copies it read earlier, and one read before the marker was set would erase
+# it, so the next project.tree would rewrite project.json to put it back.
+MIGRATION_MARKER = "siblings_migrated"
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -885,6 +891,9 @@ def write_project(project_dir: Path, body: dict[str, Any]) -> dict[str, Any]:
     body = dict(body)
     body["updated_at"] = body.get("updated_at") or now_iso()
     body["persistence"] = "filesystem"
+    marker = read_json(path).get(MIGRATION_MARKER)
+    if marker is not None:
+        body[MIGRATION_MARKER] = marker
     atomic_write(path, body)
     return body
 

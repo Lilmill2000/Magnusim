@@ -19,6 +19,7 @@ from cfddesk.project.paths import (
     walk_runs,
     walk_studies,
 )
+from cfddesk.project.web_writes import MIGRATION_MARKER, atomic_write
 
 _SIBLING_JSON = (
     "materials.json",
@@ -85,11 +86,6 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def _write_json(path: Path, doc: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -107,10 +103,16 @@ def _rows(doc: dict[str, Any] | None, *keys: str) -> list[dict[str, Any]]:
 def _mark_migration(project_dir: Path, value: bool | str) -> None:
     path = Path(project_dir) / "project.json"
     doc = _read_json(path)
-    if not doc or doc.get("siblings_migrated") == value:
+    if not doc or doc.get(MIGRATION_MARKER) == value:
         return
-    doc["siblings_migrated"] = value
-    _write_json(path, doc)
+    doc[MIGRATION_MARKER] = value
+    # Replace the file whole: Node parses project.json on every request, and a
+    # truncate-then-write lets it read half a file.
+    try:
+        atomic_write(path, doc)
+    except OSError:
+        # A reader held project.json through every retry. The next tree call marks it.
+        pass
 
 
 def _copy_if_newer(src: Path, dest: Path) -> bool:
@@ -132,7 +134,7 @@ def migrate_root_siblings(project_dir: Path) -> bool:
     """Copy root setup JSON into the only study. Two studies are left untouched."""
     root = Path(project_dir)
     proj = _read_json(root / "project.json") or {}
-    if proj.get("siblings_migrated") == "skipped-multi":
+    if proj.get(MIGRATION_MARKER) == "skipped-multi":
         return False
     studies = walk_studies(root)
     if len(studies) > 1:
@@ -161,7 +163,7 @@ def migrate_root_siblings(project_dir: Path) -> bool:
             if not mesh_path.is_file():
                 stored = {k: v for k, v in row.items() if k not in {"dir", "folder"}}
                 stored["simulation_id"] = sid
-                _write_json(mesh_path, stored)
+                atomic_write(mesh_path, stored)
             changed = True
     if sid and not walk_runs(root, sid):
         catalog = _read_json(root / "runs" / "catalog.json") or _read_json(study_dir / "catalog.json") or {}
@@ -173,7 +175,7 @@ def migrate_root_siblings(project_dir: Path) -> bool:
             if not run_path.is_file():
                 stored = {k: v for k, v in row.items() if k not in {"dir", "folder"}}
                 stored["simulation_id"] = sid
-                _write_json(run_path, stored)
+                atomic_write(run_path, stored)
             changed = True
     _mark_migration(root, True)
     return changed
