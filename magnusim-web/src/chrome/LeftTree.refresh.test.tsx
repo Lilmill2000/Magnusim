@@ -9,6 +9,7 @@ vi.mock('../api/client', () => ({
 
 import { apiGet } from '../api/client';
 import { LeftTree } from './LeftTree';
+import { applyTreeSession } from './treeSession';
 import { useProjectStore } from '../store/project';
 
 const tree = (runs: Array<{ id: string; name: string }>) => ({
@@ -53,6 +54,7 @@ function mountTree(generation = 1) {
 describe('LeftTree refresh', () => {
   afterEach(async () => {
     cleanup();
+    applyTreeSession({ studies: null });
     // Answer what is still out, so the next test starts with no read in flight.
     for (let i = 0; i < 10 && pending.length; i++) await answer(tree([]));
     vi.mocked(apiGet).mockClear();
@@ -102,6 +104,25 @@ describe('LeftTree refresh', () => {
     await answer(tree([{ id: 'r1', name: 'Run 1' }]));
     expect(treeText()).toContain('Run 1');
     expect(treeText()).not.toContain('Old run');
+  });
+
+  it('a study deleted in the workbench loses its row, and the + moves, before the next read lands', async () => {
+    mountTree();
+    const doc = tree([]);
+    doc.geometries[0].studies = [
+      { id: 's1', name: 'Baseline', geometry_id: 'g1', active: false, meshes: [], runs: [] },
+      { id: 's2', name: 'Baseline copy', geometry_id: 'g1', active: true, meshes: [], runs: [] },
+    ];
+    await answer(doc);
+    const plusOn = () =>
+      document.getElementById('btn-bcs-plus')?.closest('[data-w17-sim-id]')?.getAttribute('data-w17-sim-id');
+    expect(plusOn()).toBe('s2');
+    // The delete lands: the workbench has Baseline open, and the read it asks for is still out.
+    act(() => applyTreeSession({ studies: { projectId: 'p1', gone: ['s2'], activeId: 's1' } }));
+    await syncs(1);
+    expect(reads()).toBe(2);
+    expect(document.querySelector('[data-w17-sim-id="s2"]')).toBeNull();
+    expect(plusOn()).toBe('s1');
   });
 
   it('a failed read does not stop the next one', async () => {

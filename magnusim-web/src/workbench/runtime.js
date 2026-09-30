@@ -115,6 +115,10 @@ try { window.__CFD_JOB_QUEUE__ = jobQueue; } catch (_) {}
 const liveCompute = { kind: null, run_id: null, mesh_id: null, project_id: null };
 // Last study used on each geometry ("<project>|<geometry>"), so switching back returns to it.
 const lastStudyByGeometry = Object.create(null);
+// Studies the open project has seen go: `deleted` here (for good: a list sent a moment
+// later can still carry one), or `missing` from a newer list of its studies (until a list
+// has them again). `projectId` is set once that project's list is in.
+const goneStudies = { projectId: '', deleted: new Set(), missing: new Set() };
 
 function currentStudyId() {
   try {
@@ -19519,6 +19523,9 @@ function resetWorkbenchCatalogs() {
   studyCatalog.simulations = [];
   studyCatalog.activeId = null;
   studyCatalog.project_id = null;
+  goneStudies.projectId = '';
+  goneStudies.deleted = new Set();
+  goneStudies.missing = new Set();
   materialCatalog.material = null;
   materialCatalog.materials_all = [];
   materialCatalog.project_id = null;
@@ -19576,6 +19583,7 @@ function resetWorkbenchScope(nextId) {
         expanded: { ...(treeUi.expanded || {}) },
         selectedKey: null,
         activity: null,
+        studies: null,
       });
     } catch (_) {}
   } else {
@@ -20240,6 +20248,7 @@ function refreshSetupTree() {
           expanded: { ...(treeUi.expanded || {}) },
           selectedKey: treeUi.selectedKey || null,
           activity: window.__CFD_JOB_ACTIVITY__ || null,
+          studies: treeStudies(),
         });
       } catch (_) {}
       window.dispatchEvent(new CustomEvent('cfd:tree-sync'));
@@ -20844,6 +20853,56 @@ function persistLockedStudyOrder(list, projectId) {
   });
 }
 
+/**
+ * A newer list of the project's studies (null: none came) and the study a delete removed.
+ * The studies the list no longer has are missing; returns the list without the ones
+ * deleted here.
+ */
+function noteStudyList(list, projectId, deletedId) {
+  const pid = String(projectId || currentProjectId() || '');
+  if (!pid) return Array.isArray(list) ? list : [];
+  const sameProject = goneStudies.projectId === pid;
+  if (!sameProject) {
+    goneStudies.projectId = pid;
+    goneStudies.deleted = new Set();
+    goneStudies.missing = new Set();
+  }
+  if (typeof deletedId === 'string' && deletedId) goneStudies.deleted.add(deletedId);
+  if (!Array.isArray(list)) return [];
+  const live = list.filter((s) => !(s && goneStudies.deleted.has(String(s.id || ''))));
+  const next = new Set(live.map((s) => String((s && s.id) || '')).filter(Boolean));
+  if (sameProject) {
+    for (const s of studyCatalog.simulations || []) {
+      const id = String((s && s.id) || '');
+      if (id && !next.has(id)) goneStudies.missing.add(id);
+    }
+  }
+  // Listed again: an older answer had left it out.
+  for (const id of next) goneStudies.missing.delete(id);
+  return live;
+}
+
+/**
+ * A study the open project had and no longer has. The tree can still show its row from
+ * a read sent before the delete; selecting it must not open the deleted study again.
+ */
+function studyIsGone(simId) {
+  const id = String(simId || '').trim();
+  if (!id || goneStudies.projectId !== String(currentProjectId() || '')) return false;
+  return goneStudies.deleted.has(id) || goneStudies.missing.has(id);
+}
+
+/** The workbench's word on the studies for the React tree (TreeStudies), once it has their list. */
+function treeStudies() {
+  const pid = String(currentProjectId() || '');
+  if (!pid || goneStudies.projectId !== pid) return null;
+  return {
+    projectId: pid,
+    gone: [...goneStudies.deleted, ...goneStudies.missing],
+    activeId: String(studyCatalog.activeId || ''),
+  };
+}
+
 function applySimulationRecord(sim, projectId, extra) {
   if (!sim) {
     studyCatalog.simulation = null;
@@ -20852,8 +20911,10 @@ function applySimulationRecord(sim, projectId, extra) {
     studyCatalog.ready = false;
     studyCatalog.created = false;
     if (extra && Array.isArray(extra.simulations)) {
-      studyCatalog.simulations = applyStudyOrderLock(extra.simulations, projectId);
+      const listed = noteStudyList(extra.simulations, projectId, extra.deleted);
+      studyCatalog.simulations = applyStudyOrderLock(listed, projectId);
     } else if (extra && extra.deleted) {
+      noteStudyList(null, projectId, extra.deleted);
       studyCatalog.simulations = [];
       writeStudyOrderLock([], projectId);
     }
@@ -20878,8 +20939,9 @@ function applySimulationRecord(sim, projectId, extra) {
     created_at: sim.created_at,
   };
   if (extra && Array.isArray(extra.simulations)) {
-    const serverIds = extra.simulations.map((s) => String(s && s.id || '')).filter(Boolean);
-    studyCatalog.simulations = applyStudyOrderLock(extra.simulations, projectId || (sim && sim.project_id));
+    const listed = noteStudyList(extra.simulations, projectId || (sim && sim.project_id), extra.deleted);
+    const serverIds = listed.map((s) => String(s && s.id || '')).filter(Boolean);
+    studyCatalog.simulations = applyStudyOrderLock(listed, projectId || (sim && sim.project_id));
     const localIds = (studyCatalog.simulations || []).map((s) => String(s && s.id || '')).filter(Boolean);
     if (serverIds.join('\0') !== localIds.join('\0')) {
       persistLockedStudyOrder(studyCatalog.simulations, projectId || (sim && sim.project_id));
@@ -20966,6 +21028,7 @@ async function createSimulationClient(opts) {
 async function selectStudyClient(simId) {
   const id = String(simId || '').trim();
   if (!id) return;
+  if (studyIsGone(id)) return { stale: true, gone: true };
   if (
     studyCatalog.activeId === id &&
     studyCatalog.simulation &&
@@ -21070,7 +21133,7 @@ async function deleteStudyClient(simId) {
   });
   const j = await r.json();
   if (!r.ok || !j.ok) throw new Error((j && j.error) || 'Could not delete simulation');
-  applySimulationRecord(j.simulation || null, j.project_id, j);
+  applySimulationRecord(j.simulation || null, j.project_id, { ...j, deleted: String(j.deleted || id) });
   try { if (typeof hideMeshInspect === 'function') hideMeshInspect({ silent: true }); } catch (_) {}
   try { hideAllTreeDetails(); } catch (_) {}
   const wantGeom = j.simulation && j.simulation.geometry_id;
@@ -21635,6 +21698,7 @@ function closeMaterialLibrary() {
 
 function addMaterialForStudy(simId) {
   const sid = String(simId || '').trim();
+  if (studyIsGone(sid)) return;
   const go = () => {
     try { openMaterialLibrary(); } catch (_) {}
   };
@@ -21646,6 +21710,7 @@ function addMaterialForStudy(simId) {
 
 function addBcForStudy(simId) {
   const sid = String(simId || '').trim();
+  if (studyIsGone(sid)) return;
   const go = () => {
     try { openBcTypeModal(); } catch (_) {}
   };
@@ -34855,6 +34920,12 @@ function applyStudyDropOrder(ids, geometryId) {
       const scopedNode = e.target.closest && e.target.closest('[data-scope-key]');
       const rowScope = scopedNode && scopedNode.getAttribute('data-scope-key');
       if (rowScope && !scopeBelongsToProject(rowScope, String(currentProjectId() || ''))) return;
+      const inStudy = e.target.closest && e.target.closest('[data-w17-sim-id]');
+      if (inStudy && studyIsGone(inStudy.getAttribute('data-w17-sim-id'))) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       const refsPlus = e.target.closest('[data-refs-plus]');
       if (refsPlus) {
         e.preventDefault();

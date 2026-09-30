@@ -537,7 +537,7 @@ export function LeftTree() {
   function paint() {
     const session = getTreeSession();
     const projectId = useProjectStore.getState().projectId || '';
-    setModel(readSetupTree(docRef.current, session.activity, session.selectedKey));
+    setModel(readSetupTree(docRef.current, session.activity, session.selectedKey, session.studies));
     const fromServer = (docRef.current?.plugin_nodes || [])
       .map((node) => ({
         label: String(node.label || node.name || ''),

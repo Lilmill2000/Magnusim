@@ -15,11 +15,25 @@ export interface TreeActivity {
   }>;
 }
 
+/**
+ * The project's studies as the workbench has them, once it has their list. A tree read
+ * sent before a study was deleted still has its row (active, with the + buttons) until
+ * the next read lands; the workbench's word wins over that read.
+ */
+export interface TreeStudies {
+  projectId: string;
+  /** Studies it has seen go: their rows are dropped. */
+  gone: string[];
+  /** The study it has open ('' for none): that row is the active one. */
+  activeId: string;
+}
+
 export interface TreeSession {
   projectId: string;
   expanded: Record<string, boolean>;
   selectedKey: string | null;
   activity: TreeActivity | null;
+  studies: TreeStudies | null;
 }
 
 /** A tree row's action: its scope key, the action, and what the row shows (a plugin study's title and rev). */
@@ -30,6 +44,7 @@ let session: TreeSession = {
   expanded: {},
   selectedKey: null,
   activity: null,
+  studies: null,
 };
 let actionHandler: TreeActionHandler | null = null;
 const listeners = new Set<() => void>();
@@ -50,6 +65,7 @@ export function applyTreeSession(next: Partial<TreeSession>): void {
     expanded: next.expanded ? { ...next.expanded } : session.expanded,
     selectedKey: next.selectedKey !== undefined ? next.selectedKey : session.selectedKey,
     activity: next.activity !== undefined ? next.activity : session.activity,
+    studies: next.studies !== undefined ? next.studies : session.studies,
   };
   listeners.forEach((fn) => fn());
 }

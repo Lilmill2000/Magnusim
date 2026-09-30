@@ -1,6 +1,6 @@
 import { scopeBelongsToProject } from '../scope';
 import { runHasVisibleResults } from '../workbench/jobQueueOrder';
-import type { TreeActivity } from './treeSession';
+import type { TreeActivity, TreeStudies } from './treeSession';
 
 export interface MeshNode {
   id: string;
@@ -220,15 +220,20 @@ export function readSetupTree(
   doc?: ProjectTreeDoc | null,
   activity?: TreeActivity | null,
   selectedKey: string | null = null,
+  workbench?: TreeStudies | null,
 ): SetupTreeModel {
   const projectId = str(doc?.project_id);
   const act = scopedActivity(activity, projectId);
+  // The workbench's studies win over an older read: a deleted study has no row, and the
+  // active row (the one with the + buttons) is the study the workbench has open.
+  const known = workbench && projectId && workbench.projectId === projectId ? workbench : null;
+  const gone = new Set(known ? known.gone : []);
   const owned = <T extends { key?: string }>(nodes: T[] | undefined): T[] =>
     (nodes || []).filter((node) => !node?.key || !projectId || scopeBelongsToProject(String(node.key), projectId));
   const geoms: GeomNode[] = owned(doc?.geometries).map((geom) => {
     const gid = str(geom.id);
     const studies = owned(geom.studies)
-      .filter((study) => study && str(study.geometry_id) === gid)
+      .filter((study) => study && str(study.geometry_id) === gid && !gone.has(str(study.id)))
       .slice()
       .sort((a, b) => {
         const ai = Number(a.sort_index);
@@ -250,7 +255,7 @@ export function readSetupTree(
           name: str(study.name, 'Simulation'),
           geometryId: str(study.geometry_id),
           scopeKey: study.key,
-          active: !!study.active,
+          active: known ? !!sid && sid === known.activeId : !!study.active,
           materialsAssigned: volumes.length > 0,
           materialName: str(study.material_name, 'Air'),
           materialVolumes: volumes,

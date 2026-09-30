@@ -225,22 +225,56 @@ test('workbench: a study renamed, cloned and deleted; meshes and runs added, ren
   await page.waitForTimeout(1500);
   expect((await runs()).filter((n) => n.startsWith('Race'))).toEqual([]);
 
-  // Delete the clone; the original stays with its BC.
+  // Delete the clone; the original stays with its BC. The tree's reads are held from the
+  // delete on, so the tree keeps its read from before: the clone's row, active, with the
+  // BC + on it. That row used to stay until a read landed, and a click on it or its +
+  // went back to the deleted study (a BC added then was saved nowhere to be seen).
   await studyRow(page, clone).click();
   await studyPanel.locator('button.mat-clear-link[title="Delete this simulation"]').click();
-  await page.locator('#cf-confirm').click();
-  await expect.poll(async () => (await studies()).map((s) => s.id)).toEqual([sid]);
-  expect((await bcs(sid)).length).toBe(1);
-
-  // A Wall BC has its own wall type: editing it leaves the Slip default alone
-  // (it used to overwrite the default with the Wall's No-slip).
-  await page.locator('#btn-bcs-plus').click();
-  await page.locator('#panel-bc-picker .cfd-island [data-bc-key="wall"]').click();
-  await page.locator('#panel-bc-picker .cfd-island [data-bc-add="1"]').click();
+  const isTreeRead = (url) => url.pathname === '/api/project/tree';
+  const heldReads = [];
+  let releaseReads = () => {};
+  const readsHeld = new Promise((resolve) => {
+    releaseReads = resolve;
+  });
+  const holdRead = async (route) => {
+    heldReads.push(route.request().url());
+    await readsHeld;
+    await route.continue().catch(() => {});
+  };
+  await page.route(isTreeRead, holdRead);
   const wallEditor = page.locator('#panel-bc-editor .cfd-island [data-bc-editor="1"]');
-  await expect(wallEditor).toBeVisible();
   const wallRec = async () => (await bcs(sid)).find((b) => b.bc_type === 'Wall');
-  await expect.poll(async () => (await wallRec())?.wall_type).toBe('No-slip');
+  try {
+    await page.locator('#cf-confirm').click();
+    await expect.poll(async () => (await studies()).map((s) => s.id)).toEqual([sid]);
+    expect((await bcs(sid)).length).toBe(1);
+    await expect.poll(() => page.evaluate(() => window.__CFD_W17__.activeId)).toBe(sid);
+    await expect.poll(() => heldReads.length).toBeGreaterThan(0);
+    // No row of the deleted study; the + is on the study that is left.
+    await expect(page.locator(`#left-tree [data-w17-sim-id="${clone}"]`)).toHaveCount(0);
+    await expect(page.locator(`#left-tree [data-w17-sim-id="${sid}"] #btn-bcs-plus`)).toHaveCount(1);
+    // Asked for by id (an old button, a queued job), the deleted study is not opened again.
+    await page.evaluate((id) => window.__CFD_ADD_BC__(id), clone);
+    expect(await page.evaluate(() => window.__CFD_W17__.activeId)).toBe(sid);
+    await expect(page.locator('#panel-bc-picker')).toBeHidden();
+
+    // A Wall BC has its own wall type: editing it leaves the Slip default alone
+    // (it used to overwrite the default with the Wall's No-slip). Added before any
+    // tree read lands, it goes to the study that is left.
+    await page.locator('#btn-bcs-plus').click();
+    await page.locator('#panel-bc-picker .cfd-island [data-bc-key="wall"]').click();
+    await page.locator('#panel-bc-picker .cfd-island [data-bc-add="1"]').click();
+    await expect(wallEditor).toBeVisible();
+    await expect.poll(async () => (await wallRec())?.wall_type).toBe('No-slip');
+    expect(await page.evaluate(() => window.__CFD_W17__.activeId)).toBe(sid);
+    expect(heldReads.length).toBeGreaterThan(0);
+  } finally {
+    releaseReads();
+    await page.unroute(isTreeRead, holdRead);
+  }
+  await expect(page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w19-bc]`)).toHaveCount(2);
+  await expect(page.locator(`#left-tree [data-w17-sim-id="${clone}"]`)).toHaveCount(0);
   const wallType = wallEditor.getByLabel('Wall type');
   await expect(wallType).toHaveValue('No-slip');
   await wallType.selectOption('Slip');

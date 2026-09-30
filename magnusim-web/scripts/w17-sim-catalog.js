@@ -224,7 +224,7 @@ export function persistStudyNames(list) {
   }));
 }
 
-export function saveCatalog(projectId, catalog) {
+export function saveCatalog(projectId, catalog, opts) {
   const simulations = stampStudyOrder(persistStudyNames(catalog.simulations || [])).map(withStudyAnalysisKey);
   const active_id =
     catalog.active_id && simulations.some((s) => s.id === catalog.active_id)
@@ -235,10 +235,15 @@ export function saveCatalog(projectId, catalog) {
   for (const s of simulations) {
     writeActiveMirror(projectId, s);
   }
+  // A study being deleted (opts.drop) keeps its folder until the caller removes it after
+  // this save. The walk still finds it; it must not be listed again (the index kept it,
+  // and hydrate and activate then brought the deleted study back).
+  const drop = new Set(((opts && opts.drop) || []).map((id) => String(id)));
   const walked = catalogFromWalk(projectDir(projectId), active_id);
-  const merged = stampStudyOrder(mergeStudyOrder(walked.simulations, simulations));
+  const live = walked.simulations.filter((s) => !drop.has(String(s.id)));
+  const merged = stampStudyOrder(mergeStudyOrder(live, simulations));
   const doc = {
-    active_id: walked.active_id,
+    active_id: drop.has(String(walked.active_id)) ? (merged[0] && merged[0].id) || null : walked.active_id,
     simulations: merged,
     updated_at: new Date().toISOString(),
   };
@@ -438,5 +443,5 @@ export function deleteSimulationFromCatalog(projectId, proj, simId) {
       : list[0]
         ? list[0].id
         : null;
-  return saveCatalog(projectId, { simulations: list, active_id: nextActive });
+  return saveCatalog(projectId, { simulations: list, active_id: nextActive }, { drop: [want] });
 }

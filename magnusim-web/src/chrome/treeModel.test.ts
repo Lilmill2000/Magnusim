@@ -176,3 +176,39 @@ describe('readSetupTree job marks', () => {
     expect(otherStudy.runs.find((r) => r.id === 'run2')?.busy).toBe(false);
   });
 });
+
+describe('readSetupTree with the workbench studies', () => {
+  // Baseline, and its copy that was open (active) when this read was sent.
+  function twoStudies(): ProjectTreeDoc {
+    const doc = treeDoc();
+    doc.geometries![0].studies = [
+      { id: 's1', name: 'Baseline', geometry_id: 'g1', key: 'p:p1/g:g1/s:s1', sort_index: 0 },
+      { id: 's2', name: 'Baseline copy', geometry_id: 'g1', key: 'p:p1/g:g1/s:s2', sort_index: 1, active: true },
+    ];
+    return doc;
+  }
+  const rows = (doc: ProjectTreeDoc, studies?: Parameters<typeof readSetupTree>[3]) =>
+    readSetupTree(doc, null, null, studies).geoms[0].studies.map((s) => [s.id, s.active]);
+
+  it('drops a study the workbench has seen go; the study it has open is the active one', () => {
+    expect(rows(twoStudies(), { projectId: 'p1', gone: ['s2'], activeId: 's1' })).toEqual([['s1', true]]);
+  });
+
+  it('no study open: no row is active', () => {
+    expect(rows(twoStudies(), { projectId: 'p1', gone: [], activeId: '' })).toEqual([
+      ['s1', false],
+      ['s2', false],
+    ]);
+  });
+
+  it("keeps the read's own marks until the workbench has this project's list", () => {
+    expect(rows(twoStudies())).toEqual([
+      ['s1', false],
+      ['s2', true],
+    ]);
+    expect(rows(twoStudies(), { projectId: 'p2', gone: ['s2'], activeId: 's1' })).toEqual([
+      ['s1', false],
+      ['s2', true],
+    ]);
+  });
+});
