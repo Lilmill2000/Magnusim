@@ -1,14 +1,14 @@
 import { expect, test } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NO_WSL } from './toolchain.js';
+import { NO_WSL } from '../../../e2e/toolchain.js';
 
 // A transient run's Animation steps through its saved time steps: opening it keeps the
 // parts coloring (no particle trace, unlike a steady run), Play moves the field frame by
 // frame, and while frames are still loading the viewport says so, even while another
 // solve holds the job chip.
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
-const ROUND = join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry', 'transient-test.step');
+const ROUND = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'python', 'tests', 'fixtures', 'geometry', 'transient-test.step');
 
 test('transient animation: time steps by default, plays while another solve runs, shows loading', async ({ page, request }) => {
   test.skip(!WSL, NO_WSL);

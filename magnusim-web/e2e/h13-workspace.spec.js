@@ -1,9 +1,6 @@
 import { expect, test } from '@playwright/test';
-import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from './prepare-projects.js';
+import { NO_GEOMETRY_PROJECT } from './prepare-projects.js';
+import { startHost } from './support/host-server.mjs';
 
 // H13, a plugin's full workspace as the user meets it: a study opens in the
 // plugin's own page, in a sandboxed frame over the workbench, with the app's
@@ -22,53 +19,12 @@ function stage(t0, msg) {
   console.log(`[h13 +${Math.round((Date.now() - t0) / 1000)}s] ${msg}`);
 }
 
-async function waitUp(url, ms) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    try {
-      const r = await fetch(url);
-      if (r.status < 500) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  return false;
-}
-
-function killTree(child) {
-  if (!child || child.exitCode != null) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else child.kill('SIGKILL');
-}
-
 test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers', async ({ page, request }) => {
   test.setTimeout(300_000);
   page.setDefaultTimeout(30_000);
   const t0 = Date.now();
-  const port = String(Number(process.env.MAGNUSIM_E2E_PORT || 8083) + 13);
-  const base = `http://127.0.0.1:${port}`;
-  const tmp = mkdtempSync(join(tmpdir(), 'magnusim-h13-'));
-  const projects = join(tmp, 'projects');
-  prepareE2eProjectsRoot(projects);
-  const plugins = join(tmp, 'plugins');
-  cpSync(resolve('python/tests/fixtures/workspace-plugins'), plugins, { recursive: true });
-  const prefs = join(tmp, 'prefs.json');
-  writeFileSync(prefs, JSON.stringify({ wizard_completed: true, units: 'Metric', port: Number(port) }));
-  const server = spawn(process.execPath, [resolve('node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--strictPort'], {
-    env: {
-      ...process.env,
-      MAGNUSIM_PROJECTS_ROOT: projects,
-      MAGNUSIM_LOCAL_JSON: prefs,
-      MAGNUSIM_PORT: port,
-      MAGNUSIM_BOUND_PORT: port,
-      MAGNUSIM_PLUGINS_DIR: plugins,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let log = '';
-  server.stdout.on('data', (d) => (log += d));
-  server.stderr.on('data', (d) => (log += d));
+  const host = await startHost({ name: 'h13', pluginsFrom: 'python/tests/fixtures/workspace-plugins' });
+  const { base } = host;
   const newStudy = async (kind, title) => {
     const r = await request.post(`${base}/api/plugin-studies/create`, { data: { project_id: PROJECT, plugin: KEY, kind, title } });
     const j = await r.json();
@@ -76,7 +32,6 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     return j.study;
   };
   try {
-    expect(await waitUp(`${base}/api/registry`, 120_000), `second server did not start:\n${log.slice(-2000)}`).toBe(true);
     const bench = await newStudy('bench_case', 'Wing section');
     const silent = await newStudy('silent_case', 'Quiet one');
     // Names taken (one in other letters), so "+ New Bench case" offers "Bench case 3".
@@ -346,11 +301,6 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     await expect(card.locator('h2')).toHaveText('This study no longer exists.', { timeout: 60_000 });
     stage(t0, 'deleted study');
   } finally {
-    killTree(server);
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* a file may still be held for a moment */
-    }
+    host.stop();
   }
 });

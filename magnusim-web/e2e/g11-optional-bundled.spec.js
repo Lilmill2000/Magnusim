@@ -1,9 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from './prepare-projects.js';
+import { e2eTemp, startHost } from './support/host-server.mjs';
 
 // G11, an optional bundled plugin that ships off (manifest default_enabled = false),
 // as the user meets it: existing projects look unchanged (no STUDIES, no Workspaces
@@ -41,33 +40,11 @@ function writeStudy(projects, pid, plugin, rec) {
   writeFileSync(join(folder, 'study.json'), JSON.stringify(full, null, 2));
 }
 
-async function waitUp(url, ms) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    try {
-      const r = await fetch(url);
-      if (r.status < 500) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  return false;
-}
-
-function killTree(child) {
-  if (!child || child.exitCode != null) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else child.kill('SIGKILL');
-}
-
 test('gate:g11-optional-bundled a plugin that ships off is listed, turned on, remembered and turned off', async ({ page, request }) => {
   test.setTimeout(300_000);
   page.setDefaultTimeout(30_000);
   const t0 = Date.now();
-  const port = String(Number(process.env.MAGNUSIM_E2E_PORT || 8083) + 15);
-  const base = `http://127.0.0.1:${port}`;
-  const tmp = mkdtempSync(join(tmpdir(), 'magnusim-g11-'));
+  const tmp = e2eTemp('g11');
   const projects = join(tmp, 'projects');
   prepareE2eProjectsRoot(projects);
   const bundled = join(tmp, 'bundled');
@@ -95,35 +72,17 @@ test('gate:g11-optional-bundled a plugin that ships off is listed, turned on, re
   // Saved while the plugin had another name: its study keeps that one, not the manifest's now.
   writeStudy(projects, NO_GEOMETRY_PROJECT, BROKEN, { id: 'st-broken-1', title: 'Bracket', plugin_name: 'Older demo' });
   writeStudy(projects, NO_GEOMETRY_PROJECT, NAMELESS, { id: 'st-nameless-1', title: 'Housing', plugin_name: 'Nameless demo' });
-  const plugins = join(tmp, 'plugins');
-  mkdirSync(plugins);
-  const prefs = join(tmp, 'prefs.json');
-  writeFileSync(prefs, JSON.stringify({ wizard_completed: true, units: 'Metric', port: Number(port) }));
+  const host = await startHost({ name: 'g11', tmp, projects, bundledDir: bundled });
+  const { base, prefs } = host;
   const lists = () => {
     const p = JSON.parse(readFileSync(prefs, 'utf8')).plugins || {};
     return { disabled: p.disabled || [], enabled: p.enabled || [] };
   };
-  const server = spawn(process.execPath, [resolve('node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--strictPort'], {
-    env: {
-      ...process.env,
-      MAGNUSIM_PROJECTS_ROOT: projects,
-      MAGNUSIM_LOCAL_JSON: prefs,
-      MAGNUSIM_PORT: port,
-      MAGNUSIM_BOUND_PORT: port,
-      MAGNUSIM_BUNDLED_DIR: bundled,
-      MAGNUSIM_PLUGINS_DIR: plugins,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let log = '';
-  server.stdout.on('data', (d) => (log += d));
-  server.stderr.on('data', (d) => (log += d));
   const listed = async () => {
     const j = await (await request.get(`${base}/api/plugins`)).json();
     return (j.plugins || []).find((p) => p.key === KEY) || null;
   };
   try {
-    expect(await waitUp(`${base}/api/registry`, 120_000), `second server did not start:\n${log.slice(-2000)}`).toBe(true);
 
     // Off: listed (so it can be turned on), nothing of it runs or shows.
     expect(await listed()).toMatchObject({ status: 'disabled', default_enabled: false, tier: 'bundled', name: 'Optional demo' });
@@ -229,11 +188,6 @@ test('gate:g11-optional-bundled a plugin that ships off is listed, turned on, re
     await expect(wizard).toBeHidden();
     stage(t0, 'broken manifests: bundled, by name, parser line and column; their studies name the plugin');
   } finally {
-    killTree(server);
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* a file may still be held for a moment */
-    }
+    host.stop();
   }
 });

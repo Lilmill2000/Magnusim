@@ -64,10 +64,10 @@ Use Node 24 LTS and Python 3.10–3.12. Run `npm test` and `npm run build` here;
 run `ruff check cfddesk tools tests`, `mypy cfddesk`, and `pytest` under `python/`.
 The browser suite (`npm run test:e2e`) runs every test by default, including real
 meshing and solving, whenever WSL with OpenFOAM is on the PC; without it those tests
-are skipped and say why. `MAGNUSIM_E2E_WSL=0` (or `MAGNUSIM_E2E_HEAVY=0` for the long
-solves) skips them on purpose; `MAGNUSIM_E2E_WSL=1` fails the run if the toolchain is
-missing. `e2e/phase1-land9-solve.spec.js` checks a public deployment and runs only with
-`MAGNUSIM_PUBLIC_E2E=1` and its URL settings.
+are skipped and say why. That full run (45–60 minutes) is the check before a push;
+before a commit, `npm run test:e2e:changed` runs only the suites the change can
+affect, without WSL. [docs/TESTING.md](docs/TESTING.md) has the tiers, the suites
+(core and one per bundled plugin), and the WSL flags.
 
 Remote hosting requires an authenticated reverse proxy and an explicit
 `MAGNUSIM_ALLOWED_HOSTS` list. See [security](../SECURITY.md) and

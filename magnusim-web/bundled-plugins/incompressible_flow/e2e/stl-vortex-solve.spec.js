@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NO_HEAVY } from './toolchain.js';
+import { NO_HEAVY } from '../../../e2e/toolchain.js';
 
 // Step 2 acceptance (docs/STL-STEP-mesh-handoff.md): the faceted STL of the vortex
 // part is grouped into real surfaces, its two ports take pressure BCs, the Standard
@@ -11,7 +11,7 @@ import { NO_HEAVY } from './toolchain.js';
 // OpenFOAM (see toolchain.js); a full mesh and a 200-iteration solve take minutes.
 const HEAVY = process.env.MAGNUSIM_E2E_HEAVY === '1';
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
-const STL = join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry', 'elbow.stl');
+const STL = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'python', 'tests', 'fixtures', 'geometry', 'elbow.stl');
 
 // Both meshers the app offers: Standard (discrete surfaces, hex core) and Hex-dominant
 // (snappyHexMesh, one surface per BC patch).

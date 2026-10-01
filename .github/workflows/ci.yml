@@ -66,11 +66,17 @@ jobs:
       - run: npx playwright test
         env:
           CI: "1"
+      # Incompressible Flow's own browser suite, on the same Playwright and app server
+      # (its tests that mesh or solve skip here: CI has no WSL).
+      - run: npx playwright test -c bundled-plugins/incompressible_flow/e2e/playwright.config.js
+        env:
+          CI: "1"
 
   # The analysis contract's boundary: the core never imports a bundled plugin,
   # plugins import only magnusim_sdk, cfddesk.registry and the standard library,
-  # the core names no incompressible physics, and magnusim_sdk imports with
-  # nothing else installed.
+  # the core names no incompressible physics, the core's packages import only
+  # what tools/core_layers.py allows, and magnusim_sdk imports with nothing else
+  # installed.
   plugin-boundary:
     runs-on: ubuntu-latest
     defaults:
@@ -85,6 +91,9 @@ jobs:
         run: python tools/plugin_boundary.py
       - name: No core physics
         run: python tools/core_physics_scan.py
+      # Which cfddesk packages may import which (a new dependency is added on purpose).
+      - name: Core package dependencies
+        run: python tools/core_layers.py
       - name: magnusim_sdk alone
         run: |
           python -m venv "$RUNNER_TEMP/sdk-only"

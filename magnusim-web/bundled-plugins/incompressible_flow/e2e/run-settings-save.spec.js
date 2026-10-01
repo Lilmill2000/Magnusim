@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { RUN_SETTINGS_PROJECT } from './prepare-projects.js';
+import { RUN_SETTINGS_PROJECT } from '../../../e2e/prepare-projects.js';
 
 // A steady run's Iterations and Write interval, typed one after the other, are
 // both kept: in the Run panel, in the saved run and in what Start sends.

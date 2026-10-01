@@ -1,9 +1,6 @@
 import { expect, test } from '@playwright/test';
-import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from './prepare-projects.js';
+import { NO_GEOMETRY_PROJECT } from './prepare-projects.js';
+import { startHost } from './support/host-server.mjs';
 
 // G7, a plugin's workspace frame as the user meets it: the page has the keyboard
 // once it connects and gets it back after the app's own dialogs, but never takes
@@ -32,53 +29,12 @@ function stage(t0, msg) {
   console.log(`[g7 +${Math.round((Date.now() - t0) / 1000)}s] ${msg}`);
 }
 
-async function waitUp(url, ms) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    try {
-      const r = await fetch(url);
-      if (r.status < 500) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  return false;
-}
-
-function killTree(child) {
-  if (!child || child.exitCode != null) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else child.kill('SIGKILL');
-}
-
 test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on every way out', async ({ page, request }) => {
   test.setTimeout(600_000);
   page.setDefaultTimeout(30_000);
   const t0 = Date.now();
-  const port = String(Number(process.env.MAGNUSIM_E2E_PORT || 8083) + 14);
-  const base = `http://127.0.0.1:${port}`;
-  const tmp = mkdtempSync(join(tmpdir(), 'magnusim-g7-'));
-  const projects = join(tmp, 'projects');
-  prepareE2eProjectsRoot(projects);
-  const plugins = join(tmp, 'plugins');
-  cpSync(resolve('python/tests/fixtures/workspace-plugins'), plugins, { recursive: true });
-  const prefs = join(tmp, 'prefs.json');
-  writeFileSync(prefs, JSON.stringify({ wizard_completed: true, units: 'Metric', port: Number(port) }));
-  const server = spawn(process.execPath, [resolve('node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--strictPort'], {
-    env: {
-      ...process.env,
-      MAGNUSIM_PROJECTS_ROOT: projects,
-      MAGNUSIM_LOCAL_JSON: prefs,
-      MAGNUSIM_PORT: port,
-      MAGNUSIM_BOUND_PORT: port,
-      MAGNUSIM_PLUGINS_DIR: plugins,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let log = '';
-  server.stdout.on('data', (d) => (log += d));
-  server.stderr.on('data', (d) => (log += d));
+  const host = await startHost({ name: 'g7', pluginsFrom: 'python/tests/fixtures/workspace-plugins' });
+  const { base } = host;
 
   // The app's API, as another tab or a script would use it (not through this page).
   const api = async (path, data) => {
@@ -209,7 +165,6 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
   };
 
   try {
-    expect(await waitUp(`${base}/api/registry`, 120_000), `second server did not start:\n${log.slice(-2000)}`).toBe(true);
     const bench = await newStudy('bench_case', 'Wing section');
     const tail = await newStudy('bench_case', 'Tail section');
     const scratch = await newStudy('bench_case', 'Scratch');
@@ -842,11 +797,6 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     page.off('dialog', onDialog);
     stage(t0, 'g7-beforeunload');
   } finally {
-    killTree(server);
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* a file may still be held for a moment */
-    }
+    host.stop();
   }
 });

@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NO_WSL } from './toolchain.js';
-import { PYTHON } from '../scripts/python-env.js';
+import { NO_WSL } from '../../../e2e/toolchain.js';
+import { PYTHON } from '../../../scripts/python-env.js';
 
 // Post-processing on a real solve, through the UI: cutting planes (add, second plane,
 // axis, vectors, delete), coloring by pressure, the legend's typed range and reset,
@@ -11,8 +11,8 @@ import { PYTHON } from '../scripts/python-env.js';
 // the first's settings and gets an area-average monitor on the outlet (picked in the
 // viewport) that reports values, and a third run that is stopped while it solves.
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
-const ROUND = join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry', 'transient-test.step');
-const PY_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'python');
+const ROUND = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'python', 'tests', 'fixtures', 'geometry', 'transient-test.step');
+const PY_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'python');
 
 // Surface pressure range in Pa from a fresh read of the case, the way a spawned exporter
 // does it (no worker cache): extract_surface of the volume, point p x rho.

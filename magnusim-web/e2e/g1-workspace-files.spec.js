@@ -1,10 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { prepareE2eProjectsRoot } from './prepare-projects.js';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { startHost } from './support/host-server.mjs';
 
 // G1, a plugin's binary files (ws.files) as a workspace uses them: a 40 MB file
 // written from the sandboxed frame arrives on disk byte for byte (SHA-256) with
@@ -20,58 +18,16 @@ function stage(t0, msg) {
   console.log(`[g1 +${Math.round((Date.now() - t0) / 1000)}s] ${msg}`);
 }
 
-async function waitUp(url, ms) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    try {
-      const r = await fetch(url);
-      if (r.status < 500) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  return false;
-}
-
-function killTree(child) {
-  if (!child || child.exitCode != null) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else child.kill('SIGKILL');
-}
-
 test('gate:g1-workspace-files a workspace stores, reads, guards and deletes large files in its project', async ({ page, request }) => {
   test.setTimeout(300_000);
   page.setDefaultTimeout(30_000);
   const t0 = Date.now();
-  const port = String(Number(process.env.MAGNUSIM_E2E_PORT || 8083) + 16);
-  const base = `http://127.0.0.1:${port}`;
-  const tmp = mkdtempSync(join(tmpdir(), 'magnusim-g1-'));
-  const projects = join(tmp, 'projects');
-  prepareE2eProjectsRoot(projects);
-  const plugins = join(tmp, 'plugins');
-  cpSync(resolve('python/tests/fixtures/workspace-plugins'), plugins, { recursive: true });
-  const prefs = join(tmp, 'prefs.json');
-  writeFileSync(prefs, JSON.stringify({ wizard_completed: true, units: 'Metric', port: Number(port) }));
-  const server = spawn(process.execPath, [resolve('node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--strictPort'], {
-    env: {
-      ...process.env,
-      MAGNUSIM_PROJECTS_ROOT: projects,
-      MAGNUSIM_LOCAL_JSON: prefs,
-      MAGNUSIM_PORT: port,
-      MAGNUSIM_BOUND_PORT: port,
-      MAGNUSIM_PLUGINS_DIR: plugins,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let log = '';
-  server.stdout.on('data', (d) => (log += d));
-  server.stderr.on('data', (d) => (log += d));
+  const host = await startHost({ name: 'g1', pluginsFrom: 'python/tests/fixtures/workspace-plugins' });
+  const { base, projects } = host;
   const pluginRoot = join(projects, PROJECT, 'plugins', KEY);
   const onDisk = (rel) => join(pluginRoot, ...rel.split('/'));
   const sha = (buf) => createHash('sha256').update(buf).digest('hex');
   try {
-    expect(await waitUp(`${base}/api/registry`, 120_000), `second server did not start:\n${log.slice(-2000)}`).toBe(true);
     const made = await request.post(`${base}/api/plugin-studies/create`, { data: { project_id: PROJECT, plugin: KEY, kind: 'bench_case', title: 'Big files' } });
     const study = (await made.json()).study;
     await page.goto(`${base}/#/p/${PROJECT}/ws/${KEY}/bench/${study.id}`);
@@ -165,11 +121,6 @@ test('gate:g1-workspace-files a workspace stores, reads, guards and deletes larg
     expect(existsSync(onDisk(rel))).toBe(false);
     stage(t0, 'deleted');
   } finally {
-    killTree(server);
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* a file may still be held for a moment */
-    }
+    host.stop();
   }
 });

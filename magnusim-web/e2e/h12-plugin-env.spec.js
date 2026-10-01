@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
-import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { prepareE2eProjectsRoot } from './prepare-projects.js';
+import { e2eTemp, startHost } from './support/host-server.mjs';
 
 // H12, a plugin with its own Python environment, as the user meets it: Settings
 // > Plugins says it needs setup, Install dependencies builds the environment
@@ -17,26 +17,6 @@ const KEY = 'env-demo';
 
 function stage(t0, msg) {
   console.log(`[h12 +${Math.round((Date.now() - t0) / 1000)}s] ${msg}`);
-}
-
-async function waitUp(url, ms) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    try {
-      const r = await fetch(url);
-      if (r.status < 500) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  return false;
-}
-
-function killTree(child) {
-  if (!child || child.exitCode != null) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else child.kill('SIGKILL');
 }
 
 // Is this path inside that folder (both resolved on disk: Windows may hand out short names)?
@@ -56,17 +36,13 @@ test('gate:h12-needs-setup a plugin with its own environment is set up, runs the
   test.setTimeout(420_000);
   page.setDefaultTimeout(30_000);
   const t0 = Date.now();
-  const port = String(Number(process.env.MAGNUSIM_E2E_PORT || 8083) + 12);
-  const base = `http://127.0.0.1:${port}`;
-  const tmp = mkdtempSync(join(tmpdir(), 'magnusim-h12-'));
+  const tmp = e2eTemp('h12');
   const projects = join(tmp, 'projects');
   prepareE2eProjectsRoot(projects);
   const plugins = join(tmp, 'plugins');
   const plugin = join(plugins, KEY);
   cpSync(resolve('python/tests/fixtures/env-plugins/env-demo'), plugin, { recursive: true });
   const envs = join(tmp, 'envs');
-  const prefs = join(tmp, 'prefs.json');
-  writeFileSync(prefs, JSON.stringify({ wizard_completed: true, units: 'Metric', port: Number(port) }));
   // A study its plugin saved with schema 1 of its kind (the plugin is at 2 now).
   const oldStudy = join(projects, PROJECT, 'plugins', KEY, 'studies', 'st-0ld00001');
   mkdirSync(oldStudy, { recursive: true });
@@ -85,24 +61,10 @@ test('gate:h12-needs-setup a plugin with its own environment is set up, runs the
       updated_at: '2026-01-01T00:00:00+00:00',
     }),
   );
-  const server = spawn(process.execPath, [resolve('node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--strictPort'], {
-    env: {
-      ...process.env,
-      MAGNUSIM_PROJECTS_ROOT: projects,
-      MAGNUSIM_LOCAL_JSON: prefs,
-      MAGNUSIM_PORT: port,
-      MAGNUSIM_BOUND_PORT: port,
-      MAGNUSIM_PLUGINS_DIR: plugins,
-      MAGNUSIM_PLUGIN_ENVS_DIR: envs,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let log = '';
-  server.stdout.on('data', (d) => (log += d));
-  server.stderr.on('data', (d) => (log += d));
+  const host = await startHost({ name: 'h12', tmp, projects, pluginsDir: plugins, env: { MAGNUSIM_PLUGIN_ENVS_DIR: envs } });
+  const { base } = host;
   let jobChild = 0;
   try {
-    expect(await waitUp(`${base}/api/registry`, 120_000), `second server did not start:\n${log.slice(-2000)}`).toBe(true);
     stage(t0, 'server up');
 
     // The tree says why its study cannot open yet.
@@ -202,11 +164,6 @@ test('gate:h12-needs-setup a plugin with its own environment is set up, runs the
     stage(t0, 'new lock: set up again');
   } finally {
     if (jobChild && alive(jobChild)) spawnSync('taskkill', ['/PID', String(jobChild), '/T', '/F'], { stdio: 'ignore' });
-    killTree(server);
-    try {
-      rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      /* a service may still hold a file for a moment */
-    }
+    host.stop();
   }
 });

@@ -1,50 +1,6 @@
-import { resolve } from 'node:path';
-import { defineConfig } from '@playwright/test';
-import { settleE2eToolchain } from './e2e/toolchain.js';
+// The core's browser tests (e2e/). The server, the projects they seed, the WSL
+// toolchain and lock are shared with the bundled plugins' suites: e2e/support/app-config.js.
+import { join } from 'node:path';
+import { WEB_ROOT, appSuiteConfig } from './e2e/support/app-config.js';
 
-const PORT = process.env.MAGNUSIM_E2E_PORT || '8083';
-const baseURL = `http://127.0.0.1:${PORT}`;
-const projectsRoot = process.env.MAGNUSIM_E2E_PROJECTS_ROOT || resolve('e2e/.tmp-projects');
-process.env.MAGNUSIM_PROJECTS_ROOT = projectsRoot;
-// Test servers never sweep the WSL case root, which holds this PC's real cases
-// (wsl-prune.spec.js turns the sweep on for its own server and its own root).
-process.env.MAGNUSIM_WSL_PRUNE ??= '0';
-const prefsPath = resolve('e2e/.tmp-prefs.json');
-// Every test runs by default; real meshes and solves need WSL with OpenFOAM (see e2e/toolchain.js).
-const toolchain = settleE2eToolchain();
-
-export default defineConfig({
-  testDir: './e2e',
-  timeout: toolchain.wsl ? 900_000 : 60_000,
-  fullyParallel: false,
-  workers: 1,
-  forbidOnly: !!process.env.CI,
-  retries: 0,
-  // On GitHub Actions each failure also becomes an annotation, which anyone can read
-  // on the run page and through the API (the step log needs a signed-in account).
-  reporter: process.env.GITHUB_ACTIONS ? [['github'], ['list']] : 'list',
-  use: {
-    baseURL,
-    headless: true,
-    trace: 'on-first-retry',
-  },
-  webServer: {
-    command: 'node e2e/prepare-projects.js && npm run dev',
-    url: baseURL,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    env: {
-      ...process.env,
-      MAGNUSIM_PROJECTS_ROOT: projectsRoot,
-      MAGNUSIM_LOCAL_JSON: prefsPath,
-      MAGNUSIM_PORT: String(PORT),
-      // The app ships no plugins; the plugin gates load test plugins from here.
-      // MAGNUSIM_E2E_PLUGINS_DIR overrides it (CI's core-without-user-plugins job
-      // points it at an empty folder and skips the @plugins tests).
-      MAGNUSIM_PLUGINS_DIR: process.env.MAGNUSIM_E2E_PLUGINS_DIR
-        ? resolve(process.env.MAGNUSIM_E2E_PLUGINS_DIR)
-        : resolve('python/tests/fixtures/plugins'),
-      MAGNUSIM_BOUND_PORT: String(PORT),
-    },
-  },
-});
+export default appSuiteConfig({ name: 'core', testDir: join(WEB_ROOT, 'e2e') });

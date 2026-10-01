@@ -1,19 +1,19 @@
 import { expect, test } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { H10_PROJECT } from './prepare-projects.js';
-import { NO_WSL } from './toolchain.js';
+import { H10_PROJECT } from '../../../e2e/prepare-projects.js';
+import { NO_WSL } from '../../../e2e/toolchain.js';
 
 // gate:h10-ui-parity — the Steady-state and Transient UI looks and behaves the
 // same after it moved into the Incompressible Flow plugin (H10). Each panel's
 // DOM (tags, classes, attributes, text; numbers masked) is compared with the
-// baseline recorded from v0.2.0-era code (e2e/fixtures/h10-ui-parity.json).
+// baseline recorded from v0.2.0-era code (bundled-plugins/incompressible_flow/e2e/fixtures/h10-ui-parity.json).
 // MAGNUSIM_UPDATE_PARITY=1 rewrites the baseline; MAGNUSIM_PARITY_SHOTS=<dir>
 // also saves a screenshot of each panel for a pixel comparison.
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 const PROJECT = H10_PROJECT;
 const SIM = 'sim_1';
-const BASELINE = resolve('e2e/fixtures/h10-ui-parity.json');
+const BASELINE = resolve('bundled-plugins/incompressible_flow/e2e/fixtures/h10-ui-parity.json');
 const UPDATE = process.env.MAGNUSIM_UPDATE_PARITY === '1';
 const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 

@@ -1,9 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { H8_PROJECT, prepareE2eProjectsRoot } from './prepare-projects.js';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { H8_PROJECT } from './prepare-projects.js';
+import { e2eTemp, startHost } from './support/host-server.mjs';
 import { NO_WSL } from './toolchain.js';
 
 // H8, the analysis contract and the bundled plugin tier, as the user meets them:
@@ -29,58 +28,16 @@ async function getJson(request, url) {
   }
 }
 
-async function waitUp(url, ms) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    try {
-      const r = await fetch(url);
-      if (r.status < 500) return true;
-    } catch {
-      /* not up yet */
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  return false;
-}
-
-function killTree(child) {
-  if (!child || child.exitCode != null) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  else child.kill('SIGKILL');
-}
-
 test('gate:h8-required-plugin-missing the app says the required plugin is missing and refuses to create or run', async ({ page, request }) => {
   test.setTimeout(240_000);
   // A second app server whose bundled plugins folder is empty (its own projects,
   // settings and port, so the main server's state is untouched).
-  const port = String(Number(process.env.MAGNUSIM_E2E_PORT || 8083) + 11);
-  const base = `http://127.0.0.1:${port}`;
-  const tmp = mkdtempSync(join(tmpdir(), 'magnusim-h8-missing-'));
-  const root = join(tmp, 'projects');
-  prepareE2eProjectsRoot(root);
+  const tmp = e2eTemp('h8-missing');
   const bundled = join(tmp, 'empty-bundled');
-  const userPlugins = join(tmp, 'no-user-plugins');
   mkdirSync(bundled);
-  mkdirSync(userPlugins);
-  const prefs = join(tmp, 'prefs.json');
-  writeFileSync(prefs, JSON.stringify({ wizard_completed: true, units: 'Metric', port: Number(port) }));
-  const server = spawn(process.execPath, [resolve('node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--strictPort'], {
-    env: {
-      ...process.env,
-      MAGNUSIM_PROJECTS_ROOT: root,
-      MAGNUSIM_LOCAL_JSON: prefs,
-      MAGNUSIM_PORT: port,
-      MAGNUSIM_BOUND_PORT: port,
-      MAGNUSIM_BUNDLED_DIR: bundled,
-      MAGNUSIM_PLUGINS_DIR: userPlugins,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let log = '';
-  server.stdout.on('data', (d) => (log += d));
-  server.stderr.on('data', (d) => (log += d));
+  const host = await startHost({ name: 'h8-missing', tmp, bundledDir: bundled });
+  const { base } = host;
   try {
-    expect(await waitUp(`${base}/api/registry`, 120_000), `second server did not start:\n${log.slice(-2000)}`).toBe(true);
 
     // The registry says which required plugin is missing, and why.
     const reg = await (await request.get(`${base}/api/registry`)).json();
@@ -112,8 +69,7 @@ test('gate:h8-required-plugin-missing the app says the required plugin is missin
     const row = (plugins.plugins || []).find((p) => p.key === 'incompressible_flow');
     expect(row).toMatchObject({ status: 'error', required: true, tier: 'bundled' });
   } finally {
-    killTree(server);
-    rmSync(tmp, { recursive: true, force: true });
+    host.stop();
   }
 });
 
