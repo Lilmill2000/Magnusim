@@ -96,7 +96,8 @@ def _assert_golden(case: Path, gdir: Path, *, update: bool) -> list[str]:
         assert got.is_file(), f"missing written file {got}"
         assert golden.is_file(), f"missing golden {golden}"
         if update:
-            golden.write_text(normalize_prepare_run(got.read_text(encoding="utf-8")), encoding="utf-8")
+            # The writer's own text (normalized only when compared), like the committed goldens.
+            golden.write_text(_strip_demo_hooks(got.read_text(encoding="utf-8")), encoding="utf-8")
             continue
         a = normalize_prepare_run(got.read_text(encoding="utf-8"))
         b = normalize_prepare_run(golden.read_text(encoding="utf-8"))

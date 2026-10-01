@@ -45,6 +45,10 @@ describe('run-control defaults have one source', () => {
     assert.match(runtime, /runDefaults\(/);
     const page = runtime + text('src/workbench/catalogs.js');
     assert.equal(/endTime:\s*200\b|writeInterval:\s*50\b|\|\|\s*200,|\|\|\s*50,/.test(page), false);
+    // Nor the server: a new study's control.json was seeded with 500 / 50, and runs
+    // fell back to the default analysis's 200 / 50 frozen when the module loaded.
+    const server = text('scripts/w17-simulation.js') + text('scripts/w27-solve.js');
+    assert.equal(/endTime:\s*\d|writeInterval:\s*\d|DEFAULT_END_TIME|steadyDefaultsFromRegistry\(\)/.test(server), false);
     const w30 = text('scripts/w30-transient.js');
     assert.equal(/export function (estimateDeltaT|resolveTransientControl|flowThroughTime)/.test(w30), false);
     const w27 = text('scripts/w27-solve.js');

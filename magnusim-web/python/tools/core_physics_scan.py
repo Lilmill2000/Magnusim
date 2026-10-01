@@ -30,10 +30,14 @@ PHYSICS = re.compile(
     r"\b(simpleFoam|pimpleFoam|kOmegaSST|kOmega|kEpsilon|realizableKE|LaunderSharmaKE|"
     r"nOuterCorrectors|nCorrectors|nNonOrthogonalCorrectors|residualControl|PIMPLE|SIMPLE)\b"
     r"|k-omega|k-epsilon|\bIncompressible\b"
+    # Its analysis keys: the default analysis comes from its manifest ([default_analysis]).
+    r"|incompressible_steady|incompressible_transient"
 )
 
 SKIP_PARTS = {"__pycache__", "__tests__", "generated", "build", "node_modules", "test"}
-TEST_FILE = re.compile(r"\.test\.(ts|tsx|js|mjs)$")
+# Tests, and files generated from the shipped registry (src/api/registry.gen.ts
+# lists every shipped key, the bundled plugins' included).
+TEST_FILE = re.compile(r"\.test\.(ts|tsx|js|mjs)$|\.gen\.ts$")
 
 
 def _docstring_nodes(tree: ast.AST) -> set[int]:

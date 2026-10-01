@@ -24,7 +24,7 @@ jobs:
       - name: Ruff
         run: ruff check cfddesk tools tests ../bundled-plugins
       - name: Mypy
-        run: mypy cfddesk ../bundled-plugins/incompressible_flow/incompressible_flow
+        run: mypy cfddesk ../bundled-plugins/incompressible_flow/incompressible_flow ../bundled-plugins/incompressible_flow/plugin.py
       # testpaths: the core's tests, Incompressible Flow's (its goldens) and the plugin template's.
       - name: Pytest (including CAD, without WSL)
         run: pytest --tb=short
@@ -98,7 +98,7 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/sdk-only"
           "$RUNNER_TEMP/sdk-only/bin/pip" install ./sdk
-          "$RUNNER_TEMP/sdk-only/bin/python" -c "import sys, magnusim_sdk, magnusim_sdk.events, magnusim_sdk.units, magnusim_sdk.foam, magnusim_sdk.gmsh_helpers, magnusim_sdk.msh22, magnusim_sdk.proc; bad = [m for m in sys.modules if m.split('.')[0] in {'OCP', 'pyvista', 'gmsh', 'numpy', 'cfddesk'}]; assert not bad, bad; print('magnusim_sdk imports alone')"
+          "$RUNNER_TEMP/sdk-only/bin/python" -c "import sys, magnusim_sdk, magnusim_sdk.events, magnusim_sdk.units, magnusim_sdk.foam, magnusim_sdk.gmsh_helpers, magnusim_sdk.msh22, magnusim_sdk.proc, magnusim_sdk.study, magnusim_sdk.fluids, magnusim_sdk.progress, magnusim_sdk.data, magnusim_sdk.service; bad = [m for m in sys.modules if m.split('.')[0] in {'OCP', 'pyvista', 'gmsh', 'numpy', 'cfddesk'}]; assert not bad, bad; print('magnusim_sdk imports alone')"
 
   # The app ships no plugins. Prove the core suites pass with no user plugin
   # folder at all (the plugin-host gates are tagged @plugins and run in "node").

@@ -89,7 +89,7 @@ from cfddesk.project.settings import (
     quantize_location_m,
 )
 from cfddesk.registry.analysis import (
-    DEFAULT_STEADY_KEY,
+    default_analysis_key,
     resolve_analysis_key,
 )
 from cfddesk.results.color_scale import ColorScale
@@ -118,9 +118,16 @@ ROLES: tuple[FaceRole, ...] = ("unassigned", "inlet", "outlet", "walls")
 PROJECT_VERSION = 15
 
 PRIMARY_SIM_NAME = "Incompressible"
-# Registered AnalysisType key (land11). Legacy free-string "incompressible"
-# remaps via resolve_analysis_key in _simulation_from_dict.
-PRIMARY_SIM_ANALYSIS = DEFAULT_STEADY_KEY
+# PRIMARY_SIM_ANALYSIS: the default analysis's key (land11), read when used
+# (module __getattr__ below). Legacy free-string names remap via
+# resolve_analysis_key in _simulation_from_dict.
+
+
+def __getattr__(name: str) -> str:
+    if name == "PRIMARY_SIM_ANALYSIS":
+        return default_analysis_key()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Fingerprint token for blockMesh sizing via ``shape_bbox`` /
 # ``BRepBndLib.Add(useTriangulation=False)``. Changing this is a mesher break.
@@ -1721,7 +1728,7 @@ class Project:
             id=prev_sim.id if prev_sim is not None else _new_id(),
             name=prev_sim.name if prev_sim is not None else PRIMARY_SIM_NAME,
             analysis_type=(
-                prev_sim.analysis_type if prev_sim is not None else PRIMARY_SIM_ANALYSIS
+                prev_sim.analysis_type if prev_sim is not None else default_analysis_key()
             ),
             geometry_id=geometry.id,
             boundary_conditions=bcs,
@@ -2430,7 +2437,7 @@ def _default_simulation(geometry_id: str) -> Simulation:
     return Simulation(
         id=_new_id(),
         name=PRIMARY_SIM_NAME,
-        analysis_type=PRIMARY_SIM_ANALYSIS,
+        analysis_type=default_analysis_key(),
         geometry_id=geometry_id,
         boundary_conditions=[],
         meshes=[
@@ -2555,7 +2562,7 @@ def _migrate_flat_to_hierarchy(
     simulation = Simulation(
         id=_new_id(),
         name=PRIMARY_SIM_NAME,
-        analysis_type=PRIMARY_SIM_ANALYSIS,
+        analysis_type=default_analysis_key(),
         geometry_id=geometry.id,
         boundary_conditions=bcs,
         meshes=[mesh_node],

@@ -145,6 +145,10 @@ def dump_registry(
     for kind in DUMP_KINDS:
         payload[kind] = hub.registry(kind).describe()
     payload["plugins"] = [_manifest_row(m) for m in hub.manifests.values()]
+    from cfddesk.registry.discovery import default_analysis_of
+
+    # The analysis a study gets when none is named (the required plugin's).
+    payload["default_analysis"] = default_analysis_of(hub)
     if check_reqs:
         payload["missing"] = _missing_rows(hub, env if env is not None else {})
     else:

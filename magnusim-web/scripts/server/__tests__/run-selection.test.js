@@ -7,7 +7,7 @@ import { createGeometryFolder, createStudyFolder, writeJsonAtomic } from '../../
 
 const root = mkdtempSync(join(tmpdir(), 'magnusim-run-selection-'));
 process.env.MAGNUSIM_PROJECTS_ROOT = root;
-const { createDraftRun, getRunStatus, updateRunSettings } = await import('../../w27-solve.js');
+const { createDraftRun, getRunStatus, getSimulationControl, updateRunSettings } = await import('../../w27-solve.js');
 after(() => rmSync(root, {recursive: true, force: true}));
 
 describe('study run selection', () => {
@@ -81,5 +81,32 @@ describe('study run selection', () => {
     assert.equal(row.transient.end_time, 2);
     assert.equal(row.endTime, 123);
     assert.equal(row.writeInterval, 7);
+  });
+
+  it('stores steady settings as the run analysis cleans them, from its own defaults', async () => {
+    // The core used to clamp a steady run's iterations itself (only transient
+    // settings went through the analysis's run model), with the default
+    // analysis's 200 / 50 frozen when the module loaded.
+    const project = join(root, 'steady-model');
+    mkdirSync(project);
+    writeJsonAtomic(join(project, 'project.json'), {id: 'steady-model', title: 'Test'});
+    createGeometryFolder(project, {id: 'geo', name: 'elbow.step'});
+    const study = {id: 'sim', name: 'sim', geometry_id: 'geo', time_dependency: 'Steady-state'};
+    createStudyFolder(project, 'geo', study);
+    writeJsonAtomic(join(project, 'simulations.json'), {active_id: 'sim', simulations: [study]});
+    // No run settings saved yet: the study's analysis's run defaults.
+    assert.deepEqual(
+      [getSimulationControl('steady-model', 'sim').endTime, getSimulationControl('steady-model', 'sim').writeInterval],
+      [200, 50],
+    );
+    const made = await createDraftRun({projectId: 'steady-model', simulationId: 'sim', runId: 'run'});
+    assert.deepEqual([made.run.endTime, made.run.writeInterval], [200, 50]);
+    // 2.5 iterations: the analysis's model rounds it to 2 (Python), the old
+    // core clamp made it 3 (Math.round); a non-number falls back to its default.
+    const saved = await updateRunSettings('steady-model', {run_id: 'run', endTime: 2.5, writeInterval: 'many'});
+    assert.equal(saved.ok, true, saved.error);
+    assert.deepEqual([saved.run.endTime, saved.run.writeInterval], [2, 50]);
+    const row = getRunStatus('steady-model', 'run', 'sim').body.runs.find((r) => r.id === 'run');
+    assert.deepEqual([row.endTime, row.writeInterval], [2, 50]);
   });
 });

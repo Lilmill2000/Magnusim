@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { apiGet, apiPost } from '../api/client';
 import type { RegistryDescribe, RegistryRow } from '../api/registry.gen';
-import { DEFAULT_ANALYSIS_KEY } from '../analysis';
 
 export interface ProjectState {
   projectId: string | null;
@@ -64,7 +63,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // A new study's settings when none is picked: the default analysis's
     // study_defaults (its contract). Run defaults are each analysis's run_defaults.
     const analyses = (data.analysis || []) as RegistryRow[];
-    const def = analyses.find((a) => a.key === DEFAULT_ANALYSIS_KEY) || analyses[0];
+    const defaultKey = data.default_analysis?.steady || '';
+    const def = analyses.find((a) => a.key === defaultKey) || analyses[0];
     if (def && def.study_defaults) {
       window.__CFD_W17_DEFAULTS__ = { ...def.study_defaults };
     }

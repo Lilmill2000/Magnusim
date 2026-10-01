@@ -49,8 +49,9 @@ import { workspaceHash } from '../workspace/route';
 import { confirmLeaveWorkspace } from '../workspace/leaveGuard';
 import { confirmAction, dialogBusy, promptName } from './dialogs';
 import {
-  DEFAULT_ANALYSIS_KEY,
+  analysisMissingText,
   analysisRow,
+  defaultAnalysisKey,
   runAnalysisKey,
   runDefaults,
   siblingKey,
@@ -21182,11 +21183,11 @@ function computeStudyState() {
     project_id: String(studyCatalog.project_id || currentProjectId() || ''),
     name: String(sim.name || 'Simulation'),
     analysis: String(sim.analysis || W17_DEFAULTS.analysis),
-    analysis_type: String(sim.analysis_type || DEFAULT_ANALYSIS_KEY),
+    analysis_type: String(sim.analysis_type || defaultAnalysisKey(td)),
     time_dependency: td,
     algorithm: String(
       sim.algorithm ||
-        (analysisRow(siblingKey(sim.analysis_type || DEFAULT_ANALYSIS_KEY, td)) || {}).algorithm_label ||
+        (analysisRow(siblingKey(sim.analysis_type, td)) || {}).algorithm_label ||
         W17_DEFAULTS.algorithm,
     ),
     record: { ...sim },
@@ -21264,6 +21265,16 @@ window.__CFD_CREATE_PICK_ANALYSIS__ = function pickCreateAnalysis(row) {
   }
   const transient = /transient/i.test(String((row && row.time_dependency) || ''));
   setCreateTimeDependency(transient ? 'Transient' : 'Steady-state', { fromList: true });
+  // Only a time dependency the picked analysis's family has can be chosen.
+  const key = String((row && row.key) || '');
+  document.querySelectorAll('#cs-time-dep .cs-time-opt').forEach((el) => {
+    const td = el.getAttribute('data-time-dep') || 'Steady-state';
+    const sib = key ? analysisRow(siblingKey(key, td)) : null;
+    const has = !key || (!!sib && /transient/i.test(String(sib.time_dependency || '')) === /transient/i.test(td));
+    el.disabled = !has;
+    if (has) el.removeAttribute('title');
+    else el.title = String((row && row.label) || 'This simulation type') + ' has no ' + td + ' version.';
+  });
 };
 
 function fillCreateSimulationExtras() {
@@ -21467,7 +21478,7 @@ window.__CFD_W17_CREATE__ = createSimulationClient;
       btn.textContent = 'Creating…';
     }
     const picked = document.querySelector('#cs-type-list [data-analysis-key].is-selected');
-    const pickedKey = (picked && picked.getAttribute('data-analysis-key')) || DEFAULT_ANALYSIS_KEY;
+    const pickedKey = (picked && picked.getAttribute('data-analysis-key')) || defaultAnalysisKey();
     const pickedRow = analysisRow(pickedKey);
     createSimulationClient({
       // The picked analysis's name, as its contract publishes it.
@@ -29492,12 +29503,18 @@ function toggleAssignAaFace(face) {
 
 /** The open study's analysis (the family its runs solve with). */
 function studyAnalysisType() {
-  return (studyCatalog && studyCatalog.simulation && studyCatalog.simulation.analysis_type) || DEFAULT_ANALYSIS_KEY;
+  return (studyCatalog && studyCatalog.simulation && studyCatalog.simulation.analysis_type) || defaultAnalysisKey();
 }
 
 /** The analysis a run solves with: its stamp, else its study's family at its time dependency. */
 function runAnalysisKeyOf(rec) {
   return runAnalysisKey(rec, studyAnalysisType(), runRecIsTransient(rec));
+}
+
+/** A run whose analysis is not installed (its plugin is off or did not load): why it cannot start, else null. */
+function runAnalysisMissing(rec) {
+  const text = rec ? analysisMissingText(runAnalysisKeyOf(rec), 'run') : '';
+  return text ? { text, fix: { go: 'plugins' } } : null;
 }
 
 /**
@@ -30520,17 +30537,8 @@ function inferSetupFix(msg) {
   if (/Create a simulation first/i.test(s)) return { go: 'create-sim' };
   if (/Add a run to change settings/i.test(s)) return { go: 'add-run' };
   if (/Create a run first|already finished/i.test(s)) return { go: 'sim-hub' };
-  if (/Assign Air|Assign a fluid|assign a material|material/i.test(s) && !/boundary/i.test(s)) return { go: 'material' };
-  if (/velocity inlet|pressure boundar|boundary condition|assigned face/i.test(s)) {
-    const list = typeof bcList === 'function' ? bcList() : [];
-    const incomplete = list.find((b) => !bcHasAssignedFace(b));
-    if (incomplete) return { go: 'bc', id: incomplete.id, name: incomplete.name };
-    const pressures = list.filter((b) => String((b && b.bc_type) || '') === 'Pressure');
-    if (/same value|different pressure/i.test(s) && pressures[0]) {
-      return { go: 'bc', id: pressures[0].id, name: pressures[0].name };
-    }
-    return { go: 'bc-picker' };
-  }
+  // Materials, boundary conditions and the analysis's own settings: its
+  // validate_ready gives the fix with the message (the run's fix), never text.
   if (/assign a mesh under Mesh/i.test(s)) return { go: 'run-mesh' };
   const gen = s.match(/Generate "([^"]+)"/);
   if (gen) {
@@ -30566,12 +30574,17 @@ function setupFixLabel(fix) {
   if (fix.go === 'run-mesh') return 'Assign a mesh';
   if (fix.go === 'mesh-hub') return 'Create a mesh';
   if (fix.go === 'mesh') return fix.name ? 'Open ' + fix.name : 'Open Mesh';
+  if (fix.go === 'plugins') return 'Open Settings → Plugins';
   return 'Go there';
 }
 
 function openSetupFix(fix) {
   fix = resolveSetupFix(fix);
   if (!fix || !fix.go) return;
+  if (fix.go === 'plugins') {
+    openSetupWizard({ required: false, step: 'plugins' });
+    return;
+  }
   try { leaveResultsForSetup(); } catch (_) {}
   // The fix opens a panel for a tree item; unfold the study so that item is visible.
   try { expandActiveStudyTree(); } catch (_) {}
@@ -30739,7 +30752,9 @@ function computeRunState() {
   const want = (text, fix) => {
     if (!reason) reason = { text, fix: fix || null };
   };
+  const analysisMissing = rec && !running && !done ? runAnalysisMissing(rec) : null;
   if (runCatalog.starting) want(runCatalog.start_error || 'Starting…', null);
+  else if (analysisMissing) want(analysisMissing.text, analysisMissing.fix);
   else if (queuedHere && setupIssueNoMesh) want(setupIssueText(setupIssueNoMesh), setupIssueNoMesh.fix || null);
   else if (queuedHere) {
     // Say where it is: the queue is shared by every project, and its own mesh
@@ -30762,7 +30777,7 @@ function computeRunState() {
     want('Generate "' + meshName + '" before starting.', { go: 'mesh', id: meshId, name: meshName });
   } else if (rec && setupIssue) want(setupIssueText(setupIssue), setupIssue.fix || null);
   else if (rec && rec.status === 'failed' && (rec.error || rec.note)) {
-    want(rec.error || rec.note, inferSetupFix(rec.error || rec.note));
+    want(rec.error || rec.note, rec.fix && rec.fix.go ? rec.fix : inferSetupFix(rec.error || rec.note));
   } else if (startErrorForSelectedRun()) want(runCatalog.start_error, runCatalog.start_fix);
   else if (rec && rec.status === 'done') want('This run finished. Add a run to change settings.', { go: 'add-run', id: rec.id });
   else if (rec && rec.status === 'stopped' && runRecIsTransient(rec) !== simIsTransientClient()) {
@@ -31445,6 +31460,7 @@ async function startSolveClient() {
       rec.status = 'failed';
       rec.error = msg;
       rec.note = msg;
+      rec.fix = (extra && extra.fix) || null;
     }
     if (runCatalog.run && String(runCatalog.run.run_id || runCatalog.run.id) === String(runCatalog.start_error_run_id)) {
       runCatalog.run = { ...runCatalog.run, status: 'failed', error: msg, note: msg };
@@ -31545,7 +31561,9 @@ async function startSolveClient() {
         runCatalog.start_error_run_id = null;
         const queued = await enqueueSolveJob(runId);
         if (!queued) {
-          return failStart('Assign a fluid to a volume first', { fix: { go: 'material' } });
+          // enqueueSolveJob said why (the run's own setup issue, or its mesh).
+          const why = runCatalog.hint;
+          return failStart((why && why.text) || 'This run cannot be queued yet.', { fix: runCatalog.start_fix || null });
         }
         showHint('Queued. Starts when the current job finishes.');
         try { syncJobQueueChrome(); } catch (_) {}

@@ -15,18 +15,42 @@ from cfddesk.registry.schema import SchemaField
 TimeDependency = Literal["steady", "transient"]
 ResultKind = Literal["scalar", "vector"]
 
-DEFAULT_STEADY_KEY = "incompressible_steady"
-DEFAULT_TRANSIENT_KEY = "incompressible_transient"
-# Legacy free-string persisted before land11. Alias map lives here (registry-
-# owned) so product paths resolve through builtins — not a third name list.
-LEGACY_ANALYSIS_ALIAS = "incompressible"
+# The default analysis is the required bundled plugin's [default_analysis]
+# (manifest.toml); the core names no simulation type. DEFAULT_STEADY_KEY,
+# DEFAULT_TRANSIENT_KEY and LEGACY_ANALYSIS_ALIAS stay importable (API 1.0):
+# they are read from it when used (module __getattr__ below).
+
+
+def _default_spec() -> dict[str, Any]:
+    from cfddesk.registry.discovery import default_analysis
+
+    return default_analysis(loaded=False) or {}
 
 
 def default_analysis_key(*, time_dependency: str | None = None) -> str:
-    """Registered default AnalysisType key (steady unless transient asked)."""
+    """The analysis a study gets when none is named (steady unless transient
+    asked): the required bundled plugin's ``[default_analysis]``, "" without it."""
+    spec = _default_spec()
     if (time_dependency or "").strip().lower() == "transient":
-        return DEFAULT_TRANSIENT_KEY
-    return DEFAULT_STEADY_KEY
+        return str(spec.get("transient") or spec.get("steady") or "")
+    return str(spec.get("steady") or "")
+
+
+def is_default_alias(name: str | None) -> bool:
+    """True for a name studies saved before analysis keys carry for the default analysis."""
+    raw = (name or "").strip().lower()
+    return bool(raw) and raw in {str(a).lower() for a in _default_spec().get("aliases") or ()}
+
+
+def __getattr__(name: str) -> str:
+    if name == "DEFAULT_STEADY_KEY":
+        return default_analysis_key()
+    if name == "DEFAULT_TRANSIENT_KEY":
+        return default_analysis_key(time_dependency="transient")
+    if name == "LEGACY_ANALYSIS_ALIAS":
+        aliases = _default_spec().get("aliases") or []
+        return str(aliases[0]) if aliases else ""
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def infer_time_dependency(
@@ -68,10 +92,11 @@ def resolve_analysis_key(
 ) -> str:
     """Map legacy/product analysis strings onto registered AnalysisType keys.
 
-    `"incompressible"` aliases to `incompressible_steady` or
-    `incompressible_transient` from solver/control time dependency.
-    Registered keys pass through. When `registry` is given, unknown keys
-    fail closed via `Registry.get` (`RegistryError`).
+    Blank, or a name the default analysis lists in its aliases (studies saved
+    before analysis keys), maps to the default analysis at the time dependency
+    the solver/control fields give. Registered keys pass through. When
+    `registry` is given, unknown keys fail closed via `Registry.get`
+    (`RegistryError`).
     """
     raw = (key or "").strip()
     td = infer_time_dependency(
@@ -80,7 +105,7 @@ def resolve_analysis_key(
         simulation_control=simulation_control,
         transient=transient,
     )
-    if not raw or raw == LEGACY_ANALYSIS_ALIAS:
+    if not raw or is_default_alias(raw):
         resolved = default_analysis_key(time_dependency=td)
     else:
         resolved = raw
@@ -93,15 +118,18 @@ def analysis_key_for(key: str | None, time_dependency: str | None, registry: Any
     """The registered AnalysisType for a study's analysis family and time dependency.
 
     The stored key and the time dependency must agree: a study switched to
-    Transient solves as ``incompressible_transient``. The sibling of a key is
-    the same name with ``_steady`` / ``_transient`` swapped, when that key is
-    registered. A key with no sibling for the asked time dependency is
-    returned unchanged; callers that must refuse that check
+    Transient solves as its family's transient analysis. The sibling of a key
+    is the same name with ``_steady`` / ``_transient`` swapped, when that key
+    is registered; else the analysis of its ``family`` with the asked time
+    dependency, when the family pairs one analysis of each (a plugin's clone
+    keeps the family of the analysis it copied, so a family with two steady
+    analyses names no sibling). A key with no sibling for the asked time
+    dependency is returned unchanged; callers that must refuse that check
     :func:`analysis_supports_time_dependency`.
     """
     td = "transient" if re.search(r"transient", str(time_dependency or ""), re.I) else "steady"
     raw = (key or "").strip()
-    if not raw or raw.lower() == LEGACY_ANALYSIS_ALIAS:
+    if not raw or is_default_alias(raw):
         return default_analysis_key(time_dependency=td)
     reg = registry
     if reg is None:
@@ -116,6 +144,14 @@ def analysis_key_for(key: str | None, time_dependency: str | None, registry: Any
         sibling = f"{m.group(1)}_{td}"
         if sibling in keys:
             return sibling
+    family = getattr(getattr(reg.get(raw), "family", None), "key", "") if raw in keys else ""
+    if family:
+        members = [k for k in reg.keys() if getattr(getattr(reg.get(k), "family", None), "key", "") == family]
+        here = str(reg.get(raw).time_dependency)
+        same = [k for k in members if str(reg.get(k).time_dependency) == here]
+        other = [k for k in members if str(reg.get(k).time_dependency) == td]
+        if len(same) == 1 and len(other) == 1:
+            return str(other[0])
     return raw
 
 
@@ -266,7 +302,7 @@ def write_run_case(
 
     load_all()
     key0, ctx = _case_context(inputs, out_dir)
-    key = (analysis_key or "").strip() or key0 or DEFAULT_STEADY_KEY
+    key = (analysis_key or "").strip() or key0 or default_analysis_key()
     analysis = get_registry("analysis").get(key)
     writer = analysis.write_case
     if writer is None:
@@ -294,7 +330,7 @@ def plan_run_case(inputs: Any, *, analysis_key: str | None = None) -> dict[str, 
 
     load_all()
     key0, ctx = _case_context(inputs, None)
-    key = (analysis_key or "").strip() or key0 or DEFAULT_STEADY_KEY
+    key = (analysis_key or "").strip() or key0 or default_analysis_key()
     analysis = get_registry("analysis").get(key)
     plan = getattr(analysis, "plan_case", None)
     if not callable(plan):

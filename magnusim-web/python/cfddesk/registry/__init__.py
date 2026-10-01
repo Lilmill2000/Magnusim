@@ -5,14 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from cfddesk.registry.analysis import (
-    DEFAULT_STEADY_KEY,
-    DEFAULT_TRANSIENT_KEY,
-    LEGACY_ANALYSIS_ALIAS,
     AnalysisType,
     CaseContext,
     ResultField,
     default_analysis_key,
     infer_time_dependency,
+    is_default_alias,
     resolve_analysis_key,
     schema_defaults,
     write_run_case,
@@ -53,6 +51,7 @@ __all__ = [
     "ResultField",
     "default_analysis_key",
     "infer_time_dependency",
+    "is_default_alias",
     "resolve_analysis_key",
     "SolverApp",
     "validate_analysis_solver_refs",
@@ -96,4 +95,9 @@ def __getattr__(name: str) -> Any:
         from cfddesk.case.bc_registry import BcTypeSpec
 
         return BcTypeSpec
+    if name in ("DEFAULT_STEADY_KEY", "DEFAULT_TRANSIENT_KEY", "LEGACY_ANALYSIS_ALIAS"):
+        # The default analysis's keys and alias, read from its manifest when used.
+        from cfddesk.registry import analysis
+
+        return getattr(analysis, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -66,53 +66,6 @@ def sync_to_wsl(
     )
     return SyncResult(wsl_case=dest, result=run_wsl_bash(cmd, timeout=timeout))
 
-def sync_solve_dicts_to_wsl(
-    windows_case: Path,
-    wsl_case_id: str,
-    *,
-    timeout: float = 300.0,
-) -> SyncResult:
-    """Copy 0/, system/, physics dicts, *.foam onto an existing WSL mesh case.
-
-    Does **not** wipe ``constant/polyMesh`` — use after a successful mesh.
-    """
-    windows_case = Path(windows_case).resolve()
-    if not windows_case.is_dir():
-        raise FileNotFoundError(f"Windows case not found: {windows_case}")
-    src = windows_to_wsl_path(windows_case)
-    dest = wsl_case_path(wsl_case_id)
-    # Quote each full path — never shlex.quote(src)+"/constant/foo" (breaks the
-    # closing quote and silently skips transportProperties). Shell $vars also
-    # need escape_wsl_bash_dollars (applied in run_wsl_bash).
-    q = shlex.quote
-    poly = q(f"{dest}/constant/polyMesh")
-    cmd_parts = [
-        f"test -d {poly} || {{ echo 'missing polyMesh - mesh first' >&2; exit 2; }}",
-        f"mkdir -p {q(f'{dest}/0')} {q(f'{dest}/system')} {q(f'{dest}/constant')}",
-        # Wipe prior 0/ so switching laminar↔RAS does not leave orphan fields.
-        f"rm -rf {q(f'{dest}/0')} && mkdir -p {q(f'{dest}/0')}",
-        f"cp -a {q(f'{src}/0')}/. {q(f'{dest}/0')}/",
-        f"cp -a {q(f'{src}/system')}/. {q(f'{dest}/system')}/",
-    ]
-    for name in ("transportProperties", "turbulenceProperties"):
-        src_f = q(f"{src}/constant/{name}")
-        dest_f = q(f"{dest}/constant/{name}")
-        cmd_parts.append(
-            f"if [[ -f {src_f} ]]; then cp -a {src_f} {dest_f}; "
-            f"else echo 'missing {src}/constant/{name}' >&2; exit 3; fi"
-        )
-    cmd_parts.extend(
-        [
-            f"shopt -s nullglob; foams=({q(src)}/*.foam)",
-            f"if [[ ${{#foams[@]}} -gt 0 ]]; then cp -a \"${{foams[@]}}\" {q(dest)}/; "
-            f"else touch {q(f'{dest}/case.foam')}; fi",
-            f"test -f {q(f'{dest}/constant/transportProperties')}",
-        ]
-    )
-    cmd = "; ".join(cmd_parts)
-    return SyncResult(wsl_case=dest, result=run_wsl_bash(cmd, timeout=timeout))
-
-
 def push_polymesh_to_wsl(
     windows_results: Path,
     wsl_case_id: str,

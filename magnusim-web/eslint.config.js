@@ -81,7 +81,8 @@ export default [
   },
   ...tseslint.configs.recommended.map((cfg) => ({
     ...cfg,
-    files: ['src/**/*.{ts,tsx}'],
+    // The bundled plugins' panel UI is TypeScript on the host's React too.
+    files: ['src/**/*.{ts,tsx}', 'bundled-plugins/*/ui/**/*.{ts,tsx}'],
     ignores: ['src/home/controller.ts', 'src/wizard/controller.ts', 'src/workbench/**'],
     rules: {
       ...(cfg.rules || {}),

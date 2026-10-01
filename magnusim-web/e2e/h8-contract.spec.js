@@ -39,10 +39,17 @@ test('gate:h8-required-plugin-missing the app says the required plugin is missin
   const { base } = host;
   try {
 
-    // The registry says which required plugin is missing, and why.
+    // The registry says which required plugin is missing, and why, and has no default analysis.
     const reg = await (await request.get(`${base}/api/registry`)).json();
     expect(reg.analysis || []).toEqual([]);
     expect(reg.required_missing[0]).toMatchObject({ key: 'incompressible_flow', name: 'Incompressible Flow' });
+    expect(reg.default_analysis).toBeNull();
+
+    // A draft run of the project's existing study, made before the page opens.
+    const made = await request.post(`${base}/api/run/create`, { data: { project_id: FIXTURE, simulation_id: 'sim_1', name: 'Without its plugin' } });
+    const mj = await made.json();
+    expect(made.ok(), JSON.stringify(mj)).toBe(true);
+    const rid = String(mj.run_id || (mj.run && (mj.run.id || mj.run.run_id)));
 
     // What the user sees: the notice on every page, and the picker says it too.
     await page.goto(`${base}/#/p/${FIXTURE}`);
@@ -61,8 +68,45 @@ test('gate:h8-required-plugin-missing the app says the required plugin is missin
     const created = await request.post(`${base}/api/simulation`, { data: { project_id: FIXTURE, time_dependency: 'Steady-state' } });
     expect(created.status()).toBe(503);
     expect((await created.json()).error).toContain('Incompressible Flow failed to load');
-    const started = await request.post(`${base}/api/run/start`, { data: { project_id: FIXTURE, run_id: 'any', simulation_id: 'sim_1' } });
-    expect(started.ok()).toBe(false);
+    // A real draft run, so the refusal is the missing plugin's (a made-up run id
+    // was refused as "Run not found" before the plugin was ever checked), and it
+    // is said before the run's missing mesh.
+    const started = await request.post(`${base}/api/run/start`, { data: { project_id: FIXTURE, run_id: rid, simulation_id: 'sim_1' } });
+    expect(started.status()).toBe(400);
+    const sj = await started.json();
+    expect(sj.error).toContain('Incompressible Flow failed to load');
+    expect(sj.fix).toEqual({ go: 'plugins' });
+    // Its monitors: none, and why (this used to end in an unhandled 500).
+    const mon = await request.get(`${base}/api/run/monitors?project_id=${FIXTURE}&simulation_id=sim_1&run_id=${rid}`);
+    expect(mon.status()).toBe(200);
+    expect((await mon.json()).unavailable).toBe("Incompressible Flow failed to load, so this run can't start.");
+
+    // The existing study and run say why, after the action and after a reload.
+    // (The study panel used to show nothing, and Start stayed off with no reason.)
+    await page.locator('#cs-cancel').click();
+    for (const pass of ['open', 'reload']) {
+      if (pass === 'reload') await page.reload();
+      await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, FIXTURE, { timeout: 90_000 });
+      await page.locator('#left-tree [data-w17-sim-id="sim_1"] > .tree-row').first().click();
+      await expect(page.locator('#panel-incompressible-defaults [data-study-missing="1"]')).toContainText(
+        "Incompressible Flow failed to load, so this simulation can't be set up or run.",
+      );
+      const folder = page.locator('#left-tree [data-w17-sim-id="sim_1"] li[data-w27-sim-control="1"]').first();
+      if (!(await folder.evaluate((el) => el.classList.contains('expanded')))) {
+        await folder.locator(':scope > .tree-row .tw').click();
+      }
+      await page.locator(`#left-tree [data-w27-run="${rid}"] > .tree-row .tl`).first().click();
+      const runPanel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
+      await expect(runPanel).toHaveAttribute('data-run-id', rid);
+      await expect(runPanel.locator('[data-run-reason="1"]')).toContainText("Incompressible Flow failed to load, so this run can't start.");
+      await expect(runPanel.locator('[data-run-start="1"]')).toBeDisabled();
+    }
+    // Its fix opens Settings → Plugins.
+    const runPanel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
+    await expect(runPanel.locator('[data-setup-fix="1"]')).toHaveText('Open Settings → Plugins');
+    await runPanel.locator('[data-setup-fix="1"]').click();
+    await expect(page.locator('#setup-wizard')).toBeVisible();
+    await expect(page.locator('#setup-wizard [data-wiz-step="5"]')).toBeVisible();
 
     // Settings → Plugins lists it as a required plugin that failed, with no switch.
     const plugins = await (await request.get(`${base}/api/plugins`)).json();
@@ -71,6 +115,53 @@ test('gate:h8-required-plugin-missing the app says the required plugin is missin
   } finally {
     host.stop();
   }
+});
+
+test('gate:h8-required-plugin-dropped a plugin that knocks the required one out at load gets the same notice', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  // A user plugin drops a boundary condition type Incompressible Flow's analyses
+  // use, so the load-time cross-check unloads Incompressible Flow. The app used
+  // to list nothing as missing: an empty picker, no notice, runs failing.
+  const host = await startHost({ name: 'h8-dropped', pluginsFrom: 'python/tests/fixtures/dropper-plugins' });
+  const { base } = host;
+  try {
+    const reg = await (await request.get(`${base}/api/registry`)).json();
+    expect((reg.analysis || []).map((r) => r.key)).not.toContain('incompressible_steady');
+    expect(reg.required_missing[0]).toMatchObject({ key: 'incompressible_flow', name: 'Incompressible Flow' });
+    expect(reg.required_missing[0].error).toContain("unknown bc key(s) ['wall_slip']");
+    await page.goto(`${base}/#/p/${FIXTURE}`);
+    await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, FIXTURE, { timeout: 90_000 });
+    const notice = page.locator('[data-required-plugin-error="app"]');
+    await expect(notice).toContainText('Incompressible Flow failed to load');
+    await expect(notice).toContainText('wall_slip');
+    await page.locator('#btn-create-simulation').click();
+    await expect(page.locator('#cs-type-list [data-required-plugin-error="picker"]')).toContainText('Incompressible Flow failed to load');
+    await expect(page.locator('#cs-create')).toBeDisabled();
+  } finally {
+    host.stop();
+  }
+});
+
+test('gate:h8-create-time-dependency Create Simulation offers only the time dependencies the picked analysis has', async ({ page }) => {
+  test.setTimeout(120_000);
+  // The Transient choice used to pick the first transient analysis of any family:
+  // with the stub analysis (steady only) picked, it switched to Incompressible's.
+  await page.goto(`/#/p/${FIXTURE}`);
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, FIXTURE, { timeout: 60_000 });
+  await page.locator('#btn-create-simulation').click();
+  const transient = page.locator('#cs-time-dep .cs-time-opt[data-time-dep="Transient"]');
+  const stub = page.locator('#cs-type-list [data-analysis-key="stub_diffusion_steady"]');
+  await stub.click();
+  await expect(stub).toHaveClass(/is-selected/);
+  await expect(transient).toBeDisabled();
+  await expect(transient).toHaveAttribute('title', / has no Transient version\.$/);
+  // Incompressible Flow has both: its sibling is offered.
+  await page.locator('#cs-type-list [data-analysis-key="incompressible_steady"]').click();
+  await expect(transient).toBeEnabled();
+  await expect(transient).not.toHaveAttribute('title', /.+/);
+  await transient.click();
+  await expect(page.locator('#cs-type-list [data-analysis-key="incompressible_transient"]')).toHaveClass(/is-selected/);
+  await page.locator('#cs-cancel').click();
 });
 
 test('gate:h8-stub-analysis a simulation type the core does not know runs through the contract', async ({ page, request }) => {

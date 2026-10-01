@@ -2,7 +2,7 @@
 
 The one place the time-step estimate is computed. The written case
 (prepare_run → load_run_spec) and the Run panel preview (worker RPC
-run.transient_preview) both call resolve_transient_control with the same
+analysis.run_preview) both call resolve_transient_control with the same
 mesh metadata and reference speed, so the Δt a user is shown is the Δt that is
 written. TRANSIENT_DEFAULTS / STEADY_DEFAULTS are the only copies of the
 defaults: the registered control_schema is built from them and Node and the
@@ -152,6 +152,13 @@ def normalize_transient(partial: dict | None, base: dict | None = None) -> dict[
     if raw_non is not None:
         v = int(round(_num(raw_non, float(b["n_non_orth_correctors"]))))
         out["n_non_orth_correctors"] = min(max(v, 0), 5)
+    # A max time step longer than one frame would skip frames: at most one frame
+    # interval, as the Run panel has always stored it (ui/transient.ts).
+    mdt = out.get("max_delta_t")
+    frames = max(1, int(round(_num(out.get("write_count"), 1.0))))
+    interval = float(out["end_time"]) / frames if _num(out.get("end_time"), 0.0) > 0 else 0.0
+    if isinstance(mdt, (int, float)) and interval > 0 and mdt > interval:
+        out["max_delta_t"] = interval
     return out
 
 

@@ -1,18 +1,15 @@
-"""Built-in incompressible AnalysisType specs (Phase 2 land2)."""
+"""Incompressible Flow's two AnalysisTypes (steady and transient) and their schemas."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 
-if TYPE_CHECKING:
-    from cfddesk.registry.discovery import RegistryHub
-
-# Matches project.settings.TURBULENCE_MODELS / case.ras â€” inlined so registry
-# builtins do not import project/cad (OCP) at load_all time.
+# The turbulence models it offers (the core's legacy project.settings has the same
+# list for old project files; this copy keeps the plugin free of core imports).
 _TURBULENCE_MODELS: tuple[str, ...] = (
     "laminar",
     "kEpsilon",
@@ -502,11 +499,3 @@ def build_incompressible_transient() -> AnalysisType:
         requires=(Requirement("wsl_tool", "pimpleFoam"),),
         **_contract_fields("transient", key="incompressible_transient", label="Incompressible Fluid Flow (Transient)"),
     )
-
-
-def register_incompressible(hub: RegistryHub) -> None:
-    """Register both incompressible AnalysisTypes (idempotent same-plugin)."""
-    reg = hub.registry("analysis")
-    reg.register(build_incompressible_steady(), plugin="builtin")
-    reg.register(build_incompressible_transient(), plugin="builtin")
-

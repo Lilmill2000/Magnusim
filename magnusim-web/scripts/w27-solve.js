@@ -48,10 +48,8 @@ import {
   analysisByKey,
   analysisKeyFor,
   analysisSupportsTimeDependency,
-  DEFAULT_ANALYSIS_KEY,
   requiredPluginError,
   runDefaultsFor,
-  steadyDefaultsFromRegistry,
 } from './registry-defaults.js';
 import { removeComputeJob, scheduleComputeQueueKick } from './server/compute-queue.ts';
 import { polyMeshComplete } from './poly-mesh.js';
@@ -64,12 +62,18 @@ const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 const REPORT_DIR = join(ROOT, '.cache', 'jobs', 'run');
 const WSL_DISTRO = wslDistro();
 const INCREMENT = 'W27';
-// Steady iteration limit / write interval: one copy, incompressible_flow.transient
-// STEADY_DEFAULTS, published through the registered control_schema.
-const STEADY_CONTROL_DEFAULTS = steadyDefaultsFromRegistry();
-const DEFAULT_END_TIME = Number(STEADY_CONTROL_DEFAULTS.end_time);
-const DEFAULT_WRITE_INTERVAL = Number(STEADY_CONTROL_DEFAULTS.write_interval);
 const LARGE_MESH_CELLS = 200000;
+
+/**
+ * A run's iteration count or write interval as a positive whole number, or
+ * null when it is unset. The values themselves are the run's analysis's (its
+ * run model's defaults and limits, analysis.run_normalize); the core keeps none.
+ */
+function positiveInt(v) {
+  if (v == null || v === '') return null;
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 1 ? n : null;
+}
 
 /**
  * Physical core count (not SMT threads). One MPI rank per physical core is the
@@ -264,7 +268,7 @@ function residualSeriesFor(analysisKey) {
  * series plus the Courant number, so it reads either kind of old run.
  */
 function runAnalysisKeyOf(doc) {
-  return (doc && doc.analysis_key) || analysisKeyFor(DEFAULT_ANALYSIS_KEY, 'Transient');
+  return (doc && doc.analysis_key) || analysisKeyFor('', 'Transient');
 }
 
 /**
@@ -752,15 +756,16 @@ export function resolveProjectMesh(projectId, meshId, simulationId) {
 
 export function getSimulationControl(projectId, simulationId) {
   const id = projectId || projectIdOrActive('', readActiveId);
-  const defaults = { endTime: DEFAULT_END_TIME, writeInterval: DEFAULT_WRITE_INTERVAL };
-  if (!id) return { ...defaults, project_id: null };
+  if (!id) return { endTime: null, writeInterval: null, project_id: null };
   const sim = activeStudy(id, simulationId);
   const doc =
     (sim && readStudyJson(id, sim.id, 'control')) ||
     readJsonSafe(join(projectDir(id), 'simulation_control.json')) ||
     {};
-  const endTime = Math.max(1, Math.round(Number(doc.endTime) || DEFAULT_END_TIME));
-  const writeInterval = Math.max(1, Math.round(Number(doc.writeInterval) || DEFAULT_WRITE_INTERVAL));
+  // The last saved, else the study's steady analysis's run defaults (null when it has none).
+  const steady = steadyRunDefaults(sim);
+  const endTime = positiveInt(doc.endTime) ?? positiveInt(steady.end_time);
+  const writeInterval = positiveInt(doc.writeInterval) ?? positiveInt(steady.write_interval);
   return {
     project_id: id,
     endTime,
@@ -800,12 +805,41 @@ function steadyRunDefaults(sim) {
  * @param {string} projectId
  * @param {{ simulationId?: string, runId?: string, settings?: object, base?: object }} opts
  */
-async function normalizeTransientSettings(projectId, { simulationId, runId, settings, base }) {
+function normalizeTransientSettings(projectId, opts) {
+  return normalizeRunSettings(projectId, { ...opts, timeDependency: 'Transient' });
+}
+
+/**
+ * Steady run settings ({ end_time, write_interval } in iterations) as the
+ * run's analysis stores them, the same way: the core clamps nothing itself.
+ * @param {string} projectId
+ * @param {{ simulationId?: string, runId?: string, settings?: object, base?: object }} opts
+ */
+function normalizeSteadySettings(projectId, opts) {
+  return normalizeRunSettings(projectId, { ...opts, timeDependency: 'Steady-state' });
+}
+
+/** The run's iteration count and write interval as the steady settings block its analysis reads. */
+function steadyBlock(rec) {
+  /** @type {Record<string, number>} */
+  const out = {};
+  const end = positiveInt(rec && rec.endTime);
+  const every = positiveInt(rec && rec.writeInterval);
+  if (end != null) out.end_time = end;
+  if (every != null) out.write_interval = every;
+  return out;
+}
+
+/**
+ * @param {string} projectId
+ * @param {{ simulationId?: string, runId?: string, timeDependency: string, settings?: object, base?: object }} opts
+ */
+async function normalizeRunSettings(projectId, { simulationId, runId, timeDependency, settings, base }) {
   const out = await commitRpc('analysis.run_normalize', {
     project_id: projectId,
     simulation_id: simulationId || '',
     run_id: runId ? String(runId) : '',
-    time_dependency: 'Transient',
+    time_dependency: timeDependency,
     settings: settings && typeof settings === 'object' ? settings : {},
     base: base && typeof base === 'object' ? base : {},
   });
@@ -823,11 +857,9 @@ export async function saveSimulationControl(projectId, partial, simulationId) {
   const next = {
     project_id: id,
     simulation_id: (sim && sim.id) || null,
-    endTime: Math.max(1, Math.round(Number(partial.endTime != null ? partial.endTime : prev.endTime))),
-    writeInterval: Math.max(
-      1,
-      Math.round(Number(partial.writeInterval != null ? partial.writeInterval : prev.writeInterval))
-    ),
+    // Callers pass values its analysis already cleaned (normalizeSteadySettings).
+    endTime: partial.endTime != null ? positiveInt(partial.endTime) ?? prev.endTime : prev.endTime,
+    writeInterval: partial.writeInterval != null ? positiveInt(partial.writeInterval) ?? prev.writeInterval : prev.writeInterval,
     // Callers pass a block its analysis already cleaned (normalizeTransientSettings).
     transient:
       partial.transient && typeof partial.transient === 'object'
@@ -892,11 +924,12 @@ function resolveNProcs(nCells, opts) {
  * startSolve asks it through the worker (analysis.validate_ready).
  */
 export function validateSolveReady(projectId, opts) {
+  // Without its required plugin no run can start, whatever its mesh: say that first.
+  const blocked = requiredPluginError();
+  if (blocked) return { ok: false, error: blocked, project_id: projectId, required_plugin_missing: true, fix: { go: 'plugins' } };
   const mesh = resolveProjectMesh(projectId, opts && opts.meshId, opts && opts.simulationId);
   if (!mesh.ok) return mesh;
   const id = mesh.project_id;
-  const blocked = requiredPluginError();
-  if (blocked) return { ok: false, error: blocked, project_id: id, required_plugin_missing: true };
   const sim = activeStudy(id, opts && opts.simulationId);
   if (!sim) {
     return { ok: false, error: 'Create a simulation first', project_id: id, fix: { go: 'create-sim' } };
@@ -919,13 +952,18 @@ export async function getRunMonitors(projectId, runId, simulationId) {
     (cat.active_id && scoped.find((r) => String(r.id) === String(cat.active_id))) ||
     null;
   if (!rec) return { ok: false, error: 'Run not found', ...runListPayload(id, cat, { simulation_id: simulationId }) };
-  const res = await commitRpc('analysis.run_monitors', {
-    project_id: id,
-    run_id: String(rec.id),
-    simulation_id: rec.simulation_id || simulationId || '',
-    case_dir: rec.case_dir || join(runsDir(id), `run-${rec.id}`),
-    time_dependency: rec.time_dependency || '',
-  });
+  let res = null;
+  try {
+    res = await commitRpc('analysis.run_monitors', {
+      project_id: id,
+      run_id: String(rec.id),
+      simulation_id: rec.simulation_id || simulationId || '',
+      case_dir: rec.case_dir || join(runsDir(id), `run-${rec.id}`),
+      time_dependency: rec.time_dependency || '',
+    });
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
   if (!res || res.ok === false) return { ok: false, error: (res && res.error) || 'monitor results failed' };
   return {
     ok: true,
@@ -938,6 +976,8 @@ export async function getRunMonitors(projectId, runId, simulationId) {
     monitors: res.monitors || [],
     custom: res.custom || [],
     balance: res.balance || null,
+    // Why there are none: the run's analysis is not installed.
+    unavailable: res.unavailable || null,
   };
 }
 
@@ -1295,18 +1335,16 @@ export async function createDraftRun({ projectId, name, simulationId, runId: req
     (wantMesh ? { id: wantMesh, name: 'Mesh' } : null);
   const ctrl = getSimulationControl(id, sim.id);
   const transient = projectIsTransient(id, sim.id);
-  const studyRow = analysisByKey(sim.analysis_type);
-  const runDefaults = (studyRow && studyRow.run_defaults) || {};
+  // The study's steady analysis's own run defaults (analysis contract run_defaults).
+  const runDefaults = steadyRunDefaults(sim);
   const rec = {
     id: runId,
     name: String(name || '').trim().slice(0, 64) || nextRunName(cat.runs),
     status: 'draft',
     mesh_id: defaultMesh && defaultMesh.id,
     mesh_name: defaultMesh && defaultMesh.name,
-    // The study's analysis's own run defaults (analysis contract run_defaults).
-    endTime: Number(runDefaults.end_time) > 0 && !transient ? Math.round(Number(runDefaults.end_time)) : DEFAULT_END_TIME,
-    writeInterval:
-      Number(runDefaults.write_interval) > 0 && !transient ? Math.round(Number(runDefaults.write_interval)) : DEFAULT_WRITE_INTERVAL,
+    endTime: positiveInt(runDefaults.end_time),
+    writeInterval: positiveInt(runDefaults.write_interval),
     // A draft follows the simulation's time dependency; the choice is frozen
     // onto the run when it starts.
     time_dependency: transient ? 'Transient' : 'Steady-state',
@@ -1363,9 +1401,26 @@ async function applyRunSettings(id, runId, partial) {
     const next = String(partial.name || '').trim();
     if (next) rec.name = next.slice(0, 64);
   }
-  if (partial.endTime != null) rec.endTime = Math.max(1, Math.round(Number(partial.endTime) || DEFAULT_END_TIME));
-  if (partial.writeInterval != null) {
-    rec.writeInterval = Math.max(1, Math.round(Number(partial.writeInterval) || DEFAULT_WRITE_INTERVAL));
+  // Steady settings, stored as the run's analysis cleans them (its limits and defaults).
+  if (partial.endTime != null || partial.writeInterval != null) {
+    // As typed: rounding, limits and what a non-number means are the analysis's call.
+    /** @type {Record<string, unknown>} */
+    const edits = {};
+    if (partial.endTime != null) edits.end_time = partial.endTime;
+    if (partial.writeInterval != null) edits.write_interval = partial.writeInterval;
+    let clean;
+    try {
+      clean = await normalizeSteadySettings(id, {
+        simulationId: rec.simulation_id || found.sid,
+        runId,
+        settings: edits,
+        base: steadyBlock(rec),
+      });
+    } catch (e) {
+      return { ok: false, error: 'Run settings not saved: ' + String((e && e.message) || e) };
+    }
+    rec.endTime = positiveInt(clean.end_time) ?? rec.endTime ?? null;
+    rec.writeInterval = positiveInt(clean.write_interval) ?? rec.writeInterval ?? null;
   }
   // W30 transient settings. Drafts may also switch time dependency (the
   // Incompressible panel changed it); started runs keep what they solved with.
@@ -1691,17 +1746,31 @@ export async function startSolve(opts = {}) {
       bodyExtra: { error: 'This run is already solving. Click Stop if you want to end it.', increment: INCREMENT },
     };
   }
-  const et = Math.max(
-    1,
-    Math.round(Number(endTime != null ? endTime : draft && draft.endTime) || getSimulationControl(id).endTime)
-  );
-  const wi = Math.max(
-    1,
-    Math.round(
-      Number(writeInterval != null ? writeInterval : draft && draft.writeInterval) ||
-        getSimulationControl(id).writeInterval
-    )
-  );
+  // Iterations and write interval: what Start sends over the run's own, as its
+  // analysis cleans them for a steady run (a transient run keeps them as stored).
+  const ctrl = getSimulationControl(id, (draft && draft.simulation_id) || (ready.sim && ready.sim.id));
+  const rawEnd = endTime != null ? endTime : draft && draft.endTime;
+  const rawEvery = writeInterval != null ? writeInterval : draft && draft.writeInterval;
+  let et = positiveInt(rawEnd) ?? ctrl.endTime;
+  let wi = positiveInt(rawEvery) ?? ctrl.writeInterval;
+  if (!isTransient) {
+    try {
+      const clean = await normalizeSteadySettings(id, {
+        simulationId: (draft && draft.simulation_id) || (ready.sim && ready.sim.id),
+        runId,
+        settings: { ...(rawEnd != null ? { end_time: rawEnd } : {}), ...(rawEvery != null ? { write_interval: rawEvery } : {}) },
+        base: steadyBlock({ endTime: ctrl.endTime, writeInterval: ctrl.writeInterval }),
+      });
+      et = positiveInt(clean.end_time) ?? et;
+      wi = positiveInt(clean.write_interval) ?? wi;
+    } catch (e) {
+      return {
+        ok: false,
+        status: 500,
+        bodyExtra: { error: 'Could not read this run\'s settings: ' + String((e && e.message) || e), increment: INCREMENT },
+      };
+    }
+  }
   let transient = null;
   if (isTransient) {
     saveSimulationControl(id, { endTime: et, writeInterval: wi, transient: transientSettings }, draft && draft.simulation_id);
@@ -1760,12 +1829,15 @@ export async function startSolve(opts = {}) {
         String(prep.stderr || prep.stdout || '').slice(0, 800) ||
         `prepare_run exited ${prep.status}`;
       const error = 'Failed to prepare solve case: ' + errMsg;
+      // A run its analysis found not ready (it changed after the check) keeps the analysis's fix.
+      const fix = (prepResult && prepResult.fix) || null;
       try {
         persistRun(id, simId, {
           ...stored,
           status: 'failed',
           error,
           note: error,
+          fix,
           finished_at: new Date().toISOString(),
           pid: null,
         });
@@ -1773,7 +1845,7 @@ export async function startSolve(opts = {}) {
       return {
         ok: false,
         status: 500,
-        bodyExtra: { error, increment: INCREMENT, run_id: runId, simulation_id: simId },
+        bodyExtra: { error, increment: INCREMENT, run_id: runId, simulation_id: simId, ...(fix ? { fix } : {}) },
       };
     }
   } catch (err) {

@@ -3,7 +3,7 @@
  * Run: node scripts/__tests__/prove-registry-defaults.mjs
  */
 import {
-  DEFAULT_ANALYSIS_KEY,
+  defaultAnalysisKey,
   MESH_ENGINES,
   REGISTRY_JSON_PATH,
   analysisKeys,
@@ -13,7 +13,7 @@ import {
   mesherKeys,
   meshEngineKeys,
 } from '../registry-defaults.js';
-import { TIME_DEPENDENCIES, W17_DEFAULTS } from '../w17-simulation.js';
+import { algorithmForTimeDependency, w17Defaults } from '../w17-simulation.js';
 import { W20_DEFAULTS, MESH_ENGINES as W20_MESH_ENGINES } from '../w20-mesh.js';
 
 function fail(msg) {
@@ -25,9 +25,16 @@ const dump = loadCommittedRegistry();
 const aKeys = new Set(analysisKeys());
 const mKeys = new Set(mesherKeys());
 const engines = meshEngineKeys();
+// The default analysis is the required plugin's [default_analysis], published in the dump.
+const DEFAULT_ANALYSIS_KEY = defaultAnalysisKey();
+const W17_DEFAULTS = w17Defaults();
+const TIME_DEPENDENCIES = {
+  'Steady-state': algorithmForTimeDependency('Steady-state'),
+  Transient: algorithmForTimeDependency('Transient'),
+};
 
-if (!aKeys.has(DEFAULT_ANALYSIS_KEY)) {
-  fail(`dump analysis missing ${DEFAULT_ANALYSIS_KEY}`);
+if (!DEFAULT_ANALYSIS_KEY || !aKeys.has(DEFAULT_ANALYSIS_KEY)) {
+  fail(`dump analysis missing the default analysis ${JSON.stringify(dump.default_analysis)}`);
 }
 for (const k of ['standard', 'cfmesh', 'snappy_hexdominant']) {
   if (!mKeys.has(k)) fail(`dump mesher missing ${k}`);

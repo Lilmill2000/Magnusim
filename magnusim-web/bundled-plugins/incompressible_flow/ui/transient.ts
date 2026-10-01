@@ -74,6 +74,7 @@ export function normalizeTransient(
   };
   if (!(out.end_time > 0)) out.end_time = Number(b.end_time) > 0 ? Number(b.end_time) : Number(defaults.end_time);
   if (!(out.write_count >= 1)) out.write_count = Number(defaults.write_count);
+  out.write_count = Math.min(out.write_count, 5000);
   if (!(out.max_co > 0)) out.max_co = Number(defaults.max_co);
   if (out.delta_t != null && !(out.delta_t > 0)) out.delta_t = null;
   if (out.max_delta_t != null && !(out.max_delta_t > 0)) out.max_delta_t = null;

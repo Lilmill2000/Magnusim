@@ -8,13 +8,10 @@ path is not moved this land (soft-pass: wrap/register only).
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from cfddesk.registry.monitor import MonitorType
 from cfddesk.registry.schema import SchemaField
-
-if TYPE_CHECKING:
-    from cfddesk.registry.discovery import RegistryHub
 
 
 def _write_area_average(
@@ -112,10 +109,3 @@ def build_flow_rate() -> MonitorType:
         write_function_object=_write_flow_rate,
         parse_dat=_parse_dat_stub,
     )
-
-
-def register_monitors(hub: RegistryHub) -> None:
-    """Register area_average + flow_rate (idempotent same-plugin)."""
-    reg = hub.registry("monitor")
-    reg.register(build_area_average(), plugin="builtin")
-    reg.register(build_flow_rate(), plugin="builtin")

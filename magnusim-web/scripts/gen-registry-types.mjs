@@ -89,6 +89,14 @@ export interface RequiredPluginMissing {
   log?: string;
 }
 
+/** The analysis a study gets when none is named (the required plugin's [default_analysis]). */
+export interface DefaultAnalysis {
+  steady: string;
+  transient?: string;
+  /** Names studies saved before analysis keys carry for it. */
+  aliases?: string[];
+}
+
 export interface RegistryDescribe {
   analysis?: RegistryRow[];
   solver?: RegistryRow[];
@@ -99,6 +107,7 @@ export interface RegistryDescribe {
   monitor?: RegistryRow[];
   plugins?: Array<Record<string, unknown>>;
   required_missing?: RequiredPluginMissing[];
+  default_analysis?: DefaultAnalysis | null;
 }
 `;
 

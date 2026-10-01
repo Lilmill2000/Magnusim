@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from cfddesk.registry.material import MaterialModel
 from cfddesk.registry.schema import SchemaField
 from magnusim_sdk.fluids import LIBRARY
 
-if TYPE_CHECKING:
-    from cfddesk.registry.discovery import RegistryHub
-
 
 def _library_presets() -> tuple[dict[str, Any], ...]:
-    """Presets from materials/library.py (Air, Water, ...) — no rewrite of library."""
+    """Presets from the SDK fluid library (magnusim_sdk.fluids: Air, Water, ...)."""
     return tuple(
         {
             "key": m.key,
@@ -56,9 +53,3 @@ def build_newtonian_incompressible() -> MaterialModel:
         properties_schema=_newtonian_properties_schema(),
         library=_library_presets(),
     )
-
-
-def register_materials(hub: RegistryHub) -> None:
-    """Register newtonian_incompressible (idempotent same-plugin)."""
-    reg = hub.registry("material")
-    reg.register(build_newtonian_incompressible(), plugin="builtin")

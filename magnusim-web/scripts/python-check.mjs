@@ -6,7 +6,13 @@ import { PY_ROOT, PYTHON } from './python-env.js';
 
 const STEPS = {
   ruff: ['-m', 'ruff', 'check', 'cfddesk', 'tools', 'tests', '../bundled-plugins'],
-  mypy: ['-m', 'mypy', 'cfddesk', '../bundled-plugins/incompressible_flow/incompressible_flow'],
+  mypy: [
+    '-m',
+    'mypy',
+    'cfddesk',
+    '../bundled-plugins/incompressible_flow/incompressible_flow',
+    '../bundled-plugins/incompressible_flow/plugin.py',
+  ],
   pytest: ['-m', 'pytest', '-q', '-p', 'no:cacheprovider'],
 };
 

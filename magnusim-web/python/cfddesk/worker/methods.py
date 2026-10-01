@@ -63,6 +63,11 @@ def registry_describe() -> dict[str, Any]:
     # Required bundled plugins that did not load: the page blocks creating and
     # running simulations and says why (never an empty picker).
     out["required_missing"] = [dict(row) for row in hub.required_failures]
+    # The analysis a study gets when none is named (the required plugin's
+    # [default_analysis]: steady, transient, aliases); None without it.
+    from cfddesk.registry.discovery import default_analysis
+
+    out["default_analysis"] = default_analysis()
     return out
 
 
@@ -685,6 +690,24 @@ def _analysis_spec(key: str) -> Any:
     return reg.get(key)
 
 
+def _analysis_installed(key: str) -> bool:
+    from cfddesk.registry import load_all
+    from cfddesk.registry.discovery import get_registry
+
+    load_all()
+    return bool(key) and key in set(get_registry("analysis").keys())
+
+
+def _analysis_missing_issue() -> dict[str, Any]:
+    """Why a run whose analysis is not installed cannot start (its plugin is off or did not load)."""
+    from cfddesk.registry.discovery import get_hub
+
+    fix = {"go": "plugins"}
+    for row in get_hub().required_failures:
+        return {"message": f"{row.get('name') or row.get('key')} failed to load, so this run can't start.", "fix": fix}
+    return {"message": "This run's analysis is not available: its plugin is off or did not load.", "fix": fix}
+
+
 def _run_analysis_key(root: Path, simulation_id: str, run_id: str, time_dependency: str = "") -> str:
     """The analysis a run solves with: its study's family, at the run's time dependency."""
     from cfddesk.project.web_adapter import _analysis_and_app, _td, run_time_dependency
@@ -734,6 +757,8 @@ def analysis_validate_ready(
 
     root = _root(project_id, project_dir)
     key = _run_analysis_key(root, simulation_id, run_id, time_dependency)
+    if not _analysis_installed(key):
+        return {"ok": True, "analysis_key": key, "ready": False, "issues": [_analysis_missing_issue()]}
     ctx = ready_context(root, simulation_id=simulation_id or None, run_id=run_id, mesh_id=mesh_id)
     issues = contract.validate_ready(_analysis_spec(key), ctx)
     return {"ok": True, "analysis_key": key, "ready": not issues, "issues": issues}
@@ -814,6 +839,9 @@ def analysis_run_monitors(
     if not case.is_relative_to(root.resolve()):
         raise RpcError(-32602, "case_dir is outside the project", {"case_dir": case_dir})
     key = _run_analysis_key(root, simulation_id, run_id, time_dependency)
+    if not _analysis_installed(key):
+        # Only its analysis can read its monitors; say why there are none.
+        return {"ok": True, "analysis_key": key, **contract.NO_MONITORS, "unavailable": _analysis_missing_issue()["message"]}
     return {"ok": True, "analysis_key": key, **contract.run_monitors(_analysis_spec(key), case)}
 
 

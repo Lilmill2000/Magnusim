@@ -18,7 +18,8 @@ import { PanelChrome } from '../PanelChrome';
 import { RenameTitle } from '../RenameTitle';
 import { mergeObjectSchemas, pickSchemaValues, scopeIds, useRegistryReady } from '../scope';
 import { requiredPluginMessage } from '../../app/RequiredPluginError';
-import { DEFAULT_ANALYSIS_KEY } from '../../analysis';
+import { analysisMissingText, defaultAnalysisKey, siblingKey } from '../../analysis';
+import { openSetupWizard } from '../../wizard/controller';
 import type { StudySettingsProps } from '../../plugin-api';
 import { useSettingsSlot } from '../../plugin-api/slots';
 
@@ -48,7 +49,7 @@ export function SimulationHub(props: IslandProps) {
 
   useEffect(() => {
     if (selected || !rows.length) return;
-    pick(rows.find((row) => row.key === DEFAULT_ANALYSIS_KEY) || rows[0]);
+    pick(rows.find((row) => row.key === defaultAnalysisKey()) || rows[0]);
   }, [rows, selected]);
 
   // Without its required plugin the app cannot create a study: Create stays off and says why.
@@ -58,14 +59,19 @@ export function SimulationHub(props: IslandProps) {
 
   useEffect(() => {
     if (!creating) return undefined;
-    // The Steady/Transient toggle picks the analysis with that time dependency.
+    // The Steady/Transient toggle picks the picked analysis's sibling of that
+    // time dependency (its family's), never another family's analysis.
     const onTimeDep = (ev: Event) => {
       const value = String((ev as CustomEvent<{ value?: string }>).detail?.value || '');
       const want = /transient/i.test(value) ? 'transient' : 'steady';
+      const td = (row: RegistryRow) => (/transient/i.test(String(row.time_dependency || '')) ? 'transient' : 'steady');
       const current = rows.find((row) => row.key === selected);
-      if (current && String(current.time_dependency || 'steady') === want) return;
-      const hit = rows.find((row) => String(row.time_dependency || 'steady') === want);
+      if (current && td(current) === want) return;
+      const key = siblingKey(current ? current.key : '', want);
+      const hit = rows.find((row) => row.key === key && td(row) === want);
       if (hit) pick(hit);
+      // No such sibling: the toggle goes back to what the picked analysis solves.
+      else if (current) window.__CFD_CREATE_PICK_ANALYSIS__?.(current);
     };
     window.addEventListener('cfd:create-time-dep', onTimeDep);
     return () => window.removeEventListener('cfd:create-time-dep', onTimeDep);
@@ -95,12 +101,14 @@ export function SimulationHub(props: IslandProps) {
   return <PanelChrome title="Simulation">{list}</PanelChrome>;
 }
 
-function rowFor(key: string | undefined, rows: RegistryRow[]): RegistryRow | undefined {
-  if (key) {
-    const hit = rows.find((row) => row.key === key);
-    if (hit) return hit;
-  }
-  return rows.find((row) => row.key === DEFAULT_ANALYSIS_KEY) || rows[0];
+/**
+ * The registered analysis a study solves with (its family at its time
+ * dependency; blank or a pre-key name is the default analysis), or undefined
+ * when it is not installed: never another analysis's row.
+ */
+function rowFor(analysisType: unknown, timeDependency: unknown, rows: RegistryRow[]): RegistryRow | undefined {
+  const key = siblingKey(String(analysisType || ''), timeDependency);
+  return key ? rows.find((row) => row.key === key) : undefined;
 }
 
 function useStudyState(): StudyState | null {
@@ -120,7 +128,8 @@ export function GenericStudySettings({ study, row, rows, save, setTimeDependency
   const settingsSchema = mergeObjectSchemas([(row?.schema || row?.settings_schema) as RJSFSchema | undefined]);
   const numericsSchema = mergeObjectSchemas([row?.numerics_schema as RJSFSchema | undefined]);
   const hasSettings = Object.keys(settingsSchema.properties || {}).length > 0;
-  const hasNumerics = !transient && Object.keys(numericsSchema.properties || {}).length > 0;
+  // The analysis's schema decides (its transient sibling may have numerics of its own).
+  const hasNumerics = Object.keys(numericsSchema.properties || {}).length > 0;
   const family = row?.family?.key;
   const hasSibling =
     !!family && rows.filter((r) => r.family?.key === family).some((r) => r.time_dependency !== row?.time_dependency);
@@ -188,8 +197,11 @@ export function SimulationDefaults(_props: IslandProps) {
   const study = useStudyState();
   const [error, setError] = useState('');
   const rows = visibleAnalyses((registry?.analysis || []) as RegistryRow[]);
-  const row = rowFor(study?.analysis_type, rows);
+  const row = rowFor(study?.analysis_type, study?.time_dependency, rows);
   const { Component: Settings, waiting } = useSettingsSlot<StudySettingsProps>('study-settings', row);
+  // Its analysis is not installed (its plugin is off or did not load): say so
+  // instead of a settings form.
+  const missing = study?.has_study && registry && !row ? analysisMissingText('', 'study') : '';
 
   async function save(patch: Record<string, unknown>) {
     setError('');
@@ -227,7 +239,22 @@ export function SimulationDefaults(_props: IslandProps) {
           {study.analysis || (row ? analysisLabel(row) : '')}
         </span>
       </div>
-      {waiting ? null : Settings ? <Settings {...settingsProps} /> : <GenericStudySettings {...settingsProps} />}
+      {missing ? (
+        <div className="mat-assign-hint sim-run-hint" data-study-missing="1">
+          <span className="sim-run-hint-msg">{missing}</span>
+          <button
+            type="button"
+            className="sim-fix-go"
+            onClick={() => openSetupWizard({ required: false, step: 'plugins' })}
+          >
+            Open Settings → Plugins
+          </button>
+        </div>
+      ) : waiting ? null : Settings ? (
+        <Settings {...settingsProps} />
+      ) : (
+        <GenericStudySettings {...settingsProps} />
+      )}
       {error ? (
         <p className="mat-assign-hint" data-run-reason="1" role="alert">
           {error}
@@ -260,7 +287,7 @@ export function simulationSaveBody(
 ): Record<string, unknown> {
   const ids = scopeIds(props);
   const rows = analysisRows();
-  const row = rowFor(String(values.analysis_type || ''), rows);
+  const row = rowFor(values.analysis_type, values.time_dependency, rows);
   const schema = mergeObjectSchemas([
     (row?.schema || row?.settings_schema) as RJSFSchema | undefined,
     row?.numerics_schema as RJSFSchema | undefined,

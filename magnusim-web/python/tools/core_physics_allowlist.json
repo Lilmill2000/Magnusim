@@ -3,23 +3,23 @@
   "files": [
     {
       "file": "python/cfddesk/project/model.py",
-      "reason": "Legacy versioned Project model (project.json): PRIMARY_SIM_NAME names the one study old project files carry. It is not on the run path."
+      "reason": "Versioned Project model (project.json): loaded on every project open and save and by the meshers, but no run is written from it (runs are written by the analysis plugin from the study files). PRIMARY_SIM_NAME names the study a project file without studies is given. Moving its physics settings out is proposed (Project model split)."
     },
     {
       "file": "python/cfddesk/case/ras.py",
-      "reason": "Legacy versioned Project model (project.json): its turbulence settings still load and migrate. It is not on the run path, because runs are written by the analysis plugin."
+      "reason": "Turbulence types and writers of the versioned Project model: initial_conditions.py and numerics.py import its types to load and migrate old project.json files. Its case-writing functions are called by no run (runs are written by the analysis plugin); removing them belongs to the Project model split."
     },
     {
       "file": "python/cfddesk/project/initial_conditions.py",
-      "reason": "Legacy versioned Project model (project.json) initial conditions, used by project load and migrations. It is not on the run path."
+      "reason": "Versioned Project model (project.json) initial conditions, used when old project files are migrated. No run is written from it."
     },
     {
       "file": "python/cfddesk/project/numerics.py",
-      "reason": "Legacy versioned Project model (project.json) numerics, used by project load and migrations. It is not on the run path."
+      "reason": "Versioned Project model (project.json) numerics, used when old project files are migrated and by Project methods. No run is written from it."
     },
     {
       "file": "python/cfddesk/project/settings.py",
-      "reason": "Legacy versioned Project model (project.json) settings. Its TurbulenceModel literal validates old project files."
+      "reason": "Versioned Project model (project.json) settings, loaded on every project open: SolverSettings, BoundarySettings and the TurbulenceModel literal still read old project files. Nothing on the run path reads them. Moving them out is proposed (Project model split)."
     },
     {
       "file": "python/cfddesk/wsl/openfoam.py",

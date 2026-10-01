@@ -1743,5 +1743,12 @@
       "requires_plugins": []
     }
   ],
+  "default_analysis": {
+    "steady": "incompressible_steady",
+    "transient": "incompressible_transient",
+    "aliases": [
+      "incompressible"
+    ]
+  },
   "missing": []
 }

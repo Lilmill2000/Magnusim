@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from cfddesk.registry.requirements import Requirement
 
@@ -96,6 +97,10 @@ class PluginManifest:
     requires_plugins: list[str] = field(default_factory=list)
     # "kind:key" specs of this plugin that other plugins may not drop.
     protected: list[str] = field(default_factory=list)
+    # [default_analysis] (a required bundled plugin only): the analysis a study
+    # gets when none is named, {"steady", "transient", "aliases"}; aliases are
+    # the names studies saved before analysis keys carry.
+    default_analysis: dict[str, Any] = field(default_factory=dict)
     # Project-level studies it owns (plugins/<key>/studies/<sid>).
     study_kinds: list[StudyKind] = field(default_factory=list)
     # Full workspaces it draws in a sandboxed frame ([[workspaces]]).

@@ -2,8 +2,7 @@
 
 What the core used to decide itself, answered by the analysis: the Create modal
 text, a new study's defaults, what blocks a run, the run settings model and its
-preview, and the solver-output parser. H9 moves this module (with the rest of
-Incompressible Flow) into ``bundled-plugins/incompressible_flow``.
+preview, and the solver-output parser.
 
 ``validate_ready`` is a line-for-line port of Node's former validateSolveReady
 checks: same order, same messages, same fix targets (the page matches some of

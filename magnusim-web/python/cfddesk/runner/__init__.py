@@ -16,7 +16,6 @@ from cfddesk.runner.sync import (
     copy_back,
     copy_back_mesh,
     ensure_foam_marker,
-    sync_solve_dicts_to_wsl,
     sync_to_wsl,
 )
 
@@ -32,7 +31,6 @@ __all__ = [
     "copy_back_mesh",
     "ensure_foam_marker",
     "slugify_wsl_case_id",
-    "sync_solve_dicts_to_wsl",
     "sync_to_wsl",
     "validate_wsl_case_id",
     "wsl_case_path",

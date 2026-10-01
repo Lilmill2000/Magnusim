@@ -1,7 +1,8 @@
 """Unit tests for incompressible_flow.transient (w30 parity)."""
 from __future__ import annotations
 
-from conftest import GOLDEN, compare_or_update, normalize_foam
+from conftest import GOLDEN
+from test_prepare_run_golden import normalize_prepare_run
 
 from incompressible_flow.transient import (
     TransientControl,
@@ -16,6 +17,26 @@ from incompressible_flow.writer import (
     write_fv_schemes_transient,
     write_fv_solution_pimple,
 )
+
+
+def test_normalize_agrees_with_the_run_panel():
+    """tests/transient_vectors.json: the Run panel's clean-up (ui/transient.ts,
+    checked by ui/transient.test.tsx) and the stored one give the same answer."""
+    import json
+    from pathlib import Path
+
+    from incompressible_flow.transient import TRANSIENT_DEFAULTS
+
+    shared = json.loads((Path(__file__).parent / "transient_vectors.json").read_text(encoding="utf-8"))
+    assert shared["defaults"] == TRANSIENT_DEFAULTS
+    for v in shared["vectors"]:
+        got = normalize_transient(v["raw"], v["base"])
+        want = {**shared["defaults"], **v["base"], **v["expected"]}
+        for key, value in want.items():
+            if isinstance(value, float):
+                assert abs(float(got[key]) - value) < 1e-12, (v["name"], key, got[key])
+            else:
+                assert got[key] == value, (v["name"], key, got[key])
 
 
 def test_foam_num_basic():
@@ -109,12 +130,15 @@ def test_transient_dicts_match_js_transient_golden(tmp_path, update_golden):
         got_path = case / "system" / name
         golden_path = gdir / name
         if update_golden:
-            compare_or_update(got_path, golden_path, update=True)
+            # The writer's own text, like the committed goldens (compare_or_update
+            # would store the normalized form, which the check below does not match).
+            golden_path.write_text(got_path.read_text(encoding="utf-8"), encoding="utf-8")
             continue
-        # js_transient goldens are raw JS dumps (blank lines retained). Phase 0
-        # normalize_foam strips blank / banner lines from the Python writer
-        # output — normalize both sides for a fair w30 parity check.
+        # The same js_transient goldens test_write_case_golden checks the whole case
+        # against, compared the same way (banners, padding and the order of the
+        # function objects do not count), so refreshing them in any order keeps
+        # both tests green.
         assert golden_path.is_file(), f"missing golden {golden_path}"
-        assert normalize_foam(got_path.read_text(encoding="utf-8")) == normalize_foam(
+        assert normalize_prepare_run(got_path.read_text(encoding="utf-8")) == normalize_prepare_run(
             golden_path.read_text(encoding="utf-8")
         ), f"mismatch vs {golden_path.name}"

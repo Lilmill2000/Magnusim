@@ -926,6 +926,106 @@ def _apply_tier_meta(result: PluginManifest, meta: dict[str, Any], tier: str) ->
         kind, _, key = token.partition(":")
         if kind and key:
             protect(kind, key)
+    # Checked before the plugin is imported (_load_ordered); only a required
+    # bundled plugin's counts.
+    try:
+        spec = _parse_default_analysis(meta)
+    except ValueError:
+        spec = {}
+    result.default_analysis = spec if result.tier == "bundled" and result.required else {}
+
+
+_PLAIN_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def _parse_default_analysis(meta: dict[str, Any]) -> dict[str, Any]:
+    """A manifest's ``[default_analysis]`` table: ``steady`` (an analysis key),
+    ``transient`` (its sibling, optional) and ``aliases`` (stored names that mean
+    it). ``{}`` when there is none."""
+    raw = meta.get("default_analysis")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("[default_analysis] must be a table")
+    out: dict[str, Any] = {"steady": str(raw.get("steady") or "").strip()}
+    transient = str(raw.get("transient") or "").strip()
+    if transient:
+        out["transient"] = transient
+    out["aliases"] = _str_list(raw.get("aliases"))
+    for name in [out["steady"], transient, *out["aliases"]]:
+        if name and not _PLAIN_KEY.match(name):
+            raise ValueError(f"[default_analysis] names must be plain keys, got {name!r}")
+    if not out["steady"]:
+        raise ValueError("[default_analysis] needs steady = \"<analysis key>\"")
+    return out
+
+
+_DEFAULT_FROM_DISK: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def default_analysis(*, loaded: bool = True) -> dict[str, Any] | None:
+    """The analysis a study gets when none is named: the ``[default_analysis]``
+    of the loaded required bundled plugin (``{steady, transient?, aliases}``),
+    or None when it is not loaded.
+
+    ``loaded=False`` also reads it from the required plugins' manifest.toml
+    when they are not loaded (yet), without importing them, so the project
+    model can name a study's analysis before the registry has loaded.
+    """
+    found = default_analysis_of(get_hub())
+    if found or loaded:
+        return found
+    folder = bundled_dir_for(_resolve_web_root(None))
+    if folder is None:
+        return None
+    for key in REQUIRED_BUNDLED:
+        path = folder / key / "manifest.toml"
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        hit = _DEFAULT_FROM_DISK.get(str(path))
+        if hit is None or hit[0] != mtime:
+            meta = _parse_simple_toml(path.read_text(encoding="utf-8-sig"), source=str(path))
+            try:
+                spec = _parse_default_analysis(meta or {})
+            except ValueError:
+                spec = {}
+            hit = (mtime, spec)
+            _DEFAULT_FROM_DISK[str(path)] = hit
+        if hit[1]:
+            return dict(hit[1])
+    return None
+
+
+def default_analysis_of(hub: RegistryHub) -> dict[str, Any] | None:
+    """The ``[default_analysis]`` of a required plugin loaded in ``hub``, or None."""
+    for manifest in hub.manifests.values():
+        if manifest.required and manifest.default_analysis:
+            return dict(manifest.default_analysis)
+    return None
+
+
+def _check_default_analysis(hub: RegistryHub) -> None:
+    """A required plugin's [default_analysis] must name its own analyses, of
+    the right time dependency; otherwise the plugin fails to load."""
+    analyses = hub.registry("analysis")
+    for manifest in list(hub.manifests.values()):
+        spec = manifest.default_analysis
+        if not spec:
+            continue
+        for td in ("steady", "transient"):
+            key = spec.get(td)
+            if not key:
+                continue
+            if key not in analyses.keys() or analyses.owner(key) != manifest.key:
+                err = f"[default_analysis] {td} = {key!r} is not one of its analyses"
+            elif str(getattr(analyses.get(key), "time_dependency", "")) != td:
+                err = f"[default_analysis] {td} = {key!r} is not a {td} analysis"
+            else:
+                continue
+            _drop_failed_plugin(hub, manifest.key, err)
+            break
 
 
 def plugins_dir_for(root: Path | str) -> Path:
@@ -1045,6 +1145,8 @@ def _load_ordered(
         key = str(meta.get("key") or child.name)
         try:
             required, default_enabled = tier_flags(meta, tier)
+            if _parse_default_analysis(meta) and not (tier == "bundled" and required):
+                raise ValueError("[default_analysis] is only for a required bundled plugin")
         except ValueError as exc:
             hub.failures.append(_failure_row(key, f"manifest: {exc}", meta, source=source))
             had_failures = True
@@ -1126,8 +1228,21 @@ def discover_bundled_plugins(
     state = plugin_state(_resolve_web_root(web_root))
     manifests, failed = _load_ordered(found, hub, state, tier="bundled")
     hub.required_failures.clear()
+    _record_required_failures(hub, folder)
+    return manifests, (scan_failed or failed)
+
+
+def _record_required_failures(hub: RegistryHub, folder: Path | None) -> None:
+    """A ``hub.required_failures`` row (logged once) for every key in
+    :data:`REQUIRED_BUNDLED` that is not loaded and has no row yet.
+
+    Runs after the bundled plugins load, and again after cross-reference
+    validation, which can unload a required plugin whose analyses lost a
+    solver, BC type, material or monitor to another plugin.
+    """
+    have = {str(r.get("key")) for r in hub.required_failures}
     for key, name in REQUIRED_BUNDLED.items():
-        if key in hub.manifests:
+        if key in hub.manifests or key in have:
             continue
         err = next((f.get("error") for f in hub.failures if f.get("key") == key), None)
         row = {
@@ -1138,7 +1253,6 @@ def discover_bundled_plugins(
         }
         row["log"] = _log_required_failure(row)
         hub.required_failures.append(row)
-    return manifests, (scan_failed or failed)
 
 
 def _log_required_failure(row: dict[str, Any]) -> str:
@@ -1267,6 +1381,9 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
     _, folder_fail = discover_folder_plugins(hub, web_root=web_root)
     # After plugins: every AnalysisType bag key must resolve (solver/bc/material/monitor).
     _validate_cross_refs(hub)
+    _check_default_analysis(hub)
+    # A required plugin unloaded by these checks is missing too (the app says so).
+    _record_required_failures(hub, bundled_dir_for(_resolve_web_root(web_root)))
     from cfddesk.registry.tools import sync_tool_kinds
 
     sync_tool_kinds(hub)

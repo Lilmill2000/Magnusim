@@ -1,0 +1,29 @@
+{
+  "about": "Transient run settings as the Run panel cleans them (ui/transient.ts normalizeTransient) and as the analysis stores them (incompressible_flow.transient.normalize_transient): the same answer for the same edit. tests/test_transient.py and ui/transient.test.tsx both read this file.",
+  "defaults": {
+    "end_time": 5.0,
+    "write_count": 50,
+    "time_step_mode": "adjustable",
+    "max_co": 1.0,
+    "delta_t": null,
+    "max_delta_t": null,
+    "time_scheme": "Euler",
+    "n_outer_correctors": 1,
+    "n_correctors": 2,
+    "n_non_orth_correctors": 0
+  },
+  "vectors": [
+    {"name": "nothing typed", "raw": {}, "base": {}, "expected": {}},
+    {"name": "too many frames", "raw": {"write_count": 10000}, "base": {}, "expected": {"write_count": 5000}},
+    {"name": "frames rounded", "raw": {"write_count": 20.6}, "base": {}, "expected": {"write_count": 21}},
+    {"name": "no frames", "raw": {"write_count": 0}, "base": {}, "expected": {}},
+    {"name": "negative time", "raw": {"end_time": -1}, "base": {"end_time": 2.0}, "expected": {"end_time": 2.0}},
+    {"name": "no Courant limit", "raw": {"max_co": 0}, "base": {}, "expected": {}},
+    {"name": "blank time step is calculated", "raw": {"delta_t": "", "max_delta_t": ""}, "base": {"delta_t": 0.001, "max_delta_t": 0.01}, "expected": {"delta_t": null, "max_delta_t": null}},
+    {"name": "time steps kept", "raw": {"delta_t": 0.0005, "max_delta_t": 0.05}, "base": {}, "expected": {"delta_t": 0.0005, "max_delta_t": 0.05}},
+    {"name": "max time step at most one frame", "raw": {"end_time": 2.0, "write_count": 20, "max_delta_t": 0.5}, "base": {}, "expected": {"end_time": 2.0, "write_count": 20, "max_delta_t": 0.1}},
+    {"name": "correctors in range", "raw": {"n_outer_correctors": 99, "n_correctors": 0, "n_non_orth_correctors": 9}, "base": {}, "expected": {"n_outer_correctors": 50, "n_correctors": 1, "n_non_orth_correctors": 5}},
+    {"name": "fixed step, second order", "raw": {"time_step_mode": "fixed", "time_scheme": "backward", "max_co": 0.5}, "base": {}, "expected": {"time_step_mode": "fixed", "time_scheme": "backward", "max_co": 0.5}},
+    {"name": "stored settings kept", "raw": {"end_time": 3.0}, "base": {"write_count": 30, "max_co": 2.0, "n_correctors": 3}, "expected": {"end_time": 3.0, "write_count": 30, "max_co": 2.0, "n_correctors": 3}}
+  ]
+}

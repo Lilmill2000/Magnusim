@@ -54,7 +54,8 @@ import {
   analysisSupportsTimeDependency,
   algorithmLabelFor,
   buildW17DefaultsFromRegistry,
-  DEFAULT_ANALYSIS_KEY,
+  defaultAnalysisKey,
+  isDefaultAnalysisAlias,
   requiredPluginError,
   studyDefaultsFor,
 } from './registry-defaults.js';
@@ -66,12 +67,14 @@ const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'proje
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
 /**
- * The default analysis's study defaults, as its contract publishes them
- * (committed registry until the live one loads). A new study takes the picked
- * analysis's own (studyDefaultsFor), these only fill what that leaves out.
- * @type {Readonly<Record<string, any>>}
+ * The default analysis's study defaults, as its contract publishes them, read
+ * when used (the live registry once it has loaded): the time dependency and
+ * analysis a create request that names none gets.
+ * @returns {Readonly<Record<string, any>>}
  */
-export const W17_DEFAULTS = buildW17DefaultsFromRegistry() || Object.freeze({});
+export function w17Defaults() {
+  return buildW17DefaultsFromRegistry() || Object.freeze({});
+}
 
 function readActiveId() {
   if (!existsSync(ACTIVE_PATH)) return null;
@@ -123,30 +126,24 @@ function newSimId() {
  * @param {string} [analysisKey]
  */
 export function algorithmForTimeDependency(timeDependency, analysisKey) {
-  return algorithmLabelFor(analysisKeyFor(analysisKey || DEFAULT_ANALYSIS_KEY, timeDependency));
+  return algorithmLabelFor(analysisKeyFor(analysisKey || defaultAnalysisKey(), timeDependency));
 }
-
-/** The default family's labels (kept for scripts that print them). */
-export const TIME_DEPENDENCIES = Object.freeze({
-  'Steady-state': algorithmForTimeDependency('Steady-state'),
-  Transient: algorithmForTimeDependency('Transient'),
-});
 
 function registeredAnalysis(v) {
   const s = String(v || '').trim();
   if (!s) return true;
   if (analysisKeys().includes(s)) return true;
-  if (s === W17_DEFAULTS.analysis || s === W17_DEFAULTS.analysis_type) return true;
-  if (s === 'incompressible' || s === DEFAULT_ANALYSIS_KEY) return true;
-  return false;
+  const d = w17Defaults();
+  if (s === d.analysis || s === d.analysis_type) return true;
+  return isDefaultAnalysisAlias(s);
 }
 
 function normalizeTimeDependency(v, fallback) {
   const s = String(v == null ? '' : v).trim();
-  if (!s) return fallback || W17_DEFAULTS.time_dependency;
+  if (!s) return fallback || w17Defaults().time_dependency || 'Steady-state';
   if (/transient/i.test(s)) return 'Transient';
   if (/steady/i.test(s)) return 'Steady-state';
-  return fallback || W17_DEFAULTS.time_dependency;
+  return fallback || w17Defaults().time_dependency || 'Steady-state';
 }
 
 export function timeDependenciesMatch(a, b) {
@@ -208,7 +205,8 @@ function buildSimulation(body, project) {
   // The analysis is picked by its registry key (analysis_type). A display name
   // (analysis: "Incompressible") stands in for the key only when none is sent;
   // the study's own name comes from the picked analysis below.
-  const analysis = String(body.analysis_type || body.analysis || body.type || W17_DEFAULTS.analysis).trim();
+  const defaults = w17Defaults();
+  const analysis = String(body.analysis_type || body.analysis || body.type || defaults.analysis || '').trim();
   if (!registeredAnalysis(analysis)) {
     return {
       ok: false,
@@ -219,11 +217,11 @@ function buildSimulation(body, project) {
   const now = new Date().toISOString();
   const id = body.id || newSimId();
   const geomId = activeGeometryId(project, body.geometry_id);
-  const timeDependency = normalizeTimeDependency(body.time_dependency, W17_DEFAULTS.time_dependency);
+  const timeDependency = normalizeTimeDependency(body.time_dependency, defaults.time_dependency);
   // The analysis the Create modal picked, resolved against the chosen time
-  // dependency (the Transient choice solves as incompressible_transient).
+  // dependency (the Transient choice solves as its family's transient analysis).
   const picked =
-    String(body.analysis_type || '').trim() || (analysisKeys().includes(analysis) ? analysis : W17_DEFAULTS.analysis_type);
+    String(body.analysis_type || '').trim() || (analysisKeys().includes(analysis) ? analysis : defaults.analysis_type);
   const analysisType = analysisKeyFor(picked, timeDependency);
   if (!analysisSupportsTimeDependency(analysisType, timeDependency)) {
     const row = analysisByKey(analysisType);
@@ -240,7 +238,7 @@ function buildSimulation(body, project) {
   const geom = (project.geometries || []).find((g) => g && g.id === geomId) || project.geometry || null;
   // The picked analysis's own new-study settings (analysis contract).
   /** @type {Record<string, any>} */
-  const d = { ...W17_DEFAULTS, ...(studyDefaultsFor(analysisType) || {}) };
+  const d = { ...(studyDefaultsFor(analysisType) || {}) };
   const algorithm = d.algorithm || algorithmLabelFor(analysisType);
   const sim = {
     id,
@@ -294,10 +292,9 @@ function seedStudyDefaults(projectId, sim) {
     area_average_1: null,
     updated_at: now,
   });
+  // No run settings of its own: a run starts from its analysis's run defaults.
   writeJsonAtomic(studyControlPath(study.dir), {
     simulation_id: sim.id,
-    endTime: 500,
-    writeInterval: 50,
     updated_at: now,
   });
 }
@@ -744,7 +741,7 @@ function updateSimulation(body) {
   if (body.time_dependency != null) {
     const nextTd = normalizeTimeDependency(body.time_dependency, sim.time_dependency);
     // The analysis key follows: Steady ↔ Transient swaps to the sibling key.
-    const nextKey = analysisKeyFor(sim.analysis_type || W17_DEFAULTS.analysis_type, nextTd);
+    const nextKey = analysisKeyFor(sim.analysis_type || '', nextTd);
     if (!analysisSupportsTimeDependency(nextKey, nextTd)) {
       const row = analysisByKey(nextKey);
       return {
@@ -1105,5 +1102,7 @@ export { getActiveSimulation };
 export const W17_META = {
   increment: 'W17',
   projects_root: PROJECTS_ROOT,
-  defaults: W17_DEFAULTS,
+  get defaults() {
+    return w17Defaults();
+  },
 };

@@ -1,7 +1,6 @@
 """The OpenFOAM case writer of Incompressible Flow (write_solve_case).
 
 ``write_solve_case`` is the product path (js_steady / js_transient goldens).
-``write_web_solve_case`` is an alias of ``write_solve_case``.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 
 from magnusim_sdk.foam import dictionary_header as _foam_header
 from magnusim_sdk.foam import (
-    foam_header,  # noqa: F401  (re-exported by case.web_case)
     js_plain_float,
     write_foam_dict,
     write_vol_field,
@@ -43,16 +41,10 @@ if TYPE_CHECKING:
     )
     from .transient import TransientControl
 
-# Re-export library constant for gate scripts that import NU_AIR from writer.
-
 _PRESSURE_KEYS = (
     "gauge_pressure",
     "pressure",
 )
-
-# Design inlet (informational / A5 caveats). A4 FO gate uses FO_INLET_SPEED.
-
-# A4 FO gate: laminar-valid converging case (Re ≈ 1700).
 
 
 def write_fv_options_limit_u(path: Path, *, max_u: float) -> None:
@@ -909,7 +901,7 @@ def _clean_prior_run(out_dir: Path) -> None:
 def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -> dict[str, Any]:
     """Write a complete run case matching the UI prepare_run contract (steady or transient).
 
-    Product API. write_web_solve_case is an alias.
+    Product API.
     """
     _ensure_web_imports()
     out = Path(out_dir)
@@ -1145,6 +1137,3 @@ RAS
         "turbulence": sidecar["turbulence"],
         "polyMesh_copied": poly_dst is not None,
     }
-
-
-write_web_solve_case = write_solve_case

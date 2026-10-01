@@ -15,4 +15,10 @@ protected = [
   "analysis:incompressible_transient",
   "solver:simpleFoam",
   "solver:pimpleFoam",
+  "material:newtonian_incompressible",
+  "monitor:area_average",
+  "monitor:flow_rate",
 ]
+# The analysis a study gets when none is named (new studies, and studies saved
+# before analysis keys, which named it "incompressible").
+default_analysis = { steady = "incompressible_steady", transient = "incompressible_transient", aliases = ["incompressible"] }

@@ -269,6 +269,22 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   await expect.poll(async () => ((await runRow(runA)).transient || {}).n_correctors).toBe(2);
   await runPanel.locator('summary', { hasText: 'Advanced settings' }).click();
   stage(t0, 'stored settings cleaned by the analysis');
+  // More result frames than the analysis keeps (5000): the panel shows what is
+  // stored, also while the save is on its way. Its own clean-up had no cap, so it
+  // showed the typed 10000 until the stored 5000 came back.
+  let releaseFrames = () => {};
+  const framesHeld = new Promise((resolve) => (releaseFrames = resolve));
+  await page.route('**/api/run/update', async (route) => {
+    await framesHeld;
+    await route.continue();
+  });
+  await setField('Result frames', 10000);
+  await expect(runPanel.getByLabel('Result frames', { exact: true })).toHaveValue('5000');
+  releaseFrames();
+  await expect.poll(async () => ((await runRow(runA)).transient || {}).write_count).toBe(5000);
+  await page.unroute('**/api/run/update');
+  await openRun(runA);
+  await expect(runPanel.getByLabel('Result frames', { exact: true })).toHaveValue('5000');
   const ctl = await previewDt(runA);
   expect(ctl.source.delta_t).toBe('auto');
   const dt = Number(ctl.delta_t);

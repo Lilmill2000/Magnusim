@@ -46,6 +46,22 @@ def test_scan_catches_a_literal_and_a_stale_allowlist_entry(tmp_path: Path):
     }
 
 
+def test_scan_catches_the_plugins_analysis_keys_but_not_generated_files(tmp_path: Path):
+    """The core used to name the default analysis itself (incompressible_steady in
+    Python, Node and the page); it is the plugin's [default_analysis] now."""
+    web = tmp_path / "web"
+    for d in ("python/cfddesk", "python/tools", "scripts", "src/api"):
+        (web / d).mkdir(parents=True)
+    (web / "python" / "cfddesk" / "a.py").write_text('DEFAULT = "incompressible_steady"\n', encoding="utf-8")
+    (web / "scripts" / "b.js").write_text("export const K = 'incompressible_transient';\n", encoding="utf-8")
+    (web / "src" / "api" / "registry.gen.ts").write_text("export type K = 'incompressible_steady';\n", encoding="utf-8")
+    report = core_physics_scan.run(web, {})
+    assert {(p["file"], p["word"]) for p in report["problems"]} == {
+        ("python/cfddesk/a.py", "incompressible_steady"),
+        ("scripts/b.js", "incompressible_transient"),
+    }
+
+
 def test_scan_allows_only_the_named_lines_of_a_line_entry(tmp_path: Path):
     web = tmp_path / "web"
     (web / "python" / "cfddesk").mkdir(parents=True)

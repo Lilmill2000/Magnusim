@@ -19,11 +19,6 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REGISTRY_JSON_PATH = join(__dirname, 'generated', 'registry.json');
 
-/** Default AnalysisType key (matches cfddesk.registry.analysis.DEFAULT_STEADY_KEY). */
-export const DEFAULT_ANALYSIS_KEY = 'incompressible_steady';
-/** Transient sibling (cfddesk.registry.analysis.DEFAULT_TRANSIENT_KEY). */
-export const DEFAULT_TRANSIENT_ANALYSIS_KEY = 'incompressible_transient';
-
 /** Mesher keys used as W20 advanced.mesh_engine (not algorithm-only backends). */
 // Hex-dominant (snappyHexMesh) is a product engine too; leaving it out coerced a
 // saved Hex-dominant pick back to Standard.
@@ -140,26 +135,65 @@ function timeDependencyKey(td) {
 }
 
 /**
+ * The analysis a study gets when none is named: the required bundled plugin's
+ * [default_analysis] (registry.describe default_analysis: { steady, transient,
+ * aliases }), or null without it (the plugin did not load).
+ * @returns {{ steady: string, transient?: string, aliases?: string[] } | null}
+ */
+export function defaultAnalysis() {
+  const d = /** @type {any} */ (_registryDoc()).default_analysis;
+  return d && typeof d === 'object' && typeof d.steady === 'string' && d.steady ? d : null;
+}
+
+/**
+ * The default analysis's key at a time dependency ('' without one).
+ * @param {string | null | undefined} [timeDependency]
+ */
+export function defaultAnalysisKey(timeDependency) {
+  const d = defaultAnalysis();
+  if (!d) return '';
+  return timeDependencyKey(timeDependency) === 'transient' ? String(d.transient || d.steady) : String(d.steady);
+}
+
+/**
+ * True for a name studies saved before analysis keys carry for the default
+ * analysis (its [default_analysis] aliases).
+ * @param {string | null | undefined} name
+ */
+export function isDefaultAnalysisAlias(name) {
+  const raw = String(name || '').trim().toLowerCase();
+  const d = defaultAnalysis();
+  return !!raw && !!d && (d.aliases || []).some((a) => String(a).toLowerCase() === raw);
+}
+
+/**
  * The registered AnalysisType for an analysis family and a time dependency
  * (same rule as cfddesk.registry.analysis.analysis_key_for): the key itself
- * when it already has that time dependency, else its registered sibling
- * (`_steady` ↔ `_transient`), else the key unchanged. Blank or the legacy
- * "incompressible" / "Incompressible" name maps to the builtin pair.
+ * when it already has that time dependency, else its registered `_steady` ↔
+ * `_transient` sibling, else the analysis of its family with that time
+ * dependency when the family pairs one of each, else the key unchanged.
+ * Blank, or a name the default analysis lists in its aliases (studies saved
+ * before analysis keys), maps to the default analysis.
  * @param {string | null | undefined} key
  * @param {string | null | undefined} timeDependency
  */
 export function analysisKeyFor(key, timeDependency) {
   const td = timeDependencyKey(timeDependency);
   const raw = String(key || '').trim();
-  if (!raw || raw.toLowerCase() === 'incompressible') {
-    return td === 'transient' ? DEFAULT_TRANSIENT_ANALYSIS_KEY : DEFAULT_ANALYSIS_KEY;
-  }
+  if (!raw || isDefaultAnalysisAlias(raw)) return defaultAnalysisKey(td);
   const row = analysisByKey(raw);
   if (row && String(row.time_dependency || '') === td) return raw;
   const m = raw.match(/^(.*)_(steady|transient)$/);
   if (m) {
     const sibling = `${m[1]}_${td}`;
     if (analysisByKey(sibling)) return sibling;
+  }
+  const family = row && row.family && row.family.key ? String(row.family.key) : '';
+  if (family) {
+    const members = analysisEntries().filter((r) => r && r.family && String(r.family.key) === family);
+    const same = members.filter((r) => String(r.time_dependency || '') === String(row.time_dependency || ''));
+    const other = members.filter((r) => String(r.time_dependency || '') === td);
+    if (same.length === 1 && other.length === 1) return String(other[0].key);
   }
   return raw;
 }
@@ -204,9 +238,9 @@ export function runDefaultsFor(key) {
   return d && typeof d === 'object' ? { .../** @type {Record<string, unknown>} */ (d) } : {};
 }
 
-/** Steady run-control defaults ({ end_time, write_interval } in iterations) from the registry ({} if not installed). */
+/** Steady run-control defaults ({ end_time, write_interval } in iterations) of the default analysis ({} if not installed). */
 export function steadyDefaultsFromRegistry() {
-  return Object.freeze(controlDefaults(DEFAULT_ANALYSIS_KEY));
+  return Object.freeze(controlDefaults(defaultAnalysisKey('steady')));
 }
 
 /**
@@ -309,9 +343,10 @@ export function timeDependencyLabel(key) {
  * Null when it is not installed (a required plugin failed to load).
  */
 export function buildW17DefaultsFromRegistry() {
-  const steady = analysisByKey(DEFAULT_ANALYSIS_KEY);
+  const key = defaultAnalysisKey('steady');
+  const steady = analysisByKey(key);
   if (!steady) return null;
-  const published = studyDefaultsFor(DEFAULT_ANALYSIS_KEY);
+  const published = studyDefaultsFor(key);
   if (published) return Object.freeze({ ...published });
   // An analysis that publishes no study_defaults: only what its row says.
   return Object.freeze({
