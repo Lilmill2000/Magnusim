@@ -131,3 +131,45 @@ jobs:
       - run: npx playwright test --grep-invert @plugins e2e/smoke.spec.js e2e/lifecycle.spec.js
         env:
           CI: "1"
+
+  # Magnusim CAD (bundled, ships off): its own toolchain in bundled-plugins/cad.
+  # Its unit tests load the real kernel wasm in Node; its e2e starts this
+  # checkout's app with CAD turned on, the way Settings' Enable does.
+  cad-plugin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: magnusim-web/bundled-plugins/cad
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            magnusim-web/package-lock.json
+            magnusim-web/bundled-plugins/cad/package-lock.json
+      - name: App dependencies (the e2e host server)
+        working-directory: magnusim-web
+        run: npm ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python backend (the app's worker)
+        working-directory: magnusim-web
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglu1-mesa libxrender1 libxext6
+          python -m pip install --upgrade "pip>=26.2" "setuptools>=83"
+          python -m pip install -r python/requirements.lock
+          python -m pip install -e "python[dev]"
+          python -m pip install -e python/sdk
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build:check
+      - run: npx playwright install --with-deps chromium
+      - name: e2e (bundled Chromium)
+        run: npm run test:e2e
+        env:
+          CI: "1"
