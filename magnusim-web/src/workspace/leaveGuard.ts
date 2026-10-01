@@ -6,6 +6,7 @@
  * Back, the page's own Back, browser Back/Forward and typed links (a hashchange
  * guard), Home and the folder chip, opening another project, and turning the
  * plugin off. Closing or reloading the tab gets the browser's own prompt.
+ * On these questions Enter (and Escape) keep the work: Leave and Turn off take a click.
  *
  * The hashchange guard must be the first hashchange listener on window: in
  * Chromium, window listeners run in registration order even with capture, so
@@ -145,7 +146,10 @@ function plainName(raw: string, fallback: string): string {
   return name.length > NAME_MAX ? `${name.slice(0, NAME_MAX - 1).trimEnd()}…` : name;
 }
 
-function leaveQuestion(reason: LeaveReason, ws: GuardedWorkspace): { title: string; copy: string; yes: string } {
+/** safe: Yes discards the work, so Enter (like Escape) keeps it and Yes takes a click. */
+type LeaveQuestion = { title: string; copy: string; yes: string; no: string; safe: true };
+
+function leaveQuestion(reason: LeaveReason, ws: GuardedWorkspace): LeaveQuestion {
   const who = plainName(ws.pluginName(), ws.route.plugin);
   const msg = state.message;
   if (reason === 'plugin-off') {
@@ -153,13 +157,15 @@ function leaveQuestion(reason: LeaveReason, ws: GuardedWorkspace): { title: stri
       title: `Turn off ${who}?`,
       copy: `Its workspace is open with changes that are not saved${msg ? ` (${msg})` : ''}. Turning it off closes the workspace and discards them.`,
       yes: 'Turn off',
+      no: 'Cancel',
+      safe: true,
     };
   }
   const what = msg ? `${who}: ${msg}` : `${who} has changes to "${plainName(ws.studyTitle(), ws.route.studyId)}" that are not saved.`;
-  return { title: 'Leave without saving?', copy: `${what} Leaving discards them.`, yes: 'Leave' };
+  return { title: 'Leave without saving?', copy: `${what} Leaving discards them.`, yes: 'Leave', no: 'Stay', safe: true };
 }
 
-async function ask(q: { title: string; copy: string; yes: string }, signal?: AbortSignal): Promise<boolean> {
+async function ask(q: LeaveQuestion, signal?: AbortSignal): Promise<boolean> {
   try {
     const confirm = window.__CFD_CONFIRM__;
     if (confirm) return (await confirm({ ...q, signal })) === true;

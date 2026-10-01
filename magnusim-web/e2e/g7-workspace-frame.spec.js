@@ -11,7 +11,8 @@ import { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from './prepare-projects.
 // before it asks anything; while the page says it has unsaved work
 // (ws.nav.setDirty), every way out asks first (Back, the page's own Back, browser
 // Back/Forward, a typed link, Home, the folder chip, opening another project,
-// turning the plugin off in Settings) and Stay keeps the same page with its work;
+// turning the plugin off in Settings) and Stay keeps the same page with its work
+// (Stay has the focus and Enter answers it: Leave and Turn off take a click);
 // Settings and the compute queue never leave it; a study deleted or a plugin
 // turned off elsewhere closes it without asking; closing the tab shows the
 // browser's own prompt. A second app server with the workspace fixture plugin
@@ -165,15 +166,21 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     }
   };
 
-  // The app's question dialog, as the user reads it.
-  const expectQuestion = async (title, copy, yes) => {
+  // The id of the element that has the keyboard in the app ('workspace-frame' while its page has it).
+  const focusedId = () => page.evaluate(() => (document.activeElement && document.activeElement.id) || '');
+
+  // The app's question dialog, as the user reads it. On a question whose Yes discards the
+  // work (safe), the Cancel button has the focus (Enter answers it); on any other, Yes has it.
+  const expectQuestion = async (title, copy, yes, { no = 'Cancel', safe = false } = {}) => {
     await expect(modal).toBeVisible();
     await expect(page.locator('#cf-heading')).toHaveText(title);
     await expect(page.locator('#cf-copy')).toHaveText(copy);
     await expect(page.locator('#cf-confirm')).toHaveText(yes);
     await expect(page.locator('#cf-cancel')).toBeVisible();
+    await expect(page.locator('#cf-cancel')).toHaveText(no);
+    await expect.poll(focusedId, { message: `the ${safe ? 'Cancel' : 'Yes'} button has the focus` }).toBe(safe ? 'cf-cancel' : 'cf-confirm');
   };
-  const leaveQuestion = () => expectQuestion('Leave without saving?', LEAVE_COPY, 'Leave');
+  const leaveQuestion = () => expectQuestion('Leave without saving?', LEAVE_COPY, 'Leave', { no: 'Stay', safe: true });
   // A plain click: Playwright does not click a covered button, so this also proves the dialog is on top.
   const answer = async (yes) => {
     await page.locator(yes ? '#cf-confirm' : '#cf-cancel').click();
@@ -280,7 +287,36 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     expect((await dialogs()).length).toBe(count);
     stage(t0, 'g7-settings-not-exit');
 
-    // gate:g7-dirty-header-back: Back asks; Stay keeps the same page and gives it the keyboard.
+    // gate:g7-dirty-header-back: Back asks with Stay focused; Enter answers Stay, which keeps
+    // the same page with its work and gives it the keyboard.
+    await overlay.locator('[data-ws-back]').click();
+    await leaveQuestion();
+    await page.keyboard.press('Enter');
+    await expect(modal).toBeHidden();
+    await expect(overlay).toBeVisible();
+    await expect(page).toHaveURL(wsUrl(bench.id));
+    expect(await loadIdOf(frame)).toBe(loadId);
+    await expect(shell).toHaveAttribute('data-workspace-dirty', '1');
+    await keysReach(frame, 'p');
+    // The page's own question after it is a plain one again, even when the page asks for the
+    // leave question's Stay and safe (and a notice): Cancel, Yes focused, Enter answers Yes.
+    const plain = frame.evaluate(() =>
+      window.__ws.ui.confirm({
+        title: 'Replace the mesh?',
+        message: 'The old mesh is deleted.',
+        confirmLabel: 'Replace',
+        safe: true,
+        no: 'Stay',
+        cancelLabel: 'Stay',
+        notice: true,
+      }),
+    );
+    await expectQuestion('Replace the mesh?', 'The old mesh is deleted.', 'Replace');
+    await page.keyboard.press('Enter');
+    await expect(modal).toBeHidden();
+    expect(await plain).toBe(true);
+    expect(await loadIdOf(frame)).toBe(loadId);
+    // A click on Stay keeps it too.
     await overlay.locator('[data-ws-back]').click();
     await leaveQuestion();
     await answer(false);
@@ -559,8 +595,9 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     await expect(shell).toHaveAttribute('data-workspace-dirty', '1');
     stage(t0, 'g7-queue-never-leaves');
 
-    // gate:g7-dirty-plugin-off: turning the plugin off in Settings asks, above Settings;
-    // Cancel sends nothing and keeps the page; Turn off closes it into the "is off" card.
+    // gate:g7-dirty-plugin-off: turning the plugin off in Settings asks, above Settings, with
+    // Cancel focused; Enter or a click on Cancel sends nothing and keeps the page; a click on
+    // Turn off closes it into the "is off" card.
     const disables = [];
     const onDisable = (r) => {
       if (r.url().includes(`/api/plugins/${KEY}/disable`)) disables.push(r.method());
@@ -573,7 +610,20 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     const toggle = pluginRow.locator(`[data-plugin-toggle="${KEY}"]`);
     await expect(pluginRow).toHaveAttribute('data-plugin-status', 'enabled');
     await toggle.click();
-    await expectQuestion('Turn off Workspace demo?', OFF_COPY, 'Turn off');
+    await expectQuestion('Turn off Workspace demo?', OFF_COPY, 'Turn off', { safe: true });
+    await page.keyboard.press('Enter');
+    await expect(modal).toBeHidden();
+    await expect(wizard).toBeVisible();
+    await expect(pluginRow).toHaveAttribute('data-plugin-status', 'enabled');
+    await expect(toggle).toHaveText('Disable');
+    expect(await frame.evaluate(() => window.__ws.project.info().then((i) => i.id))).toBe(PROJECT);
+    await expect(shell).toHaveAttribute('data-workspace-connected', '1');
+    expect(await loadIdOf(frame)).toBe(loadId);
+    await expect(shell).toHaveAttribute('data-workspace-dirty', '1');
+    expect(disables).toEqual([]);
+    // A click on Cancel does the same.
+    await toggle.click();
+    await expectQuestion('Turn off Workspace demo?', OFF_COPY, 'Turn off', { safe: true });
     await answer(false);
     await expect(pluginRow).toHaveAttribute('data-plugin-status', 'enabled');
     await expect(toggle).toHaveText('Disable');
@@ -582,9 +632,10 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     expect(await loadIdOf(frame)).toBe(loadId);
     expect(disables).toEqual([]);
     await toggle.click();
-    await expectQuestion('Turn off Workspace demo?', OFF_COPY, 'Turn off');
+    await expectQuestion('Turn off Workspace demo?', OFF_COPY, 'Turn off', { safe: true });
     await answer(true);
     await expect(pluginRow).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 });
+    // One request in all: neither Enter nor Cancel sent one.
     expect(disables).toEqual(['POST']);
     page.off('request', onDisable);
     await wizard.locator('#wiz-skip').click();
@@ -678,6 +729,7 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     const confirmed = frame.evaluate(() =>
       window.__ws.ui.confirm({ title: 'Replace the mesh?', message: 'The old mesh is deleted.', confirmLabel: 'Replace' }),
     );
+    // After the leave and turn-off questions, a plain one: Cancel, with Yes focused.
     await expectQuestion('Replace the mesh?', 'The old mesh is deleted.', 'Replace');
     expect(await hostFullscreen()).toBeNull();
     const shown = await dialogs();

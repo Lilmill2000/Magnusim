@@ -42,8 +42,11 @@ function hashChange(oldURL: string, newURL: string): void {
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
-/** The question as the app's dialog gets it (with the signal that closes it along with the workspace). */
-const asked = (q: { title: string; copy: string; yes: string }) => ({ ...q, signal: expect.any(AbortSignal) });
+/**
+ * The question as the app's dialog gets it (with the signal that closes it along with the
+ * workspace). safe: Enter keeps the work, only a click on Yes discards it.
+ */
+const asked = (q: { title: string; copy: string; yes: string; no: string; safe: boolean }) => ({ ...q, signal: expect.any(AbortSignal) });
 
 /** Closing the tab now: whether the browser would ask first (a beforeunload listener cancelled it). */
 function unloadAsks(): boolean {
@@ -97,7 +100,9 @@ describe('browser Back, Forward and typed links away from a dirty workspace', ()
     expect(push).toHaveBeenCalledWith(history.state, '', WS_URL);
     await settle();
     expect(confirm).toHaveBeenCalledTimes(1);
-    expect(confirm).toHaveBeenCalledWith(asked({ title: LEAVE, copy: 'Workspace demo: Chord not saved Leaving discards them.', yes: 'Leave' }));
+    expect(confirm).toHaveBeenCalledWith(
+      asked({ title: LEAVE, copy: 'Workspace demo: Chord not saved Leaving discards them.', yes: 'Leave', no: 'Stay', safe: true }),
+    );
     // Stay: nothing more.
     expect(back).not.toHaveBeenCalled();
     expect(workspaceDirty()).toBe(true);
@@ -210,7 +215,7 @@ describe('the leave question', () => {
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 
-  it('names the plugin and the page message, or the study when there is none', async () => {
+  it('names the plugin and the page message, or the study when there is none; Enter keeps the work (Stay, Cancel)', async () => {
     setWorkspaceDirty(true, '');
     await confirmLeaveWorkspace('back');
     expect(confirm).toHaveBeenLastCalledWith(
@@ -218,6 +223,8 @@ describe('the leave question', () => {
         title: LEAVE,
         copy: 'Workspace demo has changes to "Wing section" that are not saved. Leaving discards them.',
         yes: 'Leave',
+        no: 'Stay',
+        safe: true,
       }),
     );
     await confirmLeaveWorkspace('plugin-off');
@@ -226,6 +233,8 @@ describe('the leave question', () => {
         title: 'Turn off Workspace demo?',
         copy: 'Its workspace is open with changes that are not saved. Turning it off closes the workspace and discards them.',
         yes: 'Turn off',
+        no: 'Cancel',
+        safe: true,
       }),
     );
     setWorkspaceDirty(true, 'Chord not saved');
@@ -235,6 +244,8 @@ describe('the leave question', () => {
         title: 'Turn off Workspace demo?',
         copy: 'Its workspace is open with changes that are not saved (Chord not saved). Turning it off closes the workspace and discards them.',
         yes: 'Turn off',
+        no: 'Cancel',
+        safe: true,
       }),
     );
   });

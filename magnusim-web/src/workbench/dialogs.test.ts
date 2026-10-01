@@ -167,6 +167,108 @@ describe('the app dialogs, one at a time', () => {
   });
 });
 
+describe('a question whose Yes discards work (safe)', () => {
+  const LEAVE = { title: 'Leave without saving?', yes: 'Leave', no: 'Stay', safe: true };
+  const escape = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+  it('starts on Stay and Enter answers Stay; the next plain question is as before (Cancel, Yes focused, Enter answers Yes)', async () => {
+    const left = track(confirmAction(LEAVE));
+    expect(heading()).toBe('Leave without saving?');
+    expect($('cf-cancel').textContent).toBe('Stay');
+    expect($('cf-confirm').textContent).toBe('Leave');
+    expect(document.activeElement).toBe($('cf-cancel'));
+    const down = await pressEnter();
+    await later();
+    expect(down.defaultPrevented).toBe(true);
+    expect(left.value).toBe(false);
+    expect(shown('modal-confirm')).toBe(false);
+    expect($('cf-cancel').textContent).toBe('Cancel');
+
+    const replaced = track(confirmAction({ title: 'Replace the mesh?', yes: 'Replace' }));
+    expect($('cf-cancel').textContent).toBe('Cancel');
+    expect($('cf-cancel').hidden).toBe(false);
+    expect(document.activeElement).toBe($('cf-confirm'));
+    await pressEnter();
+    await later();
+    expect(replaced.value).toBe(true);
+    expect(dialogBusy()).toBe(false);
+  });
+
+  it('Enter answers Stay even with the focus moved to Leave; Escape answers Stay; only a click on Leave leaves', async () => {
+    const tabbed = track(confirmAction(LEAVE));
+    $('cf-confirm').focus();
+    await pressEnter();
+    await later();
+    expect(tabbed.value).toBe(false);
+    const escaped = track(confirmAction(LEAVE));
+    escape();
+    await later();
+    expect(escaped.value).toBe(false);
+    const clicked = track(confirmAction(LEAVE));
+    $('cf-confirm').click();
+    await later();
+    expect(clicked.value).toBe(true);
+    expect($('cf-cancel').textContent).toBe('Cancel');
+    // Turn off: the Cancel button keeps its own label.
+    const off = track(confirmAction({ title: 'Turn off Workspace demo?', yes: 'Turn off', no: 'Cancel', safe: true }));
+    expect($('cf-cancel').textContent).toBe('Cancel');
+    expect(document.activeElement).toBe($('cf-cancel'));
+    await pressEnter();
+    await later();
+    expect(off.value).toBe(false);
+  });
+
+  it('a key something else already handled is no answer', async () => {
+    const taken = (e: Event) => e.preventDefault();
+    window.addEventListener('keydown', taken, { capture: true });
+    try {
+      const asked = track(confirmAction(LEAVE));
+      for (const key of ['Enter', 'Escape']) {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      }
+      await later();
+      expect(asked.value).toBe('pending');
+      expect(shown('modal-confirm')).toBe(true);
+      expect($('cf-cancel').textContent).toBe('Stay');
+    } finally {
+      window.removeEventListener('keydown', taken, { capture: true });
+    }
+  });
+
+  it('closed as Cancel when its asker is gone, the Cancel label is back for the next one', async () => {
+    const ended = new AbortController();
+    const asked = track(confirmAction({ ...LEAVE, signal: ended.signal }));
+    expect($('cf-cancel').textContent).toBe('Stay');
+    ended.abort();
+    await later();
+    expect(asked.value).toBe(false);
+    expect($('cf-cancel').textContent).toBe('Cancel');
+  });
+});
+
+describe('a notice (one button)', () => {
+  it('hides Cancel, has its button focused for Enter, and shows Cancel again after', async () => {
+    const seen = track(confirmAction({ title: 'Study deleted', yes: 'OK', notice: true }));
+    expect($('cf-cancel').hidden).toBe(true);
+    expect(document.activeElement).toBe($('cf-confirm'));
+    await pressEnter();
+    await later();
+    expect(seen.value).toBe(true);
+    expect($('cf-cancel').hidden).toBe(false);
+    expect($('cf-cancel').textContent).toBe('Cancel');
+  });
+
+  it('safe does not apply: its one button keeps the focus and Enter answers it', async () => {
+    const seen = track(confirmAction({ title: 'Study deleted', yes: 'OK', notice: true, safe: true }));
+    expect($('cf-cancel').hidden).toBe(true);
+    expect(document.activeElement).toBe($('cf-confirm'));
+    await pressEnter();
+    await later();
+    expect(seen.value).toBe(true);
+    expect(shown('modal-confirm')).toBe(false);
+  });
+});
+
 describe('one key press answers one dialog', () => {
   it('Enter on a question leaves the one queued behind it open and unanswered', async () => {
     const first = track(confirmAction({ title: 'First question', yes: 'Leave' }));

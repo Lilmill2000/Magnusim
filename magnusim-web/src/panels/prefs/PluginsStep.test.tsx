@@ -197,6 +197,9 @@ describe('turning off a plugin whose workspace is open', () => {
     title: 'Turn off Workspace demo?',
     copy: 'Its workspace is open with changes that are not saved (Chord not saved). Turning it off closes the workspace and discards them.',
     yes: 'Turn off',
+    // Enter answers Cancel: only a click turns it off.
+    no: 'Cancel',
+    safe: true,
   };
   let unregister: () => void = () => undefined;
   let answer = false;

@@ -20,6 +20,13 @@ export interface ConfirmOpts extends DialogOpts {
   title?: string;
   copy?: string;
   yes?: string;
+  /** The Cancel button's label for this dialog (Cancel by default). */
+  no?: string;
+  /**
+   * Yes discards work: the Cancel button has the focus and Enter answers Cancel
+   * (Escape too), so only a click on Yes says yes. Not on a notice (its one button keeps Enter).
+   */
+  safe?: boolean;
   /** An information dialog with one button (no Cancel). */
   notice?: boolean;
 }
@@ -110,6 +117,9 @@ export function promptName(opts?: PromptOpts): Promise<string | null> {
   return queue<PromptOpts, string | null>(opts, showPromptName, null);
 }
 
+/** The Cancel button's label in shell.html, which every dialog without `no` shows. */
+const NO_LABEL = 'Cancel';
+
 function showConfirm(o: ConfirmOpts): Promise<boolean> {
   const modal = document.getElementById('modal-confirm');
   if (!modal) return Promise.resolve(window.confirm(o.copy || o.title || 'Delete?'));
@@ -118,16 +128,24 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
   const yes = document.getElementById('cf-confirm');
   const no = document.getElementById('cf-cancel');
   const backdrop = document.getElementById('cf-backdrop');
+  // A notice has no Cancel to fall back on.
+  const safe = !!o.safe && !o.notice;
   if (heading) heading.textContent = o.title || 'Delete?';
   if (copy) copy.textContent = o.copy || '';
   if (yes) yes.textContent = o.yes || 'Delete';
-  // notice: an information dialog with one button (no Cancel).
-  if (no) no.hidden = !!o.notice;
+  if (no) {
+    // notice: an information dialog with one button (no Cancel).
+    no.hidden = !!o.notice;
+    no.textContent = o.no || NO_LABEL;
+  }
   modal.hidden = false;
   return new Promise<boolean>((resolve) => {
     const done = (ok: boolean) => {
       modal.hidden = true;
-      if (no) no.hidden = false;
+      if (no) {
+        no.hidden = false;
+        no.textContent = NO_LABEL;
+      }
       yes?.removeEventListener('click', onYes);
       no?.removeEventListener('click', onNo);
       backdrop?.removeEventListener('click', onNo);
@@ -143,7 +161,8 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
       if (e.key !== 'Escape' && e.key !== 'Enter') return;
       // Handled: no keypress follows to click the button that has focus now.
       e.preventDefault();
-      if (e.key === 'Escape') onNo();
+      // Enter keeps the work on a question whose Yes discards it.
+      if (e.key === 'Escape' || safe) onNo();
       else onYes();
     };
     yes?.addEventListener('click', onYes);
@@ -152,7 +171,7 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
     document.addEventListener('keydown', onKey);
     o.signal?.addEventListener('abort', onNo);
     try {
-      yes?.focus();
+      (safe ? no : yes)?.focus();
     } catch {
       /* not focusable */
     }

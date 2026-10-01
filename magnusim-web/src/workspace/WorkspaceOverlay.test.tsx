@@ -313,6 +313,8 @@ describe('the workspace overlay', () => {
       title: 'Leave without saving?',
       copy: 'Workspace demo has changes to "Wing section" that are not saved. Leaving discards them.',
       yes: 'Leave',
+      no: 'Stay',
+      safe: true,
       signal: expect.any(AbortSignal),
     });
     await new Promise((r) => setTimeout(r, 20));
@@ -365,6 +367,9 @@ describe('the workspace overlay', () => {
       expect(reply).toMatchObject({ result: true });
       expect(order).toEqual(['exit', 'ask (full screen: false)']);
       expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'Replace the mesh?', copy: 'The old mesh is deleted.', yes: 'Replace' }));
+      // A page's question is a plain one: Cancel, and Enter answers Yes.
+      expect(confirm.mock.lastCall?.[0]).not.toHaveProperty('no');
+      expect(confirm.mock.lastCall?.[0]).not.toHaveProperty('safe');
       document.dispatchEvent(new Event('fullscreenchange'));
       await waitFor(() => expect($('.ws-shell')).not.toHaveAttribute('data-workspace-fullscreen'));
       expect(skipIf && skipIf()).toBe(false);
@@ -630,6 +635,9 @@ describe('the workspace overlay', () => {
       $('[data-ws-back]').click();
       await waitFor(() => expect($('#modal-confirm').hidden).toBe(false));
       expect($('#cf-heading')).toHaveTextContent('Leave without saving?');
+      // Enter keeps the work: Stay has the focus.
+      expect($('#cf-cancel')).toHaveTextContent('Stay');
+      expect(document.activeElement).toBe($('#cf-cancel'));
       // Meanwhile the page asks something: it waits its turn.
       void call(port, 'ui.confirm', { title: 'Replace the mesh?', message: 'The old mesh is deleted.', confirmLabel: 'Replace' });
       await later();
@@ -640,6 +648,41 @@ describe('the workspace overlay', () => {
       await later();
       expect($('#modal-confirm').hidden).toBe(true);
       expect(dialogBusy()).toBe(false);
+    });
+
+    it("a page's question is a plain one whatever the page asks for, right after Stay too: Cancel, Yes focused, Enter answers Yes", async () => {
+      const enter = () =>
+        (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      const { frame } = await open();
+      const port = await connect(frame);
+      await call(port, 'nav.setDirty', { dirty: true, message: 'Chord not saved' });
+      await waitFor(() => expect(workspaceDirty()).toBe(true));
+      $('[data-ws-back]').click();
+      await waitFor(() => expect($('#modal-confirm').hidden).toBe(false));
+      expect($('#cf-cancel')).toHaveTextContent('Stay');
+      enter();
+      await waitFor(() => expect($('#modal-confirm').hidden).toBe(true));
+      expect(location.hash).toBe(WS_HASH);
+      expect(workspaceDirty()).toBe(true);
+      // The page asks for the leave question's Stay and safe (and a notice): none of it reaches the dialog.
+      const replaced = call(port, 'ui.confirm', {
+        title: 'Replace the mesh?',
+        message: 'The old mesh is deleted.',
+        confirmLabel: 'Replace',
+        safe: true,
+        no: 'Stay',
+        cancelLabel: 'Stay',
+        notice: true,
+      });
+      await waitFor(() => expect($('#modal-confirm').hidden).toBe(false));
+      expect($('#cf-heading')).toHaveTextContent('Replace the mesh?');
+      expect($('#cf-confirm')).toHaveTextContent('Replace');
+      expect($('#cf-cancel').hidden).toBe(false);
+      expect($('#cf-cancel')).toHaveTextContent('Cancel');
+      expect(document.activeElement).toBe($('#cf-confirm'));
+      enter();
+      expect(await replaced).toMatchObject({ result: true });
+      expect($('#modal-confirm').hidden).toBe(true);
     });
 
     it('a page question waiting behind "Turn off" is dropped while the turn-off runs (the page is still there)', async () => {

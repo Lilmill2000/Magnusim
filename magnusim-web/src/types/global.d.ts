@@ -41,7 +41,8 @@ declare global {
     __CFD_SINGLE_REACT__?: boolean;
     __CFD_PLUGINS_READY__?: boolean;
     /**
-     * The app's confirm dialog (title, copy, yes, notice): resolves true on yes. Dialogs open
+     * The app's confirm dialog (title, copy, yes, no, safe, notice): resolves true on yes.
+     * safe: Yes discards work, so Cancel has the focus and Enter answers Cancel. Dialogs open
      * one at a time; skipIf() is asked when its turn comes, and true drops it (false). An
      * aborted signal drops it while it waits and closes it (false) while it is open.
      */
@@ -49,6 +50,8 @@ declare global {
       title?: string;
       copy?: string;
       yes?: string;
+      no?: string;
+      safe?: boolean;
       notice?: boolean;
       skipIf?: () => boolean;
       signal?: AbortSignal;
