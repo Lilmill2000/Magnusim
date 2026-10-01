@@ -108,7 +108,16 @@ for (const ext of FORMATS) {
       await expect(page.locator('#btn-create-simulation')).toBeHidden();
       return;
     }
+    // One Done click sends one cfd:panel-done (the panel used to send two).
+    await page.evaluate(() => {
+      window.__e2ePanelDone = 0;
+      window.addEventListener('cfd:panel-done', () => {
+        window.__e2ePanelDone += 1;
+      });
+    });
     await geo.getByRole('button', { name: 'Done' }).click();
+    await expect(page.locator('#tree-detail')).toBeHidden();
+    expect(await page.evaluate(() => window.__e2ePanelDone)).toBe(1);
 
     if (!meshes) return;
     await page.locator('#btn-create-simulation').click();

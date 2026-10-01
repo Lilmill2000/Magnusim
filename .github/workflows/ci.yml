@@ -25,7 +25,7 @@ jobs:
         run: ruff check cfddesk tools tests ../bundled-plugins
       - name: Mypy
         run: mypy cfddesk ../bundled-plugins/incompressible_flow/incompressible_flow
-      # testpaths: the core's tests and Incompressible Flow's (its goldens).
+      # testpaths: the core's tests, Incompressible Flow's (its goldens) and the plugin template's.
       - name: Pytest (including CAD, without WSL)
         run: pytest --tb=short
   node:

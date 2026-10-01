@@ -16,5 +16,8 @@ e2e/.tmp-projects/
 dist/
 /bundled-plugins/*/build/
 /plugins/*/build/
+/occt-*/
+/ninja.log
+/occt-clone.log
 .DS_Store
 Thumbs.db

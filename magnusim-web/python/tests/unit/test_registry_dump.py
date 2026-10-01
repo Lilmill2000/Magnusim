@@ -123,3 +123,12 @@ def test_builtins_only_dump_ignores_installed_plugins(monkeypatch: pytest.Monkey
     assert {row["plugin"] for kind in DUMP_KINDS for row in builtins[kind]} <= {"builtin", "incompressible_flow"}
     monkeypatch.delenv("MAGNUSIM_PLUGINS_DIR")
     assert json.loads(json.dumps(builtins)) == json.loads(json.dumps(dump_registry(builtins_only=True)))
+
+
+def test_shipped_dump_names_a_broken_bundled_manifest_bundled(tmp_path: Path):
+    bundled = tmp_path / "bundled-plugins"
+    (bundled / "broken").mkdir(parents=True)
+    (bundled / "broken" / "manifest.toml").write_text('key = "broken"\nname =\n', encoding="utf-8")
+    (bundled / "broken" / "plugin.py").write_text("def register(hub):\n    return None\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="'source': 'bundled'"):
+        dump_registry(builtins_only=True, bundled_dir=bundled)

@@ -7,6 +7,8 @@ from dataclasses import replace
 from cfddesk.registry.manifest import PluginManifest
 
 PLUGIN = "template-demo"
+# The host API this plugin is written for: the same as api_version in manifest.toml.
+API_VERSION = "1.2"
 
 
 def register(hub):
@@ -19,6 +21,6 @@ def register(hub):
         version="0.1.0",
         description="Copy-paste plugin that clones the registered steady analysis",
         authors=["Magnusim"],
-        api_version="1.0",
+        api_version=API_VERSION,
         source="local",
     )

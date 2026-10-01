@@ -9,7 +9,7 @@
 > - `e2e/stl-vortex-solve.spec.js` (runs by default where WSL has OpenFOAM) solves the ports case and checks the flow direction.
 > - The finished-mesh UI attach bug below is a separate issue and is not covered by this.
 
-Date of investigation: 2026-09-21. No code was changed. This note is for the maintainer’s agent. Fix both bugs below. Do not treat the STEP mesh as a failed generate, and do not “fix” the STL solve by adding non-orthogonal correctors. The STEP solve is the reference. The STL solve is bad because the mesh is bad.
+Date of investigation: 2026-09-21. No code was changed. This note is for whoever fixes these bugs. Fix both bugs below. Do not treat the STEP mesh as a failed generate, and do not “fix” the STL solve by adding non-orthogonal correctors. The STEP solve is the reference. The STL solve is bad because the mesh is bad.
 
 Geometry is the same vortex body in both projects (SimScale-style cyclone / vortex tube, bounding-box diagonal about 0.92 m). Same air, same pressure ports, same Standard mesh settings, same SIMPLE run. STEP results are a steady through-flow. STL results are unconverged and running the wrong way through both ports.
 

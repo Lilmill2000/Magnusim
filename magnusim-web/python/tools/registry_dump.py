@@ -116,7 +116,7 @@ def shipped_hub(*, bundled_dir: Path | None = None, include_optional: bool = Fal
 
     hub = RegistryHub()
     register_builtins(hub)
-    found, _failed = discovery._scan_plugin_dir(bundled_dir or (WEB_ROOT / "bundled-plugins"), hub)
+    found, _failed = discovery._scan_plugin_dir(bundled_dir or (WEB_ROOT / "bundled-plugins"), hub, tier="bundled")
     keys = frozenset(str(meta.get("key") or d.name) for d, meta in found)
     state = discovery.PluginState(enabled=keys) if include_optional else discovery.PluginState()
     discovery._load_ordered(found, hub, state, tier="bundled")

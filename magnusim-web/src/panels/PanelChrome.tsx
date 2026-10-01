@@ -26,14 +26,7 @@ export function PanelChrome({
             </button>
           ) : null}
         </div>
-        <button
-          type="button"
-          className="js-btn tree-panel-done"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent('cfd:panel-done'));
-            dispatchPanelDone();
-          }}
-        >
+        <button type="button" className="js-btn tree-panel-done" onClick={() => dispatchPanelDone()}>
           Done
         </button>
       </div>

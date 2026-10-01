@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 import { createApiPlugin } from './scripts/server/index.ts';
 import { listenPort } from './scripts/prefs.js';
 import { verifyWslToolchain } from './scripts/wsl-env.js';
+// Projects, Python, caches, results, local OCCT builds and logs (tested in scripts/__tests__).
+import { isViteWatchIgnored } from './scripts/vite-watch-ignore.js';
 verifyWslToolchain();
 
 const PORT = listenPort();
@@ -18,30 +20,6 @@ process.env.CFDDESK_BOUND_PORT = String(PORT); // legacy alias
 // mesh generate, post-processing exports via python/.venv + python/tools).
 // Server modules under scripts/ are not hot-reloaded: restart the dev server after editing them.
 
-// Chokidar on Windows will sit on a core if it walks projects/, python/, or
-// caches. A function ignore is reliable with backslashes; globs alone are not.
-function isViteWatchIgnored(filePath) {
-  const p = String(filePath || '').replace(/\\/g, '/').toLowerCase();
-  if (
-    p.includes('/node_modules/') ||
-    p.endsWith('/node_modules') ||
-    p.includes('/.git/') ||
-    p.includes('/projects/') ||
-    // Playwright's projects root; a watched run folder blocks the live-sync rename from WSL.
-    p.includes('/.tmp-projects/') ||
-    p.includes('/.cache/') ||
-    p.includes('/python/') ||
-    // A plugin's own virtual environment or bytecode (plugins/<key>/.venv).
-    p.includes('/.venv/') ||
-    p.includes('/__pycache__/') ||
-    p.includes('/dist/') ||
-    p.includes('hexcore-process-backup')
-  ) {
-    return true;
-  }
-  return /\.(vtp|vtu|vtk|vtm|foam|bin|stl|step|stp|png|jpe?g|webp|mp4|webm)$/i.test(p);
-}
-
 export default defineConfig({
   plugins: [react(), createApiPlugin()],
   server: {
@@ -54,7 +32,8 @@ export default defineConfig({
     },
     watch: {
       usePolling: false,
-      ignored: isViteWatchIgnored,
+      // Chokidar passes the file's stats second; only the path is meant here.
+      ignored: (filePath) => isViteWatchIgnored(filePath),
     },
   },
   preview: {

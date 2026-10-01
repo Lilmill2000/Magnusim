@@ -22,6 +22,11 @@ def test_repo_respects_the_boundary():
     assert report["ok"], report["problems"]
     assert "python/tests/fixtures/plugins/stub-analysis" in report["plugins"]
     assert "bundled-plugins/incompressible_flow" in report["plugins"]
+    assert {
+        "python/tests/fixtures/workspace-plugins/ws-demo",
+        "python/tests/fixtures/env-plugins/env-demo",
+        "python/tests/fixtures/optional-plugins/opt-demo",
+    } <= set(report["plugins"])
 
 
 def _web(tmp_path: Path) -> Path:

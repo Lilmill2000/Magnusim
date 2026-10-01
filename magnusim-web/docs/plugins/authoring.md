@@ -4,13 +4,13 @@ A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins
 
 Copy `templates/plugin/` to start. That folder has `pyproject.toml`, `manifest.toml`, `register()`, and a pytest that loads the copy from a temporary `plugins/` directory.
 
-## Manifest 1.1
+## Manifest 1.2
 
 ```toml
 key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
-api_version = "1.1"
+api_version = "1.2"
 license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
@@ -218,7 +218,16 @@ await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab
 
 ## Plugins tab
 
-Settings → Plugins lists each plugin's key, name, version, source (`local` or `entry_point`), and status (`enabled`, `disabled`, `incompatible`, `missing requirement`, or `error`). Enable and Disable call the plugin routes and reload the registry. Reload runs `registry.reload` and loads UI bundles again.
+Settings → Plugins lists each plugin's name (or key), version, source (`bundled` from `bundled-plugins/`, `local` from `plugins/`, or `entry_point` for a wheel), and status:
+
+- `enabled`, shown as On, or as Required for a required plugin, which has no Disable button.
+- `disabled`, shown as Off. An optional bundled plugin that ships off (`default_enabled = false`) is listed this way with "Ships with Magnusim and stays off until you turn it on."
+- `needs setup`: its own environment is not installed on this PC yet; the row has **Install dependencies**.
+- `missing requirement`: a WSL program or Python package in its `requires` is not found; its page UI and workspaces do not load. A missing GPU is only a note on an `enabled` row.
+- `incompatible`: its `api_version` has a different major.
+- `error`, shown as Failed to load, with the message (a manifest or `register` failure, a missing required plugin, or a UI bundle that failed in the page).
+
+Enable and Disable call the plugin routes, reload the registry, and load or remove the plugin's UI at once. **Reload plugins** runs `registry.reload` and loads UI bundles again.
 
 ## License
 

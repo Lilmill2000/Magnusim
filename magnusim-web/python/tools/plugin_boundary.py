@@ -6,10 +6,11 @@
    library at module level, plus their own modules; numpy only inside a
    function (imported when used, so registering the plugin stays light).
 
-Checked plugins: every folder in ``bundled-plugins/``, the fixture plugins in
-``python/tests/fixtures/plugins/`` (the stub analysis among them) and the
-plugin template. There are no exceptions: Incompressible Flow's code lives in
-its plugin (H9).
+Checked plugins: every folder in ``bundled-plugins/``, the core's fixture
+plugins in ``python/tests/fixtures/`` (``plugins/`` with the stub analysis
+among them, ``workspace-plugins/``, ``env-plugins/`` and ``optional-plugins/``)
+and the plugin template. There are no exceptions: Incompressible Flow's code
+lives in its plugin (H9).
 
 Folders not read (vendored tools, environments, build output):
 
@@ -61,6 +62,9 @@ LAZY_ONLY = ("numpy",)
 
 SKIP_ANY_DEPTH = frozenset({"node_modules", "__pycache__", "site-packages", "tests"})
 SKIP_AT_ROOT = frozenset({"build", "dist"})
+
+# The core's test fixture plugins (under python/tests/fixtures/), held to the same rules.
+FIXTURE_PLUGIN_FOLDERS = ("plugins", "workspace-plugins", "env-plugins", "optional-plugins")
 
 SOURCES = (".py", ".pyw")
 BYTECODE = (".pyc", ".pyo")
@@ -315,7 +319,8 @@ def _plugin_key(plugin_dir: Path) -> str:
 def run(web_root: Path) -> dict[str, object]:
     bundled = web_root / "bundled-plugins"
     plugin_dirs: list[Path] = []
-    for parent in (bundled, web_root / "python" / "tests" / "fixtures" / "plugins"):
+    fixtures = web_root / "python" / "tests" / "fixtures"
+    for parent in (bundled, *(fixtures / name for name in FIXTURE_PLUGIN_FOLDERS)):
         if parent.is_dir():
             plugin_dirs += [d for d in sorted(parent.iterdir()) if (d / "plugin.py").is_file()]
     template = web_root / "templates" / "plugin"
