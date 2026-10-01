@@ -1,0 +1,33 @@
+key = "cad"
+name = "Magnusim CAD"
+version = "0.1.0"
+api_version = "1.2"
+tier = "bundled"
+required = false
+# Ships off: nothing of CAD runs, and existing projects look unchanged, until
+# someone turns it on in Settings > Plugins (host API 1.2, G11).
+default_enabled = false
+license = "GPL-3.0-or-later"
+description = "Parametric parts from boxes and cylinders, with booleans and named parameters, in their own workspace."
+authors = ["Magnusim"]
+# No [python]: all modeling runs in the workspace's own workers (OCCT and
+# PlaneGCS compiled to WebAssembly). plugin.py is the only Python file here.
+
+# What the Part workspace may keep in one project through ws.files and ws.data
+# (models, and later imported STEP files): one file, and all of them together.
+[files]
+max_file_mb = 512
+max_total_mb = 4096
+
+[[workspaces]]
+key = "part"
+title = "Part"
+icon = "M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "part"
+title = "Part"
+icon = "M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8"
+workspace = "part"
+schema_version = 1

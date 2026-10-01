@@ -1,0 +1,107 @@
+/*
+ * CAD tokens. Built on the host's --mg-* tokens (/plugin-sdk/theme.css, injected
+ * first in <head>). Core values that have no --mg-* token are defined ONLY here,
+ * as --cad-* custom properties (research/design-language.md §2, style.css
+ * citations). Components use var(--cad-*) / var(--mg-*), never raw hex.
+ * Owner: UI-SHELL (add tokens at the end of the relevant group).
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+:root {
+  /* Cards and panels (style.css:437-451, 2948-2956) */
+  --cad-card-bg: #fff;
+  --cad-card-border: #cfd3db;
+  --cad-card-radius: 6px;
+  --cad-card-shadow: 0 8px 24px rgba(20, 24, 40, 0.12);
+  --cad-divider: #e8ebf0;
+
+  /* Tree (style.css:710-805, 2531-2540, 2634-2639) */
+  --cad-tree-selected: #d7e8ff;
+  --cad-tree-hover: #f2f4f7;
+  --cad-tree-twisty: #6a7180;
+  --cad-tree-head: #3a4250;
+  --cad-tree-section: #4a5160;
+  --cad-tree-empty: #8a93a3;
+  --cad-tree-sub: #667085;
+  --cad-drop-line: #3d6fd6;
+  --cad-drop-bg: #e8f0ff;
+  /* Section dividers (style.css:2624-2627, 3829-3834, 4996-5003) */
+  --cad-tree-section-top: #eef1f5;
+  --cad-tree-section-bottom: #d5dae3;
+
+  /* Toolbar (style.css:133-224, 3761) */
+  --cad-toolbar-bg: #f2f3f6;
+  --cad-toolbar-sep: #d5d8de;
+  --cad-toolbar-label: #6a7180;
+  --cad-toolbar-active-bg: #d7e8ff;
+  --cad-toolbar-active-border: #9bc2f0;
+  --cad-toolbar-active-icon: #1a4fbf;
+
+  /* Buttons and links (style.css:2008-2028, 2450-2459, 3056-3081, 2743-2758, 2971-2990) */
+  --cad-btn-border: #c9ced6;
+  --cad-done-border: #9aa3b2;
+  --cad-done-bg: #eef1f6;
+  --cad-done-bg-hover: #e2e6ee;
+  --cad-link: #175cd3;
+  --cad-fix-link: #155eef;
+  --cad-fix-link-hover: #1849a9;
+  --cad-icon-btn: #5b6575;
+  --cad-icon-btn-hover-bg: #eef0f4;
+
+  /* Tooltip and context menu (style.css:2932-2941, 994-1031) */
+  --cad-tooltip-bg: #1f2430;
+  --cad-tooltip-fg: #f5f6f8;
+  --cad-menu-hover: #eef2f6;
+  --cad-menu-sep: #e4e7ec;
+  --cad-menu-shadow: 0 8px 24px rgba(16, 24, 40, 0.14);
+
+  /* Chips (style.css:1032-1140) */
+  --cad-chip-fg: #344054;
+  --cad-chip-key: #667085;
+
+  /* Viewport (runtime.js:1031, 17528-17595; proposal §3.2) */
+  --cad-viewport-bg: #f0f2f7;
+  --cad-body: #bdc9db;
+  --cad-edge: #0a0b0e;
+  --cad-pick: #2ec47e;
+  --cad-set: #4884eb;
+  --cad-hover-pick: #b2ccff;
+  --cad-axis-x: #d42828;
+  --cad-axis-y: #1f9a3a;
+  --cad-axis-z: #2a5bd7;
+  --cad-view-btn-border: #c9d1dc;
+
+  /* Sketch (proposal §3.3; P3) */
+  --cad-sketch-under: var(--mg-primary);
+  --cad-sketch-full: var(--mg-text);
+  --cad-sketch-over: var(--mg-danger);
+
+  /* Panels (style.css:2899-2906, 2948-3081, 3445, 3548; PanelChrome) */
+  --cad-panel-text: #344054;
+  --cad-panel-accent-feature: #344054;
+  --cad-panel-accent-sketch: #175cd3;
+  --cad-float-min: #4a5160;
+  --cad-rename-border: #c9ced6;
+  --cad-axis-lab-x: #c92a2a;
+  --cad-axis-lab-y: #2f9e44;
+  --cad-axis-lab-z: #1864ab;
+  --cad-danger-hover-bg: #fee4e2;
+  --cad-tip-shadow: 0 6px 18px rgba(16, 24, 40, 0.25);
+
+  /* Tree states (proposal §3.1: rolled back .55, suppressed struck through, error red, warning amber) */
+  --cad-tree-dim: 0.55;
+  --cad-tree-related: #eff4ff;
+  --cad-tree-suppressed: #98a2b3;
+  --cad-rollback: #3d6fd6;
+  --cad-rollback-handle-bg: #fff;
+  --cad-body-swatch-border: rgba(16, 24, 40, 0.25);
+  --cad-tree-icon: #475467;
+  --cad-disabled-text: #8a91a0;
+  --cad-warning-border: #fec84b;
+  --cad-spin-track: #c5cdd8;
+  --cad-tip-key-border: rgba(255, 255, 255, 0.3);
+  --cad-tip-detail: #c9ced6;
+
+  /* Modal (style.css:2562-2615) */
+  --cad-modal-backdrop: rgba(20, 24, 32, 0.45);
+  --cad-modal-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}

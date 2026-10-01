@@ -27,6 +27,16 @@ Preserve the license and source obligations of the exact cfMesh/OpenFOAM package
 when redistributing it. Magnusim writes case inputs and invokes these executables;
 it does not relicense their implementations.
 
+## Magnusim CAD plugin
+
+The optional CAD plugin (`magnusim-web/bundled-plugins/cad`) ships Open CASCADE
+Technology 7.9.3 (LGPL-2.1 with the Open CASCADE exception) and FreeCAD's
+PlaneGCS sketch solver (LGPL) as WebAssembly modules, with Eigen (MPL-2.0),
+Boost headers (BSL-1.0), the Emscripten and LLVM runtimes, musl, three.js and
+three-mesh-bvh (MIT). Their license texts, the pinned sources, our patches and
+the build scripts that rebuild both modules are in the plugin's `LICENSES/`,
+`kernel-build/` and `solver-build/` folders (see `LICENSES/README.md`).
+
 ## Other dependencies
 
 The JavaScript dependency inventory is recorded in `magnusim-web/package-lock.json`;

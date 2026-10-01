@@ -1,0 +1,14 @@
+# Kernel build record (kernel-build/build.sh). Same inputs => same bytes.
+variant: wasm32
+emscripten: emcc 6.0.10 (d6c521a7f05449857c76bd99e396895583cf2083)
+emsdk: 6.0.10
+occt: V7_9_3 a016080bf6738d6aeae020badee4e888ad1540a5
+occt_patch: 0001-allocate-optimal-throws.patch sha256=28c3e5f2dc2aaed3d5a32c904e1358f033511a88a677935e872de46f17168e4f
+occt_flags: -O3 -fwasm-exceptions -msimd128 -UOCC_CONVERT_SIGNALS -ffile-prefix-map=<build root>=/cad-build
+occt_key: 55fc9e3e1aa4
+compile: em++ -std=c++17 -O3 -fwasm-exceptions -msimd128 -ffile-prefix-map=<build root>=/cad-build -ffile-prefix-map=<plugin>=/cad-plugin 
+link: -O3 -fwasm-exceptions -msimd128 -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sINITIAL_MEMORY=64MB -sSTACK_SIZE=8MB -sEXPORTED_FUNCTIONS=[_mk_call,_mk_alloc,_mk_free,_malloc,_free] -sEXPORTED_RUNTIME_METHODS=[ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAPF32,HEAPU32] -sEXPORT_NAME=createMagnusimKernel -sFILESYSTEM=0 
+occt_install: occt-wasm32-55fc9e3e1aa4
+facade_sources: aee4acb6b9bf2e6e80db24410f4c0c7efe1efce50eed57d2df921831e8855121
+mk32.wasm: 20821079 bytes sha256=0fd2becb31458d22caa39f3710f9800597eff7ec398c687901140d2640a6f1c4
+mk32.mjs: 29426 bytes sha256=aad011be5d356a6a96a5c7e5eed1264a2c59382849d9a475fa9300732a856c59

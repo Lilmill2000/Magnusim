@@ -1,0 +1,122 @@
+/*
+ * The layout frame: page base, toolbar row, full-bleed stage with floating
+ * cards (research/design-language.md §1). Owner: INTEGRATE (scaffold version).
+ * Area styles live beside their code: src/ui/ui.css, src/viewport/viewport.css.
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  /* base.css sets 13px; the core tree and panels are 12px. */
+  font-family: var(--mg-font, "Segoe UI", system-ui, -apple-system, Roboto, sans-serif);
+  font-size: 12px;
+  color: var(--mg-text-strong, #1a1d24);
+  background: var(--cad-viewport-bg);
+}
+
+#cad-root {
+  width: 100%;
+  height: 100%;
+}
+
+.cad-app {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  /* Dragging in the viewport never selects text (style.css:18-35). */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.cad-app input,
+.cad-app textarea,
+.cad-app select,
+.cad-app [contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+.cad-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Floating column over the viewport: tree card, then the flyout panel. */
+.cad-float-stack {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 26;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  height: calc(100% - 64px);
+  pointer-events: none;
+}
+
+.cad-float-stack > * {
+  pointer-events: auto;
+  align-self: flex-start;
+  flex: 0 0 auto;
+  max-height: 100%;
+}
+
+/* Bottom-left status chips (.measure-dock recipe, style.css:1032-1048). */
+.cad-dock {
+  position: absolute;
+  left: 18px;
+  bottom: 16px;
+  z-index: 28;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: min(640px, calc(100% - 36px));
+  pointer-events: none;
+}
+
+.cad-dock > * {
+  pointer-events: auto;
+}
+
+/* A page that could not start (not inside Magnusim, or connect failed). */
+.cad-fatal {
+  max-width: 420px;
+  margin: 15vh auto 0;
+  padding: 18px 20px 16px;
+  background: var(--cad-card-bg);
+  border: 1px solid var(--cad-card-border);
+  border-radius: var(--cad-card-radius);
+  box-shadow: var(--cad-card-shadow);
+  font-size: 12px;
+}
+
+.cad-fatal h1 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--mg-text, #101828);
+}
+
+.cad-fatal p {
+  margin: 0;
+  color: var(--mg-text-muted, #667085);
+}

@@ -1,0 +1,325 @@
+/*
+ * Viewport styles. Owner: VIEWPORT.
+ * The bottom-right cluster copies the core's .viewport-gizmo / .view-home-btn /
+ * .viewport-axes-key recipes (style.css:1392-1450); popovers use the context
+ * menu recipe (style.css:994-1031) through the --cad-menu-* tokens.
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+.cad-viewport {
+  /* Core values without a token yet (style.css:1433-1450, 3056-3064); UI-SHELL may move them to tokens.css. */
+  --cad-vp-btn-bg: rgba(255, 255, 255, 0.92);
+  --cad-vp-btn-fg: #2b3440;
+  --cad-vp-btn-hover-border: #9fb0c5;
+  --cad-vp-btn-hover-fg: #1d4ed8;
+  --cad-vp-disabled: #98a2b3;
+  --cad-vp-glow: 0 0 4px #fff, 0 1px 2px rgba(255, 255, 255, 0.85);
+  position: absolute;
+  inset: 0;
+  background: var(--cad-viewport-bg);
+  overflow: hidden;
+}
+
+.cad-viewport-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  touch-action: none;
+  cursor: default;
+}
+
+/* Origin plane labels, placed by the viewport at each plane's corner. */
+.cad-vp-labels {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cad-vp-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font: 600 11px/1 var(--mg-font, "Segoe UI", system-ui, sans-serif);
+  color: var(--cad-tree-section);
+  text-shadow: var(--cad-vp-glow);
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.cad-vp-label[data-state="hover"] {
+  color: var(--cad-toolbar-active-icon);
+}
+
+.cad-vp-label[data-state="pick"] {
+  color: var(--mg-text, #101828);
+}
+
+/* Home + tools + X Y Z + triad: one rigid bottom-right cluster. */
+.cad-vp-gizmo {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 29;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.cad-vp-gizmo-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 6px;
+  pointer-events: none;
+}
+
+.cad-vp-triad-slot {
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  pointer-events: none;
+}
+
+.cad-vp-axes-key {
+  display: flex;
+  gap: 10px;
+  pointer-events: none;
+  font: 700 11px/1 "Segoe UI", system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  text-shadow: var(--cad-vp-glow);
+}
+
+.cad-vp-axes-key .ax-x {
+  color: var(--cad-axis-x);
+}
+
+.cad-vp-axes-key .ax-y {
+  color: var(--cad-axis-y);
+}
+
+.cad-vp-axes-key .ax-z {
+  color: var(--cad-axis-z);
+}
+
+.cad-vp-tool {
+  position: relative;
+  pointer-events: auto;
+}
+
+.cad-vp-btn {
+  pointer-events: auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--cad-view-btn-border);
+  border-radius: 6px;
+  background: var(--cad-vp-btn-bg);
+  color: var(--cad-vp-btn-fg);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.cad-vp-btn:hover {
+  background: var(--cad-card-bg);
+  border-color: var(--cad-vp-btn-hover-border);
+  color: var(--cad-vp-btn-hover-fg);
+}
+
+.cad-vp-btn:active {
+  transform: translateY(1px);
+}
+
+.cad-vp-btn.is-on {
+  background: var(--cad-toolbar-active-bg);
+  border-color: var(--cad-toolbar-active-border);
+  color: var(--cad-toolbar-active-icon);
+}
+
+/* Popovers open upwards from their button. */
+.cad-vp-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  min-width: 212px;
+  padding: 4px 0 6px;
+  background: var(--cad-card-bg);
+  border: 1px solid var(--cad-card-border);
+  border-radius: var(--cad-card-radius);
+  box-shadow: var(--cad-menu-shadow);
+  font-size: 12px;
+  color: var(--mg-text-strong, #1a1d24);
+  cursor: default;
+}
+
+.cad-vp-pop-title {
+  padding: 8px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--cad-toolbar-label);
+}
+
+.cad-vp-pop-hint {
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--cad-chip-key);
+  max-width: 240px;
+}
+
+.cad-vp-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  font: 600 12px/1.2 var(--mg-font, "Segoe UI", system-ui, sans-serif);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cad-vp-item:hover:not(:disabled) {
+  background: var(--cad-menu-hover);
+}
+
+.cad-vp-item:disabled {
+  color: var(--cad-vp-disabled);
+  cursor: default;
+}
+
+.cad-vp-item kbd {
+  font: 500 11px/1 var(--mg-font, "Segoe UI", system-ui, sans-serif);
+  color: var(--cad-chip-key);
+}
+
+.cad-vp-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--cad-menu-sep);
+}
+
+.cad-vp-seg {
+  display: flex;
+  margin: 2px 10px 6px;
+  border: 1px solid var(--cad-btn-border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.cad-vp-seg button {
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  border: 0;
+  border-left: 1px solid var(--cad-btn-border);
+  background: var(--cad-card-bg);
+  font: 600 11px/1.2 var(--mg-font, "Segoe UI", system-ui, sans-serif);
+  color: var(--cad-chip-fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cad-vp-seg button:first-child {
+  border-left: 0;
+}
+
+.cad-vp-seg button:hover {
+  background: var(--cad-menu-hover);
+}
+
+.cad-vp-seg button.is-on {
+  background: var(--cad-toolbar-active-bg);
+  color: var(--cad-toolbar-active-icon);
+}
+
+.cad-vp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 10px 4px;
+  max-width: 250px;
+}
+
+.cad-vp-chip {
+  padding: 4px 9px;
+  border: 1px solid var(--cad-btn-border);
+  border-radius: 12px;
+  background: var(--cad-card-bg);
+  font: 600 11px/1.2 var(--mg-font, "Segoe UI", system-ui, sans-serif);
+  color: var(--cad-chip-fg);
+  cursor: pointer;
+}
+
+.cad-vp-chip:hover {
+  background: var(--cad-menu-hover);
+}
+
+.cad-vp-chip.is-on {
+  background: var(--cad-toolbar-active-bg);
+  border-color: var(--cad-toolbar-active-border);
+  color: var(--cad-toolbar-active-icon);
+}
+
+.cad-vp-link {
+  margin: 4px 10px 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  color: var(--cad-link);
+  cursor: pointer;
+}
+
+.cad-vp-link:hover {
+  text-decoration: underline;
+}
+
+.cad-vp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+}
+
+.cad-vp-row > span:first-child {
+  white-space: nowrap;
+}
+
+.cad-vp-row input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 110px;
+}
+
+.cad-vp-num {
+  min-width: 64px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--cad-chip-fg);
+}
+
+.cad-vp-small {
+  padding: 4px 10px;
+  border: 1px solid var(--cad-done-border);
+  border-radius: 3px;
+  background: var(--cad-done-bg);
+  font: 600 11px/1.2 var(--mg-font, "Segoe UI", system-ui, sans-serif);
+  color: var(--mg-text-strong, #1a1d24);
+  cursor: pointer;
+}
+
+.cad-vp-small:hover {
+  background: var(--cad-done-bg-hover);
+}

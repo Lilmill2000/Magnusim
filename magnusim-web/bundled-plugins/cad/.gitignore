@@ -1,0 +1,10 @@
+# The plugin's own toolchain (npm ci restores it).
+node_modules/
+# Host dev-server dependency cache used by e2e/host-server.mjs, test output.
+.cache/
+test-results/
+playwright-report/
+coverage/
+*.log
+# Vite writes a bundled copy of a config file next to it while it loads.
+*.timestamp-*.mjs

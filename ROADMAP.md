@@ -64,6 +64,20 @@ September 2026 readiness audit. This list preserves the intended work.
   answers one call at a time. To add: environments for wheel plugins, other GPU
   vendors, and concurrent calls for services that declare they are safe.
 
+- **CAD plugin, after V1 (Magnusim CAD, `bundled-plugins/cad`):** V1 is
+  parametric multi-body parts (sketches, solid features, booleans, STEP
+  editing, CFD preparation). These come back in a later version:
+  - assemblies and joints: components, mates/joints, and a 3D constraint
+    solver (SolveSpace libslvs, GPL-3.0-or-later);
+  - full surface modelling: trim, extend, boundary, fill and offset surfaces;
+  - 2D drawings with dimensions, and sheet metal;
+  - feature recognition on imported STEP (holes and fillets first, then
+    FeatureWorks-style rebuilds as sketches and extrudes);
+  - the 64-bit kernel build (`kernel-build/`) for models larger than the
+    4 GB 32-bit heap;
+  - the R0.125 in tangential inlet blend of the Vortex test part, which
+    OCCT 7.9.3 cannot build: try a newer OCCT.
+
 Each restored control should have a persistence check and a successful
 end-to-end simulation or result-generation test. Do not expose placeholder
 buttons marked “coming soon.”

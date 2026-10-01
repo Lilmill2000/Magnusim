@@ -1,0 +1,19 @@
+Standard::AllocateOptimal returned malloc() unchecked in the NATIVE memory manager.
+NCollection_IncAllocator then placement-new'ed its block header at address 0; in
+WebAssembly address 0 is valid memory, so an out-of-memory BRepMesh run corrupted
+static data (wasm32 spun, wasm64 trapped). Throw Standard_OutOfMemory instead, as
+Standard::Allocate already does.
+--- a/src/Standard/Standard.cxx
++++ b/src/Standard/Standard.cxx
+@@ -402,7 +402,10 @@ Standard_Address Standard::AllocateOptimal(const Standard_Size theSize)
+ #elif defined OCCT_MMGT_OPT_TBB
+   return scalable_malloc(theSize);
+ #else
+-  return malloc(theSize);
++  Standard_Address aPtr = malloc(theSize);
++  if (!aPtr && theSize != 0)
++    throw Standard_OutOfMemory("Standard::AllocateOptimal(): malloc failed");
++  return aPtr;
+ #endif
+ }
+ 

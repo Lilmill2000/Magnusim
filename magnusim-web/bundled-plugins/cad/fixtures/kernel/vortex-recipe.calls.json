@@ -1,0 +1,336 @@
+{
+ "note": "facade-shaped calls of the exact recipe's native rebuild; shape ids are this run's; edge indices are 0-based TopExp::MapShapes order",
+ "calls": [
+  {
+   "op": "extrude",
+   "params": {
+    "profile": {
+     "plane": {
+      "origin": [
+       0,
+       0,
+       0
+      ],
+      "normal": [
+       0,
+       0,
+       1
+      ],
+      "xdir": [
+       1,
+       0,
+       0
+      ]
+     },
+     "loops": [
+      [
+       {
+        "id": "e_bin",
+        "kind": "circle",
+        "c": [
+         0,
+         0
+        ],
+        "r": 152.39999999999998
+       }
+      ]
+     ]
+    },
+    "extent": {
+     "kind": "blind",
+     "d": -508.0
+    }
+   },
+   "result": {
+    "id": 1
+   },
+   "ms": 4.1
+  },
+  {
+   "op": "revolve",
+   "params": {
+    "profile": {
+     "plane": {
+      "origin": [
+       0,
+       0,
+       0
+      ],
+      "normal": [
+       0,
+       -1,
+       0
+      ],
+      "xdir": [
+       1,
+       0,
+       0
+      ]
+     },
+     "loops": [
+      [
+       {
+        "id": "e_bot",
+        "kind": "line",
+        "a": [
+         0,
+         0
+        ],
+        "b": [
+         45.329086146993816,
+         0
+        ]
+       },
+       {
+        "id": "e_slant",
+        "kind": "line",
+        "a": [
+         45.329086146993816,
+         0
+        ],
+        "b": [
+         127.0,
+         304.79999999999995
+        ]
+       },
+       {
+        "id": "e_top",
+        "kind": "line",
+        "a": [
+         127.0,
+         304.79999999999995
+        ],
+        "b": [
+         0,
+         304.79999999999995
+        ]
+       },
+       {
+        "id": "e_axis",
+        "kind": "line",
+        "a": [
+         0,
+         304.79999999999995
+        ],
+        "b": [
+         0,
+         0
+        ]
+       }
+      ]
+     ]
+    },
+    "axis": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "angle_deg": 360.0
+   },
+   "result": {
+    "id": 2
+   },
+   "ms": 4.6
+  },
+  {
+   "op": "boolean",
+   "params": {
+    "op": "fuse",
+    "targets": [
+     1
+    ],
+    "tools": [
+     2
+    ],
+    "keep_tools": false
+   },
+   "result": {
+    "id": 3,
+    "warnings": null
+   },
+   "ms": 8.1
+  },
+  {
+   "op": "fillet",
+   "params": {
+    "id": 3,
+    "edges": [
+     3
+    ],
+    "r": 12.7
+   },
+   "result": {
+    "id": 4
+   },
+   "ms": 1.9
+  },
+  {
+   "op": "extrude",
+   "params": {
+    "profile": {
+     "plane": {
+      "origin": [
+       0,
+       0,
+       0
+      ],
+      "normal": [
+       1,
+       0,
+       0
+      ],
+      "xdir": [
+       0,
+       1,
+       0
+      ]
+     },
+     "loops": [
+      [
+       {
+        "id": "e_in",
+        "kind": "circle",
+        "c": [
+         93.89807552983338,
+         279.4
+        ],
+        "r": 25.4
+       }
+      ]
+     ]
+    },
+    "extent": {
+     "kind": "blind",
+     "d": 127.0
+    }
+   },
+   "result": {
+    "id": 5
+   },
+   "ms": 2.3
+  },
+  {
+   "op": "boolean",
+   "params": {
+    "op": "fuse",
+    "targets": [
+     4
+    ],
+    "tools": [
+     5
+    ],
+    "keep_tools": false
+   },
+   "result": {
+    "id": 6,
+    "warnings": null
+   },
+   "ms": 88.5
+  },
+  {
+   "op": "fillet",
+   "params": {
+    "id": 6,
+    "edges": [
+     0,
+     1,
+     2
+    ],
+    "r": 3.175
+   },
+   "result": {
+    "ok": false,
+    "diag": {
+     "reason": "result_invalid",
+     "is_done": true,
+     "valid": false,
+     "volume_in": 44840358.346958205,
+     "volume_out": 220515.43132667188,
+     "faces_out": 7
+    }
+   },
+   "ms": 5848.3
+  },
+  {
+   "op": "extrude",
+   "params": {
+    "profile": {
+     "plane": {
+      "origin": [
+       0,
+       0,
+       304.79999999999995
+      ],
+      "normal": [
+       0,
+       0,
+       1
+      ],
+      "xdir": [
+       1,
+       0,
+       0
+      ]
+     },
+     "loops": [
+      [
+       {
+        "id": "e_vf",
+        "kind": "circle",
+        "c": [
+         0,
+         0
+        ],
+        "r": 30.175199999999997
+       }
+      ],
+      [
+       {
+        "id": "e_out",
+        "kind": "circle",
+        "c": [
+         0,
+         0
+        ],
+        "r": 25.4
+       }
+      ]
+     ]
+    },
+    "extent": {
+     "kind": "blind",
+     "d": -50.8
+    }
+   },
+   "result": {
+    "id": 7
+   },
+   "ms": 3.1
+  },
+  {
+   "op": "boolean",
+   "params": {
+    "op": "cut",
+    "targets": [
+     6
+    ],
+    "tools": [
+     7
+    ],
+    "keep_tools": false
+   },
+   "result": {
+    "id": 8,
+    "warnings": null
+   },
+   "ms": 17.6
+  }
+ ]
+}

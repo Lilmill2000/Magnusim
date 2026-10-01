@@ -1,0 +1,2 @@
+*.step -text
+*.json text eol=lf

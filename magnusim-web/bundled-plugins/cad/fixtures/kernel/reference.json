@@ -1,0 +1,671 @@
+{
+ "schema": 1,
+ "about": "Native reference values for the kernel tests: OCCT 7.9.3 through cadquery-ocp 7.9.3.1.1 (Python 3.10.6), computed by the P0 fixtures workstream on 2026-09-30 and copied unchanged (trimmed to the fields the tests use). Conventions: mm, mm2, mm3; counts are TopExp::MapShapes unique sub-shapes; volume = BRepGProp::VolumeProperties defaults; bbox_exact = BRepBndLib::AddOptimal(no triangulation, no tolerance); bbox_add = BRepBndLib::Add (tolerance-padded); booleans BRepAlgoAPI_* with fuzzy 0, then UnifySameDomain(true, true, false).",
+ "vortex": {
+  "file": "vortex-cfd-test.step",
+  "bytes": 64518,
+  "sha256": "d40156af7c86297bc061a5beef6ad89a1878fe25c7b57081b09648c522c71e5b",
+  "import": {
+   "name": "Vortex CFD Test v1",
+   "solids": 1,
+   "shells": 1,
+   "faces": 17,
+   "edges": 34,
+   "vertices": 18,
+   "volume": 44798524.10991701,
+   "area": 869824.5708520302,
+   "centroid": [
+    0.2419868636892548,
+    0.24702739858653594,
+    -176.08576897917678
+   ],
+   "bbox_exact": [
+    -152.39999999999998,
+    -152.39999999999998,
+    -508,
+    152.39999999999998,
+    152.39999999999998,
+    304.8000123617929
+   ],
+   "bbox_add": [
+    -152.40035298520178,
+    -152.40035298520178,
+    -508.0003529852018,
+    152.40035298520178,
+    152.40035298520178,
+    304.8017894293469
+   ],
+   "valid": true
+  },
+  "tessellation_default": {
+   "lin_defl": 0.9200271409558146,
+   "ang_defl_deg": 20,
+   "triangles": 2424,
+   "nodes": 1720,
+   "faces_without_triangulation": 0,
+   "time_ms": 12.458200013497844
+  }
+ },
+ "fluid_box": {
+  "margin": 100,
+  "origin": [
+   -252.39999999999998,
+   -252.39999999999998,
+   -608
+  ],
+  "dx": 504.79999999999995,
+  "dy": 504.79999999999995,
+  "dz": 1012.8000123617928,
+  "V_box_native": 258084778.06206957
+ },
+ "cut_fluid": {
+  "solids": 1,
+  "shells": 2,
+  "faces": 22,
+  "edges": 44,
+  "vertices": 25,
+  "volume": 213286252.0620484,
+  "area": 3424516.4153131433,
+  "centroid": [
+   -0.050826840049621486,
+   -0.051885480400045675,
+   -85.95504726708336
+  ],
+  "bbox_exact": [
+   -252.39999999999998,
+   -252.39999999999998,
+   -608,
+   252.39999999999998,
+   252.39999999999998,
+   404.8000123617928
+  ],
+  "bbox_add": [
+   -252.40035298520178,
+   -252.40035298520178,
+   -608.0003529852019,
+   252.40035298520178,
+   252.40035298520178,
+   404.8003653469946
+  ],
+  "valid": true,
+  "faces_raw": 23,
+  "faces_unified": 22,
+  "volume_raw": 213286252.13726428,
+  "expected_volume": 213286253.95215255
+ },
+ "common_fluid": {
+  "solids": 1,
+  "shells": 1,
+  "faces": 16,
+  "edges": 32,
+  "vertices": 17,
+  "volume": 44798524.14202828,
+  "area": 869824.5503522108,
+  "centroid": [
+   0.24198690310722182,
+   0.2470271264454669,
+   -176.0857684335385
+  ],
+  "bbox_exact": [
+   -152.39999999999998,
+   -152.39999999999998,
+   -508,
+   152.39999999999998,
+   152.39999999999998,
+   304.8000123617929
+  ],
+  "bbox_add": [
+   -152.40035298520178,
+   -152.40035298520178,
+   -508.0003529852018,
+   152.40035298520178,
+   152.40035298520178,
+   304.8017894293469
+  ],
+  "valid": true,
+  "faces_raw": 17,
+  "faces_unified": 16,
+  "volume_raw": 44798524.10991701,
+  "expected_volume": 44798524.10991701
+ },
+ "fuse_box_side": {
+  "box": {
+   "definition": "PRIMARY fuse gate. 200 x 200 x 200 box centred on the centre of the +X face of Vortex bbox_exact (centre = (bbox.xmax, bbox.cy, bbox.cz)); it straddles the outer cylinder wall.",
+   "origin": [
+    52.39999999999998,
+    -100,
+    -201.59999381910356
+   ],
+   "dx": 200,
+   "dy": 200,
+   "dz": 200
+  },
+  "solids": 1,
+  "shells": 1,
+  "faces": 21,
+  "edges": 44,
+  "vertices": 25,
+  "volume": 49269787.87463613,
+  "area": 965864.9890309152,
+  "centroid": [
+   18.005098993336254,
+   0.22460885369650835,
+   -169.32612537778468
+  ],
+  "bbox_exact": [
+   -152.39999999999998,
+   -152.39999999999998,
+   -508,
+   252.39999999999998,
+   152.39999999999998,
+   304.8000123617929
+  ],
+  "bbox_add": [
+   -152.40035298520178,
+   -152.40035298520178,
+   -508.0003529852018,
+   252.40035298520178,
+   152.40035298520178,
+   304.8017894293469
+  ],
+  "valid": true,
+  "faces_raw": 22,
+  "faces_unified": 21,
+  "volume_raw": 49269787.7218339,
+  "expected_volume": 49269786.3439607,
+  "common_volume": 3528737.7659563064
+ },
+ "fuse_box200_topcentre": {
+  "box": {
+   "definition": "DEFECT CASE, not the primary gate. 200 x 200 x 200 box centred on the centre of the top face of Vortex bbox_exact (centre = (bbox.cx, bbox.cy, bbox.zmax)). Its y=+100 and x=+100 faces cut the side outlet pipe (cylinder r=25.4 along +X at y=93.898, z=279.4); OCCT 7.9.3 then returns a BRepCheck-invalid face (BRepCheck_UnorientableShape) and a volume that is wrong by about +57,334 mm3 until ShapeFix repairs it.",
+   "origin": [
+    -100,
+    -100,
+    204.80001236179288
+   ],
+   "dx": 200,
+   "dy": 200,
+   "dz": 200
+  },
+  "solids": 1,
+  "shells": 1,
+  "faces": 27,
+  "edges": 70,
+  "vertices": 44,
+  "volume": 49141501.758809425,
+  "area": 942375.4307942684,
+  "centroid": [
+   0.1023613605819557,
+   0.06547911608484591,
+   -130.01380280863447
+  ],
+  "bbox_exact": [
+   -152.39999999999998,
+   -152.39999999999998,
+   -508,
+   152.39999999999998,
+   152.39999999999998,
+   404.8000124617929
+  ],
+  "bbox_add": [
+   -152.4003538524598,
+   -152.4003538524598,
+   -508.00035385245985,
+   152.4003538524598,
+   152.4003538524598,
+   404.80036621425273
+  ],
+  "valid": false,
+  "faces_raw": 28,
+  "faces_unified": 27,
+  "volume_raw": 49141501.75101639,
+  "expected_volume": 49141494.96431258,
+  "shapefix_repaired": {
+   "volume": 49198835.677968696,
+   "valid": true,
+   "faces": 27,
+   "note": "ShapeFix_Shape default on a BRepBuilderAPI_Copy of the unified result"
+  },
+  "common_volume_invalid": 3657029.145604427,
+  "common_volume_after_shapefix": 3599695.2089998988,
+  "qmc_common": {
+   "mean": 3599609.375,
+   "stderr": 5573.377331316456,
+   "points": 8192,
+   "reps": 8,
+   "method": "scrambled Sobol (scipy qmc, seeds 0..reps-1), BRepClass3d_SolidClassifier(tol 1e-7) on the valid input solid"
+  }
+ },
+ "step_roundtrip_cut": {
+  "volume_before_export": 213286252.0620484,
+  "reimport_volume_xcaf_healed": 213286252.06196177,
+  "reimport_faces": 22
+ },
+ "box20": {
+  "file": "box20.step",
+  "import": {
+   "solids": 1,
+   "shells": 1,
+   "faces": 6,
+   "edges": 12,
+   "vertices": 8,
+   "volume": 7999.999999999998,
+   "area": 2399.9999999999995,
+   "centroid": [
+    10,
+    10,
+    10
+   ],
+   "bbox_exact": [
+    0,
+    0,
+    0,
+    20,
+    20,
+    20
+   ],
+   "bbox_add": [
+    -1e-7,
+    -1e-7,
+    -1e-7,
+    20.0000001,
+    20.0000001,
+    20.0000001
+   ],
+   "valid": true
+  },
+  "fillet_all_edges": {
+   "r": 2,
+   "edge_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+   ],
+   "solids": 1,
+   "shells": 1,
+   "faces": 26,
+   "edges": 56,
+   "vertices": 24,
+   "volume": 7804.696111127533,
+   "area": 2189.4512719466775,
+   "centroid": [
+    9.999999999999998,
+    9.999999999999998,
+    9.999999999999996
+   ],
+   "bbox_exact": [
+    -4.440892098500626e-16,
+    -4.440892098500626e-16,
+    -4.440892098500626e-16,
+    20,
+    20,
+    20
+   ],
+   "bbox_add": [
+    -1.000000004440892e-7,
+    -1.000000004440892e-7,
+    -1.000000004440892e-7,
+    20.0000001,
+    20.0000001,
+    20.0000001
+   ],
+   "valid": true,
+   "volume_analytic": 7804.696111127531,
+   "volume_analytic_formula": "L^3 + 6 L^2 r + 3 pi r^2 L + (4/3) pi r^3 with L = a - 2r = a^3 - 12 (1 - pi/4) r^2 L - 8 (r^3 - pi r^3 / 6)"
+  }
+ },
+ "flange": {
+  "file": "flange.step",
+  "r_hole": 5,
+  "t": 10,
+  "import": {
+   "solids": 1,
+   "shells": 1,
+   "faces": 10,
+   "edges": 24,
+   "vertices": 16,
+   "volume": 96858.40734641012,
+   "area": 24628.318530718054,
+   "centroid": [
+    -1.9294450160833432e-13,
+    0,
+    4.999999999999999
+   ],
+   "bbox_exact": [
+    -50,
+    -50,
+    0,
+    50,
+    50,
+    10
+   ],
+   "bbox_add": [
+    -50.0000001,
+    -50.0000001,
+    -1e-7,
+    50.0000001,
+    50.0000001,
+    10.0000001
+   ],
+   "valid": true
+  },
+  "hole_face_indices": [
+   6,
+   7,
+   8,
+   9
+  ],
+  "defeature": {
+   "faces_removed": [
+    6,
+    7,
+    8,
+    9
+   ],
+   "solids": 1,
+   "shells": 1,
+   "faces": 6,
+   "edges": 12,
+   "vertices": 8,
+   "volume": 99999.99999999997,
+   "area": 24000,
+   "centroid": [
+    0,
+    1.1368683772161606e-16,
+    5
+   ],
+   "bbox_exact": [
+    -50,
+    -50,
+    0,
+    50,
+    50,
+    10
+   ],
+   "bbox_add": [
+    -50.0000001,
+    -50.0000001,
+    -1e-7,
+    50.0000001,
+    50.0000001,
+    10.0000001
+   ],
+   "valid": true,
+   "volume_growth": 3141.592653589847,
+   "volume_growth_analytic": 3141.5926535897934
+  }
+ },
+ "naming": {
+  "scenario": "40 x 20 rectangle (corner at origin, width along +X, height along +Y) on the XY plane, extruded +Z by 10 (blind); fillet r=2 on the edge shared by the start cap (z=0) and the side generated from s1 (the bottom segment (0,0)-(W,0)); then width 40 -> 50 (s2 moves to x=50) and rebuild.",
+  "width_40": {
+   "profile": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "normal": [
+      0,
+      0,
+      1
+     ],
+     "xdir": [
+      1,
+      0,
+      0
+     ]
+    },
+    "loops": [
+     [
+      {
+       "id": "s1",
+       "kind": "line",
+       "a": [
+        0,
+        0
+       ],
+       "b": [
+        40,
+        0
+       ]
+      },
+      {
+       "id": "s2",
+       "kind": "line",
+       "a": [
+        40,
+        0
+       ],
+       "b": [
+        40,
+        20
+       ]
+      },
+      {
+       "id": "s3",
+       "kind": "line",
+       "a": [
+        40,
+        20
+       ],
+       "b": [
+        0,
+        20
+       ]
+      },
+      {
+       "id": "s4",
+       "kind": "line",
+       "a": [
+        0,
+        20
+       ],
+       "b": [
+        0,
+        0
+       ]
+      }
+     ]
+    ]
+   },
+   "extent": {
+    "kind": "blind",
+    "d": 10
+   },
+   "history": {
+    "sides": {
+     "s1": 0,
+     "s2": 1,
+     "s3": 2,
+     "s4": 3
+    },
+    "start": 4,
+    "end": 5
+   },
+   "target_edge": {
+    "rule": "edge shared by F:<extrude>:side:s1 and F:<extrude>:start",
+    "index": 2,
+    "i": 2,
+    "type": "line",
+    "length": 40,
+    "mid": [
+     20,
+     0,
+     0
+    ],
+    "faces": [
+     0,
+     4
+    ]
+   },
+   "fillet": {
+    "r": 2,
+    "volume": 7965.66370614359,
+    "faces": 7,
+    "volume_analytic": 7965.663706143591
+   }
+  },
+  "width_50": {
+   "profile": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "normal": [
+      0,
+      0,
+      1
+     ],
+     "xdir": [
+      1,
+      0,
+      0
+     ]
+    },
+    "loops": [
+     [
+      {
+       "id": "s1",
+       "kind": "line",
+       "a": [
+        0,
+        0
+       ],
+       "b": [
+        50,
+        0
+       ]
+      },
+      {
+       "id": "s2",
+       "kind": "line",
+       "a": [
+        50,
+        0
+       ],
+       "b": [
+        50,
+        20
+       ]
+      },
+      {
+       "id": "s3",
+       "kind": "line",
+       "a": [
+        50,
+        20
+       ],
+       "b": [
+        0,
+        20
+       ]
+      },
+      {
+       "id": "s4",
+       "kind": "line",
+       "a": [
+        0,
+        20
+       ],
+       "b": [
+        0,
+        0
+       ]
+      }
+     ]
+    ]
+   },
+   "extent": {
+    "kind": "blind",
+    "d": 10
+   },
+   "history": {
+    "sides": {
+     "s1": 0,
+     "s2": 1,
+     "s3": 2,
+     "s4": 3
+    },
+    "start": 4,
+    "end": 5
+   },
+   "target_edge": {
+    "rule": "edge shared by F:<extrude>:side:s1 and F:<extrude>:start",
+    "index": 2,
+    "i": 2,
+    "type": "line",
+    "length": 50,
+    "mid": [
+     25,
+     0,
+     0
+    ],
+    "faces": [
+     0,
+     4
+    ]
+   },
+   "fillet": {
+    "r": 2,
+    "volume": 9957.079632679488,
+    "faces": 7,
+    "volume_analytic": 9957.07963267949
+   }
+  },
+  "negative_case": "Trim that removes s1: no native value; the resolver must fail with 'Edge not found'."
+ },
+ "large_step": {
+  "file": "8m0119333_V12.step (not in the repository: set CAD_KERNEL_BIG_STEP to its path)",
+  "bytes": 118565907,
+  "sha256": "9d979d08696818942e4e9b05030836a6d44dd043bbf00ccdc84931767a36236b",
+  "healed_counts": {
+   "solids": 1,
+   "shells": 1,
+   "faces": 11776,
+   "edges": 27560,
+   "vertices": 15796,
+   "face_occurrences": 11776,
+   "edge_occurrences": 55045
+  },
+  "volume": 12284.179212922421,
+  "area": 21401.998293686083,
+  "bbox_exact": [
+   32.20517383751896,
+   373.59575950870305,
+   -216.91226035719998,
+   69.50517405301213,
+   449.5957597278609,
+   -192.61307573472405
+  ],
+  "bbox_add": [
+   32.191361367863756,
+   373.32900518022973,
+   -217.0417126948732,
+   69.51898651898225,
+   449.63653458123923,
+   -191.90636416477378
+  ],
+  "native_timings_ms": {
+   "read_ms": 6552.3803000105545,
+   "transfer_ms": 39694.00109999697,
+   "heal_ms": 21211.34889998939,
+   "check_ms": 11292.686399974627,
+   "bbox_exact_ms": 86981.2452000042,
+   "volume_ms": 19605.41920000105,
+   "area_ms": 20544.043700007023,
+   "volume_raw_ms": 20757.30269998894
+  }
+ }
+}

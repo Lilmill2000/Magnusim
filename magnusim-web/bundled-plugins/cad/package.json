@@ -1,0 +1,37 @@
+{
+  "name": "magnusim-cad",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Magnusim CAD: the Part workspace plugin (built into workspace/ from src/)",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:check": "node scripts/build.mjs --check",
+    "typecheck": "tsc -p tsconfig.json && tsc -p e2e/tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:kernel": "vitest run tests/kernel/kernel-",
+    "test:e2e": "node scripts/e2e.mjs",
+    "serve:host": "node e2e/host-server.mjs",
+    "check": "npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "three": "0.186.1",
+    "three-mesh-bvh": "0.9.15"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "24.19.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/three": "0.186.0",
+    "jsdom": "29.1.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.3",
+    "vitest": "5.0.1"
+  }
+}
