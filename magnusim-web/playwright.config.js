@@ -6,6 +6,9 @@ const PORT = process.env.MAGNUSIM_E2E_PORT || '8083';
 const baseURL = `http://127.0.0.1:${PORT}`;
 const projectsRoot = process.env.MAGNUSIM_E2E_PROJECTS_ROOT || resolve('e2e/.tmp-projects');
 process.env.MAGNUSIM_PROJECTS_ROOT = projectsRoot;
+// Test servers never sweep the WSL case root, which holds this PC's real cases
+// (wsl-prune.spec.js turns the sweep on for its own server and its own root).
+process.env.MAGNUSIM_WSL_PRUNE ??= '0';
 const prefsPath = resolve('e2e/.tmp-prefs.json');
 // Every test runs by default; real meshes and solves need WSL with OpenFOAM (see e2e/toolchain.js).
 const toolchain = settleE2eToolchain();

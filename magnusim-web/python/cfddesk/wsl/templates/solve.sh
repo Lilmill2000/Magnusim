@@ -192,14 +192,16 @@ fi
 
 _evt "{\"event\":\"stage\",\"stage\":\"copy\"}"
 mkdir -p "$WIN_OUT"
+# A failed copy here does not fail the run, but the ext4 case is then kept.
+COPY_OK=1
 for d in "log.$APP" log.decomposePar log.reconstructPar log.reconstructPar.live log.livesync postProcessing; do
-  [ -e "$d" ] && cp -a "$d" "$WIN_OUT/" 2>/dev/null || true
+  if [ -e "$d" ]; then cp -a "$d" "$WIN_OUT/" 2>/dev/null || COPY_OK=0; fi
 done
 # Viewer VTPs / VTK dumps if a later land writes them on ext4.
-if [ -d VTK ]; then cp -a VTK "$WIN_OUT/" 2>/dev/null || true; fi
+if [ -d VTK ]; then cp -a VTK "$WIN_OUT/" 2>/dev/null || COPY_OK=0; fi
 shopt -s nullglob
 for f in *.vtp *.vtu *.vtk; do
-  [ -e "$f" ] && cp -f "$f" "$WIN_OUT/" 2>/dev/null || true
+  if [ -e "$f" ]; then cp -f "$f" "$WIN_OUT/" 2>/dev/null || COPY_OK=0; fi
 done
 if [ "$KEEP_FRAMES" = "all" ]; then
   for frame in "$DST"/[0-9]*; do
@@ -211,6 +213,16 @@ if [ "$KEEP_FRAMES" = "all" ]; then
 else
   LATEST=$(_latest_time)
   [ -z "$LATEST" ] || copy_saved_time "$LATEST"
+fi
+
+# Everything the run made is on Windows now, and the next solve on this id starts
+# from a fresh copy: drop the ext4 case. A failed run keeps it for a day (the
+# server's sweep, cfddesk/runner/cleanup.py, removes it later).
+if [ "$EC" -eq 0 ] && [ "$COPY_OK" -eq 1 ]; then
+  _evt "{\"event\":\"stage\",\"stage\":\"cleanup\"}"
+  cd / && case "$DST" in
+    */cfddesk-*) rm -rf -- "$DST" ;;
+  esac
 fi
 
 if [ "$EC" -eq 0 ]; then

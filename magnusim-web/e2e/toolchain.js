@@ -50,6 +50,30 @@ export function settleE2eToolchain() {
   return { wsl, heavy };
 }
 
+/** The WSL distro the app runs meshes and solves in. */
+export function wslDistro() {
+  return process.env.MAGNUSIM_WSL_DISTRO || process.env.CFDDESK_WSL_DISTRO || 'Ubuntu-24.04';
+}
+
+/** Run bash in WSL (no login shell in between); returns the spawnSync result. */
+export function wslBash(script, args = [], timeout = 60_000) {
+  return spawnSync('wsl.exe', ['-d', wslDistro(), '-e', 'bash', '-c', script, 'e2e', ...args], {
+    encoding: 'utf8',
+    timeout,
+    windowsHide: true,
+  });
+}
+
+/** Whether an absolute path exists inside WSL. Throws when WSL cannot answer. */
+export function wslPathExists(path) {
+  const r = wslBash('if [ -e "$1" ] || [ -L "$1" ]; then echo YES; else echo NO; fi', [path]);
+  const out = String(r.stdout || '').trim();
+  if (r.status !== 0 || !/^(YES|NO)$/.test(out)) {
+    throw new Error(`WSL check of ${path} failed (status ${r.status}): ${out} ${r.stderr || ''}`);
+  }
+  return out === 'YES';
+}
+
 /** Why a WSL test is skipped, for its skip reason. */
 export const NO_WSL = 'Needs WSL with OpenFOAM (not found, or MAGNUSIM_E2E_WSL=0)';
 export const NO_HEAVY = 'Needs WSL with OpenFOAM (not found, or MAGNUSIM_E2E_WSL=0 / MAGNUSIM_E2E_HEAVY=0)';

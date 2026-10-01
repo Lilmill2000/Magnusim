@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NO_WSL } from './toolchain.js';
+import { NO_WSL, wslPathExists } from './toolchain.js';
 
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 
@@ -167,6 +167,11 @@ test.describe('Magnusim smoke', () => {
     const nCells = final.n_cells ?? final.live_mesh_result?.n_cells ?? 0;
     expect(caseStatus).toBe('done');
     expect(nCells).toBeGreaterThan(0);
+    // The mesher's WSL copy goes once the mesh is on Windows (left behind, these
+    // filled ~115 GB of WSL disk in 11 days).
+    const meshWslCase = final.wsl_case || final.live_mesh_result?.wsl_case;
+    expect(meshWslCase, 'the mesh result names its WSL case').toMatch(/\/cfddesk-cfdweb-[a-z0-9]+$/);
+    expect(wslPathExists(meshWslCase), `${meshWslCase} removed after the mesh`).toBe(false);
 
     // The panel reports the result: "Mesh ready — N cells / M nodes", Generate re-enabled, tree ticked.
     await expect(status).toHaveAttribute('data-mesh-status', 'ready', { timeout: 60_000 });
@@ -263,6 +268,9 @@ test.describe('Magnusim smoke', () => {
     expect(run.status).toBe('done');
     const residuals = run.residuals || [];
     expect(residuals.length).toBeGreaterThan(0);
+    // The solve's WSL copy goes once its results are on Windows.
+    expect(run.wsl_case_path, 'the run names its WSL case').toMatch(/\/cfddesk-w27-[a-z0-9-]+$/);
+    expect(wslPathExists(run.wsl_case_path), `${run.wsl_case_path} removed after the solve`).toBe(false);
     test.info().annotations.push({
       type: 'solve',
       description: `endTime=20 done residuals=${residuals.length}`,
@@ -326,6 +334,9 @@ test.describe('Magnusim smoke', () => {
     expect(completed.has_results).toBe(true);
     expect(completed.n_saved_times).toBeGreaterThanOrEqual(2);
     expect(completed.residuals.length).toBeGreaterThan(0);
+    // Every frame came back to Windows, so the transient run's WSL copy is gone too.
+    expect(completed.wsl_case_path, 'the run names its WSL case').toMatch(/\/cfddesk-w27-[a-z0-9-]+$/);
+    expect(wslPathExists(completed.wsl_case_path), `${completed.wsl_case_path} removed after the solve`).toBe(false);
     const runs = (await getJson(request, `/api/run/status?project_id=${id}&simulation_id=sim_1`)).runs;
     expect(runs.some((run) => run.time_dependency === 'Steady-state' && run.status === 'done')).toBe(true);
     await page.reload();

@@ -32,6 +32,7 @@ from cfddesk.mesh.snappy_hexdominant import (  # noqa: E402
     write_hexdominant_dicts,
 )
 from cfddesk.runner.case_id import validate_wsl_case_id, wsl_case_path  # noqa: E402
+from cfddesk.runner.cleanup import remove_wsl_case  # noqa: E402
 from cfddesk.runner.sync import sync_to_wsl  # noqa: E402
 from cfddesk.wsl.config import get_wsl_distro  # noqa: E402
 from cfddesk.wsl.mesh_run import windows_to_wsl_path  # noqa: E402
@@ -411,6 +412,9 @@ def main() -> int:
             )
 
         ok = rc == 0 and (last_result is None or bool(last_result.get("ok", True)))
+        if ok:
+            # The script copied the mesh and logs to Windows; the WSL copy is done.
+            remove_wsl_case(wsl_case)
         return _result(
             ok,
             exit_code=rc,

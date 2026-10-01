@@ -16,6 +16,12 @@ mesh/solve use this machine’s WSL user and `~/cases`. The first time you start
 sets default units, runs a hardware check (solver rank count), and lets you pick
 the listen port. **Preferences** on the home screen opens that again.
 
+Each mesh and solve works in its own copy under `~/cases` in WSL, and what it makes comes
+back to the project folder. A run that finishes removes its copy. A failed or stopped run's
+copy stays a day for a look, then the server removes it in the background
+(`MAGNUSIM_WSL_PRUNE=0` turns that off; `python/tools/prune_wsl_cases.py --dry-run` shows
+what would go).
+
 ## Run
 
 Double-click `run.bat`, or from this folder:

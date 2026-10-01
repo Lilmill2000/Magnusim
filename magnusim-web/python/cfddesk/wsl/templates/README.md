@@ -14,6 +14,11 @@ before render:
 Snappy hex-dominant (`snappy_hexdominant.sh`) uses `__DST__`, `__WIN_OUT__`, and
 related tokens documented in that file's header.
 
+`solve.sh` removes `__DST__` once the run succeeded and everything came back to
+`__WIN_OUT__`. `prune_cases.sh` (no tokens: `ROOT MAX_AGE_MIN DRY` arguments, run
+by `cfddesk.runner.cleanup`) sweeps the case root for copies failed or stopped
+runs left behind.
+
 ## Event contract
 
 Templates echo lines:

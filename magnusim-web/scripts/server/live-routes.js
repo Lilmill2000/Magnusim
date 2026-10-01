@@ -20,6 +20,7 @@ import {
 import { handleW26Api } from '../w26-mesh-refinements.js';
 import { handleW22Api } from '../w22-area-average.js';
 import { handleW27Api, startSolve, isLiveSolveHeld, liveSolveJobSnapshot } from '../w27-solve.js';
+import { scheduleWslPrune } from '../wsl-prune.js';
 import {
   configureComputeQueue,
   snapshotComputeQueue,
@@ -638,6 +639,12 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
       api.hydrateActiveMeshCase();
       try {
         scheduleComputeQueueKick(400);
+      } catch {
+        /* ignore */
+      }
+      // Failed or interrupted runs leave their WSL copy behind; sweep those later.
+      try {
+        scheduleWslPrune();
       } catch {
         /* ignore */
       }

@@ -56,6 +56,7 @@ from cfddesk.project.model import Project
 from cfddesk.project.settings import MeshRefinement, MeshSettings
 from cfddesk.project.web_adapter import study_web_bcs
 from cfddesk.runner.case_id import validate_wsl_case_id
+from cfddesk.runner.cleanup import remove_wsl_case
 from cfddesk.runner.sync import RESULTS_MARKER, copy_back_mesh
 from cfddesk.wsl.mesh_run import run_cfmesh_pipeline
 
@@ -529,6 +530,8 @@ def main() -> int:
         (case_dir / "w28-cfmesh-meta.json").write_text(
             json.dumps(meta, indent=2) + "\n", encoding="utf-8"
         )
+        # The mesh and its logs are on Windows; nothing reads the WSL copy again.
+        remove_wsl_case(wsl_case)
         return _result(
             True,
             path_kind="cartesianMesh",
