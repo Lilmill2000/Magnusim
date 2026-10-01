@@ -12,6 +12,6 @@ writer), ``proc`` (run a program with a timeout, killing its whole tree),
 (a plugin's backend in its own environment: ``python -m magnusim_sdk.service``).
 """
 
-SDK_VERSION = "1.1.0"
+SDK_VERSION = "1.2.0"
 
 __all__ = ["SDK_VERSION"]

@@ -18,6 +18,7 @@ import {
 } from './plugin-services.ts';
 import { RpcError, WorkerUnavailableError, type WorkerClient } from './worker.ts';
 import { pluginSdkFile, type SdkVariant } from './plugin-sdk.ts';
+import { PluginFiles, registerPluginFileRoutes } from './plugin-files.ts';
 import { FRAME_ASSET_HEADERS, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
 
 export interface RouteDeps {
@@ -34,7 +35,8 @@ export interface RouteDeps {
   resetCaseIdle: (note?: string) => void;
   /** Plugin services (their own environments); made here when not given. */
   services?: PluginServiceHost;
-  envInstaller?: PluginEnvInstaller;
+  /** Makes the environment builder, given what to do when a build ends (tests pass one that runs nothing). */
+  envInstaller?: (built: (key: string) => void) => PluginEnvInstaller;
   /** The workspace SDK build the frames get: dev (npm run dev) or prod (preview). */
   sdkVariant?: SdkVariant;
 }
@@ -144,8 +146,34 @@ export function safePluginFile(
 
 export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   const services = deps.services || new PluginServiceHost(deps.worker);
+  // The plugin list, briefly cached: a workspace page loads many files at once. The
+  // UI, workspace and plugin file routes share it; it is dropped when plugins change.
+  let listedCache: { at: number; rows: Promise<ListedPluginRow[]> } | null = null;
+  const listedPlugins = (): Promise<ListedPluginRow[]> => {
+    if (listedCache && Date.now() - listedCache.at < 2000) return listedCache.rows;
+    const rows = deps.worker
+      .call('plugins.list')
+      .then((r) => ((r as { plugins?: ListedPluginRow[] }).plugins || []) as ListedPluginRow[]);
+    listedCache = { at: Date.now(), rows };
+    rows.catch(() => {
+      listedCache = null;
+    });
+    return rows;
+  };
+  if (typeof deps.worker.on === 'function') {
+    deps.worker.on('registry-changed', () => {
+      listedCache = null;
+    });
+  }
+  // A plugin's own files in a project; its open uploads stop whenever its service does.
+  const pluginFiles = new PluginFiles({ plugins: listedPlugins });
   // A rebuilt environment replaces the running service (and its cached state).
-  const envInstaller = deps.envInstaller || new PluginEnvInstaller((key) => services.reset(key, 'restarted on its new environment'));
+  const envBuilt = (key: string) => {
+    services.reset(key, 'restarted on its new environment');
+    void pluginFiles.abortPlugin(key);
+    listedCache = null;
+  };
+  const envInstaller = deps.envInstaller ? deps.envInstaller(envBuilt) : new PluginEnvInstaller(envBuilt);
   router.get('/api/_routes', (ctx) => {
     ctx.sendJson(200, {
       ok: true,
@@ -252,6 +280,7 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     }
     if (method === 'registry.reload') {
       services.resetAll('stopped for a plugin reload');
+      void pluginFiles.abortAll();
       listedCache = null;
     }
     if (method === 'bc.menu' || method === 'registry.reload') {
@@ -483,28 +512,43 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       patch: body.patch && typeof body.patch === 'object' ? body.patch : null,
     });
   });
-  // A plugin's own JSON files in the project (plugins/<key>/...).
+  // A plugin's own JSON files in the project (plugins/<key>/...), only while it is on
+  // (its binary files answer the same): a page left open after Disable cannot write.
   for (const action of ['read', 'write'] as const) {
     router.post(`/api/plugin-data/${action}`, async (ctx) => {
       const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
+      const plugin = String(body.plugin || '');
+      let row: ListedPluginRow | undefined;
+      try {
+        row = (await listedPlugins()).find((p) => p.key === plugin);
+      } catch {
+        return ctx.sendJson(503, { ok: false, code: 'unavailable', error: 'the plugin list is not available right now' });
+      }
+      if (!row || row.status !== 'enabled') return ctx.sendJson(404, { ok: false, code: 'plugin_off', error: 'this plugin is not on' });
       return workerJson(deps, ctx, `plugin_data.${action}`, {
         project_id: String(body.project_id || ''),
-        plugin: String(body.plugin || ''),
+        plugin,
         rel: String(body.rel || ''),
         ...(action === 'write' ? { doc: body.doc ?? null } : {}),
       });
     });
   }
+  // Its binary files in the same folder (/api/plugin-files/*): streamed here, never through the worker.
+  registerPluginFileRoutes(router, pluginFiles);
 
   router.post('/api/plugins/:key/enable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    if (!validPluginKey(String(ctx.params.key || ''))) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
     services.reset(String(ctx.params.key || ''), 'restarted');
+    void pluginFiles.abortPlugin(String(ctx.params.key || ''));
     listedCache = null;
     return workerJson(deps, ctx, 'plugins.enable', { key: ctx.params.key });
   });
   router.post('/api/plugins/:key/disable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    if (!validPluginKey(String(ctx.params.key || ''))) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
     services.reset(String(ctx.params.key || ''), 'stopped: the plugin was turned off');
+    void pluginFiles.abortPlugin(String(ctx.params.key || ''));
     listedCache = null;
     return workerJson(deps, ctx, 'plugins.disable', { key: ctx.params.key });
   });
@@ -530,6 +574,8 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       const { name, env } = await services.envOf(key);
       if (!env) return ctx.sendJson(400, { error: `${name} has no environment to set up`, ok: false });
       services.reset(key, 'stopped while its environment is rebuilt');
+      void pluginFiles.abortPlugin(key);
+      listedCache = null;
       ctx.sendJson(202, { ok: true, key, install: publicInstall(envInstaller.start(key)) });
     } catch (err) {
       const { status, body } = rpcStatus(err);
@@ -541,6 +587,8 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     const key = String(ctx.params.key || '');
     if (!validPluginKey(key)) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
     services.reset(key, 'stopped: its environment was removed');
+    void pluginFiles.abortPlugin(key);
+    listedCache = null;
     return workerJson(deps, ctx, 'plugins.env_remove', { key });
   });
 
@@ -613,20 +661,6 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   router.get('/api/plugin/:key/**rest', pluginDispatch);
   router.post('/api/plugin/:key/**rest', pluginDispatch);
 
-  // The plugin list, briefly cached: a workspace page loads many files at once.
-  let listedCache: { at: number; rows: Promise<ListedPluginRow[]> } | null = null;
-  const listedPlugins = (): Promise<ListedPluginRow[]> => {
-    if (listedCache && Date.now() - listedCache.at < 2000) return listedCache.rows;
-    const rows = deps.worker
-      .call('plugins.list')
-      .then((r) => ((r as { plugins?: ListedPluginRow[] }).plugins || []) as ListedPluginRow[]);
-    listedCache = { at: Date.now(), rows };
-    rows.catch(() => {
-      listedCache = null;
-    });
-    return rows;
-  };
-
   // The workspace SDK for plugin frames (React as ES modules, the bridge, the theme).
   router.get('/plugin-sdk/:file', async (ctx) => {
     const name = String(ctx.params.file || '');
@@ -687,17 +721,22 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     // The manifest key may differ from the plugin's folder name; files live in the folder.
     let folder = String(ctx.params.key || '');
     let tier = 'user';
+    let hit: ListedPluginRow | undefined;
     try {
-      const listed = (await deps.worker.call('plugins.list')) as {
-        plugins?: Array<{ key: string; ui?: string; dir?: string | null; tier?: string }>;
-      };
-      const hit = (listed.plugins || []).find((p) => p.key === ctx.params.key);
-      if (hit && hit.ui) ui = hit.ui;
-      if (hit && hit.dir) folder = String(hit.dir);
-      if (hit && hit.tier) tier = String(hit.tier);
+      hit = (await listedPlugins()).find((p) => p.key === ctx.params.key);
     } catch {
-      /* serve from default ui/ */
+      hit = undefined;
     }
+    // Only a plugin that is on gets its UI served or built (the page loads no other):
+    // one that is off (an optional bundled one that ships off among them), needs setup
+    // or failed to load is never run, and nothing is served for a key the app does not list.
+    if (!hit || hit.status !== 'enabled') {
+      ctx.sendJson(404, { error: hit && hit.status === 'disabled' ? 'this plugin is off' : 'plugin ui not found' });
+      return;
+    }
+    if (hit.ui) ui = hit.ui;
+    if (hit.dir) folder = String(hit.dir);
+    if (hit.tier) tier = String(hit.tier);
     const file = safePluginFile(deps.webRoot, folder, ui, ctx.params.rest || 'index.js', tier);
     if (!file) {
       ctx.sendJson(404, { error: 'plugin ui not found' });

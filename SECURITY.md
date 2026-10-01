@@ -26,6 +26,12 @@ reverse proxy or the public tunnel they answer 403 "Plugin management is only
 available on this PC." Installing or removing a plugin's dependencies (its own
 environment) is managed the same way.
 
+An optional plugin that ships with the app turned off (`default_enabled =
+false`) is inert until someone on this PC turns it on. Only its manifest is read:
+its code is not imported, its page files are not served, and its environment is
+not built. Only the Python worker writes the list of plugins turned on or off;
+the rest of the app never writes it.
+
 A plugin's own environment keeps its packages apart from the app's (pinned and
 hashed lock, wheels only, the app's packages untouched). It separates
 dependencies, not permissions: its service and jobs still run with your
@@ -43,6 +49,24 @@ opaque, GET requests for those two folders are answered to any origin
 shipped files, never project data. The sandbox isolates crashes, styles and the
 app's data from workspace code. It is not a defence against a malicious
 plugin, whose Python already runs with your rights.
+
+A workspace can keep large files in its plugin's folder of the open project
+(`ws.files`). The app server streams them to and from disk; they never pass
+through the Python worker. The server checks every path where it really lands
+(links and junctions included), never writes a study's record, and holds the
+workspace to the plugin's own size limits and to free disk space. The same
+checks now apply to the workspace's JSON files (`ws.data`), and both are
+refused while the plugin is turned off.
+
+A workspace page may go full screen after a click or key press inside it. It
+then covers the app and the browser's own controls, which makes a fake screen
+easier to draw; the browser shows its own notice, Esc always leaves, and the app
+leaves full screen before it shows any dialog. A workspace page can also take
+the keyboard focus without a click. The app gives focus back to its own dialogs
+when they open, but text typed into the app over an open workspace is not
+isolated from that page. When a page says it has unsaved work, the app's
+question shows the page's message after the plugin's name, as plain text with
+control and direction-changing characters removed.
 
 Keep projects, `.cache`, local preferences, environment files, keys, recordings,
 and generated run reports out of source releases. `.gitignore` prevents new

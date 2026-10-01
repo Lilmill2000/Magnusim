@@ -4,6 +4,7 @@ import { PanelBoundary } from '../../islands';
 import { panelsFor } from '../../plugin-api';
 import { loadPluginUi, pluginClientErrors, subscribePluginClients, type ListedPlugin } from '../../plugins/loader';
 import { useProjectStore } from '../../store/project';
+import { confirmLeaveWorkspace, openWorkspaceRoute, withdrawLeaveApproval } from '../../workspace/leaveGuard';
 
 /** A plugin's own environment ([python] in its manifest), as the server reports it. */
 type PluginEnv = {
@@ -155,10 +156,13 @@ export function PluginsStep() {
   }, []);
 
   async function reloadRegistry() {
-    await workerRpc('registry.reload', {});
-    await useProjectStore.getState().loadRegistry(true);
-    // The plugins changed: the tree's STUDIES and the Workspaces menu read again.
-    window.dispatchEvent(new Event('cfd:tree-sync'));
+    try {
+      await workerRpc('registry.reload', {});
+      await useProjectStore.getState().loadRegistry(true);
+    } finally {
+      // The plugins changed: the tree's STUDIES, the Workspaces menu and an open workspace read again.
+      window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { plugins: true } }));
+    }
   }
 
   async function reload() {
@@ -177,8 +181,12 @@ export function PluginsStep() {
   }
 
   async function setEnabled(key: string, enabled: boolean) {
+    // Turning off the plugin whose workspace is open asks first when it has unsaved work; Cancel sends nothing.
+    const closesWorkspace = !enabled && openWorkspaceRoute()?.plugin === key;
+    if (closesWorkspace && !(await confirmLeaveWorkspace('plugin-off'))) return;
     setBusy(key);
     setNote('');
+    let done = false;
     try {
       const response = await fetch(`/api/plugins/${encodeURIComponent(key)}/${enabled ? 'enable' : 'disable'}`, {
         method: 'POST',
@@ -186,11 +194,14 @@ export function PluginsStep() {
         body: '{}',
       });
       if (!response.ok) throw new Error(`server answered ${response.status}`);
+      done = true;
       await reloadRegistry();
       // Load (or remove) its UI now, not after a manual Reload.
       await loadPluginUi(scopeNow());
       await refresh();
     } catch (e) {
+      // Still on: the workspace stays open, and its unsaved work is guarded again.
+      if (closesWorkspace && !done) withdrawLeaveApproval();
       setNote(`Could not ${enabled ? 'enable' : 'disable'} ${key}: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy('');
@@ -238,6 +249,7 @@ export function PluginsStep() {
           const run = installs[row.key];
           const installing = !!run && run.state === 'installing';
           const needsInstall = !!env && (env.state !== 'ready' || (run && run.state === 'failed'));
+          const shipsOff = row.tier === 'bundled' && row.default_enabled === false;
           return (
             <li
               key={row.key}
@@ -246,6 +258,7 @@ export function PluginsStep() {
               data-plugin-status={status}
               data-plugin-source={row.source || ''}
               data-plugin-required={row.required ? '1' : undefined}
+              data-plugin-default-off={shipsOff ? '1' : undefined}
             >
               <span className="wiz-pref-copy">
                 <strong>
@@ -256,6 +269,11 @@ export function PluginsStep() {
                   </span>
                 </strong>
                 {row.description ? <span>{row.description}</span> : null}
+                {shipsOff && status === 'disabled' ? (
+                  <span className="wiz-plugin-meta" data-plugin-optional-hint="1">
+                    Ships with Magnusim and stays off until you turn it on.
+                  </span>
+                ) : null}
                 {row.error ? (
                   <span className="wiz-plugin-error" role="alert">
                     {row.error}

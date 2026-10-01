@@ -24,7 +24,6 @@
 export interface MeshGenerateOptions {
   mesh_id?: string;
   settings?: Record<string, unknown>;
-  fromQueue?: boolean;
 }
 
 export type MeshGenerateKind = 'generating' | 'queued' | 'queue' | 'generate';

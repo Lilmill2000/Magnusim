@@ -189,6 +189,8 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     await expect(page).toHaveURL(new RegExp(`#/p/${PROJECT}$`));
     await expect(page.locator('#top-header .top-right #btn-queue')).toBeVisible();
     await expect(page.locator('#top-header .top-right #wb-prefs')).toBeVisible();
+    // The header is usable again (not left inert by the workspace).
+    expect(await page.evaluate(() => document.getElementById('top-header').inert)).toBe(false);
     expect(await page.evaluate(() => window.__CFD_W17__?.activeId || null)).toBe(scopeBefore.study);
     // The row's own Rename asks for a name and does not open the workspace.
     await page.locator(`#plugin-studies-section [data-plugin-study="${bench.id}"] [data-plugin-study-act="rename"]`).click();
@@ -210,7 +212,8 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     expect(await page.evaluate(() => window.__CFD_W17__?.activeId || null)).toBe(scopeBefore.study);
     stage(t0, 'back, history, deep link');
 
-    // Opening another project the way the queue does (it starts a job there) closes the workspace.
+    // Opening another project directly closes the workspace. (The compute queue runs
+    // in Node and never switches the browser's project; that is not this path.)
     await page.evaluate((pid) => window.__CFD_HOME__.open(pid, { reloadIfNeeded: false }), NO_GEOMETRY_PROJECT);
     await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, NO_GEOMETRY_PROJECT, { timeout: 60_000 });
     await expect(overlay).toBeHidden();

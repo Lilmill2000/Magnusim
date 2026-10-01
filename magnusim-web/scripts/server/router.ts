@@ -180,6 +180,7 @@ const SCOPED_PREFIXES = [
   '/api/area-average',
   '/api/media',
   '/api/jobs',
+  '/api/plugin-files',
 ];
 
 let missingProjectWarned = false;

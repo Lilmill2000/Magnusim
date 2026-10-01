@@ -36,7 +36,6 @@ import {
   startShouldEnqueue,
   queueHasMeshDepViolation,
   queueInsertFromY,
-  queueKickAfterStart,
   resultsAttachStealsServerCase,
   resultsAttachWaitMs,
   resultsOpenWaitsFullPrefetchQueue,
@@ -230,26 +229,6 @@ describe('meshIsQueuedOrGenerating', () => {
   });
 });
 
-describe('queueKickAfterStart', () => {
-  it('holds the front job when start fails validation so the next mesh cannot skip it', () => {
-    expect(queueKickAfterStart({ ok: false, error: 'Assign a fluid to a volume first' }, false)).toBe('hold');
-  });
-
-  it('retries later only when the machine is busy', () => {
-    expect(queueKickAfterStart({ busy: true }, false)).toBe('retry');
-  });
-
-  it('dequeues only after a job actually starts', () => {
-    expect(queueKickAfterStart({ ok: true }, true)).toBe('dequeue');
-    expect(queueKickAfterStart({}, false)).toBe('hold');
-  });
-
-  it('skips a leftover job whose mesh or run was deleted', () => {
-    expect(queueKickAfterStart({ ok: false, missing: true }, false)).toBe('skip');
-    expect(queueKickAfterStart({ skip: true }, false)).toBe('skip');
-  });
-});
-
 describe('dropMissingQueueJobs', () => {
   const queue = [
     { id: 'q-m1', kind: 'mesh', mesh_id: 'mesh_1' },
@@ -397,18 +376,11 @@ describe('results view while another job is live', () => {
     expect(resultsAttachStealsServerCase({ meshGenerateLive: false })).toBe(true);
   });
 
-  it('keeps Run 1 results open when the queue starts Run 2', () => {
+  it('keeps Run 1 results open when Run 2 starts', () => {
     expect(
       keepResultsWhileStartingRun({
         resultsOpen: true,
         resultsRunId: '28f2ce5a',
-        startingRunId: '23b9fa58',
-      })
-    ).toBe(true);
-    expect(
-      keepResultsWhileStartingRun({
-        resultsOpen: true,
-        selectedRunId: '28f2ce5a',
         startingRunId: '23b9fa58',
       })
     ).toBe(true);

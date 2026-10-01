@@ -336,7 +336,14 @@ describe('startResultFromEngine', () => {
 describe('queueKickAfterStart / dep helpers', () => {
   it('holds validation failures', () => {
     assert.equal(queueKickAfterStart({ ok: false }, false), 'hold');
+    assert.equal(queueKickAfterStart({}, false), 'hold');
     assert.equal(queueKickAfterStart({ ok: true }, true), 'dequeue');
+  });
+
+  it('retries a busy start and skips a job whose mesh or run is gone', () => {
+    assert.equal(queueKickAfterStart({ busy: true }, false), 'retry');
+    assert.equal(queueKickAfterStart({ ok: false, missing: true }, false), 'skip');
+    assert.equal(queueKickAfterStart({ skip: true }, false), 'skip');
   });
 
   it('detects a run above its mesh', () => {

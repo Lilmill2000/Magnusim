@@ -17,6 +17,8 @@ export type ListedPlugin = {
   /** "bundled" ships with the app; a required one cannot be turned off. */
   tier?: string;
   required?: boolean;
+  /** False: an optional bundled plugin that ships off until someone turns it on. */
+  default_enabled?: boolean;
 };
 
 export type PluginHost = {

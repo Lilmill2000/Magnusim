@@ -1,3 +1,4 @@
+import { installWorkspaceLeaveGuard } from '../workspace/leaveGuard';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import shellHtml from './shell.html?raw';
@@ -5,6 +6,12 @@ import shellHtml from './shell.html?raw';
 import '../theme/tokens.css';
 import { AppShell } from './AppShell';
 import { parseHomeRoute } from '../home/controller';
+
+// First, before anything else runs: the workspace leave guard must be the first
+// hashchange listener on window. Chromium runs window listeners in registration
+// order even with capture, and the home controller, the router and the workbench
+// runtime all add theirs later.
+installWorkspaceLeaveGuard();
 
 const queryClient = new QueryClient();
 

@@ -52,9 +52,14 @@ function readLocalDocFromDisk() {
 
 export function writeLocalDoc(partial) {
   // Merge onto the file as it is now, not the cached copy: the Python worker is
-  // the only writer of the plugin on/off list, and a stale cache would write an
-  // old list back (a plugin turned off comes back on after a units save).
-  const next = { ...readLocalDocFromDisk(), ...(partial || {}) };
+  // the only writer of the plugin on/off lists (plugins.disabled, plugins.enabled),
+  // and a stale cache would write an old list back (a plugin turned off comes back
+  // on after a units save). Node never writes them, even if a caller passes them.
+  const own = { ...(partial || {}) };
+  delete own.plugins;
+  delete own['plugins.disabled'];
+  delete own['plugins.enabled'];
+  const next = { ...readLocalDocFromDisk(), ...own };
   writeFileSync(LOCAL_JSON, JSON.stringify(next, null, 2) + '\n', 'utf8');
   mem = next;
   return { ...next };

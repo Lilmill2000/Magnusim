@@ -12,11 +12,12 @@ land13: W17 / MESH_ENGINES consumers read scripts/generated/registry.json via re
 --check: dump live registry and fail (exit 1) if committed
 scripts/generated/registry.json differs (stale golden).
 
---shipped (alias --builtins-only): dump what ships with the app: the core
-builtins plus the repo's bundled-plugins/ (no entry points, no user plugins
+--shipped (alias --builtins-only): dump what a fresh install registers: the
+core builtins plus the repo's bundled-plugins/ that are on by default (not an
+optional one with default_enabled = false; no entry points, no user plugins
 folder, no off list, no MAGNUSIM_* folder overrides). The committed golden uses
-it, so a plugin installed on this PC never changes it. Node reads user plugin
-keys from the live worker registry instead.
+it, so a plugin installed or turned on on this PC never changes it. Node reads
+the other plugins' keys from the live worker registry instead.
 """
 
 from __future__ import annotations
@@ -106,15 +107,19 @@ def _missing_rows(hub: RegistryHub, env: dict[str, Any] | None) -> list[dict[str
     return out
 
 
-def shipped_hub() -> RegistryHub:
-    """A fresh hub holding what ships: core builtins + the repo's bundled plugins."""
+def shipped_hub(*, bundled_dir: Path | None = None, include_optional: bool = False) -> RegistryHub:
+    """A fresh hub holding what a fresh install registers: core builtins + the
+    bundled plugins that are on by default. ``include_optional`` turns on the
+    optional ones too (a test that every bundled plugin loads)."""
     from cfddesk.builtin import register_builtins
     from cfddesk.registry import discovery
 
     hub = RegistryHub()
     register_builtins(hub)
-    found, _failed = discovery._scan_plugin_dir(WEB_ROOT / "bundled-plugins", hub)
-    discovery._load_ordered(found, hub, set(), tier="bundled")
+    found, _failed = discovery._scan_plugin_dir(bundled_dir or (WEB_ROOT / "bundled-plugins"), hub)
+    keys = frozenset(str(meta.get("key") or d.name) for d, meta in found)
+    state = discovery.PluginState(enabled=keys) if include_optional else discovery.PluginState()
+    discovery._load_ordered(found, hub, state, tier="bundled")
     if hub.failures:
         raise RuntimeError(f"a bundled plugin failed to load: {hub.failures}")
     return hub
@@ -127,9 +132,15 @@ def dump_registry(
     env: dict[str, Any] | None = None,
     force: bool = False,
     builtins_only: bool = False,
+    bundled_dir: Path | None = None,
+    include_optional: bool = False,
 ) -> dict[str, Any]:
     """Build the registry dump dict (testable without CLI I/O)."""
-    hub = shipped_hub() if builtins_only else load_all(web_root=web_root, force=force)
+    hub = (
+        shipped_hub(bundled_dir=bundled_dir, include_optional=include_optional)
+        if builtins_only
+        else load_all(web_root=web_root, force=force)
+    )
     payload: dict[str, Any] = {}
     for kind in DUMP_KINDS:
         payload[kind] = hub.registry(kind).describe()

@@ -1,5 +1,5 @@
 /**
- * The workspace bridge, host side (API 1.1).
+ * The workspace bridge, host side (API 1.2).
  *
  * A plugin workspace runs in a sandboxed frame with an opaque origin. It says
  * hello (window.postMessage, only accepted from this frame's window) and gets
@@ -7,16 +7,45 @@
  * port and is checked against the allowlist below, scoped to this plugin,
  * project and study. Anything else is refused ("not allowed") and logged.
  *
+ * Files in the plugin's folder of the project go to /api/plugin-files as raw
+ * bytes: the frame hands over Blobs and ArrayBuffers, never JSON-encoded data.
+ *
  * After every frame load the host asks the document it talks to whether it is
  * still there (probe/alive); a new document that has not connected (a reload,
- * a navigation) ends the old channel and the job streams it opened.
+ * a navigation) ends the old channel, the job streams and the uploads it opened.
+ *
+ * The page has unsaved work while it says so (nav.setDirty) or while one of its
+ * uploads is open; the host hears of every change (hooks.setDirty) and asks
+ * before any way out. A closed channel is clean again.
  */
-import type { StudyRecord, ThemeInfo, UnitSystem, WorkspaceContext } from '../plugin-sdk/workspace';
+import type { FileInfo, FileWriteResult, StudyRecord, ThemeInfo, UnitSystem, WorkspaceContext } from '../plugin-sdk/workspace';
 
 export const HOST_SDK_MAJOR = 1;
-export const HOST_API_VERSION = '1.1';
+export const HOST_API_VERSION = '1.2';
 const PROBE_MS = 1500;
 const METHOD_NAME = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,120}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/i;
+/** The longest unsaved-work message the host shows (after cleaning). */
+export const DIRTY_MESSAGE_MAX = 200;
+/** What the host shows while an upload is open and the page gave no message of its own. */
+const UPLOAD_OPEN = 'A file upload has not finished.';
+// C0, DEL and C1 (\p{Cc}), line and paragraph separators, and bidi controls.
+const DIRTY_MESSAGE_CONTROLS = /[\p{Cc}\u{2028}\u{2029}\u{200e}\u{200f}\u{202a}-\u{202e}\u{2066}-\u{2069}]/gu;
+
+/** A page's unsaved-work message as plain text on one line: no controls, single spaces, at most 200 characters. */
+export function cleanDirtyMessage(raw: unknown): string {
+  let text = '';
+  try {
+    text = String(raw ?? '');
+  } catch {
+    // Not text at all (an object whose toString is no function): no message.
+  }
+  return text
+    .replace(DIRTY_MESSAGE_CONTROLS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, DIRTY_MESSAGE_MAX);
+}
 
 export interface BridgeScope {
   plugin: string;
@@ -28,7 +57,10 @@ export interface BridgeScope {
 }
 
 export interface BridgeHooks {
-  back(): void;
+  /** Leave the workspace for the project; false when the user chose to stay. */
+  back(): Promise<boolean>;
+  /** The page's unsaved-work state changed (message is '' when clean). */
+  setDirty(dirty: boolean, message: string): void;
   connected(): void;
   studyChanged(study: StudyRecord): void;
   /** The study is not in the project any more (deleted in another tab). */
@@ -49,8 +81,17 @@ export class BridgeError extends Error {
 }
 
 const notAllowed = (what: string) => new BridgeError(`not allowed: ${what}`, 'not_allowed');
+const badParam = (what: string) => new BridgeError(`bad parameter: ${what}`, 'bad_request');
+const isCount = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 
 export const THEME: ThemeInfo = { name: 'light', stylesheet: '/plugin-sdk/theme.css' };
+
+/** A refused answer as a BridgeError: the app's own code when it names one, else one from the status. */
+async function refusal(r: Response): Promise<BridgeError> {
+  const j = (await r.json().catch(() => ({}))) as { error?: string; code?: unknown };
+  const code = typeof j.code === 'string' && j.code ? j.code : r.status === 409 ? 'conflict' : r.status === 404 ? 'not_found' : 'failed';
+  return new BridgeError(String(j.error || `the app answered ${r.status}`), code);
+}
 
 async function api<T>(url: string, init?: { body?: unknown; method?: string }): Promise<T> {
   const r = await fetch(url, {
@@ -59,12 +100,18 @@ async function api<T>(url: string, init?: { body?: unknown; method?: string }): 
     body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
     cache: 'no-store',
   });
-  const j = (await r.json().catch(() => ({}))) as { error?: string };
-  if (!r.ok) {
-    const code = r.status === 409 ? 'conflict' : r.status === 404 ? 'not_found' : 'failed';
-    throw new BridgeError(String(j.error || `the app answered ${r.status}`), code);
-  }
-  return j as T;
+  if (!r.ok) throw await refusal(r);
+  return (await r.json().catch(() => ({}))) as T;
+}
+
+/** An upload this workspace began: where it writes, and how far it has got. */
+interface OpenUpload {
+  rel: string;
+  size: number;
+  chunkBytes: number;
+  received: number;
+  /** A chunk or the commit is on its way (one at a time). */
+  busy: boolean;
 }
 
 /**
@@ -77,6 +124,15 @@ export class WorkspaceCalls {
   /** Jobs this workspace started (the only ones it may follow or stop). */
   readonly jobs = new Set<string>();
   private readonly streams = new Map<string, EventSource>();
+  /** Uploads this workspace began (the only ones it may send to, commit or abort). */
+  private readonly uploads = new Map<string, OpenUpload>();
+  /** Bumped by close(): an upload begun before it is aborted when its answer comes. */
+  private epoch = 0;
+  /** What the page last said with nav.setDirty (the message only counts while dirty). */
+  private frameDirty = false;
+  private frameMessage = '';
+  /** The unsaved-work state the host was last told. */
+  private told = { dirty: false, message: '' };
   private push: (msg: Record<string, unknown>) => void = () => undefined;
 
   constructor(scope: BridgeScope, hooks: BridgeHooks) {
@@ -90,6 +146,20 @@ export class WorkspaceCalls {
 
   private q(extra: Record<string, string> = {}): string {
     return new URLSearchParams({ project_id: this.scope.projectId, ...extra }).toString();
+  }
+
+  /**
+   * Tell the host when the unsaved-work state changes: dirty while the page
+   * says so or an upload is open; the page's own message first, else the upload's.
+   * Synchronous, so the host sees it before the page's next call.
+   */
+  private report(): void {
+    const uploading = this.uploads.size > 0;
+    const dirty = this.frameDirty || uploading;
+    const message = this.frameDirty && this.frameMessage ? this.frameMessage : uploading ? UPLOAD_OPEN : '';
+    if (dirty === this.told.dirty && message === this.told.message) return;
+    this.told = { dirty, message };
+    this.hooks.setDirty(dirty, message);
   }
 
   async study(): Promise<StudyRecord> {
@@ -174,6 +244,16 @@ export class WorkspaceCalls {
           body: { project_id: s.projectId, plugin: s.plugin, rel: String(params.rel || ''), doc: params.doc ?? null },
         });
         return { ok: true };
+      case 'files.stat':
+      case 'files.list':
+      case 'files.read':
+      case 'files.write.begin':
+      case 'files.write.chunk':
+      case 'files.write.commit':
+      case 'files.write.abort':
+      case 'files.delete':
+        if (params.plugin != null && params.plugin !== s.plugin) throw notAllowed("another plugin's files");
+        return this.files(method, params);
       case 'project.info':
         return { id: s.projectId, title: s.projectTitle, units: this.hooks.units() };
       case 'prefs.units':
@@ -199,11 +279,208 @@ export class WorkspaceCalls {
           yes: String(params.confirmLabel || 'Save'),
         });
       case 'nav.back':
-        this.hooks.back();
+        return { ok: true, left: (await this.hooks.back()) === true };
+      case 'nav.setDirty': {
+        // Both worked out before either is kept.
+        const dirty = params.dirty === true;
+        const message = dirty ? cleanDirtyMessage(params.message) : '';
+        this.frameDirty = dirty;
+        this.frameMessage = message;
+        this.report();
         return { ok: true };
+      }
       default:
         throw notAllowed(method ? JSON.stringify(method) : 'an unnamed call');
     }
+  }
+
+  /** Files in this plugin's folder of the project; the app checks every path. */
+  private async files(method: string, params: Record<string, unknown>): Promise<unknown> {
+    const s = this.scope;
+    const rel = String(params.rel || '');
+    switch (method) {
+      case 'files.stat':
+        return this.stat(rel);
+      case 'files.list': {
+        const prefix = String(params.prefix || '');
+        const r = await api<{ files: FileInfo[]; truncated?: boolean }>(`/api/plugin-files/list?${this.q({ plugin: s.plugin, prefix })}`);
+        if (r.truncated) {
+          throw new BridgeError(
+            `more than ${r.files.length} files under ${prefix || "the plugin's folder"}: list a smaller folder`,
+            'too_many',
+          );
+        }
+        return r.files;
+      }
+      case 'files.read':
+        return this.read(rel, params);
+      case 'files.write.begin': {
+        const { size, ifMatch } = params;
+        if (!isCount(size)) throw badParam('size');
+        if (ifMatch !== undefined && ifMatch !== null && typeof ifMatch !== 'string') throw badParam('ifMatch');
+        const epoch = this.epoch;
+        const r = await this.onFile(rel, () =>
+          api<{ upload: string; chunk_bytes: number }>('/api/plugin-files/uploads', {
+            body: { project_id: s.projectId, plugin: s.plugin, rel, size, ...(ifMatch !== undefined ? { if_match: ifMatch } : {}) },
+          }),
+        );
+        if (epoch !== this.epoch) {
+          this.dropUpload(r.upload);
+          throw new BridgeError('the workspace closed', 'failed');
+        }
+        this.uploads.set(r.upload, { rel, size, chunkBytes: r.chunk_bytes, received: 0, busy: false });
+        this.report();
+        return { upload: r.upload, chunkBytes: r.chunk_bytes };
+      }
+      case 'files.write.chunk': {
+        const [id, up] = this.ownUpload(params.upload);
+        const { offset, data } = params;
+        if (!(data instanceof ArrayBuffer) && !(data instanceof Blob)) throw badParam('data (an ArrayBuffer or a Blob)');
+        if (!Number.isSafeInteger(offset)) throw badParam('offset');
+        if (up.busy) throw new BridgeError('the last chunk of this upload is still on its way', 'busy');
+        if (offset !== up.received) throw new BridgeError(`the next chunk starts at byte ${up.received}`, 'offset');
+        const n = data instanceof Blob ? data.size : data.byteLength;
+        const room = Math.min(up.chunkBytes, up.size - up.received);
+        if (n > room) throw new BridgeError(`this chunk may hold at most ${room} bytes`, 'too_large');
+        return this.onUpload(up, async () => {
+          const r = await fetch(
+            `/api/plugin-files/uploads/${encodeURIComponent(id)}?${this.q({ plugin: s.plugin, offset: String(up.received) })}`,
+            {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/octet-stream' },
+              body: data,
+              cache: 'no-store',
+            },
+          );
+          if (!r.ok) throw await refusal(r);
+          const j = (await r.json()) as { received: number };
+          up.received = j.received;
+          return { received: j.received };
+        });
+      }
+      case 'files.write.commit': {
+        const [id, up] = this.ownUpload(params.upload);
+        const sha = params.sha256;
+        if (sha != null && !(typeof sha === 'string' && SHA256_HEX.test(sha))) throw badParam('sha256 (64 hex digits)');
+        if (up.busy) throw new BridgeError('the last chunk of this upload is still on its way', 'busy');
+        const r = await this.onUpload(up, () =>
+          this.onFile(up.rel, () =>
+            api<{ file: FileWriteResult }>(`/api/plugin-files/uploads/${encodeURIComponent(id)}/commit`, {
+              body: { project_id: s.projectId, plugin: s.plugin, ...(typeof sha === 'string' ? { sha256: sha.toLowerCase() } : {}) },
+            }),
+          ),
+        );
+        this.uploads.delete(id);
+        this.report();
+        return r.file;
+      }
+      case 'files.write.abort': {
+        const [id] = this.ownUpload(params.upload);
+        this.uploads.delete(id);
+        this.report();
+        await api(`/api/plugin-files/uploads/${encodeURIComponent(id)}/abort`, { body: { project_id: s.projectId, plugin: s.plugin } });
+        return { ok: true };
+      }
+      case 'files.delete': {
+        const r = await this.onFile(rel, () =>
+          api<{ deleted: number }>('/api/plugin-files/delete', {
+            body: { project_id: s.projectId, plugin: s.plugin, rel, recursive: params.recursive === true },
+          }),
+        );
+        return { deleted: r.deleted };
+      }
+      default:
+        throw notAllowed(JSON.stringify(method));
+    }
+  }
+
+  private async stat(rel: string): Promise<FileInfo | null> {
+    const r = await api<{ file: FileInfo | null }>(`/api/plugin-files/stat?${this.q({ plugin: this.scope.plugin, rel })}`);
+    return r.file ?? null;
+  }
+
+  /** A file's bytes (or a range of them) as a Blob, its whole size and its etag; null when it is not there. */
+  private async read(rel: string, params: Record<string, unknown>): Promise<{ blob: Blob; size: number; etag: string } | null> {
+    const { offset, length, ifMatch } = params;
+    if (offset !== undefined && !isCount(offset)) throw badParam('offset');
+    if (length !== undefined && !isCount(length)) throw badParam('length');
+    if (ifMatch != null && typeof ifMatch !== 'string') throw badParam('ifMatch');
+    const from = offset ?? 0;
+    if (length === 0) {
+      // No byte range asks for nothing: answer from the file's stat.
+      const info = await this.stat(rel);
+      if (!info) return null;
+      if (typeof ifMatch === 'string' && ifMatch !== info.etag) throw new BridgeError(`${rel} changed since it was read`, 'changed');
+      return { blob: new Blob([]), size: info.size, etag: info.etag };
+    }
+    const headers: Record<string, string> = {};
+    if (length !== undefined) headers.Range = `bytes=${from}-${from + length - 1}`;
+    else if (from > 0) headers.Range = `bytes=${from}-`;
+    if (typeof ifMatch === 'string') headers['If-Match'] = ifMatch;
+    const r = await fetch(`/api/plugin-files/read?${this.q({ plugin: this.scope.plugin, rel })}`, { headers, cache: 'no-store' });
+    // No byte range fits an empty file: from its start, that is all of it (as without a range).
+    if (r.status === 416 && from === 0 && r.headers.get('X-Magnusim-File-Size') === '0') {
+      return { blob: new Blob([]), size: 0, etag: r.headers.get('ETag') || '' };
+    }
+    if (!r.ok) {
+      const err = await refusal(r);
+      if (err.code === 'not_found') return null;
+      throw err;
+    }
+    const blob = await r.blob();
+    const size = Number(r.headers.get('X-Magnusim-File-Size') ?? NaN);
+    return { blob, size: Number.isFinite(size) ? size : blob.size, etag: r.headers.get('ETag') || '' };
+  }
+
+  private ownUpload(upload: unknown): [string, OpenUpload] {
+    const id = typeof upload === 'string' ? upload : '';
+    const up = this.uploads.get(id);
+    if (!up) throw notAllowed('an upload this workspace did not begin');
+    return [id, up];
+  }
+
+  /**
+   * One call at a time per upload. A failed one keeps the upload listed until
+   * the frame aborts it (or the channel ends), so that abort is not refused.
+   */
+  private async onUpload<T>(up: OpenUpload, run: () => Promise<T>): Promise<T> {
+    up.busy = true;
+    try {
+      return await run();
+    } finally {
+      up.busy = false;
+    }
+  }
+
+  /** A file call under this study's folder that finds the study gone tells the host (it closes the frame). */
+  private async onFile<T>(rel: string, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      if (err instanceof BridgeError && err.code === 'study_not_found' && this.underStudy(rel)) this.hooks.studyGone();
+      throw err;
+    }
+  }
+
+  private underStudy(rel: string): boolean {
+    const parts = rel
+      .trim()
+      .replace(/\\/g, '/')
+      .split('/')
+      .map((p) => p.replace(/[ .]+$/, '').toLowerCase())
+      .filter(Boolean);
+    return parts.length >= 3 && parts[0] === 'studies' && parts[1] === this.scope.studyId.toLowerCase();
+  }
+
+  /** Abort an upload without waiting (keepalive: it still goes when the page is closing). */
+  private dropUpload(id: string): void {
+    void fetch(`/api/plugin-files/uploads/${encodeURIComponent(id)}/abort`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: this.scope.projectId, plugin: this.scope.plugin }),
+      cache: 'no-store',
+      keepalive: true,
+    }).catch(() => undefined);
   }
 
   /** Forward a job's events to the frame until it ends (one stream per job). */
@@ -233,10 +510,16 @@ export class WorkspaceCalls {
     };
   }
 
-  /** Close every job stream (the channel ended). */
+  /** Close every job stream, abort every open upload and forget unsaved work (the channel ended). */
   close(): void {
     for (const es of this.streams.values()) es.close();
     this.streams.clear();
+    for (const id of this.uploads.keys()) this.dropUpload(id);
+    this.uploads.clear();
+    this.epoch++;
+    this.frameDirty = false;
+    this.frameMessage = '';
+    this.report();
   }
 }
 
@@ -245,8 +528,9 @@ export class WorkspaceBridge {
   private readonly frame: HTMLIFrameElement;
   private readonly calls: WorkspaceCalls;
   private readonly hooks: BridgeHooks;
-  // `welcomed` once the frame has its context and port (until then it has not connected).
-  private channel: { port: MessagePort; instance: string; welcomed: boolean } | null = null;
+  // `welcomed` once the frame has its context and port (until then it has not connected);
+  // `ended` aborts when the channel ends.
+  private channel: { port: MessagePort; instance: string; welcomed: boolean; ended: AbortController } | null = null;
   private alive = '';
 
   constructor(frame: HTMLIFrameElement, calls: WorkspaceCalls, hooks: BridgeHooks) {
@@ -271,6 +555,14 @@ export class WorkspaceBridge {
     return !!this.channel && this.channel.welcomed;
   }
 
+  /**
+   * Ends with the current channel (a new hello, a failed probe, detach): what
+   * that page load asked for, a dialog of its own, is moot then. Null when there is none.
+   */
+  channelSignal(): AbortSignal | null {
+    return this.channel ? this.channel.ended.signal : null;
+  }
+
   private onMessage = (event: MessageEvent): void => {
     if (event.source !== this.frame.contentWindow) return;
     const data = event.data as { magnusim?: string; sdkVersion?: string; instance?: string } | null;
@@ -288,7 +580,7 @@ export class WorkspaceBridge {
     this.closeChannel();
     const mc = new MessageChannel();
     const instance = data.instance;
-    const channel = { port: mc.port1, instance, welcomed: false };
+    const channel = { port: mc.port1, instance, welcomed: false, ended: new AbortController() };
     this.channel = channel;
     mc.port1.onmessage = (e) => void this.request(mc.port1, e.data);
     this.calls.setPush((msg) => mc.port1.postMessage(msg));
@@ -344,14 +636,17 @@ export class WorkspaceBridge {
     this.channel?.port.postMessage({ event: 'units', data: this.hooks.units() });
   };
 
+  /** End the channel (a new hello, a failed probe, detach): its streams and uploads go, and a dirty page is clean again. */
   private closeChannel(): void {
-    if (!this.channel) return;
+    const channel = this.channel;
+    if (!channel) return;
     try {
-      this.channel.port.close();
+      channel.port.close();
     } catch {
       /* already closed */
     }
     this.channel = null;
     this.calls.close();
+    channel.ended.abort();
   }
 }

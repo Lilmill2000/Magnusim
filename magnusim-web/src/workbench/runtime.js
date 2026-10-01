@@ -46,6 +46,8 @@ import { convertQuantity, preferredUnit, siUnitLabel, unitIsImperial } from '../
 import { isIsland, mountIsland, unmountIsland } from '../islands';
 import { useProjectStore } from '../store/project';
 import { workspaceHash } from '../workspace/route';
+import { confirmLeaveWorkspace } from '../workspace/leaveGuard';
+import { confirmAction, dialogBusy, promptName } from './dialogs';
 import {
   DEFAULT_ANALYSIS_KEY,
   analysisRow,
@@ -93,7 +95,6 @@ import {
   startShouldEnqueue,
   orderedQueueItems,
   queueHasMeshDepViolation,
-  queueKickAfterStart,
   resultsAttachStealsServerCase,
   resultsAttachWaitMs,
   resultsOpenWaitsFullPrefetchQueue,
@@ -6436,7 +6437,8 @@ function onPtRegionPointerUp(e) {
 }
 
 // ---- Small modal helpers (confirm / name prompt) ----
-// Resolve true when confirmed. Used before any filter / view is deleted.
+// confirmAction and promptName (./dialogs): one dialog at a time.
+
 /**
  * New / rename / delete a plugin study (plugins/<key>/studies) from its tree
  * row, with the app's own dialogs. A rename sends the rev the row showed: a
@@ -6449,6 +6451,8 @@ window.addEventListener('cfd:workspace-open', () => {
   try { stopAnimationPlay(); } catch (_) {}
 });
 window.__CFD_PROMPT_NAME__ = (opts) => promptName(opts);
+// A confirm or name prompt is open or waiting its turn (the workspace leave question does not queue behind one).
+window.__CFD_DIALOG_BUSY__ = () => dialogBusy();
 
 async function handlePluginStudyAction(ps, action, detail) {
   const pid = String(currentProjectId() || '');
@@ -6505,90 +6509,6 @@ async function handlePluginStudyAction(ps, action, detail) {
     if (!r.json || !r.json.ok) await notice('Delete failed', (r.json && r.json.error) || 'The study was not deleted.');
     sync();
   }
-}
-
-function confirmAction(opts) {
-  const o = opts || {};
-  const modal = document.getElementById('modal-confirm');
-  if (!modal) return Promise.resolve(window.confirm(o.copy || o.title || 'Delete?'));
-  const heading = document.getElementById('cf-heading');
-  const copy = document.getElementById('cf-copy');
-  const yes = document.getElementById('cf-confirm');
-  const no = document.getElementById('cf-cancel');
-  const backdrop = document.getElementById('cf-backdrop');
-  if (heading) heading.textContent = o.title || 'Delete?';
-  if (copy) copy.textContent = o.copy || '';
-  if (yes) yes.textContent = o.yes || 'Delete';
-  // notice: an information dialog with one button (no Cancel).
-  if (no) no.hidden = !!o.notice;
-  modal.hidden = false;
-  return new Promise((resolve) => {
-    const done = (ok) => {
-      modal.hidden = true;
-      if (no) no.hidden = false;
-      yes?.removeEventListener('click', onYes);
-      no?.removeEventListener('click', onNo);
-      backdrop?.removeEventListener('click', onNo);
-      document.removeEventListener('keydown', onKey);
-      resolve(ok);
-    };
-    const onYes = () => done(true);
-    const onNo = () => done(false);
-    const onKey = (e) => {
-      if (e.key === 'Escape') onNo();
-      if (e.key === 'Enter') onYes();
-    };
-    yes?.addEventListener('click', onYes);
-    no?.addEventListener('click', onNo);
-    backdrop?.addEventListener('click', onNo);
-    document.addEventListener('keydown', onKey);
-    try { yes?.focus(); } catch (_) {}
-  });
-}
-
-// Resolve with the entered (trimmed) text, or null when cancelled.
-function promptName(opts) {
-  const o = opts || {};
-  const modal = document.getElementById('modal-prompt');
-  if (!modal) return Promise.resolve(window.prompt(o.title || 'Name', o.value || ''));
-  const heading = document.getElementById('pm-heading');
-  const copy = document.getElementById('pm-copy');
-  const label = document.getElementById('pm-label');
-  const input = document.getElementById('pm-input');
-  const yes = document.getElementById('pm-confirm');
-  const no = document.getElementById('pm-cancel');
-  const backdrop = document.getElementById('pm-backdrop');
-  if (heading) heading.textContent = o.title || 'Name';
-  if (copy) copy.textContent = o.copy || '';
-  if (label) label.textContent = o.label || 'Name';
-  if (yes) yes.textContent = o.yes || 'Save';
-  if (input) input.value = o.value || '';
-  modal.hidden = false;
-  return new Promise((resolve) => {
-    const done = (val) => {
-      modal.hidden = true;
-      yes?.removeEventListener('click', onYes);
-      no?.removeEventListener('click', onNo);
-      backdrop?.removeEventListener('click', onNo);
-      input?.removeEventListener('keydown', onKey);
-      document.removeEventListener('keydown', onEsc);
-      resolve(val);
-    };
-    const onYes = () => {
-      const v = String(input ? input.value : '').trim();
-      if (!v) { try { input?.focus(); } catch (_) {} return; }
-      done(v);
-    };
-    const onNo = () => done(null);
-    const onKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); onYes(); } };
-    const onEsc = (e) => { if (e.key === 'Escape') onNo(); };
-    yes?.addEventListener('click', onYes);
-    no?.addEventListener('click', onNo);
-    backdrop?.addEventListener('click', onNo);
-    input?.addEventListener('keydown', onKey);
-    document.addEventListener('keydown', onEsc);
-    try { input?.focus(); input?.select(); } catch (_) {}
-  });
 }
 
 function dismissParticleTrace() {
@@ -19843,11 +19763,16 @@ setTreeActionHandler((scopeKey, action, detail) => {
 
 (function wireW16Ui() {
   window.__CFD_OPEN_NEW_PROJECT_MODAL__ = openNewProjectModal;
-  document.getElementById('wb-home')?.addEventListener('click', () => showHome());
+  // Home replaces the address without a hashchange: an open workspace with unsaved work asks here.
+  document.getElementById('wb-home')?.addEventListener('click', async () => {
+    if (!(await confirmLeaveWorkspace('home'))) return;
+    showHome();
+  });
   window.__CFD_LEAVE_WORKBENCH__ = function leaveWorkbench() {
     resetWorkbenchScope(null);
   };
-  document.getElementById('folder-chip')?.addEventListener('click', () => {
+  document.getElementById('folder-chip')?.addEventListener('click', async () => {
+    if (!(await confirmLeaveWorkspace('home'))) return;
     goHomeFromWorkbench(w16State.project && w16State.project.folder);
   });
   document.getElementById('np-cancel')?.addEventListener('click', closeNewProjectModal);
@@ -28714,85 +28639,6 @@ function scheduleKickNextQueuedJob(delay) {
   }, delay == null ? 250 : delay);
 }
 
-async function ensureQueuedJobProject(item) {
-  const want = item && item.project_id != null && String(item.project_id) !== '' ? String(item.project_id) : '';
-  if (!want) return { ok: true };
-  const cur = typeof currentProjectId === 'function' ? currentProjectId() : '';
-  if (cur && String(cur) === want) return { ok: true };
-  try {
-    if (window.__CFD_HOME__ && typeof window.__CFD_HOME__.open === 'function') {
-      const j = await window.__CFD_HOME__.open(want, { reloadIfNeeded: false });
-      if (j && j.ok === false) {
-        return { ok: false, error: (j && j.error) || 'Could not open the queued project' };
-      }
-    } else {
-      const nextHash = '#/p/' + encodeURIComponent(want);
-      if (location.hash !== nextHash) location.hash = nextHash;
-      if (typeof window.__CFD_HYDRATE_PROJECT__ !== 'function') {
-        return { ok: false, error: 'Could not open the queued project' };
-      }
-      await window.__CFD_HYDRATE_PROJECT__(want, { show: true });
-    }
-    const now = typeof currentProjectId === 'function' ? currentProjectId() : '';
-    if (now && String(now) !== want) {
-      return { ok: false, error: 'Could not open the queued project' };
-    }
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: (e && e.message) || 'Could not open the queued project' };
-  }
-}
-
-async function startQueuedMesh(item) {
-  const opened = await ensureQueuedJobProject(item);
-  if (!opened.ok) return { ok: false, error: opened.error || 'Could not open the queued project' };
-  if (item.mesh_id && typeof findMeshRecord === 'function' && !findMeshRecord(item.mesh_id)) {
-    return { ok: false, missing: true, error: 'Mesh was deleted' };
-  }
-  if (item.simulation_id && typeof selectStudyClient === 'function' && String(currentStudyId() || '') !== String(item.simulation_id)) {
-    try { await selectStudyClient(item.simulation_id); } catch (e) { console.warn('[CFD] queue study', e); }
-  }
-  if (item.mesh_id && typeof findMeshRecord === 'function' && !findMeshRecord(item.mesh_id)) {
-    return { ok: false, missing: true, error: 'Mesh was deleted' };
-  }
-  if (item.mesh_id && typeof activateMeshClient === 'function') {
-    await activateMeshClient(item.mesh_id);
-  }
-  return generateMeshClient({ fromQueue: true, mesh_id: item.mesh_id, settings: item.settings || null });
-}
-
-async function startQueuedSolve(item) {
-  const opened = await ensureQueuedJobProject(item);
-  if (!opened.ok) return { ok: false, error: opened.error || 'Could not open the queued project' };
-  if (item.simulation_id && typeof selectStudyClient === 'function' && String(currentStudyId() || '') !== String(item.simulation_id)) {
-    try { await selectStudyClient(item.simulation_id); } catch (e) { console.warn('[CFD] queue study', e); }
-  }
-  if (item.run_id && typeof findRunRecord === 'function' && !findRunRecord(item.run_id)) {
-    return { ok: false, missing: true, error: 'Run was deleted' };
-  }
-  if (item.run_id && typeof activateRunClient === 'function') {
-    await activateRunClient(item.run_id);
-  }
-  return startSolveClient({ fromQueue: true, run_id: item.run_id });
-}
-
-function dequeueQueuedItem(item) {
-  if (!item) return false;
-  const key = jobQueueKey(item.kind, item.kind === 'mesh' ? item.mesh_id : item.run_id);
-  const before = jobQueue.items.length;
-  jobQueue.items = jobQueue.items.filter((r) => {
-    if (item.id && r.id === item.id) return false;
-    return jobQueueKey(r.kind, r.kind === 'mesh' ? r.mesh_id : r.run_id) !== key;
-  });
-  if (jobQueue.items.length !== before) {
-    persistJobQueue();
-    syncJobQueueChrome();
-    return true;
-  }
-  syncJobQueueChrome();
-  return false;
-}
-
 async function kickNextQueuedJob() {
   if (jobQueue.kicking || jobQueue._dragging) return;
   // No client-side pruning here: this tab's catalog can lag a run another tab
@@ -28992,7 +28838,7 @@ async function generateMeshClient(opts) {
     (opts && opts.settings) ||
     (meshId && typeof settingsOwnedByMesh === 'function' ? settingsOwnedByMesh(meshId) : null) ||
     settingsOwnedByMesh(viewingMeshId());
-  // Persist this mesh's settings first. Explicit queue/form values win over a stale draft.
+  // Persist this mesh's settings first. Explicit form values win over a stale draft.
   try {
     await saveMeshSettings({
       allowDuringGenerate: true,
@@ -29023,7 +28869,7 @@ async function generateMeshClient(opts) {
       settings: liveSettings,
       name: jobState.mesh_name || undefined,
       // Another project's job may hold the slot; the server queues this and starts it later.
-      queue_if_busy: !opts.fromQueue,
+      queue_if_busy: true,
     }),
   });
   const j = await r.json();
@@ -29042,7 +28888,7 @@ async function generateMeshClient(opts) {
     ).catch(() => null);
     applyServerQueue(snap);
     const followed = !!(snap && snap.live && snap.live.kind === 'mesh' && String(snap.live.mesh_id) === String(kickMeshId));
-    if (opts.fromQueue || followed) return { busy: true, mesh_id: kickMeshId };
+    if (followed) return { busy: true, mesh_id: kickMeshId };
     if (kickMeshId) enqueueMeshJob(kickMeshId, liveSettings);
     return { busy: true, queued: true, mesh_id: kickMeshId };
   }
@@ -29059,7 +28905,7 @@ async function generateMeshClient(opts) {
     meshCatalog.note = (j && j.error) || 'Generate failed to start';
     publishW20({ note: meshCatalog.note });
     try { syncJobStatusChrome(); } catch (_) {}
-    if (!opts.fromQueue) scheduleKickNextQueuedJob(400);
+    scheduleKickNextQueuedJob(400);
     throw new Error(meshCatalog.note);
   }
   startJobPoll();
@@ -31567,14 +31413,11 @@ async function refreshRunCatalog() {
   return j;
 }
 
-async function startSolveClient(opts) {
-  opts = opts || {};
-  const startingId = opts.run_id || runCatalog.selected_run_id;
+async function startSolveClient() {
   if (!keepResultsWhileStartingRun({
     resultsOpen: !!resultsViewOpen,
     resultsRunId,
-    selectedRunId: runCatalog.selected_run_id,
-    startingRunId: startingId,
+    startingRunId: runCatalog.selected_run_id,
   })) {
     leaveResultsForSetup();
   }
@@ -31608,7 +31451,6 @@ async function startSolveClient(opts) {
     syncSimControlPanel();
     return extra || { ok: false, error: msg };
   };
-  if (opts.run_id) runCatalog.selected_run_id = opts.run_id;
   runCatalog.starting = true;
   runCatalog.start_error = 'Starting…';
   runCatalog.start_error_run_id = runCatalog.selected_run_id;
@@ -31622,7 +31464,7 @@ async function startSolveClient(opts) {
   if (!runCatalog.selected_run_id || !findRunRecord(runCatalog.selected_run_id)) {
     try { await refreshRunCatalog(); } catch (_) {}
   }
-  let runId = opts.run_id || runCatalog.selected_run_id;
+  let runId = runCatalog.selected_run_id;
   if (!runId) {
     const draft = (runCatalog.runs || []).find((r) => r.status === 'draft' || r.status === 'failed' || r.status === 'stopped');
     runId = draft && (draft.id || draft.run_id);
@@ -31636,53 +31478,47 @@ async function startSolveClient(opts) {
     return failStart('This run already finished. Create a new run to solve again.');
   }
   try { clearStaleSolveLive(runId); } catch (_) {}
-  if (opts.fromQueue && computeJobBlocksStart(runId)) {
+  const meshId = resolveRunMeshForQueue(rec) || (rec && rec.mesh_id) || '';
+  const waitForMesh = !!(meshId && !runMeshIsReady(meshId) && meshWillBeReadySoon(meshId));
+  const sameRunStillSolving = runStatusIsSolving(rec) && String(liveSolveRunId() || '') === String(runId);
+  const shouldQueue = typeof startShouldEnqueue === 'function'
+    ? startShouldEnqueue({
+        otherJobRunning: computeJobBlocksStart(runId),
+        waitForMesh,
+        sameRunStillSolving,
+      })
+    : computeJobBlocksStart(runId) || waitForMesh || sameRunStillSolving;
+  if (shouldQueue) {
     runCatalog.starting = false;
-    return { ok: false, busy: true, run_id: runId };
-  }
-  if (!opts.fromQueue) {
-    const meshId = resolveRunMeshForQueue(rec) || (rec && rec.mesh_id) || '';
-    const waitForMesh = !!(meshId && !runMeshIsReady(meshId) && meshWillBeReadySoon(meshId));
-    const sameRunStillSolving = runStatusIsSolving(rec) && String(liveSolveRunId() || '') === String(runId);
-    const shouldQueue = typeof startShouldEnqueue === 'function'
-      ? startShouldEnqueue({
-          otherJobRunning: computeJobBlocksStart(runId),
-          waitForMesh,
-          sameRunStillSolving,
-        })
-      : computeJobBlocksStart(runId) || waitForMesh || sameRunStillSolving;
-    if (shouldQueue) {
-      runCatalog.starting = false;
-        if (sameRunStillSolving) {
-        if (rec && rec.stop_requested) {
-          return failStart('This run is still stopping. Wait for it to finish, then Start again.');
-        }
-        return failStart('This run is already solving.');
+    if (sameRunStillSolving) {
+      if (rec && rec.stop_requested) {
+        return failStart('This run is still stopping. Wait for it to finish, then Start again.');
       }
-      const blocking = runSetupIssue(rec, { mesh: false });
-      if (!meshId || blocking) {
-        return failStart(
-          blocking ? String(blocking.message || '') : 'This run needs a mesh before it can start.',
-          { fix: blocking ? blocking.fix || null : { go: 'run-mesh' } }
-        );
-      }
-      const queued = await enqueueSolveJob(runId);
-      if (!queued) {
-        const again = runSetupIssue(rec, { mesh: false });
-        return failStart(
-          again ? String(again.message || '') : 'This run needs a mesh before it can start.',
-          { fix: again ? again.fix || null : { go: 'run-mesh' } }
-        );
-      }
-      showHint(
-        waitForMesh && meshId && !runMeshIsReady(meshId)
-          ? 'Queued. Starts after its mesh finishes.'
-          : 'Queued. Starts when the current job finishes.'
-      );
-      try { syncJobQueueChrome(); } catch (_) {}
-      try { syncSimControlPanel(); } catch (_) {}
-      return { ok: true, queued: true, run_id: runId };
+      return failStart('This run is already solving.');
     }
+    const blocking = runSetupIssue(rec, { mesh: false });
+    if (!meshId || blocking) {
+      return failStart(
+        blocking ? String(blocking.message || '') : 'This run needs a mesh before it can start.',
+        { fix: blocking ? blocking.fix || null : { go: 'run-mesh' } }
+      );
+    }
+    const queued = await enqueueSolveJob(runId);
+    if (!queued) {
+      const again = runSetupIssue(rec, { mesh: false });
+      return failStart(
+        again ? String(again.message || '') : 'This run needs a mesh before it can start.',
+        { fix: again ? again.fix || null : { go: 'run-mesh' } }
+      );
+    }
+    showHint(
+      waitForMesh && meshId && !runMeshIsReady(meshId)
+        ? 'Queued. Starts after its mesh finishes.'
+        : 'Queued. Starts when the current job finishes.'
+    );
+    try { syncJobQueueChrome(); } catch (_) {}
+    try { syncSimControlPanel(); } catch (_) {}
+    return { ok: true, queued: true, run_id: runId };
   }
   try {
     const posted = await postRunStart({
@@ -31704,7 +31540,6 @@ async function startSolveClient(opts) {
         runCatalog.starting = false;
         runCatalog.start_error = null;
         runCatalog.start_error_run_id = null;
-        if (opts.fromQueue) return { ok: false, busy: true, run_id: runId };
         const queued = await enqueueSolveJob(runId);
         if (!queued) {
           return failStart('Assign a fluid to a volume first', { fix: { go: 'material' } });

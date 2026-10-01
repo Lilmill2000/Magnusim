@@ -36,6 +36,23 @@ class WorkspaceSpec:
     entry: str = "workspace/index.html"
 
 
+MB = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class FilesSpec:
+    """Size limits for a plugin's own files in a project (manifest ``[files]``, API 1.2).
+
+    ``max_file_mb`` (1..4096, default 64) and ``max_total_mb`` (1..65536,
+    default 512, at least ``max_file_mb``), kept here in bytes. The host holds a
+    workspace's uploads (``ws.files``) to both, and its JSON writes (``ws.data``)
+    to the total; the plugin's own Python writes are not capped.
+    """
+
+    max_file_bytes: int = 64 * MB
+    max_total_bytes: int = 512 * MB
+
+
 @dataclass(frozen=True)
 class PythonEnvSpec:
     """A plugin's own Python environment (manifest ``[python]``, API 1.1).
@@ -72,6 +89,9 @@ class PluginManifest:
     # app refuses to create or run simulations without it.
     tier: str = "user"  # "bundled" | "user"
     required: bool = False
+    # An optional bundled plugin with default_enabled = false ships off: it is not
+    # imported until someone on this PC turns it on (plugins.enabled).
+    default_enabled: bool = True
     # Plugins this one needs loaded first: "key" or "key>=1.0".
     requires_plugins: list[str] = field(default_factory=list)
     # "kind:key" specs of this plugin that other plugins may not drop.
@@ -80,5 +100,7 @@ class PluginManifest:
     study_kinds: list[StudyKind] = field(default_factory=list)
     # Full workspaces it draws in a sandboxed frame ([[workspaces]]).
     workspaces: list[WorkspaceSpec] = field(default_factory=list)
+    # Size limits for its own files in a project ([files]).
+    files: FilesSpec = field(default_factory=FilesSpec)
     # Its own environment and service ([python]); None runs in the core (bundled, no extra packages).
     python_env: PythonEnvSpec | None = None

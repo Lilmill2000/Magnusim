@@ -25,7 +25,7 @@ ui_entry = "index.js"
 
 `requires_plugins` lists the plugins yours builds on, as `key` or `key>=version`. They load first; when one is missing, off, or too old, your plugin is not loaded and Settings → Plugins says which one it needs. Declare `incompressible_flow` when you clone or extend `incompressible_steady` / `incompressible_transient`: those simulation types come from the bundled Incompressible Flow plugin, not from the core.
 
-Plugins that ship with the app live in `bundled-plugins/` and add `tier = "bundled"`, `required = true|false` and `protected = ["kind:key", ...]` (specs other plugins may not drop). A required plugin cannot be turned off. See `compatibility.md` for what changed in each API version.
+Plugins that ship with the app live in `bundled-plugins/` and add `tier = "bundled"`, `required = true|false` and `protected = ["kind:key", ...]` (specs other plugins may not drop). A required plugin cannot be turned off. An optional one can ship off with `default_enabled = false`: nothing of it runs, and existing projects look unchanged, until someone turns it on in Settings → Plugins. See `compatibility.md` for what changed in each API version.
 
 A wheel's entry point belongs in `pyproject.toml` once the register function is importable:
 
@@ -59,6 +59,8 @@ Hooks use the same module. `get_hooks().on("case.written", fn, plugin="my-plugin
 
 Do not import `cfddesk.builtin`, `scripts`, or `src.workbench`. Those are host internals. The public surface is `cfddesk.registry` and `magnusim_sdk` (OpenFOAM dictionary and field writers, units, job events, gmsh helpers, the MSH 2.2 writer, and `run_exe` for programs with a timeout). `tools/plugin_boundary.py` checks this.
 
+The check reads every `.py` and `.pyw` file of the plugin except those in `tests/`, `node_modules/`, `__pycache__/`, `site-packages/`, dot folders (`.venv`, `.git`, caches), `*.egg-info`, any virtualenv (a folder holding `pyvenv.cfg`), and `build/` or `dist/` at the plugin root, so a plugin may carry a JavaScript toolchain or a local venv. Plugin code must not import from those folders: the check follows each import segment by segment and reports one that reaches a skipped folder, and its report lists what it skipped. A compiled `.pyc` outside `__pycache__/` is refused (ship sources), and a file that is not valid Python 3 is reported, not skipped. A plugin's own ruff config may use `extend-exclude`, never `exclude` (that would replace the default list and lint `node_modules`).
+
 ## Own environment and service (1.1)
 
 A plugin that needs Python packages the app does not ship (NeuralFoil, a CAD kernel, ...) declares its own environment. Its backend then runs there, in its own process, and never in the core:
@@ -72,7 +74,7 @@ find_links = "wheels"                # a folder of wheels in the plugin, to inst
 ```
 
 - **The lock** lists every package, pinned and hashed (`pip-compile --generate-hashes`, or `name==1.2.3 --hash=sha256:...` lines); pip installs it with `--require-hashes`, wheels only. Editing the lock changes its hash, and the plugin shows "Needs setup" again.
-- **Settings → Plugins** shows the plugin as "Needs setup" until someone clicks **Install dependencies** (on this PC only). The environment is built from the app's interpreter into `.cache/plugin-envs/<key>-<lock hash>/` and gets `magnusim_sdk` and nothing of the core: `import cfddesk` fails there, and the app's own packages never change. `Setup.bat -Plugins` builds the environments of bundled plugins.
+- **Settings → Plugins** shows the plugin as "Needs setup" until someone clicks **Install dependencies** (on this PC only). The environment is built from the app's interpreter into `.cache/plugin-envs/<key>-<lock hash>/` and gets `magnusim_sdk` and nothing of the core: `import cfddesk` fails there, and the app's own packages never change. `Setup.bat -Plugins` builds the environments of bundled plugins that are on.
 - **The service module** registers its methods; the page reaches them at `/api/plugin/<key>/<method>`:
 
 ```python
@@ -185,11 +187,32 @@ await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab
 - **The sandbox.** The page runs in a sandboxed frame with an opaque origin. Its Content-Security-Policy allows scripts, styles, fonts, images and `fetch` only from `/plugin-sdk/` and your own `workspace/` folder, plus `data:` and `blob:` images:
   - No inline `<script>`: put code in module files.
   - No `/api/`: use `ws.service`, `ws.data`, `ws.study` and `ws.jobs`.
-  - No `localStorage`, IndexedDB or cookies: keep state in `ws.data` (JSON, 8 MB a file) or the study.
+  - No `localStorage`, IndexedDB or cookies: keep state in `ws.data` (JSON, 8 MB a file), `ws.files` (any file, within your `[files]` limits) or the study.
   - Workers: `ws.spawnWorker(new URL('./worker.js', import.meta.url))`. You can post to it at once; messages are held until your module has loaded.
   - WebAssembly from your folder: `WebAssembly.instantiateStreaming(fetch(new URL('./x.wasm', import.meta.url)))`.
 - **Bridge calls** are allowed only for your plugin, this project and this study; `compatibility.md` lists them all. Anything else is refused with "not allowed: …". `ws.on('units', fn)` follows the user's unit choice; `ws.on('study', fn)` gets the study after a rename in the header (save next with its `rev`, or with `ws.context.study.rev`, which follows); `ws.ui.toast`, `ws.ui.confirm` and `ws.ui.prompt` use the app's own; `ws.nav.back()` closes the workspace.
 - **Starting.** Call `connect()` as soon as the page loads. A page that has not connected within 5 s shows the user "<Your plugin> didn't start." with Try again.
+- **Checking the host (1.2).** Everything below needs host 1.2. Check `ws.context.hostVersion` (compare the numbers) and set `api_version = "1.2"`; a 1.1 host refuses the new calls with code `not_allowed`.
+- **Big and binary files (1.2).** `ws.files` keeps any file in your plugin's folder of the project, the same folder `ws.data` and your Python see. A write is streamed in chunks and replaces the file only once every byte has arrived. Pass the `etag` you read as `ifMatch` so a write never overwrites a version saved from another tab (it rejects with code `changed`), or `ifMatch: null` to only create:
+
+  ```toml
+  [files]                 # what your workspace may keep in one project
+  max_file_mb = 256       # one file (default 64)
+  max_total_mb = 1024     # everything in your folder (default 512)
+  ```
+
+  ```javascript
+  const model = await ws.files.stat(`studies/${study.id}/model.bin`);
+  const saved = await ws.files.write(`studies/${study.id}/model.bin`, bytes, {
+    ifMatch: model ? model.etag : null,
+    onProgress: (done, total) => bar.set(done / total),
+  });
+  const back = await ws.files.read(`studies/${study.id}/model.bin`); // ArrayBuffer, or null
+  ```
+
+  Your service and jobs reach the same files through `magnusim_sdk.data.PluginData` (`from_scope(scope)` in a service method, `from_env()` in a job): `read_bytes`, `write_bytes`, `atomic_path` (a temp path for a mesher or exporter, replaced in one step), `list_files`, `delete_file` and `file_info`, whose `etag` matches the workspace's. Paths follow one set of rules everywhere (`compatibility.md`); a study's own `study.json` changes only through `ws.study`.
+- **Unsaved work (1.2).** Call `ws.nav.setDirty(true, 'Sketch 2 is not saved')` on the first change that is not saved yet, and `ws.nav.setDirty(false)` once it is. While it is set, and while a `ws.files.write` is on its way, every way out of the workspace asks the user first, with your plugin's name and your message, and closing the browser tab shows the browser's own prompt. `ws.nav.back()` resolves `false` when the user stays; clear the flag first to leave without a question. Never reload your own page while dirty: a reload clears the flag and loses the work. If your page accepts dropped files, call `preventDefault()` on `dragover` and `drop`, or the browser opens the file in place of the app.
+- **Keyboard and full screen (1.2).** Your page has the keyboard when it connects and again after the app's dialogs and Settings close; listen on `window` or `document`. `document.documentElement.requestFullscreen()` from a click or key handler covers the whole screen; Esc always leaves, and the app leaves full screen before it shows a dialog. The app's toasts are not seen over a full-screen page.
 
 `python/tests/fixtures/workspace-plugins/ws-demo` is a complete example (modules, React, WebAssembly, a worker, service calls, data and study saves), driven by `e2e/h13-workspace.spec.js`.
 

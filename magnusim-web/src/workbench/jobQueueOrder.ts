@@ -272,21 +272,6 @@ export function canQueueSolveJob(opts: {
   );
 }
 
-/**
- * After a queued start attempt: keep the job at the front on validation
- * failure so the next mesh/run cannot jump the line.
- */
-export function queueKickAfterStart(
-  result: { ok?: boolean; busy?: boolean; missing?: boolean; skip?: boolean } | null | undefined,
-  computeRunning: boolean
-): 'retry' | 'dequeue' | 'hold' | 'skip' {
-  if (result && result.busy) return 'retry';
-  if (result && (result.missing || result.skip)) return 'skip';
-  if (result && result.ok === false) return 'hold';
-  if (computeRunning) return 'dequeue';
-  return 'hold';
-}
-
 export type QueueDepItem = QueueItem & {
   kind?: string | null;
   mesh_id?: string | number | null;
@@ -642,17 +627,16 @@ export function startShouldEnqueue(opts?: {
 }
 
 /**
- * Keep a finished run's Results view up while a different run is started
- * from the queue. Starting the same run still leaves Results.
+ * Keep a finished run's Results view up while a different run is started.
+ * Starting the same run still leaves Results.
  */
 export function keepResultsWhileStartingRun(opts?: {
   resultsOpen?: boolean;
   resultsRunId?: unknown;
-  selectedRunId?: unknown;
   startingRunId?: unknown;
 }): boolean {
   if (!opts?.resultsOpen) return false;
-  const viewing = normId(opts.resultsRunId) || normId(opts.selectedRunId);
+  const viewing = normId(opts.resultsRunId);
   const starting = normId(opts.startingRunId);
   if (!viewing || !starting) return false;
   return viewing !== starting;

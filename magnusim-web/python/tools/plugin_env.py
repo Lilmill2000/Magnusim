@@ -3,7 +3,8 @@
     python tools/plugin_env.py create <key>      # build it (the Install dependencies job)
     python tools/plugin_env.py check <key>       # its state, as JSON
     python tools/plugin_env.py remove <key>      # delete its environments
-    python tools/plugin_env.py create-bundled    # every bundled plugin that has one (Setup.ps1 -Plugins)
+    python tools/plugin_env.py create-bundled    # every bundled plugin that has one and is on (Setup.ps1 -Plugins)
+    python tools/plugin_env.py create-bundled --include-off   # also the optional ones that are off
 
 The plugin is found by its manifest.toml in the bundled and user plugin folders,
 without importing its code. ``create`` prints job events (MAGNUSIM_EVENT lines:
@@ -78,15 +79,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=["create", "check", "remove", "create-bundled"])
     parser.add_argument("key", nargs="?", default="")
     parser.add_argument("--web-root", default="")
+    parser.add_argument(
+        "--include-off", action="store_true", help="create-bundled: also plugins that are off (packaging, offline)"
+    )
     args = parser.parse_args(argv)
     web_root = _resolve_web_root(args.web_root or None)
     if web_root is None:
         raise SystemExit("no web root")
     if args.action == "create-bundled":
+        from cfddesk.registry.discovery import plugin_is_on, plugin_state, tier_flags
+
+        state = plugin_state(web_root)
         failed = 0
         for key, folder, meta, tier in _manifests(web_root):
-            if tier == "bundled" and plugin_env.python_env_from_meta(meta, folder) is not None:
-                failed += _create(web_root, key)
+            if tier != "bundled" or plugin_env.python_env_from_meta(meta, folder) is None:
+                continue
+            try:
+                required, default_enabled = tier_flags(meta, tier)
+            except ValueError as exc:
+                print(f"skipped {key}: manifest: {exc}")
+                failed += 1
+                continue
+            on = plugin_is_on(key, tier=tier, required=required, default_enabled=default_enabled, state=state)
+            if not on and not args.include_off:
+                # An optional plugin that is off gets its environment once someone turns it on.
+                print(f"skipped {key}: off (turn it on in Settings > Plugins, then Install dependencies)")
+                continue
+            failed += _create(web_root, key)
         return 1 if failed else 0
     if not args.key:
         parser.error(f"{args.action} needs a plugin key")

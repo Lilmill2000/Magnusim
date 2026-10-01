@@ -6,6 +6,7 @@
  */
 
 import { initSetupWizard } from '../wizard/controller';
+import { confirmLeaveWorkspace, openWorkspaceRoute, workspaceDirty } from '../workspace/leaveGuard';
 import { hashIsProject, parseWorkspaceHash } from '../workspace/route';
 
 function $(id) {
@@ -328,7 +329,7 @@ export function showWorkbench() {
 
 let openInflight = null;
 
-export async function openProject(id, { reloadIfNeeded = true } = {}) {
+export async function openProject(id, { reloadIfNeeded = true, askToLeave = true } = {}) {
   const want = String(id || '').trim();
   if (!want) return null;
   if (openInflight && openInflight.id === want) {
@@ -349,6 +350,18 @@ export async function openProject(id, { reloadIfNeeded = true } = {}) {
       body: JSON.stringify({ project_id: want }),
     }).catch(() => {});
     return { ok: true, project: window.__CFD_W16__.project };
+  }
+
+  // Another project replaces an open workspace with unsaved work: ask first
+  // (askToLeave: false never asks, it stays).
+  const ws = openWorkspaceRoute();
+  if (ws && ws.projectId !== want && workspaceDirty() && !(await confirmLeaveWorkspace('project', { interactive: askToLeave }))) {
+    return { ok: false, stayed: true, error: 'The open workspace has unsaved changes.' };
+  }
+  // It may have started opening while the question was on screen.
+  if (openInflight && openInflight.id === want) {
+    showWorkbench();
+    return openInflight.promise;
   }
 
   const work = (async () => {

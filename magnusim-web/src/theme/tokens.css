@@ -70,6 +70,7 @@
   --mg-z-workspace: 1500;
   --mg-z-modal: 9999;
   --mg-z-settings: 10050;
+  --mg-z-confirm: 10100;
 
   /* Motion */
   --mg-duration-fast: 120ms;

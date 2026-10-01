@@ -7,10 +7,31 @@ import { prefersImperial } from '../prefs';
 import { pluginStudyScope } from '../scope';
 import { useProjectStore } from '../store/project';
 import { WorkspaceBridge, WorkspaceCalls, type BridgeHooks, type BridgeScope } from './bridge';
+import {
+  exitFrameFullscreen,
+  frameMayTakeFocus,
+  leaveApproved,
+  leaveWorkspaceTo,
+  openWorkspaceRoute,
+  registerOpenWorkspace,
+  setWorkspaceDirty,
+  subscribeWorkspaceDirty,
+  workspaceDirty,
+  type GuardedWorkspace,
+} from './leaveGuard';
 import type { WorkspaceRoute } from './route';
+
+// When the host gives the keyboard to the frame (it lives with the leave guard, which needs it too).
+export { frameMayTakeFocus };
 
 /** A frame that has not said hello this long after it started loading did not start. */
 export const HANDSHAKE_MS = 5000;
+
+/** The card's extra line when the page had unsaved work that went with it. */
+const LOST = 'Changes that were not saved in the workspace were lost.';
+
+/** The app's own UI over the workspace: when one closes, the keyboard goes back to the frame. */
+const HOST_UI = ['modal-confirm', 'modal-prompt', 'setup-wizard', 'job-queue-chip'];
 
 type PluginRow = {
   key: string;
@@ -20,8 +41,11 @@ type PluginRow = {
   workspaces?: Array<{ key: string; title: string; entry: string }>;
 };
 
-/** Why the workspace is not showing. `gone`: its study was deleted (nothing to set up in Settings). */
-type Blocked = { title: string; detail: string; retry: boolean; gone?: boolean };
+/**
+ * Why the workspace is not showing. `gone`: its study was deleted (nothing to set up in Settings).
+ * `lost`: the page had unsaved work when it closed.
+ */
+type Blocked = { title: string; detail: string; retry: boolean; gone?: boolean; lost?: boolean };
 
 /** The study was deleted (in another tab), or a link names one that is gone. */
 const STUDY_GONE: Blocked = {
@@ -62,6 +86,21 @@ function borrowHeaderControls(ids: string[], into: HTMLElement): () => void {
   };
 }
 
+/** Make the workbench under the overlay inert (no Tab, no clicks); returns how to undo it. */
+function coverWorkbench(): () => void {
+  const app = document.getElementById('app');
+  const overlay = document.getElementById('workspace-overlay');
+  const made: HTMLElement[] = [];
+  for (const el of Array.from(app ? app.children : [])) {
+    if (!(el instanceof HTMLElement) || el === overlay || el.inert) continue;
+    el.inert = true;
+    made.push(el);
+  }
+  return () => {
+    for (const el of made) el.inert = false;
+  };
+}
+
 /**
  * A plugin workspace over its project's workbench (`#/p/<pid>/ws/<plugin>/<ws>/<sid>`).
  * The workbench stays underneath with its tree and scope; Back returns to it.
@@ -81,6 +120,7 @@ export function WorkspaceOverlay() {
 
 function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
   const bridgeRef = useRef<WorkspaceBridge | null>(null);
   const slotRef = useRef<HTMLDivElement>(null);
   const [row, setRow] = useState<PluginRow | null>(null);
@@ -89,27 +129,72 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   const [connected, setConnected] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [toast, setToast] = useState<{ text: string; kind: string } | null>(null);
+  const [unsaved, setUnsaved] = useState({ dirty: false, message: '' });
+  const [fullscreen, setFullscreen] = useState(false);
   const name = (row && row.name) || route.plugin;
+  const title = (study && study.title) || route.studyId;
+  const projectHash = `#/p/${encodeURIComponent(route.projectId)}`;
+  // What the leave question names, kept current.
+  const named = useRef({ name, title });
+  useEffect(() => {
+    named.current = { name, title };
+  });
+  // This workspace as the leave guard knows it (registered while it is open).
+  const [guarded] = useState<GuardedWorkspace>(() => ({
+    route,
+    pluginName: () => named.current.name,
+    studyTitle: () => named.current.title,
+    frame: () => frameRef.current,
+  }));
+  const mine = () => openWorkspaceRoute() === guarded.route;
+  // Unsaved work that closing the page now would lose (the user did not choose to leave).
+  const lostNow = () => mine() && workspaceDirty();
+  // The keyboard goes to the page unless the app's own UI has it.
+  const focusFrame = () => {
+    const frame = frameRef.current;
+    if (frame && frameMayTakeFocus(document, frame, headerRef.current)) frame.focus({ preventScroll: true });
+  };
   // Found gone by the host (open, a bridge call): the card, and the tree drops the row.
   // (The tree-sync listener below only shows the card, so this cannot loop.)
   const studyGone = () => {
-    setBlocked(STUDY_GONE);
+    const lost = lostNow();
+    setBlocked((b) => (b && b.gone ? b : { ...STUDY_GONE, lost }));
     window.dispatchEvent(new CustomEvent('cfd:tree-sync'));
   };
   const entry = row && row.workspaces ? row.workspaces.find((w) => w.key === route.workspace)?.entry : undefined;
   const scopeKey = pluginStudyScope(route.projectId, route.plugin, route.studyId);
 
-  // Covering the workbench: its Queue and Settings move into this header; the viewport pauses.
+  // Covering the workbench: its Queue and Settings move into this header, the rest
+  // of it is inert (no Tab or clicks into it); the viewport pauses.
   useEffect(() => {
     document.body.classList.add('workspace-open');
     window.dispatchEvent(new CustomEvent('cfd:workspace-open'));
     const restore = slotRef.current ? borrowHeaderControls(['queue-menu', 'wb-prefs'], slotRef.current) : () => undefined;
+    const uncover = coverWorkbench();
     return () => {
-      restore();
+      try {
+        restore();
+      } finally {
+        // Once the controls are back, and whatever happened: nothing stays inert.
+        uncover();
+      }
       document.body.classList.remove('workspace-open');
       window.dispatchEvent(new CustomEvent('cfd:workspace-close'));
     };
   }, []);
+
+  // The leave guard knows this workspace while it is open; its unsaved work shows in the header.
+  // Each attempt is a new page: it starts clean, and a leave approved for the one before is over.
+  useEffect(() => {
+    const unsubscribe = subscribeWorkspaceDirty((s) => {
+      if (openWorkspaceRoute() === guarded.route) setUnsaved(s);
+    });
+    const unregister = registerOpenWorkspace(guarded);
+    return () => {
+      unregister();
+      unsubscribe();
+    };
+  }, [guarded, attempt]);
 
   // What opens: the plugin (on, with this workspace) and the study.
   useEffect(() => {
@@ -159,7 +244,10 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       const q = new URLSearchParams({ project_id: route.projectId, plugin: route.plugin, study_id: route.studyId });
       void fetch(`/api/plugin-studies/get?${q}`, { cache: 'no-store' })
         .then((r) => {
-          if (r.status === 404) setBlocked(STUDY_GONE);
+          if (r.status === 404) {
+            const lost = lostNow();
+            setBlocked((b) => (b && b.gone ? b : { ...STUDY_GONE, lost }));
+          }
           return r.ok ? r.json() : null;
         })
         .then((j) => j && j.study && setStudy(j.study as StudyRecord))
@@ -169,24 +257,80 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
     return () => window.removeEventListener('cfd:tree-sync', refresh);
   }, [route.plugin, route.projectId, route.studyId]);
 
+  // The plugin turned off (in Settings here, in another tab, by a script) closes the
+  // page into the "is off" card. Checked when the plugins changed here and when this
+  // tab comes back to the front; never polled.
+  useEffect(() => {
+    let dead = false;
+    const recheck = () => {
+      void fetch('/api/plugins', { cache: 'no-store' })
+        .then((r) => r.json() as Promise<{ plugins?: PluginRow[] }>)
+        .then((list) => {
+          const hit = (list.plugins || []).find((p) => p.key === route.plugin) || null;
+          if (dead || (hit && hit.status === 'enabled')) return;
+          // Unsaved work went with it, unless the user chose to turn it off here.
+          const lost = lostNow();
+          setBlocked((b) => b || { ...pluginNotReady(route.plugin, hit), lost });
+        })
+        .catch(() => undefined);
+    };
+    const onSync = (e: Event) => {
+      if ((e as CustomEvent<{ plugins?: boolean } | null>).detail?.plugins === true) recheck();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') recheck();
+    };
+    window.addEventListener('cfd:tree-sync', onSync);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      dead = true;
+      window.removeEventListener('cfd:tree-sync', onSync);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [route.plugin]);
+
   const ready = !!(row && study && entry && !blocked);
-  const hooks = useMemo<BridgeHooks>(
-    () => ({
-      back: () => {
-        location.hash = `#/p/${encodeURIComponent(route.projectId)}`;
+  const hooks = useMemo<BridgeHooks>(() => {
+    // The page's own questions: out of full screen first, one at a time with the app's
+    // other dialogs, then the keyboard goes back to the page. One is dropped unseen when
+    // its turn comes after the page load that asked is gone or the user chose to leave,
+    // and closes (as Cancel) if that page load goes while it is on screen.
+    const pageDialog = async <T,>(show: (opts: { skipIf: () => boolean; signal?: AbortSignal }) => Promise<T>): Promise<T> => {
+      // The channel this call came over (a reload of the page gets a new one).
+      const asker = bridgeRef.current?.channelSignal() ?? null;
+      await exitFrameFullscreen();
+      try {
+        return await show({ skipIf: () => !asker || asker.aborted || leaveApproved(), signal: asker ?? undefined });
+      } finally {
+        focusFrame();
+      }
+    };
+    return {
+      back: () => leaveWorkspaceTo(projectHash, 'frame-back'),
+      setDirty: (dirty, message) => {
+        if (mine()) setWorkspaceDirty(dirty, message);
       },
-      connected: () => setConnected(true),
+      connected: () => {
+        setConnected(true);
+        requestAnimationFrame(() => focusFrame());
+      },
       studyChanged: (next) => setStudy(next),
       studyGone,
       toast: (text, kind) => setToast({ text, kind }),
-      confirm: (opts) => (window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__(opts) : Promise.resolve(window.confirm(opts.copy || opts.title))),
+      confirm: (opts) =>
+        pageDialog((turn) =>
+          window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ ...opts, ...turn }) : Promise.resolve(window.confirm(opts.copy || opts.title)),
+        ),
       prompt: (opts) =>
-        window.__CFD_PROMPT_NAME__ ? window.__CFD_PROMPT_NAME__(opts) : Promise.resolve(window.prompt(opts.title, opts.value)),
+        pageDialog((turn) =>
+          window.__CFD_PROMPT_NAME__
+            ? window.__CFD_PROMPT_NAME__({ ...opts, ...turn })
+            : Promise.resolve(window.prompt(opts.title, opts.value)),
+        ),
       units: () => (prefersImperial() ? 'imperial' : 'metric'),
       log: (message, detail) => console.warn(`[workspace] ${message}`, detail ?? ''),
-    }),
-    [route.projectId],
-  );
+    };
+  }, [route.projectId]);
 
   // The frame's bridge; no hello within 5 s is an error card.
   useEffect(() => {
@@ -211,9 +355,54 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
     return () => {
       clearTimeout(timer);
       detach();
+      // The page's full screen ends with its frame.
+      if (document.fullscreenElement === frame) void document.exitFullscreen().catch(() => undefined);
     };
     // The bridge lives as long as this frame (a new attempt makes a new frame).
   }, [ready, attempt]);
+
+  // No page, no unsaved work: the card's Back needs no question.
+  useEffect(() => {
+    if (blocked && mine()) setWorkspaceDirty(false);
+  }, [blocked]);
+
+  // Whether the page has its frame in full screen (Esc or any app dialog ends it).
+  useEffect(() => {
+    const onChange = () => setFullscreen(!!frameRef.current && document.fullscreenElement === frameRef.current);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  // When the app's own UI over the page closes (a dialog, Settings, the Queue), the
+  // keyboard goes back to the page if nothing else took it. Chromium can still name
+  // the clicked button of a panel that just closed as the active element.
+  useEffect(() => {
+    if (!connected) return undefined;
+    const closed = new Set<HTMLElement>();
+    let raf = 0;
+    const observer = new MutationObserver((records) => {
+      for (const r of records) {
+        const el = r.target as HTMLElement;
+        if (el.hidden) closed.add(el);
+      }
+      if (!closed.size || raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const panels = Array.from(closed);
+        closed.clear();
+        const active = document.activeElement;
+        if (!active || active === document.body || panels.some((el) => el.contains(active))) focusFrame();
+      });
+    });
+    for (const id of HOST_UI) {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el, { attributes: true, attributeFilter: ['hidden'] });
+    }
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, [connected]);
 
   // Every change of the study the host sees after the welcome (a rename in the
   // header, the frame's own save) reaches the frame, so its next save has the current rev.
@@ -239,14 +428,18 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
     return () => clearTimeout(t);
   }, [toast]);
 
-  const back = () => {
-    location.hash = `#/p/${encodeURIComponent(route.projectId)}`;
-  };
-  const title = (study && study.title) || route.studyId;
+  // Back to the project; with unsaved work the app asks first.
+  const back = () => void leaveWorkspaceTo(projectHash, 'back');
 
   return (
-    <div className="ws-shell" data-workspace={`${route.plugin}/${route.workspace}`} data-workspace-connected={connected ? '1' : undefined}>
-      <header className="ws-header" data-workspace-header="1">
+    <div
+      className="ws-shell"
+      data-workspace={`${route.plugin}/${route.workspace}`}
+      data-workspace-connected={connected ? '1' : undefined}
+      data-workspace-dirty={unsaved.dirty ? '1' : undefined}
+      data-workspace-fullscreen={fullscreen && !blocked ? '1' : undefined}
+    >
+      <header className="ws-header" data-workspace-header="1" ref={headerRef}>
         <div className="ws-header-left">
           <button type="button" className="home-btn ws-back" data-ws-back="1" onClick={back}>
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
@@ -269,6 +462,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
             >
               {title}
             </button>
+            {unsaved.dirty ? <span className="ws-dirty" data-ws-dirty="1" title={unsaved.message || 'Not saved'} aria-label="Not saved" /> : null}
           </span>
         </div>
         <div className="ws-header-right" ref={slotRef} />
@@ -282,7 +476,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
             className="ws-frame"
             title={`${name}: ${title}`}
             sandbox="allow-scripts allow-downloads"
-            allow="clipboard-write"
+            allow="clipboard-write; fullscreen"
             src={`/plugins/${encodeURIComponent(route.plugin)}/${entry}`}
           />
         ) : null}
@@ -295,6 +489,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
           <div className="ws-error" role="alert" data-ws-error="1">
             <h2>{blocked.title}</h2>
             <p>{blocked.detail}</p>
+            {blocked.lost ? <p data-ws-lost="1">{LOST}</p> : null}
             <div className="ws-error-actions">
               {blocked.gone ? (
                 <button type="button" className="home-btn" data-ws-error-back="1" onClick={back}>

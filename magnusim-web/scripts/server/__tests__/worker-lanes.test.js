@@ -17,7 +17,7 @@ for line in sys.stdin:
     if (req.get("params") or {}).get("drop") and req["id"] not in seen:
         seen.add(req["id"])
         continue
-    if m.startswith("cad.") or (m.startswith("filter.") and m != "filter.validate") or m == "plugin.dispatch":
+    if m.startswith(("cad.", "plugin_studies.", "plugin_data.")) or (m.startswith("filter.") and m != "filter.validate") or m == "plugin.dispatch":
         time.sleep(float((req.get("params") or {}).get("sleep", 0)))
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": {"method": m, "pid": os.getpid()}}) + "\\n")
     sys.stdout.flush()
@@ -68,6 +68,34 @@ describe('worker lanes', () => {
       assert.ok(Date.now() - t0 < 1500, 'runs.upsert answered while the export was still running');
       const exported = await slow;
       assert.notEqual(exported.pid, write.pid, 'export ran in a separate process');
+    } finally {
+      worker.stop();
+    }
+  });
+
+  it('plugin study and data saves do not delay project.tree', async () => {
+    for (const m of ['plugin_studies.update', 'plugin_studies.rename', 'plugin_studies.create', 'plugin_studies.get', 'plugin_data.write', 'plugin_data.read']) {
+      assert.equal(isPluginLaneMethod(m), true, m);
+    }
+    for (const m of ['project.tree', 'runs.upsert', 'plugins.list', 'plugins.enable', 'project.hydrate']) {
+      assert.equal(isPluginLaneMethod(m), false, m);
+    }
+    const worker = new WorkerClient({
+      cwd: dir,
+      timeoutMs: 1500,
+      dataLane: new WorkerClient({ cwd: dir, name: 'data-worker' }),
+      pluginLane: new WorkerClient({ cwd: dir, name: 'plugin-worker' }),
+    });
+    try {
+      await worker.call('project.tree', {});
+      // A workspace saving its study (slow here) while the tree is read.
+      const save = worker.call('plugin_studies.update', { sleep: 3 }, 10_000);
+      await new Promise((r) => setTimeout(r, 100));
+      const t0 = Date.now();
+      const tree = await worker.call('project.tree', {});
+      assert.ok(Date.now() - t0 < 200, `project.tree took ${Date.now() - t0} ms behind a study save`);
+      const saved = await save;
+      assert.notEqual(saved.pid, tree.pid, 'the save ran in a separate process');
     } finally {
       worker.stop();
     }

@@ -2,6 +2,35 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pyTool } from '../python-env.js';
+import { projectDir } from '../w17-sim-catalog.js';
+
+/**
+ * What a plugin job is told of its call: its plugin, project (and folder), study,
+ * geometry and job id (PluginData.from_env reads the first two for its own files).
+ * @param {{ plugin?: string }} spec
+ * @param {Record<string, unknown>} params
+ * @param {{ id: string }} job
+ */
+function pluginJobEnv(spec, params, job) {
+  const pid = String(params.project_id || params.projectId || '');
+  let dir;
+  try {
+    dir = pid ? String(projectDir(pid)) : '';
+  } catch {
+    dir = '';
+  }
+  /** @type {Record<string, string>} */
+  const env = { MAGNUSIM_PLUGIN_KEY: String(spec.plugin || ''), MAGNUSIM_JOB_ID: String(job.id) };
+  const optional = {
+    MAGNUSIM_PROJECT_ID: pid,
+    MAGNUSIM_PROJECT_DIR: dir,
+    MAGNUSIM_SIMULATION_ID: String(params.simulation_id || params.simulationId || ''),
+    MAGNUSIM_GEOMETRY_ID: String(params.geometry_id || params.geometryId || ''),
+  };
+  // Only what is known (an empty variable reads differently across platforms).
+  for (const [name, value] of Object.entries(optional)) if (value) env[name] = value;
+  return env;
+}
 
 /**
  * @param {import('./jobs.ts').JobManager} jobs
@@ -30,7 +59,11 @@ export function startRegisteredJob(jobs, spec, params, job) {
     }
   }
   // A plugin job on its plugin's environment runs there, in the plugin's folder.
-  jobs.spawnPython(job.id, script, args, { python: spec.python || null, cwd: spec.python ? spec.cwd || null : null });
+  jobs.spawnPython(job.id, script, args, {
+    python: spec.python || null,
+    cwd: spec.python ? spec.cwd || null : null,
+    ...(builtin ? {} : { env: pluginJobEnv(spec, params, job) }),
+  });
 }
 
 /**

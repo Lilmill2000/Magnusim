@@ -40,10 +40,31 @@ declare global {
     __CFD_LOAD_PLUGIN_UI__?: (plugin: import('../plugins/loader').ListedPlugin) => Promise<void>;
     __CFD_SINGLE_REACT__?: boolean;
     __CFD_PLUGINS_READY__?: boolean;
-    /** The app's confirm dialog (title, copy, yes, notice): resolves true on yes. */
-    __CFD_CONFIRM__?: (opts: { title?: string; copy?: string; yes?: string; notice?: boolean }) => Promise<boolean>;
-    /** The app's name prompt (title, copy, label, value, yes): resolves the name, or null. */
-    __CFD_PROMPT_NAME__?: (opts: { title?: string; copy?: string; label?: string; value?: string; yes?: string }) => Promise<string | null>;
+    /**
+     * The app's confirm dialog (title, copy, yes, notice): resolves true on yes. Dialogs open
+     * one at a time; skipIf() is asked when its turn comes, and true drops it (false). An
+     * aborted signal drops it while it waits and closes it (false) while it is open.
+     */
+    __CFD_CONFIRM__?: (opts: {
+      title?: string;
+      copy?: string;
+      yes?: string;
+      notice?: boolean;
+      skipIf?: () => boolean;
+      signal?: AbortSignal;
+    }) => Promise<boolean>;
+    /** The app's name prompt (title, copy, label, value, yes): resolves the name, or null (also when skipIf() or signal drops it). */
+    __CFD_PROMPT_NAME__?: (opts: {
+      title?: string;
+      copy?: string;
+      label?: string;
+      value?: string;
+      yes?: string;
+      skipIf?: () => boolean;
+      signal?: AbortSignal;
+    }) => Promise<string | null>;
+    /** True while an app confirm or name prompt is open or waiting its turn. */
+    __CFD_DIALOG_BUSY__?: () => boolean;
     __CFD_REPLACE_PANEL__?: (panelId: string, mode: 'ok' | 'throw') => void;
     __CFD_REGISTER_FILTER__?: (title: string) => void;
     __CFD_TREE_TRANSFORM__?: (fn: (nodes: import('../plugin-api').PluginTreeNode[]) => import('../plugin-api').PluginTreeNode[]) => void;
@@ -133,7 +154,8 @@ declare global {
       show: () => void;
       hide: () => void;
       refresh: () => Promise<unknown>;
-      open: (id: string) => Promise<unknown>;
+      /** askToLeave: false never asks to leave a workspace with unsaved work; it stays ({ ok: false, stayed: true }). */
+      open: (id: string, opts?: { reloadIfNeeded?: boolean; askToLeave?: boolean }) => Promise<unknown>;
       prepareCreateModal?: () => void;
       folderValueFromCreateModal?: () => string;
       submitProjectModal?: () => Promise<unknown>;

@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudyRecord } from '../plugin-sdk/workspace';
-import { BridgeError, THEME, WorkspaceBridge, WorkspaceCalls, type BridgeHooks, type BridgeScope } from './bridge';
+import {
+  BridgeError,
+  cleanDirtyMessage,
+  DIRTY_MESSAGE_MAX,
+  THEME,
+  WorkspaceBridge,
+  WorkspaceCalls,
+  type BridgeHooks,
+  type BridgeScope,
+} from './bridge';
 
 const SCOPE: BridgeScope = {
   plugin: 'ws-demo',
@@ -12,14 +21,19 @@ const SCOPE: BridgeScope = {
 };
 
 const STUDY = { id: 'st-1', kind: 'bench_case', title: 'Wing', rev: 3 } as unknown as StudyRecord;
+const UPLOADING = 'A file upload has not finished.';
 
 type Call = { url: string; method: string; body: unknown };
+type Answer = { status: number; body: unknown } | Response;
 let calls: Call[] = [];
-let answer: (url: string, method: string) => { status: number; body: unknown } = () => ({ status: 200, body: { ok: true } });
+// Each fetch's init, beside its call (headers, keepalive).
+let inits: RequestInit[] = [];
+let answer: (url: string, method: string, init: RequestInit) => Answer | Promise<Answer> = () => ({ status: 200, body: { ok: true } });
 
 function hooks(): BridgeHooks & Record<string, ReturnType<typeof vi.fn>> {
   return {
-    back: vi.fn(),
+    back: vi.fn(async () => true),
+    setDirty: vi.fn(),
     connected: vi.fn(),
     studyChanged: vi.fn(),
     studyGone: vi.fn(),
@@ -33,6 +47,7 @@ function hooks(): BridgeHooks & Record<string, ReturnType<typeof vi.fn>> {
 
 beforeEach(() => {
   calls = [];
+  inits = [];
   answer = (url) => {
     if (url.startsWith('/api/plugin-studies/get')) return { status: 200, body: { ok: true, study: STUDY } };
     if (url === '/api/jobs') return { status: 200, body: { ok: true, job: { id: 'job-1' } } };
@@ -40,12 +55,14 @@ beforeEach(() => {
   };
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = String(input);
-      const method = init?.method || 'GET';
-      calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-      const a = answer(url, method);
-      return new Response(JSON.stringify(a.body), { status: a.status });
+      const method = init.method || 'GET';
+      // JSON bodies are parsed; raw ones (a file's chunk) are kept as they came.
+      calls.push({ url, method, body: typeof init.body === 'string' ? JSON.parse(init.body) : (init.body ?? undefined) });
+      inits.push(init);
+      const a = await answer(url, method, init);
+      return a instanceof Response ? a : new Response(JSON.stringify(a.body), { status: a.status });
     }),
   );
 });
@@ -148,9 +165,462 @@ describe('WorkspaceCalls: the allowlist', () => {
     expect(await c.handle('ui.confirm', { title: 'Replace?', message: 'The polar is replaced.', confirmLabel: 'Replace' })).toBe(true);
     expect(h.confirm).toHaveBeenCalledWith({ title: 'Replace?', copy: 'The polar is replaced.', yes: 'Replace' });
     expect(await c.handle('ui.prompt', { title: 'Name the airfoil' })).toBe('Named');
-    await c.handle('nav.back', {});
+    expect(await c.handle('nav.back', {})).toEqual({ ok: true, left: true });
     expect(h.back).toHaveBeenCalledTimes(1);
     expect(calls).toEqual([]);
+  });
+
+  it('nav.back tells the page whether the workspace was left', async () => {
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    h.back.mockResolvedValueOnce(false);
+    expect(await c.handle('nav.back', {})).toEqual({ ok: true, left: false });
+    expect(await c.handle('nav.back', {})).toEqual({ ok: true, left: true });
+    expect(h.back).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('cleanDirtyMessage', () => {
+  it('turns controls, line separators and bidi controls into spaces, collapses, trims and keeps 200 characters', () => {
+    expect(DIRTY_MESSAGE_MAX).toBe(200);
+    // C0 (NUL, bell, tab, newline, CR, escape, U+001F), then DEL and C1 (U+0080, NEL, U+009F).
+    expect(cleanDirtyMessage('a\u0000b\u0007c\td\ne\r\nf\u001bg\u001fh')).toBe('a b c d e f g h');
+    expect(cleanDirtyMessage('a\u007fb\u0080c\u0085d\u009fe')).toBe('a b c d e');
+    expect(cleanDirtyMessage('one\u{2028}two\u{2029}three')).toBe('one two three');
+    // A bidi control cannot reorder the text around it.
+    for (const cp of [0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]) {
+      expect(cleanDirtyMessage(`evil${String.fromCodePoint(cp)}txt.exe`)).toBe('evil txt.exe');
+    }
+    // Other whitespace (no-break and ideographic spaces) collapses too.
+    expect(cleanDirtyMessage('  Chord \u{a0}  120 mm\u{3000} is not saved \n')).toBe('Chord 120 mm is not saved');
+    expect(cleanDirtyMessage('\u{202e}\n\t \u0000')).toBe('');
+    // Other text stays as it is, astral characters too.
+    expect(cleanDirtyMessage('Profil “NACA 2412” — 120 mm ✓ 𝄞')).toBe('Profil “NACA 2412” — 120 mm ✓ 𝄞');
+    expect(cleanDirtyMessage('x'.repeat(300))).toBe('x'.repeat(200));
+    // The 200 are counted after cleaning.
+    expect(cleanDirtyMessage(`${' \n\u{202e}'.repeat(100)}${'y'.repeat(250)}`)).toBe('y'.repeat(200));
+    expect([cleanDirtyMessage(null), cleanDirtyMessage(undefined), cleanDirtyMessage(42)]).toEqual(['', '', '42']);
+  });
+
+  it('never throws: something that is not text becomes no message', () => {
+    // As a structured clone over the port can deliver it: an object whose toString is no function.
+    expect(cleanDirtyMessage({ toString: 1 })).toBe('');
+    expect(
+      cleanDirtyMessage({
+        toString() {
+          throw new Error('no');
+        },
+      }),
+    ).toBe('');
+  });
+});
+
+describe('WorkspaceCalls: unsaved work', () => {
+  it('nav.setDirty is dirty only for true, cleans the message, and has no message when clean', async () => {
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    for (const dirty of ['yes', 'true', 1, null, undefined, {}]) {
+      expect(await c.handle('nav.setDirty', { dirty, message: 'Chord not saved' })).toEqual({ ok: true });
+    }
+    expect(await c.handle('nav.setDirty', { message: 'no flag' })).toEqual({ ok: true });
+    expect(h.setDirty).not.toHaveBeenCalled();
+    await c.handle('nav.setDirty', { dirty: true, message: `  Chord\n120 mm\u{202e} ${'x'.repeat(300)}` });
+    expect(h.setDirty).toHaveBeenLastCalledWith(true, `Chord 120 mm ${'x'.repeat(187)}`);
+    expect((h.setDirty.mock.calls.at(-1) as [boolean, string])[1].length).toBe(200);
+    await c.handle('nav.setDirty', { dirty: 1, message: 'still not saved' });
+    expect(h.setDirty).toHaveBeenLastCalledWith(false, '');
+    await c.handle('nav.setDirty', { dirty: true });
+    expect(h.setDirty).toHaveBeenLastCalledWith(true, '');
+    expect(h.setDirty).toHaveBeenCalledTimes(3);
+    expect(calls).toEqual([]);
+  });
+
+  it('tells the host only when the state changes', async () => {
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    const set = (dirty: unknown, message?: unknown) => c.handle('nav.setDirty', { dirty, message });
+    await set(true, 'Chord not saved');
+    await set(true, 'Chord not saved');
+    // The same message once cleaned.
+    await set(true, ' Chord\tnot \n saved ');
+    await set(true, 'Span not saved');
+    await set(false, 'Span not saved');
+    await set(false);
+    await set('no', 'Span not saved');
+    await set(true, '');
+    await set(true);
+    expect(h.setDirty.mock.calls).toEqual([
+      [true, 'Chord not saved'],
+      [true, 'Span not saved'],
+      [false, ''],
+      [true, ''],
+    ]);
+  });
+
+  it('nav.setDirty with a message that is not text keeps the flag it asked for', async () => {
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    expect(await c.handle('nav.setDirty', { dirty: true, message: { toString: 1 } })).toEqual({ ok: true });
+    expect(h.setDirty.mock.calls).toEqual([[true, '']]);
+    expect(await c.handle('nav.setDirty', { dirty: false, message: { toString: 1 } })).toEqual({ ok: true });
+    expect(h.setDirty.mock.calls).toEqual([
+      [true, ''],
+      [false, ''],
+    ]);
+  });
+
+  it('close() makes a dirty page clean, once; a clean one says nothing', async () => {
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    c.close();
+    expect(h.setDirty).not.toHaveBeenCalled();
+    await c.handle('nav.setDirty', { dirty: true, message: 'Chord not saved' });
+    c.close();
+    c.close();
+    expect(h.setDirty.mock.calls).toEqual([
+      [true, 'Chord not saved'],
+      [false, ''],
+    ]);
+  });
+});
+
+describe('WorkspaceCalls: files in its own folder', () => {
+  const UP = 'a1'.repeat(16);
+  const INFO = { rel: 'meshes/wing.stl', size: 20, mtime: '2026-09-30T10:00:00.000Z', etag: '"1f-14-2a"' };
+  const SHA = 'ab'.repeat(32);
+  const bytesOf = (body: unknown) => (body instanceof Blob ? body.size : body instanceof ArrayBuffer ? body.byteLength : 0);
+  let nextUpload = 0;
+
+  /** The app's answers to /api/plugin-files, one upload id per begin after the first. */
+  function filesApp(url: string, method: string, init: RequestInit): Answer {
+    const path = url.split('?')[0];
+    if (path === '/api/plugin-files/stat') return { status: 200, body: { ok: true, file: INFO } };
+    if (path === '/api/plugin-files/list') return { status: 200, body: { ok: true, files: [INFO], truncated: false } };
+    if (path === '/api/plugin-files/read') {
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { ETag: INFO.etag, 'X-Magnusim-File-Size': '3' } });
+    }
+    if (path === '/api/plugin-files/uploads') {
+      const upload = nextUpload++ ? `${UP.slice(0, 30)}${String(nextUpload).padStart(2, '0')}` : UP;
+      return { status: 201, body: { ok: true, upload, chunk_bytes: 16, max_chunk_bytes: 32, expires_ms: 600000 } };
+    }
+    if (method === 'PUT') {
+      const offset = Number(new URLSearchParams(url.split('?')[1]).get('offset'));
+      return { status: 200, body: { ok: true, received: offset + bytesOf(init.body) } };
+    }
+    if (path.endsWith('/commit')) return { status: 200, body: { ok: true, file: { ...INFO, sha256: SHA } } };
+    if (path.endsWith('/abort')) return { status: 200, body: { ok: true, aborted: true } };
+    if (path === '/api/plugin-files/delete') return { status: 200, body: { ok: true, deleted: 2 } };
+    return { status: 500, body: { ok: false, error: `unexpected ${method} ${url}` } };
+  }
+
+  beforeEach(() => {
+    nextUpload = 0;
+    answer = filesApp;
+  });
+
+  it('are on the allowlist, and every fetch names its own plugin and project', async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    const elsewhere = { project_id: 'proj-b' };
+    expect(await c.handle('files.stat', { rel: 'meshes/wing.stl', ...elsewhere })).toEqual(INFO);
+    expect(await c.handle('files.list', { prefix: 'meshes', plugin: 'ws-demo', ...elsewhere })).toEqual([INFO]);
+    const read = (await c.handle('files.read', { rel: 'meshes/wing.stl', ...elsewhere })) as { blob: Blob; size: number; etag: string };
+    expect([read.size, read.etag]).toEqual([3, INFO.etag]);
+    expect(await c.handle('files.write.begin', { rel: 'meshes/wing.stl', size: 20, ifMatch: null, ...elsewhere })).toEqual({
+      upload: UP,
+      chunkBytes: 16,
+    });
+    const first = new ArrayBuffer(16);
+    const rest = new Blob([new Uint8Array(4)]);
+    expect(await c.handle('files.write.chunk', { upload: UP, offset: 0, data: first, ...elsewhere })).toEqual({ received: 16 });
+    expect(await c.handle('files.write.chunk', { upload: UP, offset: 16, data: rest })).toEqual({ received: 20 });
+    expect(await c.handle('files.write.commit', { upload: UP, sha256: SHA.toUpperCase(), ...elsewhere })).toEqual({ ...INFO, sha256: SHA });
+    const again = (await c.handle('files.write.begin', { rel: 'b.bin', size: 1 })) as { upload: string };
+    expect(await c.handle('files.write.abort', { upload: again.upload, ...elsewhere })).toEqual({ ok: true });
+    expect(await c.handle('files.delete', { rel: 'meshes', recursive: true, ...elsewhere })).toEqual({ deleted: 2 });
+
+    const scoped = { project_id: 'proj-a', plugin: 'ws-demo' };
+    expect(calls).toEqual([
+      { url: '/api/plugin-files/stat?project_id=proj-a&plugin=ws-demo&rel=meshes%2Fwing.stl', method: 'GET', body: undefined },
+      { url: '/api/plugin-files/list?project_id=proj-a&plugin=ws-demo&prefix=meshes', method: 'GET', body: undefined },
+      { url: '/api/plugin-files/read?project_id=proj-a&plugin=ws-demo&rel=meshes%2Fwing.stl', method: 'GET', body: undefined },
+      { url: '/api/plugin-files/uploads', method: 'POST', body: { ...scoped, rel: 'meshes/wing.stl', size: 20, if_match: null } },
+      { url: `/api/plugin-files/uploads/${UP}?project_id=proj-a&plugin=ws-demo&offset=0`, method: 'PUT', body: first },
+      { url: `/api/plugin-files/uploads/${UP}?project_id=proj-a&plugin=ws-demo&offset=16`, method: 'PUT', body: rest },
+      { url: `/api/plugin-files/uploads/${UP}/commit`, method: 'POST', body: { ...scoped, sha256: SHA } },
+      { url: '/api/plugin-files/uploads', method: 'POST', body: { ...scoped, rel: 'b.bin', size: 1 } },
+      { url: `/api/plugin-files/uploads/${again.upload}/abort`, method: 'POST', body: scoped },
+      { url: '/api/plugin-files/delete', method: 'POST', body: { ...scoped, rel: 'meshes', recursive: true } },
+    ]);
+    // The chunks go as they came: the very ArrayBuffer and Blob, as raw bytes.
+    expect(calls[4].body).toBe(first);
+    expect(calls[5].body).toBe(rest);
+    expect(inits[4].headers).toEqual({ 'Content-Type': 'application/octet-stream' });
+    expect((await refused(c.handle('files.move', { rel: 'a' }))).code).toBe('not_allowed');
+  });
+
+  it("refuses another plugin's files without a fetch", async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    for (const method of [
+      'files.stat',
+      'files.list',
+      'files.read',
+      'files.write.begin',
+      'files.write.chunk',
+      'files.write.commit',
+      'files.write.abort',
+      'files.delete',
+    ]) {
+      const err = await refused(c.handle(method, { rel: 'a.bin', size: 1, plugin: 'other' }));
+      expect([err.code, err.message]).toEqual(['not_allowed', "not allowed: another plugin's files"]);
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it('sends chunks only for uploads it began, in order, of the right kind and size', async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    const stranger = 'f'.repeat(32);
+    for (const method of ['files.write.chunk', 'files.write.commit', 'files.write.abort']) {
+      const err = await refused(c.handle(method, { upload: stranger, offset: 0, data: new ArrayBuffer(1) }));
+      expect([err.code, err.message]).toEqual(['not_allowed', 'not allowed: an upload this workspace did not begin']);
+    }
+    expect(calls).toEqual([]);
+    await c.handle('files.write.begin', { rel: 'a.bin', size: 20 });
+    calls = [];
+    const chunk = (offset: unknown, data: unknown) => c.handle('files.write.chunk', { upload: UP, offset, data });
+    for (const data of ['bytes', new Uint8Array(4), { byteLength: 4 }, null, [1, 2]]) {
+      expect((await refused(chunk(0, data))).code).toBe('bad_request');
+    }
+    for (const offset of [1.5, '0', undefined, -1]) {
+      const err = await refused(chunk(offset, new ArrayBuffer(4)));
+      expect(err.code).toBe(offset === -1 ? 'offset' : 'bad_request');
+    }
+    expect((await refused(chunk(4, new ArrayBuffer(4)))).message).toBe('the next chunk starts at byte 0');
+    expect((await refused(chunk(0, new ArrayBuffer(17)))).code).toBe('too_large');
+    expect((await refused(c.handle('files.write.commit', { upload: UP, sha256: 'not-a-hash' }))).code).toBe('bad_request');
+    expect(calls).toEqual([]);
+
+    // One chunk at a time: a second one while the first is on its way is refused.
+    let release: (a: Answer) => void = () => undefined;
+    answer = (url, method, init) => (method === 'PUT' ? new Promise<Answer>((r) => (release = r)) : filesApp(url, method, init));
+    const firstChunk = chunk(0, new ArrayBuffer(16));
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    expect((await refused(chunk(0, new ArrayBuffer(16)))).code).toBe('busy');
+    release({ status: 200, body: { ok: true, received: 16 } });
+    expect(await firstChunk).toEqual({ received: 16 });
+    answer = filesApp;
+    // 4 bytes are left: a full chunk is too much, and the next one starts at 16.
+    expect((await refused(chunk(16, new Blob([new Uint8Array(5)])))).message).toBe('this chunk may hold at most 4 bytes');
+    expect((await refused(chunk(0, new ArrayBuffer(4)))).code).toBe('offset');
+    expect(await chunk(16, new ArrayBuffer(4))).toEqual({ received: 20 });
+    expect(calls.filter((x) => x.method === 'PUT').length).toBe(2);
+  });
+
+  it('aborts every open upload when it closes, even one whose begin was still on its way', async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    const a = (await c.handle('files.write.begin', { rel: 'a.bin', size: 5 })) as { upload: string };
+    const b = (await c.handle('files.write.begin', { rel: 'b.bin', size: 5 })) as { upload: string };
+    let release: (a: Answer) => void = () => undefined;
+    answer = (url, method, init) =>
+      url === '/api/plugin-files/uploads' ? new Promise<Answer>((r) => (release = r)) : filesApp(url, method, init);
+    const late = c.handle('files.write.begin', { rel: 'c.bin', size: 5 });
+    await vi.waitFor(() => expect(calls.length).toBe(3));
+    calls = [];
+    inits = [];
+    c.close();
+    const scoped = { project_id: 'proj-a', plugin: 'ws-demo' };
+    expect(calls).toEqual([
+      { url: `/api/plugin-files/uploads/${a.upload}/abort`, method: 'POST', body: scoped },
+      { url: `/api/plugin-files/uploads/${b.upload}/abort`, method: 'POST', body: scoped },
+    ]);
+    expect(inits.map((i) => i.keepalive)).toEqual([true, true]);
+    expect((await refused(c.handle('files.write.chunk', { upload: a.upload, offset: 0, data: new ArrayBuffer(5) }))).code).toBe(
+      'not_allowed',
+    );
+    release({ status: 201, body: { ok: true, upload: 'c'.repeat(32), chunk_bytes: 16 } });
+    expect((await refused(late)).message).toBe('the workspace closed');
+    expect(calls[2]).toEqual({ url: `/api/plugin-files/uploads/${'c'.repeat(32)}/abort`, method: 'POST', body: scoped });
+    expect(inits[2].keepalive).toBe(true);
+  });
+
+  it("takes the app's own error code when it names one", async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    answer = () => ({ status: 413, body: { ok: false, error: "over this plugin's 512 MB", code: 'quota', limit: 1, used: 2 } });
+    const quota = await refused(c.handle('files.write.begin', { rel: 'a.bin', size: 5 }));
+    expect([quota.code, quota.message]).toEqual(['quota', "over this plugin's 512 MB"]);
+    answer = () => ({ status: 400, body: { ok: false, error: 'a study record', code: 'study_record' } });
+    expect((await refused(c.handle('files.delete', { rel: 'studies/st-1/study.json' }))).code).toBe('study_record');
+    // A number is the worker's code, not the app's: the status says what it was.
+    answer = () => ({ status: 404, body: { ok: false, error: 'gone', code: -32004 } });
+    expect((await refused(c.handle('files.stat', { rel: 'a.bin' }))).code).toBe('not_found');
+  });
+
+  it('closes the frame when a file call finds its own study gone, not another one', async () => {
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    const gone: Answer = { status: 404, body: { ok: false, error: 'study not found', code: 'study_not_found' } };
+    answer = () => gone;
+    expect((await refused(c.handle('files.write.begin', { rel: 'studies/st-2/mesh.stl', size: 1 }))).code).toBe('study_not_found');
+    expect(h.studyGone).not.toHaveBeenCalled();
+    await refused(c.handle('files.write.begin', { rel: 'studies\\st-1\\mesh.stl', size: 1 }));
+    expect(h.studyGone).toHaveBeenCalledTimes(1);
+    // The study went between begin and commit.
+    answer = filesApp;
+    const { upload } = (await c.handle('files.write.begin', { rel: 'studies/st-1/polar.bin', size: 0 })) as { upload: string };
+    answer = () => gone;
+    await refused(c.handle('files.write.commit', { upload }));
+    expect(h.studyGone).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads a Blob with the whole size and etag, a byte range, and null when there is no file', async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    answer = () =>
+      new Response(new Uint8Array([5, 6, 7]), {
+        status: 206,
+        headers: { ETag: INFO.etag, 'X-Magnusim-File-Size': '10', 'Content-Range': 'bytes 2-4/10' },
+      });
+    const r = (await c.handle('files.read', { rel: 'a.bin', offset: 2, length: 3, ifMatch: INFO.etag })) as {
+      blob: Blob;
+      size: number;
+      etag: string;
+    };
+    expect(r.blob).toBeInstanceOf(Blob);
+    expect(new Uint8Array(await r.blob.arrayBuffer())).toEqual(new Uint8Array([5, 6, 7]));
+    expect([r.size, r.etag]).toEqual([10, INFO.etag]);
+    await c.handle('files.read', { rel: 'a.bin', offset: 2 });
+    await c.handle('files.read', { rel: 'a.bin', length: 3 });
+    await c.handle('files.read', { rel: 'a.bin', offset: 0 });
+    expect(inits.map((i) => i.headers)).toEqual([
+      { Range: 'bytes=2-4', 'If-Match': INFO.etag },
+      { Range: 'bytes=2-' },
+      { Range: 'bytes=0-2' },
+      {},
+    ]);
+    for (const bad of [{ offset: -1 }, { length: 1.5 }, { offset: '2' }, { ifMatch: 7 }]) {
+      expect((await refused(c.handle('files.read', { rel: 'a.bin', ...bad }))).code).toBe('bad_request');
+    }
+    expect(calls.length).toBe(4);
+
+    answer = () => ({ status: 404, body: { ok: false, error: 'a.bin is not there', code: 'not_found' } });
+    expect(await c.handle('files.read', { rel: 'a.bin' })).toBeNull();
+    answer = () => ({ status: 404, body: { ok: false, error: 'the plugin is off', code: 'plugin_off' } });
+    expect((await refused(c.handle('files.read', { rel: 'a.bin' }))).code).toBe('plugin_off');
+    answer = () => ({ status: 409, body: { ok: false, error: 'a.bin changed', code: 'changed', etag: '"2"' } });
+    expect((await refused(c.handle('files.read', { rel: 'a.bin', ifMatch: INFO.etag }))).code).toBe('changed');
+
+    // Nothing asked for: no byte range can say that, so the answer comes from the file's stat.
+    answer = filesApp;
+    calls = [];
+    const none = (await c.handle('files.read', { rel: 'meshes/wing.stl', offset: 20, length: 0 })) as { blob: Blob; size: number };
+    expect([none.blob.size, none.size]).toEqual([0, 20]);
+    expect(calls[0].url.startsWith('/api/plugin-files/stat?')).toBe(true);
+    expect((await refused(c.handle('files.read', { rel: 'meshes/wing.stl', length: 0, ifMatch: '"old"' }))).code).toBe('changed');
+  });
+
+  it('reads an empty file as empty bytes when a length is asked for', async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    // The app refuses every byte range of an empty file, with its size and etag.
+    answer = () =>
+      new Response(JSON.stringify({ ok: false, error: 'that byte range is not in the file', code: 'bad_range', size: 0 }), {
+        status: 416,
+        headers: { ETag: INFO.etag, 'X-Magnusim-File-Size': '0', 'Content-Range': 'bytes */0' },
+      });
+    const r = (await c.handle('files.read', { rel: 'empty.bin', length: 1024 })) as { blob: Blob; size: number; etag: string };
+    expect([r.blob.size, r.size, r.etag]).toEqual([0, 0, INFO.etag]);
+    expect(inits[0].headers).toEqual({ Range: 'bytes=0-1023' });
+    // Past the end of it is still past the end.
+    expect((await refused(c.handle('files.read', { rel: 'empty.bin', offset: 4, length: 2 }))).code).toBe('bad_range');
+  });
+
+  it('forgets an upload once it is committed or aborted', async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    const done = (await c.handle('files.write.begin', { rel: 'a.bin', size: 0 })) as { upload: string };
+    await c.handle('files.write.commit', { upload: done.upload });
+    const dropped = (await c.handle('files.write.begin', { rel: 'b.bin', size: 1 })) as { upload: string };
+    await c.handle('files.write.abort', { upload: dropped.upload });
+    calls = [];
+    for (const upload of [done.upload, dropped.upload]) {
+      for (const method of ['files.write.chunk', 'files.write.commit', 'files.write.abort']) {
+        const err = await refused(c.handle(method, { upload, offset: 0, data: new ArrayBuffer(1) }));
+        expect(err.code).toBe('not_allowed');
+      }
+    }
+    c.close();
+    expect(calls).toEqual([]);
+  });
+
+  it('is dirty while an upload is open, and clean again once it is committed or aborted', async () => {
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    // A begin the app refuses opens nothing.
+    answer = () => ({ status: 413, body: { ok: false, error: "over this plugin's 512 MB", code: 'quota' } });
+    await refused(c.handle('files.write.begin', { rel: 'a.bin', size: 5 }));
+    expect(h.setDirty).not.toHaveBeenCalled();
+    answer = filesApp;
+    const a = (await c.handle('files.write.begin', { rel: 'a.bin', size: 0 })) as { upload: string };
+    expect(h.setDirty.mock.calls).toEqual([[true, UPLOADING]]);
+    const b = (await c.handle('files.write.begin', { rel: 'b.bin', size: 1 })) as { upload: string };
+    await c.handle('files.write.commit', { upload: a.upload });
+    expect(h.setDirty).toHaveBeenCalledTimes(1);
+    await c.handle('files.write.abort', { upload: b.upload });
+    expect(h.setDirty.mock.calls).toEqual([
+      [true, UPLOADING],
+      [false, ''],
+    ]);
+    // A refused commit keeps the upload open, and the page dirty, until the page aborts it.
+    const d = (await c.handle('files.write.begin', { rel: 'd.bin', size: 0 })) as { upload: string };
+    answer = () => ({ status: 409, body: { ok: false, error: 'd.bin changed since it was read', code: 'changed' } });
+    await refused(c.handle('files.write.commit', { upload: d.upload }));
+    expect(h.setDirty).toHaveBeenLastCalledWith(true, UPLOADING);
+    answer = filesApp;
+    await c.handle('files.write.abort', { upload: d.upload });
+    expect(h.setDirty).toHaveBeenLastCalledWith(false, '');
+    expect(h.setDirty).toHaveBeenCalledTimes(4);
+  });
+
+  it('a clean page is clean again once its one upload is committed', async () => {
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    const up = (await c.handle('files.write.begin', { rel: 'a.bin', size: 0 })) as { upload: string };
+    expect(h.setDirty.mock.calls).toEqual([[true, UPLOADING]]);
+    await c.handle('files.write.commit', { upload: up.upload });
+    expect(h.setDirty).toHaveBeenLastCalledWith(false, '');
+    expect(h.setDirty).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the page's own message over the upload's, and the upload's while the page gives none", async () => {
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    const set = (dirty: boolean, message?: string) => c.handle('nav.setDirty', { dirty, message });
+    await set(true, 'Chord not saved');
+    const a = (await c.handle('files.write.begin', { rel: 'a.bin', size: 0 })) as { upload: string };
+    // The page's own message stays while the upload is open.
+    expect(h.setDirty.mock.calls).toEqual([[true, 'Chord not saved']]);
+    await set(true, '');
+    expect(h.setDirty).toHaveBeenLastCalledWith(true, UPLOADING);
+    await set(false);
+    await set(true, 'Span not saved');
+    expect(h.setDirty).toHaveBeenLastCalledWith(true, 'Span not saved');
+    await c.handle('files.write.commit', { upload: a.upload });
+    await set(false);
+    // Open when the channel ends: aborted, and the page is clean.
+    await c.handle('files.write.begin', { rel: 'b.bin', size: 1 });
+    c.close();
+    expect(h.setDirty.mock.calls).toEqual([
+      [true, 'Chord not saved'],
+      [true, UPLOADING],
+      [true, 'Span not saved'],
+      [false, ''],
+      [true, UPLOADING],
+      [false, ''],
+    ]);
+  });
+
+  it('says when a folder holds too many files to list', async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    answer = () => ({ status: 200, body: { ok: true, files: [INFO], truncated: true } });
+    const err = await refused(c.handle('files.list', {}));
+    expect([err.code, err.message]).toEqual(['too_many', "more than 1 files under the plugin's folder: list a smaller folder"]);
+    expect(calls[0].url).toBe('/api/plugin-files/list?project_id=proj-a&plugin=ws-demo&prefix=');
   });
 });
 
@@ -188,7 +658,7 @@ describe('WorkspaceBridge: the handshake', () => {
     const [msg, origin, transfer] = t.posted[0] as [Record<string, unknown>, string, MessagePort[]];
     expect(origin).toBe('*');
     expect(msg).toMatchObject({ magnusim: 'welcome', instance: 'i1' });
-    expect(msg.context).toMatchObject({ plugin: 'ws-demo', workspace: 'bench', project: { id: 'proj-a' }, study: STUDY, hostVersion: '1.1' });
+    expect(msg.context).toMatchObject({ plugin: 'ws-demo', workspace: 'bench', project: { id: 'proj-a' }, study: STUDY, hostVersion: '1.2' });
     expect(t.bridge.connected()).toBe(true);
     expect(t.h.connected).toHaveBeenCalledTimes(1);
 
@@ -219,6 +689,24 @@ describe('WorkspaceBridge: the handshake', () => {
     t.frame.remove();
   });
 
+  it('refuses a files call naming another plugin, and logs it', async () => {
+    const t = setup();
+    t.hello({ magnusim: 'hello', sdkVersion: '1.1.0', instance: 'i4' });
+    await vi.waitFor(() => expect(t.posted.length).toBe(1));
+    const port = (t.posted[0] as [unknown, unknown, MessagePort[]])[2][0];
+    const params = { rel: 'meshes/wing.stl', plugin: 'other-plugin' };
+    const answered = new Promise<unknown>((resolve) => {
+      port.onmessage = (e: MessageEvent) => resolve(e.data);
+    });
+    port.postMessage({ id: 1, method: 'files.stat', params });
+    expect(await answered).toEqual({ id: 1, error: { message: "not allowed: another plugin's files", code: 'not_allowed' } });
+    expect(t.h.log).toHaveBeenCalledWith("workspace ws-demo: not allowed: another plugin's files", params);
+    expect(calls.filter((x) => x.url.startsWith('/api/plugin-files'))).toEqual([]);
+    port.close();
+    t.detach();
+    t.frame.remove();
+  });
+
   it('is not connected until the frame has its welcome (a slow study read keeps the 5 s error card armed)', async () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)));
     const t = setup();
@@ -244,6 +732,148 @@ describe('WorkspaceBridge: the handshake', () => {
     port.close();
     t.detach();
     expect(t.bridge.connected()).toBe(false);
+    t.frame.remove();
+  });
+
+  /** Say hello as `instance` and get the port the frame is handed. */
+  async function welcome(t: ReturnType<typeof setup>, instance: string): Promise<MessagePort> {
+    const n = t.posted.length;
+    t.hello({ magnusim: 'hello', sdkVersion: '1.1.0', instance });
+    await vi.waitFor(() => expect(t.posted.length).toBe(n + 1));
+    return (t.posted[n] as [unknown, unknown, MessagePort[]])[2][0];
+  }
+
+  /** Send calls over the port one after the other, without waiting in between; resolves with every answer by id. */
+  function send(port: MessagePort, ...msgs: { id: number; method: string; params?: Record<string, unknown> }[]) {
+    return new Promise<Record<number, unknown>>((resolve) => {
+      const got: Record<number, unknown> = {};
+      port.onmessage = (e: MessageEvent) => {
+        const d = e.data as { id: number };
+        got[d.id] = d;
+        if (Object.keys(got).length === msgs.length) resolve(got);
+      };
+      for (const m of msgs) port.postMessage({ params: {}, ...m });
+    });
+  }
+
+  const dirty = (id: number, message = 'Chord not saved') => ({ id, method: 'nav.setDirty', params: { dirty: true, message } });
+
+  it('says nothing about unsaved work before the first channel, or when a clean channel ends', async () => {
+    const t = setup();
+    t.frame.dispatchEvent(new Event('load'));
+    t.detach();
+    t.frame.remove();
+    expect(t.h.setDirty).not.toHaveBeenCalled();
+    const u = setup();
+    const first = await welcome(u, 'c1');
+    const second = await welcome(u, 'c2');
+    u.detach();
+    expect(u.h.setDirty).not.toHaveBeenCalled();
+    first.close();
+    second.close();
+    u.frame.remove();
+  });
+
+  it("gives each channel a signal that ends with it (what an old page load asked is moot)", async () => {
+    const t = setup();
+    expect(t.bridge.channelSignal()).toBeNull();
+    const first = await welcome(t, 's1');
+    const one = t.bridge.channelSignal() as AbortSignal;
+    expect(one.aborted).toBe(false);
+    // The page reloaded and said hello again.
+    const second = await welcome(t, 's2');
+    const two = t.bridge.channelSignal() as AbortSignal;
+    expect(one.aborted).toBe(true);
+    expect(two).not.toBe(one);
+    expect(two.aborted).toBe(false);
+    t.detach();
+    expect(two.aborted).toBe(true);
+    expect(t.bridge.channelSignal()).toBeNull();
+    first.close();
+    second.close();
+    t.frame.remove();
+  });
+
+  it('a second hello (the page reloaded) makes a dirty page clean, once', async () => {
+    const t = setup();
+    const first = await welcome(t, 'd1');
+    expect(await send(first, dirty(1))).toEqual({ 1: { id: 1, result: { ok: true } } });
+    expect(t.h.setDirty.mock.calls).toEqual([[true, 'Chord not saved']]);
+    const second = await welcome(t, 'd2');
+    expect(t.h.setDirty.mock.calls).toEqual([
+      [true, 'Chord not saved'],
+      [false, ''],
+    ]);
+    t.detach();
+    expect(t.h.setDirty).toHaveBeenCalledTimes(2);
+    first.close();
+    second.close();
+    t.frame.remove();
+  });
+
+  it('a failed probe (the page navigated) makes a dirty page clean, once', async () => {
+    const t = setup();
+    const port = await welcome(t, 'p1');
+    await send(port, dirty(1, ''));
+    vi.useFakeTimers();
+    t.frame.dispatchEvent(new Event('load'));
+    vi.advanceTimersByTime(1499);
+    expect(t.h.setDirty.mock.calls).toEqual([[true, '']]);
+    vi.advanceTimersByTime(1);
+    expect(t.bridge.connected()).toBe(false);
+    expect(t.h.setDirty.mock.calls).toEqual([
+      [true, ''],
+      [false, ''],
+    ]);
+    t.detach();
+    expect(t.h.setDirty).toHaveBeenCalledTimes(2);
+    port.close();
+    t.frame.remove();
+  });
+
+  it('detach makes a page with an open upload clean, once, and aborts the upload', async () => {
+    answer = (url) => {
+      if (url.startsWith('/api/plugin-studies/get')) return { status: 200, body: { ok: true, study: STUDY } };
+      if (url === '/api/plugin-files/uploads') return { status: 201, body: { ok: true, upload: 'e'.repeat(32), chunk_bytes: 16 } };
+      return { status: 200, body: { ok: true } };
+    };
+    const t = setup();
+    const port = await welcome(t, 'u1');
+    await send(port, { id: 1, method: 'files.write.begin', params: { rel: 'a.bin', size: 4 } });
+    expect(t.h.setDirty.mock.calls).toEqual([[true, UPLOADING]]);
+    t.detach();
+    expect(t.h.setDirty.mock.calls).toEqual([
+      [true, UPLOADING],
+      [false, ''],
+    ]);
+    expect(calls.at(-1)).toEqual({
+      url: `/api/plugin-files/uploads/${'e'.repeat(32)}/abort`,
+      method: 'POST',
+      body: { project_id: 'proj-a', plugin: 'ws-demo' },
+    });
+    port.close();
+    t.frame.remove();
+  });
+
+  it('sees nav.setDirty(false) before a nav.back sent right after it, and answers whether the page left', async () => {
+    const t = setup();
+    const seen: string[] = [];
+    let stay = false;
+    t.h.setDirty.mockImplementation((d: boolean) => void seen.push(`setDirty ${d}`));
+    t.h.back.mockImplementation(async () => {
+      seen.push('back');
+      return !stay;
+    });
+    const port = await welcome(t, 'o1');
+    await send(port, dirty(1));
+    const got = await send(port, { id: 2, method: 'nav.setDirty', params: { dirty: false } }, { id: 3, method: 'nav.back' });
+    expect(seen).toEqual(['setDirty true', 'setDirty false', 'back']);
+    expect(got[3]).toEqual({ id: 3, result: { ok: true, left: true } });
+    // The user chose to stay.
+    stay = true;
+    expect(await send(port, { id: 4, method: 'nav.back' })).toEqual({ 4: { id: 4, result: { ok: true, left: false } } });
+    port.close();
+    t.detach();
     t.frame.remove();
   });
 });

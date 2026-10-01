@@ -1,5 +1,5 @@
 {
-  "sdk_version": "1.0.0",
+  "sdk_version": "1.1.0",
   "react_version": "19.3.0",
   "imports": {
     "react": "/plugin-sdk/react.js",

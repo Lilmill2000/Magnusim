@@ -72,9 +72,14 @@ export function isDataLaneMethod(method: string): boolean {
  * Plugin methods (/api/plugin/:key/**) run third-party code of unknown speed, so
  * they get their own worker process: a slow or stuck plugin method never makes
  * project reads and writes (project.tree, runs.upsert, …) wait behind it.
+ *
+ * So do plugin studies and plugin data (a workspace saving often): they touch only
+ * the plugin's own folder of a project (projects/<pid>/plugins/<key>/, replaced
+ * whole, so the main worker's tree reads never see half a file), and each save held
+ * the main worker for 60-95 ms, which stalled the tree behind a busy workspace.
  */
 export function isPluginLaneMethod(method: string): boolean {
-  return method === 'plugin.dispatch';
+  return method === 'plugin.dispatch' || method.startsWith('plugin_studies.') || method.startsWith('plugin_data.');
 }
 
 /**

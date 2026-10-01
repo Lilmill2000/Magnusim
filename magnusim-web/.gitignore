@@ -1,5 +1,6 @@
 node_modules/
 python/.venv/
+.venv/
 python/**/__pycache__/
 **/__pycache__/
 *.py[cod]
@@ -13,5 +14,7 @@ e2e/.tmp-projects/
 .magnusim-ready
 .cfddesk-ready
 dist/
+/bundled-plugins/*/build/
+/plugins/*/build/
 .DS_Store
 Thumbs.db

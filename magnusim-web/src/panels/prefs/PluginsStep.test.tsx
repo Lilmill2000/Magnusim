@@ -1,6 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerPanel } from '../../plugin-api';
+import {
+  confirmLeaveWorkspace,
+  installWorkspaceLeaveGuard,
+  registerOpenWorkspace,
+  setWorkspaceDirty,
+  workspaceDirty,
+} from '../../workspace/leaveGuard';
 import { PluginsStep } from './PluginsStep';
 
 const workerRpc = vi.fn(async () => ({}));
@@ -29,7 +36,7 @@ beforeEach(() => {
       const url = String(input);
       const toggle = url.match(/\/api\/plugins\/([^/]+)\/(enable|disable)$/);
       if (toggle && init?.method === 'POST') {
-        plugins = plugins.map((p) => (p.key === toggle[1] ? row(toggle[1], toggle[2] === 'enable') : p));
+        plugins = plugins.map((p) => (p.key === toggle[1] ? { ...p, ...row(toggle[1], toggle[2] === 'enable') } : p));
         return new Response('{"ok":true}', { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true, plugins }), { status: 200 });
@@ -51,6 +58,30 @@ describe('PluginsStep', () => {
     expect(within(li).getByText(/v0\.1\.0 · local/)).toBeInTheDocument();
     expect(within(li).getByText('On')).toBeInTheDocument();
     expect(within(li).getByRole('button', { name: 'Disable' })).toBeInTheDocument();
+  });
+
+  it('an optional bundled plugin that ships off says so and can be turned on', async () => {
+    plugins = [
+      { ...row('opt-demo', false), tier: 'bundled', source: 'bundled', required: false, default_enabled: false },
+      { ...row('incompressible_flow', true), tier: 'bundled', source: 'bundled', required: true, default_enabled: true },
+    ];
+    render(<PluginsStep />);
+    const li = await waitFor(() => {
+      const el = document.querySelector('[data-plugin-key="opt-demo"]') as HTMLElement | null;
+      if (!el) throw new Error('no row yet');
+      return el;
+    });
+    expect(li).toHaveAttribute('data-plugin-default-off', '1');
+    expect(li).toHaveAttribute('data-plugin-status', 'disabled');
+    expect(within(li).getByText('Ships with Magnusim and stays off until you turn it on.')).toBeInTheDocument();
+    expect(within(li).getByText('Off')).toBeInTheDocument();
+    const required = document.querySelector('[data-plugin-key="incompressible_flow"]') as HTMLElement;
+    expect(required).not.toHaveAttribute('data-plugin-default-off');
+    expect(within(required).getByText('Required')).toBeInTheDocument();
+    fireEvent.click(within(li).getByRole('button', { name: 'Enable' }));
+    await waitFor(() => expect(document.querySelector('[data-plugin-key="opt-demo"]')).toHaveAttribute('data-plugin-status', 'enabled'));
+    // Once on, the hint goes.
+    expect(screen.queryByText('Ships with Magnusim and stays off until you turn it on.')).toBeNull();
   });
 
   it('disables a plugin, reloads the registry and shows the new state', async () => {
@@ -146,5 +177,148 @@ describe('PluginsStep', () => {
     vi.mocked(fetch).mockImplementationOnce(async () => new Response('{}', { status: 500 }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Disable' })[0]);
     expect(await screen.findByRole('status')).toHaveTextContent('Could not disable example-laminar: server answered 500');
+  });
+
+  it('Reload tells an open workspace that the plugins changed', async () => {
+    const seen: unknown[] = [];
+    const onSync = (e: Event) => void seen.push((e as CustomEvent).detail);
+    window.addEventListener('cfd:tree-sync', onSync);
+    render(<PluginsStep />);
+    await screen.findByText('example-laminar does a thing');
+    fireEvent.click(screen.getByRole('button', { name: 'Reload plugins' }));
+    await screen.findByText('Plugins reloaded.');
+    expect(seen).toContainEqual({ plugins: true });
+    window.removeEventListener('cfd:tree-sync', onSync);
+  });
+});
+
+describe('turning off a plugin whose workspace is open', () => {
+  const OFF = {
+    title: 'Turn off Workspace demo?',
+    copy: 'Its workspace is open with changes that are not saved (Chord not saved). Turning it off closes the workspace and discards them.',
+    yes: 'Turn off',
+  };
+  let unregister: () => void = () => undefined;
+  let answer = false;
+  let confirm: ReturnType<typeof vi.fn>;
+  // What happened, in order: the toggle's requests and the syncs it sent.
+  let log: string[] = [];
+  const onSync = (e: Event) => void log.push(`sync ${JSON.stringify((e as CustomEvent).detail ?? null)}`);
+
+  beforeEach(() => {
+    installWorkspaceLeaveGuard();
+    plugins = [{ ...row('ws-demo', true), name: 'Workspace demo' }, row('example-laminar', true)];
+    unregister = registerOpenWorkspace({
+      route: { projectId: 'proj', plugin: 'ws-demo', workspace: 'bench', studyId: 'st-1' },
+      pluginName: () => 'Workspace demo',
+      studyTitle: () => 'Wing section',
+      frame: () => null,
+    });
+    answer = false;
+    confirm = vi.fn(async () => answer);
+    window.__CFD_CONFIRM__ = confirm as unknown as typeof window.__CFD_CONFIRM__;
+    log = [];
+    const inner = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') log.push(`POST ${String(input)}`);
+      return (inner as NonNullable<typeof inner>)(input, init);
+    });
+    window.addEventListener('cfd:tree-sync', onSync);
+  });
+
+  afterEach(() => {
+    unregister();
+    delete window.__CFD_CONFIRM__;
+    window.removeEventListener('cfd:tree-sync', onSync);
+  });
+
+  const toggleOf = (key: string) =>
+    within(document.querySelector(`[data-plugin-key="${key}"]`) as HTMLElement).getByRole('button', { name: /Disable|Enable/ });
+
+  /** Closing the tab now: whether the browser would ask first (a beforeunload listener cancelled it). */
+  function unloadAsks(): boolean {
+    const e = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(e);
+    return e.defaultPrevented;
+  }
+
+  it('asks first when it has unsaved work; Cancel sends nothing and keeps it on', async () => {
+    setWorkspaceDirty(true, 'Chord not saved');
+    render(<PluginsStep />);
+    await screen.findByText('ws-demo does a thing');
+    fireEvent.click(toggleOf('ws-demo'));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith({ ...OFF, signal: expect.any(AbortSignal) }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(log).toEqual([]);
+    expect(document.querySelector('[data-plugin-key="ws-demo"]')).toHaveAttribute('data-plugin-status', 'enabled');
+    expect(toggleOf('ws-demo')).toHaveTextContent('Disable');
+  });
+
+  it('Turn off sends the request, then tells the workspace the plugins changed', async () => {
+    setWorkspaceDirty(true, 'Chord not saved');
+    answer = true;
+    render(<PluginsStep />);
+    await screen.findByText('ws-demo does a thing');
+    fireEvent.click(toggleOf('ws-demo'));
+    await waitFor(() =>
+      expect(document.querySelector('[data-plugin-key="ws-demo"]')).toHaveAttribute('data-plugin-status', 'disabled'),
+    );
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(log).toEqual(['POST /api/plugins/ws-demo/disable', 'sync {"plugins":true}']);
+  });
+
+  it('a Turn off the app refused guards the unsaved work again: every way out asks, closing the tab too', async () => {
+    setWorkspaceDirty(true, 'Chord not saved');
+    answer = true;
+    render(<PluginsStep />);
+    await screen.findByText('ws-demo does a thing');
+    const inner = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'POST' && String(input).endsWith('/ws-demo/disable')
+        ? new Response('{}', { status: 500 })
+        : (inner as NonNullable<typeof inner>)(input, init),
+    );
+    fireEvent.click(toggleOf('ws-demo'));
+    expect(await screen.findByRole('status')).toHaveTextContent('Could not disable ws-demo: server answered 500');
+    expect(document.querySelector('[data-plugin-key="ws-demo"]')).toHaveAttribute('data-plugin-status', 'enabled');
+    expect(workspaceDirty()).toBe(true);
+    expect(unloadAsks()).toBe(true);
+    // The next way out asks again.
+    answer = false;
+    expect(await confirmLeaveWorkspace('back')).toBe(false);
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it('a Turn off the app made keeps the user\'s choice even when reading the plugins again fails', async () => {
+    setWorkspaceDirty(true, 'Chord not saved');
+    answer = true;
+    workerRpc.mockImplementationOnce(async () => {
+      throw new Error('worker busy');
+    });
+    render(<PluginsStep />);
+    await screen.findByText('ws-demo does a thing');
+    fireEvent.click(toggleOf('ws-demo'));
+    expect(await screen.findByRole('status')).toHaveTextContent('Could not disable ws-demo: worker busy');
+    expect(log).toEqual(['POST /api/plugins/ws-demo/disable', 'sync {"plugins":true}']);
+    // It is off: the workspace closes into its card, and nothing the user chose to discard asks again.
+    expect(workspaceDirty()).toBe(false);
+    expect(unloadAsks()).toBe(false);
+  });
+
+  it('never asks for another plugin, or when the workspace has nothing unsaved', async () => {
+    setWorkspaceDirty(true, 'Chord not saved');
+    render(<PluginsStep />);
+    await screen.findByText('ws-demo does a thing');
+    fireEvent.click(toggleOf('example-laminar'));
+    await waitFor(() =>
+      expect(document.querySelector('[data-plugin-key="example-laminar"]')).toHaveAttribute('data-plugin-status', 'disabled'),
+    );
+    await waitFor(() => expect(toggleOf('ws-demo')).toBeEnabled());
+    setWorkspaceDirty(false);
+    fireEvent.click(toggleOf('ws-demo'));
+    await waitFor(() =>
+      expect(document.querySelector('[data-plugin-key="ws-demo"]')).toHaveAttribute('data-plugin-status', 'disabled'),
+    );
+    expect(confirm).not.toHaveBeenCalled();
   });
 });

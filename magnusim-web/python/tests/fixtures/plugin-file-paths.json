@@ -1,0 +1,168 @@
+{
+  "about": "Path rules for a plugin's own files in a project (ws.data, ws.files, PluginData). ASCII whitespace at both ends is trimmed first. allowed: [input, normalised]; refused_any: refused for reading and writing; refused_write: study records, readable but never written or deleted; study_containers: studies and studies/<x>, readable but never written or deleted (only plugin_studies.* make and remove a study). Read by python/tests/unit/test_g1_plugin_files.py and scripts/server/__tests__/plugin-data-files.test.js.",
+  "allowed": [
+    [
+      "notes/n.json",
+      "notes/n.json"
+    ],
+    [
+      "a\\b.bin",
+      "a/b.bin"
+    ],
+    [
+      "./a/./b",
+      "a/b"
+    ],
+    [
+      "  a/b  ",
+      "a/b"
+    ],
+    [
+      "\ta/b\n",
+      "a/b"
+    ],
+    [
+      "a//b",
+      "a/b"
+    ],
+    [
+      "x.y.z",
+      "x.y.z"
+    ],
+    [
+      "con-rod.step",
+      "con-rod.step"
+    ],
+    [
+      "nulls/x",
+      "nulls/x"
+    ],
+    [
+      "console.log",
+      "console.log"
+    ],
+    [
+      "a b/c d.txt",
+      "a b/c d.txt"
+    ],
+    [
+      "\u00fcn\u00efcode/\u00f8.bin",
+      "\u00fcn\u00efcode/\u00f8.bin"
+    ],
+    [
+      "studies/st-1/polar.json",
+      "studies/st-1/polar.json"
+    ],
+    [
+      "studies/st-1/imports/abc/source.step",
+      "studies/st-1/imports/abc/source.step"
+    ],
+    [
+      "Studies/st-1/x.bin",
+      "Studies/st-1/x.bin"
+    ],
+    [
+      "studies/st-1/study.json.bak",
+      "studies/st-1/study.json.bak"
+    ],
+    [
+      "magnusim/x",
+      "magnusim/x"
+    ],
+    [
+      ".cache/x",
+      ".cache/x"
+    ],
+    [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    [
+      "  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  ",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    [
+      "d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d",
+      "d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d"
+    ],
+    [
+      "x ",
+      "x"
+    ]
+  ],
+  "refused_any": [
+    "",
+    "   ",
+    ".",
+    "./.",
+    "/abs",
+    "\\abs",
+    "//server/share/x",
+    "../x",
+    "a/../b",
+    "a/..",
+    "C:/x",
+    "c:x",
+    "a:b",
+    "studies/st-1/study.json::$DATA",
+    "x~1",
+    "STUDY~1.JSO",
+    "a<b",
+    "a>b",
+    "a\"b",
+    "a|b",
+    "a?b",
+    "a*b",
+    "a\u0001b",
+    "a\u001fb",
+    "a\u007fb",
+    "x.",
+    "dir./f",
+    "dir /f",
+    "studies/st-1/study.json.",
+    "nul",
+    "NUL.txt",
+    "con",
+    "Con.step",
+    "aux",
+    "prn",
+    "com1",
+    "com1.log",
+    "COM9",
+    "lpt1",
+    "lpt9.txt",
+    "com\u00b9",
+    "COM\u00b2.txt",
+    "lpt\u00b3",
+    "CONIN$",
+    "conout$",
+    "sub/nul",
+    ".magnusim-staging/x",
+    ".Magnusim-x",
+    "a/.magnusim-tmp-1.json",
+    "a/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d",
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+  ],
+  "refused_write": [
+    "studies/st-1/study.json",
+    "Studies/ST-1/Study.JSON",
+    "studies\\st-1\\study.json",
+    "./studies//st-1/./study.json",
+    "STUDIES/st-1/STUDY.JSON",
+    "studies/st-1/sub/study.json",
+    "studies/st-1/study.json "
+  ],
+  "study_containers": [
+    "studies",
+    "Studies",
+    "studies/st-1",
+    "Studies/ST-1",
+    "./studies/./st-1",
+    "studies/index.bin",
+    "STUDIES\\notes.json",
+    " studies/st-2 "
+  ]
+}

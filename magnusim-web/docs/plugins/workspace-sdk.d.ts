@@ -19,7 +19,7 @@ declare module '@magnusim/workspace' {
    * Self-contained: no imports, so the host can serve it to any frame.
    */
   /** The bridge's version; a host accepts a workspace built for the same major version. */
-  export const SDK_VERSION = "1.0.0";
+  export const SDK_VERSION = "1.1.0";
   /** A project-level study record (plugins/<key>/studies/<sid>/study.json) plus the plugin's own fields. */
   export interface StudyRecord {
       id: string;
@@ -50,6 +50,12 @@ declare module '@magnusim/workspace' {
       study: StudyRecord;
       units: UnitSystem;
       theme: ThemeInfo;
+      /**
+       * The host's bridge API version ("1.2"). To use a call a later host added,
+       * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2), or
+       * catch the refusal: an older host rejects a call it does not know with
+       * code "not_allowed".
+       */
       hostVersion: string;
   }
   export interface JobEvent {
@@ -68,10 +74,45 @@ declare module '@magnusim/workspace' {
       value?: string;
       confirmLabel?: string;
   }
+  /** A file in this plugin's folder of the project. */
+  export interface FileInfo {
+      /** Its path from the plugin's folder ("meshes/wing.stl"), spelled as on disk. */
+      rel: string;
+      size: number;
+      /** When it last changed (ISO-8601, UTC). */
+      mtime: string;
+      /** Changes whenever the file does; pass it as `ifMatch` to act only on the version you read. */
+      etag: string;
+  }
+  export interface FileWriteResult extends FileInfo {
+      /** The SHA-256 of what was written (hex). */
+      sha256: string;
+  }
+  export interface FileReadOptions {
+      /** The first byte to read (default 0). */
+      offset?: number;
+      /** How many bytes to read (default: to the end). */
+      length?: number;
+      /** Read only while the file has this etag (else rejects with code "changed"). */
+      ifMatch?: string;
+  }
+  export interface FileWriteOptions {
+      /** A string: replace only the version with this etag. null: only create a file that is not there yet. */
+      ifMatch?: string | null;
+      /** The data's SHA-256 (hex): the host checks it before the file is replaced. */
+      sha256?: string;
+      /** Called after each chunk has arrived, with the bytes sent so far and the total. */
+      onProgress?: (done: number, total: number) => void;
+      /** Aborting it stops the write; the file is left as it was. */
+      signal?: AbortSignal;
+  }
   export interface Workspace {
       readonly context: WorkspaceContext;
-      /** Any bridge call by name; the typed helpers below use it. Rejects with the host's message. */
-      call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+      /**
+       * Any bridge call by name; the typed helpers below use it. Rejects with the
+       * host's message. `transfer` hands buffers over instead of copying them.
+       */
+      call<T = unknown>(method: string, params?: Record<string, unknown>, transfer?: Transferable[]): Promise<T>;
       /** Call a method of this plugin's backend (its service, or its in-process methods). */
       service<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
       study: {
@@ -83,6 +124,34 @@ declare module '@magnusim/workspace' {
           /** A JSON file from this plugin's folder in the project (null when there is none). */
           read<T = unknown>(rel: string): Promise<T | null>;
           write(rel: string, doc: unknown): Promise<void>;
+      };
+      /**
+       * Files of any kind in the same folder (`data` is its JSON view). Paths are
+       * relative to it; a study's study.json is read-only here, and files go inside
+       * a study's folder (studies/<id>/...), never directly in studies/. Rejections
+       * carry `.code`: "changed", "too_large", "quota", "study_record",
+       * "study_not_found", "invalid_path", "not_found", "plugin_off", ...
+       */
+      files: {
+          /** The file's bytes, or a range of them (null when there is no such file). */
+          read(rel: string, opts?: FileReadOptions): Promise<ArrayBuffer | null>;
+          /** As read, as a Blob. */
+          readBlob(rel: string, opts?: FileReadOptions): Promise<Blob | null>;
+          stat(rel: string): Promise<FileInfo | null>;
+          /**
+           * Write a whole file: sent in chunks, and it replaces the old one only once
+           * every byte has arrived. A string is written as UTF-8. While the write is
+           * on its way, leaving the workspace asks the user first.
+           */
+          write(rel: string, data: ArrayBuffer | ArrayBufferView | Blob | string, opts?: FileWriteOptions): Promise<FileWriteResult>;
+          /** Every file under a folder ("": the plugin's folder), at any depth, sorted by rel. */
+          list(prefix?: string): Promise<FileInfo[]>;
+          /** Delete a file, or a folder with `recursive`; says how many files went. */
+          delete(rel: string, opts?: {
+              recursive?: boolean;
+          }): Promise<{
+              deleted: number;
+          }>;
       };
       jobs: {
           /** Start one of this plugin's job kinds; returns its id. */
@@ -104,12 +173,34 @@ declare module '@magnusim/workspace' {
           toast(message: string, opts?: {
               kind?: 'info' | 'success' | 'error';
           }): Promise<void>;
+          /**
+           * The app's own question dialog. The app shows one dialog at a time, so this
+           * one may wait its turn. Resolves false without showing it when the user has
+           * chosen to leave the workspace by then.
+           */
           confirm(opts: ConfirmOptions): Promise<boolean>;
+          /** The app's own name prompt, in turn as confirm: null when cancelled or not shown. */
           prompt(opts: PromptOptions): Promise<string | null>;
       };
       nav: {
-          /** Close the workspace and go back to the project. */
-          back(): Promise<void>;
+          /**
+           * Close the workspace and go back to the project. While the page is dirty
+           * the app asks the user first, and this resolves false if they choose to
+           * stay. When the workspace does close, this page unloads, so the promise
+           * may never settle.
+           */
+          back(): Promise<boolean>;
+          /**
+           * Mark or clear unsaved work (host 1.2). While dirty, every way out of the
+           * workspace asks the user first; closing or reloading the browser tab shows
+           * the browser's own prompt. `message` is plain text, at most 200 characters
+           * after cleaning, shown in the app's dialog after the plugin's name (never
+           * in the browser's prompt). The flag belongs to this page load: a reload of
+           * the frame, a closed channel or an approved leave clears it, so do not
+           * reload your own page while dirty. Clear it after saving, and before
+           * nav.back() to leave without a question.
+           */
+          setDirty(dirty: boolean, message?: string): Promise<void>;
       };
       /**
        * Live changes the host pushes. Returns a function that stops listening.

@@ -1,0 +1,22 @@
+key = "opt-demo"
+name = "Optional demo"
+version = "1.0.0"
+api_version = "1.1"
+license = "GPL-3.0-or-later"
+description = "Test plugin that ships with the app but stays off until someone turns it on (G11)"
+authors = "Magnusim"
+tier = "bundled"
+required = false
+default_enabled = false
+
+[[workspaces]]
+key = "bench"
+title = "Bench"
+icon = "M4 5h16v14H4z"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "opt_case"
+title = "Optional case"
+icon = "M5 19V5h14v14z"
+workspace = "bench"

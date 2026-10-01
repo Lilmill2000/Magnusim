@@ -39,4 +39,37 @@ describe('prefs single writer', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('keeps the plugins the worker turned on, and never writes plugin lists itself', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'magnusim-prefs-writer-'));
+    const jsonPath = join(dir, '.magnusim-local.json');
+    writeFileSync(jsonPath, JSON.stringify({ units: 'Metric' }));
+    try {
+      const script = [
+        "import { readFileSync, writeFileSync } from 'node:fs';",
+        "import { readLocalDoc, writeLocalDoc } from './scripts/prefs.js';",
+        'readLocalDoc();',
+        `const p = ${JSON.stringify(jsonPath)};`,
+        "const doc = JSON.parse(readFileSync(p, 'utf8'));",
+        "doc.plugins = { disabled: ['example-laminar'], enabled: ['opt-demo'] };",
+        "writeFileSync(p, JSON.stringify(doc));",
+        "writeLocalDoc({ units: 'Imperial' });",
+        // A Node caller that passes plugin lists does not get to write them.
+        "writeLocalDoc({ units: 'Metric', plugins: { enabled: [] }, 'plugins.enabled': [], 'plugins.disabled': [] });",
+      ].join('\n');
+      const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+        cwd: webRoot,
+        env: { ...process.env, MAGNUSIM_LOCAL_JSON: jsonPath },
+        encoding: 'utf8',
+      });
+      assert.equal(r.status, 0, r.stderr);
+      const saved = JSON.parse(readFileSync(jsonPath, 'utf8'));
+      assert.equal(saved.units, 'Metric');
+      assert.deepEqual(saved.plugins, { disabled: ['example-laminar'], enabled: ['opt-demo'] });
+      assert.equal('plugins.enabled' in saved, false);
+      assert.equal('plugins.disabled' in saved, false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -10,13 +10,14 @@ import os
 import re
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from cfddesk.registry.base import Registry, RegistryError
 from cfddesk.registry.bc_extend import BcExtensions
 from cfddesk.registry.hooks import get_hooks
-from cfddesk.registry.manifest import PluginManifest, StudyKind, WorkspaceSpec
+from cfddesk.registry.manifest import MB, FilesSpec, PluginManifest, StudyKind, WorkspaceSpec
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ class RegistryHub:
         self._methods: dict[tuple[str, str], Callable[..., Any]] = {}
         # Required bundled plugins that did not load: {key, name, error}.
         self.required_failures: list[dict[str, Any]] = []
+        # Folder plugins skipped because they are off (never imported): catalog rows.
+        self.off_plugins: list[dict[str, Any]] = []
 
     def registry(self, kind: str) -> Registry[Any]:
         if kind not in self._regs:
@@ -65,6 +68,7 @@ class RegistryHub:
         self._job_packages.clear()
         self._methods.clear()
         self.required_failures.clear()
+        self.off_plugins.clear()
         get_hooks().clear()
 
     def current_overrides(self, plugin: str) -> list[str]:
@@ -201,8 +205,23 @@ def _plugin_sources_signature(web_root: Path | str | None) -> tuple[Any, ...]:
     return tuple(out)
 
 
-def _disabled_plugins(web_root: Path | None) -> set[str]:
+@dataclass(frozen=True)
+class PluginState:
+    """The user's plugin choices on this PC (local JSON, written only by the worker).
+
+    ``disabled``: turned off. ``enabled``: turned on, which is what brings an
+    optional bundled plugin that ships off (``default_enabled = false``) in.
+    An explicit off wins when a key is in both.
+    """
+
+    disabled: frozenset[str] = frozenset()
+    enabled: frozenset[str] = frozenset()
+
+
+def plugin_state(web_root: Path | None) -> PluginState:
+    """The on/off lists from the local JSON and the legacy web-root file (union)."""
     disabled: set[str] = set()
+    enabled: set[str] = set()
     paths: list[Path] = []
     try:
         from cfddesk.wsl.config import local_json_path
@@ -224,11 +243,55 @@ def _disabled_plugins(web_root: Path | None) -> set[str]:
         plugins = data.get("plugins")
         if isinstance(plugins, dict):
             raw = plugins.get("disabled") or []
+            on = plugins.get("enabled") or []
+            if isinstance(on, list):
+                enabled.update(str(x) for x in on)
         else:
             raw = data.get("plugins.disabled") or []
         if isinstance(raw, list):
             disabled.update(str(x) for x in raw)
-    return disabled
+    return PluginState(frozenset(disabled), frozenset(enabled))
+
+
+def _disabled_plugins(web_root: Path | None) -> set[str]:
+    return set(plugin_state(web_root).disabled)
+
+
+def _manifest_bool(meta: dict[str, Any], name: str, default: bool) -> bool:
+    """A true/false manifest key (the line-fallback parser yields strings)."""
+    raw = meta.get(name, default)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+        return raw.strip().lower() == "true"
+    raise ValueError(f"{name} must be true or false")
+
+
+def tier_flags(meta: dict[str, Any], tier: str) -> tuple[bool, bool]:
+    """(required, default_enabled) for a plugin of ``tier``.
+
+    Both are bundled-tier keys: a user plugin is never required and is on unless
+    turned off. A required plugin cannot ship off.
+    """
+    if tier != "bundled":
+        return False, True
+    required = _manifest_bool(meta, "required", False)
+    default_enabled = _manifest_bool(meta, "default_enabled", True)
+    if required and not default_enabled:
+        raise ValueError("a required plugin cannot be off by default (default_enabled = false)")
+    return required, default_enabled
+
+
+def plugin_is_on(key: str, *, tier: str, required: bool, default_enabled: bool, state: PluginState) -> bool:
+    """Whether a plugin loads: required ones always, then an explicit off, then an
+    explicit on for a bundled plugin that ships off, else on."""
+    if tier == "bundled" and required:
+        return True
+    if key in state.disabled:
+        return False
+    if tier == "bundled" and not default_enabled:
+        return key in state.enabled
+    return True
 
 
 def _resolve_web_root(web_root: Path | str | None = None) -> Path | None:
@@ -611,6 +674,34 @@ def workspaces_from_meta(meta: dict[str, Any], plugin_dir: Path) -> list[Workspa
     return out
 
 
+def files_spec_from_meta(meta: dict[str, Any]) -> FilesSpec:
+    """Validate ``[files]``: max_file_mb (1..4096, default 64) and max_total_mb
+    (1..65536, default 512, at least max_file_mb), whole numbers of MB."""
+    raw = meta.get("files")
+    if raw is None:
+        return FilesSpec()
+    if not isinstance(raw, dict):
+        raise ValueError("must be a table")
+
+    def whole_mb(name: str, default: int, top: int) -> int:
+        value = raw.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be a whole number of MB, not {value!r}")
+        if not 1 <= value <= top:
+            raise ValueError(f"{name} must be between 1 and {top}, not {value}")
+        return value
+
+    file_mb = whole_mb("max_file_mb", 64, 4096)
+    total_mb = whole_mb("max_total_mb", 512, 65536)
+    if total_mb < file_mb:
+        raise ValueError(f"max_total_mb ({total_mb}) must be at least max_file_mb ({file_mb})")
+    return FilesSpec(file_mb * MB, total_mb * MB)
+
+
+def _files_row(spec: FilesSpec) -> dict[str, int]:
+    return {"max_file_bytes": spec.max_file_bytes, "max_total_bytes": spec.max_total_bytes}
+
+
 def _str_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [part.strip() for part in value.split(",") if part.strip()]
@@ -622,7 +713,6 @@ def _str_list(value: Any) -> list[str]:
 def _load_folder_plugin(
     plugin_dir: Path,
     hub: RegistryHub,
-    disabled: set[str],
     *,
     meta: dict[str, Any] | None = None,
     tier: str = "user",
@@ -634,10 +724,6 @@ def _load_folder_plugin(
         if meta is None:
             return None, failed
     key = str(meta.get("key") or plugin_dir.name)
-    required = tier == "bundled" and bool(meta.get("required"))
-    if key in disabled and not required:
-        log.info("Plugin %s disabled via .cfddesk-local.json", key)
-        return None, False
     api = str(meta.get("api_version") or "1.0")
     if not _api_compatible(api):
         ui, entry = _ui_fields(meta)
@@ -674,6 +760,11 @@ def _load_folder_plugin(
                 raise ValueError(f"study kind {kind.key}: workspace {kind.workspace!r} is not declared")
     except ValueError as exc:
         hub.failures.append(_failure_row(key, f"manifest [[workspaces]]: {exc}", meta))
+        return None, True
+    try:
+        files = files_spec_from_meta(meta)
+    except ValueError as exc:
+        hub.failures.append(_failure_row(key, f"manifest [files]: {exc}", meta))
         return None, True
     from cfddesk.registry.plugin_env import python_env_from_meta
 
@@ -712,6 +803,7 @@ def _load_folder_plugin(
         _apply_tier_meta(result, meta, tier)
         result.study_kinds = kinds
         result.workspaces = workspaces
+        result.files = files
         result.python_env = python_env
         hub._loading_overrides.pop(key, None)
         return result, False
@@ -748,6 +840,7 @@ def _load_folder_plugin(
         license=str(meta.get("license") or ""),
         study_kinds=kinds,
         workspaces=workspaces,
+        files=files,
         python_env=python_env,
     )
     _apply_tier_meta(manifest, meta, tier)
@@ -759,7 +852,7 @@ def _apply_tier_meta(result: PluginManifest, meta: dict[str, Any], tier: str) ->
     from cfddesk.registry.base import protect
 
     result.tier = "bundled" if tier == "bundled" else "user"
-    result.required = result.tier == "bundled" and bool(meta.get("required"))
+    result.required, result.default_enabled = tier_flags(meta, result.tier)
     result.requires_plugins = _str_list(meta.get("requires_plugins"))
     result.protected = _str_list(meta.get("protected")) if result.tier == "bundled" else []
     for token in result.protected:
@@ -808,14 +901,19 @@ def _version_tuple(v: str) -> tuple[int, ...]:
     return tuple(out)
 
 
-def _requirement_met(req: str, manifests: dict[str, PluginManifest]) -> str | None:
-    """None when ``req`` ("key" or "key>=1.0") is satisfied, else why not."""
+def _requirement_met(
+    req: str, manifests: dict[str, PluginManifest], off: dict[str, str] | None = None
+) -> str | None:
+    """None when ``req`` ("key" or "key>=1.0") is satisfied, else why not.
+    ``off``: plugins skipped because they are off, {key: name}."""
     m = _REQ_RE.match(req)
     if not m:
         return f"bad plugin requirement {req!r}"
     key, op, want = m.group(1), m.group(2), m.group(3)
     have = manifests.get(key)
     if have is None:
+        if off and key in off:
+            return f"needs the {off[key]} plugin, which is off"
         return f"needs the {key} plugin"
     if op:
         a, b = _version_tuple(have.version), _version_tuple(want or "0")
@@ -868,24 +966,38 @@ def _dependency_order(
 def _load_ordered(
     found: list[tuple[Path, dict[str, Any]]],
     hub: RegistryHub,
-    disabled: set[str],
+    state: PluginState,
     *,
     tier: str,
 ) -> tuple[list[PluginManifest], bool]:
     source = "bundled" if tier == "bundled" else "local"
     manifests: list[PluginManifest] = []
     had_failures = False
+    off_names = {str(r.get("key")): str(r.get("name")) for r in hub.off_plugins}
     for child, meta in _dependency_order(found, hub, source=source):
         key = str(meta.get("key") or child.name)
-        unmet = [why for req in _str_list(meta.get("requires_plugins")) if (why := _requirement_met(req, hub.manifests))]
+        try:
+            required, default_enabled = tier_flags(meta, tier)
+        except ValueError as exc:
+            hub.failures.append(_failure_row(key, f"manifest: {exc}", meta, source=source))
+            had_failures = True
+            continue
+        # Decided before anything is imported: a plugin that is off is never run.
+        if not plugin_is_on(key, tier=tier, required=required, default_enabled=default_enabled, state=state):
+            log.info("Plugin %s is off", key)
+            hub.off_plugins.append(_off_row(child, meta, key, tier, default_enabled))
+            off_names[key] = str(meta.get("name") or key)
+            continue
+        unmet = [
+            why
+            for req in _str_list(meta.get("requires_plugins"))
+            if (why := _requirement_met(req, hub.manifests, off_names))
+        ]
         if unmet:
-            required = tier == "bundled" and bool(meta.get("required"))
-            if key in disabled and not required:
-                continue
             hub.failures.append(_failure_row(key, "; ".join(unmet), meta, source=source))
             had_failures = True
             continue
-        m, failed = _load_folder_plugin(child, hub, disabled, meta=meta, tier=tier)
+        m, failed = _load_folder_plugin(child, hub, meta=meta, tier=tier)
         if failed:
             had_failures = True
         if m is not None:
@@ -893,6 +1005,25 @@ def _load_ordered(
             hub.note_plugin_dir(m.key, child)
             manifests.append(m)
     return manifests, had_failures
+
+
+def _off_row(child: Path, meta: dict[str, Any], key: str, tier: str, default_enabled: bool) -> dict[str, Any]:
+    """What the catalog shows of a folder plugin that is off (from its manifest only)."""
+    ui, entry = _ui_fields(meta)
+    return {
+        "key": key,
+        "name": str(meta.get("name") or key),
+        "version": str(meta.get("version") or "0.0.0"),
+        "description": str(meta.get("description") or ""),
+        "authors": _authors(meta.get("authors")),
+        "ui": ui,
+        "ui_entry": entry,
+        "license": str(meta.get("license") or ""),
+        "tier": "bundled" if tier == "bundled" else "user",
+        "source": "bundled" if tier == "bundled" else "local",
+        "dir": child.name,
+        "default_enabled": default_enabled,
+    }
 
 
 def _scan_plugin_dir(folder: Path | None, hub: RegistryHub) -> tuple[list[tuple[Path, dict[str, Any]]], bool]:
@@ -923,8 +1054,8 @@ def discover_bundled_plugins(
     """
     folder = bundled_dir_for(_resolve_web_root(web_root))
     found, scan_failed = _scan_plugin_dir(folder, hub)
-    disabled = _disabled_plugins(_resolve_web_root(web_root))
-    manifests, failed = _load_ordered(found, hub, disabled, tier="bundled")
+    state = plugin_state(_resolve_web_root(web_root))
+    manifests, failed = _load_ordered(found, hub, state, tier="bundled")
     hub.required_failures.clear()
     for key, name in REQUIRED_BUNDLED.items():
         if key in hub.manifests:
@@ -968,7 +1099,7 @@ def discover_folder_plugins(
     if root is None:
         return [], False
     found, scan_failed = _scan_plugin_dir(plugins_dir_for(root), hub)
-    manifests, failed = _load_ordered(found, hub, _disabled_plugins(Path(root)), tier="user")
+    manifests, failed = _load_ordered(found, hub, plugin_state(Path(root)), tier="user")
     return manifests, (scan_failed or failed)
 
 
@@ -1052,6 +1183,7 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
     hub.manifests.clear()
     hub.failures.clear()
     hub.incompatible.clear()
+    hub.off_plugins.clear()
     hub._loading_overrides.clear()
     _purge_plugin_modules()
     get_hooks().clear()
@@ -1103,11 +1235,15 @@ def _catalog_row(
     python_env: dict[str, Any] | None = None,
     notes: list[str] | None = None,
     workspaces: list[dict[str, Any]] | None = None,
+    default_enabled: bool = True,
+    files: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     return {
         # "bundled" ships with the app; a required one cannot be turned off.
         "tier": tier,
         "required": required,
+        # False: an optional bundled plugin that ships off until someone turns it on.
+        "default_enabled": default_enabled,
         "key": key,
         # Folder name under the plugins root (never a full path); a manifest key
         # may differ from it, and the UI files are served from the folder.
@@ -1131,6 +1267,8 @@ def _catalog_row(
         "notes": list(notes or []),
         # Full workspaces it draws in a sandboxed frame.
         "workspaces": list(workspaces or []),
+        # Size limits (bytes) for its own files in a project; the defaults when not loaded.
+        "files": dict(files) if files else _files_row(FilesSpec()),
     }
 
 
@@ -1158,7 +1296,8 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
 
     hub = get_hub()
     root = _resolve_web_root(web_root)
-    disabled = _disabled_plugins(root)
+    state = plugin_state(root)
+    disabled = set(state.disabled)
     # The real environment: programs in WSL (cached probe; None until it answers),
     # each plugin's own packages (its environment's stamp), an NVIDIA GPU.
     wsl_names = {
@@ -1190,7 +1329,10 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
         reasons = [str(item.reason) for item in missing if item.blocking]
         notes = [str(item.reason) for item in missing if not item.blocking]
         required = bool(getattr(manifest, "required", False))
-        if manifest.key in disabled and not required:
+        tier = str(getattr(manifest, "tier", "user") or "user")
+        default_enabled = bool(getattr(manifest, "default_enabled", True))
+        # The lists as they are now (a hand edit, or a change the hub has not reloaded).
+        if not plugin_is_on(manifest.key, tier=tier, required=required, default_enabled=default_enabled, state=state):
             status = "disabled"
         elif env_row is not None and env_row.get("state") != "ready":
             status = "needs setup"
@@ -1216,7 +1358,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 missing=reasons,
                 dir=folder.name if folder is not None else None,
                 license=str(manifest.license or ""),
-                tier=str(getattr(manifest, "tier", "user") or "user"),
+                tier=tier,
                 required=required,
                 python_env=_env_row_public(env_row),
                 notes=notes,
@@ -1224,6 +1366,28 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                     {"key": w.key, "title": w.title, "icon": w.icon, "entry": w.entry}
                     for w in (manifest.workspaces or [])
                 ],
+                default_enabled=default_enabled,
+                files=_files_row(getattr(manifest, "files", None) or FilesSpec()),
+            )
+        )
+    # Folder plugins that are off: listed from their manifest, so they can be turned on.
+    for row in hub.off_plugins:
+        add(
+            _catalog_row(
+                key=str(row["key"]),
+                name=str(row["name"]),
+                version=str(row["version"]),
+                description=str(row["description"]),
+                authors=list(row["authors"]),
+                ui=row["ui"],
+                ui_entry=str(row["ui_entry"]),
+                source=str(row["source"]),
+                status="disabled",
+                enabled=False,
+                dir=str(row["dir"]),
+                license=str(row["license"]),
+                tier=str(row["tier"]),
+                default_enabled=bool(row["default_enabled"]),
             )
         )
     for row in hub.required_failures:

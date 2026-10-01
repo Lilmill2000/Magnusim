@@ -1243,28 +1243,26 @@ def plugin_studies_update(
     return {"ok": True, "study": rec}
 
 
-# `:` (drive letters, NTFS streams) and `~` (8.3 short names) can alias another file on Windows.
-_DATA_PART_BAD = re.compile(r"[:~\x00-\x1f]")
 _STUDY_RECORD_WRITE = "a study's record changes only through the study calls"
 
 
 def _is_study_record(parts: list[str] | tuple[str, ...]) -> bool:
     """studies/<sid>/study.json in any spelling Windows opens as that file."""
-    norm = [str(p).rstrip(" .").lower() for p in parts]
-    return len(norm) >= 3 and norm[0] == "studies" and norm[-1] == "study.json"
+    from cfddesk.registry.plugin_data import is_study_record
+
+    return is_study_record(parts)
 
 
 def _plugin_data_rel(rel: str, *, write: bool) -> str:
-    """A path in the plugin's data folder as a workspace may name it: relative,
-    no `..` and no Windows aliases. A write never reaches a study's record, which
-    changes only through the study calls (they check its rev)."""
-    text = str(rel or "").replace("\\", "/").strip()
-    parts = [part for part in text.split("/") if part not in ("", ".")]
-    if not parts or text.startswith("/") or any(part == ".." or _DATA_PART_BAD.search(part) for part in parts):
-        raise RpcError(-32602, "a path inside the plugin's data folder is required")
-    if write and _is_study_record(parts):
-        raise RpcError(-32602, _STUDY_RECORD_WRITE)
-    return "/".join(parts)
+    """A path in the plugin's data folder as a workspace may name it (the rules
+    are magnusim_sdk.data.data_rel). A write never reaches a study's record,
+    which changes only through the study calls (they check its rev)."""
+    from cfddesk.registry.plugin_data import PluginDataError, data_rel
+
+    try:
+        return data_rel(rel, write=write)
+    except PluginDataError as exc:
+        raise RpcError(-32602, str(exc)) from exc
 
 
 _PLUGIN_DATA_MAX = 8 * 1024 * 1024
@@ -1281,14 +1279,22 @@ def plugin_data_read(project_id: str = "", plugin: str = "", rel: str = "") -> d
 @rpc("plugin_data.write")
 def plugin_data_write(project_id: str = "", plugin: str = "", rel: str = "", doc: Any = None) -> dict[str, Any]:
     """Save a JSON file in the plugin's own folder in the project (8 MB at most)."""
+    from cfddesk.registry.manifest import FilesSpec
+
     data = _plugin_data_for(str(project_id or "").strip(), plugin)
     path = _plugin_data_rel(rel, write=True)
-    # Checked again where it lands (the resolved path has Windows' long, real names).
-    target = _study_call(data.path, path)
+    # Checked again where it lands (the resolved path has Windows' long, real names);
+    # a file in a study's folder needs the study.
+    target = _study_call(data.file_path, path, write=True)
     if _is_study_record(target.relative_to(data.root.resolve()).parts):
         raise RpcError(-32602, _STUDY_RECORD_WRITE)
     if len(json.dumps(doc)) > _PLUGIN_DATA_MAX:
         raise RpcError(-32602, "that file is larger than 8 MB")
+    # One folder, two views: the plugin's [files] quota holds for ws.data as for ws.files.
+    manifest = load_all(web_root=web_root()).manifests.get(data.plugin)
+    spec = manifest.files if manifest is not None else FilesSpec()
+    size = len(json.dumps(doc, indent=2, ensure_ascii=False).encode("utf-8", "surrogatepass")) + 1
+    _study_call(data.check_room, target, size, spec.max_total_bytes)
     _study_call(data.write_json, path, doc)
     return {"ok": True}
 
@@ -1478,16 +1484,6 @@ def _write_local(doc: dict[str, Any]) -> None:
     ww.atomic_write(local_json_path(), doc)
 
 
-def _disabled() -> list[str]:
-    data = _local_doc()
-    plugins = data.get("plugins")
-    if isinstance(plugins, dict):
-        raw = plugins.get("disabled") or []
-    else:
-        raw = data.get("plugins.disabled") or []
-    return [str(x) for x in raw] if isinstance(raw, list) else []
-
-
 @rpc("plugins.list")
 def plugins_list() -> dict[str, Any]:
     root = web_root()
@@ -1496,35 +1492,58 @@ def plugins_list() -> dict[str, Any]:
 
 
 def _set_plugin_enabled(key: str, enabled: bool) -> dict[str, Any]:
+    """Turn a plugin on or off: the worker is the one writer of both lists.
+
+    ``plugins.disabled``: turned off. ``plugins.enabled``: turned on, kept for
+    bundled plugins that are not required, so an optional one that ships off
+    (``default_enabled = false``) stays on, and the choice survives a later version
+    changing its default.
+    """
     from cfddesk.registry.discovery import REQUIRED_BUNDLED
 
+    key = str(key)
     hub = load_all(web_root=web_root())
-    manifest = hub.manifests.get(str(key))
-    if not enabled and (str(key) in REQUIRED_BUNDLED or bool(getattr(manifest, "required", False))):
-        name = REQUIRED_BUNDLED.get(str(key)) or getattr(manifest, "name", key)
+    manifest = hub.manifests.get(key)
+    off_row = next((r for r in hub.off_plugins if str(r.get("key")) == key), None)
+    required = key in REQUIRED_BUNDLED or bool(getattr(manifest, "required", False))
+    if not enabled and required:
+        name = REQUIRED_BUNDLED.get(key) or getattr(manifest, "name", key)
         raise RpcError(-32602, f"{name} is required and cannot be turned off")
+    tier = str(getattr(manifest, "tier", "") or (off_row or {}).get("tier") or "")
+    optional_bundled = tier == "bundled" and not required
     doc = _local_doc()
     plugins = doc.get("plugins")
     if not isinstance(plugins, dict):
         plugins = {}
     disabled = [str(x) for x in (plugins.get("disabled") or [])]
-    key = str(key)
+    # A file that held only the flat "plugins.disabled" list: fold it in, or the
+    # nested object written below would hide it from discovery.
+    flat = doc.pop("plugins.disabled", None)
+    if isinstance(flat, list):
+        disabled += [str(x) for x in flat if str(x) not in disabled]
+    on = [str(x) for x in (plugins.get("enabled") or [])]
     if enabled:
         disabled = [d for d in disabled if d != key]
-    elif key not in disabled:
-        disabled.append(key)
+        if optional_bundled and key not in on:
+            on.append(key)
+    else:
+        if key not in disabled:
+            disabled.append(key)
+        on = [k for k in on if k != key]
     plugins["disabled"] = disabled
+    if on or "enabled" in plugins:
+        plugins["enabled"] = on
     doc["plugins"] = plugins
     _write_local(doc)
-    if enabled:
-        _drop_from_legacy_disabled(key)
+    _drop_from_legacy(key, "disabled" if enabled else "enabled")
     registry_reload()
     return plugins_list()
 
 
-def _drop_from_legacy_disabled(key: str) -> None:
-    """Discovery also reads the legacy web-root .cfddesk-local.json; a key disabled
-    there would stay disabled forever, since Enable edits only the current file."""
+def _drop_from_legacy(key: str, field: str) -> None:
+    """Discovery also reads the legacy web-root .cfddesk-local.json (a union): a key
+    left in its ``field`` list ("disabled" or "enabled") would keep undoing the
+    choice just made, since Enable and Disable edit only the current file."""
     legacy = web_root() / ".cfddesk-local.json"
     try:
         if not legacy.is_file() or legacy.resolve() == local_json_path().resolve():
@@ -1536,16 +1555,16 @@ def _drop_from_legacy_disabled(key: str) -> None:
         return
     changed = False
     plugins = data.get("plugins")
-    if isinstance(plugins, dict) and isinstance(plugins.get("disabled"), list):
-        kept = [str(x) for x in plugins["disabled"] if str(x) != key]
-        if len(kept) != len(plugins["disabled"]):
-            plugins["disabled"] = kept
+    if isinstance(plugins, dict) and isinstance(plugins.get(field), list):
+        kept = [str(x) for x in plugins[field] if str(x) != key]
+        if len(kept) != len(plugins[field]):
+            plugins[field] = kept
             changed = True
-    flat = data.get("plugins.disabled")
+    flat = data.get(f"plugins.{field}")
     if isinstance(flat, list):
         kept = [str(x) for x in flat if str(x) != key]
         if len(kept) != len(flat):
-            data["plugins.disabled"] = kept
+            data[f"plugins.{field}"] = kept
             changed = True
     if changed:
         ww.atomic_write(legacy, data)
