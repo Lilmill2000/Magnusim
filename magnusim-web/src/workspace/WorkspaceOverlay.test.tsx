@@ -604,6 +604,33 @@ describe('the workspace overlay', () => {
     await waitFor(() => expect(focus).toHaveBeenCalledTimes(2));
   });
 
+  it('takes the keyboard back only when a panel really closes: hiding one that is already hidden (as the Queue sync does) does not', async () => {
+    const { frame } = await open();
+    await connect(frame);
+    await nextFrame();
+    await nextFrame();
+    const focus = vi.spyOn(frame, 'focus');
+    for (const id of ['modal-confirm', 'modal-prompt', 'setup-wizard', 'job-queue-chip']) {
+      const el = $(`#${id}`);
+      // The user clicked the header's plain text: the keyboard is on the page body.
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.activeElement, id).toBe(document.body);
+      expect(el.hidden, id).toBe(true);
+      el.hidden = true;
+      await nextFrame();
+      await nextFrame();
+      await later();
+      expect(focus, id).not.toHaveBeenCalled();
+      expect(document.activeElement, id).toBe(document.body);
+      // Shown, then closed: the keyboard goes back to the page.
+      el.hidden = false;
+      await nextFrame();
+      el.hidden = true;
+      await waitFor(() => expect(focus, id).toHaveBeenCalledTimes(1));
+      focus.mockClear();
+    }
+  });
+
   it("ends the page's full screen when the page closes", async () => {
     const { view, frame } = await open();
     await connect(frame);

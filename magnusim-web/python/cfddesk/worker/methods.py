@@ -1081,8 +1081,15 @@ def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], l
         kinds = {k.key: k for k in (manifest.study_kinds if manifest is not None else [])}
         for rec in PluginData(root, key).studies():
             kind = kinds.get(str(rec.get("kind") or ""))
-            name = str((catalog.get(key) or {}).get("name") or rec.get("plugin_name") or key)
-            needs_setup = str((catalog.get(key) or {}).get("status") or "") == "needs setup"
+            row = catalog.get(key) or {}
+            # A plugin that failed to load may be listed only by its folder: the study
+            # keeps the name its plugin had, as it does for a plugin that is off.
+            listed = "" if str(row.get("status") or "") == "error" else str(row.get("name") or "")
+            name = next(
+                (n for n in (listed, str(rec.get("plugin_name") or ""), str(row.get("name") or "")) if n and n != key),
+                key,
+            )
+            needs_setup = str(row.get("status") or "") == "needs setup"
             why = (
                 f"{name} needs setup: install its dependencies in Settings > Plugins"
                 if needs_setup

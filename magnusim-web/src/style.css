@@ -5018,6 +5018,16 @@ body.is-recording #viewport-gizmo {
 .plugin-study.is-unavailable > .tree-row { opacity: 0.55; }
 .plugin-study.is-unavailable > .tree-row [data-plugin-study-act="delete"] { opacity: 1; }
 .plugin-study-reason { font-size: 11px; color: #667085; padding: 2px 0 4px 21px; }
+/* Its Settings link: an inline link like the tree's others, not a browser button. */
+.plugin-study-settings {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--mg-primary-hover);
+  cursor: pointer;
+}
+.plugin-study-settings:hover { text-decoration: underline; }
 
 /* ---- Plugin workspaces (H13): a sandboxed frame over the workbench ---- */
 .workspace-overlay[hidden] { display: none !important; }

@@ -101,7 +101,7 @@ describe('browser Back, Forward and typed links away from a dirty workspace', ()
     await settle();
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(confirm).toHaveBeenCalledWith(
-      asked({ title: LEAVE, copy: 'Workspace demo: Chord not saved Leaving discards them.', yes: 'Leave', no: 'Stay', safe: true }),
+      asked({ title: LEAVE, copy: 'Workspace demo: Chord not saved. Leaving discards them.', yes: 'Leave', no: 'Stay', safe: true }),
     );
     // Stay: nothing more.
     expect(back).not.toHaveBeenCalled();
@@ -250,6 +250,47 @@ describe('the leave question', () => {
     );
   });
 
+  it('reads right whether or not the page message ends like a sentence', async () => {
+    const copies = async (message: string): Promise<[string, string]> => {
+      setWorkspaceDirty(true, message);
+      await confirmLeaveWorkspace('back');
+      const leave = String(confirm.mock.lastCall?.[0].copy);
+      await confirmLeaveWorkspace('plugin-off');
+      return [leave, String(confirm.mock.lastCall?.[0].copy)];
+    };
+    const off = (note: string) => `Its workspace is open with changes that are not saved${note}. Turning it off closes the workspace and discards them.`;
+    // Leave: the message is a sentence of its own. Turn off: its own full stop does not end up inside the parentheses.
+    expect(await copies('Changes to Bracket are not saved yet.')).toEqual([
+      'Workspace demo: Changes to Bracket are not saved yet. Leaving discards them.',
+      off(' (Changes to Bracket are not saved yet)'),
+    ]);
+    expect(await copies('Changes to Bracket are not saved yet')).toEqual([
+      'Workspace demo: Changes to Bracket are not saved yet. Leaving discards them.',
+      off(' (Changes to Bracket are not saved yet)'),
+    ]);
+    expect(await copies('Save the chord first!')).toEqual(['Workspace demo: Save the chord first! Leaving discards them.', off(' (Save the chord first)')]);
+    expect(await copies('Keep the new chord?')).toEqual(['Workspace demo: Keep the new chord? Leaving discards them.', off(' (Keep the new chord)')]);
+    // One mark goes, with the space before it; a message that is nothing else has no parentheses.
+    expect((await copies('Chord not saved .'))[1]).toBe(off(' (Chord not saved)'));
+    expect((await copies('.'))[1]).toBe(off(''));
+    // A run of marks stays as typed.
+    expect(await copies('Not saved...')).toEqual(['Workspace demo: Not saved... Leaving discards them.', off(' (Not saved...)')]);
+    expect(await copies('Not saved?!')).toEqual(['Workspace demo: Not saved?! Leaving discards them.', off(' (Not saved?!)')]);
+    // An ellipsis, or a closing quote or bracket after a mark, ends a sentence too.
+    expect(await copies('Saving\u{2026}')).toEqual(['Workspace demo: Saving\u{2026} Leaving discards them.', off(' (Saving\u{2026})')]);
+    expect(await copies('Bracket is "not saved."')).toEqual([
+      'Workspace demo: Bracket is "not saved." Leaving discards them.',
+      off(' (Bracket is "not saved.")'),
+    ]);
+    expect((await copies('Bracket is \u{201C}not saved.\u{201D}'))[0]).toBe(
+      'Workspace demo: Bracket is \u{201C}not saved.\u{201D} Leaving discards them.',
+    );
+    expect((await copies("Bracket is 'not saved!'"))[0]).toBe("Workspace demo: Bracket is 'not saved!' Leaving discards them.");
+    expect((await copies('Bracket (not saved.)'))[0]).toBe('Workspace demo: Bracket (not saved.) Leaving discards them.');
+    // A quote with no mark before it is not the end of a sentence.
+    expect((await copies('Bracket is "dirty"'))[0]).toBe('Workspace demo: Bracket is "dirty". Leaving discards them.');
+  });
+
   it('shows the plugin and study names as plain text that cannot reorder its words, the title at most 120 characters', async () => {
     // A title the page saved with study.update, and a plugin name from its manifest.
     const title = `Wing section\u{202e}${' .ecalp ni devas era segnahc llA'.repeat(8)}`;
@@ -269,7 +310,7 @@ describe('the leave question', () => {
     unregister = registerOpenWorkspace({ ...workspace, pluginName: () => '\u{202e}', studyTitle: () => ' \n' });
     setWorkspaceDirty(true, 'Chord\u{202e} not\nsaved');
     await confirmLeaveWorkspace('back');
-    expect(confirm.mock.calls[2][0].copy).toBe('ws-demo: Chord not saved Leaving discards them.');
+    expect(confirm.mock.calls[2][0].copy).toBe('ws-demo: Chord not saved. Leaving discards them.');
     setWorkspaceDirty(true, '');
     await confirmLeaveWorkspace('back');
     expect(confirm.mock.calls[3][0].copy).toBe('ws-demo has changes to "st-1" that are not saved. Leaving discards them.');

@@ -409,7 +409,8 @@ function stop(e: { preventDefault(): void; stopPropagation(): void }) {
  * Project-level studies plugins own (plugins/<key>/studies). Not bound to a
  * geometry: shown in every stage, the empty project included. A study whose
  * plugin is off or missing stays, greyed, with the reason and a link to
- * Settings → Plugins; it can be deleted but not opened or renamed.
+ * Settings → Plugins; it can be deleted but not opened or renamed. "+ New"
+ * names a study and opens it in its workspace when its kind has one.
  */
 export function PluginStudiesView({
   projectId,
@@ -432,7 +433,14 @@ export function PluginStudiesView({
               className="js-btn"
               data-plugin-study-new={`${k.plugin}:${k.key}`}
               title={`New ${k.title} (${k.plugin_name})`}
-              onClick={() => onTreeAction(pluginStudyScope(projectId, k.plugin), 'plugin-study-new', { kind: k.key, title: k.title })}
+              onClick={() =>
+                // The plugin's study titles, so the name prompt offers a free "<Kind> N".
+                onTreeAction(pluginStudyScope(projectId, k.plugin), 'plugin-study-new', {
+                  kind: k.key,
+                  title: k.title,
+                  titles: studies.filter((st) => st.plugin === k.plugin).map((st) => st.title),
+                })
+              }
             >
               + New {k.title}
             </button>
@@ -514,7 +522,7 @@ export function PluginStudiesView({
                 {st.reason}.{' '}
                 <button
                   type="button"
-                  className="sim-fix-go"
+                  className="plugin-study-settings"
                   onClick={(e) => {
                     stop(e);
                     onTreeAction(st.scope_key, 'open-plugin-settings');

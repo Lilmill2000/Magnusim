@@ -59,6 +59,7 @@ import {
 } from '../analysis';
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
+import { newPluginStudy, shownStudyTitles } from '../chrome/studyName';
 import { subscribeJobEvents } from '../api/client';
 import { parsePluginScope, scopeBelongsToProject, scopeKey, studyIdFromScope } from '../scope';
 import {
@@ -6472,17 +6473,19 @@ async function handlePluginStudyAction(ps, action, detail) {
     return;
   }
   if (action === 'plugin-study-new') {
-    const kindTitle = String(detail.title || 'study');
-    const title = await promptName({ title: 'New ' + kindTitle, label: 'Name', value: kindTitle + ' 1', yes: 'Create' });
-    if (!title || !String(title).trim()) return;
-    const r = await post('create', { kind: String(detail.kind || ''), title: String(title).trim() });
-    if (!r.json || !r.json.ok) await notice('Could not create the study', (r.json && r.json.error) || 'The study was not created.');
-    sync();
-    // From the Workspaces menu: open the new study in its workspace.
-    const made = r.json && r.json.ok ? r.json.study : null;
-    if (detail.open && made && made.workspace && made.id) {
-      location.hash = workspaceHash({ projectId: pid, plugin: ps.plugin, workspace: String(made.workspace), studyId: String(made.id) });
-    }
+    // Named and made, then opened in its workspace if its kind has one and the
+    // user is still on the same project and page (../chrome/studyName).
+    await newPluginStudy(detail, {
+      shownTitles: () => shownStudyTitles(ps.plugin),
+      promptName,
+      create: (body) => post('create', body),
+      notice,
+      sync,
+      where: () => String(currentProjectId() || '') + ' ' + location.hash,
+      open: (workspace, studyId) => {
+        location.hash = workspaceHash({ projectId: pid, plugin: ps.plugin, workspace, studyId });
+      },
+    });
     return;
   }
   if (action === 'plugin-study-rename') {

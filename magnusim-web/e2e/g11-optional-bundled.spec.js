@@ -3,20 +3,42 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { prepareE2eProjectsRoot } from './prepare-projects.js';
+import { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from './prepare-projects.js';
 
 // G11, an optional bundled plugin that ships off (manifest default_enabled = false),
 // as the user meets it: existing projects look unchanged (no STUDIES, no Workspaces
 // menu, nothing served), a link into its workspace says it is off, Settings lists it
 // Off with a note, Enable brings its launchers at once, the choice survives a units
 // save and a registry reload, and Disable takes it away again with its study kept.
-// A second app server whose bundled folder holds Incompressible Flow plus the
-// opt-demo fixture (python/tests/fixtures/optional-plugins).
+// Then a bundled plugin whose manifest does not parse: its study names the plugin it
+// needs, and Settings lists it as bundled, by its name, with the parser's line and column.
+// A second app server whose bundled folder holds Incompressible Flow, the opt-demo
+// fixture (python/tests/fixtures/optional-plugins) and two broken plugins written here.
 const PROJECT = 'sample-project-steady-state-e2e';
 const KEY = 'opt-demo';
+// Bundled plugins whose manifest.toml does not parse, each with a study in the project
+// with no geometry (saved while the plugin still worked).
+const BROKEN = 'broken-demo';
+const NAMELESS = 'broken-noname';
 
 function stage(t0, msg) {
   console.log(`[g11 +${Math.round((Date.now() - t0) / 1000)}s] ${msg}`);
+}
+
+// A plugin folder whose manifest is these lines (line N of the file is lines[N - 1]).
+function writePlugin(folder, lines) {
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'manifest.toml'), lines.join('\n') + '\n');
+  writeFileSync(join(folder, 'plugin.py'), 'def register(hub):\n    return None\n');
+}
+
+// A study record as the plugin's SDK saves it: plugins/<key>/studies/<id>/study.json in the project.
+function writeStudy(projects, pid, plugin, rec) {
+  const folder = join(projects, pid, 'plugins', plugin, 'studies', rec.id);
+  mkdirSync(folder, { recursive: true });
+  const at = '2026-10-01T00:00:00Z';
+  const full = { kind: 'part', schema_version: 1, rev: 1, plugin, plugin_version: '1.0.0', created_at: at, updated_at: at, ...rec };
+  writeFileSync(join(folder, 'study.json'), JSON.stringify(full, null, 2));
 }
 
 async function waitUp(url, ms) {
@@ -54,6 +76,25 @@ test('gate:g11-optional-bundled a plugin that ships off is listed, turned on, re
     filter: (src) => !/[\\/](tests|__pycache__)([\\/]|$)/.test(src),
   });
   cpSync(resolve('python/tests/fixtures/optional-plugins/opt-demo'), join(bundled, KEY), { recursive: true });
+  // Line 4 has no "=" (the parser stops at column 13); the name on line 2 still reads.
+  writePlugin(join(bundled, BROKEN), [
+    `key = "${BROKEN}"`,
+    'name = "Broken demo"',
+    'version = "1.0.0"',
+    'api_version "1.2"',
+    'license = "GPL-3.0-or-later"',
+    'required = false',
+    '',
+    '[[study_kinds]]',
+    'key = "part"',
+    'title = "Part"',
+    'icon = "M5 19V5h14v14z"',
+  ]);
+  // The name is not quoted: the parser stops on line 2, column 8, and there is no name to show.
+  writePlugin(join(bundled, NAMELESS), [`key = "${NAMELESS}"`, 'name = Nameless demo', 'version = "1.0.0"', 'api_version = "1.2"']);
+  // Saved while the plugin had another name: its study keeps that one, not the manifest's now.
+  writeStudy(projects, NO_GEOMETRY_PROJECT, BROKEN, { id: 'st-broken-1', title: 'Bracket', plugin_name: 'Older demo' });
+  writeStudy(projects, NO_GEOMETRY_PROJECT, NAMELESS, { id: 'st-nameless-1', title: 'Housing', plugin_name: 'Nameless demo' });
   const plugins = join(tmp, 'plugins');
   mkdirSync(plugins);
   const prefs = join(tmp, 'prefs.json');
@@ -153,6 +194,40 @@ test('gate:g11-optional-bundled a plugin that ships off is listed, turned on, re
     expect(lists()).toEqual({ disabled: [KEY], enabled: [] });
     expect((await request.get(`${base}/plugins/${KEY}/workspace/index.html`)).status()).toBe(404);
     stage(t0, 'turned off: launchers gone, study kept greyed');
+
+    // gate:g11-broken-manifest: a study of a plugin whose manifest does not parse says which
+    // plugin it needs by the name the study saved (as for a plugin that is off), never by
+    // its folder, nor by the name a line of the broken manifest still gives ("Broken demo").
+    await page.goto(`${base}/#/p/${NO_GEOMETRY_PROJECT}`);
+    await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, NO_GEOMETRY_PROJECT, { timeout: 60_000 });
+    const broken = page.locator('#plugin-studies-section [data-plugin-study="st-broken-1"]');
+    await expect(broken).toHaveAttribute('data-unavailable', '1');
+    await expect(broken.locator('[data-plugin-study-reason]')).toHaveText('Requires the Older demo plugin. Open Settings → Plugins');
+    const nameless = page.locator('#plugin-studies-section [data-plugin-study="st-nameless-1"]');
+    await expect(nameless).toHaveAttribute('data-unavailable', '1');
+    await expect(nameless.locator('[data-plugin-study-reason]')).toHaveText('Requires the Nameless demo plugin. Open Settings → Plugins');
+    // Its link opens Settings → Plugins. The row is bundled (where its folder is), named
+    // as its manifest names it when a line still gives the name (else by its folder), and
+    // says what the TOML parser found and where: the file's name, never its path.
+    await broken.getByRole('button', { name: 'Open Settings → Plugins' }).click();
+    await expect(wizard).toBeVisible();
+    await expect(wizard.locator('[data-wiz-step="5"]')).toBeVisible();
+    const brokenRow = wizard.locator(`[data-plugin-key="${BROKEN}"]`);
+    await expect(brokenRow).toHaveAttribute('data-plugin-status', 'error');
+    await expect(brokenRow).toHaveAttribute('data-plugin-source', 'bundled');
+    await expect(brokenRow.locator('strong')).toHaveText(/^Broken demo v\S+ · bundled$/);
+    await expect(brokenRow.locator('.wiz-plugin-status')).toHaveText('Failed to load');
+    await expect(brokenRow.locator('.wiz-plugin-error')).toHaveText(
+      /^manifest\.toml is not valid TOML \(line 4, column 13\): Expected '=' after a key/,
+    );
+    const namelessRow = wizard.locator(`[data-plugin-key="${NAMELESS}"]`);
+    await expect(namelessRow).toHaveAttribute('data-plugin-source', 'bundled');
+    await expect(namelessRow.locator('strong')).toHaveText(new RegExp(`^${NAMELESS} v\\S+ · bundled$`));
+    await expect(namelessRow.locator('.wiz-plugin-error')).toHaveText(/^manifest\.toml is not valid TOML \(line 2, column 8\): Invalid value/);
+    for (const r of [brokenRow, namelessRow]) await expect(r.locator('.wiz-plugin-error')).not.toContainText('magnusim-g11-');
+    await wizard.locator('#wiz-skip').click();
+    await expect(wizard).toBeHidden();
+    stage(t0, 'broken manifests: bundled, by name, parser line and column; their studies name the plugin');
   } finally {
     killTree(server);
     try {

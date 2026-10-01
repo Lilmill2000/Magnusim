@@ -11,8 +11,10 @@ import { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from './prepare-projects.
 // browser history work and leave the project as it was; the page loads its
 // modules, WASM and a worker, talks to the app only through the bridge, and
 // cannot reach the app's page, API or storage; a page that never connects
-// shows an error card; a plugin that is off has no launcher. A second app
-// server with the workspace fixture plugin (python/tests/fixtures/workspace-plugins).
+// shows an error card; a plugin that is off has no launcher, and its studies'
+// Settings link looks like the app's other links; "+ New" in STUDIES offers the
+// first free name and opens the new study. A second app server with the
+// workspace fixture plugin (python/tests/fixtures/workspace-plugins).
 const PROJECT = 'sample-project-steady-state-e2e';
 const KEY = 'ws-demo';
 
@@ -77,6 +79,9 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     expect(await waitUp(`${base}/api/registry`, 120_000), `second server did not start:\n${log.slice(-2000)}`).toBe(true);
     const bench = await newStudy('bench_case', 'Wing section');
     const silent = await newStudy('silent_case', 'Quiet one');
+    // Names taken (one in other letters), so "+ New Bench case" offers "Bench case 3".
+    await newStudy('bench_case', 'Bench case 1');
+    await newStudy('bench_case', 'bench case 2');
     stage(t0, `server up, studies ${bench.id} and ${silent.id}`);
 
     // The study opens from the tree, over the workbench.
@@ -241,6 +246,34 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     await page.reload();
     await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PROJECT, { timeout: 60_000 });
     await expect(row.locator('xpath=..')).toHaveAttribute('data-unavailable', '1');
+    // gate:h13-reason-link: the greyed study's "Open Settings → Plugins" is an inline link in
+    // the app's font and link colour, not the browser's default button (Arial, 2 px outset
+    // border, grey face, black text).
+    const settingsLink = row.locator('xpath=..').locator('[data-plugin-study-reason] button');
+    await expect(settingsLink).toHaveText('Open Settings → Plugins');
+    const look = await settingsLink.evaluate((b) => {
+      const s = getComputedStyle(b);
+      // The link colour token, resolved where the link is.
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--mg-primary-hover)';
+      b.parentElement.appendChild(probe);
+      const linkColor = getComputedStyle(probe).color;
+      probe.remove();
+      return {
+        font: s.fontFamily,
+        appFont: getComputedStyle(document.body).fontFamily,
+        borders: [s.borderTopStyle, s.borderRightStyle, s.borderBottomStyle, s.borderLeftStyle],
+        background: s.backgroundColor,
+        color: s.color,
+        linkColor,
+        reasonColor: getComputedStyle(b.parentElement).color,
+      };
+    });
+    expect(look.font).toBe(look.appFont);
+    expect(look.borders, JSON.stringify(look.borders)).toEqual(['none', 'none', 'none', 'none']);
+    expect(look.background).toBe('rgba(0, 0, 0, 0)');
+    expect(look.linkColor).not.toBe(look.reasonColor);
+    expect(look.color).toBe(look.linkColor);
     await expect(page.locator('#btn-workspaces')).toHaveCount(0);
     await row.click();
     await expect(overlay).toBeHidden();
@@ -264,9 +297,25 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     await expect(wizard).toBeHidden();
     await expect(page.locator('#btn-workspaces')).toBeVisible();
     await expect(row.locator('xpath=..')).not.toHaveAttribute('data-unavailable', '1');
-    // The Workspaces menu: a new study of a kind opens in its workspace.
+    // gate:h13-studies-new: STUDIES "+ New Bench case" asks with the first free name and
+    // opens the new study in its workspace, as the Workspaces menu does.
+    await page.locator(`#plugin-studies-section [data-plugin-study-new="${KEY}:bench_case"]`).click();
+    await expect(page.locator('#modal-prompt')).toBeVisible();
+    await expect(page.locator('#pm-input')).toHaveValue('Bench case 3');
+    await page.locator('#pm-confirm').click();
+    await expect(overlay).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`#/p/${PROJECT}/ws/${KEY}/bench/st-[a-z0-9-]+$`));
+    await expect(overlay.locator('[data-ws-title]')).toHaveText('Bench case 3');
+    await expect(frame.locator('#bench-title')).toHaveText('Bench case 3');
+    const fromTree = await page.evaluate(() => location.hash.split('/').pop());
+    await expect(page.locator(`#plugin-studies-section [data-plugin-study="${fromTree}"] .tl`)).toHaveText('Bench case 3');
+    await overlay.locator('[data-ws-back]').click();
+    await expect(overlay).toBeHidden();
+    // The Workspaces menu: a new study of a kind opens in its workspace. Its name prompt
+    // offers the next free name too ("Bench case 3" is taken now).
     await page.locator('#btn-workspaces').click();
     await page.locator(`[data-ws-new="${KEY}:bench_case"]`).click();
+    await expect(page.locator('#pm-input')).toHaveValue('Bench case 4');
     await page.locator('#pm-input').fill('From the menu');
     await page.locator('#pm-confirm').click();
     await expect(overlay).toBeVisible();

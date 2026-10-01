@@ -149,19 +149,36 @@ function plainName(raw: string, fallback: string): string {
 /** safe: Yes discards the work, so Enter (like Escape) keeps it and Yes takes a click. */
 type LeaveQuestion = { title: string; copy: string; yes: string; no: string; safe: true };
 
+/**
+ * The page's message inside the "Turn off" question's parentheses: without its own
+ * last ".", "!" or "?". A run of them ("...", "?!") stays as typed.
+ */
+function inParentheses(msg: string): string {
+  return msg.replace(/\s*(?<![.!?])[.!?]$/, '');
+}
+
+/**
+ * The page's message as a sentence of the "Leave" question: it ends with ".", "!",
+ * "?" or an ellipsis, maybe followed by closing quotes or brackets.
+ */
+function asSentence(msg: string): string {
+  return /[.!?\u{2026}]["'\u{201D}\u{2019})\]]*$/u.test(msg) ? msg : `${msg}.`;
+}
+
 function leaveQuestion(reason: LeaveReason, ws: GuardedWorkspace): LeaveQuestion {
   const who = plainName(ws.pluginName(), ws.route.plugin);
   const msg = state.message;
   if (reason === 'plugin-off') {
+    const note = inParentheses(msg);
     return {
       title: `Turn off ${who}?`,
-      copy: `Its workspace is open with changes that are not saved${msg ? ` (${msg})` : ''}. Turning it off closes the workspace and discards them.`,
+      copy: `Its workspace is open with changes that are not saved${note ? ` (${note})` : ''}. Turning it off closes the workspace and discards them.`,
       yes: 'Turn off',
       no: 'Cancel',
       safe: true,
     };
   }
-  const what = msg ? `${who}: ${msg}` : `${who} has changes to "${plainName(ws.studyTitle(), ws.route.studyId)}" that are not saved.`;
+  const what = msg ? `${who}: ${asSentence(msg)}` : `${who} has changes to "${plainName(ws.studyTitle(), ws.route.studyId)}" that are not saved.`;
   return { title: 'Leave without saving?', copy: `${what} Leaving discards them.`, yes: 'Leave', no: 'Stay', safe: true };
 }
 

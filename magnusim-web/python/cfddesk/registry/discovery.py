@@ -383,29 +383,53 @@ def _fallback_line_toml(text: str) -> dict[str, Any]:
     return data
 
 
-def _parse_simple_toml(text: str, *, source: str = "") -> dict[str, Any] | None:
-    """Parse TOML preferring tomllib/tomli; fail-closed when fallback cannot represent."""
+_TOML_AT_RE = re.compile(r"^(.*) \(at line (\d+), column (\d+)\)$", re.DOTALL)
+# The parser can quote a whole key, however long: its words are cut to this.
+_TOML_SAID_MAX = 200
+
+
+def _cut(text: str, limit: int = _TOML_SAID_MAX) -> str:
+    """At most ``limit`` characters, the last one "…" when cut."""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _toml_error(exc: Exception) -> str:
+    """What the TOML parser says is wrong, with its line and column (never a path).
+    Its words are cut at 200 characters; the line and column always show."""
+    msg, line, col = getattr(exc, "msg", None), getattr(exc, "lineno", None), getattr(exc, "colno", None)
+    if not (isinstance(msg, str) and isinstance(line, int) and isinstance(col, int)):
+        # tomllib before 3.14 has only the text: "<what> (at line N, column M)".
+        m = _TOML_AT_RE.match(str(exc))
+        if not m:
+            return f"is not valid TOML: {_cut(str(exc))}"
+        msg, line, col = m.group(1), int(m.group(2)), int(m.group(3))
+    return f"is not valid TOML (line {line}, column {col}): {_cut(msg)}"
+
+
+def _parse_toml(text: str, *, source: str = "") -> tuple[dict[str, Any] | None, str]:
+    """(table, "") or (None, what is wrong). Prefers tomllib/tomli; fail-closed
+    when the line fallback cannot represent the text."""
     src = source or "manifest"
 
     try:
         import tomllib
 
-        return tomllib.loads(text)
+        return tomllib.loads(text), ""
     except ImportError:
         pass
     except Exception as exc:
         log.warning("TOML parse failed for %s: %s", src, exc)
-        return None
+        return None, _toml_error(exc)
 
     try:
         import tomli
 
-        return tomli.loads(text)
+        return tomli.loads(text), ""
     except ImportError:
         pass
     except Exception as exc:
         log.warning("TOML parse failed (tomli) for %s: %s", src, exc)
-        return None
+        return None, _toml_error(exc)
 
     # No real TOML library â€” line fallback only for flat string keys.
     if _toml_needs_full_parser(text):
@@ -414,8 +438,39 @@ def _parse_simple_toml(text: str, *, source: str = "") -> dict[str, Any] | None:
             "and/or requires arrays that the line fallback would drop silently",
             src,
         )
-        return None
-    return _fallback_line_toml(text)
+        return None, "has [tables] or a requires array, which need a TOML parser (tomllib or tomli) this Python lacks"
+    return _fallback_line_toml(text), ""
+
+
+def _parse_simple_toml(text: str, *, source: str = "") -> dict[str, Any] | None:
+    """Parse TOML preferring tomllib/tomli; fail-closed when fallback cannot represent."""
+    return _parse_toml(text, source=source)[0]
+
+
+# A top-level name = "..." line, read from a manifest that does not parse.
+_NAME_LINE_RE = re.compile(r"""^\s*name\s*=\s*(?:"([^"\\]*)"|'([^']*)')\s*(?:#.*)?$""")
+
+
+def _lenient_name(text: str) -> str:
+    """The name of a manifest that does not parse, for display only ("" when unclear).
+    A line inside a multi-line string is text, never the name or a table."""
+    inside = ""  # the quotes of the multi-line string the scan is in
+    for raw in text.splitlines():
+        if inside:
+            if raw.count(inside) % 2:
+                inside = ""
+            continue
+        if raw.lstrip().startswith("["):
+            break
+        m = _NAME_LINE_RE.match(raw)
+        if m:
+            return (m.group(1) if m.group(1) is not None else m.group(2)).strip()[:80]
+        opens = [(raw.find(q), q) for q in ('"""', "'''") if q in raw]
+        if opens:
+            first = min(opens)[1]
+            if raw.count(first) % 2:
+                inside = first
+    return ""
 
 
 def _host_api_version() -> str:
@@ -516,6 +571,7 @@ def _drop_failed_plugin(hub: RegistryHub, plugin: str, error: str) -> None:
     get_hooks().clear_plugin(plugin)
     manifest = hub.manifests.pop(plugin, None)
     meta: dict[str, Any] = {}
+    source = "local"
     if manifest is not None:
         meta = {
             "name": manifest.name,
@@ -525,7 +581,8 @@ def _drop_failed_plugin(hub: RegistryHub, plugin: str, error: str) -> None:
             "ui": manifest.ui,
             "ui_entry": manifest.ui_entry,
         }
-    hub.failures.append(_failure_row(plugin, error, meta))
+        source = str(manifest.source or "local")
+    hub.failures.append(_failure_row(plugin, error, meta, source=source))
     log.warning("plugin %s unloaded: %s", plugin, error)
 
 
@@ -578,24 +635,34 @@ def _failure_row(
     }
 
 
-def _read_manifest(plugin_dir: Path, hub: RegistryHub) -> tuple[dict[str, Any] | None, bool]:
-    """(manifest dict, failed). None and not failed when the folder is not a plugin."""
+def _read_manifest(
+    plugin_dir: Path, hub: RegistryHub, *, tier: str = "user"
+) -> tuple[dict[str, Any] | None, bool]:
+    """(manifest dict, failed). None and not failed when the folder is not a plugin.
+
+    A manifest that cannot be read or parsed is listed under its folder name, as
+    the tier it was found in, with what is wrong and its name if a line still gives it.
+    """
     manifest_path = plugin_dir / "manifest.toml"
     plugin_py = plugin_dir / "plugin.py"
     if not manifest_path.is_file() or not plugin_py.is_file():
         return None, False
+    source = "bundled" if tier == "bundled" else "local"
     try:
-        meta = _parse_simple_toml(
-            manifest_path.read_text(encoding="utf-8"),
-            source=str(manifest_path),
-        )
+        text = manifest_path.read_text(encoding="utf-8")
     except Exception as exc:
         log.warning("Bad manifest in %s: %s", plugin_dir, exc)
-        hub.failures.append(_failure_row(plugin_dir.name, str(exc)))
+        # An OSError's text holds the full path; the row says only what went wrong.
+        why = (exc.strerror or type(exc).__name__) if isinstance(exc, OSError) else str(exc)
+        hub.failures.append(_failure_row(plugin_dir.name, f"manifest.toml could not be read: {why}", source=source))
         return None, True
+    # Already warned inside _parse_toml (parse fail or fail-closed fallback).
+    meta, why = _parse_toml(text, source=str(manifest_path))
     if meta is None:
-        # Already warned inside _parse_simple_toml (parse fail or fail-closed fallback).
-        hub.failures.append(_failure_row(plugin_dir.name, "bad manifest"))
+        name = _lenient_name(text)
+        hub.failures.append(
+            _failure_row(plugin_dir.name, f"manifest.toml {why}", {"name": name} if name else None, source=source)
+        )
         return None, True
     return meta, False
 
@@ -720,11 +787,12 @@ def _load_folder_plugin(
     """Load one folder plugin. Returns (manifest_or_None, load_failed)."""
     plugin_py = plugin_dir / "plugin.py"
     if meta is None:
-        meta, failed = _read_manifest(plugin_dir, hub)
+        meta, failed = _read_manifest(plugin_dir, hub, tier=tier)
         if meta is None:
             return None, failed
     key = str(meta.get("key") or plugin_dir.name)
     api = str(meta.get("api_version") or "1.0")
+    source = "bundled" if tier == "bundled" else "local"
     if not _api_compatible(api):
         ui, entry = _ui_fields(meta)
         hub.incompatible.append(
@@ -735,7 +803,7 @@ def _load_folder_plugin(
                 "description": str(meta.get("description") or ""),
                 "api_version": api,
                 "host": _host_api_version(),
-                "source": "local",
+                "source": source,
                 "ui": ui,
                 "ui_entry": entry,
             }
@@ -750,7 +818,7 @@ def _load_folder_plugin(
     try:
         kinds = study_kinds_from_meta(meta)
     except ValueError as exc:
-        hub.failures.append(_failure_row(key, f"manifest [[study_kinds]]: {exc}", meta))
+        hub.failures.append(_failure_row(key, f"manifest [[study_kinds]]: {exc}", meta, source=source))
         return None, True
     try:
         workspaces = workspaces_from_meta(meta, plugin_dir)
@@ -759,23 +827,22 @@ def _load_folder_plugin(
             if kind.workspace and kind.workspace not in declared:
                 raise ValueError(f"study kind {kind.key}: workspace {kind.workspace!r} is not declared")
     except ValueError as exc:
-        hub.failures.append(_failure_row(key, f"manifest [[workspaces]]: {exc}", meta))
+        hub.failures.append(_failure_row(key, f"manifest [[workspaces]]: {exc}", meta, source=source))
         return None, True
     try:
         files = files_spec_from_meta(meta)
     except ValueError as exc:
-        hub.failures.append(_failure_row(key, f"manifest [files]: {exc}", meta))
+        hub.failures.append(_failure_row(key, f"manifest [files]: {exc}", meta, source=source))
         return None, True
     from cfddesk.registry.plugin_env import python_env_from_meta
 
     try:
         python_env = python_env_from_meta(meta, plugin_dir)
     except ValueError as exc:
-        hub.failures.append(_failure_row(key, f"manifest [python]: {exc}", meta))
+        hub.failures.append(_failure_row(key, f"manifest [python]: {exc}", meta, source=source))
         return None, True
     overrides = _overrides_from_meta(meta)
     hub.note_overrides(key, overrides)
-    source = "bundled" if tier == "bundled" else "local"
     mod_name = f"cfddesk.{'_bundled' if tier == 'bundled' else '_plugins'}.{plugin_dir.name}"
     root = str(plugin_dir.resolve())
     if root not in sys.path:
@@ -1026,7 +1093,9 @@ def _off_row(child: Path, meta: dict[str, Any], key: str, tier: str, default_ena
     }
 
 
-def _scan_plugin_dir(folder: Path | None, hub: RegistryHub) -> tuple[list[tuple[Path, dict[str, Any]]], bool]:
+def _scan_plugin_dir(
+    folder: Path | None, hub: RegistryHub, *, tier: str = "user"
+) -> tuple[list[tuple[Path, dict[str, Any]]], bool]:
     if folder is None or not folder.is_dir():
         return [], False
     found: list[tuple[Path, dict[str, Any]]] = []
@@ -1034,7 +1103,7 @@ def _scan_plugin_dir(folder: Path | None, hub: RegistryHub) -> tuple[list[tuple[
     for child in sorted(folder.iterdir()):
         if not child.is_dir():
             continue
-        meta, failed = _read_manifest(child, hub)
+        meta, failed = _read_manifest(child, hub, tier=tier)
         had_failures = had_failures or failed
         if meta is not None:
             found.append((child, meta))
@@ -1053,7 +1122,7 @@ def discover_bundled_plugins(
     ``hub.required_failures`` with the reason.
     """
     folder = bundled_dir_for(_resolve_web_root(web_root))
-    found, scan_failed = _scan_plugin_dir(folder, hub)
+    found, scan_failed = _scan_plugin_dir(folder, hub, tier="bundled")
     state = plugin_state(_resolve_web_root(web_root))
     manifests, failed = _load_ordered(found, hub, state, tier="bundled")
     hub.required_failures.clear()
@@ -1416,6 +1485,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 status="incompatible",
                 enabled=False,
                 error=f"api_version {row.get('api_version') or ''} is incompatible",
+                tier="bundled" if row.get("source") == "bundled" else "user",
             )
         )
     for row in hub.failures:
@@ -1432,6 +1502,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 status="error",
                 enabled=False,
                 error=str(row.get("error") or ""),
+                tier="bundled" if row.get("source") == "bundled" else "user",
             )
         )
     plugins_dir = plugins_dir_for(root) if root is not None else None

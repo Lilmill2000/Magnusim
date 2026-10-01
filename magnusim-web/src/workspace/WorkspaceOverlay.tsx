@@ -376,6 +376,8 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   // When the app's own UI over the page closes (a dialog, Settings, the Queue), the
   // keyboard goes back to the page if nothing else took it. Chromium can still name
   // the clicked button of a panel that just closed as the active element.
+  // Only a change from shown to hidden counts: the Queue's sync hides its chip again
+  // when it is hidden already, and that must not take the keyboard from the page body.
   useEffect(() => {
     if (!connected) return undefined;
     const closed = new Set<HTMLElement>();
@@ -383,7 +385,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
     const observer = new MutationObserver((records) => {
       for (const r of records) {
         const el = r.target as HTMLElement;
-        if (el.hidden) closed.add(el);
+        if (r.oldValue === null && el.hidden) closed.add(el);
       }
       if (!closed.size || raf) return;
       raf = requestAnimationFrame(() => {
@@ -396,7 +398,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
     });
     for (const id of HOST_UI) {
       const el = document.getElementById(id);
-      if (el) observer.observe(el, { attributes: true, attributeFilter: ['hidden'] });
+      if (el) observer.observe(el, { attributes: true, attributeFilter: ['hidden'], attributeOldValue: true });
     }
     return () => {
       observer.disconnect();

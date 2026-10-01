@@ -7,7 +7,8 @@ import { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from './prepare-projects.
 
 // G7, a plugin's workspace frame as the user meets it: the page has the keyboard
 // once it connects and gets it back after the app's own dialogs, but never takes
-// it from Settings; the page may go full screen, and the app leaves full screen
+// it from Settings, nor from the page body when the Queue's menu, already hidden,
+// is hidden again; the page may go full screen, and the app leaves full screen
 // before it asks anything; while the page says it has unsaved work
 // (ws.nav.setDirty), every way out asks first (Back, the page's own Back, browser
 // Back/Forward, a typed link, Home, the folder chip, opening another project,
@@ -19,8 +20,11 @@ import { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from './prepare-projects.
 // (python/tests/fixtures/workspace-plugins).
 const PROJECT = 'sample-project-steady-state-e2e';
 const KEY = 'ws-demo';
+// The page's message, without and with its own full stop: the questions read the same
+// either way (one full stop after it when leaving, none inside the turn-off parentheses).
 const UNSAVED = 'Chord 120 mm is not saved';
-const LEAVE_COPY = `Workspace demo: ${UNSAVED} Leaving discards them.`;
+const UNSAVED_SENTENCE = `${UNSAVED}.`;
+const LEAVE_COPY = `Workspace demo: ${UNSAVED}. Leaving discards them.`;
 const OFF_COPY = `Its workspace is open with changes that are not saved (${UNSAVED}). Turning it off closes the workspace and discards them.`;
 const LOST = 'Changes that were not saved in the workspace were lost.';
 
@@ -153,13 +157,13 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     await expect(inFrame.locator('#bench-keys')).toHaveText(key);
   };
 
-  // The page marks or clears unsaved work; the workspace header shows it.
-  const setDirty = async (frame, dirty) => {
-    await frame.evaluate(({ dirty, message }) => window.__ws.nav.setDirty(dirty, message), { dirty, message: UNSAVED });
+  // The page marks or clears unsaved work, with its message; the workspace header shows it.
+  const setDirty = async (frame, dirty, message = UNSAVED) => {
+    await frame.evaluate(({ dirty, message }) => window.__ws.nav.setDirty(dirty, message), { dirty, message });
     if (dirty) {
       await expect(shell).toHaveAttribute('data-workspace-dirty', '1');
       await expect(overlay.locator('[data-ws-dirty]')).toBeVisible();
-      await expect(overlay.locator('[data-ws-dirty]')).toHaveAttribute('title', UNSAVED);
+      await expect(overlay.locator('[data-ws-dirty]')).toHaveAttribute('title', message);
     } else {
       await expect(shell).not.toHaveAttribute('data-workspace-dirty', '1');
       await expect(overlay.locator('[data-ws-dirty]')).toHaveCount(0);
@@ -272,6 +276,44 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     await page.unroute(mainJs);
     stage(t0, 'g7-focus: keys at connect, after a page dialog and after Settings');
 
+    // gate:g7-no-op-rehide: a click on the header's plain text (the plugin's name) gives the
+    // keyboard to the page body. The Queue's sync hides its menu again although it is hidden
+    // already (as the app does on any queue update): the frame must not take the keyboard back.
+    const activeTag = () => page.evaluate(() => (document.activeElement ? document.activeElement.tagName : ''));
+    const twoFrames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const plainText = overlay.locator('[data-ws-crumb] .ws-plugin');
+    await expect(plainText).toHaveText('Workspace demo');
+    await plainText.click();
+    await expect.poll(activeTag, { message: 'the page body has the keyboard' }).toBe('BODY');
+    const wasHidden = await page.evaluate(() => {
+      const chip = document.getElementById('job-queue-chip');
+      const before = chip.hidden;
+      chip.hidden = true;
+      return before;
+    });
+    expect(wasHidden, 'the Queue menu was hidden already').toBe(true);
+    // The app would act on the next frame; give it two and a little more.
+    await twoFrames();
+    await page.waitForTimeout(300);
+    expect(await activeTag()).toBe('BODY');
+    await frame.evaluate(() => {
+      window.__benchKeys.length = 0;
+      document.getElementById('bench-keys').textContent = '';
+    });
+    await page.keyboard.press('k');
+    await twoFrames();
+    expect(await frame.evaluate(() => window.__benchKeys.slice())).toEqual([]);
+    await expect(inFrame.locator('#bench-keys')).toHaveText('');
+    // The Queue really closing (opened from the header, closed by a click outside it) still
+    // gives the keyboard back to the page.
+    await overlay.locator('.ws-header-right #btn-queue').click();
+    await expect(page.locator('#job-queue-chip')).toBeVisible();
+    await plainText.click();
+    await expect(page.locator('#job-queue-chip')).toBeHidden();
+    await keysReach(frame, 'k');
+    expect(await loadIdOf(frame)).toBe(loadId);
+    stage(t0, 'g7-no-op-rehide');
+
     // gate:g7-settings-not-exit: Settings opens over unsaved work without asking, and the same page is there after.
     await setDirty(frame, true);
     let count = (await dialogs()).length;
@@ -337,10 +379,11 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     stage(t0, 'g7-dirty-header-back');
 
     // gate:g7-dirty-frame-back: the page's own Back (ws.nav.back) asks too, and tells the page what the user chose.
+    // Its message ends with a full stop this time: the question adds no second one (LEAVE_COPY).
     await row(bench.id).click();
     frame = await benchFrame(bench.id, loadId);
     loadId = await loadIdOf(frame);
-    await setDirty(frame, true);
+    await setDirty(frame, true, UNSAVED_SENTENCE);
     const stayed = frame.evaluate(() => window.__ws.nav.back());
     await leaveQuestion();
     await answer(false);
@@ -621,6 +664,9 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     expect(await loadIdOf(frame)).toBe(loadId);
     await expect(shell).toHaveAttribute('data-workspace-dirty', '1');
     expect(disables).toEqual([]);
+    // The page's message now ends with a full stop: the parentheses leave it out, so the
+    // question reads the same (OFF_COPY), with no full stop before the ")".
+    await setDirty(frame, true, UNSAVED_SENTENCE);
     // A click on Cancel does the same.
     await toggle.click();
     await expectQuestion('Turn off Workspace demo?', OFF_COPY, 'Turn off', { safe: true });
