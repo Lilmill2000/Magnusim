@@ -14,7 +14,7 @@
  *   GET /api/iso-surface/meta?...         -> JSON fingerprint (n_cells, empty, checksum)
  *   GET /api/iso-volume?...               -> iso volume threshold VTP (volume VTU threshold)
  *   GET /api/iso-volume/meta?...          -> JSON fingerprint (n_cells, empty, mapped lo/hi)
- *   GET /api/inspect?x=&y=&z=&time=       -> JSON probe (magU/p at point; honest miss)
+ *   GET /api/inspect?x=&y=&z=&time=[&fields=a,b] -> JSON probe (shown fields at point; honest miss)
  *
  * Particle Trace path (W8 HARD): pyvista streamlines_from_source(vectors='U')
  * on case .cfddesk-prepared.vtu, then tube(radius=Size). Not magU-only fake lines.
@@ -27,7 +27,7 @@
  * time (uniform foam fills surface); missing time -> 404 empty, no fake field.
  * Particle Trace multi-face (W14 HARD): faces[] + density|count even distribute on BC patches; empty selection honest empty.
  * Inspect point (W13 HARD): /api/inspect?x=&y=&z=&time= probes case VTU via
- * PolyData.sample (sample_over_point family); hit -> magU/p; miss -> empty no fake.
+ * PolyData.sample (sample_over_point family); hit -> values {field: v}; miss -> empty no fake.
  * Mesh->solve honesty (W15 HARD): POST /api/case/attach sets active case_dir;
  * GET /api/case returns it; /api/times + field APIs use active root when case=
  * omitted. No fake Running/0-100 progress. Attach-only is enough for W15.
@@ -1719,7 +1719,17 @@ async function ensureIsoVolume(caseDir, time, p) {
 
 
 
-function inspectParamsFromUrl(u) {
+/** Field names from a comma-separated list; anything that is not a plain name is dropped. */
+export function fieldListParam(raw) {
+  const out = [];
+  for (const part of String(raw || '').split(/[,;]/)) {
+    const name = part.trim();
+    if (isFieldName(name) && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+export function inspectParamsFromUrl(u) {
   const x = Number(u.searchParams.get('x') ?? 'NaN');
   const y = Number(u.searchParams.get('y') ?? 'NaN');
   const z = Number(u.searchParams.get('z') ?? 'NaN');
@@ -1727,11 +1737,13 @@ function inspectParamsFromUrl(u) {
     x: Number.isFinite(x) ? x : NaN,
     y: Number.isFinite(y) ? y : NaN,
     z: Number.isFinite(z) ? z : NaN,
+    // The shown fields to probe; none asks for every field the frame wrote.
+    fields: fieldListParam(u.searchParams.get('fields')),
   };
 }
 
 function inspectCacheKey(caseDir, time, p) {
-  const raw = [caseDir, time, p.x, p.y, p.z].join('|');
+  const raw = [caseDir, time, p.x, p.y, p.z, (p.fields || []).join(',')].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
   return join(scopedCacheDir(INSPECT_CACHE_ROOT, caseDir), `insp-${h}`);
 }
@@ -1753,6 +1765,7 @@ function runInspectExport(caseDir, time, outDir, p) {
       '--z',
       String(p.z),
     ];
+    if (p.fields && p.fields.length) args.push('--fields', p.fields.join(','));
     const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
@@ -1782,7 +1795,7 @@ async function ensureInspect(caseDir, time, p) {
   if (!stamp) {
     throw new Error(`case foam files missing under ${caseDir}/${time}`);
   }
-  const paramStamp = `${stamp}|${p.x}|${p.y}|${p.z}`;
+  const paramStamp = `${stamp}|${p.x}|${p.y}|${p.z}|${(p.fields || []).join(',')}`;
   const fresh =
     existsSync(meta) &&
     existsSync(stampPath) &&
@@ -1793,7 +1806,7 @@ async function ensureInspect(caseDir, time, p) {
     // Python start-up plus a full volume read (~1-2 s) on every click.
     const rpc = callWorker(
       'filter.inspect',
-      { case_dir: caseDir, time: String(time), out_dir: dir, x: p.x, y: p.y, z: p.z },
+      { case_dir: caseDir, time: String(time), out_dir: dir, x: p.x, y: p.y, z: p.z, fields: p.fields || [] },
       60000,
     );
     if (rpc && typeof rpc.then === 'function') {

@@ -188,6 +188,74 @@ def test_writing_a_case_stamps_its_frame_fields(tmp_path: Path):
     assert json.loads((bare / "w27-case.json").read_text(encoding="utf-8"))["frame_fields"] == ["T"]
 
 
+def _inspect(case: Path, out: Path, **extra) -> dict:
+    res = _rpc("filter.inspect", {"case_dir": str(case), "time": "1", "out_dir": str(out),
+                                  "x": 0.2, "y": 0.2, "z": 0.2, **extra})
+    assert "result" in res, res
+    return res["result"]
+
+
+def test_inspect_probes_the_shown_fields_with_no_physics_names(tmp_path: Path, monkeypatch):
+    """A T-only case answers T; there is no magU or p to mirror."""
+    case = _case(tmp_path, {"rho": RHO, "kinematic_fields": []}, {"T": np.full(64, 300.0)})
+    _patch_volume(monkeypatch, _mesh({"T": 300.0}))
+    r = _inspect(case, tmp_path / "o")
+    assert r["hit"] is True and r["values"] == {"T": 300.0}
+    assert r["fields_available"] == ["T"]
+    assert "magU" not in r and "p" not in r
+    meta = json.loads((tmp_path / "o" / "inspect.meta.json").read_text(encoding="utf-8"))
+    assert meta["values"] == {"T": 300.0} and meta["fields"] == ["T"]
+    assert "magU" not in meta and "p" not in meta and "units" not in meta
+    assert meta["source_foam"] == {"T": str((case / "1" / "T").resolve())}
+
+
+def test_inspect_named_fields_and_vector_magnitudes(tmp_path: Path, monkeypatch):
+    case = _case(tmp_path, {"rho": RHO, "kinematic_fields": []}, {"T": np.full(64, 300.0)})
+    _foam_file(case / "1" / "W", "volVectorField", "uniform (3 4 0)")
+    mesh = _mesh({"T": 300.0})
+    mesh.point_data["W"] = np.tile([0.0, 6.0, 8.0], (mesh.n_points, 1))
+    mesh.cell_data["W"] = np.tile([0.0, 6.0, 8.0], (mesh.n_cells, 1))
+    _patch_volume(monkeypatch, mesh)
+    # W is stored uniform at this time: its uniform magnitude wins over the volume's.
+    r = _inspect(case, tmp_path / "all")
+    assert r["values"] == {"T": 300.0, "magW": 5.0}
+    r = _inspect(case, tmp_path / "one", fields="T")
+    assert r["values"] == {"T": 300.0}
+    bad = _rpc("filter.inspect", {"case_dir": str(case), "time": "1", "out_dir": str(tmp_path / "b"),
+                                  "x": 0.2, "y": 0.2, "z": 0.2, "fields": ["../T"]})
+    assert bad["error"]["code"] == -32602
+
+
+@pytest.mark.parametrize(("kinematic", "scale"), [([], 1.0), (["p"], RHO)])
+def test_inspect_scales_only_kinematic_fields(tmp_path: Path, monkeypatch, kinematic, scale):
+    case = _case(tmp_path, {"rho": RHO, "kinematic_fields": kinematic}, {"p": np.full(64, 10.0), "T": np.full(64, 300.0)})
+    _patch_volume(monkeypatch, _mesh({"p": 10.0, "T": 300.0}))
+    r = _inspect(case, tmp_path / "o")
+    assert abs(r["values"]["p"] - 10.0 * scale) < 1e-9
+    assert r["values"]["T"] == 300.0
+    assert abs(r["p"] - 10.0 * scale) < 1e-9
+    meta = json.loads((tmp_path / "o" / "inspect.meta.json").read_text(encoding="utf-8"))
+    assert meta["units"] == {"p": "Pa"} and meta["scaled_by_density"] == (["p"] if kinematic else [])
+
+
+def test_inspect_uniform_scalar_time_overrides_the_volume(tmp_path: Path, monkeypatch):
+    case = _case(tmp_path, {"rho": RHO, "kinematic_fields": []}, {})
+    _foam_file(case / "1" / "T", "volScalarField", "uniform 350")
+    _patch_volume(monkeypatch, _mesh({"T": 300.0}))
+    r = _inspect(case, tmp_path / "o")
+    assert r["values"] == {"T": 350.0}
+    entry = volume_cache.get_prepared(str(case), "1")
+    assert np.allclose(entry["slice"].point_data["T"], 300.0)
+
+
+def test_inspect_needs_a_written_frame(tmp_path: Path, monkeypatch):
+    case = _case(tmp_path, {"rho": RHO}, {})
+    _patch_volume(monkeypatch, _mesh({"T": 300.0}))
+    res = _rpc("filter.inspect", {"case_dir": str(case), "time": "1", "out_dir": str(tmp_path / "o"),
+                                  "x": 0.2, "y": 0.2, "z": 0.2})
+    assert "time_not_found" in res["error"]["message"]
+
+
 def test_writing_a_case_stamps_its_kinematic_fields(tmp_path: Path):
     """API 1.4: the analysis's kinematic_fields go in the sidecar; the writer's own
     list wins; an analysis that does not declare them leaves the sidecar alone,

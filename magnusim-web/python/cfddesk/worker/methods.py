@@ -1700,6 +1700,23 @@ def _field_name(field: str | None) -> str:
     return name
 
 
+def _field_list(fields: Any) -> list[str]:
+    """Result field names from a list or a comma-separated string ('' entries dropped)."""
+    if fields is None or fields == "":
+        return []
+    raw = fields if isinstance(fields, list) else str(fields).replace(";", ",").split(",")
+    out: list[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if not name:
+            continue
+        if not _FIELD_NAME.match(name):
+            raise RpcError(-32602, f"invalid field name {name!r}")
+        if name not in out:
+            out.append(name)
+    return out
+
+
 @rpc("filter.case_field")
 def filter_case_field(
     case_dir: str = "",
@@ -1882,9 +1899,11 @@ def filter_inspect(
     x: Any = None,
     y: Any = None,
     z: Any = None,
+    fields: Any = None,
     **_extra: Any,
 ) -> dict[str, Any]:
-    """Probe magU/p at a point on the cached volume (writes inspect.meta.json)."""
+    """Probe the shown fields (or ``fields``: a list or comma-separated names) at a
+    point on the cached volume (writes inspect.meta.json)."""
     case = str(case_dir or "").strip()
     dest = str(out_dir or "").strip()
     if not case:
@@ -1895,6 +1914,7 @@ def filter_inspect(
         px, py, pz = float(x), float(y), float(z)
     except (TypeError, ValueError) as exc:
         raise RpcError(-32602, "x, y, z required") from exc
+    names = _field_list(fields)
     from export_inspect_point import export_inspect
 
     from cfddesk.worker.volume_cache import get_prepared
@@ -1909,6 +1929,7 @@ def filter_inspect(
             px,
             py,
             pz,
+            fields=names or None,
             mesh=entry.get("slice") or entry.get("grid") or entry.get("mesh"),
             source=str(entry.get("source") or "worker-cache"),
         )
@@ -1916,16 +1937,21 @@ def filter_inspect(
         raise
     except Exception as exc:
         raise RpcError(-32004, str(exc), {"case_dir": case, "time": t}) from exc
-    return {
+    out = {
         "ok": True,
         "case_dir": case,
         "time": t,
         "out_dir": dest,
         "hit": result["hit"],
-        "magU": result["magU"],
-        "p": result["p"],
+        "values": result["values"],
+        "fields_available": result["fields_available"],
         "volume_cached": True,
     }
+    # Deprecated mirrors of values["magU"] / values["p"] for older callers.
+    for key in ("magU", "p"):
+        if key in result:
+            out[key] = result[key]
+    return out
 
 
 @rpc("filter.particle_trace")

@@ -1,14 +1,16 @@
-"""W13: Inspect point live ? sample field at a world point from case VTU.
+"""W13: Inspect point live: sample the shown fields at a world point.
 
 Server-side path (documented):
-  GET /api/inspect?x=&y=&z=&time=  -> Vite middleware
-  -> export_inspect_point.py reads case .cfddesk-prepared.vtu
+  GET /api/inspect?x=&y=&z=&time=[&fields=a,b]  -> Vite middleware
+  -> export_inspect_point.py reads the case volume at the requested time
   -> single-point PolyData.sample(volume) probe (sample_over_point family)
-  -> JSON { magU, p, hit, fingerprint }. Honest miss when vtkValidPointMask=0.
+  -> JSON { values: {name: v}, hit, fingerprint }. Honest miss when vtkValidPointMask=0.
 
-Uniform foam times (e.g. 0/U) overwrite volume scalars before probe so
-values track case API time (same honesty as W12 field export).
-Not a SimScale value-panel invent ? values only when the probe hits.
+The fields are the frame's shown fields (a scalar by its name, a vector X as
+magX) unless the caller names some. A field stored uniform at this time (e.g.
+0/U) gives its uniform value, so values track the case time (same honesty as
+the W12 field export). A field the case stores per unit density (its
+kinematic_fields) is shown times rho. Values only when the probe hits.
 """
 from __future__ import annotations
 
@@ -24,125 +26,167 @@ import pyvista as pv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import field_scale, kinematic_fields, pressure_meta  # noqa: E402
 from case_volume import load_volume  # noqa: E402
-from result_names import ensure_shown_field  # noqa: E402
+from export_case_field import read_internal_field  # noqa: E402
+from result_names import (  # noqa: E402
+    FIELD_NAME,
+    dataset_shown_fields,
+    ensure_shown_field,
+    foam_source,
+    mag_base,
+    shown_fields,
+)
 
 APPROACH = (
     "server-side sample_over_point / probe: Vite /api/inspect?x=&y=&z=&time= -> "
     "export_inspect_point.py reads the case volume at the requested time "
     "-> PolyData([x,y,z]).sample(volume) with vtkValidPointMask "
-    "-> magU/p at pick. Honest miss off-mesh (no fake value)."
+    "-> every shown field at pick. Honest miss off-mesh (no fake value)."
 )
 
+# Deprecated mirrors for the page's two fixed rows (it reads the top-level magU
+# and p and their units); written only when the probe covers those fields.
+LEGACY_MIRRORS = ("magU", "p")
+LEGACY_UNITS = {"magU": "m/s", "p": "Pa"}
 
-def parse_foam_uniform_vector(path: Path):
-    text = path.read_text(encoding="utf-8", errors="replace")
-    m_u = re.search(r"internalField\s+uniform\s+\(([^)]+)\)", text)
-    if not m_u:
-        return None
-    parts = [float(x) for x in m_u.group(1).split()]
-    if len(parts) != 3:
-        return None
-    return parts
+# Checksum weights: the first two keep the checksum the page already knew.
+_CHECKSUM_WEIGHTS = {"magU": 1_000_003.0, "p": 17.0}
 
 
-def parse_foam_uniform_scalar(path: Path):
-    text = path.read_text(encoding="utf-8", errors="replace")
-    m_u = re.search(r"internalField\s+uniform\s+([^\s;]+)", text)
-    if not m_u:
-        return None
+def value_at(sampled: pv.DataSet, name: str) -> float | None:
+    """The probed value of shown field ``name`` (None when the probe has none)."""
     try:
-        return float(m_u.group(1))
-    except ValueError:
-        return None
-
-
-def ensure_magU(grid: pv.DataSet) -> pv.DataSet:
-    try:
-        ensure_shown_field(grid, "magU")
+        ensure_shown_field(sampled, name)
     except RuntimeError:
-        pass
-    return grid
+        return None
+    if name not in sampled.point_data:
+        return None
+    arr = np.asarray(sampled.point_data[name], dtype=float).reshape(-1)
+    if arr.size == 0:
+        return None
+    v = float(arr[0])
+    return v if np.isfinite(v) else None
 
 
-def scalar_at(sampled: pv.DataSet, name: str):
-    if name in sampled.point_data:
-        arr = np.asarray(sampled.point_data[name], dtype=float).reshape(-1)
-        if arr.size == 0:
-            return None
-        v = float(arr[0])
-        return v if np.isfinite(v) else None
-    if name == "magU" and "U" in sampled.point_data:
-        U = np.asarray(sampled.point_data["U"], dtype=float).reshape(-1, 3)
-        if U.shape[0] == 0:
-            return None
-        return float(np.linalg.norm(U[0, :3]))
-    return None
+def _checksum(values: dict[str, float | None], pt) -> float:
+    present = [(n, v) for n, v in sorted(values.items()) if v is not None]
+    if not present:
+        return 0.0
+    total = sum(float(v) * _CHECKSUM_WEIGHTS.get(n, 101.0 + 2.0 * i) for i, (n, v) in enumerate(present))
+    return total + pt[0] * 3.0 + pt[1] * 5.0 + pt[2] * 7.0
 
 
-def _checksum(mag_u, p, pt) -> float:
-    if mag_u is not None and p is not None:
-        return float(mag_u) * 1_000_003.0 + float(p) * 17.0 + pt[0] * 3.0 + pt[1] * 5.0 + pt[2] * 7.0
-    if mag_u is not None:
-        return float(mag_u) * 1_000_003.0 + pt[0] * 3.0 + pt[1] * 5.0 + pt[2] * 7.0
-    return 0.0
+def _mirror(out: dict, values: dict[str, float | None]) -> None:
+    for key in LEGACY_MIRRORS:
+        if key in values:
+            out[key] = values[key]
 
 
-def probe_point(grid: pv.DataSet, xyz):
+def probe_point(grid: pv.DataSet, xyz, names=None):
+    """Probe ``names`` (default: every field the grid shows) at one point."""
     pt = [float(xyz[0]), float(xyz[1]), float(xyz[2])]
+    names = list(names) if names is not None else dataset_shown_fields(grid)
     cloud = pv.PolyData(np.asarray([pt], dtype=float))
     sampled = cloud.sample(grid)
-    hit = False
     if "vtkValidPointMask" in sampled.point_data:
         m = np.asarray(sampled.point_data["vtkValidPointMask"]).reshape(-1)
         hit = bool(m.size and int(m[0]) != 0)
     else:
-        mu = scalar_at(sampled, "magU")
-        hit = mu is not None and np.isfinite(mu)
+        hit = any(value_at(sampled, n) is not None for n in names)
 
-    magU = scalar_at(sampled, "magU") if hit else None
-    p = scalar_at(sampled, "p") if hit else None
-    if hit and magU is None and "U" in sampled.point_data:
-        magU = scalar_at(sampled, "magU")
-
-    checksum = _checksum(magU, p, pt) if hit else 0.0
-
-    return {
+    values: dict[str, float | None] = {n: (value_at(sampled, n) if hit else None) for n in names}
+    out = {
         "hit": bool(hit),
         "empty": not bool(hit),
         "reason": "" if hit else "miss_mesh",
-        "magU": None if not hit else (None if magU is None else float(magU)),
-        "p": None if not hit else (None if p is None else float(p)),
-        "value_checksum": float(checksum),
+        "values": values,
+        "value_checksum": float(_checksum(values, pt)) if hit else 0.0,
         "no_fake_value": True,
     }
+    _mirror(out, values)
+    return out
 
 
-def uniform_foam_values(case_dir: Path, time: str) -> dict:
-    """This time's uniform U/p (e.g. 0/U = (0 0 0)) without touching any volume."""
-    proof = {"uniform_U": False, "uniform_p": False, "U": None, "p": None}
-    u_path = case_dir / str(time) / "U"
-    p_path = case_dir / str(time) / "p"
-    if u_path.is_file():
-        uv = parse_foam_uniform_vector(u_path)
-        if uv is not None:
-            proof["uniform_U"] = True
-            proof["U"] = uv
-            proof["magU"] = float(np.linalg.norm(uv))
-    if p_path.is_file():
-        pv_ = parse_foam_uniform_scalar(p_path)
-        if pv_ is not None:
-            proof["uniform_p"] = True
-            proof["p"] = float(pv_)
-    return proof
+_UNIFORM_HEAD = re.compile(rb"internalField\s+uniform\b")
 
 
-def _point_grid(mesh: pv.DataSet) -> pv.DataSet:
-    mesh = ensure_magU(mesh)
-    if "magU" not in mesh.point_data and "magU" in mesh.cell_data:
-        mesh = mesh.cell_data_to_point_data(pass_cell_data=True)
-    elif "p" not in mesh.point_data and "p" in mesh.cell_data:
-        mesh = mesh.cell_data_to_point_data(pass_cell_data=True)
-    return ensure_magU(mesh)
+def _stored_uniform(path: Path) -> bool:
+    """True when the file's internalField is uniform (read from its head only, so a
+    large nonuniform field is never parsed here)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(65536)
+    except OSError:
+        return False
+    return bool(_UNIFORM_HEAD.search(head))
+
+
+def uniform_values(case_dir: Path, time: str, names) -> dict[str, float]:
+    """This time's uniform fields (e.g. 0/U = (0 0 0)) by shown name, as stored,
+    without touching any volume. A vector gives its magnitude."""
+    time_dir = Path(case_dir) / str(time)
+    out: dict[str, float] = {}
+    for name in names:
+        src = foam_source(time_dir, name)
+        if src is None:
+            continue
+        foam_name, kind = src
+        path = time_dir / foam_name
+        if not _stored_uniform(path):
+            continue
+        try:
+            shape, data = read_internal_field(path, kind)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if shape != "uniform":
+            continue
+        out[name] = float(np.linalg.norm(data)) if kind == "vector" else float(data)
+    return out
+
+
+def _point_grid(mesh: pv.DataSet, names=None) -> pv.DataSet:
+    """The volume with every probed field on its points (cells promoted when needed)."""
+    names = list(names) if names is not None else dataset_shown_fields(mesh)
+    need_points = False
+    for name in names:
+        try:
+            ensure_shown_field(mesh, name)
+        except RuntimeError:
+            continue
+        if name not in mesh.point_data:
+            need_points = True
+    if not need_points:
+        return mesh
+    mesh = mesh.cell_data_to_point_data(pass_cell_data=True)
+    for name in names:
+        try:
+            ensure_shown_field(mesh, name)
+        except RuntimeError:
+            pass
+    return mesh
+
+
+def _foam_name(time_dir: Path, name: str) -> str:
+    src = foam_source(time_dir, name)
+    if src is not None:
+        return src[0]
+    return mag_base(name) or name
+
+
+def _field_names(fields, available: list[str]) -> list[str]:
+    if not fields:
+        return list(available)
+    if isinstance(fields, str):
+        fields = fields.replace(";", ",").split(",")
+    names: list[str] = []
+    for raw in fields:
+        name = str(raw or "").strip()
+        if not name:
+            continue
+        if not FIELD_NAME.match(name):
+            raise ValueError(f"unsupported field name {name!r}")
+        if name not in names:
+            names.append(name)
+    return names or list(available)
 
 
 def export_inspect(
@@ -153,22 +197,22 @@ def export_inspect(
     y: float,
     z: float,
     *,
+    fields=None,
     mesh=None,
     source: str | None = None,
 ) -> dict:
-    """Probe magU/p at a point. ``mesh`` is the worker's shared kinematic volume:
-    it is only read — uniform-foam overrides and Pa scaling apply to the probed
-    values, never to the volume."""
-    case_dir = case_dir.resolve()
+    """Probe the shown fields (or ``fields``) at a point. ``mesh`` is the worker's
+    shared volume, as stored: it is only read (derived magnitudes aside), and the
+    uniform-time overrides and density scaling apply to the probed values only."""
+    case_dir = Path(case_dir).resolve()
     time = str(time)
     time_dir = case_dir / time
     if not time_dir.is_dir():
         raise FileNotFoundError(f"time_not_found: missing time dir {time_dir}")
-
-    u_path = time_dir / "U"
-    p_path = time_dir / "p"
-    if not u_path.is_file() and not p_path.is_file():
-        raise FileNotFoundError(f"time_not_found: missing OpenFOAM U/p under {time_dir}")
+    available = shown_fields(time_dir)
+    if not available:
+        raise FileNotFoundError(f"time_not_found: no result fields under {time_dir}")
+    names = _field_names(fields, available)
 
     if mesh is None:
         mesh, vtu_path = load_volume(case_dir, time)
@@ -176,35 +220,37 @@ def export_inspect(
     else:
         vtu_path = source or "worker-cache"
         volume_from = "worker-cache"
-    grid = mesh if ("magU" in mesh.point_data and "p" in mesh.point_data) else _point_grid(mesh)
+    grid = _point_grid(mesh, names)
 
-    foam_proof = uniform_foam_values(case_dir, time)
-    # rho when the case stores p per unit density (its kinematic_fields, or p
-    # for older cases), else 1: a case that writes p in Pa is shown as stored.
-    p_kinematic = "p" in kinematic_fields(case_dir)
-    p_scale = field_scale(case_dir, "p")
+    uniform = uniform_values(case_dir, time, names)
+    scales = {n: field_scale(case_dir, _foam_name(time_dir, n)) for n in names}
 
-    probed = probe_point(grid, [x, y, z])
+    probed = probe_point(grid, [x, y, z], names)
+    values: dict[str, float | None] = dict(probed["values"])
     if probed["hit"]:
-        if foam_proof["uniform_U"]:
-            probed["magU"] = float(foam_proof["magU"])
-        if foam_proof["uniform_p"]:
-            probed["p"] = float(foam_proof["p"])
-        if probed["p"] is not None:
-            probed["p"] = float(probed["p"]) * p_scale
-        probed["value_checksum"] = _checksum(probed["magU"], probed["p"], [x, y, z])
-    mesh = grid
+        for name in names:
+            if name in uniform:
+                values[name] = uniform[name]
+            if values[name] is not None:
+                values[name] = float(values[name]) * scales[name]
+        probed["value_checksum"] = _checksum(values, [x, y, z])
     fp = {
         "x": float(x),
         "y": float(y),
         "z": float(z),
         "hit": probed["hit"],
         "empty": probed["empty"],
-        "magU": probed["magU"],
-        "p": probed["p"],
+        "values": values,
         "value_checksum": probed["value_checksum"],
         "reason": probed["reason"],
     }
+    _mirror(fp, values)
+
+    sources = {}
+    for name in names:
+        src = foam_source(time_dir, name)
+        if src is not None:
+            sources[name] = str(time_dir / src[0])
 
     result = {
         "increment": "W13",
@@ -217,44 +263,48 @@ def export_inspect(
         "hit": probed["hit"],
         "empty": probed["empty"],
         "reason": probed["reason"],
-        "magU": probed["magU"],
-        "p": probed["p"],
-        "fields": {"magU": probed["magU"], "p": probed["p"]},
+        "values": values,
+        "fields": names,
+        "fields_available": available,
         "value_checksum": probed["value_checksum"],
         "fingerprint": fp,
         "method": "pyvista PolyData.sample (sample_over_point / probe)",
         "approach": APPROACH,
         "source_vtu": str(vtu_path),
         "volume_from": volume_from,
-        "source_foam_U": str(u_path) if u_path.is_file() else None,
-        "source_foam_p": str(p_path) if p_path.is_file() else None,
-        "foam_uniform": foam_proof,
-        "bounds": list(map(float, mesh.bounds)),
-        "n_mesh_points": int(mesh.n_points),
-        "n_mesh_cells": int(mesh.n_cells),
+        "source_foam": sources,
+        "foam_uniform": uniform,
+        # Fields shown times the case's density (stored per unit density).
+        "scaled_by_density": sorted(n for n, s in scales.items() if s != 1.0),
+        "bounds": list(map(float, grid.bounds)),
+        "n_mesh_points": int(grid.n_points),
+        "n_mesh_cells": int(grid.n_cells),
         "proves_not_baked_only": True,
         "no_fake_value": True,
-        "units": {"magU": "m/s", "p": "Pa"},
-        **pressure_meta(p_scale, kinematic=p_kinematic),
     }
+    _mirror(result, values)
+    units = {k: LEGACY_UNITS[k] for k in LEGACY_MIRRORS if k in values}
+    if units:
+        result["units"] = units
+    if "p" in values:
+        # rho when the case stores p per unit density (its kinematic_fields, or
+        # p for older cases), else 1: a case that writes p in Pa is shown as stored.
+        result.update(pressure_meta(scales["p"], kinematic="p" in kinematic_fields(case_dir)))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_meta = out_dir / "inspect.meta.json"
     out_meta.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    print(
-        json.dumps(
-            {
-                "ok": True,
-                "meta": str(out_meta),
-                "hit": result["hit"],
-                "empty": result["empty"],
-                "magU": result["magU"],
-                "p": result["p"],
-                "value_checksum": result["value_checksum"],
-                "reason": result["reason"],
-            }
-        )
-    )
+    summary = {
+        "ok": True,
+        "meta": str(out_meta),
+        "hit": result["hit"],
+        "empty": result["empty"],
+        "values": values,
+        "value_checksum": result["value_checksum"],
+        "reason": result["reason"],
+    }
+    _mirror(summary, values)
+    print(json.dumps(summary))
     return result
 
 
@@ -266,8 +316,9 @@ def main():
     ap.add_argument("--x", type=float, required=True)
     ap.add_argument("--y", type=float, required=True)
     ap.add_argument("--z", type=float, required=True)
+    ap.add_argument("--fields", default="", help="comma-separated shown fields (default: all)")
     args = ap.parse_args()
-    export_inspect(args.case, args.time, args.out_dir, args.x, args.y, args.z)
+    export_inspect(args.case, args.time, args.out_dir, args.x, args.y, args.z, fields=args.fields or None)
 
 
 if __name__ == "__main__":
