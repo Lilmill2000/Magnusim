@@ -17443,6 +17443,7 @@ function startJobPoll() {
         if (!dir.includes(`/projects/${String(hashId).toLowerCase()}/`)) snap = null;
       }
       let live = null;
+      let liveMeshId = '';
       let liveSimId = '';
       let scopedMeshes = [];
       try {
@@ -17450,6 +17451,7 @@ function startJobPoll() {
         const mr = await fetch('/api/mesh' + meshQs);
         const mj = await mr.json();
         live = mj && mj.mesh && mj.mesh.live_mesh_result;
+        liveMeshId = String((mj && mj.mesh && mj.mesh.id) || '');
         liveSimId = String((mj && mj.mesh && mj.mesh.simulation_id) || (mj && mj.simulation_id) || '');
         scopedMeshes = (mj && Array.isArray(mj.meshes) ? mj.meshes : [])
           .map((m) => ({
@@ -17480,6 +17482,12 @@ function startJobPoll() {
           ...(snap || {}),
           status: 'running',
           mode: 'mesh',
+          // The running mesh's id: an idle /api/case answer has mesh_id null, and without an
+          // id the job poll never reads /api/mesh, where a mesh this server did not start ends.
+          mesh_id:
+            (snap && snap.status === 'running' && snap.mesh_id) ||
+            (live && live.status === 'running' && (live.mesh_id || liveMeshId)) ||
+            null,
           path_kind: (snap && snap.path_kind) || (live && live.path_kind) || 'standard',
           started_at: (snap && snap.started_at) || (live && live.started_at) || null,
           finished_at: null,

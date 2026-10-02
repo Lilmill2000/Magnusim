@@ -9,6 +9,8 @@ import { UNOWNED_MESH_PROJECT as PID } from './prepare-projects.js';
 // generator runs. Opening its project used to mark it "failed" with no reason at once:
 // a full e2e run failed on a mesh that then finished fine. It must stay running, and
 // only when that generator dies with nobody to report a result end failed, saying why.
+// The page that is open sees that end too, with no reload: the spinner goes and a toast
+// says it failed (it kept "Meshing" with no toast when its job had no mesh id).
 test('a mesh another process is generating stays running, then says why when that process dies', async ({ page, request }) => {
   test.setTimeout(180_000);
   const q = (path, extra = {}) => `${path}?${new URLSearchParams({ project_id: PID, ...extra })}`;
@@ -37,6 +39,7 @@ test('a mesh another process is generating stays running, then says why when tha
       path_kind: 'standard',
       engine: 'standard',
       generate_id: generateId,
+      mesh_id: mesh.id,
       pid: null,
       case_dir: caseDir,
       mesh_path: join(caseDir, 'constant', 'polyMesh'),
@@ -61,11 +64,31 @@ test('a mesh another process is generating stays running, then says why when tha
     const apiMesh = await (await request.get(q('/api/mesh', { simulation_id: study.id, mesh_id: mesh.id }))).json();
     expect(apiMesh.mesh?.live_mesh_result?.status).toBe('running');
 
+    // Every text the job toast shows from here on.
+    await page.evaluate(() => {
+      const el = document.getElementById('job-finish-toast');
+      window.__e2eToasts = [];
+      new MutationObserver(() => {
+        const t = el.textContent || '';
+        if (t && !el.hidden && window.__e2eToasts[window.__e2eToasts.length - 1] !== t) window.__e2eToasts.push(t);
+      }).observe(el, { childList: true, characterData: true, subtree: true, attributes: true });
+    });
+
     // The generator dies without writing a result: the mesh ends failed, with a reason.
     gen.kill();
     await expect.poll(async () => (await treeMesh()).mesh.live_status, { timeout: 60_000, intervals: [1_000] }).toBe('failed');
     const failed = await (await request.get(q('/api/mesh', { simulation_id: study.id, mesh_id: mesh.id }))).json();
     expect(failed.mesh?.live_mesh_result?.error).toBe('Meshing stopped when the server restarted.');
+    // The open page follows without a reload: no spinner, and a toast says it failed.
+    await expect(spin).toHaveCount(0, { timeout: 30_000 });
+    await expect.poll(() => page.evaluate(() => window.__e2eToasts), { timeout: 30_000 }).toContainEqual(expect.stringMatching(/ failed to mesh\.$/));
+    // The viewport chip no longer says Meshing (hidden, or another text).
+    await expect
+      .poll(() => page.evaluate(() => {
+        const chip = document.getElementById('viewport-job-chip');
+        return !chip || chip.hidden || getComputedStyle(chip).display === 'none' || !/Meshing/.test(chip.textContent || '');
+      }), { timeout: 15_000 })
+      .toBe(true);
     await page.reload();
     await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 60_000 });
     await expect(page.locator(`#left-tree li[data-w20-mesh-item="${mesh.id}"]`)).toBeAttached();
