@@ -1,0 +1,221 @@
+{
+  "preview_version": 7,
+  "step_path": "source.step",
+  "edges_vtp": "cad_edges.vtp",
+  "faces_vtp": "cad_faces.vtp",
+  "representation": "step",
+  "display": "occt-prs3d",
+  "tessellated": false,
+  "n_solids": 2,
+  "bodies": [
+    "Body1",
+    "Body2"
+  ],
+  "n_faces": 12,
+  "n_edges": 20,
+  "n_edge_polylines": 20,
+  "n_edge_points": 40,
+  "n_display_tris": 24,
+  "bounds": {
+    "xmin": 0.0,
+    "xmax": 30.0,
+    "ymin": 0.0,
+    "ymax": 10.0,
+    "zmin": 0.0,
+    "zmax": 10.0
+  },
+  "linear_deflection": 0.0026532998322843205,
+  "angular_deflection": 0.08726646259971647,
+  "deviation_coefficient": 0.0001,
+  "deviation_angle_deg": 5.0,
+  "status": 0,
+  "center_of_mass": [
+    15.000000000000002,
+    5.0,
+    5.0
+  ],
+  "center_of_mass_kind": "volume",
+  "faces": [
+    {
+      "id": 1,
+      "area": 99.99999999999999,
+      "centroid": [
+        0.0,
+        5.0,
+        5.0
+      ],
+      "normal": [
+        -1.0,
+        -0.0,
+        0.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 2,
+      "area": 99.99999999999999,
+      "centroid": [
+        10.0,
+        5.0,
+        5.0
+      ],
+      "normal": [
+        1.0,
+        0.0,
+        -0.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 3,
+      "area": 99.99999999999999,
+      "centroid": [
+        5.0,
+        0.0,
+        5.0
+      ],
+      "normal": [
+        0.0,
+        -1.0,
+        -0.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 4,
+      "area": 99.99999999999999,
+      "centroid": [
+        5.0,
+        10.0,
+        5.0
+      ],
+      "normal": [
+        -0.0,
+        1.0,
+        0.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 5,
+      "area": 99.99999999999999,
+      "centroid": [
+        5.0,
+        5.0,
+        0.0
+      ],
+      "normal": [
+        -0.0,
+        -0.0,
+        -1.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 6,
+      "area": 99.99999999999999,
+      "centroid": [
+        5.0,
+        5.0,
+        10.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 7,
+      "area": 99.99999999999999,
+      "centroid": [
+        10.0,
+        5.0,
+        5.0
+      ],
+      "normal": [
+        -1.0,
+        -0.0,
+        0.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 8,
+      "area": 99.99999999999999,
+      "centroid": [
+        30.0,
+        5.0,
+        5.0
+      ],
+      "normal": [
+        1.0,
+        0.0,
+        -0.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 9,
+      "area": 199.99999999999997,
+      "centroid": [
+        20.0,
+        0.0,
+        5.0
+      ],
+      "normal": [
+        0.0,
+        -1.0,
+        -0.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 10,
+      "area": 199.99999999999997,
+      "centroid": [
+        20.0,
+        10.0,
+        5.0
+      ],
+      "normal": [
+        -0.0,
+        1.0,
+        0.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 11,
+      "area": 199.99999999999997,
+      "centroid": [
+        20.0,
+        5.0,
+        0.0
+      ],
+      "normal": [
+        -0.0,
+        -0.0,
+        -1.0
+      ],
+      "surface_type": "Plane"
+    },
+    {
+      "id": 12,
+      "area": 199.99999999999997,
+      "centroid": [
+        20.0,
+        5.0,
+        10.0
+      ],
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "surface_type": "Plane"
+    }
+  ],
+  "faces_length_unit": "mm"
+}

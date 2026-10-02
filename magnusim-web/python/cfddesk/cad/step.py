@@ -102,7 +102,7 @@ def _face_props(face: TopoDS_Face) -> tuple[float, tuple[float, float, float]]:
 
 
 def load_step(path: str | Path) -> LoadedSolid:
-    """Read a STEP file and enumerate faces in OCCT explorer order."""
+    """Read a STEP file and enumerate faces by ``preview.face_visits`` (face_id = index - 1)."""
     from cfddesk.cad.io import geometry_file_exists, read_step_shape
 
     path = Path(path).resolve()
@@ -115,23 +115,7 @@ def load_step(path: str | Path) -> LoadedSolid:
     grouped = _load_grouped(path, shape)
     if grouped is not None:
         return grouped
-    faces: list[FaceRecord] = []
-    explorer = TopExp_Explorer(shape, TopAbs_FACE)
-    idx = 0
-    while explorer.More():
-        face = TopoDS.Face_s(explorer.Current())
-        area, centroid = _face_props(face)
-        faces.append(
-            FaceRecord(
-                face_id=idx,
-                area=area,
-                centroid=centroid,
-                surface_type=_surface_type_name(face),
-                face=face,
-            )
-        )
-        idx += 1
-        explorer.Next()
+    faces = _face_records(shape)
 
     if not faces:
         raise RuntimeError(f"No faces found in STEP: {path}")
@@ -184,43 +168,48 @@ def _load_grouped(path: Path, shape: TopoDS_Shape) -> LoadedSolid | None:
     )
 
 
+def _face_records(shape: TopoDS_Shape) -> list[FaceRecord]:
+    from cfddesk.cad.preview import face_visits
+
+    faces: list[FaceRecord] = []
+    for index, _body, face in face_visits(shape):
+        area, centroid = _face_props(face)
+        faces.append(
+            FaceRecord(
+                face_id=index - 1,
+                area=area,
+                centroid=centroid,
+                surface_type=_surface_type_name(face),
+                face=face,
+            )
+        )
+    return faces
+
+
 def enumerate_volumes(
     shape: TopoDS_Shape, faces: list[FaceRecord]
 ) -> list[VolumeRecord]:
-    """Map each TopAbs_SOLID to global face_ids (same indices as ``faces``)."""
-    from OCP.TopTools import TopTools_IndexedMapOfShape
+    """Map each TopAbs_SOLID to its own face visits as face_ids (``preview.face_visits``).
 
-    # Hashed lookup (IsSame semantics): a linear scan per face is O(n^2), hours on a
-    # 100k-face faceted STL.
-    face_map = TopTools_IndexedMapOfShape()
-    ids: list[int] = []
-    for fr in faces:
-        if face_map.Add(fr.face) > len(ids):
-            ids.append(fr.face_id)
+    A face two solids share is visited once per solid, so each solid lists its own
+    visit; ``faces`` must be the records of the same visits (``load_step``).
+    """
+    from cfddesk.cad.preview import face_visits
 
-    def _face_id_of(face: TopoDS_Face) -> int | None:
-        idx = face_map.FindIndex(face)
-        return ids[idx - 1] if idx > 0 else None
+    by_body: dict[int, list[int]] = {}
+    for index, body, _face in face_visits(shape):
+        if body is not None:
+            by_body.setdefault(body, []).append(index - 1)
 
     volumes: list[VolumeRecord] = []
     explorer = TopExp_Explorer(shape, TopAbs_SOLID)
     vi = 0
     while explorer.More():
-        solid = explorer.Current()
-        seen: set[int] = set()
-        fexp = TopExp_Explorer(solid, TopAbs_FACE)
-        while fexp.More():
-            face = TopoDS.Face_s(fexp.Current())
-            fid = _face_id_of(face)
-            if fid is not None:
-                seen.add(fid)
-            fexp.Next()
-        fids = sorted(seen)
         volumes.append(
             VolumeRecord(
                 volume_id=f"solid-{vi}",
                 name=f"Solid {vi + 1}",
-                face_ids=tuple(fids),
+                face_ids=tuple(by_body.get(vi + 1, ())),
             )
         )
         vi += 1
@@ -240,24 +229,7 @@ def enumerate_volumes(
 
 def volumes_from_shape(shape: TopoDS_Shape) -> list[VolumeRecord]:
     """Enumerate volumes for an in-memory shape (e.g. synthetic two-box gate)."""
-    faces: list[FaceRecord] = []
-    explorer = TopExp_Explorer(shape, TopAbs_FACE)
-    idx = 0
-    while explorer.More():
-        face = TopoDS.Face_s(explorer.Current())
-        area, centroid = _face_props(face)
-        faces.append(
-            FaceRecord(
-                face_id=idx,
-                area=area,
-                centroid=centroid,
-                surface_type=_surface_type_name(face),
-                face=face,
-            )
-        )
-        idx += 1
-        explorer.Next()
-    return enumerate_volumes(shape, faces)
+    return enumerate_volumes(shape, _face_records(shape))
 
 
 def shape_diagonal(solid: LoadedSolid) -> float:

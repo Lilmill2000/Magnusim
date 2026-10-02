@@ -920,7 +920,45 @@ function cadPaths(id, geomId) {
   };
 }
 
-const CAD_PREVIEW_VERSION = 7;
+const CAD_PREVIEW_VERSION = 8;
+
+/**
+ * True for a preview made before version 8 whose shape has a face two solids share.
+ * Those previews numbered that face once in the viewport (faceId), while the face table
+ * and the mesher count it once per solid, so every later viewport id named another face.
+ * Only they need a new preview: without a shared face both numberings are the same. A
+ * shared face shows in the old face table as two entries with the same area and centroid,
+ * bit for bit (both come from the same OCCT face).
+ */
+export function cadPreviewFaceIdsStale(meta) {
+  if (!meta || typeof meta !== 'object') return false;
+  if (Number(meta.preview_version) >= 8) return false;
+  // Mesh imports number their own triangles or surfaces, never shared OCCT faces.
+  if (meta.display === 'mesh-triangles' || !Array.isArray(meta.faces)) return false;
+  const seen = new Set();
+  for (const f of meta.faces) {
+    if (!f) continue;
+    const key = JSON.stringify([f.area, f.centroid]);
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  return false;
+}
+
+const faceIdsStaleSeen = new Map();
+
+function cadPreviewFaceIdsStaleAt(paths) {
+  try {
+    const mtimeMs = statSync(paths.meta).mtimeMs;
+    const hit = faceIdsStaleSeen.get(paths.meta);
+    if (hit && hit.mtimeMs === mtimeMs) return hit.stale;
+    const stale = cadPreviewFaceIdsStale(JSON.parse(readFileSync(paths.meta, 'utf8')));
+    faceIdsStaleSeen.set(paths.meta, { mtimeMs, stale });
+    return stale;
+  } catch {
+    return false;
+  }
+}
 
 function cadPreviewFilesReady(paths) {
   try {
@@ -939,7 +977,8 @@ function cadPreviewFreshAt(paths, stepPath) {
   if (!cadPreviewFilesReady(paths)) return false;
   try {
     const j = JSON.parse(readFileSync(paths.meta, 'utf8'));
-    if (Number(j.preview_version) !== CAD_PREVIEW_VERSION) return false;
+    // A version 7 preview that cadPreviewFaceIdsStale keeps is the same as a version 8 one.
+    if (Number(j.preview_version) !== CAD_PREVIEW_VERSION && Number(j.preview_version) !== 7) return false;
   } catch {
     return false;
   }
@@ -952,7 +991,7 @@ async function ensureCadPreviewAt(projectId, stepPath, paths) {
   if (!stepPath || !geomFileExists(stepPath)) {
     return { ok: false, status: 404, body: { error: 'no STEP imported', project_id: projectId } };
   }
-  if (cadPreviewFilesReady(paths)) {
+  if (cadPreviewFilesReady(paths) && !cadPreviewFaceIdsStaleAt(paths)) {
     if (cadPreviewFreshAt(paths, stepPath)) {
       try {
         const meta = JSON.parse(readFileSync(paths.meta, 'utf8'));
@@ -965,6 +1004,20 @@ async function ensureCadPreviewAt(projectId, stepPath, paths) {
     }
     return { ok: true, ...paths, step_path: stepPath, cached: true };
   }
+  // One build per preview at a time: requests that come while it runs (the page asks
+  // for faces, edges and meta together) wait for it, instead of rewriting the files
+  // another request is reading.
+  let build = cadPreviewBuilds.get(paths.meta);
+  if (!build) {
+    build = buildCadPreviewAt(projectId, stepPath, paths).finally(() => cadPreviewBuilds.delete(paths.meta));
+    cadPreviewBuilds.set(paths.meta, build);
+  }
+  return build;
+}
+
+const cadPreviewBuilds = new Map();
+
+async function buildCadPreviewAt(projectId, stepPath, paths) {
   mkdirSync(paths.dir, { recursive: true });
   try {
     const rpc = callWorker(

@@ -31,14 +31,16 @@ from OCP.StdPrs import StdPrs_ToolTriangulatedShape
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import TopoDS
+from OCP.TopoDS import TopoDS, TopoDS_Face
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_IndexedMapOfShape
 
 # Tighter than AIS interactive defaults so large circles stay round when zoomed.
 # Still the official Prs3d knobs: coefficient * bbox size, angle in radians.
 VIS_DEVIATION_COEFFICIENT = 0.0001  # AIS default is 0.001
 VIS_DEVIATION_ANGLE_DEG = 5.0  # AIS default is 20 deg
-PREVIEW_VERSION = 7
+# 8: the viewport's faceId/solidId follow face_visits. Before, a face two solids share
+# got one viewport id, so every later viewport id named another face.
+PREVIEW_VERSION = 8
 
 
 def load_step(path: Path):
@@ -84,11 +86,58 @@ def shape_center_of_mass(shape):
     return [float(c.X()), float(c.Y()), float(c.Z())], kind
 
 
-def face_properties(shape):
-    """Per-face area / centroid / outward normal, 1-based ids in explorer order.
+def face_visits(shape) -> list[tuple[int, int | None, TopoDS_Face]]:
+    """Every face visit as ``(index, body, face)``: the one face numbering rule.
 
-    Same TopExp_Explorer(FACE) order as the viewport faceId scalars and the
-    cfddesk mesher, so ``face N@Body1`` in the UI is ``faces[N-1]`` here.
+    ``index`` is the 1-based position in ``TopExp_Explorer(shape, TopAbs_FACE)``
+    over the whole shape, counting every visit. A face that two touching solids
+    share is visited once per solid, so it has one index per solid. ``body`` is the
+    1-based ``TopExp_Explorer(shape, TopAbs_SOLID)`` index of the solid being
+    explored at that visit, None for a face outside every solid.
+
+    The face table (``face_properties``), the viewport's faceId/solidId scalars
+    (``extract_display_faces``), the mesher's face records (``step.load_step``) and
+    each body's face list (``step.enumerate_volumes``) all number faces this way,
+    so ``face N@BodyB`` names the same face everywhere. Counting every visit keeps
+    the numbers when the STEP copy, which does not share faces, is read instead
+    of the binary sidecar, which does.
+    """
+    flat = []
+    exp = TopExp_Explorer(shape, TopAbs_FACE)
+    while exp.More():
+        flat.append(TopoDS.Face_s(exp.Current()))
+        exp.Next()
+    # Each solid's own visits. The explorer goes depth first (compound -> solid ->
+    # shell -> face), so these runs appear in ``flat`` in solid order, with any face
+    # outside every solid in between.
+    owned = []
+    solids = TopExp_Explorer(shape, TopAbs_SOLID)
+    body = 0
+    while solids.More():
+        body += 1
+        fexp = TopExp_Explorer(solids.Current(), TopAbs_FACE)
+        while fexp.More():
+            owned.append((body, TopoDS.Face_s(fexp.Current())))
+            fexp.Next()
+        solids.Next()
+    every_face_in_a_solid = len(owned) == len(flat)
+    out: list[tuple[int, int | None, TopoDS_Face]] = []
+    j = 0
+    for i, face in enumerate(flat):
+        b = None
+        if j < len(owned) and (every_face_in_a_solid or owned[j][1].IsEqual(face)):
+            b = owned[j][0]
+            j += 1
+        out.append((i + 1, b, face))
+    return out
+
+
+def face_properties(shape):
+    """Per-face area / centroid / outward normal / body, 1-based ids by ``face_visits``.
+
+    Same numbering as the viewport faceId scalars and the cfddesk mesher, so
+    ``face N@BodyB`` in the UI is ``faces[N-1]`` here, and that entry's ``body``
+    is B (no ``body`` for a face outside every solid).
     Lengths are in the STEP's own units (mm for the files we import).
     """
     from OCP.BRepAdaptor import BRepAdaptor_Surface
@@ -96,11 +145,7 @@ def face_properties(shape):
     from OCP.gp import gp_Pnt, gp_Vec
 
     out = []
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    idx = 0
-    while exp.More():
-        face = TopoDS.Face_s(exp.Current())
-        idx += 1
+    for idx, body, face in face_visits(shape):
         props = GProp_GProps()
         BRepGProp.SurfaceProperties_s(face, props)
         area = float(props.Mass())
@@ -121,16 +166,16 @@ def face_properties(shape):
             stype = str(adapt.GetType()).split("_")[-1]
         except Exception:
             stype = "unknown"
-        out.append(
-            {
-                "id": idx,
-                "area": area,
-                "centroid": centroid,
-                "normal": normal,
-                "surface_type": stype,
-            }
-        )
-        exp.Next()
+        entry = {
+            "id": idx,
+            "area": area,
+            "centroid": centroid,
+            "normal": normal,
+            "surface_type": stype,
+        }
+        if body is not None:
+            entry["body"] = body
+        out.append(entry)
     return out
 
 
@@ -182,50 +227,22 @@ def mesh_for_display(shape, box):
     }
 
 
-def map_face_to_solid_id(shape):
-    solids = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_SOLID, solids)
-    ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
-    TopExp.MapShapesAndAncestors_s(shape, TopAbs_FACE, TopAbs_SOLID, ancestors)
-
-    def lookup(face):
-        if solids.Extent() < 1:
-            return 1
-        try:
-            if not ancestors.Contains(face):
-                return 1
-            lst = ancestors.FindFromKey(face)
-            if lst.IsEmpty():
-                return 1
-            idx = solids.FindIndex(lst.First())
-            return int(idx) if idx else 1
-        except Exception:
-            return 1
-
-    return lookup, int(solids.Extent())
-
-
 def extract_display_faces(shape):
+    """Display triangles with per-triangle faceId / solidId from ``face_visits``.
+
+    A face two solids share is drawn once per visit, each copy with its own id and
+    body, as the face table and the mesher number it.
+    """
     verts: list[tuple[float, float, float]] = []
     normals = []
     tris = []
     solid_ids = []
     face_ids = []
-    solid_of, _n_solids = map_face_to_solid_id(shape)
-    faces_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_FACE, faces_map)
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    while exp.More():
-        face = TopoDS.Face_s(exp.Current())
-        sid = solid_of(face)
-        try:
-            fid = int(faces_map.FindIndex(face)) or 1
-        except Exception:
-            fid = 1
+    for fid, body, face in face_visits(shape):
+        sid = body or 1
         loc = TopLoc_Location()
         triangulation = BRep_Tool.Triangulation_s(face, loc)
         if triangulation is None:
-            exp.Next()
             continue
         try:
             StdPrs_ToolTriangulatedShape.ComputeNormals_s(face, triangulation)
@@ -260,7 +277,6 @@ def extract_display_faces(shape):
             tris.append((base + n1 - 1, base + n2 - 1, base + n3 - 1))
             solid_ids.append(sid)
             face_ids.append(fid)
-        exp.Next()
     return verts, normals, tris, solid_ids, face_ids
 
 
