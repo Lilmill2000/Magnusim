@@ -44,7 +44,7 @@
  * W20 HARD: POST /api/mesh + GET /api/mesh persist mesh.json (bank settings).
  * W23 HARD: POST /api/mesh/generate|/remesh uses W16 project source.step/Body1 + Standard/gmsh-hexcore (Hex-dominant=snappy); Job PID; real polyMesh counts; NOT checkMesh; NOT MTP1-silent-copy; no W15.1 stamp on generate.
  * W27: /api/run/* + /api/simulation-control â€” run catalog, simpleFoam start/stop/status, monitors.
- * W22: POST/GET /api/result-controls|/api/area-average persist optional area-average monitors (setup only).
+ * GET /api/result-controls|/api/area-average reads a study's result controls; monitors are saved on the run.
  * FILTERS/attach/W15.1 kick unchanged.
  */
 import { spawnFilter, runFilterToolAsync } from './filter-spawn.js';

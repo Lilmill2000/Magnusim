@@ -293,11 +293,6 @@ export function deleteOneBc(projectId, simId, id) {
   return ok;
 }
 
-export function deleteOneResultControl(projectId, simId, id) {
-  const s = studyOf(projectId, simId);
-  return !!(s && removeChildItem(studyRcsDir(s.dir), 'result_control.json', id));
-}
-
 export function deleteOneRefinement(projectId, meshId, simId, id) {
   const mesh = meshFolderOf(projectId, meshId, simId);
   return !!(mesh && removeChildItem(meshRefsDir(mesh.dir), 'refinement.json', id));

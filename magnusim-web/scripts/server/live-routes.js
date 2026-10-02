@@ -17,7 +17,7 @@ import {
   projectTitleOf,
 } from '../w21-mesh-generate.js';
 import { handleW26Api } from '../w26-mesh-refinements.js';
-import { handleW22Api } from '../w22-area-average.js';
+import { handleResultControlsApi } from '../w22-area-average.js';
 import { handleW27Api, startSolve } from '../w27-solve.js';
 import { scheduleWslPrune } from '../wsl-prune.js';
 import { computeSlotHolder, holderIsRow, setSlotReleaseHook } from '../compute-slot.js';
@@ -249,8 +249,9 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
   router.add(['GET', 'HEAD', 'POST'], '/api/runs', wrap(handleW27Api));
   router.add(['GET', 'HEAD', 'POST'], '/api/runs/**rest', wrap(handleW27Api));
 
-  router.add(['GET', 'HEAD', 'POST'], '/api/result-controls', wrap(handleW22Api));
-  router.add(['GET', 'HEAD', 'POST'], '/api/area-average', wrap(handleW22Api));
+  // Read-only now; POST stays routed so the handler can say why it is refused.
+  router.add(['GET', 'HEAD', 'POST'], '/api/result-controls', wrap(handleResultControlsApi));
+  router.add(['GET', 'HEAD', 'POST'], '/api/area-average', wrap(handleResultControlsApi));
 
   router.add(['GET', 'HEAD', 'POST'], '/api/mesh/refinements', wrap(handleW26Api));
   router.add(['GET', 'HEAD', 'POST'], '/api/mesh-refinements', wrap(handleW26Api));

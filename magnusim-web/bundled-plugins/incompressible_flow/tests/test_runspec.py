@@ -114,6 +114,61 @@ def test_load_run_spec_steady_fixture():
     assert len(spec.bcs) >= 2
 
 
+def _legacy_aa_study(root: Path, aa: dict | None) -> None:
+    """A study with two wall BCs on faces 57 and 71, an inlet, and an older lone
+    area_average_1 in result_controls.json (saved before monitors moved to the run)."""
+    from cfddesk.project.paths import (
+        create_geometry_folder,
+        create_study_folder,
+        find_study,
+        persist_child_item,
+    )
+
+    create_geometry_folder(root, {"id": "g1", "name": "part.step", "original_filename": "part.step"})
+    create_study_folder(root, "g1", {"id": "sim-a", "name": "Study A"})
+    study = find_study(root, "sim-a")
+    assert study is not None
+    bcs = Path(study["dir"]) / "boundary_conditions"
+    for i, (name, bc_type, face) in enumerate(
+        [
+            ("Inlet 1", "Velocity Inlet", "face 1@Body1"),
+            ("Wall 57", "Wall", "face 57@Body1"),
+            ("Wall 71", "Wall", "face 71@Body1"),
+        ]
+    ):
+        persist_child_item(
+            bcs,
+            "bc",
+            {
+                "id": f"bc-{i}",
+                "name": name,
+                "bc_type": bc_type,
+                "faces": [face],
+                "value": 1.0,
+                "simulation_id": "sim-a",
+            },
+        )
+    if aa is not None:
+        rc_path = Path(study["dir"]) / "result_controls.json"
+        rc_path.write_text(json.dumps({"area_average_1": aa}), encoding="utf-8")
+
+
+def test_legacy_area_average_lists_the_patches_owning_its_faces(tmp_path: Path):
+    _legacy_aa_study(tmp_path, {"faces": ["face 57@Body1", "face 71@Body1"]})
+    spec = load_run_spec(tmp_path, run_id="r1", simulation_id="sim-a", require_mesh=False)
+    assert spec.ok
+    assert "wall_57" in spec.monitor_patches
+    assert "wall_71" in spec.monitor_patches
+
+
+def test_walls_are_not_monitored_without_an_area_average(tmp_path: Path):
+    _legacy_aa_study(tmp_path, None)
+    spec = load_run_spec(tmp_path, run_id="r1", simulation_id="sim-a", require_mesh=False)
+    assert spec.ok
+    assert "wall_57" not in spec.monitor_patches
+    assert "wall_71" not in spec.monitor_patches
+
+
 def test_load_run_spec_transient_fixture():
     if not (FIX / "boundary_conditions.json").is_file():
         pytest.skip("js-project fixture missing")

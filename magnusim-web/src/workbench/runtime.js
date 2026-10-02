@@ -29195,9 +29195,8 @@ publishW21({ wired: true });
 
 /**
  * W22 — Area average setup (Result control → Surface data → Area average 1)
- * Bank: Write control Time step; assign BOTH face 57@Body1 + face 71@Body1 → ✓
- * Persists projects/<id>/result_controls.json (+ area_average.json) via POST/GET /api/result-controls.
- * SETUP ONLY — no solves; no fake chart values (honest empty until run).
+ * Monitors are saved on the run (persistRunSettings); GET /api/result-controls only
+ * hydrates an older study-level record at boot. No chart values until a real run.
  */
 const W22_AA = {
   name: 'Area average 1',
