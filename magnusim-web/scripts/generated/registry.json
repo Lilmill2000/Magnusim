@@ -139,7 +139,7 @@
         "LRR",
         "SSG"
       ],
-      "contract": "1.1",
+      "contract": "1.4",
       "family": {
         "key": "incompressible",
         "label": "Incompressible",
@@ -287,6 +287,7 @@
           "kind": "scalar"
         }
       ],
+      "kinematic_fields": null,
       "ui": {
         "study_settings": "incompressible_flow.study",
         "run_settings": "incompressible_flow.run"
@@ -503,7 +504,7 @@
         "LRR",
         "SSG"
       ],
-      "contract": "1.1",
+      "contract": "1.4",
       "family": {
         "key": "incompressible",
         "label": "Incompressible",
@@ -664,6 +665,7 @@
           "kind": "scalar"
         }
       ],
+      "kinematic_fields": null,
       "ui": {
         "study_settings": "incompressible_flow.study",
         "run_settings": "incompressible_flow.run"

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-CONTRACT_VERSION = "1.1"
+CONTRACT_VERSION = "1.4"
 
 KeepFrames = Literal["all", "latest"]
 XAxis = Literal["iterations", "seconds"]
@@ -39,6 +39,15 @@ XAxis = Literal["iterations", "seconds"]
 # An application name is put inside double quotes in solve.sh by raw text
 # substitution, so it may only be a plain identifier.
 APP_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+
+# A result field name: a letter, then up to 63 letters, digits, "_" or ".",
+# with no "__" (the WSL case writer substitutes __NAME__ placeholders).
+FIELD_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,63}$")
+
+
+def field_name_ok(name: Any) -> bool:
+    return isinstance(name, str) and bool(FIELD_NAME_RE.match(name)) and "__" not in name
+
 
 LEGACY_FRAME_FIELDS: tuple[str, ...] = ("U", "p")
 """The frame fields of a case written before API 1.1 (by the default analysis).
@@ -111,6 +120,8 @@ class LaunchSpec:
     log_parser: LogParserRef
     # Fields whose file in a time folder means that result frame was written.
     frame_fields: tuple[str, ...] = LEGACY_FRAME_FIELDS
+    # Fields the case stores divided by density (API 1.4; None = not declared).
+    kinematic_fields: tuple[str, ...] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -121,6 +132,7 @@ class LaunchSpec:
             "parallel": self.parallel,
             "log_parser": self.log_parser.to_json(),
             "frame_fields": list(self.frame_fields),
+            "kinematic_fields": None if self.kinematic_fields is None else list(self.kinematic_fields),
         }
 
 
@@ -176,10 +188,15 @@ def describe_extra(spec: Any) -> dict[str, Any]:
         "residual_series": residual_series(spec),
         "x_axis": str(_hook(spec, "x_axis") or ("seconds" if _td(spec.time_dependency) == "transient" else "iterations")),
         "result_fields": result_fields,
+        "kinematic_fields": _list_or_none(kinematic_fields(spec)),
         "ui": dict(_hook(spec, "ui") or {}),
         "study_defaults": study_defaults(spec),
         "run_defaults": run_defaults(spec),
     }
+
+
+def _list_or_none(names: tuple[str, ...] | None) -> list[str] | None:
+    return None if names is None else list(names)
 
 
 _SERIES_KEYS = ("key", "label", "color", "fields", "always", "dashed", "max_key", "max_label", "swatch")
@@ -359,6 +376,7 @@ def launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = Non
             parallel=str(app.parallel) == "mpirun",
             log_parser=log_parser_ref(spec),
             frame_fields=frame_fields(spec),
+            kinematic_fields=kinematic_fields(spec),
         )
     check_launch_spec(out, solver_registry)
     return out
@@ -378,11 +396,38 @@ def check_launch_spec(out: LaunchSpec, solver_registry: Any) -> None:
         raise ContractError(f"keep_frames must be 'all' or 'latest', got {out.keep_frames!r}")
     if not out.frame_fields or not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", f) for f in out.frame_fields):
         raise ContractError(f"frame_fields must be plain field names, got {out.frame_fields!r}")
+    if out.kinematic_fields is not None:
+        _check_field_names("kinematic_fields", out.kinematic_fields)
 
 
 def frame_fields(spec: Any) -> tuple[str, ...]:
     """The fields that mark a written result frame: the analysis's frame_fields, else its fields."""
     return tuple(_hook(spec, "frame_fields") or getattr(spec, "fields", ()) or LEGACY_FRAME_FIELDS)
+
+
+def kinematic_fields(spec: Any) -> tuple[str, ...] | None:
+    """The fields a case of this analysis stores divided by density (API 1.4).
+
+    None when the analysis does not say (a case's sidecar then keeps what its
+    writer put there, and a case with no list is read as ``("p",)``); ``()``
+    when it stores none. Each name must be a plain field name.
+    """
+    raw = _hook(spec, "kinematic_fields")
+    if raw is None:
+        return None
+    if isinstance(raw, str) or not isinstance(raw, (tuple, list)):
+        raise ContractError(f"{getattr(spec, 'key', '?')}.kinematic_fields must be a tuple of field names, got {raw!r}")
+    names = tuple(raw)
+    _check_field_names(f"{getattr(spec, 'key', '?')}.kinematic_fields", names)
+    return names
+
+
+def _check_field_names(what: str, names: tuple[str, ...]) -> None:
+    for name in names:
+        if not field_name_ok(name):
+            raise ContractError(
+                f"{what}: {name!r} is not a field name (a letter, then up to 63 letters, digits, _ or ., no __)"
+            )
 
 
 def log_parser_ref(spec: Any) -> LogParserRef:

@@ -40,6 +40,8 @@ export interface RegistryRow {
     swatch: string;
   }>;
   x_axis?: string;
+  /** Fields its cases store divided by density (API 1.4); null when the analysis does not say. */
+  kinematic_fields?: string[] | null;
   study_defaults?: Record<string, unknown>;
   run_defaults?: Record<string, unknown>;
   ui?: Record<string, string>;

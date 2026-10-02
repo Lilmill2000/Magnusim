@@ -256,6 +256,10 @@ class AnalysisType:
     launch: Callable[..., Any] | None = None  # (solver_key=...) -> LaunchSpec
     log_parser: Any = None  # LogParserRef to the solver-output parser
     frame_fields: tuple[str, ...] = ()  # fields that mark a written frame ("" = fields)
+    # Contract 1.4: fields its cases store divided by density (shown times rho).
+    # None = not declared (the case's sidecar keeps what write_case put there);
+    # () = none.
+    kinematic_fields: tuple[str, ...] | None = None
     plan_case: Callable[[Any], dict[str, Any]] | None = None  # write_case's report, without writing
     run_monitors: Callable[[Any], dict[str, Any]] | None = None  # (case_dir) -> {rho, monitors, custom, balance}
     ui: dict[str, str] = field(default_factory=dict)  # panel ids the plugin provides
@@ -356,9 +360,10 @@ def plan_run_case(inputs: Any, *, analysis_key: str | None = None) -> dict[str, 
 
 def _stamp_case(out: Path, key: str, spec: Any) -> None:
     """Record in the case's sidecar (``w27-case.json``) what readers of the case
-    need from its analysis: its key, and the fields whose files mark a written
-    result frame (results list only complete times). The analysis's own keys
-    stay as it wrote them."""
+    need from its analysis: its key, the fields whose files mark a written
+    result frame (results list only complete times) and, when the analysis
+    declares them, the fields stored divided by density. The analysis's own
+    keys stay as it wrote them (its own ``kinematic_fields`` list wins)."""
     from cfddesk.registry import contract
 
     if not out.is_dir():
@@ -374,6 +379,9 @@ def _stamp_case(out: Path, key: str, spec: Any) -> None:
             doc = loaded
     doc.setdefault("analysis_key", key)
     doc["frame_fields"] = list(contract.frame_fields(spec))
+    kinematic = contract.kinematic_fields(spec)
+    if kinematic is not None:
+        doc.setdefault("kinematic_fields", list(kinematic))
     sidecar.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 

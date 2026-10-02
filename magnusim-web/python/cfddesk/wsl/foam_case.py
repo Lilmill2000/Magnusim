@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cfddesk.registry.contract import APP_NAME_RE
+from cfddesk.registry.contract import APP_NAME_RE, field_name_ok
 from cfddesk.runner.case_id import InvalidWslCaseId, slugify_wsl_case_id, validate_wsl_case_id
 from cfddesk.wsl.mesh_run import windows_to_wsl_path
 
@@ -82,7 +82,6 @@ MAX_ARG_LEN = 120
 FLAG_RE = re.compile(r"^-[A-Za-z][A-Za-z0-9]*$")
 PATH_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$")
 PLACEHOLDER_RE = re.compile(r"__[A-Z][A-Z0-9_]*__")
-FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,63}$")
 TIME_DIR_RE = re.compile(r"^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$")
 PF_CASE_RE = re.compile(r"^cfddesk-pf-[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{8}$")
@@ -102,10 +101,6 @@ ROOT_UNUSABLE = "The WSL case folder setting is not usable"
 # ---------------------------------------------------------------------------
 # Names and paths (§7.6)
 # ---------------------------------------------------------------------------
-
-
-def field_name_ok(name: Any) -> bool:
-    return isinstance(name, str) and bool(FIELD_RE.match(name)) and "__" not in name
 
 
 def _bad_char(text: str, *, quote: bool) -> str | None:

@@ -30,8 +30,13 @@ def case_density(case_dir: Path) -> float:
     return 1.0
 
 
-# Cases written before analyses recorded their kinematic fields (all Incompressible Flow).
 LEGACY_KINEMATIC_FIELDS: tuple[str, ...] = ("p",)
+"""The kinematic fields of a case whose sidecar lists none: the rule for cases
+written before API 1.1, all by the default analysis (pressure divided by
+density). A case written since lists its own (its writer's list, or the
+analysis's ``kinematic_fields``, API 1.4); an analysis that declares none and
+whose writer lists none also falls back to this.
+"""
 
 
 def _sidecar(case_dir: Path) -> dict:

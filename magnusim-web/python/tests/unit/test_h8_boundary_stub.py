@@ -103,6 +103,9 @@ def test_stub_contract(stub):
     row = {r["key"]: r for r in get_registry("analysis").describe()}["stub_diffusion_steady"]
     assert row["family"]["label"] == "Scalar diffusion (stub)" and row["study_defaults"]["algorithm"] == "Laplacian"
     assert row["study_defaults"]["analysis_title"] == "Scalar diffusion (stub)" and row["study_defaults"]["diffusivity"] == 0.0
+    # It declares no kinematic fields (API 1.4): null in describe and in its launch spec.
+    assert row["contract"] == "1.4" and row["kinematic_fields"] is None
+    assert launch.kinematic_fields is None and launch.to_json()["kinematic_fields"] is None
 
 
 def test_stub_writes_its_own_case(stub, tmp_path: Path):

@@ -186,3 +186,36 @@ def test_writing_a_case_stamps_its_frame_fields(tmp_path: Path):
     bare.mkdir()
     _stamp_case(bare, "stub_diffusion_steady", SimpleNamespace(frame_fields=(), fields=("T",)))
     assert json.loads((bare / "w27-case.json").read_text(encoding="utf-8"))["frame_fields"] == ["T"]
+
+
+def test_writing_a_case_stamps_its_kinematic_fields(tmp_path: Path):
+    """API 1.4: the analysis's kinematic_fields go in the sidecar; the writer's own
+    list wins; an analysis that does not declare them leaves the sidecar alone,
+    and such a case is read as before (p)."""
+    from types import SimpleNamespace
+
+    from cfddesk.registry.analysis import AnalysisType, _stamp_case
+
+    declared = tmp_path / "declared"
+    declared.mkdir()
+    _stamp_case(declared, "x_steady", SimpleNamespace(frame_fields=("U", "p"), kinematic_fields=("p", "p_rgh")))
+    doc = json.loads((declared / "w27-case.json").read_text(encoding="utf-8"))
+    assert doc["kinematic_fields"] == ["p", "p_rgh"]
+    assert case_units.kinematic_fields(declared) == ("p", "p_rgh")
+
+    own = tmp_path / "own"
+    own.mkdir()
+    (own / "w27-case.json").write_text(json.dumps({"rho": RHO, "kinematic_fields": []}), encoding="utf-8")
+    _stamp_case(own, "x_steady", SimpleNamespace(frame_fields=("U", "p"), kinematic_fields=("p",)))
+    assert json.loads((own / "w27-case.json").read_text(encoding="utf-8"))["kinematic_fields"] == []
+    assert case_units.kinematic_fields(own) == ()
+
+    # An analysis that does not declare them (as the stub analysis): no list.
+    undeclared = tmp_path / "undeclared"
+    undeclared.mkdir()
+    stub_like = AnalysisType("stub_diffusion_steady", "Stub", "TEST", "steady", ("T",))
+    assert stub_like.kinematic_fields is None
+    _stamp_case(undeclared, stub_like.key, stub_like)
+    doc = json.loads((undeclared / "w27-case.json").read_text(encoding="utf-8"))
+    assert "kinematic_fields" not in doc and doc["frame_fields"] == ["T"]
+    assert case_units.kinematic_fields(undeclared) == case_units.LEGACY_KINEMATIC_FIELDS == ("p",)
