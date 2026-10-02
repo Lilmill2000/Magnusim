@@ -82,6 +82,7 @@ def test_render_substitutes_all_placeholders(tmp_path: Path):
         n_procs=4,
         app="pimpleFoam",
         run_id="run-1",
+        frame_fields=("U", "p"),
     )
     assert "__DST__" not in body
     assert "__APP__" not in body
@@ -97,6 +98,7 @@ def test_render_substitutes_all_placeholders(tmp_path: Path):
         n_procs=1,
         app="simpleFoam",
         run_id="run-9",
+        frame_fields=("U", "p"),
     )
     assert out.read_bytes().startswith(b"#!/usr/bin/env bash")
 
@@ -224,7 +226,7 @@ def test_solve_is_live_targets_the_runs_solver_names(monkeypatch):
 def test_render_solve_script_uses_the_launch_spec():
     from cfddesk.wsl.solve_run import render_solve_script
 
-    kw = {"dst": "/d", "win_out": "/w", "n_procs": 2, "run_id": "r1"}
+    kw = {"dst": "/d", "win_out": "/w", "n_procs": 2, "run_id": "r1", "frame_fields": ("T",)}
     body = render_solve_script(app="laplacianFoam", keep_frames="all", **kw)
     assert 'APP="laplacianFoam"' in body and 'KEEP_FRAMES="all"' in body
     assert '[ "$KEEP_FRAMES" = "all" ]' in body and "pimpleFoam" not in body
@@ -235,6 +237,32 @@ def test_render_solve_script_uses_the_launch_spec():
             render_solve_script(app=bad, **kw)
     with pytest.raises(ValueError):
         render_solve_script(app="simpleFoam", keep_frames="some", **kw)
+    assert 'FRAME_FIELDS="T"' in body
+
+
+def test_render_solve_script_needs_the_frame_fields():
+    # No default: the caller passes the launch spec's fields, so no analysis
+    # gets another analysis's frame test by leaving them out.
+    with pytest.raises(TypeError):
+        render_solve_script(dst="/d", win_out="/w", n_procs=1, app="simpleFoam", run_id="r1")  # type: ignore[call-arg]
+    for bad in ((), ("a b",), ("$(x)",)):
+        with pytest.raises(ValueError):
+            render_solve_script(dst="/d", win_out="/w", n_procs=1, app="simpleFoam", run_id="r1", frame_fields=bad)
+
+
+def test_run_solve_render_only_writes_the_given_frame_fields(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    import run_solve
+
+    monkeypatch.setenv("MAGNUSIM_WSL_CASE_ROOT", "/home/test/cases")
+    out = tmp_path / "solve.sh"
+    argv = ["--case-dir", str(tmp_path), "--wsl-case", "cfddesk-w27-run-1", "--app", "laplacianFoam",
+            "--render-only", "--render-out", str(out)]
+    assert run_solve.main([*argv, "--frame-fields", "T"]) == 0
+    text = out.read_text(encoding="utf-8")
+    assert 'FRAME_FIELDS="T"' in text and "__FRAME_FIELDS__" not in text
+    # Without the flag: the frames of a case written before API 1.1.
+    assert run_solve.main(argv) == 0
+    assert 'FRAME_FIELDS="U p"' in out.read_text(encoding="utf-8")
 
 
 def test_stop_solve_cli_has_probe():

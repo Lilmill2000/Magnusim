@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -7,7 +7,7 @@ import { after, describe, it } from 'node:test';
 // The catalog module reads the projects root when it loads.
 const root = mkdtempSync(join(tmpdir(), 'cfd-study-clash-'));
 process.env.MAGNUSIM_PROJECTS_ROOT = root;
-const { createGeometryFolder, createRunFolder, createStudyFolder, renameFolderTo, walkStudies, writeJsonAtomic } =
+const { createGeometryFolder, createRunFolder, createStudyFolder, findStudy, renameFolderTo, walkStudies, writeJsonAtomic } =
   await import('../project-layout.js');
 const { saveCatalog } = await import('../w17-sim-catalog.js');
 
@@ -81,5 +81,20 @@ describe('study folders whose names sanitize to the same folder', () => {
     assert.notEqual(next, other.dir);
     assert.ok(existsSync(next));
     assert.equal(renameFolderTo(next, simsRoot, 'Run A?'), next);
+  });
+});
+
+describe('a study without a name', () => {
+  it('gets a neutral folder, and an old-fallback folder still loads by id.json', () => {
+    const dir = join(root, 'p-unnamed');
+    createGeometryFolder(dir, { id: 'g1', name: 'part.step', original_filename: 'part.step' });
+    const first = createStudyFolder(dir, 'g1', { id: 'sim-x' });
+    const second = createStudyFolder(dir, 'g1', { id: 'sim-y', name: '' });
+    assert.deepEqual([first.folder, second.folder], ['Study', 'Study_2']);
+    const old = join(first.geometry_dir, 'simulations', 'Incompressible_Steady-state');
+    mkdirSync(old);
+    writeJsonAtomic(join(old, 'id.json'), { id: 'sim-old', geometry_id: 'g1', kind: 'simulation' });
+    assert.equal(findStudy(dir, 'sim-old').dir, old);
+    assert.deepEqual(walkStudies(dir, 'g1').map((s) => s.folder).sort(), ['Incompressible_Steady-state', 'Study', 'Study_2']);
   });
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { caseFrameFields, listFoamTimeDirs } from '../project-layout.js';
+import { LEGACY_FRAME_FIELDS, caseFrameFields, listFoamTimeDirs } from '../project-layout.js';
 
 function caseWith(times, sidecar) {
   const dir = mkdtempSync(join(tmpdir(), 'frames-'));
@@ -29,6 +29,14 @@ describe('result frames follow the case sidecar', () => {
     assert.deepEqual([...caseFrameFields(dir)], ['U', 'p']);
     assert.deepEqual(listFoamTimeDirs(dir, { complete: true }), ['1']);
     assert.deepEqual(listFoamTimeDirs(dir), ['1', '2']);
+  });
+
+  it('falls back to the one legacy constant', () => {
+    assert.deepEqual([...LEGACY_FRAME_FIELDS], ['U', 'p']);
+    assert.ok(Object.isFrozen(LEGACY_FRAME_FIELDS));
+    // A sidecar without frame_fields, and a case with no sidecar at all.
+    assert.equal(caseFrameFields(caseWith({ 1: ['U', 'p'] }, { rho: 1.2, kinematic_fields: ['p'] })), LEGACY_FRAME_FIELDS);
+    assert.equal(caseFrameFields(caseWith({ 1: ['U', 'p'] })), LEGACY_FRAME_FIELDS);
   });
 
   it('ignores names that are not plain field names', () => {

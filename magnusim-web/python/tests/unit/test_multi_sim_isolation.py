@@ -399,3 +399,18 @@ def test_saving_a_wall_bc_keeps_the_slip_default(tmp_path: Path):
         assert assemble_study_bc_defaults(root, "sim-a") == {"wall_type": "Slip"}
     walls = [b for b in _read_study_bcs(root, "sim-a")["boundary_conditions"] if b["bc_type"] == "Wall"]
     assert [w["wall_type"] for w in walls] == ["No-slip"]
+
+
+def test_a_study_without_a_name_gets_a_neutral_folder(tmp_path: Path):
+    root = tmp_path / "proj"
+    create_geometry_folder(root, {"id": "geom-1", "name": "part.step", "original_filename": "part.step"})
+    first = create_study_folder(root, "geom-1", {"id": "sim-x"})
+    second = create_study_folder(root, "geom-1", {"id": "sim-y", "name": ""})
+    assert (first["folder"], second["folder"]) == ("Study", "Study_2")
+    # A folder named by the old fallback still loads: studies are found by id.json.
+    old = Path(first["geometry_dir"]) / "simulations" / "Incompressible_Steady-state"
+    old.mkdir()
+    (old / "id.json").write_text(json.dumps({"id": "sim-old", "geometry_id": "geom-1", "kind": "simulation"}), encoding="utf-8")
+    found = find_study(root, "sim-old")
+    assert found is not None and Path(found["dir"]) == old
+    assert Path(find_study(root, "sim-x")["dir"]).name == "Study"

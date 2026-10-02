@@ -66,12 +66,14 @@ def render_solve_script(
     app: str,
     run_id: str,
     keep_frames: str = "latest",
-    frame_fields: tuple[str, ...] | list[str] = ("U", "p"),
+    frame_fields: tuple[str, ...] | list[str],
 ) -> str:
     """Substitute placeholders in ``templates/solve.sh`` (LF, no BOM).
 
     ``app`` is the program the analysis's launch spec names; ``keep_frames``
-    (``all`` | ``latest``) which result frames come back to Windows.
+    (``all`` | ``latest``) which result frames come back to Windows;
+    ``frame_fields`` the fields whose files mark a written frame (the
+    launch spec's).
     """
     _check_names(app)
     if keep_frames not in ("all", "latest"):
@@ -104,7 +106,7 @@ def write_solve_script(
     app: str,
     run_id: str,
     keep_frames: str = "latest",
-    frame_fields: tuple[str, ...] | list[str] = ("U", "p"),
+    frame_fields: tuple[str, ...] | list[str],
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +132,7 @@ def start_solve(
     run_id: str = "run-1",
     keep_frames: str = "latest",
     process_names: tuple[str, ...] | None = None,
-    frame_fields: tuple[str, ...] = ("U", "p"),
+    frame_fields: tuple[str, ...],
     script_path: Path | None = None,
 ) -> subprocess.Popen:
     """Render solve.sh and spawn ``wsl -d <distro> -- bash <script>``.

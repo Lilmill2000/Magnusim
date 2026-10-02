@@ -18669,8 +18669,6 @@ function resetEmptyWorkbench({ keepProject = true } = {}) {
       bcCatalog.bcs = [];
       bcCatalog.activeId = null;
       bcCatalog.draft_faces = [];
-      bcCatalog.velocity_inlet_1 = null;
-      bcCatalog.pressure_outlet_2 = null;
     }
   } catch (_) {}
   try {
@@ -25304,10 +25302,6 @@ function currentProjectId() {
 
 function publishW19(extra) {
   const list = bcList();
-  const vi = list.find((b) => b.bc_type === 'Velocity inlet') || null;
-  const po = list.find((b) => String(b.bc_type || '').startsWith('Pressure')) || null;
-  bcCatalog.velocity_inlet_1 = vi;
-  bcCatalog.pressure_outlet_2 = po;
   const payload = {
     ready: list.length > 0,
     hydrated: bcCatalog.hydrated,
@@ -25315,8 +25309,6 @@ function publishW19(extra) {
     project_id: bcCatalog.project_id,
     boundary_conditions: list,
     defaults: bcDefaults(),
-    velocity_inlet_1: vi,
-    pressure_outlet_2: po,
     activeId: bcCatalog.activeId,
     boundary_conditions_json: bcCatalog.boundary_conditions_json,
     note: bcCatalog.note,

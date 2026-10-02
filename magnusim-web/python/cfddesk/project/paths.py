@@ -293,7 +293,7 @@ def create_study_folder(project_dir: Path, geom_id: str, sim: dict[str, Any]) ->
     if not geom:
         raise ValueError(f"geometry folder missing for {geom_id}")
     sims_root = Path(geom["dir"]) / "simulations"
-    wanted = sanitize_folder_name(str(sim.get("name") or "Incompressible_Steady-state"), "Study")
+    wanted = sanitize_folder_name(str(sim.get("name") or "Study"), "Study")
     dest = _unique_child(sims_root, wanted)
     dest.mkdir(parents=True, exist_ok=True)
     ident = {

@@ -120,7 +120,7 @@ import { liveRegistryLoaded, pluginLoaded, solverForApplication } from './regist
 import { hardwarePrefs } from './prefs.js';
 import { solveHookNames } from './solve-hooks.js';
 import { jobArgsFromParams, pluginJobEnv } from './server/registered-tool.js';
-import { listFoamTimeDirs } from './project-layout.js';
+import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from './project-layout.js';
 import { hardwareRankCap } from './w27-solve.js';
 
 export { createFoamRecord };
@@ -1517,7 +1517,7 @@ export function startFoam(row) {
     const cap = Math.max(1, Number(D().hardwareRankCap()) || 1);
     const nProcs = parallel === 'none' && !anyParallel ? 1 : Math.min(cap, Math.max(1, Math.floor(Number(rec.n_procs) || 1)));
     const timeDependency = String(solver.time_dependency || launch.time_dependency || 'steady');
-    const frameFields = (rec.results && rec.results.frame_fields) || launch.frame_fields || ['U', 'p'];
+    const frameFields = (rec.results && rec.results.frame_fields) || launch.frame_fields || LEGACY_FRAME_FIELDS;
     /** @type {Record<string, any>} */
     const sidecar = {
       kinematic_fields: (rec.results && rec.results.kinematic_fields) || [],

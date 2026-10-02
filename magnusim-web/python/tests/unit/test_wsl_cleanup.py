@@ -23,6 +23,7 @@ def _solve_body() -> str:
         n_procs=4,
         app="simpleFoam",
         run_id="run-1",
+        frame_fields=("U", "p"),
     )
 
 

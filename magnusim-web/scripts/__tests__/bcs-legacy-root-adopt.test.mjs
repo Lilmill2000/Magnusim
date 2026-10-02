@@ -108,6 +108,47 @@ for (const copyIntoStudy of [true, false]) {
   });
 }
 
+// velocity_inlet_1 / pressure_outlet_2 were whole-record copies of the first
+// inlet and pressure BC, written beside the list and never read. Files that
+// still hold them load the same; the API no longer answers with them.
+describe('stored velocity_inlet_1 / pressure_outlet_2 keys are left unread', () => {
+  const DEAD = ['velocity_inlet_1', 'pressure_outlet_2'];
+  const STALE = { velocity_inlet_1: { name: 'stale inlet' }, pressure_outlet_2: { name: 'stale outlet' } };
+  const plain = seed('dead-keys-plain', { copyIntoStudy: true });
+  const withKeys = seed('dead-keys', { copyIntoStudy: true, rootBcs: { ...LEGACY_BCS, ...STALE } });
+  const rows = (list) =>
+    (list || [])
+      .map(({ id, name, bc_type, value, unit, faces, simulation_id }) => ({ id, name, bc_type, value, unit, faces, simulation_id }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const noDeadKeys = (body) => {
+    for (const k of DEAD) assert.equal(Object.hasOwn(body, k), false, k);
+  };
+
+  it('GET /api/bcs returns the same boundary conditions, without the keys', () => {
+    assert.ok(plain.study && withKeys.study);
+    const got = getBcs('dead-keys', undefined, 'sim_1');
+    assert.equal(got.status, 200);
+    noDeadKeys(got.body);
+    assert.deepEqual(rows(got.body.boundary_conditions), rows(getBcs('dead-keys-plain', undefined, 'sim_1').body.boundary_conditions));
+    assert.deepEqual(names(got.body.boundary_conditions), ['pressure_1', 'velocity_inlet_1']);
+  });
+
+  it('a write answers without the keys and writes no new copy of them', async () => {
+    const created = await post({ project_id: 'dead-keys', simulation_id: 'sim_1', bc_type: 'Wall', faces: ['face 3@Body1'] });
+    assert.equal(created.status, 200, JSON.stringify(created.json));
+    noDeadKeys(created.json);
+    assert.deepEqual(names(created.json.boundary_conditions), ['Wall 1', 'pressure_1', 'velocity_inlet_1']);
+    const aggregate = JSON.parse(readFileSync(studyBcsPath(withKeys.study.dir), 'utf8'));
+    assert.deepEqual(names(aggregate.boundary_conditions), ['Wall 1', 'pressure_1', 'velocity_inlet_1']);
+    // The stored file may keep what it held; nothing refreshes it.
+    for (const k of DEAD) if (Object.hasOwn(aggregate, k)) assert.deepEqual(aggregate[k], STALE[k]);
+    const del = await post({ project_id: 'dead-keys', simulation_id: 'sim_1', delete: 'bc-legacy-2' });
+    assert.equal(del.status, 200, JSON.stringify(del.json));
+    noDeadKeys(del.json);
+    noDeadKeys(getBcs('dead-keys', undefined, 'sim_1').body);
+  });
+});
+
 describe('deleting a legacy BC before any create', () => {
   const projectId = 'legacy-delete-first';
   seed(projectId, { copyIntoStudy: true });

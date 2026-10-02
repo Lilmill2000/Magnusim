@@ -23,6 +23,7 @@ CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
 from cfddesk.jobs.events import EVENT_PREFIX
+from cfddesk.registry.contract import LEGACY_FRAME_FIELDS
 from cfddesk.runner.case_id import wsl_case_path
 from cfddesk.wsl.mesh_run import windows_to_wsl_path
 from cfddesk.wsl.solve_hooks import HookRunner, hook_names
@@ -86,9 +87,14 @@ def _parse_log(path: Path, runner: HookRunner | None = None) -> int:
     return 0
 
 
+def _frame_fields(args: argparse.Namespace) -> tuple[str, ...]:
+    return tuple(f.strip() for f in args.frame_fields.split(",") if f.strip()) or LEGACY_FRAME_FIELDS
+
+
 def _render_only(args: argparse.Namespace) -> int:
     dst = wsl_case_path(args.wsl_case)
     win_out = windows_to_wsl_path(Path(args.case_dir).resolve())
+    frame_fields = _frame_fields(args)
     body = render_solve_script(
         dst=dst,
         win_out=win_out,
@@ -96,6 +102,7 @@ def _render_only(args: argparse.Namespace) -> int:
         app=args.app,
         run_id=args.run_id,
         keep_frames=args.keep_frames,
+        frame_fields=frame_fields,
     )
     out = Path(args.render_out) if args.render_out else None
     if out:
@@ -107,6 +114,7 @@ def _render_only(args: argparse.Namespace) -> int:
             app=args.app,
             run_id=args.run_id,
             keep_frames=args.keep_frames,
+            frame_fields=frame_fields,
         )
         print(
             json.dumps({"ok": True, "script": str(out), "bytes": len(body.encode("utf-8"))}),
@@ -124,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--n-procs", type=int, default=1)
     p.add_argument("--app", default="", help="Program to run: the launch spec's app (a registered solver application)")
     p.add_argument("--keep-frames", default="latest", choices=("all", "latest"))
-    p.add_argument("--frame-fields", default="U,p", help="Comma-separated fields that mark a written result frame")
+    p.add_argument("--frame-fields", default=",".join(LEGACY_FRAME_FIELDS), help="Comma-separated fields that mark a written result frame")
     p.add_argument("--process-names", default="", help="Comma-separated solver process names (default: the app)")
     p.add_argument("--log-parser", default="", help="Launch spec log_parser as JSON {module, factory, path}")
     p.add_argument("--run-id", default="run-1")
@@ -174,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         run_id=args.run_id,
         keep_frames=args.keep_frames,
         process_names=names,
-        frame_fields=tuple(f.strip() for f in args.frame_fields.split(",") if f.strip()) or ("U", "p"),
+        frame_fields=_frame_fields(args),
     )
     if runner is None:
         rc, parser = stream_events_to_stdout(proc, parser)

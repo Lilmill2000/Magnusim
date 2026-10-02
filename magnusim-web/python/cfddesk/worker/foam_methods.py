@@ -17,6 +17,7 @@ from cfddesk.registry.base import RegistryError
 from cfddesk.registry.contract import (
     APP_NAME_RE,
     GENERIC_LOG_PARSER,
+    LEGACY_FRAME_FIELDS,
     ContractError,
     LaunchSpec,
     check_launch_spec,
@@ -78,7 +79,7 @@ def foam_check_case(
         stop_strategy=stop_strategy,
         parallel=str(getattr(solver, "parallel", "none")) == "mpirun",
         log_parser=GENERIC_LOG_PARSER,
-        frame_fields=tuple(checked.get("frame_fields") or ("U", "p")),
+        frame_fields=tuple(checked.get("frame_fields") or LEGACY_FRAME_FIELDS),
     )
     try:
         check_launch_spec(launch, load_all(web_root=web_root()).registry("solver"))

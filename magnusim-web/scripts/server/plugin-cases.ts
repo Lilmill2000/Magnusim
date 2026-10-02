@@ -27,7 +27,7 @@ import { foamWslCaseId, newFoamToken, pluginEpoch, rowNameOf, stopFoamCase } fro
 import { pluginLoaded, solverForApplication } from '../registry-defaults.js';
 import { wslCaseRoot } from '../wsl-env.js';
 import { projectDir } from '../w17-sim-catalog.js';
-import { listFoamTimeDirs } from '../project-layout.js';
+import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from '../project-layout.js';
 
 export interface PluginCaseDeps {
   worker: WorkerClient;
@@ -391,7 +391,7 @@ export function registerPluginCaseRoutes(router: Router, deps: PluginCaseDeps): 
       const rowId = newRowId();
       const results: Rec = {
         kinematic_fields: shapes.results.kinematicFields,
-        frame_fields: Array.isArray(launch.frame_fields) && launch.frame_fields.length ? launch.frame_fields : shapes.results.frameFields || ['U', 'p'],
+        frame_fields: Array.isArray(launch.frame_fields) && launch.frame_fields.length ? launch.frame_fields : shapes.results.frameFields || LEGACY_FRAME_FIELDS,
       };
       if (shapes.results.rho !== undefined) results.rho = shapes.results.rho;
       const rec = createFoamRecord({
@@ -536,7 +536,7 @@ export function registerPluginCaseRoutes(router: Router, deps: PluginCaseDeps): 
       const latest = recs[0] as Rec | undefined;
       const solver = app ? (solverForApplication(app) as Rec | null) : null;
       const td = str((latest && latest.launch && latest.launch.time_dependency) || (solver && solver.time_dependency));
-      const frameFields = Array.isArray(sidecar.frame_fields) && sidecar.frame_fields.length ? sidecar.frame_fields : ['U', 'p'];
+      const frameFields = Array.isArray(sidecar.frame_fields) && sidecar.frame_fields.length ? sidecar.frame_fields : LEGACY_FRAME_FIELDS;
       const hashed = 'pf-' + createHash('sha1').update(`${s.projectId}/${s.plugin}/${s.studyId}/${key}`).digest('hex').slice(0, 12);
       ctx.sendJson(200, {
         ok: true,

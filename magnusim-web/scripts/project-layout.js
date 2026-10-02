@@ -208,8 +208,14 @@ export function foamTimeHasField(base, field) {
   return existsSync(join(base, field)) || existsSync(join(base, field + '.gz'));
 }
 
-/** Cases written before the sidecar listed its analysis's frame fields. */
-const LEGACY_FRAME_FIELDS = Object.freeze(['U', 'p']);
+/**
+ * The frame fields of a case written before API 1.1 (by the default
+ * analysis): its sidecar lists no frame_fields of its own. The same pair as
+ * LEGACY_FRAME_FIELDS in python/cfddesk/registry/contract.py; see
+ * docs/plugins/compatibility.md, section 1.1.
+ * @type {readonly string[]}
+ */
+export const LEGACY_FRAME_FIELDS = Object.freeze(['U', 'p']);
 const FRAME_FIELD_RE = /^[A-Za-z_][A-Za-z0-9_.]*$/;
 /** caseDir|sidecar mtime → frame fields (a sidecar is rewritten only when its case is). */
 const frameFieldsCache = new Map();
@@ -217,7 +223,7 @@ const frameFieldsCache = new Map();
 /**
  * The fields whose files mark a written result frame in this case: the case
  * sidecar's frame_fields (its analysis's launch spec, stamped by prepare_run),
- * else U and p.
+ * else LEGACY_FRAME_FIELDS.
  * @param {string} caseDir
  * @returns {readonly string[]}
  */
@@ -515,7 +521,7 @@ export function createStudyFolder(projectDirPath, geomId, sim) {
   if (!geom) throw new Error('geometry folder missing for ' + geomId);
   const simsRoot = join(geom.dir, 'simulations');
   mkdirSync(simsRoot, { recursive: true });
-  const wanted = sanitizeFolderName(sim.name || 'Incompressible_Steady-state', 'Study');
+  const wanted = sanitizeFolderName(sim.name || 'Study', 'Study');
   const { name: folder, path: dir } = uniqueChildDir(simsRoot, wanted);
   writeIdFile(dir, {
     id: sim.id,

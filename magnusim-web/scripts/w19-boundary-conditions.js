@@ -200,10 +200,6 @@ function isVelocityType(t) {
   return String(t || '').startsWith('Velocity');
 }
 
-function isPressureType(t) {
-  return String(t || '').startsWith('Pressure');
-}
-
 function isWallType(t) {
   return String(t || '') === 'Wall';
 }
@@ -367,8 +363,6 @@ async function persistBcsDoc(projectId, sim, bcsList, defaults, dropIds, only) {
   const mine = dedupeStudyBcs(
     (bcsList || []).filter((b) => matchesStudy(b, sim.id, legacyId))
   );
-  const velocity = mine.find((b) => b.bc_type === 'Velocity inlet') || null;
-  const pressure = mine.find((b) => isPressureType(b.bc_type)) || null;
   const prev = readBcsFile(projectId, sim.id);
   const prevBySim = (prev && prev.defaults_by_simulation) || {};
   const defs = normalizeBcDefaults(
@@ -395,8 +389,6 @@ async function persistBcsDoc(projectId, sim, bcsList, defaults, dropIds, only) {
     boundary_conditions: mine,
     defaults: defs,
     defaults_by_simulation,
-    velocity_inlet_1: velocity,
-    pressure_outlet_2: pressure,
     updated_at: now,
     persistence: 'filesystem',
     boundary_conditions_json: bcsPath,
@@ -420,7 +412,7 @@ async function persistBcsDoc(projectId, sim, bcsList, defaults, dropIds, only) {
     /* non-fatal */
   }
 
-  return { doc: written, bcsPath, velocity, pressure };
+  return { doc: written, bcsPath };
 }
 
 async function deleteBcs(body) {
@@ -474,8 +466,6 @@ async function deleteBcs(body) {
       defaults: studyDefaults,
       defaults_by_simulation: doc.defaults_by_simulation || {},
       simulation_id: sim.id,
-      velocity_inlet_1: visible.find((b) => b.bc_type === 'Velocity inlet') || null,
-      pressure_outlet_2: visible.find((b) => isPressureType(b.bc_type)) || null,
       project_id: projectId,
       boundary_conditions_json: bcsPath,
     },
@@ -559,8 +549,6 @@ async function upsertBcs(body) {
       boundary_conditions_all: liveStudyRows(projectId, proj, doc.boundary_conditions || []),
       defaults: studyDefaults,
       defaults_by_simulation: doc.defaults_by_simulation || {},
-      velocity_inlet_1: visible.find((b) => b.bc_type === 'Velocity inlet') || null,
-      pressure_outlet_2: visible.find((b) => isPressureType(b.bc_type)) || null,
       project_id: projectId,
       simulation_id: sim.id,
       boundary_conditions_json: bcsPath,
@@ -579,8 +567,6 @@ export function getBcs(projectIdOpt, geomIdOpt, simIdOpt) {
         active: false,
         boundary_conditions: [],
         defaults: normalizeBcDefaults(null),
-        velocity_inlet_1: null,
-        pressure_outlet_2: null,
         increment: 'W19',
       },
     };
@@ -600,8 +586,6 @@ export function getBcs(projectIdOpt, geomIdOpt, simIdOpt) {
       firstLegacySimId(projectId, proj)
     )
   );
-  const velocity = list.find((b) => b.bc_type === 'Velocity inlet') || null;
-  const pressure = list.find((b) => isPressureType(b.bc_type)) || null;
   const studyDefaults =
     (sim && doc && doc.defaults_by_simulation && doc.defaults_by_simulation[sim.id]) ||
     (list.length ? normalizeBcDefaults(doc && doc.defaults) : normalizeBcDefaults(null));
@@ -617,8 +601,6 @@ export function getBcs(projectIdOpt, geomIdOpt, simIdOpt) {
       simulation_id: (sim && sim.id) || null,
       defaults: studyDefaults,
       defaults_by_simulation: (doc && doc.defaults_by_simulation) || {},
-      velocity_inlet_1: velocity,
-      pressure_outlet_2: pressure,
       boundary_conditions_json_path: bcsJsonPath(projectId, sim && sim.id),
       boundary_conditions_json_exists: existsSync(bcsJsonPath(projectId, sim && sim.id)),
       increment: 'W19',

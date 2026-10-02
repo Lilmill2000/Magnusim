@@ -40,6 +40,14 @@ XAxis = Literal["iterations", "seconds"]
 # substitution, so it may only be a plain identifier.
 APP_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 
+LEGACY_FRAME_FIELDS: tuple[str, ...] = ("U", "p")
+"""The frame fields of a case written before API 1.1 (by the default analysis).
+
+Such a case names no ``frame_fields`` of its own, so a saved time counts as a
+result frame when these fields are written in it. See
+docs/plugins/compatibility.md, section 1.1.
+"""
+
 
 @dataclass(frozen=True)
 class AnalysisFamily:
@@ -102,7 +110,7 @@ class LaunchSpec:
     parallel: bool
     log_parser: LogParserRef
     # Fields whose file in a time folder means that result frame was written.
-    frame_fields: tuple[str, ...] = ("U", "p")
+    frame_fields: tuple[str, ...] = LEGACY_FRAME_FIELDS
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -354,7 +362,7 @@ def check_launch_spec(out: LaunchSpec, solver_registry: Any) -> None:
 
 def frame_fields(spec: Any) -> tuple[str, ...]:
     """The fields that mark a written result frame: the analysis's frame_fields, else its fields."""
-    return tuple(_hook(spec, "frame_fields") or getattr(spec, "fields", ()) or ("U", "p"))
+    return tuple(_hook(spec, "frame_fields") or getattr(spec, "fields", ()) or LEGACY_FRAME_FIELDS)
 
 
 def log_parser_ref(spec: Any) -> LogParserRef:

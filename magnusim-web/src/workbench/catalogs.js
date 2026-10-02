@@ -37,8 +37,6 @@ export const bcCatalog = {
   activeId: null,
   draft_faces: [],
   focusFace: null,
-  velocity_inlet_1: null,
-  pressure_outlet_2: null,
   boundary_conditions_json: null,
   note: '',
 };
