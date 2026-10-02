@@ -7590,7 +7590,7 @@ function renderPopChart(meta) {
     .join(' ');
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   svg.innerHTML =
-    `<polyline fill="none" stroke="#3b5bdb" stroke-width="2" points="${pts}" />` +
+    `<polyline fill="none" stroke="#1570ef" stroke-width="2" points="${pts}" />` +
     `<text x="8" y="14" font-size="10" fill="#4b5563">${escapeXml(m.field_variable || '')}</text>` +
     `<text x="8" y="${h - 8}" font-size="9" fill="#6b7280">distance</text>`;
   if (metaEl) {

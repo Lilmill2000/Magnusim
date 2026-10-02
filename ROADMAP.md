@@ -80,9 +80,9 @@ September 2026 readiness audit. This list preserves the intended work.
     (none today), and an OFF pill toggle that is not the browser button face
     (`.mesh-toggle.is-off` is dead CSS). One toast layer: app toasts and
     workspace toasts draw in the same bottom-right corner, apart.
-  - Buttons: the panel primary is #3b5bdb, Home's primary is near-black and
-    Kick is #1f6feb. The kit's primary token is #3b5bdb; Daniel may pick
-    #1570ef, a one-token change. Disabled is .45 in the app and .55 in
+  - Buttons: the primary blue is #1570ef (Daniel, 2026-10-02) for the kit,
+    the panel primary and Kick; Home's primary is still near-black. Disabled
+    is .45 in the app and .55 in
     `/plugin-sdk/theme.css`. Destructive styles use two reds (#c62828 in
     dialogs and the trash, #b42318 in reasons and menus). `.sim-def-title` is
     overridden by `.mat-panel-title`. A core Done click closes its panel twice

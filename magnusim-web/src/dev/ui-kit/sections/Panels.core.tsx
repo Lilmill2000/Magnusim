@@ -19,7 +19,7 @@ const TOAST_COLUMN: CSSProperties = { display: 'flex', flexDirection: 'column', 
 /**
  * The workspace toast's rules as they were before H14 (style.css at 83ebaf5),
  * renamed wsx-, without their place, and with the info accent's value then
- * (#1570ef; --mg-primary is #3b5bdb now). Page only, so the kit's class rules
+ * (#1570ef, the info token). Page only, so the kit's class rules
  * do not apply to it.
  */
 const WSX_TOAST_CSS = `

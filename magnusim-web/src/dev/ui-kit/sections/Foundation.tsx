@@ -109,7 +109,7 @@ function Row({ call, out }: { call: string; out: string | number | null }) {
 }
 
 const DECISIONS = [
-  'Primary: #3b5bdb, matches core; proposed alternative #1570ef.',
+  'Primary: #1570ef, the app primary (core panel buttons too).',
   'Danger button: #c62828 (dialogs); danger text: #b42318.',
   'Controls: browser font, browser focus ring, no hover on primary and secondary, browser-face OFF pill, as the core today; unifying them is ROADMAP.',
   'Colour maps: rainbow, viridis, balance, curl; cividis dropped (licence).',

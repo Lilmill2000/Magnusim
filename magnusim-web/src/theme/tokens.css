@@ -3,9 +3,8 @@
  * radii, shadows, layers and motion. Values are the dominant ones the app
  * already uses; the core imports this file without rewriting its own
  * selectors (no visual change), and plugin workspaces get it as
- * /plugin-sdk/theme.css with base styles. Primary #3b5bdb matches the core
- * panel buttons. #1570ef is the proposed alternative, waiting for Daniel's
- * sign-off (H14).
+ * /plugin-sdk/theme.css with base styles. Primary #1570ef is the app's primary
+ * blue (Daniel, 2026-10-02): the core panel buttons use it too.
  */
 :root {
   /* Colour roles */
@@ -19,8 +18,8 @@
   --mg-border: #d0d5dd;
   --mg-border-subtle: #eaecf0;
   --mg-header-border: #d5d8de;
-  --mg-primary: #3b5bdb;
-  --mg-primary-hover: #364fc7;
+  --mg-primary: #1570ef;
+  --mg-primary-hover: #175cd3;
   --mg-primary-text: #ffffff;
   --mg-selected-bg: #eff4ff;
   --mg-selected-border: #b2ccff;
@@ -31,7 +30,7 @@
   --mg-success-bg: #ecfdf3;
   --mg-warning: #b54708;
   --mg-warning-bg: #fffaeb;
-  --mg-focus: rgba(59, 91, 219, 0.35);
+  --mg-focus: rgba(21, 112, 239, 0.35);
 
   /* Type */
   --mg-font: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;

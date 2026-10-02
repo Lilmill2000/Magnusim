@@ -2020,8 +2020,8 @@ select.fp-select {
   cursor: not-allowed;
 }
 .fp-btn-primary {
-  background: #3b5bdb;
-  border-color: #3b5bdb;
+  background: #1570ef;
+  border-color: #1570ef;
   color: #fff;
   width: 100%;
   padding: 6px 10px;
@@ -2477,8 +2477,8 @@ select.fp-select {
 /* W15.1 Kick mesh */
 .js-btn-kick {
   margin-left: 6px;
-  background: #1f6feb;
-  border-color: #388bfd;
+  background: #1570ef;
+  border-color: #1570ef;
   color: #fff;
 }
 .js-btn-kick:disabled {

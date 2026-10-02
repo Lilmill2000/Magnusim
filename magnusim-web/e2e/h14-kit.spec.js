@@ -953,7 +953,7 @@ test.describe('h14 server', () => {
         const s = getComputedStyle(b);
         return { background: s.backgroundColor, color: s.color, size: s.fontSize, padding: s.padding };
       });
-      expect(look).toEqual({ background: 'rgb(59, 91, 219)', color: 'rgb(255, 255, 255)', size: '12px', padding: '6px 10px' });
+      expect(look).toEqual({ background: 'rgb(21, 112, 239)', color: 'rgb(255, 255, 255)', size: '12px', padding: '6px 10px' });
       stage(t0, 'frame loaded the kit; the button is the kit primary');
 
       // 3. Its toast draws inside the workspace, above the frame, and × closes it.

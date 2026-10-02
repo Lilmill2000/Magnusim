@@ -16,7 +16,7 @@ Host API 1.3 (`API_VERSION`, and `hostVersion` in a workspace's context), plugin
 
 **Workspace toasts.** `ws.ui.toast` is now drawn as the kit Toast, still inside the workspace (`#workspace-overlay [data-ws-toast]`) and one at a time. Its classes are `mgk-toast mgk-toast--<kind>` (they were `ws-toast is-<kind>`). It closes after 3.8 s, errors after 9 s (both were 4 s), and its time stops while the pointer or the focus is on it.
 
-**Changed look, in plugin pages.** `--mg-primary` is `#3b5bdb` (was `#1570ef`), the blue of the core panel buttons; `--mg-primary-hover` is `#364fc7` and `--mg-focus` `rgba(59, 91, 219, 0.35)`. The `button.primary` style and the focus ring of `/plugin-sdk/theme.css` follow.
+**Primary colour.** `--mg-primary` stays `#1570ef` (hover `#175cd3`); the app's own primary buttons now use it too.
 
 **Colour.** `useViewer().createRainbowLut()` uses hue 0.667 (was 0.666), the hue the app's own renders use (the kit's `RAINBOW_HUE`).
 
