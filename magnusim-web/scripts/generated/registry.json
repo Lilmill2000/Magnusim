@@ -306,6 +306,7 @@
         }
       ],
       "kinematic_fields": null,
+      "monitor_quantities": null,
       "ui": {
         "study_settings": "incompressible_flow.study",
         "run_settings": "incompressible_flow.run"
@@ -702,6 +703,7 @@
         }
       ],
       "kinematic_fields": null,
+      "monitor_quantities": null,
       "ui": {
         "study_settings": "incompressible_flow.study",
         "run_settings": "incompressible_flow.run"
@@ -1467,12 +1469,52 @@
     {
       "key": "area_average",
       "label": "Area average",
-      "plugin": "incompressible_flow"
+      "plugin": "incompressible_flow",
+      "target": "patch",
+      "description": "",
+      "aliases": [],
+      "user_creatable": false,
+      "quantities": [],
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fields": {
+            "type": "string",
+            "default": "U p",
+            "x-cfddesk": {
+              "group": "monitor"
+            },
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false
+      }
     },
     {
       "key": "flow_rate",
       "label": "Flow rate",
-      "plugin": "incompressible_flow"
+      "plugin": "incompressible_flow",
+      "target": "patch",
+      "description": "",
+      "aliases": [],
+      "user_creatable": false,
+      "quantities": [],
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fields": {
+            "type": "string",
+            "default": "phi",
+            "x-cfddesk": {
+              "group": "monitor"
+            },
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false
+      }
     }
   ],
   "filter": [

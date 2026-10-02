@@ -1672,6 +1672,7 @@ Registered analysis / physics type (incompressible, CHT, ...).
 | `plan_case` | `Callable[[Any], dict[str, Any]] \| None` | `None` |  |
 | `run_monitors` | `Callable[[Any], dict[str, Any]] \| None` | `None` |  |
 | `ui` | `dict[str, str]` | `field(default_factory=dict)` |  |
+| `monitor_quantities` | `tuple[Any, ...] \| None` | `None` | Contract 1.4: the quantities its run_monitors series carry (MonitorQuantity rows). None = not declared (an analysis with a run_monitors hook gets contract.LEGACY_MONITOR_QUANTITIES); () = none. |
 
 ### cfddesk.registry.contract
 
@@ -1795,6 +1796,22 @@ run_preview(spec: Any, **kwargs: Any) -> dict[str, Any]
 
 The numbers a run would be written with now (``{"partial": True}`` if unknown).
 
+#### declared_monitor_quantities
+
+```python
+declared_monitor_quantities(spec: Any) -> list[dict[str, Any]] | None
+```
+
+The monitor quantities the analysis declares, checked (None when it does not say).
+
+#### monitor_quantities
+
+```python
+monitor_quantities(spec: Any) -> list[dict[str, Any]]
+```
+
+The quantities a run's monitors carry: the analysis's own list; for one that declares none but has a ``run_monitors`` hook, :data:`LEGACY_MONITOR_QUANTITIES`; else none.
+
 #### run_monitors
 
 ```python
@@ -1858,7 +1875,8 @@ Constants:
 - `GENERIC_LOG_PARSER = LogParserRef("cfddesk.wsl.solve_run", "GenericParser")`
 - `RESULT_KINDS = ("scalar", "vector", "symm_tensor", "tensor")`
 - `UNIT_TEXT_MAX = 32`
-- `NO_MONITORS = {"rho": None, "monitors": [], "custom": [], "balance": None}`
+- `NO_MONITORS = { "rho": None, "monitors": [], "custom": [], "balance": None, "quantities": [], "summary": [], "s...`
+- `LEGACY_MONITOR_QUANTITIES = ( MonitorQuantity( "p", "Pressure", "p_Pa", unit_quantity="pressure", unit="Pa", color="#6941c6",...`
 
 ## 6. Hooks
 

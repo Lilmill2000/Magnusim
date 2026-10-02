@@ -25,11 +25,15 @@ the builtin's behaviour.
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
+
+from cfddesk.registry.monitor import MonitorQuantity
 
 CONTRACT_VERSION = "1.4"
 
@@ -185,6 +189,7 @@ def describe_extra(spec: Any) -> dict[str, Any]:
         "x_axis": str(_hook(spec, "x_axis") or ("seconds" if _td(spec.time_dependency) == "transient" else "iterations")),
         "result_fields": result_fields(spec),
         "kinematic_fields": _list_or_none(kinematic_fields(spec)),
+        "monitor_quantities": declared_monitor_quantities(spec),
         "ui": dict(_hook(spec, "ui") or {}),
         "study_defaults": study_defaults(spec),
         "run_defaults": run_defaults(spec),
@@ -396,18 +401,246 @@ def run_preview(spec: Any, **kwargs: Any) -> dict[str, Any]:
     return dict(model.preview(**kwargs) or {})
 
 
-NO_MONITORS: dict[str, Any] = {"rho": None, "monitors": [], "custom": [], "balance": None}
+NO_MONITORS: dict[str, Any] = {
+    "rho": None,
+    "monitors": [],
+    "custom": [],
+    "balance": None,
+    "quantities": [],
+    "summary": [],
+    "summary_warn": False,
+}
+
+LEGACY_MONITOR_QUANTITIES: tuple[MonitorQuantity, ...] = (
+    MonitorQuantity(
+        "p", "Pressure", "p_Pa", unit_quantity="pressure", unit="Pa", color="#6941c6",
+        headline=True, csv="pressure_Pa",
+    ),
+    MonitorQuantity(
+        "Umag", "Mean velocity", "Umag", unit_quantity="velocity", unit="m/s",
+        headline=True, csv="mean_velocity_m_s",
+    ),
+    MonitorQuantity("Ux", "Velocity X", "U", component=0, unit_quantity="velocity", unit="m/s", csv="Ux_m_s"),
+    MonitorQuantity("Uy", "Velocity Y", "U", component=1, unit_quantity="velocity", unit="m/s", csv="Uy_m_s"),
+    MonitorQuantity("Uz", "Velocity Z", "U", component=2, unit_quantity="velocity", unit="m/s", csv="Uz_m_s"),
+    MonitorQuantity(
+        "Un", "Normal velocity", "Un_m_s", unit_quantity="velocity", unit="m/s", magnitude=True,
+        direction_from="Q_m3s", direction=("in", "out"), plot=False, csv="Un_m_s",
+    ),
+    MonitorQuantity(
+        "Q", "Flow rate", "Q_m3s", unit_quantity="volumetric_flow", unit="m³/s", magnitude=True,
+        direction_from="Q_m3s", direction=("in", "out"), plot=False, headline=True, csv="flow_m3_s",
+    ),
+    MonitorQuantity(
+        "mdot", "Mass flow", "mdot_kgs", unit_quantity="mass_flow", unit="kg/s", magnitude=True,
+        plot=False, csv="mass_kg_s",
+    ),
+)
+"""The monitor quantities of an analysis that declares none but has a
+``run_monitors`` hook (API 1.1 rows: ``p_Pa``, ``Umag``, ``U``, ``Un_m_s``,
+``Q_m3s`` per series point). The table the page used to carry. See
+docs/plugins/compatibility.md, section 1.4.
+"""
+
+_QUANTITY_FIELDS = tuple(f.name for f in dataclasses.fields(MonitorQuantity))
+_QUANTITY_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
+_SAMPLE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+_COLOR_RE = re.compile(r"^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$")
+_CSV_RE = re.compile(r"^[A-Za-z0-9_]{0,64}$")
+
+
+def _real(value: Any) -> TypeGuard[float]:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _quantity_row(what: str, row: Any) -> dict[str, Any]:
+    if isinstance(row, dict):
+        bad = set(row) - set(_QUANTITY_FIELDS)
+        if bad:
+            raise ContractError(f"{what}: unknown field(s) {sorted(bad)}")
+        try:
+            row = MonitorQuantity(**row)
+        except TypeError as exc:
+            raise ContractError(f"{what}: {exc}") from exc
+    if not isinstance(row, MonitorQuantity):
+        raise ContractError(f"{what}: rows must be MonitorQuantity or dicts, got {row!r}")
+    q = row
+    problems = []
+    if not isinstance(q.key, str) or not _QUANTITY_KEY_RE.match(q.key):
+        problems.append(f"key {q.key!r} must be a letter, then up to 31 letters, digits or _")
+    if not q.label or not plain_text(q.label, 64):
+        problems.append(f"label {q.label!r} must be plain text of 1 to 64 characters")
+    if not isinstance(q.sample, str) or not _SAMPLE_RE.match(q.sample):
+        problems.append(f"sample {q.sample!r} must be a series point key")
+    if q.component is not None and not (isinstance(q.component, int) and not isinstance(q.component, bool) and 0 <= q.component <= 8):
+        problems.append(f"component {q.component!r} must be None or 0 to 8")
+    if q.unit_quantity and not (isinstance(q.unit_quantity, str) and _SAMPLE_RE.match(q.unit_quantity)):
+        problems.append(f"unit_quantity {q.unit_quantity!r} must be a quantity name")
+    if not plain_text(q.unit, UNIT_TEXT_MAX):
+        problems.append(f"unit {q.unit!r} must be plain text of at most {UNIT_TEXT_MAX} characters")
+    if not isinstance(q.color, str) or not _COLOR_RE.match(q.color):
+        problems.append(f"color {q.color!r} must be #rgb or #rrggbb")
+    if q.direction_from and not (isinstance(q.direction_from, str) and _SAMPLE_RE.match(q.direction_from)):
+        problems.append(f"direction_from {q.direction_from!r} must be a series point key")
+    direction = q.direction
+    if (
+        not isinstance(direction, (tuple, list))
+        or len(direction) != 2
+        or not all(plain_text(d, UNIT_TEXT_MAX) for d in direction)
+    ):
+        problems.append(f"direction {direction!r} must be two words (below zero, else)")
+    for flag in ("magnitude", "plot", "details", "headline"):
+        if not isinstance(getattr(q, flag), bool):
+            problems.append(f"{flag} must be true or false")
+    if not isinstance(q.csv, str) or not _CSV_RE.match(q.csv):
+        problems.append(f"csv {q.csv!r} must be a column name of letters, digits or _")
+    if problems:
+        raise ContractError(f"{what} {getattr(q, 'key', '?')!r}: " + "; ".join(problems))
+    out = dataclasses.asdict(q)
+    out["direction"] = list(direction)
+    return out
+
+
+def declared_monitor_quantities(spec: Any) -> list[dict[str, Any]] | None:
+    """The monitor quantities the analysis declares, checked (None when it does not say)."""
+    raw = _hook(spec, "monitor_quantities")
+    if raw is None:
+        return None
+    what = f"{getattr(spec, 'key', '?')}.monitor_quantities"
+    if isinstance(raw, (str, dict)) or not isinstance(raw, (tuple, list)):
+        raise ContractError(f"{what} must be a tuple of MonitorQuantity, got {raw!r}")
+    rows = [_quantity_row(what, q) for q in raw]
+    keys = [r["key"] for r in rows]
+    twice = sorted({k for k in keys if keys.count(k) > 1})
+    if twice:
+        raise ContractError(f"{what}: {twice} listed twice")
+    return rows
+
+
+def monitor_quantities(spec: Any) -> list[dict[str, Any]]:
+    """The quantities a run's monitors carry: the analysis's own list; for one
+    that declares none but has a ``run_monitors`` hook, :data:`LEGACY_MONITOR_QUANTITIES`;
+    else none."""
+    declared = declared_monitor_quantities(spec)
+    if declared is not None:
+        return declared
+    if callable(_hook(spec, "run_monitors")):
+        return [_quantity_row("LEGACY_MONITOR_QUANTITIES", q) for q in LEGACY_MONITOR_QUANTITIES]
+    return []
+
+
+def _check_monitor_answer(what: str, out: dict[str, Any]) -> None:
+    rho = out.get("rho")
+    if rho is not None and not _real(rho):
+        raise ContractError(f"{what}: rho must be a number or None, got {rho!r}")
+    for group in ("monitors", "custom"):
+        rows = out.get(group, [])
+        if not isinstance(rows, list):
+            raise ContractError(f"{what}: {group} must be a list, got {type(rows).__name__}")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ContractError(f"{what}: each of {group} must be a dict, got {row!r}")
+            series = row.get("series")
+            if series is None:
+                continue
+            if not isinstance(series, list):
+                raise ContractError(f"{what}: a monitor's series must be a list, got {type(series).__name__}")
+            for point in series:
+                if not isinstance(point, dict) or not _real(point.get("t")):
+                    raise ContractError(f"{what}: each series point needs a number t, got {point!r}")
+    balance = out.get("balance")
+    if balance is not None and not isinstance(balance, dict):
+        raise ContractError(f"{what}: balance must be a dict or None, got {balance!r}")
+    summary = out.get("summary", [])
+    if not isinstance(summary, list) or not all(
+        isinstance(s, dict) and isinstance(s.get("label"), str) for s in summary
+    ):
+        raise ContractError(f"{what}: summary must be a list of {{label, value}}, got {summary!r}")
+    if not isinstance(out.get("summary_warn", False), bool):
+        raise ContractError(f"{what}: summary_warn must be true or false")
+
+
+def _legacy_rows(rows: list[dict[str, Any]], rho: float | None, *, custom: bool) -> list[dict[str, Any]]:
+    """API 1.1 monitor rows as the page reads them: a mass flow per point
+    (``mdot_kgs`` = ``Q_m3s`` x rho), a ``key`` (``mon_<patch>``; a custom
+    monitor keeps its own) and the ``default_quantity`` its plot opens on."""
+
+    def with_mdot(point: Any) -> Any:
+        if not isinstance(point, dict) or "mdot_kgs" in point:
+            return point
+        q = point.get("Q_m3s")
+        return {**point, "mdot_kgs": q * rho if _real(q) and rho is not None else None}
+
+    out = []
+    for row in rows:
+        row = dict(row)
+        series = row.get("series")
+        if isinstance(series, list):
+            new_series = [with_mdot(p) for p in series]
+            if isinstance(row.get("last"), dict):
+                same = bool(series) and row["last"] is series[-1]
+                row["last"] = new_series[-1] if same else with_mdot(row["last"])
+            row["series"] = new_series
+        elif isinstance(row.get("last"), dict):
+            row["last"] = with_mdot(row["last"])
+        if not row.get("key") and not custom and row.get("patch"):
+            row["key"] = f"mon_{row['patch']}"
+        if not row.get("default_quantity"):
+            pressure = custom or bool(re.search(r"pressure", str(row.get("bc_type") or ""), re.I))
+            row["default_quantity"] = "p" if pressure else "Umag"
+        out.append(row)
+    return out
+
+
+def _legacy_summary(balance: Any) -> tuple[list[dict[str, Any]], bool]:
+    """The flow balance line (``Flow in … · out … · imbalance … %``), and whether
+    it warns (imbalance over 1 %). Empty when nothing flows through the monitors."""
+    if not isinstance(balance, dict):
+        return [], False
+    q_in, q_out = balance.get("in_m3s"), balance.get("out_m3s")
+    if not ((_real(q_in) and q_in > 0) or (_real(q_out) and q_out > 0)):
+        return [], False
+    summary: list[dict[str, Any]] = [
+        {"label": "Flow in", "value": q_in, "quantity": "Q", "unit": ""},
+        {"label": "out", "value": q_out, "quantity": "Q", "unit": ""},
+    ]
+    imbalance = balance.get("imbalance")
+    if not _real(imbalance):
+        return summary, False
+    pct = abs(float(imbalance)) * 100
+    summary.append({"label": "imbalance", "value": pct, "quantity": "", "unit": "%"})
+    return summary, pct > 1
 
 
 def run_monitors(spec: Any, case_dir: Path) -> dict[str, Any]:
-    """A run's monitor results as its analysis reads them (none for an analysis without monitors)."""
+    """A run's monitor results as its analysis reads them (none for an analysis without monitors).
+
+    The answer is checked and gets ``quantities`` (:func:`monitor_quantities`).
+    For an analysis that declares no monitor quantities (API 1.1 rows), the
+    core also adds what the page used to work out: ``mdot_kgs`` per point,
+    each row's ``key`` and ``default_quantity``, and the flow balance as
+    ``summary`` and ``summary_warn`` when the answer has none.
+    """
     fn = _hook(spec, "run_monitors")
     if not callable(fn):
-        return dict(NO_MONITORS)
+        return copy.deepcopy(NO_MONITORS)
     out = fn(case_dir)
+    what = f"{getattr(spec, 'key', '?')}.run_monitors"
     if not isinstance(out, dict):
-        raise ContractError(f"{spec.key}.run_monitors must return a dict, got {type(out).__name__}")
-    return {**NO_MONITORS, **out}
+        raise ContractError(f"{what} must return a dict, got {type(out).__name__}")
+    _check_monitor_answer(what, out)
+    answer = {**copy.deepcopy(NO_MONITORS), **out}
+    answer["quantities"] = monitor_quantities(spec)
+    if _hook(spec, "monitor_quantities") is None:
+        rho = answer.get("rho")
+        rho = float(rho) if _real(rho) and rho > 0 else None
+        answer["monitors"] = _legacy_rows(answer["monitors"], rho, custom=False)
+        answer["custom"] = _legacy_rows(answer["custom"], rho, custom=True)
+        if "summary" not in out:
+            answer["summary"], warn = _legacy_summary(answer.get("balance"))
+            if "summary_warn" not in out:
+                answer["summary_warn"] = warn
+    return answer
 
 
 def launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = None) -> LaunchSpec:

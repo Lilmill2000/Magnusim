@@ -110,5 +110,34 @@ def test_run_monitors_rpc_reads_through_the_run_analysis(tmp_path: Path):
     got = methods.analysis_run_monitors(project_dir=str(root), run_id="1", case_dir=str(case), time_dependency="Steady-state")
     assert got["ok"] and got["analysis_key"] == "incompressible_steady"
     assert [m["patch"] for m in got["monitors"]] == ["inlet", "outlet"]
+    assert [q["key"] for q in got["quantities"]][:2] == ["p", "Umag"] and got["summary"]
     with pytest.raises(RpcError):
         methods.analysis_run_monitors(project_dir=str(root), run_id="1", case_dir=str(tmp_path), time_dependency="Steady-state")
+
+
+def test_run_monitors_answers_get_the_legacy_quantities(tmp_path: Path):
+    """The analysis declares no monitor quantities (API 1.4) yet: describe says
+    null, and the core gives its answers the 1.1 table and fills what the page
+    used to work out (mass flow per point, row keys, the flow balance line)."""
+    from cfddesk.registry import LEGACY_MONITOR_QUANTITIES, contract, load_all, reset_for_tests
+    from cfddesk.registry.discovery import get_registry
+
+    reset_for_tests()
+    load_all()
+    try:
+        rows = {r["key"]: r for r in get_registry("analysis").describe()}
+        for key in ("incompressible_steady", "incompressible_transient"):
+            spec = get_registry("analysis").get(key)
+            assert spec.monitor_quantities is None and rows[key]["monitor_quantities"] is None
+        got = contract.run_monitors(get_registry("analysis").get("incompressible_steady"), _case(tmp_path))
+    finally:
+        reset_for_tests()
+    assert [q["key"] for q in got["quantities"]] == [q.key for q in LEGACY_MONITOR_QUANTITIES]
+    inlet, outlet = got["monitors"]
+    assert (inlet["key"], inlet["default_quantity"], outlet["key"]) == ("mon_inlet", "Umag", "mon_outlet")
+    assert inlet["series"][1]["mdot_kgs"] == pytest.approx(-0.02 * 1.2)
+    assert inlet["series"][2]["mdot_kgs"] is None  # no flow row at t=3
+    (custom,) = got["custom"]
+    assert (custom["key"], custom["default_quantity"]) == ("rc_area_average_1", "p")
+    assert [s["label"] for s in got["summary"]] == ["Flow in", "out", "imbalance"]
+    assert got["summary"][2]["value"] == pytest.approx(10.0) and got["summary_warn"] is True

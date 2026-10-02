@@ -268,8 +268,12 @@ class AnalysisType:
     # () = none.
     kinematic_fields: tuple[str, ...] | None = None
     plan_case: Callable[[Any], dict[str, Any]] | None = None  # write_case's report, without writing
-    run_monitors: Callable[[Any], dict[str, Any]] | None = None  # (case_dir) -> {rho, monitors, custom, balance}
+    run_monitors: Callable[[Any], dict[str, Any]] | None = None  # (case_dir) -> {rho, monitors, custom, balance, summary?}
     ui: dict[str, str] = field(default_factory=dict)  # panel ids the plugin provides
+    # Contract 1.4: the quantities its run_monitors series carry (MonitorQuantity
+    # rows). None = not declared (an analysis with a run_monitors hook gets
+    # contract.LEGACY_MONITOR_QUANTITIES); () = none.
+    monitor_quantities: tuple[Any, ...] | None = None
 
 
 def schema_defaults(fields: tuple[SchemaField, ...] | list[SchemaField]) -> dict[str, Any]:

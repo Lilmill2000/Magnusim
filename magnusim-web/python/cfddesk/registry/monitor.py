@@ -32,6 +32,43 @@ class MonitorType:
     # Soft-pass stubs - point at Phase 1 function_objects without moving call sites.
     write_function_object: Callable[..., str] | None = None
     parse_dat: Callable[[str], Any] | None = None
+    # API 1.4, published in registry rows: what the monitor is, other names it
+    # is known by, whether the user may add one by hand, and the keys of the
+    # monitor quantities (MonitorQuantity.key) it measures.
+    description: str = ""
+    aliases: tuple[str, ...] = ()
+    user_creatable: bool = False
+    quantities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MonitorQuantity:
+    """One quantity a run's monitors report, and how the page shows it (API 1.4).
+
+    ``sample`` is the series point key it reads (``component`` picks one entry
+    of a list sample, such as ``U``). ``unit`` is its unit label ("" = the SI
+    label of ``unit_quantity``). ``magnitude`` shows the absolute value;
+    ``direction_from`` names a sample whose sign picks a word from
+    ``direction`` (below zero, else). ``plot``: offered as the plotted quantity
+    of a monitor; ``details``: listed in a monitor's details; ``headline``:
+    shown beside the plotted value when hovering the plot; ``csv``: its column
+    in a monitor's CSV export ("" = not exported).
+    """
+
+    key: str
+    label: str
+    sample: str
+    component: int | None = None
+    unit_quantity: str = ""
+    unit: str = ""
+    color: str = "#3884e6"
+    magnitude: bool = False
+    direction_from: str = ""
+    direction: tuple[str, str] = ("", "")
+    plot: bool = True
+    details: bool = True
+    headline: bool = False
+    csv: str = ""
 
 
 def validate_analysis_monitor_refs(hub: RegistryHub) -> None:

@@ -44,11 +44,79 @@ export interface RegistryRow {
   result_fields?: ResultFieldRow[];
   /** Fields its cases store divided by density (API 1.4); null when the analysis does not say. */
   kinematic_fields?: string[] | null;
+  /** The quantities its run_monitors series carry (API 1.4); null when the analysis does not say. */
+  monitor_quantities?: MonitorQuantity[] | null;
   study_defaults?: Record<string, unknown>;
   run_defaults?: Record<string, unknown>;
   ui?: Record<string, string>;
   /** Solver apps: the program a case runs. */
   application?: string;
+  /** Monitor types (API 1.4): what it is placed on, what it is, other names, whether the user may add one, the quantity keys it measures. */
+  target?: string;
+  description?: string;
+  aliases?: string[];
+  user_creatable?: boolean;
+  quantities?: string[];
+}
+
+/** A quantity a run's monitors report, and how it is shown (API 1.4). */
+export interface MonitorQuantity {
+  key: string;
+  label: string;
+  /** The series point key it reads. */
+  sample: string;
+  /** The entry of a list sample (U[0] is Velocity X); null for a number. */
+  component: number | null;
+  unit_quantity: string;
+  /** Unit label; '' = the SI label of unit_quantity. */
+  unit: string;
+  color: string;
+  /** Shown as its absolute value. */
+  magnitude: boolean;
+  /** A sample whose sign picks direction[0] (below zero) or direction[1]; '' = none. */
+  direction_from: string;
+  direction: [string, string];
+  /** Offered as a monitor's plotted quantity. */
+  plot: boolean;
+  /** Listed in a monitor's details. */
+  details: boolean;
+  /** Shown beside the plotted value in the plot's hover readout. */
+  headline: boolean;
+  /** Its column in a monitor's CSV export; '' = not exported. */
+  csv: string;
+}
+
+/** One monitor's results: a boundary's (key mon_<patch>) or a custom monitor's. */
+export interface RunMonitor {
+  key?: string;
+  patch?: string;
+  name?: string;
+  bc_type?: string | null;
+  /** The quantity its plot opens on (filled by the core for analyses that declare no quantities). */
+  default_quantity?: string;
+  series?: Array<{ t: number } & Record<string, unknown>>;
+  [extra: string]: unknown;
+}
+
+/** A line of the monitors' summary (the flow balance for API 1.1 rows). */
+export interface MonitorSummaryItem {
+  label: string;
+  value: number | null;
+  /** A MonitorQuantity key whose unit formats the value; '' = use unit. */
+  quantity?: string;
+  unit?: string;
+}
+
+/** What analysis.run_monitors answers (GET /api/run/monitors). */
+export interface RunMonitors {
+  rho: number | null;
+  monitors: RunMonitor[];
+  custom: RunMonitor[];
+  balance: { in_m3s: number; out_m3s: number; imbalance: number | null } | null;
+  quantities: MonitorQuantity[];
+  summary: MonitorSummaryItem[];
+  summary_warn: boolean;
+  unavailable?: string;
 }
 
 /** A field an analysis's results show (API 1.4 adds unit, magnitude_label and shown). */

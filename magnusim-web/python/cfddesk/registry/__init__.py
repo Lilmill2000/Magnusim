@@ -17,6 +17,7 @@ from cfddesk.registry.analysis import (
 )
 from cfddesk.registry.base import Registry, RegistryError, Spec
 from cfddesk.registry.bc import validate_analysis_bc_refs
+from cfddesk.registry.contract import LEGACY_MONITOR_QUANTITIES
 from cfddesk.registry.discovery import (
     RegistryHub,
     get_hub,
@@ -33,7 +34,7 @@ from cfddesk.registry.mesher import (
     analysis_has_mesh_bags,
     validate_multi_region_meshing,
 )
-from cfddesk.registry.monitor import MonitorType, validate_analysis_monitor_refs
+from cfddesk.registry.monitor import MonitorQuantity, MonitorType, validate_analysis_monitor_refs
 from cfddesk.registry.requirements import Missing, Requirement, check_requirements
 from cfddesk.registry.result_filter import ResultFilterType, analysis_has_filter_bags
 from cfddesk.registry.schema import SchemaField, to_json_schema, validate
@@ -63,6 +64,8 @@ __all__ = [
     "MaterialModel",
     "validate_analysis_material_refs",
     "MonitorType",
+    "MonitorQuantity",
+    "LEGACY_MONITOR_QUANTITIES",
     "validate_analysis_monitor_refs",
     "ResultFilterType",
     "analysis_has_filter_bags",

@@ -278,5 +278,16 @@ class Registry(Generic[T]):
                 for extra in ("application", "time_dependency", "parallel", "stop_strategy"):
                     if hasattr(spec, extra):
                         row[extra] = getattr(spec, extra)
+            if self.kind == "monitor":
+                # API 1.4: what the monitor is and measures; its fields_schema is its "schema".
+                row["target"] = str(getattr(spec, "target", "") or "")
+                row["description"] = str(getattr(spec, "description", "") or "")
+                row["aliases"] = [str(a) for a in getattr(spec, "aliases", ()) or ()]
+                row["user_creatable"] = bool(getattr(spec, "user_creatable", False))
+                row["quantities"] = [str(q) for q in getattr(spec, "quantities", ()) or ()]
+                if "schema" not in row:
+                    row["schema"] = _schema_to_json(
+                        getattr(spec, "fields_schema", ()) or (), kind=self.kind, key=key, bag="fields_schema"
+                    )
             out.append(row)
         return out
