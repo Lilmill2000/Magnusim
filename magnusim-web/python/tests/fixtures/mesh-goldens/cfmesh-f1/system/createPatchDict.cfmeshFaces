@@ -1,0 +1,43 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| cfMesh face-split merge - restore intensive BC patch names                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      createPatchDict;
+}
+
+pointSync false;
+
+patches
+(
+    {
+        name pressure_1;
+        patchInfo
+        {
+            type patch;
+        }
+        constructFrom patches;
+        patches (pressure_1);
+    }
+    {
+        name velocity_inlet_1;
+        patchInfo
+        {
+            type patch;
+        }
+        constructFrom patches;
+        patches (velocity_inlet_1);
+    }
+    {
+        name walls;
+        patchInfo
+        {
+            type wall;
+        }
+        constructFrom patches;
+        patches (walls);
+    }
+);

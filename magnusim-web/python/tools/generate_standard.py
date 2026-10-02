@@ -218,6 +218,11 @@ def main() -> int:
         action="store_true",
         help="Also emit CFMESH_PROGRESS/CFMESH_RESULT lines (one-phase frontend compat).",
     )
+    p.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Write every case file WSL would get on this PC, then stop (mesh golden tests).",
+    )
     args = p.parse_args()
     _legacy.set_legacy_markers(bool(args.legacy_markers))
 
@@ -400,6 +405,19 @@ def main() -> int:
                 gmsh_layer_patches=mesh.gmsh_layer_patches,
             )
 
+        if args.prepare_only:
+            # The host side only: the case folder holds what WSL would be given.
+            return _result(
+                True,
+                prepared_only=True,
+                n_nodes=mesh.n_nodes,
+                n_tets=mesh.n_tets,
+                n_hex=mesh.n_hex,
+                n_pyr=mesh.n_pyr,
+                n_prism=mesh.n_prism,
+                hex_core_applied=mesh.hex_core_applied,
+                layers_requested=layers_requested,
+            )
         _progress("gmshToFoam", wsl_case=wsl_case, layers=layers_requested)
         result = run_standard_pipeline(
             case_dir, wsl_case_name=wsl_case, timeout_total=float(args.timeout), allow_skew=True

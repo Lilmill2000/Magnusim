@@ -1020,6 +1020,52 @@ function resolveProjectStep(projectId, meshId) {
 }
 
 /**
+ * What a mesh run takes from its saved settings, with the defaults the panel shows.
+ * No settings at all is the same as an empty object.
+ */
+export function meshGenerateValues(settings) {
+  const s = settings && typeof settings === 'object' ? settings : {};
+  const adv = s.advanced || {};
+  return {
+    fineness: s.fineness != null ? s.fineness : 5,
+    addLayers: s.automatic_boundary_layers === undefined ? true : !!s.automatic_boundary_layers,
+    physicsBased: s.physics_based_meshing === undefined ? true : !!s.physics_based_meshing,
+    hexCore: wantsHexCore(settings),
+    smallFeature:
+      adv.small_feature_suppression == null || String(adv.small_feature_suppression).trim() === ''
+        ? 'auto'
+        : String(adv.small_feature_suppression).trim(),
+    gapFactor: Number.isFinite(Number(adv.gap_refinement_factor)) ? Number(adv.gap_refinement_factor) : 0.05,
+    gradation: Number.isFinite(Number(adv.global_gradation_rate)) ? Number(adv.global_gradation_rate) : 1.22,
+  };
+}
+
+/** Generator flags for those values. cfMesh and Hex-dominant read only the first three. */
+export function meshGeneratorFlags(values, engine) {
+  const flags = [
+    '--fineness',
+    String(clampFineness(values.fineness)),
+    '--add-layers',
+    values.addLayers ? '1' : '0',
+    '--physics-based',
+    values.physicsBased ? '1' : '0',
+  ];
+  if (engine === 'standard') {
+    flags.push(
+      '--hex-core',
+      values.hexCore ? '1' : '0',
+      '--small-feature',
+      values.smallFeature,
+      '--gap-factor',
+      String(values.gapFactor),
+      '--gradation',
+      String(values.gradation),
+    );
+  }
+  return flags;
+}
+
+/**
  * Standard mesh generate (python host script + WSL OpenFOAM tools).
  * engine 'standard' → generate_standard.py (gmsh surface, hex core, layers)
  * engine 'cfmesh'   → generate_cfmesh_standard.py (legacy cartesianMesh)
@@ -1052,30 +1098,8 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   const simIdEarly = studyIdForMesh(project_id, meshId);
   const meshDoc = project_id && simIdEarly ? readMeshDoc(project_id, simIdEarly, meshId) : null;
   const settings_snapshot = settingsForMesh(meshDoc, meshId, settings) || settings || null;
-  const fineness =
-    settings_snapshot && settings_snapshot.fineness != null
-      ? settings_snapshot.fineness
-      : 5;
-  const addLayers =
-    !settings_snapshot || settings_snapshot.automatic_boundary_layers === undefined
-      ? true
-      : !!settings_snapshot.automatic_boundary_layers;
-  const physicsBased =
-    !settings_snapshot || settings_snapshot.physics_based_meshing === undefined
-      ? true
-      : !!settings_snapshot.physics_based_meshing;
-  const hexCore = wantsHexCore(settings_snapshot);
-  const adv = (settings_snapshot && settings_snapshot.advanced) || {};
-  const smallFeature =
-    adv.small_feature_suppression == null || String(adv.small_feature_suppression).trim() === ''
-      ? 'auto'
-      : String(adv.small_feature_suppression).trim();
-  const gapFactor = Number.isFinite(Number(adv.gap_refinement_factor))
-    ? Number(adv.gap_refinement_factor)
-    : 0.05;
-  const gradation = Number.isFinite(Number(adv.global_gradation_rate))
-    ? Number(adv.global_gradation_rate)
-    : 1.22;
+  const meshValues = meshGenerateValues(settings_snapshot);
+  const { fineness, addLayers, hexCore } = meshValues;
 
   const wslDst = `cfddesk-cfdweb-${generateId}`;
   const winOut = meshCasePath(project_id, meshId, simIdEarly);
@@ -1114,25 +1138,8 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     wslDst,
     '--generate-id',
     generateId,
-    '--fineness',
-    String(clampFineness(fineness)),
-    '--add-layers',
-    addLayers ? '1' : '0',
-    '--physics-based',
-    physicsBased ? '1' : '0',
+    ...meshGeneratorFlags(meshValues, engine),
   ];
-  if (engine !== 'cfmesh') {
-    argv.push(
-      '--hex-core',
-      hexCore ? '1' : '0',
-      '--small-feature',
-      smallFeature,
-      '--gap-factor',
-      String(gapFactor),
-      '--gradation',
-      String(gradation),
-    );
-  }
   const scopedMeshId = meshId || '';
   if (scopedMeshId) {
     argv.push('--mesh-id', String(scopedMeshId));
@@ -1527,17 +1534,9 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
   const simIdSnappy = studyIdForMesh(project_id, meshId);
   const meshDoc = project_id && simIdSnappy ? readMeshDoc(project_id, simIdSnappy, meshId) : null;
   const settings_snapshot = settingsForMesh(meshDoc, meshId, settings) || settings || null;
-  const fineness =
-    settings_snapshot && settings_snapshot.fineness != null ? settings_snapshot.fineness : 5;
-  const addLayers =
-    !settings_snapshot || settings_snapshot.automatic_boundary_layers === undefined
-      ? true
-      : !!settings_snapshot.automatic_boundary_layers;
   // Geometry bounds may be mm from W16 fingerprint; generate scales Body1 mm->m.
-  const physicsBased =
-    settings_snapshot.physics_based_meshing === undefined
-      ? true
-      : !!settings_snapshot.physics_based_meshing;
+  const meshValues = meshGenerateValues(settings_snapshot);
+  const { fineness, addLayers } = meshValues;
   const wslDst = `cfddesk-w25-${generateId}`;
   mkdirSync(REPORT_DIR, { recursive: true });
   const winOut = meshCasePath(project_id, meshId, simIdSnappy);
@@ -1574,12 +1573,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
     wslDst,
     '--generate-id',
     generateId,
-    '--fineness',
-    String(clampFineness(fineness)),
-    '--add-layers',
-    addLayers ? '1' : '0',
-    '--physics-based',
-    physicsBased ? '1' : '0',
+    ...meshGeneratorFlags(meshValues, 'snappy_hexdominant'),
     '--legacy-markers',
   ];
   if (simIdSnappy) argv.push('--simulation-id', String(simIdSnappy));

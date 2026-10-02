@@ -1,0 +1,41 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| cfddesk Standard + Hex element core — cfMesh cartesianMesh                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      meshDict;
+}
+
+surfaceFile "constant/triSurface/geometry.stl";
+
+maxCellSize     0.019050044;
+boundaryCellSize 0.0095250221;
+// Bulk ≈ boundary; peel ≈ walls localRef (1×skin). minCellSize = bulk.
+boundaryCellSizeRefinementThickness 0.0095250221;
+minCellSize     0.0047752;
+
+// 0: drop cells that cross the CAD (those sit outside the solid).
+keepCellsIntersectingBoundary 1;
+
+// SimScale Automatic BL follow-on + Inflate on named wall patches.
+// Global nLayers 0 so inlet/outlet stay unlayered. Official keywords only.
+boundaryLayers
+{
+    nLayers 0;
+    thicknessRatio 1.2;
+    maxFirstLayerThickness 0.0010467057;
+    patchBoundaryLayers
+    {
+        "walls.*"
+        {
+            nLayers 3;
+            thicknessRatio 1.2;
+            maxFirstLayerThickness 0.0010467057;
+            allowDiscontinuity 1;
+        }
+    }
+    optimiseLayer 1;
+}

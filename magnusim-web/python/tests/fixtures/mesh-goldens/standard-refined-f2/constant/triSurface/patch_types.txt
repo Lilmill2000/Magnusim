@@ -1,0 +1,4 @@
+inflate_boundary_layer wall
+pressure_1 patch
+velocity_inlet_1 patch
+walls wall

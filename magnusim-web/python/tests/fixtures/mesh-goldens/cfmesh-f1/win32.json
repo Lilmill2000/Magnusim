@@ -1,0 +1,35 @@
+{
+ "files": {
+  "constant/triSurface/geometry.stl": {
+   "sha256": "c0cfb39f605bcde420fc1be38f8aed8b24a4471828a42578060404973c09d0b5",
+   "size": 55251610,
+   "stl": {
+    "triangles_per_solid": {
+     "pressure_1": 328,
+     "velocity_inlet_1": 316,
+     "walls": 198014
+    }
+   }
+  }
+ },
+ "text": {
+  "log.cfmesh_host.txt": [
+   "backend=cfmesh cartesianMesh",
+   "hex_core=ok",
+   "maxCellSize=0.019050044",
+   "boundaryCellSize=0.0095250221 (uniform surface)",
+   "skinCellSize=0.0095250221 (same as surface; no extra edge peel)",
+   "skin_localRef_thickness_m=0.004762511",
+   "minCellSize=0.0047752 (smallest CAD gap or surface; hex=0.019050044)",
+   "boundary_thickness_m=0.023812555",
+   "wall_face_split=False solids=0",
+   "cad_feature_edges=0 (edgeMeshRefinement off \u2014 uniform surface)",
+   "edgeMeshRefinement=off",
+   "stl_max_edge_m=0.0095250221",
+   "stl_triangles={'pressure_1': 328, 'velocity_inlet_1': 316, 'walls': 198014}",
+   "surface=geometry.stl (no .fms; no walls__f* edge corridors)",
+   "keepCellsIntersectingBoundary=1 (do not strip 90\u00b0 corners)",
+   "transition=polyhedra (not pyr+tet; see SIMSCALE-HEXCORE-RESEARCH.md)"
+  ]
+ }
+}

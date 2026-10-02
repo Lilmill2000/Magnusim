@@ -1,0 +1,162 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      snappyHexMeshDict;
+}
+// Hex-dominant Body1 + snappy_policy (host-written)
+castellatedMesh true;
+snap            true;
+addLayers       true;
+
+geometry
+{
+    patch_inflate_boundary_layer.stl
+    {
+        type triSurfaceMesh;
+        name inflate_boundary_layer;
+    }
+    patch_pressure_1.stl
+    {
+        type triSurfaceMesh;
+        name pressure_1;
+    }
+    patch_velocity_inlet_1.stl
+    {
+        type triSurfaceMesh;
+        name velocity_inlet_1;
+    }
+    patch_walls.stl
+    {
+        type triSurfaceMesh;
+        name walls;
+    }
+    refine_1.stl
+    {
+        type triSurfaceMesh;
+        name refine_1;
+    }
+}
+
+castellatedMeshControls
+{
+    maxLocalCells 2000000;
+    maxGlobalCells 4000000;
+    minRefinementCells 0;
+    maxLoadUnbalance 0.10;
+    nCellsBetweenLevels 2;
+
+    features
+    (
+        {
+            file "cadFeatures.eMesh";
+            level 3;
+        }
+    );
+
+    refinementSurfaces
+    {
+        inflate_boundary_layer
+        {
+            level (2 2);
+            patchInfo { type wall; }
+        }
+        pressure_1
+        {
+            level (2 2);
+            patchInfo { type patch; }
+        }
+        velocity_inlet_1
+        {
+            level (2 2);
+            patchInfo { type patch; }
+        }
+        walls
+        {
+            level (2 2);
+            patchInfo { type wall; }
+        }
+    }
+
+    resolveFeatureAngle 20;
+    refinementRegions
+    {
+        refine_1
+        {
+            mode distance;
+            levels ((0.00904895 3));
+        }
+    }
+    locationInMesh (0.00000000 0.00000000 -0.10159928);
+    allowFreeStandingZoneFaces true;
+}
+
+snapControls
+{
+    nSmoothPatch 5;
+    tolerance 1.0;
+    nSolveIter 150;
+    nRelaxIter 5;
+    nFeatureSnapIter 20;
+    implicitFeatureSnap false;
+    explicitFeatureSnap true;
+    multiRegionFeatureSnap false;
+}
+
+addLayersControls
+{
+    relativeSizes true;
+    layers
+    {
+        inflate_boundary_layer
+        {
+            nSurfaceLayers 4;
+            relativeSizes false;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.2;
+            thickness 0.00120653;
+            minThickness 0.000241305;
+        }
+    }
+    expansionRatio 1.1;
+    finalLayerThickness 0.3;
+    minThickness 0.2;
+    nGrow 0;
+    featureAngle 130;
+    slipFeatureAngle 30;
+    nRelaxIter 5;
+    nSmoothSurfaceNormals 3;
+    nSmoothNormals 10;
+    nSmoothThickness 10;
+    maxFaceThicknessRatio 0.5;
+    maxThicknessToMedialRatio 0.3;
+    minMedialAxisAngle 90;
+    nBufferCellsNoExtrude 0;
+    nLayerIter 50;
+}
+
+meshQualityControls
+{
+    maxNonOrtho 65;
+    maxBoundarySkewness 20;
+    maxInternalSkewness 4;
+    maxConcave 80;
+    minVol 1e-13;
+    minTetQuality 1e-30;
+    minArea -1;
+    minTwist 0.02;
+    minDeterminant 0.001;
+    minFaceWeight 0.05;
+    minVolRatio 0.01;
+    minTriangleTwist -1;
+    nSmoothScale 4;
+    errorReduction 0.75;
+    relaxed
+    {
+        maxNonOrtho 75;
+    }
+}
+
+debug 0;
+mergeTolerance 1e-6;

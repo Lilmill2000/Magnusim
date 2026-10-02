@@ -1,0 +1,43 @@
+{
+ "files": {
+  "constant/triSurface/geometry.msh": {
+   "mesh": {
+    "elements": {
+     "hex": 9374,
+     "pyramid": 3492,
+     "tet": 95502,
+     "tri": 32738
+    },
+    "nodes": 35555,
+    "triangles_per_group": {
+     "inflate_boundary_layer": 15673,
+     "pressure_1": 88,
+     "velocity_inlet_1": 84,
+     "walls": 16893
+    }
+   },
+   "sha256": "e10db3132b1057d2f5fb1e133b39ef917da3bd5dbb68e4ac0e8b44d4ea9849d0",
+   "size": 8038618
+  }
+ },
+ "text": {
+  "log.gmsh_host.txt": [
+   "gmsh geometry geometry_mm.brep from source.step",
+   "removed 10 orphan surface(s) left by healing",
+   "small feature suppression: features below 9.2e-05 m suppressed",
+   "physics-based: 1 inlet + 1 outlet surface(s) at 0.70\u00b7h",
+   "surface custom sizing: 1 face(s) at 0.003016 m",
+   "surface: 32748 triangles, 16376 nodes at h=0.01207 m (<s>)",
+   "collapsed 5 surface edge(s) shorter than 0.0003 m",
+   "hexcore: lattice 26\u00d726\u00d768 h_c=0.01207 m, 9422 raw core cells (<s>)",
+   "hexcore: manifold repair converged after 2 pass(es)",
+   "hexcore: 9374 hexes, 3492 pyramids, 12184 inner tris (892 shared faces dropped, 48 cells removed in repair, 2 core piece(s), <s>)",
+   "hexcore: 2 core pieces, one inner surface each",
+   "tets: filling the shell between the surface and the hex core (timeout <s>)",
+   "tet shell: 95502 tets (<s>)",
+   "volume assembly: cells 0.0447542 m\u00b3 vs boundary 0.0447542 m\u00b3 (rel err 1.55e-16)",
+   "volume check: mesh 0.0447542 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 9.89e-04)",
+   "msh written: 35555 nodes, 95502 tets, 9374 hexes, 0 prisms, 3492 pyramids, 32738 boundary tris (<s>)"
+  ]
+ }
+}

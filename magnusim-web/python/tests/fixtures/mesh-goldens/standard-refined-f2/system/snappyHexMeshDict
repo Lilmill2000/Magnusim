@@ -1,0 +1,106 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      snappyHexMeshDict;
+}
+
+// Layers-only pass on the gmsh Standard mesh (no castellation / snapping).
+castellatedMesh false;
+snap            false;
+addLayers       true;
+
+geometry
+{
+}
+
+castellatedMeshControls
+{
+    maxLocalCells 1000000;
+    maxGlobalCells 50000000;
+    minRefinementCells 0;
+    nCellsBetweenLevels 1;
+    features ();
+    refinementSurfaces {}
+    resolveFeatureAngle 30;
+    refinementRegions {}
+    locationInMesh (0 0 0);
+    allowFreeStandingZoneFaces true;
+}
+
+snapControls
+{
+    nSmoothPatch 3;
+    tolerance 2.0;
+    nSolveIter 30;
+    nRelaxIter 5;
+}
+
+addLayersControls
+{
+    // Layers: Automatic BL and/or Inflate boundary layer on named wall patches.
+    relativeSizes false;
+    layers
+    {
+        walls
+        {
+            nSurfaceLayers 3;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.5;
+            thickness 0.00482622;
+            minThickness 0.000965244;
+        }
+        inflate_boundary_layer
+        {
+            nSurfaceLayers 4;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.2;
+            thickness 0.00120655;
+            minThickness 0.000241311;
+        }
+    }
+    expansionRatio 1.5;
+    thickness 0.00482622;
+    minThickness 0.000965244;
+    nGrow 0;
+    // Do not extrude round corners sharper than this. At 180 layers wrapped the
+    // 90-degree rim where a wall meets a port and inverted a tet there (118k-facet
+    // STL, hex core); 130 keeps them off that corner and thickness stays at 97%.
+    featureAngle 130;
+    slipFeatureAngle 30;
+    nRelaxIter 5;
+    nSmoothSurfaceNormals 1;
+    nSmoothNormals 3;
+    nSmoothThickness 10;
+    maxFaceThicknessRatio 0.5;
+    maxThicknessToMedialRatio 0.3;
+    minMedialAxisAngle 90;
+    nBufferCellsNoExtrude 0;
+    nLayerIter 50;
+    nRelaxedIter 20;
+}
+
+meshQualityControls
+{
+    maxNonOrtho 70;
+    maxBoundarySkewness 20;
+    maxInternalSkewness 4;
+    maxConcave 80;
+    minVol 1e-30;
+    minTetQuality 1e-30;
+    minArea -1;
+    minTwist 0.02;
+    minDeterminant 0.001;
+    minFaceWeight 0.02;
+    minVolRatio 0.01;
+    minTriangleTwist -1;
+    nSmoothScale 4;
+    errorReduction 0.75;
+    relaxed
+    {
+        maxNonOrtho 75;
+    }
+}
+
+mergeTolerance 1e-6;

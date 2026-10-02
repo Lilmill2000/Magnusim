@@ -1,0 +1,36 @@
+{
+ "files": {
+  "constant/triSurface/geometry.msh": {
+   "mesh": {
+    "elements": {
+     "tet": 152313,
+     "tri": 40152
+    },
+    "nodes": 34968,
+    "triangles_per_group": {
+     "pressure_1": 1164,
+     "velocity_inlet_1": 1156,
+     "walls": 37832
+    }
+   },
+   "sha256": "43c288eabd598f3c25ae9d63efee31b448d3c5a945f9a14545e75b90aeff8cee",
+   "size": 9467527
+  }
+ },
+ "text": {
+  "log.gmsh_host.txt": [
+   "gmsh geometry geometry_mm.brep from source.step",
+   "removed 1 orphan surface(s) left by healing",
+   "small feature suppression: features below 0.000158 m suppressed",
+   "physics-based: 1 inlet + 1 outlet surface(s) at 0.70\u00b7h",
+   "surface: 40152 triangles, 20076 nodes at h=0.01015 m (<s>)",
+   "hexcore: lattice 5\u00d7148\u00d750 h_c=0.01015 m, 0 raw core cells (<s>)",
+   "hex element core skipped: no room for core cells",
+   "tets: filling the volume (timeout <s>)",
+   "tet volume: 152313 tets, 0 prisms (<s>)",
+   "volume assembly: cells 0.0371093 m\u00b3 vs boundary 0.0371093 m\u00b3 (rel err 1.87e-16)",
+   "volume check: mesh 0.0371093 m\u00b3 vs CAD 0.0371073 m\u00b3 (rel err 5.44e-05)",
+   "msh written: 34968 nodes, 152313 tets, 0 hexes, 0 prisms, 0 pyramids, 40152 boundary tris (<s>)"
+  ]
+ }
+}

@@ -1,0 +1,114 @@
+{
+ "files": {
+  "constant/triSurface/Body1.stl": {
+   "sha256": "2fd865a9edf387afdd122f01ac7afc3cdec36b613aab7807d3d7c77cef90fd72",
+   "size": 1695584,
+   "stl": {
+    "triangles": 33910
+   }
+  },
+  "constant/triSurface/patch_inflate_boundary_layer.stl": {
+   "sha256": "ac992a21d00ffaacc49130c874910290730d375939dba988db3f193f34d9ede2",
+   "size": 15884,
+   "stl": {
+    "triangles": 316
+   }
+  },
+  "constant/triSurface/patch_pressure_1.stl": {
+   "sha256": "6d8b13fdb7231d368db0358c29d6356d662133494599b7c193d8fd78aafec38c",
+   "size": 7884,
+   "stl": {
+    "triangles": 156
+   }
+  },
+  "constant/triSurface/patch_velocity_inlet_1.stl": {
+   "sha256": "ff659dc9ac5e3038bfb04020362fe61b69b1dd594715b61a534688b1416ed44a",
+   "size": 7884,
+   "stl": {
+    "triangles": 156
+   }
+  },
+  "constant/triSurface/patch_walls.stl": {
+   "sha256": "ae9c8b14356cc82a19b805c623bf240547d3bedc7db8e2f7e409ed1ffa878229",
+   "size": 2062484,
+   "stl": {
+    "triangles": 41248
+   }
+  },
+  "constant/triSurface/refine_1.stl": {
+   "sha256": "4fa33394bde2c13fb54ad59a8077ce7ac0acdedd09a33cd4de60e4e055c37764",
+   "size": 15884,
+   "stl": {
+    "triangles": 316
+   }
+  }
+ },
+ "text": {
+  "w23-geometry-meta.json": [
+   "{",
+   " \"add_layers\": false,",
+   " \"block\": \"(18 18 47)\",",
+   " \"body1_bytes_scaled\": 1695584,",
+   " \"bounds_m\": {",
+   "  \"ntri\": 33910,",
+   "  \"scale\": 0.001,",
+   "  \"xmax\": 0.15239999389648437,",
+   "  \"xmin\": -0.15239999389648437,",
+   "  \"ymax\": 0.15239999389648437,",
+   "  \"ymin\": -0.15239999389648437,",
+   "  \"zmax\": 0.30479998779296874,",
+   "  \"zmin\": -0.508",
+   " },",
+   " \"feature_level\": 3,",
+   " \"geometry_source\": \"W16_project_STEP_Body1\",",
+   " \"increment\": \"W25\",",
+   " \"layers\": [",
+   "  {",
+   "   \"n_layers\": 4,",
+   "   \"patch\": \"inflate_boundary_layer\"",
+   "  }",
+   " ],",
+   " \"locationInMesh\": [",
+   "  0.0,",
+   "  0.0,",
+   "  -0.10159928177792744",
+   " ],",
+   " \"mtp1_silent_copy\": false,",
+   " \"patches\": [",
+   "  {",
+   "   \"name\": \"inflate_boundary_layer\",",
+   "   \"type\": \"wall\"",
+   "  },",
+   "  {",
+   "   \"name\": \"pressure_1\",",
+   "   \"type\": \"patch\"",
+   "  },",
+   "  {",
+   "   \"name\": \"velocity_inlet_1\",",
+   "   \"type\": \"patch\"",
+   "  },",
+   "  {",
+   "   \"name\": \"walls\",",
+   "   \"type\": \"wall\"",
+   "  }",
+   " ],",
+   " \"refinement_regions\": [",
+   "  {",
+   "   \"distance_m\": 0.009048947857558384,",
+   "   \"level\": 3,",
+   "   \"name\": \"refine_1\"",
+   "  }",
+   " ],",
+   " \"snap\": {",
+   "  \"n_feature_snap_iter\": 20,",
+   "  \"n_relax_iter\": 5,",
+   "  \"n_smooth_patch\": 5,",
+   "  \"n_solve_iter\": 150,",
+   "  \"tolerance\": 1.0",
+   " },",
+   " \"snappy_geometry_rev\": 3,",
+   " \"walls_level\": 2",
+   "}"
+  ]
+ }
+}
