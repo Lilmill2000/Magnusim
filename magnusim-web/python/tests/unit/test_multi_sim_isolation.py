@@ -340,6 +340,35 @@ def test_materials_do_not_union_across_studies(tmp_path: Path):
     assert not (root / "materials.json").exists()
 
 
+def test_saving_a_bc_keeps_fields_the_core_does_not_know(tmp_path: Path):
+    """A BC record is stored as it was saved. The save used to keep only ten
+    Incompressible Flow fields (value, unit, wall_type, ...), so another
+    analysis's BC settings were dropped on the first save."""
+    from cfddesk.project.paths import assemble_study_bcs
+
+    root = tmp_path / "proj"
+    _tree(root, ["sim-a"])
+    wall = {
+        "id": "bc-hot-wall",
+        "name": "Hot wall",
+        "bc_type": "Wall",
+        "wall_type": "No-slip",
+        "heat_flux_W_m2": 120.5,
+        "thermal": {"kind": "flux", "emissivity": 0.9},
+        "faces": ["face 3@Body1"],
+        "simulation_id": "sim-a",
+    }
+    doc = set_bcs(root, {"simulation_id": "sim-a", "boundary_conditions": [wall]}, sim_id="sim-a")
+    for rows in (doc["boundary_conditions"], assemble_study_bcs(root, "sim-a")):
+        [got] = [b for b in rows if b["id"] == "bc-hot-wall"]
+        assert got["heat_flux_W_m2"] == 120.5
+        assert got["thermal"] == {"kind": "flux", "emissivity": 0.9}
+        assert (got["bc_type"], got["wall_type"], got["faces"]) == ("Wall", "No-slip", ["face 3@Body1"])
+    # Saved again (the page re-sends what it read): still there.
+    again = set_bcs(root, {"simulation_id": "sim-a", "boundary_conditions": [got]}, sim_id="sim-a")
+    assert [b["heat_flux_W_m2"] for b in again["boundary_conditions"] if b["id"] == "bc-hot-wall"] == [120.5]
+
+
 def test_saving_a_wall_bc_keeps_the_slip_default(tmp_path: Path):
     """A Wall BC's own wall type never overwrites the Defaults panel's wall type,
     even when the legacy aggregate still holds the old No-slip."""

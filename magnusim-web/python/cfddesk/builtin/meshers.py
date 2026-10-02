@@ -40,13 +40,26 @@ def _bind_generate(script: str):
     return generate
 
 
-def _live_mesh_schema(*, hex_core: bool) -> tuple[SchemaField, ...]:
+_HEX_CORE_HELP = "Fill the interior with hexahedra and keep tetrahedra to a thin skin at the surface."
+# cfMesh always makes a hex core: with the toggle off, Generate meshes with
+# Standard instead (w21 resolveMeshBackend, as V0.1.0 did).
+_CFMESH_HEX_CORE_HELP = (
+    "On: cfMesh fills the interior with hexahedra. Off: the Standard mesher builds this mesh "
+    "instead, without a hex core (cfMesh always makes one)."
+)
+
+
+def _live_mesh_schema(
+    *, hex_core: bool, advanced: bool = True, hex_core_help: str = _HEX_CORE_HELP
+) -> tuple[SchemaField, ...]:
     """The mesh panel, in the row order the V0.1.0 chrome used.
 
     Fineness, the three toggles, then the advanced disclosure. Algorithm and
     Sizing are fixed rows the panel draws itself (only automatic sizing is
     implemented). Keys stay as the panel already saves them (add_layers,
-    physics_based); advanced keys match settings.advanced on disk.
+    physics_based); advanced keys match settings.advanced on disk. A mesher
+    lists only what its generator reads: ``advanced`` adds small feature
+    suppression, gap refinement and gradation, which only Standard's run gets.
     """
     fields: list[SchemaField] = [
         SchemaField(
@@ -85,9 +98,11 @@ def _live_mesh_schema(*, hex_core: bool) -> tuple[SchemaField, ...]:
                 "bool",
                 default=True,
                 group="mesh",
-                description="Fill the interior with hexahedra and keep tetrahedra to a thin skin at the surface.",
+                description=hex_core_help,
             )
         )
+    if not advanced:
+        return tuple(fields)
     fields.extend(
         [
             SchemaField(
@@ -148,7 +163,9 @@ def build_cfmesh() -> MeshBackend:
     return MeshBackend(
         key="cfmesh",
         label="cfMesh cartesianMesh (legacy)",
-        settings_schema=(),
+        # What its run reads: fineness, layers, physics-based, and the hex core
+        # it needs (generate_cfmesh_standard.py; no advanced flags).
+        settings_schema=_live_mesh_schema(hex_core=True, advanced=False, hex_core_help=_CFMESH_HEX_CORE_HELP),
         # cfmesh is Standard's advanced engine; same refinement menu as standard.
         refinement_types=_STANDARD_REFINEMENTS,
         tool="mesh",
@@ -166,7 +183,8 @@ def build_snappy_hexdominant() -> MeshBackend:
     return MeshBackend(
         key="snappy_hexdominant",
         label="Hex-dominant",
-        settings_schema=_live_mesh_schema(hex_core=False),
+        # generate_snappy.py reads fineness, layers and physics-based only.
+        settings_schema=_live_mesh_schema(hex_core=False, advanced=False),
         refinement_types=_HEX_REFINEMENTS,
         tool="mesh",
         fingerprint_payload=_mesh_fingerprint,

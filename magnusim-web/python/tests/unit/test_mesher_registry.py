@@ -93,7 +93,9 @@ def test_mesher_specs_shape():
     assert cfmesh.tool == "mesh"
     assert cfmesh.generate is not None
     assert cfmesh.generate() == "generate_cfmesh_standard.py"
-    assert cfmesh.settings_schema == ()
+    # Only what its run reads (the panel used to show none of these).
+    assert [f.key for f in cfmesh.settings_schema] == ["fineness", "add_layers", "physics_based", "hex_element_core"]
+    assert "Standard mesher builds this mesh instead" in cfmesh.settings_schema[-1].description
     assert cfmesh.frozen is True
     assert cfmesh.supports_hex_core is True
     assert any(r.name == "cartesianMesh" for r in cfmesh.requires)
@@ -105,6 +107,11 @@ def test_mesher_specs_shape():
     assert snappy.generate is not None
     assert snappy.generate() == "generate_snappy.py"
     assert "hex_element_core" not in {field.key for field in snappy.settings_schema}
+    # generate_snappy.py takes no small-feature, gap or gradation flags: the panel shows none.
+    assert [f.key for f in snappy.settings_schema] == ["fineness", "add_layers", "physics_based"]
+    assert {"small_feature_suppression", "gap_refinement_factor", "global_gradation_rate"} <= {
+        f.key for f in standard.settings_schema
+    }
     assert snappy.supports_hex_core is False
     assert snappy.frozen is False
     assert any(r.name == "snappyHexMesh" for r in snappy.requires)

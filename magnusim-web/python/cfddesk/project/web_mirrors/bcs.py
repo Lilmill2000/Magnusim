@@ -12,6 +12,10 @@ from cfddesk.project.web_mirrors._common import (
     _wa,
 )
 
+# Keys the core fills in itself; every other field a record was saved with
+# (another analysis's BC settings included) comes back as it was saved.
+_CORE_BC_KEYS = frozenset({"id", "name", "bc_type", "faces", "face", "simulation_id", "project_id"})
+
 
 def _bc_records_for_sim(
     sim: Any,
@@ -45,7 +49,8 @@ def _bc_records_for_sim(
                 bc_type = "Wall"
             else:
                 bc_type = str(getattr(bc, "name", "") or reg or "Wall")
-        rec: dict[str, Any] = {
+        rec: dict[str, Any] = {k: v for k, v in web.items() if k not in _CORE_BC_KEYS}
+        rec |= {
             "id": getattr(bc, "id", None),
             "name": getattr(bc, "name", None),
             "bc_type": bc_type,

@@ -432,7 +432,12 @@ export function MeshSettings(props: IslandProps) {
     dispatchPanelDone();
   }
 
-  const engineLabel = rows.find((row) => row.key === engine)?.label || engine;
+  // cfMesh always makes a hex core: with Hex element core off, Generate meshes
+  // with Standard instead (w21 resolveMeshBackend, as V0.1.0 did), so say so.
+  const fallsBack = engine === 'cfmesh' && data.hex_element_core === false;
+  const engineLabel = fallsBack
+    ? `${rows.find((row) => row.key === 'standard')?.label || 'Standard'} (cfMesh needs Hex element core)`
+    : rows.find((row) => row.key === engine)?.label || engine;
   const engineRow = (
     <div className="mat-row">
       <span

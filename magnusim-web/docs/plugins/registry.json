@@ -819,6 +819,52 @@
       "key": "cfmesh",
       "label": "cfMesh cartesianMesh (legacy)",
       "plugin": "builtin",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fineness": {
+            "type": "integer",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "mesh",
+              "widget": "range"
+            },
+            "title": "Fineness",
+            "description": "Coarse meshes solve fast; fine meshes resolve more detail. 5 is the default."
+          },
+          "add_layers": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Automatic boundary layers",
+            "description": "Grow thin cell layers along walls to capture the near-wall velocity profile."
+          },
+          "physics_based": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Physics-based meshing",
+            "description": "Refine where the flow needs it: inlets, outlets and narrow gaps."
+          },
+          "hex_element_core": {
+            "type": "boolean",
+            "default": true,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "Hex element core",
+            "description": "On: cfMesh fills the interior with hexahedra. Off: the Standard mesher builds this mesh instead, without a hex core (cfMesh always makes one)."
+          }
+        },
+        "additionalProperties": false
+      },
       "requires": [
         {
           "kind": "wsl_tool",
@@ -865,40 +911,6 @@
             },
             "title": "Physics-based meshing",
             "description": "Refine where the flow needs it: inlets, outlets and narrow gaps."
-          },
-          "small_feature_suppression": {
-            "type": "string",
-            "default": "",
-            "x-cfddesk": {
-              "unit": "m",
-              "group": "advanced",
-              "advanced": true
-            },
-            "title": "Small feature suppression",
-            "description": "Edges and sliver faces shorter than this (metres) are merged before meshing. Leave empty for automatic."
-          },
-          "gap_refinement_factor": {
-            "type": "number",
-            "default": 0.05,
-            "minimum": 0.0,
-            "x-cfddesk": {
-              "group": "advanced",
-              "advanced": true
-            },
-            "title": "Gap refinement factor",
-            "description": "Gap thickness divided by the edge length in the gap. Above 1 it is the number of cells across a gap."
-          },
-          "global_gradation_rate": {
-            "type": "number",
-            "default": 1.22,
-            "minimum": 1.0,
-            "maximum": 3.0,
-            "x-cfddesk": {
-              "group": "advanced",
-              "advanced": true
-            },
-            "title": "Global gradation rate",
-            "description": "Size ratio between neighbouring cells when growing away from the surface."
           }
         },
         "additionalProperties": false

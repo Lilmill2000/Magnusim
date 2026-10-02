@@ -37,7 +37,20 @@ vi.mock('../scope', async () => {
             },
           },
         },
-        { key: 'cfmesh', label: 'cfMesh (legacy)', schema: { type: 'object', properties: {} } },
+        {
+          key: 'cfmesh',
+          label: 'cfMesh (legacy)',
+          schema: {
+            type: 'object',
+            properties: {
+              fineness: { type: 'integer', title: 'Fineness', default: 5, minimum: 1, maximum: 10 },
+              add_layers: { type: 'boolean', title: 'Automatic boundary layers', default: true },
+              physics_based: { type: 'boolean', title: 'Physics-based meshing', default: true },
+              hex_element_core: { type: 'boolean', title: 'Hex element core', default: true },
+            },
+          },
+        },
+        { key: 'bare', label: 'Bare', schema: { type: 'object', properties: {} } },
       ],
     }),
   };
@@ -231,11 +244,27 @@ describe('MeshSettings', () => {
   it('keeps the engine select reachable on an engine with no settings schema', async () => {
     render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
     const engine = (await screen.findByLabelText('Mesh engine')) as HTMLSelectElement;
-    fireEvent.change(engine, { target: { value: 'cfmesh' } });
+    fireEvent.change(engine, { target: { value: 'bare' } });
     const again = (await screen.findByLabelText('Mesh engine')) as HTMLSelectElement;
-    expect(again.value).toBe('cfmesh');
+    expect(again.value).toBe('bare');
     expect(again.closest('details.mesh-advanced')).not.toBeNull();
     expect(screen.queryByText('No settings on this schema.')).toBeNull();
+  });
+
+  it('shows cfMesh the settings its run uses, and says when Standard meshes it instead', async () => {
+    // cfMesh used to show no settings at all while its run used the saved
+    // fineness, layers and physics-based values.
+    const { container } = render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+    const engine = (await screen.findByLabelText('Mesh engine')) as HTMLSelectElement;
+    fireEvent.change(engine, { target: { value: 'cfmesh' } });
+    await waitFor(() => expect(container.querySelector('[data-mesh-algorithm="1"]')?.textContent).toBe('cfMesh (legacy)'));
+    expect((screen.getByLabelText('Fineness') as HTMLInputElement).value).toBe('7');
+    expect(screen.getByLabelText('Automatic boundary layers')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByLabelText('Physics-based meshing')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Hex element core'));
+    await waitFor(() =>
+      expect(container.querySelector('[data-mesh-algorithm="1"]')?.textContent).toBe('Standard (cfMesh needs Hex element core)'),
+    );
   });
 
   it('says Queued behind the running job, and the button removes it from the queue', async () => {
