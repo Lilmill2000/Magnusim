@@ -97,6 +97,39 @@ def test_any_scalar_field_colours_the_surface_unscaled(tmp_path: Path, monkeypat
     assert (rng["min"], rng["max"], rng["scaled_by_density"]) == (290.0, 310.0, False)
 
 
+def _foam_file(path: Path, cls: str, internal: str) -> None:
+    path.write_text(
+        f"FoamFile\n{{\n    format      ascii;\n    class       {cls};\n"
+        f"    object      {path.name};\n}}\n\ninternalField   {internal};\n",
+        encoding="utf-8",
+    )
+
+
+def test_tensor_fields_are_never_offered(tmp_path: Path, monkeypatch):
+    """R (Reynolds-stress models) is a volSymmTensorField: not a scalar to colour by."""
+    case = _case(tmp_path, {"rho": RHO, "kinematic_fields": ["p"]}, {"p": np.zeros(8), "k": np.ones(8)})
+    t = case / "1"
+    _foam_file(t / "U", "volVectorField", "uniform (1 0 0)")
+    _foam_file(t / "R", "volSymmTensorField", "uniform (1 0 0 1 0 1)")
+    _foam_file(t / "gradU", "volTensorField", "uniform (0 0 0 0 0 0 0 0 0)")
+    assert export_case_field.foam_kind(t / "R") == "symm_tensor"
+    assert export_case_field.foam_kind(t / "gradU") == "tensor"
+    assert export_case_field.foam_kind(t / "U") == "vector"
+    assert export_case_field.foam_kind(t / "p") == "scalar"
+    # Scalars and vectors are listed as before; the tensors are left out.
+    assert export_case_field.shown_fields(t) == ["k", "p", "magU"]
+    for name in ("R", "magR", "gradU"):
+        assert export_case_field.foam_source(t, name) is None
+        assert export_case_field.list_field_times(case, name) == []
+    _patch_volume(monkeypatch, _mesh({"p": 0.0, "k": 1.0}))
+    res = _rpc("filter.case_field", {"case_dir": str(case), "time": "1", "field": "R", "out_dir": str(tmp_path / "o")})
+    assert "tensor" in res["error"]["message"], res
+    out = tmp_path / "k"
+    res = _rpc("filter.case_field", {"case_dir": str(case), "time": "1", "field": "k", "out_dir": str(out)})
+    assert "result" in res, res
+    assert json.loads((out / "k.meta.json").read_text(encoding="utf-8"))["fields_available"] == ["k", "p", "magU"]
+
+
 def test_field_names_are_checked(tmp_path: Path):
     case = _case(tmp_path, {"rho": RHO}, {"p": np.zeros(8)})
     for bad in ("../p", "p;rm", "", "1p"):

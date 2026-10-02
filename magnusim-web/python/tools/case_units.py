@@ -60,8 +60,12 @@ def scale_kinematic(dataset, case_dir: Path) -> None:
     scale_pressure(dataset, case_density(case_dir), names=kinematic_fields(case_dir))
 
 
-def scale_pressure(dataset, rho: float, names=("p",)) -> None:
-    """Multiply pressure arrays on a pyvista dataset in place (point + cell data)."""
+def scale_pressure(dataset, rho: float, names) -> None:
+    """Multiply the named arrays on a pyvista dataset by ``rho`` in place (point + cell data).
+
+    ``names`` has no default: which fields are kinematic is the case's call
+    (``kinematic_fields``), so a caller never assumes ``p``.
+    """
     if dataset is None or rho == 1.0:
         return
     for attr in ("point_data", "cell_data"):
@@ -87,9 +91,14 @@ def pressure_stats_in_pa(stats: dict, rho: float) -> dict:
     return out
 
 
-def pressure_meta(rho: float) -> dict:
+def pressure_meta(rho: float, kinematic: bool = True) -> dict:
+    """Where a shown pressure came from; ``kinematic=False`` when the case stores it in Pa."""
+    if not kinematic:
+        source = PRESSURE_UNIT
+    else:
+        source = KINEMATIC_UNIT + " x rho" if rho != 1.0 else KINEMATIC_UNIT
     return {
         "pressure_unit": PRESSURE_UNIT,
         "pressure_rho": float(rho),
-        "pressure_source": KINEMATIC_UNIT + " x rho" if rho != 1.0 else KINEMATIC_UNIT,
+        "pressure_source": source,
     }

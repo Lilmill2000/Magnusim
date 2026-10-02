@@ -36,7 +36,7 @@ from cfddesk.results.patches import (  # noqa: E402
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
-from case_units import case_density, scale_pressure  # noqa: E402
+from case_units import scale_kinematic  # noqa: E402
 from export_cut_plane import read_volume_at_time  # noqa: E402
 
 SKIP_PATCH_TYPES = {
@@ -1559,9 +1559,10 @@ def export_particle_trace(
     vtu_path = case_dir / ".cfddesk-prepared.vtu"
     if prepared_grid is not None:
         # Worker cache is shared and kinematic: scale a shallow copy so the
-        # cached arrays are never touched and p is Pa exactly once.
+        # cached arrays are never touched and each kinematic field (the
+        # case's kinematic_fields) is scaled to Pa exactly once.
         point_grid = prepared_grid.copy(deep=False)
-        scale_pressure(point_grid, case_density(case_dir))
+        scale_kinematic(point_grid, case_dir)
         if volume_source is None:
             volume_source = "worker-cache"
         mesh = prepared_grid
@@ -1578,8 +1579,9 @@ def export_particle_trace(
             raise RuntimeError(
                 "No point-data U for particle trace (need vector U, not magU alone)"
             )
-        # Pressure coloring in Pa (simpleFoam p is kinematic).
-        scale_pressure(point_grid, case_density(case_dir))
+        # Pressure coloring in Pa: only the fields the case stores per unit
+        # density are scaled (a plugin case may already write p in Pa).
+        scale_kinematic(point_grid, case_dir)
     if mesh is None or int(getattr(mesh, "n_cells", 0) or 0) < 1:
         raise RuntimeError(f"volume read failed: {case_dir}")
     if "U" not in getattr(point_grid, "point_data", {}):

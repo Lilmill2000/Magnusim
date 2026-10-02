@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GEOMETRY_REMOVE_IDS, GEOMETRY_REMOVE_PROJECT, NO_GEOMETRY_PROJECT } from './prepare-projects.js';
 import { WEB_ROOT, startHost } from './support/host-server.mjs';
@@ -39,6 +39,22 @@ function pressureTruth(caseDir, time) {
   ].join('\n');
   const r = spawnSync(PYTHON, ['-c', code, caseDir, String(time)], { cwd: PY_DIR, encoding: 'utf8', timeout: 300_000 });
   if (r.status !== 0) throw new Error(`pressure truth failed: ${r.stderr || r.error}`);
+  return JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
+}
+
+/** The fixture's stored p (no unit change) probed at a point, as the inspect tool probes it. */
+function storedPressureAt(caseDir, time, xyz) {
+  const code = [
+    'import json, sys',
+    'sys.path.insert(0, "tools")',
+    'from pathlib import Path',
+    'from case_volume import load_volume',
+    'from export_inspect_point import _point_grid, probe_point',
+    'mesh, _ = load_volume(Path(sys.argv[1]), sys.argv[2])',
+    'print(json.dumps(probe_point(_point_grid(mesh), [float(v) for v in sys.argv[3:6]])))',
+  ].join('\n');
+  const r = spawnSync(PYTHON, ['-c', code, caseDir, String(time), ...xyz.map(String)], { cwd: PY_DIR, encoding: 'utf8', timeout: 300_000 });
+  if (r.status !== 0) throw new Error(`stored pressure probe failed: ${r.stderr || r.error}`);
   return JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
 }
 
@@ -94,6 +110,33 @@ test('gate:h15-attach-scope and plugin case results in 3D', async ({ page, reque
     // A plugin case under a folder named "simulations" is the plugin study's, not a core study's.
     expect((await attach({ ...mine, case_dir: aoaDir })).status).toBe(200);
     stage(t0, 'attach scope');
+
+    // Inspect point shows p x rho only when the case says p is stored per unit density. A
+    // plugin case that writes p in Pa (kinematic_fields [], rho 1000) shows p as stored; it
+    // used to be multiplied by 1000 regardless.
+    const paDir = seed(PROJECT, one.id, 'cases/fixture-pa');
+    const sidecar = JSON.parse(readFileSync(join(paDir, 'w27-case.json'), 'utf8'));
+    expect(sidecar.kinematic_fields).toEqual(['p']);
+    writeFileSync(join(paDir, 'w27-case.json'), JSON.stringify({ ...sidecar, rho: 1000, kinematic_fields: [] }, null, 2));
+    const probeAt = [0.09, 0.09, 0.005];
+    const inspect = async (caseDir) => {
+      const q = new URLSearchParams({ case: caseDir, project_id: PROJECT, time: '0.5', x: String(probeAt[0]), y: String(probeAt[1]), z: String(probeAt[2]) });
+      const r = await request.get(`${base}/api/inspect?${q}`);
+      const j = await r.json();
+      expect(r.ok(), JSON.stringify(j)).toBe(true);
+      expect(j.hit, JSON.stringify(j)).toBe(true);
+      return j;
+    };
+    const stored = storedPressureAt(fixtureDir, '0.5', probeAt);
+    expect(stored.hit).toBe(true);
+    expect(Math.abs(stored.p)).toBeGreaterThan(0.1);
+    const kin = await inspect(fixtureDir);
+    const pa = await inspect(paDir);
+    stage(t0, `inspect p: stored ${stored.p}; kinematic case ${kin.p} Pa; plugin Pa case ${pa.p} Pa`);
+    expect(Math.abs(pa.p - stored.p) / Math.abs(stored.p)).toBeLessThan(0.01);
+    expect(Math.abs(kin.p - stored.p * 1000) / Math.abs(stored.p * 1000)).toBeLessThan(0.01);
+    expect([pa.units.p, pa.pressure_source]).toEqual(['Pa', 'Pa']);
+    stage(t0, 'inspect point: a p-in-Pa case is shown as stored, a kinematic case x rho');
 
     // The workbench as the user left it: the round plate with its study.
     const runRequests = [];

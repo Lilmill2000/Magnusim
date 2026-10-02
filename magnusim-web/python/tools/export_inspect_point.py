@@ -22,7 +22,7 @@ import numpy as np
 import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from case_units import case_density, pressure_meta  # noqa: E402
+from case_units import field_scale, kinematic_fields, pressure_meta  # noqa: E402
 from case_volume import load_volume  # noqa: E402
 
 APPROACH = (
@@ -182,7 +182,10 @@ def export_inspect(
     grid = mesh if ("magU" in mesh.point_data and "p" in mesh.point_data) else _point_grid(mesh)
 
     foam_proof = uniform_foam_values(case_dir, time)
-    rho = case_density(case_dir)
+    # rho when the case stores p per unit density (its kinematic_fields, or p
+    # for older cases), else 1: a case that writes p in Pa is shown as stored.
+    p_kinematic = "p" in kinematic_fields(case_dir)
+    p_scale = field_scale(case_dir, "p")
 
     probed = probe_point(grid, [x, y, z])
     if probed["hit"]:
@@ -191,7 +194,7 @@ def export_inspect(
         if foam_proof["uniform_p"]:
             probed["p"] = float(foam_proof["p"])
         if probed["p"] is not None:
-            probed["p"] = float(probed["p"]) * rho
+            probed["p"] = float(probed["p"]) * p_scale
         probed["value_checksum"] = _checksum(probed["magU"], probed["p"], [x, y, z])
     mesh = grid
     fp = {
@@ -235,7 +238,7 @@ def export_inspect(
         "proves_not_baked_only": True,
         "no_fake_value": True,
         "units": {"magU": "m/s", "p": "Pa"},
-        **pressure_meta(rho),
+        **pressure_meta(p_scale, kinematic=p_kinematic),
     }
 
     out_dir.mkdir(parents=True, exist_ok=True)

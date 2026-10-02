@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import pyvista as pv
 
 import cfddesk.worker.methods  # noqa: F401  — register RPCs
@@ -192,6 +193,64 @@ def test_inspect_uniform_time_uses_the_uniform_values(tmp_path, monkeypatch):
     assert abs(r["magU"] - 2.0) < 1e-9
     entry = volume_cache.get_prepared(str(case), "1")
     assert np.allclose(entry["slice"].point_data["p"], P_KIN)
+
+
+# Which fields get x rho is the case's call (w27-case.json kinematic_fields):
+# a plugin case that writes p in Pa lists none, an incompressible case lists p,
+# and a case written before the list existed keeps p as kinematic.
+CASE_UNITS = [
+    pytest.param({"rho": 1000, "kinematic_fields": []}, 1.0, id="plugin-pa"),
+    pytest.param({"rho": 1000, "kinematic_fields": ["p"]}, 1000.0, id="kinematic-p"),
+    pytest.param({"rho": 1000}, 1000.0, id="legacy-no-list"),
+]
+
+
+def _case_with(tmp_path: Path, sidecar: dict) -> Path:
+    case = _case(tmp_path)
+    (case / "w27-case.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    return case
+
+
+@pytest.mark.parametrize(("sidecar", "scale"), CASE_UNITS)
+def test_inspect_scales_only_the_cases_kinematic_p(tmp_path, monkeypatch, sidecar, scale):
+    case = _case_with(tmp_path, sidecar)
+    _patch_volume(monkeypatch, _mesh())
+    out = tmp_path / "insp"
+    res = _rpc("filter.inspect", {"case_dir": str(case), "time": "1", "out_dir": str(out),
+                                  "x": 0.2, "y": 0.2, "z": 0.2})
+    r = res["result"]
+    assert r["hit"] is True
+    assert abs(r["p"] - P_KIN * scale) < 1e-9
+    meta = json.loads((out / "inspect.meta.json").read_text(encoding="utf-8"))
+    assert meta["pressure_rho"] == scale
+    assert meta["pressure_source"] == ("Pa" if scale == 1.0 else "m^2/s^2 x rho")
+
+
+def _trace_p(out: Path) -> np.ndarray:
+    data = pv.read(str(out / "particle_trace.vtp"))
+    assert data.n_points and "p" in data.point_data, "particle trace carries no p"
+    return np.asarray(data.point_data["p"])
+
+
+@pytest.mark.parametrize(("sidecar", "scale"), CASE_UNITS)
+def test_particle_trace_scales_only_the_cases_kinematic_p(tmp_path, monkeypatch, sidecar, scale):
+    case = _case_with(tmp_path, sidecar)
+    _patch_volume(monkeypatch, _mesh())
+    # Worker path: the shared cached grid.
+    out = tmp_path / "pt"
+    res = _rpc("filter.particle_trace", {"case_dir": str(case), "time": "1", "out_dir": str(out)})
+    assert "result" in res, res
+    assert np.allclose(_trace_p(out), P_KIN * scale)
+    entry = volume_cache.get_prepared(str(case), "1")
+    assert np.allclose(entry["grid"].point_data["p"], P_KIN)
+
+    # Fresh read (no worker cache).
+    import export_particle_trace
+
+    monkeypatch.setattr(export_particle_trace, "read_volume_at_time", lambda c, t: (_mesh(), "test"))
+    out2 = tmp_path / "pt-fresh"
+    export_particle_trace.export_particle_trace(case, "1", out2)
+    assert np.allclose(_trace_p(out2), P_KIN * scale)
 
 
 def test_inspect_requires_a_point(tmp_path):

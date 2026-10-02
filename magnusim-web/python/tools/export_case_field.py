@@ -161,8 +161,14 @@ def parse_foam_scalar_or_vector(path: Path, kind: str):
 FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 
+# Tensor fields (e.g. R from a Reynolds-stress model) cannot be coloured as a
+# scalar or a vector magnitude, so no view offers them.
+TENSOR_KINDS = ("symm_tensor", "tensor")
+
+
 def foam_kind(path: Path) -> str:
-    """'vector' or 'scalar' from the file's FoamFile class (or its internalField)."""
+    """'vector', 'symm_tensor', 'tensor' or 'scalar' from the file's FoamFile class
+    (or its internalField)."""
     try:
         with open(path, "rb") as fh:
             head = fh.read(4096).decode("latin1", errors="replace")
@@ -170,23 +176,39 @@ def foam_kind(path: Path) -> str:
         return "scalar"
     m = re.search(r"\bclass\s+(\w+)", head)
     if m:
-        return "vector" if "Vector" in m.group(1) else "scalar"
+        cls = m.group(1)
+        if "SymmTensor" in cls:
+            return "symm_tensor"
+        if "Tensor" in cls:
+            return "tensor"
+        return "vector" if "Vector" in cls else "scalar"
+    if "List<symmTensor>" in head:
+        return "symm_tensor"
+    if "List<tensor>" in head:
+        return "tensor"
     if re.search(r"internalField\s+uniform\s*\(", head) or "List<vector>" in head:
         return "vector"
     return "scalar"
 
 
 def foam_source(time_dir: Path, field: str) -> tuple[str, str] | None:
-    """(file, kind) a shown field reads: the field's own file, or for ``mag<X>`` the vector ``X``."""
+    """(file, kind) a shown field reads: the field's own file, or for ``mag<X>`` the vector ``X``.
+
+    None for a tensor field (or its ``mag``): it is never shown.
+    """
     if (time_dir / field).is_file():
-        return field, foam_kind(time_dir / field)
+        kind = foam_kind(time_dir / field)
+        return None if kind in TENSOR_KINDS else (field, kind)
     if field.startswith("mag") and len(field) > 3 and (time_dir / field[3:]).is_file():
+        if foam_kind(time_dir / field[3:]) in TENSOR_KINDS:
+            return None
         return field[3:], "vector"
     return None
 
 
 def shown_fields(time_dir: Path) -> list[str]:
-    """Every field a time folder can colour by: scalars by name, vectors as ``mag<name>``."""
+    """Every field a time folder can colour by: scalars by name, vectors as ``mag<name>``.
+    Tensors are left out."""
     out: list[str] = []
     try:
         entries = sorted(time_dir.iterdir())
@@ -195,7 +217,10 @@ def shown_fields(time_dir: Path) -> list[str]:
     for f in entries:
         if not f.is_file() or not FIELD_NAME.match(f.name):
             continue
-        out.append(("mag" + f.name) if foam_kind(f) == "vector" else f.name)
+        kind = foam_kind(f)
+        if kind in TENSOR_KINDS:
+            continue
+        out.append(("mag" + f.name) if kind == "vector" else f.name)
     return out
 
 
@@ -287,6 +312,10 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
 
     src = foam_source(time_dir, field)
     if src is None:
+        base = field[3:] if field.startswith("mag") and len(field) > 3 else field
+        for name in dict.fromkeys((field, base)):
+            if (time_dir / name).is_file() and foam_kind(time_dir / name) in TENSOR_KINDS:
+                raise ValueError(f"{name} is a tensor field; it cannot be coloured as a scalar")
         raise FileNotFoundError(f"time_not_found: missing OpenFOAM {field}: {time_dir / field}")
     foam_name, kind = src
     foam_stats = parse_foam_scalar_or_vector(time_dir / foam_name, kind)
