@@ -18,8 +18,10 @@ export interface RegistryRow {
   params_schema?: Record<string, unknown> | null;
   category?: string;
   time_dependency?: string;
+  /** @deprecated API 1.0: present only when an analysis sets it; an analysis's settings_schema carries its turbulence choice. */
   default_turbulence?: string;
   default_solver?: string;
+  /** @deprecated API 1.0: present only when an analysis sets it; an analysis's settings_schema carries its turbulence choice. */
   turbulence_models?: string[];
   /** Analysis contract (API 1.1): what the core shows about an analysis. */
   contract?: string;

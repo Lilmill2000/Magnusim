@@ -121,10 +121,6 @@ def write_case(ctx: Any) -> dict[str, Any]:
     return {"ok": True, "case_dir": str(out), "solver": "laplacianFoam", "n_procs": int(ctx.n_procs or 1), "patches": patches}
 
 
-def _no_legacy_checks(*_args: Any, **_kwargs: Any) -> list[str]:
-    return []
-
-
 def register(hub: Any) -> None:
     hub.registry("solver").register(
         SolverApp(
@@ -144,24 +140,17 @@ def register(hub: Any) -> None:
             category="TEST",
             time_dependency="steady",
             fields=("T",),
-            turbulence_models=(),
-            default_turbulence="",
-            bc_types=(),
-            material_models=(),
             solver_backends=("laplacianFoam",),
             default_solver="laplacianFoam",
-            monitors=(),
             # The results viewer colours by T (in K), the field this analysis writes.
             result_fields=(ResultField("T", "Temperature", "temperature", "scalar"),),
             settings_schema=(
                 SchemaField("diffusivity", "Diffusivity", "float", default=0.0, min=0.0, unit="m²/s"),
             ),
-            numerics_schema=(),
             control_schema=(
                 SchemaField("end_time", "Iterations", "int", default=5, min=1),
                 SchemaField("write_interval", "Write interval", "int", default=5, min=1),
             ),
-            validate=_no_legacy_checks,
             write_case=write_case,
             family=FAMILY,
             algorithm_label="Laplacian",

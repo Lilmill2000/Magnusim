@@ -267,6 +267,9 @@ class Registry(Generic[T]):
                     val = getattr(spec, extra)
                     if val is None:
                         continue
+                    # API 1.0 turbulence fields: published only when the analysis sets them.
+                    if extra in ("default_turbulence", "turbulence_models") and not val:
+                        continue
                     row[extra] = list(val) if isinstance(val, tuple) else val
                 from cfddesk.registry.contract import describe_extra
 

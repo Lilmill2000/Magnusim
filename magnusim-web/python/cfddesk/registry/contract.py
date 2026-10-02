@@ -220,27 +220,47 @@ def residual_series(spec: Any) -> list[dict[str, Any]]:
 
 
 def study_defaults(spec: Any, time_dependency: str | None = None) -> dict[str, Any]:
-    """Settings a new study of this analysis starts with."""
+    """Settings a new study of this analysis starts with.
+
+    The analysis's ``study_defaults`` hook, else the study's identity
+    (analysis key and names, category, time dependency, algorithm). A key the
+    record leaves out is filled from the API 1.0 ``default_turbulence``
+    (:func:`_legacy_seed`), then from the ``settings_schema`` defaults: the
+    hook wins over both, and ``default_turbulence`` over a schema default.
+    """
+    from cfddesk.registry.analysis import schema_defaults
+
     fn = _hook(spec, "study_defaults")
     td = _td(time_dependency or spec.time_dependency)
     if callable(fn):
-        return dict(fn(td) or {})
-    from cfddesk.registry.analysis import schema_defaults
+        out = dict(fn(td) or {})
+    else:
+        fam = _hook(spec, "family")
+        out = {
+            "analysis_type": spec.key,
+            "analysis": (fam.study_name or fam.label) if fam is not None else spec.label,
+            "analysis_title": fam.title if fam is not None else spec.label,
+            "category": str(getattr(spec, "category", "") or ""),
+            "time_dependency": "Transient" if td == "transient" else "Steady-state",
+            "algorithm": str(_hook(spec, "algorithm_label") or ""),
+        }
+    _legacy_seed(spec, out)
+    for key, value in schema_defaults(getattr(spec, "settings_schema", ()) or ()).items():
+        out.setdefault(key, value)
+    return out
 
-    fam = _hook(spec, "family")
+
+def _legacy_seed(spec: Any, out: dict[str, Any]) -> None:
+    """The API 1.0 meaning of ``AnalysisType.default_turbulence``: a new study's
+    ``turbulence_model`` and ``turbulence_model_key``, when the record has none.
+
+    The only place the core still names turbulence; an analysis that leaves
+    ``default_turbulence`` empty carries its choice in its own settings_schema.
+    """
     turb = str(getattr(spec, "default_turbulence", "") or "")
-    return {
-        **schema_defaults(getattr(spec, "settings_schema", ()) or ()),
-        "analysis_type": spec.key,
-        "analysis": (fam.study_name or fam.label) if fam is not None else spec.label,
-        "analysis_title": fam.title if fam is not None else spec.label,
-        "category": str(getattr(spec, "category", "") or ""),
-        "flow_group": "",
-        "turbulence_model_key": turb,
-        "turbulence_model": turb,
-        "time_dependency": "Transient" if td == "transient" else "Steady-state",
-        "algorithm": str(_hook(spec, "algorithm_label") or ""),
-    }
+    if turb:
+        out.setdefault("turbulence_model", turb)
+        out.setdefault("turbulence_model_key", turb)
 
 
 def sibling(spec: Any, time_dependency: str, registry: Any | None = None) -> str | None:

@@ -96,7 +96,7 @@ def polar(params, scope):
 
 ## Simulation types (analysis contract 1.1)
 
-An `AnalysisType` tells the core everything it needs through optional contract fields (`cfddesk.registry.contract`), so the core never reaches into its physics:
+An `AnalysisType` needs only `key`, `label`, `category`, `time_dependency` and `fields` (API 1.4; the other fields default to empty). It tells the core everything else through optional contract fields (`cfddesk.registry.contract`), so the core never reaches into its physics. Keep a choice such as a turbulence model in your own `settings_schema`: its defaults fill the new-study settings that `study_defaults` leaves out.
 
 - `family`: the Create Simulation title, description and tags, shared with a sibling analysis (steady and transient of the same physics).
 - `study_defaults(time_dependency)`, `algorithm_label`, `residual_keys`, `x_axis`, `ui`.
