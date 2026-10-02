@@ -1,0 +1,11 @@
+{
+  "materials": [
+    {
+      "name": "Air",
+      "kinematic_viscosity": 1.529e-5,
+      "density": 1.196,
+      "assigned_volumes": ["Body1"],
+      "simulation_id": "sim_1"
+    }
+  ]
+}

@@ -1,7 +1,8 @@
 # Incompressible Flow's own tests: `pytest bundled-plugins/incompressible_flow/tests`.
-# They use the core's shared project fixtures (python/tests), so the core is on
-# the path here; the plugin package itself imports only magnusim_sdk and
-# cfddesk.registry (python/tools/plugin_boundary.py).
+# Their fixtures, goldens and settings file are their own (tests/conftest.py,
+# tests/fixtures); the tests drive the core (cfddesk, tools/prepare_run.py), so
+# the core is on the path here. The plugin package itself imports only
+# magnusim_sdk and cfddesk.registry (python/tools/plugin_boundary.py).
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "../../python", "../../python/tools", "../../python/sdk"]

@@ -103,7 +103,7 @@ def test_custom_monitor_on_any_faces_is_a_sampled_surface(tmp_path, monkeypatch)
     assert custom_monitor_key("Area average 1", taken) == "rc_area_average_1"
     assert custom_monitor_key("Area average 1", taken) == "rc_area_average_1_2"
 
-    step = FIXTURES / "geometry" / "elbow.step"
+    step = FIXTURES / "elbow.step"
     monkeypatch.setattr(paths, "resolve_step_for_study", lambda *a, **k: step)
     spec = SimpleNamespace(project_dir=tmp_path, simulation_id="s", mesh_id="m", custom_monitors=mons)
     written = write_custom_monitor_surfaces(tmp_path, spec, CaseServices(tmp_path, "s", "m"))

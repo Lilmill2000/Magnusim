@@ -18,6 +18,7 @@ from cfddesk.registry import (
     reset_for_tests,
 )
 from conftest import GOLDEN, JS_PROJECT
+from conftest import run_spec as load_run_spec
 from test_prepare_run_golden import _assert_golden
 
 FIX = JS_PROJECT
@@ -42,8 +43,6 @@ def test_registry_write_case_matches_phase1_js_golden(
 ):
     if not (FIX / "boundary_conditions.json").is_file():
         pytest.skip("js-project fixture missing")
-
-    from conftest import run_spec as load_run_spec
 
     transient_override = None
     if mode == "transient":

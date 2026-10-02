@@ -1,0 +1,9 @@
+{
+  "result_controls": [
+    {
+      "kind": "Area average",
+      "name": "Area average 1",
+      "faces": ["face 1@Body1"]
+    }
+  ]
+}

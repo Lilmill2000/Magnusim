@@ -4,9 +4,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import cfddesk
 import pytest
 from cfddesk.registry.analysis import write_run_case
-from conftest import FIXTURES, GOLDEN, JS_PROJECT, normalize_foam
+from conftest import GOLDEN, JS_PROJECT, normalize_foam
 from conftest import run_spec as load_run_spec
 
 FIX = JS_PROJECT
@@ -158,7 +159,7 @@ def test_prepare_run_cli_json(tmp_path):
     import sys
 
     out = tmp_path / "cli_case"
-    script = FIXTURES.parents[1] / "tools" / "prepare_run.py"
+    script = Path(cfddesk.__file__).resolve().parents[1] / "tools" / "prepare_run.py"
     proc = subprocess.run(
         [
             sys.executable,
