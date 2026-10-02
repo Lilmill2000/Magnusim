@@ -64,6 +64,50 @@ September 2026 readiness audit. This list preserves the intended work.
   answers one call at a time. To add: environments for wheel plugins, other GPU
   vendors, and concurrent calls for services that declare they are safe.
 
+- **Core UI consistency (Plugin Host H14):** the plugin UI kit
+  (`magnusim-web/src/plugin-ui/`) copies today's core look, but the core does
+  not use it yet. To do, each with Daniel's OK where users would see a change:
+  - Move the core panels onto the kit: panel chrome, rows, buttons, inputs,
+    toggles, hints, status blocks, and the residual plot onto LinePlot. The H10
+    DOM parity baseline, `e2e/fixtures/h10-ui-parity.json` in
+    `magnusim-web/bundled-plugins/incompressible_flow/`, must then be
+    re-recorded on purpose. The bundled Incompressible Flow panels use core
+    class names and move with them (H14 plan task 6). Move `style.css`
+    colours onto tokens.
+  - One look for controls in core and kit: the app font (they use the
+    browser font today), one focus ring (the browser's today; the switch
+    shows no focus at all), hover states on primary and secondary buttons
+    (none today), and an OFF pill toggle that is not the browser button face
+    (`.mesh-toggle.is-off` is dead CSS). One toast layer: app toasts and
+    workspace toasts draw in the same bottom-right corner, apart.
+  - Buttons: the panel primary is #3b5bdb, Home's primary is near-black and
+    Kick is #1f6feb. The kit's primary token is #3b5bdb; Daniel may pick
+    #1570ef, a one-token change. Disabled is .45 in the app and .55 in
+    `/plugin-sdk/theme.css`. Destructive styles use two reds (#c62828 in
+    dialogs and the trash, #b42318 in reasons and menus). `.sim-def-title` is
+    overridden by `.mat-panel-title`. A core Done click closes its panel twice
+    (the tree's click handler and `cfd:panel-done`).
+  - Bugs found while building the kit, not fixed yet: the results legend
+    gradient is not the colours the render draws; Home shows sim times from 1
+    to 10 ms as "5.0e-3 s" where the workbench shows "0.005 s"; the Mesh and
+    Run panels show "62:05" past an hour where the viewport chip shows
+    "1:02:05"; the job-finished toast is probably hidden under an open
+    workspace (layer 40 under 1500; not yet checked in a browser); the
+    residual hover tip is cut off at the right edge.
+  - Formatters: four `formatSimTime` copies (workbench, ResidualPlot, Home,
+    the Incompressible Flow transient settings); null and '' print "0 s";
+    99.95 prints "100.0 s". `formatSci` prints 999999.9 as "1000000".
+  - Units: `unitIsImperial('min')` is true; `BcPanel.tsx` keeps a second unit
+    table; the Incompressible Flow case writer uses psi 6894.757 and inH₂O
+    249.089 where the app uses 6894.757293168 and 249.08891; schema forms show
+    SI units for every quantity but length in imperial projects.
+  - Colour: `results.color_scale.cmap` in project.json is never read; the
+    Filters panel builds a colour table it never uses. cividis was left out of
+    the kit because neither table is CC0 (PNNL's has Battelle BSD-style terms,
+    matplotlib's has its own licence); add one with its notice if wanted.
+  - Dead code: `.ml-type-soon`, `.mat-check-btn`, `.mesh-toggle.is-off`,
+    `residualPaths`.
+
 - **CAD plugin, after V1 (Magnusim CAD, `bundled-plugins/cad`):** V1 is
   parametric multi-body parts (sketches, solid features, booleans, STEP
   editing, CFD preparation). These come back in a later version:

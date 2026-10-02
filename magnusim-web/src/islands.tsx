@@ -1,6 +1,7 @@
 import { createRoot, type Root } from 'react-dom/client';
-import { Component, type ComponentType, type ReactNode } from 'react';
+import { Component, Fragment, type ComponentType, type ErrorInfo, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { PanelError } from './plugin-ui';
 
 export interface IslandProps {
   projectId?: string;
@@ -13,18 +14,37 @@ export interface IslandProps {
 
 type IslandComponent = ComponentType<IslandProps>;
 
-export class PanelBoundary extends Component<{ children: ReactNode }, { error: string }> {
-  state = { error: '' };
+/**
+ * A panel that throws shows a card in its place: what failed, Try again (a fresh
+ * mount), and Done when it is a panel host's whole content (`chrome`).
+ */
+export class PanelBoundary extends Component<
+  { children: ReactNode; panelId?: string; chrome?: boolean },
+  { error: string; tries: number }
+> {
+  state = { error: '', tries: 0 };
 
   static getDerivedStateFromError(error: unknown): { error: string } {
     return { error: error instanceof Error ? error.message : 'This panel failed to load.' };
   }
 
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    console.error('[panel]', this.props.panelId || '', error, info.componentStack);
+  }
+
   render() {
-    if (this.state.error) {
-      return <p role="alert" data-panel-boundary="1">{this.state.error}</p>;
+    const { error, tries } = this.state;
+    if (error) {
+      return (
+        <PanelError
+          message={error}
+          onRetry={() => this.setState({ error: '', tries: tries + 1 })}
+          onDone={this.props.chrome ? dispatchPanelDone : undefined}
+          attrs={{ 'data-panel-boundary': '1' }}
+        />
+      );
     }
-    return this.props.children;
+    return <Fragment key={tries}>{this.props.children}</Fragment>;
   }
 }
 
@@ -77,7 +97,7 @@ export function mountIsland(panelId: string, props: Omit<IslandProps, 'panelId'>
   const serial = ++mountSerial;
   root.render(
     <QueryClientProvider client={queryClient}>
-      <PanelBoundary key={serial}>
+      <PanelBoundary key={serial} panelId={panelId} chrome>
         <Component {...props} panelId={panelId} />
       </PanelBoundary>
     </QueryClientProvider>,

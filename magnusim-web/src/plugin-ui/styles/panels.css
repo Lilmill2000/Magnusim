@@ -1,0 +1,57 @@
+/*
+ * Panels: PanelChrome (the core's panel head, body and foot), StatusBlock,
+ * Toast and PanelError. Copied from the core's rules, on tokens.
+ */
+
+/* PanelChrome (.mat-panel-head/-body/-foot; the card is the flyout's .mat-panel) */
+.mgk-panel--card {
+  background: var(--mg-bg); border: 1px solid var(--mg-card-border); border-radius: var(--mg-radius-md);
+  box-shadow: var(--mg-shadow-md); padding: 10px 12px;
+}
+.mgk-panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--mg-space-2);
+  margin-bottom: var(--mg-space-2); padding-bottom: 6px; border-bottom: 1px solid var(--mg-divider);
+}
+.mgk-panel-title { font-weight: var(--mg-weight-semibold); font-size: var(--mg-text-lg); color: var(--mg-text); }
+.mgk-panel-body { font-size: var(--mg-text-sm); color: var(--mg-text-body); }
+.mgk-panel-foot {
+  display: flex; justify-content: space-between; align-items: center; gap: var(--mg-space-2);
+  margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--mg-divider);
+}
+.mgk-panel-foot-left { display: flex; align-items: center; gap: var(--mg-space-3); min-width: 0; }
+button.mgk-panel-done { min-width: 72px; }
+
+/* StatusBlock (.mesh-finished, .sim-finished) */
+.mgk-status { margin-top: 10px; padding-top: var(--mg-space-2); border-top: 1px solid var(--mg-border-subtle); color: var(--mg-text-body); }
+.mgk-status-title { color: var(--mg-text-muted); }
+.mgk-status-line { color: var(--mg-text-body); }
+.mgk-status-elapsed {
+  font-variant-numeric: tabular-nums; font-size: var(--mg-text-2xl); font-weight: var(--mg-weight-semibold);
+  color: var(--mg-text); margin-top: var(--mg-space-1);
+}
+.mgk-status-eta { font-size: var(--mg-text-sm); color: var(--mg-text-secondary); margin-top: 2px; }
+.mgk-status-meta { font-size: var(--mg-text-xs); color: var(--mg-text-muted); margin-top: var(--mg-space-1); }
+
+/* Toast (the workspace toast's look, without its place) */
+.mgk-toast {
+  display: flex; align-items: center; gap: var(--mg-space-3); max-width: 420px; padding: 10px 12px;
+  background: var(--mg-bg); border: 1px solid var(--mg-border-subtle); border-left: 3px solid var(--mg-info);
+  border-radius: var(--mg-radius-md); box-shadow: var(--mg-shadow-sm); font-size: var(--mg-text-md);
+  color: var(--mg-text-strong); pointer-events: auto;
+}
+.mgk-toast.mgk-toast--success { border-left-color: var(--mg-success); }
+.mgk-toast.mgk-toast--error { border-left-color: var(--mg-danger); }
+button.mgk-toast-close, button.mgk-toast-close:hover {
+  margin: 0; padding: 0; border: 0; background: none; font: revert; font-size: var(--mg-text-xl); line-height: 1;
+  color: var(--mg-text-muted); cursor: pointer; border-radius: revert; opacity: revert; outline: revert; outline-offset: revert;
+}
+button.mgk-toast-close:focus-visible { outline: revert; outline-offset: revert; }
+
+/* PanelError (the card a failed panel shows) */
+.mgk-error {
+  border: 1px solid var(--mg-border-subtle); border-left: 3px solid var(--mg-danger); background: var(--mg-bg);
+  padding: var(--mg-space-3); border-radius: var(--mg-radius-md);
+}
+.mgk-error-title { color: var(--mg-danger); font-size: var(--mg-text-md); font-weight: var(--mg-weight-semibold); }
+.mgk-error-msg { margin-top: var(--mg-space-1); color: var(--mg-text-muted); overflow-wrap: anywhere; }
+.mgk-error .mgk-btn--fix { margin-top: 6px; }

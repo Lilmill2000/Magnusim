@@ -45,7 +45,9 @@ test('a workspace page may load the SDK and its own folder, fetch only its own f
 
 test("the host's import map goes first in the head, and the CSP allows exactly it", () => {
   const html = injectWorkspaceHead('<!doctype html><html><head><title>Bench</title></head><body></body></html>');
-  const m = html.match(/<head><script type="importmap">(.*?)<\/script><link rel="stylesheet" href="\/plugin-sdk\/theme.css"><title>/);
+  const m = html.match(
+    /<head><script type="importmap">(.*?)<\/script><link rel="stylesheet" href="\/plugin-sdk\/theme.css"><link rel="stylesheet" href="\/plugin-sdk\/plugin-ui.css"><title>/,
+  );
   assert.ok(m, html);
   assert.deepEqual(JSON.parse(m[1]), { imports: SDK_IMPORTS });
   const hash = createHash('sha256').update(m[1]).digest('base64');

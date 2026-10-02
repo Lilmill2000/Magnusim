@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { pluginUiFor, registeredPluginKeys, unregisterPlugin } from '../plugin-api';
+import * as kit from '../plugin-ui';
 
 export type ListedPlugin = {
   key: string;
@@ -82,6 +83,8 @@ export async function loadOnePlugin(plugin: ListedPlugin, scope: string): Promis
   if (!plugin.ui && !plugin.url) return;
   const url = plugin.url || `/plugins/${plugin.key}/ui/${plugin.ui_entry || 'index.js'}`;
   (globalThis as { __MAGNUSIM_HOST_REACT__?: typeof React }).__MAGNUSIM_HOST_REACT__ = React;
+  // A bundled TSX UI's `@magnusim/plugin-ui` import reads the page's kit from here.
+  (globalThis as { __MAGNUSIM_HOST_KIT__?: typeof kit }).__MAGNUSIM_HOST_KIT__ = kit;
   try {
     const mod = (await import(/* @vite-ignore */ url)) as {
       register?: (host: PluginHost) => void;

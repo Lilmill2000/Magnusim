@@ -1,0 +1,91 @@
+/*
+ * Controls: the core's value row (.bc-value-row, .bc-input), panel select
+ * (.bc-select), switch (.switch), ON/OFF pill (.mesh-toggle), schema form row
+ * (.mat-row, .mat-k-help, .mat-k-tip), hints and empty states, on tokens. The
+ * base rule of each control sets everything the frame's base.css sets on its
+ * element, so page and frame look the same.
+ */
+
+/* NumberUnitInput */
+.mgk-value-row { display: inline-flex; align-items: center; gap: 6px; color: var(--mg-text-body); }
+input.mgk-input {
+  margin: 0; font: revert; font-size: var(--mg-text-sm); color: revert; background: revert;
+  width: 72px; padding: 2px 6px; border: 1px solid var(--mg-border); border-radius: var(--mg-radius-sm);
+  outline: revert; outline-offset: revert;
+}
+input.mgk-input:focus-visible { outline: revert; outline-offset: revert; }
+input.mgk-input--wide { width: 128px; }
+input.mgk-input--fill { width: 100%; max-width: 220px; }
+.mgk-unit { color: var(--mg-text); font-weight: var(--mg-weight-medium); }
+
+/* Select */
+select.mgk-select {
+  margin: 0; font: revert; font-size: var(--mg-text-sm); padding: 2px 4px; border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm); background: var(--mg-bg); color: var(--mg-text); max-width: 160px;
+  outline: revert; outline-offset: revert;
+}
+select.mgk-select:focus-visible { outline: revert; outline-offset: revert; }
+select.mgk-select--fill { width: 100%; max-width: 220px; }
+
+/* Toggle: switch */
+label.mgk-switch { position: relative; display: inline-block; width: 34px; height: 18px; color: var(--mg-text-body); }
+input.mgk-switch-input {
+  margin: 0; padding: 0; border: 0; font: revert; color: revert; background: revert;
+  border-radius: revert; outline: revert; outline-offset: revert;
+  opacity: 0; width: 0; height: 0;
+}
+input.mgk-switch-input:focus-visible { outline: revert; outline-offset: revert; }
+.mgk-switch-track { position: absolute; inset: 0; background: var(--mg-switch-off); border-radius: var(--mg-radius-pill); }
+input.mgk-switch-input:checked + .mgk-switch-track { background: var(--mg-text-strong); }
+.mgk-switch-track::before {
+  content: ""; position: absolute; width: 14px; height: 14px; left: 2px; top: 2px;
+  background: var(--mg-bg); border-radius: var(--mg-radius-round); transition: transform var(--mg-duration-switch);
+}
+input.mgk-switch-input:checked + .mgk-switch-track::before { transform: translateX(16px); }
+input.mgk-switch-input:disabled + .mgk-switch-track { opacity: var(--mg-disabled-opacity); cursor: not-allowed; }
+
+/* Toggle: pill. The frame's base.css sets a disabled button's opacity, so the base rule resets it too. */
+button.mgk-pill, button.mgk-pill:hover {
+  margin: 0; font: revert; font-size: var(--mg-text-xs); font-weight: var(--mg-weight-bold);
+  color: revert; background: revert; min-width: 48px; height: 24px; border-radius: var(--mg-radius-pill);
+  border: 1px solid var(--mg-border); padding: 0 8px; cursor: pointer; opacity: revert; outline: revert; outline-offset: revert;
+}
+button.mgk-pill:focus-visible { outline: revert; outline-offset: revert; }
+button.mgk-pill.mgk-pill--on, button.mgk-pill.mgk-pill--on:hover {
+  background: var(--mg-text); color: var(--mg-primary-text); border-color: var(--mg-text);
+}
+button.mgk-pill:disabled { opacity: var(--mg-disabled-opacity); cursor: not-allowed; }
+
+/* Field. The tip has no viewport cap (the core's 70vw): a frame's viewport is not the page's. */
+.mgk-field { display: flex; justify-content: space-between; align-items: center; gap: var(--mg-space-2); padding: 4px 0; color: var(--mg-text-body); }
+.mgk-field-k { color: var(--mg-text-muted); }
+.mgk-field-k[data-help] { position: relative; cursor: help; }
+.mgk-field-v { color: var(--mg-text); font-weight: var(--mg-weight-medium); text-align: right; }
+.mgk-field-help {
+  display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; margin-left: 5px;
+  border-radius: var(--mg-radius-pill); border: 1px solid var(--mg-border); color: var(--mg-text-muted);
+  background: var(--mg-bg); font-size: var(--mg-text-3xs); font-weight: var(--mg-weight-bold); line-height: 1;
+  cursor: help; vertical-align: middle;
+}
+.mgk-field-help:focus-visible { outline: revert; outline-offset: revert; }
+.mgk-field-tip {
+  display: none; position: absolute; left: 0; top: calc(100% + 4px); z-index: var(--mg-z-tooltip);
+  width: 260px; padding: 7px 9px; border-radius: var(--mg-radius-tip);
+  background: var(--mg-tooltip-bg); color: var(--mg-tooltip-text); font-size: var(--mg-text-sm);
+  font-weight: var(--mg-weight-regular); line-height: var(--mg-line); text-align: left; white-space: normal;
+  box-shadow: var(--mg-shadow-tooltip); pointer-events: none;
+}
+.mgk-field-k[data-help]:hover .mgk-field-tip, .mgk-field-help:focus-visible + .mgk-field-tip { display: block; }
+
+/* Hint, DisabledReason, EmptyState */
+.mgk-hint { font-size: var(--mg-text-xs); color: var(--mg-text-muted); margin: 0 0 6px; }
+.mgk-hint--warning { color: var(--mg-warning); }
+.mgk-hint--danger, .mgk-reason { color: var(--mg-danger); }
+.mgk-reason-msg { display: block; }
+.mgk-reason .mgk-btn--fix { margin-top: 6px; }
+.mgk-empty { font-size: var(--mg-text-sm); color: var(--mg-text-muted); padding: 4px 0; }
+li.mgk-empty { list-style: none; }
+.mgk-empty--chart { font-size: var(--mg-text-xs); color: var(--mg-text-subtle); font-style: italic; padding: 0; }
+
+/* Icon */
+.mgk-icon { flex: none; }

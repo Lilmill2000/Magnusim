@@ -26,6 +26,7 @@ def test_repo_respects_the_boundary():
         "python/tests/fixtures/workspace-plugins/ws-demo",
         "python/tests/fixtures/env-plugins/env-demo",
         "python/tests/fixtures/optional-plugins/opt-demo",
+        "python/tests/fixtures/kit-plugins/kit-demo",
     } <= set(report["plugins"])
 
 

@@ -113,6 +113,7 @@ import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatal
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
 import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js';
 import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId } from '../viewer/pick.ts';
+import { RAINBOW_HUE } from '../plugin-ui/colormaps';
 
 const jobQueue = { items: [], kicking: false, kickTimer: null };
 try { window.__CFD_JOB_QUEUE__ = jobQueue; } catch (_) {}
@@ -1971,7 +1972,7 @@ function syncFieldVectorGlyphs(bundle, pd, enabled) {
 const isoVecGlyph = makeFieldVectorGlyph();
 const ivVecGlyph = makeFieldVectorGlyph();
 const cutVecLut = vtkLookupTable.newInstance();
-cutVecLut.setHueRange(0.667, 0.0);
+cutVecLut.setHueRange(RAINBOW_HUE, 0.0);
 cutVecLut.setSaturationRange(1.0, 1.0);
 cutVecLut.setValueRange(1.0, 1.0);
 cutVecLut.setNumberOfColors(256);
@@ -2538,12 +2539,12 @@ renderer.addActor(ivActor);
 
 
 const lut = vtkLookupTable.newInstance();
-lut.setHueRange(0.667, 0.0);
+lut.setHueRange(RAINBOW_HUE, 0.0);
 lut.setSaturationRange(1.0, 1.0);
 lut.setValueRange(1.0, 1.0);
 lut.setNumberOfColors(256);
 const ptLut = vtkLookupTable.newInstance();
-ptLut.setHueRange(0.667, 0.0);
+ptLut.setHueRange(RAINBOW_HUE, 0.0);
 ptLut.setSaturationRange(1.0, 1.0);
 ptLut.setValueRange(1.0, 1.0);
 ptLut.setNumberOfColors(256);
@@ -10847,7 +10848,7 @@ function ensureCompareResults() {
   if (compareState.res) return compareState.res;
   const mkLut = () => {
     const l = vtkLookupTable.newInstance();
-    l.setHueRange(0.667, 0.0);
+    l.setHueRange(RAINBOW_HUE, 0.0);
     l.setSaturationRange(1.0, 1.0);
     l.setValueRange(1.0, 1.0);
     l.setNumberOfColors(256);

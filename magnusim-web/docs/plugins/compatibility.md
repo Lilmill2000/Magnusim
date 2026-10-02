@@ -2,6 +2,24 @@
 
 The host loads a plugin whose `api_version` has the same major version as its own (`cfddesk.registry.API_VERSION`). A minor version adds things; it never removes or changes what an older minor version offered, so a `1.0` plugin loads unchanged on a `1.1` host. The one exception is a safety fix, listed under the version that made it (1.2 made `ws.data` paths stricter).
 
+## 1.3
+
+Host API 1.3 (`API_VERSION`, and `hostVersion` in a workspace's context), plugin UI kit 1.0.0 (`PLUGIN_UI_API_VERSION`); workspace SDK 1.1.0 and `magnusim_sdk` 1.2.0 are unchanged. A 1.2 plugin loads unchanged.
+
+**The plugin UI kit, `@magnusim/plugin-ui`.** Components and helpers that look like the app's own panels, on the design tokens. In the page a plugin gets the page's own copy as `pluginUi.kit`, and a `.tsx`, `.ts` or `.jsx` UI the host bundles may `import { Button } from '@magnusim/plugin-ui'` (the host resolves it to the same copy). In a workspace frame the import map maps `@magnusim/plugin-ui` to `/plugin-sdk/plugin-ui.js`, and every workspace page links `/plugin-sdk/plugin-ui.css` after `theme.css`. A frame that imports the kit does not start on a 1.2 host: the module does not resolve. Types: `docs/plugins/plugin-ui.d.ts`, also served as `/plugin-sdk/plugin-ui.d.ts`; `docs/plugins/plugin-sdk.json` adds `plugin_ui_version`.
+
+**`pluginUi` adds** `kit`; `panelDone()`, which closes the panel as a core panel's Done does (`cfd:panel-done`); `toast(message, { kind })`, an app toast (`info`, `success` or `error`; any other kind is `info`; 300 characters at most; up to three stack at the bottom right, and none closes while the pointer is on any of them); and `unitSystem()`, `metric` or `imperial` as the open project shows. `registerFieldWidget` is typed `ComponentType<FieldWidgetProps>` (it was `Record<string, unknown>` props).
+
+**Bundled UIs.** The in-page `react` shim exports every name React exports (it had 16, so a UI that imported `useTransition` did not bundle). A bundled UI may import `react`, `react/jsx-runtime`, `@magnusim/plugin-ui` and its own files.
+
+**Field widgets.** A widget registered after a schema form opened now replaces the core control at once (before, the form kept the core control until its schema or data changed).
+
+**Workspace toasts.** `ws.ui.toast` is now drawn as the kit Toast, still inside the workspace (`#workspace-overlay [data-ws-toast]`) and one at a time. Its classes are `mgk-toast mgk-toast--<kind>` (they were `ws-toast is-<kind>`). It closes after 3.8 s, errors after 9 s (both were 4 s), and its time stops while the pointer or the focus is on it.
+
+**Changed look, in plugin pages.** `--mg-primary` is `#3b5bdb` (was `#1570ef`), the blue of the core panel buttons; `--mg-primary-hover` is `#364fc7` and `--mg-focus` `rgba(59, 91, 219, 0.35)`. The `button.primary` style and the focus ring of `/plugin-sdk/theme.css` follow.
+
+**Colour.** `useViewer().createRainbowLut()` uses hue 0.667 (was 0.666), the hue the app's own renders use (the kit's `RAINBOW_HUE`).
+
 ## 1.2
 
 Host API 1.2 (`API_VERSION`, and `hostVersion` in a workspace's context), `magnusim_sdk` 1.2.0, workspace SDK 1.1.0. The host does not refuse a plugin whose minor version is newer than its own, so a workspace checks `ws.context.hostVersion` (compare the numbers, `1.2` or later) before it uses anything below; a 1.1 host answers the new calls with code `not_allowed`.

@@ -4,24 +4,41 @@
  * A plugin's UI entry may be `.tsx`/`.ts`/`.jsx`: the host bundles it (and the
  * plugin's own files it imports) into one ES module. `react` resolves to the
  * host's React (the page's single copy, set by the plugin loader), so a
- * plugin's components share the app's hooks and context. A plugin UI may
- * import only `react` and files inside its own `ui` folder; type-only imports
- * (the host API types) are erased.
+ * plugin's components share the app's hooks and context; `@magnusim/plugin-ui`
+ * resolves to the page's UI kit the same way. A plugin UI may import only
+ * `react`, `@magnusim/plugin-ui` and files inside its own `ui` folder;
+ * type-only imports (the host API types) are erased.
  */
-import { readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { exportNames, kitExportNames, newestStamp } from './sdk-build.ts';
 
 export const BUNDLED_UI = /\.(tsx|ts|jsx)$/;
 
-const HOST_REACT = `
-const R = globalThis.__MAGNUSIM_HOST_REACT__;
-if (!R) throw new Error('plugin UI loaded before the host provided React');
-export default R;
-export const {
-  Children, Fragment, createContext, createElement, forwardRef, memo, useCallback, useContext,
-  useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore,
-} = R;
-`;
+/** This checkout's web root (magnusim-web/). */
+const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// Every name React exports, read from the React the host bundles.
+function hostReact(names: string[]): string {
+  return [
+    'const R = globalThis.__MAGNUSIM_HOST_REACT__;',
+    "if (!R) throw new Error('plugin UI loaded before the host provided React');",
+    'export default R;',
+    names.length ? `export const { ${names.join(', ')} } = R;` : '',
+    '',
+  ].join('\n');
+}
+
+// The page's UI kit (set by the plugin loader); the names are the kit's runtime exports.
+function hostKit(names: string[]): string {
+  return [
+    'const K = globalThis.__MAGNUSIM_HOST_KIT__;',
+    "if (!K) throw new Error('plugin UI loaded before the host provided the UI kit');",
+    names.length ? `export const { ${names.join(', ')} } = K;` : '',
+    '',
+  ].join('\n');
+}
 
 // The automatic JSX runtime on the host's React (createElement takes children in props).
 const HOST_JSX = `
@@ -35,25 +52,11 @@ export const jsxs = jsx;
 export const jsxDEV = jsx;
 `;
 
-const cache = new Map<string, { stamp: string; code: string }>();
+/** kitKey: null when the bundle did not import the kit, else a hash of the kit names it used. */
+const cache = new Map<string, { stamp: string; kitKey: string | null; code: string }>();
 
-function newestStamp(dir: string): string {
-  let newest = 0;
-  let count = 0;
-  const walk = (d: string) => {
-    for (const name of readdirSync(d)) {
-      if (name === 'node_modules' || name.startsWith('.')) continue;
-      const p = join(d, name);
-      const st = statSync(p);
-      if (st.isDirectory()) walk(p);
-      else {
-        count += 1;
-        newest = Math.max(newest, st.mtimeMs);
-      }
-    }
-  };
-  walk(dir);
-  return `${newest}:${count}`;
+function namesKey(names: string[]): string {
+  return createHash('sha256').update(names.join('\n')).digest('hex');
 }
 
 function inside(child: string, parent: string): boolean {
@@ -61,11 +64,24 @@ function inside(child: string, parent: string): boolean {
   return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
-/** One ES module for the entry, rebuilt when a file in the plugin's ui folder changes. */
-export async function bundlePluginUi(entry: string, uiRoot: string): Promise<string> {
+export interface BundlePluginUiOptions {
+  /** The web root whose React and kit the shims name (default: this checkout's). */
+  webRoot?: string;
+  /** The kit's runtime export names (default: kitExportNames(webRoot)); asked only when the UI imports the kit. */
+  kitNames?: () => Promise<string[]>;
+}
+
+/**
+ * One ES module for the entry, rebuilt when a file in the plugin's ui folder
+ * changes, or, for a UI that imports the kit, when the kit's export names do.
+ */
+export async function bundlePluginUi(entry: string, uiRoot: string, opts: BundlePluginUiOptions = {}): Promise<string> {
+  const webRoot = opts.webRoot ?? WEB_ROOT;
+  const kitNames = opts.kitNames ?? (() => kitExportNames(webRoot));
   const stamp = newestStamp(uiRoot);
   const hit = cache.get(entry);
-  if (hit && hit.stamp === stamp) return hit.code;
+  if (hit && hit.stamp === stamp && (hit.kitKey === null || hit.kitKey === namesKey(await kitNames()))) return hit.code;
+  let kitKey: string | null = null;
   const esbuild = await import('esbuild');
   const result = await esbuild.build({
     entryPoints: [entry],
@@ -83,14 +99,23 @@ export async function bundlePluginUi(entry: string, uiRoot: string): Promise<str
         setup(build) {
           build.onResolve({ filter: /^react$/ }, () => ({ path: 'react', namespace: 'magnusim-host' }));
           build.onResolve({ filter: /^react\/jsx(-dev)?-runtime$/ }, () => ({ path: 'jsx', namespace: 'magnusim-host' }));
-          build.onLoad({ filter: /.*/, namespace: 'magnusim-host' }, (args) => ({
-            contents: args.path === 'jsx' ? HOST_JSX : HOST_REACT,
-            loader: 'js',
-          }));
+          build.onResolve({ filter: /^@magnusim\/plugin-ui$/ }, () => ({ path: 'kit', namespace: 'magnusim-host' }));
+          build.onLoad({ filter: /.*/, namespace: 'magnusim-host' }, async (args) => {
+            if (args.path === 'jsx') return { contents: HOST_JSX, loader: 'js' };
+            if (args.path === 'kit') {
+              // Only a UI that imports the kit waits for (and depends on) the kit's names.
+              const names = await kitNames();
+              kitKey = namesKey(names);
+              return { contents: hostKit(names), loader: 'js' };
+            }
+            return { contents: hostReact(exportNames(webRoot, 'react')), loader: 'js' };
+          });
           build.onResolve({ filter: /.*/ }, (args) => {
             if (args.kind === 'entry-point') return undefined;
             if (!/^\.{1,2}\//.test(args.path)) {
-              return { errors: [{ text: `plugin UI may import only react and its own files, not ${args.path}` }] };
+              return {
+                errors: [{ text: `plugin UI may import only react, @magnusim/plugin-ui and its own files, not ${args.path}` }],
+              };
             }
             const target = resolve(args.resolveDir, args.path);
             if (!inside(target, uiRoot)) {
@@ -103,6 +128,6 @@ export async function bundlePluginUi(entry: string, uiRoot: string): Promise<str
     ],
   });
   const code = new TextDecoder().decode(result.outputFiles[0].contents);
-  cache.set(entry, { stamp, code });
+  cache.set(entry, { stamp, kitKey, code });
   return code;
 }

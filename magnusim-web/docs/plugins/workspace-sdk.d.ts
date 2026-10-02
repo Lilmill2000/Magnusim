@@ -51,7 +51,7 @@ declare module '@magnusim/workspace' {
       units: UnitSystem;
       theme: ThemeInfo;
       /**
-       * The host's bridge API version ("1.2"). To use a call a later host added,
+       * The host's bridge API version ("1.3"). To use a call a later host added,
        * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2), or
        * catch the refusal: an older host rejects a call it does not know with
        * code "not_allowed".

@@ -483,7 +483,8 @@ body,
 }
 
 .tree-detail .sim-def-head,
-.tree-detail .mat-panel-head {
+.tree-detail .mat-panel-head,
+.tree-detail .mgk-panel-head {
   padding-right: 28px;
 }
 
@@ -5024,7 +5025,7 @@ body.is-recording #viewport-gizmo {
   border: 0;
   background: none;
   font: inherit;
-  color: var(--mg-primary-hover);
+  color: var(--mg-link);
   cursor: pointer;
 }
 .plugin-study-settings:hover { text-decoration: underline; }
@@ -5107,25 +5108,24 @@ body.is-recording #viewport-gizmo {
 .ws-error h2 { margin: 0 0 var(--mg-space-2); font-size: var(--mg-text-xl); color: var(--mg-text-strong); }
 .ws-error p { margin: 0 0 var(--mg-space-4); color: var(--mg-text-muted); line-height: var(--mg-line); }
 .ws-error-actions { display: flex; gap: var(--mg-space-2); }
-.ws-toast {
+/* The page's toast is the kit Toast (one at a time); this is only its place. */
+.ws-toast-slot {
   position: absolute;
   right: 16px;
   bottom: 16px;
-  display: flex;
-  align-items: center;
-  gap: var(--mg-space-3);
-  max-width: 420px;
-  padding: 10px 12px;
-  background: var(--mg-bg);
-  border: 1px solid var(--mg-border-subtle);
-  border-left: 3px solid var(--mg-primary);
-  border-radius: var(--mg-radius-md);
-  box-shadow: var(--mg-shadow-sm);
-  font-size: var(--mg-text-md);
 }
-.ws-toast.is-success { border-left-color: var(--mg-success); }
-.ws-toast.is-error { border-left-color: var(--mg-danger); }
-.ws-toast-close { border: 0; background: none; font-size: 16px; line-height: 1; color: var(--mg-text-muted); cursor: pointer; }
+/* App toasts (ToastHost): bottom right, newest last, above an open workspace. */
+.app-toasts {
+  position: fixed;
+  right: var(--mg-space-4);
+  bottom: var(--mg-space-4);
+  z-index: var(--mg-z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--mg-space-2);
+  align-items: flex-end;
+  pointer-events: none;
+}
 .ws-menu-host:empty { display: none; }
 .ws-menu { position: relative; }
 .ws-menu-list {

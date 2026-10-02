@@ -37,15 +37,20 @@ export const WORKSPACE_TYPES: Record<string, string> = {
 };
 
 export const SDK_TYPES: Record<string, string> = {
+  // ui-kit-sheet.html: the dev sheet's frame page (dev server with VITE_MAGNUSIM_DEV_SHEETS=1 only).
+  html: 'text/html; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
   css: 'text/css; charset=utf-8',
   // workspace.d.ts: the bridge's types, for a plugin's editor (never run).
   ts: 'text/plain; charset=utf-8',
 };
 
-/** The workspace page with the host's import map and theme first in its head. */
+/** The workspace page with the host's import map, theme and UI kit styles first in its head. */
 export function injectWorkspaceHead(html: string): string {
-  const tags = `<script type="importmap">${IMPORT_MAP}</script><link rel="stylesheet" href="/plugin-sdk/theme.css">`;
+  const tags =
+    `<script type="importmap">${IMPORT_MAP}</script>` +
+    '<link rel="stylesheet" href="/plugin-sdk/theme.css">' +
+    '<link rel="stylesheet" href="/plugin-sdk/plugin-ui.css">';
   const head = html.match(/<head(\s[^>]*)?>/i);
   if (head) return html.replace(head[0], head[0] + tags);
   return tags + html;
@@ -53,8 +58,13 @@ export function injectWorkspaceHead(html: string): string {
 
 /** The workspace page's Content-Security-Policy, for this host and plugin. */
 export function workspaceCsp(host: string, key: string): string {
+  return frameCsp(host, `/plugins/${key}/workspace/`);
+}
+
+/** A sandboxed frame page's Content-Security-Policy: the SDK plus its own folder (`ownPath`). */
+export function frameCsp(host: string, ownPath: string): string {
   const origin = `http://${host}`;
-  const own = `${origin}/plugins/${key}/workspace/`;
+  const own = `${origin}${ownPath}`;
   const sdk = `${origin}/plugin-sdk/`;
   return [
     "default-src 'none'",

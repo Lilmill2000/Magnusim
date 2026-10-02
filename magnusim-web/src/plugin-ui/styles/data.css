@@ -1,0 +1,26 @@
+/*
+ * Data: LinePlot (the core residual plot, style.css .sim-residual-*) and
+ * ColorLegend.
+ */
+.mgk-linechart { color: var(--mg-text-body); }
+.mgk-plot { position: relative; overflow: hidden; margin-top: var(--mg-space-2); background: var(--mg-plot-bg); border: 1px solid var(--mg-border-subtle); border-radius: var(--mg-radius-sm); }
+.mgk-plot-svg { width: 100%; display: block; }
+.mgk-plot-grid { stroke: var(--mg-border-subtle); stroke-width: 1; }
+.mgk-plot-label { fill: var(--mg-text-subtle); font-family: var(--mg-font); }
+.mgk-plot-line { fill: none; stroke-width: 1.5; stroke-linejoin: round; }
+.mgk-plot-line--dashed { stroke-dasharray: 4 2; }
+.mgk-plot-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; font-size: var(--mg-text-xs); color: var(--mg-text-muted); }
+.mgk-plot-swatch { display: inline-block; width: 12px; height: 2px; margin-right: var(--mg-space-1); vertical-align: middle; }
+.mgk-plot-cursor { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--mg-text-subtle); pointer-events: none; }
+.mgk-plot-tip {
+  position: absolute; top: 6px; max-width: 170px; padding: 4px 6px; border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm); background: var(--mg-plot-tip-bg); box-shadow: var(--mg-shadow-xs);
+  font-size: var(--mg-text-2xs); line-height: var(--mg-line-tight); color: var(--mg-text-body);
+  pointer-events: none; white-space: nowrap;
+}
+b.mgk-plot-tip-head { font-weight: var(--mg-weight-semibold); color: var(--mg-text); }
+.mgk-plot-cursor[hidden], .mgk-plot-tip[hidden] { display: none; }
+
+.mgk-legend-title { font-size: var(--mg-text-xs); color: var(--mg-text-muted); margin-bottom: var(--mg-space-1); }
+.mgk-legend-bar { height: 12px; border-radius: var(--mg-radius-2xs); }
+.mgk-legend-ticks { display: flex; justify-content: space-between; margin-top: 2px; font-size: var(--mg-text-xs); color: var(--mg-text-muted); font-variant-numeric: tabular-nums; }

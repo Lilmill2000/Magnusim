@@ -126,10 +126,8 @@ test('@plugins gate:h5-disable-removes demo rows after reload', async ({ page, r
   }
 });
 
-test('@plugins gate:h5-broken-plugin surfaces a thrown UI and the workbench stays up', async ({ page }) => {
-  test.setTimeout(90_000);
-  await page.goto('/');
-  await page.waitForFunction(() => typeof window.__CFD_LOAD_PLUGIN_UI__ === 'function');
+/** Load a plugin UI whose register() throws, the way the app loads a plugin's UI. */
+async function loadBrokenUi(page) {
   await page.evaluate(async () => {
     const url = URL.createObjectURL(
       new Blob(['export function register() { throw new Error("ui failed"); }'], { type: 'text/javascript' }),
@@ -146,8 +144,40 @@ test('@plugins gate:h5-broken-plugin surfaces a thrown UI and the workbench stay
       url,
     }).catch(() => undefined);
   });
-  await expect(page.locator('[data-plugin-toast]')).toContainText('ui failed');
+}
+
+test('@plugins gate:h5-broken-plugin surfaces a thrown UI and the workbench stays up', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto('/');
+  await page.waitForFunction(() => typeof window.__CFD_LOAD_PLUGIN_UI__ === 'function');
+  // The app's toast layer, bottom right: an error toast marked as a plugin failure.
+  const toast = page.locator('.app-toasts .mgk-toast.mgk-toast--error[data-plugin-toast]');
+  await loadBrokenUi(page);
+  await expect(toast).toHaveCount(1);
+  await expect(toast).toContainText('ui failed');
+
+  // × closes it.
+  await toast.locator('.mgk-toast-close').click();
+  await expect(toast).toHaveCount(0);
+
+  // The pointer is still where × was, and the next toast draws in the same place:
+  // under a still pointer it can count as hovered, which holds it. Move away first.
+  await page.mouse.move(0, 0);
+  await loadBrokenUi(page);
+  await expect(toast).toHaveCount(1);
+  await expect(toast).toContainText('ui failed');
+  // An error stays up 9 s: still there after 5 s, gone by 12 s.
+  await page.waitForTimeout(5_000);
+  await expect(toast).toBeVisible();
+  await expect(toast).toHaveCount(0, { timeout: 7_000 });
+
   const step = await openSettingsPlugins(page, '#home-prefs');
   await expect(step.locator('[data-plugin-key="broken-ui"]')).toContainText('ui failed');
   await expect(page.locator('#home')).toBeVisible();
+
+  // A reload starts with no toast.
+  await page.reload();
+  await page.waitForFunction(() => window.__CFD_PLUGINS_READY__ === true, null, { timeout: 60_000 });
+  await expect(page.locator('#home')).toBeVisible();
+  await expect(page.locator('.app-toasts .mgk-toast')).toHaveCount(0);
 });

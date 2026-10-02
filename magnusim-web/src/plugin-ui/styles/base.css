@@ -1,0 +1,18 @@
+/*
+ * The kit's own reset, so a kit element looks the same in the app page and in
+ * a workspace frame (the page resets margins, the frame styles bare elements).
+ */
+[class^="mgk-"], [class*=" mgk-"],
+[class^="mgk-"]::before, [class*=" mgk-"]::before,
+[class^="mgk-"]::after, [class*=" mgk-"]::after { box-sizing: border-box; }
+[class^="mgk-"], [class*=" mgk-"] { margin: 0; padding: 0; }
+.mgk-type {
+  font-family: var(--mg-font);
+  font-size: var(--mg-text-sm);
+  font-weight: var(--mg-weight-regular);
+  font-style: normal;
+  line-height: normal;
+  color: var(--mg-text-strong);
+  letter-spacing: normal;
+  text-transform: none;
+}

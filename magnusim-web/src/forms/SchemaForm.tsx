@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import Form from '@rjsf/core';
 import validator from '@rjsf/validator-ajv8';
 import type { ObjectFieldTemplateProps, RJSFSchema, UiSchema, WidgetProps } from '@rjsf/utils';
-import { fromSi, toSi, unitLabels, type Quantity } from '../units/convert';
+import { fieldQuantity, fieldUnit, fromSi, toSi } from '../units/convert';
 import { prefersImperial } from '../prefs';
 import { subscribeFacePicks } from '../viewer/pick';
 import { SciNumberInput } from './SciNumberInput';
-import { hasFieldWidget, pluginFieldWidgets, pluginWidgetName } from '../plugin-api/fieldWidgets';
+import {
+  fieldWidgetsVersion,
+  hasFieldWidget,
+  pluginFieldWidgets,
+  pluginWidgetName,
+  subscribeFieldWidgets,
+} from '../plugin-api/fieldWidgets';
 
 export interface SchemaFormProps {
   schema: RJSFSchema;
@@ -36,17 +42,9 @@ function AdvancedDetails({ children }: { children: ReactNode }) {
   );
 }
 
-function quantityOf(schema: RJSFSchema | undefined): Quantity | null {
-  const x = schema && (schema as { 'x-cfddesk'?: { quantity?: string } })['x-cfddesk'];
-  return (x && (x.quantity as Quantity)) || null;
-}
-
 function NumberUnitWidget(props: WidgetProps) {
-  const qty = quantityOf(props.schema);
-  const units = qty ? unitLabels(qty) : [];
-  const imperial = prefersImperial();
-  const preferred =
-    qty === 'length' ? (imperial ? 'in' : 'mm') : qty ? units[0] : '';
+  const qty = fieldQuantity(props.schema);
+  const preferred = qty ? fieldUnit(qty, prefersImperial() ? 'imperial' : 'metric') : '';
   const unit = String(props.options?.unit || preferred || '');
   const display =
     qty && unit && typeof props.value === 'number' ? fromSi(qty, props.value, unit) : props.value;
@@ -328,7 +326,10 @@ export function SchemaForm({
   const timer = useRef<number | null>(null);
   const skipMount = useRef(true);
   const prepared = useMemo(() => prepareSchemaForm(schema, formData), [schema, formData]);
-  const uiSchema = useMemo(() => buildUiSchema(prepared.schema), [prepared.schema]);
+  // A plugin widget registered after this form mounted must still replace the
+  // core widget: the registry's version rebuilds the uiSchema.
+  const widgetsVersion = useSyncExternalStore(subscribeFieldWidgets, fieldWidgetsVersion, fieldWidgetsVersion);
+  const uiSchema = useMemo(() => buildUiSchema(prepared.schema), [prepared.schema, widgetsVersion]);
   const live = prepared.formData;
   const shown = useMemo(() => pruneDepends(prepared.schema, live), [prepared.schema, live]);
 

@@ -1,4 +1,5 @@
 import vtkLookupTable from '@kitware/vtk.js/Common/Core/LookupTable';
+import { RAINBOW_HUE } from '../plugin-ui/colormaps';
 
 export function createRainbowLut(): ReturnType<typeof vtkLookupTable.newInstance> {
   const lut = vtkLookupTable.newInstance();
@@ -8,7 +9,7 @@ export function createRainbowLut(): ReturnType<typeof vtkLookupTable.newInstance
     setValueRange: (a: number, b: number) => void;
     build: () => void;
   };
-  anyLut.setHueRange(0.666, 0.0);
+  anyLut.setHueRange(RAINBOW_HUE, 0.0);
   anyLut.setSaturationRange(1, 1);
   anyLut.setValueRange(1, 1);
   anyLut.build();

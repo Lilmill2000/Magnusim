@@ -3,8 +3,9 @@
  * radii, shadows, layers and motion. Values are the dominant ones the app
  * already uses; the core imports this file without rewriting its own
  * selectors (no visual change), and plugin workspaces get it as
- * /plugin-sdk/theme.css with base styles. The primary blue is proposed and
- * signed off in H14.
+ * /plugin-sdk/theme.css with base styles. Primary #3b5bdb matches the core
+ * panel buttons. #1570ef is the proposed alternative, waiting for Daniel's
+ * sign-off (H14).
  */
 :root {
   /* Colour roles */
@@ -18,8 +19,8 @@
   --mg-border: #d0d5dd;
   --mg-border-subtle: #eaecf0;
   --mg-header-border: #d5d8de;
-  --mg-primary: #1570ef;
-  --mg-primary-hover: #175cd3;
+  --mg-primary: #3b5bdb;
+  --mg-primary-hover: #364fc7;
   --mg-primary-text: #ffffff;
   --mg-selected-bg: #eff4ff;
   --mg-selected-border: #b2ccff;
@@ -30,7 +31,7 @@
   --mg-success-bg: #ecfdf3;
   --mg-warning: #b54708;
   --mg-warning-bg: #fffaeb;
-  --mg-focus: rgba(21, 112, 239, 0.35);
+  --mg-focus: rgba(59, 91, 219, 0.35);
 
   /* Type */
   --mg-font: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
@@ -79,4 +80,47 @@
 
   /* Chrome */
   --mg-header-height: 44px;
+
+  /* H14: values the core already uses, named for the kit */
+  --mg-info: #1570ef;
+  --mg-text-body: #344054;
+  --mg-text-secondary: #475467;
+  --mg-divider: #e8ebf0;
+  --mg-card-border: #cfd3db;
+  --mg-control-border: #c9ced6;
+  --mg-btn-neutral-bg: #eef1f6;
+  --mg-btn-neutral-hover: #e2e6ee;
+  --mg-btn-neutral-border: #9aa3b2;
+  --mg-btn-disabled-bg: #9aa3b5;
+  --mg-link: #175cd3;
+  --mg-link-strong: #155eef;
+  --mg-link-strong-hover: #1849a9;
+  --mg-danger-solid: #c62828;
+  --mg-danger-solid-hover: #9b1c1c;
+  --mg-switch-off: #c5cad3;
+  --mg-tooltip-bg: #1f2430;
+  --mg-tooltip-text: #f5f6f8;
+  --mg-plot-bg: #f8fafc;
+  --mg-plot-tip-bg: rgba(255, 255, 255, 0.96);
+  --mg-series-1: #1570ef;
+  --mg-series-2: #6941c6;
+  --mg-series-3: #12b76a;
+  --mg-series-4: #f79009;
+  --mg-series-5: #0ba5ec;
+  --mg-series-6: #dd2590;
+  --mg-series-7: #667085;
+  --mg-text-3xs: 9px;
+  --mg-text-2xs: 10.5px;
+  --mg-weight-bold: 700;
+  --mg-line-tight: 1.35;
+  --mg-radius-2xs: 2px;
+  --mg-radius-xs: 3px;
+  --mg-radius-tip: 5px;
+  --mg-radius-round: 50%;
+  --mg-shadow-xs: 0 1px 3px rgba(16, 24, 40, 0.12);
+  --mg-shadow-tooltip: 0 6px 18px rgba(16, 24, 40, 0.25);
+  --mg-disabled-opacity: 0.45;
+  --mg-duration-switch: 150ms;
+  --mg-z-tooltip: 40;
+  --mg-z-toast: 2000;
 }

@@ -1,0 +1,21 @@
+key = "kit-demo"
+name = "Kit demo"
+version = "1.0.0"
+api_version = "1.3"
+license = "GPL-3.0-or-later"
+description = "Test plugin for the plugin UI kit (H14): a kit field widget in the page and kit controls in a workspace frame"
+authors = "Magnusim"
+ui = "ui"
+ui_entry = "index.tsx"
+
+[[workspaces]]
+key = "kit"
+title = "Kit"
+icon = "M4 5h16v14H4z M4 9h16"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "kit_case"
+title = "Kit case"
+icon = "M5 19V5h14v14z M9 9h6v6H9z"
+workspace = "kit"

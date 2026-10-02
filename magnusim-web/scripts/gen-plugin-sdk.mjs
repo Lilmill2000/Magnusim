@@ -2,24 +2,39 @@
  * The workspace SDK a plugin frame gets at /plugin-sdk/ (scripts/server/plugin-sdk.ts).
  *
  * Builds every SDK file in both variants (dev for `npm run dev`, prod for
- * preview), which checks that React still bundles to ES modules, and writes
+ * preview), which checks that React still bundles to ES modules, holds the
+ * plugin UI kit build to its rules (scripts/plugin-sdk-checks.mjs), and writes
  * what plugin authors build against:
  *   docs/plugins/workspace-sdk.d.ts  the types of '@magnusim/workspace'
- *   docs/plugins/plugin-sdk.json     the bridge version, React version and import map
- * --check: fail when either is out of date (CI).
+ *   docs/plugins/plugin-ui.d.ts      the types of '@magnusim/plugin-ui' (the UI kit)
+ *   docs/plugins/plugin-sdk.json     the bridge and kit versions, React version and import map
+ * --check: fail when any of them is out of date (CI).
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
-import { buildPluginSdk, pluginSdkInfo, SDK_FILES, workspaceDtsPath } from './server/plugin-sdk.ts';
+import { buildPluginSdk, pluginSdkInfo, pluginUiDtsPath, SDK_FILES, SDK_IMPORTS, workspaceDtsPath } from './server/plugin-sdk.ts';
+import { buildKit, kitExportNames, SDK_ENTRY_NAME } from './server/sdk-build.ts';
+import {
+  checkCssColours,
+  checkCssDesignValues,
+  checkCssSelectors,
+  checkCssTokens,
+  checkKitExternals,
+  checkKitInputs,
+  kitSample,
+} from './plugin-sdk-checks.mjs';
 
 const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const check = process.argv.includes('--check');
 const SOURCE = join(WEB_ROOT, 'src', 'plugin-sdk', 'workspace.ts');
+const KIT_SOURCE = join(WEB_ROOT, 'src', 'plugin-ui');
 const DTS = workspaceDtsPath(WEB_ROOT);
+const KIT_DTS = pluginUiDtsPath(WEB_ROOT);
 const INFO = join(WEB_ROOT, 'docs', 'plugins', 'plugin-sdk.json');
+const TOKENS = join(WEB_ROOT, 'src', 'theme', 'tokens.css');
 
 function fail(msg) {
   console.error(msg);
@@ -47,6 +62,26 @@ const COMPILER = {
   types: [],
 };
 
+// The kit is TSX; target and lib as tsconfig.src.json, which typechecks it in `npm run typecheck`.
+const KIT_COMPILER = {
+  ...COMPILER,
+  target: ts.ScriptTarget.ES2022,
+  lib: ['lib.es2022.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts'],
+  jsx: ts.JsxEmit.ReactJSX,
+};
+
+/** One emitted .d.ts as the body of a `declare module` (everything inside is ambient already). */
+function moduleBody(text) {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/^export declare /gm, 'export ')
+    .replace(/^declare /gm, '')
+    .trimEnd()
+    .split('\n')
+    .map((l) => (l ? `  ${l}` : l))
+    .join('\n');
+}
+
 /** src/plugin-sdk/workspace.ts's declarations, as the '@magnusim/workspace' module. */
 function workspaceDts() {
   const options = { ...COMPILER, declaration: true, emitDeclarationOnly: true };
@@ -61,16 +96,8 @@ function workspaceDts() {
   const res = program.emit();
   if (res.diagnostics.length) fail(`declaration emit failed:\n${diagnostics(res.diagnostics)}`);
   if (!emitted) fail('declaration emit wrote nothing');
-  // Inside `declare module` everything is already ambient: drop `declare` and `export {}`.
-  const body = emitted
-    .replace(/\r\n/g, '\n')
-    .replace(/^export declare /gm, 'export ')
-    .replace(/^declare /gm, '')
-    .replace(/^export \{\};\n?/gm, '')
-    .trimEnd()
-    .split('\n')
-    .map((l) => (l ? `  ${l}` : l))
-    .join('\n');
+  // `export {}` only marks the file as a module; the declare module block already is one.
+  const body = moduleBody(emitted.replace(/^export \{\};\r?\n?/gm, ''));
   return [
     "// The types of '@magnusim/workspace', the bridge a plugin workspace imports",
     '// (served to frames as /plugin-sdk/workspace.js). Copy this file into your',
@@ -87,6 +114,7 @@ function workspaceDts() {
 /** The published types must compile for a plugin that imports them. */
 function checkDtsCompiles(dts) {
   const dir = mkdtempSync(join(tmpdir(), 'magnusim-sdk-dts-'));
+  let problems;
   try {
     writeFileSync(join(dir, 'workspace-sdk.d.ts'), dts);
     writeFileSync(
@@ -105,38 +133,132 @@ function checkDtsCompiles(dts) {
       ].join('\n'),
     );
     const program = ts.createProgram([join(dir, 'use.ts')], { ...COMPILER, noEmit: true });
-    const diags = ts.getPreEmitDiagnostics(program);
-    if (diags.length) fail(`the generated workspace-sdk.d.ts does not compile for a plugin:\n${diagnostics(diags)}`);
+    problems = diagnostics(ts.getPreEmitDiagnostics(program));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+  if (problems) fail(`the generated workspace-sdk.d.ts does not compile for a plugin:\n${problems}`);
+}
+
+/** '@magnusim/plugin-ui/_internal/<file>' for the relative import `spec` in the kit file `fromRel`. */
+function internalName(fromRel, spec, files) {
+  const target = posix.normalize(posix.join(posix.dirname(fromRel), spec)).replace(/\.(d\.ts|tsx?|js)$/, '');
+  if (target.startsWith('..')) fail(`src/plugin-ui/${fromRel} imports ${spec}, outside the kit`);
+  // './controls' is the folder's index file.
+  const file = files.has(target) ? target : files.has(`${target}/index`) ? `${target}/index` : null;
+  if (!file) fail(`src/plugin-ui/${fromRel} imports ${spec}, which emitted no declarations`);
+  return `@magnusim/plugin-ui/_internal/${file}`;
+}
+
+/** The kit's declarations: every file as its own '_internal' module, behind '@magnusim/plugin-ui'. */
+function kitDts() {
+  const options = { ...KIT_COMPILER, declaration: true, emitDeclarationOnly: true };
+  const host = ts.createCompilerHost(options);
+  const emitted = new Map();
+  host.writeFile = (name, text) => {
+    if (!name.endsWith('.d.ts')) return;
+    const rel = relative(KIT_SOURCE, name.slice(0, -'.d.ts'.length)).split(sep).join('/');
+    if (rel.startsWith('..')) fail(`the kit's declarations reach outside src/plugin-ui: ${name}`);
+    emitted.set(rel, text);
+  };
+  const program = ts.createProgram([join(KIT_SOURCE, 'index.ts')], options, host);
+  const pre = ts.getPreEmitDiagnostics(program);
+  if (pre.length) fail(`src/plugin-ui does not compile:\n${diagnostics(pre)}`);
+  const res = program.emit();
+  if (res.diagnostics.length) fail(`plugin UI kit declaration emit failed:\n${diagnostics(res.diagnostics)}`);
+  if (!emitted.has('index')) fail('declaration emit wrote no index.d.ts for src/plugin-ui');
+  const files = new Set(emitted.keys());
+  const modules = [...files].sort().map((rel) => {
+    const text = emitted
+      .get(rel)
+      .replace(
+        /(\bfrom\s*|\bimport\s*\(\s*)(['"])(\.{1,2}\/[^'"]*)\2/g,
+        (_m, pre, q, spec) => `${pre}${q}${internalName(rel, spec, files)}${q}`,
+      );
+    return [`declare module '@magnusim/plugin-ui/_internal/${rel}' {`, moduleBody(text), '}'].join('\n');
+  });
+  return [
+    "// The types of '@magnusim/plugin-ui', the plugin UI kit (served to frames as",
+    '// /plugin-sdk/plugin-ui.js; in the page a plugin gets it as host.pluginUi.kit).',
+    '// Copy this file into your plugin, for example as types/plugin-ui.d.ts.',
+    "// Import only from '@magnusim/plugin-ui': the '@magnusim/plugin-ui/_internal/'",
+    "// modules below hold its types only. React's types come from @types/react.",
+    '//',
+    '// Generated by `npm run gen:plugin-sdk` from src/plugin-ui/. Do not edit.',
+    ...modules,
+    "declare module '@magnusim/plugin-ui' {",
+    "  export * from '@magnusim/plugin-ui/_internal/index';",
+    '}',
+    '',
+  ].join('\n');
+}
+
+/**
+ * The kit's types must compile for a plugin that renders it. The sample sits
+ * under .cache/ (ignored) so `react` resolves to this app's @types/react.
+ */
+function checkKitDtsCompiles(dts, names) {
+  const cacheDir = join(WEB_ROOT, '.cache');
+  mkdirSync(cacheDir, { recursive: true });
+  const dir = mkdtempSync(join(cacheDir, 'plugin-ui-dts-'));
+  let problems;
+  try {
+    writeFileSync(join(dir, 'plugin-ui.d.ts'), dts);
+    writeFileSync(join(dir, 'use.tsx'), ['/// <reference path="./plugin-ui.d.ts" />', kitSample(names)].join('\n'));
+    // skipLibCheck off: the generated .d.ts itself is checked too, not only what the sample uses.
+    const program = ts.createProgram([join(dir, 'use.tsx')], { ...KIT_COMPILER, skipLibCheck: false, noEmit: true });
+    problems = diagnostics(ts.getPreEmitDiagnostics(program));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (problems) fail(`the generated plugin-ui.d.ts does not compile for a plugin:\n${problems}`);
+}
+
+/** The kit build the server serves, held to the rules in scripts/plugin-sdk-checks.mjs. */
+function checkKitBuild(variant, kit, tokensCss) {
+  const problems = [
+    ...checkKitInputs(kit.metafile, SDK_ENTRY_NAME),
+    ...checkKitExternals(kit.metafile, SDK_IMPORTS),
+    ...checkCssColours(kit.css),
+    ...checkCssTokens(kit.css, tokensCss),
+    ...checkCssSelectors(kit.css),
+    ...checkCssDesignValues(kit.css),
+  ];
+  if (problems.length) fail(`plugin UI kit (${variant}):\n  ${problems.join('\n  ')}`);
 }
 
 function kb(n) {
   return `${(n / 1024).toFixed(1)} kB`;
 }
 
-// Both variants build, with every file the host serves (workspace.d.ts comes from docs/).
+// Both variants build, with every file the host serves (the .d.ts files come from docs/).
+const tokensCss = readFileSync(TOKENS, 'utf8');
 for (const variant of ['dev', 'prod']) {
   const files = await buildPluginSdk(WEB_ROOT, variant);
-  const missing = SDK_FILES.filter((f) => f !== 'workspace.d.ts' && !(files.get(f) || '').length);
+  const missing = SDK_FILES.filter((f) => !f.endsWith('.d.ts') && !(files.get(f) || '').length);
   if (missing.length) fail(`plugin SDK (${variant}) is missing ${missing.join(', ')}`);
   const sizes = SDK_FILES.filter((f) => files.has(f)).map((f) => `${f} ${kb(Buffer.byteLength(files.get(f)))}`);
   console.log(`plugin SDK ${variant}: ${sizes.join(', ')}`);
+  checkKitBuild(variant, await buildKit(WEB_ROOT, variant), tokensCss);
 }
 
 const dts = workspaceDts();
 checkDtsCompiles(dts);
+const kitTypes = kitDts();
+checkKitDtsCompiles(kitTypes, await kitExportNames(WEB_ROOT));
 const info = JSON.stringify(pluginSdkInfo(WEB_ROOT), null, 2) + '\n';
 
+const same = (path, text) => existsSync(path) && readFileSync(path, 'utf8').replace(/\r\n/g, '\n') === text;
 if (check) {
   const stale = [];
-  if (!existsSync(DTS) || readFileSync(DTS, 'utf8').replace(/\r\n/g, '\n') !== dts) stale.push('docs/plugins/workspace-sdk.d.ts');
-  if (!existsSync(INFO) || readFileSync(INFO, 'utf8').replace(/\r\n/g, '\n') !== info) stale.push('docs/plugins/plugin-sdk.json');
-  if (stale.length) fail(`${stale.join(' and ')} out of date; run npm run gen:plugin-sdk`);
+  if (!same(DTS, dts)) stale.push('docs/plugins/workspace-sdk.d.ts');
+  if (!same(KIT_DTS, kitTypes)) stale.push('docs/plugins/plugin-ui.d.ts');
+  if (!same(INFO, info)) stale.push('docs/plugins/plugin-sdk.json');
+  if (stale.length) fail(`${stale.join(', ')} out of date; run npm run gen:plugin-sdk`);
   console.log('plugin SDK check ok');
 } else {
   writeFileSync(DTS, dts);
+  writeFileSync(KIT_DTS, kitTypes);
   writeFileSync(INFO, info);
-  console.log('wrote docs/plugins/workspace-sdk.d.ts and docs/plugins/plugin-sdk.json');
+  console.log('wrote docs/plugins/workspace-sdk.d.ts, docs/plugins/plugin-ui.d.ts and docs/plugins/plugin-sdk.json');
 }

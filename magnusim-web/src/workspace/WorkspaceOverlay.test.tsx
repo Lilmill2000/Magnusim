@@ -1,6 +1,10 @@
 import { act, render, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../store/project';
+import { cssRules, ruleProps } from '../test/kitCss';
 import { confirmAction, dialogBusy, promptName } from '../workbench/dialogs';
 import { confirmLeaveWorkspace, installWorkspaceLeaveGuard, openWorkspaceRoute, workspaceDirty } from './leaveGuard';
 import { frameMayTakeFocus, pluginNotReady, WorkspaceOverlay } from './WorkspaceOverlay';
@@ -647,6 +651,142 @@ describe('the workspace overlay', () => {
     } finally {
       document.exitFullscreen = before;
     }
+  });
+
+  describe("the page's toast (ws.ui.toast)", () => {
+    const shown = () => [...document.querySelectorAll('[data-ws-toast]')] as HTMLElement[];
+    /** With setTimeout faked: let the message ports and React's scheduler (no timers) finish. */
+    async function settle() {
+      for (let i = 0; i < 3; i++) {
+        await act(async () => {
+          await new Promise((r) => setImmediate(r));
+        });
+      }
+    }
+    function advance(ms: number) {
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    }
+    /** Open and connect with real timers, then fake setTimeout for the toast's own time. */
+    async function openWithFakeTime() {
+      const { frame } = await open();
+      const port = await connect(frame);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      return port;
+    }
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('draws one kit toast inside the overlay, with the message and its kind, and sends no cfd:toast', async () => {
+      const { frame } = await open();
+      const port = await connect(frame);
+      const heard = vi.fn();
+      window.addEventListener('cfd:toast', heard);
+      try {
+        expect(await call(port, 'ui.toast', { message: 'Saved the polar', kind: 'success' })).toMatchObject({ result: { ok: true } });
+        await waitFor(() => expect(shown()).toHaveLength(1));
+        const toast = shown()[0];
+        expect($('#workspace-overlay').contains(toast)).toBe(true);
+        expect(toast.parentElement).toHaveClass('ws-toast-slot');
+        expect(toast.className).toBe('mgk-type mgk-toast mgk-toast--success');
+        expect(toast).toHaveAttribute('role', 'status');
+        expect(toast.querySelector('.mgk-toast-msg')).toHaveTextContent('Saved the polar');
+        expect(toast.querySelector('button.mgk-toast-close')).toHaveAttribute('aria-label', 'Close');
+        expect(document.querySelector('.ws-toast')).toBeNull();
+        expect(heard).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener('cfd:toast', heard);
+      }
+    });
+
+    it('a second message replaces the first', async () => {
+      const { frame } = await open();
+      const port = await connect(frame);
+      await call(port, 'ui.toast', { message: 'First' });
+      await waitFor(() => expect(shown()).toHaveLength(1));
+      expect(shown()[0]).toHaveClass('mgk-toast--info');
+      await call(port, 'ui.toast', { message: 'Second', kind: 'error' });
+      await waitFor(() => expect(shown()[0]).toHaveTextContent('Second'));
+      expect(shown()).toHaveLength(1);
+      expect(shown()[0]).toHaveClass('mgk-toast--error');
+    });
+
+    it('closes after 3.8 s', async () => {
+      const port = await openWithFakeTime();
+      await call(port, 'ui.toast', { message: 'Saved' });
+      await settle();
+      expect(shown()).toHaveLength(1);
+      advance(3799);
+      expect(shown()).toHaveLength(1);
+      advance(1);
+      expect(shown()).toHaveLength(0);
+    });
+
+    it('an error closes after 9 s', async () => {
+      const port = await openWithFakeTime();
+      await call(port, 'ui.toast', { message: 'Could not save', kind: 'error' });
+      await settle();
+      advance(8999);
+      expect(shown()).toHaveLength(1);
+      advance(1);
+      expect(shown()).toHaveLength(0);
+    });
+
+    it('a second message starts the time again', async () => {
+      const port = await openWithFakeTime();
+      await call(port, 'ui.toast', { message: 'First' });
+      await settle();
+      advance(3000);
+      await call(port, 'ui.toast', { message: 'Second' });
+      await settle();
+      advance(3799);
+      expect(shown()[0]).toHaveTextContent('Second');
+      advance(1);
+      expect(shown()).toHaveLength(0);
+    });
+
+    it('a re-render while it shows (the dirty flag at 3 s) does not delay its close at 3.8 s', async () => {
+      const port = await openWithFakeTime();
+      await call(port, 'ui.toast', { message: 'Saved' });
+      await settle();
+      advance(3000);
+      await call(port, 'nav.setDirty', { dirty: true, message: 'Chord not saved' });
+      await settle();
+      // The overlay did re-render: its header shows the unsaved work.
+      expect($('.ws-shell')).toHaveAttribute('data-workspace-dirty', '1');
+      expect(shown()).toHaveLength(1);
+      advance(800);
+      expect(shown()).toHaveLength(0);
+    });
+
+    it('× closes it', async () => {
+      const { frame } = await open();
+      const port = await connect(frame);
+      await call(port, 'ui.toast', { message: 'Saved' });
+      await waitFor(() => expect(shown()).toHaveLength(1));
+      (shown()[0].querySelector('.mgk-toast-close') as HTMLElement).click();
+      await waitFor(() => expect(shown()).toHaveLength(0));
+    });
+
+    it("keeps the old toast's place in style.css; the look is the kit's", () => {
+      const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'style.css'), 'utf8');
+      expect(ruleProps(appCss, '.ws-toast-slot')).toEqual({ position: 'absolute', right: '16px', bottom: '16px' });
+      const old = cssRules(appCss).flatMap((r) => r.selectors).filter((s) => /\.ws-toast(?!-slot)/.test(s));
+      expect(old).toEqual([]);
+    });
+
+    it('closing the overlay removes it', async () => {
+      const { frame } = await open();
+      const port = await connect(frame);
+      await call(port, 'ui.toast', { message: 'Saved', kind: 'success' });
+      await waitFor(() => expect(shown()).toHaveLength(1));
+      $('[data-ws-back]').click();
+      await waitFor(() => expect($('#workspace-overlay').hidden).toBe(true));
+      expect(document.querySelector('[data-ws-toast]')).toBeNull();
+      expect(document.querySelector('.mgk-toast')).toBeNull();
+    });
   });
 
   describe("with the app's own dialogs", () => {

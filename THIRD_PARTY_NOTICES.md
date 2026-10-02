@@ -45,3 +45,10 @@ React, vtk.js, PyVista, NumPy, SciPy, and Open CASCADE/cadquery-ocp retain their
 upstream licenses. An installed application bundle needs the notices for its
 actual dependency versions, including transitive dependencies. The frozen
 hexcore reference directory retains its existing contents and provenance.
+
+## Colour maps
+
+The results colour maps in `magnusim-web/src/plugin-ui/colormaps/` are data
+tables from viridis (mpl-colormaps, Nathaniel Smith and Stefan van der Walt,
+CC0 1.0) and cmocean balance and curl (Kristen M. Thyng, MIT). Their license
+texts are in that folder's `LICENSES/`.

@@ -210,7 +210,7 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
       const s = getComputedStyle(b);
       // The link colour token, resolved where the link is.
       const probe = document.createElement('span');
-      probe.style.color = 'var(--mg-primary-hover)';
+      probe.style.color = 'var(--mg-link)';
       b.parentElement.appendChild(probe);
       const linkColor = getComputedStyle(probe).color;
       probe.remove();

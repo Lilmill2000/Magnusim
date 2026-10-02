@@ -13,6 +13,7 @@
     "isolatedModules": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["vite/client"],
+    "paths": { "@magnusim/plugin-ui": ["./src/plugin-ui"] },
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },

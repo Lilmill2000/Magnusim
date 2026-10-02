@@ -1,7 +1,10 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RJSFSchema } from '@rjsf/utils';
 import { SchemaForm } from './SchemaForm';
+import { registerFieldWidget } from '../plugin-api';
+import { deleteFieldWidget } from '../plugin-api/fieldWidgets';
+import type { FieldWidgetProps } from '../plugin-ui';
 
 const schema: RJSFSchema = {
   type: 'object',
@@ -95,5 +98,35 @@ describe('SchemaForm', () => {
     };
     render(<SchemaForm schema={tiny} formData={{ residual_u: 1e-6 }} onCommit={() => {}} />);
     expect((screen.getByLabelText('Residual U') as HTMLInputElement).value).toBe('1.0000e-6');
+  });
+
+  it('uses a field widget registered after the form opened, and falls back when it is removed', () => {
+    // Plugin UIs can load after a panel is open. The schema and data objects stay
+    // the same throughout, so only the widget registry can rebuild the form.
+    const lateSchema: RJSFSchema = {
+      type: 'object',
+      properties: {
+        rate: { type: 'integer', title: 'Rate', default: 2, 'x-cfddesk': { widget: 'late-test.rate' } },
+      },
+    };
+    const data = { rate: 2 };
+    function LateRate(p: FieldWidgetProps) {
+      return <output data-late-widget="1">{`late ${String(p.value)}`}</output>;
+    }
+    const { container } = render(<SchemaForm schema={lateSchema} formData={data} onCommit={() => {}} />);
+    try {
+      expect(container.querySelector('[data-schema-key="rate"] input.bc-input')).not.toBeNull();
+      expect(container.querySelector('[data-late-widget]')).toBeNull();
+
+      act(() => registerFieldWidget('late-test.rate', LateRate));
+      expect(container.querySelector('[data-schema-key="rate"] [data-late-widget]')).toHaveTextContent('late 2');
+      expect(container.querySelector('[data-schema-key="rate"] input.bc-input')).toBeNull();
+
+      act(() => deleteFieldWidget('late-test.rate'));
+      expect(container.querySelector('[data-late-widget]')).toBeNull();
+      expect(container.querySelector('[data-schema-key="rate"] input.bc-input')).not.toBeNull();
+    } finally {
+      deleteFieldWidget('late-test.rate');
+    }
   });
 });

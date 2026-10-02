@@ -4,13 +4,13 @@ A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins
 
 Copy `templates/plugin/` to start. That folder has `pyproject.toml`, `manifest.toml`, `register()`, and a pytest that loads the copy from a temporary `plugins/` directory.
 
-## Manifest 1.2
+## Manifest 1.3
 
 ```toml
 key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
-api_version = "1.2"
+api_version = "1.3"
 license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
@@ -110,7 +110,12 @@ An `AnalysisType` tells the core everything it needs through optional contract f
 
 ## UI
 
-Build the browser bundle with `react`, `react-dom`, and `@cfddesk/plugin-api` marked external. The host passes one React and one plugin API object:
+The page has no import map, so how a UI gets React and the UI kit depends on its `ui_entry`:
+
+- **A prebuilt `.js` UI imports nothing bare.** Bundle your own files into it, and use `host.React`, `host.ReactDOM` and `host.pluginUi.kit` for React and the kit.
+- **A `.tsx`, `.ts` or `.jsx` UI** is bundled by the host. It may import `react`, `react/jsx-runtime`, `@magnusim/plugin-ui` and its own files in `ui/`; the host resolves `react` and the kit to the page's own copies.
+
+Either way the host passes one React and one plugin API object:
 
 ```javascript
 export function register(host) {
@@ -182,8 +187,8 @@ await ws.data.write(`studies/${study.id}/polar.json`, polar);
 await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab saved first
 ```
 
-- **Imports.** The host puts an import map in your page for `react`, `react-dom/client`, `react/jsx-runtime` and `@magnusim/workspace`. Import those names; do not ship your own React. If you bundle your code, mark them external and emit ES modules. The versions are in `docs/plugins/plugin-sdk.json`. For types, copy `docs/plugins/workspace-sdk.d.ts` into your plugin.
-- **Styles.** `/plugin-sdk/theme.css` is loaded before your own CSS: use its `--mg-*` tokens (colours, type, spacing, radii, shadows) so the page matches the app.
+- **Imports.** The host puts an import map in your page for `react`, `react-dom/client`, `react/jsx-runtime`, `@magnusim/workspace` and `@magnusim/plugin-ui` (the UI kit, below). Import those names; do not ship your own React. If you bundle your code, mark them external and emit ES modules. The versions are in `docs/plugins/plugin-sdk.json`. For types, copy `docs/plugins/workspace-sdk.d.ts` (and `docs/plugins/plugin-ui.d.ts` for the kit) into your plugin.
+- **Styles.** `/plugin-sdk/theme.css` is loaded before your own CSS: use its `--mg-*` tokens (colours, type, spacing, radii, shadows) so the page matches the app. `/plugin-sdk/plugin-ui.css`, the kit's styles, is loaded after `theme.css`.
 - **The sandbox.** The page runs in a sandboxed frame with an opaque origin. Its Content-Security-Policy allows scripts, styles, fonts, images and `fetch` only from `/plugin-sdk/` and your own `workspace/` folder, plus `data:` and `blob:` images:
   - No inline `<script>`: put code in module files.
   - No `/api/`: use `ws.service`, `ws.data`, `ws.study` and `ws.jobs`.
@@ -215,6 +220,52 @@ await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab
 - **Keyboard and full screen (1.2).** Your page has the keyboard when it connects and again after the app's dialogs and Settings close; listen on `window` or `document`. `document.documentElement.requestFullscreen()` from a click or key handler covers the whole screen; Esc always leaves, and the app leaves full screen before it shows a dialog. The app's toasts are not seen over a full-screen page.
 
 `python/tests/fixtures/workspace-plugins/ws-demo` is a complete example (modules, React, WebAssembly, a worker, service calls, data and study saves), driven by `e2e/h13-workspace.spec.js`.
+
+## UI kit (1.3)
+
+`@magnusim/plugin-ui` holds components and helpers that look like the app's own panels, drawn with the `--mg-*` tokens. In the page use `host.pluginUi.kit`, or import it from a `.tsx` UI the host bundles; in a workspace frame import `@magnusim/plugin-ui`. Both run the same code, so a panel looks the same in either place. The types are in `docs/plugins/plugin-ui.d.ts` (also served as `/plugin-sdk/plugin-ui.d.ts`), and the kit's version is `PLUGIN_UI_API_VERSION`.
+
+```javascript
+// workspace/main.js
+import { connect } from '@magnusim/workspace';
+import { createElement as h, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Button, PanelChrome, Toggle } from '@magnusim/plugin-ui';
+
+const ws = await connect();
+function Bench() {
+  const [on, setOn] = useState(false);
+  return h(PanelChrome, { title: 'Bench', card: true, onDone: () => ws.nav.back() },
+    h(Toggle, { label: 'Viscous', checked: on, onChange: setOn }),
+    h(Button, { variant: 'primary', onClick: () => ws.ui.toast('Saved', { kind: 'success' }) }, 'Save'));
+}
+createRoot(document.getElementById('root')).render(h(Bench));
+```
+
+The components, each as the core draws it today:
+
+- `Button`: `primary`, `secondary` (the default), `neutral` (Done), `link`, `fix` and `danger`; `block` for the full width.
+- `NumberUnitInput`: a number in a unit, kept in SI. `onCommitSi` runs on blur and Enter, Escape puts the value back, and `quantity` with `units` picks the unit shown. `width` is `narrow`, `wide` or `fill`.
+- `Select`: the BC and Materials panels' select.
+- `Toggle`: a switch (a real checkbox, so Space works) or the ON/OFF pill of schema forms.
+- `Field`: a settings row, the label (with an optional help tip) on the left and the control on the right.
+- `Hint` (a note under a control), `DisabledReason` (why something cannot run, with an optional fix) and `EmptyState` (an empty list or chart).
+- `Icon`: `pencil`, `trash`, `back`, `document`, or your own 24 x 24 path.
+- `PanelChrome`: a title, the body and a foot with Delete and Done, and no header buttons. `card` draws the card, for a frame; in the app's flyout the host draws it.
+- `StatusBlock`, `Elapsed` and `useElapsed`: the progress block of the Mesh and Run panels.
+- `Toast`, and `PanelError`, the card a failed panel shows.
+- `LinePlot`: a small line chart, log or linear, with a hover readout and a legend. `ColorLegend`: a colour scale with its range.
+- Helpers: `formatSci`, `parseSci`, `formatSimTime`, `formatElapsed` and `formatEta`; the unit tables and conversions (`UNITS`, `toSi`, `fromSi`, `convertQuantity`, `fieldUnit`, `fieldQuantity`, ...); the colour maps `rainbow`, `viridis`, `balance` and `curl` (`COLORMAPS`, `colormapRgb`, `colormapGradient`).
+
+How they fit the app:
+
+- **Done.** `PanelChrome` needs `onDone`: pass `pluginUi.panelDone` in the page and `() => ws.nav.back()` in a frame. The kit's Done sends only `cfd:panel-done`; the core's own Done handling (such as saving a refinement) does not run for it.
+- **Toasts.** `pluginUi.toast(message, { kind })` shows an app toast at the bottom right; up to three stack, newest last, and while the pointer is on any of them none closes. In a frame, `ws.ui.toast` shows one inside the workspace, one at a time. Info and success close after 3.8 s and errors after 9 s; the time stops while the pointer or the focus is on a toast. A `Toast` of your own takes `paused` to hold its time the same way.
+- **Units.** `pluginUi.unitSystem()` in the page and `ws.context.units` in a frame are `metric` or `imperial`; pass it to `NumberUnitInput`'s `units`.
+- **Field widgets.** `SchemaField(widget="my-plugin.rate")` in Python puts `x-cfddesk.widget` on the field's schema, and `pluginUi.registerFieldWidget('my-plugin.rate', Rate)` draws that field with your component, typed `ComponentType<FieldWidgetProps>`. Render only the control (the form draws the row), and use `NumberUnitInput` with `width="fill"` for the form's width. A widget registered after a form opened replaces the core control at once. `python/tests/fixtures/kit-plugins/kit-demo` is a complete example, driven by `e2e/h14-kit.spec.js`.
+- **Selects.** A kit `Select` looks like the BC and Materials panels' selects (`.bc-select`), not like a schema form's own selects. In a schema form pass `width="fill"` for the form's width; inside the study panel the core's `.sim-study-panel .schema-form select` restyles it.
+- **Shared tables.** `UNITS`, `IMPERIAL_DEFAULT`, `SI_DEFAULT` and `COLORMAPS` are frozen: the app reads the same tables.
+- **Older hosts.** A 1.2 host cannot load a frame that imports the kit: the module does not resolve, and the page shows "didn't start". Declare `api_version = "1.3"` in a plugin that uses the kit.
 
 ## Plugins tab
 

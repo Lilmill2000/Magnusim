@@ -5,6 +5,8 @@
     "bundled-plugins/*/ui/**/*.tsx",
     "python/tests/fixtures/plugins/*/ui/**/*.ts",
     "python/tests/fixtures/plugins/*/ui/**/*.tsx",
+    "python/tests/fixtures/kit-plugins/*/ui/**/*.ts",
+    "python/tests/fixtures/kit-plugins/*/ui/**/*.tsx",
     "src/**/*.d.ts"
   ],
   "exclude": ["**/*.test.ts", "**/*.test.tsx"]

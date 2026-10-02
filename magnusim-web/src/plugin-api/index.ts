@@ -4,7 +4,10 @@ import { useProjectStore } from '../store/project';
 import { useJobsStore } from '../store/jobs';
 import { useUiStore } from '../store/ui';
 import { SchemaForm } from '../forms/SchemaForm';
-import { islandComponent, registerIsland, unregisterIsland, type IslandProps } from '../islands';
+import { dispatchPanelDone, islandComponent, registerIsland, unregisterIsland, type IslandProps } from '../islands';
+import * as kit from '../plugin-ui';
+import type { FieldWidgetProps } from '../plugin-ui';
+import { prefersImperial } from '../prefs';
 import { bindLegacyViewer, type ViewerApi } from '../viewer/index';
 import { deleteFieldWidget, setFieldWidget } from './fieldWidgets';
 import { SciNumberInput } from '../forms/SciNumberInput';
@@ -89,12 +92,9 @@ function registerFilterWidgetFor(
   notifyPanels();
 }
 
-function registerFieldWidgetFor(
-  owner: string,
-  xWidget: string,
-  Component: ComponentType<Record<string, unknown>>,
-): void {
-  setFieldWidget(xWidget, Component);
+function registerFieldWidgetFor(owner: string, xWidget: string, Component: ComponentType<FieldWidgetProps>): void {
+  // The schema form passes a superset of FieldWidgetProps; the store keeps plain props.
+  setFieldWidget(xWidget, Component as unknown as ComponentType<Record<string, unknown>>);
   ledgerFor(owner).fieldWidgets.add(xWidget);
   notifyPanels();
 }
@@ -157,7 +157,7 @@ export function registerFilterWidget(key: string, Component: ComponentType<Recor
 }
 
 /** A schema field whose x-cfddesk.widget equals `xWidget` renders with this component. */
-export function registerFieldWidget(xWidget: string, Component: ComponentType<Record<string, unknown>>): void {
+export function registerFieldWidget(xWidget: string, Component: ComponentType<FieldWidgetProps>): void {
   registerFieldWidgetFor(HOST, xWidget, Component);
 }
 
@@ -232,6 +232,20 @@ function registerRunSettingsFor(owner: string, name: string, Component: Componen
   ledgerFor(owner).slots.add(registerSlotFor(owner, 'run-settings', name, Component as ComponentType<never>));
 }
 
+export type PluginToastKind = 'info' | 'success' | 'error';
+
+/** An app toast (the app's toast layer, bottom right). An unknown kind is info, as in ws.ui.toast. */
+function pluginToast(message: string, opts?: { kind?: PluginToastKind }): void {
+  const asked = opts?.kind;
+  const kind: PluginToastKind = asked === 'success' || asked === 'error' ? asked : 'info';
+  window.dispatchEvent(new CustomEvent('cfd:toast', { detail: { message: String(message).slice(0, 300), kind } }));
+}
+
+/** The units the open project shows (else the Settings choice). */
+function unitSystem(): 'metric' | 'imperial' {
+  return prefersImperial() ? 'imperial' : 'metric';
+}
+
 /** The API object one plugin's register(host) receives; its registrations are recorded under its key. */
 export function pluginUiFor(owner: string) {
   return {
@@ -245,7 +259,7 @@ export function pluginUiFor(owner: string) {
     replacePanel: (panelId: string, Component: ComponentType<IslandProps>) => replacePanelFor(owner, panelId, Component),
     registerFilterWidget: (key: string, Component: ComponentType<Record<string, unknown>>) =>
       registerFilterWidgetFor(owner, key, Component),
-    registerFieldWidget: (xWidget: string, Component: ComponentType<Record<string, unknown>>) =>
+    registerFieldWidget: (xWidget: string, Component: ComponentType<FieldWidgetProps>) =>
       registerFieldWidgetFor(owner, xWidget, Component),
     useProject,
     useSimulation,
@@ -256,6 +270,11 @@ export function pluginUiFor(owner: string) {
     SchemaForm,
     registerTreeTransform: (fn: (nodes: PluginTreeNode[]) => PluginTreeNode[]) => registerTreeTransformFor(owner, fn),
     panelsFor,
+    // API 1.3: the plugin UI kit (the page's own copy), and what its panels need.
+    kit,
+    panelDone: dispatchPanelDone,
+    toast: pluginToast,
+    unitSystem,
   };
 }
 

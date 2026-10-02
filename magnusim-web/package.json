@@ -43,7 +43,8 @@
     "zustand": "^5.0.15"
   },
   "exports": {
-    "./plugin-ui": "./src/plugin-api/index.ts"
+    "./plugin-api": "./src/plugin-api/index.ts",
+    "./plugin-ui": "./src/plugin-ui/index.ts"
   },
   "types": "./src/plugin-api/index.ts",
   "devDependencies": {

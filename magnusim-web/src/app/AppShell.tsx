@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { RequiredPluginError } from './RequiredPluginError';
+import { ToastHost } from './ToastHost';
 import ReactDOM from 'react-dom/client';
 import { FiltersPanel } from '../chrome/FiltersPanel';
 import { LeftTree } from '../chrome/LeftTree';
@@ -16,16 +17,6 @@ import { WorkspaceOverlay } from '../workspace/WorkspaceOverlay';
 import { WorkspacesMenu } from '../workspace/WorkspacesMenu';
 
 export function AppShell() {
-  const [toast, setToast] = useState('');
-
-  useEffect(() => {
-    const onToast = (event: Event) => {
-      setToast(String((event as CustomEvent<string>).detail || ''));
-    };
-    window.addEventListener('cfd:plugin-toast', onToast);
-    return () => window.removeEventListener('cfd:plugin-toast', onToast);
-  }, []);
-
   useEffect(() => {
     registerAllIslands();
     window.__CFD_PLUGIN_UI__ = pluginUi;
@@ -81,9 +72,8 @@ export function AppShell() {
 
   return (
     <>
-      <div data-plugin-toast role="status" hidden={!toast}>
-        {toast}
-      </div>
+      {/* App toasts (a plugin UI that failed, pluginUi.toast), above an open workspace. */}
+      <ToastHost />
       <RequiredPluginError />
       <Home />
       <SetupWizard />

@@ -62,6 +62,8 @@ jobs:
       - run: npm run gen:plugin-sdk:check
       - run: npm run test:js-case
       - run: npm run build
+      # The UI kit dev sheet (#/dev/ui-kit) is dev-only: the build must not hold it.
+      - run: node scripts/check-build-no-dev-sheet.mjs
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test
         env:

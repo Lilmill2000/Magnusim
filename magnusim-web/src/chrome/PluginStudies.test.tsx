@@ -116,7 +116,7 @@ describe('plugin studies in the tree', () => {
       border: '0',
       background: 'none',
       font: 'inherit',
-      color: 'var(--mg-primary-hover)',
+      color: 'var(--mg-link)',
     });
     fireEvent.click(settings);
     expect(act).toHaveBeenLastCalledWith(li.getAttribute('data-scope-key'), 'open-plugin-settings', undefined);

@@ -1,0 +1,46 @@
+/*
+ * Button: the core's panel buttons (.fp-btn, .fp-btn-primary, .js-btn,
+ * .mat-clear-link, .sim-fix-go) on tokens. The base rule sets everything the
+ * frame's base.css sets on a button, so page and frame look the same.
+ */
+button.mgk-btn {
+  margin: 0; padding: 0; font: revert; color: revert; background: revert; border: revert;
+  border-radius: revert; opacity: revert; outline: revert; outline-offset: revert;
+  cursor: pointer; font-size: var(--mg-text-sm);
+}
+button.mgk-btn:focus-visible { outline: revert; outline-offset: revert; }
+button.mgk-btn--block { width: 100%; }
+button.mgk-btn--primary, button.mgk-btn--primary:hover {
+  border: 1px solid var(--mg-primary); background: var(--mg-primary); color: var(--mg-primary-text);
+  border-radius: var(--mg-radius-sm); padding: 6px 10px; font-weight: var(--mg-weight-semibold);
+}
+button.mgk-btn--secondary, button.mgk-btn--secondary:hover {
+  border: 1px solid var(--mg-control-border); background: var(--mg-bg); color: var(--mg-text-strong);
+  border-radius: var(--mg-radius-sm); padding: 4px 8px;
+}
+button.mgk-btn--neutral {
+  border: 1px solid var(--mg-btn-neutral-border); background: var(--mg-btn-neutral-bg);
+  border-radius: var(--mg-radius-xs); padding: 4px 10px; font-size: var(--mg-text-xs); align-self: flex-start;
+}
+button.mgk-btn--neutral:hover { background: var(--mg-btn-neutral-hover); }
+button.mgk-btn--link, button.mgk-btn--link:hover {
+  background: none; border: none; color: var(--mg-link); font-size: var(--mg-text-xs);
+}
+button.mgk-btn--link:hover { text-decoration: underline; }
+button.mgk-btn--fix, button.mgk-btn--fix:hover {
+  display: inline-block; border: 0; background: none; color: var(--mg-link-strong); font: inherit;
+  font-weight: var(--mg-weight-semibold); text-decoration: underline; text-underline-offset: 2px;
+}
+button.mgk-btn--fix:hover { color: var(--mg-link-strong-hover); }
+button.mgk-btn--danger {
+  border: 1px solid var(--mg-danger-solid); background: var(--mg-danger-solid); color: var(--mg-primary-text);
+  border-radius: var(--mg-radius-sm); padding: 4px 8px; font-weight: var(--mg-weight-semibold);
+}
+button.mgk-btn--danger:hover, button.mgk-btn--danger:focus-visible {
+  border-color: var(--mg-danger-solid-hover); background: var(--mg-danger-solid-hover);
+}
+button.mgk-btn:disabled { opacity: var(--mg-disabled-opacity); cursor: not-allowed; }
+button.mgk-btn--primary:disabled { border-color: var(--mg-btn-disabled-bg); background: var(--mg-btn-disabled-bg); }
+button.mgk-btn--secondary:disabled { background: var(--mg-bg); }
+button.mgk-btn--neutral:disabled { background: var(--mg-btn-neutral-bg); }
+button.mgk-btn--danger:disabled { border-color: var(--mg-danger-solid); background: var(--mg-danger-solid); }

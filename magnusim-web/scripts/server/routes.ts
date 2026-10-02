@@ -17,9 +17,9 @@ import {
   type PluginEnv,
 } from './plugin-services.ts';
 import { RpcError, WorkerUnavailableError, type WorkerClient } from './worker.ts';
-import { pluginSdkFile, type SdkVariant } from './plugin-sdk.ts';
+import { DEV_SHEET_FILES, devSheetFile, devSheetsOn, pluginSdkFile, type SdkVariant } from './plugin-sdk.ts';
 import { PluginFiles, registerPluginFileRoutes } from './plugin-files.ts';
-import { FRAME_ASSET_HEADERS, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
+import { FRAME_ASSET_HEADERS, frameCsp, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
 
 export interface RouteDeps {
   worker: WorkerClient;
@@ -665,6 +665,32 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   router.get('/plugin-sdk/:file', async (ctx) => {
     const name = String(ctx.params.file || '');
     let text: string | null = null;
+    if (DEV_SHEET_FILES.includes(name)) {
+      // The UI kit dev sheet's frame: a dev server started with VITE_MAGNUSIM_DEV_SHEETS=1 only.
+      const variant = deps.sdkVariant || 'dev';
+      if (!devSheetsOn(variant)) {
+        ctx.sendJson(404, { error: 'no such SDK file' });
+        return;
+      }
+      try {
+        text = await devSheetFile(deps.webRoot, name);
+      } catch (err) {
+        ctx.sendJson(500, { error: `dev sheet build failed: ${err instanceof Error ? err.message : String(err)}` });
+        return;
+      }
+      if (text == null) {
+        ctx.sendJson(404, { error: 'no such SDK file' });
+        return;
+      }
+      const html = name.endsWith('.html');
+      const headers: Record<string, string> = { ...FRAME_ASSET_HEADERS, 'Content-Type': SDK_TYPES[html ? 'html' : 'js'] };
+      if (html) {
+        text = injectWorkspaceHead(text);
+        headers['Content-Security-Policy'] = frameCsp(String(ctx.req.headers.host || ''), '/plugin-sdk/');
+      }
+      sendBytes(ctx.res, Buffer.from(text, 'utf8'), headers, ctx.method === 'HEAD');
+      return;
+    }
     try {
       text = await pluginSdkFile(deps.webRoot, deps.sdkVariant || 'dev', name);
     } catch (err) {
@@ -745,7 +771,7 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     if (BUNDLED_UI.test(file)) {
       // TypeScript/TSX UI: one bundled ES module on the host's React.
       try {
-        const code = await bundlePluginUi(file, pluginUiRoot(deps.webRoot, folder, ui, tier));
+        const code = await bundlePluginUi(file, pluginUiRoot(deps.webRoot, folder, ui, tier), { webRoot: deps.webRoot });
         sendBytes(ctx.res, Buffer.from(code, 'utf8'), { 'Content-Type': 'text/javascript; charset=utf-8' }, ctx.method === 'HEAD');
       } catch (err) {
         ctx.sendJson(500, { error: `plugin ui build failed: ${err instanceof Error ? err.message : String(err)}` });

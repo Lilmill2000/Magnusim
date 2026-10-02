@@ -35,7 +35,7 @@ test('a plugin UI may import only react and its own files', async () => {
     const ok = await bundlePluginUi(join(ui, 'ok.tsx'), ui);
     assert.match(ok, /export/);
     await assert.rejects(bundlePluginUi(join(ui, 'leaves.tsx'), ui), /leaves its ui folder/);
-    await assert.rejects(bundlePluginUi(join(ui, 'package.tsx'), ui), /only react and its own files/);
+    await assert.rejects(bundlePluginUi(join(ui, 'package.tsx'), ui), /only react, @magnusim\/plugin-ui and its own files/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

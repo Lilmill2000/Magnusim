@@ -1,5 +1,5 @@
 /**
- * The workspace bridge, host side (API 1.2).
+ * The workspace bridge, host side (API 1.3).
  *
  * A plugin workspace runs in a sandboxed frame with an opaque origin. It says
  * hello (window.postMessage, only accepted from this frame's window) and gets
@@ -21,7 +21,7 @@
 import type { FileInfo, FileWriteResult, StudyRecord, ThemeInfo, UnitSystem, WorkspaceContext } from '../plugin-sdk/workspace';
 
 export const HOST_SDK_MAJOR = 1;
-export const HOST_API_VERSION = '1.2';
+export const HOST_API_VERSION = '1.3';
 const PROBE_MS = 1500;
 const METHOD_NAME = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,120}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/i;

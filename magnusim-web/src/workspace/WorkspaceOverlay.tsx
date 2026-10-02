@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useHashRoute } from '../app/routes';
 import { onTreeAction } from '../chrome/treeSession';
 import type { StudyRecord } from '../plugin-sdk/workspace';
+import { Toast, type ToastKind } from '../plugin-ui';
 import { prefersImperial } from '../prefs';
 import { pluginStudyScope } from '../scope';
 import { useProjectStore } from '../store/project';
@@ -128,7 +129,9 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   const [blocked, setBlocked] = useState<Blocked | null>(null);
   const [connected, setConnected] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const [toast, setToast] = useState<{ text: string; kind: string } | null>(null);
+  // The page's toast, one at a time: each message gets a new id, so it replaces the one showing.
+  const [toast, setToast] = useState<{ id: number; text: string; kind: ToastKind } | null>(null);
+  const toastSerial = useRef(0);
   const [unsaved, setUnsaved] = useState({ dirty: false, message: '' });
   const [fullscreen, setFullscreen] = useState(false);
   const name = (row && row.name) || route.plugin;
@@ -316,7 +319,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       },
       studyChanged: (next) => setStudy(next),
       studyGone,
-      toast: (text, kind) => setToast({ text, kind }),
+      toast: (text, kind) => setToast({ id: ++toastSerial.current, text, kind }),
       confirm: (opts) =>
         pageDialog((turn) =>
           window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ ...opts, ...turn }) : Promise.resolve(window.confirm(opts.copy || opts.title)),
@@ -424,12 +427,6 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
     bridgeRef.current?.pushStudy(study);
   }, [study, connected]);
 
-  useEffect(() => {
-    if (!toast) return undefined;
-    const t = setTimeout(() => setToast(null), 4000);
-    return () => clearTimeout(t);
-  }, [toast]);
-
   // Back to the project; with unsaved work the app asks first.
   const back = () => void leaveWorkspaceTo(projectHash, 'back');
 
@@ -510,12 +507,10 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
             </div>
           </div>
         ) : null}
+        {/* The kit Toast closes itself (3.8 s, errors 9 s); a new message remounts it (key). */}
         {toast ? (
-          <div className={`ws-toast is-${toast.kind}`} role="status" data-ws-toast="1">
-            <span>{toast.text}</span>
-            <button type="button" className="ws-toast-close" aria-label="Close" onClick={() => setToast(null)}>
-              ×
-            </button>
+          <div className="ws-toast-slot">
+            <Toast key={toast.id} message={toast.text} kind={toast.kind} onClose={() => setToast(null)} attrs={{ 'data-ws-toast': '1' }} />
           </div>
         ) : null}
       </div>

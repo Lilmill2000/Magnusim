@@ -1,0 +1,62 @@
+/*!
+ * viridis colour map table (src/plugin-ui/colormaps/data.ts): mpl-colormaps by
+ * Nathaniel Smith & Stefan van der Walt, CC0 1.0.
+ *
+ * To the extent possible under law, the persons who associated CC0 with
+ * mpl-colormaps have waived all copyright and related or neighboring rights
+ * to mpl-colormaps. See <http://creativecommons.org/publicdomain/zero/1.0/>.
+ */
+/*!
+ * cmocean balance and curl colour map tables (src/plugin-ui/colormaps/data.ts).
+ *
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2015 Kristen M. Thyng
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+/**
+ * The stored colour map tables: 256 entries of 8-bit RGB each, as one
+ * 1536-character hex string per map (rrggbb, 256 times). Rainbow is generated,
+ * not stored (index.ts). Each byte is Math.floor(v * 255 + 0.5) of the
+ * upstream float. Licence texts: LICENSES/ in this folder.
+ *
+ * viridis: BIDS/colormap, option_d.py, array cm_data (256 rows), commit
+ *   bc549477db0c12b54a5928087552ad2cf274980f, file sha256
+ *   b07e28b8ce320eee6ba859c77db2d4416f1946d65ca796a976de9bcb917ed87b.
+ *   256 rows to 8 bit. Equal at 8 bits to matplotlib 3.10.9's viridis.
+ * balance: matplotlib/cmocean tag v4.0.3, cmocean/rgb/balance-rgb.txt (256
+ *   rows), file sha256
+ *   8abbfe7ac4753be904b0c15534882da94ca22b63e25a468c0654637977b7c1cd.
+ *   256 rows to 8 bit.
+ * curl: matplotlib/cmocean tag v4.0.3, cmocean/rgb/curl-rgb.txt (512 rows),
+ *   file sha256
+ *   6267de01c3995a94889a95d07c97d3d796ef25b1daa2db8a5d110f3224a9e770.
+ *   Resampled linearly at i/255 to 256 entries, as cmocean's
+ *   tools.cmap(rgb, N=256) does (LinearSegmentedColormap.from_list), then to
+ *   8 bit.
+ *
+ * Generated from those files; do not edit by hand.
+ */
+export const VIRIDIS_HEX =
+  '44015444025645045745055946075a46085c460a5d460b5e470d60470e6147106347116447136548146748166848176948186a481a6c481b6d481c6e481d6f481f70482071482173482374482475482576482677482878482979472a7a472c7a472d7b472e7c472f7d46307e46327e46337f463480453581453781453882443983443a83443b84433d84433e85423f854240864241864142874144874045884046883f47883f48893e49893e4a893e4c8a3d4d8a3d4e8a3c4f8a3c508b3b518b3b528b3a538b3a548c39558c39568c38588c38598c375a8c375b8d365c8d365d8d355e8d355f8d34608d34618d33628d33638d32648e32658e31668e31678e31688e30698e306a8e2f6b8e2f6c8e2e6d8e2e6e8e2e6f8e2d708e2d718e2c718e2c728e2c738e2b748e2b758e2a768e2a778e2a788e29798e297a8e297b8e287c8e287d8e277e8e277f8e27808e26818e26828e26828e25838e25848e25858e24868e24878e23888e23898e238a8d228b8d228c8d228d8d218e8d218f8d21908d21918c20928c20928c20938c1f948c1f958b1f968b1f978b1f988b1f998a1f9a8a1e9b8a1e9c891e9d891f9e891f9f881fa0881fa1881fa1871fa28720a38620a48621a58521a68522a78522a88423a98324aa8325ab8225ac8226ad8127ad8128ae8029af7f2ab07f2cb17e2db27d2eb37c2fb47c31b57b32b67a34b67935b77937b87838b9773aba763bbb753dbc743fbc7340bd7242be7144bf7046c06f48c16e4ac16d4cc26c4ec36b50c46a52c56954c56856c66758c7655ac8645cc8635ec96260ca6063cb5f65cb5e67cc5c69cd5b6ccd5a6ece5870cf5773d05675d05477d1537ad1517cd2507fd34e81d34d84d44b86d54989d5488bd6468ed64590d74393d74195d84098d83e9bd93c9dd93ba0da39a2da37a5db36a8db34aadc32addc30b0dd2fb2dd2db5de2bb8de29bade28bddf26c0df25c2df23c5e021c8e020cae11fcde11dd0e11cd2e21bd5e21ad8e219dae319dde318dfe318e2e418e5e419e7e419eae51aece51befe51cf1e51df4e61ef6e620f8e621fbe723fde725';
+export const BALANCE_HEX =
+  '181c43191e461a1f491b214c1c224f1d23521e25551f265820275b21295f212a62222b65232d69242e6c252f6f25307326327627337a27347d283681283784293888293a8c293b8f293c93293e97293f9a29409e2942a22843a52745a92647ac2548b0234ab3214cb61f4eb81c50ba1952bc1655bd1357be1059be0d5bbe0c5ebe0a60be0a62be0a64be0b66bd0d68bd0f6abd116cbc136ebc1670bc1972bb1b74bb1e76bb2178bb237aba267bba297dba2b7fba2e81ba3083ba3384ba3686ba3888ba3b89ba3e8bba408dba438fba4690ba4892ba4b94ba4e95ba5197ba5399ba569abb599cbb5c9dbb5f9fbb62a0bb65a2bc68a4bc6ba5bc6ea7bd71a8bd75aabe78abbe7bacbf7eaebf81afc085b1c088b2c18bb4c28eb5c391b7c394b8c498bac59bbbc69ebcc7a1bec8a4bfc9a7c1caaac2cbadc4ccb0c5cdb3c7ceb6c9cfb9cad0bcccd2bfcdd3c1cfd4c4d0d5c7d2d7cad4d8cdd5d9d0d7dad3d9dcd5daddd8dcdedbdee0dee0e1e1e1e3e3e3e4e6e5e6e9e7e7ebe9e9eeeaeaf1ececf1ecebf0eae9efe8e6eee5e3ede3e0ece0deebdedbeadcd8e9d9d5e8d7d2e7d5cfe6d2cde5d0cae5cec7e4cbc4e3c9c1e2c7bee1c4bbe1c2b8e0c0b5dfbdb2dfbbb0deb9adddb6aadcb4a7dcb2a4dbafa1daad9edaab9bd9a998d8a696d8a493d7a290d69f8dd69d8ad59b87d49984d39681d3947fd2927cd18f79d18d76d08b73cf8970cf866ece846bcd8268cd7f65cc7d63cb7b60ca795dca765bc97458c87255c76f53c76d50c66b4dc5684bc46648c36346c36143c25f41c15c3fc05a3cbf573abe5538be5236bd5034bc4d32bb4b30ba482eb9452cb8432bb74029b63d28b43b27b33826b23525b13325af3024ae2e24ac2b24ab2924a92624a72424a52125a31f25a11d259f1b269d19269b17279916279714289413289212289010298d10298b0f29880f29860e29830e29800e297e0e297b0e29780e28760e28730e27700e276d0e266b0f25680f25650f24630e23600e225e0e215b0e20580e1f560e1e530d1d510d1c4e0d1b4b0c19490c18460b17440b16410a143f0a133c0912';
+export const CURL_HEX =
+  '151d44151f4516214616234717254817274918294a182b4b182d4c192f4d19314f1a33501a35511a37521b38531b3a541b3c561b3e571c40581c42591c435a1c455b1c475d1c495e1c4b5f1c4d601c4e611c50621c52641c54651b56661b58671b59681a5b691a5d6a1a5f6b19616c18636d18656e17676f176870166a71156c72146e73147074137275127476127676117877117978117b79117d79117f7a12817b13837b14857c16877c18887d1a8a7d1d8c7e1f8e7e228f7e26917f29937f2d95803096803498803899813c9b81409c82449e82489f834ca18350a28454a48458a5855ca78660a88764a98868ab896cac8a6fae8b73af8c77b08d7ab28f7eb39082b49185b69389b7948cb89690ba9893bb9996bd9b9abe9d9dbf9fa0c1a1a3c2a3a7c4a5aac5a7adc6a9b0c8abb3c9adb6cbb0b9ccb2bcceb4c0cfb7c3d1b9c5d2bcc8d4becbd6c1ced7c3d1d9c6d4dac8d7dccbdadecedddfd1e0e1d3e2e3d6e5e5d9e8e6dcebe8dfeeeae1f0ece4f3eee7f6efeaf9f1edfbf3f0fef5f3fdf5f4fcf3f0fbf0edfaeeeaf8ece6f7e9e3f6e7e0f5e4dcf4e2d9f3dfd6f2ddd2f1dacff0d8ccefd5c8efd3c5eed0c2edcebeeccbbbebc9b8ebc6b5eac4b2e9c1afe8bfabe8bda8e7baa5e6b8a2e6b59fe5b39ce4b09ae4ae97e3ab94e3a991e2a68ee1a48ce1a189e09e87df9c84df9982de9780dd947ddd927bdc8f79db8d77da8a75da8874d98572d88370d7806fd67e6dd57b6cd4796bd37669d27468d17267d06f66cf6d66ce6a65cc6864cb6664ca6363c86162c75f62c65d62c45a61c35861c15661c05461be5260bc5060bb4e60b94c60b74a60b54860b44660b24460b04260ae4060ac3e60aa3c60a83a60a63860a43760a23560a033609e31609c30609a2e60982c61962b619429619128608f26608d25608b2360882260862160841f60811e5f7f1d5f7c1c5f7a1b5e771a5e75195d72185c70185c6d175b6a165a6816596515586315576014555d14545b145258135155134f53134e50124c4d124a4b12484811464611444310424010403e0f3e3b0f3c390e3a360e37340d35';
