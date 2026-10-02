@@ -423,10 +423,10 @@ declare module '@magnusim/plugin-ui/_internal/format/sci' {
 }
 declare module '@magnusim/plugin-ui/_internal/format/time' {
   /**
-   * Time labels, one copy of each: simulated time, wall-clock elapsed time and
-   * the time left. The core still has its own copies (see ROADMAP).
+   * Time labels, one copy of each for the core and plugins: simulated time,
+   * wall-clock elapsed time and the time left.
    */
-  /** Seconds → short label (5 s, 0.1 s, 2.5e-4 s). */
+  /** Seconds → short label (5 s, 0.1 s, 2.5e-4 s). No number (null, '', NaN): —. */
   export function formatSimTime(v: unknown, opts?: {
       noUnit?: boolean;
   }): string;
