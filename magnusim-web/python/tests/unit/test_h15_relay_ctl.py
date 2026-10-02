@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
@@ -132,21 +133,23 @@ def test_the_cli_refuses_a_bad_job_id(capsys):
 
 
 def test_a_real_process_found_and_ended_by_its_environment():
-    env = dict(os.environ, MAGNUSIM_JOB_ID=JOB)
+    # A real kill ends every process on this PC that carries the id: one of its own per run.
+    job = f"fc-{secrets.token_hex(4)}-{secrets.token_hex(3)}"
+    env = dict(os.environ, MAGNUSIM_JOB_ID=job)
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], env=env)
     try:
         deadline = time.time() + 10
         found: dict[str, Any] = {}
         while time.time() < deadline:
-            found = foam_relay_ctl.alive(JOB)
+            found = foam_relay_ctl.alive(job)
             if proc.pid in found["pids"]:
                 break
             time.sleep(0.2)
         assert proc.pid in found["pids"]
-        assert foam_relay_ctl.kill(JOB)["killed"] >= 1
+        assert foam_relay_ctl.kill(job)["killed"] >= 1
         proc.wait(10)
         assert not psutil.pid_exists(proc.pid) or proc.poll() is not None
-        assert proc.pid not in foam_relay_ctl.alive(JOB)["pids"]
+        assert proc.pid not in foam_relay_ctl.alive(job)["pids"]
     finally:
         if proc.poll() is None:
             proc.kill()

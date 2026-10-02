@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 import sys
 import time
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+import pytest
 
 from cfddesk.wsl import foam_relay
 from cfddesk.wsl.foam_relay import StopController, read_marker_level, stage_class
@@ -281,7 +283,11 @@ time.sleep(120)
 """
 
 
-def test_a_stop_during_the_prepare_step_ends_its_tree(tmp_path: Path):
+def test_a_stop_during_the_prepare_step_ends_its_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # The relay sets these in this process for itself and its children: give them back after the test,
+    # or a later relay_ctl kill by job id would also end this pytest process.
+    for name in ("MAGNUSIM_JOB_ID", "MAGNUSIM_WSL_CASE_ROOT", "MAGNUSIM_WSL_DISTRO"):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
     from test_h15_relay import (
         FakeHub,
         Recorder,

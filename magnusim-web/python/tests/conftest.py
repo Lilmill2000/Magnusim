@@ -12,6 +12,17 @@ PROJECTS = FIXTURES / "projects"
 
 
 @pytest.fixture(autouse=True)
+def _no_job_id_left_behind():
+    """A test that runs a relay or job in this process must give MAGNUSIM_JOB_ID back:
+    a later kill by job id (foam_relay_ctl) ends every process carrying it, other pytest
+    runs on this PC included."""
+    before = os.environ.get("MAGNUSIM_JOB_ID")
+    yield
+    after = os.environ.get("MAGNUSIM_JOB_ID")
+    assert after == before, f"MAGNUSIM_JOB_ID left set to {after!r}"
+
+
+@pytest.fixture(autouse=True)
 def _own_local_json(request, tmp_path_factory, monkeypatch):
     """Each test reads an empty local JSON of its own, never this PC's settings: a
     plugin turned on in the app (plugins.enabled) would otherwise leak into the plugin
