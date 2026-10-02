@@ -8150,6 +8150,12 @@ let meshInspectOpen = false;
 let meshInspectLoadToken = 0;
 let studySwitchGen = 0;
 let studySwitchBusy = false;
+/** The study switch on its way ({ id, token }); a later switch or a project change replaces it. */
+let studySwitchPending = null;
+
+function studySwitchInFlight() {
+  return !!(studySwitchPending && studySwitchPending.token === studySwitchGen);
+}
 let meshChipDismissed = false;
 let resultsViewOpen = false;
 let resultsOpeningRunId = null;
@@ -21147,7 +21153,10 @@ async function selectStudyClient(simId) {
   const id = String(simId || '').trim();
   if (!id) return;
   if (studyIsGone(id)) return { stale: true, gone: true };
+  // While another switch is on its way, this one goes ahead even to the study shown now:
+  // the later call wins (the earlier one used to land after it and take over).
   if (
+    !studySwitchInFlight() &&
     studyCatalog.activeId === id &&
     studyCatalog.simulation &&
     studyCatalog.simulation.id === id &&
@@ -21157,6 +21166,7 @@ async function selectStudyClient(simId) {
     return window.__CFD_W17__;
   }
   const token = ++studySwitchGen;
+  studySwitchPending = { id, token };
   studySwitchBusy = true;
   try {
     try { hideAllTreeDetails(); } catch (_) {}
@@ -21221,6 +21231,7 @@ async function selectStudyClient(simId) {
     try { syncViewportJobChip(); } catch (_) {}
     return window.__CFD_W17__;
   } finally {
+    if (studySwitchPending && studySwitchPending.token === token) studySwitchPending = null;
     if (token === studySwitchGen) {
       studySwitchBusy = false;
       // Panels closed during the switch skip repainting the CAD (a monitor's
@@ -34796,7 +34807,8 @@ function markTreeSelected(key) {
   if (node) node.classList.add('selected');
 }
 
-function activateTreePanel(selectKey, panelKey) {
+/** opts.toggle false: open the panel even if it is open already (never close it). */
+function activateTreePanel(selectKey, panelKey, opts) {
   if (selectKey !== 'mesh1' && meshInspectOpen) hideMeshInspect();
   if (!String(selectKey || '').startsWith('runresults:') && resultsViewOpen) {
     hideRunResultsView();
@@ -34805,7 +34817,7 @@ function activateTreePanel(selectKey, panelKey) {
     markTreeSelected(selectKey);
     return;
   }
-  const opened = openTreeDetail(panelKey, { toggle: true });
+  const opened = openTreeDetail(panelKey, { toggle: !(opts && opts.toggle === false) });
   markTreeSelected(opened ? selectKey : null);
 }
 
@@ -35258,8 +35270,17 @@ function applyStudyDropOrder(ids, geometryId) {
         const sid = node.getAttribute('data-w17-sim-id');
         if (e.target.closest('.tw')) return;
         const go = () => activateTreePanel('incompressible', 'incompressible');
-        if (sid && studyCatalog.activeId !== sid) {
-          selectStudyClient(sid).then(go).catch((err) => console.warn('[CFD] study', err));
+        // During another study's switch, this row is the one to show even if it is the active
+        // study still: switch (back) to it.
+        if (sid && (studyCatalog.activeId !== sid || studySwitchInFlight())) {
+          // A switch a later click replaced opens nothing. It used to open the panel, and the
+          // later switch's open then toggled it shut (two study rows clicked in quick succession).
+          selectStudyClient(sid)
+            .then((out) => {
+              if (!out || out.stale) return;
+              activateTreePanel('incompressible', 'incompressible', { toggle: false });
+            })
+            .catch((err) => console.warn('[CFD] study', err));
         } else {
           go();
         }

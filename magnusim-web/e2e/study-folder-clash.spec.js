@@ -65,9 +65,9 @@ test('a study named like another keeps its folder and results across saves', asy
     if (!open) await studyRow(sid).click();
     await expect.poll(() => page.evaluate(() => window.__CFD_W17__.activeId)).toBe(sid);
     // A switch draws the panel again when its replies land (activate, hydrate), which wipes
-    // a rename box opened before that. A tree read landing after the switch can also close
-    // the new study's panel and clear the tree's selection (seen on 1496bf1..143483c), so
-    // reopen the panel too. Retry until the server has the name.
+    // a rename box opened before that. Two switches in quick succession also closed the new
+    // study's panel (study-switch-panel.spec.js), so reopen the panel if it is closed. Retry
+    // until the server has the name.
     const input = studyPanel.locator('input[aria-label="Simulation name"]');
     await expect(async () => {
       if (!(await studyPanel.isVisible())) await studyRow(sid).click({ timeout: 5_000 });
@@ -77,7 +77,7 @@ test('a study named like another keeps its folder and results across saves', asy
       }
       await input.fill(name, { timeout: 5_000 });
       await input.press('Enter', { timeout: 5_000 });
-      // Hidden is not enough: a panel closed by that tree read hides an unsaved box too.
+      // Hidden is not enough: a panel that closes hides an unsaved box too.
       await expect.poll(async () => (await studies()).find((s) => s.id === sid)?.name, { timeout: 5_000 }).toBe(name);
     }).toPass({ timeout: 90_000 });
     await expect(studyRow(sid)).toContainText(name);
