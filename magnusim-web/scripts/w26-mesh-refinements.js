@@ -25,6 +25,7 @@ import { envGet } from './env-compat.js';
 import { matchFaces, readPreviewFaces, remapRecordFaces } from './geometry-face-match.js';
 import { findStudy, walkMeshes, walkStudies } from './project-layout.js';
 import { commitRpc, writeProjectCli } from './py-json.js';
+import { mesherByKey } from './registry-defaults.js';
 import {
   assembleMeshDoc,
   assembleRefinements,
@@ -202,6 +203,36 @@ function asUnit(v, fallback) {
 
 function isSurface(type) {
   return type === 'Surface custom sizing';
+}
+
+/**
+ * A refinement must be a type its mesh's mesher applies (the registry row's
+ * refinement_types). A mesh whose mesher is not loaded, or a row without the
+ * list, keeps the core types.
+ */
+export function refusedByMesher(projectId, simId, rec) {
+  if (!rec || !rec.mesh_id) return null;
+  let mesh = null;
+  try {
+    mesh = walkMeshes(projectDir(projectId), simId).find((m) => String(m.id) === String(rec.mesh_id)) || null;
+  } catch {
+    return null;
+  }
+  const s = (mesh && mesh.settings) || {};
+  const key = String((mesh && mesh.ui_mesh_engine) || (s.advanced && s.advanced.mesh_engine) || 'standard');
+  const row = mesherByKey(key);
+  if (!row || !Array.isArray(row.refinement_types) || !row.refinement_types.length) return null;
+  const allowed = row.refinement_types.map((t) => t && t.label).filter(Boolean);
+  if (allowed.includes(rec.type)) return null;
+  return {
+    ok: false,
+    status: 400,
+    body: {
+      error: `${row.label || key} does not apply ${rec.type} refinements.`,
+      got: rec.type,
+      allowed,
+    },
+  };
 }
 
 function buildRefinement(body, list) {
@@ -523,6 +554,8 @@ async function upsertRefinements(body) {
     for (const item of batch) {
       const built = buildRefinement(item, list);
       if (!built.ok) return built;
+      const refused = refusedByMesher(projectId, sim.id, built.refinement);
+      if (refused) return refused;
       last = built.refinement;
       last.simulation_id = sim.id;
       list = mergeIntoList(list, built.refinement);
@@ -531,6 +564,8 @@ async function upsertRefinements(body) {
   } else {
     const built = buildRefinement(body || {}, list);
     if (!built.ok) return built;
+    const refused = refusedByMesher(projectId, sim.id, built.refinement);
+    if (refused) return refused;
     last = built.refinement;
     last.simulation_id = sim.id;
     list = mergeIntoList(list, built.refinement);

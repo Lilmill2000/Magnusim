@@ -87,6 +87,10 @@ class Registry(Generic[T]):
         key = getattr(spec, "key", None)
         if not isinstance(key, str) or not key:
             raise RegistryError(f"{self.kind}: spec missing non-empty key")
+        if self.kind == "mesher":
+            from cfddesk.registry.mesher import validate_mesher
+
+            validate_mesher(spec)
         existing_plugin = self._plugins.get(key)
         if key in self._items and existing_plugin != plugin:
             raise RegistryError(
@@ -115,6 +119,10 @@ class Registry(Generic[T]):
             )
         if key not in self._items:
             raise RegistryError(f"{self.kind}: cannot replace unknown key {key!r}")
+        if self.kind == "mesher":
+            from cfddesk.registry.mesher import validate_mesher
+
+            validate_mesher(spec)
         if key not in self._baseline:
             self._baseline[key] = (self._items[key], self._plugins.get(key, "builtin"))
         self._items[key] = spec
@@ -228,7 +236,19 @@ class Registry(Generic[T]):
             if hasattr(spec, "supported"):
                 row["supported"] = bool(spec.supported)
             if self.kind == "mesher":
+                from cfddesk.project.mesh_refinements import (
+                    REFINEMENT_TYPE_HINTS,
+                    REFINEMENT_TYPE_LABELS,
+                )
+
                 row["engine"] = str(getattr(spec, "engine", "") or key)
+                row["refinement_types"] = [
+                    {"key": t, "label": REFINEMENT_TYPE_LABELS[t], "hint": REFINEMENT_TYPE_HINTS.get(t, "")}
+                    for t in getattr(spec, "refinement_types", ()) or ()
+                ]
+                row["stage_labels"] = dict(getattr(spec, "stage_labels", ()) or ())
+                row["stage_details"] = [list(d) for d in getattr(spec, "stage_details", ()) or ()]
+                row["report"] = [list(r) for r in getattr(spec, "report", ()) or ()]
             if self.kind == "filter":
                 for extra in ("tool", "cache_scope", "output"):
                     if hasattr(spec, extra):

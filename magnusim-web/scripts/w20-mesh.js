@@ -891,6 +891,10 @@ function buildSettings(body, existing) {
             W20_DEFAULTS.advanced.global_gradation_rate
           ),
     },
+    // A mesher's own settings (schema keys the core does not model), as the panel sent them.
+    mesher_settings: useBank
+      ? {}
+      : plainObject(src.mesher_settings !== undefined ? src.mesher_settings : existingSettings.mesher_settings),
   };
 
   // Force bank-exact when caller asks for bank defaults (W20 hard bar)
@@ -908,10 +912,15 @@ function buildSettings(body, existing) {
       maximum_meshing_runtime: W20_DEFAULTS.maximum_meshing_runtime,
       maximum_meshing_runtime_unit: W20_DEFAULTS.maximum_meshing_runtime_unit,
       advanced: { ...W20_DEFAULTS.advanced },
+      mesher_settings: {},
     });
   }
 
   return settings;
+}
+
+function plainObject(v) {
+  return v && typeof v === 'object' && !Array.isArray(v) ? { ...v } : {};
 }
 
 function requireProjectSim(body) {

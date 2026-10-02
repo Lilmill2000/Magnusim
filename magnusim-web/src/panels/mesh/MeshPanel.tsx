@@ -41,6 +41,8 @@ interface MeshSettingsDoc {
     gap_refinement_factor?: number;
     global_gradation_rate?: number;
   };
+  /** A mesher's own settings: its schema keys the core does not model. */
+  mesher_settings?: Record<string, unknown>;
 }
 
 interface MeshDoc {
@@ -67,13 +69,25 @@ function schemaFor(key: string, rows: RegistryRow[]): RJSFSchema {
 /** The legacy fixed default reads as "automatic" so old projects show an empty box. */
 const LEGACY_AUTO_SFS = '4.227e-6';
 
+/** Schema keys the core maps to its own settings fields; any other key is the mesher's own. */
+const CORE_KEYS = new Set([
+  'fineness',
+  'add_layers',
+  'physics_based',
+  'hex_element_core',
+  'small_feature_suppression',
+  'gap_refinement_factor',
+  'global_gradation_rate',
+]);
+
 /** Form values (schema keys) from the on-disk settings. */
 export function formValuesFrom(settings: MeshSettingsDoc | undefined): Record<string, unknown> {
   const s = settings || {};
   const adv = s.advanced || {};
   const sfs = adv.small_feature_suppression;
   const sfsText = sfs == null || String(sfs) === LEGACY_AUTO_SFS ? '' : String(sfs);
-  const values: Record<string, unknown> = {};
+  const own = s.mesher_settings && typeof s.mesher_settings === 'object' ? s.mesher_settings : {};
+  const values: Record<string, unknown> = Object.fromEntries(Object.entries(own).filter(([k]) => !CORE_KEYS.has(k)));
   if (s.fineness != null) values.fineness = Number(s.fineness);
   if (s.automatic_boundary_layers != null) values.add_layers = !!s.automatic_boundary_layers;
   if (s.physics_based_meshing != null) values.physics_based = !!s.physics_based_meshing;
@@ -84,8 +98,15 @@ export function formValuesFrom(settings: MeshSettingsDoc | undefined): Record<st
   return values;
 }
 
-/** On-disk settings from the form values. Every advanced key is sent so nothing is left to a merge. */
-export function settingsFrom(values: Record<string, unknown>, engine: string): Record<string, unknown> {
+/**
+ * On-disk settings from the form values. Every advanced key is sent so nothing is left to a merge.
+ * The mesher's own keys (in `schema`, not core) go to `mesher_settings`, an unset one at its default.
+ */
+export function settingsFrom(
+  values: Record<string, unknown>,
+  engine: string,
+  schema?: RJSFSchema,
+): Record<string, unknown> {
   const advanced: Record<string, unknown> = { mesh_engine: engine };
   if (values.small_feature_suppression !== undefined) {
     advanced.small_feature_suppression = String(values.small_feature_suppression ?? '').trim();
@@ -100,6 +121,14 @@ export function settingsFrom(values: Record<string, unknown>, engine: string): R
   if (values.physics_based != null) body.physics_based_meshing = !!values.physics_based;
   // Manual sizing is not implemented by any mesher; the panel shows Sizing as a fixed row.
   body.sizing = 'Automatic';
+  const props = (schema?.properties || {}) as Record<string, { default?: unknown }>;
+  const own: Record<string, unknown> = {};
+  for (const [key, prop] of Object.entries(props)) {
+    if (CORE_KEYS.has(key)) continue;
+    const v = values[key] !== undefined ? values[key] : prop && typeof prop === 'object' ? prop.default : undefined;
+    if (v !== undefined) own[key] = v;
+  }
+  body.mesher_settings = own;
   return body;
 }
 
@@ -374,7 +403,7 @@ export function MeshSettings(props: IslandProps) {
 
   async function save(values: Record<string, unknown>, nextEngine = engine) {
     const scoped = ids();
-    const settings = settingsFrom(values, nextEngine);
+    const settings = settingsFrom(values, nextEngine, schemaFor(nextEngine, rows));
     const mesh = scoped.mesh_id || meshId || undefined;
     // The runtime path merges into the stored mesh and keeps its catalog current.
     const viaRuntime = window.__CFD_MESH_SAVE__;

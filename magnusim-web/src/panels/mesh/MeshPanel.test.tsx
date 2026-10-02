@@ -165,6 +165,25 @@ describe('settings mapping', () => {
     expect(body.sizing).toBe('Automatic');
   });
 
+  it("keeps a plugin mesher's own settings, at their defaults until changed", () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        fineness: { type: 'integer' as const, default: 5 },
+        surface_bias: { type: 'number' as const, default: 1.5 },
+        smoothing: { type: 'boolean' as const, default: true },
+      },
+    };
+    const body = settingsFrom({ fineness: 4, surface_bias: 2.25 }, 'example_extra_mesher', schema);
+    // Core keys stay in their own fields; the mesher's own keys are saved as given.
+    expect(body.fineness).toBe(4);
+    expect(body.mesher_settings).toEqual({ surface_bias: 2.25, smoothing: true });
+    const back = formValuesFrom({ fineness: 4, mesher_settings: body.mesher_settings as Record<string, unknown> });
+    expect(back).toMatchObject({ fineness: 4, surface_bias: 2.25, smoothing: true });
+    // A core key never comes back from the bag.
+    expect(formValuesFrom({ fineness: 4, mesher_settings: { fineness: 9 } }).fineness).toBe(4);
+  });
+
   it('labels the Generate button by queue state', () => {
     expect(generateButtonFor('generate').text).toBe('Generate');
     expect(generateButtonFor('generating')).toMatchObject({ text: 'Generating…', disabled: true });

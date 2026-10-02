@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from cfddesk.project.mesh_refinements import REFINEMENT_MENU_BY_ALGORITHM
 from cfddesk.registry.mesher import MeshBackend
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
@@ -12,10 +11,55 @@ from cfddesk.registry.schema import SchemaField
 if TYPE_CHECKING:
     from cfddesk.registry.discovery import RegistryHub
 
-# Product keys match w20 MESH_ENGINES + w21 hex-dominant path (snappy).
-# Labels match plan Step 4 / product copy.
-_STANDARD_REFINEMENTS = REFINEMENT_MENU_BY_ALGORITHM["standard"]
-_HEX_REFINEMENTS = REFINEMENT_MENU_BY_ALGORITHM["hex-dominant"]
+# What all three generators apply (web_refinements.load_surface_custom_sizes and
+# load_inflate_refs); the panel offers these and nothing else.
+_REFINEMENTS = ("surface_custom_sizing", "inflate_boundary_layer")
+
+# Progress stages each generator reports, as the Mesh panel names them.
+_READ = (("load_step", "Reading geometry"), ("step_loaded", "Reading geometry"))
+_COPY_BACK = (("copy_back", "Copying the mesh into the project"),)
+_STANDARD_STAGES = (
+    *_READ,
+    ("surface_mesh", "Meshing the surface"),
+    ("gmsh", "Preparing the geometry"),
+    ("gmshToFoam", "Building the OpenFOAM mesh and boundary layers"),
+    ("boundary_layers_retry", "Retrying without boundary layers"),
+    *_COPY_BACK,
+)
+# generate_standard.py's gmsh lines (log.gmsh_host.txt), first match wins.
+_STANDARD_DETAILS = (
+    ("gmsh", r"^surface \(gap", "Refining gaps"),
+    ("gmsh", r"^surface", "Meshing the surface"),
+    ("gmsh", r"^gap refinement", "Refining gaps"),
+    ("gmsh", r"^hexcore|^hex element core", "Building the hex element core"),
+    ("gmsh", r"^tets:", "Filling the volume with tetrahedra"),
+    ("gmsh", r"^tet (shell|volume)|^msh written|^volume check", "Writing the volume mesh"),
+)
+_CFMESH_STAGES = (
+    *_READ,
+    ("write_case", "Writing the case"),
+    ("cartesianMesh", "Running cartesianMesh"),
+    *_COPY_BACK,
+)
+_HEX_STAGES = (
+    ("load_geometry", "Reading geometry"),
+    ("sync_to_wsl", "Copying the case to WSL"),
+    ("snappy_pipeline", "Starting the mesh in WSL"),
+    ("start", "Starting the mesh in WSL"),
+    ("surfaceFeatureExtract", "Finding feature edges"),
+    ("blockMesh", "Building the background mesh"),
+    ("snappyHexMesh", "Snapping the mesh to the surface"),
+)
+
+
+def _report(name: str) -> tuple[tuple[str, str, str], ...]:
+    """The finished-mesh summary: engine, then what the run applied."""
+    return (
+        ("", name, ""),
+        ("hex_core_applied", "hex element core", ""),
+        ("layers_applied", "boundary layers", "no boundary layers"),
+        ("surface_size_m", "surface size {length}", ""),
+    )
 
 
 def _mesh_fingerprint(project: Any, mesh_id: str | None = None, **_kwargs: Any) -> dict[str, Any]:
@@ -146,7 +190,7 @@ def build_standard() -> MeshBackend:
         key="standard",
         label="Standard",
         settings_schema=_live_mesh_schema(hex_core=True),
-        refinement_types=_STANDARD_REFINEMENTS,
+        refinement_types=_REFINEMENTS,
         tool="mesh",
         fingerprint_payload=_mesh_fingerprint,
         generate=_bind_generate("generate_standard.py"),
@@ -155,6 +199,9 @@ def build_standard() -> MeshBackend:
         frozen=False,
         multi_region=False,
         engine="standard",
+        stage_labels=_STANDARD_STAGES,
+        stage_details=_STANDARD_DETAILS,
+        report=_report("Standard"),
     )
 
 
@@ -166,8 +213,7 @@ def build_cfmesh() -> MeshBackend:
         # What its run reads: fineness, layers, physics-based, and the hex core
         # it needs (generate_cfmesh_standard.py; no advanced flags).
         settings_schema=_live_mesh_schema(hex_core=True, advanced=False, hex_core_help=_CFMESH_HEX_CORE_HELP),
-        # cfmesh is Standard's advanced engine; same refinement menu as standard.
-        refinement_types=_STANDARD_REFINEMENTS,
+        refinement_types=_REFINEMENTS,
         tool="mesh",
         fingerprint_payload=_mesh_fingerprint,
         generate=_bind_generate("generate_cfmesh_standard.py"),
@@ -176,6 +222,8 @@ def build_cfmesh() -> MeshBackend:
         frozen=True,
         multi_region=False,
         engine="cfmesh",
+        stage_labels=_CFMESH_STAGES,
+        report=_report("cfMesh"),
     )
 
 
@@ -185,7 +233,7 @@ def build_snappy_hexdominant() -> MeshBackend:
         label="Hex-dominant",
         # generate_snappy.py reads fineness, layers and physics-based only.
         settings_schema=_live_mesh_schema(hex_core=False, advanced=False),
-        refinement_types=_HEX_REFINEMENTS,
+        refinement_types=_REFINEMENTS,
         tool="mesh",
         fingerprint_payload=_mesh_fingerprint,
         generate=_bind_generate("generate_snappy.py"),
@@ -194,6 +242,8 @@ def build_snappy_hexdominant() -> MeshBackend:
         frozen=False,
         multi_region=False,
         engine="snappy_hexdominant",
+        stage_labels=_HEX_STAGES,
+        report=_report("Hex-dominant"),
     )
 
 

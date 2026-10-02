@@ -813,7 +813,82 @@
         "additionalProperties": false
       },
       "requires": [],
-      "engine": "standard"
+      "engine": "standard",
+      "refinement_types": [
+        {
+          "key": "surface_custom_sizing",
+          "label": "Surface custom sizing",
+          "hint": "Set a max element size on selected faces"
+        },
+        {
+          "key": "inflate_boundary_layer",
+          "label": "Inflate boundary layer",
+          "hint": "Prism layers \u2014 set count and total thickness"
+        }
+      ],
+      "stage_labels": {
+        "load_step": "Reading geometry",
+        "step_loaded": "Reading geometry",
+        "surface_mesh": "Meshing the surface",
+        "gmsh": "Preparing the geometry",
+        "gmshToFoam": "Building the OpenFOAM mesh and boundary layers",
+        "boundary_layers_retry": "Retrying without boundary layers",
+        "copy_back": "Copying the mesh into the project"
+      },
+      "stage_details": [
+        [
+          "gmsh",
+          "^surface \\(gap",
+          "Refining gaps"
+        ],
+        [
+          "gmsh",
+          "^surface",
+          "Meshing the surface"
+        ],
+        [
+          "gmsh",
+          "^gap refinement",
+          "Refining gaps"
+        ],
+        [
+          "gmsh",
+          "^hexcore|^hex element core",
+          "Building the hex element core"
+        ],
+        [
+          "gmsh",
+          "^tets:",
+          "Filling the volume with tetrahedra"
+        ],
+        [
+          "gmsh",
+          "^tet (shell|volume)|^msh written|^volume check",
+          "Writing the volume mesh"
+        ]
+      ],
+      "report": [
+        [
+          "",
+          "Standard",
+          ""
+        ],
+        [
+          "hex_core_applied",
+          "hex element core",
+          ""
+        ],
+        [
+          "layers_applied",
+          "boundary layers",
+          "no boundary layers"
+        ],
+        [
+          "surface_size_m",
+          "surface size {length}",
+          ""
+        ]
+      ]
     },
     {
       "key": "cfmesh",
@@ -872,7 +947,49 @@
           "version_spec": ""
         }
       ],
-      "engine": "cfmesh"
+      "engine": "cfmesh",
+      "refinement_types": [
+        {
+          "key": "surface_custom_sizing",
+          "label": "Surface custom sizing",
+          "hint": "Set a max element size on selected faces"
+        },
+        {
+          "key": "inflate_boundary_layer",
+          "label": "Inflate boundary layer",
+          "hint": "Prism layers \u2014 set count and total thickness"
+        }
+      ],
+      "stage_labels": {
+        "load_step": "Reading geometry",
+        "step_loaded": "Reading geometry",
+        "write_case": "Writing the case",
+        "cartesianMesh": "Running cartesianMesh",
+        "copy_back": "Copying the mesh into the project"
+      },
+      "stage_details": [],
+      "report": [
+        [
+          "",
+          "cfMesh",
+          ""
+        ],
+        [
+          "hex_core_applied",
+          "hex element core",
+          ""
+        ],
+        [
+          "layers_applied",
+          "boundary layers",
+          "no boundary layers"
+        ],
+        [
+          "surface_size_m",
+          "surface size {length}",
+          ""
+        ]
+      ]
     },
     {
       "key": "snappy_hexdominant",
@@ -922,7 +1039,51 @@
           "version_spec": ""
         }
       ],
-      "engine": "snappy_hexdominant"
+      "engine": "snappy_hexdominant",
+      "refinement_types": [
+        {
+          "key": "surface_custom_sizing",
+          "label": "Surface custom sizing",
+          "hint": "Set a max element size on selected faces"
+        },
+        {
+          "key": "inflate_boundary_layer",
+          "label": "Inflate boundary layer",
+          "hint": "Prism layers \u2014 set count and total thickness"
+        }
+      ],
+      "stage_labels": {
+        "load_geometry": "Reading geometry",
+        "sync_to_wsl": "Copying the case to WSL",
+        "snappy_pipeline": "Starting the mesh in WSL",
+        "start": "Starting the mesh in WSL",
+        "surfaceFeatureExtract": "Finding feature edges",
+        "blockMesh": "Building the background mesh",
+        "snappyHexMesh": "Snapping the mesh to the surface"
+      },
+      "stage_details": [],
+      "report": [
+        [
+          "",
+          "Hex-dominant",
+          ""
+        ],
+        [
+          "hex_core_applied",
+          "hex element core",
+          ""
+        ],
+        [
+          "layers_applied",
+          "boundary layers",
+          "no boundary layers"
+        ],
+        [
+          "surface_size_m",
+          "surface size {length}",
+          ""
+        ]
+      ]
     }
   ],
   "bc": [

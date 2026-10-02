@@ -849,6 +849,7 @@ export function persistMeshResult(projectId, resultFields) {
     step_path: resultFields.step_path || null,
     body1_path: resultFields.body1_path || null,
     engine: resultFields.engine || null,
+    mesh_backend: resultFields.mesh_backend || null,
     stage: resultFields.stage || null,
     stage_detail: resultFields.stage_detail || null,
     error: resultFields.error || null,

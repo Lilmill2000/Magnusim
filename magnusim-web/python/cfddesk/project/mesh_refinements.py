@@ -97,6 +97,12 @@ REFINEMENT_TYPE_LABELS: dict[str, str] = {
     "bounding_box_layer_addition": "Bounding box layer addition",
 }
 
+# One line under each type in the Mesh panel's refinement menu.
+REFINEMENT_TYPE_HINTS: dict[str, str] = {
+    "surface_custom_sizing": "Set a max element size on selected faces",
+    "inflate_boundary_layer": "Prism layers — set count and total thickness",
+}
+
 # Exact menu order per algorithm (Coordinator / DA GO 7a).
 REFINEMENT_MENU_BY_ALGORITHM: dict[str, tuple[str, ...]] = {
     "standard": (

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from cfddesk.registry.manifest import PluginManifest
+from cfddesk.registry.schema import SchemaField
 
 PLUGIN = "example-extra-mesher"
 
@@ -17,11 +18,26 @@ def register(hub):
             fields.append(replace(field, default=3))
         else:
             fields.append(field)
+    # A setting of its own: the core does not model it, so the Mesh panel keeps
+    # it in settings.mesher_settings.
+    fields.append(
+        SchemaField(
+            "surface_bias",
+            "Surface bias",
+            "float",
+            default=1.5,
+            min=1.0,
+            max=4.0,
+            description="How much finer the surface is than the core (this mesher's own setting).",
+        )
+    )
     spec = replace(
         standard,
         key="example_extra_mesher",
         label="Extra mesher",
         settings_schema=tuple(fields),
+        # Only inflate layers: the Mesh panel's refinement menu offers just that.
+        refinement_types=("inflate_boundary_layer",),
         frozen=False,
         multi_region=False,
     )

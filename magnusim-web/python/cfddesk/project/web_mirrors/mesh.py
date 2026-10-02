@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from typing import Any
 
 from cfddesk.project.web_mirrors._common import (
@@ -16,6 +17,12 @@ from cfddesk.project.web_mirrors._common import (
 PRODUCT_MESH_ENGINES = ("standard", "cfmesh", "snappy_hexdominant")
 
 
+def _pickable_engine(key: str) -> bool:
+    """A core engine, or a plugin mesher's key: kept even while that plugin is off,
+    so Generate can say it is not installed (w21 resolveMeshBackend)."""
+    return key in PRODUCT_MESH_ENGINES or re.fullmatch(r"[a-z][a-z0-9_]*", key) is not None
+
+
 def _mesh_entry(m: Any, *, sim_id: str | None) -> dict[str, Any]:
     settings = m.settings.to_dict() if hasattr(m.settings, "to_dict") else {}
     meta = dict(getattr(m, "web_meta", None) or {})
@@ -26,7 +33,7 @@ def _mesh_entry(m: Any, *, sim_id: str | None) -> dict[str, Any]:
     # Standard hex-core impl hint (cfmesh|bodyfit), not the generate path picker.
     # Mapping it flipped new meshes onto legacy cfMesh / away from Cyclone path.
     ui_engine = str(meta.get("ui_mesh_engine") or "standard").strip().lower()
-    if ui_engine not in PRODUCT_MESH_ENGINES:
+    if not _pickable_engine(ui_engine):
         ui_engine = "standard"
     web_settings = {
         "name": m.name,
@@ -42,6 +49,9 @@ def _mesh_entry(m: Any, *, sim_id: str | None) -> dict[str, Any]:
             "mesh_engine": ui_engine,
         },
     }
+    # A mesher's own settings (schema keys the core does not model), as saved.
+    if isinstance(meta.get("mesher_settings"), dict):
+        web_settings["mesher_settings"] = dict(meta["mesher_settings"])
     entry: dict[str, Any] = {
         "id": m.id,
         "name": m.name,
@@ -56,7 +66,7 @@ def _mesh_entry(m: Any, *, sim_id: str | None) -> dict[str, Any]:
     if live:
         entry["live_mesh_result"] = live
     for k, v in meta.items():
-        if k not in entry and k != "live_mesh_result":
+        if k not in entry and k not in ("live_mesh_result", "mesher_settings"):
             entry[k] = v
     return entry
 
@@ -166,10 +176,10 @@ def from_web_mesh(doc: dict | None) -> tuple[list[Any], str]:
             ui_engine = str(meta.get("ui_mesh_engine") or "standard").strip().lower()
         else:
             adv_engine = str(adv.get("mesh_engine") or "standard").strip().lower()
-            if adv_engine not in PRODUCT_MESH_ENGINES:
+            if not _pickable_engine(adv_engine):
                 adv_engine = "standard"
             ui_engine = "standard" if adv_engine == "cfmesh" else adv_engine
-        if ui_engine not in PRODUCT_MESH_ENGINES:
+        if not _pickable_engine(ui_engine):
             ui_engine = "standard"
         # Explicit legacy Advanced=cfmesh only. Do not treat default hexcore_backend as
         # product mesh_engine (that routed Standard generates off Cyclone gmsh-hexcore).
@@ -182,6 +192,8 @@ def from_web_mesh(doc: dict | None) -> tuple[list[Any], str]:
             except (TypeError, ValueError):
                 pass
         meta["ui_mesh_engine"] = ui_engine
+        if isinstance(settings_raw.get("mesher_settings"), dict):
+            meta["mesher_settings"] = dict(settings_raw["mesher_settings"])
         if live is not None:
             meta["live_mesh_result"] = live
         n_cells = raw.get("n_cells")

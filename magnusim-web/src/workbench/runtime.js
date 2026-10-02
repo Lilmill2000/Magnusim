@@ -58,6 +58,7 @@ import {
   transientSolverApps,
   xAxisIsSeconds,
 } from '../analysis';
+import { mesherFor, mesherRows, refinementMenu, reportBits, stageText } from '../mesher';
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
 import { newPluginStudy, shownStudyTitles } from '../chrome/studyName';
@@ -16348,35 +16349,11 @@ function syncJobStatusChrome() {
   publishMeshJobState();
 }
 
-const MESH_STAGE_LABELS = {
-  starting: 'Starting',
-  load_step: 'Reading geometry',
-  step_loaded: 'Reading geometry',
-  sizing: 'Computing mesh sizes',
-  surface_mesh: 'Meshing the surface',
-  gmsh: 'Meshing the volume',
-  volume_mesh: 'Volume mesh done',
-  boundary_layers: 'Preparing boundary layers',
-  gmshToFoam: 'Building the OpenFOAM mesh and boundary layers',
-  boundary_layers_retry: 'Retrying without boundary layers',
-  cartesianMesh: 'Running cartesianMesh',
-  write_case: 'Writing the case',
-  copy_back: 'Copying the mesh into the project',
-};
-
+/** The running stage as the mesh's mesher names it (its registry row's stage labels). */
 function meshStageText() {
   const stage = jobState.stage ? String(jobState.stage) : '';
   const detail = jobState.stage_detail ? String(jobState.stage_detail) : '';
-  if (stage === 'gmsh') {
-    if (/^surface \(gap/i.test(detail)) return 'Refining gaps';
-    if (/^surface/i.test(detail)) return 'Meshing the surface';
-    if (/^gap refinement/i.test(detail)) return 'Refining gaps';
-    if (/^hexcore|^hex element core/i.test(detail)) return 'Building the hex element core';
-    if (/^tets:/i.test(detail)) return 'Filling the volume with tetrahedra';
-    if (/^tet (shell|volume)|^msh written|^volume check/i.test(detail)) return 'Writing the volume mesh';
-    return 'Preparing the geometry';
-  }
-  return MESH_STAGE_LABELS[stage] || 'Working';
+  return stageText(mesherFor(mesherRows(), jobState.mesh_backend, jobState.path_kind), stage, detail);
 }
 
 function formatMetres(m) {
@@ -16453,20 +16430,15 @@ function publishMeshJobState() {
   const ready = meshReady && countsReady;
   const bits = [];
   if (ready) {
-    const engine = String(
-      (live && (live.engine || live.path_kind)) || (mine && (jobState.engine || jobState.path_kind)) || '',
-    );
-    if (engine === 'cfmesh' || engine === 'cartesianMesh') bits.push('cfMesh');
-    else if (engine === 'snappyHexMesh') bits.push('Hex-dominant');
-    else if (engine) bits.push('Standard');
-    const hex = live && live.hex_core_applied != null ? live.hex_core_applied : mine ? jobState.hex_core_applied : null;
-    const layers = live && live.layers_applied != null ? live.layers_applied : mine ? jobState.layers_applied : null;
-    const surface = live && live.surface_size_m != null ? live.surface_size_m : mine ? jobState.surface_size_m : null;
-    if (hex === true) bits.push('hex element core');
-    if (layers === true) bits.push('boundary layers');
-    else if (layers === false) bits.push('no boundary layers');
-    const h = formatMetres(surface);
-    if (h) bits.push('surface size ' + h);
+    // The finished mesh's summary is its mesher's report (registry row), over
+    // the result's fields (this tab's job fills in what the record lacks).
+    const pick = (k) => (live && live[k] != null ? live[k] : mine ? jobState[k] : null);
+    const backend = pick('mesh_backend') || pick('engine');
+    const path = pick('path_kind');
+    const rows = mesherRows();
+    const row = mesherFor(rows, backend, path) || (backend || path ? mesherFor(rows, 'standard') : undefined);
+    const result = Object.fromEntries(((row && row.report) || []).map(([k]) => [k, k ? pick(k) : null]));
+    bits.push(...reportBits(row, result, formatMetres));
   }
   const err = failed && jobState.error ? String(jobState.error).split('\n')[0].slice(0, 160) : '';
   const startMs = jobState.started_at ? Date.parse(jobState.started_at) : NaN;
@@ -27460,8 +27432,36 @@ function openRefTypeModal() {
     console.warn('[CFD] Create Simulation first');
     return;
   }
+  fillRefPickerTypes();
   openTreeDetail('ref-picker', { toggle: false });
   syncRefPickerSelected();
+}
+
+/** The refinement types of the viewed mesh's mesher (registry row), the first one selected. */
+function fillRefPickerTypes() {
+  const box = document.getElementById('ref-picker-types');
+  if (!box) return;
+  const rec = findMeshRecord(viewingMeshId()) || {};
+  const engine = rec.ui_mesh_engine || (rec.settings && rec.settings.advanced && rec.settings.advanced.mesh_engine) || 'standard';
+  box.replaceChildren(
+    ...refinementMenu(mesherFor(mesherRows(), engine)).map((t, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ml-type' + (i === 0 ? ' is-selected' : '');
+      btn.setAttribute('data-ref-type', t.label);
+      const name = document.createElement('span');
+      name.className = 'ml-type-name';
+      name.textContent = t.label;
+      btn.append(name);
+      if (t.hint) {
+        const sub = document.createElement('span');
+        sub.className = 'hub-item-sub';
+        sub.textContent = t.hint;
+        btn.append(sub);
+      }
+      return btn;
+    }),
+  );
 }
 
 /** "Selected: face N" under the refinement types, like the BC picker. */
@@ -35671,11 +35671,12 @@ function applyStudyDropOrder(ids, geometryId) {
       createRefClient(t, { faces }).catch((e) => console.error('[CFD] refinement create', e));
     }
   });
-  document.querySelectorAll('#panel-ref-picker .ml-type:not([disabled])').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#panel-ref-picker .ml-type').forEach((b) => b.classList.remove('is-selected'));
-      btn.classList.add('is-selected');
-    });
+  // The type buttons are drawn per mesher (fillRefPickerTypes), so select by delegation.
+  document.getElementById('ref-picker-types')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.ml-type:not([disabled])');
+    if (!btn) return;
+    document.querySelectorAll('#panel-ref-picker .ml-type').forEach((b) => b.classList.remove('is-selected'));
+    btn.classList.add('is-selected');
   });
 })();
 
