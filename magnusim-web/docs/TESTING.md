@@ -58,7 +58,7 @@ materials, the run panel, results), so every core change runs its suite. CAD
 reaches the app only through the plugin host, so a core change runs CAD's suite
 only when it touches what CAD uses. That list is `HOST_PATHS.cad` in
 `scripts/e2e-suites.mjs` (until CAD declares `"magnusim": {"e2eHostPaths": [...]}` in
-its `package.json`): the workspace host, the plugin SDK and API, the app shell,
+its `package.json`): the workspace host, the plugin SDK and API, the UI kit, the app shell,
 the tree, Settings, the dialogs, the Node server, the registry and worker, the
 project tree and plugin data writes, `magnusim_sdk`, the e2e harness, the
 build config and dependencies. A change elsewhere (`runtime.js`, the panels,

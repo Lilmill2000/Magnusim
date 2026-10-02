@@ -46,6 +46,8 @@ export const HOST_PATHS = {
     'src/workspace/',
     'src/plugin-sdk/',
     'src/plugin-api/',
+    // The UI kit: every workspace frame loads /plugin-sdk/plugin-ui.css and its import-map entry.
+    'src/plugin-ui/',
     'src/plugins/',
     'src/app/',
     'src/chrome/',
