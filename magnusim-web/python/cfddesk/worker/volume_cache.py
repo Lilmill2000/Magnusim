@@ -71,7 +71,7 @@ def _evict() -> None:
 def get_prepared(case_dir: str, time: str, *, pin: bool = True) -> dict[str, Any]:
     from case_volume import load_volume
     from export_particle_trace import point_data_grid
-    from result_names import dataset_vectors, ensure_shown_field, velocity_vector
+    from result_names import dataset_vector, dataset_vectors, ensure_shown_field
 
     case = Path(case_dir).resolve()
     t = str(time or "0")
@@ -90,11 +90,8 @@ def get_prepared(case_dir: str, time: str, *, pin: bool = True) -> dict[str, Any
     # mesh's only vector. Cutting planes can colour from a vector left on the
     # cells; that must not throw (it used to skip the LRU and reload the
     # volume on every axis change).
-    vectors = dataset_vectors(mesh)
-    vec = velocity_vector(case, t)
-    if vec not in vectors:
-        vec = vectors[0] if len(vectors) == 1 else None
-    grid = point_data_grid(mesh, vec or "")
+    vec = dataset_vector(case, t, mesh)
+    grid = point_data_grid(mesh, vec)
     slice_src = grid if grid is not None else mesh
     # Bake mag<X> for every vector once so live slices skip per-cut promotion.
     # Kinematic fields stay as stored here: every export scales its own output
@@ -117,7 +114,7 @@ def get_prepared(case_dir: str, time: str, *, pin: bool = True) -> dict[str, Any
         "source": source,
         "n_cells": int(getattr(slice_src, "n_cells", 0) or 0),
         "n_points": int(getattr(slice_src, "n_points", 0) or 0),
-        "vector": vec or "",
+        "vector": vec,
         "has_point_u": bool(vec) and vec in getattr(slice_src, "point_data", {}),
         "has_cell_u": bool(vec) and vec in getattr(slice_src, "cell_data", {}),
     }

@@ -1,11 +1,11 @@
 /**
  * W6/W8/W9/W10/W11/W12/W13 Vite middleware:
  *   GET /api/times?case=                  -> real OpenFOAM time dirs on disk (W12)
- *   GET /api/fields/:field?case=&time=     -> surface VTP (magU/p) from case tree
+ *   GET /api/fields/:field?case=&time=     -> surface VTP (a shown field) from case tree
  *   GET /api/fields/:field/meta?...       -> JSON fingerprint
- *   GET /api/particle-trace?...           -> tube-glyph VTP (server streamlines on U)
+ *   GET /api/particle-trace?...           -> tube-glyph VTP (server streamlines on the case's velocity)
  *   GET /api/particle-trace/meta?...      -> JSON (n_seeds, tube_proof, fingerprint)
- *   GET /api/plot-over-path?...           -> JSON series (sample_over_line on magU/p)
+ *   GET /api/plot-over-path?...           -> JSON series (sample_over_line on the asked field)
  *   GET /api/plot-over-path/meta?...      -> same JSON fingerprint
  *   GET /api/volume/warmup?case=&time=    -> pin OpenFOAM volume in worker RAM
  *   POST /api/volume/release              -> drop in-memory volumes (Home / idle)
@@ -16,10 +16,10 @@
  *   GET /api/iso-volume/meta?...          -> JSON fingerprint (n_cells, empty, mapped lo/hi)
  *   GET /api/inspect?x=&y=&z=&time=[&fields=a,b] -> JSON probe (shown fields at point; honest miss)
  *
- * Particle Trace path (W8 HARD): pyvista streamlines_from_source(vectors='U')
- * on case .cfddesk-prepared.vtu, then tube(radius=Size). Not magU-only fake lines.
+ * Particle Trace path (W8 HARD): pyvista streamlines_from_source on the case's
+ * velocity vector (vector= names it), then tube(radius=Size). Not magnitude-only fake lines.
  * Plot-over-path (W9 HARD): pyvista sample_over_line on case VTU field along polyline.
- * Iso Surface (W10 HARD): pyvista contour on volume .cfddesk-prepared.vtu (magU/p);
+ * Iso Surface (W10 HARD): pyvista contour on the case volume (iso_field / color_field names);
  * honest empty when iso value out of range (MTP1 default 11.1). Not a solid shell.
  * Iso Volume (W11 HARD): pyvista threshold on volume VTU; normalized 0.25/0.75 mapped
  * to live min/max -> nonzero cells; honest empty when inverted. Not contour rebrand.
@@ -465,6 +465,48 @@ const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
 export function isFieldName(field) {
   return FIELD_NAME_RE.test(String(field || ''));
+}
+
+/**
+ * Legacy label map: the iso, iso-volume and plot pickers still send labels
+ * ("Velocity Magnitude", "Pressure") instead of field names. They are mapped
+ * here, and only here; the page sends field names in a later step and this map
+ * goes then.
+ */
+const LEGACY_FIELD_LABELS = {
+  'velocity magnitude': 'magU',
+  '|u|': 'magU',
+  'u magnitude': 'magU',
+  velocity: 'magU',
+  pressure: 'p',
+  'kinematic pressure': 'p',
+  'pressure (p)': 'p',
+};
+
+/** A field name from a picker value: a legacy label mapped to its field, a name as is. */
+export function legacyFieldName(value) {
+  const raw = String(value ?? '').trim();
+  return LEGACY_FIELD_LABELS[raw.toLowerCase()] || raw;
+}
+
+/**
+ * The first non-empty of `keys` as a field name, else the first non-empty of
+ * `legacyKeys` mapped through the legacy label map. '' when none is given (the
+ * tool then shows the case's default field) or the value is not a plain name.
+ */
+export function fieldNameParam(u, keys, legacyKeys = []) {
+  for (const k of keys) {
+    const v = String(u.searchParams.get(k) ?? '').trim();
+    if (v) return isFieldName(v) ? v : '';
+  }
+  for (const k of legacyKeys) {
+    const v = String(u.searchParams.get(k) ?? '').trim();
+    if (v) {
+      const name = legacyFieldName(v);
+      return isFieldName(name) ? name : '';
+    }
+  }
+  return '';
 }
 
 /** The OpenFOAM file a shown field reads at a time: itself, or for magX the vector X. */
@@ -1097,7 +1139,7 @@ function listCaseSeedFaces(caseDir) {
     );
 }
 
-function ptParamsFromUrl(u) {
+export function ptParamsFromUrl(u) {
   const seeds_h = Number(u.searchParams.get('seeds_h') ?? '10');
   const seeds_v = Number(u.searchParams.get('seeds_v') ?? '10');
   const spacing = Number(u.searchParams.get('spacing') ?? '0.015');
@@ -1121,6 +1163,10 @@ function ptParamsFromUrl(u) {
   const density = Number(u.searchParams.get('density') ?? '10000');
   const region = (u.searchParams.get('region') || '').trim();
   return {
+    // The vector to trace ('' = the case's velocity) and the field the paths
+    // carry ('' = every scalar the frame wrote).
+    vector: fieldNameParam(u, ['vector']),
+    coloring: fieldNameParam(u, ['coloring']),
     seeds_h: Number.isFinite(seeds_h) ? seeds_h : 10,
     seeds_v: Number.isFinite(seeds_v) ? seeds_v : 10,
     spacing: Number.isFinite(spacing) ? spacing : 0.015,
@@ -1155,6 +1201,8 @@ function ptCacheKey(caseDir, time, p) {
     p.pick,
     p.region || '',
     p.max_steps,
+    p.vector || '',
+    p.coloring || '',
     'seeds-any-face-v1',
   ].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
@@ -1200,6 +1248,10 @@ function runPtExport(caseDir, time, outDir, p) {
       String(p.density ?? 10000),
       '--region',
       p.region || '',
+      '--vector',
+      p.vector || '',
+      '--coloring',
+      p.coloring || '',
     ];
     const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
@@ -1228,7 +1280,8 @@ async function ensureParticleTrace(caseDir, time, p) {
   const vtp = join(dir, 'particle_trace.vtp');
   const meta = join(dir, 'particle_trace.meta.json');
   const stampPath = join(dir, '.stamp');
-  const stamp = foamStamp(caseDir, time, 'magU');
+  // Every field file of the time: the paths carry the vector and the frame's scalars.
+  const stamp = timeFolderStamp(caseDir, time);
   if (!stamp) {
     throw new Error(`case foam files missing under ${caseDir}/${time}`);
   }
@@ -1260,6 +1313,8 @@ async function ensureParticleTrace(caseDir, time, p) {
         n_seeds: p.n_seeds ?? 40,
         density: p.density ?? 10000,
         region: p.region || '',
+        vector: p.vector || '',
+        coloring: p.coloring || '',
       },
       180000,
     );
@@ -1282,24 +1337,19 @@ async function ensureParticleTrace(caseDir, time, p) {
 }
 
 
-function popParamsFromUrl(u) {
+export function popParamsFromUrl(u) {
   const subdivisions = Number(u.searchParams.get('subdivisions') ?? '0');
-  const field_variable =
-    u.searchParams.get('field_variable') ||
-    u.searchParams.get('fieldVariable') ||
-    'Velocity Magnitude';
-  const field = u.searchParams.get('field') || '';
   const points = (u.searchParams.get('points') || '').trim();
   return {
     subdivisions: Number.isFinite(subdivisions) ? Math.max(0, Math.floor(subdivisions)) : 0,
-    field_variable,
-    field,
+    // field_variable / fieldVariable: legacy labels.
+    field: fieldNameParam(u, ['field'], ['field_variable', 'fieldVariable']),
     points,
   };
 }
 
 function popCacheKey(caseDir, time, p) {
-  const raw = [caseDir, time, p.subdivisions, p.field_variable, p.field, p.points].join('|');
+  const raw = [caseDir, time, p.subdivisions, p.field, p.points].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 14);
   return join(scopedCacheDir(POP_CACHE_ROOT, caseDir), `pop-${h}`);
 }
@@ -1318,12 +1368,9 @@ function runPopExport(caseDir, time, outDir, p) {
       p.points || '',
       '--subdivisions',
       String(p.subdivisions),
-      '--field-variable',
-      p.field_variable || 'Velocity Magnitude',
+      '--field',
+      p.field || '',
     ];
-    if (p.field) {
-      args.push('--field', p.field);
-    }
     const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
@@ -1365,21 +1412,18 @@ async function ensurePlotOverPath(caseDir, time, p) {
 }
 
 
-function isoParamsFromUrl(u) {
+export function isoParamsFromUrl(u) {
   const iso_value = Number(u.searchParams.get('iso_value') ?? u.searchParams.get('value') ?? '11.1');
-  const iso_scalar =
-    u.searchParams.get('iso_scalar') ||
-    u.searchParams.get('isoScalar') ||
-    'Velocity Magnitude';
-  const coloring = u.searchParams.get('coloring') || 'Pressure';
   const opacity = Number(u.searchParams.get('opacity') ?? '1');
   const vectorsRaw = u.searchParams.get('vectors');
   const vectors =
     vectorsRaw === '1' || vectorsRaw === 'true' || vectorsRaw === 'True' ? 1 : 0;
   return {
     iso_value: Number.isFinite(iso_value) ? iso_value : 11.1,
-    iso_scalar,
-    coloring,
+    // iso_scalar / isoScalar / coloring: legacy labels.
+    iso_field: fieldNameParam(u, ['iso_field'], ['iso_scalar', 'isoScalar']),
+    color_field: fieldNameParam(u, ['color_field'], ['coloring']),
+    vector: fieldNameParam(u, ['vector']),
     opacity: Number.isFinite(opacity) ? opacity : 1,
     vectors,
   };
@@ -1389,9 +1433,10 @@ function isoCacheKey(caseDir, time, p) {
   const raw = [
     caseDir,
     time,
-    p.iso_scalar,
+    p.iso_field,
     p.iso_value,
-    p.coloring,
+    p.color_field,
+    p.vector,
     p.opacity,
     p.vectors,
   ].join('|');
@@ -1409,12 +1454,14 @@ function runIsoExport(caseDir, time, outDir, p) {
       String(time),
       '--out-dir',
       outDir,
-      '--iso-scalar',
-      p.iso_scalar || 'Velocity Magnitude',
+      '--iso-field',
+      p.iso_field || '',
       '--iso-value',
       String(p.iso_value),
-      '--coloring',
-      p.coloring || 'Pressure',
+      '--color-field',
+      p.color_field || '',
+      '--vector',
+      p.vector || '',
       '--opacity',
       String(p.opacity),
       '--vectors',
@@ -1440,13 +1487,11 @@ function runIsoExport(caseDir, time, outDir, p) {
   });
 }
 
-function cutParamsFromUrl(u) {
+export function cutParamsFromUrl(u) {
   const num = (key, fallback) => {
     const n = Number(u.searchParams.get(key));
     return Number.isFinite(n) ? n : fallback;
   };
-  const asked = u.searchParams.get('field') || 'magU';
-  const field = isFieldName(asked) ? asked : 'magU';
   const liveRaw = u.searchParams.get('live');
   return {
     ox: num('ox', 0),
@@ -1455,13 +1500,23 @@ function cutParamsFromUrl(u) {
     nx: num('nx', 0),
     ny: num('ny', 1),
     nz: num('nz', 0),
-    field,
+    // '' colours by the case's default field.
+    field: fieldNameParam(u, ['field']),
+    // The vector carried for glyphs ('' = the case's velocity) and extra fields to
+    // carry. No extra parameter at all (today's page) is null: the slice keeps
+    // every scalar the frame wrote; extra= (empty) keeps none.
+    vector: fieldNameParam(u, ['vector']),
+    extra: u.searchParams.has('extra') ? fieldListParam(u.searchParams.get('extra')) : null,
     live: liveRaw === '1' || liveRaw === 'true',
   };
 }
 
+function cutArraysKey(p) {
+  return `${p.vector || ''}|${Array.isArray(p.extra) ? p.extra.join(',') : '*'}`;
+}
+
 function liveCutCacheKey(caseDir, time, p) {
-  const raw = [caseDir, time, p.field, p.nx.toFixed(3), p.ny.toFixed(3), p.nz.toFixed(3)].join('|');
+  const raw = [caseDir, time, p.field, cutArraysKey(p), p.nx.toFixed(3), p.ny.toFixed(3), p.nz.toFixed(3)].join('|');
   const h = createHash('sha1').update(raw).digest('hex').slice(0, 12);
   return join(scopedCacheDir(CUT_CACHE_ROOT, caseDir), `live-${h}`);
 }
@@ -1471,6 +1526,7 @@ function cutCacheKey(caseDir, time, p) {
     caseDir,
     time,
     p.field,
+    cutArraysKey(p),
     p.ox.toFixed(5),
     p.oy.toFixed(5),
     p.oz.toFixed(5),
@@ -1505,8 +1561,11 @@ function runCutExport(caseDir, time, outDir, p) {
       '--nz',
       String(p.nz),
       '--field',
-      p.field,
+      p.field || '',
+      '--vector',
+      p.vector || '',
     ];
+    if (Array.isArray(p.extra)) args.push('--extra', p.extra.join(','));
     const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
@@ -1541,7 +1600,9 @@ async function runWorkerCut(caseDir, time, dir, p) {
       nx: p.nx,
       ny: p.ny,
       nz: p.nz,
-      field: p.field,
+      field: p.field || '',
+      vector: p.vector || '',
+      extra: Array.isArray(p.extra) ? p.extra : null,
     },
     180000,
   );
@@ -1570,11 +1631,11 @@ async function ensureCutPlane(caseDir, time, p) {
   const vtp = join(dir, 'cut_plane.vtp');
   const meta = join(dir, 'cut_plane.meta.json');
   const stampPath = join(dir, '.stamp');
-  const stamp = foamStamp(caseDir, time, p.field);
+  const stamp = p.field ? foamStamp(caseDir, time, p.field) : timeFolderStamp(caseDir, time);
   if (!stamp) {
     throw new Error(`case foam files missing under ${caseDir}/${time}`);
   }
-  const paramStamp = `${stamp}|${p.field}|${p.ox.toFixed(5)}|${p.oy.toFixed(5)}|${p.oz.toFixed(5)}|${p.nx.toFixed(4)}|${p.ny.toFixed(4)}|${p.nz.toFixed(4)}|arrays=U,magU,p,T`;
+  const paramStamp = `${stamp}|${p.field}|${p.ox.toFixed(5)}|${p.oy.toFixed(5)}|${p.oz.toFixed(5)}|${p.nx.toFixed(4)}|${p.ny.toFixed(4)}|${p.nz.toFixed(4)}|${cutArraysKey(p)}`;
   const fresh =
     existsSync(vtp) &&
     existsSync(meta) &&
@@ -1613,14 +1674,9 @@ async function ensureIsoSurface(caseDir, time, p) {
 
 
 
-function isoVolParamsFromUrl(u) {
+export function isoVolParamsFromUrl(u) {
   const iso_value_low = Number(u.searchParams.get('iso_value_low') ?? u.searchParams.get('low') ?? '0.25');
   const iso_value_high = Number(u.searchParams.get('iso_value_high') ?? u.searchParams.get('high') ?? '0.75');
-  const iso_scalar =
-    u.searchParams.get('iso_scalar') ||
-    u.searchParams.get('isoScalar') ||
-    'Velocity Magnitude';
-  const coloring = u.searchParams.get('coloring') || 'Pressure';
   const opacity = Number(u.searchParams.get('opacity') ?? '1');
   const vectorsRaw = u.searchParams.get('vectors');
   const vectors =
@@ -1628,8 +1684,10 @@ function isoVolParamsFromUrl(u) {
   return {
     iso_value_low: Number.isFinite(iso_value_low) ? iso_value_low : 0.25,
     iso_value_high: Number.isFinite(iso_value_high) ? iso_value_high : 0.75,
-    iso_scalar,
-    coloring,
+    // iso_scalar / isoScalar / coloring: legacy labels.
+    iso_field: fieldNameParam(u, ['iso_field'], ['iso_scalar', 'isoScalar']),
+    color_field: fieldNameParam(u, ['color_field'], ['coloring']),
+    vector: fieldNameParam(u, ['vector']),
     opacity: Number.isFinite(opacity) ? opacity : 1,
     vectors,
   };
@@ -1639,10 +1697,11 @@ function isoVolCacheKey(caseDir, time, p) {
   const raw = [
     caseDir,
     time,
-    p.iso_scalar,
+    p.iso_field,
     p.iso_value_low,
     p.iso_value_high,
-    p.coloring,
+    p.color_field,
+    p.vector,
     p.opacity,
     p.vectors,
   ].join('|');
@@ -1660,14 +1719,16 @@ function runIsoVolExport(caseDir, time, outDir, p) {
       String(time),
       '--out-dir',
       outDir,
-      '--iso-scalar',
-      p.iso_scalar || 'Velocity Magnitude',
+      '--iso-field',
+      p.iso_field || '',
       '--iso-value-low',
       String(p.iso_value_low),
       '--iso-value-high',
       String(p.iso_value_high),
-      '--coloring',
-      p.coloring || 'Pressure',
+      '--color-field',
+      p.color_field || '',
+      '--vector',
+      p.vector || '',
       '--opacity',
       String(p.opacity),
       '--vectors',

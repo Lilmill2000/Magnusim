@@ -2,17 +2,18 @@
 
 Server-side path (documented; match desktop Inc 29a):
   case volume at time (case_volume.load_volume; legacy .cfddesk-prepared.vtu
-  only as fallback) -> ensure point-data
-  magU (derived from U when needed) / p -> map normalized low/high (defaults
-  0.25/0.75) onto live scalar min/max -> pyvista threshold([lo, hi], scalars=iso_field)
+  only as fallback) -> the iso field on the point data (a vector's magnitude
+  mag<X> derived when needed) -> map normalized low/high (defaults 0.25/0.75)
+  onto live field min/max -> pyvista threshold([lo, hi], scalars=iso_field)
   -> extract_surface binary VTP for vtk.js Geometry. Not an Iso Surface contour
-  rebrand; volume cells from threshold (meta n_cells). U is copied so Vectors draws live glyphs.
+  rebrand; volume cells from threshold (meta n_cells). The case's velocity
+  vector is carried so Vectors draws live glyphs.
 
-Banked defaults (Inc16e / 29a / post-form-iso-volume):
-  Iso scalar=Velocity Magnitude (-> magU), Iso value dual-handle 0.25/0.75
-  normalized (no numeric endpoint labels), Coloring=Pressure, Vectors=off,
-  Opacity=1. Default mid-range MUST yield nonzero cells.
-Honest empty: inverted (low>high) or empty/non-finite scalars -> n_cells=0.
+Fields are names (a scalar by its own name, a vector X as magX); '' is the
+case's default shown field. Iso value dual-handle 0.25/0.75 normalized,
+Vectors=off, Opacity=1 (banked Inc16e / 29a form). Default mid-range MUST
+yield nonzero cells.
+Honest empty: inverted (low>high) or empty/non-finite field -> n_cells=0.
 """
 from __future__ import annotations
 
@@ -28,73 +29,22 @@ import pyvista as pv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import scale_kinematic  # noqa: E402
 from case_volume import load_volume  # noqa: E402
-from result_names import point_shown_field  # noqa: E402
+from result_names import (  # noqa: E402
+    dataset_vector,
+    default_shown_field,
+    filter_fields,
+    foam_sources,
+)
 
 APPROACH = (
     "server-side volume threshold: Vite /api/iso-volume -> export_iso_volume.py "
     "reads the case volume at time (OpenFOAM fields; legacy prepared VTU fallback) point-data "
-    "(magU derived from U when needed; p) -> map normalized low/high onto live "
-    "scalar min/max -> pyvista threshold([mapped_lo, mapped_hi], scalars=iso_field) "
+    "(a vector's magnitude derived when needed) -> map normalized low/high onto live "
+    "field min/max -> pyvista threshold([mapped_lo, mapped_hi], scalars=iso_field) "
     "-> extract_surface binary VTP for vtk.js. Not an Iso Surface contour rebrand. "
-    "U is copied onto the threshold surface so the viewport can draw live vector glyphs."
+    "The case's velocity vector is copied onto the threshold surface so the viewport "
+    "can draw live vector glyphs."
 )
-
-
-def field_variable_to_scalar(label: str) -> str:
-    key = (label or "").strip().lower()
-    if key in ("velocity magnitude", "magu", "|u|", "u magnitude", "velocity", "u"):
-        return "magU"
-    if key in ("pressure", "p", "kinematic pressure", "pressure (p)"):
-        return "p"
-    return (label or "magU").strip() or "magU"
-
-
-def resolve_iso_scalar(label: str, dataset: pv.DataSet) -> str:
-    mapped = field_variable_to_scalar(label)
-    key = (label or "").strip().lower()
-    if key in ("velocity magnitude", "magu", "|u|", "u magnitude", "velocity", "u"):
-        candidates = ["magU", "U", mapped]
-    elif key in ("pressure", "p", "kinematic pressure", "pressure (p)"):
-        candidates = ["p", "p_rgh", "Pressure", mapped]
-    else:
-        candidates = [mapped, "magU", "p"]
-    for name in candidates:
-        if name and (name in dataset.point_data or name in dataset.cell_data):
-            if name == "U":
-                return "magU"
-            return name
-    if "U" in dataset.point_data or "U" in dataset.cell_data:
-        return "magU"
-    raise RuntimeError(f"Iso scalar {label!r} not on dataset (tried {candidates})")
-
-
-def resolve_coloring_scalar(label: str, dataset: pv.DataSet) -> str | None:
-    mapped = field_variable_to_scalar(label)
-    key = (label or "").strip().lower()
-    if key in ("velocity magnitude", "magu", "|u|", "u magnitude", "velocity", "u"):
-        candidates = ["magU", "U", mapped]
-    elif key in ("pressure", "p", "kinematic pressure", "pressure (p)"):
-        candidates = ["p", "p_rgh", "Pressure", mapped]
-    else:
-        candidates = [mapped, "p", "magU"]
-    for name in candidates:
-        if not name:
-            continue
-        if name == "U":
-            if "magU" in dataset.point_data or "magU" in dataset.cell_data:
-                return "magU"
-            continue
-        if name in dataset.point_data or name in dataset.cell_data:
-            return name
-    return None
-
-
-def ensure_contour_scalars(grid: pv.DataSet, scalar_name: str) -> pv.DataSet:
-    """Point data the threshold needs (a vector's magnitude derived when needed)."""
-    try:
-        return point_shown_field(grid, scalar_name, pass_cell_data=False)
-    except RuntimeError as exc:
-        raise RuntimeError(f"{scalar_name!r} unavailable for iso volume: {exc}") from exc
 
 
 def map_normalized_range(
@@ -137,27 +87,16 @@ def asset_sha256(path: Path) -> str:
 def threshold_iso_volume(
     grid: pv.DataSet,
     *,
-    iso_scalar: str,
+    iso_field: str = "",
     iso_value_low: float,
     iso_value_high: float,
-    coloring: str,
+    color_field: str = "",
+    vector: str = "",
+    default: str = "",
 ) -> tuple:
-    iso_field = resolve_iso_scalar(iso_scalar, grid)
-    src = ensure_contour_scalars(grid, iso_field)
-    if "U" not in src.point_data and "U" in src.cell_data:
-        try:
-            src = src.cell_data_to_point_data()
-        except Exception:
-            pass
-    color_want = resolve_coloring_scalar(coloring, src)
-    if color_want == "magU" and "magU" not in src.point_data:
-        src = ensure_contour_scalars(src, "magU")
-    elif color_want and color_want not in src.point_data and color_want in src.cell_data:
-        try:
-            src = src.cell_data_to_point_data()
-        except Exception:
-            pass
-
+    src, iso_field, color_field, vector = filter_fields(
+        grid, field=iso_field, color_field=color_field, vector=vector, default=default, what="Iso field"
+    )
     arr = np.asarray(src.point_data[iso_field], dtype=float)
     smin = float(np.nanmin(arr)) if arr.size else 0.0
     smax = float(np.nanmax(arr)) if arr.size else 0.0
@@ -189,10 +128,6 @@ def threshold_iso_volume(
     if empty and reason == "ok":
         reason = "empty_threshold"
 
-    color_field = resolve_coloring_scalar(coloring, vol) if n_points else color_want
-    if color_field is None:
-        color_field = resolve_coloring_scalar(coloring, src)
-
     pts = np.asarray(vol.points, dtype=float) if n_points else np.zeros((0, 3))
     point_checksum = float(pts.sum()) if pts.size else 0.0
     mesh_rms = float(np.sqrt(np.mean(pts * pts))) if pts.size else 0.0
@@ -208,14 +143,13 @@ def threshold_iso_volume(
             surface = pv.PolyData()
 
     meta = {
-        "iso_scalar": str(iso_scalar),
         "iso_value_low": lo_frac,
         "iso_value_high": hi_frac,
         "mapped_low": float(mapped_lo),
         "mapped_high": float(mapped_hi),
         "iso_field": str(iso_field),
-        "coloring": str(coloring),
         "coloring_field": color_field,
+        "vector_field": vector or None,
         "scalar_min": smin,
         "scalar_max": smax,
         "n_cells": n_cells,
@@ -229,9 +163,10 @@ def threshold_iso_volume(
         "mesh_checksum": mesh_checksum(pts, n_cells),
         "vectors_live": bool(
             (not empty)
+            and vector
             and (
-                "U" in getattr(surface, "point_data", {})
-                or "U" in getattr(vol, "point_data", {})
+                vector in getattr(surface, "point_data", {})
+                or vector in getattr(vol, "point_data", {})
             )
         ),
         "vectors_persist_only": False,
@@ -252,34 +187,35 @@ def export_iso_volume(
     time: str,
     out_dir: Path,
     *,
-    iso_scalar: str = "Velocity Magnitude",
+    iso_field: str = "",
     iso_value_low: float = 0.25,
     iso_value_high: float = 0.75,
-    coloring: str = "Pressure",
+    color_field: str = "",
+    vector: str = "",
     opacity: float = 1.0,
     vectors: bool = False,
 ) -> dict:
     case_dir = Path(case_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    u_path = case_dir / str(time) / "U"
-    p_path = case_dir / str(time) / "p"
     # Shared loader (see export_iso_surface): runs never write the legacy
     # .cfddesk-prepared.vtu, so it is only a fallback, not a requirement.
     mesh, vtu_path = load_volume(case_dir, str(time))
     if int(getattr(mesh, "n_cells", 0) or 0) == 0:
         raise RuntimeError("volume has 0 cells; cannot threshold")
-    # Kinematic fields (p) in Pa, like every other result view: the iso value
-    # the page sends is in the units its legend shows. This process loaded its
+    # Kinematic fields in Pa, like every other result view: the iso value the
+    # page sends is in the units its legend shows. This process loaded its
     # own copy of the volume, so scaling it in place is safe.
     scale_kinematic(mesh, case_dir)
 
     surface, meta = threshold_iso_volume(
         mesh,
-        iso_scalar=iso_scalar,
+        iso_field=iso_field,
         iso_value_low=iso_value_low,
         iso_value_high=iso_value_high,
-        coloring=coloring,
+        color_field=color_field,
+        vector=dataset_vector(case_dir, str(time), mesh, vector),
+        default=default_shown_field(case_dir, str(time)),
     )
     out_vtp = out_dir / "iso_volume.vtp"
     if meta["empty"]:
@@ -293,9 +229,9 @@ def export_iso_volume(
             "case_dir": str(case_dir),
             "time": str(time),
             "source_vtu": str(vtu_path),
-            "source_foam_U": str(u_path) if u_path.is_file() else None,
-            "source_foam_p": str(p_path) if p_path.is_file() else None,
-            "u_from_case": bool(u_path.is_file()),
+            "source_foam": foam_sources(
+                case_dir / str(time), (meta["iso_field"], meta["coloring_field"], meta["vector_field"])
+            ),
             "opacity": float(opacity),
             "vectors": bool(vectors),
             "vectors_actor": False,
@@ -330,10 +266,11 @@ def main():
     ap.add_argument("--case", type=Path, required=True, help="OpenFOAM case directory")
     ap.add_argument("--time", default="50")
     ap.add_argument("--out-dir", type=Path, required=True)
-    ap.add_argument("--iso-scalar", default="Velocity Magnitude")
+    ap.add_argument("--iso-field", default="", help="shown field to threshold ('' = the case's default)")
     ap.add_argument("--iso-value-low", type=float, default=0.25)
     ap.add_argument("--iso-value-high", type=float, default=0.75)
-    ap.add_argument("--coloring", default="Pressure")
+    ap.add_argument("--color-field", default="", help="shown field to colour by ('' = the case's default)")
+    ap.add_argument("--vector", default="", help="vector to carry for glyphs ('' = the case's velocity)")
     ap.add_argument("--opacity", type=float, default=1.0)
     ap.add_argument("--vectors", type=int, default=0)
     args = ap.parse_args()
@@ -341,10 +278,11 @@ def main():
         args.case,
         args.time,
         args.out_dir,
-        iso_scalar=args.iso_scalar,
+        iso_field=args.iso_field,
         iso_value_low=args.iso_value_low,
         iso_value_high=args.iso_value_high,
-        coloring=args.coloring,
+        color_field=args.color_field,
+        vector=args.vector,
         opacity=args.opacity,
         vectors=bool(args.vectors),
     )

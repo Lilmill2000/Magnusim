@@ -24,6 +24,7 @@ import case_units  # noqa: E402
 import case_volume  # noqa: E402
 import export_case_field  # noqa: E402
 import export_iso_surface  # noqa: E402
+import export_iso_volume  # noqa: E402
 import export_plot_over_path  # noqa: E402
 
 RHO = 1.2
@@ -65,7 +66,7 @@ def _mesh(arrays: dict[str, float]) -> pv.UnstructuredGrid:
 def _patch_volume(monkeypatch, mesh) -> None:
     volume_cache.clear()
     monkeypatch.setattr(case_volume, "load_volume", lambda case, time, **_kw: (mesh.copy(), "test"))
-    for mod in (export_iso_surface, export_plot_over_path):
+    for mod in (export_iso_surface, export_iso_volume, export_plot_over_path):
         monkeypatch.setattr(mod, "load_volume", lambda case, time, **_kw: (mesh.copy(), "test"))
 
 
@@ -130,13 +131,17 @@ def test_tensor_fields_are_never_offered(tmp_path: Path, monkeypatch):
     assert json.loads((out / "k.meta.json").read_text(encoding="utf-8"))["fields_available"] == ["k", "p", "magU"]
 
 
-def test_field_names_are_checked(tmp_path: Path):
+def test_field_names_are_checked(tmp_path: Path, monkeypatch):
     case = _case(tmp_path, {"rho": RHO}, {"p": np.zeros(8)})
-    for bad in ("../p", "p;rm", "", "1p"):
-        res = _rpc("filter.case_field", {"case_dir": str(case), "time": "1", "field": bad or " ", "out_dir": str(tmp_path / "o")})
+    for bad in ("../p", "p;rm", "1p"):
+        res = _rpc("filter.case_field", {"case_dir": str(case), "time": "1", "field": bad, "out_dir": str(tmp_path / "o")})
         assert "error" in res, bad
     with pytest.raises(ValueError):
         export_case_field.series_field_range(case, "../p")
+    # No field: the case's default shown field.
+    _patch_volume(monkeypatch, _mesh({"p": 0.0}))
+    res = _rpc("filter.case_field", {"case_dir": str(case), "time": "1", "field": " ", "out_dir": str(tmp_path / "d")})
+    assert res["result"]["field"] == "p", res
 
 
 def test_iso_surface_and_plot_over_path_show_pressure_in_pa(tmp_path: Path, monkeypatch):
@@ -152,9 +157,7 @@ def test_iso_surface_and_plot_over_path_show_pressure_in_pa(tmp_path: Path, monk
 
     # 6 Pa = 5 m^2/s^2 x 1.2 -> the surface p = 5 kinematic sits at x = 0.2.
     out = tmp_path / "iso"
-    export_iso_surface.export_iso_surface(
-        case, "1", out, iso_scalar="Pressure", iso_value=5.0 * RHO, coloring="Pressure"
-    )
+    export_iso_surface.export_iso_surface(case, "1", out, iso_field="p", iso_value=5.0 * RHO, color_field="p")
     iso = pv.read(str(next(out.glob("*.vtp"))))
     assert iso.n_points > 0
     assert np.allclose(iso.points[:, 0], 0.2, atol=1e-6)
@@ -162,7 +165,7 @@ def test_iso_surface_and_plot_over_path_show_pressure_in_pa(tmp_path: Path, monk
 
     out2 = tmp_path / "pop"
     series = export_plot_over_path.export_plot_over_path(
-        case, "1", out2, points=[[0.0, 0.2, 0.2], [0.4, 0.2, 0.2]], subdivisions=4, field_variable="Pressure"
+        case, "1", out2, points=[[0.0, 0.2, 0.2], [0.4, 0.2, 0.2]], subdivisions=4, field="p"
     )
     vals = [v for v in series["values"] if v is not None]
     assert vals and abs(max(vals) - 10.0 * RHO) < 1e-6 and abs(min(vals)) < 1e-6
@@ -254,6 +257,181 @@ def test_inspect_needs_a_written_frame(tmp_path: Path, monkeypatch):
     res = _rpc("filter.inspect", {"case_dir": str(case), "time": "1", "out_dir": str(tmp_path / "o"),
                                   "x": 0.2, "y": 0.2, "z": 0.2})
     assert "time_not_found" in res["error"]["message"]
+
+
+def _t_case(tmp_path: Path) -> tuple[Path, pv.UnstructuredGrid]:
+    """A case that writes only T, rising along x (290 K at x=0 to 310 K at x=0.4)."""
+    case = _case(tmp_path, {"rho": RHO, "kinematic_fields": []}, {"T": np.linspace(290.0, 310.0, 64)})
+    mesh = _mesh({})
+    mesh.point_data["T"] = 290.0 + mesh.points[:, 0] / 0.4 * 20.0
+    mesh.cell_data["T"] = 290.0 + mesh.cell_centers().points[:, 0] / 0.4 * 20.0
+    return case, mesh
+
+
+def test_iso_and_plot_work_on_a_t_only_case(tmp_path: Path, monkeypatch):
+    case, mesh = _t_case(tmp_path)
+    _patch_volume(monkeypatch, mesh)
+    # Named, and '' (the case's default field, T): the same contour at x = 0.2.
+    for asked in ("T", ""):
+        out = tmp_path / f"iso-{asked or 'default'}"
+        meta = export_iso_surface.export_iso_surface(case, "1", out, iso_field=asked, iso_value=300.0)
+        iso = pv.read(str(out / "iso_surface.vtp"))
+        assert iso.n_points > 0 and np.allclose(iso.points[:, 0], 0.2, atol=1e-6)
+        assert (meta["iso_field"], meta["coloring_field"], meta["vector_field"]) == ("T", "T", None)
+        assert meta["source_foam"] == {"T": str(case / "1" / "T")}
+        assert "iso_scalar" not in meta and "source_foam_U" not in meta
+    vol = export_iso_volume.export_iso_volume(case, "1", tmp_path / "iv", iso_field="T")
+    assert vol["iso_field"] == "T" and vol["n_cells"] > 0
+    with pytest.raises(RuntimeError, match="magU"):
+        export_iso_surface.export_iso_surface(case, "1", tmp_path / "nou", iso_field="magU", iso_value=1.0)
+
+    series = export_plot_over_path.export_plot_over_path(
+        case, "1", tmp_path / "pop", points=[[0.0, 0.2, 0.2], [0.4, 0.2, 0.2]], subdivisions=4, field="T"
+    )
+    assert series["field_name"] == "T"
+    assert abs(min(series["values"]) - 290.0) < 1e-6 and abs(max(series["values"]) - 310.0) < 1e-6
+    default = export_plot_over_path.export_plot_over_path(
+        case, "1", tmp_path / "pop2", points=[[0.0, 0.2, 0.2], [0.4, 0.2, 0.2]], subdivisions=4
+    )
+    assert default["field_name"] == "T" and default["values"] == series["values"]
+
+
+def test_iso_colours_by_a_vector_magnitude_and_carries_the_vector(tmp_path: Path, monkeypatch):
+    case, mesh = _t_case(tmp_path)
+    _foam_file(case / "1" / "W", "volVectorField", "uniform (0 0 2)")
+    mesh.point_data["W"] = np.tile([0.0, 0.0, 2.0], (mesh.n_points, 1))
+    mesh.cell_data["W"] = np.tile([0.0, 0.0, 2.0], (mesh.n_cells, 1))
+    _patch_volume(monkeypatch, mesh)
+    out = tmp_path / "iso"
+    meta = export_iso_surface.export_iso_surface(case, "1", out, iso_field="T", iso_value=300.0, color_field="W")
+    iso = pv.read(str(out / "iso_surface.vtp"))
+    assert (meta["coloring_field"], meta["vector_field"], meta["vectors_live"]) == ("magW", "W", True)
+    assert np.allclose(iso.point_data["magW"], 2.0) and "W" in iso.point_data
+
+
+def test_cut_plane_keeps_only_the_shown_field_and_the_asked_extras(tmp_path: Path, monkeypatch):
+    case, mesh = _t_case(tmp_path)
+    _scalar_file(case / "1" / "Y", "Y", np.ones(64))
+    mesh.point_data["Y"] = np.ones(mesh.n_points)
+    mesh.cell_data["Y"] = np.ones(mesh.n_cells)
+    _patch_volume(monkeypatch, mesh)
+
+    def cut(name: str, **params) -> pv.PolyData:
+        out = tmp_path / name
+        res = _rpc("filter.cut_plane", {"case_dir": str(case), "time": "1", "out_dir": str(out),
+                                        "ox": 0.2, "oy": 0.2, "oz": 0.2, "nx": 0, "ny": 1, "nz": 0, **params})
+        assert "result" in res, res
+        return pv.read(str(out / "cut_plane.vtp"))
+
+    for name, params in (("named", {"field": "T", "extra": ""}), ("default", {"extra": []})):
+        data = cut(name, **params)
+        assert set(data.point_data.keys()) | set(data.cell_data.keys()) == {"T"}, name
+    # No extra at all (today's page): every scalar the frame wrote.
+    data = cut("all", field="T")
+    assert set(data.point_data.keys()) | set(data.cell_data.keys()) == {"T", "Y"}
+    data = cut("extra", field="T", extra=["Y", "missing"])
+    assert set(data.point_data.keys()) | set(data.cell_data.keys()) == {"T", "Y"}
+    meta = json.loads((tmp_path / "extra" / "cut_plane.meta.json").read_text(encoding="utf-8"))
+    assert (meta["field"], meta["vector_field"], meta["extra"]) == ("T", None, ["Y"])
+
+
+def test_cut_plane_for_a_page_that_names_no_extra_keeps_p_and_t(tmp_path: Path, monkeypatch):
+    """The page colours a cut plane's glyphs by p or T and reads inspect picks from
+    the slice: with no extra named the slice keeps them; extra='' keeps only the
+    field, the vector and its magnitude."""
+    case = _case(tmp_path, {"rho": RHO, "kinematic_fields": ["p"]}, {"p": np.full(64, 10.0), "T": np.full(64, 300.0)})
+    _foam_file(case / "1" / "U", "volVectorField", "uniform (1 0 0)")
+    mesh = _mesh({"p": 10.0, "T": 300.0})
+    mesh.point_data["U"] = np.tile([1.0, 0.0, 0.0], (mesh.n_points, 1))
+    mesh.cell_data["U"] = np.tile([1.0, 0.0, 0.0], (mesh.n_cells, 1))
+    _patch_volume(monkeypatch, mesh)
+
+    def cut(name: str, **params) -> pv.PolyData:
+        out = tmp_path / name
+        res = _rpc("filter.cut_plane", {"case_dir": str(case), "time": "1", "out_dir": str(out), "field": "magU",
+                                        "ox": 0.2, "oy": 0.2, "oz": 0.2, "nx": 0, "ny": 1, "nz": 0, **params})
+        assert "result" in res, res
+        return pv.read(str(out / "cut_plane.vtp"))
+
+    data = cut("page")
+    assert {"magU", "U", "p", "T"} <= set(data.point_data.keys())
+    assert np.allclose(data.point_data["p"], 10.0 * RHO) and np.allclose(data.point_data["T"], 300.0)
+    data = cut("none", extra="")
+    assert set(data.point_data.keys()) | set(data.cell_data.keys()) == {"magU", "U"}
+
+    # The CLI follows the same rule: --extra left out keeps them, --extra "" does not.
+    import export_cut_plane
+
+    monkeypatch.setattr(export_cut_plane, "read_volume_at_time", lambda c, t: (mesh.copy(), "test"))
+    for name, extra in (("cli-page", None), ("cli-none", "")):
+        export_cut_plane.export_cut_plane(case, "1", tmp_path / name, ox=0.2, oy=0.2, oz=0.2, nx=0, ny=1, nz=0,
+                                          field="magU", extra=extra)
+    page = pv.read(str(tmp_path / "cli-page" / "cut_plane.vtp"))
+    none = pv.read(str(tmp_path / "cli-none" / "cut_plane.vtp"))
+    assert {"p", "T"} <= set(page.point_data.keys())
+    assert set(none.point_data.keys()) | set(none.cell_data.keys()) == {"magU", "U"}
+
+
+def _w_case(tmp_path: Path, sidecar: dict, vectors=("W",)) -> tuple[Path, pv.UnstructuredGrid]:
+    """A case whose velocity is W (no U), with p, plus any other vectors given."""
+    case = _case(tmp_path, sidecar, {"p": np.full(64, 10.0)})
+    mesh = _mesh({"p": 10.0})
+    for name in vectors:
+        _foam_file(case / "1" / name, "volVectorField", "uniform (1 0 0)")
+        mesh.point_data[name] = np.tile([1.0, 0.0, 0.0] if name == "W" else [0.0, 0.0, 3.0], (mesh.n_points, 1))
+        mesh.cell_data[name] = np.tile([1.0, 0.0, 0.0] if name == "W" else [0.0, 0.0, 3.0], (mesh.n_cells, 1))
+    return case, mesh
+
+
+VELOCITY_W = {"key": "W", "kind": "vector", "unit_quantity": "velocity", "label": "Wind"}
+
+
+def test_particle_trace_follows_the_cases_velocity_vector(tmp_path: Path, monkeypatch):
+    sidecar = {"rho": RHO, "kinematic_fields": [], "result_fields": [
+        {"key": "B", "kind": "vector", "unit_quantity": "magnetic_field"}, VELOCITY_W,
+    ]}
+    case, mesh = _w_case(tmp_path, sidecar, vectors=("B", "W"))
+    _patch_volume(monkeypatch, mesh)
+    out = tmp_path / "pt"
+    res = _rpc("filter.particle_trace", {"case_dir": str(case), "time": "1", "out_dir": str(out)})
+    assert "result" in res, res
+    data = pv.read(str(out / "particle_trace.vtp"))
+    assert data.n_points > 0
+    assert {"W", "magW", "p"} <= set(data.point_data.keys())
+    assert "U" not in data.point_data and "magU" not in data.point_data and "B" not in data.point_data
+    assert np.allclose(data.point_data["magW"], 1.0)
+    # kinematic_fields [] keeps p as stored.
+    assert np.allclose(data.point_data["p"], 10.0)
+    meta = json.loads((out / "particle_trace.meta.json").read_text(encoding="utf-8"))
+    assert (meta["vector_field"], meta["coloring_field"]) == ("W", "magW")
+    assert meta["source_foam"]["W"] == str((case / "1" / "W").resolve())
+    assert "magU_min" not in meta and abs(meta["vector_magnitude_max"] - 1.0) < 1e-9
+
+    # A coloring field: the paths carry only it beside the vector.
+    out2 = tmp_path / "pt-colour"
+    res = _rpc("filter.particle_trace", {"case_dir": str(case), "time": "1", "out_dir": str(out2), "coloring": "magB"})
+    assert "result" in res, res
+    data = pv.read(str(out2 / "particle_trace.vtp"))
+    assert {"W", "magW", "magB"} <= set(data.point_data.keys()) and "p" not in data.point_data
+    assert np.allclose(data.point_data["magB"], 3.0)
+
+
+def test_particle_trace_sole_vector_on_a_fresh_read(tmp_path: Path, monkeypatch):
+    import export_particle_trace
+
+    case, mesh = _w_case(tmp_path, {"rho": RHO, "kinematic_fields": ["p"]})
+    monkeypatch.setattr(export_particle_trace, "read_volume_at_time", lambda c, t: (mesh.copy(), "test"))
+    meta = export_particle_trace.export_particle_trace(case, "1", tmp_path / "pt")
+    data = pv.read(str(tmp_path / "pt" / "particle_trace.vtp"))
+    assert meta["vector_field"] == "W" and data.n_points > 0
+    assert np.allclose(data.point_data["p"], 10.0 * RHO)
+
+
+def test_particle_trace_without_a_velocity_says_so(tmp_path: Path, monkeypatch):
+    case, mesh = _t_case(tmp_path)
+    _patch_volume(monkeypatch, mesh)
+    res = _rpc("filter.particle_trace", {"case_dir": str(case), "time": "1", "out_dir": str(tmp_path / "pt")})
+    assert res["error"]["message"] == "This case has no velocity field to trace", res
 
 
 def test_writing_a_case_stamps_its_kinematic_fields(tmp_path: Path):

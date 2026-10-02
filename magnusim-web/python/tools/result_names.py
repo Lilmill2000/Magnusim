@@ -153,6 +153,23 @@ def has_shown_field(dataset: Any, name: str) -> bool:
     )
 
 
+def resolve_shown_field(dataset: Any, name: str, default: str = "") -> str:
+    """The shown field a tool works on. A named field must be on the dataset (a
+    vector's own name means its magnitude); '' means ``default``, else the first
+    field the dataset shows. '' when nothing fits."""
+    name = str(name or "").strip()
+    if name:
+        for data in (dataset.point_data, dataset.cell_data):
+            if name in data and _is_vector(data[name]):
+                name = "mag" + name
+                break
+        return name if has_shown_field(dataset, name) else ""
+    for cand in (default, *dataset_shown_fields(dataset)):
+        if cand and has_shown_field(dataset, cand):
+            return cand
+    return ""
+
+
 def ensure_shown_field(dataset: Any, name: str) -> None:
     """Put shown field ``name`` on the dataset: as read, or for ``mag<X>`` the
     magnitude of vector ``X`` on the point data and the cell data wherever ``X`` is."""
@@ -181,6 +198,34 @@ def point_shown_field(dataset: Any, name: str, *, pass_cell_data: bool = True) -
         if name in out.point_data or (base and _derive_mag(out.point_data, name, base)):
             return out
     raise RuntimeError(f"mesh missing {name}")
+
+
+def filter_fields(
+    grid: Any, *, field: str, color_field: str = "", vector: str = "", default: str = "", what: str = "field"
+) -> tuple[Any, str, str, str]:
+    """For a volume filter (contour, threshold): ``(dataset, field, color, vector)``
+    with the filtered field, the colour field and the vector on the points (cells
+    promoted when needed). The colour falls back to the filtered field when it is
+    not on the dataset; the vector is dropped when it is not."""
+    name = resolve_shown_field(grid, field, default)
+    if not name:
+        if field:
+            raise RuntimeError(f"{what} {field!r} is not in this result")
+        raise RuntimeError(f"this result has no field for the {what}")
+    src = point_shown_field(grid, name, pass_cell_data=False)
+    vec = vector if vector and (vector in src.point_data or vector in src.cell_data) else ""
+    if vec and vec not in src.point_data:
+        try:
+            src = src.cell_data_to_point_data()
+        except Exception:
+            vec = ""
+    color = resolve_shown_field(src, color_field, default) or name
+    if color != name:
+        try:
+            src = point_shown_field(src, color, pass_cell_data=False)
+        except RuntimeError:
+            color = name
+    return src, name, color, vec
 
 
 def case_result_fields(case_dir: Path) -> list[dict[str, str]] | None:
@@ -253,3 +298,25 @@ def velocity_vector(case_dir: Path, time: str, requested: str = "") -> str | Non
         return None
     vectors = [n for n in names if _vector_file(time_dir, n)]
     return vectors[0] if len(vectors) == 1 else None
+
+
+def dataset_vector(case_dir: Path, time: str, dataset: Any, requested: str = "") -> str:
+    """The vector a tool carries on ``dataset``: ``velocity_vector`` when the dataset
+    holds it, else the dataset's only vector; '' when neither."""
+    vectors = dataset_vectors(dataset)
+    vec = velocity_vector(case_dir, time, requested)
+    if vec in vectors:
+        return str(vec)
+    return vectors[0] if len(vectors) == 1 else ""
+
+
+def foam_sources(time_dir: Path, names) -> dict[str, str]:
+    """{shown name: the OpenFOAM file it reads} for the names the time folder holds."""
+    out: dict[str, str] = {}
+    for name in names:
+        if not name or name in out:
+            continue
+        src = foam_source(Path(time_dir), name)
+        if src is not None:
+            out[name] = str(Path(time_dir) / src[0])
+    return out

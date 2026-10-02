@@ -1,4 +1,4 @@
-"""Particle traces: streamlines of OpenFOAM U, then tube glyphs.
+"""Particle traces: streamlines of the case's velocity vector, then tube glyphs.
 
 Volume: .cfddesk-prepared.vtu if present, otherwise OpenFOAMReader at the
 requested time (same path as the cutting plane).
@@ -38,7 +38,16 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 from case_units import scale_kinematic  # noqa: E402
 from export_cut_plane import read_volume_at_time  # noqa: E402
-from result_names import dataset_vectors, ensure_shown_field  # noqa: E402
+from result_names import (  # noqa: E402
+    dataset_vector,
+    dataset_vectors,
+    ensure_shown_field,
+    foam_sources,
+    resolve_shown_field,
+    shown_fields,
+)
+
+NO_VELOCITY = "This case has no velocity field to trace"
 
 SKIP_PATCH_TYPES = {
     "wall",
@@ -1366,23 +1375,26 @@ def trace_from_seeds(
     step: float,
     cell_size: float,
     umin: float,
+    vector: str,
+    carry=(),
 ) -> tuple[pv.PolyData, dict]:
-    """Integrate the velocity field with VTK's stream tracer (RK4/5).
+    """Integrate the velocity field ``vector`` with VTK's stream tracer (RK4/5).
 
-    The tracer interpolates U inside the cell that contains the particle, so a
-    path can never leave the fluid through a wall; it ends where the flow
-    leaves the mesh (outlet), stalls (terminal speed) or after max_len.
+    The tracer interpolates the velocity inside the cell that contains the
+    particle, so a path can never leave the fluid through a wall; it ends where
+    the flow leaves the mesh (outlet), stalls (terminal speed) or after max_len.
+    The paths carry the vector and the ``carry`` fields interpolated on them.
     """
     if int(seeds.n_points) < 1:
         return empty_poly(), {"n_paths": 0, "integrator": "vtkStreamTracer"}
-    speeds = np.linalg.norm(np.asarray(grid.point_data["U"], dtype=float)[:, :3], axis=1)
+    speeds = np.linalg.norm(np.asarray(grid.point_data[vector], dtype=float)[:, :3], axis=1)
     umax = float(np.nanmax(speeds)) if speeds.size else 1.0
     terminal = max(1e-9, 1e-4 * umax)
 
     def run(source: pv.PolyData, direction: str):
         return grid.streamlines_from_source(
             source,
-            vectors="U",
+            vectors=vector,
             integrator_type=45,
             integration_direction=direction,
             surface_streamlines=False,
@@ -1401,7 +1413,7 @@ def trace_from_seeds(
     # Direction per seed. "Trace both directions" integrates up- and
     # downstream from every seed. Otherwise each seed follows the flow *into*
     # the domain: forward from an inlet face, backward from an outlet face
-    # (where the fluid came from), decided from U at the seed against the
+    # (where the fluid came from), decided from the velocity at the seed against the
     # face's inward normal.
     jobs: list[tuple[pv.PolyData, str]] = []
     n_fwd = 0
@@ -1422,7 +1434,7 @@ def trace_from_seeds(
             inward[weak] = mid - seed_pts[weak]
         try:
             sampled = seeds.sample(grid)
-            U_seed = np.asarray(sampled.point_data["U"], dtype=float)[:, :3]
+            U_seed = np.asarray(sampled.point_data[vector], dtype=float)[:, :3]
         except Exception:
             U_seed = np.zeros_like(seed_pts)
         dots = np.einsum("ij,ij->i", U_seed, inward)
@@ -1451,18 +1463,17 @@ def trace_from_seeds(
             np.asarray(stream.points, dtype=float),
             lines=np.asarray(stream.lines, dtype=np.int64),
         )
-        if "U" in stream.point_data:
-            part.point_data["U"] = np.asarray(stream.point_data["U"], dtype=float)
-        if "p" in stream.point_data:
-            part.point_data["p"] = np.asarray(stream.point_data["p"], dtype=float)
+        for name in dict.fromkeys((vector, *carry)):
+            if name in stream.point_data:
+                part.point_data[name] = np.asarray(stream.point_data[name], dtype=float)
         parts.append(part)
     if not parts:
         return empty_poly(), {"n_paths": 0, "integrator": "vtkStreamTracer", "termination_reasons": reasons or None}
 
     poly = parts[0] if len(parts) == 1 else parts[0].merge(parts[1:], merge_points=False)
-    if "U" in poly.point_data:
-        U = np.asarray(poly.point_data["U"], dtype=float)
-        poly.point_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
+    if vector in poly.point_data:
+        vec = np.asarray(poly.point_data[vector], dtype=float)
+        poly.point_data["mag" + vector] = np.linalg.norm(vec[:, :3], axis=1)
     poly.point_data["along"] = _streamline_along(poly)
 
     lengths = _streamline_lengths(poly)
@@ -1482,7 +1493,7 @@ def trace_from_seeds(
     return poly, meta
 
 
-def point_data_grid(grid: pv.DataSet, vector: str = "U") -> pv.DataSet:
+def point_data_grid(grid: pv.DataSet, vector: str = "") -> pv.DataSet:
     """The grid with ``vector`` on its points (its cells promoted when it is only
     on cells). '' picks the grid's only vector; with none the grid comes back as is."""
     if not vector:
@@ -1546,45 +1557,63 @@ def export_particle_trace(
     region=None,
     prepared_grid=None,
     volume_source: str | None = None,
+    vector: str = "",
+    coloring: str = "",
 ):
+    """Streamlines of the case's velocity: ``vector`` when the frame wrote it, else
+    the case's velocity vector (``result_names.velocity_vector``), else the volume's
+    only vector. The paths carry the vector, its magnitude and ``coloring`` (a shown
+    field); with no ``coloring`` they carry every scalar the frame wrote, so the
+    viewer can colour by any of them."""
     case_dir = case_dir.resolve()
-    u_path = case_dir / str(time) / "U"
+    time_dir = case_dir / str(time)
     vtu_path = case_dir / ".cfddesk-prepared.vtu"
     if prepared_grid is not None:
-        # Worker cache is shared and kinematic: scale a shallow copy so the
-        # cached arrays are never touched and each kinematic field (the
-        # case's kinematic_fields) is scaled to Pa exactly once.
-        point_grid = prepared_grid.copy(deep=False)
-        scale_kinematic(point_grid, case_dir)
+        mesh = prepared_grid
         if volume_source is None:
             volume_source = "worker-cache"
-        mesh = prepared_grid
     else:
         mesh, volume_source = read_volume_at_time(case_dir, str(time))
-        if mesh is None or int(getattr(mesh, "n_cells", 0) or 0) < 1:
-            raise RuntimeError(f"volume read failed: {case_dir}")
-        if "U" not in mesh.point_data and "U" not in mesh.cell_data:
-            if not u_path.is_file():
-                raise FileNotFoundError(f"missing OpenFOAM U: {u_path}")
-            raise RuntimeError("volume has no vector U for particle trace")
-        point_grid = point_data_grid(mesh)
-        if "U" not in point_grid.point_data:
-            raise RuntimeError(
-                "No point-data U for particle trace (need vector U, not magU alone)"
-            )
-        # Pressure coloring in Pa: only the fields the case stores per unit
-        # density are scaled (a plugin case may already write p in Pa).
-        scale_kinematic(point_grid, case_dir)
     if mesh is None or int(getattr(mesh, "n_cells", 0) or 0) < 1:
         raise RuntimeError(f"volume read failed: {case_dir}")
-    if "U" not in getattr(point_grid, "point_data", {}):
-        raise RuntimeError(
-            "No point-data U for particle trace (need vector U, not magU alone)"
-        )
+    vec = dataset_vector(case_dir, str(time), mesh, vector)
+    if not vec:
+        raise RuntimeError(NO_VELOCITY)
+    # The worker cache is shared and stored as written: a shallow copy is
+    # scaled, so the cached arrays are never touched and each kinematic field
+    # (the case's kinematic_fields) is shown in Pa exactly once. A plugin case
+    # may already write p in Pa: only the listed fields are scaled.
+    point_grid = point_data_grid(mesh, vec)
+    if point_grid is mesh:
+        point_grid = mesh.copy(deep=False)
+    scale_kinematic(point_grid, case_dir)
+    if vec not in getattr(point_grid, "point_data", {}):
+        raise RuntimeError(f"No point-data {vec} for particle trace (need the vector, not its magnitude alone)")
     try:
-        point_grid.set_active_vectors("U")
+        point_grid.set_active_vectors(vec)
     except Exception:
         pass
+    mag_name = "mag" + vec
+    color_field = resolve_shown_field(point_grid, coloring) if coloring else ""
+    if color_field:
+        wanted = [color_field]
+    else:
+        # Every scalar the frame wrote (the viewer colours by any of them); the
+        # volume's own scalars when there is no time folder (legacy prepared VTU).
+        wanted = shown_fields(time_dir) or [
+            str(n) for n in point_grid.point_data.keys()
+            if not str(n).startswith("vtk") and np.asarray(point_grid.point_data[n]).ndim == 1
+        ]
+    carry: list[str] = []
+    for name in wanted:
+        if name in (vec, mag_name):
+            continue
+        try:
+            ensure_shown_field(point_grid, name)
+        except RuntimeError:
+            continue
+        if name in point_grid.point_data:
+            carry.append(name)
 
     bounds = point_grid.bounds
     smode = (seed_mode or "grid").strip().lower()
@@ -1632,7 +1661,7 @@ def export_particle_trace(
     n_cells_vol = int(getattr(point_grid, "n_cells", 0) or 1)
     cell_size = max(diag / max(n_cells_vol ** (1.0 / 3.0), 1.0), 1e-4)
     step = max(0.35 * cell_size, 1.5e-3)
-    umin = max(1e-3, 0.01 * (float(np.nanmax(np.linalg.norm(np.asarray(point_grid.point_data["U"])[:, :3], axis=1))) or 1.0))
+    umin = max(1e-3, 0.01 * (float(np.nanmax(np.linalg.norm(np.asarray(point_grid.point_data[vec])[:, :3], axis=1))) or 1.0))
 
     empty = False
     empty_reason = None
@@ -1658,6 +1687,8 @@ def export_particle_trace(
             step=step,
             cell_size=cell_size,
             umin=umin,
+            vector=vec,
+            carry=carry,
         )
         n_stream_lines = int(trace_meta.get("n_paths") or 0)
         if streams.n_points == 0 or n_stream_lines == 0:
@@ -1667,14 +1698,14 @@ def export_particle_trace(
             tubes = empty_poly()
         else:
             try:
-                ensure_shown_field(streams, "magU")
+                ensure_shown_field(streams, mag_name)
             except RuntimeError:
                 pass
             # Client builds cylinders / spheres / comets. Keep the raw lines
             # so Size and Representation can change without a re-export.
             tubes = streams
 
-    keep_pt = {"magU", "U", "p", "along", "TubeNormals", "Normals"}
+    keep_pt = {vec, mag_name, *carry, "along", "TubeNormals", "Normals"}
     for k in list(tubes.point_data.keys()):
         if k not in keep_pt:
             try:
@@ -1682,7 +1713,7 @@ def export_particle_trace(
             except Exception:
                 pass
     for k in list(tubes.cell_data.keys()):
-        if k not in ("magU",):
+        if k != mag_name:
             try:
                 del tubes.cell_data[k]
             except Exception:
@@ -1715,12 +1746,12 @@ def export_particle_trace(
     }
 
     mag = None
-    if "magU" in tubes.point_data and n_points:
-        mag = np.asarray(tubes.point_data["magU"], dtype=float)
+    if mag_name in tubes.point_data and n_points:
+        mag = np.asarray(tubes.point_data[mag_name], dtype=float)
 
     approach = (
         "server-side streamlines: Vite middleware -> export_particle_trace.py "
-        f"reads volume ({volume_source}) point-data U "
+        f"reads volume ({volume_source}) point-data {vec} "
         + (
             "-> even seeds on this case's inlet/outlet patches "
             if smode == "faces"
@@ -1734,9 +1765,9 @@ def export_particle_trace(
         "case_dir": str(case_dir),
         "time": time,
         "approach": approach,
-        "vector_field": "U",
-        "coloring": "Velocity Magnitude",
-        "coloring_field": "magU",
+        "vector_field": vec,
+        "coloring_field": color_field or mag_name,
+        "carried_fields": [n for n in dict.fromkeys((mag_name, *carry)) if n in tubes.point_data],
         "representation": "Cylinders",
         "seed_mode": smode,
         "seeds_h": int(seeds_h),
@@ -1771,17 +1802,16 @@ def export_particle_trace(
         "n_cells": n_cells,
         "bounds": list(map(float, tubes.bounds)) if n_points else list(map(float, bounds)),
         "mesh_checksum": mesh_checksum(pts, n_cells),
-        "magU_min": float(np.nanmin(mag)) if mag is not None and mag.size else None,
-        "magU_max": float(np.nanmax(mag)) if mag is not None and mag.size else None,
+        "vector_magnitude_min": float(np.nanmin(mag)) if mag is not None and mag.size else None,
+        "vector_magnitude_max": float(np.nanmax(mag)) if mag is not None and mag.size else None,
         "asset_bytes": len(vtp_bytes),
         "asset_sha256": vtp_sha,
         "source_vtu": str(vtu_path) if vtu_path.is_file() else None,
         "volume_source": volume_source,
-        "source_foam_U": str(u_path) if u_path.is_file() else None,
+        "source_foam": foam_sources(time_dir, (vec, *carry)),
         "proves_not_baked_only": True,
         "no_fake_solve": True,
         "no_line_fakes_as_cylinders": True,
-        "u_from_case": True,
     }
     if face_meta:
         meta.update(face_meta)
@@ -1849,6 +1879,8 @@ def main():
     ap.add_argument("--n-seeds", type=int, default=40)
     ap.add_argument("--density", type=float, default=10000.0)
     ap.add_argument("--region", type=str, default="")
+    ap.add_argument("--vector", default="", help="velocity vector to trace ('' = the case's velocity)")
+    ap.add_argument("--coloring", default="", help="shown field the paths carry ('' = every scalar)")
     args = ap.parse_args()
     if args.list_faces:
         cat = build_live_catalog(args.case.resolve())
@@ -1874,6 +1906,8 @@ def main():
         n_seeds=args.n_seeds,
         density=args.density,
         region=parse_region(args.region),
+        vector=args.vector,
+        coloring=args.coloring,
     )
 
 

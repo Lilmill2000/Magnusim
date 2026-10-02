@@ -1,13 +1,14 @@
 """W9: on-demand Plot-over-path live sample from real OpenFOAM case fields.
 
 Server-side path (documented):
-  case volume at time via case_volume.load_volume (point-data magU / p / U) -> polyline vertices
+  case volume at time via case_volume.load_volume (the field on the point data;
+  a vector's magnitude mag<X> derived when needed) -> polyline vertices
   -> pyvista sample_over_line per segment (resolution = subdivisions+1)
   -> JSON series (distance, value). Not a chrome-only / made-up chart.
 
-Defaults match banked post-form-plot-over-path / Inc16c + Inc30a:
-  Number of subdivisions=0, Field variable=Velocity Magnitude (-> magU),
-  Selected points empty, Generate plot disabled until points exist.
+The field is a name (a scalar by its own name, a vector X as magX); '' is the
+case's default shown field. Number of subdivisions=0 and no selected points by
+default (banked Inc16c + Inc30a form; Generate plot is off until points exist).
 Honest empty: <2 points or path misses mesh -> n_samples=0, no fake curve.
 """
 from __future__ import annotations
@@ -23,43 +24,20 @@ import pyvista as pv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import scale_kinematic  # noqa: E402
 from case_volume import load_volume  # noqa: E402
-from result_names import point_shown_field  # noqa: E402
+from result_names import (  # noqa: E402
+    default_shown_field,
+    foam_sources,
+    point_shown_field,
+    resolve_shown_field,
+)
 
 APPROACH = (
     "server-side sample_over_line: Vite /api/plot-over-path -> "
     "export_plot_over_path.py reads the case volume at time "
-    "point-data (magU/p/U) -> sample along polyline "
+    "point-data (the asked field) -> sample along polyline "
     "(resolution=subdivisions+1 per segment) -> JSON series. "
     "Not a chrome path line with a made-up chart."
 )
-
-
-def field_variable_to_scalar(label: str) -> str:
-    key = (label or "").strip().lower()
-    if key in ("velocity magnitude", "magu", "|u|", "u magnitude", "velocity", "u"):
-        return "magU"
-    if key in ("pressure", "p", "kinematic pressure", "pressure (p)"):
-        return "p"
-    if key == "magu":
-        return "magU"
-    return (label or "magU").strip() or "magU"
-
-
-def resolve_scalar(label: str, dataset: pv.DataSet) -> str:
-    mapped = field_variable_to_scalar(label)
-    key = (label or "").strip().lower()
-    if key in ("velocity magnitude", "magu", "|u|", "u magnitude", "velocity", "u"):
-        candidates = ["magU", "U", mapped]
-    elif key in ("pressure", "p", "kinematic pressure", "pressure (p)"):
-        candidates = ["p", "p_rgh", "Pressure", mapped]
-    else:
-        candidates = [mapped, "magU", "p"]
-    for name in candidates:
-        if name and (name in dataset.point_data or name in dataset.cell_data):
-            return name
-    if "U" in dataset.point_data or "U" in dataset.cell_data:
-        return "magU"
-    raise RuntimeError(f"field {label!r} not on dataset (tried {candidates})")
 
 
 def ensure_scalars(grid: pv.DataSet, scalar_name: str) -> pv.DataSet:
@@ -130,15 +108,16 @@ def sample_over_path(
     grid: pv.DataSet,
     points: list[list[float]],
     subdivisions: int,
-    field_variable: str,
+    field: str = "",
+    default: str = "",
 ) -> dict:
     pts = [list(map(float, p[:3])) for p in (points or []) if p and len(p) >= 3]
     n_path = len(pts)
     subdiv = max(0, int(subdivisions))
-    label = str(field_variable or "Velocity Magnitude")
+    asked = str(field or "").strip()
 
     base = {
-        "field_variable": label,
+        "field": asked,
         "field_name": "",
         "subdivisions": subdiv,
         "n_path_points": n_path,
@@ -168,9 +147,12 @@ def sample_over_path(
         base["reason"] = "need_two_points"
         return base
 
-    resolved = resolve_scalar(label, grid)
-    src = ensure_scalars(grid, resolved)
-    scalar_key = resolved
+    scalar_key = resolve_shown_field(grid, asked, default)
+    if not scalar_key:
+        if asked:
+            raise RuntimeError(f"field {asked!r} is not in this result")
+        raise RuntimeError("this result has no field to plot")
+    src = ensure_scalars(grid, scalar_key)
 
     resolution = segment_resolution(subdiv)
     all_dist: list[float] = []
@@ -190,17 +172,9 @@ def sample_over_path(
             continue
         mask = valid_mask(sampled)
         sp = np.asarray(sampled.points, dtype=float)
-        if scalar_key in sampled.point_data:
-            raw = np.asarray(sampled.point_data[scalar_key], dtype=float)
-        elif "magU" in sampled.point_data:
-            raw = np.asarray(sampled.point_data["magU"], dtype=float)
-            scalar_key = "magU"
-        elif "U" in sampled.point_data:
-            U = np.asarray(sampled.point_data["U"], dtype=float)
-            raw = np.linalg.norm(U[:, :3], axis=1)
-            scalar_key = "U_mag"
-        else:
+        if scalar_key not in sampled.point_data:
             continue
+        raw = np.asarray(sampled.point_data[scalar_key], dtype=float)
         if raw.ndim > 1:
             raw = np.linalg.norm(raw[:, :3], axis=1)
         if sp.shape[0] == 1:
@@ -223,6 +197,7 @@ def sample_over_path(
     values = np.asarray(all_val, dtype=float)
     n_valid = int(values.size)
     empty = n_valid == 0
+    base["field"] = str(scalar_key)
     base["field_name"] = str(scalar_key)
     base["distances"] = [float(x) for x in distances.tolist()]
     base["values"] = [float(x) for x in values.tolist()]
@@ -250,34 +225,23 @@ def export_plot_over_path(
     *,
     points: list[list[float]],
     subdivisions: int = 0,
-    field_variable: str = "Velocity Magnitude",
-    field: str | None = None,
+    field: str = "",
 ) -> dict:
     case_dir = Path(case_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Prefer magU foam stamp proof
-    u_path = case_dir / str(time) / "U"
-    p_path = case_dir / str(time) / "p"
     # Shared loader (see export_iso_surface): the legacy prepared VTU is only
     # a fallback for times without native fields.
     mesh, vtu_path = load_volume(case_dir, str(time))
-    # Kinematic fields (p) in Pa, as the cut planes and surfaces show them.
+    # Kinematic fields in Pa, as the cut planes and surfaces show them.
     scale_kinematic(mesh, case_dir)
-    label = field_variable
-    if field and not field_variable:
-        label = "Velocity Magnitude" if field == "magU" else ("Pressure" if field == "p" else field)
-    if field in ("magU", "p") and field_variable in ("", None, "Velocity Magnitude") and field == "p":
-        label = "Pressure"
-    series = sample_over_path(mesh, points, subdivisions, label)
+    series = sample_over_path(mesh, points, subdivisions, field, default_shown_field(case_dir, str(time)))
     series.update(
         {
             "case_dir": str(case_dir),
             "time": str(time),
             "source_vtu": str(vtu_path),
-            "source_foam_U": str(u_path) if u_path.is_file() else None,
-            "source_foam_p": str(p_path) if p_path.is_file() else None,
-            "u_from_case": bool(u_path.is_file()),
+            "source_foam": foam_sources(case_dir / str(time), (series["field_name"],)),
             "bounds": list(map(float, mesh.bounds)),
             "n_mesh_points": int(mesh.n_points),
             "n_mesh_cells": int(mesh.n_cells),
@@ -307,8 +271,7 @@ def main():
     ap.add_argument("--out-dir", type=Path, required=True)
     ap.add_argument("--points", type=str, default="")
     ap.add_argument("--subdivisions", type=int, default=0)
-    ap.add_argument("--field-variable", default="Velocity Magnitude")
-    ap.add_argument("--field", default="")
+    ap.add_argument("--field", default="", help="shown field to plot ('' = the case's default)")
     args = ap.parse_args()
     pts = parse_points(args.points)
     export_plot_over_path(
@@ -317,8 +280,7 @@ def main():
         args.out_dir,
         points=pts,
         subdivisions=args.subdivisions,
-        field_variable=args.field_variable,
-        field=args.field or None,
+        field=args.field,
     )
 
 

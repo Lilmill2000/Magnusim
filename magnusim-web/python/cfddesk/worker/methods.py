@@ -1692,9 +1692,18 @@ def filter_series_range(case_dir: str = "", field: str = "magU") -> dict[str, An
 _FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 
-def _field_name(field: str | None) -> str:
-    """A result field to colour by: a scalar's name, or ``mag<X>`` for vector X (default magU)."""
-    name = str(field or "magU").strip()
+def _field_name(field: str | None, case_dir: str = "", time: str = "") -> str:
+    """A result field to colour by: a scalar's name, or ``mag<X>`` for vector X.
+
+    '' is allowed: with a case and a time it resolves to the case's default shown
+    field there; without them it stays '' and the tool resolves it."""
+    name = str(field or "").strip()
+    if not name:
+        if case_dir and time:
+            from result_names import default_shown_field
+
+            return default_shown_field(Path(case_dir), str(time))
+        return ""
     if not _FIELD_NAME.match(name):
         raise RpcError(-32602, f"invalid field name {name!r}")
     return name
@@ -1721,7 +1730,7 @@ def _field_list(fields: Any) -> list[str]:
 def filter_case_field(
     case_dir: str = "",
     time: str = "",
-    field: str = "magU",
+    field: str = "",
     out_dir: str = "",
     **_extra: Any,
 ) -> dict[str, Any]:
@@ -1736,7 +1745,9 @@ def filter_case_field(
     from cfddesk.worker.volume_cache import get_prepared
 
     t = str(time or "0")
-    name = _field_name(field)
+    name = _field_name(field, case, t)
+    if not name:
+        raise RpcError(-32004, f"time_not_found: no result fields at {t}", {"case_dir": case, "time": t})
     try:
         entry = get_prepared(case, t, pin=False)
         export_field(
@@ -1764,15 +1775,18 @@ def filter_case_field(
 @rpc("filter.prefetch_fields")
 def filter_prefetch_fields(
     case_dir: str = "",
-    field: str = "magU",
+    field: str = "",
     jobs: Any = None,
     **_extra: Any,
 ) -> dict[str, Any]:
     case = str(case_dir or "").strip()
     if not case:
         raise RpcError(-32602, "case_dir required")
-    name = _field_name(field)
     rows = jobs if isinstance(jobs, list) else []
+    first = next((str(r.get("time") or "") for r in rows if isinstance(r, dict) and r.get("time")), "")
+    name = _field_name(field, case, first)
+    if not name:
+        return {"ok": True, "field": "", "done": [], "errors": [], "n_done": 0}
     done: list[str] = []
     errors: list[dict[str, str]] = []
     for row in rows:
@@ -1838,7 +1852,9 @@ def filter_cut_plane(
     nx: Any = 0,
     ny: Any = 1,
     nz: Any = 0,
-    field: str = "magU",
+    field: str = "",
+    vector: str = "",
+    extra: Any = None,
     **_extra: Any,
 ) -> dict[str, Any]:
     case = str(case_dir or "").strip()
@@ -1851,6 +1867,10 @@ def filter_cut_plane(
 
     t = str(time or "0")
     name = _field_name(field)
+    # No extra at all: the tool carries every scalar the frame wrote; '' or []
+    # carries none.
+    extras = None if extra is None else _field_list(extra)
+    vec = _field_name(vector)
     mesh = None
     source = None
     try:
@@ -1859,11 +1879,13 @@ def filter_cut_plane(
         entry = get_prepared(case, t)
         mesh = entry.get("slice") or entry.get("grid") or entry.get("mesh")
         source = str(entry.get("source") or "worker-cache")
+        # The cache already picked the case's vector for this volume.
+        vec = vec or str(entry.get("vector") or "")
     except Exception:
         mesh = None
         source = None
     try:
-        export_cut_plane(
+        meta = export_cut_plane(
             Path(case),
             t,
             Path(dest),
@@ -1874,6 +1896,8 @@ def filter_cut_plane(
             ny=float(ny if ny is not None else 1),
             nz=float(nz or 0),
             field=name,
+            vector=vec,
+            extra=extras,
             mesh=mesh,
             source=source,
         )
@@ -1885,7 +1909,7 @@ def filter_cut_plane(
         "ok": True,
         "case_dir": case,
         "time": t,
-        "field": name,
+        "field": meta.get("field") or name,
         "out_dir": dest,
         "volume_cached": mesh is not None,
     }
@@ -1973,6 +1997,8 @@ def filter_particle_trace(
     n_seeds: Any = 40,
     density: Any = 10000,
     region: str = "",
+    vector: str = "",
+    coloring: str = "",
     **_extra: Any,
 ) -> dict[str, Any]:
     case = str(case_dir or "").strip()
@@ -1981,6 +2007,8 @@ def filter_particle_trace(
         raise RpcError(-32602, "case_dir required")
     if not dest:
         raise RpcError(-32602, "out_dir required")
+    vec = _field_name(vector)
+    color = _field_name(coloring)
     from export_particle_trace import export_particle_trace, parse_faces, parse_pick, parse_region
 
     from cfddesk.worker.volume_cache import get_prepared
@@ -2007,6 +2035,9 @@ def filter_particle_trace(
             region=parse_region(region),
             prepared_grid=entry["grid"],
             volume_source=str(entry.get("source") or "worker-cache"),
+            # The cache already picked the case's vector for this volume.
+            vector=vec or str(entry.get("vector") or ""),
+            coloring=color,
         )
     except RpcError:
         raise

@@ -2,16 +2,15 @@
 
 Server-side path (documented):
   case volume at time (case_volume.load_volume; legacy .cfddesk-prepared.vtu
-  only as fallback) -> ensure point-data
-  magU (derived from U when needed) / p -> pyvista contour([iso_value], scalars=iso_field)
-  -> binary VTP PolyData for vtk.js. Not a solid colored shell; not surface-only
-  magU (surface-only may not contour). Coloring array carried on iso when present.
+  only as fallback) -> the iso field on the point data (a vector's magnitude
+  mag<X> derived when needed) -> pyvista contour([iso_value], scalars=iso_field)
+  -> binary VTP PolyData for vtk.js. Not a solid colored shell. The colour field
+  and the case's velocity vector are carried on the contour.
 
-Banked defaults (Inc16d / post-form-iso-surface):
-  Iso scalar=Velocity Magnitude (-> magU), Iso value=11.1 m/s, Coloring=Pressure,
-  Vectors=on draws live U glyphs on the contour (U copied onto the VTP).
-Honest empty: iso value outside scalar range (MTP1 umax~0.77, default 11.1)
-  -> n_cells=0, empty VTP, no fake surface.
+Fields are names (a scalar by its own name, a vector X as magX); '' is the
+case's default shown field. Iso value default 11.1 (banked Inc16d form).
+Honest empty: iso value outside the field's range -> n_cells=0, empty VTP, no
+fake surface.
 """
 from __future__ import annotations
 
@@ -27,72 +26,20 @@ import pyvista as pv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import scale_kinematic  # noqa: E402
 from case_volume import load_volume  # noqa: E402
-from result_names import point_shown_field  # noqa: E402
+from result_names import (  # noqa: E402
+    dataset_vector,
+    default_shown_field,
+    filter_fields,
+    foam_sources,
+)
 
 APPROACH = (
     "server-side volume contour: Vite /api/iso-surface -> export_iso_surface.py "
     "reads the case volume at time (OpenFOAM fields; legacy prepared VTU fallback) point-data "
-    "(magU derived from U when needed; p) -> pyvista contour([iso_value], scalars=iso_field) "
-    "-> binary VTP. Not a solid colored shell; surface-only magU may not contour. "
-    "U is copied onto the contour so the viewport can draw live vector glyphs."
+    "(a vector's magnitude derived when needed) -> pyvista contour([iso_value], scalars=iso_field) "
+    "-> binary VTP. Not a solid colored shell. The case's velocity vector is copied onto "
+    "the contour so the viewport can draw live vector glyphs."
 )
-
-
-def field_variable_to_scalar(label: str) -> str:
-    key = (label or "").strip().lower()
-    if key in ("velocity magnitude", "magu", "|u|", "u magnitude", "velocity", "u"):
-        return "magU"
-    if key in ("pressure", "p", "kinematic pressure", "pressure (p)"):
-        return "p"
-    return (label or "magU").strip() or "magU"
-
-
-def resolve_iso_scalar(label: str, dataset: pv.DataSet) -> str:
-    mapped = field_variable_to_scalar(label)
-    key = (label or "").strip().lower()
-    if key in ("velocity magnitude", "magu", "|u|", "u magnitude", "velocity", "u"):
-        candidates = ["magU", "U", mapped]
-    elif key in ("pressure", "p", "kinematic pressure", "pressure (p)"):
-        candidates = ["p", "p_rgh", "Pressure", mapped]
-    else:
-        candidates = [mapped, "magU", "p"]
-    for name in candidates:
-        if name and (name in dataset.point_data or name in dataset.cell_data):
-            if name == "U":
-                return "magU"
-            return name
-    if "U" in dataset.point_data or "U" in dataset.cell_data:
-        return "magU"
-    raise RuntimeError(f"Iso scalar {label!r} not on dataset (tried {candidates})")
-
-
-def resolve_coloring_scalar(label: str, dataset: pv.DataSet) -> str | None:
-    mapped = field_variable_to_scalar(label)
-    key = (label or "").strip().lower()
-    if key in ("velocity magnitude", "magu", "|u|", "u magnitude", "velocity", "u"):
-        candidates = ["magU", "U", mapped]
-    elif key in ("pressure", "p", "kinematic pressure", "pressure (p)"):
-        candidates = ["p", "p_rgh", "Pressure", mapped]
-    else:
-        candidates = [mapped, "p", "magU"]
-    for name in candidates:
-        if not name:
-            continue
-        if name == "U":
-            if "magU" in dataset.point_data or "magU" in dataset.cell_data:
-                return "magU"
-            continue
-        if name in dataset.point_data or name in dataset.cell_data:
-            return name
-    return None
-
-
-def ensure_contour_scalars(grid: pv.DataSet, scalar_name: str) -> pv.DataSet:
-    """Point data the contour needs (a vector's magnitude derived when needed)."""
-    try:
-        return point_shown_field(grid, scalar_name, pass_cell_data=False)
-    except RuntimeError as exc:
-        raise RuntimeError(f"{scalar_name!r} unavailable for iso contour: {exc}") from exc
 
 
 def mesh_checksum(pts: np.ndarray, n_cells: int) -> str:
@@ -126,26 +73,15 @@ def asset_sha256(path: Path) -> str:
 def contour_iso(
     grid: pv.DataSet,
     *,
-    iso_scalar: str,
+    iso_field: str = "",
     iso_value: float,
-    coloring: str,
+    color_field: str = "",
+    vector: str = "",
+    default: str = "",
 ) -> tuple:
-    iso_field = resolve_iso_scalar(iso_scalar, grid)
-    src = ensure_contour_scalars(grid, iso_field)
-    if "U" not in src.point_data and "U" in src.cell_data:
-        try:
-            src = src.cell_data_to_point_data()
-        except Exception:
-            pass
-    color_want = resolve_coloring_scalar(coloring, src)
-    if color_want == "magU" and "magU" not in src.point_data:
-        src = ensure_contour_scalars(src, "magU")
-    elif color_want and color_want not in src.point_data and color_want in src.cell_data:
-        try:
-            src = src.cell_data_to_point_data()
-        except Exception:
-            pass
-
+    src, iso_field, color_field, vector = filter_fields(
+        grid, field=iso_field, color_field=color_field, vector=vector, default=default, what="Iso field"
+    )
     arr = np.asarray(src.point_data[iso_field], dtype=float)
     smin = float(np.nanmin(arr)) if arr.size else 0.0
     smax = float(np.nanmax(arr)) if arr.size else 0.0
@@ -157,10 +93,6 @@ def contour_iso(
         iso = pv.PolyData()
     if not isinstance(iso, pv.PolyData):
         iso = pv.PolyData(iso)
-
-    color_field = resolve_coloring_scalar(coloring, iso) if iso.n_points else color_want
-    if color_field is None:
-        color_field = resolve_coloring_scalar(coloring, src)
 
     n_cells = int(iso.n_cells)
     n_points = int(iso.n_points)
@@ -176,11 +108,10 @@ def contour_iso(
             reason = "empty_contour"
 
     meta = {
-        "iso_scalar": str(iso_scalar),
         "iso_value": value,
         "iso_field": str(iso_field),
-        "coloring": str(coloring),
         "coloring_field": color_field,
+        "vector_field": vector or None,
         "scalar_min": smin,
         "scalar_max": smax,
         "n_cells": n_cells,
@@ -190,7 +121,7 @@ def contour_iso(
         "point_checksum": point_checksum,
         "mesh_rms": mesh_rms,
         "mesh_checksum": mesh_checksum(pts, n_cells),
-        "vectors_live": bool(n_points and "U" in iso.point_data),
+        "vectors_live": bool(n_points and vector and vector in iso.point_data),
         "vectors_persist_only": False,
         "approach": APPROACH,
         "method": "pyvista DataSet.contour on volume VTU",
@@ -209,33 +140,34 @@ def export_iso_surface(
     time: str,
     out_dir: Path,
     *,
-    iso_scalar: str = "Velocity Magnitude",
+    iso_field: str = "",
     iso_value: float = 11.1,
-    coloring: str = "Pressure",
+    color_field: str = "",
+    vector: str = "",
     opacity: float = 1.0,
     vectors: bool = False,
 ) -> dict:
     case_dir = Path(case_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    u_path = case_dir / str(time) / "U"
-    p_path = case_dir / str(time) / "p"
     # Same loader as cut plane / inspect: native fields at this time, the
     # legacy .cfddesk-prepared.vtu only when the time has none. Runs never
     # write the prepared VTU, so requiring it 500'd every fresh result.
     mesh, vtu_path = load_volume(case_dir, str(time))
     if int(getattr(mesh, "n_cells", 0) or 0) == 0:
         raise RuntimeError("volume has 0 cells; cannot contour")
-    # Kinematic fields (p) in Pa, like every other result view: the iso value
-    # the page sends is in the units its legend shows. This process loaded its
+    # Kinematic fields in Pa, like every other result view: the iso value the
+    # page sends is in the units its legend shows. This process loaded its
     # own copy of the volume, so scaling it in place is safe.
     scale_kinematic(mesh, case_dir)
 
     iso, meta = contour_iso(
         mesh,
-        iso_scalar=iso_scalar,
+        iso_field=iso_field,
         iso_value=iso_value,
-        coloring=coloring,
+        color_field=color_field,
+        vector=dataset_vector(case_dir, str(time), mesh, vector),
+        default=default_shown_field(case_dir, str(time)),
     )
     out_vtp = out_dir / "iso_surface.vtp"
     if meta["empty"]:
@@ -249,9 +181,9 @@ def export_iso_surface(
             "case_dir": str(case_dir),
             "time": str(time),
             "source_vtu": str(vtu_path),
-            "source_foam_U": str(u_path) if u_path.is_file() else None,
-            "source_foam_p": str(p_path) if p_path.is_file() else None,
-            "u_from_case": bool(u_path.is_file()),
+            "source_foam": foam_sources(
+                case_dir / str(time), (meta["iso_field"], meta["coloring_field"], meta["vector_field"])
+            ),
             "opacity": float(opacity),
             "vectors": bool(vectors),
             "vectors_actor": False,
@@ -284,9 +216,10 @@ def main():
     ap.add_argument("--case", type=Path, required=True, help="OpenFOAM case directory")
     ap.add_argument("--time", default="50")
     ap.add_argument("--out-dir", type=Path, required=True)
-    ap.add_argument("--iso-scalar", default="Velocity Magnitude")
+    ap.add_argument("--iso-field", default="", help="shown field to contour ('' = the case's default)")
     ap.add_argument("--iso-value", type=float, default=11.1)
-    ap.add_argument("--coloring", default="Pressure")
+    ap.add_argument("--color-field", default="", help="shown field to colour by ('' = the case's default)")
+    ap.add_argument("--vector", default="", help="vector to carry for glyphs ('' = the case's velocity)")
     ap.add_argument("--opacity", type=float, default=1.0)
     ap.add_argument("--vectors", type=int, default=0)
     args = ap.parse_args()
@@ -294,9 +227,10 @@ def main():
         args.case,
         args.time,
         args.out_dir,
-        iso_scalar=args.iso_scalar,
+        iso_field=args.iso_field,
         iso_value=args.iso_value,
-        coloring=args.coloring,
+        color_field=args.color_field,
+        vector=args.vector,
         opacity=args.opacity,
         vectors=bool(args.vectors),
     )
