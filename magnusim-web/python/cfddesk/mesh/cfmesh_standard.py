@@ -450,7 +450,11 @@ def export_multisolid_stl_ascii(
         raise RuntimeError("no boundary conditions with faces for cfMesh surface")
 
     if require_all_assigned:
-        unassigned = project.unassigned_face_ids()
+        from cfddesk.cad.shared_faces import shared_face_ids
+
+        # A face two bodies share is inside the part: no patch, not in the STL.
+        inside = shared_face_ids(solid)
+        unassigned = [f for f in project.unassigned_face_ids() if f not in inside]
         if unassigned:
             preview = ", ".join(str(i) for i in unassigned[:20])
             raise RuntimeError(

@@ -18921,6 +18921,52 @@ async function createProjectClient(fields) {
   return window.__CFD_W16__;
 }
 
+/**
+ * Faces inside the part: two bodies share each one (python/cfddesk/cad/shared_faces.py),
+ * so it is meshed through and can't take a boundary condition. Label -> why, from the
+ * face table (cad_preview.json faces[].shared_with) of the geometry on screen.
+ */
+let cadInsideFaces = new Map();
+
+function insideFacesFromTable(faces) {
+  const out = new Map();
+  if (!Array.isArray(faces)) return out;
+  faces.forEach((f) => {
+    const other = f && f.shared_with ? faces[Number(f.shared_with) - 1] : null;
+    if (!other) return;
+    const body = Number(f.body) || 1;
+    const pair = [body, Number(other.body) || 1].sort((a, b) => a - b);
+    out.set(
+      faceLabel(f.id, body),
+      'Face ' + Number(f.id) + '@Body' + body + ' is inside the part (Body' + pair[0] + ' and Body' + pair[1] + ' share it)',
+    );
+  });
+  return out;
+}
+
+async function loadCadInsideFaces(facesUrl, token) {
+  cadInsideFaces = new Map();
+  const url = String(facesUrl || '').replace(/([?&])part=faces(?=&|$)/, '$1part=preview');
+  if (!/[?&]part=preview(&|$)/.test(url)) return;
+  try {
+    const r = await fetch(url);
+    if (!r.ok || token !== cadLoadToken) return;
+    const meta = await r.json();
+    if (token === cadLoadToken) cadInsideFaces = insideFacesFromTable(meta && meta.faces);
+  } catch (_) {}
+}
+
+/** Say why a face inside the part was not put on the boundary condition. */
+function refuseInsideFace(label) {
+  const why = cadInsideFaces.get(label);
+  if (!why) return;
+  window.dispatchEvent(
+    new CustomEvent('cfd:toast', { detail: { message: why + ", so it can't take a boundary condition.", kind: 'error' } }),
+  );
+}
+
+window.__CFD_INSIDE_FACES__ = () => Array.from(cadInsideFaces.keys());
+
 async function loadOfficialCadCom() {
   const pid = w16State.project && w16State.project.id;
   if (!pid) return;
@@ -18955,6 +19001,7 @@ async function loadGeometryCad(facesUrl, edgesUrl, opts) {
   const keepCamera = !!(opts && opts.keepCamera);
   clearCadEdgeDisplay();
   loadOfficialCadCom().catch(() => {});
+  loadCadInsideFaces(facesUrl, token);
   const facesP = geomCadFaceReader.setUrl(facesUrl);
   const edgesP = edgesUrl ? geomCadEdgeReader.setUrl(edgesUrl) : Promise.resolve();
   await facesP;
@@ -25759,7 +25806,8 @@ function bcUnassignedFaces() {
   const claimed = new Set();
   bcList().forEach((b) => (b.faces || []).forEach((f) => claimed.add(f)));
   const all = typeof allGeomFaceLabels === 'function' ? allGeomFaceLabels() : [];
-  return all.filter((f) => !claimed.has(f));
+  // A face inside the part is no boundary, so it takes no default either.
+  return all.filter((f) => !claimed.has(f) && !cadInsideFaces.has(f));
 }
 
 function syncBcDefaultsLabels() {
@@ -25828,6 +25876,11 @@ async function persistBcDefaults(partial) {
 function toggleAssignFace(label) {
   const name = String(label || '').trim();
   if (!name || !activeBc()) return;
+  // A face inside the part is refused; one saved on a BC before still comes off.
+  if (cadInsideFaces.has(name) && !(bcCatalog.draft_faces || []).includes(name)) {
+    refuseInsideFace(name);
+    return;
+  }
   bcCatalog.draft_faces = toggleFaceId(bcCatalog.draft_faces || [], name);
   bcCatalog.focusFace = bcCatalog.draft_faces.includes(name) ? name : bcCatalog.draft_faces[0] || null;
   const bc = activeBc();
@@ -25897,7 +25950,10 @@ function newClientBcId() {
 }
 
 async function createBcClient(bcType, opts) {
-  const pendingFaces = Array.isArray(opts && opts.faces) ? opts.faces.slice() : pendingCadFaceLabels();
+  const picked = Array.isArray(opts && opts.faces) ? opts.faces.slice() : pendingCadFaceLabels();
+  const pendingFaces = picked.filter((f) => !cadInsideFaces.has(f));
+  const insidePick = picked.find((f) => cadInsideFaces.has(f));
+  if (insidePick) refuseInsideFace(insidePick);
   const pid = currentProjectId();
   // New BCs start in the open project's units.
   const imperial = prefersImperialUnits();

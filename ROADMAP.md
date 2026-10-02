@@ -150,6 +150,17 @@ September 2026 readiness audit. This list preserves the intended work.
   - solve hooks in a process of their own, so a plugin cannot end or bend a
     core run.
 
+- **Faces two bodies share (October 2026):** every body is one fluid region, so
+  a face two bodies share whole is inside the fluid. Each mesher meshes
+  through it, and a BC on it is refused (`cfddesk/cad/shared_faces.py`). To
+  add:
+  - a thin wall there (a zero-thickness baffle, wall on both sides), made by
+    an explicit Wall BC on the face, in all three meshers;
+  - bodies that touch over only part of a face: they are not found as
+    sharing, so each body keeps its own wall there;
+  - one region per body (solids, conjugate heat transfer), where the shared
+    face becomes an interface.
+
 Each restored control should have a persistence check and a successful
 end-to-end simulation or result-generation test. Do not expose placeholder
 buttons marked “coming soon.”

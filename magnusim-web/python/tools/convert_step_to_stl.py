@@ -110,7 +110,8 @@ def write_stl_from_vtp(vtp_path: Path, out: Path, meta_path: Path) -> int:
         mesh = mesh.triangulate()
     except Exception:
         pass
-    if mesh is None or mesh.n_points < 3 or mesh.n_cells < 100:
+    # A closed surface needs 4 triangles; a box has 12 (a floor of 100 refused every boxy part).
+    if mesh is None or mesh.n_points < 4 or mesh.n_cells < 4:
         print("FAIL: CAD VTP too small", vtp_path, file=sys.stderr)
         return 3
     faces = mesh.faces.reshape(-1, 4)
@@ -216,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Tessellating lin=", args.lin, "ang=", args.ang)
         verts, tris = tessellate(shape, args.lin, args.ang)
     print("vertices", len(verts), "triangles", len(tris))
-    if len(tris) < 100:
+    if len(tris) < 4:
         print("FAIL: too few triangles", file=sys.stderr)
         return 3
     xs = [v[0] for v in verts]

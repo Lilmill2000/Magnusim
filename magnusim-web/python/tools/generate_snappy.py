@@ -98,6 +98,7 @@ def boundary_patches(
     from generate_standard import _add_default_walls, _apply_web_bcs
 
     from cfddesk.cad.location import find_location_in_mesh
+    from cfddesk.cad.shared_faces import bc_refusal, face_bodies, shared_face_ids
     from cfddesk.cad.step import load_step, tessellate_faces
     from cfddesk.mesh.gmsh_standard import _face_to_patch_map, emitted_patch_types
     from cfddesk.mesh.snappy_hexdominant import (
@@ -107,6 +108,8 @@ def boundary_patches(
     )
     from cfddesk.mesh.web_refinements import (
         bind_inflate_patches,
+        drop_inside_faces,
+        face_ids_from_web_bc,
         inflate_notes,
         layer_specs_for_generate,
         leftover_faces,
@@ -129,13 +132,24 @@ def boundary_patches(
 
     project = Project.from_solid(solid, scale_to_metres=scale, units_confirmed=True)
     web_bcs = study_web_bcs(project_dir, None, simulation_id=simulation_id or None)
+    inside = shared_face_ids(solid)
+    refusal = bc_refusal(
+        ((str(b.get("name") or "a boundary condition"), face_ids_from_web_bc(b, n_faces)) for b in web_bcs),
+        inside,
+        face_bodies(solid),
+    )
+    if refusal:
+        raise RuntimeError(refusal)
     project = _apply_web_bcs(project, web_bcs, n_faces)
     sizes, _mins, size_notes = load_surface_custom_sizes(project_dir, mesh_id, n_faces, diag_m)
     inflates = load_inflate_refs(project_dir, mesh_id, n_faces, h_wall_m, extra_face_sizes=sizes)
+    drop_inside_faces(inside, sizes, _mins, size_notes, inflates)
     project, inflates = bind_inflate_patches(project, inflates, n_faces)
-    project = _add_default_walls(project, leftover_faces(project, n_faces))
+    project = _add_default_walls(project, leftover_faces(project, n_faces, inside))
     patch_types = emitted_patch_types(project)
-    patches = write_patch_stls(tri_dir, pts_m, tris, fids, _face_to_patch_map(project), patch_types)
+    patches = write_patch_stls(
+        tri_dir, pts_m, tris, fids, _face_to_patch_map(project), patch_types, inside=inside
+    )
 
     layer_specs = None
     if inflates or add_layers:

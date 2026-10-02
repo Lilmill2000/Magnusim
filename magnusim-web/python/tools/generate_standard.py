@@ -27,6 +27,7 @@ from pathlib import Path
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))
 
+from cfddesk.cad.shared_faces import bc_refusal, face_bodies, shared_face_ids
 from cfddesk.cad.step import load_step
 from cfddesk.cad.units import shape_bbox
 from cfddesk.jobs import legacy_markers as _legacy
@@ -44,6 +45,7 @@ from cfddesk.mesh.standard_hexcore import (
 )
 from cfddesk.mesh.web_refinements import (
     bind_inflate_patches,
+    drop_inside_faces,
     face_ids_from_web_bc,
     inflate_notes,
     layer_specs_for_generate,
@@ -268,6 +270,14 @@ def main() -> int:
             simulation_id=str(args.simulation_id or "") or None,
             mesh_id=str(args.mesh_id or "") or None,
         )
+        inside = shared_face_ids(solid)
+        refusal = bc_refusal(
+            ((str(b.get("name") or "a boundary condition"), face_ids_from_web_bc(b, n_faces)) for b in web_bcs),
+            inside,
+            face_bodies(solid),
+        )
+        if refusal:
+            return _result(False, error=refusal)
         project = _apply_web_bcs(project, web_bcs, n_faces)
 
         bbox = shape_bbox(solid.shape, unit="native")
@@ -298,8 +308,9 @@ def main() -> int:
             sizing.h_surface_m,
             extra_face_sizes=extra_face_sizes,
         )
+        drop_inside_faces(inside, extra_face_sizes, extra_face_mins, ref_notes, inflates)
         project, inflates = bind_inflate_patches(project, inflates, n_faces)
-        project = _add_default_walls(project, leftover_faces(project, n_faces))
+        project = _add_default_walls(project, leftover_faces(project, n_faces, inside))
         _progress(
             "sizing",
             fineness=fineness,

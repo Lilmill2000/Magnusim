@@ -137,15 +137,20 @@ def face_properties(shape):
 
     Same numbering as the viewport faceId scalars and the cfddesk mesher, so
     ``face N@BodyB`` in the UI is ``faces[N-1]`` here, and that entry's ``body``
-    is B (no ``body`` for a face outside every solid).
+    is B (no ``body`` for a face outside every solid). A face two bodies share
+    (``cad.shared_faces``) is inside the part: each of its entries has
+    ``shared_with``, the id of the other one, and the BC panel refuses it.
     Lengths are in the STEP's own units (mm for the files we import).
     """
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     from OCP.BRepGProp import BRepGProp_Face
     from OCP.gp import gp_Pnt, gp_Vec
 
+    from cfddesk.cad import shared_faces
+
     out = []
-    for idx, body, face in face_visits(shape):
+    visits = face_visits(shape)
+    for idx, body, face in visits:
         props = GProp_GProps()
         BRepGProp.SurfaceProperties_s(face, props)
         area = float(props.Mass())
@@ -176,6 +181,12 @@ def face_properties(shape):
         if body is not None:
             entry["body"] = body
         out.append(entry)
+    shared = shared_faces.pairs(
+        (idx, body, e["area"], e["centroid"], face) for (idx, body, face), e in zip(visits, out, strict=True)
+    )
+    for e in out:
+        if e["id"] in shared:
+            e["shared_with"] = shared[e["id"]]
     return out
 
 

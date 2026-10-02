@@ -182,13 +182,22 @@ def scale_body1_stl(body1_src: Path, body1_dst: Path, *, scale: float = 0.001) -
 
 
 def write_patch_stls(
-    tri_dir: Path, points_m, tris, face_ids, face_to_patch: dict[int, str], patch_types: dict[str, str]
+    tri_dir: Path,
+    points_m,
+    tris,
+    face_ids,
+    face_to_patch: dict[int, str],
+    patch_types: dict[str, str],
+    *,
+    inside=(),
 ) -> list[dict[str, str]]:
     """One binary STL per boundary patch (metres) in ``tri_dir``; returns the patch list.
 
     snappyHexMesh names the patch of a single-region surface after the surface,
     so each BC patch comes out under the name the solver writes it with. CAD
-    faces with no patch go to ``walls``.
+    faces with no patch go to ``walls``. Faces ``inside`` the part (two bodies
+    share them, ``cad.shared_faces``) are left out: a surface there would cut
+    the part in two, and snappy would keep only the side ``locationInMesh`` is on.
     """
     import numpy as np
 
@@ -196,6 +205,9 @@ def write_patch_stls(
     tri_dir.mkdir(parents=True, exist_ok=True)
     tri = np.asarray(tris, dtype=np.int64)
     fid = np.asarray(face_ids, dtype=np.int64)
+    if len(inside):
+        keep = ~np.isin(fid, np.asarray(sorted(int(f) for f in inside), dtype=np.int64))
+        tri, fid = tri[keep], fid[keep]
     names = np.array([face_to_patch.get(int(f), "walls") for f in fid])
     out: list[dict[str, str]] = []
     for name in sorted(set(names.tolist())):

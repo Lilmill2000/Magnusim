@@ -960,6 +960,11 @@ def build_standard_msh(
         # source.step: same surfaces, and seconds instead of minutes for faceted STLs.
         gmsh_geometry = write_gmsh_brep(solid.shape, Path(out_msh).with_name("geometry_mm.brep"))
         _log(f"gmsh geometry {gmsh_geometry.name} from {Path(step_path).name}")
+    from cfddesk.cad.shared_faces import shared_face_ids
+
+    # Bodies that share a face are one fluid region (cad.shared_faces): they are
+    # fused into one volume, so the face they share is meshed through, not walled.
+    inside = shared_face_ids(solid)
     initialize_gmsh(gmsh)
     try:
         gmsh.option.setNumber("General.Terminal", 0)
@@ -992,6 +997,18 @@ def build_standard_msh(
                     gmsh.model.occ.remove(orphans, recursive=True)
                     gmsh.model.occ.synchronize()
                     _log(f"removed {len(orphans)} orphan surface(s) left by healing")
+            bodies = gmsh.model.getEntities(3)
+            if inside and len(bodies) > 1:
+                # healShapes gives each body its own copy of the face they share,
+                # and gmsh would mesh them as regions walled off from each other.
+                # No unifying: every other CAD face stays its own surface to match.
+                gmsh.option.setNumber("Geometry.OCCUnionUnify", 0)
+                gmsh.model.occ.fuse(bodies[:1], bodies[1:])
+                gmsh.model.occ.synchronize()
+                _log(
+                    f"{len(bodies)} bodies fused into {len(gmsh.model.getEntities(3))} fluid volume(s): "
+                    f"the {len(inside) // 2} face(s) they share are inside the mesh"
+                )
             return _match_occ_surfaces(
                 gmsh, solid, project, scale=float(scale_to_metres), lc=h
             )

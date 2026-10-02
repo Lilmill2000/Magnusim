@@ -445,9 +445,34 @@ def bind_exclusive_wall_patch(
     return project, str(bc.patch_name)
 
 
-def leftover_faces(project: Project, n_faces: int) -> list[int]:
+def leftover_faces(project: Project, n_faces: int, inside=()) -> list[int]:
+    """Faces no BC claims: the default ``walls``. Faces ``inside`` the part
+    (``cad.shared_faces``) are no boundary at all."""
     have = assigned_face_ids(project)
-    return [f for f in range(n_faces) if f not in have]
+    skip = set(int(f) for f in inside)
+    return [f for f in range(n_faces) if f not in have and f not in skip]
+
+
+def drop_inside_faces(
+    inside, sizes: dict[int, float], mins: dict[int, float], notes: list[dict], inflates: list[InflateRef]
+) -> None:
+    """Mesh refinements on faces inside the part (``cad.shared_faces``) have no
+    boundary to act on: take those faces out, in place. An Inflate boundary layer
+    left with no face says why it was skipped."""
+    skip = set(int(f) for f in inside)
+    if not skip:
+        return
+    for f in skip:
+        sizes.pop(f, None)
+        mins.pop(f, None)
+    notes[:] = [n for n in notes if [f for f in n.get("face_ids") or [] if int(f) not in skip]]
+    for n in notes:
+        n["face_ids"] = [f for f in n.get("face_ids") or [] if int(f) not in skip]
+    for spec in inflates:
+        kept = [f for f in spec.face_ids if int(f) not in skip]
+        if spec.face_ids and not kept:
+            spec.skipped = "its faces are inside the part (two bodies share them)"
+        spec.face_ids = kept
 
 
 def bind_inflate_patches(
@@ -470,7 +495,7 @@ def bind_inflate_patches(
     for spec in specs:
         wall_fids = [f for f in spec.face_ids if f not in blocked and 0 <= f < n_faces]
         if not wall_fids:
-            spec.skipped = "no wall faces (inlet/outlet/pressure)"
+            spec.skipped = spec.skipped or "no wall faces (inlet/outlet/pressure)"
             continue
         spec.face_ids = wall_fids
         for fid in wall_fids:
