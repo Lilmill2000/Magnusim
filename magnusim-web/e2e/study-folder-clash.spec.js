@@ -64,10 +64,22 @@ test('a study named like another keeps its folder and results across saves', asy
     const open = (await studyPanel.isVisible()) && (await page.evaluate(() => window.__CFD_W17__.activeId)) === sid;
     if (!open) await studyRow(sid).click();
     await expect.poll(() => page.evaluate(() => window.__CFD_W17__.activeId)).toBe(sid);
-    await studyPanel.locator('button.mesh-rename[aria-label="Rename simulation"]').click();
-    await studyPanel.locator('input[aria-label="Simulation name"]').fill(name);
-    await studyPanel.locator('input[aria-label="Simulation name"]').press('Enter');
-    await expect.poll(async () => (await studies()).find((s) => s.id === sid)?.name).toBe(name);
+    // A switch draws the panel again when its replies land (activate, hydrate), which wipes
+    // a rename box opened before that. A tree read landing after the switch can also close
+    // the new study's panel and clear the tree's selection (seen on 1496bf1..143483c), so
+    // reopen the panel too. Retry until the server has the name.
+    const input = studyPanel.locator('input[aria-label="Simulation name"]');
+    await expect(async () => {
+      if (!(await studyPanel.isVisible())) await studyRow(sid).click({ timeout: 5_000 });
+      await expect(studyPanel).toBeVisible({ timeout: 2_000 });
+      if (!(await input.isVisible())) {
+        await studyPanel.locator('button.mesh-rename[aria-label="Rename simulation"]').click({ timeout: 5_000 });
+      }
+      await input.fill(name, { timeout: 5_000 });
+      await input.press('Enter', { timeout: 5_000 });
+      // Hidden is not enough: a panel closed by that tree read hides an unsaved box too.
+      await expect.poll(async () => (await studies()).find((s) => s.id === sid)?.name, { timeout: 5_000 }).toBe(name);
+    }).toPass({ timeout: 90_000 });
     await expect(studyRow(sid)).toContainText(name);
   };
   const folderOf = (sid) =>
