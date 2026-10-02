@@ -186,14 +186,16 @@ export function planSuites(changed, suites) {
 /**
  * A changed file as magnusim-web-relative ("/" separators; "../..." outside it). A
  * relative path is read from magnusim-web, unless it starts with "magnusim-web/"
- * (a path from the repository root, as git prints it).
+ * (a path from the repository root, as git prints it). Without git (a snapshot) the
+ * folder holding magnusim-web stands for the repository root.
  */
 export function toWebRel(p, repoRoot, webRoot = WEB_ROOT) {
-  const webDir = repoRoot ? relative(repoRoot, webRoot).split(sep).join('/') : null;
+  const root = repoRoot || dirname(webRoot);
+  const webDir = relative(root, webRoot).split(sep).join('/');
   const slashed = p.replace(/\\/g, '/');
   let abs;
   if (isAbsolute(p)) abs = p;
-  else if (webDir && (slashed === webDir || slashed.startsWith(`${webDir}/`))) abs = resolve(repoRoot, p);
+  else if (slashed === webDir || slashed.startsWith(`${webDir}/`)) abs = resolve(root, p);
   else abs = resolve(webRoot, p);
   const rel = relative(webRoot, abs);
   if (isAbsolute(rel)) return `../${abs.split(sep).join('/')}`;

@@ -140,6 +140,12 @@ test('changed paths read from magnusim-web, from the repository root, or absolut
   assert.equal(toWebRel(join(repo, 'ROADMAP.md'), repo, web), '../ROADMAP.md');
   // Without git (a snapshot) a relative path is still read from magnusim-web.
   assert.equal(toWebRel('src/a.ts', null, web), 'src/a.ts');
+  // ... and a path from the repository root too, so it still reaches a plugin's host paths.
+  assert.equal(toWebRel('magnusim-web/src/workspace/bridge.ts', null, web), 'src/workspace/bridge.ts');
+  assert.equal(toWebRel('magnusim-web\\src\\a.ts', null, web), 'src/a.ts');
+  assert.equal(toWebRel('magnusim-web', null, web), '');
+  const snap = planSuites([toWebRel('magnusim-web/src/workspace/bridge.ts', null, web)], [{ key: 'cad', run: 'npm', hostPaths: HOST_PATHS.cad }]);
+  assert.ok(snap.plugins.cad, JSON.stringify(snap));
 });
 
 test('the WSL lock is taken only by runs that may mesh or solve', () => {
