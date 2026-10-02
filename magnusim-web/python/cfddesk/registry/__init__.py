@@ -39,7 +39,7 @@ from cfddesk.registry.result_filter import ResultFilterType, analysis_has_filter
 from cfddesk.registry.schema import SchemaField, to_json_schema, validate
 from cfddesk.registry.solver import SolverApp, validate_analysis_solver_refs
 
-API_VERSION = "1.3"
+API_VERSION = "1.4"
 
 __all__ = [
     "API_VERSION",

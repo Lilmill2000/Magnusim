@@ -1,0 +1,37 @@
+key = "my-workspace"
+name = "My workspace"
+version = "0.1.0"
+api_version = "1.4"
+license = "GPL-3.0-or-later"
+description = "A plugin with its own full workspace: copy this folder to start one"
+authors = "Your Name"
+
+# The page the host shows in a sandboxed frame (docs/plugins/authoring.md, "Workspaces (1.1)").
+[[workspaces]]
+key = "sketch"
+title = "Sketch"
+icon = "M4 5h16v14H4z M4 9h16"
+entry = "workspace/index.html"
+
+# A study of this kind opens in that workspace.
+[[study_kinds]]
+key = "sketch"
+title = "Sketch"
+icon = "M5 19V5h14v14z M9 9h6v6H9z"
+workspace = "sketch"
+schema_version = 1
+# Host 1.5 and later: a study of this kind may link one project geometry.
+# Host 1.4 checks the key only (compatibility.md, "## 1.4"); its how-to
+# comes with host 1.5. Remove the "# " to opt in.
+# links_geometry = true
+
+# Host 1.4 and later: a button that creates a study of this kind and opens it,
+# in the empty project, the header, the New Project dialog and Home
+# (authoring.md, "Start actions (1.4)"). Remove the "# " to add it.
+# [[start_actions]]
+# study_kind = "sketch"
+# label = "Start a sketch"
+# hint = "Draw it here, then simulate it"
+# places = ["empty_project", "header", "new_project", "home"]
+# home_label = "New sketch"
+# header_label = "Sketch"

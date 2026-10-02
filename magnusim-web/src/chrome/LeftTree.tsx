@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { pluginTreeNodes, type PluginTreeNode } from '../plugin-api';
 import { useProjectStore } from '../store/project';
 import { pluginStudyScope, scopeBelongsToProject } from '../scope';
+import { headerKinds, kindKey } from '../workspace/startActions';
 import {
   readSetupTree,
   type GeomNode,
@@ -400,6 +401,22 @@ function StudyIcon({ path }: { path: string }) {
   );
 }
 
+/**
+ * STUDIES shows when the project has a plugin study, or a plugin kind that can be made
+ * only from here: it stays hidden while every kind opens from a start action's header
+ * button (after the cap) and no study exists yet (API 1.4).
+ */
+export function studiesSectionShown(
+  projectId: string | null | undefined,
+  rows: readonly PluginStudyRow[],
+  kinds: readonly PluginStudyKind[],
+): boolean {
+  if (!projectId) return false;
+  if (rows.length) return true;
+  const inHeader = headerKinds(kinds);
+  return kinds.some((k) => !inHeader.has(kindKey(k)));
+}
+
 function stop(e: { preventDefault(): void; stopPropagation(): void }) {
   e.preventDefault();
   e.stopPropagation();
@@ -589,8 +606,7 @@ export function LeftTree() {
     setStudiesHost(document.getElementById('plugin-studies-section'));
   }, []);
 
-  // The section shows when the project has a plugin study or a plugin that can make one.
-  const showStudies = !!projectId && (studies.rows.length > 0 || studies.kinds.length > 0);
+  const showStudies = studiesSectionShown(projectId, studies.rows, studies.kinds);
   useEffect(() => {
     if (studiesHost) studiesHost.hidden = !showStudies;
   }, [studiesHost, showStudies]);

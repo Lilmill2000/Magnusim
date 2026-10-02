@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { firstFreeStudyName, newPluginStudy, shownStudyTitles, type CreateAnswer, type NewStudyHost } from './studyName';
+import { firstFreeStudyName, newPluginStudy, shownStudyTitles, takenStudyTitles, type CreateAnswer, type NewStudyHost } from './studyName';
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -135,5 +135,27 @@ describe('the study titles the STUDIES section shows', () => {
       </ul>`;
     expect(shownStudyTitles('cad')).toEqual(['Part 1', 'Bracket']);
     expect(shownStudyTitles('none')).toEqual([]);
+  });
+});
+
+// gate:l1-menus: a start action's study (API 1.4) is named without a prompt, with a
+// name free across every plugin's studies and the project's geometries.
+describe('a study made without asking (ask: false)', () => {
+  it('takes the first free name and makes it, with no prompt', async () => {
+    const { host } = workbench();
+    await newPluginStudy({ kind: 'demo', title: 'Demo', titles: ['Demo 1'] }, host, { ask: false });
+    expect(host.promptName).not.toHaveBeenCalled();
+    expect(host.create).toHaveBeenCalledWith({ kind: 'demo', title: 'Demo 2' });
+    expect(host.open).toHaveBeenCalledWith('part', 'st-9');
+  });
+
+  it("counts another plugin's studies and the geometry names as taken", () => {
+    const taken = takenStudyTitles({
+      plugin_studies: [{ title: 'Demo 1' }, { title: 'Wing' }],
+      geometries: [{ name: 'Demo 2' }, { name: '' }],
+    });
+    expect(taken).toEqual(['Demo 1', 'Wing', 'Demo 2']);
+    expect(firstFreeStudyName('Demo', taken)).toBe('Demo 3');
+    expect(takenStudyTitles(null)).toEqual([]);
   });
 });

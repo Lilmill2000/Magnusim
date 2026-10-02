@@ -1,0 +1,41 @@
+key = "start-demo"
+name = "Start demo"
+version = "1.0.0"
+api_version = "1.4"
+license = "GPL-3.0-or-later"
+description = "Test plugin with a start action (API 1.4): one kind with an action and a header label, one without"
+authors = "Magnusim"
+
+[[workspaces]]
+key = "demo"
+title = "Demo workspace"
+icon = "M4 5h16v14H4z M4 9h16"
+entry = "workspace/index.html"
+
+[[workspaces]]
+key = "note"
+title = "Notes"
+icon = "M5 4h14v16H5z M8 8h8 M8 12h8"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "demo"
+title = "Demo"
+icon = "M5 19V5h14v14z M9 9h6v6H9z"
+workspace = "demo"
+
+# No start action: it stays in the Workspaces menu and STUDIES.
+[[study_kinds]]
+key = "note"
+title = "Note"
+icon = "M5 4h14v16H5z"
+workspace = "note"
+
+[[start_actions]]
+study_kind = "demo"
+label = "Design a demo"
+hint = "Make a demo here, then simulate it"
+home_label = "New demo"
+header_label = "Demo"
+# A key this host does not know: ignored.
+colour = "teal"

@@ -61,6 +61,7 @@ import {
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
 import { newPluginStudy, shownStudyTitles } from '../chrome/studyName';
+import { loadStartActions, startStudy } from '../workspace/startActions';
 import { subscribeJobEvents } from '../api/client';
 import { parsePluginScope, scopeBelongsToProject, scopeKey, studyIdFromScope } from '../scope';
 import {
@@ -19523,6 +19524,9 @@ async function runGeometryImport(label, work) {
     b.disabled = true;
     b.textContent = 'Importing…';
   });
+  // The empty project's start action buttons wait for the import too (StartActionPlaces).
+  const announce = (busy) => window.dispatchEvent(new CustomEvent('cfd:geometry-import', { detail: { busy } }));
+  announce(true);
   try {
     return await work();
   } catch (e) {
@@ -19539,6 +19543,7 @@ async function runGeometryImport(label, work) {
       b.disabled = false;
       b.textContent = before[i];
     });
+    announce(false);
   }
 }
 
@@ -19550,11 +19555,63 @@ function openNewProjectModal(existing, opts) {
     modal.hidden = false;
     const t = document.getElementById('np-title');
     if (t) t.focus();
+    // A start action's Home button filled the title in: typing replaces it.
+    if (t && opts && opts.start) t.select();
   });
 }
 function closeNewProjectModal() {
   const modal = document.getElementById('modal-new-project');
   if (modal) modal.hidden = true;
+}
+
+/**
+ * The New Project dialog's Create: the project (or the edit), then, when a start action
+ * is chosen under "Start from" (API 1.4), its study, named "<Kind> 1", and the project
+ * opens on that study's workspace. A study the server refuses (its plugin was turned off
+ * meanwhile) leaves the project open and says so.
+ */
+async function createFromProjectModal() {
+  const got = await submitProjectModal();
+  if (!got || !got.ok) return;
+  closeNewProjectModal();
+  if (got.mode === 'edit') return;
+  const payload = await createProjectClient(got.fields);
+  const id = payload && payload.project && payload.project.id;
+  if (!id) return;
+  let refused = null;
+  if (got.start) {
+    const all = await loadStartActions().catch(() => []);
+    const entry = all.find((e) => e.plugin === got.start.plugin && e.action.study_kind === got.start.kind) || {
+      plugin: got.start.plugin,
+      plugin_name: got.start.plugin,
+      action: { study_kind: got.start.kind, kind_title: got.start.kind },
+    };
+    let opened = '';
+    await startStudy(entry, {
+      projectId: id,
+      titles: [],
+      // Shown once the project is open.
+      notice: (title, copy) => {
+        refused = { title, copy };
+        return Promise.resolve();
+      },
+      where: () => id,
+      open: (workspace, studyId) => {
+        opened = workspaceHash({ projectId: id, plugin: entry.plugin, workspace, studyId });
+      },
+      sync: () => undefined,
+    });
+    // openProject keeps a workspace deep link of the project it opens.
+    if (opened) location.hash = opened;
+  }
+  if (got.start || document.body.classList.contains('on-home')) {
+    if (window.__CFD_HOME__ && typeof window.__CFD_HOME__.open === 'function') {
+      await window.__CFD_HOME__.open(id, { reloadIfNeeded: false }).catch((err) => console.error('[CFD W16] open created', err));
+    } else {
+      location.hash = `#/p/${encodeURIComponent(id)}`;
+    }
+  }
+  if (refused) await confirmAction({ title: refused.title, copy: refused.copy, yes: 'OK', notice: true });
 }
 
 window.__CFD_W16_CREATE__ = createProjectClient;
@@ -19929,28 +19986,23 @@ setTreeActionHandler((scopeKey, action, detail) => {
   });
   document.getElementById('np-cancel')?.addEventListener('click', closeNewProjectModal);
   document.getElementById('np-backdrop')?.addEventListener('click', closeNewProjectModal);
+  document.addEventListener('keydown', (e) => {
+    const modal = document.getElementById('modal-new-project');
+    if (e.key !== 'Escape' || !modal || modal.hidden) return;
+    e.preventDefault();
+    closeNewProjectModal();
+  });
+  // Create is disabled from the click until the project opens or an error shows, so a
+  // double click makes one project (and one study).
   document.getElementById('np-create')?.addEventListener('click', () => {
-    submitProjectModal()
-      .then((got) => {
-        if (!got || !got.ok) return;
-        closeNewProjectModal();
-        if (got.mode === 'edit') return null;
-        return createProjectClient(got.fields);
-      })
-      .then((payload) => {
-        if (!payload) return;
-        const id = payload && payload.project && payload.project.id;
-        if (id && document.body.classList.contains('on-home')) {
-          if (window.__CFD_HOME__ && typeof window.__CFD_HOME__.open === 'function') {
-            window.__CFD_HOME__.open(id, { reloadIfNeeded: false }).catch((err) =>
-              console.error('[CFD W16] open created', err)
-            );
-          } else {
-            location.hash = `#/p/${encodeURIComponent(id)}`;
-          }
-        }
-      })
-      .catch((e) => console.error('[CFD W16] create', e));
+    const btn = document.getElementById('np-create');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    createFromProjectModal()
+      .catch((e) => console.error('[CFD W16] create', e))
+      .finally(() => {
+        btn.disabled = false;
+      });
   });
 
   const fileInput = document.getElementById('geometry-file-input');

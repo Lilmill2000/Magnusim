@@ -17,7 +17,15 @@ from typing import Any
 from cfddesk.registry.base import Registry, RegistryError
 from cfddesk.registry.bc_extend import BcExtensions
 from cfddesk.registry.hooks import get_hooks
-from cfddesk.registry.manifest import MB, FilesSpec, PluginManifest, StudyKind, WorkspaceSpec
+from cfddesk.registry.manifest import (
+    MB,
+    START_ACTION_PLACES,
+    FilesSpec,
+    PluginManifest,
+    StartAction,
+    StudyKind,
+    WorkspaceSpec,
+)
 
 log = logging.getLogger(__name__)
 
@@ -705,8 +713,145 @@ def study_kinds_from_meta(meta: dict[str, Any]) -> list[StudyKind]:
             schema_version = int(row.get("schema_version", 1))
         except (TypeError, ValueError):
             raise ValueError(f"{key}: schema_version must be an integer") from None
-        out.append(StudyKind(key, title[:80], icon, workspace, max(1, schema_version)))
+        # API 1.4 (used from 1.5): only through a workspace, so a kind without one may not.
+        links = row.get("links_geometry", False)
+        if not isinstance(links, bool):
+            raise ValueError(f"{key}: links_geometry must be true or false")
+        if links and not workspace:
+            raise ValueError(f"{key}: links_geometry needs a workspace")
+        out.append(StudyKind(key, title[:80], icon, workspace, max(1, schema_version), links))
     return out
+
+
+# Button texts: one line, no control or bidirectional-override characters.
+_TEXT_BAD_RE = re.compile("[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]")
+# The header has room for this many characters on a start button.
+HEADER_LABEL_MAX = 24
+
+
+def _action_text(row: dict[str, Any], name: str, top: int, *, required: bool = False) -> str:
+    """A start action's text: a string of 1..top characters on one line (never cut)."""
+    value = row.get(name)
+    if value is None:
+        if required:
+            raise ValueError(f"needs a {name}")
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be text")
+    text = value.strip()
+    if not text:
+        if required:
+            raise ValueError(f"needs a {name}")
+        raise ValueError(f"{name} is empty")
+    if _TEXT_BAD_RE.search(text):
+        raise ValueError(f"{name} must be one line of plain text")
+    if len(text) > top:
+        raise ValueError(f"{name} is {len(text)} characters; at most {top}")
+    return text
+
+
+def start_actions_from_meta(
+    meta: dict[str, Any], kinds: list[StudyKind], workspaces: list[WorkspaceSpec]
+) -> tuple[list[StartAction], list[str]]:
+    """Validate ``[[start_actions]]`` (API 1.4): (actions, warnings).
+
+    A bad table raises ValueError (the plugin fails to load). A place this host
+    does not know is left out with a warning, so a plugin written for a later
+    host still loads; the table is an error only when no known place is left.
+    Unknown keys are ignored, as everywhere in the manifest.
+    """
+    raw = meta.get("start_actions")
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        raise ValueError("must be an array of tables")
+    by_key = {k.key: k for k in kinds}
+    titles = {w.key: w.title for w in workspaces}
+    out: list[StartAction] = []
+    warnings: list[str] = []
+    seen: set[str] = set()
+    header_of: dict[str, str] = {}
+    for row in raw:
+        if not isinstance(row, dict):
+            raise ValueError("each start action is a table")
+        kind_key = row.get("study_kind")
+        if not isinstance(kind_key, str) or not kind_key:
+            raise ValueError("each start action needs a study_kind")
+        kind = by_key.get(kind_key)
+        if kind is None:
+            raise ValueError(f"study_kind {kind_key!r} is not declared in [[study_kinds]]")
+        if not kind.workspace:
+            raise ValueError(f"{kind_key}: its study kind has no workspace to open")
+        if kind_key in seen:
+            raise ValueError(f"{kind_key}: has two start actions; at most one per kind")
+        seen.add(kind_key)
+        try:
+            label = _action_text(row, "label", 40, required=True)
+            hint = _action_text(row, "hint", 120)
+            home_label = _action_text(row, "home_label", 40)
+            header_label = _action_text(row, "header_label", HEADER_LABEL_MAX)
+        except ValueError as exc:
+            raise ValueError(f"{kind_key}: {exc}") from None
+        icon = row.get("icon", "")
+        if not isinstance(icon, str) or not _ICON_PATH_RE.match(icon):
+            raise ValueError(f"{kind_key}: icon must be one SVG path (d attribute)")
+        places_raw = row.get("places")
+        if places_raw is None:
+            places = START_ACTION_PLACES
+        else:
+            if not isinstance(places_raw, list) or not all(isinstance(p, str) for p in places_raw):
+                raise ValueError(f"{kind_key}: places must be a list of names")
+            if len(set(places_raw)) != len(places_raw):
+                raise ValueError(f"{kind_key}: places names a place twice")
+            for place in places_raw:
+                if place not in START_ACTION_PLACES:
+                    warnings.append(f"manifest [[start_actions]]: place {place!r} is not known to this app; ignored")
+            places = tuple(p for p in places_raw if p in START_ACTION_PLACES)
+            if not places:
+                raise ValueError(f"{kind_key}: places names no place this app knows ({', '.join(START_ACTION_PLACES)})")
+        if header_label and "header" not in places:
+            raise ValueError(f"{kind_key}: header_label needs places to include header")
+        if "header" in places:
+            other = header_of.get(kind.workspace)
+            if other is not None:
+                raise ValueError(f"{kind_key}: workspace {kind.workspace!r} already has a header action ({other}); at most one")
+            header_of[kind.workspace] = kind_key
+            title = titles.get(kind.workspace, "")
+            if not header_label and len(title) > HEADER_LABEL_MAX:
+                raise ValueError(
+                    f"{kind_key}: the header button would show the workspace title {title!r}, "
+                    f"longer than {HEADER_LABEL_MAX} characters; set header_label"
+                )
+        out.append(
+            StartAction(
+                study_kind=kind_key,
+                label=label,
+                hint=hint,
+                icon=icon or kind.icon,
+                places=places,
+                home_label=home_label,
+                header_label=header_label,
+            )
+        )
+    return out, warnings
+
+
+def start_action_row(manifest: PluginManifest, action: StartAction) -> dict[str, Any]:
+    """A start action as the catalog and the tree's kind rows publish it."""
+    kind = next((k for k in manifest.study_kinds if k.key == action.study_kind), None)
+    workspace = next((w for w in manifest.workspaces if kind is not None and w.key == kind.workspace), None)
+    return {
+        "study_kind": action.study_kind,
+        "kind_title": kind.title if kind else "",
+        "workspace": kind.workspace if kind else "",
+        "workspace_title": workspace.title if workspace else "",
+        "label": action.label,
+        "home_label": action.home_label,
+        "header_label": action.header_label,
+        "hint": action.hint,
+        "icon": action.icon,
+        "places": list(action.places),
+    }
 
 
 def workspaces_from_meta(meta: dict[str, Any], plugin_dir: Path) -> list[WorkspaceSpec]:
@@ -834,6 +979,11 @@ def _load_folder_plugin(
         hub.failures.append(_failure_row(key, f"manifest [[workspaces]]: {exc}", meta, source=source))
         return None, True
     try:
+        start_actions, manifest_warnings = start_actions_from_meta(meta, kinds, workspaces)
+    except ValueError as exc:
+        hub.failures.append(_failure_row(key, f"manifest [[start_actions]]: {exc}", meta, source=source))
+        return None, True
+    try:
         files = files_spec_from_meta(meta)
     except ValueError as exc:
         hub.failures.append(_failure_row(key, f"manifest [files]: {exc}", meta, source=source))
@@ -874,6 +1024,8 @@ def _load_folder_plugin(
         _apply_tier_meta(result, meta, tier)
         result.study_kinds = kinds
         result.workspaces = workspaces
+        result.start_actions = start_actions
+        result.manifest_warnings = manifest_warnings
         result.files = files
         result.python_env = python_env
         hub._loading_overrides.pop(key, None)
@@ -911,6 +1063,8 @@ def _load_folder_plugin(
         license=str(meta.get("license") or ""),
         study_kinds=kinds,
         workspaces=workspaces,
+        start_actions=start_actions,
+        manifest_warnings=manifest_warnings,
         files=files,
         python_env=python_env,
     )
@@ -1427,6 +1581,7 @@ def _catalog_row(
     workspaces: list[dict[str, Any]] | None = None,
     default_enabled: bool = True,
     files: dict[str, int] | None = None,
+    start_actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         # "bundled" ships with the app; a required one cannot be turned off.
@@ -1459,6 +1614,8 @@ def _catalog_row(
         "workspaces": list(workspaces or []),
         # Size limits (bytes) for its own files in a project; the defaults when not loaded.
         "files": dict(files) if files else _files_row(FilesSpec()),
+        # API 1.4: its start actions, only while it is loaded and on ([] otherwise).
+        "start_actions": list(start_actions or []),
     }
 
 
@@ -1552,13 +1709,22 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 tier=tier,
                 required=required,
                 python_env=_env_row_public(env_row),
-                notes=[*notes, *script_template_notes(hub, manifest.key)],
+                notes=[
+                    *notes,
+                    *script_template_notes(hub, manifest.key),
+                    *list(getattr(manifest, "manifest_warnings", None) or []),
+                ],
                 workspaces=[
                     {"key": w.key, "title": w.title, "icon": w.icon, "entry": w.entry}
                     for w in (manifest.workspaces or [])
                 ],
                 default_enabled=default_enabled,
                 files=_files_row(getattr(manifest, "files", None) or FilesSpec()),
+                start_actions=(
+                    [start_action_row(manifest, a) for a in (getattr(manifest, "start_actions", None) or [])]
+                    if status == "enabled"
+                    else []
+                ),
             )
         )
     # Folder plugins that are off: listed from their manifest, so they can be turned on.

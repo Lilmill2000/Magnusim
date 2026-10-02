@@ -10,7 +10,7 @@ from typing import Any
 from cfddesk.project import web_writes as ww
 from cfddesk.registry import get_hub, load_all, reset_for_tests
 from cfddesk.registry.base import RegistryError
-from cfddesk.registry.discovery import plugin_catalog
+from cfddesk.registry.discovery import plugin_catalog, start_action_row
 from cfddesk.registry.schema import validate as validate_schema
 from cfddesk.worker import (
     volume_cache as _volume_cache,  # noqa: F401 — puts python/tools on sys.path for the export_* imports
@@ -1158,8 +1158,16 @@ def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], l
             "icon": k.icon,
             # The workspace a study of this kind opens in ("" when it has none).
             "workspace": k.workspace,
+            # API 1.4: it may link a project geometry (used from 1.5), and its start action.
+            "links_geometry": k.links_geometry,
+            "start_action": next(
+                (start_action_row(m, a) for a in m.start_actions if a.study_kind == k.key),
+                None,
+            ),
         }
-        for key, m in sorted(enabled.items())
+        # Plugin load order (bundled, then user plugins), then manifest order: the
+        # order start actions are drawn and capped in (shownStartActions).
+        for key, m in enabled.items()
         for k in m.study_kinds
     ]
     return studies, kinds_out

@@ -4,13 +4,13 @@ A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins
 
 Copy `templates/plugin/` to start. That folder has `pyproject.toml`, `manifest.toml`, `register()`, and a pytest that loads the copy from a temporary `plugins/` directory.
 
-## Manifest 1.3
+## Manifest 1.4
 
 ```toml
 key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
-api_version = "1.3"
+api_version = "1.4"
 license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
@@ -219,7 +219,7 @@ await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab
 - **Unsaved work (1.2).** Call `ws.nav.setDirty(true, 'Sketch 2 is not saved')` on the first change that is not saved yet, and `ws.nav.setDirty(false)` once it is. While it is set, and while a `ws.files.write` is on its way, every way out of the workspace asks the user first, with your plugin's name and your message, and closing the browser tab shows the browser's own prompt. `ws.nav.back()` resolves `false` when the user stays; clear the flag first to leave without a question. Never reload your own page while dirty: a reload clears the flag and loses the work. If your page accepts dropped files, call `preventDefault()` on `dragover` and `drop`, or the browser opens the file in place of the app.
 - **Keyboard and full screen (1.2).** Your page has the keyboard when it connects and again after the app's dialogs and Settings close; listen on `window` or `document`. `document.documentElement.requestFullscreen()` from a click or key handler covers the whole screen; Esc always leaves, and the app leaves full screen before it shows a dialog. The app's toasts are not seen over a full-screen page.
 
-`python/tests/fixtures/workspace-plugins/ws-demo` is a complete example (modules, React, WebAssembly, a worker, service calls, data and study saves), driven by `e2e/h13-workspace.spec.js`.
+`python/tests/fixtures/workspace-plugins/ws-demo` is a complete example (modules, React, WebAssembly, a worker, service calls, data and study saves), driven by `e2e/h13-workspace.spec.js`. To start a workspace plugin of your own, copy `templates/plugin-workspace/`.
 
 ### OpenFOAM cases and solve hooks (1.3)
 
@@ -243,6 +243,48 @@ ws.compute.events(id, (ev) => {
 `compatibility.md` (1.3) has the rules: the calls, the case and `controlDict` rules, the table of WSL steps and their arguments (meshing utilities and parallel spans included), the events, Stop, what happens when the plugin is turned off or the app restarts, and the codes. `python/tests/fixtures/foam-plugins/foam-demo` is a complete example, driven by `e2e/h15-submit-openfoam.spec.js`.
 
 Your plugin's Python can also follow every solve, core runs included: `solve.prepare`, `solve.parse_line` (batches of solver output lines) and `solve.stop`, registered with `get_hooks().on(name, fn, plugin=KEY)` in `register(hub)`. They run inside the solve's relay process, never slow the solve, and are dropped for the run when they take too long or raise; `compatibility.md` lists what they are told and their limits.
+
+## Start actions (1.4)
+
+A study kind with a workspace can have a **start action**: a button that creates a study of that kind and opens it in its workspace. The host draws it in up to four places, the same way for every plugin:
+
+| Place | What the user sees | At most |
+|---|---|---|
+| `empty_project` | A button under Add geometry in a project with no geometry, with your `hint` below it | 3 |
+| `header` | A button in the project header, left of Workspaces. Its menu lists the project's studies of the kind (read-only ones marked), then "New <Kind>" | 3 |
+| `new_project` | A radio under "Start from" in the New Project dialog, beside "Import geometry". A long list scrolls; the dialog opens at once and adds the radios when the app has read them | no limit |
+| `home` | A button on Home, left of New project. It opens the New Project dialog with your action chosen and a title "Untitled <Kind> N" filled in, so one Create click makes the project and the study | 3 |
+
+```toml
+[[workspaces]]
+key = "sketch"
+title = "Sketch"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "sketch"
+title = "Sketch"
+workspace = "sketch"            # a start action needs a kind with a workspace
+
+[[start_actions]]
+study_kind = "sketch"           # required: one of your kinds that has a workspace
+label = "Start a sketch"        # required, 1-40 characters
+hint = "Draw it here, then simulate it"   # optional, up to 120 characters
+icon = "M4 8l8-4 8 4"           # optional, one SVG path; the default is the kind's icon
+places = ["empty_project", "header", "new_project", "home"]   # optional; the default is all four
+home_label = "New sketch"       # optional, 1-40 characters: Home's button text (default: label)
+header_label = "Sketch"         # optional, 1-24 characters: the header button's text
+```
+
+- **The study.** A click makes a study named with the first "<Kind title> N" that no study of any plugin in the project, and no geometry, already has. There is no name prompt; the user renames it from the workspace header. The workspace then opens at `#/p/<project>/ws/<plugin>/<workspace>/<study>`. A button stays disabled from the click until the workspace opens or a notice shows. If the study cannot be made (your plugin was turned off meanwhile), the user sees "Could not create the study"; the project stays open (from the New Project dialog, the new project opens without the study).
+- **Rules.** At most one start action per kind, and at most one `header` action per workspace. Texts are one line of plain text, with no control or bidirectional-override characters, and the manifest check never shortens them: a text that is too long is an error. On Home, in a window too narrow for every button, a start button's text ends in "…" and its tooltip has the whole text; New project always stays in view. The header button shows `header_label`, or else the workspace title, which must then be 24 characters or fewer. `header_label` needs `"header"` in `places`. A bad table fails only your plugin, with "manifest [[start_actions]]: …" on its Settings row.
+- **Places a later host may add.** A name in `places` this host does not know is ignored, with a warning on your plugin's Settings row ("place 'toolbar' is not known to this app; ignored"), so a plugin written for a later host still loads. The table is an error only when no known place is left. Keys this host does not know are ignored.
+- **Order and caps.** Places list actions in plugin load order (bundled plugins first, then the user's plugins folder), then manifest order, each place cut at its cap. A kind whose header button was cut stays in the Workspaces menu, and STUDIES shows it. A kind shown as a header button leaves the Workspaces menu. STUDIES stays hidden in a project that has no plugin study while every kind is a header button.
+- **When nothing shows.** A plugin that is off, missing, needs setup or failed to load shows its actions nowhere. They come back without a reload once it is turned on in Settings → Plugins.
+- **Older hosts.** A 1.3 host ignores `[[start_actions]]`: your kinds still open from the Workspaces menu and STUDIES. Set `api_version = "1.4"`.
+- **`links_geometry` (parsed in 1.4, used from 1.5).** `links_geometry = true` on a study kind says its studies may link one project geometry. It must be `true` or `false`, and the kind must have a workspace.
+
+`templates/plugin-workspace/` is a working starting point: a kind, a workspace page, and commented-out `[[start_actions]]` and `links_geometry` lines. `python/tests/fixtures/start-plugins/` has two complete examples, driven by `e2e/start-actions.spec.js`.
 
 ## UI kit (1.3)
 

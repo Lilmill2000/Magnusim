@@ -15,6 +15,7 @@
         <div class="home-top-actions">
           <button type="button" class="home-btn" id="home-prefs">Settings</button>
           <button type="button" class="home-btn" id="home-new-folder">New folder</button>
+          <span id="home-start-host" class="home-start-host"></span>
           <button type="button" class="home-btn-primary" id="home-new-project">New project</button>
         </div>
       </header>
@@ -86,6 +87,7 @@
           <span class="project-name">Project</span>
         </div>
         <div class="top-right">
+          <span id="ws-start-host" class="ws-menu-host ws-start-host"></span>
           <span id="ws-menu-host" class="ws-menu-host"></span>
           <div class="queue-menu" id="queue-menu">
             <button type="button" class="home-btn queue-btn" id="btn-queue" aria-haspopup="true" aria-expanded="false" aria-controls="job-queue-chip" title="Meshes and runs: what is running and what waits for it">
@@ -671,6 +673,7 @@
           <div id="wb-empty-cta" class="wb-empty-cta" hidden>
             <button type="button" class="wb-empty-btn" id="btn-add-geometry">Add geometry</button>
             <p class="wb-empty-hint">Import STEP, IGES, BREP, STL, OBJ or PLY to start the setup</p>
+            <div id="wb-empty-start" class="wb-empty-start"></div>
           </div>
           <div id="inspect-readout" class="inspect-readout" hidden aria-hidden="true"></div>
           <div id="inspect-pins" class="inspect-pins" hidden aria-label="Inspected points"></div>
@@ -1254,6 +1257,10 @@
           <label for="np-folder-new">New folder name</label>
           <input type="text" id="np-folder-new" placeholder="Cyclone studies" autocomplete="off" />
         </div>
+        <fieldset class="np-field np-start" id="np-start" hidden>
+          <legend>Start from</legend>
+          <div class="np-start-list" id="np-start-list"></div>
+        </fieldset>
         <div class="np-actions">
           <button type="button" class="js-btn" id="np-cancel">Cancel</button>
           <button type="button" class="js-btn js-btn-kick" id="np-create">Create</button>

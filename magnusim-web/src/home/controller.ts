@@ -9,6 +9,7 @@ import { formatElapsed, formatSimTime } from '../plugin-ui/format/time';
 import { initSetupWizard } from '../wizard/controller';
 import { confirmLeaveWorkspace, openWorkspaceRoute, workspaceDirty } from '../workspace/leaveGuard';
 import { hashIsProject, parseWorkspaceHash } from '../workspace/route';
+import { loadStartActions, shownStartActions, startActionsNow, startKey } from '../workspace/startActions';
 
 function $(id) {
   return document.getElementById(id);
@@ -741,7 +742,59 @@ const NEW_FOLDER_VALUE = '__new__';
 const projectModal = {
   mode: 'create',
   id: null,
+  // The start actions offered under "Start from" for this opening (API 1.4).
+  starts: [],
+  // Counts openings, so a late read of the start actions fills only the opening it was for.
+  opening: 0,
 };
+
+/** The "Start from" actions: every new_project one, plus the opener's (Home's button). */
+function startChoicesFor(all, want) {
+  const starts = shownStartActions(all).new_project.slice();
+  const chosen = want ? all.find((e) => e.plugin === want.plugin && e.action.study_kind === want.kind) || null : null;
+  if (chosen && !starts.some((e) => startKey(e) === startKey(chosen))) starts.push(chosen);
+  return { starts, chosen };
+}
+
+/** The first free "Untitled <kind title> N" among the projects of a folder. */
+export function firstFreeUntitledTitle(kindTitle, projects, folder) {
+  const base = `Untitled ${String(kindTitle || '').trim() || 'project'}`;
+  const where = String(folder || ROOT_FOLDER);
+  const taken = new Set(
+    (projects || [])
+      .filter((p) => String(p.folder || ROOT_FOLDER) === where)
+      .map((p) => String(p.title || '').trim().toLowerCase()),
+  );
+  let n = 1;
+  while (taken.has(`${base} ${n}`.toLowerCase())) n += 1;
+  return `${base} ${n}`;
+}
+
+/** "Start from": "Import geometry" (the default) and one radio per start action. */
+function fillStartChoices(entries, chosen) {
+  const list = $('np-start-list');
+  if (!list) return;
+  const radio = (id, value, label, hint, checked) =>
+    `<label class="np-start-choice" for="${id}">` +
+    `<input type="radio" name="np-start-choice" id="${id}" value="${escapeHtml(value)}"${checked ? ' checked' : ''} />` +
+    `<span><span class="np-start-label">${escapeHtml(label)}</span>` +
+    (hint ? `<span class="np-start-hint">${escapeHtml(hint)}</span>` : '') +
+    '</span></label>';
+  list.innerHTML = [
+    radio('np-start-import', '', 'Import geometry', '', !chosen),
+    ...entries.map((e, i) =>
+      radio(`np-start-action-${i}`, startKey(e), e.action.label, e.action.hint, !!chosen && startKey(chosen) === startKey(e)),
+    ),
+  ].join('');
+}
+
+/** The start action checked under "Start from", or null for "Import geometry". */
+function chosenStart() {
+  if (projectModal.mode === 'edit') return null;
+  const value = document.querySelector('#np-start-list input[name="np-start-choice"]:checked')?.value || '';
+  const entry = projectModal.starts.find((e) => startKey(e) === value);
+  return entry ? { plugin: entry.plugin, kind: entry.action.study_kind } : null;
+}
 
 function setSelectValue(sel, value) {
   if (!sel || value == null) return;
@@ -758,6 +811,8 @@ function setSelectValue(sel, value) {
 function paintProjectModalChrome() {
   const heading = $('np-heading');
   const btn = $('np-create');
+  const start = $('np-start');
+  if (start) start.hidden = projectModal.mode === 'edit' || !projectModal.starts.length;
   if (projectModal.mode === 'edit') {
     if (heading) heading.textContent = 'Edit project';
     if (btn) btn.textContent = 'Save';
@@ -806,6 +861,7 @@ export async function prepareCreateModal(existing, opts) {
   const title = $('np-title');
   const desc = $('np-description');
   const editing = existing && existing.id;
+  projectModal.opening += 1;
   projectModal.mode = editing ? 'edit' : 'create';
   projectModal.id = editing ? existing.id : null;
   if (title) {
@@ -820,6 +876,7 @@ export async function prepareCreateModal(existing, opts) {
     setSelectValue($('np-category'), existing.category || 'Other');
     setSelectValue($('np-units'), existing.units || 'Metric');
     fillFolderSelect(existing.folder || ROOT_FOLDER);
+    projectModal.starts = [];
   } else {
     setSelectValue($('np-category'), 'Fluid dynamics');
     const prefUnits =
@@ -828,6 +885,41 @@ export async function prepareCreateModal(existing, opts) {
     fillFolderSelect(
       (opts && opts.folder) || currentFolderName() || state.selectedFolder || ROOT_FOLDER,
     );
+    // "Start from" (API 1.4): every new_project action, plus the one this opening was
+    // asked for (Home's button) when it has no new_project place. The dialog does not
+    // wait on the worker: it draws what the store has, and a read still out (or the
+    // first one) fills "Start from" when it lands, keeping the user's choice. Only a
+    // Home button's opening waits, when the store has nothing yet (its button was drawn
+    // from the store, so it never has to in practice).
+    const want = opts && opts.start;
+    const opening = projectModal.opening;
+    let all = startActionsNow();
+    if (!all && want) {
+      try {
+        all = await loadStartActions();
+      } catch (e) {
+        console.warn('[CFD home] start actions', e);
+      }
+    }
+    const { starts, chosen } = startChoicesFor(all || [], want);
+    projectModal.starts = starts;
+    fillStartChoices(starts, chosen);
+    loadStartActions()
+      .then((fresh) => {
+        if (projectModal.opening !== opening || projectModal.mode !== 'create') return;
+        const again = startChoicesFor(fresh, want);
+        if (again.starts.map(startKey).join('\n') === projectModal.starts.map(startKey).join('\n')) return;
+        const checked = document.querySelector('#np-start-list input[name="np-start-choice"]:checked')?.value || '';
+        projectModal.starts = again.starts;
+        fillStartChoices(again.starts, again.starts.find((e) => startKey(e) === checked) || null);
+        paintProjectModalChrome();
+      })
+      .catch((e) => console.warn('[CFD home] start actions', e));
+    // One Create click is enough: the title is filled in, and selected so typing replaces it.
+    if (chosen && title) {
+      title.value = firstFreeUntitledTitle(chosen.action.kind_title, state.projects, $('np-folder')?.value);
+      title.select();
+    }
   }
   paintProjectModalChrome();
 }
@@ -871,7 +963,7 @@ export async function submitProjectModal() {
     selectProject(id);
     return { ok: true, mode: 'edit', project: j.project };
   }
-  return { ok: true, mode: 'create', fields };
+  return { ok: true, mode: 'create', fields, start: chosenStart() };
 }
 
 function openEditModal(project) {
@@ -911,10 +1003,15 @@ export async function folderValueFromCreateModal() {
   return { ok: true, folder };
 }
 
-function openCreateModalFromHome(folder) {
+/**
+ * New Project from Home, in the folder shown. `extra.start` ({plugin, kind}: a start
+ * action's Home button, API 1.4) opens it with that action chosen and a title filled in.
+ */
+export function openCreateModalFromHome(folder, extra) {
   const raw = typeof folder === 'string' ? folder : '';
   const hint = String(raw || currentFolderName() || state.selectedFolder || '').trim();
-  const opts = hint ? { folder: hint } : undefined;
+  const start = extra && extra.start ? { plugin: String(extra.start.plugin), kind: String(extra.start.kind) } : null;
+  const opts = hint || start ? { ...(hint ? { folder: hint } : {}), ...(start ? { start } : {}) } : undefined;
   if (window.__CFD_OPEN_NEW_PROJECT_MODAL__) {
     window.__CFD_OPEN_NEW_PROJECT_MODAL__(null, opts);
     return;
@@ -923,6 +1020,7 @@ function openCreateModalFromHome(folder) {
     const modal = $('modal-new-project');
     if (modal) modal.hidden = false;
     $('np-title')?.focus();
+    if (start) $('np-title')?.select();
   });
 }
 

@@ -89,6 +89,10 @@ export interface PluginStudyKind {
   icon: string;
   /** The workspace a study of this kind opens in ("" when none). */
   workspace?: string;
+  /** API 1.4: a study of this kind may link a project geometry (used from 1.5). */
+  links_geometry?: boolean;
+  /** API 1.4: its start action (manifest [[start_actions]]), or null. */
+  start_action?: import('../workspace/startActions').StartAction | null;
 }
 
 interface ProjectTreeGeom {

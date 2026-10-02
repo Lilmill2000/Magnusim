@@ -35,7 +35,7 @@ import type {
 } from '../plugin-sdk/workspace';
 
 export const HOST_SDK_MAJOR = 1;
-export const HOST_API_VERSION = '1.3';
+export const HOST_API_VERSION = '1.4';
 const PROBE_MS = 1500;
 const METHOD_NAME = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,120}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/i;

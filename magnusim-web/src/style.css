@@ -5156,4 +5156,38 @@ body.is-recording #viewport-gizmo {
 }
 .ws-menu-list button:hover { background: var(--mg-selected-bg); }
 .ws-menu-plugin { color: var(--mg-text-muted); font-size: var(--mg-text-sm); }
+/* Start actions (API 1.4): header buttons, their menus, the empty project and Home. */
+.ws-menu-list button:focus-visible { background: var(--mg-selected-bg); outline: none; }
+.ws-menu-list button:disabled { color: var(--mg-text-muted); cursor: default; }
+.ws-menu-sep { height: 1px; margin: 4px 6px; background: var(--mg-border-subtle); }
+.ws-menu-note { padding: 6px 10px; color: var(--mg-text-muted); font-size: var(--mg-text-md); white-space: nowrap; }
+.ws-start-host { display: inline-flex; gap: 8px; }
+.ws-start-btn { display: inline-flex; align-items: center; gap: 6px; }
+.ws-start-icon { flex: none; }
+.home-start-host { display: flex; gap: 8px; flex: 0 1 auto; min-width: 0; }
+.home-start-host:empty { display: none; }
+/* A start button gives way first: cut with an ellipsis (its full text is its tooltip). */
+.home-start-host .home-btn { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* With start buttons the header is a row that gives way instead of overflowing: the
+   start buttons shrink, then the search (down to 140px), so the mark, the search,
+   Settings, New folder and New project always stay in view. */
+.home-top:has(.home-start-host:not(:empty)) { display: flex; justify-content: space-between; column-gap: 12px; }
+.home-top:has(.home-start-host:not(:empty)) .home-mark { flex: none; }
+.home-top:has(.home-start-host:not(:empty)) .home-search-wrap { flex: 0 1 420px; width: auto; min-width: 140px; }
+.home-top:has(.home-start-host:not(:empty)) .home-top-actions { flex: 0 1 auto; min-width: 0; }
+.home-top:has(.home-start-host:not(:empty)) .home-top-actions > button { flex: none; white-space: nowrap; }
+.wb-empty-start { display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none; }
+.wb-empty-start:empty { display: none; }
+.wb-empty-start-item { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.wb-empty-start .wb-empty-btn:disabled { opacity: 0.6; cursor: default; }
+.np-start { border: 0; margin: 0; padding: 0; min-width: 0; }
+.np-start[hidden] { display: none; }
+.np-start legend { padding: 0; margin-bottom: 6px; font-size: 11px; color: #5b6575; }
+.np-start-list { display: flex; flex-direction: column; gap: 6px; }
+/* Any number of start actions: the list scrolls, so the title and Create stay in view. */
+#modal-new-project .cfd-modal-card { max-height: calc(100vh - 32px); overflow-y: auto; }
+#modal-new-project .np-start-list { max-height: min(240px, 32vh); overflow-y: auto; padding-right: 2px; }
+.np-start .np-start-choice { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--mg-text-strong); cursor: pointer; }
+.np-start .np-start-choice input { margin-top: 3px; }
+.np-start-hint { display: block; color: var(--mg-text-muted); font-size: var(--mg-text-sm); }
 .plugin-study .tree-row[data-plugin-study-open] { cursor: pointer; }

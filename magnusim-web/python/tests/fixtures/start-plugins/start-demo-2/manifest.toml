@@ -1,0 +1,61 @@
+key = "start-demo-2"
+name = "Start demo two"
+version = "1.0.0"
+api_version = "1.4"
+license = "GPL-3.0-or-later"
+description = "Test plugin with three header start actions (API 1.4): with start-demo, one more than the header holds"
+authors = "Magnusim"
+
+[[workspaces]]
+key = "alpha"
+title = "Alpha bench"
+icon = "M4 5h16v14H4z"
+entry = "workspace/index.html"
+
+[[workspaces]]
+key = "beta"
+title = "Beta bench"
+icon = "M4 5h16v14H4z M12 5v14"
+entry = "workspace/index.html"
+
+[[workspaces]]
+key = "gamma"
+title = "Gamma bench"
+icon = "M4 5h16v14H4z M4 12h16"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "alpha"
+title = "Alpha"
+icon = "M6 18L12 6l6 12z"
+workspace = "alpha"
+
+[[study_kinds]]
+key = "beta"
+title = "Beta"
+icon = "M7 5h6a4 4 0 010 8H7z M7 13h7a4 4 0 010 8H7z"
+workspace = "beta"
+
+[[study_kinds]]
+key = "gamma"
+title = "Gamma"
+icon = "M6 6h12 M9 6v12"
+workspace = "gamma"
+
+# "toolbar" is a place a later host may have: this one ignores it, with a warning.
+[[start_actions]]
+study_kind = "alpha"
+label = "Start an alpha"
+hint = "An alpha study, opened in its bench"
+places = ["header", "toolbar", "empty_project", "new_project", "home"]
+
+[[start_actions]]
+study_kind = "beta"
+label = "Start a beta"
+places = ["header", "new_project"]
+
+# The fourth header action over the two plugins (start-demo loads first): past the cap.
+[[start_actions]]
+study_kind = "gamma"
+label = "Start a gamma"
+places = ["header", "empty_project", "home"]

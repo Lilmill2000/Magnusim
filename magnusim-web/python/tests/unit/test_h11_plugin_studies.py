@@ -143,6 +143,9 @@ def test_studies_create_list_rename_delete_and_stale_rev(env):
             "icon": st["icon"],
             # No workspace declared: its studies do not open in one (H13).
             "workspace": "",
+            # API 1.4: no link, no start action.
+            "links_geometry": False,
+            "start_action": None,
         }
     ]
     assert methods.plugin_studies_list(project_id="proj-b")["studies"] == []

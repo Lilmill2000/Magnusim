@@ -2,6 +2,22 @@
 
 The host loads a plugin whose `api_version` has the same major version as its own (`cfddesk.registry.API_VERSION`). A minor version adds things; it never removes or changes what an older minor version offered, so a `1.0` plugin loads unchanged on a `1.1` host. The one exception is a safety fix, listed under the version that made it (1.2 made `ws.data` paths stricter).
 
+## 1.4
+
+Host API 1.4 (`API_VERSION`, and `hostVersion` in a workspace's context). The workspace SDK (1.1.0), `magnusim_sdk` (1.2.0) and the plugin UI kit are unchanged. A 1.3 plugin loads unchanged.
+
+**Start actions, `[[start_actions]]`.** A study kind with a workspace may declare one start action: a button that creates a study of that kind (named with the first free "<Kind title> N", no prompt) and opens it in its workspace. The host draws it in the empty project, the header, the New Project dialog and Home (`places`, default all four), at most 3 in each place except the New Project dialog, in plugin load order then manifest order. Fields: `study_kind` and `label` (1-40 characters) are required; `hint` (up to 120), `icon` (one SVG path), `places`, `home_label` (1-40) and `header_label` (1-24, needs `"header"` in `places`) are optional. At most one action per kind and one `header` action per workspace; without `header_label` the workspace title must be 24 characters or fewer. Texts are one line with no control or bidirectional characters, and are never shortened by the check (too long is an error); Home cuts a start button's text with "…" only when the window is too narrow, with the whole text in its tooltip. A bad table fails only that plugin ("manifest [[start_actions]]: …"). `authoring.md` has the whole contract.
+
+**`links_geometry`.** A `[[study_kinds]]` key, `true` or `false` (default `false`); `true` needs the kind to have a `workspace`. It is checked from 1.4 and used from 1.5, which adds the call that links a geometry.
+
+**Unknown names in manifest lists are ignored.** From 1.4 on, a value in a manifest list this host does not know (a `places` name a later host added) is left out, with a warning on the plugin's Settings row, so a plugin written for a later host still loads; the table is an error only when nothing it can use is left. This is the rule for every manifest enum from 1.4 on. Unknown keys are ignored, as before.
+
+**Published.** `GET /api/plugins` rows (`plugins.list`) add `start_actions: [{study_kind, kind_title, workspace, workspace_title, label, home_label, header_label, hint, icon, places}]`, filled only for a plugin that is on (`[]` for one that is off, needs setup, failed or is incompatible); `home_label` and `header_label` are `""` when not set. The project tree's `plugin_study_kinds` and `plugin_studies.list`'s `kinds` add `links_geometry` and `start_action` (the same object, or `null`), and are listed in plugin load order (they were sorted by plugin key).
+
+**The project header.** The header button of a kind shown there (left of Workspaces, in a project; a workspace's own header does not show it) opens a menu of that kind's studies and "New <Kind>"; the Workspaces menu no longer lists that kind, and disappears when no kind is left for it. Both menus open from the keyboard (Down, Enter or Space; Up, Down, Home, End; Escape returns the focus to the button; Tab closes).
+
+**Kit formatters and units (`@magnusim/plugin-ui`, same signatures).** `formatSimTime(null)` and `formatSimTime('')` return "—" (were "0 s"); a value that rounds into the next band is written in that band (99.95 gives "100 s", was "100.0 s"); `formatSci(999999.9)` gives "1.0000e+6" (was "1000000"); `unitIsImperial('min')` and `unitIsImperial('mmH₂O')` are `false` (were `true`).
+
 ## 1.3
 
 Host API 1.3 (`API_VERSION`, and `hostVersion` in a workspace's context), plugin UI kit 1.0.0 (`PLUGIN_UI_API_VERSION`); workspace SDK 1.1.0 and `magnusim_sdk` 1.2.0 are unchanged. A 1.2 plugin loads unchanged.

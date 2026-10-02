@@ -159,5 +159,16 @@ one of two forms. `npm run test:e2e` and `test:e2e:changed` find both.
   can list the core paths it depends on in its `package.json`
   (`"magnusim": {"e2eHostPaths": [...]}`), so other core changes don't run its
   suite. Without a list, every core change runs it.
+  - **Added by the manifest.** A plugin with a list also depends on the host
+    features its `manifest.toml` opts into, with no plugin named in the core:
+    a `[[start_actions]]` table adds `START_ACTION_HOST_PATHS` (Home, the New
+    Project dialog, the header and empty-project buttons and their host
+    elements, the create-then-open path in `runtime.js`, the tree's kind rows
+    and the STUDIES rule, the manifest checks),
+    and a study kind with `links_geometry = true` adds `LINK_HOST_PATHS` (the
+    linked geometry's writers and readers). Both lists are in
+    `scripts/e2e-suites.mjs`; `discoverPluginSuites` adds them by a plain line
+    test of the manifest, so a commented-out example adds nothing
+    (`scripts/__tests__/e2e-suites.test.mjs`, `gate:l1-suites`).
 - **Fast tier.** A plugin's tests that mesh or solve must skip when
   `MAGNUSIM_E2E_WSL=0`.

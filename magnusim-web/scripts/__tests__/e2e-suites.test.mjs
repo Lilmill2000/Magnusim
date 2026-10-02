@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { CONTRACT_SPECS, HOST_PATHS, classifyPath, discoverPluginSuites, planSuites, suiteOfFilter, toWebRel } from '../e2e-suites.mjs';
+import { CONTRACT_SPECS, HOST_PATHS, LINK_HOST_PATHS, START_ACTION_HOST_PATHS, classifyPath, discoverPluginSuites, planSuites, suiteOfFilter, toWebRel } from '../e2e-suites.mjs';
 import { acquireWslLock, mayRunWslTests } from '../../e2e/support/wsl-lock.mjs';
 
 const PLUGINS = ['cad'];
@@ -117,6 +117,64 @@ test('plugin suites are found by their own test:e2e script or an e2e/playwright.
       { key: 'own', run: 'npm', hostPaths: ['src/workspace/'] },
       { key: 'shared', run: 'playwright', config: 'bundled-plugins/shared/e2e/playwright.config.js', hostPaths: null },
     ]);
+  } finally {
+    rmSync(web, { recursive: true, force: true });
+  }
+});
+
+test('gate:l1-suites a plugin that declares start actions or links a geometry depends on those host paths too', () => {
+  const web = mkdtempSync(join(tmpdir(), 'magnusim-suites-'));
+  try {
+    const put = (rel, text) => {
+      mkdirSync(join(web, rel, '..'), { recursive: true });
+      writeFileSync(join(web, rel), text);
+    };
+    const npm = (hostPaths) => JSON.stringify({ scripts: { 'test:e2e': 'node e2e.mjs' }, ...(hostPaths ? { magnusim: { e2eHostPaths: hostPaths } } : {}) });
+    const kind = (extra = '') => `[[study_kinds]]\nkey = "part"\ntitle = "Part"\nworkspace = "part"\n${extra}`;
+    put('bundled-plugins/starter/package.json', npm(['src/plugin-sdk/']));
+    put('bundled-plugins/starter/manifest.toml', `key = "starter"\n\n${kind()}\n[[start_actions]]\nstudy_kind = "part"\nlabel = "Start"\n`);
+    put('bundled-plugins/linker/package.json', npm(['src/plugin-sdk/']));
+    put('bundled-plugins/linker/manifest.toml', `key = "linker"\n\n${kind('links_geometry = true\n')}`);
+    put('bundled-plugins/both/e2e/playwright.config.js', 'export default {};');
+    put('bundled-plugins/both/package.json', JSON.stringify({ magnusim: { e2eHostPaths: ['src/plugin-sdk/'] } }));
+    put('bundled-plugins/both/manifest.toml', `key = "both"\n\n${kind('links_geometry  =  true   # opt in\n')}\n[[start_actions]]\nstudy_kind = "part"\nlabel = "Start"\n`);
+    // Commented out, or false: nothing is added.
+    put('bundled-plugins/quiet/package.json', npm(['src/plugin-sdk/']));
+    put('bundled-plugins/quiet/manifest.toml', `key = "quiet"\n\n${kind('links_geometry = false\n')}\n# [[start_actions]]\n# links_geometry = true\n`);
+    // No list of its own: it already runs on every core change.
+    put('bundled-plugins/all/package.json', npm(null));
+    put('bundled-plugins/all/manifest.toml', `key = "all"\n\n${kind()}\n[[start_actions]]\nstudy_kind = "part"\nlabel = "Start"\n`);
+    const byKey = Object.fromEntries(discoverPluginSuites(web).map((s) => [s.key, s.hostPaths]));
+    assert.deepEqual(byKey.starter, ['src/plugin-sdk/', ...START_ACTION_HOST_PATHS]);
+    assert.deepEqual(byKey.linker, ['src/plugin-sdk/', ...LINK_HOST_PATHS]);
+    assert.deepEqual(byKey.both, ['src/plugin-sdk/', ...START_ACTION_HOST_PATHS, ...LINK_HOST_PATHS]);
+    assert.deepEqual(byKey.quiet, ['src/plugin-sdk/']);
+    assert.equal(byKey.all, null);
+    // The host's own files for them, with no plugin named.
+    for (const p of ['src/home/', 'src/workspace/startActions.ts', 'src/chrome/MenuButton.tsx', 'python/cfddesk/registry/']) {
+      assert.ok(START_ACTION_HOST_PATHS.includes(p), p);
+    }
+    for (const p of ['src/workspace/linkChoice.ts', 'scripts/link-store.js', 'scripts/compute-slot.js', 'python/cfddesk/project/']) {
+      assert.ok(LINK_HOST_PATHS.includes(p), p);
+    }
+    for (const list of [START_ACTION_HOST_PATHS, LINK_HOST_PATHS]) assert.ok(!list.some((p) => p.startsWith('bundled-plugins/')), list.join(' '));
+    // So a change to the Home page runs the starter's suite, not the quiet one's; so does
+    // a change to any other file that draws, publishes or opens a start action.
+    for (const changed of [
+      'src/home/controller.ts',
+      'src/workbench/runtime.js',
+      'python/cfddesk/worker/methods.py',
+      'src/chrome/LeftTree.tsx',
+      'src/chrome/treeModel.ts',
+      'src/app/shell.html',
+    ]) {
+      const plan = planSuites([changed], discoverPluginSuites(web));
+      assert.ok(plan.plugins.starter && plan.plugins.both && plan.plugins.all, changed);
+      assert.equal(plan.plugins.quiet, undefined, changed);
+      assert.equal(plan.plugins.linker, undefined, changed);
+    }
+    // HOST_PATHS.cad keeps its own list: a manifest adds the groups, not this table.
+    assert.ok(!HOST_PATHS.cad.includes('src/home/'));
   } finally {
     rmSync(web, { recursive: true, force: true });
   }

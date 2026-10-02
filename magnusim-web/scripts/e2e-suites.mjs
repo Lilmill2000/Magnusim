@@ -73,6 +73,78 @@ export const HOST_PATHS = {
   ],
 };
 
+/**
+ * Host files a bundled plugin's suite also depends on when its manifest declares
+ * `[[start_actions]]` (API 1.4): the places the host draws them (Home, the New Project
+ * dialog, the header and the empty project, their host elements in the shell), the
+ * create-then-open path (runtime.js), the tree's kind rows that publish them
+ * (worker methods, treeModel) with the STUDIES rule (LeftTree), and the manifest
+ * checks. Added to the plugin's own list by discoverPluginSuites; no plugin is named here.
+ */
+export const START_ACTION_HOST_PATHS = [
+  'src/home/',
+  'src/app/shell.html',
+  'src/workbench/runtime.js',
+  'src/workspace/startActions.ts',
+  'src/workspace/StartActionPlaces.tsx',
+  'src/workspace/WorkspacesMenu.tsx',
+  'src/chrome/MenuButton.tsx',
+  'src/chrome/studyName.ts',
+  'src/chrome/LeftTree.tsx',
+  'src/chrome/treeModel.ts',
+  'python/cfddesk/registry/',
+  'python/cfddesk/worker/methods.py',
+];
+
+/**
+ * Host files a bundled plugin's suite also depends on when one of its study kinds has
+ * `links_geometry = true` (API 1.5): the linked geometry's writers and readers.
+ */
+export const LINK_HOST_PATHS = [
+  'scripts/w16-project-geometry.js',
+  'scripts/w17-simulation.js',
+  'scripts/w18-materials.js',
+  'scripts/w19-boundary-conditions.js',
+  'scripts/w20-mesh.js',
+  'scripts/w21-mesh-generate.js',
+  'scripts/w22-area-average.js',
+  'scripts/w26-mesh-refinements.js',
+  'scripts/study-io.js',
+  'scripts/py-json.js',
+  'scripts/project-layout.js',
+  'scripts/w17-sim-catalog.js',
+  'scripts/geometry-face-match.js',
+  'scripts/link-store.js',
+  'scripts/compute-slot.js',
+  'scripts/foam-runner.js',
+  'scripts/server/',
+  'src/workbench/jobQueueOrder.ts',
+  'src/workbench/geometryRev.ts',
+  'src/workspace/linkChoice.ts',
+  'src/workbench/dialogs.ts',
+  'python/cfddesk/cad/',
+  'python/cfddesk/project/',
+  'python/sdk/magnusim_sdk/link.py',
+  'python/tools/gen_link_*',
+];
+
+/**
+ * The host path groups a bundled plugin's manifest opts into: a plain line test, so a
+ * commented-out example adds nothing.
+ */
+function manifestHostPaths(pluginDir) {
+  let text;
+  try {
+    text = readFileSync(join(pluginDir, 'manifest.toml'), 'utf8');
+  } catch {
+    return [];
+  }
+  const out = [];
+  if (/^\s*\[\[start_actions\]\]/m.test(text)) out.push(...START_ACTION_HOST_PATHS);
+  if (/^\s*links_geometry\s*=\s*true\b/m.test(text)) out.push(...LINK_HOST_PATHS);
+  return out;
+}
+
 function hostMatcher(entries) {
   if (!entries) return () => true;
   const tests = entries.map((e) => {
@@ -101,7 +173,10 @@ export function discoverPluginSuites(webRoot = WEB_ROOT) {
     } catch {
       /* no package.json */
     }
-    const hostPaths = pkg?.magnusim?.e2eHostPaths || HOST_PATHS[e.name] || null;
+    const base = pkg?.magnusim?.e2eHostPaths || HOST_PATHS[e.name] || null;
+    // A plugin with no list runs on every core change already; one with a list also
+    // depends on the host features its manifest opts into (start actions, linking).
+    const hostPaths = base ? [...base, ...manifestHostPaths(join(dir, e.name)).filter((p) => !base.includes(p))] : null;
     if (pkg?.scripts?.['test:e2e']) out.push({ key: e.name, run: 'npm', hostPaths });
     else if (existsSync(join(dir, e.name, 'e2e', 'playwright.config.js'))) {
       out.push({ key: e.name, run: 'playwright', config: `bundled-plugins/${e.name}/e2e/playwright.config.js`, hostPaths });

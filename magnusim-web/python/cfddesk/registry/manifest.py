@@ -19,6 +19,32 @@ class StudyKind:
     # The workspace that opens it (H13); empty until the plugin has one.
     workspace: str = ""
     schema_version: int = 1
+    # API 1.4: a study of this kind may link one project geometry (used from 1.5).
+    # Needs a workspace: the link is a workspace bridge call.
+    links_geometry: bool = False
+
+
+# Where the host draws a start action (manifest ``[[start_actions]]`` ``places``).
+START_ACTION_PLACES = ("empty_project", "header", "new_project", "home")
+
+
+@dataclass(frozen=True)
+class StartAction:
+    """A button that creates a study of a kind and opens it in its workspace
+    (manifest ``[[start_actions]]``, API 1.4).
+
+    ``places`` keeps only the places this host knows, in the manifest's order.
+    ``home_label`` is Home's text and ``header_label`` the header button's; ""
+    means the host's default (``label``, and the workspace title).
+    """
+
+    study_kind: str
+    label: str
+    hint: str = ""
+    icon: str = ""
+    places: tuple[str, ...] = START_ACTION_PLACES
+    home_label: str = ""
+    header_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,6 +131,10 @@ class PluginManifest:
     study_kinds: list[StudyKind] = field(default_factory=list)
     # Full workspaces it draws in a sandboxed frame ([[workspaces]]).
     workspaces: list[WorkspaceSpec] = field(default_factory=list)
+    # Buttons that create a study and open it ([[start_actions]], API 1.4).
+    start_actions: list[StartAction] = field(default_factory=list)
+    # What the manifest asked for that this host ignores (shown on its Settings row).
+    manifest_warnings: list[str] = field(default_factory=list)
     # Size limits for its own files in a project ([files]).
     files: FilesSpec = field(default_factory=FilesSpec)
     # Its own environment and service ([python]); None runs in the core (bundled, no extra packages).
