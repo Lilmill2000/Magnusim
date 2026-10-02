@@ -15,6 +15,12 @@ describe('formatSci and parseSci', () => {
     expect(formatSci(-12.5)).toBe('-12.5');
   });
 
+  it('uses exponent form when rounding reaches a million', () => {
+    expect(formatSci(999999.9)).toBe('1.0000e+6');
+    expect(formatSci(-999999.95)).toBe('-1.0000e+6');
+    expect(formatSci(999999.4)).toBe('999999');
+  });
+
   it('parses a number or gives null', () => {
     expect(parseSci(' 1.5e-3 ')).toBe(0.0015);
     expect(parseSci('')).toBeNull();

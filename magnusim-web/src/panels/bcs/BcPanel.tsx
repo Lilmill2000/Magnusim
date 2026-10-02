@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { workerRpc } from '../../api/workerRpc';
 import { SciNumberInput } from '../../forms/SciNumberInput';
 import { dispatchPanelDone, type IslandProps } from '../../islands';
-import { unitIsImperial } from '../../units/convert';
+import { UNITS, resolveUnit, unitIsImperial, type Quantity } from '../../units/convert';
 import {
   bcStateNow,
   clearBcFaces,
@@ -93,18 +93,15 @@ export function velocityUnits(velocityType?: string, flowRateType?: string): str
   return ['m/s', 'ft/s', 'ft/min'];
 }
 
-/** SI factor for each inlet/outlet unit: m/s, m³/s or kg/s. */
-const TO_SI: Record<string, number> = {
-  'm/s': 1,
-  'ft/s': 0.3048,
-  'ft/min': 0.00508,
-  'm³/s': 1,
-  'ft³/min': 0.00047194745,
-  'kg/s': 1,
-  'lb/s': 0.45359237,
-};
-
 type FlowKind = 'velocity' | 'volume' | 'mass';
+
+const FLOW_QUANTITY: Record<FlowKind, Quantity> = { velocity: 'velocity', volume: 'volumetric_flow', mass: 'mass_flow' };
+
+/** SI factor of an inlet/outlet unit (to m/s, m³/s or kg/s); 1 for a unit the table does not know. */
+function siFactor(kind: FlowKind, unit: string): number {
+  const q = FLOW_QUANTITY[kind];
+  return UNITS[q][resolveUnit(q, unit)] ?? 1;
+}
 
 function flowKind(velocityType?: string, flowRateType?: string): FlowKind {
   if (velocityType !== 'Flow rate') return 'velocity';
@@ -131,11 +128,11 @@ export function convertFlowValue(
   const toKind = flowKind(to.velocityType, to.flowRateType);
   const area = basis.face_area_m2 && basis.face_area_m2 > 0 ? basis.face_area_m2 : 0.01;
   const rho = basis.density > 0 ? basis.density : 1.196;
-  let si = Number(value) * (TO_SI[from.unit] ?? 1);
+  let si = Number(value) * siFactor(fromKind, from.unit);
   if (!Number.isFinite(si)) si = fromKind === 'velocity' ? 1 : fromKind === 'volume' ? area : rho * area;
   const velocity = fromKind === 'velocity' ? si : fromKind === 'volume' ? si / area : si / (rho * area);
   const out = toKind === 'velocity' ? velocity : toKind === 'volume' ? velocity * area : velocity * area * rho;
-  return roundSig(out / (TO_SI[to.unit] ?? 1));
+  return roundSig(out / siFactor(toKind, to.unit));
 }
 
 const PRESSURE_UNITS = ['Pa', 'kPa', 'psi'];

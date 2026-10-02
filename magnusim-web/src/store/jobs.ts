@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { subscribeJobEvents } from '../api/client';
+import { formatElapsed } from '../plugin-ui/format/time';
 import { useProjectStore } from './project';
+
+export { formatElapsed };
 
 export interface JobMirror {
   id: string;
@@ -91,13 +94,6 @@ export const useJobsStore = create<JobsState>((set, get) => ({
 
 export function useJob(jobId: string | undefined): JobMirror | undefined {
   return useJobsStore((s) => (jobId ? s.jobs[jobId] : undefined));
-}
-
-export function formatElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 /** Ticks every second while the job runs, then freezes on the finished value. */

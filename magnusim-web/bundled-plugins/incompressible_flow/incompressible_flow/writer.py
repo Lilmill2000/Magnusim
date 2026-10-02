@@ -22,6 +22,7 @@ from magnusim_sdk.foam import (
     write_decompose_par_dict as _write_decompose_par_dict_sdk,
 )
 from magnusim_sdk.foam import write_foam_text as _write_foam
+from magnusim_sdk.units import UNITS as _UNITS
 
 from .physics import DEFAULT_PHYSICS, StudyPhysics, TurbulenceModel, turbulence_fields
 
@@ -347,6 +348,21 @@ def inlet_speed_ms(bc: dict) -> float:
     return v
 
 
+_PA = _UNITS["pressure"]
+# The app's pressure units (magnusim_sdk.units), by every lower-case name a BC may carry.
+PRESSURE_PA_FACTORS: dict[str, float] = {
+    "kpa": _PA["kPa"],
+    "bar": _PA["bar"],
+    "psi": _PA["psi"],
+    "inh2o": _PA["inH₂O"],
+    "inh₂o": _PA["inH₂O"],
+    "in h2o": _PA["inH₂O"],
+    "inwc": _PA["inH₂O"],
+    "mmh2o": _PA["mmH₂O"],
+    "mmh₂o": _PA["mmH₂O"],
+}
+
+
 def pressure_pa(bc: dict) -> float:
     try:
         v = float(bc["value"]) if bc.get("value") is not None else float("nan")
@@ -355,19 +371,7 @@ def pressure_pa(bc: dict) -> float:
     if not math.isfinite(v):
         return 0.0
     unit = str(bc.get("unit") or "Pa").lower()
-    if unit in ("pa", ""):
-        return v
-    if unit == "kpa":
-        return v * 1e3
-    if unit == "bar":
-        return v * 1e5
-    if unit == "psi":
-        return v * 6894.757
-    if unit in ("inh2o", "in h2o", "inwc"):
-        return v * 249.089
-    if unit == "mmh2o":
-        return v * 9.80665
-    return v
+    return v * PRESSURE_PA_FACTORS.get(unit, 1.0)
 
 
 def uses_flow_rate(bc: dict) -> bool:

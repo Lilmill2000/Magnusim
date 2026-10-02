@@ -4,6 +4,7 @@
  * runs again when the case is written), the frame interval and the hint.
  */
 import type { RunPreview } from '../../../src/panels/legacyBridge';
+import { formatSimTime } from '@magnusim/plugin-ui';
 
 export interface TransientSettings {
   end_time: number;
@@ -17,22 +18,6 @@ export interface TransientSettings {
   n_correctors: number;
   n_non_orth_correctors: number;
   [key: string]: unknown;
-}
-
-/** Seconds → short label (5 s, 0.1 s, 2.5e-4 s). */
-export function formatSimTime(v: unknown): string {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '—';
-  if (n === 0) return '0 s';
-  const a = Math.abs(n);
-  let s: string;
-  if (a >= 100) s = n.toFixed(0);
-  else if (a >= 10) s = n.toFixed(1);
-  else if (a >= 1) s = String(Number(n.toFixed(2)));
-  else if (a >= 0.01) s = String(Number(n.toFixed(3)));
-  else if (a >= 1e-3) s = String(Number(n.toFixed(4)));
-  else s = n.toExponential(1);
-  return `${s} s`;
 }
 
 export function frameInterval(t: Partial<TransientSettings> | null | undefined): number {

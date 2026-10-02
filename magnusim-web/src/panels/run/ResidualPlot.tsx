@@ -1,4 +1,6 @@
-import { Fragment, useMemo, useRef, useState } from 'react';
+import { Fragment, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { tipLeft } from '../../plugin-ui/data/linePlotGeometry';
+import { formatSimTime } from '../../plugin-ui/format/time';
 import type { ResidualRow } from './residuals';
 
 /**
@@ -36,21 +38,6 @@ const PAD_T = 10;
 const PAD_B = 18;
 
 type Row = ResidualRow & { [key: string]: number | undefined };
-
-/** Seconds → short label (5 s, 0.1 s, 2.5e-4 s), as the runtime's formatSimTime. */
-export function formatSimTime(v: number): string {
-  if (!Number.isFinite(v)) return '—';
-  if (v === 0) return '0 s';
-  const a = Math.abs(v);
-  let s: string;
-  if (a >= 100) s = v.toFixed(0);
-  else if (a >= 10) s = v.toFixed(1);
-  else if (a >= 1) s = String(Number(v.toFixed(2)));
-  else if (a >= 0.01) s = String(Number(v.toFixed(3)));
-  else if (a >= 1e-3) s = String(Number(v.toFixed(4)));
-  else s = v.toExponential(1);
-  return `${s} s`;
-}
 
 function plotNum(v: number): string {
   if (!Number.isFinite(v)) return '—';
@@ -146,7 +133,15 @@ export function ResidualPlot({
   const series = useMemo(() => seriesFor(rows, declared), [rows, declared]);
   const geo = useMemo(() => plotGeometry(rows, endTime, seconds, series), [rows, endTime, seconds, series]);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const [hover, setHover] = useState<{ row: Row; x: number } | null>(null);
+  const tipRef = useRef<HTMLDivElement | null>(null);
+  const [hover, setHover] = useState<{ row: Row; x: number; width: number } | null>(null);
+  const [left, setLeft] = useState(0);
+  // Place the tip once its width is known: flipped left of the cursor near the right edge.
+  useLayoutEffect(() => {
+    const el = tipRef.current;
+    if (!hover || !el) return;
+    setLeft(tipLeft(hover.x, el.getBoundingClientRect().width, hover.width));
+  }, [hover]);
   if (!geo) return null;
 
   function onMove(e: React.PointerEvent) {
@@ -165,10 +160,9 @@ export function ResidualPlot({
         best = row;
       }
     }
-    setHover({ row: best, x: (geo.xOf(Number(best.t)) / W) * r.width });
+    setHover({ row: best, x: (geo.xOf(Number(best.t)) / W) * r.width, width: r.width });
   }
 
-  const tipLeft = hover ? hover.x + 8 : 0;
   return (
     <>
       <div className="sim-residual-wrap" onPointerMove={onMove} onPointerLeave={() => setHover(null)} data-residual-wrap="1">
@@ -210,7 +204,7 @@ export function ResidualPlot({
         {hover ? (
           <>
             <div className="sim-plot-cursor" style={{ left: `${hover.x.toFixed(1)}px` }} />
-            <div className="sim-plot-tip" style={{ left: `${tipLeft.toFixed(1)}px` }}>
+            <div ref={tipRef} className="sim-plot-tip" style={{ left: `${left.toFixed(1)}px` }}>
               <b>{seconds ? `t = ${formatSimTime(Number(hover.row.t))}` : `Iteration ${Math.round(Number(hover.row.t))}`}</b>
               {geo.metrics
                 .filter((m) => Number.isFinite(Number(hover.row[m.key])))

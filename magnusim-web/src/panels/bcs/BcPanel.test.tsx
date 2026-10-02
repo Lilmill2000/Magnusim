@@ -202,6 +202,16 @@ describe('editor', () => {
     expect(v).toBeCloseTo(10 / 0.3048, 3);
   });
 
+  it("converts with the app's unit table, every unit it lists", () => {
+    const basis = { face_area_m2: 0.01, density: 1.2 };
+    const vol = (unit: string) => ({ velocityType: 'Flow rate', flowRateType: 'Volumetric flow', unit });
+    // 1 L/s through 0.01 m² is 0.1 m/s; a second table without L/s read it as 1 m³/s (100 m/s).
+    expect(convertFlowValue(1, vol('L/s'), { velocityType: 'Fixed', unit: 'm/s' }, basis)).toBeCloseTo(0.1, 10);
+    // Six significant digits, as the panel rounds.
+    expect(convertFlowValue(1, vol('CFM'), vol('m³/s'), basis)).toBe(0.000471947);
+    expect(convertFlowValue(3.6, { velocityType: 'Fixed', unit: 'km/h' }, { velocityType: 'Fixed', unit: 'm/s' }, basis)).toBeCloseTo(1, 10);
+  });
+
   it('says so when no BC is open', () => {
     publish({ active_id: null });
     render(<BcPanel panelId="panel-bc-editor" />);

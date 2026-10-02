@@ -1207,7 +1207,8 @@ body,
   position: fixed;
   top: 52px;
   right: 16px;
-  z-index: 40;
+  /* The toast layer: above an open plugin workspace (--mg-z-workspace), as the app toasts. */
+  z-index: var(--mg-z-toast);
   max-width: min(520px, 56vw);
   padding: 7px 12px;
   border-radius: 6px;
@@ -1854,15 +1855,8 @@ body,
   height: 12px;
   margin-top: 0;
   border-radius: 2px;
-  background: linear-gradient(
-    to right,
-    #2b3cff 0%,
-    #00c2ff 20%,
-    #2ad66a 40%,
-    #f5d000 60%,
-    #ff7a00 80%,
-    #e02020 100%
-  );
+  /* The renders' lookup table (runtime.js sets it from the kit's colour map). */
+  background: var(--legend-cmap);
 }
 .legend-bar-shade {
   position: absolute;

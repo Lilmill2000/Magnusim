@@ -5,6 +5,7 @@
  * (folders, cards, search, create) without cloning SimScale chrome.
  */
 
+import { formatElapsed, formatSimTime } from '../plugin-ui/format/time';
 import { initSetupWizard } from '../wizard/controller';
 import { confirmLeaveWorkspace, openWorkspaceRoute, workspaceDirty } from '../workspace/leaveGuard';
 import { hashIsProject, parseWorkspaceHash } from '../workspace/route';
@@ -53,29 +54,6 @@ function formatBusyLabel(verb, startedAt) {
     : `${verb} ${mm}:${ss}`;
 }
 
-function formatHomeClock(ms) {
-  const s = Math.max(0, Math.floor(Number(ms) / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
-  return m + ':' + String(sec).padStart(2, '0');
-}
-
-function formatHomeSimTime(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '';
-  if (n === 0) return '0 s';
-  const a = Math.abs(n);
-  let s;
-  if (a >= 100) s = n.toFixed(0);
-  else if (a >= 10) s = n.toFixed(1);
-  else if (a >= 1) s = String(Number(n.toFixed(2)));
-  else if (a >= 0.01) s = String(Number(n.toFixed(3)));
-  else s = n.toExponential(1);
-  return s + ' s';
-}
-
 /** The run's progress is in simulated seconds (its analysis's x axis), else iterations. */
 function homeAxisIsSeconds(p) {
   if (p && (p.x_axis === 'seconds' || p.x_axis === 'iterations')) return p.x_axis === 'seconds';
@@ -113,7 +91,7 @@ export function formatHomeSolveLine(p) {
   if (homeAxisIsSeconds(p)) {
     const t = Number(p.sim_time) || 0;
     const end = Number(p.sim_end) || 0;
-    if (t > 0 && end > 0) bits.push(formatHomeSimTime(t) + ' / ' + formatHomeSimTime(end));
+    if (t > 0 && end > 0) bits.push(formatSimTime(t) + ' / ' + formatSimTime(end));
   } else {
     const it = Number(p.iteration) || 0;
     const end = Number(p.endTime) || 0;
@@ -121,7 +99,7 @@ export function formatHomeSolveLine(p) {
   }
   const eta = homeSolveEtaMs(p);
   if (eta != null && Number.isFinite(eta) && eta >= 0) {
-    bits.push(eta < 8000 ? '< 10s left' : '~' + formatHomeClock(eta) + ' left');
+    bits.push(eta < 8000 ? '< 10s left' : '~' + formatElapsed(eta) + ' left');
   }
   return bits.join(' · ');
 }

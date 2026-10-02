@@ -1,23 +1,29 @@
 /**
- * Time labels, one copy of each: simulated time, wall-clock elapsed time and
- * the time left. The core still has its own copies (see ROADMAP).
+ * Time labels, one copy of each for the core and plugins: simulated time,
+ * wall-clock elapsed time and the time left.
  */
 
-/** Seconds → short label (5 s, 0.1 s, 2.5e-4 s). */
+function simTimeDigits(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 100) return n.toFixed(0);
+  if (a >= 10) return n.toFixed(1);
+  if (a >= 1) return String(Number(n.toFixed(2)));
+  if (a >= 0.01) return String(Number(n.toFixed(3)));
+  if (a >= 1e-3) return String(Number(n.toFixed(4)));
+  return n.toExponential(1);
+}
+
+/** Seconds → short label (5 s, 0.1 s, 2.5e-4 s). No number (null, '', NaN): —. */
 export function formatSimTime(v: unknown, opts?: { noUnit?: boolean }): string {
+  if (v == null || (typeof v === 'string' && !v.trim())) return '—';
   const n = Number(v);
   if (!Number.isFinite(n)) return '—';
   const unit = opts && opts.noUnit ? '' : ' s';
   if (n === 0) return '0' + unit;
-  const a = Math.abs(n);
-  let s: string;
-  if (a >= 100) s = n.toFixed(0);
-  else if (a >= 10) s = n.toFixed(1);
-  else if (a >= 1) s = String(Number(n.toFixed(2)));
-  else if (a >= 0.01) s = String(Number(n.toFixed(3)));
-  else if (a >= 1e-3) s = String(Number(n.toFixed(4)));
-  else s = n.toExponential(1);
-  return s + unit;
+  const s = simTimeDigits(n);
+  // Rounding can carry into the next band (99.95 → "100.0"): label the rounded number in its own band.
+  const rounded = Number(s);
+  return (Math.abs(rounded) > Math.abs(n) ? simTimeDigits(rounded) : s) + unit;
 }
 
 /** Milliseconds → m:ss, or h:mm:ss from one hour. Not a number: 0:00. */

@@ -120,11 +120,10 @@ def _pressure_pa(bc: dict[str, Any]) -> float:
         return 0.0
     if not math.isfinite(v):
         return 0.0
+    from .writer import PRESSURE_PA_FACTORS
+
     unit = str(bc.get("unit") or "Pa").lower()
-    if unit in ("pa", ""):
-        return v
-    factors = {"kpa": 1e3, "bar": 1e5, "psi": 6894.757, "inh2o": 249.089, "in h2o": 249.089, "inwc": 249.089, "mmh2o": 9.80665}
-    return v * factors.get(unit, 1.0)
+    return v * PRESSURE_PA_FACTORS.get(unit, 1.0)
 
 
 def _mesh_web_bcs(case_dir: Path | None) -> list[dict[str, Any]]:

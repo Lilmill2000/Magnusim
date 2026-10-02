@@ -134,7 +134,11 @@ import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatal
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
 import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js';
 import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId } from '../viewer/pick.ts';
-import { RAINBOW_HUE } from '../plugin-ui/colormaps';
+import { RAINBOW_HUE, colormapGradient } from '../plugin-ui/colormaps';
+import { formatElapsed, formatEta, formatSimTime } from '../plugin-ui/format/time';
+
+// The legend bars draw the renders' own lookup table: every LUT here is the rainbow from RAINBOW_HUE.
+try { document.documentElement.style.setProperty('--legend-cmap', colormapGradient('rainbow')); } catch (_) {}
 
 const jobQueue = { items: [], kicking: false, kickTimer: null };
 try { window.__CFD_JOB_QUEUE__ = jobQueue; } catch (_) {}
@@ -16207,23 +16211,6 @@ function isMeshJobKind(kind) {
   return k === 'standard' || k === 'snappyHexMesh' || k === 'cartesianMesh' || k === 'cfMesh';
 }
 
-function formatElapsed(ms) {
-  const s = Math.max(0, Math.floor(Number(ms) / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
-  return m + ':' + String(sec).padStart(2, '0');
-}
-
-function formatEta(ms) {
-  if (ms == null) return null;
-  const n = Number(ms);
-  if (!Number.isFinite(n) || n < 0) return null;
-  if (n < 8000) return '< 10s left';
-  return '~' + formatElapsed(n) + ' left';
-}
-
 function mergeRunProgress(base, extra) {
   const out = { ...(base || {}) };
   if (!extra) return out;
@@ -29699,23 +29686,6 @@ function transientSettingsFor(rec) {
   return base;
 }
 
-/** Seconds → short label (5 s, 0.1 s, 2.5e-4 s). */
-function formatSimTime(v, opts) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '—';
-  const unit = opts && opts.noUnit ? '' : ' s';
-  if (n === 0) return '0' + unit;
-  const a = Math.abs(n);
-  let s;
-  if (a >= 100) s = n.toFixed(0);
-  else if (a >= 10) s = n.toFixed(1);
-  else if (a >= 1) s = String(Number(n.toFixed(2)));
-  else if (a >= 0.01) s = String(Number(n.toFixed(3)));
-  else if (a >= 1e-3) s = String(Number(n.toFixed(4)));
-  else s = n.toExponential(1);
-  return s + unit;
-}
-
 /**
  * A transient run's control block: the one on record with what the run panel
  * changed. Its analysis's run-settings component keeps the values valid, and
@@ -33805,7 +33775,10 @@ function drawLegendInto(ctx, el, fx, fy, scale) {
     let m;
     while ((m = re.exec(bg))) stops.push([Number(m[2]) / 100, m[1]]);
     if (stops.length < 2) {
-      stops.splice(0, stops.length, [0, '#2b3cff'], [0.2, '#00c2ff'], [0.4, '#2ad66a'], [0.6, '#f5d000'], [0.8, '#ff7a00'], [1, '#e02020']);
+      const own = colormapGradient('rainbow');
+      stops.length = 0;
+      re.lastIndex = 0;
+      while ((m = re.exec(own))) stops.push([Number(m[2]) / 100, m[1]]);
     }
     for (const [p, c] of stops) {
       try { g.addColorStop(Math.min(1, Math.max(0, p)), c); } catch (_) {}

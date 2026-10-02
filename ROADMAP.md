@@ -87,20 +87,14 @@ September 2026 readiness audit. This list preserves the intended work.
     dialogs and the trash, #b42318 in reasons and menus). `.sim-def-title` is
     overridden by `.mat-panel-title`. A core Done click closes its panel twice
     (the tree's click handler and `cfd:panel-done`).
-  - Bugs found while building the kit, not fixed yet: the results legend
-    gradient is not the colours the render draws; Home shows sim times from 1
-    to 10 ms as "5.0e-3 s" where the workbench shows "0.005 s"; the Mesh and
-    Run panels show "62:05" past an hour where the viewport chip shows
-    "1:02:05"; the job-finished toast is probably hidden under an open
-    workspace (layer 40 under 1500; not yet checked in a browser); the
-    residual hover tip is cut off at the right edge.
-  - Formatters: four `formatSimTime` copies (workbench, ResidualPlot, Home,
-    the Incompressible Flow transient settings); null and '' print "0 s";
-    99.95 prints "100.0 s". `formatSci` prints 999999.9 as "1000000".
-  - Units: `unitIsImperial('min')` is true; `BcPanel.tsx` keeps a second unit
-    table; the Incompressible Flow case writer uses psi 6894.757 and inH₂O
-    249.089 where the app uses 6894.757293168 and 249.08891; schema forms show
-    SI units for every quantity but length in imperial projects.
+  - Plot tips: the residual plot's and the kit LinePlot's hover tip is at most
+    170 px wide and does not wrap, so a readout of four series (U, p, k, ω)
+    spills past the tip's own box.
+  - The CAD plugin keeps two copies of `formatSci`
+    (`bundled-plugins/cad/src/ui/kit/format.ts`, `src/doc/units.ts`) that
+    still print 999999.9 as "1000000"; the kit's shows "1.0000e+6".
+  - Units: schema forms show SI units for every quantity but length in
+    imperial projects.
   - Colour: `results.color_scale.cmap` in project.json is never read; the
     Filters panel builds a colour table it never uses. cividis was left out of
     the kit because neither table is CC0 (PNNL's has Battelle BSD-style terms,

@@ -55,6 +55,17 @@ describe('units (moved from src/units/convert.ts)', () => {
     expect(SI_DEFAULT.pressure).toBe('Pa');
   });
 
+  it('unitIsImperial: imperial units only, not min or mmH₂O', () => {
+    for (const u of ['in', 'ft', 'ft/s', 'ft/min', 'mph', 'psi', 'inH₂O', 'inH2O', 'in H2O', 'inh2o', 'ft³/min', 'CFM', 'lb/s', 'lb/ft³', 'ft²/s', '°F']) {
+      expect(units.unitIsImperial(u), u).toBe(true);
+    }
+    for (const u of ['min', 'h', 's', 'mm', 'm', 'm/s', 'mmH₂O', 'Pa', 'kPa', 'kg/min', 'rpm', 'rad/s', '°C', 'K', '']) {
+      expect(units.unitIsImperial(u), u).toBe(false);
+    }
+    // A time field in an imperial project keeps seconds (IMPERIAL_DEFAULT.time).
+    expect(units.unitLabels('time').find((u) => units.unitIsImperial(u))).toBeUndefined();
+  });
+
   it('fieldUnit: length in mm or in, every other quantity in its first unit', () => {
     expect(fieldUnit('length', 'metric')).toBe('mm');
     expect(fieldUnit('length', 'imperial')).toBe('in');

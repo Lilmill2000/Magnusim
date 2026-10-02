@@ -93,7 +93,8 @@ export function preferredUnit(quantity: Quantity, imperial: boolean): string {
 }
 
 export function unitIsImperial(unit: string): boolean {
-  return /ft|in(?!t)|psi|lb|cfm|mph|°F/i.test(String(unit || ''));
+  // "in" only as its own word or inH₂O, never inside one (min, mmH₂O are not imperial).
+  return /ft|(?:^|[^a-z])in(?:$|[^a-z]|h)|psi|lb|cfm|mph|°F/i.test(String(unit || ''));
 }
 
 export function convertQuantity(

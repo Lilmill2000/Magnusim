@@ -3,19 +3,18 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { formatElapsed, formatEta, formatSimTime } from './time';
-import { formatSimTime as residualFormatSimTime } from '../../panels/run/ResidualPlot';
 import { formatElapsed as jobsFormatElapsed } from '../../store/jobs';
 
-// The viewport chip's own formatEta (and the formatElapsed it calls), read from runtime.js.
-const runtime = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'workbench', 'runtime.js'), 'utf8');
-function runtimeSource(name: string): string {
-  const m = runtime.match(new RegExp(`^function ${name}\\([\\s\\S]*?^}`, 'm'));
-  if (!m) throw new Error(`runtime.js has no function ${name}`);
-  return m[0];
-}
-const coreFormatEta = new Function(`${runtimeSource('formatElapsed')}\n${runtimeSource('formatEta')}\nreturn formatEta;`)() as (
-  ms: unknown,
-) => string | null;
+const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const read = (rel: string) => readFileSync(join(SRC, ...rel.split('/')), 'utf8');
+// Every place that labels times, which must use these and keep no copy of its own.
+const USERS = [
+  'workbench/runtime.js',
+  'panels/run/ResidualPlot.tsx',
+  'home/controller.ts',
+  'store/jobs.ts',
+  '../bundled-plugins/incompressible_flow/ui/transient.ts',
+];
 
 const SIM_TIMES: Array<[number, string]> = [
   [0, '0 s'],
@@ -27,6 +26,11 @@ const SIM_TIMES: Array<[number, string]> = [
   [0.0012, '0.0012 s'],
   [150, '150 s'],
   [-0.25, '-0.25 s'],
+  // Rounding that carries into the next band is labelled in that band.
+  [99.95, '100 s'],
+  [9.9996e-4, '0.001 s'],
+  [0.0099996, '0.01 s'],
+  [-99.95, '-100 s'],
 ];
 
 describe('formatSimTime', () => {
@@ -37,14 +41,22 @@ describe('formatSimTime', () => {
     expect(formatSimTime('0.5')).toBe('0.5 s');
   });
 
+  it('is — for no value, not 0 s', () => {
+    for (const v of [null, undefined, '', '  ']) expect(formatSimTime(v), JSON.stringify(v)).toBe('—');
+    expect(formatSimTime(null, { noUnit: true })).toBe('—');
+  });
+
   it('drops the unit with noUnit', () => {
     expect(formatSimTime(0.005, { noUnit: true })).toBe('0.005');
     expect(formatSimTime(0, { noUnit: true })).toBe('0');
   });
 
-  it('equals the residual plot label for every number in the table', () => {
-    for (const [v] of SIM_TIMES) expect(formatSimTime(v)).toBe(residualFormatSimTime(v));
-    expect(formatSimTime(Number.NaN)).toBe(residualFormatSimTime(Number.NaN));
+  it('is the one copy: the workbench, residual plot, Home and Incompressible Flow import it', () => {
+    for (const rel of USERS) {
+      const src = read(rel);
+      expect(src, rel).toMatch(/import \{[^}]*\bformat(SimTime|Elapsed)\b[^}]*\} from '([./]*plugin-ui\/format\/time|@magnusim\/plugin-ui)'/);
+      expect(src, rel).not.toMatch(/function (formatSimTime|formatHomeSimTime|formatElapsed|formatHomeClock|formatEta)\b/);
+    }
   });
 });
 
@@ -62,8 +74,9 @@ describe('formatElapsed', () => {
     expect(formatElapsed('x')).toBe('0:00');
   });
 
-  it('equals the Mesh and Run panels below one hour', () => {
-    for (const ms of [0, 999, 1000, 59_000, 61_500, 600_000, 3_599_999]) expect(formatElapsed(ms)).toBe(jobsFormatElapsed(ms));
+  it('is the Mesh panel clock, also past an hour', () => {
+    expect(jobsFormatElapsed).toBe(formatElapsed);
+    expect(jobsFormatElapsed(3_725_000)).toBe('1:02:05');
   });
 });
 
@@ -85,8 +98,4 @@ describe('formatEta', () => {
     expect(formatEta(9999)).toBe('~0:09 left');
   });
 
-  it("equals runtime.js's formatEta", () => {
-    const inputs: unknown[] = [null, undefined, -1, Number.NaN, 'x', 0, 1, 999, 7999, 8000, 8001, 9999, 10_000, 59_999, 60_000, 70_000, 3_599_999, 3_600_000, 3_725_000, '9000'];
-    for (const ms of inputs) expect(formatEta(ms), String(ms)).toBe(coreFormatEta(ms));
-  });
 });

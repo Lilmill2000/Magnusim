@@ -8,7 +8,9 @@ export function formatSci(value: number | null | undefined): string {
   const magnitude = Math.abs(value);
   if (magnitude < SMALL || magnitude >= LARGE) return value.toExponential(4);
   // Converted units (62.31559031… lb/ft³) read as 62.3156; typed values keep their digits.
-  return String(Number(value.toPrecision(6)));
+  const text = String(Number(value.toPrecision(6)));
+  // Rounding can reach the huge range (999999.9 → 1000000): show that in exponent form too.
+  return Math.abs(Number(text)) >= LARGE ? value.toExponential(4) : text;
 }
 
 export function parseSci(text: string): number | null {

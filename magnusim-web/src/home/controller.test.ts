@@ -30,6 +30,11 @@ describe('home card progress', () => {
     expect(formatHomeSolveLine({ ...live, x_axis: 'seconds', time_dependency: 'Steady-state' })).toBe('1.5 s / 5 s');
   });
 
+  it('labels 1 to 10 ms as the workbench does (0.005 s, not 5.0e-3 s)', () => {
+    expect(formatHomeSolveLine({ ...live, x_axis: 'seconds', sim_time: 0.005, sim_end: 0.0099996 })).toBe('0.005 s / 0.01 s');
+    expect(formatHomeSolveLine({ ...live, x_axis: 'seconds', sim_time: 99.95, sim_end: 200 })).toBe('100 s / 200 s');
+  });
+
   it('shows iterations on an iterations axis', () => {
     expect(formatHomeSolveLine({ ...live, x_axis: 'iterations', time_dependency: 'Transient' })).toBe('40 / 200');
   });
