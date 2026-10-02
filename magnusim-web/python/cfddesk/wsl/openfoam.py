@@ -52,6 +52,7 @@ def run_wsl_bash(inner: str, *, timeout: float = 120.0) -> WslCommandResult:
     argv = wsl_bash_argv(inner)
     completed = subprocess.run(
         argv,
+        stdin=subprocess.DEVNULL,  # never the caller's stdin: wsl.exe would read it (the worker's request pipe)
         capture_output=True,
         text=True,
         timeout=timeout,

@@ -199,9 +199,24 @@ def events(out: io.StringIO) -> list[dict[str, Any]]:
     return [ev for ev in (parse_job_line(line) for line in out.getvalue().splitlines()) if ev]
 
 
-def run(spec: Path, root: Path, deps: RelayDeps) -> tuple[int, list[dict[str, Any]]]:
+# The relay sets these in this process for itself and its children.
+RELAY_ENV = ("MAGNUSIM_JOB_ID", "MAGNUSIM_WSL_CASE_ROOT", "MAGNUSIM_WSL_DISTRO")
+
+
+def run(spec: Path, root: Path, deps: RelayDeps, *, keep_env: bool = False) -> tuple[int, list[dict[str, Any]]]:
+    """Run the relay in this process, then give its variables back (used from other test
+    files too): a job id left set would make a later kill by that id end this pytest run.
+    keep_env: leave them for the test to read (this file's _relay_env still restores them)."""
+    saved = {name: os.environ.get(name) for name in RELAY_ENV}
     out = io.StringIO()
-    code = run_relay(spec, projects_root=root, out=out, deps=deps)
+    try:
+        code = run_relay(spec, projects_root=root, out=out, deps=deps)
+    finally:
+        for name, value in ({} if keep_env else saved).items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     return code, events(out)
 
 
@@ -376,7 +391,7 @@ def test_a_refusal_writes_the_final_status_but_not_into_another_runs_folder(tmp_
 def test_a_whole_run(tmp_path: Path):
     r = make_run(tmp_path)
     rec = Recorder()
-    code, evs = run(make_spec(r), r.root, rec.deps())
+    code, evs = run(make_spec(r), r.root, rec.deps(), keep_env=True)
     assert code == 0
     kinds = [e["event"] for e in evs]
     # .magnusim-ran only after the gate, before anything ran.

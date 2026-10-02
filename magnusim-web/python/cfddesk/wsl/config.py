@@ -51,6 +51,7 @@ def _probe_wsl_home(distro: str) -> str | None:
     try:
         r = subprocess.run(
             ["wsl", "-d", distro, "--", "printenv", "HOME"],
+            stdin=subprocess.DEVNULL,  # never the caller's stdin: wsl.exe would read it (the worker's request pipe)
             capture_output=True,
             text=True,
             timeout=45,

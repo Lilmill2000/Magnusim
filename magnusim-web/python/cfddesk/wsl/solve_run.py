@@ -168,6 +168,7 @@ def start_solve(
     argv = ["wsl", "-d", get_wsl_distro(), "--", "bash", sh_wsl]
     return subprocess.Popen(
         argv,
+        stdin=subprocess.DEVNULL,  # never the caller's stdin: wsl.exe would read it (the worker's request pipe)
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -264,6 +265,7 @@ def stop_solve(wsl_case_id: str, *, graceful: bool = True) -> None:
                 "-lc",
                 escape_wsl_bash_dollars(inner),
             ],
+            stdin=subprocess.DEVNULL,  # never the caller's stdin: wsl.exe would read it (the worker's request pipe)
             check=False,
             capture_output=True,
             text=True,
@@ -291,6 +293,7 @@ def kill_solve(
     inner = "; ".join(extra) if extra else "true"
     subprocess.run(
         ["wsl", "-d", get_wsl_distro(), "--", "bash", "-lc", escape_wsl_bash_dollars(inner)],
+        stdin=subprocess.DEVNULL,  # never the caller's stdin: wsl.exe would read it (the worker's request pipe)
         check=False,
         capture_output=True,
         text=True,

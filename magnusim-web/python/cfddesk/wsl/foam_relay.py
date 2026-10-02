@@ -748,6 +748,7 @@ def wsl_mpi_slots(timeout: float = 20.0) -> int:
     try:
         r = subprocess.run(
             ["wsl", "-d", get_wsl_distro(), "-e", "bash", "-c", _SLOTS_QUERY],
+            stdin=subprocess.DEVNULL,  # never the caller's stdin: wsl.exe would read it (the worker's request pipe)
             capture_output=True,
             timeout=timeout,
             check=False,

@@ -91,7 +91,7 @@ def prune_wsl_cases(
             "1" if dry_run else "0",
         ]
         try:
-            r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+            r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "error": str(exc), "root": case_root}
     doc = parse_prune_output((r.stdout or "") + "\n" + (r.stderr or ""))
