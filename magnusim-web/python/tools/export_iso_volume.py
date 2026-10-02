@@ -28,6 +28,7 @@ import pyvista as pv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import scale_kinematic  # noqa: E402
 from case_volume import load_volume  # noqa: E402
+from result_names import point_shown_field  # noqa: E402
 
 APPROACH = (
     "server-side volume threshold: Vite /api/iso-volume -> export_iso_volume.py "
@@ -89,41 +90,11 @@ def resolve_coloring_scalar(label: str, dataset: pv.DataSet) -> str | None:
 
 
 def ensure_contour_scalars(grid: pv.DataSet, scalar_name: str) -> pv.DataSet:
-    """Point-data required for threshold. Derive magU from U when needed."""
-    src = grid
-    if scalar_name == "magU":
-        if "magU" not in src.point_data:
-            if "U" in src.point_data:
-                U = np.asarray(src.point_data["U"], dtype=float)
-                src.point_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-            elif "magU" in src.cell_data:
-                try:
-                    src = src.cell_data_to_point_data()
-                except Exception:
-                    pass
-            if "magU" not in src.point_data and "U" in src.cell_data:
-                try:
-                    tmp = src.cell_data_to_point_data()
-                    if "U" in tmp.point_data:
-                        U = np.asarray(tmp.point_data["U"], dtype=float)
-                        tmp.point_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-                        src = tmp
-                except Exception as exc:
-                    raise RuntimeError(f"Cannot derive magU for iso volume: {exc}") from exc
-        if "magU" not in src.point_data:
-            raise RuntimeError("magU unavailable for iso volume (need volume U/magU)")
-        return src
-
-    if scalar_name in src.point_data:
-        return src
-    if scalar_name in src.cell_data:
-        try:
-            return src.cell_data_to_point_data()
-        except Exception as exc:
-            raise RuntimeError(
-                f"Cannot promote {scalar_name!r} to point_data for threshold: {exc}"
-            ) from exc
-    raise RuntimeError(f"Scalar {scalar_name!r} missing for iso volume")
+    """Point data the threshold needs (a vector's magnitude derived when needed)."""
+    try:
+        return point_shown_field(grid, scalar_name, pass_cell_data=False)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{scalar_name!r} unavailable for iso volume: {exc}") from exc
 
 
 def map_normalized_range(

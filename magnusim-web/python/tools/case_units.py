@@ -39,7 +39,8 @@ whose writer lists none also falls back to this.
 """
 
 
-def _sidecar(case_dir: Path) -> dict:
+def case_sidecar(case_dir: Path) -> dict:
+    """The case's ``w27-case.json`` as a dict ({} when missing or unreadable)."""
     try:
         doc = json.loads((Path(case_dir) / "w27-case.json").read_text(encoding="utf-8"))
     except Exception:
@@ -49,7 +50,7 @@ def _sidecar(case_dir: Path) -> dict:
 
 def kinematic_fields(case_dir: Path) -> tuple[str, ...]:
     """Fields the case stores divided by density (its analysis's ``kinematic_fields``)."""
-    listed = _sidecar(case_dir).get("kinematic_fields")
+    listed = case_sidecar(case_dir).get("kinematic_fields")
     if isinstance(listed, list):
         return tuple(str(x) for x in listed if str(x))
     return LEGACY_KINEMATIC_FIELDS

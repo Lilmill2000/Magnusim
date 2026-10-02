@@ -24,6 +24,7 @@ import pyvista as pv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import field_scale, kinematic_fields, pressure_meta  # noqa: E402
 from case_volume import load_volume  # noqa: E402
+from result_names import ensure_shown_field  # noqa: E402
 
 APPROACH = (
     "server-side sample_over_point / probe: Vite /api/inspect?x=&y=&z=&time= -> "
@@ -56,15 +57,11 @@ def parse_foam_uniform_scalar(path: Path):
 
 
 def ensure_magU(grid: pv.DataSet) -> pv.DataSet:
-    src = grid
-    if "magU" not in src.point_data and "magU" not in src.cell_data:
-        if "U" in src.point_data:
-            U = np.asarray(src.point_data["U"], dtype=float)
-            src.point_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-        elif "U" in src.cell_data:
-            U = np.asarray(src.cell_data["U"], dtype=float)
-            src.cell_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-    return src
+    try:
+        ensure_shown_field(grid, "magU")
+    except RuntimeError:
+        pass
+    return grid
 
 
 def scalar_at(sampled: pv.DataSet, name: str):

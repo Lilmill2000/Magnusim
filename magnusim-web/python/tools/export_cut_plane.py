@@ -19,6 +19,7 @@ import pyvista as pv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import case_density, pressure_meta, scale_kinematic  # noqa: E402
 from case_volume import load_volume  # noqa: E402
+from result_names import ensure_shown_field  # noqa: E402
 
 
 def read_volume_at_time(case_dir: Path, time: str):
@@ -26,20 +27,6 @@ def read_volume_at_time(case_dir: Path, time: str):
 
 
 FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
-
-
-def ensure_field(mesh, field: str):
-    """The coloured field on the mesh: as read, or a vector's magnitude for ``mag<X>``."""
-    if field in mesh.point_data or field in mesh.cell_data:
-        return
-    base = field[3:] if field.startswith("mag") and len(field) > 3 else ""
-    if base:
-        for data in (mesh.point_data, mesh.cell_data):
-            if base in data:
-                vec = np.asarray(data[base])
-                data[field] = np.linalg.norm(vec[:, :3], axis=1)
-                return
-    raise RuntimeError(f"mesh missing {field}")
 
 
 def export_cut_plane(
@@ -70,7 +57,7 @@ def export_cut_plane(
         source = "worker-cache"
     if mesh is None or int(getattr(mesh, "n_cells", 0) or 0) < 1:
         raise RuntimeError(f"volume read failed: {case_dir}")
-    ensure_field(mesh, field)
+    ensure_shown_field(mesh, field)
 
     origin = [float(ox), float(oy), float(oz)]
     normal = [float(nx), float(ny), float(nz)]
@@ -86,9 +73,9 @@ def export_cut_plane(
     if not isinstance(sliced, pv.PolyData):
         sliced = sliced.extract_surface() if hasattr(sliced, "extract_surface") else pv.PolyData(sliced)
 
-    ensure_field(sliced, field)
+    ensure_shown_field(sliced, field)
     try:
-        ensure_field(sliced, "magU")
+        ensure_shown_field(sliced, "magU")
     except RuntimeError:
         pass
     rho = case_density(case_dir)

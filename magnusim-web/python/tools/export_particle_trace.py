@@ -38,6 +38,7 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 from case_units import scale_kinematic  # noqa: E402
 from export_cut_plane import read_volume_at_time  # noqa: E402
+from result_names import dataset_vectors, ensure_shown_field  # noqa: E402
 
 SKIP_PATCH_TYPES = {
     "wall",
@@ -1481,23 +1482,15 @@ def trace_from_seeds(
     return poly, meta
 
 
-def ensure_mag_u(mesh: pv.DataSet) -> None:
-    if "magU" in mesh.point_data or "magU" in mesh.cell_data:
-        return
-    if "U" in mesh.point_data:
-        U = np.asarray(mesh.point_data["U"], dtype=float)
-        if U.ndim == 2 and U.shape[1] >= 3:
-            mesh.point_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-    elif "U" in mesh.cell_data:
-        U = np.asarray(mesh.cell_data["U"], dtype=float)
-        if U.ndim == 2 and U.shape[1] >= 3:
-            mesh.cell_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-
-
-def point_data_grid(grid: pv.DataSet) -> pv.DataSet:
-    if "U" in grid.point_data:
+def point_data_grid(grid: pv.DataSet, vector: str = "U") -> pv.DataSet:
+    """The grid with ``vector`` on its points (its cells promoted when it is only
+    on cells). '' picks the grid's only vector; with none the grid comes back as is."""
+    if not vector:
+        vectors = dataset_vectors(grid)
+        vector = vectors[0] if len(vectors) == 1 else ""
+    if not vector or vector in grid.point_data:
         return grid
-    if "U" in grid.cell_data:
+    if vector in grid.cell_data:
         try:
             return grid.cell_data_to_point_data()
         except Exception:
@@ -1673,7 +1666,10 @@ def export_particle_trace(
             streams = empty_poly()
             tubes = empty_poly()
         else:
-            ensure_mag_u(streams)
+            try:
+                ensure_shown_field(streams, "magU")
+            except RuntimeError:
+                pass
             # Client builds cylinders / spheres / comets. Keep the raw lines
             # so Size and Representation can change without a re-export.
             tubes = streams

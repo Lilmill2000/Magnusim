@@ -26,6 +26,14 @@ from case_units import (  # noqa: E402
     scale_pressure,
 )
 from case_volume import load_volume  # noqa: E402
+from result_names import (  # noqa: E402, F401  (foam_kind / FIELD_NAME / shown_fields: re-exported)
+    FIELD_NAME,
+    TENSOR_KINDS,
+    ensure_shown_field,
+    foam_kind,
+    foam_source,
+    shown_fields,
+)
 
 
 def read_internal_field(path: Path, kind: str):
@@ -68,8 +76,7 @@ def read_internal_field(path: Path, kind: str):
         # Vector rows are "(x y z)": drop the brackets, parse every number at once.
         arr = np.array(body[:stop].translate(None, b"()").split(), dtype=np.float64)
     if arr.size != n * width:
-        name = "U" if comp == "vector" else "p"
-        raise RuntimeError(f"{name} count mismatch {arr.size // width} != {n}")
+        raise RuntimeError(f"{path.name} count mismatch {arr.size // width} != {n}")
     return "nonuniform", arr.reshape(n, 3) if comp == "vector" else arr
 
 
@@ -156,85 +163,6 @@ def parse_foam_scalar_or_vector(path: Path, kind: str):
         "sample_tail": [float(x) for x in arr[-8:]],
         "source_path": str(path),
     }
-
-
-FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
-
-
-# Tensor fields (e.g. R from a Reynolds-stress model) cannot be coloured as a
-# scalar or a vector magnitude, so no view offers them.
-TENSOR_KINDS = ("symm_tensor", "tensor")
-
-
-def foam_kind(path: Path) -> str:
-    """'vector', 'symm_tensor', 'tensor' or 'scalar' from the file's FoamFile class
-    (or its internalField)."""
-    try:
-        with open(path, "rb") as fh:
-            head = fh.read(4096).decode("latin1", errors="replace")
-    except OSError:
-        return "scalar"
-    m = re.search(r"\bclass\s+(\w+)", head)
-    if m:
-        cls = m.group(1)
-        if "SymmTensor" in cls:
-            return "symm_tensor"
-        if "Tensor" in cls:
-            return "tensor"
-        return "vector" if "Vector" in cls else "scalar"
-    if "List<symmTensor>" in head:
-        return "symm_tensor"
-    if "List<tensor>" in head:
-        return "tensor"
-    if re.search(r"internalField\s+uniform\s*\(", head) or "List<vector>" in head:
-        return "vector"
-    return "scalar"
-
-
-def foam_source(time_dir: Path, field: str) -> tuple[str, str] | None:
-    """(file, kind) a shown field reads: the field's own file, or for ``mag<X>`` the vector ``X``.
-
-    None for a tensor field (or its ``mag``): it is never shown.
-    """
-    if (time_dir / field).is_file():
-        kind = foam_kind(time_dir / field)
-        return None if kind in TENSOR_KINDS else (field, kind)
-    if field.startswith("mag") and len(field) > 3 and (time_dir / field[3:]).is_file():
-        if foam_kind(time_dir / field[3:]) in TENSOR_KINDS:
-            return None
-        return field[3:], "vector"
-    return None
-
-
-def shown_fields(time_dir: Path) -> list[str]:
-    """Every field a time folder can colour by: scalars by name, vectors as ``mag<name>``.
-    Tensors are left out."""
-    out: list[str] = []
-    try:
-        entries = sorted(time_dir.iterdir())
-    except OSError:
-        return out
-    for f in entries:
-        if not f.is_file() or not FIELD_NAME.match(f.name):
-            continue
-        kind = foam_kind(f)
-        if kind in TENSOR_KINDS:
-            continue
-        out.append(("mag" + f.name) if kind == "vector" else f.name)
-    return out
-
-
-def ensure_field_on_mesh(mesh, field: str):
-    """The shown field on the mesh: as read, or a vector's magnitude for ``mag<X>``."""
-    if field in mesh.cell_data or field in mesh.point_data:
-        return
-    base = field[3:] if field.startswith("mag") and len(field) > 3 else ""
-    if base:
-        for data in (mesh.cell_data, mesh.point_data):
-            if base in data:
-                data[field] = np.linalg.norm(np.asarray(data[base]), axis=1)
-                return
-    raise RuntimeError(f"mesh missing {field}")
 
 
 _FOAM_TIME = re.compile(r"^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
@@ -329,7 +257,7 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
             ) from exc
     elif not source_vtu:
         source_vtu = "worker-cache"
-    ensure_field_on_mesh(mesh, field)
+    ensure_shown_field(mesh, field)
     rho = case_density(case_dir)
     scale = field_scale(case_dir, foam_name)
 

@@ -23,6 +23,7 @@ import pyvista as pv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import scale_kinematic  # noqa: E402
 from case_volume import load_volume  # noqa: E402
+from result_names import point_shown_field  # noqa: E402
 
 APPROACH = (
     "server-side sample_over_line: Vite /api/plot-over-path -> "
@@ -62,19 +63,11 @@ def resolve_scalar(label: str, dataset: pv.DataSet) -> str:
 
 
 def ensure_scalars(grid: pv.DataSet, scalar_name: str) -> pv.DataSet:
-    src = grid
-    if scalar_name == "magU":
-        if "magU" not in src.point_data:
-            if "U" in src.point_data:
-                U = np.asarray(src.point_data["U"], dtype=float)
-                src.point_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-            elif "U" in src.cell_data:
-                src = src.cell_data_to_point_data()
-                U = np.asarray(src.point_data["U"], dtype=float)
-                src.point_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
-    elif scalar_name not in src.point_data and scalar_name in src.cell_data:
-        src = src.cell_data_to_point_data()
-    return src
+    """The field on the point data (a vector's magnitude derived when needed)."""
+    try:
+        return point_shown_field(grid, scalar_name, pass_cell_data=False)
+    except RuntimeError:
+        return grid
 
 
 def segment_resolution(subdivisions: int) -> int:
@@ -178,9 +171,6 @@ def sample_over_path(
     resolved = resolve_scalar(label, grid)
     src = ensure_scalars(grid, resolved)
     scalar_key = resolved
-    if scalar_key == "magU" and "magU" not in src.point_data and "U" in src.point_data:
-        U = np.asarray(src.point_data["U"], dtype=float)
-        src.point_data["magU"] = np.linalg.norm(U[:, :3], axis=1)
 
     resolution = segment_resolution(subdiv)
     all_dist: list[float] = []
