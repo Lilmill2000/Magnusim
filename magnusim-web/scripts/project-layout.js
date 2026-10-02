@@ -666,9 +666,19 @@ function persistBoundRecords(studyDir) {
   }
 }
 
+// A folder named <wanted>_<n> already is the name uniqueChildDir gives on a clash.
+// Asking again counted the folder itself as taken: studies whose names sanitize alike
+// ("Run A", "Run A?") moved between _2 and _3 on every catalog save, breaking every
+// path held into them.
+function holdsClashSuffix(folder, wanted) {
+  if (!folder.startsWith(wanted + '_')) return false;
+  const n = folder.slice(wanted.length + 1);
+  return /^[1-9][0-9]*$/.test(n) && Number(n) >= 2;
+}
+
 export function renameFolderTo(dir, parent, newName) {
   const wanted = sanitizeFolderName(newName, basename(dir));
-  if (basename(dir) === wanted) return dir;
+  if (basename(dir) === wanted || holdsClashSuffix(basename(dir), wanted)) return dir;
   const dest = uniqueChildDir(parent, wanted);
   renameSync(dir, dest.path);
   rewritePathPrefixInJsonTree(dest.path, dir, dest.path);
