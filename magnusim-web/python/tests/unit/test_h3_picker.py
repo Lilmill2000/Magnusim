@@ -20,9 +20,10 @@ def _plugin(root: Path) -> None:
         "\n".join(
             [
                 "from dataclasses import replace",
-                "from incompressible_flow.analyses import build_incompressible_steady",
                 "def register(hub):",
-                "    spec = replace(build_incompressible_steady(), key='h3probe', label='H3 probe analysis')",
+                "    # The bundled analyses register before the user's plugins.",
+                "    steady = hub.registry('analysis').get('incompressible_steady')",
+                "    spec = replace(steady, key='h3probe', label='H3 probe analysis')",
                 "    hub.registry('analysis').register(spec, plugin='h3probe')",
             ]
         ),

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import fields, replace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from incompressible_flow import function_objects as fo
 
 from cfddesk.case.bc_registry import BC_TYPES, BcTypeSpec
 from cfddesk.registry import (
@@ -32,14 +31,6 @@ def _clean_registry():
     reset_for_tests()
     yield
     reset_for_tests()
-
-
-def test_fo_monitor_spec_untouched_naming_collision():
-    """registry.MonitorType must not replace function_objects.MonitorSpec."""
-    assert {"patch", "kind"} <= {f.name for f in fields(fo.MonitorSpec)}
-    assert {"key", "label", "target"} <= {f.name for f in fields(MonitorType)}
-    assert fo.MonitorSpec is not MonitorType
-    assert fo.MonitorKind.__args__ == ("area_average", "flow")
 
 
 def test_load_all_registers_bc_material_monitor_keys():
@@ -111,10 +102,8 @@ def test_analysis_bags_resolve_from_registries():
 def test_validate_bc_refs_raises_on_unknown():
     load_all()
     hub = get_hub()
-    from incompressible_flow.analyses import build_incompressible_steady
-
     bad = replace(
-        build_incompressible_steady(),
+        hub.registry("analysis").get("incompressible_steady"),
         key="incompressible_steady_bad_bc",
         bc_types=("not_a_real_bc",),
     )
@@ -126,10 +115,8 @@ def test_validate_bc_refs_raises_on_unknown():
 def test_validate_material_refs_raises_on_unknown():
     load_all()
     hub = get_hub()
-    from incompressible_flow.analyses import build_incompressible_steady
-
     bad = replace(
-        build_incompressible_steady(),
+        hub.registry("analysis").get("incompressible_steady"),
         key="incompressible_steady_bad_mat",
         material_models=("not_a_real_material",),
     )
@@ -141,10 +128,8 @@ def test_validate_material_refs_raises_on_unknown():
 def test_validate_monitor_refs_raises_on_unknown():
     load_all()
     hub = get_hub()
-    from incompressible_flow.analyses import build_incompressible_steady
-
     bad = replace(
-        build_incompressible_steady(),
+        hub.registry("analysis").get("incompressible_steady"),
         key="incompressible_steady_bad_mon",
         monitors=("not_a_real_monitor",),
     )

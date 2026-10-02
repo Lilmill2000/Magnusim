@@ -64,14 +64,11 @@ def test_describe_emits_numerics_and_control_for_analysis():
     )
 
     assert "delta_t" not in steady["control_schema"]["properties"]
-    # H7: the control schema is the one copy of the run-control defaults
-    # (incompressible_flow.transient); a blank time step is "auto" (null), not 0.001.
-    from incompressible_flow.transient import STEADY_DEFAULTS, TRANSIENT_DEFAULTS
-
-    transient_defaults = {k: p.get("default") for k, p in transient["control_schema"]["properties"].items()}
-    assert transient_defaults == TRANSIENT_DEFAULTS
-    steady_defaults = {k: p.get("default") for k, p in steady["control_schema"]["properties"].items()}
-    assert steady_defaults == STEADY_DEFAULTS
+    # H7: that these defaults are the plugin's one copy of the run-control defaults
+    # is tested with the plugin (tests/test_time_dependency.py); here, only that
+    # every control property carries a default.
+    for row in (steady, transient):
+        assert all("default" in p for p in row["control_schema"]["properties"].values())
     assert "delta_t" not in transient["control_schema"].get("required", [])
 
     # Steady SIMPLE numerics the solve reads; defaults match the pre-Phase-6 writer.

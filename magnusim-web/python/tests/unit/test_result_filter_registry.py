@@ -152,15 +152,3 @@ def test_load_all_idempotent_filters():
     load_all()
     load_all(force=True)
     assert set(get_registry("filter").keys()) == EXPECTED_FILTER_KEYS
-
-
-def test_fo_monitor_kind_flow_vs_flow_rate_unchanged():
-    """Carry: FO MonitorKind still 'flow'; registry monitor key still flow_rate.
-    No third name invented this land.
-    """
-    from incompressible_flow import function_objects as fo
-
-    assert fo.MonitorKind.__args__ == ("area_average", "flow")
-    load_all()
-    assert "flow_rate" in get_registry("monitor").keys()
-    assert "flow" not in get_registry("monitor").keys()

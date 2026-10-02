@@ -116,3 +116,35 @@ def test_custom_monitor_on_any_faces_is_a_sampled_surface(tmp_path, monkeypatch)
     assert "regionType      sampledSurface;" in text
     assert "type        meshedSurface;" in text and "surface     rc_area_average_1.stl;" in text
     assert "operation       areaAverage;" in text
+
+
+def test_fo_monitor_spec_untouched_naming_collision():
+    """registry.MonitorType must not replace function_objects.MonitorSpec."""
+    from dataclasses import fields
+
+    from cfddesk.registry import MonitorType
+
+    from incompressible_flow import function_objects as fo
+
+    assert {"patch", "kind"} <= {f.name for f in fields(fo.MonitorSpec)}
+    assert {"key", "label", "target"} <= {f.name for f in fields(MonitorType)}
+    assert fo.MonitorSpec is not MonitorType
+    assert fo.MonitorKind.__args__ == ("area_average", "flow")
+
+
+def test_fo_monitor_kind_flow_vs_flow_rate_unchanged():
+    """Carry: FO MonitorKind still 'flow'; registry monitor key still flow_rate.
+    No third name invented this land.
+    """
+    from cfddesk.registry import get_registry, load_all, reset_for_tests
+
+    from incompressible_flow import function_objects as fo
+
+    assert fo.MonitorKind.__args__ == ("area_average", "flow")
+    reset_for_tests()
+    try:
+        load_all()
+        assert "flow_rate" in get_registry("monitor").keys()
+        assert "flow" not in get_registry("monitor").keys()
+    finally:
+        reset_for_tests()

@@ -6,7 +6,7 @@ import inspect
 from pathlib import Path
 
 import pytest
-from incompressible_flow.parser import IncompressibleParser as ProgressParser
+from magnusim_sdk.progress import ProgressParser
 
 from cfddesk.jobs.events import EVENT_PREFIX, parse_line
 from cfddesk.wsl.solve_run import (
@@ -151,16 +151,6 @@ def test_events_from_transient_courant():
     assert progress.fields.get("delta_t") == pytest.approx(0.000123)
 
 
-def test_progress_parser_snapshot():
-    parser = ProgressParser()
-    for line in SAMPLE_LOG.splitlines():
-        parser.feed(line)
-    snap = parser.snapshot()
-    assert snap["stage"] == "copy"
-    assert float(snap["saved_times"][0]) == 2.0
-    assert snap["n_steps"] >= 2
-
-
 def test_jsonl_lines_roundtrip_parseable():
     events = events_from_lines(SAMPLE_LOG.splitlines())
     for ev in events:
@@ -292,8 +282,14 @@ def test_stage_wall_clock_becomes_phase_durations():
 
 
 def test_stage_events_without_wall_clock_record_no_phases():
+    # The SDK's parser, as the core streams a run; Incompressible Flow's own parser
+    # (its residual fields) is tested with the plugin (tests/test_parser.py).
     parser = ProgressParser()
     for line in SAMPLE_LOG.splitlines():
         parser.feed(line)
-    assert parser.snapshot()["phases"] == {}
+    snap = parser.snapshot()
+    assert snap["stage"] == "copy"
+    assert float(snap["saved_times"][0]) == 2.0
+    assert snap["n_steps"] >= 2
+    assert snap["phases"] == {}
 

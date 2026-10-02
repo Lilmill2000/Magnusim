@@ -32,17 +32,19 @@ def _clean_registry():
     reset_for_tests()
 
 
-def _steady_spec():
-    from tests.conftest import run_spec as load_run_spec
+def _steady_inputs():
+    """The fixture's steady run inputs, as prepare_run gathers them; the analysis
+    reads them when it writes the case."""
+    from cfddesk.project.run_inputs import gather_run_inputs
 
-    spec = load_run_spec(
+    inputs = gather_run_inputs(
         FIX,
         run_id="run-h1",
         require_mesh=False,
         n_procs=1,
     )
-    assert spec.ok, spec.error
-    return spec
+    assert inputs.analysis_key == "incompressible_steady"
+    return inputs
 
 
 def test_gate_h1_no_stubs(tmp_path, sample_project_dict):
@@ -70,10 +72,8 @@ def test_gate_h1_no_stubs(tmp_path, sample_project_dict):
     assert get_registry("job").get(standard.tool).scope == "study"
 
 
-    plugin = Path(__file__).resolve().parents[3] / "bundled-plugins" / "incompressible_flow" / "incompressible_flow"
-    for path in (plugin / "solvers.py", BUILTIN / "meshers.py", plugin / "materials.py"):
-        text = path.read_text(encoding="utf-8")
-        assert "NOT_yet_done" not in text
+    # Incompressible Flow's solver and material modules: its own tests (test_contract.py).
+    assert "NOT_yet_done" not in (BUILTIN / "meshers.py").read_text(encoding="utf-8")
     # The word soft-pass is allowed in comments and must not fail this gate.
     solver_src = (
         Path(__file__).resolve().parents[2] / "cfddesk" / "registry" / "solver.py"
@@ -186,7 +186,7 @@ def test_gate_h1_hook(tmp_path):
     from cfddesk.registry.analysis import write_run_case
 
     load_all(web_root=web)
-    spec = _steady_spec()
+    spec = _steady_inputs()
     case = tmp_path / "hooked"
     result = write_run_case(spec, case)
     assert result["ok"]

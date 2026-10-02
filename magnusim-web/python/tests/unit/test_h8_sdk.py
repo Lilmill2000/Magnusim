@@ -48,20 +48,16 @@ def test_sdk_imports_bare():
 
 def test_core_uses_the_sdk_copy():
     import magnusim_sdk.events as sdk_events
-    import magnusim_sdk.foam as sdk_foam
     import magnusim_sdk.gmsh_helpers as sdk_gmsh
     import magnusim_sdk.msh22 as sdk_msh22
     import magnusim_sdk.units as sdk_units
-    from incompressible_flow import writer
 
     from cfddesk.jobs import events
     from cfddesk.mesh import gmsh_standard, msh22
     from cfddesk.units import convert, pressure
 
+    # Incompressible Flow's writer uses the same copy: its own tests (test_sdk_use.py).
     assert events.emit is sdk_events.emit and events.parse_line is sdk_events.parse_line
-    assert writer.write_vol_field is sdk_foam.write_vol_field
-    assert writer.write_foam_dict is sdk_foam.write_foam_dict
-    assert writer.js_plain_float is sdk_foam.js_plain_float
     assert gmsh_standard.initialize_gmsh is sdk_gmsh.initialize_gmsh
     assert gmsh_standard.apply_boundary_patch_types is sdk_gmsh.apply_boundary_patch_types
     assert msh22.write_msh22 is sdk_msh22.write_msh22

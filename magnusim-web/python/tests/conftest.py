@@ -100,12 +100,3 @@ def pytest_runtest_logreport(report):
     msg = f"{report.nodeid} ({report.when}): {last[0]}"
     msg = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     print(f"\n::error file=magnusim-web/python/{path},line={line}::{msg}", flush=True)
-
-
-def run_spec(project_dir, **kw):
-    """The incompressible RunSpec for a project: what the core gathers, as the plugin reads it."""
-    from incompressible_flow.runspec import load_run_spec
-
-    from cfddesk.project.run_inputs import gather_run_inputs
-
-    return load_run_spec(gather_run_inputs(project_dir, **kw))

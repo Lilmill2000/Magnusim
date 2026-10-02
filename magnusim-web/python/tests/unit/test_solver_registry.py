@@ -91,10 +91,8 @@ def test_validate_analysis_solver_refs_raises_on_unknown():
     # Corrupt: inject analysis with unknown solver bag key
     from dataclasses import replace
 
-    from incompressible_flow.analyses import build_incompressible_steady
-
     bad = replace(
-        build_incompressible_steady(),
+        get_registry("analysis").get("incompressible_steady"),
         key="incompressible_steady_bad",
         solver_backends=("notARealSolver",),
         default_solver="notARealSolver",
@@ -168,14 +166,3 @@ def test_load_all_idempotent_solvers():
     load_all()
     load_all(force=True)
     assert set(get_registry("solver").keys()) == EXPECTED_SOLVER_KEYS
-
-def test_web_adapter_solver_app_name_no_collision():
-    """land3-fix2: the run spec's Literal is SolverAppName; registry class stays SolverApp."""
-    import incompressible_flow.runspec as wa
-
-    from cfddesk.registry.solver import SolverApp as RegSolverApp
-
-    assert hasattr(wa, "SolverAppName")
-    assert not hasattr(wa, "SolverApp")
-    assert wa.SolverAppName.__args__ == ("simpleFoam", "pimpleFoam")
-    assert isinstance(RegSolverApp, type)

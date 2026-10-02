@@ -98,14 +98,13 @@ def test_gate_h5_hook_monitor_writes_control_dict(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(PLUGINS))
     if not (FIX / "boundary_conditions.json").is_file():
         pytest.skip("js-project fixture missing")
+    from cfddesk.project.run_inputs import gather_run_inputs
     from cfddesk.registry import write_run_case
-    from tests.conftest import run_spec as load_run_spec
 
     load_all(force=True)
-    spec = load_run_spec(FIX, run_id="run-h5-hook", require_mesh=False, n_procs=1)
-    assert spec.ok, spec.error
+    inputs = gather_run_inputs(FIX, run_id="run-h5-hook", require_mesh=False, n_procs=1)
     out = tmp_path / "case"
-    result = write_run_case(spec, out)
+    result = write_run_case(inputs, out)
     assert result.get("ok") is True
     text = (out / "system" / "controlDict").read_text(encoding="utf-8")
     assert "exampleHookMonitor" in text
