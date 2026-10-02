@@ -149,13 +149,14 @@ def face_properties(shape):
     from cfddesk.cad import shared_faces
 
     out = []
-    visits = face_visits(shape)
-    for idx, body, face in visits:
+    keys: list[tuple[int, int | None, float, tuple[float, float, float], object]] = []
+    for idx, body, face in face_visits(shape):
         props = GProp_GProps()
         BRepGProp.SurfaceProperties_s(face, props)
         area = float(props.Mass())
         c = props.CentreOfMass()
         centroid = [float(c.X()), float(c.Y()), float(c.Z())]
+        keys.append((idx, body, area, (centroid[0], centroid[1], centroid[2]), face))
         normal = None
         try:
             adapt = BRepAdaptor_Surface(face)
@@ -181,9 +182,7 @@ def face_properties(shape):
         if body is not None:
             entry["body"] = body
         out.append(entry)
-    shared = shared_faces.pairs(
-        (idx, body, e["area"], e["centroid"], face) for (idx, body, face), e in zip(visits, out, strict=True)
-    )
+    shared = shared_faces.pairs(keys)
     for e in out:
         if e["id"] in shared:
             e["shared_with"] = shared[e["id"]]
