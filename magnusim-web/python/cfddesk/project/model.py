@@ -49,7 +49,6 @@ from cfddesk.case.bc_registry import (
     get_type,
     sanitize_patch_name,
 )
-from cfddesk.materials.library import RHO_AIR
 from cfddesk.project.hierarchy import (
     Body,
     Geometry,
@@ -60,6 +59,7 @@ from cfddesk.project.hierarchy import (
     default_run_results_subdir,
     next_run_name,
 )
+from cfddesk.project.legacy_sim import V7_ASSUMED_DENSITY_KG_M3, v4_bcs_from_roles
 from cfddesk.project.mesh_refinements import (
     BB_LAYER_TYPE,
     EXTRUSION_TYPE,
@@ -1822,7 +1822,7 @@ def _upgrade_to_v7(
     project: Project, *, project_dir: str | Path | None = None
 ) -> Project:
     """Kinematic→Pa, volume enumeration, Run ρ backfill, materials shape."""
-    rho0 = RHO_AIR
+    rho0 = V7_ASSUMED_DENSITY_KG_M3
     geometries: list[Geometry] = []
     for g in project.geometries:
         g2, _note = _ensure_geometry_volumes(g, project_dir=project_dir)
@@ -2540,7 +2540,7 @@ def _migrate_flat_to_hierarchy(
     if bcs_data is not None:
         bcs = [BoundaryCondition.from_dict(item) for item in bcs_data]
     elif version < 5:
-        bcs = _migrate_v4_bcs(faces, boundary, mesh)
+        bcs = _migrate_v4_bcs(faces, data.get("boundary"), mesh)
     else:
         bcs = []
 
@@ -2577,63 +2577,16 @@ def _migrate_flat_to_hierarchy(
 
 def _migrate_v4_bcs(
     faces: list[FaceFingerprint],
-    boundary: BoundarySettings,
+    boundary: dict | None,
     mesh: MeshSettings,
 ) -> list[BoundaryCondition]:
-    """Build v5 BCs from v4 face roles + BoundarySettings; keep inlet/outlet/walls."""
-    by_role: dict[FaceRole, list[int]] = {
-        "inlet": [],
-        "outlet": [],
-        "walls": [],
-        "unassigned": [],
-    }
-    for f in faces:
-        by_role.setdefault(f.role, []).append(f.face_id)
-
-    bcs: list[BoundaryCondition] = []
-    if by_role["inlet"]:
-        settings = default_settings("velocity_inlet_fixed")
-        settings["speed_m_s"] = boundary.inlet_speed_m_s
-        settings["direction_mode"] = boundary.inlet_direction_mode
-        settings["velocity"] = list(boundary.inlet_vector)
-        bcs.append(
-            BoundaryCondition(
-                id=_new_bc_id(),
-                name="Velocity inlet 1",
-                patch_name="inlet",
-                type="velocity_inlet_fixed",
-                settings=settings,
-                face_ids=sorted(by_role["inlet"]),
-                refinement_level=mesh.refinement.inlet,
-            )
-        )
-    if by_role["outlet"]:
-        settings = default_settings("pressure_outlet_gauge")
-        settings["gauge_pressure"] = boundary.outlet_p
-        bcs.append(
-            BoundaryCondition(
-                id=_new_bc_id(),
-                name="Pressure outlet 1",
-                patch_name="outlet",
-                type="pressure_outlet_gauge",
-                settings=settings,
-                face_ids=sorted(by_role["outlet"]),
-                refinement_level=mesh.refinement.outlet,
-            )
-        )
-    if by_role["walls"]:
-        bcs.append(
-            BoundaryCondition(
-                id=_new_bc_id(),
-                name="Wall no-slip 1",
-                patch_name="walls",
-                type="wall_noslip",
-                settings=default_settings("wall_noslip"),
-                face_ids=sorted(by_role["walls"]),
-                refinement_level=mesh.refinement.walls,
-            )
-        )
-    return bcs
+    """Build v5 BCs from v4 face roles + the raw ``boundary`` block; keep inlet/outlet/walls."""
+    rows = v4_bcs_from_roles(
+        ((f.face_id, f.role) for f in faces),
+        boundary,
+        mesh.refinement.to_dict(),
+    )
+    return [BoundaryCondition(id=_new_bc_id(), **row) for row in rows]
 
 
 @dataclass

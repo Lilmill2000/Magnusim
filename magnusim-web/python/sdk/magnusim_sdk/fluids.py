@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# Shared by migration (kinematic→Pa) and library Air entry — import these; do not re-type.
+# Used by the library Air entry — import these; do not re-type. Old project
+# migrations keep their own frozen copy (cfddesk.project.legacy_sim), not these.
 RHO_AIR = 1.204  # kg/m³, dry air at 20 °C, 1 atm
 NU_AIR = 1.5e-5  # m²/s, rounded legacy cfddesk value (~1% below 20 °C table)
 

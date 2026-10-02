@@ -1,0 +1,22 @@
+{
+ "pressure_outlet_gauge": {
+  "gauge_pressure": 0.0
+ },
+ "velocity_inlet_fixed": {
+  "direction_mode": "normal",
+  "speed_m_s": 20.0,
+  "temperature_K": 293.15,
+  "velocity": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ "wall_noslip": {
+  "ambient_T_K": 293.15,
+  "heat_flux_W_m2": 0.0,
+  "htc_W_m2K": 10.0,
+  "temperature_K": 293.15,
+  "thermal_mode": "adiabatic"
+ }
+}

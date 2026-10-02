@@ -21,7 +21,7 @@ import still makes the package depend on the other.
 ``ALLOWED`` started as the graph on 2026-10-01, which is not layered: nine
 pairs of packages import each other (the report lists them under ``cycles``). The
 intended direction, bottom to top, is ``units``/``jobs`` → ``wsl``/``runner`` →
-``cad``/``materials`` → ``mesh``/``case`` → ``results`` → ``project`` →
+``cad`` → ``mesh``/``case`` → ``results`` → ``project`` →
 ``registry``/``builtin`` → ``worker``; removing an edge that points down the
 wrong way is progress, adding one is not.
 
@@ -45,9 +45,8 @@ ALLOWED: dict[str, set[str]] = {
     "cad": {"case", "project"},
     "case": {"mesh", "registry"},
     "jobs": set(),
-    "materials": set(),
     "mesh": {"cad", "case", "project"},
-    "project": {"cad", "case", "materials", "mesh", "registry", "results", "units"},
+    "project": {"cad", "case", "mesh", "registry", "results", "units"},
     "registry": {"builtin", "case", "project", "wsl"},
     "results": set(),
     "runner": {"wsl"},

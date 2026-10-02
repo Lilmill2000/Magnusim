@@ -1,0 +1,106 @@
+{
+ "simulations": [
+  {
+   "analysis_type": "incompressible_steady",
+   "boundary_conditions": [
+    {
+     "face_ids": [
+      0
+     ],
+     "patch_name": "inlet",
+     "refinement_level": 2,
+     "settings": {
+      "direction_mode": "normal",
+      "speed_m_s": 0.5,
+      "temperature_K": 293.15,
+      "velocity": [
+       -1.0,
+       0.0,
+       0.0
+      ]
+     },
+     "type": "velocity_inlet",
+     "variant": "fixed_value"
+    },
+    {
+     "face_ids": [
+      1
+     ],
+     "patch_name": "outlet",
+     "refinement_level": 2,
+     "settings": {
+      "gauge_pressure": 0.0
+     },
+     "type": "pressure_outlet",
+     "variant": "fixed_gauge"
+    },
+    {
+     "face_ids": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+     ],
+     "patch_name": "walls",
+     "refinement_level": 1,
+     "settings": {
+      "ambient_T_K": 293.15,
+      "heat_flux_W_m2": 0.0,
+      "htc_W_m2K": 10.0,
+      "temperature_K": 293.15,
+      "thermal_mode": "adiabatic"
+     },
+     "type": "wall",
+     "variant": "noslip"
+    }
+   ],
+   "legacy_blocks": {
+    "boundary": {
+     "inlet_direction_mode": "normal",
+     "inlet_speed_m_s": 0.5,
+     "inlet_vector": [
+      -1.0,
+      0.0,
+      0.0
+     ],
+     "outlet_p": 0.0,
+     "walls_type": "noSlip"
+    },
+    "initial_conditions": {},
+    "numerics": {},
+    "solver": {
+     "backend": "cpu",
+     "end_condition": "residual",
+     "end_time": 1000,
+     "energy": false,
+     "mode": "steady",
+     "residual_p": 1e-06,
+     "residual_u": 1e-06,
+     "turbulence": "kOmegaSST",
+     "turbulence_intensity_pct": 5.0,
+     "warm_start": false
+    }
+   },
+   "meshes": [
+    {
+     "last_mesh_fingerprint": null,
+     "mesh_input_fingerprint": "1fe52a19f6e6f90a"
+    }
+   ],
+   "runs": [],
+   "simulation_control_keys": []
+  }
+ ],
+ "version": 15
+}

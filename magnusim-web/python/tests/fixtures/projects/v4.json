@@ -1,0 +1,110 @@
+{
+  "version": 4,
+  "scale_to_metres": 0.001,
+  "native_unit": "MM",
+  "declared_unit": "MM",
+  "units_confirmed": true,
+  "units_ambiguous": false,
+  "units_notes": [],
+  "paths": {
+    "wsl_case_id": "",
+    "local_case": "case",
+    "local_results": "results"
+  },
+  "step_path": "C:\\Magnusim-fixture\\cfd-web\\projects\\v4-box\\geometry\\source.step",
+  "faces": [
+    {
+      "id": 0,
+      "role": "inlet",
+      "centroid": [
+        -50.0,
+        0.0,
+        0.0
+      ],
+      "area": 400.0
+    },
+    {
+      "id": 1,
+      "role": "outlet",
+      "centroid": [
+        50.0,
+        0.0,
+        0.0
+      ],
+      "area": 400.0
+    },
+    {
+      "id": 2,
+      "role": "walls",
+      "centroid": [
+        0.0,
+        10.0,
+        0.0
+      ],
+      "area": 2000.0
+    },
+    {
+      "id": 3,
+      "role": "walls",
+      "centroid": [
+        0.0,
+        -10.0,
+        0.0
+      ],
+      "area": 2000.0
+    },
+    {
+      "id": 4,
+      "role": "walls",
+      "centroid": [
+        0.0,
+        0.0,
+        10.0
+      ],
+      "area": 2000.0
+    },
+    {
+      "id": 5,
+      "role": "unassigned",
+      "centroid": [
+        0.0,
+        0.0,
+        -10.0
+      ],
+      "area": 2000.0
+    }
+  ],
+  "mesh": {
+    "base_cell_m": 0.02,
+    "refinement": {
+      "inlet": 3,
+      "outlet": 2,
+      "walls": 1
+    },
+    "location_in_mesh": [
+      0.01,
+      0.02,
+      0.03
+    ],
+    "last_mesh_fingerprint": "052e33069594fdec"
+  },
+  "boundary": {
+    "inlet_speed_m_s": 1.5,
+    "inlet_direction_mode": "vector",
+    "inlet_vector": [
+      1.0,
+      0.0,
+      0.0
+    ],
+    "outlet_p": 2.5,
+    "walls_type": "noSlip"
+  },
+  "solver": {
+    "backend": "cpu",
+    "end_condition": "iterations",
+    "end_time": 500,
+    "residual_u": 1e-05,
+    "residual_p": 0.0001,
+    "turbulence": "kOmegaSST"
+  }
+}

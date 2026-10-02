@@ -15,7 +15,7 @@ Everything the web app runs through Python lives here. The Node API
 | `cfddesk/results/` | Post-processing helpers used by the exporters (patch surfaces, loaders, colour scales) |
 | `cfddesk/runner/` | Windows ⇄ WSL case sync, case ids, parallel decomposition |
 | `cfddesk/wsl/` | Runs the OpenFOAM / cfMesh pipelines inside WSL |
-| `cfddesk/materials/`, `cfddesk/units/` | Material library and unit conversion |
+| `cfddesk/units/` | Unit conversion |
 | `tools/` | CLI entry points spawned by the API (one process per request) |
 | `tools/generate_standard.py` | **Standard** mesher (default) |
 | `tools/generate_cfmesh_standard.py` | cfMesh `cartesianMesh` engine (Standard + Hex element core on) |
