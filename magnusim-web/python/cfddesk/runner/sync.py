@@ -66,32 +66,6 @@ def sync_to_wsl(
     )
     return SyncResult(wsl_case=dest, result=run_wsl_bash(cmd, timeout=timeout))
 
-def push_polymesh_to_wsl(
-    windows_results: Path,
-    wsl_case_id: str,
-    *,
-    timeout: float = 600.0,
-) -> SyncResult:
-    """Replace WSL ``constant/polyMesh`` from a Windows mesh results tree.
-
-    Used when multiple meshes share one WSL case id: Solve for mesh A must
-    restore A's polyMesh after Generate for mesh B overwrote the WSL case.
-    """
-    windows_results = Path(windows_results).resolve()
-    poly_src = windows_results / "constant" / "polyMesh"
-    if not (poly_src / "points").is_file():
-        raise FileNotFoundError(f"missing polyMesh points under {poly_src}")
-    src = windows_to_wsl_path(poly_src)
-    dest = wsl_case_path(wsl_case_id)
-    q = shlex.quote
-    poly_dest = q(f"{dest}/constant/polyMesh")
-    cmd = (
-        f"mkdir -p {q(f'{dest}/constant')} && "
-        f"rm -rf {poly_dest} && "
-        f"cp -a {q(src)} {poly_dest}"
-    )
-    return SyncResult(wsl_case=dest, result=run_wsl_bash(cmd, timeout=timeout))
-
 
 def assert_safe_results_dir(windows_results: Path) -> Path:
     """Refuse destructive copy-back into unexpected Windows paths.
@@ -280,14 +254,3 @@ def copy_back_mesh(
             f"stderr={result.stderr[-2000:]}"
         )
     return cb
-
-
-def ensure_foam_marker(case_dir: Path) -> Path:
-    """Ensure a *.foam marker exists for the OpenFOAM reader."""
-    case_dir = Path(case_dir)
-    existing = list(case_dir.glob("*.foam"))
-    if existing:
-        return existing[0]
-    marker = case_dir / "case.foam"
-    marker.write_text("", encoding="ascii")
-    return marker

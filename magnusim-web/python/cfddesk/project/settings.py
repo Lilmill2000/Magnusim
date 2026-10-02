@@ -22,9 +22,9 @@ LocationSource = Literal["auto", "manual"]
 SizingMode = Literal["automatic", "manual"]
 # Hex-dominant = snappyHexMesh; Standard = gmsh BREP → gmshToFoam (Phase 5b).
 MeshAlgorithm = Literal["hex-dominant", "hex-dominant-parametric", "standard"]
-# cfmesh = cartesianMesh (bulk hex + poly skin). bodyfit = OCC surface +
-# Cartesian flood + Delaunay peel (nodes on STEP faces). Default stays
-# cfmesh until the body-fit gates pass on the user's mesh.
+# cfmesh = cartesianMesh (bulk hex + poly skin). "bodyfit" selects nothing:
+# that mesher was removed, and the value stays only so projects that saved it
+# keep their mesh fingerprint (hexcore_recipe_token).
 HexcoreBackend = Literal["cfmesh", "bodyfit"]
 TurbulenceModel = Literal["laminar", "kEpsilon", "kOmegaSST", "LRR", "SSG"]
 TURBULENCE_MODELS: tuple[TurbulenceModel, ...] = (
@@ -309,8 +309,8 @@ class BoundarySettings:
     inlet_direction_mode: InletDirectionMode = "normal"
     # Used verbatim as the flow direction when mode == "vector". When
     # mode == "normal", direction instead comes from the inlet face's
-    # geometric normal (see cfddesk.cad.normals.inlet_velocity_from_face);
-    # this field is then just the last resolved/fallback direction.
+    # geometric normal; this field is then just the last resolved/fallback
+    # direction.
     inlet_vector: tuple[float, float, float] = (-1.0, 0.0, 0.0)
     outlet_p: float = 0.0
     walls_type: str = "noSlip"

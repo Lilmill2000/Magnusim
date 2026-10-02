@@ -163,20 +163,3 @@ def group_properties(points, tris, groups) -> list[dict]:
         }
         for g in range(k)
     ]
-
-
-def group_boundary_edges(tris, groups) -> np.ndarray:
-    """(n, 2) vertex pairs of edges between two surfaces or on an open border."""
-    tris = np.asarray(tris, dtype=np.int64)
-    groups = np.asarray(groups)
-    ends = np.sort(tris[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2), axis=1)
-    owner = np.repeat(np.arange(len(tris)), 3)
-    order = np.lexsort((ends[:, 1], ends[:, 0]))
-    ends, owner = ends[order], owner[order]
-    starts = np.r_[True, np.any(ends[1:] != ends[:-1], axis=1)]
-    first = np.nonzero(starts)[0]
-    counts = np.diff(np.r_[first, len(ends)])
-    border = first[counts == 1]
-    pair = first[counts == 2]
-    between = pair[groups[owner[pair]] != groups[owner[pair + 1]]]
-    return ends[np.r_[border, between]]

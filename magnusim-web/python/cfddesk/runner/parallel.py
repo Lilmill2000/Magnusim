@@ -1,7 +1,4 @@
-"""Parallel OpenFOAM solve path: clean → decompose → mpirun → reconstruct.
-
-AmgX is serial-only (N=1); callers must refuse AmgX+N>1 before entering here.
-"""
+"""Force Stop for parallel runs: kill mpirun and the ranks of one case."""
 
 from __future__ import annotations
 
@@ -19,56 +16,6 @@ class ParallelStepResult:
     detail: str = ""
 
 
-def clean_processor_dirs(wsl_case: str) -> ParallelStepResult:
-    """Remove stale processor* before decompose (N changes leave orphans)."""
-    cmd = (
-        f"cd {shlex.quote(wsl_case)} && "
-        r"rm -rf processor*[0-9]* && echo CLEAN_OK"
-    )
-    r = run_wsl_bash(cmd, timeout=120.0)
-    text = (r.stdout or "") + (r.stderr or "")
-    ok = "CLEAN_OK" in text and r.returncode == 0
-    return ParallelStepResult("clean_processor", ok, text, detail=text[-500:])
-
-
-def run_decompose_par(wsl_case: str, *, log_name: str = "log.decomposePar") -> ParallelStepResult:
-    log_q = shlex.quote(log_name)
-    dest = shlex.quote(wsl_case)
-    inner = (
-        f"cd {dest} && : > {log_q} && "
-        f"openfoam2606 bash -c {shlex.quote(f'cd {wsl_case} && decomposePar > {log_name} 2>&1')}"
-    )
-    r = run_wsl_bash(inner, timeout=600.0)
-    cat = run_wsl_bash(f"cat {dest}/{log_q} 2>/dev/null || true", timeout=60.0)
-    text = cat.stdout or ""
-    ok = (
-        "End" in text
-        or "Finished decomposing" in text
-        or ("nCells" in text and "FOAM FATAL" not in text)
-    ) and "FOAM FATAL" not in text
-    if not ok and r.returncode == 0 and "processor" in text.lower():
-        ok = "FOAM FATAL" not in text
-    return ParallelStepResult("decomposePar", ok, text)
-
-
-def run_reconstruct_par(
-    wsl_case: str, *, log_name: str = "log.reconstructPar"
-) -> ParallelStepResult:
-    log_q = shlex.quote(log_name)
-    dest = shlex.quote(wsl_case)
-    inner = (
-        f"cd {dest} && : > {log_q} && "
-        f"openfoam2606 bash -c {shlex.quote(f'cd {wsl_case} && reconstructPar -latestTime > {log_name} 2>&1')}"
-    )
-    r = run_wsl_bash(inner, timeout=600.0)
-    cat = run_wsl_bash(f"cat {dest}/{log_q} 2>/dev/null || true", timeout=60.0)
-    text = cat.stdout or ""
-    ok = "FOAM FATAL" not in text and (
-        "End" in text or "Reconstructing" in text or r.returncode == 0
-    )
-    return ParallelStepResult("reconstructPar", ok, text)
-
-
 def kill_mpirun_tree(wsl_case: str, process_names: tuple[str, ...]) -> ParallelStepResult:
     """Kill mpirun + solver/mesh ranks for this case (Force Stop).
 
@@ -76,7 +23,7 @@ def kill_mpirun_tree(wsl_case: str, process_names: tuple[str, ...]) -> ParallelS
     snappyHexMesh (parallel mesh) plus mpirun.
     Matches by cmdline *or* /proc/PID/cwd == case (snappy argv often omits the
     case path). Writes a real ``.sh`` under /tmp and runs it — never inline
-    ``pkill -f run_snappy_parallel.sh`` (that self-matches the killer cmdline).
+    ``pkill -f <pattern>`` (that self-matches the killer cmdline).
     """
     import hashlib
     import re
@@ -125,26 +72,3 @@ echo KILL_DONE
     text = (r.stdout or "") + (r.stderr or "")
     ok = "KILL_DONE" in text
     return ParallelStepResult("kill_mpirun_tree", ok, text, detail=text[-500:])
-
-
-def run_potential_foam(
-    wsl_case: str, *, log_name: str = "log.potentialFoam"
-) -> ParallelStepResult:
-    """potentialFoam with log-file redirect; scan log, never trust RC alone."""
-    log_q = shlex.quote(log_name)
-    dest = shlex.quote(wsl_case)
-    foam_inner = (
-        f"cd {shlex.quote(wsl_case)} && "
-        f"potentialFoam -writep -initialiseUBCs > {log_q} 2>&1"
-    )
-    inner = (
-        f"cd {dest} && : > {log_q} && "
-        f"openfoam2606 bash -c {shlex.quote(foam_inner)}"
-    )
-    run_wsl_bash(inner, timeout=600.0)
-    cat = run_wsl_bash(f"cat {dest}/{log_q} 2>/dev/null || true", timeout=60.0)
-    text = cat.stdout or ""
-    ok = "FOAM FATAL" not in text and (
-        "End" in text or "Writing" in text or "potentialFoam" in text
-    )
-    return ParallelStepResult("potentialFoam", ok, text)

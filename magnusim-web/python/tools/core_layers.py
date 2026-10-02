@@ -42,11 +42,11 @@ ROOT = Path(__file__).resolve().parents[1] / "cfddesk"
 ALLOWED: dict[str, set[str]] = {
     "<top>": set(),
     "builtin": {"project", "registry", "results"},
-    "cad": {"case", "mesh", "project"},
+    "cad": {"case", "project"},
     "case": {"mesh", "registry"},
     "jobs": set(),
     "materials": set(),
-    "mesh": {"cad", "case", "project", "runner", "wsl"},
+    "mesh": {"cad", "case", "project"},
     "project": {"cad", "case", "materials", "mesh", "registry", "results", "units"},
     "registry": {"builtin", "case", "project", "wsl"},
     "results": set(),

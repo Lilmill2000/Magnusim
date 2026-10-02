@@ -45,6 +45,19 @@ September 2026 readiness audit. This list preserves the intended work.
   mesher and loads its mesh like a core one, proven end to end with a fixture
   mesher plugin.
 
+- **Mesh paths no Generate reached (removed 2026-10):** about 6.4k lines of
+  core mesh and CAD code that no run used were deleted before the Standard and
+  Hex-dominant meshers move into a plugin: the body-fit hex core (OCC surface,
+  Cartesian flood, Delaunay peel, prism skin), the gmsh all-tet volume path and
+  its OCC surface fallback, the old snappyHexMesh case writer with periodic
+  (cyclic) patch pairing, CAD feature edges and CAD-adherence checks, and the
+  parallel snappy and gmsh-only WSL pipelines, the STL-against-cell quality
+  checks and the face-normal inlet helper. Standard, Hex-dominant and
+  cfMesh are unchanged (their goldens prove it). Projects that saved
+  `hexcore_backend = "bodyfit"` keep their mesh fingerprint; the value selects
+  nothing. To restore one: take it from git history into a mesher plugin, with
+  goldens and a WSL mesh check like the others.
+
 - **XFLR5 polar import/export (Airfoil plugin):** XFLR5 is a desktop program
   with no command line, so the app cannot run it. To add: import and export of
   XFLR5 polar files in the Airfoil workspace.

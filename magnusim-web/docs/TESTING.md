@@ -73,8 +73,8 @@ same host with test plugins.
 cross-package import fails until it is added to `ALLOWED` on purpose, and an
 entry nothing uses any more fails too, so the graph only shrinks unnoticed,
 never grows. The graph started as it was on 2026-10-01. That graph is not
-layered: nine pairs of packages import each other (the report lists them under
-`cycles`), so a change in one of those packages can still reach the other.
+layered: eight pairs of packages import each other (nine on 2026-10-01; the
+report lists them under `cycles`), so a change in one of those packages can still reach the other.
 Removing a cycle is how a package becomes safe to change on its own.
 
 ## Real meshes and solves (WSL)

@@ -9,7 +9,7 @@ Everything the web app runs through Python lives here. The Node API
 | `.venv/` | Python 3.10 virtual environment: pyvista/VTK, gmsh, cadquery-ocp (OCCT), numpy, psutil. `cfddesk` is installed editable from this folder. |
 | `cfddesk/` | Library package (importable as `cfddesk`) |
 | `cfddesk/cad/` | STEP loading (OCCT), units, bounding boxes, STL export/quality, gap and passage measurement |
-| `cfddesk/mesh/` | Mesh engines: gmsh Standard surface mesh + hex core (`gmsh_standard`, `standard_hexcore`, `hexcore_bodyfit`, `octree_hex`), cfMesh `cartesianMesh` (`cfmesh_standard`), OpenFOAM dict writers (`case_writer`, `create_patch`, `feature_edges`, `snappy_policy`) |
+| `cfddesk/mesh/` | Mesh engines: gmsh Standard surface mesh + hex core (`gmsh_standard`, `standard_hexcore`, `octree_hex`), cfMesh `cartesianMesh` (`cfmesh_standard`, `case_writer`), Hex-dominant snappyHexMesh (`snappy_hexdominant`, `snappy_policy`) |
 | `cfddesk/case/` | OpenFOAM case writers: boundary conditions, RAS turbulence, function objects for surface averages |
 | `cfddesk/project/` | Project model + settings (mesh sizing, refinements, initial conditions, numerics) |
 | `cfddesk/results/` | Post-processing helpers used by the exporters (patch surfaces, loaders, colour scales) |

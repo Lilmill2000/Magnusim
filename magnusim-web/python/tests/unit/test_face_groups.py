@@ -12,7 +12,6 @@ import pytest
 from cfddesk.cad import io
 from cfddesk.cad import preview as pvw
 from cfddesk.cad.face_groups import (
-    group_boundary_edges,
     group_properties,
     group_triangles,
     orient_outward,
@@ -59,8 +58,6 @@ def test_cylinder_groups_into_wall_and_two_caps():
     polygon = 0.5 * 48 * 20.0**2 * np.sin(2 * np.pi / 48)
     assert props[1]["area"] == pytest.approx(polygon, rel=1e-9)
     assert props[0]["area"] == pytest.approx(48 * 2 * 20.0 * np.sin(np.pi / 48) * 300.0, rel=1e-9)
-    # Surface boundaries are the two rims.
-    assert len(group_boundary_edges(tris, groups)) == 2 * 48
 
 
 def test_orientation_is_made_consistent_and_outward():
@@ -126,9 +123,19 @@ def test_stl_import_preview_and_load_step_use_the_surfaces(tmp_path):
     assert len(tris_t) == len(tris) and set(fids.tolist()) == {0, 1, 2}
 
     # The CAD face kept for a flat cap has the cap's outward normal.
-    from cfddesk.cad.normals import face_outward_normal
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.gp import gp_Pnt, gp_Vec
+    from OCP.TopAbs import TopAbs_REVERSED
 
-    assert face_outward_normal(solid.faces[2].face) == pytest.approx((0, 0, 1), abs=1e-9)
+    face = solid.faces[2].face
+    surf = BRepAdaptor_Surface(face)
+    u = 0.5 * (surf.FirstUParameter() + surf.LastUParameter())
+    v = 0.5 * (surf.FirstVParameter() + surf.LastVParameter())
+    du, dv = gp_Vec(), gp_Vec()
+    surf.D1(u, v, gp_Pnt(), du, dv)
+    n = du.Crossed(dv).Normalized()
+    sign = -1.0 if face.Orientation() == TopAbs_REVERSED else 1.0
+    assert (sign * n.X(), sign * n.Y(), sign * n.Z()) == pytest.approx((0, 0, 1), abs=1e-9)
 
 
 def test_open_mesh_still_sews_and_is_not_grouped(tmp_path):

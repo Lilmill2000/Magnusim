@@ -60,8 +60,6 @@ are substituted by `cfddesk.wsl.mesh_run` at write time:
 
 | File | Placeholders | Used by |
 |---|---|---|
-| `run_snappy_parallel.sh` | `__N__`, `__METHOD__` | `write_run_snappy_parallel_sh` / parallel snappy |
-| `run_gmsh_standard.sh` | (none) | `write_run_gmsh_standard_sh` |
 | `run_standard_mesh.sh` | (none) | `write_run_standard_sh` (gmsh + optional layers) |
 | `run_cfmesh_standard.sh` | (none) | `write_run_cfmesh_standard_sh` |
 

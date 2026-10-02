@@ -7,11 +7,10 @@ from pathlib import Path
 
 import numpy as np
 from OCP.BRep import BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepTools import BRepTools
-from OCP.GCPnts import GCPnts_QuasiUniformDeflection
 from OCP.GeomAbs import (
     GeomAbs_BSplineSurface,
     GeomAbs_Cone,
@@ -21,11 +20,10 @@ from OCP.GeomAbs import (
     GeomAbs_Torus,
 )
 from OCP.GProp import GProp_GProps
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
-from OCP.TopExp import TopExp, TopExp_Explorer
+from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
+from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Face, TopoDS_Shape
-from OCP.TopTools import TopTools_IndexedMapOfShape
 
 from cfddesk.cad.units import UnitResolution, resolve_units, shape_bbox
 
@@ -332,143 +330,4 @@ def tessellate_faces(
         np.asarray(points, dtype=np.float64),
         np.asarray(triangles, dtype=np.int64),
         np.asarray(face_ids, dtype=np.int32),
-    )
-
-
-def tessellate_single_face(
-    face: TopoDS_Face,
-    *,
-    linear_deflection: float,
-    angular_deflection: float = 0.35,
-    relative_deflection: bool = False,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Triangulate one BREP face in native OCCT units.
-
-    Used when gmsh cannot mesh closed periodic surfaces (cylinders/tori).
-    """
-    lin = max(float(linear_deflection), 1e-15)
-    ang = max(float(angular_deflection), 1e-3)
-    rel = bool(relative_deflection)
-    BRepTools.Clean_s(face)
-    BRepMesh_IncrementalMesh(face, lin, rel, ang, True)
-
-    loc = TopLoc_Location()
-    tri = BRep_Tool.Triangulation_s(face, loc)
-    if tri is None or tri.NbTriangles() < 1:
-        raise RuntimeError("OCCT face tessellation produced no triangles")
-
-    trsf = loc.Transformation()
-    points: list[list[float]] = []
-    for i in range(1, tri.NbNodes() + 1):
-        p = tri.Node(i)
-        p.Transform(trsf)
-        points.append([p.X(), p.Y(), p.Z()])
-
-    reversed_orient = face.Orientation() == TopAbs_REVERSED
-    triangles: list[list[int]] = []
-    for i in range(1, tri.NbTriangles() + 1):
-        t = tri.Triangle(i)
-        n1, n2, n3 = t.Value(1), t.Value(2), t.Value(3)
-        if reversed_orient:
-            n1, n2, n3 = n1, n3, n2
-        triangles.append([n1 - 1, n2 - 1, n3 - 1])
-
-    return np.asarray(points, dtype=np.float64), np.asarray(triangles, dtype=np.int64)
-
-
-def tessellate_single_face_robust(
-    face: TopoDS_Face,
-    *,
-    linear_deflection: float,
-    face_area_native: float,
-    angular_deflection: float = 0.35,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Try several OCCT deflections — tiny spheres need relative meshing."""
-    import math
-
-    lin0 = max(float(linear_deflection), 1e-15)
-    area = max(float(face_area_native), 1e-30)
-    edge_est = math.sqrt(area)
-    attempts: list[tuple[float, bool]] = [
-        (lin0, False),
-        (min(lin0, edge_est * 0.5), False),
-        (min(lin0, edge_est * 0.15), False),
-        (max(edge_est * 0.08, 1e-6), False),
-        (0.01, True),
-        (0.001, True),
-        (0.0001, True),
-    ]
-    last_err: RuntimeError | None = None
-    for lin, rel in attempts:
-        try:
-            return tessellate_single_face(
-                face,
-                linear_deflection=lin,
-                angular_deflection=angular_deflection,
-                relative_deflection=rel,
-            )
-        except RuntimeError as exc:
-            last_err = exc
-            continue
-    raise RuntimeError(
-        f"OCCT face tessellation failed after {len(attempts)} attempts: {last_err}"
-    )
-
-
-def extract_cad_edges(
-    solid: LoadedSolid,
-    *,
-    deflection: float | None = None,
-    scale: float = 1.0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Discretise unique topological edges (Fusion-style true CAD edges).
-
-    Returns
-    -------
-    points : (N, 3) float64 — scaled by ``scale`` (use ``scale_to_metres`` for CFD)
-    lines : int64 ravelled VTK line connectivity ``[n, i0, i1, …]``
-    """
-    if deflection is None:
-        deflection, _ = mesh_deflection(solid)
-        # Match face-mesh deflection so circles (vortex finder, rims) stay round.
-        deflection = max(deflection, 1e-4)
-
-    edge_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(solid.shape, TopAbs_EDGE, edge_map)
-
-    points: list[list[float]] = []
-    lines: list[int] = []
-    offset = 0
-
-    for i in range(1, edge_map.Size() + 1):
-        edge = TopoDS.Edge_s(edge_map.FindKey(i))
-        if BRep_Tool.Degenerated_s(edge):
-            continue
-        try:
-            curve = BRepAdaptor_Curve(edge)
-            u0 = float(curve.FirstParameter())
-            u1 = float(curve.LastParameter())
-        except Exception:
-            continue
-        if abs(u1 - u0) < 1e-15:
-            continue
-        try:
-            sampler = GCPnts_QuasiUniformDeflection(curve, float(deflection), u0, u1)
-        except Exception:
-            continue
-        if not sampler.IsDone() or sampler.NbPoints() < 2:
-            continue
-        n = int(sampler.NbPoints())
-        for j in range(1, n + 1):
-            p = sampler.Value(j)
-            points.append([p.X() * scale, p.Y() * scale, p.Z() * scale])
-        lines.append(n)
-        lines.extend(range(offset, offset + n))
-        offset += n
-
-    if not points:
-        return np.zeros((0, 3), dtype=np.float64), np.zeros((0,), dtype=np.int64)
-    return (
-        np.asarray(points, dtype=np.float64),
-        np.asarray(lines, dtype=np.int64),
     )
