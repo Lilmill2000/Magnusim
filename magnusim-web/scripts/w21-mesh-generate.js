@@ -13,6 +13,7 @@ import { killProcessTree } from './proc-tree.js';
 import { projectIdOrActive } from './request-scope.js';
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  appendFileSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -1151,7 +1152,6 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   const started_at = new Date().toISOString();
   const engineLabel = engine === 'cfmesh' ? 'cfMesh cartesianMesh' : 'Standard';
 
-  let logBuf = '';
   let lastResult = null;
   const jobLog = createJobLogger('mesh', generateId);
   const { child } = spawnJob({
@@ -1231,7 +1231,6 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   persistMeshResult(project_id, baseRunning);
 
   let lastStage = null;
-  let lineCarry = '';
   const flushParsedLine = (line) => {
     const parsed = parseCfmeshLine(line);
     if (!parsed) return;
@@ -1251,33 +1250,14 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
       }
     }
   };
-  const appendLog = (chunk) => {
-    const s = chunk.toString('utf8');
-    logBuf += s;
-    try {
-      writeFileSync(winLog, logBuf, 'utf8');
-    } catch {}
-    // Carry incomplete trailing fragment across chunks so JSON result lines
-    // split mid-chunk still set lastResult (avoids exit_code 45 false-fail).
-    lineCarry += s;
-    const parts = lineCarry.split(/\r?\n/);
-    lineCarry = parts.pop() ?? '';
-    for (const line of parts) flushParsedLine(line);
-  };
-  const flushLineCarry = () => {
-    if (!lineCarry) return;
-    const rem = lineCarry;
-    lineCarry = '';
-    flushParsedLine(rem);
-  };
-  child.stdout?.on('data', appendLog);
-  child.stderr?.on('data', appendLog);
+  // A line split mid-chunk is carried, so a JSON result line still sets lastResult
+  // (avoids exit_code 45 false-fail).
+  const out = generateOutput(winLog, flushParsedLine);
+  child.stdout?.on('data', out.add);
+  child.stderr?.on('data', out.add);
 
   child.on('error', (err) => {
-    logBuf += `\nSPAWN_ERROR: ${err}\n`;
-    try {
-      writeFileSync(winLog, logBuf, 'utf8');
-    } catch {}
+    out.note(`\nSPAWN_ERROR: ${err}\n`);
     if (job.stop_requested) {
       if (liveJob && liveJob.child === child) liveJob = null;
       notifyMeshStopped(job);
@@ -1290,7 +1270,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
       status: 'failed',
       exit_code: -1,
       finished_at: new Date().toISOString(),
-      log_excerpt: logBuf.slice(-2000),
+      log_excerpt: out.text().slice(-2000),
       error: String(err),
       note: `${engineLabel} mesher failed to start: ${err}`,
     };
@@ -1302,7 +1282,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   // Decide on 'close' (not 'exit'): exit can fire while the final JSON result
   // chunk is still in the pipe; close waits until stdout/stderr are fully drained.
   child.on('close', (code, signal) => {
-    flushLineCarry();
+    out.flushCarry();
     if (liveJob && liveJob.child === child) liveJob = null;
     if (job.stop_requested) {
       notifyMeshStopped(job);
@@ -1310,9 +1290,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     }
     const exit_code = code == null ? (signal ? -2 : -1) : code;
     const finished_at = new Date().toISOString();
-    try {
-      writeFileSync(winLog, logBuf, 'utf8');
-    } catch {}
+    out.save();
     const polyDir = join(winOut, 'constant', 'polyMesh');
     let counts = { n_cells: null, n_points: null, n_faces: null, source: null };
     const inspected = inspectGeneratedCase(winOut);
@@ -1339,7 +1317,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
         if (counts.n_faces == null) counts.n_faces = lastResult.n_faces ?? null;
       }
     } catch (e) {
-      logBuf += `\nCOUNT_PARSE_ERROR: ${e}\n`;
+      out.note(`\nCOUNT_PARSE_ERROR: ${e}\n`);
     }
 
     const scriptOk = (lastResult && lastResult.ok === true) || !!(inspected && inspected.script_ok);
@@ -1352,7 +1330,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
       status,
       exit_code: ok ? 0 : exit_code === 0 && !ok ? 45 : exit_code,
       finished_at,
-      log_excerpt: logBuf.slice(-4000),
+      log_excerpt: out.text().slice(-4000),
       case_dir: winOut,
       mesh_path: polyDir,
       n_cells: counts.n_cells,
@@ -1410,6 +1388,50 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     ok: true,
     status: 202,
     bodyExtra: { ...baseRunning },
+  };
+}
+
+/**
+ * A generator's stdout and stderr: the text so far (for log excerpts), each whole line to
+ * `onLine` (a line split across chunks is carried to the next), and each chunk appended to
+ * the Windows log. Appending keeps writing the log linear in the output; rewriting the
+ * whole log on every chunk cost the square of it.
+ */
+export function generateOutput(winLog, onLine, io = { appendFileSync, writeFileSync }) {
+  let text = '';
+  let carry = '';
+  const write = (s) => {
+    text += s;
+    try {
+      io.appendFileSync(winLog, s, 'utf8');
+    } catch {}
+  };
+  return {
+    text: () => text,
+    /** A chunk of output (Buffer or string). */
+    add(chunk) {
+      const s = chunk.toString('utf8');
+      write(s);
+      carry += s;
+      const parts = carry.split(/\r?\n/);
+      carry = parts.pop() ?? '';
+      for (const line of parts) onLine(line);
+    },
+    /** The last line, when the output ended without a newline. */
+    flushCarry() {
+      if (!carry) return;
+      const rem = carry;
+      carry = '';
+      onLine(rem);
+    },
+    /** A note of the app's own (not parsed as output). */
+    note: write,
+    /** The whole log once more (after the process ends): mends a chunk an append missed. */
+    save() {
+      try {
+        io.writeFileSync(winLog, text, 'utf8');
+      } catch {}
+    },
   };
 }
 
@@ -1581,7 +1603,6 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
   const command = argv.join(' ');
   const started_at = new Date().toISOString();
 
-  let logBuf = '';
   let lastResult = null;
   const jobLog = createJobLogger('mesh', generateId);
   const { child } = spawnJob({
@@ -1671,7 +1692,6 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
   persistMeshResult(project_id, baseRunning);
 
   let lastStage = null;
-  let lineCarry = '';
   const flushParsedLine = (line) => {
     const parsed = parseCfmeshLine(line);
     if (!parsed) return;
@@ -1691,28 +1711,12 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
       }
     }
   };
-  const appendLog = (chunk) => {
-    const s = chunk.toString('utf8');
-    logBuf += s;
-    try {
-      writeFileSync(winLog, logBuf, 'utf8');
-    } catch {}
-    lineCarry += s;
-    const parts = lineCarry.split(/\r?\n/);
-    lineCarry = parts.pop() ?? '';
-    for (const line of parts) flushParsedLine(line);
-  };
-  const flushLineCarry = () => {
-    if (!lineCarry) return;
-    const rem = lineCarry;
-    lineCarry = '';
-    flushParsedLine(rem);
-  };
-  child.stdout?.on('data', appendLog);
-  child.stderr?.on('data', appendLog);
+  const out = generateOutput(winLog, flushParsedLine);
+  child.stdout?.on('data', out.add);
+  child.stderr?.on('data', out.add);
 
   child.on('close', (code) => {
-    flushLineCarry();
+    out.flushCarry();
     if (liveJob && liveJob.child === child) liveJob = null;
     if (job.stop_requested) {
       notifyMeshStopped(job);
@@ -1770,7 +1774,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
           : status === 'stopped'
             ? 'Mesh generate cancelled.'
             : `Hex-dominant snappy failed (exit ${exit_code}).`,
-      log_excerpt: logBuf.slice(-4000),
+      log_excerpt: out.text().slice(-4000),
       mtp1_silent_copy: false,
     };
     persistMeshResult(project_id, terminal);
