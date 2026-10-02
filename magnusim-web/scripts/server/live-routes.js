@@ -13,14 +13,17 @@ import { handleW20Api } from '../w20-mesh.js';
 import {
   startMeshGenerate,
   liveMeshJobSnapshot,
-  isLiveMeshJobHeld,
   reapOrphanMeshGeneratorsOnBoot,
   projectTitleOf,
 } from '../w21-mesh-generate.js';
 import { handleW26Api } from '../w26-mesh-refinements.js';
 import { handleW22Api } from '../w22-area-average.js';
-import { handleW27Api, startSolve, isLiveSolveHeld, liveSolveJobSnapshot } from '../w27-solve.js';
+import { handleW27Api, startSolve } from '../w27-solve.js';
 import { scheduleWslPrune } from '../wsl-prune.js';
+import { computeSlotHolder, holderIsRow, setSlotReleaseHook } from '../compute-slot.js';
+import { rediscoverAtBoot } from '../compute-rediscover.js';
+import { onQueueChange, onQueueLeave, startFoam } from '../foam-runner.js';
+import { refreshSolveHooks } from '../solve-hooks.js';
 import {
   configureComputeQueue,
   snapshotComputeQueue,
@@ -62,37 +65,39 @@ function wrap(handler) {
   };
 }
 
+/** The compute slot's holder, as the Queue chip shows it. */
 function computeQueueLive() {
-  if (isLiveMeshJobHeld()) {
-    const mesh = liveMeshJobSnapshot() || {};
-    return {
-      kind: 'mesh',
-      mesh_id: mesh.mesh_id || null,
-      run_id: null,
-      project_id: mesh.project_id || null,
-      project_title: mesh.project_title || null,
-      mesh_name: mesh.mesh_name || null,
-      generate_id: mesh.generate_id || null,
-      path_kind: mesh.path_kind || null,
-      started_at: mesh.started_at || null,
-    };
+  const h = computeSlotHolder();
+  if (!h) return null;
+  if (h.kind === 'check') {
+    return { kind: 'check', phase: 'checking', name: 'Checking for jobs left running', stopping: false, project_id: null };
   }
-  if (isLiveSolveHeld()) {
-    const solve = liveSolveJobSnapshot() || {};
-    return {
-      kind: 'solve',
-      mesh_id: null,
-      run_id: solve.run_id || null,
-      project_id: solve.project_id || null,
-      project_title: projectTitleOf(solve.project_id),
-    };
-  }
-  return null;
+  return {
+    kind: h.kind,
+    phase: h.phase,
+    name: h.name || null,
+    stopping: !!h.stop_requested,
+    project_id: h.project_id || null,
+    project_title: h.project_id ? projectTitleOf(h.project_id) : null,
+    run_id: h.run_id || null,
+    mesh_id: h.mesh_id || null,
+    mesh_name: h.mesh_name || null,
+    generate_id: h.generate_id || null,
+    path_kind: h.path_kind || null,
+    started_at: h.started_at || null,
+    job_id: h.job_id || null,
+    plugin: h.plugin || null,
+    study_id: h.study_id || null,
+  };
 }
 
 function wireComputeQueue(api) {
   configureComputeQueue({
-    isBusy: () => isLiveMeshJobHeld() || isLiveSolveHeld(),
+    isBusy: () => computeSlotHolder() !== null,
+    startFoam: (item) => startFoam(item),
+    onLeave: (row, reason, error) => onQueueLeave(row, reason, error),
+    onChange: () => onQueueChange(),
+    holdsRow: (row) => holderIsRow(computeSlotHolder(), row),
     meshIsGenerating: (meshId, projectId) => {
       const snap = liveMeshJobSnapshot();
       if (!snap || !meshId || String(snap.mesh_id || '') !== String(meshId)) return false;
@@ -120,11 +125,24 @@ function wireComputeQueue(api) {
 }
 
 export function registerLiveRoutes(router, { worker, jobs, services }) {
+  // An old instance's release hook (a Vite re-import) is dropped until boot() installs this one's.
+  setSlotReleaseHook(null);
   const api = getCaseFieldApi();
 
   attachLiveMeshJobReader(liveMeshJobSnapshot);
   attachActiveProjectListener(api.syncActiveCaseToActiveProject);
   wireComputeQueue(api);
+  // Jobs a previous server left running hold the slot before the first request is served.
+  try {
+    void rediscoverAtBoot();
+  } catch (e) {
+    console.warn('[CFD] boot check failed', e);
+  }
+  if (worker && typeof worker.on === 'function') {
+    worker.on('registry-changed', () => {
+      void refreshSolveHooks(worker);
+    });
+  }
 
   router.get('/api/compute-queue', (ctx) => {
     // No project: the whole queue (every project), with each row's position.
@@ -257,11 +275,19 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
       ctx.sendJson(400, { error: 'invalid JSON body', detail: String(e) });
       return;
     }
-    const caseDir = body.case_dir || body.case || body.path || '';
+    if (body.case !== undefined || body.path !== undefined) {
+      ctx.sendJson(400, { error: 'use case_dir' });
+      return;
+    }
+    const caseDir = body.case_dir || body.caseDir || '';
+    // A plugin study's case names its plugin and study (the router checked they go together).
+    const plugin = String(body.plugin || '');
+    const pluginStudyId = String(body.plugin_study_id || '');
     const result = api.attachCaseDir(
       caseDir,
       body.project_id || body.projectId,
-      body.simulation_id || body.simulationId
+      body.simulation_id || body.simulationId,
+      plugin && pluginStudyId ? { plugin, studyId: pluginStudyId } : null
     );
     ctx.res.setHeader('X-CFD-Source', 'case-attach');
     if (result.ok && result.body && result.body.case_dir) {
@@ -637,6 +663,9 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
         /* ignore */
       }
       api.hydrateActiveMeshCase();
+      // From now on every release of the compute slot moves the queue on.
+      setSlotReleaseHook(() => scheduleComputeQueueKick(250));
+      void refreshSolveHooks(worker);
       try {
         scheduleComputeQueueKick(400);
       } catch {

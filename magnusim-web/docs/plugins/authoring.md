@@ -215,11 +215,34 @@ await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab
   const back = await ws.files.read(`studies/${study.id}/model.bin`); // ArrayBuffer, or null
   ```
 
-  Your service and jobs reach the same files through `magnusim_sdk.data.PluginData` (`from_scope(scope)` in a service method, `from_env()` in a job): `read_bytes`, `write_bytes`, `atomic_path` (a temp path for a mesher or exporter, replaced in one step), `list_files`, `delete_file` and `file_info`, whose `etag` matches the workspace's. Paths follow one set of rules everywhere (`compatibility.md`); a study's own `study.json` changes only through `ws.study`.
+  Your service and jobs reach the same files through `magnusim_sdk.data.PluginData` (`from_scope(scope)` in a service method, `from_env()` in a job): `read_bytes`, `write_bytes`, `atomic_path` (a temp path for a mesher or exporter, replaced in one step), `list_files`, `delete_file` and `file_info`, whose `etag` matches the workspace's. Paths follow one set of rules everywhere (`compatibility.md`); a study's own `study.json` changes only through `ws.study`. The output of your OpenFOAM cases (1.3: frames, logs, `postProcessing`, the mesh) lands in the same folder and counts toward `max_total_mb` too; a run is not cut short at the limit, but later writes and submits are refused until you delete old cases.
 - **Unsaved work (1.2).** Call `ws.nav.setDirty(true, 'Sketch 2 is not saved')` on the first change that is not saved yet, and `ws.nav.setDirty(false)` once it is. While it is set, and while a `ws.files.write` is on its way, every way out of the workspace asks the user first, with your plugin's name and your message, and closing the browser tab shows the browser's own prompt. `ws.nav.back()` resolves `false` when the user stays; clear the flag first to leave without a question. Never reload your own page while dirty: a reload clears the flag and loses the work. If your page accepts dropped files, call `preventDefault()` on `dragover` and `drop`, or the browser opens the file in place of the app.
 - **Keyboard and full screen (1.2).** Your page has the keyboard when it connects and again after the app's dialogs and Settings close; listen on `window` or `document`. `document.documentElement.requestFullscreen()` from a click or key handler covers the whole screen; Esc always leaves, and the app leaves full screen before it shows a dialog. The app's toasts are not seen over a full-screen page.
 
 `python/tests/fixtures/workspace-plugins/ws-demo` is a complete example (modules, React, WebAssembly, a worker, service calls, data and study saves), driven by `e2e/h13-workspace.spec.js`.
+
+### OpenFOAM cases and solve hooks (1.3)
+
+A workspace can run an OpenFOAM case it wrote in its study's folder: the host runs it in WSL on the app's one compute slot (it may wait in the queue behind a mesh or a solve), streams its progress to the page, and can show its results in the project's 3D view.
+
+```javascript
+const ws = await connect();
+// Write the case with ws.files (or your service) under studies/<sid>/cases/c1, then:
+const { id } = await ws.compute.submitOpenFOAM({
+  caseRel: 'cases/c1',                       // inside this study's folder; a case runs once
+  app: 'pimpleFoam',                         // a registered solver, as controlDict names it
+  pre: [{ tool: 'blockMesh' }],              // WSL steps before the solver
+  results: { kinematicFields: ['p'], rho: 1.2 },
+});
+ws.compute.events(id, (ev) => {
+  if (ev.event === 'progress') plot.add(ev.points);
+  if (ev.event === 'end' && ev.status === 'done') ws.results.openIn3D('cases/c1');
+});
+```
+
+`compatibility.md` (1.3) has the rules: the calls, the case and `controlDict` rules, the table of WSL steps and their arguments (meshing utilities and parallel spans included), the events, Stop, what happens when the plugin is turned off or the app restarts, and the codes. `python/tests/fixtures/foam-plugins/foam-demo` is a complete example, driven by `e2e/h15-submit-openfoam.spec.js`.
+
+Your plugin's Python can also follow every solve, core runs included: `solve.prepare`, `solve.parse_line` (batches of solver output lines) and `solve.stop`, registered with `get_hooks().on(name, fn, plugin=KEY)` in `register(hub)`. They run inside the solve's relay process, never slow the solve, and are dropped for the run when they take too long or raise; `compatibility.md` lists what they are told and their limits.
 
 ## UI kit (1.3)
 
@@ -278,7 +301,7 @@ Settings → Plugins lists each plugin's name (or key), version, source (`bundle
 - `incompatible`: its `api_version` has a different major.
 - `error`, shown as Failed to load, with the message (a manifest or `register` failure, a missing required plugin, or a UI bundle that failed in the page).
 
-Enable and Disable call the plugin routes, reload the registry, and load or remove the plugin's UI at once. **Reload plugins** runs `registry.reload` and loads UI bundles again.
+Enable and Disable call the plugin routes, reload the registry, and load or remove the plugin's UI at once. **Reload plugins** runs `registry.reload` and loads UI bundles again. It also stops every running plugin OpenFOAM case ("Stopped: plugins were reloaded") and takes every queued one off the queue. Disable, and removing a plugin's environment, stop only that plugin's cases; Enable and installing an environment stop nothing.
 
 ## License
 

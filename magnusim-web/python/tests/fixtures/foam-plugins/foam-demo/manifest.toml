@@ -1,0 +1,19 @@
+key = "foam-demo"
+name = "Foam demo"
+version = "1.0.0"
+api_version = "1.3"
+license = "GPL-3.0-or-later"
+description = "Test plugin that writes and runs its own OpenFOAM cases (H15)"
+authors = "Magnusim"
+
+[[workspaces]]
+key = "cavity"
+title = "Cavity"
+icon = "M4 5h16v14H4z M4 9h16"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "cavity_case"
+title = "Cavity case"
+icon = "M5 19V5h14v14z M5 9h14"
+workspace = "cavity"

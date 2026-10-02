@@ -181,6 +181,7 @@ const SCOPED_PREFIXES = [
   '/api/media',
   '/api/jobs',
   '/api/plugin-files',
+  '/api/plugin-cases',
 ];
 
 let missingProjectWarned = false;
@@ -294,7 +295,22 @@ export async function dispatch(
       console.warn(`[scope] ${url.pathname} has no project_id`);
     }
   }
-  if (caseDir && projectId && !caseDirAllowedForAttach(caseDir, projectId, simulationId)) {
+  // A plugin study's case names its plugin and study (both, or neither).
+  let pluginStudy: { plugin: string; studyId: string } | null = null;
+  if (caseDir) {
+    const pluginField = scopedField(url, parsedBody, ['plugin']);
+    const studyField = scopedField(url, parsedBody, ['plugin_study_id']);
+    if (pluginField.mismatch || studyField.mismatch) {
+      sendJson(res, 400, { error: 'scope fields disagree' });
+      return true;
+    }
+    if (!!pluginField.value !== !!studyField.value) {
+      sendJson(res, 400, { error: 'plugin and plugin_study_id go together' });
+      return true;
+    }
+    if (pluginField.value) pluginStudy = { plugin: pluginField.value, studyId: studyField.value };
+  }
+  if (caseDir && projectId && !caseDirAllowedForAttach(caseDir, projectId, simulationId, pluginStudy)) {
     sendJson(res, 403, { error: 'case_dir is outside this study' });
     return true;
   }

@@ -155,9 +155,11 @@ export function PluginsStep() {
     return () => window.removeEventListener('cfd:panels', bump);
   }, []);
 
-  async function reloadRegistry() {
+  // Only the Reload button stops running plugin cases (and drops queued ones); the reload
+  // that turning a plugin on or off, or an install, runs stops nothing.
+  async function reloadRegistry(opts: { stopCases?: boolean } = {}) {
     try {
-      await workerRpc('registry.reload', {});
+      await workerRpc('registry.reload', opts.stopCases ? { stop_plugin_cases: true } : {});
       await useProjectStore.getState().loadRegistry(true);
     } finally {
       // The plugins changed: the tree's STUDIES, the Workspaces menu and an open workspace read again.
@@ -169,7 +171,7 @@ export function PluginsStep() {
     setBusy('reload');
     setNote('');
     try {
-      await reloadRegistry();
+      await reloadRegistry({ stopCases: true });
       await loadPluginUi(scopeNow());
       await refresh();
       setNote('Plugins reloaded.');

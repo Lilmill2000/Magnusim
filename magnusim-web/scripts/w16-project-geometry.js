@@ -38,6 +38,8 @@ import {
 } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
 import { projectSolveSummary } from './w27-solve.js';
+import { computeSlotHolder, folderBusyMessage, holderNamesProject, projectBusyMessage } from './compute-slot.js';
+import { computeRowsForProject, dropComputeRows } from './server/compute-queue.ts';
 import { envGet } from './env-compat.js';
 import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
 import { callWorker, commitRpc, commitRpcSync } from './py-json.js';
@@ -362,7 +364,7 @@ function projectsInFolder(folder) {
   return listProjects().filter((p) => String((p && p.folder) || '').trim() === name);
 }
 
-function deleteFolder(name) {
+export function deleteFolder(name) {
   const folder = String(name || '').trim();
   if (!folder) {
     return { ok: false, status: 400, body: { error: 'folder name required' } };
@@ -371,6 +373,12 @@ function deleteFolder(name) {
     return { ok: false, status: 400, body: { error: 'Cannot delete My Projects' } };
   }
   const projects = projectsInFolder(folder);
+  // A job running (or stopping) in any of its projects: nothing is deleted.
+  const held = computeSlotHolder();
+  const busy = held ? projects.find((p) => holderNamesProject(held, p.id)) : null;
+  if (busy) {
+    return { ok: false, status: 409, body: { error: folderBusyMessage(held, busy.title || busy.id, busy.id), folder } };
+  }
   const deleted = [];
   const failed = [];
   for (const p of projects) {
@@ -480,7 +488,7 @@ function isInsideProjectsRoot(abs) {
   return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
-function deleteProject(id) {
+export function deleteProject(id) {
   if (!isSafeProjectId(id)) {
     return { ok: false, status: 400, body: { error: 'invalid project id' } };
   }
@@ -492,7 +500,16 @@ function deleteProject(id) {
   if (!isInsideProjectsRoot(abs)) {
     return { ok: false, status: 400, body: { error: 'refusing to delete outside projects root' } };
   }
+  // Synchronous from here to rmSync: no job can start in between. A job of this
+  // project (by folder, in any spelling) holding the compute slot refuses the delete.
+  const held = computeSlotHolder();
+  if (held && holderNamesProject(held, id)) {
+    return { ok: false, status: 409, body: { error: projectBusyMessage(held, id) } };
+  }
+  const rowIds = computeRowsForProject(id);
   rmSync(abs, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+  // Its queued jobs go with it (a plugin case's record finishes stopped).
+  dropComputeRows(rowIds, 'The project was deleted');
   if (readActiveId() === id) {
     writeActiveId(null);
   }

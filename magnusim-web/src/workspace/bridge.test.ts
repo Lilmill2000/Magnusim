@@ -42,6 +42,7 @@ function hooks(): BridgeHooks & Record<string, ReturnType<typeof vi.fn>> {
     prompt: vi.fn(async () => 'Named'),
     units: vi.fn(() => 'metric' as const),
     log: vi.fn(),
+    openResults: vi.fn(async () => true),
   };
 }
 
@@ -621,6 +622,354 @@ describe('WorkspaceCalls: files in its own folder', () => {
     const err = await refused(c.handle('files.list', {}));
     expect([err.code, err.message]).toEqual(['too_many', "more than 1 files under the plugin's folder: list a smaller folder"]);
     expect(calls[0].url).toBe('/api/plugin-files/list?project_id=proj-a&plugin=ws-demo&prefix=');
+  });
+});
+
+/** An EventSource the tests drive: `emit` delivers a named event, `fail` closes it as the browser does on a refused stream. */
+class FakeEventSource {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 2;
+  static made: FakeEventSource[] = [];
+  readonly url: string;
+  readyState = 1;
+  onerror: (() => void) | null = null;
+  private readonly listeners = new Map<string, Array<(e: MessageEvent) => void>>();
+  constructor(url: string) {
+    this.url = url;
+    FakeEventSource.made.push(this);
+  }
+  addEventListener(type: string, fn: (e: MessageEvent) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) || []), fn]);
+  }
+  emit(type: string, data: unknown): void {
+    for (const fn of this.listeners.get(type) || []) fn(new MessageEvent(type, { data: JSON.stringify(data) }));
+  }
+  fail(): void {
+    this.readyState = 2;
+    this.onerror?.();
+  }
+  close(): void {
+    this.readyState = 2;
+  }
+}
+
+const JOB = 'fc-mg1abc2d-0a1b2c';
+const JOB2 = 'fc-mg1abc2e-0d0e0f';
+/** A case as the app lists it (ComputeJob). */
+function caseJob(over: Record<string, unknown> = {}) {
+  return {
+    id: JOB,
+    caseRel: 'cases/c1',
+    app: 'pimpleFoam',
+    nProcs: 1,
+    status: 'running',
+    stage: 'solve',
+    stopping: false,
+    ahead: null,
+    createdAt: null,
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+    code: null,
+    result: null,
+    seq: 5,
+    ...over,
+  };
+}
+
+describe('WorkspaceCalls: plugin OpenFOAM cases (compute.*, results.openIn3D)', () => {
+  const RESULTS = { kinematicFields: ['p'], rho: 1 };
+  let pushed: Array<Record<string, unknown>>;
+  let statusOf: Record<string, unknown>;
+
+  beforeEach(() => {
+    FakeEventSource.made = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+    pushed = [];
+    statusOf = { [JOB]: caseJob(), [JOB2]: caseJob({ id: JOB2, status: 'queued', stage: null, ahead: 2, seq: 1 }) };
+    answer = (url) => {
+      if (url.startsWith('/api/plugin-cases/status')) {
+        const id = new URL(url, 'http://x').searchParams.get('job_id') || '';
+        return statusOf[id] ? { status: 200, body: { ok: true, job: statusOf[id] } } : { status: 404, body: { ok: false, code: 'not_found', error: 'No such case in this study' } };
+      }
+      if (url.startsWith('/api/plugin-cases/submit')) return { status: 202, body: { ok: true, job: caseJob({ status: 'queued', ahead: 1 }), ahead: 1, existing: false } };
+      if (url.startsWith('/api/plugin-cases/stop')) return { status: 200, body: { ok: true, job: caseJob({ stopping: true }) } };
+      if (url.startsWith('/api/plugin-cases?')) return { status: 200, body: { ok: true, jobs: [caseJob()] } };
+      return { status: 200, body: { ok: true } };
+    };
+  });
+
+  function calls_(h = hooks()) {
+    const c = new WorkspaceCalls(SCOPE, h);
+    c.setPush((msg) => pushed.push(msg));
+    return c;
+  }
+  const events = (jobId = JOB) => pushed.filter((m) => m.jobId === jobId).map((m) => m.data as Record<string, unknown>);
+
+  it('submits a case in its own study with clean shapes, and answers id, ahead and existing', async () => {
+    const c = calls_();
+    const r = await c.handle('compute.submitOpenFOAM', {
+      caseRel: 'cases/c1',
+      app: 'pimpleFoam',
+      nProcs: 2,
+      pre: [{ tool: 'blockMesh', extra: 1 }, { tool: 'decomposePar' }, { tool: 'renumberMesh', args: ['-overwrite'], parallel: true }],
+      results: { kinematicFields: ['p'], rho: 1, frameFields: ['U', 'p'], other: true },
+      project_id: 'proj-b',
+      plugin: 'other',
+      study_id: 'st-9',
+    });
+    expect(r).toEqual({ id: JOB, ahead: 1, existing: false });
+    expect(calls).toEqual([
+      {
+        url: '/api/plugin-cases/submit?project_id=proj-a',
+        method: 'POST',
+        body: {
+          project_id: 'proj-a',
+          plugin: 'ws-demo',
+          study_id: 'st-1',
+          case_rel: 'cases/c1',
+          app: 'pimpleFoam',
+          n_procs: 2,
+          pre: [{ tool: 'blockMesh' }, { tool: 'decomposePar' }, { tool: 'renumberMesh', args: ['-overwrite'], parallel: true }],
+          results: { kinematicFields: ['p'], rho: 1, frameFields: ['U', 'p'] },
+        },
+      },
+    ]);
+    // The same folder already queued or running: that case.
+    answer = () => ({ status: 200, body: { ok: true, job: caseJob(), ahead: null, existing: true } });
+    expect(await c.handle('compute.submitOpenFOAM', { caseRel: 'cases/c1', app: 'pimpleFoam', results: RESULTS })).toEqual({
+      id: JOB,
+      ahead: 0,
+      existing: true,
+    });
+  });
+
+  it('refuses bad shapes with bad_request before any fetch', async () => {
+    const c = calls_();
+    const ok = { caseRel: 'cases/c1', app: 'pimpleFoam', results: RESULTS };
+    for (const bad of [
+      { ...ok, caseRel: '' },
+      { ...ok, caseRel: 'c'.repeat(241) },
+      { ...ok, caseRel: 7 },
+      { ...ok, app: '' },
+      { ...ok, app: 'a'.repeat(65) },
+      { ...ok, nProcs: 0 },
+      { ...ok, nProcs: 65 },
+      { ...ok, nProcs: 1.5 },
+      { ...ok, nProcs: '2' },
+      { ...ok, pre: 'blockMesh' },
+      { ...ok, pre: Array.from({ length: 17 }, () => ({ tool: 'checkMesh' })) },
+      { ...ok, pre: [{}] },
+      { ...ok, pre: [{ tool: 't'.repeat(33) }] },
+      { ...ok, pre: [{ tool: 'checkMesh', args: ['-allGeometry', '-allTopology', 'a', 'b', 'c'] }] },
+      { ...ok, pre: [{ tool: 'checkMesh', args: ['x'.repeat(121)] }] },
+      { ...ok, pre: [{ tool: 'checkMesh', args: [3] }] },
+      { ...ok, pre: [{ tool: 'checkMesh', parallel: 'yes' }] },
+      { ...ok, results: undefined },
+      { ...ok, results: { rho: 1 } },
+      { ...ok, results: { kinematicFields: Array.from({ length: 17 }, (_, i) => `f${i}`) } },
+      { ...ok, results: { kinematicFields: ['p'], rho: 0 } },
+      { ...ok, results: { kinematicFields: ['p'], rho: Infinity } },
+      { ...ok, results: { kinematicFields: ['p'], frameFields: 'U' } },
+    ]) {
+      const err = await refused(c.handle('compute.submitOpenFOAM', bad as Record<string, unknown>));
+      expect(err.code, JSON.stringify(bad).slice(0, 80)).toBe('bad_request');
+    }
+    for (const method of ['compute.stop', 'compute.status', 'compute.events']) {
+      for (const jobId of [undefined, '', 'job-1', 'fc-ABC123-0a1b2c', `${JOB}x`]) {
+        expect((await refused(c.handle(method, { jobId }))).code).toBe('bad_request');
+      }
+    }
+    expect((await refused(c.handle('results.openIn3D', { caseRel: '' }))).code).toBe('bad_request');
+    expect(calls).toEqual([]);
+  });
+
+  it("passes the app's refusal code through", async () => {
+    const c = calls_();
+    answer = () => ({ status: 400, body: { ok: false, code: 'app_not_allowed', error: 'icoFoam is not a registered solver' } });
+    const err = await refused(c.handle('compute.submitOpenFOAM', { caseRel: 'cases/c1', app: 'icoFoam', results: RESULTS }));
+    expect([err.code, err.message]).toEqual(['app_not_allowed', 'icoFoam is not a registered solver']);
+    answer = () => ({ status: 409, body: { ok: false, code: 'busy', error: 'Stop the case first' } });
+    expect((await refused(c.handle('compute.submitOpenFOAM', { caseRel: 'cases/c1', app: 'pimpleFoam', results: RESULTS }))).code).toBe('busy');
+  });
+
+  it("stops, reads and lists this study's cases only", async () => {
+    const c = calls_();
+    expect(await c.handle('compute.stop', { jobId: JOB, force: 'yes' })).toEqual({ status: 'running', stopping: true });
+    expect(calls[0]).toEqual({
+      url: '/api/plugin-cases/stop?project_id=proj-a',
+      method: 'POST',
+      body: { project_id: 'proj-a', plugin: 'ws-demo', study_id: 'st-1', job_id: JOB, force: false },
+    });
+    await c.handle('compute.stop', { jobId: JOB, force: true });
+    expect((calls[1].body as Record<string, unknown>).force).toBe(true);
+    expect(await c.handle('compute.status', { jobId: JOB })).toEqual(caseJob());
+    expect(calls[2].url).toBe(`/api/plugin-cases/status?project_id=proj-a&plugin=ws-demo&study_id=st-1&job_id=${JOB}`);
+    expect(await c.handle('compute.list', { plugin: 'other', study_id: 'st-9' })).toEqual([caseJob()]);
+    expect(calls[3].url).toBe('/api/plugin-cases?project_id=proj-a&plugin=ws-demo&study_id=st-1');
+    // Another study's case (the app answers not_found).
+    const other = 'fc-mg1abc2f-ffffff';
+    expect((await refused(c.handle('compute.status', { jobId: other }))).code).toBe('not_found');
+  });
+
+  it('opens one stream per channel; a case not of this study is not followed', async () => {
+    const c = calls_();
+    expect((await refused(c.handle('compute.events', { jobId: 'fc-mg1abc2f-ffffff' }))).code).toBe('not_found');
+    expect(await c.handle('compute.events', { jobId: JOB })).toEqual({ ok: true });
+    expect(await c.handle('compute.events', { jobId: JOB2 })).toEqual({ ok: true });
+    expect(FakeEventSource.made.map((e) => e.url)).toEqual(['/api/plugin-cases/events?project_id=proj-a&plugin=ws-demo&study_id=st-1']);
+    const es = FakeEventSource.made[0];
+    es.emit('case', { job_id: 'fc-mg1abc2f-ffffff', seq: 9, ev: { event: 'stage', stage: 'solve' } });
+    expect(pushed.filter((m) => m.jobId === 'fc-mg1abc2f-ffffff')).toEqual([]);
+    // close() ends the stream and forgets the cases.
+    c.close();
+    expect(es.readyState).toBe(2);
+    es.emit('case', { job_id: JOB, seq: 99, ev: { event: 'stage', stage: 'copy' } });
+    expect(events().map((e) => e.event)).not.toContain('stage');
+    // The next channel's follow opens a new stream.
+    await c.handle('compute.events', { jobId: JOB });
+    expect(FakeEventSource.made.length).toBe(2);
+  });
+
+  it('catches a case up once from the snapshot (start and the live points), then passes newer events only', async () => {
+    const c = calls_();
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => (release = r));
+    const plain = answer;
+    answer = async (url, method, init) => {
+      if (url.startsWith('/api/plugin-cases/status')) await held;
+      return plain(url, method, init);
+    };
+    const following = c.handle('compute.events', { jobId: JOB });
+    await vi.waitFor(() => expect(FakeEventSource.made.length).toBe(1));
+    const es = FakeEventSource.made[0];
+    es.emit('snapshot', { jobs: [caseJob({ seq: 5 })], live: { job_id: JOB, points: [{ t: 0.1 }, { t: 0.2 }] } });
+    es.emit('case', { job_id: JOB, seq: 5, ev: { event: 'stage', stage: 'solve' } });
+    es.emit('case', { job_id: JOB, seq: 6, ev: { event: 'time_saved', t: 0.1 } });
+    es.emit('case', { job_id: JOB, seq: 6, ev: { event: 'time_saved', t: 0.1 } });
+    release();
+    await following;
+    expect(events()).toEqual([{ event: 'start' }, { event: 'progress', points: [{ t: 0.1 }, { t: 0.2 }] }, { event: 'time_saved', t: 0.1 }]);
+    // A reconnect: a new snapshot of a case already seen sends nothing more while it runs...
+    es.emit('snapshot', { jobs: [caseJob({ seq: 8 })], live: { job_id: JOB, points: [{ t: 0.3 }] } });
+    es.emit('case', { job_id: JOB, seq: 8, ev: { event: 'stage', stage: 'copy' } });
+    expect(events().length).toBe(3);
+    // ...and its end once, in the frame's result shape, also when the snapshot says it first.
+    const result = { exit_code: 0, n_procs: 1, phases: { solve: 3 }, saved_times: [0.1, 0.2], last_saved: 0.2, write_format: 'binary' };
+    es.emit('case', { job_id: JOB, seq: 9, ev: { event: 'end', status: 'done', error: null, code: null, result } });
+    es.emit('snapshot', { jobs: [caseJob({ status: 'done', seq: 9 })], live: null });
+    es.emit('case', { job_id: JOB, seq: 10, ev: { event: 'end', status: 'done', error: null, code: null, result } });
+    expect(events().slice(3)).toEqual([
+      {
+        event: 'end',
+        status: 'done',
+        error: null,
+        code: null,
+        result: { savedTimes: [0.1, 0.2], lastSaved: 0.2, phases: { solve: 3 }, writeFormat: 'binary' },
+      },
+    ]);
+  });
+
+  it('a snapshot of a seen case that ended while the stream was down sends its end', async () => {
+    const c = calls_();
+    await c.handle('compute.events', { jobId: JOB });
+    const es = FakeEventSource.made[0];
+    // The status answered first: the case was caught up from it (start, no points).
+    expect(events()).toEqual([{ event: 'start' }]);
+    es.emit('snapshot', { jobs: [caseJob({ seq: 5 })], live: { job_id: JOB, points: [{ t: 1 }] } });
+    expect(events()).toEqual([{ event: 'start' }]);
+    es.emit('snapshot', {
+      jobs: [caseJob({ status: 'stopped', seq: 12, result: { savedTimes: [0.1], lastSaved: 0.1, phases: {}, writeFormat: 'binary' } })],
+      live: null,
+    });
+    expect(events()[1]).toEqual({
+      event: 'end',
+      status: 'stopped',
+      error: null,
+      code: null,
+      result: { savedTimes: [0.1], lastSaved: 0.1, phases: {}, writeFormat: 'binary' },
+    });
+    // Anything older than what the snapshot said is dropped.
+    es.emit('case', { job_id: JOB, seq: 11, ev: { event: 'time_saved', t: 0.2 } });
+    expect(events().length).toBe(2);
+  });
+
+  it('catches up a queued case with its place, and a finished one with its end', async () => {
+    const c = calls_();
+    statusOf[JOB] = caseJob({ status: 'failed', stage: null, error: 'blockMesh failed (exit 1). See log.blockMesh.1 in the case folder', seq: 4 });
+    await c.handle('compute.events', { jobId: JOB2 });
+    await c.handle('compute.events', { jobId: JOB });
+    expect(events(JOB2)).toEqual([{ event: 'queued', ahead: 2 }]);
+    expect(events(JOB)).toEqual([
+      { event: 'end', status: 'failed', error: 'blockMesh failed (exit 1). See log.blockMesh.1 in the case folder', code: null, result: null },
+    ]);
+    // Following again sends nothing new.
+    await c.handle('compute.events', { jobId: JOB });
+    expect(events(JOB).length).toBe(1);
+    const es = FakeEventSource.made[0];
+    es.emit('case', { job_id: JOB2, seq: 2, ev: { event: 'queued', ahead: 1 } });
+    es.emit('case', { job_id: JOB2, seq: 3, ev: { event: 'start' } });
+    expect(events(JOB2)).toEqual([{ event: 'queued', ahead: 2 }, { event: 'queued', ahead: 1 }, { event: 'start' }]);
+  });
+
+  it('events of a newly followed case that come while its status is read are held, then passed once, newer than the status, in seq order', async () => {
+    const c = calls_();
+    // The study stream is already open and caught up (the page follows JOB).
+    await c.handle('compute.events', { jobId: JOB });
+    expect(FakeEventSource.made.length).toBe(1);
+    const es = FakeEventSource.made[0];
+    // The page submits JOB2 and follows it; its status answer is held.
+    statusOf[JOB2] = caseJob({ id: JOB2, status: 'running', stage: 'solve', seq: 5 });
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => (release = r));
+    const plain = answer;
+    answer = async (url, method, init) => {
+      if (url.startsWith('/api/plugin-cases/status') && url.includes(`job_id=${JOB2}`)) await held;
+      return plain(url, method, init);
+    };
+    const following = c.handle('compute.events', { jobId: JOB2 });
+    await vi.waitFor(() => expect(calls.some((x) => x.url.includes(`job_id=${JOB2}`))).toBe(true));
+    // Out of order, below, at and above the status's seq, one twice, and the end.
+    es.emit('case', { job_id: JOB2, seq: 7, ev: { event: 'time_saved', t: 0.2 } });
+    es.emit('case', { job_id: JOB2, seq: 8, ev: { event: 'end', status: 'done', error: null, code: null, result: null } });
+    es.emit('case', { job_id: JOB2, seq: 4, ev: { event: 'stage', stage: 'pre_copy_in' } });
+    es.emit('case', { job_id: JOB2, seq: 6, ev: { event: 'time_saved', t: 0.1 } });
+    es.emit('case', { job_id: JOB2, seq: 5, ev: { event: 'stage', stage: 'solve' } });
+    es.emit('case', { job_id: JOB2, seq: 6, ev: { event: 'time_saved', t: 0.1 } });
+    expect(events(JOB2), 'nothing before its catch-up').toEqual([]);
+    release();
+    await following;
+    expect(events(JOB2)).toEqual([
+      { event: 'start' },
+      { event: 'time_saved', t: 0.1 },
+      { event: 'time_saved', t: 0.2 },
+      { event: 'end', status: 'done', error: null, code: null, result: null },
+    ]);
+    // The end is not sent again, and the first case was not touched.
+    es.emit('case', { job_id: JOB2, seq: 9, ev: { event: 'end', status: 'done', error: null, code: null, result: null } });
+    expect(events(JOB2).length).toBe(4);
+    expect(events(JOB)).toEqual([{ event: 'start' }]);
+  });
+
+  it('a stream the browser closed is opened again by the next follow', async () => {
+    const c = calls_();
+    await c.handle('compute.events', { jobId: JOB });
+    FakeEventSource.made[0].fail();
+    await c.handle('compute.events', { jobId: JOB2 });
+    expect(FakeEventSource.made.length).toBe(2);
+  });
+
+  it('results.openIn3D asks the host and says whether the results opened', async () => {
+    const h = hooks();
+    const c = calls_(h);
+    expect(await c.handle('results.openIn3D', { caseRel: 'cases/c2', plugin: 'other' })).toEqual({ opened: true });
+    expect(h.openResults).toHaveBeenCalledWith('cases/c2');
+    h.openResults.mockResolvedValueOnce(false);
+    expect(await c.handle('results.openIn3D', { caseRel: 'cases/c2' })).toEqual({ opened: false });
+    h.openResults.mockRejectedValueOnce(new BridgeError('This case is queued or running. Open its results when it has finished.', 'running'));
+    expect((await refused(c.handle('results.openIn3D', { caseRel: 'cases/c2' }))).code).toBe('running');
+    expect(calls).toEqual([]);
   });
 });
 

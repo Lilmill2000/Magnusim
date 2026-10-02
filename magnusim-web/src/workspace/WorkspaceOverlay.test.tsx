@@ -512,6 +512,118 @@ describe('the workspace overlay', () => {
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 
+  describe("results.openIn3D (a case's results in the project's 3D view)", () => {
+    const RESOLVED = {
+      ok: true,
+      key: 'pf-0123456789ab',
+      case_dir: 'C:\\projects\\proj\\plugins\\ws-demo\\studies\\st-1\\cases\\c2',
+      times: ['0.1', '0.2', '0.3'],
+      app: 'pimpleFoam',
+      time_dependency: 'transient',
+      frame_fields: ['U', 'p'],
+    };
+    let openResults: ReturnType<typeof vi.fn>;
+    let resolveStatus = 200;
+
+    beforeEach(() => {
+      resolveStatus = 200;
+      const base = globalThis.fetch;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.startsWith('/api/plugin-cases/resolve')) {
+            fetches.push(url);
+            const body = resolveStatus === 200 ? RESOLVED : { ok: false, code: 'running', error: 'This case is queued or running. Open its results when it has finished.' };
+            return new Response(JSON.stringify(body), { status: resolveStatus });
+          }
+          return base(input, init);
+        }),
+      );
+      openResults = vi.fn(async () => ({ ok: true }));
+      window.__CFD_OPEN_PLUGIN_RESULTS__ = openResults as unknown as typeof window.__CFD_OPEN_PLUGIN_RESULTS__;
+    });
+
+    afterEach(() => {
+      delete window.__CFD_OPEN_PLUGIN_RESULTS__;
+      delete window.__CFD_RESULTS_VIEW__;
+    });
+
+    it('with nothing shown: no question; the workspace closes to the project and then the results open', async () => {
+      const { frame } = await open();
+      const port = await connect(frame);
+      expect(await call(port, 'results.openIn3D', { caseRel: 'cases/c2' })).toMatchObject({ result: { opened: true } });
+      expect(fetches).toContain('/api/plugin-cases/resolve?project_id=proj&plugin=ws-demo&study_id=st-1&case_rel=cases%2Fc2');
+      await waitFor(() => expect($('#workspace-overlay').hidden).toBe(true));
+      expect(location.hash).toBe('#/p/proj');
+      expect(confirm).not.toHaveBeenCalled();
+      await waitFor(() => expect(openResults).toHaveBeenCalledTimes(1));
+      expect(openResults).toHaveBeenCalledWith({
+        key: 'pf-0123456789ab',
+        projectId: 'proj',
+        caseDir: RESOLVED.case_dir,
+        plugin: 'ws-demo',
+        pluginName: 'Workspace demo',
+        studyId: 'st-1',
+        studyTitle: 'Wing section',
+        caseRel: 'cases/c2',
+        app: 'pimpleFoam',
+        timeDependency: 'transient',
+        times: ['0.1', '0.2', '0.3'],
+      });
+    });
+
+    it('with results shown it asks first (in turn, like a page question); Cancel keeps the workspace', async () => {
+      window.__CFD_RESULTS_VIEW__ = true;
+      const { frame } = await open();
+      const port = await connect(frame);
+      answer = false;
+      expect(await call(port, 'results.openIn3D', { caseRel: 'cases/c2' })).toMatchObject({ result: { opened: false } });
+      expect(confirm).toHaveBeenCalledWith({
+        title: 'Open these results?',
+        copy: 'This replaces the results currently shown.',
+        yes: 'Open results',
+        skipIf: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      });
+      await later();
+      expect($('#workspace-overlay').hidden).toBe(false);
+      expect(location.hash).toBe(WS_HASH);
+      expect(openResults).not.toHaveBeenCalled();
+      // Open results: replaces them.
+      answer = true;
+      expect(await call(port, 'results.openIn3D', { caseRel: 'cases/c2' })).toMatchObject({ result: { opened: true } });
+      await waitFor(() => expect(openResults).toHaveBeenCalledTimes(1));
+      expect(location.hash).toBe('#/p/proj');
+    });
+
+    it('with unsaved work in the page it asks the Back question; Stay keeps the workspace and opens nothing', async () => {
+      const { frame } = await open();
+      const port = await connect(frame);
+      await call(port, 'nav.setDirty', { dirty: true, message: 'Chord not saved' });
+      await waitFor(() => expect(workspaceDirty()).toBe(true));
+      answer = false;
+      expect(await call(port, 'results.openIn3D', { caseRel: 'cases/c2' })).toMatchObject({ result: { opened: false } });
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm.mock.calls[0][0]).toMatchObject({ title: 'Leave without saving?', yes: 'Leave', no: 'Stay' });
+      await later();
+      expect($('#workspace-overlay').hidden).toBe(false);
+      expect(openResults).not.toHaveBeenCalled();
+    });
+
+    it("a case still queued or running: the app's code reaches the page, nothing is asked", async () => {
+      window.__CFD_RESULTS_VIEW__ = true;
+      resolveStatus = 409;
+      const { frame } = await open();
+      const port = await connect(frame);
+      expect(await call(port, 'results.openIn3D', { caseRel: 'cases/c1' })).toMatchObject({
+        error: { code: 'running', message: 'This case is queued or running. Open its results when it has finished.' },
+      });
+      expect(confirm).not.toHaveBeenCalled();
+      expect($('#workspace-overlay').hidden).toBe(false);
+    });
+  });
+
   it('a new page after Try again is guarded again, whatever the one before was allowed', async () => {
     const { frame } = await open();
     const port = await connect(frame);

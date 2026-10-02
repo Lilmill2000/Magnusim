@@ -52,15 +52,74 @@ declare module '@magnusim/workspace' {
       theme: ThemeInfo;
       /**
        * The host's bridge API version ("1.3"). To use a call a later host added,
-       * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2), or
-       * catch the refusal: an older host rejects a call it does not know with
-       * code "not_allowed".
+       * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2,
+       * ws.compute and ws.results need 1.3), or catch the refusal: an older host
+       * rejects a call it does not know with code "not_allowed".
        */
       hostVersion: string;
   }
   export interface JobEvent {
       event: string;
       [field: string]: unknown;
+  }
+  /** A WSL step a plugin case may run before its solver (host 1.3; compatibility.md lists their arguments). */
+  export type PreTool = 'blockMesh' | 'gmshToFoam' | 'surfaceFeatureExtract' | 'snappyHexMesh' | 'extrudeMesh' | 'changeDictionary' | 'createPatch' | 'checkMesh' | 'renumberMesh' | 'decomposePar' | 'reconstructParMesh';
+  /**
+   * One WSL step. `parallel: true` runs it with `mpirun -np N … -parallel`, only
+   * between a decomposePar step and the reconstructParMesh step after it, and
+   * only for the tools that can run in parallel.
+   */
+  export interface PreStep {
+      tool: PreTool;
+      args?: string[];
+      parallel?: boolean;
+  }
+  /** A case the page wrote in its study's folder, to run with OpenFOAM in WSL (host 1.3). */
+  export interface SubmitOpenFOAM {
+      /** The case folder inside this study's folder ("cases/c1"). It must not have run before. */
+      caseRel: string;
+      /** The solver application, as system/controlDict names it; a registered solver. */
+      app: string;
+      /** Ranks for a parallel solve and parallel steps (1 to 64; the host clamps it to the PC). */
+      nProcs?: number;
+      pre?: PreStep[];
+      results: {
+          /** Fields the solver writes divided by density; shown multiplied by rho. */
+          kinematicFields: string[];
+          rho?: number;
+          /** Fields copied back for each saved frame (default U and p). */
+          frameFields?: string[];
+      };
+  }
+  export type ComputeStatus = 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'lost';
+  /** A plugin case as the page sees it: no paths. */
+  export interface ComputeJob {
+      id: string;
+      caseRel: string;
+      app: string;
+      nProcs: number;
+      status: ComputeStatus;
+      /** Where a running case is (pre_copy_in, solve, copy, stopping, …); null before it starts. */
+      stage: string | null;
+      /** A stop was asked for and the case has not ended yet. */
+      stopping: boolean;
+      /** How many jobs run or wait before it, or null when it is not queued. */
+      ahead: number | null;
+      createdAt: string | null;
+      startedAt: string | null;
+      finishedAt: string | null;
+      error: string | null;
+      /** Why it was refused or did not finish ("has_results", "launch", "lost", …). */
+      code: string | null;
+      /** Once it has ended: the saved frames' times, the last one, seconds per phase, and how the solver wrote its fields. */
+      result: {
+          savedTimes: number[];
+          lastSaved: number | null;
+          phases: Record<string, number>;
+          writeFormat: string | null;
+      } | null;
+      /** The last event's number. */
+      seq: number;
   }
   export interface ConfirmOptions {
       title: string;
@@ -201,6 +260,48 @@ declare module '@magnusim/workspace' {
            * nav.back() to leave without a question.
            */
           setDirty(dirty: boolean, message?: string): Promise<void>;
+      };
+      /**
+       * OpenFOAM cases this study's page writes and runs (host 1.3: check
+       * `context.hostVersion`; an older host refuses with code "not_allowed").
+       * A case runs once, from its `0/` folder, on the app's one compute slot, so
+       * it may wait in the queue. Refusals carry `.code` ("app_not_allowed",
+       * "has_results", "invalid_path", "busy", …).
+       */
+      compute: {
+          /** Queue a case; `existing` when that folder is already queued or running (its id comes back). */
+          submitOpenFOAM(opts: SubmitOpenFOAM): Promise<{
+              id: string;
+              ahead: number;
+              existing: boolean;
+          }>;
+          /**
+           * Follow a case of this study: first where it is now (queued, start, or end),
+           * then each event (stage, pre, ranks, phase, progress, time_saved, warning, end).
+           * Returns a function that stops listening.
+           */
+          events(jobId: string, onEvent: (ev: JobEvent) => void): () => void;
+          /** Stop a case: a queued one leaves the queue; a running one saves its latest frame and ends. Again to stop harder; `force` at once. */
+          stop(jobId: string, opts?: {
+              force?: boolean;
+          }): Promise<{
+              status: string;
+              stopping: boolean;
+          }>;
+          status(jobId: string): Promise<ComputeJob>;
+          /** This study's cases, newest first (a reopened page finds its running case here). */
+          list(): Promise<ComputeJob[]>;
+      };
+      results: {
+          /**
+           * Show a finished case's saved frames in the project's 3D view. The app asks
+           * first when other results are on screen, and when the page has unsaved work.
+           * Resolves { opened: false } when the user cancels or stays; when it opens,
+           * the workspace closes, so the promise may never settle.
+           */
+          openIn3D(caseRel: string): Promise<{
+              opened: boolean;
+          }>;
       };
       /**
        * Live changes the host pushes. Returns a function that stops listening.

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { NO_WSL } from '../../../e2e/toolchain.js';
+import { waitSlotFree } from '../../../e2e/support/compute-slot.js';
 
 // Steady-state and Transient agree end to end (H7):
 // - a study's analysis key follows its time dependency (create, toggle, reload,
@@ -310,6 +311,7 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   await waitSolving(runA);
   await runPanel.locator('[data-run-stop="1"]').click();
   await waitStatus(runA, /^stopped$/, 300_000);
+  await waitSlotFree(request);
   stage(t0, 'run A stopped');
 
   // Switch the study to Steady-state. Run A solved Transient, so it stays Transient
@@ -367,6 +369,7 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   await waitSolving(runB);
   await runPanel.locator('[data-run-stop="1"]').click();
   await waitStatus(runB, /^stopped$/, 300_000);
+  await waitSlotFree(request);
   const panel3 = await openStudyPanel(page, SIM);
   await panel3.getByLabel('Time dependency').selectOption('Transient');
   await expect.poll(async () => (await getJson(request, simUrl(SIM))).simulation?.analysis_type).toBe('incompressible_transient');

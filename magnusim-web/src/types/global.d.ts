@@ -167,5 +167,17 @@ declare global {
     __CFD_APPLY_WB_STAGE__?: () => void;
     __CFD_ADD_MATERIAL__?: (simId?: string) => void | Promise<unknown>;
     __CFD_ADD_BC__?: (simId?: string) => void | Promise<unknown>;
+    /**
+     * Show a plugin case's saved frames in the main viewer (results.openIn3D), once its
+     * workspace has closed back to the project. No core study stays active. ok:false with
+     * stale when a study or geometry switch came first, or error when it could not open.
+     */
+    __CFD_OPEN_PLUGIN_RESULTS__?: (
+      info: import('../workbench/pluginResultsRules').PluginResultsInfo,
+    ) => Promise<{ ok: boolean; stale?: boolean; error?: string }>;
+    /** True while a Results view is open (a core run's or a plugin case's). */
+    __CFD_RESULTS_VIEW__?: boolean;
+    /** The scale the shown results are drawn at (1 for plugin case results). */
+    __CFD_RESULTS_SCALE__?: number;
   }
 }

@@ -14,6 +14,22 @@ before render:
 Snappy hex-dominant (`snappy_hexdominant.sh`) uses `__DST__`, `__WIN_OUT__`, and
 related tokens documented in that file's header.
 
+`foam_pre.sh` (`cfddesk.wsl.foam_case.render_foam_pre`) runs the WSL steps of a
+step-list run (plugin OpenFOAM cases, meshing plans): `__DST__`, `__WIN_OUT__`,
+`__TOKEN__` and `__STEPS__`, replaced in one pass (`re.sub` with a lookup), so an
+inserted value is never scanned again. `__STEPS__` becomes one bash array per step,
+`STEP_<i>=(<tool> <quoted args>)`, run as `openfoam2606 "${STEP_<i>[@]}"` with its
+output in `log.<tool>.<i>`; no argument is pasted into `bash -c`. A step inside a
+`decomposePar` … `reconstructParMesh` span runs as
+`mpirun --oversubscribe -np <n> <tool> … -parallel` (the line `solve.sh` uses for a
+parallel solve) when the run has more than one rank; with one rank the span runs
+serially and `decomposePar` and `reconstructParMesh` only report `"skipped":true`.
+It checks `__WIN_OUT__/.magnusim-stop` before and after each step (exit 130),
+copies back `constant/polyMesh`, `0/` (when there is one) and `log.*` through
+`.magnusim-*.part` names, never `processor*`, and never creates `__WIN_OUT__`.
+Exit 50: a step wrote a result time folder; 46: no `constant/polyMesh` after the
+steps. The relay runs it with `wsl -e bash <script>` (no shell in between).
+
 `solve.sh` removes `__DST__` once the run succeeded and everything came back to
 `__WIN_OUT__`. `prune_cases.sh` (no tokens: `ROOT MAX_AGE_MIN DRY` arguments, run
 by `cfddesk.runner.cleanup`) sweeps the case root for copies failed or stopped

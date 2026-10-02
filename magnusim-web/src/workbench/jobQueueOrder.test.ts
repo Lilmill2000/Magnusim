@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   bindJobQueuePointerDrag,
@@ -47,6 +50,18 @@ import {
   previousResultTime,
   snapMatchesLiveMeshJob,
   viewportChipPrefersResultsLoad,
+  serverBusyIsPluginOrCheck,
+  serverSolvePhase,
+  serverBusyBlocksRun,
+  startRefusalKind,
+  stopActionFor,
+  stopShownFor,
+  cancelStartOutcome,
+  START_ID_RE,
+  newStartId,
+  liveSolveToFollow,
+  queueFailureMessage,
+  queueFailureLinksRun,
 } from './jobQueueOrder';
 
 const items = [
@@ -294,6 +309,19 @@ describe('dropMissingQueueJobs', () => {
       }).map((r) => r.id)
     ).toEqual(['q-keep']);
   });
+
+  it("keeps the open project's plugin cases: they are in no core catalog", () => {
+    const rows = [
+      { id: 'q-case', kind: 'foam', job_id: 'fc-abc123-0a1b2c', run_id: null, mesh_id: null, project_id: 'test-ss' },
+      { id: 'q-gone', kind: 'solve', run_id: 'gone', project_id: 'test-ss' },
+    ];
+    expect(
+      dropMissingQueueJobs(rows, { meshIds: ['mesh_1'], runIds: ['run_1'], currentProjectId: 'test-ss' }).map((r) => r.id)
+    ).toEqual(['q-case']);
+    // The browser's own queue copies still never hold one.
+    expect(parseStoredQueueItems([rows[0]])).toEqual([]);
+    expect(mergeStoredQueueItems([rows[0] as never])).toEqual([]);
+  });
 });
 
 describe('queue mesh dependencies', () => {
@@ -532,6 +560,300 @@ describe('computeBusyLabel', () => {
 
   it('is empty when nothing runs', () => {
     expect(computeBusyLabel(null)).toBe('');
+    expect(computeBusyLabel({ kind: 'other', project_id: 'pA' })).toBe('');
+  });
+
+  it('names a plugin case by the name the server gives it', () => {
+    const own = { kind: 'foam', phase: 'running', name: 'Cavity case 1 · c1 · Foam demo', project_id: 'pB' };
+    expect(computeBusyLabel(own, { currentProjectId: 'pB' })).toBe('Cavity case 1 · c1 · Foam demo');
+    expect(computeBusyLabel({ ...own, project_id: 'pA', project_title: 'Project A' }, { currentProjectId: 'pB' })).toBe(
+      'Cavity case 1 · c1 · Foam demo in Project A',
+    );
+    expect(computeBusyLabel({ kind: 'foam', project_id: 'pB' }, { currentProjectId: 'pB' })).toBe('a plugin case');
+  });
+
+  it('says the app is checking for jobs left running, in any project', () => {
+    const check = { kind: 'check', phase: 'checking', name: 'Checking for jobs left running', project_id: null };
+    expect(computeBusyLabel(check, { currentProjectId: 'pB' })).toBe('Checking for jobs left running');
+    expect(computeBusyLabel({ kind: 'check', project_id: 'pA', project_title: 'Project A' }, { currentProjectId: 'pB' })).toBe(
+      'Checking for jobs left running',
+    );
+  });
+
+  it('says (stopping) for a job asked to stop and (finishing) for a drain with no stop', () => {
+    const run = { kind: 'solve', run_id: 'r1', project_id: 'pA', project_title: 'Project A' };
+    const opts = { currentProjectId: 'pB' };
+    expect(computeBusyLabel({ ...run, phase: 'draining', stopping: true }, opts)).toBe('a run in Project A (stopping)');
+    expect(computeBusyLabel({ ...run, phase: 'draining', stopping: false }, opts)).toBe('a run in Project A (finishing)');
+    expect(computeBusyLabel({ ...run, phase: 'running', stopping: true }, opts)).toBe('a run in Project A (stopping)');
+    expect(computeBusyLabel({ ...run, phase: 'running', stopping: false }, opts)).toBe('a run in Project A');
+    expect(computeBusyLabel({ ...run, phase: 'starting' }, opts)).toBe('a run in Project A');
+    const names = (kind: string, id: string) => (kind === 'solve' && id === 'r1' ? 'Run 1' : null);
+    expect(computeBusyLabel({ ...run, project_id: 'pB', phase: 'draining' }, { currentProjectId: 'pB', lookupName: names })).toBe(
+      'Run 1 (finishing)',
+    );
+    expect(
+      computeBusyLabel({ kind: 'foam', name: 'Case', project_id: 'pB', phase: 'draining', stopping: true }, { currentProjectId: 'pB' }),
+    ).toBe('Case (stopping)');
+  });
+});
+
+describe('the server busy job and the Run panel', () => {
+  const at = { runId: 'r1', projectId: 'pA' };
+  const solve = (phase: string, extra: Record<string, unknown> = {}) => ({ kind: 'solve', run_id: 'r1', project_id: 'pA', phase, ...extra });
+
+  it('a plugin case or the boot check blocks every start', () => {
+    expect(serverBusyIsPluginOrCheck({ kind: 'foam', project_id: 'pZ' })).toBe(true);
+    expect(serverBusyIsPluginOrCheck({ kind: 'check', phase: 'checking' })).toBe(true);
+    expect(serverBusyIsPluginOrCheck({ kind: 'mesh' })).toBe(false);
+    expect(serverBusyIsPluginOrCheck({ kind: 'solve' })).toBe(false);
+    expect(serverBusyIsPluginOrCheck(null)).toBe(false);
+  });
+
+  it('reads the phase only of this very run in this project', () => {
+    expect(serverSolvePhase(solve('draining'), at)).toBe('draining');
+    expect(serverSolvePhase(solve('starting'), at)).toBe('starting');
+    expect(serverSolvePhase({ kind: 'solve', run_id: 'r1', project_id: 'pA' }, at)).toBe('running');
+    expect(serverSolvePhase(solve('running'), { runId: 'r2', projectId: 'pA' })).toBe('');
+    expect(serverSolvePhase(solve('running'), { runId: 'r1', projectId: 'pB' })).toBe('');
+    expect(serverSolvePhase({ kind: 'mesh', mesh_id: 'r1', project_id: 'pA' }, at)).toBe('');
+    expect(serverSolvePhase(solve('running'), { projectId: 'pA' })).toBe('');
+  });
+
+  it('Start queues behind another job of any kind and project, and behind this run\'s own drain', () => {
+    expect(serverBusyBlocksRun(null, at)).toBe(false);
+    expect(serverBusyBlocksRun({ kind: null }, at)).toBe(false);
+    expect(serverBusyBlocksRun({ kind: 'mesh', mesh_id: 'm1', project_id: 'pA', phase: 'running' }, at)).toBe(true);
+    expect(serverBusyBlocksRun({ kind: 'mesh', mesh_id: 'm1', project_id: 'pZ', phase: 'running' }, at)).toBe(true);
+    expect(serverBusyBlocksRun({ kind: 'foam', project_id: 'pA', phase: 'running' }, at)).toBe(true);
+    expect(serverBusyBlocksRun({ kind: 'check', phase: 'checking', project_id: null }, at)).toBe(true);
+    // Another run of this project, or this run id in another project.
+    expect(serverBusyBlocksRun({ ...solve('running'), run_id: 'r2' }, at)).toBe(true);
+    expect(serverBusyBlocksRun({ ...solve('running'), project_id: 'pZ' }, at)).toBe(true);
+    // This run's own solve is not another job, until it drains.
+    expect(serverBusyBlocksRun(solve('starting'), at)).toBe(false);
+    expect(serverBusyBlocksRun(solve('running'), at)).toBe(false);
+    expect(serverBusyBlocksRun(solve('draining'), at)).toBe(true);
+    expect(serverBusyBlocksRun(solve('draining', { stopping: true }), at)).toBe(true);
+    // No run selected: anything busy blocks.
+    expect(serverBusyBlocksRun(solve('running'), {})).toBe(true);
+  });
+
+  it("tells a refused start's kind: busy queues; stopped and same_run are no failure", () => {
+    expect(startRefusalKind(409, { error: 'Another job is already running', code: 'busy', busy: { kind: 'mesh' } })).toBe('busy');
+    expect(startRefusalKind(409, { error: 'A run is already in progress', run_id: 'r9' })).toBe('busy');
+    // By its text too, as the Start's own busy test reads it.
+    expect(startRefusalKind(409, { error: 'Another job is already running' })).toBe('busy');
+    expect(startRefusalKind(409, { error: 'Stopped before it started', code: 'stopped', stopped: true, run_id: 'r1' })).toBe('stopped');
+    expect(startRefusalKind(409, { stopped: true })).toBe('stopped');
+    expect(startRefusalKind(409, { error: 'This run is already solving. Click Stop if you want to end it.', code: 'same_run' })).toBe(
+      'same_run',
+    );
+    // Without its code the same-run text is a plain failure (an older server).
+    expect(startRefusalKind(409, { error: 'This run is already solving. Click Stop if you want to end it.' })).toBe('fail');
+    expect(startRefusalKind(409, { error: 'This run already finished. Create a new run to solve again.' })).toBe('fail');
+    expect(startRefusalKind(500, { error: 'Another job is already running', code: 'busy' })).toBe('fail');
+    expect(startRefusalKind(400, { error: 'project_id required' })).toBe('fail');
+    expect(startRefusalKind(409, null)).toBe('fail');
+  });
+
+  it("Stop cancels this tab's own start, cancels a start the server makes, else stops", () => {
+    const own = { id: 's-abc-123456', run_id: 'r1', posted: false };
+    expect(stopActionFor({ ownStart: own, busy: null, ...at })).toBe('cancel_own');
+    // Its own start wins over what the server shows (its own POST may be in flight).
+    expect(stopActionFor({ ownStart: { ...own, posted: true }, busy: solve('starting'), ...at })).toBe('cancel_own');
+    expect(stopActionFor({ ownStart: { ...own, run_id: 'r2' }, busy: null, ...at })).toBe('stop');
+    // The queue (or another tab) is starting this run.
+    expect(stopActionFor({ ownStart: null, busy: solve('starting'), ...at })).toBe('cancel_server');
+    expect(stopActionFor({ ownStart: null, busy: solve('starting'), runId: 'r1', projectId: 'pB' })).toBe('stop');
+    expect(stopActionFor({ ownStart: null, busy: { ...solve('starting'), run_id: 'r2' }, ...at })).toBe('stop');
+    expect(stopActionFor({ ownStart: null, busy: solve('running'), ...at })).toBe('stop');
+    expect(stopActionFor({ ownStart: null, busy: solve('draining'), ...at })).toBe('stop');
+    expect(stopActionFor({ ownStart: null, busy: null, ...at })).toBe('stop');
+    expect(stopActionFor({ ownStart: own, busy: null, projectId: 'pA' })).toBe('stop');
+    // A start already asked to stop is not cancelled again.
+    expect(stopActionFor({ ownStart: null, busy: solve('starting', { stopping: true }), ...at })).toBe('stop');
+  });
+
+  it('a "Cancel this start" answer: cancelled, or a run that had already started and now stops', () => {
+    // The start ended before its run started.
+    expect(cancelStartOutcome(true, { ok: true, stopping: true, cancelled: true, run_id: 'r1' })).toBe('cancelled');
+    // The claim was already running: today's Stop ran (a started run, never "Stopped before it started").
+    expect(cancelStartOutcome(true, { ok: true, stopping: true, run_id: 'r1' })).toBe('stopping');
+    // Nothing of this run was starting or running.
+    expect(cancelStartOutcome(true, { ok: true, stopping: false, pending: false, run_id: 'r1' })).toBe('none');
+    expect(cancelStartOutcome(true, { ok: true, stopping: true, pending: true, run_id: 'r1' })).toBe('none');
+    expect(cancelStartOutcome(false, { ok: false, error: 'No run is in progress' })).toBe('none');
+    expect(cancelStartOutcome(true, null)).toBe('none');
+  });
+
+  it('Stop shows while the run starts (here or by the queue) and while it drains with no stop asked', () => {
+    const own = { id: 's-abc-123456', run_id: 'r1', posted: false };
+    expect(stopShownFor({ ownStart: own, busy: null, ...at })).toBe('cancel_start');
+    expect(stopShownFor({ ownStart: null, busy: solve('starting'), ...at })).toBe('cancel_start');
+    expect(stopShownFor({ ownStart: null, busy: solve('starting', { stopping: true }), ...at })).toBe(null);
+    expect(stopShownFor({ ownStart: null, busy: solve('draining'), ...at })).toBe('drain');
+    expect(stopShownFor({ ownStart: null, busy: solve('draining', { stopping: true }), ...at })).toBe(null);
+    expect(stopShownFor({ ownStart: null, busy: solve('running'), ...at })).toBe(null);
+    expect(stopShownFor({ ownStart: null, busy: { ...solve('draining'), run_id: 'r2' }, ...at })).toBe(null);
+    expect(stopShownFor({ ownStart: null, busy: { kind: 'foam', project_id: 'pA', phase: 'draining' }, ...at })).toBe(null);
+    expect(stopShownFor({ ownStart: null, busy: null, ...at })).toBe(null);
+  });
+
+  it('gives every Start click its own id, in the form the server accepts', () => {
+    const a = newStartId(Date.UTC(2026, 9, 1), '0a1b2c');
+    expect(a).toBe('s-' + Date.UTC(2026, 9, 1).toString(36) + '-0a1b2c');
+    expect(START_ID_RE.test(a)).toBe(true);
+    const ids = new Set(Array.from({ length: 50 }, () => newStartId()));
+    expect(ids.size).toBe(50);
+    for (const id of ids) {
+      expect(id).toMatch(/^s-[a-z0-9]+-[0-9a-f]{6}$/);
+      expect(START_ID_RE.test(id)).toBe(true);
+    }
+  });
+
+  it('follows the live job only for a mesh, or a solve in phase running', () => {
+    expect(liveSolveToFollow({ kind: 'mesh', mesh_id: 'm1', phase: 'running' })).toBe(true);
+    expect(liveSolveToFollow({ kind: 'mesh', mesh_id: 'm1' })).toBe(true);
+    expect(liveSolveToFollow({ kind: 'solve', run_id: 'r1', phase: 'running' })).toBe(true);
+    expect(liveSolveToFollow({ kind: 'solve', run_id: 'r1', phase: 'starting' })).toBe(false);
+    expect(liveSolveToFollow({ kind: 'solve', run_id: 'r1', phase: 'draining' })).toBe(false);
+    expect(liveSolveToFollow({ kind: 'foam', phase: 'running' })).toBe(false);
+    expect(liveSolveToFollow({ kind: 'check', phase: 'checking' })).toBe(false);
+    expect(liveSolveToFollow(null)).toBe(false);
+  });
+});
+
+describe('queue leave notices', () => {
+  it('words the toast by why the job left the queue', () => {
+    expect(queueFailureMessage({ kind: 'solve', name: 'Run 6', error: 'Start failed on the server. See the server log' })).toBe(
+      'Run 6 could not start from the queue: Start failed on the server. See the server log.',
+    );
+    expect(queueFailureMessage({ kind: 'solve', name: 'Run 6', error: 'No mesh', reason: 'failed' })).toBe(
+      'Run 6 could not start from the queue: No mesh.',
+    );
+    expect(
+      queueFailureMessage({ kind: 'foam', name: 'Cavity case 1 · c1 · Foam demo', error: 'The study was deleted', reason: 'dropped' }),
+    ).toBe('Cavity case 1 · c1 · Foam demo was taken off the queue: The study was deleted.');
+    expect(
+      queueFailureMessage({ kind: 'foam', name: 'Cavity case 1 · c3 · Foam demo', error: 'Foam demo was turned off', reason: 'stopped' }),
+    ).toBe('Cavity case 1 · c3 · Foam demo was stopped: Foam demo was turned off.');
+  });
+
+  it('falls back on a name and a reason, and never ends in two full stops', () => {
+    expect(queueFailureMessage({ kind: 'mesh' })).toBe('Mesh could not start from the queue: unknown reason.');
+    expect(queueFailureMessage({ kind: 'solve', error: 'Run not found.' })).toBe('Run could not start from the queue: Run not found.');
+    expect(queueFailureMessage({ kind: 'foam', error: 'x', reason: 'stopped' })).toBe('A plugin case was stopped: x.');
+    expect(queueFailureMessage(null)).toBe('Run could not start from the queue: unknown reason.');
+  });
+
+  it('shows the reason on the Run panel only for a core run that could not start', () => {
+    expect(queueFailureLinksRun({ kind: 'solve', run_id: 'r1', error: 'x' })).toBe(true);
+    expect(queueFailureLinksRun({ kind: 'solve', run_id: 'r1', error: 'x', reason: 'failed' })).toBe(true);
+    expect(queueFailureLinksRun({ kind: 'solve', run_id: 'r1', error: 'The project was deleted', reason: 'dropped' })).toBe(false);
+    expect(queueFailureLinksRun({ kind: 'solve', error: 'x' })).toBe(false);
+    expect(queueFailureLinksRun({ kind: 'foam', run_id: null, error: 'x', reason: 'stopped' })).toBe(false);
+    expect(queueFailureLinksRun({ kind: 'mesh', error: 'x' })).toBe(false);
+  });
+});
+
+describe('runtime.js uses these rules where the Run panel, Stop and the queue decide', () => {
+  const runtime = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'runtime.js'), 'utf8').replace(/\r\n/g, '\n');
+  /** A top-level function of runtime.js, from its header to its closing brace. */
+  const fn = (header: string) => {
+    const at = runtime.indexOf(header);
+    expect(at, header).toBeGreaterThanOrEqual(0);
+    return runtime.slice(at, runtime.indexOf('\n}\n', at) + 2);
+  };
+  const count = (text: string, part: string) => text.split(part).length - 1;
+
+  it('Start and the busy checks read the server slot', () => {
+    expect(fn('function anyComputeJobRunning(')).toContain('serverBusyIsPluginOrCheck(jobQueue.busy)');
+    expect(fn('function computeJobBlocksStart(')).toContain('serverBusyBlocksRun(jobQueue.busy, { runId: exceptRunId, projectId: pid })');
+    const state = fn('function computeRunState(');
+    expect(state).toContain('|| serverBusyBlocksRun(jobQueue.busy, runProject)');
+    expect(state).toContain('stopShownFor({ ownStart: runCatalog.start, busy: jobQueue.busy, ...runProject })');
+    expect(state).toContain("'Cancel this start'");
+    expect(state).toContain("'The solver still runs in WSL. Stop ends it.'");
+    expect(state).toContain('visible: running || !!stopMore');
+  });
+
+  it('the tab follows only a running solve or a mesh, and words leave notices by reason', () => {
+    expect(fn('function applyServerQueue(')).toContain('liveSolveToFollow(j.live)');
+    const notices = fn('function noticeQueueFailures(');
+    expect(notices).toContain('const msg = queueFailureMessage(f);');
+    expect(notices).toContain('if (queueFailureLinksRun(f)) {');
+  });
+
+  it("a Start carries its click's start_id, posted only after its last cancel check, with no await between", () => {
+    const start = fn('async function startSolveClient(');
+    expect(start).toContain("const start = { id: newStartId(), run_id: runCatalog.selected_run_id, posted: false };");
+    expect(start).toContain('start_id: start.id,');
+    // After persistSimControl, after refreshRunCatalog, before each enqueue and before the POST.
+    expect(count(start, "if (cancelled()) return endWithoutStart('Stopped before it started.', true);")).toBe(5);
+    const posted = start.indexOf('start.posted = true;');
+    const lastCheck = start.lastIndexOf("if (cancelled()) return endWithoutStart('Stopped before it started.', true);", posted);
+    const post = start.indexOf('await postRunStart({', posted);
+    expect(lastCheck).toBeGreaterThan(0);
+    expect(start.slice(lastCheck, posted)).not.toContain('await');
+    expect(start.slice(posted, post)).not.toContain('await');
+    // Wherever this start ends, its record goes with it.
+    const ends = count(start, 'runCatalog.starting = false;');
+    expect(ends).toBe(5);
+    expect(count(start, 'runCatalog.starting = false;\n    dropStart();')).toBe(4);
+    expect(count(start, 'runCatalog.starting = false;\n        dropStart();')).toBe(1);
+    // A stopped or same-run refusal is no failure; the busy test above it is unchanged.
+    const refusal = start.indexOf('const refusal = startRefusalKind(r.status, j);');
+    expect(refusal).toBeGreaterThan(start.indexOf('const busy = r.status === 409 && /already in progress|already running/i.test(err);'));
+    expect(refusal).toBeLessThan(start.lastIndexOf("return failStart((j && j.error) || 'Start failed', j);"));
+  });
+
+  it("Stop cancels a start without stop_requested: its own only once posted, with that click's start_id", () => {
+    const stop = fn('async function stopSolveClient(');
+    const force = stop.indexOf('const force = !!(rec && rec.stop_requested);');
+    expect(stop.indexOf('stopActionFor({')).toBeLessThan(force);
+    const own = stop.slice(stop.indexOf("if (action === 'cancel_own') {"), stop.indexOf("if (action === 'cancel_server') {"));
+    expect(own).toContain('runCatalog.cancel_start = stopRunId;');
+    expect(own).toContain('if (own && own.posted) {');
+    expect(own).toContain('starting: true,\n          start_id: own.id,');
+    const server = stop.slice(stop.indexOf("if (action === 'cancel_server') {"), force);
+    expect(server).toContain('starting: true,');
+    expect(server).not.toContain('start_id');
+    // "Stopped before it started." only for a cancelled start, never for a run that had started.
+    expect(server).toContain('const outcome = cancelStartOutcome(posted.response.ok, posted.json);');
+    expect(server).toContain("if (outcome === 'cancelled') {\n        runCatalog.start_error = 'Stopped before it started.';");
+    expect(server.split('Stopped before it started.').length).toBe(2);
+    expect(stop.slice(0, force)).not.toContain('stop_requested');
+  });
+
+  it('plugin results: one record, no core run request, no autosave, no Views, scale 1', () => {
+    expect(fn('function findRunRecord(').split('\n')[1]).toBe(
+      '  if (isPluginResultsKey(runId) && pluginResultsMatch(pluginResultsRec, runId)) return pluginResultsRec;',
+    );
+    expect(fn('function refreshRunReady(')).toContain('if (!rec || isPluginResultsKey(rec.id)) return;');
+    expect(fn('function filterAutosaveAllowed(')).toContain('if (!pluginResultsAutosaveAllowed(resultsRunId)) return false;');
+    expect(fn('function renderViewsBlock(')).toContain('if (!pluginResultsShowsViews(resultsRunId)) { block.hidden = true; return; }');
+    expect(fn('function meshDisplayScaleFromBounds(').split('\n')[1]).toBe(
+      '  if (pluginResultsRec) return pluginResultsDisplayScale(pluginResultsRec);',
+    );
+    expect(fn('function resultDisplayScale(')).toContain('window.__CFD_RESULTS_SCALE__ = scale;');
+    const hide = fn('function hideRunResultsView(');
+    expect(hide.indexOf('pluginResultsRec = null;\n    syncPluginResultsChrome();')).toBeGreaterThan(0);
+    expect(hide.indexOf('pluginResultsRec = null;')).toBeLessThan(hide.indexOf('if (!resultsViewOpen) return;'));
+    const attach = fn('async function attachCaseDirClient(');
+    expect(attach).toContain('{ plugin: plugin.plugin, plugin_study_id: plugin.study_id }');
+    expect(attach).toContain('const claimedElsewhere = !plugin &&');
+  });
+
+  it('opening plugin results takes a switch token, clears the study, and every await of the open checks it', () => {
+    const open = runtime.slice(runtime.indexOf('window.__CFD_OPEN_PLUGIN_RESULTS__ = async function'), runtime.indexOf('async function openRunResults('));
+    expect(open.indexOf('const token = ++studySwitchGen;')).toBeGreaterThan(0);
+    expect(open).toContain('if (typeof currentStudyId === \'function\' && currentStudyId()) clearStudyScope();');
+    expect(open.indexOf('const token = ++studySwitchGen;')).toBeLessThan(open.indexOf('await openRunResults(rec.id, { token });'));
+    const body = fn('async function openRunResults(');
+    // Each await is followed by the stale check (the attach chain by one after its try).
+    expect(count(body, 'if (stale()) return { stale: true };')).toBe(7);
+    expect(body).toContain('attachSolveCase(casePath, { simulation_id: rec && rec.simulation_id, ...scope })');
   });
 });
 

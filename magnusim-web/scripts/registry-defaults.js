@@ -267,6 +267,32 @@ export function algorithmLabelFor(key) {
   return String(row.algorithm_label || '');
 }
 
+/**
+ * The registered SolverApp whose OpenFOAM application is `app` (its key, label,
+ * time_dependency, parallel and stop_strategy), or null when no loaded plugin
+ * registers it. Plugin OpenFOAM cases may only run a registered solver.
+ * @param {unknown} app
+ * @returns {Record<string, any> | null}
+ */
+export function solverForApplication(app) {
+  const want = String(app || '');
+  if (!want) return null;
+  const rows = _rows('solver');
+  return rows.find((r) => r && String(r.application || r.key || '') === want) || null;
+}
+
+/**
+ * The loaded plugin's row ({ key, name, version, … }) from the live registry, or
+ * null when it is off, failed to load or the live registry is not loaded yet.
+ * @param {unknown} key
+ * @returns {Record<string, any> | null}
+ */
+export function pluginLoaded(key) {
+  const want = String(key || '');
+  if (!want || !_live || !Array.isArray(_live.plugins)) return null;
+  return _live.plugins.find((p) => p && String(p.key) === want) || null;
+}
+
 export function mesherByKey(key) {
   const want = String(key || '');
   return mesherEntries().find((r) => r && String(r.key) === want) || null;

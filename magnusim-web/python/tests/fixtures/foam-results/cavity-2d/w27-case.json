@@ -1,0 +1,13 @@
+{
+  "rho": 1000,
+  "kinematic_fields": [
+    "p"
+  ],
+  "frame_fields": [
+    "U",
+    "p"
+  ],
+  "app": "pimpleFoam",
+  "plugin": "foam-demo",
+  "study_id": "st-1"
+}

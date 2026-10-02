@@ -24,7 +24,9 @@ type Reply = (method: string, params: Params) => unknown;
  * its transfer list, as a real one does (so a transferred buffer is detached
  * on the frame's side), records it and answers from `reply` (a throw is a refusal).
  */
-async function open(reply: Reply): Promise<{ ws: Workspace; posts: Post[]; hello: ReturnType<typeof vi.fn> }> {
+async function open(
+  reply: Reply,
+): Promise<{ ws: Workspace; posts: Post[]; hello: ReturnType<typeof vi.fn>; push: (msg: Record<string, unknown>) => void }> {
   const posts: Post[] = [];
   const port = {
     onmessage: null as ((e: { data: unknown }) => void) | null,
@@ -57,7 +59,9 @@ async function open(reply: Reply): Promise<{ ws: Workspace; posts: Post[]; hello
   };
   vi.spyOn(window, 'parent', 'get').mockReturnValue(parent as unknown as Window);
   const ws = await connect({ timeoutMs: 1000 });
-  return { ws, posts, hello: parent.postMessage };
+  // What the host pushes without being asked (job events, study changes).
+  const push = (msg: Record<string, unknown>) => port.onmessage?.({ data: msg });
+  return { ws, posts, hello: parent.postMessage, push };
 }
 
 /** A host that takes uploads: chunks count up to what was sent, the commit answers WRITTEN. */
@@ -320,6 +324,89 @@ describe('ws.nav: Back and unsaved work', () => {
       ['nav.back', {}],
       ['nav.back', {}],
       ['nav.back', {}],
+    ]);
+  });
+});
+
+describe('ws.compute and ws.results: plugin OpenFOAM cases (host 1.3)', () => {
+  const JOB = 'fc-mg1abc2d-0a1b2c';
+  const JOB_ROW = { id: JOB, caseRel: 'cases/c1', app: 'pimpleFoam', status: 'queued', seq: 1 };
+
+  it('submits a case and answers what the host says', async () => {
+    const { ws, posts } = await open((method) => (method === 'compute.submitOpenFOAM' ? { id: JOB, ahead: 1, existing: false } : null));
+    const opts = {
+      caseRel: 'cases/c1',
+      app: 'pimpleFoam',
+      nProcs: 2,
+      pre: [{ tool: 'blockMesh' as const }, { tool: 'decomposePar' as const }, { tool: 'renumberMesh' as const, parallel: true }, { tool: 'reconstructParMesh' as const }],
+      results: { kinematicFields: ['p'], rho: 1 },
+    };
+    expect(await ws.compute.submitOpenFOAM(opts)).toEqual({ id: JOB, ahead: 1, existing: false });
+    expect(posts.map((p) => [p.method, p.params])).toEqual([['compute.submitOpenFOAM', opts]]);
+  });
+
+  it('stops, reads and lists, and an older host refuses with code "not_allowed"', async () => {
+    const { ws, posts } = await open((method) => {
+      if (method === 'compute.stop') return { status: 'running', stopping: true };
+      if (method === 'compute.status') return JOB_ROW;
+      if (method === 'compute.list') return [JOB_ROW];
+      throw { message: `not allowed: "${method}"`, code: 'not_allowed' };
+    });
+    expect(await ws.compute.stop(JOB)).toEqual({ status: 'running', stopping: true });
+    await ws.compute.stop(JOB, { force: true });
+    expect(await ws.compute.status(JOB)).toEqual(JOB_ROW);
+    expect(await ws.compute.list()).toEqual([JOB_ROW]);
+    expect(posts.map((p) => [p.method, p.params])).toEqual([
+      ['compute.stop', { jobId: JOB, force: false }],
+      ['compute.stop', { jobId: JOB, force: true }],
+      ['compute.status', { jobId: JOB }],
+      ['compute.list', {}],
+    ]);
+    await expect(ws.compute.submitOpenFOAM({ caseRel: 'c', app: 'pimpleFoam', results: { kinematicFields: [] } })).rejects.toMatchObject({
+      code: 'not_allowed',
+    });
+  });
+
+  it("follows a case once, hands its events to that case's listeners only, and stops on unsubscribe", async () => {
+    const { ws, posts, push } = await open(() => ({ ok: true }));
+    const a: unknown[] = [];
+    const b: unknown[] = [];
+    const offA = ws.compute.events(JOB, (ev) => a.push(ev));
+    ws.compute.events(JOB, (ev) => b.push(ev));
+    await Promise.resolve();
+    expect(posts.map((p) => [p.method, p.params])).toEqual([['compute.events', { jobId: JOB }]]);
+    push({ event: 'job', jobId: JOB, data: { event: 'start' } });
+    push({ event: 'job', jobId: 'fc-other00-ffffff', data: { event: 'start' } });
+    offA();
+    push({ event: 'job', jobId: JOB, data: { event: 'stage', stage: 'solve' } });
+    expect(a).toEqual([{ event: 'start' }]);
+    expect(b).toEqual([{ event: 'start' }, { event: 'stage', stage: 'solve' }]);
+    // A job of the jobs.* kind with the same id is asked for with its own call.
+    ws.jobs.events(JOB, () => undefined);
+    await Promise.resolve();
+    expect(posts.map((p) => p.method)).toEqual(['compute.events', 'jobs.events']);
+  });
+
+  it('a refused follow reaches the listener as an error event with its code', async () => {
+    const { ws } = await open(() => {
+      throw { message: 'No such case in this study', code: 'not_found' };
+    });
+    const got = await new Promise((resolve) => ws.compute.events(JOB, resolve));
+    expect(got).toEqual({ event: 'error', message: 'No such case in this study', code: 'not_found' });
+  });
+
+  it('results.openIn3D resolves whether the results opened', async () => {
+    let answer: unknown = { opened: true };
+    const { ws, posts } = await open(() => answer);
+    expect(await ws.results.openIn3D('cases/c2')).toEqual({ opened: true });
+    answer = { opened: false };
+    expect(await ws.results.openIn3D('cases/c2')).toEqual({ opened: false });
+    answer = null;
+    expect(await ws.results.openIn3D('cases/c2')).toEqual({ opened: false });
+    expect(posts.map((p) => [p.method, p.params])).toEqual([
+      ['results.openIn3D', { caseRel: 'cases/c2' }],
+      ['results.openIn3D', { caseRel: 'cases/c2' }],
+      ['results.openIn3D', { caseRel: 'cases/c2' }],
     ]);
   });
 });

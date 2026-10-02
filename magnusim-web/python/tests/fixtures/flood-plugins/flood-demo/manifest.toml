@@ -1,0 +1,7 @@
+key = "flood-demo"
+name = "Flood demo"
+version = "1.0.0"
+api_version = "1.3"
+license = "GPL-3.0-or-later"
+description = "Test plugin whose job sends events as fast as a small solver case does"
+authors = "Magnusim"

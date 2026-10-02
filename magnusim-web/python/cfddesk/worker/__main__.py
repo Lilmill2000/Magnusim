@@ -7,6 +7,7 @@ import os
 import sys
 from io import TextIOWrapper
 
+from cfddesk.worker import foam_methods as _foam_methods  # noqa: F401  — plugin cases, solve hooks
 from cfddesk.worker import handle_line
 from cfddesk.worker import methods as _methods  # noqa: F401  — register RPCs
 

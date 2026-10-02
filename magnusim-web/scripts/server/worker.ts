@@ -79,7 +79,14 @@ export function isDataLaneMethod(method: string): boolean {
  * the main worker for 60-95 ms, which stalled the tree behind a busy workspace.
  */
 export function isPluginLaneMethod(method: string): boolean {
-  return method === 'plugin.dispatch' || method.startsWith('plugin_studies.') || method.startsWith('plugin_data.');
+  return (
+    method === 'plugin.dispatch' ||
+    method.startsWith('plugin_studies.') ||
+    method.startsWith('plugin_data.') ||
+    // A plugin OpenFOAM case's check (it reads the case folder) and the solve hook names.
+    method.startsWith('foam.') ||
+    method.startsWith('solve_hooks.')
+  );
 }
 
 /**

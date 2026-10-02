@@ -109,6 +109,8 @@ export interface PluginFilesOptions {
   now?: () => number;
   /** MAX_ENTRIES (tests use a small one). */
   maxEntries?: number;
+  /** The case_keys of this plugin's running OpenFOAM cases in a project (their folders are busy). */
+  activeCases?: (projectId: string, plugin: string) => string[];
 }
 
 // ---- path rules (magnusim_sdk.data.data_rel is the Python copy) ----
@@ -180,6 +182,31 @@ function relParts(rel: unknown, allowEmpty: boolean): string[] {
 function studyNorm(part: string): string {
   return part.replace(/[ .]+$/, '').toLowerCase();
 }
+
+/** A case folder's key: its real parts from the plugin's folder, as Windows compares names. */
+export function caseKeyOf(parts: readonly string[]): string {
+  return parts.map(studyNorm).join('/');
+}
+
+export const CASE_BUSY = 'Stop the case, or wait for it to finish, before changing its files';
+
+/**
+ * A path is busy for a running case: a write inside one of its folders, or a
+ * delete inside, of, or above one (by the names on disk, in any letter case).
+ */
+export function caseBusy(parts: readonly string[], keys: readonly string[], mode: 'write' | 'delete'): boolean {
+  const norm = parts.map(studyNorm);
+  return keys.some((key) => {
+    const k = String(key || '').split('/').filter(Boolean);
+    if (!k.length) return false;
+    if (k.length <= norm.length && k.every((p, i) => p === norm[i])) return true;
+    return mode === 'delete' && norm.length < k.length && norm.every((p, i) => p === k[i]);
+  });
+}
+
+const CASE_PART_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;
+const PLACEHOLDER_RE = /__[A-Z][A-Z0-9_]*__/;
+const STUDY_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** studies/<sid>/.../study.json in any spelling Windows opens as that file. */
 export function isStudyRecord(parts: readonly string[]): boolean {
@@ -483,6 +510,7 @@ export class PluginFiles {
   private readonly fs: FsOps;
   private readonly now: () => number;
   private readonly maxEntries: number;
+  private readonly activeCases: ((projectId: string, plugin: string) => string[]) | null;
   private readonly uploads = new Map<string, Upload>();
   private readonly locks = new Map<string, Promise<void>>();
   private timer: NodeJS.Timeout | null = null;
@@ -501,6 +529,71 @@ export class PluginFiles {
     };
     this.now = opts.now || Date.now;
     this.maxEntries = opts.maxEntries ?? MAX_ENTRIES;
+    this.activeCases = opts.activeCases || null;
+  }
+
+  /** A running case's folder is busy (writes inside it; deletes inside, of or above it). */
+  private checkBusy(projectId: string, plugin: string, parts: readonly string[], mode: 'write' | 'delete'): void {
+    if (!this.activeCases) return;
+    let keys: string[] = [];
+    try {
+      keys = this.activeCases(projectId, plugin) || [];
+    } catch {
+      keys = [];
+    }
+    if (keys.length && caseBusy(parts, keys, mode)) throw new PluginFileError(409, 'busy', CASE_BUSY);
+  }
+
+  /**
+   * Where a path of the plugin's folder really lands (place()'s resolution), as
+   * its parts from that folder spelled on disk. Nothing is written.
+   */
+  async realParts(projectId: string, plugin: string, rel: unknown, mode: 'write' | 'delete' = 'write'): Promise<string[]> {
+    if (!validKey(plugin)) throw new PluginFileError(400, 'bad_request', 'invalid plugin key');
+    let dir = '';
+    try {
+      dir = this.projectDirOf(projectId);
+    } catch {
+      throw new PluginFileError(400, 'bad_request', 'invalid project id');
+    }
+    const at = await this.place(dir, plugin, relParts(rel, false), mode);
+    return at.parts;
+  }
+
+  /**
+   * A plugin OpenFOAM case's folder: studies/<studyId>/<caseRel> in the plugin's
+   * folder, with caseRel's own rules (1 to 8 plain parts, no placeholder), resolved
+   * as every file call is. Its real parts stay under the study with at least one
+   * part below it.
+   */
+  async caseFolder(
+    projectId: string,
+    plugin: string,
+    studyId: string,
+    caseRel: unknown,
+  ): Promise<{ parts: string[]; base: string; dir: string; rel: string }> {
+    const { dir } = await this.scope(projectId, plugin);
+    if (!STUDY_ID_RE.test(String(studyId || ''))) throw new PluginFileError(400, 'bad_request', 'invalid study id');
+    const bad = new PluginFileError(400, 'invalid_path', 'The case folder name is not usable');
+    const raw = typeof caseRel === 'string' ? caseRel.replace(/\\/g, '/') : '';
+    const parts = raw.split('/');
+    if (!raw || parts.length > 8) throw bad;
+    for (const p of parts) {
+      if (!CASE_PART_RE.test(p) || p === '.' || p === '..' || p.endsWith('.') || PLACEHOLDER_RE.test(p)) throw bad;
+    }
+    const rel = pluginFileRel(['studies', studyId, ...parts].join('/'), { write: true });
+    const at = await this.place(dir, plugin, rel.split('/'), 'write');
+    if (at.parts.length < 3 || studyNorm(at.parts[0]) !== 'studies' || studyNorm(at.parts[1]) !== studyNorm(studyId)) throw bad;
+    const base = join(dir, 'plugins', plugin);
+    return { parts: at.parts, base, dir: join(base, ...at.parts), rel: parts.join('/') };
+  }
+
+  /** What the plugin's folder in this project holds, against its quota. */
+  async usage(projectId: string, plugin: string): Promise<{ bytes: number; entries: number; maxTotal: number; maxEntries: number }> {
+    const { dir, row } = await this.scope(projectId, plugin);
+    const root = await nativeResolved(join(dir, 'plugins', plugin));
+    const used = await folderUsage(root, this.maxEntries, this.now() - STALE_PART_MS);
+    return { bytes: used.bytes, entries: used.entries, maxTotal: limitsOf(row).maxTotal, maxEntries: this.maxEntries };
   }
 
   /** The project's folder and the plugin's row, or why the call is refused. */
@@ -768,6 +861,7 @@ export class PluginFiles {
     const parts = relParts(body.rel, false);
     checkWritable(parts);
     const at = await this.place(dir, plugin, parts, 'write');
+    this.checkBusy(projectId, plugin, at.parts, 'write');
     const size = body.size;
     if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) {
       throw new PluginFileError(400, 'bad_request', 'size must be a whole number of bytes');
@@ -944,6 +1038,7 @@ export class PluginFiles {
       const first = await this.place(dir, plugin, parts, 'write');
       const file = await this.inFolder(first.root, async () => {
         const at = await this.place(dir, plugin, parts, 'write');
+        this.checkBusy(projectId, plugin, at.parts, 'write');
         await this.checkFolders(at);
         await this.checkStudy(at);
         const current = await statOrNull(at.target);
@@ -991,6 +1086,7 @@ export class PluginFiles {
     const first = await this.place(dir, plugin, parts, 'delete');
     return this.inFolder(first.root, async () => {
       const at = await this.place(dir, plugin, parts, 'delete');
+      this.checkBusy(projectId, plugin, at.parts, 'delete');
       const st = await lstatOrNull(at.target);
       if (!st) return 0;
       const name = at.parts.join('/');

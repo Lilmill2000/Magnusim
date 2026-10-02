@@ -68,6 +68,33 @@ isolated from that page. When a page says it has unsaved work, the app's
 question shows the page's message after the plugin's name, as plain text with
 control and direction-changing characters removed.
 
+A workspace can run an OpenFOAM case it wrote (host API 1.3). Case content can
+run code in WSL: OpenFOAM dictionaries may hold `#codeStream`, `#calc` and
+`systemCall` entries, which compile and run code when the case runs. The host
+checks the solver name, the case's path and every WSL step and argument against
+fixed lists, and builds the WSL scripts only from those checked names: the
+solver must be a registered plain program name, the case path and the step
+arguments pass fixed character rules and are quoted, and no free text from the
+case or the plugin reaches a shell. That stops shell injection through the
+case's settings; it does not stop a malicious plugin, whose case runs with your
+WSL account's rights. When a step list has a prepare step on the host (a later
+meshing plugin), it is only that plugin's own job tool, run on the app's
+interpreter or on that plugin's own environment, as a job the plugin starts
+would run.
+
+The case folder is the one place a plugin's page names a path the host acts on,
+and attaching a case to the viewer is checked against the plugin's study
+(`/api/case/attach` with `plugin` and `plugin_study_id`). Reading a case's
+result fields checks only that the folder is inside the open project. Workspace
+frames reach neither: they cannot call the app's API.
+
+Solve hooks (`solve.prepare`, `solve.parse_line`, `solve.stop`) run inside the
+relay process of every solve, core runs included, whenever some plugin listens.
+A listener's output cannot reach the run's events, a slow or failing listener is
+dropped for the run, and core solves never wait for one. A plugin whose code
+ends that process, crashes it or patches the runtime can still end or bend a
+run.
+
 Keep projects, `.cache`, local preferences, environment files, keys, recordings,
 and generated run reports out of source releases. `.gitignore` prevents new
 tracking; it does not remove files from old commits. Review existing history

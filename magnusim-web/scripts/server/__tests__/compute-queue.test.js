@@ -17,7 +17,28 @@ import {
   queueHasMeshDepViolation,
   enqueueMeshWhenBusy,
   computeQueueFileFor,
+  enqueueFoamJob,
+  dropFoamJobs,
+  computeRowsForProject,
+  dropComputeRows,
+  relabelFoamJobs,
+  queueAheadOf,
+  queuedFoamCount,
+  queueHasRow,
+  pushComputeNotice,
+  scheduleComputeQueueKick,
+  START_THREW_ERROR,
 } from '../compute-queue.ts';
+import {
+  claimComputeSlot,
+  computeSlotHolder,
+  holderIsRow,
+  releaseComputeSlot,
+  resetComputeSlotForTests,
+  runClaimed,
+  setSlotReleaseHook,
+} from '../../compute-slot.js';
+import { readFileSync } from 'node:fs';
 
 process.env.MAGNUSIM_QUEUE_QUIET = '1';
 
@@ -492,5 +513,369 @@ describe('computeQueueFileFor', () => {
     const b = computeQueueFileFor(join(dir, 'root-b'));
     assert.notEqual(a, b);
     assert.match(a, /compute-queue-[0-9a-f]{10}\.json$/);
+  });
+});
+
+// ---- H15: plugin cases (kind foam), leaves, notices, throws, process-wide state ----
+
+const queueState = () => globalThis[Symbol.for('magnusim.computeQueue')];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(check, ms, what) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (check()) return;
+    await sleep(5);
+  }
+  assert.fail(`timed out waiting for ${what}`);
+}
+
+function foam(jobId, extra = {}) {
+  return {
+    kind: 'foam',
+    project_id: extra.project_id || 'p1',
+    name: extra.name || `Study · ${jobId} · Foam demo`,
+    job_id: `fc-aaaaaaaa-${jobId}`,
+    foam: { plugin: extra.plugin || 'foam-demo', study_id: extra.study_id || 's1' },
+    ...(extra.id ? { id: extra.id } : {}),
+  };
+}
+
+describe('plugin case rows', () => {
+  it('go to the back, survive a reload, and only the host adds them', () => {
+    enqueueComputeJob(mesh('m1'));
+    const a = enqueueFoamJob(foam('000001'));
+    assert.equal(a.ok, true);
+    assert.equal(enqueueFoamJob(foam('000001')).item.id, a.item.id, 'one row per case');
+    enqueueComputeJob(solve('r1', { mesh_id: 'm9' }));
+    assert.deepEqual(snapshotComputeQueue().items.map((r) => r.kind), ['mesh', 'foam', 'solve']);
+    const row = snapshotComputeQueue().items[1];
+    assert.equal(row.job_id, 'fc-aaaaaaaa-000001');
+    assert.deepEqual(row.foam, { plugin: 'foam-demo', study_id: 's1' });
+    assert.equal(row.mesh_id, null);
+    assert.equal(row.run_id, null);
+    resetComputeQueueForTests({ filePath, reload: true, deps: {} });
+    assert.deepEqual(snapshotComputeQueue().items.map((r) => r.kind), ['mesh', 'foam', 'solve'], 'kept by the file');
+    // A browser merge or the generic POST can never add one.
+    assert.equal(enqueueComputeJob(foam('000002')).error, 'kind must be mesh or solve');
+    mergeComputeQueueItems([foam('000003')]);
+    assert.equal(snapshotComputeQueue().items.filter((r) => r.kind === 'foam').length, 1);
+    // Malformed rows are dropped.
+    assert.equal(enqueueFoamJob({ ...foam('000004'), job_id: 'bad' }).ok, false);
+    assert.equal(enqueueFoamJob({ ...foam('000004'), foam: { plugin: 'foam-demo', study_id: 'Bad Id' } }).ok, false);
+    // Mesh and solve rows look as before.
+    assert.deepEqual(Object.keys(snapshotComputeQueue().items[0]).sort(), ['id', 'kind', 'mesh_id', 'name', 'position', 'project_id', 'run_id', 'settings', 'simulation_id']);
+  });
+
+  it('the mesh and solve rules never touch them', () => {
+    enqueueFoamJob(foam('000001'));
+    enqueueComputeJob(mesh('m1'));
+    dropComputeJobsForMesh('m1');
+    removeComputeJob('solve', 'fc-aaaaaaaa-000001', 'p1');
+    removeComputeJob(null, 'fc-aaaaaaaa-000001', 'p1');
+    assert.equal(snapshotComputeQueue().items.filter((r) => r.kind === 'foam').length, 1);
+  });
+
+  it('counts, positions and labels', () => {
+    let busy = false;
+    resetComputeQueueForTests({ filePath, items: [], deps: { isBusy: () => busy } });
+    const a = enqueueFoamJob(foam('000001')).item;
+    enqueueComputeJob(mesh('m1', { project_id: 'p2' }));
+    const b = enqueueFoamJob(foam('000002', { plugin: 'other' })).item;
+    assert.equal(queuedFoamCount('p1', 'foam-demo'), 1);
+    assert.equal(queuedFoamCount('p1', 'other'), 1);
+    assert.equal(queuedFoamCount('p2', 'foam-demo'), 0);
+    assert.equal(queueAheadOf(a.id), 0);
+    assert.equal(queueAheadOf(b.id), 2);
+    busy = true;
+    assert.equal(queueAheadOf(a.id), 1, 'the running job is ahead too');
+    assert.equal(queueAheadOf('q-missing'), null);
+    assert.equal(queueHasRow(a.id), true);
+    assert.equal(queueHasRow('q-missing'), false);
+    assert.equal(relabelFoamJobs('p1', 'foam-demo', 's1', 'Renamed · study'), 1);
+    assert.equal(snapshotComputeQueue().items[0].name, 'Renamed · study · 000001 · Foam demo');
+    assert.deepEqual(computeRowsForProject('p1').sort(), [a.id, b.id].sort());
+  });
+});
+
+describe('leaves: each row that leaves unstarted says why, once', () => {
+  it('fail (a final refusal): out at once, one failure, onLeave failed, the next row starts', async () => {
+    const leaves = [];
+    const started = [];
+    let busy = false;
+    resetComputeQueueForTests({
+      filePath,
+      items: [foam('000001'), mesh('m2')],
+      deps: {
+        isBusy: () => busy,
+        startFoam: () => ({ ok: false, final: true, error: 'Foam demo is off. Turn it on in Settings → Plugins' }),
+        startMesh: (item) => {
+          started.push(item.mesh_id);
+          busy = true;
+          return { ok: true };
+        },
+        onLeave: (row, reason, error) => leaves.push([row.kind, reason, error]),
+      },
+    });
+    await kickComputeQueue();
+    assert.deepEqual(started, ['m2']);
+    assert.deepEqual(leaves, [['foam', 'failed', 'Foam demo is off. Turn it on in Settings → Plugins']]);
+    const failed = snapshotComputeQueue().failed;
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].job_id, 'fc-aaaaaaaa-000001');
+    assert.equal(failed[0].reason, undefined, 'failed is the default');
+    assert.equal(queueState().holdTries.size, 0, 'no retries');
+  });
+
+  it('skipped, removed, held to the end, dropped: one onLeave each', async () => {
+    const leaves = [];
+    const onLeave = (row, reason, error) => leaves.push([row.job_id || row.mesh_id, reason, error || '']);
+    resetComputeQueueForTests({
+      filePath,
+      holdRetryMs: 5,
+      items: [foam('000001'), foam('000002'), foam('000003'), foam('000004', { study_id: 's2' })],
+      deps: {
+        isBusy: () => false,
+        startFoam: (row) =>
+          row.job_id.endsWith('000001') ? { missing: true } : row.job_id.endsWith('000002') ? { ok: false, error: 'The plugin list is not loaded yet' } : { busy: true },
+        onLeave,
+      },
+    });
+    await kickComputeQueue();
+    await waitFor(() => leaves.length >= 2, 1000, 'the held row to leave');
+    assert.deepEqual(leaves.slice(0, 2), [
+      ['fc-aaaaaaaa-000001', 'skipped', ''],
+      ['fc-aaaaaaaa-000002', 'failed', 'The plugin list is not loaded yet'],
+    ]);
+    removeComputeJob(null, snapshotComputeQueue().items[0].id);
+    assert.deepEqual(leaves[2], ['fc-aaaaaaaa-000003', 'removed', '']);
+    const dropped = dropFoamJobs({ project_id: 'p1', plugin: 'foam-demo', study_id: 's2' }, 'The study was deleted');
+    assert.equal(dropped.length, 1);
+    assert.deepEqual(leaves[3], ['fc-aaaaaaaa-000004', 'dropped', 'The study was deleted']);
+    assert.equal(leaves.length, 4);
+    const notice = snapshotComputeQueue().failed.find((f) => f.job_id === 'fc-aaaaaaaa-000004');
+    assert.equal(notice.reason, 'dropped');
+    assert.equal(notice.error, 'The study was deleted');
+    const st = queueState();
+    if (st.kickTimer) clearTimeout(st.kickTimer);
+    st.kickTimer = null;
+  });
+
+  it('a project delete drops its rows of every kind, by folder, with a notice', () => {
+    const leaves = [];
+    resetComputeQueueForTests({
+      filePath,
+      items: [mesh('m1', { project_id: 'pA' }), foam('000001', { project_id: 'pA' }), mesh('m2', { project_id: 'pB' })],
+      deps: { onLeave: (row, reason) => leaves.push([row.kind, reason]) },
+    });
+    const ids = computeRowsForProject('pA');
+    assert.equal(ids.length, 2);
+    dropComputeRows(ids, 'The project was deleted');
+    assert.deepEqual(snapshotComputeQueue().items.map((r) => r.project_id), ['pB']);
+    assert.deepEqual(leaves, [['mesh', 'dropped'], ['foam', 'dropped']]);
+    assert.deepEqual(snapshotComputeQueue().failed.map((f) => [f.kind, f.reason, f.error]), [
+      ['mesh', 'dropped', 'The project was deleted'],
+      ['foam', 'dropped', 'The project was deleted'],
+    ]);
+    // A skip removes quietly.
+    dropComputeRows(computeRowsForProject('pB'), 'Lost from the queue', 'skipped');
+    assert.equal(snapshotComputeQueue().failed.length, 2);
+  });
+
+  it('notices: no closing full stop, kept 15 minutes, 50 at most, never throw', () => {
+    pushComputeNotice({ kind: 'foam', name: 'Case · c3 · Foam demo', error: 'Foam demo was turned off.', reason: 'stopped', job_id: 'fc-aaaaaaaa-000003', project_id: 'p1' });
+    const n = snapshotComputeQueue().failed[0];
+    assert.equal(n.error, 'Foam demo was turned off');
+    assert.equal(n.reason, 'stopped');
+    for (let i = 0; i < 60; i += 1) pushComputeNotice({ kind: 'solve', name: `r${i}`, error: 'x' });
+    assert.equal(snapshotComputeQueue().failed.length, 50);
+    queueState().failures.forEach((f) => (f.at -= 16 * 60 * 1000));
+    assert.equal(snapshotComputeQueue().failed.length, 0);
+    assert.doesNotThrow(() => pushComputeNotice(null));
+  });
+
+  it('startResultFromEngine: a start stopped before it started leaves the queue (skip)', () => {
+    assert.deepEqual(
+      startResultFromEngine({ ok: false, status: 409, bodyExtra: { error: 'Stopped before it started', code: 'stopped', stopped: true } }),
+      { ok: false, skip: true, error: 'Stopped before it started' },
+    );
+    assert.deepEqual(startResultFromEngine({ ok: false, status: 409, bodyExtra: { error: 'Another job is already running', code: 'busy' } }), {
+      ok: false,
+      busy: true,
+      error: 'Another job is already running',
+    });
+    assert.equal(queueKickAfterStart({ ok: false, final: true }, false), 'fail');
+    assert.equal(queueKickAfterStart({ busy: true, final: true }, false), 'retry');
+  });
+});
+
+describe('a start that throws', () => {
+  it('before its job started: 3 more tries, then out with the fixed text; the next row starts', async () => {
+    resetComputeSlotForTests();
+    const leaves = [];
+    const starts = [];
+    resetComputeQueueForTests({
+      filePath,
+      holdRetryMs: 50,
+      items: [solve('r-throws'), mesh('m-next', { project_id: 'p2' })],
+      deps: {
+        isBusy: () => computeSlotHolder() !== null,
+        holdsRow: (row) => holderIsRow(computeSlotHolder(), row),
+        startSolve: async (item) => {
+          starts.push(['solve', Date.now()]);
+          const c = claimComputeSlot('solve', { project_id: item.project_id, run_id: item.run_id }, { phase: 'starting' });
+          return runClaimed(c.token, async () => {
+            await Promise.resolve();
+            throw new Error('mkdirSync: a file named case is in the way');
+          });
+        },
+        startMesh: (item) => {
+          starts.push(['mesh', Date.now()]);
+          claimComputeSlot('mesh', { project_id: item.project_id, mesh_id: item.mesh_id });
+          return { ok: true };
+        },
+        onLeave: (row, reason, error) => leaves.push([row.run_id || row.mesh_id, reason, error]),
+      },
+    });
+    await kickComputeQueue();
+    await waitFor(() => starts.some((s) => s[0] === 'mesh'), 2000, 'the next row');
+    const solves = starts.filter((s) => s[0] === 'solve');
+    assert.equal(solves.length, 4, 'the first try and 3 more');
+    const meshAt = starts.find((s) => s[0] === 'mesh')[1];
+    assert.ok(meshAt - solves[3][1] < 200, 'the next row starts at once');
+    assert.deepEqual(leaves, [['r-throws', 'failed', START_THREW_ERROR]]);
+    const failed = snapshotComputeQueue().failed;
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].error, 'Start failed on the server. See the server log');
+    assert.equal(queueState().kickTimer, null, 'no timer left behind');
+    resetComputeSlotForTests();
+  });
+
+  it('after its job started: it leaves as started, with no failure and no retry', async () => {
+    resetComputeSlotForTests();
+    let starts = 0;
+    resetComputeQueueForTests({
+      filePath,
+      holdRetryMs: 20,
+      items: [solve('r-started')],
+      deps: {
+        isBusy: () => computeSlotHolder() !== null,
+        holdsRow: (row) => holderIsRow(computeSlotHolder(), row),
+        startSolve: async (item) => {
+          starts += 1;
+          const c = claimComputeSlot('solve', { project_id: item.project_id, run_id: item.run_id }, { phase: 'starting' });
+          return runClaimed(c.token, async (s) => {
+            s.keep();
+            throw new Error('loadCatalog failed after spawnJob');
+          });
+        },
+      },
+    });
+    await kickComputeQueue();
+    assert.deepEqual(snapshotComputeQueue().items, []);
+    assert.deepEqual(snapshotComputeQueue().failed, []);
+    releaseComputeSlot(computeSlotHolder().token);
+    await kickComputeQueue();
+    await sleep(80);
+    assert.equal(starts, 1, 'never started again');
+    assert.equal(queueState().kickTimer, null);
+    resetComputeSlotForTests();
+  });
+});
+
+describe('no kickAgain', () => {
+  it('a kick during a start returns the snapshot; a row added meanwhile starts after the job releases', async () => {
+    resetComputeSlotForTests();
+    const started = [];
+    let finishA;
+    resetComputeQueueForTests({
+      filePath,
+      items: [mesh('mA')],
+      deps: {
+        isBusy: () => computeSlotHolder() !== null,
+        startMesh: async (item) => {
+          started.push(item.mesh_id);
+          if (item.mesh_id === 'mA') {
+            const c = claimComputeSlot('mesh', { project_id: item.project_id, mesh_id: 'mA' });
+            await new Promise((r) => (finishA = r));
+            return { ok: true, token: c.token };
+          }
+          claimComputeSlot('mesh', { project_id: item.project_id, mesh_id: item.mesh_id });
+          return { ok: true };
+        },
+      },
+    });
+    setSlotReleaseHook(() => scheduleComputeQueueKick(20));
+    const first = kickComputeQueue();
+    await sleep(5);
+    const during = await kickComputeQueue();
+    assert.deepEqual(during.items.map((r) => r.mesh_id), ['mA'], 'returns at once with the snapshot');
+    enqueueComputeJob(mesh('mB'));
+    finishA();
+    await first;
+    assert.deepEqual(started, ['mA']);
+    assert.equal(queueState().kickTimer, null, 'nothing scheduled while mA runs');
+    releaseComputeSlot(computeSlotHolder().token);
+    await waitFor(() => started.includes('mB'), 1000, 'mB to start after the release');
+    setSlotReleaseHook(null);
+    releaseComputeSlot(computeSlotHolder().token);
+    assert.equal(queueState().kickTimer, null);
+    resetComputeSlotForTests();
+  });
+
+  it("a hold's backoff is not cut short by a kick during the refused start", async () => {
+    resetComputeSlotForTests();
+    const starts = [];
+    let refuse;
+    resetComputeQueueForTests({
+      filePath,
+      holdRetryMs: 300,
+      items: [mesh('mHold')],
+      deps: {
+        isBusy: () => false,
+        startMesh: async () => {
+          starts.push(Date.now());
+          if (starts.length === 1) {
+            await new Promise((r) => (refuse = r));
+            return { ok: false, error: 'not ready yet' };
+          }
+          return { ok: true };
+        },
+      },
+    });
+    const first = kickComputeQueue();
+    await sleep(5);
+    await kickComputeQueue();
+    refuse();
+    await first;
+    await sleep(150);
+    assert.equal(starts.length, 1, 'still waiting for the 300 ms retry');
+    await waitFor(() => starts.length === 2, 1000, 'the retry');
+    assert.ok(starts[1] - starts[0] >= 290);
+    const st = queueState();
+    if (st.kickTimer) clearTimeout(st.kickTimer);
+    st.kickTimer = null;
+  });
+});
+
+describe('process-wide queue state', () => {
+  it('two module instances share one list: a row removed in one never starts from the other; the file never goes back', async () => {
+    const other = await import('../compute-queue.ts?v=2');
+    assert.notEqual(other.kickComputeQueue, kickComputeQueue);
+    const started = [];
+    resetComputeQueueForTests({ filePath, items: [mesh('m1'), mesh('m2')], deps: {} });
+    other.configureComputeQueue({
+      isBusy: () => false,
+      startMesh: (item) => {
+        started.push(item.mesh_id);
+        return { ok: true };
+      },
+    });
+    const first = snapshotComputeQueue().items[0];
+    removeComputeJob(null, first.id);
+    await other.kickComputeQueue();
+    assert.deepEqual(started, ['m2']);
+    const onDisk = JSON.parse(readFileSync(filePath, 'utf8')).items;
+    assert.deepEqual(onDisk, []);
+    assert.deepEqual(other.snapshotComputeQueue().items, []);
   });
 });

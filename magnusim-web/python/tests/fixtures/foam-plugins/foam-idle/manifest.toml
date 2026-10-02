@@ -1,0 +1,7 @@
+key = "foam-idle"
+name = "Foam idle"
+version = "1.0.0"
+api_version = "1.3"
+license = "GPL-3.0-or-later"
+description = "Test plugin that adds nothing: turning it on or off must not touch another plugin's case (H15)"
+authors = "Magnusim"

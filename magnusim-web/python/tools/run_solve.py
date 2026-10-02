@@ -3,9 +3,12 @@
 
 CLI: tools/run_solve.py --case-dir ... --wsl-case ... --n-procs N --app <program> --run-id ...
      [--keep-frames all|latest] [--process-names a,b] [--log-parser JSON]
+     [--owner core:<project>/<study> --hooks solve.prepare,solve.parse_line,...]
 
 The app, frames kept, process names and log parser come from the analysis's
-launch spec (prepare_run reports it; Node passes it on).
+launch spec (prepare_run reports it; Node passes it on). ``--hooks`` is given
+only when some plugin listens (cfddesk.wsl.solve_hooks); the solve never waits
+for a hook.
 
 Also supports --parse-log PATH for offline JSONL parsing tests (no WSL).
 """
@@ -22,6 +25,7 @@ sys.path.insert(0, str(CFDDESK_ROOT))
 from cfddesk.jobs.events import EVENT_PREFIX
 from cfddesk.runner.case_id import wsl_case_path
 from cfddesk.wsl.mesh_run import windows_to_wsl_path
+from cfddesk.wsl.solve_hooks import HookRunner, hook_names
 from cfddesk.wsl.solve_run import (
     events_from_lines,
     render_solve_script,
@@ -31,24 +35,54 @@ from cfddesk.wsl.solve_run import (
 )
 
 
-def _parse_log(path: Path) -> int:
+def _hook_runner(args: argparse.Namespace, case_dir: Path | None = None) -> HookRunner | None:
+    """Solve hooks for this run, started (output isolated, plugins loading), or None.
+
+    Only when Node passed hook names (some plugin listens) and a valid owner.
+    The solve never waits for them: solve.prepare is a notice for core runs.
+    """
+    names = hook_names(args.hooks)
+    if not names:
+        return None
+    from cfddesk.registry.solve_context import solve_context
+
+    ctx = solve_context(
+        args.owner,
+        wsl_case=str(args.wsl_case or ""),
+        run_id=args.run_id,
+        app=args.app or None,
+        case_dir=str(case_dir) if case_dir is not None else None,
+        n_procs=args.n_procs,
+    )
+    if ctx is None:
+        return None
+    runner = HookRunner(ctx, names)
+    runner.start()
+    return runner
+
+
+def _parse_log(path: Path, runner: HookRunner | None = None) -> int:
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    events = events_from_lines(lines)
-    for ev in events:
-        print(EVENT_PREFIX + ev.to_json(), flush=True)
+    out = runner.events if runner is not None else None
+    events = events_from_lines(lines, on_line=runner.feed if runner is not None else None, out=out)
+    if out is None:
+        for ev in events:
+            print(EVENT_PREFIX + ev.to_json(), flush=True)
     kinds = {}
     for ev in events:
         kinds[ev.event] = kinds.get(ev.event, 0) + 1
     # Summary result if the log did not already emit one
     if not any(ev.event == "result" for ev in events):
-        print(
-            EVENT_PREFIX
-            + json.dumps(
-                {"event": "result", "ok": True, "parsed_only": True, "counts": kinds},
-                separators=(",", ":"),
-            ),
-            flush=True,
+        summary = EVENT_PREFIX + json.dumps(
+            {"event": "result", "ok": True, "parsed_only": True, "counts": kinds},
+            separators=(",", ":"),
         )
+        if out is None:
+            print(summary, flush=True)
+        else:
+            out.write(summary + "\n")
+    if runner is not None:
+        runner.close()
     return 0
 
 
@@ -97,10 +131,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--parse-log", type=Path, default=None, help="Offline: parse a captured log to JSONL")
     p.add_argument("--render-only", action="store_true", help="Render solve.sh and exit (no WSL)")
     p.add_argument("--render-out", type=Path, default=None, help="With --render-only, write script here")
+    p.add_argument("--owner", default="", help="Solve hooks: the run's owner, core:<project>/<study>")
+    p.add_argument("--hooks", default="", help="Solve hooks some plugin listens on (comma list)")
     args = p.parse_args(argv)
 
     if args.parse_log is not None:
-        return _parse_log(args.parse_log)
+        return _parse_log(args.parse_log, _hook_runner(args))
 
     if args.case_dir is None or args.wsl_case is None:
         print(
@@ -128,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     names = tuple(n.strip() for n in args.process_names.split(",") if n.strip()) or (args.app,)
     parser = load_log_parser(json.loads(args.log_parser) if args.log_parser else None)
+    # Started before the solve and never waited for.
+    runner = _hook_runner(args, case_dir)
     proc = start_solve(
         case_dir,
         wsl_case_id=args.wsl_case,
@@ -138,7 +176,11 @@ def main(argv: list[str] | None = None) -> int:
         process_names=names,
         frame_fields=tuple(f.strip() for f in args.frame_fields.split(",") if f.strip()) or ("U", "p"),
     )
-    rc, parser = stream_events_to_stdout(proc, parser)
+    if runner is None:
+        rc, parser = stream_events_to_stdout(proc, parser)
+    else:
+        rc, parser = stream_events_to_stdout(proc, parser, on_line=runner.feed, out=runner.events)
+        runner.close(join=2.0)
     parser.snapshot()
     # Ensure a trailing result if the template somehow did not emit one
     # (stream already printed events; only add if missing — check via stage)

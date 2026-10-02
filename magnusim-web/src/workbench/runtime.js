@@ -108,7 +108,28 @@ import {
   liveFramesShouldOpenResults,
   snapMatchesLiveMeshJob,
   viewportChipPrefersResultsLoad,
+  serverBusyIsPluginOrCheck,
+  serverBusyBlocksRun,
+  startRefusalKind,
+  stopActionFor,
+  stopShownFor,
+  cancelStartOutcome,
+  newStartId,
+  liveSolveToFollow,
+  queueFailureMessage,
+  queueFailureLinksRun,
 } from './jobQueueOrder';
+import {
+  isPluginResultsKey,
+  pluginResultsAutosaveAllowed,
+  pluginResultsDisplayScale,
+  pluginResultsMatch,
+  pluginResultsRecord,
+  pluginResultsShowsCad,
+  pluginResultsShowsCompare,
+  pluginResultsShowsViews,
+} from './pluginResultsRules';
+import { createToastQueue } from './toastQueue';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
 import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js';
@@ -8492,6 +8513,12 @@ function revealResultSurface() {
 }
 
 function hideRunResultsView(opts) {
+  if (pluginResultsRec) {
+    // Plugin case results end here: the CAD and Compare come back, framed.
+    pluginResultsRec = null;
+    syncPluginResultsChrome();
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(framePluginResultsView);
+  }
   if (!resultsViewOpen) return;
   // Write the live filter set for this run before anything is torn down so
   // Results reopen exactly as they were left.
@@ -8859,13 +8886,81 @@ function syncRunResultsPanel(statusText) {
   hint.textContent = 'Start this run first. Results open here after it finishes.';
 }
 
-async function openRunResults(runId) {
+/*
+ * Plugin case results in 3D (results.openIn3D). While they show, this record is
+ * the "run" the results code reads (findRunRecord answers it first), no core
+ * study is active, and the CAD and Compare are hidden. hideRunResultsView ends it.
+ */
+let pluginResultsRec = null;
+
+/** The CAD and Compare follow the record: hidden while plugin results show, back after. */
+function syncPluginResultsChrome() {
+  try {
+    const compare = document.getElementById('btn-compare');
+    const showCompare = pluginResultsShowsCompare(pluginResultsRec);
+    if (compare) {
+      compare.hidden = !showCompare;
+      compare.style.display = showCompare ? '' : 'none';
+    }
+    if (!pluginResultsShowsCad(pluginResultsRec)) setGeomVisible(false);
+    else if (w16State && w16State.geometry) setGeomVisible(true);
+  } catch (e) {
+    console.warn('[CFD] plugin results chrome', e);
+  }
+}
+
+function framePluginResultsView() {
+  try {
+    frameSceneCamera(true);
+  } catch (e) {
+    console.warn('[CFD] plugin results frame', e);
+  }
+}
+
+window.__CFD_OPEN_PLUGIN_RESULTS__ = async function openPluginResults(info) {
+  const pid = typeof currentProjectId === 'function' ? String(currentProjectId() || '') : '';
+  const rec = pluginResultsRecord(info, { projectId: pid });
+  if (!rec || !pid) return { ok: false, error: 'These results are not in the open project' };
+  // A study click (or a geometry switch) from here on wins over this open.
+  const token = ++studySwitchGen;
+  if (typeof currentStudyId === 'function' && currentStudyId()) clearStudyScope();
+  if (resultsViewOpen) hideRunResultsView({ silent: true });
+  pluginResultsRec = rec;
+  syncPluginResultsChrome();
+  runCatalog.selected_run_id = rec.id;
+  const out = await openRunResults(rec.id, { token });
+  if ((out && out.stale) || token !== studySwitchGen || pluginResultsRec !== rec) return { ok: false, stale: true };
+  if (String(resultsRunId || '') !== rec.id) {
+    // The case could not be attached: back to the project as it was.
+    hideRunResultsView();
+    return { ok: false, error: 'These results could not be opened' };
+  }
+  // Loading showed the CAD for a moment; the case's results stand alone, framed.
+  syncPluginResultsChrome();
+  framePluginResultsView();
+  return { ok: true };
+};
+
+async function openRunResults(runId, opts) {
   if (!runId) return;
+  // With opts.token (a plugin results open): a study or geometry switch since
+  // then makes this open stale; it stops at its next step.
+  const token = opts && typeof opts.token === 'number' ? opts.token : null;
+  const loadingPlugin = pluginResultsMatch(pluginResultsRec, runId) ? pluginResultsRec : null;
+  const stale = () => {
+    if (token === null || token === studySwitchGen) return false;
+    if (loadingPlugin && pluginResultsRec === loadingPlugin) {
+      pluginResultsRec = null;
+      syncPluginResultsChrome();
+    }
+    return true;
+  };
   let early = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
   if (!runHasStarted(early)) {
     // After a reload the tree can list a finished run before its status is read;
     // ask the server once instead of ignoring the click.
     try { await refreshRunCatalog(); } catch (_) {}
+    if (stale()) return { stale: true };
     early = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
     if (!runHasStarted(early)) return;
   }
@@ -8891,10 +8986,12 @@ async function openRunResults(runId) {
   hideAllTreeDetails();
   const rec = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
   let casePath = await resolveRunResultsCasePath(rec);
+  if (stale()) return { stale: true };
   let ready = runHasResults(rec);
   if (!ready && casePath) {
     try {
       const times = await peekCaseTimes(casePath);
+      if (stale()) return { stale: true };
       if (times.length) {
         ready = true;
         if (rec) {
@@ -8940,17 +9037,21 @@ async function openRunResults(runId) {
   try { syncViewportOrient(); } catch (_) {}
   try {
     try { await awaitResultsPrefetchFor(runId, casePath); } catch (_) {}
+    if (stale()) return { stale: true };
+    // A plugin case attaches in its plugin study's scope (no core study).
+    const scope = rec && rec.plugin_case ? { plugin: rec.plugin_case } : {};
     if (resultsCaseAlreadyAttached(casePath)) {
       await refreshFieldsAfterAttach();
     } else if (typeof attachSolveCase === 'function') {
-      await attachSolveCase(casePath, { simulation_id: rec && rec.simulation_id });
+      await attachSolveCase(casePath, { simulation_id: rec && rec.simulation_id, ...scope });
     } else {
-      await attachCaseDirClient(casePath);
+      await attachCaseDirClient(casePath, scope);
     }
   } catch (e) {
     console.warn('[CFD] open run results', e);
     return;
   }
+  if (stale()) return { stale: true };
   try { applyWorkbenchStage(); } catch (_) {}
   try { setFiltersToolbarMode('post'); } catch (_) {}
   try { setFiltersVisible(false); } catch (_) {}
@@ -8982,7 +9083,9 @@ async function openRunResults(runId) {
     try { renderViewsBlock(); } catch (_) {}
     if (loaded) {
       try { await restoreCurrentFilterSet(runId); } catch (_) {}
+      if (stale()) return { stale: true };
       try { await lockSeriesLutFromServer(activeField || 'magU'); } catch (_) {}
+      if (stale()) return { stale: true };
       // A failed earlier attach can autosave CAD leftovers (solid grey parts,
       // group-hidden planes). Show the field and any enabled planes.
       if (!ptState.enabled && cutState.partsStyle === 'solid') {
@@ -9324,6 +9427,7 @@ function cadNativeSpan() {
 }
 
 function meshDisplayScaleFromBounds(bounds) {
+  if (pluginResultsRec) return pluginResultsDisplayScale(pluginResultsRec);
   const cadSpan = cadNativeSpan();
   if (!bounds || cadSpan == null || cadSpan < 1e-12) return 1;
   const meshSpan = Math.max(
@@ -9364,7 +9468,10 @@ function applyMeshDisplayScale(actor, bounds) {
 }
 
 function resultDisplayScale() {
-  return meshDisplayScaleFromBounds(sourceBounds) || 1;
+  const scale = meshDisplayScaleFromBounds(sourceBounds) || 1;
+  // The scale results are drawn at (read by e2e).
+  window.__CFD_RESULTS_SCALE__ = scale;
+  return scale;
 }
 
 function applyResultDisplayScale(actor) {
@@ -12613,6 +12720,7 @@ async function applyFilterSet(set, opts) {
 }
 
 function filterAutosaveAllowed() {
+  if (!pluginResultsAutosaveAllowed(resultsRunId)) return false;
   return !!(
     resultsViewOpen &&
     resultsRunId &&
@@ -12681,6 +12789,7 @@ function renderViewsBlock() {
   const upd = document.getElementById('views-update');
   const del = document.getElementById('views-delete');
   if (!block || !sel) return;
+  if (!pluginResultsShowsViews(resultsRunId)) { block.hidden = true; return; }
   const show = !!(resultsViewOpen && resultsRunId) && window.__CFD_FILTERS_MODE__ === 'post';
   block.hidden = !show;
   if (!show) return;
@@ -16485,7 +16594,8 @@ function jobChipWho(rec, fallbackName) {
 
 let lastFinishToastKey = '';
 let lastFinishToastAt = 0;
-let finishToastTimer = 0;
+// The one #job-finish-toast: run-finished toasts and queue notices are shown in turn.
+const finishToasts = createToastQueue({ el: () => document.getElementById('job-finish-toast') });
 
 function showJobFinishToast(kind, rec, status) {
   const el = document.getElementById('job-finish-toast');
@@ -16503,17 +16613,8 @@ function showJobFinishToast(kind, rec, status) {
     : stopped
       ? kind === 'mesh' ? 'meshing stopped' : 'solve stopped'
       : kind === 'mesh' ? 'finished meshing' : 'finished simulating';
-  el.textContent = who ? who + ' ' + verb + '.' : (kind === 'mesh' ? 'Mesh finished.' : 'Run finished.');
-  el.classList.toggle('is-fail', failed);
-  el.hidden = false;
-  requestAnimationFrame(() => el.classList.add('is-on'));
-  if (finishToastTimer) clearTimeout(finishToastTimer);
-  finishToastTimer = setTimeout(() => {
-    el.classList.remove('is-on');
-    finishToastTimer = setTimeout(() => {
-      el.hidden = true;
-    }, 280);
-  }, 3800);
+  const text = who ? who + ' ' + verb + '.' : (kind === 'mesh' ? 'Mesh finished.' : 'Run finished.');
+  finishToasts.push({ text, fail: failed, ms: 3800 });
 }
 
 function catalogRunningRun(j) {
@@ -16948,18 +17049,22 @@ async function attachCaseDirClient(path, opts) {
       publish: { kept_generate: true },
     });
   }
+  // A plugin case attaches in its plugin study's scope: no core study, and a refusal is final.
+  const plugin = opts && opts.plugin && opts.plugin.plugin ? opts.plugin : null;
   const r = await fetch('/api/case/attach', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify({
       case_dir,
       project_id: currentProjectId() || undefined,
-      simulation_id: (opts && opts.simulation_id) || currentStudyId() || undefined,
+      ...(plugin
+        ? { plugin: plugin.plugin, plugin_study_id: plugin.study_id }
+        : { simulation_id: (opts && opts.simulation_id) || currentStudyId() || undefined }),
     }),
   });
   const j = await r.json();
   if (!r.ok) {
-    const claimedElsewhere = /not in this study/i.test(String((j && j.error) || ''));
+    const claimedElsewhere = !plugin && /not in this study/i.test(String((j && j.error) || ''));
     if (claimedElsewhere) {
       // Settings-copy can leave the saved frames in a sibling study folder
       // this run still points at. Bind locally so TIME/play can load them.
@@ -27784,6 +27889,8 @@ function catalogHasLiveSolve(exceptRunId) {
 
 function anyComputeJobRunning() {
   if (runCatalog && runCatalog.starting) return true;
+  // A plugin case or the server's boot check holds the one compute slot.
+  if (serverBusyIsPluginOrCheck(jobQueue.busy)) return true;
   if (typeof solveHandleStillLive === 'function' && solveHandleStillLive(liveSolveHandleOpts())) return true;
   if (liveCompute.kind === 'mesh' && (meshGenerateJobIsLive() || jobState.status === 'running')) return true;
   if (runCatalog && runCatalog.live_run_id && jobState.status === 'running' && jobState.mode === 'solve') {
@@ -27817,6 +27924,9 @@ function clearStaleSolveLive(runId) {
 
 /** Another job is actually running — not this start's own "Starting…" flag. */
 function computeJobBlocksStart(exceptRunId) {
+  // The server's slot is held by another job, any kind and project (or by this run's drain).
+  const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  if (serverBusyBlocksRun(jobQueue.busy, { runId: exceptRunId, projectId: pid })) return true;
   if (liveCompute.kind === 'mesh' && (meshGenerateJobIsLive() || jobState.status === 'running')) return true;
   if (liveCompute.kind === 'solve') {
     const liveId = liveSolveRunId();
@@ -27904,8 +28014,10 @@ function clearLeftoverSessionQueue(keys) {
 }
 
 /**
- * A queued job that could not start left the queue (server side). Say so once
- * per tab: a toast, and on the run's own panel the reason it gave.
+ * A queued job left the queue on the server: it could not start, it was taken
+ * off (its project or study went), or a plugin case was stopped by the host.
+ * Say so once per tab: a toast, and for a core run that could not start, the
+ * reason on its own panel.
  */
 function noticeQueueFailures(list, pid) {
   if (!Array.isArray(list) || !list.length) return;
@@ -27918,21 +28030,11 @@ function noticeQueueFailures(list, pid) {
     if (pid && String(f.project_id || '') !== pid) continue;
     // After a reload only recent ones: an old failure was already shown.
     if (firstLook && Date.now() - Number(f.at || 0) > 60000) continue;
-    const name = f.name || (f.kind === 'mesh' ? 'Mesh' : 'Run');
-    const msg = name + ' could not start from the queue: ' + (f.error || 'unknown reason') + '.';
-    const el = document.getElementById('job-finish-toast');
-    if (el) {
-      el.textContent = msg;
-      el.classList.add('is-fail');
-      el.hidden = false;
-      requestAnimationFrame(() => el.classList.add('is-on'));
-      if (finishToastTimer) clearTimeout(finishToastTimer);
-      finishToastTimer = setTimeout(() => {
-        el.classList.remove('is-on');
-        finishToastTimer = setTimeout(() => { el.hidden = true; }, 280);
-      }, 9000);
-    }
-    if (f.kind === 'solve' && f.run_id) {
+    // Worded by why it left: could not start, taken off the queue, or stopped.
+    const msg = queueFailureMessage(f);
+    // In turn behind any toast on screen: two notices of one poll are both seen.
+    finishToasts.push({ text: msg, fail: true, ms: 9000 });
+    if (queueFailureLinksRun(f)) {
       runCatalog.start_error = f.error || 'Could not start';
       runCatalog.start_error_run_id = f.run_id;
       runCatalog.start_error_study_id = f.simulation_id || null;
@@ -27960,7 +28062,9 @@ function applyServerQueue(j, opts) {
     try { adopted = releaseForeignMeshJob(jobQueue.busy); } catch (_) {}
   }
   let liveSolveRun = '';
-  if (j.live && j.live.kind && pid && queueRowProject(j.live) === pid) {
+  // Only a mesh, or a solve in phase running, is followed here: a solve starting
+  // or draining, a plugin case and the boot check have no progress to poll.
+  if (j.live && j.live.kind && pid && queueRowProject(j.live) === pid && liveSolveToFollow(j.live)) {
     if (j.live.kind === 'mesh') {
       try { adopted = adoptServerMeshJob(j.live); } catch (e) { console.warn('[CFD] follow server mesh', e); }
     }
@@ -29710,6 +29814,7 @@ function studyRunList() {
 }
 
 function findRunRecord(runId) {
+  if (isPluginResultsKey(runId) && pluginResultsMatch(pluginResultsRec, runId)) return pluginResultsRec;
   if (!runId) return null;
   const sid = typeof currentStudyId === 'function' ? currentStudyId() : '';
   const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
@@ -30484,7 +30589,7 @@ function runReadyStamp(rec, meshReady) {
 }
 
 function refreshRunReady(rec, meshReady) {
-  if (!rec) return;
+  if (!rec || isPluginResultsKey(rec.id)) return;
   const id = String(rec.id || rec.run_id || '');
   const stamp = runReadyStamp(rec, meshReady);
   if ((runReady.run_id === id && stamp === runReady.stamp) || stamp === runReady.pending) return;
@@ -30708,7 +30813,10 @@ function computeRunState() {
     const local = meshList().find((m) => String(m.id) === String(meshId));
     if (local && isGeneratedMeshReady(local)) meshReady = true;
   }
-  const computeBusy = typeof anyComputeJobRunning === 'function' && anyComputeJobRunning();
+  // Another job holds the server's slot (any kind or project, or this run's own drain).
+  const runProject = { runId: rec && (rec.id || rec.run_id), projectId: currentProjectId() };
+  const computeBusy =
+    (typeof anyComputeJobRunning === 'function' && anyComputeJobRunning()) || serverBusyBlocksRun(jobQueue.busy, runProject);
   const queuedHere = !!(rec && typeof jobQueueHas === 'function' && jobQueueHas('solve', rec.id || rec.run_id));
   const meshSoon = !!(meshId && meshWillBeReadySoon(meshId));
   refreshRunReady(rec, meshReady);
@@ -30740,12 +30848,20 @@ function computeRunState() {
   const stopping = !!(running && run && run.stop_requested);
   // A run on a seconds axis writes its current time step, else its iteration.
   const stepName = running && runXAxisIsSeconds(run) ? 'time step' : 'iteration';
+  // Stop also shows while this tab or the queue starts the run (it cancels the
+  // start), and while its solver still ends in WSL after the run ended.
+  const stopMore = stopShownFor({ ownStart: runCatalog.start, busy: jobQueue.busy, ...runProject });
   const stop = {
-    visible: running,
-    label: stopping ? 'Force stop' : 'Stop',
-    title: stopping
-      ? 'The solver is writing the current ' + stepName + '. Click again to kill it without saving.'
-      : 'Write the current ' + stepName + ' and stop. Results up to this point stay available.',
+    visible: running || !!stopMore,
+    label: stopping && !stopMore ? 'Force stop' : 'Stop',
+    title:
+      stopMore === 'cancel_start'
+        ? 'Cancel this start'
+        : stopMore === 'drain'
+          ? 'The solver still runs in WSL. Stop ends it.'
+          : stopping
+            ? 'The solver is writing the current ' + stepName + '. Click again to kill it without saving.'
+            : 'Write the current ' + stepName + ' and stop. Results up to this point stay available.',
   };
 
   // Reason, in priority order (first match wins).
@@ -31444,8 +31560,28 @@ async function startSolveClient() {
     runCatalog.start_error = msg || runCatalog.start_error;
     setRunHint(msg || '', fix);
   };
+  // This click's start record: Stop reads it to cancel this start. Before the
+  // Start POST the cancel flag alone stops it; once the POST is out, the server
+  // matches the cancel to this click by start_id.
+  const start = { id: newStartId(), run_id: runCatalog.selected_run_id, posted: false };
+  const dropStart = () => {
+    if (runCatalog.start === start) runCatalog.start = null;
+  };
+  const cancelled = () => !!runCatalog.cancel_start && String(runCatalog.cancel_start) === String(start.run_id || '');
+  // Not started, and not a failure: the run stays as it was.
+  const endWithoutStart = (msg, stopped) => {
+    runCatalog.starting = false;
+    dropStart();
+    runCatalog.cancel_start = null;
+    runCatalog.start_error_run_id = start.run_id || runCatalog.start_error_run_id;
+    showHint(msg);
+    syncJobStatusChrome();
+    syncSimControlPanel();
+    return { ok: false, stopped: !!stopped };
+  };
   const failStart = (msg, extra) => {
     runCatalog.starting = false;
+    dropStart();
     runCatalog.start_error = msg;
     runCatalog.start_error_run_id = runId || runCatalog.selected_run_id || (extra && extra.run_id) || null;
     runCatalog.start_error_study_id =
@@ -31472,6 +31608,8 @@ async function startSolveClient() {
     return extra || { ok: false, error: msg };
   };
   runCatalog.starting = true;
+  runCatalog.start = start;
+  runCatalog.cancel_start = null;
   runCatalog.start_error = 'Starting…';
   runCatalog.start_error_run_id = runCatalog.selected_run_id;
   runCatalog.start_error_study_id = typeof currentStudyId === 'function' ? currentStudyId() : null;
@@ -31481,9 +31619,11 @@ async function startSolveClient() {
   try {
     await persistSimControl({ skipSync: true });
   } catch (_) {}
+  if (cancelled()) return endWithoutStart('Stopped before it started.', true);
   if (!runCatalog.selected_run_id || !findRunRecord(runCatalog.selected_run_id)) {
     try { await refreshRunCatalog(); } catch (_) {}
   }
+  if (cancelled()) return endWithoutStart('Stopped before it started.', true);
   let runId = runCatalog.selected_run_id;
   if (!runId) {
     const draft = (runCatalog.runs || []).find((r) => r.status === 'draft' || r.status === 'failed' || r.status === 'stopped');
@@ -31493,6 +31633,7 @@ async function startSolveClient() {
   if (!runId) {
     return failStart('Create a run first, then start it.');
   }
+  start.run_id = runId;
   const rec = findRunRecord(runId);
   if (rec && rec.status === 'done') {
     return failStart('This run already finished. Create a new run to solve again.');
@@ -31510,6 +31651,7 @@ async function startSolveClient() {
     : computeJobBlocksStart(runId) || waitForMesh || sameRunStillSolving;
   if (shouldQueue) {
     runCatalog.starting = false;
+    dropStart();
     if (sameRunStillSolving) {
       if (rec && rec.stop_requested) {
         return failStart('This run is still stopping. Wait for it to finish, then Start again.');
@@ -31523,6 +31665,7 @@ async function startSolveClient() {
         { fix: blocking ? blocking.fix || null : { go: 'run-mesh' } }
       );
     }
+    if (cancelled()) return endWithoutStart('Stopped before it started.', true);
     const queued = await enqueueSolveJob(runId);
     if (!queued) {
       const again = runSetupIssue(rec, { mesh: false });
@@ -31540,6 +31683,9 @@ async function startSolveClient() {
     try { syncSimControlPanel(); } catch (_) {}
     return { ok: true, queued: true, run_id: runId };
   }
+  if (cancelled()) return endWithoutStart('Stopped before it started.', true);
+  // From here a Stop also tells the server, with this click's start_id.
+  start.posted = true;
   try {
     const posted = await postRunStart({
       run_id: runId,
@@ -31547,6 +31693,7 @@ async function startSolveClient() {
       endTime: runCatalog.endTime,
       writeInterval: runCatalog.writeInterval,
       scope: window.__CFD_RUN_SCOPE__ || undefined,
+      start_id: start.id,
       ...(typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {}),
       ...(rec && runRecIsTransient(rec) ? { transient: mergeTransient() } : {}),
     });
@@ -31558,8 +31705,10 @@ async function startSolveClient() {
       if (busy) {
         if (j && j.run_id) markLiveCompute('solve', { run_id: j.run_id });
         runCatalog.starting = false;
+        dropStart();
         runCatalog.start_error = null;
         runCatalog.start_error_run_id = null;
+        if (cancelled()) return endWithoutStart('Stopped before it started.', true);
         const queued = await enqueueSolveJob(runId);
         if (!queued) {
           // enqueueSolveJob said why (the run's own setup issue, or its mesh).
@@ -31571,9 +31720,20 @@ async function startSolveClient() {
         try { syncSimControlPanel(); } catch (_) {}
         return { ok: true, queued: true, run_id: runId };
       }
+      // Stopped before it started, or this run already solves: no failure.
+      const refusal = startRefusalKind(r.status, j);
+      if (refusal === 'stopped' || refusal === 'same_run') {
+        return endWithoutStart(
+          refusal === 'stopped' ? 'Stopped before it started.' : 'This run is already solving.',
+          refusal === 'stopped'
+        );
+      }
       return failStart((j && j.error) || 'Start failed', j);
     }
     runCatalog.starting = false;
+    dropStart();
+    // A cancel that came too late reached the server while the run ran: its Stop.
+    if (cancelled()) runCatalog.cancel_start = null;
     runCatalog.start_error = null;
     runCatalog.run = j;
     runCatalog.live_run_id = runId;
@@ -31605,6 +31765,63 @@ async function startSolveClient() {
 
 async function stopSolveClient() {
   const rec = selectedRunRecord() || runCatalog.run;
+  const stopRunId = rec && (rec.id || rec.run_id);
+  const action = stopActionFor({
+    ownStart: runCatalog.start,
+    busy: jobQueue.busy,
+    runId: stopRunId,
+    projectId: currentProjectId(),
+  });
+  if (action === 'cancel_own') {
+    // This tab's own start: the flag stops it at its next step. Once its POST is
+    // out, the server matches this cancel to that click by start_id.
+    const own = runCatalog.start;
+    runCatalog.cancel_start = stopRunId;
+    if (own && own.posted) {
+      try {
+        await postJson('/api/run/stop' + hashProjectQs(), {
+          project_id: currentProjectId() || undefined,
+          run_id: stopRunId,
+          scope: window.__CFD_RUN_SCOPE__ || undefined,
+          starting: true,
+          start_id: own.id,
+        });
+      } catch (e) {
+        console.warn('[CFD] sim stop', e);
+      }
+    }
+    syncSimControlPanel();
+    return;
+  }
+  if (action === 'cancel_server') {
+    // A start this tab did not make (the queue's): the server stops it there.
+    try {
+      const posted = await postJson('/api/run/stop' + hashProjectQs(), {
+        project_id: currentProjectId() || undefined,
+        run_id: stopRunId,
+        scope: window.__CFD_RUN_SCOPE__ || undefined,
+        starting: true,
+      });
+      // Only a start that ended before its run started says so. When the run had
+      // already started (the busy poll was old), this was its Stop: the panel
+      // reads the stopping run from the server.
+      const outcome = cancelStartOutcome(posted.response.ok, posted.json);
+      if (outcome === 'cancelled') {
+        runCatalog.start_error = 'Stopped before it started.';
+        runCatalog.start_error_run_id = stopRunId;
+        runCatalog.start_error_study_id = (rec && rec.simulation_id) || null;
+        setRunHint(runCatalog.start_error);
+      }
+      // The queue as the server has it now (the slot is free, the row gone; or the run solving).
+      const pid = currentProjectId();
+      if (pid) applyServerQueue(await fetchComputeQueue('/api/compute-queue?project_id=' + encodeURIComponent(pid)));
+      if (outcome === 'stopping') await pollSimRunStatus();
+      syncSimControlPanel();
+    } catch (e) {
+      console.warn('[CFD] sim stop', e);
+    }
+    return;
+  }
   const force = !!(rec && rec.stop_requested);
   try {
     const posted = await postJson('/api/run/stop' + hashProjectQs(), {

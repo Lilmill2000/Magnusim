@@ -64,7 +64,16 @@ SKIP_ANY_DEPTH = frozenset({"node_modules", "__pycache__", "site-packages", "tes
 SKIP_AT_ROOT = frozenset({"build", "dist"})
 
 # The core's test fixture plugins (under python/tests/fixtures/), held to the same rules.
-FIXTURE_PLUGIN_FOLDERS = ("plugins", "workspace-plugins", "env-plugins", "optional-plugins", "kit-plugins")
+FIXTURE_PLUGIN_FOLDERS = (
+    "plugins",
+    "workspace-plugins",
+    "env-plugins",
+    "optional-plugins",
+    "kit-plugins",
+    "foam-plugins",
+    "hook-plugins",
+    "flood-plugins",
+)
 
 SOURCES = (".py", ".pyw")
 BYTECODE = (".pyc", ".pyo")

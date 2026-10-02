@@ -800,6 +800,8 @@ export function dropMissingQueueJobs<T extends QueueDepItem>(
     if (cur && pid && pid !== cur) return true;
     if (row.kind === 'mesh') return !meshes.size || meshes.has(normId(row.mesh_id));
     if (row.kind === 'solve') return !runs.size || runs.has(normId(row.run_id));
+    // A plugin case is in no core catalog; the server drops it when its study goes.
+    if (row.kind === 'foam') return true;
     return false;
   });
 }
@@ -870,8 +872,16 @@ export function snapMatchesLiveMeshJob(opts?: {
   return true;
 }
 
+/**
+ * The job holding the server's one compute slot (`/api/compute-queue` `busy`).
+ * `kind` is mesh, solve, foam (a plugin case) or check (the boot check);
+ * `phase` is checking, starting, running or draining.
+ */
 export type ComputeBusySnap = {
   kind?: unknown;
+  phase?: unknown;
+  name?: unknown;
+  stopping?: unknown;
   mesh_id?: unknown;
   run_id?: unknown;
   project_id?: unknown;
@@ -882,7 +892,8 @@ export type ComputeBusySnap = {
 /**
  * What a queued row waits on, e.g. "Mesh 1 in Sample project". Names from this
  * project come from its own records (lookup); another project's job is named
- * from the server snapshot.
+ * from the server snapshot. A job asked to stop reads "(stopping)"; one that
+ * ends in WSL with no stop asked reads "(finishing)".
  */
 export function computeBusyLabel(
   busy: ComputeBusySnap | null | undefined,
@@ -892,16 +903,175 @@ export function computeBusyLabel(
     projectTitle?: (projectId: string) => string | null | undefined;
   },
 ): string {
-  if (!busy || (busy.kind !== 'mesh' && busy.kind !== 'solve')) return '';
+  if (!busy) return '';
+  if (busy.kind === 'check') return 'Checking for jobs left running';
+  if (busy.kind !== 'mesh' && busy.kind !== 'solve' && busy.kind !== 'foam') return '';
   const kind = String(busy.kind);
   const pid = normId(busy.project_id);
   const same = !!pid && pid === normId(opts && opts.currentProjectId);
-  const id = normId(kind === 'mesh' ? busy.mesh_id : busy.run_id);
-  const own = same && id && opts && opts.lookupName ? opts.lookupName(kind, id) : '';
-  const name = String(own || (kind === 'mesh' ? busy.mesh_name : '') || (kind === 'mesh' ? 'a mesh' : 'a run'));
-  if (same || !pid) return name;
-  const title = normId(busy.project_title) || normId(opts && opts.projectTitle ? opts.projectTitle(pid) : '');
-  return title ? `${name} in ${title}` : `${name} in another project`;
+  let name: string;
+  if (kind === 'foam') {
+    name = normId(busy.name) || 'a plugin case';
+  } else {
+    const id = normId(kind === 'mesh' ? busy.mesh_id : busy.run_id);
+    const own = same && id && opts && opts.lookupName ? opts.lookupName(kind, id) : '';
+    name = String(own || (kind === 'mesh' ? busy.mesh_name : '') || (kind === 'mesh' ? 'a mesh' : 'a run'));
+  }
+  let label = name;
+  if (!same && pid) {
+    const title = normId(busy.project_title) || normId(opts && opts.projectTitle ? opts.projectTitle(pid) : '');
+    label = title ? `${name} in ${title}` : `${name} in another project`;
+  }
+  if (busy.stopping === true) return `${label} (stopping)`;
+  if (busy.phase === 'draining') return `${label} (finishing)`;
+  return label;
+}
+
+/** The server's busy job is a plugin case or the boot check: nothing else may start. */
+export function serverBusyIsPluginOrCheck(busy: ComputeBusySnap | null | undefined): boolean {
+  return !!busy && (busy.kind === 'foam' || busy.kind === 'check');
+}
+
+type RunInProject = { runId?: unknown; projectId?: unknown };
+
+/** The phase of the server's busy solve when it is this run in this project, else ''. */
+export function serverSolvePhase(busy: ComputeBusySnap | null | undefined, opts?: RunInProject): string {
+  const runId = normId(opts && opts.runId);
+  if (!busy || busy.kind !== 'solve' || !runId) return '';
+  if (normId(busy.run_id) !== runId) return '';
+  if (normId(busy.project_id) !== normId(opts && opts.projectId)) return '';
+  return normId(busy.phase) || 'running';
+}
+
+/**
+ * Another job holds the server's compute slot, so this run's Start queues.
+ * Only this very run's own solve (starting or running) is not another job;
+ * its drain is: a new start must not overlap its WSL processes. (A Start while
+ * a cancelled start of this run still ends is refused `busy` by the server,
+ * so it is queued then.)
+ */
+export function serverBusyBlocksRun(busy: ComputeBusySnap | null | undefined, opts?: RunInProject): boolean {
+  if (!busy || !busy.kind) return false;
+  const phase = serverSolvePhase(busy, opts);
+  return !phase || phase === 'draining';
+}
+
+export type StartRefusal = 'busy' | 'stopped' | 'same_run' | 'fail';
+
+/** Why `/api/run/start` refused: busy queues, stopped and same_run are no failure. */
+export function startRefusalKind(status: unknown, body: unknown): StartRefusal {
+  const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  if (b.stopped === true || b.code === 'stopped') return 'stopped';
+  if (Number(status) !== 409) return 'fail';
+  if (b.code === 'same_run') return 'same_run';
+  if (b.code === 'busy' || /already in progress|already running/i.test(String(b.error || ''))) return 'busy';
+  return 'fail';
+}
+
+export type StopAction = 'cancel_own' | 'cancel_server' | 'stop';
+
+/**
+ * What the Run panel's Stop does. `ownStart` is this tab's start record
+ * (runCatalog.start): while it names this run, Stop cancels that start.
+ * A solve of this run the server is starting (the queue's) is cancelled
+ * there, unless that cancel was already asked. Anything else is the normal Stop.
+ */
+export function stopActionFor(opts?: {
+  ownStart?: { run_id?: unknown } | null;
+  busy?: ComputeBusySnap | null;
+  runId?: unknown;
+  projectId?: unknown;
+}): StopAction {
+  const runId = normId(opts && opts.runId);
+  if (!runId) return 'stop';
+  if (opts && opts.ownStart && normId(opts.ownStart.run_id) === runId) return 'cancel_own';
+  const busy = opts && opts.busy;
+  if (serverSolvePhase(busy, opts) === 'starting' && busy && busy.stopping !== true) return 'cancel_server';
+  return 'stop';
+}
+
+/**
+ * What a "Cancel this start" sent to the server did (`/api/run/stop` with
+ * `starting`): 'cancelled' when the start ended before its run started,
+ * 'stopping' when the run had already started and this Stop now stops it,
+ * else 'none' (nothing of this run was starting or running).
+ */
+export function cancelStartOutcome(ok: unknown, body: unknown): 'cancelled' | 'stopping' | 'none' {
+  const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  if (ok !== true || b.ok === false) return 'none';
+  if (b.cancelled === true) return 'cancelled';
+  if (b.stopping === true && b.pending !== true) return 'stopping';
+  return 'none';
+}
+
+/**
+ * Stop shows beyond a running run: 'cancel_start' while this tab or the
+ * queue starts it, 'drain' while its solver still ends in WSL with no stop
+ * asked yet; else null.
+ */
+export function stopShownFor(opts?: {
+  ownStart?: { run_id?: unknown } | null;
+  busy?: ComputeBusySnap | null;
+  runId?: unknown;
+  projectId?: unknown;
+}): 'cancel_start' | 'drain' | null {
+  const action = stopActionFor(opts);
+  if (action !== 'stop') return 'cancel_start';
+  const busy = opts && opts.busy;
+  if (serverSolvePhase(busy, opts) === 'draining' && busy && busy.stopping !== true) return 'drain';
+  return null;
+}
+
+/** The server matches a start's cancel by this id (`start_id`). */
+export const START_ID_RE = /^[a-z0-9-]{8,40}$/;
+
+/** A new id for one Start click: 's-' + time in base 36 + '-' + 6 random hex. */
+export function newStartId(now: number = Date.now(), hex?: string): string {
+  let tail = hex;
+  if (!tail) {
+    const bytes = new Uint8Array(3);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+    else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    tail = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return 's-' + Math.max(0, Math.floor(Number(now) || 0)).toString(36) + '-' + tail;
+}
+
+/**
+ * The tab follows the server's live job (progress poll, finish) only for a
+ * mesh, or a solve in phase running. A solve starting or draining, a plugin
+ * case and the boot check are never followed.
+ */
+export function liveSolveToFollow(live: ComputeBusySnap | null | undefined): boolean {
+  if (!live) return false;
+  if (live.kind === 'mesh') return true;
+  return live.kind === 'solve' && live.phase === 'running';
+}
+
+/** A job that left the queue, as `/api/compute-queue` lists it in `failed`. */
+export type QueueLeaveNotice = {
+  kind?: unknown;
+  name?: unknown;
+  error?: unknown;
+  run_id?: unknown;
+  reason?: unknown;
+};
+
+/** The toast for a job that left the queue, by why it left (failed, dropped or stopped). */
+export function queueFailureMessage(f: QueueLeaveNotice | null | undefined): string {
+  const kind = String((f && f.kind) || '');
+  const name = normId(f && f.name) || (kind === 'mesh' ? 'Mesh' : kind === 'foam' ? 'A plugin case' : 'Run');
+  const error = (normId(f && f.error) || 'unknown reason').replace(/\.$/, '');
+  const reason = normId(f && f.reason) || 'failed';
+  if (reason === 'dropped') return `${name} was taken off the queue: ${error}.`;
+  if (reason === 'stopped') return `${name} was stopped: ${error}.`;
+  return `${name} could not start from the queue: ${error}.`;
+}
+
+/** Only a core run that could not start also shows the reason on its Run panel. */
+export function queueFailureLinksRun(f: QueueLeaveNotice | null | undefined): boolean {
+  if (!f || f.kind !== 'solve' || !normId(f.run_id)) return false;
+  return (normId(f.reason) || 'failed') === 'failed';
 }
 
 /** Keep Generate vs Add to queue stable while this mesh is the live job. */

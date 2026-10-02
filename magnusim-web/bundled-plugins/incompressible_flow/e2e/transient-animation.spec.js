@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NO_WSL } from '../../../e2e/toolchain.js';
+import { waitSlotFree } from '../../../e2e/support/compute-slot.js';
 
 // A transient run's Animation steps through its saved time steps: opening it keeps the
 // parts coloring (no particle trace, unlike a steady run), Play moves the field frame by
@@ -219,5 +220,6 @@ test('transient animation: time steps by default, plays while another solve runs
   await openRun(run2);
   await runPanel.locator('[data-run-stop="1"]').click();
   await runTo(run2, /^stopped$/, 300_000);
+  await waitSlotFree(request);
   stage('run 2 stopped');
 });

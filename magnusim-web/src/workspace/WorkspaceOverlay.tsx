@@ -20,6 +20,7 @@ import {
   workspaceDirty,
   type GuardedWorkspace,
 } from './leaveGuard';
+import { openPluginResults } from './pluginResults';
 import type { WorkspaceRoute } from './route';
 
 // When the host gives the keyboard to the frame (it lives with the leave guard, which needs it too).
@@ -308,6 +309,10 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
         focusFrame();
       }
     };
+    const appConfirm = (opts: { title: string; copy: string; yes: string }) =>
+      pageDialog((turn) =>
+        window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ ...opts, ...turn }) : Promise.resolve(window.confirm(opts.copy || opts.title)),
+      );
     return {
       back: () => leaveWorkspaceTo(projectHash, 'frame-back'),
       setDirty: (dirty, message) => {
@@ -320,10 +325,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       studyChanged: (next) => setStudy(next),
       studyGone,
       toast: (text, kind) => setToast({ id: ++toastSerial.current, text, kind }),
-      confirm: (opts) =>
-        pageDialog((turn) =>
-          window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ ...opts, ...turn }) : Promise.resolve(window.confirm(opts.copy || opts.title)),
-        ),
+      confirm: appConfirm,
       prompt: (opts) =>
         pageDialog((turn) =>
           window.__CFD_PROMPT_NAME__
@@ -332,6 +334,23 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
         ),
       units: () => (prefersImperial() ? 'imperial' : 'metric'),
       log: (message, detail) => console.warn(`[workspace] ${message}`, detail ?? ''),
+      // A case's results in the project's 3D view: asks before replacing results on screen, then leaves.
+      openResults: (caseRel) =>
+        openPluginResults(
+          {
+            projectId: route.projectId,
+            plugin: route.plugin,
+            pluginName: named.current.name,
+            studyId: route.studyId,
+            studyTitle: named.current.title,
+          },
+          caseRel,
+          {
+            ask: appConfirm,
+            leave: (hash) => leaveWorkspaceTo(hash, 'results'),
+            resultsShown: () => window.__CFD_RESULTS_VIEW__ === true,
+          },
+        ),
     };
   }, [route.projectId]);
 

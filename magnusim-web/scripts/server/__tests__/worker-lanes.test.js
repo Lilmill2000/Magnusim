@@ -73,6 +73,11 @@ describe('worker lanes', () => {
     }
   });
 
+  it('a plugin OpenFOAM case check and the solve hook names run on the plugin lane', () => {
+    for (const m of ['foam.check_case', 'solve_hooks.listening']) assert.equal(isPluginLaneMethod(m), true, m);
+    for (const m of ['foamcheck', 'solve.start', 'runs.upsert']) assert.equal(isPluginLaneMethod(m), false, m);
+  });
+
   it('plugin study and data saves do not delay project.tree', async () => {
     for (const m of ['plugin_studies.update', 'plugin_studies.rename', 'plugin_studies.create', 'plugin_studies.get', 'plugin_data.write', 'plugin_data.read']) {
       assert.equal(isPluginLaneMethod(m), true, m);

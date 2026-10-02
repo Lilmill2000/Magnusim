@@ -38,6 +38,7 @@ import { findGeometry, findStudy, walkGeometries } from './project-layout.js';
 import { getActiveSimulation } from './w17-sim-catalog.js';
 import { scheduleComputeQueueKick } from './server/compute-queue.ts';
 import { polyMeshComplete } from './poly-mesh.js';
+import { computeSlotHolder, claimComputeSlot, releaseComputeSlot, slotRefusal } from './compute-slot.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -1405,7 +1406,26 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   };
 }
 
-export function startMeshGenerate({ settings, projectId, onUpdate, meshId }) {
+export function startMeshGenerate(args) {
+  const held = computeSlotHolder();
+  if (held) return slotRefusal(held);
+  const before = liveJob;
+  try {
+    return startMeshGenerateBody(args);
+  } finally {
+    const job = /** @type {any} */ (liveJob);
+    if (job && job !== before && job.child && !job.slot_token) {
+      const c = claimComputeSlot('mesh', {
+        project_id: job.project_id || null, mesh_id: job.mesh_id, mesh_name: job.mesh_name,
+        generate_id: job.generate_id, path_kind: job.path_kind, started_at: job.started_at,
+        name: job.mesh_name || 'Mesh',
+      }, { phase: 'running' });
+      if (c.ok) { job.slot_token = c.token; job.child.once('close', () => releaseComputeSlot(c.token)); }
+    }
+  }
+}
+
+function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
   if (isLiveMeshJobHeld()) {
     return {
       ok: false,

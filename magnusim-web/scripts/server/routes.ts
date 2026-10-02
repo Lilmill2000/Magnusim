@@ -18,8 +18,15 @@ import {
 } from './plugin-services.ts';
 import { RpcError, WorkerUnavailableError, type WorkerClient } from './worker.ts';
 import { DEV_SHEET_FILES, devSheetFile, devSheetsOn, pluginSdkFile, type SdkVariant } from './plugin-sdk.ts';
-import { PluginFiles, registerPluginFileRoutes } from './plugin-files.ts';
+import { CASE_BUSY, PluginFileError, PluginFiles, caseBusy, registerPluginFileRoutes } from './plugin-files.ts';
 import { FRAME_ASSET_HEADERS, frameCsp, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
+import { registerPluginCaseRoutes } from './plugin-cases.ts';
+import { dropFoamJobs, relabelFoamJobs } from './compute-queue.ts';
+import { activeCaseKeys, bumpPluginEpoch, stopFoamCasesFor, studyHasActiveCase } from '../foam-runner.js';
+import { listFoamRecords, updateFoamRecord } from '../foam-store.js';
+import { pluginLoaded } from '../registry-defaults.js';
+import { sameProjectFolder } from '../compute-slot.js';
+import { projectDir } from '../w17-sim-catalog.js';
 
 export interface RouteDeps {
   worker: WorkerClient;
@@ -106,6 +113,40 @@ async function workerJson(
   }
 }
 
+/** workerJson's answer, returned before it is sent (the caller acts on an ok first). */
+async function workerAnswer(
+  deps: RouteDeps,
+  method: string,
+  params: unknown,
+  timeoutMs?: number,
+): Promise<{ ok: boolean; status: number; body: unknown }> {
+  try {
+    const result = await deps.worker.call(method, params, timeoutMs);
+    const failed = !!result && typeof result === 'object' && (result as { ok?: unknown }).ok === false;
+    return { ok: !failed, status: 200, body: result };
+  } catch (err) {
+    const { status, body } = rpcStatus(err);
+    return { ok: false, status, body };
+  }
+}
+
+/** The project's folder holds its project.json (an id that is not a safe folder name is no project). */
+function projectExists(id: string): boolean {
+  try {
+    return statSync(resolve(String(projectDir(id)), 'project.json')).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** A plugin's name for the host's notices: the live registry's, else a case record's, else its key. */
+function pluginNameOf(key: string): string {
+  const row = pluginLoaded(key) as { name?: string } | null;
+  if (row && row.name) return String(row.name);
+  const rec = (listFoamRecords({ kind: 'foam' }) as Array<{ plugin?: string; plugin_name?: string }>).find((r) => r.plugin === key && r.plugin_name);
+  return rec && rec.plugin_name ? String(rec.plugin_name) : key;
+}
+
 /** Plugin folders: webRoot/plugins, or MAGNUSIM_PLUGINS_DIR (the e2e tests point it at their fixture plugins). */
 export function pluginsRootFor(webRoot: string): string {
   const override = String(process.env.MAGNUSIM_PLUGINS_DIR || '').trim();
@@ -166,7 +207,8 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     });
   }
   // A plugin's own files in a project; its open uploads stop whenever its service does.
-  const pluginFiles = new PluginFiles({ plugins: listedPlugins });
+  // A running OpenFOAM case's folder is busy for writes and deletes.
+  const pluginFiles = new PluginFiles({ plugins: listedPlugins, activeCases: (pid, key) => activeCaseKeys(pid, key) });
   // A rebuilt environment replaces the running service (and its cached state).
   const envBuilt = (key: string) => {
     services.reset(key, 'restarted on its new environment');
@@ -282,6 +324,18 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       services.resetAll('stopped for a plugin reload');
       void pluginFiles.abortAll();
       listedCache = null;
+    }
+    // Only the Reload button stops plugin cases (Enable, Disable and an environment
+    // install reload the registry too, and stop nothing here).
+    if (method === 'registry.reload' && raw.stop_plugin_cases === true) {
+      bumpPluginEpoch('*');
+      const answer = await workerAnswer(deps, method, {});
+      if (answer.ok) {
+        bumpPluginEpoch('*');
+        stopFoamCasesFor({}, 'reload', 'plugins were reloaded');
+      }
+      ctx.sendJson(answer.status, answer.body);
+      return;
     }
     if (method === 'bc.menu' || method === 'registry.reload') {
       return workerJson(deps, ctx, method, {});
@@ -481,19 +535,60 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       ctx.sendJson(status, body);
     }
   });
-  for (const action of ['create', 'rename', 'delete'] as const) {
-    router.post(`/api/plugin-studies/${action}`, async (ctx) => {
-      const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
-      const pick = (k: string) => (body[k] == null ? undefined : body[k]);
-      return workerJson(deps, ctx, `plugin_studies.${action}`, {
-        project_id: String(pick('project_id') || ''),
-        plugin: String(pick('plugin') || ''),
-        ...(action === 'create' ? { kind: String(pick('kind') || ''), title: String(pick('title') || '') } : {}),
-        ...(action !== 'create' ? { study_id: String(pick('study_id') || '') } : {}),
-        ...(action === 'rename' ? { title: String(pick('title') || ''), rev: pick('rev') } : {}),
-      });
+  router.post('/api/plugin-studies/create', async (ctx) => {
+    const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
+    const pick = (k: string) => (body[k] == null ? undefined : body[k]);
+    return workerJson(deps, ctx, 'plugin_studies.create', {
+      project_id: String(pick('project_id') || ''),
+      plugin: String(pick('plugin') || ''),
+      kind: String(pick('kind') || ''),
+      title: String(pick('title') || ''),
     });
-  }
+  });
+  router.post('/api/plugin-studies/rename', async (ctx) => {
+    const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
+    const pick = (k: string) => (body[k] == null ? undefined : body[k]);
+    const params = {
+      project_id: String(pick('project_id') || ''),
+      plugin: String(pick('plugin') || ''),
+      study_id: String(pick('study_id') || ''),
+      title: String(pick('title') || ''),
+      rev: pick('rev'),
+    };
+    const answer = await workerAnswer(deps, 'plugin_studies.rename', params);
+    if (answer.ok) {
+      // Its queued cases and their records carry the study's new title.
+      const study = (answer.body as { study?: { title?: string } } | null)?.study;
+      const title = String((study && study.title) || params.title);
+      relabelFoamJobs(params.project_id, params.plugin, params.study_id, title);
+      for (const rec of listFoamRecords({ kind: 'foam' }) as Array<{ id: string; plugin?: string; study_id?: string; project_id?: string }>) {
+        if (rec.plugin === params.plugin && rec.study_id === params.study_id && sameProjectFolder(rec.project_id, params.project_id)) {
+          updateFoamRecord(rec.id, { study_title: title });
+        }
+      }
+    }
+    ctx.sendJson(answer.status, answer.body);
+  });
+  router.post('/api/plugin-studies/delete', async (ctx) => {
+    const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
+    const pick = (k: string) => (body[k] == null ? undefined : body[k]);
+    const params = {
+      project_id: String(pick('project_id') || ''),
+      plugin: String(pick('plugin') || ''),
+      study_id: String(pick('study_id') || ''),
+    };
+    // A study id is unique only in its project: nothing is checked or dropped without one.
+    if (!params.project_id) return ctx.sendJson(400, { ok: false, code: 'bad_request', error: 'project_id required' });
+    if (!projectExists(params.project_id)) return ctx.sendJson(404, { ok: false, code: 'not_found', error: 'project not found' });
+    // Synchronous: a running case refuses; queued cases are dropped at once.
+    if (studyHasActiveCase(params.project_id, params.plugin, params.study_id)) {
+      return ctx.sendJson(409, { ok: false, code: 'busy', error: 'A case of this study is running. Stop it before deleting the study.' });
+    }
+    if (params.plugin && params.study_id) {
+      dropFoamJobs({ project_id: params.project_id, plugin: params.plugin, study_id: params.study_id }, 'The study was deleted');
+    }
+    return workerJson(deps, ctx, 'plugin_studies.delete', params);
+  });
   // A study's whole record, and saving its own fields (a workspace's bridge uses these).
   router.get('/api/plugin-studies/get', async (ctx) =>
     workerJson(deps, ctx, 'plugin_studies.get', {
@@ -525,6 +620,19 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
         return ctx.sendJson(503, { ok: false, code: 'unavailable', error: 'the plugin list is not available right now' });
       }
       if (!row || row.status !== 'enabled') return ctx.sendJson(404, { ok: false, code: 'plugin_off', error: 'this plugin is not on' });
+      if (action === 'write') {
+        // It goes straight to Python: a running case's folder is checked here, by the names on disk.
+        const keys = activeCaseKeys(String(body.project_id || ''), plugin) as string[];
+        if (keys.length) {
+          try {
+            const parts = await pluginFiles.realParts(String(body.project_id || ''), plugin, String(body.rel || ''), 'write');
+            if (caseBusy(parts, keys, 'write')) return ctx.sendJson(409, { ok: false, code: 'busy', error: CASE_BUSY });
+          } catch (err) {
+            if (err instanceof PluginFileError) return ctx.sendJson(err.status, { ok: false, code: err.code, error: err.message });
+            throw err;
+          }
+        }
+      }
       return workerJson(deps, ctx, `plugin_data.${action}`, {
         project_id: String(body.project_id || ''),
         plugin,
@@ -535,6 +643,8 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   }
   // Its binary files in the same folder (/api/plugin-files/*): streamed here, never through the worker.
   registerPluginFileRoutes(router, pluginFiles);
+  // Its OpenFOAM cases on the compute slot (/api/plugin-cases/*).
+  registerPluginCaseRoutes(router, { worker: deps.worker, files: pluginFiles });
 
   router.post('/api/plugins/:key/enable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
@@ -547,10 +657,19 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   router.post('/api/plugins/:key/disable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
     if (!validPluginKey(String(ctx.params.key || ''))) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
-    services.reset(String(ctx.params.key || ''), 'stopped: the plugin was turned off');
-    void pluginFiles.abortPlugin(String(ctx.params.key || ''));
+    const key = String(ctx.params.key || '');
+    const name = pluginNameOf(key);
+    services.reset(key, 'stopped: the plugin was turned off');
+    void pluginFiles.abortPlugin(key);
     listedCache = null;
-    return workerJson(deps, ctx, 'plugins.disable', { key: ctx.params.key });
+    // Before and after the worker: a submit that read the epoch in between still fails its next check.
+    bumpPluginEpoch(key);
+    const answer = await workerAnswer(deps, 'plugins.disable', { key: ctx.params.key });
+    if (answer.ok) {
+      bumpPluginEpoch(key);
+      stopFoamCasesFor({ plugin: key }, 'plugin_off', `${name} was turned off`);
+    }
+    ctx.sendJson(answer.status, answer.body);
   });
 
   // A plugin's own environment ([python]): its state, and building or removing it.
@@ -586,10 +705,17 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
     const key = String(ctx.params.key || '');
     if (!validPluginKey(key)) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
+    const name = pluginNameOf(key);
     services.reset(key, 'stopped: its environment was removed');
     void pluginFiles.abortPlugin(key);
     listedCache = null;
-    return workerJson(deps, ctx, 'plugins.env_remove', { key });
+    bumpPluginEpoch(key);
+    const answer = await workerAnswer(deps, 'plugins.env_remove', { key });
+    if (answer.ok) {
+      bumpPluginEpoch(key);
+      stopFoamCasesFor({ plugin: key }, 'env_removed', `${name}'s environment was removed`);
+    }
+    ctx.sendJson(answer.status, answer.body);
   });
 
   const pluginDispatch = async (ctx: RequestContext) => {

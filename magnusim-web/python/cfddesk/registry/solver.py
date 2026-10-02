@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
@@ -11,6 +12,8 @@ from cfddesk.registry.requirements import Requirement
 
 if TYPE_CHECKING:
     from cfddesk.registry.discovery import RegistryHub
+
+log = logging.getLogger(__name__)
 
 TimeDependency = Literal["steady", "transient"]
 ParallelMode = Literal["mpirun", "none"]
@@ -33,8 +36,46 @@ class SolverApp:
     extra_lines: Callable[[str], dict[str, Any] | None] | None = None
     write_fv_solution: Callable[..., None] | None = None
     write_control_dict: Callable[..., None] | None = None
+    # A solve JobKind (one whose tool is solve.sh). Anything else is ignored with
+    # a note in Settings > Plugins (script_template_notes).
     script_template: str = "solve"
     requires: tuple[Requirement, ...] = ()
+
+
+def _solve_job(hub: RegistryHub, key: str) -> bool:
+    """Whether ``key`` names a solve job: a JobKind whose tool is solve.sh (the builtin ``solve``)."""
+    from cfddesk.wsl.solve_run import solve_template_path
+
+    jobs = hub.registry("job")
+    if not key or key not in jobs.keys():
+        return False
+    spec = jobs.get(key)
+    return jobs.owner(key) == "builtin" and str(getattr(spec, "tool", "")) == solve_template_path().name
+
+
+# (plugin, solver key, value) already logged.
+_TEMPLATE_SAID: set[tuple[str, str, str]] = set()
+
+
+def script_template_notes(hub: RegistryHub, plugin_key: str) -> list[str]:
+    """A note for each SolverApp of ``plugin_key`` whose ``script_template`` is not a
+    solve job. The value is ignored (every solve runs solve.sh); the plugin still loads."""
+    notes: list[str] = []
+    reg = hub.registry("solver")
+    for key in reg.keys():
+        if reg.owner(key) != plugin_key:
+            continue
+        app = reg.get(key)
+        value = str(getattr(app, "script_template", "") or "")
+        if _solve_job(hub, value):
+            continue
+        label = str(getattr(app, "label", "") or key)
+        notes.append(f'Solver {label}: script_template "{value}" is not a solve job, so it is ignored. Solves use solve.sh.')
+        said = (str(plugin_key), str(key), value)
+        if said not in _TEMPLATE_SAID:
+            _TEMPLATE_SAID.add(said)
+            log.warning("plugin %s solver %s: script_template %r is not a solve job; ignored", plugin_key, key, value)
+    return notes
 
 
 def validate_analysis_solver_refs(hub: RegistryHub) -> None:

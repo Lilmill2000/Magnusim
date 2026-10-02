@@ -11,7 +11,7 @@ import { projectDir } from '../w17-sim-catalog.js';
  * @param {Record<string, unknown>} params
  * @param {{ id: string }} job
  */
-function pluginJobEnv(spec, params, job) {
+export function pluginJobEnv(spec, params, job) {
   const pid = String(params.project_id || params.projectId || '');
   let dir;
   try {
@@ -33,6 +33,25 @@ function pluginJobEnv(spec, params, job) {
 }
 
 /**
+ * A JobKind's command-line arguments from its call's params: `--<name> <value>`
+ * for each of its args_from_params that is set (the runner's prepare step builds
+ * them the same way).
+ * @param {{ args_from_params?: string[] }} spec
+ * @param {Record<string, unknown>} params
+ * @returns {string[]}
+ */
+export function jobArgsFromParams(spec, params) {
+  const args = [];
+  for (const name of spec.args_from_params || []) {
+    const value = params[name];
+    if (value !== undefined && value !== null && value !== '') {
+      args.push('--' + String(name).replace(/_/g, '-'), String(value));
+    }
+  }
+  return args;
+}
+
+/**
  * @param {import('./jobs.ts').JobManager} jobs
  * @param {{ tool?: string, tool_path?: string, args_from_params?: string[], plugin?: string, python?: string | null, cwd?: string | null, python_error?: string }} spec
  * @param {Record<string, unknown>} params
@@ -51,13 +70,7 @@ export function startRegisteredJob(jobs, spec, params, job) {
     jobs.finish(job.id, 'failed', undefined, `plugin job tool ${String(spec.tool || '')} is not in the plugin folder`);
     return;
   }
-  const args = [];
-  for (const name of spec.args_from_params || []) {
-    const value = params[name];
-    if (value !== undefined && value !== null && value !== '') {
-      args.push('--' + String(name).replace(/_/g, '-'), String(value));
-    }
-  }
+  const args = jobArgsFromParams(spec, params);
   // A plugin job on its plugin's environment runs there, in the plugin's folder.
   jobs.spawnPython(job.id, script, args, {
     python: spec.python || null,

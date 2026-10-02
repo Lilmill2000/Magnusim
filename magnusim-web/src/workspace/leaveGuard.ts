@@ -15,7 +15,8 @@
 import { cleanDirtyMessage } from './bridge';
 import { parseWorkspaceHash, type WorkspaceRoute } from './route';
 
-export type LeaveReason = 'back' | 'frame-back' | 'history' | 'project' | 'home' | 'plugin-off';
+/** Why the user leaves; 'results' (the page opens a case's results in 3D) asks the 'back' question. */
+export type LeaveReason = 'back' | 'frame-back' | 'history' | 'project' | 'home' | 'plugin-off' | 'results';
 
 /** The open workspace, as the guard needs it. */
 export interface GuardedWorkspace {

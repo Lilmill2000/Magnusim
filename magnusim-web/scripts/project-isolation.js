@@ -3,6 +3,7 @@
  * A case_dir may only be served for the project folder it lives under.
  * Home lists every project; workbench APIs must not leak another project's mesh.
  */
+import { realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
@@ -63,11 +64,59 @@ export function studyRunClaimsCaseDir(caseDir, projectId, simId, projectsRoot = 
   return false;
 }
 
-export function caseDirAllowedForAttach(caseDir, projectId, simId) {
+/**
+ * With a plugin study ({ plugin, studyId }), only that study's own folder counts;
+ * otherwise the core study rules.
+ * @param {string} caseDir
+ * @param {string} projectId
+ * @param {string} simId
+ * @param {{ plugin: string, studyId: string } | null} [pluginStudy]
+ */
+export function caseDirAllowedForAttach(caseDir, projectId, simId, pluginStudy) {
+  if (pluginStudy) return caseDirBelongsToPluginStudy(caseDir, projectId, pluginStudy.plugin, pluginStudy.studyId);
   return (
     caseDirBelongsToStudy(caseDir, projectId, simId) ||
     studyRunClaimsCaseDir(caseDir, projectId, simId)
   );
+}
+
+const PLUGIN_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
+const PLUGIN_STUDY_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** @param {string} p */
+function nativeReal(p) {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The case folder lies inside a plugin study's own folder
+ * (<project>/plugins/<key>/studies/<sid>/, which has its study.json), by real path:
+ * a link or junction out of it does not count.
+ * @param {string} caseDir
+ * @param {string} projectId
+ * @param {string} plugin
+ * @param {string} studyId
+ */
+export function caseDirBelongsToPluginStudy(caseDir, projectId, plugin, studyId) {
+  if (!caseDirBelongsToProject(caseDir, projectId)) return false;
+  const key = String(plugin || '');
+  const sid = String(studyId || '');
+  if (!PLUGIN_KEY_RE.test(key) || /[. ]$/.test(key) || !PLUGIN_STUDY_ID_RE.test(sid)) return false;
+  const studyDir = join(PROJECTS_ROOT, basename(String(projectId)), 'plugins', key, 'studies', sid);
+  try {
+    if (!statSync(join(studyDir, 'study.json')).isFile()) return false;
+  } catch {
+    return false;
+  }
+  const realStudy = nativeReal(studyDir);
+  const realCase = nativeReal(String(caseDir));
+  if (!realStudy || !realCase) return false;
+  const rel = relative(realStudy, realCase);
+  return Boolean(rel) && !isAbsolute(rel) && rel !== '..' && !rel.startsWith('..' + sep);
 }
 
 /**

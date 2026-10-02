@@ -6,9 +6,9 @@ import re
 import shlex
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from magnusim_sdk.progress import ProgressParser as GenericParser
 from magnusim_sdk.progress import parse_extra_line, parse_residual_line  # noqa: F401
@@ -25,6 +25,15 @@ WRITE_NOW_SED = r"s/^[[:space:]]*stopAt.*/stopAt          writeNow;/"
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 _SOLVE_SH = _TEMPLATES / "solve.sh"
+
+
+class LineOut(Protocol):
+    """Where events go when not to stdout (a text stream, or the solve hooks' event stream)."""
+
+    def write(self, text: str, /) -> int: ...
+
+    def flush(self) -> None: ...
+
 
 # solve.sh stage that starts each timed phase; any later stage/result ends it.
 
@@ -176,13 +185,43 @@ def iter_events(proc: subprocess.Popen, *, parser: Any = None) -> Iterator[Event
         yield from progress.feed(line.rstrip("\n"))
 
 
-def events_from_lines(lines: list[str] | Iterator[str]) -> list[Event]:
-    """Parse a captured log (unit tests / dry-run)."""
+def events_from_lines(
+    lines: list[str] | Iterator[str],
+    *,
+    on_line: Callable[[str, list[Event]], None] | None = None,
+    out: LineOut | None = None,
+) -> list[Event]:
+    """Parse a captured log (unit tests / dry-run).
+
+    ``on_line(line, events)`` sees each line and what it parsed to (solve hooks);
+    with ``out`` each event is also written there as a ``MAGNUSIM_EVENT`` line.
+    """
     progress = GenericParser()
-    out: list[Event] = []
+    found: list[Event] = []
     for line in lines:
-        out.extend(progress.feed(line.rstrip("\n")))
-    return out
+        evs = progress.feed(line.rstrip("\n"))
+        found.extend(evs)
+        _tell_line(on_line, line, evs)
+        if out is not None:
+            _write_events(out, evs)
+    return found
+
+
+def _tell_line(on_line: Callable[[str, list[Event]], None] | None, line: str, evs: list[Event]) -> None:
+    """Hand one line to ``on_line``; whatever it raises never reaches the solve."""
+    if on_line is None:
+        return
+    try:
+        on_line(line.rstrip("\n"), evs)
+    except Exception:
+        pass
+
+
+def _write_events(out: LineOut, evs: list[Event]) -> None:
+    for ev in evs:
+        out.write(EVENT_PREFIX + ev.to_json() + "\n")
+    if evs:
+        out.flush()
 
 
 def solve_is_live(wsl_case_id: str, process_names: tuple[str, ...] | None = None) -> bool:
@@ -259,15 +298,34 @@ def kill_solve(
     )
 
 
-def stream_events_to_stdout(proc: subprocess.Popen, parser: Any = None) -> tuple[int, Any]:
+def stream_events_to_stdout(
+    proc: subprocess.Popen,
+    parser: Any = None,
+    *,
+    on_line: Callable[[str, list[Event]], None] | None = None,
+    out: LineOut | None = None,
+) -> tuple[int, Any]:
     """Relay events as ``MAGNUSIM_EVENT`` JSONL; return (exit_code, parser).
 
     ``parser`` is the analysis's log parser (its launch spec names it);
-    :class:`GenericParser` when none is given.
+    :class:`GenericParser` when none is given. ``on_line(line, events)`` sees
+    every line (solve hooks queue it and return at once); ``out`` is where the
+    events go (default stdout).
     """
     parser = parser if parser is not None else GenericParser()
-    for ev in iter_events(proc, parser=parser):
-        # Re-emit with prefix so Node parse_line works uniformly.
-        print(EVENT_PREFIX + ev.to_json(), flush=True)
+    if on_line is None and out is None:
+        for ev in iter_events(proc, parser=parser):
+            # Re-emit with prefix so Node parse_line works uniformly.
+            print(EVENT_PREFIX + ev.to_json(), flush=True)
+    else:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            evs = parser.feed(line.rstrip("\n"))
+            _tell_line(on_line, line, evs)
+            if out is None:
+                for ev in evs:
+                    print(EVENT_PREFIX + ev.to_json(), flush=True)
+            else:
+                _write_events(out, evs)
     rc = proc.wait()
     return int(rc if rc is not None else -1), parser

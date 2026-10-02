@@ -27,7 +27,7 @@ import { probeWslMpiSlots } from './hardware-profile.js';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, liveStudyRows } from './w17-sim-catalog.js';
 import { TRANSIENT_LARGE_MESH_CELLS, simIsTransient } from './w30-transient.js';
-import { createJobLogger } from './log.js';
+import { createJobLogger, MAX_LOG_BYTES } from './log.js';
 import { envGet } from './env-compat.js';
 import { spawnJob } from './job-runner.js';
 import { commitRpc, commitRpcSync } from './py-json.js';
@@ -53,6 +53,22 @@ import {
 } from './registry-defaults.js';
 import { removeComputeJob, scheduleComputeQueueKick } from './server/compute-queue.ts';
 import { polyMeshComplete } from './poly-mesh.js';
+import {
+  claimComputeSlot,
+  computeSlotHolder,
+  noteStartCancel,
+  patchComputeSlot,
+  releaseComputeSlot,
+  runClaimed,
+  sameProjectFolder,
+  slotRefusal,
+  solveClaimDecision,
+  takeStartCancel,
+} from './compute-slot.js';
+import { LOST_TEXT, killWslCase, watchWslCaseGone } from './wsl-case-watch.js';
+import { pushComputeNotice } from './server/compute-queue.ts';
+import { coreOwner, hookArgs, stopHookArgs } from './solve-hooks.js';
+import { renameSync, unlinkSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -106,11 +122,12 @@ function detectPhysicalCores() {
 }
 detectPhysicalCores();
 
-/** @type {null | { child: import('node:child_process').ChildProcess, run_id: string, wsl_case: string, project_id: string, progress: ReturnType<typeof newProgressState>, wsl_case_path?: string, jobLog?: object, protocol?: string, baseRunning?: Record<string, any>, stop_requested?: boolean, stop_requested_at?: number, stop_timer?: ReturnType<typeof setTimeout> }} */
+/** @type {null | { child: import('node:child_process').ChildProcess, run_id: string, wsl_case: string, project_id: string, progress: ReturnType<typeof newProgressState>, wsl_case_path?: string, jobLog?: object, protocol?: string, baseRunning?: Record<string, any>, stop_requested?: boolean, stop_requested_at?: number, stop_timer?: ReturnType<typeof setTimeout>, slot_token?: string, kill_sent?: boolean }} */
 let liveRun = null;
 
-function newProgressState() {
-  return { buf: '', series: [], stage: 'starting', current: null, pending: null, solve_started_at: null, saved_times: [] };
+export function newProgressState() {
+  // thinned, cur_at, step_at: the steps a job log left out, the current row's step number, each row's (once steps were left out).
+  return { buf: '', series: [], stage: 'starting', current: null, pending: null, solve_started_at: null, saved_times: [], thinned: 0, cur_at: 0, step_at: null };
 }
 
 const LATE_SOLVE_STAGES = new Set(['reconstruct', 'stopping']);
@@ -188,7 +205,16 @@ function applyJobEvent(state, ev) {
   if (kind === 'progress') {
     enterSolveStage(state);
     if (state.stage !== 'solve') return;
-    if (state.current && Number.isFinite(state.current.t)) state.series.push(state.current);
+    // A job log leaves out steps of a fast run (job-runner.js createLogThinner):
+    // a progress row says how many came right before it.
+    const thinned = Math.max(0, Math.floor(Number(ev.thinned) || 0));
+    if (thinned && !state.step_at) state.step_at = state.series.map((_, i) => i);
+    if (state.current && Number.isFinite(state.current.t)) {
+      state.series.push(state.current);
+      if (state.step_at) state.step_at.push(Number.isFinite(state.cur_at) ? state.cur_at : state.step_at.length);
+    }
+    state.thinned = (state.thinned || 0) + thinned;
+    state.cur_at = state.series.length + state.thinned;
     const t = Number(ev.time != null ? ev.time : ev.sim_time);
     const prev = state.current || {};
     const pend = state.pending || {};
@@ -306,6 +332,35 @@ function downsampleResiduals(series, maxPts = 200, spec = []) {
 }
 
 /**
+ * downsampleResiduals for a series whose job log left steps out: the points are
+ * spaced by step number (`at`, one per row), not by row, so the thinner later
+ * part of a long run keeps its share. Where no step was left out it picks the
+ * same rows.
+ */
+function downsampleResidualsAt(series, at, maxPts = 200, spec = []) {
+  const rows = [];
+  const pos = [];
+  series.forEach((row, i) => {
+    if (!rowHasResidual(row, spec)) return;
+    rows.push(row);
+    pos.push(at[i]);
+  });
+  if (rows.length <= maxPts) return rows.map((row) => compactResidual(row, spec));
+  const first = pos[0];
+  const span = pos[pos.length - 1] - first;
+  const out = [];
+  let j = 0;
+  let prev = -1;
+  for (let i = 0; i < maxPts; i++) {
+    const want = first + (i / (maxPts - 1)) * span;
+    while (j + 1 < pos.length && Math.abs(pos[j + 1] - want) <= Math.abs(pos[j] - want)) j++;
+    if (j !== prev) out.push(compactResidual(rows[j], spec));
+    prev = j;
+  }
+  return out;
+}
+
+/**
  * A solver iteration's row, not a lone metric line: two of its residual fields
  * (or every one, for an analysis that solves a single field).
  */
@@ -320,10 +375,14 @@ function rowHasResidual(row, spec = []) {
 
 function snapshotProgress(state) {
   const series = state.series.slice();
+  // Each row's step number, when the job log left steps out.
+  const at = state.step_at ? state.step_at.slice() : null;
   if (state.current && Number.isFinite(state.current.t)) {
     const last = series[series.length - 1];
-    if (!last || last.t !== state.current.t) series.push({ ...state.current });
-    else series[series.length - 1] = { ...state.current };
+    if (!last || last.t !== state.current.t) {
+      series.push({ ...state.current });
+      if (at) at.push(state.cur_at);
+    } else series[series.length - 1] = { ...state.current };
   }
   const last = series[series.length - 1];
   const out = {
@@ -331,12 +390,14 @@ function snapshotProgress(state) {
     iteration: last && Number.isFinite(last.t) ? Math.round(last.t) : 0,
     // Physical time for transient runs (same number as iteration for steady).
     sim_time: last && Number.isFinite(last.t) ? last.t : 0,
-    n_steps: series.length,
-    residuals: downsampleResiduals(
-      series.filter((row) => rowHasResidual(row, state.residual_series || [])),
-      200,
-      state.residual_series || [],
-    ),
+    n_steps: series.length + (state.thinned || 0),
+    residuals: at
+      ? downsampleResidualsAt(series, at, 200, state.residual_series || [])
+      : downsampleResiduals(
+        series.filter((row) => rowHasResidual(row, state.residual_series || [])),
+        200,
+        state.residual_series || [],
+      ),
     solve_started_at: state.solve_started_at || null,
   };
   if (last && Number.isFinite(last.co_max)) out.co_max = last.co_max;
@@ -363,6 +424,29 @@ export function parseSolveProgress(text, analysisKey) {
     if (ev) applyJobEvent(state, ev);
   }
   return snapshotProgress(state);
+}
+
+/** The largest run log read back: a job log stops growing below it (log.js). */
+export const RUN_LOG_READ_MAX = MAX_LOG_BYTES + 8 * 1024 * 1024;
+/** Progress read from each run log, by path, while the file is unchanged. */
+const logProgressCache = new Map();
+
+/**
+ * parseSolveProgress of a run's log file, read once per file version; null for
+ * a file over RUN_LOG_READ_MAX (an old unthinned log: reading it held the
+ * server for seconds). Throws when the file cannot be read.
+ */
+export function readLogProgress(logPath, analysisKey) {
+  const st = statSync(logPath);
+  if (!st.isFile() || st.size > RUN_LOG_READ_MAX) return null;
+  const key = `${st.size}:${st.mtimeMs}:${analysisKey || ''}`;
+  const hit = logProgressCache.get(logPath);
+  if (hit && hit.key === key) return structuredClone(hit.progress);
+  const progress = parseSolveProgress(readFileSync(logPath, 'utf8'), analysisKey);
+  logProgressCache.delete(logPath);
+  logProgressCache.set(logPath, { key, progress });
+  if (logProgressCache.size > 32) logProgressCache.delete(logProgressCache.keys().next().value);
+  return structuredClone(progress);
 }
 
 /** Catalog-sized run for first paint. No log re-parse, no residual series. */
@@ -419,7 +503,7 @@ function enrichRunDoc(doc, opts) {
     for (const logPath of [doc.log_jsonl_path, doc.log_path]) {
       if (!logPath || !existsSync(logPath)) continue;
       try {
-        const parsed = parseSolveProgress(readFileSync(logPath, 'utf8'), runAnalysisKeyOf(doc));
+        const parsed = readLogProgress(logPath, runAnalysisKeyOf(doc));
         if (!progressSnapshotIsThin(parsed) || (parsed && parsed.stage && parsed.stage !== 'starting')) {
           progress = parsed;
           fromLog = true;
@@ -900,15 +984,8 @@ function resolveNProcs(nCells, opts) {
   const n = Number(nCells) || 0;
   const threshold = opts && opts.transient ? TRANSIENT_LARGE_MESH_CELLS : LARGE_MESH_CELLS;
   if (n > 0 && n < threshold) return 1;
-  const logical = Math.max(1, (cpus() || []).length);
-  // One rank per physical core. Never oversubscribe hyperthreads: OpenMPI
-  // ranks busy-poll, and two ranks on one core ran ~18x slower in testing.
-  let nProcs;
-  if (PHYSICAL_CORES >= 1) nProcs = Math.max(2, Math.min(PHYSICAL_CORES, logical));
-  else nProcs = Math.max(2, logical >= 8 ? Math.floor(logical / 2) : logical);
+  let nProcs = hardwareRankCap();
   const hw = hardwarePrefs();
-  const cap = hw && Number(hw.n_procs);
-  if (Number.isFinite(cap) && cap >= 1) nProcs = Math.min(nProcs, Math.floor(cap));
   // Windows CIM core counts can exceed Open MPI's WSL slot count (hybrid CPUs).
   const savedSlots = hw && Number(hw.wsl_mpi_slots);
   const liveSlots = probeWslMpiSlots(WSL_DISTRO);
@@ -1587,10 +1664,44 @@ function persistRunDoc(projectId, doc) {
  *   runId?: string,
  *   transient?: object,
  *   onDone?: (result: { status: string, exit_code?: number, run_id?: string, project_id?: string, error?: string|null }) => void,
+ *   startId?: string,
  * }} [opts]
  */
 
 export async function startSolve(opts = {}) {
+  // One compute slot for every job: claimed here, before the first await, and
+  // released when the start ends unless the run's process took it (slot.keep()).
+  let id;
+  try {
+    id = opts.projectId || projectIdOrActive('', readActiveId);
+  } catch {
+    return { ok: false, status: 400, bodyExtra: { error: 'project_id required', increment: INCREMENT } };
+  }
+  const runId = opts.runId;
+  const holder = computeSlotHolder();
+  const decision = solveClaimDecision(holder, { runId, sameFolder: !!holder && sameProjectFolder(holder.project_id, id) });
+  if (decision === 'same_run') {
+    return {
+      ok: false,
+      status: 409,
+      bodyExtra: { error: 'This run is already solving. Click Stop if you want to end it.', code: 'same_run', increment: INCREMENT },
+    };
+  }
+  if (decision === 'busy') return slotRefusal(holder);
+  // A Stop of this very click that reached the server before its Start (opts.startId).
+  if (opts.startId && takeStartCancel(opts.startId)) {
+    return {
+      ok: false,
+      status: 409,
+      bodyExtra: { error: 'Stopped before it started', code: 'stopped', stopped: true, run_id: runId, increment: INCREMENT },
+    };
+  }
+  const claimed = claimComputeSlot('solve', { project_id: id, run_id: runId, name: String(runId) }, { phase: 'starting' });
+  if (!claimed.ok) return slotRefusal(computeSlotHolder());
+  return runClaimed(claimed.token, (slot) => startSolveBody(opts, slot));
+}
+
+async function startSolveBody(opts = {}, slot) {
   const { projectId, endTime, writeInterval, runId, transient: transientIn, onDone, simulationId } = opts;
   if (liveRun && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) {
     if (!runId || String(liveRun.run_id) !== String(runId)) {
@@ -1634,6 +1745,7 @@ export async function startSolve(opts = {}) {
   if (!draft) {
     return { ok: false, status: 404, bodyExtra: { error: 'Run not found', increment: INCREMENT } };
   }
+  patchComputeSlot(slot.token, { name: draft.name || 'Run' });
   if (draft && draft.status === 'done') {
     return {
       ok: false,
@@ -1657,6 +1769,7 @@ export async function startSolve(opts = {}) {
         status: 409,
         bodyExtra: {
           error: 'This run is already solving. Click Stop if you want to end it.',
+          code: 'same_run',
           increment: INCREMENT,
         },
       };
@@ -1780,6 +1893,9 @@ export async function startSolve(opts = {}) {
   const timeDependency = isTransient ? 'Transient' : 'Steady-state';
   const nProcs = resolveNProcs(ready.mesh.n_cells, { transient: isTransient });
   const simId = (draft && draft.simulation_id) || (ready.sim && ready.sim.id);
+  const hold = Number(process.env.MAGNUSIM_TEST_START_HOLD_MS) || 0;
+  if (hold > 0) await new Promise((r) => setTimeout(r, hold));
+  if (slot.stopRequested()) return { ok: false, status: 409, bodyExtra: { error: 'Stopped before it started', code: 'stopped', stopped: true, run_id: runId, increment: INCREMENT } };
   const stored = persistRun(id, simId, {
     id: runId,
     run_id: runId,
@@ -1908,7 +2024,7 @@ export async function startSolve(opts = {}) {
   const wslRunCasePath = wslCasePath(wslCaseId);
   const winLog = join(REPORT_DIR, `run-${runId}.log`);
   const started_at = new Date().toISOString();
-  let logBuf = '';
+  const runTail = createRunTail();
   const progress = newProgressState();
   progress.residual_series = residualSeriesFor((prepResult && prepResult.analysis_key) || '');
   // Seconds per phase of this solve, so where the time goes is on record.
@@ -1931,57 +2047,108 @@ export async function startSolve(opts = {}) {
     ...(launch.log_parser ? ['--log-parser', JSON.stringify(launch.log_parser)] : []),
     '--run-id',
     String(runId),
+    ...hookArgs(coreOwner(id, simId)),
   ];
   const argv = [PYTHON, pyTool('run_solve.py'), ...runSolveArgs];
 
   let runFinished = false;
+  let thisRun = null; const seen = { wslStart: false, result: false };
   const finishRun = (code, signal, errMsg) => {
     if (runFinished) return;
     runFinished = true;
-    const exit_code = code == null ? (signal ? -2 : -1) : code;
-    const snap = liveRun && liveRun.progress ? snapshotProgress(liveRun.progress) : parseSolveProgress(logBuf, (prepResult && prepResult.analysis_key) || '');
-    const stopRequested = !!(liveRun && liveRun.stop_requested);
-    if (liveRun && liveRun.stop_timer) clearTimeout(liveRun.stop_timer);
-    const base = (liveRun && liveRun.baseRunning) || {};
-    liveRun = null;
-    const savedTimes = listSavedTimes(winOut);
-    const lastSaved = savedTimes.length ? savedTimes[savedTimes.length - 1] : 0;
-    const stopped = stopRequested || (exit_code !== 0 && signal === 'SIGTERM');
-    const status = errMsg ? 'failed' : stopped ? 'stopped' : exit_code === 0 ? 'done' : 'failed';
-    const unit = isTransient ? 't = ' + lastSaved + ' s' : 'iteration ' + lastSaved;
-    persistRunDoc(id, {
-      ...base,
-      status,
-      exit_code,
-      signal: signal || null,
-      stop_requested: stopRequested,
-      finished_at: new Date().toISOString(),
-      log_excerpt: logBuf.slice(-6000),
-      stage: snap.stage,
-      iteration: snap.iteration,
-      sim_time: snap.sim_time,
-      n_steps: snap.n_steps,
-      residuals: snap.residuals || [],
-      ...(snap.co_max != null ? { co_max: snap.co_max } : {}),
-      ...(snap.co_mean != null ? { co_mean: snap.co_mean } : {}),
-      ...(snap.delta_t != null ? { delta_t: snap.delta_t } : {}),
-      ...(snap.phases ? { phases: snap.phases } : {}),
-      last_saved_iteration: lastSaved,
-      n_saved_times: savedTimes.length,
-      has_results: lastSaved > 0,
-      ...(errMsg ? { error: errMsg } : {}),
-      note: errMsg
-        ? `Failed to start ${solver}: ` + errMsg
-        : status === 'done'
-          ? `${solver} finished. Results are in the run folder.`
-          : status === 'stopped'
-            ? lastSaved > 0
-              ? `Run stopped. Results up to ${unit} are available.`
-              : 'Run stopped before the first saved ' + (isTransient ? 'time step.' : 'iteration.')
-            : `${solver} failed (exit ${exit_code}${signal ? ' ' + signal : ''}).`,
-    });
-    if (typeof onDone === 'function') {
-      onDone({ status, exit_code, run_id: runId, project_id: id, error: errMsg || null });
+    // This run's own record only (another run may be live by now). Each step is
+    // best effort; the slot is released in finally unless a drain watch owns it.
+    const run = thisRun;
+    const token = (run && run.slot_token) || slot.token;
+    let watching = false;
+    try {
+      const exit_code = code == null ? (signal ? -2 : -1) : code;
+      let snap = /** @type {any} */ (null);
+      try {
+        snap = run && run.progress ? snapshotProgress(run.progress) : parseSolveProgress(runTail.text(), (prepResult && prepResult.analysis_key) || '');
+      } catch (e) {
+        console.warn('[CFD] solve end: progress', runId, e);
+      }
+      snap = snap || {};
+      const stopRequested = !!(run && run.stop_requested);
+      if (run && run.stop_timer) clearTimeout(run.stop_timer);
+      const base = (run && run.baseRunning) || {};
+      if (liveRun === run) liveRun = null;
+      const savedTimes = listSavedTimes(winOut);
+      const lastSaved = savedTimes.length ? savedTimes[savedTimes.length - 1] : 0;
+      const stopped = stopRequested || (exit_code !== 0 && signal === 'SIGTERM');
+      const status = errMsg ? 'failed' : stopped ? 'stopped' : exit_code === 0 ? 'done' : 'failed';
+      const unit = isTransient ? 't = ' + lastSaved + ' s' : 'iteration ' + lastSaved;
+      // Its WSL processes may outlive the relay (a forced stop, a relay crash): then
+      // the slot stays held until they are gone.
+      const drain = coreDrainNeeded({ exitCode: exit_code, sawResult: seen.result, sawWslStart: seen.wslStart, killSent: !!(run && run.kill_sent) });
+      if (drain) patchComputeSlot(token, { phase: 'draining', stop_requested: stopRequested });
+      persistRunDoc(id, {
+        ...base,
+        status,
+        exit_code,
+        signal: signal || null,
+        stop_requested: stopRequested,
+        finished_at: new Date().toISOString(),
+        log_excerpt: runTail.text().slice(-6000),
+        stage: snap.stage,
+        iteration: snap.iteration,
+        sim_time: snap.sim_time,
+        n_steps: snap.n_steps,
+        residuals: snap.residuals || [],
+        ...(snap.co_max != null ? { co_max: snap.co_max } : {}),
+        ...(snap.co_mean != null ? { co_mean: snap.co_mean } : {}),
+        ...(snap.delta_t != null ? { delta_t: snap.delta_t } : {}),
+        ...(snap.phases ? { phases: snap.phases } : {}),
+        last_saved_iteration: lastSaved,
+        n_saved_times: savedTimes.length,
+        has_results: lastSaved > 0,
+        ...(errMsg ? { error: errMsg } : {}),
+        ...(drain ? { draining: true, wsl_case: wslCaseId } : {}),
+        note: errMsg
+          ? `Failed to start ${solver}: ` + errMsg
+          : status === 'done'
+            ? `${solver} finished. Results are in the run folder.`
+            : status === 'stopped'
+              ? lastSaved > 0
+                ? `Run stopped. Results up to ${unit} are available.`
+                : 'Run stopped before the first saved ' + (isTransient ? 'time step.' : 'iteration.')
+              : `${solver} failed (exit ${exit_code}${signal ? ' ' + signal : ''}).`,
+      });
+      try {
+        invalidateLiveSolveCache();
+      } catch (e) {
+        console.warn('[CFD] solve end: live cache', runId, e);
+      }
+      if (typeof onDone === 'function') {
+        try {
+          onDone({ status, exit_code, run_id: runId, project_id: id, error: errMsg || null });
+        } catch (e) {
+          console.warn('[CFD] solve end: onDone', runId, e);
+        }
+      }
+      if (drain) {
+        const runName = base.name || (draft && draft.name) || String(runId);
+        watchWslCaseGone({
+          token,
+          wslCase: wslCaseId,
+          scripts: [`solve-${runId}.sh`],
+          stop: () => runDocStopRequested(id, runId),
+          onGone: () => patchRunDocIfPresent(id, runId, { draining: false }),
+          onLost: (reason) => {
+            try {
+              patchRunDocIfPresent(id, runId, { draining: false });
+            } finally {
+              pushComputeNotice({ id: `solve-${runId}`, kind: 'solve', run_id: runId, project_id: id, name: runName, error: LOST_TEXT[reason] || reason, reason: 'stopped' });
+            }
+          },
+        });
+        watching = true;
+      }
+    } catch (e) {
+      console.warn('[CFD] solve end', runId, e);
+    } finally {
+      if (!watching) releaseComputeSlot(token);
     }
     scheduleComputeQueueKick(250);
   };
@@ -1991,18 +2158,20 @@ export async function startSolve(opts = {}) {
     jobId: String(runId),
     script: pyTool('run_solve.py'),
     args: runSolveArgs,
-    onEvent: (ev) => {
-      if (liveRun && liveRun.progress) applyJobEvent(liveRun.progress, ev);
-      if (ev && ev.event === 'time_saved' && liveRun) {
-        const times = (liveRun.progress && liveRun.progress.saved_times) || [];
-        if (liveRun.baseRunning) {
-          liveRun.baseRunning.has_results = times.length > 0;
-          liveRun.baseRunning.n_saved_times = times.length;
-          liveRun.baseRunning.last_saved_iteration = times.length ? times[times.length - 1] : 0;
-          liveRun.baseRunning.stage = 'solve';
+    onEvent: coreSolveEvents({
+      seen,
+      tail: runTail,
+      run: () => liveRun,
+      saved: (live) => {
+        const times = (live.progress && live.progress.saved_times) || [];
+        if (live.baseRunning) {
+          live.baseRunning.has_results = times.length > 0;
+          live.baseRunning.n_saved_times = times.length;
+          live.baseRunning.last_saved_iteration = times.length ? times[times.length - 1] : 0;
+          live.baseRunning.stage = 'solve';
         }
         try {
-          const snap = liveRun.progress ? snapshotProgress(liveRun.progress) : null;
+          const snap = live.progress ? snapshotProgress(live.progress) : null;
           persistRun(id, simId, {
             id: runId,
             run_id: runId,
@@ -2016,20 +2185,13 @@ export async function startSolve(opts = {}) {
         } catch (e) {
           console.warn('[CFD] stamp live results', e);
         }
-      }
-      try {
-        const line =
-          ev && ev.event === 'log' && ev.line
-            ? String(ev.line) + '\n'
-            : JSON.stringify(ev) + '\n';
-        logBuf = (logBuf + line).slice(-1024 * 1024);
-        // Phase 1 land10: structured log via job-runner createJobLogger (.cache/logs), not projects/.
-      } catch {}
-    },
+      },
+    }),
     onExit: (code, signal) => finishRun(code, signal, null),
   });
   progress._jobLog = jobLog;
-  liveRun = {
+  slot.keep(); patchComputeSlot(slot.token, { phase: 'running' });
+  thisRun = liveRun = {
     child,
     run_id: runId,
     wsl_case: wslCaseId,
@@ -2038,6 +2200,8 @@ export async function startSolve(opts = {}) {
     progress,
     jobLog,
     protocol: 'magnusim-jsonl',
+    slot_token: slot.token,
+    kill_sent: false,
   };
   const baseRunning = {
     simulation_id: simId,
@@ -2200,11 +2364,13 @@ function invalidateWslLive(caseId) {
   if (caseId) wslLiveCache.delete(String(caseId));
 }
 
-function requestWriteNow(caseId, runId) {
+function requestWriteNow(caseId, runId, rec) {
   if (!caseId) return;
   const caseQ = caseId.startsWith('/') ? caseId : wslCasePath(caseId);
+  // solve.stop listeners (only when a plugin listens; never on a probe).
+  const hooks = rec ? stopHookArgs({ owner: coreOwner(rec.project_id, rec.simulation_id), app: rec.path_kind || (rec.launch && rec.launch.app), caseDir: rec.case_dir, nProcs: rec.n_procs }) : [];
   try {
-    spawn(PYTHON, [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(runId || '')], {
+    spawn(PYTHON, [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(runId || ''), ...hooks], {
       windowsHide: true,
       stdio: 'ignore',
     });
@@ -2223,6 +2389,11 @@ function forceKillDoc(rec, run) {
   const caseId = wslCaseOf(rec, run);
   const rid = runIdOf(rec) || (run && run.run_id);
   invalidateWslLive(caseId);
+  // A kill was sent: when its relay ends without a result, the run drains.
+  if (run) run.kill_sent = true;
+  else if (liveRun && String(liveRun.run_id) === String(rid)) liveRun.kill_sent = true;
+  const doc = rec || {};
+  const hooks = stopHookArgs({ owner: coreOwner(doc.project_id, doc.simulation_id), app: doc.path_kind || (doc.launch && doc.launch.app), caseDir: doc.case_dir, nProcs: doc.n_procs });
   if (run && run.child) {
     try {
       run.child.kill();
@@ -2235,7 +2406,7 @@ function forceKillDoc(rec, run) {
   try {
     spawn(
       PYTHON,
-      [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(rid || ''), '--force', ...processNamesArgs(rec || run)],
+      [pyTool('stop_solve.py'), '--wsl-case', caseId, '--run-id', String(rid || ''), '--force', ...processNamesArgs(rec || run), ...hooks],
       { windowsHide: true, stdio: 'ignore' },
     );
   } catch {
@@ -2304,9 +2475,33 @@ function resolveStopTarget(projectId, runId) {
   return { run: null, rec: pick };
 }
 
-/** @param {{ projectId?: string, force?: boolean, runId?: string }} [opts] */
-export function stopSolve({ projectId, force, runId } = {}) {
+/** @param {{ projectId?: string, force?: boolean, runId?: string, starting?: boolean, startId?: string }} [opts] */
+export function stopSolve({ projectId, force, runId, starting, startId } = {}) {
   const id = projectId || projectIdOrActive('', readActiveId);
+  // The slot's own solve first: a start in progress, a drain, or the live run.
+  const h = computeSlotHolder();
+  const mine = !!h && h.kind === 'solve' && sameProjectFolder(h.project_id, id) && (!runId || String(h.run_id) === String(runId));
+  if (mine && h.phase === 'starting') {
+    patchComputeSlot(h.token, { stop_requested: true });
+    removeComputeJob('solve', h.run_id, id);
+    // `cancelled`: the start ends before its run starts (a Stop of a started run says only `stopping`).
+    return { ok: true, status: 200, bodyExtra: { ok: true, stopping: true, cancelled: true, run_id: h.run_id, increment: INCREMENT } };
+  }
+  if (mine && h.phase === 'draining') {
+    patchRunDocIfPresent(id, h.run_id, { stop_requested: true });
+    patchComputeSlot(h.token, { stop_requested: true });
+    killWslCase({ wslCase: 'cfddesk-w27-' + h.run_id, scripts: ['solve-' + h.run_id + '.sh'] });
+    return { ok: true, status: 200, bodyExtra: { ok: true, stopping: true, run_id: h.run_id, increment: INCREMENT } };
+  }
+  if (mine && h.phase === 'running') {
+    patchComputeSlot(h.token, { stop_requested: true });
+  } else if (starting === true) {
+    // "Cancel this start" never falls into the code below, which could pick another run.
+    if (startId && noteStartCancel(startId)) {
+      return { ok: true, status: 200, bodyExtra: { ok: true, stopping: true, pending: true, run_id: runId, increment: INCREMENT } };
+    }
+    return { ok: true, status: 200, bodyExtra: { ok: true, stopping: false, pending: false, run_id: runId, increment: INCREMENT } };
+  }
   const target = resolveStopTarget(id, runId);
   if (target && target.error) {
     return { ok: false, status: 409, bodyExtra: { error: target.error, increment: INCREMENT } };
@@ -2355,7 +2550,7 @@ export function stopSolve({ projectId, force, runId } = {}) {
     run.stop_requested = true;
     run.stop_requested_at = Date.now();
   }
-  requestWriteNow(wslCaseOf(rec, run), rec.run_id || rec.id);
+  requestWriteNow(wslCaseOf(rec, run), rec.run_id || rec.id, rec);
   persistStopping(id || rec.project_id, rec);
   const recSnap = { ...rec, stop_requested: true };
   const timer = setTimeout(() => {
@@ -2422,6 +2617,9 @@ function runProcessIsLive(doc) {
 /** Vite/Node restart used to leave run.json at "running" forever. Persist stopped/failed. */
 function reapStaleRunningDoc(projectId, doc) {
   if (!doc || !projectId) return doc;
+  // Never while the boot check probes, nor a run the slot holds (its reconstructPar or copy back may still run).
+  const holder = computeSlotHolder();
+  if (holder && (holder.kind === 'check' || (holder.kind === 'solve' && (holder.phase === 'running' || holder.phase === 'draining') && String(holder.run_id) === String(doc.run_id || doc.id) && sameProjectFolder(holder.project_id, projectId)))) return doc;
   const st = String(doc.status || '');
   if (st !== 'running' && st !== 'starting') return doc;
   if (runProcessIsLive(doc)) return doc;
@@ -2818,6 +3016,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         runId: body.run_id || body.id,
         transient: body.transient,
         simulationId: body.simulation_id || u.searchParams.get('simulation_id'),
+        startId: body.start_id,
       });
       if (!started.ok) {
         return sendJson(res, started.status, { ok: false, ...(started.bodyExtra || {}) });
@@ -2836,6 +3035,8 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         projectId: body.project_id || u.searchParams.get('project_id'),
         runId: body.run_id || body.id || u.searchParams.get('run_id'),
         force: body.force === true || body.force === '1' || u.searchParams.get('force') === '1',
+        starting: body.starting === true,
+        startId: body.start_id,
       });
       return sendJson(res, stopped.status, { ok: stopped.ok, ...(stopped.bodyExtra || {}) });
     }
@@ -2970,4 +3171,220 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
   }
 
   return false;
+}
+
+/**
+ * The most MPI ranks this PC gives a run: one per physical core (never two on one
+ * core's hyperthreads), capped by Settings → Hardware. WSL's own slot count is not
+ * asked here (resolveNProcs and the plugin case relay clamp by it).
+ */
+export function hardwareRankCap() {
+  const logical = Math.max(1, (cpus() || []).length);
+  // One rank per physical core. Never oversubscribe hyperthreads: OpenMPI
+  // ranks busy-poll, and two ranks on one core ran ~18x slower in testing.
+  let nProcs;
+  if (PHYSICAL_CORES >= 1) nProcs = Math.max(2, Math.min(PHYSICAL_CORES, logical));
+  else nProcs = Math.max(2, logical >= 8 ? Math.floor(logical / 2) : logical);
+  const hw = hardwarePrefs();
+  const cap = hw && Number(hw.n_procs);
+  if (Number.isFinite(cap) && cap >= 1) nProcs = Math.min(nProcs, Math.floor(cap));
+  return nProcs;
+}
+
+/**
+ * Run docs the boot check looks at: every run with a WSL case that is `running`
+ * or `starting`, or still draining. Relay pids are not trusted (a pid alive now
+ * may be another program's).
+ * @returns {Array<{ project_id: string, run_id: string, wsl_case: string, name: string, stop_requested: boolean, doc: object }>}
+ */
+export function listSolveDocsToCheck() {
+  const out = [];
+  let names;
+  try {
+    names = existsSync(PROJECTS_ROOT) ? readdirSync(PROJECTS_ROOT) : [];
+  } catch {
+    names = [];
+  }
+  for (const name of names) {
+    try {
+      if (!existsSync(join(projectDir(name), 'project.json'))) continue;
+      for (const rec of assembleAllRuns(name) || []) {
+        if (!rec || !rec.wsl_case) continue;
+        const st = String(rec.status || '');
+        if (st !== 'running' && st !== 'starting' && rec.draining !== true) continue;
+        out.push({
+          project_id: name,
+          run_id: String(rec.id || rec.run_id),
+          wsl_case: String(rec.wsl_case),
+          name: String(rec.name || rec.id || rec.run_id),
+          stop_requested: !!rec.stop_requested,
+          doc: rec,
+        });
+      }
+    } catch (e) {
+      console.warn('[CFD] boot check: runs of', name, e);
+    }
+  }
+  return out;
+}
+
+function runJsonPath(projectId, runId) {
+  const folder = runFolderOf(projectId, runId);
+  return folder && folder.dir ? join(folder.dir, 'run.json') : null;
+}
+
+/**
+ * Merge `patch` into the run's run.json and write it back atomically. A missing
+ * run (folder or file) is left alone: this never creates a folder.
+ * @returns {object | null} the doc written, or null
+ */
+export function patchRunDocIfPresent(projectId, runId, patch) {
+  const file = runJsonPath(projectId, runId);
+  if (!file || !existsSync(file)) return null;
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(file, 'utf8').replace(/^\u{FEFF}/u, ''));
+  } catch {
+    return null;
+  }
+  if (!doc || typeof doc !== 'object') return null;
+  const next = { ...doc, ...(patch || {}) };
+  const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`;
+  try {
+    // In the run's own folder: if it was removed meanwhile this fails, and nothing is made again.
+    writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8');
+  } catch {
+    return null;
+  }
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      renameSync(tmp, file);
+      return next;
+    } catch (e) {
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(e && e.code) || attempt >= 7) {
+        try {
+          unlinkSync(tmp);
+        } catch {
+          /* gone */
+        }
+        return null;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+    }
+  }
+}
+
+/**
+ * A Stop was asked for this run (its run.json says so), or the run was deleted
+ * while its WSL processes still ran (they must end too). An unreadable doc is false.
+ */
+export function runDocStopRequested(projectId, runId) {
+  const file = runJsonPath(projectId, runId);
+  if (!file) return true;
+  try {
+    const doc = JSON.parse(readFileSync(file, 'utf8').replace(/^\u{FEFF}/u, ''));
+    return !!(doc && doc.stop_requested === true);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The boot check found this run's WSL processes gone (or they ended since): read
+ * its doc again and mark it as today's reap rule does, written in place. A run
+ * deleted meanwhile stays deleted; a stop asked for meanwhile is kept.
+ */
+export function reapCheckedSolveDoc(projectId, runId) {
+  const file = runJsonPath(projectId, runId);
+  const doc = file ? readJsonSafe(file) : null;
+  if (!doc) return null;
+  const st = String(doc.status || '');
+  if (st === 'running' || st === 'starting') {
+    const savedTimes = listSavedTimes(doc.case_dir);
+    const lastSaved = savedTimes.length ? savedTimes[savedTimes.length - 1] : 0;
+    return patchRunDocIfPresent(projectId, runId, {
+      status: lastSaved > 0 ? 'stopped' : 'failed',
+      exit_code: doc.exit_code === undefined || doc.exit_code === null ? -1 : doc.exit_code,
+      finished_at: doc.finished_at || new Date().toISOString(),
+      last_saved_iteration: lastSaved,
+      n_saved_times: savedTimes.length,
+      has_results: lastSaved > 0 || !!doc.has_results,
+      pid: null,
+      draining: false,
+      error: lastSaved > 0 ? null : 'Solver process exited before the first saved iteration.',
+      note:
+        lastSaved > 0
+          ? 'Solver process is gone. Results up to iteration ' + lastSaved + ' are available.'
+          : 'Solver process is gone. It never wrote a result frame — Start again to retry.',
+    });
+  }
+  if (doc.draining) return patchRunDocIfPresent(projectId, runId, { draining: false });
+  return doc;
+}
+
+/** Forget the cached live-solve scan (a run just ended). */
+export function invalidateLiveSolveCache() {
+  discoverLiveCache = { at: 0, found: [] };
+}
+
+/** solve.sh's `start` (WSL was reached) and `result` (it ended in order) events. */
+export function noteSolveEvent(seen, ev) {
+  if (!seen || !ev) return;
+  if (ev.event === 'start') seen.wslStart = true;
+  else if (ev.event === 'result') seen.result = true;
+}
+
+/** How much of a core run's newest output is kept (its log_excerpt, a progress read without live progress). */
+export const RUN_TAIL_CHARS = 1024 * 1024;
+
+/**
+ * The newest RUN_TAIL_CHARS of a run's relayed output: a solver line as it came,
+ * any other event as JSON. Cut back only once it holds twice that: cutting it
+ * to size on every event copied the whole megabyte each time, and a fast case
+ * (thousands of events a second) kept the server from answering for its whole
+ * solve.
+ * @param {number} [max]
+ */
+export function createRunTail(max = RUN_TAIL_CHARS) {
+  let buf = '';
+  return {
+    /** @param {Record<string, any>} ev */
+    push(ev) {
+      try {
+        buf += ev && ev.event === 'log' && ev.line ? String(ev.line) + '\n' : JSON.stringify(ev) + '\n';
+      } catch {
+        return;
+      }
+      if (buf.length > 2 * max) buf = buf.slice(-max);
+    },
+    /** The newest `max` characters. */
+    text() {
+      if (buf.length > max) buf = buf.slice(-max);
+      return buf;
+    },
+  };
+}
+
+/**
+ * A core solve's onEvent (startSolveBody), for every event its relay sends: the
+ * start/result marks, the live run's progress, the run's tail, and `saved(live)`
+ * for a saved time. Its cost must not grow with the run: see createRunTail.
+ * @param {{ seen: { wslStart: boolean, result: boolean }, tail: ReturnType<typeof createRunTail>, run: () => any, saved: (live: any) => void }} ctx
+ */
+export function coreSolveEvents({ seen, tail, run, saved }) {
+  return (/** @type {Record<string, any>} */ ev) => {
+    noteSolveEvent(seen, ev);
+    const live = run();
+    if (live && live.progress) applyJobEvent(live.progress, ev);
+    if (ev && ev.event === 'time_saved' && live) saved(live);
+    tail.push(ev);
+  };
+}
+
+/**
+ * Does an ended relay leave WSL processes to wait for? Only when it did not end in
+ * order (exit 0 means solve.sh sent its result) and WSL was reached or a kill sent.
+ */
+export function coreDrainNeeded({ exitCode, sawResult, sawWslStart, killSent }) {
+  return exitCode !== 0 && !sawResult && !!(sawWslStart || killSent);
 }

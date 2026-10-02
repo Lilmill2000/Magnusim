@@ -50,6 +50,9 @@
 import { spawnFilter, runFilterToolAsync } from './filter-spawn.js';
 import { attachLiveMeshJobReader } from './w16-project-geometry.js';
 import { caseDirAllowedForAttach, caseDirBelongsToProject, caseDirBelongsToStudy, projectIdFromCaseDir } from './project-isolation.js';
+import { PROJECTS_ROOT as PROJECTS_ROOT_FOR_ATTACH, caseDirBelongsToPluginStudy } from './project-isolation.js';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, relative } from 'node:path';
 import { listFoamTimeDirs } from './project-layout.js';
 import { liveMeshJobSnapshot, meshGenerateLivePid, recoverStudyMeshesFromDisk, watchUnownedMeshGenerate } from './w21-mesh-generate.js';
 import { getActiveSimulation } from './w17-sim-catalog.js';
@@ -260,7 +263,25 @@ function applyKickUpdate(fields) {
   };
 }
 
-function attachCaseDir(caseDirAbs, projectIdOpt, simIdOpt) {
+/**
+ * The first folder of caseDir under its project's real folder, lower-cased
+ * ('plugins', 'geometries', 'simulations' and so on), or '' when it is not inside.
+ */
+function firstPartUnderProject(caseDir, projectId) {
+  const root = resolve(PROJECTS_ROOT_FOR_ATTACH, String(projectId));
+  const real = (p) => {
+    try {
+      return realpathSync.native(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  const rel = relative(real(root), real(String(caseDir)));
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return '';
+  return rel.split(/[\\/]/)[0].toLowerCase();
+}
+
+function attachCaseDir(caseDirAbs, projectIdOpt, simIdOpt, pluginStudy) {
   const caseDir = String(caseDirAbs || '').trim();
   if (!caseDir) {
     return { ok: false, status: 400, body: { error: 'case_dir required (absolute path)', status: 'idle' } };
@@ -274,14 +295,27 @@ function attachCaseDir(caseDirAbs, projectIdOpt, simIdOpt) {
     };
   }
   const sid = String(simIdOpt || '').trim();
-  if (want && /[/\\](geometries|simulations)[/\\]/i.test(caseDir) && !sid) {
+  // Which rule applies follows where the case really is in the project.
+  const first = want ? firstPartUnderProject(caseDir, want) : '';
+  if (first === 'plugins') {
+    const plugin = pluginStudy && pluginStudy.plugin;
+    const studyId = pluginStudy && pluginStudy.studyId;
+    if (!plugin || !studyId || !caseDirBelongsToPluginStudy(caseDir, want, plugin, studyId)) {
+      return {
+        ok: false,
+        status: 403,
+        body: { error: 'case_dir is not in this plugin study', case_dir: caseDir, project_id: want },
+      };
+    }
+  }
+  if (want && (first === 'geometries' || first === 'simulations') && !sid) {
     return {
       ok: false,
       status: 400,
       body: { error: 'simulation_id required', case_dir: caseDir, project_id: want },
     };
   }
-  if (want && sid && !caseDirAllowedForAttach(caseDir, want, sid)) {
+  if (want && sid && first !== 'plugins' && !caseDirAllowedForAttach(caseDir, want, sid)) {
     return {
       ok: false,
       status: 403,

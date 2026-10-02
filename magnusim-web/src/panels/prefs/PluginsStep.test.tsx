@@ -10,8 +10,10 @@ import {
 } from '../../workspace/leaveGuard';
 import { PluginsStep } from './PluginsStep';
 
-const workerRpc = vi.fn(async () => ({}));
-vi.mock('../../api/workerRpc', () => ({ workerRpc: (method: string) => workerRpc(method) }));
+const workerRpc = vi.fn(async (_method: string, _params?: unknown) => ({}));
+vi.mock('../../api/workerRpc', () => ({
+  workerRpc: (method: string, params?: unknown) => workerRpc(method, params),
+}));
 
 let plugins: Array<Record<string, unknown>> = [];
 
@@ -94,7 +96,8 @@ describe('PluginsStep', () => {
     await waitFor(() =>
       expect(document.querySelector('[data-plugin-key="example-laminar"]')).toHaveAttribute('data-plugin-status', 'disabled'),
     );
-    expect(workerRpc).toHaveBeenCalledWith('registry.reload');
+    // A Disable's reload stops nothing: the server stops that plugin's cases itself.
+    expect(workerRpc).toHaveBeenCalledWith('registry.reload', {});
     expect(screen.getByRole('button', { name: 'Enable' })).toBeInTheDocument();
     // The tree (its STUDIES) and the Workspaces menu read the plugins' state again.
     expect(syncs).toBeGreaterThan(0);
@@ -152,7 +155,9 @@ describe('PluginsStep', () => {
     await waitFor(() => expect(li).toHaveAttribute('data-plugin-status', 'enabled'), { timeout: 4000 });
     expect(within(li).getByText('On')).toBeInTheDocument();
     expect(within(li).queryByRole('button', { name: 'Install dependencies' })).toBeNull();
-    expect(workerRpc).toHaveBeenCalledWith('registry.reload');
+    // A finished install's reload stops no plugin case.
+    expect(workerRpc).toHaveBeenCalledWith('registry.reload', {});
+    expect(workerRpc).not.toHaveBeenCalledWith('registry.reload', { stop_plugin_cases: true });
   });
 
   it("shows why a setup failed, with pip's last lines", async () => {
@@ -189,6 +194,28 @@ describe('PluginsStep', () => {
     await screen.findByText('Plugins reloaded.');
     expect(seen).toContainEqual({ plugins: true });
     window.removeEventListener('cfd:tree-sync', onSync);
+  });
+
+  it('only the Reload button asks the reload to stop running plugin cases', async () => {
+    render(<PluginsStep />);
+    await screen.findByText('example-laminar does a thing');
+    // Disable, then Enable: each reload stops nothing.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Disable' })[0]);
+    await waitFor(() =>
+      expect(document.querySelector('[data-plugin-key="example-laminar"]')).toHaveAttribute('data-plugin-status', 'disabled'),
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Enable' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    await waitFor(() =>
+      expect(document.querySelector('[data-plugin-key="example-laminar"]')).toHaveAttribute('data-plugin-status', 'enabled'),
+    );
+    const reloads = () => workerRpc.mock.calls.filter((c) => c[0] === 'registry.reload').map((c) => c[1]);
+    await waitFor(() => expect(reloads()).toHaveLength(2));
+    expect(reloads()).toEqual([{}, {}]);
+    // The Reload button: stop_plugin_cases, once.
+    fireEvent.click(screen.getByRole('button', { name: 'Reload plugins' }));
+    await screen.findByText('Plugins reloaded.');
+    expect(reloads()).toEqual([{}, {}, { stop_plugin_cases: true }]);
   });
 });
 

@@ -35,6 +35,9 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** How often a running job's events are written to its file, at most. */
+export const EVENT_PERSIST_MS = 500;
+
 function newId(): string {
   return `job-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
 }
@@ -45,6 +48,8 @@ export class JobManager extends EventEmitter {
   private readonly children = new Map<string, ChildProcess>();
   private readonly emitters = new Map<string, EventEmitter>();
   private readonly onPersist?: (job: JobRecord) => void;
+  /** Event writes waiting, by job (see pushEvent). */
+  private readonly persistTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(opts: JobManagerOptions) {
     super();
@@ -75,6 +80,11 @@ export class JobManager extends EventEmitter {
   }
 
   private persist(job: JobRecord): void {
+    const soon = this.persistTimers.get(job.id);
+    if (soon) {
+      clearTimeout(soon);
+      this.persistTimers.delete(job.id);
+    }
     try {
       writeFileSync(join(this.dir, `${job.id}.json`), JSON.stringify(job, null, 2), 'utf8');
     } catch {
@@ -87,6 +97,16 @@ export class JobManager extends EventEmitter {
         /* ignore */
       }
     }
+  }
+
+  private persistSoon(job: JobRecord): void {
+    if (this.persistTimers.has(job.id)) return;
+    const timer = setTimeout(() => {
+      this.persistTimers.delete(job.id);
+      this.persist(job);
+    }, EVENT_PERSIST_MS);
+    timer.unref();
+    this.persistTimers.set(job.id, timer);
   }
 
   private bus(id: string): EventEmitter {
@@ -104,7 +124,11 @@ export class JobManager extends EventEmitter {
     if (!job) return;
     job.events.push(ev);
     if (job.events.length > 400) job.events.splice(0, job.events.length - 400);
-    this.persist(job);
+    // A running job's events are written at most every EVENT_PERSIST_MS: a fast
+    // job sends thousands a second, and one file write each kept the server from
+    // answering. The end is written at once.
+    if (job.status === 'done' || job.status === 'failed' || job.status === 'stopped') this.persist(job);
+    else this.persistSoon(job);
     this.bus(id).emit('event', ev);
     this.emit('event', id, ev);
   }

@@ -48,9 +48,9 @@ export interface WorkspaceContext {
   theme: ThemeInfo;
   /**
    * The host's bridge API version ("1.3"). To use a call a later host added,
-   * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2), or
-   * catch the refusal: an older host rejects a call it does not know with
-   * code "not_allowed".
+   * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2,
+   * ws.compute and ws.results need 1.3), or catch the refusal: an older host
+   * rejects a call it does not know with code "not_allowed".
    */
   hostVersion: string;
 }
@@ -58,6 +58,76 @@ export interface WorkspaceContext {
 export interface JobEvent {
   event: string;
   [field: string]: unknown;
+}
+
+/** A WSL step a plugin case may run before its solver (host 1.3; compatibility.md lists their arguments). */
+export type PreTool =
+  | 'blockMesh'
+  | 'gmshToFoam'
+  | 'surfaceFeatureExtract'
+  | 'snappyHexMesh'
+  | 'extrudeMesh'
+  | 'changeDictionary'
+  | 'createPatch'
+  | 'checkMesh'
+  | 'renumberMesh'
+  | 'decomposePar'
+  | 'reconstructParMesh';
+
+/**
+ * One WSL step. `parallel: true` runs it with `mpirun -np N … -parallel`, only
+ * between a decomposePar step and the reconstructParMesh step after it, and
+ * only for the tools that can run in parallel.
+ */
+export interface PreStep {
+  tool: PreTool;
+  args?: string[];
+  parallel?: boolean;
+}
+
+/** A case the page wrote in its study's folder, to run with OpenFOAM in WSL (host 1.3). */
+export interface SubmitOpenFOAM {
+  /** The case folder inside this study's folder ("cases/c1"). It must not have run before. */
+  caseRel: string;
+  /** The solver application, as system/controlDict names it; a registered solver. */
+  app: string;
+  /** Ranks for a parallel solve and parallel steps (1 to 64; the host clamps it to the PC). */
+  nProcs?: number;
+  pre?: PreStep[];
+  results: {
+    /** Fields the solver writes divided by density; shown multiplied by rho. */
+    kinematicFields: string[];
+    rho?: number;
+    /** Fields copied back for each saved frame (default U and p). */
+    frameFields?: string[];
+  };
+}
+
+export type ComputeStatus = 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'lost';
+
+/** A plugin case as the page sees it: no paths. */
+export interface ComputeJob {
+  id: string;
+  caseRel: string;
+  app: string;
+  nProcs: number;
+  status: ComputeStatus;
+  /** Where a running case is (pre_copy_in, solve, copy, stopping, …); null before it starts. */
+  stage: string | null;
+  /** A stop was asked for and the case has not ended yet. */
+  stopping: boolean;
+  /** How many jobs run or wait before it, or null when it is not queued. */
+  ahead: number | null;
+  createdAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  /** Why it was refused or did not finish ("has_results", "launch", "lost", …). */
+  code: string | null;
+  /** Once it has ended: the saved frames' times, the last one, seconds per phase, and how the solver wrote its fields. */
+  result: { savedTimes: number[]; lastSaved: number | null; phases: Record<string, number>; writeFormat: string | null } | null;
+  /** The last event's number. */
+  seq: number;
 }
 
 export interface ConfirmOptions {
@@ -195,6 +265,37 @@ export interface Workspace {
     setDirty(dirty: boolean, message?: string): Promise<void>;
   };
   /**
+   * OpenFOAM cases this study's page writes and runs (host 1.3: check
+   * `context.hostVersion`; an older host refuses with code "not_allowed").
+   * A case runs once, from its `0/` folder, on the app's one compute slot, so
+   * it may wait in the queue. Refusals carry `.code` ("app_not_allowed",
+   * "has_results", "invalid_path", "busy", …).
+   */
+  compute: {
+    /** Queue a case; `existing` when that folder is already queued or running (its id comes back). */
+    submitOpenFOAM(opts: SubmitOpenFOAM): Promise<{ id: string; ahead: number; existing: boolean }>;
+    /**
+     * Follow a case of this study: first where it is now (queued, start, or end),
+     * then each event (stage, pre, ranks, phase, progress, time_saved, warning, end).
+     * Returns a function that stops listening.
+     */
+    events(jobId: string, onEvent: (ev: JobEvent) => void): () => void;
+    /** Stop a case: a queued one leaves the queue; a running one saves its latest frame and ends. Again to stop harder; `force` at once. */
+    stop(jobId: string, opts?: { force?: boolean }): Promise<{ status: string; stopping: boolean }>;
+    status(jobId: string): Promise<ComputeJob>;
+    /** This study's cases, newest first (a reopened page finds its running case here). */
+    list(): Promise<ComputeJob[]>;
+  };
+  results: {
+    /**
+     * Show a finished case's saved frames in the project's 3D view. The app asks
+     * first when other results are on screen, and when the page has unsaved work.
+     * Resolves { opened: false } when the user cancels or stays; when it opens,
+     * the workspace closes, so the promise may never settle.
+     */
+    openIn3D(caseRel: string): Promise<{ opened: boolean }>;
+  };
+  /**
    * Live changes the host pushes. Returns a function that stops listening.
    * `study`: the study changed (renamed in the header, or saved): save next with its `rev`.
    */
@@ -292,6 +393,8 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   const listeners = new Map<string, Set<(data: unknown) => void>>();
   const jobListeners = new Map<string, Set<(ev: JobEvent) => void>>();
+  // The follow calls already sent ("<method> <id>"): one per job and kind of job.
+  const followed = new Set<string>();
   const ctx: WorkspaceContext = { ...context };
 
   port.onmessage = (event: MessageEvent) => {
@@ -322,6 +425,30 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       if (transfer && transfer.length) port.postMessage({ id, method, params }, transfer);
       else port.postMessage({ id, method, params });
     });
+  }
+
+  /** Listen to a job's events; the first listener asks the host to follow it (`method`). */
+  function follow(method: string, jobId: string, onEvent: (ev: JobEvent) => void): () => void {
+    let set = jobListeners.get(jobId);
+    if (!set) {
+      set = new Set();
+      jobListeners.set(jobId, set);
+    }
+    set.add(onEvent);
+    const key = `${method} ${jobId}`;
+    if (!followed.has(key)) {
+      followed.add(key);
+      void call(method, { jobId }).catch((e: Error) => {
+        const ev: JobEvent = { event: 'error', message: e.message };
+        const code = (e as { code?: unknown }).code;
+        if (typeof code === 'string' && code) ev.code = code;
+        onEvent(ev);
+      });
+    }
+    const listening = set;
+    return () => {
+      listening.delete(onEvent);
+    };
   }
 
   async function readBlob(rel: string, opts: FileReadOptions = {}): Promise<Blob | null> {
@@ -419,18 +546,22 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     },
     jobs: {
       start: (kind, params = {}) => call('jobs.start', { kind, params }),
-      events(jobId, onEvent) {
-        let set = jobListeners.get(jobId);
-        if (!set) {
-          set = new Set();
-          jobListeners.set(jobId, set);
-          void call('jobs.events', { jobId }).catch((e: Error) => onEvent({ event: 'error', message: e.message }));
-        }
-        set.add(onEvent);
-        return () => set?.delete(onEvent);
-      },
+      events: (jobId, onEvent) => follow('jobs.events', jobId, onEvent),
       stop: async (jobId) => {
         await call('jobs.stop', { jobId });
+      },
+    },
+    compute: {
+      submitOpenFOAM: (opts) => call('compute.submitOpenFOAM', { ...opts }),
+      events: (jobId, onEvent) => follow('compute.events', jobId, onEvent),
+      stop: (jobId, opts = {}) => call('compute.stop', { jobId, force: opts.force === true }),
+      status: (jobId) => call('compute.status', { jobId }),
+      list: () => call('compute.list'),
+    },
+    results: {
+      openIn3D: async (caseRel) => {
+        const r = await call<{ opened?: boolean } | null>('results.openIn3D', { caseRel });
+        return { opened: !!r && r.opened === true };
       },
     },
     project: {

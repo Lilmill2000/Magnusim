@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NO_WSL } from '../../../e2e/toolchain.js';
+import { waitSlotFree } from '../../../e2e/support/compute-slot.js';
 import { PYTHON } from '../../../scripts/python-env.js';
 
 // Post-processing on a real solve, through the UI: cutting planes (add, second plane,
@@ -412,5 +413,6 @@ test('results tools on a solved run, monitors, copied run settings, and stopping
   await runTo(run3, /^running$/, 300_000);
   await runPanel.locator('[data-run-stop="1"]').click();
   await runTo(run3, /^stopped$/, 300_000);
+  await waitSlotFree(request);
   stage('run 3 stopped');
 });

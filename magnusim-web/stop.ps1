@@ -46,6 +46,7 @@ Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinu
 $here = $PSScriptRoot.TrimEnd('\') + '\'
 Get-CimInstance Win32_Process | ForEach-Object {
   $cl = [string]$_.CommandLine
+  if ($cl -match 'run_foam_case\.py') { return }
   if (-not $cl) { return }
   if ($cl.IndexOf($here, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $cl -match '(vite|@esbuild)') {
     [void]$seeds.Add([int]$_.ProcessId)

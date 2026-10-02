@@ -1421,3 +1421,73 @@ test('the plugin job process sees those variables', { skip: !existsSync(PYTHON) 
     MAGNUSIM_JOB_ID: job.id,
   });
 });
+
+test('H15: a running OpenFOAM case folder is busy for ws.files and ws.data, by its real parts', async () => {
+  const pid = 'p-busy';
+  project(pid);
+  const caseDir = join(pluginDir(pid), 'studies', 's1', 'cases', 'c1');
+  mkdirSync(join(caseDir, '0'), { recursive: true });
+  writeFileSync(join(pluginDir(pid), 'studies', 's1', 'study.json'), '{}');
+  writeFileSync(join(caseDir, '0', 'U'), 'x');
+  const store = await import('../../foam-store.js');
+  store.resetFoamStoreForTests({ filePath: join(ROOT, 'foam-cases-busy.json') });
+  const rec = store.createFoamRecord({
+    kind: 'foam',
+    project_id: pid,
+    plugin: KEY,
+    study_id: 's1',
+    case_rel: 'cases/c1',
+    case_parts: ['studies', 's1', 'cases', 'c1'],
+    case_key: 'studies/s1/cases/c1',
+    case_dir: caseDir,
+  });
+  store.updateFoamRecord(rec.id, { status: 'running' });
+  const worker = new CountingWorker();
+  const router = new Router();
+  registerPhase3Routes(router, {
+    worker,
+    jobs: new JobManager({ cacheDir: join(ROOT, 'jobs-busy') }),
+    webRoot: ROOT,
+    cacheDir: join(ROOT, 'cache'),
+    serveLegacyFilter: async () => {},
+    startMeshJob() {},
+    startSolveJob() {},
+    startCadImportJob() {},
+    caseSnapshot: () => ({}),
+    attachCaseDir: () => ({ ok: true, status: 200, body: {} }),
+    resetCaseIdle() {},
+  });
+  const srv = await serve(router);
+  const c = client(srv.base, pid);
+  const data = (rel) =>
+    fetch(srv.base + '/api/plugin-data/write', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project_id: pid, plugin: KEY, rel, doc: { n: 1 } }),
+    }).then(async (r) => ({ status: r.status, body: await r.json() }));
+  try {
+    const busy = 'Stop the case, or wait for it to finish, before changing its files';
+    for (const rel of ['studies/s1/cases/c1/0/U', 'studies/s1/CASES/C1/0/U']) {
+      const r = await c.begin(rel, 1);
+      assert.deepEqual([r.status, r.body.code, r.body.error], [409, 'busy', busy], rel);
+    }
+    for (const [rel, recursive] of [['studies/s1/cases', true], ['studies/s1/cases/c1', true], ['studies/s1/cases/c1/0/U', false]]) {
+      const r = await c.del(rel, recursive);
+      assert.equal(r.body.code, 'busy', rel);
+    }
+    assert.ok(existsSync(join(caseDir, '0', 'U')));
+    const from = worker.calls.length;
+    for (const rel of ['studies/s1/cases/c1/x.json', 'studies/s1/CASES/C1/x.json']) {
+      const r = await data(rel);
+      assert.deepEqual([r.status, r.body.code], [409, 'busy'], rel);
+    }
+    assert.ok(!worker.calls.slice(from).includes('plugin_data.write'), 'refused before Python');
+    assert.equal((await data('studies/s1/notes.json')).status, 200, 'elsewhere in the study');
+    // A finished case frees its folder.
+    store.updateFoamRecord(rec.id, { status: 'done' });
+    assert.equal((await data('studies/s1/cases/c1/x.json')).status, 200);
+    assert.equal((await c.begin('studies/s1/cases/c1/0/p', 1)).status, 201);
+  } finally {
+    await srv.close();
+  }
+});

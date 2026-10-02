@@ -1483,6 +1483,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
     from cfddesk.registry import wsl_tools
     from cfddesk.registry.plugin_env import env_status
     from cfddesk.registry.requirements import check_requirements
+    from cfddesk.registry.solver import script_template_notes
 
     hub = get_hub()
     root = _resolve_web_root(web_root)
@@ -1551,7 +1552,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 tier=tier,
                 required=required,
                 python_env=_env_row_public(env_row),
-                notes=notes,
+                notes=[*notes, *script_template_notes(hub, manifest.key)],
                 workspaces=[
                     {"key": w.key, "title": w.title, "icon": w.icon, "entry": w.entry}
                     for w in (manifest.workspaces or [])

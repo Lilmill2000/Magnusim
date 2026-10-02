@@ -1,0 +1,7 @@
+key = "hook-demo"
+name = "Hook demo"
+version = "1.0.0"
+api_version = "1.3"
+license = "GPL-3.0-or-later"
+description = "Test plugin listening on the solve hooks (H15)"
+authors = "Magnusim"

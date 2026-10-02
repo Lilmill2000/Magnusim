@@ -456,6 +456,37 @@ describe('leaveWorkspaceTo', () => {
     expect(confirm).toHaveBeenCalledTimes(2);
   });
 
+  it("'results' (a case's results opened in 3D) asks the question Back asks, and goes only on Leave", async () => {
+    await goTo('#/p/proj/ws/ws-demo/bench/st-1');
+    setWorkspaceDirty(true);
+    expect(await leaveWorkspaceTo('#/p/proj', 'results')).toBe(false);
+    expect(location.hash).toBe('#/p/proj/ws/ws-demo/bench/st-1');
+    expect(await leaveWorkspaceTo('#/p/proj', 'back')).toBe(false);
+    // The same question both times.
+    expect(confirm.mock.calls[0]).toEqual(confirm.mock.calls[1]);
+    expect(confirm).toHaveBeenCalledWith(
+      asked({
+        title: LEAVE,
+        copy: 'Workspace demo has changes to "Wing section" that are not saved. Leaving discards them.',
+        yes: 'Leave',
+        no: 'Stay',
+        safe: true,
+      }),
+    );
+    const arrived = new Promise((r) => window.addEventListener('hashchange', r, { once: true }));
+    answer = true;
+    expect(await leaveWorkspaceTo('#/p/proj', 'results')).toBe(true);
+    await arrived;
+    expect(location.hash).toBe('#/p/proj');
+    // A clean page leaves without a question.
+    await goTo('#/p/proj/ws/ws-demo/bench/st-1');
+    unregister();
+    unregister = registerOpenWorkspace(workspace);
+    confirm.mockClear();
+    expect(await leaveWorkspaceTo('#/p/proj', 'results')).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it('goes nowhere when the workspace closed while its question was open', async () => {
     await goTo('#/p/proj/ws/ws-demo/bench/st-1');
     let reply: (ok: boolean) => void = () => undefined;

@@ -122,6 +122,27 @@ September 2026 readiness audit. This list preserves the intended work.
   - the R0.125 in tangential inlet blend of the Vortex test part, which
     OCCT 7.9.3 cannot build: try a newer OCCT.
 
+- **Plugin OpenFOAM cases and the compute slot, later (Plugin Host H15):**
+  - live results in the 3D view while a plugin case runs (`results.openIn3D`
+    answers `running` until it has ended);
+  - residual points for a case the app found again after a restart (its stage,
+    time and saved frames update, its plot does not);
+  - hold the compute slot until a stopped mesh's WSL processes are gone (today
+    it frees when the generator ends);
+  - scope result field reads (`?case=`) to a study, as attach is;
+  - busy checks for a plugin's own Python writers (its service, jobs and
+    `scope["data"]`) inside a running case's folder;
+  - a queue number on plugin study rows in the tree;
+  - more WSL step flags (`-dict`) when a plugin needs them;
+  - an optional scan for `#codeStream`, `#calc` and `systemCall` in a plugin's
+    case;
+  - plugin cases that start from a later time than `0`;
+  - render `solve.sh` in one pass for core runs (its placeholders), as
+    `foam_pre.sh` is;
+  - a prepare step's own progress beyond its stage names;
+  - solve hooks in a process of their own, so a plugin cannot end or bend a
+    core run.
+
 Each restored control should have a persistence check and a successful
 end-to-end simulation or result-generation test. Do not expose placeholder
 buttons marked “coming soon.”

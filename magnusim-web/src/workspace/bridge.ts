@@ -17,8 +17,22 @@
  * The page has unsaved work while it says so (nav.setDirty) or while one of its
  * uploads is open; the host hears of every change (hooks.setDirty) and asks
  * before any way out. A closed channel is clean again.
+ *
+ * Plugin OpenFOAM cases (1.3): compute.* submits a case the page wrote in its
+ * study's folder, and follows, stops and lists the study's cases. One event
+ * stream per channel carries every followed case; a reconnect's snapshot
+ * catches each case up, and an event the frame already has (by seq) is dropped.
  */
-import type { FileInfo, FileWriteResult, StudyRecord, ThemeInfo, UnitSystem, WorkspaceContext } from '../plugin-sdk/workspace';
+import type {
+  ComputeJob,
+  FileInfo,
+  FileWriteResult,
+  JobEvent,
+  StudyRecord,
+  ThemeInfo,
+  UnitSystem,
+  WorkspaceContext,
+} from '../plugin-sdk/workspace';
 
 export const HOST_SDK_MAJOR = 1;
 export const HOST_API_VERSION = '1.3';
@@ -70,6 +84,11 @@ export interface BridgeHooks {
   prompt(opts: { title: string; label: string; value: string; yes: string }): Promise<string | null>;
   units(): UnitSystem;
   log(message: string, detail?: unknown): void;
+  /**
+   * results.openIn3D: show a case's saved frames in the project's viewer. True
+   * once the workspace is closing for it; false when the user cancelled or stayed.
+   */
+  openResults(caseRel: string): Promise<boolean>;
 }
 
 export class BridgeError extends Error {
@@ -83,6 +102,90 @@ export class BridgeError extends Error {
 const notAllowed = (what: string) => new BridgeError(`not allowed: ${what}`, 'not_allowed');
 const badParam = (what: string) => new BridgeError(`bad parameter: ${what}`, 'bad_request');
 const isCount = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
+
+/** A plugin case's id (fc-<time>-<6 hex>). */
+const CASE_JOB_ID = /^fc-[a-z0-9]{6,12}-[0-9a-f]{6}$/;
+const CASE_DONE = new Set(['done', 'failed', 'stopped', 'lost']);
+
+function text(v: unknown, what: string, max: number): string {
+  if (typeof v !== 'string' || !v || v.length > max) throw badParam(what);
+  return v;
+}
+
+function caseJobId(v: unknown): string {
+  if (typeof v !== 'string' || !CASE_JOB_ID.test(v)) throw badParam('jobId');
+  return v;
+}
+
+function texts(v: unknown, what: string, maxItems: number, maxLength: number): string[] {
+  if (!Array.isArray(v) || v.length > maxItems) throw badParam(what);
+  for (const x of v) if (typeof x !== 'string' || !x || x.length > maxLength) throw badParam(what);
+  return [...(v as string[])];
+}
+
+/** compute.submitOpenFOAM's params as the app's submit body (§9.1 shapes; anything else is dropped). */
+export function caseSubmitBody(params: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = { case_rel: text(params.caseRel, 'caseRel', 240), app: text(params.app, 'app', 64) };
+  if (params.nProcs !== undefined && params.nProcs !== null) {
+    const n = params.nProcs;
+    if (!Number.isSafeInteger(n) || (n as number) < 1 || (n as number) > 64) throw badParam('nProcs (a whole number from 1 to 64)');
+    body.n_procs = n;
+  }
+  if (params.pre !== undefined && params.pre !== null) {
+    if (!Array.isArray(params.pre) || params.pre.length > 16) throw badParam('pre (at most 16 steps)');
+    body.pre = params.pre.map((raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw badParam('pre (each step an object)');
+      const step = raw as Record<string, unknown>;
+      const out: Record<string, unknown> = { tool: text(step.tool, 'pre tool', 32) };
+      if (step.args !== undefined && step.args !== null) out.args = texts(step.args, 'pre args (at most 4, each at most 120 characters)', 4, 120);
+      if (step.parallel !== undefined && step.parallel !== null) {
+        if (typeof step.parallel !== 'boolean') throw badParam('pre parallel (true or false)');
+        out.parallel = step.parallel;
+      }
+      return out;
+    });
+  }
+  const res = params.results;
+  if (!res || typeof res !== 'object' || Array.isArray(res)) throw badParam('results');
+  const r = res as Record<string, unknown>;
+  const results: Record<string, unknown> = { kinematicFields: texts(r.kinematicFields, 'results.kinematicFields', 16, 64) };
+  if (r.rho !== undefined && r.rho !== null) {
+    if (typeof r.rho !== 'number' || !Number.isFinite(r.rho) || r.rho <= 0) throw badParam('results.rho (a number above 0)');
+    results.rho = r.rho;
+  }
+  if (r.frameFields !== undefined && r.frameFields !== null) results.frameFields = texts(r.frameFields, 'results.frameFields', 16, 64);
+  body.results = results;
+  return body;
+}
+
+/** A case's result in the frame's shape (ComputeJob.result), whether the app sent it as the record or the job has it. */
+function caseResult(raw: unknown): ComputeJob['result'] {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pick = (camel: string, snake: string) => (r[camel] !== undefined ? r[camel] : r[snake]);
+  const saved = pick('savedTimes', 'saved_times');
+  const phases = r.phases;
+  const last = Number(pick('lastSaved', 'last_saved') ?? NaN);
+  const format = pick('writeFormat', 'write_format');
+  return {
+    savedTimes: Array.isArray(saved) ? (saved as unknown[]).map((t) => Number(t)).filter((t) => Number.isFinite(t)) : [],
+    lastSaved: Number.isFinite(last) ? last : null,
+    phases: phases && typeof phases === 'object' ? (phases as Record<string, number>) : {},
+    writeFormat: typeof format === 'string' ? format : null,
+  };
+}
+
+/** A case as the frame gets it from compute.status and compute.list. */
+function caseJob(job: ComputeJob): ComputeJob {
+  return { ...job, result: caseResult(job.result) };
+}
+
+/** A followed case: the last seq the frame was given; `held` keeps its events until it is caught up. */
+interface FollowedCase {
+  seq: number;
+  endSent: boolean;
+  held: Array<{ seq: number; ev: JobEvent }> | null;
+}
 
 export const THEME: ThemeInfo = { name: 'light', stylesheet: '/plugin-sdk/theme.css' };
 
@@ -124,6 +227,9 @@ export class WorkspaceCalls {
   /** Jobs this workspace started (the only ones it may follow or stop). */
   readonly jobs = new Set<string>();
   private readonly streams = new Map<string, EventSource>();
+  /** The study's plugin cases the frame follows (compute.events), and their one stream. */
+  private readonly cases = new Map<string, FollowedCase>();
+  private caseStream: EventSource | null = null;
   /** Uploads this workspace began (the only ones it may send to, commit or abort). */
   private readonly uploads = new Map<string, OpenUpload>();
   /** Bumped by close(): an upload begun before it is aborted when its answer comes. */
@@ -288,6 +394,35 @@ export class WorkspaceCalls {
         this.frameMessage = message;
         this.report();
         return { ok: true };
+      }
+      case 'compute.submitOpenFOAM': {
+        const body = caseSubmitBody(params);
+        const r = await api<{ job: ComputeJob; ahead?: number | null; existing?: boolean }>(`/api/plugin-cases/submit?${this.q()}`, {
+          body: { project_id: s.projectId, plugin: s.plugin, study_id: s.studyId, ...body },
+        });
+        return { id: r.job.id, ahead: typeof r.ahead === 'number' ? r.ahead : 0, existing: r.existing === true };
+      }
+      case 'compute.events': {
+        const jobId = caseJobId(params.jobId);
+        await this.followCase(jobId);
+        return { ok: true };
+      }
+      case 'compute.stop': {
+        const jobId = caseJobId(params.jobId);
+        const r = await api<{ job: ComputeJob }>(`/api/plugin-cases/stop?${this.q()}`, {
+          body: { project_id: s.projectId, plugin: s.plugin, study_id: s.studyId, job_id: jobId, force: params.force === true },
+        });
+        return { status: r.job.status, stopping: r.job.stopping === true };
+      }
+      case 'compute.status':
+        return caseJob(await this.caseStatus(caseJobId(params.jobId)));
+      case 'compute.list': {
+        const r = await api<{ jobs: ComputeJob[] }>(`/api/plugin-cases?${this.caseQuery()}`);
+        return (r.jobs || []).map(caseJob);
+      }
+      case 'results.openIn3D': {
+        const caseRel = text(params.caseRel, 'caseRel', 240);
+        return { opened: (await this.hooks.openResults(caseRel)) === true };
       }
       default:
         throw notAllowed(method ? JSON.stringify(method) : 'an unnamed call');
@@ -510,10 +645,133 @@ export class WorkspaceCalls {
     };
   }
 
+  /** This study's scope for the plugin-case routes. */
+  private caseQuery(extra: Record<string, string> = {}): string {
+    return this.q({ plugin: this.scope.plugin, study_id: this.scope.studyId, ...extra });
+  }
+
+  /** A case of this study (not_found for any other). */
+  private async caseStatus(jobId: string): Promise<ComputeJob> {
+    const r = await api<{ job: ComputeJob }>(`/api/plugin-cases/status?${this.caseQuery({ job_id: jobId })}`);
+    return r.job;
+  }
+
+  /**
+   * Follow a case of this study: its events reach the frame from now on, after
+   * one catch-up (queued, start and the live points, or end) from the stream's
+   * snapshot or from its status, whichever comes first.
+   */
+  private async followCase(jobId: string): Promise<void> {
+    const epoch = this.epoch;
+    const known = this.cases.get(jobId);
+    if (!known) this.cases.set(jobId, { seq: 0, endSent: false, held: [] });
+    this.openCaseStream();
+    let job: ComputeJob;
+    try {
+      job = await this.caseStatus(jobId);
+    } catch (err) {
+      // Not a case of this study: it is not followed.
+      const c = this.cases.get(jobId);
+      if (!known && c && c.held) this.cases.delete(jobId);
+      throw err;
+    }
+    if (epoch !== this.epoch) return;
+    const c = this.cases.get(jobId);
+    if (c && c.held) this.catchUp(jobId, c, job, null);
+  }
+
+  /** One stream per channel for every followed case of this study. */
+  private openCaseStream(): void {
+    if (this.caseStream) return;
+    const es = new EventSource(`/api/plugin-cases/events?${this.caseQuery()}`);
+    this.caseStream = es;
+    es.addEventListener('snapshot', (e) => {
+      try {
+        this.onSnapshot(JSON.parse((e as MessageEvent).data));
+      } catch {
+        /* not JSON: skip */
+      }
+    });
+    es.addEventListener('case', (e) => {
+      try {
+        const m = JSON.parse((e as MessageEvent).data) as { job_id?: unknown; seq?: unknown; ev?: unknown };
+        if (typeof m.job_id === 'string' && typeof m.seq === 'number' && m.ev && typeof m.ev === 'object') {
+          this.onCaseEvent(m.job_id, m.seq, m.ev as JobEvent);
+        }
+      } catch {
+        /* not JSON: skip */
+      }
+    });
+    es.onerror = () => {
+      // The browser reconnects by itself (and the next snapshot catches up); a closed stream is opened again by the next compute.events.
+      if (es.readyState === EventSource.CLOSED && this.caseStream === es) this.caseStream = null;
+    };
+  }
+
+  private onSnapshot(snap: { jobs?: ComputeJob[]; live?: { job_id?: string; points?: unknown[] } | null }): void {
+    for (const job of Array.isArray(snap.jobs) ? snap.jobs : []) {
+      const c = job && this.cases.get(job.id);
+      if (!c) continue;
+      if (c.held) {
+        this.catchUp(job.id, c, job, snap.live || null);
+        continue;
+      }
+      // Seen before (a reconnect): only an end the frame has not had.
+      if (CASE_DONE.has(job.status) && !c.endSent) {
+        c.endSent = true;
+        this.pushCase(job.id, { event: 'end', status: job.status, error: job.error ?? null, code: job.code ?? null, result: caseResult(job.result) });
+      }
+      c.seq = Math.max(c.seq, Number(job.seq) || 0);
+    }
+  }
+
+  /** The frame's first view of a followed case, then the events that came meanwhile (newer ones only). */
+  private catchUp(jobId: string, c: FollowedCase, job: ComputeJob, live: { job_id?: string; points?: unknown[] } | null): void {
+    const held = c.held || [];
+    c.held = null;
+    c.seq = Number(job.seq) || 0;
+    if (job.status === 'queued') this.pushCase(jobId, { event: 'queued', ahead: job.ahead });
+    else if (job.status === 'running') {
+      this.pushCase(jobId, { event: 'start' });
+      if (live && live.job_id === jobId && Array.isArray(live.points) && live.points.length) {
+        this.pushCase(jobId, { event: 'progress', points: live.points });
+      }
+    } else if (CASE_DONE.has(job.status)) {
+      c.endSent = true;
+      this.pushCase(jobId, { event: 'end', status: job.status, error: job.error ?? null, code: job.code ?? null, result: caseResult(job.result) });
+    }
+    for (const h of held.sort((a, b) => a.seq - b.seq)) this.onCaseEvent(jobId, h.seq, h.ev);
+  }
+
+  private onCaseEvent(jobId: string, seq: number, ev: JobEvent): void {
+    const c = this.cases.get(jobId);
+    if (!c) return;
+    if (c.held) {
+      c.held.push({ seq, ev });
+      return;
+    }
+    if (seq <= c.seq) return;
+    c.seq = seq;
+    if (ev.event === 'end') {
+      if (c.endSent) return;
+      c.endSent = true;
+      this.pushCase(jobId, { ...ev, result: caseResult(ev.result) });
+      return;
+    }
+    this.pushCase(jobId, ev);
+  }
+
+  private pushCase(jobId: string, data: JobEvent): void {
+    this.push({ event: 'job', jobId, data });
+  }
+
   /** Close every job stream, abort every open upload and forget unsaved work (the channel ended). */
   close(): void {
     for (const es of this.streams.values()) es.close();
     this.streams.clear();
+    this.caseStream?.close();
+    this.caseStream = null;
+    this.cases.clear();
     for (const id of this.uploads.keys()) this.dropUpload(id);
     this.uploads.clear();
     this.epoch++;
