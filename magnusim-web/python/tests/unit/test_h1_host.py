@@ -10,6 +10,7 @@ gate:h1-api-version
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -132,6 +133,8 @@ def test_gate_h1_override(tmp_path):
         hub.unregister("mesher", "cfmesh", plugin="h1_override")
     assert "cfmesh" in get_registry("mesher").keys()
 
+    # The test's own settings file (named, so it is the only one read).
+    os.environ["CFDDESK_LOCAL_JSON"] = str(web / ".cfddesk-local.json")
     (web / ".cfddesk-local.json").write_text(
         json.dumps({"plugins": {"disabled": ["h1_override"]}}),
         encoding="utf-8",
@@ -190,6 +193,8 @@ def test_gate_h1_hook(tmp_path):
     hooked = (case / "system" / "controlDict").read_text(encoding="utf-8")
     assert "h1Probe" in hooked
 
+    # The test's own settings file (named, so it is the only one read).
+    os.environ["CFDDESK_LOCAL_JSON"] = str(web / ".cfddesk-local.json")
     (web / ".cfddesk-local.json").write_text(
         json.dumps({"plugins": {"disabled": ["h1_hook"]}}),
         encoding="utf-8",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from cfddesk.registry.discovery import load_all, reset_for_tests
@@ -42,6 +43,8 @@ def test_gate_h3_picker_open(tmp_path: Path) -> None:
         load_all(web_root=tmp_path)
         assert "h3probe" in _keys()
         assert "incompressible_steady" in _keys()
+        # The test's own settings file (named, so it is the only one read).
+        os.environ["CFDDESK_LOCAL_JSON"] = str(tmp_path / ".cfddesk-local.json")
         (tmp_path / ".cfddesk-local.json").write_text(
             json.dumps({"plugins": {"disabled": ["h3probe"]}}),
             encoding="utf-8",

@@ -21,6 +21,12 @@ def web_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def local_json_named() -> bool:
+    """The local JSON was named by MAGNUSIM_LOCAL_JSON (tests, second servers): it is then
+    the only settings file, and the legacy web-root file is not read beside it."""
+    return bool((os.environ.get("MAGNUSIM_LOCAL_JSON") or os.environ.get("CFDDESK_LOCAL_JSON") or "").strip())
+
+
 def local_json_path() -> Path:
     override = (os.environ.get("MAGNUSIM_LOCAL_JSON") or os.environ.get("CFDDESK_LOCAL_JSON") or "").strip()
     if override:

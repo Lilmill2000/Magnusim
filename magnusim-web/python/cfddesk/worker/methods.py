@@ -1578,8 +1578,13 @@ def _set_plugin_enabled(key: str, enabled: bool) -> dict[str, Any]:
 def _drop_from_legacy(key: str, field: str) -> None:
     """Discovery also reads the legacy web-root .cfddesk-local.json (a union): a key
     left in its ``field`` list ("disabled" or "enabled") would keep undoing the
-    choice just made, since Enable and Disable edit only the current file."""
+    choice just made, since Enable and Disable edit only the current file. A local
+    JSON named by MAGNUSIM_LOCAL_JSON is read alone, so the legacy file stays as it is."""
+    from cfddesk.wsl.config import local_json_named
+
     legacy = web_root() / ".cfddesk-local.json"
+    if local_json_named():
+        return
     try:
         if not legacy.is_file() or legacy.resolve() == local_json_path().resolve():
             return

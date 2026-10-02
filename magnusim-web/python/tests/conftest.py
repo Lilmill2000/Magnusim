@@ -11,6 +11,19 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PROJECTS = FIXTURES / "projects"
 
 
+@pytest.fixture(autouse=True)
+def _own_local_json(request, tmp_path_factory, monkeypatch):
+    """Each test reads an empty local JSON of its own, never this PC's settings: a
+    plugin turned on in the app (plugins.enabled) would otherwise leak into the plugin
+    tests. A test may still name its own file with either variable (this one uses the
+    lower-precedence CFDDESK_LOCAL_JSON, so any test's choice wins). WSL tests keep the
+    PC's file, which holds the toolchain settings they need."""
+    if request.node.get_closest_marker("wsl"):
+        return
+    monkeypatch.delenv("MAGNUSIM_LOCAL_JSON", raising=False)
+    monkeypatch.setenv("CFDDESK_LOCAL_JSON", str(tmp_path_factory.mktemp("local") / ".magnusim-local.json"))
+
+
 @pytest.fixture
 def fixtures_dir() -> Path:
     return FIXTURES

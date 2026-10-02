@@ -219,17 +219,21 @@ class PluginState:
 
 
 def plugin_state(web_root: Path | None) -> PluginState:
-    """The on/off lists from the local JSON and the legacy web-root file (union)."""
+    """The on/off lists from the local JSON and the legacy web-root file (union).
+    A local JSON named by MAGNUSIM_LOCAL_JSON is the only one read, so a test or a
+    second server never picks up the plugins turned on in this PC's app."""
     disabled: set[str] = set()
     enabled: set[str] = set()
     paths: list[Path] = []
+    named = False
     try:
-        from cfddesk.wsl.config import local_json_path
+        from cfddesk.wsl.config import local_json_named, local_json_path
 
         paths.append(local_json_path())
+        named = local_json_named()
     except Exception:
         pass
-    if web_root is not None:
+    if web_root is not None and not named:
         paths.append(web_root / ".cfddesk-local.json")
     for path in paths:
         try:

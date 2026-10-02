@@ -142,24 +142,59 @@ def test_a_default_on_bundled_plugin_turned_on_is_remembered_too(env):
     assert "incompressible_flow" not in _lists(env["local"])[1]
 
 
-def test_legacy_file_and_the_flat_key(env):
+def test_legacy_file_and_the_flat_key(env, monkeypatch: pytest.MonkeyPatch):
+    import cfddesk.wsl.config as wsl_config
     from cfddesk.worker import methods
 
+    # As the app runs: no named local JSON, so the current file is read together with
+    # the legacy one in the web root. Both are private here: the current file's path is
+    # stubbed (unnamed, it would be this PC's real file) and the worker's web root is
+    # MAGNUSIM_WEB_ROOT.
+    monkeypatch.delenv("MAGNUSIM_LOCAL_JSON")
+    monkeypatch.delenv("CFDDESK_LOCAL_JSON")
+    current = env["web"] / ".magnusim-local.json"
+    current.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(wsl_config, "local_json_path", lambda: current)
+    monkeypatch.setattr(methods, "local_json_path", lambda: current)
+    real = [wsl_config.web_root() / name for name in (".magnusim-local.json", ".cfddesk-local.json")]
+    real_before = [p.read_bytes() if p.is_file() else None for p in real]
     legacy = env["web"] / ".cfddesk-local.json"
     legacy.write_text(json.dumps({"plugins": {"enabled": [KEY]}}), encoding="utf-8")
+    reset_for_tests()
     load_all()
     assert _row()["status"] == "enabled"
     methods.plugins_disable(key=KEY)
     assert json.loads(legacy.read_text(encoding="utf-8"))["plugins"]["enabled"] == []
     assert _row()["status"] == "disabled"
     # A current file holding only the flat list: it is folded into the nested one.
-    env["local"].write_text(json.dumps({"plugins.disabled": ["example-laminar"]}), encoding="utf-8")
+    current.write_text(json.dumps({"plugins.disabled": ["example-laminar"]}), encoding="utf-8")
     reset_for_tests()
     methods.plugins_enable(key=KEY)
-    data = json.loads(env["local"].read_text(encoding="utf-8"))
+    data = json.loads(current.read_text(encoding="utf-8"))
     assert "plugins.disabled" not in data
     assert data["plugins"]["disabled"] == ["example-laminar"]
     assert data["plugins"]["enabled"] == [KEY]
+    # This PC's own settings files were never touched.
+    assert [p.read_bytes() if p.is_file() else None for p in real] == real_before
+
+
+def test_a_named_local_json_is_the_only_settings_file(env):
+    """MAGNUSIM_LOCAL_JSON (tests, second servers) is read alone: a plugin turned on in
+    this PC's legacy web-root file does not leak in, and turning it off leaves that file
+    as it was."""
+    from cfddesk.worker import methods
+
+    legacy = env["web"] / ".cfddesk-local.json"
+    before = json.dumps({"plugins": {"enabled": [KEY]}})
+    legacy.write_text(before, encoding="utf-8")
+    reset_for_tests()
+    load_all()
+    assert discovery.plugin_state(env["web"]) == discovery.PluginState()
+    assert _row()["status"] == "disabled"
+    methods.plugins_enable(key=KEY)
+    methods.plugins_disable(key=KEY)
+    assert legacy.read_text(encoding="utf-8") == before
+    assert json.loads(env["local"].read_text(encoding="utf-8"))["plugins"]["disabled"] == [KEY]
 
 
 def test_manifest_flags_are_strict():
