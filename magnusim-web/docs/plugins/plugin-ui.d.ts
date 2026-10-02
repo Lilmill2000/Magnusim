@@ -565,7 +565,8 @@ declare module '@magnusim/plugin-ui/_internal/units' {
   /**
    * The SI unit label a result field of this quantity is shown in ('' when the
    * quantity is unknown). Results are drawn in SI; a kinematic field has already
-   * been scaled to its quantity (Pa for pressure) by the exporter.
+   * been scaled to its quantity (Pa for pressure) by the exporter. Results use it
+   * only for a field whose analysis names no `unit` (API 1.4 `ResultField.unit`).
    */
   export function siUnitLabel(quantity: string): string;
   /**

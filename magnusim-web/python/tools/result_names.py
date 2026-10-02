@@ -231,8 +231,10 @@ def filter_fields(
 def case_result_fields(case_dir: Path) -> list[dict[str, str]] | None:
     """The analysis's result fields from the case sidecar, in order; None when it lists none.
 
-    Each row is ``{key, kind, unit_quantity, label}``; ``kind`` is '' when the
-    sidecar does not say (the time folder's file tells then).
+    Each row is ``{key, kind, unit_quantity, label, unit, magnitude_label}``;
+    ``kind`` is '' when the sidecar does not say (the time folder's file tells
+    then), and ``unit`` and ``magnitude_label`` are '' when it names none (API
+    1.4; a unit that is not plain text of at most 32 characters reads as '').
     """
     rows = case_sidecar(case_dir).get("result_fields")
     if not isinstance(rows, list):
@@ -251,8 +253,17 @@ def case_result_fields(case_dir: Path) -> list[dict[str, str]] | None:
             "kind": str(row.get("kind") or "").strip().lower(),
             "unit_quantity": str(row.get("unit_quantity") or "").strip().lower(),
             "label": str(row.get("label") or ""),
+            "unit": _plain(row.get("unit"), 32),
+            "magnitude_label": _plain(row.get("magnitude_label"), 120),
         })
     return out
+
+
+def _plain(value: Any, limit: int) -> str:
+    """``value`` when it is one line of plain text of at most ``limit`` characters, else ''."""
+    if not isinstance(value, str) or len(value) > limit or re.search(r"[\x00-\x1f\x7f-\x9f]", value):
+        return ""
+    return value
 
 
 def _row_shown_name(time_dir: Path, row: dict[str, str]) -> str:

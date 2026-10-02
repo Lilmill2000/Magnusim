@@ -254,37 +254,55 @@
           "key": "U",
           "label": "Velocity",
           "unit_quantity": "velocity",
-          "kind": "vector"
+          "kind": "vector",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "magU"
         },
         {
           "key": "p",
           "label": "Pressure",
           "unit_quantity": "pressure",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "p"
         },
         {
           "key": "k",
           "label": "Turbulent kinetic energy",
           "unit_quantity": "specific_energy",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "k"
         },
         {
           "key": "omega",
           "label": "Specific dissipation rate",
           "unit_quantity": "specific_dissipation_rate",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "omega"
         },
         {
           "key": "epsilon",
           "label": "Turbulent dissipation rate",
           "unit_quantity": "dissipation_rate",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "epsilon"
         },
         {
           "key": "nut",
           "label": "Turbulent viscosity",
           "unit_quantity": "kinematic_viscosity",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "nut"
         }
       ],
       "kinematic_fields": null,
@@ -632,37 +650,55 @@
           "key": "U",
           "label": "Velocity",
           "unit_quantity": "velocity",
-          "kind": "vector"
+          "kind": "vector",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "magU"
         },
         {
           "key": "p",
           "label": "Pressure",
           "unit_quantity": "pressure",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "p"
         },
         {
           "key": "k",
           "label": "Turbulent kinetic energy",
           "unit_quantity": "specific_energy",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "k"
         },
         {
           "key": "omega",
           "label": "Specific dissipation rate",
           "unit_quantity": "specific_dissipation_rate",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "omega"
         },
         {
           "key": "epsilon",
           "label": "Turbulent dissipation rate",
           "unit_quantity": "dissipation_rate",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "epsilon"
         },
         {
           "key": "nut",
           "label": "Turbulent viscosity",
           "unit_quantity": "kinematic_viscosity",
-          "kind": "scalar"
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "nut"
         }
       ],
       "kinematic_fields": null,

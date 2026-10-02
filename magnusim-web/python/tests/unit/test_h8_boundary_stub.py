@@ -106,6 +106,11 @@ def test_stub_contract(stub):
     # It declares no kinematic fields (API 1.4): null in describe and in its launch spec.
     assert row["contract"] == "1.4" and row["kinematic_fields"] is None
     assert launch.kinematic_fields is None and launch.to_json()["kinematic_fields"] is None
+    # Its result field names no unit of its own (the page labels it from unit_quantity).
+    assert row["result_fields"] == [
+        {"key": "T", "label": "Temperature", "unit_quantity": "temperature", "kind": "scalar",
+         "unit": "", "magnitude_label": "", "shown": "T"}
+    ]
 
 
 def test_stub_writes_its_own_case(stub, tmp_path: Path):

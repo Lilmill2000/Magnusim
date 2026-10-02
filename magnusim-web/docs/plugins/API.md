@@ -624,7 +624,7 @@ The core's panel select (.bc-select, the BC and Materials panels).
 siUnitLabel(quantity: string): string
 ```
 
-The SI unit label a result field of this quantity is shown in ('' when the quantity is unknown). Results are drawn in SI; a kinematic field has already been scaled to its quantity (Pa for pressure) by the exporter.
+The SI unit label a result field of this quantity is shown in ('' when the quantity is unknown). Results are drawn in SI; a kinematic field has already been scaled to its quantity (Pa for pressure) by the exporter. Results use it only for a field whose analysis names no `unit` (API 1.4 `ResultField.unit`).
 
 #### StatusBlock
 
@@ -1717,6 +1717,22 @@ describe_extra(spec: Any) -> dict[str, Any]
 
 The contract fields ``Registry.describe`` adds to an analysis row.
 
+#### plain_text
+
+```python
+plain_text(value: Any, limit: int) -> bool
+```
+
+True for a one-line string of at most ``limit`` characters with no control characters.
+
+#### result_fields
+
+```python
+result_fields(spec: Any) -> list[dict[str, Any]]
+```
+
+What results colour by, in the analysis's order (API 1.4 adds ``unit``, ``magnitude_label`` and ``shown``).
+
 #### residual_series
 
 ```python
@@ -1840,6 +1856,8 @@ Constants:
 - `FIELD_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,63}$")`
 - `LEGACY_FRAME_FIELDS = ("U", "p")`
 - `GENERIC_LOG_PARSER = LogParserRef("cfddesk.wsl.solve_run", "GenericParser")`
+- `RESULT_KINDS = ("scalar", "vector", "symm_tensor", "tensor")`
+- `UNIT_TEXT_MAX = 32`
 - `NO_MONITORS = {"rho": None, "monitors": [], "custom": [], "balance": None}`
 
 ## 6. Hooks

@@ -94,6 +94,8 @@ def test_any_scalar_field_colours_the_surface_unscaled(tmp_path: Path, monkeypat
     assert (meta["foam_proof"]["min"], meta["foam_proof"]["max"]) == (290.0, 310.0)
     assert meta["scaled_by_density"] is False and "pressure_range_unit" not in meta
     assert meta["fields_available"] == ["T"]
+    # The case's sidecar lists no result fields, so the meta has none.
+    assert meta["result_fields"] is None
     rng = _rpc("filter.series_range", {"case_dir": str(case), "field": "T"})["result"]
     assert (rng["min"], rng["max"], rng["scaled_by_density"]) == (290.0, 310.0, False)
 
@@ -129,6 +131,28 @@ def test_tensor_fields_are_never_offered(tmp_path: Path, monkeypatch):
     res = _rpc("filter.case_field", {"case_dir": str(case), "time": "1", "field": "k", "out_dir": str(out)})
     assert "result" in res, res
     assert json.loads((out / "k.meta.json").read_text(encoding="utf-8"))["fields_available"] == ["k", "p", "magU"]
+
+
+def test_exported_meta_carries_the_cases_result_fields(tmp_path: Path, monkeypatch):
+    """API 1.4: the surface meta lists the sidecar's result fields (labels and units)."""
+    rows = [
+        {"key": "T", "label": "Temperature", "unit_quantity": "temperature", "kind": "scalar",
+         "unit": "K", "magnitude_label": "", "shown": "T"},
+        {"key": "W", "label": "Drift", "unit_quantity": "velocity", "kind": "vector",
+         "unit": "", "magnitude_label": "Drift speed", "shown": "magW"},
+    ]
+    case = _case(tmp_path, {"rho": RHO, "kinematic_fields": [], "result_fields": rows}, {"T": np.full(64, 300.0)})
+    _patch_volume(monkeypatch, _mesh({"T": 300.0}))
+    out = tmp_path / "surf"
+    res = _rpc("filter.case_field", {"case_dir": str(case), "time": "1", "field": "T", "out_dir": str(out)})
+    assert "result" in res, res
+    meta = json.loads((out / "T.meta.json").read_text(encoding="utf-8"))
+    assert meta["result_fields"] == [
+        {"key": "T", "kind": "scalar", "unit_quantity": "temperature", "label": "Temperature",
+         "unit": "K", "magnitude_label": ""},
+        {"key": "W", "kind": "vector", "unit_quantity": "velocity", "label": "Drift",
+         "unit": "", "magnitude_label": "Drift speed"},
+    ]
 
 
 def test_field_names_are_checked(tmp_path: Path, monkeypatch):
@@ -176,14 +200,26 @@ def test_writing_a_case_stamps_its_frame_fields(tmp_path: Path):
     a scalar analysis, not U and p): the case sidecar says which they are."""
     from types import SimpleNamespace
 
-    from cfddesk.registry.analysis import _stamp_case
+    from cfddesk.registry.analysis import ResultField, _stamp_case
 
     case = tmp_path / "case"
     case.mkdir()
     (case / "w27-case.json").write_text(json.dumps({"rho": RHO, "kinematic_fields": ["p"]}), encoding="utf-8")
-    _stamp_case(case, "incompressible_steady", SimpleNamespace(frame_fields=("U", "p")))
+    declared = (ResultField("U", "Velocity", "velocity", "vector"), ResultField("p", "Pressure", "pressure", "scalar", unit="Pa"))
+    _stamp_case(case, "incompressible_steady", SimpleNamespace(key="x", frame_fields=("U", "p"), result_fields=declared))
     doc = json.loads((case / "w27-case.json").read_text(encoding="utf-8"))
-    assert doc == {"rho": RHO, "kinematic_fields": ["p"], "analysis_key": "incompressible_steady", "frame_fields": ["U", "p"]}
+    assert doc == {
+        "rho": RHO,
+        "kinematic_fields": ["p"],
+        "analysis_key": "incompressible_steady",
+        "frame_fields": ["U", "p"],
+        "result_fields": [
+            {"key": "U", "label": "Velocity", "unit_quantity": "velocity", "kind": "vector",
+             "unit": "", "magnitude_label": "", "shown": "magU"},
+            {"key": "p", "label": "Pressure", "unit_quantity": "pressure", "kind": "scalar",
+             "unit": "Pa", "magnitude_label": "", "shown": "p"},
+        ],
+    }
 
     bare = tmp_path / "bare"
     bare.mkdir()

@@ -515,24 +515,38 @@ function resultFieldRows() {
   return row && Array.isArray(row.result_fields) ? row.result_fields : [];
 }
 
+/**
+ * The name a result row is coloured by: its `shown` (null for a tensor, which
+ * is never offered). A row without `shown` (before API 1.4) shows a vector X as
+ * magX and anything else by its key.
+ */
+function resultRowShown(r) {
+  if (!r || !r.key) return null;
+  if ('shown' in r) return r.shown ? String(r.shown) : null;
+  return r.kind === 'vector' ? 'mag' + r.key : String(r.key);
+}
+
+/** The unit label of a result row: the analysis's own unit, else the SI label of its quantity. */
+function resultRowUnit(r) {
+  const own = String(r.unit || '').trim();
+  return own || siUnitLabel(r.unit_quantity);
+}
+
 /** The fields the open study's analysis can colour by, in its declared order. */
 function resultFieldNames() {
-  return resultFieldRows()
-    .filter((r) => r && r.key)
-    .map((r) => (r.kind === 'vector' ? 'mag' + r.key : r.key));
+  return resultFieldRows().map(resultRowShown).filter(Boolean);
 }
 
 /** { name, label, unit } of a shown field (label: its analysis's, else the name). */
 function fieldInfo(field) {
   const name = fieldKey(field);
   for (const r of resultFieldRows()) {
-    if (!r || !r.key) continue;
-    if (r.kind === 'vector' && 'mag' + r.key === name) {
-      return { name, label: String(r.label || r.key) + ' Magnitude', unit: siUnitLabel(r.unit_quantity) };
+    if (resultRowShown(r) !== name) continue;
+    if (r.kind === 'vector') {
+      const own = String(r.magnitude_label || '').trim();
+      return { name, label: own || String(r.label || r.key) + ' Magnitude', unit: resultRowUnit(r) };
     }
-    if (r.kind !== 'vector' && r.key === name) {
-      return { name, label: String(r.label || r.key), unit: siUnitLabel(r.unit_quantity) };
-    }
+    return { name, label: String(r.label || r.key), unit: resultRowUnit(r) };
   }
   return { name, label: name, unit: '' };
 }

@@ -153,7 +153,10 @@ export function fromSi(quantity: Quantity, valueSi: number, unit: string): numbe
   return valueSi / table[resolved];
 }
 
-/** SI labels of quantities results carry that no input uses (turbulence fields). */
+/**
+ * SI labels of quantities results carry that no input uses (turbulence fields).
+ * The fallback for a result field whose analysis names no `unit` of its own (API 1.4).
+ */
 const RESULT_SI: Record<string, string> = {
   specific_energy: 'm²/s²',
   specific_dissipation_rate: '1/s',
@@ -163,7 +166,8 @@ const RESULT_SI: Record<string, string> = {
 /**
  * The SI unit label a result field of this quantity is shown in ('' when the
  * quantity is unknown). Results are drawn in SI; a kinematic field has already
- * been scaled to its quantity (Pa for pressure) by the exporter.
+ * been scaled to its quantity (Pa for pressure) by the exporter. Results use it
+ * only for a field whose analysis names no `unit` (API 1.4 `ResultField.unit`).
  */
 export function siUnitLabel(quantity: string): string {
   const q = String(quantity || '');

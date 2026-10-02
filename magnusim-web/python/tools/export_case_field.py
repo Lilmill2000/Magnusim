@@ -29,6 +29,7 @@ from case_volume import load_volume  # noqa: E402
 from result_names import (  # noqa: E402, F401  (foam_kind / FIELD_NAME / shown_fields: re-exported)
     FIELD_NAME,
     TENSOR_KINDS,
+    case_result_fields,
     ensure_shown_field,
     foam_kind,
     foam_source,
@@ -314,6 +315,8 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
         "time": time,
         "field": field,
         "fields_available": shown_fields(time_dir),
+        # The analysis's result fields from the case sidecar (labels, units); None without one.
+        "result_fields": case_result_fields(case_dir),
         "source_vtu": source_vtu,
         "convert_method": (
             "on-demand pyvista: read .cfddesk-prepared.vtu or OpenFOAMReader "

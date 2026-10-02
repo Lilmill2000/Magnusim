@@ -66,6 +66,8 @@ export interface RegistryRow {
     swatch: string;
   }>;
   x_axis?: string;
+  /** What results colour by, in the analysis's order. */
+  result_fields?: ResultFieldRow[];
   /** Fields its cases store divided by density (API 1.4); null when the analysis does not say. */
   kinematic_fields?: string[] | null;
   study_defaults?: Record<string, unknown>;
@@ -73,6 +75,20 @@ export interface RegistryRow {
   ui?: Record<string, string>;
   /** Solver apps: the program a case runs. */
   application?: string;
+}
+
+/** A field an analysis's results show (API 1.4 adds unit, magnitude_label and shown). */
+export interface ResultFieldRow {
+  key: string;
+  label: string;
+  unit_quantity: string;
+  kind: 'scalar' | 'vector' | 'symm_tensor' | 'tensor';
+  /** The unit label results show it in; '' = the SI label of unit_quantity. */
+  unit: string;
+  /** A vector's magnitude label; '' = "<label> Magnitude". */
+  magnitude_label: string;
+  /** The name a view colours by: key (scalar), mag<key> (vector), null (tensor: never shown). */
+  shown: string | null;
 }
 
 export interface AnalysisFamily {

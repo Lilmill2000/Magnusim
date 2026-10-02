@@ -165,10 +165,6 @@ def _td(value: Any) -> Literal["steady", "transient"]:
 def describe_extra(spec: Any) -> dict[str, Any]:
     """The contract fields ``Registry.describe`` adds to an analysis row."""
     fam = _hook(spec, "family")
-    result_fields = [
-        {"key": f.key, "label": f.label, "unit_quantity": f.unit_quantity, "kind": f.kind}
-        for f in (getattr(spec, "result_fields", ()) or ())
-    ]
     return {
         "contract": CONTRACT_VERSION,
         "family": (
@@ -187,7 +183,7 @@ def describe_extra(spec: Any) -> dict[str, Any]:
         "residual_keys": list(_hook(spec, "residual_keys") or ()),
         "residual_series": residual_series(spec),
         "x_axis": str(_hook(spec, "x_axis") or ("seconds" if _td(spec.time_dependency) == "transient" else "iterations")),
-        "result_fields": result_fields,
+        "result_fields": result_fields(spec),
         "kinematic_fields": _list_or_none(kinematic_fields(spec)),
         "ui": dict(_hook(spec, "ui") or {}),
         "study_defaults": study_defaults(spec),
@@ -197,6 +193,65 @@ def describe_extra(spec: Any) -> dict[str, Any]:
 
 def _list_or_none(names: tuple[str, ...] | None) -> list[str] | None:
     return None if names is None else list(names)
+
+
+RESULT_KINDS: tuple[str, ...] = ("scalar", "vector", "symm_tensor", "tensor")
+UNIT_TEXT_MAX = 32
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def plain_text(value: Any, limit: int) -> bool:
+    """True for a one-line string of at most ``limit`` characters with no control characters."""
+    return isinstance(value, str) and len(value) <= limit and not _CONTROL_RE.search(value)
+
+
+def _row_value(row: Any, name: str) -> Any:
+    return row.get(name) if isinstance(row, dict) else getattr(row, name, None)
+
+
+def result_fields(spec: Any) -> list[dict[str, Any]]:
+    """What results colour by, in the analysis's order (API 1.4 adds ``unit``,
+    ``magnitude_label`` and ``shown``).
+
+    ``shown`` is the name a view colours by: the key of a scalar, ``mag<key>``
+    for a vector, None for a tensor (never offered). A key must be a field name,
+    the kind one of :data:`RESULT_KINDS`, and the unit plain text of at most
+    32 characters; anything else is a ContractError.
+    """
+    what = f"{getattr(spec, 'key', '?')}.result_fields"
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in getattr(spec, "result_fields", ()) or ():
+        key = _row_value(row, "key")
+        if not field_name_ok(key):
+            raise ContractError(
+                f"{what}: {key!r} is not a field name (a letter, then up to 63 letters, digits, _ or ., no __)"
+            )
+        if key in seen:
+            raise ContractError(f"{what}: {key!r} is listed twice")
+        seen.add(key)
+        kind = _row_value(row, "kind")
+        if kind not in RESULT_KINDS:
+            raise ContractError(f"{what}: {key} has kind {kind!r}; use one of {list(RESULT_KINDS)}")
+        unit = _row_value(row, "unit") or ""
+        if not plain_text(unit, UNIT_TEXT_MAX):
+            raise ContractError(f"{what}: {key} unit {unit!r} must be plain text of at most {UNIT_TEXT_MAX} characters")
+        magnitude_label = _row_value(row, "magnitude_label") or ""
+        if not plain_text(magnitude_label, 120):
+            raise ContractError(f"{what}: {key} magnitude_label {magnitude_label!r} must be one line of plain text")
+        shown: str | None = key if kind == "scalar" else ("mag" + key if kind == "vector" else None)
+        out.append(
+            {
+                "key": key,
+                "label": str(_row_value(row, "label") or key),
+                "unit_quantity": str(_row_value(row, "unit_quantity") or ""),
+                "kind": kind,
+                "unit": unit,
+                "magnitude_label": magnitude_label,
+                "shown": shown,
+            }
+        )
+    return out
 
 
 _SERIES_KEYS = ("key", "label", "color", "fields", "always", "dashed", "max_key", "max_label", "swatch")

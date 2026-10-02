@@ -13,7 +13,7 @@ from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 
 TimeDependency = Literal["steady", "transient"]
-ResultKind = Literal["scalar", "vector"]
+ResultKind = Literal["scalar", "vector", "symm_tensor", "tensor"]
 
 # The default analysis is the required bundled plugin's [default_analysis]
 # (manifest.toml); the core names no simulation type. DEFAULT_STEADY_KEY,
@@ -169,12 +169,19 @@ def analysis_supports_time_dependency(key: str, time_dependency: str | None, reg
 
 @dataclass(frozen=True)
 class ResultField:
-    """A field exposed in results / post for an analysis."""
+    """A field exposed in results / post for an analysis.
+
+    ``unit`` (API 1.4) is the unit label results show it in ("" = the SI label
+    of ``unit_quantity``); ``magnitude_label`` names a vector's magnitude
+    ("" = "<label> Magnitude"). Tensor kinds are listed but never coloured by.
+    """
 
     key: str
     label: str
     unit_quantity: str
     kind: ResultKind
+    unit: str = ""
+    magnitude_label: str = ""
 
 
 
@@ -362,8 +369,10 @@ def _stamp_case(out: Path, key: str, spec: Any) -> None:
     """Record in the case's sidecar (``w27-case.json``) what readers of the case
     need from its analysis: its key, the fields whose files mark a written
     result frame (results list only complete times) and, when the analysis
-    declares them, the fields stored divided by density. The analysis's own
-    keys stay as it wrote them (its own ``kinematic_fields`` list wins)."""
+    declares them, the fields stored divided by density and its result fields
+    (what results colour by, with labels and units). The analysis's own keys
+    stay as it wrote them (its own ``kinematic_fields`` and ``result_fields``
+    lists win)."""
     from cfddesk.registry import contract
 
     if not out.is_dir():
@@ -382,6 +391,9 @@ def _stamp_case(out: Path, key: str, spec: Any) -> None:
     kinematic = contract.kinematic_fields(spec)
     if kinematic is not None:
         doc.setdefault("kinematic_fields", list(kinematic))
+    rows = contract.result_fields(spec)
+    if rows:
+        doc.setdefault("result_fields", rows)
     sidecar.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 
