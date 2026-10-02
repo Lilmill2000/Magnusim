@@ -1,0 +1,85 @@
+// {{name}} as a user meets it: a second app server with only this plugin installed
+// (the app's e2e/support/host-server.mjs), a {{kind_title}} study opened in its workspace,
+// the form saved to the study, the backend's answer and a job's progress.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { expect, test } from '{{playwright}}';
+import { cpSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { NO_GEOMETRY_PROJECT } from '{{app_rel}}/e2e/prepare-projects.js';
+import { e2eTemp, startHost } from '{{app_rel}}/e2e/support/host-server.mjs';
+
+const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const KEY = '{{key}}';
+const KIND = '{{kind}}';
+const PROJECT = NO_GEOMETRY_PROJECT;
+
+let host;
+
+test.beforeAll(async () => {
+  test.setTimeout(300_000);
+  const tmp = e2eTemp(KEY);
+  const plugins = join(tmp, 'plugins');
+  cpSync(PLUGIN_DIR, join(plugins, KEY), {
+    recursive: true,
+    filter: (src) => !/[\\/](node_modules|__pycache__|\.venv|test-results)([\\/]|$)/.test(src),
+  });
+  // A Vite cache of its own, so it never disturbs another test server of this app.
+  host = await startHost({
+    name: KEY,
+    tmp,
+    pluginsDir: plugins,
+    viteCacheDir: join(tmp, 'vite-cache'),
+    env: { MAGNUSIM_PLUGIN_ENVS_DIR: join(tmp, 'envs') },
+  });
+{{#venv}}
+  // Its own environment, built as Settings > Plugins > Install dependencies builds it.
+  const install = await fetch(`${host.base}/api/plugins/${KEY}/env/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  expect(install.status, await install.text()).toBe(202);
+  await expect
+    .poll(async () => (await (await fetch(`${host.base}/api/plugins/${KEY}/env`)).json()).env?.state, { timeout: 240_000 })
+    .toBe('ready');
+{{/venv}}
+});
+
+test.afterAll(() => {
+  host?.stop();
+});
+
+test('{{kind_title_js}}: the form saves to the study, the backend answers and the job reports progress', async ({ page, request }) => {
+  const made = await request.post(`${host.base}/api/plugin-studies/create`, {
+    data: { project_id: PROJECT, plugin: KEY, kind: KIND, title: 'Test {{kind_title_lower_js}}' },
+  });
+  expect(made.ok(), await made.text()).toBe(true);
+  const study = (await made.json()).study;
+
+  await page.goto(`${host.base}/#/p/${PROJECT}/ws/${KEY}/${KIND}/${study.id}`);
+  await expect(page.locator('#workspace-overlay')).toBeVisible({ timeout: 60_000 });
+  const frame = page.frameLocator('#workspace-frame');
+  await expect(frame.locator('[data-title]')).toHaveText('Test {{kind_title_lower_js}}', { timeout: 60_000 });
+
+  // The form saves when a field is committed, in SI: the metric project shows lengths in mm.
+  const width = frame.locator('input[aria-label="Width"]');
+  await expect(width.locator('xpath=following-sibling::*[1]')).toHaveText('mm');
+  await width.fill('2000');
+  await width.press('Enter');
+  await expect
+    .poll(async () => {
+      const r = await request.get(`${host.base}/api/plugin-studies/get?project_id=${PROJECT}&plugin=${KEY}&study_id=${study.id}`);
+      return (await r.json()).study?.width;
+    })
+    .toBe(2);
+
+  // The backend answers.
+  await frame.locator('[data-compute]').click();
+  await expect(frame.locator('[data-area]')).toHaveText('Area: 2 m²');
+
+  // The job runs and reports each step.
+  await frame.locator('[data-run]').click();
+  await expect(frame.locator('[data-job]')).toHaveAttribute('data-status', 'done', { timeout: 120_000 });
+  await expect(frame.locator('[data-job]')).toContainText('5 of 5 steps');
+});

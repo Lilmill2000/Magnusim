@@ -1,0 +1,27 @@
+// The workspace page build: src/index.html -> workspace/index.html and main.js.
+// React, the bridge and the UI kit are NOT bundled: the host injects an import map
+// into every workspace page that maps them to /plugin-sdk/* (src/importmap.json is
+// that map, copied from the app's docs/plugins/plugin-sdk.json), so they stay
+// external here. Run `npm install` once, then `npm run build`.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { readFileSync } from 'node:fs';
+import { defineConfig } from 'vite';
+
+const HOST_IMPORTS = Object.keys(JSON.parse(readFileSync(new URL('./src/importmap.json', import.meta.url), 'utf8')).imports);
+
+export default defineConfig({
+  root: 'src',
+  base: './',
+  publicDir: false,
+  esbuild: { jsx: 'automatic' },
+  build: {
+    outDir: '../workspace',
+    emptyOutDir: true,
+    target: 'es2022',
+    modulePreload: { polyfill: false },
+    rollupOptions: {
+      external: HOST_IMPORTS,
+      output: { entryFileNames: 'main.js', chunkFileNames: 'chunks/[name].js', assetFileNames: 'assets/[name][extname]' },
+    },
+  },
+});

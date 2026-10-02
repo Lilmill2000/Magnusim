@@ -1,0 +1,114 @@
+// The {{kind_title}} workspace: a form saved to the study, a call to the plugin's
+// backend and a job that reports progress. `npm run build` writes workspace/main.js;
+// React, the bridge and the UI kit come from the host (vite.config.js).
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { connect, type JobEvent, type StudyRecord } from '@magnusim/workspace';
+import { Button, Field, Hint, NumberUnitInput, StatusBlock } from '@magnusim/plugin-ui';
+import { useEffect, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+
+const ws = await connect();
+const JOB = '{{job_key}}';
+const STEPS = 5;
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function num(study: StudyRecord, name: string): number {
+  const v = Number(study[name]);
+  return Number.isFinite(v) && v > 0 ? v : 1;
+}
+
+type Run = { status: 'running' | 'done' | 'failed'; done: number; error?: string };
+
+function App() {
+  const [study, setStudy] = useState<StudyRecord>(ws.context.study);
+  const [units, setUnits] = useState(ws.context.units);
+  const [area, setArea] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [run, setRun] = useState<Run | null>(null);
+  // A rename (or any save) in the app arrives here.
+  useEffect(() => ws.on('study', setStudy), []);
+  // Values are stored in SI and shown in the project's units.
+  useEffect(() => ws.on('units', setUnits), []);
+
+  // Every field saves when it is committed (Enter or leaving it); a stale rev is refused.
+  async function save(patch: Record<string, unknown>) {
+    try {
+      setStudy(await ws.study.update(patch, study.rev));
+    } catch (err) {
+      ws.ui.toast(`Save failed: ${message(err)}`, { kind: 'error' });
+    }
+  }
+
+  async function compute() {
+    setBusy(true);
+    try {
+      const r = await ws.service<{ area: number }>('area', { width: num(study, 'width'), height: num(study, 'height') });
+      setArea(`Area: ${r.area} m²`);
+    } catch (err) {
+      setArea('');
+      ws.ui.toast(`Compute failed: ${message(err)}`, { kind: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function start() {
+    setRun({ status: 'running', done: 0 });
+    try {
+      const { id } = await ws.jobs.start(JOB, { steps: STEPS });
+      const stop = ws.jobs.events(id, (ev: JobEvent) => {
+        if (ev.event === 'progress') setRun({ status: 'running', done: Number(ev.done) || 0 });
+        if (ev.event === 'end') {
+          stop();
+          const ok = ev.status === 'done';
+          setRun((r) => ({ status: ok ? 'done' : 'failed', done: ok ? STEPS : r?.done ?? 0, error: ok ? undefined : String(ev.error || ev.status) }));
+          ws.ui.toast(ok ? 'Run finished' : `Run failed: ${String(ev.error || ev.status)}`, { kind: ok ? 'success' : 'error' });
+        }
+      });
+    } catch (err) {
+      setRun({ status: 'failed', done: 0, error: message(err) });
+      ws.ui.toast(`Run failed: ${message(err)}`, { kind: 'error' });
+    }
+  }
+
+  return (
+    <main style={{ padding: 'var(--mg-space-4)', display: 'grid', gap: 'var(--mg-space-3)', maxWidth: 420 }}>
+      <h1 data-title style={{ fontSize: 'var(--mg-text-lg)', margin: 0 }}>
+        {study.title}
+      </h1>
+      <Field label="Width" help="The rectangle's width.">
+        <NumberUnitInput label="Width" quantity="length" units={units} valueSi={num(study, 'width')} onCommitSi={(v) => void save({ width: v })} />
+      </Field>
+      <Field label="Height" help="The rectangle's height.">
+        <NumberUnitInput label="Height" quantity="length" units={units} valueSi={num(study, 'height')} onCommitSi={(v) => void save({ height: v })} />
+      </Field>
+      <div>
+        <Button variant="primary" disabled={busy} onClick={() => void compute()} attrs={{ 'data-compute': '1' }}>
+          {busy ? 'Computing…' : 'Compute area'}
+        </Button>
+        <Hint>
+          <span data-area>{area || 'Compute the area from the width and height.'}</span>
+        </Hint>
+      </div>
+      <div>
+        <Button disabled={run?.status === 'running'} onClick={() => void start()} attrs={{ 'data-run': '1' }}>
+          {run?.status === 'running' ? 'Running…' : 'Run job'}
+        </Button>
+        {run && (
+          <div data-job data-status={run.status}>
+            <StatusBlock
+              title={run.status === 'failed' ? `Run failed: ${run.error ?? ''}` : run.status === 'done' ? 'Run finished' : 'Running'}
+              status={run.status}
+              line={`${run.done} of ${STEPS} steps`}
+            />
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}
+
+createRoot(document.getElementById('root') as HTMLElement).render(<App />);

@@ -1,0 +1,44 @@
+"""{{name_py}}: a study kind that opens in its own workspace page.
+
+manifest.toml declares the study kind and the workspace. register() runs in
+the app's process and only declares things: the job the page starts{{^service}}, and
+the backend method it calls{{/service}}.{{#service}} The backend is service/: its methods run in the
+plugin's own environment, in a process of their own.{{/service}}
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from cfddesk.registry.jobs import JobKind
+
+PLUGIN = "{{key}}"
+# The host API this plugin is written for: the same as api_version in manifest.toml.
+API_VERSION = "{{api}}"
+HERE = Path(__file__).resolve().parent
+{{^service}}
+
+
+def area(params: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
+    """The page's ws.service("area", {width, height}): runs in the app's process."""
+    width = float(params.get("width") or 0)
+    height = float(params.get("height") or 0)
+    if width <= 0 or height <= 0:
+        raise ValueError("Width and height must be above 0")
+    return {"area": width * height}
+{{/service}}
+
+
+def register(hub: Any) -> None:
+    # A job the page starts with ws.jobs.start("{{job_key}}", {"steps": 5}); its tool
+    # runs {{#venv}}on the plugin's own environment{{/venv}}{{^venv}}on the app's Python{{/venv}}, in this folder.
+    hub.register_job(
+        JobKind("{{job_key}}", "tools/count.py", "project", ("steps",), python="{{runtime}}"),
+        plugin=PLUGIN,
+        package_dir=HERE,
+    )
+{{^service}}
+    hub.register_method(PLUGIN, "area", area)
+{{/service}}
+    return None

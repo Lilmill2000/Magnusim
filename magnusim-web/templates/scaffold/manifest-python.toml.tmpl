@@ -1,0 +1,8 @@
+
+# Its own Python environment, built from the lock (Settings > Plugins >
+# Install dependencies){{#service}}, and its backend, which runs there{{/service}}.
+[python]
+requirements = "requirements.lock"
+python = ">=3.10,<3.15"
+{{#service}}service = "service"
+{{/service}}

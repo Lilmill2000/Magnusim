@@ -1,0 +1,18 @@
+{
+  "name": "magnusim-plugin-{{key}}",
+  "private": true,
+  "version": "0.1.0",
+  "description": "{{name_json}}: the workspace page's build (src/ -> workspace/)",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/react": "^{{react_version}}",
+    "@types/react-dom": "^{{react_version}}",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  }
+}

@@ -1,0 +1,106 @@
+"""{{name_py}}: the host loads it as the app does{{#workspace}}, its backend method answers{{/workspace}}{{#job}}, and
+its job reports progress{{/job}}. Run by `npm run plugin:check` (or pytest in this folder)."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import magnusim_sdk
+
+from cfddesk.registry import load_all, reset_for_tests
+
+PLUGIN_DIR = Path(__file__).resolve().parents[1]
+KEY = "{{key}}"
+SDK_ROOT = Path(magnusim_sdk.__file__).resolve().parents[1]
+
+
+def _load(tmp_path: Path):
+    """The plugin in a plugins folder of its own, loaded by the host's loader."""
+    web = tmp_path / "web"
+    shutil.copytree(
+        PLUGIN_DIR,
+        web / "plugins" / KEY,
+        ignore=shutil.ignore_patterns("tests", "__pycache__", "*.pyc", "node_modules", ".venv"),
+    )
+    reset_for_tests()
+    return load_all(web_root=web, force=True)
+
+
+def test_the_host_loads_it(tmp_path: Path):
+    hub = _load(tmp_path)
+    assert [f["error"] for f in hub.failures if f["key"] == KEY] == []
+    manifest = hub.manifests[KEY]
+    assert manifest.license == "GPL-3.0-or-later"
+{{#study_kind}}
+    kind = next(k for k in manifest.study_kinds if k.key == "{{kind}}")
+    assert kind.title == "{{kind_title_py}}"
+{{/study_kind}}
+{{#workspace}}
+    assert kind.workspace == "{{kind}}"
+    assert [w.key for w in manifest.workspaces] == ["{{kind}}"]
+{{/workspace}}
+{{#job}}
+    job = hub.registry("job").get("{{job_key}}")
+    assert job.python == "{{runtime}}"
+    assert hub.job_package("{{job_key}}") is not None
+{{/job}}
+{{#workspace}}{{^service}}
+
+
+def test_its_backend_method(tmp_path: Path):
+    hub = _load(tmp_path)
+    assert hub.call_method(KEY, "area", {"width": 2, "height": 3}) == {"area": 6.0}
+{{/service}}{{/workspace}}
+{{#service}}
+
+
+def _service_call(method: str, params: dict) -> dict:
+    """One call through the real service protocol (python -m magnusim_sdk.service)."""
+    env = dict(os.environ, PYTHONPATH=str(SDK_ROOT), PYTHONIOENCODING="utf-8")
+    request = json.dumps({"id": 1, "method": method, "params": {"params": params, "scope": {"plugin": KEY}}})
+    done = subprocess.run(
+        [sys.executable, "-m", "magnusim_sdk.service", "service"],
+        input=request + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=PLUGIN_DIR,
+        env=env,
+        timeout=60,
+    )
+    lines = [json.loads(line) for line in done.stdout.splitlines() if line.strip()]
+    assert lines and lines[0].get("method") == "ready", done.stderr
+    assert method in lines[0]["params"]["methods"]
+    return lines[1]
+
+
+def test_its_service_answers():
+    assert _service_call("area", {"width": 2, "height": 3})["result"] == {"area": 6.0}
+    refused = _service_call("area", {"width": 0, "height": 3})
+    assert refused["error"]["message"] == "Width and height must be above 0"
+{{/service}}
+{{#job}}
+
+
+def test_its_job_reports_progress():
+    env = dict(os.environ, PYTHONPATH=str(SDK_ROOT), PYTHONIOENCODING="utf-8")
+    done = subprocess.run(
+        [sys.executable, "tools/count.py", "--steps", "3", "--delay", "0"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=PLUGIN_DIR,
+        env=env,
+        timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    events = [json.loads(line.split(" ", 1)[1]) for line in done.stdout.splitlines() if line.startswith("MAGNUSIM_EVENT ")]
+    progress = [e for e in events if e["event"] == "progress"]
+    assert [(e["done"], e["total"]) for e in progress] == [(1, 3), (2, 3), (3, 3)]
+    assert events[-1] == {"event": "result", "ok": True, "steps": 3}
+{{/job}}

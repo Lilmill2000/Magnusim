@@ -1,0 +1,33 @@
+"""{{name_py}}'s backend: its service, run by ``python -m magnusim_sdk.service service``
+in the plugin's own environment (manifest.toml, [python] service = "service").
+
+The workspace calls a method with ``ws.service("<name>", params)``; the app
+calls it at ``/api/plugin/{{key}}/<name>``. A method gets the call's params and
+its scope (plugin, project_id, project_dir, ...) and returns something JSON can
+carry; an exception's message is the error the page shows.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from magnusim_sdk.service import method
+
+
+@method("area")
+def area(params: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
+    width = float(params.get("width") or 0)
+    height = float(params.get("height") or 0)
+    if width <= 0 or height <= 0:
+        raise ValueError("Width and height must be above 0")
+    return {"area": width * height}
+
+
+@method("migrate_study")
+def migrate_study(params: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade a study saved with an older schema_version of its kind (the host
+    calls it when manifest.toml's schema_version goes up); returns the record."""
+    study = dict(params["study"])
+    study.setdefault("width", 1.0)
+    study.setdefault("height", 1.0)
+    return study

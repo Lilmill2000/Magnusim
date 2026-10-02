@@ -60,6 +60,13 @@ jobs:
       - run: npm run test:unit
       - run: npm run gen:registry:check
       - run: npm run gen:plugin-sdk:check
+      # docs/plugins/API.md and manifest.schema.json are generated from the code, and
+      # every code block tagged `test` in docs/plugins runs.
+      - run: npm run gen:plugin-docs:check
+      - run: npm run test:docs
+      # Every bundled plugin against the plugin rules. Their own tests run where their
+      # toolchains are: the python job's pytest and the cad-plugin job.
+      - run: npm run plugin:check -- --no-tests bundled-plugins/*
       - run: npm run test:js-case
       - run: npm run build
       # The UI kit dev sheet (#/dev/ui-kit) is dev-only: the build must not hold it.
@@ -179,6 +186,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build:check
+      # The plugin rules, with CAD's own tests (its packages are installed here).
+      - name: plugin:check
+        working-directory: magnusim-web
+        run: npm run plugin:check -- bundled-plugins/cad
       - run: npx playwright install --with-deps chromium
       - name: e2e (bundled Chromium)
         run: npm run test:e2e

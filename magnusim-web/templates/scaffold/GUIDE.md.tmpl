@@ -1,0 +1,65 @@
+# {{name}}: plugin rules
+
+A Magnusim plugin, made with `npm run plugin:new`. The host's plugin docs are
+the app's `docs/plugins/` folder: `API.md` is the reference generated from the
+app's code (manifest keys, the workspace bridge, the UI kit, `magnusim_sdk`).
+
+## Hard rules
+
+1. Python code imports only `magnusim_sdk`, `cfddesk.registry`, the standard
+   library and this plugin's own modules. `register(hub)` only declares things:
+   import heavy packages inside the functions that use them.
+2. The manifest's `key` is this folder's name (`{{key}}`); `api_version` is the
+   host API you wrote it for (`{{api}}` here).
+3. The licence is GPL-3.0-or-later, or another licence compatible with it.
+{{#workspace}}
+4. The workspace page gets React, the bridge (`@magnusim/workspace`) and the UI
+   kit (`@magnusim/plugin-ui`) from the host's import map: never bundle them
+   (`vite.config.js` marks them external, from `src/importmap.json`). A frame
+   has no `localStorage`, cookies or IndexedDB: keep state in the study
+   (`ws.study.update`) or the plugin's files (`ws.data`, `ws.files`).
+5. Colours, sizes and fonts come from the design tokens (`var(--mg-…)`); no
+   hex values outside a token.
+{{/workspace}}
+{{^workspace}}
+4. An in-page UI (a `ui/` folder, if you add one) imports only `react`, the JSX
+   runtime, `@magnusim/plugin-ui` and its own files.
+5. Colours, sizes and fonts come from the design tokens (`var(--mg-…)`); no
+   hex values outside a token.
+{{/workspace}}
+6. Use only this plugin's own data folder in a project (`magnusim_sdk.data.PluginData`,
+   `ws.data`, `ws.files`).
+7. Job tools live in this folder (`tools/`); a `[python]` lock pins every package
+   with `==` and a `--hash`.
+8. No placeholder copy: no "coming soon", `TODO` or "lorem" in anything that ships.
+   Every button works end to end, and every action tells the user what happened.
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `manifest.toml` | What the host reads before importing anything |
+| `plugin.py` | `register(hub)`: declares {{#workspace}}its job{{^service}} and backend method{{/service}}{{/workspace}}{{^workspace}}the analysis it adds{{/workspace}} |
+{{#service}}| `service/` | Its backend, run by `magnusim_sdk.service` in its own environment |
+{{/service}}{{#job}}| `tools/` | Job tools; they report progress with `magnusim_sdk.events.emit` |
+{{/job}}{{#venv}}| `requirements.lock` | Its own environment's packages, pinned and hashed |
+{{/venv}}{{#workspace}}| `src/` | The workspace page's source (`npm run build` writes `workspace/`) |
+| `workspace/` | What the host serves in the sandboxed frame (built; committed) |
+| `types/` | The bridge's and the kit's types, copied from the app's `docs/plugins/` |
+{{/workspace}}| `tests/` | pytest tests{{#workspace}}, and `tests/e2e/` for the browser{{/workspace}} |
+
+## Check it
+
+From the app folder:
+
+```
+npm run plugin:check -- {{check_path}}
+```
+
+It runs every rule above and this plugin's own pytest tests.{{#workspace}} The
+browser test needs the app: `npx playwright test -c {{e2e_config}}`. After
+changing `src/`, run `npm install` and `npm run build` in this folder.{{/workspace}}
+
+Done means: the real flow works end to end in the app, `plugin:check` passes,
+every bug found has a test, turning the plugin off leaves no trace, and removing
+it keeps the studies it made.

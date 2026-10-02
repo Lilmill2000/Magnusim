@@ -1,0 +1,16 @@
+// {{name}}'s browser test, on the app's Playwright and its test servers. From the
+// app folder (its node_modules hold Playwright):
+//   npx playwright test -c {{e2e_config}}
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defineConfig } from '{{playwright}}';
+
+export default defineConfig({
+  testDir: dirname(fileURLToPath(import.meta.url)),
+  timeout: 300_000,
+  workers: 1,
+  retries: 0,
+  reporter: 'list',
+  use: { headless: true },
+});

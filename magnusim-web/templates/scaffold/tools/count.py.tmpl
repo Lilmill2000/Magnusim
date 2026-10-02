@@ -1,0 +1,32 @@
+"""Job tool: counts to --steps, reporting progress (the {{job_key}} job).
+
+The host runs it {{#venv}}on the plugin's own environment{{/venv}}{{^venv}}on the app's Python{{/venv}}, in the plugin folder, with
+MAGNUSIM_PROJECT_DIR and MAGNUSIM_JOB_ID set. Every MAGNUSIM_EVENT line it
+prints reaches the page that started it (ws.jobs.events). Replace the loop with
+your plugin's work.
+"""
+
+from __future__ import annotations
+
+import argparse
+import time
+
+from magnusim_sdk.events import emit
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--steps", type=int, default=5)
+    parser.add_argument("--delay", type=float, default=0.2)
+    args = parser.parse_args(argv)
+    steps = max(1, min(args.steps, 1000))
+    emit("start", steps=steps)
+    for done in range(1, steps + 1):
+        time.sleep(max(0.0, args.delay))
+        emit("progress", done=done, total=steps, fraction=done / steps)
+    emit("result", ok=True, steps=steps)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

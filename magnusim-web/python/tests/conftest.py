@@ -9,17 +9,30 @@ import pytest
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PROJECTS = FIXTURES / "projects"
+_JOB_ID_BEFORE = pytest.StashKey[str]()
 
 
-@pytest.fixture(autouse=True)
-def _no_job_id_left_behind():
+def _job_id() -> str:
+    # Only a real id matters: an empty value matches no process.
+    return os.environ.get("MAGNUSIM_JOB_ID") or ""
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item):
+    item.stash[_JOB_ID_BEFORE] = _job_id()
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
     """A test that runs a relay or job in this process must give MAGNUSIM_JOB_ID back:
     a later kill by job id (foam_relay_ctl) ends every process carrying it, other pytest
-    runs on this PC included."""
-    before = os.environ.get("MAGNUSIM_JOB_ID")
-    yield
-    after = os.environ.get("MAGNUSIM_JOB_ID")
-    assert after == before, f"MAGNUSIM_JOB_ID left set to {after!r}"
+    runs on this PC included. Checked after every fixture (monkeypatch too) is undone."""
+    result = yield
+    after = _job_id()
+    if after and after != item.stash.get(_JOB_ID_BEFORE, ""):
+        raise AssertionError(f"MAGNUSIM_JOB_ID left set to {after!r}")
+    return result
 
 
 @pytest.fixture(autouse=True)
