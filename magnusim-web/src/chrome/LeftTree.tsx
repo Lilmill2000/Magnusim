@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { pluginTreeNodes, type PluginTreeNode } from '../plugin-api';
 import { useProjectStore } from '../store/project';
+import { defaultFluidName } from '../materialModel';
 import { pluginStudyScope, scopeBelongsToProject } from '../scope';
 import { headerKinds, kindKey } from '../workspace/startActions';
 import {
@@ -154,6 +155,9 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
   const skey = study.scopeKey || `study:${study.id}`;
   const matKey = study.scopeKey ? `${study.scopeKey}/item:materials` : `Materials:${study.id}`;
   const airKey = study.scopeKey ? `${study.scopeKey}/item:air` : `Air:${study.id}`;
+  // Re-read when the registry arrives: a material with no name shows its model's default fluid.
+  useProjectStore((s) => s.registry);
+  const fluidLabel = study.materialName || defaultFluidName() || 'Fluid';
   const bcKey = study.scopeKey ? `${study.scopeKey}/item:bcs` : `Boundary conditions:${study.id}`;
   const meshKey = study.scopeKey ? `${study.scopeKey}/item:mesh` : `Mesh:${study.id}`;
   const simKey = study.scopeKey ? `${study.scopeKey}/item:simulation` : `Simulation:${study.id}`;
@@ -253,7 +257,7 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
         }
       >
         {study.materialVolumes.length ? (
-          <Node label={study.materialName || 'Air'} expandedLabel={airKey} attrs={{ 'data-w18-air': '1' }}>
+          <Node label={fluidLabel} expandedLabel={airKey} attrs={{ 'data-w18-air': '1' }}>
             {study.materialVolumes.map((v, i) => (
               <Node
                 key={v}

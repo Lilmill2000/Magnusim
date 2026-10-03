@@ -120,6 +120,15 @@ export function defaultPreset(model: MaterialModelRow | undefined): MaterialPres
 }
 
 /**
+ * The name a study's fluid shows when its saved material has none: the default
+ * preset of the analysis's material model (the default analysis's for a blank
+ * key). Blank when no material model is registered.
+ */
+export function defaultFluidName(analysisKey?: string | null, rows: MaterialModelRow[] = materialModelRows()): string {
+  return String(defaultPreset(modelFor(analysisKey, rows))?.name || '').trim();
+}
+
+/**
  * The preset a saved record is: its preset key, else its library code (one of
  * a preset's codes), else its name (one of a preset's names, any case), else
  * the default preset when it has no name, else custom.

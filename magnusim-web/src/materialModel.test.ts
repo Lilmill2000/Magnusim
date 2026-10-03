@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import committed from '../scripts/generated/registry.json';
 import {
+  defaultFluidName,
   defaultPreset,
   materialRecord,
   modelFor,
@@ -58,6 +59,24 @@ describe('presetOf: preset key, library code, name, blank name, else custom', ()
 
   it('the default preset carries the DEFAULT code', () => {
     expect(defaultPreset(m)?.key).toBe('air');
+  });
+});
+
+describe('defaultFluidName', () => {
+  it("is the default preset of the analysis's model, the default analysis's for a blank key", () => {
+    expect(defaultFluidName()).toBe('Air');
+    expect(defaultFluidName('incompressible_steady')).toBe('Air');
+    const renamed: MaterialModelRow = {
+      ...FIXTURE_MODEL,
+      library: [{ key: 'n2', name: 'Nitrogen', library: 'N2', codes: ['N2', 'DEFAULT'] }, ...(FIXTURE_MODEL.library || [])],
+    };
+    expect(defaultFluidName('', [renamed])).toBe('Nitrogen');
+  });
+
+  it('is blank when no material model is registered', () => {
+    expect(defaultFluidName('no_fluid_steady')).toBe('');
+    useProjectStore.setState({ registry: null });
+    expect(defaultFluidName()).toBe('');
   });
 });
 

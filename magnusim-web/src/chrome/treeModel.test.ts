@@ -64,6 +64,15 @@ describe('readSetupTree study order', () => {
   });
 });
 
+describe('readSetupTree material name', () => {
+  it('keeps the saved name and stores blank when the study has none', () => {
+    const doc = treeDoc();
+    expect(readSetupTree(doc).geoms[0].studies[0].materialName).toBe('');
+    doc.geometries![0].studies![0].material_name = 'Water';
+    expect(readSetupTree(doc).geoms[0].studies[0].materialName).toBe('Water');
+  });
+});
+
 describe('readSetupTree job marks', () => {
   it('marks the live mesh and numbers queued jobs', () => {
     const study = readSetupTree(

@@ -1,7 +1,9 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { LeftTree, SetupTreeView } from './LeftTree';
 import type { SetupTreeModel } from './treeModel';
+import { useProjectStore } from '../store/project';
+import { FIXTURE_MODEL, FIXTURE_REGISTRY } from '../test/materialFixture';
 
 const fixture: SetupTreeModel = {
   selectedKey: null,
@@ -218,5 +220,49 @@ describe('LeftTree', () => {
     expect(document.querySelector('[data-w27-run-results="run1"]')).toBeTruthy();
     expect(document.querySelector('[data-w27-run="run1"] > .tree-row .tree-check')).toBeFalsy();
     expect(document.querySelector('[data-w27-run="run1"] > .tree-row .tree-spin')).toBeTruthy();
+  });
+});
+
+describe('LeftTree fluid label', () => {
+  afterEach(() => {
+    useProjectStore.setState({ registry: null });
+  });
+
+  const assigned = (materialName: string): SetupTreeModel => ({
+    ...fixture,
+    geoms: [{ ...fixture.geoms[0], studies: [{ ...fixture.geoms[0].studies[0], materialsAssigned: true, materialVolumes: ['Body1'], materialName }] }],
+  });
+
+  const label = () => document.querySelector('[data-w18-air="1"] > .tree-row .tl')?.textContent;
+
+  it("a material with no name shows the registry's default fluid", () => {
+    const registry = {
+      ...FIXTURE_REGISTRY,
+      material: [{ ...FIXTURE_MODEL, library: [{ key: 'n2', name: 'Nitrogen', codes: ['DEFAULT'] }] }],
+    };
+    useProjectStore.setState({ registry: registry as never });
+    render(
+      <ul>
+        <SetupTreeView model={assigned('')} />
+      </ul>,
+    );
+    expect(label()).toBe('Nitrogen');
+  });
+
+  it('a saved name wins; with no material model the label is Fluid', () => {
+    const { unmount } = render(
+      <ul>
+        <SetupTreeView model={assigned('')} />
+      </ul>,
+    );
+    expect(label()).toBe('Fluid');
+    unmount();
+    useProjectStore.setState({ registry: FIXTURE_REGISTRY as never });
+    render(
+      <ul>
+        <SetupTreeView model={assigned('Water')} />
+      </ul>,
+    );
+    expect(label()).toBe('Water');
   });
 });

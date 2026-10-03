@@ -211,12 +211,13 @@ def _faces(row: dict[str, Any]) -> list[str]:
 
 
 def _material_name(study_dir: Path) -> str:
+    """The assigned material's name; "" when none is assigned (the page shows its model's default fluid)."""
     for doc in [_read_json(study_dir / "materials.json"), *walk_child_items(study_dir / "materials", "material.json")]:
         for row in _rows(doc, "materials") or ([doc] if isinstance(doc, dict) and doc.get("name") else []):
             assigned = row.get("assigned_volumes")
             if isinstance(assigned, list) and assigned and row.get("name"):
                 return str(row.get("name"))
-    return "Air"
+    return ""
 
 
 def _material_volumes(study_dir: Path) -> list[str]:

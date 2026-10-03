@@ -263,7 +263,7 @@ export function readSetupTree(
           scopeKey: study.key,
           active: known ? !!sid && sid === known.activeId : !!study.active,
           materialsAssigned: volumes.length > 0,
-          materialName: str(study.material_name, 'Air'),
+          materialName: str(study.material_name),
           materialVolumes: volumes,
           wallDefault: str(study.wall_default, 'No-slip'),
           bcs: owned(study.bcs).map((bc, i) => ({
