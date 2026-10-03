@@ -12,6 +12,7 @@ import { envGet } from './env-compat.js';
 import {
   catalogFromWalk,
   findStudy,
+  readJsonFile,
   renameFolderTo,
   writeIdFile,
   writeJsonAtomic,
@@ -179,7 +180,10 @@ export function assignStudyNames(list) {
 /** Shared-JSON claiming is gone; each study folder is created with its own files. */
 export function claimUntaggedRecords(_projectId, _simId, _geomId) {}
 
-/** Study fields kept in the study folder's id.json (the walked catalog reads these back). */
+/**
+ * The study folder's id.json: its identity only (the walked catalog reads these back).
+ * Its settings live in its simulations.json row.
+ */
 function studyIdRecord(sim) {
   return {
     id: sim.id,
@@ -188,7 +192,6 @@ function studyIdRecord(sim) {
     kind: 'simulation',
     analysis: sim.analysis,
     analysis_type: sim.time_dependency ? studyAnalysisKey(sim) : sim.analysis_type,
-    turbulence_model: sim.turbulence_model,
     time_dependency: sim.time_dependency,
     algorithm: sim.algorithm,
     created_at: sim.created_at,
@@ -280,10 +283,93 @@ function normalizeWalkedAnalysisKeys(walked) {
   return walked;
 }
 
+/** The keys a study's id.json holds (studyIdRecord); anything else there is a setting. */
+const STUDY_ID_KEYS = new Set([
+  'id',
+  'name',
+  'geometry_id',
+  'kind',
+  'analysis',
+  'analysis_type',
+  'time_dependency',
+  'algorithm',
+  'created_at',
+  'updated_at',
+  'sort_index',
+]);
+
+/** Keys catalogFromWalk adds to a walked study (not in its id.json). */
+const WALKED_KEYS = new Set(['folder', 'dir', 'geometry_dir', 'geometry_folder']);
+
+/** The settings (non-identity scalars) an older version wrote into a study's id.json. */
+function idFileSettings(doc) {
+  /** @type {Record<string, unknown>} */
+  const out = {};
+  for (const [key, value] of Object.entries(doc || {})) {
+    if (STUDY_ID_KEYS.has(key) || WALKED_KEYS.has(key)) continue;
+    if (value !== null && typeof value === 'object') continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Older versions also kept study settings (the turbulence model) in the study
+ * folder's id.json, and that copy won over the index. Move them, once, into the
+ * study's simulations.json row (id.json still wins where the two differ), then
+ * leave id.json with the identity only. The index is written first, so a stop
+ * between the two writes loses nothing and the next read finishes the move.
+ * A study with no index row keeps its id.json as it is (the walk still reads it).
+ * Returns the index as it now is.
+ */
+function foldLegacyIdSettings(projectId, walked, index) {
+  const rows = index && Array.isArray(index.simulations) ? index.simulations : null;
+  if (!rows) return index;
+  /** @type {any[] | null} */
+  let next = null;
+  const trim = [];
+  for (const s of walked.simulations || []) {
+    if (!s || !s.dir) continue;
+    // The walked row carries every scalar of its id.json (catalogFromWalk): most
+    // studies have none to move and their id.json is not read again.
+    if (!Object.keys(idFileSettings(s)).length) continue;
+    const doc = readJsonFile(join(s.dir, 'id.json'));
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) continue;
+    const settings = idFileSettings(doc);
+    const keys = Object.keys(settings);
+    if (!keys.length) continue;
+    const i = rows.findIndex((r) => r && String(r.id) === String(s.id));
+    if (i < 0) continue;
+    const row = (next || rows)[i];
+    if (keys.some((k) => row[k] !== settings[k])) {
+      next = next || rows.slice();
+      next[i] = { ...row, ...settings };
+    }
+    trim.push({ dir: s.dir, doc, keys });
+  }
+  if (!trim.length) return index;
+  let out = index;
+  try {
+    if (next) {
+      out = { ...index, simulations: next };
+      writeJsonAtomic(simulationsJsonPath(projectId), out);
+    }
+    for (const t of trim) {
+      const ident = { ...t.doc };
+      for (const k of t.keys) delete ident[k];
+      writeIdFile(t.dir, ident);
+    }
+  } catch (e) {
+    // The walk still reads id.json first; the next read tries again.
+    console.warn('[CFD W17] fold study id.json settings', e);
+  }
+  return out;
+}
+
 export function readCatalog(projectId) {
   const walked = normalizeWalkedAnalysisKeys(catalogFromWalk(projectDir(projectId), null));
   if (walked.simulations.length) {
-    const index = readJson(simulationsJsonPath(projectId));
+    const index = foldLegacyIdSettings(projectId, walked, readJson(simulationsJsonPath(projectId)));
     const active_id =
       (index && index.active_id && walked.simulations.some((s) => s.id === index.active_id)
         ? index.active_id
@@ -332,11 +418,14 @@ function dropMissingStudies(projectId, index, onDisk) {
 }
 
 export function pruneOrphanStudies(projectId, proj) {
-  const existing = readJson(simulationsJsonPath(projectId));
+  const walked = catalogFromWalk(projectDir(projectId), null);
+  // Settings still in an id.json move into the index first: the save below writes
+  // id.json identity-only from these rows.
+  const existing = foldLegacyIdSettings(projectId, walked, readJson(simulationsJsonPath(projectId)));
   if (!existing || !Array.isArray(existing.simulations)) {
     return { catalog: existing || { active_id: null, simulations: [] }, dropped: [] };
   }
-  const onDisk = new Set(catalogFromWalk(projectDir(projectId), null).simulations.map((s) => String(s.id)));
+  const onDisk = new Set(walked.simulations.map((s) => String(s.id)));
   if (!proj || !Array.isArray(proj.geometries)) {
     return dropMissingStudies(projectId, existing, onDisk);
   }

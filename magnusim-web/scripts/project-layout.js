@@ -530,7 +530,6 @@ export function createStudyFolder(projectDirPath, geomId, sim) {
     kind: 'simulation',
     analysis: sim.analysis,
     analysis_type: sim.analysis_type,
-    turbulence_model: sim.turbulence_model,
     time_dependency: sim.time_dependency,
     algorithm: sim.algorithm,
     created_at: sim.created_at,
@@ -880,22 +879,37 @@ export function copyStudyTree(srcStudyDir, destParent, newName, { cloneCases }) 
   return dest.path;
 }
 
+/** What walkStudies adds to a study's id.json, and the folder kind: never study fields. */
+const WALK_ONLY_KEYS = new Set(['folder', 'dir', 'geometry_dir', 'geometry_folder', 'kind']);
+
 export function catalogFromWalk(projectDirPath, activeId) {
-  const simulations = walkStudies(projectDirPath).map((s) => ({
-    id: s.id,
-    name: s.name,
-    geometry_id: s.geometry_id,
-    folder: s.folder,
-    dir: s.dir,
-    analysis: s.analysis,
-    analysis_type: s.analysis_type,
-    turbulence_model: s.turbulence_model,
-    time_dependency: s.time_dependency,
-    algorithm: s.algorithm,
-    created_at: s.created_at,
-    updated_at: s.updated_at,
-    sort_index: Number.isFinite(Number(s.sort_index)) ? Number(s.sort_index) : undefined,
-  }));
+  const simulations = walkStudies(projectDirPath).map((s) => {
+    // Any other scalar the folder's id.json holds comes along and wins over the index:
+    // settings older versions wrote there, until the read moves them into the index
+    // (w17-sim-catalog foldLegacyIdSettings).
+    /** @type {Record<string, unknown>} */
+    const extra = {};
+    for (const [key, value] of Object.entries(s)) {
+      if (WALK_ONLY_KEYS.has(key)) continue;
+      if (value !== null && typeof value === 'object') continue;
+      extra[key] = value;
+    }
+    return {
+      ...extra,
+      id: s.id,
+      name: s.name,
+      geometry_id: s.geometry_id,
+      folder: s.folder,
+      dir: s.dir,
+      analysis: s.analysis,
+      analysis_type: s.analysis_type,
+      time_dependency: s.time_dependency,
+      algorithm: s.algorithm,
+      created_at: s.created_at,
+      updated_at: s.updated_at,
+      sort_index: Number.isFinite(Number(s.sort_index)) ? Number(s.sort_index) : undefined,
+    };
+  });
   const active_id =
     activeId && simulations.some((s) => s.id === activeId)
       ? activeId
