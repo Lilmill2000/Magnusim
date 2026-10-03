@@ -21318,7 +21318,6 @@ function applySimulationRecord(sim, projectId, extra) {
     project_id: sim.project_id || projectId,
     name: sim.name || 'Simulation',
     analysis: sim.analysis || W17_DEFAULTS.analysis,
-    turbulence_model: sim.turbulence_model || W17_DEFAULTS.turbulence_model,
     time_dependency: sim.time_dependency || W17_DEFAULTS.time_dependency,
     algorithm: sim.algorithm || W17_DEFAULTS.algorithm,
     geometry_id: sim.geometry_id || null,
@@ -21345,7 +21344,7 @@ function applySimulationRecord(sim, projectId, extra) {
     lastStudyByGeometry[studyCatalog.simulation.project_id + '|' + studyCatalog.simulation.geometry_id] = sim.id;
   }
   studyCatalog.defaults = {
-    turbulence_model: studyCatalog.simulation.turbulence_model,
+    ...(sim.defaults && typeof sim.defaults === 'object' ? sim.defaults : {}),
     time_dependency: studyCatalog.simulation.time_dependency,
     algorithm: studyCatalog.simulation.algorithm,
   };

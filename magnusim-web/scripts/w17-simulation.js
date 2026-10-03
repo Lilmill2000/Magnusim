@@ -171,7 +171,6 @@ function catalogPayload(projectId, proj, cat) {
     simulation_json: simulationJsonPath(projectId),
     defaults: active
       ? {
-          turbulence_model: active.turbulence_model,
           time_dependency: active.time_dependency,
           algorithm: active.algorithm,
         }
@@ -187,7 +186,6 @@ function touchProjectSimRef(proj, sim) {
     name: sim.name,
     analysis: sim.analysis,
     analysis_type: sim.analysis_type,
-    turbulence_model: sim.turbulence_model,
     time_dependency: sim.time_dependency,
     algorithm: sim.algorithm,
     geometry_id: sim.geometry_id || null,
@@ -198,7 +196,7 @@ function touchProjectSimRef(proj, sim) {
   proj.updated_at = sim.updated_at || new Date().toISOString();
 }
 
-function buildSimulation(body, project) {
+export function buildSimulation(body, project) {
   // A required plugin that failed to load: say so, never create a study that cannot run.
   const blocked = requiredPluginError();
   if (blocked) return { ok: false, status: 503, body: { error: blocked, required_plugin_missing: true } };
@@ -240,7 +238,11 @@ function buildSimulation(body, project) {
   /** @type {Record<string, any>} */
   const d = { ...(studyDefaultsFor(analysisType) || {}) };
   const algorithm = d.algorithm || algorithmLabelFor(analysisType);
+  // Every setting the analysis seeds (its settings_schema defaults and whatever its
+  // study_defaults adds), stored as given: the core names none of them.
+  const settings = studyPhysicsFrom(d);
   const sim = {
+    ...settings,
     id,
     project_id: project.id,
     // Named after its own analysis ("Scalar diffusion Steady-state"), not a fixed one.
@@ -248,14 +250,11 @@ function buildSimulation(body, project) {
     analysis: d.analysis,
     analysis_type: analysisType,
     analysis_title: d.analysis_title,
-    turbulence_model_key: d.turbulence_model_key,
     category: d.category,
-    flow_group: d.flow_group,
-    turbulence_model: d.turbulence_model,
     time_dependency: timeDependency,
     algorithm,
     defaults: {
-      turbulence_model: d.turbulence_model,
+      ...settings,
       time_dependency: timeDependency,
       algorithm,
     },
@@ -642,7 +641,7 @@ const STUDY_IDENTITY_KEYS = new Set([
   'dir',
 ]);
 
-/** Scalar study settings (turbulence model and the like) to carry into a copy. */
+/** A study's settings (every scalar that is not its identity): what a new study is seeded with and a copy carries. */
 export function studyPhysicsFrom(src) {
   const out = {};
   for (const [key, value] of Object.entries(src || {})) {
