@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PYTHON, PY_ROOT } from '../python-env.js';
 import {
@@ -15,15 +15,24 @@ import {
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const text = (rel) => readFileSync(join(root, rel), 'utf8');
 
+// The run defaults of the default steady and transient analyses, as the worker's
+// registry.describe publishes them. The core loads the plugins itself, so the
+// path is the core's alone and nothing here imports a plugin.
+const PY_DEFAULTS = [
+  'import json',
+  'from cfddesk.worker import methods',
+  'd = methods.registry_describe()',
+  'keys = d["default_analysis"]',
+  'rows = {r["key"]: r for r in d["analysis"]}',
+  'print(json.dumps({"keys": keys, "s": rows[keys["steady"]]["run_defaults"], "t": rows[keys["transient"]]["run_defaults"]}))',
+].join('; ');
+
 function pythonDefaults() {
-  const r = spawnSync(
-    PYTHON,
-    [
-      '-c',
-      'import json; from incompressible_flow.transient import TRANSIENT_DEFAULTS, STEADY_DEFAULTS; print(json.dumps({"t": TRANSIENT_DEFAULTS, "s": STEADY_DEFAULTS}))',
-    ],
-    { cwd: PY_ROOT, encoding: 'utf8', env: { ...process.env, PYTHONPATH: [PY_ROOT, join(root, 'bundled-plugins', 'incompressible_flow')].join(delimiter) } },
-  );
+  const r = spawnSync(PYTHON, ['-c', PY_DEFAULTS], {
+    cwd: PY_ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, PYTHONPATH: PY_ROOT },
+  });
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
 }
@@ -32,8 +41,8 @@ function pythonDefaults() {
 describe('run-control defaults have one source', () => {
   it('Node reads the transient and steady defaults Python defines', () => {
     const py = pythonDefaults();
-    assert.deepEqual(runDefaultsFor('incompressible_transient'), py.t);
-    assert.deepEqual(runDefaultsFor('incompressible_steady'), py.s);
+    assert.deepEqual(runDefaultsFor(py.keys.transient), py.t);
+    assert.deepEqual(runDefaultsFor(py.keys.steady), py.s);
     assert.deepEqual({ ...steadyDefaultsFromRegistry() }, py.s);
   });
 
