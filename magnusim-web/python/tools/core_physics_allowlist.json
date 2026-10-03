@@ -1,5 +1,5 @@
 {
-  "about": "Core files allowed to name incompressible physics (gate:h9-no-core-physics). Each entry says why; tools/core_physics_scan.py fails on an entry with no hit.",
+  "about": "Core files allowed to name incompressible physics (gate:h9-no-core-physics). Each entry says why; tools/core_physics_scan.py fails on an entry with no hit. if_vocab and if_vocab_sdk are the ratcheted Incompressible Flow vocabulary: the scan fails when a file's count rises above max_hits and when it falls below it (lower max_hits in the same commit).",
   "files": [
     {
       "file": "python/cfddesk/project/legacy_sim.py",
@@ -27,6 +27,145 @@
         "REQUIRED_BUNDLED"
       ],
       "reason": "The product's required bundled plugin, by key and display name, so the app can say which plugin is missing when it cannot load it. Only that line is allowed."
+    }
+  ],
+  "if_vocab": [
+    {
+      "file": "python/cfddesk/results/filters.py",
+      "max_hits": 17,
+      "reason": "Results filters read records saved before colouring labels: a stored field of magU (or U, or none) means the default colouring, and the colouring label 'Velocity magnitude' maps to magU. Shrinks when the default result field comes from the run's analysis."
+    },
+    {
+      "file": "python/cfddesk/results/loader.py",
+      "max_hits": 17,
+      "reason": "The results loader derives magU (|U|) from U and prefers it when no field is asked for. Shrinks when the loader picks from the run's declared result fields."
+    },
+    {
+      "file": "src/workbench/runtime.js",
+      "max_hits": 14,
+      "reason": "The page's material tree node and fallbacks ('Air' folder, label and row name) and the BC tree shortcuts for 'Velocity inlet' / 'Pressure outlet'. Shrinks as the tree reads the study's material model and BC families."
+    },
+    {
+      "file": "scripts/w18-materials.js",
+      "max_hits": 13,
+      "reason": "W18_LEGACY_AIR: the frozen Air record an older project's Air without numbers still reads, the study-fluid fallback by that name, and the X-CFD-Material-Name header."
+    },
+    {
+      "file": "python/cfddesk/case/bc_menu.py",
+      "max_hits": 6,
+      "reason": "_LEGACY_MENU: the menu keys v8 project.json files hold for the seven BC type keys projects have always stored, so old projects load without the plugin."
+    },
+    {
+      "file": "python/cfddesk/project/legacy_sim.py",
+      "max_hits": 6,
+      "reason": "Frozen migrations of pre-v12 project.json files (v4 BC settings, the v12 initial-condition inlet key, the old default BC names). Read only when an old file is loaded."
+    },
+    {
+      "file": "python/cfddesk/project/web_mirrors/materials.py",
+      "max_hits": 4,
+      "reason": "Material mirror rows keep the 1.x record key kinematic_viscosity next to nu for older readers of materials.json."
+    },
+    {
+      "file": "python/cfddesk/worker/methods.py",
+      "max_hits": 4,
+      "reason": "filter.series_range's default field, and the deprecated values['magU'] / values['p'] mirrors of the inspect RPC for older callers."
+    },
+    {
+      "file": "scripts/w19-boundary-conditions.js",
+      "max_hits": 4,
+      "reason": "W19_VELOCITY_INLET_1 / W19_PRESSURE_OUTLET_2: exported example BC records with no reader left."
+    },
+    {
+      "file": "src/plugin-ui/units.ts",
+      "max_hits": 4,
+      "reason": "The unit system's kinematic_viscosity quantity (plugin-ui API: units, add-only)."
+    },
+    {
+      "file": "python/cfddesk/case/bc_registry.py",
+      "max_hits": 3,
+      "reason": "_LEGACY_SEMANTICS: what kind of patch each of the seven stored BC type keys is when the plugin that owns them is not loaded."
+    },
+    {
+      "file": "python/cfddesk/results/session.py",
+      "max_hits": 3,
+      "reason": "A results session's velocity-magnitude check (has_mag_u) and its default field. Shrinks with the results loader."
+    },
+    {
+      "file": "python/cfddesk/builtin/filters.py",
+      "max_hits": 2,
+      "reason": "The cut plane and iso surface schemas default their field to magU. Shrinks when the default result field comes from the run's analysis."
+    },
+    {
+      "file": "python/cfddesk/results/color_scale.py",
+      "max_hits": 2,
+      "reason": "A colour scale's default field (magU), also the value read when a stored scale names none."
+    },
+    {
+      "file": "src/dev/ui-kit/sections/Controls.tsx",
+      "max_hits": 2,
+      "reason": "The dev UI kit's resolveUnit example (dev page only, not shipped in the workbench)."
+    },
+    {
+      "file": "python/cfddesk/mesh/gmsh_standard.py",
+      "max_hits": 1,
+      "reason": "Inlet tagging falls back on the patch name velocity_inlet when a BC has no semantic class."
+    },
+    {
+      "file": "python/cfddesk/project/web_adapter.py",
+      "max_hits": 1,
+      "reason": "1.x re-export of the SDK's is_velocity_inlet BC-record helper."
+    },
+    {
+      "file": "python/cfddesk/wsl/foam_case.py",
+      "max_hits": 1,
+      "reason": "Imported cases with no results.frameFields fall back on the U/p pair when 0/U and 0/p exist (could name LEGACY_FRAME_FIELDS instead)."
+    },
+    {
+      "file": "python/tools/export_case_field.py",
+      "max_hits": 1,
+      "reason": "The CLI's --field default (magU)."
+    },
+    {
+      "file": "python/tools/export_inspect_point.py",
+      "max_hits": 1,
+      "reason": "Checksum weights that keep the checksum the page already knew (magU, p)."
+    },
+    {
+      "file": "scripts/gen-registry-types.mjs",
+      "max_hits": 1,
+      "reason": "An example in the doc comment the generator writes into registry.gen.ts (text inside its template, so it counts as code)."
+    },
+    {
+      "file": "scripts/w27-solve.js",
+      "max_hits": 1,
+      "reason": "The U/p frame-field fallback of the old W27 solve path. Shrinks to 0 when Incompressible Flow solves move onto the shared step-list runner and this path is removed."
+    },
+    {
+      "file": "src/plugin-api/index.ts",
+      "max_hits": 1,
+      "reason": "PANEL_ID_ALIASES: the old panel id panel-incompressible-defaults, so an older plugin's replacePanel still finds the study settings panel."
+    }
+  ],
+  "if_vocab_sdk": [
+    {
+      "file": "python/sdk/magnusim_sdk/units/quantities.py",
+      "max_hits": 3,
+      "reason": "Published plugin API, add-only: the kinematic_viscosity unit quantity."
+    },
+    {
+      "file": "docs/plugins/plugin-ui.d.ts",
+      "max_hits": 1,
+      "reason": "Published plugin typings, add-only: the units Quantity union (mirrors src/plugin-ui/units.ts)."
+    },
+    {
+      "file": "python/sdk/magnusim_sdk/fluids.py",
+      "max_hits": 1,
+      "reason": "Published plugin API, add-only: the Air library fluid."
+    },
+    {
+      "file": "python/sdk/magnusim_sdk/study.py",
+      "max_hits": 1,
+      "reason": "Published plugin API, add-only: the is_velocity_inlet BC-record helper."
     }
   ]
 }
