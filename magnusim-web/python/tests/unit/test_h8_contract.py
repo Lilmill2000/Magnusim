@@ -30,7 +30,7 @@ def _analysis(key: str):
 def test_describe_carries_the_contract():
     rows = {r["key"]: r for r in get_registry("analysis").describe()}
     steady, transient = rows["incompressible_steady"], rows["incompressible_transient"]
-    assert steady["contract"] == "1.4"
+    assert steady["contract"] == "1.5"
     assert steady["family"]["title"] == "Incompressible Fluid Flow"
     assert steady["family"]["tags"] == ["FLUID FLOW (GAS OR LIQUID)", "MACH<0.3 (100 M/S)", "NEGLIGIBLE DENSITY VARIATION"]
     assert steady["family"] == transient["family"]

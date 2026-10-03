@@ -17,6 +17,8 @@ one and otherwise fall back to a neutral default:
   kept, which processes belong to it and how it is stopped.
 - :func:`log_parser_ref`: the module that turns the solver's output into job
   events (the one parser; Node only aggregates events).
+- :func:`live_metrics`: the per-step numbers the Run panel's progress line
+  shows (API 1.5).
 
 Hooks live on :class:`~cfddesk.registry.analysis.AnalysisType` as optional
 fields, so a plugin that clones a builtin with ``dataclasses.replace`` keeps
@@ -35,7 +37,7 @@ from typing import Any, Literal, TypeGuard
 
 from cfddesk.registry.monitor import MonitorQuantity
 
-CONTRACT_VERSION = "1.4"
+CONTRACT_VERSION = "1.5"
 
 KeepFrames = Literal["all", "latest"]
 XAxis = Literal["iterations", "seconds"]
@@ -60,6 +62,18 @@ Such a case names no ``frame_fields`` of its own, so a saved time counts as a
 result frame when these fields are written in it. See
 docs/plugins/compatibility.md, section 1.1.
 """
+
+BUILTIN_PREPARE_JOB = "solve.prepare"
+"""The JobKind that writes a run's case for an analysis that names no
+``LaunchSpec.prepare_job`` of its own (tools/prepare_run.py, which calls the
+analysis's ``write_case``). See docs/plugins/compatibility.md, section 1.5."""
+
+LEGACY_SERIAL_BELOW_CELLS: dict[str, int] = {"steady": 200_000, "transient": 50_000}
+"""The cell count under which a run is serial, for a launch spec that says
+nothing (``serial_below_cells`` None): the core's rule before API 1.5."""
+
+# A JobKind key, as the relay accepts it in a prepare step.
+JOB_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,120}$")
 
 
 @dataclass(frozen=True)
@@ -126,6 +140,13 @@ class LaunchSpec:
     frame_fields: tuple[str, ...] = LEGACY_FRAME_FIELDS
     # Fields the case stores divided by density (API 1.4; None = not declared).
     kinematic_fields: tuple[str, ...] | None = None
+    # API 1.5: a mesh with fewer cells than this runs serial, else on every rank
+    # the PC offers. None = the core's rule before 1.5 (LEGACY_SERIAL_BELOW_CELLS).
+    serial_below_cells: int | None = None
+    # API 1.5: the JobKind of the analysis's plugin that writes the run's case
+    # into MAGNUSIM_CASE_DIR. "" = the builtin BUILTIN_PREPARE_JOB, which calls
+    # the analysis's write_case.
+    prepare_job: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -137,6 +158,8 @@ class LaunchSpec:
             "log_parser": self.log_parser.to_json(),
             "frame_fields": list(self.frame_fields),
             "kinematic_fields": None if self.kinematic_fields is None else list(self.kinematic_fields),
+            "serial_below_cells": self.serial_below_cells,
+            "prepare_job": self.prepare_job,
         }
 
 
@@ -190,6 +213,8 @@ def describe_extra(spec: Any) -> dict[str, Any]:
         "result_fields": result_fields(spec),
         "kinematic_fields": _list_or_none(kinematic_fields(spec)),
         "monitor_quantities": declared_monitor_quantities(spec),
+        # API 1.5: the Run panel's per-step numbers (None = not declared).
+        "live_metrics": live_metrics(spec),
         "ui": dict(_hook(spec, "ui") or {}),
         "study_defaults": study_defaults(spec),
         "run_defaults": run_defaults(spec),
@@ -259,6 +284,56 @@ def result_fields(spec: Any) -> list[dict[str, Any]]:
                 "shown": shown,
             }
         )
+    return out
+
+
+LIVE_METRIC_FORMATS: tuple[str, ...] = ("time", "sig2")
+_METRIC_FIELDS = ("key", "label", "format", "max_key")
+_METRIC_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+LIVE_METRIC_LABEL_MAX = 32
+
+
+def live_metrics(spec: Any) -> list[dict[str, Any]] | None:
+    """The per-step numbers the Run panel's progress line shows after the time
+    (API 1.5), checked: ``{key, label, format, max_key}`` per number, in order.
+
+    ``key`` names a run field the solve's progress fills (``delta_t``,
+    ``co_mean``, ``co_max``, ...); ``format`` is ``"time"`` (a duration) or
+    ``"sig2"`` (two significant digits); ``max_key`` ("" for none) names a
+    second field shown as its maximum (``Co 0.42 (max 0.9)``). None when the
+    analysis does not say (the panel keeps its text before 1.5: Δt and Co for a
+    transient run); ``()`` when it shows none. Anything else is a ContractError.
+    """
+    raw = _hook(spec, "live_metrics")
+    if raw is None:
+        return None
+    what = f"{getattr(spec, 'key', '?')}.live_metrics"
+    if isinstance(raw, (str, dict)) or not isinstance(raw, (tuple, list)):
+        raise ContractError(f"{what} must be a tuple of dicts, got {raw!r}")
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            raise ContractError(f"{what}: rows must be dicts, got {row!r}")
+        bad = set(row) - set(_METRIC_FIELDS)
+        if bad:
+            raise ContractError(f"{what}: unknown field(s) {sorted(bad)}")
+        key = row.get("key")
+        if not isinstance(key, str) or not _METRIC_KEY_RE.match(key):
+            raise ContractError(f"{what}: key {key!r} must be a letter, then up to 63 letters, digits or _")
+        if key in seen:
+            raise ContractError(f"{what}: {key!r} is listed twice")
+        seen.add(key)
+        label = row.get("label", key)
+        if not label or not plain_text(label, LIVE_METRIC_LABEL_MAX):
+            raise ContractError(f"{what}: {key} label {label!r} must be plain text of 1 to {LIVE_METRIC_LABEL_MAX} characters")
+        fmt = row.get("format")
+        if fmt not in LIVE_METRIC_FORMATS:
+            raise ContractError(f"{what}: {key} format {fmt!r}; use one of {list(LIVE_METRIC_FORMATS)}")
+        max_key = row.get("max_key") or ""
+        if max_key and not (isinstance(max_key, str) and _METRIC_KEY_RE.match(max_key)):
+            raise ContractError(f"{what}: {key} max_key {max_key!r} must be a letter, then up to 63 letters, digits or _")
+        out.append({"key": key, "label": label, "format": fmt, "max_key": max_key})
     return out
 
 
@@ -647,7 +722,14 @@ def run_monitors(spec: Any, case_dir: Path) -> dict[str, Any]:
 
 
 def launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = None) -> LaunchSpec:
-    """How to run a case of ``spec``: its launch hook, else its default solver's app."""
+    """How to run a case of ``spec``: its launch hook, else its default solver's app.
+
+    A ``prepare_job`` must be a registered JobKind. One of a plugin other than
+    the analysis's (what an analysis cloned from another plugin's with
+    ``dataclasses.replace`` inherits) is not used: the answer names none, so the
+    run is prepared by :data:`BUILTIN_PREPARE_JOB` with the clone's own
+    ``write_case``, as before API 1.5.
+    """
     fn = _hook(spec, "launch")
     key = solver_key or getattr(spec, "default_solver", "")
     if callable(fn):
@@ -669,12 +751,36 @@ def launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = Non
             frame_fields=frame_fields(spec),
             kinematic_fields=kinematic_fields(spec),
         )
-    check_launch_spec(out, solver_registry)
+    jobs, owner = _jobs_and_owner(spec)
+    if isinstance(out.prepare_job, str) and out.prepare_job and jobs is not None and owner is not None:
+        if out.prepare_job in set(jobs.keys()) and jobs.owner(out.prepare_job) != owner:
+            out = dataclasses.replace(out, prepare_job="")
+    check_launch_spec(out, solver_registry, jobs=jobs, owner=owner)
     return out
 
 
-def check_launch_spec(out: LaunchSpec, solver_registry: Any) -> None:
-    """The app must be a registered solver application with a plain name."""
+def _jobs_and_owner(spec: Any) -> tuple[Any, str | None]:
+    """The loaded JobKind registry and the plugin that registered ``spec`` (None
+    when ``spec`` is not the registered analysis of its key)."""
+    from cfddesk.registry.discovery import get_hub
+
+    hub = get_hub()
+    analyses = hub.registry("analysis")
+    key = str(getattr(spec, "key", "") or "")
+    owner = analyses.owner(key) if key in set(analyses.keys()) else None
+    return hub.registry("job"), owner
+
+
+def check_launch_spec(
+    out: LaunchSpec, solver_registry: Any, *, jobs: Any = None, owner: str | None = None
+) -> None:
+    """The app must be a registered solver application with a plain name.
+
+    ``serial_below_cells`` is None or a whole number of cells, at least 0.
+    ``prepare_job`` is "" or a JobKind key; given the JobKind registry
+    (``jobs``) it must be registered, and given the analysis's plugin
+    (``owner``) it must be one of that plugin's.
+    """
     if not APP_NAME_RE.match(out.app or ""):
         raise ContractError(f"solver application {out.app!r} is not a plain program name")
     apps = {str(solver_registry.get(k).application) for k in solver_registry.keys()}
@@ -689,6 +795,29 @@ def check_launch_spec(out: LaunchSpec, solver_registry: Any) -> None:
         raise ContractError(f"frame_fields must be plain field names, got {out.frame_fields!r}")
     if out.kinematic_fields is not None:
         _check_field_names("kinematic_fields", out.kinematic_fields)
+    cells = out.serial_below_cells
+    if cells is not None and (not isinstance(cells, int) or isinstance(cells, bool) or cells < 0):
+        raise ContractError(f"serial_below_cells must be None or a whole number of cells (0 or more), got {cells!r}")
+    job = out.prepare_job
+    if not isinstance(job, str) or (job and not JOB_KEY_RE.match(job)):
+        raise ContractError(f"prepare_job must be '' or a JobKind key, got {job!r}")
+    if job and jobs is not None:
+        if job not in set(jobs.keys()):
+            raise ContractError(f"prepare_job {job!r} is not a registered JobKind")
+        if owner is not None and jobs.owner(job) != owner:
+            raise ContractError(f"prepare_job {job!r} belongs to {jobs.owner(job)!r}, not to the analysis's plugin {owner!r}")
+
+
+def effective_prepare_job(launch: LaunchSpec) -> str:
+    """The JobKind that writes a run's case: the launch spec's own, else :data:`BUILTIN_PREPARE_JOB`."""
+    return launch.prepare_job or BUILTIN_PREPARE_JOB
+
+
+def serial_below_cells(launch: LaunchSpec, time_dependency: str) -> int:
+    """The cell count under which a run is serial: the launch spec's, else :data:`LEGACY_SERIAL_BELOW_CELLS`."""
+    if launch.serial_below_cells is not None:
+        return int(launch.serial_below_cells)
+    return LEGACY_SERIAL_BELOW_CELLS[_td(time_dependency)]
 
 
 def frame_fields(spec: Any) -> tuple[str, ...]:

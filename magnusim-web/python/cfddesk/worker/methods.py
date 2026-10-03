@@ -958,6 +958,64 @@ def analysis_launch_spec(key: str = "") -> dict[str, Any]:
     return {"ok": True, "launch": contract.launch_spec(spec, get_registry("solver")).to_json()}
 
 
+@rpc("analysis.plan_run")
+def analysis_plan_run(
+    project_id: str = "",
+    project_dir: str = "",
+    simulation_id: str = "",
+    run_id: str = "",
+    mesh_id: str = "",
+    time_dependency: str = "",
+    transient: Any = None,
+    n_procs: int = 1,
+) -> dict[str, Any]:
+    """What a run would be written with, writing nothing (API 1.5).
+
+    ``cfddesk.registry.run_case.plan_run``'s answer (the analysis's plan, its
+    launch spec and plugin, the prepare JobKind and the serial threshold) plus
+    ``prepare``: the ``jobs.describe`` row of the JobKind that writes the case.
+    A run that cannot start answers ``ok: false`` with the analysis's
+    ``error``, ``fix`` and ``patches``.
+    """
+    from cfddesk.registry import run_case
+
+    root = _root(project_id, project_dir)
+    rid = str(run_id or "").strip()
+    if not rid:
+        raise RpcError(-32602, "run_id required")
+    if isinstance(transient, str):
+        try:
+            transient = run_case.transient_arg(transient)
+        except ValueError as exc:
+            raise RpcError(-32602, f"transient: {exc}") from exc
+    if transient is not None and not isinstance(transient, dict):
+        raise RpcError(-32602, "transient must be an object")
+    try:
+        procs = max(1, int(n_procs or 1))
+    except (TypeError, ValueError) as exc:
+        raise RpcError(-32602, "n_procs must be a whole number") from exc
+    hub = load_all(web_root=web_root())
+    out = run_case.plan_run(
+        root,
+        rid,
+        simulation_id=simulation_id or None,
+        mesh_id=mesh_id or None,
+        time_dependency=time_dependency or None,
+        transient=transient,
+        n_procs=procs,
+    )
+    if not out.get("ok"):
+        return out
+    job = str(out.get("prepare_job") or "")
+    jobs = hub.registry("job")
+    if job not in set(jobs.keys()):
+        return {**out, "ok": False, "error": f"The job that writes this run's case ({job}) is not loaded."}
+    row = _job_row(hub, jobs.get(job))
+    if row["plugin"] != "builtin" and not row["tool_path"]:
+        return {**out, "ok": False, "error": f"The job that writes this run's case ({job}) is not in its plugin's folder."}
+    return {**out, "prepare": row}
+
+
 @rpc("runs.upsert")
 def runs_upsert(
     id: str = "",

@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 def register_job_kinds(hub: RegistryHub) -> None:
-    """Register mesh, solve, and cad_import (idempotent same-plugin)."""
+    """Register mesh, solve, solve.prepare and cad_import (idempotent same-plugin)."""
     reg = hub.registry("job")
     reg.register(
         JobKind(
@@ -28,6 +28,18 @@ def register_job_kinds(hub: RegistryHub) -> None:
             tool="solve.sh",
             scope="study",
             args_from_params=("project_id", "simulation_id", "run_id"),
+        ),
+        plugin="builtin",
+    )
+    # API 1.5: writes a run's case for an analysis that names no
+    # LaunchSpec.prepare_job (contract.BUILTIN_PREPARE_JOB): prepare_run.py, which
+    # calls the analysis's write_case into MAGNUSIM_CASE_DIR.
+    reg.register(
+        JobKind(
+            key="solve.prepare",
+            tool="prepare_run.py",
+            scope="study",
+            args_from_params=("run_id", "mesh_id", "simulation_id", "time_dependency", "n_procs", "transient"),
         ),
         plugin="builtin",
     )

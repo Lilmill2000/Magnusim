@@ -247,7 +247,7 @@ def test_analysis_rpcs(tmp_path: Path):
     d = methods.analysis_defaults(key="incompressible_steady", time_dependency="Transient")
     assert d["sibling"] == "incompressible_transient" and d["run"]["end_time"] == 200
     assert methods.analysis_launch_spec(key="incompressible_transient")["launch"]["keep_frames"] == "all"
-    assert methods.analysis_describe(key="incompressible_steady")["analysis"]["contract"] == "1.4"
+    assert methods.analysis_describe(key="incompressible_steady")["analysis"]["contract"] == "1.5"
 
 
 def test_run_settings_are_cleaned_by_the_run_analysis(tmp_path: Path):

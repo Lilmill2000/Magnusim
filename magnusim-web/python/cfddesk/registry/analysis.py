@@ -292,6 +292,11 @@ class AnalysisType:
     # rows). None = not declared (an analysis with a run_monitors hook gets
     # contract.LEGACY_MONITOR_QUANTITIES); () = none.
     monitor_quantities: tuple[Any, ...] | None = None
+    # Contract 1.5: the per-step numbers the Run panel's progress line shows,
+    # {key, label, format: "time" | "sig2", max_key?} each (contract.live_metrics).
+    # None = not declared (the panel keeps its time step and Courant text for a
+    # transient run); () = none.
+    live_metrics: tuple[dict[str, Any], ...] | None = None
 
 
 def schema_defaults(fields: tuple[SchemaField, ...] | list[SchemaField]) -> dict[str, Any]:

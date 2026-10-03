@@ -104,7 +104,7 @@ def test_stub_contract(stub):
     assert row["family"]["label"] == "Scalar diffusion (stub)" and row["study_defaults"]["algorithm"] == "Laplacian"
     assert row["study_defaults"]["analysis_title"] == "Scalar diffusion (stub)" and row["study_defaults"]["diffusivity"] == 0.0
     # It declares no kinematic fields (API 1.4): null in describe and in its launch spec.
-    assert row["contract"] == "1.4" and row["kinematic_fields"] is None
+    assert row["contract"] == "1.5" and row["kinematic_fields"] is None
     assert launch.kinematic_fields is None and launch.to_json()["kinematic_fields"] is None
     # Its result field names no unit of its own (the page labels it from unit_quantity).
     assert row["result_fields"] == [
