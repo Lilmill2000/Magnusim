@@ -334,14 +334,14 @@ test('results tools on a solved run, monitors, copied run settings, and stopping
   const box = await page.locator('#viewer').boundingBox();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await expect
-    .poll(() => page.evaluate(() => (window.__CFD_W13__?.points || []).some((p) => p.hit && p.magU != null)), { timeout: 60_000 })
+    .poll(() => page.evaluate(() => (window.__CFD_W13__?.points || []).some((p) => p.hit && p.values?.magU != null)), { timeout: 60_000 })
     .toBe(true);
   await shot('results-tools');
   // The values shown match a fresh, independent probe of the case at that point.
   const picked = await page.evaluate(() => {
     const w = window.__CFD_W13__;
     const pt = (w.points || []).filter((q) => q.hit).pop();
-    return { casePos: pt.casePos, magU: pt.magU, p: pt.p, time: String(w.time), case_dir: window.__CFD_W6__.case_dir };
+    return { casePos: pt.casePos, magU: pt.values.magU, p: pt.values.p ?? null, time: String(w.time), case_dir: window.__CFD_W6__.case_dir };
   });
   const truthAt = probeTruth(picked.case_dir, picked.time, picked.casePos);
   stage(`inspect shows magU ${picked.magU} p ${picked.p}; independent magU ${truthAt.magU} p ${truthAt.p}`);
@@ -359,11 +359,11 @@ test('results tools on a solved run, monitors, copied run settings, and stopping
   }, [picked.case_dir, picked.time, ...probeAt]);
   const apiMs = Date.now() - apiT0;
   const truthApi = probeTruth(picked.case_dir, picked.time, probeAt);
-  stage(`inspect API ${apiMs} ms via ${api.volume_from}: magU ${api.magU} p ${api.p}`);
+  stage(`inspect API ${apiMs} ms via ${api.volume_from}: magU ${api.values.magU} p ${api.values.p}`);
   expect(api.hit).toBe(true);
   expect(api.volume_from).toBe('worker-cache');
-  expect(close(api.magU, truthApi.magU, 1e-6)).toBe(true);
-  expect(close(api.p, truthApi.p, 1e-6)).toBe(true);
+  expect(close(api.values.magU, truthApi.magU, 1e-6)).toBe(true);
+  expect(close(api.values.p, truthApi.p, 1e-6)).toBe(true);
   await page.locator('#btn-inspect-point').click();
   stage('inspect point');
 

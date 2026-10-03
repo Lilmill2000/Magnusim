@@ -43,11 +43,6 @@ APPROACH = (
     "-> every shown field at pick. Honest miss off-mesh (no fake value)."
 )
 
-# Deprecated mirrors for the page's two fixed rows (it reads the top-level magU
-# and p and their units); written only when the probe covers those fields.
-LEGACY_MIRRORS = ("magU", "p")
-LEGACY_UNITS = {"magU": "m/s", "p": "Pa"}
-
 # Checksum weights: the first two keep the checksum the page already knew.
 _CHECKSUM_WEIGHTS = {"magU": 1_000_003.0, "p": 17.0}
 
@@ -75,10 +70,6 @@ def _checksum(values: dict[str, float | None], pt) -> float:
     return total + pt[0] * 3.0 + pt[1] * 5.0 + pt[2] * 7.0
 
 
-def _mirror(out: dict, values: dict[str, float | None]) -> None:
-    for key in LEGACY_MIRRORS:
-        if key in values:
-            out[key] = values[key]
 
 
 def _sample_once(grid: pv.DataSet, pt, names) -> tuple[pv.DataSet, bool]:
@@ -133,7 +124,6 @@ def probe_point(grid: pv.DataSet, xyz, names=None):
         "value_checksum": float(_checksum(values, pt)) if hit else 0.0,
         "no_fake_value": True,
     }
-    _mirror(out, values)
     return out
 
 
@@ -275,7 +265,6 @@ def export_inspect(
         "value_checksum": probed["value_checksum"],
         "reason": probed["reason"],
     }
-    _mirror(fp, values)
 
     sources = {}
     for name in names:
@@ -313,10 +302,6 @@ def export_inspect(
         "proves_not_baked_only": True,
         "no_fake_value": True,
     }
-    _mirror(result, values)
-    units = {k: LEGACY_UNITS[k] for k in LEGACY_MIRRORS if k in values}
-    if units:
-        result["units"] = units
     if "p" in values:
         # rho when the case stores p per unit density (its kinematic_fields, or
         # p for older cases), else 1: a case that writes p in Pa is shown as stored.
@@ -334,7 +319,6 @@ def export_inspect(
         "value_checksum": result["value_checksum"],
         "reason": result["reason"],
     }
-    _mirror(summary, values)
     print(json.dumps(summary))
     return result
 

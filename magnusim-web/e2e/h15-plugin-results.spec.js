@@ -129,13 +129,15 @@ test('gate:h15-attach-scope and plugin case results in 3D', async ({ page, reque
     };
     const stored = storedPressureAt(fixtureDir, '0.5', probeAt);
     expect(stored.hit).toBe(true);
-    expect(Math.abs(stored.p)).toBeGreaterThan(0.1);
-    const kin = await inspect(fixtureDir);
-    const pa = await inspect(paDir);
-    stage(t0, `inspect p: stored ${stored.p}; kinematic case ${kin.p} Pa; plugin Pa case ${pa.p} Pa`);
-    expect(Math.abs(pa.p - stored.p) / Math.abs(stored.p)).toBeLessThan(0.01);
-    expect(Math.abs(kin.p - stored.p * 1000) / Math.abs(stored.p * 1000)).toBeLessThan(0.01);
-    expect([pa.units.p, pa.pressure_source]).toEqual(['Pa', 'Pa']);
+    const storedP = stored.values.p;
+    expect(Math.abs(storedP)).toBeGreaterThan(0.1);
+    const kin = (await inspect(fixtureDir)).values.p;
+    const paMeta = await inspect(paDir);
+    const pa = paMeta.values.p;
+    stage(t0, `inspect p: stored ${storedP}; kinematic case ${kin} Pa; plugin Pa case ${pa} Pa`);
+    expect(Math.abs(pa - storedP) / Math.abs(storedP)).toBeLessThan(0.01);
+    expect(Math.abs(kin - storedP * 1000) / Math.abs(storedP * 1000)).toBeLessThan(0.01);
+    expect([paMeta.pressure_unit, paMeta.pressure_source]).toEqual(['Pa', 'Pa']);
     stage(t0, 'inspect point: a p-in-Pa case is shown as stored, a kinematic case x rho');
 
     // The workbench as the user left it: the round plate with its study.

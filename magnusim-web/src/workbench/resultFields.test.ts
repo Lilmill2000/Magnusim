@@ -46,6 +46,11 @@ describe('result fields a results tool lists', () => {
     ]);
   });
 
+  it('lists what the frame wrote by name when none of the run rows were written', () => {
+    expect(labelled(resultRowsFor({ runRow: ifRow, wrote: ['T'] }))).toEqual([['T', 'T', '']]);
+    expect(resultRowsFor({ runRow: ifRow, wrote: [] })).toEqual([]);
+  });
+
   it('keeps every row while the frame is not known yet', () => {
     expect(resultRowsFor({ runRow: ifRow }).map((f) => f.name)).toEqual(['magU', 'p', 'k', 'omega']);
   });
@@ -62,8 +67,9 @@ describe('result fields a results tool lists', () => {
       ['T', 'Temperature', 'K'],
     ]);
     expect(labelled(resultRowsFor({ runRow: tRow, defaultRow: ifRow, wrote: ['T', 'magU'] }))).toEqual([['T', 'Temperature', 'K']]);
-    // An empty case list is still the case's own: nothing else is listed.
-    expect(resultRowsFor({ caseRows: [], runRow: ifRow, wrote: ['magU'] })).toEqual([]);
+    // An empty case list is still the case's own: the run's rows are not used, and
+    // what the frame wrote is listed by name rather than nothing.
+    expect(labelled(resultRowsFor({ caseRows: [], runRow: ifRow, wrote: ['magU'] }))).toEqual([['magU', 'magU', '']]);
   });
 
   it('reads a sidecar vector row that does not say its kind from the frame', () => {

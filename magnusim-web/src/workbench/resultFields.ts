@@ -10,7 +10,7 @@
  * the frame wrote (the exporter's `fields_available`; unknown = keep all). A
  * case that names no analysis at all (no sidecar list and no known run
  * analysis) also lists every other field it wrote, by its own name and with no
- * unit, so its results still show.
+ * unit, so its results still show; so does a case none of whose rows it wrote.
  *
  * A scalar is shown by its key, a vector X by its magnitude magX; a tensor is
  * never shown.
@@ -122,8 +122,9 @@ export function resultRowsFor(input: ResultRowsInput): ShownField[] {
     seen.add(name);
     out.push(shownField(row, name));
   }
-  // A case whose analysis is not known lists what else it wrote, by name.
-  if (!caseRows && !runRows && wrote) {
+  // A case whose analysis is not known lists what else it wrote, by name; so
+  // does a case none of whose rows it wrote (rather than nothing at all).
+  if (wrote && ((!caseRows && !runRows) || !out.length)) {
     for (const name of wrote) {
       if (!FIELD_NAME_RE.test(name) || seen.has(name)) continue;
       seen.add(name);

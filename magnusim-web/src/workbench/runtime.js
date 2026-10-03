@@ -707,7 +707,7 @@ function absorbSeriesFromEntry(field, entry) {
     }
   } catch (_) {}
   const foamR = rangeFromFoamMeta(field, entry && entry.meta);
-  // Skip volume-field spikes (e.g. magU foam 500 vs surface p99 ~49) that collapse LUT to solid blue.
+  // Skip volume-field spikes (a volume maximum of 500 against a surface p99 of ~49, say) that collapse the LUT to solid blue.
   if (foamR && pdR && Number.isFinite(pdR[0]) && Number.isFinite(pdR[1])) {
     const foamSpan = foamR[1] - foamR[0];
     const pdSpan = pdR[1] - pdR[0];
@@ -2878,7 +2878,7 @@ function cutFingerprint(pd) {
 /**
  * vtk.js Cutter does not interpolate point-field scalars onto cut points.
  * Re-cut with the same vtkPlane and lerp activeField onto intersections so the
- * cutting-plane actor is a real sample of the API magU surface (not a chrome overlay).
+ * cutting-plane actor is a real sample of the API field surface (not a chrome overlay).
  */
 function buildCutBins(pd) {
   const points = pd.getPoints().getData();
@@ -12379,7 +12379,7 @@ async function loadMeshSectionForInspect(opts) {
     console.warn('[CFD W25b] mesh-section meta', e);
   }
   cutState.enabled = true;
-  // Bank-like mesh inspect: white bg, gray faces, black edges (not magU rainbow)
+  // Bank-like mesh inspect: white bg, gray faces, black edges (not a field rainbow)
   try {
     renderer.setBackground(1, 1, 1);
   } catch (_) {}
@@ -14682,7 +14682,7 @@ function publishW12(extra) {
     increment: 'W12',
     ready: !!(window.__CFD_W6__ && window.__CFD_W6__.ready !== false),
     approach:
-      'Animation live + ITERATIONS honesty: /api/times lists real OpenFOAM time dirs; scrub/play and right-panel ITERATIONS share that list; load /api/fields/magU?time= for each real time; uniform foam (time 0) fills surface zeros; missing time -> 404 empty.',
+      'Animation live + ITERATIONS honesty: /api/times lists real OpenFOAM time dirs; scrub/play and right-panel ITERATIONS share that list; load /api/fields/<field>?time= for each real time; uniform foam (time 0) fills surface zeros; missing time -> 404 empty.',
     case_dir: getCaseDir(),
     time: cur,
     available_times: times.slice(),
@@ -16119,9 +16119,6 @@ function publishW13(overrides) {
       casePos: pt.casePos.slice(),
       hit: !!pt.hit,
       values: { ...pt.values },
-      // Deprecated mirrors of values.magU / values.p (older test hooks).
-      magU: pt.values.magU != null ? pt.values.magU : null,
-      p: pt.values.p != null ? pt.values.p : null,
     })),
     hit: !!inspectState.hit,
     empty: !!inspectState.empty,

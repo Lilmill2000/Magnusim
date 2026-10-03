@@ -163,10 +163,10 @@ def test_inspect_through_worker_reports_pa_and_leaves_cache(tmp_path, monkeypatc
                                       "x": 0.2, "y": 0.2, "z": 0.2})
         r = res["result"]
         assert r["hit"] is True and r["volume_cached"] is True
-        assert abs(r["p"] - P_PA) < 1e-9, f"inspect {n}"
-        assert abs(r["magU"] - 1.0) < 1e-9
+        assert abs(r["values"]["p"] - P_PA) < 1e-9, f"inspect {n}"
+        assert abs(r["values"]["magU"] - 1.0) < 1e-9
         meta = json.loads((out / "inspect.meta.json").read_text(encoding="utf-8"))
-        assert meta["units"]["p"] == "Pa" and abs(meta["p"] - P_PA) < 1e-9
+        assert meta["pressure_unit"] == "Pa" and abs(meta["values"]["p"] - P_PA) < 1e-9
         assert meta["volume_from"] == "worker-cache"
     entry = volume_cache.get_prepared(str(case), "1")
     assert np.allclose(entry["slice"].point_data["p"], P_KIN)
@@ -178,7 +178,7 @@ def test_inspect_miss_is_honest(tmp_path, monkeypatch):
     res = _rpc("filter.inspect", {"case_dir": str(case), "time": "1", "out_dir": str(tmp_path / "o"),
                                   "x": 5.0, "y": 5.0, "z": 5.0})
     r = res["result"]
-    assert r["hit"] is False and r["p"] is None and r["magU"] is None
+    assert r["hit"] is False and r["values"]["p"] is None and r["values"]["magU"] is None
 
 
 def test_inspect_uniform_time_uses_the_uniform_values(tmp_path, monkeypatch):
@@ -189,8 +189,8 @@ def test_inspect_uniform_time_uses_the_uniform_values(tmp_path, monkeypatch):
     res = _rpc("filter.inspect", {"case_dir": str(case), "time": "1", "out_dir": str(tmp_path / "o"),
                                   "x": 0.2, "y": 0.2, "z": 0.2})
     r = res["result"]
-    assert abs(r["p"] - 3.0 * RHO) < 1e-9
-    assert abs(r["magU"] - 2.0) < 1e-9
+    assert abs(r["values"]["p"] - 3.0 * RHO) < 1e-9
+    assert abs(r["values"]["magU"] - 2.0) < 1e-9
     entry = volume_cache.get_prepared(str(case), "1")
     assert np.allclose(entry["slice"].point_data["p"], P_KIN)
 
@@ -220,7 +220,7 @@ def test_inspect_scales_only_the_cases_kinematic_p(tmp_path, monkeypatch, sideca
                                   "x": 0.2, "y": 0.2, "z": 0.2})
     r = res["result"]
     assert r["hit"] is True
-    assert abs(r["p"] - P_KIN * scale) < 1e-9
+    assert abs(r["values"]["p"] - P_KIN * scale) < 1e-9
     meta = json.loads((out / "inspect.meta.json").read_text(encoding="utf-8"))
     assert meta["pressure_rho"] == scale
     assert meta["pressure_source"] == ("Pa" if scale == 1.0 else "m^2/s^2 x rho")

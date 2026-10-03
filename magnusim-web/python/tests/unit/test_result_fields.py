@@ -272,9 +272,12 @@ def test_inspect_scales_only_kinematic_fields(tmp_path: Path, monkeypatch, kinem
     r = _inspect(case, tmp_path / "o")
     assert abs(r["values"]["p"] - 10.0 * scale) < 1e-9
     assert r["values"]["T"] == 300.0
-    assert abs(r["p"] - 10.0 * scale) < 1e-9
+    # Values only: no top-level copies of p or magU, and no fixed unit table.
+    assert "p" not in r and "magU" not in r
     meta = json.loads((tmp_path / "o" / "inspect.meta.json").read_text(encoding="utf-8"))
-    assert meta["units"] == {"p": "Pa"} and meta["scaled_by_density"] == (["p"] if kinematic else [])
+    assert "units" not in meta and "p" not in meta and "p" not in meta["fingerprint"]
+    assert meta["scaled_by_density"] == (["p"] if kinematic else [])
+    assert meta["pressure_source"] == ("m^2/s^2 x rho" if kinematic else "Pa")
 
 
 def test_inspect_uniform_scalar_time_overrides_the_volume(tmp_path: Path, monkeypatch):

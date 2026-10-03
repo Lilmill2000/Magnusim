@@ -468,43 +468,13 @@ export function isFieldName(field) {
 }
 
 /**
- * Legacy label map: the iso, iso-volume and plot pickers still send labels
- * ("Velocity Magnitude", "Pressure") instead of field names. They are mapped
- * here, and only here; the page sends field names in a later step and this map
- * goes then.
- */
-const LEGACY_FIELD_LABELS = {
-  'velocity magnitude': 'magU',
-  '|u|': 'magU',
-  'u magnitude': 'magU',
-  velocity: 'magU',
-  pressure: 'p',
-  'kinematic pressure': 'p',
-  'pressure (p)': 'p',
-};
-
-/** A field name from a picker value: a legacy label mapped to its field, a name as is. */
-export function legacyFieldName(value) {
-  const raw = String(value ?? '').trim();
-  return LEGACY_FIELD_LABELS[raw.toLowerCase()] || raw;
-}
-
-/**
- * The first non-empty of `keys` as a field name, else the first non-empty of
- * `legacyKeys` mapped through the legacy label map. '' when none is given (the
+ * The first non-empty of `keys` as a field name. '' when none is given (the
  * tool then shows the case's default field) or the value is not a plain name.
  */
-export function fieldNameParam(u, keys, legacyKeys = []) {
+export function fieldNameParam(u, keys) {
   for (const k of keys) {
     const v = String(u.searchParams.get(k) ?? '').trim();
     if (v) return isFieldName(v) ? v : '';
-  }
-  for (const k of legacyKeys) {
-    const v = String(u.searchParams.get(k) ?? '').trim();
-    if (v) {
-      const name = legacyFieldName(v);
-      return isFieldName(name) ? name : '';
-    }
   }
   return '';
 }
@@ -1439,8 +1409,7 @@ export function popParamsFromUrl(u) {
   const points = (u.searchParams.get('points') || '').trim();
   return {
     subdivisions: Number.isFinite(subdivisions) ? Math.max(0, Math.floor(subdivisions)) : 0,
-    // field_variable / fieldVariable: legacy labels.
-    field: fieldNameParam(u, ['field'], ['field_variable', 'fieldVariable']),
+    field: fieldNameParam(u, ['field']),
     points,
   };
 }
@@ -1517,9 +1486,8 @@ export function isoParamsFromUrl(u) {
     vectorsRaw === '1' || vectorsRaw === 'true' || vectorsRaw === 'True' ? 1 : 0;
   return {
     iso_value: Number.isFinite(iso_value) ? iso_value : 11.1,
-    // iso_scalar / isoScalar / coloring: legacy labels.
-    iso_field: fieldNameParam(u, ['iso_field'], ['iso_scalar', 'isoScalar']),
-    color_field: fieldNameParam(u, ['color_field'], ['coloring']),
+    iso_field: fieldNameParam(u, ['iso_field']),
+    color_field: fieldNameParam(u, ['color_field']),
     vector: fieldNameParam(u, ['vector']),
     opacity: Number.isFinite(opacity) ? opacity : 1,
     vectors,
@@ -1781,9 +1749,8 @@ export function isoVolParamsFromUrl(u) {
   return {
     iso_value_low: Number.isFinite(iso_value_low) ? iso_value_low : 0.25,
     iso_value_high: Number.isFinite(iso_value_high) ? iso_value_high : 0.75,
-    // iso_scalar / isoScalar / coloring: legacy labels.
-    iso_field: fieldNameParam(u, ['iso_field'], ['iso_scalar', 'isoScalar']),
-    color_field: fieldNameParam(u, ['color_field'], ['coloring']),
+    iso_field: fieldNameParam(u, ['iso_field']),
+    color_field: fieldNameParam(u, ['color_field']),
     vector: fieldNameParam(u, ['vector']),
     opacity: Number.isFinite(opacity) ? opacity : 1,
     vectors,

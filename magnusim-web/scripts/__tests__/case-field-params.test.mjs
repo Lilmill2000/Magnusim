@@ -11,14 +11,12 @@ import {
   inspectParamsFromUrl,
   isoParamsFromUrl,
   isoVolParamsFromUrl,
-  legacyFieldName,
   popParamsFromUrl,
   ptParamsFromUrl,
 } from '../vite-plugin-case-fields.js';
 
-// Results tools take field names (a scalar by its name, a vector X as magX).
-// The page still sends labels for the iso and plot pickers; those map to names
-// in one place, and '' stays '' so the tool shows the case's default field.
+// Results tools take field names (a scalar by its name, a vector X as magX); a
+// label is not a name, and '' stays '' so the tool shows the case's default field.
 const url = (query) => new URL(`http://127.0.0.1/api/x?${new URLSearchParams(query)}`);
 
 describe('case field request parameters', () => {
@@ -35,17 +33,12 @@ describe('case field request parameters', () => {
     assert.deepEqual([pt.vector, pt.coloring], ['W', 'T']);
   });
 
-  it('maps the legacy labels the page sends', () => {
-    const iso = isoParamsFromUrl(url({ iso_scalar: 'Velocity Magnitude', coloring: 'Pressure' }));
-    assert.deepEqual([iso.iso_field, iso.color_field], ['magU', 'p']);
-    const iv = isoVolParamsFromUrl(url({ isoScalar: 'Pressure', coloring: 'Velocity Magnitude' }));
-    assert.deepEqual([iv.iso_field, iv.color_field], ['p', 'magU']);
-    assert.equal(popParamsFromUrl(url({ field_variable: 'Pressure' })).field, 'p');
-    assert.equal(popParamsFromUrl(url({ fieldVariable: 'Velocity Magnitude' })).field, 'magU');
-    // A name in the new parameter wins over a label in the old one.
-    assert.equal(isoParamsFromUrl(url({ iso_field: 'T', iso_scalar: 'Pressure' })).iso_field, 'T');
-    assert.equal(legacyFieldName('pressure'), 'p');
-    assert.equal(legacyFieldName('T'), 'T');
+  it('reads no labels, and no old parameter names', () => {
+    const iso = isoParamsFromUrl(url({ iso_field: 'Velocity Magnitude', color_field: 'Pressure' }));
+    assert.deepEqual([iso.iso_field, iso.color_field], ['', 'Pressure']);
+    const old = isoVolParamsFromUrl(url({ iso_scalar: 'p', isoScalar: 'p', coloring: 'p' }));
+    assert.deepEqual([old.iso_field, old.color_field], ['', '']);
+    assert.equal(popParamsFromUrl(url({ field_variable: 'p', fieldVariable: 'p' })).field, '');
   });
 
   it("keeps '' as '' and drops what is not a name", () => {
@@ -56,7 +49,7 @@ describe('case field request parameters', () => {
     const cut = cutParamsFromUrl(url({ field: '' }));
     assert.deepEqual([cut.field, cut.vector, cut.extra], ['', '', null]);
     assert.deepEqual(cutParamsFromUrl(url({ field: 'magU', extra: '' })).extra, []);
-    assert.equal(isoParamsFromUrl(url({ coloring: 'Solid color' })).color_field, '');
+    assert.equal(isoParamsFromUrl(url({ color_field: 'Solid color' })).color_field, '');
     assert.equal(cutParamsFromUrl(url({ field: '../p' })).field, '');
     assert.deepEqual(inspectParamsFromUrl(url({ x: '0', y: '0', z: '0' })).fields, []);
     const pt = ptParamsFromUrl(url({ seeds_h: '4' }));

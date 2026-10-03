@@ -106,6 +106,7 @@ An `AnalysisType` needs only `key`, `label`, `category`, `time_dependency` and `
 - `launch` (or the default solver's `SolverApp`): the program, which frames to keep (`all` or `latest`), the process names Stop looks for, and `frame_fields` (fields that mark a written frame).
 - `log_parser`: `module:factory` of the parser that turns the solver's output into job events.
 - `kinematic_fields` (API 1.4): the fields your cases store divided by density (pressure in an incompressible case), shown times `rho`. The core writes them in the case's `w27-case.json` unless `write_case` listed its own; leave it `None` to say nothing (a case with no list is read as `["p"]`).
+- `result_fields`: what your runs' results show, as `ResultField(key, label, unit_quantity, kind, unit, magnitude_label)` rows. Every results tool (colouring, iso surface and volume, plot over path, cutting planes, particle trace, inspect, views, legends) lists these in your order, those the frame wrote, with your labels and units; nothing else is shown for your runs. Give a velocity vector `unit_quantity="velocity"`: particle trace and vector glyphs follow the first one, and are off for a case without one. A case you write yourself can carry the list as `result_fields` in its `w27-case.json` (the core adds it after `write_case` when it is missing).
 
 `python/tests/fixtures/plugins/stub-analysis` is a complete example: a steady scalar-diffusion analysis on `laplacianFoam`, written with `magnusim_sdk` only.
 

@@ -288,5 +288,5 @@ test("results tools list the run's result fields with their units", async ({ pag
   const stored = storedPressureAt(runC.caseDir, picked.time, picked.casePos);
   expect(stored.hit).toBe(true);
   // As stored: not times rho (1000).
-  expect(Math.abs(shownP - stored.p)).toBeLessThanOrEqual(Math.max(1e-6, 0.01 * Math.abs(stored.p)));
+  expect(Math.abs(shownP - stored.values.p)).toBeLessThanOrEqual(Math.max(1e-6, 0.01 * Math.abs(stored.values.p)));
 });
