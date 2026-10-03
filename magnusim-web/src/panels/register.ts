@@ -11,7 +11,7 @@ import { SimulationDefaults, SimulationHub } from './simulation/SimulationPanel'
 /** Host flyouts register through the same function plugins will use. */
 export function registerAllIslands(): void {
   clearIslands();
-  replacePanel('panel-incompressible-defaults', SimulationDefaults);
+  replacePanel('panel-study-settings', SimulationDefaults);
   replacePanel('cs-type-list', SimulationHub);
   replacePanel('panel-materials-hub', MaterialsPanel);
   replacePanel('panel-material-picker', MaterialsPanel);

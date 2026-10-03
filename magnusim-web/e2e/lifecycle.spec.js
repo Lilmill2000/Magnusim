@@ -158,7 +158,7 @@ test('workbench: a study renamed, cloned and deleted; meshes and runs added, ren
 
   // Rename the study from its panel.
   await studyRow(page, sid).click();
-  const studyPanel = page.locator('#panel-incompressible-defaults');
+  const studyPanel = page.locator('#panel-study-settings');
   await studyPanel.locator('button.mesh-rename[aria-label="Rename simulation"]').click();
   await studyPanel.locator('input[aria-label="Simulation name"]').fill('Baseline');
   await studyPanel.locator('input[aria-label="Simulation name"]').press('Enter');

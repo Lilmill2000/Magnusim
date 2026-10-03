@@ -42,7 +42,7 @@ test('gate:h3-simulation-island defaults come from the registry schema', async (
   await openProject(page);
   const study = page.locator('#left-tree [data-w17-sim="1"] > .tree-row').first();
   await study.click();
-  const island = page.locator('#panel-incompressible-defaults .cfd-island');
+  const island = page.locator('#panel-study-settings .cfd-island');
   await expect(island).toBeVisible({ timeout: 15_000 });
   await expect(island.locator('[data-schema-key="turbulence_model"]')).toBeVisible();
   await expect(island.locator('[data-schema-key="residual_u"]')).toBeVisible();

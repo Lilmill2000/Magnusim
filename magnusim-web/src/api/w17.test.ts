@@ -33,7 +33,7 @@ describe('gate:h3-simulation-scoped', () => {
   it('saves study A without study B id', () => {
     const body = simulationSaveBody(
       {
-        panelId: 'panel-incompressible-defaults',
+        panelId: 'panel-study-settings',
         projectId: 'proj',
         simId: 'study-a',
         scope: 'p:proj/g:geom/s:study-a',

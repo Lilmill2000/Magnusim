@@ -18336,7 +18336,7 @@ function clearResultActors() {
 }
 
 const TREE_DETAIL_IDS = {
-  incompressible: 'panel-incompressible-defaults',
+  'study-settings': 'panel-study-settings',
   geometry: 'panel-geometry',
   'mat-picker': 'panel-material-picker',
   'materials-hub': 'panel-materials-hub',
@@ -18454,7 +18454,7 @@ const SETUP_SECTION_FROM_PANEL = {
   'refs-hub': 'Mesh',
   'ref-picker': 'Mesh',
   ref: 'Mesh',
-  incompressible: 'Simulation',
+  'study-settings': 'Simulation',
   aa: 'Simulation',
   rc: 'Simulation',
   'run-mesh': 'Simulation',
@@ -18484,7 +18484,7 @@ function setupSectionFromSelectedKey(selectedKey) {
   }
   if (
     key === 'sim-hub' ||
-    key === 'incompressible' ||
+    key === 'study-settings' ||
     key === 'rc' ||
     key.startsWith('run')
   ) {
@@ -21113,7 +21113,7 @@ function refreshSetupTree() {
               return (
                 '<li class="tree-node' +
                 treeExpClass(skey) +
-                (on ? sel('incompressible') : '') +
+                (on ? sel('study-settings') : '') +
                 '" data-label="' +
                 escapeHtml(skey) +
                 '" data-w17-sim-id="' +
@@ -34832,7 +34832,7 @@ function markTreeSelected(key) {
   if (!key) return;
   const studyScope = activeStudyScopeSel();
   const map = {
-    incompressible: studyCatalog.activeId
+    'study-settings': studyCatalog.activeId
       ? '[data-w17-sim-id="' + cssSelAttr(studyCatalog.activeId) + '"]'
       : '[data-w17-sim="1"]',
     geometry: '[data-w17-geo="1"]',
@@ -35373,7 +35373,7 @@ function applyStudyDropOrder(ids, geometryId) {
       if (node.matches('[data-w17-sim-id], [data-w17-sim="1"]')) {
         const sid = node.getAttribute('data-w17-sim-id');
         if (e.target.closest('.tw')) return;
-        const go = () => activateTreePanel('incompressible', 'incompressible');
+        const go = () => activateTreePanel('study-settings', 'study-settings');
         // During another study's switch, this row is the one to show even if it is the active
         // study still: switch (back) to it.
         if (sid && (studyCatalog.activeId !== sid || studySwitchInFlight())) {
@@ -35382,7 +35382,7 @@ function applyStudyDropOrder(ids, geometryId) {
           selectStudyClient(sid)
             .then((out) => {
               if (!out || out.stale) return;
-              activateTreePanel('incompressible', 'incompressible', { toggle: false });
+              activateTreePanel('study-settings', 'study-settings', { toggle: false });
             })
             .catch((err) => console.warn('[CFD] study', err));
         } else {
@@ -35761,7 +35761,7 @@ function applyStudyDropOrder(ids, geometryId) {
           switchGeometryClient(gid)
             .then((out) => {
               if (out && out.stale) return;
-              markTreeSelected('incompressible');
+              markTreeSelected('study-settings');
             })
             .catch((err) => console.warn('[CFD] geom study', err));
           return;

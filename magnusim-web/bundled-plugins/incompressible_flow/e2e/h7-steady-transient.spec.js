@@ -81,7 +81,7 @@ function controlDict(runId) {
 async function openStudyPanel(page, sid) {
   const row = page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first();
   await row.click();
-  const panel = page.locator('#panel-incompressible-defaults .cfd-island [data-study-panel="1"]');
+  const panel = page.locator('#panel-study-settings .cfd-island [data-study-panel="1"]');
   await expect(panel).toBeVisible({ timeout: 15_000 });
   return panel;
 }

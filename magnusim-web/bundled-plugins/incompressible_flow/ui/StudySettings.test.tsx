@@ -86,7 +86,7 @@ afterEach(() => {
 });
 
 function renderPanel() {
-  return render(<SimulationDefaults panelId="panel-incompressible-defaults" scope="p:proj/s:sim_1" />);
+  return render(<SimulationDefaults panelId="panel-study-settings" scope="p:proj/s:sim_1" />);
 }
 
 describe('turbulenceKey', () => {

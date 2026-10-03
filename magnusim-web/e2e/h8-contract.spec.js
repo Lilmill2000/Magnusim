@@ -88,7 +88,7 @@ test('gate:h8-required-plugin-missing the app says the required plugin is missin
       if (pass === 'reload') await page.reload();
       await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, FIXTURE, { timeout: 90_000 });
       await page.locator('#left-tree [data-w17-sim-id="sim_1"] > .tree-row').first().click();
-      await expect(page.locator('#panel-incompressible-defaults [data-study-missing="1"]')).toContainText(
+      await expect(page.locator('#panel-study-settings [data-study-missing="1"]')).toContainText(
         "Incompressible Flow failed to load, so this simulation can't be set up or run.",
       );
       const folder = page.locator('#left-tree [data-w17-sim-id="sim_1"] li[data-w27-sim-control="1"]').first();
@@ -264,7 +264,7 @@ test('gate:h8-stub-analysis a simulation type the core does not know runs throug
   await expect(runPanel.locator('[data-run-reason="1"]')).toContainText('Set the diffusivity above 0 m²/s.', { timeout: 15_000 });
   await expect(runPanel.locator('[data-run-start]')).toBeDisabled();
   await page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first().click();
-  const studyPanel = page.locator('#panel-incompressible-defaults .cfd-island [data-study-panel="1"]');
+  const studyPanel = page.locator('#panel-study-settings .cfd-island [data-study-panel="1"]');
   await expect(studyPanel.locator('[data-stub-study-settings="1"]')).toBeVisible({ timeout: 15_000 });
   await expect(studyPanel.locator('[data-study-analysis="1"]')).toBeVisible();
   await expect(studyPanel).not.toContainText(/simpleFoam|Turbulence model|SIMPLE/);

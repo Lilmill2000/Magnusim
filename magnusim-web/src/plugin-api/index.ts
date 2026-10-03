@@ -81,7 +81,22 @@ function registerPanelFor(owner: string, opts: RegisterPanelOpts): void {
   notifyPanels();
 }
 
-function replacePanelFor(owner: string, panelId: string, Component: ComponentType<IslandProps>): void {
+/**
+ * Old host panel ids a plugin may still name. The study panel was
+ * `panel-incompressible-defaults` before API 1.4; replacePanel() with that id
+ * replaces `panel-study-settings`, so a plugin written against 1.3 keeps working.
+ */
+export const PANEL_ID_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  'panel-incompressible-defaults': 'panel-study-settings',
+});
+
+/** The host panel id `panelId` names today (an old alias resolves to its new id). */
+export function resolvePanelId(panelId: string): string {
+  return Object.prototype.hasOwnProperty.call(PANEL_ID_ALIASES, panelId) ? PANEL_ID_ALIASES[panelId] : panelId;
+}
+
+function replacePanelFor(owner: string, requestedId: string, Component: ComponentType<IslandProps>): void {
+  const panelId = resolvePanelId(requestedId);
   const ledger = ledgerFor(owner);
   // Remember the host's own component the first time, to restore it on disable.
   if (owner !== HOST && !ledger.islands.has(panelId)) ledger.islands.set(panelId, islandComponent(panelId));

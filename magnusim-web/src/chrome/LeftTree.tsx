@@ -224,7 +224,7 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
     <Node
       label={study.name}
       expandedLabel={skey}
-      selected={study.active && selectedKey === 'incompressible'}
+      selected={study.active && selectedKey === 'study-settings'}
       attrs={{ 'data-w17-sim-id': study.id, 'data-w17-sim': '1', 'data-scope-key': study.scopeKey }}
     >
       <Node

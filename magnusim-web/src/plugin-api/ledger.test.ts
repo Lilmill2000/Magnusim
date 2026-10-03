@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { panelsFor, pluginTreeNodes, pluginUiFor, registeredPluginKeys, unregisterPlugin, type PanelPlace } from './index';
+import {
+  PANEL_ID_ALIASES,
+  panelsFor,
+  pluginTreeNodes,
+  pluginUiFor,
+  registeredPluginKeys,
+  replacePanel,
+  unregisterPlugin,
+  type PanelPlace,
+} from './index';
+import { islandComponent, unregisterIsland } from '../islands';
 import { hasFieldWidget, pluginFieldWidgets } from './fieldWidgets';
 
 const Blank = () => null;
@@ -40,5 +50,22 @@ describe('plugin UI ledger', () => {
       ui.registerPanel({ key: 'x', title: 'X', place: 'toolbar' as unknown as PanelPlace, Component: Blank }),
     ).toThrow(/not rendered/);
     unregisterPlugin('ledger-bad-place');
+  });
+
+  it("replacePanel with the study panel's old id replaces panel-study-settings; unloading restores the host's", () => {
+    const Host = () => null;
+    const Probe = () => null;
+    expect(PANEL_ID_ALIASES['panel-incompressible-defaults']).toBe('panel-study-settings');
+    replacePanel('panel-study-settings', Host);
+    try {
+      pluginUiFor('ledger-old-id').replacePanel('panel-incompressible-defaults', Probe);
+      expect(islandComponent('panel-study-settings')).toBe(Probe);
+      expect(islandComponent('panel-incompressible-defaults')).toBeUndefined();
+      unregisterPlugin('ledger-old-id');
+      expect(islandComponent('panel-study-settings')).toBe(Host);
+    } finally {
+      unregisterPlugin('ledger-old-id');
+      unregisterIsland('panel-study-settings');
+    }
   });
 });

@@ -204,7 +204,7 @@ test('@plugins gate:laminar-clone-turbulence a laminar study starts laminar', as
     await openProject(page);
     await page.waitForFunction(() => window.__CFD_PLUGINS_READY__ === true);
     await page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first().click();
-    const panel = page.locator('#panel-incompressible-defaults .cfd-island [data-study-panel="1"]');
+    const panel = page.locator('#panel-study-settings .cfd-island [data-study-panel="1"]');
     await expect(panel).toBeVisible({ timeout: 15_000 });
     const select = panel.locator('[data-schema-key="turbulence_model"] select');
     await expect(select).toBeVisible();

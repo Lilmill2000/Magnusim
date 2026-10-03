@@ -3916,7 +3916,7 @@ select.fp-select {
 
 .workbench[data-wb-stage="empty"] #btn-create-simulation,
 .workbench[data-wb-stage="empty"] #simulations-section,
-.workbench[data-wb-stage="empty"] #panel-incompressible-defaults,
+.workbench[data-wb-stage="empty"] #panel-study-settings,
 .workbench[data-wb-stage="empty"] #panel-air-material,
 .workbench[data-wb-stage="empty"] #panel-mesh-form,
 .workbench[data-wb-stage="empty"] #panel-mesh-inspect,

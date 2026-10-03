@@ -164,7 +164,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
     .toBe('done');
   stage(t0, 'mesh done');
 
-  const studyPanel = page.locator('#panel-incompressible-defaults .cfd-island');
+  const studyPanel = page.locator('#panel-study-settings .cfd-island');
   const openStudy = async () => {
     await page.locator(`#left-tree [data-w17-sim-id="${SIM}"] > .tree-row`).first().click();
     await expect(studyPanel.locator('[data-study-panel="1"]')).toBeVisible({ timeout: 15_000 });

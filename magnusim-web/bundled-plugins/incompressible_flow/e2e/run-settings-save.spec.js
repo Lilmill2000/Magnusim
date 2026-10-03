@@ -70,7 +70,7 @@ test('typed run settings survive a refresh while they are saving', async ({ page
   await iterations.press('Enter');
   // A refresh while that save is held: open the study, then the run again.
   await page.locator(`#left-tree [data-w17-sim-id="${SIM}"] > .tree-row`).first().click();
-  await expect(page.locator('#panel-incompressible-defaults .cfd-island [data-study-panel="1"]')).toBeVisible();
+  await expect(page.locator('#panel-study-settings .cfd-island [data-study-panel="1"]')).toBeVisible();
   await runNode.click();
   await expect(runPanel).toHaveAttribute('data-run-id', rid);
   await expect(iterations, 'the typed Iterations is still shown').toHaveValue(String(want.endTime));

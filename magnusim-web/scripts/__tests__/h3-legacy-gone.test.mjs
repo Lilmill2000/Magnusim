@@ -118,7 +118,7 @@ test('gate:h3-replace-panel', () => {
   assert.match(api, /replacePanel/);
   // H6: only places the host renders are typed; the unrendered 1.0 places are an error row.
   assert.match(api, /export type PanelPlace = 'filters' \| 'prefs';/);
-  assert.match(register, /replacePanel\('panel-incompressible-defaults'/);
+  assert.match(register, /replacePanel\('panel-study-settings'/);
   assert.match(register, /replacePanel\('panel-mesh-form'/);
   assert.match(register, /replacePanel\('panel-bc-editor'/);
   assert.match(register, /replacePanel\('panel-air-material'/);

@@ -49,7 +49,7 @@ test('the study clicked last keeps its panel open when it was clicked during ano
 
   const row = (sid) => page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first();
   const node = (sid) => page.locator(`#left-tree li[data-w17-sim-id="${sid}"]`).first();
-  const panel = page.locator('#panel-incompressible-defaults');
+  const panel = page.locator('#panel-study-settings');
   const activeId = () => page.evaluate(() => window.__CFD_W17__.activeId);
   /** The study's panel is open, titled with its name, and its row selected, for 2 s. */
   const shows = async (sid) => {

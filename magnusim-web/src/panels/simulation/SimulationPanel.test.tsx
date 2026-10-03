@@ -51,7 +51,7 @@ afterEach(() => {
   delete window.__CFD_PLUGINS_READY__;
 });
 
-const renderPanel = () => render(<SimulationDefaults panelId="panel-incompressible-defaults" scope="p:proj/s:sim_1" />);
+const renderPanel = () => render(<SimulationDefaults panelId="panel-study-settings" scope="p:proj/s:sim_1" />);
 
 describe('Create Simulation time dependency', () => {
   afterEach(() => {

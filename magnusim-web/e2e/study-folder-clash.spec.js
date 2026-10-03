@@ -48,7 +48,7 @@ test('a study named like another keeps its folder and results across saves', asy
   const simsRoot = join(dirname(geom.step_path), 'simulations');
 
   const studyRow = (sid) => page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first();
-  const studyPanel = page.locator('#panel-incompressible-defaults');
+  const studyPanel = page.locator('#panel-study-settings');
   const studies = async () => (await json(request, q('/api/simulation'))).simulations || [];
   const createStudy = async () => {
     await expect(page.locator('#btn-create-simulation')).toBeVisible({ timeout: 60_000 });
