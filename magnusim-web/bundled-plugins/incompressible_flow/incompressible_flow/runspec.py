@@ -30,6 +30,7 @@ from magnusim_sdk.study import (
     wall_treatment,
 )
 
+from .materials import LEGACY_AIR
 from .monitors import custom_monitors
 from .physics import StudyPhysics, physics_from_record
 from .transient import STEADY_DEFAULTS, TransientControl, load_mesh_meta, resolve_transient_control
@@ -118,7 +119,11 @@ class RunSpec:
 def air_from_materials(
     mats: dict | None, sim_id: str | None = None, legacy_id: str | None = None
 ) -> dict[str, Any] | None:
-    """The study's fluid: name, nu, rho, and whether it is assigned to a volume."""
+    """The study's fluid: name, nu, rho, and whether it is assigned to a volume.
+
+    A record without a number reads LEGACY_AIR's (what older versions filled in),
+    so an older project solves as it did; every record written now has its own.
+    """
     lst = (mats or {}).get("materials") if isinstance(mats, dict) else None
     if not isinstance(lst, list):
         return None
@@ -131,8 +136,8 @@ def air_from_materials(
     rho = float(air.get("density") or 0)
     return {
         "name": air.get("name") or "Air",
-        "nu": nu if math.isfinite(nu) and nu > 0 else 1.529e-5,
-        "rho": rho if math.isfinite(rho) and rho > 0 else 1.196,
+        "nu": nu if math.isfinite(nu) and nu > 0 else LEGACY_AIR["nu"],
+        "rho": rho if math.isfinite(rho) and rho > 0 else LEGACY_AIR["rho"],
         "assigned": len(vols) > 0 or bool(air.get("assigned_volume")),
     }
 
@@ -174,8 +179,8 @@ def load_run_spec(inputs: Any) -> RunSpec:
             end_time=float(ctrl.get("endTime") or STEADY_DEFAULTS["end_time"]),
             write_interval=float(ctrl.get("writeInterval") or STEADY_DEFAULTS["write_interval"]),
             transient=None,
-            nu=(air or {}).get("nu", 1.529e-5),
-            rho=(air or {}).get("rho", 1.196),
+            nu=(air or {}).get("nu", LEGACY_AIR["nu"]),
+            rho=(air or {}).get("rho", LEGACY_AIR["rho"]),
             wall_default=wall_treatment(bcs_doc.get("defaults")),
             bcs=[],
             monitor_patches=[],
@@ -234,8 +239,8 @@ def load_run_spec(inputs: Any) -> RunSpec:
         end_time=end_time,
         write_interval=write_interval,
         transient=None,
-        nu=float((air or {}).get("nu", 1.529e-5)),
-        rho=float((air or {}).get("rho", 1.196)),
+        nu=float((air or {}).get("nu", LEGACY_AIR["nu"])),
+        rho=float((air or {}).get("rho", LEGACY_AIR["rho"])),
         wall_default=wall_treatment(bcs_doc.get("defaults")),
         bcs=web_bcs,
         monitor_patches=mon,

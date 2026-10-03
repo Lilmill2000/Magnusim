@@ -23,7 +23,11 @@ from typing import Any, TypeGuard
 
 from magnusim_sdk.foam import read_surface_field_value
 
-DEFAULT_RHO = 1.196
+from .materials import LEGACY_AIR
+
+# A run whose case metadata has no density (an older run) reads the density
+# older versions filled in.
+DEFAULT_RHO = LEGACY_AIR["rho"]
 
 _U_COL = re.compile(r"areaAverage\(U\)")
 _P_COL = re.compile(r"areaAverage\(p\)")

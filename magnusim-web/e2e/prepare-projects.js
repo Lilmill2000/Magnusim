@@ -37,6 +37,11 @@ export const RUN_SETTINGS_PROJECT = 'run-settings-e2e';
 export const H8_PROJECT = 'h8-contract-e2e';
 /** Own elbow project for h10-ui-parity.spec.js: it solves a steady and a transient run to compare the panels. */
 export const H10_PROJECT = 'h10-ui-parity-e2e';
+/**
+ * Own elbow project for materials-presets.spec.js: its saved Air (no library code,
+ * the numbers of older versions) must open unchanged, and it adds a study.
+ */
+export const MATERIALS_PROJECT = 'materials-presets-e2e';
 /** A project with no geometry at all (h11-plugin-studies.spec.js: plugin studies in the empty stage). */
 export const NO_GEOMETRY_PROJECT = 'no-geometry-e2e';
 /**
@@ -189,6 +194,7 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
   seedElbowProject(destRoot, RUN_SETTINGS_PROJECT, 'Run settings');
   seedElbowProject(destRoot, H8_PROJECT, 'Analysis contract');
   seedElbowProject(destRoot, H10_PROJECT, 'UI parity');
+  seedElbowProject(destRoot, MATERIALS_PROJECT, 'Fluid presets');
   seedElbowProject(destRoot, MISSING_STUDY_PROJECT, 'Deleted study still listed');
   const missingDir = join(destRoot, MISSING_STUDY_PROJECT);
   const index = JSON.parse(readFileSync(join(missingDir, 'simulations.json'), 'utf8'));

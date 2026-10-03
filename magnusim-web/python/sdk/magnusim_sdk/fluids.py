@@ -1,7 +1,9 @@
 """Fluid presets (Air, Water, ...) and reference constants at 20 °C, 1 atm.
 
-NU_AIR is the rounded legacy engineering value (1.5e-5), not the more precise
-1.516e-5 at 20 °C — kept for Gate A3/A4 Re continuity. RHO_AIR is 20 °C dry air.
+RHO_AIR and NU_AIR are dry air at 20 °C, 1 atm (Cengel, Fluid Mechanics,
+table A-15: ρ 1.204 kg/m³, ν 1.516e-5 m²/s). The Incompressible Flow
+plugin's material presets are the values the app uses; LIBRARY agrees with them
+(the plugin's tests pin it).
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from typing import Any
 # Used by the library Air entry — import these; do not re-type. Old project
 # migrations keep their own frozen copy (cfddesk.project.legacy_sim), not these.
 RHO_AIR = 1.204  # kg/m³, dry air at 20 °C, 1 atm
-NU_AIR = 1.5e-5  # m²/s, rounded legacy cfddesk value (~1% below 20 °C table)
+NU_AIR = 1.516e-5  # m²/s, dry air at 20 °C, 1 atm
 
 
 @dataclass(frozen=True)
@@ -24,13 +26,13 @@ class LibraryMaterial:
     rho: float  # kg/m³
 
 
-# Values at 20 °C, 1 atm (ν for Air is the rounded NU_AIR constant above).
+# Values at 20 °C, 1 atm.
 LIBRARY: list[LibraryMaterial] = [
     LibraryMaterial("air", "Air", "Newtonian", NU_AIR, RHO_AIR),
     LibraryMaterial("argon", "Argon", "Newtonian", 1.34e-5, 1.661),
     LibraryMaterial("co2", "Carbon dioxide", "Newtonian", 8.03e-6, 1.842),
     LibraryMaterial("hydrogen", "Hydrogen", "Newtonian", 1.05e-4, 0.0838),
-    LibraryMaterial("nitrogen", "Nitrogen", "Newtonian", 1.50e-5, 1.165),
+    LibraryMaterial("nitrogen", "Nitrogen", "Newtonian", 1.51e-5, 1.165),
     LibraryMaterial("water", "Water", "Newtonian", 1.004e-6, 998.2),
     LibraryMaterial("seawater", "Seawater (3.5% saline)", "Newtonian", 1.05e-6, 1025.0),
     LibraryMaterial("custom", "Custom fluid", "Newtonian", NU_AIR, RHO_AIR),

@@ -1194,7 +1194,7 @@ search(query: str) -> list[LibraryMaterial]
 Constants:
 
 - `RHO_AIR = 1.204`
-- `NU_AIR = 1.5e-5`
+- `NU_AIR = 1.516e-5`
 - `LIBRARY = [ LibraryMaterial("air", "Air", "Newtonian", NU_AIR, RHO_AIR), LibraryMaterial("argon", "Argon", ...`
 
 ### magnusim_sdk.foam

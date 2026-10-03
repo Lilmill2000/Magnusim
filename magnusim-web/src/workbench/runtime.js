@@ -69,6 +69,7 @@ import {
   typeChangeFields,
   valueQuantity as bcValueQuantity,
 } from '../bcCatalog';
+import { modelFor as materialModelFor, recordFields as materialRecordFields } from '../materialModel';
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
 import { newPluginStudy, shownStudyTitles } from '../chrome/studyName';
@@ -22023,14 +22024,21 @@ window.__CFD_W17_CREATE__ = createSimulationClient;
  * Bank: Materials + → Air (Newtonian) → assign Body1 → ✓ save.
  * No BCs / mesh form / solves in this slice.
  * ======================================================================== */
-const W18_AIR_DEFAULTS = {
-  name: 'Air',
-  viscosity_model: 'Newtonian',
-  kinematic_viscosity: 1.529e-5,
-  kinematic_viscosity_unit: 'm2/s',
-  density: 1.196,
-  density_unit: 'kg/m3',
-};
+/** The material model of the study's analysis (registry), or undefined before the registry loads. */
+function studyMaterialModel() {
+  const st = window.__CFD_STUDY_STATE__;
+  return materialModelFor(st && st.analysis_type);
+}
+
+/**
+ * A material's property values under their record keys ({ kinematic_viscosity,
+ * density }): a saved one's own, and for a number it lacks what older versions
+ * filled in (its preset's legacy values); no material yet gets the default
+ * preset's values.
+ */
+function materialFill(mat) {
+  return materialRecordFields(studyMaterialModel(), mat || null);
+}
 
 
 
@@ -22073,8 +22081,6 @@ function openMaterialLibrary() {
     console.warn('[CFD W18] Create Simulation first');
     return;
   }
-  const modal = document.getElementById('modal-material-library');
-  if (modal) modal.hidden = true;
   openTreeDetail('mat-picker', { toggle: false });
 }
 
@@ -22091,12 +22097,6 @@ function syncMaterialsHub() {
 /** The React BC hub renders from `cfd:bcs`; nothing here writes panel DOM. */
 function syncBcsHub() {
   publishBcState();
-}
-
-function closeMaterialLibrary() {
-  const modal = document.getElementById('modal-material-library');
-  if (modal) modal.hidden = true;
-  if (treeUi.openPanel === 'mat-picker') hideAllTreeDetails();
 }
 
 function addMaterialForStudy(simId) {
@@ -22155,9 +22155,9 @@ function applyMaterialRecord(mat, projectId, opts) {
   const row = {
     id: mat.id,
     name: mat.name || 'Air',
-    viscosity_model: mat.viscosity_model || W18_AIR_DEFAULTS.viscosity_model,
-    kinematic_viscosity: mat.kinematic_viscosity ?? W18_AIR_DEFAULTS.kinematic_viscosity,
-    density: mat.density ?? W18_AIR_DEFAULTS.density,
+    viscosity_model: mat.viscosity_model || (studyMaterialModel()?.record_constants?.viscosity_model ?? null),
+    kinematic_viscosity: mat.kinematic_viscosity ?? materialFill(mat).kinematic_viscosity ?? null,
+    density: mat.density ?? materialFill(mat).density ?? null,
     assigned_volumes: mat.assigned_volumes || [],
     materials_json: mat.materials_json || null,
     created_at: mat.created_at,
@@ -22194,47 +22194,6 @@ function applyMaterialRecord(mat, projectId, opts) {
   publishW18({ created: true });
   try { window.dispatchEvent(new CustomEvent('cfd:material')); } catch (_) {}
   return window.__CFD_W18__;
-}
-
-async function saveAirMaterialClient(opts) {
-  const volumes = Array.isArray(opts && opts.assigned_volumes)
-    ? opts.assigned_volumes
-    : (materialCatalog.draft_volumes || []).slice();
-  if (!volumes.length && !materialCatalog.material) {
-    publishW18({ ready: false, note: 'Assign a body first' });
-    throw new Error('Assign a body first');
-  }
-  const current = materialCatalog.material || {};
-  const payload = {
-    id: current.id,
-    name: current.name || 'Air',
-    material: current.name || 'Air',
-    viscosity_model: 'Newtonian',
-    kinematic_viscosity: current.kinematic_viscosity,
-    density: current.density,
-    assigned_volumes: volumes,
-  };
-  if (w16State.project && w16State.project.id) payload.project_id = w16State.project.id;
-  if (studyCatalog.project_id) payload.project_id = studyCatalog.project_id;
-  if (opts && opts.project_id) payload.project_id = opts.project_id;
-  if (typeof currentMeshStudyIds === 'function') Object.assign(payload, currentMeshStudyIds());
-
-  const r = await fetch('/api/materials', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
-    body: JSON.stringify(payload),
-  });
-  const j = await r.json();
-  if (!r.ok) {
-    publishW18({ ready: false, note: j.error || 'materials save failed' });
-    throw new Error(j.error || 'materials save failed');
-  }
-  const snap = applyMaterialRecord(j.material, j.project_id, opts);
-  if (volumes.length) {
-    try { if (typeof syncSimControlPanel === 'function') syncSimControlPanel(); } catch (_) {}
-    try { if (typeof scheduleKickNextQueuedJob === 'function') scheduleKickNextQueuedJob(200); } catch (_) {}
-  }
-  return snap;
 }
 
 /**
@@ -22847,7 +22806,7 @@ window.__CFD_BC_FLOW_BASIS__ = function bcFlowBasis(faces) {
   const rho = Number(mat && mat.density);
   return {
     face_area_m2: ids.length && total > 0 ? (total / ids.length) * 1e-6 : null,
-    density: Number.isFinite(rho) && rho > 0 ? rho : W18_AIR_DEFAULTS.density,
+    density: Number.isFinite(rho) && rho > 0 ? rho : materialFill(mat).density ?? null,
   };
 };
 
@@ -25369,32 +25328,8 @@ function assignBody1Draft() {
   toggleAssignVolume('Body1', 1);
 }
 
-async function applyMaterialFromLibrary() {
-  if (!materialCatalog.draft_volumes.length) {
-    const hint = document.getElementById('mat-picker-hint');
-    if (hint) hint.classList.add('is-warn');
-    return;
-  }
-  try {
-    await saveAirMaterialClient({
-      assigned_volumes: materialCatalog.draft_volumes.slice(),
-      openPanel: false,
-    });
-    highlightGeomBody(null);
-    closeMaterialLibrary();
-    markTreeSelected('air');
-    publishW18({ library_applied: true, ready: true });
-  } catch (e) {
-    console.error('[CFD W18] apply', e);
-  }
-}
-
 
 (function wireW18Ui() {
-  document.getElementById('ml-cancel')?.addEventListener('click', closeMaterialLibrary);
-  document.getElementById('ml-cancel-x')?.addEventListener('click', closeMaterialLibrary);
-  document.getElementById('ml-backdrop')?.addEventListener('click', closeMaterialLibrary);
-  document.getElementById('ml-apply')?.addEventListener('click', () => applyMaterialFromLibrary());
   if (container && !container._assignPickWired) {
     container._assignPickWired = true;
     let down = null;

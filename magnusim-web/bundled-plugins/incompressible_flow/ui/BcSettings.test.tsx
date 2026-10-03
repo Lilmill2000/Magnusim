@@ -106,7 +106,7 @@ describe('helpers', () => {
 
   it("uses the app's Air density when the study has none", () => {
     const q = convertFlowValue(1, { velocityType: 'Fixed', unit: 'm/s' }, { velocityType: 'Flow rate', flowRateType: 'Mass flow', unit: 'kg/s' }, { face_area_m2: 1, density: 0 });
-    expect(q).toBe(1.196);
+    expect(q).toBe(1.204);
   });
 });
 

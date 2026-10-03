@@ -22,6 +22,7 @@ import { assembleAllMaterials, deleteOneMaterial, persistOneMaterial, readStudyJ
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
 import { commitRpc } from './py-json.js';
+import { materialModel, materialPreset, materialPresetOf } from './registry-defaults.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -29,8 +30,13 @@ const _projectsRoot = envGet('PROJECTS_ROOT');
 const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
-/** Exact bank labels from walkthrough step 4 / FINDINGS */
-export const W18_AIR = {
+/**
+ * The Air record W18 wrote before fluid presets came from the analysis's
+ * material model. Frozen: an older project's Air without numbers reads these,
+ * so it solves as it always did. A new material is seeded from the model's
+ * presets (materialPreset).
+ */
+export const W18_LEGACY_AIR = Object.freeze({
   name: 'Air',
   type: 'Newtonian',
   viscosity_model: 'Newtonian',
@@ -39,7 +45,7 @@ export const W18_AIR = {
   density: 1.196,
   density_unit: 'kg/m3',
   library: 'DEFAULT',
-};
+});
 
 function readActiveId() {
   if (!existsSync(ACTIVE_PATH)) return null;
@@ -100,20 +106,21 @@ function stripMaterialNotes(doc) {
   return next;
 }
 
-function airFromProject(id) {
+/** An older project's Air (project.json materials.air), as W18 first wrote it. */
+export function airFromProject(id) {
   const proj = readProject(id);
   const sim = getActiveSimulation(id, proj);
   const ref = proj && proj.materials && proj.materials.air;
   const air = {
     id: (ref && ref.id) || `mat-${String(id).slice(-8)}`,
-    name: W18_AIR.name,
-    type: W18_AIR.type,
-    viscosity_model: W18_AIR.viscosity_model,
-    kinematic_viscosity: W18_AIR.kinematic_viscosity,
-    kinematic_viscosity_unit: W18_AIR.kinematic_viscosity_unit,
-    density: W18_AIR.density,
-    density_unit: W18_AIR.density_unit,
-    library: W18_AIR.library,
+    name: W18_LEGACY_AIR.name,
+    type: W18_LEGACY_AIR.type,
+    viscosity_model: W18_LEGACY_AIR.viscosity_model,
+    kinematic_viscosity: W18_LEGACY_AIR.kinematic_viscosity,
+    kinematic_viscosity_unit: W18_LEGACY_AIR.kinematic_viscosity_unit,
+    density: W18_LEGACY_AIR.density,
+    density_unit: W18_LEGACY_AIR.density_unit,
+    library: W18_LEGACY_AIR.library,
     assigned_volumes: (ref && ref.assigned_volumes) || ['Body1'],
     assigned_volume: ((ref && ref.assigned_volumes) || ['Body1'])[0] || 'Body1',
     saved: true,
@@ -190,19 +197,53 @@ function normalizeAssignedVolumes(raw) {
     .filter(Boolean);
 }
 
-const FLUID_PRESETS = {
-  Air: { kinematic_viscosity: 1.529e-5, density: 1.196 },
-  Water: { kinematic_viscosity: 1.004e-6, density: 998.2 },
-};
-
 function fluidNumber(raw, fallback) {
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-function buildAirMaterial(body, existing) {
-  const name = String(body.name || body.material || (existing && existing.name) || W18_AIR.name).trim() || W18_AIR.name;
-  const preset = FLUID_PRESETS[name] || FLUID_PRESETS.Air;
+/** The record keys that may hold a model property, the first preferred. */
+function recordKeysOf(model, field) {
+  const keys = model && model.record_keys && model.record_keys[field];
+  return Array.isArray(keys) && keys.length ? keys.map(String) : [field];
+}
+
+/** A saved record's value of a model property (any of its record keys), or undefined. */
+function savedNumber(model, rec, field) {
+  if (!rec) return undefined;
+  for (const k of recordKeysOf(model, field).concat(field)) {
+    const n = fluidNumber(rec[k], undefined);
+    if (n !== undefined) return n;
+  }
+  return undefined;
+}
+
+/**
+ * A study's fluid from a POST body. The body names a preset by key, library
+ * code or fluid name (blank keeps the saved one's, else the default preset);
+ * any other name is a custom fluid. Values come from the body, else the saved
+ * record of the same preset, else the preset: a new material gets the
+ * preset's values, while a saved one that lacks a number reads what older
+ * versions filled in (the preset's legacy_values), so it solves as before.
+ */
+export function buildAirMaterial(body, existing) {
+  const model = materialModel((body && body.material_model) || (existing && existing.material_model) || '');
+  if (!model) {
+    return {
+      ok: false,
+      status: 503,
+      body: { error: 'No material model is registered: the analysis plugin is off or did not load.', soft_pass: false },
+    };
+  }
+  const asked = String(body.preset || body.name || body.material || '').trim();
+  const before = existing ? materialPresetOf(model.key, existing) : null;
+  const preset = asked ? materialPreset(model.key, asked) : before || materialPreset(model.key, '');
+  const custom = String(model.custom_preset || 'custom');
+  const isCustom = !preset || preset.key === custom;
+  const ownName = String(body.name || body.material || '').trim();
+  const name = isCustom
+    ? ownName || (before && before.key === custom ? String(existing.name || '') : '') || String((preset && preset.name) || '')
+    : String(preset.name);
   const assigned = normalizeAssignedVolumes(
     body.assigned_volumes || body.volumes || body.assign || body.body
   );
@@ -220,26 +261,32 @@ function buildAirMaterial(body, existing) {
   }
   const now = new Date().toISOString();
   const id = (existing && existing.id) || body.id || newMaterialId();
-  const nu = fluidNumber(
-    body.kinematic_viscosity != null ? body.kinematic_viscosity : body.nu,
-    existing && existing.kinematic_viscosity != null ? Number(existing.kinematic_viscosity) : preset.kinematic_viscosity,
-  );
-  const rho = fluidNumber(
-    body.density != null ? body.density : body.rho,
-    existing && existing.density != null ? Number(existing.density) : preset.density,
-  );
+  const presetValues = (preset && preset.values) || {};
+  const legacyValues = { ...presetValues, ...((preset && preset.legacy_values) || {}) };
+  const samePreset = !!existing && !!before && !!preset && before.key === preset.key;
+  /** @type {Record<string, unknown>} */
+  const values = {};
+  const fields = new Set([
+    ...Object.keys((model.schema && model.schema.properties) || {}),
+    ...Object.keys(model.record_keys || {}),
+    ...Object.keys(presetValues),
+  ]);
+  for (const field of fields) {
+    const given = savedNumber(model, body, field);
+    const saved = samePreset ? savedNumber(model, existing, field) : undefined;
+    const fill = samePreset ? legacyValues[field] : presetValues[field];
+    const v = given ?? saved ?? fluidNumber(fill, undefined);
+    if (v === undefined) continue;
+    for (const k of recordKeysOf(model, field)) values[k] = v;
+  }
   const material = {
     id,
     name,
-    type: 'Newtonian',
-    viscosity_model: 'Newtonian',
-    kinematic_viscosity: nu,
-    nu,
-    kinematic_viscosity_unit: 'm2/s',
-    density: rho,
-    rho,
-    density_unit: 'kg/m3',
-    library: name === 'Air' || name === 'Water' ? name.toUpperCase() : 'CUSTOM',
+    ...(model.record_constants || {}),
+    ...values,
+    library: String((preset && (preset.library || (preset.codes || [])[0])) || ''),
+    material_model: String(model.key),
+    preset: String((preset && preset.key) || custom),
     assigned_volumes: kept,
     assigned_volume: kept[0],
     saved: true,
@@ -586,5 +633,8 @@ export async function handleW18Api(req, res, u, parts, helpers) {
 export const W18_META = {
   increment: 'W18',
   projects_root: PROJECTS_ROOT,
-  air: W18_AIR,
+  /** The fluid a new material starts as: the default material model's default preset. */
+  get air() {
+    return materialPreset('', '');
+  },
 };

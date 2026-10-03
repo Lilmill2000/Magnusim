@@ -10,8 +10,8 @@ import { Select, UNITS, preferredUnit, resolveUnit, type Quantity } from '@magnu
 import type { BcSettingsProps } from '../../../src/plugin-api';
 import { host } from './host';
 
-/** The fluid density a flow-rate conversion uses when the study has none (the app's Air). */
-const AIR_DENSITY = 1.196;
+/** The fluid density a flow-rate conversion uses when the study has none: Air at 20 C, 1 atm (materials.AIR). */
+const AIR_DENSITY = 1.204;
 
 const VELOCITY_FAMILIES = new Set(['velocity_inlet', 'velocity_outlet']);
 

@@ -2252,13 +2252,14 @@
         "properties": {
           "nu": {
             "type": "number",
-            "default": 1.5e-05,
+            "default": 1.516e-05,
             "minimum": 0.0,
             "x-cfddesk": {
               "unit": "m^2/s",
+              "quantity": "kinematic_viscosity",
               "group": "transport"
             },
-            "title": "Kinematic viscosity"
+            "title": "(\u03bd) Kinematic viscosity"
           },
           "rho": {
             "type": "number",
@@ -2266,9 +2267,10 @@
             "minimum": 0.0,
             "x-cfddesk": {
               "unit": "kg/m^3",
+              "quantity": "density",
               "group": "transport"
             },
-            "title": "Density"
+            "title": "(\u03c1) Density"
           }
         },
         "additionalProperties": false
@@ -2277,62 +2279,149 @@
         {
           "key": "air",
           "name": "Air",
-          "viscosity_model": "Newtonian",
-          "nu": 1.5e-05,
-          "rho": 1.204
+          "values": {
+            "nu": 1.516e-05,
+            "rho": 1.204
+          },
+          "library": "AIR",
+          "codes": [
+            "AIR",
+            "DEFAULT"
+          ],
+          "names": [
+            "Air"
+          ],
+          "legacy_values": {
+            "nu": 1.529e-05,
+            "rho": 1.196
+          }
         },
         {
           "key": "argon",
           "name": "Argon",
-          "viscosity_model": "Newtonian",
-          "nu": 1.34e-05,
-          "rho": 1.661
+          "values": {
+            "nu": 1.34e-05,
+            "rho": 1.661
+          },
+          "library": "ARGON",
+          "codes": [
+            "ARGON"
+          ],
+          "names": [
+            "Argon"
+          ]
         },
         {
           "key": "co2",
           "name": "Carbon dioxide",
-          "viscosity_model": "Newtonian",
-          "nu": 8.03e-06,
-          "rho": 1.842
+          "values": {
+            "nu": 8.03e-06,
+            "rho": 1.842
+          },
+          "library": "CO2",
+          "codes": [
+            "CO2"
+          ],
+          "names": [
+            "Carbon dioxide",
+            "CO2"
+          ]
         },
         {
           "key": "hydrogen",
           "name": "Hydrogen",
-          "viscosity_model": "Newtonian",
-          "nu": 0.000105,
-          "rho": 0.0838
+          "values": {
+            "nu": 0.000105,
+            "rho": 0.0838
+          },
+          "library": "HYDROGEN",
+          "codes": [
+            "HYDROGEN"
+          ],
+          "names": [
+            "Hydrogen"
+          ]
         },
         {
           "key": "nitrogen",
           "name": "Nitrogen",
-          "viscosity_model": "Newtonian",
-          "nu": 1.5e-05,
-          "rho": 1.165
+          "values": {
+            "nu": 1.51e-05,
+            "rho": 1.165
+          },
+          "library": "NITROGEN",
+          "codes": [
+            "NITROGEN"
+          ],
+          "names": [
+            "Nitrogen"
+          ]
         },
         {
           "key": "water",
           "name": "Water",
-          "viscosity_model": "Newtonian",
-          "nu": 1.004e-06,
-          "rho": 998.2
+          "values": {
+            "nu": 1.004e-06,
+            "rho": 998.2
+          },
+          "library": "WATER",
+          "codes": [
+            "WATER"
+          ],
+          "names": [
+            "Water"
+          ]
         },
         {
           "key": "seawater",
           "name": "Seawater (3.5% saline)",
-          "viscosity_model": "Newtonian",
-          "nu": 1.05e-06,
-          "rho": 1025.0
+          "values": {
+            "nu": 1.05e-06,
+            "rho": 1025.0
+          },
+          "library": "SEAWATER",
+          "codes": [
+            "SEAWATER"
+          ],
+          "names": [
+            "Seawater (3.5% saline)",
+            "Seawater"
+          ]
         },
         {
           "key": "custom",
           "name": "Custom fluid",
-          "viscosity_model": "Newtonian",
-          "nu": 1.5e-05,
-          "rho": 1.204
+          "values": {
+            "nu": 1.516e-05,
+            "rho": 1.204
+          },
+          "library": "CUSTOM",
+          "codes": [
+            "CUSTOM"
+          ],
+          "names": [],
+          "legacy_values": {
+            "nu": 1.529e-05,
+            "rho": 1.196
+          }
         }
       ],
-      "record_keys": {},
-      "record_constants": {},
+      "record_keys": {
+        "nu": [
+          "kinematic_viscosity",
+          "nu"
+        ],
+        "rho": [
+          "density",
+          "rho"
+        ]
+      },
+      "record_constants": {
+        "type": "Newtonian",
+        "viscosity_model": "Newtonian",
+        "kinematic_viscosity_unit": "m2/s",
+        "density_unit": "kg/m3"
+      },
       "custom_preset": "custom"
     }
   ],

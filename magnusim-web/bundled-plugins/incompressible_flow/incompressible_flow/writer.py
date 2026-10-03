@@ -24,6 +24,7 @@ from magnusim_sdk.foam import (
 from magnusim_sdk.foam import write_foam_text as _write_foam
 from magnusim_sdk.units import UNITS as _UNITS
 
+from .materials import LEGACY_AIR
 from .physics import (
     DEFAULT_PHYSICS,
     KINEMATIC_FIELDS,
@@ -474,7 +475,7 @@ def inlet_ref_speed(bc: dict, face_area: float, rho: float) -> float:
 def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
     """Port of writeSolveCase speedRef / dHyd selection."""
     _ensure_web_imports()
-    rho = float(spec.rho) or 1.196
+    rho = float(spec.rho) or LEGACY_AIR["rho"]
     props = spec.face_props or {}
     speed_ref = 1.0
     d_hyd: float | None = None
@@ -593,7 +594,7 @@ def _build_field_patches(
         value = "0" if name == "nut" else turb_values[name]
         return {"type": wall_fn[name], "value": f"uniform {value}"}
 
-    rho = float(spec.rho) or 1.196
+    rho = float(spec.rho) or LEGACY_AIR["rho"]
     wall_default = spec.wall_default or "No-slip"
     props = spec.face_props or {}
     role: dict[str, dict[str, Any]] = {}

@@ -30,9 +30,18 @@ test('gate:h3-materials-island Air is the preset', async ({ page }) => {
   const island = page.locator('#panel-air-material .cfd-island, #panel-materials-hub .cfd-island').first();
   await expect(island).toBeVisible({ timeout: 15_000 });
   await expect(island.locator('.mat-panel-title')).toHaveText('Air');
-  // Air is the default; Water and a custom fluid are offered in the Fluid picker.
-  await expect(island.getByLabel('Fluid')).toHaveValue('Air');
-  await expect(island.getByLabel('Fluid').locator('option')).toHaveText(['Air', 'Water', 'Custom fluid']);
+  // Air is the default; the material model's other fluids and a custom fluid are offered.
+  await expect(island.getByLabel('Fluid')).toHaveValue('air');
+  await expect(island.getByLabel('Fluid').locator('option')).toHaveText([
+    'Air',
+    'Argon',
+    'Carbon dioxide',
+    'Hydrogen',
+    'Nitrogen',
+    'Water',
+    'Seawater (3.5% saline)',
+    'Custom fluid',
+  ]);
   await expect(island.getByLabel('Kinematic viscosity')).toHaveValue(/^\d\.\d{4}e-\d+$/);
 });
 

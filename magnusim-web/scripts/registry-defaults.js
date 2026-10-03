@@ -340,6 +340,106 @@ export function canonicalBcType(raw) {
   return fam ? String(fam.record_type) : t;
 }
 
+/**
+ * The registry docs to look a material model up in: the live one, then the
+ * committed scripts/generated/registry.json (what ships), so a new material is
+ * seeded from the bundled plugin's presets even before the live registry loads.
+ * @returns {Array<Record<string, any>>}
+ */
+function _materialDocs() {
+  /** @type {Array<Record<string, any>>} */
+  const docs = [];
+  if (_live) docs.push(_live);
+  try {
+    const committed = loadCommittedRegistry();
+    if (!docs.includes(committed)) docs.push(committed);
+  } catch {
+    /* no committed registry: the live one only */
+  }
+  return docs;
+}
+
+/**
+ * A material model's registry row ({ key, label, schema, library, record_keys,
+ * record_constants, custom_preset }), or null. A blank key is the default
+ * analysis's first material model. The live registry first, then the
+ * committed one.
+ * @param {unknown} [key]
+ * @returns {Record<string, any> | null}
+ */
+export function materialModel(key) {
+  for (const doc of _materialDocs()) {
+    let want = String(key || '');
+    if (!want) {
+      const d = doc.default_analysis;
+      const steady = d && typeof d === 'object' ? String(d.steady || '') : '';
+      const analyses = Array.isArray(doc.analysis) ? doc.analysis : [];
+      const row = analyses.find((r) => r && String(r.key) === steady);
+      const models = row && Array.isArray(row.material_models) ? row.material_models : [];
+      want = models.length ? String(models[0]) : '';
+    }
+    if (!want) continue;
+    const rows = Array.isArray(doc.material) ? doc.material : [];
+    const hit = rows.find((r) => r && String(r.key) === want);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** @param {Record<string, any>} p */
+function _presetCodes(p) {
+  const codes = Array.isArray(p.codes) && p.codes.length ? p.codes : p.library ? [p.library] : [];
+  return codes.map((c) => String(c).toUpperCase());
+}
+
+/** @param {Record<string, any>} p */
+function _presetNames(p) {
+  return (Array.isArray(p.names) ? p.names : [p.name]).map((n) => String(n).trim().toLowerCase());
+}
+
+/**
+ * The preset a saved material record is (the Materials panel's read rule, as
+ * src/materialModel.ts presetOf): its preset key, else its library code (one
+ * of a preset's codes), else its name (one of a preset's names, any case);
+ * no name is the default preset (the one whose codes include DEFAULT), any
+ * other name the custom preset. Null when the model is not registered or has
+ * no presets. Preset rows: { key, name, values: { field: SI }, legacy_values?,
+ * library, codes, names }.
+ * @param {unknown} modelKey
+ * @param {{ preset?: unknown, library?: unknown, name?: unknown } | null | undefined} record
+ * @returns {Record<string, any> | null}
+ */
+export function materialPresetOf(modelKey, record) {
+  const model = materialModel(modelKey);
+  const list = model && Array.isArray(model.library) ? model.library.filter((p) => p && p.key) : [];
+  if (!list.length) return null;
+  const custom = String(model.custom_preset || 'custom');
+  const key = String((record && record.preset) || '').trim();
+  const byKey = key ? list.find((p) => String(p.key) === key) : undefined;
+  if (byKey) return byKey;
+  const code = String((record && record.library) || '').trim().toUpperCase();
+  const byCode = code ? list.find((p) => _presetCodes(p).includes(code)) : undefined;
+  if (byCode) return byCode;
+  const name = String((record && record.name) || '').trim().toLowerCase();
+  if (!name) {
+    return list.find((p) => _presetCodes(p).includes('DEFAULT')) || list.find((p) => p.key !== custom) || list[0];
+  }
+  return list.find((p) => _presetNames(p).includes(name)) || list.find((p) => String(p.key) === custom) || null;
+}
+
+/**
+ * The preset that `nameOrKey` names: a preset key, a library code or a fluid
+ * name (materialPresetOf's rule); blank is the default preset, anything else
+ * the custom preset.
+ * @param {unknown} modelKey
+ * @param {unknown} nameOrKey
+ * @returns {Record<string, any> | null}
+ */
+export function materialPreset(modelKey, nameOrKey) {
+  const raw = String(nameOrKey || '').trim();
+  return materialPresetOf(modelKey, { preset: raw, library: raw, name: raw });
+}
+
 export function mesherByKey(key) {
   const want = String(key || '');
   return mesherEntries().find((r) => r && String(r.key) === want) || null;

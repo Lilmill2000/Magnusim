@@ -22,6 +22,11 @@ class MaterialModel:
     properties_schema: tuple[SchemaField, ...]
     # Built-in newtonian_incompressible delegates to write_transport_properties.
     write_files: Callable[..., None] | None = None
+    # Presets, in picker order: {"key", "name", "values": {property: SI value},
+    # "library": the code a record saves, "codes": codes a saved record may carry
+    # for it (e.g. ("AIR", "DEFAULT"); DEFAULT marks a new material's preset),
+    # "names": record names read as it (any case), and optionally
+    # "legacy_values": what a saved record of it that lacks a number reads}.
     library: tuple[dict[str, Any], ...] = ()
     # API 1.4: how a study's material record stores this model's properties.
     # record_keys: property -> the record keys that may hold it, first preferred,

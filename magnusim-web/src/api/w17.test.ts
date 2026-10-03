@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { visibleAnalyses } from '../panels/simulation/SimulationPanel';
-import { materialPresetLabel } from '../panels/materials/MaterialsPanel';
 import { meshEngines } from '../panels/mesh/MeshPanel';
 import { simulationSaveBody } from '../panels/simulation/SimulationPanel';
 import type { RegistryRow } from './registry.gen';
@@ -21,11 +20,6 @@ describe('gate:h3-picker-open', () => {
     expect(visibleAnalyses(rows.filter((row) => row.key !== 'h3probe')).map((row) => row.key)).not.toContain(
       'h3probe',
     );
-  });
-
-  it('keeps Air visible and leaves Water out of the material picker', () => {
-    expect(materialPresetLabel({ key: 'newtonian_incompressible', label: 'Newtonian' })).toBe('Air');
-    expect(materialPresetLabel({ key: 'water', label: 'Water' })).toBe('Water');
   });
 
   it('includes cfmesh in the mesher list', () => {

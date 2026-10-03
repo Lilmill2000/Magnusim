@@ -62,9 +62,16 @@ def test_material_spec_shape_and_library():
     assert spec.label == "Newtonian (incompressible)"
     keys = {f.key for f in spec.properties_schema}
     assert "nu" in keys and "rho" in keys
-    lib_keys = {row["key"] for row in spec.library}
-    assert {"air", "water", "custom"} <= lib_keys
-    assert len(spec.library) >= 8
+    # The plugin's product presets: every fluid of the Fluid picker, then Custom.
+    assert [row["key"] for row in spec.library] == [
+        "air", "argon", "co2", "hydrogen", "nitrogen", "water", "seawater", "custom"
+    ]
+    air = spec.library[0]
+    assert air["values"] == {"nu": 1.516e-5, "rho": 1.204}
+    assert "DEFAULT" in air["codes"]
+    assert spec.custom_preset == "custom"
+    assert spec.record_keys["nu"][0] == "kinematic_viscosity"
+    assert spec.record_keys["rho"][0] == "density"
 
 
 def test_monitor_spec_shape_and_stubs():
