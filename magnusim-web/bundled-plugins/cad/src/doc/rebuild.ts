@@ -8,14 +8,22 @@
 //   skipped until it is edited or retried, so a respawn never loops.
 // - After a respawn every shape id died: caches are dropped and the whole
 //   history rebuilds from the document, transparently.
+// - P2/P3: a feature's cache key also holds the keys of its parent features
+//   (an extrude rebuilds when its sketch changes), the bodies it uses come from
+//   its type's `uses` hook, and each feature may publish an output (a sketch's
+//   regions) that later features read and RebuildState shows.
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { BodyId, CadDoc, CadView, Feature, FeatureAction, FeatureId, FeatureStatus } from '../types/doc';
-import type { BodyProps, BuildContext, BuiltBody, FeatureBuildResult, FeatureRegistry } from '../types/doc-service';
+import type { BodyProps, BuildContext, BuiltBody, FeatureBuildResult, FeatureFiles, FeatureOutput, FeatureRegistry } from '../types/doc-service';
 import type { BodyInfo, KernelAdapter, KernelCallError, TessPayload } from '../types/kernel';
 import type { BBox, ShapeId } from '../types/kernel-protocol';
+import type { SketchSolverClient } from '../types/sketch';
 import { LARGE_PART_FACES } from '../kernel/timeouts';
 import { canonicalJson, hashString } from './canonical';
+import { storedBodyName } from './features/body-ids';
+import { featureUses } from './features/hooks';
+import { removedFeatureMessage } from './features/removed';
 import { DEFAULT_BODY_COLOR } from './schema';
 import { createUnitsService } from './units';
 
@@ -39,6 +47,9 @@ interface CacheEntry {
 interface HeldBody extends BuiltBody {
   /** Geometry key: changes exactly when the body's geometry does. */
   key: string;
+  /** Name and colour the feature gave a body that has no BodyDef (split pieces). */
+  name?: string;
+  color?: string;
 }
 
 export interface RebuildInput {
@@ -49,6 +60,8 @@ export interface RebuildInput {
 export interface RebuildOutput {
   features: Record<FeatureId, FeatureStatus>;
   bodies: BodyInfo[];
+  /** Outputs of the features built (by feature id). */
+  outputs: Record<FeatureId, FeatureOutput>;
   ms: number;
   failed: FeatureId[];
   /** A whole-rebuild failure (kernel down). */
@@ -58,6 +71,10 @@ export interface RebuildOutput {
 export interface RebuildEngineOptions {
   kernel: KernelAdapter;
   registry: FeatureRegistry;
+  /** The Part's stored files (BuildContext.files); null/absent without ws.files. */
+  files?: FeatureFiles | null;
+  /** The sketch solver when it runs (BuildContext.solver). */
+  solver?: () => SketchSolverClient | null;
   /** A rebuild started (the status goes to running). */
   onStart?(): void;
   /** A rebuild finished (not called for rebuilds replaced by a newer request or cut short by a respawn). */
@@ -161,7 +178,7 @@ export class RebuildEngine {
         this.pending = null;
         const features: Record<FeatureId, FeatureStatus> = {};
         for (const f of input.doc.features) features[f.id] = { state: 'pending' };
-        this.opts.onResult({ features, bodies: [], ms: 0, failed: [], message: `The kernel stopped ${this.respawnsInARow} times in a row while rebuilding (${reason}). Edit the part or reload it to try again.` }, input);
+        this.opts.onResult({ features, bodies: [], outputs: {}, ms: 0, failed: [], message: `The kernel stopped ${this.respawnsInARow} times in a row while rebuilding (${reason}). Edit the part or reload it to try again.` }, input);
         return;
       }
       this.pending = input;
@@ -218,7 +235,7 @@ export class RebuildEngine {
         this.pending = null;
         this.last = input;
         this.opts.onStart?.();
-        const out = await this.build(input).catch((e: unknown): RebuildOutput => ({ features: {}, bodies: [], ms: 0, failed: [], message: `The rebuild failed: ${e instanceof Error ? e.message : String(e)}` }));
+        const out = await this.build(input).catch((e: unknown): RebuildOutput => ({ features: {}, bodies: [], outputs: {}, ms: 0, failed: [], message: `The rebuild failed: ${e instanceof Error ? e.message : String(e)}` }));
         if (out && !this.disposed) {
           if (!out.message) this.respawnsInARow = 0;
           this.opts.onResult(out, input);
@@ -282,12 +299,12 @@ export class RebuildEngine {
 
     const ks = kernel.status.get();
     if (ks.state === 'failed' || ks.state === 'closed') {
-      return { features: statuses, bodies: [], ms: 0, failed: [], message: `The kernel is not running${ks.message ? `: ${ks.message}` : ''}` };
+      return { features: statuses, bodies: [], outputs: {}, ms: 0, failed: [], message: `The kernel is not running${ks.message ? `: ${ks.message}` : ''}` };
     }
     try {
       await kernel.start();
     } catch (e) {
-      return { features: statuses, bodies: [], ms: 0, failed: [], message: `The kernel is not running: ${e instanceof Error ? e.message : String(e)}` };
+      return { features: statuses, bodies: [], outputs: {}, ms: 0, failed: [], message: `The kernel is not running: ${e instanceof Error ? e.message : String(e)}` };
     }
 
     const epoch = this.epoch;
@@ -300,7 +317,12 @@ export class RebuildEngine {
     const used = new Set<string>();
     const failed: FeatureId[] = [];
     const rollback = view.rollback ?? doc.features.length;
-    const bodyName = (id: BodyId) => doc.bodies[id]?.name ?? 'a deleted body';
+    // A split piece never renamed has no stored name: the derived-name rule gives it ("flange (2)").
+    const bodyName = (id: BodyId) => storedBodyName(doc, id) ?? 'a deleted body';
+    const featureName = (id: FeatureId) => doc.features.find((g) => g.id === id)?.name ?? 'a deleted feature';
+    /** Outputs of the features built so far (a sketch's regions), and each built feature's cache key. */
+    const outputs = new Map<FeatureId, FeatureOutput>();
+    const featureKeys = new Map<FeatureId, string>();
 
     for (let i = 0; i < doc.features.length; i++) {
       const f = doc.features[i];
@@ -316,7 +338,8 @@ export class RebuildEngine {
       }
       const def = this.opts.registry.get(f.type);
       if (!def) {
-        statuses[f.id] = { bodiesBefore: before, state: 'error', message: `${f.name}: this version of Magnusim CAD cannot build "${f.type}" features` };
+        // A removed type (Box, Cylinder) says so; the row stays, with Delete (SD pass).
+        statuses[f.id] = { bodiesBefore: before, state: 'error', message: removedFeatureMessage(f) ?? `${f.name}: this version of Magnusim CAD cannot build "${f.type}" features` };
         failed.push(f.id);
         continue;
       }
@@ -327,11 +350,22 @@ export class RebuildEngine {
         continue;
       }
 
-      // Cache key: the feature (without its name and suppression), its values, its input bodies.
-      const bm = f as Feature & { op?: string; scope?: BodyId[] };
-      const inputIds = bm.op === 'new' ? [] : bm.scope && bm.scope.length ? bm.scope : [...bodies.keys()];
+      // Cache key: the feature (without its name and suppression), its values, its input
+      // bodies, and its parent features' keys (an extrude rebuilds when its sketch changes).
+      const uses = featureUses(this.opts.registry, f);
+      const inputIds = uses === 'all' ? [...bodies.keys()] : uses;
+      const parents = def.parents(f);
       const { name: _n, suppressed: _s, ...shape } = f;
-      const key = canonicalJson({ f: shape, v: res.values, in: inputIds.map((id) => [id, bodies.get(id)?.key ?? null]) });
+      const key = canonicalJson({
+        f: shape,
+        v: res.values,
+        in: inputIds.map((id) => [id, bodies.get(id)?.key ?? null]),
+        ...(parents.length ? { p: parents.map((id) => [id, featureKeys.get(id) ?? null]) } : {}),
+        // A sketch built while the solver was not running shows its stored shape with a
+        // warning: once the solver runs, the key differs, so it re-solves (P3 integration).
+        ...(def.isolateWhileEditing && !this.opts.solver?.() ? { nosolver: true } : {}),
+      });
+      featureKeys.set(f.id, key);
 
       const stop = this.stopped.get(key);
       if (stop) {
@@ -347,12 +381,16 @@ export class RebuildEngine {
         const ctx: BuildContext = {
           kernel,
           units,
-          bodies: new Map([...bodies].map(([id, b]) => [id, { id: b.id, shape: b.shape, valid: b.valid, feature: b.feature }])),
+          bodies: new Map([...bodies].map(([id, b]) => [id, { id: b.id, shape: b.shape, valid: b.valid, feature: b.feature, names: b.names }])),
           doc,
           bodyName,
+          featureName,
           bbox: async (s) => (await this.fastOf(s, epoch)).bbox,
           faces: async (s) => (await this.fastOf(s, epoch)).faces,
           release: (ids) => this.release(ids, epoch),
+          outputs: new Map(outputs),
+          files: this.opts.files ?? null,
+          solver: this.opts.solver?.() ?? null,
         };
         const tf = performance.now();
         let result: FeatureBuildResult;
@@ -368,7 +406,7 @@ export class RebuildEngine {
             return null;
           }
           if (epoch !== this.epoch || e.kind === 'restarted') return null;
-          if (e.kind === 'boot') return { features: statuses, bodies: [], ms: 0, failed: [], message: `The kernel is not running: ${e.message}` };
+          if (e.kind === 'boot') return { features: statuses, bodies: [], outputs: {}, ms: 0, failed: [], message: `The kernel is not running: ${e.message}` };
           result = { ok: false, message: `${f.name} failed: ${plainKernelMessage(e instanceof Error ? e.message : String(e))}` };
         }
         if (epoch !== this.epoch) return null;
@@ -385,10 +423,16 @@ export class RebuildEngine {
 
       const r = entry.result;
       if (r.ok) {
-        for (const b of r.bodies) bodies.set(b.id, { id: b.id, shape: b.shape, valid: b.valid, feature: f.id, key: hashString(`${key}#${b.id}`) });
+        for (const b of r.bodies) {
+          // A body a later feature changes keeps the default name and colour it was given (a split piece).
+          const was = bodies.get(b.id);
+          bodies.set(b.id, { id: b.id, shape: b.shape, valid: b.valid, feature: f.id, names: b.names ?? null, name: b.name ?? was?.name, color: b.color ?? was?.color, key: hashString(`${key}#${b.id}`) });
+        }
         for (const id of r.removed) bodies.delete(id);
+        if (r.output) outputs.set(f.id, r.output);
         statuses[f.id] = r.warning ? { bodiesBefore: before, state: 'warning', message: untemplate(r.warning, f.name), ms: entry.ms } : { bodiesBefore: before, state: 'ok', ms: entry.ms };
       } else {
+        if (r.output) outputs.set(f.id, r.output);
         const st: FeatureStatus = { bodiesBefore: before, state: 'error', message: untemplate(r.message, f.name), ms: entry.ms };
         if (r.actions?.length) st.actions = [...r.actions] as FeatureAction[];
         statuses[f.id] = st;
@@ -439,8 +483,8 @@ export class RebuildEngine {
       const def = doc.bodies[b.id];
       out.push({
         id: b.id,
-        name: def?.name ?? 'Body',
-        color: def?.color ?? DEFAULT_BODY_COLOR,
+        name: def?.name ?? b.name ?? 'Body',
+        color: def?.color ?? b.color ?? DEFAULT_BODY_COLOR,
         feature: b.feature,
         shape: b.shape,
         valid: b.valid,
@@ -449,9 +493,11 @@ export class RebuildEngine {
         bbox: props?.bbox ?? (t ? bboxOfPositions(t.positions) : [0, 0, 0, 0, 0, 0]),
         volume: props?.volume ?? null,
         area: props?.area ?? null,
+        solids: props?.solids ?? null,
         visible: !hidden.has(b.id),
         tessKey: b.key,
         tess: t ?? null,
+        names: b.names,
       });
     }
     if (epoch !== this.epoch) return null;
@@ -468,6 +514,6 @@ export class RebuildEngine {
     await this.release(freed, epoch);
 
     this.latestBodies = out;
-    return { features: statuses, bodies: out, ms: performance.now() - t0, failed, message: null };
+    return { features: statuses, bodies: out, outputs: Object.fromEntries(outputs), ms: performance.now() - t0, failed, message: null };
   }
 }

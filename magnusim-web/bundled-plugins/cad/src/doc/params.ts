@@ -2,8 +2,10 @@
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { CadDoc, Feature, Param } from '../types/doc';
+import type { FeatureRegistry } from '../types/doc-service';
 import type { DocUnits, EvalResult, Quantity } from '../types/units';
 import { dimsOf, evaluateExpr, isReservedName, namesIn, type EvalScope, type Qty } from './expr';
+import { featureExprFields } from './features/hooks';
 
 export const PARAM_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const MAX_PARAM_NAME = 64;
@@ -90,24 +92,19 @@ export function evaluateIn(doc: Pick<CadDoc, 'params' | 'units'>, text: string, 
   return evaluateExpr(text, quantity, scopeFor(doc.params, doc.units));
 }
 
-/** Every expression string inside a feature (any depth), with its JSON path. */
-export function featureExprs(f: Feature): { path: string; expr: string }[] {
-  const out: { path: string; expr: string }[] = [];
-  const walk = (v: unknown, path: string) => {
-    if (typeof v === 'string') out.push({ path, expr: v });
-    else if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
-    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k);
-  };
-  // Only fields that hold expressions: skip identity, naming and references.
-  const skip = new Set(['id', 'type', 'name', 'op', 'creates', 'scope', 'axis', 'suppressed', 'repair']);
-  for (const [k, v] of Object.entries(f)) if (!skip.has(k)) walk(v, k);
-  return out;
+/**
+ * Every expression inside a feature, with its JSON path: the type's own list
+ * (FeatureTypeDef.exprs) when the registry has one, else every string field
+ * except identity, naming and references (the P1 walk).
+ */
+export function featureExprs(f: Feature, registry: FeatureRegistry | null = null): { path: string; expr: string }[] {
+  return featureExprFields(registry, f);
 }
 
 /** Who reads parameter `name`: other parameters and features (by name, for messages). */
-export function usersOfParam(doc: CadDoc, name: string): { params: Param[]; features: Feature[] } {
+export function usersOfParam(doc: CadDoc, name: string, registry: FeatureRegistry | null = null): { params: Param[]; features: Feature[] } {
   return {
     params: doc.params.filter((p) => p.name !== name && namesIn(p.expr).includes(name)),
-    features: doc.features.filter((f) => featureExprs(f).some((e) => namesIn(e.expr).includes(name))),
+    features: doc.features.filter((f) => featureExprs(f, registry).some((e) => namesIn(e.expr).includes(name))),
   };
 }

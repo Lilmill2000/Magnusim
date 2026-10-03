@@ -5,13 +5,17 @@
 // ("Result is not a valid solid") and offers Try repair, which rebuilds with a
 // fuzzy tolerance and, if that is not enough, the kernel's ShapeFix repair
 // (kept only when it is valid and keeps the volume).
+// Face names (src/naming) follow the booleans' history when the kernel gives
+// the result's face count and history (API 3); otherwise the body is unnamed.
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { BodyId, BodyMaking, BodyOp } from '../../types/doc';
+import type { BodyId, BodyMaking, BodyOp, FeatureId } from '../../types/doc';
 import type { BuildContext, BuiltBody, FeatureBuildResult } from '../../types/doc-service';
 import type { KernelCallError } from '../../types/kernel';
-import type { BBox, ShapeId } from '../../types/kernel-protocol';
+import type { BBox, OpHistory, ShapeId } from '../../types/kernel-protocol';
+import type { FaceNames } from '../../types/naming';
 import { timeoutForFaces } from '../../kernel/timeouts';
+import { namesFromResult } from '../../naming/result';
 
 /** Try repair: the tolerances tried in turn (mm). */
 export const REPAIR_FUZZY_STEPS = [0.001, 0.01] as const;
@@ -29,6 +33,9 @@ interface BoolOut {
   /** Solids in the result (a fuse of two bodies that touch or overlap is one). */
   solids: number;
   reason?: string;
+  /** API 3: the result's face count and history (for names). */
+  faces?: number;
+  history?: OpHistory;
 }
 
 async function boolean(ctx: BuildContext, op: BooleanKind, targets: ShapeId[], tools: ShapeId[], fuzzy: number | undefined): Promise<BoolOut> {
@@ -38,7 +45,7 @@ async function boolean(ctx: BuildContext, op: BooleanKind, targets: ShapeId[], t
   const timeoutMs = timeoutForFaces('boolean', faces);
   const r = await ctx.kernel.call('boolean', { op, targets, tools, ...(fuzzy ? { fuzzy } : {}) }, timeoutMs ? { timeoutMs } : {});
   const res = r.result;
-  return { id: res.id, valid: res.valid !== false, empty: !!res.empty, solids: typeof res.solids === 'number' ? res.solids : 1, reason: res.reason };
+  return { id: res.id, valid: res.valid !== false, empty: !!res.empty, solids: typeof res.solids === 'number' ? res.solids : 1, reason: res.reason, faces: res.faces, history: res.history };
 }
 
 /**
@@ -89,7 +96,7 @@ async function shapeFix(ctx: BuildContext, id: ShapeId): Promise<ShapeId | null>
  * Apply `f.op` with the tool shape the feature built (`label` names the feature
  * in messages, "Box 2"). Owns `tool`: it is released unless it becomes a body.
  */
-export async function applyBodyOp(f: BodyMaking, label: string, tool: { shape: ShapeId; valid: boolean }, ctx: BuildContext): Promise<FeatureBuildResult> {
+export async function applyBodyOp(f: BodyMaking & { id: FeatureId }, label: string, tool: { shape: ShapeId; valid: boolean; names?: FaceNames | null }, ctx: BuildContext): Promise<FeatureBuildResult> {
   if (f.op === 'new') {
     if (!tool.valid) {
       await ctx.release([tool.shape]);
@@ -99,7 +106,7 @@ export async function applyBodyOp(f: BodyMaking, label: string, tool: { shape: S
       await ctx.release([tool.shape]);
       return { ok: false, message: `${label} has no body to create` };
     }
-    return { ok: true, bodies: [{ id: f.creates, shape: tool.shape, valid: true }], removed: [] };
+    return { ok: true, bodies: [{ id: f.creates, shape: tool.shape, valid: true, names: tool.names ?? null }], removed: [] };
   }
 
   const made: ShapeId[] = [];
@@ -149,14 +156,15 @@ export async function applyBodyOp(f: BodyMaking, label: string, tool: { shape: S
       if (!targets.length) return { ok: false, message: nothingToActOn(f.op, label) };
     }
 
-    const out: { id: BodyId; shape: ShapeId; valid: boolean; reason?: string }[] = [];
+    const out: { id: BodyId; shape: ShapeId; valid: boolean; reason?: string; names: FaceNames | null }[] = [];
+    const named = (r: BoolOut, inputs: BuiltBody[]) => namesFromResult(f.id, r, new Map<ShapeId, FaceNames | null>([...inputs.map((b): [ShapeId, FaceNames | null] => [b.shape, b.names]), [tool.shape, tool.names ?? null]]));
     const removed: BodyId[] = [];
     const gone: string[] = [];
     if (f.op === 'join') {
       const [primary, ...others] = targets;
       const r = await boolean(ctx, 'fuse', [primary.shape], [tool.shape, ...others.map((o) => o.shape)], fuzzy);
       made.push(r.id);
-      out.push({ id: primary.id, shape: r.id, valid: r.valid, reason: r.reason });
+      out.push({ id: primary.id, shape: r.id, valid: r.valid, reason: r.reason, names: named(r, targets) });
       removed.push(...others.map((o) => o.id));
     } else {
       for (const t of targets) {
@@ -169,7 +177,7 @@ export async function applyBodyOp(f: BodyMaking, label: string, tool: { shape: S
           removed.push(t.id);
           gone.push(ctx.bodyName(t.id));
         } else {
-          out.push({ id: t.id, shape: r.id, valid: r.valid, reason: r.reason });
+          out.push({ id: t.id, shape: r.id, valid: r.valid, reason: r.reason, names: named(r, [t]) });
         }
       }
     }
@@ -184,6 +192,8 @@ export async function applyBodyOp(f: BodyMaking, label: string, tool: { shape: S
           made.push(fixed);
           b.shape = fixed;
           b.valid = true;
+          // ShapeFix rebuilt the faces: no names until repair reports history to follow.
+          b.names = null;
           repaired.push(ctx.bodyName(b.id));
         }
       }
@@ -204,7 +214,7 @@ export async function applyBodyOp(f: BodyMaking, label: string, tool: { shape: S
     const notes: string[] = [];
     if (gone.length) notes.push(`${gone.join(', ')} ${gone.length === 1 ? 'was' : 'were'} removed completely`);
     if (repaired.length) notes.push(`${repaired.join(', ')} ${repaired.length === 1 ? 'was' : 'were'} repaired: check the result`);
-    return { ok: true, bodies: out.map(({ id, shape, valid }) => ({ id, shape, valid })), removed, ...(notes.length ? { warning: notes.join('; ') } : {}) };
+    return { ok: true, bodies: out.map(({ id, shape, valid, names }) => ({ id, shape, valid, names })), removed, ...(notes.length ? { warning: notes.join('; ') } : {}) };
   } finally {
     // The tool never becomes a body here; results are released unless kept.
     await ctx.release([tool.shape, ...made]).catch(() => {});

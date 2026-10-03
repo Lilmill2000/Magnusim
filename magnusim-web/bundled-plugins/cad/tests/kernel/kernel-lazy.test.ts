@@ -5,21 +5,21 @@
 // (The 113 MB part's timings: kernel-bigstep.test.ts, opt-in.)
 // Owner: KERNEL-HARDENING.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect } from 'vitest';
 import type { Kernel } from '../../src/kernel-worker/kernel-api';
 import { topoInChunks } from '../../src/kernel-worker/topo-chunks';
 import type { TopoResult } from '../../src/types/kernel-protocol';
-import { call, importStep, loadKernel, REF, rel, tryCall, type R } from './kernel-lib';
+import { call, HAVE_VORTEX, importVortex, itVortex, loadKernel, REF, rel, tryCall, type R } from './kernel-lib';
 
 let k: Kernel;
 let vortex: number;
 beforeAll(async () => {
   k = await loadKernel();
-  vortex = importStep(k, 'vortex-cfd-test.step').shapes[0].id;
+  if (HAVE_VORTEX) vortex = importVortex(k).shapes[0].id;
 });
 
 describe('props', () => {
-  it('by default: counts and a fast bbox that encloses the exact one, no volume or area', () => {
+  itVortex('by default: counts and a fast bbox that encloses the exact one, no volume or area', () => {
     const p = call(k, 'props', { id: vortex });
     expect(p).toMatchObject({ faces: 17, edges: 34, vertices: 18, solids: 1, shells: 1, bbox_mode: 'fast' });
     expect(p.volume).toBeUndefined();
@@ -33,7 +33,7 @@ describe('props', () => {
     for (let i = 0; i < 6; i++) expect(p.bbox[i]).toBeCloseTo(REF.vortex.import.bbox_add[i], 6);
   });
 
-  it('on request: volume and centroid, area, exact bbox; none skips the bbox', () => {
+  itVortex('on request: volume and centroid, area, exact bbox; none skips the bbox', () => {
     const p = call(k, 'props', { id: vortex, volume: true, area: true, bbox: 'exact' });
     expect(rel(p.volume, REF.vortex.import.volume)).toBeLessThan(1e-9);
     expect(rel(p.area, REF.vortex.import.area)).toBeLessThan(1e-9);
@@ -50,7 +50,7 @@ describe('props', () => {
 });
 
 describe('topo', () => {
-  it('computes only the requested faces, edges and vertices', () => {
+  itVortex('computes only the requested faces, edges and vertices', () => {
     const full = call(k, 'topo', { id: vortex });
     expect(full.counts).toEqual({ faces: 17, edges: 34, vertices: 18 });
     expect(full.faces).toHaveLength(17);
@@ -63,7 +63,7 @@ describe('topo', () => {
     expect(some.counts).toEqual(full.counts);
   });
 
-  it('can skip the slow parts (exact face bbox, face area/centroid, edge length)', () => {
+  itVortex('can skip the slow parts (exact face bbox, face area/centroid, edge length)', () => {
     const cheap = call(k, 'topo', { id: vortex, face_bbox: 'fast', face_mass: false, edge_length: false, vertices: 'none' });
     expect(cheap.faces[0].area).toBeUndefined();
     expect(cheap.faces[0].centroid).toBeUndefined();
@@ -73,13 +73,13 @@ describe('topo', () => {
     expect(call(k, 'topo', { id: vortex, face_bbox: 'none', edges: 'none', vertices: 'none' }).faces[0].bbox).toBeUndefined();
   });
 
-  it('rejects out-of-range indices and bad selectors', () => {
+  itVortex('rejects out-of-range indices and bad selectors', () => {
     expect(tryCall(k, 'topo', { id: vortex, faces: [17] })).toMatchObject({ ok: false, kind: 'input' });
     expect(tryCall(k, 'topo', { id: vortex, faces: 'some' })).toMatchObject({ ok: false, kind: 'input' });
     expect(tryCall(k, 'topo', { id: vortex, face_bbox: 'tight' })).toMatchObject({ ok: false, kind: 'input' });
   });
 
-  it('topoInChunks gives exactly the full result, with progress', async () => {
+  itVortex('topoInChunks gives exactly the full result, with progress', async () => {
     const full = call(k, 'topo', { id: vortex });
     const progress: [number, number][] = [];
     let calls = 0;

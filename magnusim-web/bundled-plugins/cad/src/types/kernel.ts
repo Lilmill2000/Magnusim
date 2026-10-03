@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { BodyId, FeatureId } from './doc';
 import type { BBox, KernelErrorKind, KernelOp, KernelParams, KernelResult, ShapeId } from './kernel-protocol';
+import type { FaceNames } from './naming';
 import type { ReadonlyStateStore } from './state';
 
 export type KernelState = 'idle' | 'starting' | 'ready' | 'restarting' | 'failed' | 'closed';
@@ -43,7 +44,8 @@ export const KERNEL_RECYCLE_BYTES = 1.2e9;
  * respawned); `restarted`: queued when the worker was respawned (its shape ids
  * died); `boot`: the kernel never became ready; others come from the facade.
  */
-export type KernelCallErrorKind = KernelErrorKind | 'watchdog' | 'restarted' | 'boot' | 'crash';
+/** 'cancelled': the caller's AbortSignal stopped the call (the error's name is also AbortError). */
+export type KernelCallErrorKind = KernelErrorKind | 'watchdog' | 'restarted' | 'boot' | 'crash' | 'cancelled';
 
 export interface KernelCallError extends Error {
   kind: KernelCallErrorKind;
@@ -67,6 +69,15 @@ export interface KernelCallOptions {
   bytes?: ArrayBuffer;
   /** Overrides the per-op timeout (src/kernel/timeouts.ts). */
   timeoutMs?: number;
+  /**
+   * Stops the call: a queued call is dropped; a call the worker is running is
+   * cut off by terminating the worker and starting a fresh one (a kernel op
+   * cannot be interrupted; every shape id dies and onRespawn listeners rebuild
+   * from the document). Either way the call rejects with kind 'cancelled'
+   * (name AbortError). Used by long user-started ops (an import's read and
+   * heal) so their Cancel frees the kernel at once.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -134,8 +145,15 @@ export interface BodyInfo {
   volume: number | null;
   /** mm², when measured (with the volume). */
   area: number | null;
+  /**
+   * Solids in the body, when measured. 0 = a surface body (an open shell, e.g. an
+   * import before knitting): it has no volume, whatever BRepGProp integrates over its faces.
+   */
+  solids?: number | null;
   visible: boolean;
   /** Changes whenever the geometry changes; the viewport re-uploads only on a new key. */
   tessKey: string;
   tess: TessPayload | null;
+  /** Its faces' persistent names (panels list faces by them; references store them), or null when none were made. */
+  names?: FaceNames | null;
 }

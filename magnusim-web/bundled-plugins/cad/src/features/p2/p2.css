@@ -1,0 +1,312 @@
+/*
+ * P2 panels and tools: selection lists (core .mat-assign-list, style.css:3085-3146),
+ * the switch (.switch, style.css:1690-1728), progress, tables, the in-frame
+ * dialog (.cfd-modal, style.css:2562-2615), the drop hint and measure labels.
+ * Its core values are --cad-p2-* tokens in src/styles/tokens.css.
+ * Owner: P2-FEATURES.
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+/* ---- selection list ---- */
+.cad-pick {
+  margin: 4px 0 6px;
+}
+.cad-pick-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 3px;
+  color: var(--mg-text-muted);
+}
+.mat-assign-list {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+  min-height: 28px;
+  max-height: 168px;
+  overflow: auto;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  background: var(--mg-surface);
+  cursor: pointer;
+}
+.cad-pick.is-active .mat-assign-list {
+  border-color: var(--cad-pick);
+  box-shadow: 0 0 0 1px var(--cad-pick);
+}
+.mat-assign-list:focus {
+  outline: none;
+}
+.mat-assign-list li {
+  padding: 6px 8px;
+  background: var(--mg-selected-bg);
+  border-bottom: 1px solid var(--mg-border);
+  font-weight: 500;
+  color: var(--mg-text);
+}
+.mat-assign-list li.bc-assign-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  min-height: 26px;
+}
+/* A face that is not on the body any more (a rebuild lost it): a red frame and "not found". */
+.mat-assign-list li.bc-assign-item.is-missing {
+  border: 1px solid var(--mg-danger);
+  border-radius: 3px;
+}
+.mat-assign-state.is-missing {
+  color: var(--mg-danger);
+  font-weight: 600;
+}
+.mat-assign-list li:last-child {
+  border-bottom: none;
+}
+.cad-pick-list > .cad-pick-empty {
+  display: block;
+  padding: 6px 8px;
+  color: var(--mg-text-subtle);
+  font-style: italic;
+  border-bottom: none;
+}
+.mat-assign-list:empty::after {
+  content: '(none)';
+  display: block;
+  padding: 6px 8px;
+  color: var(--mg-text-subtle);
+  font-style: italic;
+}
+.cad-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mat-assign-state {
+  margin-left: auto;
+  padding-right: 4px;
+  font-size: 11px;
+  color: var(--mg-text-muted);
+  white-space: nowrap;
+}
+.bc-assign-x {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mg-text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.bc-assign-x:hover {
+  background: var(--cad-danger-hover-bg);
+  color: var(--mg-danger);
+}
+
+/* ---- switch ---- */
+.cad-switch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+/* The switch is the host kit's Toggle (mgk-switch). The kit draws no focus ring on
+   it (its checkbox is 0 x 0); CAD rings the track, so the keyboard shows where it is. */
+.cad-switch-row .mgk-switch-input:focus-visible + .mgk-switch-track {
+  box-shadow: 0 0 0 2px var(--mg-focus);
+}
+.cad-switch-label {
+  cursor: pointer;
+}
+
+/* ---- progress ---- */
+.cad-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 8px;
+}
+.cad-progress-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--mg-text);
+  font-weight: 500;
+}
+.cad-progress-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--cad-p2-progress-track);
+  overflow: hidden;
+}
+.cad-progress-bar {
+  height: 100%;
+  background: var(--mg-primary);
+  transition: width 0.2s;
+}
+.cad-progress-track.is-busy .cad-progress-bar {
+  width: 30%;
+  animation: cad-p2-busy 1.2s linear infinite;
+}
+@keyframes cad-p2-busy {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+/* ---- tables (mass properties, check, import bodies) ---- */
+.cad-p2-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.cad-p2-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--mg-text-muted);
+  font-size: 11px;
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--mg-divider);
+}
+.cad-p2-table td {
+  padding: 3px 4px;
+  color: var(--mg-text);
+  vertical-align: top;
+}
+.cad-p2-table td.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cad-p2-table tr + tr td {
+  border-top: 1px solid var(--mg-divider);
+}
+/* A table cell's state colour wins over the cell's text colour ("Not valid" and "Open" read in black). */
+.cad-p2-table td.cad-p2-bad {
+  color: var(--mg-danger);
+}
+.cad-p2-table td.cad-p2-warn {
+  color: var(--mg-warning);
+}
+.cad-p2-ok {
+  color: var(--mg-text);
+}
+.cad-p2-bad {
+  color: var(--mg-danger);
+}
+.cad-p2-warn {
+  color: var(--mg-warning);
+}
+.cad-p2-problems {
+  list-style: none;
+  margin: 2px 0 6px;
+  padding: 0;
+  max-height: 140px;
+  overflow: auto;
+  font-size: 11px;
+  color: var(--mg-text-muted);
+}
+.cad-p2-problems li {
+  padding: 2px 0;
+}
+.cad-p2-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.cad-p2-readout {
+  font-variant-numeric: tabular-nums;
+}
+input.mgk-input.cad-p2-name-input {
+  width: 160px;
+}
+.cad-p2-sub {
+  font-size: 11px;
+  color: var(--mg-text-muted);
+}
+
+/* ---- in-frame dialog (non-destructive choices) ---- */
+.cad-dialog {
+  border: none;
+  padding: 0;
+  background: transparent;
+  max-width: none;
+  max-height: none;
+}
+.cad-dialog::backdrop {
+  background: var(--cad-modal-backdrop);
+}
+.cad-dialog-card {
+  width: min(420px, 92vw);
+  background: var(--mg-bg);
+  border-radius: 6px;
+  box-shadow: var(--cad-modal-shadow);
+  padding: 18px 20px 16px;
+  color: var(--mg-text-strong);
+  font-size: 13px;
+}
+.cad-dialog-card h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 650;
+}
+.cad-dialog-card p {
+  margin: 0 0 12px;
+  line-height: 1.4;
+  color: var(--mg-text-muted);
+}
+.cad-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---- drop hint ---- */
+.cad-drop-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cad-modal-backdrop);
+  pointer-events: none;
+}
+.cad-drop-hint[hidden] {
+  display: none;
+}
+.cad-drop-card {
+  background: var(--mg-bg);
+  border: 2px dashed var(--mg-primary);
+  border-radius: 8px;
+  padding: 18px 28px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mg-text-strong);
+  box-shadow: var(--mg-shadow-md);
+}
+
+/* ---- measure labels (viewport html layer) ---- */
+.cad-measure-label {
+  position: absolute;
+  transform: translate(-50%, -130%);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--mg-bg);
+  border: 1px solid var(--cad-p2-measure);
+  color: var(--cad-p2-measure);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}

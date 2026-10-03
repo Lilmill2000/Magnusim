@@ -9,6 +9,7 @@ import type { Param } from '../../src/types/doc';
 import { NumberUnitInput } from '../../src/ui/kit/NumberUnitInput';
 import { createUnitsService } from '../../src/doc/units';
 import { createFakeUnits } from './fake-doc';
+import { commitPendingEdits, pendingEdits, subscribePendingEdits } from '../../src/lib/pendingEdits';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
@@ -48,6 +49,39 @@ function type(input: HTMLInputElement, text: string) {
   fireEvent.focus(input);
   fireEvent.change(input, { target: { value: text } });
 }
+
+describe('NumberUnitInput: typed text not applied yet is unsaved work (SD review round 2)', () => {
+  it('says so while text waits, applies it when the user leaves, and keeps a refusal with its reason', () => {
+    const heard = vi.fn();
+    const off = subscribePendingEdits(heard);
+    const s = setup({ expr: '10 mm', validate: (v) => (v > 100 ? 'Must be at most 100 mm' : null) });
+    expect(pendingEdits()).toEqual({ pending: false, refused: null });
+    type(s.input, '7');
+    expect(pendingEdits()).toEqual({ pending: true, refused: null });
+    expect(heard).toHaveBeenCalled();
+    // Leaving (Back, the pointer out of the frame, the page going): applied as Enter would.
+    act(() => commitPendingEdits());
+    expect(s.onCommit).toHaveBeenCalledWith('7 mm', 7);
+    expect(s.input.value).toBe('7');
+    expect(pendingEdits()).toEqual({ pending: false, refused: null });
+    // A value the field refuses stays, with its reason: still unsaved work, and named.
+    type(s.input, '200');
+    act(() => commitPendingEdits());
+    expect(s.error()).toBe('Must be at most 100 mm');
+    expect(s.input.value).toBe('200');
+    expect(pendingEdits()).toEqual({ pending: true, refused: { label: 'Length', error: 'Must be at most 100 mm' } });
+    act(() => commitPendingEdits());
+    expect(s.onCommit).toHaveBeenCalledTimes(1);
+    // Escape takes it back: nothing waits. A field that goes takes its text with it.
+    fireEvent.keyDown(s.input, { key: 'Escape' });
+    expect(pendingEdits()).toEqual({ pending: false, refused: null });
+    type(s.input, '9');
+    expect(pendingEdits().pending).toBe(true);
+    cleanup();
+    expect(pendingEdits()).toEqual({ pending: false, refused: null });
+    off();
+  });
+});
 
 describe('NumberUnitInput', () => {
   it('a stored expression that does not evaluate keeps the unit after it, and says why once (P1.5 review round 1)', () => {
@@ -278,6 +312,28 @@ describe('NumberUnitInput', () => {
     type(n.input, '6');
     fireEvent.keyDown(n.input, { key: 'Enter' });
     expect(n.onCommit).toHaveBeenCalledWith('6', 6);
+  });
+
+  it('Ctrl+Z: nothing typed hands it to the app (data-undo-to-app, no text undo); typed and not applied puts the applied value back first (review P2/P3 round 3)', () => {
+    const s = setup({ expr: '45 mm' });
+    fireEvent.focus(s.input);
+    expect(s.input.getAttribute('data-undo-to-app')).toBe('1');
+    type(s.input, '50');
+    expect(s.input.hasAttribute('data-undo-to-app')).toBe(false);
+    fireEvent.keyDown(s.input, { key: 'Enter' });
+    expect(s.onCommit).toHaveBeenCalledWith('50 mm', 50);
+    // Applied, focus still in the field: the app's Undo takes Ctrl+Z (the browser's text undo showed 45).
+    expect(s.input.getAttribute('data-undo-to-app')).toBe('1');
+    const passed = fireEvent.keyDown(s.input, { key: 'z', ctrlKey: true });
+    expect(passed).toBe(true);
+    expect(s.input.value).toBe('50');
+    // Typed, not applied: Ctrl+Z drops the typing (the event goes no further), then hands on again.
+    type(s.input, '35');
+    const handled = !fireEvent.keyDown(s.input, { key: 'z', ctrlKey: true });
+    expect(handled).toBe(true);
+    expect(s.input.value).toBe('50');
+    expect(s.input.getAttribute('data-undo-to-app')).toBe('1');
+    expect(s.onCommit).toHaveBeenCalledTimes(1);
   });
 
   it('raw mode (parameter table) shows the expression exactly as stored', () => {

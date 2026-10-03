@@ -5,22 +5,22 @@ import type { BodyInfo } from '../../src/types/kernel';
 import type { Feature } from '../../src/types/doc';
 import { barIndexAt, bodyRows, historyRows, rollbackIndex, rollbackValue, selectedBodies, selectedFeatures } from '../../src/ui/tree/model';
 
-const box = (id: string, name: string, extra: Partial<Feature> = {}): Feature =>
-  ({ id, type: 'box', name, op: 'new', creates: `b_${id}`, scope: [], origin: ['0', '0', '0'], size: ['1', '1', '1'], ...extra }) as Feature;
-const cyl = (id: string, name: string, extra: Partial<Feature> = {}): Feature =>
-  ({ id, type: 'cylinder', name, op: 'join', creates: null, scope: [], origin: ['0', '0', '0'], axis: 'origin:z', diameter: '1', height: '1', ...extra }) as Feature;
+const extrude = (id: string, name: string, extra: Partial<Feature> = {}): Feature =>
+  ({ id, type: 'extrude', name, op: 'new', creates: `b_${id}`, scope: [], profiles: [], extent: { kind: 'blind', distance: '1' }, flip: false, ...extra }) as Feature;
+const sketch = (id: string, name: string, extra: Partial<Feature> = {}): Feature =>
+  ({ id, type: 'sketch', name, support: { kind: 'plane', plane: 'origin:top' }, plane: { origin: [0, 0, 0], normal: [0, 0, 1], xdir: [1, 0, 0] }, points: {}, entities: [], constraints: [], solved: { values: {}, dof: 0, state: 'fully' }, ...extra }) as Feature;
 
 const body = (id: string, feature: string, name = id): BodyInfo =>
   ({ id, name, color: '#bdc9db', feature, shape: 1, valid: true, faces: 6, edges: 12, bbox: [0, 0, 0, 1, 1, 1], volume: 1, area: 6, visible: true, tessKey: id, tess: null }) as unknown as BodyInfo;
 
 describe('history rows', () => {
-  const features = [box('f1', 'Box 1'), cyl('f2', 'Cylinder 1'), box('f3', 'Box 2')];
+  const features = [extrude('f1', 'Extrude 1'), sketch('f2', 'Sketch 1'), extrude('f3', 'Extrude 2')];
 
   it('keeps the document order, whatever the rebuild order or names', () => {
     const rows = historyRows({ features: [features[2], features[0], features[1]] }, { rollback: null }, { features: {} });
-    expect(rows.map((r) => r.name)).toEqual(['Box 2', 'Box 1', 'Cylinder 1']);
+    expect(rows.map((r) => r.name)).toEqual(['Extrude 2', 'Extrude 1', 'Sketch 1']);
     expect(rows.map((r) => r.index)).toEqual([0, 1, 2]);
-    expect(rows.map((r) => r.type)).toEqual(['box', 'box', 'cylinder']);
+    expect(rows.map((r) => r.type)).toEqual(['extrude', 'extrude', 'sketch']);
   });
 
   it('marks rows at or below the rollback bar as rolled back', () => {
@@ -33,26 +33,26 @@ describe('history rows', () => {
 
   it('carries suppression and the rebuild outcome with its message', () => {
     const rows = historyRows(
-      { features: [box('f1', 'Box 1'), cyl('f2', 'Cylinder 1', { suppressed: true }), box('f3', 'Box 2')] },
+      { features: [extrude('f1', 'Extrude 1'), sketch('f2', 'Sketch 1', { suppressed: true }), extrude('f3', 'Extrude 2')] },
       { rollback: null },
       {
         features: {
           f1: { state: 'ok' },
           f2: { state: 'suppressed' },
-          f3: { state: 'error', message: 'Box 2 failed: the result is not a valid solid' },
+          f3: { state: 'error', message: 'Extrude 2 failed: the result is not a valid solid' },
         },
       },
     );
     expect(rows.map((r) => [r.suppressed, r.status, r.message])).toEqual([
       [false, 'ok', null],
       [true, 'ok', null],
-      [false, 'error', 'Box 2 failed: the result is not a valid solid'],
+      [false, 'error', 'Extrude 2 failed: the result is not a valid solid'],
     ]);
-    const warn = historyRows({ features: [box('f1', 'Box 1')] }, { rollback: null }, { features: { f1: { state: 'warning', message: 'Nothing to cut' } } });
+    const warn = historyRows({ features: [extrude('f1', 'Extrude 1')] }, { rollback: null }, { features: { f1: { state: 'warning', message: 'Nothing to cut' } } });
     expect(warn[0]).toMatchObject({ status: 'warning', message: 'Nothing to cut' });
-    const failedNoText = historyRows({ features: [box('f1', 'Box 1')] }, { rollback: null }, { features: { f1: { state: 'error' } } });
-    expect(failedNoText[0].message).toBe('Box 1 failed');
-    const pending = historyRows({ features: [box('f1', 'Box 1')] }, { rollback: null }, { features: { f1: { state: 'pending' } } });
+    const failedNoText = historyRows({ features: [extrude('f1', 'Extrude 1')] }, { rollback: null }, { features: { f1: { state: 'error' } } });
+    expect(failedNoText[0].message).toBe('Extrude 1 failed');
+    const pending = historyRows({ features: [extrude('f1', 'Extrude 1')] }, { rollback: null }, { features: { f1: { state: 'pending' } } });
     expect(pending[0].status).toBe('pending');
   });
 });

@@ -11,11 +11,13 @@
 //   - the section slider spans the kernel's exact extent and starts on a round value;
 //   - the viewport's context menu starts with the core's items (Normal to, Orbit around…);
 //   - bodies are listed in the order they were made.
-// window.__CAD__ is used only to read the viewport's projection, pivot and hover.
+// window.__CAD__ is used only to read the viewport's projection, pivot and hover, and
+// (helpers.ts addSketch / addSolid) to set sketched solids up: there is no Box or
+// Cylinder since decision 2026-10-01; an extrude's distance is the size field.
 // Owner: INTEGRATE (review round 1).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 
 type Vec3 = [number, number, number];
 type Loc = ReturnType<FrameLocator['locator']>;
@@ -109,47 +111,42 @@ test('cad:p1-review-panels tiny sizes refused, grouped volume readouts and total
   const panel = frame.locator('[data-cad-panel="feature"]');
   const chip = frame.locator('[data-chip="volume"]');
 
+  // A 20 x 20 profile extruded 20 mm (the Extrude panel, new).
+  await addSketch(page);
+  await tb.locator('[data-command="solid.extrude"]').click();
+  const len = panel.locator('.nui[data-field="distance"] input');
+  await setField(panel, 'distance', '20');
+  await expect(chip).toHaveText('Volume8000 mm³');
   // A size too small to model is refused where it is typed, in plain words (it used to
   // reach the kernel: "Box 1 failed: Standard_DomainError").
-  await tb.locator('[data-command="solid.box"]').click();
-  const len = panel.locator('.nui[data-field="size.0"] input');
   await len.fill('1e-9');
   await len.press('Enter');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-error]')).toHaveText('Length must be at least 0.000001 mm');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-error]')).toHaveText('Distance must be at least 0.000001 mm');
   await expect(chip).toHaveText('Volume8000 mm³');
-  await expect(tree.locator('[data-feature-row]')).toHaveAttribute('data-state', 'ok');
+  await expect(tree.locator('[data-feature-row][data-feature-type="extrude"]')).toHaveAttribute('data-state', 'ok');
   // Escape reverts what was typed and keeps the panel; a second Escape closes it (it did nothing).
   await len.press('Escape');
   await expect(len).toHaveValue('20');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-error]')).toHaveCount(0);
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-error]')).toHaveCount(0);
   await expect(panel).toHaveCount(1);
   await len.press('Escape');
   await expect(panel).toHaveCount(0);
-  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Box 1']);
+  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1', 'Extrude 1']);
 
   // Readouts group digits instead of the field's scientific style ("1.0000e+6 mm³").
-  await tree.locator('[data-feature-row] > .tree-row').dblclick();
-  for (const f of ['size.0', 'size.1', 'size.2']) await setField(panel, f, '100');
+  await tree.locator('[data-feature-row][data-feature-type="extrude"] > .tree-row').dblclick();
+  await setField(panel, 'distance', '2500');
   await expect(chip).toHaveText('Volume1,000,000 mm³');
-  await setField(panel, 'size.0', '1e6');
-  await setField(panel, 'size.1', '20');
-  await setField(panel, 'size.2', '20');
+  await setField(panel, 'distance', '1e6');
   await expect(chip).toHaveText('Volume400,000,000 mm³');
-  for (const f of ['size.0', 'size.1', 'size.2']) await setField(panel, f, '1000');
+  await setField(panel, 'distance', '2500000');
   await expect(chip).toHaveText('Volume1 m³');
-  for (const f of ['size.0', 'size.1', 'size.2']) await setField(panel, f, '20');
+  await setField(panel, 'distance', '20');
   await expect(chip).toHaveText('Volume8000 mm³');
   await panel.locator('[data-panel-done]').click();
 
-  // A cylinder as a second body (it overlaps the box): the chip says it is a total;
-  // the tiny diameter is refused the same way.
-  await tb.locator('[data-command="solid.cylinder"]').click();
-  const dia = panel.locator('.nui[data-field="diameter"] input');
-  await dia.fill('1e-9');
-  await dia.press('Enter');
-  await expect(panel.locator('.nui[data-field="diameter"] [data-nui-error]')).toHaveText('Diameter must be at least 0.000001 mm');
-  await dia.press('Escape');
-  await panel.locator('[data-panel-done]').click();
+  // A cylinder (Ø20 × 20, sketched and extruded) as a second body (it overlaps the cube): the chip says it is a total.
+  await addSolid(page, { circle: true, size: [20, 20] });
   await expect(chip).toHaveText('VolumeTotal of 2 bodies · 14,283.2 mm³');
   // A hidden body is not counted, and the chip says the total is of the shown ones.
   await tree.locator('[data-bodies-folder] > .tree-row').click();
@@ -186,10 +183,9 @@ test('cad:p1-review-viewport Fit margin and direction, refit after a size typed 
   const panel = frame.locator('[data-cad-panel="feature"]');
   const menu = frame.locator('[data-cad-menu]');
 
-  // A cylinder (Ø20 × 20 along Z at the origin): the section slider spans its exact
+  // A cylinder (Ø20 × 20 along Z at the origin, sketched and extruded): the section slider spans its exact
   // extent along Y, -10 to 10 (the tessellation reaches only 9.983), and starts at 0.
-  await tb.locator('[data-command="solid.cylinder"]').click();
-  await panel.locator('[data-panel-done]').click();
+  await addSolid(page, { circle: true, size: [20, 20] });
   await frame.locator('[data-vp-opens="section"]').click();
   const slider = frame.locator('[data-section-offset]');
   await expect(slider).toBeVisible();
@@ -199,14 +195,15 @@ test('cad:p1-review-viewport Fit margin and direction, refit after a size typed 
   await expect(frame.locator('[data-section-value]')).toHaveText('Y 0 mm');
   await frame.locator('[data-vp-opens="section"]').click();
   await expect(slider).toHaveCount(0);
-  await tree.locator('[data-feature-row] > .tree-row').click({ button: 'right' });
-  await menu.locator('[data-menu-item="delete"]').click();
+  for (const type of ['extrude', 'sketch']) {
+    await tree.locator(`[data-feature-row][data-feature-type="${type}"] > .tree-row`).click({ button: 'right' });
+    await menu.locator('[data-menu-item="delete"]').click();
+  }
   await expect(tree.locator('[data-tree-empty="history"]')).toHaveText('No features yet');
 
   // The first body is framed with a margin: none of the cube's corners within 6% of the canvas's top or bottom
   // (Fit filled the whole height, so an iso cube touched the bottom edge under the chips).
-  await tb.locator('[data-command="solid.box"]').click();
-  await panel.locator('[data-panel-done]').click();
+  await addSolid(page);
   await tb.locator('[data-command="view.iso"]').click();
   await expect.poll(() => boxOnCanvas(page, [0, 0, 0], [20, 20, 20]).then((r) => (r ? 'still' : 'moving'))).toBe('still');
   const m = (await boxOnCanvas(page, [0, 0, 0], [20, 20, 20]))!;
@@ -231,12 +228,12 @@ test('cad:p1-review-viewport Fit margin and direction, refit after a size typed 
 
   // A size typed wrong (1e6 mm) and framed, then put back to 20 mm: the part is framed
   // again (it stayed a dot until F).
-  await tree.locator('[data-feature-row] > .tree-row').dblclick();
-  await setField(panel, 'size.0', '1e6');
+  await tree.locator('[data-feature-row][data-feature-type="extrude"] > .tree-row').dblclick();
+  await setField(panel, 'distance', '1e6');
   await expect(frame.locator('[data-chip="volume"]')).toHaveText('Volume400,000,000 mm³');
   await tb.locator('[data-command="view.fit"]').click();
-  await expect.poll(() => boxOnCanvas(page, [0, 0, 0], [1e6, 20, 20]).then(fmtSpan)).toBeGreaterThan(200);
-  await setField(panel, 'size.0', '20');
+  await expect.poll(() => boxOnCanvas(page, [0, 0, 0], [20, 20, 1e6]).then(fmtSpan)).toBeGreaterThan(200);
+  await setField(panel, 'distance', '20');
   await panel.locator('[data-panel-done]').click();
   await expect(frame.locator('[data-chip="volume"]')).toHaveText('Volume8000 mm³');
   await expect.poll(() => boxOnCanvas(page, [0, 0, 0], [20, 20, 20]).then(fmtSpan), { message: 'the 20 mm box is framed, not a dot' }).toBeGreaterThan(200);
@@ -269,9 +266,11 @@ test('cad:p1-review-viewport Fit margin and direction, refit after a size typed 
 
   // Undo to the empty part (the origin planes show), hover a plane, then redo without
   // moving the pointer: the plane is no longer lit as hovered (it stayed so until the mouse moved).
-  // One Ctrl+Z is enough: the 1e6-and-back edit made no undo step of its own (it would change nothing).
+  // Two Ctrl+Z (the extrude, then its sketch: planes stay hidden while a sketch shows): the
+  // 1e6-and-back edit made no undo step of its own (it would change nothing).
   await tree.locator('[data-part-name] > .tree-row').click();
   await tb.locator('[data-command="view.iso"]').click();
+  await page.keyboard.press('Control+z');
   await page.keyboard.press('Control+z');
   await expect(tree.locator('[data-tree-empty="history"]')).toHaveText('No features yet');
   await expect.poll(async () => (await vpState(page)).bodies).toBe(0);
@@ -281,7 +280,8 @@ test('cad:p1-review-viewport Fit margin and direction, refit after a size typed 
   await page.mouse.move(onPlane[0], onPlane[1], { steps: 4 });
   await expect.poll(async () => (await vpState(page)).hover).toBe('origin');
   await page.keyboard.press('Control+y');
-  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Box 1']);
+  await page.keyboard.press('Control+y');
+  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1', 'Extrude 1']);
   await expect.poll(async () => (await vpState(page)).bodies).toBe(1);
   await expect.poll(async () => (await vpState(page)).hover, { message: 'no stale plane hover' }).not.toBe('origin');
 
@@ -295,22 +295,17 @@ test('cad:p1-review-bodies bodies are listed in the order they were made, whatev
   const tree = frame.locator('[data-cad-tree]');
   const panel = frame.locator('[data-cad-panel="feature"]');
   const menu = frame.locator('[data-cad-menu]');
-  // Box 1 and Box 2 side by side (Body 1, Body 2); then, rolled back to after Box 1,
-  // Box 3 (Body 3) goes in between: the history reads Box 1, Box 3, Box 2.
-  for (const x of ['0', '50']) {
-    await tb.locator('[data-command="solid.box"]').click();
-    await setField(panel, 'origin.0', x);
-    await panel.locator('[data-panel-done]').click();
-  }
-  await tree.locator('[data-feature-row] > .tree-row').first().click({ button: 'right' });
+  // Two cubes side by side, sketched and extruded (Body 1, Body 2); then, rolled back to after
+  // Extrude 1, a third (Body 3) goes in between: the history reads ... Extrude 1, Sketch 3, Extrude 3, Sketch 2, Extrude 2.
+  for (const x of [0, 50]) await addSolid(page, { at: [x, 0, 0] });
+  const e1 = tree.locator('[data-feature-row][data-feature-type="extrude"]').first();
+  await e1.locator('> .tree-row').click({ button: 'right' });
   await menu.locator('[data-menu-item="rollback"]').click();
-  await expect(tree.locator('[data-rollback-bar]')).toHaveAttribute('aria-valuenow', '1');
-  await tb.locator('[data-command="solid.box"]').click();
-  await setField(panel, 'origin.0', '100');
-  await panel.locator('[data-panel-done]').click();
-  await tree.locator('[data-feature-row] > .tree-row').first().click({ button: 'right' });
+  await expect(tree.locator('[data-rollback-bar]')).toHaveAttribute('aria-valuenow', '2');
+  await addSolid(page, { at: [100, 0, 0] });
+  await e1.locator('> .tree-row').click({ button: 'right' });
   await menu.locator('[data-menu-item="roll-end"]').click();
-  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Box 1', 'Box 3', 'Box 2']);
+  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 3', 'Extrude 3', 'Sketch 2', 'Extrude 2']);
   await expect(tree.locator('[data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (3)');
   await tree.locator('[data-bodies-folder] > .tree-row').click();
   // The list keeps the order they were made in (it followed the history: Body 1, Body 3, Body 2).

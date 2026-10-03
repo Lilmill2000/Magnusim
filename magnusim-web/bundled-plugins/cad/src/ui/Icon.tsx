@@ -10,6 +10,7 @@ export const ICONS = {
   origin: 'M12 4v16 M4 12h16 M12 12m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0',
   plane: 'M3 9l9-4 9 4-9 4z M3 9v6l9 4 9-4V9',
   point: 'M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M12 3v5 M12 16v5 M3 12h5 M16 12h5',
+  /** Rows of removed feature types (a P1 Part's Box and Cylinder) keep their glyph. */
   box: 'M3 9l5-4h13v10l-5 4H3z M3 9h13v10 M16 9l5-4',
   cylinder: 'M6 6a6 2.5 0 1 0 12 0a6 2.5 0 1 0 -12 0 M6 6v12a6 2.5 0 0 0 12 0V6',
   params: 'M4 19c2 0 3-1 3.5-4l1.5-8C9.5 4 10.5 3 12.5 3 M5 9h7 M13 12l6 7 M19 12l-6 7',

@@ -1,11 +1,12 @@
 // The workspace page build: src/index.html -> workspace/index.html + app.js + app.css.
-// React and the bridge are NOT bundled: the host's import map provides them in
-// the frame (react, react-dom/client, react/jsx-runtime, @magnusim/workspace).
+// React, the bridge and the UI kit are NOT bundled: the host's import map
+// provides them in the frame (react, react-dom/client, react/jsx-runtime,
+// @magnusim/workspace, @magnusim/plugin-ui; host API 1.3).
 // Worker modules are built separately by scripts/build.mjs. Run `npm run build`.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { defineConfig } from 'vite';
 
-export const HOST_IMPORTS = ['react', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime', '@magnusim/workspace'];
+export const HOST_IMPORTS = ['react', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime', '@magnusim/workspace', '@magnusim/plugin-ui'];
 
 export default defineConfig({
   root: 'src',

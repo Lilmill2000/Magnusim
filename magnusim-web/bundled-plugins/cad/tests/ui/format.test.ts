@@ -19,6 +19,11 @@ describe('formatSci (core SciNumberInput parity)', () => {
     expect(formatSci(999999)).toBe('999999');
     expect(formatSci(1234567)).toBe('1.2346e+6');
   });
+
+  it('a value that rounds up to 1e6 reads in exponent form (999999.9 is not "1000000")', () => {
+    expect(formatSci(999999.9)).toBe('1.0000e+6');
+    expect(formatSci(-999999.9)).toBe('-1.0000e+6');
+  });
 });
 
 describe('display units', () => {

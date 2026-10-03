@@ -6,7 +6,10 @@
 //            rows red and warned rows amber with a "What's wrong" tooltip.
 // Click selects (shared with the viewport), Ctrl+click toggles, double-click
 // opens the feature's panel, right-click opens the context menu.
-// Owner: UI-SHELL.
+// Sketch rows (P3-PROFILES): "(-)" / "(+)" / "(?)" before the name as
+// SOLIDWORKS shows how defined a sketch is (a lock when fully defined), its
+// dimension count, and an eye that shows or hides it in the view.
+// Owner: UI-SHELL; sketch rows P3-PROFILES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import { useServices } from '../../lib/services';
@@ -19,7 +22,11 @@ import { PARAMS_ID } from '../commands';
 import { errText, uiFor } from '../controller';
 import { Icon, ICONS } from '../Icon';
 import { DisabledReason, EmptyState, IconButton, InlineRename, TreeNode, TreeSection, useTip } from '../kit';
-import { barIndexAt, bodyRows, historyRows, rollbackIndex, selectedBodies, selectedFeatures, type BodyRow, type HistoryRow } from './model';
+import { sketchShown } from '../../features/sketch/view';
+import { barIndexAt, bodyRows, dimensionsText, historyRows, rollbackIndex, selectedBodies, selectedFeatures, sketchPrefix, type BodyRow, type HistoryRow } from './model';
+
+/** A padlock (24 viewBox outline): the sketch is fully defined. */
+const LOCK_ICON = 'M7.5 11V8a4.5 4.5 0 0 1 9 0v3 M5.5 11h13v9.5h-13z';
 
 const PLANES: OriginPlaneRef[] = ['origin:top', 'origin:front', 'origin:right'];
 /** The host keeps study titles to 120 characters (magnusim_sdk.data.rename_study). */
@@ -97,7 +104,7 @@ function History() {
   const services = useServices();
   const ui = uiFor(services);
   const { doc, selection } = services;
-  const d = useStateStore(doc.state, (s) => ({ features: s.doc.features, rollback: s.view.rollback, rebuild: s.rebuild.features, bodies: s.rebuild.bodies, status: s.status, error: s.error }));
+  const d = useStateStore(doc.state, (s) => ({ features: s.doc.features, rollback: s.view.rollback, sketches: s.view.sketches, rebuild: s.rebuild.features, bodies: s.rebuild.bodies, status: s.status, error: s.error }));
   const sel = useStateStore(selection);
   const uiState = useStateStore(ui.state, (s) => ({ panel: s.panel, renaming: s.renaming }));
   const [drag, setDrag] = useState<number | null>(null);
@@ -205,6 +212,9 @@ function History() {
     ]
       .filter(Boolean)
       .join(' ');
+    const sk = row.sketch;
+    const prefix = sk ? sketchPrefix(sk.state) : '';
+    const shown = sk ? sketchShown({ features: d.features }, { sketches: d.sketches }, doc.features, row.id) : false;
     items.push(
       <TreeNode
         key={row.id}
@@ -219,6 +229,20 @@ function History() {
               onDone={() => ui.endRename()}
               onGiveUp={(why) => ui.fail(`Rename ${row.name}`, why)}
             />
+          ) : sk ? (
+            <>
+              {prefix ? (
+                <span className="cad-sketch-prefix" data-sketch-prefix={prefix}>
+                  {prefix}{' '}
+                </span>
+              ) : null}
+              {row.name}
+              {sk.state === 'fully' && !sk.empty ? (
+                <span className="cad-sketch-lock" data-sketch-lock="1" role="img" aria-label="Fully defined">
+                  <Icon d={LOCK_ICON} size={11} />
+                </span>
+              ) : null}
+            </>
           ) : (
             row.name
           )
@@ -232,9 +256,33 @@ function History() {
           'data-state': row.status,
           'data-suppressed': row.suppressed ? '1' : undefined,
           'data-rolled-back': row.rolledBack ? '1' : undefined,
+          'data-sketch-state': sk?.state,
+          'data-sketch-shown': sk ? (shown ? '1' : '0') : undefined,
         }}
         badge={<StatusBadge row={row} onOpen={() => onRowOpen(row)} />}
-        sub={row.suppressed ? 'Suppressed' : undefined}
+        sub={row.suppressed ? 'Suppressed' : sk ? (dimensionsText(sk.dims) ?? undefined) : undefined}
+        actions={
+          sk ? (
+            <IconButton
+              size="row"
+              icon={shown ? ICONS.eye : ICONS.eyeOff}
+              label={shown ? `Hide ${row.name}` : `Show ${row.name}`}
+              hint={shown ? 'Shown in the view' : 'Hidden in the view'}
+              data-sketch-act="visibility"
+              data-visible={shown ? '1' : '0'}
+              onClick={() => {
+                // A choice that matches the default is forgotten, so a sketch shown by default still hides once a feature uses it.
+                const next = !shown;
+                const byDefault = sketchShown({ features: d.features }, { sketches: {} }, doc.features, row.id);
+                try {
+                  doc.setSketchVisibility(row.id, next === byDefault ? null : next ? 'shown' : 'hidden');
+                } catch (err) {
+                  ui.fail(next ? `Show ${row.name}` : `Hide ${row.name}`, errText(err));
+                }
+              }}
+            />
+          ) : undefined
+        }
         onClick={(e) => onRowClick(row, e)}
         onDoubleClick={() => onRowOpen(row)}
         onContextMenu={(e) => onRowMenu(row, e)}

@@ -11,7 +11,8 @@ import { createStateStore } from '../lib/store';
 import { createDocService, install as installDoc } from '../doc';
 import { PLUGIN_VERSION } from '../doc/schema';
 import { createKernelAdapter } from '../kernel';
-import type { AppServices } from '../types/app';
+import { createModuleRegistry, discoverModules, installModules, registerModuleFeatures } from '../modules';
+import type { AppServices, AreaApis } from '../types/app';
 import type { Mode } from '../types/commands';
 import type { CadEvents } from '../types/events';
 import type { ViewportHandle } from '../types/viewport';
@@ -49,11 +50,16 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   const bridge = createBridge(ws);
   const bus = createBus<CadEvents>();
   const kernel = createKernelAdapter({ spawn: (url) => bridge.spawnWorker(url) });
-  const doc = createDocService({ bridge, kernel, bus });
-  let services: AppServices | null = null;
-  const commands = createCommandRegistry(() => services!);
+  const apis = createStateStore<AreaApis>({ sketch: null, solver: null, files: null });
+  const doc = createDocService({ bridge, kernel, bus, solver: () => apis.get().solver, onSolverChange: (fn) => apis.subscribe(fn) });
+  // Features and areas that plug themselves in (src/features/*/, src/sketch/): their
+  // feature types are registered before the Part loads.
+  const found = discoverModules();
+  const modules = createModuleRegistry(found);
+  registerModuleFeatures(doc.features, found);
+  const commands = createCommandRegistry(() => services);
   const keyboard = createKeyboard(document);
-  services = {
+  const services: AppServices = {
     bridge,
     bus,
     commands,
@@ -63,13 +69,17 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
     selection: createSelectionStore(),
     mode: createStateStore<{ mode: Mode }>({ mode: 'model' }),
     viewport: createStateStore<{ handle: ViewportHandle | null }>({ handle: null }),
+    modules,
+    apis,
   };
 
-  // Each area registers its commands and handlers (see ARCHITECTURE.md "install()").
+  // Each area registers its commands and handlers (see ARCHITECTURE.md "install()"),
+  // then the modules (after the UI shell, so their commands and bindings come later).
   installDoc(services);
   installViewport(services);
   installUi(services);
-  bindCommandShortcuts(commands, keyboard, (message) => bridge.toast(message, 'info'));
+  installModules(services, found);
+  bindCommandShortcuts(commands, keyboard, (message) => bridge.toast(message, 'info'), () => services.mode.get().mode);
   exposeTestHandle(services, PLUGIN_VERSION);
 
   createRoot(root).render(createElement(App, { services }));

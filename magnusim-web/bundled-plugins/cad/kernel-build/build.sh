@@ -71,6 +71,24 @@ emcc_line=$(emcc --version | head -1)
   echo "$NAME.mjs: $(stat -c %s "$STAGE/$NAME.mjs") bytes sha256=$(sha256sum "$STAGE/$NAME.mjs" | cut -c1-64)"
 } > "$STAGE/$NAME.build.txt"
 
+# Replacing the shipped kernel while an e2e run (scripts/e2e.mjs) holds
+# .cache/build.lock would change the kernel under its pages mid-run: wait for the
+# lock to go (bounded: CAD_KERNEL_LOCK_WAIT seconds, default 900), then refuse.
+# CAD_KERNEL_IGNORE_BUILD_LOCK=1 skips the wait (a lock left by a stopped run).
+if [ "$OUT" = "$SHIP" ] && [ "${CAD_KERNEL_IGNORE_BUILD_LOCK:-0}" != 1 ]; then
+  lockfile="$PLUGIN/.cache/build.lock"
+  waited=0
+  while [ -e "$lockfile" ]; do
+    if [ "$waited" -ge "${CAD_KERNEL_LOCK_WAIT:-900}" ]; then
+      echo "$lockfile is still held ($(cat "$lockfile" 2>/dev/null)): an e2e run is using workspace/. The kernel was not replaced; set CAD_KERNEL_IGNORE_BUILD_LOCK=1 if that run is gone." >&2
+      exit 1
+    fi
+    [ "$waited" = 0 ] && echo "waiting for $lockfile (an e2e run is using workspace/)" >&2
+    sleep 5
+    waited=$((waited + 5))
+  done
+fi
+
 mkdir -p "$OUT"
 cp -f "$STAGE/$NAME.wasm" "$OUT/.$NAME.wasm.new"
 cp -f "$STAGE/$NAME.mjs" "$OUT/.$NAME.mjs.new"

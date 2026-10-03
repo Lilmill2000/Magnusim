@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Kernel } from '../../src/kernel-worker/kernel-api';
 import { EDGE_FLAG, EDGE_HIDDEN } from '../../src/types/kernel-protocol';
-import { call, FIXTURES, importStep, loadKernel, type R } from './kernel-lib';
+import { call, FIXTURES, importVortex, itVortex, loadKernel, type R } from './kernel-lib';
 
 let k: Kernel;
 beforeAll(async () => {
@@ -61,7 +61,7 @@ describe('edge flags', () => {
     expect(flags(unified.id).count).toEqual({ 0: 12 });
   });
 
-  it('the Vortex recipe: the tangent inlet leaves an 85.5 mm internal edge in the roof (P0)', () => {
+  itVortex('the Vortex recipe: the tangent inlet leaves an 85.5 mm internal edge in the roof (P0)', () => {
     const calls: R[] = JSON.parse(readFileSync(join(FIXTURES, 'vortex-recipe.calls.json'), 'utf8')).calls;
     const bin = call(k, 'extrude', calls[0].params).id;
     const cone = call(k, 'revolve', calls[1].params).id;
@@ -75,8 +75,8 @@ describe('edge flags', () => {
     expect(internal[0]).toBeCloseTo(85.5111, 3);
   });
 
-  it('the imported Vortex: seams, poles and the split cone are hidden, blends are smooth', () => {
-    const id = importStep(k, 'vortex-cfd-test.step').shapes[0].id;
+  itVortex('the imported Vortex: seams, poles and the split cone are hidden, blends are smooth', () => {
+    const id = importVortex(k).shapes[0].id;
     const r = flags(id);
     expect(r.flags).toHaveLength(34);
     expect(r.hidden).toBe(r.flags.filter((f) => f & EDGE_HIDDEN).length);

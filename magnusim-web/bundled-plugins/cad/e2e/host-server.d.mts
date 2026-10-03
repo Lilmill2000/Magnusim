@@ -9,10 +9,12 @@ export interface HostServer {
   /** The server's local prefs JSON (MAGNUSIM_LOCAL_JSON): plugins.enabled / plugins.disabled live there. */
   prefs: string | null;
   stop(): void;
+  /** The end of the server's output (empty for a reused server). */
+  tail(): string;
 }
 export const PLUGIN_DIR: string;
 export const WEB_ROOT: string;
-export function findFreeBase(start?: number, end?: number): Promise<number>;
-export function readLiveLock(lock: string | null): Promise<{ base: string; port: number; pid: number } | null>;
+export const KEEP_FREE: number[];
+export function readLiveLock(lock: string | null): Promise<{ base: string; port: number; pid: number; server_pid: number; projects?: string; prefs?: string } | null>;
 export function killTree(pid: number): void;
 export function startHostServer(opts?: { port?: number; lock?: string | null; pluginsDir?: string | null; log?: (m: string) => void }): Promise<HostServer>;

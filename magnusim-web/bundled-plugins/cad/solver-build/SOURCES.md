@@ -62,5 +62,7 @@ eval under the frame's CSP.
 | `build.sh` | GPL-3.0-or-later |
 
 The P3 sketcher's worker side lives in `src/solver-worker/` (`solver-api.mjs`,
-`solver-worker.mjs`, GPL-3.0-or-later); it is not built into `workspace/` until
-the sketcher lands.
+`solver-worker.mjs`, GPL-3.0-or-later); `npm run build` bundles it into
+`workspace/solver/solver-worker.js` (scripts/build.mjs `WORKERS`), next to the two
+files above, and sketch mode (`src/sketch/solver-client.ts`) starts it with
+`ws.spawnWorker`.

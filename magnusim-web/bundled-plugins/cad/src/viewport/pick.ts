@@ -18,6 +18,8 @@ export interface PickBody {
   bvh: MeshBVH | null;
   /** B-rep vertex positions (kernel order), or null when unknown. */
   vertices: Float32Array | null;
+  /** Drawn see-through (ViewportBody.seeThrough): it hides nothing, and a face behind it wins. */
+  seeThrough?: boolean;
 }
 
 export interface PickPlane {
@@ -109,8 +111,17 @@ function kept(view: PickView, p: Vector3, eps = 0): boolean {
   return !view.clip || view.clip.distanceToPoint(p) >= -eps;
 }
 
-/** Nearest face hit along a ray over all bodies (respecting the section plane), or null. */
+/**
+ * Nearest face hit along a ray over all bodies (respecting the section plane), or null. A face of
+ * an opaque body wins over a see-through body's nearer face (it is seen through it); a see-through
+ * body's face is hit where nothing opaque is behind it.
+ */
 export function raycastBodies(bodies: readonly PickBody[], ray: Ray, view: PickView): FaceHit | null {
+  if (!bodies.some((b) => b.seeThrough)) return nearestFace(bodies, ray, view);
+  return nearestFace(bodies.filter((b) => !b.seeThrough), ray, view) ?? nearestFace(bodies.filter((b) => b.seeThrough), ray, view);
+}
+
+function nearestFace(bodies: readonly PickBody[], ray: Ray, view: PickView): FaceHit | null {
   let best: FaceHit | null = null;
   for (const b of bodies) {
     if (!b.bvh) continue;
@@ -160,7 +171,8 @@ export function pointVisible(bodies: readonly PickBody[], view: PickView, p: Vec
     _ray.direction.subVectors(p, _ray.origin).normalize();
   }
   const tP = _v2.subVectors(p, _ray.origin).dot(_ray.direction);
-  const hit = raycastBodies(bodies, _ray, view);
+  // A see-through body hides nothing.
+  const hit = nearestFace(bodies.some((b) => b.seeThrough) ? bodies.filter((b) => !b.seeThrough) : bodies, _ray, view);
   return !hit || tP <= hit.distance + slack;
 }
 

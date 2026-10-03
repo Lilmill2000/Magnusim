@@ -8,16 +8,23 @@
 // Owner: KERNEL-HARDENING.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 
 const FIX = fileURLToPath(new URL('../fixtures/kernel/', import.meta.url));
+// Daniel's Vortex part is read where it is, never copied into the plugin (review P2/P3 round 3),
+// and only when CAD_E2E_VORTEX_STEP names it: without it this test is skipped and says why.
+const VORTEX = process.env.CAD_E2E_VORTEX_STEP || '';
 const REF = JSON.parse(readFileSync(join(FIX, 'reference.json'), 'utf8'));
 const CALLS = JSON.parse(readFileSync(join(FIX, 'vortex-recipe.calls.json'), 'utf8')).calls;
 
 test('cad:p1-kernel-ops the kernel in the Part frame checks, copies and repairs', async ({ page, request }) => {
+  const missing = "needs Daniel's Vortex STEP: set CAD_E2E_VORTEX_STEP to the path of Vortex CFD Test.step";
+  if (!VORTEX) console.warn(`[cad:p1-kernel-ops] skipped: ${missing}`);
+  test.skip(!VORTEX, missing);
+  expect(existsSync(VORTEX), `CAD_E2E_VORTEX_STEP is set but there is no file at ${VORTEX}`).toBe(true);
   const seen = await watchPage(page);
   const projectId = await newProject(request);
   await openProject(page, projectId);
@@ -26,7 +33,7 @@ test('cad:p1-kernel-ops the kernel in the Part frame checks, copies and repairs'
   const frame = workspaceFrame(page);
 
   const input = {
-    step: readFileSync(join(FIX, 'vortex-cfd-test.step')).toString('base64'),
+    step: readFileSync(VORTEX).toString('base64'),
     topBox: REF.fuse_box200_topcentre.box,
     calls: CALLS,
   };
@@ -108,7 +115,8 @@ test('cad:p1-kernel-ops the kernel in the Part frame checks, copies and repairs'
     return r;
   }, input);
 
-  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 2 });
+  // API 3 since P2/P3 (docs/p2p3-plan.md §2; the API 3 ops: cad-p2-kernel-ops.spec.ts).
+  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 3 });
   // props: cheap by default.
   expect(out.props).toMatchObject({ faces: 17, edges: 34, bbox_mode: 'fast' });
   expect(out.props.volume).toBeUndefined();

@@ -2,6 +2,7 @@
 // and formatting (mm / deg internally, the document's display units outside).
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { formatSci as kitFormatSci } from '@magnusim/plugin-ui';
 import type { Param } from '../types/doc';
 import type { DocUnits, EvalResult, Quantity, UnitsService } from '../types/units';
 import { DEG_PER, MM_PER, evaluateExpr } from './expr';
@@ -9,12 +10,13 @@ import { scopeFor } from './params';
 
 export { DEG_PER, MM_PER };
 
-/** Core SciNumberInput formatting: exponent outside [1e-3, 1e6), else 6 significant digits. */
+/**
+ * Core SciNumberInput formatting (the host kit's formatSci): exponent outside
+ * [1e-3, 1e6), else 6 significant digits. A value that is not finite reads as
+ * itself ("NaN", "Infinity"), where the kit gives an empty field.
+ */
 export function formatSci(v: number): string {
-  if (!Number.isFinite(v)) return String(v);
-  const a = Math.abs(v);
-  if (a !== 0 && (a < 1e-3 || a >= 1e6)) return v.toExponential(4);
-  return String(Number(v.toPrecision(6)));
+  return Number.isFinite(v) ? kitFormatSci(v) : String(v);
 }
 
 const NO_PARAMS: readonly Param[] = Object.freeze([]);

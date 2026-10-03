@@ -23,15 +23,18 @@ test('cad:p1-scaffold + New Part opens an empty Part with the kernel ready', asy
   await expect(page.locator('#workspace-overlay [data-ws-loading]')).toHaveCount(0);
 
   // Empty part: the origin planes and no features; the toolbar holds only the
-  // commands that work (P1: Box, Cylinder, Parameters, the views, Undo/Redo); no kernel chip once ready.
+  // commands that work (Sketch, Extrude, Parameters, the views, Undo/Redo); no kernel chip once ready.
   const tree = frame.locator('[data-cad-tree]');
   await expect(tree.locator('.geo-head')).toHaveText(['PART', 'HISTORY']);
   await expect(tree.locator('[data-tree-node="origin"] > .tree-row .tl')).toHaveText('Origin');
   await expect(tree.locator('[data-tree-node^="origin:"] .tl')).toHaveText(['Top plane', 'Front plane', 'Right plane']);
   await expect(tree.locator('[data-tree-empty="history"]')).toHaveText('No features yet');
   const tb = frame.locator('[data-cad-toolbar]');
-  await expect(tb.locator('.tb-group-label')).toHaveText(['SOLID', 'MODIFY', 'VIEW', 'EDIT']);
-  await expect(tb.locator('[data-group="solid"] .tb-txt')).toHaveText(['Box', 'Cylinder']);
+  // P2/P3: SKETCH first; INSPECT and FILE after MODIFY. SD: no one-click solids (SOLID is Extrude
+  // only), and CFD PREP (Enclosure) after the modelling groups.
+  await expect(tb.locator('.tb-group-label')).toHaveText(['SKETCH', 'SOLID', 'MODIFY', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
+  await expect(tb.locator('[data-group="solid"] .tb-txt')).toHaveText(['Extrude']);
+  await expect(tb.locator('[data-group="cfd"] .tb-txt')).toHaveText(['Enclosure']);
   await expect(tb.locator('[data-group="edit"] [data-command="edit.undo"]')).toHaveAttribute('aria-disabled', 'true');
   await expect(frame.locator('[data-chip="kernel"]')).toHaveCount(0);
 

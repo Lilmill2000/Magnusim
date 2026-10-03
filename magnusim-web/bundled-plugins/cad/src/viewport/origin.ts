@@ -201,18 +201,26 @@ export class OriginPlanes {
    * bodies first: `away` is the shown bodies' centre) where the whole label is
    * on the canvas (`size`) and over no body (`covered` says whether a body is
    * under a canvas pixel). Labels are HTML on top of the canvas, so a body
-   * would not hide one (review round 2: "Front" over the box edge). A label is
-   * hidden for a plane seen edge-on, or when no corner works.
+   * would not hide one (review round 2: "Front" over the box edge), and clear of
+   * `blocked` (canvas px: the tree, an open panel, the dock and the view buttons
+   * float over the canvas; review P2/P3 round 3: "Right" showed as "ght" beside the
+   * Parameters panel). A label is hidden for a plane seen edge-on, or when no corner works.
    */
   placeLabels(
     project: (p: Vector3) => [number, number] | null,
     viewDir: Vector3,
-    opts: { away?: Vector3 | null; covered?: (x: number, y: number) => boolean; size?: { w: number; h: number } } = {},
+    opts: {
+      away?: Vector3 | null;
+      covered?: (x: number, y: number) => boolean;
+      size?: { w: number; h: number };
+      blocked?: readonly { left: number; top: number; right: number; bottom: number }[];
+    } = {},
   ): void {
     const show = this.group.visible;
     const away = opts.away ?? null;
     const covered = opts.covered;
     const size = opts.size;
+    const blocked = opts.blocked ?? [];
     for (const p of this.planes.values()) {
       const { u, v, origin, normal, half } = p.pick;
       const c = show && p.fill.visible && Math.abs(normal.dot(viewDir)) > 0.12 ? project(origin) : null;
@@ -234,6 +242,7 @@ export class OriginPlanes {
         const x = s[0] >= c[0] ? s[0] + 4 : s[0] - w - 4;
         const y = s[1] >= c[1] ? s[1] + 3 : s[1] - h - 3;
         if (size && (x < 0 || y < 0 || x + w > size.w || y + h > size.h)) continue;
+        if (blocked.some((b) => x < b.right && b.left < x + w && y < b.bottom && b.top < y + h)) continue;
         if (covered && [[x, y], [x + w, y], [x, y + h], [x + w, y + h], [x + w / 2, y + h / 2]].some(([px, py]) => covered(px, py))) continue;
         at = [x, y];
         break;

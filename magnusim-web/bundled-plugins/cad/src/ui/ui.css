@@ -1,9 +1,9 @@
 /*
  * UI shell recipes, re-created from the core (research/design-language.md §5;
  * style.css line numbers cited per block). Class names follow the core's
- * (tree-row, geo-head, tb-btn, mat-panel, bc-input, ...) so parity checks can
- * compare like with like. The frame gets only /plugin-sdk/theme.css, whose
- * base.css button/input defaults are overridden here to the core's density.
+ * (tree-row, geo-head, tb-btn, ...) so parity checks can compare like with
+ * like. Panels, fields, buttons and inputs come from the host's UI kit
+ * (/plugin-sdk/plugin-ui.css, mgk-* classes); this file only adds to them.
  * Colours only through var(--mg-*) / var(--cad-*) (src/styles/tokens.css).
  * Owner: UI-SHELL.
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -101,6 +101,18 @@
   background: transparent;
 }
 
+/* The mode's primary action (sketch mode: Finish sketch), as the core's primary button. */
+.tb-btn.is-primary,
+.tb-btn.is-primary:hover {
+  background: var(--mg-primary);
+  border-color: var(--mg-primary);
+  color: var(--mg-primary-text);
+}
+
+.tb-btn.is-primary .tb-ico {
+  color: var(--mg-primary-text);
+}
+
 .tb-btn .tb-ico {
   display: inline-flex;
   width: 20px;
@@ -125,20 +137,45 @@
   white-space: normal;
 }
 
+/* Fit levels (Toolbar useFitLevel): icons only where the labelled buttons do not fit the frame;
+   the label stays in the tooltip and the accessible name. */
+.cad-toolbar.is-fit-1 .tb-group[data-group='view'] .tb-btn,
+.cad-toolbar.is-fit-1 .tb-group[data-group='edit'] .tb-btn,
+.cad-toolbar.is-fit-2 .tb-group:not([data-group='primary']) .tb-btn {
+  min-width: 30px;
+  padding: 4px 4px;
+}
+.cad-toolbar.is-fit-1 .tb-group[data-group='view'] .tb-txt,
+.cad-toolbar.is-fit-1 .tb-group[data-group='edit'] .tb-txt,
+.cad-toolbar.is-fit-2 .tb-group:not([data-group='primary']) .tb-txt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /* ---- tree card (style.css:437-457, 665-805, 829-837, 2531-2540, 2634-2639) ---- */
+/* One width, whatever the rows hold: a long name ends in an ellipsis, and a glyph that comes
+   (a warning in History) moves nothing beside the card. Review P2/P3 round 4: it followed its
+   content and grew from 232 to 250 px, pushing the open panel 18 px right. */
 .left-tree {
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
+  width: 240px;
   min-width: 220px;
   max-width: min(320px, 38vw);
+  flex: 0 0 auto;
   max-height: 100%;
   overflow: auto;
   padding: 4px 0 8px;
   font-size: 12px;
-  background: var(--cad-card-bg);
-  border: 1px solid var(--cad-card-border);
-  border-radius: var(--cad-card-radius);
-  box-shadow: var(--cad-card-shadow);
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-card-border);
+  border-radius: var(--mg-radius-md);
+  box-shadow: var(--mg-shadow-md);
 }
 
 /* Sections are divided as the core's SIMULATIONS / STUDIES sections are
@@ -202,7 +239,7 @@
 }
 
 .tree-row:hover {
-  background: var(--cad-tree-hover);
+  background: var(--mg-surface-muted);
 }
 
 .tree-node.selected > .tree-row {
@@ -236,13 +273,13 @@
 }
 
 .tree-row .tree-ico {
-  color: var(--cad-tree-icon);
+  color: var(--mg-text-secondary);
 }
 
 .tree-row .tree-sub {
   margin-left: auto;
   font-size: 11px;
-  color: var(--cad-tree-sub);
+  color: var(--mg-text-muted);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -299,7 +336,7 @@
 
 .tree-node.is-suppressed > .tree-row .tl,
 .tree-node.is-suppressed > .tree-row .tree-ico {
-  color: var(--cad-tree-suppressed);
+  color: var(--mg-text-subtle);
 }
 
 .tree-node.is-suppressed > .tree-row .tl {
@@ -315,7 +352,7 @@
 }
 
 .tree-node.is-related > .tree-row {
-  background: var(--cad-tree-related);
+  background: var(--mg-selected-bg);
 }
 
 .tree-node.is-hidden-body > .tree-row .cad-body-name,
@@ -448,14 +485,14 @@
   min-width: 0;
 }
 
-.mesh-title-row .mat-panel-title {
+.mesh-title-row .mgk-panel-title {
   min-width: 0;
 }
 
 .mesh-rename-input {
   width: 160px;
   max-width: 70%;
-  border: 1px solid var(--cad-rename-border);
+  border: 1px solid var(--mg-control-border);
   border-radius: 4px;
   padding: 3px 6px;
   font-size: 14px;
@@ -477,7 +514,7 @@
 .cad-row-rename {
   width: 150px;
   padding: 1px 4px;
-  border: 1px solid var(--cad-rename-border);
+  border: 1px solid var(--mg-control-border);
   border-radius: 3px;
   font-size: 12px;
   color: var(--mg-text);
@@ -530,74 +567,41 @@
   pointer-events: auto;
 }
 
-.mat-panel {
-  padding: 10px 12px;
-  background: var(--cad-card-bg);
-  border: 1px solid var(--mg-border);
-  border-radius: 6px;
-}
+/* ---- panels, fields, buttons, inputs: the host's UI kit ----
+ * PanelChrome, Field, Select, Hint, DisabledReason, EmptyState, Toggle, the
+ * buttons and the number fields are drawn by /plugin-sdk/plugin-ui.css (the
+ * kit's mgk-* classes, held equal to the core by the kit's parity gate). Only
+ * what CAD adds is here. */
 
-.tree-detail > .mat-panel {
+/* The flyout's panel: as tall as the stage allows, scrolling inside. */
+.tree-detail > .cad-panel {
   margin: 0;
-  border: 1px solid var(--cad-card-border);
-  border-radius: var(--cad-card-radius);
-  box-shadow: var(--cad-card-shadow);
   max-height: calc(100vh - 120px);
   overflow: auto;
 }
 
-.mat-panel.is-accent-feature {
+/* A feature or tool panel is the core's fixed 360 px (style.css: .tree-detail > #panel-mesh-form),
+   whatever its content (SD review round 1: Extrude 310, Combine 330, Enclosure 360 px).
+   Parameters (is-wide) sizes to its table. */
+.tree-detail:not(.is-wide) > .cad-panel {
+  width: min(360px, 40vw);
+  box-sizing: border-box;
+}
+
+/* The 3 px accent bar (feature / sketch panels). */
+.cad-panel.is-accent-feature {
   border-left: 3px solid var(--cad-panel-accent-feature);
 }
 
-.mat-panel.is-accent-sketch {
+.cad-panel.is-accent-sketch {
   border-left: 3px solid var(--cad-panel-accent-sketch);
-}
-
-.mat-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--cad-divider);
-}
-
-.mat-panel-title {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--mg-text);
-}
-
-.mat-panel-body {
-  font-size: 12px;
-  color: var(--cad-panel-text);
-}
-
-.mat-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-
-.mat-k {
-  color: var(--mg-text-muted);
-}
-
-.mat-v {
-  color: var(--mg-text);
-  font-weight: 500;
-  text-align: right;
 }
 
 .cad-field-group + .cad-field-group,
 .cad-field-group + .cad-field {
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px solid var(--cad-divider);
+  border-top: 1px solid var(--mg-divider);
 }
 
 .cad-field-group-title {
@@ -607,58 +611,11 @@
   margin-bottom: 2px;
 }
 
-.bc-axis-lab[data-axis="x"] {
-  color: var(--cad-axis-lab-x);
-}
-
-.bc-axis-lab[data-axis="y"] {
-  color: var(--cad-axis-lab-y);
-}
-
-.bc-axis-lab[data-axis="z"] {
-  color: var(--cad-axis-lab-z);
-}
-
-.mat-assign-hint {
-  font-size: 11px;
-  color: var(--mg-text-muted);
-}
-
-.mat-assign-hint[data-run-reason] {
-  color: var(--mg-danger);
-}
-
-.mat-assign-hint.is-warning {
-  color: var(--mg-warning);
-}
-
-.sim-run-hint-msg {
-  margin-right: 6px;
-}
-
-.sim-fix-go {
-  display: inline-block;
-  margin-right: 8px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--cad-fix-link);
-  font: inherit;
-  font-weight: 600;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-
-.sim-fix-go:hover {
-  background: none;
-  color: var(--cad-fix-link-hover);
-}
-
 .cad-not-applied {
   color: var(--mg-warning);
 }
 
+/* The note line above the foot: reasons, warnings, "Not applied". */
 .cad-panel-note {
   display: flex;
   flex-direction: column;
@@ -666,147 +623,36 @@
   margin-top: 10px;
 }
 
-.mesh-foot-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.mat-panel-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--cad-divider);
-}
-
-.mat-panel-foot.foot-end {
-  justify-content: flex-end;
-}
-
-/* Delete link (.mat-clear-link, style.css:3056-3064). */
-.mat-clear-link {
-  background: none;
-  border: none;
-  border-radius: 0;
-  color: var(--cad-link);
-  cursor: pointer;
-  font-size: 11px;
-  padding: 0;
-}
-
-.mat-clear-link:hover {
-  background: none;
-  text-decoration: underline;
-}
-
-.mat-clear-link.is-danger {
+/* A destructive text action (Delete a constraint): the kit's link, in red. */
+button.mgk-btn.cad-btn-danger,
+button.mgk-btn.cad-btn-danger:hover {
   color: var(--mg-danger);
 }
 
-/* The core sets no font on these buttons, so they keep the browser's own
-   button font (and .js-btn its button text colour); base.css in the frame sets
-   font/color: inherit, so go back to the browser's values, as the core has them. */
-.mat-clear-link,
-.js-btn {
-  font-family: revert;
-  line-height: revert;
-}
-
-/* Done (.js-btn.tree-panel-done, style.css:2450-2459, 3079-3081). */
-.js-btn {
-  align-self: flex-start;
-  font-size: 11px;
-  padding: 4px 10px;
-  border: 1px solid var(--cad-done-border);
-  border-radius: 3px;
-  background: var(--cad-done-bg);
-  color: revert;
-  cursor: pointer;
-}
-
-.js-btn:hover {
-  background: var(--cad-done-bg-hover);
-}
-
-.tree-panel-done {
-  min-width: 72px;
-  align-self: center;
-}
-
-.js-btn.is-disabled {
-  opacity: 0.45;
+/* A button that cannot act stays focusable (aria-disabled) so its reason can be
+   read; it looks as the kit's disabled buttons do. */
+button.mgk-btn[aria-disabled="true"] {
+  opacity: var(--mg-disabled-opacity);
   cursor: not-allowed;
 }
 
-.js-btn.is-disabled:hover {
-  background: var(--cad-done-bg);
+button.mgk-btn--primary[aria-disabled="true"] {
+  border-color: var(--mg-btn-disabled-bg);
+  background: var(--mg-btn-disabled-bg);
 }
 
-/* .fp-btn (style.css:2008-2020); primary on the token blue. */
-.fp-btn {
-  border: 1px solid var(--cad-btn-border);
-  background: var(--cad-card-bg);
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 12px;
-  cursor: pointer;
-  color: var(--mg-text-strong);
+button.mgk-btn--neutral[aria-disabled="true"] {
+  background: var(--mg-btn-neutral-bg);
+  /* The kit's Done keeps the browser's button text colour, which is dimmed when disabled. */
+  color: var(--cad-disabled-button-text);
 }
 
-.fp-btn:hover {
-  background: var(--mg-surface-muted);
+button.mgk-btn--link[aria-disabled="true"]:hover {
+  text-decoration: none;
 }
 
-.fp-btn.is-primary {
-  background: var(--mg-primary);
-  border-color: var(--mg-primary);
-  color: var(--mg-primary-text);
-  font-weight: 600;
-}
-
-.fp-btn.is-disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-/* ---- inputs (style.css:3446-3471) ---- */
-.bc-input {
-  width: 72px;
-  font-size: 12px;
-  padding: 2px 6px;
-  border: 1px solid var(--mg-border);
-  border-radius: 4px;
-  background: var(--mg-bg);
-  color: var(--mg-text);
-}
-
-.bc-select {
-  font-size: 12px;
-  padding: 2px 4px;
-  border: 1px solid var(--mg-border);
-  border-radius: 4px;
-  background: var(--mg-bg);
-  color: var(--mg-text);
-  max-width: 160px;
-}
-
-.bc-value-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.bc-unit-label {
-  color: var(--mg-text);
-  font-weight: 500;
-  min-width: 18px;
-  text-align: left;
-}
-
+/* NumberUnitInput: an expression field is wider than the kit's 72 px, its unit
+   keeps the fields in line, and "= 12.5 mm" or the reason sits after or under it. */
 .nui {
   display: inline-flex;
   flex-direction: column;
@@ -814,8 +660,13 @@
   gap: 2px;
 }
 
-.nui .bc-input {
+.nui .mgk-input {
   width: 96px;
+}
+
+.nui .mgk-unit {
+  min-width: 18px;
+  text-align: left;
 }
 
 .nui-eq {
@@ -825,9 +676,15 @@
   white-space: nowrap;
 }
 
-.nui.is-invalid .bc-input {
+.nui.is-invalid .mgk-input {
   border-color: var(--mg-danger);
   background: var(--mg-danger-bg);
+}
+
+/* Under a reason the row's label stays level with its input (the kit centres it on the input and
+   the reason together: SD review round 2, "−X" sat half a line below its field). */
+.cad-field > .mgk-field:has(.nui-error) {
+  align-items: baseline;
 }
 
 .nui-error {
@@ -863,8 +720,8 @@
   align-items: flex-start;
 }
 
-.cad-params .nui .bc-input,
-.cad-param-expr {
+.cad-params .nui .mgk-input,
+input.mgk-input.cad-param-expr {
   width: 130px;
 }
 
@@ -873,7 +730,7 @@
   text-align: left;
 }
 
-.cad-param-name {
+input.mgk-input.cad-param-name {
   width: 96px;
 }
 
@@ -897,16 +754,11 @@
 
 .cad-param-add td {
   padding-top: 8px;
-  border-top: 1px solid var(--cad-divider);
+  border-top: 1px solid var(--mg-divider);
 }
 
 .cad-param-add-actions td {
   padding-top: 6px;
-}
-
-.cad-empty {
-  font-size: 12px;
-  color: var(--mg-text-muted);
 }
 
 .cad-sr {
@@ -924,13 +776,17 @@
   z-index: 40;
   min-width: 148px;
   padding: 4px;
-  background: var(--cad-card-bg);
+  background: var(--mg-bg);
   border: 1px solid var(--mg-border);
   border-radius: 6px;
   box-shadow: var(--cad-menu-shadow);
   font: 600 12px/1.3 var(--mg-font);
 }
 
+/* The menu takes the keyboard while a disabled item is hovered: no ring on it. */
+.face-ctx-menu:focus {
+  outline: none;
+}
 .face-ctx-menu button {
   display: block;
   width: 100%;
@@ -980,10 +836,10 @@
   max-width: 260px;
   padding: 7px 9px;
   border-radius: 5px;
-  background: var(--cad-tooltip-bg);
-  color: var(--cad-tooltip-fg);
+  background: var(--mg-tooltip-bg);
+  color: var(--mg-tooltip-text);
   font: 400 12px/1.45 var(--mg-font);
-  box-shadow: var(--cad-tip-shadow);
+  box-shadow: var(--mg-shadow-tooltip);
   pointer-events: none;
 }
 
@@ -1006,12 +862,12 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px 8px 12px;
-  background: var(--cad-card-bg);
+  background: var(--mg-bg);
   border: 1px solid var(--mg-border);
   border-radius: 6px;
   box-shadow: var(--mg-shadow-sm);
   font: 600 12px/1.35 "Segoe UI", system-ui, sans-serif;
-  color: var(--cad-chip-fg);
+  color: var(--mg-text-body);
 }
 
 .cad-chip.is-error {
@@ -1031,7 +887,7 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--cad-chip-key);
+  color: var(--mg-text-muted);
 }
 
 .cad-chip-v {
@@ -1044,7 +900,7 @@
 }
 
 .cad-chip-which {
-  color: var(--cad-chip-fg);
+  color: var(--mg-text-body);
 }
 
 /* A long body name ends in an ellipsis (the full name is the tooltip), so the
@@ -1062,7 +918,7 @@
   padding: 0;
   border: none;
   background: none;
-  color: var(--cad-fix-link);
+  color: var(--mg-link-strong);
   font: inherit;
   font-weight: 600;
   text-decoration: underline;
@@ -1071,7 +927,7 @@
 
 .cad-chip-link:hover {
   background: none;
-  color: var(--cad-fix-link-hover);
+  color: var(--mg-link-strong-hover);
 }
 
 .tree-spin {

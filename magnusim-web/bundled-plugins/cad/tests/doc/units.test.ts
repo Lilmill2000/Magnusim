@@ -28,4 +28,13 @@ describe('units (scaffold subset)', () => {
     expect(formatSci(12.3456789)).toBe('12.3457');
     expect(formatSci(2_000_000)).toBe('2.0000e+6');
   });
+
+  it('a value that rounds up to 1e6 reads in exponent form, as the kit does', () => {
+    // 999999.9 has 6 significant digits of 1000000: not "1000000".
+    expect(formatSci(999999.9)).toBe('1.0000e+6');
+    expect(formatSci(-999999.9)).toBe('-1.0000e+6');
+    expect(formatSci(999999.4)).toBe('999999');
+    const s = createUnitsService(() => ({ length: 'mm', angle: 'deg' }));
+    expect(s.format(999999.9, 'length')).toBe('1.0000e+6 mm');
+  });
 });

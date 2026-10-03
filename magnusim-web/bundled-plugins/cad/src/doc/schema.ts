@@ -1,8 +1,8 @@
-// Document schema v1: empty documents, the default view, reading stored
-// documents (validation + migration) and freezing snapshots.
+// Document schema (v2, src/types/doc.ts): empty documents, the default view,
+// reading stored documents (validation + migration from v1) and freezing snapshots.
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { DOC_SCHEMA, type CadDoc, type CadView, type Feature, type Param, type SavedCamera, type Vec3 } from '../types/doc';
+import { DOC_SCHEMA, DOC_SCHEMAS_READ, type CadDoc, type CadView, type Feature, type Param, type SavedCamera, type Vec3 } from '../types/doc';
 import type { DocUnits, LengthUnit } from '../types/units';
 import { newId } from '../lib/ids';
 
@@ -98,7 +98,10 @@ export function readDoc(raw: unknown): CadDoc {
   const d = raw as Partial<CadDoc> & { schema?: unknown };
   if (typeof d.schema !== 'number') throw new DocReadError('the model file has no schema version');
   if (d.schema > DOC_SCHEMA) throw new DocReadError(`it was saved by a newer Magnusim CAD (schema ${d.schema}); this one reads schema ${DOC_SCHEMA}`);
-  if (d.schema !== DOC_SCHEMA) throw new DocReadError(`schema ${d.schema} is not known`);
+  if (!DOC_SCHEMAS_READ.includes(d.schema)) throw new DocReadError(`schema ${d.schema} is not known`);
+  // Migrations, oldest first. 1 -> 2 (P2/P3): no field changes; schema 2 only tells a
+  // schema-1 reader to leave the file alone. Box and Cylinder rows (removed by decision
+  // 2026-10-01) are read as they are: the rebuild marks each "Removed feature".
   const units = d.units && typeof d.units === 'object' ? d.units : ({} as Partial<DocUnits>);
   const doc: CadDoc = {
     schema: DOC_SCHEMA,
@@ -137,6 +140,11 @@ export function readView(raw: unknown, featureCount: number): CadView {
   if (v.planes === 'always') view.planes = 'always';
   const camera = readCamera(v.camera);
   if (camera) view.camera = camera;
+  if (v.sketches && typeof v.sketches === 'object') {
+    const sketches: NonNullable<CadView['sketches']> = {};
+    for (const [id, mode] of Object.entries(v.sketches)) if (mode === 'shown' || mode === 'hidden') sketches[id] = mode;
+    if (Object.keys(sketches).length) view.sketches = sketches;
+  }
   return view;
 }
 

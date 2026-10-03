@@ -7,13 +7,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Kernel } from '../../src/kernel-worker/kernel-api';
-import { call, circle, fingerprint, importStep, loadKernel, rect, REF, rel, tryCall, volume, type R } from './kernel-lib';
+import { call, circle, describeVortex, fingerprint, HAVE_VORTEX, importVortex, itVortex, loadKernel, rect, REF, rel, tryCall, volume, type R } from './kernel-lib';
 
 let k: Kernel;
 let vortex: number;
 beforeAll(async () => {
   k = await loadKernel();
-  vortex = importStep(k, 'vortex-cfd-test.step').shapes[0].id;
+  if (HAVE_VORTEX) vortex = importVortex(k).shapes[0].id;
 });
 
 describe('every shape op reports valid', () => {
@@ -50,7 +50,7 @@ describe('every shape op reports valid', () => {
   });
 });
 
-describe('known defect (P0 verify): Vortex fused with a 200 mm box on its top centre', () => {
+describeVortex('known defect (P0 verify): Vortex fused with a 200 mm box on its top centre', () => {
   const ref = REF.fuse_box200_topcentre;
   let box: number;
   let fuse: R;
@@ -74,7 +74,7 @@ describe('known defect (P0 verify): Vortex fused with a 200 mm box on its top ce
     expect(call(k, 'check', { id: fuse.id })).toMatchObject({ valid: false, problem_counts: fuse.problem_counts });
   });
 
-  it('repair makes it valid, and its volume agrees with the independent Monte Carlo estimate', () => {
+  itVortex('repair makes it valid, and its volume agrees with the independent Monte Carlo estimate', () => {
     const rep = call(k, 'repair', { id: fuse.id });
     expect(rep.valid).toBe(true);
     expect(rep.fixed).toBe(true);
@@ -91,7 +91,7 @@ describe('known defect (P0 verify): Vortex fused with a 200 mm box on its top ce
     expect(rep.history.faces.every((f: R) => f.from.every((s: R) => s.shape === fuse.id))).toBe(true);
   });
 
-  it('a fuzzy value does not fix it (1e-5 .. 1e-2 mm)', () => {
+  itVortex('a fuzzy value does not fix it (1e-5 .. 1e-2 mm)', () => {
     for (const fuzzy of [1e-5, 1e-4, 1e-3, 1e-2]) {
       const r = call(k, 'boolean', { op: 'fuse', targets: [vortex], tools: [box], fuzzy });
       expect(r.fuzzy).toBe(fuzzy);
@@ -99,7 +99,7 @@ describe('known defect (P0 verify): Vortex fused with a 200 mm box on its top ce
     }
   });
 
-  it('the inputs are unchanged by the fuse and the repair', () => {
+  itVortex('the inputs are unchanged by the fuse and the repair', () => {
     const before = fingerprint(k, vortex);
     call(k, 'repair', { id: call(k, 'boolean', { op: 'fuse', targets: [vortex], tools: [box] }).id });
     expect(fingerprint(k, vortex)).toEqual(before);
@@ -132,7 +132,7 @@ describe('boolean options', () => {
     expect(rel(volume(k, full.id), 2000)).toBeLessThan(1e-12);
   });
 
-  it('glue on bodies that really overlap gives a valid but wrong result (why it is off by default)', () => {
+  itVortex('glue on bodies that really overlap gives a valid but wrong result (why it is off by default)', () => {
     const b = REF.fuse_box200_topcentre.box;
     const box = call(k, 'box', { origin: b.origin, dx: b.dx, dy: b.dy, dz: b.dz }).id;
     const glued = call(k, 'boolean', { op: 'fuse', targets: [vortex], tools: [box], glue: 'shift' });
@@ -161,7 +161,7 @@ describe('boolean options', () => {
 });
 
 describe('the reasons', () => {
-  it('name the BRepCheck statuses and where they are', () => {
+  itVortex('name the BRepCheck statuses and where they are', () => {
     const b = REF.fuse_box200_topcentre.box;
     const box = call(k, 'box', { origin: b.origin, dx: b.dx, dy: b.dy, dz: b.dz }).id;
     const common = call(k, 'boolean', { op: 'common', targets: [vortex], tools: [box] });

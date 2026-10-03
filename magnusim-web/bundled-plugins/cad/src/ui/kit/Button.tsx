@@ -1,24 +1,38 @@
-// Buttons (H14 kit names). Variants map to the core recipes:
-//   secondary -> .fp-btn (style.css:2008-2020), primary -> .fp-btn.is-primary,
-//   done -> .js-btn.tree-panel-done (2450-2459, 3079), link -> .mat-clear-link
-//   (3056-3064), danger -> red text button; IconButton -> .mesh-rename (2971-2990).
-// A control that cannot act right now stays focusable with aria-disabled and
-// says why in its tooltip (honest UI: a disabled control gives its reason).
+// Buttons. They are drawn by the host's UI kit (@magnusim/plugin-ui, H14): the
+// kit's classes and stylesheet (/plugin-sdk/plugin-ui.css), which the kit's
+// parity gate holds equal to the core's panel buttons:
+//   secondary -> mgk-btn--secondary (core .fp-btn), primary -> mgk-btn--primary,
+//   done -> mgk-btn--neutral + mgk-panel-done (core .js-btn.tree-panel-done),
+//   link -> mgk-btn--link (core .mat-clear-link), fix -> mgk-btn--fix (core
+//   .sim-fix-go), danger -> the link in red (a destructive text action; the
+//   kit's own 'danger' is a solid red button, which CAD does not use).
+// Why not the kit's <Button> itself: it disables with the native attribute, so a
+// button that cannot act takes no focus and no hover, and its reason could not
+// be read (honest UI: a disabled control says why, by tooltip and by keyboard);
+// it also takes no ref, aria-pressed, key or pointer handlers. So this button
+// stays focusable with aria-disabled and the kit's disabled look (ui.css).
+// IconButton -> .mesh-rename (style.css:2971-2990): the kit has no icon button.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ButtonHTMLAttributes, MouseEvent, ReactNode } from 'react';
 import { Icon } from '../Icon';
 import { useTip, type TipContent } from './Tooltip';
 
-export type ButtonVariant = 'secondary' | 'primary' | 'done' | 'link' | 'danger';
+export type ButtonVariant = 'secondary' | 'primary' | 'done' | 'link' | 'fix' | 'danger';
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
-  secondary: 'fp-btn',
-  primary: 'fp-btn is-primary',
-  done: 'js-btn tree-panel-done',
-  link: 'mat-clear-link',
-  danger: 'mat-clear-link is-danger',
+  secondary: 'mgk-btn mgk-btn--secondary',
+  primary: 'mgk-btn mgk-btn--primary',
+  done: 'mgk-btn mgk-btn--neutral mgk-panel-done',
+  link: 'mgk-btn mgk-btn--link',
+  fix: 'mgk-btn mgk-btn--fix',
+  danger: 'mgk-btn mgk-btn--link cad-btn-danger',
 };
+
+/** The kit classes of a button variant, for buttons made outside React (in-frame dialogs, the view's boxes). */
+export function buttonClass(variant: ButtonVariant): string {
+  return VARIANT_CLASS[variant];
+}
 
 type NativeProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'disabled' | 'type' | 'title'>;
 

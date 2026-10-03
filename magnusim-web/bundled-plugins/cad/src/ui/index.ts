@@ -4,9 +4,7 @@
 // StatusDock (bottom-left chips), Overlays (context menu, tooltip; last).
 //
 // install() registers (see ./commands.ts):
-//   solid.<type>       for each feature type the document registered that has a
-//                      UI panel (P1: box, cylinder); opens the panel via
-//                      doc.beginNew(type)
+//   (feature commands come from their modules: src/features/*)
 //   modify.parameters  the Parameters panel      } only when at least one
 //   edit.undo / redo   Ctrl+Z / Ctrl+Y (+Ctrl+Shift+Z) } feature type exists
 // key bindings Escape (menu, rename, panel, else app:escape), Delete (selected

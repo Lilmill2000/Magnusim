@@ -3,7 +3,8 @@
 //   rebuild  "Rebuilding…" while a rebuild runs (after a short delay, so fast
 //            rebuilds do not flicker), or "Rebuild failed: <why>"
 //   volume   the selected bodies' volume, or the shown bodies' total when none
-//            is selected ("Total of 3 bodies · 24,000 mm³")
+//            is selected ("Total of 3 bodies · 24,000 mm³"); a surface body has none
+//   size     the same bodies' exact bounding box ("100 mm × 100 mm × 20 mm")
 //   save     "Saved" / "Saving…" / "Not saved: <why> · Retry" / "Changed in another tab · Reload"
 //   keys     while the frame has no keyboard focus: the host (API 1.2) gives
 //            the page the keyboard when it opens and after its own dialogs,
@@ -15,7 +16,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { useServices } from '../lib/services';
 import { useStateStore } from '../lib/store';
-import { Chip, formatVolume } from './kit';
+import { Chip, formatQuantity, formatVolume } from './kit';
 import { selectedBodies } from './tree/model';
 
 /**
@@ -68,6 +69,19 @@ function useHasFocus(): boolean {
     };
   }, []);
   return has;
+}
+
+/**
+ * What a Reload after "Changed in another tab" dropped from this tab, in words (review P2/P3
+ * round 2: Reload adopted the other tab's version and this tab's unsaved Cylinder 1 was gone
+ * without a word). A conflict only comes from a refused save, so this tab always had changes.
+ */
+export function reloadWords(before: { features: { id: string; name: string }[] }, after: { features: { id: string }[] }): string {
+  const kept = new Set(after.features.map((f) => f.id));
+  const gone = before.features.filter((f) => !kept.has(f.id)).map((f) => f.name);
+  if (!gone.length) return "Reloaded the other tab's version: this tab's changes that were not saved are gone.";
+  const list = gone.length === 1 ? gone[0] : `${gone.slice(0, -1).join(', ')} and ${gone[gone.length - 1]}`;
+  return `Reloaded the other tab's version: ${list}, made in this tab and not saved, ${gone.length === 1 ? 'is' : 'are'} gone.`;
 }
 
 function useDelayed(flag: boolean, ms: number): boolean {
@@ -144,9 +158,27 @@ export function StatusDock() {
     if (pickedLive.length) which = chosen.length === 1 ? chosen[0].name : `${chosen.length} bodies`;
     else if (hidden) which = `Total of ${chosen.length} shown ${chosen.length === 1 ? 'body' : 'bodies'}`;
     else if (chosen.length > 1) which = `Total of ${chosen.length} bodies`;
+    // One body in several separate solids says so ("Body 1 · 2 pieces"; review P2/P3 round 4: two
+    // cubes meeting at a corner after an Intersect read as one body with no word of it).
+    const pieces = chosen.length === 1 ? (chosen[0].solids ?? 0) : 0;
+    if (pieces > 1) which = `${which ?? chosen[0].name} · ${pieces} pieces`;
     const unmeasured = chosen.filter((b) => b.volume == null);
-    if (chosen.length && !unmeasured.length) {
-      const total = chosen.reduce((sum, b) => sum + (b.volume ?? 0), 0);
+    // A surface body (no solid: an open shell, e.g. an import before knitting) has no volume,
+    // whatever BRepGProp integrates over its faces: it is never counted (P2 integration).
+    const surfaces = chosen.filter((b) => b.solids === 0);
+    if (chosen.length && !unmeasured.length && surfaces.length === chosen.length) {
+      chips.push(
+        <Chip key="volume" chip="volume" k="Volume">
+          {which ? (
+            <span className="cad-chip-which" title={which}>
+              <span className="cad-chip-name">{which}</span> ·{' '}
+            </span>
+          ) : null}
+          <span data-volume-surface="1">{surfaces.length === 1 ? 'Surface body: no volume' : 'Surface bodies: no volume'}</span>
+        </Chip>,
+      );
+    } else if (chosen.length && !unmeasured.length) {
+      const total = chosen.reduce((sum, b) => sum + (b.solids === 0 ? 0 : (b.volume ?? 0)), 0);
       chips.push(
         <Chip key="volume" chip="volume" k="Volume">
           {which ? (
@@ -155,6 +187,7 @@ export function StatusDock() {
             </span>
           ) : null}
           <span data-volume-mm3={String(total)}>{formatVolume(total, d.units)}</span>
+          {surfaces.length ? <span data-volume-surface={String(surfaces.length)}> ({surfaces.length === 1 ? '1 surface body' : `${surfaces.length} surface bodies`} not counted)</span> : null}
         </Chip>,
       );
     } else if (chosen.length) {
@@ -176,12 +209,40 @@ export function StatusDock() {
         </Chip>,
       );
     }
+    // Size: the exact bounding box of the same bodies (proposal §7 P2: "Press-pull +10 mm ->
+    // the bounding-box chip grows by 10 mm"), once they are measured (exact boxes come with it).
+    if (chosen.length && !unmeasured.length) {
+      const box = chosen.reduce<number[] | null>((a, b) => (a ? [Math.min(a[0], b.bbox[0]), Math.min(a[1], b.bbox[1]), Math.min(a[2], b.bbox[2]), Math.max(a[3], b.bbox[3]), Math.max(a[4], b.bbox[4]), Math.max(a[5], b.bbox[5])] : [...b.bbox]), null)!;
+      const size = [box[3] - box[0], box[4] - box[1], box[5] - box[2]];
+      chips.push(
+        <Chip key="size" chip="size" k="Size">
+          <span data-size-mm={size.map((v) => String(v)).join(',')}>{size.map((v) => formatQuantity(v, 'length', d.units)).join(' × ')}</span>
+        </Chip>,
+      );
+    }
   }
 
   const save = d.save;
   if (save.state === 'conflict') {
     chips.push(
-      <Chip key="save" chip="save" state="conflict" kind="warning" actions={[{ label: 'Reload', run: () => void doc.reload().catch((err: unknown) => services.bridge.toast(`Reload failed: ${err instanceof Error ? err.message : String(err)}`, 'error')) }]}>
+      <Chip
+        key="save"
+        chip="save"
+        state="conflict"
+        kind="warning"
+        actions={[
+          {
+            label: 'Reload',
+            run: () => {
+              const before = doc.state.get().doc;
+              void doc
+                .reload()
+                .then(() => services.bridge.toast(reloadWords(before, doc.state.get().doc), 'info'))
+                .catch((err: unknown) => services.bridge.toast(`Reload failed: ${err instanceof Error ? err.message : String(err)}`, 'error'));
+            },
+          },
+        ]}
+      >
         {save.message || 'Changed in another tab'}
       </Chip>,
     );
@@ -204,6 +265,11 @@ export function StatusDock() {
         Saved
       </Chip>,
     );
+  }
+
+  // Modules' chips (sketch mode's "Under defined · 2 DOF"); each renders nothing when it has nothing to say.
+  for (const m of services.modules?.all() ?? []) {
+    (m.chips ?? []).forEach((ModuleChip, i) => chips.push(<ModuleChip key={`m:${m.id}:${i}`} />));
   }
 
   // Last: it comes and goes with the frame's focus, and the chips before it stay put.

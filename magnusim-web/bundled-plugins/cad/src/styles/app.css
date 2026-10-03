@@ -102,10 +102,10 @@ body {
   max-width: 420px;
   margin: 15vh auto 0;
   padding: 18px 20px 16px;
-  background: var(--cad-card-bg);
-  border: 1px solid var(--cad-card-border);
-  border-radius: var(--cad-card-radius);
-  box-shadow: var(--cad-card-shadow);
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-card-border);
+  border-radius: var(--mg-radius-md);
+  box-shadow: var(--mg-shadow-md);
   font-size: 12px;
 }
 

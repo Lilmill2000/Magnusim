@@ -7,16 +7,17 @@
 // Values copied from the core viewer: src/viewport/colors.ts.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { Box3, BufferGeometry, Float32BufferAttribute, LessEqualDepth, Mesh, Plane, Points, Ray, Scene, Sphere, Vector3, WebGLRenderer } from 'three';
+import { Box3, BufferGeometry, Float32BufferAttribute, Group, LessEqualDepth, Mesh, Plane, Points, Ray, Scene, Sphere, Vector3, WebGLRenderer, type Material, type Object3D } from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import type { MeshBVH } from 'three-mesh-bvh';
+import { floatingRects } from '../lib/chrome';
 import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
-import { ORIGIN_PLANES, type BodyId, type OriginPlaneRef, type SavedCamera, type Vec3 } from '../types/doc';
+import { ORIGIN_PLANES, type BodyId, type OriginPlaneRef, type SavedCamera, type Vec2, type Vec3 } from '../types/doc';
 import type { PickResult, SelectionItem, SelectKind } from '../types/selection';
-import type { DisplayMode, PlanesMode, Projection, SectionState, StandardView, ViewportBody, ViewportHandle, ViewportPickEvent, ViewportState, ViewportStats } from '../types/viewport';
+import type { DisplayMode, FrameBox, OverlayLayer, PlanesMode, Projection, SectionState, StandardView, ViewportBody, ViewportHandle, ViewportPickEvent, ViewportPointer, ViewportState, ViewportStats, ViewportTool } from '../types/viewport';
 import { bindViewport } from './bind';
 import { BvhClient } from './bvh';
 import { CameraRig, VIEW_DIRS, type CameraPose } from './camera';
@@ -37,7 +38,7 @@ import {
   parseHex,
   rgb01,
 } from './colors';
-import { BODY_LIT_OFFSET_UNITS, BODY_OFFSET_UNITS, createBodyMaterial, createPointsMaterial, setBodyColor, setClipping, type BodyMaterial } from './materials';
+import { BODY_LIT_OFFSET_UNITS, BODY_OFFSET_UNITS, createBodyMaterial, createPointsMaterial, SEE_THROUGH_OFFSET_UNITS, setBodyColor, setClipping, setSeeThrough, type BodyMaterial } from './materials';
 import { OriginPlanes, type PlaneState } from './origin';
 import { kindsForFilter, pickAt, raycastBodies, rayAt, type PickBody, type PickView } from './pick';
 import { DEFAULT_SECTION, SectionCaps, sectionPlane } from './section';
@@ -90,6 +91,8 @@ interface BodyRec {
   cancelBvh: () => void;
   /** Faces whose hl is not 0 right now. */
   faceHl: Map<number, number>;
+  /** ViewportBody.seeThrough. */
+  seeThrough: boolean;
 }
 
 /** Screen-width lines. An overlay (picked or hovered edges) is pulled towards the camera so it wins over the edge it covers. */
@@ -176,6 +179,77 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   let edgeOverlayKey = '';
   const lineMats = (): LineMaterial[] => [selEdgeMat, hovEdgeMat, ...[...bodies.values()].map((b) => b.edgeMat)];
 
+  // ------------------------------------------------------------ overlays and tools (P2/P3)
+  // Layers: other areas' drawing (sketch geometry, regions, handles, measure
+  // markers) in model coordinates, plus an html element over the canvas each.
+  const layers = new Map<string, { layer: OverlayLayer; group: Group; html: HTMLElement; frame: boolean | (() => FrameBox | null) }>();
+  const frameListeners = new Set<() => void>();
+  /** Fat lines in layers get the viewport's size, as the bodies' edges do. */
+  function layerLineMats(): LineMaterial[] {
+    const out: LineMaterial[] = [];
+    for (const { group } of layers.values()) {
+      group.traverse((o: Object3D) => {
+        const m = (o as Object3D & { material?: Material | Material[] }).material;
+        for (const x of Array.isArray(m) ? m : m ? [m] : []) if (x instanceof LineMaterial) out.push(x);
+      });
+    }
+    return out;
+  }
+  // Tools: newest first; one that consumes a 'down' captures the pointer until 'up'.
+  const tools: ViewportTool[] = [];
+  let captured: { tool: ViewportTool; pointerId: number; x0: number; y0: number; moved: boolean } | null = null;
+  function applyCursor() {
+    const top = tools[tools.length - 1];
+    canvas.style.cursor = top?.cursor ?? '';
+  }
+  function pointerOf(type: ViewportPointer['type'], e: PointerEvent | MouseEvent): ViewportPointer {
+    const p = local(e);
+    const ray = rayAt(pickView(), p.x, p.y);
+    return {
+      type,
+      button: e.button,
+      buttons: e.buttons,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      ctrl: e.ctrlKey || e.metaKey,
+      shift: e.shiftKey,
+      alt: e.altKey,
+      ray: { origin: [ray.origin.x, ray.origin.y, ray.origin.z], dir: [ray.direction.x, ray.direction.y, ray.direction.z] },
+      native: e,
+    };
+  }
+  /** Offer an event to the tools (newest first); true when one consumed it. */
+  function offerTools(type: ViewportPointer['type'], e: PointerEvent | MouseEvent): boolean {
+    if (!tools.length) return false;
+    const ev = pointerOf(type, e);
+    for (let i = tools.length - 1; i >= 0; i--) {
+      const t = tools[i];
+      let used = false;
+      try {
+        used = t.onPointer(ev);
+      } catch (err) {
+        console.error(`[cad] viewport tool ${t.id} failed`, err);
+      }
+      if (used) {
+        if (type === 'down' && 'pointerId' in e) {
+          const p = local(e);
+          captured = { tool: t, pointerId: e.pointerId, x0: p.x, y0: p.y, moved: false };
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+  /** Send an event to the capturing tool only. */
+  function toCaptured(type: ViewportPointer['type'], e: PointerEvent | MouseEvent) {
+    if (!captured) return;
+    try {
+      captured.tool.onPointer(pointerOf(type, e));
+    } catch (err) {
+      console.error(`[cad] viewport tool ${captured.tool.id} failed`, err);
+    }
+  }
+
   // ------------------------------------------------------------ sizes
   let width = 1;
   let height = 1;
@@ -190,7 +264,19 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
 
   // ------------------------------------------------------------ render loop
   let frame = 0;
-  let anim: { from: CameraPose; to: CameraPose; t0: number; ms: number } | null = null;
+  /** A camera transition; `aim` when it frames the part (re-aimed while the panels beside it change). */
+  let anim: { from: CameraPose; to: CameraPose; t0: number; ms: number; aim?: { dir: Vec3 | null; up: Vec3 | null; cover: number } } | null = null;
+  /** The camera is where the last framing put it (fit, a standard view, Look at): no orbit, pan or zoom since. */
+  let framed = true;
+  /**
+   * Owners drawing something other than bodies (sketches): Auto then hides the origin planes as
+   * it does once bodies exist (review P2/P3 round 1: on an empty Part the Top plane's square sat
+   * under the sketch in the same blue as its shaded regions).
+   */
+  const planesBusy = new Set<string>();
+  const planesWanted = new Set<string>();
+  /** The sphere (with the fit margin) the last framing showed. */
+  let framedOn: Sphere | null = null;
 
   function request() {
     if (!frame && !disposed) frame = requestAnimationFrame(render);
@@ -204,6 +290,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const box = new Box3();
     for (const b of bodies.values()) if (visibleOf(b)) box.union(b.data.bounds);
     box.union(origin.box());
+    // What the layers frame is inside the camera's depth range too (a sketch far from the origin).
+    box.union(layersBox());
     return box.getBoundingSphere(new Sphere());
   }
 
@@ -217,10 +305,22 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     return { x: width - 10 - TRIAD_PX, y: 10, s: TRIAD_PX };
   }
 
+  /** Observes the floating chrome's containers once they are there (set where the observers are made). */
+  let watchChrome: () => void = () => {};
+
   function render() {
     frame = 0;
     if (disposed) return;
+    watchChrome();
     if (anim) {
+      // A panel that opens with the move (the Sketch panel with Look at) changes the free part of the view.
+      if (anim.aim) {
+        const cover = coverLeft();
+        if (Math.abs(cover - anim.aim.cover) > 1) {
+          anim.aim.cover = cover;
+          anim.to = poseFor(anim.aim.dir, anim.aim.up, true);
+        }
+      }
       const t = Math.min(1, (performance.now() - anim.t0) / anim.ms);
       const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
       rig.setPose(CameraRig.blend(anim.from, anim.to, e));
@@ -232,6 +332,13 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     }
     const t0 = performance.now();
     drawFrame();
+    for (const fn of [...frameListeners]) {
+      try {
+        fn();
+      } catch (err) {
+        console.error('[cad] frame listener failed', err);
+      }
+    }
     const ms = performance.now() - t0;
     stats.lastFrameMs = ms;
     if (uploadPending) {
@@ -245,8 +352,9 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
 
   function drawFrame() {
     rig.scene.copy(sceneSphere());
-    const cam = rig.apply(width / height);
+    const cam = rig.apply(width / height, width);
     for (const m of lineMats()) m.resolution.set(width, height);
+    if (layers.size) for (const m of layerLineMats()) m.resolution.set(width, height);
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, width, height);
     renderer.clear(true, true, true);
@@ -266,11 +374,13 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     placePlaneLabels();
   }
 
-  /** The origin planes' labels: away from the shown bodies, and never drawn over one. */
+  /** The origin planes' labels: away from the shown bodies, never drawn over one, never under the floating chrome. */
   function placePlaneLabels() {
+    const c = canvas.getBoundingClientRect();
+    const blocked = floatingRects(host.ownerDocument).map((r) => ({ left: r.left - c.left, top: r.top - c.top, right: r.right - c.left, bottom: r.bottom - c.top }));
     const shown = [...bodies.values()].filter(visibleOf);
     if (!shown.length) {
-      origin.placeLabels((p) => projectLocal(p), rig.dop(), { size: { w: width, h: height } });
+      origin.placeLabels((p) => projectLocal(p), rig.dop(), { size: { w: width, h: height }, blocked });
       return;
     }
     const box = new Box3();
@@ -282,19 +392,20 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       size: { w: width, h: height },
       away: box.getCenter(new Vector3()),
       covered: (x, y) => x >= 0 && y >= 0 && x <= width && y <= height && !!raycastBodies(picks, rayAt(view, x, y, ray), view),
+      blocked,
     });
   }
 
   // ------------------------------------------------------------ projection helpers
   function projectLocal(p: Vector3): [number, number] | null {
-    const cam = rig.apply(width / height);
+    const cam = rig.apply(width / height, width);
     const v = p.clone().project(cam);
     if (v.z > 1 || v.z < -1) return null;
     return [((v.x + 1) / 2) * width, ((1 - v.y) / 2) * height];
   }
 
   function pickView(): PickView {
-    const cam = rig.apply(width / height);
+    const cam = rig.apply(width / height, width);
     const s = state.get();
     return {
       camera: cam,
@@ -311,7 +422,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const out: PickBody[] = [];
     for (const id of order) {
       const b = bodies.get(id);
-      if (b && visibleOf(b)) out.push({ id: b.id, data: b.data, bvh: b.bvh, vertices: b.vertices });
+      if (b && visibleOf(b)) out.push({ id: b.id, data: b.data, bvh: b.bvh, vertices: b.vertices, seeThrough: b.seeThrough });
     }
     return out;
   }
@@ -342,6 +453,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const data = buildBodyData(src.tess);
     const color = parseHex(src.color);
     const material = createBodyMaterial(color);
+    if (src.seeThrough) setSeeThrough(material, true);
     const mesh = new Mesh(data.geometry, material);
     mesh.name = `body:${src.id}`;
     mesh.frustumCulled = false;
@@ -369,6 +481,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       bvh: null,
       cancelBvh: () => {},
       faceHl: new Map(),
+      seeThrough: !!src.seeThrough,
     };
     rec.cancelBvh = bvhClient.build(
       data.geometry,
@@ -440,10 +553,38 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     }
   }
 
+  /**
+   * Frame the part again when it changed size many times over (a 1e6 mm box typed back to
+   * 20 mm must not stay a dot), or when it reaches past the framed sphere of a view nobody has
+   * moved since it was framed (review P2/P3 round 1: the Vortex's fluid-domain Box was cut off
+   * until F).
+   */
+  function refitCheck(radiusBefore: number) {
+    const now = framedSphere(true);
+    const r = now.radius;
+    if (radiusBefore > 0 && (r > radiusBefore * REFIT_RATIO || r * REFIT_RATIO < radiusBefore)) fit();
+    else if (framed && framedOn && now.center.distanceTo(framedOn.center) + r > framedOn.radius * 1.001) fit();
+  }
+
+  /**
+   * While a tool holds the pointer (an extrude arrow being dragged), the view does not refit:
+   * the camera moving under a still pointer turns it into another value, and the part ran away
+   * (review P2/P3 round 2: an arrow dragged to the spot of 25 mm stored 77.6 mm, the view
+   * refitting on each live rebuild). The size before the hold; one check runs at the release.
+   */
+  let refitHeld: { radius: number; first: boolean } | null = null;
+  function releaseRefit() {
+    const held = refitHeld;
+    refitHeld = null;
+    if (!held || disposed || ![...bodies.values()].some(visibleOf)) return;
+    if (held.first) fit();
+    else refitCheck(held.radius);
+  }
+
   function setBodies(list: ViewportBody[]) {
     const t0 = performance.now();
     const hadVisible = [...bodies.values()].some(visibleOf);
-    const radiusBefore = hadVisible ? framedSphere().radius : 0;
+    const radiusBefore = hadVisible ? framedSphere(true).radius : 0;
     const seen = new Set<BodyId>();
     let geomChanged = false;
     for (const src of list) {
@@ -461,6 +602,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         old.feature = src.feature;
         old.kbox = src.bbox ?? old.kbox;
         if (src.vertices) old.vertices = src.vertices;
+        if (old.seeThrough !== !!src.seeThrough) {
+          old.seeThrough = !!src.seeThrough;
+          setSeeThrough(old.mesh.material, old.seeThrough);
+        }
         continue;
       }
       if (old) disposeBody(old);
@@ -494,11 +639,18 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     // is a part whose size changed many times over (a 1e6 mm box typed back to
     // 20 mm must not stay a dot).
     const hasVisible = [...bodies.values()].some(visibleOf);
-    if (!hadVisible && hasVisible) fit({ animate: false });
-    else if (hadVisible && hasVisible) {
-      const r = framedSphere().radius;
-      if (radiusBefore > 0 && (r > radiusBefore * REFIT_RATIO || r * REFIT_RATIO < radiusBefore)) fit();
-    }
+    if (captured && hasVisible) {
+      // A tool holds the pointer (an extrude arrow being dragged): the view waits for the release.
+      if (!refitHeld) refitHeld = { radius: radiusBefore, first: !hadVisible };
+    } else if (anim?.aim && hasVisible) {
+      // A framing on its way (a standard view, Look at) frames the bodies as they are now: the
+      // first body's own framing must not stop it (review P2/P3 round 2: the turn to Isometric of
+      // a new extrude was cut short by the framing of the body it made).
+      anim.to = poseFor(anim.aim.dir, anim.aim.up, true);
+      framedOn = framedSphere();
+      framedOn.radius *= FIT_MARGIN;
+    } else if (!hadVisible && hasVisible) fit({ animate: false });
+    else if (hadVisible && hasVisible) refitCheck(radiusBefore);
     // What is under a pointer that has not moved may have changed (a redo that
     // brings a body back hides the origin plane that was hovered): drop the
     // hover first (a hovered plane is drawn, and so pickable), then pick again.
@@ -585,7 +737,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     }
     let changed = origin.setState(planes);
     const anyBody = [...bodies.values()].some(visibleOf);
-    if (origin.setShown(state.get().planes === 'always' || !anyBody)) changed = true;
+    if (origin.setShown(state.get().planes === 'always' || planesWanted.size > 0 || (!anyBody && planesBusy.size === 0))) changed = true;
     for (const b of bodies.values()) {
       const target = want.get(b.id) ?? new Map<number, number>();
       for (const face of [...b.faceHl.keys()]) {
@@ -609,7 +761,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       // where it shares a face plane with another body its highlight wins the
       // depth test instead of fighting it (review round 2: a grey wedge in a
       // selected box top). Its own edges still win over it.
-      const units = bs > 0 || target.size > 0 ? BODY_LIT_OFFSET_UNITS : BODY_OFFSET_UNITS;
+      // A see-through body (an Enclosure) is pushed back further than any: where it shares a face
+      // plane with the part (Zero padding) the part's face wins whole, instead of fighting it in
+      // patches (SD review round 1: grey triangles on the shared faces).
+      const units = b.seeThrough ? SEE_THROUGH_OFFSET_UNITS : bs > 0 || target.size > 0 ? BODY_LIT_OFFSET_UNITS : BODY_OFFSET_UNITS;
       if (b.mesh.material.polygonOffsetUnits !== units) {
         b.mesh.material.polygonOffsetUnits = units;
         changed = true;
@@ -669,14 +824,70 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   }
 
   // ------------------------------------------------------------ camera moves
-  function framedSphere(): Sphere {
-    const box = new Box3();
-    for (const b of bodies.values()) if (visibleOf(b)) box.union(b.data.bounds);
-    if (box.isEmpty()) box.copy(origin.box());
-    return box.getBoundingSphere(new Sphere());
+  /** What a layer draws now (visible objects only: an empty, hidden line set is not at the origin). */
+  function shownBox(group: Group): Box3 {
+    const out = new Box3();
+    group.updateMatrixWorld(true);
+    const walk = (o: Object3D) => {
+      if (!o.visible) return;
+      const g = (o as Object3D & { geometry?: BufferGeometry }).geometry;
+      if (g && typeof g.computeBoundingBox === 'function') {
+        if (!g.boundingBox) g.computeBoundingBox();
+        const b = g.boundingBox;
+        if (b && !b.isEmpty() && Number.isFinite(b.min.x) && Number.isFinite(b.max.x)) out.union(b.clone().applyMatrix4(o.matrixWorld));
+      }
+      for (const c of o.children) walk(c);
+    };
+    walk(group);
+    return out;
   }
 
-  function goTo(to: CameraPose, animate: boolean) {
+  /**
+   * What the layers that count in framing draw now: the shown sketches (`frame: true`) and the
+   * sketch being edited (a function); `shownOnly` leaves the latter out.
+   */
+  function layersBox(shownOnly = false): Box3 {
+    const out = new Box3();
+    for (const l of layers.values()) {
+      if (!l.frame || !l.group.visible || (shownOnly && l.frame !== true)) continue;
+      if (l.frame === true) {
+        out.union(shownBox(l.group));
+        continue;
+      }
+      let b: FrameBox | null = null;
+      try {
+        b = l.frame();
+      } catch (err) {
+        console.error(`[cad] layer ${l.layer.id} could not say what it frames`, err);
+      }
+      if (b && [...b.min, ...b.max].every(Number.isFinite)) out.union(new Box3(new Vector3(...b.min), new Vector3(...b.max)));
+    }
+    return out;
+  }
+
+  /**
+   * What a framing shows: the shown bodies (never one the rollback hides: those are not in the
+   * last setBodies) and the shown sketches (review P2/P3 round 2: a new extrude framed only the
+   * lens it made, cutting off the circles of its sketch); the origin planes' extent only when
+   * neither is drawn. Review round 4: with no body the planes' extent stayed in, and it keeps
+   * the size the last bodies gave it, so a reopened sketch whose later bodies were rolled back
+   * was framed on those bodies (most of it and its dimensions off-screen), and a sketch-only
+   * part's 35 mm sketch sat small in the origin planes' extent.
+   * `forRefit`: what the view's own refits follow (a body growing out of the view), which leaves
+   * out the sketch being edited: the camera never moves by itself while lines are drawn.
+   */
+  function framedSphere(forRefit = false): Sphere {
+    const box = new Box3();
+    for (const b of bodies.values()) if (visibleOf(b)) box.union(b.data.bounds);
+    box.union(layersBox(forRefit));
+    if (box.isEmpty()) box.copy(origin.box());
+    const sphere = box.getBoundingSphere(new Sphere());
+    // One sketch point alone has no size: a small view around it.
+    if (!(sphere.radius > 1e-6)) sphere.radius = 1;
+    return sphere;
+  }
+
+  function goTo(to: CameraPose, animate: boolean, aim?: { dir: Vec3 | null; up: Vec3 | null }) {
     if (!animate) {
       anim = null;
       rig.setPose(to);
@@ -684,9 +895,28 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       request();
       return;
     }
-    anim = { from: rig.pose(), to, t0: performance.now(), ms: TRANSITION_MS };
+    anim = { from: rig.pose(), to, t0: performance.now(), ms: TRANSITION_MS, aim: aim ? { ...aim, cover: coverLeft() } : undefined };
     state.set({ animating: true });
     request();
+  }
+
+  /**
+   * CSS px over the left of the view that floating panels cover (elements marked
+   * [data-view-cover]: the tree column and the open panel). Framing centres the
+   * part in the rest (review P2/P3 round 1: at 1280 px, Look at put the sketch
+   * origin at x = 640 with the tree and the Sketch panel over x < 600). At most
+   * half the view.
+   */
+  function coverLeft(): number {
+    const c = canvas.getBoundingClientRect();
+    if (!(c.width > 0)) return 0;
+    let right = 0;
+    for (const el of host.ownerDocument.querySelectorAll<HTMLElement>('[data-view-cover]')) {
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || r.left - c.left > c.width / 4 || r.bottom <= c.top || r.top >= c.bottom) continue;
+      right = Math.max(right, r.right - c.left);
+    }
+    return Math.min(right, c.width / 2);
   }
 
   function poseFor(dir: Vec3 | null, up: Vec3 | null, frameIt: boolean): CameraPose {
@@ -698,8 +928,43 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       const sphere = framedSphere();
       sphere.radius *= FIT_MARGIN;
       tmp.frame(sphere);
+      tmp.frameBeside(width, height, coverLeft());
     }
     return tmp.pose();
+  }
+
+  /** The direction of the last framing (null: the one the camera had), for reframe(). */
+  let lastAim: { dir: Vec3 | null; up: Vec3 | null } | null = null;
+
+  /**
+   * Frame the shown bodies and sketches (fit, a standard view, Look at). Until the
+   * user moves the camera, the view stays "framed": bodies that grow out of it are
+   * framed again (setBodies).
+   */
+  function frameTo(dir: Vec3 | null, up: Vec3 | null, animate: boolean) {
+    framed = true;
+    lastAim = { dir, up };
+    framedOn = framedSphere();
+    framedOn.radius *= FIT_MARGIN;
+    goTo(poseFor(dir, up, true), animate, { dir, up });
+  }
+
+  /** The last framing again with what is drawn now, while nobody has moved the camera since it. */
+  function reframe(): boolean {
+    if (!framed || !lastAim || disposed) return false;
+    const now = framedSphere();
+    now.radius *= FIT_MARGIN;
+    if (anim?.aim) {
+      anim.to = poseFor(anim.aim.dir, anim.aim.up, true);
+      framedOn = now;
+      request();
+      return true;
+    }
+    // Nothing changed: the camera stays where it is (no transition to the same place).
+    const eps = 1e-6 * Math.max(1, now.radius);
+    if (framedOn && now.center.distanceTo(framedOn.center) <= eps && Math.abs(now.radius - framedOn.radius) <= eps) return true;
+    frameTo(lastAim.dir, lastAim.up, true);
+    return true;
   }
 
   // ------------------------------------------------------------ the camera a Part keeps
@@ -740,12 +1005,12 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
 
   // The pivot and plane sizes follow the geometry (geometryChanged on setBodies / setVisibility), not the view.
   function fit(o: { animate?: boolean } = {}) {
-    goTo(poseFor(null, null, true), o.animate ?? true);
+    frameTo(null, null, o.animate ?? true);
   }
 
   function setView(view: StandardView, o: { animate?: boolean } = {}) {
     const v = VIEW_DIRS[view];
-    goTo(poseFor(v.dir, v.up, true), o.animate ?? true);
+    frameTo(v.dir, v.up, o.animate ?? true);
   }
 
   function lookAt(normal: Vec3, up: Vec3 = [0, 0, 1], o: { animate?: boolean } = {}) {
@@ -753,7 +1018,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     let u: Vec3 = up;
     if (Math.abs(n.dot(new Vector3(...up).normalize())) > 0.99) u = Math.abs(n.z) > 0.9 ? [0, 1, 0] : [0, 0, 1];
     // Framed as a standard view is (review round 2: after Normal to the cylinder was cut off).
-    goTo(poseFor([n.x, n.y, n.z], u, true), o.animate ?? true);
+    frameTo([n.x, n.y, n.z], u, o.animate ?? true);
   }
 
   // ------------------------------------------------------------ pointer input
@@ -813,8 +1078,24 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
 
   function onPointerDown(e: PointerEvent) {
     if (drag) return;
+    if (captured) {
+      toCaptured('down', e);
+      return;
+    }
     if (e.button !== 0 && e.button !== 1 && e.button !== 2) return;
     if (e.button === 1) e.preventDefault();
+    // A tool (sketch tool, a panel's picker, a drag handle) may take the press: then it gets
+    // the whole gesture and nothing orbits or selects.
+    if (offerTools('down', e)) {
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch {
+        /* synthetic events have no capture */
+      }
+      if (state.get().hover) setHover(null);
+      stopAnim();
+      return;
+    }
     const p = local(e);
     drag = { button: e.button, mode: null, x0: p.x, y0: p.y, x: p.x, y: p.y, moved: false, additive: e.ctrlKey || e.metaKey, anchor: null, id: e.pointerId };
     try {
@@ -827,6 +1108,11 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
 
   function onPointerMove(e: PointerEvent) {
     const p = local(e);
+    if (captured && e.pointerId === captured.pointerId) {
+      if (Math.hypot(p.x - captured.x0, p.y - captured.y0) > CLICK_PX) captured.moved = true;
+      toCaptured('move', e);
+      return;
+    }
     // A press whose release never reached us (let go outside the frame without capture): forget it.
     if (drag && e.pointerId === drag.id && e.buttons === 0 && e.pointerType === 'mouse') drag = null;
     if (drag && e.pointerId === drag.id) {
@@ -845,6 +1131,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       const dy = p.y - drag.y;
       drag.x = p.x;
       drag.y = p.y;
+      framed = false;
       if (drag.mode === 'orbit') rig.orbit(dx, dy, width, height);
       else if (drag.mode === 'pan') rig.pan(dx, dy, height);
       else rig.zoomAt(Math.exp((dy * 1.9) / height), drag.anchor);
@@ -852,10 +1139,28 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       return;
     }
     if (e.buttons) return;
+    // Hover: a tool that takes the move (it pre-highlights its own things) stops the model's hover.
+    if (offerTools('move', e)) {
+      if (state.get().hover) setHover(null);
+      return;
+    }
     scheduleHover(p);
   }
 
   function onPointerUp(e: PointerEvent) {
+    if (captured && e.pointerId === captured.pointerId) {
+      const c = captured;
+      toCaptured('up', e);
+      if (!c.moved && e.button === 0) toCaptured('click', e);
+      captured = null;
+      try {
+        canvas.releasePointerCapture(e.pointerId);
+      } catch {
+        /* not captured */
+      }
+      releaseRefit();
+      return;
+    }
     if (!drag || e.pointerId !== drag.id) return;
     const d = drag;
     drag = null;
@@ -871,13 +1176,20 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       return;
     }
     if (d.button === 0) {
+      if (offerTools('click', e)) return;
       emit({ type: 'click', pick: pickLocal(p.x, p.y), additive: d.additive || e.ctrlKey || e.metaKey, clientX: e.clientX, clientY: e.clientY });
     } else if (d.button === 2) {
+      if (offerTools('contextmenu', e)) return;
       emit({ type: 'contextmenu', pick: pickLocal(p.x, p.y), additive: false, clientX: e.clientX, clientY: e.clientY });
     }
   }
 
   function onPointerCancel(e: PointerEvent) {
+    if (captured && e.pointerId === captured.pointerId) {
+      toCaptured('up', e);
+      captured = null;
+      releaseRefit();
+    }
     if (drag && e.pointerId === drag.id) drag = null;
   }
 
@@ -891,6 +1203,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     if (!(f > 0)) return;
     const p = local(e);
     stopAnim();
+    framed = false;
     rig.zoomAt(f, anchorAt(p.x, p.y));
     request();
     scheduleHover(p);
@@ -898,14 +1211,16 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   }
 
   function onDblClick(e: MouseEvent) {
+    if (offerTools('dblclick', e)) return;
     const p = local(e);
     const pick = pickLocal(p.x, p.y);
     if (pick) emit({ type: 'dblclick', pick, additive: false, clientX: e.clientX, clientY: e.clientY });
   }
 
-  function onLeave() {
+  function onLeave(e: PointerEvent) {
     hoverAt = null;
     if (!drag && state.get().hover) setHover(null);
+    if (!captured && tools.length) offerTools('leave', e);
   }
 
   const onContextMenu = (e: Event) => e.preventDefault();
@@ -922,6 +1237,17 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
 
   const ro = new ResizeObserver(resize);
   ro.observe(host);
+  // The floating chrome (the tree column with its panel, the dock) changes size when a panel
+  // opens or a chip comes: a frame then places the plane labels clear of it again.
+  const chromeRo = new ResizeObserver(() => request());
+  let chromeSeen = 0;
+  watchChrome = () => {
+    const els = host.ownerDocument.querySelectorAll('[data-view-cover], [data-cad-dock]');
+    if (els.length === chromeSeen) return;
+    chromeSeen = els.length;
+    for (const el of Array.from(els)) chromeRo.observe(el);
+  };
+  watchChrome();
   resize();
   rig.frame(framedSphere());
 
@@ -980,6 +1306,11 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       lookAt(normal, up, o);
       cameraMoved();
     },
+    reframe() {
+      if (!reframe()) return false;
+      cameraMoved();
+      return true;
+    },
     setDisplay(mode: DisplayMode) {
       if (state.get().display === mode) return;
       state.set({ display: mode });
@@ -1009,6 +1340,20 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       state.set({ planes: mode });
       applyHighlight();
       if (state.get().hover) setHover(null);
+      request();
+    },
+    setPlanesBusy(owner: string, busy: boolean) {
+      if (planesBusy.has(owner) === busy) return;
+      if (busy) planesBusy.add(owner);
+      else planesBusy.delete(owner);
+      applyHighlight();
+      request();
+    },
+    setPlanesWanted(owner: string, wanted: boolean) {
+      if (planesWanted.has(owner) === wanted) return;
+      if (wanted) planesWanted.add(owner);
+      else planesWanted.delete(owner);
+      applyHighlight();
       request();
     },
     sectionRange(plane: OriginPlaneRef) {
@@ -1057,6 +1402,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     camera: savedCamera,
     setCamera(c) {
       stopAnim();
+      // The camera a Part kept is the user's: bodies that grow out of it are not framed again.
+      framed = false;
       if (state.get().projection !== c.projection) {
         rig.setProjection(c.projection);
         state.set({ projection: c.projection });
@@ -1081,6 +1428,87 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       }
       return null;
     },
+    addLayer(id, o = {}) {
+      layers.get(id)?.layer.dispose();
+      const group = new Group();
+      group.name = `layer:${id}`;
+      group.renderOrder = 100 + (o.order ?? 10);
+      const html = document.createElement('div');
+      html.className = 'cad-viewport-layer';
+      html.dataset.layer = id;
+      html.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;';
+      host.appendChild(html);
+      scene.add(group);
+      const layer: OverlayLayer = {
+        id,
+        group,
+        html,
+        setVisible(visible) {
+          group.visible = visible;
+          html.style.display = visible ? '' : 'none';
+          request();
+        },
+        changed: () => request(),
+        dispose() {
+          if (layers.get(id)?.layer !== layer) return;
+          layers.delete(id);
+          scene.remove(group);
+          html.remove();
+          request();
+        },
+      };
+      layers.set(id, { layer, group, html, frame: typeof o.frame === 'function' ? o.frame : !!o.frame });
+      request();
+      return layer;
+    },
+    pushTool(tool) {
+      tools.push(tool);
+      applyCursor();
+      let popped = false;
+      return () => {
+        if (popped) return;
+        popped = true;
+        const i = tools.lastIndexOf(tool);
+        if (i >= 0) tools.splice(i, 1);
+        if (captured?.tool === tool) {
+          captured = null;
+          releaseRefit();
+        }
+        applyCursor();
+      };
+    },
+    rayAt(clientX, clientY) {
+      const r = canvas.getBoundingClientRect();
+      const ray = rayAt(pickView(), clientX - r.left, clientY - r.top);
+      return { origin: [ray.origin.x, ray.origin.y, ray.origin.z], dir: [ray.direction.x, ray.direction.y, ray.direction.z] };
+    },
+    toPlane(clientX, clientY, plane) {
+      const r = canvas.getBoundingClientRect();
+      const ray = rayAt(pickView(), clientX - r.left, clientY - r.top);
+      const n = new Vector3(...plane.normal).normalize();
+      const denom = ray.direction.dot(n);
+      if (Math.abs(denom) < 1e-12) return null;
+      const o = new Vector3(...plane.origin);
+      const t = new Vector3().subVectors(o, ray.origin).dot(n) / denom;
+      const p = ray.at(t, new Vector3());
+      const x = new Vector3(...plane.xdir);
+      x.sub(n.clone().multiplyScalar(x.dot(n))).normalize();
+      const y = new Vector3().crossVectors(n, x);
+      const d = new Vector3().subVectors(p, o);
+      const uv: Vec2 = [d.dot(x), d.dot(y)];
+      return { p: [p.x, p.y, p.z], uv };
+    },
+    pixelSize(at) {
+      rig.apply(width / height, width);
+      return rig.worldPerPixel(new Vector3(...at), height);
+    },
+    onFrame(fn) {
+      frameListeners.add(fn);
+      return () => {
+        frameListeners.delete(fn);
+      };
+    },
+    lineResolution: () => [width, height],
     stats: () => ({ ...stats, bvh: { ...stats.bvh } }),
     measure(frames) {
       const gl = renderer.getContext();
@@ -1101,6 +1529,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       disposed = true;
       unbind();
       ro.disconnect();
+      chromeRo.disconnect();
       if (frame) cancelAnimationFrame(frame);
       if (hoverTimer) clearTimeout(hoverTimer);
       if (cameraTimer) clearTimeout(cameraTimer);
@@ -1116,6 +1545,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       canvas.removeEventListener('auxclick', onAux);
       for (const b of bodies.values()) disposeBody(b);
       bodies.clear();
+      for (const { layer } of [...layers.values()]) layer.dispose();
+      tools.length = 0;
+      captured = null;
+      frameListeners.clear();
       bvhClient.dispose();
       origin.dispose();
       triad.dispose();

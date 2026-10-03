@@ -33,5 +33,39 @@
     "typescript": "5.9.3",
     "vite": "6.4.3",
     "vitest": "5.0.1"
+  },
+  "allowScripts": {
+    "esbuild": true
+  },
+  "magnusim": {
+    "e2eHostPaths": [
+      "src/workspace/",
+      "src/plugin-sdk/",
+      "src/plugin-api/",
+      "src/plugin-ui/",
+      "src/plugins/",
+      "src/app/",
+      "src/chrome/",
+      "src/wizard/",
+      "src/theme/",
+      "src/style.css",
+      "src/workbench/dialogs.ts",
+      "scripts/server/",
+      "scripts/prefs.js",
+      "scripts/e2e-suites.mjs",
+      "python/cfddesk/registry/",
+      "python/cfddesk/worker/",
+      "python/cfddesk/project/scope.py",
+      "python/cfddesk/project/web_writes.py",
+      "python/sdk/",
+      "e2e/support/",
+      "e2e/prepare-projects.js",
+      "e2e/fixtures/",
+      "e2e/toolchain.js",
+      "e2e/global-setup.js",
+      "vite.config.js",
+      "package.json",
+      "package-lock.json"
+    ]
   }
 }

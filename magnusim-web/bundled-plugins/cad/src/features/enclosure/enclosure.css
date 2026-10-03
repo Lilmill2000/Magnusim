@@ -1,0 +1,57 @@
+/*
+ * The Enclosure panel's side rows ("Use padding" before the value field of a
+ * side set on its own, so the field does not move and all the panel's value
+ * fields stay in one column), the percent field's "%" (as wide as a length's
+ * unit, so the fields line up), a side's amber note, and the value beside a
+ * dragged arrow (as the extrude's). Colours only through tokens.
+ * Owner: SD pass (src/features/enclosure/).
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+.cad-enclosure-side {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.cad-enclosure-side .cad-enclosure-reset {
+  margin-left: 0;
+  white-space: nowrap;
+}
+
+.cad-enclosure-side[data-side-source='set'] .mgk-input {
+  font-weight: 600;
+}
+
+/* Percent: the "%" sits where a length's unit sits (in the input's row), as wide as it. */
+.cad-enclosure-pct-unit {
+  display: inline-grid;
+  text-align: left;
+}
+
+.cad-enclosure-pct-unit > span {
+  grid-area: 1 / 1;
+}
+
+.cad-enclosure-pct-width {
+  visibility: hidden;
+}
+
+.cad-enclosure-note {
+  max-width: 100%;
+  margin-top: 2px;
+}
+
+.cad-enclosure-value {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}

@@ -35,6 +35,12 @@ interface Pending {
   timer?: ReturnType<typeof setTimeout>;
 }
 
+function cancelError(op: KernelOp): KernelCallError {
+  const e = callError(`${op} was cancelled`, 'cancelled', op);
+  e.name = 'AbortError';
+  return e;
+}
+
 function callError(message: string, kind: KernelCallErrorKind, op: KernelOp, extra: Partial<KernelCallError> = {}): KernelCallError {
   return Object.assign(new Error(message), { kind, op, ...extra }) as KernelCallError;
 }
@@ -169,7 +175,7 @@ export class WorkerClient {
     void this.respawn(`crash: ${message}`);
   }
 
-  call(op: KernelOp, params: Record<string, unknown>, opts: { bytes?: ArrayBuffer; timeoutMs?: number } = {}) {
+  call(op: KernelOp, params: Record<string, unknown>, opts: { bytes?: ArrayBuffer; timeoutMs?: number; signal?: AbortSignal } = {}) {
     return new Promise<{ result: Record<string, unknown>; buffers: Record<string, ArrayBuffer>; ms: number; wall_ms: number; heap_bytes: number }>((resolve, reject) => {
       if (this.disposed) {
         reject(callError('The kernel is closed', 'restarted', op));
@@ -179,9 +185,55 @@ export class WorkerClient {
         reject(callError(`The kernel is not running: ${this.failed}`, 'boot', op));
         return;
       }
-      this.queue.push({ id: ++this.nextId, op, params, bytes: opts.bytes ?? null, timeoutMs: opts.timeoutMs ?? this.opts.timeoutFor(op), resolve, reject });
+      const signal = opts.signal;
+      if (signal?.aborted) {
+        reject(cancelError(op));
+        return;
+      }
+      let off = () => {};
+      const req: Pending = {
+        id: ++this.nextId,
+        op,
+        params,
+        bytes: opts.bytes ?? null,
+        timeoutMs: opts.timeoutMs ?? this.opts.timeoutFor(op),
+        resolve: (v) => {
+          off();
+          resolve(v);
+        },
+        reject: (e) => {
+          off();
+          reject(e);
+        },
+      };
+      if (signal) {
+        const onAbort = () => this.cancel(req);
+        signal.addEventListener('abort', onAbort, { once: true });
+        off = () => signal.removeEventListener('abort', onAbort);
+      }
+      this.queue.push(req);
       this.pump();
     });
+  }
+
+  /**
+   * The caller gave up on `req` (its AbortSignal): a queued call is dropped; the call in
+   * flight cannot be interrupted inside the worker, so the worker is terminated and a fresh
+   * one started (review P2/P3 round 1: an import's Cancel left the kernel reading a 113 MB
+   * file, and the next action waited 36 s for it).
+   */
+  private cancel(req: Pending) {
+    const i = this.queue.indexOf(req);
+    if (i >= 0) {
+      this.queue.splice(i, 1);
+      req.reject(cancelError(req.op));
+      return;
+    }
+    if (this.inflight !== req) return;
+    if (req.timer) clearTimeout(req.timer);
+    this.inflight = null;
+    req.reject(cancelError(req.op));
+    void this.respawn(`${req.op} was cancelled`);
   }
 
   private pump() {

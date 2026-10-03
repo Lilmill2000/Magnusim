@@ -54,6 +54,9 @@ bundled-plugins/cad/kernel-build/build.sh --clean    # the facade from nothing
 CAD_BUILD_ROOT=/somewhere/else kernel-build/build.sh # work folder (default ~/cad-build)
 kernel-build/build.sh --out /tmp/k                   # build elsewhere to compare
 kernel-build/repro-check.sh --against-shipped        # two clean builds, compared with each other and with workspace/kernel
+
+# Windows (the plugin's Node): the same build.sh in WSL, holding .cache/build.lock
+node kernel-build/ship.mjs                           # queued with e2e runs; replaces workspace/kernel between them
 ```
 
 - The work folder holds emsdk, the OCCT source, the OCCT builds and the
@@ -68,15 +71,22 @@ kernel-build/repro-check.sh --against-shipped        # two clean builds, compare
   renames), so a page that starts a worker meanwhile does not load halves of
   two builds.
 
-## Reproducibility (measured 2026-09-30)
+## Reproducibility (measured 2026-09-30; API 3 build 2026-10-01)
 
 - `repro-check.sh --against-shipped`: two facade builds from clean object
-  folders are byte-identical to each other and to the shipped files
-  (`mk32.wasm` 20,821,079 bytes, sha256 `0fd2becb31458d22…`; `mk32.mjs` sha256
-  `aad011be5d356a6a…`).
+  folders are byte-identical to each other and to the shipped files. API 3
+  (2026-10-01, 1m20s for both): `mk32.wasm` 21,262,262 bytes, sha256
+  `030265d3a8cc6ebb…`; `mk32.mjs` sha256 `aad011be5d356a6a…` (unchanged). P1.5:
+  `mk32.wasm` 20,821,079 bytes, sha256 `0fd2becb31458d22…`.
 - OCCT rebuilt from nothing (230 s): all 27 static libraries identical to the
   first build, and the facade linked against them identical again.
 - No `/home/...` or other build-machine path is left in `mk32.wasm`.
+- `build.sh` waits (bounded, `CAD_KERNEL_LOCK_WAIT`, default 900 s) while an e2e
+  run holds `.cache/build.lock` before it replaces the shipped pair, so a running
+  e2e suite never gets a new kernel mid-run; `CAD_KERNEL_IGNORE_BUILD_LOCK=1` for a
+  lock left by a stopped run. With e2e runs queued the lock may never be free for
+  long: `node kernel-build/ship.mjs` takes its turn in the queue (it holds the lock
+  the way `scripts/e2e.mjs` does) and runs build.sh inside it.
 
 ## Tests
 

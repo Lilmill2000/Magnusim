@@ -7,11 +7,13 @@
 // host asks first (host API 1.2), and once it lands Back just leaves.
 // The model goes through ws.files (etag + ifMatch); ws.data reads the same file.
 // Document edits are driven through the document service (the panels are
-// UI-SHELL's own e2e); what is asserted is what the user and the host see:
-// the chips, the stored files, the rebuilt volume.
+// UI-SHELL's own e2e): solids are sketched and extruded (helpers.ts addSketch /
+// addSolid; there is no Box or Cylinder since decision 2026-10-01); what is
+// asserted is what the user and the host see: the chips, the stored files, the
+// rebuilt volume.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Page } from '@playwright/test';
-import { answerLeave, baseUrl, expectLeaveQuestion, headerTakesKeyboard, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, answerLeave, baseUrl, expectLeaveQuestion, headerTakesKeyboard, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 
 type Snap = {
   status: string;
@@ -40,16 +42,6 @@ async function snap(frame: Frame): Promise<Snap> {
   });
 }
 
-/** Add a feature through the document service (a panel session committed at once). */
-async function addFeature(frame: Frame, type: 'box' | 'cylinder', init: Record<string, unknown> = {}) {
-  await frame.evaluate(
-    ([t, i]) => {
-      const doc = (window as unknown as { __CAD__: { services: { doc: { beginNew(t: string, i: unknown): { commit(): void } } } } }).__CAD__.services.doc;
-      doc.beginNew(t as string, i).commit();
-    },
-    [type, init] as const,
-  );
-}
 
 async function studyRecord(request: APIRequestContext, projectId: string, studyId: string) {
   const q = new URLSearchParams({ project_id: projectId, plugin: 'cad', study_id: studyId });
@@ -102,17 +94,17 @@ test('cad:p1-doc-storage the model lives outside the study record, autosaves and
   const hostFields = ['created_at', 'doc', 'id', 'kind', 'plugin', 'plugin_name', 'plugin_version', 'rev', 'schema_version', 'title', 'updated_at'];
   expect(Object.keys(rec).sort()).toEqual(hostFields);
   const empty = await pluginFile(request, projectId, `studies/${studyId}/model.json`);
-  expect(empty).toMatchObject({ format: 'magnusim-cad/model', doc: { schema: 1, units: { length: 'mm', angle: 'deg' }, features: [] } });
+  expect(empty).toMatchObject({ format: 'magnusim-cad/model', doc: { schema: 2, units: { length: 'mm', angle: 'deg' }, features: [] } });
   // Written through ws.files: no version token inside (the host's etag is its version).
   expect(empty!.etag).toBeUndefined();
   const stat = await request.get(`${baseUrl()}/api/plugin-files/stat?${new URLSearchParams({ project_id: projectId, plugin: 'cad', rel: `studies/${studyId}/model.json` })}`);
   expect(stat.ok()).toBe(true);
   expect((await stat.json()).file).toMatchObject({ rel: `studies/${studyId}/model.json`, etag: expect.any(String) });
 
-  // A box and a cylinder cut through it, built by the real kernel worker.
-  await addFeature(frame, 'box');
-  await addFeature(frame, 'cylinder', { op: 'cut', creates: null, origin: ['10', '10', '-5'], diameter: '10 mm', height: '40 mm' });
-  const s1 = await waitFor(frame, (s) => saved(s) && s.features.length === 2 && s.bodies.length === 1, 'the cut to build and save');
+  // A 20 mm cube and a Ø10 circle cut through it (from z = -5, 40 long), sketched and extruded by the real kernel worker.
+  await addSolid(page);
+  await addSolid(page, { circle: true, at: [10, 10, -5], size: [10, 40], op: 'cut' });
+  const s1 = await waitFor(frame, (s) => saved(s) && s.features.length === 4 && s.bodies.length === 1, 'the cut to build and save');
   const expected = 8000 - Math.PI * 25 * 20;
   expect(s1.bodies[0].valid).toBe(true);
   expect(s1.bodies[0].volume!).toBeCloseTo(expected, 6);
@@ -125,7 +117,7 @@ test('cad:p1-doc-storage the model lives outside the study record, autosaves and
 
   // Stored beside study.json; the record still holds only the pointer.
   const model = await pluginFile(request, projectId, `studies/${studyId}/model.json`);
-  expect(model!.doc.features.map((f: { name: string }) => f.name)).toEqual(['Box 1', 'Cylinder 1']);
+  expect(model!.doc.features.map((f: { name: string }) => f.name)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
   expect(Object.keys(await studyRecord(request, projectId, studyId)).sort()).toEqual(hostFields);
 
   // Back and reopen: the same part, rebuilt.
@@ -135,7 +127,7 @@ test('cad:p1-doc-storage the model lives outside the study record, autosaves and
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
   frame = workspaceFrame(page);
   const s2 = await waitFor(frame, (s) => s.rebuild === 'done' && s.bodies.length === 1, 'the reopened part to rebuild');
-  expect(s2.features).toEqual(['Box 1', 'Cylinder 1']);
+  expect(s2.features).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
   expect(s2.bodies[0].volume!).toBeCloseTo(expected, 6);
 
   expect(seen.csp, 'CSP violations').toEqual([]);
@@ -157,23 +149,23 @@ test('cad:p1-doc-conflict an edit from a second tab says "Changed in another tab
   await page.locator('#pm-input').fill('Housing');
   await page.locator('#pm-confirm').click();
   await expect(page.locator('#workspace-overlay [data-ws-crumb]')).toHaveText(/Housing/);
-  await addFeature(a, 'box');
-  await waitFor(a, (s) => saved(s) && s.features.length === 1, 'tab A to save after the rename');
+  await addSolid(page);
+  await waitFor(a, (s) => saved(s) && s.features.length === 2, 'tab A to save after the rename');
   await expect(aLoc.locator('[data-chip="save"]')).toHaveText('Saved');
 
-  // A second tab opens the same Part (it sees Box 1).
+  // A second tab opens the same Part (it sees Sketch 1 and Extrude 1).
   const page2 = await context.newPage();
   const seen2 = await watchPage(page2);
   await page2.goto(page.url());
   const bLoc = page2.frameLocator('#workspace-frame');
   await expect(bLoc.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready', { timeout: 60_000 });
   const b = workspaceFrame(page2);
-  await waitFor(b, (s) => s.features.length === 1 && s.rebuild === 'done', 'tab B to load');
+  await waitFor(b, (s) => s.features.length === 2 && s.rebuild === 'done', 'tab B to load');
 
-  // Tab A edits and saves; tab B, not knowing, edits too: B's save is refused.
-  await addFeature(a, 'box', { origin: ['50', '0', '0'] });
-  await waitFor(a, (s) => saved(s) && s.features.length === 2, 'tab A to save its second box');
-  await addFeature(b, 'cylinder', { origin: ['0', '60', '0'] });
+  // Tab A edits and saves; tab B, not knowing, edits too (a sketch): B's save is refused.
+  await addSolid(page, { at: [50, 0, 0] });
+  await waitFor(a, (s) => saved(s) && s.features.length === 4, 'tab A to save its second block');
+  await addSketch(page2, { circle: true, at: [0, 60], size: [20] });
   await waitFor(b, (s) => s.save === 'conflict', 'tab B to see the conflict');
   const chip = bLoc.locator('[data-chip="save"][data-state="conflict"]');
   await expect(chip).toBeVisible();
@@ -181,7 +173,7 @@ test('cad:p1-doc-conflict an edit from a second tab says "Changed in another tab
   // Tab A's model is intact.
   const studyId = studyIdOf(page);
   const model = await pluginFile(request, projectId, `studies/${studyId}/model.json`);
-  expect(model!.doc.features.map((f: { name: string }) => f.name)).toEqual(['Box 1', 'Box 2']);
+  expect(model!.doc.features.map((f: { name: string }) => f.name)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
 
   // Reload adopts A's version and B can edit again. Tab B's header takes the
   // keyboard from its frame, so the keys hint shows; the Reload click is the one that
@@ -191,11 +183,11 @@ test('cad:p1-doc-conflict an edit from a second tab says "Changed in another tab
   await expect(bLoc.locator('[data-chip="keys"]')).toBeVisible();
   await chip.getByRole('button', { name: 'Reload' }).click();
   await expect(bLoc.locator('[data-chip="keys"]')).toHaveCount(0);
-  const sb = await waitFor(b, (s) => s.save === 'saved' && s.features.length === 2 && s.rebuild === 'done', 'tab B to reload');
-  expect(sb.features).toEqual(['Box 1', 'Box 2']);
+  const sb = await waitFor(b, (s) => s.save === 'saved' && s.features.length === 4 && s.rebuild === 'done', 'tab B to reload');
+  expect(sb.features).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
   await expect(bLoc.locator('[data-chip="save"][data-state="conflict"]')).toHaveCount(0);
-  await addFeature(b, 'cylinder', { origin: ['0', '60', '0'] });
-  await waitFor(b, (s) => saved(s) && s.features.length === 3, 'tab B to save after reload');
+  await addSketch(page2, { circle: true, at: [0, 60], size: [20] });
+  await waitFor(b, (s) => saved(s) && s.features.length === 5, 'tab B to save after reload');
 
   expect(seen.csp).toEqual([]);
   expect(seen.errors).toEqual([]);
@@ -213,9 +205,9 @@ test('cad:p1-doc-respawn a kernel stopped by its watchdog respawns and the part 
   const loc = await partOpened(page);
   await expect(loc.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
   const frame = workspaceFrame(page);
-  await addFeature(frame, 'box');
-  await addFeature(frame, 'cylinder', { op: 'cut', creates: null, origin: ['10', '10', '-5'], diameter: '10 mm', height: '40 mm' });
-  const s1 = await waitFor(frame, (s) => saved(s) && s.bodies.length === 1, 'the cut to build');
+  await addSolid(page);
+  await addSolid(page, { circle: true, at: [10, 10, -5], size: [10, 40], op: 'cut' });
+  const s1 = await waitFor(frame, (s) => saved(s) && s.features.length === 4 && s.bodies.length === 1, 'the cut to build');
 
   // A call stopped by its wall-clock watchdog: the worker is terminated and respawned.
   const err = await frame.evaluate(async () => {
@@ -252,8 +244,9 @@ test('cad:p1-doc-back-quick Back right after two edits loses neither: the host a
   const hold = await holdCommits(page);
   const fb = (await page.locator('#workspace-frame').boundingBox())!;
   await page.mouse.move(fb.x + fb.width / 2, fb.y + fb.height / 2);
-  await addFeature(frame, 'box');
-  await addFeature(frame, 'cylinder');
+  // Two edits: two sketches.
+  await addSketch(page);
+  await addSketch(page, { circle: true, at: [50, 0], size: [20] });
   await expect.poll(() => hold.held()).toBe(1);
   const back = (await page.locator('#workspace-overlay [data-ws-back]').boundingBox())!;
   await page.mouse.move(back.x + back.width / 2, back.y + back.height / 2, { steps: 10 });
@@ -266,5 +259,5 @@ test('cad:p1-doc-back-quick Back right after two edits loses neither: the host a
   await page.locator('#workspace-overlay [data-ws-back]').click();
   await expect(page.locator('#workspace-overlay')).toBeHidden();
   const model = await pluginFile(request, projectId, `studies/${studyId}/model.json`);
-  expect(model!.doc.features.map((f: { name: string }) => f.name)).toEqual(['Box 1', 'Cylinder 1']);
+  expect(model!.doc.features.map((f: { name: string }) => f.name)).toEqual(['Sketch 1', 'Sketch 2']);
 });

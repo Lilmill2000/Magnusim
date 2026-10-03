@@ -211,3 +211,217 @@ export async function answerLeave(page: Page, leave: boolean): Promise<void> {
   await page.locator(leave ? '#cf-confirm' : '#cf-cancel').click();
   await expect(page.locator('#modal-confirm')).toBeHidden();
 }
+
+// ---- SD pass (decision 2026-10-01): solids come only from sketches (and STEP)
+
+/** A sketch with one closed profile: a rectangle on Top, or a circle on Top (axis Z) or on the Right plane (axis X). */
+export interface ProfileSpec {
+  /** Rectangle: its corner (x, y) on Top. Circle on Top: its centre (x, y); on the Right plane: its centre (y, z). Default the origin. */
+  at?: [number, number];
+  /** Rectangle: [W, D] (default 20 x 20). Circle: its diameter (default 20). */
+  size?: number[];
+  circle?: boolean;
+  /** The plane: 'top' (default) or, for a circle, 'right' (a cylinder along X). */
+  plane?: 'top' | 'right';
+}
+
+/** What a solid made from a sketch is: a block (rectangle) or a cylinder (circle). */
+export interface SolidSpec {
+  /** A block's corner (x, y, z), or a cylinder's base centre. Default the origin. */
+  at?: [number, number, number];
+  /** A block's [W, D, H] (default 20 mm each), or a cylinder's [diameter, height]. */
+  size?: number[];
+  /** A circle (a cylinder) instead of a rectangle. */
+  circle?: boolean;
+  /** A cylinder along X (a circle on the Right plane, extruded from x = at[0]) instead of Z. */
+  axis?: 'x' | 'z';
+  op?: 'new' | 'join' | 'cut' | 'intersect';
+  scope?: string[];
+}
+
+export interface MadeSolid {
+  sketch: string;
+  extrude: string;
+  /** The extrude's body (op new), else null. */
+  body: string | null;
+}
+
+type CadDocApi = {
+  beginNew(t: string, init?: unknown): { feature: string; commit(): void };
+  state: { get(): { doc: { features: { id: string; creates?: string | null }[] }; rebuild: { status: string; features: Record<string, { state: string } | undefined>; bodies: { id: string }[]; outputs: Record<string, { type: string; regions?: { key: string; entities: string[]; sample: [number, number] }[] }> } } };
+};
+
+/**
+ * Sketch N with one closed profile, fully defined by its relations and
+ * dimensions (no "(-)" in the tree), set up through the document (the sketch
+ * tools themselves are the P3 specs'), once its profile is built. Returns its
+ * id. One undo step.
+ */
+export async function addSketch(page: Page, spec: ProfileSpec = {}): Promise<string> {
+  return workspaceFrame(page).evaluate(async (s: ProfileSpec) => {
+    const doc = (window as unknown as { __CAD__: { services: { doc: CadDocApi } } }).__CAD__.services.doc;
+    const [x, y] = s.at ?? [0, 0];
+    const dim = (refs: string[], kind: string, v: number, id: string) => ({ id, kind, refs, expr: `${v} mm`, driving: true });
+    const pos = (pt: string, c: string, v: [number, number]) => (v[0] === 0 && v[1] === 0 ? [{ id: c, kind: 'coincident', refs: [pt, 'origin'] }] : [dim(['origin', pt], 'distance_x', v[0], `${c}x`), dim(['origin', pt], 'distance_y', v[1], `${c}y`)]);
+    const values = (cs: { id: string; expr?: string }[]) => Object.fromEntries(cs.filter((c) => c.expr).map((c) => [c.id, Number(String(c.expr).replace(' mm', ''))]));
+    const frames = {
+      top: { plane: 'origin:top', frame: { origin: [0, 0, 0], normal: [0, 0, 1], xdir: [1, 0, 0] } },
+      right: { plane: 'origin:right', frame: { origin: [0, 0, 0], normal: [1, 0, 0], xdir: [0, 1, 0] } },
+    };
+    const pl = frames[s.plane ?? 'top'];
+    let init: Record<string, unknown>;
+    if (s.circle) {
+      const dia = s.size?.[0] ?? 20;
+      const cs = [...pos('pt_1', 'c_p', [x, y]), dim(['e_1'], 'diameter', dia, 'c_d')];
+      init = { points: { pt_1: [x, y] }, entities: [{ id: 'e_1', kind: 'circle', c: 'pt_1', r: dia / 2 }], constraints: cs, solved: { values: values(cs), dof: 0, state: 'fully' } };
+    } else {
+      const [w, d] = s.size ?? [20, 20];
+      const cs = [
+        { id: 'c_h1', kind: 'horizontal', refs: ['e_1'] },
+        { id: 'c_v2', kind: 'vertical', refs: ['e_2'] },
+        { id: 'c_h3', kind: 'horizontal', refs: ['e_3'] },
+        { id: 'c_v4', kind: 'vertical', refs: ['e_4'] },
+        ...pos('pt_1', 'c_p', [x, y]),
+        dim(['e_1'], 'distance', w, 'c_w'),
+        dim(['e_2'], 'distance', d, 'c_d'),
+      ];
+      init = {
+        points: { pt_1: [x, y], pt_2: [x + w, y], pt_3: [x + w, y + d], pt_4: [x, y + d] },
+        entities: [
+          { id: 'e_1', kind: 'line', p: ['pt_1', 'pt_2'] },
+          { id: 'e_2', kind: 'line', p: ['pt_2', 'pt_3'] },
+          { id: 'e_3', kind: 'line', p: ['pt_3', 'pt_4'] },
+          { id: 'e_4', kind: 'line', p: ['pt_4', 'pt_1'] },
+        ],
+        constraints: cs,
+        solved: { values: values(cs), dof: 0, state: 'fully' },
+      };
+    }
+    // A sketch session turns the camera to its plane (sketch mode's Look at), as the user's Sketch
+    // does; a sketch set up here as "made earlier" must leave the camera (and whether the view is
+    // still the framed one) as it was (SD review round 1: the turn made later clicks and pixels miss).
+    const handle = (window as unknown as { __CAD__: { services: { viewport: { get(): { handle: { lookAt: (...a: unknown[]) => void } | null } } } } }).__CAD__.services.viewport.get().handle;
+    const lookAt = handle?.lookAt;
+    if (handle) handle.lookAt = () => {};
+    let sk: { feature: string; commit(): void };
+    try {
+      sk = doc.beginNew('sketch', { support: { kind: 'plane', plane: pl.plane }, plane: pl.frame, ...init });
+      sk.commit();
+    } finally {
+      if (handle && lookAt) handle.lookAt = lookAt;
+    }
+    for (let i = 0; i < 400; i++) {
+      const o = doc.state.get().rebuild.outputs[sk.feature];
+      if (o && o.type === 'sketch' && o.regions?.length) return sk.feature;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error('the sketch made no profile');
+  }, spec);
+}
+
+/**
+ * A solid as the app makes it: addSketch (a rectangle, or a circle) then Extrude N
+ * of its one profile, through the document. The span [z0, z0 + H] along the
+ * sketch normal is a blind extrude when z0 is 0, else Two sides (z0 + H along
+ * the normal, -z0 against it). Two undo steps. It returns once the extrude is
+ * built (its body drawn) and the view is still: a point projected right after it
+ * is where the next click lands (SD review round 1: a click projected before the
+ * first body's framing hit an edge).
+ */
+export async function addSolid(page: Page, spec: SolidSpec = {}): Promise<MadeSolid> {
+  const [x, y, z] = spec.at ?? [0, 0, 0];
+  const size = spec.size ?? (spec.circle ? [20, 20] : [20, 20, 20]);
+  const alongX = spec.circle && spec.axis === 'x';
+  const sketch = await addSketch(page, alongX ? { circle: true, plane: 'right', at: [y, z], size: [size[0]] } : { circle: spec.circle, at: [x, y], size: spec.circle ? [size[0]] : [size[0], size[1]] });
+  const z0 = alongX ? x : z;
+  const h = spec.circle ? size[1] : size[2];
+  const made = await workspaceFrame(page).evaluate(
+    ({ sketch, z0, h, op, scope }) => {
+      const doc = (window as unknown as { __CAD__: { services: { doc: CadDocApi } } }).__CAD__.services.doc;
+      const region = doc.state.get().rebuild.outputs[sketch].regions![0];
+      const extent = z0 === 0 ? { kind: 'blind', distance: `${h} mm` } : { kind: 'two', distance: `${z0 + h} mm`, distance2: `${-z0} mm` };
+      const ex = doc.beginNew('extrude', { profiles: [{ sketch, region: region.key, entities: region.entities, sample: region.sample }], extent, op, ...(op === 'new' ? {} : { creates: null, scope }) });
+      ex.commit();
+      const made = doc.state.get().doc.features.find((g) => g.id === ex.feature);
+      return { sketch, extrude: ex.feature, body: made?.creates ?? null };
+    },
+    { sketch, z0, h, op: spec.op ?? 'new', scope: spec.scope ?? [] },
+  );
+  // Built (the rebuild done with the extrude in it), then a still view (the first body is framed).
+  await expect
+    .poll(
+      () =>
+        workspaceFrame(page).evaluate((id) => {
+          const r = (window as unknown as { __CAD__: { services: { doc: CadDocApi } } }).__CAD__.services.doc.state.get().rebuild;
+          return r.status === 'done' && !!r.features[id];
+        }, made.extrude),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  await viewAndSketchIdle(page);
+  return made;
+}
+
+/** Page coordinates of a model point (the viewport's own projection plus the frame's offset). */
+export async function modelOnPage(page: Page, p: [number, number, number]): Promise<[number, number]> {
+  const xy = await workspaceFrame(page).evaluate((q) => (window as unknown as { __CAD__: { services: { viewport: { get(): { handle: { project(p: number[]): [number, number] | null } } } } } }).__CAD__.services.viewport.get().handle.project(q), p);
+  expect(xy, `model point ${p} is not on screen`).not.toBeNull();
+  const box = (await page.locator('#workspace-frame').boundingBox())!;
+  return [box.x + xy![0], box.y + xy![1]];
+}
+
+/** No view transition runs, and sketch mode has stored every edit. */
+async function viewAndSketchIdle(page: Page) {
+  const f = workspaceFrame(page);
+  await expect.poll(() => f.evaluate(() => (window as unknown as { __CAD__: { services: { viewport: { get(): { handle: { state: { get(): { animating: boolean } } } | null } } } } }).__CAD__.services.viewport.get().handle?.state.get().animating ?? true)).toBe(false);
+  await f.evaluate(async () => {
+    await (window as unknown as { __CAD__: { services: { apis: { get(): { sketch?: { idle?(): Promise<void> } | null } } } } }).__CAD__.services.apis.get().sketch?.idle?.();
+  });
+}
+
+/**
+ * A W x D rectangle from the origin, drawn as a user draws it: the Top plane,
+ * Sketch, R, a click on the origin, W Tab D Enter, Finish sketch. It ends in
+ * model mode (the sketch fully defined: the typed sizes are its dimensions).
+ */
+export async function drawRectangle(page: Page, frame: FrameLocator, w: number, d: number): Promise<void> {
+  await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
+  await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
+  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  await viewAndSketchIdle(page);
+  await page.keyboard.press('r');
+  await expect(frame.locator('[data-cad-toolbar] [data-command="sketch.rectangle"]')).toHaveClass(/is-active/);
+  const o = await modelOnPage(page, [0, 0, 0]);
+  await page.mouse.click(o[0], o[1]);
+  const c = await modelOnPage(page, [w * 0.8, d * 0.7, 0]);
+  await page.mouse.move(c[0], c[1]);
+  await expect(frame.locator('[data-sketch-box="width"]')).toBeVisible();
+  await page.keyboard.type(String(w));
+  await page.keyboard.press('Tab');
+  await page.keyboard.type(String(d));
+  await page.keyboard.press('Enter');
+  await viewAndSketchIdle(page);
+  await page.keyboard.press('Escape');
+  await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
+  await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+}
+
+/**
+ * A W x D x H block drawn as a user draws it: drawRectangle, then Extrude with H
+ * typed and Done. It ends in model mode with the panel closed.
+ */
+export async function drawBlock(page: Page, frame: FrameLocator, w: number, d: number, h: number): Promise<void> {
+  await drawRectangle(page, frame, w, d);
+  await frame.locator('[data-cad-toolbar] [data-command="solid.extrude"]').click();
+  const panel = frame.locator('[data-cad-panel="feature"]');
+  await expect(panel.locator('[data-profile-list] [data-profile]')).toHaveCount(1);
+  const dist = panel.locator('.nui[data-field="distance"] input');
+  await dist.fill(String(h));
+  await dist.press('Enter');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-error]')).toHaveCount(0);
+  await panel.locator('[data-panel-done]').click();
+  await expect(panel).toHaveCount(0);
+}
+
+/** History labels as the tree shows them, in order. */
+export const historyNames = (frame: FrameLocator) => frame.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl');

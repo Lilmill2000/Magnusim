@@ -126,11 +126,21 @@ export interface WsFileInfo {
  * "busy", "invalid_path", ... src/lib/bridge.ts exposes it only on a 1.2 host.
  */
 export interface WsFilesApi {
-  /** The bytes (null when there is no such file). With ifMatch: rejects "changed" unless the etag still holds. */
+  /** The bytes (null when there is no such file). No etag (take it from stat or the last write). With ifMatch: rejects "changed" unless the etag still holds. */
   read(rel: string, opts?: { offset?: number; length?: number; ifMatch?: string }): Promise<ArrayBuffer | null>;
+  /** As read, as a Blob (large files: no copy into one ArrayBuffer). The SDK has it since host API 1.2. */
+  readBlob?(rel: string, opts?: { offset?: number; length?: number; ifMatch?: string }): Promise<Blob | null>;
   stat(rel: string): Promise<WsFileInfo | null>;
-  /** ifMatch string: replace only that version; null: create only. Rejects with code "changed" otherwise. A string is written as UTF-8. */
-  write(rel: string, data: ArrayBuffer | ArrayBufferView | Blob | string, opts?: { ifMatch?: string | null }): Promise<WsFileInfo & { sha256?: string }>;
+  /**
+   * ifMatch string: replace only that version; null: create only. Rejects with code "changed" otherwise. A string is written as UTF-8.
+   * Sent in 16 MB chunks: onProgress(done, total) after each; `signal` aborts (the file is left as it was);
+   * `sha256` (hex) makes the host check the bytes.
+   */
+  write(
+    rel: string,
+    data: ArrayBuffer | ArrayBufferView | Blob | string,
+    opts?: { ifMatch?: string | null; onProgress?: (done: number, total: number) => void; signal?: AbortSignal; sha256?: string },
+  ): Promise<WsFileInfo & { sha256?: string }>;
   list(prefix?: string): Promise<WsFileInfo[]>;
   delete(rel: string, opts?: { recursive?: boolean }): Promise<unknown>;
 }

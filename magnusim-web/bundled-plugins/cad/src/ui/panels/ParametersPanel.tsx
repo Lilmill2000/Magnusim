@@ -86,7 +86,7 @@ function NameInput({ p, onError }: { p: Param; onError(msg: string | null): void
   return (
     <input
       type="text"
-      className="bc-input cad-param-name"
+      className="mgk-input cad-param-name"
       aria-label={`Name of ${p.name}`}
       spellCheck={false}
       autoComplete="off"
@@ -157,11 +157,11 @@ function ParamRow({ p }: { p: Param }) {
         </td>
         <td>
           <Select
-            aria-label={`Unit of ${p.name}`}
+            label={`Unit of ${p.name}`}
             value={p.quantity}
-            data-param-unit="1"
-            onChange={(e) => {
-              const q = e.target.value as Quantity;
+            attrs={{ 'data-param-unit': '1' }}
+            onChange={(v) => {
+              const q = v as Quantity;
               const problem = quantityProblem(p.expr, q, units);
               if (problem) {
                 setError(problem);
@@ -174,13 +174,8 @@ function ParamRow({ p }: { p: Param }) {
                 setError(errText(err));
               }
             }}
-          >
-            {opts.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
+            options={opts.map((o) => ({ value: o.value, label: o.label }))}
+          />
         </td>
         <td>
           <IconButton
@@ -271,7 +266,7 @@ function AddRow() {
         <td>
           <input
             type="text"
-            className="bc-input cad-param-name"
+            className="mgk-input cad-param-name"
             aria-label="New parameter name"
             placeholder="Name"
             spellCheck={false}
@@ -288,7 +283,7 @@ function AddRow() {
         <td>
           <input
             type="text"
-            className="bc-input cad-param-expr"
+            className="mgk-input cad-param-expr"
             aria-label="New parameter expression"
             placeholder="Expression"
             spellCheck={false}
@@ -303,13 +298,7 @@ function AddRow() {
         </td>
         <td />
         <td>
-          <Select aria-label="New parameter unit" value={quantity} onChange={(e) => setQuantity(e.target.value as Quantity)}>
-            {opts.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
+          <Select label="New parameter unit" value={quantity} onChange={(v) => setQuantity(v as Quantity)} options={opts.map((o) => ({ value: o.value, label: o.label }))} />
         </td>
         <td />
       </tr>

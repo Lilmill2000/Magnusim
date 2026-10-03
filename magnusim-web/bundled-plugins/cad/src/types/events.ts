@@ -29,6 +29,14 @@ export interface CadEvents {
   // ---- ui (UI-SHELL) ----
   /** Open a feature's panel (tree double-click, context menu "Edit feature"). */
   'ui:edit-feature': { feature: FeatureId };
+
+  // ---- sketch mode (P3-SKETCH) ----
+  /** Sketch mode was entered (a panel session opened on a sketch) or left (`feature` null). */
+  'sketch:mode': { feature: FeatureId | null };
+
+  // ---- import (P2-FEATURES) ----
+  /** A STEP was dropped on the frame or picked; the import panel takes it. */
+  'import:file': { file: File };
 }
 
 export type CadEventName = keyof CadEvents;

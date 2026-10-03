@@ -1,10 +1,71 @@
 // The 3D viewport's public surface.
 // Owner: VIEWPORT (src/viewport/). Others call only what is here.
+// P2/P3 (docs/p2p3-plan.md §3.3): overlay layers (sketch geometry, regions,
+// manipulators, measure markers) and pointer tools (sketch tools, selection
+// fields of panels, drag handles) that see pointer events before the camera
+// and the selection do.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { BodyId, FeatureId, OriginPlaneRef, SavedCamera, Vec3 } from './doc';
+import type { Group } from 'three';
+import type { BodyId, FeatureId, OriginPlaneRef, PlaneFrame, SavedCamera, Vec2, Vec3 } from './doc';
 import type { TessPayload } from './kernel';
 import type { PickResult, SelectionItem, SelectKind } from './selection';
 import type { ReadonlyStateStore } from './state';
+
+/**
+ * A layer of extra drawing in model coordinates (mm), over the bodies. Its
+ * owner adds three.js objects to `group` (lines: LineSegments2 with the
+ * viewport's resolution, see setLineResolution; meshes; points) and calls
+ * changed() after changing them. `html` is an absolutely placed element over
+ * the canvas (pointer-events: none; children may set auto) for labels, glyphs
+ * and value boxes, placed with project() and moved in onFrame().
+ */
+export interface OverlayLayer {
+  readonly id: string;
+  readonly group: Group;
+  readonly html: HTMLElement;
+  setVisible(visible: boolean): void;
+  /** Redraw at the next frame. */
+  changed(): void;
+  /** Remove the group and the html element. */
+  dispose(): void;
+}
+
+/** An axis-aligned box in model coordinates (mm). */
+export interface FrameBox {
+  min: Vec3;
+  max: Vec3;
+}
+
+/** A pointer event offered to viewport tools before the camera and the selection (frame CSS px). */
+export interface ViewportPointer {
+  /** 'click': a press and release within the click threshold (5 px) that no tool captured, or that the capturing tool released. */
+  type: 'down' | 'move' | 'up' | 'click' | 'dblclick' | 'contextmenu' | 'leave';
+  button: number;
+  buttons: number;
+  clientX: number;
+  clientY: number;
+  ctrl: boolean;
+  shift: boolean;
+  alt: boolean;
+  /** The pointer's ray in model coordinates. */
+  ray: { origin: Vec3; dir: Vec3 };
+  /** The native event (preventDefault, pointerId). */
+  native: PointerEvent | MouseEvent;
+}
+
+/**
+ * A pointer tool: sketch tools, a panel's selection field, a drag handle.
+ * Tools form a stack (newest first). A tool that returns true from a 'down'
+ * captures the pointer: it gets every event until 'up' and nothing orbits or
+ * selects. Unconsumed events go to the next tool, then to the viewport's own
+ * handling (orbit / pan / zoom / pick into the selection).
+ */
+export interface ViewportTool {
+  id: string;
+  /** CSS cursor while this tool is the newest (e.g. 'crosshair'). */
+  cursor?: string;
+  onPointer(e: ViewportPointer): boolean;
+}
 
 /**
  * Standard views. `home` is the core viewer's default direction (front-left,
@@ -37,6 +98,12 @@ export interface ViewportBody {
   tess: TessPayload;
   /** The feature that last changed the body (a selected feature highlights its bodies). */
   feature?: FeatureId;
+  /**
+   * Drawn translucent (no depth writes, so what is inside shows and nothing z-fights with a
+   * coplanar face of it), and a click through it picks an opaque body behind it first (its own
+   * faces where nothing opaque is behind). Edges and vertices behind it stay pickable.
+   */
+  seeThrough?: boolean;
   /**
    * The kernel's bounding box [xmin, ymin, zmin, xmax, ymax, zmax] (exact once
    * measured), for ranges the user reads (the section slider): a tessellated
@@ -119,7 +186,13 @@ export interface ViewportHandle {
   setFilter(kinds: SelectKind[]): void;
   /** Clicks, right-clicks (context menu) and double-clicks with what is under the pointer. Returns unsubscribe. */
   onPick(fn: (e: ViewportPickEvent) => void): () => void;
-  /** Frame the visible bodies (the origin planes when there are none), keeping the view direction. */
+  /**
+   * Frame the visible bodies and the shown sketches (the origin planes when there are neither),
+   * keeping the view direction. Bodies the rollback hides never count.
+   * Framing (fit, setView, lookAt) centres the part in what floating panels leave free: elements
+   * marked [data-view-cover] over the left of the view. Until the user orbits, pans or zooms,
+   * bodies that grow out of the framed view are framed again.
+   */
   fit(opts?: { animate?: boolean }): void;
   setView(view: StandardView, opts?: { animate?: boolean }): void;
   /** Turn the camera to look straight at a plane (Normal To / sketch entry), framing the shown part. `normal` points at the viewer. */
@@ -128,6 +201,18 @@ export interface ViewportHandle {
   setProjection(p: Projection): void;
   setSection(patch: Partial<SectionState>): void;
   setPlanes(mode: PlanesMode): void;
+  /**
+   * In Auto mode the origin planes are drawn only on an empty part. Sketches are not bodies, so
+   * whatever draws one (finished sketches, sketch mode) says so here: while any owner is `busy`
+   * the planes stay hidden unless hovered or selected, as they do once bodies exist.
+   */
+  setPlanesBusy(owner: string, busy: boolean): void;
+  /**
+   * While any owner wants them, the origin planes are drawn (and pickable) whatever the bodies
+   * and sketches say: Sketch with nothing selected waits for a plane or a flat face to be picked.
+   * Not saved (the Origin planes setting stays the user's).
+   */
+  setPlanesWanted(owner: string, wanted: boolean): void;
   /** Range of the section offset along a plane's normal that cuts the visible bodies (mm), or null without bodies. */
   sectionRange(plane: OriginPlaneRef): [number, number] | null;
   /** Pick at frame client coordinates, respecting the selection filter. */
@@ -160,5 +245,35 @@ export interface ViewportHandle {
    * for the GPU after each one. Returns ms per frame. For performance tests.
    */
   measure(frames: number): { msPerFrame: number; frames: number };
+
+  // --- P2/P3: overlays and tools (docs/p2p3-plan.md §3.3) ---
+  /**
+   * A new overlay layer; `order` sorts layers (higher draws later, default 10). An id in use is
+   * replaced. `frame`: what the layer draws counts when the view frames the part (Fit, the
+   * standard views, Look at, a refit), as the shown sketches do; `true` for everything it
+   * draws, or a function giving the box that counts (model mm; null when nothing does), so a
+   * sketch counts its curves and dimensions but not its grid. Sketches and bodies are framed
+   * together; the origin planes' extent only when neither is drawn.
+   */
+  addLayer(id: string, opts?: { order?: number; frame?: boolean | (() => FrameBox | null) }): OverlayLayer;
+  /**
+   * The last framing (Fit, a standard view, Look at) again, with what is drawn now, when the
+   * camera is still where that framing put it (nobody orbited, panned or zoomed since). A
+   * reopened sketch calls it once its rebuild has rolled the later bodies back (review P2/P3
+   * round 4: the view stayed on bodies the rollback hid). False when the camera was moved.
+   */
+  reframe(): boolean;
+  /** Push a pointer tool on the stack; returns pop (safe to call twice). */
+  pushTool(tool: ViewportTool): () => void;
+  /** The ray under frame client coordinates (model mm). */
+  rayAt(clientX: number, clientY: number): { origin: Vec3; dir: Vec3 };
+  /** Where the pointer meets a plane: model point and the plane's own u/v (mm); null when the ray runs parallel to it. */
+  toPlane(clientX: number, clientY: number, plane: PlaneFrame): { p: Vec3; uv: Vec2 } | null;
+  /** Model length of one CSS pixel at a model point (pick radii, glyph offsets, handle sizes). */
+  pixelSize(at: Vec3): number;
+  /** Called after every drawn frame (the camera may have moved): re-place html overlays. Returns unsubscribe. */
+  onFrame(fn: () => void): () => void;
+  /** Size in device pixels for LineMaterial.resolution (fat lines in overlays). */
+  lineResolution(): [number, number];
   dispose(): void;
 }

@@ -130,6 +130,31 @@ describe('picking on kernel geometry', () => {
     expect(noVerts.item.kind).toBe('edge');
   });
 
+  it('picks through a see-through body (an Enclosure) to the part inside; its own faces where nothing is behind', () => {
+    // SD review round 1: the Enclosure hid the part. A 50 x 60 x 70 box around the 10 x 20 x 30 one.
+    const id = k.call('box', { dx: 50, dy: 60, dz: 70, origin: [-20, -20, -20] }).id as number;
+    const encTopo = k.call('topo', { id }) as unknown as Topo;
+    const enc: PickBody = { ...body('b_enc', tessOf(id), encTopo), seeThrough: true };
+    const rig = rigLooking('front', enc.data.sphere.clone());
+    const view = viewFor(rig);
+    const front = boxTopo.faces.find((f) => near(f.normal ?? [0, 0, 0], [0, -1, 0]))!.i;
+    // On the part: its front face, though the enclosure's front face is nearer.
+    const [x, y] = screenOf(view, [5, 10, 15]);
+    expect(pickAt([box, enc], [], view, x, y, ALL)!.item).toEqual({ kind: 'face', body: 'b_box', index: front });
+    expect(pickAt([enc, box], [], view, x, y, ALL)!.item).toEqual({ kind: 'face', body: 'b_box', index: front });
+    // Opaque, the enclosure hides it.
+    expect(pickAt([box, { ...enc, seeThrough: false }], [], view, x, y, ALL)!.item).toMatchObject({ kind: 'face', body: 'b_enc' });
+    // Beside the part: the enclosure's own front face.
+    const encFront = encTopo.faces.find((f) => near(f.normal ?? [0, 0, 0], [0, -1, 0]))!.i;
+    const [ex, ey] = screenOf(view, [20, -20, 38]);
+    expect(pickAt([box, enc], [], view, ex, ey, ALL)!.item).toEqual({ kind: 'face', body: 'b_enc', index: encFront });
+    // The part's edges inside stay pickable.
+    const topEdge = boxTopo.edges.find((e) => near(e.mid, [5, 0, 30]))!.i;
+    const [tx, ty] = screenOf(view, [5, 0, 30]);
+    expect(pickAt([box, enc], [], view, tx, ty - 3, ALL)!.item).toEqual({ kind: 'edge', body: 'b_box', index: topEdge });
+    k.call('release', { ids: [id] });
+  });
+
   it('does not pick edges hidden behind the body', () => {
     const rig = rigLooking('home', sphere);
     const view = viewFor(rig);

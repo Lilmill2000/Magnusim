@@ -26,6 +26,8 @@ export const WORKERS = [
   { entry: 'src/kernel-worker/kernel-worker.ts', out: 'kernel/kernel-worker.js' },
   // VIEWPORT: builds picking BVHs off the main thread (three-mesh-bvh).
   { entry: 'src/viewport/pick-worker.ts', out: 'pick/pick-worker.js' },
+  // P3-SKETCH: the sketch solver (PlaneGCS), next to planegcs.mjs/.wasm in workspace/solver/.
+  { entry: 'src/solver-worker/solver-worker.mjs', out: 'solver/solver-worker.js' },
 ];
 
 /** Everything the page build writes (relative to the output folder). */

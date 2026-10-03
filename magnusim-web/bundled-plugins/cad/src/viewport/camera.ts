@@ -29,6 +29,12 @@ export interface CameraPose {
   up: Vector3;
   /** Orthographic: visible height at the target (world units). */
   orthoHeight: number;
+  /**
+   * CSS px the image's centre (where the target is drawn) sits right of the view's centre, so a
+   * framed part is centred beside the panels over the left of the view (frameBeside). Kept until
+   * the next framing; absent = unchanged.
+   */
+  shift?: number;
 }
 
 const _m = new Matrix4();
@@ -47,6 +53,8 @@ export class CameraRig {
   projection: Projection = 'perspective';
   /** Visible height at the target in orthographic projection. */
   orthoHeight = 100;
+  /** CSS px the target is drawn right of the view's centre (see CameraPose.shift). */
+  shift = 0;
   /** Bounding sphere of everything drawn (near/far planes). */
   scene = new Sphere(new Vector3(), 50);
 
@@ -67,7 +75,7 @@ export class CameraRig {
   }
 
   pose(): CameraPose {
-    return { position: this.position.clone(), target: this.target.clone(), up: this.up.clone(), orthoHeight: this.orthoHeight };
+    return { position: this.position.clone(), target: this.target.clone(), up: this.up.clone(), orthoHeight: this.orthoHeight, shift: this.shift };
   }
 
   setPose(p: CameraPose): void {
@@ -75,6 +83,7 @@ export class CameraRig {
     this.target.copy(p.target);
     this.up.copy(p.up);
     this.orthoHeight = p.orthoHeight;
+    if (p.shift != null) this.shift = p.shift;
     this.orthogonalizeUp();
   }
 
@@ -164,6 +173,26 @@ export class CameraRig {
     this.target.copy(sphere.center);
     this.position.copy(sphere.center).addScaledVector(d, dist);
     this.orthoHeight = 2 * r;
+    this.shift = 0;
+  }
+
+  /**
+   * After frame(): keep the framed sphere clear of a column `coverPx` wide that
+   * floats over the left of a `widthPx` x `heightPx` view (the tree and the open
+   * panel). The view widens when the free part is narrower than it is tall, and
+   * the camera moves so the sphere's centre sits in the middle of the free part.
+   */
+  frameBeside(widthPx: number, heightPx: number, coverPx: number): void {
+    this.shift = 0;
+    if (!(coverPx > 0) || !(widthPx > coverPx) || !(heightPx > 0)) return;
+    const k = heightPx / (widthPx - coverPx);
+    if (k > 1) {
+      this.orthoHeight *= k;
+      this.position.sub(this.target).multiplyScalar(k).add(this.target);
+    }
+    // The image's centre moves, not the camera: the part is still seen straight on (in
+    // perspective a camera moved sideways looked at it from the side).
+    this.shift = coverPx / 2;
   }
 
   /** Point the camera along a direction (from the target to the camera) with an up hint, keeping the target and distance. */
@@ -195,7 +224,8 @@ export class CameraRig {
     const up = new Vector3(0, 1, 0).applyQuaternion(q);
     const position = target.clone().addScaledVector(back, dist);
     const orthoHeight = Math.exp(Math.log(Math.max(a.orthoHeight, 1e-9)) * (1 - t) + Math.log(Math.max(b.orthoHeight, 1e-9)) * t);
-    return { position, target, up, orthoHeight };
+    const shift = (a.shift ?? 0) * (1 - t) + (b.shift ?? 0) * t;
+    return { position, target, up, orthoHeight, shift };
   }
 
   /** Switch projection keeping the apparent size at the target. */
@@ -211,8 +241,20 @@ export class CameraRig {
     this.projection = p;
   }
 
-  /** Update three's cameras (near/far from the scene sphere) and return the active one. */
-  apply(aspect: number): PerspectiveCamera | OrthographicCamera {
+  /**
+   * Update three's cameras (near/far from the scene sphere) and return the active one.
+   * `widthPx`: the view's width, for the image's shift (none without it).
+   */
+  apply(aspect: number, widthPx = 0): PerspectiveCamera | OrthographicCamera {
+    const cam = this.applyCamera(aspect);
+    const w = widthPx;
+    const h = w / aspect;
+    if (this.shift && w > 0 && h > 0) cam.setViewOffset(w, h, -this.shift, 0, w, h);
+    else if (cam.view) cam.clearViewOffset();
+    return cam;
+  }
+
+  private applyCamera(aspect: number): PerspectiveCamera | OrthographicCamera {
     const dop = this.dop(_v);
     const depthC = _v2.subVectors(this.scene.center, this.position).dot(dop);
     const R = Math.max(this.scene.radius, 1e-3) * 1.05;

@@ -1,22 +1,17 @@
-// Number and unit formatting for the UI kit (H14 "formatters"): the core
-// SciNumberInput's formatSci, display-unit conversion, and how a typed value
+// Number and unit formatting for the CAD fields: the host kit's formatSci
+// (@magnusim/plugin-ui), display-unit conversion, and how a typed value
 // is stored as an expression. Evaluation itself belongs to the document's
 // UnitsService; this file only formats and recognises plain literals.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { formatSci } from '@magnusim/plugin-ui';
 import type { AngleUnit, DocUnits, Expr, LengthUnit, Quantity } from '../../types/units';
 
-const SMALL = 1e-3;
-const LARGE = 1e6;
+/** The kit's formatSci (the core SciNumberInput's): tiny and huge magnitudes as 1.5290e-5, others with 6 significant digits. */
+export { formatSci };
 
-/** Core SciNumberInput.formatSci: tiny and huge magnitudes as 1.5290e-5, others with 6 significant digits. */
-export function formatSci(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '';
-  if (value === 0) return '0';
-  const magnitude = Math.abs(value);
-  if (magnitude < SMALL || magnitude >= LARGE) return value.toExponential(4);
-  return String(Number(value.toPrecision(6)));
-}
+/** Below this magnitude a readout uses the scientific style, as formatSci does. */
+const SMALL = 1e-3;
 
 /** Millimetres per length unit, degrees per angle unit (internal units are mm and degrees). */
 export const MM_PER: Record<LengthUnit, number> = { mm: 1, cm: 10, m: 1000, in: 25.4, ft: 304.8 };

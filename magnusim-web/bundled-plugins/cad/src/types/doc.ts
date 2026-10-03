@@ -1,20 +1,43 @@
-// The Part document, schema v1: what is saved, undone and rebuilt.
+// The Part document, schema v2: what is saved, undone and rebuilt.
 // Owner: DOC-CORE (schema, migration, rebuild). Everyone else reads it.
 // Changes: add new feature types to the Feature union (below) and bump nothing
 // else without DOC-CORE; a breaking change needs DOC_SCHEMA + a migration.
+// Schema history (src/doc/schema.ts readDoc migrates every older one):
+//   1  P1: box, cylinder; a body is made by the one feature whose `creates` names it.
+//   2  P2/P3 (docs/p2p3-plan.md §1): import, delete_faces, press_pull, split,
+//      combine, sketch, extrude. A feature may make several bodies (import, split),
+//      so a schema-1 reader would drop their names and colours on its next save:
+//      it refuses schema 2 instead ("saved by a newer Magnusim CAD"). 1 -> 2 changes
+//      no field (box and cylinder are unchanged).
+//   SD (2026-10-01): Box and Cylinder are no longer built (REMOVED_FEATURE_TYPES):
+//      a stored one stays in the Part as a red "Removed feature" row. Enclosure is
+//      new. The schema stays 2 (no released build reads schema 2).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { DocUnits, Expr } from './units';
 
-export const DOC_SCHEMA = 1 as const;
+export const DOC_SCHEMA = 2 as const;
+/** Every schema readDoc reads (older ones are migrated on read and written back as DOC_SCHEMA). */
+export const DOC_SCHEMAS_READ: readonly number[] = [1, 2];
 
-/** Ids are opaque strings with a type prefix: f_ feature, b_ body, p_ param (src/lib/ids.ts). */
+/**
+ * Ids are opaque strings with a type prefix (src/lib/ids.ts): f_ feature, b_ body,
+ * p_ param, pt_ sketch point, e_ sketch entity, c_ sketch constraint or dimension.
+ * Derived body ids (split pieces) are `<target body>.<feature id without f_>.<k>`
+ * (deriveBodyId in src/doc/features/body-ids.ts): stable across rebuilds without
+ * being stored.
+ */
 export type FeatureId = string;
 export type BodyId = string;
 export type ParamId = string;
+export type SketchPointId = string;
+export type SketchEntityId = string;
+export type SketchConstraintId = string;
 
 /** A 3-vector of expressions (each evaluates as a length unless noted). */
 export type ExprVec3 = [Expr, Expr, Expr];
 export type Vec3 = [number, number, number];
+/** A point in a sketch's own 2D frame (mm along the plane's xdir and ydir = normal x xdir). */
+export type Vec2 = [number, number];
 
 /**
  * The implicit origin feature: always present, never stored in `features`,
@@ -26,13 +49,20 @@ export type OriginRef = 'origin:point' | 'origin:top' | 'origin:front' | 'origin
 export type OriginPlaneRef = 'origin:top' | 'origin:front' | 'origin:right';
 export type OriginAxisRef = 'origin:x' | 'origin:y' | 'origin:z';
 
+/** A plane with its own 2D frame (mm): `normal` points at the viewer of a sketch on it, ydir = normal x xdir. */
+export interface PlaneFrame {
+  origin: Vec3;
+  normal: Vec3;
+  xdir: Vec3;
+}
+
 /**
  * Where the three origin planes are (mm). Z is up, as in the core viewer
  * (runtime.js setViewUp(0, 0, 1); default view direction [-0.55, -0.75, 0.42]).
  * Top = XY plane (normal +Z), Front = XZ plane (normal -Y, facing a viewer at -Y),
  * Right = YZ plane (normal +X).
  */
-export const ORIGIN_PLANES: Record<OriginPlaneRef, { label: string; origin: Vec3; normal: Vec3; xdir: Vec3 }> = {
+export const ORIGIN_PLANES: Record<OriginPlaneRef, { label: string } & PlaneFrame> = {
   'origin:top': { label: 'Top plane', origin: [0, 0, 0], normal: [0, 0, 1], xdir: [1, 0, 0] },
   'origin:front': { label: 'Front plane', origin: [0, 0, 0], normal: [0, -1, 0], xdir: [1, 0, 0] },
   'origin:right': { label: 'Right plane', origin: [0, 0, 0], normal: [1, 0, 0], xdir: [0, 1, 0] },
@@ -85,27 +115,433 @@ export interface BodyMaking {
   repair?: { fuzzy: number };
 }
 
-/** Box primitive: a corner at `origin`, sizes along +X, +Y, +Z (mm expressions). */
-export interface BoxFeature extends FeatureBase<'box'>, BodyMaking {
-  origin: ExprVec3;
-  size: ExprVec3;
+// ------------------------------------------------------------ references (§4.5)
+
+/** What a stored reference points at. */
+export type RefKind = 'face' | 'edge' | 'vertex';
+
+/**
+ * Geometric fingerprint of a face, edge or vertex when it was picked (or last
+ * re-anchored), from the kernel's `topo` (mm, mm²). Used to check every name
+ * match and, when no name matches, to find the entity again (accepted only when
+ * the runner-up is at least 50% worse). src/naming/signature.ts compares them.
+ */
+export interface RefSignature {
+  kind: RefKind;
+  /** Face: 'plane' | 'cylinder' | 'cone' | 'sphere' | 'torus' | 'bspline' | 'other'; edge: 'line' | 'circle' | ... (TopoResult types). */
+  type: string;
+  /** Face area (mm²) or edge length (mm). */
+  size?: number;
+  /** Face centroid, edge midpoint or vertex position (mm). */
+  at: Vec3;
+  /** Plane normal (out of the material), cylinder/cone axis or line direction. */
+  dir?: Vec3 | null;
+  radius?: number | null;
+  /** Exact bounding box [xmin, ymin, zmin, xmax, ymax, zmax] (mm). */
+  bbox?: [number, number, number, number, number, number] | null;
 }
 
-/** Cylinder primitive: base centre at `origin`, along an origin axis. */
-export interface CylinderFeature extends FeatureBase<'cylinder'>, BodyMaking {
-  origin: ExprVec3;
-  axis: OriginAxisRef;
-  diameter: Expr;
-  height: Expr;
+/** The second resolution step: what the entity was, in words the naming layer can test. */
+export interface RefSemantic {
+  /** The feature that made it, when known ("f_..."). */
+  feature?: FeatureId;
+  /** 'side' / 'start' / 'end' of a sweep, a face of an import, a cut face of a split, ... */
+  role?: 'side' | 'start' | 'end' | 'import' | 'primitive' | 'cut' | 'heal' | 'moved' | 'other';
 }
 
 /**
- * Every stored feature. P1: box, cylinder (origin is implicit, see OriginRef).
- * Later phases add sketch, extrude, revolve, fillet, chamfer, shell, combine,
- * split, imported, ... as new members of this union.
+ * A stored reference to a face, edge or vertex of a body (proposal §4.5 point 4).
+ * Resolves by name, then by the semantic hint, then by signature; the signature
+ * is also checked on every name match. Nothing is repaired silently: a repair
+ * is a warning on the feature ("Reference repaired · check"), a miss an error
+ * ("Face not found after rebuild").
+ * Name grammar (src/naming/names.ts): faces `F:<feature>:<role>[:<detail>][#k]`,
+ * merged faces `A|B` (sorted), edges `E:<faceA>&<faceB>` (sorted), vertices
+ * `V:<faceA>&<faceB>&<faceC>` (sorted).
  */
-export type Feature = BoxFeature | CylinderFeature;
+export interface PersistentRef {
+  name: string;
+  semantic?: RefSemantic;
+  signature: RefSignature;
+}
+
+/** A reference to a face, edge or vertex of one body. */
+export interface BodyRef {
+  body: BodyId;
+  ref: PersistentRef;
+}
+
+// ------------------------------------------------------------ removed feature types
+
+/**
+ * Feature types this version no longer builds (decision 2026-10-01, "fully
+ * sketch-driven": no one-click solids). P1's Box and Cylinder were dev-only, so
+ * there is no migration: a Part that still has one keeps the row, which shows
+ * "This part uses a removed feature (Box 1)" in red and can be
+ * deleted (src/doc/features/removed.ts). Nothing is dropped silently.
+ */
+export const REMOVED_FEATURE_TYPES: Readonly<Record<string, string>> = { box: 'Box', cylinder: 'Cylinder' };
+
+// ------------------------------------------------------------ SD: CFD prep
+
+/** A side of an Enclosure: the six faces of a box, or a cylinder's radius, top (+axis end) and bottom. */
+export type EnclosureSide = '+x' | '-x' | '+y' | '-y' | '+z' | '-z' | 'radius' | 'top' | 'bottom';
+
+/**
+ * Enclosure (decision 2026-10-01, CFD prep): a box or a cylinder around the
+ * exact bounding box of bodies made before it, as a new body. It never cuts:
+ * the air volume is always a separate Combine (Cut, keep tools). Parametric:
+ * it follows the bounding box of the bodies it encloses when they change, and
+ * keeps the sides the user set.
+ * Each side sits out from the bounding box by the padding: Zero (tight to the
+ * part, the default), a percent of the part's size along that direction, or a
+ * fixed distance; a side the user typed or dragged keeps its own value
+ * (`sides`). Face names: F:<id>:enclosure:<side> (src/features/enclosure/def.ts).
+ */
+export interface EnclosureFeature extends FeatureBase<'enclosure'> {
+  shape: 'box' | 'cylinder';
+  /** The cylinder's axis (an origin axis); kept while the shape is Box. */
+  axis: OriginAxisRef;
+  /** The bodies it wraps; empty = every solid body made before it (other enclosures left out). */
+  bodies: BodyId[];
+  padding: 'zero' | 'percent' | 'fixed';
+  /** Percent of the part's size (a plain number expression, "10"). Kept while another padding is chosen. */
+  percent: Expr;
+  /** The fixed distance (a length expression, "10 mm"). Kept while another padding is chosen. */
+  distance: Expr;
+  /** Sides the user set on their own (typed or dragged), as lengths; the others follow the padding. */
+  sides: Partial<Record<EnclosureSide, Expr>>;
+  /** The body it makes (fixed when it is made). */
+  creates: BodyId;
+}
+
+// ------------------------------------------------------------ P2: STEP editing
+
+/**
+ * A file the Part keeps in the plugin's project folder through ws.files
+ * (host API 1.2). `rel` is relative to that folder; files of a Part live under
+ * `studies/<sid>/` so deleting the Part deletes them.
+ */
+export interface StoredFileRef {
+  rel: string;
+  /** Bytes. */
+  size: number;
+  /** Hex SHA-256 of the bytes (identical uploads are stored once). */
+  sha256: string;
+}
+
+/** What the import checked and fixed (shown in its panel; the kernel's import_step diagnostics, trimmed). */
+export interface ImportDiagnosticsSummary {
+  /** BRepCheck problems on the shapes as read, before healing. */
+  problemsBefore: number;
+  /** ... and after healing (and sewing). 0 = "0 problems". */
+  problemsAfter: number;
+  /** Shapes ShapeFix changed. */
+  fixed: number;
+  /** Faces sewn into closed shells (knit), when sewing ran. */
+  sewn?: number;
+  /** Free (unshared) edges left after sewing: > 0 means the model is still open. */
+  freeEdges?: number;
+  /** A large file (over 50 MB) was healed while it was read: there is no separate "before" count. */
+  healedOnRead?: boolean;
+}
+
+/**
+ * Imported STEP (proposal §2.8, §4.9): one feature at the top of the history
+ * that makes one body per solid (or per open shell kept as a surface body) of
+ * the file. The rebuild reads the stored healed BREP, never the STEP (§4.5
+ * point 6: healing output depends on the OCCT version and the tolerance), so a
+ * reopen never re-heals. Re-healing with another tolerance writes a new BREP
+ * from the kept `source` (no new upload).
+ */
+export interface ImportFeature extends FeatureBase<'import'> {
+  /** The STEP as uploaded: `studies/<sid>/imports/<sha256>/source.step`. */
+  source: StoredFileRef & {
+    /** The file name the user picked ("flange.step"), for labels. */
+    fileName: string;
+    /** Length unit the file declared ("inch"), for the panel; the kernel converts to mm. */
+    unit?: string | null;
+  };
+  /**
+   * The healed shapes, one compound in OCCT's binary BREP format (BinTools):
+   * `studies/<sid>/imports/<sha256>/healed-<tolerance key>.brep`.
+   */
+  brep: StoredFileRef & {
+    /** OCCT version that wrote it ("7.9.3"): another version re-heals from `source` (a new import revision, §4.5 point 6). */
+    occt: string;
+  };
+  /** How `brep` was made. */
+  heal: {
+    /** ShapeFix precision and max tolerance (mm). Default 0.001. */
+    tolerance: number;
+    /** Sewing (knit) ran: faces of an open model were sewn into shells, closed shells made solids. */
+    sew: boolean;
+  };
+  /**
+   * The bodies this feature makes (ids fixed when the feature is made), in
+   * compound order: each one's child index in the BREP compound and what the
+   * STEP called it. Its ownsBody hook answers from this list.
+   */
+  items: {
+    body: BodyId;
+    index: number;
+    stepName: string;
+    /** "#rrggbb" from the STEP, or null. */
+    stepColor: string | null;
+    kind: 'solid' | 'shell';
+    /**
+     * BRepCheck of the healed shape when the BREP was written. The rebuild reads
+     * the same bytes (sha256 checked), so it keeps this instead of checking
+     * again (6 s on the 113 MB part); an invalid body shows red with its reason.
+     */
+    valid: boolean;
+    reason?: string;
+  }[];
+  diagnostics?: ImportDiagnosticsSummary;
+}
+
+/**
+ * Delete faces and heal (proposal §2.8): the kernel's `defeature`
+ * (BRepAlgoAPI_Defeaturing, with history) on `body`; the neighbours grow to
+ * close the gap. The body keeps its id.
+ */
+export interface DeleteFacesFeature extends FeatureBase<'delete_faces'> {
+  body: BodyId;
+  faces: PersistentRef[];
+  /** Set by "Try repair" (DocService.repair): ShapeFix on an invalid result. */
+  repair?: { fuzzy: number };
+}
+
+/**
+ * Press-pull of planar faces (proposal §2.8, §3.4): each face moves along its
+ * own normal by `distance` (> 0 adds material, < 0 removes it). Kernel op
+ * `press_pull` (prism of the faces, then fuse or cut, then UnifySameDomain,
+ * with history; docs/p2p3-plan.md §2.4). The body keeps its id; the moved face
+ * keeps its name.
+ */
+export interface PressPullFeature extends FeatureBase<'press_pull'> {
+  body: BodyId;
+  faces: PersistentRef[];
+  distance: Expr;
+  repair?: { fuzzy: number };
+}
+
+/** What a Split cuts with. */
+export type SplitTool =
+  /** An origin plane moved `offset` along its normal. */
+  | { kind: 'plane'; plane: OriginPlaneRef; offset: Expr }
+  /** The (infinite) plane of a planar face. */
+  | { kind: 'face'; body: BodyId; face: PersistentRef }
+  /** Another body's boundary; `keepTool: false` removes the tool body afterwards. */
+  | { kind: 'body'; body: BodyId; keepTool: boolean };
+
+/**
+ * Split bodies (proposal §2.7; decision 2026-09-30: "split body by body is the
+ * basis for the fluid domain"). Each target's first piece keeps the target's
+ * id; piece k >= 1 gets the derived id deriveBodyId(feature, target, k).
+ * Pieces are ordered as the kernel's `split` orders them (along the plane
+ * normal; largest volume first for a tool body).
+ */
+export interface SplitFeature extends FeatureBase<'split'> {
+  targets: BodyId[];
+  tool: SplitTool;
+  /** Set by "Try repair" (DocService.repair): ShapeFix on the invalid pieces. */
+  repair?: { fuzzy: number };
+}
+
+/**
+ * Combine (decision 2026-09-30, MVP): Join / Cut / Intersect with several
+ * targets and several tools, "Keep tools". Join fuses targets and tools into
+ * the first target (the other targets go); Cut removes every tool from each
+ * target; Intersect keeps what each target shares with all the tools (review
+ * P2/P3 round 4). Tools go unless `keepTools`.
+ */
+export interface CombineFeature extends FeatureBase<'combine'> {
+  op: 'join' | 'cut' | 'intersect';
+  targets: BodyId[];
+  tools: BodyId[];
+  keepTools: boolean;
+  repair?: { fuzzy: number };
+}
+
+// ------------------------------------------------------------ P3: sketches
+
+/** A sketch's reserved origin point: always at [0, 0], fixed, never stored in `points`; constraints may use it. */
+export const SKETCH_ORIGIN = 'origin' as const;
+
+interface SketchEntityBase {
+  id: SketchEntityId;
+  /** Construction geometry: drawn dashed, never part of a profile. */
+  construction?: boolean;
+  /**
+   * Lineage (§4.5 point 1): when trim or split breaks an entity, one piece keeps
+   * its id and each other piece gets `<id>.b`, `<id>.c`, ... with `parent` = the id
+   * it came from. Region keys and references resolve through it.
+   */
+  parent?: SketchEntityId | null;
+}
+
+/** Sketch geometry (solver-neutral; maps 1:1 onto src/solver-worker/solver-api.mjs). Coordinates are in `points`. */
+export type SketchEntity =
+  | (SketchEntityBase & { kind: 'point'; p: SketchPointId })
+  | (SketchEntityBase & {
+      kind: 'line';
+      p: [SketchPointId, SketchPointId];
+      /** A centerline: construction, drawn dash-dot, usable as a revolve or mirror axis. */
+      centerline?: boolean;
+    })
+  /** `r` is the solved radius (mm). */
+  | (SketchEntityBase & { kind: 'circle'; c: SketchPointId; r: number })
+  /** From `a` to `b` about `c`, counter-clockwise about the sketch normal unless ccw:false. */
+  | (SketchEntityBase & { kind: 'arc'; c: SketchPointId; a: SketchPointId; b: SketchPointId; ccw?: boolean });
+
+export type SketchEntityKind = SketchEntity['kind'];
+
+/** Geometric relations (glyphs on the sketch). collinear = two point_on_line in the solver. */
+export type SketchRelationKind =
+  | 'coincident'
+  | 'horizontal'
+  | 'vertical'
+  | 'parallel'
+  | 'perpendicular'
+  | 'tangent'
+  | 'equal'
+  | 'midpoint'
+  | 'symmetric'
+  | 'point_on_line'
+  | 'point_on_circle'
+  | 'concentric'
+  | 'collinear'
+  | 'fix';
+
+/** Dimensions (Smart Dimension picks the kind from the selection). */
+export type SketchDimensionKind = 'distance' | 'distance_x' | 'distance_y' | 'radius' | 'diameter' | 'angle';
+
+export interface SketchRelation {
+  id: SketchConstraintId;
+  kind: SketchRelationKind;
+  /** Point ids, entity ids or SKETCH_ORIGIN, in the solver's order for the kind. */
+  refs: string[];
+  /** fix: the locked position (mm, u/v). */
+  value?: Vec2;
+  /** Added by inference while drawing (same constraint; the UI may show it lighter until touched). */
+  inferred?: boolean;
+}
+
+export interface SketchDimension {
+  id: SketchConstraintId;
+  kind: SketchDimensionKind;
+  refs: string[];
+  /** "40 mm", "width/2", "15 deg". Driven dimensions keep the value they showed when made driven. */
+  expr: Expr;
+  /** false = driven (reference): measured, shown grey in parentheses, never given to the solver. */
+  driving: boolean;
+  /** Where its label sits (mm, sketch u/v). */
+  at?: Vec2;
+}
+
+export type SketchConstraint = SketchRelation | SketchDimension;
+
+/** Where a sketch lies. */
+export type SketchSupport =
+  | { kind: 'plane'; plane: OriginPlaneRef }
+  | { kind: 'face'; body: BodyId; face: PersistentRef };
+
+/** What the stored geometry satisfies, so an unchanged model rebuilds without the solver. */
+export interface SketchSolvedState {
+  /**
+   * Each driving dimension's value (mm or deg) when `points` and the radii were
+   * solved. A rebuild whose evaluated values all match (1e-9 relative) uses the
+   * stored geometry as it is; otherwise it re-solves from it (same branch).
+   */
+  values: Record<SketchConstraintId, number>;
+  /** Degrees of freedom left at the last analysis (sketch mode). */
+  dof: number;
+  /** Tree prefix and status chip: (-) under, none fully, (+) over, (?) unsolved. */
+  state: 'under' | 'fully' | 'over' | 'unsolved';
+  /**
+   * An under-defined sketch's entities that are fully defined (the last analysis in sketch
+   * mode), so model mode draws them in the fully defined colour as sketch mode does. Absent
+   * when none are, or for a sketch not analysed since this was added.
+   */
+  fully?: SketchEntityId[];
+}
+
+/**
+ * A 2D sketch (proposal §2.1-2.3, §3.3, §4.5). Stable ids everywhere; solved
+ * coordinates are stored (proposal §4.4). Its profile regions are computed by
+ * the kernel (`sketch_regions`) at rebuild and published as the feature's
+ * output (SketchOutput); extrudes keep RegionRefs.
+ */
+export interface SketchFeature extends FeatureBase<'sketch'> {
+  support: SketchSupport;
+  /**
+   * The sketch frame when the support last resolved (§4.5 point 5). For a face
+   * support it is kept when the face is lost (the sketch then warns and stays
+   * where it was).
+   */
+  plane: PlaneFrame;
+  /** Solved point coordinates (mm, sketch u/v). SKETCH_ORIGIN is implicit. */
+  points: Record<SketchPointId, Vec2>;
+  entities: SketchEntity[];
+  constraints: SketchConstraint[];
+  solved: SketchSolvedState;
+}
+
+// ------------------------------------------------------------ P3: extrude
+
+/**
+ * A profile region of a sketch, kept by an extrude (§4.5 point 2). `region` is
+ * the canonical region key (KernelRegion.key). When it is not found after a
+ * change, the region with the same boundary entities is taken if there is
+ * exactly one (a warning: "Profile repaired · check"); otherwise "Profile lost".
+ */
+export interface RegionRef {
+  sketch: FeatureId;
+  region: string;
+  /** Sorted ids of the entities on its boundary when it was picked. */
+  entities: SketchEntityId[];
+  /** A point inside it then (mm, sketch u/v): the tie-break among candidates. */
+  sample: Vec2;
+}
+
+/** How far an extrude goes (distances are expressions; the direction is the sketch normal, or the opposite with flip). */
+export type ExtrudeExtentDef =
+  | { kind: 'blind'; distance: Expr }
+  /** `distance` is the whole length, half on each side of the sketch. */
+  | { kind: 'symmetric'; distance: Expr }
+  /** `distance` along the direction, `distance2` against it. */
+  | { kind: 'two'; distance: Expr; distance2: Expr };
+
+/**
+ * Extrude (proposal §2.5): profiles of one sketch, an extent, an Operation.
+ * Face names: F:<id>:side:<sub-segment token>; caps F:<id>:start / F:<id>:end
+ * with one profile, F:<id>:start:<n> / F:<id>:end:<n> (n = index in `profiles`)
+ * with several (docs/p2p3-plan.md §1.8).
+ */
+export interface ExtrudeFeature extends FeatureBase<'extrude'>, BodyMaking {
+  profiles: RegionRef[];
+  extent: ExtrudeExtentDef;
+  /** Against the sketch normal. */
+  flip: boolean;
+}
+
+/**
+ * Every stored feature. The origin is implicit (OriginRef). Later phases add
+ * revolve, fillet, chamfer, shell, ... as new members of this union.
+ */
+export type Feature =
+  | ImportFeature
+  | DeleteFacesFeature
+  | PressPullFeature
+  | SplitFeature
+  | CombineFeature
+  | SketchFeature
+  | ExtrudeFeature
+  | EnclosureFeature;
 export type FeatureType = Feature['type'];
+/** The feature of one type. */
+export type FeatureOf<T extends FeatureType> = Extract<Feature, { type: T }>;
 
 /** The saved, undoable model. Stored outside the study record (see DocStore). */
 export interface CadDoc {
@@ -143,6 +579,11 @@ export interface CadView {
   planes?: 'auto' | 'always';
   /** The camera when the Part was last looked at; absent until it first moves. */
   camera?: SavedCamera | null;
+  /**
+   * Sketches the user showed or hid in model mode (eye in the tree). A sketch
+   * with no entry is shown until a later feature uses it (Fusion).
+   */
+  sketches?: Record<FeatureId, 'shown' | 'hidden'>;
 }
 
 /**

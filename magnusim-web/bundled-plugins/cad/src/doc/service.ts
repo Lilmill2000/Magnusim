@@ -6,16 +6,20 @@
 import type { Bridge } from '../lib/bridge';
 import type { EventBus } from '../lib/bus';
 import { newId, nextName } from '../lib/ids';
+import { commitPendingEdits, pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
 import { createStateStore } from '../lib/store';
 import { FEATURE_ACTION_LABELS, type BodyId, type BodyMaking, type CadDoc, type CadView, type Feature, type FeatureId, type FeatureStatus, type FeatureType, type Param, type ParamId, type SavedCamera } from '../types/doc';
-import type { BodyProps, DocService, DocState, EditResult, EditSession, SaveState } from '../types/doc-service';
+import type { BodyProps, DocService, DocState, EditResult, EditSession, FeatureFiles, SaveState } from '../types/doc-service';
 import type { DocStore } from '../types/docstore';
 import type { CadEvents } from '../types/events';
 import type { BodyInfo, KernelAdapter } from '../types/kernel';
+import type { SketchSolverClient } from '../types/sketch';
 import type { Quantity } from '../types/units';
 import { Autosave } from './autosave';
 import { renameInExpr } from './expr';
 import { REPAIR_FUZZY_STEPS } from './features/body-op';
+import { storedBodyName } from './features/body-ids';
+import { dependencies as featureDependencies, featureUses, gcBodies as gcFeatureBodies, isBodyMaking, ownsBody, renameParamInFeature, withNewBodies } from './features/hooks';
 import { createBuiltinRegistry } from './features/registry';
 import { createParamScope, featureExprs, paramNameProblem, usersOfParam } from './params';
 import { RebuildEngine, type RebuildOutput } from './rebuild';
@@ -35,36 +39,20 @@ export interface DocServiceOptions {
   /** Autosave: spacing of view-only writes (doc/autosave.ts VIEW_INTERVAL_MS). Tests pass less. */
   saveViewIntervalMs?: number;
   log?: (message: string, detail?: unknown) => void;
+  /** The sketch solver, once sketch mode's module started it (rebuilds re-solve sketches whose dimensions changed). */
+  solver?: () => SketchSolverClient | null;
+  /**
+   * Calls fn whenever what solver() answers may have changed (bootstrap: the apis store).
+   * When the solver starts after the Part was built, the part rebuilds, so a sketch
+   * shown with its stored shape ("the sketch solver is not running") is solved.
+   */
+  onSolverChange?: (fn: () => void) => () => void;
 }
 
 const MAX_NAME = 80;
 const QUANTITIES: Quantity[] = ['length', 'angle', 'scalar'];
 
 type BodyFeature = Feature & BodyMaking;
-const isBodyMaking = (f: Feature): f is BodyFeature => 'op' in f && 'scope' in f;
-
-/** Feature ids `f` depends on: its declared parents and the features that create the bodies in its scope. */
-function dependencies(doc: CadDoc, f: Feature, parents: (f: Feature) => FeatureId[]): FeatureId[] {
-  const out = new Set(parents(f));
-  if (isBodyMaking(f)) {
-    for (const b of f.scope) {
-      const maker = doc.features.find((g) => isBodyMaking(g) && g.creates === b);
-      if (maker) out.add(maker.id);
-    }
-  }
-  out.delete(f.id);
-  return [...out];
-}
-
-/** Drop body definitions no feature creates any more. */
-function gcBodies(doc: CadDoc): CadDoc {
-  const made = new Set(doc.features.filter(isBodyMaking).map((f) => f.creates).filter((b): b is BodyId => !!b));
-  const keys = Object.keys(doc.bodies);
-  if (keys.every((k) => made.has(k))) return doc;
-  const bodies: CadDoc['bodies'] = {};
-  for (const k of keys) if (made.has(k)) bodies[k] = doc.bodies[k];
-  return { ...doc, bodies };
-}
 
 function replaceFeature(doc: CadDoc, f: Feature): CadDoc {
   return { ...doc, features: doc.features.map((g) => (g.id === f.id ? f : g)) };
@@ -110,13 +98,15 @@ export function createDocService(opts: DocServiceOptions): DocService {
   const registry = createBuiltinRegistry();
   const sessionTag = newId('s');
   const undo = createUndoStack<CadDoc>();
+  const dependencies = (doc: CadDoc, f: Feature) => featureDependencies(registry, doc, f);
+  const gcBodies = (doc: CadDoc) => gcFeatureBodies(registry, doc);
 
   const state = createStateStore<DocState>({
     status: 'loading',
     error: null,
     doc: deepFreeze(emptyDoc(bridge.units())),
     view: emptyView(),
-    rebuild: { status: 'idle', seq: 0, features: {}, bodies: [], ms: null, message: null },
+    rebuild: { status: 'idle', seq: 0, features: {}, bodies: [], outputs: {}, ms: null, message: null },
     save: { state: 'saved', at: null },
     history: { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null },
     session: null,
@@ -133,9 +123,26 @@ export function createDocService(opts: DocServiceOptions): DocService {
   let disposed = false;
   let open: SessionImpl | null = null;
 
+  // Feature builds read stored files (an import's healed BREP) through ws.files, checked against their sha256.
+  const files: FeatureFiles | null = bridge.files
+    ? {
+        async read(ref) {
+          const buf = await bridge.files!.read(ref.rel);
+          if (!buf) return null;
+          if (ref.sha256 && typeof crypto !== 'undefined' && crypto.subtle) {
+            const hex = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map((b) => b.toString(16).padStart(2, '0')).join('');
+            if (hex !== ref.sha256.toLowerCase()) throw new Error(`the stored file ${ref.rel} changed (its checksum is not the one the Part recorded)`);
+          }
+          return buf;
+        },
+      }
+    : null;
+
   const engine = new RebuildEngine({
     kernel,
     registry,
+    files,
+    solver: () => opts.solver?.() ?? null,
     onStart() {
       state.set((s) => (s.rebuild.status === 'running' ? s : { ...s, rebuild: { ...s.rebuild, status: 'running' } }));
     },
@@ -145,7 +152,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
         seq = s.rebuild.seq + 1;
         const hidden = new Set(s.view.hiddenBodies);
         const bodies = out.bodies.map((b) => (b.visible === !hidden.has(b.id) ? b : { ...b, visible: !hidden.has(b.id) }));
-        return { ...s, rebuild: { status: out.message ? 'failed' : 'done', seq, features: out.features, bodies, ms: out.ms, message: out.message } };
+        return { ...s, rebuild: { status: out.message ? 'failed' : 'done', seq, features: out.features, bodies, outputs: out.outputs, ms: out.ms, message: out.message } };
       });
       bus.emit('doc:rebuilt', { seq, ms: out.ms, failed: out.failed });
     },
@@ -154,11 +161,37 @@ export function createDocService(opts: DocServiceOptions): DocService {
     },
   });
 
+  /**
+   * The view the rebuild uses: the saved one, except while a session edits a
+   * feature whose type isolates while editing (a sketch): then the rebuild
+   * stops just after it (later features show rolled back; nothing downstream
+   * rebuilds on every edit). Never saved.
+   */
+  function rebuildView(s: DocState): CadView {
+    if (!open || !open.open) return s.view;
+    const def = registry.get(open.draft.type);
+    if (!def?.isolateWhileEditing) return s.view;
+    const at = s.doc.features.findIndex((f) => f.id === open!.feature);
+    if (at < 0) return s.view;
+    const stop = at + 1;
+    if (s.view.rollback != null && s.view.rollback <= stop) return s.view;
+    return { ...s.view, rollback: stop >= s.doc.features.length ? null : stop };
+  }
+
   function rebuild() {
     const s = state.get();
     if (s.status !== 'ready') return;
-    engine.request({ doc: s.doc, view: s.view });
+    engine.request({ doc: s.doc, view: rebuildView(s) });
   }
+
+  let solverRuns = !!opts.solver?.();
+  const offSolver =
+    opts.onSolverChange?.(() => {
+      const now = !!opts.solver?.();
+      if (now === solverRuns) return;
+      solverRuns = now;
+      if (now) rebuild();
+    }) ?? (() => {});
 
   function historyState(): DocState['history'] {
     return { canUndo: undo.canUndo, canRedo: undo.canRedo, undoLabel: undo.undoLabel, redoLabel: undo.redoLabel };
@@ -219,7 +252,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
     readonly feature: FeatureId;
     open = true;
     private current: Feature;
-    private readonly before: CadDoc;
+    /** The document when the session opened (a refused Delete checks it too). */
+    readonly before: CadDoc;
     private readonly viewBefore: CadView;
     private inDoc: boolean;
     private lastCreates: BodyId | null;
@@ -235,7 +269,21 @@ export function createDocService(opts: DocServiceOptions): DocService {
       this.viewBefore = state.get().view;
       this.inDoc = !isNew;
       this.lastCreates = isBodyMaking(draft) ? draft.creates : null;
+      // The open session from the start: its first apply already rebuilds as this session (isolateWhileEditing).
+      open = this;
       if (isNew) this.apply();
+      else if (this.def()?.isolateWhileEditing) rebuild();
+    }
+
+    get changed(): boolean {
+      if (!this.open) return false;
+      const doc = gcBodies(state.get().doc);
+      return doc !== this.before && JSON.stringify(doc) !== JSON.stringify(this.before);
+    }
+
+    /** The rebuild stops after this feature while it is edited (FeatureTypeDef.isolateWhileEditing). */
+    private isolates(): boolean {
+      return !!this.def()?.isolateWhileEditing;
     }
 
     get draft(): Feature {
@@ -268,6 +316,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
         if (f.creates !== creates) f = { ...f, creates } as Feature;
         this.current = f;
       }
+      // Bodies the feature brings with their names and colours (an import's STEP bodies).
+      doc = withNewBodies(registry, doc, f);
       if (this.inDoc) {
         doc = replaceFeature(doc, f);
       } else {
@@ -295,7 +345,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
           next = { ...next, creates: this.lastCreates } as Feature;
         }
         // A new body is made from nothing: it has no targets.
-        if (next.op === 'new' && (next as BodyFeature).scope.length) next = { ...next, scope: [] } as Feature;
+        if ((next as BodyFeature).op === 'new' && (next as BodyFeature).scope.length) next = { ...next, scope: [] } as Feature;
       }
       this.current = next;
       this.apply();
@@ -317,6 +367,9 @@ export function createDocService(opts: DocServiceOptions): DocService {
         // (20 mm typed to 1e6 and back): an Undo that changes nothing is confusing.
         if (JSON.stringify(doc) === JSON.stringify(this.before)) applyDoc(this.before, null);
         else applyDoc(doc, label, this.before);
+      } else if (this.isolates()) {
+        // Nothing changed, but the rebuild stopped after this feature while it was edited.
+        rebuild();
       }
       state.set((s) => ({ ...s, session: null, history: historyState() }));
     }
@@ -326,6 +379,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
       this.open = false;
       open = null;
       if (state.get().doc !== this.before) applyDoc(this.before, null);
+      else if (this.isolates()) rebuild();
       if (this.isNew && state.get().view.rollback !== this.viewBefore.rollback) setView({ ...state.get().view, rollback: this.viewBefore.rollback }, { rebuild: true });
       state.set((s) => ({ ...s, session: null }));
     }
@@ -399,24 +453,56 @@ export function createDocService(opts: DocServiceOptions): DocService {
   }
 
   function dependents(doc: CadDoc, f: Feature): Feature[] {
-    return doc.features.filter((g) => g.id !== f.id && dependencies(doc, g, (x) => registry.get(x.type)?.parents(x) ?? []).includes(f.id));
+    return doc.features.filter((g) => g.id !== f.id && dependencies(doc, g).includes(f.id));
+  }
+
+  /** A body made by `f` that `d` uses, for "Combine 1 uses Body 2 of Split 1" (or null). */
+  function bodyLink(doc: CadDoc, f: Feature, d: Feature): BodyId | null {
+    const uses = featureUses(registry, d);
+    if (uses === 'all') return null;
+    return uses.find((b) => ownsBody(registry, f, b)) ?? null;
+  }
+
+  /** Why `f` cannot be removed from `doc` (a later feature uses it), or null. */
+  function usedBy(doc: CadDoc, f: Feature): string | null {
+    const deps = dependents(doc, f);
+    if (!deps.length) return null;
+    const d = deps[0];
+    const via = bodyLink(doc, f, d);
+    const body = via ? (storedBodyName(doc, via) ?? 'the body') : null;
+    // A body named as its feature (Enclosure 1's body "Enclosure 1") is named once (SD review round 2).
+    const what = body && body !== f.name ? `${body} of ${f.name}` : f.name;
+    return `${d.name} uses ${what}: delete ${d.name} or change what it uses first`;
+  }
+
+  function removeBlock(id: FeatureId): string | null {
+    const doc = state.get().doc;
+    const f = doc.features.find((g) => g.id === id);
+    if (!f) return 'That feature is not in the part';
+    const now = usedBy(doc, f);
+    if (now) return now;
+    // Delete removes the feature as it was before its panel opened: check that one too.
+    if (open && open.open && open.feature === id && !open.isNew) {
+      const was = open.before.features.find((g) => g.id === id);
+      if (was) return usedBy({ ...doc, features: doc.features.map((g) => (g.id === id ? was : g)) }, was);
+    }
+    return null;
   }
 
   function remove(id: FeatureId): EditResult {
     const no = refuse();
     if (no) return no;
+    // Refused before anything changes: an open panel session on it keeps its work
+    // (review P2/P3 round 1: a refused Delete threw away the edits of the open sketch).
+    const block = removeBlock(id);
+    if (block) return { ok: false, reason: block };
     if (open && open.feature === id) open.discard();
     return edit((doc) => {
       const idx = doc.features.findIndex((g) => g.id === id);
       if (idx < 0) return { ok: false, reason: 'That feature is not in the part' };
       const f = doc.features[idx];
-      const deps = dependents(doc, f);
-      if (deps.length) {
-        const d = deps[0];
-        const viaBody = isBodyMaking(f) && f.creates && isBodyMaking(d) && d.scope.includes(f.creates);
-        const what = viaBody ? `${doc.bodies[f.creates!]?.name ?? 'the body'} of ${f.name}` : f.name;
-        return { ok: false, reason: `${d.name} uses ${what}: delete ${d.name} or change what it uses first` };
-      }
+      const used = usedBy(doc, f);
+      if (used) return { ok: false, reason: used };
       const features = doc.features.filter((g) => g.id !== id);
       const next = gcBodies({ ...doc, features });
       const v = state.get().view;
@@ -435,8 +521,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
       const f = doc.features[from];
       const to = Math.max(0, Math.min(doc.features.length - 1, Math.floor(toIndex)));
       if (to === from) return { doc, label: '' };
-      const parentsOf = (x: Feature) => registry.get(x.type)?.parents(x) ?? [];
-      const deps = dependencies(doc, f, parentsOf);
+      const deps = dependencies(doc, f);
       for (const p of deps) {
         const pi = doc.features.findIndex((g) => g.id === p);
         if (pi >= to && pi !== from) return { ok: false, reason: `${f.name} uses ${doc.features[pi].name}: it cannot move above it` };
@@ -452,9 +537,22 @@ export function createDocService(opts: DocServiceOptions): DocService {
     });
   }
 
+  /**
+   * A body's definition: the stored one, or (a derived body such as a split
+   * piece, which has none until it is renamed or recoloured) the one the
+   * rebuild shows, when a feature makes it.
+   */
+  function bodyDefOf(doc: CadDoc, id: BodyId): { name: string; color: string } | null {
+    const b = doc.bodies[id];
+    if (b) return b;
+    const built = state.get().rebuild.bodies.find((x) => x.id === id);
+    if (!built || !doc.features.some((f) => ownsBody(registry, f, id))) return null;
+    return { name: built.name, color: built.color };
+  }
+
   function renameBody(id: BodyId, raw: string): EditResult {
     return edit((doc) => {
-      const b = doc.bodies[id];
+      const b = bodyDefOf(doc, id);
       if (!b) return { ok: false, reason: 'That body is not in the part' };
       const name = String(raw ?? '').trim();
       if (!name) return { ok: false, reason: 'Enter a name' };
@@ -468,7 +566,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
 
   function setBodyColor(id: BodyId, raw: string): EditResult {
     return edit((doc) => {
-      const b = doc.bodies[id];
+      const b = bodyDefOf(doc, id);
       if (!b) return { ok: false, reason: 'That body is not in the part' };
       const color = String(raw ?? '').trim().toLowerCase();
       if (!COLOR_RE.test(color)) return { ok: false, reason: 'A colour is written #rrggbb' };
@@ -517,9 +615,9 @@ export function createDocService(opts: DocServiceOptions): DocService {
         // Rename every use: other parameters and every feature expression.
         params = params.map((p) => (p.id === id ? p : { ...p, expr: renameInExpr(p.expr, old.name, next.name) }));
         features = features.map((f) => {
-          const exprs = featureExprs(f);
+          const exprs = featureExprs(f, registry);
           if (!exprs.some((e) => renameInExpr(e.expr, old.name, next.name) !== e.expr)) return f;
-          return renameInFeature(f, old.name, next.name);
+          return renameParamInFeature(registry, f, old.name, next.name);
         });
         next.expr = renameInExpr(next.expr, old.name, next.name);
       }
@@ -533,7 +631,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     return edit((doc) => {
       const p = doc.params.find((x) => x.id === id);
       if (!p) return { ok: false, reason: 'That parameter is not in the part' };
-      const users = usersOfParam(doc, p.name);
+      const users = usersOfParam(doc, p.name, registry);
       const names = [...users.params.map((u) => u.name), ...users.features.map((u) => u.name)];
       if (names.length) return { ok: false, reason: `${p.name} can't be deleted: ${listOfNames(names)} ${names.length === 1 ? 'uses' : 'use'} it` };
       return { doc: { ...doc, params: doc.params.filter((x) => x.id !== id) }, label: `Delete parameter ${p.name}` };
@@ -560,8 +658,10 @@ export function createDocService(opts: DocServiceOptions): DocService {
       const f = doc.features.find((g) => g.id === id);
       if (!f) return { ok: false, reason: 'That feature is not in the part' };
       const st: FeatureStatus | undefined = state.get().rebuild.features[id];
-      if (!st?.actions?.includes('repair') || !isBodyMaking(f)) return { ok: false, reason: `${f.name} has nothing to repair` };
-      const next = REPAIR_FUZZY_STEPS.find((s) => s > (f.repair?.fuzzy ?? 0));
+      // Any feature whose build offered "Try repair" (body-making features, combine, press-pull) keeps a `repair` field.
+      if (!st?.actions?.includes('repair')) return { ok: false, reason: `${f.name} has nothing to repair` };
+      const current = (f as Feature & { repair?: { fuzzy: number } }).repair?.fuzzy ?? 0;
+      const next = REPAIR_FUZZY_STEPS.find((s) => s > current);
       if (!next) return { ok: false, reason: `${f.name} cannot be repaired further` };
       return { doc: replaceFeature(doc, { ...f, repair: { fuzzy: next } } as Feature), label: `${FEATURE_ACTION_LABELS.repair} ${f.name}` };
     });
@@ -614,14 +714,25 @@ export function createDocService(opts: DocServiceOptions): DocService {
     setView({ ...v, camera: c });
   }
 
+  function setSketchVisibility(id: FeatureId, mode: 'shown' | 'hidden' | null) {
+    const v = state.get().view;
+    if (state.get().status !== 'ready' || (v.sketches?.[id] ?? null) === mode) return;
+    const sketches = { ...(v.sketches ?? {}) };
+    if (mode) sketches[id] = mode;
+    else delete sketches[id];
+    const next: CadView = { ...v, sketches };
+    if (!Object.keys(sketches).length) delete next.sketches;
+    setView(next);
+  }
+
   async function measure(id: BodyId): Promise<BodyProps> {
     const p = await engine.measure(id);
     state.set((s) => {
       const i = s.rebuild.bodies.findIndex((b) => b.id === id);
       if (i < 0) return s;
       const b = s.rebuild.bodies[i];
-      if (b.volume === p.volume && b.area === p.area) return s;
-      const next: BodyInfo = { ...b, volume: p.volume, area: p.area, bbox: p.bbox, faces: p.faces, edges: p.edges };
+      if (b.volume === p.volume && b.area === p.area && b.solids === p.solids) return s;
+      const next: BodyInfo = { ...b, volume: p.volume, area: p.area, bbox: p.bbox, faces: p.faces, edges: p.edges, solids: p.solids };
       const bodies = [...s.rebuild.bodies];
       bodies[i] = next;
       return { ...s, rebuild: { ...s.rebuild, bodies } };
@@ -677,7 +788,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
           save: { state: 'saved', at: model ? (model.savedAt ?? null) : null },
           history: historyState(),
           session: null,
-          rebuild: { status: 'idle', seq: state.get().rebuild.seq, features: pending, bodies: [], ms: null, message: null },
+          rebuild: { status: 'idle', seq: state.get().rebuild.seq, features: pending, bodies: [], outputs: {}, ms: null, message: null },
         });
         if (!model) {
           // A new Part is stored at once, so its units are fixed from now on.
@@ -711,8 +822,16 @@ export function createDocService(opts: DocServiceOptions): DocService {
   // (leaveNow): on a 1.2 host that is the same conditional write, and while it
   // runs the page is dirty, so the host asks before it goes (setDirty above); on
   // a 1.1 host it posts the model in one message (review round 2).
-  const saveNow = () => autosave?.flushNow();
-  const leaveNow = () => autosave?.leaveNow();
+  // A value typed in a panel field and not applied yet is applied first, as
+  // Enter would, so it goes with the save (SD review round 2: Back lost it).
+  const saveNow = () => {
+    commitPendingEdits();
+    autosave?.flushNow();
+  };
+  const leaveNow = () => {
+    commitPendingEdits();
+    autosave?.leaveNow();
+  };
   const onLeaveKey = (e: KeyboardEvent) => {
     const k = e.key;
     const ctrl = e.ctrlKey || e.metaKey;
@@ -745,14 +864,24 @@ export function createDocService(opts: DocServiceOptions): DocService {
   // asks "Leave without saving?" with this message after the plugin's name,
   // and F5 or closing the tab gets the browser's own prompt. The page never
   // reloads itself (a reload would clear the flag and lose the change).
+  // A value typed in a panel field and not applied yet counts too
+  // (lib/pendingEdits.ts): leaving applies it first, and the question asks only
+  // when it is not saved by then; one the field refused says why.
   let toldDirty = '';
   const dirtyMessage = (s: DocState): string | null => {
     if (s.status !== 'ready') return null;
     const title = String(bridge.context.study?.title ?? '').trim() || 'this Part';
     const save: SaveState = s.save;
-    if (save.state === 'pending' || save.state === 'saving') return `Changes to ${title} are not saved yet.`;
     if (save.state === 'error') return `Changes to ${title} are not saved: ${save.message}.`;
     if (save.state === 'conflict') return `Changes to ${title} are not saved: it was changed in another tab.`;
+    const typed = pendingEdits();
+    if (typed.refused) {
+      // The reason after it when it fits the host's 200 characters.
+      const head = `Changes to ${title} are not saved: the value typed in ${typed.refused.label} is not applied.`;
+      const full = `${head} ${typed.refused.error.replace(/\.$/, '')}.`;
+      return full.length <= 200 ? full : head;
+    }
+    if (save.state === 'pending' || save.state === 'saving' || typed.pending) return `Changes to ${title} are not saved yet.`;
     return null;
   };
   const syncDirty = () => {
@@ -766,6 +895,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     if (s.save !== prev.save || s.status !== prev.status) syncDirty();
   });
   const offTitle = bridge.onStudy(() => syncDirty());
+  const offTyped = subscribePendingEdits(() => syncDirty());
 
   const service: DocService = {
     state,
@@ -779,6 +909,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     rename,
     setSuppressed,
     remove,
+    removeBlock,
     move,
     renameBody,
     setBodyColor,
@@ -794,6 +925,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     setExpanded,
     setPlanes,
     setCamera,
+    setSketchVisibility,
     measure,
     async flush() {
       await autosave?.flush();
@@ -807,9 +939,11 @@ export function createDocService(opts: DocServiceOptions): DocService {
     dispose() {
       if (disposed) return;
       disposed = true;
+      offSolver();
       offStudy();
       offDirty();
       offTitle();
+      offTyped();
       if (typeof window !== 'undefined') {
         window.removeEventListener('pagehide', leaveNow);
         window.removeEventListener('blur', saveNow);
@@ -839,16 +973,3 @@ function listOfNames(names: string[]): string {
   return `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
 }
 
-/** Rename a parameter in every expression field of a feature. */
-function renameInFeature(f: Feature, from: string, to: string): Feature {
-  const skip = new Set(['id', 'type', 'name', 'op', 'creates', 'scope', 'axis', 'suppressed', 'repair']);
-  const walk = (v: unknown): unknown => {
-    if (typeof v === 'string') return renameInExpr(v, from, to);
-    if (Array.isArray(v)) return v.map(walk);
-    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
-    return v;
-  };
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(f)) out[k] = skip.has(k) ? v : walk(v);
-  return out as unknown as Feature;
-}

@@ -12,7 +12,7 @@ import { CameraRig, VIEW_DIRS } from '../../src/viewport/camera';
 const W = 800;
 const H = 600;
 function screen(rig: CameraRig, p: Vector3): [number, number] {
-  const cam = rig.apply(W / H);
+  const cam = rig.apply(W / H, W);
   const v = p.clone().project(cam);
   return [((v.x + 1) / 2) * W, ((1 - v.y) / 2) * H];
 }
@@ -27,6 +27,49 @@ function rigAt(view: keyof typeof VIEW_DIRS = 'home'): CameraRig {
 const close = (a: Vector3, b: Vector3, tol = 1e-6) => a.distanceTo(b) <= tol;
 
 describe('CameraRig', () => {
+  // Review P2/P3 round 1: at 1280 px the framed sketch plane sat half under the tree and the Sketch panel.
+  it('frames beside a column over the left of the view: the centre in the middle of the rest, widened when the rest is narrow', () => {
+    for (const projection of ['perspective', 'orthographic'] as const) {
+      const r = new CameraRig();
+      r.projection = projection;
+      r.orient(VIEW_DIRS.top.dir, VIEW_DIRS.top.up);
+      const sphere = new Sphere(new Vector3(5, 10, 15), 20);
+      r.frame(sphere);
+      const h0 = r.viewHeightAtTarget();
+      r.frameBeside(W, H, 300);
+      // 500 px free, narrower than the 600 px height: the view grows by 600 / 500.
+      expect(r.viewHeightAtTarget()).toBeCloseTo((h0 * H) / (W - 300), 6);
+      const [x, y] = screen(r, sphere.center);
+      expect(x).toBeCloseTo(300 + (W - 300) / 2, 4);
+      expect(y).toBeCloseTo(H / 2, 4);
+      // Still seen straight on: the camera looks along the view direction through the centre (a
+      // camera moved sideways saw a top view's walls in perspective).
+      const below = sphere.center.clone().addScaledVector(r.dop(), 30);
+      const [bx, by] = screen(r, below);
+      expect(Math.hypot(bx - x, by - y)).toBeLessThan(1e-6);
+      expect(r.target.distanceTo(sphere.center)).toBeLessThan(1e-9);
+      // A pose carries the shift, and a new framing starts from none.
+      expect(r.pose().shift).toBe(150);
+      r.frame(sphere);
+      expect(r.shift).toBe(0);
+      // A narrow column: no widening, the centre moves by half its width.
+      const s = new CameraRig();
+      s.projection = projection;
+      s.orient(VIEW_DIRS.top.dir, VIEW_DIRS.top.up);
+      s.frame(sphere);
+      s.frameBeside(W, H, 100);
+      expect(s.viewHeightAtTarget()).toBeCloseTo(h0, 6);
+      expect(screen(s, sphere.center)[0]).toBeCloseTo(W / 2 + 50, 4);
+      // Nothing over the view: framed as before.
+      const t = new CameraRig();
+      t.projection = projection;
+      t.orient(VIEW_DIRS.top.dir, VIEW_DIRS.top.up);
+      t.frame(sphere);
+      t.frameBeside(W, H, 0);
+      expect(screen(t, sphere.center)[0]).toBeCloseTo(W / 2, 4);
+    }
+  });
+
   it('frames a sphere at r / sin(fov / 2) along the view direction (vtk resetCamera)', () => {
     const r = rigAt('front');
     expect(r.target.toArray()).toEqual([5, 10, 15]);

@@ -1,5 +1,5 @@
 // The document: public surface. createDocService (src/doc/service.ts) is the
-// one owner of the model (schema v1, parameters, features, rebuild, undo,
+// one owner of the model (schema v2, parameters, features, rebuild, undo,
 // autosave, conflicts); install() registers the document's own commands.
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -7,7 +7,7 @@ import type { AppServices } from '../types/app';
 
 export { createDocService, type DocServiceOptions } from './service';
 export { createFeatureRegistry, createBuiltinRegistry } from './features/registry';
-export { boxDef, cylinderDef, BOX_ICON, CYLINDER_ICON } from './features/primitives';
+export { removedFeatureMessage, isRemovedFeature } from './features/removed';
 export { OP_LABELS } from './features/body-op';
 export { paramNameProblem } from './params';
 
@@ -15,7 +15,7 @@ export { paramNameProblem } from './params';
  * Undo and redo (Ctrl+Z; Ctrl+Y or Ctrl+Shift+Z). Keyboard commands with no
  * toolbar group; UI-SHELL may register buttons with the same ids (the later
  * registration wins). New-feature commands belong with their panels (UI-SHELL):
- * `services.doc.beginNew('box')` opens the session the panel edits.
+ * `services.doc.beginNew('extrude')` opens the session the panel edits.
  * Returns an uninstall.
  */
 export function install(services: AppServices): () => void {

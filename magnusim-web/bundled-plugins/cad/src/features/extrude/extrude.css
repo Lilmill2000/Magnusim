@@ -1,0 +1,105 @@
+/*
+ * The Extrude panel's profile list (the core's selection list recipe,
+ * style.css:3085-3146 .mat-assign-list / .bc-assign-item / .bc-assign-x) and the
+ * distance value beside the arrow. Colours only through tokens.
+ * Owner: P3-PROFILES.
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+.cad-profile-list {
+  list-style: none;
+  margin: 4px 0 4px;
+  padding: 0;
+  min-height: 28px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  background: var(--mg-surface);
+  min-width: 220px;
+}
+
+.cad-profile-list li.bc-assign-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  background: var(--mg-selected-bg);
+  border-bottom: 1px solid var(--mg-border);
+  font-weight: 500;
+  color: var(--mg-text);
+}
+
+.cad-profile-list li:last-child {
+  border-bottom: none;
+}
+
+.cad-profile-list:empty::after {
+  content: '(none)';
+  display: block;
+  padding: 6px 8px;
+  color: var(--mg-text-subtle);
+  font-style: italic;
+}
+
+.cad-profile-list .cad-profile-name {
+  flex: 1;
+  padding: 4px 0;
+}
+
+.cad-profile-list .mat-assign-state {
+  margin-left: auto;
+  padding-right: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--mg-text-muted);
+  white-space: nowrap;
+}
+
+.cad-profile-list li.is-repaired .mat-assign-state {
+  color: var(--mg-warning);
+}
+
+.cad-profile-list li.is-lost {
+  background: var(--mg-danger-bg);
+}
+
+.cad-profile-list li.is-lost .mat-assign-state {
+  color: var(--mg-danger);
+  font-weight: 600;
+}
+
+.cad-profile-list .bc-assign-x {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mg-text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cad-profile-list .bc-assign-x:hover {
+  background: var(--cad-danger-hover-bg);
+  color: var(--mg-danger);
+}
+
+.cad-check {
+  margin: 0;
+  accent-color: var(--mg-primary);
+}
+
+.cad-extrude-value {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}

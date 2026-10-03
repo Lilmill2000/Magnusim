@@ -114,7 +114,7 @@ export function RenameTitle({
         </span>
       ) : (
         <>
-          <span className="mat-panel-title" data-panel-title="1">
+          <span className="mgk-panel-title" data-panel-title="1">
             {name}
           </span>
           {canRename ? <IconButton icon={ICONS.pencil} label={`Rename ${label}`} onClick={ed.start} data-rename-btn="1" /> : null}

@@ -12,8 +12,8 @@ let ui: ReturnType<typeof mountUi>;
 let f: Feature[];
 
 beforeEach(() => {
-  t = makeServices({ viewport: true });
-  f = [t.doc.seed('box'), t.doc.seed('cylinder'), t.doc.seed('box')];
+  t = makeServices({ viewport: true, panels: true });
+  f = [t.doc.seed('extrude'), t.doc.seed('extrude'), t.doc.seed('extrude')];
   ui = mountUi(t);
 });
 
@@ -29,11 +29,11 @@ describe('design tree', () => {
     expect(ui.$('[data-part-name] .tl')!.textContent).toBe('Part 1');
     expect(ui.$$('.geo-head').map((e) => e.textContent)).toEqual(['PART', 'HISTORY']);
     expect(ui.$$('[data-tree-node^="origin:"] .tl').map((e) => e.textContent)).toEqual(['Top plane', 'Front plane', 'Right plane']);
-    expect(ui.history()).toEqual(['Box 1', 'Cylinder 1', 'Box 2', '|']);
+    expect(ui.history()).toEqual(['Extrude 1', 'Extrude 2', 'Extrude 3', '|']);
     expect(ui.$('[data-bodies-folder] > .tree-row .tl')!.textContent).toBe('Bodies (3)');
     expect(ui.$('[data-params-row] .tl')!.textContent).toBe('Parameters (0)');
     // Feature type icons come from the document's registry.
-    expect(ui.row(f[0].id).querySelector('path')!.getAttribute('d')).toBe(t.doc.features.get('box')!.icon);
+    expect(ui.row(f[0].id).querySelector('path')!.getAttribute('d')).toBe(t.doc.features.get('extrude')!.icon);
   });
 
   it('follows a rename in the host header', () => {
@@ -47,17 +47,17 @@ describe('design tree', () => {
     key('ArrowUp');
     fireEvent.keyDown(bar(), { key: 'ArrowUp' });
     expect(t.doc.calls).toContain('setRollback 2');
-    expect(ui.history()).toEqual(['Box 1', 'Cylinder 1', '|', 'Box 2']);
+    expect(ui.history()).toEqual(['Extrude 1', 'Extrude 2', '|', 'Extrude 3']);
     expect(ui.node(f[2].id).className).toContain('is-rolled-back');
     expect(ui.node(f[1].id).className).not.toContain('is-rolled-back');
     expect(ui.$('[data-bodies-folder] > .tree-row .tl')!.textContent).toBe('Bodies (2)');
     fireEvent.keyDown(bar(), { key: 'Home' });
-    expect(ui.history()).toEqual(['|', 'Box 1', 'Cylinder 1', 'Box 2']);
+    expect(ui.history()).toEqual(['|', 'Extrude 1', 'Extrude 2', 'Extrude 3']);
     expect(ui.$$('[data-rolled-back]')).toHaveLength(3);
     fireEvent.keyDown(bar(), { key: 'ArrowDown' });
-    expect(ui.history()).toEqual(['Box 1', '|', 'Cylinder 1', 'Box 2']);
+    expect(ui.history()).toEqual(['Extrude 1', '|', 'Extrude 2', 'Extrude 3']);
     fireEvent.keyDown(bar(), { key: 'End' });
-    expect(ui.history()).toEqual(['Box 1', 'Cylinder 1', 'Box 2', '|']);
+    expect(ui.history()).toEqual(['Extrude 1', 'Extrude 2', 'Extrude 3', '|']);
     expect(t.doc.state.get().view.rollback).toBeNull();
     expect(bar().getAttribute('aria-valuenow')).toBe('3');
   });
@@ -69,20 +69,20 @@ describe('design tree', () => {
     });
     const bar = ui.$('[data-rollback-bar]')!;
     fireEvent.pointerDown(bar, { button: 0, clientY: 175 });
-    // Over the middle of Cylinder 1's row (y 124..148): the bar goes above it while dragging.
+    // Over the middle of Extrude 2's row (y 124..148): the bar goes above it while dragging.
     act(() => void window.dispatchEvent(new MouseEvent('pointermove', { clientY: 130 })));
-    expect(ui.history()).toEqual(['Box 1', '|', 'Cylinder 1', 'Box 2']);
+    expect(ui.history()).toEqual(['Extrude 1', '|', 'Extrude 2', 'Extrude 3']);
     expect(ui.node(f[1].id).className).toContain('is-rolled-back');
     expect(t.doc.calls.filter((c) => c.startsWith('setRollback'))).toEqual([]);
     act(() => void window.dispatchEvent(new MouseEvent('pointerup', { clientY: 130 })));
     expect(t.doc.calls).toContain('setRollback 1');
     expect(t.doc.state.get().view.rollback).toBe(1);
-    expect(ui.history()).toEqual(['Box 1', '|', 'Cylinder 1', 'Box 2']);
+    expect(ui.history()).toEqual(['Extrude 1', '|', 'Extrude 2', 'Extrude 3']);
   });
 
   it('suppresses from the context menu: the row greys and says so', () => {
     fireEvent.contextMenu(ui.row(f[1].id), { clientX: 40, clientY: 60 });
-    expect(ui.menu()).toEqual(['Edit Cylinder 1', 'Rename Cylinder 1', 'Suppress Cylinder 1', 'Roll back to here', 'Delete Cylinder 1']);
+    expect(ui.menu()).toEqual(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Roll back to here', 'Delete Extrude 2']);
     expect(ui.node(f[1].id).className).toContain('selected');
     fireEvent.click(ui.menuItem('suppress'));
     expect(t.doc.calls).toContain(`setSuppressed ${f[1].id} true`);
@@ -90,7 +90,7 @@ describe('design tree', () => {
     expect(ui.node(f[1].id).className).toContain('is-suppressed');
     expect(ui.row(f[1].id).querySelector('.tree-sub')!.textContent).toBe('Suppressed');
     fireEvent.contextMenu(ui.row(f[1].id), { clientX: 40, clientY: 60 });
-    expect(ui.menu()).toContain('Unsuppress Cylinder 1');
+    expect(ui.menu()).toContain('Unsuppress Extrude 2');
     fireEvent.click(ui.menuItem('suppress'));
     expect(ui.node(f[1].id).className).not.toContain('is-suppressed');
   });
@@ -99,43 +99,53 @@ describe('design tree', () => {
     fireEvent.contextMenu(ui.row(f[0].id), { clientX: 40, clientY: 60 });
     fireEvent.click(ui.menuItem('rollback'));
     expect(t.doc.calls).toContain('setRollback 1');
-    expect(ui.history()).toEqual(['Box 1', '|', 'Cylinder 1', 'Box 2']);
+    expect(ui.history()).toEqual(['Extrude 1', '|', 'Extrude 2', 'Extrude 3']);
     fireEvent.contextMenu(ui.row(f[2].id), { clientX: 40, clientY: 60 });
     // A rolled-back feature cannot be edited until the bar moves below it.
-    expect(ui.menu()).toEqual(['(Edit Box 2)', 'Rename Box 2', 'Suppress Box 2', 'Roll back to here', 'Roll to end', 'Delete Box 2']);
+    expect(ui.menu()).toEqual(['(Edit Extrude 3)', 'Rename Extrude 3', 'Suppress Extrude 3', 'Roll back to here', 'Roll to end', 'Delete Extrude 3']);
     fireEvent.click(ui.menuItem('roll-end'));
     expect(t.doc.state.get().view.rollback).toBeNull();
   });
 
-  it('deletes from the menu, and says why when the document refuses', () => {
+  it('deletes from the menu; offers it disabled with the reason when the document would refuse, and the Delete key says why', () => {
     fireEvent.contextMenu(ui.row(f[2].id), { clientX: 40, clientY: 60 });
     fireEvent.click(ui.menuItem('delete'));
-    expect(ui.history()).toEqual(['Box 1', 'Cylinder 1', '|']);
+    expect(ui.history()).toEqual(['Extrude 1', 'Extrude 2', '|']);
     act(() => {
       t.doc.rename(f[0].id, 'Locked');
     });
+    // Review P2/P3 round 2: "Delete Sketch 1" was offered although it would be refused.
     fireEvent.contextMenu(ui.row(f[0].id), { clientX: 40, clientY: 60 });
+    expect(ui.menuItem('delete').getAttribute('aria-disabled')).toBe('true');
+    fireEvent.mouseEnter(ui.menuItem('delete'));
+    expect(ui.tip()).toBe('Delete LockedExtrude 2 uses Locked');
+    fireEvent.mouseLeave(ui.menuItem('delete'));
+    const toasts = t.ws.log.toasts.length;
     fireEvent.click(ui.menuItem('delete'));
-    expect(ui.history()).toEqual(['Locked', 'Cylinder 1', '|']);
-    expect(t.ws.log.toasts.at(-1)).toEqual({ message: 'Delete Locked failed: Cylinder 1 uses Locked', kind: 'error' });
+    expect(ui.history()).toEqual(['Locked', 'Extrude 2', '|']);
+    expect(t.ws.log.toasts).toHaveLength(toasts);
+    fireEvent.click(ui.row(f[0].id));
+    key('Delete');
+    expect(ui.history()).toEqual(['Locked', 'Extrude 2', '|']);
+    expect(t.ws.log.toasts.at(-1)).toEqual({ message: 'Delete Locked failed: Extrude 2 uses Locked', kind: 'error' });
   });
 
   it('deletes the selected feature with the Delete key', () => {
     fireEvent.click(ui.row(f[1].id));
     key('Delete');
     expect(t.doc.calls).toContain(`remove ${f[1].id}`);
-    expect(ui.history()).toEqual(['Box 1', 'Box 2', '|']);
+    expect(ui.history()).toEqual(['Extrude 1', 'Extrude 3', '|']);
     expect(t.services.selection.get().items).toEqual([]);
   });
 
   it('shows a failed feature in red with a "What\'s wrong" tooltip and its fix in the menu', () => {
-    act(() => t.doc.setStatus(f[2].id, { state: 'error', message: 'Box 2 failed: the result is not a valid solid', actions: ['repair'] }));
+    act(() => t.doc.setStatus(f[2].id, { state: 'error', message: 'Extrude 3 failed: the result is not a valid solid', actions: ['repair'] }));
     expect(ui.node(f[2].id).className).toContain('is-error');
     const badge = ui.$(`[data-tree-node="${f[2].id}"] [data-feature-badge]`)!;
     expect(badge.getAttribute('data-feature-badge')).toBe('error');
-    expect(badge.getAttribute('aria-label')).toBe("What's wrong: Box 2 failed: the result is not a valid solid");
+    expect(badge.getAttribute('aria-label')).toBe("What's wrong: Extrude 3 failed: the result is not a valid solid");
     fireEvent.mouseEnter(badge);
-    expect(ui.tip()).toBe("What's wrongBox 2 failed: the result is not a valid solid");
+    expect(ui.tip()).toBe("What's wrongExtrude 3 failed: the result is not a valid solid");
     fireEvent.mouseLeave(badge);
     expect(ui.tip()).toBeNull();
     // The tooltip goes with the badge when the error is fixed under a still pointer.
@@ -144,7 +154,7 @@ describe('design tree', () => {
     act(() => t.doc.setStatus(f[2].id, null));
     expect(ui.$(`[data-tree-node="${f[2].id}"] [data-feature-badge]`)).toBeNull();
     expect(ui.tip()).toBeNull();
-    act(() => t.doc.setStatus(f[2].id, { state: 'error', message: 'Box 2 failed: the result is not a valid solid', actions: ['repair'] }));
+    act(() => t.doc.setStatus(f[2].id, { state: 'error', message: 'Extrude 3 failed: the result is not a valid solid', actions: ['repair'] }));
     fireEvent.contextMenu(ui.row(f[2].id), { clientX: 40, clientY: 60 });
     expect(ui.menu()).toContain('Try repair');
     fireEvent.click(ui.menuItem('action-repair'));
@@ -158,10 +168,10 @@ describe('design tree', () => {
   it('opens the feature panel on double-click, but not for a rolled-back feature', () => {
     fireEvent.doubleClick(ui.row(f[1].id));
     expect(t.doc.calls).toContain(`beginEdit ${f[1].id}`);
-    expect(ui.$('[data-cad-panel="feature"] [data-panel-title]')!.textContent).toBe('Cylinder 1');
+    expect(ui.$('[data-cad-panel="feature"] [data-panel-title]')!.textContent).toBe('Extrude 2');
     act(() => t.doc.setRollback(2));
     fireEvent.doubleClick(ui.row(f[2].id));
-    expect(t.ws.log.toasts.at(-1)).toEqual({ message: 'Roll forward to edit Box 2', kind: 'info' });
+    expect(t.ws.log.toasts.at(-1)).toEqual({ message: 'Roll forward to edit Extrude 3', kind: 'info' });
     expect(t.doc.calls).not.toContain(`beginEdit ${f[2].id}`);
   });
 
@@ -169,14 +179,14 @@ describe('design tree', () => {
     fireEvent.click(ui.row(f[0].id));
     key('F2');
     const input = () => ui.$<HTMLInputElement>(`[data-tree-node="${f[0].id}"] input`);
-    expect(input()!.value).toBe('Box 1');
-    fireEvent.change(input()!, { target: { value: 'cylinder 1' } });
+    expect(input()!.value).toBe('Extrude 1');
+    fireEvent.change(input()!, { target: { value: 'extrude 2' } });
     fireEvent.keyDown(input()!, { key: 'Enter' });
-    expect(ui.$(`[data-tree-node="${f[0].id}"] [role="alert"]`)!.textContent).toBe('A feature named "Cylinder 1" already exists');
+    expect(ui.$(`[data-tree-node="${f[0].id}"] [role="alert"]`)!.textContent).toBe('A feature named "Extrude 2" already exists');
     expect(input()).not.toBeNull();
     fireEvent.keyDown(input()!, { key: 'Escape' });
     expect(input()).toBeNull();
-    expect(ui.row(f[0].id).querySelector('.tl')!.textContent).toBe('Box 1');
+    expect(ui.row(f[0].id).querySelector('.tl')!.textContent).toBe('Extrude 1');
 
     fireEvent.contextMenu(ui.row(f[0].id), { clientX: 40, clientY: 60 });
     fireEvent.click(ui.menuItem('rename'));
@@ -259,11 +269,11 @@ describe('design tree', () => {
     ui = mountUi(t);
     expect(ui.$('[data-tree-empty="loading"]')!.textContent).toBe('Opening the part…');
     expect(ui.$('[data-tree-empty="history"]')).toBeNull();
-    expect(ui.$('[data-command="solid.box"]')!.getAttribute('data-disabled-reason')).toBe('The part is still loading');
+    expect(ui.$('[data-command="modify.parameters"]')!.getAttribute('data-disabled-reason')).toBe('The part is still loading');
     act(() => (t.doc.state as unknown as { set(v: object): void }).set({ status: 'error', error: 'Could not read the part: bad JSON' }));
     const err = ui.$('[data-tree-error]')!;
     expect(err.textContent).toBe('Could not read the part: bad JSONTry again');
-    fireEvent.click(err.querySelector('[data-fix="Try again"]')!);
+    fireEvent.click([...err.querySelectorAll('button')].find((b) => b.textContent === 'Try again')!);
     expect(t.doc.calls).toContain('reload');
   });
 

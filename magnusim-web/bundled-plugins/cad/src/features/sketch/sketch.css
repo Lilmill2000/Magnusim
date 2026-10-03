@@ -1,0 +1,30 @@
+/*
+ * Profile overlay (P3-PROFILES): open-profile markers over the viewport, and
+ * the open-profile chip's count. Colours only through tokens.
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+.cad-open-end {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 9px;
+  height: 9px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--mg-bg);
+  border: 1.5px solid var(--mg-warning);
+  box-shadow: 0 0 0 1px var(--mg-bg);
+  pointer-events: none;
+}
+
+/* Sketch rows in the design tree: the definition prefix and the lock. */
+.tree-row .cad-sketch-prefix {
+  color: var(--mg-text-muted);
+}
+
+.tree-row .cad-sketch-lock {
+  display: inline-flex;
+  margin-left: 4px;
+  vertical-align: -1px;
+  color: var(--mg-text-muted);
+}

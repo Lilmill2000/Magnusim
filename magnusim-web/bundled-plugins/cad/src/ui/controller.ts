@@ -4,6 +4,7 @@
 // per AppServices (uiFor), created by install() or on first use.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { isRemovedFeature, removedFeatureMessage } from '../doc/features/removed';
 import { clearSelection, selectItem } from '../lib/selection';
 import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
@@ -15,12 +16,21 @@ import { hideTip, type MenuEntry, type MenuItem } from './kit';
 import { checkItemName } from './tree/names';
 import { rollbackIndex, rollbackValue } from './tree/model';
 
-/** Feature types the UI has a panel for (the toolbar shows a type only when the document builds it too). */
-export const PANEL_TYPES: readonly FeatureType[] = ['box', 'cylinder'];
+/**
+ * Whether some panel edits features of this type. Every feature type brings
+ * its own panel in its module (services.modules.panelFor) and registers its
+ * own commands; the shell has none of its own since Box and Cylinder were
+ * removed (SD pass).
+ */
+export function hasPanel(services: AppServices, type: FeatureType): boolean {
+  return !!services.modules?.panelFor(type);
+}
 
 export type PanelState =
   | { kind: 'feature'; session: EditSession; type: FeatureType; feature: FeatureId; isNew: boolean }
-  | { kind: 'params' };
+  | { kind: 'params' }
+  /** A module's tool panel (Measure, Mass properties, Check, Export): not a feature, not undoable. */
+  | { kind: 'tool'; tool: string };
 
 export interface MenuState {
   x: number;
@@ -42,12 +52,15 @@ export interface UiController {
   readonly state: StateStore<UiState>;
   /** Why the model cannot be edited right now, or null. */
   editBlock(): string | null;
-  openNew(type: FeatureType): void;
+  /** Open the panel of a new feature (`init`: fields filled from the selection, select-first). */
+  openNew(type: FeatureType, init?: Partial<Feature>): void;
   openEdit(id: FeatureId): void;
   openParams(): void;
+  /** Open a module's tool panel (closes the open panel first, as any panel does). */
+  openTool(id: string): void;
   /** Close the open panel: keep what applied (commit), or discard a new feature whose inputs are incomplete. */
   closePanel(): void;
-  /** Undo inside a panel: drop what the session changed (a new feature goes away) and close. */
+  /** Undo inside a panel: undo what the session changed (a new feature goes away; Redo brings it back) and close. */
   cancelPanel(): void;
   /** The panel's Delete: discard a new feature, remove an existing one. */
   deletePanelFeature(): void;
@@ -106,6 +119,36 @@ export function createUiController(services: AppServices): UiController {
 
   const featureName = (id: FeatureId) => featureById(services, id)?.name ?? 'the feature';
 
+  /**
+   * After a Delete: the later features that built before it and fail once the part is rebuilt
+   * without it are named, with the way back (review P2/P3 round 2: deleting Combine 1 turned
+   * Delete faces 1 and Press-pull 1 red, "Face not found after rebuild", and nothing said why).
+   */
+  function nameBrokenAfterDelete(id: FeatureId, name: string) {
+    const s0 = doc.state.get();
+    const builtBefore = new Set(s0.doc.features.filter((f) => f.id !== id && ['ok', 'warning'].includes(s0.rebuild.features[f.id]?.state ?? '')).map((f) => f.id));
+    if (!builtBefore.size) return;
+    const seq0 = s0.rebuild.seq;
+    let done = false;
+    const stop = () => {
+      done = true;
+      off();
+      clearTimeout(timer);
+    };
+    const check = () => {
+      const s = doc.state.get();
+      if (done || s.rebuild.seq <= seq0 || s.rebuild.status === 'running' || s.doc.features.some((f) => f.id === id)) return;
+      stop();
+      const broken = s.doc.features.filter((f) => builtBefore.has(f.id) && s.rebuild.features[f.id]?.state === 'error').map((f) => f.name);
+      if (!broken.length) return;
+      const list = broken.length === 1 ? broken[0] : `${broken.slice(0, -1).join(', ')} and ${broken[broken.length - 1]}`;
+      services.bridge.toast(`Deleted ${name}: ${list} ${broken.length === 1 ? 'fails' : 'fail'} without it. Undo (Ctrl+Z) brings ${name} back.`, 'error');
+    };
+    const off = doc.state.subscribe(check);
+    const timer = setTimeout(stop, 120_000);
+    offs.push(stop);
+  }
+
   function closePanel() {
     const p = state.get().panel;
     if (!p) return;
@@ -156,15 +199,34 @@ export function createUiController(services: AppServices): UiController {
   const c: UiController = {
     state,
     editBlock,
-    openNew(type) {
+    openNew(type, init) {
       const label = doc.features.get(type)?.label ?? type;
-      begin(() => doc.beginNew(type), type, `New ${label}`);
+      begin(() => doc.beginNew(type, init), type, `New ${label}`);
+    },
+    openTool(id) {
+      const p = state.get().panel;
+      if (p?.kind === 'tool' && p.tool === id) return;
+      if (!services.modules?.tool(id)) return;
+      closePanel();
+      closeMenu();
+      state.set({ panel: { kind: 'tool', tool: id }, panelNote: null });
     },
     openEdit(id) {
       const p = state.get().panel;
       if (p?.kind === 'feature' && p.feature === id) return;
       const f = featureById(services, id);
       if (!f) return;
+      // A removed type (Box, Cylinder): say so and what to do instead (SD pass).
+      const removed = removedFeatureMessage(f);
+      if (removed) {
+        services.bridge.toast(`${removed}. Solids come from sketches now: delete it, then sketch the shape and extrude it.`, 'info');
+        return;
+      }
+      // No panel edits this type (a module that is not installed): say so, never open another panel on it.
+      if (!hasPanel(services, f.type)) {
+        services.bridge.toast(`This version of Magnusim CAD cannot edit ${f.name}: no panel edits ${f.type} features`, 'info');
+        return;
+      }
       begin(() => doc.beginEdit(id), f.type, `Edit ${f.name}`);
     },
     openParams() {
@@ -180,7 +242,13 @@ export function createUiController(services: AppServices): UiController {
       state.set({ panel: null, panelNote: null });
       if (p?.kind !== 'feature') return;
       try {
-        p.session.discard();
+        // What Done would keep becomes one undo step, undone at once, so Redo brings it back (review
+        // P2/P3 round 2: Ctrl+Z dropped the panel's changes, a new feature went away, and Redo could
+        // not bring them back). A new feature still incomplete is only discarded.
+        if (p.session.changed && p.session.incomplete() === null) {
+          p.session.commit();
+          doc.undo();
+        } else p.session.discard();
       } catch (err) {
         fail(`Undo ${featureName(p.feature)}`, errText(err));
       }
@@ -198,6 +266,14 @@ export function createUiController(services: AppServices): UiController {
         }
         return;
       }
+      // Refused (a later feature uses it): say why and keep the panel and its work
+      // as they are. (Review P2/P3 round 1: the session was discarded first, so a
+      // refused Delete threw away every edit made in the open sketch.)
+      const block = doc.removeBlock(p.feature);
+      if (block) {
+        state.set({ panelNote: `Delete failed: ${block}` });
+        return;
+      }
       // Undo the session's own changes, then remove the feature: one undo step
       // brings back the feature as it was before the panel opened.
       try {
@@ -208,18 +284,9 @@ export function createUiController(services: AppServices): UiController {
         return;
       }
       const r = doc.remove(p.feature);
-      if (r.ok) {
-        state.set({ panel: null, panelNote: null });
-        return;
-      }
-      // Refused (another feature uses it): keep the panel open on the feature and say why.
-      try {
-        const again = doc.beginEdit(p.feature);
-        state.set({ panel: { ...p, session: again }, panelNote: `Delete failed: ${r.reason}` });
-      } catch {
-        state.set({ panel: null, panelNote: null });
-        fail(`Delete ${name}`, r.reason);
-      }
+      state.set({ panel: null, panelNote: null });
+      if (!r.ok) fail(`Delete ${name}`, r.reason);
+      else nameBrokenAfterDelete(p.feature, name);
     },
     setPanelNote(note) {
       state.set({ panelNote: note });
@@ -313,6 +380,7 @@ export function createUiController(services: AppServices): UiController {
         else {
           // The deleted feature leaves the selection.
           services.selection.set((s) => ({ ...s, items: s.items.filter((it) => !(it.kind === 'feature' && it.feature === id)) }));
+          nameBrokenAfterDelete(id, f.name);
         }
       } catch (err) {
         fail(`Delete ${f.name}`, errText(err));
@@ -364,7 +432,7 @@ export function createUiController(services: AppServices): UiController {
         {
           id: 'edit',
           label: `Edit ${f.name}`,
-          disabled: block ?? (rolledBack ? `Roll forward to edit ${f.name}` : null),
+          disabled: block ?? (isRemovedFeature(f) ? `${removedFeatureMessage(f)}. Solids come from sketches now: delete it, then sketch the shape and extrude it` : rolledBack ? `Roll forward to edit ${f.name}` : null),
           run: () => c.openEdit(id),
         },
         { id: 'rename', label: `Rename ${f.name}`, disabled: block, run: () => c.startRename('feature', id) },
@@ -383,7 +451,9 @@ export function createUiController(services: AppServices): UiController {
         },
       );
       if (bar < d.doc.features.length) items.push({ id: 'roll-end', label: 'Roll to end', run: () => c.rollToEnd() } satisfies MenuItem);
-      items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: `Delete ${f.name}`, danger: true, disabled: block, run: () => c.deleteFeature(id) });
+      // Refused while a later feature uses it: offered disabled, with the reason (review P2/P3 round 2:
+      // "Delete Sketch 1" was offered, and only the click said no).
+      items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: `Delete ${f.name}`, danger: true, disabled: block ?? doc.removeBlock(id), run: () => c.deleteFeature(id) });
       return items;
     },
     bodyMenu(id) {
@@ -407,7 +477,7 @@ export function createUiController(services: AppServices): UiController {
     },
     closeMenu,
     featureOfItem(item) {
-      if (item.kind === 'feature') return item.feature;
+      if (item.kind === 'feature' || item.kind === 'sketch' || item.kind === 'region') return item.feature;
       if (item.kind === 'origin') return null;
       const b = doc.state.get().rebuild.bodies.find((x) => x.id === item.body);
       return b?.feature ?? null;
@@ -431,7 +501,7 @@ export function createUiController(services: AppServices): UiController {
       }
       if (s.session && (p?.kind !== 'feature' || p.session.id !== s.session.id)) {
         const open = doc.session();
-        if (open && open.open && open.id === s.session.id && PANEL_TYPES.includes(open.draft.type)) {
+        if (open && open.open && open.id === s.session.id && hasPanel(services, open.draft.type)) {
           state.set({ panel: { kind: 'feature', session: open, type: open.draft.type, feature: open.feature, isNew: open.isNew }, panelNote: null });
         }
       }
@@ -445,7 +515,16 @@ export function createUiController(services: AppServices): UiController {
     doc.state.subscribe((s, prev) => {
       if (s.rebuild.seq === prev.rebuild.seq || s.status !== 'ready') return;
       const built = new Set(s.rebuild.bodies.map((b) => b.id));
-      const keep = (it: SelectionItem) => (it.kind === 'feature' || it.kind === 'origin' ? true : built.has(it.body));
+      // Sketch items stay while their sketch is built (sketch mode prunes its own); a region while its key exists.
+      const keep = (it: SelectionItem) => {
+        if (it.kind === 'feature' || it.kind === 'origin') return true;
+        if (it.kind === 'sketch') return !!s.rebuild.outputs?.[it.feature];
+        if (it.kind === 'region') {
+          const out = s.rebuild.outputs?.[it.feature];
+          return !!out && out.type === 'sketch' && out.regions.some((r) => r.key === it.key);
+        }
+        return built.has(it.body);
+      };
       if (services.selection.get().items.every(keep)) return;
       services.selection.set((sel) => ({ ...sel, items: sel.items.filter(keep) }));
     }),

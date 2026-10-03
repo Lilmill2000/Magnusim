@@ -8,12 +8,14 @@
 //   - hiding a selected body takes it out of the selection;
 //   - F2 and Delete on a face say what they do instead of doing nothing;
 //   - the origin planes' Always and the camera are kept per Part (not undoable);
-//   - a parameter in use says who uses it: "width can't be deleted: h and Box 1 use it".
-// window.__CAD__ is used only to read the viewport's projection and camera.
+//   - a parameter in use says who uses it: "width can't be deleted: h and Extrude 1 use it".
+// window.__CAD__ is used only to read the viewport's projection and camera, and
+// (helpers.ts addSketch / addSolid) to set sketched solids up: there is no Box
+// since decision 2026-10-01.
 // Owner: INTEGRATE (review round 3).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 
 type Vec3 = [number, number, number];
 type Loc = ReturnType<FrameLocator['locator']>;
@@ -36,15 +38,6 @@ async function setField(panel: Loc, field: string, value: string) {
   await expect(panel.locator(`.nui[data-field="${field}"] [data-nui-error]`)).toHaveCount(0);
 }
 
-/** A feature from the toolbar, its fields set, then Done. */
-async function addFeature(frame: FrameLocator, type: 'box' | 'cylinder', fields: Record<string, string> = {}) {
-  await frame.locator(`[data-cad-toolbar] [data-command="solid.${type}"]`).click();
-  const panel = frame.locator('[data-cad-panel="feature"]');
-  await expect(panel).toHaveCount(1);
-  for (const [k, v] of Object.entries(fields)) await setField(panel, k, v);
-  await panel.locator('[data-panel-done]').click();
-  await expect(panel).toHaveCount(0);
-}
 
 const featureRow = (frame: FrameLocator, name: string) => frame.locator('[data-cad-tree] [data-feature-row]').filter({ has: frame.locator('> .tree-row .tl', { hasText: new RegExp(`^${name}$`) }) });
 const expectSaved = (frame: FrameLocator) => expect(frame.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 20_000 });
@@ -74,10 +67,10 @@ async function onPage(page: Page, pts: Vec3[]): Promise<[number, number][]> {
   return xy.map((p) => [box.x + p![0], box.y + p![1]]);
 }
 
-/** Two boxes: Box 1 (Body 1, 8000 mm³) at the origin, Box 2 (Body 2, 27,000 mm³) 30 mm along X. */
-async function twoBoxes(frame: FrameLocator) {
-  await addFeature(frame, 'box');
-  await addFeature(frame, 'box', { 'origin.0': '50', 'size.0': '30', 'size.1': '30', 'size.2': '30' });
+/** Two cubes, sketched and extruded: Extrude 1 (Body 1, 8000 mm³) at the origin, Extrude 2 (Body 2, 27,000 mm³) from x = 50. */
+async function twoBoxes(page: Page, frame: FrameLocator) {
+  await addSolid(page);
+  await addSolid(page, { at: [50, 0, 0], size: [30, 30, 30] });
   await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeTotal of 2 bodies · 35,000 mm³');
   await frame.locator('[data-cad-toolbar] [data-command="view.fit"]').click();
 }
@@ -91,11 +84,12 @@ async function pickBody2Face(page: Page, frame: FrameLocator) {
 
 test('cad:p1-review3-precision a size field shows every stored digit while edited, so an edit keeps them; commas are refused with a reason', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
-  await addFeature(frame, 'box');
+  // A 20 x 20 profile: its extrude's distance is the size field.
+  await addSolid(page);
   const vol = frame.locator('[data-chip="volume"] [data-volume-mm3]');
-  await frame.locator('[data-cad-tree] [data-feature-row] > .tree-row').first().dblclick();
+  await frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="extrude"] > .tree-row').dblclick();
   const panel = frame.locator('[data-cad-panel="feature"]');
-  const len = panel.locator('.nui[data-field="size.0"] input');
+  const len = panel.locator('.nui[data-field="distance"] input');
   await len.fill('12.3456789');
   await len.press('Enter');
   // Still in the field: every digit; out of it: the readout's 6 significant digits.
@@ -128,12 +122,12 @@ test('cad:p1-review3-precision a size field shows every stored digit while edite
   const before = await vol.getAttribute('data-volume-mm3');
   await len.fill('1,500');
   await len.press('Enter');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-error]')).toHaveText('No commas in numbers: write 1500, or 1.5 for a decimal');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-error]')).toHaveText('No commas in numbers: write 1500, or 1.5 for a decimal');
   expect(await vol.getAttribute('data-volume-mm3')).toBe(before);
   await len.press('Escape');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-error]')).toHaveCount(0);
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-error]')).toHaveCount(0);
   await expect(len).toHaveValue('1234567.891');
-  await setField(panel, 'size.0', '1500');
+  await setField(panel, 'distance', '1500');
   await expect(frame.locator('[data-chip="volume"]')).toHaveText('Volume600,000 mm³');
   await panel.locator('[data-panel-done]').click();
   expect(seen.csp, 'CSP violations').toEqual([]);
@@ -142,7 +136,7 @@ test('cad:p1-review3-precision a size field shows every stored digit while edite
 
 test('cad:p1-review3-escape-selection Escape with nothing open lets go of the viewport selection', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
-  await twoBoxes(frame);
+  await twoBoxes(page, frame);
   await pickBody2Face(page, frame);
   await page.keyboard.press('Escape');
   await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeTotal of 2 bodies · 35,000 mm³');
@@ -162,7 +156,7 @@ test('cad:p1-review3-escape-selection Escape with nothing open lets go of the vi
 test('cad:p1-review3-hide-deselects hiding a selected body takes it, and its faces, out of the selection', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tree = frame.locator('[data-cad-tree]');
-  await twoBoxes(frame);
+  await twoBoxes(page, frame);
   await tree.locator('[data-bodies-folder] > .tree-row').click();
   const body2 = tree.locator('[data-body-row]').nth(1);
   await expect(body2.locator('> .tree-row .tl')).toHaveText('Body 2');
@@ -187,18 +181,25 @@ test('cad:p1-review3-hide-deselects hiding a selected body takes it, and its fac
 test('cad:p1-review3-key-hints F2 and Delete on a face say what they do instead of doing nothing', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const toast = page.locator('#workspace-overlay [data-ws-toast]');
-  await twoBoxes(frame);
+  await twoBoxes(page, frame);
   await pickBody2Face(page, frame);
   await page.keyboard.press('F2');
   await expect(toast).toHaveText(/Faces have no names\. F2 renames a feature or a body: select one in the tree\./);
   await expect(frame.locator('[data-cad-tree] input[aria-label="Feature name"]')).toHaveCount(0);
+  // Delete on a face of a native feature (P2, plan §3.9): the frame asks what to delete,
+  // focus on Cancel; Escape keeps everything (before P2 a toast said "delete Box 2 in the history").
   await page.keyboard.press('Delete');
-  await expect(toast).toHaveText(/A face cannot be deleted on its own\. To remove it, delete Box 2 in the history\./);
-  await expect(frame.locator('[data-cad-tree] [data-feature-row]')).toHaveCount(2);
+  const dlg = frame.locator('[data-cad-dialog]');
+  await expect(dlg.locator('h2')).toHaveText('Delete faces of Extrude 2?');
+  await expect(dlg.locator('[data-dialog-choice]')).toHaveText(['Delete feature Extrude 2', 'Delete faces and heal', 'Cancel']);
+  await expect(dlg.locator('[data-dialog-choice="cancel"]')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dlg).toHaveCount(0);
+  await expect(frame.locator('[data-cad-tree] [data-feature-row]')).toHaveCount(4);
   // A feature selected: F2 renames it, as before.
-  await featureRow(frame, 'Box 2').locator('> .tree-row').click();
+  await featureRow(frame, 'Extrude 2').locator('> .tree-row').click();
   await page.keyboard.press('F2');
-  await expect(frame.locator('[data-cad-tree] input[aria-label="Feature name"]')).toHaveValue('Box 2');
+  await expect(frame.locator('[data-cad-tree] input[aria-label="Feature name"]')).toHaveValue('Extrude 2');
   await page.keyboard.press('Escape');
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
@@ -206,7 +207,8 @@ test('cad:p1-review3-key-hints F2 and Delete on a face say what they do instead 
 
 test('cad:p1-review3-view-kept the origin planes Always and the camera are kept per Part, and are not undo steps', async ({ page, request }) => {
   const { seen, frame, row, projectId } = await freshPart(page, request);
-  await addFeature(frame, 'box');
+  // One edit: a sketch.
+  await addSketch(page);
   await expectSaved(frame);
   const studyId = /\/ws\/cad\/part\/([^/?#]+)/.exec(decodeURIComponent(page.url()))![1];
   // Origin planes: Always, from the Views menu.
@@ -233,7 +235,7 @@ test('cad:p1-review3-view-kept the origin planes Always and the camera are kept 
       return v && v.planes === 'always' && v.camera && near(v.camera.position, cam.position) ? 'kept' : JSON.stringify(v);
     }, { timeout: 10_000 })
     .toBe('kept');
-  // Neither is an undo step: Ctrl+Z undoes the box, and the planes stay Always.
+  // Neither is an undo step: Ctrl+Z undoes the sketch, and the planes stay Always.
   await page.keyboard.press('Control+z');
   await expect(frame.locator('[data-cad-tree] [data-tree-empty="history"]')).toHaveText('No features yet');
   expect(await planesMode(page)).toBe('always');
@@ -269,7 +271,7 @@ test('cad:p1-review3-view-kept the origin planes Always and the camera are kept 
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test("cad:p1-review3-param-in-use a parameter in use says who uses it: \"width can't be deleted: h and Box 1 use it\"", async ({ page, request }) => {
+test("cad:p1-review3-param-in-use a parameter in use says who uses it: \"width can't be deleted: h and Extrude 1 use it\"", async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tb = frame.locator('[data-cad-toolbar]');
   await tb.locator('[data-command="modify.parameters"]').click();
@@ -283,16 +285,22 @@ test("cad:p1-review3-param-in-use a parameter in use says who uses it: \"width c
   await add('width', '40 mm');
   await add('h', 'width / 2');
   await params.locator('[data-panel-done]').click();
-  await addFeature(frame, 'box', { 'size.0': 'width' });
+  // A sketch extruded "width".
+  await addSketch(page);
+  await tb.locator('[data-command="solid.extrude"]').click();
+  const panel = frame.locator('[data-cad-panel="feature"]');
+  await setField(panel, 'distance', 'width');
+  await panel.locator('[data-panel-done]').click();
+  await expect(panel).toHaveCount(0);
   await tb.locator('[data-command="modify.parameters"]').click();
   await params.locator('[data-param-row="width"] [data-param-delete]').click();
-  await expect(params.locator('[data-param-error="width"]')).toHaveText("width can't be deleted: h and Box 1 use it");
+  await expect(params.locator('[data-param-error="width"]')).toHaveText("width can't be deleted: h and Extrude 1 use it");
   await expect(params.locator('[data-param-row="width"]')).toHaveCount(1);
   // One user: "uses".
   await params.locator('[data-param-row="h"] [data-param-delete]').click();
   await expect(params.locator('[data-param-row="h"]')).toHaveCount(0);
   await params.locator('[data-param-row="width"] [data-param-delete]').click();
-  await expect(params.locator('[data-param-error="width"]')).toHaveText("width can't be deleted: Box 1 uses it");
+  await expect(params.locator('[data-param-error="width"]')).toHaveText("width can't be deleted: Extrude 1 uses it");
   await params.locator('[data-panel-done]').click();
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
@@ -300,7 +308,7 @@ test("cad:p1-review3-param-in-use a parameter in use says who uses it: \"width c
 
 test('cad:p1-review3-not-saved a save the host refuses says why ("Not saved: the disk is full") with Retry, keeps asking before leaving, and Retry saves', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
-  await addFeature(frame, 'box');
+  await addSolid(page);
   await expectSaved(frame);
   // The host refuses every commit, the automatic retries' too, until the disk has room again
   // (`room`, set just before Retry is clicked): its own answer, HTTP 507 disk_full. Nothing
@@ -314,7 +322,7 @@ test('cad:p1-review3-not-saved a save the host refuses says why ("Not saved: the
     refused++;
     await route.fulfill({ status: 507, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'there is not enough free disk space for this file', code: 'disk_full' }) });
   });
-  await featureRow(frame, 'Box 1').locator('> .tree-row').click({ button: 'right' });
+  await featureRow(frame, 'Extrude 1').locator('> .tree-row').click({ button: 'right' });
   await frame.locator('[data-cad-menu] [data-menu-item="suppress"]').click();
   const chip = frame.locator('[data-chip="save"]');
   await expect(chip).toHaveAttribute('data-state', 'error');

@@ -9,8 +9,10 @@
 //      existing project looks unchanged (no STUDIES, no Workspaces menu, its
 //      workspace files not served). Enable there -> STUDIES "+ New Part" opens
 //      the workspace; the tree shows Top / Front / Right plane and "No features yet".
-//   2. Box -> flyout "Box 1" -> Done -> "Bodies (1)" and the volume chip (8000 mm³);
-//      a Cylinder with Cut -> volume = box - the cylinder's overlap (analytic).
+//   2. A 20 x 20 rectangle sketched on Top (Sketch, R, the size typed), Extrude ->
+//      flyout "Extrude 1" -> 20 mm, Done -> "Bodies (1)" and the volume chip (8000
+//      mm³); a circle extruded with Cut -> volume = block - the overlap (analytic).
+//      (Decision 2026-10-01: no one-click Box or Cylinder; solids come from sketches.)
 //   3. Ctrl+Z removes the last feature, Ctrl+Y restores it.
 //   4. Suppress greys the row and hides the body; dragging the rollback bar above
 //      it dims it.
@@ -18,7 +20,7 @@
 //   6. A rename in the header crumb, then an edit: no conflict. An edit from a
 //      second tab is refused on its etag (the host answers 409 "changed"):
 //      "Changed in another tab · Reload", and Reload adopts it.
-//   7. Parameters: width = 40 mm, Box uses "width", changing width updates the volume.
+//   7. Parameters: width = 40 mm, an Extrude's distance is "width", changing width updates the volume.
 //   8. Plugin off -> the Part row is greyed with its reason; Settings' Enable on
 //      CAD's row turns it on again and the Part opens as it was.
 //   9. A broken CAD manifest -> the core still loads, and the CAD rows show why:
@@ -46,10 +48,11 @@
 //  15. The mouse's side Back button over the part with a save on its way asks
 //      too; ten tree-twisty clicks never make a suppress wait. F5 with a save on
 //      its way: cad-p1-leave-f5.spec.js (the browser's own prompt).
-//  16. Settings > Plugins describes only what CAD has (no sketches, no STEP).
+//  16. Settings > Plugins describes only what CAD has (since SD: sketches, extrude,
+//      booleans, the enclosure, STEP; no boxes and cylinders; nothing of later phases).
 // Review round 3:
 //  17. Operation (New body / Join / Cut / Intersect) is offered only when a body
-//      is made before the feature in history; Box 2 joins Box 1.
+//      is made before the feature in history; Extrude 2 joins Extrude 1.
 //  18. A reload after a save shows the saved model, read with ws.files.
 // P1.5 review round 1:
 //  19. With a save on its way, a link typed to another project asks "Leave without
@@ -63,7 +66,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { answerLeave, baseUrl, cadPluginRow, ensureCadOn, expectLeaveQuestion, headerTakesKeyboard, historyState, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, resetCadToDefault, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, answerLeave, baseUrl, cadPluginRow, drawRectangle, ensureCadOn, expectLeaveQuestion, headerTakesKeyboard, historyState, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, resetCadToDefault, watchPage, workspaceFrame } from './helpers';
 import { breakManifest } from './manifest-guard.mjs';
 import { PNG } from './png';
 
@@ -160,12 +163,11 @@ const studyIdOf = (page) => {
   return m[1];
 };
 
-/** Box from the toolbar, then Done (one edit). */
-async function addBox(frame) {
-  await frame.locator('[data-cad-toolbar] [data-command="solid.box"]').click();
-  await frame.locator('[data-cad-panel="feature"] [data-panel-done]').click();
-  await expect(frame.locator('[data-cad-panel="feature"]')).toHaveCount(0);
-}
+/**
+ * A 20 mm cube as the app makes solids (decision 2026-10-01): Sketch N (a 20 x 20
+ * rectangle on Top) and Extrude N, 20 mm (two edits; helpers.ts addSolid).
+ */
+const addBlock = (page) => addSolid(page);
 
 /** A 64-character name (the rename fields take at most 64). */
 const LONG = (head) => `${head} ${'that goes on and on to see what the tree row does with it ok'}`.slice(0, 64);
@@ -237,7 +239,7 @@ test.beforeEach(async ({ request }, info) => {
 
 // ---------------------------------------------------------------- 1-5
 
-test('cad:p1-document-open CAD ships off; Enable in Settings; "+ New Part" opens the workspace; Box, Cut, undo/redo, suppress, rollback, reopen', async ({ page, request }) => {
+test('cad:p1-document-open CAD ships off; Enable in Settings; "+ New Part" opens the workspace; a sketch extruded, a Cut, undo/redo, suppress, rollback, reopen', async ({ page, request }) => {
   const seen = await watchPage(page);
   // 1. A fresh install: CAD's choice is not remembered on this PC, so its manifest's default_enabled = false holds.
   await resetCadToDefault(request);
@@ -293,56 +295,53 @@ test('cad:p1-document-open CAD ships off; Enable in Settings; "+ New Part" opens
   await expect(bodiesLabel(frame)).toHaveText('Bodies (0)');
   await expect(frame.locator('[data-chip="volume"]')).toHaveCount(0);
 
-  // 2. Box -> flyout "Box 1" beside the tree -> Done -> "Bodies (1)", volume 20 x 20 x 20.
+  // 2. No one-click solids (decision 2026-10-01): a 20 x 20 rectangle sketched on Top, then
+  // Extrude -> flyout "Extrude 1" beside the tree -> 20 mm, Done -> "Bodies (1)", volume 20 x 20 x 20.
   const tb = frame.locator('[data-cad-toolbar]');
-  await tb.locator('[data-command="solid.box"]').click();
+  await expect(tb.locator('[data-command="solid.box"], [data-command="solid.cylinder"]')).toHaveCount(0);
+  await drawRectangle(page, frame, 20, 20);
+  await expect(historyLabels(frame)).toHaveText(['Sketch 1']);
+  await tb.locator('[data-command="solid.extrude"]').click();
   const panel = frame.locator('[data-cad-panel="feature"]');
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
   const flyout = await frame.locator('[data-cad-flyout]').boundingBox();
   const card = await tree.boundingBox();
   expect(flyout.x).toBeGreaterThan(card.x + card.width);
+  await setField(panel, 'distance', '20');
   await panel.locator('[data-panel-done]').click();
   await expect(panel).toHaveCount(0);
-  await expect(historyLabels(frame)).toHaveText(['Box 1']);
+  await expect(historyLabels(frame)).toHaveText(['Sketch 1', 'Extrude 1']);
   await expect(bodiesLabel(frame)).toHaveText('Bodies (1)');
   await expectVolume(frame, 8000);
 
-  // A Cylinder cut from the box: Ø8 along Z from z = -5, 30 long, centred at (10, 10).
-  // It passes through the box's full 20 mm height: overlap = pi r^2 h = pi * 16 * 20.
-  await tb.locator('[data-command="solid.cylinder"]').click();
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Cylinder 1');
-  await panel.locator('select[data-field="op"]').selectOption('cut');
-  await setField(panel, 'diameter', '8');
-  await setField(panel, 'height', '30');
-  await setField(panel, 'origin.0', '10');
-  await setField(panel, 'origin.1', '10');
-  await setField(panel, 'origin.2', '-5');
-  await panel.locator('[data-panel-done]').click();
-  await expect(panel).toHaveCount(0);
+  // A cut from the block: a Ø8 circle centred at (10, 10), extruded from z = -5, 30 long, with Cut.
+  // It passes through the block's full 20 mm height: overlap = pi r^2 h = pi * 16 * 20.
+  await addSolid(page, { circle: true, at: [10, 10, -5], size: [8, 30], op: 'cut' });
   const cut = 8000 - Math.PI * 16 * 20;
-  await expect(historyLabels(frame)).toHaveText(['Box 1', 'Cylinder 1']);
+  await expect(historyLabels(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
   await expect(bodiesLabel(frame)).toHaveText('Bodies (1)');
   await expectVolume(frame, cut);
-  await expect(featureRow(frame, 'Cylinder 1')).toHaveAttribute('data-state', 'ok');
+  await expect(featureRow(frame, 'Extrude 2')).toHaveAttribute('data-state', 'ok');
   await shot(page, 'p1-doc-cut');
 
   // 3. Ctrl+Z removes the last feature, Ctrl+Y restores it.
+  await tree.locator('[data-part-name] > .tree-row').click();
   await page.keyboard.press('Control+z');
-  await expect(historyLabels(frame)).toHaveText(['Box 1']);
+  await expect(historyLabels(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2']);
   await expectVolume(frame, 8000);
   await page.keyboard.press('Control+y');
-  await expect(historyLabels(frame)).toHaveText(['Box 1', 'Cylinder 1']);
+  await expect(historyLabels(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
   await expectVolume(frame, cut);
   await expectSaved(frame);
 
-  // 4. Suppress Box 1: its row greys and strikes through, and the body is gone from the part and the viewport.
+  // 4. Suppress Extrude 1: its row greys and strikes through, and the body is gone from the part and the viewport.
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-viewport', 'ready');
   await tb.locator('[data-command="view.fit"]').click();
-  const onBox = [10, 0, 10]; // the middle of the box's front face (y = 0), clear of the cut
+  const onBox = [10, 0, 10]; // the middle of the block's front face (y = 0), clear of the cut
   await expect.poll(() => pixelAt(page, onBox, 1), { timeout: 20_000 }).toMatch(/^\d+,\d+,\d+$/);
   const before = rgb(await pixelAt(page, onBox, 1));
   expect(before[0], `body pixel ${before}`).toBeLessThan(180);
-  const box1 = featureRow(frame, 'Box 1');
+  const box1 = featureRow(frame, 'Extrude 1');
   await rowMenu(frame, box1, 'suppress');
   await expect(box1).toHaveAttribute('data-suppressed', '1');
   await expect(box1.locator('> .tree-row .tl')).toHaveCSS('text-decoration-line', 'line-through');
@@ -351,7 +350,7 @@ test('cad:p1-document-open CAD ships off; Enable in Settings; "+ New Part" opens
   await expect(bodiesLabel(frame)).toHaveText('Bodies (0)');
   await expect(frame.locator('[data-chip="volume"]')).toHaveCount(0);
   // The cut after it has nothing left to cut, and says so.
-  const cyl = featureRow(frame, 'Cylinder 1');
+  const cyl = featureRow(frame, 'Extrude 2');
   await expect(cyl).toHaveAttribute('data-state', 'error');
   await expect(cyl.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', /What's wrong: Nothing to cut/);
   // No body drawn there now: only the background, or the translucent origin planes an empty part shows.
@@ -364,13 +363,13 @@ test('cad:p1-document-open CAD ships off; Enable in Settings; "+ New Part" opens
   // Dragging the rollback bar above it dims it (and every row below the bar).
   const bar = tree.locator('[data-rollback-bar]');
   const b = await bar.boundingBox();
-  const first = await box1.locator('> .tree-row').boundingBox();
+  const first = await featureRow(frame, 'Sketch 1').locator('> .tree-row').boundingBox();
   await page.mouse.move(b.x + 10, b.y + b.height / 2);
   await page.mouse.down();
   await page.mouse.move(first.x + 30, first.y + 4, { steps: 6 });
   await page.mouse.up();
   await expect(bar).toHaveAttribute('aria-valuenow', '0');
-  await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(2);
+  await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(4);
   await expect(box1.locator('> .tree-row')).toHaveCSS('opacity', '0.55');
   await expect(cyl.locator('> .tree-row')).toHaveCSS('opacity', '0.55');
   await shot(page, 'p1-doc-rolled-back');
@@ -389,7 +388,7 @@ test('cad:p1-document-open CAD ships off; Enable in Settings; "+ New Part" opens
     return /^\d/.test(px) && rgb(px)[0] < 180 ? 'body' : px;
   }, { timeout: 20_000 }).toBe('body');
 
-  // 5. Leave Cylinder 1 suppressed, then Back and reopen: the tree comes back as it was.
+  // 5. Leave Extrude 2 suppressed, then Back and reopen: the tree comes back as it was.
   // (Back while the save is still on its way asks first: test 12 holds the save to show it.)
   await rowMenu(frame, cyl, 'suppress');
   await expect(cyl).toHaveAttribute('data-suppressed', '1');
@@ -399,11 +398,11 @@ test('cad:p1-document-open CAD ships off; Enable in Settings; "+ New Part" opens
   await expect(partRow).toHaveCount(1);
   const again = await openPart(page, partRow);
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  await expect(historyLabels(again)).toHaveText(['Box 1', 'Cylinder 1']);
-  await expect(featureRow(again, 'Cylinder 1')).toHaveAttribute('data-suppressed', '1');
-  await expect(featureRow(again, 'Cylinder 1').locator('.tree-sub')).toHaveText('Suppressed');
-  await expect(featureRow(again, 'Box 1')).not.toHaveAttribute('data-suppressed', '1');
-  await expect(again.locator('[data-cad-tree] [data-rollback-bar]')).toHaveAttribute('aria-valuenow', '2');
+  await expect(historyLabels(again)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
+  await expect(featureRow(again, 'Extrude 2')).toHaveAttribute('data-suppressed', '1');
+  await expect(featureRow(again, 'Extrude 2').locator('.tree-sub')).toHaveText('Suppressed');
+  await expect(featureRow(again, 'Extrude 1')).not.toHaveAttribute('data-suppressed', '1');
+  await expect(again.locator('[data-cad-tree] [data-rollback-bar]')).toHaveAttribute('aria-valuenow', '4');
   await expect(bodiesLabel(again)).toHaveText('Bodies (1)');
   await expectVolume(again, 8000);
   await shot(page, 'p1-doc-reopened');
@@ -416,9 +415,7 @@ test('cad:p1-document-open CAD ships off; Enable in Settings; "+ New Part" opens
 
 test('cad:p1-document-tabs a header rename then an edit does not conflict; an edit from a second tab says "Changed in another tab" and Reload adopts it', async ({ page, context, request }) => {
   const { seen, frame: a } = await freshPart(page, request);
-  const tb = a.locator('[data-cad-toolbar]');
-  await tb.locator('[data-command="solid.box"]').click();
-  await a.locator('[data-panel-done]').click();
+  await addBlock(page);
   await expectSaved(a);
 
   // Rename in the header crumb (the host's prompt); the tree's part row follows it.
@@ -429,11 +426,9 @@ test('cad:p1-document-tabs a header rename then an edit does not conflict; an ed
   await expect(page.locator('#modal-prompt')).toBeHidden();
   await expect(page.locator('#workspace-overlay [data-ws-crumb]')).toHaveText(/Magnusim CAD\s*›\s*Housing/);
   await expect(a.locator('[data-cad-tree] [data-part-name] > .tree-row .tl')).toHaveText('Housing');
-  // Then an edit: it saves, with no conflict chip and no dialog.
-  await tb.locator('[data-command="solid.cylinder"]').click();
-  await expect(a.locator('[data-cad-panel="feature"] [data-panel-title]')).toHaveText('Cylinder 1');
-  await a.locator('[data-panel-done]').click();
-  await expect(historyLabels(a)).toHaveText(['Box 1', 'Cylinder 1']);
+  // Then an edit (a sketch): it saves, with no conflict chip and no dialog.
+  await addSketch(page, { circle: true, at: [60, 0], size: [10] });
+  await expect(historyLabels(a)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2']);
   await expectSaved(a);
   await expect(a.locator('[data-chip="save"][data-state="conflict"]')).toHaveCount(0);
   await expect(page.locator('#modal-confirm')).toBeHidden();
@@ -447,10 +442,10 @@ test('cad:p1-document-tabs a header rename then an edit does not conflict; an ed
   await page2.goto(page.url());
   const b = page2.frameLocator('#workspace-frame');
   await expect(b.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready', { timeout: 60_000 });
-  await expect(historyLabels(b)).toHaveText(['Box 1', 'Cylinder 1']);
+  await expect(historyLabels(b)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2']);
   await expect(b.locator('[data-cad-tree] [data-part-name] > .tree-row .tl')).toHaveText('Housing');
 
-  // Tab A adds a box and saves; tab B, not knowing, suppresses Box 1: B's save is refused and B says why.
+  // Tab A adds a block and saves; tab B, not knowing, suppresses Extrude 1: B's save is refused and B says why.
   // Both write the model with ws.files on the etag they last read or wrote (host API 1.2).
   // A write is begun (POST /api/plugin-files/uploads, with its if_match), sent, then committed;
   // the host checks the etag when the write begins and again when it commits.
@@ -463,13 +458,12 @@ test('cad:p1-document-tabs a header rename then an edit does not conflict; an ed
   };
   const aCommits = commits(page);
   const bCommits = commits(page2);
-  await tb.locator('[data-command="solid.box"]').click();
-  await a.locator('[data-panel-done]').click();
-  await expect(historyLabels(a)).toHaveText(['Box 1', 'Cylinder 1', 'Box 2']);
+  await addSolid(page, { at: [50, 0, 0] });
+  await expect(historyLabels(a)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Sketch 3', 'Extrude 2']);
   await expectSaved(a);
   expect(aCommits.length, 'tab A saved with ws.files').toBeGreaterThan(0);
   expect(aCommits.map((r) => r.status()).filter((st) => !(st >= 200 && st < 300)), "tab A's writes were accepted").toEqual([]);
-  await rowMenu(b, featureRow(b, 'Box 1'), 'suppress');
+  await rowMenu(b, featureRow(b, 'Extrude 1'), 'suppress');
   const chip = b.locator('[data-chip="save"][data-state="conflict"]');
   await expect(chip).toBeVisible({ timeout: 20_000 });
   // Tab B's write was refused by the host on its etag: 409 "changed".
@@ -480,18 +474,18 @@ test('cad:p1-document-tabs a header rename then an edit does not conflict; an ed
   await expect(chip.getByRole('button', { name: 'Reload' })).toBeVisible();
   await shot(page2, 'p1-doc-conflict');
   // Tab A's part is untouched, and still says Saved.
-  await expect(historyLabels(a)).toHaveText(['Box 1', 'Cylinder 1', 'Box 2']);
-  await expect(featureRow(a, 'Box 1')).not.toHaveAttribute('data-suppressed', '1');
+  await expect(historyLabels(a)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Sketch 3', 'Extrude 2']);
+  await expect(featureRow(a, 'Extrude 1')).not.toHaveAttribute('data-suppressed', '1');
   await expectSaved(a);
 
   // Reload adopts tab A's version; tab B can edit again.
   await shot(page2, 'p15-conflict');
   await chip.getByRole('button', { name: 'Reload' }).click();
-  await expect(historyLabels(b)).toHaveText(['Box 1', 'Cylinder 1', 'Box 2']);
-  await expect(featureRow(b, 'Box 1')).not.toHaveAttribute('data-suppressed', '1');
+  await expect(historyLabels(b)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Sketch 3', 'Extrude 2']);
+  await expect(featureRow(b, 'Extrude 1')).not.toHaveAttribute('data-suppressed', '1');
   await expect(b.locator('[data-chip="save"][data-state="conflict"]')).toHaveCount(0);
-  await rowMenu(b, featureRow(b, 'Box 2'), 'suppress');
-  await expect(featureRow(b, 'Box 2')).toHaveAttribute('data-suppressed', '1');
+  await rowMenu(b, featureRow(b, 'Extrude 2'), 'suppress');
+  await expect(featureRow(b, 'Extrude 2')).toHaveAttribute('data-suppressed', '1');
   await expectSaved(b);
 
   expect(seen.csp, 'CSP violations').toEqual([]);
@@ -507,7 +501,7 @@ test('cad:p1-document-tabs a header rename then an edit does not conflict; an ed
 
 // ---------------------------------------------------------------- 7
 
-test('cad:p1-document-params width = 40 mm drives the Box; changing width updates the volume', async ({ page, request }) => {
+test('cad:p1-document-params width = 40 mm drives an Extrude; changing width updates the volume', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tb = frame.locator('[data-cad-toolbar]');
   const tree = frame.locator('[data-cad-tree]');
@@ -524,16 +518,17 @@ test('cad:p1-document-params width = 40 mm drives the Box; changing width update
   await params.locator('[data-panel-done]').click();
   await expect(params).toHaveCount(0);
 
-  // A Box whose length is "width".
-  await tb.locator('[data-command="solid.box"]').click();
+  // A 20 x 20 sketch extruded "width".
+  await addSketch(page, { size: [20, 20] });
+  await tb.locator('[data-command="solid.extrude"]').click();
   const panel = frame.locator('[data-cad-panel="feature"]');
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
-  await setField(panel, 'size.0', 'width');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-after]')).toHaveText('= 40 mm');
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
+  await setField(panel, 'distance', 'width');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-after]')).toHaveText('= 40 mm');
   await panel.locator('[data-panel-done]').click();
   await expectVolume(frame, 40 * 20 * 20);
 
-  // Change width: the box follows.
+  // Change width: the solid follows.
   await tb.locator('[data-command="modify.parameters"]').click();
   const wexpr = params.locator('[data-param-row="width"] .nui input');
   await wexpr.fill('65 mm');
@@ -543,10 +538,10 @@ test('cad:p1-document-params width = 40 mm drives the Box; changing width update
   await shot(page, 'p1-doc-params');
   await params.locator('[data-panel-done]').click();
   await expectSaved(frame);
-  // The box panel shows the new value of its expression.
-  await featureRow(frame, 'Box 1').locator('> .tree-row').dblclick();
-  await expect(panel.locator('.nui[data-field="size.0"] input')).toHaveValue('width');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-after]')).toHaveText('= 65 mm');
+  // The extrude panel shows the new value of its expression.
+  await featureRow(frame, 'Extrude 1').locator('> .tree-row').dblclick();
+  await expect(panel.locator('.nui[data-field="distance"] input')).toHaveValue('width');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-after]')).toHaveText('= 65 mm');
   await panel.locator('[data-panel-done]').click();
 
   expect(seen.csp, 'CSP violations').toEqual([]);
@@ -557,8 +552,7 @@ test('cad:p1-document-params width = 40 mm drives the Box; changing width update
 
 test('cad:p1-document-plugin-off with CAD off the Part row is greyed with its reason; on again it opens as it was', async ({ page, request }) => {
   const { seen, frame, row } = await freshPart(page, request);
-  await frame.locator('[data-command="solid.box"]').click();
-  await frame.locator('[data-panel-done]').click();
+  await addBlock(page);
   await expectVolume(frame, 8000);
   await expectSaved(frame);
   await page.locator('#workspace-overlay [data-ws-back]').click();
@@ -569,10 +563,12 @@ test('cad:p1-document-plugin-off with CAD off the Part row is greyed with its re
     const step = await openSettingsPlugins(page);
     const cadRow = step.locator('[data-plugin-key="cad"]');
     await expect(cadRow).toHaveAttribute('data-plugin-status', 'enabled');
-    // Review round 2: the row promised sketches and STEP editing, which CAD does not have yet.
+    // Review round 2: the row promised sketches and STEP editing before CAD had them. Since P2/P3 it
+    // names what ships (sketches, extrude, STEP) and nothing that does not (revolve, fillet, assemblies);
+    // since SD no boxes or cylinders (solids come from sketches), and the enclosure for CFD.
     await expect(cadRow.locator('.wiz-pref-copy > strong')).toHaveText('Magnusim CAD v0.1.0 · bundled');
-    await expect(cadRow.locator('.wiz-pref-copy > span').first()).toHaveText('Parametric parts from boxes and cylinders, with booleans and named parameters, in their own workspace.');
-    await expect(cadRow).not.toContainText(/sketch|STEP/i);
+    await expect(cadRow.locator('.wiz-pref-copy > span').first()).toHaveText('Parametric parts in their own workspace: sketches with dimensions and constraints, extruded into solids, booleans, an enclosure around the part for CFD, named parameters, and STEP import, editing and export.');
+    await expect(cadRow).not.toContainText(/revolve|fillet|sweep|loft|assembl|drawing|boxes|cylinders/i);
     await cadRow.locator('[data-plugin-toggle="cad"]').click();
     // Off, and still listed so it can be turned on again (G11).
     await expect(cadRow).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 });
@@ -619,7 +615,7 @@ test('cad:p1-document-plugin-off with CAD off the Part row is greyed with its re
   await expect(row).not.toHaveClass(/is-unavailable/);
   await expect(row.locator('[data-plugin-study-reason]')).toHaveCount(0);
   const again = await openPart(page, row);
-  await expect(historyLabels(again)).toHaveText(['Box 1']);
+  await expect(historyLabels(again)).toHaveText(['Sketch 1', 'Extrude 1']);
   await expectVolume(again, 8000);
   await shot(page, 'p1-doc-plugin-on-again');
 
@@ -784,16 +780,17 @@ test('cad:p1-document-parity tree rows, the flyout panel and Done match the core
     empty: await styleOf(tree.locator('[data-tree-empty="history"]'), EMPTY),
   };
   const tb = frame.locator('[data-cad-toolbar]');
-  await tb.locator('[data-command="solid.box"]').click();
+  await addSketch(page);
+  await tb.locator('[data-command="solid.extrude"]').click();
   const panel = frame.locator('[data-cad-panel="feature"]');
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
-  const boxRow = featureRow(frame, 'Box 1');
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
+  const boxRow = featureRow(frame, 'Extrude 1');
   await expect(boxRow).toHaveClass(/selected/);
   cad.selected = await styleOf(boxRow.locator('> .tree-row'), ROW);
   cad.panel = await styleOf(panel, PANEL);
-  cad.panelHead = await styleOf(panel.locator('.mat-panel-head'), PANEL_HEAD);
+  cad.panelHead = await styleOf(panel.locator('.mgk-panel-head'), PANEL_HEAD);
   cad.title = await styleOf(panel.locator('[data-panel-title]'), TITLE);
-  cad.foot = await styleOf(panel.locator('.mat-panel-foot'), FOOT);
+  cad.foot = await styleOf(panel.locator('.mgk-panel-foot'), FOOT);
   cad.done = await styleOf(panel.locator('[data-panel-done]'), DONE);
   cad.doneH = await heightOf(panel.locator('[data-panel-done]'));
   cad.del = await styleOf(panel.locator('[data-panel-delete]'), DELETE);
@@ -801,7 +798,7 @@ test('cad:p1-document-parity tree rows, the flyout panel and Done match the core
   const cadPanelPng = shots ? await frame.locator('[data-cad-flyout]').screenshot() : null;
   await panel.locator('[data-panel-done]').click();
   await expect(panel).toHaveCount(0);
-  // An unselected leaf row: click the part row (a heading) so Box 1 is no longer selected.
+  // An unselected leaf row: click the part row (a heading) so Extrude 1 is no longer selected.
   await tree.locator('[data-part-name] > .tree-row').click();
   await expect(boxRow).not.toHaveClass(/selected/);
   cad.leaf = await styleOf(boxRow.locator('> .tree-row'), ROW);
@@ -864,8 +861,9 @@ test('cad:p1-document-parity tree rows, the flyout panel and Done match the core
 test('cad:p1-document-save-chip undo, redo, undo within 1.5 s ends on "Saved"; a reopened Part says Saved', async ({ page, request }) => {
   const { seen, frame, row } = await freshPart(page, request);
   const chip = frame.locator('[data-chip="save"]');
-  await addBox(frame);
-  await expect(historyLabels(frame)).toHaveText(['Box 1']);
+  // One edit: a sketch.
+  await addSketch(page);
+  await expect(historyLabels(frame)).toHaveText(['Sketch 1']);
   await expectSaved(frame);
   // The bug needed the first undo to be written at once and the redo to wait (the
   // old 1.5 s window): so start more than 1.5 s after the last save, as a person
@@ -876,7 +874,7 @@ test('cad:p1-document-save-chip undo, redo, undo within 1.5 s ends on "Saved"; a
   await page.keyboard.press('Control+z');
   await expect(historyLabels(frame)).toHaveCount(0);
   await page.keyboard.press('Control+y');
-  await expect(historyLabels(frame)).toHaveText(['Box 1']);
+  await expect(historyLabels(frame)).toHaveText(['Sketch 1']);
   await page.keyboard.press('Control+z');
   await expect(frame.locator('[data-cad-tree] [data-tree-empty="history"]')).toHaveText('No features yet');
   expect(Date.now() - t0, 'undo, redo, undo within 1.5 s').toBeLessThan(1500);
@@ -896,9 +894,9 @@ test('cad:p1-document-save-chip undo, redo, undo within 1.5 s ends on "Saved"; a
 
 test('cad:p1-document-leave-asks with a save on its way, Back, Home and the browser Back ask "Leave without saving?"; Stay keeps the edit', async ({ page, request }) => {
   const { seen, frame, row } = await freshPart(page, request);
-  await addBox(frame);
+  await addBlock(page);
   await expectSaved(frame);
-  const box1 = featureRow(frame, 'Box 1');
+  const box1 = featureRow(frame, 'Extrude 1');
 
   // The save is held at its commit (the step that replaces the file): it stays on its way.
   const hold = await holdCommits(page);
@@ -938,14 +936,14 @@ test('cad:p1-document-leave-asks with a save on its way, Back, Home and the brow
   await backByPointer(page);
   let again = await openPart(page, row);
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  await expect(featureRow(again, 'Box 1')).toHaveAttribute('data-suppressed', '1');
+  await expect(featureRow(again, 'Extrude 1')).toHaveAttribute('data-suppressed', '1');
 
   // Leave: the workspace closes at once, with no second question. Here the held write never
   // reaches the disk (the test fails it, as a dropped connection would), and the Part
   // reopens from what was saved, saying Saved.
   const hold2 = await holdCommits(page);
-  await rowMenu(again, featureRow(again, 'Box 1'), 'suppress');
-  await expect(featureRow(again, 'Box 1')).not.toHaveAttribute('data-suppressed', '1');
+  await rowMenu(again, featureRow(again, 'Extrude 1'), 'suppress');
+  await expect(featureRow(again, 'Extrude 1')).not.toHaveAttribute('data-suppressed', '1');
   await expect.poll(() => hold2.held()).toBe(1);
   await backByPointer(page, { asks: true });
   await expectLeaveQuestion(page);
@@ -955,7 +953,7 @@ test('cad:p1-document-leave-asks with a save on its way, Back, Home and the brow
   await hold2.abort();
   again = await openPart(page, row);
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  await expect(featureRow(again, 'Box 1')).toHaveAttribute('data-suppressed', '1');
+  await expect(featureRow(again, 'Extrude 1')).toHaveAttribute('data-suppressed', '1');
   await expect(again.locator('[data-chip="save"]')).toHaveText('Saved');
   expect(seen.csp, 'CSP violations').toEqual([]);
   // The one error is the commit this test failed on purpose.
@@ -967,9 +965,9 @@ test('cad:p1-document-leave-asks with a save on its way, Back, Home and the brow
 // "Turn off Magnusim CAD?". Stay (or Cancel) keeps the page, the edit, and CAD on.
 test('cad:p1-document-leave-elsewhere with a save on its way, a typed link to another project and Settings > Plugins > Disable both ask; Stay and Cancel keep the edit and CAD on', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
-  await addBox(frame);
+  await addBlock(page);
   await expectSaved(frame);
-  const box1 = featureRow(frame, 'Box 1');
+  const box1 = featureRow(frame, 'Extrude 1');
   const hold = await holdCommits(page);
   await rowMenu(frame, box1, 'suppress');
   await expect(box1).toHaveAttribute('data-suppressed', '1');
@@ -1043,14 +1041,14 @@ async function lookAroundTree(page, frame) {
 
 test('cad:p1-document-leave-side-back the mouse side Back button over the part, with a save on its way, asks first; Stay keeps the change', async ({ page, request }) => {
   const { seen, frame, row } = await freshPart(page, request);
-  await addBox(frame);
-  await addBox(frame);
+  await addBlock(page);
+  await addSolid(page, { at: [50, 0, 0] });
   await expectSaved(frame);
   const hold = await holdCommits(page);
-  await rowMenu(frame, featureRow(frame, 'Box 2'), 'suppress');
+  await rowMenu(frame, featureRow(frame, 'Extrude 2'), 'suppress');
   await expect.poll(() => hold.held()).toBe(1);
   const expected = await historyState(frame);
-  expect(expected).toBe('Box 1, Box 2 (S)');
+  expect(expected).toBe('Sketch 1, Extrude 1, Sketch 2, Extrude 2 (S)');
   // The pointer stays over the part, and the button goes down and up as a finger
   // presses it; the browser goes back on the release, as it does for the real button.
   const fb = await page.locator('#workspace-frame').boundingBox();
@@ -1086,7 +1084,7 @@ test('cad:p1-document-leave-side-back the mouse side Back button over the part, 
 test('cad:p1-document-leave-tree-twisties folders opened and closed do not hold up the next edit: a suppress right after them survives Back', async ({ page, request }) => {
   const { seen, frame, row } = await freshPart(page, request);
   const chip = frame.locator('[data-chip="save"]');
-  for (let i = 0; i < 3; i++) await addBox(frame);
+  for (let i = 0; i < 3; i++) await addSolid(page, { at: [50 * i, 0, 0] });
   await expectSaved(frame);
   await page.waitForTimeout(9500); // a person looks at the part: the save budget is full again
   await frame.locator('[data-cad-tree] [data-part-name] > .tree-row').click();
@@ -1097,8 +1095,8 @@ test('cad:p1-document-leave-tree-twisties folders opened and closed do not hold 
   // suppress below waited for the next 1.5 s slot, and Back 600 ms later lost it.
   await lookAroundTree(page, frame);
   expect([await originOpen(), await bodiesOpen()], 'both folders flipped (five clicks each)').toEqual([!folders[0], !folders[1]]);
-  await rowMenu(frame, featureRow(frame, 'Box 3'), 'suppress');
-  await expect(featureRow(frame, 'Box 3')).toHaveAttribute('data-suppressed', '1');
+  await rowMenu(frame, featureRow(frame, 'Extrude 3'), 'suppress');
+  await expect(featureRow(frame, 'Extrude 3')).toHaveAttribute('data-suppressed', '1');
   // Written at once (one save round trip, about 20 ms here): it does not wait for a slot.
   await expect(chip).toHaveText('Saved', { timeout: 500 });
   await expect(chip).toHaveAttribute('data-state', 'saved');
@@ -1111,7 +1109,7 @@ test('cad:p1-document-leave-tree-twisties folders opened and closed do not hold 
   const again = await openPart(page, row);
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
   expect(await historyState(again)).toBe(expected);
-  await expect(featureRow(again, 'Box 3')).toHaveAttribute('data-suppressed', '1');
+  await expect(featureRow(again, 'Extrude 3')).toHaveAttribute('data-suppressed', '1');
   // The folders as they were left (written with the suppress).
   const a = again.locator('[data-cad-tree] [data-tree-node="origin"]');
   const b = again.locator('[data-cad-tree] [data-bodies-folder]');
@@ -1136,7 +1134,7 @@ test('cad:p1-document-keys keys work as soon as the Part opens and after Setting
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-viewport', 'ready');
   await expect(hint).toHaveCount(0);
   expect(await workspaceFrame(page).evaluate(() => document.hasFocus())).toBe(true);
-  await addBox(frame);
+  await addBlock(page);
   await expectSaved(frame);
   await backByPointer(page);
   // Reopened from the project's tree (a click on the host, not in the frame): a key works at once.
@@ -1174,10 +1172,10 @@ test('cad:p1-document-keys keys work as soon as the Part opens and after Setting
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:p1-document-keys-undo Ctrl+Z / Ctrl+Y reach the Part with no click in it: after Settings closes, an edit made from the toolbar is undone and redone', async ({ page, request }) => {
+test('cad:p1-document-keys-undo Ctrl+Z / Ctrl+Y reach the Part with no click in it: after Settings closes, the last edit is undone and redone', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
-  await addBox(frame);
-  await expect(historyLabels(frame)).toHaveText(['Box 1']);
+  await addSketch(page);
+  await expect(historyLabels(frame)).toHaveText(['Sketch 1']);
   // Focus leaves the frame (the host's header), then the app's Settings opens and closes.
   await headerTakesKeyboard(page);
   await expect(frame.locator('[data-chip="keys"]')).toBeVisible();
@@ -1189,7 +1187,7 @@ test('cad:p1-document-keys-undo Ctrl+Z / Ctrl+Y reach the Part with no click in 
   await page.keyboard.press('Control+z');
   await expect(frame.locator('[data-cad-tree] [data-tree-empty="history"]')).toHaveText('No features yet');
   await page.keyboard.press('Control+y');
-  await expect(historyLabels(frame)).toHaveText(['Box 1']);
+  await expect(historyLabels(frame)).toHaveText(['Sketch 1']);
   await expectSaved(frame);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
@@ -1198,18 +1196,18 @@ test('cad:p1-document-keys-undo Ctrl+Z / Ctrl+Y reach the Part with no click in 
 test('cad:p1-document-long-names 64-character names end in an ellipsis inside the card; the row buttons stay clear', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tree = frame.locator('[data-cad-tree]');
-  await addBox(frame);
+  await addBlock(page);
   const fname = LONG('A very long feature name');
   const bname = LONG('Another extremely long body name');
   expect(fname).toHaveLength(64);
   expect(bname).toHaveLength(64);
   // Rename the feature (F2) and the body (its pencil).
-  await featureRow(frame, 'Box 1').locator('> .tree-row').click();
+  await featureRow(frame, 'Extrude 1').locator('> .tree-row').click();
   await page.keyboard.press('F2');
   const fin = tree.locator('input[aria-label="Feature name"]');
   await fin.fill(fname);
   await fin.press('Enter');
-  const frow = tree.locator('[data-feature-row]').first();
+  const frow = tree.locator('[data-feature-row][data-feature-type="extrude"]').first();
   await expect(frow.locator('> .tree-row .tl')).toHaveText(fname);
   await tree.locator('[data-bodies-folder] > .tree-row').click();
   const brow = tree.locator('[data-body-row]').first();
@@ -1271,38 +1269,41 @@ test('cad:p1-document-long-names 64-character names end in an ellipsis inside th
 
 // ---------------------------------------------------------------- review round 3
 
-test('cad:p1-document-operation Operation is offered only when a body is made before the feature; Box 2 at X = 20 joins Box 1', async ({ page, request }) => {
+test('cad:p1-document-operation Operation is offered only when a body is made before the feature; Extrude 2 (a square at X = 20) joins Extrude 1', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tb = frame.locator('[data-cad-toolbar]');
   const panel = frame.locator('[data-cad-panel="feature"]');
-  const op = panel.locator('select[data-field="op"]');
-  // Box 1: the first feature, nothing before it to join, cut or intersect.
-  await tb.locator('[data-command="solid.box"]').click();
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
+  const op = panel.locator('[data-field="op"] select');
+  // Extrude 1: the first solid, nothing before it to join, cut or intersect.
+  await addSketch(page);
+  await tb.locator('[data-command="solid.extrude"]').click();
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
   await expect(op).toHaveCount(0);
+  await setField(panel, 'distance', '20');
   await panel.locator('[data-panel-done]').click();
-  // Box 2 at X = 20 (touching Box 1's +X face): Box 1's body is before it.
-  await tb.locator('[data-command="solid.box"]').click();
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 2');
-  await setField(panel, 'origin.0', '20');
+  // Extrude 2 of a square at X = 20 (touching Extrude 1's +X face): Extrude 1's body is before it.
+  await addSketch(page, { at: [20, 0] });
+  await tb.locator('[data-command="solid.extrude"]').click();
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 2');
+  await setField(panel, 'distance', '20');
   await expect(op).toHaveValue('new');
   await expect(op.locator('option')).toHaveText(['New body', 'Join', 'Cut', 'Intersect']);
   await panel.locator('[data-panel-done]').click();
   await expect(bodiesLabel(frame)).toHaveText('Bodies (2)');
-  // Reopened, Box 1 still has no Operation, although Box 2 made a body after it.
-  await featureRow(frame, 'Box 1').locator('> .tree-row').dblclick();
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
+  // Reopened, Extrude 1 still has no Operation, although Extrude 2 made a body after it.
+  await featureRow(frame, 'Extrude 1').locator('> .tree-row').dblclick();
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
   await expect(op).toHaveCount(0);
   await panel.locator('[data-panel-done]').click();
-  // Box 2 joins Box 1: one body of 40 x 20 x 20.
-  await featureRow(frame, 'Box 2').locator('> .tree-row').dblclick();
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 2');
+  // Extrude 2 joins Extrude 1: one body of 40 x 20 x 20.
+  await featureRow(frame, 'Extrude 2').locator('> .tree-row').dblclick();
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 2');
   await op.selectOption('join');
   await panel.locator('[data-panel-done]').click();
   await expect(bodiesLabel(frame)).toHaveText('Bodies (1)');
   await expectVolume(frame, 16000);
   await expect(volumeValue(frame)).toHaveText('16,000 mm³');
-  await expect(featureRow(frame, 'Box 2')).toHaveAttribute('data-state', 'ok');
+  await expect(featureRow(frame, 'Extrude 2')).toHaveAttribute('data-state', 'ok');
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
 });
@@ -1310,22 +1311,19 @@ test('cad:p1-document-operation Operation is offered only when a body is made be
 test('cad:p1-document-nothing-to-join a first feature stored as Join keeps its Operation row and says why it does nothing; New body fixes it', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const panel = frame.locator('[data-cad-panel="feature"]');
-  await addBox(frame);
-  // Box 2 joins Box 1; with Box 1 suppressed, no body is made before Box 2 any more.
-  await frame.locator('[data-cad-toolbar] [data-command="solid.box"]').click();
-  await setField(panel, 'origin.0', '20');
-  await panel.locator('select[data-field="op"]').selectOption('join');
-  await panel.locator('[data-panel-done]').click();
+  await addBlock(page);
+  // Extrude 2 (a cube at X = 20) joins Extrude 1; with Extrude 1 suppressed, no body is made before it any more.
+  await addSolid(page, { at: [20, 0, 0], op: 'join' });
   await expectVolume(frame, 16000);
-  await rowMenu(frame, featureRow(frame, 'Box 1'), 'suppress');
-  const box2 = featureRow(frame, 'Box 2');
+  await rowMenu(frame, featureRow(frame, 'Extrude 1'), 'suppress');
+  const box2 = featureRow(frame, 'Extrude 2');
   await expect(box2).toHaveAttribute('data-state', 'error');
-  await expect(box2.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', "What's wrong: Nothing to join: Box 2 shares no face with a body made before it");
+  await expect(box2.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', "What's wrong: Nothing to join: Extrude 2 shares no face with a body made before it");
   // Its panel keeps the Operation row (so it can be set back), with the same reason in the foot.
   await box2.locator('> .tree-row').dblclick();
-  await expect(panel.locator('select[data-field="op"]')).toHaveValue('join');
-  await expect(panel).toContainText('Nothing to join: Box 2 shares no face with a body made before it');
-  await panel.locator('select[data-field="op"]').selectOption('new');
+  await expect(panel.locator('[data-field="op"] select')).toHaveValue('join');
+  await expect(panel).toContainText('Nothing to join: Extrude 2 shares no face with a body made before it');
+  await panel.locator('[data-field="op"] select').selectOption('new');
   await panel.locator('[data-panel-done]').click();
   await expect(box2).toHaveAttribute('data-state', 'ok');
   await expect(bodiesLabel(frame)).toHaveText('Bodies (1)');
@@ -1335,19 +1333,21 @@ test('cad:p1-document-nothing-to-join a first feature stored as Join keeps its O
 });
 
 // P1.5 review round 1: the reason said "no body made before Box 2 touches it" for a Cut flush
-// against Box 1's face and for a Join along an edge, although both touch Box 1.
+// against Box 1's face and for a Join along an edge, although both touch Box 1. (Since SD the
+// solids are sketched and extruded.)
 test('cad:p1-document-nothing-to-op-touching a Cut flush against a face, and a Join along an edge only, say what is missing', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const panel = frame.locator('[data-cad-panel="feature"]');
-  const op = panel.locator('select[data-field="op"]');
+  const op = panel.locator('[data-field="op"] select');
   const reason = panel.locator('[data-run-reason]');
-  await addBox(frame);
-  // Box 2 at X = 20 with Cut: it sits flush against Box 1's +X face, so it cuts nothing away.
-  await frame.locator('[data-cad-toolbar] [data-command="solid.box"]').click();
-  await setField(panel, 'origin.0', '20');
+  await addBlock(page);
+  // A square at X = 20 extruded 20 mm with Cut: it sits flush against Extrude 1's +X face, so it cuts nothing away.
+  await addSketch(page, { at: [20, 0] });
+  await frame.locator('[data-cad-toolbar] [data-command="solid.extrude"]').click();
+  await setField(panel, 'distance', '20');
   await op.selectOption('cut');
-  const box2 = featureRow(frame, 'Box 2');
-  const cutWhy = 'Nothing to cut: Box 2 does not overlap any body made before it (touching is not enough)';
+  const box2 = featureRow(frame, 'Extrude 2');
+  const cutWhy = 'Nothing to cut: Extrude 2 does not overlap any body made before it (touching is not enough)';
   await expect(box2).toHaveAttribute('data-state', 'error');
   await expect(reason).toHaveText(cutWhy);
   await expect(box2.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', `What's wrong: ${cutWhy}`);
@@ -1356,25 +1356,33 @@ test('cad:p1-document-nothing-to-op-touching a Cut flush against a face, and a J
   await expectVolume(frame, 8000);
   // Intersect in the same place: nothing in common either.
   await op.selectOption('intersect');
-  await expect(reason).toHaveText('Nothing to intersect: Box 2 does not overlap any body made before it (touching is not enough)');
+  await expect(reason).toHaveText('Nothing to intersect: Extrude 2 does not overlap any body made before it (touching is not enough)');
   // Join there shares the face: one body of 40 x 20 x 20.
   await op.selectOption('join');
   await expect(box2).toHaveAttribute('data-state', 'ok');
   await expect(reason).toHaveCount(0);
   await expectVolume(frame, 16000);
-  // Join at (20, 20, 0): it meets Box 1 only along the edge x = 20, y = 20. Touching, but no shared face.
-  await setField(panel, 'origin.1', '20');
-  const joinWhy = 'Nothing to join: Box 2 shares no face with a body made before it';
-  await expect(box2).toHaveAttribute('data-state', 'error');
-  await expect(reason).toHaveText(joinWhy);
+  // Back to Cut and Done (it stays red, cutting nothing); then a cube at (20, 20, 0) joined: it meets
+  // Extrude 1 only along the edge x = 20, y = 20. Touching, but no shared face.
+  await op.selectOption('cut');
+  await panel.locator('[data-panel-done]').click();
+  await expectVolume(frame, 8000);
+  await addSolid(page, { at: [20, 20, 0], op: 'join' });
+  const edge = featureRow(frame, 'Extrude 3');
+  const joinWhy = (n) => `Nothing to join: Extrude ${n} shares no face with a body made before it`;
+  await expect(edge).toHaveAttribute('data-state', 'error');
+  await edge.locator('> .tree-row').dblclick();
+  await expect(reason).toHaveText(joinWhy(3));
+  await panel.locator('[data-panel-done]').click();
   await expect(bodiesLabel(frame)).toHaveText('Bodies (1)');
   await shot(page, 'p15r1-join-edge');
   await expectVolume(frame, 8000);
   // Only a corner in common (20, 20, 20): the same.
-  await setField(panel, 'origin.2', '20');
-  await expect(reason).toHaveText(joinWhy);
-  await panel.locator('[data-panel-done]').click();
-  await expect(box2.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', `What's wrong: ${joinWhy}`);
+  await addSolid(page, { at: [20, 20, 20], op: 'join' });
+  const corner = featureRow(frame, 'Extrude 4');
+  await expect(corner).toHaveAttribute('data-state', 'error');
+  await expect(corner.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', `What's wrong: ${joinWhy(4)}`);
+  await expectVolume(frame, 8000);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
 });
@@ -1382,16 +1390,9 @@ test('cad:p1-document-nothing-to-op-touching a Cut flush against a face, and a J
 test('cad:p1-document-reload-files a reload after a save shows the saved model, read with ws.files (host API 1.2)', async ({ page, request }) => {
   const { seen, frame, projectId } = await freshPart(page, request);
   const studyId = studyIdOf(page);
-  await addBox(frame);
-  await frame.locator('[data-cad-toolbar] [data-command="solid.cylinder"]').click();
-  const panel = frame.locator('[data-cad-panel="feature"]');
-  await panel.locator('select[data-field="op"]').selectOption('cut');
-  await setField(panel, 'diameter', '8');
-  await setField(panel, 'height', '30');
-  await setField(panel, 'origin.0', '10');
-  await setField(panel, 'origin.1', '10');
-  await setField(panel, 'origin.2', '-5');
-  await panel.locator('[data-panel-done]').click();
+  await addBlock(page);
+  // A Ø8 circle at (10, 10) extruded from z = -5, 30 long, with Cut.
+  await addSolid(page, { circle: true, at: [10, 10, -5], size: [8, 30], op: 'cut' });
   const cut = 8000 - Math.PI * 16 * 20;
   await expectVolume(frame, cut);
   await expectSaved(frame);
@@ -1403,7 +1404,7 @@ test('cad:p1-document-reload-files a reload after a save shows the saved model, 
   const stored = await storedModel(request, projectId, studyId);
   expect(stored.json.format).toBe('magnusim-cad/model');
   expect(stored.json.etag).toBeUndefined();
-  expect(stored.json.doc.features.map((f) => f.name)).toEqual(['Box 1', 'Cylinder 1']);
+  expect(stored.json.doc.features.map((f) => f.name)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
   // Reload the page: the model comes back through ws.files (stat, then read), never ws.data.
   const reads = [];
   page.on('request', (r) => {
@@ -1417,7 +1418,7 @@ test('cad:p1-document-reload-files a reload after a save shows the saved model, 
   await page.reload();
   const again = page.frameLocator('#workspace-frame');
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready', { timeout: 60_000 });
-  await expect(historyLabels(again)).toHaveText(['Box 1', 'Cylinder 1']);
+  await expect(historyLabels(again)).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
   await expectVolume(again, cut);
   await expect(again.locator('[data-chip="save"]')).toHaveText('Saved');
   expect(reads.some((r) => r.startsWith('GET /api/plugin-files/stat')), reads.join('\n')).toBe(true);
@@ -1427,7 +1428,7 @@ test('cad:p1-document-reload-files a reload after a save shows the saved model, 
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:p1-document-p1-part-moves a Part saved by P1 (ws.data) opens as it was and moves to ws.files once; the P1 file is kept', async ({ page, request }) => {
+test('cad:p1-document-p1-part-moves a Part saved by P1 (ws.data) opens with nothing lost and moves to ws.files once; the P1 file is kept', async ({ page, request }) => {
   const seen = await watchPage(page);
   const projectId = await newProject(request);
   // A Part as a P1 build left it: the pointer says "data", and model.json carries ws.data's own version token.
@@ -1455,29 +1456,34 @@ test('cad:p1-document-p1-part-moves a Part saved by P1 (ws.data) opens as it was
   expect(w.ok(), await w.text()).toBe(true);
   const p1Bytes = await (await request.get(`${baseUrl()}/api/plugin-files/read?${new URLSearchParams({ project_id: projectId, plugin: 'cad', rel })}`)).text();
 
-  // Opened: the same part, nothing lost, saying Saved.
+  // Opened: the same part, nothing lost, saying Saved. Its Box is a removed feature since SD
+  // (decision 2026-10-01): the row stays, red, saying so (cad-sd-enclosure.spec.ts has the rest).
   await openProject(page, projectId);
   const row = page.locator('#plugin-studies-section li[data-plugin="cad"]').filter({ has: page.locator('.tl', { hasText: 'Old part' }) });
   const frame = await openPart(page, row);
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
   await expect(historyLabels(frame)).toHaveText(['Old box']);
-  await expectVolume(frame, 6000);
+  await expect(featureRow(frame, 'Old box')).toHaveAttribute('data-state', 'error');
+  await expect(featureRow(frame, 'Old box').locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', "What's wrong: This part uses a removed feature (Old box)");
   await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved');
   // An edit saves, and the reopened Part shows both (what the user sees comes first; P1.5 review round 1).
-  await addBox(frame);
+  await addBlock(page);
   await expectSaved(frame);
   await backByPointer(page);
   const again = await openPart(page, row);
-  await expect(historyLabels(again)).toHaveText(['Old box', 'Box 1']);
-  await expect(bodiesLabel(again)).toHaveText('Bodies (2)');
-  await expect(again.locator('[data-chip="volume"]')).toHaveText('VolumeTotal of 2 bodies · 14,000 mm³');
+  await expect(historyLabels(again)).toHaveText(['Old box', 'Sketch 1', 'Extrude 1']);
+  await expect(bodiesLabel(again)).toHaveText('Bodies (1)');
+  await expect(again.locator('[data-chip="volume"]')).toHaveText('Volume8000 mm³');
   // Moved: the pointer says "files", model.json was written through ws.files (no token of its own),
   // and the P1 file is kept byte for byte beside it, and not moved again on the reopen.
   const after = await (await request.get(`${baseUrl()}/api/plugin-studies/get?${new URLSearchParams({ project_id: projectId, plugin: 'cad', study_id: studyId })}`)).json();
   expect(after.study.doc).toEqual({ ...pointer, store: 'files' });
   const moved = await storedModel(request, projectId, studyId);
   expect(moved.json.etag).toBeUndefined();
-  expect(moved.json.doc.features.map((f) => f.name)).toEqual(['Old box', 'Box 1']);
+  expect(moved.json.doc.features.map((f) => f.name)).toEqual(['Old box', 'Sketch 1', 'Extrude 1']);
+  // Nothing of the old Part was dropped: its Box and its body's name are in the stored model as they were.
+  expect(moved.json.doc.features[0]).toEqual(p1File.doc.features[0]);
+  expect(moved.json.doc.bodies.b_p1).toEqual({ name: 'Body 1', color: '#bdc9db' });
   const kept = await request.get(`${baseUrl()}/api/plugin-files/read?${new URLSearchParams({ project_id: projectId, plugin: 'cad', rel: `studies/${studyId}/model.p1.json` })}`);
   expect(kept.ok()).toBe(true);
   expect(await kept.text()).toBe(p1Bytes);

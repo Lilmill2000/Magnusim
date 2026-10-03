@@ -4,13 +4,16 @@
 // wrapper (LGPL-2.1-or-later), rebuilt with -sDYNAMIC_EXECUTION=0 -sEMBIND_AOT=1 (no eval,
 // no new Function) and our patches (solver-build/SOURCES.md).
 //
-// createSolver({moduleUrl}) -> {load, solve, dragStart, dragMove, dragEnd, setValue, analyze,
-//                               values, stats, dispose}
+// createSolver({moduleUrl}) -> {load, solve, dragStart, dragStartEntity, dragMove, dragEnd,
+//                               setValue, analyze, values, stats, dispose}
 //
 // Drags follow FreeCAD's Sketcher: a temporary soft coincidence (tag -1) pulls the dragged
 // point to the pointer, solved by SQP against the hard constraints. On top of that,
 // dragStart({freeze:true}, the default) fixes every parameter the last diagnosis found
 // fully determined, so a drag solves only the under-defined part of the sketch.
+// dragStartEntity(id, grab) drags a whole entity: a line translates (both ends follow the
+// pointer's offset from the grab point), a circle or an arc changes its radius (its edge
+// follows the pointer, its centre is held softly where it was).
 //
 // Sketch JSON (all lengths in mm, angles in degrees):
 //   points:      { "<pointId>": [u, v], ... }
@@ -51,7 +54,9 @@ function normAngle(a) {
 export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussStep = 3, sparseSqpMinParams = 64 } = {}) {
   let factory = moduleFactory;
   if (!factory) {
-    const url = moduleUrl ?? new URL('./planegcs.mjs', import.meta.url).href;
+    // A variable, not a literal: the bundler leaves the URL to be resolved at run time.
+    const name = 'planegcs.mjs';
+    const url = moduleUrl ?? new URL(name, import.meta.url).href;
     factory = (await import(/* @vite-ignore */ url)).default;
   }
   const opts = {};
@@ -76,7 +81,8 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
   let paramOwner = []; // idx -> {owner, name}
   let nParams = 0;
   let dragTarget = null; // [ix, iy] fixed target params, allocated once per load
-  let drag = null; // {pointId, init:[u,v], step, reinits}
+  let dragTarget2 = null; // a second pair (a line's other end; a circle's held centre)
+  let drag = null; // {pointId | entity, kind, init:[u,v], step, reinits}
   let lastGood = null; // Float64Array of the last accepted parameter values
   let frozen = []; // parameter indices fixed for the current drag
   let geomVersion = 0; // bumped whenever parameter values may have changed
@@ -445,8 +451,9 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
           throw new SketchInputError(`entity ${e.id}: unknown kind "${e.kind}"`);
       }
     }
-    // drag target: two fixed parameters reused by every drag
+    // drag targets: fixed parameters reused by every drag
     dragTarget = [push(0, true, '#drag', 'u'), push(0, true, '#drag', 'v')];
+    dragTarget2 = [push(0, true, '#drag2', 'u'), push(0, true, '#drag2', 'v')];
 
     let tag = 0;
     for (const c of sketch.constraints ?? []) {
@@ -603,9 +610,56 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     writeParams(init, dragTarget[0]);
     withGeo([P(dragTarget), P(p)], (t, q) => gcs.add_constraint_p2p_coincident(t, q, TEMP_TAG, true, 1));
     gcs.init_solution(ALG.DOGLEG);
-    drag = { pointId, init, step: 0, reinits: 0, freeze, frozen: frozen.length };
+    drag = { kind: 'point', pointId, init, grab: init, step: 0, reinits: 0, freeze, frozen: frozen.length };
     const movable = !frozen.includes(p[0]) || !frozen.includes(p[1]);
     return { ok: true, at: init, movable, frozenParams: frozen.length };
+  }
+
+  // A whole entity: a line translates with the pointer (both ends held softly at their
+  // start positions plus the pointer's offset from `grab`); a circle or an arc takes the
+  // pointer on its edge (its radius follows) while its centre is held softly in place.
+  function dragStartEntity(entityId, grab, { freeze = true } = {}) {
+    if (!sk) throw new Error('load() a sketch first');
+    const e = entityInfo.get(entityId);
+    if (!e || e.kind === 'point') throw new SketchInputError(`entity "${entityId}" cannot be dragged as a whole`);
+    if (!Array.isArray(grab) || grab.length !== 2) throw new SketchInputError('dragStartEntity needs the grab point [u, v]');
+    gcs.clear_by_id(TEMP_TAG);
+    unfreeze();
+    drag = null;
+    if (freeze) {
+      if (analyzedVersion !== geomVersion) {
+        gcs.diagnose_fresh(ALG.DOGLEG);
+        analyzedVersion = geomVersion;
+      } else {
+        gcs.init_solution(ALG.DOGLEG);
+      }
+    } else {
+      gcs.init_solution(ALG.DOGLEG);
+    }
+    if (gcs.has_conflicting()) {
+      return { ok: false, reason: 'conflicting', movable: false, frozenParams: 0, conflicting: diagnosisLists().conflicting };
+    }
+    if (freeze) freezeDetermined();
+    const vals = readParams();
+    let ends = null;
+    if (e.kind === 'line') {
+      ends = [[vals[e.p1[0]], vals[e.p1[1]]], [vals[e.p2[0]], vals[e.p2[1]]]];
+      writeParams(ends[0], dragTarget[0]);
+      writeParams(ends[1], dragTarget2[0]);
+      withGeo([P(dragTarget), P(e.p1)], (t, q) => gcs.add_constraint_p2p_coincident(t, q, TEMP_TAG, true, 1));
+      withGeo([P(dragTarget2), P(e.p2)], (t, q) => gcs.add_constraint_p2p_coincident(t, q, TEMP_TAG, true, 1));
+    } else {
+      // circle or arc: the pointer on the edge, the centre held where it is
+      writeParams(grab, dragTarget[0]);
+      writeParams([vals[e.c[0]], vals[e.c[1]]], dragTarget2[0]);
+      const cc = { c: e.c, r: e.r };
+      withGeo([P(dragTarget), C(cc)], (t, c) => gcs.add_constraint_point_on_circle(t, c, TEMP_TAG, true, 1));
+      withGeo([P(dragTarget2), P(e.c)], (t, q) => gcs.add_constraint_p2p_coincident(t, q, TEMP_TAG, true, 1));
+    }
+    gcs.init_solution(ALG.DOGLEG);
+    drag = { kind: e.kind === 'line' ? 'line' : 'radius', entity: entityId, ends, init: [...grab], grab: [...grab], step: 0, reinits: 0, freeze, frozen: frozen.length };
+    const movable = e.params.some((i) => !frozen.includes(i));
+    return { ok: true, at: [...grab], movable, frozenParams: frozen.length };
   }
 
   // FreeCAD Sketcher: each move re-solves from the drag-start reference; when the pointer
@@ -616,15 +670,26 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     const d = Math.hypot(u - drag.init[0], v - drag.init[1]);
     if (reinit === 'always' || (drag.step > 0 && d > 20 * drag.step)) {
       gcs.init_solution(ALG.DOGLEG);
-      const vals = readParams();
-      const p = ptOf(drag.pointId);
-      drag.init = [vals[p[0]], vals[p[1]]];
+      if (drag.kind === 'point') {
+        const vals = readParams();
+        const p = ptOf(drag.pointId);
+        drag.init = [vals[p[0]], vals[p[1]]];
+      } else {
+        drag.init = [u, v];
+      }
       drag.step = 0;
       drag.reinits += 1;
     } else if (drag.step === 0) {
       drag.step = d;
     }
-    writeParams([u, v], dragTarget[0]);
+    if (drag.kind === 'line') {
+      const du = u - drag.grab[0];
+      const dv = v - drag.grab[1];
+      writeParams([drag.ends[0][0] + du, drag.ends[0][1] + dv], dragTarget[0]);
+      writeParams([drag.ends[1][0] + du, drag.ends[1][1] + dv], dragTarget2[0]);
+    } else {
+      writeParams([u, v], dragTarget[0]);
+    }
     const ok = solvePrepared(false);
     geomVersion++;
     return { status: ok ? 'ok' : 'failed', values: full ? values(lastGood) : undefined };
@@ -685,5 +750,5 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
   }
 
   const _internals = () => ({ M, gcs, pointParams, entityInfo, consInfo, dragTarget, frozen, paramOwner });
-  return { load, solve, dragStart, dragMove, dragEnd, setValue, analyze, values: () => values(), stats, dispose, _internals };
+  return { load, solve, dragStart, dragStartEntity, dragMove, dragEnd, setValue, analyze, values: () => values(), stats, dispose, _internals };
 }

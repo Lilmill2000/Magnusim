@@ -44,6 +44,8 @@ export function viewportCommands(): CommandDef[] {
       label: 'Fit',
       shortcut: 'F',
       hint: 'Frame the visible bodies, keeping the view direction',
+      // Fit and the standard views work the same in sketch mode (the VIEW group stays).
+      mode: 'any',
       enabled: ready,
       run: (s) => viewport(s)?.fit(),
     },
@@ -52,6 +54,7 @@ export function viewportCommands(): CommandDef[] {
         id: `view.${v.view}`,
         label: `${v.label} view`,
         shortcut: v.shortcut,
+        mode: 'any',
         enabled: ready,
         run: (s) => viewport(s)?.setView(v.view),
       }),

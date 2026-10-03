@@ -23,7 +23,7 @@
 import { expect, test, type Frame, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 import { PNG } from './png';
 
 type V3 = [number, number, number];
@@ -542,7 +542,7 @@ test('cad:p1-viewport-box shading, picking, views, section, visibility and the m
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:p1-viewport-doc a Box from the toolbar is drawn, picked (with kernel vertices), edited on double-click, hidden by the eye', async ({ page, request }) => {
+test('cad:p1-viewport-doc a sketch extruded from the toolbar is drawn, picked (with kernel vertices), edited on double-click, hidden by the eye', async ({ page, request }) => {
   const seen = await watchPage(page);
   const projectId = await newProject(request);
   await openProject(page, projectId);
@@ -552,9 +552,14 @@ test('cad:p1-viewport-doc a Box from the toolbar is drawn, picked (with kernel v
   await expect(f.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
 
   // The document makes the body (DocService rebuild); the viewport draws it from doc.state.
-  await f.locator('[data-command="solid.box"]').click();
+  // A 20 x 20 sketch on Top, extruded 20 mm (no one-click Box since decision 2026-10-01).
+  await addSketch(page);
+  await f.locator('[data-command="solid.extrude"]').click();
   const panel = f.locator('[data-cad-panel="feature"]');
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
+  const dist = panel.locator('.nui[data-field="distance"] input');
+  await dist.fill('20');
+  await dist.press('Enter');
   await panel.locator('[data-panel-done]').click();
   await expect(panel).toHaveCount(0);
   await expect.poll(async () => (await vpState(frame)).bodies).toBe(1);
@@ -566,7 +571,7 @@ test('cad:p1-viewport-doc a Box from the toolbar is drawn, picked (with kernel v
   expect(body.bbox.map((v) => Math.round(v * 1e6) / 1e6)).toEqual([0, 0, 0, 20, 20, 20]);
   expect((await vpState(frame)).triangles).toBe(12);
   const frontPt = await at(page, frame, [10, 0, 10]);
-  await expectPixel(page, frontPt, lit(BODY, [0, -1, 0], HOME), 'the doc box, front face');
+  await expectPixel(page, frontPt, lit(BODY, [0, -1, 0], HOME), 'the extruded block, front face');
 
   // Vertices come from the kernel (topo, vertices only) through the viewport's binding.
   const corner = await frame.evaluate(async (shape) => {
@@ -577,11 +582,11 @@ test('cad:p1-viewport-doc a Box from the toolbar is drawn, picked (with kernel v
   await page.mouse.move(cPt[0] + 2, cPt[1] + 2);
   await expect.poll(() => hoverItem(frame), { timeout: 15_000 }).toEqual({ kind: 'vertex', body: body.id, index: corner });
 
-  // Click the front face, then double-click it: the Box 1 panel opens (the UI edits the feature that made it).
+  // Click the front face, then double-click it: the Extrude 1 panel opens (the UI edits the feature that made it).
   await page.mouse.click(...frontPt);
   await expect.poll(async () => ((await selection(frame)) as { kind: string; body: string }[]).map((s) => `${s.kind}:${s.body}`)).toEqual([`face:${body.id}`]);
   await page.mouse.dblclick(...frontPt);
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
   await panel.locator('[data-panel-done]').click();
   await expect(panel).toHaveCount(0);
 
@@ -604,7 +609,7 @@ test('cad:p1-viewport-doc a Box from the toolbar is drawn, picked (with kernel v
   await eye.click();
   await expect.poll(async () => (await vpState(frame)).bodies).toBe(1);
 
-  // Undo removes the box from the viewport.
+  // Undo removes the extrude, and its body from the viewport.
   await page.keyboard.press('Control+z');
   await expect.poll(async () => (await vpState(frame)).bodies).toBe(0);
   expect((await vpState(frame)).triangles).toBe(0);

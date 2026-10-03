@@ -8,7 +8,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { fixture, KERNEL_DIR, REF, rel, type R } from './kernel-lib';
+import { itVortex, KERNEL_DIR, REF, rel, vortexBytes, type R } from './kernel-lib';
 
 let w: Worker;
 function send(op: string, params: R = {}, bytes?: Uint8Array, timeoutMs = 60_000): Promise<R> {
@@ -56,11 +56,11 @@ describe('gate 9: out of memory', () => {
     expect(await alive()).toBe(true);
   }, 180_000);
 
-  it('real ops on a full heap fail cleanly; after freeing, import + cut work again', async () => {
+  itVortex('real ops on a full heap fail cleanly; after freeing, import + cut work again', async () => {
     const hold = await send('debug_hold', { leave_mb: 4 }, undefined, 120_000);
     expect(hold.ok).toBe(true);
     expect(hold.held_mb).toBeGreaterThan(3500);
-    const bytes = fixture('vortex-cfd-test.step');
+    const bytes = vortexBytes();
     const failures: R[] = [];
     // About 16 MB are left: enough to import the 64 KB part and make a box.
     const imp = await send('import_step', { name: 'vortex.step', heal: true, tol: 1e-3 }, bytes);

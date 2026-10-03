@@ -165,11 +165,11 @@ describe('parameters', () => {
     const doc: CadDoc = {
       ...emptyDoc('metric'),
       params: [p('w', '10'), p('h', 'w * 2')],
-      features: [{ id: 'f_1', type: 'box', name: 'Box 1', op: 'new', creates: 'b_1', scope: [], origin: ['0', '0', '0'], size: ['w', '10', '10'] }],
+      features: [{ id: 'f_1', type: 'extrude', name: 'Extrude 1', op: 'new', creates: 'b_1', scope: [], profiles: [], extent: { kind: 'blind', distance: 'w' }, flip: false }],
     };
     const u = usersOfParam(doc, 'w');
     expect(u.params.map((x) => x.name)).toEqual(['h']);
-    expect(u.features.map((x) => x.name)).toEqual(['Box 1']);
+    expect(u.features.map((x) => x.name)).toEqual(['Extrude 1']);
   });
 });
 

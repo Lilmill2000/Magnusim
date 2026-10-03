@@ -1,10 +1,10 @@
 // What the design tree shows, as plain data (pure functions, unit-tested):
 // history rows in document order with their rollback / suppressed / error
 // states, where the rollback bar sits, and the bodies list.
-// Owner: UI-SHELL.
+// Owner: UI-SHELL; sketch rows (prefix, lock, dimension count): P3-PROFILES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { RebuildState } from '../../types/doc-service';
-import type { BodyId, CadDoc, CadView, FeatureId, FeatureType } from '../../types/doc';
+import type { BodyId, CadDoc, CadView, Feature, FeatureId, FeatureType, SketchSolvedState } from '../../types/doc';
 import type { Selection } from '../../types/selection';
 import type { BodyInfo } from '../../types/kernel';
 
@@ -19,6 +19,38 @@ export interface HistoryRow {
   /** Rebuild outcome shown as a badge. */
   status: 'ok' | 'error' | 'warning' | 'pending';
   message: string | null;
+  /** A sketch's row: how defined it is (prefix, lock) and how many dimensions it has. */
+  sketch?: SketchRowInfo;
+}
+
+export interface SketchRowInfo {
+  state: SketchSolvedState['state'];
+  dims: number;
+  /** Nothing drawn yet: no lock (review P2/P3 round 2: an empty sketch showed "Fully defined" in the tree). */
+  empty: boolean;
+}
+
+/**
+ * A sketch row's prefix (SOLIDWORKS): "(-)" under defined, none fully defined
+ * (the row shows a lock instead), "(+)" over defined, "(?)" not solved.
+ */
+export function sketchPrefix(state: SketchSolvedState['state']): string {
+  return state === 'under' ? '(-)' : state === 'over' ? '(+)' : state === 'unsolved' ? '(?)' : '';
+}
+
+/** "1 dimension", "3 dimensions"; null with none. */
+export function dimensionsText(n: number): string | null {
+  return n > 0 ? `${n} dimension${n === 1 ? '' : 's'}` : null;
+}
+
+function sketchInfo(f: Feature): SketchRowInfo | undefined {
+  if (f.type !== 'sketch') return undefined;
+  const state = f.solved?.state;
+  return {
+    state: state === 'under' || state === 'fully' || state === 'over' ? state : 'unsolved',
+    dims: (f.constraints ?? []).filter((c) => 'expr' in c && 'driving' in c).length,
+    empty: (f.entities ?? []).length === 0,
+  };
 }
 
 /** Where the rollback bar is, as an index in [0, n] (n = at the end). */
@@ -55,6 +87,7 @@ export function historyRows(doc: Pick<CadDoc, 'features'>, view: Pick<CadView, '
       rolledBack: index >= bar,
       status,
       message,
+      ...(f.type === 'sketch' ? { sketch: sketchInfo(f) } : {}),
     };
   });
 }

@@ -23,13 +23,24 @@ import type { ViewportBody, ViewportHandle } from '../types/viewport';
  */
 export const TOPO_VERTICES_ONLY = { faces: 'none', edges: 'none', vertices: 'all' } as const;
 
-export function toViewportBodies(list: readonly BodyInfo[], vertices: ReadonlyMap<string, Float32Array>): ViewportBody[] {
+export function toViewportBodies(list: readonly BodyInfo[], vertices: ReadonlyMap<string, Float32Array>, seeThrough: (id: BodyInfo['id']) => boolean = () => false): ViewportBody[] {
   const out: ViewportBody[] = [];
   for (const b of list) {
     if (!b.tess) continue;
-    out.push({ id: b.id, color: b.color, visible: b.visible, tessKey: b.tessKey, tess: b.tess, feature: b.feature, bbox: b.bbox ?? null, vertices: vertices.get(`${b.id}|${b.tessKey}`) ?? null });
+    out.push({ id: b.id, color: b.color, visible: b.visible, tessKey: b.tessKey, tess: b.tess, feature: b.feature, bbox: b.bbox ?? null, vertices: vertices.get(`${b.id}|${b.tessKey}`) ?? null, ...(seeThrough(b.id) ? { seeThrough: true } : {}) });
   }
   return out;
+}
+
+/** Whether the feature that owns body `id` draws it see-through (FeatureTypeDef.seeThrough: an Enclosure's body). */
+export function seeThroughOf(s: Pick<DocState, 'doc'>, services: Pick<AppServices, 'doc'>, id: BodyInfo['id']): boolean {
+  const registry = services.doc.features;
+  if (!registry) return false;
+  for (const f of s.doc.features) {
+    const def = registry.get(f.type);
+    if (def?.seeThrough && def.ownsBody?.(f, id) && def.seeThrough(f, id)) return true;
+  }
+  return false;
 }
 
 export function bindViewport(handle: ViewportHandle, services: AppServices): () => void {
@@ -42,7 +53,7 @@ export function bindViewport(handle: ViewportHandle, services: AppServices): () 
     const list = s.rebuild.bodies;
     const live = new Set(list.map((b) => `${b.id}|${b.tessKey}`));
     for (const key of [...vertices.keys()]) if (!live.has(key)) vertices.delete(key);
-    handle.setBodies(toViewportBodies(list, vertices));
+    handle.setBodies(toViewportBodies(list, vertices, (id) => seeThroughOf(s, services, id)));
     for (const b of list) void fetchVertices(b);
   };
 

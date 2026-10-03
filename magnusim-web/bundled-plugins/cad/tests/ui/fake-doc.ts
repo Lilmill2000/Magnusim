@@ -1,7 +1,9 @@
 // Test-only fakes for the UI shell's unit tests: an in-memory DocService (the
-// src/types/doc-service.ts contract, with box and cylinder types, sessions,
-// undo, rollback, parameters and a synchronous fake rebuild) and a units
-// service with a small expression evaluator. Never used by shipped code.
+// src/types/doc-service.ts contract, with stand-ins for the extrude (a body
+// maker: 10 x 20 x its distance) and sketch (no body) types, sessions, undo,
+// rollback, parameters and a synchronous fake rebuild), a units service with a
+// small expression evaluator, and (makeServices({ panels: true })) a plain
+// feature panel for those types. Never used by shipped code.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { createBus } from '../../src/lib/bus';
 import { createBridge } from '../../src/lib/bridge';
@@ -10,10 +12,13 @@ import { createSelectionStore } from '../../src/lib/selection';
 import { createStateStore } from '../../src/lib/store';
 import { createCommandRegistry } from '../../src/app/commands';
 import { bindCommandShortcuts, createKeyboard } from '../../src/app/keyboard';
-import type { AppServices } from '../../src/types/app';
+import { createModuleRegistry } from '../../src/modules';
+import type { AppServices, AreaApis } from '../../src/types/app';
 import type { Mode } from '../../src/types/commands';
 import type { DocService, DocState, EditResult, EditSession, FeatureRegistry, FeatureTypeDef } from '../../src/types/doc-service';
-import type { BodyId, BoxFeature, CadDoc, CadView, CylinderFeature, Feature, FeatureId, FeatureStatus, FeatureType, Param } from '../../src/types/doc';
+import type { BodyId, CadDoc, CadView, ExtrudeFeature, Feature, FeatureId, FeatureStatus, FeatureType, Param, SketchFeature } from '../../src/types/doc';
+import type { CadModule } from '../../src/types/modules';
+import { TestFeaturePanel } from './test-panel';
 import type { CadEvents } from '../../src/types/events';
 import type { BodyInfo, KernelAdapter, KernelStatus } from '../../src/types/kernel';
 import type { DocUnits, EvalResult, Quantity, UnitsService } from '../../src/types/units';
@@ -146,8 +151,8 @@ export function createFakeUnits(getDoc: () => Pick<CadDoc, 'units' | 'params'>):
 
 // ---------------------------------------------------------------- feature types
 
-const BOX_ICON = 'M3 9l5-4h13v10l-5 4H3z';
-const CYL_ICON = 'M6 6v12';
+const EXTRUDE_ICON = 'M3 16l9 4.5 9-4.5-9-4.5z';
+const SKETCH_ICON = 'M6 6v12';
 
 function positiveProblem(units: UnitsService, label: string, e: string): string | null {
   const r = units.evaluate(e, 'length');
@@ -156,60 +161,58 @@ function positiveProblem(units: UnitsService, label: string, e: string): string 
   return null;
 }
 
-function boxDef(): FeatureTypeDef<BoxFeature> {
+/** A stand-in for Extrude: a body of 10 x 20 x its distance (default 30 mm: 6000 mm³). */
+function extrudeDef(startIncomplete = false): FeatureTypeDef<ExtrudeFeature> {
   return {
-    type: 'box',
-    label: 'Box',
-    icon: BOX_ICON,
+    type: 'extrude',
+    label: 'Extrude',
+    icon: EXTRUDE_ICON,
     create: (doc, init) => ({
       id: newId('f'),
-      type: 'box',
-      name: nextName('Box', doc.features.map((f) => f.name)),
+      type: 'extrude',
+      name: nextName('Extrude', doc.features.map((f) => f.name)),
       op: 'new',
       creates: newId('b'),
       scope: [],
-      origin: ['0 mm', '0 mm', '0 mm'],
-      size: ['10 mm', '20 mm', '30 mm'],
+      profiles: [],
+      extent: { kind: 'blind', distance: startIncomplete ? '' : '30 mm' },
+      flip: false,
       ...init,
     }),
     resolve: () => ({ ok: true, values: null }),
-    incomplete(f, units) {
-      const names = ['Length', 'Width', 'Height'];
-      for (let i = 0; i < 3; i++) {
-        const p = positiveProblem(units, names[i], f.size[i]);
-        if (p) return p;
-      }
-      return null;
-    },
+    incomplete: (f, units) => positiveProblem(units, 'Distance', f.extent.distance),
     parents: () => [],
     build: async () => ({ ok: false, message: 'fake' }),
   };
 }
 
-function cylinderDef(startIncomplete = false): FeatureTypeDef<CylinderFeature> {
+/** A stand-in for Sketch: makes no body. */
+function sketchDef(): FeatureTypeDef<SketchFeature> {
   return {
-    type: 'cylinder',
-    label: 'Cylinder',
-    icon: CYL_ICON,
+    type: 'sketch',
+    label: 'Sketch',
+    icon: SKETCH_ICON,
     create: (doc, init) => ({
       id: newId('f'),
-      type: 'cylinder',
-      name: nextName('Cylinder', doc.features.map((f) => f.name)),
-      op: 'new',
-      creates: newId('b'),
-      scope: [],
-      origin: ['0 mm', '0 mm', '0 mm'],
-      axis: 'origin:z',
-      diameter: '10 mm',
-      height: startIncomplete ? '' : '20 mm',
+      type: 'sketch',
+      name: nextName('Sketch', doc.features.map((f) => f.name)),
+      support: { kind: 'plane', plane: 'origin:top' },
+      plane: { origin: [0, 0, 0], normal: [0, 0, 1], xdir: [1, 0, 0] },
+      points: {},
+      entities: [],
+      constraints: [],
+      solved: { values: {}, dof: 0, state: 'fully' },
       ...init,
     }),
     resolve: () => ({ ok: true, values: null }),
-    incomplete: (f, units) => positiveProblem(units, 'Diameter', f.diameter) ?? positiveProblem(units, 'Height', f.height),
+    incomplete: () => null,
     parents: () => [],
     build: async () => ({ ok: false, message: 'fake' }),
   };
 }
+
+/** The plain panel for the stand-in types (makeServices({ panels: true })). */
+export const TEST_PANELS: CadModule = { id: 'test-panels', panels: { extrude: TestFeaturePanel, sketch: TestFeaturePanel } };
 
 // ---------------------------------------------------------------- the fake service
 
@@ -229,16 +232,14 @@ function volumeOf(f: Feature, units: UnitsService): number {
     const r = units.evaluate(e, 'length');
     return r.ok ? r.value : 0;
   };
-  if (f.type === 'box') return v(f.size[0]) * v(f.size[1]) * v(f.size[2]);
-  const d = v(f.diameter);
-  return (Math.PI * d * d * v(f.height)) / 4;
+  return f.type === 'extrude' ? 10 * 20 * v(f.extent.distance) : 0;
 }
 
-export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['status']; types?: FeatureType[]; incompleteCylinder?: boolean } = {}): FakeDoc {
+export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['status']; types?: FeatureType[]; incompleteExtrude?: boolean } = {}): FakeDoc {
   const calls: string[] = [];
   const overrides = new Map<FeatureId, FeatureStatus>();
   const emptyDoc: CadDoc = {
-    schema: 1,
+    schema: 2,
     units: opts.units ?? { length: 'mm', angle: 'deg' },
     params: [],
     bodies: {},
@@ -251,7 +252,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     error: null,
     doc: emptyDoc,
     view: emptyView,
-    rebuild: { status: 'idle', seq: 0, features: {}, bodies: [], ms: null, message: null },
+    rebuild: { status: 'idle', seq: 0, features: {}, bodies: [], outputs: {}, ms: null, message: null },
     save: { state: 'saved', at: null },
     history: { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null },
     session: null,
@@ -265,9 +266,9 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     get: (t) => defs.get(t),
     all: () => [...defs.values()],
   };
-  const types = opts.types ?? ['box', 'cylinder'];
-  if (types.includes('box')) registry.register(boxDef());
-  if (types.includes('cylinder')) registry.register(cylinderDef(opts.incompleteCylinder));
+  const types = opts.types ?? ['extrude', 'sketch'];
+  if (types.includes('extrude')) registry.register(extrudeDef(opts.incompleteExtrude));
+  if (types.includes('sketch')) registry.register(sketchDef());
 
   const undoStack: { label: string; before: CadDoc; after: CadDoc }[] = [];
   const redoStack: typeof undoStack = [];
@@ -297,7 +298,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       const o = overrides.get(f.id);
       features[f.id] = { ...(o ?? { state: 'ok' }), bodiesBefore };
       if (o?.state === 'error') return;
-      if (f.op === 'new' && f.creates) {
+      if ('op' in f && 'creates' in f && f.op === 'new' && f.creates) {
         const b = s.doc.bodies[f.creates];
         bodies.push({
           id: f.creates,
@@ -317,11 +318,11 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
         } as BodyInfo);
       }
     });
-    state.set((st) => ({ ...st, rebuild: { status: 'done', seq: st.rebuild.seq + 1, features, bodies, ms: 1, message: null } }));
+    state.set((st) => ({ ...st, rebuild: { status: 'done', seq: st.rebuild.seq + 1, features, bodies, outputs: {}, ms: 1, message: null } }));
   }
 
   function withBody(doc: CadDoc, f: Feature): CadDoc {
-    if (f.op !== 'new' || !f.creates || doc.bodies[f.creates]) return doc;
+    if (!('op' in f) || !('creates' in f) || f.op !== 'new' || !f.creates || doc.bodies[f.creates]) return doc;
     const name = nextName('Body', Object.values(doc.bodies).map((b) => b.name));
     return { ...doc, bodies: { ...doc.bodies, [f.creates]: { name, color: '#bdc9db' } } };
   }
@@ -470,13 +471,18 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
         features: doc.features.map((x) => (x.id === id ? ({ ...x, suppressed: suppressed || undefined } as Feature) : x)),
       }));
     },
+    removeBlock(id) {
+      const f = state.get().doc.features.find((x) => x.id === id);
+      if (!f) return 'That feature is not in the part';
+      return f.name === 'Locked' ? 'Extrude 2 uses Locked' : null;
+    },
     remove(id) {
       calls.push(`remove ${id}`);
-      if (open && open.feature === id) open.discard();
+      if (open && open.feature === id && !this.removeBlock(id)) open.discard();
       return edit('Delete', (doc) => {
         const f = doc.features.find((x) => x.id === id);
         if (!f) return { ok: false, reason: 'That feature is not in the part' };
-        if (f.name === 'Locked') return { ok: false, reason: 'Cylinder 1 uses Locked' };
+        if (f.name === 'Locked') return { ok: false, reason: 'Extrude 2 uses Locked' };
         return { ...doc, features: doc.features.filter((x) => x.id !== id) };
       });
     },
@@ -576,6 +582,10 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       calls.push('setCamera');
       state.set((s) => ({ ...s, view: { ...s.view, camera } }));
     },
+    setSketchVisibility(id, mode) {
+      calls.push(`setSketchVisibility ${id} ${mode}`);
+      state.set((s) => ({ ...s, view: { ...s.view, sketches: { ...(s.view.sketches ?? {}), ...(mode ? { [id]: mode } : {}) } } }));
+    },
     async flush() {},
     retrySave() {
       calls.push('retrySave');
@@ -616,11 +626,11 @@ export interface TestServices {
   looks: unknown[][];
 }
 
-export function makeServices(opts: { types?: FeatureType[]; status?: DocState['status']; units?: DocUnits; viewport?: boolean; incompleteCylinder?: boolean } = {}): TestServices {
+export function makeServices(opts: { types?: FeatureType[]; status?: DocState['status']; units?: DocUnits; viewport?: boolean; incompleteExtrude?: boolean; panels?: boolean } = {}): TestServices {
   const ws = createFakeWorkspace();
   const bridge = createBridge(ws);
   const bus = createBus<CadEvents>();
-  const doc = createFakeDoc({ types: opts.types, status: opts.status, units: opts.units, incompleteCylinder: opts.incompleteCylinder });
+  const doc = createFakeDoc({ types: opts.types, status: opts.status, units: opts.units, incompleteExtrude: opts.incompleteExtrude });
   const kernelStatus = createStateStore<KernelStatus>({ state: 'ready', info: null, message: null, respawns: 0, busy: null, heap_bytes: null, memory_high: false });
   const kernel = {
     status: kernelStatus,
@@ -640,6 +650,7 @@ export function makeServices(opts: { types?: FeatureType[]; status?: DocState['s
         state: vpState,
         flash: (items: unknown[]) => flashes.push(items),
         lookAt: (...args: unknown[]) => looks.push(args),
+        reframe: () => false,
         setPlanes: (planes: 'auto' | 'always') => vpState.set({ planes }),
       } as unknown as ViewportHandle)
     : null;
@@ -656,6 +667,8 @@ export function makeServices(opts: { types?: FeatureType[]; status?: DocState['s
     selection: createSelectionStore(),
     mode: createStateStore<{ mode: Mode }>({ mode: 'model' }),
     viewport: createStateStore<{ handle: ViewportHandle | null }>({ handle }),
+    modules: createModuleRegistry(opts.panels ? [TEST_PANELS] : []),
+    apis: createStateStore<AreaApis>({ sketch: null, solver: null, files: null }),
   };
   return { services, doc, kernelStatus, ws, flashes, looks };
 }

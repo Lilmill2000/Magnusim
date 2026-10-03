@@ -2,7 +2,7 @@
  "schema": 1,
  "about": "Native reference values for the kernel tests: OCCT 7.9.3 through cadquery-ocp 7.9.3.1.1 (Python 3.10.6), computed by the P0 fixtures workstream on 2026-09-30 and copied unchanged (trimmed to the fields the tests use). Conventions: mm, mm2, mm3; counts are TopExp::MapShapes unique sub-shapes; volume = BRepGProp::VolumeProperties defaults; bbox_exact = BRepBndLib::AddOptimal(no triangulation, no tolerance); bbox_add = BRepBndLib::Add (tolerance-padded); booleans BRepAlgoAPI_* with fuzzy 0, then UnifySameDomain(true, true, false).",
  "vortex": {
-  "file": "vortex-cfd-test.step",
+  "file": "Vortex CFD Test.step (read where it is: CAD_E2E_VORTEX_STEP; never copied into the plugin)",
   "bytes": 64518,
   "sha256": "d40156af7c86297bc061a5beef6ad89a1878fe25c7b57081b09648c522c71e5b",
   "import": {
@@ -666,6 +666,126 @@
    "volume_ms": 19605.41920000105,
    "area_ms": 20544.043700007023,
    "volume_raw_ms": 20757.30269998894
+  }
+ },
+ "p2p3": {
+  "about": "API 3 (docs/p2p3-plan.md §2) native values: OCCT 7.9.3 through cadquery-ocp 7.9.3.1.1, computed by the KERNEL builder on 2026-10-01 with the generators kept outside the plugin (scratchpad cad/p2p3/kernel: gen_heal_fixtures.py, native_presspull.py). heal: STEPControl_Reader, ShapeFix_Shape(precision = max tolerance = tol), BRepBuilderAPI_Sewing(tol) of every face, ShapeFix_Solid::SolidFromShell of closed shells. press_pull: a prism of the planar face along its outward normal (BRepPrimAPI_MakePrism of a copy), BRepAlgoAPI_Fuse (d > 0) / Cut (d < 0) with the healed Vortex, UnifySameDomain(true, true, false) on a copy; raw = before unify.",
+  "heal": {
+   "box20_faces": {
+    "file": "box20-faces.step",
+    "top_dz": 0,
+    "body_name": "Box 20 faces",
+    "as_read": {
+     "solids": 0,
+     "shells": 6,
+     "faces": 6,
+     "edges": 24,
+     "free_edges": 24
+    },
+    "heal_0.001": {
+     "faces_sewn": 6,
+     "free_edges": 0,
+     "solids": 1,
+     "volume": 7999.999999999998,
+     "valid": true,
+     "faces": 6
+    },
+    "heal_0.01": {
+     "faces_sewn": 6,
+     "free_edges": 0,
+     "solids": 1,
+     "volume": 7999.999999999998,
+     "valid": true,
+     "faces": 6
+    }
+   },
+   "box20_gap": {
+    "file": "box20-gap.step",
+    "top_dz": 0.005,
+    "body_name": "Box 20 gap",
+    "as_read": {
+     "solids": 0,
+     "shells": 6,
+     "faces": 6,
+     "edges": 24,
+     "free_edges": 24
+    },
+    "heal_0.001": {
+     "faces_sewn": 6,
+     "free_edges": 8,
+     "solids": 0,
+     "volume": null
+    },
+    "heal_0.01": {
+     "faces_sewn": 6,
+     "free_edges": 0,
+     "solids": 1,
+     "volume": 8000.666666666665,
+     "valid": true,
+     "faces": 6
+    }
+   },
+   "box10_sheet": {
+    "file": "box10-sheet.step",
+    "body_name": "Box and sheet",
+    "as_read": {
+     "solids": 1,
+     "faces": 7
+    }
+   }
+  },
+  "press_pull_vortex": {
+   "volume": 44798524.10991701,
+   "inlet_cap_plus_50_8": {
+    "face": "plane x = 127 (5 in), normal +X, area 2026.8299163899912",
+    "d": 50.8,
+    "area": 2026.8299163899912,
+    "raw": {
+     "valid": true,
+     "faces": 18,
+     "volume": 44901486.930219024
+    },
+    "unified": {
+     "valid": false,
+     "faces": 17,
+     "volume": 44901486.9480446
+    },
+    "dv_analytic": 102962.95975261152,
+    "note": "UnifySameDomain merges the inlet pipe and the prism side (coincident cylinders with different seams) into an invalid face natively too; the unmerged result is valid."
+   },
+   "roof_minus_10": {
+    "face": "plane z = 304.8 (12 in), normal +Z, area 47810.193668232256",
+    "d": -10,
+    "area": 47810.193668232256,
+    "raw": {
+     "valid": false,
+     "faces": 32,
+     "volume": 44817596.71312639
+    },
+    "unified": {
+     "valid": false,
+     "faces": 29,
+     "volume": 44817596.709033206
+    },
+    "dv_expected": -478101.9366823225,
+    "note": "OCCT 7.9.3 fails here natively as well: the inlet pipe is tangent to the roof plane; both results are invalid with a wrong volume."
+   },
+   "bottom_minus_10": {
+    "face": "plane z = -508 (-20 in), normal -Z, area 72965.87699003967",
+    "d": -10,
+    "area": 72965.87699003967,
+    "raw": {
+     "valid": true,
+     "faces": 17,
+     "volume": 44068865.33200553
+    },
+    "unified": {
+     "valid": true,
+     "faces": 16,
+     "volume": 44068865.36269845
+    },
+    "dv_expected": -729658.7699003967
+   }
   }
  }
 }

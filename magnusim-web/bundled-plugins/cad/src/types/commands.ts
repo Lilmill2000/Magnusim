@@ -6,7 +6,7 @@
 import type { AppServices } from './app';
 
 /** Toolbar groups by mode, in display order (proposal §3.1). */
-export type ModelGroup = 'sketch' | 'solid' | 'modify' | 'pattern' | 'construct' | 'inspect' | 'file';
+export type ModelGroup = 'sketch' | 'solid' | 'modify' | 'pattern' | 'construct' | 'cfd' | 'inspect' | 'file';
 export type SketchGroup = 'draw' | 'constrain' | 'dimension' | 'sketch-modify';
 export type ToolbarGroup = ModelGroup | SketchGroup;
 export type Mode = 'model' | 'sketch';
@@ -17,6 +17,7 @@ export const GROUP_LABELS: Record<ToolbarGroup, string> = {
   modify: 'MODIFY',
   pattern: 'PATTERN',
   construct: 'CONSTRUCT',
+  cfd: 'CFD PREP',
   inspect: 'INSPECT',
   file: 'FILE',
   draw: 'DRAW',
@@ -25,7 +26,8 @@ export const GROUP_LABELS: Record<ToolbarGroup, string> = {
   'sketch-modify': 'MODIFY',
 };
 
-export const MODEL_GROUPS: ModelGroup[] = ['sketch', 'solid', 'modify', 'pattern', 'construct', 'inspect', 'file'];
+/** CFD PREP (Enclosure) comes after the modelling groups (decision 2026-10-01). */
+export const MODEL_GROUPS: ModelGroup[] = ['sketch', 'solid', 'modify', 'pattern', 'construct', 'cfd', 'inspect', 'file'];
 export const SKETCH_GROUPS: SketchGroup[] = ['draw', 'constrain', 'dimension', 'sketch-modify'];
 
 /**
@@ -34,9 +36,9 @@ export const SKETCH_GROUPS: SketchGroup[] = ['draw', 'constrain', 'dimension', '
  * `enabled` returns a reason, shown as the tooltip, and the button is disabled.
  */
 export interface CommandDef {
-  /** "solid.box", "edit.undo", "view.fit". */
+  /** "solid.extrude", "edit.undo", "view.fit". */
   id: string;
-  /** Sentence case, verb-first where it is an action: "Box", "Undo", "Fit". */
+  /** Sentence case, verb-first where it is an action: "Extrude", "Undo", "Fit". */
   label: string;
   /** Toolbar group; omit for keyboard / context-menu-only commands. */
   group?: ToolbarGroup;
@@ -58,6 +60,13 @@ export interface CommandDef {
    * reason is obvious (Undo with nothing to undo).
    */
   explainRefusal?: boolean;
+  /**
+   * The mode's primary action, drawn as the toolbar's primary button at the end
+   * of the mode's groups (sketch mode: "Finish sketch"). Needs `group`.
+   */
+  primary?: boolean;
+  /** Drawn pressed while this panel is open (a feature of this type, or this tool), or while this sketch tool is in use. */
+  activeWhen?: { featureType?: string; tool?: string; sketchTool?: string };
   run(services: AppServices): void | Promise<void>;
 }
 
@@ -70,6 +79,8 @@ export interface CommandRegistry {
   toolbar(mode: Mode): { group: ToolbarGroup; label: string; commands: CommandDef[] }[];
   /** Runs a command if it is enabled; returns the reason when it is not. */
   run(id: string): Promise<true | string>;
+  /** Whether a command could run now (its `enabled`), without running it; unknown ids say so. */
+  canRun(id: string): true | string;
   /** Notified when commands are added or removed (the toolbar re-renders). */
   subscribe(fn: () => void): () => void;
 }
@@ -77,7 +88,12 @@ export interface CommandRegistry {
 export interface KeyBinding {
   /** Normalised combo, "Ctrl+Shift+Z". */
   combo: string;
-  run(e: KeyboardEvent): void;
+  /**
+   * Handle the key. Returning false passes it to the next older binding of the
+   * same combo (command shortcuts do this when no command of the current mode
+   * has the combo); anything else means handled.
+   */
+  run(e: KeyboardEvent): void | boolean;
   /** Also fires while an input or textarea has focus (default false; Escape usually true). */
   inInputs?: boolean;
 }

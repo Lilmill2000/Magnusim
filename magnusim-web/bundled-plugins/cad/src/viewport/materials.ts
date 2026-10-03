@@ -40,6 +40,7 @@ uniform float uAmbient;
 uniform float uDiffuse;
 uniform float uSpecular;
 uniform float uPower;
+uniform float uOpacity;
 #ifdef HATCH
 uniform float uHatchGap;
 uniform float uHatchWidth;
@@ -57,7 +58,7 @@ void main() {
   else if (uBodyState > 0.5) c = uHover;
   if (vHl > 1.5) c = uPick;
   else if (vHl > 0.5) c = uHover;
-  gl_FragColor = vec4(c * uAmbient + df * c * uDiffuse + sf * uColor * uSpecular, 1.0);
+  gl_FragColor = vec4(c * uAmbient + df * c * uDiffuse + sf * uColor * uSpecular, uOpacity);
   #ifdef HATCH
   // Section caps: diagonal hatching, as a cut face is drawn in CAD (one line every HATCH_GAP css px).
   if (mod(gl_FragCoord.x + gl_FragCoord.y, uHatchGap) < uHatchWidth) gl_FragColor.rgb *= HATCH_SHADE;
@@ -77,7 +78,26 @@ export interface BodyMaterial extends ShaderMaterial {
     uDiffuse: { value: number };
     uSpecular: { value: number };
     uPower: { value: number };
+    /** 1 opaque; less for a see-through body (setSeeThrough). */
+    uOpacity: { value: number };
   };
+}
+
+/** How much of a see-through body's colour covers what is behind it (an Enclosure's air). */
+export const SEE_THROUGH_OPACITY = 0.28;
+
+/** A see-through body's polygon offset units: behind every opaque body's surface it shares a plane with. */
+export const SEE_THROUGH_OFFSET_UNITS = 24;
+
+/** Draw a body see-through (translucent, no depth writes, pushed back: what is inside shows, nothing z-fights) or opaque. */
+export function setSeeThrough(m: BodyMaterial, on: boolean): void {
+  if (m.transparent === on) return;
+  m.transparent = on;
+  m.depthWrite = !on;
+  m.uniforms.uOpacity.value = on ? SEE_THROUGH_OPACITY : 1;
+  m.polygonOffsetFactor = on ? 4 : 1;
+  m.polygonOffsetUnits = on ? SEE_THROUGH_OFFSET_UNITS : BODY_OFFSET_UNITS;
+  m.needsUpdate = true;
 }
 
 /** Hatch of a section cap: every HATCH_GAP_PX css px, HATCH_WIDTH_PX wide, at HATCH_SHADE of the lit colour. */
@@ -120,6 +140,7 @@ export function createBodyMaterial(
       uDiffuse: { value: light.diffuse },
       uSpecular: { value: light.specular },
       uPower: { value: light.power },
+      uOpacity: { value: 1 },
       uHatchGap: { value: HATCH_GAP_PX * (hatch ?? 1) },
       uHatchWidth: { value: HATCH_WIDTH_PX * (hatch ?? 1) },
     },

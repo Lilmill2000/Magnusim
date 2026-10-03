@@ -150,4 +150,53 @@ describe('KernelAdapter', () => {
     await kernel.restart('Retry');
     expect(kernel.status.get().state).toBe('ready');
   });
+
+  // Review P2/P3 round 1: an import's Cancel left the worker reading; the next call waited for it.
+  it('a signal cuts off the call the worker is running: the worker restarts at once and the next call runs', async () => {
+    const slow: CallHandler = (msg, reply) => {
+      if (msg.op !== 'import_step') reply({ type: 'result', id: msg.id, ok: true, result: { id: 3, valid: true }, buffers: {}, ms: 1, heap_bytes: 1 });
+    };
+    const { kernel, workers } = adapterWith(slow);
+    await kernel.start();
+    const respawned = vi.fn();
+    kernel.onRespawn(respawned);
+    const abort = new AbortController();
+    const read = kernel.call('import_step', { name: 'big.step' }, { signal: abort.signal }).catch((e) => e);
+    await vi.waitFor(() => expect(kernel.status.get().busy).toBe('import_step'));
+    abort.abort();
+    const err = await read;
+    expect(err.kind).toBe('cancelled');
+    expect(err.name).toBe('AbortError');
+    expect(err.message).toBe('import_step was cancelled');
+    expect(workers[0].terminated).toBe(true);
+    const box = await kernel.call('box', { dx: 1, dy: 1, dz: 1 });
+    expect(box.result).toMatchObject({ id: 3, valid: true });
+    expect(workers).toHaveLength(2);
+    expect(workers[1].received.map((m) => m.op)).toEqual(['box']);
+    expect(respawned).toHaveBeenCalledWith('import_step was cancelled');
+  });
+
+  it('a signal drops a queued call without restarting the worker; an aborted signal never sends', async () => {
+    let hold: (() => void) | null = null;
+    const held: CallHandler = (msg, reply) => {
+      const answer = () => reply({ type: 'result', id: msg.id, ok: true, result: {}, buffers: {}, ms: 1, heap_bytes: 1 });
+      if (msg.op === 'props') hold = answer;
+      else answer();
+    };
+    const { kernel, workers } = adapterWith(held);
+    await kernel.start();
+    const first = kernel.call('props', { id: 1 });
+    const abort = new AbortController();
+    const queued = kernel.call('heal', { ids: [1] }, { signal: abort.signal }).catch((e) => e);
+    abort.abort();
+    expect((await queued).kind).toBe('cancelled');
+    await vi.waitFor(() => expect(hold).not.toBeNull());
+    hold!();
+    await first;
+    expect(workers).toHaveLength(1);
+    expect(workers[0].received.map((m) => m.op)).toEqual(['props']);
+    const gone = await kernel.call('heal', { ids: [1] }, { signal: abort.signal }).catch((e) => e);
+    expect(gone.kind).toBe('cancelled');
+    expect(workers[0].received.map((m) => m.op)).toEqual(['props']);
+  });
 });

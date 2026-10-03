@@ -130,7 +130,7 @@
 }
 
 .cad-vp-btn:hover {
-  background: var(--cad-card-bg);
+  background: var(--mg-bg);
   border-color: var(--cad-vp-btn-hover-border);
   color: var(--cad-vp-btn-hover-fg);
 }
@@ -152,9 +152,9 @@
   bottom: calc(100% + 8px);
   min-width: 212px;
   padding: 4px 0 6px;
-  background: var(--cad-card-bg);
-  border: 1px solid var(--cad-card-border);
-  border-radius: var(--cad-card-radius);
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-card-border);
+  border-radius: var(--mg-radius-md);
   box-shadow: var(--cad-menu-shadow);
   font-size: 12px;
   color: var(--mg-text-strong, #1a1d24);
@@ -174,7 +174,7 @@
   padding: 4px 10px 2px;
   font-size: 11px;
   line-height: 1.4;
-  color: var(--cad-chip-key);
+  color: var(--mg-text-muted);
   max-width: 240px;
 }
 
@@ -203,7 +203,7 @@
 
 .cad-vp-item kbd {
   font: 500 11px/1 var(--mg-font, "Segoe UI", system-ui, sans-serif);
-  color: var(--cad-chip-key);
+  color: var(--mg-text-muted);
 }
 
 .cad-vp-sep {
@@ -215,7 +215,7 @@
 .cad-vp-seg {
   display: flex;
   margin: 2px 10px 6px;
-  border: 1px solid var(--cad-btn-border);
+  border: 1px solid var(--mg-control-border);
   border-radius: 5px;
   overflow: hidden;
 }
@@ -224,10 +224,10 @@
   flex: 1 1 auto;
   padding: 5px 8px;
   border: 0;
-  border-left: 1px solid var(--cad-btn-border);
-  background: var(--cad-card-bg);
+  border-left: 1px solid var(--mg-control-border);
+  background: var(--mg-bg);
   font: 600 11px/1.2 var(--mg-font, "Segoe UI", system-ui, sans-serif);
-  color: var(--cad-chip-fg);
+  color: var(--mg-text-body);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -255,11 +255,11 @@
 
 .cad-vp-chip {
   padding: 4px 9px;
-  border: 1px solid var(--cad-btn-border);
+  border: 1px solid var(--mg-control-border);
   border-radius: 12px;
-  background: var(--cad-card-bg);
+  background: var(--mg-bg);
   font: 600 11px/1.2 var(--mg-font, "Segoe UI", system-ui, sans-serif);
-  color: var(--cad-chip-fg);
+  color: var(--mg-text-body);
   cursor: pointer;
 }
 
@@ -279,7 +279,7 @@
   border: 0;
   background: none;
   font-size: 11px;
-  color: var(--cad-link);
+  color: var(--mg-link);
   cursor: pointer;
 }
 
@@ -307,19 +307,19 @@
   min-width: 64px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  color: var(--cad-chip-fg);
+  color: var(--mg-text-body);
 }
 
 .cad-vp-small {
   padding: 4px 10px;
-  border: 1px solid var(--cad-done-border);
+  border: 1px solid var(--mg-btn-neutral-border);
   border-radius: 3px;
-  background: var(--cad-done-bg);
+  background: var(--mg-btn-neutral-bg);
   font: 600 11px/1.2 var(--mg-font, "Segoe UI", system-ui, sans-serif);
   color: var(--mg-text-strong, #1a1d24);
   cursor: pointer;
 }
 
 .cad-vp-small:hover {
-  background: var(--cad-done-bg-hover);
+  background: var(--mg-btn-neutral-hover);
 }

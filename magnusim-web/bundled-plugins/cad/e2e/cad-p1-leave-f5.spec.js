@@ -16,7 +16,7 @@
 // applies to a whole file).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
-import { answerLeave, baseUrl, historyState, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage } from './helpers';
+import { addSketch, answerLeave, baseUrl, historyState, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage } from './helpers';
 
 test.use({ launchOptions: { args: ['--site-per-process'] } });
 
@@ -32,18 +32,15 @@ async function freshPart(page, request) {
   return { seen, frame, row, projectId };
 }
 
-async function addBox(frame) {
-  await frame.locator('[data-cad-toolbar] [data-command="solid.box"]').click();
-  await frame.locator('[data-cad-panel="feature"] [data-panel-done]').click();
-  await expect(frame.locator('[data-cad-panel="feature"]')).toHaveCount(0);
-}
+/** One edit: a sketch (a 20 x 20 rectangle on Top, the n-th one 30 mm along X). There is no Box since decision 2026-10-01. */
+const oneEdit = (page, n = 0) => addSketch(page, { at: [30 * n, 0] });
 
 const expectSaved = (frame) => expect(frame.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 20_000 });
 
 test('cad:p1-leave-f5 F5 with a save on its way: the browser asks before reloading; staying keeps the change, and it is there after the next reload', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
-  await addBox(frame);
-  await addBox(frame);
+  await oneEdit(page);
+  await oneEdit(page, 1);
   await expectSaved(frame);
   const hold = await holdCommits(page);
   const box2 = frame.locator('[data-cad-tree] [data-feature-row]').nth(1);
@@ -53,7 +50,7 @@ test('cad:p1-leave-f5 F5 with a save on its way: the browser asks before reloadi
   await expect.poll(() => hold.held()).toBe(1);
   await expect(frame.locator('[data-chip="save"]')).toHaveText('Saving…');
   const expected = await historyState(frame);
-  expect(expected).toBe('Box 1, Box 2 (S)');
+  expect(expected).toBe('Sketch 1, Sketch 2 (S)');
 
   // F5 reaches the frame (it has the keyboard); the browser then reloads (headless Chromium
   // does not on the key itself). The page has unsaved work: the browser asks first.
@@ -86,7 +83,7 @@ test('cad:p1-leave-f5 F5 with a save on its way: the browser asks before reloadi
   expect(after).toEqual([]);
   const reloaded = page.frameLocator('#workspace-frame');
   await expect(reloaded.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready', { timeout: 60_000 });
-  await expect(historyLabels(reloaded)).toHaveText(['Box 1', 'Box 2']);
+  await expect(historyLabels(reloaded)).toHaveText(['Sketch 1', 'Sketch 2']);
   expect(await historyState(reloaded)).toBe(expected);
   await expect(reloaded.locator('[data-chip="save"]')).toHaveText('Saved');
   expect(seen.csp, 'CSP violations').toEqual([]);
@@ -136,10 +133,10 @@ async function stored(request, projectId, studyId) {
 }
 
 test("cad:p1-leave-f5-conflict a tab behind another one never overwrites it on its way out: F5, the pointer leaving, Back then Leave", async ({ page, context, request }) => {
-  // Tab A: Box 1, saved.
+  // Tab A: Sketch 1, saved.
   const { seen, frame: a, projectId } = await freshPart(page, request);
   const studyId = studyIdOf(page);
-  await addBox(a);
+  await oneEdit(page);
   await expectSaved(a);
   // Tab B opens the same Part.
   const page2 = await context.newPage();
@@ -147,8 +144,8 @@ test("cad:p1-leave-f5-conflict a tab behind another one never overwrites it on i
   await page2.goto(page.url());
   const b = page2.frameLocator('#workspace-frame');
   await expect(b.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready', { timeout: 60_000 });
-  await expect(historyLabels(b)).toHaveText(['Box 1']);
-  // B suppresses Box 1; its save is begun and held, so it is still on its way.
+  await expect(historyLabels(b)).toHaveText(['Sketch 1']);
+  // B suppresses Sketch 1; its save is begun and held, so it is still on its way.
   const hold = await holdFirstBegin(page2);
   const b1 = b.locator('[data-cad-tree] [data-feature-row]').first();
   await b1.locator('> .tree-row').click({ button: 'right' });
@@ -156,12 +153,12 @@ test("cad:p1-leave-f5-conflict a tab behind another one never overwrites it on i
   await expect(b1).toHaveAttribute('data-suppressed', '1');
   await expect.poll(() => hold.held()).toBe(1);
   await expect(b.locator('[data-chip="save"]')).toHaveText('Saving…');
-  // Meanwhile tab A adds Box 2 and saves: B's version is now behind.
+  // Meanwhile tab A adds Sketch 2 and saves: B's version is now behind.
   await page.bringToFront();
-  await addBox(a);
+  await oneEdit(page, 1);
   await expectSaved(a);
   const theirs = await stored(request, projectId, studyId);
-  expect(theirs.tree).toBe('Box 1, Box 2');
+  expect(theirs.tree).toBe('Sketch 1, Sketch 2');
 
   // 1. F5 in B with its save on its way: the browser asks; B stays. The leave flush is
   // the same conditional write as every save, so it cannot replace A's version.
@@ -207,10 +204,10 @@ test("cad:p1-leave-f5-conflict a tab behind another one never overwrites it on i
   const rowB = page2.locator('#plugin-studies-section li[data-plugin="cad"]').filter({ has: page2.locator('.tl', { hasText: 'Part 1' }) });
   const again = await openPart(page2, rowB);
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  expect(await historyState(again)).toBe('Box 1, Box 2');
+  expect(await historyState(again)).toBe('Sketch 1, Sketch 2');
   await expect(again.locator('[data-chip="save"]')).toHaveText('Saved');
   await page.bringToFront();
-  expect(await historyState(a)).toBe('Box 1, Box 2');
+  expect(await historyState(a)).toBe('Sketch 1, Sketch 2');
   await expect(a.locator('[data-chip="save"]')).toHaveText('Saved');
 
   expect(seen.csp, 'CSP violations').toEqual([]);

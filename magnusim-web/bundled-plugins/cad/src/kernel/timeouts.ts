@@ -18,6 +18,14 @@ export const OP_TIMEOUTS: Partial<Record<KernelOp, number>> = {
   topo: 120_000,
   tessellate: 60_000,
   check: 60_000,
+  // API 3 (docs/p2p3-plan.md §2). heal on the 113 MB part is part of the 28-37 s
+  // import; BREP read / write scale with the file; measure on a large body runs
+  // BRepExtrema over every face. Modelling ops on large inputs also get
+  // LARGE_OP_TIMEOUT_MS through timeoutForFaces.
+  heal: 300_000,
+  brep_write: 120_000,
+  brep_read: 120_000,
+  measure: 60_000,
 };
 
 export function timeoutFor(op: KernelOp): number {

@@ -11,12 +11,12 @@ describe('command registry', () => {
     const reg = createCommandRegistry(() => services);
     expect(reg.toolbar('model')).toEqual([]);
     reg.register({ id: 'file.export', label: 'Export', group: 'file', icon: 'M0 0', run() {} });
-    reg.register({ id: 'solid.cyl', label: 'Cylinder', group: 'solid', icon: 'M0 0', order: 2, run() {} });
-    reg.register({ id: 'solid.box', label: 'Box', group: 'solid', icon: 'M0 0', order: 1, run() {} });
+    reg.register({ id: 'solid.revolve', label: 'Revolve', group: 'solid', icon: 'M0 0', order: 2, run() {} });
+    reg.register({ id: 'solid.extrude', label: 'Extrude', group: 'solid', icon: 'M0 0', order: 1, run() {} });
     reg.register({ id: 'draw.line', label: 'Line', group: 'draw', mode: 'sketch', icon: 'M0 0', run() {} });
     const tb = reg.toolbar('model');
     expect(tb.map((g) => g.label)).toEqual(['SOLID', 'FILE']);
-    expect(tb[0].commands.map((c) => c.id)).toEqual(['solid.box', 'solid.cyl']);
+    expect(tb[0].commands.map((c) => c.id)).toEqual(['solid.extrude', 'solid.revolve']);
     expect(reg.toolbar('sketch').map((g) => g.label)).toEqual(['DRAW']);
   });
 
@@ -52,6 +52,43 @@ describe('keyboard', () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
     await Promise.resolve();
     expect(run).toHaveBeenCalledTimes(1);
+    kb.dispose();
+  });
+
+  it('a field marked data-undo-to-app hands Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z to the app, and the browser does not undo its text (review P2/P3 round 3)', async () => {
+    const reg = createCommandRegistry(() => services);
+    const kb = createKeyboard(document);
+    const undo = vi.fn();
+    const redo = vi.fn();
+    const other = vi.fn();
+    reg.register({ id: 'edit.undo', label: 'Undo', shortcut: 'Ctrl+Z', run: undo });
+    reg.register({ id: 'edit.redo', label: 'Redo', shortcut: 'Ctrl+Y', run: redo });
+    reg.register({ id: 'view.fit', label: 'Fit', shortcut: 'F', run: other });
+    bindCommandShortcuts(reg, kb);
+    kb.bind({ combo: 'Ctrl+Shift+Z', run: () => void reg.run('edit.redo') });
+    const input = document.createElement('input');
+    input.setAttribute('data-undo-to-app', '1');
+    document.body.append(input);
+    const key = (init: KeyboardEventInit) => {
+      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+      input.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    expect(key({ key: 'z', ctrlKey: true })).toBe(true);
+    expect(key({ key: 'y', ctrlKey: true })).toBe(true);
+    expect(key({ key: 'Z', ctrlKey: true, shiftKey: true })).toBe(true);
+    await Promise.resolve();
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(redo).toHaveBeenCalledTimes(2);
+    // Other shortcuts still type into the field.
+    expect(key({ key: 'f' })).toBe(false);
+    expect(other).not.toHaveBeenCalled();
+    // Without the mark (something typed), Ctrl+Z stays with the field.
+    input.removeAttribute('data-undo-to-app');
+    expect(key({ key: 'z', ctrlKey: true })).toBe(false);
+    await Promise.resolve();
+    expect(undo).toHaveBeenCalledTimes(1);
+    input.remove();
     kb.dispose();
   });
 });

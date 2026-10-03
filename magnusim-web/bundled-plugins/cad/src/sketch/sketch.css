@@ -1,0 +1,287 @@
+/*
+ * Sketch mode (proposal §3.3; design-language §sketch colours): constraint
+ * glyphs (12 px outline icons on white badges), dimension labels (12 px
+ * #101828 on a white pill with a #d0d5dd border; driven grey in parentheses),
+ * value boxes typed while drawing, the Sketch panel's state line, conflicts
+ * list and the in-frame "Make it driven?" question (the core modal's card).
+ * Colours only through var(--mg-*) / var(--cad-*).
+ * Owner: P3-SKETCH.
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+.cad-sketch-annotations > * {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+}
+
+/* ---- constraint glyphs ---- */
+.cad-sk-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 1px solid var(--mg-border);
+  border-radius: 3px;
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  pointer-events: auto;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.cad-sk-glyph:hover {
+  border-color: var(--cad-set);
+}
+.cad-sk-glyph:focus-visible,
+.cad-sk-dim:focus-visible {
+  outline: 2px solid var(--mg-primary);
+  outline-offset: 1px;
+}
+.cad-sk-glyph.is-selected {
+  border-color: var(--cad-pick);
+  box-shadow: 0 0 0 1px var(--cad-pick);
+}
+.cad-sk-glyph.is-over {
+  border-color: var(--cad-sketch-over);
+  color: var(--cad-sketch-over);
+}
+.cad-sk-glyph.is-inference {
+  pointer-events: none;
+  color: var(--mg-primary);
+  border-color: var(--mg-primary);
+}
+
+/* ---- dimension labels ---- */
+.cad-sk-dim {
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: 10px;
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  transform-origin: 0 0;
+  translate: -50% -50%;
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+}
+.cad-sk-dim.is-driven {
+  color: var(--mg-text-muted);
+}
+.cad-sk-dim.is-selected {
+  border-color: var(--cad-pick);
+  box-shadow: 0 0 0 1px var(--cad-pick);
+}
+.cad-sk-dim.is-over {
+  border-color: var(--cad-sketch-over);
+  color: var(--cad-sketch-over);
+}
+.cad-sk-dim.is-preview {
+  color: var(--mg-primary);
+  border-color: var(--mg-primary);
+  pointer-events: none;
+}
+
+/* ---- value boxes (typed while drawing) and the dimension editor ---- */
+.cad-sk-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  translate: -50% 0;
+  padding: 2px 4px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  background: var(--mg-bg);
+  box-shadow: var(--cad-menu-shadow);
+  font-size: 11px;
+  color: var(--mg-text-body);
+  pointer-events: auto;
+  /* Over the labels and glyphs; the box with the keyboard over everything. */
+  z-index: 1;
+}
+.cad-sk-box:focus-within {
+  z-index: 2;
+}
+.cad-sk-box.is-editor {
+  translate: -50% -50%;
+  padding: 1px;
+}
+.cad-sk-box-k {
+  color: var(--mg-text-muted);
+}
+.cad-sk-box input {
+  width: 72px;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.cad-sk-box.is-locked input {
+  border-color: var(--cad-warning-border);
+  font-weight: 600;
+}
+.cad-sk-box.is-error input {
+  border-color: var(--mg-danger);
+  color: var(--mg-danger);
+}
+/* Why a typed value cannot be used, under its box ("Radius must be at least 20 mm"). */
+.cad-sk-box-err {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--mg-danger);
+  border-radius: 4px;
+  background: var(--mg-bg);
+  color: var(--mg-danger);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.cad-sk-box-err[hidden] {
+  display: none;
+}
+
+/* ---- the Sketch panel ---- */
+.cad-sk-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.cad-sk-state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cad-sketch-under);
+}
+.cad-sk-state.is-fully .cad-sk-state-dot {
+  background: var(--cad-sketch-full);
+}
+.cad-sk-state.is-over .cad-sk-state-dot,
+.cad-sk-state.is-unsolved .cad-sk-state-dot {
+  background: var(--cad-sketch-over);
+}
+.cad-sk-state.is-over,
+.cad-sk-state.is-unsolved {
+  color: var(--cad-sketch-over);
+}
+.cad-sk-hint {
+  margin: 6px 0;
+}
+.cad-sk-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 8px;
+  font-size: 12px;
+}
+.cad-sk-section {
+  margin: 8px 0;
+}
+.cad-sk-selected {
+  margin: 2px 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cad-sk-actions {
+  display: flex;
+  gap: 6px;
+}
+.cad-sk-conflicts {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.cad-sk-conflicts li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--mg-divider);
+  color: var(--cad-sketch-over);
+}
+.cad-sk-conflict-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- "Make it driven?" (the core modal's card, style.css:2562-2615) ---- */
+.cad-sk-dialog {
+  padding: 0;
+  border: none;
+  border-radius: var(--mg-radius-md);
+  background: transparent;
+}
+.cad-sk-dialog::backdrop {
+  background: var(--cad-modal-backdrop);
+}
+.cad-sk-dialog-card {
+  width: min(420px, 92vw);
+  padding: 18px 20px 16px;
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  box-shadow: var(--cad-modal-shadow);
+  color: var(--mg-text-strong);
+}
+.cad-sk-dialog-card h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 650;
+}
+.cad-sk-dialog-copy {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--mg-text-body);
+}
+.cad-sk-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ---- the sketch toolbar: 25 commands fit the frame (CONSTRAIN as icons, labels in the tooltips) ---- */
+.cad-toolbar[data-cad-toolbar='sketch'] .tb-btn {
+  min-width: 48px;
+  padding: 4px 3px;
+}
+.cad-toolbar[data-cad-toolbar='sketch'] [data-group='constrain'] .tb-btn {
+  min-width: 30px;
+}
+.cad-toolbar[data-cad-toolbar='sketch'] [data-group='constrain'] .tb-txt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Sketch with nothing selected: what to pick, over the top of the view (sketch/commands.ts). */
+.cad-sketch-pick {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--mg-shadow-tooltip);
+}
+
+.cad-sketch-pick[data-problem='1'] {
+  color: var(--mg-danger);
+}

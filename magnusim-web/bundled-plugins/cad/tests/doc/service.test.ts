@@ -1,17 +1,20 @@
 // The document service over a fake host and a fake kernel: storage outside
 // the study record, panel sessions (live apply, one undo step), edits and
 // their guards, parameters, undo/redo, autosave, conflicts, view state, G1.
+// Solids are made as the app makes them (decision 2026-10-01, no Box or
+// Cylinder): a sketch on Top, then an Extrude (tests/doc/blocks.ts).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDocService } from '../../src/doc';
 import { SAVE_BURST } from '../../src/doc/autosave';
 import { createBridge } from '../../src/lib/bridge';
 import { createBus } from '../../src/lib/bus';
-import type { BoxFeature, CylinderFeature } from '../../src/types/doc';
+import { pendingEditsChanged, registerPendingEdit } from '../../src/lib/pendingEdits';
+import type { ExtrudeFeature, Feature, SketchFeature } from '../../src/types/doc';
 import type { DocService } from '../../src/types/doc-service';
 import type { CadEvents } from '../../src/types/events';
 import { createFakeWorkspace, type FakeWorkspace } from '../fakes/workspace-sdk';
-import { FakeKernel } from './fake-kernel';
+import { block, BlockKernel, blockSketch, circleSketch, cylinder, profileOf, registerSolidFeatures } from './blocks';
 
 const MODEL = 'studies/st-test/model.json';
 const VIEW = 'studies/st-test/view.json';
@@ -26,9 +29,9 @@ afterEach(() => {
  * A tab with the document service. `noFiles`: a tab that cannot use ws.files on
  * the same folder (a P1 build, which had only ws.data).
  */
-function make(opts: { ws?: FakeWorkspace; kernel?: FakeKernel; noFiles?: boolean; interval?: number; viewInterval?: number; burst?: number; units?: 'metric' | 'imperial' } = {}) {
+function make(opts: { ws?: FakeWorkspace; kernel?: BlockKernel; noFiles?: boolean; interval?: number; viewInterval?: number; burst?: number; units?: 'metric' | 'imperial' } = {}) {
   const ws = opts.ws ?? createFakeWorkspace({ units: opts.units });
-  const kernel = opts.kernel ?? new FakeKernel();
+  const kernel = opts.kernel ?? new BlockKernel();
   const bridge = createBridge(ws);
   const b = opts.noFiles ? { ...bridge, files: null } : bridge;
   const bus = createBus<CadEvents>();
@@ -38,8 +41,14 @@ function make(opts: { ws?: FakeWorkspace; kernel?: FakeKernel; noFiles?: boolean
   // View-only writes: 20 ms here unless a test asks for the app's own 2 s (`viewInterval: undefined`).
   const saveViewIntervalMs = 'viewInterval' in opts ? opts.viewInterval : 20;
   const doc = createDocService({ bridge: b, kernel, bus, saveIntervalMs, saveBurst: opts.burst, saveViewIntervalMs, log: (m) => logs.push(m) });
+  registerSolidFeatures(doc);
   services.push(doc);
   return { ws, kernel, doc, bus, logs };
+}
+
+/** One model change that adds one feature: a sketch (the `n`th, side by side). */
+function sketch(doc: DocService, n = 0) {
+  doc.beginNew('sketch', (n % 2 ? circleSketch(30 * n, 0, 10) : blockSketch(30 * n, 0)) as Partial<Feature>).commit();
 }
 
 /** Wait until the rebuild after the latest change finished. */
@@ -60,6 +69,10 @@ async function rebuilt(doc: DocService) {
 async function saved(doc: DocService) {
   await vi.waitFor(() => expect(doc.state.get().save.state).toBe('saved'), { timeout: 3000, interval: 5 });
 }
+
+const names = (doc: DocService) => doc.state.get().doc.features.map((f) => f.name);
+const extrudeOf = (doc: DocService, id: string) => doc.state.get().doc.features.find((f) => f.id === id) as ExtrudeFeature;
+const blind = (distance: string) => ({ extent: { kind: 'blind', distance } }) as Partial<Feature>;
 
 describe('loading and storage', () => {
   it('a new Part stores a pointer in the study record and its model beside it, in the app units', async () => {
@@ -83,26 +96,26 @@ describe('loading and storage', () => {
   it('reopening reads the same model, and the unit preference no longer changes it', async () => {
     const { ws, doc } = make({ units: 'metric' });
     await doc.load();
-    doc.beginNew('box').commit();
+    block(doc);
     await doc.flush();
     doc.dispose();
     ws.push('units', 'imperial');
     const again = make({ ws });
     await again.doc.load();
     expect(again.doc.state.get().doc.units.length).toBe('mm');
-    expect(again.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Box 1']);
+    expect(names(again.doc)).toEqual(['Sketch 1', 'Extrude 1']);
     await rebuilt(again.doc);
     expect(again.doc.state.get().rebuild.bodies.map((b) => [b.name, b.volume])).toEqual([['Body 1', 8000]]);
   });
 
   it('a model from a newer version is an error and is never overwritten', async () => {
     const ws = createFakeWorkspace({ study: { doc: { rel: MODEL, schema: 1, store: 'data', view: VIEW } } });
-    ws.folder.putJson(MODEL, { format: 'magnusim-cad/model', etag: '3.x', saved_at: '', doc: { schema: 2, units: {}, features: [] } });
+    ws.folder.putJson(MODEL, { format: 'magnusim-cad/model', etag: '3.x', saved_at: '', doc: { schema: 3, units: {}, features: [] } });
     const { doc } = make({ ws });
     await doc.load();
-    expect(doc.state.get()).toMatchObject({ status: 'error', error: 'Could not read the part: it was saved by a newer Magnusim CAD (schema 2); this one reads schema 1' });
+    expect(doc.state.get()).toMatchObject({ status: 'error', error: 'Could not read the part: it was saved by a newer Magnusim CAD (schema 3); this one reads schema 2' });
     expect(doc.editable()).toMatch(/newer Magnusim CAD/);
-    expect(() => doc.beginNew('box')).toThrow(/newer/);
+    expect(() => doc.beginNew('sketch')).toThrow(/newer/);
     expect(ws.log.dataWrites.filter((w) => w.rel === MODEL)).toEqual([]);
   });
 });
@@ -111,136 +124,146 @@ describe('panel sessions and edits', () => {
   it('an edit session that ends where it began makes no undo step (review round 1)', async () => {
     const { doc } = make();
     await doc.load();
-    doc.beginNew('box').commit();
-    const id = doc.state.get().doc.features[0].id;
-    expect(doc.state.get().history.undoLabel).toBe('Box 1');
-    const s = doc.beginEdit(id);
-    s.update({ size: ['1e6 mm', '20 mm', '20 mm'] } as Partial<BoxFeature>);
-    s.update({ size: ['20 mm', '20 mm', '20 mm'] } as Partial<BoxFeature>);
+    const { extrude } = block(doc);
+    expect(doc.state.get().history.undoLabel).toBe('Extrude 1');
+    const s = doc.beginEdit(extrude);
+    s.update(blind('1e6 mm'));
+    s.update(blind('20 mm'));
     s.commit();
-    // Undo still names the box: no "Edit Box 1" step that would change nothing.
-    expect(doc.state.get().history.undoLabel).toBe('Box 1');
+    // Undo still names the extrude: no "Edit Extrude 1" step that would change nothing.
+    expect(doc.state.get().history.undoLabel).toBe('Extrude 1');
     doc.undo();
-    expect(doc.state.get().doc.features).toEqual([]);
+    expect(names(doc)).toEqual(['Sketch 1']);
   });
 
-  it('a new Box applies live, Done makes one undo step, undo and redo', async () => {
+  it('a new Extrude applies live, Done makes one undo step, undo and redo', async () => {
     const { doc } = make();
     await doc.load();
-    const s = doc.beginNew('box');
+    const sk = doc.beginNew('sketch', blockSketch() as Partial<Feature>);
+    sk.commit();
+    const s = doc.beginNew('extrude', { profiles: [profileOf(sk.feature, blockSketch())] } as Partial<Feature>);
     expect(doc.state.get().session).toMatchObject({ feature: s.feature, isNew: true });
-    const f = doc.state.get().doc.features[0] as BoxFeature;
-    expect(f).toMatchObject({ name: 'Box 1', op: 'new', size: ['20 mm', '20 mm', '20 mm'] });
+    const f = doc.state.get().doc.features[1] as ExtrudeFeature;
+    expect(f).toMatchObject({ name: 'Extrude 1', op: 'new', extent: { kind: 'blind', distance: '10 mm' } });
     expect(doc.state.get().doc.bodies[f.creates!]).toEqual({ name: 'Body 1', color: '#bdc9db' });
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.bodies[0]).toMatchObject({ name: 'Body 1', volume: 8000 });
+    expect(doc.state.get().rebuild.bodies[0]).toMatchObject({ name: 'Body 1', volume: 4000 });
 
     // A valid change applies at once; an invalid one keeps the last valid version.
-    s.update({ size: ['10 mm', '20 mm', '30 mm'] } as Partial<BoxFeature>);
+    s.update(blind('30 mm'));
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.bodies[0].volume).toBe(6000);
-    s.update({ size: ['10 mm', '20 mm', '30 +'] } as Partial<BoxFeature>);
-    expect(s.incomplete()).toBe('Height: "30 +" is incomplete');
-    expect((doc.state.get().doc.features[0] as BoxFeature).size[2]).toBe('30 mm');
-    s.update({ size: ['10 mm', '20 mm', '40'] } as Partial<BoxFeature>);
+    expect(doc.state.get().rebuild.bodies[0].volume).toBe(12000);
+    s.update(blind('30 +'));
+    expect(s.incomplete()).toBe('Distance: "30 +" is incomplete');
+    expect((extrudeOf(doc, s.feature).extent as { distance: string }).distance).toBe('30 mm');
+    s.update(blind('40'));
     expect(s.incomplete()).toBeNull();
 
-    expect(doc.state.get().history.canUndo).toBe(false);
+    // Before Done only the sketch is a step.
+    expect(doc.state.get().history.undoLabel).toBe('Sketch 1');
     s.commit();
     expect(doc.state.get().session).toBeNull();
-    expect(doc.state.get().history).toMatchObject({ canUndo: true, undoLabel: 'Box 1' });
+    expect(doc.state.get().history).toMatchObject({ canUndo: true, undoLabel: 'Extrude 1' });
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.bodies[0].volume).toBe(8000);
+    expect(doc.state.get().rebuild.bodies[0].volume).toBe(16000);
 
     doc.undo();
-    expect(doc.state.get().doc.features).toEqual([]);
+    expect(names(doc)).toEqual(['Sketch 1']);
     expect(doc.state.get().doc.bodies).toEqual({});
     await rebuilt(doc);
     expect(doc.state.get().rebuild.bodies).toEqual([]);
-    expect(doc.state.get().history).toMatchObject({ canUndo: false, canRedo: true, redoLabel: 'Box 1' });
+    expect(doc.state.get().history).toMatchObject({ canUndo: true, canRedo: true, redoLabel: 'Extrude 1' });
     doc.redo();
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.bodies.map((b) => b.volume)).toEqual([8000]);
+    expect(doc.state.get().rebuild.bodies.map((b) => b.volume)).toEqual([16000]);
   });
 
-  it('Delete on a new feature discards it (no undo step); an edit session is "Edit Box 1"', async () => {
+  it('Delete on a new feature discards it (no undo step); an edit session is "Edit Extrude 1"', async () => {
     const { doc } = make();
     await doc.load();
-    doc.beginNew('box').discard();
+    doc.beginNew('sketch', blockSketch() as Partial<Feature>).discard();
     expect(doc.state.get().doc.features).toEqual([]);
     expect(doc.state.get().history.canUndo).toBe(false);
-    doc.beginNew('box').commit();
-    const id = doc.state.get().doc.features[0].id;
+    const { extrude: id } = block(doc);
     const e = doc.beginEdit(id);
     expect(doc.beginEdit(id)).toBe(e);
-    e.update({ origin: ['5', '0', '0'] } as Partial<BoxFeature>);
-    e.update({ origin: ['6', '0', '0'] } as Partial<BoxFeature>);
+    e.update(blind('5 mm'));
+    e.update(blind('6 mm'));
     e.commit();
-    expect(doc.state.get().history.undoLabel).toBe('Edit Box 1');
+    expect(doc.state.get().history.undoLabel).toBe('Edit Extrude 1');
     doc.undo();
-    expect((doc.state.get().doc.features[0] as BoxFeature).origin).toEqual(['0', '0', '0']);
+    expect(extrudeOf(doc, id).extent).toEqual({ kind: 'blind', distance: '20 mm' });
     // Undo during a session closes it first (the session is its own step).
     const e2 = doc.beginEdit(id);
-    e2.update({ origin: ['9', '0', '0'] } as Partial<BoxFeature>);
+    e2.update(blind('9 mm'));
     doc.undo();
     expect(e2.open).toBe(false);
-    expect((doc.state.get().doc.features[0] as BoxFeature).origin).toEqual(['0', '0', '0']);
-    expect(doc.state.get().history.redoLabel).toBe('Edit Box 1');
+    expect(extrudeOf(doc, id).extent).toEqual({ kind: 'blind', distance: '20 mm' });
+    expect(doc.state.get().history.redoLabel).toBe('Edit Extrude 1');
   });
 
   it('switching the operation keeps the body id for the session and drops unused bodies at Done', async () => {
     const { doc } = make();
     await doc.load();
-    doc.beginNew('box').commit();
-    const s = doc.beginNew('cylinder');
-    const made = (doc.state.get().doc.features[1] as CylinderFeature).creates!;
-    s.update({ op: 'cut' } as Partial<CylinderFeature>);
-    expect((doc.state.get().doc.features[1] as CylinderFeature).creates).toBeNull();
-    s.update({ op: 'new' } as Partial<CylinderFeature>);
-    expect((doc.state.get().doc.features[1] as CylinderFeature).creates).toBe(made);
-    s.update({ op: 'cut', origin: ['10', '10', '-5'], diameter: '10', height: '40' } as Partial<CylinderFeature>);
-    s.commit();
+    block(doc);
+    const { session: s, extrude } = cylinder(doc, { open: true });
+    const made = extrudeOf(doc, extrude).creates!;
+    s!.update({ op: 'cut' } as Partial<Feature>);
+    expect(extrudeOf(doc, extrude).creates).toBeNull();
+    s!.update({ op: 'new' } as Partial<Feature>);
+    expect(extrudeOf(doc, extrude).creates).toBe(made);
+    s!.update({ op: 'cut', extent: { kind: 'two', distance: '35 mm', distance2: '5 mm' } } as Partial<Feature>);
+    s!.commit();
     expect(Object.keys(doc.state.get().doc.bodies)).toHaveLength(1);
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.features[s.feature]).toMatchObject({ state: 'ok' });
+    expect(doc.state.get().rebuild.features[extrude]).toMatchObject({ state: 'ok' });
     expect(doc.state.get().rebuild.bodies).toHaveLength(1);
   });
 
   it('rename, suppress and delete, with the dependents guard', async () => {
     const { doc } = make();
     await doc.load();
-    doc.beginNew('box').commit();
-    const box = doc.state.get().doc.features[0] as BoxFeature;
-    const s = doc.beginNew('cylinder', { op: 'cut', creates: null, scope: [box.creates!], origin: ['10', '10', '-5'], height: '40', diameter: '10' } as Partial<CylinderFeature>);
-    s.commit();
-    const cylId = doc.state.get().doc.features[1].id;
+    const box = block(doc);
+    const cut = cylinder(doc, { op: 'cut', scope: [box.body!], at: [10, 10, -5], size: [10, 40] }).extrude;
 
-    expect(doc.rename(box.id, 'Cylinder 1')).toEqual({ ok: false, reason: 'Another feature is already called Cylinder 1' });
-    expect(doc.rename(box.id, '  ')).toEqual({ ok: false, reason: 'Enter a name' });
-    expect(doc.rename(box.id, 'Base')).toEqual({ ok: true });
-    expect(doc.state.get().history.undoLabel).toBe('Rename Box 1');
+    expect(doc.rename(box.extrude, 'Extrude 2')).toEqual({ ok: false, reason: 'Another feature is already called Extrude 2' });
+    expect(doc.rename(box.extrude, '  ')).toEqual({ ok: false, reason: 'Enter a name' });
+    expect(doc.rename(box.extrude, 'Base')).toEqual({ ok: true });
+    expect(doc.state.get().history.undoLabel).toBe('Rename Extrude 1');
 
-    expect(doc.remove(box.id)).toEqual({ ok: false, reason: 'Cylinder 1 uses Body 1 of Base: delete Cylinder 1 or change what it uses first' });
-    expect(doc.move(cylId, 0)).toEqual({ ok: false, reason: 'Cylinder 1 uses Base: it cannot move above it' });
+    const uses = 'Extrude 2 uses Body 1 of Base: delete Extrude 2 or change what it uses first';
+    expect(doc.remove(box.extrude)).toEqual({ ok: false, reason: uses });
+    expect(doc.removeBlock(box.extrude)).toBe(uses);
+    expect(doc.removeBlock(cut)).toBeNull();
+    // The sketch an extrude uses cannot go either.
+    expect(doc.removeBlock(box.sketch)).toMatch(/^Base uses Sketch 1/);
+    // Review P2/P3 round 1: a refused delete of the feature a panel edits keeps that panel's work.
+    const open = doc.beginEdit(box.extrude);
+    open.update(blind('30 mm'));
+    expect(doc.remove(box.extrude)).toEqual({ ok: false, reason: uses });
+    expect(open.open).toBe(true);
+    expect(extrudeOf(doc, box.extrude).extent).toEqual({ kind: 'blind', distance: '30 mm' });
+    open.discard();
+    expect(doc.move(cut, 1)).toEqual({ ok: false, reason: 'Extrude 2 uses Sketch 2: it cannot move above it' });
+    expect(doc.move(box.extrude, 3)).toEqual({ ok: false, reason: 'Extrude 2 uses Base: Base cannot move below it' });
 
-    expect(doc.setSuppressed(cylId, true)).toEqual({ ok: true });
+    expect(doc.setSuppressed(cut, true)).toEqual({ ok: true });
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.features[cylId]).toEqual({ state: 'suppressed', bodiesBefore: 1 });
-    expect(doc.state.get().history.undoLabel).toBe('Suppress Cylinder 1');
+    expect(doc.state.get().rebuild.features[cut]).toEqual({ state: 'suppressed', bodiesBefore: 1 });
+    expect(doc.state.get().history.undoLabel).toBe('Suppress Extrude 2');
 
-    expect(doc.remove(cylId)).toEqual({ ok: true });
-    expect(doc.remove(box.id)).toEqual({ ok: true });
-    expect(doc.state.get().doc.features).toEqual([]);
+    expect(doc.remove(cut)).toEqual({ ok: true });
+    expect(doc.remove(box.extrude)).toEqual({ ok: true });
+    expect(names(doc)).toEqual(['Sketch 1', 'Sketch 2']);
     expect(doc.state.get().doc.bodies).toEqual({});
     doc.undo();
-    expect(doc.state.get().doc.features.map((f) => f.name)).toEqual(['Base']);
+    expect(names(doc)).toEqual(['Sketch 1', 'Base', 'Sketch 2']);
   });
 
   it('bodies: rename and colour are undoable; visibility is view state (not undoable)', async () => {
     const { doc, ws } = make();
     await doc.load();
-    doc.beginNew('box').commit();
-    const b = (doc.state.get().doc.features[0] as BoxFeature).creates!;
+    const b = block(doc).body!;
     expect(doc.renameBody(b, 'Fluid')).toEqual({ ok: true });
     expect(doc.setBodyColor(b, 'red')).toEqual({ ok: false, reason: 'A colour is written #rrggbb' });
     expect(doc.setBodyColor(b, '#4884EB')).toEqual({ ok: true });
@@ -258,19 +281,19 @@ describe('panel sessions and edits', () => {
   it('the rollback bar stops the rebuild; new features go in at the bar', async () => {
     const { doc } = make();
     await doc.load();
-    doc.beginNew('box').commit();
-    doc.beginNew('box', { origin: ['50', '0', '0'] } as Partial<BoxFeature>).commit();
+    const one = block(doc);
+    const two = block(doc, { at: [50, 0, 0] });
     await rebuilt(doc);
     expect(doc.state.get().rebuild.bodies).toHaveLength(2);
-    doc.setRollback(1);
+    doc.setRollback(2);
     await rebuilt(doc);
-    const [f1, f2] = doc.state.get().doc.features;
-    expect(doc.state.get().rebuild.features[f2.id]).toEqual({ state: 'rolled-back' });
-    expect(doc.state.get().rebuild.bodies.map((b) => b.feature)).toEqual([f1.id]);
-    expect(doc.state.get().history.undoLabel).toBe('Box 2');
-    doc.beginNew('cylinder').commit();
-    expect(doc.state.get().doc.features.map((f) => f.name)).toEqual(['Box 1', 'Cylinder 1', 'Box 2']);
-    expect(doc.state.get().view.rollback).toBe(2);
+    expect(doc.state.get().rebuild.features[two.sketch]).toEqual({ state: 'rolled-back' });
+    expect(doc.state.get().rebuild.features[two.extrude]).toEqual({ state: 'rolled-back' });
+    expect(doc.state.get().rebuild.bodies.map((b) => b.feature)).toEqual([one.extrude]);
+    expect(doc.state.get().history.undoLabel).toBe('Extrude 2');
+    cylinder(doc, { at: [0, 50, 0] });
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 3', 'Extrude 3', 'Sketch 2', 'Extrude 2']);
+    expect(doc.state.get().view.rollback).toBe(4);
     doc.setRollback(null);
     await rebuilt(doc);
     expect(doc.state.get().rebuild.bodies).toHaveLength(3);
@@ -279,29 +302,34 @@ describe('panel sessions and edits', () => {
   it('undo of a feature inserted at the rollback bar keeps the features below the bar rolled back; redo puts it back (review round 2)', async () => {
     const { doc } = make();
     await doc.load();
-    doc.beginNew('box').commit();
-    doc.beginNew('cylinder').commit();
-    doc.setRollback(1);
-    doc.beginNew('box', { origin: ['50', '0', '0'] } as Partial<BoxFeature>).commit();
-    const names = () => doc.state.get().doc.features.map((f) => f.name);
-    expect(names()).toEqual(['Box 1', 'Box 2', 'Cylinder 1']);
-    expect(doc.state.get().view.rollback).toBe(2);
+    block(doc);
+    const cyl = cylinder(doc, { at: [50, 0, 0] });
+    doc.setRollback(2);
+    block(doc, { at: [0, 50, 0] });
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 3', 'Extrude 3', 'Sketch 2', 'Extrude 2']);
+    expect(doc.state.get().view.rollback).toBe(4);
+    // Undo takes back Extrude 3, then Sketch 3: the bar stays above Sketch 2 (it did not jump to the end).
     doc.undo();
-    expect(names()).toEqual(['Box 1', 'Cylinder 1']);
-    // It went to the end (null) and Cylinder 1 came back.
-    expect(doc.state.get().view.rollback).toBe(1);
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 3', 'Sketch 2', 'Extrude 2']);
+    expect(doc.state.get().view.rollback).toBe(3);
+    doc.undo();
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
+    expect(doc.state.get().view.rollback).toBe(2);
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.features[doc.state.get().doc.features[1].id]).toEqual({ state: 'rolled-back' });
+    expect(doc.state.get().rebuild.features[cyl.sketch]).toEqual({ state: 'rolled-back' });
+    expect(doc.state.get().rebuild.features[cyl.extrude]).toEqual({ state: 'rolled-back' });
     doc.redo();
-    expect(names()).toEqual(['Box 1', 'Box 2', 'Cylinder 1']);
-    expect(doc.state.get().view.rollback).toBe(2);
+    doc.redo();
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 3', 'Extrude 3', 'Sketch 2', 'Extrude 2']);
+    expect(doc.state.get().view.rollback).toBe(4);
     // Undo of a delete above the bar: the bar stays above the same feature.
-    expect(doc.remove(doc.state.get().doc.features[0].id)).toEqual({ ok: true });
-    expect(names()).toEqual(['Box 2', 'Cylinder 1']);
-    expect(doc.state.get().view.rollback).toBe(1);
+    const e1 = doc.state.get().doc.features[1].id;
+    expect(doc.remove(e1)).toEqual({ ok: true });
+    expect(names(doc)).toEqual(['Sketch 1', 'Sketch 3', 'Extrude 3', 'Sketch 2', 'Extrude 2']);
+    expect(doc.state.get().view.rollback).toBe(3);
     doc.undo();
-    expect(names()).toEqual(['Box 1', 'Box 2', 'Cylinder 1']);
-    expect(doc.state.get().view.rollback).toBe(2);
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 3', 'Extrude 3', 'Sketch 2', 'Extrude 2']);
+    expect(doc.state.get().view.rollback).toBe(4);
   });
 });
 
@@ -314,23 +342,24 @@ describe('parameters', () => {
     expect(doc.addParam({ name: 'w', expr: '1', quantity: 'length' })).toEqual({ ok: false, reason: 'There is already a parameter called w' });
     expect(doc.addParam({ name: 'bad', expr: '2 deg', quantity: 'length' })).toEqual({ ok: false, reason: 'Expected a length, got an angle' });
     const h = doc.addParam({ name: 'h', expr: 'w / 2', quantity: 'length' }) as string;
-    doc.beginNew('box', { size: ['w', 'h', '10'] } as Partial<BoxFeature>).commit();
+    // A 10 x 20 profile extruded w along +Z and h against it: 10 x 20 x (w + h).
+    const { extrude } = block(doc, { size: [10, 20, 1], extrude: { extent: { kind: 'two', distance: 'w', distance2: 'h' } } });
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.bodies[0].volume).toBe(40 * 20 * 10);
+    expect(doc.state.get().rebuild.bodies[0].volume).toBe(10 * 20 * 60);
 
     expect(doc.updateParam(w as string, { expr: 'h * 2' })).toEqual({ ok: false, reason: 'Circular reference: w → h → w' });
     expect(doc.updateParam(w as string, { name: 'width' })).toEqual({ ok: true });
     const d = doc.state.get().doc;
     expect(d.params.find((p) => p.id === h)?.expr).toBe('width / 2');
-    expect((d.features[0] as BoxFeature).size).toEqual(['width', 'h', '10']);
+    expect(extrudeOf(doc, extrude).extent).toEqual({ kind: 'two', distance: 'width', distance2: 'h' });
     expect(doc.updateParam(w as string, { expr: '60' })).toEqual({ ok: true });
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.bodies[0].volume).toBe(60 * 30 * 10);
+    expect(doc.state.get().rebuild.bodies[0].volume).toBe(10 * 20 * 90);
 
-    expect(doc.removeParam(w as string)).toEqual({ ok: false, reason: "width can't be deleted: h and Box 1 use it" });
+    expect(doc.removeParam(w as string)).toEqual({ ok: false, reason: "width can't be deleted: h and Extrude 1 use it" });
     doc.undo();
     await rebuilt(doc);
-    expect(doc.state.get().rebuild.bodies[0].volume).toBe(40 * 20 * 10);
+    expect(doc.state.get().rebuild.bodies[0].volume).toBe(10 * 20 * 60);
   });
 });
 
@@ -341,19 +370,19 @@ describe('autosave and conflicts', () => {
     await doc.load();
     const writes = () => ws.log.dataWrites.filter((w) => w.rel === MODEL).length;
     const first = writes();
-    const s = doc.beginNew('box');
+    const s = doc.beginNew('sketch', blockSketch() as Partial<Feature>);
     // Written at once (no timer a closing page would never fire).
     await vi.advanceTimersByTimeAsync(0);
     expect(writes()).toBe(first + 1);
     expect(doc.state.get().save.state).toBe('saved');
     // Two changes in the same moment: the first starts a write, the second waits for it and follows at once.
-    s.update({ size: ['11', '10', '10'] } as Partial<BoxFeature>);
-    s.update({ size: ['12', '10', '10'] } as Partial<BoxFeature>);
+    s.update({ points: { ...blockSketch().points, pt_2: [11, 0] } } as Partial<Feature>);
+    s.update({ points: { ...blockSketch().points, pt_2: [12, 0] } } as Partial<Feature>);
     await vi.advanceTimersByTimeAsync(0);
     expect(writes()).toBe(first + 3);
     s.commit();
-    const stored = ws.json(MODEL) as { doc: { features: BoxFeature[] } };
-    expect(stored.doc.features[0].size[0]).toBe('12');
+    const stored = ws.json(MODEL) as { doc: { features: SketchFeature[] } };
+    expect(stored.doc.features[0].points.pt_2[0]).toBe(12);
     expect(doc.state.get().save.state).toBe('saved');
   });
 
@@ -365,13 +394,13 @@ describe('autosave and conflicts', () => {
     const writes = () => ws.log.dataWrites.filter((w) => w.rel === MODEL).length;
     const first = writes();
     const id = () => doc.state.get().doc.features[0]?.id;
-    doc.beginNew('box').commit();
+    sketch(doc);
     for (let i = 1; i <= 3; i++) {
       await vi.advanceTimersByTimeAsync(10);
       doc.rename(id()!, `Block ${i}`);
     }
     await vi.advanceTimersByTimeAsync(10);
-    // Burst of 4 used: the new Part, the box, Block 1, Block 2. Block 3 waits for the budget.
+    // Burst of 4 used: the new Part, the sketch, Block 1, Block 2. Block 3 waits for the budget.
     expect(writes()).toBe(first + 3);
     expect(doc.state.get().save.state).toBe('pending');
     await vi.advanceTimersByTimeAsync(1400);
@@ -414,8 +443,8 @@ describe('autosave and conflicts', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const { doc, ws } = make({ interval: undefined, burst: 1 });
     await doc.load();
-    doc.beginNew('box').commit();
-    await vi.advanceTimersByTimeAsync(3500); // the box is written after 1.5 s; the budget refills 1.5 s later
+    sketch(doc);
+    await vi.advanceTimersByTimeAsync(3500); // the sketch is written after 1.5 s; the budget refills 1.5 s later
     expect(doc.state.get().save.state).toBe('saved');
     const writes = () => ws.log.dataWrites.filter((w) => w.rel === MODEL).length;
     const first = writes();
@@ -437,7 +466,7 @@ describe('autosave and conflicts', () => {
     const ws = createFakeWorkspace();
     const a = make({ ws });
     await a.doc.load();
-    a.doc.beginNew('box').commit();
+    sketch(a.doc);
     await a.doc.flush();
     const at = (ws.json(MODEL) as { saved_at: string }).saved_at;
     a.doc.dispose();
@@ -452,20 +481,20 @@ describe('autosave and conflicts', () => {
     await a.doc.load();
     const b = make({ ws });
     await b.doc.load();
-    a.doc.beginNew('box').commit();
+    sketch(a.doc);
     await a.doc.flush();
     await saved(a.doc);
-    // Tab B had not seen A's box: its next save is refused.
-    b.doc.beginNew('cylinder').commit();
+    // Tab B had not seen A's sketch: its next save is refused.
+    sketch(b.doc, 1);
     await b.doc.flush();
     expect(b.doc.state.get().save).toEqual({ state: 'conflict', message: 'Changed in another tab' });
     expect(b.doc.editable()).toBe('Changed in another tab · Reload to keep editing');
     expect(b.doc.rename(b.doc.state.get().doc.features[0].id, 'x')).toEqual({ ok: false, reason: 'Changed in another tab · Reload to keep editing' });
     // A's model is intact.
-    expect((ws.json(MODEL) as { doc: { features: { name: string }[] } }).doc.features.map((f) => f.name)).toEqual(['Box 1']);
+    expect((ws.json(MODEL) as { doc: { features: { name: string }[] } }).doc.features.map((f) => f.name)).toEqual(['Sketch 1']);
     await b.doc.reload();
     expect(b.doc.state.get().save.state).toBe('saved');
-    expect(b.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Box 1']);
+    expect(b.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Sketch 1']);
     expect(b.doc.editable()).toBe(true);
   });
 
@@ -474,7 +503,7 @@ describe('autosave and conflicts', () => {
     await doc.load();
     const rec = await ws.study.get();
     await ws.study.update({ title: 'Renamed' }, rec.rev);
-    doc.beginNew('box').commit();
+    sketch(doc);
     await doc.flush();
     expect(doc.state.get().save.state).toBe('saved');
     expect((doc as unknown as { studyRev: number }).studyRev).toBe(rec.rev + 1);
@@ -484,7 +513,7 @@ describe('autosave and conflicts', () => {
     const { ws, doc } = make({ interval: 60_000, burst: 1 });
     await doc.load();
     // The budget is used by the new Part's first write: the change waits.
-    doc.beginNew('box').commit();
+    sketch(doc);
     expect(doc.state.get().save.state).toBe('pending');
     window.dispatchEvent(new Event('pagehide'));
     // Posted before the event returned.
@@ -496,7 +525,7 @@ describe('autosave and conflicts', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const { doc, ws } = make({ interval: undefined, viewInterval: undefined });
     await doc.load(); // the new Part: 1 of the 6
-    doc.beginNew('box').commit(); // 2 of the 6
+    sketch(doc); // 2 of the 6
     await vi.advanceTimersByTimeAsync(10);
     const models = () => ws.log.dataWrites.filter((w) => w.rel === MODEL).length;
     const views = () => ws.log.dataWrites.filter((w) => w.rel === VIEW).length;
@@ -535,12 +564,12 @@ describe('autosave and conflicts', () => {
     await doc.load(); // the budget's only write
     const reads = vi.spyOn(ws.data, 'read');
     const stored = () => (ws.json(MODEL) as { doc: { features: { name: string }[] } }).doc.features.map((f) => f.name);
-    doc.beginNew('box').commit();
+    sketch(doc);
     expect(doc.state.get().save.state).toBe('pending');
     const before = reads.mock.calls.length;
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', bubbles: true }));
     // In the store before the key event returned, with no read first (a reload does not wait for a second round trip).
-    expect(stored()).toEqual(['Box 1']);
+    expect(stored()).toEqual(['Sketch 1']);
     expect(reads.mock.calls.length).toBe(before);
     expect(doc.state.get().save.state).toBe('saving');
     await saved(doc);
@@ -585,7 +614,7 @@ describe('autosave and conflicts', () => {
     });
     const names = (file: unknown) => (file as { doc: { features: { name: string }[] } }).doc.features.map((f) => f.name);
     const first = ws.log.dataWrites.filter((w) => w.rel === MODEL).length;
-    doc.beginNew('box').commit(); // a usual save starts: its read hangs
+    sketch(doc); // a usual save starts: its read hangs
     await vi.waitFor(() => expect(release).not.toBeNull());
     const id = doc.state.get().doc.features[0].id;
     doc.rename(id, 'Newer');
@@ -604,7 +633,7 @@ describe('autosave and conflicts', () => {
     await doc.load();
     await vi.advanceTimersByTimeAsync(11_000);
     const reads = vi.spyOn(ws.data, 'read');
-    doc.beginNew('box').commit();
+    sketch(doc);
     expect(doc.state.get().save.state).toBe('pending');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', bubbles: true }));
     expect(reads).toHaveBeenCalledWith(MODEL);
@@ -619,16 +648,16 @@ describe('autosave and conflicts', () => {
     const b = make({ ws, interval: 60_000, burst: 6 });
     await b.doc.load();
     // A's second change waits on its budget; then A reloads (F5).
-    a.doc.beginNew('box').commit();
-    a.doc.beginNew('box').commit();
+    sketch(a.doc);
+    sketch(a.doc);
     expect(a.doc.state.get().save.state).toBe('pending');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', bubbles: true }));
     await saved(a.doc);
-    // B had not seen A's boxes: its save is refused, and A's model stays.
-    b.doc.beginNew('cylinder').commit();
+    // B had not seen A's sketches: its save is refused, and A's model stays.
+    sketch(b.doc, 1);
     await b.doc.flush();
     expect(b.doc.state.get().save.state).toBe('conflict');
-    expect((ws.json(MODEL) as { doc: { features: { name: string }[] } }).doc.features.map((f) => f.name)).toEqual(['Box 1', 'Box 2']);
+    expect((ws.json(MODEL) as { doc: { features: { name: string }[] } }).doc.features.map((f) => f.name)).toEqual(['Sketch 1', 'Sketch 2']);
   });
 });
 
@@ -643,7 +672,7 @@ describe('ws.files (host API 1.2)', () => {
     expect((await ws.study.get()).doc).toEqual({ rel: MODEL, schema: 1, store: 'files', view: VIEW });
     expect(ws.files.writes).toEqual([{ rel: MODEL, ifMatch: null }]);
     const first = ws.folder.info(MODEL)!.etag;
-    a.doc.beginNew('box').commit();
+    sketch(a.doc);
     await a.doc.flush();
     expect(ws.files.writes.at(-1)).toEqual({ rel: MODEL, ifMatch: first });
     const second = ws.folder.info(MODEL)!.etag;
@@ -668,27 +697,27 @@ describe('ws.files (host API 1.2)', () => {
     await a.doc.load();
     const b = make({ ws });
     await b.doc.load();
-    a.doc.beginNew('box').commit();
+    sketch(a.doc);
     await a.doc.flush();
     expect(a.doc.state.get().save.state).toBe('saved');
-    b.doc.beginNew('cylinder').commit();
+    sketch(b.doc, 1);
     await b.doc.flush();
     expect(b.doc.state.get().save).toEqual({ state: 'conflict', message: 'Changed in another tab' });
-    expect(featureNames(ws.json(MODEL))).toEqual(['Box 1']);
+    expect(featureNames(ws.json(MODEL))).toEqual(['Sketch 1']);
     await b.doc.reload();
-    expect(b.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Box 1']);
+    expect(b.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Sketch 1']);
     expect(b.doc.state.get().save.state).toBe('saved');
-    b.doc.beginNew('cylinder').commit();
+    sketch(b.doc, 1);
     await b.doc.flush();
     expect(b.doc.state.get().save.state).toBe('saved');
-    expect(featureNames(ws.json(MODEL))).toEqual(['Box 1', 'Cylinder 1']);
+    expect(featureNames(ws.json(MODEL))).toEqual(['Sketch 1', 'Sketch 2']);
   });
 
   it('a P1 Part (kept with ws.data) moves to ws.files once: the P1 file is kept byte for byte, the model is written on the etag it was read at', async () => {
     const ws = host12();
     const p1 = make({ ws, noFiles: true });
     await p1.doc.load();
-    p1.doc.beginNew('box').commit();
+    sketch(p1.doc);
     await p1.doc.flush();
     expect((await ws.study.get()).doc).toMatchObject({ store: 'data' });
     const before = ws.folder.entries.get(MODEL)!;
@@ -699,7 +728,7 @@ describe('ws.files (host API 1.2)', () => {
     const now = make({ ws });
     await now.doc.load();
     expect((await ws.study.get()).doc).toEqual({ rel: MODEL, schema: 1, store: 'files', view: VIEW });
-    expect(now.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Box 1']);
+    expect(now.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Sketch 1']);
     // Kept as it was (never deleted), then the model written through ws.files on the version read.
     expect(new TextDecoder().decode(ws.folder.entries.get('studies/st-test/model.p1.json')!.bytes)).toBe(p1Bytes);
     expect(ws.files.writes).toEqual([
@@ -707,9 +736,9 @@ describe('ws.files (host API 1.2)', () => {
       { rel: MODEL, ifMatch: before.etag },
     ]);
     expect((ws.json(MODEL) as { etag?: string }).etag).toBeUndefined();
-    now.doc.beginNew('cylinder').commit();
+    sketch(now.doc, 1);
     await now.doc.flush();
-    expect(featureNames(ws.json(MODEL))).toEqual(['Box 1', 'Cylinder 1']);
+    expect(featureNames(ws.json(MODEL))).toEqual(['Sketch 1', 'Sketch 2']);
     now.doc.dispose();
 
     // Opened again: nothing moves a second time.
@@ -717,22 +746,22 @@ describe('ws.files (host API 1.2)', () => {
     const again = make({ ws });
     await again.doc.load();
     expect(ws.files.writes.length).toBe(writes);
-    expect(again.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Box 1', 'Cylinder 1']);
+    expect(again.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Sketch 1', 'Sketch 2']);
   });
 
   it('a tab still on ws.data when the model moved gets "Changed in another tab", not a silent overwrite', async () => {
     const ws = host12();
     const old = make({ ws, noFiles: true });
     await old.doc.load();
-    old.doc.beginNew('box').commit();
+    sketch(old.doc);
     await old.doc.flush();
     const next = make({ ws });
     await next.doc.load();
     expect((await ws.study.get()).doc).toMatchObject({ store: 'files' });
-    old.doc.beginNew('cylinder').commit();
+    sketch(old.doc, 1);
     await old.doc.flush();
     expect(old.doc.state.get().save.state).toBe('conflict');
-    expect(featureNames(ws.json(MODEL))).toEqual(['Box 1']);
+    expect(featureNames(ws.json(MODEL))).toEqual(['Sketch 1']);
   });
 
   it('a host that refuses ws.files ("not_allowed") keeps ws.data; a 1.1 host never calls them', async () => {
@@ -762,7 +791,7 @@ describe('ws.files (host API 1.2)', () => {
       ['busy', 'studies/st-test/model.json is in use by another program', "another program has the part's file open"],
       ['invalid_path', "not a path in the plugin's folder: x", "the part's file name was refused"],
     ];
-    doc.beginNew('box').commit();
+    sketch(doc);
     await saved(doc);
     const id = doc.state.get().doc.features[0].id;
     let n = 0;
@@ -787,7 +816,7 @@ describe('ws.files (host API 1.2)', () => {
     let release!: () => void;
     ws.files.hold = new Promise<void>((r) => (release = r));
     const writes = ws.files.writes.length;
-    doc.beginNew('box').commit();
+    sketch(doc);
     // A write is on its way (held), and the commit's change waits behind it.
     await vi.waitFor(() => expect(ws.files.writes.length).toBe(writes + 1));
     expect(['pending', 'saving']).toContain(doc.state.get().save.state);
@@ -810,11 +839,50 @@ describe('ws.files (host API 1.2)', () => {
     expect(ws.log.dirty.map((d) => d.dirty)).toEqual([true, false, true, true, true, false]);
   });
 
+  it('a value typed in a panel field and not applied is unsaved work; leaving applies it first (SD review round 2: Back lost it)', async () => {
+    const ws = host12();
+    const { doc } = make({ ws, interval: 60_000, burst: 1 });
+    await doc.load();
+    await saved(doc);
+    ws.log.dirty.length = 0;
+    // A field holding typed text (as NumberUnitInput registers itself): its commit adds a sketch.
+    let text: string | null = 'Block';
+    let error: string | null = null;
+    const off = registerPendingEdit({
+      label: 'Distance',
+      pending: () => text !== null,
+      error: () => error,
+      commit: () => {
+        if (text === 'bad') {
+          error = 'Distance must not be 0';
+          pendingEditsChanged();
+          return;
+        }
+        sketch(doc);
+        text = null;
+      },
+    });
+    expect(ws.log.dirty).toEqual([{ dirty: true, message: 'Changes to Part 1 are not saved yet.' }]);
+    // The pointer leaves the frame (Back, Settings, the browser's controls are all outside it): applied, then written.
+    const before = doc.state.get().doc.features.length;
+    document.documentElement.dispatchEvent(new MouseEvent('mouseleave'));
+    expect(doc.state.get().doc.features.length).toBe(before + 1);
+    await saved(doc);
+    expect(ws.log.dirty.at(-1)).toEqual({ dirty: false, message: '' });
+    // A refused value stays unsaved work, with the field and the reason in the question.
+    text = 'bad';
+    pendingEditsChanged();
+    window.dispatchEvent(new Event('blur'));
+    expect(ws.log.dirty.at(-1)).toEqual({ dirty: true, message: 'Changes to Part 1 are not saved: the value typed in Distance is not applied. Distance must not be 0.' });
+    off();
+    expect(ws.log.dirty.at(-1)).toEqual({ dirty: false, message: '' });
+  });
+
   it('leaving (F5, the side buttons, hidden) writes with ifMatch: on a 1.2 host there is no write without the check', async () => {
     const ws = host12();
     const { doc } = make({ ws, interval: 60_000, burst: 1 });
     await doc.load();
-    doc.beginNew('box').commit();
+    sketch(doc);
     expect(doc.state.get().save.state).toBe('pending');
     const etag = ws.folder.info(MODEL)!.etag;
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', bubbles: true }));
@@ -847,7 +915,7 @@ describe('commands', () => {
     expect(await commands.run('edit.undo')).toBe('The part is still loading');
     await doc.load();
     expect(await commands.run('edit.undo')).toBe('Nothing to undo');
-    doc.beginNew('box').commit();
+    sketch(doc);
     expect(await commands.run('edit.undo')).toBe(true);
     expect(doc.state.get().doc.features).toEqual([]);
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true }));

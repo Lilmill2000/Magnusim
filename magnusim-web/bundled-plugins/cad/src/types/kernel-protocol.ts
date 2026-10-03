@@ -2,8 +2,13 @@
 // Mirrors the C facade (kernel-build/facade/facade.cpp, CONTRACT "Kernel facade").
 // Owner: KERNEL-HARDENING. Add ops to KernelOps as the facade gains them; keep
 // field names identical to the C++ JSON. DOC-CORE's KernelAdapter reads this.
+// API 3 (P2/P3, docs/p2p3-plan.md §2): import diagnostics, heal (+ sew),
+// brep_write / brep_read, press_pull, combine, measure, sketch_regions,
+// extrude_regions. The ops marked "API 3" below are the contract the KERNEL
+// builder implements; `version` answers api: 3 (all of them exist since
+// 2026-10-01; changes to this file during the build: docs/p2p3-plan.md §8).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { Vec3 } from './doc';
+import type { PlaneFrame, Vec2, Vec3 } from './doc';
 
 // ---------------------------------------------------------------- messages
 
@@ -95,6 +100,11 @@ export interface OpHistory {
   end?: number | null;
   /** Revolve: profile segments lying on the axis (they sweep no face). */
   on_axis?: string[];
+  /**
+   * extrude_regions (API 3): the caps per requested region key. Regions that
+   * merged (adjacent regions extruded together) share their cap faces.
+   */
+  caps?: Record<string, { start: number | null; end: number | null }>;
 }
 
 /** One BRepCheck finding: a status on a sub-shape (index in the result's own index space). */
@@ -131,6 +141,8 @@ export interface Validity {
 export interface ShapeResult extends Validity {
   id: ShapeId;
   history?: OpHistory;
+  /** API 3: face count of the result (TopExp::MapShapes), so names can be made without a `props` call. */
+  faces?: number;
   timings?: Record<string, number>;
 }
 
@@ -189,7 +201,7 @@ export type TopoSelector = 'all' | 'none' | number[] | { start: number; count: n
  * in `buffers` come back as ArrayBuffers in the reply.
  */
 export interface KernelOps {
-  /** `api`: facade contract revision (2 = this file). */
+  /** `api`: facade contract revision (3 = this file: docs/p2p3-plan.md §2). */
   version: { params: Record<string, never>; result: { occt: string; build: 'wasm32' | 'wasm64'; api?: number } };
   mem: {
     params: Record<string, never>;
@@ -225,7 +237,11 @@ export interface KernelOps {
     };
     result: ShapeResult & { empty: boolean; solids: number; warnings: boolean; warning_text?: string; fuzzy: number; glue: 'off' | 'shift' | 'full' };
   };
-  /** Split by a plane or by a tool body; `valid` is true only if every piece is. */
+  /**
+   * Split by a plane or by a tool body; `valid` is true only if every piece is and
+   * no input face is lost: `lost_faces` > 0 (OCCT's splitter dropped a piece without
+   * an error) makes it false, with the reason, even with check:false.
+   */
   split: {
     params: CheckParam & ({ id: ShapeId; plane: { origin: Vec3; normal: Vec3 } } | { id: ShapeId; tool: ShapeId });
     result: {
@@ -236,6 +252,10 @@ export interface KernelOps {
       reason?: string;
       piece_problems?: Record<string, Validity>;
       history: { pieces: { id: ShapeId; faces: OpHistory['faces']; edges: OpHistory['edges'] }[]; deleted: OpHistory['deleted'] };
+      /** API 3: the face count of each piece, in the order of `ids`. */
+      faces: number[];
+      /** API 3: input faces in no piece (0 for a split that kept all of the body). */
+      lost_faces: number;
     };
   };
   /**
@@ -270,7 +290,8 @@ export interface KernelOps {
    * ('optimal' = 'exact').
    */
   props: {
-    params: { id: ShapeId; volume?: boolean; area?: boolean; bbox?: 'fast' | 'exact' | 'none'; bbox_mode?: 'fast' | 'optimal' };
+    /** volume_eps (API 3): adaptive volume integration to that relative error (the default is off by ~1.5e-7 on B-spline parts); the result adds volume_error. */
+    params: { id: ShapeId; volume?: boolean; area?: boolean; bbox?: 'fast' | 'exact' | 'none'; bbox_mode?: 'fast' | 'optimal'; volume_eps?: number };
     result: {
       faces: number;
       edges: number;
@@ -280,6 +301,8 @@ export interface KernelOps {
       bbox?: BBox | null;
       bbox_mode: 'fast' | 'exact' | 'none';
       volume?: number;
+      /** With volume_eps: the integration's error estimate. */
+      volume_error?: number;
       centroid?: Vec3 | null;
       area?: number;
       timings: Record<string, number>;
@@ -320,18 +343,284 @@ export interface KernelOps {
       timings: Record<string, number>;
     };
   };
+  /**
+   * Read a STEP (bytes in, as params.ptr/len). API 3 adds `diagnose` (BRepCheck
+   * of every shape as read, before any healing) and the file's length unit.
+   * P2 imports with heal:false and then calls `heal`, so the panel can show the
+   * problems before and after and "Heal all" can run again with another
+   * tolerance without reading the file again (the raw ids stay alive until
+   * released). heal:true (default, P1 behaviour) heals in the same call.
+   */
   import_step: {
-    params: { name: string; heal?: boolean; tol?: number; xcaf?: boolean; bbox_mode?: 'fast' | 'optimal' };
+    params: { name: string; heal?: boolean; tol?: number; xcaf?: boolean; bbox_mode?: 'fast' | 'optimal'; diagnose?: boolean };
     result: {
-      shapes: { id: ShapeId; name: string; color: [number, number, number] | null; color_linear: [number, number, number] | null; type: 'solid' | 'shell' | 'other' }[];
+      /**
+       * One shape per solid, or one surface body (type 'shell': its shells and
+       * loose faces together) per STEP product without solids. API 3: `faces`;
+       * with diagnose, `valid` (+ `reason`) of the shape returned.
+       */
+      shapes: (ImportedShape & { color_linear: [number, number, number] | null; valid?: boolean; reason?: string })[];
       faces: number;
       edges: number;
       bbox: BBox | null;
+      /** API 3: the length unit the file declared ("inch", "millimetre"), or null. */
+      unit?: string | null;
+      /** API 3, with heal: on how many shapes ShapeFix changed something. */
+      fixed?: number;
+      /**
+       * API 3, with diagnose (default true): problems of the shapes returned (as
+       * read with heal:false; healed with heal:true), with their ids and index spaces.
+       */
+      diagnostics?: ShapeDiagnostics;
       timings: Record<string, number>;
     };
   };
+  /**
+   * API 3. Heal shapes (work copies; the inputs never change): ShapeFix_Shape at
+   * `tol` (precision and max tolerance), then, unless sew is false,
+   * BRepBuilderAPI_Sewing at `sew_tol` (default tol) of every face that is not in
+   * a valid closed solid, over all inputs together (a surface model often comes
+   * as one shell per face), and closed shells made into solids (ShapeFix_Solid).
+   * sew: true and 'auto' (default) are the same: only faces outside valid closed
+   * solids are sewn, so valid solids are never touched by sewing. Outputs: every
+   * valid closed solid, every knitted solid, and per input the faces left open as
+   * one surface body (type 'shell'); with sew:false one output per input. Ordered
+   * by `from` (the first input each came from); the STEP name and colour are that
+   * input's (import_step keeps them with the shape). Every output reports `valid`
+   * and its own `history` (its faces -> input faces, ShapeFix + sewing);
+   * `deleted` lists input faces in no output.
+   */
+  heal: {
+    params: CheckParam & { ids: ShapeId[]; tol?: number; sew?: boolean | 'auto'; sew_tol?: number; diagnose?: boolean };
+    result: {
+      shapes: (ImportedShape & Validity & { from: ShapeId; faces: number; history: OpHistory })[];
+      /** Inputs ShapeFix changed something on. */
+      fixed: number;
+      /** Faces that went through sewing (0 when it did not run). */
+      sewn: number;
+      /** Free (unshared) edges on all outputs: an open model stays a surface body. */
+      free_edges: number;
+      /** Input faces that are in no output. */
+      deleted: OpHistory['deleted'];
+      /** With diagnose (default true): the outputs' problems. */
+      diagnostics?: ShapeDiagnostics;
+      timings: Record<string, number>;
+    };
+  };
+  /**
+   * API 3. The shapes, in order, as one compound in OCCT's binary BREP format
+   * (BinTools::Write, no triangulation). Buffer: brep (u8). Used to store an
+   * import's healed shapes in ws.files; brep_read gives the same shapes back with
+   * the same face/edge/vertex indices.
+   */
+  brep_write: {
+    params: { ids: ShapeId[] };
+    result: { bytes: number; occt: string; timings: Record<string, number> };
+  };
+  /**
+   * API 3. Bytes (params.ptr/len) written by brep_write -> one shape per
+   * compound child, in order. No healing. check:false by default (the import
+   * stored its validity); with check:true each shape reports `valid`.
+   */
+  brep_read: {
+    params: { check?: boolean };
+    result: {
+      shapes: { id: ShapeId; type: 'solid' | 'shell' | 'other'; faces: number; valid?: boolean; reason?: string }[];
+      occt: string;
+      timings: Record<string, number>;
+    };
+  };
+  /**
+   * API 3. Press-pull planar faces of one body (work copy): a prism of each face
+   * along its own outward normal by d (d > 0, fused) or against it by |d|
+   * (d < 0, cut), all prisms in one boolean, then UnifySameDomain with history.
+   * Faces must be planar ("press_pull needs planar faces: face 3 is a cylinder").
+   * `moved[i]`: the result face where input face faces[i] now lies (-1 if it is
+   * gone). `sides`: result face per boundary edge of a moved face, keyed
+   * "<input face>:<input edge>" (absent where the side merged with a neighbour
+   * that already lay in that plane). d so negative that nothing is left is
+   * ok:false ("press-pull would remove the whole body"). `unified`: faces on the
+   * same surface were merged (false when merging made the result invalid and the
+   * unmerged one is valid: see combine). glue 'shift' (kernel-only) is OCCT's
+   * gluing, right only when the prisms merely touch the body.
+   */
+  press_pull: {
+    params: CheckParam & { id: ShapeId; faces: number[]; d: number; fuzzy?: number; glue?: 'off' | 'shift'; unify?: boolean };
+    result: ShapeResult & { moved: number[]; sides: Record<string, number>; op: 'fuse' | 'cut'; empty: boolean; solids: number; unified: boolean };
+  };
+  /**
+   * API 3. Join / Cut / Intersect with several targets and several tools, one
+   * call: join fuses every target and tool into one shape; cut and intersect
+   * give one result per target (target minus / common with the union of the
+   * tools). Work copies of every input (copied together). Each result reports
+   * valid / empty / solids / faces and its history against the input ids. Whether
+   * tool bodies stay is the document's business (inputs never change).
+   * UnifySameDomain (unify, default true) runs on a copy and is checked: when the
+   * merged result is invalid and the unmerged one valid (OCCT 7.9.3 can merge two
+   * coincident cylinders with different seams into a broken face), the unmerged
+   * one is kept and `unified` is false.
+   */
+  combine: {
+    params: CheckParam & {
+      op: 'join' | 'cut' | 'intersect';
+      targets: ShapeId[];
+      tools: ShapeId[];
+      fuzzy?: number;
+      unify?: boolean;
+    };
+    result: {
+      results: (Validity & { target: ShapeId; id: ShapeId; empty: boolean; solids: number; faces: number; unified: boolean; history: OpHistory; warning_text?: string })[];
+      timings: Record<string, number>;
+    };
+  };
+  /**
+   * API 3. Measure one entity, or two (BRepExtrema_DistShapeShape for the
+   * minimum distance; analytic angles for planes, lines and axes). A whole body
+   * reports volume, area and centroid only when it is the one target.
+   */
+  measure: {
+    params: { a: MeasureTarget; b?: MeasureTarget };
+    result: MeasureResult;
+  };
+  /**
+   * API 3. Closed profile regions of a sketch, computed in the kernel: every
+   * non-construction curve becomes an edge on `plane`, the edges are split at
+   * every crossing (BOPAlgo_Builder, general fuse), a planar face covering them
+   * all is split by them (BOPAlgo_BuilderFace), and the faces that do not touch
+   * the covering face's outer boundary are the regions. Each region comes back
+   * with its canonical key (docs/p2p3-plan.md §2.8: cyclic oriented
+   * sub-segments, split points named by sketch point ids or by the crossing
+   * entity pair plus a pair-canonical ordinal, so a dimension change keeps the
+   * key), area, a point inside, and (tess:true, default) a triangulation for
+   * shading. Open ends (degree-1 vertices of the split curves) and entities on
+   * no region's boundary are reported. Buffers: tri_uv f32 (u,v pairs),
+   * tri_idx u32, tri_ranges u32 (per region: [start in tri_idx, count]).
+   * Points are accepted and ignored (they never bound a region).
+   */
+  sketch_regions: {
+    params: { plane: PlaneFrame; curves: SketchCurve[]; tol?: number; tess?: boolean; deflection?: number };
+    result: {
+      regions: KernelRegion[];
+      open: { at: Vec2; entity: string; point: string | null }[];
+      /** Non-construction entities that bound no region (open chains, lines sticking out). */
+      dangling: string[];
+      /** The tolerance used (mm; default 1e-7 x the sketch's extent). */
+      tol: number;
+      timings: Record<string, number>;
+    };
+  };
+  /**
+   * API 3. Extrude sketch regions by key. The kernel derives the regions again
+   * from the curves (same algorithm as sketch_regions) and refuses keys it does
+   * not find (InputError "region not found: <key>"); adjacent regions are fused
+   * into one face first, so their shared sub-segments sweep no face. History:
+   * `sides` keyed by the unsigned sub-segment token (`<entity>[<from>><to>]`),
+   * `caps` per region key, `start`/`end` = the first region's caps. Same extents
+   * and flip as `extrude` (through_all / to_face kernel-only).
+   */
+  extrude_regions: {
+    params: CheckParam & { plane: PlaneFrame; curves: SketchCurve[]; regions: string[]; extent: ExtrudeExtent; flip?: boolean; taper_deg?: number; tol?: number };
+    result: ShapeResult & { from: number; to: number; direction: Vec3; solids: number };
+  };
   /** Buffer: step (u8, the file's bytes). */
   export_step: { params: { shapes: { id: ShapeId; name: string; color?: [number, number, number] }[]; schema: 'AP214' | 'AP242' }; result: Record<string, never> };
+}
+
+/** A shape as import_step / heal give it back. */
+export interface ImportedShape {
+  id: ShapeId;
+  /** The STEP product or body name ("Body1"), or the file name. */
+  name: string;
+  /** sRGB 0..1, when the file gave one. */
+  color: [number, number, number] | null;
+  type: 'solid' | 'shell' | 'other';
+  faces?: number;
+}
+
+/** BRepCheck (and, for shells, free-edge) findings per shape, for the import diagnostics panel. */
+export interface ShapeDiagnostics {
+  /** Problems in all (sum of problem_total). */
+  total: number;
+  shapes: {
+    id: ShapeId;
+    valid: boolean;
+    /** Up to 40 findings, indices in the shape's own index space. */
+    problems: CheckProblem[];
+    problem_counts: Record<string, number>;
+    problem_total: number;
+    /** Edges on one face only (an open shell). */
+    free_edges: number;
+    /** Closed (watertight) solid. */
+    closed: boolean;
+  }[];
+}
+
+/** What `measure` measures: a sub-shape of a stored shape, a whole shape, a point or an origin plane/axis. */
+export type MeasureTarget =
+  | { id: ShapeId; face?: number; edge?: number; vertex?: number }
+  | { point: Vec3 }
+  | { plane: { origin: Vec3; normal: Vec3 } }
+  | { axis: { origin: Vec3; dir: Vec3 } };
+
+/** One entity's measures (mm, mm², mm³, degrees). */
+export interface MeasureOne {
+  kind: 'face' | 'edge' | 'vertex' | 'body' | 'point' | 'plane' | 'axis';
+  /** Surface or curve type (TopoResult names). */
+  type?: string;
+  area?: number;
+  length?: number;
+  volume?: number;
+  radius?: number;
+  /** Circle / arc / sphere centre, or a face's centroid. */
+  center?: Vec3;
+  /** Plane normal (out of the material) or line / axis direction. */
+  dir?: Vec3;
+  point?: Vec3;
+}
+
+export interface MeasureResult {
+  a: MeasureOne;
+  b?: MeasureOne;
+  /** With two targets: minimum distance (BRepExtrema) and where it is reached. */
+  distance?: number;
+  p1?: Vec3;
+  p2?: Vec3;
+  /** p2 - p1. */
+  delta?: Vec3;
+  /** Angle between two directions (planes, lines, axes), 0..90 for planes and lines, when both have one. */
+  angle_deg?: number;
+  parallel?: boolean;
+  /** Two circles/cylinders/spheres: distance between centres (or axes, when parallel). */
+  center_distance?: number;
+  timings: Record<string, number>;
+}
+
+/**
+ * A sketch curve as the kernel takes it (mm, sketch u/v; arc angles in degrees
+ * from the sketch's xdir, counter-clockwise about the normal). `pa`/`pb` are the
+ * sketch point ids at the curve's ends (arc: at a0 / a1), `pc` the centre's:
+ * the kernel names split points by them (p:<id>).
+ */
+export type SketchCurve =
+  | { id: string; kind: 'line'; a: Vec2; b: Vec2; pa?: string; pb?: string }
+  | { id: string; kind: 'arc'; c: Vec2; r: number; a0: number; a1: number; ccw: boolean; pa?: string; pb?: string; pc?: string }
+  | { id: string; kind: 'circle'; c: Vec2; r: number; pc?: string }
+  | { id: string; kind: 'point'; p: Vec2; pid?: string };
+
+/** A closed region of a sketch (sketch_regions). */
+export interface KernelRegion {
+  /** Canonical key: loops of signed sub-segment tokens (docs/p2p3-plan.md §2.8). */
+  key: string;
+  /** Outer loop then holes, each as signed tokens ("+e_1[p:pt_a>p:pt_b]"), canonical rotation. */
+  loops: string[][];
+  /** Sorted ids of the entities on its boundary. */
+  entities: string[];
+  /** mm². */
+  area: number;
+  /** A point strictly inside (mm, u/v). */
+  sample: Vec2;
+  /** [umin, vmin, umax, vmax]. */
+  bbox: [number, number, number, number];
 }
 
 export type KernelOp = keyof KernelOps;

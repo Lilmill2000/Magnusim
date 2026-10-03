@@ -9,13 +9,15 @@
 //   - a field with an unknown parameter says so once, under the field, keeps
 //     its unit and stays in line with the other fields (the reason showed three
 //     times, and the field lost "mm" and moved right).
-// window.__CAD__ is not used: the crash below is a fault injected into the
-// frame's own kernel worker (its error event), as a crashed worker raises it.
+// window.__CAD__ is used only (helpers.ts addSolid) to set the two sketched
+// blocks up: there is no Box since decision 2026-10-01. The crash below is a
+// fault injected into the frame's own kernel worker (its error event), as a
+// crashed worker raises it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { baseUrl, historyState, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, baseUrl, historyState, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 
 type Loc = ReturnType<FrameLocator['locator']>;
 
@@ -69,12 +71,46 @@ async function p1Part(request: APIRequestContext, projectId: string, title: stri
   return { studyId, rel, pointer, bytes };
 }
 
-const p1Doc = (params: unknown[], size: string[] = ['w', '20 mm', '10 mm']) => ({
+/**
+ * A schema-1 file: a 20 x 10 rectangle on Top extruded Two sides, "w" up and 0 mm
+ * down (Old block, Body 1). P1's own files held a Box; Box is gone (decision
+ * 2026-10-01: such a row only says it was removed), and these tests are about the
+ * parameter, so the block is a sketch and an extrude in the same old file.
+ */
+const p1Doc = (params: unknown[]) => ({
   schema: 1,
   units: { length: 'mm', angle: 'deg' },
   params,
   bodies: { b_p1: { name: 'Body 1', color: '#bdc9db' } },
-  features: [{ id: 'f_p1', type: 'box', name: 'Old box', op: 'new', creates: 'b_p1', scope: [], origin: ['0 mm', '0 mm', '0 mm'], size }],
+  features: [
+    {
+      id: 'f_sk1',
+      type: 'sketch',
+      name: 'Sketch 1',
+      support: { kind: 'plane', plane: 'origin:top' },
+      plane: { origin: [0, 0, 0], normal: [0, 0, 1], xdir: [1, 0, 0] },
+      points: { pt_1: [0, 0], pt_2: [20, 0], pt_3: [20, 10], pt_4: [0, 10] },
+      entities: [
+        { id: 'e_1', kind: 'line', p: ['pt_1', 'pt_2'] },
+        { id: 'e_2', kind: 'line', p: ['pt_2', 'pt_3'] },
+        { id: 'e_3', kind: 'line', p: ['pt_3', 'pt_4'] },
+        { id: 'e_4', kind: 'line', p: ['pt_4', 'pt_1'] },
+      ],
+      constraints: [],
+      solved: { values: {}, dof: 0, state: 'fully' },
+    },
+    {
+      id: 'f_p1',
+      type: 'extrude',
+      name: 'Old block',
+      op: 'new',
+      creates: 'b_p1',
+      scope: [],
+      profiles: [{ sketch: 'f_sk1', region: '+e_1[p:pt_1>p:pt_2] +e_2[p:pt_2>p:pt_3] +e_3[p:pt_3>p:pt_4] +e_4[p:pt_4>p:pt_1]', entities: ['e_1', 'e_2', 'e_3', 'e_4'], sample: [10, 5] }],
+      extent: { kind: 'two', distance: 'w', distance2: '0 mm' },
+      flip: false,
+    },
+  ],
   meta: { created_at: '2026-09-30T19:00:00.000Z', written_by: '0.1.0' },
 });
 
@@ -93,20 +129,19 @@ test('cad:p15-r1-stopped-feature-retry a feature that stopped the kernel is red 
   const { seen, frame } = await freshPart(page, request);
   const tb = frame.locator('[data-cad-toolbar]');
   const panel = frame.locator('[data-cad-panel="feature"]');
-  await tb.locator('[data-command="solid.box"]').click();
-  await panel.locator('[data-panel-done]').click();
-  await tb.locator('[data-command="solid.box"]').click();
-  await setField(panel, 'origin.0', '50');
-  await panel.locator('[data-panel-done]').click();
+  // Two 20 mm cubes, sketched and extruded: Extrude 1 at the origin, Extrude 2 from x = 50.
+  await addSolid(page);
+  await addSolid(page, { at: [50, 0, 0] });
   await expect(volumeChip(frame)).toHaveText('VolumeTotal of 2 bodies · 16,000 mm³');
   await expectSaved(frame);
-  // The next box the kernel builds crashes its worker (the worker's own error event, while the call is in flight).
+  await expect(tb.locator('[data-command="solid.extrude"]')).toBeVisible();
+  // The next extrude the kernel builds crashes its worker (the worker's own error event, while the call is in flight).
   await workspaceFrame(page).evaluate(() => {
     const orig = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (this: Worker, msg: unknown, ...rest: unknown[]) {
       const out = (orig as (...a: unknown[]) => void).call(this, msg, ...rest);
       const m = msg as { type?: string; op?: string } | null;
-      if (m && m.type === 'call' && m.op === 'box') {
+      if (m && m.type === 'call' && m.op === 'extrude_regions') {
         Worker.prototype.postMessage = orig;
         const w = this;
         // Right after the call is sent, before any reply can come (a microtask runs before the next event).
@@ -115,25 +150,25 @@ test('cad:p15-r1-stopped-feature-retry a feature that stopped the kernel is red 
       return out;
     } as typeof orig;
   });
-  // Box 2 made 30 high: its build is the one that stops the kernel.
-  const box2 = featureRow(frame, 'Box 2');
-  await box2.locator('> .tree-row').dblclick();
-  await setField(panel, 'size.2', '30');
+  // Extrude 2 made 30 high: its build is the one that stops the kernel.
+  const ex2 = featureRow(frame, 'Extrude 2');
+  await ex2.locator('> .tree-row').dblclick();
+  await setField(panel, 'distance', '30');
   await panel.locator('[data-panel-done]').click();
-  // The kernel restarts, the part rebuilds, and Box 2 waits, red, until the user says.
-  await expect(box2).toHaveAttribute('data-state', 'error', { timeout: 30_000 });
+  // The kernel restarts, the part rebuilds, and Extrude 2 waits, red, until the user says.
+  await expect(ex2).toHaveAttribute('data-state', 'error', { timeout: 30_000 });
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-kernel', 'ready', { timeout: 60_000 });
-  await expect(box2.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', /^What's wrong: Box 2 stopped the kernel: The kernel crashed during box: the worker crashed$/);
-  await expect(featureRow(frame, 'Box 1')).toHaveAttribute('data-state', 'ok');
+  await expect(ex2.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', /^What's wrong: Extrude 2 stopped the kernel: The kernel crashed during extrude_regions: the worker crashed$/);
+  await expect(featureRow(frame, 'Extrude 1')).toHaveAttribute('data-state', 'ok');
   await expect(volumeChip(frame)).toHaveText('Volume8000 mm³');
   // Its panel says why, with Retry; Retry builds it.
-  await box2.locator('> .tree-row').dblclick();
+  await ex2.locator('> .tree-row').dblclick();
   const reason = panel.locator('[data-run-reason]');
-  await expect(reason.locator('.sim-run-hint-msg')).toHaveText('Box 2 stopped the kernel: The kernel crashed during box: the worker crashed');
-  await expect(reason.locator('[data-fix]')).toHaveText(['Retry']);
+  await expect(reason.locator('.mgk-reason-msg')).toHaveText('Extrude 2 stopped the kernel: The kernel crashed during extrude_regions: the worker crashed');
+  await expect(reason.locator('.mgk-btn--fix')).toHaveText(['Retry']);
   await shot(page, 'p15r1-stopped-feature');
-  await reason.locator('[data-fix="Retry"]').click();
-  await expect(box2).toHaveAttribute('data-state', 'ok', { timeout: 30_000 });
+  await reason.getByRole('button', { name: 'Retry' }).click();
+  await expect(ex2).toHaveAttribute('data-state', 'ok', { timeout: 30_000 });
   await expect(reason).toHaveCount(0);
   await panel.locator('[data-panel-done]').click();
   await expect(volumeChip(frame)).toHaveText('VolumeTotal of 2 bodies · 20,000 mm³');
@@ -149,9 +184,9 @@ test('cad:p15-r1-p1-part-repaired a P1 Part with a parameter that has no id open
   await openProject(page, projectId);
   const frame = await openPart(page, partRow(page, 'Odd part'));
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  // Everything is there: the parameter, and the box it sizes (30 x 20 x 10).
+  // Everything is there: the parameter, and the block it sizes (20 x 10, w = 30 high).
   await expect(frame.locator('[data-cad-tree] [data-params-row] .tl')).toHaveText('Parameters (1)');
-  await expect(featureRow(frame, 'Old box')).toHaveAttribute('data-state', 'ok');
+  await expect(featureRow(frame, 'Old block')).toHaveAttribute('data-state', 'ok');
   await expect(volumeChip(frame)).toHaveText('Volume6000 mm³');
   await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved');
   await frame.locator('[data-cad-toolbar] [data-command="modify.parameters"]').click();
@@ -181,8 +216,8 @@ test('cad:p15-r1-p1-part-unreadable a P1 Part this version cannot fully read say
   const frame = await openPart(page, partRow(page, 'Odd part'));
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'error');
   const why = frame.locator('[data-cad-tree] [data-tree-error]');
-  await expect(why.locator('.sim-run-hint-msg')).toHaveText('Could not read the part: parameter "w" does not say whether it is a length, an angle or a number');
-  await expect(why.locator('[data-fix]')).toHaveText(['Try again']);
+  await expect(why.locator('.mgk-reason-msg')).toHaveText('Could not read the part: parameter "w" does not say whether it is a length, an angle or a number');
+  await expect(why.locator('.mgk-btn--fix')).toHaveText(['Try again']);
   await expect(frame.locator('[data-cad-tree] [data-feature-row]')).toHaveCount(0);
   await shot(page, 'p15r1-p1-unreadable');
   // Nothing was written: the model is the P1 file as it was, there is no copy, and the pointer is unchanged.
@@ -190,8 +225,8 @@ test('cad:p15-r1-p1-part-unreadable a P1 Part this version cannot fully read say
   expect(await readFile(request, projectId, `studies/${p1.studyId}/model.p1.json`)).toBeNull();
   expect(await pointerOf(request, projectId, p1.studyId)).toEqual(p1.pointer);
   // Try again reads it again, and says the same.
-  await why.locator('[data-fix="Try again"]').click();
-  await expect(why.locator('.sim-run-hint-msg')).toHaveText('Could not read the part: parameter "w" does not say whether it is a length, an angle or a number');
+  await why.getByRole('button', { name: 'Try again' }).click();
+  await expect(why.locator('.mgk-reason-msg')).toHaveText('Could not read the part: parameter "w" does not say whether it is a length, an angle or a number');
   expect(await readFile(request, projectId, p1.rel)).toBe(p1.bytes);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
@@ -200,43 +235,44 @@ test('cad:p15-r1-p1-part-unreadable a P1 Part this version cannot fully read say
 test('cad:p15-r1-unknown-param-panel a field with an unknown parameter says so once, keeps its unit, and stays in line', async ({ page, request }) => {
   const seen = await watchPage(page);
   const projectId = await newProject(request);
-  // A Part whose box's Length is "w", and no parameter w.
+  // A Part whose extrude's Distance 1 is "w", and no parameter w.
   await p1Part(request, projectId, 'Odd part', p1Doc([]));
   await openProject(page, projectId);
   const frame = await openPart(page, partRow(page, 'Odd part'));
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  const box = featureRow(frame, 'Old box');
-  await expect(box).toHaveAttribute('data-state', 'error');
-  await expect(box.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', 'What\'s wrong: Old box: Length: Unknown parameter "w"');
-  await box.locator('> .tree-row').dblclick();
+  const block = featureRow(frame, 'Old block');
+  await expect(block).toHaveAttribute('data-state', 'error');
+  // The reason names the field as the panel shows it ("Distance 1", not "Distance").
+  await expect(block.locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', 'What\'s wrong: Old block: Distance 1: Unknown parameter "w"');
+  await block.locator('> .tree-row').dblclick();
   const panel = frame.locator('[data-cad-panel="feature"]');
-  const length = panel.locator('.nui[data-field="size.0"]');
-  const width = panel.locator('.nui[data-field="size.1"]');
+  const length = panel.locator('.nui[data-field="distance"]');
+  const width = panel.locator('.nui[data-field="distance2"]');
   await expect(length.locator('input')).toHaveValue('w');
   await expect(length.locator('[data-nui-error]')).toHaveText('Unknown parameter "w"');
   // Said once: under the field, not again in the panel's foot.
   expect(((await panel.innerText()).match(/Unknown parameter "w"/g) ?? []).length, await panel.innerText()).toBe(1);
   await expect(panel.locator('[data-run-reason]')).toHaveCount(0);
   await expect(panel.locator('.cad-not-applied')).toHaveCount(0);
-  // The field keeps its unit and its place: in line with Width.
+  // The field keeps its unit and its place: in line with Distance 2.
   await expect(length.locator('[data-nui-after]')).toHaveText('mm');
   const lx = (await length.locator('input').boundingBox())!;
   const wx = (await width.locator('input').boundingBox())!;
-  expect(Math.abs(lx.x - wx.x), `Length input at x ${lx.x}, Width at ${wx.x}`).toBeLessThanOrEqual(1);
+  expect(Math.abs(lx.x - wx.x), `Distance 1 input at x ${lx.x}, Distance 2 at ${wx.x}`).toBeLessThanOrEqual(1);
   expect(Math.abs(lx.width - wx.width)).toBeLessThanOrEqual(1);
   await shot(page, 'p15r1-unknown-param-panel');
-  // A change to another field cannot apply while Length is broken: that is said (once more is new news).
-  await setField(panel, 'size.1', '25');
-  await expect(panel.locator('.cad-not-applied')).toHaveText('Not applied: Length: Unknown parameter "w"');
-  // Length fixed: both apply.
-  await setField(panel, 'size.0', '30');
-  await expect(box).toHaveAttribute('data-state', 'ok');
+  // A change to another field cannot apply while Distance 1 is broken: that is said (once more is new news).
+  await setField(panel, 'distance2', '-5');
+  await expect(panel.locator('.cad-not-applied')).toHaveText('Not applied: Distance 1: Unknown parameter "w"');
+  // Distance 1 fixed: both apply (5 .. 30 mm up: 20 x 10 x 25).
+  await setField(panel, 'distance', '30');
+  await expect(block).toHaveAttribute('data-state', 'ok');
   await expect(panel.locator('.cad-not-applied')).toHaveCount(0);
   await expect(length.locator('[data-nui-error]')).toHaveCount(0);
-  await expect(volumeChip(frame)).toHaveText('Volume7500 mm³');
+  await expect(volumeChip(frame)).toHaveText('Volume5000 mm³');
   await panel.locator('[data-panel-done]').click();
   await expectSaved(frame);
-  expect(await historyState(frame)).toBe('Old box');
+  expect(await historyState(frame)).toBe('Sketch 1, Old block');
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
 });

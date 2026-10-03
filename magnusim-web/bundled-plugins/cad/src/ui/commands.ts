@@ -1,46 +1,23 @@
 // The UI shell's commands, key bindings and event handlers (install()).
-// Honest UI: a feature command is registered only for a feature type the
-// document registered AND the UI has a panel for; Parameters, Undo and Redo
-// only once the document offers such editing (at least one feature type).
-// Command ids: solid.<type>, modify.parameters, edit.undo, edit.redo.
+// Honest UI: Parameters, Undo and Redo are registered once the document offers
+// editing (at least one feature type). Feature commands (Sketch, Extrude,
+// Enclosure, ...) come from their modules; the shell has none of its own since
+// Box and Cylinder were removed (SD pass: no one-click solids).
+// Command ids: modify.parameters, edit.undo, edit.redo.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../types/app';
 import type { CommandDef } from '../types/commands';
-import type { FeatureType } from '../types/doc';
 import { clearSelection } from '../lib/selection';
+import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import type { SelectionItem } from '../types/selection';
-import { PANEL_TYPES, uiFor, type UiController } from './controller';
+import { uiFor, type UiController } from './controller';
 import { ICONS } from './Icon';
 import type { MenuEntry } from './kit';
-
-const FEATURE_HINTS: Partial<Record<FeatureType, { hint: string; order: number }>> = {
-  box: { hint: 'A box body from its size and corner position', order: 10 },
-  cylinder: { hint: 'A cylinder body along an origin axis', order: 20 },
-};
 
 export const UNDO_ID = 'edit.undo';
 export const REDO_ID = 'edit.redo';
 export const PARAMS_ID = 'modify.parameters';
-
-function featureCommand(ui: UiController, type: FeatureType, label: string, icon: string): CommandDef {
-  const meta = FEATURE_HINTS[type];
-  return {
-    id: `solid.${type}`,
-    label,
-    group: 'solid',
-    icon: icon || (ICONS as Record<string, string>)[type] || ICONS.part,
-    hint: meta?.hint,
-    order: meta?.order,
-    enabled: () => ui.editBlock() ?? true,
-    run: () => {
-      const p = ui.state.get().panel;
-      // Clicking the command of the new feature being edited just keeps it open.
-      if (p?.kind === 'feature' && p.isNew && p.type === type) return;
-      ui.openNew(type);
-    },
-  };
-}
 
 function historyCommands(services: AppServices, ui: UiController): CommandDef[] {
   const undo: CommandDef = {
@@ -48,11 +25,12 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     label: 'Undo',
     icon: ICONS.undo,
     shortcut: 'Ctrl+Z',
-    // With a feature panel open, Undo cancels that panel's changes (a new
-    // feature goes away); earlier steps are untouched until the next Undo.
+    // With a feature panel open, Undo undoes that panel's changes as one step
+    // (a new feature goes away; Redo brings them back); earlier steps are
+    // untouched until the next Undo.
     get hint() {
       const p = ui.state.get().panel;
-      if (p?.kind === 'feature') return p.isNew ? 'Cancel the new feature' : 'Cancel the changes made in the open panel';
+      if (p?.kind === 'feature') return p.isNew ? 'Undo the new feature (Redo brings it back)' : 'Undo the changes made in the open panel (Redo brings them back)';
       const l = services.doc.state.get().history.undoLabel;
       return l ? `Undo ${l}` : undefined;
     },
@@ -97,18 +75,27 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
 }
 
 /** What Delete does, for a selection it cannot remove (a face, an edge, a point, a body, a plane). */
-function deleteHint(services: AppServices, ui: UiController, item: SelectionItem): string {
+const ONE: Partial<Record<SelectionItem['kind'], string>> = { body: 'A body', vertex: 'A point', region: 'A profile', face: 'A face', edge: 'An edge' };
+const MANY: Partial<Record<SelectionItem['kind'], string>> = { body: 'bodies', vertex: 'points', region: 'profiles', face: 'faces', edge: 'edges' };
+
+/** What Delete does, for a selection it cannot remove (faces, edges, points, bodies, a plane). */
+export function deleteHint(services: AppServices, ui: UiController, items: readonly SelectionItem[]): string {
+  const item = items[0];
   if (item.kind === 'origin') return 'The origin planes cannot be deleted.';
   const f = ui.featureOfItem(item);
   const name = f ? services.doc.state.get().doc.features.find((x) => x.id === f)?.name : null;
-  const what = item.kind === 'body' ? 'A body' : item.kind === 'vertex' ? 'A point' : `A ${item.kind}`;
+  if (item.kind === 'sketch') return name ? `Sketch geometry is deleted in the sketch: edit ${name}.` : 'Sketch geometry is deleted in its sketch.';
+  // "An edge ...", "These 4 edges ..." (review P2/P3 round 1: "A edge", and the singular for 4 edges).
+  const many = items.length > 1 && items.every((it) => it.kind === item.kind) && MANY[item.kind];
+  if (many) return name ? `These ${items.length} ${many} cannot be deleted on their own. To remove them, delete ${name} in the history.` : `These ${items.length} ${many} cannot be deleted on their own: delete the feature that makes them.`;
+  const what = ONE[item.kind] ?? `A ${item.kind}`;
   return name ? `${what} cannot be deleted on its own. To remove it, delete ${name} in the history.` : `${what} cannot be deleted on its own: delete the feature that makes it.`;
 }
 
 /** What F2 does, for a selection it cannot rename. */
 function renameHint(item: SelectionItem): string {
   if (item.kind === 'origin') return 'The origin planes cannot be renamed.';
-  const what = item.kind === 'vertex' ? 'Points' : `${item.kind[0].toUpperCase()}${item.kind.slice(1)}s`;
+  const what = item.kind === 'vertex' ? 'Points' : item.kind === 'sketch' ? 'Sketch entities' : item.kind === 'region' ? 'Profiles' : `${item.kind[0].toUpperCase()}${item.kind.slice(1)}s`;
   return `${what} have no names. F2 renames a feature or a body: select one in the tree.`;
 }
 
@@ -124,9 +111,7 @@ export function installUi(services: AppServices): () => void {
   };
 
   const sync = () => {
-    const defs = services.doc.features.all().filter((d) => PANEL_TYPES.includes(d.type));
-    for (const d of defs) reg(featureCommand(ui, d.type, d.label, d.icon));
-    if (defs.length) for (const d of historyCommands(services, ui)) reg(d);
+    if (services.doc.features.all().length) for (const d of historyCommands(services, ui)) reg(d);
   };
   sync();
   // Feature types may be registered when the document loads.
@@ -166,8 +151,13 @@ export function installUi(services: AppServices): () => void {
         const items = services.selection.get().items;
         const ids = items.flatMap((it) => (it.kind === 'feature' ? [it.feature] : []));
         for (const id of ids) ui.deleteFeature(id);
+        // Only faces selected: "Delete faces and heal" when that module is there and can run (P2).
+        if (!ids.length && items.length && items.every((it) => it.kind === 'face') && services.commands.canRun(WELL_KNOWN_COMMANDS.deleteFaces) === true) {
+          void services.commands.run(WELL_KNOWN_COMMANDS.deleteFaces);
+          return;
+        }
         // Nothing Delete can remove is selected: say what it does instead of doing nothing (review round 3).
-        if (!ids.length && items.length) services.bridge.toast(deleteHint(services, ui, items[0]), 'info');
+        if (!ids.length && items.length) services.bridge.toast(deleteHint(services, ui, items), 'info');
       },
     }),
     kb.bind({
@@ -231,6 +221,19 @@ export function installUi(services: AppServices): () => void {
           if (items.length) items.push({ sep: true, id: 'sep-core' });
           items.push({ id: 'view.fit', label: fit.label, run: () => void services.commands.run('view.fit') });
         }
+      }
+      // Modules' items (Delete faces, Press-pull, Measure, Edit sketch, ...), after the shell's own.
+      for (const m of services.modules?.all() ?? []) {
+        if (!m.contextMenu) continue;
+        let extra: ReturnType<NonNullable<typeof m.contextMenu>> = [];
+        try {
+          extra = m.contextMenu(services, pick);
+        } catch (err) {
+          console.error(`[cad] context menu of ${m.id} failed`, err);
+        }
+        if (!extra.length) continue;
+        if (items.length) items.push({ sep: true, id: `sep-${m.id}` });
+        items.push(...extra.map((e) => ({ id: `${m.id}:${e.id}`, label: e.label, disabled: e.disabled ?? null, run: e.run })));
       }
       ui.showMenu(clientX, clientY, items);
     }),

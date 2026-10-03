@@ -1,17 +1,19 @@
 // The UI shell as a user meets it, in the real host frame with the real
 // document service and kernel: the toolbar shows only working commands with
-// tooltips; Box and Cylinder open flyouts that apply live, refuse bad input
-// inline and close with Done; the design tree shows history, bodies, the
-// rollback bar, suppressed / failed rows and a context menu; the Parameters
-// panel drives a size; the chips show volume and save state; and the chrome
-// matches the core's recipes (computed styles). No CSP violations, no
-// console errors.
+// tooltips (no one-click solids: decision 2026-10-01); the Extrude flyout
+// applies live, refuses bad input inline and closes with Done; the design tree
+// shows history, bodies, the rollback bar, suppressed / failed rows and a
+// context menu; the Parameters panel drives a size; the chips show volume and
+// save state; and the chrome matches the core's recipes (computed styles).
+// Solids are sketched (addSketch / addSolid in helpers.ts set the sketches up
+// through the document; the sketch tools are the P3 specs'). No CSP
+// violations, no console errors.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 import { PNG } from './png';
 
 async function freshPart(page: Page, request: Parameters<typeof newProject>[0], title = 'Part 1') {
@@ -69,17 +71,17 @@ const styleOf = (loc: ReturnType<FrameLocator['locator']>, props: string[]) =>
     return Object.fromEntries(names.map((n) => [n, s.getPropertyValue(n)]));
   }, props);
 
-test('cad:p1-ui-box toolbar, Box flyout with live apply and inline errors, chips, undo and redo', async ({ page, request }) => {
+test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline errors, chips, undo and redo (no Box: solids come from sketches)', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tb = frame.locator('[data-cad-toolbar]');
   const tree = frame.locator('[data-cad-tree]');
   const tip = frame.locator('[data-cad-tip]');
 
-  // Only commands that work, in the core's toolbar groups.
-  await expect(tb.locator('[data-group="solid"] .tb-txt')).toHaveText(['Box', 'Cylinder']);
-  await expect(tb.locator('[data-group="modify"] .tb-txt')).toHaveText(['Parameters']);
+  // Only commands that work, in the core's toolbar groups. No one-click solids (decision 2026-10-01).
+  await expect(tb.locator('[data-group="solid"] .tb-txt')).toHaveText(['Extrude']);
+  await expect(tb.locator('[data-group="modify"] .tb-txt')).toHaveText(['Parameters', 'Press-pull', 'Delete faces', 'Split', 'Combine']);
   await expect(tb.locator('[data-group="edit"] .tb-txt')).toHaveText(['Undo', 'Redo']);
-  await expect(tb.locator('.tb-group-label').first()).toHaveText('SOLID');
+  await expect(tb.locator('.tb-group-label').first()).toHaveText('SKETCH');
   await expect(tb.locator('.tb-group-label').last()).toHaveText('EDIT');
   const undo = tb.locator('[data-command="edit.undo"]');
   await expect(undo).toHaveAttribute('aria-disabled', 'true');
@@ -88,96 +90,110 @@ test('cad:p1-ui-box toolbar, Box flyout with live apply and inline errors, chips
   await expect(tip).toContainText('Undo');
   await expect(tip.locator('kbd')).toHaveText('Ctrl+Z');
   await expect(tip).toContainText('Nothing to undo');
-  await tb.locator('[data-command="solid.box"]').hover();
-  await expect(tip).toContainText('A box body from its size and corner position');
+  const extrude = tb.locator('[data-command="solid.extrude"]');
+  await expect(extrude).toHaveAttribute('data-disabled-reason', 'Draw a closed profile in a sketch first');
+  // Greyed, its tip says why (not what it would do).
+  await extrude.hover();
+  await expect(tip).toContainText('Extrude');
+  await expect(tip).toContainText('Draw a closed profile in a sketch first');
 
-  // Box: the flyout opens beside the tree and the box is in the part at once.
-  await tb.locator('[data-command="solid.box"]').click();
+  // A 20 x 20 sketch on Top, then Extrude: the flyout opens beside the tree and the body is in the part at once.
+  await page.mouse.move(5, 5);
+  await addSketch(page, { size: [20, 20] });
+  // Offered now: the tip says what it does. (Over another button first: real Chrome sends the
+  // frame no pointer-out when the pointer jumped out of it, so the old tip would stay.)
+  await expect(extrude).not.toHaveAttribute('aria-disabled', 'true');
+  await undo.hover();
+  await expect(tip).toContainText('Undo');
+  await extrude.hover();
+  await expect(tip).toContainText('A solid from closed profiles of a sketch');
+  await extrude.click();
   const panel = frame.locator('[data-cad-panel="feature"]');
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
-  await expect(panel.locator('.mat-panel-head')).toHaveText('Box 1'); // no tick in the head
-  await expect(panel.locator('.mat-panel-foot button')).toHaveText(['Delete', 'Done']);
-  await expect(tb.locator('[data-command="solid.box"]')).toHaveClass(/is-active/);
-  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Box 1']);
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
+  await expect(panel.locator('.mgk-panel-head')).toHaveText('Extrude 1'); // no tick in the head
+  await expect(panel.locator('.mgk-panel-foot button')).toHaveText(['Delete', 'Done']);
+  await expect(extrude).toHaveClass(/is-active/);
+  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1', 'Extrude 1']);
   await expect(tree.locator('[data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (1)');
   const vol = frame.locator('[data-chip="volume"]');
-  await expect(vol).toHaveText('Volume8000 mm³');
+  await expect(vol).toHaveText('Volume4000 mm³');
   const flyout = await frame.locator('[data-cad-flyout]').boundingBox();
   const card = await tree.boundingBox();
   expect(flyout!.x).toBeGreaterThan(card!.x + card!.width);
 
   // Live apply of a valid value; an invalid one shows why and changes nothing.
-  const len = panel.locator('.nui[data-field="size.0"] input');
-  await expect(len).toHaveValue('20');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-after]')).toHaveText('mm');
+  const len = panel.locator('.nui[data-field="distance"] input');
+  await expect(len).toHaveValue('10');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-after]')).toHaveText('mm');
   await len.fill('50');
   await len.press('Enter');
   await expect(vol).toHaveText('Volume20,000 mm³');
   await len.fill('50 kg');
   await len.press('Enter');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-error]')).toBeVisible();
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-error]')).toBeVisible();
   await expect(len).toHaveAttribute('aria-invalid', 'true');
   await expect(vol).toHaveText('Volume20,000 mm³');
   await len.press('Escape');
   await expect(len).toHaveValue('50');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-error]')).toHaveCount(0);
-  const height = panel.locator('.nui[data-field="size.2"] input');
-  await height.fill('0');
-  await height.press('Enter');
-  await expect(panel.locator('.nui[data-field="size.2"] [data-nui-error]')).toHaveText('Height must be more than 0');
-  await height.press('Escape');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-error]')).toHaveCount(0);
+  await len.fill('0');
+  await len.press('Enter');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-error]')).toHaveText('Distance must not be 0');
+  await len.press('Escape');
   // A unit typed with the value is kept; the field shows it in the part's unit.
-  const cz = panel.locator('.nui[data-field="origin.2"] input');
-  await cz.fill('1 in');
-  await cz.press('Enter');
-  await expect(cz).toHaveValue('25.4');
+  await len.fill('1.5 in');
+  await len.press('Enter');
+  await expect(len).toHaveValue('38.1');
+  await expect(vol).toHaveText('Volume15,240 mm³');
 
   // The body the panel made is drawn: Fit (the toolbar's VIEW group runs the
   // viewport's command), then a viewport pixel at its middle is not background.
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-viewport', 'ready');
   await expect(tb.locator('[data-group="view"] .tb-txt')).toHaveText(['Fit', 'Front view', 'Top view', 'Right view', 'Isometric view']);
   await tb.locator('[data-command="view.fit"]').click();
-  await expect.poll(() => pixelAt(page, [25, 10, 35.4]), { timeout: 15_000 }).toMatch(/^\d+,\d+,\d+$/);
-  expect(await pixelAt(page, [25, 10, 35.4])).not.toBe('240,242,247');
-  await shot(page, 'ui-box-panel');
+  await expect.poll(() => pixelAt(page, [10, 0, 19]), { timeout: 15_000 }).toMatch(/^\d+,\d+,\d+$/);
+  expect(await pixelAt(page, [10, 0, 19])).not.toBe('240,242,247');
+  await shot(page, 'ui-extrude-panel');
 
-  // Done closes; the box stays; Undo is now available and names the step.
+  // Done closes; the body stays; Undo is now available and names the step.
   await panel.locator('[data-panel-done]').click();
   await expect(panel).toHaveCount(0);
   await expect(undo).not.toHaveAttribute('aria-disabled', 'true');
   await undo.hover();
-  await expect(tip).toContainText('Undo Box 1');
+  await expect(tip).toContainText('Undo Extrude 1');
   await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 20_000 });
 
-  // Right-click on the body in the viewport: the body's and its feature's actions; Edit reopens the panel.
-  const mid = await pagePoint(page, [25, 10, 35.4]);
+  // Right-click on the body in the viewport (its front face): the body's and its feature's actions; Edit reopens the panel.
+  const mid = await pagePoint(page, [10, 0, 19]);
   await page.mouse.click(mid[0], mid[1], { button: 'right' });
   const menu = frame.locator('[data-cad-menu]');
-  // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the CAD ones.
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Hide Body 1', 'Rename Body 1', 'Edit Box 1', 'Rename Box 1', 'Suppress Box 1', 'Roll back to here', 'Delete Box 1']);
+  // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the CAD ones,
+  // then the modules' items for a face (P2/P3, plan §3.1: after the shell's, behind a separator).
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Hide Body 1', 'Rename Body 1', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Roll back to here', 'Delete Extrude 1', 'Delete faces and heal', 'Measure', 'Press-pull', 'New sketch on this face']);
   await menu.locator('[data-menu-item="edit"]').click();
   await expect(menu).toHaveCount(0);
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
-  await expect(panel.locator('.nui[data-field="size.0"] input')).toHaveValue('50');
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
+  await expect(panel.locator('.nui[data-field="distance"] input')).toHaveValue('38.1');
   await panel.locator('[data-panel-done]').click();
   await expect(panel).toHaveCount(0);
 
-  // Keyboard: Ctrl+Z / Ctrl+Y (the frame gets keys after a click inside it until host G7).
+  // Keyboard: Ctrl+Z / Ctrl+Y.
   await tree.locator('[data-part-name] > .tree-row').click();
   await page.keyboard.press('Control+z');
-  await expect(tree.locator('[data-tree-empty="history"]')).toHaveText('No features yet');
+  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1']);
   await expect(vol).toHaveCount(0);
   await page.keyboard.press('Control+y');
-  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Box 1']);
-  await expect(vol).toHaveText('Volume20,000 mm³');
+  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1', 'Extrude 1']);
+  await expect(vol).toHaveText('Volume15,240 mm³');
 
-  // A new box, then Delete in its panel discards it.
-  await tb.locator('[data-command="solid.box"]').click();
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 2');
-  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Box 1', 'Box 2']);
+  // A new extrude of the same sketch (selected in the tree), then Delete in its panel discards it.
+  await tree.locator('[data-feature-row][data-feature-type="sketch"] > .tree-row').click();
+  await extrude.click();
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 2');
+  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1', 'Extrude 1', 'Extrude 2']);
   await panel.locator('[data-panel-delete]').click();
   await expect(panel).toHaveCount(0);
-  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Box 1']);
+  await expect(tree.locator('[data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1', 'Extrude 1']);
 
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
@@ -186,14 +202,15 @@ test('cad:p1-ui-box toolbar, Box flyout with live apply and inline errors, chips
 test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipes', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tree = frame.locator('[data-cad-tree]');
-  await frame.locator('[data-command="solid.box"]').click();
+  await addSolid(page);
+  await tree.locator('[data-feature-row][data-feature-type="extrude"] > .tree-row').dblclick();
   const panel = frame.locator('[data-cad-panel="feature"]');
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
 
   // Tree rows (LeftTree rows inherit .tree-section's 11px/600: the core page computes 11px, which
   // e2e/cad-p1-document.spec.js reads live; 24px rows, 3px 8px, selected #d7e8ff) and section heads (.geo-head 11px/600 #3a4250).
-  const row = tree.locator('[data-feature-row] > .tree-row').first();
-  await expect(tree.locator('[data-feature-row]').first()).toHaveClass(/selected/);
+  const row = tree.locator('[data-feature-row][data-feature-type="extrude"] > .tree-row');
+  await expect(tree.locator('[data-feature-row][data-feature-type="extrude"]')).toHaveClass(/selected/);
   expect(await styleOf(row, ['font-size', 'min-height', 'padding-top', 'padding-left', 'background-color', 'border-radius'])).toEqual({
     'font-size': '11px',
     'min-height': '24px',
@@ -238,8 +255,8 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
     'padding-left': '10px',
   });
   expect(await styleOf(card.locator('[data-panel-delete]'), ['font-size', 'color', 'background-color'])).toEqual({ 'font-size': '11px', color: 'rgb(23, 92, 211)', 'background-color': 'rgba(0, 0, 0, 0)' });
-  expect(await styleOf(card.locator('.mat-k').first(), ['color'])).toEqual({ color: 'rgb(102, 112, 133)' });
-  expect(await styleOf(card.locator('.bc-input').first(), ['font-size', 'padding-top', 'padding-left', 'border-top-color'])).toEqual({
+  expect(await styleOf(card.locator('.mgk-field-k').first(), ['color'])).toEqual({ color: 'rgb(102, 112, 133)' });
+  expect(await styleOf(card.locator('.mgk-input').first(), ['font-size', 'padding-top', 'padding-left', 'border-top-color'])).toEqual({
     'font-size': '12px',
     'padding-top': '2px',
     'padding-left': '6px',
@@ -249,7 +266,7 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   // Toolbar (.tb-btn 10px, labels 10px/700 #6a7180, bar #f2f3f6) and chips (600 12px #344054 on white).
   expect(await styleOf(frame.locator('[data-cad-toolbar]'), ['background-color'])).toEqual({ 'background-color': 'rgb(242, 243, 246)' });
   expect(await styleOf(frame.locator('.tb-group-label').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '10px', 'font-weight': '700', color: 'rgb(106, 113, 128)' });
-  expect(await styleOf(frame.locator('[data-command="solid.box"]'), ['font-size', 'min-width', 'border-top-left-radius'])).toEqual({ 'font-size': '10px', 'min-width': '64px', 'border-top-left-radius': '4px' });
+  expect(await styleOf(frame.locator('[data-command="solid.extrude"]'), ['font-size', 'min-width', 'border-top-left-radius'])).toEqual({ 'font-size': '10px', 'min-width': '64px', 'border-top-left-radius': '4px' });
   // The core's .measure-chip (style.css:1093-1106): 600 12px/1.35 "Segoe UI", padding 8/10/8/12 (review round 1: CAD had 6/10).
   expect(await styleOf(frame.locator('[data-chip="volume"]'), ['font-size', 'font-weight', 'font-family', 'line-height', 'color', 'background-color', 'border-top-color', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left'])).toEqual({
     'font-size': '12px',
@@ -277,36 +294,39 @@ test('cad:p1-ui-tree rollback bar, suppress, failed feature, rename, delete, reo
   const vol = frame.locator('[data-chip="volume"]');
   const labels = tree.locator('[data-feature-row] > .tree-row .tl');
   const menu = frame.locator('[data-cad-menu]');
+  const row = (name: string) => tree.locator('[data-feature-row]').filter({ has: frame.locator('> .tree-row .tl', { hasText: new RegExp(`^${name}$`) }) });
 
-  await tb.locator('[data-command="solid.box"]').click();
+  // A 20 mm cube (Sketch 1, Extrude 1).
+  await addSolid(page);
   await expect(vol).toHaveText('Volume8000 mm³');
-  await panel.locator('[data-panel-done]').click();
 
-  // A cylinder cut from the box: Operation shows once there is another body.
-  await tb.locator('[data-command="solid.cylinder"]').click();
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Cylinder 1');
-  await panel.locator('select[data-field="op"]').selectOption('cut');
+  // A circle Ø20 at the origin (Sketch 2), extruded with Cut: Operation shows once there is another body.
+  await addSketch(page, { circle: true, size: [20] });
+  await tb.locator('[data-command="solid.extrude"]').click();
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 2');
+  await panel.locator('[data-field="op"] select').selectOption('cut');
+  const dist = panel.locator('.nui[data-field="distance"] input');
+  await dist.fill('20');
+  await dist.press('Enter');
   await expect(tree.locator('[data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (1)');
-  // 8000 - quarter of a Ø20 × 20 cylinder = 6429.2 mm³
+  // 8000 - a quarter of a Ø20 × 20 cylinder = 6429.2 mm³
   await expect(vol).toHaveText('Volume6429.2 mm³');
 
-  // Moved away it cuts nothing: the row turns red with a "What's wrong" tooltip; the panel foot says why.
-  const cx = panel.locator('.nui[data-field="origin.0"] input');
-  await cx.fill('100');
-  await cx.press('Enter');
-  const cyl = tree.locator('[data-feature-row][data-feature-type="cylinder"]');
-  await expect(cyl).toHaveAttribute('data-state', 'error');
-  await expect(cyl.locator('> .tree-row .tl')).toHaveCSS('color', 'rgb(180, 35, 24)');
-  const badge = cyl.locator('[data-feature-badge="error"]');
+  // Turned away (down from the Top plane) it cuts nothing: the row turns red with a "What's wrong" tooltip; the panel foot says why.
+  const flip = panel.locator('input[data-field="flip"]');
+  await flip.check();
+  const cut = row('Extrude 2');
+  await expect(cut).toHaveAttribute('data-state', 'error');
+  await expect(cut.locator('> .tree-row .tl')).toHaveCSS('color', 'rgb(180, 35, 24)');
+  const badge = cut.locator('[data-feature-badge="error"]');
   await expect(badge).toHaveAttribute('aria-label', /What's wrong: Nothing to cut/);
   await badge.hover();
   await expect(frame.locator('[data-cad-tip]')).toContainText("What's wrong");
   await expect(frame.locator('[data-cad-tip]')).toContainText('Nothing to cut');
   await expect(panel.locator('[data-run-reason]')).toContainText('Nothing to cut');
   await expect(vol).toHaveText('Volume8000 mm³');
-  await cx.fill('0');
-  await cx.press('Enter');
-  await expect(cyl).toHaveAttribute('data-state', 'ok');
+  await flip.uncheck();
+  await expect(cut).toHaveAttribute('data-state', 'ok');
   await expect(vol).toHaveText('Volume6429.2 mm³');
   // Bug 2026-09-30: the badge's tooltip stayed on screen after the error was fixed
   // (the pointer never left; the badge went away under it).
@@ -317,7 +337,7 @@ test('cad:p1-ui-tree rollback bar, suppress, failed feature, rename, delete, reo
   await expect(panel).toHaveCount(0);
   await shot(page, 'ui-tree-cut');
 
-  // Drag the rollback bar above Box 1: everything below is dimmed and not built.
+  // Drag the rollback bar above Sketch 1: everything below is dimmed and not built.
   const bar = tree.locator('[data-rollback-bar]');
   const b = await bar.boundingBox();
   const first = await tree.locator('[data-feature-row] > .tree-row').first().boundingBox();
@@ -325,57 +345,59 @@ test('cad:p1-ui-tree rollback bar, suppress, failed feature, rename, delete, reo
   await page.mouse.down();
   await page.mouse.move(first!.x + 30, first!.y + 6, { steps: 6 });
   await page.mouse.up();
-  await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(2);
+  await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(4);
   await expect(tree.locator('[data-feature-row] > .tree-row').first()).toHaveCSS('opacity', '0.55');
   await expect(tree.locator('[data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (0)');
   await expect(vol).toHaveCount(0);
   await expect(bar).toHaveAttribute('aria-valuenow', '0');
-  // Arrow keys move it back down.
+  // Arrow keys move it back down: past Sketch 1 and Extrude 1, the cube is back.
   await bar.focus();
   await page.keyboard.press('ArrowDown');
-  await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(1);
+  await page.keyboard.press('ArrowDown');
+  await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(2);
   await expect(vol).toHaveText('Volume8000 mm³');
   await page.keyboard.press('End');
   await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(0);
   await expect(vol).toHaveText('Volume6429.2 mm³');
 
   // Suppress from the context menu: the row greys and strikes through; the cut is gone.
-  await cyl.locator('> .tree-row').click({ button: 'right' });
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Edit Cylinder 1', 'Rename Cylinder 1', 'Suppress Cylinder 1', 'Roll back to here', 'Delete Cylinder 1']);
+  await cut.locator('> .tree-row').click({ button: 'right' });
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Roll back to here', 'Delete Extrude 2']);
   await expect(menu.locator('[data-menu-item="rollback"]')).toHaveAttribute('aria-disabled', 'true');
   await menu.locator('[data-menu-item="suppress"]').click();
   await expect(menu).toHaveCount(0);
-  await expect(cyl.locator('> .tree-row .tl')).toHaveCSS('text-decoration-line', 'line-through');
-  await expect(cyl.locator('> .tree-row .tl')).toHaveCSS('color', 'rgb(152, 162, 179)');
-  await expect(cyl.locator('.tree-sub')).toHaveText('Suppressed');
+  await expect(cut.locator('> .tree-row .tl')).toHaveCSS('text-decoration-line', 'line-through');
+  await expect(cut.locator('> .tree-row .tl')).toHaveCSS('color', 'rgb(152, 162, 179)');
+  await expect(cut.locator('.tree-sub')).toHaveText('Suppressed');
   await expect(vol).toHaveText('Volume8000 mm³');
   // Ctrl+Z brings it back.
   await tree.locator('[data-part-name] > .tree-row').click();
   await page.keyboard.press('Control+z');
-  await expect(cyl.locator('.tree-sub')).toHaveCount(0);
+  await expect(cut.locator('.tree-sub')).toHaveCount(0);
   await expect(vol).toHaveText('Volume6429.2 mm³');
 
   // Rename in place (F2) with the core's rules: a duplicate is refused inline.
-  await tree.locator('[data-feature-row][data-feature-type="box"] > .tree-row').click();
+  const base = row('Extrude 1');
+  await base.locator('> .tree-row').click();
   await page.keyboard.press('F2');
-  const input = tree.locator('[data-feature-row][data-feature-type="box"] input');
-  await expect(input).toHaveValue('Box 1');
-  await input.fill('cylinder 1');
+  const input = tree.locator('[data-feature-row] input');
+  await expect(input).toHaveValue('Extrude 1');
+  await input.fill('extrude 2');
   await input.press('Enter');
-  await expect(tree.locator('[data-feature-row][data-feature-type="box"] [role="alert"]')).toHaveText('A feature named "Cylinder 1" already exists');
+  await expect(tree.locator('[data-feature-row] [role="alert"]')).toHaveText('A feature named "Extrude 2" already exists');
   await input.fill('Base');
   await input.press('Enter');
-  await expect(labels).toHaveText(['Base', 'Cylinder 1']);
+  await expect(labels).toHaveText(['Sketch 1', 'Base', 'Sketch 2', 'Extrude 2']);
 
   // Double-click opens the panel on the feature.
-  await cyl.locator('> .tree-row').dblclick();
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Cylinder 1');
+  await cut.locator('> .tree-row').dblclick();
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 2');
   await panel.locator('[data-panel-done]').click();
 
   // Delete from the menu.
-  await cyl.locator('> .tree-row').click({ button: 'right' });
+  await cut.locator('> .tree-row').click({ button: 'right' });
   await menu.locator('[data-menu-item="delete"]').click();
-  await expect(labels).toHaveText(['Base']);
+  await expect(labels).toHaveText(['Sketch 1', 'Base', 'Sketch 2']);
   await expect(vol).toHaveText('Volume8000 mm³');
   await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 20_000 });
 
@@ -383,7 +405,7 @@ test('cad:p1-ui-tree rollback bar, suppress, failed feature, rename, delete, reo
   await page.locator('#workspace-overlay [data-ws-back]').click();
   await expect(page.locator('#workspace-overlay')).toBeHidden();
   const again = await openPart(page, partRow);
-  await expect(again.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl')).toHaveText(['Base']);
+  await expect(again.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1', 'Base', 'Sketch 2']);
   await expect(again.locator('[data-cad-tree] [data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (1)');
   await expect(again.locator('[data-chip="volume"]')).toHaveText('Volume8000 mm³');
 
@@ -397,14 +419,13 @@ test('cad:p1-ui-params the Parameters panel drives a size; bad input is refused 
   const tree = frame.locator('[data-cad-tree]');
   const vol = frame.locator('[data-chip="volume"]');
 
-  await tb.locator('[data-command="solid.box"]').click();
-  await frame.locator('[data-panel-done]').click();
+  await addSolid(page);
   await expect(vol).toHaveText('Volume8000 mm³');
 
   await tb.locator('[data-command="modify.parameters"]').click();
   const params = frame.locator('[data-cad-panel="params"]');
   await expect(params.locator('[data-panel-title]')).toHaveText('Parameters');
-  await expect(params.locator('.mat-panel-foot button')).toHaveText(['Done']);
+  await expect(params.locator('.mgk-panel-foot button')).toHaveText(['Done']);
   await expect(params.locator('[data-params-empty]')).toHaveText('No parameters yet');
   const add = async (name: string, expr: string) => {
     await params.locator('[aria-label="New parameter name"]').fill(name);
@@ -419,17 +440,17 @@ test('cad:p1-ui-params the Parameters panel drives a size; bad input is refused 
   await add('depth', 'width / 4 + 1 mm');
   await expect(params.locator('[data-param-row="depth"] [data-param-value]')).toHaveText('11 mm');
 
-  // A size bound to a parameter.
-  await tree.locator('[data-feature-row] > .tree-row').first().dblclick();
+  // The extrude's distance bound to a parameter.
+  await tree.locator('[data-feature-row][data-feature-type="extrude"] > .tree-row').dblclick();
   const panel = frame.locator('[data-cad-panel="feature"]');
-  const len = panel.locator('.nui[data-field="size.0"] input');
+  const len = panel.locator('.nui[data-field="distance"] input');
   await len.fill('width');
   await len.press('Enter');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-after]')).toHaveText('= 40 mm');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-after]')).toHaveText('= 40 mm');
   await expect(vol).toHaveText('Volume16,000 mm³');
   await panel.locator('[data-panel-done]').click();
 
-  // Change the parameter: the box follows.
+  // Change the parameter: the solid follows.
   await tb.locator('[data-command="modify.parameters"]').click();
   const wexpr = params.locator('[data-param-row="width"] .nui input');
   await wexpr.fill('width * 2');
@@ -442,7 +463,7 @@ test('cad:p1-ui-params the Parameters panel drives a size; bad input is refused 
 
   // In use: refused with the document's reason.
   await params.locator('[data-param-row="width"] [data-param-delete]').click();
-  await expect(params.locator('[data-param-error="width"]')).toHaveText("width can't be deleted: depth and Box 1 use it");
+  await expect(params.locator('[data-param-error="width"]')).toHaveText("width can't be deleted: depth and Extrude 1 use it");
   await expect(params.locator('[data-param-row]')).toHaveCount(2);
   await shot(page, 'ui-params');
   await params.locator('[data-panel-done]').click();
@@ -475,7 +496,7 @@ async function looksAlong(page: Page, n: [number, number, number]): Promise<stri
   }, n);
 }
 
-test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the planes eye, Roll to end, Intersect, Cylinder axis, parameters', async ({ page, request }) => {
+test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the planes eye, Roll to end, Intersect, a cylinder along X or Z, parameters', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tb = frame.locator('[data-cad-toolbar]');
   const tree = frame.locator('[data-cad-tree]');
@@ -483,6 +504,7 @@ test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the pla
   const menu = frame.locator('[data-cad-menu]');
   const vol = frame.locator('[data-chip="volume"] [data-volume-mm3]');
   const labels = tree.locator('[data-feature-row] > .tree-row .tl');
+  const row = (name: string) => tree.locator('[data-feature-row]').filter({ has: frame.locator('> .tree-row .tl', { hasText: new RegExp(`^${name}$`) }) });
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-viewport', 'ready');
 
   // The Origin row's eye: open while the planes are drawn (an empty part, "auto"), not pressed.
@@ -503,9 +525,8 @@ test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the pla
     await expect.poll(() => looksAlong(page, n as unknown as [number, number, number]), { message: `${label}: Look at` }).toBe('along');
   }
 
-  // Box 1 (20 mm cube at the origin): the planes hide; the eye says so (crossed out).
-  await tb.locator('[data-command="solid.box"]').click();
-  await panel.locator('[data-panel-done]').click();
+  // A 20 mm cube at the origin (Sketch 1, Extrude 1): the planes hide; the eye says so (crossed out).
+  await addSolid(page);
   await expect(vol).toHaveText('8000 mm³');
   await expect(eye).toHaveAttribute('data-planes-drawn', '0');
   // Pressed: always drawn.
@@ -517,52 +538,48 @@ test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the pla
   await expect(eye).toHaveAttribute('data-planes', 'auto');
   await expect(eye).toHaveAttribute('data-planes-drawn', '0');
 
-  // Intersect: a Ø20 × 20 cylinder centred on the box's middle keeps only their common part, pi·10²·20.
-  await tb.locator('[data-command="solid.cylinder"]').click();
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Cylinder 1');
-  await setField(panel, 'origin.0', '10');
-  await setField(panel, 'origin.1', '10');
-  await panel.locator('select[data-field="op"]').selectOption('intersect');
+  // Intersect: a Ø20 circle centred on the cube's middle, extruded 20: only their common part, pi·10²·20.
+  await addSketch(page, { circle: true, at: [10, 10], size: [20] });
+  await tb.locator('[data-command="solid.extrude"]').click();
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 2');
+  await setField(panel, 'distance', '20');
+  await panel.locator('[data-field="op"] select').selectOption('intersect');
   await expect(vol).toHaveText('6283.19 mm³');
   await expect(tree.locator('[data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (1)');
   await panel.locator('[data-panel-done]').click();
   // Its own Delete undoes it: back to the cube.
-  await tree.locator('[data-feature-row][data-feature-type="cylinder"] > .tree-row').click({ button: 'right' });
+  await row('Extrude 2').locator('> .tree-row').click({ button: 'right' });
   await menu.locator('[data-menu-item="delete"]').click();
   await expect(vol).toHaveText('8000 mm³');
 
-  // The Cylinder's axis: Ø10, 30 long from (0, 10, 10), joined to the cube. Along X it
-  // is inside the cube for its first 20 mm: 8000 + pi·25·10. Along Z its axis is the
-  // cube's edge line x = 0: half of it overlaps the cube for 10 mm, so
-  // 8000 + pi·25·30 - pi·25·10 / 2.
-  await tb.locator('[data-command="solid.cylinder"]').click();
-  await panel.locator('select[data-field="axis"]').selectOption('origin:x');
-  await setField(panel, 'diameter', '10');
-  await setField(panel, 'height', '30');
-  await setField(panel, 'origin.1', '10');
-  await setField(panel, 'origin.2', '10');
-  await panel.locator('select[data-field="op"]').selectOption('join');
+  // A cylinder Ø10, 30 long from (0, 10, 10), joined to the cube. Along X (a circle on the Right
+  // plane) it is inside the cube for its first 20 mm: 8000 + pi·25·10. Along Z (a circle on Top,
+  // from z = 10) its axis is the cube's edge line x = 0: half of it overlaps the cube for 10 mm,
+  // so 8000 + pi·25·30 - pi·25·10 / 2.
+  const alongX = await addSolid(page, { circle: true, axis: 'x', at: [0, 10, 10], size: [10, 30], op: 'join' });
   await expect(vol).toHaveText('8785.4 mm³');
-  await panel.locator('select[data-field="axis"]').selectOption('origin:z');
+  // (Names count up from the highest in the history: with Extrude 2 deleted, this one is Extrude 2 again.)
+  await row('Extrude 2').locator('> .tree-row').click({ button: 'right' });
+  await menu.locator('[data-menu-item="delete"]').click();
+  await expect(vol).toHaveText('8000 mm³');
+  await addSolid(page, { circle: true, at: [0, 10, 10], size: [10, 30], op: 'join' });
   await expect(vol).toHaveText('9963.5 mm³');
-  await panel.locator('select[data-field="axis"]').selectOption('origin:x');
-  await expect(vol).toHaveText('8785.4 mm³');
-  await panel.locator('[data-panel-done]').click();
-  await expect(labels).toHaveText(['Box 1', 'Cylinder 1']);
+  void alongX;
+  await expect(labels).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Sketch 3', 'Sketch 4', 'Extrude 2']);
 
   // "Roll back to here", then "Roll to end" (offered only while the bar is not at the end).
   const bar = tree.locator('[data-rollback-bar]');
-  await tree.locator('[data-feature-row][data-feature-type="box"] > .tree-row').click({ button: 'right' });
+  await row('Extrude 1').locator('> .tree-row').click({ button: 'right' });
   await expect(menu.locator('[data-menu-item="roll-end"]')).toHaveCount(0);
   await menu.locator('[data-menu-item="rollback"]').click();
-  await expect(bar).toHaveAttribute('aria-valuenow', '1');
+  await expect(bar).toHaveAttribute('aria-valuenow', '2');
   await expect(vol).toHaveText('8000 mm³');
-  await tree.locator('[data-feature-row][data-feature-type="box"] > .tree-row').click({ button: 'right' });
+  await row('Extrude 1').locator('> .tree-row').click({ button: 'right' });
   await expect(menu.locator('[data-menu-item="roll-end"]')).toHaveText('Roll to end');
   await menu.locator('[data-menu-item="roll-end"]').click();
-  await expect(bar).toHaveAttribute('aria-valuenow', '2');
+  await expect(bar).toHaveAttribute('aria-valuenow', '6');
   await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(0);
-  await expect(vol).toHaveText('8785.4 mm³');
+  await expect(vol).toHaveText('9963.5 mm³');
 
   // Parameters: a cycle is refused with its path; a new one that names itself says so;
   // a unit change that does not fit says what the value is, once; a rename follows into the features.
@@ -584,13 +601,13 @@ test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the pla
   await expect(params.locator('[data-param-row="a"] [data-nui-error]')).toHaveText('Circular reference: a → b → a');
   await aexpr.press('Escape');
   await expect(aexpr).toHaveValue('20 mm');
-  await params.locator('[data-param-row="a"] [data-param-unit]').selectOption('scalar');
+  await params.locator('[data-param-row="a"] [data-param-unit] select').selectOption('scalar');
   await expect(params.locator('[data-param-error="a"]')).toHaveText('20 mm is a length, not a plain number');
   await params.locator('[data-panel-done]').click();
-  // Box 1's length uses b; renaming b to depth renames it there too, and the volume stays.
-  await tree.locator('[data-feature-row][data-feature-type="box"] > .tree-row').dblclick();
-  await setField(panel, 'size.0', 'b');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-after]')).toHaveText('= 40 mm');
+  // Extrude 1's distance uses b; renaming b to depth renames it there too, and the volume stays.
+  await row('Extrude 1').locator('> .tree-row').dblclick();
+  await setField(panel, 'distance', 'b');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-after]')).toHaveText('= 40 mm');
   await panel.locator('[data-panel-done]').click();
   const withB = Number(await vol.getAttribute('data-volume-mm3'));
   await tb.locator('[data-command="modify.parameters"]').click();
@@ -599,9 +616,9 @@ test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the pla
   await bname.press('Enter');
   await expect(params.locator('[data-param-row="depth"] .nui input')).toHaveValue('a * 2');
   await params.locator('[data-panel-done]').click();
-  await tree.locator('[data-feature-row][data-feature-type="box"] > .tree-row').dblclick();
-  await expect(panel.locator('.nui[data-field="size.0"] input')).toHaveValue('depth');
-  await expect(panel.locator('.nui[data-field="size.0"] [data-nui-after]')).toHaveText('= 40 mm');
+  await row('Extrude 1').locator('> .tree-row').dblclick();
+  await expect(panel.locator('.nui[data-field="distance"] input')).toHaveValue('depth');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-after]')).toHaveText('= 40 mm');
   expect(Number(await vol.getAttribute('data-volume-mm3'))).toBeCloseTo(withB, 6);
   await panel.locator('[data-panel-done]').click();
 

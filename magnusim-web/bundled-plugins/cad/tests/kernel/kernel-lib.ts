@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { describe, it } from 'vitest';
 import { createKernel, type Kernel } from '../../src/kernel-worker/kernel-api';
 
 export type R = Record<string, any>;
@@ -20,6 +21,34 @@ export const REF: R = JSON.parse(readFileSync(join(FIXTURES, 'reference.json'), 
 
 export function fixture(name: string): Uint8Array {
   return new Uint8Array(readFileSync(join(FIXTURES, name)));
+}
+
+/**
+ * Daniel's Vortex part ("Vortex CFD Test.step"), read where it is: it is never copied
+ * into the plugin (review P2/P3 round 3). Only CAD_E2E_VORTEX_STEP names it, as for the
+ * e2e gates. Without it the tests that need it are skipped and say why in their names;
+ * set to a path with no file there, they fail (reading it) with that path.
+ */
+export const VORTEX_STEP = process.env.CAD_E2E_VORTEX_STEP || '';
+export const HAVE_VORTEX = VORTEX_STEP !== '';
+export const NO_VORTEX = "needs Daniel's Vortex STEP: set CAD_E2E_VORTEX_STEP to the path of Vortex CFD Test.step";
+if (!HAVE_VORTEX) console.warn(`[kernel tests] skipping the Vortex tests: ${NO_VORTEX}`);
+
+/** The Vortex STEP's bytes (only called by tests that run when HAVE_VORTEX). */
+export function vortexBytes(): Uint8Array {
+  return new Uint8Array(readFileSync(VORTEX_STEP));
+}
+
+/** A test that needs the Vortex STEP: skipped, with the reason in its name, when it is not there. */
+export function itVortex(name: string, fn: () => unknown, timeout?: number): void {
+  if (HAVE_VORTEX) it(name, fn, timeout);
+  else it.skip(`${name} [skipped: ${NO_VORTEX}]`, fn);
+}
+
+/** A group of tests that needs the Vortex STEP (its own beforeAll reads it). */
+export function describeVortex(name: string, fn: () => void): void {
+  if (HAVE_VORTEX) describe(name, fn);
+  else describe.skip(`${name} [skipped: ${NO_VORTEX}]`, fn);
 }
 
 export async function loadKernel(): Promise<Kernel> {
@@ -40,6 +69,11 @@ export const tryCall = (k: Kernel, op: string, params: R = {}): R => k.tryCall(o
 
 export function importStep(k: Kernel, file: string, extra: R = {}): R {
   return call(k, 'import_step', { ...k.putBytes(fixture(file)), name: file, heal: true, tol: 1e-3, ...extra });
+}
+
+/** import_step of the Vortex STEP (read by path), healed as importStep heals. */
+export function importVortex(k: Kernel, extra: R = {}): R {
+  return call(k, 'import_step', { ...k.putBytes(vortexBytes()), name: 'Vortex CFD Test.step', heal: true, tol: 1e-3, ...extra });
 }
 
 export function volume(k: Kernel, id: number): number {

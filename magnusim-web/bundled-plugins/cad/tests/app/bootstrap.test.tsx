@@ -55,8 +55,16 @@ describe('bootstrap', () => {
     expect([...root.querySelectorAll('[data-tree-node^="origin:"] .tl')].map((e) => e.textContent)).toEqual(['Top plane', 'Front plane', 'Right plane']);
     // Each area installed its commands: the toolbar shows only those that work, in the core's group order.
     const groups = [...root.querySelectorAll('[data-cad-toolbar] .tb-group-label')].map((e) => e.textContent);
-    expect(groups).toEqual(['SOLID', 'MODIFY', 'VIEW', 'EDIT']);
-    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="solid"] .tb-txt')].map((e) => e.textContent)).toEqual(['Box', 'Cylinder']);
+    // P2/P3 modules (src/features/*, src/sketch): SKETCH first, CFD PREP after the modelling groups,
+    // INSPECT and FILE after it. No Box or Cylinder (decision 2026-10-01): SOLID is Extrude only.
+    expect(groups).toEqual(['SKETCH', 'SOLID', 'MODIFY', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
+    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="solid"] .tb-txt')].map((e) => e.textContent)).toEqual(['Extrude']);
+    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="cfd"] .tb-txt')].map((e) => e.textContent)).toEqual(['Enclosure']);
+    // Greyed with the reason until a body exists.
+    expect(root.querySelector('[data-command="cfd.enclosure"]')?.getAttribute('data-disabled-reason')).toBe('Add or import a body first');
+    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="modify"] .tb-txt')].map((e) => e.textContent)).toEqual(['Parameters', 'Press-pull', 'Delete faces', 'Split', 'Combine']);
+    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="inspect"] .tb-txt')].map((e) => e.textContent)).toEqual(['Measure', 'Mass properties', 'Check']);
+    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="file"] .tb-txt')].map((e) => e.textContent)).toEqual(['Import STEP', 'Export STEP']);
     expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="edit"] .tb-txt')].map((e) => e.textContent)).toEqual(['Undo', 'Redo']);
     expect(root.querySelector('[data-command="edit.undo"]')?.getAttribute('aria-disabled')).toBe('true');
     expect(root.querySelector('[data-chip="kernel"]')).toBeNull();

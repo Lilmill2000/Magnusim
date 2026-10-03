@@ -12,11 +12,13 @@
 //   - plane labels sit away from the bodies, never over one;
 //   - a long body name in the volume chip ends in an ellipsis; a disabled menu
 //     item's reason sits beside it, not over the items under it.
-// window.__CAD__ is used only to read the viewport's projection and picks.
+// window.__CAD__ is used only to read the viewport's projection and picks, and
+// (helpers.ts addSketch / addSolid) to set sketched solids up: there is no Box
+// or Cylinder since decision 2026-10-01.
 // Owner: INTEGRATE (review round 2).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 import { PNG } from './png';
 
 type Vec3 = [number, number, number];
@@ -41,14 +43,13 @@ async function setField(panel: Loc, field: string, value: string) {
   await expect(panel.locator(`.nui[data-field="${field}"] [data-nui-error]`)).toHaveCount(0);
 }
 
-/** A feature from the toolbar, its fields set, then Done. */
-async function addFeature(frame: FrameLocator, type: 'box' | 'cylinder', fields: Record<string, string> = {}) {
-  await frame.locator(`[data-cad-toolbar] [data-command="solid.${type}"]`).click();
+/** A sketch on Top, then the Extrude panel opened on it (as a new feature). */
+async function openNewExtrude(page: Page, frame: FrameLocator) {
+  await addSketch(page);
+  await frame.locator('[data-cad-toolbar] [data-command="solid.extrude"]').click();
   const panel = frame.locator('[data-cad-panel="feature"]');
-  await expect(panel).toHaveCount(1);
-  for (const [k, v] of Object.entries(fields)) await setField(panel, k, v);
-  await panel.locator('[data-panel-done]').click();
-  await expect(panel).toHaveCount(0);
+  await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
+  return panel;
 }
 
 const featureRow = (frame: FrameLocator, name: string) => frame.locator('[data-cad-tree] [data-feature-row]').filter({ has: frame.locator('> .tree-row .tl', { hasText: new RegExp(`^${name}$`) }) });
@@ -109,9 +110,7 @@ const near = (a: RGB, b: RGB, tol: number) => a.every((v, i) => Math.abs(v - b[i
 
 test('cad:p1-review2-escape Escape in a viewport popover closes the popover, not the open feature panel', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
-  await frame.locator('[data-cad-toolbar] [data-command="solid.box"]').click();
-  const panel = frame.locator('[data-cad-panel="feature"]');
-  await expect(panel.locator('[data-panel-title]')).toHaveText('Box 1');
+  const panel = await openNewExtrude(page, frame);
   // Views and Selection filter: one Escape closes the popover; the panel stays (it closed too).
   for (const which of ['views', 'filter']) {
     await frame.locator(`[data-vp-opens="${which}"]`).click();
@@ -129,11 +128,11 @@ test('cad:p1-review2-escape Escape in a viewport popover closes the popover, not
   await expect(frame.locator('[data-vp-opens="section"]')).toHaveAttribute('aria-pressed', 'true');
   await frame.locator('[data-vp-opens="section"]').click();
   await expect(frame.locator('[data-vp-opens="section"]')).toHaveAttribute('aria-pressed', 'false');
-  // With nothing above it, Escape closes the panel (Done: Box 1 is kept).
+  // With nothing above it, Escape closes the panel (Done: Extrude 1 is kept).
   await frame.locator('[data-cad-panel="feature"] [data-panel-title]').click();
   await page.keyboard.press('Escape');
   await expect(panel).toHaveCount(0);
-  await expect(frame.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl')).toHaveText(['Box 1']);
+  await expect(frame.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1', 'Extrude 1']);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
 });
@@ -143,22 +142,22 @@ test('cad:p1-review2-volume-fallback a selected body that is suppressed or delet
   const chip = frame.locator('[data-chip="volume"]');
   const tree = frame.locator('[data-cad-tree]');
   const menu = frame.locator('[data-cad-menu]');
-  await addFeature(frame, 'box');
-  await addFeature(frame, 'box', { 'origin.0': '50' });
+  await addSolid(page);
+  await addSolid(page, { at: [50, 0, 0] });
   await expect(chip).toHaveText('VolumeTotal of 2 bodies · 16,000 mm³');
   await frame.locator('[data-cad-toolbar] [data-command="view.fit"]').click();
-  // Right-click Box 2's front face in the viewport: it is selected (the chip says Body 2),
-  // and its menu suppresses Box 2. The selection was left on a body that is gone, and the chip vanished.
+  // Right-click the second cube's front face in the viewport: it is selected (the chip says Body 2),
+  // and its menu suppresses Extrude 2. The selection was left on a body that is gone, and the chip vanished.
   const onBox2 = async () => (await onPage(page, [[60, 0, 10]]))[0]!;
   let at = await onBox2();
   await page.mouse.click(at[0], at[1], { button: 'right' });
   await expect(chip).toHaveText('VolumeBody 2 · 8000 mm³');
   await menu.locator('[data-menu-item="suppress"]').click();
-  await expect(featureRow(frame, 'Box 2')).toHaveAttribute('data-suppressed', '1');
+  await expect(featureRow(frame, 'Extrude 2')).toHaveAttribute('data-suppressed', '1');
   await expect(tree.locator('[data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (1)');
   await expect(chip).toHaveText('Volume8000 mm³');
   // Unsuppressed: the old selection is gone, so the chip is the total of both.
-  await rowMenu(frame, featureRow(frame, 'Box 2'), 'suppress');
+  await rowMenu(frame, featureRow(frame, 'Extrude 2'), 'suppress');
   await expect(chip).toHaveText('VolumeTotal of 2 bodies · 16,000 mm³');
   // Deleted from the same menu while selected: the same.
   at = await onBox2();
@@ -174,10 +173,10 @@ test('cad:p1-review2-volume-fallback a selected body that is suppressed or delet
 test('cad:p1-review2-size-format a size field shows 1,000,000 as the chip does; while edited it shows the plain digits', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const chip = frame.locator('[data-chip="volume"]');
-  await frame.locator('[data-cad-toolbar] [data-command="solid.box"]').click();
-  const panel = frame.locator('[data-cad-panel="feature"]');
-  const len = panel.locator('.nui[data-field="size.0"] input');
-  await setField(panel, 'size.0', '1e6');
+  // A 20 x 20 profile: its extrude's distance is the size field.
+  const panel = await openNewExtrude(page, frame);
+  const len = panel.locator('.nui[data-field="distance"] input');
+  await setField(panel, 'distance', '1e6');
   // Out of the field it reads as the chip does: it read "1.0000e+6" while the chip read "400,000,000 mm³".
   await len.press('Tab');
   await expect(len).toHaveValue('1,000,000');
@@ -186,14 +185,14 @@ test('cad:p1-review2-size-format a size field shows 1,000,000 as the chip does; 
   // commas are refused in numbers, as the core's number fields refuse them).
   await len.click();
   await expect(len).toHaveValue('1e6');
-  await setField(panel, 'size.0', '2000000');
+  await setField(panel, 'distance', '2000000');
   await len.press('Tab');
   await expect(len).toHaveValue('2,000,000');
   await expect(chip).toHaveText('Volume800,000,000 mm³');
-  await setField(panel, 'size.0', '12345.678');
+  await setField(panel, 'distance', '12345.678');
   await len.press('Tab');
   await expect(len).toHaveValue('12,345.7');
-  await setField(panel, 'size.0', '20');
+  await setField(panel, 'distance', '20');
   await len.press('Tab');
   await expect(len).toHaveValue('20');
   await expect(chip).toHaveText('Volume8000 mm³');
@@ -207,28 +206,28 @@ test('cad:p1-review2-undo-insert undo of a feature inserted at the rollback bar 
   const tree = frame.locator('[data-cad-tree]');
   const bar = tree.locator('[data-rollback-bar]');
   const labels = tree.locator('[data-feature-row] > .tree-row .tl');
-  await addFeature(frame, 'box');
-  await addFeature(frame, 'cylinder', { 'origin.0': '40' });
-  await rowMenu(frame, featureRow(frame, 'Box 1'), 'rollback');
-  await expect(bar).toHaveAttribute('aria-valuenow', '1');
-  await expect(featureRow(frame, 'Cylinder 1')).toHaveAttribute('data-rolled-back', /.*/);
-  // Insert at the bar.
-  await addFeature(frame, 'box', { 'origin.1': '40' });
-  await expect(labels).toHaveText(['Box 1', 'Box 2', 'Cylinder 1']);
+  await addSolid(page);
+  await addSolid(page, { circle: true, at: [40, 0, 0] });
+  await rowMenu(frame, featureRow(frame, 'Extrude 1'), 'rollback');
   await expect(bar).toHaveAttribute('aria-valuenow', '2');
-  // Undo it: the bar stays above Cylinder 1 (it jumped to the end and brought Cylinder 1 back).
+  await expect(featureRow(frame, 'Extrude 2')).toHaveAttribute('data-rolled-back', /.*/);
+  // Insert at the bar (one edit: a sketch).
+  await addSketch(page, { at: [0, 40] });
+  await expect(labels).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 3', 'Sketch 2', 'Extrude 2']);
+  await expect(bar).toHaveAttribute('aria-valuenow', '3');
+  // Undo it: the bar stays above Sketch 2 (it jumped to the end and brought Extrude 2 back).
   await tree.locator('[data-part-name] > .tree-row').click();
   await page.keyboard.press('Control+z');
-  await expect(labels).toHaveText(['Box 1', 'Cylinder 1']);
-  await expect(bar).toHaveAttribute('aria-valuenow', '1');
-  await expect(featureRow(frame, 'Cylinder 1')).toHaveAttribute('data-rolled-back', /.*/);
-  await expect(featureRow(frame, 'Cylinder 1').locator('> .tree-row')).toHaveCSS('opacity', '0.55');
-  await expect(frame.locator('[data-chip="volume"]')).toHaveText('Volume8000 mm³');
-  // Redo: the box is back above the bar.
-  await page.keyboard.press('Control+y');
-  await expect(labels).toHaveText(['Box 1', 'Box 2', 'Cylinder 1']);
+  await expect(labels).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
   await expect(bar).toHaveAttribute('aria-valuenow', '2');
-  await expect(featureRow(frame, 'Box 2')).not.toHaveAttribute('data-rolled-back', /.*/);
+  await expect(featureRow(frame, 'Extrude 2')).toHaveAttribute('data-rolled-back', /.*/);
+  await expect(featureRow(frame, 'Extrude 2').locator('> .tree-row')).toHaveCSS('opacity', '0.55');
+  await expect(frame.locator('[data-chip="volume"]')).toHaveText('Volume8000 mm³');
+  // Redo: the sketch is back above the bar.
+  await page.keyboard.press('Control+y');
+  await expect(labels).toHaveText(['Sketch 1', 'Extrude 1', 'Sketch 3', 'Sketch 2', 'Extrude 2']);
+  await expect(bar).toHaveAttribute('aria-valuenow', '3');
+  await expect(featureRow(frame, 'Sketch 3')).not.toHaveAttribute('data-rolled-back', /.*/);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
 });
@@ -236,16 +235,16 @@ test('cad:p1-review2-undo-insert undo of a feature inserted at the rollback bar 
 test('cad:p1-review2-rename-error an inline rename error wraps inside the tree card; the card keeps its width', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tree = frame.locator('[data-cad-tree]');
-  await addFeature(frame, 'box');
-  await addFeature(frame, 'cylinder', { 'origin.0': '40' });
+  await addSolid(page);
+  await addSolid(page, { circle: true, at: [40, 0, 0] });
   const before = (await tree.boundingBox())!.width;
-  await featureRow(frame, 'Cylinder 1').locator('> .tree-row').click();
+  await featureRow(frame, 'Extrude 2').locator('> .tree-row').click();
   await page.keyboard.press('F2');
   const input = tree.locator('input[aria-label="Feature name"]');
-  await input.fill('Box 1');
+  await input.fill('Extrude 1');
   await input.press('Enter');
   const err = tree.locator('.cad-rename-err');
-  await expect(err).toHaveText('A feature named "Box 1" already exists');
+  await expect(err).toHaveText('A feature named "Extrude 1" already exists');
   // It widened the card from 231 to 252 px before.
   expect(Math.abs((await tree.boundingBox())!.width - before), 'tree card width').toBeLessThan(0.5);
   const e = (await err.boundingBox())!;
@@ -261,10 +260,10 @@ test('cad:p1-review2-rename-error an inline rename error wraps inside the tree c
 test('cad:p1-review2-coplanar a selected face wins where it shares a plane with another body; Normal to frames the part', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const canvas = await canvasRect(page);
-  // The review's scene: a 20 mm cube and a Ø20, 20 tall cylinder at the origin, both tops at z = 20;
-  // a quarter of the cylinder's top lies on the cube's.
-  await addFeature(frame, 'box');
-  await addFeature(frame, 'cylinder');
+  // The review's scene: a 20 mm cube and a Ø20, 20 tall cylinder at the origin (both sketched and
+  // extruded), both tops at z = 20; a quarter of the cylinder's top lies on the cube's.
+  await addSolid(page);
+  await addSolid(page, { circle: true, size: [20, 20] });
   await frame.locator('[data-cad-toolbar] [data-command="view.fit"]').click();
   // Select the cube's top (a click clear of the cylinder): it turns the pick green.
   const top = (await onPage(page, [[15, 15, 20]]))[0]!;
@@ -309,7 +308,7 @@ test('cad:p1-review2-planes rolled to the start the planes keep the part size; l
   const { seen, frame } = await freshPart(page, request);
   const tree = frame.locator('[data-cad-tree]');
   const labels = frame.locator('.cad-vp-label');
-  await addFeature(frame, 'box');
+  await addSolid(page);
   await frame.locator('[data-cad-toolbar] [data-command="view.fit"]').click();
   await expect.poll(() => still(page)).toBe('still');
   const canvas = await canvasRect(page);
@@ -332,7 +331,7 @@ test('cad:p1-review2-planes rolled to the start the planes keep the part size; l
   for (const p of px) expect(near(p, BG, 3), `background at a canvas corner: ${p}`).toBe(true);
   await bar.focus();
   await page.keyboard.press('End');
-  await expect(bar).toHaveAttribute('aria-valuenow', '1');
+  await expect(bar).toHaveAttribute('aria-valuenow', '2');
 
   // Origin planes Always, with the cube: no label is drawn over the cube.
   await frame.locator('[data-vp-opens="views"]').click();
@@ -370,8 +369,8 @@ test('cad:p1-review2-planes rolled to the start the planes keep the part size; l
 test('cad:p1-review2-chip-and-menu a long body name in the volume chip ends in an ellipsis; a disabled item says why beside itself', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tree = frame.locator('[data-cad-tree]');
-  await addFeature(frame, 'box');
-  await addFeature(frame, 'cylinder', { 'origin.0': '40' });
+  await addSolid(page);
+  await addSolid(page, { circle: true, at: [40, 0, 0] });
   const name = `A body with an extremely long name ${'x'.repeat(64)}`.slice(0, 64);
   await tree.locator('[data-bodies-folder] > .tree-row').click();
   const body1 = tree.locator('[data-body-row]').first();

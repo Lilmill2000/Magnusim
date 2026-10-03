@@ -4,20 +4,27 @@
 // memory) is kernel-oom.test.ts; the 113 MB STEP is kernel-bigstep.test.ts (opt-in).
 // Owner: KERNEL-HARDENING.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { createHash } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Kernel } from '../../src/kernel-worker/kernel-api';
-import { call, importStep, loadKernel, rect, REF, rel, tryCall, volume, type R } from './kernel-lib';
+import { call, HAVE_VORTEX, importStep, importVortex, itVortex, loadKernel, rect, REF, rel, tryCall, volume, vortexBytes, type R } from './kernel-lib';
 
 let k: Kernel;
 let vortex: number;
 beforeAll(async () => {
   k = await loadKernel();
-  vortex = importStep(k, 'vortex-cfd-test.step').shapes[0].id;
+  if (HAVE_VORTEX) vortex = importVortex(k).shapes[0].id;
 });
 
 describe('gate 2: Vortex import', () => {
-  it('gives 1 solid and 17 faces with the native volume, area and exact bbox (1e-6)', () => {
-    const imp = importStep(k, 'vortex-cfd-test.step');
+  itVortex('reads the Vortex STEP the references were made from (by path: its bytes and sha256)', () => {
+    const bytes = vortexBytes();
+    expect(bytes.length).toBe(REF.vortex.bytes);
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(REF.vortex.sha256);
+  });
+
+  itVortex('gives 1 solid and 17 faces with the native volume, area and exact bbox (1e-6)', () => {
+    const imp = importVortex(k);
     const ref = REF.vortex.import;
     expect(imp.shapes).toHaveLength(1);
     expect(imp.shapes[0].name).toBe(ref.name);
@@ -40,7 +47,7 @@ describe('gate 2: Vortex import', () => {
 });
 
 describe('gate 3: booleans on the import', () => {
-  it('box minus Vortex = the external fluid volume (native and V_box - V_vortex, 1e-6), valid', () => {
+  itVortex('box minus Vortex = the external fluid volume (native and V_box - V_vortex, 1e-6), valid', () => {
     const fb = REF.fluid_box;
     const box = call(k, 'box', { origin: fb.origin, dx: fb.dx, dy: fb.dy, dz: fb.dz });
     const cut = call(k, 'boolean', { op: 'cut', targets: [box.id], tools: [vortex] });
@@ -52,7 +59,7 @@ describe('gate 3: booleans on the import', () => {
     expect(rel(p.volume, fb.V_box_native - REF.vortex.import.volume)).toBeLessThan(1e-6);
   });
 
-  it('box common Vortex = V_vortex (1e-6), valid, 16 faces after unify', () => {
+  itVortex('box common Vortex = V_vortex (1e-6), valid, 16 faces after unify', () => {
     const fb = REF.fluid_box;
     const box = call(k, 'box', { origin: fb.origin, dx: fb.dx, dy: fb.dy, dz: fb.dz });
     const com = call(k, 'boolean', { op: 'common', targets: [box.id], tools: [vortex] });
@@ -62,7 +69,7 @@ describe('gate 3: booleans on the import', () => {
     expect(rel(p.volume, REF.vortex.import.volume)).toBeLessThan(1e-6);
   });
 
-  it('Vortex fuse the side box = native (1e-6), valid', () => {
+  itVortex('Vortex fuse the side box = native (1e-6), valid', () => {
     const b = REF.fuse_box_side.box;
     const box = call(k, 'box', { origin: b.origin, dx: b.dx, dy: b.dy, dz: b.dz });
     const fuse = call(k, 'boolean', { op: 'fuse', targets: [vortex], tools: [box.id] });
@@ -72,7 +79,7 @@ describe('gate 3: booleans on the import', () => {
     expect(rel(p.volume, REF.fuse_box_side.volume)).toBeLessThan(1e-6);
   });
 
-  it('the fluid body survives a STEP round trip (AP214 out, re-import in the kernel)', () => {
+  itVortex('the fluid body survives a STEP round trip (AP214 out, re-import in the kernel)', () => {
     const fb = REF.fluid_box;
     const box = call(k, 'box', { origin: fb.origin, dx: fb.dx, dy: fb.dy, dz: fb.dz });
     const cut = call(k, 'boolean', { op: 'cut', targets: [box.id], tools: [vortex] });
@@ -167,7 +174,7 @@ describe('gate 7: naming mini-gate', () => {
     expect(() => resolve(ext, 'side:s1', 'start')).toThrow(/Edge not found/);
   });
 
-  it('reports bad inputs as input errors, never a trap', () => {
+  itVortex('reports bad inputs as input errors, never a trap', () => {
     expect(tryCall(k, 'extrude', { profile: rect(0, 0, 0, 10), extent: { kind: 'blind', d: 1 } })).toMatchObject({ ok: false, kind: 'input' });
     expect(tryCall(k, 'fillet', { id: vortex, edges: [999], r: 1 })).toMatchObject({ ok: false, kind: 'input' });
     expect(tryCall(k, 'boolean', { op: 'xor', targets: [vortex], tools: [vortex] })).toMatchObject({ ok: false, kind: 'input' });
