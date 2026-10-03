@@ -112,8 +112,8 @@ def _apply_web_bcs(project: Project, bcs: list[dict], n_faces: int) -> Project:
 def _add_default_walls(project: Project, leftover: list[int]) -> Project:
     """Every face no BC claims → one ``walls`` patch (type wall).
 
-    Done explicitly rather than via ``Project.with_role(fid, "walls")``: that
-    helper merges into the first wall-semantic BC it finds, which would fold
+    Done explicitly rather than by merging into the first wall-semantic BC
+    (the removed ``Project.with_role`` helper did that), which would fold
     the leftovers into a user's explicit (possibly slip) Wall BC. Slip vs
     no-slip for this patch is decided at solve time from the project defaults.
     """

@@ -23,9 +23,16 @@ def test_migrate_to_current(ver):
     proj = Project.from_dict(doc)
     assert proj.version == PROJECT_VERSION
     assert proj.scale_to_metres > 0
-    # v12+: numerics seeded
+    # The stored legacy blocks (solver, boundary, numerics, initial conditions)
+    # of a v6+ file come back as the file holds them (a v5 file's flat blocks
+    # are migrated); pre-v12 files get numerics seeded.
+    saved = proj.primary_simulation().to_dict()
+    stored = (doc.get("simulations") or [{}])[0]
+    for key in ("solver", "boundary", "numerics", "initial_conditions"):
+        if isinstance(stored.get(key), dict) and stored[key]:
+            assert saved[key] == stored[key], key
     if ver < 12:
-        assert proj.numerics_settings() is not None
+        assert saved["numerics"]
     # pressures stored as Pa on BCs after v7 upgrade
     for bc in proj.boundary_conditions:
         settings = bc.settings or {}

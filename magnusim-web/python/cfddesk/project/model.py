@@ -144,18 +144,6 @@ DEFAULT_CENTROID_TOL = 1e-3
 DEFAULT_AREA_TOL_ABS = 1e-2
 DEFAULT_AREA_TOL_REL = 1e-6
 
-_ROLE_TO_BC_TYPE: dict[FaceRole, str] = {
-    "inlet": "velocity_inlet_fixed",
-    "outlet": "pressure_outlet_gauge",
-    "walls": "wall_noslip",
-}
-_ROLE_TO_DISPLAY: dict[FaceRole, str] = {
-    "inlet": "Velocity inlet 1",
-    "outlet": "Pressure outlet 1",
-    "walls": "Wall no-slip 1",
-}
-
-
 @dataclass
 class BoundaryCondition:
     id: str
@@ -251,16 +239,6 @@ def _semantic_to_role(semantic: str) -> FaceRole:
     if semantic == "wall":
         return "walls"
     return "unassigned"
-
-
-def _role_semantic(role: FaceRole) -> str | None:
-    if role == "inlet":
-        return "inlet"
-    if role == "outlet":
-        return "outlet"
-    if role == "walls":
-        return "wall"
-    return None
 
 
 def _faces_from_list(items: list[dict]) -> list[FaceFingerprint]:
@@ -887,53 +865,6 @@ class Project:
         bcs = [bc for bc in self.boundary_conditions if bc.id != bc_id]
         return self._replace_bcs(bcs)
 
-    def with_role(self, face_id: int, role: FaceRole) -> Project:
-        """Assign face to a matching semantic BC (create if needed)."""
-        if role == "unassigned":
-            return self.unassign_faces([face_id])
-        semantic = _role_semantic(role)
-        assert semantic is not None
-        matching = [
-            bc
-            for bc in self.boundary_conditions
-            if get_type(registry_key_for_bc(bc)).semantic == semantic
-        ]
-        if matching:
-            return self.assign_faces(matching[0].id, [face_id])
-        # Create classic-named BC so gate_a2 / migrated meshes keep inlet|outlet|walls.
-        bc_type = _ROLE_TO_BC_TYPE[role]
-        display = _ROLE_TO_DISPLAY[role]
-        existing_patches = {bc.patch_name for bc in self.boundary_conditions}
-        # Prefer stable role patch names when free; else sanitize.
-        preferred = role if role in ("inlet", "outlet", "walls") else None
-        if preferred is not None and preferred not in existing_patches:
-            patch: str = preferred
-        else:
-            patch = sanitize_patch_name(display, existing_patches)
-        level = 1
-        if role == "inlet":
-            level = self.mesh.refinement.inlet
-        elif role == "outlet":
-            level = self.mesh.refinement.outlet
-        elif role == "walls":
-            level = self.mesh.refinement.walls
-        settings = default_settings(bc_type)
-        if role == "inlet":
-            settings["speed_m_s"] = self.boundary.inlet_speed_m_s
-            settings["direction_mode"] = self.boundary.inlet_direction_mode
-            settings["velocity"] = list(self.boundary.inlet_vector)
-        elif role == "outlet":
-            settings["gauge_pressure"] = self.boundary.outlet_p
-        proj, bc = self.add_bc(
-            name=display,
-            bc_type=bc_type,
-            settings=settings,
-            face_ids=[face_id],
-            refinement_level=level,
-            patch_name=patch,
-        )
-        return proj
-
     # ---- mutators ------------------------------------------------------------
 
     def with_units(
@@ -998,39 +929,6 @@ class Project:
         if not any(r.id == run_id for r in sim.runs):
             raise ValueError(f"unknown run id {run_id!r}")
         return self._replace_primary_sim(active_run_id=str(run_id))
-
-    def add_solve_run(self) -> Project:
-        """Append a new named run bound to the active mesh, and make it active.
-
-        Each run gets its own ``results/mesh-<id>/run-<id>`` tree so a later
-        solve cannot overwrite a sibling turbulence model's copy-back.
-        """
-        sim = self.primary_simulation()
-        if sim is None:
-            return self
-        mesh = sim.active_mesh()
-        rid = _new_id()
-        name = next_run_name(sim.runs, self.solver.turbulence)
-        results_path = default_run_results_subdir(mesh.id, rid)
-        snap = dict(self.solver.to_dict())
-        mat = self.assigned_material()
-        if mat is not None:
-            snap["density_kg_m3"] = float(mat["rho"])
-            snap["nu"] = float(mat["nu"])
-            snap["material_id"] = str(mat.get("id", ""))
-            snap["material_name"] = str(mat.get("name", ""))
-        run = RunNode(
-            id=rid,
-            name=name,
-            results_path=results_path,
-            settings_snapshot=snap,
-            mesh_id=mesh.id,
-        )
-        return self._replace_primary_sim(
-            runs=list(sim.runs) + [run],
-            active_run_id=rid,
-        )
-
 
     def reconcile_runs_from_disk(self, project_dir: str | Path) -> Project:
         """Bind orphan ``results/mesh-*/run-*`` trees into the run list.
@@ -1160,100 +1058,14 @@ class Project:
             active = meshes[0].id
         return self._replace_primary_sim(meshes=meshes, active_mesh_id=active)
 
-    def with_boundary(self, boundary: BoundarySettings) -> Project:
-        return self._replace_primary_sim(boundary=boundary)
-
     def with_boundary_conditions(self, bcs: list[BoundaryCondition]) -> Project:
         return self._replace_bcs(bcs)
-
-    def with_solver(self, solver: SolverSettings) -> Project:
-        return self._replace_primary_sim(solver=solver)
-
-    def numerics_settings(self) -> Any:
-        from cfddesk.project.numerics import NumericsSettings
-
-        sim = self.primary_simulation()
-        raw = sim.numerics if sim is not None else {}
-        n = NumericsSettings.from_dict(raw if raw else None)
-        # backend authoritative for AmgX display / write path sync
-        if self.solver.backend == "amgx":
-            n.p_solver = "amgx"
-            n.residual_u = self.solver.residual_u
-        else:
-            if n.p_solver == "amgx":
-                n.p_solver = "GAMG"
-            n.residual_u = self.solver.residual_u
-            n.residual_p = self.solver.residual_p
-        return n
-
-    def simulation_control_settings(self) -> Any:
-        from cfddesk.project.numerics import SimulationControlSettings
-
-        sim = self.primary_simulation()
-        raw = sim.simulation_control if sim is not None else {}
-        return SimulationControlSettings.from_dict(raw if raw else None)
-
-    def with_numerics(self, numerics: Any) -> Project:
-        from cfddesk.project.numerics import NumericsSettings
-
-        n = numerics if isinstance(numerics, NumericsSettings) else NumericsSettings.from_dict(numerics)
-        # Form Apply: p_solver updates authoritative backend.
-        sol = self.solver
-        backend = "amgx" if n.p_solver == "amgx" else "cpu"
-        from dataclasses import replace as dc_replace
-
-        sol = dc_replace(
-            sol,
-            backend=backend,  # type: ignore[arg-type]
-            residual_u=n.residual_u,
-            residual_p=n.residual_p,
-        )
-        return self._replace_primary_sim(numerics=n.to_dict(), solver=sol)
-
-    def with_simulation_control(self, ctrl: Any) -> Project:
-        from cfddesk.project.numerics import SimulationControlSettings
-
-        c = (
-            ctrl
-            if isinstance(ctrl, SimulationControlSettings)
-            else SimulationControlSettings.from_dict(ctrl)
-        )
-        return self._replace_primary_sim(simulation_control=c.to_dict())
-
-    def with_initial_conditions(self, ic: dict[str, Any]) -> Project:
-        return self._replace_primary_sim(initial_conditions=dict(ic))
 
     def with_paths(self, paths: PathsSettings) -> Project:
         return dataclasses.replace(self, paths=paths)
 
     def with_runs(self, runs: list[RunNode]) -> Project:
         return self._replace_primary_sim(runs=list(runs))
-
-    def snapshot_run_material(
-        self, run_id: str, *, material: dict[str, Any] | None = None
-    ) -> Project:
-        """Write density/nu into a Run's settings_snapshot (legend source of truth)."""
-        mat = material if material is not None else self.assigned_material()
-        if mat is None:
-            raise RuntimeError("No assigned material to snapshot onto Run")
-        runs: list[RunNode] = []
-        found = False
-        primary = self.primary_simulation()
-        for run in primary.runs if primary else []:
-            if run.id == run_id:
-                found = True
-                snap = copy.deepcopy(run.settings_snapshot)
-                snap["density_kg_m3"] = float(mat["rho"])
-                snap["nu"] = float(mat["nu"])
-                snap["material_id"] = str(mat.get("id", ""))
-                snap["material_name"] = str(mat.get("name", ""))
-                snap.pop("density_backfill", None)
-                runs.append(dataclasses.replace(run, settings_snapshot=snap))
-            else:
-                runs.append(run)
-        if not found:
-            raise KeyError(f"Unknown run id {run_id!r}")
-        return self.with_runs(runs)
 
     def with_mesh_fingerprint(
         self,
@@ -1605,13 +1417,11 @@ class Project:
     @staticmethod
     def from_solid(
         solid: LoadedSolid,
-        roles: dict[int, FaceRole] | None = None,
         *,
         scale_to_metres: float | None = None,
         units_confirmed: bool = False,
         preserve: Project | None = None,
     ) -> Project:
-        roles = roles or {}
         faces = [
             FaceFingerprint(
                 face_id=rec.face_id,
@@ -1760,11 +1570,6 @@ class Project:
             simulations=[simulation],
             field_units=field_units,
         )._sync_faces_from_bcs()
-
-        # Apply explicit role map (creates classic BCs as needed).
-        for fid, role in roles.items():
-            if role != "unassigned":
-                project = project.with_role(fid, role)
         return project
 
 
@@ -2654,12 +2459,12 @@ def load_project_against_solid(
     project = Project.load(path)
     mismatch = fingerprints_match(project.faces, solid.faces)
     if mismatch is not None:
-        cleared = Project.from_solid(solid, roles=None, preserve=project)
+        cleared = Project.from_solid(solid, preserve=project)
         # Strip face assignments on mismatch but keep BC definitions.
         cleared_bcs = [
             dataclasses.replace(bc, face_ids=[]) for bc in cleared.boundary_conditions
         ]
         cleared = cleared.with_boundary_conditions(cleared_bcs)
         return ProjectLoadResult(project=cleared, mismatch=mismatch)
-    trusted = Project.from_solid(solid, roles=None, preserve=project)
+    trusted = Project.from_solid(solid, preserve=project)
     return ProjectLoadResult(project=trusted, mismatch=None)
