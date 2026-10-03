@@ -204,6 +204,39 @@ def test_ready_when_everything_is_set(tmp_path: Path):
     assert _ready(_study(tmp_path, fluid_assigned=True, bcs=[INLET, OUTLET])) == []
 
 
+VENT = {"name": "Vent", "bc_type": "Velocity outlet", "faces": ["face 3@B"], "value": 1, "unit": "m/s"}
+
+
+def test_ready_with_a_velocity_outlet_beside_the_inlet_and_pressure(tmp_path: Path):
+    root = _study(tmp_path, fluid_assigned=True, bcs=[INLET, VENT, OUTLET])
+    assert _ready(root, patches=("inlet", "vent", "outlet", "walls")) == []
+
+
+def test_a_velocity_outlet_does_not_drive_the_flow(tmp_path: Path):
+    # The case writes it as a free outflow (U inletOutlet, inflow 0), so with one
+    # pressure boundary nothing sets the flow rate: V0.1.0 refused it too.
+    issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[VENT, OUTLET]), patches=("vent", "outlet"))
+    assert issues == [
+        {
+            "message": "Add a velocity inlet, or two pressure boundaries, each with an assigned face",
+            "fix": {"go": "bc-picker"},
+        }
+    ]
+
+
+def test_ready_with_two_different_pressures(tmp_path: Path):
+    p1 = {"name": "Pressure 1", "bc_type": "Pressure outlet", "faces": ["face 1@B"], "value": 50, "unit": "Pa"}
+    p2 = {"name": "Pressure 2", "bc_type": "Pressure outlet", "faces": ["face 2@B"], "value": 0, "unit": "Pa"}
+    assert _ready(_study(tmp_path, fluid_assigned=True, bcs=[p1, p2]), patches=("pressure_1", "pressure_2")) == []
+
+
+def test_pressure_difference_compares_pascals_not_typed_numbers(tmp_path: Path):
+    # The same typed number in kPa and in Pa is a 999 Pa difference: ready.
+    p1 = {"name": "Pressure 1", "bc_type": "Pressure outlet", "faces": ["face 1@B"], "value": 1, "unit": "kPa"}
+    p2 = {"name": "Pressure 2", "bc_type": "Pressure outlet", "faces": ["face 2@B"], "value": 1, "unit": "Pa"}
+    assert _ready(_study(tmp_path, fluid_assigned=True, bcs=[p1, p2]), patches=("pressure_1", "pressure_2")) == []
+
+
 def test_analysis_rpcs(tmp_path: Path):
     from cfddesk.worker import methods
 

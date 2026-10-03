@@ -69,6 +69,27 @@ def _text(case: Path, rel: str) -> str:
     return (case / rel).read_text(encoding="utf-8")
 
 
+def _internal(text: str) -> str:
+    m = re.search(r"internalField\s+uniform\s+([^;]+);", text)
+    assert m, text[:200]
+    return m.group(1).strip()
+
+
+@pytest.mark.parametrize("model", ["LRR", "SSG"])
+def test_reynolds_stress_starts_isotropic_with_wall_functions(tmp_path, model):
+    case = _write(tmp_path, {"turbulence_model": model})
+    k = float(_internal(_text(case, "0/k")))
+    r = _text(case, "0/R")
+    comps = [float(x) for x in _internal(r).strip("()").split()]
+    # R = (2/3) k I, written as a symmetric tensor (xx xy xz yy yz zz).
+    assert len(comps) == 6
+    assert comps[1] == comps[2] == comps[4] == 0
+    for diag in (comps[0], comps[3], comps[5]):
+        assert diag == pytest.approx(2 * k / 3, rel=1e-5)
+    walls = re.search(r"walls\s*\{[^}]*\}", r)
+    assert walls and "kqRWallFunction" in walls.group(0)
+
+
 def test_panel_lists_exactly_the_five_models():
     from incompressible_flow.analyses import build_incompressible_steady
 
