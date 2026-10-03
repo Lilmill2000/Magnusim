@@ -181,3 +181,36 @@ test('@plugins gate:h5-broken-plugin surfaces a thrown UI and the workbench stay
   await expect(page.locator('#home')).toBeVisible();
   await expect(page.locator('.app-toasts .mgk-toast')).toHaveCount(0);
 });
+
+// The laminar example clones the default analysis with its own turbulence default.
+// Its new studies used to start on the copied analysis's k-omega SST.
+test('@plugins gate:laminar-clone-turbulence a laminar study starts laminar', async ({ page, request }) => {
+  test.setTimeout(120_000);
+  let sid = '';
+  try {
+    const created = await request.post('/api/simulation', {
+      data: { project_id: PROJECT, analysis_type: 'laminar_steady' },
+    });
+    const body = await created.json();
+    expect(created.status(), JSON.stringify(body)).toBeLessThan(300);
+    sid = String((body.simulation || body.sim || body).id || '');
+    expect(sid, JSON.stringify(body)).toBeTruthy();
+    const read = await request.get(`/api/simulation?project_id=${PROJECT}&simulation_id=${sid}`);
+    const sim = (await read.json()).simulation || {};
+    expect(sim.analysis_type).toBe('laminar_steady');
+    expect(sim.turbulence_model).toBe('laminar');
+
+    await openProject(page);
+    await page.waitForFunction(() => window.__CFD_PLUGINS_READY__ === true);
+    await page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first().click();
+    const panel = page.locator('#panel-incompressible-defaults .cfd-island [data-study-panel="1"]');
+    await expect(panel).toBeVisible({ timeout: 15_000 });
+    const select = panel.locator('[data-schema-key="turbulence_model"] select');
+    await expect(select).toBeVisible();
+    await expect
+      .poll(() => select.evaluate((el) => (el.selectedOptions[0] ? el.selectedOptions[0].textContent.trim() : '')))
+      .toBe('Laminar');
+  } finally {
+    if (sid) await request.post('/api/simulation/delete', { data: { project_id: PROJECT, simulation_id: sid } });
+  }
+});

@@ -56,11 +56,12 @@ if (W17_DEFAULTS.analysis_title !== w17.analysis_title) {
 if (W17_DEFAULTS.analysis !== 'Incompressible') {
   fail('bank analysis display name must remain Incompressible for create gate');
 }
-if (W17_DEFAULTS.turbulence_model_key !== 'kOmegaSST') {
-  fail(`turbulence_model_key ${W17_DEFAULTS.turbulence_model_key} != kOmegaSST`);
+// The turbulence model is the analysis's settings_schema default (a model key).
+if (W17_DEFAULTS.turbulence_model !== 'kOmegaSST') {
+  fail(`turbulence_model ${W17_DEFAULTS.turbulence_model} != kOmegaSST`);
 }
-if (W17_DEFAULTS.turbulence_model !== 'k-omega SST') {
-  fail(`turbulence label ${W17_DEFAULTS.turbulence_model} != k-omega SST`);
+if ('turbulence_model_key' in W17_DEFAULTS || 'flow_group' in W17_DEFAULTS) {
+  fail('study defaults still carry turbulence_model_key / flow_group');
 }
 if (W17_DEFAULTS.algorithm !== 'SIMPLE') {
   fail(`algorithm ${W17_DEFAULTS.algorithm} != SIMPLE (from dump default_solver)`);
@@ -103,7 +104,6 @@ console.log(
       registry: REGISTRY_JSON_PATH,
       analysis_type: W17_DEFAULTS.analysis_type,
       analysis_title: W17_DEFAULTS.analysis_title,
-      turbulence_model_key: W17_DEFAULTS.turbulence_model_key,
       turbulence_model: W17_DEFAULTS.turbulence_model,
       mesh_engine: W20_DEFAULTS.advanced.mesh_engine,
       algorithm: W20_DEFAULTS.algorithm,

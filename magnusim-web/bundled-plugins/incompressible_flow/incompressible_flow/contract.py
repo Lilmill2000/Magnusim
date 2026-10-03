@@ -80,26 +80,24 @@ def algorithm_label(time_dependency: str) -> str:
     return "PIMPLE" if time_dependency == "transient" else "SIMPLE"
 
 
-def make_study_defaults(*, key: str, label: str, category: str, default_turbulence: str):
+def make_study_defaults(*, key: str, label: str, category: str):
     """study_defaults(time_dependency) for one of the two analyses.
 
-    The same record Node's W17 defaults carried: analysis key, the Create
-    modal's bank name, label, category, turbulence (key and label), time
-    dependency and algorithm.
+    The study's identity: analysis key, the Create modal's bank name, the
+    family title, category, time dependency and algorithm. The turbulence
+    model is left out on purpose: the core fills it from the analysis's
+    settings_schema default, so an analysis that clones this one with its own
+    default (a laminar copy) starts its studies on that default.
     """
 
     def study_defaults(time_dependency: str) -> dict[str, Any]:
         td = "transient" if time_dependency == "transient" else "steady"
-        turb = str(default_turbulence or "kOmegaSST")
         return {
             "analysis_type": key,
             "analysis": FAMILY.study_name,
             # The family title for both siblings (what every study carried before H8).
             "analysis_title": FAMILY.title,
             "category": category,
-            "flow_group": "FLOW",
-            "turbulence_model_key": turb,
-            "turbulence_model": TURBULENCE_LABELS.get(turb, turb or "k-omega SST"),
             "time_dependency": "Transient" if td == "transient" else "Steady-state",
             "algorithm": algorithm_label(td),
         }

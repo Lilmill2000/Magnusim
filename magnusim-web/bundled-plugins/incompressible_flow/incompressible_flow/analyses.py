@@ -8,15 +8,7 @@ from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 
-# The turbulence models it offers (the core's legacy project.settings has the same
-# list for old project files; this copy keeps the plugin free of core imports).
-_TURBULENCE_MODELS: tuple[str, ...] = (
-    "laminar",
-    "kEpsilon",
-    "kOmegaSST",
-    "LRR",
-    "SSG",
-)
+from .physics import DEFAULT_TURBULENCE, TURBULENCE_MODELS
 
 # Product BC keys from case.bc_registry.BC_TYPES (placeholders OK until BC wrap).
 _INCOMPRESSIBLE_BC_TYPES: tuple[str, ...] = (
@@ -46,6 +38,7 @@ _MONITORS: tuple[str, ...] = ("area_average", "flow_rate")
 _MATERIAL_MODELS: tuple[str, ...] = ("newtonian_incompressible",)
 
 
+# The study panel's names for physics.TURBULENCE_MODELS, in the same order.
 _TURBULENCE_LABELS: tuple[str, ...] = (
     "Laminar",
     "k-epsilon",
@@ -62,8 +55,10 @@ def _settings_schema() -> tuple[SchemaField, ...]:
             "turbulence_model",
             "Turbulence model",
             "choice",
-            default="kOmegaSST",
-            choices=_TURBULENCE_MODELS,
+            # A new study's turbulence model (the core copies schema defaults
+            # into its record; contract.make_study_defaults leaves it out).
+            default=DEFAULT_TURBULENCE,
+            choices=TURBULENCE_MODELS,
             choice_labels=_TURBULENCE_LABELS,
             group="flow",
             description=(
@@ -299,43 +294,6 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
     )
 
 
-def _validate_region_roles(project: Any, region_roles: tuple[str, ...]) -> list[str]:
-    """Reject when geometry lacks a body for each required AnalysisType role."""
-    if project is None:
-        return []
-    geom = getattr(project, "primary_geometry", lambda: None)()
-    if geom is None:
-        return []
-    bodies = getattr(geom, "bodies", None) or []
-    present = {getattr(b, "role", "fluid") for b in bodies}
-    errors: list[str] = []
-    for role in region_roles:
-        if role not in present and bodies:
-            # Only complain when bodies exist but required role is missing
-            # (empty bodies = not yet enumerated — defer).
-            errors.append(f"analysis requires a body with role={role!r}")
-    return errors
-
-
-def _validate_minimal(
-    project: Any = None,
-    _simulation: Any = None,
-    *,
-    region_roles: tuple[str, ...] = ("fluid",),
-    mesher: Any = None,
-    **_kwargs: Any,
-) -> list[str]:
-    """Region-role + multi-region mesher checks (soft-pass geometry land7)."""
-    errors = _validate_region_roles(project, region_roles)
-    try:
-        from cfddesk.registry.mesher import validate_multi_region_meshing
-
-        errors.extend(validate_multi_region_meshing(project, mesher))
-    except Exception:
-        pass
-    return errors
-
-
 def _spec(ctx: CaseContext) -> Any:
     """The RunSpec for this case: the one given, else built from the core's RunInputs."""
     if ctx.run_spec is not None:
@@ -435,7 +393,7 @@ def _contract_fields(td: str, *, key: str, label: str) -> dict:
         "residual_series": ic.residual_series(td),
         "x_axis": "seconds" if td == "transient" else "iterations",
         "study_defaults": ic.make_study_defaults(
-            key=key, label=label, category="FLUID DYNAMICS", default_turbulence="kOmegaSST"
+            key=key, label=label, category="FLUID DYNAMICS"
         ),
         "validate_ready": ic.validate_ready,
         "run_model": ic.TRANSIENT_RUN_MODEL if td == "transient" else ic.STEADY_RUN_MODEL,
@@ -454,8 +412,6 @@ def build_incompressible_steady() -> AnalysisType:
         category="FLUID DYNAMICS",
         time_dependency="steady",
         fields=_FIELDS,
-        turbulence_models=_TURBULENCE_MODELS,
-        default_turbulence="kOmegaSST",
         bc_types=_INCOMPRESSIBLE_BC_TYPES,
         material_models=_MATERIAL_MODELS,
         solver_backends=("simpleFoam",),
@@ -465,10 +421,8 @@ def build_incompressible_steady() -> AnalysisType:
         settings_schema=_settings_schema(),
         numerics_schema=_numerics_schema(transient=False),
         control_schema=_control_schema(transient=False),
-        validate=_validate_minimal,
         region_roles=("fluid",),
         write_case=_write_case_steady,
-        parse_log_line=None,
         requires=(Requirement("wsl_tool", "simpleFoam"),),
         **_contract_fields("steady", key="incompressible_steady", label="Incompressible Fluid Flow"),
     )
@@ -481,8 +435,6 @@ def build_incompressible_transient() -> AnalysisType:
         category="FLUID DYNAMICS",
         time_dependency="transient",
         fields=_FIELDS,
-        turbulence_models=_TURBULENCE_MODELS,
-        default_turbulence="kOmegaSST",
         bc_types=_INCOMPRESSIBLE_BC_TYPES,
         material_models=_MATERIAL_MODELS,
         solver_backends=("pimpleFoam",),
@@ -492,10 +444,8 @@ def build_incompressible_transient() -> AnalysisType:
         settings_schema=_settings_schema(),
         numerics_schema=_numerics_schema(transient=True),
         control_schema=_control_schema(transient=True),
-        validate=_validate_minimal,
         region_roles=("fluid",),
         write_case=_write_case_transient,
-        parse_log_line=None,
         requires=(Requirement("wsl_tool", "pimpleFoam"),),
         **_contract_fields("transient", key="incompressible_transient", label="Incompressible Fluid Flow (Transient)"),
     )

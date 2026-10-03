@@ -27,22 +27,59 @@ def _analysis(key: str):
     return get_registry("analysis").get(key)
 
 
-def test_study_defaults_are_the_old_w17_record():
-    """What Node's W17 defaults carried, now asked of the analysis."""
-    assert contract.study_defaults(_analysis("incompressible_steady")) == {
+def test_study_defaults_are_the_study_identity_and_the_schema_turbulence():
+    """The study's identity from the analysis's hook; the turbulence model from
+    its settings_schema default (the analysis no longer sets the API 1.0
+    turbulence fields)."""
+    steady = _analysis("incompressible_steady")
+    assert steady.default_turbulence == "" and steady.turbulence_models == ()
+    assert contract.study_defaults(steady) == {
         "analysis_type": "incompressible_steady",
         "analysis": "Incompressible",
         "analysis_title": "Incompressible Fluid Flow",
         "category": "FLUID DYNAMICS",
-        "flow_group": "FLOW",
-        "turbulence_model_key": "kOmegaSST",
-        "turbulence_model": "k-omega SST",
         "time_dependency": "Steady-state",
         "algorithm": "SIMPLE",
+        "turbulence_model": "kOmegaSST",
     }
     t = contract.study_defaults(_analysis("incompressible_transient"))
     assert (t["analysis_type"], t["time_dependency"], t["algorithm"]) == ("incompressible_transient", "Transient", "PIMPLE")
+    assert t["turbulence_model"] == "kOmegaSST"
     assert contract.sibling(_analysis("incompressible_steady"), "Transient") == "incompressible_transient"
+
+
+def test_study_defaults_record_solves_with_the_same_physics_as_before():
+    """A new study's record gives the physics the old record (label plus key) gave."""
+    from incompressible_flow.physics import physics_from_record
+
+    old = {"turbulence_model": "k-omega SST", "turbulence_model_key": "kOmegaSST"}
+    for key in ("incompressible_steady", "incompressible_transient"):
+        new = contract.study_defaults(_analysis(key))
+        assert physics_from_record(new) == physics_from_record(old)
+        assert physics_from_record(new).turbulence_model == "kOmegaSST"
+    assert physics_from_record({"turbulence_model": "kOmegaSST"}).turbulence_model == "kOmegaSST"
+
+
+def test_turbulence_choices_are_the_physics_list():
+    from incompressible_flow.physics import DEFAULT_TURBULENCE, TURBULENCE_MODELS
+
+    for key in ("incompressible_steady", "incompressible_transient"):
+        field = next(f for f in _analysis(key).settings_schema if f.key == "turbulence_model")
+        assert tuple(field.choices) == TURBULENCE_MODELS
+        assert field.default == DEFAULT_TURBULENCE
+        assert len(field.choice_labels) == len(TURBULENCE_MODELS)
+
+
+def test_api_10_fields_are_left_unset():
+    """No 1.0 turbulence list, seed, validate or log-line parser: the contract hooks carry them."""
+    from cfddesk.registry.analysis import run_analysis_validate
+
+    for key in ("incompressible_steady", "incompressible_transient"):
+        spec = _analysis(key)
+        assert (spec.turbulence_models, spec.default_turbulence, spec.parse_log_line) == ((), "", None)
+        assert run_analysis_validate(spec) == []
+        row = next(r for r in get_registry("analysis").describe() if r["key"] == key)
+        assert "default_turbulence" not in row and "turbulence_models" not in row
 
 
 def test_run_model_defaults_and_normalize():

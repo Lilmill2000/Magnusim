@@ -8,6 +8,7 @@ from cfddesk.registry import (
     AnalysisType,
     RegistryError,
     SchemaField,
+    contract,
     get_registry,
     load_all,
     reset_for_tests,
@@ -68,7 +69,10 @@ def test_get_defaults_validate_via_schemafield():
     for key in (DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY):
         spec = reg.get(key)
         assert isinstance(spec, AnalysisType)
-        assert spec.default_turbulence == "kOmegaSST"
+        # The default analysis carries its turbulence choice in its settings_schema,
+        # not in the API 1.0 default_turbulence seed.
+        assert spec.default_turbulence == ""
+        assert schema_defaults(spec.settings_schema)["turbulence_model"] == "kOmegaSST"
         assert "U" in spec.fields and "p" in spec.fields
         assert callable(spec.write_case)  # land12: Phase 1 web_case wired
         assert callable(spec.validate)
@@ -98,7 +102,7 @@ def test_steady_vs_transient_product_shape():
     assert steady.category == "FLUID DYNAMICS"
     assert len(steady.bc_types) == 7
     assert steady.region_roles == ("fluid",)
-    assert steady.default_turbulence == "kOmegaSST"
+    assert contract.study_defaults(steady)["turbulence_model"] == "kOmegaSST"
     assert "nut" in steady.fields
 
 

@@ -129,16 +129,8 @@
         }
       ],
       "time_dependency": "steady",
-      "default_turbulence": "kOmegaSST",
       "default_solver": "simpleFoam",
       "category": "FLUID DYNAMICS",
-      "turbulence_models": [
-        "laminar",
-        "kEpsilon",
-        "kOmegaSST",
-        "LRR",
-        "SSG"
-      ],
       "contract": "1.4",
       "family": {
         "key": "incompressible",
@@ -316,11 +308,9 @@
         "analysis": "Incompressible",
         "analysis_title": "Incompressible Fluid Flow",
         "category": "FLUID DYNAMICS",
-        "flow_group": "FLOW",
-        "turbulence_model_key": "kOmegaSST",
-        "turbulence_model": "k-omega SST",
         "time_dependency": "Steady-state",
-        "algorithm": "SIMPLE"
+        "algorithm": "SIMPLE",
+        "turbulence_model": "kOmegaSST"
       },
       "run_defaults": {
         "end_time": 200,
@@ -525,16 +515,8 @@
         }
       ],
       "time_dependency": "transient",
-      "default_turbulence": "kOmegaSST",
       "default_solver": "pimpleFoam",
       "category": "FLUID DYNAMICS",
-      "turbulence_models": [
-        "laminar",
-        "kEpsilon",
-        "kOmegaSST",
-        "LRR",
-        "SSG"
-      ],
       "contract": "1.4",
       "family": {
         "key": "incompressible",
@@ -725,11 +707,9 @@
         "analysis": "Incompressible",
         "analysis_title": "Incompressible Fluid Flow",
         "category": "FLUID DYNAMICS",
-        "flow_group": "FLOW",
-        "turbulence_model_key": "kOmegaSST",
-        "turbulence_model": "k-omega SST",
         "time_dependency": "Transient",
-        "algorithm": "PIMPLE"
+        "algorithm": "PIMPLE",
+        "turbulence_model": "kOmegaSST"
       },
       "run_defaults": {
         "end_time": 5.0,

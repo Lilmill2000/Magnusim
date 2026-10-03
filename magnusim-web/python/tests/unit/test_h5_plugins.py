@@ -65,6 +65,24 @@ def test_gate_h5_zero_core_edits_static():
             assert not bad, f"{path} imports {bad}"
 
 
+def test_gate_h5_laminar_clone_studies_start_laminar(monkeypatch):
+    """A plugin that clones the default analysis with its own turbulence default
+    starts its studies on that default, not on the analysis it copied."""
+    from cfddesk.registry import contract
+
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(PLUGINS))
+    load_all(force=True)
+    laminar = get_registry("analysis").get("laminar_steady")
+    defaults = contract.study_defaults(laminar)
+    assert defaults["turbulence_model"] == "laminar"
+    assert defaults["time_dependency"] == "Steady-state"
+    row = next(r for r in get_registry("analysis").describe() if r["key"] == "laminar_steady")
+    assert row["study_defaults"]["turbulence_model"] == "laminar"
+    # The analysis it copied still starts on its own default.
+    steady = get_registry("analysis").get(DEFAULT_STEADY_KEY)
+    assert contract.study_defaults(steady)["turbulence_model"] != "laminar"
+
+
 def test_gate_h5_demos_register(monkeypatch):
     monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(PLUGINS))
     load_all(force=True)

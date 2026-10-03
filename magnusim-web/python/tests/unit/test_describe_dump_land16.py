@@ -81,7 +81,10 @@ def test_describe_emits_numerics_and_control_for_analysis():
     assert transient["numerics_schema"]["properties"] == {}
     assert steady["time_dependency"] == "steady"
     assert transient["time_dependency"] == "transient"
-    assert steady["default_turbulence"] == "kOmegaSST"
+    # Its turbulence choice is the settings_schema default, which seeds a new study.
+    assert "default_turbulence" not in steady and "turbulence_models" not in steady
+    assert steady["schema"]["properties"]["turbulence_model"]["default"] == "kOmegaSST"
+    assert steady["study_defaults"]["turbulence_model"] == "kOmegaSST"
     assert steady["default_solver"] == "simpleFoam"
     assert transient["default_solver"] == "pimpleFoam"
 
