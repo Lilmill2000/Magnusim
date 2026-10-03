@@ -167,7 +167,7 @@ export function studyFluid(list) {
 /**
  * X-CFD-Material-Name for a saved material: its name; percent-encoded when it
  * is not plain printable ASCII (a header cannot carry it as is).
- * @param {{ name?: unknown } | null | undefined} material
+ * @param {{ name?: unknown, material_model?: unknown } | null | undefined} material
  */
 export function materialHeaderName(material) {
   const name = String((material && material.name) || defaultFluidName(material && material.material_model));
