@@ -31,12 +31,8 @@ export const QUEUE_PROJECT_B = 'queue-project-b-e2e';
 export const UNOWNED_MESH_PROJECT = 'unowned-mesh-e2e';
 /** Own elbow project for h7-steady-transient.spec.js: it toggles the study and stops/restarts runs. */
 export const H7_PROJECT = 'h7-steady-transient-e2e';
-/** Own elbow project for run-settings-save.spec.js: it edits a draft run's settings. */
-export const RUN_SETTINGS_PROJECT = 'run-settings-e2e';
 /** Own elbow project for h8-contract.spec.js: a study of the stub analysis plugin. */
 export const H8_PROJECT = 'h8-contract-e2e';
-/** Own elbow project for h10-ui-parity.spec.js: it solves a steady and a transient run to compare the panels. */
-export const H10_PROJECT = 'h10-ui-parity-e2e';
 /**
  * Own elbow project for materials-presets.spec.js: its saved Air (no library code,
  * the numbers of older versions) must open unchanged, and it adds a study.
@@ -226,9 +222,7 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
   seedElbowProject(destRoot, QUEUE_PROJECT_B, 'Queue project B');
   seedElbowProject(destRoot, UNOWNED_MESH_PROJECT, 'Unowned mesh');
   seedElbowProject(destRoot, H7_PROJECT, 'Steady and transient');
-  seedElbowProject(destRoot, RUN_SETTINGS_PROJECT, 'Run settings');
   seedElbowProject(destRoot, H8_PROJECT, 'Analysis contract');
-  seedElbowProject(destRoot, H10_PROJECT, 'UI parity');
   seedElbowProject(destRoot, MATERIALS_PROJECT, 'Fluid presets');
   seedElbowProject(destRoot, MISSING_STUDY_PROJECT, 'Deleted study still listed');
   const missingDir = join(destRoot, MISSING_STUDY_PROJECT);
