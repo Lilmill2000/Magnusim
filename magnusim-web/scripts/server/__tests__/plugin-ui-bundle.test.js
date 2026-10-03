@@ -16,6 +16,7 @@ test('a bundled plugin UI in TSX is served as one module on the host React', asy
   const code = await bundlePluginUi(entry, dirname(entry));
   assert.match(code, /registerStudySettings/);
   assert.match(code, /registerRunSettings/);
+  assert.match(code, /registerBcSettings/);
   assert.match(code, /__MAGNUSIM_HOST_REACT__/);
   // No second React, and nothing imported at run time: one self-contained module.
   assert.doesNotMatch(code, /^import\s/m);

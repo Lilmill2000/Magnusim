@@ -59,6 +59,16 @@ import {
   xAxisIsSeconds,
 } from '../analysis';
 import { mesherFor, mesherRows, refinementMenu, reportBits, stageText } from '../mesher';
+import {
+  bcFamilyRows,
+  colorOf as bcColorOf,
+  completeBcRecord,
+  familyForType as bcFamilyForType,
+  isUnitOf,
+  newBcRecord,
+  typeChangeFields,
+  valueQuantity as bcValueQuantity,
+} from '../bcCatalog';
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
 import { newPluginStudy, shownStudyTitles } from '../chrome/studyName';
@@ -17897,6 +17907,8 @@ const BC_KIND_RGB = {
   outlet: [234, 112, 36],
   pressure: [147, 51, 234],
   wall: [95, 107, 122],
+  // a BC family that names no other colour, or a record no plugin knows
+  other: [219, 39, 119],
   // faces with no BC, shown only while the Defaults panel is open (must read
   // against the CAD grey, so a warm sand rather than another grey)
   default: [214, 190, 140],
@@ -17906,18 +17918,12 @@ const BC_KIND_VTK = {
   outlet: [0.92, 0.44, 0.14],
   pressure: [0.58, 0.2, 0.92],
   wall: [0.37, 0.42, 0.48],
+  other: [0.86, 0.15, 0.47],
 };
 
+/** A BC's colour group (its family's colour): inlet, outlet, pressure, wall or other. */
 function bcKind(bc) {
-  const t = String((bc && bc.bc_type) || '');
-  if (t === 'Velocity outlet') return 'outlet';
-  if (t.startsWith('Pressure')) return 'pressure';
-  if (t === 'Wall') return 'wall';
-  return 'inlet';
-}
-
-function isWallBcType(t) {
-  return String(t || '') === 'Wall';
+  return bcColorOf(bc);
 }
 
 function paintForBcFaces(faces, kind) {
@@ -22466,7 +22472,7 @@ function arrowExtentX() {
 function addFlowArrows(append, groups, bc, modelDiag) {
   const useVec = isVelocityBc(bc) && bc.velocity_type === 'Fixed' && bc.direction === 'Vector';
   const vec = v3norm((bc && bc.vector) || [0, 0, 1]);
-  const inlet = String((bc && bc.bc_type) || '') === 'Velocity inlet';
+  const inlet = !!bc && bcKind(bc) === 'inlet';
   for (const g of groups) {
     const arrowLen = Math.max(modelDiag * 0.07, Math.min(modelDiag * 0.13, g.diag * 0.4));
     const lift = arrowLen * 0.012;
@@ -25169,7 +25175,7 @@ function showBcOverview() {
   let nOut = 0;
   list.forEach((bc) => {
     const kind = bcKind(bc);
-    if (kind === 'pressure' || kind === 'wall') return;
+    if (kind !== 'inlet' && kind !== 'outlet') return;
     const groups = sampleFaceSeeds(collectFaceTriangles(bc.faces));
     if (!groups.length) return;
     if (kind === 'outlet') {
@@ -25470,13 +25476,12 @@ async function applyMaterialFromLibrary() {
 
 
 /**
- * Boundary conditions: Velocity inlet / outlet, Pressure, Wall (slip / no-slip).
- * Click a CAD face in the viewport to assign it. Settings save automatically.
- * Faces no BC claims follow the project defaults (`bcCatalog.defaults`):
- * no-slip walls unless the user switches the default to slip.
+ * Boundary conditions: the BC families the study's analysis offers (registry
+ * kind bc_family, src/bcCatalog.ts). Click a CAD face in the viewport to
+ * assign it. Settings save automatically. Faces no BC claims follow the
+ * project defaults (`bcCatalog.defaults`): no-slip walls unless the user
+ * switches the default to slip.
  */
-const BC_TYPE_LIST = ['Velocity inlet', 'Velocity outlet', 'Pressure', 'Wall'];
-const WALL_TYPE_LIST = ['No-slip', 'Slip'];
 const BC_DEFAULTS_FALLBACK = { wall_type: 'No-slip' };
 
 
@@ -25526,12 +25531,25 @@ function bcDefaults() {
   return { wall_type: normalizeWallType(d.wall_type) };
 }
 
+/** A name the app gave a BC of some type ("Pressure 2"): the number, else null. */
+function bcTypeNameNumber(name) {
+  const text = String(name || '');
+  for (const fam of bcFamilyRows()) {
+    for (const t of [fam.record_type, ...(Array.isArray(fam.aliases) ? fam.aliases : [])]) {
+      const prefix = String(t || '');
+      if (!prefix || text.length <= prefix.length) continue;
+      if (text.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) continue;
+      const m = text.slice(prefix.length).match(/^\s+(\d+)$/);
+      if (m) return m[1];
+    }
+  }
+  return null;
+}
+
 function renameBcForType(bc, nextType) {
-  const m = String((bc && bc.name) || '').match(
-    /^(Velocity inlet|Velocity outlet|Pressure|Wall)\s+(\d+)$/i
-  );
-  if (!m) return bc.name;
-  const n = Number(m[2]);
+  const num = bcTypeNameNumber(bc && bc.name);
+  if (num == null) return bc.name;
+  const n = Number(num);
   const want = nextType + ' ' + n;
   const taken = bcList().some((b) => b.id !== bc.id && b.name === want);
   if (!taken) return want;
@@ -25541,12 +25559,10 @@ function renameBcForType(bc, nextType) {
   return nextType + ' ' + i;
 }
 
+/** A BC drawn with flow arrows: an inlet or outlet colour. */
 function isVelocityBc(bc) {
-  return !!(bc && String(bc.bc_type || '').startsWith('Velocity'));
-}
-
-function isWallBc(bc) {
-  return !!(bc && isWallBcType(bc.bc_type));
+  const kind = bc ? bcKind(bc) : '';
+  return kind === 'inlet' || kind === 'outlet';
 }
 
 function currentProjectId() {
@@ -25607,39 +25623,23 @@ function formatConvertedNumber(n) {
   return Number(n.toPrecision(4));
 }
 
-function quantityForBc(bc) {
-  if (!bc) return 'velocity';
-  if (String(bc.bc_type || '').startsWith('Velocity')) {
-    if (bc.velocity_type === 'Flow rate' && bc.flow_rate_type === 'Mass flow') return 'mass_flow';
-    if (bc.velocity_type === 'Flow rate') return 'volumetric_flow';
-    return 'velocity';
-  }
-  if (isWallBc(bc) || isWallBcType(bc.bc_type)) return null;
-  return 'pressure';
-}
-
-function unitsForVelocity(vt, fr) {
-  if (vt === 'Flow rate' && fr === 'Mass flow') return ['kg/s', 'lb/s'];
-  if (vt === 'Flow rate') return ['m³/s', 'ft³/min'];
-  return ['m/s', 'ft/s', 'ft/min'];
-}
-
-function unitsForPressure() {
-  return ['Pa', 'kPa', 'psi'];
+/** The value with units a BC carries (its family's values rule): { field, unit_field, quantity }, or null. */
+function bcValueOf(bc) {
+  return bc ? bcValueQuantity(bc) : null;
 }
 
 function convertBcRecord(bc, imperial) {
-  if (!bc) return false;
-  const qty = quantityForBc(bc);
-  if (!qty) return false;
-  const from = bc.unit || preferredUnit(qty, !imperial);
+  const vq = bcValueOf(bc);
+  if (!vq) return false;
+  const qty = vq.quantity;
+  const from = bc[vq.unit_field] || preferredUnit(qty, !imperial);
   const to = preferredUnit(qty, imperial);
   if (!from || from === to) return false;
   if (unitIsImperial(from) === !!imperial) return false;
   try {
-    const n = Number(bc.value);
-    if (Number.isFinite(n)) bc.value = formatConvertedNumber(convertQuantity(qty, n, from, to));
-    bc.unit = to;
+    const n = Number(bc[vq.field]);
+    if (Number.isFinite(n)) bc[vq.field] = formatConvertedNumber(convertQuantity(qty, n, from, to));
+    bc[vq.unit_field] = to;
     return true;
   } catch (e) {
     console.warn('[CFD] convert BC', e);
@@ -25760,6 +25760,8 @@ async function persistProjectUnits(imperial) {
  */
 async function applyPreferredUnitsToOpenProject(opts) {
   if (!currentProjectId()) return false;
+  // Which BC field holds a value with units comes from the BC families (the registry).
+  try { await useProjectStore.getState().loadRegistry(); } catch (_) {}
   const fromPrefs = !!(opts && opts.fromPrefs);
   const imperial = fromPrefs ? globalPrefersImperialUnits() : prefersImperialUnits();
   const changedBcs = [];
@@ -25819,6 +25821,7 @@ function publishBcState() {
     defaults_summary: bcDefaultsSummary(),
     pending_faces: treeUi.openPanel === 'bc-picker' ? pendingCadFaceLabels() : [],
     imperial: prefersImperialUnits(),
+    analysis_key: (typeof studyAnalysisType === 'function' && studyAnalysisType()) || '',
   };
   window.__CFD_BCS__ = detail;
   try {
@@ -25832,76 +25835,35 @@ function syncBcEditorFields() {
   syncBcAssignList();
 }
 
-function wallTypeHint(wt) {
-  return wt === 'Slip'
-    ? 'Air slides along the wall with no friction: zero velocity through it, no shear. Use for symmetry-like or idealized frictionless surfaces.'
-    : 'Air sticks to the wall (zero velocity at the surface). This is the usual CFD wall.';
-}
-
-/** The open BC as saved: its record plus the faces being assigned. No DOM is read. */
+/** The open BC as saved: its record plus the faces being assigned, made whole for its family. No DOM is read. */
 function readBcEditorDraft() {
   const bc = activeBc();
   if (!bc) return null;
-  const out = { ...bc, faces: (bcCatalog.draft_faces || []).slice() };
+  const out = completeBcRecord({ ...bc, faces: (bcCatalog.draft_faces || []).slice() }, prefersImperialUnits());
   out.face = out.faces[0] || null;
   const pid = currentProjectId();
   if (pid) out.project_id = pid;
-  if (String(out.bc_type || '').startsWith('Velocity')) {
-    out.velocity_type = out.velocity_type || 'Fixed';
-    out.flow_rate_type = out.flow_rate_type || 'Volumetric flow';
-    const n = Number(out.value);
-    out.value = Number.isFinite(n) ? n : out.velocity_type === 'Fixed' ? 5 : 0.01;
-    out.unit = out.unit || preferredUnit(quantityForBc(out), prefersImperialUnits());
-    out.direction = out.direction || 'Normal to face';
-    out.apply_per_face = true;
-    out.vector = Array.isArray(out.vector) ? out.vector.map((v) => Number(v) || 0) : [0, 0, 1];
-  } else if (isWallBcType(out.bc_type)) {
-    out.wall_type = normalizeWallType(out.wall_type);
-  } else {
-    out.pressure_type = 'Fixed value';
-    const n = Number(out.value);
-    out.value = Number.isFinite(n) ? n : 0;
-    out.unit = out.unit || (prefersImperialUnits() ? 'psi' : 'Pa');
-  }
   if (typeof currentMeshStudyIds === 'function') Object.assign(out, currentMeshStudyIds());
   return out;
 }
 
-const BC_FLOW_UNIT_RE = /m\/s|ft\/s|ft\/min|kg\/s|lb\/s|m³|ft³/i;
-
 /**
  * Apply an edit from the React editor to one BC and save it. A type change
- * renames "Pressure 1" style names and seeds that type's fields; a unit
+ * renames "Pressure 1" style names and seeds the new family's fields; a unit
  * change alone converts the value so the physical quantity is unchanged.
  */
 function updateBcClient(id, patch) {
   const bc = findBcRecord(id) || activeBc();
   if (!bc || !patch) return Promise.resolve(null);
   const next = { ...patch };
+  const imperial = prefersImperialUnits();
   if (next.bc_type && next.bc_type !== bc.bc_type) {
-    const nextType = next.bc_type;
+    const family = bcFamilyForType(next.bc_type);
+    const nextType = family ? String(family.record_type) : String(next.bc_type);
     const oldName = bc.name;
+    if (family) Object.assign(bc, typeChangeFields(bc, family, imperial, bcDefaults()));
     bc.bc_type = nextType;
     bc.name = renameBcForType(bc, nextType);
-    if (String(nextType).startsWith('Velocity')) {
-      if (!bc.velocity_type) bc.velocity_type = 'Fixed';
-      if (bc.value == null || !BC_FLOW_UNIT_RE.test(String(bc.unit || ''))) {
-        bc.value = 5;
-        bc.unit = prefersImperialUnits() ? 'ft/s' : 'm/s';
-      }
-      if (!bc.direction) bc.direction = 'Normal to face';
-      if (!bc.vector) bc.vector = [0, 0, 1];
-      bc.apply_per_face = true;
-    } else if (isWallBcType(nextType)) {
-      if (!bc.wall_type) bc.wall_type = bcDefaults().wall_type === 'Slip' ? 'No-slip' : 'Slip';
-    } else {
-      if (bc.value == null) bc.value = 0;
-      if (!bc.unit || BC_FLOW_UNIT_RE.test(String(bc.unit))) {
-        bc.unit = prefersImperialUnits() ? 'psi' : 'Pa';
-        bc.value = 0;
-      }
-      bc.pressure_type = 'Fixed value';
-    }
     if (oldName !== bc.name) {
       delete treeUi.expanded[oldName];
       treeUi.expanded[bc.name] = true;
@@ -25909,24 +25871,29 @@ function updateBcClient(id, patch) {
     }
     delete next.bc_type;
   }
-  if (next.unit && bc.unit && next.unit !== bc.unit && next.value === undefined) {
-    const qty = quantityForBc(bc);
-    const n = Number(bc.value);
-    if (qty && Number.isFinite(n)) {
+  const before = bcValueOf(bc);
+  if (
+    before &&
+    next[before.unit_field] &&
+    bc[before.unit_field] &&
+    next[before.unit_field] !== bc[before.unit_field] &&
+    next[before.field] === undefined
+  ) {
+    const n = Number(bc[before.field]);
+    if (Number.isFinite(n)) {
       try {
-        bc.value = formatConvertedNumber(convertQuantity(qty, n, bc.unit, next.unit));
+        bc[before.field] = formatConvertedNumber(
+          convertQuantity(before.quantity, n, bc[before.unit_field], next[before.unit_field])
+        );
       } catch (_) {}
     }
   }
-  const flowChanged =
-    (next.velocity_type && next.velocity_type !== bc.velocity_type) ||
-    (next.flow_rate_type && next.flow_rate_type !== bc.flow_rate_type);
   Object.assign(bc, next);
-  if (flowChanged && next.unit === undefined) {
-    const units = unitsForVelocity(bc.velocity_type, bc.flow_rate_type);
-    if (!units.includes(bc.unit)) {
-      bc.unit = units.find((u) => unitIsImperial(u) === prefersImperialUnits()) || units[0];
-    }
+  // What the value means changed (a velocity became a flow rate) with no unit
+  // given: it takes the unit system's unit of its new quantity.
+  const after = bcValueOf(bc);
+  if (after && (!before || before.quantity !== after.quantity) && next[after.unit_field] === undefined) {
+    if (!isUnitOf(after.quantity, bc[after.unit_field])) bc[after.unit_field] = preferredUnit(after.quantity, imperial);
   }
   if (String(bcCatalog.activeId) === String(bc.id)) syncBcEditorFields();
   else publishBcState();
@@ -26012,14 +25979,36 @@ function wireBcTreeHandlers() {
 }
 
 function canonicalBcRecord(record, index) {
-  const type = String(record.bc_type || record.type || '').toLowerCase().replace(/[\s_-]+/g, '');
-  const bc_type = { velocityinlet: 'Velocity inlet', velocityoutlet: 'Velocity outlet', pressure: 'Pressure', pressureinlet: 'Pressure', pressureoutlet: 'Pressure', wall: 'Wall' }[type];
-  const out = bc_type ? { ...record, bc_type } : record;
+  // Older type names ("Pressure outlet") read as their family's (its aliases).
+  const family = bcFamilyForType(record.bc_type || record.type);
+  const out = family && record.bc_type !== family.record_type ? { ...record, bc_type: String(family.record_type) } : record;
   // Older projects saved BCs without ids; the editor and hub address records by id.
   if (out.id) return out;
   const slug = String(out.name || out.bc_type || 'bc').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   return { ...out, id: 'bc-' + (slug || 'bc') + '-' + (Number(index) || 0) };
 }
+
+/*
+ * The BC families come with the registry, which can arrive after a
+ * deep-linked project has hydrated: older type names are read again and the
+ * faces repainted in their family's colours.
+ */
+(function watchBcFamilies() {
+  let seen = useProjectStore.getState().registry;
+  useProjectStore.subscribe((st) => {
+    if (st.registry === seen) return;
+    seen = st.registry;
+    try {
+      for (const list of [bcCatalog.bcs, bcCatalog.bcs_all]) {
+        (list || []).forEach((b) => {
+          const family = b && bcFamilyForType(b.bc_type || b.type);
+          if (family && b.bc_type !== family.record_type) b.bc_type = String(family.record_type);
+        });
+      }
+      syncBcAssignList();
+    } catch (_) {}
+  });
+})();
 
 function applyBcRecords(doc, projectId) {
   const prev = activeBc();
@@ -26242,32 +26231,21 @@ async function createBcClient(bcType, opts) {
   const insidePick = picked.find((f) => cadInsideFaces.has(f));
   if (insidePick) refuseInsideFace(insidePick);
   const pid = currentProjectId();
-  // New BCs start in the open project's units.
+  // New BCs start in the open project's units, from their family's seed; a BC
+  // of the family the study's defaults use starts on the other choice (default
+  // no-slip walls: a new Wall is slip).
   const imperial = prefersImperialUnits();
+  const family = bcFamilyForType(bcType);
+  const seed = family ? newBcRecord(family, imperial, bcDefaults()) : { bc_type: bcType };
   const local = {
+    ...seed,
     id: newClientBcId(),
-    name: nextClientBcName(bcType),
-    bc_type: bcType,
+    name: nextClientBcName(seed.bc_type),
     faces: pendingFaces.slice(),
     face: pendingFaces[0] || null,
   };
   if (pid) local.project_id = pid;
   if (typeof currentMeshStudyIds === 'function') Object.assign(local, currentMeshStudyIds());
-  if (String(bcType).startsWith('Velocity')) {
-    local.velocity_type = 'Fixed';
-    local.value = 5;
-    local.unit = imperial ? 'ft/s' : 'm/s';
-    local.direction = 'Normal to face';
-    local.vector = [0, 0, 1];
-  } else if (isWallBcType(bcType)) {
-    // A face-by-face Wall BC exists to differ from the default, so start it
-    // on the opposite treatment (default no-slip → new wall slip).
-    local.wall_type = bcDefaults().wall_type === 'Slip' ? 'No-slip' : 'Slip';
-  } else {
-    local.pressure_type = 'Fixed value';
-    local.value = 0;
-    local.unit = imperial ? 'psi' : 'Pa';
-  }
   markTreeSelected('bcid:' + local.id);
   applyBcRecords(
     {

@@ -3206,6 +3206,7 @@ select.fp-select {
 .hub-swatch-outlet { background: #ea7024; }
 .hub-swatch-pressure { background: #9333ea; }
 .hub-swatch-wall { background: #5f6b7a; }
+.hub-swatch-other { background: #db2777; }
 .hub-swatch-default { background: #d6be8c; }
 .hub-item-defaults {
   width: 100%;

@@ -1,0 +1,8 @@
+key = "example-extra-bc"
+name = "Extra BC"
+version = "0.1.0"
+api_version = "1.4"
+license = "GPL-3.0-or-later"
+description = "Steady incompressible analysis that also offers a symmetry plane boundary condition"
+authors = "Magnusim"
+requires_plugins = ["incompressible_flow>=1.0"]

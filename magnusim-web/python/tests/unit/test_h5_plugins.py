@@ -22,7 +22,7 @@ PYTHON_ROOT = WEB_ROOT / "python"
 PLUGINS = Path(__file__).resolve().parents[1] / "fixtures" / "plugins"
 TEMPLATE = WEB_ROOT / "templates" / "plugin"
 TEMPLATE_TEST = TEMPLATE / "tests" / "test_register.py"
-DEMOS = ("example-laminar", "example-extra-mesher", "example-hook-monitor", "ui-folder-name")
+DEMOS = ("example-laminar", "example-extra-mesher", "example-extra-bc", "example-hook-monitor", "ui-folder-name")
 FORBIDDEN = ("cfddesk.builtin", "scripts", "src.workbench")
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "js-project"
 
@@ -110,6 +110,26 @@ def test_gate_h5_demos_register(monkeypatch):
     # The UI is served from the plugin's folder, which may differ from its key.
     assert rows["key-not-folder"]["dir"] == "ui-folder-name"
     assert rows["example-hook-monitor"]["dir"] == "example-hook-monitor"
+
+
+def test_extra_bc_fixture_publishes_its_family(monkeypatch):
+    """The e2e fixture for the BC contract: an analysis offering IF's BCs plus a
+    symmetry plane whose family has one choice field and no UI component."""
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(PLUGINS))
+    load_all(force=True)
+    steady = get_registry("analysis").get(DEFAULT_STEADY_KEY)
+    extra = get_registry("analysis").get("extra_bc_steady")
+    assert extra.bc_types == (*steady.bc_types, "symmetry_plane")
+    row = next(r for r in get_registry("bc_family").describe() if r["key"] == "symmetry")
+    assert row["record_type"] == "Symmetry"
+    assert row["color"] == "other"
+    assert row["hint"] == "Mirror plane: no flow through it"
+    assert row["variants"] == ["symmetry_plane"]
+    assert row["ui"] == ""
+    assert row["fields"]["properties"]["mirror"]["enum"] == ["Plane", "Wedge"]
+    spec = get_registry("bc").get("symmetry_plane")
+    assert spec.family == "symmetry"
+    assert "symmetryPlane" in spec.write_U("sym", {}, {})
 
 
 def test_gate_h5_hook_monitor_writes_control_dict(tmp_path: Path, monkeypatch):

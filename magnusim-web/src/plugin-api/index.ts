@@ -12,9 +12,15 @@ import { bindLegacyViewer, type ViewerApi } from '../viewer/index';
 import { deleteFieldWidget, setFieldWidget } from './fieldWidgets';
 import { SciNumberInput } from '../forms/SciNumberInput';
 import { mergeObjectSchemas, pickSchemaValues } from '../panels/scope';
-import { registerSlotFor, unregisterSlot, type RunSettingsProps, type StudySettingsProps } from './slots';
+import {
+  registerSlotFor,
+  unregisterSlot,
+  type BcSettingsProps,
+  type RunSettingsProps,
+  type StudySettingsProps,
+} from './slots';
 
-export type { RunSettingsProps, StudySettingsProps } from './slots';
+export type { BcSettingsProps, RunSettingsProps, StudySettingsProps } from './slots';
 
 /**
  * Places the host actually renders: the Filters panel and the plugin's row in
@@ -232,6 +238,23 @@ function registerRunSettingsFor(owner: string, name: string, Component: Componen
   ledgerFor(owner).slots.add(registerSlotFor(owner, 'run-settings', name, Component as ComponentType<never>));
 }
 
+/**
+ * A BC family's fields in the BC editor (API 1.4; the family's `ui`), and
+ * optionally a line under its assigned faces (`facesNote`).
+ */
+function registerBcSettingsFor(
+  owner: string,
+  name: string,
+  Component: ComponentType<BcSettingsProps>,
+  opts?: { facesNote?: ComponentType<BcSettingsProps> },
+): void {
+  const ledger = ledgerFor(owner);
+  ledger.slots.add(registerSlotFor(owner, 'bc-settings', name, Component as ComponentType<never>));
+  if (opts?.facesNote) {
+    ledger.slots.add(registerSlotFor(owner, 'bc-faces-note', name, opts.facesNote as ComponentType<never>));
+  }
+}
+
 export type PluginToastKind = 'info' | 'success' | 'error';
 
 /** An app toast (the app's toast layer, bottom right). An unknown kind is info, as in ws.ui.toast. */
@@ -253,6 +276,12 @@ export function pluginUiFor(owner: string) {
       registerStudySettingsFor(owner, name, Component),
     registerRunSettings: (name: string, Component: ComponentType<RunSettingsProps>) =>
       registerRunSettingsFor(owner, name, Component),
+    // API 1.4: a BC family's editor fields.
+    registerBcSettings: (
+      name: string,
+      Component: ComponentType<BcSettingsProps>,
+      opts?: { facesNote?: ComponentType<BcSettingsProps> },
+    ) => registerBcSettingsFor(owner, name, Component, opts),
     SciNumberInput,
     schema: { mergeObjectSchemas, pickSchemaValues },
     registerPanel: (opts: RegisterPanelOpts) => registerPanelFor(owner, opts),

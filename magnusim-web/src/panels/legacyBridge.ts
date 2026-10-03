@@ -403,6 +403,8 @@ export interface BcState {
   /** Faces clicked in the viewport while the picker is open; Add assigns them. */
   pending_faces: string[];
   imperial: boolean;
+  /** The study's analysis: the BC families it offers (its registry row's bc_types). */
+  analysis_key?: string;
 }
 
 export function subscribeBcState(onState: (state: BcState) => void): () => void {
@@ -454,6 +456,15 @@ export function unassignBcFace(face: string): void {
 
 export function focusBcFace(face: string): void {
   window.__CFD_BC_FOCUS_FACE__?.(face);
+}
+
+/**
+ * What a BC editor needs to turn a velocity into a flow rate and back: the mean
+ * area of one of these faces (m², null without geometry) and the study's fluid
+ * density (kg/m³, 0 when the runtime is not there).
+ */
+export function bcFlowBasis(faces: string[]): { face_area_m2: number | null; density: number } {
+  return window.__CFD_BC_FLOW_BASIS__?.(faces) || { face_area_m2: null, density: 0 };
 }
 
 export async function clearBcFaces(): Promise<unknown> {

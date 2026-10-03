@@ -1,12 +1,35 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import committed from '../../../scripts/generated/registry.json';
+import type { BcFamilyRow, RegistryDescribe } from '../../api/registry.gen';
+import { pluginUiFor, unregisterPlugin, type BcSettingsProps } from '../../plugin-api';
+import { useProjectStore } from '../../store/project';
 import type { BcState } from '../legacyBridge';
-import { BcPanel, bcCardSub, bcKind, convertFlowValue, perFaceHint, velocityUnits } from './BcPanel';
+import { BcPanel, bcCardSub } from './BcPanel';
 
-const workerRpc = vi.fn(async (_method: string, _params?: unknown) => ({ menu: [] as unknown[] }));
-vi.mock('../../api/workerRpc', () => ({
-  workerRpc: (method: string, params?: unknown) => workerRpc(method, params),
-}));
+// The BC panels are core chrome around the BC families the study's analysis
+// offers (registry kind bc_family): picker, legend and cards come from the
+// rows, a family's fields from the plugin component its `ui` names.
+const IF_FAMILIES = (committed as unknown as RegistryDescribe).bc_family as BcFamilyRow[];
+const IF_BCS = IF_FAMILIES.flatMap((f) => f.variants);
+
+const symmetry: BcFamilyRow = {
+  key: 'symmetry',
+  label: 'Symmetry',
+  plugin: 'example-extra-bc',
+  record_type: 'Symmetry',
+  aliases: [],
+  color: 'other',
+  hint: 'Mirror plane: no flow through it',
+  variants: ['symmetry_plane'],
+  defaults: { metric: { mirror: 'Plane' }, imperial: { mirror: 'Plane' } },
+  values: [],
+  fields: {
+    type: 'object',
+    properties: { mirror: { type: 'string', title: 'Mirror', enum: ['Plane', 'Wedge'], default: 'Plane' } },
+  },
+  ui: '',
+};
 
 function bcState(partial: Partial<BcState> = {}): BcState {
   return {
@@ -22,6 +45,7 @@ function bcState(partial: Partial<BcState> = {}): BcState {
     defaults_summary: 'Unassigned faces: no-slip walls',
     pending_faces: [],
     imperial: false,
+    analysis_key: 'incompressible_steady',
     ...partial,
   };
 }
@@ -34,8 +58,38 @@ function publish(partial: Partial<BcState>) {
   });
 }
 
+const seen: BcSettingsProps[] = [];
+
+/** A stand-in for Incompressible Flow's 'incompressible_flow.bc' component. */
+function FakeIfFields(props: BcSettingsProps) {
+  seen.push(props);
+  return (
+    <div data-fake-if-fields={props.family.key}>
+      <button type="button" onClick={() => void props.save({ value: 1 })}>
+        Save one
+      </button>
+    </div>
+  );
+}
+
+function FakeFacesNote(props: BcSettingsProps) {
+  return <div data-fake-note="1">{`${props.faces.length} faces`}</div>;
+}
+
 beforeEach(() => {
-  workerRpc.mockClear();
+  seen.length = 0;
+  useProjectStore.setState({
+    registry: {
+      analysis: [
+        { key: 'incompressible_steady', label: 'Incompressible', bc_types: IF_BCS },
+        { key: 'extra_bc_steady', label: 'Extra BC', bc_types: [...IF_BCS, 'symmetry_plane'] },
+      ],
+      bc_family: [...IF_FAMILIES, symmetry],
+      default_analysis: { steady: 'incompressible_steady' },
+    } as RegistryDescribe,
+  });
+  window.__CFD_PLUGINS_READY__ = true;
+  pluginUiFor('bcpanel-test').registerBcSettings('incompressible_flow.bc', FakeIfFields, { facesNote: FakeFacesNote });
   window.__CFD_BCS__ = bcState();
   window.__CFD_OPEN_BC__ = vi.fn(() => true);
   window.__CFD_BC_OPEN_PICKER__ = vi.fn();
@@ -46,39 +100,26 @@ beforeEach(() => {
   window.__CFD_BC_UNASSIGN_FACE__ = vi.fn();
   window.__CFD_BC_FOCUS_FACE__ = vi.fn();
   window.__CFD_BC_CLEAR_FACES__ = vi.fn(async () => ({}));
+  window.__CFD_BC_FLOW_BASIS__ = vi.fn(() => ({ face_area_m2: 0.002, density: 1.2 }));
 });
 
 afterEach(() => {
   cleanup();
+  unregisterPlugin('bcpanel-test');
   delete window.__CFD_BCS__;
+  delete window.__CFD_PLUGINS_READY__;
+  delete window.__CFD_BC_FLOW_BASIS__;
 });
 
 describe('helpers', () => {
   it('labels cards the way V0.1.0 did', () => {
-    expect(bcCardSub({ id: 'a', name: 'P', bc_type: 'Pressure', faces: ['face 10@Body1'] })).toBe(
+    expect(bcCardSub({ id: 'a', name: 'P', bc_type: 'Pressure', faces: ['face 10@Body1'] }, { wall_type: 'No-slip' })).toBe(
       'Pressure · face 10@Body1',
     );
-    expect(bcCardSub({ id: 'a', name: 'W', bc_type: 'Wall', faces: [], wall_type: 'slip' })).toBe(
+    expect(bcCardSub({ id: 'a', name: 'W', bc_type: 'Wall', faces: [], wall_type: 'slip' }, { wall_type: 'No-slip' })).toBe(
       'Wall · Slip · no faces',
     );
-  });
-
-  it('groups types into the legend colors', () => {
-    expect(bcKind({ bc_type: 'Velocity inlet' })).toBe('inlet');
-    expect(bcKind({ bc_type: 'Velocity outlet' })).toBe('outlet');
-    expect(bcKind({ bc_type: 'Pressure' })).toBe('pressure');
-    expect(bcKind({ bc_type: 'Wall' })).toBe('wall');
-  });
-
-  it('offers the units that match the velocity mode', () => {
-    expect(velocityUnits('Fixed')).toEqual(['m/s', 'ft/s', 'ft/min']);
-    expect(velocityUnits('Flow rate', 'Volumetric flow')).toEqual(['m³/s', 'ft³/min']);
-    expect(velocityUnits('Flow rate', 'Mass flow')).toEqual(['kg/s', 'lb/s']);
-  });
-
-  it('spells out the per-face total', () => {
-    expect(perFaceHint(3, 5, 'm/s')).toBe('Each face gets this value on its own. 3 faces × 5 m/s = 15 m/s total.');
-    expect(perFaceHint(1, 5, 'm/s')).toMatch(/Two faces at 5 means 10 total/);
+    expect(bcCardSub({ id: 'a', name: 'W', bc_type: 'Wall', faces: [] }, { wall_type: 'No-slip' })).toBe('Wall · No-slip · no faces');
   });
 });
 
@@ -96,6 +137,34 @@ describe('hub', () => {
     expect(window.__CFD_BC_OPEN_PICKER__).toHaveBeenCalled();
     fireEvent.click(screen.getByText('Defaults'));
     expect(window.__CFD_BC_OPEN_DEFAULTS__).toHaveBeenCalled();
+  });
+
+  it("draws the legend from the analysis's families and colours cards by family", () => {
+    publish({
+      bcs: [
+        { id: 'w', name: 'Wall 1', bc_type: 'Wall', faces: [], wall_type: 'Slip' },
+        { id: 'p', name: 'Old', bc_type: 'Pressure outlet', faces: [] },
+        { id: 'm', name: 'Mystery 1', bc_type: 'Mystery', faces: [] },
+      ],
+    });
+    const { container } = render(<BcPanel panelId="panel-bcs-hub" />);
+    const legend = [...container.querySelectorAll('.bc-legend > span')].map((s) => [
+      s.querySelector('i')?.className,
+      s.textContent?.trim(),
+    ]);
+    expect(legend).toEqual([
+      ['hub-swatch hub-swatch-inlet', 'Velocity inlet'],
+      ['hub-swatch hub-swatch-outlet', 'Velocity outlet'],
+      ['hub-swatch hub-swatch-pressure', 'Pressure'],
+      ['hub-swatch hub-swatch-wall', 'Wall'],
+    ]);
+    const swatches = [...container.querySelectorAll('.hub-item-main .hub-swatch')].map((s) => s.className);
+    expect(swatches.slice(0, 3)).toEqual([
+      'hub-swatch hub-swatch-wall',
+      'hub-swatch hub-swatch-pressure',
+      'hub-swatch hub-swatch-other',
+    ]);
+    expect(screen.getByText('Wall · Slip · no faces')).toBeInTheDocument();
   });
 
   it('follows runtime updates', () => {
@@ -120,6 +189,30 @@ describe('picker', () => {
     expect(window.__CFD_BC_CREATE__).toHaveBeenCalledWith('Pressure');
   });
 
+  it("lists the analysis's families with their keys and hints", () => {
+    const { container, rerender } = render(<BcPanel panelId="panel-bc-picker" />);
+    const keys = () => [...container.querySelectorAll('[data-bc-key]')].map((b) => b.getAttribute('data-bc-key'));
+    expect(keys()).toEqual(['velocity_inlet', 'velocity_outlet', 'pressure_outlet', 'wall']);
+    expect(container.querySelector('[data-bc-key="wall"] .ml-type-sub')?.textContent).toBe('Slip or no-slip, face by face');
+    expect(container.querySelector('[data-bc-key="velocity_inlet"] .ml-type-sub')).toBeNull();
+    publish({ analysis_key: 'extra_bc_steady' });
+    rerender(<BcPanel panelId="panel-bc-picker" />);
+    expect(keys()).toEqual(['velocity_inlet', 'velocity_outlet', 'pressure_outlet', 'wall', 'symmetry']);
+    expect(container.querySelector('[data-bc-key="symmetry"] .ml-type-sub')?.textContent).toBe('Mirror plane: no flow through it');
+  });
+
+  it('waits for the registry instead of offering types it does not have', () => {
+    const loadRegistry = useProjectStore.getState().loadRegistry;
+    useProjectStore.setState({ registry: null, loadRegistry: vi.fn(async () => ({})) });
+    try {
+      const { container } = render(<BcPanel panelId="panel-bc-picker" />);
+      expect(container.querySelectorAll('[data-bc-key]')).toHaveLength(0);
+      expect(container.querySelector('[data-bc-types-loading="1"]')).not.toBeNull();
+    } finally {
+      useProjectStore.setState({ loadRegistry });
+    }
+  });
+
   it('shows the faces picked in the viewport', () => {
     render(<BcPanel panelId="panel-bc-picker" />);
     publish({ pending_faces: ['face 15@Body1'] });
@@ -128,19 +221,95 @@ describe('picker', () => {
 });
 
 describe('editor', () => {
-  it('shows the saved value, not a schema default, and saves edits through the bridge', () => {
-    publish({ active_id: 'bc2', draft_faces: ['face 13@Body1'] });
+  it("draws the family's slot component with the BC, its family, units, faces and the flow basis", async () => {
+    publish({ active_id: 'bc2', draft_faces: ['face 13@Body1', 'face 14@Body1'], imperial: true });
     const { container } = render(<BcPanel panelId="panel-bc-editor" />);
     expect(container.querySelector('[data-bc-title]')?.textContent).toBe('Pressure 2');
-    const value = screen.getByLabelText('Fixed value') as HTMLInputElement;
-    expect(value.value).toBe('-15000');
-    fireEvent.change(value, { target: { value: '-14000' } });
-    fireEvent.blur(value);
-    expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('bc2', { value: -14000, unit: 'Pa' });
-    fireEvent.change(screen.getByLabelText('Fixed value unit'), { target: { value: 'kPa' } });
-    expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('bc2', { unit: 'kPa' });
-    fireEvent.change(screen.getByLabelText('Boundary condition type'), { target: { value: 'Wall' } });
+    expect(container.querySelector('[data-fake-if-fields="pressure_outlet"]')).not.toBeNull();
+    const props = seen[seen.length - 1];
+    expect(props.bc.id).toBe('bc2');
+    expect(props.family.key).toBe('pressure_outlet');
+    expect(props.imperial).toBe(true);
+    expect(props.faces).toEqual(['face 13@Body1', 'face 14@Body1']);
+    expect(props.flowBasis(['face 13@Body1'])).toEqual({ face_area_m2: 0.002, density: 1.2 });
+    // Under the assigned faces: the family's faces note.
+    expect(container.querySelector('.mat-assign-block [data-fake-note="1"]')?.textContent).toBe('2 faces');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save one' }));
+    });
+    expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('bc2', { value: 1 });
+  });
+
+  it('changes the type through the runtime, offering the families of the analysis', () => {
+    publish({ active_id: 'bc2', draft_faces: ['face 13@Body1'] });
+    render(<BcPanel panelId="panel-bc-editor" />);
+    const type = screen.getByLabelText('Boundary condition type') as HTMLSelectElement;
+    expect([...type.options].map((o) => o.value)).toEqual(['Velocity inlet', 'Velocity outlet', 'Pressure', 'Wall']);
+    expect(type.value).toBe('Pressure');
+    fireEvent.change(type, { target: { value: 'Wall' } });
     expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('bc2', { bc_type: 'Wall' });
+  });
+
+  it("shows a failed save's message", async () => {
+    window.__CFD_BC_UPDATE__ = vi.fn(async () => {
+      throw new Error('Disk full');
+    });
+    publish({ active_id: 'bc2' });
+    render(<BcPanel panelId="panel-bc-editor" />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save one' }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Disk full');
+  });
+
+  it('draws a form from the family fields when it names no component', () => {
+    publish({
+      analysis_key: 'extra_bc_steady',
+      active_id: 's1',
+      bcs: [{ id: 's1', name: 'Symmetry 1', bc_type: 'Symmetry', faces: [], mirror: 'Wedge' }],
+    });
+    const { container } = render(<BcPanel panelId="panel-bc-editor" />);
+    const select = container.querySelector('[data-schema-key="mirror"] select') as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    expect(select.selectedOptions[0]?.textContent).toBe('Wedge');
+    expect(container.querySelector('[data-fake-if-fields]')).toBeNull();
+    expect(container.querySelector('[data-fake-note]')).toBeNull();
+    vi.useFakeTimers();
+    try {
+      const plane = [...select.options].find((o) => o.textContent === 'Plane');
+      fireEvent.change(select, { target: { value: plane?.value } });
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('s1', { mirror: 'Plane' });
+  });
+
+  it('keeps an unknown type and its fields, and says its plugin is off', () => {
+    publish({
+      active_id: 'm1',
+      bcs: [{ id: 'm1', name: 'Mystery 1', bc_type: 'Mystery', faces: ['face 2@Body1'], strength: 3 }],
+      draft_faces: ['face 2@Body1'],
+    });
+    const { container } = render(<BcPanel panelId="panel-bc-editor" />);
+    expect(container.querySelector('[data-bc-plugin-off="1"]')?.textContent).toBe("This boundary condition's plugin is off");
+    const type = screen.getByLabelText('Boundary condition type') as HTMLSelectElement;
+    expect(type.value).toBe('Mystery');
+    expect(window.__CFD_BC_UPDATE__).not.toHaveBeenCalled();
+    // Faces can still be assigned and removed.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove face 2@Body1' }));
+    expect(window.__CFD_BC_UNASSIGN_FACE__).toHaveBeenCalledWith('face 2@Body1');
+  });
+
+  it("never flashes the generic form while the family's plugin UI is loading", () => {
+    unregisterPlugin('bcpanel-test');
+    window.__CFD_PLUGINS_READY__ = false;
+    publish({ active_id: 'bc2' });
+    const { container } = render(<BcPanel panelId="panel-bc-editor" />);
+    expect(container.querySelector('.schema-form')).toBeNull();
+    expect(container.querySelector('[data-bc-plugin-off]')).toBeNull();
   });
 
   it('lists assigned faces with remove, focus and clear', () => {
@@ -158,58 +327,6 @@ describe('editor', () => {
     expect(window.__CFD_BC_CLEAR_FACES__).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(window.__CFD_BC_DELETE__).toHaveBeenCalledWith('bc2');
-  });
-
-  it('shows velocity fields and the vector row only when chosen', () => {
-    publish({
-      active_id: 'v1',
-      draft_faces: ['face 1@Body1', 'face 2@Body1'],
-      bcs: [
-        {
-          id: 'v1',
-          name: 'Velocity inlet 1',
-          bc_type: 'Velocity inlet',
-          faces: ['face 1@Body1', 'face 2@Body1'],
-          velocity_type: 'Fixed',
-          value: 5,
-          unit: 'm/s',
-          direction: 'Vector',
-          vector: [0, 0, 1],
-        },
-      ],
-    });
-    render(<BcPanel panelId="panel-bc-editor" />);
-    expect((screen.getByLabelText('Velocity') as HTMLInputElement).value).toBe('5');
-    expect(screen.getByLabelText('Z')).toBeInTheDocument();
-    expect(screen.getByText('Each face gets this value on its own. 2 faces × 5 m/s = 10 m/s total.')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Velocity type'), { target: { value: 'Flow rate' } });
-    // 5 m/s is converted to the same flow, not reused as 5 m³/s (no face area here → 0.01 m² fallback).
-    expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('v1', {
-      velocity_type: 'Flow rate',
-      flow_rate_type: 'Volumetric flow',
-      value: 0.05,
-      unit: 'm³/s',
-    });
-  });
-
-  it('converts between velocity, volumetric flow and mass flow per face', () => {
-    const basis = { face_area_m2: 0.002, density: 1.2 };
-    const q = convertFlowValue(10, { velocityType: 'Fixed', unit: 'm/s' }, { velocityType: 'Flow rate', flowRateType: 'Volumetric flow', unit: 'm³/s' }, basis);
-    expect(q).toBeCloseTo(0.02, 10);
-    const m = convertFlowValue(q, { velocityType: 'Flow rate', flowRateType: 'Volumetric flow', unit: 'm³/s' }, { velocityType: 'Flow rate', flowRateType: 'Mass flow', unit: 'kg/s' }, basis);
-    expect(m).toBeCloseTo(0.024, 10);
-    const v = convertFlowValue(m, { velocityType: 'Flow rate', flowRateType: 'Mass flow', unit: 'kg/s' }, { velocityType: 'Fixed', unit: 'ft/s' }, basis);
-    expect(v).toBeCloseTo(10 / 0.3048, 3);
-  });
-
-  it("converts with the app's unit table, every unit it lists", () => {
-    const basis = { face_area_m2: 0.01, density: 1.2 };
-    const vol = (unit: string) => ({ velocityType: 'Flow rate', flowRateType: 'Volumetric flow', unit });
-    // 1 L/s through 0.01 m² is 0.1 m/s; a second table without L/s read it as 1 m³/s (100 m/s).
-    expect(convertFlowValue(1, vol('L/s'), { velocityType: 'Fixed', unit: 'm/s' }, basis)).toBeCloseTo(0.1, 10);
-    // Six significant digits, as the panel rounds.
-    expect(convertFlowValue(1, vol('CFM'), vol('m³/s'), basis)).toBe(0.000471947);
-    expect(convertFlowValue(3.6, { velocityType: 'Fixed', unit: 'km/h' }, { velocityType: 'Fixed', unit: 'm/s' }, basis)).toBeCloseTo(1, 10);
   });
 
   it('says so when no BC is open', () => {

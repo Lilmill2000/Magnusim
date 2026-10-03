@@ -70,7 +70,9 @@ test('gate:h3-bcs-legacy-gone', () => {
   const panel = text('src/panels/bcs/BcPanel.tsx');
   const shell = text('src/app/shell.html');
   for (const name of BANNED) assert.equal(runtime.includes(name), false, name);
-  assert.match(panel, /bc\.menu/);
+  // The types, hints, colours and fields come from the BC families (registry), never core literals.
+  assert.match(panel, /from '\.\.\/\.\.\/bcCatalog'/);
+  assert.equal(/Velocity|PRESSURE_UNITS|wall_type|FALLBACK_TYPES/.test(panel), false);
   assert.equal(panel.includes('PRODUCT'), false);
   assert.match(runtime, /toggleFaceId/);
   assert.match(text('src/viewer/pick.ts'), /export function toggleFaceId/);

@@ -9,10 +9,15 @@
  * built from its schemas.
  */
 import { useSyncExternalStore, type ComponentType } from 'react';
-import type { RegistryRow } from '../api/registry.gen';
-import type { RunState, StudyState, TimeDependency } from '../panels/legacyBridge';
+import type { BcFamilyRow, RegistryRow } from '../api/registry.gen';
+import type { BcRecord, RunState, StudyState, TimeDependency } from '../panels/legacyBridge';
 
-export type SettingsSlot = 'study-settings' | 'run-settings';
+/**
+ * 'bc-settings' (API 1.4): a BC family's fields in the BC editor, between the
+ * Type row and the assigned faces, named by the family's `ui`. 'bc-faces-note'
+ * is an optional line the same family draws under the assigned faces.
+ */
+export type SettingsSlot = 'study-settings' | 'run-settings' | 'bc-settings' | 'bc-faces-note';
 
 /** What a study-settings component gets. The core shows a failed save's message. */
 export interface StudySettingsProps {
@@ -36,6 +41,22 @@ export interface RunSettingsProps {
   saveTransient: (settings: Record<string, unknown>) => Promise<void>;
 }
 
+/** What a bc-settings component gets (API 1.4). The core shows a failed save's message. */
+export interface BcSettingsProps {
+  /** The BC as saved (its faces are the ones being assigned). */
+  bc: BcRecord;
+  /** Its family's registry row (registry kind bc_family). */
+  family: BcFamilyRow;
+  /** The open project shows Imperial units. */
+  imperial: boolean;
+  /** The faces assigned to it now. */
+  faces: string[];
+  /** Merge fields into the BC and save it. A unit change alone converts the value. */
+  save: (patch: Record<string, unknown>) => Promise<void>;
+  /** The mean area of one of these faces (m²; null without geometry) and the study's fluid density (kg/m³; 0 when unknown). */
+  flowBasis: (faces: string[]) => { face_area_m2: number | null; density: number };
+}
+
 type AnyComponent = ComponentType<never>;
 
 const slots = new Map<string, { owner: string; Component: AnyComponent }>();
@@ -53,7 +74,10 @@ function notify(): void {
 
 export function registerSlotFor(owner: string, slot: SettingsSlot, name: string, Component: AnyComponent): string {
   const key = slotKey(slot, String(name || '').trim());
-  if (!name) throw new Error(`${slot} components need a name (the contract's ui.${slot.replace('-', '_')})`);
+  if (!name) {
+    const where = slot.startsWith('bc-') ? "the BC family's ui" : `the contract's ui.${slot.replace('-', '_')}`;
+    throw new Error(`${slot} components need a name (${where})`);
+  }
   slots.set(key, { owner, Component });
   notify();
   return key;
