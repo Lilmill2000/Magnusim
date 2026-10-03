@@ -79,7 +79,13 @@ test('gate:h8-required-plugin-missing the app says the required plugin is missin
     // Its monitors: none, and why (this used to end in an unhandled 500).
     const mon = await request.get(`${base}/api/run/monitors?project_id=${FIXTURE}&simulation_id=sim_1&run_id=${rid}`);
     expect(mon.status()).toBe(200);
-    expect((await mon.json()).unavailable).toBe("Incompressible Flow failed to load, so this run can't start.");
+    const mb = await mon.json();
+    expect(mb.unavailable).toBe("Incompressible Flow failed to load, so this run can't start.");
+    // The core's empty answer reaches the page whole.
+    expect(mb.quantities).toEqual([]);
+    expect(mb.summary).toEqual([]);
+    expect(mb.summary_warn).toBe(false);
+    expect(mb.analysis_key).toBeTruthy();
 
     // The existing study and run say why, after the action and after a reload.
     // (The study panel used to show nothing, and Start stayed off with no reason.)

@@ -1042,14 +1042,16 @@ export async function getRunMonitors(projectId, runId, simulationId) {
     return { ok: false, error: String((e && e.message) || e) };
   }
   if (!res || res.ok === false) return { ok: false, error: (res && res.error) || 'monitor results failed' };
+  // The whole answer goes to the page (analysis_key, quantities, summary,
+  // summary_warn and each row as the analysis wrote it): src/monitors.ts reads it.
   return {
+    ...res,
     ok: true,
     project_id: id,
     run_id: rec.id,
     status: rec.status || null,
     transient: runIsTransient(rec),
     time_dependency: rec.time_dependency || null,
-    rho: res.rho,
     monitors: res.monitors || [],
     custom: res.custom || [],
     balance: res.balance || null,

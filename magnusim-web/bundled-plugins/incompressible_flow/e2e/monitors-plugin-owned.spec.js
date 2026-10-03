@@ -154,6 +154,11 @@ test('run monitors are drawn from the plugin: quantities, defaults, summary, exp
 
   const answer = await json(request, q('/api/run/monitors', { simulation_id: sid, run_id: runA }));
   expect(answer.ok, JSON.stringify(answer)).toBe(true);
+  // The analysis's own answer reaches the page whole.
+  expect(answer.analysis_key).toBe('incompressible_steady');
+  expect(answer.quantities.map((x) => x.key)).toEqual(['p', 'Umag', 'Ux', 'Uy', 'Uz', 'Un', 'Q', 'mdot']);
+  expect(answer.summary.map((x) => x.label)).toEqual(['Flow in', 'out', 'imbalance']);
+  expect(answer.summary_warn).toBe(true);
   expect(answer.monitors.map((m) => [m.key, m.default_quantity])).toEqual([
     ['mon_inlet', 'Umag'],
     ['mon_outlet', 'p'],
