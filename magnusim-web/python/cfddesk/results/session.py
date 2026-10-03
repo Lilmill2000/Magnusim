@@ -14,6 +14,8 @@ import pyvista as pv
 from cfddesk.results.loader import (
     ResultMesh,
     _finalize_field,
+    case_result_fields,
+    has_vector_magnitude,
     prepare_grid_for_slice,
     read_foam_grid,
 )
@@ -42,7 +44,7 @@ def _mtime_ns(path: Path) -> int:
 
 
 def case_fingerprint(case_dir: Path) -> str:
-    """Stable fingerprint of mesh + latest time fields for cache invalidation."""
+    """Stable fingerprint of mesh + latest time fields (every file there) for cache invalidation."""
     case_dir = Path(case_dir)
     parts: list[str] = []
     foams = sorted(case_dir.glob("*.foam"))
@@ -66,10 +68,9 @@ def case_fingerprint(case_dir: Path) -> str:
     if time_dirs:
         _, latest = max(time_dirs, key=lambda x: x[0])
         parts.append(f"time:{latest.name}:{_mtime_ns(latest)}")
-        for name in ("U", "p", "T", "p_rgh"):
-            f = latest / name
+        for f in sorted(latest.iterdir()):
             if f.is_file():
-                parts.append(f"{name}:{_mtime_ns(f)}:{f.stat().st_size}")
+                parts.append(f"{f.name}:{_mtime_ns(f)}:{f.stat().st_size}")
     raw = "\n".join(parts).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:24]
 
@@ -95,14 +96,9 @@ class ResultsSession:
     _point_grid: pv.UnstructuredGrid | None = field(default=None, repr=False)
 
     @property
-    def has_mag_u(self) -> bool:
-        g = self.grid
-        return (
-            self.field_name == "magU"
-            or "U" in g.cell_data
-            or "U" in g.point_data
-            or "magU" in g.cell_data
-        )
+    def has_magnitude(self) -> bool:
+        """True when the grid carries a vector (or a derived magnitude) to colour by."""
+        return has_vector_magnitude(self.grid, self.field_name)
 
     def to_result_mesh(self) -> ResultMesh:
         return ResultMesh(
@@ -111,7 +107,7 @@ class ResultsSession:
             n_cells=self.prepared_n_cells,
             n_points=self.n_points,
             field_name=self.field_name,
-            has_mag_u=self.has_mag_u,
+            has_magnitude=self.has_magnitude,
             reader="foam",
             polyhedra_decomposed=self.polyhedra_decomposed,
         )
@@ -159,8 +155,10 @@ class ResultsSession:
                     if not isinstance(grid, pv.UnstructuredGrid):
                         grid = pv.UnstructuredGrid(grid)
                     cache_s = time.perf_counter() - t0
-                    field = str(meta.get("field_name") or prefer_field or "magU")
-                    field = _finalize_field(grid, prefer_field or field)
+                    field = str(meta.get("field_name") or prefer_field or "")
+                    field = _finalize_field(
+                        grid, prefer_field or field, defaults=case_result_fields(case_dir)
+                    )
                     foam = case_dir / str(meta.get("foam_name", "case.foam"))
                     if not foam.is_file():
                         from cfddesk.results.loader import find_foam_marker
@@ -191,7 +189,9 @@ class ResultsSession:
         grid, tri_dec = prepare_grid_for_slice(raw)
         prep_s = time.perf_counter() - t1
         if tri_dec:
-            field = _finalize_field(grid, prefer_field or field, after_prep=True)
+            field = _finalize_field(
+                grid, prefer_field or field, after_prep=True, defaults=case_result_fields(case_dir)
+            )
 
         session = cls(
             case_dir=case_dir,

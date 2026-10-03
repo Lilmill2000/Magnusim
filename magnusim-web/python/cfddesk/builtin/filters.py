@@ -54,8 +54,9 @@ def build_cut_plane() -> ResultFilterType:
             SchemaField("nx", "Normal X", "float", default=0.0),
             SchemaField("ny", "Normal Y", "float", default=1.0),
             SchemaField("nz", "Normal Z", "float", default=0.0),
-            # Any result field the run's analysis declares (mag<X> for a vector X).
-            SchemaField("field", "Field", "text", default="magU"),
+            # Any result field the run's analysis declares (mag<X> for a vector X);
+            # '' is the case's default (its analysis's first result field the frame wrote).
+            SchemaField("field", "Field", "text", default=""),
             SchemaField("opacity", "Opacity", "float", default=CUTTING_PLANE_DEFAULT_OPACITY, min=0, max=1),
             SchemaField("case", "Case directory", "text", default=""),
             SchemaField("time", "Time", "text", default="50"),
@@ -173,8 +174,9 @@ def build_surface_field() -> ResultFilterType:
         key="surface_field",
         label="Surface field",
         params_schema=(
-            # Any result field the run's analysis declares (mag<X> for a vector X).
-            SchemaField("field", "Field", "text", default="magU"),
+            # Any result field the run's analysis declares (mag<X> for a vector X);
+            # '' is the case's default (its analysis's first result field the frame wrote).
+            SchemaField("field", "Field", "text", default=""),
             SchemaField("case", "Case directory", "text", default=""),
             SchemaField("time", "Time", "text", default="50"),
         ),

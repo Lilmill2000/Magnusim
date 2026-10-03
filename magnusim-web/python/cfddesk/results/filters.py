@@ -96,18 +96,50 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def coloring_to_scalar_field(coloring: str) -> str:
-    """Map persist Coloring label to a prepared scalar name when known."""
-    key = (coloring or "").strip().lower()
-    if key in (
-        "velocity magnitude",
-        "magu",
-        "|u|",
-        "u magnitude",
-        "velocity",
-    ):
-        return "magU"
-    return coloring.strip() or "magU"
+LEGACY_MAGNITUDE_FIELD = "magU"
+"""The shown field records saved before result fields came from the analysis mean
+by the velocity magnitude: a Coloring label in :data:`LEGACY_MAGNITUDE_LABELS`, an
+empty one, and the ``field`` alias these records still write for older readers.
+Frozen: a new tool takes its default field from the case's result fields
+(``tools/result_names.default_shown_field``), never from here."""
+
+LEGACY_MAGNITUDE_LABELS: frozenset[str] = frozenset(
+    {"velocity magnitude", "magu", "|u|", "u magnitude", "velocity"}
+)
+"""Lower-cased Coloring labels (and old spellings) that name :data:`LEGACY_MAGNITUDE_FIELD`."""
+
+# A stored ``field`` with one of these values means the default colouring.
+_LEGACY_DEFAULT_FIELDS = (LEGACY_MAGNITUDE_FIELD, "U", "", None)
+
+
+def _is_legacy_default_field(value: object) -> bool:
+    """True when a stored ``field`` (records saved before Coloring labels) means the default colouring."""
+    return value in _LEGACY_DEFAULT_FIELDS
+
+
+def coloring_to_scalar_field(coloring: str, result_fields: object = None) -> str:
+    """Map a persisted Coloring label to the shown field it names.
+
+    ``result_fields`` (optional) are the run's analysis rows (``key``, ``kind``,
+    ``label``, ``magnitude_label``): a label matching a row's magnitude label
+    names ``mag<key>``, one matching its label names the key (``mag<key>`` for a
+    vector). Labels no row names: :data:`LEGACY_MAGNITUDE_LABELS` (and '') read
+    as :data:`LEGACY_MAGNITUDE_FIELD`; any other label is taken as a field name.
+    """
+    text = (coloring or "").strip()
+    key = text.lower()
+    for row in result_fields if isinstance(result_fields, (list, tuple)) else ():
+        if not isinstance(row, dict) or not str(row.get("key") or "").strip():
+            continue
+        name = str(row["key"]).strip()
+        vector = str(row.get("kind") or "").strip().lower() == "vector"
+        if key and key == str(row.get("magnitude_label") or "").strip().lower():
+            return "mag" + name
+        if key and key == str(row.get("label") or "").strip().lower():
+            return "mag" + name if vector else name
+    if not key or key in LEGACY_MAGNITUDE_LABELS:
+        return LEGACY_MAGNITUDE_FIELD
+    return text
 
 
 @dataclass
@@ -153,8 +185,8 @@ class CutPlaneFilter:
         position = max(0.0, min(1.0, position))
         coloring = data.get("coloring")
         if coloring is None:
-            legacy_field = data.get("field", "magU")
-            if legacy_field in ("magU", "U", "", None):
+            legacy_field = data.get("field")
+            if _is_legacy_default_field(legacy_field):
                 coloring = CUTTING_PLANE_DEFAULT_COLORING
             else:
                 coloring = str(legacy_field)
@@ -205,7 +237,7 @@ class CutPlaneFilter:
 
     @field.setter
     def field(self, value: str) -> None:
-        if value in ("magU", "U", ""):
+        if _is_legacy_default_field(value):
             self.coloring = CUTTING_PLANE_DEFAULT_COLORING
         else:
             self.coloring = str(value)
@@ -291,8 +323,8 @@ class StreamlineFilter:
         rep = normalize_representation(data.get("representation"))
         coloring = data.get("coloring")
         if coloring is None:
-            legacy_field = data.get("field", "magU")
-            if legacy_field in ("magU", "U", "", None):
+            legacy_field = data.get("field")
+            if _is_legacy_default_field(legacy_field):
                 coloring = PARTICLE_TRACE_DEFAULT_COLORING
             else:
                 coloring = str(legacy_field)
@@ -359,7 +391,7 @@ class StreamlineFilter:
 
     @field.setter
     def field(self, value: str) -> None:
-        if value in ("magU", "U", ""):
+        if _is_legacy_default_field(value):
             self.coloring = PARTICLE_TRACE_DEFAULT_COLORING
         else:
             self.coloring = str(value)
@@ -418,8 +450,8 @@ class PlotOverPathFilter:
     def from_dict(data: dict) -> PlotOverPathFilter:
         field_variable = data.get("field_variable")
         if field_variable is None:
-            legacy_field = data.get("field", "magU")
-            if legacy_field in ("magU", "U", "", None):
+            legacy_field = data.get("field")
+            if _is_legacy_default_field(legacy_field):
                 field_variable = PLOT_OVER_PATH_DEFAULT_FIELD_VARIABLE
             else:
                 field_variable = str(legacy_field)
@@ -446,7 +478,7 @@ class PlotOverPathFilter:
 
     @field.setter
     def field(self, value: str) -> None:
-        if value in ("magU", "U", ""):
+        if _is_legacy_default_field(value):
             self.field_variable = PLOT_OVER_PATH_DEFAULT_FIELD_VARIABLE
         else:
             self.field_variable = str(value)
@@ -495,8 +527,8 @@ class IsoSurfaceFilter:
     def from_dict(data: dict) -> IsoSurfaceFilter:
         iso_scalar = data.get("iso_scalar")
         if iso_scalar is None:
-            legacy_field = data.get("field", "magU")
-            if legacy_field in ("magU", "U", "", None):
+            legacy_field = data.get("field")
+            if _is_legacy_default_field(legacy_field):
                 iso_scalar = ISO_SURFACE_DEFAULT_ISO_SCALAR
             else:
                 iso_scalar = str(legacy_field)
@@ -532,7 +564,7 @@ class IsoSurfaceFilter:
 
     @field.setter
     def field(self, value: str) -> None:
-        if value in ("magU", "U", ""):
+        if _is_legacy_default_field(value):
             self.iso_scalar = ISO_SURFACE_DEFAULT_ISO_SCALAR
         else:
             self.iso_scalar = str(value)
@@ -587,8 +619,8 @@ class IsoVolumeFilter:
     def from_dict(data: dict) -> IsoVolumeFilter:
         iso_scalar = data.get("iso_scalar")
         if iso_scalar is None:
-            legacy_field = data.get("field", "magU")
-            if legacy_field in ("magU", "U", "", None):
+            legacy_field = data.get("field")
+            if _is_legacy_default_field(legacy_field):
                 iso_scalar = ISO_VOLUME_DEFAULT_ISO_SCALAR
             else:
                 iso_scalar = str(legacy_field)
@@ -643,7 +675,7 @@ class IsoVolumeFilter:
 
     @field.setter
     def field(self, value: str) -> None:
-        if value in ("magU", "U", ""):
+        if _is_legacy_default_field(value):
             self.iso_scalar = ISO_VOLUME_DEFAULT_ISO_SCALAR
         else:
             self.iso_scalar = str(value)

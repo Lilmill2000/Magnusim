@@ -30,6 +30,7 @@ from result_names import (  # noqa: E402, F401  (foam_kind / FIELD_NAME / shown_
     FIELD_NAME,
     TENSOR_KINDS,
     case_result_fields,
+    default_shown_field,
     ensure_shown_field,
     foam_kind,
     foam_source,
@@ -185,13 +186,28 @@ def list_field_times(case_dir: Path, field: str) -> list[str]:
     return names
 
 
+def _latest_time(case_dir: Path) -> str:
+    """The case's last saved time folder ('' when it has none)."""
+    try:
+        names = [p.name for p in Path(case_dir).iterdir() if p.is_dir() and _FOAM_TIME.match(p.name)]
+    except OSError:
+        return ""
+    return max(names, key=float) if names else ""
+
+
 def series_field_range(case_dir: Path, field: str) -> dict:
     """Overall foam min/max across every saved time. No VTK, no per-frame legend.
 
-    Kinematic fields (the case's ``kinematic_fields``) are scaled by rho, as
-    every surface shows them.
+    ``field`` '' is the case's default shown field at its last saved time (its
+    analysis's first result field the frame wrote). Kinematic fields (the case's
+    ``kinematic_fields``) are scaled by rho, as every surface shows them.
     """
-    field = str(field).strip()
+    field = str(field or "").strip()
+    if not field:
+        latest = _latest_time(case_dir)
+        field = default_shown_field(Path(case_dir), latest) if latest else ""
+        if not field:
+            raise ValueError(f"no result field in {case_dir}")
     if not FIELD_NAME.match(field):
         raise ValueError(f"unsupported field name {field!r}")
     case_dir = Path(case_dir).resolve()
@@ -361,10 +377,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--case", type=Path, required=True, help="OpenFOAM case directory")
     ap.add_argument("--time", default="50")
-    ap.add_argument("--field", default="magU")
+    ap.add_argument("--field", default="", help="shown field ('' = the case's default)")
     ap.add_argument("--out-dir", type=Path, default=None)
     ap.add_argument("--series-range", action="store_true")
     args = ap.parse_args()
+    if not args.field and not args.series_range:
+        args.field = default_shown_field(args.case, str(args.time))
+        if not args.field:
+            raise SystemExit(f"no result field in {args.case / str(args.time)}")
     if args.series_range:
         print(json.dumps(series_field_range(args.case, args.field)))
         return

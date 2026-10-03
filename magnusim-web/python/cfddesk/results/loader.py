@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +14,11 @@ import pyvista as pv
 _VTK_POLYHEDRON = 42
 
 
+# The case sidecar the solve writes next to its case (w27-case.json); its
+# ``result_fields`` list the analysis's result fields in order.
+CASE_SIDECAR = "w27-case.json"
+
+
 @dataclass
 class ResultMesh:
     path: Path
@@ -19,7 +26,8 @@ class ResultMesh:
     n_cells: int
     n_points: int
     field_name: str
-    has_mag_u: bool
+    # True when the mesh carries a vector (or a vector magnitude already derived).
+    has_magnitude: bool
     reader: str = "vtu"  # "foam" | "vtu"
     polyhedra_decomposed: bool = False
 
@@ -29,66 +37,130 @@ def _is_user_scalar_name(name: str) -> bool:
     return bool(name) and not str(name).lower().startswith("vtk")
 
 
-def ensure_mag_u(grid: pv.DataSet) -> str:
-    """Ensure magU exists on cell or point data; return field name.
+def _magnitude_base(name: str) -> str:
+    """``X`` for a shown name ``magX``, else ''."""
+    name = str(name or "")
+    return name[3:] if name.startswith("mag") and len(name) > 3 else ""
 
-    Always recompute from ``U`` when present so prep/cache/cut paths cannot
-    leave a stale or missing derived array.
+
+def _is_vector(arr: object) -> bool:
+    a = np.asarray(arr)
+    return a.ndim == 2 and a.shape[1] == 3
+
+
+def _vector_names(grid: pv.DataSet) -> list[str]:
+    """Names of the 3-component arrays on the grid (cell data first, then points)."""
+    out: list[str] = []
+    for data in (grid.cell_data, grid.point_data):
+        for name in data.keys():
+            name = str(name)
+            if _is_user_scalar_name(name) and name not in out and _is_vector(data[name]):
+                out.append(name)
+    return out
+
+
+def _derive_magnitude(grid: pv.DataSet, name: str) -> bool:
+    """Put ``mag<X>`` (|X|) wherever vector ``X`` is; False when the grid has no such vector.
+
+    Always recomputed, so prep / cache / cut paths cannot keep a stale magnitude."""
+    base = _magnitude_base(name)
+    found = False
+    if base:
+        for data in (grid.cell_data, grid.point_data):
+            if base in data and _is_vector(data[base]):
+                data[name] = np.linalg.norm(np.asarray(data[base])[:, :3], axis=1)
+                found = True
+    return found
+
+
+def has_vector_magnitude(grid: pv.DataSet, field_name: str = "") -> bool:
+    """True when ``field_name`` is a vector magnitude, or the grid holds a vector or a derived magnitude."""
+    if _magnitude_base(field_name) or _vector_names(grid):
+        return True
+    return any(_magnitude_base(str(n)) for n in grid.cell_data.keys())
+
+
+def case_result_fields(case_dir: str | Path) -> list[str]:
+    """The keys of the analysis's result fields the case sidecar lists, in order ([] when none)."""
+    try:
+        doc = json.loads((Path(case_dir) / CASE_SIDECAR).read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = doc.get("result_fields") if isinstance(doc, dict) else None
+    if not isinstance(rows, list):
+        return []
+    keys: list[str] = []
+    for row in rows:
+        key = row.get("key") if isinstance(row, dict) else row
+        key = str(key or "").strip()
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _shown_name(grid: pv.DataSet, key: str) -> str:
+    """The name ``key`` is shown by on this grid: ``mag<key>`` for a vector, the key for a
+    scalar (or an already-derived magnitude); '' when the grid does not carry it."""
+    for data in (grid.cell_data, grid.point_data):
+        if key in data:
+            arr = np.asarray(data[key])
+            if _is_vector(arr):
+                return "mag" + key
+            return key if arr.ndim == 1 else ""
+    return key if _derive_magnitude(grid, key) else ""
+
+
+def ensure_colour_field(grid: pv.DataSet, defaults: Sequence[str] = ()) -> str:
+    """A field to colour by; return its name.
+
+    The first of ``defaults`` (result field keys, in the analysis's order) the grid
+    carries; else the magnitude of the grid's first vector; else a magnitude already
+    derived; else its first scalar. Raises when the grid has none.
     """
-    cd = grid.cell_data
-    pd = grid.point_data
-    if "U" in cd:
-        u = np.asarray(cd["U"])
-        if u.ndim == 2 and u.shape[1] >= 3:
-            cd["magU"] = np.linalg.norm(u[:, :3], axis=1)
-            return "magU"
-    if "U" in pd:
-        u = np.asarray(pd["U"])
-        if u.ndim == 2 and u.shape[1] >= 3:
-            pd["magU"] = np.linalg.norm(u[:, :3], axis=1)
-            return "magU"
-    if "magU" in cd:
-        return "magU"
-    if "magU" in pd:
-        return "magU"
-    for name in list(cd.keys()) + list(pd.keys()):
-        if not _is_user_scalar_name(str(name)):
-            continue
-        arr = cd[name] if name in cd else pd[name]
-        if np.asarray(arr).ndim == 1:
+    for key in defaults:
+        name = _shown_name(grid, key)
+        if name:
+            if _magnitude_base(name):
+                _derive_magnitude(grid, name)
             return name
+    vectors = _vector_names(grid)
+    if vectors:
+        name = "mag" + vectors[0]
+        _derive_magnitude(grid, name)
+        return name
+    scalars: list[str] = []
+    for data in (grid.cell_data, grid.point_data):
+        for name in data.keys():
+            name = str(name)
+            if _is_user_scalar_name(name) and np.asarray(data[name]).ndim == 1:
+                scalars.append(name)
+    for name in scalars:
+        if _magnitude_base(name):
+            return name
+    if scalars:
+        return scalars[0]
     raise RuntimeError("No suitable scalar field for colouring")
 
 
-def _ensure_mag_u(grid: pv.DataSet) -> str:
-    return ensure_mag_u(grid)
-
-
 def _pick_field(
-    grid: pv.DataSet, prefer: str | None, *, require_field: bool = True
+    grid: pv.DataSet,
+    prefer: str | None,
+    *,
+    require_field: bool = True,
+    defaults: Sequence[str] = (),
 ) -> str:
     if prefer:
         if prefer in grid.cell_data or prefer in grid.point_data:
             return prefer
-        if prefer == "magU":
-            try:
-                return _ensure_mag_u(grid)
-            except RuntimeError:
-                if require_field:
-                    raise
-                return ""
-    for name in ("T", "magU", "p", "p_rgh"):
-        if name in grid.cell_data or name in grid.point_data:
-            if name == "magU":
-                return _ensure_mag_u(grid)
-            return name
+        if _derive_magnitude(grid, prefer):
+            return prefer
     try:
-        return _ensure_mag_u(grid)
+        return ensure_colour_field(grid, defaults)
     except RuntimeError:
         if require_field:
             raise
         # Geometry-only (mesh with no 0/ fields) — callers that colour must
-        # still call ensure_mag_u / handle empty field_name explicitly.
+        # still call ensure_colour_field / handle empty field_name explicitly.
         return ""
 
 
@@ -210,29 +282,20 @@ def _finalize_field(
     *,
     after_prep: bool = False,
     require_field: bool = False,
+    defaults: Sequence[str] = (),
 ) -> str:
     """Pick a display field; empty string when the case is geometry-only.
 
+    ``defaults`` are the case's result field keys in order (:func:`case_result_fields`).
     ``require_field=False`` (default) lets Mesh Cut / ResultsSession open a
     freshly meshed case with no ``0/`` solution fields. Results colouring still
-    calls :func:`ensure_mag_u`, which raises if nothing is available.
+    calls :func:`ensure_colour_field`, which raises if nothing is available.
+    ``after_prep`` is kept for callers; a magnitude is recomputed either way.
     """
-    field = _pick_field(grid, prefer_field, require_field=require_field)
-    if prefer_field in (None, "magU") and (
-        field == "magU" or "U" in grid.cell_data or "U" in grid.point_data
-    ):
-        try:
-            if "U" in grid.cell_data or "U" in grid.point_data:
-                field = _ensure_mag_u(grid)
-        except RuntimeError:
-            if after_prep:
-                field = _pick_field(
-                    grid, prefer_field, require_field=require_field
-                )
-            elif require_field:
-                raise
-            else:
-                field = ""
+    field = _pick_field(grid, prefer_field, require_field=require_field, defaults=defaults)
+    if field:
+        # A magnitude read from a cache or carried through prep is recomputed from its vector.
+        _derive_magnitude(grid, field)
     return field
 
 
@@ -266,7 +329,7 @@ def read_foam_grid(
     else:
         grid = _combine_foam_multiblock(mb)
     field = _finalize_field(
-        grid, prefer_field, require_field=require_field
+        grid, prefer_field, require_field=require_field, defaults=case_result_fields(case_dir)
     )
     return grid, foam, field, reader_decomposed
 
@@ -289,14 +352,16 @@ def load_foam_case(
     if prepare:
         grid, tri_decomposed = prepare_grid_for_slice(grid)
         if tri_decomposed:
-            field = _finalize_field(grid, prefer_field or field, after_prep=True)
+            field = _finalize_field(
+                grid, prefer_field or field, after_prep=True, defaults=case_result_fields(case_dir)
+            )
     return ResultMesh(
         path=foam,
         grid=grid,
         n_cells=int(grid.n_cells),
         n_points=int(grid.n_points),
         field_name=field,
-        has_mag_u=field == "magU" or "U" in grid.cell_data or "U" in grid.point_data,
+        has_magnitude=has_vector_magnitude(grid, field),
         reader="foam",
         polyhedra_decomposed=reader_decomposed or tri_decomposed,
     )
@@ -313,14 +378,14 @@ def load_vtu(path: str | Path) -> ResultMesh:
     if not isinstance(grid, pv.UnstructuredGrid):
         grid = pv.UnstructuredGrid(grid)
     grid, decomp = prepare_grid_for_slice(grid)
-    field = _ensure_mag_u(grid)
+    field = ensure_colour_field(grid)
     return ResultMesh(
         path=path,
         grid=grid,
         n_cells=int(grid.n_cells),
         n_points=int(grid.n_points),
         field_name=field,
-        has_mag_u=field == "magU" or "U" in grid.cell_data or "U" in grid.point_data,
+        has_magnitude=has_vector_magnitude(grid, field),
         reader="vtu",
         polyhedra_decomposed=decomp,
     )
@@ -342,24 +407,20 @@ def load_merged_vtus(paths: list[Path], *, prefer_field: str = "T") -> ResultMes
     grids = [pv.read(p) for p in paths]
     mb = pv.MultiBlock(grids)
     grid = mb.combine(merge_points=False)
-    field = prefer_field
-    if field not in grid.cell_data and field not in grid.point_data:
-        try:
-            field = _ensure_mag_u(grid)
-        except RuntimeError:
-            names = list(grid.cell_data.keys()) + list(grid.point_data.keys())
-            if not names:
-                raise
-            field = names[0]
-    elif field == "magU" or "U" in grid.cell_data:
-        field = _ensure_mag_u(grid)
+    try:
+        field = _finalize_field(grid, prefer_field, require_field=True)
+    except RuntimeError:
+        names = list(grid.cell_data.keys()) + list(grid.point_data.keys())
+        if not names:
+            raise
+        field = str(names[0])
     return ResultMesh(
         path=paths[0].parent,
         grid=grid,
         n_cells=int(grid.n_cells),
         n_points=int(grid.n_points),
         field_name=field,
-        has_mag_u="magU" in grid.cell_data or "U" in grid.cell_data,
+        has_magnitude=has_vector_magnitude(grid, field),
         reader="vtu",
     )
 

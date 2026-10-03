@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from cfddesk.results.filters import LEGACY_MAGNITUDE_FIELD
+
 ColorScaleMode = Literal["auto", "manual"]
 ColorMapName = Literal["coolwarm", "viridis", "jet", "gray"]
 
@@ -18,7 +20,8 @@ class ColorScale:
     mode: ColorScaleMode = "auto"
     vmin: float | None = None
     vmax: float | None = None
-    field: str = "magU"
+    # Persisted with the scale; a stored scale that names none reads as the legacy default.
+    field: str = LEGACY_MAGNITUDE_FIELD
     cmap: ColorMapName = DEFAULT_CMAP
 
     def to_dict(self) -> dict:
@@ -46,7 +49,7 @@ class ColorScale:
             mode=mode,
             vmin=float(vmin) if vmin is not None else None,
             vmax=float(vmax) if vmax is not None else None,
-            field=str(data.get("field", "magU")),
+            field=str(data.get("field", LEGACY_MAGNITUDE_FIELD)),
             cmap=cmap,
         )
 

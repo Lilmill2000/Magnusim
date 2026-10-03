@@ -31,16 +31,6 @@
   ],
   "if_vocab": [
     {
-      "file": "python/cfddesk/results/filters.py",
-      "max_hits": 17,
-      "reason": "Results filters read records saved before colouring labels: a stored field of magU (or U, or none) means the default colouring, and the colouring label 'Velocity magnitude' maps to magU. Shrinks when the default result field comes from the run's analysis."
-    },
-    {
-      "file": "python/cfddesk/results/loader.py",
-      "max_hits": 17,
-      "reason": "The results loader derives magU (|U|) from U and prefers it when no field is asked for. Shrinks when the loader picks from the run's declared result fields."
-    },
-    {
       "file": "src/workbench/runtime.js",
       "max_hits": 14,
       "reason": "The page's material tree node and fallbacks ('Air' folder, label and row name) and the BC tree shortcuts for 'Velocity inlet' / 'Pressure outlet'. Shrinks as the tree reads the study's material model and BC families."
@@ -66,11 +56,6 @@
       "reason": "Material mirror rows keep the 1.x record key kinematic_viscosity next to nu for older readers of materials.json."
     },
     {
-      "file": "python/cfddesk/worker/methods.py",
-      "max_hits": 4,
-      "reason": "filter.series_range's default field, and the deprecated values['magU'] / values['p'] mirrors of the inspect RPC for older callers."
-    },
-    {
       "file": "scripts/w19-boundary-conditions.js",
       "max_hits": 4,
       "reason": "W19_VELOCITY_INLET_1 / W19_PRESSURE_OUTLET_2: exported example BC records with no reader left."
@@ -86,24 +71,19 @@
       "reason": "_LEGACY_SEMANTICS: what kind of patch each of the seven stored BC type keys is when the plugin that owns them is not loaded."
     },
     {
-      "file": "python/cfddesk/results/session.py",
-      "max_hits": 3,
-      "reason": "A results session's velocity-magnitude check (has_mag_u) and its default field. Shrinks with the results loader."
-    },
-    {
-      "file": "python/cfddesk/builtin/filters.py",
-      "max_hits": 2,
-      "reason": "The cut plane and iso surface schemas default their field to magU. Shrinks when the default result field comes from the run's analysis."
-    },
-    {
-      "file": "python/cfddesk/results/color_scale.py",
-      "max_hits": 2,
-      "reason": "A colour scale's default field (magU), also the value read when a stored scale names none."
-    },
-    {
       "file": "src/dev/ui-kit/sections/Controls.tsx",
       "max_hits": 2,
       "reason": "The dev UI kit's resolveUnit example (dev page only, not shipped in the workbench)."
+    },
+    {
+      "file": "python/cfddesk/results/filters.py",
+      "max_hits": 1,
+      "reason": "LEGACY_MAGNITUDE_FIELD: the shown field records saved before result fields came from the analysis mean by the velocity magnitude (the 'Velocity Magnitude' Coloring label, an empty or magU/U stored field, and the field alias they still write). New tools take their default from the case's result fields."
+    },
+    {
+      "file": "python/cfddesk/worker/methods.py",
+      "max_hits": 1,
+      "reason": "The deprecated values['magU'] / values['p'] mirrors of the inspect RPC for older callers."
     },
     {
       "file": "python/cfddesk/mesh/gmsh_standard.py",
@@ -119,11 +99,6 @@
       "file": "python/cfddesk/wsl/foam_case.py",
       "max_hits": 1,
       "reason": "Imported cases with no results.frameFields fall back on the U/p pair when 0/U and 0/p exist (could name LEGACY_FRAME_FIELDS instead)."
-    },
-    {
-      "file": "python/tools/export_case_field.py",
-      "max_hits": 1,
-      "reason": "The CLI's --field default (magU)."
     },
     {
       "file": "python/tools/export_inspect_point.py",

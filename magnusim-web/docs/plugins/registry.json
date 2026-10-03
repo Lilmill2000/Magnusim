@@ -2549,7 +2549,7 @@
           },
           "field": {
             "type": "string",
-            "default": "magU",
+            "default": "",
             "title": "Field"
           },
           "opacity": {
@@ -2870,7 +2870,7 @@
         "properties": {
           "field": {
             "type": "string",
-            "default": "magU",
+            "default": "",
             "title": "Field"
           },
           "case": {

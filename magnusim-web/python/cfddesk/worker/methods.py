@@ -1677,16 +1677,17 @@ def _pt_bool(val: Any, default: bool = True) -> bool:
 
 
 @rpc("filter.series_range")
-def filter_series_range(case_dir: str = "", field: str = "magU") -> dict[str, Any]:
+def filter_series_range(case_dir: str = "", field: str = "") -> dict[str, Any]:
+    """Min / max of ``field`` over every saved time ('' = the case's default shown field)."""
     case = str(case_dir or "").strip()
     if not case:
         raise RpcError(-32602, "case_dir required")
     from export_case_field import series_field_range
 
     try:
-        return series_field_range(Path(case), str(field or "magU"))
+        return series_field_range(Path(case), str(field or ""))
     except Exception as exc:
-        raise RpcError(-32004, str(exc), {"case_dir": case, "field": str(field or "magU")}) from exc
+        raise RpcError(-32004, str(exc), {"case_dir": case, "field": str(field or "")}) from exc
 
 
 _FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
