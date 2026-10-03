@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 
 import pytest
-
 from magnusim_sdk import fluids
 
 from airfoil import foamcase
