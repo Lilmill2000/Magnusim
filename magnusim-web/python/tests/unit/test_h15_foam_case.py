@@ -26,6 +26,7 @@ from cfddesk.wsl.foam_case import (
     is_link,
     plugin_case_id_ok,
     render_foam_pre,
+    solve_case_id_ok,
     temp_path_problem,
     wsl_path_problem,
     wsl_root_ok,
@@ -163,6 +164,24 @@ def test_plugin_case_ids():
     assert not plugin_case_id_ok("cfddesk-pf-foam_demo-st-1-0a1b2c3d", "0a1b2c3d")
     assert not plugin_case_id_ok("cfddesk-pf-x-0a1b2c3d/..", "0a1b2c3d")
     assert not plugin_case_id_ok("cfddesk-pf-x-0a1b2c3", "0a1b2c3")
+
+
+def test_solve_case_ids():
+    # A core solve keeps the WSL case name core runs always had: cfddesk-w27-<run id>.
+    assert solve_case_id_ok("cfddesk-w27-r1a2b3c4", "r1a2b3c4", "0a1b2c3d")
+    assert solve_case_id_ok("cfddesk-w27-run-7", "run-7", "0a1b2c3d")
+    assert not solve_case_id_ok("cfddesk-w27-r1a2b3c4", "ffffffff", "0a1b2c3d")  # not its run
+    assert not solve_case_id_ok("cfddesk-w27-r1a2b3c4", "r1a2b3c4", "nothex00")  # the token names the scripts
+    assert not solve_case_id_ok("cfddesk-w27-r1a2b3c4", "r1a2b3c4", None)
+    assert not solve_case_id_ok("cfddesk-w27-R1", "R1", "0a1b2c3d")  # not a slug
+    assert not solve_case_id_ok("cfddesk-w27-a b", "a b", "0a1b2c3d")
+    assert not solve_case_id_ok("cfddesk-w27-x ", "x ", "0a1b2c3d")  # whitespace is not stripped away
+    assert not solve_case_id_ok("cfddesk-w27-..", "..", "0a1b2c3d")
+    assert not solve_case_id_ok("cfddesk-w27-", "", "0a1b2c3d")
+    assert not solve_case_id_ok("cfddesk-pf-foam-demo-st-1-0a1b2c3d", "r1", "0a1b2c3d")
+    assert not solve_case_id_ok(None, "r1", "0a1b2c3d")
+    # A plugin case id is never a core one, nor the other way round.
+    assert not plugin_case_id_ok("cfddesk-w27-r1a2b3c4", "0a1b2c3d")
 
 
 def test_link_rule_by_reparse_tag(monkeypatch: pytest.MonkeyPatch):

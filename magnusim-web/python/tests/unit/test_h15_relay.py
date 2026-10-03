@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from cfddesk.registry.contract import LogParserRef
 from cfddesk.wsl import foam_relay
 from cfddesk.wsl.foam_relay import (
     EventWriter,
@@ -998,3 +999,415 @@ def test_the_starter_retries_without_breakaway(monkeypatch: pytest.MonkeyPatch):
     assert parse_job_line(out.getvalue())["breakaway"] is False
     assert seen[0] & foam_relay.CREATE_NO_WINDOW and seen[0] & foam_relay.CREATE_NEW_PROCESS_GROUP
     assert not seen[1] & foam_relay.CREATE_BREAKAWAY_FROM_JOB and seen[1] & foam_relay.CREATE_NO_WINDOW
+
+
+# ---------------------------------------------------------------------------
+# Kind 'solve': a core study's run
+# ---------------------------------------------------------------------------
+
+RUN_ID = "r1a2b3c4"
+SIM_ID = "sim-1"
+CORE_CASE = f"cfddesk-w27-{RUN_ID}"
+CORE_OWNER = f"core:proj/{SIM_ID}"
+ANALYSIS = "flow_steady"
+FLOW_PLUGIN = "flow-demo"
+PARSER_REF = LogParserRef(module="flow_demo.parser", factory="FlowParser", path="")
+
+
+def make_solve_run(tmp_path: Path, *, cavity: bool = True) -> SimpleNamespace:
+    root = tmp_path / "projects"
+    proj = root / "proj"
+    base = proj / "Geometry_1" / "Study_1" / "simulation_runs" / "Run_1"
+    case = base / "case"
+    case.mkdir(parents=True)
+    (proj / "project.json").write_text("{}", encoding="utf-8")
+    if cavity:
+        write_cavity(case)
+        # A core run's case comes with its mesh (no WSL step makes one).
+        (case / "constant" / "polyMesh").mkdir(parents=True, exist_ok=True)
+    specs = tmp_path / ".cache" / "foam-specs"
+    specs.mkdir(parents=True)
+    return SimpleNamespace(root=root, proj=proj, base=base, parts=["case"], case=case, specs=specs, tmp=tmp_path)
+
+
+def make_solve_spec(run: SimpleNamespace, **over: Any) -> Path:
+    doc: dict[str, Any] = {
+        "kind": "solve",
+        "run_id": RUN_ID,
+        "simulation_id": SIM_ID,
+        "plugin": FLOW_PLUGIN,
+        "wsl_case": CORE_CASE,
+        "pre": [],
+        "solver": {**SOLVER, "analysis": ANALYSIS},
+        "owner": CORE_OWNER,
+    }
+    doc.update(over)
+    return make_spec(run, **doc)
+
+
+class FakeSolveHub:
+    """A registry with analyses, solvers and jobs (a builtin one among them)."""
+
+    def __init__(self, *, analyses: dict[str, tuple[str, Any]] | None = None,
+                 jobs: dict[str, tuple[str, Any]] | None = None, package: Path | None = None) -> None:
+        self.regs = {
+            "analysis": FakeRegistry(analyses if analyses is not None else {
+                ANALYSIS: (FLOW_PLUGIN, SimpleNamespace(key=ANALYSIS, log_parser=PARSER_REF)),
+            }),
+            "job": FakeRegistry(jobs if jobs is not None else {
+                "solve.prepare": ("builtin", SimpleNamespace(tool="prepare_run.py", python="core")),
+            }),
+            "solver": FakeRegistry({"pimple": ("builtin", SimpleNamespace(application="pimpleFoam"))}),
+        }
+        self.package = package
+        self.manifests: dict[str, Any] = {}
+        self.loads = 0
+
+    def registry(self, kind: str) -> FakeRegistry:
+        return self.regs[kind]
+
+    def job_package(self, key: str) -> Path | None:
+        return self.package
+
+    def plugin_dir(self, key: str) -> Path | None:
+        return self.package
+
+
+class FlowParser:
+    """The analysis's own parser: solve.sh's event lines pass, and every 'Time =' line
+    is a progress event it marks."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def feed(self, line: str) -> list[Any]:
+        from cfddesk.jobs.events import Event
+
+        self.lines.append(line)
+        ev = parse_job_line(line)
+        if ev is not None:
+            kind = ev.pop("event")
+            return [Event(kind, ev)]
+        if line.startswith("Time = "):
+            return [Event("progress", {"time": float(line.split("=")[1]), "by": "flow-demo"})]
+        return []
+
+
+def solve_deps(rec: Recorder, hub: Any = None, **over: Any) -> tuple[RelayDeps, list[Any]]:
+    loaded: list[Any] = []
+    parser = FlowParser()
+
+    def load_parser(ref: Any) -> Any:
+        loaded.append(ref)
+        return parser
+
+    base: dict[str, Any] = {"registry_loader": (lambda: hub if hub is not None else FakeSolveHub()), "load_parser": load_parser}
+    base.update(over)
+    return rec.deps(**base), loaded
+
+
+SOLVE_GATE_CASES = {
+    "a wsl case id of another run": ({"wsl_case": "cfddesk-w27-ffffffff"}, "invalid_spec"),
+    "a plugin case id": ({"wsl_case": f"cfddesk-pf-foam-demo-st-1-{TOKEN}"}, "invalid_spec"),
+    "no run id": ({"run_id": None}, "invalid_spec"),
+    "a run id that is not a slug": ({"run_id": "R1 x", "wsl_case": "cfddesk-w27-R1 x"}, "invalid_spec"),
+    "a bad token": ({"token": "nothex00"}, "invalid_spec"),
+    "no simulation id": ({"simulation_id": None}, "invalid_spec"),
+    "a simulation id with a slash": ({"simulation_id": "a/b"}, "invalid_spec"),
+    "no solver": ({"solver": None, "owner": None, "pre": [{"tool": "blockMesh"}]}, "invalid_spec"),
+    "an analysis that is not a key": ({"solver": {**SOLVER, "analysis": ["x"]}}, "invalid_spec"),
+    "an analysis of another plugin": ({"plugin": "other-plugin"}, "invalid_spec"),
+    "an analysis that is not registered": ({"solver": {**SOLVER, "analysis": "gone_steady"}}, "analysis_unavailable"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SOLVE_GATE_CASES))
+def test_a_solve_spec_is_refused_at_the_gate(tmp_path: Path, name: str):
+    over, want = SOLVE_GATE_CASES[name]
+    r = make_solve_run(tmp_path)
+    rec = Recorder()
+    deps, _loaded = solve_deps(rec, popen=no_popen, start_solve=no_popen, mpi_slots=no_popen)
+    code, evs = run(make_solve_spec(r, **over), r.root, deps)
+    assert _refused(code, evs) == want
+    assert rec.calls == []
+    assert not (r.case / ".magnusim-ran").exists()
+
+
+def test_a_solve_case_must_be_a_run_folder_of_the_project(tmp_path: Path):
+    r = make_solve_run(tmp_path)
+    nope = Recorder().deps(popen=no_popen, start_solve=no_popen, registry_loader=FakeSolveHub)
+    # A run folder whose parent is not simulation_runs.
+    elsewhere = r.proj / "Geometry_1" / "Study_1" / "runs" / "Run_1"
+    write_cavity(elsewhere / "case")
+    code, evs = run(make_solve_spec(r, case_base=str(elsewhere), case_dir=str(elsewhere / "case")), r.root, nope)
+    assert _refused(code, evs) == "invalid_path"
+    assert [e["error"] for e in evs if e["event"] == "refused"] == ["The case folder is not a run folder of the project"]
+    # Parts other than ['case'].
+    deeper = r.base / "case" / "inner"
+    write_cavity(deeper)
+    code, evs = run(make_solve_spec(r, case_dir=str(deeper), case_parts=["case", "inner"]), r.root, nope)
+    assert _refused(code, evs) == "invalid_path"
+    # A run folder of another project.
+    other = r.root / "other" / "G" / "S" / "simulation_runs" / "Run_1"
+    write_cavity(other / "case")
+    code, evs = run(make_solve_spec(r, case_base=str(other), case_dir=str(other / "case")), r.root, nope)
+    assert _refused(code, evs) == "invalid_path"
+    # A plugin case folder is not a core run's.
+    p = make_run(tmp_path / "plugin")
+    code, evs = run(make_solve_spec(p), p.root, nope)
+    assert _refused(code, evs) == "invalid_path"
+
+
+def test_a_solve_refuses_when_the_registry_or_parser_does_not_load(tmp_path: Path):
+    r = make_solve_run(tmp_path)
+
+    def broken() -> Any:
+        raise RuntimeError("no")
+
+    rec = Recorder()
+    code, evs = run(make_solve_spec(r), r.root, rec.deps(popen=no_popen, start_solve=no_popen, registry_loader=broken))
+    assert _refused(code, evs) == "analysis_unavailable" and rec.calls == []
+
+    def bad_parser(ref: Any) -> Any:
+        raise ImportError("flow_demo.parser")
+
+    code, evs = run(make_solve_spec(r), r.root, rec.deps(popen=no_popen, start_solve=no_popen,
+                                                          registry_loader=FakeSolveHub, load_parser=bad_parser))
+    assert _refused(code, evs) == "analysis_unavailable" and rec.calls == []
+
+
+def test_a_solve_run_reads_its_output_with_the_analysis_parser(tmp_path: Path):
+    r = make_solve_run(tmp_path)
+    rec = Recorder()
+    hub = FakeSolveHub()
+    deps, loaded = solve_deps(rec, hub)
+    code, evs = run(make_solve_spec(r), r.root, deps)
+    assert code == 0, evs
+    # The parser the registry names (never one from the spec), built once at the gate.
+    assert loaded == [PARSER_REF]
+    progress = [e for e in evs if e["event"] == "progress"]
+    assert progress == [{"event": "progress", "time": 0.005, "by": "flow-demo"}]
+    # The generic parser did not run: no residual events from it.
+    assert not any(e["event"] == "residual" for e in evs)
+    # The scripts are still named after the token; the WSL case is the core run's.
+    (_n, kw), = [c for c in rec.calls if c[0] == "start_solve"]
+    assert kw["run_id"] == f"pf-{TOKEN}" and kw["wsl_case_id"] == CORE_CASE and kw["app"] == "pimpleFoam"
+    assert evs[-1]["outcome"] == {"ok": True, "phase": "solve", "exit_code": 0, "stopped": False}
+    assert status(r.case)["n_steps"] == 1
+
+
+def test_a_solve_without_an_analysis_uses_the_generic_parser(tmp_path: Path):
+    r = make_solve_run(tmp_path)
+    rec = Recorder()
+    deps, loaded = solve_deps(rec, registry_loader=no_popen)
+    code, evs = run(make_solve_spec(r, solver=dict(SOLVER)), r.root, deps)
+    assert code == 0, evs
+    assert loaded == []
+    kinds = [e["event"] for e in evs]
+    assert "progress" in kinds and "residual" in kinds
+
+
+def test_the_log_parser_comes_from_the_analysis_launch_hook_when_it_has_one():
+    from cfddesk.registry.contract import LaunchSpec
+
+    own = LogParserRef("flow_demo.launch_parser", "Parser", "")
+
+    def launch(solver_key: str | None = None) -> LaunchSpec:
+        return LaunchSpec(app="pimpleFoam", keep_frames="all", process_names=("pimpleFoam",),
+                          stop_strategy="stopAt_writeNow", parallel=True, log_parser=own)
+
+    hooked = SimpleNamespace(key=ANALYSIS, launch=launch, log_parser=PARSER_REF)
+    hub = FakeSolveHub(analyses={ANALYSIS: (FLOW_PLUGIN, hooked)})
+    assert foam_relay.resolve_log_parser(hub, ANALYSIS, plugin=FLOW_PLUGIN) == own
+    # Without a launch hook: contract.log_parser_ref.
+    assert foam_relay.resolve_log_parser(FakeSolveHub(), ANALYSIS, plugin=FLOW_PLUGIN) is PARSER_REF
+    bare = FakeSolveHub(analyses={ANALYSIS: (FLOW_PLUGIN, SimpleNamespace(key=ANALYSIS))})
+    assert foam_relay.resolve_log_parser(bare, ANALYSIS, plugin=FLOW_PLUGIN).factory == "GenericParser"
+    # A launch hook that breaks the contract: refused.
+    broken = SimpleNamespace(key=ANALYSIS, launch=lambda solver_key=None: "nope")
+    with pytest.raises(RefusalError) as err:
+        foam_relay.resolve_log_parser(FakeSolveHub(analyses={ANALYSIS: (FLOW_PLUGIN, broken)}), ANALYSIS, plugin=FLOW_PLUGIN)
+    assert err.value.code == "analysis_unavailable"
+    with pytest.raises(RefusalError) as err:
+        foam_relay.resolve_log_parser(FakeSolveHub(), ANALYSIS, plugin="other")
+    assert (err.value.code, err.value.error) == ("invalid_spec", "The run's analysis is not this plugin's")
+
+
+class WatchingRunner:
+    """A hook runner that records its context and whether the relay waited for it."""
+
+    def __init__(self, ctx: Any, names: list[str], seen: list[Any]) -> None:
+        self.ctx = ctx
+        self.waited: float | None = None
+        seen.append(self)
+
+    def start(self) -> None:
+        return None
+
+    def wait_ready(self, seconds: float) -> None:
+        self.waited = seconds
+
+    def feed(self, line: str, evs: list[Any]) -> None:
+        return None
+
+    def stop_notice(self, forced: bool) -> None:
+        return None
+
+    def close(self, join: float = 0.0) -> None:
+        return None
+
+
+def test_a_core_owner_gets_hooks_with_the_core_run_id_and_no_wait(tmp_path: Path):
+    r = make_solve_run(tmp_path)
+    seen: list[WatchingRunner] = []
+    deps, _ = solve_deps(Recorder(), hook_runner=lambda c, names: WatchingRunner(c, names, seen), hook_wait=5.0)
+    code, evs = run(make_solve_spec(r, hooks=["solve.prepare", "solve.parse_line"]), r.root, deps)
+    assert code == 0, evs
+    (runner,) = seen
+    c = runner.ctx
+    assert (c.owner, c.project_id, c.simulation_id, c.plugin, c.run_id, c.app) == ("core", "proj", SIM_ID, None, RUN_ID, "pimpleFoam")
+    assert c.wsl_case == CORE_CASE and c.case_dir == str(r.case) and c.n_procs == 1
+    # A core solve never waits for solve.prepare.
+    assert runner.waited is None
+    # An owner of another study, or a plugin owner: no hooks for the run.
+    for owner in ("core:proj/sim-2", f"core:other/{SIM_ID}", f"plugin:proj/{FLOW_PLUGIN}/st-1"):
+        r2 = make_solve_run(tmp_path / owner.replace(":", "_").replace("/", "_"))
+        seen.clear()
+        deps, _ = solve_deps(Recorder(), hook_runner=lambda c, names: WatchingRunner(c, names, seen))
+        code, _evs = run(make_solve_spec(r2, owner=owner, hooks=["solve.parse_line"]), r2.root, deps)
+        assert code == 0 and seen == []
+
+
+def test_a_plugin_case_still_waits_for_its_hooks(tmp_path: Path):
+    r = make_run(tmp_path)
+    seen: list[WatchingRunner] = []
+    deps = Recorder().deps(hook_runner=lambda c, names: WatchingRunner(c, names, seen), hook_wait=0.25)
+    code, _evs = run(make_spec(r, owner="plugin:proj/foam-demo/st-1", hooks=["solve.prepare"]), r.root, deps)
+    assert code == 0 and len(seen) == 1 and seen[0].waited == 0.25
+    assert seen[0].ctx.run_id == f"pf-{TOKEN}"
+
+
+# -- the prepare step of a core solve ---------------------------------------
+
+
+def _builtin_shape(*, job: str = "solve.prepare", runtime: str = "core", key: str | None = "builtin") -> dict[str, Any]:
+    env = {"MAGNUSIM_JOB_ID": JOB}
+    if key is not None:
+        env["MAGNUSIM_PLUGIN_KEY"] = key
+    return {"job": job, "runtime": runtime, "args": ["--run-id", RUN_ID], "env": env}
+
+
+def test_a_builtin_job_kind_resolves_its_tool_in_python_tools():
+    hub = FakeSolveHub()
+    step = resolve_prepare(_builtin_shape(), plugin=FLOW_PLUGIN, loader=lambda: hub, builtin_ok=True)
+    assert Path(step.tool) == (PY_ROOT / "tools" / "prepare_run.py").resolve()
+    assert step.interpreter == sys.executable and step.runtime == "core" and step.cwd == str(foam_relay.app_root())
+    assert step.args == ["--run-id", RUN_ID]
+    # No MAGNUSIM_PLUGIN_KEY at all is fine too.
+    assert resolve_prepare(_builtin_shape(key=None), plugin=FLOW_PLUGIN, loader=lambda: hub, builtin_ok=True).job == "solve.prepare"
+    # Only a core solve takes a builtin job: a plugin case (foam) does not.
+    assert _refusal(lambda: resolve_prepare(_builtin_shape(), plugin=FLOW_PLUGIN, loader=lambda: hub))[0] == "invalid_spec"
+    # The step must name the job's owner.
+    assert _refusal(lambda: resolve_prepare(_builtin_shape(key=FLOW_PLUGIN), plugin=FLOW_PLUGIN, loader=lambda: hub,
+                                            builtin_ok=True))[0] == "invalid_spec"
+
+
+def test_no_other_builtin_job_kind_is_a_core_solves_prepare_step(tmp_path: Path):
+    # The real builtin JobKinds (mesh, solve, cad_import) and any other builtin key
+    # are refused, even with a tool that is in python/tools.
+    for key, tool in (("mesh", "generate_standard.py"), ("solve", "solve.sh"), ("cad_import", "convert_step_to_stl.py"),
+                      ("other.prepare", "prepare_run.py")):
+        hub = FakeSolveHub(jobs={key: ("builtin", SimpleNamespace(tool=tool, python="core"))})
+        got = _refusal(lambda h=hub, k=key: resolve_prepare(_builtin_shape(job=k), plugin=FLOW_PLUGIN, loader=lambda: h,
+                                                             builtin_ok=True))
+        assert got == ("invalid_spec", "The prepare step is not one this plugin can run"), key
+    # ... and a whole 'solve' run planned with the builtin mesh job stops at the gate.
+    r = make_solve_run(tmp_path)
+    rec = Recorder()
+    hub = FakeSolveHub(jobs={"mesh": ("builtin", SimpleNamespace(tool="generate_standard.py", python="core"))})
+    deps, _ = solve_deps(rec, hub, popen=no_popen, start_solve=no_popen, mpi_slots=no_popen)
+    prepare = {**_builtin_shape(job="mesh"), "env": {"MAGNUSIM_PLUGIN_KEY": "builtin", "MAGNUSIM_JOB_ID": JOB, "MAGNUSIM_CASE_DIR": str(r.case)}}
+    code, evs = run(make_solve_spec(r, prepare=prepare), r.root, deps)
+    assert _refused(code, evs) == "invalid_spec" and rec.calls == []
+    assert not (r.case / ".magnusim-ran").exists()
+
+
+def test_a_builtin_job_kind_runs_only_a_python_tool_of_python_tools(tmp_path: Path):
+    outside = tmp_path / "outside.py"
+    outside.write_text("", encoding="utf-8")
+    for tool in ("../outside.py", str(outside), "solve.sh", "no_such_tool.py", ""):
+        hub = FakeSolveHub(jobs={"solve.prepare": ("builtin", SimpleNamespace(tool=tool, python="core"))})
+        got = _refusal(lambda h=hub: resolve_prepare(_builtin_shape(), plugin=FLOW_PLUGIN, loader=lambda: h, builtin_ok=True))
+        assert got == ("prepare_unavailable", "The prepare step's tool is not in the app's tools folder"), tool
+    # A builtin job is always a core one.
+    plugin_rt = FakeSolveHub(jobs={"solve.prepare": ("builtin", SimpleNamespace(tool="prepare_run.py", python="plugin"))})
+    assert _refusal(lambda: resolve_prepare(_builtin_shape(), plugin=FLOW_PLUGIN, loader=lambda: plugin_rt,
+                                            builtin_ok=True))[0] == "prepare_unavailable"
+    assert _refusal(lambda: resolve_prepare(_builtin_shape(runtime="plugin"), plugin=FLOW_PLUGIN, loader=FakeSolveHub,
+                                            builtin_ok=True))[0] == "prepare_unavailable"
+
+
+def test_a_core_solve_may_still_use_its_plugins_own_job(tmp_path: Path):
+    pkg = make_package(tmp_path)
+    hub = FakeSolveHub(jobs={"flow.write": (FLOW_PLUGIN, SimpleNamespace(tool="jobs/tool.py", python="core"))}, package=pkg)
+    step = resolve_prepare(_builtin_shape(job="flow.write", key=FLOW_PLUGIN), plugin=FLOW_PLUGIN, loader=lambda: hub, builtin_ok=True)
+    assert Path(step.tool) == (pkg / "jobs" / "tool.py").resolve()
+    # ... but not under the builtin key, nor another plugin's job.
+    assert _refusal(lambda: resolve_prepare(_builtin_shape(job="flow.write"), plugin=FLOW_PLUGIN, loader=lambda: hub,
+                                            builtin_ok=True))[0] == "invalid_spec"
+    other = FakeSolveHub(jobs={"flow.write": ("other", SimpleNamespace(tool="jobs/tool.py", python="core"))}, package=pkg)
+    assert _refusal(lambda: resolve_prepare(_builtin_shape(job="flow.write", key="other"), plugin=FLOW_PLUGIN,
+                                            loader=lambda: other, builtin_ok=True))[0] == "invalid_spec"
+
+
+def test_the_builtin_plugin_key_is_a_core_solves_only():
+    raw = {"job": "solve.prepare", "runtime": "core", "args": [], "env": {"MAGNUSIM_PLUGIN_KEY": "builtin"}}
+    assert check_prepare_shape(raw, plugin=FLOW_PLUGIN, job_id=JOB, case_dir="C:/c", builtin_ok=True)["job"] == "solve.prepare"
+    with pytest.raises(RefusalError):
+        check_prepare_shape(raw, plugin=FLOW_PLUGIN, job_id=JOB, case_dir="C:/c")
+    with pytest.raises(RefusalError):
+        bad = {**raw, "env": {"MAGNUSIM_PLUGIN_KEY": "other"}}
+        check_prepare_shape(bad, plugin=FLOW_PLUGIN, job_id=JOB, case_dir="C:/c", builtin_ok=True)
+
+
+BUILTIN_TOOL = """import json, os, sys
+from pathlib import Path
+print('MAGNUSIM_EVENT ' + json.dumps({'event': 'stage', 'stage': 'inputs'}), flush=True)
+case = Path(os.environ['MAGNUSIM_CASE_DIR'])
+seen = {k: os.environ.get(k) for k in ('MAGNUSIM_JOB_ID', 'MAGNUSIM_PLUGIN_KEY', 'MAGNUSIM_CASE_DIR')}
+seen['argv'] = sys.argv[1:]
+seen['tool'] = __file__
+seen['ran_marker'] = (case / '.magnusim-ran').is_file()
+(case / 'tool-saw.json').write_text(json.dumps(seen))
+print('MAGNUSIM_EVENT ' + json.dumps({'event': 'stage', 'stage': 'written'}), flush=True)
+"""
+
+
+def test_a_core_solve_runs_a_builtin_prepare_job_then_solves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "fake_prepare.py").write_text(BUILTIN_TOOL, encoding="utf-8")
+    monkeypatch.setattr(foam_relay, "PY_TOOLS", tools)
+    hub = FakeSolveHub(jobs={"solve.prepare": ("builtin", SimpleNamespace(tool="fake_prepare.py", python="core"))})
+    r = make_solve_run(tmp_path)
+    rec = Recorder()
+    loads: list[int] = []
+
+    def loader() -> Any:
+        loads.append(1)
+        return hub
+
+    deps, _ = solve_deps(rec, registry_loader=loader)
+    prepare = {**_builtin_shape(), "env": {"MAGNUSIM_PLUGIN_KEY": "builtin", "MAGNUSIM_JOB_ID": JOB, "MAGNUSIM_CASE_DIR": str(r.case)}}
+    code, evs = run(make_solve_spec(r, prepare=prepare), r.root, deps)
+    assert code == 0, evs
+    # One registry load for the analysis and the prepare step.
+    assert loads == [1]
+    saw = json.loads((r.case / "tool-saw.json").read_text(encoding="utf-8"))
+    assert saw["ran_marker"] is True and Path(saw["tool"]).resolve() == (tools / "fake_prepare.py").resolve()
+    assert saw["argv"] == ["--run-id", RUN_ID] and saw["MAGNUSIM_PLUGIN_KEY"] == "builtin" and saw["MAGNUSIM_CASE_DIR"] == str(r.case)
+    assert [e["stage"] for e in evs if e["event"] == "prepare_stage"] == ["inputs", "written"]
+    kinds = [e["event"] for e in evs]
+    assert kinds.index("prepare") < kinds.index("progress")
+    assert {"event": "prepare", "job": "solve.prepare", "exit_code": 0} in evs
+    assert evs[-1]["outcome"]["ok"] is True and evs[-1]["outcome"]["phase"] == "solve"

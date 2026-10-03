@@ -84,6 +84,7 @@ PATH_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*
 PLACEHOLDER_RE = re.compile(r"__[A-Z][A-Z0-9_]*__")
 TIME_DIR_RE = re.compile(r"^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$")
 PF_CASE_RE = re.compile(r"^cfddesk-pf-[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$")
+CORE_CASE_PREFIX = "cfddesk-w27-"
 TOKEN_RE = re.compile(r"^[0-9a-f]{8}$")
 _SHOWN_RE = re.compile(r"^[A-Za-z0-9_./-]{1,40}$")
 _TOOL_SHOWN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,63}$")
@@ -160,6 +161,22 @@ def plugin_case_id_ok(wsl_case: Any, token: Any) -> bool:
     except InvalidWslCaseId:
         return False
     return bool(PF_CASE_RE.match(wsl_case)) and wsl_case.endswith("-" + token)
+
+
+def solve_case_id_ok(wsl_case: Any, run_id: Any, token: Any) -> bool:
+    """A core solve's WSL id: ``cfddesk-w27-<run id>``, the name core runs always had
+    (the prune rules and the legacy stop know it). The token still names the run's
+    scripts, so it must be one."""
+    if not isinstance(wsl_case, str) or not isinstance(run_id, str) or not run_id:
+        return False
+    if not isinstance(token, str) or not TOKEN_RE.match(token):
+        return False
+    if wsl_case != CORE_CASE_PREFIX + run_id:
+        return False
+    try:
+        return validate_wsl_case_id(wsl_case) == wsl_case
+    except InvalidWslCaseId:
+        return False
 
 
 # ---------------------------------------------------------------------------

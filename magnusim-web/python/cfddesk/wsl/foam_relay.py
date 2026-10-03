@@ -36,6 +36,18 @@ The relay trusts nothing in the spec. In order:
 Exit codes are for logs only (Node reads ``outcome``): 0 done, 2 refused, 3
 the starter failed, 130 stopped before the solve, 50 a WSL step wrote a time
 folder, else the prepare tool's, the WSL step's or ``solve.sh``'s own code.
+
+Kind ``solve`` is a core study's run (host-only, not plugin API). Its spec also
+names ``run_id`` and ``simulation_id``; its WSL case is ``cfddesk-w27-<run id>``;
+its case is ``<run folder>/case`` with the run folder in a ``simulation_runs``
+folder of the project; it has a solver. ``solver.analysis`` (optional) is looked
+up in the registry: the analysis must be ``plugin``'s, and its log parser (from
+the registry, never from the spec) reads the solver's output. Its hooks run for
+a ``core:<project_id>/<simulation_id>`` owner of those ids, with the core run id
+as ``SolveContext.run_id``, and the solve never waits for ``solve.prepare``. Its
+prepare step may also be the builtin JobKind ``solve.prepare`` (its tool in
+``python/tools``).
+Kinds ``foam`` and ``mesh`` are unchanged by any of this.
 """
 
 from __future__ import annotations
@@ -57,6 +69,7 @@ from typing import Any
 
 from cfddesk.jobs.events import EVENT_PREFIX
 from cfddesk.registry.contract import APP_NAME_RE
+from cfddesk.registry.solve_context import SIMULATION_ID_RE
 from cfddesk.wsl import case_procs
 from cfddesk.wsl.config import get_wsl_distro
 from cfddesk.wsl.foam_case import (
@@ -74,6 +87,7 @@ from cfddesk.wsl.foam_case import (
     is_link,
     plugin_case_id_ok,
     render_foam_pre,
+    solve_case_id_ok,
     temp_path_problem,
     wsl_root_ok,
 )
@@ -101,6 +115,16 @@ MAX_PROCS = 64
 LOG_LINE_MAX = 500
 SOLVE_HOOKS = ("solve.prepare", "solve.parse_line", "solve.stop")
 STOP_STRATEGIES = ("stopAt_writeNow", "sigterm")
+KINDS = ("foam", "mesh", "solve")
+# A core solve's run folder sits in this folder of its study.
+SOLVE_RUNS_FOLDER = "simulation_runs"
+ANALYSIS_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,120}$")
+BUILTIN = "builtin"
+# The one builtin JobKind a core solve may run as its prepare step: the
+# prepare_run shim for analyses that declare no prepare_job of their own.
+BUILTIN_PREPARE_JOB = "solve.prepare"
+# Where a builtin JobKind's tool is (as Node's pyTool finds it).
+PY_TOOLS = Path(__file__).resolve().parents[2] / "tools"
 
 EXIT_DONE = 0
 EXIT_REFUSED = 2
@@ -112,6 +136,7 @@ CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
 NOT_ITS_JOB = "The prepare step is not one this plugin can run"
+NOT_ITS_ANALYSIS = "The run's analysis is not this plugin's"
 LAUNCH_FAILED = "The case could not start"
 
 LEVELS = ("graceful", "solver", "all")
@@ -626,8 +651,11 @@ def app_root() -> Path:
     return web_root()
 
 
-def check_prepare_shape(raw: Any, *, plugin: str, job_id: str, case_dir: str) -> dict[str, Any]:
-    """The prepare spec's shape (no registry yet); raises ``invalid_spec``."""
+def check_prepare_shape(raw: Any, *, plugin: str, job_id: str, case_dir: str, builtin_ok: bool = False) -> dict[str, Any]:
+    """The prepare spec's shape (no registry yet); raises ``invalid_spec``.
+
+    ``builtin_ok`` (a core solve): ``MAGNUSIM_PLUGIN_KEY`` may also be ``builtin``, for
+    a builtin JobKind; :func:`resolve_prepare` then checks it names the job's owner."""
     if not isinstance(raw, dict) or set(raw) - {"job", "runtime", "args", "env"}:
         raise RefusalError("invalid_spec", NOT_ITS_JOB)
     job = raw.get("job")
@@ -647,6 +675,8 @@ def check_prepare_shape(raw: Any, *, plugin: str, job_id: str, case_dir: str) ->
     for name, value in env.items():
         if name not in PREPARE_ENV_KEYS or not isinstance(value, str) or len(value) > MAX_VALUE or "\x00" in value:
             raise RefusalError("invalid_spec", NOT_ITS_JOB)
+        if builtin_ok and name == "MAGNUSIM_PLUGIN_KEY" and value == BUILTIN:
+            continue
         if name in must and value != must[name]:
             raise RefusalError("invalid_spec", NOT_ITS_JOB)
     return {"job": job, "runtime": runtime, "args": list(args), "env": dict(env)}
@@ -682,9 +712,17 @@ def _load_registry() -> Any:
     return load_all()
 
 
-def resolve_prepare(shape: dict[str, Any], *, plugin: str, loader: Callable[[], Any] | None = None) -> PrepareStep:
+def resolve_prepare(
+    shape: dict[str, Any], *, plugin: str, loader: Callable[[], Any] | None = None, builtin_ok: bool = False
+) -> PrepareStep:
     """Find the step's tool, interpreter and folder from the registry, as
-    ``jobs.describe`` does; raises ``prepare_unavailable`` or ``invalid_spec``."""
+    ``jobs.describe`` does; raises ``prepare_unavailable`` or ``invalid_spec``.
+
+    ``builtin_ok`` (a core solve): the builtin JobKind ``solve.prepare`` is accepted
+    too, and no other builtin one. It runs on the core interpreter in the app's
+    folder, and its tool must be a ``.py`` in ``python/tools`` (as Node's
+    ``pyTool``), never anywhere else. The step's ``MAGNUSIM_PLUGIN_KEY``, when
+    given, must name the job's owner."""
     try:
         hub = (loader or _load_registry)()
     except Exception:
@@ -694,7 +732,16 @@ def resolve_prepare(shape: dict[str, Any], *, plugin: str, loader: Callable[[], 
     jobs = hub.registry("job")
     if job not in jobs.keys():
         raise RefusalError("prepare_unavailable", "The prepare step's job is not loaded (its plugin may be off)")
-    if jobs.owner(job) != plugin:
+    owner = jobs.owner(job)
+    if builtin_ok:
+        named = shape["env"].get("MAGNUSIM_PLUGIN_KEY")
+        if named is not None and named != owner:
+            raise RefusalError("invalid_spec", NOT_ITS_JOB)
+        if owner == BUILTIN:
+            if job != BUILTIN_PREPARE_JOB:
+                raise RefusalError("invalid_spec", NOT_ITS_JOB)
+            return _builtin_prepare(shape, jobs.get(job))
+    if owner != plugin:
         raise RefusalError("invalid_spec", NOT_ITS_JOB)
     spec = jobs.get(job)
     if str(getattr(spec, "python", "core") or "core") != runtime:
@@ -717,6 +764,41 @@ def resolve_prepare(shape: dict[str, Any], *, plugin: str, loader: Callable[[], 
         name = getattr(manifest, "name", "") or plugin
         raise RefusalError("prepare_unavailable", f"{name} needs setup: install its dependencies in Settings > Plugins")
     return PrepareStep(job, runtime, shape["args"], shape["env"], str(state["python"]), str(tool), str(folder))
+
+
+def _builtin_prepare(shape: dict[str, Any], spec: Any) -> PrepareStep:
+    """A builtin JobKind as a core solve's prepare step: its ``python/tools`` tool."""
+    if str(getattr(spec, "python", "core") or "core") != "core" or shape["runtime"] != "core":
+        raise RefusalError("prepare_unavailable", "The prepare step's job changed since the run was planned")
+    tool = tool_in_package(PY_TOOLS, str(getattr(spec, "tool", "") or ""))
+    if tool is None:
+        raise RefusalError("prepare_unavailable", "The prepare step's tool is not in the app's tools folder")
+    return PrepareStep(shape["job"], "core", shape["args"], shape["env"], sys.executable, str(tool), str(app_root()))
+
+
+def resolve_log_parser(hub: Any, analysis: str, *, plugin: str) -> Any:
+    """A core solve's log parser ref, from its analysis in the registry; raises
+    ``analysis_unavailable`` or ``invalid_spec``. The analysis must be ``plugin``'s.
+    Its launch hook names the parser when it has one (``LaunchSpec.log_parser``, as
+    the run was planned); else :func:`~cfddesk.registry.contract.log_parser_ref`."""
+    from cfddesk.registry import contract
+
+    try:
+        analyses = hub.registry("analysis")
+        known = analysis in analyses.keys()
+    except Exception:
+        raise RefusalError("analysis_unavailable", "The run's analysis is not available: the plugins could not be loaded") from None
+    if not known:
+        raise RefusalError("analysis_unavailable", "The run's analysis is not loaded (its plugin may be off)")
+    if analyses.owner(analysis) != plugin:
+        raise RefusalError("invalid_spec", NOT_ITS_ANALYSIS)
+    spec = analyses.get(analysis)
+    if not callable(getattr(spec, "launch", None)):
+        return contract.log_parser_ref(spec)
+    try:
+        return contract.launch_spec(spec, hub.registry("solver")).log_parser
+    except Exception:
+        raise RefusalError("analysis_unavailable", "The run's analysis could not say how its run is read") from None
 
 
 def prepare_environment(step: PrepareStep, base: dict[str, str] | None = None) -> dict[str, str]:
@@ -795,6 +877,12 @@ def _default_write_now(wsl_case: str, *, graceful: bool = True) -> Any:
     return stop_solve(wsl_case, graceful=graceful)
 
 
+def _default_load_parser(ref: Any) -> Any:
+    from cfddesk.registry.contract import load_log_parser
+
+    return load_log_parser(ref)
+
+
 def _default_remove_case(wsl_case: str) -> bool:
     from cfddesk.runner.cleanup import remove_wsl_case
 
@@ -813,6 +901,7 @@ class RelayDeps:
     remove_case: Callable[[str], Any] = _default_remove_case
     mpi_slots: Callable[[], int] = wsl_mpi_slots
     registry_loader: Callable[[], Any] | None = None
+    load_parser: Callable[[Any], Any] = _default_load_parser
     hook_runner: Callable[[Any, list[str]], Any] = _default_hook_runner
     kill_tree: Callable[[int], Any] = kill_process_tree
     clock: Callable[[], float] = time.monotonic
@@ -858,6 +947,9 @@ class Relay:
         self.prepare: PrepareStep | None = None
         self.prepare_shape: dict[str, Any] | None = None
         self.solver: dict[str, Any] | None = None
+        self.analysis: str | None = None
+        self.parser: Any = None
+        self._hub: Any = None
         self.n = 1
         self._prepare_pid: int | None = None
         self._phase = "gate"
@@ -882,7 +974,8 @@ class Relay:
     def _shape(self) -> None:
         s = self.spec
         bad = RefusalError("invalid_spec", "The run's spec is not valid")
-        if s.get("kind") not in ("foam", "mesh"):
+        kind = s.get("kind")
+        if kind not in KINDS:
             raise bad
         if s.get("job_id") != self.spec_path.stem or not JOB_ID_RE.match(str(s.get("job_id") or "")):
             raise bad
@@ -892,7 +985,15 @@ class Relay:
         plugin = s.get("plugin")
         if not isinstance(plugin, str) or not PLUGIN_KEY_RE.match(plugin) or plugin.endswith("."):
             raise bad
-        if not plugin_case_id_ok(s.get("wsl_case"), s.get("token")):
+        if kind == "solve":
+            if not solve_case_id_ok(s.get("wsl_case"), s.get("run_id"), s.get("token")):
+                raise bad
+            sid = s.get("simulation_id")
+            if not isinstance(sid, str) or not SIMULATION_ID_RE.match(sid):
+                raise bad
+            if s.get("solver") is None:
+                raise bad
+        elif not plugin_case_id_ok(s.get("wsl_case"), s.get("token")):
             raise bad
         n = s.get("n_procs")
         if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= MAX_PROCS:
@@ -928,6 +1029,16 @@ class Relay:
             own = os.path.realpath(os.path.join(project, "plugins", str(s["plugin"])))
             if os.path.normcase(base_real) != os.path.normcase(own):
                 raise RefusalError("invalid_path", "The case folder is not in the plugin's folder")
+        elif s["kind"] == "solve":
+            # <study>/simulation_runs/<run folder>/case, inside the project.
+            runs = os.path.dirname(base_real)
+            if (
+                list(s["case_parts"]) != ["case"]
+                or os.path.normcase(os.path.basename(runs)) != os.path.normcase(SOLVE_RUNS_FOLDER)
+                or not _inside(runs, project)
+                or os.path.normcase(runs) == os.path.normcase(project)
+            ):
+                raise RefusalError("invalid_path", "The case folder is not a run folder of the project")
         self.case = Path(case_dir)
         self.case_ok = True
 
@@ -962,6 +1073,11 @@ class Relay:
         owner = self.spec.get("owner")
         if owner is not None and not isinstance(owner, str):
             raise bad
+        if self.spec.get("kind") == "solve":
+            analysis = raw.get("analysis")
+            if analysis is not None and (not isinstance(analysis, str) or not ANALYSIS_KEY_RE.match(analysis)):
+                raise bad
+            self.analysis = analysis
         self.solver = {
             "app": app,
             "keep_frames": raw["keep_frames"],
@@ -982,17 +1098,23 @@ class Relay:
         except FoamCaseError as exc:
             raise RefusalError(exc.code, exc.error) from None
         s = self.spec
+        core = s["kind"] == "solve"
         if s.get("prepare") is not None:
             self.prepare_shape = check_prepare_shape(
-                s["prepare"], plugin=str(s["plugin"]), job_id=str(s["job_id"]), case_dir=str(s["case_dir"])
+                s["prepare"], plugin=str(s["plugin"]), job_id=str(s["job_id"]), case_dir=str(s["case_dir"]), builtin_ok=core
             )
         if not wsl_root_ok(s.get("wsl_root")):
             raise RefusalError("invalid_path", ROOT_UNUSABLE)
         problem = temp_path_problem(tempfile.gettempdir())
         if problem:
             raise RefusalError("invalid_path", problem)
+        if core and self.analysis is not None:
+            self._resolve_parser()
         if self.prepare_shape is not None:
-            self.prepare = resolve_prepare(self.prepare_shape, plugin=str(s["plugin"]), loader=self.deps.registry_loader)
+            if core:
+                self.prepare = resolve_prepare(self.prepare_shape, plugin=str(s["plugin"]), loader=self._registry, builtin_ok=True)
+            else:
+                self.prepare = resolve_prepare(self.prepare_shape, plugin=str(s["plugin"]), loader=self.deps.registry_loader)
         try:
             if self.prepare is not None:
                 check_case_paths(str(s["case_dir"]))
@@ -1000,6 +1122,26 @@ class Relay:
                 self._check_case(own_marker=False)
         except FoamCaseError as exc:
             raise RefusalError(exc.code, exc.error) from None
+
+    def _registry(self) -> Any:
+        """The registry, loaded once for a core solve's gate (analysis and prepare)."""
+        if self._hub is None:
+            self._hub = (self.deps.registry_loader or _load_registry)()
+        return self._hub
+
+    def _resolve_parser(self) -> None:
+        """A core solve's log parser: from its analysis in the registry, built now so a
+        parser that cannot load refuses the run before anything ran."""
+        assert self.analysis is not None
+        try:
+            hub = self._registry()
+        except Exception:
+            raise RefusalError("analysis_unavailable", "The run's analysis is not available: the plugins could not be loaded") from None
+        ref = resolve_log_parser(hub, self.analysis, plugin=str(self.spec["plugin"]))
+        try:
+            self.parser = self.deps.load_parser(ref)
+        except Exception:
+            raise RefusalError("analysis_unavailable", "The run's analysis has no log reader that loads") from None
 
     def _check_case(self, *, own_marker: bool) -> None:
         solver = self.solver
@@ -1075,7 +1217,23 @@ class Relay:
 
             ids = parse_owner(str(s.get("owner") or ""))
             ctx = None
-            if ids and ids.get("project_id") == s["project_id"] and ids.get("plugin") == s["plugin"]:
+            if s["kind"] == "solve":
+                # A core run: its own core owner, and the core run id as SolveContext.run_id.
+                if (
+                    ids
+                    and ids.get("owner") == "core"
+                    and ids.get("project_id") == s["project_id"]
+                    and ids.get("simulation_id") == s["simulation_id"]
+                ):
+                    ctx = solve_context(
+                        str(s["owner"]),
+                        wsl_case=str(s["wsl_case"]),
+                        run_id=str(s["run_id"]),
+                        app=self.solver["app"],
+                        case_dir=str(s["case_dir"]),
+                        n_procs=int(s["n_procs"]),
+                    )
+            elif ids and ids.get("project_id") == s["project_id"] and ids.get("plugin") == s["plugin"]:
                 ctx = solve_context(
                     str(s["owner"]),
                     wsl_case=str(s["wsl_case"]),
@@ -1243,7 +1401,8 @@ class Relay:
         self._phase = "solve"
         if self._stopped_now():
             return self._stopped("solve")
-        if self.hooks is not None:
+        if self.hooks is not None and s["kind"] != "solve":
+            # A core solve never waits for solve.prepare (compatibility 1.3).
             self.hooks.wait_ready(self.deps.hook_wait)
         if self._stopped_now():
             return self._stopped("solve")
@@ -1375,7 +1534,8 @@ class Relay:
             frame_fields=tuple(solver["frame_fields"]),
         )
         on_line = self.hooks.feed if self.hooks is not None else None
-        code, _parser = stream_events_to_stdout(proc, GenericParser(), on_line=on_line, out=self.writer)
+        parser = self.parser if self.parser is not None else GenericParser()
+        code, _parser = stream_events_to_stdout(proc, parser, on_line=on_line, out=self.writer)
         outcome = {
             "ok": bool(self.state.result_ok and code == 0),
             "phase": "solve",
