@@ -5,6 +5,12 @@ Per boundary-condition patch: area-averaged velocity and pressure
 monitor: area-averaged velocity and pressure (``rc_<name>``). Velocities in
 m/s, pressure in Pa (kinematic × rho), flow in m³/s and kg/s. A negative flow
 rate is flow INTO the domain (OpenFOAM face normals point out).
+
+Each series point carries the samples of incompressible_flow.monitors
+MONITOR_QUANTITIES; each row its ``key``, monitor ``type`` and the
+``default_quantity`` its plot opens on; the answer the flow balance line
+(``summary``). The analysis declares its monitor quantities, so the core adds
+none of this itself.
 """
 
 from __future__ import annotations
@@ -13,7 +19,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from magnusim_sdk.foam import read_surface_field_value
 
@@ -25,6 +31,15 @@ _P_COL = re.compile(r"areaAverage\(p\)")
 
 def _finite(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _number(v: Any) -> TypeGuard[float]:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _mass_flow(q: Any, rho: float) -> float | None:
+    """kg/s for a flow of ``q`` m³/s; None without a flow or a positive density."""
+    return q * rho if _number(q) and rho > 0 else None
 
 
 def _col(mon: dict | None, pattern: re.Pattern[str]) -> int:
@@ -80,9 +95,11 @@ def _patch_monitor(case_dir: Path, patch: str, bc: dict | None, rho: float) -> d
                 "p_Pa": p_kin * rho if p_kin is not None else None,
                 "Q_m3s": q,
                 "Un_m_s": q / area if q is not None and area else None,
+                "mdot_kgs": _mass_flow(q, rho),
             }
         )
     last = series[-1] if series else None
+    pressure = bool(re.search(r"pressure", str((bc and bc.get("bc_type")) or ""), re.I))
     return {
         "patch": patch,
         "name": (bc and bc.get("name")) or patch,
@@ -104,6 +121,10 @@ def _patch_monitor(case_dir: Path, patch: str, bc: dict | None, rho: float) -> d
         if last
         else None,
         "series": series,
+        "key": f"mon_{patch}",
+        # Velocity and pressure when the area average wrote, else only the flow.
+        "type": "area_average" if mon else "flow_rate",
+        "default_quantity": "p" if pressure else "Umag",
     }
 
 
@@ -124,6 +145,7 @@ def _custom_monitor(case_dir: Path, cm: dict, rho: float) -> dict[str, Any] | No
                 "p_Pa": p_kin * rho if p_kin is not None else None,
                 "Q_m3s": None,
                 "Un_m_s": None,
+                "mdot_kgs": None,
             }
         )
     last = series[-1] if series else None
@@ -145,11 +167,34 @@ def _custom_monitor(case_dir: Path, cm: dict, rho: float) -> dict[str, Any] | No
         if last
         else None,
         "series": series,
+        "type": "area_average",
+        "default_quantity": "p",
     }
 
 
+def balance_summary(balance: dict[str, Any] | None) -> tuple[list[dict[str, Any]], bool]:
+    """The flow balance line under the monitors (``Flow in … · out … ·
+    imbalance … %``) and whether it warns (an imbalance over 1 %). Empty when
+    nothing flows through the monitored boundaries."""
+    if not balance:
+        return [], False
+    q_in, q_out = balance.get("in_m3s"), balance.get("out_m3s")
+    if not ((_number(q_in) and q_in > 0) or (_number(q_out) and q_out > 0)):
+        return [], False
+    summary: list[dict[str, Any]] = [
+        {"label": "Flow in", "value": q_in, "quantity": "Q", "unit": ""},
+        {"label": "out", "value": q_out, "quantity": "Q", "unit": ""},
+    ]
+    imbalance = balance.get("imbalance")
+    if not _number(imbalance):
+        return summary, False
+    pct = abs(float(imbalance)) * 100
+    summary.append({"label": "imbalance", "value": pct, "quantity": "", "unit": "%"})
+    return summary, pct > 1
+
+
 def run_monitors(case_dir: Path | str) -> dict[str, Any]:
-    """``{rho, monitors, custom, balance}`` for the case in ``case_dir``."""
+    """``{rho, monitors, custom, balance, summary, summary_warn}`` for the case in ``case_dir``."""
     case = Path(case_dir)
     meta = _meta(case)
     try:
@@ -188,4 +233,12 @@ def run_monitors(case_dir: Path | str) -> dict[str, Any]:
         if out and (sum_in > 0 or sum_out > 0)
         else None
     )
-    return {"rho": rho, "monitors": out, "custom": custom, "balance": balance}
+    summary, warn = balance_summary(balance)
+    return {
+        "rho": rho,
+        "monitors": out,
+        "custom": custom,
+        "balance": balance,
+        "summary": summary,
+        "summary_warn": warn,
+    }

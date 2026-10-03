@@ -98,7 +98,9 @@ def test_run_monitors_patch_values_in_display_units(tmp_path: Path):
 
 def test_run_monitors_without_results(tmp_path: Path):
     out = run_monitors(tmp_path / "never-ran")
-    assert out == {"rho": 1.196, "monitors": [], "custom": [], "balance": None}
+    assert out == {
+        "rho": 1.196, "monitors": [], "custom": [], "balance": None, "summary": [], "summary_warn": False,
+    }
 
 
 def test_run_monitors_rpc_reads_through_the_run_analysis(tmp_path: Path):
@@ -115,12 +117,14 @@ def test_run_monitors_rpc_reads_through_the_run_analysis(tmp_path: Path):
         methods.analysis_run_monitors(project_dir=str(root), run_id="1", case_dir=str(tmp_path), time_dependency="Steady-state")
 
 
-def test_run_monitors_answers_get_the_legacy_quantities(tmp_path: Path):
-    """The analysis declares no monitor quantities (API 1.4) yet: describe says
-    null, and the core gives its answers the 1.1 table and fills what the page
-    used to work out (mass flow per point, row keys, the flow balance line)."""
+def test_run_monitors_answers_carry_their_own_quantities(tmp_path: Path):
+    """The analysis declares its monitor quantities (API 1.4): describe lists
+    them, and its own answers carry what the page reads (mass flow per point,
+    row keys and plot defaults, the flow balance line)."""
     from cfddesk.registry import LEGACY_MONITOR_QUANTITIES, contract, load_all, reset_for_tests
     from cfddesk.registry.discovery import get_registry
+
+    from incompressible_flow.monitors import MONITOR_QUANTITIES
 
     reset_for_tests()
     load_all()
@@ -128,10 +132,14 @@ def test_run_monitors_answers_get_the_legacy_quantities(tmp_path: Path):
         rows = {r["key"]: r for r in get_registry("analysis").describe()}
         for key in ("incompressible_steady", "incompressible_transient"):
             spec = get_registry("analysis").get(key)
-            assert spec.monitor_quantities is None and rows[key]["monitor_quantities"] is None
+            assert spec.monitor_quantities == MONITOR_QUANTITIES
+            assert [q["key"] for q in rows[key]["monitor_quantities"]] == [q.key for q in MONITOR_QUANTITIES]
         got = contract.run_monitors(get_registry("analysis").get("incompressible_steady"), _case(tmp_path))
     finally:
         reset_for_tests()
+    # The hook's own answer already has every field; the core adds only quantities.
+    own = run_monitors(_case(tmp_path / "own"))
+    assert {k: v for k, v in got.items() if k != "quantities"} == own
     assert [q["key"] for q in got["quantities"]] == [q.key for q in LEGACY_MONITOR_QUANTITIES]
     inlet, outlet = got["monitors"]
     assert (inlet["key"], inlet["default_quantity"], outlet["key"]) == ("mon_inlet", "Umag", "mon_outlet")

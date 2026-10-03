@@ -19,6 +19,11 @@ TURBULENCE_MODELS: tuple[str, ...] = ("laminar", "kEpsilon", "kOmegaSST", "LRR",
 RSM_MODELS: frozenset[str] = frozenset({"LRR", "SSG"})
 DEFAULT_TURBULENCE = "kOmegaSST"
 
+# Fields the case stores divided by density (incompressible solvers solve for
+# p/rho): results show them times rho. The writer's sidecar and both analyses
+# declare this list.
+KINEMATIC_FIELDS: tuple[str, ...] = ("p",)
+
 # Display names used by V0.1.0 records ("k-omega SST") and loose spellings.
 _ALIASES: dict[str, str] = {
     "laminar": "laminar",

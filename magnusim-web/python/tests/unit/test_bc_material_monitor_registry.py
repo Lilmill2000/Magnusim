@@ -69,7 +69,7 @@ def test_monitor_spec_shape_and_stubs():
     assert isinstance(aa, MonitorType)
     assert aa.target == "patch"
     assert callable(aa.write_function_object)
-    assert callable(aa.parse_dat)
+    assert aa.parse_dat is None  # its .dat files are read by the analysis's run_monitors
     assert fr.target == "patch"
     assert fr.label == "Flow rate"
     # Stub emits Phase 1-shaped FO body without moving call sites

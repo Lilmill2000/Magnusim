@@ -1,0 +1,1137 @@
+{
+  "balanced": {
+    "rho": 1.2,
+    "monitors": [
+      {
+        "patch": "inlet",
+        "name": "Inlet",
+        "bc_type": "Velocity inlet",
+        "faces": [],
+        "area_m2": 0.01,
+        "n_faces": 40,
+        "rho": 1.2,
+        "last": {
+          "t": 1.0,
+          "U": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "Umag": 2.0,
+          "p_Pa": 0.6,
+          "Q_m3s": -0.03,
+          "Un_m_s": -3.0,
+          "mdot_kgs": -0.036
+        },
+        "final": {
+          "iteration": 1.0,
+          "mean_velocity_vector": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "mean_velocity_magnitude": 2.0,
+          "mean_normal_velocity": -3.0,
+          "pressure_Pa": 0.6,
+          "volumetric_flow_m3s": -0.03,
+          "mass_flow_kgs": -0.036
+        },
+        "series": [
+          {
+            "t": 1.0,
+            "U": [
+              2.0,
+              0.0,
+              0.0
+            ],
+            "Umag": 2.0,
+            "p_Pa": 0.6,
+            "Q_m3s": -0.03,
+            "Un_m_s": -3.0,
+            "mdot_kgs": -0.036
+          }
+        ],
+        "key": "mon_inlet",
+        "default_quantity": "Umag"
+      },
+      {
+        "patch": "outlet",
+        "name": "Outlet",
+        "bc_type": "Pressure outlet",
+        "faces": [],
+        "area_m2": 0.01,
+        "n_faces": 40,
+        "rho": 1.2,
+        "last": {
+          "t": 1.0,
+          "U": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "Umag": 2.0,
+          "p_Pa": 0.0,
+          "Q_m3s": 0.0301,
+          "Un_m_s": 3.01,
+          "mdot_kgs": 0.03612
+        },
+        "final": {
+          "iteration": 1.0,
+          "mean_velocity_vector": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "mean_velocity_magnitude": 2.0,
+          "mean_normal_velocity": 3.01,
+          "pressure_Pa": 0.0,
+          "volumetric_flow_m3s": 0.0301,
+          "mass_flow_kgs": 0.03612
+        },
+        "series": [
+          {
+            "t": 1.0,
+            "U": [
+              2.0,
+              0.0,
+              0.0
+            ],
+            "Umag": 2.0,
+            "p_Pa": 0.0,
+            "Q_m3s": 0.0301,
+            "Un_m_s": 3.01,
+            "mdot_kgs": 0.03612
+          }
+        ],
+        "key": "mon_outlet",
+        "default_quantity": "p"
+      }
+    ],
+    "custom": [],
+    "balance": {
+      "in_m3s": 0.03,
+      "out_m3s": 0.0301,
+      "imbalance": 0.003333333333333313
+    },
+    "quantities": [
+      {
+        "key": "p",
+        "label": "Pressure",
+        "sample": "p_Pa",
+        "component": null,
+        "unit_quantity": "pressure",
+        "unit": "Pa",
+        "color": "#6941c6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": true,
+        "csv": "pressure_Pa"
+      },
+      {
+        "key": "Umag",
+        "label": "Mean velocity",
+        "sample": "Umag",
+        "component": null,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": true,
+        "csv": "mean_velocity_m_s"
+      },
+      {
+        "key": "Ux",
+        "label": "Velocity X",
+        "sample": "U",
+        "component": 0,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Ux_m_s"
+      },
+      {
+        "key": "Uy",
+        "label": "Velocity Y",
+        "sample": "U",
+        "component": 1,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Uy_m_s"
+      },
+      {
+        "key": "Uz",
+        "label": "Velocity Z",
+        "sample": "U",
+        "component": 2,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Uz_m_s"
+      },
+      {
+        "key": "Un",
+        "label": "Normal velocity",
+        "sample": "Un_m_s",
+        "component": null,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "Q_m3s",
+        "direction": [
+          "in",
+          "out"
+        ],
+        "plot": false,
+        "details": true,
+        "headline": false,
+        "csv": "Un_m_s"
+      },
+      {
+        "key": "Q",
+        "label": "Flow rate",
+        "sample": "Q_m3s",
+        "component": null,
+        "unit_quantity": "volumetric_flow",
+        "unit": "m³/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "Q_m3s",
+        "direction": [
+          "in",
+          "out"
+        ],
+        "plot": false,
+        "details": true,
+        "headline": true,
+        "csv": "flow_m3_s"
+      },
+      {
+        "key": "mdot",
+        "label": "Mass flow",
+        "sample": "mdot_kgs",
+        "component": null,
+        "unit_quantity": "mass_flow",
+        "unit": "kg/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": false,
+        "details": true,
+        "headline": false,
+        "csv": "mass_kg_s"
+      }
+    ],
+    "summary": [
+      {
+        "label": "Flow in",
+        "value": 0.03,
+        "quantity": "Q",
+        "unit": ""
+      },
+      {
+        "label": "out",
+        "value": 0.0301,
+        "quantity": "Q",
+        "unit": ""
+      },
+      {
+        "label": "imbalance",
+        "value": 0.3333333333333313,
+        "quantity": "",
+        "unit": "%"
+      }
+    ],
+    "summary_warn": false
+  },
+  "custom_only": {
+    "rho": 1.196,
+    "monitors": [],
+    "custom": [
+      {
+        "id": "rc7",
+        "key": "rc_probe",
+        "name": "Probe",
+        "faces": [
+          "face 3@B"
+        ],
+        "area_m2": 0.01,
+        "n_faces": 40,
+        "rho": 1.196,
+        "last": {
+          "t": 2.0,
+          "U": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "Umag": 2.0,
+          "p_Pa": 0.4784,
+          "Q_m3s": null,
+          "Un_m_s": null,
+          "mdot_kgs": null
+        },
+        "final": {
+          "iteration": 2.0,
+          "mean_velocity_vector": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "mean_velocity_magnitude": 2.0,
+          "pressure_Pa": 0.4784
+        },
+        "series": [
+          {
+            "t": 1.0,
+            "U": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "Umag": 1.0,
+            "p_Pa": 0.598,
+            "Q_m3s": null,
+            "Un_m_s": null,
+            "mdot_kgs": null
+          },
+          {
+            "t": 2.0,
+            "U": [
+              2.0,
+              0.0,
+              0.0
+            ],
+            "Umag": 2.0,
+            "p_Pa": 0.4784,
+            "Q_m3s": null,
+            "Un_m_s": null,
+            "mdot_kgs": null
+          }
+        ],
+        "default_quantity": "p"
+      }
+    ],
+    "balance": null,
+    "quantities": [
+      {
+        "key": "p",
+        "label": "Pressure",
+        "sample": "p_Pa",
+        "component": null,
+        "unit_quantity": "pressure",
+        "unit": "Pa",
+        "color": "#6941c6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": true,
+        "csv": "pressure_Pa"
+      },
+      {
+        "key": "Umag",
+        "label": "Mean velocity",
+        "sample": "Umag",
+        "component": null,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": true,
+        "csv": "mean_velocity_m_s"
+      },
+      {
+        "key": "Ux",
+        "label": "Velocity X",
+        "sample": "U",
+        "component": 0,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Ux_m_s"
+      },
+      {
+        "key": "Uy",
+        "label": "Velocity Y",
+        "sample": "U",
+        "component": 1,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Uy_m_s"
+      },
+      {
+        "key": "Uz",
+        "label": "Velocity Z",
+        "sample": "U",
+        "component": 2,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Uz_m_s"
+      },
+      {
+        "key": "Un",
+        "label": "Normal velocity",
+        "sample": "Un_m_s",
+        "component": null,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "Q_m3s",
+        "direction": [
+          "in",
+          "out"
+        ],
+        "plot": false,
+        "details": true,
+        "headline": false,
+        "csv": "Un_m_s"
+      },
+      {
+        "key": "Q",
+        "label": "Flow rate",
+        "sample": "Q_m3s",
+        "component": null,
+        "unit_quantity": "volumetric_flow",
+        "unit": "m³/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "Q_m3s",
+        "direction": [
+          "in",
+          "out"
+        ],
+        "plot": false,
+        "details": true,
+        "headline": true,
+        "csv": "flow_m3_s"
+      },
+      {
+        "key": "mdot",
+        "label": "Mass flow",
+        "sample": "mdot_kgs",
+        "component": null,
+        "unit_quantity": "mass_flow",
+        "unit": "kg/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": false,
+        "details": true,
+        "headline": false,
+        "csv": "mass_kg_s"
+      }
+    ],
+    "summary": [],
+    "summary_warn": false
+  },
+  "full": {
+    "rho": 1.2,
+    "monitors": [
+      {
+        "patch": "inlet",
+        "name": "Inlet",
+        "bc_type": "Velocity inlet",
+        "faces": [
+          "face 1@B"
+        ],
+        "area_m2": 0.01,
+        "n_faces": 40,
+        "rho": 1.2,
+        "last": {
+          "t": 4.0,
+          "U": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Umag": 1.0,
+          "p_Pa": 0.36,
+          "Q_m3s": -0.03,
+          "Un_m_s": -3.0,
+          "mdot_kgs": -0.036
+        },
+        "final": {
+          "iteration": 4.0,
+          "mean_velocity_vector": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "mean_velocity_magnitude": 1.0,
+          "mean_normal_velocity": -3.0,
+          "pressure_Pa": 0.36,
+          "volumetric_flow_m3s": -0.03,
+          "mass_flow_kgs": -0.036
+        },
+        "series": [
+          {
+            "t": 1.0,
+            "U": [
+              2.0,
+              0.0,
+              0.0
+            ],
+            "Umag": 2.0,
+            "p_Pa": 0.6,
+            "Q_m3s": -0.01,
+            "Un_m_s": -1.0,
+            "mdot_kgs": -0.012
+          },
+          {
+            "t": 2.0,
+            "U": [
+              3.0,
+              4.0,
+              0.0
+            ],
+            "Umag": 5.0,
+            "p_Pa": 0.3,
+            "Q_m3s": -0.02,
+            "Un_m_s": -2.0,
+            "mdot_kgs": -0.024
+          },
+          {
+            "t": 3.0,
+            "U": [
+              0.0,
+              3.0,
+              4.0
+            ],
+            "Umag": 5.0,
+            "p_Pa": 0.24,
+            "Q_m3s": null,
+            "Un_m_s": null,
+            "mdot_kgs": null
+          },
+          {
+            "t": 4.0,
+            "U": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "Umag": 1.0,
+            "p_Pa": 0.36,
+            "Q_m3s": -0.03,
+            "Un_m_s": -3.0,
+            "mdot_kgs": -0.036
+          }
+        ],
+        "key": "mon_inlet",
+        "default_quantity": "Umag"
+      },
+      {
+        "patch": "outlet",
+        "name": "Outlet",
+        "bc_type": "Pressure outlet",
+        "faces": [
+          "face 2@B"
+        ],
+        "area_m2": 0.02,
+        "n_faces": 40,
+        "rho": 1.2,
+        "last": {
+          "t": 4.0,
+          "U": null,
+          "Umag": null,
+          "p_Pa": null,
+          "Q_m3s": 0.033,
+          "Un_m_s": 1.6500000000000001,
+          "mdot_kgs": 0.0396
+        },
+        "final": {
+          "iteration": 4.0,
+          "mean_velocity_vector": null,
+          "mean_velocity_magnitude": null,
+          "mean_normal_velocity": 1.6500000000000001,
+          "pressure_Pa": null,
+          "volumetric_flow_m3s": 0.033,
+          "mass_flow_kgs": 0.0396
+        },
+        "series": [
+          {
+            "t": 1.0,
+            "U": null,
+            "Umag": null,
+            "p_Pa": null,
+            "Q_m3s": 0.01,
+            "Un_m_s": 0.5,
+            "mdot_kgs": 0.012
+          },
+          {
+            "t": 2.0,
+            "U": null,
+            "Umag": null,
+            "p_Pa": null,
+            "Q_m3s": 0.02,
+            "Un_m_s": 1.0,
+            "mdot_kgs": 0.024
+          },
+          {
+            "t": 4.0,
+            "U": null,
+            "Umag": null,
+            "p_Pa": null,
+            "Q_m3s": 0.033,
+            "Un_m_s": 1.6500000000000001,
+            "mdot_kgs": 0.0396
+          }
+        ],
+        "key": "mon_outlet",
+        "default_quantity": "p"
+      }
+    ],
+    "custom": [
+      {
+        "id": "rc1",
+        "key": "rc_area_average_1",
+        "name": "Area average 1",
+        "faces": [
+          "face 9@B"
+        ],
+        "area_m2": 0.005,
+        "n_faces": 40,
+        "rho": 1.2,
+        "last": {
+          "t": 4.0,
+          "U": [
+            1.0,
+            2.0,
+            2.0
+          ],
+          "Umag": 3.0,
+          "p_Pa": 1.2,
+          "Q_m3s": null,
+          "Un_m_s": null,
+          "mdot_kgs": null
+        },
+        "final": {
+          "iteration": 4.0,
+          "mean_velocity_vector": [
+            1.0,
+            2.0,
+            2.0
+          ],
+          "mean_velocity_magnitude": 3.0,
+          "pressure_Pa": 1.2
+        },
+        "series": [
+          {
+            "t": 4.0,
+            "U": [
+              1.0,
+              2.0,
+              2.0
+            ],
+            "Umag": 3.0,
+            "p_Pa": 1.2,
+            "Q_m3s": null,
+            "Un_m_s": null,
+            "mdot_kgs": null
+          }
+        ],
+        "default_quantity": "p"
+      }
+    ],
+    "balance": {
+      "in_m3s": 0.03,
+      "out_m3s": 0.033,
+      "imbalance": 0.10000000000000009
+    },
+    "quantities": [
+      {
+        "key": "p",
+        "label": "Pressure",
+        "sample": "p_Pa",
+        "component": null,
+        "unit_quantity": "pressure",
+        "unit": "Pa",
+        "color": "#6941c6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": true,
+        "csv": "pressure_Pa"
+      },
+      {
+        "key": "Umag",
+        "label": "Mean velocity",
+        "sample": "Umag",
+        "component": null,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": true,
+        "csv": "mean_velocity_m_s"
+      },
+      {
+        "key": "Ux",
+        "label": "Velocity X",
+        "sample": "U",
+        "component": 0,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Ux_m_s"
+      },
+      {
+        "key": "Uy",
+        "label": "Velocity Y",
+        "sample": "U",
+        "component": 1,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Uy_m_s"
+      },
+      {
+        "key": "Uz",
+        "label": "Velocity Z",
+        "sample": "U",
+        "component": 2,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Uz_m_s"
+      },
+      {
+        "key": "Un",
+        "label": "Normal velocity",
+        "sample": "Un_m_s",
+        "component": null,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "Q_m3s",
+        "direction": [
+          "in",
+          "out"
+        ],
+        "plot": false,
+        "details": true,
+        "headline": false,
+        "csv": "Un_m_s"
+      },
+      {
+        "key": "Q",
+        "label": "Flow rate",
+        "sample": "Q_m3s",
+        "component": null,
+        "unit_quantity": "volumetric_flow",
+        "unit": "m³/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "Q_m3s",
+        "direction": [
+          "in",
+          "out"
+        ],
+        "plot": false,
+        "details": true,
+        "headline": true,
+        "csv": "flow_m3_s"
+      },
+      {
+        "key": "mdot",
+        "label": "Mass flow",
+        "sample": "mdot_kgs",
+        "component": null,
+        "unit_quantity": "mass_flow",
+        "unit": "kg/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": false,
+        "details": true,
+        "headline": false,
+        "csv": "mass_kg_s"
+      }
+    ],
+    "summary": [
+      {
+        "label": "Flow in",
+        "value": 0.03,
+        "quantity": "Q",
+        "unit": ""
+      },
+      {
+        "label": "out",
+        "value": 0.033,
+        "quantity": "Q",
+        "unit": ""
+      },
+      {
+        "label": "imbalance",
+        "value": 10.000000000000009,
+        "quantity": "",
+        "unit": "%"
+      }
+    ],
+    "summary_warn": true
+  },
+  "outflow_only": {
+    "rho": 1000.0,
+    "monitors": [
+      {
+        "patch": "outlet",
+        "name": "Outlet",
+        "bc_type": "Pressure outlet",
+        "faces": [],
+        "area_m2": 0.01,
+        "n_faces": 40,
+        "rho": 1000.0,
+        "last": {
+          "t": 2.0,
+          "U": null,
+          "Umag": null,
+          "p_Pa": null,
+          "Q_m3s": 0.02,
+          "Un_m_s": 2.0,
+          "mdot_kgs": 20.0
+        },
+        "final": {
+          "iteration": 2.0,
+          "mean_velocity_vector": null,
+          "mean_velocity_magnitude": null,
+          "mean_normal_velocity": 2.0,
+          "pressure_Pa": null,
+          "volumetric_flow_m3s": 0.02,
+          "mass_flow_kgs": 20.0
+        },
+        "series": [
+          {
+            "t": 1.0,
+            "U": null,
+            "Umag": null,
+            "p_Pa": null,
+            "Q_m3s": 0.01,
+            "Un_m_s": 1.0,
+            "mdot_kgs": 10.0
+          },
+          {
+            "t": 2.0,
+            "U": null,
+            "Umag": null,
+            "p_Pa": null,
+            "Q_m3s": 0.02,
+            "Un_m_s": 2.0,
+            "mdot_kgs": 20.0
+          }
+        ],
+        "key": "mon_outlet",
+        "default_quantity": "p"
+      }
+    ],
+    "custom": [],
+    "balance": {
+      "in_m3s": 0.0,
+      "out_m3s": 0.02,
+      "imbalance": null
+    },
+    "quantities": [
+      {
+        "key": "p",
+        "label": "Pressure",
+        "sample": "p_Pa",
+        "component": null,
+        "unit_quantity": "pressure",
+        "unit": "Pa",
+        "color": "#6941c6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": true,
+        "csv": "pressure_Pa"
+      },
+      {
+        "key": "Umag",
+        "label": "Mean velocity",
+        "sample": "Umag",
+        "component": null,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": true,
+        "csv": "mean_velocity_m_s"
+      },
+      {
+        "key": "Ux",
+        "label": "Velocity X",
+        "sample": "U",
+        "component": 0,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Ux_m_s"
+      },
+      {
+        "key": "Uy",
+        "label": "Velocity Y",
+        "sample": "U",
+        "component": 1,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Uy_m_s"
+      },
+      {
+        "key": "Uz",
+        "label": "Velocity Z",
+        "sample": "U",
+        "component": 2,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": false,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": true,
+        "details": true,
+        "headline": false,
+        "csv": "Uz_m_s"
+      },
+      {
+        "key": "Un",
+        "label": "Normal velocity",
+        "sample": "Un_m_s",
+        "component": null,
+        "unit_quantity": "velocity",
+        "unit": "m/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "Q_m3s",
+        "direction": [
+          "in",
+          "out"
+        ],
+        "plot": false,
+        "details": true,
+        "headline": false,
+        "csv": "Un_m_s"
+      },
+      {
+        "key": "Q",
+        "label": "Flow rate",
+        "sample": "Q_m3s",
+        "component": null,
+        "unit_quantity": "volumetric_flow",
+        "unit": "m³/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "Q_m3s",
+        "direction": [
+          "in",
+          "out"
+        ],
+        "plot": false,
+        "details": true,
+        "headline": true,
+        "csv": "flow_m3_s"
+      },
+      {
+        "key": "mdot",
+        "label": "Mass flow",
+        "sample": "mdot_kgs",
+        "component": null,
+        "unit_quantity": "mass_flow",
+        "unit": "kg/s",
+        "color": "#3884e6",
+        "magnitude": true,
+        "direction_from": "",
+        "direction": [
+          "",
+          ""
+        ],
+        "plot": false,
+        "details": true,
+        "headline": false,
+        "csv": "mass_kg_s"
+      }
+    ],
+    "summary": [
+      {
+        "label": "Flow in",
+        "value": 0.0,
+        "quantity": "Q",
+        "unit": ""
+      },
+      {
+        "label": "out",
+        "value": 0.02,
+        "quantity": "Q",
+        "unit": ""
+      }
+    ],
+    "summary_warn": false
+  }
+}

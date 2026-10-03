@@ -1,7 +1,7 @@
 key = "incompressible_flow"
 name = "Incompressible Flow"
 version = "1.0.0"
-api_version = "1.1"
+api_version = "1.4"
 tier = "bundled"
 required = true
 license = "GPL-3.0-or-later"

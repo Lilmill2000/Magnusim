@@ -247,8 +247,8 @@
           "label": "Velocity",
           "unit_quantity": "velocity",
           "kind": "vector",
-          "unit": "",
-          "magnitude_label": "",
+          "unit": "m/s",
+          "magnitude_label": "Velocity Magnitude",
           "shown": "magU"
         },
         {
@@ -256,7 +256,7 @@
           "label": "Pressure",
           "unit_quantity": "pressure",
           "kind": "scalar",
-          "unit": "",
+          "unit": "Pa",
           "magnitude_label": "",
           "shown": "p"
         },
@@ -265,7 +265,7 @@
           "label": "Turbulent kinetic energy",
           "unit_quantity": "specific_energy",
           "kind": "scalar",
-          "unit": "",
+          "unit": "m\u00b2/s\u00b2",
           "magnitude_label": "",
           "shown": "k"
         },
@@ -274,7 +274,7 @@
           "label": "Specific dissipation rate",
           "unit_quantity": "specific_dissipation_rate",
           "kind": "scalar",
-          "unit": "",
+          "unit": "1/s",
           "magnitude_label": "",
           "shown": "omega"
         },
@@ -283,7 +283,7 @@
           "label": "Turbulent dissipation rate",
           "unit_quantity": "dissipation_rate",
           "kind": "scalar",
-          "unit": "",
+          "unit": "m\u00b2/s\u00b3",
           "magnitude_label": "",
           "shown": "epsilon"
         },
@@ -292,13 +292,177 @@
           "label": "Turbulent viscosity",
           "unit_quantity": "kinematic_viscosity",
           "kind": "scalar",
-          "unit": "",
+          "unit": "m\u00b2/s",
           "magnitude_label": "",
           "shown": "nut"
+        },
+        {
+          "key": "R",
+          "label": "Reynolds stress",
+          "unit_quantity": "specific_energy",
+          "kind": "symm_tensor",
+          "unit": "m\u00b2/s\u00b2",
+          "magnitude_label": "",
+          "shown": null
         }
       ],
-      "kinematic_fields": null,
-      "monitor_quantities": null,
+      "kinematic_fields": [
+        "p"
+      ],
+      "monitor_quantities": [
+        {
+          "key": "p",
+          "label": "Pressure",
+          "sample": "p_Pa",
+          "component": null,
+          "unit_quantity": "pressure",
+          "unit": "Pa",
+          "color": "#6941c6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "pressure_Pa"
+        },
+        {
+          "key": "Umag",
+          "label": "Mean velocity",
+          "sample": "Umag",
+          "component": null,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "mean_velocity_m_s"
+        },
+        {
+          "key": "Ux",
+          "label": "Velocity X",
+          "sample": "U",
+          "component": 0,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Ux_m_s"
+        },
+        {
+          "key": "Uy",
+          "label": "Velocity Y",
+          "sample": "U",
+          "component": 1,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Uy_m_s"
+        },
+        {
+          "key": "Uz",
+          "label": "Velocity Z",
+          "sample": "U",
+          "component": 2,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Uz_m_s"
+        },
+        {
+          "key": "Un",
+          "label": "Normal velocity",
+          "sample": "Un_m_s",
+          "component": null,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": true,
+          "direction_from": "Q_m3s",
+          "direction": [
+            "in",
+            "out"
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Un_m_s"
+        },
+        {
+          "key": "Q",
+          "label": "Flow rate",
+          "sample": "Q_m3s",
+          "component": null,
+          "unit_quantity": "volumetric_flow",
+          "unit": "m\u00b3/s",
+          "color": "#3884e6",
+          "magnitude": true,
+          "direction_from": "Q_m3s",
+          "direction": [
+            "in",
+            "out"
+          ],
+          "plot": false,
+          "details": true,
+          "headline": true,
+          "csv": "flow_m3_s"
+        },
+        {
+          "key": "mdot",
+          "label": "Mass flow",
+          "sample": "mdot_kgs",
+          "component": null,
+          "unit_quantity": "mass_flow",
+          "unit": "kg/s",
+          "color": "#3884e6",
+          "magnitude": true,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "mass_kg_s"
+        }
+      ],
       "ui": {
         "study_settings": "incompressible_flow.study",
         "run_settings": "incompressible_flow.run"
@@ -646,8 +810,8 @@
           "label": "Velocity",
           "unit_quantity": "velocity",
           "kind": "vector",
-          "unit": "",
-          "magnitude_label": "",
+          "unit": "m/s",
+          "magnitude_label": "Velocity Magnitude",
           "shown": "magU"
         },
         {
@@ -655,7 +819,7 @@
           "label": "Pressure",
           "unit_quantity": "pressure",
           "kind": "scalar",
-          "unit": "",
+          "unit": "Pa",
           "magnitude_label": "",
           "shown": "p"
         },
@@ -664,7 +828,7 @@
           "label": "Turbulent kinetic energy",
           "unit_quantity": "specific_energy",
           "kind": "scalar",
-          "unit": "",
+          "unit": "m\u00b2/s\u00b2",
           "magnitude_label": "",
           "shown": "k"
         },
@@ -673,7 +837,7 @@
           "label": "Specific dissipation rate",
           "unit_quantity": "specific_dissipation_rate",
           "kind": "scalar",
-          "unit": "",
+          "unit": "1/s",
           "magnitude_label": "",
           "shown": "omega"
         },
@@ -682,7 +846,7 @@
           "label": "Turbulent dissipation rate",
           "unit_quantity": "dissipation_rate",
           "kind": "scalar",
-          "unit": "",
+          "unit": "m\u00b2/s\u00b3",
           "magnitude_label": "",
           "shown": "epsilon"
         },
@@ -691,13 +855,177 @@
           "label": "Turbulent viscosity",
           "unit_quantity": "kinematic_viscosity",
           "kind": "scalar",
-          "unit": "",
+          "unit": "m\u00b2/s",
           "magnitude_label": "",
           "shown": "nut"
+        },
+        {
+          "key": "R",
+          "label": "Reynolds stress",
+          "unit_quantity": "specific_energy",
+          "kind": "symm_tensor",
+          "unit": "m\u00b2/s\u00b2",
+          "magnitude_label": "",
+          "shown": null
         }
       ],
-      "kinematic_fields": null,
-      "monitor_quantities": null,
+      "kinematic_fields": [
+        "p"
+      ],
+      "monitor_quantities": [
+        {
+          "key": "p",
+          "label": "Pressure",
+          "sample": "p_Pa",
+          "component": null,
+          "unit_quantity": "pressure",
+          "unit": "Pa",
+          "color": "#6941c6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "pressure_Pa"
+        },
+        {
+          "key": "Umag",
+          "label": "Mean velocity",
+          "sample": "Umag",
+          "component": null,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "mean_velocity_m_s"
+        },
+        {
+          "key": "Ux",
+          "label": "Velocity X",
+          "sample": "U",
+          "component": 0,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Ux_m_s"
+        },
+        {
+          "key": "Uy",
+          "label": "Velocity Y",
+          "sample": "U",
+          "component": 1,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Uy_m_s"
+        },
+        {
+          "key": "Uz",
+          "label": "Velocity Z",
+          "sample": "U",
+          "component": 2,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Uz_m_s"
+        },
+        {
+          "key": "Un",
+          "label": "Normal velocity",
+          "sample": "Un_m_s",
+          "component": null,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": true,
+          "direction_from": "Q_m3s",
+          "direction": [
+            "in",
+            "out"
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Un_m_s"
+        },
+        {
+          "key": "Q",
+          "label": "Flow rate",
+          "sample": "Q_m3s",
+          "component": null,
+          "unit_quantity": "volumetric_flow",
+          "unit": "m\u00b3/s",
+          "color": "#3884e6",
+          "magnitude": true,
+          "direction_from": "Q_m3s",
+          "direction": [
+            "in",
+            "out"
+          ],
+          "plot": false,
+          "details": true,
+          "headline": true,
+          "csv": "flow_m3_s"
+        },
+        {
+          "key": "mdot",
+          "label": "Mass flow",
+          "sample": "mdot_kgs",
+          "component": null,
+          "unit_quantity": "mass_flow",
+          "unit": "kg/s",
+          "color": "#3884e6",
+          "magnitude": true,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "mass_kg_s"
+        }
+      ],
       "ui": {
         "study_settings": "incompressible_flow.study",
         "run_settings": "incompressible_flow.run"
@@ -1592,10 +1920,19 @@
       "label": "Area average",
       "plugin": "incompressible_flow",
       "target": "patch",
-      "description": "",
-      "aliases": [],
-      "user_creatable": false,
-      "quantities": [],
+      "description": "Average velocity and pressure over the faces it is assigned to, at every saved step.",
+      "aliases": [
+        "Area average",
+        "Surface data"
+      ],
+      "user_creatable": true,
+      "quantities": [
+        "p",
+        "Umag",
+        "Ux",
+        "Uy",
+        "Uz"
+      ],
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -1617,10 +1954,14 @@
       "label": "Flow rate",
       "plugin": "incompressible_flow",
       "target": "patch",
-      "description": "",
+      "description": "Volume and mass flow through a boundary, at every saved step.",
       "aliases": [],
       "user_creatable": false,
-      "quantities": [],
+      "quantities": [
+        "Q",
+        "mdot",
+        "Un"
+      ],
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -2110,7 +2451,7 @@
       ],
       "description": "Steady-state and transient incompressible flow of one fluid (simpleFoam, pimpleFoam).",
       "source": "bundled",
-      "api_version": "1.1",
+      "api_version": "1.4",
       "overrides": [],
       "tier": "bundled",
       "required": true,

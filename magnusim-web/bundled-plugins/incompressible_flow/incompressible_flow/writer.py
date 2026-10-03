@@ -24,7 +24,13 @@ from magnusim_sdk.foam import (
 from magnusim_sdk.foam import write_foam_text as _write_foam
 from magnusim_sdk.units import UNITS as _UNITS
 
-from .physics import DEFAULT_PHYSICS, StudyPhysics, TurbulenceModel, turbulence_fields
+from .physics import (
+    DEFAULT_PHYSICS,
+    KINEMATIC_FIELDS,
+    StudyPhysics,
+    TurbulenceModel,
+    turbulence_fields,
+)
 
 # Runtime imports stay lazy; static analysis sees the real exported types.
 if TYPE_CHECKING:
@@ -1089,7 +1095,7 @@ RAS
         "nu": float(spec.nu),
         "rho": float(spec.rho),
         # Fields stored divided by rho: the results viewer shows them times rho (Pa).
-        "kinematic_fields": ["p"],
+        "kinematic_fields": list(KINEMATIC_FIELDS),
         "patches": patch_names,
         "wall_default": spec.wall_default,
         "mapped": mapped_meta,

@@ -8,7 +8,8 @@ from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 
-from .physics import DEFAULT_TURBULENCE, TURBULENCE_MODELS
+from .monitors import MONITOR_QUANTITIES
+from .physics import DEFAULT_TURBULENCE, KINEMATIC_FIELDS, TURBULENCE_MODELS
 
 # Product BC keys from case.bc_registry.BC_TYPES (placeholders OK until BC wrap).
 _INCOMPRESSIBLE_BC_TYPES: tuple[str, ...] = (
@@ -23,13 +24,17 @@ _INCOMPRESSIBLE_BC_TYPES: tuple[str, ...] = (
 
 _FIELDS: tuple[str, ...] = ("U", "p", "k", "omega", "nut")
 
+# What results colour by, with the units the page shows them in (pressure in
+# Pa: the case stores p divided by rho, see KINEMATIC_FIELDS). R, the Reynolds
+# stress the LRR and SSG models write, is a tensor: listed, never coloured by.
 _RESULT_FIELDS: tuple[ResultField, ...] = (
-    ResultField("U", "Velocity", "velocity", "vector"),
-    ResultField("p", "Pressure", "pressure", "scalar"),
-    ResultField("k", "Turbulent kinetic energy", "specific_energy", "scalar"),
-    ResultField("omega", "Specific dissipation rate", "specific_dissipation_rate", "scalar"),
-    ResultField("epsilon", "Turbulent dissipation rate", "dissipation_rate", "scalar"),
-    ResultField("nut", "Turbulent viscosity", "kinematic_viscosity", "scalar"),
+    ResultField("U", "Velocity", "velocity", "vector", unit="m/s", magnitude_label="Velocity Magnitude"),
+    ResultField("p", "Pressure", "pressure", "scalar", unit="Pa"),
+    ResultField("k", "Turbulent kinetic energy", "specific_energy", "scalar", unit="m²/s²"),
+    ResultField("omega", "Specific dissipation rate", "specific_dissipation_rate", "scalar", unit="1/s"),
+    ResultField("epsilon", "Turbulent dissipation rate", "dissipation_rate", "scalar", unit="m²/s³"),
+    ResultField("nut", "Turbulent viscosity", "kinematic_viscosity", "scalar", unit="m²/s"),
+    ResultField("R", "Reynolds stress", "specific_energy", "symm_tensor", unit="m²/s²"),
 )
 
 # MonitorType keys (wired to registry in land5; flow->flow_rate bag fix).
@@ -401,6 +406,8 @@ def _contract_fields(td: str, *, key: str, label: str) -> dict:
         "plan_case": _plan_case,
         "run_monitors": run_monitors,
         "frame_fields": ("U", "p"),
+        "kinematic_fields": KINEMATIC_FIELDS,
+        "monitor_quantities": MONITOR_QUANTITIES,
         "ui": dict(ic.UI),
     }
 

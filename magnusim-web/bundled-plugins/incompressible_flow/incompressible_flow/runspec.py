@@ -25,12 +25,12 @@ from magnusim_sdk.study import (
     list_bc_records,
     map_bc_to_patch,
     matches_study,
-    run_custom_monitors,
     sanitize_patch_name,
     study_fluid,
     wall_treatment,
 )
 
+from .monitors import custom_monitors
 from .physics import StudyPhysics, physics_from_record
 from .transient import STEADY_DEFAULTS, TransientControl, load_mesh_meta, resolve_transient_control
 
@@ -248,7 +248,7 @@ def load_run_spec(inputs: Any) -> RunSpec:
         aa=aa,
         mapped=mapped,
         physics=physics_from_record(inputs.study or None),
-        custom_monitors=run_custom_monitors((inputs.run or {}).get("result_controls")),
+        custom_monitors=custom_monitors((inputs.run or {}).get("result_controls")),
         analysis_key=inputs.analysis_key,
         time_dependency=td,
         ok=True,

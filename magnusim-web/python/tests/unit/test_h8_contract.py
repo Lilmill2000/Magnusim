@@ -58,10 +58,14 @@ def test_kinematic_fields_in_the_contract():
     solvers = get_registry("solver")
     base = _analysis("incompressible_steady")
     rows = {r["key"]: r for r in get_registry("analysis").describe()}
+    # The default analysis declares its own: p is stored divided by rho.
+    assert rows["incompressible_steady"]["kinematic_fields"] == ["p"]
+    assert contract.kinematic_fields(base) == ("p",)
     # Not declared: describe says null, the launch spec carries null.
-    assert rows["incompressible_steady"]["kinematic_fields"] is None
-    assert contract.kinematic_fields(base) is None
-    assert contract.launch_spec(base, solvers).to_json()["kinematic_fields"] is None
+    undeclared = replace(base, key="x_undeclared", kinematic_fields=None)
+    assert contract.describe_extra(undeclared)["kinematic_fields"] is None
+    assert contract.kinematic_fields(undeclared) is None
+    assert contract.launch_spec(undeclared, solvers).to_json()["kinematic_fields"] is None
     declared = replace(base, key="x_kin", kinematic_fields=("p", "p_rgh"))
     assert contract.kinematic_fields(declared) == ("p", "p_rgh")
     assert contract.launch_spec(declared, solvers).to_json()["kinematic_fields"] == ["p", "p_rgh"]
