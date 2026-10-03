@@ -255,6 +255,23 @@ export function corePythonPath(current) {
 }
 
 /**
+ * A job's environment. On the core's Python a tool (a plugin's job too) imports this
+ * app's cfddesk and SDK; another interpreter (a plugin's own environment) sees nothing
+ * of the core's (isolatedPythonEnv: no PYTHONPATH at all).
+ * @param {string | undefined} python
+ * @param {NodeJS.ProcessEnv | undefined} extra
+ * @param {NodeJS.ProcessEnv} [from]
+ * @returns {NodeJS.ProcessEnv}
+ */
+export function jobEnv(python, extra, from = process.env) {
+  /** @type {NodeJS.ProcessEnv} */
+  const base = { ...from, ...(extra || {}), PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+  if (python && python !== PYTHON) return isolatedPythonEnv(base);
+  base.PYTHONPATH = corePythonPath(base.PYTHONPATH);
+  return base;
+}
+
+/**
  * @param {{
  *   kind: string,
  *   jobId: string,
@@ -281,15 +298,10 @@ export function spawnJob(opts) {
   const args = Array.isArray(opts.args) ? opts.args : [];
   const python = opts.python || PYTHON;
   const jobLog = createJobLogger(kind, jobId);
-  /** @type {NodeJS.ProcessEnv} */
-  const base = { ...process.env, ...(opts.env || {}), PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
-  // On the core's Python a tool (a plugin's job too) imports this app's cfddesk and SDK.
-  if (python === PYTHON) base.PYTHONPATH = corePythonPath(base.PYTHONPATH);
   const child = spawn(python, [script, ...args], {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Another interpreter (a plugin's own environment) sees nothing of the core's.
-    env: opts.python && opts.python !== PYTHON ? isolatedPythonEnv(base) : base,
+    env: jobEnv(opts.python, opts.env),
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     // Stop ends what the tool started too (POSIX: its own process group).
     ...ownProcessGroup(),
