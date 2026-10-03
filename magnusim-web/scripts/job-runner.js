@@ -10,9 +10,10 @@
  * still separate.
  */
 import { spawn } from 'node:child_process';
+import { delimiter, join } from 'node:path';
 import { isolatedPythonEnv, ownProcessGroup } from './proc-tree.js';
 import { createJobLogger } from './log.js';
-import { PYTHON } from './python-env.js';
+import { PY_ROOT, PYTHON } from './python-env.js';
 
 const EVENT_PREFIX = 'MAGNUSIM_EVENT ';
 const EVENT_PREFIX_ALIASES = ['MAGNUSIM_EVENT ', 'CFDDESK_EVENT '];
@@ -244,6 +245,16 @@ export function createLogThinner(opts = {}) {
 }
 
 /**
+ * PYTHONPATH for a tool on the core's Python: the app's python and SDK folders first.
+ * @param {string | undefined} current
+ */
+export function corePythonPath(current) {
+  const first = [PY_ROOT, join(PY_ROOT, 'sdk')];
+  const rest = String(current || '').split(delimiter).filter((p) => p && !first.includes(p));
+  return [...first, ...rest].join(delimiter);
+}
+
+/**
  * @param {{
  *   kind: string,
  *   jobId: string,
@@ -270,7 +281,10 @@ export function spawnJob(opts) {
   const args = Array.isArray(opts.args) ? opts.args : [];
   const python = opts.python || PYTHON;
   const jobLog = createJobLogger(kind, jobId);
+  /** @type {NodeJS.ProcessEnv} */
   const base = { ...process.env, ...(opts.env || {}), PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+  // On the core's Python a tool (a plugin's job too) imports this app's cfddesk and SDK.
+  if (python === PYTHON) base.PYTHONPATH = corePythonPath(base.PYTHONPATH);
   const child = spawn(python, [script, ...args], {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],

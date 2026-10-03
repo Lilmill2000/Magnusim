@@ -820,8 +820,33 @@ def test_the_prepare_environment():
     assert "PYTHONPATH" not in env and "PYTHONHOME" not in env and "PYTHONSTARTUP" not in env
     assert env["PYTHONNOUSERSITE"] == "1" and env["KEEP"] == "1" and env["MAGNUSIM_JOB_ID"] == JOB
     assert env["PYTHONUTF8"] == "1" and env["PYTHONIOENCODING"] == "utf-8"
-    core = prepare_environment(foam_relay.PrepareStep("j", "core", [], {}, "py", "t.py", "."), base)
-    assert core["PYTHONPATH"] == "x" and "PYTHONNOUSERSITE" not in core
+    root = Path("app")
+    core = prepare_environment(foam_relay.PrepareStep("j", "core", [], {}, "py", "t.py", str(root)), base)
+    # The core's Python: the app's python and SDK folders first, the relay's own after.
+    first = [str(root / "python"), str(root / "python" / "sdk")]
+    assert core["PYTHONPATH"].split(os.pathsep) == [*first, "x"] and "PYTHONNOUSERSITE" not in core
+    again = prepare_environment(foam_relay.PrepareStep("j", "core", [], {}, "py", "t.py", str(root)), {"PYTHONPATH": core["PYTHONPATH"]})
+    assert again["PYTHONPATH"] == core["PYTHONPATH"]
+
+
+def test_a_plugin_tool_on_the_core_python_imports_cfddesk_with_no_pythonpath(tmp_path: Path):
+    """The relay starts a core-runtime job tool with no PYTHONPATH of its own: the
+    step's environment must still let it import cfddesk.registry and magnusim_sdk
+    (Incompressible Flow's write_run_case failed with ModuleNotFoundError)."""
+    web = Path(__file__).resolve().parents[3]
+    tool = tmp_path / "probe.py"
+    tool.write_text(
+        "import cfddesk.registry.run_case, magnusim_sdk.events; print(cfddesk.registry.run_case.__file__)",
+        encoding="utf-8",
+    )
+    step = foam_relay.PrepareStep("j", "core", [], {}, sys.executable, str(tool), str(web))
+    base = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    out = subprocess.run(
+        [sys.executable, str(tool)], env=prepare_environment(step, base), stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert out.returncode == 0, out.stderr
+    assert Path(out.stdout.strip()).resolve().is_relative_to((web / "python").resolve())
 
 
 def test_a_prepare_step_runs_after_the_marker_and_before_wsl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

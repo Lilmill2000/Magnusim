@@ -803,7 +803,9 @@ def resolve_log_parser(hub: Any, analysis: str, *, plugin: str) -> Any:
 
 def prepare_environment(step: PrepareStep, base: dict[str, str] | None = None) -> dict[str, str]:
     """The relay's environment plus the step's; a plugin runtime sees nothing of the
-    core's Python paths (as ``isolatedPythonEnv``)."""
+    core's Python paths (as ``isolatedPythonEnv``). A step on the core's Python gets
+    the app's ``python`` and SDK folders first on PYTHONPATH, so a plugin's job tool
+    there can import ``cfddesk.registry`` and ``magnusim_sdk`` (as Node's spawnJob)."""
     env = dict(os.environ if base is None else base)
     env.update(step.env)
     env["PYTHONIOENCODING"] = "utf-8"
@@ -812,6 +814,11 @@ def prepare_environment(step: PrepareStep, base: dict[str, str] | None = None) -
         for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"):
             env.pop(name, None)
         env["PYTHONNOUSERSITE"] = "1"
+    else:
+        py_root = Path(step.cwd) / "python"
+        first = [str(py_root), str(py_root / "sdk")]
+        rest = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and p not in first]
+        env["PYTHONPATH"] = os.pathsep.join(first + rest)
     return env
 
 
