@@ -308,6 +308,10 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   expect(sig4((await runRow(runA)).transient?.delta_t)).toBe(sig4(written.deltaT));
   stage(t0, `run A writes deltaT ${written.deltaT} = preview ${ctlLong.delta_t}; the panel showed ${shown} s`);
   await waitSolving(runA);
+  // The progress line shows the numbers the transient analysis declares (live_metrics):
+  // its time step and Courant number, as before.
+  await expect(runPanel.locator('[data-run-line="1"]')).toContainText(/^t = .* · Δt \S+ s · Co \S+( \(max \S+\))?/, { timeout: 120_000 });
+  stage(t0, `progress line: ${await runPanel.locator('[data-run-line="1"]').textContent()}`);
   await runPanel.locator('[data-run-stop="1"]').click();
   await waitStatus(runA, /^stopped$/, 300_000);
   await waitSlotFree(request);

@@ -175,6 +175,7 @@ import {
   velocityVectorName as pickVelocityVector,
 } from './resultFields';
 import { createToastQueue } from './toastQueue';
+import { runProgressText } from './runProgressText';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
 import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js';
@@ -30321,30 +30322,14 @@ async function persistTransientSettings(next) {
   }
 }
 
-/** Live transient progress from the run doc: physical time, frames, Δt, Co. */
+/**
+ * Live transient progress from the run doc: physical time, frames and the per-step
+ * numbers its analysis declares (live_metrics; none declared: Δt and Co). runProgressText.ts.
+ */
 function transientProgressText(run, endTime) {
-  const t =
-    Number(run && run.sim_time != null ? run.sim_time : run && run.iteration) ||
-    Number(run && run.last_saved_iteration) ||
-    0;
-  const end = Number(endTime) || 0;
-  let s = 't = ' + formatSimTime(t) + (end > 0 ? ' / ' + formatSimTime(end) : '');
-  if (end > 0 && t > 0) s += ' (' + Math.min(100, Math.floor((t / end) * 100)) + '%)';
-  const extra = [];
-  const frames = runFrameCountLabel(run);
-  if (frames) extra.push(frames);
-  if (run && Number.isFinite(Number(run.delta_t)) && Number(run.delta_t) > 0) extra.push('Δt ' + formatSimTime(run.delta_t));
-  if (run && Number.isFinite(Number(run.co_mean))) {
-    extra.push(
-      'Co ' +
-        Number(run.co_mean).toPrecision(2) +
-        (Number.isFinite(Number(run.co_max)) ? ' (max ' + Number(run.co_max).toPrecision(2) + ')' : '')
-    );
-  } else if (run && Number.isFinite(Number(run.co_max))) {
-    extra.push('Co max ' + Number(run.co_max).toPrecision(2));
-  }
-  if (extra.length) s += ' · ' + extra.join(' · ');
-  return s;
+  const row = analysisRow(runAnalysisKeyOf(run));
+  const metrics = row && Array.isArray(row.live_metrics) ? row.live_metrics : null;
+  return runProgressText(run, endTime, { frames: runFrameCountLabel(run), metrics });
 }
 
 function stampRcId() {
