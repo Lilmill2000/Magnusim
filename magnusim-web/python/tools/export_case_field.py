@@ -243,8 +243,11 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
     if src is None:
         base = field[3:] if field.startswith("mag") and len(field) > 3 else field
         for name in dict.fromkeys((field, base)):
-            if (time_dir / name).is_file() and foam_kind(time_dir / name) in TENSOR_KINDS:
+            found = foam_kind(time_dir / name) if (time_dir / name).is_file() else ""
+            if found in TENSOR_KINDS:
                 raise ValueError(f"{name} is a tensor field; it cannot be coloured as a scalar")
+            if found == "face":
+                raise ValueError(f"{name} is a face field; it cannot be coloured")
         raise FileNotFoundError(f"time_not_found: missing OpenFOAM {field}: {time_dir / field}")
     foam_name, kind = src
     foam_stats = parse_foam_scalar_or_vector(time_dir / foam_name, kind)

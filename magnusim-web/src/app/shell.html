@@ -625,10 +625,10 @@
               <div id="viewer-b" class="viewer" aria-label="Compare viewer"></div>
               <div id="legend-b" class="legend legend-b is-hidden" hidden aria-label="Compare legend">
                 <div class="legend-head">
-                  <span class="legend-title">Pressure</span>
+                  <span class="legend-title"></span>
                   <span class="legend-head-right">
                     <button type="button" class="legend-auto" hidden title="Back to the data's own range">Auto</button>
-                    <span class="legend-units">Pa</span>
+                    <span class="legend-units"></span>
                   </span>
                 </div>
                 <div class="legend-bar-wrap">
@@ -730,7 +730,7 @@
               <div class="fp-field">
                 <div class="fp-label">Coloring</div>
                 <select id="parts-style" class="fp-select" aria-label="Parts coloring">
-                  <option value="field" selected>Velocity Magnitude</option>
+                  <option value="field" selected>Field</option>
                   <option value="solid">Solid color</option>
                 </select>
               </div>
@@ -756,7 +756,7 @@
               </div>
               <div class="fp-field">
                 <div class="fp-label">Coloring</div>
-                <div class="fp-select" id="cp-coloring">Velocity Magnitude</div>
+                <div class="fp-select" id="cp-coloring"></div>
               </div>
               <ul id="result-plane-list" class="mesh-plane-list"></ul>
               <button type="button" class="js-btn" id="btn-add-result-plane">Add cutting plane</button>
@@ -821,8 +821,6 @@
               <div class="fp-field">
                 <div class="fp-label">Coloring</div>
                 <select id="pt-coloring" class="fp-select" aria-label="Particle coloring">
-                  <option value="magU" selected>Velocity Magnitude</option>
-                  <option value="p">Pressure</option>
                   <option value="solid">Solid color</option>
                 </select>
               </div>
@@ -883,10 +881,7 @@
               </div>
               <div class="fp-field">
                 <div class="fp-label">Field variable</div>
-                <select id="pop-field-variable" class="fp-select" aria-label="Field variable">
-                  <option value="Velocity Magnitude" selected>Velocity Magnitude</option>
-                  <option value="Pressure">Pressure</option>
-                </select>
+                <select id="pop-field-variable" class="fp-select" aria-label="Field variable"></select>
               </div>
               <div class="fp-field">
                 <div class="fp-label" id="pop-selected-label">Selected points (0)</div>
@@ -911,24 +906,18 @@
               </div>
               <div class="fp-field">
                 <div class="fp-label">Iso scalar</div>
-                <select id="iso-scalar" class="fp-select" aria-label="Iso scalar">
-                  <option value="Velocity Magnitude" selected>Velocity Magnitude</option>
-                  <option value="Pressure">Pressure</option>
-                </select>
+                <select id="iso-scalar" class="fp-select" aria-label="Iso scalar"></select>
               </div>
               <div class="fp-field">
                 <div class="fp-label">Iso value</div>
                 <div class="opacity-row">
                   <input type="number" id="iso-value" class="fp-num" step="any" value="11.1" aria-label="Iso value" />
-                  <span class="opacity-val" id="iso-value-unit">m/s</span>
+                  <span class="opacity-val" id="iso-value-unit"></span>
                 </div>
               </div>
               <div class="fp-field">
                 <div class="fp-label">Coloring</div>
-                <select id="iso-coloring" class="fp-select" aria-label="Coloring">
-                  <option value="Pressure" selected>Pressure</option>
-                  <option value="Velocity Magnitude">Velocity Magnitude</option>
-                </select>
+                <select id="iso-coloring" class="fp-select" aria-label="Coloring"></select>
               </div>
               <div class="fp-row toggle-row">
                 <span>Vectors</span>
@@ -950,10 +939,7 @@
               </div>
               <div class="fp-field">
                 <div class="fp-label">Iso scalar</div>
-                <select id="iv-scalar" class="fp-select" aria-label="Iso scalar">
-                  <option value="Velocity Magnitude" selected>Velocity Magnitude</option>
-                  <option value="Pressure">Pressure</option>
-                </select>
+                <select id="iv-scalar" class="fp-select" aria-label="Iso scalar"></select>
               </div>
               <div class="fp-field">
                 <div class="fp-label">Iso value</div>
@@ -966,10 +952,7 @@
               </div>
               <div class="fp-field">
                 <div class="fp-label">Coloring</div>
-                <select id="iv-coloring" class="fp-select" aria-label="Coloring">
-                  <option value="Pressure" selected>Pressure</option>
-                  <option value="Velocity Magnitude">Velocity Magnitude</option>
-                </select>
+                <select id="iv-coloring" class="fp-select" aria-label="Coloring"></select>
               </div>
               <div class="fp-row toggle-row">
                 <span>Vectors</span>
@@ -1050,10 +1033,10 @@
           </aside>
           <div id="legend" class="legend is-hidden" hidden aria-label="Legend">
             <div class="legend-head">
-              <span class="legend-title">Velocity Magnitude</span>
+              <span class="legend-title"></span>
               <span class="legend-head-right">
                 <button type="button" class="legend-auto" hidden title="Back to the data's own range">Auto</button>
-                <span class="legend-units">m/s</span>
+                <span class="legend-units"></span>
               </span>
             </div>
             <div class="legend-bar-wrap">
@@ -1071,10 +1054,10 @@
           </div>
           <div id="legend-pt" class="legend legend-pt is-hidden" hidden aria-label="Particle trace legend">
             <div class="legend-head">
-              <span class="legend-title">Particle trace · Velocity Magnitude</span>
+              <span class="legend-title">Particle trace</span>
               <span class="legend-head-right">
                 <button type="button" class="legend-auto" hidden title="Back to the data's own range">Auto</button>
-                <span class="legend-units">m/s</span>
+                <span class="legend-units"></span>
               </span>
             </div>
             <div class="legend-bar-wrap">
@@ -1132,7 +1115,7 @@
               <input type="range" id="iter-scrub" min="0" max="0" value="0" step="1" aria-label="Iteration scrubber" />
               <span id="iter-range-max">—</span>
             </div>
-            <div class="iter-coloring" id="iter-coloring">Coloring: Velocity Magnitude</div>
+            <div class="iter-coloring" id="iter-coloring">Coloring</div>
           </section>
         </aside>
       </div>

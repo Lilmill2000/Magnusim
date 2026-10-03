@@ -295,6 +295,23 @@ def test_inspect_needs_a_written_frame(tmp_path: Path, monkeypatch):
     assert "time_not_found" in res["error"]["message"]
 
 
+def test_inspect_reads_a_point_on_the_outer_face():
+    """A pick on the domain's outer face (the page probes the surface point it hit)
+    lands a rounding error outside the cells: it reads the cell it lies on. A point
+    clearly off the mesh is still an honest miss."""
+    import export_inspect_point
+
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "foam-results" / "cavity-2d"
+    mesh, _ = case_volume.load_volume(fixture, "0.5")
+    grid = export_inspect_point._point_grid(mesh)
+    # The cavity's front face as the page picked it (z just past the float32 bound).
+    on_face = export_inspect_point.probe_point(grid, [0.0103968, 0.0619048, 0.009999999776482584])
+    assert on_face["hit"] is True
+    assert on_face["values"]["p"] is not None and on_face["values"]["magU"] is not None
+    off = export_inspect_point.probe_point(grid, [0.05, 0.05, 0.0101])
+    assert off["hit"] is False and off["reason"] == "miss_mesh"
+
+
 def _t_case(tmp_path: Path) -> tuple[Path, pv.UnstructuredGrid]:
     """A case that writes only T, rising along x (290 K at x=0 to 310 K at x=0.4)."""
     case = _case(tmp_path, {"rho": RHO, "kinematic_fields": []}, {"T": np.linspace(290.0, 310.0, 64)})

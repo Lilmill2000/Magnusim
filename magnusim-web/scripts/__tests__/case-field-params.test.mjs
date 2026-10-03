@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  caseResultFieldRows,
+  caseShownFields,
   cutParamsFromUrl,
   fieldListParam,
   inspectParamsFromUrl,
@@ -57,5 +62,48 @@ describe('case field request parameters', () => {
     const pt = ptParamsFromUrl(url({ seeds_h: '4' }));
     assert.deepEqual([pt.vector, pt.coloring, pt.seeds_h], ['', '', 4]);
     assert.deepEqual(fieldListParam(''), []);
+  });
+});
+
+describe('case shown fields', () => {
+  const foam = (dir, name, cls) =>
+    writeFileSync(join(dir, name), ['FoamFile', '{', `    class       ${cls};`, `    object      ${name};`, '}', 'internalField uniform 0;', ''].join('\n'));
+
+  it('lists scalars by name and vectors as magX, never tensors, face fields or old times', () => {
+    const root = mkdtempSync(join(tmpdir(), 'case-fields-'));
+    try {
+      const t = join(root, '100');
+      mkdirSync(join(t, 'uniform'), { recursive: true });
+      foam(t, 'U', 'volVectorField');
+      foam(t, 'p', 'volScalarField');
+      foam(t, 'k', 'volScalarField');
+      foam(t, 'phi', 'surfaceScalarField');
+      foam(t, 'R', 'volSymmTensorField');
+      foam(t, 'U_0', 'volVectorField');
+      assert.deepEqual(caseShownFields(root, '100'), ['magU', 'k', 'p']);
+      assert.deepEqual(caseShownFields(root, '7'), []);
+      // No sidecar, or one without result_fields: null.
+      assert.equal(caseResultFieldRows(root), null);
+      writeFileSync(join(root, 'w27-case.json'), JSON.stringify({ kinematic_fields: [] }));
+      assert.equal(caseResultFieldRows(root), null);
+      writeFileSync(
+        join(root, 'w27-case.json'),
+        JSON.stringify({
+          result_fields: [
+            { key: 'T', kind: 'Scalar', unit_quantity: 'Temperature', label: 'Temperature', unit: 'K' },
+            '../x',
+            'W',
+            { key: 'q', unit: ['a', 'b'].join(String.fromCharCode(10)) },
+          ],
+        }),
+      );
+      assert.deepEqual(caseResultFieldRows(root), [
+        { key: 'T', kind: 'scalar', unit_quantity: 'temperature', label: 'Temperature', unit: 'K', magnitude_label: '' },
+        { key: 'W', kind: '', unit_quantity: '', label: '', unit: '', magnitude_label: '' },
+        { key: 'q', kind: '', unit_quantity: '', label: '', unit: '', magnitude_label: '' },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

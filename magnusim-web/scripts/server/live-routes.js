@@ -409,6 +409,7 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
       return;
     }
     const times = api.listCaseTimes(caseDir);
+    const last = times.length ? times[times.length - 1] : null;
     ctx.res.setHeader('X-CFD-Source', 'case-tree-times');
     ctx.res.setHeader('X-CFD-Case-Dir', caseDir);
     ctx.sendJson(200, {
@@ -416,6 +417,11 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
       case_dir: caseDir,
       times,
       n_times: times.length,
+      // What the last saved time can colour by and the sidecar's result_fields
+      // (null when it lists none), so results list the right fields before the
+      // first field loads.
+      fields_available: last != null ? api.caseShownFields(caseDir, last) : [],
+      result_fields: api.caseResultFieldRows(caseDir),
       start: times.length ? times[0] : null,
       end: times.length ? times[times.length - 1] : null,
       proves_not_baked_only: true,

@@ -25,10 +25,18 @@ FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 # scalar or a vector magnitude, so no view offers them.
 TENSOR_KINDS = ("symm_tensor", "tensor")
 
+# Face fields (surfaceScalarField phi, the face flux every solver writes) live
+# on the mesh faces, not the cells: the volume reader does not load them, so no
+# view offers them either.
+NEVER_SHOWN = (*TENSOR_KINDS, "face")
+
+# Old-time copies (U_0, phi_0) a second-order time scheme writes next to the field.
+OLD_TIME = re.compile(r"_0$")
+
 
 def foam_kind(path: Path) -> str:
-    """'vector', 'symm_tensor', 'tensor' or 'scalar' from the file's FoamFile class
-    (or its internalField)."""
+    """'vector', 'symm_tensor', 'tensor', 'face' (a surface field) or 'scalar' from
+    the file's FoamFile class (or its internalField)."""
     try:
         with open(path, "rb") as fh:
             head = fh.read(4096).decode("latin1", errors="replace")
@@ -37,6 +45,8 @@ def foam_kind(path: Path) -> str:
     m = re.search(r"\bclass\s+(\w+)", head)
     if m:
         cls = m.group(1)
+        if cls.startswith("surface"):
+            return "face"
         if "SymmTensor" in cls:
             return "symm_tensor"
         if "Tensor" in cls:
@@ -59,14 +69,14 @@ def mag_base(name: str) -> str:
 def foam_source(time_dir: Path, field: str) -> tuple[str, str] | None:
     """(file, kind) a shown field reads: the field's own file, or for ``mag<X>`` the vector ``X``.
 
-    None for a tensor field (or its ``mag``): it is never shown.
+    None for a tensor or face field (or its ``mag``): it is never shown.
     """
     if (time_dir / field).is_file():
         kind = foam_kind(time_dir / field)
-        return None if kind in TENSOR_KINDS else (field, kind)
+        return None if kind in NEVER_SHOWN else (field, kind)
     base = mag_base(field)
     if base and (time_dir / base).is_file():
-        if foam_kind(time_dir / base) in TENSOR_KINDS:
+        if foam_kind(time_dir / base) in NEVER_SHOWN:
             return None
         return base, "vector"
     return None
@@ -74,17 +84,17 @@ def foam_source(time_dir: Path, field: str) -> tuple[str, str] | None:
 
 def shown_fields(time_dir: Path) -> list[str]:
     """Every field a time folder can colour by: scalars by name, vectors as ``mag<name>``.
-    Tensors are left out."""
+    Tensors, face fields (phi) and old-time copies (U_0) are left out."""
     out: list[str] = []
     try:
         entries = sorted(Path(time_dir).iterdir())
     except OSError:
         return out
     for f in entries:
-        if not f.is_file() or not FIELD_NAME.match(f.name):
+        if not f.is_file() or not FIELD_NAME.match(f.name) or OLD_TIME.search(f.name):
             continue
         kind = foam_kind(f)
-        if kind in TENSOR_KINDS:
+        if kind in NEVER_SHOWN:
             continue
         out.append(("mag" + f.name) if kind == "vector" else f.name)
     return out

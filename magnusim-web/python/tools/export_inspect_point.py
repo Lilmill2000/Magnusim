@@ -81,17 +81,48 @@ def _mirror(out: dict, values: dict[str, float | None]) -> None:
             out[key] = values[key]
 
 
-def probe_point(grid: pv.DataSet, xyz, names=None):
-    """Probe ``names`` (default: every field the grid shows) at one point."""
-    pt = [float(xyz[0]), float(xyz[1]), float(xyz[2])]
-    names = list(names) if names is not None else dataset_shown_fields(grid)
+def _sample_once(grid: pv.DataSet, pt, names) -> tuple[pv.DataSet, bool]:
     cloud = pv.PolyData(np.asarray([pt], dtype=float))
     sampled = cloud.sample(grid)
     if "vtkValidPointMask" in sampled.point_data:
         m = np.asarray(sampled.point_data["vtkValidPointMask"]).reshape(-1)
-        hit = bool(m.size and int(m[0]) != 0)
-    else:
-        hit = any(value_at(sampled, n) is not None for n in names)
+        return sampled, bool(m.size and int(m[0]) != 0)
+    return sampled, any(value_at(sampled, n) is not None for n in names)
+
+
+# A point this close to the mesh (relative to its size) is on it: a pick on the
+# domain's outer face lands on the boundary, a rounding error outside the cells.
+_ON_MESH = 1e-6
+
+
+def _inside_point(grid: pv.DataSet, pt) -> list[float] | None:
+    """For a point on the mesh's outer boundary, a point just inside the cell it
+    lies on; None when the point is off the mesh."""
+    try:
+        cell, closest = grid.find_closest_cell(np.asarray(pt, dtype=float), return_closest_point=True)
+    except Exception:
+        return None
+    if int(cell) < 0:
+        return None
+    b = np.asarray(grid.bounds, dtype=float)
+    diag = float(np.linalg.norm([b[1] - b[0], b[3] - b[2], b[5] - b[4]])) or 1.0
+    closest = np.asarray(closest, dtype=float)
+    if float(np.linalg.norm(closest - np.asarray(pt, dtype=float))) > _ON_MESH * diag:
+        return None
+    center = np.asarray(grid.extract_cells([int(cell)]).center, dtype=float)
+    return [float(v) for v in closest + (center - closest) * 1e-4]
+
+
+def probe_point(grid: pv.DataSet, xyz, names=None):
+    """Probe ``names`` (default: every field the grid shows) at one point. A point
+    on the mesh's outer boundary reads the cell it lies on."""
+    pt = [float(xyz[0]), float(xyz[1]), float(xyz[2])]
+    names = list(names) if names is not None else dataset_shown_fields(grid)
+    sampled, hit = _sample_once(grid, pt, names)
+    if not hit:
+        inside = _inside_point(grid, pt)
+        if inside is not None:
+            sampled, hit = _sample_once(grid, inside, names)
 
     values: dict[str, float | None] = {n: (value_at(sampled, n) if hit else None) for n in names}
     out = {

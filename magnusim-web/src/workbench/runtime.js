@@ -42,7 +42,7 @@ import { ColorMode, ScalarMode } from '@kitware/vtk.js/Rendering/Core/Mapper/Con
 import { initHome, showHome, showWorkbench, goHomeFromWorkbench, prepareCreateModal, submitProjectModal, activateHashProject, parseHomeRoute } from '../home/controller';
 import { prefersCollapseCompletedSections } from '../prefs';
 import { openSetupWizard } from '../wizard/controller';
-import { convertQuantity, preferredUnit, siUnitLabel, unitIsImperial } from '../units/convert';
+import { convertQuantity, preferredUnit, unitIsImperial } from '../units/convert';
 import { isIsland, mountIsland, unmountIsland } from '../islands';
 import { useProjectStore } from '../store/project';
 import { workspaceHash } from '../workspace/route';
@@ -131,6 +131,15 @@ import {
   pluginResultsShowsCompare,
   pluginResultsShowsViews,
 } from './pluginResultsRules';
+import {
+  FIELD_NAME_RE,
+  defaultResultField as pickDefaultResultField,
+  fieldInfoIn,
+  normalizeFilterSet,
+  resultRowsFor,
+  toolOptions,
+  velocityVectorName as pickVelocityVector,
+} from './resultFields';
 import { createToastQueue } from './toastQueue';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
@@ -138,6 +147,7 @@ import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js
 import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId } from '../viewer/pick.ts';
 import { RAINBOW_HUE, colormapGradient } from '../plugin-ui/colormaps';
 import { formatElapsed, formatEta, formatSimTime } from '../plugin-ui/format/time';
+import { formatSci } from '../plugin-ui/format/sci';
 
 // The legend bars draw the renders' own lookup table: every LUT here is the rainbow from RAINBOW_HUE.
 try { document.documentElement.style.setProperty('--legend-cmap', colormapGradient('rainbow')); } catch (_) {}
@@ -348,6 +358,7 @@ function apiParticleTraceUrl(st, ctx) {
     representation: s.representation || 'Cylinders',
     region: isRegionSeedMode(s) ? encodePtRegionParam(s.region) : '',
   });
+  if (velocityVectorName()) q.set('vector', velocityVectorName());
   return `/api/particle-trace?${q.toString()}`;
 }
 function apiParticleTraceMetaUrl(st, ctx) {
@@ -370,6 +381,7 @@ function apiParticleTraceMetaUrl(st, ctx) {
     representation: s.representation || 'Cylinders',
     region: isRegionSeedMode(s) ? encodePtRegionParam(s.region) : '',
   });
+  if (velocityVectorName()) q.set('vector', velocityVectorName());
   return `/api/particle-trace/meta?${q.toString()}`;
 }
 
@@ -385,7 +397,7 @@ function apiPlotOverPathUrl(st) {
     time: getTime(),
     points: encodePopPoints(s.points),
     subdivisions: String(s.subdivisions),
-    field_variable: s.field_variable || 'Velocity Magnitude',
+    field: toolField(s.field),
   });
   return `/api/plot-over-path?${q.toString()}`;
 }
@@ -396,7 +408,7 @@ function apiPlotOverPathMetaUrl(st) {
     time: getTime(),
     points: encodePopPoints(s.points),
     subdivisions: String(s.subdivisions),
-    field_variable: s.field_variable || 'Velocity Magnitude',
+    field: toolField(s.field),
   });
   return `/api/plot-over-path/meta?${q.toString()}`;
 }
@@ -433,12 +445,13 @@ function apiIsoSurfaceUrl(st) {
   const q = new URLSearchParams({
     case: getCaseDir(),
     time: getTime(),
-    iso_scalar: s.iso_scalar || 'Velocity Magnitude',
+    iso_field: isoToolFields(s).iso,
     iso_value: String(s.iso_value),
-    coloring: s.coloring || 'Pressure',
+    color_field: isoToolFields(s).color,
     opacity: String(s.opacity),
     vectors: s.vectors ? '1' : '0',
   });
+  if (s.vectors && velocityVectorName()) q.set('vector', velocityVectorName());
   return `/api/iso-surface?${q.toString()}`;
 }
 function apiIsoSurfaceMetaUrl(st) {
@@ -446,12 +459,13 @@ function apiIsoSurfaceMetaUrl(st) {
   const q = new URLSearchParams({
     case: getCaseDir(),
     time: getTime(),
-    iso_scalar: s.iso_scalar || 'Velocity Magnitude',
+    iso_field: isoToolFields(s).iso,
     iso_value: String(s.iso_value),
-    coloring: s.coloring || 'Pressure',
+    color_field: isoToolFields(s).color,
     opacity: String(s.opacity),
     vectors: s.vectors ? '1' : '0',
   });
+  if (s.vectors && velocityVectorName()) q.set('vector', velocityVectorName());
   return `/api/iso-surface/meta?${q.toString()}`;
 }
 
@@ -460,13 +474,14 @@ function apiIsoVolumeUrl(st) {
   const q = new URLSearchParams({
     case: getCaseDir(),
     time: getTime(),
-    iso_scalar: s.iso_scalar || 'Velocity Magnitude',
+    iso_field: isoToolFields(s).iso,
     iso_value_low: String(s.iso_value_low),
     iso_value_high: String(s.iso_value_high),
-    coloring: s.coloring || 'Pressure',
+    color_field: isoToolFields(s).color,
     opacity: String(s.opacity),
     vectors: s.vectors ? '1' : '0',
   });
+  if (s.vectors && velocityVectorName()) q.set('vector', velocityVectorName());
   return `/api/iso-volume?${q.toString()}`;
 }
 function apiIsoVolumeMetaUrl(st) {
@@ -474,13 +489,14 @@ function apiIsoVolumeMetaUrl(st) {
   const q = new URLSearchParams({
     case: getCaseDir(),
     time: getTime(),
-    iso_scalar: s.iso_scalar || 'Velocity Magnitude',
+    iso_field: isoToolFields(s).iso,
     iso_value_low: String(s.iso_value_low),
     iso_value_high: String(s.iso_value_high),
-    coloring: s.coloring || 'Pressure',
+    color_field: isoToolFields(s).color,
     opacity: String(s.opacity),
     vectors: s.vectors ? '1' : '0',
   });
+  if (s.vectors && velocityVectorName()) q.set('vector', velocityVectorName());
   return `/api/iso-volume/meta?${q.toString()}`;
 }
 
@@ -498,71 +514,113 @@ function apiInspectUrl(x, y, z, time) {
 
 
 /**
- * Result fields: what the run's analysis writes (its contract's result_fields).
- * A scalar colours by its own name; a vector X by its magnitude, magX. Labels
- * and units come from the analysis; a kinematic field arrives already scaled
- * by the exporter (Pa for pressure).
+ * Result fields: the run's result fields that the frame wrote
+ * (./resultFields.ts). A scalar colours by its own name; a vector X by its
+ * magnitude, magX. Labels and units come from the case sidecar's
+ * result_fields, else the run's analysis, else the default analysis; a
+ * kinematic field arrives already scaled by the exporter (Pa for pressure).
  */
-const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
-
 function fieldKey(field) {
   const name = String(field || '');
-  return FIELD_NAME_RE.test(name) ? name : 'magU';
-}
-
-function resultFieldRows() {
-  const row = analysisRow(studyAnalysisType());
-  return row && Array.isArray(row.result_fields) ? row.result_fields : [];
+  return FIELD_NAME_RE.test(name) ? name : defaultResultField();
 }
 
 /**
- * The name a result row is coloured by: its `shown` (null for a tensor, which
- * is never offered). A row without `shown` (before API 1.4) shows a vector X as
- * magX and anything else by its key.
+ * Per case folder: what its frames wrote (the exporter's fields_available) and
+ * the sidecar's result_fields (null when it lists none).
  */
-function resultRowShown(r) {
-  if (!r || !r.key) return null;
-  if ('shown' in r) return r.shown ? String(r.shown) : null;
-  return r.kind === 'vector' ? 'mag' + r.key : String(r.key);
+const caseFieldInfo = new Map();
+
+/** A case folder as a map key (the same reading as sameCasePath). */
+function caseFieldKey(casePath) {
+  return String(casePath || '').trim().replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
 }
 
-/** The unit label of a result row: the analysis's own unit, else the SI label of its quantity. */
-function resultRowUnit(r) {
-  const own = String(r.unit || '').trim();
-  return own || siUnitLabel(r.unit_quantity);
+/** The run whose results show (or are opening). */
+function resultsRunRecord() {
+  let id;
+  // Declared further down this module: unset while it is still loading.
+  try { id = resultsRunId || resultsOpeningRunId; } catch (_) { id = null; }
+  return id ? findRunRecord(id) : null;
 }
 
-/** The fields the open study's analysis can colour by, in its declared order. */
-function resultFieldNames() {
-  return resultFieldRows().map(resultRowShown).filter(Boolean);
+/**
+ * The fields results list for a case (default: the open one) and run
+ * (default: the one whose results show; with none, the open study's analysis).
+ * Plugin case results name no analysis of their own.
+ */
+let resultFieldMemo = null;
+
+function resultFieldRows(opts) {
+  const o = opts || {};
+  const c = o.case || getCaseDir();
+  const info = caseFieldInfo.get(caseFieldKey(c)) || null;
+  const rec = 'rec' in o ? o.rec : resultsRunRecord();
+  const runRow = (rec && isPluginResultsKey(rec.id) ? null : analysisRow(runAnalysisKeyOf(rec))) || null;
+  const defaultRow = analysisRow(defaultAnalysisKey()) || null;
+  // The same inputs give the same list (legends and pickers ask often).
+  const memo = resultFieldMemo;
+  if (memo && memo.info === info && memo.runRow === runRow && memo.defaultRow === defaultRow) return memo.rows;
+  const rows = resultRowsFor({
+    caseRows: info ? info.rows : null,
+    runRow,
+    defaultRow,
+    wrote: info ? info.names : null,
+  });
+  resultFieldMemo = { info, runRow, defaultRow, rows };
+  return rows;
 }
 
-/** { name, label, unit } of a shown field (label: its analysis's, else the name). */
+/** The names results can colour by, in order. */
+function resultFieldNames(opts) {
+  return resultFieldRows(opts).map((f) => f.name);
+}
+
+/** { name, label, unit } of a shown field (label: its row's, else the name). */
 function fieldInfo(field) {
   const name = fieldKey(field);
-  for (const r of resultFieldRows()) {
-    if (resultRowShown(r) !== name) continue;
-    if (r.kind === 'vector') {
-      const own = String(r.magnitude_label || '').trim();
-      return { name, label: own || String(r.label || r.key) + ' Magnitude', unit: resultRowUnit(r) };
-    }
-    return { name, label: String(r.label || r.key), unit: resultRowUnit(r) };
-  }
-  return { name, label: name, unit: '' };
+  return fieldInfoIn(resultFieldRows(), name);
 }
 
-/** The field results open on: the current one if the analysis has it, else its first. */
-function defaultResultField() {
+/** The field results open on: the current one if listed, else the first. */
+function defaultResultField(opts) {
+  const fields = resultFieldRows(opts);
+  const cur = activeField === 'cellVolume' ? '' : activeField;
+  return pickDefaultResultField(fields, cur) || (FIELD_NAME_RE.test(String(cur || '')) ? cur : '');
+}
+
+/** The vector particles follow and glyphs draw ('' when the case wrote none). */
+function velocityVectorName(opts) {
+  return pickVelocityVector(resultFieldRows(opts));
+}
+
+/**
+ * A tool's field: `name` when the case lists it, else the first listed field
+ * (with `avoid`, the first other one). A name is kept while nothing is listed.
+ */
+function toolField(name, avoid) {
   const names = resultFieldNames();
-  if (!names.length || names.includes(activeField)) return fieldKey(activeField);
-  return names[0];
+  const want = String(name || '');
+  if (want && names.includes(want)) return want;
+  if (avoid) {
+    const other = names.find((n) => n !== avoid);
+    if (other) return other;
+  }
+  return names[0] || (FIELD_NAME_RE.test(want) ? want : '');
+}
+
+/** An iso tool's iso field and colour field (coloured by another field when the case has one). */
+function isoToolFields(st) {
+  const iso = toolField(st && st.iso_field);
+  return { iso, color: toolField(st && st.color_field, iso) };
 }
 
 function clearKeys(obj) {
   for (const k of Object.keys(obj)) delete obj[k];
 }
 
-let activeField = 'magU';
+// The field on screen ('' until results load; the first listed field then).
+let activeField = '';
 let sourcePolyData = null;
 let sourceBounds = null;
 let lutRange = [0, 0.79];
@@ -606,7 +664,8 @@ function unionLutRange(a, b) {
 function foamMetaRange(field, foam) {
   if (!foam) return [null, null];
   if (foam.min != null || foam.max != null) return [foam.min, foam.max];
-  return field === 'p' ? [foam.pmin, foam.pmax] : [foam.umin, foam.umax];
+  // A legacy meta names a vector's range umin / umax and a scalar's pmin / pmax.
+  return foam.umin != null || foam.umax != null ? [foam.umin, foam.umax] : [foam.pmin, foam.pmax];
 }
 
 function rangeFromFoamMeta(field, meta) {
@@ -713,7 +772,7 @@ function applySeriesLegendRange(field, lo, hi) {
 }
 
 function applyLockedSeriesLegend(field) {
-  const name = field || activeField || 'magU';
+  const name = field || activeField || defaultResultField();
   if ((animState.times || []).length < 2) return;
   const r =
     (seriesLut.locked[seriesLutKey(name)] && seriesLut.range[seriesLutKey(name)]) ||
@@ -829,7 +888,7 @@ function legendAutoRange(field) {
   const sk = seriesLutKey(key);
   if (seriesLut.range[sk] && seriesLut.range[sk][1] > seriesLut.range[sk][0]) return seriesLut.range[sk].slice();
   if (seriesLut.held[sk] && seriesLut.held[sk][1] > seriesLut.held[sk][0]) return seriesLut.held[sk].slice();
-  if (ptOwnRange && (ptOwnRange.field === key || (key === 'magU' && ptOwnRange.field !== 'p'))) {
+  if (ptOwnRange && ptOwnRange.field === key) {
     return [ptOwnRange.lo, ptOwnRange.hi];
   }
   return null;
@@ -977,7 +1036,8 @@ const ptState = {
   size: 0.0037,
   representation: 'Cylinders',
   both: false,
-  coloring: 'magU',
+  // A field name, or 'solid'; '' = the case's velocity magnitude.
+  coloring: '',
   solid: '#2563eb',
   // Spheres / Comets are drawn as particle groups ("pulses") that travel
   // along each trace at the local flow speed (SimScale's Num pulses and
@@ -1005,7 +1065,8 @@ const popState = {
   pick: '',
   points: [],
   subdivisions: 0,
-  field_variable: 'Velocity Magnitude',
+  // The field sampled along the path ('' = the case's first).
+  field: '',
 };
 let popMeta = null;
 let popSeries = null;
@@ -1016,9 +1077,10 @@ let popLoadToken = 0;
 // results prefetch attached a case before resetPostFilters().
 const isoState = {
   enabled: false,
-  iso_scalar: 'Velocity Magnitude',
+  // Field names ('' = the case's first, coloured by its next).
+  iso_field: '',
   iso_value: 11.1,
-  coloring: 'Pressure',
+  color_field: '',
   vectors: false,
   opacity: 1,
 };
@@ -1028,10 +1090,10 @@ let isoLoadToken = 0;
 // Off by default for the same reason as isoState.
 const ivState = {
   enabled: false,
-  iso_scalar: 'Velocity Magnitude',
+  iso_field: '',
   iso_value_low: 0.25,
   iso_value_high: 0.75,
-  coloring: 'Pressure',
+  color_field: '',
   vectors: false,
   opacity: 1,
 };
@@ -1048,8 +1110,8 @@ const inspectState = {
   position: null,
   hit: false,
   empty: true,
-  magU: null,
-  p: null,
+  // {field: value} at the last point.
+  values: {},
   value_checksum: 0,
   reason: '',
   time: null,
@@ -1786,7 +1848,7 @@ const ptMapper = vtkMapper.newInstance();
 ptMapper.setInputConnection(ptReader.getOutputPort());
 ptMapper.setScalarVisibility(true);
 ptMapper.setScalarMode(ScalarMode.USE_POINT_FIELD_DATA);
-ptMapper.setColorByArrayName('magU');
+ptMapper.setColorByArrayName('');
 ptMapper.setColorMode(ColorMode.MAP_SCALARS);
 ptMapper.setInterpolateScalarsBeforeMapping(true);
 ptMapper.setUseLookupTableScalarRange(true);
@@ -1818,7 +1880,7 @@ try { ptGlyphMapper.setInputData(ptSphereSrc.getOutputData(), 1); } catch (_) {}
 try { ptGlyphMapper.setSourceConnection(ptSphereSrc.getOutputPort()); } catch (_) {}
 ptGlyphMapper.setScalarVisibility(true);
 ptGlyphMapper.setScalarMode(ScalarMode.USE_POINT_FIELD_DATA);
-ptGlyphMapper.setColorByArrayName('magU');
+ptGlyphMapper.setColorByArrayName('');
 ptGlyphMapper.setColorMode(ColorMode.MAP_SCALARS);
 ptGlyphMapper.setInterpolateScalarsBeforeMapping(true);
 ptGlyphMapper.setUseLookupTableScalarRange(true);
@@ -1912,7 +1974,7 @@ const isoMapper = vtkMapper.newInstance();
 isoMapper.setInputConnection(isoReader.getOutputPort());
 isoMapper.setScalarVisibility(true);
 isoMapper.setScalarMode(ScalarMode.USE_POINT_FIELD_DATA);
-isoMapper.setColorByArrayName('p');
+isoMapper.setColorByArrayName('');
 isoMapper.setColorMode(ColorMode.MAP_SCALARS);
 isoMapper.setInterpolateScalarsBeforeMapping(true);
 isoMapper.setUseLookupTableScalarRange(true);
@@ -1939,7 +2001,7 @@ function makeFieldVectorGlyph() {
   try { mapper.setSourceConnection(arrow.getOutputPort()); } catch (_) {}
   try { mapper.setOrient(true); } catch (_) {}
   try { mapper.setOrientationMode(OrientationModes.DIRECTION); } catch (_) {}
-  try { mapper.setOrientationArray('U'); } catch (_) {}
+  try { mapper.setOrientationArray(GLYPH_VECTOR); } catch (_) {}
   try { mapper.setScaleMode(GlyphScaleModes.SCALE_BY_CONSTANT); } catch (_) {}
   try { mapper.setScaling(true); } catch (_) {}
   mapper.setScalarVisibility(false);
@@ -1952,11 +2014,33 @@ function makeFieldVectorGlyph() {
   return { mapper, actor };
 }
 
+// The arrow glyphs' own copy of the vector they draw.
+const GLYPH_VECTOR = 'glyphVector';
+
+/**
+ * The vector array glyphs draw on `pd`: the case's velocity when it carries
+ * it, else its only 3-component point array ('' when none).
+ */
+function glyphVectorName(pd) {
+  const vec = velocityVectorName();
+  if (vec && pdHasArray(pd, vec)) return vec;
+  const found = [];
+  try {
+    const pda = pd.getPointData();
+    for (let i = 0; i < pda.getNumberOfArrays(); i++) {
+      const arr = pda.getArrayByIndex(i);
+      if (arr && arr.getNumberOfComponents && arr.getNumberOfComponents() === 3 && arr.getName() !== 'Normals') found.push(arr.getName());
+    }
+  } catch (_) {}
+  return found.length === 1 ? found[0] : '';
+}
+
 function subsampleVectorsForGlyphs(pd, maxPts) {
   if (!pd || typeof pd.getNumberOfPoints !== 'function') return null;
   const n = pd.getNumberOfPoints();
   const pda = pd.getPointData && pd.getPointData();
-  const uArr = pda && pda.getArrayByName && pda.getArrayByName('U');
+  const vecName = glyphVectorName(pd);
+  const uArr = vecName && pda && pda.getArrayByName && pda.getArrayByName(vecName);
   if (!uArr || n < 1) return null;
   const stride = n > maxPts ? Math.ceil(n / maxPts) : 1;
   const srcPts = pd.getPoints().getData();
@@ -1985,7 +2069,7 @@ function subsampleVectorsForGlyphs(pd, maxPts) {
   }
   out.getVerts().setData(verts);
   out.getPointData().addArray(
-    vtkDataArray.newInstance({ name: 'U', values: u, numberOfComponents: 3 })
+    vtkDataArray.newInstance({ name: GLYPH_VECTOR, values: u, numberOfComponents: 3 })
   );
   return out;
 }
@@ -2001,7 +2085,7 @@ function syncFieldVectorGlyphs(bundle, pd, enabled) {
     return false;
   }
   bundle.mapper.setInputData(input);
-  try { bundle.mapper.setOrientationArray('U'); } catch (_) {}
+  try { bundle.mapper.setOrientationArray(GLYPH_VECTOR); } catch (_) {}
   const b = input.getBounds ? input.getBounds() : [0, 1, 0, 1, 0, 1];
   const diag = Math.hypot((b[1] - b[0]) || 0, (b[3] - b[2]) || 0, (b[5] - b[4]) || 0);
   try { bundle.mapper.setScaleFactor(Math.max(diag * 0.028, 1e-5)); } catch (_) {}
@@ -2048,7 +2132,7 @@ function makeCutPlaneVectorGlyph(targetRenderer) {
   }
   try { mapper.setOrient(true); } catch (_) {}
   try { mapper.setOrientationMode(OrientationModes.DIRECTION); } catch (_) {}
-  try { mapper.setOrientationArray('U'); } catch (_) {}
+  try { mapper.setOrientationArray(GLYPH_VECTOR); } catch (_) {}
   try { mapper.setScaleMode(GlyphScaleModes.SCALE_BY_MAGNITUDE); } catch (_) {}
   try { mapper.setScaleArray('vecScale'); } catch (_) {}
   try { mapper.setScaling(true); } catch (_) {}
@@ -2172,8 +2256,10 @@ function clampCutVectorDensity(v) {
   if (!Number.isFinite(n)) return 0.25;
   return Math.min(1, Math.max(0.1, n));
 }
+/** A plane's vector colouring: a field name, else a solid colour. */
 function planeVectorColoring(v) {
-  return v === 'p' || v === 'magU' || v === 'T' ? v : 'solid';
+  const name = String(v || '');
+  return name !== 'solid' && FIELD_NAME_RE.test(name) ? name : 'solid';
 }
 function cutVectorMaxPts(density) {
   const d = clampCutVectorDensity(density);
@@ -2253,35 +2339,21 @@ function cutPlaneTempArrayName(pd) {
   return null;
 }
 
+/** The array the plane's vectors are coloured by: the field when the slice carries it (T also reads its older array names). */
 function cutVectorColorArrayName(mode, pd) {
-  if (mode === 'p') return pdHasArray(pd, 'p') ? 'p' : null;
-  if (mode === 'magU') return pdHasArray(pd, 'magU') ? 'magU' : null;
+  if (!mode || mode === 'solid') return null;
+  if (pdHasArray(pd, mode)) return mode;
   if (mode === 'T') return cutPlaneTempArrayName(pd);
   return null;
-}
-
-function polyDataHasTemp(pd) {
-  return !!cutPlaneTempArrayName(pd);
-}
-
-function anyCutPlaneHasTemp() {
-  for (const p of resultPlanes) {
-    try {
-      const pd = p.mapper && p.mapper.getInputData ? p.mapper.getInputData() : null;
-      if (polyDataHasTemp(pd)) return true;
-    } catch (_) {}
-  }
-  try {
-    if (polyDataHasTemp(sourcePolyData)) return true;
-  } catch (_) {}
-  return false;
 }
 
 function subsampleCutPlaneVectors(pd, maxPts, projectNormal) {
   if (!pd || typeof pd.getNumberOfPoints !== 'function') return null;
   const n = pd.getNumberOfPoints();
   const pda = pd.getPointData && pd.getPointData();
-  const uArr = pda && pda.getArrayByName && pda.getArrayByName('U');
+  const vecName = glyphVectorName(pd);
+  const magName = 'mag' + vecName;
+  const uArr = vecName && pda && pda.getArrayByName && pda.getArrayByName(vecName);
   if (!uArr || n < 1) return null;
   const stride = n > maxPts ? Math.ceil(n / maxPts) : 1;
   const srcPts = pd.getPoints().getData();
@@ -2324,10 +2396,10 @@ function subsampleCutPlaneVectors(pd, maxPts, projectNormal) {
   }
   out.getVerts().setData(verts);
   out.getPointData().addArray(
-    vtkDataArray.newInstance({ name: 'U', values: u, numberOfComponents: 3 })
+    vtkDataArray.newInstance({ name: GLYPH_VECTOR, values: u, numberOfComponents: 3 })
   );
   const mag = new Float32Array(outN);
-  const srcMagArr = pda.getArrayByName && pda.getArrayByName('magU');
+  const srcMagArr = pda.getArrayByName && pda.getArrayByName(magName);
   const srcMag = srcMagArr && srcMagArr.getData ? srcMagArr.getData() : null;
   let mk = 0;
   for (let i = 0; i < n && mk < outN; i += stride, mk++) {
@@ -2340,11 +2412,11 @@ function subsampleCutPlaneVectors(pd, maxPts, projectNormal) {
     }
   }
   out.getPointData().addArray(
-    vtkDataArray.newInstance({ name: 'magU', values: mag, numberOfComponents: 1 })
+    vtkDataArray.newInstance({ name: magName, values: mag, numberOfComponents: 1 })
   );
   const copyScalar = (name) => {
     const arr = pda.getArrayByName(name);
-    if (!arr || name === 'magU') return;
+    if (!arr || name === magName) return;
     const src = arr.getData();
     const nc = arr.getNumberOfComponents ? arr.getNumberOfComponents() : 1;
     if (nc !== 1) return;
@@ -2355,8 +2427,11 @@ function subsampleCutPlaneVectors(pd, maxPts, projectNormal) {
       vtkDataArray.newInstance({ name, values: vals, numberOfComponents: 1 })
     );
   };
-  copyScalar('p');
-  for (const tn of CUT_VECTOR_TEMP_NAMES) copyScalar(tn);
+  // Every scalar the slice carries, so the vectors can be coloured by any of them.
+  for (let i = 0; i < pda.getNumberOfArrays(); i++) {
+    const arr = pda.getArrayByIndex(i);
+    if (arr && arr.getName) copyScalar(arr.getName());
+  }
   return out;
 }
 
@@ -2375,7 +2450,7 @@ function cutVectorLengthRange(bounds, minMul, maxMul) {
 }
 
 function applyClampedVectorScales(input, minLen, maxLen) {
-  const uArr = input && input.getPointData && input.getPointData().getArrayByName('U');
+  const uArr = input && input.getPointData && input.getPointData().getArrayByName(GLYPH_VECTOR);
   const d = uArr && uArr.getData ? uArr.getData() : null;
   if (!d) return;
   const n = Math.floor(d.length / 3);
@@ -2396,7 +2471,7 @@ function applyClampedVectorScales(input, minLen, maxLen) {
 }
 
 function applyCutVectorAppearance(mapper, actor, pd, coloring, solid, fieldLut, altLut, activeName) {
-  const mode = coloring === 'p' || coloring === 'magU' || coloring === 'T' ? coloring : 'solid';
+  const mode = planeVectorColoring(coloring);
   const colorName = cutVectorColorArrayName(mode, pd);
   if (mode === 'solid' || !colorName) {
     mapper.setScalarVisibility(false);
@@ -2409,13 +2484,14 @@ function applyCutVectorAppearance(mapper, actor, pd, coloring, solid, fieldLut, 
   try { mapper.setColorMode(ColorMode.MAP_SCALARS); } catch (_) {}
   try { mapper.setUseLookupTableScalarRange(true); } catch (_) {}
   mapper.setColorByArrayName(colorName);
-  const same = (colorName === 'p' && activeName === 'p') || (colorName === 'magU' && activeName !== 'p');
+  // Coloured by the field on screen: the same scale as the surfaces.
+  const same = colorName === activeName;
   const useLut = same && fieldLut ? fieldLut : (altLut || fieldLut);
   if (useLut) {
     try { mapper.setLookupTable(useLut); } catch (_) {}
   }
   if (!same && altLut) {
-    const key = colorName === 'p' ? 'p' : (colorName === 'magU' ? 'magU' : null);
+    const key = FIELD_NAME_RE.test(colorName) ? colorName : null;
     const data = fieldRangeFromPd(pd, colorName);
     const a = data && (data.lo != null ? data.lo : data[0]);
     const b = data && (data.hi != null ? data.hi : data[1]);
@@ -2446,7 +2522,7 @@ function syncPlaneVectorGlyph(bundle, pd, spec) {
   const [minLen, maxLen] = cutVectorLengthRange(s.bounds, s.min, s.max != null ? s.max : s.scale);
   applyClampedVectorScales(input, minLen, maxLen);
   bundle.mapper.setInputData(input);
-  try { bundle.mapper.setOrientationArray('U'); } catch (_) {}
+  try { bundle.mapper.setOrientationArray(GLYPH_VECTOR); } catch (_) {}
   try { bundle.mapper.setScaleMode(GlyphScaleModes.SCALE_BY_MAGNITUDE); } catch (_) {}
   try { bundle.mapper.setScaleArray('vecScale'); } catch (_) {}
   try { bundle.mapper.setScaling(true); } catch (_) {}
@@ -2537,7 +2613,7 @@ function applyCutPlaneVectorSettings(plane) {
   const targets = plane ? [plane] : resultPlanes;
   const needReload = targets.some((p) => {
     if (!p.vectors || !resultPlaneOn(p)) return false;
-    return !pdHasArray(planeMapperPolyData(p), 'U');
+    return !glyphVectorName(planeMapperPolyData(p));
   });
   if (needReload) {
     updateCuttingPlane();
@@ -2549,11 +2625,20 @@ function applyCutPlaneVectorSettings(plane) {
   try { publishW7({ vectors_live: anyCutPlaneVectorsVisible() }); } catch (_) {}
 }
 
+/** The planes' vector colour pickers list the case's fields (and keep each plane's pick). */
 function syncCutPlaneVectorChrome() {
-  const hasT = anyCutPlaneHasTemp();
   document.querySelectorAll('[data-rplane-vec-color]').forEach((sel) => {
-    const tOpt = sel.querySelector('option[value="T"]');
-    if (tOpt) tOpt.hidden = !hasT;
+    const plane = resultPlanes.find((p) => p.id === sel.getAttribute('data-rplane-vec-color'));
+    const html = planeVectorColorOptionsHtml(plane ? plane.vectorColoring : sel.value);
+    if (sel.dataset.options !== html) {
+      sel.dataset.options = html;
+      sel.innerHTML = html;
+    }
+  });
+  const noVec = !velocityVectorName() && caseFieldsKnown();
+  document.querySelectorAll('[data-rplane-vec]').forEach((box) => {
+    box.disabled = noVec;
+    box.title = noVec ? NO_VELOCITY_TITLE : '';
   });
 }
 
@@ -2562,7 +2647,7 @@ const ivMapper = vtkMapper.newInstance();
 ivMapper.setInputConnection(ivReader.getOutputPort());
 ivMapper.setScalarVisibility(true);
 ivMapper.setScalarMode(ScalarMode.USE_POINT_FIELD_DATA);
-ivMapper.setColorByArrayName('p');
+ivMapper.setColorByArrayName('');
 ivMapper.setColorMode(ColorMode.MAP_SCALARS);
 ivMapper.setInterpolateScalarsBeforeMapping(true);
 ivMapper.setUseLookupTableScalarRange(true);
@@ -2748,8 +2833,7 @@ function fingerprintFromPolyData(pd, meta, field, assetUrl) {
     meta_umax: foam ? foam.umax ?? foam.pmax ?? null : null,
     meta_checksum: foam ? foam.sample_checksum_sha256 : null,
     proves_not_baked_only: !!(assetUrl && assetUrl.indexOf('/api/fields/') === 0),
-    real_field: !!(arr && nSamples > 1000 && meta && (meta.foam_proof || meta.u_from_case) && (field !== 'magU' || (umax !== null && umax < 5))),
-    not_simscale_22_2: !!(field !== 'magU' || (umax !== null && umax < 5)),
+    real_field: !!(arr && nSamples > 1000 && meta && (meta.foam_proof || meta.u_from_case)),
   };
 }
 
@@ -3590,6 +3674,25 @@ function renderResultPlaneList() {
     .join('');
 }
 
+// Why the particle trace and plane vectors are off for a case with no velocity.
+const NO_VELOCITY_TITLE = 'This case has no velocity field';
+
+/** True once the open case has said what its frames wrote. */
+function caseFieldsKnown() {
+  const info = caseFieldInfo.get(caseFieldKey(getCaseDir()));
+  return !!(info && info.names);
+}
+
+/** Options of a plane's vector colour picker: solid, then the case's fields; `col` selected. */
+function planeVectorColorOptionsHtml(col) {
+  const opts = toolOptions(resultFieldRows());
+  // A saved pick the case does not list stays shown until changed.
+  if (col && col !== 'solid' && !opts.some((o) => o.value === col)) opts.push({ value: col, label: fieldInfo(col).label });
+  return [{ value: 'solid', label: 'Solid color' }, ...opts]
+    .map((o) => '<option value="' + escapeHtml(o.value) + '"' + (o.value === col ? ' selected' : '') + '>' + escapeHtml(o.label) + '</option>')
+    .join('');
+}
+
 function renderResultPlaneVectorFields(p) {
   const id = p.id;
   const on = !!p.vectors;
@@ -3599,11 +3702,13 @@ function renderResultPlaneVectorFields(p) {
   const dens = clampCutVectorDensity(p.vectorDensity);
   const col = planeVectorColoring(p.vectorColoring);
   const solid = escapeHtml(p.vectorSolid || '#000000');
-  const tHidden = anyCutPlaneHasTemp() ? '' : ' hidden';
+  const noVec = !velocityVectorName() && caseFieldsKnown();
+  const optionsHtml = planeVectorColorOptionsHtml(col);
   return (
     '<div class="fp-row toggle-row"><span>Vectors</span>' +
     '<label class="switch"><input type="checkbox" data-rplane-vec="' + id + '"' +
-    (on ? ' checked' : '') + ' aria-label="Show vectors on this cutting plane" /><span class="slider"></span></label></div>' +
+    (on ? ' checked' : '') + (noVec ? ' disabled title="' + escapeHtml(NO_VELOCITY_TITLE) + '"' : '') +
+    ' aria-label="Show vectors on this cutting plane" /><span class="slider"></span></label></div>' +
     '<div class="rplane-vec-fields" data-rplane-vec-fields="' + id + '"' + (on ? '' : ' hidden') + '>' +
     '<div class="fp-field"><div class="fp-label">Size</div><div class="rplane-vec-size">' +
     '<span class="opacity-val" data-rplane-vec-min-val="' + id + '">' + fmtCutVecNum(min) + '</span>' +
@@ -3624,11 +3729,8 @@ function renderResultPlaneVectorFields(p) {
     '" data-rplane-vec-dens="' + id + '" aria-label="Vector density" />' +
     '<span class="opacity-val">' + fmtCutVecNum(dens) + '</span></div></div>' +
     '<div class="fp-field"><div class="fp-label">Vector coloring</div>' +
-    '<select class="fp-select" data-rplane-vec-color="' + id + '" aria-label="Vector coloring">' +
-    '<option value="solid"' + (col === 'solid' ? ' selected' : '') + '>Solid color</option>' +
-    '<option value="magU"' + (col === 'magU' ? ' selected' : '') + '>Velocity Magnitude</option>' +
-    '<option value="p"' + (col === 'p' ? ' selected' : '') + '>Pressure</option>' +
-    '<option value="T"' + tHidden + (col === 'T' ? ' selected' : '') + '>Temperature</option>' +
+    '<select class="fp-select" data-rplane-vec-color="' + id + '" aria-label="Vector coloring" data-options="' +
+    escapeHtml(optionsHtml) + '">' + optionsHtml +
     '</select></div>' +
     '<div class="fp-field" data-rplane-vec-solid-field="' + id + '"' + (col === 'solid' ? '' : ' hidden') + '>' +
     '<div class="fp-label">Color</div><div class="parts-color-row">' +
@@ -4018,7 +4120,7 @@ function ptFingerprintFromPd(pd, meta) {
     seed_checksum: meta ? meta.seed_checksum : null,
     asset_sha256: meta ? meta.asset_sha256 : null,
     approach: meta ? meta.approach : null,
-    vector_field: meta ? meta.vector_field : 'U',
+    vector_field: meta ? meta.vector_field : velocityVectorName(),
     representation: 'Cylinders',
     live_rep: 'tubes',
     seed_mode: meta ? meta.seed_mode : ptState.seed_mode,
@@ -4175,8 +4277,28 @@ function ptSeedCloudFromLines(pd) {
 const ptPathsCache = new WeakMap();
 let ptPhase = 0;
 
-function ptPathsFor(pd) {
-  const cached = ptPathsCache.get(pd);
+/**
+ * The array a particle trace is coloured by: its picked field when the trace
+ * carries it, else the velocity magnitude, else the first listed field it
+ * carries; '' = a solid colour.
+ */
+function ptColorArrayName(pd, coloring) {
+  const want = String(coloring || '');
+  if (want === 'solid') return '';
+  if (want && pdHasArray(pd, want)) return want;
+  const vec = velocityVectorName();
+  if (vec && pdHasArray(pd, 'mag' + vec)) return 'mag' + vec;
+  return resultFieldNames().find((n) => pdHasArray(pd, n)) || '';
+}
+
+function ptPathsFor(pd, colorName) {
+  let byColor = ptPathsCache.get(pd);
+  if (!byColor) {
+    byColor = new Map();
+    ptPathsCache.set(pd, byColor);
+  }
+  const ckey = String(colorName || '');
+  const cached = byColor.get(ckey);
   if (cached) return cached;
   const paths = [];
   let magData = null;
@@ -4185,13 +4307,20 @@ function ptPathsFor(pd) {
   let uComp = 3;
   try {
     const pdat = pd.getPointData();
-    const magArr = pdat.getArrayByName('magU');
-    const pArr = pdat.getArrayByName('p');
-    const uArr = pdat.getArrayByName('U');
-    magData = magArr ? magArr.getData() : null;
-    pData = pArr ? pArr.getData() : null;
+    const vecName = glyphVectorName(pd);
+    const magArr = vecName ? pdat.getArrayByName('mag' + vecName) : null;
+    const pArr = ckey ? pdat.getArrayByName(ckey) : null;
+    const uArr = vecName ? pdat.getArrayByName(vecName) : null;
     uData = uArr ? uArr.getData() : null;
     uComp = uArr ? uArr.getNumberOfComponents() || 3 : 3;
+    magData = magArr ? magArr.getData() : null;
+    if (!magData && uData) {
+      // The speed from the vector when the trace carries no magnitude.
+      const nPts = Math.floor(uData.length / uComp);
+      magData = new Float32Array(nPts);
+      for (let i = 0; i < nPts; i++) magData[i] = Math.hypot(uData[i * uComp], uData[i * uComp + 1], uData[i * uComp + 2]);
+    }
+    pData = pArr && (pArr.getNumberOfComponents ? pArr.getNumberOfComponents() : 1) === 1 ? pArr.getData() : null;
   } catch (_) {}
   const xyzAll = pd.getPoints().getData();
   let vmax = 0;
@@ -4241,7 +4370,7 @@ function ptPathsFor(pd) {
   let period = totals.length ? totals[Math.floor(totals.length / 2)] : 1;
   if (!(period > 0)) period = 1;
   const out = { pd, paths, period };
-  ptPathsCache.set(pd, out);
+  byColor.set(ckey, out);
   return out;
 }
 
@@ -4305,8 +4434,10 @@ function ptPulseCount(st) {
 }
 
 // Sphere per pulse per trace, at the head position for the current phase.
+// The spheres carry the field the trace is coloured by (under its own name).
 function ptPulseSpheresPd(pd, phase, st) {
-  const { paths, period } = ptPathsFor(pd);
+  const colorName = ptColorArrayName(pd, (st || ptState).coloring);
+  const { paths, period } = ptPathsFor(pd, colorName);
   const N = ptPulseCount(st);
   const out = vtkPolyData.newInstance();
   const pts = vtkPoints.newInstance();
@@ -4328,8 +4459,7 @@ function ptPulseSpheresPd(pd, phase, st) {
   }
   out.setPoints(pts);
   out.setVerts(verts);
-  out.getPointData().addArray(vtkDataArray.newInstance({ name: 'magU', values: Float32Array.from(mag), numberOfComponents: 1 }));
-  out.getPointData().addArray(vtkDataArray.newInstance({ name: 'p', values: Float32Array.from(pres), numberOfComponents: 1 }));
+  if (colorName) out.getPointData().addArray(vtkDataArray.newInstance({ name: colorName, values: Float32Array.from(pres), numberOfComponents: 1 }));
   return out;
 }
 
@@ -4339,7 +4469,8 @@ function ptPulseSpheresPd(pd, phase, st) {
 // plain arrays; ptCometTubesPd turns them into a triangle mesh.
 function ptPulseComets(pd, phase, st) {
   const s0 = st || ptState;
-  const { paths, period } = ptPathsFor(pd);
+  const colorName = ptColorArrayName(pd, s0.coloring);
+  const { paths, period } = ptPathsFor(pd, colorName);
   const N = ptPulseCount(s0);
   const relLen = Math.max(0.01, Math.min(0.5, Number(s0.comet_length) || 0.05));
   const L = relLen * period;
@@ -4382,6 +4513,7 @@ function ptPulseComets(pd, phase, st) {
     if (cm.length < 2) return; // all samples coincident
     comets.push({ xyz: cx, mag: cm, p: cp, c: cc });
   };
+  comets.colorName = colorName;
   for (const path of paths) {
     const pathArc = path.arc[path.n - 1];
     for (let k = 0; k < N; k++) {
@@ -4409,8 +4541,8 @@ function ptPulseComets(pd, phase, st) {
 
 // Triangle mesh for the comets, built directly (no TubeFilter, no strips):
 // a ring of `sides` vertices around every sample with parallel-transported
-// frames, a fan cap on the head, per-vertex normals and the magU / p
-// scalars carried along. Radius = size*0.25 at the tail up to size at the
+// frames, a fan cap on the head, per-vertex normals and the colour field
+// carried along (under its own name). Radius = size*0.25 at the tail up to size at the
 // head (the same look the TubeFilter gave, ~10x cheaper per frame).
 const PT_COMET_SIDES = 6;
 function ptCometTubesPd(comets, size) {
@@ -4531,8 +4663,7 @@ function ptCometTubesPd(comets, size) {
   out.setPolys(cells);
   const pdata = out.getPointData();
   pdata.setNormals(vtkDataArray.newInstance({ name: 'Normals', values: Nrm, numberOfComponents: 3 }));
-  pdata.addArray(vtkDataArray.newInstance({ name: 'magU', values: mag, numberOfComponents: 1 }));
-  pdata.addArray(vtkDataArray.newInstance({ name: 'p', values: pres, numberOfComponents: 1 }));
+  if (comets.colorName) pdata.addArray(vtkDataArray.newInstance({ name: comets.colorName, values: pres, numberOfComponents: 1 }));
   return out;
 }
 
@@ -4768,10 +4899,10 @@ function legendScaleTarget(legendEl) {
   }
   if (id === 'legend-pt') {
     if (!ptOwnRange) return null;
-    return { field: ptOwnRange.field === 'p' ? 'p' : 'magU', lut: ptLut };
+    return { field: fieldKey(ptOwnRange.field), lut: ptLut };
   }
   if (!mainLegendIsSurfaceField() && ptOwnRange) {
-    return { field: ptOwnRange.field === 'p' ? 'p' : 'magU', lut: ptLut };
+    return { field: fieldKey(ptOwnRange.field), lut: ptLut };
   }
   return { field: fieldKey(activeField), lut };
 }
@@ -5109,9 +5240,8 @@ function applyPtRepresentation() {
   }
   const size = Math.max(2e-4, Number(ptState.size) || 0.0037);
   const rep = String(ptState.representation || 'Cylinders');
-  const coloring = String(ptState.coloring || 'magU');
-  const solid = coloring === 'solid';
-  const colorName = coloring === 'p' ? 'p' : 'magU';
+  const colorName = ptColorArrayName(pd, ptState.coloring);
+  const solid = !colorName;
   if (!solid) applyPtFieldLut(pd, colorName);
   else ptOwnRange = null;
   try {
@@ -7218,6 +7348,7 @@ async function prefetchFieldFrame(field, time, ctx) {
     tmp.parseAsArrayBuffer(buf);
     const pd = tmp.getOutputData ? tmp.getOutputData() : null;
     const entry = { pd, meta: await metaP, field, time: String(time), caseDir: casePath };
+    noteCaseFields(entry.meta, casePath);
     fieldFrameCache.set(key, entry);
     return entry;
   })();
@@ -7470,7 +7601,7 @@ function syncPtChromeFromState() {
   if (rep) rep.value = ptState.representation || 'Cylinders';
   try { syncPtLookVisibility(); } catch (_) {}
   const col = document.getElementById('pt-coloring');
-  if (col) col.value = ptState.coloring === 'p' || ptState.coloring === 'solid' ? ptState.coloring : 'magU';
+  if (col) col.value = ptState.coloring === 'solid' ? 'solid' : ptColoringField();
   const solidField = document.getElementById('pt-solid-field');
   if (solidField) solidField.hidden = ptState.coloring !== 'solid';
   const solid = document.getElementById('pt-solid-color');
@@ -7489,7 +7620,7 @@ function syncPtChromeFromState() {
 function popFingerprint(meta) {
   const m = meta || popMeta || {};
   return {
-    field_variable: m.field_variable || popState.field_variable,
+    field: m.field || toolField(popState.field),
     field_name: m.field_name || '',
     subdivisions: m.subdivisions != null ? m.subdivisions : popState.subdivisions,
     n_path_points: m.n_path_points != null ? m.n_path_points : (popState.points || []).length,
@@ -7525,7 +7656,7 @@ function publishW9(extra) {
       pick: popState.pick,
       points: (popState.points || []).map((p) => [...p]),
       subdivisions: popState.subdivisions,
-      field_variable: popState.field_variable,
+      field: popState.field,
     },
     pop_meta: popMeta,
     pop_fingerprint: fp,
@@ -7542,7 +7673,7 @@ function publishW9(extra) {
     no_fake_curve: true,
     banked_defaults: {
       subdivisions: 0,
-      field_variable: 'Velocity Magnitude',
+      field: '',
       selected_points: 'Selected points (0)',
       no_points_selected: true,
       generate_enabled: false,
@@ -7611,11 +7742,19 @@ function renderPopChart(meta) {
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   svg.innerHTML =
     `<polyline fill="none" stroke="#1570ef" stroke-width="2" points="${pts}" />` +
-    `<text x="8" y="14" font-size="10" fill="#4b5563">${escapeXml(m.field_variable || '')}</text>` +
+    `<text x="8" y="14" font-size="10" fill="#4b5563">${escapeXml(popChartTitle(m))}</text>` +
     `<text x="8" y="${h - 8}" font-size="9" fill="#6b7280">distance</text>`;
   if (metaEl) {
     metaEl.textContent = `n_samples=${m.n_samples} checksum=${Number(m.value_checksum).toFixed(6)} field=${m.field_name}`;
   }
+}
+
+/** The plot's title: the sampled field's label and unit. */
+function popChartTitle(m) {
+  const name = String((m && (m.field_name || m.field)) || toolField(popState.field) || '');
+  if (!name) return '';
+  const info = fieldInfo(name);
+  return info.unit ? info.label + ' (' + info.unit + ')' : info.label;
 }
 
 function escapeXml(s) {
@@ -7637,7 +7776,7 @@ function syncPopChromeFromState() {
   const n = (popState.points || []).length;
   if (pick) pick.value = popState.pick || '';
   if (sub) sub.value = String(popState.subdivisions);
-  if (fv) fv.value = popState.field_variable || 'Velocity Magnitude';
+  if (fv) fv.value = toolField(popState.field);
   if (en) en.checked = !!popState.enabled;
   if (label) label.textContent = `Selected points (${n})`;
   if (noPts) noPts.classList.toggle('is-hidden', n > 0);
@@ -7655,7 +7794,7 @@ function syncPopChromeFromState() {
 
 function clearPopSeries() {
   popMeta = {
-    field_variable: popState.field_variable,
+    field: popState.field,
     field_name: '',
     subdivisions: popState.subdivisions,
     n_path_points: (popState.points || []).length,
@@ -7679,7 +7818,7 @@ async function loadPlotOverPath(overrides) {
   if (overrides && typeof overrides === 'object') {
     if (overrides.points) popState.points = overrides.points.map((p) => [Number(p[0]), Number(p[1]), Number(p[2])]);
     if (overrides.subdivisions != null) popState.subdivisions = Math.max(0, Math.floor(Number(overrides.subdivisions) || 0));
-    if (overrides.field_variable != null) popState.field_variable = String(overrides.field_variable);
+    if (overrides.field != null) popState.field = String(overrides.field);
     if (overrides.enabled != null) popState.enabled = !!overrides.enabled;
     if (overrides.pick != null) popState.pick = String(overrides.pick || '');
   }
@@ -7694,7 +7833,7 @@ async function loadPlotOverPath(overrides) {
   }
   if (n < 2) {
     popMeta = {
-      field_variable: popState.field_variable,
+      field: popState.field,
       field_name: '',
       subdivisions: popState.subdivisions,
       n_path_points: n,
@@ -7740,14 +7879,10 @@ async function loadPlotOverPath(overrides) {
 
 
 
+/** The array an iso surface is coloured by: the exporter's coloring_field, else the picked one. */
 function isoColorArrayName(meta) {
   const m = meta || isoMeta || {};
-  const cf = m.coloring_field || '';
-  if (cf === 'p' || cf === 'Pressure') return 'p';
-  if (cf === 'magU' || cf === 'U') return 'magU';
-  const c = (m.coloring || isoState.coloring || 'Pressure').toLowerCase();
-  if (c.indexOf('pressure') >= 0 || c === 'p') return 'p';
-  return 'magU';
+  return String(m.coloring_field || isoToolFields(isoState).color || '');
 }
 
 function isoFingerprint(meta, pd) {
@@ -7756,10 +7891,8 @@ function isoFingerprint(meta, pd) {
   const nPoints = pd && pd.getPoints ? pd.getPoints().getNumberOfPoints() : (m.n_points != null ? m.n_points : 0);
   const empty = !!(m.empty || nCells === 0 || nPoints === 0);
   return {
-    iso_scalar: m.iso_scalar || isoState.iso_scalar,
     iso_value: m.iso_value != null ? m.iso_value : isoState.iso_value,
     iso_field: m.iso_field || '',
-    coloring: m.coloring || isoState.coloring,
     coloring_field: m.coloring_field || null,
     opacity: m.opacity != null ? m.opacity : isoState.opacity,
     n_cells: nCells,
@@ -7810,10 +7943,9 @@ function publishW10(extra) {
     iso_volume_live_w11: true,
     no_solid_shell: true,
     banked_defaults: {
-      iso_scalar: 'Velocity Magnitude',
+      iso_field: '',
       iso_value: 11.1,
-      iso_value_unit: 'm/s',
-      coloring: 'Pressure',
+      color_field: '',
       vectors: false,
       opacity: 1,
     },
@@ -7831,9 +7963,9 @@ async function loadIsoSurface(overrides) {
     return { empty: true, skipped: 'no_case' };
   }
   if (overrides && typeof overrides === 'object') {
-    if (overrides.iso_scalar != null) isoState.iso_scalar = String(overrides.iso_scalar);
+    if (overrides.iso_field != null) isoState.iso_field = String(overrides.iso_field);
     if (overrides.iso_value != null) isoState.iso_value = Number(overrides.iso_value);
-    if (overrides.coloring != null) isoState.coloring = String(overrides.coloring);
+    if (overrides.color_field != null) isoState.color_field = String(overrides.color_field);
     if (overrides.opacity != null) isoState.opacity = Number(overrides.opacity);
     if (overrides.vectors != null) isoState.vectors = !!overrides.vectors;
     if (overrides.enabled != null) isoState.enabled = !!overrides.enabled;
@@ -7889,13 +8021,12 @@ function syncIsoChromeFromState() {
   const op = document.getElementById('iso-opacity');
   const opv = document.getElementById('iso-opacity-val');
   const en = document.getElementById('iso-enabled');
-  if (sc) sc.value = isoState.iso_scalar || 'Velocity Magnitude';
+  const fields = isoToolFields(isoState);
+  if (sc) sc.value = fields.iso;
   if (val) val.value = String(isoState.iso_value);
-  if (unit) {
-    const s = (isoState.iso_scalar || '').toLowerCase();
-    unit.textContent = s.indexOf('pressure') >= 0 ? 'Pa' : 'm/s';
-  }
-  if (col) col.value = isoState.coloring || 'Pressure';
+  // The iso value is in the picked field's unit.
+  if (unit) unit.textContent = fields.iso ? fieldInfo(fields.iso).unit : '';
+  if (col) col.value = fields.color;
   if (vec) vec.checked = !!isoState.vectors;
   if (op) op.value = String(isoState.opacity);
   if (opv) opv.textContent = String(isoState.opacity);
@@ -7906,14 +8037,10 @@ function syncIsoChromeFromState() {
 
 
 
+/** The array an iso volume is coloured by: the exporter's coloring_field, else the picked one. */
 function ivColorArrayName(meta) {
   const m = meta || ivMeta || {};
-  const cf = m.coloring_field || '';
-  if (cf === 'p' || cf === 'Pressure') return 'p';
-  if (cf === 'magU' || cf === 'U') return 'magU';
-  const c = (m.coloring || ivState.coloring || 'Pressure').toLowerCase();
-  if (c.indexOf('pressure') >= 0 || c === 'p') return 'p';
-  return 'magU';
+  return String(m.coloring_field || isoToolFields(ivState).color || '');
 }
 
 function ivFingerprint(meta, pd) {
@@ -7923,13 +8050,11 @@ function ivFingerprint(meta, pd) {
   const nPoints = m.n_points != null ? m.n_points : (pd && pd.getPoints ? pd.getPoints().getNumberOfPoints() : 0);
   const empty = !!(m.empty || nCells === 0 || nPoints === 0);
   return {
-    iso_scalar: m.iso_scalar || ivState.iso_scalar,
     iso_value_low: m.iso_value_low != null ? m.iso_value_low : ivState.iso_value_low,
     iso_value_high: m.iso_value_high != null ? m.iso_value_high : ivState.iso_value_high,
     mapped_low: m.mapped_low != null ? m.mapped_low : null,
     mapped_high: m.mapped_high != null ? m.mapped_high : null,
     iso_field: m.iso_field || '',
-    coloring: m.coloring || ivState.coloring,
     coloring_field: m.coloring_field || null,
     opacity: m.opacity != null ? m.opacity : ivState.opacity,
     n_cells: nCells,
@@ -7979,10 +8104,10 @@ function publishW11(extra) {
     animation_live: true, animation_chrome_only: false,
     not_iso_surface_rebrand: true,
     banked_defaults: {
-      iso_scalar: 'Velocity Magnitude',
+      iso_field: '',
       iso_value_low: 0.25,
       iso_value_high: 0.75,
-      coloring: 'Pressure',
+      color_field: '',
       vectors: false,
       opacity: 1,
     },
@@ -8010,10 +8135,11 @@ function syncIvChromeFromState() {
   const op = document.getElementById('iv-opacity');
   const opv = document.getElementById('iv-opacity-val');
   const en = document.getElementById('iv-enabled');
-  if (sc) sc.value = ivState.iso_scalar || 'Velocity Magnitude';
+  const fields = isoToolFields(ivState);
+  if (sc) sc.value = fields.iso;
   if (lo) lo.value = String(ivState.iso_value_low);
   if (hi) hi.value = String(ivState.iso_value_high);
-  if (col) col.value = ivState.coloring || 'Pressure';
+  if (col) col.value = fields.color;
   if (vec) vec.checked = !!ivState.vectors;
   if (op) op.value = String(ivState.opacity);
   if (opv) opv.textContent = String(ivState.opacity);
@@ -8031,10 +8157,10 @@ async function loadIsoVolume(overrides) {
     return { empty: true, skipped: 'no_case' };
   }
   if (overrides && typeof overrides === 'object') {
-    if (overrides.iso_scalar != null) ivState.iso_scalar = String(overrides.iso_scalar);
+    if (overrides.iso_field != null) ivState.iso_field = String(overrides.iso_field);
     if (overrides.iso_value_low != null) ivState.iso_value_low = Number(overrides.iso_value_low);
     if (overrides.iso_value_high != null) ivState.iso_value_high = Number(overrides.iso_value_high);
-    if (overrides.coloring != null) ivState.coloring = String(overrides.coloring);
+    if (overrides.color_field != null) ivState.color_field = String(overrides.color_field);
     if (overrides.opacity != null) ivState.opacity = Number(overrides.opacity);
     if (overrides.vectors != null) ivState.vectors = !!overrides.vectors;
     if (overrides.enabled != null) ivState.enabled = !!overrides.enabled;
@@ -8125,10 +8251,10 @@ function setFiltersToolbarMode(mode) {
       // Cell Volume is a mesh-quality view; keep it out of the results coloring list.
       cv.hidden = m !== 'mesh';
       cv.disabled = m !== 'mesh';
-      cpColor.value = m === 'mesh' ? 'cellVolume' : 'magU';
+      cpColor.value = m === 'mesh' ? 'cellVolume' : defaultResultField();
       cpColor.setAttribute('data-coloring-mode', m);
     } else {
-      cpColor.textContent = m === 'mesh' ? 'Cell Volume' : 'Velocity Magnitude';
+      cpColor.textContent = m === 'mesh' ? 'Cell Volume' : fieldInfo(defaultResultField()).label;
     }
   }
   const fp = document.getElementById('filters-panel');
@@ -8636,6 +8762,7 @@ async function resolveRunResultsCasePath(rec) {
         const r = await fetch('/api/times?case=' + encodeURIComponent(c), { cache: 'no-store' });
         const j = await r.json();
         const times = Array.isArray(j.times) ? j.times.map(String) : [];
+        if (r.ok) noteCaseFields(j, c);
         const n = times.length;
         if (n > bestN) {
           bestN = n;
@@ -8644,7 +8771,7 @@ async function resolveRunResultsCasePath(rec) {
         const t = times[times.length - 1];
         if (!t) return;
         const meta = await fetch(
-          '/api/fields/' + encodeURIComponent(defaultResultField()) + '/meta?case=' + encodeURIComponent(c) + '&time=' + encodeURIComponent(t),
+          '/api/fields/' + encodeURIComponent(defaultResultField({ case: c, rec })) + '/meta?case=' + encodeURIComponent(c) + '&time=' + encodeURIComponent(t),
           { cache: 'no-store' }
         );
         const body = await meta.json().catch(() => null);
@@ -8709,6 +8836,7 @@ function hidePrefetchedResultSurface() {
 async function peekCaseTimes(casePath) {
   const r = await fetch('/api/times?case=' + encodeURIComponent(casePath), { cache: 'no-store' });
   const j = await r.json().catch(() => null);
+  if (r.ok && j) noteCaseFields(j, casePath);
   return Array.isArray(j && j.times) ? j.times.map(String) : [];
 }
 
@@ -8752,7 +8880,7 @@ async function prefetchOneRun(rec, gen, attach) {
           console.warn('[CFD] results prefetch warm', e);
         }
         // The field it opens on first, then the analysis's other declared fields' first two.
-        const warm = [defaultResultField(), ...resultFieldNames()].filter((f, i, all) => all.indexOf(f) === i).slice(0, 2);
+        const warm = [defaultResultField({ case: casePath, rec: latest }), ...resultFieldNames({ case: casePath, rec: latest })].filter((f, i, all) => all.indexOf(f) === i).slice(0, 2);
         for (const f of warm) {
           try { await prefetchFieldFrame(f, t, { case: casePath }); } catch (_) {}
         }
@@ -9110,7 +9238,7 @@ async function openRunResults(runId, opts) {
     if (loaded) {
       try { await restoreCurrentFilterSet(runId); } catch (_) {}
       if (stale()) return { stale: true };
-      try { await lockSeriesLutFromServer(activeField || 'magU'); } catch (_) {}
+      try { await lockSeriesLutFromServer(activeField || defaultResultField()); } catch (_) {}
       if (stale()) return { stale: true };
       // A failed earlier attach can autosave CAD leftovers (solid grey parts,
       // group-hidden planes). Show the field and any enabled planes.
@@ -11053,7 +11181,7 @@ function ensureCompareResults() {
     runId: null,
     viewId: '',
     set: null,
-    field: 'magU',
+    field: '',
     range: null,       // [lo, hi] of the surface field
     bounds: null,
     pd: null,
@@ -11188,7 +11316,7 @@ function resultsCompareSetFor(opt) {
   if (resultsCompareSyncOn()) return serializeFilterSet({ camera: false });
   if (opt.view && opt.view.set) return opt.view.set;
   if (String(opt.runId) === String(resultsRunId)) return serializeFilterSet({ camera: false });
-  return (opt.rec && opt.rec.current_view) || { v: 1, field: 'magU', parts: { on: true, style: 'field', opacity: 1 }, planes: [], pt: { open: false }, anim: { open: false } };
+  return (opt.rec && opt.rec.current_view) || { v: 1, field: defaultResultField(), parts: { on: true, style: 'field', opacity: 1 }, planes: [], pt: { open: false }, anim: { open: false } };
 }
 
 async function timesForCase(casePath) {
@@ -11196,6 +11324,7 @@ async function timesForCase(casePath) {
   try {
     const r = await fetch('/api/times?case=' + encodeURIComponent(casePath), { cache: 'no-store' });
     const j = await r.json();
+    if (r.ok) noteCaseFields(j, casePath);
     return Array.isArray(j.times) ? j.times.map(String) : [];
   } catch (_) {
     return [];
@@ -11493,7 +11622,7 @@ async function applyCompareResultsTime(time, opts) {
   if (!compareResultsFollowsTime()) return false;
   const tstr = mapTimeToCaseTimes(time, R.times || []);
   const cachedOnly = !!(opts && opts.cachedOnly);
-  const field = R.field || 'magU';
+  const field = R.field || defaultResultField();
   const applyEntry = (entry) => {
     if (!entry || !entry.pd) return false;
     applyCompareResultsSurface(R, entry.pd);
@@ -11590,7 +11719,7 @@ function warmCompareAnimFrames() {
   if (!compareResultsFollowsTime() || isPtAnimation()) return;
   const times = compareMappedWindowTimes();
   if (times.length < 2) return;
-  const field = (compareState.res && compareState.res.field) || activeField || 'magU';
+  const field = (compareState.res && compareState.res.field) || activeField || defaultResultField();
   animPreloadB = {
     done: times.filter((t) => compareAnimTimeIsCached(field, t)).length,
     total: times.length,
@@ -11843,9 +11972,8 @@ function applyCompareResultsPtLook(R) {
   }
   const size = Math.max(2e-4, Number(st.size) || 0.0037);
   const rep = String(st.representation || 'Cylinders');
-  const coloring = String(st.coloring || 'magU');
-  const solid = coloring === 'solid';
-  const colorName = coloring === 'p' ? 'p' : 'magU';
+  const colorName = ptColorArrayName(pd, st.coloring);
+  const solid = !colorName;
   P.range = solid ? null : (() => {
     const r = fieldRangeFromPd(pd, colorName);
     return r ? { field: colorName, lo: r[0], hi: r[1] } : null;
@@ -12029,9 +12157,10 @@ async function loadResultsCompareB() {
     R.set = synced.set;
     R.ptLost = synced.lost;
     showComparePaneBNote(R);
-    R.field = fieldKey(R.set.field);
     R.times = await timesForCase(R.caseDir);
     if (token !== R.loadToken) return;
+    R.set = normalizeFilterSet(R.set, resultFieldNames({ case: casePath, rec: opt.rec || null }));
+    R.field = fieldKey(R.set.field);
     R.time = mapTimeToCaseTimes(getTime(), R.times);
     let pd = null;
     try {
@@ -12604,20 +12733,28 @@ function serializeFilterSet(opts) {
       phase: Number(ptPhase) || 0,
     },
     collapsed: Array.from(collapsedFilterBlocks).filter((k) => !String(k).startsWith('rplane:')),
-    // window = squeeze handles; bounds = typed min/max. Old {lo,hi} is a window.
-    scale: {
-      magU: persistLegendScaleState('magU'),
-      p: persistLegendScaleState('p'),
-    },
+    // Per field: window = squeeze handles; bounds = typed min/max. Old {lo,hi} is a window.
+    scale: serializeLegendScales(),
     camera: o.camera === false ? null : snapshotCamera(renderer.getActiveCamera()),
   };
   return set;
 }
 
+/** The colour scale of every field the user set one for (squeeze window or typed bounds). */
+function serializeLegendScales() {
+  const out = {};
+  for (const key of new Set([...Object.keys(scaleOverride), ...Object.keys(legendScale)])) {
+    if (!FIELD_NAME_RE.test(key)) continue;
+    const saved = persistLegendScaleState(key);
+    if (saved) out[key] = saved;
+  }
+  return out;
+}
+
 function filterSetSummary(set) {
   if (!set) return '';
   const bits = [];
-  bits.push(set.field === 'p' ? 'Pressure' : 'Velocity');
+  if (set.field) bits.push(fieldInfo(set.field).label);
   const nPlanes = Array.isArray(set.planes) ? set.planes.length : 0;
   if (nPlanes) bits.push(nPlanes + (nPlanes === 1 ? ' plane' : ' planes'));
   if (set.pt && set.pt.open && set.pt.enabled) bits.push('trace');
@@ -12627,9 +12764,11 @@ function filterSetSummary(set) {
 
 // Rebuild the live filters from a saved set. `opts.camera === false` keeps
 // the current camera (used for the auto-restored set); saved views move it.
-async function applyFilterSet(set, opts) {
+async function applyFilterSet(rawSet, opts) {
   const o = opts || {};
-  if (!set || typeof set !== 'object') return false;
+  if (!rawSet || typeof rawSet !== 'object') return false;
+  // A saved field this case does not show opens on its first field instead.
+  const set = normalizeFilterSet(rawSet, resultFieldNames());
   applyingFilterSet = true;
   try {
     try { stopAnimationPlay(); } catch (_) {}
@@ -12696,8 +12835,11 @@ async function applyFilterSet(set, opts) {
     if (animBlock) animBlock.hidden = !anim.open;
     btnAnimation?.classList.toggle('is-active', !!anim.open);
     if (Number.isFinite(Number(anim.phase))) ptPhase = Math.max(0, Number(anim.phase)) % 1;
-    for (const key of ['magU', 'p']) {
-      restoreLegendScaleState(key, set.scale && set.scale[key]);
+    // Colour scales: exactly the saved ones (every field name in the set).
+    clearScaleOverrides();
+    const scales = set.scale && typeof set.scale === 'object' ? set.scale : {};
+    for (const key of Object.keys(scales)) {
+      if (FIELD_NAME_RE.test(key)) restoreLegendScaleState(key, scales[key]);
     }
     // Collapsed blocks.
     collapsedFilterBlocks.clear();
@@ -12959,7 +13101,7 @@ function setLegendVisible(on) {
     setLegendCardShown(document.getElementById('legend-b'), false, true);
     return;
   }
-  if (ptState.enabled && ptLinePd && String(ptState.coloring || 'magU') !== 'solid') {
+  if (ptState.enabled && ptLinePd && String(ptState.coloring || '') !== 'solid') {
     try { applyPtRepresentation(); } catch (_) {}
   }
   try { syncSharedLegend(); } catch (_) {}
@@ -13250,6 +13392,8 @@ document.getElementById('btn-add-result-plane')?.addEventListener('click', () =>
 })();
 
 function enableParticleTraceFilter(opts) {
+  // Nothing for particles to follow in a case with no velocity field.
+  if (!velocityVectorName() && caseFieldsKnown()) return Promise.resolve(null);
   ptState.enabled = true;
   const en = document.getElementById('pt-enabled');
   if (en) en.checked = true;
@@ -13356,7 +13500,7 @@ document.getElementById('pt-delete')?.addEventListener('click', () => {
   const readLook = () => {
     if (sz) ptState.size = parseSci(sz.value, ptState.size || 0.0037);
     if (rep) ptState.representation = rep.value || 'Cylinders';
-    if (col) ptState.coloring = col.value || 'magU';
+    if (col) ptState.coloring = col.value || '';
     if (solid) ptState.solid = solid.value || '#2563eb';
     if (solidHex) solidHex.textContent = ptState.solid;
     if (pulses) {
@@ -13571,7 +13715,7 @@ btnPlotOverPath?.addEventListener('click', () => {
     publishW9();
   });
   fv?.addEventListener('change', () => {
-    popState.field_variable = fv.value || 'Velocity Magnitude';
+    popState.field = fv.value || '';
     publishW9();
   });
   gen?.addEventListener('click', () => {
@@ -13723,39 +13867,115 @@ function syncChromeFromState() {
 })();
 
 /**
- * The Coloring picker lists the fields the open study's analysis writes
- * (a vector as its magnitude), plus the hidden mesh-quality entry.
+ * What a case's frames wrote (the exporter's fields_available, or /api/times
+ * for the last saved time) and its sidecar's result_fields. `casePath`
+ * defaults to the open case. A meta from before result_fields (a cached
+ * export) leaves the rows as they were.
  */
-/** The shown fields the open case's frames hold (the exporter's fields_available). */
-const caseFieldsAvailable = { case: null, names: null };
-
-function noteCaseFields(meta) {
-  const names = meta && Array.isArray(meta.fields_available) ? meta.fields_available.map(String) : null;
-  if (!names || !names.length) return;
-  const c = getCaseDir();
-  if (caseFieldsAvailable.case === c && (caseFieldsAvailable.names || []).join('|') === names.join('|')) return;
-  caseFieldsAvailable.case = c;
-  caseFieldsAvailable.names = names;
-  syncColoringOptions();
+function noteCaseFields(meta, casePath) {
+  if (!meta || typeof meta !== 'object') return;
+  const key = caseFieldKey(casePath || getCaseDir());
+  if (!key) return;
+  const names = Array.isArray(meta.fields_available) && meta.fields_available.length
+    ? meta.fields_available.map(String)
+    : null;
+  const prev = caseFieldInfo.get(key) || { names: null, rows: null };
+  const rows = 'result_fields' in meta ? (Array.isArray(meta.result_fields) ? meta.result_fields : null) : prev.rows;
+  const next = { names: names || prev.names, rows };
+  if (caseFieldInfo.has(key) && JSON.stringify(next) === JSON.stringify(prev)) return;
+  caseFieldInfo.set(key, next);
+  if (key === caseFieldKey(getCaseDir())) syncColoringOptions();
 }
 
+/**
+ * The Coloring picker lists the run's result fields the frame wrote (a vector
+ * as its magnitude), plus the hidden mesh-quality entry.
+ */
 function syncColoringOptions() {
   const sel = document.getElementById('cp-coloring');
   if (!sel || sel.tagName !== 'SELECT') return;
-  const names = resultFieldNames();
-  // Only what this run wrote: a laminar run has no k or omega to colour by.
-  const have = caseFieldsAvailable.case === getCaseDir() ? caseFieldsAvailable.names : null;
-  const wrote = have ? names.filter((n) => have.includes(n)) : names;
-  const list = wrote.length ? wrote : names.length ? names : ['magU', 'p'];
-  const current = fieldKey(activeField);
-  if (current !== 'cellVolume' && !list.includes(current)) list.push(current);
-  const want = list.join('|');
+  const list = resultFieldNames();
+  // Before the case says what it wrote, keep the field on screen listed.
+  const info = caseFieldInfo.get(caseFieldKey(getCaseDir()));
+  const current = activeField;
+  if (!(info && info.names) && current && current !== 'cellVolume' && FIELD_NAME_RE.test(current) && !list.includes(current)) {
+    list.push(current);
+  }
+  const rows = resultFieldRows();
+  const want = list.map((n) => n + '=' + fieldInfoIn(rows, n).label).join('|');
+  if (sel.dataset.fields !== want) {
+    sel.dataset.fields = want;
+    sel.innerHTML =
+      list.map((n) => '<option value="' + escapeHtml(n) + '">' + escapeHtml(fieldInfoIn(rows, n).label) + '</option>').join('') +
+      '<option value="cellVolume" hidden disabled>Cell Volume</option>';
+  }
+  sel.value = activeField === 'cellVolume' ? 'cellVolume' : defaultResultField();
+  try { syncToolFieldOptions(); } catch (e) { console.warn('[CFD] tool fields', e); }
+}
+
+/** Replace a picker's options when they differ (`extra`: options after the fields). */
+function fillFieldSelect(sel, fields, extra) {
+  if (!sel) return;
+  const opts = [...toolOptions(fields), ...(extra || [])];
+  const want = opts.map((o) => o.value + '=' + o.label).join('|');
   if (sel.dataset.fields === want) return;
   sel.dataset.fields = want;
-  sel.innerHTML =
-    list.map((n) => '<option value="' + escapeHtml(n) + '">' + escapeHtml(fieldInfo(n).label) + '</option>').join('') +
-    '<option value="cellVolume" hidden disabled>Cell Volume</option>';
-  sel.value = fieldKey(activeField);
+  sel.innerHTML = opts.map((o) => '<option value="' + escapeHtml(o.value) + '">' + escapeHtml(o.label) + '</option>').join('');
+}
+
+/** The particle trace's colour field: its pick when listed, else the velocity magnitude, else the first. */
+function ptColoringField() {
+  const names = resultFieldNames();
+  const want = String(ptState.coloring || '');
+  if (want && names.includes(want)) return want;
+  const vec = velocityVectorName();
+  if (vec && names.includes('mag' + vec)) return 'mag' + vec;
+  return names[0] || '';
+}
+
+/**
+ * Every results tool picker lists the run's result fields the frame wrote
+ * (particle trace and plane vectors add a solid colour). With no velocity
+ * vector there is nothing for particles to follow or arrows to draw.
+ */
+function syncToolFieldOptions() {
+  const fields = resultFieldRows();
+  fillFieldSelect(document.getElementById('pt-coloring'), fields, [{ value: 'solid', label: 'Solid color' }]);
+  fillFieldSelect(document.getElementById('pop-field-variable'), fields);
+  fillFieldSelect(document.getElementById('iso-scalar'), fields);
+  fillFieldSelect(document.getElementById('iso-coloring'), fields);
+  fillFieldSelect(document.getElementById('iv-scalar'), fields);
+  fillFieldSelect(document.getElementById('iv-coloring'), fields);
+  const ptCol = document.getElementById('pt-coloring');
+  if (ptCol) ptCol.value = ptState.coloring === 'solid' ? 'solid' : ptColoringField();
+  const pop = document.getElementById('pop-field-variable');
+  if (pop) pop.value = toolField(popState.field);
+  for (const [st, sc, col, unitId] of [[isoState, 'iso-scalar', 'iso-coloring', 'iso-value-unit'], [ivState, 'iv-scalar', 'iv-coloring', '']]) {
+    const f = isoToolFields(st);
+    const scEl = document.getElementById(sc);
+    const colEl = document.getElementById(col);
+    if (scEl) scEl.value = f.iso;
+    if (colEl) colEl.value = f.color;
+    const unit = unitId && document.getElementById(unitId);
+    if (unit) unit.textContent = f.iso ? fieldInfo(f.iso).unit : '';
+  }
+  const fieldOpt = document.querySelector('#parts-style option[value="field"]');
+  if (fieldOpt && fields.length && !activeField) fieldOpt.textContent = fieldInfo(defaultResultField()).label;
+  // No velocity: the particle trace and the vector toggles are off, and say why.
+  const noVec = !velocityVectorName() && caseFieldsKnown();
+  const ptBtn = document.querySelector('.tb-btn[data-label="Particle Trace"]');
+  if (ptBtn) {
+    ptBtn.disabled = noVec;
+    ptBtn.title = noVec ? NO_VELOCITY_TITLE : 'Show / hide particle traces';
+  }
+  for (const id of ['iso-vectors', 'iv-vectors']) {
+    const box = document.getElementById(id);
+    if (box) {
+      box.disabled = noVec;
+      box.title = noVec ? NO_VELOCITY_TITLE : '';
+    }
+  }
+  try { syncCutPlaneVectorChrome(); } catch (_) {}
 }
 
 (function wireColoringSelect() {
@@ -13853,9 +14073,9 @@ btnIsoSurface?.addEventListener('click', () => {
     }, 120);
   };
   const read = () => {
-    if (sc) isoState.iso_scalar = sc.value || 'Velocity Magnitude';
+    if (sc) isoState.iso_field = sc.value || '';
     if (val) isoState.iso_value = Number(val.value);
-    if (col) isoState.coloring = col.value || 'Pressure';
+    if (col) isoState.color_field = col.value || '';
     if (vec) isoState.vectors = !!vec.checked;
     if (op) {
       isoState.opacity = Number(op.value);
@@ -13943,7 +14163,7 @@ btnAnimation?.addEventListener('click', () => {
   const fresh = !block || block.hidden;
   // Steady runs animate the particle trace; a transient run steps through its saved
   // times and keeps its coloring (Particle Trace stays one click away).
-  if (fresh) animState.type = isSteadyAnimationRun() ? 'Particle Trace' : 'Time Step';
+  if (fresh) animState.type = isSteadyAnimationRun() && velocityVectorName() ? 'Particle Trace' : 'Time Step';
   revealPostFilter('anim-block', { collapseOthers: !!fresh });
   syncAnimChromeFromState();
   btnAnimation.classList.add('is-active');
@@ -13983,7 +14203,7 @@ document.getElementById('anim-delete')?.addEventListener('click', () => {
     }, 120);
   };
   const read = () => {
-    if (sc) ivState.iso_scalar = sc.value || 'Velocity Magnitude';
+    if (sc) ivState.iso_field = sc.value || '';
     if (lo) ivState.iso_value_low = Number(lo.value);
     if (hi) ivState.iso_value_high = Number(hi.value);
     // UI dual-handle: prevent crossing while dragging (prove APPLY can still invert)
@@ -13996,7 +14216,7 @@ document.getElementById('anim-delete')?.addEventListener('click', () => {
         ivState.iso_value_low = Number(lo.value);
       }
     }
-    if (col) ivState.coloring = col.value || 'Pressure';
+    if (col) ivState.color_field = col.value || '';
     if (vec) ivState.vectors = !!vec.checked;
     if (op) {
       ivState.opacity = Number(op.value);
@@ -14285,6 +14505,7 @@ async function ensureAnimTimes() {
     await null;
   }
   const times = Array.isArray(j.times) ? j.times.map(String) : [];
+  if (hasAttachedCase()) noteCaseFields(j);
   if (!times.length) currentTime = '';
   const prevStart = animState.start;
   const prevEnd = animState.end;
@@ -14318,7 +14539,7 @@ async function ensureAnimTimes() {
         seriesLut.held[key] = lutRange.slice();
       }
     } catch (_) {}
-    lockSeriesLutFromServer(activeField || 'magU').catch(() => {});
+    lockSeriesLutFromServer(activeField || defaultResultField()).catch(() => {});
     try { warmAnimFrameCache(); } catch (_) {}
   }
   syncAnimChromeFromState();
@@ -14478,7 +14699,7 @@ function publishW12(extra) {
     },
     mapping_note: animState.mapping_note,
     api_times_url: apiTimesUrl(),
-    api_field_url: apiFieldUrl(activeField || 'magU'),
+    api_field_url: apiFieldUrl(activeField || defaultResultField()),
     fingerprint: window.__CFD_W6__ ? window.__CFD_W6__.fingerprint : null,
     foam_proof: window.__CFD_W6__ ? window.__CFD_W6__.foam_proof : null,
     animation_live: true,
@@ -14733,7 +14954,7 @@ function warmAnimFrameCache() {
   if (!hasAttachedCase()) return;
   const times = animWindowTimes();
   if (times.length < 2) return;
-  const field = activeField || 'magU';
+  const field = activeField || defaultResultField();
   preloadAnimFrames(times, field, setAnimFrameHint).catch((e) => console.warn('[CFD] anim warm', e));
   try { warmCompareAnimFrames(); } catch (_) {}
 }
@@ -14868,7 +15089,7 @@ function startAnimationPlay() {
   const playGen = ++animPlayGen;
   animState.playing = true;
   syncAnimPlayButtons();
-  const field = activeField || 'magU';
+  const field = activeField || defaultResultField();
   const playBtn = document.getElementById('anim-play');
   const prefetchAhead = (fromIdx) => {
     const { startIdx, endIdx } = animWindowRange();
@@ -15115,7 +15336,7 @@ window.__CFD_W12_APPLY__ = async function applyW12(partial) {
     if (!times.length) return;
     const i = Math.max(0, Math.min(times.length - 1, idx));
     setAnimationTime(times[i], { skipExtras: true }).catch((e) => console.error('[CFD W12.1] iter', e));
-    const field = activeField || 'magU';
+    const field = activeField || defaultResultField();
     const ahead = [];
     for (let k = -6; k <= 6; k++) {
       if (k === 0) continue;
@@ -15146,17 +15367,11 @@ publishW12({ ready: false });
 function inspectFmtM(v) {
   return Number.isFinite(v) ? Number(v).toFixed(3) : '—';
 }
-function inspectFmtVel(v) {
-  if (v == null || !Number.isFinite(v)) return '—';
-  return (Math.abs(v) < 1e-6 ? '0.00' : Number(v).toPrecision(4)) + ' m/s';
-}
-function inspectFmtP(v) {
-  if (v == null || !Number.isFinite(v)) return '—';
-  return Math.round(Number(v)).toLocaleString('en-US') + ' Pa';
-}
-function inspectFmtT(v) {
-  if (v == null || !Number.isFinite(v)) return '—';
-  return Number(v).toFixed(1);
+/** A probed value with its field's unit ('—' when there is none). */
+function inspectFmtValue(v, unit) {
+  if (v == null || !Number.isFinite(Number(v))) return '—';
+  const text = formatSci(Number(v));
+  return unit ? text + ' ' + unit : text;
 }
 
 function inspectActorVisible(a) {
@@ -15372,17 +15587,34 @@ function pdScalarAt(pd, name, idx) {
   return null;
 }
 
+/**
+ * Every shown field the polydata carries at a point: {name: value}. A vector's
+ * magnitude is taken from the vector when only the vector is there; T also
+ * reads its older array names.
+ */
 function pdScalarsAtIndex(pd, idx) {
-  const U = pdScalarAt(pd, 'U', idx);
-  let magU = pdScalarAt(pd, 'magU', idx);
-  if (magU == null && U) magU = Math.hypot(U[0], U[1], U[2]);
-  const p = pdScalarAt(pd, 'p', idx);
-  let T = null;
-  for (const n of CUT_VECTOR_TEMP_NAMES) {
-    const v = pdScalarAt(pd, n, idx);
-    if (v != null) { T = v; break; }
+  const values = {};
+  const names = resultFieldNames();
+  for (const name of names) {
+    let v = pdScalarAt(pd, name, idx);
+    if (Array.isArray(v)) v = Math.hypot(v[0], v[1], v[2]);
+    if (v == null && /^mag[A-Za-z]/.test(name)) {
+      const vec = pdScalarAt(pd, name.slice(3), idx);
+      if (Array.isArray(vec)) v = Math.hypot(vec[0], vec[1], vec[2]);
+    }
+    if (v == null && name === 'T') {
+      const alias = cutPlaneTempArrayName(pd);
+      if (alias) v = pdScalarAt(pd, alias, idx);
+    }
+    if (v != null) values[name] = v;
   }
-  return { magU, p, T, U };
+  // A temperature under an older array name, when the case lists no T.
+  if (!names.includes('T')) {
+    const alias = cutPlaneTempArrayName(pd);
+    const v = alias ? pdScalarAt(pd, alias, idx) : null;
+    if (v != null && !Array.isArray(v)) values.T = v;
+  }
+  return { values };
 }
 
 function polyDataCellPointIds(pd, cellId) {
@@ -15665,16 +15897,32 @@ function inspectPinCardInner(pt, idx, many) {
   const rows = [];
   if (many) rows.push('<div class="inspect-pin-n">' + (idx + 1) + '</div>');
   if (pt.hit) {
-    rows.push('<div class="inspect-pin-row"><span>Velocity</span><b>' + inspectFmtVel(pt.magU) + '</b></div>');
-    rows.push('<div class="inspect-pin-row"><span>Pressure</span><b>' + inspectFmtP(pt.p) + '</b></div>');
-    if (pt.T != null) {
-      rows.push('<div class="inspect-pin-row"><span>Temperature</span><b>' + inspectFmtT(pt.T) + '</b></div>');
+    // One row per shown field, with its label and unit.
+    for (const name of inspectRowNames(pt)) {
+      const info = fieldInfo(name);
+      rows.push(
+        '<div class="inspect-pin-row" data-field="' + escapeHtml(name) + '"><span>' + escapeHtml(info.label) + '</span><b>' +
+        escapeHtml(inspectFmtValue(pt.values[name], info.unit)) + '</b></div>'
+      );
     }
   } else {
     rows.push('<div class="inspect-pin-miss">No field data here</div>');
   }
   rows.push('<div class="inspect-pin-xyz">' + xyz + '</div>');
   return rows.join('');
+}
+
+/** The fields an inspect card shows: the listed ones, and T read under an older array name. */
+function inspectRowNames(pt) {
+  const names = resultFieldNames();
+  const vals = (pt && pt.values) || {};
+  return !names.includes('T') && vals.T != null ? [...names, 'T'] : names;
+}
+
+/** The listed fields a point has no value for yet (the volume probe fills them). */
+function inspectMissing(pt) {
+  const vals = (pt && pt.values) || {};
+  return resultFieldNames().filter((n) => vals[n] == null);
 }
 
 function inspectPinHtml(pt, idx, many) {
@@ -15821,8 +16069,7 @@ function mirrorInspectLegacy() {
   inspectState.position = last ? last.casePos.slice() : null;
   inspectState.hit = !!(last && last.hit);
   inspectState.empty = !last || !last.hit;
-  inspectState.magU = last ? last.magU : null;
-  inspectState.p = last ? last.p : null;
+  inspectState.values = last ? { ...last.values } : {};
   inspectState.reason = last ? (last.reason || '') : '';
   inspectState.marker_present = inspectState.points.length > 0;
   inspectState.fingerprint = last
@@ -15832,8 +16079,7 @@ function mirrorInspectLegacy() {
         z: last.casePos[2],
         hit: last.hit,
         empty: !last.hit,
-        magU: last.magU,
-        p: last.p,
+        values: { ...last.values },
         value_checksum: last.value_checksum || 0,
         reason: last.reason || '',
       }
@@ -15852,9 +16098,7 @@ function setInspectMarker(position, present) {
       world: position.slice(),
       casePos: worldToCasePoint(position),
       hit: false,
-      magU: null,
-      p: null,
-      T: null,
+      values: {},
     });
   } else {
     inspectState.points[inspectState.points.length - 1].world = position.slice();
@@ -15874,14 +16118,14 @@ function publishW13(overrides) {
     points: inspectState.points.map((pt) => ({
       casePos: pt.casePos.slice(),
       hit: !!pt.hit,
-      magU: pt.magU,
-      p: pt.p,
-      T: pt.T,
+      values: { ...pt.values },
+      // Deprecated mirrors of values.magU / values.p (older test hooks).
+      magU: pt.values.magU != null ? pt.values.magU : null,
+      p: pt.values.p != null ? pt.values.p : null,
     })),
     hit: !!inspectState.hit,
     empty: !!inspectState.empty,
-    magU: inspectState.magU,
-    p: inspectState.p,
+    values: { ...(inspectState.values || {}) },
     value_checksum: last ? last.value_checksum || 0 : inspectState.value_checksum,
     reason: inspectState.reason || '',
     time: inspectState.time != null ? String(inspectState.time) : getTime(),
@@ -15908,8 +16152,7 @@ async function probeInspectApi(casePos, time) {
   if (!r.ok) {
     return {
       hit: false,
-      magU: null,
-      p: null,
+      values: {},
       value_checksum: 0,
       reason: (meta && (meta.reason || meta.error)) || 'api_error',
       meta,
@@ -15917,10 +16160,16 @@ async function probeInspectApi(casePos, time) {
     };
   }
   const hit = !!meta.hit && meta.empty !== true;
+  // The probe's values, as shown (a kinematic field already times rho).
+  const values = {};
+  if (hit && meta.values && typeof meta.values === 'object') {
+    for (const [k, v] of Object.entries(meta.values)) {
+      if (FIELD_NAME_RE.test(k) && v != null && Number.isFinite(Number(v))) values[k] = Number(v);
+    }
+  }
   return {
     hit,
-    magU: hit && meta.magU != null ? Number(meta.magU) : null,
-    p: hit && meta.p != null ? Number(meta.p) : null,
+    values,
     value_checksum: Number(meta.value_checksum || 0),
     reason: hit ? '' : (meta.reason || 'miss_mesh'),
     meta,
@@ -15951,10 +16200,8 @@ async function addInspectPoint(spec) {
     casePos,
     screen: options.screen || null,
     cardOffset: options.cardOffset || defaultInspectCardOffset(inspectState.points.length),
-    hit: !!(local && (local.magU != null || local.p != null || local.T != null)),
-    magU: local ? local.magU : null,
-    p: local ? local.p : null,
-    T: local ? local.T : null,
+    hit: !!(local && Object.keys(local.values).length),
+    values: local ? { ...local.values } : {},
     value_checksum: 0,
     reason: '',
     marker: null,
@@ -15963,7 +16210,7 @@ async function addInspectPoint(spec) {
   mirrorInspectLegacy();
   syncInspectMarkers();
   syncInspectReadout();
-  const needApi = hasAttachedCase() && (pt.magU == null || pt.p == null);
+  const needApi = hasAttachedCase() && (!pt.hit || inspectMissing(pt).length > 0);
   publishW13({ loading: needApi });
 
   if (needApi) {
@@ -15972,10 +16219,13 @@ async function addInspectPoint(spec) {
       if (token !== inspectLoadToken) return publishW13({ stale: true });
       if (api.hit) {
         pt.hit = true;
-        if (pt.magU == null && api.magU != null) pt.magU = api.magU;
-        if (pt.p == null && api.p != null) pt.p = api.p;
+        // Only the fields the card lists (the probe answers every field the frame wrote).
+        const listed = resultFieldNames();
+        for (const [k, v] of Object.entries(api.values)) {
+          if (listed.includes(k) && pt.values[k] == null) pt.values[k] = v;
+        }
         pt.value_checksum = api.value_checksum;
-        if (pt.magU != null || pt.p != null) pt.reason = '';
+        if (Object.keys(pt.values).length) pt.reason = '';
       } else if (!pt.hit) {
         pt.reason = api.reason || 'miss_mesh';
       }
@@ -16010,8 +16260,7 @@ function clearInspect(keepArmed) {
   inspectState.position = null;
   inspectState.hit = false;
   inspectState.empty = true;
-  inspectState.magU = null;
-  inspectState.p = null;
+  inspectState.values = {};
   inspectState.value_checksum = 0;
   inspectState.reason = '';
   inspectState.fingerprint = null;
@@ -33594,7 +33843,8 @@ async function uploadCaptureToOwner(own, cap, nm) {
 function captureDefaultName(kind) {
   const own = captureOwner();
   const base = own ? own.label.replace(/ › Results$/, '') : (document.querySelector('.project-name')?.textContent.trim() || 'cfd');
-  const what = resultsViewOpen ? (activeField === 'p' ? 'pressure' : 'velocity') : meshInspectOpen ? 'mesh' : 'view';
+  const shown = resultsViewOpen ? fieldInfo(activeField).label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
+  const what = resultsViewOpen ? shown || 'results' : meshInspectOpen ? 'mesh' : 'view';
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes());
@@ -35739,7 +35989,7 @@ async function compareProjectRuns(runA, runB) {
 
 window.__CFD_HOST_SURFACES__ = {
   setLegendRange(lo, hi) {
-    setScaleOverride('magU', Number(lo), Number(hi));
+    setScaleOverride(fieldKey(activeField), Number(lo), Number(hi));
   },
   setTimeline(time) {
     return setAnimationTime(String(time));

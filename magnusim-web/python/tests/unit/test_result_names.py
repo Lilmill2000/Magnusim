@@ -51,6 +51,33 @@ def test_shown_fields_name_vectors_by_magnitude(tmp_path: Path):
     assert result_names.foam_source(case / "1", "magR") is None
 
 
+def test_shown_fields_leave_out_face_fields_and_old_times(tmp_path: Path):
+    """A real Incompressible Flow frame: U, p, k, omega, nut, plus the face flux phi
+    (surfaceScalarField) and a second-order scheme's old-time copies. Only what the
+    results page has always offered is shown: never phi, U_0 or phi_0."""
+    case = _time(
+        tmp_path,
+        {
+            "U": "volVectorField",
+            "p": "volScalarField",
+            "k": "volScalarField",
+            "omega": "volScalarField",
+            "nut": "volScalarField",
+            "phi": "surfaceScalarField",
+            "U_0": "volVectorField",
+            "phi_0": "surfaceScalarField",
+        },
+    )
+    t = case / "1"
+    assert result_names.foam_kind(t / "phi") == "face"
+    assert sorted(result_names.shown_fields(t)) == ["k", "magU", "nut", "omega", "p"]
+    assert result_names.foam_source(t, "phi") is None
+    assert result_names.foam_source(t, "magU") == ("U", "vector")
+    # The fixture cavity (U and p) is unchanged.
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "foam-results" / "cavity-2d" / "0.5"
+    assert sorted(result_names.shown_fields(fixture)) == ["magU", "p"]
+
+
 def test_ensure_shown_field_derives_magnitude_on_cells_and_points():
     cells = _grid()
     cells.cell_data["W"] = np.tile([3.0, 4.0, 0.0], (cells.n_cells, 1))

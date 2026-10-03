@@ -517,6 +517,103 @@ function foamNameFor(caseDir, time, field) {
   return name;
 }
 
+/**
+ * 'vector', 'tensor', 'face' or 'scalar' from a field file's FoamFile class (the
+ * same reading as python/tools/result_names.foam_kind; tensors and face fields
+ * are never shown).
+ */
+function foamFileKind(path) {
+  let head = '';
+  let fd = -1;
+  try {
+    fd = openSync(path, 'r');
+    const buf = Buffer.alloc(4096);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    head = buf.subarray(0, n).toString('latin1');
+  } catch {
+    return 'scalar';
+  } finally {
+    if (fd >= 0) closeSync(fd);
+  }
+  const m = /\bclass\s+(\w+)/.exec(head);
+  if (m) {
+    const cls = m[1];
+    if (cls.startsWith('surface')) return 'face';
+    if (cls.includes('Tensor')) return 'tensor';
+    return cls.includes('Vector') ? 'vector' : 'scalar';
+  }
+  if (/List<(symmTensor|tensor)>/.test(head)) return 'tensor';
+  if (/internalField\s+uniform\s*\(/.test(head) || head.includes('List<vector>')) return 'vector';
+  return 'scalar';
+}
+
+/**
+ * The fields a saved time can colour by (python/tools/result_names.shown_fields):
+ * a scalar by its name, a vector X as magX. Tensors, face fields (phi) and
+ * old-time copies (U_0) are left out.
+ */
+export function caseShownFields(caseDir, time) {
+  const dir = join(String(caseDir), String(time));
+  let names = [];
+  try {
+    names = readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    if (!isFieldName(name) || /_0$/.test(name)) continue;
+    let file = false;
+    try {
+      file = statSync(join(dir, name)).isFile();
+    } catch {
+      file = false;
+    }
+    if (!file) continue;
+    const kind = foamFileKind(join(dir, name));
+    if (kind === 'tensor' || kind === 'face') continue;
+    out.push(kind === 'vector' ? 'mag' + name : name);
+  }
+  return out;
+}
+
+/** One line of plain text of at most `limit` characters, else ''. */
+function plainText(value, limit) {
+  if (typeof value !== 'string' || value.length > limit || /[\x00-\x1f\x7f-\x9f]/.test(value)) return '';
+  return value;
+}
+
+/**
+ * The analysis's result fields the case sidecar lists, in order
+ * (python/tools/result_names.case_result_fields); null when it lists none.
+ */
+export function caseResultFieldRows(caseDir) {
+  let doc = null;
+  try {
+    doc = JSON.parse(readFileSync(join(String(caseDir), 'w27-case.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+  const rows = doc && doc.result_fields;
+  if (!Array.isArray(rows)) return null;
+  const out = [];
+  for (let row of rows) {
+    if (typeof row === 'string') row = { key: row };
+    if (!row || typeof row !== 'object') continue;
+    const key = String(row.key || '').trim();
+    if (!isFieldName(key)) continue;
+    out.push({
+      key,
+      kind: String(row.kind || '').trim().toLowerCase(),
+      unit_quantity: String(row.unit_quantity || '').trim().toLowerCase(),
+      label: String(row.label || ''),
+      unit: plainText(row.unit, 32),
+      magnitude_label: plainText(row.magnitude_label, 120),
+    });
+  }
+  return out;
+}
+
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj, null, 2);
   res.statusCode = status;
@@ -2192,6 +2289,8 @@ export function getCaseFieldApi() {
     hydrateActiveMeshCase,
     syncActiveCaseToActiveProject,
     listCaseTimes,
+    caseShownFields,
+    caseResultFieldRows,
     listCaseSeedFaces,
     foamFieldPath,
     ensureSeriesRange,
