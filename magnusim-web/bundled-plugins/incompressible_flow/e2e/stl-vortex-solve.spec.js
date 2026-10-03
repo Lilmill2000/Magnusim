@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NO_HEAVY } from '../../../e2e/toolchain.js';
+import { NO_HEAVY } from '../../../e2e/support/plugin-suite.js';
 
 // Step 2 acceptance (docs/STL-STEP-mesh-handoff.md): the faceted STL of the vortex
 // part is grouped into real surfaces, its two ports take pressure BCs, the Standard

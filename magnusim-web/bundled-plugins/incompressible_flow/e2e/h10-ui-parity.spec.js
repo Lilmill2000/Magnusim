@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { H10_PROJECT } from '../../../e2e/prepare-projects.js';
-import { NO_WSL } from '../../../e2e/toolchain.js';
+import { NO_WSL } from '../../../e2e/support/plugin-suite.js';
+import { H10_PROJECT } from './seed.js';
 
 // gate:h10-ui-parity — the Steady-state and Transient UI looks and behaves the
 // same after it moved into the Incompressible Flow plugin (H10). Each panel's

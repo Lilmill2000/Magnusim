@@ -1,8 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NO_WSL } from '../../../e2e/toolchain.js';
-import { waitSlotFree } from '../../../e2e/support/compute-slot.js';
+import { NO_WSL, waitSlotFree } from '../../../e2e/support/plugin-suite.js';
 
 // A transient run's Animation steps through its saved time steps: opening it keeps the
 // parts coloring (no particle trace, unlike a steady run), Play moves the field frame by

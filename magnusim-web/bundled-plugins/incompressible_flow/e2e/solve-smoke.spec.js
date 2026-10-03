@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { NO_WSL, wslPathExists } from '../../../e2e/toolchain.js';
+import { NO_WSL, wslPathExists } from '../../../e2e/support/plugin-suite.js';
 
 // Incompressible Flow's half of the smoke run (the core keeps the mesh, BC, material
 // and import tests in e2e/smoke.spec.js): the sample's steady solve, a transient

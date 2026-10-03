@@ -102,7 +102,7 @@ export function seedLegacyDocProject(root) {
 }
 
 /** Copy the elbow fixture into destRoot/<id> laid out the way the app stores it. */
-function seedElbowProject(destRoot, id, title) {
+export function seedElbowProject(destRoot, id, title) {
   const dest = join(destRoot, id);
   cpSync(FIXTURE_SRC, dest, { recursive: true });
   if (id !== FIXTURE_ID) {

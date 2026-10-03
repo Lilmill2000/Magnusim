@@ -1,8 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { NO_WSL } from '../../../e2e/toolchain.js';
-import { waitSlotFree } from '../../../e2e/support/compute-slot.js';
+import { NO_WSL, waitSlotFree } from '../../../e2e/support/plugin-suite.js';
 
 // Steady-state and Transient agree end to end (H7):
 // - a study's analysis key follows its time dependency (create, toggle, reload,

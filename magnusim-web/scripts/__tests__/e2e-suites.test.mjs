@@ -2,9 +2,9 @@
 // and the PC's WSL test lock (e2e/support/wsl-lock.mjs).
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { CONTRACT_SPECS, HOST_PATHS, LINK_HOST_PATHS, START_ACTION_HOST_PATHS, classifyPath, discoverPluginSuites, isFullTier, parseArgs, planSuites, suiteEnv, suiteOfFilter, toWebRel } from '../e2e-suites.mjs';
@@ -12,6 +12,7 @@ import { acquireWslLock, mayRunWslTests } from '../../e2e/support/wsl-lock.mjs';
 
 const PLUGINS = ['cad'];
 const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const WEB_ROOT = WEB;
 
 test('documentation, unit tests and files outside the app run no browser suite', () => {
   for (const rel of [
@@ -369,5 +370,83 @@ test('a second run waits for the WSL lock, and a dead holder does not block', as
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a plugin suite on the core\'s Playwright reaches the core harness only through e2e/support/plugin-suite.js', () => {
+  const seam = join(WEB_ROOT, 'e2e', 'support', 'plugin-suite.js');
+  const pluginsDir = join(WEB_ROOT, 'bundled-plugins');
+  const suites = readdirSync(pluginsDir).filter((key) => existsSync(join(pluginsDir, key, 'e2e', 'playwright.config.js')));
+  assert.ok(suites.includes('incompressible_flow'), suites.join(' '));
+  const specifiers = (text) => [...text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+  const outside = [];
+  // Suites that have moved onto the seam; another bundled suite (Airfoil) still
+  // imports the core harness directly until it adopts plugin-suite.js.
+  const onSeam = ['incompressible_flow'];
+  for (const key of suites.filter((k) => onSeam.includes(k))) {
+    const dir = join(pluginsDir, key, 'e2e');
+    const files = readdirSync(dir).filter((name) => /\.(c|m)?[jt]s$/.test(name));
+    assert.ok(files.includes('seed.js') || key !== 'incompressible_flow', 'incompressible_flow seeds its own projects');
+    for (const name of files) {
+      for (const spec of specifiers(readFileSync(join(dir, name), 'utf8'))) {
+        if (!spec.startsWith('.')) continue;
+        const target = resolve(dir, spec);
+        const rel = relative(join(pluginsDir, key), target);
+        if (!rel.startsWith('..') && !rel.startsWith(sep)) continue;
+        if (target !== seam) outside.push(`${key}/e2e/${name}: ${spec}`);
+      }
+    }
+  }
+  assert.deepEqual(outside, [], 'import these through ../../../e2e/support/plugin-suite.js');
+});
+
+test('the plugin seam re-exports what plugin suites use', async () => {
+  const seam = await import('../../e2e/support/plugin-suite.js');
+  for (const name of [
+    'appSuiteConfig',
+    'NO_WSL',
+    'NO_HEAVY',
+    'wslPathExists',
+    'waitSlotFree',
+    'addAir',
+    'addBc',
+    'createStudy',
+    'setup',
+    'PYTHON',
+    'seedElbowProject',
+  ]) {
+    assert.ok(name in seam, name);
+  }
+});
+
+test('a plugin suite seeds its own projects after the core\'s', async () => {
+  const { appSuiteConfig } = await import('../../e2e/support/app-config.js');
+  const { runSuiteSeed } = await import('../../e2e/support/seed-suite.js');
+  const seedPath = join(WEB_ROOT, 'bundled-plugins', 'incompressible_flow', 'e2e', 'seed.js');
+  // appSuiteConfig sets the runner's environment; put it back after.
+  const saved = { ...process.env };
+  process.env.MAGNUSIM_E2E_SETTLED = '1';
+  try {
+    const cfg = appSuiteConfig({ name: 'incompressible_flow', testDir: dirname(seedPath), seed: seedPath });
+    assert.match(cfg.webServer.command, /^node e2e\/prepare-projects\.js && node e2e\/support\/seed-suite\.js ".*seed\.js" && npm run dev$/);
+    const core = appSuiteConfig({ testDir: join(WEB_ROOT, 'e2e') });
+    assert.equal(core.webServer.command, 'node e2e/prepare-projects.js && npm run dev');
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+  const root = mkdtempSync(join(tmpdir(), 'magnusim-seed-'));
+  try {
+    // Seeded twice (a project already there is replaced): one copy, its own id and title.
+    await runSuiteSeed(seedPath, root);
+    await runSuiteSeed(seedPath, root);
+    const { H10_PROJECT, RUN_SETTINGS_PROJECT } = await import('../../bundled-plugins/incompressible_flow/e2e/seed.js');
+    for (const id of [H10_PROJECT, RUN_SETTINGS_PROJECT]) {
+      const doc = JSON.parse(readFileSync(join(root, id, 'project.json'), 'utf8'));
+      assert.equal(doc.id, id);
+      assert.equal(readdirSync(join(root, id, 'geometries')).length, 1, id);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

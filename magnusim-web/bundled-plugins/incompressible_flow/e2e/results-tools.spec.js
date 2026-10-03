@@ -2,9 +2,7 @@ import { expect, test } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NO_WSL } from '../../../e2e/toolchain.js';
-import { waitSlotFree } from '../../../e2e/support/compute-slot.js';
-import { PYTHON } from '../../../scripts/python-env.js';
+import { NO_WSL, PYTHON, waitSlotFree } from '../../../e2e/support/plugin-suite.js';
 
 // Post-processing on a real solve, through the UI: cutting planes (add, second plane,
 // axis, vectors, delete), coloring by pressure, the legend's typed range and reset,

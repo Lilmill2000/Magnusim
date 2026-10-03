@@ -1,6 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { NO_HEAVY } from '../../../e2e/toolchain.js';
-import { addAir, addBc, createStudy, setup } from '../../../e2e/support/two-plates.js';
+import { NO_HEAVY, addAir, addBc, createStudy, setup } from '../../../e2e/support/plugin-suite.js';
 
 // Two geometries in one project (the round-hole and teardrop-hole test plates), each
 // meshed and solved, then put side by side in Compare with synced filters. Moved from

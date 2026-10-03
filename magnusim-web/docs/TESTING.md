@@ -146,11 +146,21 @@ one of two forms. `npm run test:e2e` and `test:e2e:changed` find both.
 
 - **On the core's Playwright** (Incompressible Flow): an
   `e2e/playwright.config.js` that exports
-  `appSuiteConfig({ name: '<key>', testDir })` from
-  `e2e/support/app-config.js`. Its specs get the same app server, seeded
-  projects, WSL toolchain and lock as the core suite. They import helpers from
-  `e2e/` by relative path (`../../../e2e/toolchain.js`,
-  `../../../e2e/support/...`).
+  `appSuiteConfig({ name: '<key>', testDir, seed })`. Its specs get the same
+  app server, seeded projects, WSL toolchain and lock as the core suite.
+  - **One seam.** Its specs, seed module and config import from the core only
+    `../../../e2e/support/plugin-suite.js` (`appSuiteConfig`, `NO_WSL`,
+    `NO_HEAVY`, `wslPathExists`, `waitSlotFree`, the two-plates helpers
+    `setup`, `createStudy`, `addAir`, `addBc`, `PYTHON` and
+    `seedElbowProject`); `scripts/__tests__/e2e-suites.test.mjs` fails on any
+    other import from outside the plugin.
+  - **Its own projects.** `seed` is a module (absolute path) whose default
+    export gets the projects root and seeds the suite's projects, after
+    `e2e/prepare-projects.js` has seeded the core's
+    (`e2e/support/seed-suite.js`). Incompressible Flow's is
+    `bundled-plugins/incompressible_flow/e2e/seed.js`; it exports the ids its
+    specs open. `seedElbowProject(root, id, title)` copies a fresh elbow
+    sample there, replacing one already seeded.
 - **With its own toolchain** (CAD): a `package.json` whose `test:e2e` script
   builds the plugin and runs its tests against this checkout's app, started
   with `startHost()`. Most plugins ship off, so pass

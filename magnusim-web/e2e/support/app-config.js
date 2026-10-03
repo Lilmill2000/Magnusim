@@ -16,8 +16,11 @@ export const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '
  * @param {object} o
  * @param {string} o.testDir  the suite's spec folder (absolute)
  * @param {string} [o.name]   'core', or the plugin's key (its output goes to test-results/<key>)
+ * @param {string} [o.seed]   a plugin suite's seed module (absolute path): its default export
+ *                            seeds the suite's own projects into the projects root, after the core's
+ *                            (e2e/support/seed-suite.js)
  */
-export function appSuiteConfig({ testDir, name = 'core' }) {
+export function appSuiteConfig({ testDir, name = 'core', seed = '' }) {
   const PORT = process.env.MAGNUSIM_E2E_PORT || '8083';
   const baseURL = `http://127.0.0.1:${PORT}`;
   const projectsRoot = process.env.MAGNUSIM_E2E_PROJECTS_ROOT || join(WEB_ROOT, 'e2e', '.tmp-projects');
@@ -48,7 +51,9 @@ export function appSuiteConfig({ testDir, name = 'core' }) {
       trace: 'on-first-retry',
     },
     webServer: {
-      command: 'node e2e/prepare-projects.js && npm run dev',
+      command: seed
+        ? `node e2e/prepare-projects.js && node e2e/support/seed-suite.js "${resolve(seed)}" && npm run dev`
+        : 'node e2e/prepare-projects.js && npm run dev',
       cwd: WEB_ROOT,
       url: baseURL,
       reuseExistingServer: false,
