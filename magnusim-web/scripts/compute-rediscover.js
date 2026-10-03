@@ -8,8 +8,10 @@
  * Core runs: their WSL processes are probed (wsl_case_procs.py, which also sees
  * reconstructPar and the copy back). Dead → the doc is reaped; live or unknown →
  * followed like a drain until they are gone (no relay follows them any more, so
- * their phase is `draining` and a Stop ends their WSL processes). Runner records:
- * their relay is checked by identity; alive → adopted, gone → afterRelayGone.
+ * their phase is `draining` and a Stop ends their WSL processes). These are the
+ * run docs without runner_job_id (listSolveDocsToCheck). Runner records (plugin
+ * cases, plugin meshers and core solves on the runner): their relay is checked by
+ * identity; alive → adopted, gone → afterRelayGone.
  * The probes take 20 s at most; one that has not answered counts as unknown.
  */
 import { wslCaseRoot } from './wsl-env.js';
@@ -105,6 +107,18 @@ function infoOf(job, d) {
     };
   }
   const rec = job.rec;
+  if (rec.kind === 'solve') {
+    // A core solve on the runner: the claim its Start held (the run's id and name).
+    return {
+      project_id: rec.project_id,
+      job_id: rec.id,
+      run_id: rec.run_id || null,
+      name: rec.run_name || rec.run_id || rec.id,
+      stop_requested: stopAskedOf(job, d),
+      plugin: null,
+      study_id: null,
+    };
+  }
   return {
     project_id: rec.project_id,
     job_id: rec.id,

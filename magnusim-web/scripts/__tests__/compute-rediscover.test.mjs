@@ -203,6 +203,24 @@ describe('the boot check', () => {
     assert.equal(computeSlotHolder(), null);
   });
 
+  it('a core solve on the runner is adopted with its run on the claim (kind solve, its run id and name)', async () => {
+    const rec = { id: 'fc-aaaaaaaa-333333', kind: 'solve', project_id: 'p1', plugin: 'incompressible_flow', run_id: 'r7', run_name: 'Run 7', simulation_id: 's1' };
+    const foam = { id: 'fc-aaaaaaaa-444444', kind: 'foam', project_id: 'p2', plugin: 'foam-demo', plugin_name: 'Foam demo', study_id: 's1', study_title: 'Cavity', case_rel: 'cases/c1' };
+    const { deps, log } = fakes({ listRunner: () => [foam, rec] });
+    await rediscoverAtBoot({ deps });
+    assert.deepEqual(log.adopted.map((a) => a.rec.id), [foam.id, rec.id]);
+    assert.equal(computeSlotHolder().kind, 'foam');
+    log.adopted[0].release();
+    const h = computeSlotHolder();
+    assert.deepEqual(
+      [h.kind, h.phase, h.job_id, h.run_id, h.name, h.plugin, h.study_id, h.project_id],
+      ['solve', 'running', rec.id, 'r7', 'Run 7', null, null, 'p1'],
+    );
+    assert.ok(holderIsRow(h, { kind: 'solve', project_id: 'p1', run_id: 'r7' }));
+    log.adopted[1].release();
+    assert.equal(computeSlotHolder(), null);
+  });
+
   it('a reap that throws still releases the check claim', async () => {
     const { deps } = fakes({
       listCore: () => [coreDoc('p1', 'r1')],
@@ -387,6 +405,15 @@ describe('run docs of the boot check', () => {
     const found = w27.listSolveDocsToCheck().filter((d) => d.project_id === 'proj-l');
     assert.deepEqual(found.map((d) => d.run_id).sort(), ['r_drain', 'r_run', 'r_start']);
     assert.equal(found.find((d) => d.run_id === 'r_run').wsl_case, 'cfddesk-w27-r_run');
+  });
+
+  it('a run on the step-list runner (runner_job_id) is not listed: its runner record is followed instead', () => {
+    seedProject('proj-n');
+    runDoc('proj-n', 'r_legacy', { status: 'running', wsl_case: 'cfddesk-w27-r_legacy' });
+    runDoc('proj-n', 'r_runner', { status: 'running', wsl_case: 'cfddesk-w27-r_runner', runner_job_id: 'fc-aaaaaaaa-555555', pid: null });
+    runDoc('proj-n', 'r_runner_drain', { status: 'stopped', draining: true, wsl_case: 'cfddesk-w27-r_runner_drain', runner_job_id: 'fc-aaaaaaaa-666666' });
+    const found = w27.listSolveDocsToCheck().filter((d) => d.project_id === 'proj-n');
+    assert.deepEqual(found.map((d) => d.run_id), ['r_legacy']);
   });
 
   it('reapCheckedSolveDoc never makes a deleted run again, and keeps a stop asked for after the snapshot', () => {

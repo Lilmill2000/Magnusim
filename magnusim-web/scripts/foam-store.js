@@ -1,7 +1,7 @@
 // @ts-check
 /**
- * Records of the step-list runner's runs (plugin OpenFOAM cases, later plugin
- * meshers): one per run, kept in memory on the process (globalThis) and written
+ * Records of the step-list runner's runs (plugin OpenFOAM cases, plugin meshers,
+ * core solves): one per run, kept in memory on the process (globalThis) and written
  * to .cache/foam-cases.json for the default projects root, else
  * .cache/foam-cases-<tag>.json (the queue file's rule). The in-memory record is
  * the truth: a write that fails is skipped and logged, and the next write writes
@@ -30,7 +30,7 @@ const sleepCell = new Int32Array(new SharedArrayBuffer(4));
 
 /**
  * @typedef {{
- *   id: string, kind: 'foam'|'mesh', projects_root: string, project_id: string,
+ *   id: string, kind: 'foam'|'mesh'|'solve', projects_root: string, project_id: string,
  *   plugin: string|null, plugin_name: string|null, study_id: string|null, study_title: string|null,
  *   case_rel: string|null, case_parts: string[], case_key: string|null, case_dir: string, case_base: string,
  *   token: string, wsl_case: string, wsl_root: string, prepare: null | { job: string, runtime: string },
@@ -41,6 +41,7 @@ const sleepCell = new Int32Array(new SharedArrayBuffer(4));
  *   stop: null | { at: string, by: string, level: 'graceful'|'solver'|'all', reason: string|null, seq?: number },
  *   node_pid: number|null, created_at: string, started_at: string|null, finished_at: string|null,
  *   error: string|null, code: string|null, result: Record<string, any> | null, seq: number,
+ *   log_path?: string, run_id?: string, run_name?: string, simulation_id?: string,
  *   [extra: string]: any,
  * }} FoamRecord
  */
@@ -114,20 +115,28 @@ function ensureLoaded() {
   return s;
 }
 
-/** Finished records: 30 days, 200 per root at most (oldest first out). */
+/**
+ * Finished records: 30 days, 200 per kind at most (oldest first out), so many
+ * core solves never push plugin cases' history out, nor the other way round.
+ */
 function prune() {
   const s = S();
   const now = Date.now();
   const finished = [...s.records.values()]
     .filter((r) => !ACTIVE.has(r.status))
     .sort((a, b) => String(b.finished_at || b.created_at || '').localeCompare(String(a.finished_at || a.created_at || '')));
-  finished.forEach((r, i) => {
+  /** @type {Map<string, number>} */
+  const seen = new Map();
+  for (const r of finished) {
+    const kind = String(r.kind || 'foam');
+    const i = seen.get(kind) || 0;
+    seen.set(kind, i + 1);
     const at = Date.parse(String(r.finished_at || r.created_at || '')) || 0;
     if (i >= KEEP_FINISHED_MAX || (at && now - at > KEEP_FINISHED_MS)) {
       s.records.delete(r.id);
       s.recent.delete(r.id);
     }
-  });
+  }
 }
 
 /**

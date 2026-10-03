@@ -421,6 +421,151 @@ function started(name = 'c1', extra = {}) {
   return { ...c, spawn: fx.spawned[fx.spawned.length - 1], token: computeSlotHolder().token };
 }
 
+// A core solve's run folder: <study>/simulation_runs/<run>, its case in case/.
+function makeRun(runId, pid = 'p1') {
+  const runDir = join(PROJECTS, pid, 'geometries', 'g1', 'studies', 's1', 'simulation_runs', runId);
+  mkdirSync(join(runDir, 'case', 'system'), { recursive: true });
+  return runDir;
+}
+
+/** A queued core solve record and its plan (kind 'solve'). */
+function solvePlan(runId, extra = {}) {
+  const base = makeRun(runId);
+  const token = 'a1b2c3d4';
+  const rec = createFoamRecord({
+    kind: 'solve',
+    project_id: 'p1',
+    run_id: runId,
+    run_name: `Run ${runId}`,
+    simulation_id: 's1',
+    plugin: 'incompressible_flow',
+    case_base: base,
+    case_parts: ['case'],
+    case_dir: join(base, 'case'),
+    token,
+    wsl_case: `cfddesk-w27-${runId}`,
+    wsl_root: '/home/tester/cases',
+    app: 'simpleFoam',
+  });
+  const plan = {
+    job_id: rec.id,
+    claim: { kind: 'solve', project_id: 'p1', run_id: runId, name: `Run ${runId}`, job_id: rec.id },
+    case_base: base,
+    case_parts: ['case'],
+    case_dir: join(base, 'case'),
+    plugin: 'incompressible_flow',
+    wsl_case: `cfddesk-w27-${runId}`,
+    wsl_root: '/home/tester/cases',
+    token,
+    prepare: { job: 'incompressible_flow.write_run_case', runtime: 'core', args: [], env: {} },
+    pre: [],
+    n_procs: 1,
+    slots_hint: null,
+    solver: { app: 'simpleFoam', keep_frames: 'latest', process_names: ['simpleFoam'], stop_strategy: 'stopAt_writeNow', frame_fields: ['U', 'p'], parallel: 'none', analysis: 'incompressible_steady' },
+    run_id: runId,
+    simulation_id: 's1',
+    ...extra,
+  };
+  return { rec, plan };
+}
+
+describe('core solves on the runner (kind solve)', () => {
+  it("a held 'solve' claim (its Start's token) is adopted: no busy, the claim gets the job, released once at the end", () => {
+    const releases = [];
+    slot.setSlotReleaseHook(() => releases.push(Date.now()));
+    const start = claimComputeSlot('solve', { project_id: 'p1', run_id: 'r1', name: 'Run r1' }, { phase: 'starting' });
+    const { rec, plan } = solvePlan('r1');
+    assert.deepEqual(runFoamSteps({ ...plan, claim_token: start.token }), { ok: true });
+    const h = computeSlotHolder();
+    assert.deepEqual([h.token, h.kind, h.phase, h.job_id, h.run_id, h.name], [start.token, 'solve', 'running', rec.id, 'r1', 'Run r1']);
+    assert.equal(readFoamRecord(rec.id).status, 'running');
+    assert.equal(fx.spawned.length, 1);
+    const spawn = fx.spawned[0];
+    writeStatus(rec.case_dir, { outcome: { ok: true, phase: 'solve', exit_code: 0 }, clean: true, exit_code: 0, n_procs: 1 });
+    spawn.onExit(0);
+    spawn.onClose();
+    assert.equal(readFoamRecord(rec.id).status, 'done');
+    assert.equal(computeSlotHolder(), null);
+    assert.equal(releases.length, 1, 'released once, by the runner');
+    assert.equal(releaseComputeSlot(start.token), false, 'nothing is left for the Start to release');
+    assert.equal(releases.length, 1);
+  });
+
+  it('a wrong token, no token, a plan that is not a solve or a held claim that is not a solve: busy, nothing taken', () => {
+    const { rec, plan } = solvePlan('r2');
+    const start = claimComputeSlot('solve', { project_id: 'p1', run_id: 'r2' }, { phase: 'starting' });
+    assert.deepEqual(runFoamSteps({ ...plan, claim_token: 'slot-1-999' }), { busy: true });
+    assert.deepEqual(runFoamSteps(plan), { busy: true }, 'no token');
+    assert.deepEqual(runFoamSteps({ ...plan, claim: { ...plan.claim, kind: 'foam' }, claim_token: start.token }), { busy: true });
+    assert.deepEqual([computeSlotHolder().phase, computeSlotHolder().job_id], ['starting', undefined], 'the Start keeps its claim as it was');
+    releaseComputeSlot(start.token);
+    const mesh = claimComputeSlot('mesh', { project_id: 'p1' });
+    assert.deepEqual(runFoamSteps({ ...plan, claim_token: mesh.token }), { busy: true });
+    releaseComputeSlot(mesh.token);
+    assert.equal(readFoamRecord(rec.id).status, 'queued');
+    assert.equal(fx.spawned.length, 0);
+  });
+
+  it("a refusal before the spawn leaves the held claim to its Start (which releases it)", () => {
+    const start = claimComputeSlot('solve', { project_id: 'p1', run_id: 'r3' }, { phase: 'starting' });
+    const { rec, plan } = solvePlan('r3');
+    rmSync(plan.case_dir, { recursive: true, force: true });
+    const out = runFoamSteps({ ...plan, claim_token: start.token });
+    assert.deepEqual([out.final, out.code], [true, 'not_found']);
+    assert.equal(readFoamRecord(rec.id).status, 'failed');
+    assert.deepEqual([computeSlotHolder().token, computeSlotHolder().phase], [start.token, 'starting']);
+    assert.equal(fx.spawned.length, 0);
+  });
+
+  it('with the slot free a solve claims it like any run', () => {
+    const { rec, plan } = solvePlan('r4');
+    assert.deepEqual(runFoamSteps(plan), { ok: true });
+    const h = computeSlotHolder();
+    assert.deepEqual([h.kind, h.phase, h.run_id, h.job_id], ['solve', 'running', 'r4', rec.id]);
+  });
+
+  it('the solve case folder: <run folder inside simulation_runs>/case, in its own project', () => {
+    const base = makeRun('r5');
+    const p = { project_id: 'p1', kind: 'solve', case_base: base, case_parts: ['case'], case_dir: join(base, 'case') };
+    assert.equal(caseFolderProblem(p), null);
+    assert.equal(caseFolderProblem({ ...p, case_parts: ['system'], case_dir: join(base, 'system') }).code, 'invalid_path', 'only the case folder');
+    mkdirSync(join(base, 'case', 'inner'), { recursive: true });
+    assert.equal(caseFolderProblem({ ...p, case_parts: ['case', 'inner'], case_dir: join(base, 'case', 'inner') }).code, 'invalid_path');
+    const loose = join(PROJECTS, 'p1', 'runs', 'r5');
+    mkdirSync(join(loose, 'case'), { recursive: true });
+    assert.equal(caseFolderProblem({ ...p, case_base: loose, case_dir: join(loose, 'case') }).code, 'invalid_path', 'not in a simulation_runs folder');
+    const runs = join(PROJECTS, 'p1', 'simulation_runs');
+    mkdirSync(join(runs, 'case'), { recursive: true });
+    assert.equal(caseFolderProblem({ ...p, case_base: runs, case_dir: join(runs, 'case') }).code, 'invalid_path', 'the simulation_runs folder itself is no run');
+    const other = makeRun('r5', 'p2');
+    assert.equal(caseFolderProblem({ ...p, case_base: other, case_dir: join(other, 'case') }).code, 'invalid_path', 'a run of another project');
+    rmSync(join(base, 'case'), { recursive: true, force: true });
+    assert.equal(caseFolderProblem(p).code, 'not_found');
+  });
+
+  it('the spec names the run, its study and its analysis; the record keeps the job log path', () => {
+    const logPath = join(ROOT, 'logs', 'solve-r6.jsonl');
+    setFoamRunnerDepsForTests({
+      ...runnerDeps(),
+      spawnJob: (opts) => {
+        fx.spawned.push(opts);
+        return { child: { pid: 1 }, jobLog: { path: logPath } };
+      },
+    });
+    const { rec, plan } = solvePlan('r6');
+    assert.deepEqual(runFoamSteps(plan), { ok: true });
+    const spec = JSON.parse(readFileSync(join(SPECS, `${rec.id}.json`), 'utf8'));
+    assert.deepEqual(
+      [spec.kind, spec.run_id, spec.simulation_id, spec.wsl_case, spec.plugin, spec.case_parts, spec.solver.analysis],
+      ['solve', 'r6', 's1', 'cfddesk-w27-r6', 'incompressible_flow', ['case'], 'incompressible_steady'],
+    );
+    assert.equal(readFoamRecord(rec.id).log_path, logPath);
+    // A plugin case's spec has none of them.
+    const foam = buildFoamSpec({ ...plan, claim: { kind: 'foam', project_id: 'p1' }, solver: { ...plan.solver, analysis: '' } });
+    assert.ok(!('run_id' in foam) && !('simulation_id' in foam) && !('analysis' in foam.solver), JSON.stringify(foam));
+  });
+});
+
 describe('the launch is decided at close', () => {
   it('starter exit 0, close, no status file: the run drains (the slot stays held)', () => {
     const { rec, spawn, token } = started();

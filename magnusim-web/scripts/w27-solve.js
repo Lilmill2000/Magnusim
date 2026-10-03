@@ -3219,8 +3219,9 @@ export function hardwareRankCap() {
 
 /**
  * Run docs the boot check looks at: every run with a WSL case that is `running`
- * or `starting`, or still draining. Relay pids are not trusted (a pid alive now
- * may be another program's).
+ * or `starting`, or still draining, and not on the step-list runner (no
+ * runner_job_id: those are runner records). Relay pids are not trusted (a pid
+ * alive now may be another program's).
  * @returns {Array<{ project_id: string, run_id: string, wsl_case: string, name: string, stop_requested: boolean, doc: object }>}
  */
 export function listSolveDocsToCheck() {
@@ -3236,6 +3237,9 @@ export function listSolveDocsToCheck() {
       if (!existsSync(join(projectDir(name), 'project.json'))) continue;
       for (const rec of assembleAllRuns(name) || []) {
         if (!rec || !rec.wsl_case) continue;
+        // A run on the step-list runner is followed through its runner record
+        // (compute-rediscover listRunner), never also as a legacy doc.
+        if (rec.runner_job_id) continue;
         const st = String(rec.status || '');
         if (st !== 'running' && st !== 'starting' && rec.draining !== true) continue;
         out.push({

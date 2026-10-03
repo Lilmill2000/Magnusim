@@ -14,7 +14,8 @@
  * runFoamSteps is synchronous: no await and no RPC. The caller has created the
  * store record (foam-store.js, status `queued`) and resolved everything that
  * needs an RPC before it calls. In order it: (1) answers {busy:true} while the
- * slot is held, taking no claim; (2) needs the record `queued` and of this
+ * slot is held, taking no claim (except a `solve` plan's own held claim: see
+ * claim_token); (2) needs the record `queued` and of this
  * projects root, else final `missing`; (3) checks the case folder (below), else
  * final `not_found` or `invalid_path`; (4) removes a leftover `.magnusim-stop` and
  * writes the spec file (.cache/foam-specs/<job_id>.json) atomically; (5) claims the
@@ -26,14 +27,23 @@
  *   job_id      the store record (`fc-…`).
  *   claim       {kind, project_id, name, …info}: what the slot holds and the Queue
  *               shows. `foam` for plugin cases; `mesh` for the mesher path, whose
- *               branch in startMeshGenerateBody must leave w21's liveJob alone.
+ *               branch in startMeshGenerateBody must leave w21's liveJob alone;
+ *               `solve` for a core solve ({kind, project_id, run_id, name, job_id}).
+ *   claim_token a `solve` plan only: the token of the `solve` claim its Start
+ *               already holds. runFoamSteps adopts that claim (phase running, job_id)
+ *               instead of answering busy or claiming again; the caller then keeps it
+ *               (slot.keep()), and the runner releases it once, at the run's end. The
+ *               caller checks its own stop request before it calls.
  *   case_base   the folder the case lies in, inside <projects root>/<project_id>
- *               (a plugin case: that project's plugins/<key>).
+ *               (a plugin case: that project's plugins/<key>; a core solve: its run
+ *               folder, simulation_runs/<run>).
  *   case_parts  the case folder's parts below case_base, as spelled on disk; each a
- *               directory and not a link (junctions count as links).
+ *               directory and not a link (junctions count as links). A core solve: ['case'].
  *   case_dir    case_base joined with case_parts.
- *   plugin      the plugin that owns the run.
- *   wsl_case    the WSL case id (cfddesk-pf-<plugin>-<study>-<token> for plugin cases).
+ *   plugin      the plugin that owns the run (a core solve: its analysis's plugin).
+ *   run_id, simulation_id  a core solve only: its run and study (spec extras).
+ *   wsl_case    the WSL case id (cfddesk-pf-<plugin>-<study>-<token> for plugin cases,
+ *               cfddesk-w27-<run_id> for a core solve).
  *   wsl_root    the WSL case root when the run was queued; every probe and kill uses it.
  *   token       8 hex: names the run's WSL scripts (foam-pre-<token>.sh, solve-pf-<token>.sh).
  *   prepare     null, or a JobKind run on the host before anything reaches WSL:
@@ -44,9 +54,12 @@
  *               (python/cfddesk/wsl/foam_case.py); may be empty.
  *   n_procs     the ranks of parallel steps and of the solver; slots_hint the saved
  *               WSL MPI slot count (the relay clamps by WSL's own count).
- *   solver      null, or {app, keep_frames, process_names, stop_strategy, frame_fields, parallel}.
+ *   solver      null, or {app, keep_frames, process_names, stop_strategy, frame_fields, parallel,
+ *               analysis?}; analysis (a core solve) names the analysis whose log parser
+ *               the relay uses.
  *   owner, hooks  solve hooks, only with a solver.
  *   At least one of prepare, pre and solver.
+ * The record gets log_path, the run's job log (spawnJob's jobLog), at the spawn.
  *
  * ### Events
  * The relay's events are mapped to frame events and given to the kind's
@@ -66,10 +79,11 @@
  * relay_failed, lost, stuck, missing. Every finish calls the kind's onEnd once.
  *
  * ### Rules every caller keeps
- * One compute slot: claimed at the spawn, released only when the relay has ended
- * and WSL is verified gone (a drain watches the case copy until then). The step
- * allowlist, argument and path rules are checked only in the relay's gate. One run
- * per case folder (.magnusim-ran, written before the prepare step). Nothing
+ * One compute slot: claimed (or the Start's held `solve` claim adopted) at the
+ * spawn, released only when the relay has ended and WSL is verified gone (a
+ * drain watches the case copy until then). The step allowlist, argument and
+ * path rules are checked only in the relay's gate. One run per case folder
+ * (.magnusim-ran, written before the prepare step). Nothing
  * reaches WSL before the gate and the prepare step have passed. The prepare step
  * is the owning plugin's own JobKind tool, on the core interpreter or that
  * plugin's own ready environment, never another program.
@@ -87,7 +101,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { PYTHON, WEB_ROOT, pyTool } from './python-env.js';
 import { PROJECTS_ROOT } from './project-isolation.js';
 import { spawnJob } from './job-runner.js';
@@ -371,8 +385,9 @@ function samePath(a, b) {
 
 /**
  * The case folder rule: case_base inside <projects root>/<project_id> (a plugin
- * case: its plugins/<key>), case_dir = case_base + case_parts, and every folder
- * from case_base down a directory and not a link.
+ * case: its plugins/<key>; a core solve: a run folder, whose parent folder is
+ * simulation_runs, with case_parts ['case']), case_dir = case_base + case_parts,
+ * and every folder from case_base down a directory and not a link.
  * @param {{ project_id?: unknown, case_base?: unknown, case_parts?: unknown, case_dir?: unknown, plugin?: unknown, kind?: unknown, case_rel?: unknown }} p
  * @returns {{ code: 'not_found' | 'invalid_path', error: string } | null}
  */
@@ -388,6 +403,10 @@ export function caseFolderProblem(p) {
   if (p.kind === 'foam' && !samePath(base, join(projDir, 'plugins', String(p.plugin || '')))) return invalid;
   const parts = Array.isArray(p.case_parts) ? p.case_parts.map(String) : [];
   if (!parts.length || parts.some((x) => !x || x === '.' || x === '..' || /[\\/]/.test(x))) return invalid;
+  if (p.kind === 'solve') {
+    const runs = basename(dirname(base));
+    if (parts.length !== 1 || parts[0] !== 'case' || (WIN ? runs.toLowerCase() : runs) !== 'simulation_runs') return invalid;
+  }
   if (!p.case_dir || !samePath(String(p.case_dir), join(base, ...parts))) return invalid;
   let cur = base;
   for (let i = -1; i < parts.length; i += 1) {
@@ -483,12 +502,14 @@ export function buildFoamSpec(plan) {
         process_names: (Array.isArray(s.process_names) && s.process_names.length ? s.process_names : [s.app]).map(String),
         stop_strategy: String(s.stop_strategy || 'kill'),
         parallel: String(s.parallel || 'none'),
+        ...(s.analysis ? { analysis: String(s.analysis) } : {}),
       }
     : null;
   const p = plan.prepare;
+  const kind = String((plan.claim && plan.claim.kind) || 'foam');
   return {
     v: 1,
-    kind: String((plan.claim && plan.claim.kind) || 'foam'),
+    kind,
     job_id: String(plan.job_id),
     token: String(plan.token),
     project_id: String((plan.claim && plan.claim.project_id) || plan.project_id || ''),
@@ -516,6 +537,13 @@ export function buildFoamSpec(plan) {
     solver,
     owner: solver && plan.owner ? String(plan.owner) : null,
     hooks: solver && plan.owner && Array.isArray(plan.hooks) ? plan.hooks.map(String) : [],
+    // A core solve's run and study (the relay checks wsl_case against the run id).
+    ...(kind === 'solve'
+      ? {
+          run_id: String(plan.run_id || (plan.claim && plan.claim.run_id) || ''),
+          simulation_id: String(plan.simulation_id || ''),
+        }
+      : {}),
   };
 }
 
@@ -551,12 +579,25 @@ function finalFail(id, code, error) {
 }
 
 /**
+ * The slot holder is the `solve` claim this core solve's Start holds (plan.claim_token).
+ * @param {any} plan
+ * @param {{ token: string, kind: string }} holder
+ */
+function heldSolveClaim(plan, holder) {
+  if (!plan || !plan.claim_token || holder.kind !== 'solve') return false;
+  if (String((plan.claim && plan.claim.kind) || '') !== 'solve') return false;
+  return holder.token === String(plan.claim_token);
+}
+
+/**
  * Run a plan (see the top of this file). Synchronous.
  * @param {any} plan
  * @returns {{ ok: true } | { busy: true } | { ok: false, final: true, code: string, error: string }}
  */
 export function runFoamSteps(plan) {
-  if (computeSlotHolder()) return { busy: true };
+  const holder = computeSlotHolder();
+  const adopt = !!(holder && heldSolveClaim(plan, holder));
+  if (holder && !adopt) return { busy: true };
   const id = plan && plan.job_id ? String(plan.job_id) : '';
   const rec = id ? readFoamRecord(id) : null;
   if (!rec || rec.status !== 'queued') return { ok: false, final: true, code: 'missing', error: FOAM_TEXT.missing };
@@ -575,15 +616,21 @@ export function runFoamSteps(plan) {
     mkdirSync(dir, { recursive: true });
     const specPath = join(dir, `${id}.json`);
     writeAtomic(specPath, JSON.stringify(buildFoamSpec({ ...plan, claim: { ...(plan.claim || {}), kind } }), null, 2));
-    // Claim, persist, spawn: in this order, in this tick.
-    const claimed = claimComputeSlot(/** @type {any} */ (kind), { ...(plan.claim || {}), job_id: id }, { phase: 'running' });
-    if (!claimed.ok) return { busy: true };
-    token = claimed.token;
+    // Claim (or adopt the Start's held claim), persist, spawn: in this order, in this tick.
+    if (adopt) {
+      const held = String(plan.claim_token);
+      if (!patchComputeSlot(held, { ...(plan.claim || {}), job_id: id, phase: 'running' })) return { busy: true };
+      token = held;
+    } else {
+      const claimed = claimComputeSlot(/** @type {any} */ (kind), { ...(plan.claim || {}), job_id: id }, { phase: 'running' });
+      if (!claimed.ok) return { busy: true };
+      token = claimed.token;
+    }
     const own = token;
     updateFoamRecord(id, { status: 'running', stage: 'starting', node_pid: process.pid, started_at: new Date().toISOString(), spec_path: specPath });
     const entry = newEntry({ token: own, kind, adopted: false, release: () => releaseComputeSlot(own) });
     R().entries.set(id, entry);
-    D().spawnJob({
+    const spawned = D().spawnJob({
       kind,
       jobId: id,
       script: pyTool('run_foam_case.py'),
@@ -595,6 +642,8 @@ export function runFoamSteps(plan) {
       },
       onClose: () => afterRelayGone(id),
     });
+    const logPath = spawned && spawned.jobLog && spawned.jobLog.path;
+    if (logPath) updateFoamRecord(id, { log_path: String(logPath) });
     deliver(id, { event: 'start' });
     return { ok: true };
   } catch (e) {

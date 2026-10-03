@@ -94,6 +94,27 @@ describe('foam store', () => {
     assert.ok(readFoamRecord(running.id), 'a running record stays');
   });
 
+  it('the 200 cap is per kind: finished core solves never push plugin cases out', () => {
+    const now = Date.now();
+    const cases = [];
+    for (let i = 0; i < 3; i += 1) {
+      const r = createFoamRecord(base());
+      updateFoamRecord(r.id, { status: 'done', finished_at: new Date(now - (900 - i) * 1000).toISOString() }, { write: 'none' });
+      cases.push(r.id);
+    }
+    const solves = [];
+    for (let i = 0; i < 205; i += 1) {
+      const r = createFoamRecord(base({ kind: 'solve', run_id: `r${i}`, wsl_case: `cfddesk-w27-r${i}` }));
+      updateFoamRecord(r.id, { status: 'done', finished_at: new Date(now - (300 - i) * 1000).toISOString() }, { write: 'none' });
+      solves.push(r.id);
+    }
+    writeFoamStore();
+    for (const id of cases) assert.ok(readFoamRecord(id), 'the older plugin cases stay');
+    assert.equal(listFoamRecords({ kind: 'solve', status: 'done' }).length, 200);
+    assert.equal(readFoamRecord(solves[0]), null, 'the oldest solve went first');
+    assert.ok(readFoamRecord(solves[204]));
+  });
+
   it('events: the next seq per job; the last 400 events and 2000 points kept; one emitter', () => {
     const a = createFoamRecord(base());
     const b = createFoamRecord(base());
