@@ -26,6 +26,10 @@ import { persistRunAt } from '../scripts/study-io.js';
 // "finishing": the queued mesh waits, its project cannot be deleted, and its Stop kills its
 // WSL processes (never answered "stopped" without a kill). Then the mesh starts with no tab
 // open. The run doc, the WSL process and the queue file are made before any server starts.
+// IF Item 7 (legacy-run migration check): core solves run on the step-list runner now, and
+// this doc is one an earlier version left running (no runner_job_id, no runner record): it
+// is still found at boot, held and stopped by its WSL processes (core-solve-restart.spec.js
+// covers a run on the runner).
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 const A = QUEUE_PROJECT_A;
 const B = QUEUE_PROJECT_B;
@@ -61,6 +65,7 @@ test('gate:h15-core-orphan: a solve left running holds the slot until its Stop',
     has_results: false,
   });
   expect(doc.status).toBe('running');
+  expect(doc.runner_job_id, 'a doc of the run path before the runner').toBeUndefined();
   plantNamedProcess(`${wslRoot}/${wslCase}`, 'reconstructPar');
   writeFileSync(
     queueFileFor(projects),
