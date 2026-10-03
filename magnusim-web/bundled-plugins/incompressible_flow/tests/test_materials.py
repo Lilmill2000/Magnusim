@@ -107,3 +107,13 @@ def test_a_record_without_numbers_reads_legacy_air():
     assert (air["nu"], air["rho"]) == (1.529e-5, 1.196)
     air = air_from_materials(_mats({"name": "Air", "kinematic_viscosity": 2e-5}), "s1")
     assert (air["nu"], air["rho"]) == (2e-5, 1.196)
+
+
+def test_the_core_materials_mirror_reads_these_record_keys():
+    # The materials.json mirror keeps each property under the model's record keys;
+    # its fallback (no model loaded) is these same keys.
+    from cfddesk.project.web_mirrors import materials as mirror
+
+    assert mirror.record_keys() == materials.RECORD_KEYS
+    assert mirror.record_keys("newtonian_incompressible") == materials.RECORD_KEYS
+    assert mirror._FALLBACK_RECORD_KEYS == materials.RECORD_KEYS

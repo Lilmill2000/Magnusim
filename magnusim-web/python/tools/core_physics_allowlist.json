@@ -51,11 +51,6 @@
       "reason": "The fluid tree folder's DOM / stored-state key ('Air', fluidTreeKey: projects' stored tree state and LeftTree's Air:<study> key use it) and a saved material's kinematic_viscosity record key."
     },
     {
-      "file": "python/cfddesk/project/web_mirrors/materials.py",
-      "max_hits": 4,
-      "reason": "Material mirror rows keep the 1.x record key kinematic_viscosity next to nu for older readers of materials.json."
-    },
-    {
       "file": "src/plugin-ui/units.ts",
       "max_hits": 4,
       "reason": "The unit system's kinematic_viscosity quantity (plugin-ui API: units, add-only)."
@@ -69,6 +64,11 @@
       "file": "src/dev/ui-kit/sections/Controls.tsx",
       "max_hits": 2,
       "reason": "The dev UI kit's resolveUnit example (dev page only, not shipped in the workbench)."
+    },
+    {
+      "file": "python/cfddesk/project/web_mirrors/materials.py",
+      "max_hits": 1,
+      "reason": "_FALLBACK_RECORD_KEYS: the record keys materials.json has always held (kinematic_viscosity next to nu), read only when no material model is loaded; otherwise the model's record_keys."
     },
     {
       "file": "python/cfddesk/results/filters.py",
