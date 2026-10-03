@@ -40,9 +40,9 @@ def default_run_results_subdir(mesh_id: str, run_id: str) -> str:
     return f"results/mesh-{mesh_id}/run-{run_id}"
 
 
-def next_run_name(runs: list[RunNode], turbulence: str) -> str:
-    """Return the next free ``<turbulence> N`` label (e.g. ``kOmegaSST 1``)."""
-    label = (turbulence or "Run").strip() or "Run"
+def next_run_name(runs: list[RunNode], label: str) -> str:
+    """Return the next free ``<label> N`` name (e.g. ``Run 1``)."""
+    label = (label or "Run").strip() or "Run"
     existing = {r.name for r in runs}
     n = 1
     while f"{label} {n}" in existing:

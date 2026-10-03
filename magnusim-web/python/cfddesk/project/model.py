@@ -933,8 +933,10 @@ class Project:
         so reopen must heal the tree without inventing Simulation control UI.
 
         - Adds a RunNode for each ``run-<id>`` folder not already in ``runs``.
+        - Names each adopted run ``Run N`` (the next free N): nothing on disk
+          says what it solved.
         - If ``active_run_id`` is empty, selects the run with the highest
-          numeric time directory that contains field files (U/p/phi preferred).
+          numeric time directory that holds any file (a field of any analysis).
         - Does not rename or delete existing legacy runs (``results_path``
           ``results`` stays as-is).
         """
@@ -958,10 +960,7 @@ class Project:
                     t = float(child.name)
                 except ValueError:
                     continue
-                field_names = {"U", "p", "phi", "T", "k", "omega", "nut"}
-                has_field = any((child / name).is_file() for name in field_names)
-                if not has_field and t > 0:
-                    has_field = any(p.is_file() for p in child.iterdir())
+                has_field = any(p.is_file() for p in child.iterdir())
                 if has_field and t > best:
                     best = t
             return best
@@ -981,8 +980,7 @@ class Project:
                 if not has_mesh and not has_times:
                     continue
                 results_path = default_run_results_subdir(mesh.id, rid)
-                turb = str(legacy_solver(sim.legacy.get("solver"))["turbulence"])
-                name = next_run_name(runs, turb or "Run")
+                name = next_run_name(runs, "Run")
                 runs.append(
                     RunNode(
                         id=rid,

@@ -66,6 +66,41 @@ export const GEOMETRY_REMOVE_IDS = Object.freeze({
   unlistedStudy: 'sim-round-unlisted-e2e',
 });
 
+/**
+ * legacy-project-load.spec.js: an elbow project with a run folder its run list does not
+ * have (results/mesh-<mesh>/run-<id>, as an interrupted session leaves it). Opening the
+ * project adopts it.
+ */
+export const LEGACY_ORPHAN_PROJECT = 'legacy-orphan-run-e2e';
+export const LEGACY_ORPHAN_RUN = 'orphan-e2e-1';
+export const LEGACY_ORPHAN_MESH = JSON.parse(readFileSync(join(FIXTURE_SRC, 'mesh.json'), 'utf8')).meshes[0].id;
+/**
+ * legacy-project-load.spec.js: an old desktop project.json (python/tests/fixtures/projects/v13.json,
+ * with its solver and boundary blocks) and a run folder its run list does not have. The spec
+ * seeds it with seedLegacyDocProject and removes it: the file has no web id or title.
+ */
+export const LEGACY_DOC_PROJECT = 'legacy-python-doc-e2e';
+export const LEGACY_DOC_RUN = 'orphan-e2e-doc';
+
+/** A run folder with a mesh, as a copy-back leaves it, under <projectDir>/results/mesh-<meshId>. */
+function seedOrphanRun(projectDir, meshId, runId) {
+  const polyMesh = join(projectDir, 'results', `mesh-${meshId}`, `run-${runId}`, 'constant', 'polyMesh');
+  mkdirSync(polyMesh, { recursive: true });
+  writeFileSync(join(polyMesh, 'points'), 'x\n');
+}
+
+/** Seed LEGACY_DOC_PROJECT under root; returns the project.json it wrote (parsed). */
+export function seedLegacyDocProject(root) {
+  const dest = join(root, LEGACY_DOC_PROJECT);
+  rmSync(dest, { recursive: true, force: true });
+  mkdirSync(dest, { recursive: true });
+  const raw = readFileSync(join(WEB_ROOT, 'python', 'tests', 'fixtures', 'projects', 'v13.json'), 'utf8');
+  writeFileSync(join(dest, 'project.json'), raw);
+  const doc = JSON.parse(raw);
+  seedOrphanRun(dest, doc.simulations[0].active_mesh_id, LEGACY_DOC_RUN);
+  return doc;
+}
+
 /** Copy the elbow fixture into destRoot/<id> laid out the way the app stores it. */
 function seedElbowProject(destRoot, id, title) {
   const dest = join(destRoot, id);
@@ -212,6 +247,8 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
   });
   writeJsonAtomic(join(missingDir, 'simulation.json'), deleted);
   seedGeometryRemoveProject(destRoot);
+  seedElbowProject(destRoot, LEGACY_ORPHAN_PROJECT, 'Orphan run folder');
+  seedOrphanRun(join(destRoot, LEGACY_ORPHAN_PROJECT), LEGACY_ORPHAN_MESH, LEGACY_ORPHAN_RUN);
   mkdirSync(join(destRoot, NO_GEOMETRY_PROJECT), { recursive: true });
   writeJsonAtomic(join(destRoot, NO_GEOMETRY_PROJECT, 'project.json'), {
     id: NO_GEOMETRY_PROJECT,
