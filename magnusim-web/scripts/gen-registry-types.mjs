@@ -240,6 +240,8 @@ export interface DefaultAnalysis {
   transient?: string;
   /** Names studies saved before analysis keys carry for it. */
   aliases?: string[];
+  /** API 1.4: the name a study gets when a project file stores none. */
+  study_name?: string;
 }
 
 export interface RegistryDescribe {

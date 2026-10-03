@@ -40,7 +40,7 @@ from magnusim_sdk.data import KIND_KEY_RE, PLUGIN_KEY_RE
 
 from cfddesk.registry import API_VERSION
 from cfddesk.registry import manifest as manifest_mod
-from cfddesk.registry.discovery import _ICON_PATH_RE, HEADER_LABEL_MAX
+from cfddesk.registry.discovery import _ICON_PATH_RE, HEADER_LABEL_MAX, STUDY_NAME_MAX
 from cfddesk.registry.requirements import Requirement
 
 API_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+$")
@@ -60,6 +60,7 @@ FEATURE_API: dict[str, str] = {
     "files": "1.2",
     "start_actions": "1.4",
     "study_kinds.links_geometry": "1.4",
+    "default_analysis.study_name": "1.4",
 }
 
 # PluginManifest fields that are not manifest keys: the host or register() sets them.
@@ -152,12 +153,18 @@ TOP_LEVEL: dict[str, dict[str, Any]] = {
             "steady": {"type": "string", "pattern": r"^[A-Za-z][A-Za-z0-9_]*$"},
             "transient": {"type": "string", "pattern": r"^[A-Za-z][A-Za-z0-9_]*$"},
             "aliases": {"type": "array", "items": {"type": "string", "pattern": r"^[A-Za-z][A-Za-z0-9_]*$"}},
+            "study_name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": STUDY_NAME_MAX,
+                "description": "The name a study gets when a project file stores none, one line.",
+            },
         },
         "required": ["steady"],
         "additionalProperties": False,
         "description": (
             "A required bundled plugin only: the analysis a study gets when none is named (steady, its transient "
-            "sibling, and the names older studies stored for it)."
+            "sibling, and the names older studies stored for it), and the name a study gets when none is stored."
         ),
     },
     "study_kinds": {"type": "array", "items": "StudyKind", "description": "Project-level studies the plugin owns."},
@@ -376,6 +383,9 @@ def build_schema() -> dict[str, Any]:
     links = defs["StudyKind"]["properties"].get("links_geometry")
     if links is not None:
         links["x-since"] = FEATURE_API["study_kinds.links_geometry"]
+    study_name = props["default_analysis"]["properties"].get("study_name")
+    if study_name is not None:
+        study_name["x-since"] = FEATURE_API["default_analysis.study_name"]
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "manifest.schema.json",

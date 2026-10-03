@@ -36,6 +36,24 @@ def default_analysis_key(*, time_dependency: str | None = None) -> str:
     return str(spec.get("steady") or "")
 
 
+def default_study_name() -> str:
+    """The name a study gets when none is stored: the ``study_name`` of the
+    default analysis's family when its plugin is loaded, else the required
+    plugin manifest's ``[default_analysis] study_name``, else "Simulation"."""
+    key = default_analysis_key()
+    if key:
+        from cfddesk.registry.discovery import get_registry
+
+        reg = get_registry("analysis")
+        if key in reg.keys():
+            family = getattr(reg.get(key), "family", None)
+            name = str(getattr(family, "study_name", "") or "").strip()
+            if name:
+                return name
+    name = str(_default_spec().get("study_name") or "").strip()
+    return name or "Simulation"
+
+
 def is_default_alias(name: str | None) -> bool:
     """True for a name studies saved before analysis keys carry for the default analysis."""
     raw = (name or "").strip().lower()

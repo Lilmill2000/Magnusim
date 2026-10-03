@@ -655,6 +655,9 @@ def _uses(meta: dict[str, Any]) -> list[str]:
     kinds = meta.get("study_kinds")
     if isinstance(kinds, list) and any(isinstance(k, dict) and "links_geometry" in k for k in kinds):
         used.append("study_kinds.links_geometry")
+    default = meta.get("default_analysis")
+    if isinstance(default, dict) and "study_name" in default:
+        used.append("default_analysis.study_name")
     return used
 
 

@@ -2974,7 +2974,8 @@
     "transient": "incompressible_transient",
     "aliases": [
       "incompressible"
-    ]
+    ],
+    "study_name": "Incompressible"
   },
   "missing": []
 }

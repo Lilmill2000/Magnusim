@@ -31,5 +31,6 @@ protected = [
   "bc_family:wall",
 ]
 # The analysis a study gets when none is named (new studies, and studies saved
-# before analysis keys, which named it "incompressible").
-default_analysis = { steady = "incompressible_steady", transient = "incompressible_transient", aliases = ["incompressible"] }
+# before analysis keys, which named it "incompressible"), and the name a study
+# gets when a project file stores none.
+default_analysis = { steady = "incompressible_steady", transient = "incompressible_transient", aliases = ["incompressible"], study_name = "Incompressible" }

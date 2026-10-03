@@ -2,10 +2,6 @@
   "about": "Core files allowed to name incompressible physics (gate:h9-no-core-physics). Each entry says why; tools/core_physics_scan.py fails on an entry with no hit.",
   "files": [
     {
-      "file": "python/cfddesk/project/model.py",
-      "reason": "Versioned Project model (project.json): loaded on every project open and save and by the meshers, but no run is written from it (runs are written by the analysis plugin from the study files). Its only hit is PRIMARY_SIM_NAME, the name a project file without studies gives its study."
-    },
-    {
       "file": "python/cfddesk/project/legacy_sim.py",
       "line_contains": [
         "\"kEpsilon\": (",

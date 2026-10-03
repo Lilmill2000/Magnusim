@@ -182,13 +182,20 @@
             "type": "string",
             "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
           }
+        },
+        "study_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "The name a study gets when a project file stores none, one line.",
+          "x-since": "1.4"
         }
       },
       "required": [
         "steady"
       ],
       "additionalProperties": false,
-      "description": "A required bundled plugin only: the analysis a study gets when none is named (steady, its transient sibling, and the names older studies stored for it).",
+      "description": "A required bundled plugin only: the analysis a study gets when none is named (steady, its transient sibling, and the names older studies stored for it), and the name a study gets when none is stored.",
       "x-since": "1.2"
     },
     "study_kinds": {

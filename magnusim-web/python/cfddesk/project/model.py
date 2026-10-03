@@ -99,6 +99,7 @@ from cfddesk.project.settings import (
 )
 from cfddesk.registry.analysis import (
     default_analysis_key,
+    default_study_name,
     resolve_analysis_key,
 )
 from cfddesk.results.color_scale import ColorScale
@@ -125,15 +126,18 @@ ROLES: tuple[FaceRole, ...] = ("unassigned", "inlet", "outlet", "walls")
 
 PROJECT_VERSION = 15
 
-PRIMARY_SIM_NAME = "Incompressible"
-# PRIMARY_SIM_ANALYSIS: the default analysis's key (land11), read when used
-# (module __getattr__ below). Legacy free-string names remap via
-# resolve_analysis_key in _simulation_from_dict.
+# PRIMARY_SIM_ANALYSIS: the default analysis's key (land11), and
+# PRIMARY_SIM_NAME: the name a study gets when none is stored
+# (registry.analysis.default_study_name), both read when used (module
+# __getattr__ below). Legacy free-string names remap via resolve_analysis_key
+# in _simulation_from_dict.
 
 
 def __getattr__(name: str) -> str:
     if name == "PRIMARY_SIM_ANALYSIS":
         return default_analysis_key()
+    if name == "PRIMARY_SIM_NAME":
+        return default_study_name()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -359,7 +363,7 @@ def _simulation_from_dict(data: dict, *, geometry_id: str) -> Simulation:
     )
     return Simulation(
         id=str(data.get("id") or _new_id()),
-        name=str(data.get("name") or PRIMARY_SIM_NAME),
+        name=str(data.get("name") or default_study_name()),
         analysis_type=analysis_type,
         geometry_id=str(data.get("geometry_id") or geometry_id),
         boundary_conditions=[
@@ -1527,7 +1531,7 @@ class Project:
         )
         simulation = Simulation(
             id=prev_sim.id if prev_sim is not None else _new_id(),
-            name=prev_sim.name if prev_sim is not None else PRIMARY_SIM_NAME,
+            name=prev_sim.name if prev_sim is not None else default_study_name(),
             analysis_type=(
                 prev_sim.analysis_type if prev_sim is not None else default_analysis_key()
             ),
@@ -2200,7 +2204,7 @@ def _default_simulation(geometry_id: str) -> Simulation:
     mid = _new_id()
     return Simulation(
         id=_new_id(),
-        name=PRIMARY_SIM_NAME,
+        name=default_study_name(),
         analysis_type=default_analysis_key(),
         geometry_id=geometry_id,
         boundary_conditions=[],
@@ -2316,7 +2320,7 @@ def _migrate_flat_to_hierarchy(
     runs = [dataclasses.replace(r, mesh_id=r.mesh_id or mesh_node.id) for r in runs]
     simulation = Simulation(
         id=_new_id(),
-        name=PRIMARY_SIM_NAME,
+        name=default_study_name(),
         analysis_type=default_analysis_key(),
         geometry_id=geometry.id,
         boundary_conditions=bcs,

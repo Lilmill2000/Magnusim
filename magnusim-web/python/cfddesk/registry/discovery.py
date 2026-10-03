@@ -731,6 +731,8 @@ def study_kinds_from_meta(meta: dict[str, Any]) -> list[StudyKind]:
 _TEXT_BAD_RE = re.compile("[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]")
 # The header has room for this many characters on a start button.
 HEADER_LABEL_MAX = 24
+# [default_analysis] study_name: the longest default study name.
+STUDY_NAME_MAX = 40
 
 
 def _action_text(row: dict[str, Any], name: str, top: int, *, required: bool = False) -> str:
@@ -1102,8 +1104,9 @@ _PLAIN_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 def _parse_default_analysis(meta: dict[str, Any]) -> dict[str, Any]:
     """A manifest's ``[default_analysis]`` table: ``steady`` (an analysis key),
-    ``transient`` (its sibling, optional) and ``aliases`` (stored names that mean
-    it). ``{}`` when there is none."""
+    ``transient`` (its sibling, optional), ``aliases`` (stored names that mean
+    it) and ``study_name`` (API 1.4, optional: the name a study gets when none
+    is stored, one line of 1..40 characters). ``{}`` when there is none."""
     raw = meta.get("default_analysis")
     if raw is None:
         return {}
@@ -1119,6 +1122,11 @@ def _parse_default_analysis(meta: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"[default_analysis] names must be plain keys, got {name!r}")
     if not out["steady"]:
         raise ValueError("[default_analysis] needs steady = \"<analysis key>\"")
+    if raw.get("study_name") is not None:
+        try:
+            out["study_name"] = _action_text(raw, "study_name", STUDY_NAME_MAX)
+        except ValueError as exc:
+            raise ValueError(f"[default_analysis] {exc}") from None
     return out
 
 

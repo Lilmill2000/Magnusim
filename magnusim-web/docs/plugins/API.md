@@ -60,7 +60,7 @@ schema_version = 1
 | `default_enabled` | boolean | `true` | 1.2 | Bundled tier only: false ships the plugin off until someone turns it on in Settings → Plugins. |
 | `requires_plugins` | string or array of string |  | 1.1 | Plugins loaded before this one: "key" or "key>=1.0". |
 | `protected` | string or array of string |  | 1.1 | Bundled tier only: kind:key specs of this plugin that other plugins may not drop. |
-| `default_analysis` | table |  | 1.2 | A required bundled plugin only: the analysis a study gets when none is named (steady, its transient sibling, and the names older studies stored for it). |
+| `default_analysis` | table |  | 1.2 | A required bundled plugin only: the analysis a study gets when none is named (steady, its transient sibling, and the names older studies stored for it), and the name a study gets when none is stored. |
 | `study_kinds` | array of tables |  | 1.1 | Project-level studies the plugin owns. |
 | `workspaces` | array of tables |  | 1.1 | Full pages the plugin draws in a sandboxed frame. |
 | `start_actions` | array of tables |  | 1.4 | Buttons that create a study of a kind and open it in its workspace. |
@@ -130,6 +130,7 @@ schema_version = 1
 | `steady` | string |  |  | (matches `^[A-Za-z][A-Za-z0-9_]*$`; required) |
 | `transient` | string |  |  | (matches `^[A-Za-z][A-Za-z0-9_]*$`) |
 | `aliases` | array of string |  |  |  |
+| `study_name` | string |  | 1.4 | The name a study gets when a project file stores none, one line. (at most 40 characters) |
 
 ## 2. The workspace bridge (@magnusim/workspace)
 

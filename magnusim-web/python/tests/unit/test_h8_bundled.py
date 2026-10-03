@@ -194,7 +194,12 @@ def test_the_default_analysis_comes_from_the_required_plugins_manifest(monkeypat
     from cfddesk.worker import methods
 
     load_all()
-    want = {"steady": "incompressible_steady", "transient": "incompressible_transient", "aliases": ["incompressible"]}
+    want = {
+        "steady": "incompressible_steady",
+        "transient": "incompressible_transient",
+        "aliases": ["incompressible"],
+        "study_name": "Incompressible",
+    }
     assert default_analysis() == want
     assert methods.registry_describe()["default_analysis"] == want
     assert (DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY, LEGACY_ANALYSIS_ALIAS) == (
