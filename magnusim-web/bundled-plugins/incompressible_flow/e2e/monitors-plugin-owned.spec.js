@@ -181,10 +181,18 @@ test('run monitors are drawn from the plugin: quantities, defaults, summary, exp
   // ---- The Run panel lists each monitor's headline values with the cards' units ----
   await openRun(runA);
   const runList = page.locator('#panel-sim-control [data-run-monitors="1"] li');
-  await expect(runList).toHaveText(
-    ['Inlet · 0.3 Pa · 5.00 m/s · 4.00 L/s in', 'Outlet · 4.40 L/s out', 'Outlet probe · 136 Pa · 3.00 m/s'],
-    { timeout: 30_000 },
-  );
+  // The Run panel's list keeps its v0.2.0 form (h10-ui-parity): the final pressure
+  // and volumetric flow of each monitor that has one.
+  const finalLine = (row) => {
+    const f = row.final || {};
+    if (f.pressure_Pa == null && f.volumetric_flow_m3s == null) return null;
+    return `${row.name || row.patch}`
+      + (f.pressure_Pa != null ? ` · ${f.pressure_Pa.toFixed(1)} Pa` : '')
+      + (f.volumetric_flow_m3s != null ? ` · ${f.volumetric_flow_m3s.toExponential(3)} m³/s` : '');
+  };
+  const wantLines = [...answer.monitors, ...answer.custom].map(finalLine).filter(Boolean);
+  expect(wantLines.length).toBeGreaterThan(1);
+  await expect(runList).toHaveText(wantLines, { timeout: 30_000 });
 
   // ---- Graphs ----
   const results = page.locator(`#left-tree [data-w27-run-results="${runA}"]`).first();
