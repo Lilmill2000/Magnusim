@@ -183,7 +183,9 @@ import {
   adoptServerRev,
   bindGeometryRevHost,
   canPickInto,
+  facePicksPaused,
   fetchLinkedSave,
+  pauseFacePicks,
   reloadLinkedToServer,
   runOlderGeometry,
   shownGeometryKey,
@@ -192,6 +194,9 @@ import {
   withGeometryRev,
 } from './geometryRev';
 import { setShownFaceTable } from './faceNames';
+import { linkNeedsReport } from '../workspace/bridge';
+import { linkReportText } from '../workspace/linkReport';
+import { savedAsNewText } from '../workspace/linkChoice';
 import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId } from '../viewer/pick.ts';
 import { RAINBOW_HUE, colormapGradient } from '../plugin-ui/colormaps';
 import { formatElapsed, formatEta, formatSimTime } from '../plugin-ui/format/time';
@@ -8787,6 +8792,8 @@ function hideRunResultsView(opts) {
     if (w16State && w16State.geometry) {
       try { setGeomVisible(true); } catch (_) {}
     }
+    // A linked part that changed while the results showed: load it now.
+    loadPendingLinkCad();
     try { applyWorkbenchStage(); } catch (_) {}
     // Results are drawn in CAD display units, so the camera and orbit pivot
     // are already correct. Only refresh the clip range for the CAD bounds.
@@ -8801,6 +8808,9 @@ function hideRunResultsView(opts) {
     try {
       requestAnimationFrame(() => {
         try { applyWorkbenchStage(); } catch (_) {}
+        // A linked part that changed while the results showed loads too, once the caller's
+        // own view is up (mesh inspect keeps it hidden; other results keep it waiting).
+        try { loadPendingLinkCad(); } catch (_) {}
       });
     } catch (_) {}
   }
@@ -9136,6 +9146,35 @@ function syncRunResultsPanel(statusText) {
  * study is active, and the CAD and Compare are hidden. hideRunResultsView ends it.
  */
 let pluginResultsRec = null;
+/**
+ * A linked geometry whose new part arrived while results were on screen (API 1.6, LINK 6.5:
+ * a landing never touches a results view): its part is loaded when the results close.
+ */
+let linkCadPending = '';
+
+/**
+ * Load the linked part that waited for the results to close (API 1.6), unless results are
+ * on screen again. A part waiting for another geometry than the one shown is dropped: that
+ * geometry loads from the server when it is shown next.
+ */
+function loadPendingLinkCad() {
+  const id = linkCadPending;
+  if (!id || resultsViewOpen || pluginResultsRec) return false;
+  linkCadPending = '';
+  if (!w16State || !w16State.geometry || String(w16State.geometry.id || '') !== id) return false;
+  void reloadLinkedGeometry(id, 'results-' + Date.now()).catch((e) => console.warn('[CFD] linked geometry after results', e));
+  return true;
+}
+
+/**
+ * Face picks are off while a landing or a linked reload loads a part (geometryRev), and
+ * while the shown geometry's new part waits under the results: its setup is read at the
+ * new rev already, its old part still drawn.
+ */
+function linkPicksPaused() {
+  if (facePicksPaused()) return true;
+  return !!linkCadPending && !!w16State && !!w16State.geometry && String(w16State.geometry.id || '') === linkCadPending;
+}
 
 /** The CAD and Compare follow the record: hidden while plugin results show, back after. */
 function syncPluginResultsChrome() {
@@ -19070,7 +19109,8 @@ function applyWorkbenchStage() {
   document.documentElement.classList.add('cfd-ready');
 
   const cta = document.getElementById('wb-empty-cta');
-  if (cta) cta.hidden = stage !== 'empty';
+  // A first sync left running by its workspace shows its state there instead (API 1.6).
+  if (cta) cta.hidden = stage !== 'empty' || !!linkWaitText;
 
   if (!stageChanged) {
     try { syncViewportChromeInset(); } catch (_) {}
@@ -19553,6 +19593,8 @@ async function activateGeometryClient(geomId, opts) {
       j.geometries || (j.project && j.project.geometries),
     );
     w16State.mode = 'geometry';
+    // Its part is loaded from the server just below: one that waited under the results is moot.
+    if (linkCadPending === id) linkCadPending = '';
     syncProjectChrome();
     syncGeometryTree();
     try { if (typeof hideMeshInspect === 'function') hideMeshInspect({ silent: true }); } catch (_) {}
@@ -25380,6 +25422,8 @@ function pickSolidIdAtDisplay(x, y) {
 
 function assignBodyFromViewportEvent(e) {
   if (!isAssigningMaterial()) return false;
+  // A linked geometry's landing is loading the part and its setup: no pick lands meanwhile.
+  if (linkPicksPaused()) return false;
   const hit = pickCadHitFromEvent(e);
   if (!hit || !hit.solidId) return false;
   toggleAssignVolume(bodyNameFromIndex(hit.solidId), hit.solidId);
@@ -25387,6 +25431,8 @@ function assignBodyFromViewportEvent(e) {
 }
 
 function assignFromViewportEvent(e) {
+  // A linked geometry's landing is loading the part and its setup: no pick lands meanwhile.
+  if (linkPicksPaused()) return false;
   const hit = pickCadHitFromEvent(e);
   if (!hit) return false;
   if (isAssigningFace()) {
@@ -26257,6 +26303,8 @@ window.__CFD_FORGET_LOST__ = forgetLostFacesClient;
 function toggleAssignFace(label) {
   const name = String(label || '').trim();
   if (!name || !activeBc()) return;
+  // A linked geometry's landing is loading the part and its setup: the pick is dropped.
+  if (linkPicksPaused()) return;
   // Its labels were drawn at another rev of a linked geometry: read it again first.
   if (!canPickInto(activeBc())) {
     void rereadBcRecords();
@@ -36001,21 +36049,169 @@ window.__CFD_HOST_SURFACES__ = {
  * A linked geometry changed under this tab (host API 1.5): its new files (a fresh CAD URL,
  * the face names) and its studies' setup, as the server has them now.
  */
-async function reloadLinkedGeometry(geomId, key) {
+async function reloadLinkedGeometry(geomId, key, opts) {
   const g = w16State.geometry;
   const pid = currentProjectId();
   if (!g || !pid || String(g.id || '') !== String(geomId || '')) return;
-  const urls = cadUrlsFor(pid, 'link-' + String(key || Date.now()), geomId);
-  g.faces_url = urls.faces_url;
-  g.edges_url = urls.edges_url;
-  await loadGeometryCad(urls.faces_url, urls.edges_url, { keepCamera: true });
-  await reloadGeometryScopedSetup();
+  // Only the names changed (the same rev, API 1.6, LINK 6.5 step 4): the face and body
+  // names are read again and the face lists redrawn; the faces file is not loaded again.
+  if (opts && opts.namesOnly) {
+    await reloadShownFaceNames(geomId);
+    return;
+  }
+  // Results on screen, or opening (a results exit): the landing never touches them (LINK
+  // 6.5). The part's files are noted now and loaded when the results close; its studies'
+  // setup is read now.
+  if (resultsViewOpen || pluginResultsRec || (opts && opts.deferCad)) {
+    const urls = cadUrlsFor(pid, 'link-' + String(key || Date.now()), geomId);
+    g.faces_url = urls.faces_url;
+    g.edges_url = urls.edges_url;
+    linkCadPending = String(geomId);
+    await reloadGeometryScopedSetup();
+    try { refreshSetupTree(); } catch (_) {}
+    return;
+  }
+  if (linkCadPending === String(geomId)) linkCadPending = '';
+  const resume = pauseFacePicks();
+  try {
+    const urls = cadUrlsFor(pid, 'link-' + String(key || Date.now()), geomId);
+    g.faces_url = urls.faces_url;
+    g.edges_url = urls.edges_url;
+    const loaded = await loadGeometryCad(urls.faces_url, urls.edges_url, { keepCamera: true });
+    // Mesh inspect shows the mesh in place of the part (a CAD load shows it).
+    if (meshInspectOpen) {
+      try { setGeomVisible(false); } catch (_) {}
+    }
+    // What the viewport shows now (the new rev's part), as an import or a switch records it.
+    if (loaded && !loaded.stale && loaded.fp && String((w16State.geometry && w16State.geometry.id) || '') === String(geomId)) {
+      w16State.fingerprint = loaded.fp;
+      try { publishW16({}); } catch (_) {}
+    }
+    await reloadGeometryScopedSetup();
+  } finally {
+    resume();
+  }
   try { refreshSetupTree(); } catch (_) {}
+}
+
+/** The shown geometry's face and body names as its cad_preview.json has them now; the face lists redraw. */
+async function reloadShownFaceNames(geomId) {
+  const pid = currentProjectId();
+  if (!pid || !geomId) return false;
+  try {
+    const q = new URLSearchParams({ project_id: String(pid), geometry_id: String(geomId), part: 'preview', t: String(Date.now()) });
+    const r = await fetch('/api/geometry/cad?' + q.toString(), { cache: 'no-store' });
+    if (!r.ok) return false;
+    const meta = await r.json();
+    if (String(currentProjectId() || '') !== String(pid)) return false;
+    setShownFaceTable(meta, geomId);
+  } catch (_) {
+    return false;
+  }
+  try { refreshSetupTree(); } catch (_) {}
+  try { fillGeometryDetail(); } catch (_) {}
+  return true;
+}
+
+/**
+ * The camera a linking plugin's page asked for (API 1.6, LINK 6.6) on the viewport, in
+ * place of the framing: position, target and up in model mm (the CAD is drawn in its own
+ * mm, Z up), orthographic `height` as twice the parallel scale, `fovDeg` as the vertical
+ * view angle. The framed bounds are kept, so the next load does not frame again. A bad
+ * view is dropped (false).
+ */
+function applyLinkView(view) {
+  const v = view || {};
+  const ok3 = (a) => Array.isArray(a) && a.length === 3 && a.every((n) => typeof n === 'number' && Number.isFinite(n));
+  if (!ok3(v.position) || !ok3(v.target) || !ok3(v.up)) return false;
+  if (v.projection !== 'perspective' && v.projection !== 'orthographic') return false;
+  const d = [v.target[0] - v.position[0], v.target[1] - v.position[1], v.target[2] - v.position[2]];
+  const dl = Math.hypot(d[0], d[1], d[2]);
+  const ul = Math.hypot(v.up[0], v.up[1], v.up[2]);
+  const c = [d[1] * v.up[2] - d[2] * v.up[1], d[2] * v.up[0] - d[0] * v.up[2], d[0] * v.up[1] - d[1] * v.up[0]];
+  if (!(dl > 1e-9) || !(ul > 1e-9) || Math.hypot(c[0], c[1], c[2]) <= 1e-6 * dl * ul) return false;
+  const cam = renderer.getActiveCamera();
+  if (!cam) return false;
+  const ortho = v.projection === 'orthographic';
+  const height = Number(v.height);
+  const fov = Number(v.fovDeg);
+  try {
+    applyCameraSnapshot(cam, {
+      pos: v.position.slice(),
+      fp: v.target.slice(),
+      vu: v.up.slice(),
+      parallel: ortho,
+      scale: ortho && height > 0 ? height / 2 : null,
+      angle: !ortho && fov > 0 && fov < 180 ? fov : null,
+      clip: null,
+    });
+    try { cam.orthogonalizeViewUp(); } catch (_) {}
+    let b = null;
+    try { b = renderer.computeVisiblePropBounds(); } catch (_) {}
+    if (b && b[0] <= b[1] && b[2] <= b[3] && b[4] <= b[5]) {
+      lastFramedBounds = b.slice();
+      try { updateScenePivot(b); } catch (_) {}
+    }
+    try { resetCameraClippingRangeLoose(); } catch (_) {}
+    try { renderWindow.render(); } catch (_) {}
+  } catch (e) {
+    console.warn('[CFD] linked geometry view', e);
+    return false;
+  }
+  return true;
+}
+
+// The viewport's camera as the snapshot has it (pos, fp, vu, parallel, scale, angle): tests read it.
+window.__CFD_CAMERA__ = () => snapshotCamera(renderer.getActiveCamera());
+// The results surface's opacity (a CAD load fades it), and whether a linked part waits for the results to close.
+window.__CFD_RESULTS_SURFACE_OPACITY__ = () => surfaceActor.getProperty().getOpacity();
+window.__CFD_LINK_CAD_PENDING__ = () => linkCadPending;
+window.__CFD_FACE_PICKS_PAUSED__ = () => linkPicksPaused();
+// The faces picked in the viewport (a click or a right-click), and the hidden ones: tests read them.
+window.__CFD_VIEWPORT_FACES__ = () => ({ selected: Array.from(faceCtxSelected), hidden: Array.from(hiddenCadFaces) });
+
+/** A shape changed under the shown geometry: hidden and right-clicked faces and the compare views go with it. */
+function clearLinkedFaceState() {
+  try {
+    hiddenCadFaces.clear();
+    faceCtxSelected.clear();
+    faceCtxHit = null;
+    syncHiddenFacesChip();
+    applyHiddenDisplays();
+  } catch (_) {}
+  try { if (compareState.on) stopCompare(); } catch (_) {}
+}
+
+/** The update's report after the landing (5.14): "Save as new" says what it added and copied. */
+async function showLandingReport(job) {
+  if (!job || job.status !== 'done' || !job.result) return false;
+  let t = null;
+  if (job.saveAsNew && job.result.created) {
+    t = savedAsNewText(String(job.result.name || job.geometryName || ''), String(job.oldGeometryName || ''), job.copies || null);
+  } else if (linkNeedsReport(job.result)) {
+    t = linkReportText(job.result);
+  }
+  if (!t) return false;
+  await confirmAction({ title: t.title, copy: t.copy, yes: 'OK', notice: true });
+  return true;
+}
+
+/**
+ * The results the page opened in 3D are on screen (H15): the view is open and its case is
+ * attached, the opening over. False when the wait gave up.
+ */
+async function waitResultsShown(pid, waitMs) {
+  const until = Date.now() + (waitMs || 60000);
+  const shown = () => resultsViewOpen && !!resultsRunId && !resultsOpeningRunId;
+  while (!shown() && Date.now() < until && String(currentProjectId() || '') === pid) {
+    await new Promise((res) => setTimeout(res, 250));
+  }
+  return shown();
 }
 
 bindGeometryRevHost({
   activeGeometryId: () => String((w16State.geometry && w16State.geometry.id) || ''),
-  reloadGeometry: reloadLinkedGeometry,
+  reloadGeometry: (geomId, key, opts) => reloadLinkedGeometry(geomId, key, opts),
 });
 
 // A tree read that says a run was made on an older geometry: the run panel and the
@@ -36025,8 +36221,22 @@ subscribeLinkedGeometries(() => {
   try { syncPtOlderGeometry(); } catch (_) {}
 });
 
-/** A link job's end, as its status route says (polls; gives up after `waitMs`). */
-async function waitLinkJobEnd(projectId, plugin, studyId, jobId, waitMs) {
+/** What the viewport says of a link job the workspace left running ('' when nothing). */
+let linkWaitText = '';
+
+/** Show (or clear, with '') a link job's state in the viewport (LINK 6.4 "Continue in background"). */
+function showLinkWait(text) {
+  linkWaitText = String(text || '');
+  const el = document.getElementById('wb-link-wait');
+  if (el) {
+    el.textContent = linkWaitText;
+    el.hidden = !linkWaitText;
+  }
+  try { applyWorkbenchStage(); } catch (_) {}
+}
+
+/** A link job's end, as its status route says (polls; gives up after `waitMs`); `onJob` hears each read. */
+async function waitLinkJobEnd(projectId, plugin, studyId, jobId, waitMs, onJob) {
   const q = new URLSearchParams({ project_id: projectId, plugin, study_id: studyId, job_id: jobId });
   const until = Date.now() + (waitMs || 10 * 60 * 1000);
   for (;;) {
@@ -36039,6 +36249,9 @@ async function waitLinkJobEnd(projectId, plugin, studyId, jobId, waitMs) {
     }
     const status = job && String(job.status || '');
     if (job && !['queued', 'running', 'choosing'].includes(status)) return job;
+    if (job && typeof onJob === 'function') {
+      try { onJob(job); } catch (_) {}
+    }
     if (Date.now() > until || String(currentProjectId() || '') !== String(projectId)) return job;
     await new Promise((res) => setTimeout(res, 500));
   }
@@ -36046,23 +36259,71 @@ async function waitLinkJobEnd(projectId, plugin, studyId, jobId, waitMs) {
 
 /**
  * The landing after a plugin's workspace closed when its page linked a geometry (host API
- * 1.5, LINK proposal 6.5; L2 has no saved view yet). Only for the project shown. On Back:
- * waits for the link job; a new geometry (a first link) is added to the list and shown; a
- * new rev of the shown one closes the mesh and results views (which would hide the new
- * part), clears the face selection and loads it again; a new rev of another one shows it;
- * nothing changed shows it only if another geometry is shown. A job that ended with the
- * geometry still updating keeps the part shown (its row says why). Another way out (the
- * results, another project, home) only refreshes the data.
+ * 1.5 and 1.6, LINK proposal 6.5). Only for the project shown. Waits for the link job; a
+ * job that ended with the geometry still updating keeps the part shown (its row says why).
+ * By the way out (`reason`):
+ * - Back (the header's or the page's): the full landing. A new geometry (a first link,
+ *   "Save as new") is added to the list and shown, with its copied study; a new rev of the
+ *   shown one closes the mesh and results views (which would hide the new part), clears
+ *   the face selection, hidden faces and compare views and loads it again; only new names
+ *   redraw the face lists without loading the faces file again; a new rev of another one
+ *   shows it; nothing changed shows it only if another geometry is shown. Then the page's
+ *   camera (when the stage shows the part) and the update's report.
+ * - The results (results.openIn3D): data only; the report waits until the results show.
+ * - Anywhere else (the address, another project, Home): data only, no dialog (the geometry
+ *   panel's last update line has it).
+ * Face picks are off until the part and its setup are loaded again.
  */
 async function showLinkedGeometry(geomId, opts) {
   const o = opts || {};
   const pid = String(currentProjectId() || '');
   if (!geomId || !pid || String(o.projectId || '') !== pid) return { skipped: 'project' };
+  const reason = String(o.reason || 'back');
+  const full = reason === 'back' || reason === 'frame-back';
   let job = null;
-  if (o.jobId && o.plugin && o.studyId) job = await waitLinkJobEnd(pid, o.plugin, o.studyId, o.jobId);
+  if (o.jobId && o.plugin && o.studyId) {
+    // Back while the job runs ("Continue in background", or the page's own link): the viewport
+    // says what it waits for, in place of the empty-project buttons on a first sync.
+    const study = String(o.studyTitle || '') || 'the workspace';
+    const waitText = (j) => {
+      if (!full || !j) return '';
+      if (o.created && (j.status === 'queued' || j.status === 'running')) return `Adding a geometry from ${study}…`;
+      if (j.status === 'queued') return `Queued: the update from ${study} (see Queue)`;
+      if (j.status === 'running') return `Updating the project from ${study}…`;
+      return '';
+    };
+    try {
+      job = await waitLinkJobEnd(pid, o.plugin, o.studyId, o.jobId, 0, (j) => {
+        if (String(currentProjectId() || '') === pid) showLinkWait(waitText(j));
+      });
+    } finally {
+      if (linkWaitText) showLinkWait('');
+    }
+  }
   if (String(currentProjectId() || '') !== pid) return { skipped: 'project' };
   if (job && job.status !== 'done') return { skipped: String(job.status || 'unknown') };
-  const id = String(geomId);
+  const resume = pauseFacePicks();
+  let out;
+  try {
+    out = await landLinkedGeometry(String(geomId), o, job, full, pid);
+  } finally {
+    resume();
+  }
+  if (!out || !out.landed || String(currentProjectId() || '') !== pid) return out;
+  // The page's camera (LINK 6.6): only on the full landing, while the stage shows the part.
+  if (full && o.view) {
+    const stage = String(window.__CFD_WB_STAGE__ || '');
+    out.view = stage === 'geometry' || stage === 'setup' ? applyLinkView(o.view) : false;
+  }
+  // The update's report (5.14), when the page did not show it: after the part, or after the results.
+  if (o.report === true && job) {
+    if (full) out.report = await showLandingReport(job);
+    else if (reason === 'results' && (await waitResultsShown(pid))) out.report = await showLandingReport(job);
+  }
+  return out;
+}
+
+async function landLinkedGeometry(id, o, job, full, pid) {
   const known = (w16State.geometries || []).some((g) => g && String(g.id) === id);
   // "Save as new" with a copy (API 1.5, LINK 5.0): the landing opens the copied study's setup.
   const copied = job && Array.isArray(job.copies) ? job.copies.find((c) => c && c.ok && c.newStudyId) : null;
@@ -36073,7 +36334,6 @@ async function showLinkedGeometry(geomId, opts) {
   const before = shownGeometryKey(id);
   const node = await adoptServerRev(id, false);
   if (!node) return { skipped: 'gone' };
-  const full = o.reason === 'back' || o.reason === 'frame-back';
   // A geometry this tab has not seen: the project as the server has it now, then show it.
   if (!known) {
     if (!w16State.geometry) {
@@ -36101,16 +36361,30 @@ async function showLinkedGeometry(geomId, opts) {
   // Changed: the job says so, or this tab still shows another rev or other names. (A tree
   // read while the workspace was open may have loaded the new part already: no second load.)
   const loadedOld = !!before && (before.rev !== node.rev || before.names8 !== String(node.names8 || ''));
-  const changed = loadedOld || !!(job && job.result && job.result.change && job.result.change !== 'none');
+  // Only the names (the same rev): no new part to load (LINK 6.5 step 4).
+  const namesOnly = loadedOld ? before.rev === node.rev : !!(job && job.result && job.result.change === 'names');
   const shownNow = String((w16State.geometry && w16State.geometry.id) || '') === id;
+  // A part that arrived while results showed waits for them to close: Back loads it now.
+  const pendingCad = full && shownNow && linkCadPending === id;
+  const changed = loadedOld || pendingCad || !!(job && job.result && job.result.change && job.result.change !== 'none');
+  if (changed && shownNow && namesOnly && !pendingCad) {
+    if (loadedOld) await reloadLinkedToServer(id, { namesOnly: true });
+    return { landed: 'names' };
+  }
   if (changed && shownNow) {
+    // This landing loads the waiting part itself (not the results' close as well).
+    if (pendingCad) linkCadPending = '';
     if (full) {
       try { if (meshInspectOpen) hideMeshInspect({ silent: true }); } catch (_) {}
       try { if (resultsViewOpen) hideRunResultsView({ silent: true }); } catch (_) {}
     }
     w16State.selectedFaces = [];
     w16State.focusedFace = null;
-    if (loadedOld || !before) await reloadLinkedToServer(id);
+    clearLinkedFaceState();
+    // A results exit: the results are opening; the part loads when they close.
+    if (loadedOld || !before || pendingCad) {
+      await reloadLinkedToServer(id, o.reason === 'results' ? { deferCad: true } : pendingCad ? { force: true } : undefined);
+    }
     try { applyWorkbenchStage(); } catch (_) {}
     return { landed: 'reloaded' };
   }
@@ -36126,14 +36400,44 @@ async function showLinkedGeometry(geomId, opts) {
   return { landed: 'switched', study: copied ? copied.newStudyId : null };
 }
 
+/** The geometry a plugin study links now (its id), or '' (API 1.5's linked route). */
+async function linkedGeometryIdOf(projectId, plugin, studyId) {
+  try {
+    const q = new URLSearchParams({ project_id: String(projectId), plugin: String(plugin), study_id: String(studyId) });
+    const r = await fetch('/api/plugin-geometry/linked?' + q.toString(), { cache: 'no-store' });
+    if (!r.ok) return '';
+    const j = await r.json();
+    return String((j && j.linked && j.linked.geometryId) || '');
+  } catch (_) {
+    return '';
+  }
+}
+
 function onLinkLanding(e) {
   const d = (e && e.detail) || {};
-  if (!d.geometryId) return;
+  if (!d.geometryId) {
+    // The page's exit hook ran but linked nothing in this visit: the landing is on the
+    // geometry the study links (if any, in the project shown), with the hook's camera.
+    const pid = String(currentProjectId() || '');
+    if (!d.projectId || !d.plugin || !d.studyId || String(d.projectId) !== pid) return;
+    void linkedGeometryIdOf(d.projectId, d.plugin, d.studyId).then((gid) => {
+      if (gid) landLinked({ ...d, geometryId: gid, jobId: null, report: false });
+    });
+    return;
+  }
+  landLinked(d);
+}
+
+function landLinked(d) {
   void showLinkedGeometry(d.geometryId, d)
     .then((out) => {
-      window.__CFD_LAST_LANDING__ = { geometryId: d.geometryId, ...(out || {}) };
+      window.__CFD_LAST_LANDING__ = { geometryId: d.geometryId, reason: d.reason || null, ...(out || {}) };
     })
-    .catch((err) => console.warn('[CFD] linked geometry landing', err));
+    .catch((err) => console.warn('[CFD] linked geometry landing', err))
+    .finally(() => {
+      // How many landings have ended (tests wait for the next one).
+      window.__CFD_LANDINGS__ = (window.__CFD_LANDINGS__ || 0) + 1;
+    });
 }
 window.addEventListener('cfd:workspace-left', onLinkLanding);
 // A question answered from the geometry's row ("Choose…", API 1.5): the same landing.

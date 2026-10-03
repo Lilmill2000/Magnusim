@@ -11,12 +11,36 @@
  * The hashchange guard must be the first hashchange listener on window: in
  * Chromium, window listeners run in registration order even with capture, so
  * main.tsx installs it before anything else runs.
+ *
+ * Exit sync (host API 1.6, LINK proposal 6.3 and 6.4): a page with an exit hook
+ * (nav.onLeave) has it run on every way out the host owns but turning the plugin off,
+ * through this one gate, in order: leave full screen, probe the page, run the hook (the
+ * host's link question shows inside it), ask about unsaved work only if the page is still
+ * dirty, approve (the 10 s window starts here), go. After 400 ms the workspace header
+ * shows what the hook does, with Cancel, and "Continue in background" once the link's
+ * job exists; a hook that stalls (30 s with no progress and no call in flight, the timer
+ * paused while an app dialog is open), throws, fails, has its link refused or loses its
+ * page ends in one safe question. One leave at a time.
  */
-import { cleanDirtyMessage } from './bridge';
+import { cleanDirtyMessage, type LeaveActivity, type LeaveHookOutcome } from './bridge';
 import { parseWorkspaceHash, type WorkspaceRoute } from './route';
 
 /** Why the user leaves; 'results' (the page opens a case's results in 3D) asks the 'back' question. */
 export type LeaveReason = 'back' | 'frame-back' | 'history' | 'project' | 'home' | 'plugin-off' | 'results';
+
+/** The page's exit hook (API 1.6), as the overlay gives it to the guard (through its bridge). */
+export interface LeaveHook {
+  /** The page registered a hook and is connected. */
+  on(): boolean;
+  /** The page still answers (a crashed or hung page runs no hook). */
+  probe(): Promise<boolean>;
+  /** Run it for this leave; what happens meanwhile goes to `activity`. */
+  run(reason: LeaveReason, o: { signal: AbortSignal; interactive: boolean; activity: (a: LeaveActivity) => void }): Promise<LeaveHookOutcome>;
+  /** The name of the geometry the study links ('' before the first link). */
+  geometryName(): Promise<string>;
+  /** That name as last known here, at once (when the app is too slow to say). */
+  lastGeometryName?(): string;
+}
 
 /** The open workspace, as the guard needs it. */
 export interface GuardedWorkspace {
@@ -24,7 +48,41 @@ export interface GuardedWorkspace {
   pluginName(): string;
   studyTitle(): string;
   frame(): HTMLIFrameElement | null;
+  /** Its page's exit hook, when the page can have one (API 1.6). */
+  hook?: LeaveHook;
+  /** A leave that ran the hook ended and the workspace stays (Stay, Cancel, Keep editing). */
+  stayed?(): void;
 }
+
+/** What the workspace header shows while a leave runs the page's hook. */
+export interface LeaveProgress {
+  /** A leave is running the hook. */
+  running: boolean;
+  /** Drawn: the hook has run longer than LEAVE_PROGRESS_MS. */
+  shown: boolean;
+  /** The status line. */
+  label: string;
+  /** The host's question is open: the header's Cancel is hidden (its "Keep editing" is the way out). */
+  choosing: boolean;
+  /** "Continue in background" is offered. */
+  background: boolean;
+  /**
+   * The link's job exists: it goes on whatever the user does, so the header's Cancel reads
+   * "Stay here" (the workspace stays; the update is not stopped).
+   */
+  started: boolean;
+}
+
+/** Nothing is drawn for a hook quicker than this. */
+export const LEAVE_PROGRESS_MS = 400;
+/** A hook with no progress and no call in flight this long has stalled. */
+export const LEAVE_STALL_MS = 30000;
+/** "Continue in background" waits this long after the link's job exists (at once when it is queued). */
+export const LEAVE_BACKGROUND_MS = 5000;
+/** How often the running leave looks at its clocks. */
+const LEAVE_TICK_MS = 250;
+/** How long a failed leave's question waits for the geometry's name before it uses the last one known. */
+export const LEAVE_NAME_MS = 1500;
 
 /**
  * An approved leave lets everything through until the workspace closes, or this
@@ -47,6 +105,15 @@ let approved = false;
 let approvalTimer: ReturnType<typeof setTimeout> | null = null;
 // A leave question is on screen.
 let asking = false;
+// A leave is running the page's hook (one at a time).
+let leaving = false;
+// The way out the user last chose and the guard let through, for the overlay's landing.
+let lastReason: { ws: GuardedWorkspace; reason: LeaveReason } | null = null;
+const IDLE: LeaveProgress = { running: false, shown: false, label: '', choosing: false, background: false, started: false };
+let progress: LeaveProgress = IDLE;
+const progressSubscribers = new Set<(p: LeaveProgress) => void>();
+// The header's Cancel and "Continue in background" for the running leave.
+let leaveControls: { cancel: () => void; background: () => void } | null = null;
 let unloadArmed = false;
 const subscribers = new Set<(s: DirtyState) => void>();
 
@@ -183,6 +250,173 @@ function leaveQuestion(reason: LeaveReason, ws: GuardedWorkspace): LeaveQuestion
   return { title: 'Leave without saving?', copy: `${what} Leaving discards them.`, yes: 'Leave', no: 'Stay', safe: true };
 }
 
+/**
+ * What became of the hook's link in this leave: nothing reached the server ('none'), the
+ * server took it and its job goes on ('running'), or it went through ('done').
+ */
+type LeaveUpdate = 'none' | 'running' | 'done';
+
+/**
+ * The one question after a hook that did not finish (a stall, a throw, ok:false, a refused
+ * link, its page gone): Stay has the focus, "Leave anyway" takes a click. When the page is
+ * still dirty it says so too (one question, not two). It says what became of the link: a
+ * job the server took goes on whatever the page does, and one that went through updated
+ * the geometry.
+ */
+function hookFailedQuestion(ws: GuardedWorkspace, message: string, geometry: string, update: LeaveUpdate): LeaveQuestion {
+  const who = plainName(ws.pluginName(), ws.route.plugin);
+  const msg = cleanDirtyMessage(message) || 'it could not update the project';
+  const name = geometry ? plainName(geometry, geometry) : '';
+  const kept =
+    update === 'done'
+      ? `${name || 'The project'} was updated.`
+      : update === 'running'
+        ? `The update of ${name || 'the project'} goes on.`
+        : name
+          ? `${name} keeps its last update.`
+          : 'The project is unchanged.';
+  const lost = state.dirty ? ' Its changes are not saved. Leaving discards them.' : '';
+  return { title: "Couldn't update the project", copy: `${who}: ${asSentence(msg)} ${kept}${lost}`, yes: 'Leave anyway', no: 'Stay', safe: true };
+}
+
+/** The status line's words for a link stage (LINK 6.4). */
+function stageText(stage: string, ahead: number | null, label: string, create: boolean, study: string): string {
+  if (stage === 'queued') {
+    if (create) return `Waiting for the last update of ${study} to finish`;
+    const n = ahead ?? 0;
+    // Nothing waits before it: the job that runs now holds the slot.
+    return n > 0 ? `Queued behind ${n} job${n === 1 ? '' : 's'} (see Queue)` : 'Queued (see Queue)';
+  }
+  if (stage === 'waiting' && label) return label;
+  const words: Record<string, string> = {
+    reading: 'Reading the design',
+    meshing: 'Building the part',
+    naming: 'Naming the faces',
+    matching: 'Matching faces',
+    saving: 'Saving the project',
+    finishing: 'Finishing',
+  };
+  return words[stage] || label || '';
+}
+
+function publishProgress(next: LeaveProgress): void {
+  progress = next;
+  for (const fn of Array.from(progressSubscribers)) {
+    try {
+      fn({ ...next });
+    } catch (err) {
+      console.warn('[workspace] leave progress listener failed', err);
+    }
+  }
+}
+
+/** How the hook's run ended for the guard. */
+type HookEnd =
+  | { kind: 'done' }
+  | { kind: 'failed'; message: string; update: LeaveUpdate }
+  /** "Keep editing" in the host's question, or the header's Cancel: stay, no question. */
+  | { kind: 'stay' }
+  /** "Continue in background", or a caller that cannot ask once the server took the link. */
+  | { kind: 'go' };
+
+/**
+ * Run the page's hook (LINK 6.4 step 3): the progress the header shows, the stall timer,
+ * Cancel and "Continue in background". `interactive: false` goes on once the server has
+ * taken the link (the job then runs on), and never asks.
+ */
+function runHook(ws: GuardedWorkspace, hook: LeaveHook, reason: LeaveReason, interactive: boolean): Promise<HookEnd> {
+  const study = plainName(ws.studyTitle(), ws.route.studyId);
+  const ctl = new AbortController();
+  const started = Date.now();
+  let lastActivity = started;
+  let inFlight = 0;
+  let pageLabel = '';
+  let stage = '';
+  let ahead: number | null = null;
+  let stageLabel = '';
+  let choosing = false;
+  let create = false;
+  let jobAt: number | null = null;
+  let update: LeaveUpdate = 'none';
+  return new Promise<HookEnd>((resolve) => {
+    let settled = false;
+    const label = () => {
+      if (choosing) return 'Waiting for your choice';
+      return stageText(stage, ahead, stageLabel, create, study) || pageLabel || `Updating the project from ${study}…`;
+    };
+    const draw = () => {
+      if (settled) return;
+      const now = Date.now();
+      const shown = now - started >= LEAVE_PROGRESS_MS;
+      // Only once the link's job exists (the page's uploads are over), never while the user chooses.
+      const background = !choosing && jobAt !== null && (stage === 'queued' || now - jobAt >= LEAVE_BACKGROUND_MS);
+      publishProgress({ running: true, shown, label: label(), choosing, background, started: jobAt !== null });
+    };
+    const finish = (end: HookEnd, abort: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(tick);
+      leaveControls = null;
+      if (abort) ctl.abort();
+      resolve(end);
+    };
+    const busy = () => typeof window.__CFD_DIALOG_BUSY__ === 'function' && window.__CFD_DIALOG_BUSY__() === true;
+    const tick = setInterval(() => {
+      const now = Date.now();
+      // The stall timer waits while an app dialog is open, the user chooses, a call is in
+      // flight (an upload, the link) or the link's job waits in the queue.
+      if (choosing || inFlight > 0 || stage === 'queued' || busy()) lastActivity = now;
+      if (now - lastActivity >= LEAVE_STALL_MS) {
+        finish({ kind: 'failed', message: `it did not answer for ${Math.round(LEAVE_STALL_MS / 1000)} seconds`, update }, true);
+        return;
+      }
+      draw();
+    }, LEAVE_TICK_MS);
+    leaveControls = {
+      cancel: () => finish({ kind: 'stay' }, true),
+      background: () => {
+        if (progress.background) finish({ kind: 'go' }, false);
+      },
+    };
+    const activity = (a: LeaveActivity) => {
+      if (settled) return;
+      lastActivity = Date.now();
+      if (a.kind === 'progress') pageLabel = a.label;
+      else if (a.kind === 'calls') inFlight = a.inFlight;
+      else if (a.kind === 'link') {
+        stage = a.stage;
+        ahead = a.ahead;
+        stageLabel = a.label;
+      } else if (a.kind === 'choosing') choosing = a.open;
+      else if (a.kind === 'kept') {
+        finish({ kind: 'stay' }, true);
+        return;
+      } else if (a.kind === 'linked') {
+        if (!a.ok) update = 'none';
+        else if (a.change && a.change !== 'none') update = 'done';
+      } else if (a.kind === 'accepted') {
+        create = a.create;
+        if (a.jobId) {
+          jobAt = Date.now();
+          if (update !== 'done') update = 'running';
+        }
+        if (a.queued) stage = 'queued';
+        // A caller that cannot ask waits only until the server has the link (LINK 6.4).
+        if (!interactive) {
+          finish({ kind: 'go' }, false);
+          return;
+        }
+      }
+      draw();
+    };
+    draw();
+    hook.run(reason, { signal: ctl.signal, interactive, activity }).then(
+      (out) => finish(out.ok ? { kind: 'done' } : { kind: 'failed', message: out.message || '', update }, false),
+      (err) => finish({ kind: 'failed', message: err instanceof Error ? err.message : String(err), update }, false),
+    );
+  });
+}
+
 async function ask(q: LeaveQuestion, signal?: AbortSignal): Promise<boolean> {
   try {
     const confirm = window.__CFD_CONFIRM__;
@@ -195,10 +429,14 @@ async function ask(q: LeaveQuestion, signal?: AbortSignal): Promise<boolean> {
   }
 }
 
-/** Browser Back/Forward or a typed link away from the dirty workspace: hold it and ask. */
+/**
+ * Browser Back/Forward or a typed link away from a workspace that needs work first
+ * (unsaved work, or an exit hook to run): hold it and ask (or run the hook). During a
+ * leave the address is only put back.
+ */
 function onHash(e: HashChangeEvent): void {
   const ws = open;
-  if (!ws || !workspaceDirty()) return;
+  if (!ws || !leaveNeedsWork()) return;
   const from = routeOf(e.oldURL);
   if (!from || !sameRoute(from, ws.route)) return;
   // The same workspace spelled another way (%2D for "-") is not a way out.
@@ -207,6 +445,8 @@ function onHash(e: HashChangeEvent): void {
   // Nothing else hears of this change, and the address is the workspace's again.
   e.stopImmediatePropagation();
   history.pushState(history.state, '', e.oldURL);
+  // One leave at a time: the running one decides.
+  if (leaving || asking) return;
   void confirmLeaveWorkspace('history').then((ok) => {
     // The entry the user was going to is under the restored one; the approval lets it through.
     if (ok) history.back();
@@ -238,6 +478,45 @@ export function registerOpenWorkspace(ws: GuardedWorkspace): () => void {
     ends.abort();
     reset();
   };
+}
+
+/**
+ * Leaving needs work first (LINK 6.4): the page has unsaved work, or an exit hook to run,
+ * and the user has not chosen to leave already. A running leave counts.
+ */
+export function leaveNeedsWork(): boolean {
+  if (!open || approved) return false;
+  if (leaving) return true;
+  return state.dirty || !!(open.hook && open.hook.on());
+}
+
+/** A leave is running the page's exit hook. */
+export function leaveInProgress(): boolean {
+  return leaving;
+}
+
+/** The way out the guard last let through for this workspace (the landing's reason), or null. */
+export function lastLeaveReason(ws: GuardedWorkspace): LeaveReason | null {
+  return lastReason && lastReason.ws === ws ? lastReason.reason : null;
+}
+
+/** Hear what the workspace header shows while a leave runs the page's hook. */
+export function subscribeLeaveProgress(fn: (p: LeaveProgress) => void): () => void {
+  progressSubscribers.add(fn);
+  fn({ ...progress });
+  return () => {
+    progressSubscribers.delete(fn);
+  };
+}
+
+/** The header's Cancel: the hook is aborted and the workspace stays (no question). */
+export function cancelLeave(): void {
+  leaveControls?.cancel();
+}
+
+/** "Continue in background": the leave goes on now; the link's job runs on in the app. */
+export function continueLeaveInBackground(): void {
+  leaveControls?.background();
 }
 
 /** The open workspace's page has unsaved work (or not). Only changes are acted on. */
@@ -290,18 +569,132 @@ export async function exitFrameFullscreen(): Promise<void> {
 }
 
 /**
- * May the user leave the open workspace? True at once when nothing would be
- * lost; otherwise the app asks. The question waits its turn behind another app
- * dialog (one at a time), and never gets lost in the moment between two of them.
- * False without a question when it must not ask (interactive: false) or a leave
- * question is already open, and false when the workspace closed while the
- * question was open (the question closes with it).
+ * The geometry's name for a failed leave's question: the app's answer, or after
+ * LEAVE_NAME_MS the last one known (the app may be busy behind a long call).
+ */
+async function geometryNameSoon(hook: LeaveHook): Promise<string> {
+  const last = () => {
+    try {
+      return hook.lastGeometryName ? hook.lastGeometryName() : '';
+    } catch {
+      return '';
+    }
+  };
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const late = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve(last()), LEAVE_NAME_MS);
+  });
+  try {
+    return await Promise.race([hook.geometryName().catch(() => last()), late]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** The guard let this way out through: the overlay's landing reads why. */
+function noteReason(ws: GuardedWorkspace | null, reason: LeaveReason): void {
+  if (ws) lastReason = { ws, reason };
+}
+
+/**
+ * May the user leave the open workspace? True at once when nothing would be lost and the
+ * page has no exit hook; otherwise, in order (LINK 6.4): leave full screen, probe the
+ * page, run its hook (not for turning the plugin off), ask about unsaved work only if the
+ * page is still dirty (merged into the one question when the hook failed), approve, go.
+ * Questions wait their turn behind another app dialog (one at a time). False when the
+ * user stays, cancels or keeps editing, while another leave or question is running, when
+ * it must not ask (interactive: false) and would have to, and when the workspace closed
+ * meanwhile (a question about it closes with it).
  */
 export async function confirmLeaveWorkspace(reason: LeaveReason, opts: { interactive?: boolean } = {}): Promise<boolean> {
-  if (!workspaceDirty()) return true;
-  const ws = open as GuardedWorkspace;
+  const ws = open;
   const ends = openEnds;
-  if (opts.interactive === false || asking) return false;
+  const run = { ran: false };
+  const ok = await confirmLeave(reason, opts, run);
+  // The hook ran and the user stays in this workspace (still open): it hears so.
+  if (!ok && run.ran && ws && open === ws && openEnds === ends) {
+    try {
+      ws.stayed?.();
+    } catch (err) {
+      console.warn('[workspace] stay listener failed', err);
+    }
+  }
+  return ok;
+}
+
+async function confirmLeave(reason: LeaveReason, opts: { interactive?: boolean }, run: { ran: boolean }): Promise<boolean> {
+  if (leaving || asking) return false;
+  const ws = open;
+  if (!ws || !leaveNeedsWork()) {
+    noteReason(ws, reason);
+    return true;
+  }
+  const ends = openEnds;
+  const interactive = opts.interactive !== false;
+  // Turning the plugin off runs no hook (D11): today's question about unsaved work only.
+  const hook = reason !== 'plugin-off' && ws.hook && ws.hook.on() ? ws.hook : null;
+  let failed: { message: string; update: LeaveUpdate } | null = null;
+  if (hook) {
+    leaving = true;
+    try {
+      await exitFrameFullscreen();
+      const alive = await hook.probe();
+      if (openEnds !== ends) return false;
+      // A crashed or hung page runs no hook: the geometry keeps its last update.
+      if (alive) {
+        run.ran = true;
+        const end = await runHook(ws, hook, reason, interactive);
+        if (openEnds !== ends) return false;
+        if (end.kind === 'stay') {
+          refocus(ws);
+          return false;
+        }
+        if (end.kind === 'go') {
+          // The job goes on in the app; the page's unsaved work (if any) is the caller's to ask about.
+          if (!interactive && state.dirty) return false;
+          approve(true);
+          noteReason(ws, reason);
+          return true;
+        }
+        if (end.kind === 'failed') failed = { message: end.message, update: end.update };
+      }
+      if (failed !== null) {
+        // A caller that cannot ask stays.
+        if (!interactive) return false;
+        // The question comes next: the header offers nothing meanwhile (no Cancel with
+        // nothing left to cancel), and a slow app holds it up for LEAVE_NAME_MS at most.
+        publishProgress({ ...progress, choosing: true, background: false });
+        const geometry = await geometryNameSoon(hook);
+        if (openEnds !== ends) return false;
+        publishProgress(IDLE);
+        asking = true;
+        let ok = false;
+        try {
+          ok = await ask(hookFailedQuestion(ws, failed.message, geometry, failed.update), ends ? ends.signal : undefined);
+        } finally {
+          asking = false;
+        }
+        if (openEnds !== ends) return false;
+        if (!ok) {
+          refocus(ws);
+          return false;
+        }
+        approve(true);
+        noteReason(ws, reason);
+        return true;
+      }
+    } finally {
+      leaving = false;
+      publishProgress(IDLE);
+    }
+  }
+  if (!state.dirty) {
+    // Nothing is unsaved. After the hook the approval window starts now (LINK 6.4).
+    if (hook) approve(true);
+    noteReason(ws, reason);
+    return true;
+  }
+  if (!interactive) return false;
   asking = true;
   let ok = false;
   try {
@@ -319,6 +712,7 @@ export async function confirmLeaveWorkspace(reason: LeaveReason, opts: { interac
   // A turn-off holds until it ends (PluginsStep withdraws it when the request fails):
   // the disable and the registry reload wait on the worker, maybe longer than LEAVE_APPROVAL_MS.
   approve(reason !== 'plugin-off');
+  noteReason(ws, reason);
   return true;
 }
 

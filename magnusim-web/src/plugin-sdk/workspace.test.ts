@@ -89,7 +89,7 @@ describe('ws.files: writing', () => {
   it("sends an ArrayBuffer in chunks it hands over, leaving the caller's buffer as it was", async () => {
     const { ws, posts, hello } = await open(uploads());
     expect(hello).toHaveBeenCalledWith({ magnusim: 'hello', sdkVersion: SDK_VERSION, instance: expect.any(String) }, '*');
-    expect(SDK_VERSION).toBe('1.2.0');
+    expect(SDK_VERSION).toBe('1.3.0');
     const data = new Uint8Array(40 * MiB);
     data[0] = 1;
     data[16 * MiB] = 2;
@@ -456,7 +456,7 @@ describe('ws.files: reading, listing and deleting', () => {
 });
 
 describe('ws.project.linkGeometry and linkedGeometry (host 1.5)', () => {
-  it('sends the call with a token, keeps the camera and the callback in the page, and gives the page its progress', async () => {
+  it('sends the call with a token and the camera (1.6: the host keeps it in its page), keeps the callback in the page, and gives the page its progress', async () => {
     let finish: (v: unknown) => void = () => undefined;
     const { ws, posts, push } = await open((method) => {
       if (method === 'project.linkGeometry') return new Promise((r) => (finish = r));
@@ -468,13 +468,13 @@ describe('ws.project.linkGeometry and linkedGeometry (host 1.5)', () => {
       shape: { rel: 'studies/st-1/x.bbrep', format: 'brep', sha256: SHA },
       sourceVersion: 3,
       basedOnRev: 1,
-      view: { fov: 30 },
+      view: { position: [1, 2, 3], target: [0, 0, 0], up: [0, 0, 1], projection: 'perspective', fovDeg: 30 },
       onProgress: (pr) => stages.push(`${pr.stage}${pr.ahead !== undefined ? `:${pr.ahead}` : ''}`),
-    } as Parameters<Workspace['project']['linkGeometry']>[0] & { view: unknown });
+    });
     await vi.waitFor(() => expect(methods(posts)).toContain('project.linkGeometry'));
     const sent = posts.find((q) => q.method === 'project.linkGeometry')!.params;
     expect(sent).toMatchObject({ shape: { rel: 'studies/st-1/x.bbrep', format: 'brep', sha256: SHA }, sourceVersion: 3, basedOnRev: 1 });
-    expect(sent.view).toBeUndefined();
+    expect(sent.view).toEqual({ position: [1, 2, 3], target: [0, 0, 0], up: [0, 0, 1], projection: 'perspective', fovDeg: 30 });
     expect(sent.onProgress).toBeUndefined();
     expect(typeof sent.token).toBe('string');
     push({ event: 'linkProgress', data: { token: sent.token, stage: 'queued', ahead: 2 } });
@@ -494,5 +494,68 @@ describe('ws.project.linkGeometry and linkedGeometry (host 1.5)', () => {
     await vi.waitFor(() => expect(methods(posts).filter((m) => m === 'project.followGeometry')).toHaveLength(1));
     push({ event: 'geometry', data: { geometryId: 'g1', rev: 4, fromRev: 3 } });
     expect(seen).toEqual([{ geometryId: 'g1', rev: 4, fromRev: 3 }]);
+  });
+});
+
+describe('ws.nav.onLeave (host 1.6, gate:l3-guard)', () => {
+  const VIEW = { position: [400, 15, 15], target: [0, 15, 15], up: [0, 0, 1], projection: 'orthographic', height: 100 } as const;
+
+  it('registers the hook; on `leave` it runs with the reason, a signal and progress, and sends its end with the camera', async () => {
+    const { ws, posts, push } = await open(() => ({ ok: true }));
+    const seen: string[] = [];
+    await ws.nav.onLeave(async ({ reason, signal, progress }) => {
+      seen.push(reason);
+      expect(signal.aborted).toBe(false);
+      progress(0.25, 'Exporting the design');
+      progress(Number.NaN);
+      return { view: { ...VIEW, position: [400, 15, 15] } };
+    });
+    expect(posts.find((p) => p.method === 'nav.leaveHook')?.params).toEqual({ on: true });
+    push({ event: 'leave', data: { leave: 'leave-1', reason: 'frame-back' } });
+    await vi.waitFor(() => expect(methods(posts)).toContain('nav.leaveDone'));
+    expect(seen).toEqual(['frame-back']);
+    expect(posts.filter((p) => p.method === 'nav.leaveProgress').map((p) => p.params)).toEqual([
+      { leave: 'leave-1', fraction: 0.25, label: 'Exporting the design' },
+      { leave: 'leave-1', fraction: null },
+    ]);
+    expect(posts.find((p) => p.method === 'nav.leaveDone')?.params).toEqual({ leave: 'leave-1', ok: true, view: { ...VIEW, position: [400, 15, 15] } });
+  });
+
+  it('a throw ends the leave ok:false with its message; leaveAbort aborts the signal; null clears the hook', async () => {
+    const { ws, posts, push } = await open(() => ({ ok: true }));
+    let aborted: AbortSignal | null = null;
+    await ws.nav.onLeave(async ({ reason, signal }) => {
+      if (reason === 'home') throw new Error('The export failed');
+      aborted = signal;
+      await new Promise<void>((r) => signal.addEventListener('abort', () => r()));
+      return undefined;
+    });
+    push({ event: 'leave', data: { leave: 'leave-1', reason: 'home' } });
+    await vi.waitFor(() => expect(posts.filter((p) => p.method === 'nav.leaveDone')).toHaveLength(1));
+    expect(posts.filter((p) => p.method === 'nav.leaveDone')[0].params).toEqual({ leave: 'leave-1', ok: false, message: 'The export failed' });
+    push({ event: 'leave', data: { leave: 'leave-2', reason: 'back' } });
+    await vi.waitFor(() => expect(aborted).not.toBeNull());
+    push({ event: 'leaveAbort', data: { leave: 'leave-2' } });
+    await vi.waitFor(() => expect(posts.filter((p) => p.method === 'nav.leaveDone')).toHaveLength(2));
+    expect((aborted as unknown as AbortSignal).aborted).toBe(true);
+    await ws.nav.onLeave(null);
+    expect(posts.filter((p) => p.method === 'nav.leaveHook').map((p) => p.params)).toEqual([{ on: true }, { on: false }]);
+    // With no hook a leave is done at once.
+    push({ event: 'leave', data: { leave: 'leave-3', reason: 'back' } });
+    await vi.waitFor(() => expect(posts.filter((p) => p.method === 'nav.leaveDone')).toHaveLength(3));
+    expect(posts.filter((p) => p.method === 'nav.leaveDone')[2].params).toEqual({ leave: 'leave-3', ok: true });
+  });
+
+  it('a host before 1.6 refuses it with not_allowed, and nothing is registered', async () => {
+    const { ws, posts, push } = await open((method) => {
+      if (method === 'nav.leaveHook') throw Object.assign(new Error('not allowed: "nav.leaveHook"'), { code: 'not_allowed' });
+      return { ok: true };
+    });
+    const handler = vi.fn();
+    await expect(ws.nav.onLeave(handler)).rejects.toMatchObject({ code: 'not_allowed' });
+    push({ event: 'leave', data: { leave: 'leave-1', reason: 'back' } });
+    await vi.waitFor(() => expect(methods(posts)).toContain('nav.leaveDone'));
+    expect(handler).not.toHaveBeenCalled();
+    await expect(ws.nav.onLeave('nope' as never)).rejects.toThrow(TypeError);
   });
 });

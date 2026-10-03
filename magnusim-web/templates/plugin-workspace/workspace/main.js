@@ -33,3 +33,16 @@ document.getElementById('save').addEventListener('click', async () => {
   //   basedOnRev: linked ? linked.rev : null,
   // });
 });
+
+// Host 1.6 and later: the exit hook. The app runs it on every way out it owns (Back, your
+// own nav.back(), browser Back, another project, Home, results.openIn3D) before it asks
+// about unsaved work: save, then link, then return (authoring.md, "Exit sync (1.6)").
+// Its linkGeometry may meet the app's question; "Keep editing" rejects it with
+// `cancelled`: return at once, the workspace stays open. A page's own "Done" is just
+// ws.nav.back(). An older host refuses onLeave (code "not_allowed").
+// await ws.nav.onLeave(async ({ signal, progress }) => {
+//   progress(null, 'Saving the design');
+//   // ...save unsaved work, then ws.nav.setDirty(false), then link as above...
+//   if (signal.aborted) return;
+//   return { view: { position: [400, 0, 0], target: [0, 0, 0], up: [0, 0, 1], projection: 'perspective', fovDeg: 30 } };
+// });

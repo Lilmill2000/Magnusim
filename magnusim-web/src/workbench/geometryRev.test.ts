@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bindGeometryRevHost,
   canPickInto,
+  facePicksPaused,
   fetchLinkedSave,
   linkJobOf,
   linkedWorkerRpc,
   noteTreeGeometries,
+  pauseFacePicks,
+  reloadLinkedToServer,
   resetGeometryRevForTests,
   shownGeometryRev,
   stampRecords,
@@ -92,6 +95,54 @@ describe('the rev a tab shows, and the stamp on its saves', () => {
     // A names-only update (same rev) reloads too; a fence that ends does.
     noteTreeGeometries('p1', [{ id: 'g1', rev: 2, names8: 'cccc', source: SRC }]);
     expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it('API 1.6: new names at the same rev read only the names again (no new faces file); a new rev loads the part', async () => {
+    const reload = vi.fn(async () => undefined);
+    bindGeometryRevHost({ activeGeometryId: () => 'g1', reloadGeometry: reload });
+    noteTreeGeometries('p1', [{ id: 'g1', rev: 1, names8: 'aaaa', source: SRC }]);
+    noteTreeGeometries('p1', [{ id: 'g1', rev: 1, names8: 'bbbb', source: SRC }]);
+    expect(reload).toHaveBeenLastCalledWith('g1', '1-aaaa', { namesOnly: true });
+    await vi.waitFor(() => expect(shownGeometryRev('g1')).toBe(1));
+    await new Promise((r) => setTimeout(r, 0));
+    noteTreeGeometries('p1', [{ id: 'g1', rev: 2, names8: 'bbbb', source: SRC }]);
+    expect(reload).toHaveBeenLastCalledWith('g1', '1-bbbb');
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it('API 1.6: a landing waits for a reload of a tree read in flight; it shows the new rev only after, and loads the part once (twice with force)', async () => {
+    let release: () => void = () => undefined;
+    const reload = vi.fn((_g: string, _k: string) => (reload.mock.calls.length === 1 ? new Promise<void>((r) => (release = r)) : Promise.resolve()));
+    bindGeometryRevHost({ activeGeometryId: () => 'g1', reloadGeometry: reload });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ geometries: [{ id: 'g1', rev: 2, names8: 'aaaa' }] }), { status: 200 })));
+    noteTreeGeometries('p1', [{ id: 'g1', rev: 1, names8: 'aaaa', source: SRC }]);
+    // The tree read's reload of rev 2 starts and is held.
+    noteTreeGeometries('p1', [{ id: 'g1', rev: 2, names8: 'aaaa', source: SRC }]);
+    expect(reload).toHaveBeenCalledTimes(1);
+    const landing = reloadLinkedToServer('g1');
+    await new Promise((r) => setTimeout(r, 20));
+    // Still the old rev while the part and its labels load: a pick drawn now is at rev 1.
+    expect(shownGeometryRev('g1')).toBe(1);
+    release();
+    await landing;
+    expect(shownGeometryRev('g1')).toBe(2);
+    // The rev it loaded was the server's: no second load.
+    expect(reload).toHaveBeenCalledTimes(1);
+    // With force (a part set aside while results showed) it loads again.
+    await reloadLinkedToServer('g1', { force: true });
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it('API 1.6: face picks wait while a landing loads the part and its setup (pauseFacePicks)', () => {
+    expect(facePicksPaused()).toBe(false);
+    const a = pauseFacePicks();
+    const b = pauseFacePicks();
+    expect(facePicksPaused()).toBe(true);
+    a();
+    a();
+    expect(facePicksPaused()).toBe(true);
+    b();
+    expect(facePicksPaused()).toBe(false);
   });
 
   it("follows each linked geometry's study on its link events: the row's job state, and a tree read when one ends", () => {

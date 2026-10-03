@@ -2,23 +2,29 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useHashRoute } from '../app/routes';
 import { onTreeAction } from '../chrome/treeSession';
-import type { StudyRecord } from '../plugin-sdk/workspace';
+import type { StudyRecord, ViewState } from '../plugin-sdk/workspace';
 import { Toast, type ToastKind } from '../plugin-ui';
 import { prefersImperial } from '../prefs';
 import { pluginStudyScope } from '../scope';
 import { useProjectStore } from '../store/project';
 import { WorkspaceBridge, WorkspaceCalls, type BridgeHooks, type BridgeScope } from './bridge';
 import {
+  cancelLeave,
+  continueLeaveInBackground,
   exitFrameFullscreen,
   frameMayTakeFocus,
+  lastLeaveReason,
   leaveApproved,
+  leaveInProgress,
   leaveWorkspaceTo,
   openWorkspaceRoute,
   registerOpenWorkspace,
   setWorkspaceDirty,
+  subscribeLeaveProgress,
   subscribeWorkspaceDirty,
   workspaceDirty,
   type GuardedWorkspace,
+  type LeaveProgress,
 } from './leaveGuard';
 import { openPluginResults } from './pluginResults';
 import type { WorkspaceRoute } from './route';
@@ -127,9 +133,19 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   const headerRef = useRef<HTMLElement>(null);
   const bridgeRef = useRef<WorkspaceBridge | null>(null);
   const slotRef = useRef<HTMLDivElement>(null);
-  // The last geometry this page linked, and whether it is leaving for the results (API 1.5).
-  const linked = useRef<{ geometryId: string; jobId: string | null; created: boolean } | null>(null);
+  // The last geometry this page linked (API 1.5), whether the host showed its report here
+  // already, and whether it is leaving for the results; the camera the page wants to land
+  // with (API 1.6: linkGeometry's view, or the exit hook's; the last one wins).
+  const linked = useRef<{ geometryId: string; jobId: string | null; created: boolean; reported: boolean } | null>(null);
   const toResults = useRef(false);
+  const landView = useRef<ViewState | null>(null);
+  // The page's exit hook ran in this visit: the workbench lands on the study's geometry
+  // (LINK 6.5) even when nothing was linked, with the camera the hook returned.
+  const hookRan = useRef(false);
+  // The update's report held back during a leave: shown if the user stays after all.
+  const heldReport = useRef<{ title: string; copy: string } | null>(null);
+  // What the header shows while a leave runs the page's exit hook (API 1.6).
+  const [leaveUi, setLeaveUi] = useState<LeaveProgress>({ running: false, shown: false, label: '', choosing: false, background: false, started: false });
   const [row, setRow] = useState<PluginRow | null>(null);
   const [study, setStudy] = useState<StudyRecord | null>(null);
   const [blocked, setBlocked] = useState<Blocked | null>(null);
@@ -148,12 +164,39 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   useEffect(() => {
     named.current = { name, title };
   });
-  // This workspace as the leave guard knows it (registered while it is open).
+  // This workspace as the leave guard knows it (registered while it is open), with its
+  // page's exit hook (API 1.6) through the bridge of the page now loaded.
   const [guarded] = useState<GuardedWorkspace>(() => ({
     route,
     pluginName: () => named.current.name,
     studyTitle: () => named.current.title,
     frame: () => frameRef.current,
+    hook: {
+      on: () => !!bridgeRef.current && bridgeRef.current.hookOn(),
+      probe: () => (bridgeRef.current ? bridgeRef.current.probe() : Promise.resolve(false)),
+      run: (reason, o) => {
+        if (!bridgeRef.current) return Promise.resolve({ ok: true });
+        hookRan.current = true;
+        return bridgeRef.current.runLeave(reason, o);
+      },
+      geometryName: () => (bridgeRef.current ? bridgeRef.current.geometryName() : Promise.resolve('')),
+      lastGeometryName: () => (bridgeRef.current ? bridgeRef.current.lastGeometryName() : ''),
+    },
+    // The user stays after a leave whose hook updated the project: its report, held back
+    // for the landing, shows here now.
+    stayed: () => {
+      const held = heldReport.current;
+      heldReport.current = null;
+      if (!held || !linked.current || linked.current.reported) return;
+      linked.current.reported = true;
+      void (async () => {
+        await exitFrameFullscreen();
+        if (window.__CFD_CONFIRM__) await window.__CFD_CONFIRM__({ title: held.title, copy: held.copy, yes: 'OK', notice: true });
+        const frame = frameRef.current;
+        const header = headerRef.current;
+        if (frame && frameMayTakeFocus(document, frame, header)) frame.focus({ preventScroll: true });
+      })();
+    },
   }));
   const mine = () => openWorkspaceRoute() === guarded.route;
   // Unsaved work that closing the page now would lose (the user did not choose to leave).
@@ -189,15 +232,30 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       }
       document.body.classList.remove('workspace-open');
       window.dispatchEvent(new CustomEvent('cfd:workspace-close'));
-      // The page linked a geometry: the workbench lands on it (showLinkedGeometry, LINK 6.5).
-      // Back to this project is the full landing; the results or anywhere else refresh data only.
+      // The page linked a geometry, or its exit hook ran: the workbench lands on the study's
+      // geometry (showLinkedGeometry, LINK 6.5; with no link here it looks the geometry up).
+      // Back (the header's or the page's) is the full landing; the results or anywhere else
+      // refresh data only. The reason is the way out the leave guard let through; a change
+      // of address it never saw is read from where the address went.
       const link = linked.current;
-      if (link) {
+      if (link || hookRan.current) {
         const hash = window.location.hash || '';
-        const reason = toResults.current ? 'results' : hash === projectHash || hash.startsWith(`${projectHash}?`) ? 'back' : 'project';
+        const guess = toResults.current ? 'results' : hash === projectHash || hash.startsWith(`${projectHash}?`) ? 'back' : 'project';
+        const reason = lastLeaveReason(guarded) || guess;
+        const { reported, ...rest } = link || { reported: true };
         window.dispatchEvent(
           new CustomEvent('cfd:workspace-left', {
-            detail: { projectId: route.projectId, plugin: route.plugin, studyId: route.studyId, reason, ...link },
+            detail: {
+              projectId: route.projectId,
+              plugin: route.plugin,
+              studyId: route.studyId,
+              studyTitle: named.current.title,
+              reason,
+              ...rest,
+              view: landView.current,
+              // The landing shows the update's report when this page did not show it.
+              report: !reported,
+            },
           }),
         );
       }
@@ -216,6 +274,14 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       unsubscribe();
     };
   }, [guarded, attempt]);
+
+  // A leave running the page's exit hook: the header's status line, Cancel and "Continue in
+  // background"; the page under it takes no input meanwhile.
+  useEffect(() => subscribeLeaveProgress((p) => setLeaveUi(p)), []);
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (frame) frame.inert = leaveUi.running;
+  }, [leaveUi.running]);
 
   // What opens: the plugin (on, with this workspace) and the study.
   useEffect(() => {
@@ -353,13 +419,23 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       log: (message, detail) => console.warn(`[workspace] ${message}`, detail ?? ''),
       // A linked geometry's update the page made: what was lost, came back or must be picked (API 1.5).
       linkStarted: (link) => {
-        linked.current = link;
+        linked.current = { ...link, reported: false };
       },
+      // Inside a leave the landing shows the report, after the part (LINK 6.5); here only
+      // for a link the page made while it stays open.
       linkReport: (result) => {
+        if (leaveInProgress() || leaveApproved()) {
+          heldReport.current = linkReportText(result);
+          return;
+        }
+        if (linked.current) linked.current.reported = true;
         const t = linkReportText(result);
         void pageDialog((turn) =>
           window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ title: t.title, copy: t.copy, yes: 'OK', notice: true, ...turn }) : Promise.resolve(true),
         );
+      },
+      linkView: (view) => {
+        landView.current = view;
       },
       // The host's question when the page links a new shape onto a geometry in use (LINK 5.0):
       // over the covered workspace; dropped unanswered when the page goes or the job ends.
@@ -369,6 +445,11 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
           return showLinkChoice(question, { skipIf: () => turn.skipIf() || signal.aborted, signal: both });
         }),
       linkSavedAsNew: (info) => {
+        if (leaveInProgress() || leaveApproved()) {
+          heldReport.current = savedAsNewText(info.newName, info.oldName, info.copies);
+          return;
+        }
+        if (linked.current) linked.current.reported = true;
         const t = savedAsNewText(info.newName, info.oldName, info.copies);
         void pageDialog((turn) =>
           window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ title: t.title, copy: t.copy, yes: 'OK', notice: true, ...turn }) : Promise.resolve(true),
@@ -489,8 +570,9 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
     bridgeRef.current?.pushStudy(study);
   }, [study, connected]);
 
-  // Back to the project; with unsaved work the app asks first.
+  // Back to the project; with unsaved work the app asks first, and the page's exit hook runs.
   const back = () => void leaveWorkspaceTo(projectHash, 'back');
+  const leaveShown = leaveUi.running && leaveUi.shown;
 
   return (
     <div
@@ -502,7 +584,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
     >
       <header className="ws-header" data-workspace-header="1" ref={headerRef}>
         <div className="ws-header-left">
-          <button type="button" className="home-btn ws-back" data-ws-back="1" onClick={back}>
+          <button type="button" className="home-btn ws-back" data-ws-back="1" onClick={back} disabled={leaveUi.running}>
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
               <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -526,6 +608,30 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
             {unsaved.dirty ? <span className="ws-dirty" data-ws-dirty="1" title={unsaved.message || 'Not saved'} aria-label="Not saved" /> : null}
           </span>
         </div>
+        {leaveShown ? (
+          <div className="ws-leave" data-ws-leave="1">
+            <span className="ws-leave-status" role="status" data-ws-leave-status="1">
+              {leaveUi.label}
+            </span>
+            {leaveUi.background ? (
+              <button type="button" className="home-btn" data-ws-leave-background="1" onClick={() => continueLeaveInBackground()}>
+                Continue in background
+              </button>
+            ) : null}
+            {!leaveUi.choosing ? (
+              // Once the link's job exists it goes on whatever happens here: this only keeps the workspace open.
+              <button
+                type="button"
+                className="home-btn"
+                data-ws-leave-cancel="1"
+                title={leaveUi.started ? 'The update goes on; the workspace stays open' : undefined}
+                onClick={() => cancelLeave()}
+              >
+                {leaveUi.started ? 'Stay here' : 'Cancel'}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div className="ws-header-right" ref={slotRef} />
       </header>
       <div className="ws-body">
@@ -541,6 +647,8 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
             src={`/plugins/${encodeURIComponent(route.plugin)}/${entry}`}
           />
         ) : null}
+        {/* While the exit hook runs, nothing is edited after its snapshot (the frame is inert too). */}
+        {leaveShown ? <div className="ws-leave-cover" data-ws-leave-cover="1" aria-hidden="true" /> : null}
         {!blocked && !connected ? (
           <div className="ws-loading" data-ws-loading="1" role="status">
             Starting {name}…

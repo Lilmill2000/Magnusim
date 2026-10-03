@@ -131,6 +131,10 @@ export const LINK_HOST_PATHS = [
   'src/workspace/linkReport.ts',
   'src/workspace/bridge.ts',
   'src/workspace/WorkspaceOverlay.tsx',
+  // Exit sync (1.6): the leave guard runs the page's hook; openProject and the landing.
+  'src/workspace/leaveGuard.ts',
+  'src/home/controller.ts',
+  'src/workbench/runtime.js',
   'src/workbench/dialogs.ts',
   'python/cfddesk/cad/',
   'python/cfddesk/project/',

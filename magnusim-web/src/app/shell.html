@@ -668,6 +668,8 @@
             <p class="wb-empty-hint">Import STEP, IGES, BREP, STL, OBJ or PLY to start the setup</p>
             <div id="wb-empty-start" class="wb-empty-start"></div>
           </div>
+          <!-- A linked geometry's update the workspace left running (host API 1.6): its state, in place of the empty-project buttons on a first sync. -->
+          <div id="wb-link-wait" class="wb-link-wait" role="status" hidden></div>
           <div id="inspect-readout" class="inspect-readout" hidden aria-hidden="true"></div>
           <div id="inspect-pins" class="inspect-pins" hidden aria-label="Inspected points"></div>
           <div id="measure-dock" class="measure-dock">

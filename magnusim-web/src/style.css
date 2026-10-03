@@ -3965,6 +3965,23 @@ select.fp-select {
   display: flex;
 }
 
+/* A linked geometry's update left running by its workspace ("Continue in background"). */
+.wb-link-wait {
+  position: absolute;
+  left: calc(var(--vp-viewer-left, 0px) + (100% - var(--vp-viewer-left, 0px) - var(--vp-viewer-right, 0px)) / 2);
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 8;
+  pointer-events: none;
+  padding: 8px 14px;
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: var(--mg-radius-lg);
+  background: var(--mg-bg);
+  color: var(--mg-text-muted);
+  font-size: var(--mg-text-md);
+}
+.wb-link-wait[hidden] { display: none; }
+
 .wb-empty-btn {
   pointer-events: auto;
   border: 0;
@@ -5093,7 +5110,28 @@ body.is-recording #viewport-gizmo {
   border-radius: var(--mg-radius-pill);
   background: var(--mg-warning);
 }
+/* A leave running the page's exit hook (API 1.6): what it does, Cancel, "Continue in background". */
+.ws-leave { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 0 12px; }
+/* Back while the hook runs: disabled, and it looks it. */
+.ws-header .home-btn:disabled { opacity: 0.5; cursor: default; }
+.ws-header .home-btn:disabled:hover { background: #fff; }
+.ws-leave-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mg-text-muted);
+  font-size: var(--mg-text-md);
+}
 .ws-body { position: relative; flex: 1; min-height: 0; background: var(--mg-surface); }
+/* Over the page while its exit hook runs: nothing is edited after its snapshot. */
+.ws-leave-cover {
+  position: absolute;
+  inset: 0;
+  background: var(--mg-bg);
+  opacity: 0.55;
+  cursor: progress;
+}
 .ws-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--mg-bg); }
 .ws-loading {
   position: absolute;

@@ -2,6 +2,16 @@
 
 The host loads a plugin whose `api_version` has the same major version as its own (`cfddesk.registry.API_VERSION`). A minor version adds things; it never removes or changes what an older minor version offered, so a `1.0` plugin loads unchanged on a `1.1` host. The one exception is a safety fix, listed under the version that made it (1.2 made `ws.data` paths stricter).
 
+## 1.6
+
+Host API 1.6 (`API_VERSION`, and `hostVersion` in a workspace's context), workspace SDK 1.3.0; `magnusim_sdk` stays 1.3.0. A 1.5 plugin loads unchanged.
+
+**Exit sync.** `ws.nav.onLeave(handler | null)` registers one exit hook per page load (null clears it). The app runs it on every way out it owns, with `reason` `back`, `frame-back`, `history`, `project`, `home` or `results`, an `AbortSignal` and `progress(fraction, label?)`; the handler saves, links (`ws.project.linkGeometry`) and may return `{ view }`. Turning the plugin off, closing or reloading the tab and a crashed page run no hook. The app's question about a new shape shows inside the leave; "Keep editing" rejects the link with `cancelled` and the workspace stays. A throw, a refused link, a lost page or 30 s with no progress and no bridge call made during the leave end in one question ("Couldn't update the project"), which says whether the link reached the app. `openProject(id, {askToLeave: false})` runs the hook with no question and answers the app's question "Overwrite". During a leave `nav.back()` answers `false`. A 1.5 host refuses `nav.onLeave` with `not_allowed`. `authoring.md` "Exit sync (1.6)" has the contract.
+
+**The camera.** `ViewState` `{position, target, up, projection, fovDeg?, height?}` (model mm, Z up; `fovDeg` vertical; `height` the full visible height of an orthographic view), from the hook's result or `LinkOptions.view` (new, kept in the app's page, never sent to the server); the last one wins, a bad one is dropped. It is applied when the user goes Back to the project, also when the hook linked nothing.
+
+**Bridge messages** (the SDK sends them; listed for a page that talks to the port itself): `nav.leaveHook {on}`, `nav.leaveProgress {leave, fraction, label}`, `nav.leaveDone {leave, ok, message?, view?}`; the events `leave {leave, reason}` and `leaveAbort {leave}`.
+
 ## 1.5
 
 Host API 1.5 (`API_VERSION`, and `hostVersion` in a workspace's context), workspace SDK 1.2.0, `magnusim_sdk` 1.3.0. A 1.4 plugin loads unchanged.

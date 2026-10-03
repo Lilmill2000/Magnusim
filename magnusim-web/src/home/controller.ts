@@ -7,7 +7,7 @@
 
 import { formatElapsed, formatSimTime } from '../plugin-ui/format/time';
 import { initSetupWizard } from '../wizard/controller';
-import { confirmLeaveWorkspace, openWorkspaceRoute, workspaceDirty } from '../workspace/leaveGuard';
+import { confirmLeaveWorkspace, leaveNeedsWork, openWorkspaceRoute, workspaceDirty } from '../workspace/leaveGuard';
 import { hashIsProject, parseWorkspaceHash } from '../workspace/route';
 import { loadStartActions, shownStartActions, startActionsNow, startKey } from '../workspace/startActions';
 
@@ -331,11 +331,14 @@ export async function openProject(id, { reloadIfNeeded = true, askToLeave = true
     return { ok: true, project: window.__CFD_W16__.project };
   }
 
-  // Another project replaces an open workspace with unsaved work: ask first
-  // (askToLeave: false never asks, it stays).
+  // Another project replaces an open workspace with unsaved work or an exit hook (API 1.6):
+  // ask first, and run the hook. askToLeave: false never asks: it runs the hook (the host's
+  // link question answered "Overwrite"), goes on once the server has the link, and stays
+  // when the hook fails or the page is still dirty.
   const ws = openWorkspaceRoute();
-  if (ws && ws.projectId !== want && workspaceDirty() && !(await confirmLeaveWorkspace('project', { interactive: askToLeave }))) {
-    return { ok: false, stayed: true, error: 'The open workspace has unsaved changes.' };
+  if (ws && ws.projectId !== want && leaveNeedsWork() && !(await confirmLeaveWorkspace('project', { interactive: askToLeave }))) {
+    const error = workspaceDirty() ? 'The open workspace has unsaved changes.' : "The open workspace's update of the project did not finish.";
+    return { ok: false, stayed: true, error };
   }
   // It may have started opening while the question was on screen.
   if (openInflight && openInflight.id === want) {

@@ -4,7 +4,12 @@ Plugins that link a project geometry, for the link tests. None of them is a real
 design tool: the host's link must work for any plugin.
 
 - `link-demo/`: kind **Demo** links a geometry (`links_geometry = true`), kind
-  **Sketch** does not. `workspace/exports/` holds the files its tests link (and
+  **Sketch** does not. When its study's record has `leave_hook` set (the exit-sync
+  tests set it, host 1.6), its page registers an exit hook (`ws.nav.onLeave`): the page
+  edits a design ("Change to v2"), saves it, and the hook saves unsaved work and links
+  the saved design on every way out; `#hook-mode` makes it throw, stall, link without
+  saving, call `nav.back()`, reload, or do nothing, and each run logs its reason in
+  `studies/<id>/hook-log.json`. `workspace/exports/` holds the files its tests link (and
   its page links through the bridge): deterministic
   BREPs (binary and text) and face-name sidecars, built by
 

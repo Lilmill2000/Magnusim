@@ -16,6 +16,29 @@
       <p>Status: <span id="link-status">idle</span> (<span id="link-stage"></span>)</p>
       <p>Result: <span id="link-result"></span></p>
       <p>Geometry events: <span id="link-events"></span></p>
+      <h2>Design (exit sync, host 1.6)</h2>
+      <p>Exit hook: <span id="hook-on">off</span>. Design: <span id="design">none</span></p>
+      <p>
+        <button type="button" id="edit-v1">Change to v1</button>
+        <button type="button" id="edit-v2">Change to v2</button>
+        <button type="button" id="edit-v3">Change to v3</button>
+        <button type="button" id="edit-v1-renamed">Rename v1's faces</button>
+        <button type="button" id="save">Save</button>
+        <button type="button" id="done">Done</button>
+      </p>
+      <p>
+        <label>Hook mode <input type="text" id="hook-mode" value="sync" size="12" /></label>
+        <label>Delay (ms) <input type="number" id="hook-delay" value="0" size="6" /></label>
+        <label>After (ms) <input type="number" id="hook-after" value="0" size="6" /></label>
+        <label><input type="checkbox" id="hook-view" /> Return a camera</label>
+        <label><input type="checkbox" id="link-view" /> Link with a camera</label>
+        <label><input type="checkbox" id="link-always" /> Link even when unchanged</label>
+      </p>
+      <p>Hook: <span id="hook-status"></span> <span id="hook-back"></span></p>
+      <p>
+        <label>Case <input type="text" id="case" value="cases/fixture" /></label>
+        <button type="button" id="open3d">Open in 3D</button>
+      </p>
     </main>
   </body>
 </html>

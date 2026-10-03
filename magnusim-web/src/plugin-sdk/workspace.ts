@@ -14,7 +14,7 @@
  */
 
 /** The bridge's version; a host accepts a workspace built for the same major version. */
-export const SDK_VERSION = '1.2.0';
+export const SDK_VERSION = '1.3.0';
 
 /** A project-level study record (plugins/<key>/studies/<sid>/study.json) plus the plugin's own fields. */
 export interface StudyRecord {
@@ -54,9 +54,10 @@ export interface WorkspaceContext {
   units: UnitSystem;
   theme: ThemeInfo;
   /**
-   * The host's bridge API version ("1.3"). To use a call a later host added,
+   * The host's bridge API version ("1.6"). To use a call a later host added,
    * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2,
-   * ws.compute and ws.results need 1.3), or catch the refusal: an older host
+   * ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5,
+   * ws.nav.onLeave 1.6), or catch the refusal: an older host
    * rejects a call it does not know with code "not_allowed".
    */
   hostVersion: string;
@@ -197,6 +198,12 @@ export interface LinkOptions {
   basedOnRev: number | null;
   /** The geometry's name; the default is the study's title. */
   name?: string;
+  /**
+   * The camera the project's viewport lands with when the workspace closes (host 1.6). It
+   * stays in the app's page and is never sent to the server; the exit hook's own `view`
+   * (nav.onLeave) replaces it when it comes later. A bad view is dropped.
+   */
+  view?: ViewState;
   /** Called as the update moves through its stages (queued with the jobs ahead of it). */
   onProgress?: (p: { stage: LinkStage; fraction: number | null; label?: string; ahead?: number }) => void;
 }
@@ -206,7 +213,7 @@ export interface LinkResult {
   name: string;
   rev: number;
   fromRev: number | null;
-  /** This call made the geometry (a first link). */
+  /** This call made the geometry: a first link, or the user chose "Save as new geometry" (a new geometryId). */
   created: boolean;
   /**
    * none: nothing but sourceVersion recorded; names: names or colours only, the rev
@@ -242,6 +249,44 @@ export interface LinkedGeometry {
   error: string | null;
   lostFaces: number;
 }
+
+/**
+ * A camera (host 1.6), the same for every plugin: model mm in the frame of the exported
+ * shape (the BREP has no transform), Z up as the app's viewport. `fovDeg` is the vertical
+ * angle of a perspective view (as three.js PerspectiveCamera.fov); `height` is the full
+ * visible height in mm of an orthographic one. The app's window has another width, so the
+ * sides crop differently; the vertical extent matches.
+ */
+export interface ViewState {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  projection: 'perspective' | 'orthographic';
+  fovDeg?: number;
+  height?: number;
+}
+
+/**
+ * Why the user leaves the workspace (host 1.6): the header's Back (`back`), the page's own
+ * nav.back() (`frame-back`), the browser's Back or Forward or a typed link (`history`),
+ * another project (`project`), Home (`home`), or results.openIn3D (`results`).
+ */
+export type LeaveReason = 'back' | 'frame-back' | 'history' | 'project' | 'home' | 'results';
+
+/** What an exit hook gets (host 1.6). */
+export interface LeaveEvent {
+  reason: LeaveReason;
+  /** Aborted when the user cancels or stays, or the hook stalls (30 s with no progress and no call). */
+  signal: AbortSignal;
+  /** Say how far it is (0 to 1, or null) and what it does: shown in the workspace header. */
+  progress(fraction: number | null, label?: string): void;
+}
+
+/**
+ * An exit hook (host 1.6): save the design, then link it (ws.project.linkGeometry), then
+ * return. The camera it returns is the one the project's viewport lands with.
+ */
+export type LeaveHandler = (leave: LeaveEvent) => Promise<{ view?: ViewState } | void> | { view?: ViewState } | void;
 
 export interface ConfirmOptions {
   title: string;
@@ -392,6 +437,20 @@ export interface Workspace {
      * nav.back() to leave without a question.
      */
     setDirty(dirty: boolean, message?: string): Promise<void>;
+    /**
+     * The exit hook (host 1.6; an older host rejects with code "not_allowed"): the app runs
+     * it on every way out it owns (Back, nav.back(), browser Back and links, another project,
+     * Home, results.openIn3D), before it asks about unsaved work. The handler saves, calls
+     * setDirty(false), links (ws.project.linkGeometry), and returns; a page's own "Done"
+     * just calls nav.back(). Its linkGeometry call may meet the app's question ("Save as
+     * new", "Overwrite", "Keep editing"): it stays pending meanwhile, and "Keep editing"
+     * rejects it with `cancelled`, ends the leave and keeps the workspace open (return at
+     * once then). A throw, `signal` aborting, or 30 s with no progress and no call ends in
+     * one question to the user ("Couldn't update the project"). One handler per page load;
+     * null clears it. Turning the plugin off, closing or reloading the tab, and a crashed
+     * page run no hook: the geometry keeps its last update.
+     */
+    onLeave(handler: LeaveHandler | null): Promise<void>;
   };
   /**
    * OpenFOAM cases this study's page writes and runs (host 1.3: check
@@ -529,6 +588,9 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   const jobListeners = new Map<string, Set<(ev: JobEvent) => void>>();
   // linkGeometry calls in flight, by their token: the progress the host sends for each.
   const linkProgress = new Map<string, NonNullable<LinkOptions['onProgress']>>();
+  // The exit hook (host 1.6), and the leaves it is running, by the host's id for each.
+  let leaveHandler: LeaveHandler | null = null;
+  const leaves = new Map<string, AbortController>();
   let followingGeometry = false;
   // The follow calls already sent ("<method> <id>"): one per job and kind of job.
   const followed = new Set<string>();
@@ -560,6 +622,15 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       }
       return;
     }
+    if (msg.event === 'leave') {
+      void runLeave(msg.data);
+      return;
+    }
+    if (msg.event === 'leaveAbort') {
+      const id = String(((msg.data || {}) as { leave?: unknown }).leave || '');
+      leaves.get(id)?.abort(new DOMException('The leave was cancelled', 'AbortError'));
+      return;
+    }
     if (msg.event === 'units') ctx.units = msg.data as UnitSystem;
     if (msg.event === 'theme') ctx.theme = msg.data as ThemeInfo;
     if (msg.event === 'study') ctx.study = msg.data as StudyRecord;
@@ -574,6 +645,41 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       if (transfer && transfer.length) port.postMessage({ id, method, params }, transfer);
       else port.postMessage({ id, method, params });
     });
+  }
+
+  /**
+   * The host runs the exit hook for one leave: the handler's progress goes back as
+   * nav.leaveProgress, its end (and its camera) as nav.leaveDone. With no handler (cleared
+   * meanwhile) the leave is done at once.
+   */
+  async function runLeave(data: unknown): Promise<void> {
+    const d = (data || {}) as { leave?: unknown; reason?: unknown };
+    const id = typeof d.leave === 'string' ? d.leave : '';
+    if (!id || leaves.has(id)) return;
+    const ctl = new AbortController();
+    leaves.set(id, ctl);
+    const handler = leaveHandler;
+    let done: Record<string, unknown>;
+    try {
+      const out = handler
+        ? await handler({
+            reason: String(d.reason || 'back') as LeaveReason,
+            signal: ctl.signal,
+            progress: (fraction, label) => {
+              if (ctl.signal.aborted) return;
+              const f = typeof fraction === 'number' && Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : null;
+              void call('nav.leaveProgress', { leave: id, fraction: f, ...(label ? { label: String(label) } : {}) }).catch(() => undefined);
+            },
+          })
+        : undefined;
+      const view = out && typeof out === 'object' ? (out as { view?: unknown }).view : undefined;
+      done = { leave: id, ok: true, ...(view !== undefined ? { view } : {}) };
+    } catch (e) {
+      done = { leave: id, ok: false, message: e instanceof Error ? e.message : String(e ?? '') };
+    } finally {
+      leaves.delete(id);
+    }
+    void call('nav.leaveDone', done).catch(() => undefined);
   }
 
   /** Listen to a job's events; the first listener asks the host to follow it (`method`). */
@@ -716,9 +822,9 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     project: {
       info: () => call('project.info'),
       linkGeometry: async (o) => {
-        // The camera and the callback stay in the page; the host gets the call's fields.
-        const { onProgress, ...rest } = (o || {}) as LinkOptions & { view?: unknown };
-        delete (rest as { view?: unknown }).view;
+        // The callback stays in the page; the host gets the call's fields (the camera stays
+        // in the app's page: the server never gets it).
+        const { onProgress, ...rest } = (o || {}) as LinkOptions;
         const token = newInstance();
         if (typeof onProgress === 'function') linkProgress.set(token, onProgress);
         try {
@@ -741,6 +847,11 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       back: async () => (await call<{ left?: boolean } | null>('nav.back'))?.left !== false,
       setDirty: async (dirty, message) => {
         await call('nav.setDirty', { dirty: dirty === true, message: String(message ?? '') });
+      },
+      onLeave: async (handler) => {
+        if (handler !== null && typeof handler !== 'function') throw new TypeError('nav.onLeave takes a function, or null to clear it');
+        await call('nav.leaveHook', { on: !!handler });
+        leaveHandler = handler;
       },
     },
     on(event: string, fn: (data: never) => void) {

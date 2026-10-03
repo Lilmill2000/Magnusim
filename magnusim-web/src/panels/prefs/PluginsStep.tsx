@@ -4,7 +4,7 @@ import { PanelBoundary } from '../../islands';
 import { panelsFor } from '../../plugin-api';
 import { loadPluginUi, pluginClientErrors, subscribePluginClients, type ListedPlugin } from '../../plugins/loader';
 import { useProjectStore } from '../../store/project';
-import { confirmLeaveWorkspace, openWorkspaceRoute, withdrawLeaveApproval } from '../../workspace/leaveGuard';
+import { confirmLeaveWorkspace, leaveInProgress, openWorkspaceRoute, withdrawLeaveApproval } from '../../workspace/leaveGuard';
 
 /** A plugin's own environment ([python] in its manifest), as the server reports it. */
 type PluginEnv = {
@@ -185,6 +185,11 @@ export function PluginsStep() {
   async function setEnabled(key: string, enabled: boolean) {
     // Turning off the plugin whose workspace is open asks first when it has unsaved work; Cancel sends nothing.
     const closesWorkspace = !enabled && openWorkspaceRoute()?.plugin === key;
+    // Its workspace is updating the project on the way out (API 1.6): that ends first.
+    if (closesWorkspace && leaveInProgress()) {
+      setNote('Wait until the workspace has finished updating the project, then turn it off.');
+      return;
+    }
     if (closesWorkspace && !(await confirmLeaveWorkspace('plugin-off'))) return;
     setBusy(key);
     setNote('');

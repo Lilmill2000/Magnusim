@@ -6,6 +6,8 @@ vi.mock('../wizard/controller', () => ({ initSetupWizard: () => {} }));
 const guard = vi.hoisted(() => ({
   route: null as null | { projectId: string; plugin: string; workspace: string; studyId: string },
   dirty: false,
+  // The page registered an exit hook (API 1.6): leaving needs work even when it is clean.
+  hook: false,
   // The user's answer: at once, or (a promise) once they give it.
   answer: false as boolean | Promise<boolean>,
   asked: [] as unknown[][],
@@ -13,6 +15,7 @@ const guard = vi.hoisted(() => ({
 vi.mock('../workspace/leaveGuard', () => ({
   openWorkspaceRoute: () => guard.route,
   workspaceDirty: () => guard.dirty,
+  leaveNeedsWork: () => guard.dirty || guard.hook,
   confirmLeaveWorkspace: async (reason: string, opts: { interactive?: boolean } = {}) => {
     guard.asked.push([reason, opts]);
     return opts.interactive === false ? false : await guard.answer;
@@ -62,6 +65,7 @@ describe('openProject over a workspace with unsaved work', () => {
   beforeEach(() => {
     guard.route = { projectId: 'proj', plugin: 'ws-demo', workspace: 'bench', studyId: 'st-1' };
     guard.dirty = true;
+    guard.hook = false;
     guard.answer = false;
     guard.asked = [];
     opens = [];
@@ -151,5 +155,24 @@ describe('openProject over a workspace with unsaved work', () => {
     await openProject('other', { reloadIfNeeded: false });
     expect(guard.asked).toEqual([]);
     expect(opens).toEqual(['proj', 'proj', 'other']);
+  });
+
+  it('a clean page with an exit hook (API 1.6) goes through the guard, which runs it; when it stays, nothing opens', async () => {
+    guard.dirty = false;
+    guard.hook = true;
+    expect(await openProject('other', { reloadIfNeeded: false, askToLeave: false })).toEqual({
+      ok: false,
+      stayed: true,
+      error: "The open workspace's update of the project did not finish.",
+    });
+    expect(guard.asked).toEqual([['project', { interactive: false }]]);
+    expect(opens).toEqual([]);
+    guard.answer = true;
+    expect(await openProject('other', { reloadIfNeeded: false })).toMatchObject({ ok: true, project: { id: 'other' } });
+    expect(guard.asked).toEqual([
+      ['project', { interactive: false }],
+      ['project', { interactive: true }],
+    ]);
+    expect(opens).toEqual(['other']);
   });
 });

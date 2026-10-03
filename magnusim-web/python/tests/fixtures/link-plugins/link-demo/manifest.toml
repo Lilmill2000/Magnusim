@@ -1,7 +1,7 @@
 key = "link-demo"
 name = "Link demo"
 version = "1.0.0"
-api_version = "1.5"
+api_version = "1.6"
 license = "GPL-3.0-or-later"
 description = "Test plugin that links a project geometry (host API 1.5): kind Demo links, kind Sketch does not"
 authors = "Magnusim"

@@ -157,7 +157,7 @@ test('gate:l1-suites a plugin that declares start actions or links a geometry de
     for (const p of ['src/home/', 'src/workspace/startActions.ts', 'src/chrome/MenuButton.tsx', 'python/cfddesk/registry/']) {
       assert.ok(START_ACTION_HOST_PATHS.includes(p), p);
     }
-    for (const p of ['src/workspace/linkChoice.ts', 'scripts/link-store.js', 'scripts/link-build.js', 'scripts/compute-slot.js', 'python/cfddesk/project/']) {
+    for (const p of ['src/workspace/linkChoice.ts', 'scripts/link-store.js', 'scripts/link-build.js', 'scripts/compute-slot.js', 'python/cfddesk/project/', 'src/workspace/leaveGuard.ts', 'src/home/controller.ts', 'src/workbench/runtime.js']) {
       assert.ok(LINK_HOST_PATHS.includes(p), p);
     }
     for (const list of [START_ACTION_HOST_PATHS, LINK_HOST_PATHS]) assert.ok(!list.some((p) => p.startsWith('bundled-plugins/')), list.join(' '));
@@ -173,8 +173,14 @@ test('gate:l1-suites a plugin that declares start actions or links a geometry de
       const plan = planSuites([changed], discoverPluginSuites(web));
       assert.ok(plan.plugins.starter && plan.plugins.both && plan.plugins.all, changed);
       assert.equal(plan.plugins.quiet, undefined, changed);
-      assert.equal(plan.plugins.linker, undefined, changed);
+      // openProject and the landing run a linking page's exit hook too (API 1.6).
+      if (changed === 'src/home/controller.ts' || changed === 'src/workbench/runtime.js') assert.ok(plan.plugins.linker, changed);
+      else assert.equal(plan.plugins.linker, undefined, changed);
     }
+    // The leave guard (exit sync, API 1.6) runs the linking group, not the start-action one.
+    const guard = planSuites(['src/workspace/leaveGuard.ts'], discoverPluginSuites(web));
+    assert.ok(guard.plugins.linker && guard.plugins.both && guard.plugins.all);
+    assert.equal(guard.plugins.starter, undefined);
     // The worker files that read and repair a linked geometry (API 1.5) run both groups.
     for (const changed of ['python/cfddesk/worker/methods.py', 'python/cfddesk/worker/link_methods.py']) {
       const plan = planSuites([changed], discoverPluginSuites(web));

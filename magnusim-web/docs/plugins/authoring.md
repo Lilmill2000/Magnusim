@@ -4,13 +4,13 @@ A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins
 
 Copy `templates/plugin/` to start. That folder has `pyproject.toml`, `manifest.toml`, `register()`, and a pytest that loads the copy from a temporary `plugins/` directory.
 
-## Manifest 1.5
+## Manifest 1.6
 
 ```toml
 key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
-api_version = "1.5"
+api_version = "1.6"
 license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
@@ -462,6 +462,54 @@ assert json.loads((out / "face_names.json").read_text(encoding="utf-8"))["faces"
 From a shell (the same checks the app runs; exit code 0 when it would accept the pair): `python -m magnusim_sdk.link check part.bbrep face_names.json`.
 
 **Schema fields that hold faces.** A boundary-condition kind's, monitor kind's or mesher's `SchemaField` with `widget="faces"`, `"patch"` or `"body"` is rewritten by an update like the host's own face lists; a field with your own widget says so with `holds="faces"` or `holds="body"` (published as `x-cfddesk.holds`). Its value is read from the record's top level or its `settings` (a mesher's from `settings.mesher_settings`). Study-level settings with these widgets are not supported in 1.5.
+
+## Exit sync (1.6)
+
+A linking page registers an **exit hook**: the app runs it on every way out of the workspace that it owns, so the geometry gets the design the user leaves with. The contract is **save, then link**: the handler saves unsaved work, calls `nav.setDirty(false)`, links with `ws.project.linkGeometry`, and returns. A page's own "Done" button just calls `ws.nav.back()`; the hook does the sync.
+
+```ts test
+import { connect } from '@magnusim/workspace';
+
+const ws = await connect();
+const sid = ws.context.study.id;
+// An older host refuses onLeave with code "not_allowed": link from your own button then.
+await ws.nav.onLeave(async ({ reason, signal, progress }) => {
+  progress(null, 'Saving the design');
+  // ...save unsaved work here, then:
+  await ws.nav.setDirty(false);
+  if (signal.aborted) return;
+  progress(0.5, 'Exporting the design');
+  const shape = await ws.files.write(`studies/${sid}/export/part.bbrep`, new Uint8Array([1, 2, 3]));
+  const linked = await ws.project.linkedGeometry();
+  const study = await ws.study.get();
+  const sourceVersion = Number(study.source_version) || 0;
+  try {
+    await ws.project.linkGeometry({
+      shape: { rel: shape.rel, format: 'brep', sha256: shape.sha256 },
+      sourceVersion,
+      basedOnRev: linked ? linked.rev : null,
+    });
+  } catch (e) {
+    // "Keep editing" in the app's question: the leave is over and the workspace stays open.
+    if ((e as { code?: string }).code === 'cancelled') return;
+    throw e;
+  }
+  console.log('left by', reason);
+  // The camera the project's viewport lands with (optional).
+  return { view: { position: [400, 0, 100], target: [0, 0, 0], up: [0, 0, 1], projection: 'perspective', fovDeg: 30 } };
+});
+document.getElementById('done')?.addEventListener('click', () => void ws.nav.back());
+```
+
+- **Every way out the app owns runs it,** with its `reason`: the header's Back (`back`), your page's `nav.back()` (`frame-back`), the browser's Back or Forward and a typed link (`history`), opening another project (`project`), Home (`home`), and `results.openIn3D` (`results`). **None of these run it:** turning your plugin off in Settings (only the usual question about unsaved work), closing or reloading the tab, and a page that crashed or does not answer. The geometry then keeps its last update, and its row says "Not up to date with <study>." while the saved design is newer.
+- **Order.** The app leaves full screen, checks that your page answers, runs the hook, then asks about unsaved work only if the page is still dirty, then leaves. Nothing is drawn for a hook quicker than 400 ms; after that the workspace header shows `progress`'s label (or the link's stage: "Queued behind 2 jobs (see Queue)", "Waiting for your choice"), with Cancel, and your page is covered so nothing is edited after the snapshot. Once the link's job exists the button reads "Stay here": the job goes on whatever the user does (it is not stopped), and the workspace stays open.
+- **The app's question** ("Save as new geometry", "Overwrite", "Keep editing", see "Linking a geometry (1.5)") shows inside the leave, over your page: your `linkGeometry` stays pending. "Keep editing" rejects it with `cancelled`, ends the leave and keeps the workspace open with no further question: return at once.
+- **Long work.** The leave waits while a bridge call made during it is in flight (an upload, the link) and while the link's job is queued. The call that started the leave (your `nav.back()` or `results.openIn3D`, which wait for it) does not count. A hook with no `progress` and no call for **30 s** has stalled (the clock stops while an app dialog is open); a worker that exports for long must post progress at least every 10 s. Once the link's job exists (5 s after, or at once when it is queued) the header offers **"Continue in background"**: the workspace closes and the update goes on in the app.
+- **When it fails** (a throw, a stall, a refused link such as `unsaved`, your page gone), the app asks once: "Couldn't update the project", with your message, Stay (the default) or "Leave anyway". It says what became of the link: "<Geometry> keeps its last update." when none reached the app, "The update of <Geometry> goes on." when the app took it (its job runs on, whatever your page does), "<Geometry> was updated." when it went through (the update's report shows if the user stays). `signal` aborts when the user cancels, stays or the hook stalls.
+- **A script that cannot ask** (`openProject` with `askToLeave: false`) runs the hook with no question: the app's link question is answered "Overwrite", and the leave goes on once the server has the link.
+- **One leave at a time.** During a leave, Back is disabled and `nav.back()` answers `false`, also from inside the handler.
+- **`setDirty` keeps its meaning,** "would be lost": a saved design that is not linked yet is not dirty.
+- **The camera** (`ViewState`, optional, from the hook's result or `linkGeometry`'s `view`; the last one wins) is model mm in the frame of your export, Z up like the app's viewport: `position`, `target`, `up`, `projection` (`perspective` with the vertical angle `fovDeg`, or `orthographic` with the full visible `height` in mm). The app's window has another width, so the sides crop differently. A view with a number that is not finite, the position on the target, or `up` along the view direction is dropped. It is applied when the user goes Back to the project (the header's or your `nav.back()`) and the part shows (stage geometry or setup), also when the hook linked nothing because the design did not change: the project then shows the study's geometry with that camera.
 
 ## UI kit (1.3)
 

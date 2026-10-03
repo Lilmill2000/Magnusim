@@ -9,5 +9,6 @@ A plugin whose study kind opens in its own full page (a workspace), for host API
 Optional, in `manifest.toml`:
 - `[[start_actions]]` (host 1.4): buttons that create a study and open it, in the empty project, the header, the New Project dialog and Home.
 - `links_geometry = true` (host 1.5): the page may hand a design to the simulation as a project geometry (`workspace/main.js` has the call, commented out; `docs/plugins/authoring.md`, "Linking a geometry (1.5)", is its how-to).
+- With `links_geometry`, an exit hook (host 1.6): `ws.nav.onLeave` saves and links on every way out of the workspace (`workspace/main.js` has it, commented out; `docs/plugins/authoring.md`, "Exit sync (1.6)").
 
 `docs/plugins/authoring.md` describes every part; `python/tests/unit/test_start_actions.py` loads this template as it is and with its examples turned on.

@@ -16,9 +16,12 @@
  *   once more; 409 says "<Geometry> was updated. This change was not saved." and loads
  *   the geometry and its setup again (the edit is lost, visibly);
  * - picks (`canPickInto`): a face is picked into a record only when its stamp is the
- *   shown rev (no stamp counts as shown); otherwise the record is read again first;
+ *   shown rev (no stamp counts as shown); otherwise the record is read again first; and
+ *   no pick lands while a landing or a reload loads the part and its setup again
+ *   (`pauseFacePicks`, API 1.6);
  * - a second tab: each tree read compares a linked geometry's rev and names with the
- *   ones shown and loads it again, once, when they differ; this study's link events
+ *   ones shown and loads it again, once, when they differ (only its names when the rev
+ *   is the same: the faces file is not loaded again); this study's link events
  *   (`/api/plugin-geometry/events`) say when a job is queued, running or ended, for the
  *   geometry's row, and an ended one reads the tree again.
  *
@@ -63,11 +66,23 @@ interface Shown {
   name: string;
 }
 
+/** How a linked geometry is loaded again (API 1.6). */
+export interface ReloadOpts {
+  namesOnly?: boolean;
+  deferCad?: boolean;
+  /** Load it even when a reload that just ended shows the server's rev (its part was set aside). */
+  force?: boolean;
+}
+
 interface Host {
   /** The geometry the viewport shows (its id), or ''. */
   activeGeometryId: () => string;
-  /** Load a linked geometry and its studies' setup again (the viewport and the panels). */
-  reloadGeometry: (geometryId: string, key: string) => Promise<unknown> | unknown;
+  /**
+   * Load a linked geometry and its studies' setup again (the viewport and the panels);
+   * `namesOnly`: the rev is the same, only its face and body names are read again;
+   * `deferCad`: results are opening, so the part itself loads when they close.
+   */
+  reloadGeometry: (geometryId: string, key: string, opts?: ReloadOpts) => Promise<unknown> | unknown;
 }
 
 const host: Host = {
@@ -82,7 +97,30 @@ const listeners = new Set<() => void>();
 /** Started runs made on an older rev of their linked geometry, by run id: the geometry's name. */
 const olderRuns = new Map<string, string>();
 let projectOf = '';
-let reloading = new Set<string>();
+/** Reloads in flight, by geometry. */
+let reloading = new Map<string, Promise<void>>();
+/** Landings and reloads now loading a part and its setup: face picks wait for them. */
+let picksPaused = 0;
+
+/**
+ * Face picks are off until the returned function is called (LINK 5.16, 6.5 step 3): a
+ * landing turns them off before it loads the new part and on after its setup is read
+ * again, so no face is picked into a record by the old part's numbers.
+ */
+export function pauseFacePicks(): () => void {
+  picksPaused += 1;
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    picksPaused = Math.max(0, picksPaused - 1);
+  };
+}
+
+/** A landing or a reload is loading a part and its setup: a face pick is dropped. */
+export function facePicksPaused(): boolean {
+  return picksPaused > 0;
+}
 
 export function bindGeometryRevHost(api: Partial<Host>): void {
   Object.assign(host, api || {});
@@ -138,9 +176,12 @@ export async function adoptServerRev(geometryId: string, accept = true): Promise
   }
 }
 
-/** Load the shown linked geometry again and show it at the server's rev (the landing's step 3). */
-export function reloadLinkedToServer(geometryId: string): Promise<void> {
-  return reloadToServer(geometryId);
+/**
+ * Load the shown linked geometry again and show it at the server's rev (the landing's step
+ * 3); `namesOnly` (step 4): only its names are read again.
+ */
+export function reloadLinkedToServer(geometryId: string, opts?: ReloadOpts): Promise<void> {
+  return reloadToServer(geometryId, opts);
 }
 
 /** The rev and names this tab shows for a linked geometry, or null. */
@@ -211,7 +252,7 @@ async function refusedAsChanged(message: string, geometryId?: string | null): Pr
  * Load a geometry again after a refusal, and show it at the rev the server has: read
  * first, so the rev shown is never newer than the labels loaded.
  */
-async function reloadToServer(geometryId: string): Promise<void> {
+async function reloadToServer(geometryId: string, opts?: ReloadOpts): Promise<void> {
   if (!geometryId) return;
   let node: LinkTreeNode | null = null;
   try {
@@ -223,7 +264,17 @@ async function reloadToServer(geometryId: string): Promise<void> {
   } catch {
     node = null;
   }
-  await reloadNow(geometryId);
+  // A tree read's reload in flight ends first; when it loaded the server's rev already, the
+  // part is not loaded a second time (a faces file can be hundreds of MB).
+  let waited = false;
+  while (reloading.has(geometryId)) {
+    waited = true;
+    await reloading.get(geometryId)?.catch(() => undefined);
+  }
+  const now = shown.get(geometryId);
+  const current =
+    waited && !(opts && opts.force) && !!node && !!now && now.rev === node.rev && now.names8 === String(node.names8 || '');
+  if (!current) await reloadNow(geometryId, opts, true);
   if (node && typeof node.rev === 'number') {
     shown.set(geometryId, { rev: node.rev, names8: String(node.names8 || ''), updating: !!node.updating, name: String(node.name || '') });
     changed();
@@ -294,16 +345,31 @@ function linkKey(s: { rev?: number; names8?: string }): string {
   return `${Number(s.rev) || 0}-${String(s.names8 || '')}`;
 }
 
-async function reloadNow(geometryId: string): Promise<void> {
-  if (!geometryId || reloading.has(geometryId)) return;
+/**
+ * Load a geometry again (once at a time). A tree read's reload is dropped while one runs;
+ * `after` (a landing or a refusal, which then shows the geometry at the server's rev) waits
+ * for the one in flight and loads it again itself, so the rev shown is never ahead of the
+ * part and the labels loaded.
+ */
+async function reloadNow(geometryId: string, opts?: ReloadOpts, after = false): Promise<void> {
+  if (!geometryId) return;
+  if (reloading.has(geometryId)) {
+    if (!after) return;
+    while (reloading.has(geometryId)) await reloading.get(geometryId)?.catch(() => undefined);
+  }
   const s = shown.get(geometryId);
-  reloading.add(geometryId);
+  const run = (async () => {
+    const key = s ? linkKey(s) : String(Date.now());
+    if (opts && (opts.namesOnly || opts.deferCad)) await host.reloadGeometry(geometryId, key, { ...opts });
+    else await host.reloadGeometry(geometryId, key);
+  })();
+  reloading.set(geometryId, run);
   try {
-    await host.reloadGeometry(geometryId, s ? linkKey(s) : String(Date.now()));
+    await run;
   } catch (e) {
     console.warn('[CFD] linked geometry reload', e);
   } finally {
-    reloading.delete(geometryId);
+    if (reloading.get(geometryId) === run) reloading.delete(geometryId);
   }
 }
 
@@ -317,7 +383,7 @@ export function noteTreeGeometries(projectId: string, geometries: LinkTreeNode[]
     projectOf = projectId;
     shown.clear();
     jobs.clear();
-    reloading = new Set();
+    reloading = new Map();
     for (const es of streams.values()) es.close();
     streams.clear();
   }
@@ -337,8 +403,10 @@ export function noteTreeGeometries(projectId: string, geometries: LinkTreeNode[]
       shown.set(gid, next);
     } else if (before.rev !== next.rev || before.names8 !== next.names8 || (before.updating && !next.updating)) {
       // Moved only once the geometry is loaded again: saves made meanwhile are refused.
+      // Only new names at the same rev: no new part (its faces file is not loaded again).
       const target = next;
-      void reloadNow(gid).then(() => {
+      const namesOnly = before.rev === next.rev && before.names8 !== next.names8 && !(before.updating && !next.updating);
+      void reloadNow(gid, { namesOnly }).then(() => {
         shown.set(gid, target);
         changed();
       });
@@ -474,7 +542,8 @@ export function resetGeometryRevForTests(): void {
   scopes.clear();
   listeners.clear();
   projectOf = '';
-  reloading = new Set();
+  reloading = new Map();
+  picksPaused = 0;
   host.activeGeometryId = () => '';
   host.reloadGeometry = () => undefined;
 }

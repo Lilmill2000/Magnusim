@@ -19,7 +19,7 @@ declare module '@magnusim/workspace' {
    * Self-contained: no imports, so the host can serve it to any frame.
    */
   /** The bridge's version; a host accepts a workspace built for the same major version. */
-  export const SDK_VERSION = "1.2.0";
+  export const SDK_VERSION = "1.3.0";
   /** A project-level study record (plugins/<key>/studies/<sid>/study.json) plus the plugin's own fields. */
   export interface StudyRecord {
       id: string;
@@ -58,9 +58,10 @@ declare module '@magnusim/workspace' {
       units: UnitSystem;
       theme: ThemeInfo;
       /**
-       * The host's bridge API version ("1.3"). To use a call a later host added,
+       * The host's bridge API version ("1.6"). To use a call a later host added,
        * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2,
-       * ws.compute and ws.results need 1.3), or catch the refusal: an older host
+       * ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5,
+       * ws.nav.onLeave 1.6), or catch the refusal: an older host
        * rejects a call it does not know with code "not_allowed".
        */
       hostVersion: string;
@@ -183,6 +184,12 @@ declare module '@magnusim/workspace' {
       basedOnRev: number | null;
       /** The geometry's name; the default is the study's title. */
       name?: string;
+      /**
+       * The camera the project's viewport lands with when the workspace closes (host 1.6). It
+       * stays in the app's page and is never sent to the server; the exit hook's own `view`
+       * (nav.onLeave) replaces it when it comes later. A bad view is dropped.
+       */
+      view?: ViewState;
       /** Called as the update moves through its stages (queued with the jobs ahead of it). */
       onProgress?: (p: {
           stage: LinkStage;
@@ -196,7 +203,7 @@ declare module '@magnusim/workspace' {
       name: string;
       rev: number;
       fromRev: number | null;
-      /** This call made the geometry (a first link). */
+      /** This call made the geometry: a first link, or the user chose "Save as new geometry" (a new geometryId). */
       created: boolean;
       /**
        * none: nothing but sourceVersion recorded; names: names or colours only, the rev
@@ -245,6 +252,44 @@ declare module '@magnusim/workspace' {
       error: string | null;
       lostFaces: number;
   }
+  /**
+   * A camera (host 1.6), the same for every plugin: model mm in the frame of the exported
+   * shape (the BREP has no transform), Z up as the app's viewport. `fovDeg` is the vertical
+   * angle of a perspective view (as three.js PerspectiveCamera.fov); `height` is the full
+   * visible height in mm of an orthographic one. The app's window has another width, so the
+   * sides crop differently; the vertical extent matches.
+   */
+  export interface ViewState {
+      position: [number, number, number];
+      target: [number, number, number];
+      up: [number, number, number];
+      projection: 'perspective' | 'orthographic';
+      fovDeg?: number;
+      height?: number;
+  }
+  /**
+   * Why the user leaves the workspace (host 1.6): the header's Back (`back`), the page's own
+   * nav.back() (`frame-back`), the browser's Back or Forward or a typed link (`history`),
+   * another project (`project`), Home (`home`), or results.openIn3D (`results`).
+   */
+  export type LeaveReason = 'back' | 'frame-back' | 'history' | 'project' | 'home' | 'results';
+  /** What an exit hook gets (host 1.6). */
+  export interface LeaveEvent {
+      reason: LeaveReason;
+      /** Aborted when the user cancels or stays, or the hook stalls (30 s with no progress and no call). */
+      signal: AbortSignal;
+      /** Say how far it is (0 to 1, or null) and what it does: shown in the workspace header. */
+      progress(fraction: number | null, label?: string): void;
+  }
+  /**
+   * An exit hook (host 1.6): save the design, then link it (ws.project.linkGeometry), then
+   * return. The camera it returns is the one the project's viewport lands with.
+   */
+  export type LeaveHandler = (leave: LeaveEvent) => Promise<{
+      view?: ViewState;
+  } | void> | {
+      view?: ViewState;
+  } | void;
   export interface ConfirmOptions {
       title: string;
       message?: string;
@@ -400,6 +445,20 @@ declare module '@magnusim/workspace' {
            * nav.back() to leave without a question.
            */
           setDirty(dirty: boolean, message?: string): Promise<void>;
+          /**
+           * The exit hook (host 1.6; an older host rejects with code "not_allowed"): the app runs
+           * it on every way out it owns (Back, nav.back(), browser Back and links, another project,
+           * Home, results.openIn3D), before it asks about unsaved work. The handler saves, calls
+           * setDirty(false), links (ws.project.linkGeometry), and returns; a page's own "Done"
+           * just calls nav.back(). Its linkGeometry call may meet the app's question ("Save as
+           * new", "Overwrite", "Keep editing"): it stays pending meanwhile, and "Keep editing"
+           * rejects it with `cancelled`, ends the leave and keeps the workspace open (return at
+           * once then). A throw, `signal` aborting, or 30 s with no progress and no call ends in
+           * one question to the user ("Couldn't update the project"). One handler per page load;
+           * null clears it. Turning the plugin off, closing or reloading the tab, and a crashed
+           * page run no hook: the geometry keeps its last update.
+           */
+          onLeave(handler: LeaveHandler | null): Promise<void>;
       };
       /**
        * OpenFOAM cases this study's page writes and runs (host 1.3: check

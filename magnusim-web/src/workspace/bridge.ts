@@ -29,6 +29,12 @@
  * `linkProgress`). Link job ids sit in a follow-only set, never in `jobs`: nothing a
  * page can call stops an update. The same stream tells the page when this study's
  * geometry changed (`geometry`), and no other study's page hears it.
+ *
+ * Exit sync (1.6): a page registers its exit hook (nav.leaveHook); the leave guard runs it
+ * through runLeave on each way out the host owns: the event `leave {leave, reason}`, then
+ * the page's nav.leaveProgress and nav.leaveDone (with its camera), or `leaveAbort` when
+ * the user cancels or the hook stalls. While it runs, the bridge tells the guard what
+ * happens (calls in flight, the link's stages, the host's question, the job accepted).
  */
 import type {
   ComputeJob,
@@ -40,12 +46,14 @@ import type {
   StudyRecord,
   ThemeInfo,
   UnitSystem,
+  ViewState,
   WorkspaceContext,
 } from '../plugin-sdk/workspace';
+import type { LeaveReason } from './leaveGuard';
 import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestion } from './linkChoice';
 
 export const HOST_SDK_MAJOR = 1;
-export const HOST_API_VERSION = '1.5';
+export const HOST_API_VERSION = '1.6';
 /** A link job's id (gl-<time>-<hex>, scripts/link-store.js LINK_JOB_RE). */
 const LINK_JOB_ID = /^gl-[a-z0-9]{6,12}-[0-9a-f]{6}$/;
 const PROBE_MS = 1500;
@@ -72,6 +80,90 @@ export function cleanDirtyMessage(raw: unknown): string {
     .trim()
     .slice(0, DIRTY_MESSAGE_MAX);
 }
+
+/**
+ * A camera the page sent (linkGeometry's `view`, or the exit hook's), checked (LINK 6.6):
+ * null when a number is not finite, the position equals the target, `up` lies along the
+ * view direction, the projection is unknown, or the angle or height is out of range.
+ */
+export function viewState(raw: unknown): ViewState | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const v = raw as Record<string, unknown>;
+  const vec = (x: unknown): [number, number, number] | null =>
+    Array.isArray(x) && x.length === 3 && x.every((n) => typeof n === 'number' && Number.isFinite(n)) ? [x[0], x[1], x[2]] : null;
+  const position = vec(v.position);
+  const target = vec(v.target);
+  const up = vec(v.up);
+  if (!position || !target || !up) return null;
+  if (v.projection !== 'perspective' && v.projection !== 'orthographic') return null;
+  const d = [target[0] - position[0], target[1] - position[1], target[2] - position[2]];
+  const dLen = Math.hypot(d[0], d[1], d[2]);
+  const upLen = Math.hypot(up[0], up[1], up[2]);
+  if (!(dLen > 1e-9) || !(upLen > 1e-9)) return null;
+  const cross = [d[1] * up[2] - d[2] * up[1], d[2] * up[0] - d[0] * up[2], d[0] * up[1] - d[1] * up[0]];
+  if (Math.hypot(cross[0], cross[1], cross[2]) <= 1e-6 * dLen * upLen) return null;
+  const out: ViewState = { position, target, up, projection: v.projection };
+  if (v.fovDeg !== undefined && v.fovDeg !== null) {
+    if (typeof v.fovDeg !== 'number' || !Number.isFinite(v.fovDeg) || v.fovDeg <= 0 || v.fovDeg >= 180) return null;
+    out.fovDeg = v.fovDeg;
+  }
+  if (v.height !== undefined && v.height !== null) {
+    if (typeof v.height !== 'number' || !Number.isFinite(v.height) || v.height <= 0) return null;
+    out.height = v.height;
+  }
+  return out;
+}
+
+/** What happens while the page's exit hook runs (API 1.6), as the bridge tells the leave guard. */
+export type LeaveActivity =
+  /** The page's own progress (nav.leaveProgress). */
+  | { kind: 'progress'; fraction: number | null; label: string }
+  /** Bridge calls of the page now in flight (uploads, the link): the hook is busy, not stalled. */
+  | { kind: 'calls'; inFlight: number }
+  /** The link job's stage (queued with the jobs ahead of it, reading, waiting, ...). */
+  | { kind: 'link'; stage: string; ahead: number | null; label: string }
+  /**
+   * The server took the link: a job (`jobId`; `create` for a first link or "Save as new",
+   * which take no queue row; `queued` for an overwrite in the Queue), or nothing to do (null).
+   */
+  | { kind: 'accepted'; jobId: string | null; create: boolean; queued: boolean }
+  /** The host's question is on screen (open), or answered or dropped. */
+  | { kind: 'choosing'; open: boolean }
+  /** The user chose "Keep editing" in the host's question: the leave ends, the workspace stays. */
+  | { kind: 'kept' }
+  /**
+   * A link of this leave's hook ended: it went through (`ok`, with its change; `none`
+   * changed nothing) or it was refused or dropped (the project is as it was).
+   */
+  | { kind: 'linked'; ok: boolean; change: string };
+
+/** How the page's exit hook ended. */
+export interface LeaveHookOutcome {
+  ok: boolean;
+  /** Why not (the page's message, a refused link's, or "its page closed"). */
+  message?: string;
+}
+
+/** One leave the page's exit hook runs. */
+interface LeaveRun {
+  id: string;
+  activity: (a: LeaveActivity) => void;
+  done: (out: LeaveHookOutcome) => void;
+  /** The last link of this leave was refused: its message (cleared by a link that went through). */
+  linkError: string | null;
+  /** Calls of the page that began during this leave and are not answered yet (its stall timer). */
+  inFlight: number;
+}
+
+/**
+ * Calls that are no work of a running hook: the leave's own messages, and the page's own
+ * ways out (its Done, Open in 3D), which wait on a leave themselves (inside a hook they
+ * answer at once).
+ */
+const NOT_HOOK_WORK = new Set(['nav.leaveProgress', 'nav.leaveDone', 'nav.leaveHook', 'nav.back', 'results.openIn3D']);
+
+/** Link refusals that are no error of the hook: "Keep editing", the Queue's remove, a newer link. */
+const QUIET_LINK_ENDS = new Set(['cancelled', 'superseded']);
 
 export interface BridgeScope {
   plugin: string;
@@ -116,6 +208,8 @@ export interface BridgeHooks {
   linkChoice?(question: LinkQuestion, signal: AbortSignal): Promise<LinkChoice | null>;
   /** "Save as new" landed: the new geometry and what its copies came to (the host's report). */
   linkSavedAsNew?(info: { newName: string; oldName: string; copies: LinkCopyOutcome[] | null }): void;
+  /** The camera the page wants the project's viewport to land with (API 1.6, LINK 6.6): the last one wins. */
+  linkView?(view: ViewState): void;
 }
 
 export class BridgeError extends Error {
@@ -315,6 +409,12 @@ export class WorkspaceCalls {
    * question is answered "Overwrite" at once, revision 6's update (LINK 5.0, 6.4).
    */
   private interactive = true;
+  /** The page registered an exit hook (nav.leaveHook, API 1.6). */
+  leaveHookOn = false;
+  /** The leave the page's hook is running, or null. */
+  private leave: LeaveRun | null = null;
+  /** The name of the geometry this study links, as the last link or question said. */
+  private linkedName = '';
   private linkStream: EventSource | null = null;
   private wantsGeometry = false;
   /** Link jobs whose end the page was told of (`geometry` once per job). */
@@ -346,6 +446,69 @@ export class WorkspaceCalls {
   /** Whether a link of this page may show the host's question (false: answer "Overwrite"). */
   setInteractive(on: boolean): void {
     this.interactive = !!on;
+  }
+
+  /** A leave starts running the page's hook: what happens goes to `run.activity` until it ends. */
+  beginLeave(run: { id: string; activity: (a: LeaveActivity) => void; done: (out: LeaveHookOutcome) => void; interactive: boolean }): void {
+    this.leave = { id: run.id, activity: run.activity, done: run.done, linkError: null, inFlight: 0 };
+    this.setInteractive(run.interactive);
+    this.note({ kind: 'calls', inFlight: 0 });
+  }
+
+  /** The leave ended (its hook returned, or the leave was cancelled or went on without it). */
+  endLeave(id: string): void {
+    if (!this.leave || this.leave.id !== id) return;
+    this.leave = null;
+    this.setInteractive(true);
+  }
+
+  /** Tell the running leave (if any) what happened; a listener's failure stays here. */
+  private note(a: LeaveActivity): void {
+    const run = this.leave;
+    if (!run) return;
+    try {
+      run.activity(a);
+    } catch (e) {
+      this.hooks.log('leave activity listener failed', e);
+    }
+  }
+
+  /**
+   * A call of the page came in; the returned function says it was answered. Only a call
+   * that began during the running leave counts for its stall timer: one begun before it
+   * (the page's Done or Open in 3D, which wait on this very leave, or a call of a leave the
+   * user cancelled that is still waiting) is no work of this hook.
+   */
+  callStart(method: string): () => void {
+    const run = this.leave;
+    if (!run || NOT_HOOK_WORK.has(method)) return () => undefined;
+    run.inFlight += 1;
+    this.note({ kind: 'calls', inFlight: run.inFlight });
+    let answered = false;
+    return () => {
+      if (answered) return;
+      answered = true;
+      run.inFlight = Math.max(0, run.inFlight - 1);
+      if (this.leave === run) this.note({ kind: 'calls', inFlight: run.inFlight });
+    };
+  }
+
+  /** That name as this page last heard it (no call to the app). */
+  lastGeometryName(): string {
+    return this.linkedName;
+  }
+
+  /** The name of the geometry this study links ('' before the first link). */
+  async geometryName(): Promise<string> {
+    try {
+      const r = await api<{ linked: LinkedGeometry | null }>(
+        `/api/plugin-geometry/linked?${this.q({ plugin: this.scope.plugin, study_id: this.scope.studyId })}`,
+      );
+      if (r.linked && r.linked.name) this.linkedName = r.linked.name;
+    } catch {
+      /* the last one known */
+    }
+    return this.linkedName;
   }
 
   private q(extra: Record<string, string> = {}): string {
@@ -505,6 +668,30 @@ export class WorkspaceCalls {
         this.report();
         return { ok: true };
       }
+      case 'nav.leaveHook':
+        // The page's exit hook (1.6): every way out the host owns runs it from now on.
+        this.leaveHookOn = params.on === true;
+        return { ok: true };
+      case 'nav.leaveProgress': {
+        const run = this.leave;
+        if (run && params.leave === run.id) {
+          const f = params.fraction;
+          const fraction = typeof f === 'number' && Number.isFinite(f) ? Math.min(1, Math.max(0, f)) : null;
+          this.note({ kind: 'progress', fraction, label: cleanDirtyMessage(params.label) });
+        }
+        return { ok: true };
+      }
+      case 'nav.leaveDone': {
+        const run = this.leave;
+        // A leave that already ended (cancelled, kept editing, gone on without it): nothing to do.
+        if (!run || params.leave !== run.id) return { ok: true };
+        const view = viewState(params.view);
+        if (view) this.hooks.linkView?.(view);
+        const message = cleanDirtyMessage(params.message);
+        if (params.ok === true) run.done(run.linkError ? { ok: false, message: run.linkError } : { ok: true });
+        else run.done({ ok: false, message });
+        return { ok: true };
+      }
       case 'compute.submitOpenFOAM': {
         const body = caseSubmitBody(params);
         const r = await api<{ job: ComputeJob; ahead?: number | null; existing?: boolean }>(`/api/plugin-cases/submit?${this.q()}`, {
@@ -545,8 +732,34 @@ export class WorkspaceCalls {
    * started, followed to its end.
    */
   private async linkGeometry(params: Record<string, unknown>): Promise<LinkResult> {
+    const run = this.leave;
+    try {
+      const result = await this.linkGeometryNow(params);
+      if (run && this.leave === run) {
+        run.linkError = null;
+        // The leave's question (if its hook then fails) says the project was updated.
+        this.note({ kind: 'linked', ok: true, change: String(result.change || '') });
+      }
+      return result;
+    } catch (e) {
+      // A refused link inside a leave fails the leave (one question), whatever the hook then returns.
+      const code = e instanceof BridgeError ? e.code : 'failed';
+      if (run && this.leave === run) {
+        if (!QUIET_LINK_ENDS.has(code)) run.linkError = cleanDirtyMessage((e as Error).message) || 'the link was refused';
+        this.note({ kind: 'linked', ok: false, change: '' });
+      }
+      throw e;
+    }
+  }
+
+  private async linkGeometryNow(params: Record<string, unknown>): Promise<LinkResult> {
     const s = this.scope;
     if (this.frameDirty) throw new BridgeError('Save the design before linking it: the page has unsaved work.', 'unsaved');
+    // The camera to land with stays in this page (LINK 6.6); a bad one is dropped.
+    if (params.view !== undefined && params.view !== null) {
+      const view = viewState(params.view);
+      if (view) this.hooks.linkView?.(view);
+    }
     const token = typeof params.token === 'string' ? params.token.slice(0, 64) : '';
     const body = { project_id: s.projectId, plugin: s.plugin, study_id: s.studyId, ...linkBody(params) };
     // Open the stream first, so the job's first events are not missed.
@@ -558,7 +771,9 @@ export class WorkspaceCalls {
     );
     if (answer.result) {
       const done = linkResultOf(answer.result);
+      if (done.name) this.linkedName = done.name;
       if (done.geometryId) this.hooks.linkStarted?.({ geometryId: done.geometryId, jobId: null, created: false });
+      this.note({ kind: 'accepted', jobId: null, create: false, queued: false });
       // Nothing changed, but the link recorded the design's version: the geometry's row
       // reads the tree again ("Not up to date" goes), as it does when a job ends.
       window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { link: true } }));
@@ -567,11 +782,32 @@ export class WorkspaceCalls {
     const jobId = String(answer.job_id || '');
     if (!LINK_JOB_ID.test(jobId)) throw new BridgeError('The app did not start the link', 'failed');
     if (answer.geometry_id && !answer.choosing) this.hooks.linkStarted?.({ geometryId: String(answer.geometry_id), jobId, created: !!answer.created });
+    if (!answer.choosing) this.note({ kind: 'accepted', jobId, create: !!answer.created, queued: !!(answer as { queued?: boolean }).queued });
     // A page that closed before the answer came does not ask: the question stays open.
     if (epoch !== this.epoch) throw new BridgeError('the workspace closed', 'failed');
     this.linkJobs.add(jobId);
     const ending = new Promise<LinkResult>((done, fail) => {
-      this.linkWaits.set(jobId, { token, done, fail, seq: 0 });
+      // The same design again joins the job already running (a leave cancelled, then Back
+      // again): the earlier call waits for the same end, so both are answered.
+      const prev = this.linkWaits.get(jobId);
+      this.linkWaits.set(jobId, {
+        token,
+        done: prev
+          ? (r) => {
+              prev.done(r);
+              done(r);
+            }
+          : done,
+        fail: prev
+          ? (e) => {
+              prev.fail(e);
+              fail(e);
+            }
+          : fail,
+        seq: prev ? prev.seq : 0,
+        ask: prev ? prev.ask : null,
+        oldName: prev ? prev.oldName : undefined,
+      });
       // It may have ended before the stream heard of it: its status says.
       void api<{ job?: { status?: string; result?: unknown; error?: string | null; code?: string | null; seq?: number } }>(
         `/api/plugin-geometry/status?${this.q({ plugin: s.plugin, study_id: s.studyId, job_id: jobId })}`,
@@ -583,6 +819,10 @@ export class WorkspaceCalls {
     });
     if (answer.choosing) await this.answerLinkQuestion(jobId, answer.choosing);
     const result = await ending;
+    if (result && result.name) this.linkedName = result.name;
+    // Two calls that joined one job: its report shows once.
+    if (this.reportedJobs.has(jobId)) return result;
+    this.reportedJobs.add(jobId);
     const wait = this.saved.get(jobId);
     this.saved.delete(jobId);
     if (wait && result.created && wait.oldName) {
@@ -603,6 +843,9 @@ export class WorkspaceCalls {
     return result;
   }
 
+  /** Link jobs whose report this page load has had (once per job). */
+  private readonly reportedJobs = new Set<string>();
+
   /** "Save as new" jobs this page waits for: the old geometry's name and the copies' outcome, for the report. */
   private readonly saved = new Map<string, { oldName: string; copies: LinkCopyOutcome[] | null }>();
 
@@ -622,17 +865,29 @@ export class WorkspaceCalls {
       wait.ask = ask;
       wait.oldName = question.geometry.name;
     }
+    if (question.geometry && question.geometry.name) this.linkedName = question.geometry.name;
     let picked: LinkChoice | null;
     if (!this.interactive || !this.hooks.linkChoice) picked = { choice: 'overwrite' };
-    else picked = await this.hooks.linkChoice(question, ask.signal);
+    else {
+      // Inside a leave: "Waiting for your choice", and the stall timer waits too (LINK 6.4).
+      this.note({ kind: 'choosing', open: true });
+      try {
+        picked = await this.hooks.linkChoice(question, ask.signal);
+      } finally {
+        this.note({ kind: 'choosing', open: false });
+      }
+    }
     if (wait) wait.ask = null;
     if (!picked || !this.linkWaits.has(jobId)) return;
+    // "Keep editing" inside a leave: the leave ends at once and the workspace stays (no question).
+    if (picked.choice === 'cancel') this.note({ kind: 'kept' });
     try {
       const chosen = await sendLinkChoice({ projectId: s.projectId, plugin: s.plugin, studyId: s.studyId, jobId }, picked);
       if (picked.choice === 'new') this.saved.set(jobId, { oldName: question.geometry.name, copies: null });
       if (chosen.geometry_id && picked.choice !== 'cancel') {
         this.hooks.linkStarted?.({ geometryId: String(chosen.geometry_id), jobId, created: !!chosen.created });
       }
+      if (picked.choice !== 'cancel') this.note({ kind: 'accepted', jobId, create: picked.choice === 'new', queued: !!chosen.queued });
     } catch (e) {
       const code = String((e as { code?: unknown })?.code || 'failed');
       // Answered in another tab or from the geometry's row: the job's end settles the call.
@@ -691,6 +946,14 @@ export class WorkspaceCalls {
     }
     const kind = String(ev.event || '');
     if (kind === 'stage' || kind === 'queued') {
+      if (wait) {
+        this.note({
+          kind: 'link',
+          stage: kind === 'queued' ? 'queued' : String(ev.stage || ''),
+          ahead: typeof ev.ahead === 'number' ? ev.ahead : null,
+          label: typeof ev.label === 'string' ? ev.label : '',
+        });
+      }
       if (wait && wait.token) {
         const stage = kind === 'queued' ? 'queued' : String(ev.stage || '');
         if (stage) {
@@ -1066,6 +1329,12 @@ export class WorkspaceCalls {
 
   /** Close every job stream, abort every open upload and forget unsaved work (the channel ended). */
   close(): void {
+    // A leave whose page went away (a reload, a crash): the hook did not finish.
+    const run = this.leave;
+    this.leave = null;
+    this.leaveHookOn = false;
+    this.setInteractive(true);
+    run?.done({ ok: false, message: 'its page closed before it finished' });
     for (const es of this.streams.values()) es.close();
     this.streams.clear();
     this.linkStream?.close();
@@ -1101,6 +1370,9 @@ export class WorkspaceBridge {
   // `ended` aborts when the channel ends.
   private channel: { port: MessagePort; instance: string; welcomed: boolean; ended: AbortController } | null = null;
   private alive = '';
+  /** Probes waiting for the page's answer. */
+  private readonly aliveWaiters = new Set<(instance: string) => void>();
+  private leaveSerial = 0;
 
   constructor(frame: HTMLIFrameElement, calls: WorkspaceCalls, hooks: BridgeHooks) {
     this.frame = frame;
@@ -1137,8 +1409,83 @@ export class WorkspaceBridge {
     const data = event.data as { magnusim?: string; sdkVersion?: string; instance?: string } | null;
     if (!data || typeof data !== 'object') return;
     if (data.magnusim === 'hello') void this.hello(data);
-    else if (data.magnusim === 'alive' && typeof data.instance === 'string') this.alive = data.instance;
+    else if (data.magnusim === 'alive' && typeof data.instance === 'string') {
+      this.alive = data.instance;
+      for (const fn of [...this.aliveWaiters]) fn(data.instance);
+    }
   };
+
+  /** The page registered an exit hook and its channel is up (API 1.6). */
+  hookOn(): boolean {
+    return this.connected() && this.calls.leaveHookOn;
+  }
+
+  /** The name of the geometry this study links ('' before the first link), for the leave's question. */
+  geometryName(): Promise<string> {
+    return this.calls.geometryName();
+  }
+
+  /** That name as this page last heard it, at once. */
+  lastGeometryName(): string {
+    return this.calls.lastGeometryName();
+  }
+
+  /** Whether the page still answers (the leave's step 2): its `alive` within PROBE_MS. */
+  probe(): Promise<boolean> {
+    const ch = this.channel;
+    const win = this.frame.contentWindow;
+    if (!ch || !ch.welcomed || !win) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      const fn = (instance: string) => {
+        if (instance !== ch.instance) return;
+        clearTimeout(timer);
+        this.aliveWaiters.delete(fn);
+        resolve(this.channel === ch);
+      };
+      const timer = setTimeout(() => {
+        this.aliveWaiters.delete(fn);
+        resolve(false);
+      }, PROBE_MS);
+      this.aliveWaiters.add(fn);
+      win.postMessage({ magnusim: 'probe', instance: ch.instance }, '*');
+    });
+  }
+
+  /**
+   * Run the page's exit hook for one leave (API 1.6): the event `leave`, then the page's
+   * nav.leaveDone. Aborting `signal` sends `leaveAbort` and ends it; a page that goes away
+   * meanwhile ends it as not done. What happens meanwhile goes to `activity`.
+   */
+  runLeave(reason: LeaveReason, o: { signal: AbortSignal; interactive: boolean; activity: (a: LeaveActivity) => void }): Promise<LeaveHookOutcome> {
+    const ch = this.channel;
+    if (!ch || !ch.welcomed || !this.calls.leaveHookOn) return Promise.resolve({ ok: true });
+    const id = `leave-${++this.leaveSerial}`;
+    return new Promise<LeaveHookOutcome>((resolve) => {
+      let settled = false;
+      const end = (out: LeaveHookOutcome) => {
+        if (settled) return;
+        settled = true;
+        o.signal.removeEventListener('abort', onAbort);
+        this.calls.endLeave(id);
+        resolve(out);
+      };
+      const onAbort = () => {
+        try {
+          ch.port.postMessage({ event: 'leaveAbort', data: { leave: id } });
+        } catch {
+          /* the channel is gone */
+        }
+        end({ ok: false, message: 'cancelled' });
+      };
+      if (o.signal.aborted) {
+        end({ ok: false, message: 'cancelled' });
+        return;
+      }
+      o.signal.addEventListener('abort', onAbort);
+      this.calls.beginLeave({ id, activity: o.activity, interactive: o.interactive, done: end });
+      ch.port.postMessage({ event: 'leave', data: { leave: id, reason } });
+    });
+  }
 
   private async hello(data: { sdkVersion?: string; instance?: string }): Promise<void> {
     const major = Number(String(data.sdkVersion || '').split('.')[0]);
@@ -1174,12 +1521,16 @@ export class WorkspaceBridge {
     if (typeof m.id !== 'number') return;
     const method = String(m.method || '');
     const params = m.params && typeof m.params === 'object' ? (m.params as Record<string, unknown>) : {};
+    // Calls in flight count as work for a running leave's stall timer.
+    const answered = this.calls.callStart(method);
     try {
       port.postMessage({ id: m.id, result: await this.calls.handle(method, params) });
     } catch (err) {
       const e = err instanceof BridgeError ? err : new BridgeError(err instanceof Error ? err.message : String(err));
       if (e.code === 'not_allowed') this.hooks.log(`workspace ${this.calls.scope.plugin}: ${e.message}`, params);
       port.postMessage({ id: m.id, error: { message: e.message, code: e.code } });
+    } finally {
+      answered();
     }
   }
 
