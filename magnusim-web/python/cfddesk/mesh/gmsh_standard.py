@@ -369,17 +369,14 @@ def _inlet_outlet_surface_tags(project: Project, face_to_tag: dict[int, int]) ->
                 semantic = str(get_type(registry_key_for_bc(bc)).semantic).lower()
             except Exception:
                 semantic = ""
+        # The BC's semantic class decides; a patch the user named inlet / outlet
+        # (or inlet_* / outlet_*) is sized as one too, as it always was.
         pname = ep.name.lower()
         for fid in ep.face_ids:
             tags = surface_tags_of(face_to_tag, fid)
-            if semantic == "inlet" or pname in ("inlet", "velocity_inlet") or pname.startswith(
-                "inlet_"
-            ):
+            if semantic == "inlet" or pname == "inlet" or pname.startswith("inlet_"):
                 inlet_tags.extend(tags)
-            elif semantic == "outlet" or pname in (
-                "outlet",
-                "pressure_outlet",
-            ) or pname.startswith("outlet_"):
+            elif semantic == "outlet" or pname == "outlet" or pname.startswith("outlet_"):
                 outlet_tags.extend(tags)
     return inlet_tags, outlet_tags
 
