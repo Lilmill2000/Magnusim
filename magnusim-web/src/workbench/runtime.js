@@ -60,6 +60,24 @@ import {
 } from '../analysis';
 import { mesherFor, mesherRows, refinementMenu, reportBits, stageText } from '../mesher';
 import {
+  defaultQuantity as monDefaultQuantity,
+  detailRows as monitorDetailRows,
+  formatSampleValue,
+  lastSample as monLastSample,
+  monitorCsv,
+  monitorQuantities,
+  monitorsCsv,
+  monitorTypes,
+  plotQuantities,
+  quantityByKey,
+  resolveMonitorType,
+  shownValue,
+  summaryOf,
+  summaryText,
+  tipLines,
+  unitOf,
+} from '../monitors';
+import {
   bcFamilyRows,
   colorOf as bcColorOf,
   completeBcRecord,
@@ -29414,11 +29432,27 @@ function highlightAaFaces(faces, focus) {
   highlightGeomFaces(list, focus === undefined ? resultCatalog.focusFace : focus, paintForAaFaces(list));
 }
 
+/** The monitor types a user may add to a run (the registry's monitor rows, for the run's analysis). */
+function registryMonitorTypes(rec) {
+  const reg = useProjectStore.getState().registry;
+  const key = rec && typeof runAnalysisKeyOf === 'function' ? runAnalysisKeyOf(rec) : '';
+  return monitorTypes((reg && reg.monitor) || [], key ? analysisRow(key) : null);
+}
+
+/** The quantities of a run's monitor answer: its own, else its analysis's, else the API 1.1 table. */
+function runMonitorQuantities(data, runId) {
+  const rec = runId != null && typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
+  const key = (data && data.analysis_key) || (rec ? runAnalysisKeyOf(rec) : '');
+  const row = key ? analysisRow(key) : undefined;
+  return monitorQuantities(data, row && row.monitor_quantities);
+}
+
 function showRunAaOverview() {
   const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
   const all = [];
+  const types = registryMonitorTypes(rec);
   ((rec && rec.result_controls) || []).forEach((rc) => {
-    if (!/area average/i.test(String((rc && rc.kind) || (rc && rc.name) || ''))) return;
+    if (!resolveMonitorType(rc, types)) return;
     (rc.faces || []).forEach((f) => {
       if (f && !all.includes(f)) all.push(f);
     });
@@ -29505,12 +29539,57 @@ function showAaPanel() {
   publishW22({ panel_open: true });
 }
 
+/** Group headings of the Monitors modal, by what a monitor type is placed on. */
+const RC_TARGET_GROUPS = { patch: 'SURFACE DATA', point: 'POINT DATA', line: 'LINE DATA', volume: 'VOLUME DATA' };
+let rcTypeChoice = '';
+
+/** The Monitors modal: the monitor types a user may add to the run, and the chosen one's description. */
+function fillRcTypeList(runId) {
+  const list = document.getElementById('rc-type-list');
+  const title = document.getElementById('rc-detail-title');
+  const hint = document.getElementById('rc-detail-hint');
+  const apply = document.getElementById('rc-apply');
+  const types = registryMonitorTypes(runId ? findRunRecord(runId) : null);
+  if (!types.some((t) => t.key === rcTypeChoice)) rcTypeChoice = types.length ? types[0].key : '';
+  const chosen = types.find((t) => t.key === rcTypeChoice) || null;
+  if (list) {
+    let group = null;
+    list.innerHTML = types.length
+      ? types
+          .map((t) => {
+            const label = RC_TARGET_GROUPS[t.target] || 'MONITORS';
+            const head = label !== group ? '<div class="cs-group-label">' + escapeHtml(label) + '</div>' : '';
+            group = label;
+            return (
+              head +
+              '<button type="button" class="ml-type' +
+              (t.key === rcTypeChoice ? ' is-selected' : '') +
+              '" data-rc-type="' +
+              escapeHtml(t.key) +
+              '"><span class="ml-type-name">' +
+              escapeHtml(t.label || t.key) +
+              '</span></button>'
+            );
+          })
+          .join('')
+      : '<p class="mat-assign-hint">No monitor can be added: the plugin that reads this run\'s monitors is off or did not load.</p>';
+  }
+  if (title) title.textContent = chosen ? chosen.label || chosen.key : '';
+  if (hint) {
+    const pick = chosen && chosen.target === 'patch' ? 'Add it here, then pick faces in the viewport.' : 'Add it here.';
+    hint.textContent = chosen ? [chosen.description, pick].filter(Boolean).join(' ') : '';
+  }
+  if (apply) apply.disabled = !chosen;
+  return chosen;
+}
+
 function openRcTypeModal(runId) {
   if (!studyCatalog.simulation) {
     console.warn('[CFD W22] Create Simulation first');
     return;
   }
   if (runId) runCatalog.rc_target_run_id = runId;
+  fillRcTypeList(runCatalog.rc_target_run_id || runId);
   const modal = document.getElementById('modal-result-control');
   if (modal) modal.hidden = false;
 }
@@ -29644,10 +29723,14 @@ async function saveAreaAverageClient(partial) {
   if (viewRc && String(viewRc) !== String(rcId)) {
     return window.__CFD_W22__;
   }
+  const types = registryMonitorTypes(rec);
+  const savedRc = rcs.find((r) => String(r.id) === String(rcId) || r.name === name) || resultCatalog.area_average_1;
+  const typeRow = resolveMonitorType(savedRc, types) || types[0] || null;
   const nextRc = {
     id: rcId,
     name,
-    kind: 'Area average',
+    ...(typeRow ? { monitor_type: typeRow.key } : {}),
+    kind: (typeRow && typeRow.label) || 'Area average',
     category: 'Surface data',
     write_control: (wcEl && wcEl.value) || W22_AA.write_control,
     faces,
@@ -29793,6 +29876,12 @@ function toggleAssignAaFace(face) {
   document.getElementById('rc-cancel')?.addEventListener('click', () => closeRcTypeModal());
   document.getElementById('rc-cancel-x')?.addEventListener('click', () => closeRcTypeModal());
   document.getElementById('rc-backdrop')?.addEventListener('click', () => closeRcTypeModal());
+  document.getElementById('rc-type-list')?.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('[data-rc-type]');
+    if (!btn) return;
+    rcTypeChoice = btn.getAttribute('data-rc-type') || '';
+    fillRcTypeList(runCatalog.rc_target_run_id || runCatalog.selected_run_id || runCatalog.active_run_id);
+  });
   document.getElementById('rc-apply')?.addEventListener('click', () => {
     const runId = runCatalog.rc_target_run_id || runCatalog.selected_run_id || runCatalog.active_run_id;
     if (!runId) {
@@ -29800,15 +29889,18 @@ function toggleAssignAaFace(face) {
       console.warn('[CFD] Create a run first');
       return;
     }
+    const typeRow = fillRcTypeList(runId);
+    if (!typeRow) return;
     closeRcTypeModal();
     const rec = findRunRecord(runId);
     const rcs = ((rec && rec.result_controls) || []).map((r) => ({ ...r }));
-    const name = nextAaName(rcs);
+    const name = nextAaName(rcs, typeRow.label);
     const rcId = stampRcId();
     const nextRc = {
       id: rcId,
       name,
-      kind: 'Area average',
+      monitor_type: typeRow.key,
+      kind: typeRow.label || 'Area average',
       category: 'Surface data',
       write_control: 'Time step',
       faces: [],
@@ -30219,9 +30311,11 @@ function nextClientRunName() {
   return 'Run ' + n;
 }
 
-function nextAaName(rcs) {
-  const n = (rcs || []).filter((r) => /area average/i.test(String(r.kind || r.name || ''))).length;
-  return 'Area average ' + (n + 1);
+function nextAaName(rcs, label) {
+  const base = String(label || 'Area average');
+  const word = base.toLowerCase();
+  const n = (rcs || []).filter((r) => String(r.kind || r.name || '').toLowerCase().includes(word)).length;
+  return base + ' ' + (n + 1);
 }
 
 function generatedMeshOptions() {
@@ -32252,7 +32346,7 @@ async function renameActiveRunClient(name) {
     byRun: {},
     inflight: {},
     timer: null,
-    qtyByPatch: {},
+    qtyByKey: {},
     moreOpen: {},
   };
   window.__CFD_MONITORS__ = monState;
@@ -32274,85 +32368,44 @@ async function renameActiveRunClient(name) {
     return fmtNum(a, 4) + ' m²';
   }
 
-  function fmtFlow(q) {
-    if (q == null || !Number.isFinite(Number(q))) return '—';
-    const a = Math.abs(Number(q));
-    if (a < 0.01) return fmtNum(a * 1000, a * 1000 < 1 ? 3 : 2) + ' L/s';
-    return fmtNum(a, 4) + ' m³/s';
-  }
-
-  function fmtMassFlow(kgs) {
-    if (kgs == null || !Number.isFinite(Number(kgs))) return '—';
-    const a = Math.abs(Number(kgs));
-    if (a < 0.01) return fmtNum(a * 1000, 3) + ' g/s';
-    return fmtNum(a, 4) + ' kg/s';
-  }
-
-  function fmtImbalance(pct) {
-    if (pct == null || !Number.isFinite(Number(pct))) return '';
-    const a = Math.abs(Number(pct));
-    if (a < 0.01) return '< 0.01 %';
-    return fmtNum(a, 2) + ' %';
-  }
-
   const MON_SPARK = { w: 260, h: 72, pad: 4 };
-  const monPlotHover = { lastClientX: null, patch: null };
-  const MON_QTY = {
-    p: {
-      label: 'Pressure',
-      unit: 'Pa',
-      color: '#6941c6',
-      pick: (s) => (s ? s.p_Pa : null),
-      fmt: (v) => fmtNum(v, Math.abs(Number(v)) >= 100 ? 0 : 1) + ' Pa',
-    },
-    Umag: {
-      label: 'Mean velocity',
-      unit: 'm/s',
-      color: '#3884e6',
-      pick: (s) => (s ? s.Umag : null),
-      fmt: (v) => fmtNum(v) + ' m/s',
-    },
-    Ux: {
-      label: 'Velocity X',
-      unit: 'm/s',
-      color: '#3884e6',
-      pick: (s) => (s && Array.isArray(s.U) ? s.U[0] : null),
-      fmt: (v) => fmtNum(v) + ' m/s',
-    },
-    Uy: {
-      label: 'Velocity Y',
-      unit: 'm/s',
-      color: '#3884e6',
-      pick: (s) => (s && Array.isArray(s.U) ? s.U[1] : null),
-      fmt: (v) => fmtNum(v) + ' m/s',
-    },
-    Uz: {
-      label: 'Velocity Z',
-      unit: 'm/s',
-      color: '#3884e6',
-      pick: (s) => (s && Array.isArray(s.U) ? s.U[2] : null),
-      fmt: (v) => fmtNum(v) + ' m/s',
-    },
-  };
+  const monPlotHover = { lastClientX: null, key: null };
+  /** The run each answer row came from (its quantities are that run's). */
+  const monRowRun = new WeakMap();
 
-  function isPressureMon(m) {
-    return /pressure/i.test(String((m && m.bc_type) || ''));
+  function monQtys(m) {
+    const runId = m ? monRowRun.get(m) : undefined;
+    return runMonitorQuantities(runId != null ? monState.byRun[runId] : null, runId);
+  }
+
+  /** A monitor card's id: the row's key (mon_<patch> for a boundary). */
+  function monKey(m) {
+    return String((m && (m.key || m.patch)) || '');
   }
 
   function qtyKey(m) {
-    const patch = m && m.patch;
-    const saved = patch != null ? monState.qtyByPatch[patch] : null;
-    if (saved && MON_QTY[saved]) return saved;
-    // Custom monitors are usually on walls, where the mean velocity is zero.
-    return isPressureMon(m) || (m && m.custom) ? 'p' : 'Umag';
+    const qs = monQtys(m);
+    const saved = monState.qtyByKey[monKey(m)];
+    if (saved && plotQuantities(qs).some((q) => q.key === saved)) return saved;
+    return monDefaultQuantity(m, qs);
+  }
+
+  function qtySpec(m) {
+    return quantityByKey(monQtys(m), qtyKey(m)) || null;
   }
 
   function qtySample(m) {
-    return (m && m.last) || (m && m.series && m.series[m.series.length - 1]) || null;
+    return monLastSample(m);
+  }
+
+  /** A point's plotted value, NaN when it has none (no point is drawn). */
+  function plotValue(spec, s) {
+    const v = spec ? shownValue(spec, s) : null;
+    return v == null ? NaN : v;
   }
 
   function sparkline(series, pick, color) {
-    const vals = (series || []).map((s) => Number(pick(s))).filter((v) => Number.isFinite(v));
+    const vals = (series || []).map((s) => pick(s)).filter((v) => Number.isFinite(v));
     if (vals.length < 2) return '';
     const w = MON_SPARK.w;
     const h = MON_SPARK.h;
@@ -32375,42 +32428,23 @@ async function renameActiveRunClient(name) {
     );
   }
 
-  function bcTag(type) {
-    const t = String(type || '').toLowerCase();
-    if (t.includes('inlet')) return 'Velocity inlet';
-    if (t.includes('outlet')) return 'Velocity outlet';
-    if (t.includes('pressure')) return 'Pressure';
-    return type || 'Boundary';
+  function monLatestLabel(m) {
+    const spec = qtySpec(m);
+    return spec ? formatSampleValue(spec, qtySample(m)) : '';
   }
 
-  function monLatestLabel(m) {
-    const spec = MON_QTY[qtyKey(m)];
-    if (!spec) return '';
-    const v = spec.pick(qtySample(m));
-    if (v == null || !Number.isFinite(Number(v))) return '';
-    return spec.fmt(v);
+  function monQtyOptions(m) {
+    const key = qtyKey(m);
+    return plotQuantities(monQtys(m))
+      .map(
+        (q) =>
+          '<option value="' + escapeHtml(q.key) + '"' + (q.key === key ? ' selected' : '') + '>' + escapeHtml(q.label) + '</option>'
+      )
+      .join('');
   }
 
   function monQtySelect(m) {
-    const key = qtyKey(m);
-    return (
-      '<select class="bc-select mon-qty" data-mon-qty aria-label="Plotted quantity">' +
-      Object.keys(MON_QTY)
-        .map((k) => {
-          const spec = MON_QTY[k];
-          return (
-            '<option value="' +
-            k +
-            '"' +
-            (k === key ? ' selected' : '') +
-            '>' +
-            escapeHtml(spec.label) +
-            '</option>'
-          );
-        })
-        .join('') +
-      '</select>'
-    );
+    return '<select class="bc-select mon-qty" data-mon-qty aria-label="Plotted quantity">' + monQtyOptions(m) + '</select>';
   }
 
   function monitorFaceLabels(m) {
@@ -32442,15 +32476,6 @@ async function renameActiveRunClient(name) {
   }
 
   function monDetailRows(m) {
-    const f = (m && m.final) || {};
-    const last = qtySample(m) || {};
-    const U = Array.isArray(f.mean_velocity_vector)
-      ? f.mean_velocity_vector
-      : Array.isArray(last.U)
-        ? last.U
-        : [];
-    const q = f.volumetric_flow_m3s != null ? f.volumetric_flow_m3s : last.Q_m3s;
-    const dir = q == null || !Number.isFinite(Number(q)) ? '' : Number(q) < 0 ? ' in' : ' out';
     const faces = monitorFaceLabels(m);
     const rows = [];
     if (faces.length === 1) rows.push(['Face', faces[0]]);
@@ -32458,35 +32483,15 @@ async function renameActiveRunClient(name) {
     const cadArea = cadAreaForLabels(faces);
     if (cadArea) rows.push(['Area', cadArea]);
     else if (m.area_m2 != null) rows.push(['Area', fmtArea(m.area_m2)]);
-    if (f.mean_velocity_magnitude != null || last.Umag != null) {
-      rows.push(['Mean velocity', fmtNum(f.mean_velocity_magnitude != null ? f.mean_velocity_magnitude : last.Umag) + ' m/s']);
-    }
-    if (U[0] != null && Number.isFinite(Number(U[0]))) rows.push(['Velocity X', fmtNum(U[0]) + ' m/s']);
-    if (U[1] != null && Number.isFinite(Number(U[1]))) rows.push(['Velocity Y', fmtNum(U[1]) + ' m/s']);
-    if (U[2] != null && Number.isFinite(Number(U[2]))) rows.push(['Velocity Z', fmtNum(U[2]) + ' m/s']);
-    const un = f.mean_normal_velocity != null ? f.mean_normal_velocity : last.Un_m_s;
-    if (un != null && Number.isFinite(Number(un))) {
-      rows.push(['Normal velocity', fmtNum(Math.abs(un)) + ' m/s' + dir]);
-    }
-    if (q != null && Number.isFinite(Number(q))) {
-      rows.push(['Flow rate', fmtFlow(q) + dir]);
-      const mdot = f.mass_flow_kgs != null ? f.mass_flow_kgs : Number(q) * (Number(m.rho) || 1.196);
-      rows.push(['Mass flow', fmtMassFlow(mdot)]);
-    }
-    const p = f.pressure_Pa != null ? f.pressure_Pa : last.p_Pa;
-    if (p != null && Number.isFinite(Number(p))) {
-      rows.push(['Pressure', fmtNum(p, Math.abs(Number(p)) >= 100 ? 0 : 1) + ' Pa']);
-    }
-    return rows;
+    return rows.concat(monitorDetailRows(m, monQtys(m)));
   }
 
   function monitorCard(m) {
-    const key = qtyKey(m);
-    const spec = MON_QTY[key] || MON_QTY.Umag;
+    const spec = qtySpec(m);
     const last = monLatestLabel(m);
-    const spark = sparkline(m.series, spec.pick, spec.color);
+    const spark = spec ? sparkline(m.series, (s) => plotValue(spec, s), spec.color) : '';
     const rows = monDetailRows(m);
-    const open = !!(m.patch && monState.moreOpen[m.patch]);
+    const open = !!monState.moreOpen[monKey(m)];
     const details =
       rows.length
         ? '<details class="mon-more"' +
@@ -32497,7 +32502,7 @@ async function renameActiveRunClient(name) {
             .join('') +
           '</div></details>'
         : '';
-    const canChart = (m.series || []).length >= 2;
+    const canChart = monPts(m).length >= 2;
     const canCsv = !!(m.series || []).length;
     const acts =
       canChart || canCsv
@@ -32511,8 +32516,8 @@ async function renameActiveRunClient(name) {
           '</div>'
         : '';
     return (
-      '<div class="mon-card" data-monitor-patch="' + escapeHtml(m.patch) + '">' +
-      '<div class="mon-card-head"><span class="mon-card-name">' + escapeHtml(m.name || m.patch) + '</span>' +
+      '<div class="mon-card" data-monitor-key="' + escapeHtml(monKey(m)) + '" data-monitor-patch="' + escapeHtml(m.patch || monKey(m)) + '">' +
+      '<div class="mon-card-head"><span class="mon-card-name">' + escapeHtml(m.name || m.patch || m.key) + '</span>' +
       monQtySelect(m) +
       (last ? '<span class="mon-card-last">' + escapeHtml(last) + '</span>' : '') +
       '</div>' +
@@ -32536,8 +32541,6 @@ async function renameActiveRunClient(name) {
 
   function monTipHtml(m, s) {
     const transient = monTimeAxis();
-    const q = s.Q_m3s;
-    const dir = q == null || !Number.isFinite(Number(q)) ? '' : Number(q) < 0 ? ' in' : ' out';
     const lines = [];
     const t = Number(s.t);
     lines.push(
@@ -32549,33 +32552,24 @@ async function renameActiveRunClient(name) {
         ) +
         '</b>'
     );
-    const spec = MON_QTY[qtyKey(m)];
-    const chosen = spec ? spec.pick(s) : null;
-    if (spec && chosen != null && Number.isFinite(Number(chosen))) {
-      lines.push('<b>' + escapeHtml(spec.label) + '</b> ' + escapeHtml(spec.fmt(chosen)));
-    }
-    if (s.p_Pa != null && Number.isFinite(Number(s.p_Pa)) && qtyKey(m) !== 'p') {
-      lines.push('Pressure ' + escapeHtml(MON_QTY.p.fmt(s.p_Pa)));
-    }
-    if (q != null && Number.isFinite(Number(q))) {
-      lines.push('Flow ' + escapeHtml(fmtFlow(q) + dir));
-    }
-    if (s.Umag != null && Number.isFinite(Number(s.Umag)) && qtyKey(m) !== 'Umag') {
-      lines.push('Mean velocity ' + escapeHtml(MON_QTY.Umag.fmt(s.Umag)));
+    for (const line of tipLines(monQtys(m), qtyKey(m), s)) {
+      lines.push(
+        line.chosen ? '<b>' + escapeHtml(line.label) + '</b> ' + escapeHtml(line.value) : escapeHtml(line.label + ' ' + line.value)
+      );
     }
     return lines.join('<br>');
   }
 
-  function findMonitorByPatch(patch) {
-    if (patch == null || patch === '') return null;
+  function findMonitorByKey(key) {
+    if (key == null || key === '') return null;
     const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
     const runId = (rec && rec.id) || (typeof resultCatalog !== 'undefined' && resultCatalog.editing_run_id) || null;
     const data = runId ? monState.byRun[runId] : null;
     const all = (d) => ((d && d.monitors) || []).concat((d && d.custom) || []);
-    const hit = all(data).find((x) => String(x.patch) === String(patch));
+    const hit = all(data).find((x) => monKey(x) === String(key));
     if (hit) return hit;
     for (const id of Object.keys(monState.byRun || {})) {
-      const row = all(monState.byRun[id]).find((x) => String(x.patch) === String(patch));
+      const row = all(monState.byRun[id]).find((x) => monKey(x) === String(key));
       if (row) return row;
     }
     return null;
@@ -32614,10 +32608,11 @@ async function renameActiveRunClient(name) {
   }
 
   function monChartTitle(m) {
-    const spec = MON_QTY[qtyKey(m)] || MON_QTY.Umag;
-    const name = (m && (m.name || m.patch)) || 'Monitor';
-    const qty = spec.label + (spec.unit ? ' (' + spec.unit + ')' : '');
-    return name + ' — ' + qty;
+    const spec = qtySpec(m);
+    const name = (m && (m.name || m.patch || m.key)) || 'Monitor';
+    if (!spec) return name;
+    const unit = unitOf(spec);
+    return name + ' — ' + spec.label + (unit ? ' (' + unit + ')' : '');
   }
 
   function monChartSubtitle() {
@@ -32628,28 +32623,29 @@ async function renameActiveRunClient(name) {
   }
 
   function monPts(m) {
-    const spec = MON_QTY[qtyKey(m)];
+    const spec = qtySpec(m);
     if (!spec) return [];
     return (m.series || [])
-      .map((s) => [Number(s.t), Number(spec.pick(s))])
+      .map((s) => [Number(s.t), plotValue(spec, s)])
       .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
   }
 
   function monFileBase(m) {
-    const spec = MON_QTY[qtyKey(m)];
+    const spec = qtySpec(m);
     const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
     const run = rec && rec.name ? rec.name + '-' : '';
-    return (run + (m.name || m.patch || 'monitor') + '-' + ((spec && spec.label) || 'chart')).replace(/[^\w.-]+/g, '-');
+    return (run + (m.name || m.patch || m.key || 'monitor') + '-' + ((spec && spec.label) || 'chart')).replace(/[^\w.-]+/g, '-');
   }
 
   function monChartSvgEl(m, width, height) {
     const pts = monPts(m);
     if (pts.length < 2 || typeof monitorChartSvg !== 'function') return null;
-    const spec = MON_QTY[qtyKey(m)] || MON_QTY.Umag;
+    const spec = qtySpec(m);
+    const unit = unitOf(spec);
     const geo = monitorChartSvg(pts, {
       width: width || 1200,
       height: height || 640,
-      unit: spec.unit,
+      unit,
       timeAxis: monTimeAxis(),
       color: spec.color,
       title: monChartTitle(m),
@@ -32658,7 +32654,7 @@ async function renameActiveRunClient(name) {
     const wrap = document.createElement('div');
     wrap.innerHTML = geo.svg;
     const svg = wrap.querySelector('svg');
-    return { svg, geo, pts, spec };
+    return { svg, geo, pts, spec, unit };
   }
 
   function downloadMonImage(m, type) {
@@ -32670,41 +32666,8 @@ async function renameActiveRunClient(name) {
   }
 
   function downloadMonCsv(m) {
-    const timeAxis = monTimeAxis();
-    const rho = Number(m.rho) || 1.196;
-    const head = [
-      timeAxis ? 'time_s' : 'iteration',
-      'pressure_Pa',
-      'mean_velocity_m_s',
-      'Ux_m_s',
-      'Uy_m_s',
-      'Uz_m_s',
-      'Un_m_s',
-      'flow_m3_s',
-      'mass_kg_s',
-    ];
-    const lines = [head.join(',')];
-    for (const s of m.series || []) {
-      const U = Array.isArray(s.U) ? s.U : [];
-      const row = [
-        s.t,
-        s.p_Pa,
-        s.Umag,
-        U[0],
-        U[1],
-        U[2],
-        s.Un_m_s,
-        s.Q_m3s,
-        s.Q_m3s != null && Number.isFinite(Number(s.Q_m3s)) ? Number(s.Q_m3s) * rho : '',
-      ].map((v) => {
-        if (v == null || v === '') return '';
-        const n = Number(v);
-        return Number.isFinite(n) ? String(n) : '';
-      });
-      lines.push(row.join(','));
-    }
     if (typeof downloadTextFile === 'function') {
-      downloadTextFile(monFileBase(m) + '.csv', lines.join('\n'), 'text/csv');
+      downloadTextFile(monFileBase(m) + '.csv', monitorCsv(m, monQtys(m), monTimeAxis()), 'text/csv');
     }
   }
 
@@ -32716,26 +32679,18 @@ async function renameActiveRunClient(name) {
 
   function fillMonChartQty(sel, m) {
     if (!sel) return;
-    const key = qtyKey(m);
-    sel.innerHTML = Object.keys(MON_QTY)
-      .map((k) => {
-        const spec = MON_QTY[k];
-        return (
-          '<option value="' + k + '"' + (k === key ? ' selected' : '') + '>' + escapeHtml(spec.label) + '</option>'
-        );
-      })
-      .join('');
+    sel.innerHTML = monQtyOptions(m);
   }
 
   function renderMonChartModal() {
-    const patch = monState.expanded;
+    const key = monState.expanded;
     const modal = document.getElementById('modal-mon-chart');
     const body = document.getElementById('mon-chart-body');
     const title = document.getElementById('mon-chart-title');
     const lastEl = document.getElementById('mon-chart-last');
     const qtyEl = document.getElementById('mon-chart-qty');
-    if (!patch || !modal || !body) return;
-    const m = findMonitorByPatch(patch);
+    if (!key || !modal || !body) return;
+    const m = findMonitorByKey(key);
     if (!m) {
       closeMonChart();
       return;
@@ -32754,12 +32709,12 @@ async function renameActiveRunClient(name) {
     body.innerHTML = '';
     body.appendChild(built.svg);
     if (typeof wireChartHover === 'function') {
-      wireChartHover(built.svg, built.pts, built.geo, built.spec.unit, monTimeAxis());
+      wireChartHover(built.svg, built.pts, built.geo, built.unit, monTimeAxis());
     }
   }
 
-  function openMonChart(patch) {
-    monState.expanded = patch;
+  function openMonChart(key) {
+    monState.expanded = key;
     const modal = document.getElementById('modal-mon-chart');
     if (modal) modal.hidden = false;
     renderMonChartModal();
@@ -32774,21 +32729,21 @@ async function renameActiveRunClient(name) {
     document.getElementById('mon-chart-close')?.addEventListener('click', close);
     document.getElementById('mon-chart-backdrop')?.addEventListener('click', close);
     document.getElementById('mon-chart-png')?.addEventListener('click', () => {
-      const m = findMonitorByPatch(monState.expanded);
+      const m = findMonitorByKey(monState.expanded);
       if (m) downloadMonImage(m, 'png');
     });
     document.getElementById('mon-chart-jpg')?.addEventListener('click', () => {
-      const m = findMonitorByPatch(monState.expanded);
+      const m = findMonitorByKey(monState.expanded);
       if (m) downloadMonImage(m, 'jpg');
     });
     document.getElementById('mon-chart-csv')?.addEventListener('click', () => {
-      const m = findMonitorByPatch(monState.expanded);
+      const m = findMonitorByKey(monState.expanded);
       if (m) downloadMonCsv(m);
     });
     document.getElementById('mon-chart-qty')?.addEventListener('change', (e) => {
-      const patch = monState.expanded;
-      if (!patch) return;
-      monState.qtyByPatch[patch] = e.target.value;
+      const key = monState.expanded;
+      if (!key) return;
+      monState.qtyByKey[key] = e.target.value;
       renderMonChartModal();
       renderRunMonitorsHub();
       renderAaMonitorValues();
@@ -32831,11 +32786,11 @@ async function renameActiveRunClient(name) {
   }
 
   function restoreMonPlotTip(root) {
-    if (monPlotHover.lastClientX == null || !monPlotHover.patch) return;
+    if (monPlotHover.lastClientX == null || !monPlotHover.key) return;
     const wrap = (root || document).querySelector(
-      '.mon-card[data-monitor-patch="' + monPlotHover.patch + '"] .mon-spark-wrap'
+      '.mon-card[data-monitor-key="' + CSS.escape(monPlotHover.key) + '"] .mon-spark-wrap'
     );
-    const m = findMonitorByPatch(monPlotHover.patch);
+    const m = findMonitorByKey(monPlotHover.key);
     if (wrap && m) updateMonPlotTip(wrap, m, monPlotHover.lastClientX);
   }
 
@@ -32846,10 +32801,10 @@ async function renameActiveRunClient(name) {
       const sel = e.target.closest && e.target.closest('[data-mon-qty]');
       if (!sel || !root.contains(sel)) return;
       const card = sel.closest('.mon-card');
-      const patch = card && card.getAttribute('data-monitor-patch');
-      if (!patch) return;
-      monState.qtyByPatch[patch] = sel.value;
-      if (monState.expanded === patch) renderMonChartModal();
+      const key = card && card.getAttribute('data-monitor-key');
+      if (!key) return;
+      monState.qtyByKey[key] = sel.value;
+      if (monState.expanded === key) renderMonChartModal();
       if (root.id === 'aa-monitor-list') renderAaMonitorValues();
       else renderRunMonitorsHub();
     });
@@ -32857,11 +32812,11 @@ async function renameActiveRunClient(name) {
       const btn = e.target.closest && e.target.closest('[data-mon-act]');
       if (!btn || !root.contains(btn)) return;
       const card = btn.closest('.mon-card');
-      const patch = card && card.getAttribute('data-monitor-patch');
-      const m = findMonitorByPatch(patch);
+      const key = card && card.getAttribute('data-monitor-key');
+      const m = findMonitorByKey(key);
       if (!m) return;
       const act = btn.getAttribute('data-mon-act');
-      if (act === 'expand') openMonChart(patch);
+      if (act === 'expand') openMonChart(key);
       else if (act === 'png') downloadMonImage(m, 'png');
       else if (act === 'jpg') downloadMonImage(m, 'jpg');
       else if (act === 'csv') downloadMonCsv(m);
@@ -32872,20 +32827,20 @@ async function renameActiveRunClient(name) {
         const d = e.target && e.target.closest && e.target.closest('details.mon-more');
         if (!d || !root.contains(d)) return;
         const card = d.closest('.mon-card');
-        const patch = card && card.getAttribute('data-monitor-patch');
-        if (patch) monState.moreOpen[patch] = !!d.open;
+        const key = card && card.getAttribute('data-monitor-key');
+        if (key) monState.moreOpen[key] = !!d.open;
       },
       true
     );
   }
 
   function restoreMonFocus(root) {
-    const patch = monState.focusPatch;
-    if (!root || !patch || monState.focusKind !== 'qty') return;
-    const sel = root.querySelector('.mon-card[data-monitor-patch="' + patch + '"] [data-mon-qty]');
+    const key = monState.focusKey;
+    if (!root || !key || monState.focusKind !== 'qty') return;
+    const sel = root.querySelector('.mon-card[data-monitor-key="' + CSS.escape(key) + '"] [data-mon-qty]');
     if (sel) {
       sel.focus();
-      monState.focusPatch = null;
+      monState.focusKey = null;
       monState.focusKind = null;
     }
   }
@@ -32897,19 +32852,26 @@ async function renameActiveRunClient(name) {
       const wrap = e.target.closest && e.target.closest('.mon-spark-wrap');
       if (!wrap || !root.contains(wrap)) return;
       const card = wrap.closest('.mon-card');
-      const patch = card && card.getAttribute('data-monitor-patch');
-      const m = findMonitorByPatch(patch);
+      const key = card && card.getAttribute('data-monitor-key');
+      const m = findMonitorByKey(key);
       if (!m) return;
-      if (monPlotHover.patch && monPlotHover.patch !== patch) hideMonPlotTips(root);
+      if (monPlotHover.key && monPlotHover.key !== key) hideMonPlotTips(root);
       monPlotHover.lastClientX = e.clientX;
-      monPlotHover.patch = patch;
+      monPlotHover.key = key;
       updateMonPlotTip(wrap, m, e.clientX);
     });
     root.addEventListener('pointerleave', () => {
       monPlotHover.lastClientX = null;
-      monPlotHover.patch = null;
+      monPlotHover.key = null;
       hideMonPlotTips(root);
     });
+  }
+
+  /** A boundary's tag on its pending card: its BC family's label, else its saved type. */
+  function bcFamilyTag(bc) {
+    const type = bc.bc_type || bc.type;
+    const family = bcFamilyForType(type);
+    return (family && family.label) || type || 'Boundary';
   }
 
   function pendingCards() {
@@ -32923,25 +32885,24 @@ async function renameActiveRunClient(name) {
           '<div class="mon-card"><div class="mon-card-head"><span class="mon-card-name">' +
           escapeHtml(bc.name || bc.bc_type || bc.type) +
           '</span><span class="mon-card-tag">' +
-          escapeHtml(bcTag(bc.bc_type || bc.type)) +
+          escapeHtml(bcFamilyTag(bc)) +
           '</span></div><div class="mon-empty">Values appear once the run starts.</div></div>'
       )
       .join('');
   }
 
-  function renderBalance(el, data) {
+  function renderSummary(el, data, runId) {
     if (!el) return;
-    const b = data && data.balance;
-    if (!b || !(b.in_m3s > 0 || b.out_m3s > 0)) {
+    const summary = summaryOf(data);
+    const text = summary.items.length ? summaryText(summary.items, runMonitorQuantities(data, runId)) : '';
+    if (!text) {
       el.hidden = true;
       el.textContent = '';
       return;
     }
-    const imb = b.imbalance != null ? Math.abs(b.imbalance) * 100 : null;
     el.hidden = false;
-    el.classList.toggle('is-warn', imb != null && imb > 1);
-    el.textContent =
-      'Flow in ' + fmtFlow(b.in_m3s) + ' · out ' + fmtFlow(b.out_m3s) + (imb != null ? ' · imbalance ' + fmtImbalance(imb) : '');
+    el.classList.toggle('is-warn', summary.warn);
+    el.textContent = text;
   }
 
   function fillMonitorList(list, hint, bal) {
@@ -32951,7 +32912,7 @@ async function renameActiveRunClient(name) {
     const active = document.activeElement;
     if (active && list.contains(active) && active.matches && active.matches('[data-mon-qty]')) {
       const card = active.closest('.mon-card');
-      monState.focusPatch = card && card.getAttribute('data-monitor-patch');
+      monState.focusKey = card && card.getAttribute('data-monitor-key');
       monState.focusKind = 'qty';
     }
     const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
@@ -32961,7 +32922,7 @@ async function renameActiveRunClient(name) {
         hint.hidden = true;
         hint.textContent = '';
       }
-      renderBalance(bal, null);
+      renderSummary(bal, null);
       return;
     }
     const data = monState.byRun[rec.id];
@@ -32973,7 +32934,7 @@ async function renameActiveRunClient(name) {
         hint.textContent = waiting ? 'Waiting for the first iteration…' : '';
       }
       list.innerHTML = pendingCards();
-      renderBalance(bal, null);
+      renderSummary(bal, null);
       return;
     }
     if (hint) {
@@ -32981,28 +32942,31 @@ async function renameActiveRunClient(name) {
       hint.textContent = '';
     }
     list.innerHTML = mons.map(monitorCard).join('');
-    renderBalance(bal, data);
+    renderSummary(bal, data, rec.id);
     restoreMonPlotTip(list);
     restoreMonFocus(list);
   }
 
-  /** Custom (Area average) monitors: a chart card each, or why there is no data. */
+  /** Custom monitors (result controls of a registered monitor type): a chart card each, or why there is no data. */
   function fillCustomMonitorCards(root) {
     if (!root) return;
     wireMonPlotHover(root);
     wireMonCardControls(root);
     const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
+    const data = rec ? monState.byRun[rec.id] : null;
+    const custom = (data && data.custom) || [];
+    const types = registryMonitorTypes(rec);
     const rcs = ((rec && rec.result_controls) || []).filter(
-      (rc) => rc && Array.isArray(rc.faces) && rc.faces.length && /area average|surface data/i.test(
-        [rc.kind, rc.type, rc.name, rc.category].filter(Boolean).join(' ')
-      )
+      (rc) =>
+        rc &&
+        Array.isArray(rc.faces) &&
+        rc.faces.length &&
+        (resolveMonitorType(rc, types) || custom.some((c) => (rc.id && String(c.id) === String(rc.id)) || c.name === rc.name))
     );
     if (!rec || !rcs.length) {
       root.innerHTML = '';
       return;
     }
-    const data = monState.byRun[rec.id];
-    const custom = (data && data.custom) || [];
     const solved = rec.status === 'done' || rec.status === 'failed' || rec.status === 'stopped';
     root.innerHTML = rcs
       .map((rc) => {
@@ -33066,8 +33030,9 @@ async function renameActiveRunClient(name) {
       const r = await fetch('/api/run/monitors?' + qs.toString(), { cache: 'no-store' });
       const j = await r.json();
       if (j && j.ok) {
-        // Custom monitors share the card code; their key is the card id.
-        j.custom = (j.custom || []).map((c) => ({ ...c, patch: c.key, custom: true }));
+        for (const row of (j.monitors || []).concat(j.custom || [])) {
+          if (row && typeof row === 'object') monRowRun.set(row, rec.id);
+        }
         monState.byRun[rec.id] = j;
       }
       renderRunMonitorsHub();
@@ -33107,6 +33072,14 @@ async function renameActiveRunClient(name) {
     const runId = resultCatalog.editing_run_id || runCatalog.selected_run_id;
     if (runId && !monState.byRun[runId]) refreshRunMonitors(runId);
   };
+
+  // Monitor types and quantities come with the registry, which can arrive after the panels drew.
+  let seenRegistry = useProjectStore.getState().registry;
+  useProjectStore.subscribe((st) => {
+    if (st.registry === seenRegistry) return;
+    seenRegistry = st.registry;
+    renderRunMonitorsHub();
+  });
 
   window.__CFD_REFRESH_MONITORS__ = refreshRunMonitors;
   wireMonChartModal();
@@ -34550,14 +34523,6 @@ function saveCaptureDialog(cap) {
 
 /* ---------------- Graphs: monitor time series per run ---------------- */
 
-const GRAPH_QUANTITIES = {
-  Umag: { label: 'Mean velocity', unit: 'm/s', pick: (s) => s.Umag },
-  Un: { label: 'Normal velocity', unit: 'm/s', pick: (s) => (s.Un_m_s != null ? Math.abs(s.Un_m_s) : null) },
-  p: { label: 'Pressure', unit: 'Pa', pick: (s) => s.p_Pa },
-  Q: { label: 'Flow rate', unit: 'm³/s', pick: (s) => (s.Q_m3s != null ? Math.abs(s.Q_m3s) : null) },
-  mdot: { label: 'Mass flow', unit: 'kg/s', pick: (s, rho) => (s.Q_m3s != null ? Math.abs(s.Q_m3s) * (rho || 1.196) : null) },
-};
-
 function niceTicks(lo, hi, n) {
   if (!(hi > lo)) {
     const v = Number.isFinite(lo) ? lo : 0;
@@ -34736,37 +34701,12 @@ function graphsCsv(runId) {
   const data = graphsData(runId);
   if (!data || !Array.isArray(data.monitors)) return '';
   const mons = data.monitors.concat(Array.isArray(data.custom) ? data.custom : []);
-  const iters = new Set();
-  for (const m of mons) for (const s of m.series || []) iters.add(Number(s.t));
-  const sorted = [...iters].filter(Number.isFinite).sort((a, b) => a - b);
-  const cols = ['Umag', 'Un', 'p', 'Q', 'mdot'];
   const recForCsv = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
   const transientCsv =
     (typeof runRecIsTransient === 'function' && runRecIsTransient(recForCsv)) ||
     !!(data && data.transient) ||
     /transient/i.test(String((data && data.time_dependency) || (recForCsv && recForCsv.time_dependency) || ''));
-  const head = [transientCsv ? 'time_s' : 'iteration'];
-  for (const m of mons) {
-    for (const c of cols) head.push((m.name || m.patch) + ' ' + GRAPH_QUANTITIES[c].label + ' [' + GRAPH_QUANTITIES[c].unit + ']');
-  }
-  const byT = mons.map((m) => {
-    const map = new Map();
-    for (const s of m.series || []) map.set(Number(s.t), s);
-    return map;
-  });
-  const lines = [head.map((h) => '"' + h.replace(/"/g, '""') + '"').join(',')];
-  for (const t of sorted) {
-    const row = [t];
-    mons.forEach((m, i) => {
-      const s = byT[i].get(t);
-      for (const c of cols) {
-        const v = s ? GRAPH_QUANTITIES[c].pick(s, data.rho) : null;
-        row.push(v == null || !Number.isFinite(v) ? '' : String(v));
-      }
-    });
-    lines.push(row.join(','));
-  }
-  return lines.join('\n');
+  return monitorsCsv(mons, runMonitorQuantities(data, runId), transientCsv);
 }
 
 async function downloadChartImage(svgEl, name, type) {
