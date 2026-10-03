@@ -30,6 +30,7 @@ import { TRANSIENT_LARGE_MESH_CELLS, simIsTransient } from './w30-transient.js';
 import { createJobLogger, MAX_LOG_BYTES } from './log.js';
 import { envGet } from './env-compat.js';
 import { spawnJob } from './job-runner.js';
+import { foldSolveEvent } from './solve-fold.js';
 import { checkRecordSave } from './link-stamp.js';
 import { LINK_BUILD_TEXT, linkStartRefusal, meshOutOfDate, runBuiltFrom } from './link-build.js';
 import { commitRpc, commitRpcSync } from './py-json.js';
@@ -129,7 +130,7 @@ let liveRun = null;
 
 export function newProgressState() {
   // thinned, cur_at, step_at: the steps a job log left out, the current row's step number, each row's (once steps were left out).
-  return { buf: '', series: [], stage: 'starting', current: null, pending: null, solve_started_at: null, saved_times: [], thinned: 0, cur_at: 0, step_at: null };
+  return { buf: '', series: [], stage: 'starting', current: null, held: null, solve_started_at: null, saved_times: [], thinned: 0, cur_at: 0, step_at: null };
 }
 
 const LATE_SOLVE_STAGES = new Set(['reconstruct', 'stopping']);
@@ -181,7 +182,9 @@ function parseEventPayload(line) {
 /**
  * Apply one MAGNUSIM_EVENT / CFDDESK_EVENT JSONL object to the live progress
  * state. The solver's output is parsed once, in Python (the analysis's log
- * parser, named by its launch spec); Node only aggregates the events.
+ * parser, named by its launch spec); Node only aggregates the events, steps by
+ * the shared fold (solve-fold.js: a Courant block belongs to the next step,
+ * each field's last initial residual of a step is kept).
  * Keeps snapshotProgress / enrichRunDoc shape unchanged for /api/run/status.
  */
 function applyJobEvent(state, ev) {
@@ -207,27 +210,21 @@ function applyJobEvent(state, ev) {
   if (kind === 'progress') {
     enterSolveStage(state);
     if (state.stage !== 'solve') return;
+    const open = state.current;
+    const closed = foldSolveEvent(state, ev);
+    if (!state.current || state.current === open) return; // no time: not a step
     // A job log leaves out steps of a fast run (job-runner.js createLogThinner):
     // a progress row says how many came right before it.
     const thinned = Math.max(0, Math.floor(Number(ev.thinned) || 0));
     if (thinned && !state.step_at) state.step_at = state.series.map((_, i) => i);
-    if (state.current && Number.isFinite(state.current.t)) {
-      state.series.push(state.current);
+    if (closed) {
+      state.series.push(closed);
       if (state.step_at) state.step_at.push(Number.isFinite(state.cur_at) ? state.cur_at : state.step_at.length);
     }
     state.thinned = (state.thinned || 0) + thinned;
     state.cur_at = state.series.length + state.thinned;
-    const t = Number(ev.time != null ? ev.time : ev.sim_time);
-    const prev = state.current || {};
-    const pend = state.pending || {};
-    state.pending = null;
-    state.current = { t };
-    for (const k of ['delta_t', 'co_max', 'co_mean']) {
-      if (Number.isFinite(Number(ev[k]))) state.current[k] = Number(ev[k]);
-      else if (Number.isFinite(pend[k])) state.current[k] = pend[k];
-      else if (Number.isFinite(prev[k])) state.current[k] = prev[k];
-    }
-    if (!state.solve_started_at && Number.isFinite(t) && t > 0) {
+    const t = state.current.t;
+    if (!state.solve_started_at && t > 0) {
       state.solve_started_at = new Date().toISOString();
     }
     return;
@@ -236,16 +233,7 @@ function applyJobEvent(state, ev) {
     enterSolveStage(state);
     const t = Number(ev.time != null ? ev.time : ev.sim_time);
     if (!state.current && Number.isFinite(t)) state.current = { t };
-    if (!state.current) return;
-    const field = ev.field;
-    const initial = Number(ev.initial);
-    if (field && Number.isFinite(initial)) state.current[field] = initial;
-    if (ev.fields && typeof ev.fields === 'object') {
-      for (const [k, v] of Object.entries(ev.fields)) {
-        const n = Number(v);
-        if (Number.isFinite(n)) state.current[k] = n;
-      }
-    }
+    foldSolveEvent(state, ev, { residual: 'last' });
     return;
   }
   if (kind === 'phase') {
@@ -259,10 +247,7 @@ function applyJobEvent(state, ev) {
   }
   if (kind === 'courant') {
     enterSolveStage(state);
-    if (!state.pending) state.pending = {};
-    if (Number.isFinite(Number(ev.mean))) state.pending.co_mean = Number(ev.mean);
-    if (Number.isFinite(Number(ev.max))) state.pending.co_max = Number(ev.max);
-    if (Number.isFinite(Number(ev.delta_t))) state.pending.delta_t = Number(ev.delta_t);
+    foldSolveEvent(state, ev);
     return;
   }
 }

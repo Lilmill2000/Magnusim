@@ -122,6 +122,7 @@ import { solveHookNames } from './solve-hooks.js';
 import { jobArgsFromParams, pluginJobEnv } from './server/registered-tool.js';
 import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from './project-layout.js';
 import { hardwareRankCap } from './w27-solve.js';
+import { STEP_METRICS, closeStep as closeSolveStep, foldSolveEvent, newSolveFold } from './solve-fold.js';
 
 export { createFoamRecord };
 
@@ -151,7 +152,6 @@ const FRAME_STAGES = new Set([
 ]);
 const FRAME_PHASES = new Set(['prepare', 'pre', 'copy_in', 'decompose', 'solve', 'reconstruct', 'copy_back']);
 const STAGE_NAME_RE = /^[a-z][a-z0-9_]{0,31}$/;
-const FIELD_RE = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/;
 const TOOL_RE = /^[A-Za-z][A-Za-z0-9]{0,31}$/;
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
 
@@ -611,11 +611,10 @@ export function runFoamSteps(plan) {
 
 // ---- events ----
 
-/** A fresh progress fold. */
+/** A fresh progress fold: the shared step fold (solve-fold.js) and the frame's points. */
 export function newFoamFold() {
   return {
-    /** @type {null | { t: number, res: Record<string, number>, co_max?: number, co_mean?: number, delta_t?: number }} */
-    cur: null,
+    ...newSolveFold(),
     steps: 0,
     /** @type {any[]} */
     pending: [],
@@ -629,17 +628,14 @@ export function newFoamFold() {
   };
 }
 
-/** @param {ReturnType<typeof newFoamFold>} state */
-function closeStep(state) {
-  const c = state.cur;
-  state.cur = null;
-  if (!c) return;
-  /** @type {Record<string, number>} */
-  const point = { t: c.t, ...c.res };
-  for (const k of ['co_max', 'co_mean', 'delta_t']) {
-    const v = /** @type {any} */ (c)[k];
-    if (finite(v)) point[k] = Number(v);
-  }
+/**
+ * A closed step becomes the frame's next point.
+ * @param {ReturnType<typeof newFoamFold>} state
+ * @param {Record<string, number> | null} step
+ */
+function takeStep(state, step) {
+  if (!step) return;
+  const point = { ...step };
   state.steps += 1;
   state.pending.push(point);
   if (state.pending.length > PENDING_MAX) state.pending.splice(0, state.pending.length - PENDING_MAX);
@@ -647,37 +643,21 @@ function closeStep(state) {
   state.dirty = true;
 }
 
+/** @param {ReturnType<typeof newFoamFold>} state */
+function closeStep(state) {
+  takeStep(state, closeSolveStep(state));
+}
+
 /**
- * Fold one solver event into the steps: a `progress` event closes the step before
- * it; per step the largest initial residual of each field is kept.
+ * Fold one solver event into the steps (solve-fold.js): a `progress` event closes
+ * the step before it; a Courant/deltaT block printed before `Time = t` is step t's;
+ * per step the largest initial residual of each field is kept.
  * @param {ReturnType<typeof newFoamFold>} state
  * @param {any} ev
  */
 export function foldFoamEvent(state, ev) {
   if (!ev || !state) return;
-  if (ev.event === 'progress') {
-    const t = Number(ev.time ?? ev.sim_time);
-    if (!Number.isFinite(t)) return;
-    closeStep(state);
-    state.cur = { t, res: {} };
-    for (const k of ['co_max', 'co_mean', 'delta_t']) if (finite(ev[k])) /** @type {any} */ (state.cur)[k] = Number(ev[k]);
-    return;
-  }
-  if (ev.event === 'residual' && state.cur) {
-    const fields = ev.fields && typeof ev.fields === 'object' ? ev.fields : ev.field ? { [ev.field]: ev.initial } : {};
-    for (const [k, v] of Object.entries(fields)) {
-      const x = Number(v);
-      if (!FIELD_RE.test(k) || !Number.isFinite(x)) continue;
-      const before = state.cur.res[k];
-      state.cur.res[k] = before === undefined ? x : Math.max(before, x);
-    }
-    return;
-  }
-  if (ev.event === 'courant' && state.cur) {
-    if (finite(ev.max)) state.cur.co_max = Number(ev.max);
-    if (finite(ev.mean)) state.cur.co_mean = Number(ev.mean);
-    if (finite(ev.delta_t)) state.cur.delta_t = Number(ev.delta_t);
-  }
+  takeStep(state, foldSolveEvent(state, ev, { residual: 'max' }));
 }
 
 /**
@@ -694,10 +674,10 @@ export function takeProgressFrame(state, now) {
   const last = state.last || {};
   /** @type {Record<string, number>} */
   const residuals = {};
-  for (const [k, v] of Object.entries(last)) if (!['t', 'co_max', 'co_mean', 'delta_t'].includes(k)) residuals[k] = /** @type {number} */ (v);
+  for (const [k, v] of Object.entries(last)) if (k !== 't' && !STEP_METRICS.includes(k)) residuals[k] = /** @type {number} */ (v);
   /** @type {Record<string, any>} */
   const ev = { event: 'progress', time: last.t, n_steps: state.steps, residuals, points };
-  for (const k of ['co_max', 'co_mean', 'delta_t']) if (finite(last[k])) ev[k] = last[k];
+  for (const k of STEP_METRICS) if (finite(last[k])) ev[k] = last[k];
   return ev;
 }
 
@@ -930,7 +910,7 @@ export function finishFoam(id, status, fields = {}) {
   const entry = R().entries.get(id);
   if (entry) {
     try {
-      if (entry.fold.cur) {
+      if (entry.fold.current) {
         closeStep(entry.fold);
       }
       emitProgress(id, entry);

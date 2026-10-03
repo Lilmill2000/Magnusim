@@ -284,6 +284,32 @@ test('gate:h15-submit-openfoam and gate:h15-app-allowlist: a plugin case on the 
     expect(wslPathExists(`${wslRoot}/${rec2.wsl_case}`)).toBe(false);
     stage(`c2 done on ${ranks ? ranks.n_procs : '?'} ranks: 5 binary frames, renumberMesh ${JSON.stringify(pre9('renumberMesh'))}`);
 
+    // Each step's Courant number in the progress points is the one the solver printed
+    // before that step's 'Time =' line (log.pimpleFoam, copied back into the case).
+    const courantAt = new Map();
+    let printed = null;
+    for (const raw of readFileSync(join(caseDir('cases/c2'), 'log.pimpleFoam'), 'utf8').split(/\r?\n/)) {
+      const line = raw.replace(/^\s*\[\d+\]\s*/, '');
+      const co = /^Courant Number mean:\s*(\S+)\s+max:\s*(\S+)/.exec(line);
+      if (co) printed = { co_mean: Number(co[1]), co_max: Number(co[2]) };
+      const tm = /^Time\s*=\s*([0-9.eE+-]+)s?\s*$/.exec(line);
+      if (tm && printed) {
+        courantAt.set(Number(tm[1]), printed);
+        printed = null;
+      }
+    }
+    const points9 = ev9.filter((e) => e.event === 'progress').flatMap((e) => e.points || []);
+    const checked = points9.filter((pt) => courantAt.has(pt.t) && Number.isFinite(pt.co_mean));
+    expect(checked.length, `${points9.length} points, ${courantAt.size} steps in the log`).toBeGreaterThanOrEqual(10);
+    expect(new Set(checked.map((pt) => courantAt.get(pt.t).co_mean)).size, 'the Courant number changes over the run').toBeGreaterThan(1);
+    const offStep = checked
+      .filter((pt) => pt.co_mean !== courantAt.get(pt.t).co_mean || pt.co_max !== courantAt.get(pt.t).co_max)
+      .map((pt) => ({ t: pt.t, point: [pt.co_mean, pt.co_max], log: courantAt.get(pt.t) }));
+    expect(offStep.slice(0, 5), `${offStep.length} of ${checked.length} points carry another step's Courant number`).toEqual([]);
+    const lastStep = [...courantAt.keys()].at(-1);
+    expect([points9.at(-1).t, points9.at(-1).co_mean]).toEqual([lastStep, courantAt.get(lastStep).co_mean]);
+    stage(`c2: the Courant number of ${checked.length} points is their own step's`);
+
     // 10. A step that fails ends the case and names its log.
     await writeCase({ caseRel: 'cases/c5', broken: true });
     await run({ caseRel: 'cases/c5', broken: true });

@@ -18,6 +18,8 @@ Host API 1.5 (`API_VERSION`, and `hostVersion` in a workspace's context), worksp
 
 **Records on a linked geometry.** Each face- or body-carrying record of a linked geometry's studies (boundary condition, material, refinement, study result control, and every run but a finished one, with its result controls) carries `geometry_rev`, set by the host when a save passes its check, and may carry `lost_faces`, which only the host writes. A save drawn at an older rev answers `409 geometry_changed` ("<Geometry> was updated. This change was not saved."), and one while the geometry's update is unfinished `503 geometry_updating` with `Retry-After`. A plugin's own pages never write these records; a plugin method that reads them sees each file whole.
 
+**Progress frames, a fix.** A `progress` frame's per-step `co_max`, `co_mean` and `delta_t` (and each of its `points`) are the Courant number and time step the solver printed before that step's `Time =` line. Before 1.5 a point carried the next step's.
+
 ## 1.4
 
 Host API 1.4 (`API_VERSION`, and `hostVersion` in a workspace's context). The workspace SDK (1.1.0) and the plugin UI kit are unchanged; `magnusim_sdk` stays 1.2.0, with two fluid values corrected (below). A 1.3 plugin loads unchanged, unless it drops one of the BC types Incompressible Flow now owns (below).

@@ -733,6 +733,44 @@ describe('events', () => {
     assert.equal(one.points.at(-1).t, 999);
   });
 
+  it('a Courant block printed before Time = t lands on step t; a deltaT-only one fills delta_t', () => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
+    const { rec, spawn } = started();
+    spawn.onEvent({ event: 'stage', stage: 'solve' });
+    // What the log parser sends for a pimpleFoam log: the step's Courant number and
+    // deltaT lines come before its 'Time =' line (the progress event's own co_* are
+    // left out here, so the fold alone decides).
+    for (let i = 1; i <= 3; i += 1) {
+      spawn.onEvent({ event: 'courant', mean: i / 10, max: i });
+      spawn.onEvent({ event: 'courant', delta_t: i / 1000 });
+      spawn.onEvent({ event: 'progress', time: i / 1000, sim_time: i / 1000 });
+      spawn.onEvent({ event: 'residual', field: 'Ux', initial: 1 / i, fields: { Ux: 1 / i } });
+    }
+    mock.timers.tick(300);
+    finishFoam(rec.id, 'done');
+    const points = frames(rec.id)
+      .filter((e) => e.event === 'progress')
+      .flatMap((e) => e.points);
+    assert.deepEqual(points, [
+      { t: 0.001, co_mean: 0.1, co_max: 1, delta_t: 0.001, Ux: 1 },
+      { t: 0.002, co_mean: 0.2, co_max: 2, delta_t: 0.002, Ux: 0.5 },
+      { t: 0.003, co_mean: 0.3, co_max: 3, delta_t: 0.003, Ux: 1 / 3 },
+    ]);
+    // The progress event's own values win; a deltaT-only block keeps the step before's Courant.
+    const st = newFoamFold();
+    foldFoamEvent(st, { event: 'courant', mean: 0.5, max: 0.9 });
+    foldFoamEvent(st, { event: 'progress', time: 1, co_mean: 0.4 });
+    foldFoamEvent(st, { event: 'courant', delta_t: 0.25 });
+    foldFoamEvent(st, { event: 'progress', time: 2 });
+    foldFoamEvent(st, { event: 'progress', time: 3 });
+    const frame = runner.takeProgressFrame(st, 0);
+    assert.deepEqual(frame.points, [
+      { t: 1, co_mean: 0.4, co_max: 0.9 },
+      { t: 2, co_mean: 0.4, co_max: 0.9, delta_t: 0.25 },
+    ]);
+    assert.deepEqual([frame.time, frame.co_mean, frame.co_max, frame.delta_t], [2, 0.4, 0.9, 0.25]);
+  });
+
   it('no frame event carries a path, a pid or a log line', () => {
     const { rec, spawn } = started();
     const raw = [
