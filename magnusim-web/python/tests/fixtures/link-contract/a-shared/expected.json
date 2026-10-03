@@ -1,0 +1,143 @@
+{
+  "faces": [
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        0.0,
+        5.0,
+        5.0
+      ],
+      "index": 1,
+      "side": "-x"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        10.0,
+        5.0,
+        5.0
+      ],
+      "index": 2,
+      "side": "+x"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        5.0,
+        0.0,
+        5.0
+      ],
+      "index": 3,
+      "side": "-y"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        5.0,
+        10.0,
+        5.0
+      ],
+      "index": 4,
+      "side": "+y"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        5.0,
+        5.0,
+        0.0
+      ],
+      "index": 5,
+      "side": "-z"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        5.0,
+        5.0,
+        10.0
+      ],
+      "index": 6,
+      "side": "+z"
+    },
+    {
+      "area": 100.0,
+      "body": 2,
+      "centroid": [
+        10.0,
+        5.0,
+        5.0
+      ],
+      "index": 7,
+      "side": "-x"
+    },
+    {
+      "area": 100.0,
+      "body": 2,
+      "centroid": [
+        30.0,
+        5.0,
+        5.0
+      ],
+      "index": 8,
+      "side": "+x"
+    },
+    {
+      "area": 200.0,
+      "body": 2,
+      "centroid": [
+        20.0,
+        0.0,
+        5.0
+      ],
+      "index": 9,
+      "side": "-y"
+    },
+    {
+      "area": 200.0,
+      "body": 2,
+      "centroid": [
+        20.0,
+        10.0,
+        5.0
+      ],
+      "index": 10,
+      "side": "+y"
+    },
+    {
+      "area": 200.0,
+      "body": 2,
+      "centroid": [
+        20.0,
+        5.0,
+        0.0
+      ],
+      "index": 11,
+      "side": "-z"
+    },
+    {
+      "area": 200.0,
+      "body": 2,
+      "centroid": [
+        20.0,
+        5.0,
+        10.0
+      ],
+      "index": 12,
+      "side": "+z"
+    }
+  ],
+  "n_solids": 2,
+  "part": "a-shared",
+  "shared_centroid": [
+    10.0,
+    5.0,
+    5.0
+  ]
+}

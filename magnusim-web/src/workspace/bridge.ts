@@ -22,20 +22,32 @@
  * study's folder, and follows, stops and lists the study's cases. One event
  * stream per channel carries every followed case; a reconnect's snapshot
  * catches each case up, and an event the frame already has (by seq) is dropped.
+ *
+ * Linked geometries (1.5): project.linkGeometry sends the study's saved design to
+ * /api/plugin-geometry/link and stays pending until the job it started ends, following
+ * it on this study's /api/plugin-geometry/events stream (its stages go to the page as
+ * `linkProgress`). Link job ids sit in a follow-only set, never in `jobs`: nothing a
+ * page can call stops an update. The same stream tells the page when this study's
+ * geometry changed (`geometry`), and no other study's page hears it.
  */
 import type {
   ComputeJob,
   FileInfo,
   FileWriteResult,
   JobEvent,
+  LinkedGeometry,
+  LinkResult,
   StudyRecord,
   ThemeInfo,
   UnitSystem,
   WorkspaceContext,
 } from '../plugin-sdk/workspace';
+import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestion } from './linkChoice';
 
 export const HOST_SDK_MAJOR = 1;
-export const HOST_API_VERSION = '1.4';
+export const HOST_API_VERSION = '1.5';
+/** A link job's id (gl-<time>-<hex>, scripts/link-store.js LINK_JOB_RE). */
+const LINK_JOB_ID = /^gl-[a-z0-9]{6,12}-[0-9a-f]{6}$/;
 const PROBE_MS = 1500;
 const METHOD_NAME = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,120}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/i;
@@ -89,6 +101,21 @@ export interface BridgeHooks {
    * once the workspace is closing for it; false when the user cancelled or stayed.
    */
   openResults(caseRel: string): Promise<boolean>;
+  /** A link this page made committed with something the user must know (lost, returned, split, ...). */
+  linkReport?(result: LinkResult): void;
+  /**
+   * A link this page started (its job, or its answer at once): the host lands on that
+   * geometry when the workspace closes (showLinkedGeometry, LINK 6.5).
+   */
+  linkStarted?(link: { geometryId: string; jobId: string | null; created: boolean }): void;
+  /**
+   * The host's question (API 1.5, LINK 5.0): the shape changed under simulation setup.
+   * The answer, or null when it was dropped (the page is going away, or the job ended
+   * another way): the question then stays open and the geometry's row offers "Choose…".
+   */
+  linkChoice?(question: LinkQuestion, signal: AbortSignal): Promise<LinkChoice | null>;
+  /** "Save as new" landed: the new geometry and what its copies came to (the host's report). */
+  linkSavedAsNew?(info: { newName: string; oldName: string; copies: LinkCopyOutcome[] | null }): void;
 }
 
 export class BridgeError extends Error {
@@ -180,6 +207,59 @@ function caseJob(job: ComputeJob): ComputeJob {
   return { ...job, result: caseResult(job.result) };
 }
 
+/** A link file's fields as the link route takes them (`bad_request` for anything else). */
+function linkFileBody(v: unknown, what: string): { rel: string; sha256?: string; etag?: string } {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw badParam(`${what} ({rel, sha256} or {rel, etag})`);
+  const f = v as Record<string, unknown>;
+  const out: { rel: string; sha256?: string; etag?: string } = { rel: text(f.rel, `${what}.rel`, 240) };
+  if (f.sha256 !== undefined && f.sha256 !== null) {
+    if (typeof f.sha256 !== 'string' || !SHA256_HEX.test(f.sha256)) throw badParam(`${what}.sha256 (64 hex digits)`);
+    out.sha256 = f.sha256.toLowerCase();
+  }
+  if (f.etag !== undefined && f.etag !== null) out.etag = text(f.etag, `${what}.etag`, 200);
+  if (!!out.sha256 === !!out.etag) throw badParam(`${what} (exactly one of sha256 and etag)`);
+  return out;
+}
+
+/** project.linkGeometry's params as the link route's body (scope added by the caller). */
+export function linkBody(params: Record<string, unknown>): Record<string, unknown> {
+  const shape = linkFileBody(params.shape, 'shape');
+  const format = (params.shape as Record<string, unknown>).format;
+  const body: Record<string, unknown> = { shape: { ...shape, format: typeof format === 'string' ? format : '' } };
+  body.face_names = params.faceNames === undefined || params.faceNames === null ? null : linkFileBody(params.faceNames, 'faceNames');
+  if (!isCount(params.sourceVersion)) throw badParam('sourceVersion (a whole number)');
+  body.source_version = params.sourceVersion;
+  const based = params.basedOnRev;
+  if (based !== null && based !== undefined && !isCount(based)) throw badParam('basedOnRev (a whole number or null)');
+  body.based_on_rev = based ?? null;
+  if (params.name !== undefined && params.name !== null) body.name = text(params.name, 'name', 120);
+  return body;
+}
+
+/** A finished link's result for the page: the job's own, else the minimal one an older record kept. */
+function linkResultOf(raw: unknown): LinkResult {
+  return raw as LinkResult;
+}
+
+/** Something in a link's result the user must be told (proposal 5.14): lost, returned, split, merged, moved far, claimed twice. */
+export function linkNeedsReport(r: LinkResult | null | undefined): boolean {
+  if (!r) return false;
+  const m = r.match || { split: 0, merged: 0, movedFar: 0 };
+  return !!(r.lost?.length || r.returned?.length || r.claimedTwice?.length || m.split || m.merged || m.movedFar);
+}
+
+/** A link this page is waiting for: where its progress goes, and how it ends. */
+interface LinkWait {
+  token: string;
+  done: (r: LinkResult) => void;
+  fail: (e: BridgeError) => void;
+  seq: number;
+  /** The host's question while it is on screen: aborted when the job ends another way. */
+  ask?: AbortController | null;
+  /** "Save as new": the old geometry's name, for the report. */
+  oldName?: string;
+}
+
 /** A followed case: the last seq the frame was given; `held` keeps its events until it is caught up. */
 interface FollowedCase {
   seq: number;
@@ -226,6 +306,19 @@ export class WorkspaceCalls {
   private readonly hooks: BridgeHooks;
   /** Jobs this workspace started (the only ones it may follow or stop). */
   readonly jobs = new Set<string>();
+  /** Link jobs this page started: followed only, never stoppable (API 1.5). */
+  readonly linkJobs = new Set<string>();
+  /** Links this page waits for, by job id; the study's link stream and whether the page wants `geometry`. */
+  private readonly linkWaits = new Map<string, LinkWait>();
+  /**
+   * False for a caller that cannot ask (L3's scripted exit, askToLeave:false): the host's
+   * question is answered "Overwrite" at once, revision 6's update (LINK 5.0, 6.4).
+   */
+  private interactive = true;
+  private linkStream: EventSource | null = null;
+  private wantsGeometry = false;
+  /** Link jobs whose end the page was told of (`geometry` once per job). */
+  private readonly linkEnds = new Set<string>();
   private readonly streams = new Map<string, EventSource>();
   /** The study's plugin cases the frame follows (compute.events), and their one stream. */
   private readonly cases = new Map<string, FollowedCase>();
@@ -248,6 +341,11 @@ export class WorkspaceCalls {
 
   setPush(push: (msg: Record<string, unknown>) => void): void {
     this.push = push;
+  }
+
+  /** Whether a link of this page may show the host's question (false: answer "Overwrite"). */
+  setInteractive(on: boolean): void {
+    this.interactive = !!on;
   }
 
   private q(extra: Record<string, string> = {}): string {
@@ -362,6 +460,18 @@ export class WorkspaceCalls {
         return this.files(method, params);
       case 'project.info':
         return { id: s.projectId, title: s.projectTitle, units: this.hooks.units() };
+      case 'project.linkGeometry':
+        return this.linkGeometry(params);
+      case 'project.linkedGeometry': {
+        const r = await api<{ linked: LinkedGeometry | null }>(
+          `/api/plugin-geometry/linked?${this.q({ plugin: s.plugin, study_id: s.studyId })}`,
+        );
+        return r.linked ?? null;
+      }
+      case 'project.followGeometry':
+        this.wantsGeometry = true;
+        this.openLinkStream();
+        return { ok: true };
       case 'prefs.units':
         return this.hooks.units();
       case 'theme':
@@ -427,6 +537,195 @@ export class WorkspaceCalls {
       default:
         throw notAllowed(method ? JSON.stringify(method) : 'an unnamed call');
     }
+  }
+
+  /**
+   * project.linkGeometry: refused `unsaved` while the page says it has unsaved work (the
+   * geometry only ever shows a saved design); else the link route, then the job it
+   * started, followed to its end.
+   */
+  private async linkGeometry(params: Record<string, unknown>): Promise<LinkResult> {
+    const s = this.scope;
+    if (this.frameDirty) throw new BridgeError('Save the design before linking it: the page has unsaved work.', 'unsaved');
+    const token = typeof params.token === 'string' ? params.token.slice(0, 64) : '';
+    const body = { project_id: s.projectId, plugin: s.plugin, study_id: s.studyId, ...linkBody(params) };
+    // Open the stream first, so the job's first events are not missed.
+    this.openLinkStream();
+    const epoch = this.epoch;
+    const answer = await api<{ result?: LinkResult; job_id?: string; geometry_id?: string; created?: boolean; choosing?: LinkQuestion }>(
+      `/api/plugin-geometry/link?${this.q()}`,
+      { body },
+    );
+    if (answer.result) {
+      const done = linkResultOf(answer.result);
+      if (done.geometryId) this.hooks.linkStarted?.({ geometryId: done.geometryId, jobId: null, created: false });
+      // Nothing changed, but the link recorded the design's version: the geometry's row
+      // reads the tree again ("Not up to date" goes), as it does when a job ends.
+      window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { link: true } }));
+      return done;
+    }
+    const jobId = String(answer.job_id || '');
+    if (!LINK_JOB_ID.test(jobId)) throw new BridgeError('The app did not start the link', 'failed');
+    if (answer.geometry_id && !answer.choosing) this.hooks.linkStarted?.({ geometryId: String(answer.geometry_id), jobId, created: !!answer.created });
+    // A page that closed before the answer came does not ask: the question stays open.
+    if (epoch !== this.epoch) throw new BridgeError('the workspace closed', 'failed');
+    this.linkJobs.add(jobId);
+    const ending = new Promise<LinkResult>((done, fail) => {
+      this.linkWaits.set(jobId, { token, done, fail, seq: 0 });
+      // It may have ended before the stream heard of it: its status says.
+      void api<{ job?: { status?: string; result?: unknown; error?: string | null; code?: string | null; seq?: number } }>(
+        `/api/plugin-geometry/status?${this.q({ plugin: s.plugin, study_id: s.studyId, job_id: jobId })}`,
+      )
+        .then((r) => {
+          if (r.job) this.onLinkJob(jobId, r.job);
+        })
+        .catch(() => undefined);
+    });
+    if (answer.choosing) await this.answerLinkQuestion(jobId, answer.choosing);
+    const result = await ending;
+    const wait = this.saved.get(jobId);
+    this.saved.delete(jobId);
+    if (wait && result.created && wait.oldName) {
+      try {
+        this.hooks.linkSavedAsNew?.({ newName: result.name, oldName: wait.oldName, copies: wait.copies });
+      } catch (e) {
+        this.hooks.log('link report failed', e);
+      }
+      return result;
+    }
+    if (linkNeedsReport(result)) {
+      try {
+        this.hooks.linkReport?.(result);
+      } catch (e) {
+        this.hooks.log('link report failed', e);
+      }
+    }
+    return result;
+  }
+
+  /** "Save as new" jobs this page waits for: the old geometry's name and the copies' outcome, for the report. */
+  private readonly saved = new Map<string, { oldName: string; copies: LinkCopyOutcome[] | null }>();
+
+  /**
+   * The host's question for a link this page made (LINK 5.0): the dialog over the
+   * workspace (or "Overwrite" at once for a caller that cannot ask), then the answer to
+   * the choose route, which only the host calls. "Keep editing" ends the job `cancelled`,
+   * which rejects linkGeometry with that code. A dialog dropped unanswered (the page went
+   * away, or the job ended another way) sends nothing: the question stays open and the
+   * geometry's row offers "Choose…".
+   */
+  private async answerLinkQuestion(jobId: string, question: LinkQuestion): Promise<void> {
+    const s = this.scope;
+    const wait = this.linkWaits.get(jobId);
+    const ask = new AbortController();
+    if (wait) {
+      wait.ask = ask;
+      wait.oldName = question.geometry.name;
+    }
+    let picked: LinkChoice | null;
+    if (!this.interactive || !this.hooks.linkChoice) picked = { choice: 'overwrite' };
+    else picked = await this.hooks.linkChoice(question, ask.signal);
+    if (wait) wait.ask = null;
+    if (!picked || !this.linkWaits.has(jobId)) return;
+    try {
+      const chosen = await sendLinkChoice({ projectId: s.projectId, plugin: s.plugin, studyId: s.studyId, jobId }, picked);
+      if (picked.choice === 'new') this.saved.set(jobId, { oldName: question.geometry.name, copies: null });
+      if (chosen.geometry_id && picked.choice !== 'cancel') {
+        this.hooks.linkStarted?.({ geometryId: String(chosen.geometry_id), jobId, created: !!chosen.created });
+      }
+    } catch (e) {
+      const code = String((e as { code?: unknown })?.code || 'failed');
+      // Answered in another tab or from the geometry's row: the job's end settles the call.
+      if (code === 'not_choosing') return;
+      const w = this.linkWaits.get(jobId);
+      this.linkWaits.delete(jobId);
+      this.linkJobs.delete(jobId);
+      w?.fail(new BridgeError((e as Error).message || 'The answer was refused', code));
+    }
+  }
+
+  /** This study's link stream: one per channel, for the links this page waits for and `geometry`. */
+  private openLinkStream(): void {
+    if (this.linkStream) return;
+    const s = this.scope;
+    const es = new EventSource(`/api/plugin-geometry/events?${this.q({ plugin: s.plugin, study_id: s.studyId })}`);
+    this.linkStream = es;
+    es.addEventListener('snapshot', (e) => {
+      try {
+        const snap = JSON.parse((e as MessageEvent).data) as { jobs?: Array<{ id: string; status?: string; result?: unknown; error?: string | null; code?: string | null; seq?: number }> };
+        for (const job of snap.jobs || []) if (job && job.id) this.onLinkJob(job.id, job);
+      } catch {
+        /* not JSON: skip */
+      }
+    });
+    es.addEventListener('link', (e) => {
+      try {
+        const m = JSON.parse((e as MessageEvent).data) as { job_id?: string; seq?: number; ev?: Record<string, unknown> };
+        if (typeof m.job_id === 'string' && m.ev && typeof m.ev === 'object') this.onLinkEvent(m.job_id, Number(m.seq) || 0, m.ev);
+      } catch {
+        /* not JSON: skip */
+      }
+    });
+    es.onerror = () => {
+      if (es.readyState === EventSource.CLOSED && this.linkStream === es) this.linkStream = null;
+    };
+  }
+
+  /** A link job's state as the snapshot or its status has it: an ended one settles. */
+  private onLinkJob(jobId: string, job: { status?: string; result?: unknown; error?: string | null; code?: string | null; seq?: number; copies?: unknown }): void {
+    const status = String(job.status || '');
+    if (['queued', 'running', 'choosing'].includes(status)) return;
+    this.onLinkEvent(
+      jobId,
+      Number(job.seq) || 0,
+      { event: 'end', status, result: job.result ?? null, error: job.error ?? null, code: job.code ?? null, copies: job.copies ?? null },
+      true,
+    );
+  }
+
+  private onLinkEvent(jobId: string, seq: number, ev: Record<string, unknown>, snapshot = false): void {
+    const wait = this.linkWaits.get(jobId);
+    if (wait && !snapshot) {
+      if (seq && seq <= wait.seq) return;
+      if (seq) wait.seq = seq;
+    }
+    const kind = String(ev.event || '');
+    if (kind === 'stage' || kind === 'queued') {
+      if (wait && wait.token) {
+        const stage = kind === 'queued' ? 'queued' : String(ev.stage || '');
+        if (stage) {
+          this.push({
+            event: 'linkProgress',
+            data: {
+              token: wait.token,
+              stage,
+              fraction: typeof ev.fraction === 'number' ? ev.fraction : null,
+              ...(typeof ev.label === 'string' ? { label: ev.label } : {}),
+              ...(typeof ev.ahead === 'number' ? { ahead: ev.ahead } : {}),
+            },
+          });
+        }
+      }
+      return;
+    }
+    if (kind !== 'end') return;
+    // The question on screen goes when its job ends another way (superseded, answered elsewhere).
+    wait?.ask?.abort();
+    const status = String(ev.status || '');
+    const result = (ev.result || null) as LinkResult | null;
+    const kept = this.saved.get(jobId);
+    if (kept && Array.isArray(ev.copies)) kept.copies = ev.copies as LinkCopyOutcome[];
+    if (status === 'done' && result && result.change && result.change !== 'none' && !this.linkEnds.has(jobId)) {
+      this.linkEnds.add(jobId);
+      if (this.wantsGeometry) {
+        this.push({ event: 'geometry', data: { geometryId: result.geometryId, rev: result.rev, fromRev: result.fromRev ?? null } });
+      }
+    }
+    if (!wait) return;
+    this.linkWaits.delete(jobId);
+    this.linkJobs.delete(jobId);
+    if (status === 'done' && result) wait.done(linkResultOf(result));
+    else wait.fail(new BridgeError(String(ev.error || `The link ended ${status || 'without a result'}`), String(ev.code || status || 'failed')));
   }
 
   /** Files in this plugin's folder of the project; the app checks every path. */
@@ -769,6 +1068,18 @@ export class WorkspaceCalls {
   close(): void {
     for (const es of this.streams.values()) es.close();
     this.streams.clear();
+    this.linkStream?.close();
+    this.linkStream = null;
+    this.wantsGeometry = false;
+    // A link the server accepted goes on (the next page sees it in linkedGeometry);
+    // this page load no longer waits for it.
+    for (const w of this.linkWaits.values()) {
+      w.ask?.abort();
+      w.fail(new BridgeError('the workspace closed', 'failed'));
+    }
+    this.linkWaits.clear();
+    this.saved.clear();
+    this.linkJobs.clear();
     this.caseStream?.close();
     this.caseStream = null;
     this.cases.clear();

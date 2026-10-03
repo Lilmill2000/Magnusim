@@ -178,6 +178,20 @@ import { createToastQueue } from './toastQueue';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
 import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js';
+import {
+  OLDER_RUN_TEXT,
+  adoptServerRev,
+  bindGeometryRevHost,
+  canPickInto,
+  fetchLinkedSave,
+  reloadLinkedToServer,
+  runOlderGeometry,
+  shownGeometryKey,
+  stampRecords,
+  subscribeLinkedGeometries,
+  withGeometryRev,
+} from './geometryRev';
+import { setShownFaceTable } from './faceNames';
 import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId } from '../viewer/pick.ts';
 import { RAINBOW_HUE, colormapGradient } from '../plugin-ui/colormaps';
 import { formatElapsed, formatEta, formatSimTime } from '../plugin-ui/format/time';
@@ -339,6 +353,8 @@ function ptApiSeedMode() {
 }
 function ptFacesParam(s) {
   const st = s || ptState;
+  // A run made on an older version of its linked geometry seeds from no face (D26).
+  if (ptFaceToolsOff()) return '__none__';
   if (isRegionSeedMode(st) && !regionIsUsable(st.region)) return '__none__';
   const faces = Array.isArray(st.faces) ? st.faces : [];
   return faces.length ? faces.join(',') : '__none__';
@@ -5562,7 +5578,40 @@ function paintForPtFaces(faces) {
   return paint;
 }
 
+/**
+ * The run whose results are open was made on an older version of its linked geometry
+ * (host API 1.5, D26): the live faces are not the ones it solved on, so face seeds and
+ * face highlights are off for it; its field views work as before. The line it shows, or ''.
+ */
+function ptFaceToolsOffText() {
+  if (!resultsViewOpen || !resultsRunId) return '';
+  const geometry = runOlderGeometry(resultsRunId);
+  return geometry === null ? '' : OLDER_RUN_TEXT(geometry);
+}
+
+function ptFaceToolsOff() {
+  return !!ptFaceToolsOffText();
+}
+
+/** The particle trace block's line and its face controls for such a run. */
+function syncPtOlderGeometry() {
+  const text = ptFaceToolsOffText();
+  const note = document.getElementById('pt-older-geometry');
+  if (note) {
+    note.hidden = !text;
+    note.textContent = text;
+  }
+  const hilite = document.getElementById('pt-highlight-openings');
+  if (hilite) hilite.disabled = !!text;
+  const clear = document.getElementById('pt-clear-assign');
+  if (clear) clear.disabled = !!text;
+  if (text) {
+    try { hidePtFaceOverlay(); } catch (_) {}
+  }
+}
+
 function isAssigningPtFace() {
+  if (ptFaceToolsOff()) return false;
   const block = document.getElementById('pt-block');
   return !!(
     resultsViewOpen &&
@@ -6672,6 +6721,12 @@ async function handlePluginStudyAction(ps, action, detail) {
     openSetupWizard({ required: false, step: 'plugins' });
     return;
   }
+  if (action === 'plugin-study-geometry') {
+    // "→ <geometry>" on a linking study's row (API 1.5): show the geometry it links.
+    const gid = String(detail.geometryId || '');
+    if (gid) await switchGeometryClient(gid);
+    return;
+  }
   if (action === 'plugin-study-open') {
     // Its plugin's workspace, over the workbench (#/p/<pid>/ws/<plugin>/<ws>/<sid>).
     const ws = String(detail.workspace || '');
@@ -7599,6 +7654,7 @@ function syncPtModeVisibility() {
   setHidden('pt-quantity-field', !faceLike);
   setHidden('pt-n-seeds-field', !faceLike || dens);
   setHidden('pt-density-field', !faceLike || !dens);
+  syncPtOlderGeometry();
 }
 
 function readPtFacesFromChrome() {
@@ -19240,7 +19296,10 @@ async function loadOfficialCadCom() {
   try {
     const r = await fetch('/api/geometry/cad?project_id=' + encodeURIComponent(pid) + '&part=preview');
     if (!r.ok) return;
-    rememberOfficialCom(await r.json());
+    const meta = await r.json();
+    rememberOfficialCom(meta);
+    // A linked geometry's face and body names, for the face and body lists (API 1.5).
+    try { setShownFaceTable(meta, (w16State.geometry && w16State.geometry.id) || ''); } catch (_) {}
   } catch (_) {}
 }
 
@@ -25360,6 +25419,7 @@ async function deleteAirMaterialClient() {
   const payload = { delete: true };
   if (w16State.project && w16State.project.id) payload.project_id = w16State.project.id;
   if (typeof currentMeshStudyIds === 'function') Object.assign(payload, currentMeshStudyIds());
+  // census: a delete (never stamp-checked).
   const r = await fetch('/api/materials', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -25689,11 +25749,11 @@ async function persistConvertedBcs(changed) {
   }
   let last = null;
   for (const [sid, list] of groups) {
-    const r = await fetch('/api/bcs', {
+    const r = await fetchLinkedSave('/api/bcs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        bcs: list,
+        bcs: stampRecords(list),
         project_id: currentProjectId() || undefined,
         simulation_id: sid || undefined,
       }),
@@ -26126,6 +26186,7 @@ async function persistBcDefaults(partial) {
   const pid = currentProjectId();
   if (pid) body.project_id = pid;
   if (typeof currentMeshStudyIds === 'function') Object.assign(body, currentMeshStudyIds());
+  // census: the wall default only, no face-carrying record (never stamp-checked).
   const r = await fetch('/api/bcs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -26140,9 +26201,67 @@ async function persistBcDefaults(partial) {
 }
 
 
+/** The study's BCs as the server has them now (a pick into a record of another rev reads them first). */
+async function rereadBcRecords() {
+  const pid = currentProjectId();
+  const sid = currentStudyId();
+  if (!pid) return;
+  const qs = 'project_id=' + encodeURIComponent(pid) + (sid ? '&simulation_id=' + encodeURIComponent(sid) : '');
+  try {
+    const j = await fetch('/api/bcs?' + qs, { cache: 'no-store' }).then((r) => r.json());
+    if (j && j.ok !== false) applyBcRecords(j, j.project_id || pid);
+  } catch (e) {
+    console.warn('[CFD] BC re-read', e);
+  }
+}
+
+/**
+ * Forget lost faces of a linked geometry's records (API 1.5): one entry, every entry of a
+ * record, of a study, or of the whole geometry. The server refuses a tab that shows an
+ * older rev of the geometry (409) and a geometry that is updating (503).
+ */
+async function forgetLostFacesClient(opts) {
+  const o = opts || {};
+  const pid = currentProjectId();
+  const gid = String(o.geometry_id || (w16State.geometry && w16State.geometry.id) || '');
+  if (!pid || !gid) throw new Error('No geometry is shown');
+  const body = withGeometryRev(
+    {
+      project_id: pid,
+      geometry_id: gid,
+      study_id: o.study_id || '',
+      kind: o.kind || '',
+      id: o.id || '',
+      mesh_id: o.mesh_id || '',
+      run_id: o.run_id || '',
+      entry: o.entry || null,
+    },
+    null,
+    gid,
+  );
+  const r = await fetchLinkedSave(
+    '/api/geometry/lost-faces/forget',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    gid,
+  );
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) throw new Error(j.error || 'Could not forget the lost faces');
+  await rereadBcRecords();
+  window.dispatchEvent(new CustomEvent('cfd:tree-sync'));
+  window.dispatchEvent(new CustomEvent('cfd:lost-faces', { detail: { geometry_id: gid } }));
+  return j;
+}
+
+window.__CFD_FORGET_LOST__ = forgetLostFacesClient;
+
 function toggleAssignFace(label) {
   const name = String(label || '').trim();
   if (!name || !activeBc()) return;
+  // Its labels were drawn at another rev of a linked geometry: read it again first.
+  if (!canPickInto(activeBc())) {
+    void rereadBcRecords();
+    return;
+  }
   // A face inside the part is refused; one saved on a BC before still comes off.
   if (cadInsideFaces.has(name) && !(bcCatalog.draft_faces || []).includes(name)) {
     refuseInsideFace(name);
@@ -26251,10 +26370,10 @@ async function createBcClient(bcType, opts) {
     try { clearCadSelection(); } catch (_) {}
   }
   const pending = (async () => {
-    const r = await fetch('/api/bcs', {
+    const r = await fetchLinkedSave('/api/bcs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(local),
+      body: JSON.stringify(withGeometryRev(local)),
     });
     const j = await r.json();
     if (!r.ok || !j.ok) throw new Error(j.error || 'BC create failed');
@@ -26281,6 +26400,7 @@ async function deleteBcClient(id) {
   const body = { delete: id };
   const pid = currentProjectId();
   if (pid) body.project_id = pid;
+  // census: a delete (never stamp-checked: deletes go on even while a geometry is fenced).
   const r = await fetch('/api/bcs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -29330,6 +29450,14 @@ async function generateMeshClient(opts) {
     if (kickMeshId) enqueueMeshJob(kickMeshId, liveSettings);
     return { busy: true, queued: true, mesh_id: kickMeshId };
   }
+  if (!(r.ok || r.status === 202) && j && j.final === true) {
+    // Refused before it started (a linked geometry still updating, or a face claimed
+    // twice): the mesh is as it was, and the panel says why.
+    restoreGenerateOptimism(undo);
+    meshCatalog.note = j.error || 'Generate failed to start';
+    publishW20({ note: meshCatalog.note });
+    throw new Error(meshCatalog.note);
+  }
   if (j && j.job_id) watchJobEvents(j.job_id);
   jobState.last_kick = { ok: r.ok || r.status === 202, status: r.status, body: j, kind: 'generate' };
   applyCaseSnapToJob(j);
@@ -31398,7 +31526,15 @@ function computeRunState() {
     mesh_ready: meshReady,
     // The analysis's readiness: true, false, or null while it has not answered.
     setup_ready: setupIssue === undefined ? null : setupIssue === null,
+    // Made on an older version of its linked geometry (host API 1.5, D26): the line it shows.
+    older_geometry: runOlderLine(rec),
   };
+}
+
+/** D26: the run panel's line for a run made on an older version of its linked geometry, else ''. */
+function runOlderLine(rec) {
+  const geometry = rec ? runOlderGeometry(rec.id || rec.run_id) : null;
+  return geometry === null ? '' : OLDER_RUN_TEXT(geometry);
 }
 
 /** Dispatch `cfd:run-state` (and keep `__CFD_RUN_STATE__`) for the React run panel. */
@@ -35860,6 +35996,148 @@ window.__CFD_HOST_SURFACES__ = {
   },
   compareRuns: compareProjectRuns,
 };
+
+/**
+ * A linked geometry changed under this tab (host API 1.5): its new files (a fresh CAD URL,
+ * the face names) and its studies' setup, as the server has them now.
+ */
+async function reloadLinkedGeometry(geomId, key) {
+  const g = w16State.geometry;
+  const pid = currentProjectId();
+  if (!g || !pid || String(g.id || '') !== String(geomId || '')) return;
+  const urls = cadUrlsFor(pid, 'link-' + String(key || Date.now()), geomId);
+  g.faces_url = urls.faces_url;
+  g.edges_url = urls.edges_url;
+  await loadGeometryCad(urls.faces_url, urls.edges_url, { keepCamera: true });
+  await reloadGeometryScopedSetup();
+  try { refreshSetupTree(); } catch (_) {}
+}
+
+bindGeometryRevHost({
+  activeGeometryId: () => String((w16State.geometry && w16State.geometry.id) || ''),
+  reloadGeometry: reloadLinkedGeometry,
+});
+
+// A tree read that says a run was made on an older geometry: the run panel and the
+// particle trace block say so (D26).
+subscribeLinkedGeometries(() => {
+  try { publishRunState(); } catch (_) {}
+  try { syncPtOlderGeometry(); } catch (_) {}
+});
+
+/** A link job's end, as its status route says (polls; gives up after `waitMs`). */
+async function waitLinkJobEnd(projectId, plugin, studyId, jobId, waitMs) {
+  const q = new URLSearchParams({ project_id: projectId, plugin, study_id: studyId, job_id: jobId });
+  const until = Date.now() + (waitMs || 10 * 60 * 1000);
+  for (;;) {
+    let job = null;
+    try {
+      const r = await fetch('/api/plugin-geometry/status?' + q.toString(), { cache: 'no-store' });
+      job = r.ok ? (await r.json()).job || null : null;
+    } catch (_) {
+      job = null;
+    }
+    const status = job && String(job.status || '');
+    if (job && !['queued', 'running', 'choosing'].includes(status)) return job;
+    if (Date.now() > until || String(currentProjectId() || '') !== String(projectId)) return job;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+
+/**
+ * The landing after a plugin's workspace closed when its page linked a geometry (host API
+ * 1.5, LINK proposal 6.5; L2 has no saved view yet). Only for the project shown. On Back:
+ * waits for the link job; a new geometry (a first link) is added to the list and shown; a
+ * new rev of the shown one closes the mesh and results views (which would hide the new
+ * part), clears the face selection and loads it again; a new rev of another one shows it;
+ * nothing changed shows it only if another geometry is shown. A job that ended with the
+ * geometry still updating keeps the part shown (its row says why). Another way out (the
+ * results, another project, home) only refreshes the data.
+ */
+async function showLinkedGeometry(geomId, opts) {
+  const o = opts || {};
+  const pid = String(currentProjectId() || '');
+  if (!geomId || !pid || String(o.projectId || '') !== pid) return { skipped: 'project' };
+  let job = null;
+  if (o.jobId && o.plugin && o.studyId) job = await waitLinkJobEnd(pid, o.plugin, o.studyId, o.jobId);
+  if (String(currentProjectId() || '') !== pid) return { skipped: 'project' };
+  if (job && job.status !== 'done') return { skipped: String(job.status || 'unknown') };
+  const id = String(geomId);
+  const known = (w16State.geometries || []).some((g) => g && String(g.id) === id);
+  // "Save as new" with a copy (API 1.5, LINK 5.0): the landing opens the copied study's setup.
+  const copied = job && Array.isArray(job.copies) ? job.copies.find((c) => c && c.ok && c.newStudyId) : null;
+  const openCopied = async () => {
+    if (!copied) return;
+    try { await selectStudyClient(copied.newStudyId); } catch (_) {}
+  };
+  const before = shownGeometryKey(id);
+  const node = await adoptServerRev(id, false);
+  if (!node) return { skipped: 'gone' };
+  const full = o.reason === 'back' || o.reason === 'frame-back';
+  // A geometry this tab has not seen: the project as the server has it now, then show it.
+  if (!known) {
+    if (!w16State.geometry) {
+      await hydrateOpenProject(pid, { show: false });
+      await adoptServerRev(id);
+      return { landed: 'created' };
+    }
+    const j = await fetch('/api/project?project_id=' + encodeURIComponent(pid), { cache: 'no-store' })
+      .then((r) => r.json())
+      .catch(() => null);
+    const list = (j && (j.geometries || (j.project && j.project.geometries))) || null;
+    if (Array.isArray(list) && String(currentProjectId() || '') === pid) {
+      w16State.geometries = list.map((g) => ({ ...g }));
+      try { syncGeometryTree(); } catch (_) {}
+      try { refreshSetupTree(); } catch (_) {}
+    }
+    if (!full) return { landed: 'listed' };
+    try { if (meshInspectOpen) hideMeshInspect({ silent: true }); } catch (_) {}
+    try { if (resultsViewOpen) hideRunResultsView({ silent: true }); } catch (_) {}
+    await switchGeometryClient(id);
+    await openCopied();
+    await adoptServerRev(id);
+    return { landed: 'created', study: copied ? copied.newStudyId : null };
+  }
+  // Changed: the job says so, or this tab still shows another rev or other names. (A tree
+  // read while the workspace was open may have loaded the new part already: no second load.)
+  const loadedOld = !!before && (before.rev !== node.rev || before.names8 !== String(node.names8 || ''));
+  const changed = loadedOld || !!(job && job.result && job.result.change && job.result.change !== 'none');
+  const shownNow = String((w16State.geometry && w16State.geometry.id) || '') === id;
+  if (changed && shownNow) {
+    if (full) {
+      try { if (meshInspectOpen) hideMeshInspect({ silent: true }); } catch (_) {}
+      try { if (resultsViewOpen) hideRunResultsView({ silent: true }); } catch (_) {}
+    }
+    w16State.selectedFaces = [];
+    w16State.focusedFace = null;
+    if (loadedOld || !before) await reloadLinkedToServer(id);
+    try { applyWorkbenchStage(); } catch (_) {}
+    return { landed: 'reloaded' };
+  }
+  if (!full || shownNow) return { landed: 'none' };
+  try { if (meshInspectOpen) hideMeshInspect({ silent: true }); } catch (_) {}
+  try { if (resultsViewOpen) hideRunResultsView({ silent: true }); } catch (_) {}
+  await switchGeometryClient(id);
+  // A geometry a tree read already listed (a new one after "Save as new"): its copied study.
+  await openCopied();
+  // A changed one is loaded again by its rev key (its record's URL stamp may be the old one's).
+  if (changed) await reloadLinkedToServer(id);
+  else await adoptServerRev(id);
+  return { landed: 'switched', study: copied ? copied.newStudyId : null };
+}
+
+function onLinkLanding(e) {
+  const d = (e && e.detail) || {};
+  if (!d.geometryId) return;
+  void showLinkedGeometry(d.geometryId, d)
+    .then((out) => {
+      window.__CFD_LAST_LANDING__ = { geometryId: d.geometryId, ...(out || {}) };
+    })
+    .catch((err) => console.warn('[CFD] linked geometry landing', err));
+}
+window.addEventListener('cfd:workspace-left', onLinkLanding);
+// A question answered from the geometry's row ("Choose…", API 1.5): the same landing.
+window.addEventListener('cfd:link-land', onLinkLanding);
 
 bindSetupHost({
   viewingBcId,

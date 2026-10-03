@@ -1,0 +1,24 @@
+key = "link-demo-2"
+name = "Link demo 2"
+version = "1.0.0"
+api_version = "1.5"
+license = "GPL-3.0-or-later"
+description = "Test plugin that links a project geometry from its own button (host API 1.5): its backend writes a text BREP and its face names, its page links them by etag, with no exit hook"
+authors = "Magnusim"
+
+[[workspaces]]
+key = "demo2"
+title = "Demo 2 workspace"
+icon = "M4 5h16v14H4z M4 15h16"
+entry = "workspace/index.html"
+
+# The same kind title as link-demo's: names must be unique across the two plugins.
+[[study_kinds]]
+key = "demo"
+title = "Demo"
+icon = "M5 19V5h14v14z M9 9h6v6H9z"
+workspace = "demo2"
+links_geometry = true
+
+[files]
+max_file_mb = 64

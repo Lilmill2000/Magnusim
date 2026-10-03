@@ -255,6 +255,18 @@ def persist_mesh_doc(project_dir: Path, sim_id: str, doc: dict[str, Any]) -> dic
         rec = {**m, "simulation_id": sim_id}
         bind_mesh_case_paths(rec, folder_dir)
         rec.pop("dir", None)
+        if folder:
+            from cfddesk.project.paths import keep_build_stamp, link_keys_from_disk
+
+            # A linked geometry's own keys (host API 1.5) come from the mesh.json on disk,
+            # and so does the mesh's build stamp (only the generator sets it).
+            on_disk = read_json(folder_dir / "mesh.json") or None
+            link_keys_from_disk(rec, on_disk, None, False)
+            keep_build_stamp(rec, on_disk)
+        else:
+            from cfddesk.project.paths import keep_build_stamp
+
+            keep_build_stamp(rec, None)
         atomic_write(
             folder_dir / "id.json",
             {"id": rec["id"], "name": rec.get("name"), "simulation_id": sim_id, "kind": "mesh"},
@@ -429,12 +441,31 @@ def write_through_project(
     return proj, mode, mirror
 
 
-def set_materials(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dict[str, Any]:
+def _save_rev(project_dir: Path, sid: str, raw: dict[str, Any], key: str, geometry_rev: Any) -> int | None:
+    """The stamp check of a save of face-carrying records (host API 1.5; raises LinkError).
+
+    ``geometry_rev`` is the rev the app server checked; without it (a call through
+    /api/worker) each record the save writes must carry the geometry's rev itself.
+    """
+    from cfddesk.project.link import check_save
+
+    rows = raw.get(key) if isinstance(raw, dict) else None
+    recs = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+    only = str(raw.get("only_id") or "").strip() if isinstance(raw, dict) else ""
+    if only:
+        recs = [r for r in recs if str(r.get("id") or "") == only]
+    return check_save(project_dir, sid, recs, geometry_rev)
+
+
+def set_materials(
+    project_dir: Path, body: dict[str, Any], *, sim_id: str = "", geometry_rev: Any = None
+) -> dict[str, Any]:
     from cfddesk.project.paths import find_study, persist_child_item
 
     raw = body if isinstance(body, dict) else {"materials": body}
     raw = strip_material_notes(raw) or raw
     sid = str(sim_id or raw.get("simulation_id") or "").strip()
+    rev = _save_rev(project_dir, sid, raw, "materials", geometry_rev)
     path = _study_dest(project_dir, "materials.json", sid)
     _proj, mode, mirror = write_through_project(project_dir, "materials", raw, sim_id=sid)
     src = mirror if isinstance(mirror, dict) and (mirror.get("materials") or mirror.get("air")) else raw
@@ -448,7 +479,7 @@ def set_materials(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") 
                 continue
             if only and str(rec.get("id")) != only:
                 continue
-            persist_child_item(parent, "material", {**rec, "simulation_id": sid})
+            persist_child_item(parent, "material", {**rec, "simulation_id": sid}, geometry_rev=rev)
     proj_path = project_dir / "project.json"
     proj = read_json(proj_path)
     if proj and mode != "python":
@@ -474,7 +505,7 @@ def set_materials(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") 
     return doc
 
 
-def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dict[str, Any]:
+def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "", geometry_rev: Any = None) -> dict[str, Any]:
     from cfddesk.project.paths import (
         adopt_legacy_bcs,
         assemble_study_bc_defaults,
@@ -485,6 +516,7 @@ def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dic
 
     raw = body if isinstance(body, dict) else {"boundary_conditions": body}
     sid = str(sim_id or (raw.get("simulation_id") if isinstance(raw, dict) else "") or "").strip()
+    rev = _save_rev(project_dir, sid, raw, "boundary_conditions", geometry_rev)
     path = _study_dest(project_dir, "boundary_conditions.json", sid)
     # Saving BC records never changes the wall default (the Defaults panel owns it):
     # keep what is saved, read by the same rule as the solve.
@@ -511,7 +543,7 @@ def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dic
                 continue
             if only and str(rec.get("id")) != only:
                 continue
-            persist_child_item(parent, "bc", {**rec, "simulation_id": sid})
+            persist_child_item(parent, "bc", {**rec, "simulation_id": sid}, geometry_rev=rev)
         rows = assemble_study_bcs(project_dir, sid)
         doc["boundary_conditions"] = rows
         atomic_write(path, {**doc, "boundary_conditions": rows, "simulation_id": sid})
@@ -575,11 +607,14 @@ def set_mesh_settings(project_dir: Path, body: dict[str, Any], *, sim_id: str = 
     return doc
 
 
-def set_refinements(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dict[str, Any]:
+def set_refinements(
+    project_dir: Path, body: dict[str, Any], *, sim_id: str = "", geometry_rev: Any = None
+) -> dict[str, Any]:
     from cfddesk.project.paths import walk_meshes
 
     raw = body if isinstance(body, dict) else {"refinements": body}
     sid = str(sim_id or (raw.get("simulation_id") if isinstance(raw, dict) else "") or "").strip()
+    rev = _save_rev(project_dir, sid, raw, "refinements", geometry_rev)
     _proj, mode, mirror = write_through_project(
         project_dir, "mesh_refinements", raw, sim_id=sid
     )
@@ -605,7 +640,7 @@ def set_refinements(project_dir: Path, body: dict[str, Any], *, sim_id: str = ""
         for rec in rows:
             if only and str(rec.get("id") or "") != only:
                 continue
-            persist_child_item(Path(m["dir"]) / "refinements", "refinement", rec)
+            persist_child_item(Path(m["dir"]) / "refinements", "refinement", rec, geometry_rev=rev)
         path = dest
         written.extend(rows)
     doc["refinements"] = written
@@ -626,12 +661,15 @@ def set_refinements(project_dir: Path, body: dict[str, Any], *, sim_id: str = ""
     return doc
 
 
-def set_result_controls(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") -> dict[str, Any]:
+def set_result_controls(
+    project_dir: Path, body: dict[str, Any], *, sim_id: str = "", geometry_rev: Any = None
+) -> dict[str, Any]:
     only_aa = isinstance(body, dict) and body.get("_file") == "area_average.json"
     if only_aa and isinstance(body, dict):
         body = {k: v for k, v in body.items() if k != "_file"}
     raw = body if isinstance(body, dict) else {"controls": body}
     sid = str(sim_id or (raw.get("simulation_id") if isinstance(raw, dict) else "") or "").strip()
+    rev = _save_rev(project_dir, sid, raw, "result_controls", geometry_rev)
     _proj, mode, mirror = write_through_project(project_dir, "result_controls", raw, sim_id=sid)
     doc = _scope_doc_to_study(
         stamp(mirror if isinstance(mirror, dict) else raw, sim_id=sid, increment="W22"),
@@ -647,7 +685,7 @@ def set_result_controls(project_dir: Path, body: dict[str, Any], *, sim_id: str 
         parent = Path(study["dir"]) / "result_controls"
         for rec in doc.get("result_controls") or []:
             if isinstance(rec, dict) and rec.get("id") is not None:
-                persist_child_item(parent, "rc", {**rec, "simulation_id": sid})
+                persist_child_item(parent, "rc", {**rec, "simulation_id": sid}, geometry_rev=rev)
     proj_path = project_dir / "project.json"
     proj = read_json(proj_path)
     if proj:
@@ -727,6 +765,7 @@ def run_upsert(
     sim_id: str = "",
     run_id: str = "",
     stamp_project: bool = False,
+    geometry_rev: int | None = None,
 ) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise ValueError("body must be object")
@@ -776,6 +815,12 @@ def run_upsert(
                         merged["last_saved_iteration"] = existing.get("last_saved_iteration")
             except (TypeError, ValueError):
                 pass
+        from cfddesk.project.paths import keep_run_build_stamp, link_keys_from_disk
+
+        # A linked geometry's own keys (host API 1.5) come from disk, or the checked rev;
+        # the run's build stamp from disk (only Start sets it).
+        link_keys_from_disk(merged, existing, geometry_rev, False)
+        keep_run_build_stamp(merged, existing)
         keep_status = str(existing.get("status") or "")
         if keep_status in {"running", "starting", "done", "failed", "stopped"} and incoming_status in {
             "",
@@ -784,6 +829,8 @@ def run_upsert(
         }:
             merged["status"] = keep_status
         body = merged
+    else:
+        body.pop("built_from", None)
     if not fresh_start:
         stage = str(body.get("stage") or "")
         evidence = 0.0
@@ -836,6 +883,14 @@ def mesh_result(project_dir: Path, body: dict[str, Any], *, sim_id: str = "") ->
     existing = read_json(path)
     now = now_iso()
     live = slim_live_mesh_result(body.get("live_mesh_result") or body)
+    if isinstance(live, dict) and not isinstance(live.get("built_from_rev"), int):
+        # A result that does not carry its generate's build stamp (host API 1.5) keeps the
+        # one on disk: only a generator sets it.
+        from cfddesk.project.paths import keep_build_stamp
+
+        holder = {"live_mesh_result": live}
+        keep_build_stamp(holder, existing)
+        live = holder["live_mesh_result"]
     if isinstance(live, dict) and live.get("status") == "done":
         case_dir = str(Path(found["dir"]) / "case")
         live = {**live, "case_dir": case_dir, "mesh_path": str(Path(case_dir) / "constant" / "polyMesh")}

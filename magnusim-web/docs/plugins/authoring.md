@@ -4,13 +4,13 @@ A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins
 
 Copy `templates/plugin/` to start. That folder has `pyproject.toml`, `manifest.toml`, `register()`, and a pytest that loads the copy from a temporary `plugins/` directory.
 
-## Manifest 1.4
+## Manifest 1.5
 
 ```toml
 key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
-api_version = "1.4"
+api_version = "1.5"
 license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
@@ -358,9 +358,108 @@ header_label = "Sketch"         # optional, 1-24 characters: the header button's
 - **Order and caps.** Places list actions in plugin load order (bundled plugins first, then the user's plugins folder), then manifest order, each place cut at its cap. A kind whose header button was cut stays in the Workspaces menu, and STUDIES shows it. A kind shown as a header button leaves the Workspaces menu. STUDIES stays hidden in a project that has no plugin study while every kind is a header button.
 - **When nothing shows.** A plugin that is off, missing, needs setup or failed to load shows its actions nowhere. They come back without a reload once it is turned on in Settings → Plugins.
 - **Older hosts.** A 1.3 host ignores `[[start_actions]]`: your kinds still open from the Workspaces menu and STUDIES. Set `api_version = "1.4"`.
-- **`links_geometry` (parsed in 1.4, used from 1.5).** `links_geometry = true` on a study kind says its studies may link one project geometry. It must be `true` or `false`, and the kind must have a workspace.
+- **`links_geometry` (parsed in 1.4, used from 1.5).** `links_geometry = true` on a study kind says its studies may link one project geometry ("Linking a geometry (1.5)" below). It must be `true` or `false`, and the kind must have a workspace.
 
 `templates/plugin-workspace/` is a working starting point: a kind, a workspace page, and commented-out `[[start_actions]]` and `links_geometry` lines. `python/tests/fixtures/start-plugins/` has two complete examples, driven by `e2e/start-actions.spec.js`.
+
+## Linking a geometry (1.5)
+
+A study kind with `links_geometry = true` (and a workspace) can link **one project geometry per study**: its design becomes a geometry the simulation side uses like an imported part, and later saves of the design update it. The host does the same for every plugin; nothing in it knows what your plugin is.
+
+**What your plugin does.** Export the saved design as one compound of solids in mm, as an OCCT BREP (binary, BinTools, or text, BRepTools), write it with `ws.files.write` (it returns the sha256), optionally write a face-name sidecar, then call `ws.project.linkGeometry`:
+
+```ts test
+import { connect } from '@magnusim/workspace';
+
+const ws = await connect();
+const sid = ws.context.study.id;
+const shape = await ws.files.write(`studies/${sid}/export/part.bbrep`, new Uint8Array([1, 2, 3]));
+const names = await ws.files.write(`studies/${sid}/export/face_names.json`, '{}');
+const linked = await ws.project.linkedGeometry();
+const study = await ws.study.get();
+const sourceVersion = (Number(study.source_version) || 0) + 1;
+await ws.study.update({ source_version: sourceVersion }, study.rev);
+try {
+  const r = await ws.project.linkGeometry({
+    shape: { rel: shape.rel, format: 'brep', sha256: shape.sha256 },
+    faceNames: { rel: names.rel, sha256: names.sha256 },
+    sourceVersion,
+    basedOnRev: linked ? linked.rev : null,
+    onProgress: (p) => console.log(p.stage, p.ahead ?? ''),
+  });
+  console.log(r.change, r.rev, r.lost.length, r.claimedTwice.length);
+} catch (e) {
+  // "cancelled": the user kept editing (the app's question), or removed the update from
+  // the Queue. Stay as you are; show no error.
+  if ((e as { code?: string }).code !== 'cancelled') throw e;
+}
+ws.on('geometry', (g) => console.log('the linked geometry is now rev', g.rev));
+```
+
+**A file your plugin's Python wrote.** Each file is given by `sha256` (what `ws.files.write` returned) **or** by `etag`, exactly one of the two. A file your backend wrote (`magnusim_sdk.data`, with the sidecar from `magnusim_sdk.link.write_face_names`) never passes through the page: read its etag with `ws.files.stat` and link it by that. If the file changes between the stat and the link, the call is refused with `changed`.
+
+```ts test
+import { connect } from '@magnusim/workspace';
+
+const ws = await connect();
+const sid = ws.context.study.id;
+// Your backend's own method wrote both files into the study's folder.
+const out = (await ws.service('export', { study_id: sid })) as { shape: string; faceNames: string };
+const shape = await ws.files.stat(out.shape);
+const names = await ws.files.stat(out.faceNames);
+if (!shape || !names) throw new Error('the export is missing');
+const linked = await ws.project.linkedGeometry();
+const study = await ws.study.get();
+const sourceVersion = Math.max(Number(study.source_version) || 0, linked ? linked.sourceVersion : 0) + 1;
+await ws.study.update({ source_version: sourceVersion }, study.rev);
+await ws.project.linkGeometry({
+  shape: { rel: out.shape, format: 'brep', etag: shape.etag },
+  faceNames: { rel: out.faceNames, etag: names.etag },
+  sourceVersion,
+  basedOnRev: linked ? linked.rev : null,
+});
+```
+
+- **The first call creates the geometry** (named after the study, or `name`). It is made like an import: it never waits for a running mesh or solve.
+- **A later call** with the same bytes changes nothing (`change: 'none'`, at once). One that changes only names or labels updates it in place (`names`, the rev kept). One that changes the shape is an **update**: a queued job on the app's one compute slot (the page gets stage `queued` with the jobs `ahead` of it while a mesh, a solve or a plugin case runs), then `shape`, the rev + 1.
+- **The app's question.** When the **shape** changed and a simulation study on the geometry has saved setup (a boundary condition, material, monitor or refinement, a generated mesh, a run with results), the app asks the user, in its own dialog over your page, the same for every plugin: **"Save as new geometry"** adds the part as a new geometry ("<Geometry> v2", "v3", ...) and can copy each study's setup onto it, faces matched by name; the old geometry and its studies, meshes and results stay exactly as they were and become a plain geometry. **"Overwrite <Geometry>"** is the update below. **"Keep editing"** changes nothing. Your call stays pending while the dialog is open. You write no code for it and cannot skip it: `linkGeometry` has no mode. After "Save as new" the result has `created: true` and a new `geometryId`, and `linkedGeometry()` names the new geometry. After "Keep editing" the call rejects with `cancelled`: **the user kept editing**, so stay as you are and show no error. A geometry nothing uses yet, a change of names only, and the first link never ask. If your page closes before the user answers, the geometry's row says "Waiting for your choice" with "Choose…".
+- **An update rewrites the simulation setup once, at its commit.** Every boundary condition, material, refinement, monitor and run that can still start (every run but a finished one) of the geometry's studies keeps its faces by **name**, then by shape. The fields of your own BC families, BC kinds, monitor kinds and meshers that hold faces or bodies (widget `faces`, `patch` or `body`, or `holds`) are rewritten the same way: a face split in two keeps its boundary condition on both halves; a face that is gone stays listed on its record under "Lost faces" (with its label) and comes back when a later design has a face of that name again. Two boundary conditions whose faces merged into one keep neither until the user picks (`claimedTwice`). Bodies pair by `id`, then name, then index, so a body the user renames keeps its material. Generated meshes are out of date. The result lists all of it, and the host shows the user a report.
+- **Save, then link.** `sourceVersion` names one saved design: a whole number that only goes up and is never shared by two designs. `basedOnRev` is the geometry rev the page last read (`linkedGeometry().rev`, `null` before the first link). An older design is refused (`stale`), and so is a call while the page says it has unsaved work (`unsaved`: call `nav.setDirty(false)` after saving). Write the reserved study key `source_version` after each save: the geometry's row says "Not up to date with <study>." while the saved design is newer than the linked one.
+- **Byte-identical exports.** Two exports of one design must be byte-identical (the BREP and the sidecar), so a link that changed nothing costs nothing. `magnusim_sdk.link.write_face_names` writes the sidecar that way.
+- **Refusals** carry `.code`: `unsaved`, `stale`, `changed` (a file's bytes or etag differ from what you passed), `outside_study`, `unsupported_format`, `bad_brep` (not a BREP this app reads, or a face outside every solid), `empty` (no solid), `bad_face_names` (the message says which rule), `preview_failed`, `plugin_needed` (a record of the geometry's studies belongs to a plugin that is off or not installed: the update would not know which of its fields hold faces), `busy`, `gone` (the geometry was removed), `superseded` (a newer link of the study replaced a queued one, or a question still open), `cancelled` (the user kept editing, or removed the update from the Queue: show no error), `failed`, `not_allowed`.
+- **Nothing stops an update from a page.** `ws.jobs.stop` answers `not_allowed` for it; the user can remove a queued update from the Queue (`cancelled`).
+- **Events.** `ws.on('geometry', fn)` tells the page of its own study when the geometry changed (this page's link or another tab's). A page of another study hears nothing.
+
+**Formats.** 1.5 reads one: `format: 'brep'`, an OCCT BREP, binary or text, told apart by its header (OCCT 7.8 or later reads it; this app has 7.9.3). Any other value is refused with `unsupported_format`. A plugin with no OCCT (a scan, an STL/OBJ/PLY generator) cannot link in 1.5; a mesh format, whose faces are the app's own face groups, is the first follow-up.
+
+**Face numbering** (the one rule; `compatibility.md` "1.5" states it per format). A face's `index` is its 1-based position in `TopExp_Explorer(shape, TopAbs_FACE)` over the whole compound, counting every visit: a face two touching solids share is visited once per solid, so it has one index per solid, each with its own `body`. A body's `index` is its 1-based `TopExp_Explorer(shape, TopAbs_SOLID)` order. A Python plugin calls `magnusim_sdk.link.face_visits(shape)`, the function the app itself uses.
+
+**The face-name sidecar** (`face_names.json`, format `magnusim.face-names` version 1): `length_unit` must be `"mm"`; `shape_sha256` (the shape file's sha256, recommended) ties it to one export; `bodies` lists every solid once (`index`, optional `id`, `name`, `label`, `color`), with names and ids unique; `faces` lists every face visit once (`index`, `body`, optional `name`, `label`). `name` (1-200 characters) is the match key and is never shown when a `label` (1-120 characters) exists; several faces may share a name (the pieces of one split face). Faces and bodies are shown as "Label (face 12)" and "Label (Body2)".
+
+```python test
+import json
+import tempfile
+from pathlib import Path
+
+from magnusim_sdk.link import check, face_visits, write_face_names
+from OCP.BinTools import BinTools
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+box = BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape()
+out = Path(tempfile.mkdtemp())
+BinTools.Write_s(box, str(out / "part.bbrep"))
+import hashlib
+
+sha = hashlib.sha256((out / "part.bbrep").read_bytes()).hexdigest()
+faces = [{"index": i, "body": b, "name": f"F:{i}", "label": f"Side {i}"} for i, b, _f in face_visits(box)]
+write_face_names(out / "face_names.json", [{"index": 1, "id": "b1", "name": "Body 1", "label": "Fluid"}], faces, sha)
+assert check(out / "part.bbrep", out / "face_names.json") == []
+assert json.loads((out / "face_names.json").read_text(encoding="utf-8"))["faces"][0]["label"] == "Side 1"
+```
+
+From a shell (the same checks the app runs; exit code 0 when it would accept the pair): `python -m magnusim_sdk.link check part.bbrep face_names.json`.
+
+**Schema fields that hold faces.** A boundary-condition kind's, monitor kind's or mesher's `SchemaField` with `widget="faces"`, `"patch"` or `"body"` is rewritten by an update like the host's own face lists; a field with your own widget says so with `holds="faces"` or `holds="body"` (published as `x-cfddesk.holds`). Its value is read from the record's top level or its `settings` (a mesher's from `settings.mesher_settings`). Study-level settings with these widgets are not supported in 1.5.
 
 ## UI kit (1.3)
 

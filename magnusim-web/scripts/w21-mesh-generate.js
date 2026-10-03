@@ -35,6 +35,7 @@ import { writeJsonCli } from './py-json.js';
 import { MESH_ENGINES, mesherEngineOf, mesherKeys } from './registry-defaults.js';
 import { slimLiveMeshResult, slimMeshDoc } from './mesh-live-slim.js';
 import { assembleMeshDoc, persistMeshDoc, persistOneMesh, meshCasePath, meshFolderOf } from './study-io.js';
+import { buildStampOf, generateRev, linkStartRefusal, writeBuildStamp } from './link-build.js';
 import { findGeometry, findStudy, walkGeometries } from './project-layout.js';
 import { getActiveSimulation } from './w17-sim-catalog.js';
 import { scheduleComputeQueueKick } from './server/compute-queue.ts';
@@ -781,7 +782,15 @@ export function recoverStudyMeshesFromDisk(projectId, simId) {
     const caseDir = (live && live.case_dir) || m.case_dir || meshCasePath(projectId, m.id, simId);
     const found = inspectGeneratedCase(caseDir);
     if (!found) continue;
+    // Its build stamp (host API 1.5): the one its generate wrote at its start, else unknown.
+    const generateId = found.generate_id || (live && live.generate_id) || null;
+    const builtFromRev =
+      buildStampOf(projectId, m.id, generateId) ??
+      (live && generateId && String(live.generate_id || '') === String(generateId) && typeof live.built_from_rev === 'number'
+        ? live.built_from_rev
+        : null);
     persistMeshResult(projectId, {
+      ...(builtFromRev !== null ? { built_from_rev: builtFromRev } : {}),
       status: 'done',
       mesh_id: m.id,
       simulation_id: simId,
@@ -808,6 +817,32 @@ export function recoverStudyMeshesFromDisk(projectId, simId) {
 function studyIdForMesh(projectId, meshId) {
   const folder = meshId ? meshFolderOf(projectId, meshId) : null;
   return folder && folder.simulation_id ? String(folder.simulation_id) : '';
+}
+
+/** The geometry a mesh's study lives on ('' when unknown). */
+function studyGeometryIdForMesh(projectId, meshId) {
+  const folder = projectId && meshId ? meshFolderOf(projectId, meshId) : null;
+  return folder && folder.geometry_id ? String(folder.geometry_id) : '';
+}
+
+/**
+ * A generate's build stamp (host API 1.5, LINK 5.15): the linked geometry's rev now, in
+ * the step that spawns, also written beside the case for a recovery; with the stamp of
+ * the mesh it replaces, for a generate interrupted with that mesh kept. Empty when no link
+ * made the geometry.
+ */
+function buildStampFields(projectId, meshId, simId, generateId) {
+  const rev = generateRev(projectId, simId);
+  try {
+    writeBuildStamp(projectId, meshId, generateId, rev);
+  } catch (e) {
+    console.warn('[CFD] mesh build stamp', e);
+  }
+  if (rev === null) return {};
+  const folder = meshFolderOf(projectId, meshId, simId);
+  const prev = folder && folder.live_mesh_result;
+  const prevRev = prev && prev.status === 'done' && typeof prev.built_from_rev === 'number' ? prev.built_from_rev : null;
+  return { built_from_rev: rev, ...(prevRev !== null ? { prev_built_from_rev: prevRev } : {}) };
 }
 
 export function persistMeshResult(projectId, resultFields) {
@@ -859,6 +894,9 @@ export function persistMeshResult(projectId, resultFields) {
     note: resultFields.note,
     increment,
   };
+  // The build stamp (host API 1.5): the rev this generate started from, set here only.
+  if (typeof resultFields.built_from_rev === 'number') live.built_from_rev = resultFields.built_from_rev;
+  if (typeof resultFields.prev_built_from_rev === 'number') live.prev_built_from_rev = resultFields.prev_built_from_rev;
   const fallbackNote =
     resultFields.status === 'done'
       ? `Mesh done: ${live.n_cells} cells, ${live.n_points} points.`
@@ -909,7 +947,7 @@ export function persistMeshResult(projectId, resultFields) {
     };
     delete doc.out_of_scope;
     const updated = meshes.find((m) => m && String(m.id) === String(meshId));
-    if (updated) persistOneMesh(projectId, simId, { ...updated, simulation_id: simId });
+    if (updated) persistOneMesh(projectId, simId, { ...updated, simulation_id: simId }, { generator: true });
     return assembleMeshDoc(projectId, simId, meshId);
   }
   const doc = {
@@ -1152,6 +1190,8 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   const command = argv.join(' ');
   const started_at = new Date().toISOString();
   const engineLabel = engine === 'cfmesh' ? 'cfMesh cartesianMesh' : 'Standard';
+  // The build stamp, read in the step that spawns (the mesh holds the slot until its close).
+  const builtFrom = buildStampFields(project_id, meshId, simIdEarly, generateId);
 
   let lastResult = null;
   const jobLog = createJobLogger('mesh', generateId);
@@ -1228,6 +1268,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     stage_detail: null,
     note: `${engineLabel} mesh on project STEP (fineness ${fineness}, hex core ${hexCore ? 'on' : 'off'}, layers ${addLayers ? 'on' : 'off'}).`,
     mesh_id: job.mesh_id,
+    ...builtFrom,
   };
   persistMeshResult(project_id, baseRunning);
 
@@ -1472,6 +1513,10 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
   liveJob = null;
 
   const projectIdEarly = projectId || projectIdOrActive('', readActiveId);
+  // A linked geometry (host API 1.5): no generate while it is updating or while a face is
+  // claimed twice. Here, so the route and the queue's kick both meet it.
+  const linkRefused = projectIdEarly && meshId ? linkStartRefusal(projectIdEarly, studyIdForMesh(projectIdEarly, meshId)) : null;
+  if (linkRefused) return linkRefused;
   const meshDocEarly =
     projectIdEarly && meshId
       ? readMeshDoc(projectIdEarly, studyIdForMesh(projectIdEarly, meshId), meshId)
@@ -1516,7 +1561,9 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
     };
   }
 
-  const stlReady = ensureBody1Stl(projectId);
+  // The mesh input of the mesh's own geometry, not the one shown.
+  const meshGeometryId = studyGeometryIdForMesh(projectIdEarly, meshId);
+  const stlReady = ensureBody1Stl(projectId, meshGeometryId ? { geometryId: meshGeometryId } : undefined);
   if (!stlReady.ok) {
     return {
       ok: false,
@@ -1603,6 +1650,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
   if (meshId) argv.push('--mesh-id', String(meshId));
   const command = argv.join(' ');
   const started_at = new Date().toISOString();
+  const builtFrom = buildStampFields(project_id, meshId, simIdSnappy, generateId);
 
   let lastResult = null;
   const jobLog = createJobLogger('mesh', generateId);
@@ -1689,6 +1737,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
     stage_detail: null,
     note: `Hex-dominant snappy via generate_snappy.py (fineness ${fineness}, layers ${addLayers ? 'on' : 'off'}).`,
     mtp1_silent_copy: false,
+    ...builtFrom,
   };
   persistMeshResult(project_id, baseRunning);
 
@@ -1854,8 +1903,13 @@ export function markMeshGenerateInterrupted(projectId, live) {
   // interrupted generate may already have overwritten part of it.
   const polyDir = live.mesh_path || (live.case_dir ? join(live.case_dir, 'constant', 'polyMesh') : null);
   const keepPrev = before.n_cells != null && polyMeshComplete(polyDir);
+  // A kept previous mesh keeps its own build stamp (host API 1.5), not the interrupted one's.
+  const stamp = keepPrev ? live.prev_built_from_rev : live.built_from_rev;
+  const rest = { ...live };
+  delete rest.built_from_rev;
   return persistMeshResult(projectId, {
-    ...live,
+    ...rest,
+    ...(typeof stamp === 'number' ? { built_from_rev: stamp } : {}),
     status: keepPrev ? 'done' : 'failed',
     n_cells: keepPrev ? before.n_cells : live.n_cells,
     n_points: keepPrev ? before.n_points : live.n_points,

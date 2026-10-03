@@ -620,7 +620,7 @@ def test_versions():
 
     from cfddesk.registry import API_VERSION
 
-    assert (API_VERSION, SDK_VERSION) == ("1.4", "1.2.0")
+    assert (API_VERSION, SDK_VERSION) == ("1.5", "1.3.0")
     # The installed package reports the same version (python/sdk/pyproject.toml).
     pyproject = Path(sdk_data.__file__).resolve().parents[1] / "pyproject.toml"
     assert re.search(r'^version = "([^"]+)"', pyproject.read_text(encoding="utf-8"), re.M).group(1) == SDK_VERSION

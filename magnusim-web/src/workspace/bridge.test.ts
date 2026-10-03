@@ -43,6 +43,8 @@ function hooks(): BridgeHooks & Record<string, ReturnType<typeof vi.fn>> {
     units: vi.fn(() => 'metric' as const),
     log: vi.fn(),
     openResults: vi.fn(async () => true),
+    linkReport: vi.fn(),
+    linkStarted: vi.fn(),
   };
 }
 
@@ -1007,7 +1009,7 @@ describe('WorkspaceBridge: the handshake', () => {
     const [msg, origin, transfer] = t.posted[0] as [Record<string, unknown>, string, MessagePort[]];
     expect(origin).toBe('*');
     expect(msg).toMatchObject({ magnusim: 'welcome', instance: 'i1' });
-    expect(msg.context).toMatchObject({ plugin: 'ws-demo', workspace: 'bench', project: { id: 'proj-a' }, study: STUDY, hostVersion: '1.4' });
+    expect(msg.context).toMatchObject({ plugin: 'ws-demo', workspace: 'bench', project: { id: 'proj-a' }, study: STUDY, hostVersion: '1.5' });
     expect(t.bridge.connected()).toBe(true);
     expect(t.h.connected).toHaveBeenCalledTimes(1);
 
@@ -1224,5 +1226,287 @@ describe('WorkspaceBridge: the handshake', () => {
     port.close();
     t.detach();
     t.frame.remove();
+  });
+});
+
+describe('WorkspaceCalls: linked geometries (project.linkGeometry, API 1.5)', () => {
+  const LJOB = 'gl-mg1abc2d-0a1b2c';
+  const SHA_HEX = 'ab'.repeat(32);
+  const RESULT = {
+    geometryId: 'g1',
+    name: 'Wing',
+    rev: 2,
+    fromRev: 1,
+    created: false,
+    change: 'shape',
+    bodies: 1,
+    faces: 6,
+    named: 6,
+    match: { byName: 5, byShape: 0, split: 0, merged: 0, movedFar: 0 },
+    lost: [{ studyId: 's1', studyTitle: 'Study 1', kind: 'bc', registryKey: null, item: 'Top', field: 'faces', old: 'face 6@Body1', name: 'F:end', label: 'Boss end', reason: 'gone' }],
+    returned: [],
+    stillLost: 1,
+    claimedTwice: [],
+    outOfDate: { meshes: [], runs: 0 },
+    seconds: 1,
+  };
+  const CALL = { shape: { rel: 'studies/st-1/exports/x.bbrep', format: 'brep', sha256: SHA_HEX }, sourceVersion: 2, basedOnRev: 1, token: 't1' };
+  let pushed: Array<Record<string, unknown>>;
+  let jobStatus: Record<string, unknown>;
+
+  beforeEach(() => {
+    FakeEventSource.made = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+    pushed = [];
+    jobStatus = { id: LJOB, status: 'running', seq: 1 };
+    answer = (url) => {
+      if (url.startsWith('/api/plugin-studies/get')) return { status: 200, body: { ok: true, study: STUDY } };
+      if (url.startsWith('/api/plugin-geometry/linked')) return { status: 200, body: { ok: true, linked: { geometryId: 'g1', rev: 2, lostFaces: 1 } } };
+      if (url.startsWith('/api/plugin-geometry/link?')) return { status: 202, body: { ok: true, job_id: LJOB, geometry_id: 'g1', created: false, queued: true } };
+      if (url.startsWith('/api/plugin-geometry/status')) return { status: 200, body: { ok: true, job: jobStatus } };
+      return { status: 200, body: { ok: true } };
+    };
+  });
+
+  function linkCalls(h = hooks()) {
+    const c = new WorkspaceCalls(SCOPE, h);
+    c.setPush((m) => pushed.push(m));
+    return c;
+  }
+
+  it("sends the study's design with its scope, follows the job to its end and resolves with the result; its stages reach the page", async () => {
+    const h = hooks();
+    const c = linkCalls(h);
+    const p = c.handle('project.linkGeometry', { ...CALL, plugin: 'other', project_id: 'proj-b' });
+    await vi.waitFor(() => expect(c.linkJobs.has(LJOB)).toBe(true));
+    expect(calls.find((x) => x.url.startsWith('/api/plugin-geometry/link?'))?.body).toEqual({
+      project_id: 'proj-a',
+      plugin: 'ws-demo',
+      study_id: 'st-1',
+      shape: { rel: 'studies/st-1/exports/x.bbrep', format: 'brep', sha256: SHA_HEX },
+      face_names: null,
+      source_version: 2,
+      based_on_rev: 1,
+    });
+    expect(FakeEventSource.made.map((e) => e.url)).toEqual(['/api/plugin-geometry/events?project_id=proj-a&plugin=ws-demo&study_id=st-1']);
+    const es = FakeEventSource.made[0];
+    es.emit('link', { job_id: LJOB, seq: 2, ev: { event: 'queued', ahead: 1 } });
+    es.emit('link', { job_id: LJOB, seq: 3, ev: { event: 'stage', stage: 'matching', fraction: null } });
+    es.emit('link', { job_id: LJOB, seq: 3, ev: { event: 'stage', stage: 'matching', fraction: null } });
+    es.emit('link', { job_id: LJOB, seq: 4, ev: { event: 'end', status: 'done', result: RESULT } });
+    await expect(p).resolves.toEqual(RESULT);
+    expect(pushed).toEqual([
+      { event: 'linkProgress', data: { token: 't1', stage: 'queued', fraction: null, ahead: 1 } },
+      { event: 'linkProgress', data: { token: 't1', stage: 'matching', fraction: null } },
+    ]);
+    // Something was lost: the host's report dialog is shown.
+    expect(h.linkReport).toHaveBeenCalledWith(RESULT);
+  });
+
+  it('keeps link jobs follow-only: nothing a page calls stops one', async () => {
+    const c = linkCalls();
+    const p = c.handle('project.linkGeometry', CALL);
+    await vi.waitFor(() => expect(c.linkJobs.has(LJOB)).toBe(true));
+    expect(c.jobs.has(LJOB)).toBe(false);
+    const err = await refused(c.handle('jobs.stop', { jobId: LJOB }));
+    expect(err.code).toBe('not_allowed');
+    expect(calls.some((x) => x.url.includes('/stop'))).toBe(false);
+    FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'done', result: RESULT } });
+    await p;
+  });
+
+  it('settles from the job status when the job ended before the stream heard of it, and rejects a refused end with its code', async () => {
+    jobStatus = { id: LJOB, status: 'cancelled', error: 'Removed from the Queue', code: 'cancelled', seq: 5 };
+    const c = linkCalls();
+    const err = await refused(c.handle('project.linkGeometry', CALL));
+    expect(err.code).toBe('cancelled');
+    expect(err.message).toBe('Removed from the Queue');
+    expect(c.linkJobs.size).toBe(0);
+  });
+
+  it('answers at once when nothing changed (no job), and refuses while the page has unsaved work', async () => {
+    answer = (url) => (url.startsWith('/api/plugin-geometry/link?') ? { status: 200, body: { ok: true, result: { ...RESULT, change: 'none', lost: [] } } } : { status: 200, body: { ok: true } });
+    const h = hooks();
+    const c = linkCalls(h);
+    const sync = vi.fn();
+    window.addEventListener('cfd:tree-sync', sync);
+    try {
+      expect(await c.handle('project.linkGeometry', CALL)).toMatchObject({ change: 'none' });
+    } finally {
+      window.removeEventListener('cfd:tree-sync', sync);
+    }
+    // The tree is read again: the row's "Not up to date" goes.
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(h.linkReport).not.toHaveBeenCalled();
+    await c.handle('nav.setDirty', { dirty: true, message: 'Not saved' });
+    const err = await refused(c.handle('project.linkGeometry', CALL));
+    expect(err.code).toBe('unsaved');
+  });
+
+  it('tells the host which geometry the page linked, for the landing when the workspace closes (L2 step 3)', async () => {
+    const h = hooks();
+    const c = linkCalls(h);
+    const p = c.handle('project.linkGeometry', CALL);
+    await vi.waitFor(() => expect(h.linkStarted).toHaveBeenCalledWith({ geometryId: 'g1', jobId: LJOB, created: false }));
+    FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'done', result: RESULT } });
+    await p;
+    // A first link: created.
+    answer = (url) =>
+      url.startsWith('/api/plugin-geometry/link?')
+        ? { status: 202, body: { ok: true, job_id: LJOB, geometry_id: 'g9', created: true, queued: false } }
+        : url.startsWith('/api/plugin-geometry/status')
+          ? { status: 200, body: { ok: true, job: { id: LJOB, status: 'done', result: { ...RESULT, geometryId: 'g9', created: true }, seq: 2 } } }
+          : { status: 200, body: { ok: true } };
+    await c.handle('project.linkGeometry', CALL);
+    expect(h.linkStarted).toHaveBeenLastCalledWith({ geometryId: 'g9', jobId: LJOB, created: true });
+    // Nothing changed: the geometry it names, with no job.
+    answer = (url) => (url.startsWith('/api/plugin-geometry/link?') ? { status: 200, body: { ok: true, result: { ...RESULT, change: 'none', lost: [] } } } : { status: 200, body: { ok: true } });
+    await c.handle('project.linkGeometry', CALL);
+    expect(h.linkStarted).toHaveBeenLastCalledWith({ geometryId: 'g1', jobId: null, created: false });
+  });
+
+  it('checks the call: exactly one of sha256 and etag, whole numbers, a refusal from the app keeps its code', async () => {
+    const c = linkCalls();
+    for (const bad of [
+      { ...CALL, shape: { rel: 'a', format: 'brep' } },
+      { ...CALL, shape: { rel: 'a', format: 'brep', sha256: SHA_HEX, etag: '"e"' } },
+      { ...CALL, shape: { rel: 'a', format: 'brep', sha256: 'nothex' } },
+      { ...CALL, sourceVersion: 1.5 },
+      { ...CALL, basedOnRev: -1 },
+      { ...CALL, faceNames: { rel: '' } },
+    ]) {
+      expect((await refused(c.handle('project.linkGeometry', bad))).code).toBe('bad_request');
+    }
+    answer = (url) =>
+      url.startsWith('/api/plugin-geometry/link?') ? { status: 409, body: { ok: false, code: 'stale', error: 'Wing changed in another tab. Reload to continue.' } } : { status: 200, body: { ok: true } };
+    const err = await refused(c.handle('project.linkGeometry', CALL));
+    expect([err.code, err.message]).toEqual(['stale', 'Wing changed in another tab. Reload to continue.']);
+  });
+
+  it("tells the page when its study's geometry changed, once per job, only after it asked; never for a link that changed nothing", async () => {
+    const c = linkCalls();
+    await c.handle('project.followGeometry', {});
+    const es = FakeEventSource.made[0];
+    expect(es.url).toBe('/api/plugin-geometry/events?project_id=proj-a&plugin=ws-demo&study_id=st-1');
+    // Another tab's link of this study: its end reaches this page as a `geometry` event.
+    es.emit('link', { job_id: 'gl-mg1abc2e-0d0e0f', seq: 7, ev: { event: 'end', status: 'done', result: RESULT } });
+    es.emit('snapshot', { jobs: [{ id: 'gl-mg1abc2e-0d0e0f', status: 'done', result: RESULT, seq: 7 }] });
+    es.emit('link', { job_id: 'gl-mg1abc2f-0d0e0f', seq: 2, ev: { event: 'end', status: 'done', result: { ...RESULT, change: 'none' } } });
+    expect(pushed).toEqual([{ event: 'geometry', data: { geometryId: 'g1', rev: 2, fromRev: 1 } }]);
+    expect(await c.handle('project.linkedGeometry', {})).toEqual({ geometryId: 'g1', rev: 2, lostFaces: 1 });
+    expect(calls.some((x) => x.url === '/api/plugin-geometry/linked?project_id=proj-a&plugin=ws-demo&study_id=st-1')).toBe(true);
+    // The stream is this study's alone: the server sends nothing of another study on it.
+    c.close();
+    expect(es.readyState).toBe(2);
+  });
+});
+
+describe("WorkspaceCalls: the host's question (API 1.5, LINK 5.0)", () => {
+  const LJOB = 'gl-mg1abc2d-0a1b2c';
+  const SHA_HEX = 'ab'.repeat(32);
+  const QUESTION = {
+    geometry: { id: 'g1', name: 'Demo 1' },
+    study: { id: 'st-1', title: 'Wing' },
+    new_name: 'Demo 1 v2',
+    studies: [{ id: 's1', title: 'Study 1', copy: 'ok', checked: true }],
+    overwrite: 'ok',
+    fenced: false,
+  };
+  const CREATED = { geometryId: 'g2', name: 'Demo 1 v2', rev: 1, fromRev: null, created: true, change: 'shape', bodies: 2, faces: 17, named: 17,
+    match: { byName: 0, byShape: 0, split: 0, merged: 0, movedFar: 0 }, lost: [], returned: [], stillLost: 0, claimedTwice: [], outOfDate: { meshes: [], runs: 0 }, seconds: 1 };
+  // A page's own fields are ignored: it never chooses (choice/copy here are the page's).
+  const CALL = { shape: { rel: 'studies/st-1/exports/x.bbrep', format: 'brep', sha256: SHA_HEX }, sourceVersion: 2, basedOnRev: 1, choice: 'new', copy: ['s1'] };
+
+  beforeEach(() => {
+    FakeEventSource.made = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+    answer = (url, _method, init) => {
+      if (url.startsWith('/api/plugin-geometry/link?')) return { status: 202, body: { ok: true, job_id: LJOB, geometry_id: 'g1', created: false, queued: false, choosing: QUESTION } };
+      if (url.startsWith('/api/plugin-geometry/status')) return { status: 200, body: { ok: true, job: { id: LJOB, status: 'choosing', seq: 1 } } };
+      if (url.startsWith('/api/plugin-geometry/choose')) {
+        const b = JSON.parse(String(init.body));
+        if (b.choice === 'cancel') return { status: 200, body: { ok: true, job_id: LJOB, cancelled: true } };
+        return { status: 202, body: { ok: true, job_id: LJOB, geometry_id: b.choice === 'new' ? 'g2' : 'g1', created: b.choice === 'new', queued: b.choice === 'overwrite' } };
+      }
+      return { status: 200, body: { ok: true } };
+    };
+  });
+
+  const chosen = () => calls.filter((x) => x.url.startsWith('/api/plugin-geometry/choose')).map((x) => x.body);
+
+  it('asks through the host hook, sends its answer (never the page\'s), lands on the new geometry and shows the "added" report', async () => {
+    const h = hooks();
+    const linkChoice = vi.fn(async () => ({ choice: 'new' as const, copy: ['s1'] }));
+    const linkSavedAsNew = vi.fn();
+    const c = new WorkspaceCalls(SCOPE, { ...h, linkChoice, linkSavedAsNew });
+    const p = c.handle('project.linkGeometry', CALL);
+    await vi.waitFor(() => expect(chosen().length).toBe(1));
+    expect(linkChoice).toHaveBeenCalledWith(QUESTION, expect.any(AbortSignal));
+    expect(chosen()).toEqual([{ project_id: 'proj-a', plugin: 'ws-demo', study_id: 'st-1', job_id: LJOB, choice: 'new', copy: ['s1'] }]);
+    expect(h.linkStarted).toHaveBeenCalledWith({ geometryId: 'g2', jobId: LJOB, created: true });
+    const copies = [{ studyId: 's1', title: 'Study 1', ok: true, lost: [] }];
+    FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'done', result: CREATED, copies } });
+    await expect(p).resolves.toEqual(CREATED);
+    expect(linkSavedAsNew).toHaveBeenCalledWith({ newName: 'Demo 1 v2', oldName: 'Demo 1', copies });
+  });
+
+  it('Keep editing rejects with cancelled once the job ends so', async () => {
+    const c = new WorkspaceCalls(SCOPE, { ...hooks(), linkChoice: vi.fn(async () => ({ choice: 'cancel' as const })) });
+    const p = c.handle('project.linkGeometry', CALL);
+    await vi.waitFor(() => expect(chosen().length).toBe(1));
+    expect(chosen()[0]).toMatchObject({ choice: 'cancel', copy: [] });
+    FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'cancelled', code: 'cancelled', error: 'You kept editing. Nothing changed.' } });
+    const err = await refused(p);
+    expect(err.code).toBe('cancelled');
+  });
+
+  it('a caller that cannot ask (interactive:false, the L3 scripted exit) answers Overwrite with no dialog', async () => {
+    const linkChoice = vi.fn(async () => ({ choice: 'new' as const, copy: [] }));
+    const c = new WorkspaceCalls(SCOPE, { ...hooks(), linkChoice });
+    c.setInteractive(false);
+    const p = c.handle('project.linkGeometry', CALL);
+    await vi.waitFor(() => expect(chosen().length).toBe(1));
+    expect(linkChoice).not.toHaveBeenCalled();
+    expect(chosen()[0]).toMatchObject({ choice: 'overwrite' });
+    FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'done', result: { ...CREATED, created: false, geometryId: 'g1', rev: 2, fromRev: 1, name: 'Demo 1' } } });
+    await expect(p).resolves.toMatchObject({ geometryId: 'g1', rev: 2 });
+  });
+
+  it('a question dropped unanswered (the page went away) sends nothing: it stays open for the row\'s Choose…', async () => {
+    const c = new WorkspaceCalls(SCOPE, { ...hooks(), linkChoice: vi.fn(async () => null) });
+    const p = c.handle('project.linkGeometry', CALL);
+    await vi.waitFor(() => expect(c.linkJobs.has(LJOB)).toBe(true));
+    c.close();
+    await refused(p);
+    expect(chosen()).toEqual([]);
+  });
+
+  it('the dialog goes when the job ends another way (answered elsewhere, superseded)', async () => {
+    let signal: AbortSignal | null = null;
+    const linkChoice = vi.fn((_q: unknown, s: AbortSignal) => {
+      signal = s;
+      return new Promise<null>((r) => s.addEventListener('abort', () => r(null)));
+    });
+    const c = new WorkspaceCalls(SCOPE, { ...hooks(), linkChoice });
+    const p = c.handle('project.linkGeometry', CALL);
+    await vi.waitFor(() => expect(linkChoice).toHaveBeenCalled());
+    FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'superseded', code: 'superseded', error: 'A newer link of this study replaced it' } });
+    expect((await refused(p)).code).toBe('superseded');
+    expect(signal!.aborted).toBe(true);
+    expect(chosen()).toEqual([]);
+  });
+
+  it('no call on the allowlist reaches the choose route: only the host answers', async () => {
+    const { default: source } = await import('./bridge.ts?raw');
+    const cases = [...String(source).matchAll(/case '([a-zA-Z.]+)':/g)].map((m) => m[1]);
+    expect(cases.length).toBeGreaterThan(20);
+    expect(cases.filter((name) => /choose|choice/i.test(name))).toEqual([]);
+    expect(String(source)).not.toContain('/api/plugin-geometry/choose');
+    // The only sender is the host's own answer (linkChoice.ts sendLinkChoice), called after its dialog.
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    for (const name of ['project.choose', 'project.chooseLink', 'project.answer', 'link.choose']) {
+      expect((await refused(c.handle(name, { jobId: LJOB, choice: 'overwrite' }))).code).toBe('not_allowed');
+    }
+    expect(chosen()).toEqual([]);
   });
 });

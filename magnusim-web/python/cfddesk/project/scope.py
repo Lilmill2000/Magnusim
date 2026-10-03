@@ -210,6 +210,19 @@ def _faces(row: dict[str, Any]) -> list[str]:
     return [str(face) for face in raw if str(face)]
 
 
+def _lost(row: dict[str, Any]) -> int:
+    """Open lost-face entries of a record (a linked geometry's update put them there)."""
+    raw = row.get("lost_faces")
+    return len([e for e in raw if isinstance(e, dict)]) if isinstance(raw, list) else 0
+
+
+def _with_lost(node: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+    n = _lost(row)
+    if n:
+        node["lost"] = n
+    return node
+
+
 def _material_name(study_dir: Path) -> str:
     """The assigned material's name; "" when none is assigned (the page shows its model's default fluid)."""
     for doc in [_read_json(study_dir / "materials.json"), *walk_child_items(study_dir / "materials", "material.json")]:
@@ -218,6 +231,19 @@ def _material_name(study_dir: Path) -> str:
             if isinstance(assigned, list) and assigned and row.get("name"):
                 return str(row.get("name"))
     return ""
+
+
+def _material_lost(study_dir: Path) -> int:
+    """Lost bodies of the study's materials (folder records first, then leftover rows)."""
+    seen: set[str] = set()
+    n = 0
+    for row in walk_child_items(study_dir / "materials", "material.json") + _rows(_read_json(study_dir / "materials.json"), "materials"):
+        key = str(row.get("id") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        n += _lost(row)
+    return n
 
 
 def _material_volumes(study_dir: Path) -> list[str]:
@@ -253,12 +279,15 @@ def _bcs(root: Path, scope: ScopeId) -> list[dict[str, Any]]:
             item_id=item_id,
         )
         rows.append(
-            {
-                "id": item_id,
-                "name": str(row.get("name") or "BC"),
-                "faces": _faces(row),
-                "key": item_scope.key(),
-            }
+            _with_lost(
+                {
+                    "id": item_id,
+                    "name": str(row.get("name") or "BC"),
+                    "faces": _faces(row),
+                    "key": item_scope.key(),
+                },
+                row,
+            )
         )
     return rows
 
@@ -287,27 +316,57 @@ def _refinements(mesh_dir: Path, scope: ScopeId) -> list[dict[str, Any]]:
         if item_id:
             seen.add(item_id)
         out.append(
-            {
-                "id": item_id,
-                "name": str(row.get("name") or "Refinement"),
-                "faces": _faces(row),
-                "key": ScopeId(
-                    scope.project_id,
-                    scope.geometry_id,
-                    scope.study_id,
-                    scope.mesh_id,
-                    item_id=item_id,
-                ).key(),
-            }
+            _with_lost(
+                {
+                    "id": item_id,
+                    "name": str(row.get("name") or "Refinement"),
+                    "faces": _faces(row),
+                    "key": ScopeId(
+                        scope.project_id,
+                        scope.geometry_id,
+                        scope.study_id,
+                        scope.mesh_id,
+                        item_id=item_id,
+                    ).key(),
+                },
+                row,
+            )
         )
     return out
 
 
-def _mesh_node(project_id: str, geometry_id: str, study_id: str, mesh: dict[str, Any]) -> dict[str, Any]:
+def _geometry_rev(geom: dict[str, Any]) -> int | None:
+    """The rev of a geometry a link made (``link/state.json``, linked or not), else None."""
+    from cfddesk.project import link
+
+    try:
+        state = link.read_state(geom["dir"])
+        rev = int((state or {}).get("rev") or 0)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return rev if rev >= 1 else None
+
+
+def _stamp(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else None
+
+
+def _build_fields(node: dict[str, Any], rev: int | None, built: int | None, generated: bool) -> dict[str, Any]:
+    """A mesh's build stamp and whether it is out of date (host API 1.5, LINK 5.15)."""
+    if rev is not None:
+        node["built_from_rev"] = built
+        node["out_of_date"] = bool(generated and (built is None or built < rev))
+    return node
+
+
+def _mesh_node(
+    project_id: str, geometry_id: str, study_id: str, mesh: dict[str, Any], rev: int | None = None
+) -> dict[str, Any]:
     live = _dict(mesh.get("live_mesh_result"))
     scope = ScopeId(project_id, geometry_id, study_id, mesh_id=str(mesh.get("id") or ""))
     cells = live.get("n_cells", mesh.get("n_cells"))
-    return {
+    generated = str(live.get("status") or "") == "done"
+    return _build_fields({
         "id": str(mesh.get("id") or ""),
         "name": str(mesh.get("name") or "Mesh"),
         "key": scope.key(),
@@ -318,10 +377,12 @@ def _mesh_node(project_id: str, geometry_id: str, study_id: str, mesh: dict[str,
         "n_cells": cells if isinstance(cells, (int, float)) and not isinstance(cells, bool) else None,
         "live_status": str(live.get("status") or mesh.get("status") or ""),
         "refinements": _refinements(Path(mesh["dir"]), scope) if mesh.get("dir") else [],
-    }
+    }, rev, _stamp(live.get("built_from_rev")), generated)
 
 
-def _run_node(project_id: str, geometry_id: str, study_id: str, run: dict[str, Any]) -> dict[str, Any]:
+def _run_node(
+    project_id: str, geometry_id: str, study_id: str, run: dict[str, Any], rev: int | None = None
+) -> dict[str, Any]:
     run_id = str(run.get("id") or run.get("run_id") or "")
     scope = ScopeId(project_id, geometry_id, study_id, run_id=run_id)
     controls = []
@@ -330,18 +391,21 @@ def _run_node(project_id: str, geometry_id: str, study_id: str, run: dict[str, A
             continue
         item_id = str(row.get("id") or row.get("name") or "")
         controls.append(
-            {
-                "id": item_id,
-                "name": str(row.get("name") or row.get("kind") or "Result"),
-                "faces": _faces(row),
-                "key": ScopeId(
-                    project_id,
-                    geometry_id,
-                    study_id,
-                    run_id=run_id,
-                    item_id=item_id,
-                ).key(),
-            }
+            _with_lost(
+                {
+                    "id": item_id,
+                    "name": str(row.get("name") or row.get("kind") or "Result"),
+                    "faces": _faces(row),
+                    "key": ScopeId(
+                        project_id,
+                        geometry_id,
+                        study_id,
+                        run_id=run_id,
+                        item_id=item_id,
+                    ).key(),
+                },
+                row,
+            )
         )
     return {
         "id": run_id,
@@ -356,7 +420,21 @@ def _run_node(project_id: str, geometry_id: str, study_id: str, run: dict[str, A
         "last_saved_iteration": run.get("last_saved_iteration"),
         "has_results": bool(run.get("has_results")),
         "result_controls": controls,
+        **_run_build_fields(run, rev),
     }
+
+
+def _run_build_fields(run: dict[str, Any], rev: int | None) -> dict[str, Any]:
+    """A started run of a linked geometry made from an older rev: ``older_geometry`` (D26).
+
+    Its ``built_from`` is what Start copied from its mesh; a started run without one counts
+    as older, as a mesh without a stamp counts as out of date.
+    """
+    if rev is None or str(run.get("status") or "") in ("", "draft", "idle"):
+        return {}
+    built = _dict(run.get("built_from"))
+    stamp = _stamp(built.get("geometry_rev"))
+    return {"built_from_rev": stamp, "older_geometry": stamp is None or stamp < rev}
 
 
 def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
@@ -371,7 +449,11 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
     geometries = []
     for geom in walk_geometries(root):
         gid = str(geom.get("id") or "")
+        # A new linked geometry stays hidden until its commit (link/pending.json, API 1.5).
+        if (Path(geom["dir"]) / "link" / "pending.json").is_file():
+            continue
         gscope = ScopeId(project_id, gid)
+        grev = _geometry_rev(geom)
         study_nodes = []
         for study in studies:
             if str(study.get("geometry_id") or "") != gid:
@@ -390,20 +472,60 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
                     "wall_default": _wall(study_dir, sid),
                     "material_name": _material_name(study_dir),
                     "material_volumes": _material_volumes(study_dir),
+                    "material_lost": _material_lost(study_dir),
                     "bcs": _bcs(root, sscope),
                     "meshes": [
-                        _mesh_node(project_id, gid, sid, mesh) for mesh in walk_meshes(root, sid)
+                        _mesh_node(project_id, gid, sid, mesh, grev) for mesh in walk_meshes(root, sid)
                     ],
-                    "runs": [_run_node(project_id, gid, sid, run) for run in walk_runs(root, sid)],
+                    "runs": [_run_node(project_id, gid, sid, run, grev) for run in walk_runs(root, sid)],
                 }
             )
-        geometries.append(
-            {
-                "id": gid,
-                "name": str(geom.get("name") or geom.get("original_filename") or "Geometry"),
-                "key": gscope.key(),
-                "bodies": _body_names(geom, proj),
-                "studies": study_nodes,
-            }
-        )
+        node: dict[str, Any] = {
+            "id": gid,
+            "name": str(geom.get("name") or geom.get("original_filename") or "Geometry"),
+            "key": gscope.key(),
+            "bodies": _body_names(geom, proj),
+            "studies": study_nodes,
+        }
+        _link_fields(node, geom)
+        geometries.append(node)
     return {"ok": True, "project_id": project_id, "geometries": geometries}
+
+
+def _link_fields(node: dict[str, Any], geom: dict[str, Any]) -> None:
+    """A geometry a plugin study links (API 1.5): its source, rev, names8 and journal.
+
+    A second tab reloads the geometry when ``rev`` or ``names8`` differ from what it
+    shows; ``updating`` is True while a commit journal is left (the geometry is fenced).
+    ``body_labels`` are the design's body names and labels by host body label,
+    ``lost_faces`` the open lost entries on its studies' records, ``unlinked`` an earlier
+    version the link moved away from (a plain row to the user). ``source_state`` and
+    ``behind`` are added with the plugin studies (worker ``project.tree``).
+    """
+    from cfddesk.project import link
+
+    src = link.source_of(geom)
+    state = link.read_state(geom["dir"]) if src else None
+    if not src or not state or int(state.get("rev") or 0) < 1:
+        return
+    node["source"] = {
+        "plugin": str(src.get("plugin") or ""),
+        "study_id": str(src.get("study_id") or ""),
+        "workspace": str(src.get("workspace") or ""),
+    }
+    node["rev"] = int(state.get("rev") or 0)
+    node["names8"] = str(state.get("names_sha256") or "")[:8]
+    node["updating"] = link.has_journal(geom["dir"])
+    node["unlinked"] = (Path(geom["dir"]) / "link" / "unlinked.json").is_file()
+    node["source_version"] = int(state.get("source_version") or 0)
+    if state.get("name"):
+        node["name"] = str(state["name"])
+    labels = []
+    for b in state.get("bodies") or []:
+        if isinstance(b, dict) and b.get("ref"):
+            labels.append({"ref": str(b["ref"]), "name": b.get("name") or None, "label": b.get("label") or None})
+    node["body_labels"] = labels
+    try:
+        node["lost_faces"] = sum(link.lost_counts(Path(geom["dir"]).parent.parent, str(geom.get("id") or "")).values())
+    except Exception:
+        node["lost_faces"] = 0

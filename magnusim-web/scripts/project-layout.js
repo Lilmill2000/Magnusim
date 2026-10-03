@@ -735,12 +735,43 @@ export function findChildItem(parentDir, jsonFile, id) {
   return walkChildItems(parentDir, jsonFile).find((x) => String(x.id) === want) || null;
 }
 
-export function persistChildItem(parentDir, kind, rec) {
+/**
+ * Keep a linked geometry's own keys as a record writer must (host API 1.5):
+ * `lost_faces` from the file on disk, whatever the save sent (only the link writes
+ * it); `geometry_rev` set to the rev the save's stamp check passed with, else kept
+ * from disk. A record with no file yet keeps neither, unless it is a legacy row given
+ * its own folder (`keepRow`), which keeps the row's.
+ * @param {Record<string, any>} bound the record about to be written (changed in place)
+ * @param {Record<string, any> | null} onDisk
+ * @param {{ geometryRev?: number | null, keepRow?: boolean }} [opts]
+ */
+export function keepLinkKeys(bound, onDisk, opts = {}) {
+  for (const key of ['lost_faces', 'geometry_rev']) {
+    if (key === 'geometry_rev' && opts.geometryRev !== undefined && opts.geometryRev !== null) {
+      bound[key] = Number(opts.geometryRev);
+    } else if (onDisk) {
+      if (Object.prototype.hasOwnProperty.call(onDisk, key)) bound[key] = onDisk[key];
+      else delete bound[key];
+    } else if (!opts.keepRow) {
+      delete bound[key];
+    }
+  }
+  return bound;
+}
+
+/**
+ * Write one record into its own folder (bc.json and its id.json in a BC_ folder), atomically.
+ * `opts.geometryRev` is the rev the save's stamp check passed with; the link's keys
+ * follow keepLinkKeys.
+ * @param {{ geometryRev?: number | null, keepRow?: boolean }} [opts]
+ */
+export function persistChildItem(parentDir, kind, rec, opts = {}) {
   const spec = ITEM_KIND[kind];
   if (!spec) throw new Error('unknown item kind ' + kind);
   if (!rec || rec.id == null) throw new Error(kind + ' id required');
   mkdirSync(parentDir, { recursive: true });
   let folder = findChildItem(parentDir, spec.json, rec.id);
+  const onDisk = folder ? readJsonFile(join(folder.dir, spec.json)) : null;
   if (!folder) {
     const wanted = itemFolderName(kind, rec.name, rec.id);
     const created = uniqueChildDir(parentDir, wanted);
@@ -757,6 +788,7 @@ export function persistChildItem(parentDir, kind, rec) {
   const bound = { ...rec };
   delete bound.dir;
   delete bound.folder;
+  keepLinkKeys(bound, onDisk && typeof onDisk === 'object' ? onDisk : null, opts);
   writeJsonAtomic(join(folder.dir, spec.json), bound);
   return { ...bound, folder: folder.folder || basename(folder.dir), dir: folder.dir };
 }
@@ -768,7 +800,11 @@ export function removeChildItem(parentDir, jsonFile, id) {
   return true;
 }
 
-/** Wipe child folders and persist each record into its own folder. Never share a list file as SoT. */
+/**
+ * Wipe child folders and persist each record into its own folder. Never share a list file as SoT.
+ * The records are whole (a study copy rewrites them): they keep their own `lost_faces`
+ * and `geometry_rev` (keepLinkKeys' `keepRow`).
+ */
 export function replaceChildItems(parentDir, kind, recs) {
   const spec = ITEM_KIND[kind];
   if (!spec) throw new Error('unknown item kind ' + kind);
@@ -785,7 +821,7 @@ export function replaceChildItems(parentDir, kind, recs) {
   }
   const out = [];
   for (const rec of recs || []) {
-    if (rec && rec.id != null) out.push(persistChildItem(parentDir, kind, rec));
+    if (rec && rec.id != null) out.push(persistChildItem(parentDir, kind, rec, { keepRow: true }));
   }
   return out;
 }
@@ -883,7 +919,11 @@ export function copyStudyTree(srcStudyDir, destParent, newName, { cloneCases }) 
 const WALK_ONLY_KEYS = new Set(['folder', 'dir', 'geometry_dir', 'geometry_folder', 'kind']);
 
 export function catalogFromWalk(projectDirPath, activeId) {
-  const simulations = walkStudies(projectDirPath).map((s) => {
+  // A study under a new linked geometry that has not committed yet (link/pending.json,
+  // host API 1.5) is not listed: the geometry and its copied studies appear together.
+  const simulations = walkStudies(projectDirPath)
+    .filter((s) => !existsSync(join(s.geometry_dir, 'link', 'pending.json')))
+    .map((s) => {
     // Any other scalar the folder's id.json holds comes along and wins over the index:
     // settings older versions wrote there, until the read moves them into the index
     // (w17-sim-catalog foldLegacyIdSettings).

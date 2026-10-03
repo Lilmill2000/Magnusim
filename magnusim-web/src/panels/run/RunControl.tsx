@@ -274,6 +274,11 @@ export function RunControl(props: IslandProps) {
             </button>
           ) : null}
         </div>
+        {state.older_geometry ? (
+          <p className="mat-assign-hint" data-run-older="1">
+            {state.older_geometry}
+          </p>
+        ) : null}
         {state.reason ? (
           <div className="mat-assign-hint sim-run-hint" data-run-reason="1">
             <span className="sim-run-hint-msg">{state.reason.text}</span>

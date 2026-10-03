@@ -538,7 +538,7 @@ def adopt_legacy_bcs(project_dir: Path | str, sim_id: str | None) -> int:
     for rec in _legacy_study_bc_rows(root, study, bool(folders)):
         if str(rec.get("id")) in have or str(rec.get("simulation_id")) != sid:
             continue
-        persist_child_item(parent, "bc", rec)
+        persist_child_item(parent, "bc", rec, keep_row=True)
         adopted += 1
     return adopted
 
@@ -573,7 +573,66 @@ def assemble_study_bc_defaults(project_dir: Path | str, sim_id: str | None) -> d
     return {"wall_type": "No-slip"}
 
 
-def persist_child_item(parent: Path, kind: str, rec: dict[str, Any]) -> dict[str, Any]:
+# Keys only a linked geometry's update writes (host API 1.5): a save keeps them from disk.
+LINK_KEYS = ("lost_faces", "geometry_rev")
+
+
+def link_keys_from_disk(bound: dict[str, Any], on_disk: dict[str, Any] | None, geometry_rev: int | None, keep_row: bool) -> None:
+    """``lost_faces`` and ``geometry_rev`` as a record writer keeps them.
+
+    ``lost_faces`` comes from the file on disk, whatever the save sent (only the link
+    writes it). ``geometry_rev`` is the rev the save's stamp check passed with, else the
+    one on disk. A record with no file yet keeps neither, except a legacy row being
+    given its own folder (``keep_row``), which keeps the row's.
+    """
+    for key in LINK_KEYS:
+        if key == "geometry_rev" and geometry_rev is not None:
+            bound[key] = int(geometry_rev)
+        elif on_disk is not None:
+            if key in on_disk:
+                bound[key] = on_disk[key]
+            else:
+                bound.pop(key, None)
+        elif not keep_row:
+            bound.pop(key, None)
+
+
+def keep_build_stamp(rec: dict[str, Any], on_disk: dict[str, Any] | None) -> None:
+    """A mesh's build stamp (host API 1.5, LINK 5.15) as every writer but the generator keeps it.
+
+    ``live_mesh_result.built_from_rev`` comes from the mesh.json on disk; a record with no
+    result keeps none (not generated says more than out of date).
+    """
+    live = rec.get("live_mesh_result")
+    if not isinstance(live, dict):
+        return
+    disk = on_disk.get("live_mesh_result") if isinstance(on_disk, dict) else None
+    nxt = dict(live)
+    if isinstance(disk, dict) and "built_from_rev" in disk:
+        nxt["built_from_rev"] = disk["built_from_rev"]
+    else:
+        nxt.pop("built_from_rev", None)
+    rec["live_mesh_result"] = nxt
+
+
+def keep_run_build_stamp(merged: dict[str, Any], existing: dict[str, Any] | None) -> None:
+    """A run's ``built_from`` (host API 1.5): only Start sets it (Node), every other write keeps it."""
+    if isinstance(existing, dict) and "built_from" in existing:
+        merged["built_from"] = existing["built_from"]
+    else:
+        merged.pop("built_from", None)
+
+
+def persist_child_item(
+    parent: Path, kind: str, rec: dict[str, Any], *, geometry_rev: int | None = None, keep_row: bool = False
+) -> dict[str, Any]:
+    """Write one record into its own folder (``BC_*/bc.json`` and its ``id.json``).
+
+    Atomic (a temp file, then a replace), so no reader sees half a record. The link's
+    keys follow :func:`link_keys_from_disk`.
+    """
+    from cfddesk.project.web_writes import atomic_write
+
     spec = _ITEM_KIND.get(kind)
     if not spec:
         raise ValueError(f"unknown item kind {kind}")
@@ -582,18 +641,21 @@ def persist_child_item(parent: Path, kind: str, rec: dict[str, Any]) -> dict[str
         raise ValueError(f"{kind} id required")
     parent.mkdir(parents=True, exist_ok=True)
     found = None
+    on_disk = None
     want = str(rec["id"])
     for folder in _folders(parent):
         data = _read_json(folder / json_name) or {}
         if str(data.get("id") or "") == want:
             found = folder
+            on_disk = data
             break
     if found is None:
         wanted = prefix + sanitize_folder_name(str(rec.get("name") or rec["id"]), fallback)
         found = _unique_child(parent, wanted)
         found.mkdir(parents=True, exist_ok=True)
     bound = {k: v for k, v in rec.items() if k not in ("dir", "folder")}
-    _write_json(
+    link_keys_from_disk(bound, on_disk, geometry_rev, keep_row)
+    atomic_write(
         found / "id.json",
         {
             "id": rec["id"],
@@ -604,7 +666,7 @@ def persist_child_item(parent: Path, kind: str, rec: dict[str, Any]) -> dict[str
             "kind": kind,
         },
     )
-    _write_json(found / json_name, bound)
+    atomic_write(found / json_name, bound)
     return {**bound, "folder": found.name, "dir": found}
 
 

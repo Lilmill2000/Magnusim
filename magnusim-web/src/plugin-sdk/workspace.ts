@@ -14,7 +14,7 @@
  */
 
 /** The bridge's version; a host accepts a workspace built for the same major version. */
-export const SDK_VERSION = '1.1.0';
+export const SDK_VERSION = '1.2.0';
 
 /** A project-level study record (plugins/<key>/studies/<sid>/study.json) plus the plugin's own fields. */
 export interface StudyRecord {
@@ -28,6 +28,13 @@ export interface StudyRecord {
   plugin_version: string;
   created_at: string;
   updated_at: string;
+  /**
+   * Reserved (host 1.5): the version of the design this study saved last. A linking
+   * plugin writes it with study.update after each save; the host only reads it, and
+   * the linked geometry's row says "Not up to date" while it is newer than the
+   * version the geometry was last updated from.
+   */
+  source_version?: number;
   [field: string]: unknown;
 }
 
@@ -128,6 +135,112 @@ export interface ComputeJob {
   result: { savedTimes: number[]; lastSaved: number | null; phases: Record<string, number>; writeFormat: string | null } | null;
   /** The last event's number. */
   seq: number;
+}
+
+/** A file the page wrote in its study's folder (host 1.5): its hash, or the etag ws.files.stat gave. */
+export interface LinkFile {
+  /** Its path from the plugin's folder, under studies/<this study>/. */
+  rel: string;
+  /** What ws.files.write returned; or `etag` (exactly one of the two). */
+  sha256?: string;
+  /** What ws.files.stat returned, for a file the plugin's backend wrote. */
+  etag?: string;
+}
+
+export interface LinkShape extends LinkFile {
+  /** 1.5 reads only 'brep': an OCCT BREP, binary (BinTools) or text (BRepTools). */
+  format: 'brep';
+}
+
+export type LinkStage = 'queued' | 'reading' | 'meshing' | 'naming' | 'matching' | 'waiting' | 'saving' | 'finishing';
+
+/** A face (or body) assignment an update could not place, kept on its record (host 1.5). */
+export interface LostFace {
+  studyId: string;
+  studyTitle: string;
+  kind: 'bc' | 'material' | 'result_control' | 'refinement' | 'mesh_doc' | 'run_doc' | 'run_result_control';
+  /** The record's registry key (its BC kind, result-control kind or mesher); a plugin's own kinds show here. */
+  registryKey: string | null;
+  /** The record's name. */
+  item: string;
+  /** The field, e.g. "faces" or "assigned_volumes". */
+  field: string;
+  /** The label it had ("face 12@Body1"), or a body label ("Body1"). */
+  old: string;
+  /** The face or body name it had (the match key). */
+  name: string | null;
+  /** The display label it had, when the sidecar gave one. */
+  label: string | null;
+  reason: 'gone' | 'claimed_twice' | 'held_elsewhere' | 'stale';
+}
+
+/** A face that boundary conditions of one study claimed after their faces merged: nobody keeps it until the user picks. */
+export interface ClaimedTwice {
+  studyId: string;
+  studyTitle: string;
+  /** The new host face label, e.g. "face 7@Body1". */
+  target: string;
+  name: string | null;
+  label: string | null;
+  /** The boundary conditions that claimed it. */
+  items: string[];
+}
+
+export interface LinkOptions {
+  /** Required: one compound of solids, in mm. */
+  shape: LinkShape;
+  /** The face-name sidecar (magnusim_sdk.link.write_face_names writes it). */
+  faceNames?: LinkFile;
+  /** The plugin's own version of the SAVED design: a whole number that never goes down. */
+  sourceVersion: number;
+  /** The geometry rev this page last read (linkedGeometry().rev); null before the first link. */
+  basedOnRev: number | null;
+  /** The geometry's name; the default is the study's title. */
+  name?: string;
+  /** Called as the update moves through its stages (queued with the jobs ahead of it). */
+  onProgress?: (p: { stage: LinkStage; fraction: number | null; label?: string; ahead?: number }) => void;
+}
+
+export interface LinkResult {
+  geometryId: string;
+  name: string;
+  rev: number;
+  fromRev: number | null;
+  /** This call made the geometry (a first link). */
+  created: boolean;
+  /**
+   * none: nothing but sourceVersion recorded; names: names or colours only, the rev
+   * kept; faces: the same shape but lost faces came back by name (rev + 1); shape: rev + 1.
+   */
+  change: 'none' | 'names' | 'faces' | 'shape';
+  bodies: number;
+  faces: number;
+  /** Faces that carry a name from the sidecar. */
+  named: number;
+  match: { byName: number; byShape: number; split: number; merged: number; movedFar: number };
+  /** Assignments this update could not place. */
+  lost: LostFace[];
+  /** Lost assignments that came back with this update. */
+  returned: LostFace[];
+  /** Open lost entries on this geometry's records after this update. */
+  stillLost: number;
+  claimedTwice: ClaimedTwice[];
+  outOfDate: { meshes: { studyId: string; studyTitle: string; meshId: string; meshName: string }[]; runs: number };
+  seconds: number;
+}
+
+/** The project geometry this study links, as the host has it. */
+export interface LinkedGeometry {
+  geometryId: string;
+  name: string;
+  rev: number;
+  sourceVersion: number;
+  shapeSha256: string;
+  namesSha256: string | null;
+  syncedAt: string;
+  state: 'ok' | 'queued' | 'updating' | 'failed';
+  error: string | null;
+  lostFaces: number;
 }
 
 export interface ConfirmOptions {
@@ -232,6 +345,22 @@ export interface Workspace {
   };
   project: {
     info(): Promise<{ id: string; title: string; units: UnitSystem }>;
+    /**
+     * Link this study's saved design into the project as a geometry (host 1.5, a study
+     * kind with `links_geometry`). Write the files first (ws.files.write gives their
+     * sha256); the host copies them at the call, so the page may write again at once.
+     * The first call creates the geometry; a later one with equal bytes changes nothing
+     * (`none`), one that changes only names updates it in place, and one that changes
+     * the shape updates it as a queued job (it may wait for a running mesh or solve).
+     * Resolves when the update is committed. Refusals carry `.code`: "unsaved" (the page
+     * is dirty: save first), "stale" (an older design, or another tab's), "changed",
+     * "bad_brep", "empty", "bad_face_names", "unsupported_format", "plugin_needed",
+     * "busy", "gone", "cancelled" (the user removed it from the Queue: stay as you are,
+     * show no error), "superseded", "not_allowed", …
+     */
+    linkGeometry(o: LinkOptions): Promise<LinkResult>;
+    /** The geometry this study links now; null before the first link, or after the user removed it. */
+    linkedGeometry(): Promise<LinkedGeometry | null>;
   };
   ui: {
     toast(message: string, opts?: { kind?: 'info' | 'success' | 'error' }): Promise<void>;
@@ -302,6 +431,11 @@ export interface Workspace {
   on(event: 'units', fn: (units: UnitSystem) => void): () => void;
   on(event: 'theme', fn: (theme: ThemeInfo) => void): () => void;
   on(event: 'study', fn: (study: StudyRecord) => void): () => void;
+  /**
+   * `geometry` (host 1.5): the geometry this study links was updated (by this page or
+   * another tab of the same study). Only the page of the study that owns it hears it.
+   */
+  on(event: 'geometry', fn: (g: { geometryId: string; rev: number; fromRev: number | null }) => void): () => void;
   /**
    * Start an ES-module worker. A sandboxed frame cannot start a worker from a
    * URL or a module worker from a blob; this starts a classic blob worker that
@@ -393,6 +527,9 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   const listeners = new Map<string, Set<(data: unknown) => void>>();
   const jobListeners = new Map<string, Set<(ev: JobEvent) => void>>();
+  // linkGeometry calls in flight, by their token: the progress the host sends for each.
+  const linkProgress = new Map<string, NonNullable<LinkOptions['onProgress']>>();
+  let followingGeometry = false;
   // The follow calls already sent ("<method> <id>"): one per job and kind of job.
   const followed = new Set<string>();
   const ctx: WorkspaceContext = { ...context };
@@ -409,6 +546,18 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     }
     if (msg.event === 'job' && msg.jobId) {
       for (const fn of jobListeners.get(msg.jobId) || []) fn(msg.data as JobEvent);
+      return;
+    }
+    if (msg.event === 'linkProgress') {
+      const p = (msg.data || {}) as { token?: string; stage?: LinkStage; fraction?: number | null; label?: string; ahead?: number };
+      const fn = p.token ? linkProgress.get(p.token) : undefined;
+      if (fn && p.stage) {
+        try {
+          fn({ stage: p.stage, fraction: p.fraction ?? null, ...(p.label ? { label: p.label } : {}), ...(typeof p.ahead === 'number' ? { ahead: p.ahead } : {}) });
+        } catch (e) {
+          console.warn('[workspace] onProgress', e);
+        }
+      }
       return;
     }
     if (msg.event === 'units') ctx.units = msg.data as UnitSystem;
@@ -566,6 +715,19 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     },
     project: {
       info: () => call('project.info'),
+      linkGeometry: async (o) => {
+        // The camera and the callback stay in the page; the host gets the call's fields.
+        const { onProgress, ...rest } = (o || {}) as LinkOptions & { view?: unknown };
+        delete (rest as { view?: unknown }).view;
+        const token = newInstance();
+        if (typeof onProgress === 'function') linkProgress.set(token, onProgress);
+        try {
+          return await call<LinkResult>('project.linkGeometry', { ...rest, token });
+        } finally {
+          linkProgress.delete(token);
+        }
+      },
+      linkedGeometry: () => call('project.linkedGeometry'),
     },
     ui: {
       toast: async (message, opts = {}) => {
@@ -586,6 +748,13 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       if (!set) {
         set = new Set();
         listeners.set(event, set);
+      }
+      if (event === 'geometry' && !followingGeometry) {
+        // The host hears this study's geometry updates for this page from now on.
+        followingGeometry = true;
+        void call('project.followGeometry').catch(() => {
+          followingGeometry = false;
+        });
       }
       const f = fn as (data: unknown) => void;
       set.add(f);

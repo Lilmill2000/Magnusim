@@ -1,5 +1,5 @@
-import { workerRpc } from '../api/workerRpc';
 import { bcCatalog, meshCatalog } from './catalogs.js';
+import { linkedWorkerRpc, stampRecords } from './geometryRev';
 
 const host = {
   viewingBcId: () => '',
@@ -53,12 +53,13 @@ export async function saveBoundary(expectedId) {
   const ownerId = draft.id;
   const simId = String(draft.simulation_id || host.currentStudyId() || '');
   const list = (bcCatalog.bcs || []).map((b) => (same(b) ? { ...b, ...draft } : b));
-  const doc = await workerRpc('bcs.set', {
+  // Each record carries the rev its faces were drawn at (a linked geometry's stamp).
+  const doc = await linkedWorkerRpc('bcs.set', {
     project_id: draft.project_id,
     sim_id: simId,
     // BC records only: the wall default is saved by the Defaults panel alone.
     body: {
-      boundary_conditions: list,
+      boundary_conditions: stampRecords(list),
       simulation_id: simId,
     },
   });

@@ -1,0 +1,88 @@
+{
+  "faces": [
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        0.0,
+        5.0,
+        5.0
+      ],
+      "index": 1,
+      "side": "-x"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        10.0,
+        5.0,
+        5.0
+      ],
+      "index": 2,
+      "side": "+x"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        5.0,
+        0.0,
+        5.0
+      ],
+      "index": 3,
+      "side": "-y"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        5.0,
+        10.0,
+        5.0
+      ],
+      "index": 4,
+      "side": "+y"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        5.0,
+        5.0,
+        0.0
+      ],
+      "index": 5,
+      "side": "-z"
+    },
+    {
+      "area": 100.0,
+      "body": 1,
+      "centroid": [
+        5.0,
+        5.0,
+        10.0
+      ],
+      "index": 6,
+      "side": "+z"
+    },
+    {
+      "area": 36.0,
+      "body": 1,
+      "centroid": [
+        5.0,
+        5.0,
+        5.0
+      ],
+      "index": 7,
+      "side": "internal"
+    }
+  ],
+  "internal_centroid": [
+    5.0,
+    5.0,
+    5.0
+  ],
+  "n_solids": 1,
+  "part": "b-internal"
+}

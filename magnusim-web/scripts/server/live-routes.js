@@ -7,6 +7,7 @@ import { handleW16Api, attachLiveMeshJobReader, attachActiveProjectListener, imp
 import { handleProjectHydrate } from '../project-hydrate.js';
 import { caseDetachAllowed, caseDirBelongsToProject } from '../project-isolation.js';
 import { handleW17Api } from '../w17-simulation.js';
+import { registerLostFaceRoutes } from './link-routes.ts';
 import { handleW18Api } from '../w18-materials.js';
 import { handleW19Api } from '../w19-boundary-conditions.js';
 import { handleW20Api } from '../w20-mesh.js';
@@ -23,6 +24,14 @@ import { scheduleWslPrune } from '../wsl-prune.js';
 import { computeSlotHolder, holderIsRow, setSlotReleaseHook } from '../compute-slot.js';
 import { rediscoverAtBoot } from '../compute-rediscover.js';
 import { onQueueChange, onQueueLeave, startFoam } from '../foam-runner.js';
+import {
+  linkBootOnce,
+  linkRunFirst,
+  onLinkQueueChange,
+  onLinkQueueLeave,
+  resumeQueuedCreates,
+  startGeometryUpdate,
+} from './link-job.js';
 import { refreshSolveHooks } from '../solve-hooks.js';
 import {
   configureComputeQueue,
@@ -88,6 +97,7 @@ function computeQueueLive() {
     job_id: h.job_id || null,
     plugin: h.plugin || null,
     study_id: h.study_id || null,
+    geometry_id: h.geometry_id || null,
   };
 }
 
@@ -95,8 +105,16 @@ function wireComputeQueue(api) {
   configureComputeQueue({
     isBusy: () => computeSlotHolder() !== null,
     startFoam: (item) => startFoam(item),
-    onLeave: (row, reason, error) => onQueueLeave(row, reason, error),
-    onChange: () => onQueueChange(),
+    startGeometry: (item) => startGeometryUpdate(item),
+    // A link recovery goes before every queued row (API 1.5).
+    runFirst: () => linkRunFirst(),
+    // One handler per event, by the row's kind: a geometry row is the link job's.
+    onLeave: (row, reason, error) =>
+      row && row.kind === 'geometry' ? onLinkQueueLeave(row, reason, error) : onQueueLeave(row, reason, error),
+    onChange: () => {
+      onQueueChange();
+      onLinkQueueChange();
+    },
     holdsRow: (row) => holderIsRow(computeSlotHolder(), row),
     meshIsGenerating: (meshId, projectId) => {
       const snap = liveMeshJobSnapshot();
@@ -138,6 +156,8 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
   } catch (e) {
     console.warn('[CFD] boot check failed', e);
   }
+  // Once per process: link jobs left by the last server, and journals for the recovery.
+  linkBootOnce();
   if (worker && typeof worker.on === 'function') {
     worker.on('registry-changed', () => {
       void refreshSolveHooks(worker);
@@ -266,6 +286,8 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
   router.add(['GET', 'HEAD'], '/api/projects', wrap(handleW16Api));
   router.add(['GET', 'HEAD', 'POST'], '/api/folders', wrap(handleW16Api));
   router.add(['GET', 'HEAD', 'POST'], '/api/geometry', wrap(handleW16Api));
+  // A linked geometry's lost faces (API 1.5), ahead of the catch-all below.
+  registerLostFaceRoutes(router, worker);
   router.add(['GET', 'HEAD', 'POST'], '/api/geometry/**rest', wrap(handleW16Api));
 
   router.post('/api/case/attach', async (ctx) => {
@@ -672,6 +694,12 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
       api.hydrateActiveMeshCase();
       // From now on every release of the compute slot moves the queue on.
       setSlotReleaseHook(() => scheduleComputeQueueKick(250));
+      // First links queued when the last server stopped start now that plugins are known.
+      try {
+        resumeQueuedCreates();
+      } catch (e) {
+        console.warn('[CFD link] queued creates could not resume', e);
+      }
       void refreshSolveHooks(worker);
       try {
         scheduleComputeQueueKick(400);

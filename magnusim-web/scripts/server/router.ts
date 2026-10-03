@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { caseDirAllowedForAttach } from '../project-isolation.js';
 import { scopeIsStrict } from '../request-scope.js';
 import { HttpError, jsonBodyLimit, parseUrl, readJsonBody, sendJson } from './http.ts';
+import { admitThroughGate, gateProjectOf, requestIsGated } from './link-gate.js';
 
 export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
@@ -317,6 +318,19 @@ export async function dispatch(
   if (caseDir && !projectId && scopeIsStrict()) {
     sendJson(res, 400, { error: 'project_id required' });
     return true;
+  }
+  // A geometry update's commit closes its project's gate (API 1.5): a gated request
+  // waits there, and counts itself in until its response ends. Only here, once per request.
+  if (requestIsGated(method, url.pathname, parsedBody)) {
+    const gateProject = gateProjectOf(url.pathname, projectId, parsedBody);
+    if (gateProject) {
+      const admitted = await admitThroughGate({ projectId: gateProject, method, res });
+      if (!admitted.ok) {
+        res.setHeader('Retry-After', '2');
+        sendJson(res, 503, admitted.body);
+        return true;
+      }
+    }
   }
   const ctx: RequestContext = {
     req,

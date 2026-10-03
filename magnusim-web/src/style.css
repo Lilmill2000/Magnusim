@@ -2570,7 +2570,21 @@ select.fp-select {
 }
 /* The app's questions show above Settings (a plugin turned off there asks first). */
 #modal-confirm,
-#modal-prompt { z-index: var(--mg-z-confirm); }
+#modal-prompt,
+#modal-link-choice { z-index: var(--mg-z-confirm); }
+/* A linked geometry's new shape (host API 1.5): two choices, each with its line. */
+.link-choice-card { width: min(480px, 94vw); }
+.link-choice-copy { margin: 0 0 12px; font-size: 13px; line-height: 1.4; color: #374151; }
+.link-choice-option { border: 1px solid #e3e7ee; border-radius: 4px; padding: 10px 12px; margin-bottom: 10px; }
+.link-choice-option .home-btn { width: 100%; justify-content: center; }
+.link-choice-line { margin: 6px 0 0; font-size: 12px; line-height: 1.4; color: #4b5563; }
+.link-choice-copies { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.link-choice-copies label { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: #1f2430; }
+.link-choice-copies label.is-disabled { color: #8a93a3; }
+.link-choice-why { display: block; font-size: 11px; color: #8a93a3; }
+/* A linking plugin study's row: the geometry it links ("→ Part 1 v2"), or none yet. */
+.plugin-study-geometry { display: block; margin: 0 0 2px 26px; padding: 0; border: 0; background: none; font: inherit; font-size: 11px; color: #3b6fb6; cursor: pointer; text-align: left; }
+.plugin-study-geometry.is-none { color: #8a93a3; cursor: default; }
 .cfd-modal-card {
   position: relative;
   z-index: 1;
@@ -4516,6 +4530,11 @@ select.fp-select {
   margin: 0 0 8px;
 }
 
+/* A dialog's text keeps its line breaks (a linked geometry's update report lists one item per line). */
+#cf-copy {
+  white-space: pre-line;
+}
+
 .home-detail-desc {
   font-size: 13px;
   color: #5b6575;
@@ -5190,3 +5209,27 @@ body.is-recording #viewport-gizmo {
 .np-start .np-start-choice input { margin-top: 3px; }
 .np-start-hint { display: block; color: var(--mg-text-muted); font-size: var(--mg-text-sm); }
 .plugin-study .tree-row[data-plugin-study-open] { cursor: pointer; }
+
+/* A linked geometry's row (API 1.5): "from <study>", Edit, its link state and lost faces. */
+.tree-link-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  min-width: 0;
+}
+.tree-link-edit {
+  font: inherit;
+  font-size: 11px;
+  padding: 0 6px;
+  border: 1px solid #c8d0db;
+  border-radius: 4px;
+  background: #fff;
+  color: #1570ef;
+  cursor: pointer;
+}
+.tree-link-edit:disabled {
+  color: #9aa3af;
+  cursor: default;
+}

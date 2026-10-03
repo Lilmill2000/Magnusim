@@ -1,7 +1,7 @@
 key = "my-workspace"
 name = "My workspace"
 version = "0.1.0"
-api_version = "1.4"
+api_version = "1.5"
 license = "GPL-3.0-or-later"
 description = "A plugin with its own full workspace: copy this folder to start one"
 authors = "Your Name"
@@ -20,9 +20,8 @@ title = "Sketch"
 icon = "M5 19V5h14v14z M9 9h6v6H9z"
 workspace = "sketch"
 schema_version = 1
-# Host 1.5 and later: a study of this kind may link one project geometry.
-# Host 1.4 checks the key only (compatibility.md, "## 1.4"); its how-to
-# comes with host 1.5. Remove the "# " to opt in.
+# Host 1.5 and later: a study of this kind may link one project geometry
+# (authoring.md, "Linking a geometry (1.5)"). Remove the "# " to opt in.
 # links_geometry = true
 
 # Host 1.4 and later: a button that creates a study of this kind and opens it,

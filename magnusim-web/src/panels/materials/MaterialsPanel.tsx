@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../../api/client';
-import { workerRpc } from '../../api/workerRpc';
+import { bodyDisplay, subscribeFaceNames } from '../../workbench/faceNames';
+import { linkedWorkerRpc, stampRecords } from '../../workbench/geometryRev';
 import { SciNumberInput } from '../../forms/SciNumberInput';
 import {
   customPresetKey,
@@ -160,14 +161,16 @@ export function MaterialsPanel(props: IslandProps) {
         geometry_id: scoped.geometry_id || undefined,
         project_id: scoped.project_id,
       }, new Date().toISOString());
-      const doc = await workerRpc<{ materials?: SavedMaterial[]; air?: SavedMaterial }>('materials.set', {
+      // Each record carries the rev its bodies were drawn at (a linked geometry's stamp).
+      const [stamped] = stampRecords([rec as Record<string, unknown>]);
+      const doc = await linkedWorkerRpc<{ materials?: SavedMaterial[]; air?: SavedMaterial }>('materials.set', {
         project_id: scoped.project_id,
         sim_id: scoped.simulation_id,
         body: {
           project_id: scoped.project_id,
           simulation_id: scoped.simulation_id,
-          materials: [...live.current.others, rec],
-          air: rec,
+          materials: [...live.current.others, stamped],
+          air: stamped,
           only_id: rec.id,
         },
       });
@@ -194,6 +197,9 @@ export function MaterialsPanel(props: IslandProps) {
   function toggleBody(body: string) {
     return save({ volumes: toggleVolume(live.current.volumes, body) });
   }
+
+  // A linked geometry's body names arrive with its preview: show "Fluid (Body1)".
+  useEffect(() => subscribeFaceNames(() => setBodies(geometryBodies())), []);
 
   useEffect(
     () =>
@@ -306,7 +312,7 @@ export function MaterialsPanel(props: IslandProps) {
                   title={on ? `Unassign ${body}` : `Assign ${title} to ${body}`}
                   onClick={() => void toggleBody(body)}
                 >
-                  {body}
+                  {bodyDisplay(body)}
                 </button>
                 <span className="mat-assign-state">{on ? 'Assigned' : 'Not assigned'}</span>
               </li>

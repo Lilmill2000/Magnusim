@@ -1108,6 +1108,64 @@ export class PluginFiles {
     });
   }
 
+  /**
+   * Copy files of a study's folder to destDir, as a link job's input (API 1.5): each
+   * path is checked as a read and must lie under studies/<studyId>/; inside the plugin
+   * folder's lock, so no write lands between two files, each file's etag is checked
+   * when one is given, and it is streamed to destDir/<name> and hashed as it goes. A
+   * hash that differs from a given sha256, or an etag that differs, is `changed`.
+   */
+  async snapshotFiles(
+    projectId: string,
+    plugin: string,
+    studyId: string,
+    files: Array<{ name: string; rel: unknown; sha256?: string | null; etag?: string | null }>,
+    destDir: string,
+  ): Promise<Array<{ name: string; rel: string; sha256: string; size: number }>> {
+    const { dir, row } = await this.scope(projectId, plugin);
+    if (!STUDY_ID_RE.test(String(studyId || ''))) throw new PluginFileError(400, 'bad_request', 'invalid study id');
+    const { maxFile } = limitsOf(row);
+    const placed: Array<{ name: string; at: Place; sha256: string | null; etag: string | null }> = [];
+    for (const f of files) {
+      const at = await this.place(dir, plugin, relParts(f.rel, false), 'read');
+      if (at.parts.length < 3 || studyNorm(at.parts[0]) !== 'studies' || studyNorm(at.parts[1]) !== studyNorm(studyId)) {
+        throw new PluginFileError(403, 'outside_study', `${at.parts.join('/')} is not in this study's folder`);
+      }
+      await this.checkStudy(at);
+      placed.push({ name: f.name, at, sha256: f.sha256 ? String(f.sha256).toLowerCase() : null, etag: f.etag ? String(f.etag) : null });
+    }
+    const root = placed.length ? placed[0].at.root : await nativeResolved(join(dir, 'plugins', plugin));
+    return this.inFolder(root, async () => {
+      await fsp.mkdir(destDir, { recursive: true });
+      const out: Array<{ name: string; rel: string; sha256: string; size: number }> = [];
+      for (const f of placed) {
+        const rel = f.at.parts.join('/');
+        const st = await statOrNull(f.at.target);
+        if (!st) throw new PluginFileError(404, 'not_found', `${rel} does not exist`);
+        if (st.isDirectory()) throw new PluginFileError(400, 'is_folder', `${rel} is a folder`);
+        if (!st.isFile()) throw new PluginFileError(404, 'not_found', `${rel} is not a file`);
+        if (Number(st.size) > maxFile) throw new PluginFileError(413, 'too_large', `${rel} is larger than ${mb(maxFile)}`, { limit: maxFile });
+        if (f.etag !== null && fileEtag(st) !== f.etag) {
+          throw new PluginFileError(409, 'changed', `${rel} changed since it was read`, { etag: fileEtag(st) });
+        }
+        const hash = createHash('sha256');
+        const meter = new Transform({
+          transform(chunk: Buffer, _enc, done) {
+            hash.update(chunk);
+            done(null, chunk);
+          },
+        });
+        await pipeline(createReadStream(f.at.target), meter, createWriteStream(join(destDir, f.name), { flags: 'wx' }));
+        const digest = hash.digest('hex');
+        if (f.sha256 !== null && digest !== f.sha256) {
+          throw new PluginFileError(409, 'changed', `${rel} is not the file that was written (its sha256 differs)`, { sha256: digest });
+        }
+        out.push({ name: f.name, rel, sha256: digest, size: Number(st.size) });
+      }
+      return out;
+    });
+  }
+
   /** The plugin was turned off, reloaded, or its environment is rebuilt or removed. */
   async abortPlugin(key: string): Promise<void> {
     await Promise.all([...this.uploads.values()].filter((u) => u.plugin === key).map((u) => this.drop(u)));

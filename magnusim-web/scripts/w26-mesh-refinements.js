@@ -25,6 +25,8 @@ import { envGet } from './env-compat.js';
 import { matchFaces, readPreviewFaces, remapRecordFaces } from './geometry-face-match.js';
 import { findStudy, walkMeshes, walkStudies } from './project-layout.js';
 import { commitRpc, writeProjectCli } from './py-json.js';
+import { checkRecordSave, studyLinkState, updatingAnswer } from './link-stamp.js';
+import { geometryFenced } from './server/link-job.js';
 import { mesherByKey } from './registry-defaults.js';
 import {
   assembleMeshDoc,
@@ -346,6 +348,7 @@ async function persistDoc(projectId, sim, refinements, opts) {
   const now = new Date().toISOString();
   const only = opts && opts.only;
   const drop = opts && opts.drop;
+  const geometryRev = opts && opts.geometryRev;
   for (const rec of drop || []) {
     if (rec && rec.id) deleteOneRefinement(projectId, rec.mesh_id, sim.id, rec.id);
   }
@@ -355,7 +358,7 @@ async function persistDoc(projectId, sim, refinements, opts) {
     if (!rec || !rec.id || !rec.mesh_id) continue;
     rec.project_id = projectId;
     rec.simulation_id = sim.id;
-    persistOneRefinement(projectId, rec.mesh_id, sim.id, rec);
+    persistOneRefinement(projectId, rec.mesh_id, sim.id, rec, { geometryRev });
     path = rec.mesh_id;
   }
   const assembled = assembleRefinements(projectId, sim.id);
@@ -459,6 +462,12 @@ async function copyRefinementsToMesh(body) {
       body: { ok: true, copied: false, refinements: visibleRefs(projectId, gate.proj, sim, doc.refinements), mesh_refinements_json: path },
     };
   }
+  // Never into or out of a linked geometry whose update did not finish (host API 1.5):
+  // its files may already be the new shape while its records are still the old one.
+  for (const st of [findStudy(projectDir(projectId), sim.id), meshStudy(projectId, srcId)]) {
+    const link = st ? studyLinkState(projectDir(projectId), st.id) : null;
+    if (link && geometryFenced(link.dir)) return updatingAnswer(link.name);
+  }
   const destMesh = readMeshEntry(projectId, destId);
   const destMeta = {
     simulation_id: (destMesh && destMesh.simulation_id) || sim.id,
@@ -548,6 +557,9 @@ async function upsertRefinements(body) {
   const { projectId, sim } = gate;
   let list = currentList(projectId, sim.id);
   const batch = (body && (body.refinements || body.items)) || null;
+  // A linked geometry's stamp check (host API 1.5) for the records this save writes.
+  const stamp = checkRecordSave(projectDir(projectId), sim.id, Array.isArray(batch) && batch.length ? batch : [body || {}], body && body.geometry_rev);
+  if (!stamp.ok) return stamp;
   let last = null;
   const changed = [];
   if (Array.isArray(batch) && batch.length) {
@@ -571,7 +583,7 @@ async function upsertRefinements(body) {
     list = mergeIntoList(list, built.refinement);
     changed.push(last);
   }
-  const { doc, path } = await persistDoc(projectId, sim, list, { only: changed });
+  const { doc, path } = await persistDoc(projectId, sim, list, { only: changed, geometryRev: stamp.rev });
   return {
     ok: true,
     status: 200,
@@ -640,6 +652,7 @@ export async function handleW26Api(req, res, u, parts, helpers) {
     }
     const result = await upsertRefinements(body);
     res.setHeader('X-CFD-Source', 'refinements-upsert');
+    for (const [k, v] of Object.entries(result.headers || {})) res.setHeader(k, v);
     return sendJson(res, result.status, result.body);
   }
   if (req.method === 'GET' || req.method === 'HEAD') {

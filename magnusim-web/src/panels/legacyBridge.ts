@@ -245,6 +245,8 @@ export interface RunState {
   mesh_ready: boolean;
   /** The run's analysis reports no setup issue (null until it answers). */
   setup_ready: boolean | null;
+  /** Made on an older version of its linked geometry (API 1.5, D26): the line the panel shows, else ''. */
+  older_geometry?: string;
 }
 
 export function subscribeRunState(onState: (state: RunState) => void): () => void {
@@ -448,6 +450,31 @@ export async function deleteBc(id: string): Promise<unknown> {
   const fn = window.__CFD_BC_DELETE__;
   if (!fn) throw new Error('Delete is not ready yet.');
   return fn(id);
+}
+
+/** A lost face entry on a record (a linked geometry's update put it there; API 1.5). */
+export interface LostFaceEntry {
+  field: string;
+  old: string;
+  name?: string | null;
+  label?: string | null;
+  reason: 'gone' | 'claimed_twice' | 'held_elsewhere' | 'stale';
+  targets?: string[];
+}
+
+/** Forget lost faces: one entry, a record's, a study's, or the whole geometry's (no id). */
+export async function forgetLostFaces(opts: {
+  geometry_id?: string;
+  study_id?: string;
+  kind?: string;
+  id?: string;
+  mesh_id?: string;
+  run_id?: string;
+  entry?: { field: string; old: string } | null;
+}): Promise<unknown> {
+  const fn = window.__CFD_FORGET_LOST__;
+  if (!fn) throw new Error('The project is not open yet.');
+  return fn(opts);
 }
 
 export function unassignBcFace(face: string): void {

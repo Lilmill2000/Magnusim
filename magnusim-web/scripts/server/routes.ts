@@ -21,12 +21,15 @@ import { DEV_SHEET_FILES, devSheetFile, devSheetsOn, pluginSdkFile, type SdkVari
 import { CASE_BUSY, PluginFileError, PluginFiles, caseBusy, registerPluginFileRoutes } from './plugin-files.ts';
 import { FRAME_ASSET_HEADERS, frameCsp, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
 import { registerPluginCaseRoutes } from './plugin-cases.ts';
+import { registerLinkRoutes } from './link-routes.ts';
+import { cancelStudyQuestions } from './link-job.js';
 import { dropFoamJobs, relabelFoamJobs } from './compute-queue.ts';
 import { activeCaseKeys, bumpPluginEpoch, stopFoamCasesFor, studyHasActiveCase } from '../foam-runner.js';
 import { listFoamRecords, updateFoamRecord } from '../foam-store.js';
 import { pluginLoaded } from '../registry-defaults.js';
 import { sameProjectFolder } from '../compute-slot.js';
 import { projectDir } from '../w17-sim-catalog.js';
+import { checkRecordSave } from '../link-stamp.js';
 
 export interface RouteDeps {
   worker: WorkerClient;
@@ -88,6 +91,13 @@ function rpcStatus(err: unknown): { status: number; body: Record<string, unknown
     return { status: 503, body: { error: err.message, ok: false } };
   }
   if (err instanceof RpcError) {
+    // A linked geometry's stamp check refused the save (host API 1.5): -32010 the tab's
+    // labels are older than the geometry (409), -32011 the geometry is updating (503).
+    if (err.code === -32010 || err.code === -32011) {
+      const data = (err.data && typeof err.data === 'object' ? err.data : {}) as { code?: string };
+      const code = data.code || (err.code === -32010 ? 'geometry_changed' : 'geometry_updating');
+      return { status: err.code === -32010 ? 409 : 503, body: { error: err.message, code, ok: false } };
+    }
     // -32009: the record changed since the caller read it (a plugin study's rev).
     const status = err.code === -32004 ? 404 : err.code === -32602 ? 400 : err.code === -32009 ? 409 : 500;
     return { status, body: { error: err.message, code: err.code, ok: false } };
@@ -108,6 +118,7 @@ async function workerJson(
     return true;
   } catch (err) {
     const { status, body } = rpcStatus(err);
+    if (status === 503 && body.code === 'geometry_updating') ctx.res.setHeader('Retry-After', '2');
     ctx.sendJson(status, body);
     return true;
   }
@@ -350,6 +361,27 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       params.sim_id = String(raw.sim_id || raw.simulation_id || ctx.scope.simulationId || '');
       if (raw.body && typeof raw.body === 'object') params.body = raw.body;
     }
+    // A linked geometry's stamp check (host API 1.5), before the worker writes anything:
+    // each record the save writes carries the rev its labels were drawn at (Python
+    // checks again; a page can never pass the checked rev itself).
+    const listKey = method === 'bcs.set' ? 'boundary_conditions' : method === 'materials.set' ? 'materials' : '';
+    if (listKey && params.body && typeof params.body === 'object') {
+      const body = params.body as Record<string, unknown>;
+      const rows = Array.isArray(body[listKey]) ? (body[listKey] as Array<Record<string, unknown>>) : [];
+      const only = String(body.only_id || '');
+      const recs = only ? rows.filter((r) => r && String(r.id || '') === only) : rows;
+      const check = checkRecordSave(String(projectDir(project_id)), String(params.sim_id || ''), recs, undefined) as {
+        ok: boolean;
+        status?: number;
+        body?: unknown;
+        headers?: Record<string, string>;
+      };
+      if (!check.ok) {
+        for (const [k, v] of Object.entries(check.headers || {})) ctx.res.setHeader(k, v);
+        ctx.sendJson(Number(check.status) || 409, check.body);
+        return;
+      }
+    }
     return workerJson(deps, ctx, method, params);
   });
 
@@ -586,6 +618,8 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     }
     if (params.plugin && params.study_id) {
       dropFoamJobs({ project_id: params.project_id, plugin: params.plugin, study_id: params.study_id }, 'The study was deleted');
+      // A linked geometry's open question ends cancelled (API 1.5); its geometry stays.
+      cancelStudyQuestions(params.project_id, params.plugin, params.study_id);
     }
     return workerJson(deps, ctx, 'plugin_studies.delete', params);
   });
@@ -645,6 +679,8 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   registerPluginFileRoutes(router, pluginFiles);
   // Its OpenFOAM cases on the compute slot (/api/plugin-cases/*).
   registerPluginCaseRoutes(router, { worker: deps.worker, files: pluginFiles });
+  // A plugin study's linked geometry (/api/plugin-geometry/*, API 1.5).
+  registerLinkRoutes(router, { worker: deps.worker, files: pluginFiles });
 
   router.post('/api/plugins/:key/enable', async (ctx) => {
     if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });

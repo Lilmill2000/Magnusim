@@ -1,0 +1,5 @@
+{
+  "bc": [{ "key": "demo_porous", "label": "Demo porous wall", "plugin": "bc-demo" }],
+  "bc_family": [{ "key": "demo_porous", "label": "Demo porous", "plugin": "bc-demo", "record_type": "Demo porous", "aliases": [], "variants": ["demo_porous"] }],
+  "plugins": [{ "key": "bc-demo", "name": "BC demo" }]
+}

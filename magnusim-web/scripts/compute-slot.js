@@ -15,7 +15,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { PROJECTS_ROOT } from './project-isolation.js';
 
-const KINDS = new Set(['mesh', 'solve', 'foam', 'check']);
+const KINDS = new Set(['mesh', 'solve', 'foam', 'check', 'geometry']);
 const PHASES = new Set(['checking', 'starting', 'running', 'draining']);
 /** Claim fields besides token, kind, phase, since and stop_requested. */
 const INFO_FIELDS = [
@@ -31,6 +31,7 @@ const INFO_FIELDS = [
   'job_id',
   'plugin',
   'study_id',
+  'geometry_id',
 ];
 const START_ID_RE = /^[a-z0-9-]{8,40}$/;
 const PENDING_STOP_MS = 10_000;
@@ -38,10 +39,11 @@ const WIN = process.platform === 'win32';
 
 /**
  * @typedef {{
- *   token: string, kind: 'mesh'|'solve'|'foam'|'check', phase: 'checking'|'starting'|'running'|'draining',
+ *   token: string, kind: 'mesh'|'solve'|'foam'|'check'|'geometry', phase: 'checking'|'starting'|'running'|'draining',
  *   project_id: string|null, project_ids?: string[]|null, name: string, since: number, stop_requested: boolean,
  *   run_id?: string|null, mesh_id?: string|null, mesh_name?: string|null, generate_id?: string|null,
  *   path_kind?: string|null, started_at?: string|null, job_id?: string|null, plugin?: string|null, study_id?: string|null,
+ *   geometry_id?: string|null,
  *   boot?: boolean,
  * }} SlotClaim
  */
@@ -88,7 +90,7 @@ export function computeSlotHolder() {
 
 /**
  * Take the slot. It fails while any claim exists.
- * @param {'mesh'|'solve'|'foam'|'check'} kind
+ * @param {'mesh'|'solve'|'foam'|'check'|'geometry'} kind
  * @param {Record<string, any>} info
  * @param {{ phase?: string }} [opts]
  * @returns {{ ok: true, token: string } | { ok: false, holder: SlotClaim | null }}
@@ -112,7 +114,10 @@ export function claimComputeSlot(kind, info, opts = {}) {
     // The boot check's claim: it is handed to each job the check follows, in turn.
     ...(kind === 'check' ? { boot: true } : {}),
   });
-  if (!s.claim.name) s.claim.name = kind === 'mesh' ? 'Mesh' : kind === 'solve' ? 'Run' : kind === 'check' ? 'Checking for jobs left running' : 'Plugin case';
+  if (!s.claim.name) {
+    s.claim.name =
+      kind === 'mesh' ? 'Mesh' : kind === 'solve' ? 'Run' : kind === 'check' ? 'Checking for jobs left running' : kind === 'geometry' ? 'Geometry update' : 'Plugin case';
+  }
   return { ok: true, token };
 }
 
@@ -342,6 +347,7 @@ export function projectBusyMessage(holder, id) {
   if (namedByBootOnly(holder, id)) return 'A job left running in this project has not ended yet. Try again when it has ended.';
   if (holder.phase === 'draining') return 'A job in this project is still stopping. Try again when it has stopped.';
   if (holder.kind === 'foam') return 'A plugin case in this project is running. Stop it before deleting the project.';
+  if (holder.kind === 'geometry') return 'A geometry in this project is updating. Try again when it has finished.';
   if (holder.kind === 'mesh') return 'A mesh in this project is generating. Stop it before deleting the project.';
   return 'A run in this project is solving. Stop it before deleting the project.';
 }
@@ -356,11 +362,12 @@ export function folderBusyMessage(holder, title, id) {
   if (holder.kind === 'check') return `The app is checking ${title} for jobs left running. Try again in a few seconds.`;
   if (namedByBootOnly(holder, id)) return `A job left running in ${title} has not ended yet. Try again when it has ended.`;
   if (holder.phase === 'draining') return `A job in ${title} is still stopping. Try again when it has stopped.`;
+  if (holder.kind === 'geometry') return `A geometry in ${title} is updating. Try again when it has finished.`;
   return `A job in ${title} is running. Stop it before deleting the folder.`;
 }
 
 /**
- * The claim is the job of this queue row: its mesh, its run or its plugin case,
+ * The claim is the job of this queue row: its mesh, its run, its plugin case or its geometry update,
  * in the row's project.
  * @param {SlotClaim | null} holder
  * @param {{ kind?: string, project_id?: unknown, mesh_id?: unknown, run_id?: unknown, job_id?: unknown } | null} row
@@ -372,6 +379,7 @@ export function holderIsRow(holder, row) {
   if (row.kind === 'mesh') return holder.kind === 'mesh' && same(holder.mesh_id, row.mesh_id);
   if (row.kind === 'solve') return holder.kind === 'solve' && same(holder.run_id, row.run_id);
   if (row.kind === 'foam') return holder.kind === 'foam' && same(holder.job_id, row.job_id);
+  if (row.kind === 'geometry') return holder.kind === 'geometry' && same(holder.job_id, row.job_id);
   return false;
 }
 

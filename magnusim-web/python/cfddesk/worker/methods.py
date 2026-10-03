@@ -197,6 +197,13 @@ def project_hydrate(id: str = "", project_id: str = "", simulation_id: str = "")
         raise RpcError(-32602, "project_id required")
     root = _require_dir(pid)
     _reconcile_and_save(root)
+    # Linked geometries (API 1.5): project.json is their cache; one it lost comes back.
+    from cfddesk.project.link import repair_project
+
+    try:
+        repair_project(root)
+    except Exception:
+        pass
     proj = ww.read_json(root / "project.json")
     if not proj:
         raise RpcError(-32004, "project not found", {"project_id": pid})
@@ -269,6 +276,13 @@ def project_tree(id: str = "", project_id: str = "") -> dict[str, Any]:
     from cfddesk.project.scope import build_project_tree, migrate_root_siblings
 
     migrate_root_siblings(root)
+    # Repair on read (API 1.5): two folders linked to one study keep only the newest linked.
+    try:
+        from cfddesk.project.link import mark_older_unlinked
+
+        mark_older_unlinked(root)
+    except Exception:
+        pass
     tree = build_project_tree(root, pid)
     extra: list[Any] = []
     try:
@@ -292,7 +306,75 @@ def project_tree(id: str = "", project_id: str = "") -> dict[str, Any]:
         studies, kinds = [], []
     tree["plugin_studies"] = studies
     tree["plugin_study_kinds"] = kinds
+    _link_source_states(root, tree, studies)
     return tree
+
+
+def _link_source_states(root: Path, tree: dict[str, Any], studies: list[dict[str, Any]]) -> None:
+    """A linked geometry's row (API 1.5): its plugin's state and whether the design is newer.
+
+    ``source_state`` is ``ok`` while the linking plugin is on, ``plugin_off`` when its
+    plugin is listed but not on (``source_reason`` says why: off, needs setup, failed),
+    ``plugin_missing`` when it is not installed; ``behind`` is True when the study's
+    saved design (its ``source_version``) is newer than the one the geometry was last
+    updated from. Every plugin study on disk is listed, whatever its plugin's state, so a
+    source study with no row was deleted: the geometry is a plain one (``unlinked``,
+    proposal 5.18, 5.19).
+    """
+    catalog = {str(r.get("key") or ""): r for r in plugin_catalog(web_root())}
+    listed = set(catalog)
+    by_key = {(str(s.get("plugin") or ""), str(s.get("id") or "")): s for s in studies}
+    for node in tree.get("geometries") or []:
+        src = node.get("source") if isinstance(node, dict) else None
+        if not isinstance(src, dict):
+            continue
+        plugin = str(src.get("plugin") or "")
+        row = by_key.get((plugin, str(src.get("study_id") or "")))
+        if row is None:
+            node["unlinked"] = True
+            node["source_state"] = "study_deleted"
+            node["behind"] = False
+            continue
+        if row.get("available"):
+            node["source_state"] = "ok"
+        elif plugin in listed:
+            node["source_state"] = "plugin_off"
+            node["source_reason"] = _plugin_off_reason(catalog[plugin], str(row.get("plugin_name") or plugin), str(row.get("reason") or ""))
+        else:
+            node["source_state"] = "plugin_missing"
+        src["study_title"] = str(row.get("title") or "")
+        rec = _read_json_file(root / "plugins" / plugin / "studies" / str(src.get("study_id") or "") / "study.json")
+        try:
+            wanted = int((rec or {}).get("source_version") or 0)
+        except (TypeError, ValueError):
+            wanted = 0
+        node["behind"] = bool(row is not None and not node.get("unlinked") and wanted > int(node.get("source_version") or 0))
+
+
+def _plugin_off_reason(row: dict[str, Any], name: str, fallback: str) -> str:
+    """Why a listed plugin's studies cannot open now, by its catalog status (the geometry row's line)."""
+    status = str(row.get("status") or "")
+    if status == "disabled":
+        return f"{name} is off"
+    if status == "needs setup":
+        return f"{name} needs setup: install its dependencies"
+    if status == "incompatible":
+        return f"{name} does not work with this version of the app"
+    if status == "error":
+        return f"{name} failed to load"
+    if status == "missing requirement":
+        missing = ", ".join(str(m) for m in row.get("missing") or [] if m)
+        return f"{name} is missing {missing}" if missing else f"{name} is missing something it needs"
+    return fallback or f"Requires the {name} plugin"
+
+
+def _read_json_file(path: Path) -> Any:
+    import json
+
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 @rpc("project.list")
@@ -513,7 +595,22 @@ def materials_get(
 def materials_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_materials(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
+    return _stamped(
+        lambda: ww.set_materials(root, doc, sim_id=_study_for_write(doc, sim_id, extra), geometry_rev=extra.get("geometry_rev"))
+    )
+
+
+# A save the stamp check refused (host API 1.5): the app server answers 409 or 503.
+STAMP_RPC_CODES = {"geometry_changed": -32010, "geometry_updating": -32011}
+
+
+def _stamped(save: Any) -> Any:
+    from cfddesk.project.link import LinkError
+
+    try:
+        return save()
+    except LinkError as exc:
+        raise RpcError(STAMP_RPC_CODES.get(exc.code, -32000), exc.message, {"code": exc.code}) from exc
 
 
 @rpc("bcs.get")
@@ -531,7 +628,9 @@ def bcs_get(
 def bcs_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_bcs(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
+    return _stamped(
+        lambda: ww.set_bcs(root, doc, sim_id=_study_for_write(doc, sim_id, extra), geometry_rev=extra.get("geometry_rev"))
+    )
 
 
 @rpc("bc.menu")
@@ -614,7 +713,9 @@ def refinements_get(
 def refinements_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_refinements(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
+    return _stamped(
+        lambda: ww.set_refinements(root, doc, sim_id=_study_for_write(doc, sim_id, extra), geometry_rev=extra.get("geometry_rev"))
+    )
 
 
 @rpc("result_controls.get")
@@ -633,7 +734,9 @@ def result_controls_get(
 def result_controls_set(id: str = "", project_id: str = "", project_dir: str = "", body: dict | None = None, sim_id: str = "", **extra: Any) -> Any:
     root = _root(id or project_id, project_dir)
     doc = body if isinstance(body, dict) else extra
-    return ww.set_result_controls(root, doc, sim_id=_study_for_write(doc, sim_id, extra))
+    return _stamped(
+        lambda: ww.set_result_controls(root, doc, sim_id=_study_for_write(doc, sim_id, extra), geometry_rev=extra.get("geometry_rev"))
+    )
 
 
 @rpc("sim_control.get")
@@ -1137,6 +1240,11 @@ def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], l
                     "kind_title": kind.title if kind else "",
                     "icon": kind.icon if kind else "",
                     "workspace": kind.workspace if kind else "",
+                    # The workspace's title (a linked geometry's "Edit in <workspace title>", API 1.5).
+                    "workspace_title": next(
+                        (str(w.title) for w in (manifest.workspaces if manifest is not None else []) if kind and w.key == kind.workspace),
+                        "",
+                    ),
                     "title": rec.get("title") or rec["id"],
                     "rev": int(rec.get("rev") or 0),
                     "available": kind is not None,

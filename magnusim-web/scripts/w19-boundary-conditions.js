@@ -34,6 +34,7 @@ import {
   studyFilePath,
 } from './study-io.js';
 import { fileURLToPath } from 'node:url';
+import { checkRecordSave } from './link-stamp.js';
 import { envGet } from './env-compat.js';
 import { defaultUnits } from './prefs.js';
 import { bcFamilyFor, bcRecordTypes, canonicalBcType } from './registry-defaults.js';
@@ -123,7 +124,7 @@ function writeBcsFile(id, doc, opts) {
     ? (Array.isArray(only) ? only : [only]).filter(Boolean)
     : [];
   for (const rec of recs) {
-    if (rec && rec.id) persistOneBc(id, simId, rec);
+    if (rec && rec.id) persistOneBc(id, simId, rec, { geometryRev: opts && opts.geometryRev });
   }
   persistBcDefaults(id, simId, doc.defaults, doc.defaults_by_simulation);
   return studyBcsDirPath(id, simId);
@@ -434,7 +435,7 @@ function mergeBcIntoList(list, bc) {
   return next;
 }
 
-async function persistBcsDoc(projectId, sim, bcsList, defaults, dropIds, only) {
+async function persistBcsDoc(projectId, sim, bcsList, defaults, dropIds, only, geometryRev) {
   const materialsOk = existsSync(materialsJsonPath(projectId, sim.id));
   const bcsPath = bcsJsonPath(projectId, sim.id);
   const now = new Date().toISOString();
@@ -477,7 +478,7 @@ async function persistBcsDoc(projectId, sim, bcsList, defaults, dropIds, only) {
   };
   if (dropIds && dropIds.length) doc._drop_ids = dropIds;
 
-  await writeBcsFile(projectId, doc, { only, dropIds });
+  await writeBcsFile(projectId, doc, { only, dropIds, geometryRev });
   const written = readBcsFile(projectId, sim.id) || doc;
 
   try {
@@ -584,6 +585,10 @@ async function upsertBcs(body) {
   const batch = (body && (body.bcs || body.boundary_conditions)) || null;
   const hasDefaults = !!(body && body.defaults && typeof body.defaults === 'object');
   const hasBcFields = !!(body && (body.bc_type || body.type || body.id || body.name));
+  // A linked geometry's stamp check (host API 1.5) for the records this save writes.
+  const writes = Array.isArray(batch) && batch.length ? batch : hasBcFields || !hasDefaults ? [body || {}] : [];
+  const stamp = writes.length ? checkRecordSave(projectDir(projectId), sim.id, writes, body && body.geometry_rev) : { ok: true, rev: null };
+  if (!stamp.ok) return stamp;
   let lastBuilt = null;
   const changed = [];
   if (Array.isArray(batch) && batch.length) {
@@ -611,7 +616,7 @@ async function upsertBcs(body) {
   const nextDefaults = hasDefaults
     ? normalizeBcDefaults({ ...((existingDoc && existingDoc.defaults) || {}), ...body.defaults })
     : undefined;
-  const { doc, bcsPath } = await persistBcsDoc(projectId, sim, list, nextDefaults, undefined, changed);
+  const { doc, bcsPath } = await persistBcsDoc(projectId, sim, list, nextDefaults, undefined, changed, stamp.rev);
   const visible = filterByStudy(
     filterByGeometry(doc.boundary_conditions, geomId, primaryGeometryId(proj)),
     sim.id,
@@ -706,6 +711,7 @@ export async function handleW19Api(req, res, u, parts, helpers) {
       }
       const result = await upsertBcs(body);
       res.setHeader('X-CFD-Source', 'bcs-upsert');
+      for (const [k, v] of Object.entries(result.headers || {})) res.setHeader(k, v);
       return sendJson(res, result.status, result.body);
     }
     if ((req.method === 'GET' || req.method === 'HEAD') && !parts[2]) {

@@ -122,6 +122,8 @@ declare global {
     __CFD_BC_OPEN_DEFAULTS__?: () => void;
     __CFD_BC_CREATE__?: (bcType: string) => Promise<unknown>;
     __CFD_BC_UPDATE__?: (id: string, patch: Record<string, unknown>) => Promise<unknown>;
+    /** Forget lost faces of a linked geometry's records (API 1.5; runtime.forgetLostFacesClient). */
+    __CFD_FORGET_LOST__?: (opts: Record<string, unknown>) => Promise<unknown>;
     __CFD_BC_DELETE__?: (id: string) => Promise<unknown>;
     __CFD_BC_UNASSIGN_FACE__?: (face: string) => void;
     __CFD_BC_FOCUS_FACE__?: (face: string) => void;

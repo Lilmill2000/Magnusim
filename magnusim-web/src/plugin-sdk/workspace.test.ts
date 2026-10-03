@@ -89,7 +89,7 @@ describe('ws.files: writing', () => {
   it("sends an ArrayBuffer in chunks it hands over, leaving the caller's buffer as it was", async () => {
     const { ws, posts, hello } = await open(uploads());
     expect(hello).toHaveBeenCalledWith({ magnusim: 'hello', sdkVersion: SDK_VERSION, instance: expect.any(String) }, '*');
-    expect(SDK_VERSION).toBe('1.1.0');
+    expect(SDK_VERSION).toBe('1.2.0');
     const data = new Uint8Array(40 * MiB);
     data[0] = 1;
     data[16 * MiB] = 2;
@@ -452,5 +452,47 @@ describe('ws.files: reading, listing and deleting', () => {
     expect(posts.at(-1)?.params).toEqual({ rel: 'meshes', recursive: true });
     expect(await ws.files.delete('a.bin')).toEqual({ deleted: 1 });
     expect(posts.at(-1)?.params).toEqual({ rel: 'a.bin', recursive: false });
+  });
+});
+
+describe('ws.project.linkGeometry and linkedGeometry (host 1.5)', () => {
+  it('sends the call with a token, keeps the camera and the callback in the page, and gives the page its progress', async () => {
+    let finish: (v: unknown) => void = () => undefined;
+    const { ws, posts, push } = await open((method) => {
+      if (method === 'project.linkGeometry') return new Promise((r) => (finish = r));
+      if (method === 'project.linkedGeometry') return null;
+      return undefined;
+    });
+    const stages: string[] = [];
+    const p = ws.project.linkGeometry({
+      shape: { rel: 'studies/st-1/x.bbrep', format: 'brep', sha256: SHA },
+      sourceVersion: 3,
+      basedOnRev: 1,
+      view: { fov: 30 },
+      onProgress: (pr) => stages.push(`${pr.stage}${pr.ahead !== undefined ? `:${pr.ahead}` : ''}`),
+    } as Parameters<Workspace['project']['linkGeometry']>[0] & { view: unknown });
+    await vi.waitFor(() => expect(methods(posts)).toContain('project.linkGeometry'));
+    const sent = posts.find((q) => q.method === 'project.linkGeometry')!.params;
+    expect(sent).toMatchObject({ shape: { rel: 'studies/st-1/x.bbrep', format: 'brep', sha256: SHA }, sourceVersion: 3, basedOnRev: 1 });
+    expect(sent.view).toBeUndefined();
+    expect(sent.onProgress).toBeUndefined();
+    expect(typeof sent.token).toBe('string');
+    push({ event: 'linkProgress', data: { token: sent.token, stage: 'queued', ahead: 2 } });
+    push({ event: 'linkProgress', data: { token: 'another-call', stage: 'meshing' } });
+    push({ event: 'linkProgress', data: { token: sent.token, stage: 'saving' } });
+    finish({ geometryId: 'g1', rev: 2, change: 'shape' });
+    await expect(p).resolves.toMatchObject({ geometryId: 'g1', rev: 2 });
+    expect(stages).toEqual(['queued:2', 'saving']);
+    expect(await ws.project.linkedGeometry()).toBeNull();
+  });
+
+  it("asks the host for this study's geometry events once, when the page first listens", async () => {
+    const { ws, posts, push } = await open(() => ({ ok: true }));
+    const seen: unknown[] = [];
+    ws.on('geometry', (g) => seen.push(g));
+    ws.on('geometry', () => undefined);
+    await vi.waitFor(() => expect(methods(posts).filter((m) => m === 'project.followGeometry')).toHaveLength(1));
+    push({ event: 'geometry', data: { geometryId: 'g1', rev: 4, fromRev: 3 } });
+    expect(seen).toEqual([{ geometryId: 'g1', rev: 4, fromRev: 3 }]);
   });
 });

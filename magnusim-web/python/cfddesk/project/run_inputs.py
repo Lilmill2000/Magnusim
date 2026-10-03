@@ -118,8 +118,20 @@ def gather_run_inputs(
         result_controls=aa if isinstance(aa, dict) else {},
         simulation_control=_study_or_root("simulation_control.json"),
         mesh=resolve_mesh(root, mesh_id=mesh_id, simulation_id=sim_id, require_poly=require_mesh),
-        face_props=load_face_props(root),
+        face_props=load_face_props(root, _study_geometry_id(root, sim_id)),
         study=study_doc(root, sim_id),
         run={k: v for k, v in dict(run).items() if k != "dir"},
         transient_override=transient_override,
     )
+
+
+def _study_geometry_id(root: Path, sim_id: str | None) -> str | None:
+    """The geometry a study lives on (its face table is the one the case uses), or None."""
+    from cfddesk.project.paths import find_study
+
+    try:
+        study = find_study(root, sim_id) if sim_id else None
+    except Exception:
+        study = None
+    gid = (study or {}).get("geometry_id")
+    return str(gid) if gid else None

@@ -21,15 +21,18 @@ import {
   upsertSimulationInCatalog,
   assignStudyNames,
   reorderSimulationsInCatalog,
+  addCatalogRows,
 } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
 import { matchFaces, readPreviewFaces, remapRecordFaces } from './geometry-face-match.js';
 import { commitRpc, commitRpcSync } from './py-json.js';
+import { geometryFenced } from './server/link-job.js';
 import {
   collectChildRecs,
   copyStudyTree,
   createRunFolder,
   createStudyFolder,
+  findGeometry,
   findStudy,
   meshRefsDir,
   readJsonFile,
@@ -404,9 +407,27 @@ function remapClonedRuns(destDir, toId, stamp, meshIdMap, destTimeDep) {
   }
 }
 
-function seedDraftRunsFromSource(projectDirPath, fromId, toId, destTimeDep, meshIdMap) {
+/** A run's views with no face labels (particle-trace seed faces drawn on an older shape). */
+function viewsWithoutFaces(views) {
+  return (Array.isArray(views) ? views : []).map((v) => {
+    if (!v || typeof v !== 'object' || !v.pt || typeof v.pt !== 'object') return v;
+    const pt = { ...v.pt, faces: [] };
+    if (pt.region && typeof pt.region === 'object' && 'face' in pt.region) pt.region = { ...pt.region, face: null };
+    return { ...v, pt };
+  });
+}
+
+/**
+ * Draft runs for a copied study, one per source run, with its settings, result controls
+ * and views. `labels` (a linked geometry, host API 1.5) says how its face labels relate to
+ * the copy's geometry: 'same' (a copy on the same geometry) or 'keep' ("Save as new": the
+ * link's own map rewrites them next); null for a copy onto another geometry.
+ */
+function seedDraftRunsFromSource(projectDirPath, fromId, toId, destTimeDep, meshIdMap, labels = null) {
   const destStudy = findStudy(projectDirPath, toId);
   if (!destStudy) return;
+  const destState = labels === 'same' ? readJsonFile(join(String(destStudy.geometry_dir || ''), 'link', 'state.json')) : null;
+  const destRev = destState && Number.isSafeInteger(Number(destState.rev)) && Number(destState.rev) > 0 ? Number(destState.rev) : null;
   const srcRuns = walkRuns(projectDirPath, fromId);
   const stamp = Date.now().toString(36);
   let n = 0;
@@ -433,6 +454,25 @@ function seedDraftRunsFromSource(projectDirPath, fromId, toId, destTimeDep, mesh
       current_view: null,
       case_dir: null,
     };
+    // Its labels are the source run's, drawn at that run's rev (a linked geometry, API 1.5;
+    // a finished run keeps the rev it was set up at). A "Save as new" copy keeps that stamp:
+    // the link's own plan maps it, or treats an older one as stale. A copy on the same
+    // geometry keeps it when it is the geometry's rev.
+    if (labels) {
+      const built = src.built_from && typeof src.built_from === 'object' ? src.built_from.geometry_rev : null;
+      const drawnAt = Number.isSafeInteger(src.geometry_rev) ? src.geometry_rev : Number.isSafeInteger(built) ? built : null;
+      if (labels === 'same' && destRev !== null && drawnAt !== null && drawnAt < destRev) {
+        // A finished run of an older shape: its faces mean other faces now. The draft gets
+        // its settings without them, current, rather than labels no save could keep.
+        rec.result_controls = rec.result_controls.map((rc) =>
+          rc && typeof rc === 'object' ? { ...rc, faces: [], ...('face' in rc ? { face: null } : {}), geometry_rev: destRev } : rc
+        );
+        rec.views = viewsWithoutFaces(rec.views);
+        rec.geometry_rev = destRev;
+      } else if (drawnAt !== null) {
+        rec.geometry_rev = drawnAt;
+      }
+    }
     if (timeDependenciesMatch(destTimeDep, 'Transient') && src.transient) {
       rec.transient = cloneJson(src.transient, null);
     }
@@ -457,14 +497,30 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
   // there (face numbers differ between geometries); the rest are listed in `lost`.
   const faceMap = sameCad ? null : options.faceMap || new Map();
   const lost = new Map();
+  // A linked geometry's keys (host API 1.5): on the same geometry a record keeps its stamp
+  // and its lost faces (both current); onto another geometry its labels were remapped to
+  // that geometry's live faces, so it takes that geometry's rev (none when no link made
+  // it), and its lost faces, which name the source geometry's faces, are dropped.
+  const destRev = Number(options.destGeometryRev) > 0 ? Number(options.destGeometryRev) : null;
+  // "Save as new" (API 1.5, LINK 5.0): the copy keeps the source's labels, stamps and lost
+  // faces as they are; the link's own face map (geometry.plan / apply) rewrites them next.
+  const keepLabels = !!options.keepLabels;
+  const linkKeys = (rec) => {
+    if (sameCad || keepLabels || !rec || typeof rec !== 'object') return rec;
+    const out = { ...rec };
+    delete out.lost_faces;
+    if (destRev) out.geometry_rev = destRev;
+    else delete out.geometry_rev;
+    return out;
+  };
   const dropFaces = (rec, kind) => {
-    if (sameCad || !rec) return rec;
+    if (sameCad || keepLabels || !rec) return rec;
     const out = remapRecordFaces(rec, faceMap);
     if (out.lost.length) {
       const name = String(rec.name || rec.type || rec.bc_type || kind);
       lost.set(`${kind}|${name}`, { kind, name, faces: out.lost });
     }
-    return out.rec;
+    return linkKeys(out.rec);
   };
   const report = () => [...lost.values()];
   const stamp = Date.now().toString(36);
@@ -491,7 +547,7 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
     'material.json',
     matLegacy && matLegacy.materials
   ).map((m, i) => ({
-    ...m,
+    ...linkKeys(m),
     id: `mat-copy-${stamp}-${i}`,
     simulation_id: toId,
     geometry_id: toGeom || m.geometry_id,
@@ -499,7 +555,7 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
   replaceChildItems(studyMaterialsDir(destDir), 'material', mappedMats);
   rekey(studyMaterialsPath(destDir), (doc) => {
     doc.materials = mappedMats;
-    if (doc.air) doc.air = { ...doc.air, id: `mat-copy-${stamp}-air`, simulation_id: toId };
+    if (doc.air) doc.air = { ...linkKeys(doc.air), id: `mat-copy-${stamp}-air`, simulation_id: toId };
     if (doc.defaults_by_simulation && doc.defaults_by_simulation[fromId]) {
       doc.defaults_by_simulation = { [toId]: doc.defaults_by_simulation[fromId] };
     }
@@ -612,7 +668,7 @@ export function rewriteCopiedStudy(destDir, fromId, toId, toGeom, opts) {
   }
   clearRunFolders(runRoot);
   if (projectDirPath) {
-    seedDraftRunsFromSource(projectDirPath, fromId, toId, destTimeDep, meshIdMap);
+    seedDraftRunsFromSource(projectDirPath, fromId, toId, destTimeDep, meshIdMap, keepLabels ? 'keep' : sameCad ? 'same' : null);
     rematerializeRunResultControls(destDir, toId, stamp, dropFaces);
   }
   return { meshIdMap, lost_faces: report() };
@@ -652,6 +708,24 @@ export function studyPhysicsFrom(src) {
   return out;
 }
 
+/**
+ * A study made on, or copied into or out of, a linked geometry whose update did not
+ * finish (API 1.5): its files may already be the new shape while its records and its
+ * rev are the old one, so the copy would map or stamp faces wrongly. 503 until the
+ * recovery has run; null when every geometry named is whole.
+ */
+function fencedGeometryAnswer(projectId, geometryIds) {
+  for (const id of geometryIds) {
+    if (!id) continue;
+    const g = findGeometry(projectDir(projectId), String(id));
+    if (!g || !geometryFenced(g.dir)) continue;
+    const state = readJsonFile(join(g.dir, 'link', 'state.json')) || {};
+    const name = String(state.name || g.name || 'the geometry');
+    return { ok: false, status: 503, body: { ok: false, code: 'geometry_updating', error: `Updating ${name}. Try again in a moment.` } };
+  }
+  return null;
+}
+
 function createSimulation(body) {
   const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
@@ -664,6 +738,9 @@ function createSimulation(body) {
   const built = buildSimulation(body || {}, proj);
   if (!built.ok) return built;
   const root = projectDir(projectId);
+  const copySource = body && body.copy_from ? findStudy(root, String(body.copy_from)) : null;
+  const fenced = fencedGeometryAnswer(projectId, [built.sim.geometry_id, copySource && copySource.geometry_id]);
+  if (fenced) return fenced;
   const known = ensureCatalog(projectId, proj).simulations || [];
   if (body && body.copy_from) {
     // Copy / clone keeps the source study's physics (turbulence model and the other
@@ -688,7 +765,8 @@ function createSimulation(body) {
         sim.id,
         body.include,
         body.copy_mode || body.mode,
-        sim.time_dependency
+        sim.time_dependency,
+        !!(body && body.keep_labels),
       );
     } else {
       seedStudyDefaults(projectId, sim);
@@ -696,9 +774,13 @@ function createSimulation(body) {
   } catch (e) {
     console.error('[CFD] seed study defaults', e);
   }
+  // activate: false (a "Save as new" copy, API 1.5): the user's active study stays, and the
+  // catalog is not saved (a save rewrites every study's id.json; the new geometry is hidden
+  // until its commit, after which the link adds the row: addCatalogRows).
+  const activate = !(body && body.activate === false);
   let cat;
   try {
-    cat = upsertSimulationInCatalog(projectId, proj, sim, true);
+    cat = activate ? upsertSimulationInCatalog(projectId, proj, sim, true) : readCatalog(projectId);
   } catch (e) {
     console.error('[CFD] catalog upsert', e);
     cat = readCatalog(projectId);
@@ -707,15 +789,17 @@ function createSimulation(body) {
     cat = {
       ...cat,
       simulations: [...(cat.simulations || []), sim],
-      active_id: sim.id,
+      active_id: activate ? sim.id : cat.active_id,
     };
   }
   const saved = (cat.simulations || []).find((s) => s.id === sim.id) || sim;
-  touchProjectSimRef(proj, saved);
-  try {
-    writeProject(proj);
-  } catch (e) {
-    console.error('[CFD] write project after create', e);
+  if (activate) {
+    touchProjectSimRef(proj, saved);
+    try {
+      writeProject(proj);
+    } catch (e) {
+      console.error('[CFD] write project after create', e);
+    }
   }
   return {
     ok: true,
@@ -831,7 +915,7 @@ function resolveCopyMode(mode) {
   return 'settings';
 }
 
-function copySimulationSettings(projectId, proj, fromId, toId, include, copyMode, destTimeDep) {
+function copySimulationSettings(projectId, proj, fromId, toId, include, copyMode, destTimeDep, keepLabels = false) {
   const mode = resolveCopyMode(copyMode);
   const from = String(fromId);
   const to = String(toId);
@@ -851,7 +935,7 @@ function copySimulationSettings(projectId, proj, fromId, toId, include, copyMode
   const otherGeometry = !!srcGeom && srcGeom !== destGeom;
   // A generated mesh or a result belongs to its own geometry: onto another one, only settings copy.
   const cloneCases = mode === 'clone' && !otherGeometry;
-  const faceMap = otherGeometry
+  const faceMap = otherGeometry && !keepLabels
     ? matchFaces(readPreviewFaces(fromStudy.geometry_dir), readPreviewFaces(toStudy.geometry_dir))
     : null;
   const destParent = join(toStudy.geometry_dir, 'simulations');
@@ -860,6 +944,7 @@ function copySimulationSettings(projectId, proj, fromId, toId, include, copyMode
     rmSync(toStudy.dir, { recursive: true, force: true });
   } catch (_) {}
   const copied = copyStudyTree(fromStudy.dir, destParent, destName, { cloneCases });
+  const destState = otherGeometry ? readJsonFile(join(toStudy.geometry_dir, 'link', 'state.json')) : null;
   const out = rewriteCopiedStudy(copied, from, to, destGeom, {
     cloneCases,
     copyRuns,
@@ -868,6 +953,8 @@ function copySimulationSettings(projectId, proj, fromId, toId, include, copyMode
     projectDirPath: root,
     sourceGeometryId: srcGeom,
     faceMap,
+    destGeometryRev: destState && Number(destState.rev) > 0 ? Number(destState.rev) : null,
+    keepLabels,
   });
   return {
     mode: cloneCases ? 'clone' : 'settings',
@@ -910,6 +997,41 @@ export function purgeRemovedStudies(projectId, { simIds = [], geometryIds = [] }
  * its studies' folders goes (before the catalog save, whose walk must not list them),
  * then their rows. Returns pruneOrphanStudies' answer.
  */
+/**
+ * "Save as new" (host API 1.5, LINK proposal 5.0): a copy of a study's settings onto a new
+ * linked geometry, which stays hidden until the link commits. The copy keeps the source's
+ * labels, stamps and lost faces (the link's own map rewrites them next) and leaves the
+ * user's active study as it is. {ok, simId, name} or {ok:false, error}.
+ * @param {string} projectId
+ * @param {{ geometryId: string, geometryName?: string, copyFrom: string }} o
+ */
+export function createLinkedStudyCopy(projectId, o) {
+  const out = createSimulation({
+    project_id: projectId,
+    geometry_id: o.geometryId,
+    geometry_name: o.geometryName || null,
+    copy_from: o.copyFrom,
+    copy_mode: 'settings',
+    keep_labels: true,
+    activate: false,
+  });
+  /** @type {any} */
+  const body = out.body;
+  if (!out.ok) return { ok: false, error: String((body && (body.error || body.code)) || 'the study could not be made') };
+  const sim = body && body.simulation;
+  return { ok: true, simId: String((sim && sim.id) || ''), name: String((sim && sim.name) || ''), row: sim || null };
+}
+
+/** After the new geometry's commit: its copied studies' catalog rows (no other write). */
+export function indexLinkedStudyCopies(projectId, rows) {
+  return addCatalogRows(projectId, rows);
+}
+
+/** A "Save as new" copy that failed: its folder goes (its geometry is still hidden, so it has no catalog row). */
+export function dropLinkedStudyCopy(projectId, simId) {
+  purgeRemovedStudies(projectId, { simIds: [simId] });
+}
+
 export function dropGeometryStudies(projectId, proj, geomId) {
   try {
     purgeRemovedStudies(projectId, { geometryIds: [geomId] });
@@ -961,6 +1083,9 @@ function copySimulation(body) {
   const to = body && (body.to || body.simulation_id);
   if (!from || !to) return { ok: false, status: 400, body: { error: 'from and to study ids required' } };
   const dest = findStudy(projectDir(projectId), to);
+  const source = findStudy(projectDir(projectId), from);
+  const fenced = fencedGeometryAnswer(projectId, [source && source.geometry_id, dest && dest.geometry_id]);
+  if (fenced) return fenced;
   const copyReport = copySimulationSettings(
     projectId,
     proj,

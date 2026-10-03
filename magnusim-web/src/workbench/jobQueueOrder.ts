@@ -800,8 +800,9 @@ export function dropMissingQueueJobs<T extends QueueDepItem>(
     if (cur && pid && pid !== cur) return true;
     if (row.kind === 'mesh') return !meshes.size || meshes.has(normId(row.mesh_id));
     if (row.kind === 'solve') return !runs.size || runs.has(normId(row.run_id));
-    // A plugin case is in no core catalog; the server drops it when its study goes.
-    if (row.kind === 'foam') return true;
+    // A plugin case or a geometry update is in no core catalog; the server drops it
+    // when its study or its geometry goes.
+    if (row.kind === 'foam' || row.kind === 'geometry') return true;
     return false;
   });
 }
@@ -874,7 +875,8 @@ export function snapMatchesLiveMeshJob(opts?: {
 
 /**
  * The job holding the server's one compute slot (`/api/compute-queue` `busy`).
- * `kind` is mesh, solve, foam (a plugin case) or check (the boot check);
+ * `kind` is mesh, solve, foam (a plugin case), geometry (a linked geometry's update,
+ * or its recovery) or check (the boot check);
  * `phase` is checking, starting, running or draining.
  */
 export type ComputeBusySnap = {
@@ -905,13 +907,15 @@ export function computeBusyLabel(
 ): string {
   if (!busy) return '';
   if (busy.kind === 'check') return 'Checking for jobs left running';
-  if (busy.kind !== 'mesh' && busy.kind !== 'solve' && busy.kind !== 'foam') return '';
+  if (busy.kind !== 'mesh' && busy.kind !== 'solve' && busy.kind !== 'foam' && busy.kind !== 'geometry') return '';
   const kind = String(busy.kind);
   const pid = normId(busy.project_id);
   const same = !!pid && pid === normId(opts && opts.currentProjectId);
   let name: string;
   if (kind === 'foam') {
     name = normId(busy.name) || 'a plugin case';
+  } else if (kind === 'geometry') {
+    name = normId(busy.name) || 'a geometry update';
   } else {
     const id = normId(kind === 'mesh' ? busy.mesh_id : busy.run_id);
     const own = same && id && opts && opts.lookupName ? opts.lookupName(kind, id) : '';
@@ -927,9 +931,12 @@ export function computeBusyLabel(
   return label;
 }
 
-/** The server's busy job is a plugin case or the boot check: nothing else may start. */
+/**
+ * The server's busy job is a plugin case, a geometry update or the boot check: nothing
+ * else may start (Generate and Start read "Add to queue").
+ */
 export function serverBusyIsPluginOrCheck(busy: ComputeBusySnap | null | undefined): boolean {
-  return !!busy && (busy.kind === 'foam' || busy.kind === 'check');
+  return !!busy && (busy.kind === 'foam' || busy.kind === 'check' || busy.kind === 'geometry');
 }
 
 type RunInProject = { runId?: unknown; projectId?: unknown };
@@ -1060,7 +1067,8 @@ export type QueueLeaveNotice = {
 /** The toast for a job that left the queue, by why it left (failed, dropped or stopped). */
 export function queueFailureMessage(f: QueueLeaveNotice | null | undefined): string {
   const kind = String((f && f.kind) || '');
-  const name = normId(f && f.name) || (kind === 'mesh' ? 'Mesh' : kind === 'foam' ? 'A plugin case' : 'Run');
+  const name =
+    normId(f && f.name) || (kind === 'mesh' ? 'Mesh' : kind === 'foam' ? 'A plugin case' : kind === 'geometry' ? 'A geometry update' : 'Run');
   const error = (normId(f && f.error) || 'unknown reason').replace(/\.$/, '');
   const reason = normId(f && f.reason) || 'failed';
   if (reason === 'dropped') return `${name} was taken off the queue: ${error}.`;

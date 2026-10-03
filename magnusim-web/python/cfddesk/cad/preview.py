@@ -17,6 +17,10 @@ import math
 import sys
 from pathlib import Path
 
+# The one face numbering rule (host API 1.5): every visit, one index per solid that
+# holds a shared face. It lives in magnusim_sdk.link, so a linking plugin numbers its
+# faces with the same code; the face table, the viewport and the mesher call it here.
+from magnusim_sdk.link import face_visits
 from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Tool
 from OCP.BRepBndLib import BRepBndLib
@@ -31,7 +35,7 @@ from OCP.StdPrs import StdPrs_ToolTriangulatedShape
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import TopoDS, TopoDS_Face
+from OCP.TopoDS import TopoDS
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_IndexedMapOfShape
 
 # Tighter than AIS interactive defaults so large circles stay round when zoomed.
@@ -84,52 +88,6 @@ def shape_center_of_mass(shape):
         return None, kind
     c = props.CentreOfMass()
     return [float(c.X()), float(c.Y()), float(c.Z())], kind
-
-
-def face_visits(shape) -> list[tuple[int, int | None, TopoDS_Face]]:
-    """Every face visit as ``(index, body, face)``: the one face numbering rule.
-
-    ``index`` is the 1-based position in ``TopExp_Explorer(shape, TopAbs_FACE)``
-    over the whole shape, counting every visit. A face that two touching solids
-    share is visited once per solid, so it has one index per solid. ``body`` is the
-    1-based ``TopExp_Explorer(shape, TopAbs_SOLID)`` index of the solid being
-    explored at that visit, None for a face outside every solid.
-
-    The face table (``face_properties``), the viewport's faceId/solidId scalars
-    (``extract_display_faces``), the mesher's face records (``step.load_step``) and
-    each body's face list (``step.enumerate_volumes``) all number faces this way,
-    so ``face N@BodyB`` names the same face everywhere. Counting every visit keeps
-    the numbers when the STEP copy, which does not share faces, is read instead
-    of the binary sidecar, which does.
-    """
-    flat = []
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    while exp.More():
-        flat.append(TopoDS.Face_s(exp.Current()))
-        exp.Next()
-    # Each solid's own visits. The explorer goes depth first (compound -> solid ->
-    # shell -> face), so these runs appear in ``flat`` in solid order, with any face
-    # outside every solid in between.
-    owned = []
-    solids = TopExp_Explorer(shape, TopAbs_SOLID)
-    body = 0
-    while solids.More():
-        body += 1
-        fexp = TopExp_Explorer(solids.Current(), TopAbs_FACE)
-        while fexp.More():
-            owned.append((body, TopoDS.Face_s(fexp.Current())))
-            fexp.Next()
-        solids.Next()
-    every_face_in_a_solid = len(owned) == len(flat)
-    out: list[tuple[int, int | None, TopoDS_Face]] = []
-    j = 0
-    for i, face in enumerate(flat):
-        b = None
-        if j < len(owned) and (every_face_in_a_solid or owned[j][1].IsEqual(face)):
-            b = owned[j][0]
-            j += 1
-        out.append((i + 1, b, face))
-    return out
 
 
 def face_properties(shape):
@@ -579,8 +537,13 @@ def export_preview_from_triangles(
     return out
 
 
-def export_preview(step: Path, edges: Path, faces: Path, meta: Path | None = None, shape=None) -> dict:
-    """Write edges/faces VTP + cad_preview.json. ``shape`` may be a cached OCCT shape."""
+def export_preview(
+    step: Path, edges: Path, faces: Path, meta: Path | None = None, shape=None, *, com: bool = True
+) -> dict:
+    """Write edges/faces VTP + cad_preview.json. ``shape`` may be a cached OCCT shape.
+
+    ``com=False`` leaves the centre of mass out (a link job writes it afterwards).
+    """
     from cfddesk.cad.io import read_triangle_sidecar
 
     triangles = read_triangle_sidecar(step)
@@ -618,10 +581,11 @@ def export_preview(step: Path, edges: Path, faces: Path, meta: Path | None = Non
         "bounds": bounds,
         **mesh_info,
     }
-    com, com_kind = shape_center_of_mass(shape)
     if com:
-        out["center_of_mass"] = com
-        out["center_of_mass_kind"] = com_kind
+        centre, centre_kind = shape_center_of_mass(shape)
+        if centre:
+            out["center_of_mass"] = centre
+            out["center_of_mass_kind"] = centre_kind
     try:
         out["faces"] = face_properties(shape)
         out["faces_length_unit"] = "mm"

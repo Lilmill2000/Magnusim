@@ -1,0 +1,30 @@
+key = "link-demo"
+name = "Link demo"
+version = "1.0.0"
+api_version = "1.5"
+license = "GPL-3.0-or-later"
+description = "Test plugin that links a project geometry (host API 1.5): kind Demo links, kind Sketch does not"
+authors = "Magnusim"
+
+[[workspaces]]
+key = "demo"
+title = "Demo workspace"
+icon = "M4 5h16v14H4z M4 9h16"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "demo"
+title = "Demo"
+icon = "M5 19V5h14v14z M9 9h6v6H9z"
+workspace = "demo"
+links_geometry = true
+
+# A kind with a workspace that does not link: its link call is refused (not_allowed).
+[[study_kinds]]
+key = "sketch"
+title = "Sketch"
+icon = "M5 4h14v16H5z"
+workspace = "demo"
+
+[files]
+max_file_mb = 64

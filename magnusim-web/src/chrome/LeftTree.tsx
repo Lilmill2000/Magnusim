@@ -5,8 +5,12 @@ import { useProjectStore } from '../store/project';
 import { defaultFluidName } from '../materialModel';
 import { pluginStudyScope, scopeBelongsToProject } from '../scope';
 import { headerKinds, kindKey } from '../workspace/startActions';
+import { bodyDisplay, faceDisplay, faceNamesGeometry, subscribeFaceNames } from '../workbench/faceNames';
+import { chooseLinkFromRow, linkJobOf, noteTreeGeometries, subscribeLinkedGeometries } from '../workbench/geometryRev';
 import {
+  linkedGeometryByStudy,
   readSetupTree,
+  type GeomLink,
   type GeomNode,
   type MeshNode,
   type PluginStudyKind,
@@ -115,6 +119,13 @@ function MeshItem({ mesh, selected, selectedKey }: { mesh: MeshNode; selected: b
       mark={mesh.ready}
       busy={mesh.busy}
       queuePos={mesh.queuePos}
+      extra={
+        mesh.outOfDate ? (
+          <span className="tree-sub" data-mesh-out-of-date="1" title="Made from an older version of its geometry. Generate it again.">
+            Out of date
+          </span>
+        ) : undefined
+      }
     >
       <Node
         label="Refinements"
@@ -176,6 +187,13 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
         mark={r.ready}
         busy={r.busy}
         queuePos={r.queuePos}
+        extra={
+          r.olderGeometry ? (
+            <span className="tree-sub" data-run-older-geometry="1" title="Made on an older version of its geometry.">
+              Older geometry
+            </span>
+          ) : undefined
+        }
       >
         <Node label="Mesh" expandedLabel={`run-mesh:${r.id}`} attrs={{ 'data-w27-run-mesh': r.id }}>
           {r.meshId ? (
@@ -304,10 +322,15 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
             label={bc.name}
             expandedLabel={bc.scopeKey || `bcid:${bc.id}`}
             selected={study.active && selectedKey === `bcid:${bc.id}`}
-            attrs={{ 'data-w19-bc': bc.id, 'data-scope-key': bc.scopeKey }}
+            attrs={{ 'data-w19-bc': bc.id, 'data-scope-key': bc.scopeKey, 'data-lost': bc.lost ? String(bc.lost) : undefined }}
+            extra={bc.lost ? <span className="tree-sub" data-bc-lost-count="1">{lostText(bc.lost)}</span> : undefined}
           >
             {bc.faces.map((f) => (
-              <Node key={f} label={f} attrs={{ 'data-w19-face': f, 'data-w19-parent': bc.id }} />
+              <Node
+                key={f}
+                label={study.geometryId === faceNamesGeometry() ? faceDisplay(f) : f}
+                attrs={{ 'data-w19-face': f, 'data-w19-parent': bc.id }}
+              />
             ))}
           </Node>
         ))}
@@ -333,6 +356,99 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
   );
 }
 
+function lostText(n: number): string {
+  return `${n} lost face${n === 1 ? '' : 's'}`;
+}
+
+/** What a linked geometry's row says about its link now (API 1.5, proposal 5.18). */
+export function linkStatusText(
+  geomName: string,
+  link: GeomLink,
+  job: { status: string; stage: string | null; label: string | null; adding?: string | null } | null,
+): string {
+  if (job && job.status === 'choosing') return `Waiting for your choice: ${link.studyTitle} changed`;
+  if (job && job.adding && (job.status === 'queued' || job.status === 'running')) return `Adding ${job.adding}…`;
+  if (job && job.status === 'queued') return 'Queued';
+  if (job && job.status === 'running') return job.label || (job.stage ? `Updating… (${job.stage})` : 'Updating…');
+  if (link.updating) return `Couldn't finish updating ${geomName}`;
+  if (link.behind) return `Not up to date with ${link.studyTitle}.`;
+  return '';
+}
+
+/** A linked geometry's row: "from <study>", its Edit button, its link state and its lost faces. */
+function LinkRow({ geom, link }: { geom: GeomNode; link: GeomLink }) {
+  const missing = link.sourceState === 'plugin_missing';
+  const off = link.sourceState === 'plugin_off';
+  const job = linkJobOf(geom.id);
+  const status = linkStatusText(geom.name, link, job);
+  return (
+    <span className="tree-link-row" data-geom-link={geom.id}>
+      <span className="tree-sub" data-geom-from="1">
+        from {link.studyTitle}
+        {missing ? ' (plugin not installed)' : ''}
+      </span>
+      {!missing && link.workspace ? (
+        <button
+          type="button"
+          className="tree-link-edit"
+          data-geom-edit={geom.id}
+          disabled={off}
+          title={off ? link.reason : `Edit in ${link.workspaceTitle || link.studyTitle}`}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!off && link.studyScopeKey) onTreeAction(link.studyScopeKey, 'plugin-study-open', { workspace: link.workspace });
+          }}
+        >
+          Edit
+        </button>
+      ) : null}
+      {off ? (
+        <span className="tree-sub plugin-study-reason" data-geom-link-reason="1">
+          {link.reason}.{' '}
+          <button
+            type="button"
+            className="plugin-study-settings"
+            data-geom-link-settings="1"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onTreeAction(link.studyScopeKey, 'open-plugin-settings');
+            }}
+          >
+            Open Settings → Plugins
+          </button>
+        </span>
+      ) : null}
+      {status ? (
+        <span className="tree-sub" data-geom-link-status="1">
+          {status}
+        </span>
+      ) : null}
+      {job && job.status === 'choosing' ? (
+        <button
+          type="button"
+          className="tree-link-edit"
+          data-geom-choose={geom.id}
+          title={`Choose how the simulation gets the new shape of ${link.studyTitle}`}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            void chooseLinkFromRow(geom.id);
+          }}
+        >
+          Choose…
+        </button>
+      ) : null}
+      {link.lostFaces ? (
+        <span className="tree-sub" data-geom-lost="1">
+          {lostText(link.lostFaces)}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string | null }) {
   const gkey = geom.scopeKey || `geom:${geom.id}`;
   return (
@@ -340,15 +456,24 @@ function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string 
       label={geom.name}
       expandedLabel={gkey}
       selected={selectedKey === gkey}
-      attrs={{ 'data-w16-geom': geom.id, 'data-scope-key': geom.scopeKey }}
+      attrs={{ 'data-w16-geom': geom.id, 'data-scope-key': geom.scopeKey, 'data-geom-linked': geom.link ? '1' : undefined }}
       mark={!!geom.id}
+      extra={
+        geom.link ? (
+          <LinkRow geom={geom} link={geom.link} />
+        ) : geom.unlinkedLost ? (
+          <span className="tree-sub" data-geom-lost="1">
+            {lostText(geom.unlinkedLost)}
+          </span>
+        ) : undefined
+      }
     >
       {geom.bodies.length ? (
         <Node label="Geometry" attrs={{ 'data-w17-geo': '1' }} mark>
           {geom.bodies.map((b, i) => (
             <Node
               key={`${b}-${i}`}
-              label={b}
+              label={bodyDisplay(b, geom.bodyLabels ? geom.bodyLabels[b] || null : null)}
               selected={selectedKey === `body-${i + 1}`}
               attrs={{ 'data-w16-body': '1', 'data-body-index': String(i + 1) }}
             />
@@ -437,11 +562,15 @@ export function PluginStudiesView({
   projectId,
   studies,
   kinds,
+  linked = {},
 }: {
   projectId: string;
   studies: PluginStudyRow[];
   kinds: PluginStudyKind[];
+  /** The geometry each linking study links now (API 1.5): "→ <geometry>". */
+  linked?: Record<string, { id: string; name: string }>;
 }) {
+  const links = (st: PluginStudyRow) => kinds.some((k) => k.plugin === st.plugin && k.key === st.kind && k.links_geometry);
   return (
     <>
       <div className="geo-head">
@@ -538,6 +667,24 @@ export function PluginStudiesView({
                 </svg>
               </button>
             </div>
+            {linked[`${st.plugin}|${st.id}`] ? (
+              <button
+                type="button"
+                className="plugin-study-geometry"
+                data-plugin-study-geometry={linked[`${st.plugin}|${st.id}`].id}
+                title="Show the geometry this study links"
+                onClick={(e) => {
+                  stop(e);
+                  onTreeAction(st.scope_key, 'plugin-study-geometry', { geometryId: linked[`${st.plugin}|${st.id}`].id });
+                }}
+              >
+                {`\u2192 ${linked[`${st.plugin}|${st.id}`].name}`}
+              </button>
+            ) : st.available && links(st) ? (
+              <div className="plugin-study-geometry is-none" data-plugin-study-geometry="">
+                Not in the simulation yet
+              </div>
+            ) : null}
             {st.available ? null : (
               <div className="plugin-study-reason" data-plugin-study-reason="1">
                 {st.reason}.{' '}
@@ -567,7 +714,11 @@ export function LeftTree() {
   const docRef = useRef<ProjectTreeDoc | null>(null);
   const [model, setModel] = useState(() => readSetupTree(null));
   const [pluginNodes, setPluginNodes] = useState<PluginTreeNode[]>([]);
-  const [studies, setStudies] = useState<{ rows: PluginStudyRow[]; kinds: PluginStudyKind[] }>({ rows: [], kinds: [] });
+  const [studies, setStudies] = useState<{ rows: PluginStudyRow[]; kinds: PluginStudyKind[]; linked: Record<string, { id: string; name: string }> }>({
+    rows: [],
+    kinds: [],
+    linked: {},
+  });
   const [host, setHost] = useState<HTMLElement | null>(null);
   const [studiesHost, setStudiesHost] = useState<HTMLElement | null>(null);
 
@@ -594,10 +745,14 @@ export function LeftTree() {
     setStudies({
       rows: projectId ? (doc?.plugin_studies || []).filter(own) : [],
       kinds: projectId ? doc?.plugin_study_kinds || [] : [],
+      linked: projectId ? linkedGeometryByStudy(doc) : {},
     });
   }
 
   useEffect(() => subscribeTreeSession(paint), []);
+  // A linked geometry's job state and the shown geometry's face names repaint the rows.
+  useEffect(() => subscribeLinkedGeometries(paint), []);
+  useEffect(() => subscribeFaceNames(paint), []);
 
   useEffect(() => {
     const left = document.getElementById('left-tree');
@@ -643,6 +798,8 @@ export function LeftTree() {
       if (live.generation !== gen || live.projectId !== projectId) return;
       painted = seq;
       docRef.current = doc;
+      // A linked geometry whose rev or names changed is loaded again (a second tab, API 1.5).
+      if (doc) noteTreeGeometries(projectId, doc.geometries as Parameters<typeof noteTreeGeometries>[1]);
       paint();
       if (doc && doc.plugin_studies_migrating && followUps < 30 && !followTimer) {
         followUps += 1;
@@ -665,7 +822,10 @@ export function LeftTree() {
     <>
       {createPortal(<SetupTreeView model={model} pluginNodes={pluginNodes} />, host)}
       {studiesHost && showStudies
-        ? createPortal(<PluginStudiesView projectId={projectId || ''} studies={studies.rows} kinds={studies.kinds} />, studiesHost)
+        ? createPortal(
+            <PluginStudiesView projectId={projectId || ''} studies={studies.rows} kinds={studies.kinds} linked={studies.linked} />,
+            studiesHost,
+          )
         : null}
     </>
   );

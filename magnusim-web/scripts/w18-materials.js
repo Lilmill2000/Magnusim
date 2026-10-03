@@ -22,6 +22,8 @@ import { assembleAllMaterials, deleteOneMaterial, persistOneMaterial, readStudyJ
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
 import { commitRpc } from './py-json.js';
+import { checkRecordSave, stampRefusalOf } from './link-stamp.js';
+import { linkTestHook } from './server/link-job.js';
 import { materialModel, materialPreset, materialPresetOf } from './registry-defaults.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -181,24 +183,35 @@ function readMaterialsFile(id, simId) {
   return fromStudy ? stripMaterialNotes(fromStudy) : null;
 }
 
-async function writeMaterialsFile(id, doc, simId, only) {
+/**
+ * Write the material records, then materials.set (the aggregate and project.json).
+ * `geometryRev` is the rev the save's stamp check passed with on a linked geometry
+ * (host API 1.5): the records are stamped with it and Python checks it again. A
+ * refusal from that check is the answer to send (`{refusal}`); other errors keep
+ * today's handling (the folders are already written).
+ */
+async function writeMaterialsFile(id, doc, simId, only, geometryRev) {
   const slim = stripMaterialNotes(doc);
   const recs = only
     ? (Array.isArray(only) ? only : [only]).filter(Boolean)
     : (slim && slim.materials) || [];
   for (const rec of recs) {
-    if (rec && rec.id) persistOneMaterial(id, simId, rec);
+    if (rec && rec.id) persistOneMaterial(id, simId, rec, { geometryRev });
   }
+  await linkTestHook('beforeCommitRpc', { projectId: id, simId });
   try {
     await commitRpc('materials.set', {
       project_dir: projectDir(id),
       sim_id: String(simId || ''),
       body: { ...slim, materials: recs, air: recs[0] || slim.air, only_id: recs[0] && recs[0].id },
+      ...(geometryRev != null ? { geometry_rev: geometryRev } : {}),
     });
-  } catch {
+  } catch (e) {
+    const refusal = stampRefusalOf(e);
+    if (refusal) return { refusal };
     /* folders already written */
   }
-  return materialsJsonPath(id, simId);
+  return { path: materialsJsonPath(id, simId) };
 }
 
 function readSimulationFile(id) {
@@ -356,6 +369,10 @@ async function upsertMaterials(body) {
     };
   }
 
+  // A linked geometry's stamp check (host API 1.5): nothing is written on a refusal.
+  const stamp = checkRecordSave(projectDir(projectId), sim.id, [body || {}], body && body.geometry_rev);
+  if (!stamp.ok) return stamp;
+
   const existingDoc = readMaterialsFile(projectId, sim.id);
   const geomId = studyScopedGeometryId(proj, sim, body && body.geometry_id);
   const primaryId = primaryGeometryId(proj);
@@ -397,7 +414,8 @@ async function upsertMaterials(body) {
     },
   };
 
-  await writeMaterialsFile(projectId, doc, sim.id, [built.material]);
+  const wrote = await writeMaterialsFile(projectId, doc, sim.id, [built.material], stamp.rev);
+  if (wrote.refusal) return wrote.refusal;
   // set_materials already stamps project.json.
 
   proj.materials = {
@@ -620,6 +638,7 @@ export async function handleW18Api(req, res, u, parts, helpers) {
       const result = await upsertMaterials(body);
       res.setHeader('X-CFD-Source', 'materials-upsert');
       res.setHeader('X-CFD-Increment', 'W18');
+      for (const [k, v] of Object.entries(result.headers || {})) res.setHeader(k, v);
       if (result.ok && result.body.material) {
         res.setHeader('X-CFD-Material-Id', result.body.material.id);
         res.setHeader('X-CFD-Project-Id', result.body.project_id);

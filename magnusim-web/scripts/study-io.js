@@ -14,6 +14,7 @@ import {
   findMesh,
   findRun,
   findStudy,
+  keepLinkKeys,
   meshRefinementsPath,
   meshRefsDir,
   persistChildItem,
@@ -118,7 +119,8 @@ function adoptLegacyBcsAt(projectDirPath, s) {
   let adopted = 0;
   for (const rec of legacyBcRowsAt(projectDirPath, s, folders.length > 0)) {
     if (have.has(String(rec.id)) || String(rec.simulation_id) !== String(s.id)) continue;
-    persistChildItem(parent, 'bc', rec);
+    // The row's own lost faces and stamp come with it (a linked geometry's keys).
+    persistChildItem(parent, 'bc', rec, { keepRow: true });
     adopted += 1;
   }
   return adopted;
@@ -177,14 +179,19 @@ export function readStudyJson(projectId, simId, which) {
   return assembleStudyCollection(projectId, simId, which);
 }
 
-export function persistOneMaterialAt(projectDirPath, simId, rec) {
+/**
+ * The record writers below take `opts.geometryRev`: the rev a save's stamp check passed
+ * with on a linked geometry (link-stamp.js); the record is stamped with it. Without it
+ * the stamp and `lost_faces` stay as they are on disk (project-layout.js keepLinkKeys).
+ */
+export function persistOneMaterialAt(projectDirPath, simId, rec, opts) {
   const s = findStudy(projectDirPath, String(simId));
   if (!s) throw new Error('study folder missing for ' + simId);
-  return persistChildItem(studyMaterialsDir(s.dir), 'material', { ...rec, simulation_id: simId });
+  return persistChildItem(studyMaterialsDir(s.dir), 'material', { ...rec, simulation_id: simId }, opts);
 }
 
-export function persistOneMaterial(projectId, simId, rec) {
-  return persistOneMaterialAt(projectDir(projectId), simId, rec);
+export function persistOneMaterial(projectId, simId, rec, opts) {
+  return persistOneMaterialAt(projectDir(projectId), simId, rec, opts);
 }
 
 function mirrorStudyBcsJson(studyDir, simId) {
@@ -207,17 +214,17 @@ function mirrorStudyBcsJson(studyDir, simId) {
   });
 }
 
-export function persistOneBcAt(projectDirPath, simId, rec) {
+export function persistOneBcAt(projectDirPath, simId, rec, opts) {
   const s = findStudy(projectDirPath, String(simId));
   if (!s) throw new Error('study folder missing for ' + simId);
   adoptLegacyBcsAt(projectDirPath, s);
-  const out = persistChildItem(studyBcsDir(s.dir), 'bc', { ...rec, simulation_id: simId });
+  const out = persistChildItem(studyBcsDir(s.dir), 'bc', { ...rec, simulation_id: simId }, opts);
   mirrorStudyBcsJson(s.dir, simId);
   return out;
 }
 
-export function persistOneBc(projectId, simId, rec) {
-  return persistOneBcAt(projectDir(projectId), simId, rec);
+export function persistOneBc(projectId, simId, rec, opts) {
+  return persistOneBcAt(projectDir(projectId), simId, rec, opts);
 }
 
 export function persistBcDefaultsAt(projectDirPath, simId, defaults, defaultsBySimulation) {
@@ -236,42 +243,52 @@ export function persistBcDefaults(projectId, simId, defaults, defaultsBySimulati
   return persistBcDefaultsAt(projectDir(projectId), simId, defaults, defaultsBySimulation);
 }
 
-export function persistOneResultControlAt(projectDirPath, simId, rec) {
+export function persistOneResultControlAt(projectDirPath, simId, rec, opts) {
   const s = findStudy(projectDirPath, String(simId));
   if (!s) throw new Error('study folder missing for ' + simId);
-  return persistChildItem(studyRcsDir(s.dir), 'rc', { ...rec, simulation_id: simId });
+  return persistChildItem(studyRcsDir(s.dir), 'rc', { ...rec, simulation_id: simId }, opts);
 }
 
-export function persistOneResultControl(projectId, simId, rec) {
-  return persistOneResultControlAt(projectDir(projectId), simId, rec);
+export function persistOneResultControl(projectId, simId, rec, opts) {
+  return persistOneResultControlAt(projectDir(projectId), simId, rec, opts);
 }
 
-export function persistOneRefinementAt(projectDirPath, meshId, simId, rec) {
+export function persistOneRefinementAt(projectDirPath, meshId, simId, rec, opts) {
   const mesh = findMesh(projectDirPath, String(meshId), String(simId));
   if (!mesh) throw new Error('mesh folder missing for ' + meshId);
-  return persistChildItem(meshRefsDir(mesh.dir), 'refinement', {
-    ...rec,
-    mesh_id: meshId,
-    simulation_id: simId,
-  });
+  return persistChildItem(
+    meshRefsDir(mesh.dir),
+    'refinement',
+    {
+      ...rec,
+      mesh_id: meshId,
+      simulation_id: simId,
+    },
+    opts,
+  );
 }
 
-export function persistOneRefinement(projectId, meshId, simId, rec) {
-  return persistOneRefinementAt(projectDir(projectId), meshId, simId, rec);
+export function persistOneRefinement(projectId, meshId, simId, rec, opts) {
+  return persistOneRefinementAt(projectDir(projectId), meshId, simId, rec, opts);
 }
 
-export function persistOneRunResultControlAt(projectDirPath, simId, runId, rec) {
+export function persistOneRunResultControlAt(projectDirPath, simId, runId, rec, opts) {
   const run = findRun(projectDirPath, String(runId), String(simId));
   if (!run) throw new Error('run folder missing for ' + runId);
-  return persistChildItem(runRcsDir(run.dir), 'rc', {
-    ...rec,
-    run_id: runId,
-    simulation_id: simId,
-  });
+  return persistChildItem(
+    runRcsDir(run.dir),
+    'rc',
+    {
+      ...rec,
+      run_id: runId,
+      simulation_id: simId,
+    },
+    opts,
+  );
 }
 
-export function persistOneRunResultControl(projectId, simId, runId, rec) {
-  return persistOneRunResultControlAt(projectDir(projectId), simId, runId, rec);
+export function persistOneRunResultControl(projectId, simId, runId, rec, opts) {
+  return persistOneRunResultControlAt(projectDir(projectId), simId, runId, rec, opts);
 }
 
 export function deleteOneRunResultControl(projectId, simId, runId, id) {
@@ -368,10 +385,29 @@ export function assembleMeshDoc(projectId, simId, wantId) {
   return assembleMeshDocAt(projectDir(projectId), simId, wantId);
 }
 
-function writeMeshFolder(root, sid, rec, folder) {
+/**
+ * A mesh's build stamp (host API 1.5, LINK proposal 5.15): only the generator sets
+ * `live_mesh_result.built_from_rev` (`opts.generator`); every other write keeps the one on
+ * disk. A write with no result leaves none (not generated says more than out of date).
+ * @param {Record<string, any>} bound @param {Record<string, any> | null} onDisk
+ */
+function keepBuildStamp(bound, onDisk) {
+  const live = bound.live_mesh_result;
+  if (!live || typeof live !== 'object') return;
+  const disk = onDisk && onDisk.live_mesh_result && typeof onDisk.live_mesh_result === 'object' ? onDisk.live_mesh_result : null;
+  const next = { ...live };
+  if (disk && Object.prototype.hasOwnProperty.call(disk, 'built_from_rev')) next.built_from_rev = disk.built_from_rev;
+  else delete next.built_from_rev;
+  bound.live_mesh_result = next;
+}
+
+function writeMeshFolder(root, sid, rec, folder, opts) {
   const bound = bindMeshCasePaths({ ...rec, simulation_id: sid }, folder.dir);
   delete bound.dir;
   delete bound.folder;
+  const onDisk = readJsonFile(join(folder.dir, 'mesh.json'));
+  keepLinkKeys(bound, onDisk, opts || {});
+  if (!(opts && opts.generator)) keepBuildStamp(bound, onDisk);
   writeIdFile(folder.dir, {
     id: bound.id,
     name: bound.name,
@@ -383,18 +419,19 @@ function writeMeshFolder(root, sid, rec, folder) {
 }
 
 /** Write one mesh folder only. Never rewrite or delete siblings. */
-export function persistOneMeshAt(projectDirPath, simId, rec) {
+export function persistOneMeshAt(projectDirPath, simId, rec, opts) {
   const sid = String(simId || (rec && rec.simulation_id) || '');
   if (!sid) throw new Error('simulation_id required to persist mesh');
   if (!rec || !rec.id) throw new Error('mesh id required');
   let folder = findMesh(projectDirPath, String(rec.id), sid);
   if (!folder) folder = createMeshFolder(projectDirPath, sid, rec);
-  writeMeshFolder(projectDirPath, sid, rec, folder);
+  writeMeshFolder(projectDirPath, sid, rec, folder, opts);
   return folder;
 }
 
-export function persistOneMesh(projectId, simId, rec) {
-  persistOneMeshAt(projectDir(projectId), simId, rec);
+/** `opts.generator`: the generate's own result writes its build stamp (keepBuildStamp). */
+export function persistOneMesh(projectId, simId, rec, opts) {
+  persistOneMeshAt(projectDir(projectId), simId, rec, opts);
   return assembleMeshDoc(projectId, String(simId || (rec && rec.simulation_id) || ''), rec.id);
 }
 
@@ -476,13 +513,14 @@ export function assembleRefinements(projectId, simId, meshId) {
 }
 
 /** Write one run folder only. case/ always stays under that run. */
-export function persistRunAt(projectDirPath, simId, run) {
+export function persistRunAt(projectDirPath, simId, run, opts) {
   const sid = String(simId || (run && run.simulation_id) || '');
   if (!sid) throw new Error('simulation_id required to persist run');
   const rid = run && (run.id || run.run_id);
   let folder = rid ? findRun(projectDirPath, String(rid), sid) : null;
   if (!folder) folder = createRunFolder(projectDirPath, sid, run);
-  const existing = readJsonFile(join(folder.dir, 'run.json')) || {};
+  const onDisk = readJsonFile(join(folder.dir, 'run.json'));
+  const existing = onDisk || {};
   const rec = {
     ...existing,
     ...run,
@@ -549,11 +587,16 @@ export function persistRunAt(projectDirPath, simId, run) {
     const keep = new Set();
     for (const rc of run.result_controls) {
       if (!rc || rc.id == null) continue;
-      persistChildItem(runRcsDir(folder.dir), 'rc', {
-        ...rc,
-        run_id: rec.id,
-        simulation_id: sid,
-      });
+      persistChildItem(
+        runRcsDir(folder.dir),
+        'rc',
+        {
+          ...rc,
+          run_id: rec.id,
+          simulation_id: sid,
+        },
+        opts,
+      );
       keep.add(String(rc.id));
     }
     for (const row of walkChildItems(runRcsDir(folder.dir), 'result_control.json')) {
@@ -567,12 +610,18 @@ export function persistRunAt(projectDirPath, simId, run) {
   }
   delete rec.dir;
   delete rec.folder;
+  keepLinkKeys(rec, onDisk, opts || {});
+  // A run's build stamp (host API 1.5): only Start sets it (`opts.builtFrom`); every other
+  // write keeps the one on disk.
+  if (opts && opts.builtFrom) rec.built_from = { ...opts.builtFrom };
+  else if (existing && existing.built_from) rec.built_from = existing.built_from;
+  else delete rec.built_from;
   writeJsonAtomic(join(folder.dir, 'run.json'), rec);
   return { ...rec, dir: folder.dir, folder: folder.folder };
 }
 
-export function persistRun(projectId, simId, run) {
-  return persistRunAt(projectDir(projectId), simId, run);
+export function persistRun(projectId, simId, run, opts) {
+  return persistRunAt(projectDir(projectId), simId, run, opts);
 }
 
 export function assembleRuns(projectId, simId) {

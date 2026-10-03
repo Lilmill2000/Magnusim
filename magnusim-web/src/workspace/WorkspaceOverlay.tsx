@@ -22,6 +22,8 @@ import {
 } from './leaveGuard';
 import { openPluginResults } from './pluginResults';
 import type { WorkspaceRoute } from './route';
+import { linkReportText } from './linkReport';
+import { savedAsNewText, showLinkChoice } from './linkChoice';
 
 // When the host gives the keyboard to the frame (it lives with the leave guard, which needs it too).
 export { frameMayTakeFocus };
@@ -33,7 +35,7 @@ export const HANDSHAKE_MS = 5000;
 const LOST = 'Changes that were not saved in the workspace were lost.';
 
 /** The app's own UI over the workspace: when one closes, the keyboard goes back to the frame. */
-const HOST_UI = ['modal-confirm', 'modal-prompt', 'setup-wizard', 'job-queue-chip'];
+const HOST_UI = ['modal-confirm', 'modal-prompt', 'modal-link-choice', 'setup-wizard', 'job-queue-chip'];
 
 type PluginRow = {
   key: string;
@@ -125,6 +127,9 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   const headerRef = useRef<HTMLElement>(null);
   const bridgeRef = useRef<WorkspaceBridge | null>(null);
   const slotRef = useRef<HTMLDivElement>(null);
+  // The last geometry this page linked, and whether it is leaving for the results (API 1.5).
+  const linked = useRef<{ geometryId: string; jobId: string | null; created: boolean } | null>(null);
+  const toResults = useRef(false);
   const [row, setRow] = useState<PluginRow | null>(null);
   const [study, setStudy] = useState<StudyRecord | null>(null);
   const [blocked, setBlocked] = useState<Blocked | null>(null);
@@ -184,6 +189,18 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       }
       document.body.classList.remove('workspace-open');
       window.dispatchEvent(new CustomEvent('cfd:workspace-close'));
+      // The page linked a geometry: the workbench lands on it (showLinkedGeometry, LINK 6.5).
+      // Back to this project is the full landing; the results or anywhere else refresh data only.
+      const link = linked.current;
+      if (link) {
+        const hash = window.location.hash || '';
+        const reason = toResults.current ? 'results' : hash === projectHash || hash.startsWith(`${projectHash}?`) ? 'back' : 'project';
+        window.dispatchEvent(
+          new CustomEvent('cfd:workspace-left', {
+            detail: { projectId: route.projectId, plugin: route.plugin, studyId: route.studyId, reason, ...link },
+          }),
+        );
+      }
     };
   }, []);
 
@@ -334,6 +351,29 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
         ),
       units: () => (prefersImperial() ? 'imperial' : 'metric'),
       log: (message, detail) => console.warn(`[workspace] ${message}`, detail ?? ''),
+      // A linked geometry's update the page made: what was lost, came back or must be picked (API 1.5).
+      linkStarted: (link) => {
+        linked.current = link;
+      },
+      linkReport: (result) => {
+        const t = linkReportText(result);
+        void pageDialog((turn) =>
+          window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ title: t.title, copy: t.copy, yes: 'OK', notice: true, ...turn }) : Promise.resolve(true),
+        );
+      },
+      // The host's question when the page links a new shape onto a geometry in use (LINK 5.0):
+      // over the covered workspace; dropped unanswered when the page goes or the job ends.
+      linkChoice: (question, signal) =>
+        pageDialog((turn) => {
+          const both = turn.signal ? AbortSignal.any([turn.signal, signal]) : signal;
+          return showLinkChoice(question, { skipIf: () => turn.skipIf() || signal.aborted, signal: both });
+        }),
+      linkSavedAsNew: (info) => {
+        const t = savedAsNewText(info.newName, info.oldName, info.copies);
+        void pageDialog((turn) =>
+          window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ title: t.title, copy: t.copy, yes: 'OK', notice: true, ...turn }) : Promise.resolve(true),
+        );
+      },
       // A case's results in the project's 3D view: asks before replacing results on screen, then leaves.
       openResults: (caseRel) =>
         openPluginResults(
@@ -347,7 +387,10 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
           caseRel,
           {
             ask: appConfirm,
-            leave: (hash) => leaveWorkspaceTo(hash, 'results'),
+            leave: (hash) => {
+              toResults.current = true;
+              return leaveWorkspaceTo(hash, 'results');
+            },
             resultsShown: () => window.__CFD_RESULTS_VIEW__ === true,
           },
         ),

@@ -52,6 +52,56 @@ interface MeshDoc {
   n_points?: number;
   settings?: MeshSettingsDoc;
   ui_mesh_engine?: string;
+  /** Generated from an older version of its linked geometry (API 1.5). */
+  out_of_date?: boolean;
+}
+
+type TreeGeom = { name?: string; studies?: Array<{ meshes?: MeshDoc[] }> };
+
+/** What a mesh panel says of a mesh made from an older version of its geometry (LINK 5.15). */
+export function outOfDateLine(geometryName: string): string {
+  return `Out of date: made from an older version of ${geometryName || 'its geometry'}. Generate it again.`;
+}
+
+/** The geometry's name when this mesh is out of date (from the project tree), else null. */
+export function meshOutOfDateOf(geoms: TreeGeom[], meshId: string): string | null {
+  for (const geom of geoms) {
+    for (const study of geom.studies || []) {
+      for (const mesh of study.meshes || []) {
+        if (meshId && String(mesh.id || '') === meshId) return mesh.out_of_date ? String(geom.name || '') : null;
+      }
+    }
+  }
+  return null;
+}
+
+/** The out-of-date line of a mesh, read from the tree again when its job changes phase. */
+function useMeshOutOfDate(projectId: string, meshId: string, phase: string | undefined): string | null {
+  const [geometry, setGeometry] = useState<string | null>(null);
+  useEffect(() => {
+    if (!projectId || !meshId) {
+      setGeometry(null);
+      return;
+    }
+    let dead = false;
+    void apiGet('/api/project/tree', { project_id: projectId })
+      .then((doc) => {
+        if (!dead) setGeometry(meshOutOfDateOf((doc as { geometries?: TreeGeom[] }).geometries || [], meshId));
+      })
+      .catch(() => {});
+    return () => {
+      dead = true;
+    };
+  }, [projectId, meshId, phase]);
+  return geometry;
+}
+
+function OutOfDate({ geometry }: { geometry: string | null }) {
+  return geometry !== null ? (
+    <p className="mat-assign-hint" data-mesh-out-of-date-line="1">
+      {outOfDateLine(geometry)}
+    </p>
+  ) : null;
 }
 
 export function meshEngines(rows: RegistryRow[]): RegistryRow[] {
@@ -353,6 +403,7 @@ export function MeshSettings(props: IslandProps) {
   const job = useMeshJob(meshId);
   const copy = useMeshCopy(meshId);
   const button = generateButtonFor(job?.generate_kind || 'generate');
+  const stale = useMeshOutOfDate(props.projectId || useProjectStore.getState().projectId || '', meshId, job?.phase);
 
   function ids() {
     return scopeIds({
@@ -540,6 +591,7 @@ export function MeshSettings(props: IslandProps) {
           </button>
         </div>
         <MeshStatus job={job} />
+        <OutOfDate geometry={job?.phase === 'generating' || job?.phase === 'queued' ? null : stale} />
         {note ? (
           <p className="mat-assign-hint" role="alert">
             {note}
@@ -573,6 +625,7 @@ export function MeshInspect(props: IslandProps) {
   const [cells, setCells] = useState<number | null>(null);
   const [points, setPoints] = useState<number | null>(null);
   const job = useMeshJob(meshId);
+  const stale = useMeshOutOfDate(ids.project_id || '', meshId || '', job?.phase);
 
   useEffect(() => {
     const projectId = ids.project_id;
@@ -627,6 +680,7 @@ export function MeshInspect(props: IslandProps) {
         {status}
       </p>
       {counts ? <p className="mesh-chip-size">{counts}</p> : null}
+      <OutOfDate geometry={stale} />
       <div className="mesh-chip-actions">
         <button type="button" className="mat-clear-link" data-mesh-settings="1" onClick={() => openMeshSettings(meshId)}>
           Settings

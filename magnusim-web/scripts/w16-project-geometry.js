@@ -43,6 +43,8 @@ import { computeRowsForProject, dropComputeRows } from './server/compute-queue.t
 import { envGet } from './env-compat.js';
 import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
 import { callWorker, commitRpc, commitRpcSync } from './py-json.js';
+import { geometryFenced, isLinkedGeometryDir, onGeometryRemove } from './server/link-job.js';
+import { linkOverlay } from './server/link-overlay.js';
 import {
   LAYOUT_VERSION,
   createGeometryFolder,
@@ -97,6 +99,30 @@ function writeDeferredStepLater(stepPath) {
 }
 const DEFAULT_STEP = String(envGet('DEFAULT_STEP') || '').trim();
 const thumbJobs = new Map();
+
+/** A linked geometry's name (its link/state.json), else its folder's id.json name. */
+function linkedGeometryName(dir) {
+  for (const f of [join(dir, 'link', 'state.json'), join(dir, 'id.json')]) {
+    try {
+      const doc = JSON.parse(readFileSync(f, 'utf8'));
+      if (doc && doc.name) return String(doc.name);
+    } catch {
+      /* next */
+    }
+  }
+  return 'the geometry';
+}
+
+/**
+ * A linked geometry whose update did not finish is fenced (API 1.5): its files and its
+ * records may disagree until the recovery runs, so its CAD, VTP, stl, thumbnail and
+ * face-map reads answer 503 at once, and the page keeps what it shows.
+ */
+function linkFenceAnswer(dir) {
+  if (!dir || !geometryFenced(dir)) return null;
+  const name = linkedGeometryName(dir);
+  return { ok: false, status: 503, body: { ok: false, code: 'geometry_updating', error: `Updating ${name}. Try again in a moment.` } };
+}
 
 function ensureProjectsRoot() {
   mkdirSync(PROJECTS_ROOT, { recursive: true });
@@ -553,6 +579,18 @@ function createProject(body) {
 
 function ensureGeometriesHydrated(proj) {
   if (!proj || !proj.id) return proj;
+  // Linked geometries (API 1.5): project.json is their cache. Their link fields come from
+  // link/state.json on every read; a record the cache lost is added back (the repair).
+  try {
+    const pdir = projectDir(proj.id);
+    for (const rec of linkOverlay(proj, pdir)) {
+      commitRpc('project.upsert_geometry', { project_dir: pdir, record: rec }).catch(() => {
+        /* the overlay adds it again on the next read */
+      });
+    }
+  } catch {
+    /* an unreadable folder: the record stays as it was */
+  }
   const geomDir = join(projectDir(proj.id), 'geometry');
   if (!hasImportedGeometry(proj, geomDir)) return proj;
   let dirty = false;
@@ -576,6 +614,21 @@ function ensureGeometriesHydrated(proj) {
     dirty = true;
   }
   if (dirty) writeProject(proj);
+  // A project whose only geometry a link made has no active record yet: draw it from its
+  // own files (never regenerated, never written here).
+  if (!proj.geometry && proj.active_geometry_id) {
+    const part = geometriesOf(proj).find((g) => g.id === proj.active_geometry_id);
+    const paths = part ? cadPaths(proj.id, part.id) : null;
+    if (part && paths && isLinkedGeometryDir(paths.dir) && cadPreviewFilesReady(paths)) {
+      let meta = null;
+      try {
+        meta = JSON.parse(readFileSync(paths.meta, 'utf8'));
+      } catch {
+        meta = null;
+      }
+      proj.geometry = geometryRecordFromPart(proj.id, { ...part }, paths, meta, 'link');
+    }
+  }
   return proj;
 }
 
@@ -662,15 +715,17 @@ function runConvert(stepPath, outStl) {
   return runPython([CONVERT_SCRIPT, '--step', stepPath, '--out', outStl]);
 }
 
-function resolveStepPath(proj) {
+function resolveStepPath(proj, geometryId) {
   if (!proj) return null;
-  const aid = activeGeometryId(proj);
+  const aid = geometryId || activeGeometryId(proj);
   if (aid) {
     const part = geometriesOf(proj).find((g) => g.id === aid);
     if (part && part.step_path && geomFileExists(part.step_path)) return part.step_path;
     const partStep = join(partDirFor(proj.id, aid), 'source.step');
     if (geomFileExists(partStep)) return partStep;
   }
+  // A named geometry has only its own shape (never the shown one's).
+  if (geometryId) return null;
   const listed = proj.geometry && proj.geometry.step_path;
   if (listed && geomFileExists(listed)) return listed;
   return null;
@@ -988,6 +1043,15 @@ function cadPreviewFreshAt(paths, stepPath) {
 }
 
 async function ensureCadPreviewAt(projectId, stepPath, paths) {
+  // A linked geometry (API 1.5): its link job wrote its previews, so they are never made
+  // again here and no --com-only run starts for it (its centre of mass is a follow-up).
+  if (paths && isLinkedGeometryDir(paths.dir)) {
+    const fenced = linkFenceAnswer(paths.dir);
+    if (fenced) return fenced;
+    if (cadPreviewFilesReady(paths) && existsSync(paths.meta)) return { ok: true, ...paths, step_path: stepPath, cached: true };
+    const name = linkedGeometryName(paths.dir);
+    return { ok: false, status: 503, body: { ok: false, code: 'geometry_updating', error: `Updating ${name}. Try again in a moment.` } };
+  }
   if (!stepPath || !geomFileExists(stepPath)) {
     return { ok: false, status: 404, body: { error: 'no STEP imported', project_id: projectId } };
   }
@@ -1226,18 +1290,25 @@ function stlNeedsCadRefresh(outStl) {
   return false;
 }
 
+/**
+ * The Hex-dominant mesh input (`Body1.stl`) of a geometry: `opts.geometryId`, the mesh's
+ * own geometry (LINK proposal 5.9), else the one shown. Only the shown geometry's record
+ * in project.json names the file.
+ */
 export function ensureBody1Stl(projectId, opts) {
   const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no project' };
   const proj = readProject(id);
   if (!proj) return { ok: false, error: 'project not found', project_id: id };
-  const stepPath = resolveStepPath(proj);
+  const wanted = opts && opts.geometryId ? String(opts.geometryId) : '';
+  const stepPath = resolveStepPath(proj, wanted || undefined);
   if (!stepPath) return { ok: false, error: 'W16 source.step missing — import geometry first', project_id: id };
-  const aid = activeGeometryId(proj);
+  const aid = wanted || activeGeometryId(proj);
+  const shown = !wanted || wanted === String(activeGeometryId(proj) || (proj.geometry && proj.geometry.id) || '');
   const outStl = join(partDirFor(id, aid || (proj.geometry && proj.geometry.id)), 'Body1.stl');
   const force = !!(opts && opts.force);
   if (!force && existsSync(outStl) && statSync(outStl).size >= 100 && !stlNeedsCadRefresh(outStl)) {
-    if (proj.geometry && !proj.geometry.stl_path) {
+    if (shown && proj.geometry && !proj.geometry.stl_path) {
       proj.geometry.stl_path = outStl;
       proj.geometry.stl_url = `/api/geometry/stl?project_id=${encodeURIComponent(id)}`;
       writeProject(proj);
@@ -1260,7 +1331,7 @@ export function ensureBody1Stl(projectId, opts) {
   if (!existsSync(outStl) || statSync(outStl).size < 100) {
     return { ok: false, error: 'STL missing after convert', out_stl: outStl };
   }
-  if (proj.geometry) {
+  if (shown && proj.geometry) {
     proj.geometry.stl_path = outStl;
     proj.geometry.stl_url = `/api/geometry/stl?project_id=${encodeURIComponent(id)}`;
     proj.updated_at = new Date().toISOString();
@@ -1313,10 +1384,17 @@ async function renderGeometryThumb(projectId, retried = false) {
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
   const proj = readProject(id);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found', project_id: id } };
+  const out = thumbPathFor(id);
+  // A linked geometry's thumbnail is a follow-up of its link job: served, never rendered here.
+  if (isLinkedGeometryDir(dirname(out))) {
+    const fenced = linkFenceAnswer(dirname(out));
+    if (fenced) return fenced;
+    if (existsSync(out) && statSync(out).size >= 80) return { ok: true, path: out, bytes: readFileSync(out), cached: true, project: proj };
+    return { ok: false, status: 404, body: { error: 'no thumbnail yet', project_id: id } };
+  }
   const preview = await ensureCadPreview(id);
   const source = preview.ok ? preview.faces : resolveStlPath(proj);
   if (!source) return { ok: false, status: 404, body: { error: 'no geometry imported', project_id: id } };
-  const out = thumbPathFor(id);
   const freshnessSrc = resolveStepPath(proj) || source;
   if (thumbIsFresh(out, freshnessSrc)) {
     return { ok: true, path: out, bytes: readFileSync(out), cached: true, project: proj };
@@ -1826,6 +1904,9 @@ async function removeGeometry(opts) {
   }
   parts = parts.filter((p) => p.id !== geomId);
   const destDir = partDirFor(projectId, geomId);
+  // A linked geometry (API 1.5): marked removed first, so no follow-up or repair brings it
+  // back; its queued update leaves the queue and a running one before its commit stops.
+  onGeometryRemove(projectId, geomId, destDir);
   try {
     // Before the catalog save below: its walk must not find this geometry's studies.
     // Retried as a study folder's remove is: the worker may be reading a file in it.
@@ -1935,6 +2016,9 @@ function readStlForProject(projectId) {
   const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
   const proj = readProject(id);
+  const aid = proj && activeGeometryId(proj);
+  const fenced = aid ? linkFenceAnswer(cadPaths(id, aid).dir) : null;
+  if (fenced) return fenced;
   if (!proj || !proj.geometry || !proj.geometry.stl_path) {
     return { ok: false, status: 404, body: { error: 'no geometry imported', project_id: id } };
   }
@@ -2179,6 +2263,8 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       if (!ids.has(from) || !ids.has(to)) {
         return sendJson(res, 404, { error: 'geometry not in project', from, to });
       }
+      const fenced = linkFenceAnswer(cadPaths(pid, from).dir) || linkFenceAnswer(cadPaths(pid, to).dir);
+      if (fenced) return sendJson(res, fenced.status, fenced.body);
       const map = matchFaces(readPreviewFaces(cadPaths(pid, from).dir), readPreviewFaces(cadPaths(pid, to).dir));
       res.setHeader('X-CFD-Source', 'geometry-face-map');
       return sendJson(res, 200, { ok: true, project_id: pid, from, to, map: Object.fromEntries(map) });

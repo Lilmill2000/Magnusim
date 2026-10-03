@@ -4,6 +4,7 @@ import type { BcFamilyRow } from '../../api/registry.gen';
 import { canonicalBcType, colorOf, defaultsChoiceText, familiesFor, familyOf } from '../../bcCatalog';
 import { SchemaForm } from '../../forms/SchemaForm';
 import { dispatchPanelDone, type IslandProps } from '../../islands';
+import { faceDisplay, lostDisplay, subscribeFaceNames } from '../../workbench/faceNames';
 import { usePluginUiLoaded, useSlotComponent, type BcSettingsProps } from '../../plugin-api/slots';
 import {
   bcFlowBasis,
@@ -12,6 +13,7 @@ import {
   createBc,
   deleteBc,
   focusBcFace,
+  forgetLostFaces,
   openBc,
   openBcDefaults,
   openBcPicker,
@@ -20,8 +22,55 @@ import {
   updateBc,
   type BcRecord,
   type BcState,
+  type LostFaceEntry,
 } from '../legacyBridge';
 import { pickSchemaValues, useRegistryReady } from '../scope';
+
+/** The lost entries of a BC record (a linked geometry's update put them there). */
+export function lostFacesOf(bc: BcRecord | null | undefined): LostFaceEntry[] {
+  const raw = bc ? (bc as { lost_faces?: unknown }).lost_faces : null;
+  return Array.isArray(raw) ? (raw.filter((e) => e && typeof e === 'object') as LostFaceEntry[]) : [];
+}
+
+/** Why a face is listed as lost, in the user's words. */
+export function lostReason(e: LostFaceEntry): string {
+  if (e.reason === 'claimed_twice') return 'It merged with a face of another boundary condition: pick it on one of them.';
+  if (e.reason === 'held_elsewhere') return 'It is back, but another boundary condition has it now.';
+  if (e.reason === 'stale') return 'Saved for an older version of the geometry: pick its faces again.';
+  return 'Gone from the geometry. It comes back here if the face does.';
+}
+
+/** The record's lost faces, each with Forget (D19). */
+function LostFaces({ bc, studyId, onError }: { bc: BcRecord; studyId: string | null; onError: (e: unknown) => void }) {
+  const lost = lostFacesOf(bc);
+  if (!lost.length) return null;
+  return (
+    <div className="mat-assign-block" data-bc-lost="1">
+      <div className="mat-assign-head">
+        <span className="mat-k">Lost faces ({lost.length})</span>
+      </div>
+      <ul className="mat-assign-list" aria-label="Lost faces">
+        {lost.map((e) => (
+          <li key={`${e.field}|${e.old}`} className="bc-assign-item" data-lost-face={e.old} data-lost-reason={e.reason}>
+            <span className="bc-assign-pick" title={lostReason(e)}>
+              {lostDisplay(e)}
+            </span>
+            <button
+              type="button"
+              className="mat-clear-link"
+              onClick={() =>
+                void forgetLostFaces({ study_id: studyId || '', kind: 'bc', id: bc.id, entry: { field: e.field, old: e.old } }).catch(onError)
+              }
+            >
+              Forget
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="mat-assign-hint">{lost.length === 1 ? lostReason(lost[0]) : 'These faces are not on the geometry now. Each one comes back here if its face does.'}</div>
+    </div>
+  );
+}
 
 /**
  * The boundary-condition hub, picker and editor. The types, their hints and
@@ -34,7 +83,7 @@ import { pickSchemaValues, useRegistryReady } from '../scope';
 export function bcCardSub(bc: BcRecord, studyDefaults?: Record<string, unknown> | null): string {
   const choice = defaultsChoiceText(bc, studyDefaults);
   const type = String(bc.bc_type || '');
-  const faces = (bc.faces || []).join(', ') || 'no faces';
+  const faces = (bc.faces || []).map(faceDisplay).join(', ') || 'no faces';
   return choice ? `${type} · ${choice} · ${faces}` : `${type} · ${faces}`;
 }
 
@@ -298,6 +347,9 @@ export function BcEditor() {
   const state = useBcState();
   const families = useFamilies(state?.analysis_key) || [];
   const [note, setNote] = useState('');
+  // A linked geometry's face names arrive with its preview.
+  const [, setNamesSeen] = useState(0);
+  useEffect(() => subscribeFaceNames(() => setNamesSeen((n) => n + 1)), []);
   const bc = state?.bcs.find((b) => String(b.id) === String(state.active_id)) || null;
   if (!bc || !state) {
     return (
@@ -356,7 +408,7 @@ export function BcEditor() {
             {faces.map((f) => (
               <li key={f} className={`bc-assign-item${state.focus_face === f ? ' is-focus' : ''}`} data-face-id={f}>
                 <button type="button" className="bc-assign-pick" onClick={() => focusBcFace(f)}>
-                  {f}
+                  {faceDisplay(f)}
                 </button>
                 <button type="button" className="bc-assign-x" aria-label={`Remove ${f}`} onClick={() => unassignBcFace(f)}>
                   ×
@@ -367,6 +419,7 @@ export function BcEditor() {
           <div className="mat-assign-hint">Click a face in the viewport to assign it. It highlights when selected.</div>
           {family ? <BcFacesNote {...slotProps} family={family} /> : null}
         </div>
+        <LostFaces bc={bc} studyId={state.simulation_id} onError={(e) => report(e, setNote, 'Forget')} />
         {note ? (
           <p className="mat-assign-hint" role="alert">
             {note}

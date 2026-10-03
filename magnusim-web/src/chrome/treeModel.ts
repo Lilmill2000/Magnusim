@@ -10,6 +10,8 @@ export interface MeshNode {
   queuePos?: number;
   scopeKey?: string;
   refinements?: Array<{ id: string; name: string; faces: string[]; scopeKey?: string }>;
+  /** Generated from an older version of its linked geometry (API 1.5): Generate it again. */
+  outOfDate?: boolean;
 }
 
 export interface StudyNode {
@@ -22,7 +24,9 @@ export interface StudyNode {
   materialsAssigned: boolean;
   materialName?: string;
   materialVolumes: string[];
-  bcs: Array<{ id: string; name: string; faces: string[]; scopeKey?: string }>;
+  /** Bodies of the study's material a linked geometry's update could not place (API 1.5). */
+  materialLost?: number;
+  bcs: Array<{ id: string; name: string; faces: string[]; scopeKey?: string; lost?: number }>;
   wallDefault: string;
   runs: Array<{
     id: string;
@@ -35,13 +39,42 @@ export interface StudyNode {
     queuePos?: number;
     scopeKey?: string;
     resultControls?: Array<{ id: string; name: string; faces: string[]; scopeKey?: string }>;
+    /** Started on an older version of its linked geometry (API 1.5, D26). */
+    olderGeometry?: boolean;
   }>;
+}
+
+/** A geometry a plugin study links (API 1.5): what its row says and its Edit button opens. */
+export interface GeomLink {
+  plugin: string;
+  studyId: string;
+  studyTitle: string;
+  workspace: string;
+  /** The plugin study's tree scope (plugin-study-open), '' when its plugin is not installed. */
+  studyScopeKey: string;
+  /** The title of the workspace its Edit opens ("Edit in <workspace title>"). */
+  workspaceTitle: string;
+  sourceState: 'ok' | 'plugin_off' | 'plugin_missing';
+  /** Why its plugin cannot open the study now (plugin_off): off, needs setup, failed to load. */
+  reason: string;
+  /** The study's saved design is newer than the geometry's last update. */
+  behind: boolean;
+  /** A commit journal is left: fenced until the app finishes the update. */
+  updating: boolean;
+  lostFaces: number;
+  rev: number;
 }
 
 export interface GeomNode {
   id: string;
   name: string;
   bodies: string[];
+  /** A linked geometry's body names and labels by host body label ("Body1"). */
+  bodyLabels?: Record<string, { name?: string | null; label?: string | null }>;
+  /** Set for the geometry a plugin study links now (not for an earlier version kept unlinked). */
+  link?: GeomLink | null;
+  /** An earlier version kept unlinked (API 1.5): the lost faces its records still list. */
+  unlinkedLost?: number;
   scopeKey?: string;
   studies: StudyNode[];
 }
@@ -70,6 +103,8 @@ export interface PluginStudyRow {
   kind_title: string;
   icon: string;
   workspace: string;
+  /** Its workspace's title (API 1.5); '' when unknown (its plugin is off). */
+  workspace_title?: string;
   title: string;
   rev: number;
   /** False when its plugin is off or missing: greyed, cannot open or rename. */
@@ -101,6 +136,18 @@ interface ProjectTreeGeom {
   key?: string;
   bodies?: string[];
   studies?: ProjectTreeStudy[];
+  // A linked geometry (API 1.5; worker project.tree).
+  source?: { plugin?: string; study_id?: string; workspace?: string; study_title?: string } | null;
+  rev?: number;
+  names8?: string;
+  updating?: boolean;
+  unlinked?: boolean;
+  body_labels?: Array<{ ref?: string; name?: string | null; label?: string | null }>;
+  lost_faces?: number;
+  // study_deleted comes with unlinked: a plain geometry (proposal 5.18, 5.19).
+  source_state?: 'ok' | 'plugin_off' | 'plugin_missing' | 'study_deleted';
+  source_reason?: string;
+  behind?: boolean;
 }
 
 interface ProjectTreeStudy {
@@ -113,7 +160,8 @@ interface ProjectTreeStudy {
   wall_default?: string;
   material_volumes?: string[];
   material_name?: string;
-  bcs?: Array<{ id?: string; name?: string; faces?: string[]; key?: string }>;
+  material_lost?: number;
+  bcs?: Array<{ id?: string; name?: string; faces?: string[]; key?: string; lost?: number }>;
   meshes?: ProjectTreeMesh[];
   runs?: ProjectTreeRun[];
 }
@@ -127,6 +175,7 @@ interface ProjectTreeMesh {
   n_cells?: number | null;
   live_status?: string;
   refinements?: Array<{ id?: string; name?: string; faces?: string[]; key?: string }>;
+  out_of_date?: boolean;
 }
 
 interface ProjectTreeRun {
@@ -141,6 +190,7 @@ interface ProjectTreeRun {
   last_saved_iteration?: number;
   has_results?: boolean;
   result_controls?: Array<{ id?: string; name?: string; faces?: string[]; key?: string }>;
+  older_geometry?: boolean;
 }
 
 type QueueRow = NonNullable<TreeActivity['queue']>[number];
@@ -222,6 +272,54 @@ function runBusy(run: ProjectTreeRun, activity: TreeActivity | null, studyId: st
   return forStudy(activity, studyId) && activity?.kind === 'solve' && !!id && String(activity.run_id) === id;
 }
 
+function bodyLabelsOf(geom: ProjectTreeGeom): GeomNode['bodyLabels'] {
+  const out: NonNullable<GeomNode['bodyLabels']> = {};
+  for (const b of geom.body_labels || []) {
+    if (b && b.ref) out[String(b.ref)] = { name: b.name ?? null, label: b.label ?? null };
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** The link of a geometry a plugin study links now; null for any other (an earlier version is a plain row). */
+function geomLinkOf(geom: ProjectTreeGeom, doc: ProjectTreeDoc | null | undefined): GeomLink | null {
+  const src = geom.source;
+  // A deleted study comes with unlinked too; its state is no link state.
+  if (!src || !src.plugin || !src.study_id || geom.unlinked || geom.source_state === 'study_deleted') return null;
+  const row = (doc?.plugin_studies || []).find((r) => r && r.plugin === src.plugin && r.id === src.study_id) || null;
+  // Every plugin study on disk is listed, whatever its plugin's state: no row, no study.
+  if (!row && !geom.source_state) return null;
+  const state = geom.source_state || (row && row.available ? 'ok' : 'plugin_off');
+  return {
+    plugin: String(src.plugin),
+    studyId: String(src.study_id),
+    studyTitle: str(row?.title || src.study_title, 'its study'),
+    workspace: str(row?.workspace || src.workspace),
+    studyScopeKey: state === 'plugin_missing' ? '' : str(row?.scope_key),
+    workspaceTitle: str(row?.workspace_title),
+    sourceState: state,
+    reason: state === 'plugin_off' ? str(geom.source_reason || row?.reason, `Requires the ${str(row?.plugin_name, String(src.plugin))} plugin`) : '',
+    behind: !!geom.behind,
+    updating: !!geom.updating,
+    lostFaces: Number(geom.lost_faces) || 0,
+    rev: Number(geom.rev) || 0,
+  };
+}
+
+/**
+ * The geometry each linking plugin study links now, by "<plugin>|<study id>" (API 1.5):
+ * its row says "→ <geometry>" ("→ Part 1 v2" after "Save as new"). An earlier version kept
+ * unlinked is not the study's any more.
+ */
+export function linkedGeometryByStudy(doc: ProjectTreeDoc | null | undefined): Record<string, { id: string; name: string }> {
+  const out: Record<string, { id: string; name: string }> = {};
+  for (const g of doc?.geometries || []) {
+    const src = g && g.source;
+    if (!src || !src.plugin || !src.study_id || g.unlinked || !g.id) continue;
+    out[`${src.plugin}|${src.study_id}`] = { id: String(g.id), name: str(g.name, 'Geometry') };
+  }
+  return out;
+}
+
 export function readSetupTree(
   doc?: ProjectTreeDoc | null,
   activity?: TreeActivity | null,
@@ -252,6 +350,10 @@ export function readSetupTree(
       name: str(geom.name, 'Geometry'),
       scopeKey: geom.key,
       bodies: (geom.bodies || []).map((body) => str(body)).filter(Boolean),
+      bodyLabels: bodyLabelsOf(geom),
+      link: geomLinkOf(geom, doc),
+      // An earlier version kept by "Save as new" is a plain row; it keeps its lost-face count.
+      unlinkedLost: geom.unlinked ? Number(geom.lost_faces) || 0 : 0,
       studies: studies.map((study) => {
         const sid = str(study.id);
         const studyAct = forStudy(act, sid) ? act : null;
@@ -265,12 +367,14 @@ export function readSetupTree(
           materialsAssigned: volumes.length > 0,
           materialName: str(study.material_name),
           materialVolumes: volumes,
+          materialLost: Number(study.material_lost) || 0,
           wallDefault: str(study.wall_default, 'No-slip'),
           bcs: owned(study.bcs).map((bc, i) => ({
             id: str(bc.id, `bc_${i}`),
             name: str(bc.name, 'BC'),
             faces: (bc.faces || []).map((face) => str(face)).filter(Boolean),
             scopeKey: bc.key,
+            ...(Number(bc.lost) > 0 ? { lost: Number(bc.lost) } : {}),
           })),
           meshes: owned(study.meshes).map((mesh, i) => {
             const id = str(mesh.id || mesh.name, `mesh_${i + 1}`);
@@ -288,6 +392,7 @@ export function readSetupTree(
                 faces: (ref.faces || []).map((face) => str(face)).filter(Boolean),
                 scopeKey: ref.key,
               })),
+              ...(mesh.out_of_date ? { outOfDate: true } : {}),
             };
           }),
           runs: owned(study.runs).map((run) => {
@@ -309,6 +414,7 @@ export function readSetupTree(
                 faces: (rc.faces || []).map((face) => str(face)).filter(Boolean),
                 scopeKey: rc.key,
               })),
+              ...(run.older_geometry ? { olderGeometry: true } : {}),
             };
           }),
         };

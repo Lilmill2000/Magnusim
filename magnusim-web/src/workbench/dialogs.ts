@@ -102,6 +102,15 @@ function settle(d: Waiting, value: unknown): void {
   }, 0);
 }
 
+/**
+ * One more dialog kind in the same one-at-a-time queue (host API 1.5: the linked
+ * geometry's question, src/workspace/linkChoice.ts): `show` runs when its turn comes and
+ * its answer settles the call; `dropped` is the answer when it is skipped or aborted.
+ */
+export function queueDialog<O extends DialogOpts, T>(opts: O | undefined, show: (o: O) => Promise<T>, dropped: T): Promise<T> {
+  return queue(opts, show, dropped);
+}
+
 /** A confirm or name prompt is open or waiting its turn. */
 export function dialogBusy(): boolean {
   return open || waiting.length > 0;

@@ -34,6 +34,10 @@ class SchemaField:
     # Blank is a real value ("calculate for me", e.g. the auto time step): never
     # required, and a default of None is written out as null.
     optional: bool = False
+    # A plugin's own widget whose value is face labels ("faces") or body labels ("body")
+    # (host API 1.5): a linked geometry's update rewrites it like the "faces" and "body"
+    # widgets (x-cfddesk.holds).
+    holds: str = ""
 
 
 _KIND_TO_JSON: dict[str, dict[str, Any]] = {
@@ -99,6 +103,8 @@ def to_json_schema(fields: list[SchemaField] | tuple[SchemaField, ...]) -> dict[
             x["rate_kind"] = f.rate_kind
         if f.widget:
             x["widget"] = f.widget
+        if f.holds in ("faces", "body"):
+            x["holds"] = f.holds
         if f.optional:
             x["optional"] = True
         if f.kind == "choice" and f.choice_labels and len(f.choice_labels) == len(f.choices):

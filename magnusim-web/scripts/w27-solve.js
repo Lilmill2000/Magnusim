@@ -30,6 +30,8 @@ import { TRANSIENT_LARGE_MESH_CELLS, simIsTransient } from './w30-transient.js';
 import { createJobLogger, MAX_LOG_BYTES } from './log.js';
 import { envGet } from './env-compat.js';
 import { spawnJob } from './job-runner.js';
+import { checkRecordSave } from './link-stamp.js';
+import { LINK_BUILD_TEXT, linkStartRefusal, meshOutOfDate, runBuiltFrom } from './link-build.js';
 import { commitRpc, commitRpcSync } from './py-json.js';
 import {
   assembleAllRuns,
@@ -1007,6 +1009,20 @@ export function validateSolveReady(projectId, opts) {
   const mesh = resolveProjectMesh(projectId, opts && opts.meshId, opts && opts.simulationId);
   if (!mesh.ok) return mesh;
   const id = mesh.project_id;
+  // Made from an older version of a linked geometry (host API 1.5, D7): generate it again
+  // first, also for a stopped run, whose case is written again from the study's setup.
+  const stale = mesh.mesh_id ? meshOutOfDate(id, mesh.mesh_id) : null;
+  if (stale && stale.outOfDate) {
+    const name = mesh.mesh_name || stale.meshName;
+    return {
+      ok: false,
+      error: LINK_BUILD_TEXT.outOfDate(name, stale.geometryName),
+      code: 'mesh_out_of_date',
+      project_id: id,
+      mesh_id: mesh.mesh_id,
+      fix: { go: 'mesh', id: mesh.mesh_id, name },
+    };
+  }
   const sim = activeStudy(id, opts && opts.simulationId);
   if (!sim) {
     return { ok: false, error: 'Create a simulation first', project_id: id, fix: { go: 'create-sim' } };
@@ -1329,11 +1345,13 @@ function saveCatalog(projectId, cat, opts) {
   if (sim && sim.id) {
     const only = opts && (opts.onlyRunId || opts.only_run_id);
     const skipRuns = !!(opts && opts.skipRuns);
+    // A draft run's save on a linked geometry is stamped with the rev its check passed with.
+    const geometryRev = opts && opts.geometryRev;
     if (!skipRuns) {
       for (const rec of cat.runs || []) {
         if (!rec || !(rec.id || rec.run_id)) continue;
         if (only && String(rec.id || rec.run_id) !== String(only)) continue;
-        persistRun(projectId, sim.id, rec);
+        persistRun(projectId, sim.id, rec, only ? { geometryRev } : undefined);
       }
     }
     writeStudyJson(projectId, sim.id, 'runs', { active_id: cat.active_id || null });
@@ -1476,6 +1494,14 @@ async function applyRunSettings(id, runId, partial) {
   const cat = found.cat;
   const rec = cat.runs.find((r) => String(r.id) === String(runId));
   if (!rec) return { ok: false, error: 'Run not found' };
+  // A run on a linked geometry that can still start holds face labels of its rev (host
+  // API 1.5): its saves carry the rev they were drawn at. A finished run is history: unchecked.
+  let geometryRev = null;
+  if (rec.status !== 'done' && rec.status !== 'finished') {
+    const stamp = checkRecordSave(projectDir(id), rec.simulation_id || found.sid, [partial], partial.geometry_rev);
+    if (!stamp.ok) return { ...stamp.body, status: stamp.status, headers: stamp.headers };
+    geometryRev = stamp.rev;
+  }
   if (partial.name != null) {
     const next = String(partial.name || '').trim();
     if (next) rec.name = next.slice(0, 64);
@@ -1532,7 +1558,7 @@ async function applyRunSettings(id, runId, partial) {
   // reopen exactly as they were left.
   if (Array.isArray(partial.views)) rec.views = partial.views.slice(0, 50);
   if (partial.current_view !== undefined) rec.current_view = partial.current_view || null;
-  await saveCatalog(id, cat, { onlyRunId: runId });
+  await saveCatalog(id, cat, { onlyRunId: runId, geometryRev });
   const side = readJsonSafe(runSidecarPath(id, runId)) || { run_id: runId, project_id: id };
   await writeRunSidecar(id, runId, { ...side, ...rec, run_id: runId, project_id: id, increment: INCREMENT });
   return {
@@ -1748,6 +1774,10 @@ async function startSolveBody(opts = {}, slot) {
     return { ok: false, status: 404, bodyExtra: { error: 'Run not found', increment: INCREMENT } };
   }
   patchComputeSlot(slot.token, { name: draft.name || 'Run' });
+  // A linked geometry (host API 1.5): no Start while it is updating or a face is claimed
+  // twice. Here, so the route and the queue's kick both meet it.
+  const linkRefused = linkStartRefusal(id, draft.simulation_id || simulationId || (found && found.simulation_id));
+  if (linkRefused) return { ...linkRefused, bodyExtra: { ...linkRefused.bodyExtra, increment: INCREMENT } };
   if (draft && draft.status === 'done') {
     return {
       ok: false,
@@ -1898,14 +1928,22 @@ async function startSolveBody(opts = {}, slot) {
   const hold = Number(process.env.MAGNUSIM_TEST_START_HOLD_MS) || 0;
   if (hold > 0) await new Promise((r) => setTimeout(r, hold));
   if (slot.stopRequested()) return { ok: false, status: 409, bodyExtra: { error: 'Stopped before it started', code: 'stopped', stopped: true, run_id: runId, increment: INCREMENT } };
-  const stored = persistRun(id, simId, {
-    id: runId,
-    run_id: runId,
-    name: (draft && draft.name) || 'Run 1',
-    simulation_id: simId,
-    mesh_id: (draft && draft.mesh_id) || (ready.mesh && ready.mesh.mesh_id) || null,
-    status: 'running',
-  });
+  const startMeshId = (draft && draft.mesh_id) || (ready.mesh && ready.mesh.mesh_id) || null;
+  // The run's build stamp (host API 1.5): its mesh as Start found it; only Start sets it.
+  const builtFrom = runBuiltFrom(id, simId, startMeshId);
+  const stored = persistRun(
+    id,
+    simId,
+    {
+      id: runId,
+      run_id: runId,
+      name: (draft && draft.name) || 'Run 1',
+      simulation_id: simId,
+      mesh_id: startMeshId,
+      status: 'running',
+    },
+    builtFrom ? { builtFrom } : undefined,
+  );
   const winOut = stored.case_dir;
   mkdirSync(winOut, { recursive: true });
   mkdirSync(REPORT_DIR, { recursive: true });
@@ -3116,7 +3154,8 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       }
       const id = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const updated = await updateRunSettings(id, body);
-      if (!updated.ok) return sendJson(res, 400, updated);
+      for (const [k, v] of Object.entries(updated.headers || {})) res.setHeader(k, String(v));
+      if (!updated.ok) return sendJson(res, updated.status || 400, updated);
       return sendJson(res, 200, { ok: true, ...updated, increment: INCREMENT });
     }
     if (req.method === 'POST' && b === 'delete') {

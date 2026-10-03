@@ -220,6 +220,27 @@ export function writeActiveMirror(projectId, sim) {
   return path;
 }
 
+/**
+ * Rows added to the index as they are, with no other write (host API 1.5): a "Save as new"
+ * copy's study, once its new geometry has committed. No study's id.json is written and the
+ * active study stays, so no file of another geometry's studies changes (LINK 0.1 R1).
+ */
+export function addCatalogRows(projectId, rows) {
+  const path = simulationsJsonPath(projectId);
+  const index = readJson(path) || { active_id: null, simulations: [] };
+  const list = Array.isArray(index.simulations) ? index.simulations.slice() : [];
+  let added = 0;
+  for (const row of rows || []) {
+    if (!row || !row.id || list.some((s) => s && String(s.id) === String(row.id))) continue;
+    const { dir, ...rest } = row;
+    void dir;
+    list.push(rest);
+    added += 1;
+  }
+  if (added) writeJsonAtomic(path, { ...index, simulations: list, updated_at: new Date().toISOString() });
+  return added;
+}
+
 export function persistStudyNames(list) {
   return (list || []).map((s) => ({
     ...s,

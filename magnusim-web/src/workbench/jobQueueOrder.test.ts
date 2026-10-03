@@ -1122,3 +1122,29 @@ describe('runOwnerStudyIds', () => {
     });
   });
 });
+
+describe('a geometry update on the compute slot (API 1.5)', () => {
+  const busy = { kind: 'geometry', phase: 'running', name: 'Update Demo 1 from Demo 1', project_id: 'pB' };
+
+  it('the busy label names it by the name the server gives it, in this project or another', () => {
+    expect(computeBusyLabel(busy, { currentProjectId: 'pB' })).toBe('Update Demo 1 from Demo 1');
+    expect(computeBusyLabel({ ...busy, project_id: 'pA', project_title: 'Project A' }, { currentProjectId: 'pB' })).toBe(
+      'Update Demo 1 from Demo 1 in Project A',
+    );
+    expect(computeBusyLabel({ kind: 'geometry', project_id: 'pB' }, { currentProjectId: 'pB' })).toBe('a geometry update');
+    expect(computeBusyLabel({ ...busy, name: 'Finish updating Demo 1' }, { currentProjectId: 'pB' })).toBe('Finish updating Demo 1');
+  });
+
+  it('nothing else starts beside it: Generate and Start read "Add to queue"', () => {
+    expect(serverBusyIsPluginOrCheck(busy)).toBe(true);
+  });
+
+  it('its queue row is kept (it is in no mesh or run catalog), and a notice names it', () => {
+    const rows = [
+      { kind: 'geometry', id: 'q-g', job_id: 'gl-abc123-abcdef', project_id: 'pB' },
+      { kind: 'mesh', id: 'q-m', mesh_id: 'gone', project_id: 'pB' },
+    ];
+    expect(dropMissingQueueJobs(rows, { meshIds: ['m1'], runIds: ['r1'], currentProjectId: 'pB' }).map((r) => r.id)).toEqual(['q-g']);
+    expect(queueFailureMessage({ kind: 'geometry', error: 'lost' })).toBe('A geometry update could not start from the queue: lost.');
+  });
+});

@@ -1,0 +1,7 @@
+key = "bc-demo"
+name = "BC demo"
+version = "1.0.0"
+api_version = "1.5"
+license = "GPL-3.0-or-later"
+description = "Test plugin with a boundary-condition family whose field holds faces (host API 1.5): no workspace"
+authors = "Magnusim"

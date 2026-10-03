@@ -777,6 +777,7 @@
                   <option value="region">region</option>
                 </select>
               </div>
+              <div class="mat-assign-hint" id="pt-older-geometry" hidden></div>
               <div class="fp-field" id="pt-faces-field">
                 <div class="mat-assign-head">
                   <span class="mat-k">Assigned faces (<span id="pt-assign-count">0</span>)</span>
@@ -1301,6 +1302,27 @@
         <div class="np-actions">
           <button type="button" class="home-btn" id="cf-cancel">Cancel</button>
           <button type="button" class="home-btn home-btn-danger" id="cf-confirm">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- A linked geometry's new shape: the host's question (host API 1.5, src/workspace/linkChoice.ts). -->
+    <div id="modal-link-choice" class="cfd-modal" hidden role="dialog" aria-modal="true" aria-labelledby="lc-heading">
+      <div class="cfd-modal-backdrop" id="lc-backdrop"></div>
+      <div class="cfd-modal-card link-choice-card">
+        <h2 id="lc-heading">The part has a new shape</h2>
+        <p class="link-choice-copy" id="lc-copy"></p>
+        <div class="link-choice-option">
+          <button type="button" class="home-btn home-btn-primary" id="lc-new">Save as new geometry</button>
+          <p class="link-choice-line" id="lc-new-line"></p>
+          <div class="link-choice-copies" id="lc-copies"></div>
+        </div>
+        <div class="link-choice-option">
+          <button type="button" class="home-btn" id="lc-overwrite">Overwrite</button>
+          <p class="link-choice-line" id="lc-overwrite-line"></p>
+        </div>
+        <div class="np-actions">
+          <button type="button" class="home-btn" id="lc-cancel">Keep editing</button>
         </div>
       </div>
     </div>

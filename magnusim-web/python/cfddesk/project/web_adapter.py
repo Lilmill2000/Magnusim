@@ -66,12 +66,17 @@ def _read_json(path: Path) -> dict | list | None:
 
 
 
-def load_face_props(project_dir: Path) -> dict[str, dict[str, Any]]:
-    """Port of w27 loadFaceProps (read-only; no STEP regen)."""
-    from cfddesk.project.paths import walk_geometries
+def load_face_props(project_dir: Path, geometry_id: str | None = None) -> dict[str, dict[str, Any]]:
+    """Port of w27 loadFaceProps (read-only; no STEP regen).
+
+    ``geometry_id`` is the study's geometry (LINK proposal 5.7): its own face table, never
+    another geometry's. Without it, the first geometry that has one (as before).
+    """
+    from cfddesk.project.paths import find_geometry, walk_geometries
 
     meta: dict | list | None = None
-    for g in walk_geometries(project_dir):
+    own = find_geometry(project_dir, geometry_id) if geometry_id else None
+    for g in [own] if own else walk_geometries(project_dir):
         cand = _read_json(Path(g["dir"]) / "cad_preview.json")
         if isinstance(cand, dict) and isinstance(cand.get("faces"), list) and cand["faces"]:
             meta = cand
