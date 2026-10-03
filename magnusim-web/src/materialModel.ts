@@ -170,6 +170,11 @@ export function recordKeys(model: MaterialModelRow | undefined, key: string): st
   return Array.isArray(keys) && keys.length ? keys.map(String) : [key];
 }
 
+/** Each property's preferred record key, in schema order (the keys recordFields returns). */
+export function propertyRecordKeys(model: MaterialModelRow | undefined): string[] {
+  return properties(model).map((prop) => recordKeys(model, prop.key)[0]);
+}
+
 function positive(raw: unknown): number | undefined {
   if (raw === null || raw === undefined || raw === '') return undefined;
   const n = Number(raw);

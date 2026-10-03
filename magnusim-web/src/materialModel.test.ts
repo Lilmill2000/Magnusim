@@ -7,6 +7,7 @@ import {
   modelFor,
   presetOf,
   properties,
+  propertyRecordKeys,
   recordValues,
   type MaterialModelRow,
 } from './materialModel';
@@ -96,6 +97,14 @@ describe('recordValues', () => {
 
   it("no record yet is a new material: the preset's values", () => {
     expect(recordValues(m, null)).toEqual({ nu: 1.516e-5, rho: 1.204 });
+  });
+});
+
+describe('propertyRecordKeys', () => {
+  it("is each property's preferred record key, in schema order; none without a model", () => {
+    expect(propertyRecordKeys(FIXTURE_MODEL)).toEqual(['kinematic_viscosity', 'density']);
+    expect(propertyRecordKeys({ ...FIXTURE_MODEL, record_keys: {} })).toEqual(['nu', 'rho']);
+    expect(propertyRecordKeys(undefined)).toEqual([]);
   });
 });
 

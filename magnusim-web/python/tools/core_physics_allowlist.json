@@ -47,8 +47,8 @@
     },
     {
       "file": "src/workbench/runtime.js",
-      "max_hits": 4,
-      "reason": "The fluid tree folder's DOM / stored-state key ('Air', fluidTreeKey: projects' stored tree state and LeftTree's Air:<study> key use it) and a saved material's kinematic_viscosity record key."
+      "max_hits": 2,
+      "reason": "The fluid tree folder's DOM / stored-state key ('Air', fluidTreeKey: projects' stored tree state and LeftTree's Air:<study> key use it) and MATERIAL_FALLBACK_RECORD_KEYS: the kinematic_viscosity record key material rows hold before the registry loads (otherwise the material model's record_keys)."
     },
     {
       "file": "src/plugin-ui/units.ts",

@@ -87,7 +87,12 @@ import {
   typeChangeFields,
   valueQuantity as bcValueQuantity,
 } from '../bcCatalog';
-import { defaultFluidName, modelFor as materialModelFor, recordFields as materialRecordFields } from '../materialModel';
+import {
+  defaultFluidName,
+  modelFor as materialModelFor,
+  propertyRecordKeys as materialPropertyRecordKeys,
+  recordFields as materialRecordFields,
+} from '../materialModel';
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
 import { newPluginStudy, shownStudyTitles } from '../chrome/studyName';
@@ -22066,13 +22071,30 @@ function studyMaterialModel() {
 }
 
 /**
- * A material's property values under their record keys ({ kinematic_viscosity,
- * density }): a saved one's own, and for a number it lacks what older versions
- * filled in (its preset's legacy values); no material yet gets the default
- * preset's values.
+ * A material's property values under their record keys (the material model's
+ * preferred key per property): a saved one's own, and for a number it lacks
+ * what older versions filled in (its preset's legacy values); no material yet
+ * gets the default preset's values.
  */
 function materialFill(mat) {
   return materialRecordFields(studyMaterialModel(), mat || null);
+}
+
+/** The keys material records have always held their values under, used before the registry loads. */
+const MATERIAL_FALLBACK_RECORD_KEYS = ['kinematic_viscosity', 'density'];
+
+/**
+ * A material row's property values, keyed as its record keys them: the
+ * model's preferred record key per property (schema order), else the keys
+ * records have always held. Each is the record's own value, else materialFill's.
+ */
+function materialRowValues(mat) {
+  const model = studyMaterialModel();
+  const keys = model ? materialPropertyRecordKeys(model) : [];
+  const fill = materialFill(mat);
+  const out = {};
+  for (const key of keys.length ? keys : MATERIAL_FALLBACK_RECORD_KEYS) out[key] = mat[key] ?? fill[key] ?? null;
+  return out;
 }
 
 
@@ -22191,8 +22213,7 @@ function applyMaterialRecord(mat, projectId, opts) {
     id: mat.id,
     name: materialShownName(mat),
     viscosity_model: mat.viscosity_model || (studyMaterialModel()?.record_constants?.viscosity_model ?? null),
-    kinematic_viscosity: mat.kinematic_viscosity ?? materialFill(mat).kinematic_viscosity ?? null,
-    density: mat.density ?? materialFill(mat).density ?? null,
+    ...materialRowValues(mat),
     assigned_volumes: mat.assigned_volumes || [],
     materials_json: mat.materials_json || null,
     created_at: mat.created_at,
