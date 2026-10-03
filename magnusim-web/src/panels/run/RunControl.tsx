@@ -156,7 +156,13 @@ function RunStatus({
         series={row?.residual_series || []}
       />
       {p.meta ? <div className="mesh-finished-meta">{p.meta}</div> : null}
-      <RunMonitors projectId={ids.project_id} simulationId={ids.simulation_id} runId={state.run_id} live={state.running} />
+      <RunMonitors
+        projectId={ids.project_id}
+        simulationId={ids.simulation_id}
+        runId={state.run_id}
+        live={state.running}
+        quantities={row?.monitor_quantities}
+      />
     </div>
   );
 }

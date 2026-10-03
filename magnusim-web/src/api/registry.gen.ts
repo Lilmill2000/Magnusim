@@ -165,6 +165,8 @@ export interface MonitorSummaryItem {
 
 /** What analysis.run_monitors answers (GET /api/run/monitors). */
 export interface RunMonitors {
+  /** The analysis that read them. */
+  analysis_key?: string;
   rho: number | null;
   monitors: RunMonitor[];
   custom: RunMonitor[];
