@@ -249,7 +249,7 @@ describe('Start hands a core solve to the runner', () => {
     const { out } = await start(rid);
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
     const spec = JSON.parse(readFileSync(join(ROOT, 'foam-specs', `${out.bodyExtra.runner_job_id}.json`), 'utf8'));
-    assert.equal(spec.n_procs, w27.hardwareRankCap());
+    assert.equal(spec.n_procs, (await import('../ranks.js')).hardwareRankCap());
     assert.match(runDoc(rid).note, /^simpleFoam (\d+ ranks|serial)/);
   });
 

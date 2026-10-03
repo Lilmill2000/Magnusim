@@ -2,12 +2,12 @@
 /**
  * Thin JSONL job adapter (Phase 1 Step 7 partial).
  *
- * Spawns a Python tool (prepare_run / run_solve / generate_*), splits stdout by
+ * Spawns a Python tool (the step-list runner's relay, generate_*, ...), splits stdout by
  * line, parses MAGNUSIM_EVENT / CFDDESK_EVENT alias (and bare {"event":...}) JSON, writes structured
  * rows via log.js (a thinned copy for a fast job: createLogThinner), and invokes onEvent.
  *
- * w27 startSolve uses this for run_solve JSONL; w21 parseCfmeshLine still separate — that is
- * the next land once run_solve is proven end-to-end from startSolve.
+ * Core solves and plugin OpenFOAM cases reach it through foam-runner.js; w21 parseCfmeshLine is
+ * still separate.
  */
 import { spawn } from 'node:child_process';
 import { isolatedPythonEnv, ownProcessGroup } from './proc-tree.js';

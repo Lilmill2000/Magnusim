@@ -1,7 +1,10 @@
-// H15: a core solve's end. Drain only when WSL may still run; finishRun acts on its
-// own run; every end releases the compute slot (scripts/w27-solve.js, finishRun).
-import { after, afterEach, beforeEach, describe, it, mock } from 'node:test';
+// H15: a core solve's drain and Stop of a run an earlier version left running (its
+// doc has no runner_job_id): the doc writes the boot check's drain makes, the probe
+// a read of such a doc starts (wsl-case-watch, never the old stop tool), and the
+// ranks a core run gets (scripts/w27-solve.js runRanks, scripts/ranks.js).
+import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -18,11 +21,11 @@ process.env.MAGNUSIM_WSL_CASE_ROOT = '/home/tester/cases';
 const w27 = await import('../w27-solve.js');
 const layout = await import('../project-layout.js');
 const studyIo = await import('../study-io.js');
-const slot = await import('../compute-slot.js');
 const watch = await import('../wsl-case-watch.js');
-const { coreDrainNeeded, noteSolveEvent, patchRunDocIfPresent, runDocStopRequested } = w27;
+const { patchRunDocIfPresent, runDocStopRequested } = w27;
 
 after(() => {
+  watch.setCaseProcsSpawnForTests(null);
   try {
     rmSync(ROOT, { recursive: true, force: true });
   } catch {
@@ -33,38 +36,14 @@ after(() => {
 function seedRun(pid = 'proj-a', runId = 'run_1') {
   const dir = join(PROJECTS, pid);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'project.json'), JSON.stringify({ id: pid, title: pid }));
   if (!existsSync(join(dir, 'geometries'))) {
-    layout.createGeometryFolder(dir, { id: 'g1', name: 'G', original_filename: 'g.step' });
+    const g = layout.createGeometryFolder(dir, { id: 'g1', name: 'G', original_filename: 'g.step' });
     layout.createStudyFolder(dir, 'g1', { id: 's1', name: 'Study 1' });
+    writeFileSync(join(dir, 'project.json'), JSON.stringify({ id: pid, title: pid, geometries: [{ id: g.id, name: g.name }], active_geometry_id: g.id }));
+    writeFileSync(join(dir, 'simulations.json'), JSON.stringify({ active_id: 's1', simulations: [{ id: 's1', name: 'Study 1', geometry_id: g.id }] }));
   }
   return studyIo.persistRun(pid, 's1', { id: runId, run_id: runId, name: 'Run 1', simulation_id: 's1', status: 'running', wsl_case: `cfddesk-w27-${runId}` });
 }
-
-describe('when a core run drains', () => {
-  const table = [
-    [{ exitCode: 0, sawResult: true, sawWslStart: true, killSent: false }, false, 'a clean end'],
-    [{ exitCode: 0, sawResult: false, sawWslStart: true, killSent: true }, false, 'exit 0 means solve.sh sent its result'],
-    [{ exitCode: 1, sawResult: true, sawWslStart: true, killSent: false }, false, 'a failed run that ended in order'],
-    [{ exitCode: 1, sawResult: false, sawWslStart: false, killSent: false }, false, 'never reached WSL'],
-    [{ exitCode: 1, sawResult: false, sawWslStart: true, killSent: false }, true, 'a relay crash after WSL started'],
-    [{ exitCode: -1, sawResult: false, sawWslStart: false, killSent: true }, true, 'a forced stop'],
-    [{ exitCode: -2, sawResult: false, sawWslStart: true, killSent: true }, true, 'killed by a signal'],
-  ];
-  for (const [args, want, why] of table) {
-    it(`${why}: ${want ? 'drain' : 'no drain'}`, () => assert.equal(coreDrainNeeded(args), want));
-  }
-
-  it('solve.sh start and result events are noted', () => {
-    const seen = { wslStart: false, result: false };
-    noteSolveEvent(seen, { event: 'stage', stage: 'solve' });
-    assert.deepEqual(seen, { wslStart: false, result: false });
-    noteSolveEvent(seen, { event: 'start', run_id: 'r' });
-    noteSolveEvent(seen, { event: 'result', ok: false });
-    assert.deepEqual(seen, { wslStart: true, result: true });
-    assert.doesNotThrow(() => noteSolveEvent(seen, null));
-  });
-});
 
 describe('run doc writes of a drain', () => {
   it('patchRunDocIfPresent merges into run.json and never creates a folder', () => {
@@ -94,221 +73,55 @@ describe('run doc writes of a drain', () => {
   });
 });
 
-// ---- finishRun itself, from the source, with stand-ins around it ----
-
-const SRC = readFileSync(join(HERE, '..', 'w27-solve.js'), 'utf8').replace(/\r\n/g, '\n');
-const FINISH = (() => {
-  const start = SRC.indexOf('  const finishRun = (code, signal, errMsg) => {');
-  const end = SRC.indexOf('  const { child, jobLog } = spawnJob({', start);
-  return SRC.slice(start, end);
-})();
-
-/** The real forceKillDoc source, run with stand-ins (no process is started). */
-function forceKillDocWith(liveRun) {
-  const start = SRC.indexOf('function forceKillDoc(rec, run) {');
-  const body = SRC.slice(start, SRC.indexOf('\n}\n', start) + 2);
-  const spawned = [];
-  const make = new Function(
-    'deps',
-    `let liveRun = deps.liveRun;
-    const wslCaseOf = (rec, run) => (rec && rec.wsl_case) || (run && run.wsl_case) || '';
-    const runIdOf = (rec) => rec && (rec.run_id || rec.id);
-    const invalidateWslLive = () => {};
-    const stopHookArgs = () => [];
-    const coreOwner = () => null;
-    const spawn = (...a) => deps.spawned.push(a);
-    const PYTHON = 'python';
-    const pyTool = (n) => n;
-    const processNamesArgs = () => [];
-    const wslCasePath = (id) => '/r/' + id;
-    const WSL_DISTRO = 'Ubuntu';
-    ${body}
-    return forceKillDoc;`,
-  );
-  return { forceKillDoc: make({ liveRun, spawned }), spawned };
+/** A wsl_case_procs.py probe that answers `state` ('live' or 'dead'). */
+function probeChild(state) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.kill = () => {};
+  setImmediate(() => {
+    child.stdout.emit('data', JSON.stringify({ ok: true, live: state === 'live' }) + '\n');
+    child.emit('close', 0);
+  });
+  return child;
 }
 
-describe('a forced stop marks the kill (so its end drains)', () => {
-  it('kill_sent on the run given, or on the live run of that id; never on another run', () => {
-    const run = { run_id: 'run_1', wsl_case: 'cfddesk-w27-run_1', child: { kill() {} }, kill_sent: false };
-    const a = forceKillDocWith(null);
-    a.forceKillDoc({ run_id: 'run_1', wsl_case: 'cfddesk-w27-run_1' }, run);
-    assert.equal(run.kill_sent, true);
-    assert.equal(a.spawned.length, 1, 'stop_solve.py --force');
-    // The grace timer's kill passes no run: the live run of that id is marked.
-    const live = { run_id: 'run_2', wsl_case: 'cfddesk-w27-run_2', child: { kill() {} }, kill_sent: false };
-    forceKillDocWith(live).forceKillDoc({ run_id: 'run_2', wsl_case: 'cfddesk-w27-run_2' }, null);
-    assert.equal(live.kill_sent, true);
-    const other = { run_id: 'run_3', child: { kill() {} }, kill_sent: false };
-    forceKillDocWith(other).forceKillDoc({ run_id: 'run_4', wsl_case: 'cfddesk-w27-run_4' }, null);
-    assert.equal(other.kill_sent, false);
-  });
-});
+const settle = async () => {
+  for (let i = 0; i < 10; i += 1) await new Promise((r) => setImmediate(r));
+};
 
-describe('finishRun (source)', () => {
-  it('acts on its own run, drains only when needed, releases in finally', () => {
-    assert.ok(FINISH.length > 500);
-    assert.match(FINISH, /const run = thisRun;/);
-    assert.match(FINISH, /if \(liveRun === run\) liveRun = null;/);
-    assert.ok(!/liveRun\.(stop_requested|baseRunning|progress|stop_timer)/.test(FINISH), 'reads from thisRun, never from liveRun');
-    assert.match(FINISH, /coreDrainNeeded\(\{ exitCode: exit_code, sawResult: seen\.result, sawWslStart: seen\.wslStart, killSent: !!\(run && run\.kill_sent\) \}\)/);
-    assert.match(FINISH, /draining: true, wsl_case: wslCaseId/);
-    assert.match(FINISH, /stop: \(\) => runDocStopRequested\(id, runId\)/);
-    assert.match(FINISH, /onGone: \(\) => patchRunDocIfPresent\(id, runId, \{ draining: false \}\)/);
-    assert.match(FINISH, /finally \{\s*if \(!watching\) releaseComputeSlot\(token\);/);
-    const iPatch = FINISH.indexOf("patchComputeSlot(token, { phase: 'draining'");
-    const iPersist = FINISH.indexOf('persistRunDoc(id, {');
-    const iWatch = FINISH.indexOf('watchWslCaseGone({');
-    assert.ok(iPatch > 0 && iPatch < iPersist && iPersist < iWatch);
-  });
-});
-
-/** The real finishRun source, run with these stand-ins. */
-function finishRunWith(over = {}) {
-  const deps = {
-    slot: { token: over.token },
-    snapshotProgress: () => ({ stage: 'solve', residuals: [] }),
-    parseSolveProgress: () => ({ stage: 'solve', residuals: [] }),
-    prepResult: { analysis_key: 'k' },
-    listSavedTimes: () => [],
-    winOut: 'C:/run/case',
-    isTransient: false,
-    coreDrainNeeded,
-    patchComputeSlot: slot.patchComputeSlot,
-    persistRunDoc: () => {},
-    id: 'proj-a',
-    solver: 'simpleFoam',
-    wslCaseId: 'cfddesk-w27-run_1',
-    invalidateLiveSolveCache: () => {},
-    onDone: () => {},
-    runId: 'run_1',
-    draft: { name: 'Run 1' },
-    watchWslCaseGone: watch.watchWslCaseGone,
-    runDocStopRequested: () => false,
-    patchRunDocIfPresent: () => null,
-    pushComputeNotice: () => {},
-    LOST_TEXT: watch.LOST_TEXT,
-    releaseComputeSlot: slot.releaseComputeSlot,
-    scheduleComputeQueueKick: () => {},
-    thisRun: null,
-    otherLive: null,
-    seen: { wslStart: false, result: false },
-    ...over,
-  };
-  const make = new Function(
-    'deps',
-    `const { slot, snapshotProgress, parseSolveProgress, prepResult, listSavedTimes, winOut, isTransient, coreDrainNeeded,
-      patchComputeSlot, persistRunDoc, id, solver, wslCaseId, invalidateLiveSolveCache, onDone, runId, draft,
-      watchWslCaseGone, runDocStopRequested, patchRunDocIfPresent, pushComputeNotice, LOST_TEXT, releaseComputeSlot,
-      scheduleComputeQueueKick, seen } = deps;
-    const runTail = { text: () => '' };
-    let thisRun = deps.thisRun;
-    let liveRun = deps.otherLive || deps.thisRun;
-    let runFinished = false;
-    ${FINISH}
-    return { finishRun, liveRun: () => liveRun };`,
-  );
-  return make(deps);
-}
-
-describe('finishRun releases on every end', () => {
-  beforeEach(() => slot.resetComputeSlotForTests());
-  afterEach(() => mock.timers.reset());
-
-  it('no drain: onDone throws and the slot is free; liveRun cleared only when it is this run', () => {
-    const c = slot.claimComputeSlot('solve', { project_id: 'proj-a', run_id: 'run_1' }, { phase: 'running' });
-    const run = { run_id: 'run_1', slot_token: c.token, baseRunning: { name: 'Run 1' }, stop_requested: false };
-    const persisted = [];
-    const f = finishRunWith({
-      token: c.token,
-      thisRun: run,
-      persistRunDoc: (pid, doc) => persisted.push(doc),
-      onDone: () => {
-        throw new Error('onDone failed');
-      },
-      seen: { wslStart: true, result: true },
+describe('a run an earlier version left running (no runner record)', () => {
+  it('a read probes its case copy with wsl_case_procs (never the old stop tool) and reaps it once a probe finds it gone', async () => {
+    seedRun('proj-c', 'run_l');
+    const calls = [];
+    let state = 'live';
+    watch.setCaseProcsSpawnForTests((cmd, args) => {
+      calls.push(args.slice(1));
+      return probeChild(state);
     });
-    f.finishRun(0, null, null);
-    assert.equal(slot.computeSlotHolder(), null);
-    assert.equal(persisted.length, 1);
-    assert.equal(persisted[0].status, 'done');
-    assert.equal(persisted[0].draining, undefined);
-    assert.equal(f.liveRun(), null);
-    // Another run is live by now: it is left alone.
-    const other = { run_id: 'run_2' };
-    const c2 = slot.claimComputeSlot('solve', { project_id: 'proj-a', run_id: 'run_1' });
-    const g = finishRunWith({ token: c2.token, thisRun: { run_id: 'run_1', slot_token: c2.token }, otherLive: other });
-    g.finishRun(0, null, null);
-    assert.equal(g.liveRun(), other);
-  });
-
-  it('drain: the slot stays held (draining) until WSL is gone; an onGone that throws still frees it', async () => {
-    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
-    const c = slot.claimComputeSlot('solve', { project_id: 'proj-a', run_id: 'run_1' }, { phase: 'running' });
-    const run = { run_id: 'run_1', slot_token: c.token, kill_sent: true, stop_requested: true, baseRunning: {} };
-    const persisted = [];
-    let probes = 0;
-    const f = finishRunWith({
-      token: c.token,
-      thisRun: run,
-      persistRunDoc: (pid, doc) => persisted.push(doc),
-      watchWslCaseGone: (opts) =>
-        watch.watchWslCaseGone({
-          ...opts,
-          probe: async () => {
-            probes += 1;
-            return 'dead';
-          },
-        }),
-      patchRunDocIfPresent: () => {
-        throw new Error('run.json locked');
-      },
-    });
-    f.finishRun(-1, null, null);
-    const h = slot.computeSlotHolder();
-    assert.deepEqual([h.phase, h.stop_requested], ['draining', true]);
-    assert.equal(persisted[0].draining, true);
-    assert.equal(persisted[0].wsl_case, 'cfddesk-w27-run_1');
-    assert.equal(persisted[0].status, 'stopped');
-    for (let i = 0; i < 2; i += 1) {
-      mock.timers.tick(2_000);
-      for (let k = 0; k < 5; k += 1) await new Promise((r) => setImmediate(r));
+    const status = () => (w27.getRunStatus('proj-c', 'run_l', 's1').body.runs.find((r) => r.id === 'run_l') || {}).status;
+    try {
+      assert.equal(status(), 'running');
+      await settle();
+      assert.deepEqual(calls, [['probe', '--wsl-case', 'cfddesk-w27-run_l', '--script', 'solve-run_l.sh']], 'one probe per read, by the case id and solve-<run>.sh');
+      // Live: still running; the next read probes again.
+      state = 'dead';
+      assert.equal(status(), 'running');
+      await settle();
+      assert.equal(calls.length, 2);
+      // Gone: reaped, written to its run.json.
+      assert.equal(status(), 'failed');
+      const doc = JSON.parse(readFileSync(join(studyIo.runFolderOf('proj-c', 'run_l').dir, 'run.json'), 'utf8'));
+      assert.deepEqual([doc.status, doc.pid], ['failed', null]);
+      assert.match(doc.note, /^Solver process is gone\./);
+    } finally {
+      watch.setCaseProcsSpawnForTests(null);
     }
-    assert.equal(probes, 2);
-    assert.equal(slot.computeSlotHolder(), null, 'released although onGone threw');
-  });
-
-  it('a drain whose watch cannot start releases in finally', () => {
-    const c = slot.claimComputeSlot('solve', { project_id: 'proj-a', run_id: 'run_1' });
-    const f = finishRunWith({
-      token: c.token,
-      thisRun: { run_id: 'run_1', slot_token: c.token },
-      seen: { wslStart: true, result: false },
-      watchWslCaseGone: () => {
-        throw new Error('no watch');
-      },
-    });
-    f.finishRun(1, null, null);
-    assert.equal(slot.computeSlotHolder(), null);
-  });
-
-  it('a persist that throws still frees the slot', () => {
-    const c = slot.claimComputeSlot('solve', { project_id: 'proj-a', run_id: 'run_1' });
-    const f = finishRunWith({
-      token: c.token,
-      thisRun: { run_id: 'run_1', slot_token: c.token },
-      persistRunDoc: () => {
-        throw new Error('disk');
-      },
-    });
-    f.finishRun(0, null, null);
-    assert.equal(slot.computeSlotHolder(), null);
   });
 });
 
-// ---- hardwareRankCap: resolveNProcs gives the same ranks as before ----
+// ---- the ranks of a core run (runRanks: serial_below_cells, else the cap) ----
 
-/** resolveNProcs as it was at c6ffe2f (HEAD before H15). */
+/** resolveNProcs as it was at c6ffe2f (HEAD before H15): the rule runRanks keeps. */
 const OLD_RESOLVE = `function resolveNProcs(nCells, opts) {
   const n = Number(nCells) || 0;
   const threshold = opts && opts.transient ? TRANSIENT_LARGE_MESH_CELLS : LARGE_MESH_CELLS;
@@ -327,44 +140,66 @@ const OLD_RESOLVE = `function resolveNProcs(nCells, opts) {
   return Math.max(1, nProcs);
 }`;
 
+const SRC = readFileSync(join(HERE, '..', 'w27-solve.js'), 'utf8').replace(/\r\n/g, '\n');
+const RANKS = readFileSync(join(HERE, '..', 'ranks.js'), 'utf8').replace(/\r\n/g, '\n');
+
 function fnSource(name, from) {
   const start = from.indexOf(name);
-  return from.slice(start, from.indexOf('\n}\n', start) + 2);
+  assert.ok(start >= 0, name);
+  return from.slice(start, from.indexOf('\n}\n', start) + 2).replace(/^export function/, 'function');
 }
 
-describe('hardwareRankCap', () => {
-  it('keeps resolveNProcs results (fake cpus, prefs and WSL slots)', () => {
-    const newResolve = fnSource('function resolveNProcs(', SRC);
-    // The cap moved to ranks.js (the runner and the core solve read it there).
-    const RANKS = readFileSync(join(HERE, '..', 'ranks.js'), 'utf8').replace(/\r\n/g, '\n');
-    const cap = fnSource('export function hardwareRankCap(', RANKS).replace('export function', 'function');
-    assert.match(newResolve, /let nProcs = hardwareRankCap\(\);/);
-    const build = (body) =>
+describe('runRanks', () => {
+  it("gives the old resolveNProcs ranks (fake cpus and prefs; the relay clamps by WSL's own slots)", () => {
+    assert.match(SRC, /const LEGACY_SERIAL_BELOW_CELLS = Object\.freeze\(\{ steady: 200000, transient: 50000 \}\);/);
+    const runRanks = fnSource('export function runRanks(', SRC);
+    const cap = fnSource('export function hardwareRankCap(', RANKS);
+    const saved = fnSource('export function savedWslSlots(', RANKS);
+    // runRanks asks WSL nothing: no probe, no synchronous spawn.
+    assert.ok(!/probeWslMpiSlots|spawnSync|spawn\(/.test(runRanks + cap + saved));
+    const oldFn = (env) =>
       new Function('env', `const { cpus, hardwarePrefs, probeWslMpiSlots, PHYSICAL_CORES } = env;
         const TRANSIENT_LARGE_MESH_CELLS = 50000, LARGE_MESH_CELLS = 200000, WSL_DISTRO = 'Ubuntu';
-        ${body}
-        return resolveNProcs;`);
-    const oldFn = (env) => build(OLD_RESOLVE)(env);
-    const newFn = (env) => build(`${cap}\n${newResolve}`)(env);
+        ${OLD_RESOLVE}
+        return resolveNProcs;`)(env);
+    const newFn = (env) =>
+      new Function('env', `const { cpus, hardwarePrefs, PHYSICAL_CORES } = env;
+        const LEGACY_SERIAL_BELOW_CELLS = Object.freeze({ steady: 200000, transient: 50000 });
+        ${cap}
+        ${saved}
+        ${runRanks}
+        return runRanks;`)(env);
     let checked = 0;
     for (const logical of [1, 2, 4, 8, 16, 32]) {
       for (const physical of [0, 1, 4, 16]) {
         for (const hw of [null, { n_procs: 3 }, { n_procs: 0 }, { wsl_mpi_slots: 6 }, { n_procs: 12, wsl_mpi_slots: 4 }]) {
-          for (const live of [0, 2, 64]) {
-            for (const cells of [0, 1000, 60000, 300000]) {
-              for (const transient of [false, true]) {
-                const env = { cpus: () => new Array(logical).fill({}), hardwarePrefs: () => hw, probeWslMpiSlots: () => live, PHYSICAL_CORES: physical };
-                assert.equal(newFn(env)(cells, { transient }), oldFn(env)(cells, { transient }), JSON.stringify({ logical, physical, hw, live, cells, transient }));
-                checked += 1;
-              }
+          for (const cells of [0, 1000, 60000, 300000]) {
+            for (const transient of [false, true]) {
+              const env = { cpus: () => new Array(logical).fill({}), hardwarePrefs: () => hw, probeWslMpiSlots: () => 0, PHYSICAL_CORES: physical };
+              const want = oldFn(env)(cells, { transient });
+              const why = JSON.stringify({ logical, physical, hw, cells, transient });
+              // An analysis that declares no serial_below_cells (before API 1.5): the old rule.
+              assert.equal(newFn(env)(cells, { transient }), want, why);
+              assert.equal(newFn(env)(cells, { transient, serialBelowCells: null }), want, why);
+              // Incompressible Flow declares the same numbers.
+              assert.equal(newFn(env)(cells, { transient, serialBelowCells: transient ? 50000 : 200000, parallel: true }), want, why);
+              // Its own number wins; a launch that is not parallel is serial.
+              assert.equal(newFn(env)(cells, { transient, serialBelowCells: 0 }), oldFn(env)(0, { transient }), why);
+              assert.equal(newFn(env)(cells, { transient, parallel: false }), 1, why);
+              checked += 1;
             }
           }
         }
       }
     }
-    assert.ok(checked > 1000);
-    // And the cap alone never asks WSL.
-    assert.ok(!/probeWslMpiSlots|spawnSync/.test(cap));
-    assert.equal(typeof w27.hardwareRankCap(), 'number');
+    assert.ok(checked > 900);
+  });
+
+  it('is the rule Start uses', () => {
+    const start = SRC.indexOf('async function startSolveOnRunner(');
+    const body = SRC.slice(start, SRC.indexOf('\n}\n', start));
+    assert.match(body, /const nProcs = runRanks\(ready\.mesh\.n_cells, \{ transient: isTransient, serialBelowCells: plan\.serial_below_cells, parallel: launch\.parallel \}\);/);
+    assert.equal(w27.runRanks(1000, { transient: false }), 1);
+    assert.ok(w27.runRanks(300000, { transient: false }) >= 1);
   });
 });

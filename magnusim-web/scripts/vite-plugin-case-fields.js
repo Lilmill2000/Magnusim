@@ -57,7 +57,6 @@ import { listFoamTimeDirs } from './project-layout.js';
 import { liveMeshJobSnapshot, meshGenerateLivePid, recoverStudyMeshesFromDisk, watchUnownedMeshGenerate } from './w21-mesh-generate.js';
 import { getActiveSimulation } from './w17-sim-catalog.js';
 import { assembleMeshDoc } from './study-io.js';
-import { runLivePid as runLivePidW27 } from './w27-solve.js';
 import { PY_TOOLS, pyTool } from './python-env.js';
 import { callWorker } from './py-json.js';
 import { fieldExportMaySpawnFallback } from './field-export-fallback.js';
@@ -199,7 +198,7 @@ function readJsonBody(req) {
 function caseSnapshot() {
   const caseDir = activeCaseState.case_dir;
   const times = caseDir && existsSync(caseDir) ? listCaseTimes(caseDir) : [];
-  const livePid = runLivePidW27() != null ? runLivePidW27() : meshGenerateLivePid();
+  const livePid = meshGenerateLivePid();
   return {
     increment: activeCaseState.increment || (activeCaseState.path_kind === 'snappyHexMesh' ? 'W23' : 'W15.1'),
     project_id: activeCaseState.project_id || projectIdFromCaseDir(caseDir),

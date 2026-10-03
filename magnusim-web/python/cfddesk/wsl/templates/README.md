@@ -45,13 +45,16 @@ MAGNUSIM_EVENT {"event":"stage","stage":"decompose",...}
 
 (`CFDDESK_EVENT` is still accepted as a parse alias.)
 
-OpenFOAM / mpirun stdout is left untouched. `cfddesk.wsl.solve_run` /
-`tools/run_solve.py` parse events via `cfddesk.jobs.events` and turn residual /
-Courant / `Time =` lines into `residual` / `courant` / `progress` events.
+OpenFOAM / mpirun stdout is left untouched. `cfddesk.wsl.solve_run` (run by the
+step-list runner's relay, `cfddesk.wsl.foam_relay`) parses events via
+`cfddesk.jobs.events` and the analysis's log parser turns residual / Courant /
+`Time =` lines into `residual` / `courant` / `progress` events.
 
 Legacy `W27_*` / `W25_*` markers are **not** emitted on this path. The JS
 `buildSolveScript` / `writeSolveCase` writers were deleted in Phase 1 land6;
-solve ownership is `prepare_run` + `run_solve` + `solve.sh`.
+solve ownership is the analysis's prepare job (or `prepare_run`) + the relay + `solve.sh`.
+`tools/run_solve.py` keeps `--parse-log` (a captured log to events) and
+`--render-only` (write `solve.sh`, no WSL).
 
 ## Mesh pipeline scripts
 

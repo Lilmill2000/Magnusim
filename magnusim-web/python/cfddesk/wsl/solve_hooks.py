@@ -1,8 +1,8 @@
 """Solve hooks in the solve relay (API 1.3): ``solve.prepare``, ``solve.parse_line``
 and ``solve.stop``.
 
-Used by ``tools/run_solve.py`` (core runs), the foam relay (plugin OpenFOAM
-cases) and ``tools/stop_solve.py``, and only when the host passes hook names
+Used by the foam relay (core solves and plugin OpenFOAM cases) and
+``tools/run_solve.py --parse-log``, and only when the host passes hook names
 (some plugin listens). Without names nothing loads and nothing fires.
 
 - **Output first.** The real stdout becomes a private event stream; fd 1 and

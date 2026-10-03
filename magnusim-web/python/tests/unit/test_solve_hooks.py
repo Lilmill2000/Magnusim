@@ -360,92 +360,17 @@ def test_the_hook_output_writer():
 
 
 # ---------------------------------------------------------------------------
-# run_solve and stop_solve (in process)
+# The relay (core solves and plugin cases): run_solve.py no longer solves and
+# stop_solve.py is gone (a core solve's hooks: test_h15_relay.py)
 # ---------------------------------------------------------------------------
 
 
-class FakeSolve:
-    def __init__(self, lines: list[str]) -> None:
-        self.stdout = iter([ln + "\n" for ln in lines])
-        self.pid = 1
-
-    def wait(self) -> int:
-        return 0
-
-
-def test_core_run_solve_does_not_wait_for_solve_prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_the_old_core_solve_tools_are_gone():
     import run_solve
 
-    s, buf = sink()
-    monkeypatch.setattr(solve_hooks, "isolate_output", lambda: s)
-    release = threading.Event()
-    monkeypatch.setattr(solve_hooks, "_load_plugins", release.wait)
-    started: list[float] = []
-
-    def fake_start(case_dir: Path, **kw: Any) -> FakeSolve:
-        started.append(time.monotonic())
-        return FakeSolve(['MAGNUSIM_EVENT {"event":"stage","stage":"solve"}', "Time = 1", 'MAGNUSIM_EVENT {"event":"result","ok":true,"exit_code":0}'])
-
-    monkeypatch.setattr(run_solve, "start_solve", fake_start)
-    t0 = time.monotonic()
-    code = run_solve.main(
-        ["--case-dir", str(tmp_path), "--wsl-case", "cfddesk-w27-run-1", "--app", "pimpleFoam", "--run-id", "run-1",
-         "--owner", "core:proj/sim-1", "--hooks", "solve.prepare,solve.parse_line"]
-    )
-    release.set()
-    assert code == 0
-    assert started and started[0] - t0 < 1.0
-    kinds = [e["event"] for e in lines_of(buf)]
-    assert kinds[:2] == ["stage", "progress"] and "result" in kinds
-
-
-def test_run_solve_without_hooks_loads_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys):
-    import run_solve
-
-    def no(*a: Any, **k: Any) -> None:
-        raise AssertionError("no hook may load")
-
-    monkeypatch.setattr(solve_hooks, "isolate_output", no)
-    monkeypatch.setattr(solve_hooks, "_load_plugins", no)
-    monkeypatch.setattr(run_solve, "start_solve", lambda case_dir, **kw: FakeSolve(["Time = 1"]))
-    code = run_solve.main(["--case-dir", str(tmp_path), "--wsl-case", "cfddesk-w27-run-1", "--app", "pimpleFoam", "--owner", "core:proj/sim-1"])
-    assert code == 0
-    assert '"event":"progress"' in capsys.readouterr().out
-    # Hooks asked for, but the owner is bad: off for the run.
-    code = run_solve.main(["--case-dir", str(tmp_path), "--wsl-case", "cfddesk-w27-run-1", "--app", "pimpleFoam",
-                           "--owner", "core:..", "--hooks", "solve.parse_line"])
-    assert code == 0
-
-
-def test_stop_solve_fires_solve_stop_after_the_action_and_never_on_probe(monkeypatch: pytest.MonkeyPatch, capsys):
-    import stop_solve
-
-    s, buf = sink()
-    monkeypatch.setattr(solve_hooks, "isolate_output", lambda: s)
-    monkeypatch.setattr(solve_hooks, "_load_plugins", lambda: None)
-    order: list[str] = []
-    monkeypatch.setattr(stop_solve, "stop_solve", lambda wsl_case, graceful=True: order.append("write_now"))
-    monkeypatch.setattr(stop_solve, "kill_solve", lambda *a: order.append("kill"))
-    monkeypatch.setattr(stop_solve, "solve_is_live", lambda *a: order.append("probe") or False)
-    get_hooks().on("solve.stop", lambda *, ctx, forced, **kw: order.append(f"hook forced={forced} {ctx.owner} {ctx.app}"), plugin="p")
-    args = ["--wsl-case", "cfddesk-w27-run-1", "--run-id", "run-1", "--owner", "core:proj/sim-1", "--hooks", "solve.stop",
-            "--app", "pimpleFoam", "--case-dir", "C:/x", "--n-procs", "2"]
-    assert stop_solve.main(args) == 0
-    assert order == ["write_now", "hook forced=False core pimpleFoam"]
-    assert json.loads(buf.getvalue().splitlines()[0]) == {"ok": True, "wsl_case": "cfddesk-w27-run-1", "forced": False}
-    order.clear()
-    assert stop_solve.main([*args, "--force"]) == 0
-    assert order == ["kill", "hook forced=True core pimpleFoam"]
-    order.clear()
-
-    def no(*a: Any, **k: Any) -> None:
-        raise AssertionError("a probe never loads hooks")
-
-    monkeypatch.setattr(solve_hooks, "isolate_output", no)
-    monkeypatch.setattr(solve_hooks, "_load_plugins", no)
-    assert stop_solve.main([*args, "--probe"]) == 0
-    assert order == ["probe"]
-    assert json.loads(capsys.readouterr().out) == {"ok": True, "live": False, "wsl_case": "cfddesk-w27-run-1"}
+    assert not (PY_ROOT / "tools" / "stop_solve.py").exists()
+    assert not hasattr(run_solve, "start_solve")
+    assert run_solve.main(["--case-dir", ".", "--wsl-case", "cfddesk-w27-run-1", "--app", "pimpleFoam", "--owner", "core:proj/sim-1"]) == 2
 
 
 def test_the_relay_waits_at_most_its_bound_for_solve_prepare(tmp_path: Path):

@@ -62,8 +62,10 @@ describe('run-control defaults have one source', () => {
     assert.equal(/export function (estimateDeltaT|resolveTransientControl|flowThroughTime)/.test(w30), false);
     const w27 = text('scripts/w27-solve.js');
     assert.equal(w27.includes('transientControlFor'), false);
-    assert.match(w27, /'--time-dependency'/);
-    assert.match(w27, /'--transient-json'/);
+    // The run's time dependency and transient settings go to its analysis's plan and prepare job.
+    assert.match(w27, /'analysis\.plan_run'/);
+    assert.match(w27, /time_dependency: timeDependency,/);
+    assert.match(w27, /transient: JSON\.stringify\(transientSettings\)/);
     assert.match(w27, /analysis\.run_preview/);
   });
 });

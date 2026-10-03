@@ -198,5 +198,6 @@ def test_the_real_allowlist_ceilings_are_seeded_and_sdk_entries_are_kept_apart()
         e["file"].startswith(("python/sdk/magnusim_sdk/", "docs/plugins/")) for e in doc["if_vocab_sdk"]
     )
     assert not any(e["file"].startswith("python/sdk/") for e in doc["if_vocab"])
-    w27 = next(e for e in doc["if_vocab"] if e["file"] == "scripts/w27-solve.js")
-    assert "runner" in w27["reason"]
+    # Core solves run on the step-list runner (IF Item 7): the old W27 run path and its
+    # U/p frame-field fallback are gone, and so is its entry.
+    assert not any(e["file"] == "scripts/w27-solve.js" for e in doc["if_vocab"])

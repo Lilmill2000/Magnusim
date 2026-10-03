@@ -11,7 +11,8 @@ const ROOT = mkdtempSync(join(tmpdir(), 'magnusim-hooks-'));
 process.env.MAGNUSIM_PROJECTS_ROOT = join(ROOT, 'projects');
 process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 
-const { coreOwner, hookArgs, refreshSolveHooks, setSolveHookNamesForTests, solveHookNames, stopHookArgs } = await import('../solve-hooks.js');
+const hooks = await import('../solve-hooks.js');
+const { coreOwner, refreshSolveHooks, setSolveHookNamesForTests, solveHookNames } = hooks;
 
 after(() => rmSync(ROOT, { recursive: true, force: true }));
 
@@ -28,33 +29,21 @@ function worker(answer) {
 }
 
 describe('solve hooks in Node', () => {
-  it('nothing listening: no arguments at all (the command lines of today)', async () => {
+  it('nothing listening: no names at all', async () => {
     const w = worker({ names: [] });
     assert.deepEqual(await refreshSolveHooks(w), []);
     assert.deepEqual(w.calls, [['solve_hooks.listening', {}]]);
-    assert.deepEqual(hookArgs('core:p1/s1'), []);
-    assert.deepEqual(stopHookArgs({ owner: 'core:p1/s1', app: 'simpleFoam', caseDir: 'C:/x', nProcs: 2 }), []);
+    assert.deepEqual(solveHookNames(), []);
   });
 
-  it('names a plugin listens to go to run_solve; solve.stop only to the stop tool', async () => {
+  it('the names a plugin listens to, cleaned and sorted (a solve\'s relay gets them in its spec)', async () => {
     await refreshSolveHooks(worker({ names: ['solve.parse_line', 'solve.prepare', 'bogus', 'solve.parse_line'] }));
     assert.deepEqual(solveHookNames(), ['solve.parse_line', 'solve.prepare']);
-    assert.deepEqual(hookArgs('core:p1/s1'), ['--owner', 'core:p1/s1', '--hooks', 'solve.parse_line,solve.prepare']);
-    assert.deepEqual(stopHookArgs({ owner: 'core:p1/s1', app: 'simpleFoam' }), [], 'solve.stop is not listened to');
     setSolveHookNamesForTests(['solve.stop']);
-    assert.deepEqual(stopHookArgs({ owner: 'core:p1/s1', app: 'simpleFoam', caseDir: 'C:/runs/case', nProcs: 4 }), [
-      '--owner',
-      'core:p1/s1',
-      '--hooks',
-      'solve.stop',
-      '--app',
-      'simpleFoam',
-      '--case-dir',
-      'C:/runs/case',
-      '--n-procs',
-      '4',
-    ]);
-    assert.deepEqual(hookArgs(''), [], 'no owner, no hooks');
+    assert.deepEqual(solveHookNames(), ['solve.stop']);
+    // The old run path's command-line arguments are gone with run_solve.py's solve and stop_solve.py.
+    assert.equal('hookArgs' in hooks, false);
+    assert.equal('stopHookArgs' in hooks, false);
   });
 
   it('a failure or no answer means no hooks', async () => {
@@ -65,7 +54,7 @@ describe('solve hooks in Node', () => {
     await refreshSolveHooks(worker(null));
     assert.deepEqual(solveHookNames(), []);
     await refreshSolveHooks(null);
-    assert.deepEqual(hookArgs('core:p/s'), []);
+    assert.deepEqual(solveHookNames(), []);
   });
 
   it('a core owner needs plain ids', () => {
@@ -77,7 +66,11 @@ describe('solve hooks in Node', () => {
   it('no RPC on a start or stop path: only refreshSolveHooks asks (source scan)', () => {
     const w27 = readFileSync(join(HERE, '..', 'w27-solve.js'), 'utf8');
     assert.ok(!w27.includes('solve_hooks.listening'));
-    assert.match(w27, /\.\.\.hookArgs\(coreOwner\(id, simId\)\)/);
+    // A core solve's Start reads the cached names and gives its runner run the owner.
+    assert.match(w27, /const hookNames = solveHookNames\(\);/);
+    assert.match(w27, /const owner = hookNames\.length \? coreOwner\(id, simId\) \|\| null : null;/);
+    // Its Stop goes to the runner record (or ends a legacy run's processes): no hook tool.
+    assert.ok(!/stop_solve|run_solve/.test(w27));
     const runner = readFileSync(join(HERE, '..', 'foam-runner.js'), 'utf8');
     assert.ok(!runner.includes('solve_hooks.listening'));
     const live = readFileSync(join(HERE, '..', 'server', 'live-routes.js'), 'utf8');

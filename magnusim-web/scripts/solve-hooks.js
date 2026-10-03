@@ -2,8 +2,9 @@
 /**
  * Which solve hooks some plugin listens to (solve.prepare, solve.parse_line,
  * solve.stop), asked once at boot and again whenever the registry changes. The
- * answer is cached: no start or stop path makes an RPC for it. With nothing
- * listening a solve gets no hook arguments, so its relay loads no plugin code.
+ * answer is cached: no start or stop path makes an RPC for it. A solve's relay
+ * (foam_relay.py: core solves and plugin OpenFOAM cases) gets the names in its
+ * spec; with nothing listening it gets none and loads no plugin code.
  */
 
 const NAME_RE = /^solve\.[a-z][a-z_]{0,40}$/;
@@ -62,31 +63,4 @@ export function coreOwner(projectId, simulationId) {
   const p = String(projectId || '');
   const s = String(simulationId || '');
   return ID_RE.test(p) && ID_RE.test(s) ? `core:${p}/${s}` : '';
-}
-
-/**
- * run_solve.py's hook arguments: none when nothing listens.
- * @param {string} owner
- * @returns {string[]}
- */
-export function hookArgs(owner) {
-  const names = state().names;
-  if (!names.length || !owner) return [];
-  return ['--owner', owner, '--hooks', names.join(',')];
-}
-
-/**
- * stop_solve.py's arguments for solve.stop: only when a plugin listens to it.
- * Probes never get them.
- * @param {{ owner: string, app?: unknown, caseDir?: unknown, nProcs?: unknown }} opts
- * @returns {string[]}
- */
-export function stopHookArgs({ owner, app, caseDir, nProcs }) {
-  if (!owner || !state().names.includes('solve.stop')) return [];
-  const out = ['--owner', owner, '--hooks', 'solve.stop'];
-  if (app && /^[A-Za-z][A-Za-z0-9_]*$/.test(String(app))) out.push('--app', String(app));
-  if (caseDir) out.push('--case-dir', String(caseDir));
-  const n = Number(nProcs);
-  if (Number.isInteger(n) && n >= 1) out.push('--n-procs', String(n));
-  return out;
 }

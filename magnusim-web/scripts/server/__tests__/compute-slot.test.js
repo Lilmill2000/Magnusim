@@ -226,7 +226,7 @@ describe('startSolve claims before its first await (source scan)', () => {
   const src = readFileSync(join(HERE, '..', '..', 'w27-solve.js'), 'utf8');
   const wrapStart = src.indexOf('export async function startSolve(');
   const bodyStart = src.indexOf('async function startSolveBody(opts = {}, slot) {');
-  const bodyEnd = src.indexOf('const STOP_GRACE_MS');
+  const bodyEnd = src.indexOf('export function runRanks(');
   // Code only: comments may say "await".
   const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
   const wrapper = code(src.slice(wrapStart, bodyStart));
@@ -244,26 +244,20 @@ describe('startSolve claims before its first await (source scan)', () => {
     assert.match(wrapper, /code: 'stopped', stopped: true/);
   });
 
-  it('from the stop check to spawnJob there is no await; keep() comes after spawnJob', () => {
+  it('from the stop check to the hand-over to the runner there is no await', () => {
     const iStop = body.indexOf('if (slot.stopRequested())');
-    const iSpawn = body.indexOf('spawnJob({');
-    const iKeep = body.indexOf('slot.keep()');
-    assert.ok(iStop > 0 && iSpawn > iStop && iKeep > iSpawn, `${iStop} ${iSpawn} ${iKeep}`);
-    assert.ok(!/\bawait\b/.test(body.slice(iStop, iSpawn)));
+    const iHand = body.indexOf('return startSolveOnRunner({');
+    assert.ok(iStop > 0 && iHand > iStop, `${iStop} ${iHand}`);
+    assert.ok(!/\bawait\b/.test(body.slice(iStop, iHand)));
     const iHold = body.indexOf('MAGNUSIM_TEST_START_HOLD_MS');
     assert.ok(iHold > 0 && iHold < iStop);
     // The last await before the stop check is the test hold, after every check of the run.
     assert.ok(body.lastIndexOf('await', iStop) > body.indexOf('normalizeSteadySettings('));
-    assert.ok(body.indexOf('persistRun(id, simId, {') > iStop, 'the run is marked running only after the stop check');
-  });
-
-  it("right after spawnJob the claim is the run's: kept, phase running, its token on liveRun", () => {
-    // A claim left `starting` would make the Run panel's Stop a "cancel this start" that stops nothing.
-    const iSpawn = body.indexOf('spawnJob({');
-    const after = body.slice(body.indexOf('slot.keep()', iSpawn));
-    assert.match(after, /^slot\.keep\(\); patchComputeSlot\(slot\.token, \{ phase: 'running' \}\);\s*\n\s*thisRun = liveRun = \{/);
-    assert.match(after.slice(0, after.indexOf('};')), /slot_token: slot\.token,/);
-    assert.equal(body.split('slot.keep()').length, 2, 'kept in one place only');
+    const iMark = body.search(/persistRun\(\s*id,\s*simId,\s*\{/);
+    assert.ok(iMark > iStop && iMark < iHand, 'the run is marked running only after the stop check');
+    // The old run path is gone: no spawn of its own, no claim kept here (the runner keeps it).
+    assert.ok(!body.includes('spawnJob('));
+    assert.ok(!body.includes('slot.keep()'));
   });
 
   it('on the runner: after the plan (its only await) the Stop is read again, then the launch and keep() with no await between', () => {

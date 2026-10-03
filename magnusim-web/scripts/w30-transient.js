@@ -11,9 +11,6 @@
 export const TRANSIENT_LABEL = 'Transient';
 export const STEADY_LABEL = 'Steady-state';
 
-/** Transient runs are long: go parallel from a smaller mesh than steady. */
-export const TRANSIENT_LARGE_MESH_CELLS = 50000;
-
 export function isTransientLabel(v) {
   return /transient/i.test(String(v || ''));
 }

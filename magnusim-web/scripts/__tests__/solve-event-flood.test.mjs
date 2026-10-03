@@ -1,10 +1,10 @@
 // H15 core bug 1, a core solve's side: the job log no longer held the server, but
-// a core solve's own onEvent (w27-solve.js startSolveBody) still cut its output
-// tail to 1 MB on every event, copying the whole megabyte each time. A fast core
-// case (its relay sends about ten events a time step, one per solver line among
-// them) kept the server from answering for the whole solve again, and throttled
-// the solver. Here the real onEvent (coreSolveEvents, with the run's tail and live
-// progress) takes a core relay's events at a fast case's rate, through spawnJob.
+// a core solve's own onEvent (then w27-solve.js startSolveBody) cut its output tail
+// to 1 MB on every event, copying the whole megabyte each time. A fast core case
+// (its relay sends about ten events a time step, one per solver line among them)
+// kept the server from answering for the whole solve again, and throttled the
+// solver. Core solves run on the step-list runner now (IF Item 7): here a fast
+// case's events go through the runner to the 'solve' kind's handler, through spawnJob.
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,7 +17,7 @@ process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 
 const { spawnJob } = await import('../job-runner.js');
 const { WEB_ROOT } = await import('../python-env.js');
-const { RUN_TAIL_CHARS, coreSolveEvents, createRunTail, newProgressState } = await import('../w27-solve.js');
+await import('../w27-solve.js');
 
 const KIND = 'test-solve-flood';
 const ID = `${process.pid}-${Date.now()}`;
@@ -26,7 +26,7 @@ after(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-// One pimpleFoam time step as run_solve.py relays it (ten events): two Courant
+// One pimpleFoam time step as the relay sends it (ten events): two Courant
 // events, the progress event, four residuals and three solver lines (`log`), one line each,
 // flushed; a saved time every 1000 steps. `rate` steps a second.
 const STREAM = join(ROOT, 'core_flood.py');
@@ -63,89 +63,6 @@ for i in range(1, steps + 1):
 emit({"event": "result", "ok": True, "exit_code": 0})
 `,
 );
-
-describe("a core solve's onEvent", () => {
-  it('keeps the event loop free while a fast case floods it, and keeps the run tail and progress', { timeout: 300_000 }, async () => {
-    const steps = 8000; // 2,000 steps a second: about 20,000 events a second for 4 s
-    const seen = { wslStart: false, result: false };
-    const tail = createRunTail();
-    const live = { progress: newProgressState() };
-    const saved = [];
-    const onEvent = coreSolveEvents({ seen, tail, run: () => live, saved: (run) => saved.push(run.progress.saved_times.at(-1)) });
-    let events = 0;
-    let lastEvent = null;
-
-    let last = Date.now();
-    let worst = 0;
-    const timer = setInterval(() => {
-      const now = Date.now();
-      worst = Math.max(worst, now - last);
-      last = now;
-    }, 10);
-    const t0 = Date.now();
-    const code = await new Promise((resolve) => {
-      const { child } = spawnJob({
-        kind: KIND,
-        jobId: `core-${ID}`,
-        script: STREAM,
-        args: [String(steps), '2000'],
-        onEvent: (ev) => {
-          events += 1;
-          lastEvent = ev;
-          onEvent(ev);
-        },
-      });
-      child.on('close', (c) => setImmediate(() => resolve(c)));
-    });
-    clearInterval(timer);
-    worst = Math.max(worst, Date.now() - last);
-    const wall = Date.now() - t0;
-    console.log(`[core flood] ${events} events in ${wall} ms, longest stall ${worst} ms`);
-    assert.equal(code, 0);
-    // The bug: about 30 s with no timer at all on this PC (a 1 MB copy per event).
-    assert.ok(worst < 1500, `the event loop stalled ${worst} ms while the core run flooded`);
-    assert.equal(events, 2 + steps * 10 + steps / 1000 + 1, 'every event reached onEvent');
-
-    // The marks, the live progress and the saved times, as before.
-    assert.deepEqual(seen, { wslStart: true, result: true });
-    assert.equal(live.progress.stage, 'solve');
-    assert.equal(live.progress.series.length + 1, steps, 'every step is in the live progress');
-    assert.equal(live.progress.current.t, steps * 0.001);
-    assert.deepEqual(saved, Array.from({ length: steps / 1000 }, (_, i) => (i + 1)));
-    // The tail: the newest RUN_TAIL_CHARS of the output, ending with the last event.
-    const text = tail.text();
-    assert.equal(text.length, RUN_TAIL_CHARS);
-    assert.ok(text.endsWith(JSON.stringify(lastEvent) + '\n'), text.slice(-200));
-    assert.ok(text.includes('ExecutionTime = 4.00 s  ClockTime = 4 s\n'), 'the last solver line is in the tail');
-  });
-
-  it('startSolveBody hands spawnJob coreSolveEvents, with the run tail', () => {
-    const src = readFileSync(new URL('../w27-solve.js', import.meta.url), 'utf8');
-    const start = src.indexOf('async function startSolveBody(');
-    const body = src.slice(start, src.indexOf('\n}\n', start));
-    assert.ok(body.includes('onEvent: coreSolveEvents({'), "startSolveBody's onEvent is coreSolveEvents");
-    assert.ok(body.includes('tail: runTail,'), 'with the run tail');
-    assert.ok(!/\.slice\(-1024 \* 1024\)/.test(body), 'no per-event 1 MB cut in startSolveBody');
-  });
-});
-
-describe('createRunTail', () => {
-  it('holds exactly the newest characters of the output, solver lines as they came', () => {
-    const max = 10_000;
-    const tail = createRunTail(max);
-    let full = '';
-    for (let i = 1; i <= 5000; i++) {
-      const ev = i % 3 ? { event: 'residual', seq: i, initial: 1 / i } : { event: 'log', line: `line ${i}` };
-      tail.push(ev);
-      full += ev.event === 'log' ? `line ${i}\n` : JSON.stringify(ev) + '\n';
-      if (i % 997 === 0) assert.equal(tail.text(), full.slice(-max), `after ${i} events`);
-    }
-    assert.equal(tail.text(), full.slice(-max));
-    const short = createRunTail(max);
-    short.push({ event: 'log', line: 'only one' });
-    assert.equal(short.text(), 'only one\n');
-  });
-});
 
 // IF Item 7: a core solve on the step-list runner. The same fast case's events go
 // through the runner (its fold, at most four progress frames a second) to the 'solve'

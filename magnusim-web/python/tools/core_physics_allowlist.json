@@ -96,11 +96,6 @@
       "reason": "An example in the doc comment the generator writes into registry.gen.ts (text inside its template, so it counts as code)."
     },
     {
-      "file": "scripts/w27-solve.js",
-      "max_hits": 1,
-      "reason": "The U/p frame-field fallback of the old W27 solve path. Shrinks to 0 when Incompressible Flow solves move onto the shared step-list runner and this path is removed."
-    },
-    {
       "file": "src/plugin-api/index.ts",
       "max_hits": 1,
       "reason": "PANEL_ID_ALIASES: the old panel id panel-incompressible-defaults, so an older plugin's replacePanel still finds the study settings panel."

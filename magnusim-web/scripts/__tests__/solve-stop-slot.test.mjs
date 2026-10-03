@@ -1,7 +1,8 @@
 // H15: Stop of a core solve that is starting or draining, and the pending stop of a
 // click whose Start has not reached the server (stopSolve / startSolve in w27-solve.js).
 // IF Item 7: a run on the step-list runner is stopped through its record (the last block);
-// the blocks before it are the old run path's docs (no runner_job_id), still followed so.
+// the blocks before it are docs an earlier version left running (no runner_job_id): their
+// Stop ends their processes in WSL (wsl-case-watch), never the old stop tool.
 import { after, afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import cp from 'node:child_process';
@@ -35,7 +36,7 @@ const PID = 'proj-a';
 const A = 's-lq2x8k9c-aaaaaa';
 const B = 's-lq2x8k9c-bbbbbb';
 
-/** Every process w27 starts (stop_solve.py and friends) and every case kill. */
+/** Every process w27 starts itself, and every case probe and kill (wsl_case_procs.py). */
 const spawned = [];
 const kills = [];
 
@@ -174,19 +175,20 @@ describe('Stop of the slot holder', () => {
   });
 
   it('a "cancel this start" that reaches a run already started stops it: not "cancelled", the claim reads stopping', () => {
-    seedRunningDoc('run_r');
+    const run = seedRunningDoc('run_r');
     claimComputeSlot('solve', { project_id: PID, run_id: 'run_r' }, { phase: 'running' });
-    // Today's Stop arms a 20 s force-kill timer: fake timers drop it at the end.
-    mock.timers.enable({ apis: ['setTimeout'] });
-    try {
-      const r = stopSolve({ projectId: PID, runId: 'run_r', starting: true });
-      assert.deepEqual([r.status, r.bodyExtra.stopping, r.bodyExtra.cancelled, r.bodyExtra.pending], [200, true, undefined, undefined]);
-      assert.equal(computeSlotHolder().stop_requested, true, 'the Queue title reads (stopping)');
-      const writeNow = spawned.filter((s) => s.includes('stop_solve.py') && !s.includes('--probe') && !s.includes('--force'));
-      assert.equal(writeNow.length, 1, "today's Stop: write the current step");
-    } finally {
-      mock.timers.reset();
-    }
+    const r = stopSolve({ projectId: PID, runId: 'run_r', starting: true });
+    assert.deepEqual([r.status, r.bodyExtra.stopping, r.bodyExtra.cancelled, r.bodyExtra.pending], [200, true, undefined, undefined]);
+    assert.equal(computeSlotHolder().stop_requested, true, 'the Queue title reads (stopping)');
+    // A run with no runner record: its processes in WSL are ended (no relay of this server runs it).
+    assert.deepEqual(kills.filter((k) => k[0] === 'kill'), [['kill', '--wsl-case', 'cfddesk-w27-run_r', '--script', 'solve-run_r.sh']]);
+    assert.deepEqual(spawned, [], 'no stop tool, no other process');
+    const doc = JSON.parse(readFileSync(join(run.dir, 'run.json'), 'utf8'));
+    assert.deepEqual([doc.status, doc.stage, doc.stop_requested], ['running', 'stopping', true], 'running until a probe finds its processes gone');
+    // A second Stop ends them again and says forced.
+    const again = stopSolve({ projectId: PID, runId: 'run_r' });
+    assert.equal(again.bodyExtra.forced, true);
+    assert.equal(kills.filter((k) => k[0] === 'kill').length, 2);
   });
 
   it('while draining (a run the boot check follows): its doc is asked to stop and its WSL processes are killed once now', () => {

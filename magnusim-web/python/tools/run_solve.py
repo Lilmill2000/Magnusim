@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""Stream a WSL OpenFOAM solve as MAGNUSIM_EVENT JSONL (Phase 1 Step 5).
+"""Offline tools of the solve pipeline (no solve: core solves run on the step-list runner).
 
-CLI: tools/run_solve.py --case-dir ... --wsl-case ... --n-procs N --app <program> --run-id ...
-     [--keep-frames all|latest] [--process-names a,b] [--log-parser JSON]
-     [--owner core:<project>/<study> --hooks solve.prepare,solve.parse_line,...]
+CLI: tools/run_solve.py --parse-log PATH [--owner core:<project>/<study> --hooks ...]
+     parse a captured solver log to MAGNUSIM_EVENT JSONL (no WSL)
+     tools/run_solve.py --render-only --case-dir ... --wsl-case ... --app <program>
+     [--n-procs N] [--run-id ...] [--keep-frames all|latest] [--frame-fields a,b] [--render-out PATH]
+     render solve.sh (the script the relay runs) and print or write it (no WSL)
 
-The app, frames kept, process names and log parser come from the analysis's
-launch spec (prepare_run reports it; Node passes it on). ``--hooks`` is given
-only when some plugin listens (cfddesk.wsl.solve_hooks); the solve never waits
-for a hook.
-
-Also supports --parse-log PATH for offline JSONL parsing tests (no WSL).
+A solve itself runs in the relay (cfddesk.wsl.foam_relay), with the app, frames,
+process names and log parser of the analysis's launch spec.
 """
 from __future__ import annotations
 
@@ -30,17 +28,14 @@ from cfddesk.wsl.solve_hooks import HookRunner, hook_names
 from cfddesk.wsl.solve_run import (
     events_from_lines,
     render_solve_script,
-    start_solve,
-    stream_events_to_stdout,
     write_solve_script,
 )
 
 
 def _hook_runner(args: argparse.Namespace, case_dir: Path | None = None) -> HookRunner | None:
-    """Solve hooks for this run, started (output isolated, plugins loading), or None.
+    """Solve hooks for a parsed log, started (output isolated, plugins loading), or None.
 
-    Only when Node passed hook names (some plugin listens) and a valid owner.
-    The solve never waits for them: solve.prepare is a notice for core runs.
+    Only when hook names were passed (some plugin listens) and a valid owner.
     """
     names = hook_names(args.hooks)
     if not names:
@@ -126,15 +121,13 @@ def _render_only(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Run OpenFOAM solve via WSL; stream JSONL events.")
+    p = argparse.ArgumentParser(description="Parse a solver log to JSONL events, or render solve.sh (no WSL).")
     p.add_argument("--case-dir", type=Path, help="Windows run case directory (0/ constant/ system/)")
     p.add_argument("--wsl-case", default=None, help="WSL case id, e.g. cfddesk-w27-run-1")
     p.add_argument("--n-procs", type=int, default=1)
     p.add_argument("--app", default="", help="Program to run: the launch spec's app (a registered solver application)")
     p.add_argument("--keep-frames", default="latest", choices=("all", "latest"))
     p.add_argument("--frame-fields", default=",".join(LEGACY_FRAME_FIELDS), help="Comma-separated fields that mark a written result frame")
-    p.add_argument("--process-names", default="", help="Comma-separated solver process names (default: the app)")
-    p.add_argument("--log-parser", default="", help="Launch spec log_parser as JSON {module, factory, path}")
     p.add_argument("--run-id", default="run-1")
     p.add_argument("--parse-log", type=Path, default=None, help="Offline: parse a captured log to JSONL")
     p.add_argument("--render-only", action="store_true", help="Render solve.sh and exit (no WSL)")
@@ -146,9 +139,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.parse_log is not None:
         return _parse_log(args.parse_log, _hook_runner(args))
 
+    if not args.render_only:
+        print(
+            json.dumps({"ok": False, "error": "--parse-log or --render-only required: a solve runs on the step-list runner"}),
+            flush=True,
+        )
+        return 2
+
     if args.case_dir is None or args.wsl_case is None:
         print(
-            json.dumps({"ok": False, "error": "--case-dir and --wsl-case required (unless --parse-log)"}),
+            json.dumps({"ok": False, "error": "--case-dir and --wsl-case required with --render-only"}),
             flush=True,
         )
         return 2
@@ -157,42 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": False, "error": "--app required (the analysis launch spec's app)"}), flush=True)
         return 2
 
-    if args.render_only:
-        return _render_only(args)
-
-    case_dir = Path(args.case_dir).resolve()
-    if not (case_dir / "constant" / "polyMesh").is_dir() and not (case_dir / "system").is_dir():
-        # soft check: allow missing polyMesh only if system exists (error will come from bash)
-        pass
-
-    from cfddesk.registry.contract import APP_NAME_RE, load_log_parser
-
-    if not APP_NAME_RE.match(args.app or ""):
-        print(json.dumps({"ok": False, "error": f"not a plain program name: {args.app!r}"}), flush=True)
-        return 2
-    names = tuple(n.strip() for n in args.process_names.split(",") if n.strip()) or (args.app,)
-    parser = load_log_parser(json.loads(args.log_parser) if args.log_parser else None)
-    # Started before the solve and never waited for.
-    runner = _hook_runner(args, case_dir)
-    proc = start_solve(
-        case_dir,
-        wsl_case_id=args.wsl_case,
-        n_procs=args.n_procs,
-        app=args.app,
-        run_id=args.run_id,
-        keep_frames=args.keep_frames,
-        process_names=names,
-        frame_fields=_frame_fields(args),
-    )
-    if runner is None:
-        rc, parser = stream_events_to_stdout(proc, parser)
-    else:
-        rc, parser = stream_events_to_stdout(proc, parser, on_line=runner.feed, out=runner.events)
-        runner.close(join=2.0)
-    parser.snapshot()
-    # Ensure a trailing result if the template somehow did not emit one
-    # (stream already printed events; only add if missing — check via stage)
-    return rc
+    return _render_only(args)
 
 
 if __name__ == "__main__":

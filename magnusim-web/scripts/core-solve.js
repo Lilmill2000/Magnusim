@@ -36,7 +36,7 @@ import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { FOAM_TEXT, finishFoam, prepareFromJob, registerStepRunKind, runFoamSteps, stepRunRecord } from './foam-runner.js';
 import { createFoamRecord, listFoamRecords, newFoamJobId } from './foam-store.js';
-import { listFoamTimeDirs } from './project-layout.js';
+import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from './project-layout.js';
 import { persistRun, runFolderOf } from './study-io.js';
 import { scheduleComputeQueueKick } from './server/compute-queue.ts';
 
@@ -566,7 +566,7 @@ export function launchCoreSolve(p) {
   const prepare = prepareFromJob(/** @type {any} */ (p.prepareRow), p.prepareParams, { jobId: id, caseDir: p.caseDir });
   const launch = p.launch || {};
   const names = Array.isArray(launch.process_names) && launch.process_names.length ? launch.process_names.map(String) : [p.app];
-  const frames = Array.isArray(launch.frame_fields) && launch.frame_fields.length ? launch.frame_fields.map(String) : ['U', 'p'];
+  const frames = Array.isArray(launch.frame_fields) && launch.frame_fields.length ? launch.frame_fields.map(String) : [...LEGACY_FRAME_FIELDS];
   const solver = {
     app: p.app,
     keep_frames: String(launch.keep_frames || 'latest'),

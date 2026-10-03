@@ -265,13 +265,6 @@ def test_run_solve_render_only_writes_the_given_frame_fields(monkeypatch: pytest
     assert 'FRAME_FIELDS="U p"' in out.read_text(encoding="utf-8")
 
 
-def test_stop_solve_cli_has_probe():
-    path = Path(__file__).resolve().parents[2] / "tools" / "stop_solve.py"
-    text = path.read_text(encoding="utf-8")
-    assert "--probe" in text
-    assert "solve_is_live" in text
-
-
 def test_start_solve_kills_leftover_wsl_solver():
     src = inspect.getsource(start_solve)
     assert "solve_is_live" in src
