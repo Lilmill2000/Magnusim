@@ -7,6 +7,7 @@ import { startHost } from './support/host-server.mjs';
 import {
   computeQueue,
   createRun,
+  foamRecords,
   getJson,
   meshRow,
   openRunPanel,
@@ -63,13 +64,23 @@ test('gate:h15-core-drain: core Stop while starting, draining and after a relay 
       return rid;
     };
     const panelOf = (runId) => openRunPanel(page, { base, projectId: A, runId });
+    // This attempt of a run: its newest runner record (status/stage), or 'none'.
+    const attempt = (runId) => {
+      const recs = foamRecords(projects).filter((r) => r && r.kind === 'solve' && String(r.run_id) === String(runId));
+      recs.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      return recs[0] ? `${recs[0].status}/${recs[0].stage}` : 'none';
+    };
+    // Solving now: this attempt's runner record is at its solve stage (solve.sh runs), and
+    // the run shows it. A run started again must not pass on its last attempt's progress.
     const solving = async (runId, timeout = 600_000) => {
       await expect
         .poll(
           async () => {
             const r = await row(runId);
             if (/done|failed|stopped/.test(r.status || '')) return `ended ${r.status}: ${r.error || r.note || ''}`;
-            return r.stage === 'solve' || Number(r.iteration || 0) > 0 ? 'solving' : `${r.status}/${r.stage}`;
+            const now = attempt(runId);
+            if (now !== 'running/solve') return `record ${now}`;
+            return r.stage === 'solve' ? 'solving' : `${r.status}/${r.stage}`;
           },
           { timeout, intervals: [2_000] },
         )
@@ -174,7 +185,12 @@ test('gate:h15-core-drain: core Stop while starting, draining and after a relay 
     expect(wslProcessesUnder(caseCopy(R))).toEqual([]);
     await expect.poll(async () => (await busy())?.run_id || (await busy())?.kind || 'idle', { timeout: 900_000, intervals: [3_000] }).toBe(R);
     await solving(R);
-    expect(solveScripts(R)).toBe(1);
+    {
+      const n = solveScripts(R);
+      const ps = n === 1 ? '' : String(wslBash('ps -eo pid,ppid,args | grep -E "solve|Foam" | grep -v grep', [], 30_000).stdout || '');
+      expect(n, `one solve script for ${solveScriptId(R)}; WSL:
+${ps}`).toBe(1);
+    }
     panel = await panelOf(R);
     await panel.locator('[data-run-stop="1"]').click();
     await sleep(1_000);
