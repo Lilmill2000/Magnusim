@@ -4,11 +4,10 @@ import { projectIdOrActive } from './request-scope.js';
  * Boundary conditions — filesystem persistence.
  * POST/GET /api/bcs → projects/<id>/boundary_conditions.json
  *
- * Types: Velocity inlet, Velocity outlet, Pressure.
- * Pressure is a face pressure value — not an inlet/outlet direction.
- * Velocity: Flow rate (volumetric / mass) or Fixed (normal-to-face or XYZ vector).
- * apply_per_face: each assigned face gets the same value independently
- * (two faces at 5 ft³/min → 10 ft³/min total). Do not split one value across faces.
+ * Types: the registered BC families (registry kind bc_family). A record's
+ * bc_type is its family's record_type; its other fields are the family's
+ * (fields schema, seeded from defaults[metric|imperial]) plus any field a
+ * plugin saved that the core does not know, which is kept as saved.
  */
 import { randomBytes } from 'node:crypto';
 import {
@@ -37,6 +36,8 @@ import {
 import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
 import { defaultUnits } from './prefs.js';
+import { bcFamilyFor, bcRecordTypes, canonicalBcType } from './registry-defaults.js';
+import { preferredUnit } from '../src/plugin-ui/units.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -44,25 +45,8 @@ const _projectsRoot = envGet('PROJECTS_ROOT');
 const PROJECTS_ROOT = _projectsRoot ? resolve(_projectsRoot) : join(ROOT, 'projects');
 const ACTIVE_PATH = join(PROJECTS_ROOT, 'active.json');
 
-export const BC_TYPES = [
-  'Velocity inlet',
-  'Velocity outlet',
-  'Pressure',
-  'Wall',
-];
-
 /** Wall treatment: no-slip (U = 0 at the wall) or slip (no shear, zero normal velocity). */
 export const WALL_TYPES = ['No-slip', 'Slip'];
-
-const PRESSURE_ALIASES = new Set(['Pressure', 'Pressure inlet', 'Pressure outlet']);
-const WALL_ALIASES = new Set(['Wall', 'Slip wall', 'No-slip wall']);
-
-function canonicalBcType(raw) {
-  const t = String(raw || '').trim();
-  if (PRESSURE_ALIASES.has(t)) return 'Pressure';
-  if (WALL_ALIASES.has(t)) return 'Wall';
-  return t;
-}
 
 function canonicalWallType(raw, fallback) {
   const t = String(raw || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
@@ -196,14 +180,6 @@ function normalizeFaces(raw) {
   return list.map(normalizeFace).filter(Boolean);
 }
 
-function isVelocityType(t) {
-  return String(t || '').startsWith('Velocity');
-}
-
-function isWallType(t) {
-  return String(t || '') === 'Wall';
-}
-
 function nextName(list, bcType, simId, geomId) {
   let n = 1;
   const names = new Set(
@@ -250,16 +226,164 @@ function dedupeStudyBcs(list) {
   return out;
 }
 
-/** Units for a new BC value: the project's own, else the Settings default. */
-function defaultVelocityUnit(velocityType, flowRateType, units) {
-  const imperial = /imperial/i.test(String(units || defaultUnits()));
-  if (velocityType === 'Fixed') return imperial ? 'ft/s' : 'm/s';
-  if (flowRateType === 'Mass flow') return imperial ? 'lb/s' : 'kg/s';
-  return imperial ? 'ft³/min' : 'm³/s';
+/**
+ * Keys the core owns on a BC record (set by buildBc / persistBcsDoc) or that
+ * only travel on a request or a folder read. Every other key of a record is a
+ * field of its BC and is kept as saved.
+ */
+const CORE_BC_KEYS = new Set([
+  'id',
+  'name',
+  'bc_type',
+  'type',
+  'faces',
+  'face',
+  'assigned_faces',
+  'saved',
+  'created_at',
+  'updated_at',
+  'persistence',
+  'geometry_id',
+  'simulation_id',
+  'project_id',
+  'boundary_conditions_json',
+  'defaults',
+  'defaults_by_simulation',
+  'bcs',
+  'boundary_conditions',
+  'boundary_conditions_all',
+  'delete',
+  'action',
+  'dir',
+  'folder',
+  'kind',
+]);
+
+function bcFieldsOf(rec) {
+  const out = {};
+  for (const [k, v] of Object.entries(rec || {})) {
+    if (!CORE_BC_KEYS.has(k)) out[k] = v;
+  }
+  return out;
 }
 
-function defaultPressureUnit(units) {
-  return /imperial/i.test(String(units || defaultUnits())) ? 'psi' : 'Pa';
+function isBlank(v) {
+  return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+}
+
+function copyValue(v) {
+  return Array.isArray(v) ? v.slice() : v && typeof v === 'object' ? { ...v } : v;
+}
+
+/** The fields schema properties of a BC family ({} when it declares none). */
+function familyProps(family) {
+  const props = family && family.fields && family.fields.properties;
+  return props && typeof props === 'object' ? props : {};
+}
+
+/** The keys a family owns: its schema fields and its seed keys. */
+function familyKeys(family) {
+  const d = (family && family.defaults) || {};
+  return new Set([...Object.keys(familyProps(family)), ...Object.keys(d.metric || {}), ...Object.keys(d.imperial || {})]);
+}
+
+/** A choice as one of its choices: exact, else ignoring case, spaces, '_' and '-', else the field default. */
+function normalizeChoice(prop, v) {
+  const choices = prop.enum;
+  const s = typeof v === 'string' ? v.trim() : v;
+  if (choices.includes(s)) return s;
+  const key = (x) => String(x).toLowerCase().replace(/[\s_-]+/g, '');
+  const hit = choices.find((c) => key(c) === key(s));
+  if (hit !== undefined) return hit;
+  return 'default' in prop ? copyValue(prop.default) : choices[0];
+}
+
+/** A value made to its schema field's type (fields the schema does not type are left as saved). */
+function normalizeField(prop, v) {
+  if (!prop || typeof prop !== 'object') return v;
+  if (Array.isArray(prop.enum) && prop.enum.length) return normalizeChoice(prop, v);
+  if (prop.type === 'number' || prop.type === 'integer') return Number(v);
+  if (prop.type === 'string') return String(v).trim();
+  if (prop.type === 'boolean') return v === true || v === 'true';
+  if (prop.type === 'array') {
+    if (!Array.isArray(v)) return copyValue(prop.default);
+    const numeric = prop.items && (prop.items.type === 'number' || prop.items.type === 'integer');
+    const n = Number.isInteger(prop.minItems) && prop.minItems === prop.maxItems ? prop.minItems : v.length;
+    const out = [];
+    for (let i = 0; i < n; i += 1) out.push(numeric ? Number(v[i]) || 0 : v[i]);
+    return out;
+  }
+  return v;
+}
+
+/** True when every key of a family values row's `when` has that value on the record. */
+function valuesRowMatches(row, rec) {
+  const when = (row && row.when) || {};
+  return Object.entries(when).every(([k, want]) => rec[k] === want);
+}
+
+/**
+ * The unit a BC value field starts in: the project's unit system's unit for
+ * the quantity of the family values row the record matches (a volumetric flow
+ * in ft³/min on an Imperial project), else the family's seed.
+ */
+function seedUnit(family, rec, unitField, imperial, seed) {
+  for (const row of Array.isArray(family.values) ? family.values : []) {
+    if (!row || row.unit_field !== unitField || !valuesRowMatches(row, rec)) continue;
+    const unit = row.quantity ? preferredUnit(row.quantity, imperial) : '';
+    if (unit) return unit;
+    break;
+  }
+  if (!isBlank(seed[unitField])) return seed[unitField];
+  const prop = familyProps(family)[unitField];
+  return prop && 'default' in prop ? prop.default : undefined;
+}
+
+/**
+ * A BC's fields, from its family (registry bc_family row): every field the
+ * record carries (the saved record's, then the body's) is kept; a new BC
+ * starts from the family's seed for the project's unit system
+ * (defaults[metric|imperial]); a field a saved record lacks reads as its
+ * schema default; schema fields are normalized to their type (a choice not
+ * among its choices becomes the field default).
+ */
+function familyFields(family, existing, body, units) {
+  const imperial = /imperial/i.test(String(units || defaultUnits()));
+  const d = (family && family.defaults) || {};
+  const seed = (imperial ? d.imperial || d.metric : d.metric || d.imperial) || {};
+  const props = familyProps(family);
+  const carried = bcFieldsOf(existing);
+  const prevFamily = existing ? bcFamilyFor(existing.bc_type) : null;
+  if (prevFamily && family && prevFamily.key !== family.key) {
+    // A BC whose type changed drops the fields of its old family the new one lacks.
+    const mine = familyKeys(family);
+    for (const k of familyKeys(prevFamily)) if (!mine.has(k)) delete carried[k];
+  }
+  const out = { ...carried, ...bcFieldsOf(body) };
+  const unitFields = new Set(
+    (Array.isArray(family && family.values) ? family.values : []).map((r) => r && r.unit_field).filter(Boolean)
+  );
+  for (const [k, v] of Object.entries(seed)) {
+    if (unitFields.has(k) || !isBlank(out[k])) continue;
+    if (existing && k in props) continue;
+    out[k] = copyValue(v);
+  }
+  for (const [k, prop] of Object.entries(props)) {
+    if (unitFields.has(k) || !isBlank(out[k])) continue;
+    if (prop && typeof prop === 'object' && 'default' in prop) out[k] = copyValue(prop.default);
+  }
+  for (const [k, prop] of Object.entries(props)) {
+    if (!unitFields.has(k) && k in out) out[k] = normalizeField(prop, out[k]);
+  }
+  for (const k of unitFields) {
+    if (isBlank(out[k])) {
+      const unit = seedUnit(family, out, k, imperial, seed);
+      if (unit !== undefined) out[k] = unit;
+    } else {
+      out[k] = String(out[k]).trim();
+    }
+  }
+  return out;
 }
 
 function buildBc(body, list, units) {
@@ -276,11 +400,12 @@ function buildBc(body, list, units) {
       return false;
     }) || null;
   const bcType = canonicalBcType(body.bc_type || body.type || (existing && existing.bc_type) || '');
-  if (!BC_TYPES.includes(bcType)) {
+  const family = bcFamilyFor(bcType);
+  if (!family) {
     return {
       ok: false,
       status: 400,
-      body: { error: 'Unsupported boundary condition type', got: bcType, allowed: BC_TYPES },
+      body: { error: 'Unsupported boundary condition type', got: bcType, allowed: bcRecordTypes() },
     };
   }
   const name = String(body.name || (existing && existing.name) || nextName(list, bcType, simId, geomId)).trim();
@@ -301,34 +426,8 @@ function buildBc(body, list, units) {
     persistence: 'filesystem',
     geometry_id: body.geometry_id || (existing && existing.geometry_id) || null,
     simulation_id: simId || (existing && existing.simulation_id) || null,
+    ...familyFields(family, existing, body, units),
   };
-  if (isVelocityType(bcType)) {
-    const velocityType = String(body.velocity_type || (existing && existing.velocity_type) || 'Fixed').trim();
-    const flowRateType = String(
-      body.flow_rate_type || (existing && existing.flow_rate_type) || 'Volumetric flow'
-    ).trim();
-    rec.velocity_type = velocityType === 'Flow rate' ? 'Flow rate' : 'Fixed';
-    rec.flow_rate_type = flowRateType === 'Mass flow' ? 'Mass flow' : 'Volumetric flow';
-    const rawVal = body.value ?? (existing && existing.value);
-    rec.value = rawVal == null || rawVal === '' ? (rec.velocity_type === 'Fixed' ? 5 : 0.01) : Number(rawVal);
-    rec.unit = String(
-      body.unit || (existing && existing.unit) || defaultVelocityUnit(rec.velocity_type, rec.flow_rate_type, units)
-    ).trim();
-    rec.direction = String(body.direction || (existing && existing.direction) || 'Normal to face').trim();
-    if (rec.direction !== 'Vector') rec.direction = 'Normal to face';
-    const vec = body.vector || (existing && existing.vector) || [0, 0, 1];
-    rec.vector = [Number(vec[0]) || 0, Number(vec[1]) || 0, Number(vec[2]) || 0];
-    rec.apply_per_face = true;
-  } else if (isWallType(bcType)) {
-    rec.wall_type = canonicalWallType(body.wall_type ?? (existing && existing.wall_type), 'No-slip');
-  } else {
-    rec.pressure_type = String(
-      body.pressure_type || (existing && existing.pressure_type) || 'Fixed value'
-    ).trim();
-    const rawVal = body.value ?? (existing && existing.value);
-    rec.value = rawVal == null || rawVal === '' ? 0 : Number(rawVal);
-    rec.unit = String(body.unit || (existing && existing.unit) || defaultPressureUnit(units)).trim() || defaultPressureUnit(units);
-  }
   return { ok: true, bc: rec };
 }
 
@@ -647,5 +746,8 @@ export async function handleW19Api(req, res, u, parts, helpers) {
 export const W19_META = {
   increment: 'W19',
   projects_root: PROJECTS_ROOT,
-  types: BC_TYPES,
+  /** The registered BC record types (live registry). */
+  get types() {
+    return bcRecordTypes();
+  },
 };

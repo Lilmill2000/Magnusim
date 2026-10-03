@@ -6,7 +6,9 @@ import { startHost } from './support/host-server.mjs';
 //   three advanced fields its run never got; cfMesh showed none of the fields
 //   its run used), and says when cfMesh hands the mesh to Standard;
 // - a boundary condition keeps every field it was saved with (the save kept only
-//   ten Incompressible Flow fields, so another analysis's BC settings were lost).
+//   ten Incompressible Flow fields, so another analysis's BC settings were lost),
+//   also when a units switch re-saves it through /api/bcs (that route rebuilt the
+//   record from the fields it knew and dropped the rest).
 // Its own server (own projects copy), so the shared sample project is untouched.
 const FIXTURE = 'sample-project-steady-state-e2e';
 const SIM = 'sim_1';
@@ -120,4 +122,55 @@ test('a boundary condition keeps fields the core does not know', async ({ page, 
   await page.locator('#panel-bcs-hub .cfd-island [data-open-bc="bc-hot-wall"]').click();
   await expect(editor.getByLabel('Wall type')).toHaveValue('Slip');
   expect((await hotWall()).heat_flux_W_m2).toBe(120.5);
+});
+
+test("a units switch keeps a BC's fields the core does not know", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const bcsNow = async () =>
+    (await (await request.get(`${host.base}/api/bcs?project_id=${FIXTURE}&simulation_id=${SIM}`)).json()).boundary_conditions || [];
+  const warmOutlet = async () => (await bcsNow()).find((b) => b.id === 'bc-warm-outlet') || {};
+  const setUnits = (units) => request.post(`${host.base}/api/project/update`, { data: { project_id: FIXTURE, units } });
+
+  // A pressure BC of 1 psi, entered in Pa, with a field another analysis would add;
+  // saved the way the page saves BCs.
+  const outlet = {
+    id: 'bc-warm-outlet',
+    name: 'Warm outlet',
+    bc_type: 'Pressure',
+    pressure_type: 'Fixed value',
+    value: 6894.757293168,
+    unit: 'Pa',
+    heat_flux_W_m2: 120.5,
+    faces: [],
+    simulation_id: SIM,
+    project_id: FIXTURE,
+  };
+  const saved = await request.post(`${host.base}/api/worker`, {
+    data: {
+      method: 'bcs.set',
+      params: { project_id: FIXTURE, sim_id: SIM, body: { boundary_conditions: [...(await bcsNow()), outlet], simulation_id: SIM } },
+    },
+  });
+  expect(saved.ok(), await saved.text()).toBe(true);
+  expect((await warmOutlet()).unit).toBe('Pa');
+  expect((await warmOutlet()).heat_flux_W_m2).toBe(120.5);
+
+  // The project switches to Imperial: opening it converts its BC values to psi and
+  // re-saves them through /api/bcs (persistConvertedBcs).
+  const switched = await setUnits('Imperial');
+  expect(switched.ok(), await switched.text()).toBe(true);
+  try {
+    const posted = page.waitForRequest(
+      (r) => r.method() === 'POST' && /\/api\/bcs(\?|$)/.test(r.url()) && (r.postData() || '').includes('bc-warm-outlet'),
+      { timeout: 90_000 }
+    );
+    await openProject(page);
+    await posted;
+    await expect.poll(async () => (await warmOutlet()).unit, { timeout: 30_000 }).toBe('psi');
+    const after = await warmOutlet();
+    expect(Number(after.value)).toBeCloseTo(1, 3);
+    expect(after.heat_flux_W_m2).toBe(120.5);
+  } finally {
+    await setUnits('Metric');
+  }
 });

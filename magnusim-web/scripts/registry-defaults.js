@@ -293,6 +293,53 @@ export function pluginLoaded(key) {
   return _live.plugins.find((p) => p && String(p.key) === want) || null;
 }
 
+/**
+ * The boundary conditions the user can pick: the registered BC families
+ * (registry kind bc_family; { key, label, record_type, aliases, defaults,
+ * values, fields, ... }), from the plugins that register them.
+ * @returns {Array<Record<string, any>>}
+ */
+export function bcFamilies() {
+  return _rows('bc_family').filter((r) => r && typeof r === 'object' && r.record_type);
+}
+
+/** The bc_type a saved BC record of each family carries ("Velocity inlet", "Wall", ...). */
+export function bcRecordTypes() {
+  return bcFamilies().map((r) => String(r.record_type));
+}
+
+/** A bc_type compared without case or spaces ("pressure Outlet" = "Pressure outlet"). */
+function _bcTypeText(raw) {
+  return String(raw || '').replace(/\s+/g, '').toLowerCase();
+}
+
+/**
+ * The BC family whose record_type or one of its aliases is `type`, ignoring
+ * case and spaces (the worker's bc_family_for rule), or null.
+ * @param {unknown} type
+ * @returns {Record<string, any> | null}
+ */
+export function bcFamilyFor(type) {
+  const want = _bcTypeText(type);
+  if (!want) return null;
+  return (
+    bcFamilies().find((f) =>
+      [f.record_type, ...(Array.isArray(f.aliases) ? f.aliases : [])].some((n) => _bcTypeText(n) === want)
+    ) || null
+  );
+}
+
+/**
+ * The bc_type a record is saved under: its family's record_type ("Pressure
+ * outlet" is stored as "Pressure"), else the text as given (trimmed).
+ * @param {unknown} raw
+ */
+export function canonicalBcType(raw) {
+  const t = String(raw || '').trim();
+  const fam = bcFamilyFor(t);
+  return fam ? String(fam.record_type) : t;
+}
+
 export function mesherByKey(key) {
   const want = String(key || '');
   return mesherEntries().find((r) => r && String(r.key) === want) || null;
