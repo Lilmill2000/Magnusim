@@ -6,8 +6,6 @@ September 2026 readiness audit. This list preserves the intended work.
 - **Static structural simulation:** add the analysis definition, material model,
   boundary conditions, mesher/solver integration, and result controls before
   exposing it in the analysis picker.
-- **Water preset:** verify the supported incompressible material workflow and
-  its unit conversions, then restore the preset in material pickers.
 - **Virtual thermocouple:** implement temperature-capable analysis and monitor
   output before restoring the point-data monitor option.
 - **Energy (temperature) and passive species:** removed from the study panel in
@@ -33,11 +31,6 @@ September 2026 readiness audit. This list preserves the intended work.
   Workspace files are read whole and sent again on every open, and the CAD
   kernel is 20 MB: stream them, let the browser revalidate them, and serve
   precompressed copies (G9).
-
-- **Plugin e2e in the default suite (G0):** a bundled plugin's own e2e specs
-  (`bundled-plugins/<key>/e2e/`) run neither with the core suite nor in CI,
-  because `playwright.config.js` reads only `e2e/`. To add: load them with the
-  core specs, locally and in CI.
 
 - **Mesher plugins with their own engine:** a mesher plugin can register, but
   generating a mesh with it answers 400 “has no run path in this version”
