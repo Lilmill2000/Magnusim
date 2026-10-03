@@ -463,7 +463,7 @@
           "csv": "mass_kg_s"
         }
       ],
-      "live_metrics": null,
+      "live_metrics": [],
       "ui": {
         "study_settings": "incompressible_flow.study",
         "run_settings": "incompressible_flow.run"
@@ -1027,7 +1027,20 @@
           "csv": "mass_kg_s"
         }
       ],
-      "live_metrics": null,
+      "live_metrics": [
+        {
+          "key": "delta_t",
+          "label": "\u0394t",
+          "format": "time",
+          "max_key": ""
+        },
+        {
+          "key": "co_mean",
+          "label": "Co",
+          "format": "sig2",
+          "max_key": "co_max"
+        }
+      ],
       "ui": {
         "study_settings": "incompressible_flow.study",
         "run_settings": "incompressible_flow.run"
@@ -2964,7 +2977,7 @@
       ],
       "description": "Steady-state and transient incompressible flow of one fluid (simpleFoam, pimpleFoam).",
       "source": "bundled",
-      "api_version": "1.4",
+      "api_version": "1.5",
       "overrides": [],
       "tier": "bundled",
       "required": true,

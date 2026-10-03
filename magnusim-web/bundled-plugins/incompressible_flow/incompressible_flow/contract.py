@@ -67,6 +67,24 @@ LOG_PARSER = LogParserRef(
 # run panels' settings slots.
 UI = {"study_settings": "incompressible_flow.study", "run_settings": "incompressible_flow.run"}
 
+# How a run is launched (API 1.5): its case is written by this plugin's own job
+# (incompressible_flow/jobs/write_run_case.py, registered in plugin.py), and a
+# mesh with fewer cells than this runs serial (the rule before 1.5).
+WRITE_RUN_CASE_JOB = "incompressible_flow.write_run_case"
+SERIAL_BELOW_CELLS = {"steady": 200_000, "transient": 50_000}
+
+# The Run panel's progress line after the time of a transient run (API 1.5):
+# the time step, and the mean Courant number with its maximum. A steady run
+# shows none.
+LIVE_METRICS: tuple[dict, ...] = (
+    {"key": "delta_t", "label": "Δt", "format": "time"},
+    {"key": "co_mean", "label": "Co", "format": "sig2", "max_key": "co_max"},
+)
+
+
+def live_metrics(td: str) -> tuple[dict, ...]:
+    return LIVE_METRICS if td == "transient" else ()
+
 TURBULENCE_LABELS = {
     "laminar": "Laminar",
     "kEpsilon": "k-epsilon",

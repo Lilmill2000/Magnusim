@@ -7,7 +7,10 @@ it imports only ``magnusim_sdk`` and ``cfddesk.registry``.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+from cfddesk.registry.jobs import JobKind
 
 from incompressible_flow.analyses import build_incompressible_steady, build_incompressible_transient
 from incompressible_flow.bcs import register_bcs
@@ -19,6 +22,19 @@ KEY = "incompressible_flow"
 
 
 def register(hub: Any) -> None:
+    # The prepare step of this plugin's runs (LaunchSpec.prepare_job, API 1.5): it
+    # writes a run's case into the run's own case folder, on the core's Python.
+    hub.register_job(
+        JobKind(
+            "incompressible_flow.write_run_case",
+            "incompressible_flow/jobs/write_run_case.py",
+            "study",
+            ("run_id", "mesh_id", "time_dependency", "n_procs", "transient"),
+            python="core",
+        ),
+        plugin=KEY,
+        package_dir=Path(__file__).resolve().parent,
+    )
     register_bcs(hub, KEY)
     hub.registry("material").register(build_newtonian_incompressible(), plugin=KEY)
     monitors = hub.registry("monitor")

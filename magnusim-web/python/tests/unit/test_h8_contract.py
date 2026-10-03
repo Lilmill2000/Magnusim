@@ -50,13 +50,14 @@ def test_launch_spec_refuses_what_solve_sh_cannot_run():
     with pytest.raises(ContractError, match="not a registered solver app"):
         contract.launch_spec(unregistered, solvers)
     with pytest.raises(ContractError, match="not registered"):
-        contract.launch_spec(replace(base, key="x_nosolver", default_solver="nope"), solvers)
+        contract.launch_spec(replace(base, key="x_nosolver", default_solver="nope", launch=None), solvers)
 
 
 def test_kinematic_fields_in_the_contract():
     """API 1.4: an analysis may say which fields its cases store divided by density."""
     solvers = get_registry("solver")
-    base = _analysis("incompressible_steady")
+    # launch=None: the core's own launch spec (the default analysis declares its own, API 1.5).
+    base = replace(_analysis("incompressible_steady"), launch=None)
     rows = {r["key"]: r for r in get_registry("analysis").describe()}
     # The default analysis declares its own: p is stored divided by rho.
     assert rows["incompressible_steady"]["kinematic_fields"] == ["p"]
@@ -76,7 +77,7 @@ def test_kinematic_fields_in_the_contract():
 @pytest.mark.parametrize("bad", ["", "1p", "p__x", "p-x", "a" * 65, "p q"])
 def test_a_bad_kinematic_field_name_is_a_contract_error(bad: str):
     solvers = get_registry("solver")
-    spec = replace(_analysis("incompressible_steady"), key="x_bad_kin", kinematic_fields=("p", bad))
+    spec = replace(_analysis("incompressible_steady"), key="x_bad_kin", kinematic_fields=("p", bad), launch=None)
     with pytest.raises(ContractError, match="not a field name"):
         contract.kinematic_fields(spec)
     with pytest.raises(ContractError, match="not a field name"):

@@ -379,6 +379,40 @@ def _write_case_transient(ctx: CaseContext) -> dict:
     return _write_web_solve_case(ctx)
 
 
+def _launch(td: str) -> Any:
+    """How a run is launched (the contract's ``launch`` hook): the run's solver
+    (simpleFoam or pimpleFoam) as its registered SolverApp says, every frame of
+    a transient run and the latest of a steady one, and (API 1.5) the serial
+    threshold and this plugin's own case-writing job."""
+    from cfddesk.registry.contract import ContractError, LaunchSpec
+    from cfddesk.registry.discovery import get_registry
+
+    from . import contract as ic
+
+    default = "pimpleFoam" if td == "transient" else "simpleFoam"
+
+    def launch(solver_key: str | None = None, **_ignored: Any) -> LaunchSpec:
+        key = str(solver_key or default)
+        solvers = get_registry("solver")
+        if key not in set(solvers.keys()):
+            raise ContractError(f"solver {key!r} is not registered")
+        app = solvers.get(key)
+        return LaunchSpec(
+            app=str(app.application),
+            keep_frames="all" if td == "transient" else "latest",
+            process_names=(str(app.application),),
+            stop_strategy=str(app.stop_strategy),
+            parallel=str(app.parallel) == "mpirun",
+            log_parser=ic.LOG_PARSER,
+            frame_fields=("U", "p"),
+            kinematic_fields=KINEMATIC_FIELDS,
+            serial_below_cells=ic.SERIAL_BELOW_CELLS[td],
+            prepare_job=ic.WRITE_RUN_CASE_JOB,
+        )
+
+    return launch
+
+
 def _contract_fields(td: str, *, key: str, label: str) -> dict:
     """Contract 1.1 hooks (incompressible_flow.contract)."""
     from . import contract as ic
@@ -396,6 +430,8 @@ def _contract_fields(td: str, *, key: str, label: str) -> dict:
         "validate_ready": ic.validate_ready,
         "run_model": ic.TRANSIENT_RUN_MODEL if td == "transient" else ic.STEADY_RUN_MODEL,
         "log_parser": ic.LOG_PARSER,
+        "launch": _launch(td),
+        "live_metrics": ic.live_metrics(td),
         "plan_case": _plan_case,
         "run_monitors": run_monitors,
         "frame_fields": ("U", "p"),
