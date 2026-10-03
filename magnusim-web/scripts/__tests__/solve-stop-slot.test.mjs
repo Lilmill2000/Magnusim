@@ -1,5 +1,7 @@
 // H15: Stop of a core solve that is starting or draining, and the pending stop of a
 // click whose Start has not reached the server (stopSolve / startSolve in w27-solve.js).
+// IF Item 7: a run on the step-list runner is stopped through its record (the last block);
+// the blocks before it are the old run path's docs (no runner_job_id), still followed so.
 import { after, afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import cp from 'node:child_process';
@@ -23,6 +25,9 @@ const watch = await import('../wsl-case-watch.js');
 const queue = await import('../server/compute-queue.ts');
 const layout = await import('../project-layout.js');
 const studyIo = await import('../study-io.js');
+const runner = await import('../foam-runner.js');
+const store = await import('../foam-store.js');
+const core = await import('../core-solve.js');
 const { startSolve, stopSolve } = w27;
 const { claimComputeSlot, computeSlotHolder, resetComputeSlotForTests, releaseComputeSlot, takeStartCancel } = slot;
 
@@ -212,5 +217,133 @@ describe('the route passes the click', () => {
     const src = readFileSync(new URL('../w27-solve.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
     assert.match(src, /simulationId: body\.simulation_id \|\| u\.searchParams\.get\('simulation_id'\),\n\s+startId: body\.start_id,/);
     assert.match(src, /starting: body\.starting === true,\n\s+startId: body\.start_id,/);
+  });
+});
+
+// IF Item 7: a core solve on the step-list runner (runner kind 'solve') is stopped
+// through its record (stopFoamCase): the levels plugin cases have, also while it drains.
+describe('Stop of a run on the runner (kind solve)', () => {
+  const rx = { spawned: [], watches: [], kills: [] };
+  beforeEach(() => {
+    rmSync(join(ROOT, 'foam-cases.json'), { force: true });
+    store.resetFoamStoreForTests({ filePath: join(ROOT, 'foam-cases.json') });
+    runner.resetFoamRunnerForTests();
+    runner.registerStepRunKind('solve', { onEvent: core.onCoreSolveEvent, onEnd: core.onCoreSolveEnd });
+    rx.spawned = [];
+    rx.watches = [];
+    rx.kills = [];
+    runner.setFoamRunnerDepsForTests({
+      spawnJob: (opts) => {
+        rx.spawned.push(opts);
+        return { child: { pid: 1 } };
+      },
+      watchWslCaseGone: (opts) => {
+        rx.watches.push(opts);
+        return { cancel() {} };
+      },
+      killWslCase: (opts) => rx.kills.push(opts),
+      probeWslCase: async () => 'live',
+      relayAlive: async () => true,
+      killRelay: () => {},
+      pushComputeNotice: () => {},
+      specDir: () => join(ROOT, 'foam-specs'),
+      hookNames: () => [],
+      slotsHint: () => null,
+    });
+  });
+  afterEach(() => {
+    for (const rec of store.listFoamRecords({ status: ['queued', 'running'] })) runner.finishFoam(rec.id, 'stopped', {});
+    runner.setFoamRunnerDepsForTests(null);
+  });
+
+  /** A run its Start handed to the runner: the doc names its record, the runner holds the Start's claim. */
+  function onRunner(runId) {
+    const folder = seedRunningDoc(runId);
+    const caseDir = join(folder.dir, 'case');
+    mkdirSync(join(caseDir, 'system'), { recursive: true });
+    const c = claimComputeSlot('solve', { project_id: PID, run_id: runId, name: runId }, { phase: 'starting' });
+    const rec = store.createFoamRecord({
+      kind: 'solve',
+      project_id: PID,
+      run_id: runId,
+      run_name: runId,
+      simulation_id: 's1',
+      plugin: 'incompressible_flow',
+      case_base: folder.dir,
+      case_parts: ['case'],
+      case_dir: caseDir,
+      token: 'a1b2c3d4',
+      wsl_case: `cfddesk-w27-${runId}`,
+      wsl_root: '/home/tester/cases',
+      app: 'simpleFoam',
+    });
+    studyIo.persistRun(PID, 's1', { id: runId, run_id: runId, simulation_id: 's1', status: 'running', runner_job_id: rec.id, pid: null });
+    const out = runner.runFoamSteps({
+      job_id: rec.id,
+      claim: { kind: 'solve', project_id: PID, run_id: runId, name: runId, job_id: rec.id },
+      claim_token: c.token,
+      case_base: folder.dir,
+      case_parts: ['case'],
+      case_dir: caseDir,
+      plugin: 'incompressible_flow',
+      wsl_case: `cfddesk-w27-${runId}`,
+      wsl_root: '/home/tester/cases',
+      token: 'a1b2c3d4',
+      prepare: null,
+      pre: [],
+      n_procs: 1,
+      slots_hint: null,
+      solver: { app: 'simpleFoam', keep_frames: 'latest', process_names: ['simpleFoam'], stop_strategy: 'stopAt_writeNow', frame_fields: ['U', 'p'], parallel: 'none', analysis: 'incompressible_steady' },
+      run_id: runId,
+      simulation_id: 's1',
+    });
+    assert.deepEqual(out, { ok: true });
+    return { rec, caseDir, folder };
+  }
+  const marker = (caseDir) => JSON.parse(readFileSync(join(caseDir, '.magnusim-stop'), 'utf8'));
+  const runJson = (folder) => JSON.parse(readFileSync(join(folder.dir, 'run.json'), 'utf8'));
+
+  it('running: the first Stop is graceful, the next raises it, force ends everything now; the doc says stopping', () => {
+    const { rec, caseDir, folder } = onRunner('run_q');
+    const first = stopSolve({ projectId: PID, runId: 'run_q' });
+    assert.deepEqual([first.status, first.bodyExtra.stopping, first.bodyExtra.forced], [200, true, undefined]);
+    assert.equal(store.readFoamRecord(rec.id).stop.level, 'graceful');
+    assert.equal(marker(caseDir).level, 'graceful');
+    assert.equal(computeSlotHolder().stop_requested, true, 'the Queue title reads (stopping)');
+    assert.deepEqual([runJson(folder).stop_requested, runJson(folder).stage], [true, 'stopping']);
+    assert.deepEqual(spawned.filter((s) => s.includes('stop_solve.py')), [], 'not the old stop');
+    assert.deepEqual(rx.kills, []);
+    const second = stopSolve({ projectId: PID, runId: 'run_q' });
+    assert.equal(second.bodyExtra.forced, true);
+    assert.equal(store.readFoamRecord(rec.id).stop.level, 'solver');
+    assert.equal(runJson(folder).note, 'Force-stopping.');
+    const forced = stopSolve({ projectId: PID, runId: 'run_q', force: true });
+    assert.equal(forced.bodyExtra.forced, true);
+    assert.equal(store.readFoamRecord(rec.id).stop.level, 'all');
+    assert.deepEqual(rx.kills.map((k) => [k.wslCase, k.scripts]), [['cfddesk-w27-run_q', ['foam-pre-a1b2c3d4.sh', 'solve-pf-a1b2c3d4.sh']]]);
+    // Without a run id, the slot's run is meant.
+    assert.equal(stopSolve({ projectId: PID }).bodyExtra.run_id, 'run_q');
+  });
+
+  it('draining (its relay died): the Stop goes to its record, the drain kills at its next probe; never the old kill', () => {
+    const { rec } = onRunner('run_dr');
+    rx.spawned[0].onExit(0);
+    rx.spawned[0].onClose();
+    assert.equal(computeSlotHolder().phase, 'draining');
+    assert.equal(rx.watches.length, 1);
+    assert.equal(rx.watches[0].stop(), false);
+    const r = stopSolve({ projectId: PID, runId: 'run_dr' });
+    assert.deepEqual([r.status, r.bodyExtra.stopping], [200, true]);
+    assert.equal(store.readFoamRecord(rec.id).stop.level, 'graceful');
+    assert.equal(rx.watches[0].stop(), true, 'the drain kills at its next probe');
+    assert.deepEqual(kills, [], 'not the old cfddesk-w27 kill by solve-<run>.sh');
+  });
+
+  it('"Cancel this start" of another run never stops the run on the runner', () => {
+    const { rec } = onRunner('run_busy');
+    const r = stopSolve({ projectId: PID, runId: 'run_mine', starting: true, startId: B });
+    assert.deepEqual([r.status, r.bodyExtra.pending], [200, true]);
+    assert.equal(store.readFoamRecord(rec.id).stop, null);
+    assert.equal(takeStartCancel(B), true);
   });
 });

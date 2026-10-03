@@ -86,6 +86,17 @@ function queueFor(path, max) {
 }
 
 /**
+ * The log file of a job: .cache/logs/<kind>/<job id>.jsonl (createJobLogger writes it).
+ * @param {string} kind
+ * @param {string} jobId
+ */
+export function jobLogPath(kind, jobId) {
+  const safeKind = String(kind || 'job').replace(/[^\w.-]+/g, '_');
+  const safeId = String(jobId || 'unknown').replace(/[^\w.-]+/g, '_');
+  return join(WEB_ROOT, '.cache', 'logs', safeKind, `${safeId}.jsonl`);
+}
+
+/**
  * @param {string} kind
  * @param {string} jobId
  * @param {{ maxBytes?: number }} [opts]
@@ -93,9 +104,8 @@ function queueFor(path, max) {
 export function createJobLogger(kind, jobId, opts = {}) {
   const safeKind = String(kind || 'job').replace(/[^\w.-]+/g, '_');
   const safeId = String(jobId || 'unknown').replace(/[^\w.-]+/g, '_');
-  const dir = join(WEB_ROOT, '.cache', 'logs', safeKind);
-  mkdirSync(dir, { recursive: true });
-  const logPath = join(dir, `${safeId}.jsonl`);
+  const logPath = jobLogPath(kind, jobId);
+  mkdirSync(dirname(logPath), { recursive: true });
   const max = Number(opts.maxBytes) > 0 ? Number(opts.maxBytes) : MAX_LOG_BYTES;
 
   /**

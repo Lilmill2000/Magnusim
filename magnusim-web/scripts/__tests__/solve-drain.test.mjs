@@ -335,7 +335,9 @@ function fnSource(name, from) {
 describe('hardwareRankCap', () => {
   it('keeps resolveNProcs results (fake cpus, prefs and WSL slots)', () => {
     const newResolve = fnSource('function resolveNProcs(', SRC);
-    const cap = fnSource('export function hardwareRankCap(', SRC).replace('export function', 'function');
+    // The cap moved to ranks.js (the runner and the core solve read it there).
+    const RANKS = readFileSync(join(HERE, '..', 'ranks.js'), 'utf8').replace(/\r\n/g, '\n');
+    const cap = fnSource('export function hardwareRankCap(', RANKS).replace('export function', 'function');
     assert.match(newResolve, /let nProcs = hardwareRankCap\(\);/);
     const build = (body) =>
       new Function('env', `const { cpus, hardwarePrefs, probeWslMpiSlots, PHYSICAL_CORES } = env;

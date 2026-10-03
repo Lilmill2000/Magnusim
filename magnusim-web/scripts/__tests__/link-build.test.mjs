@@ -47,6 +47,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 attachWorkerBridge(async (method, params) => {
   if (method === 'analysis.validate_ready') return { ready: true, issues: [] };
   if (method === 'analysis.run_normalize') return { settings: { end_time: 10, write_interval: 5, ...(params && params.settings) } };
+  // The run's plan (core solves on the runner): the stand-in refuses, as fake prepare_run did.
+  if (method === 'analysis.plan_run') return { ok: false, error: 'fake prepare_run' };
   return { ok: true };
 });
 

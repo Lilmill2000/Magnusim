@@ -31093,6 +31093,7 @@ async function deleteSelectedRunClient() {
 
 const SIM_STAGE_LABELS = {
   starting: 'Starting',
+  prepare: 'Writing the case',
   decompose: 'Decomposing the mesh',
   solve: 'Solving',
   reconstruct: 'Reconstructing',

@@ -265,6 +265,21 @@ describe('startSolve claims before its first await (source scan)', () => {
     assert.match(after.slice(0, after.indexOf('};')), /slot_token: slot\.token,/);
     assert.equal(body.split('slot.keep()').length, 2, 'kept in one place only');
   });
+
+  it('on the runner: after the plan (its only await) the Stop is read again, then the launch and keep() with no await between', () => {
+    const start = src.indexOf('async function startSolveOnRunner(');
+    const runner = code(src.slice(start, src.indexOf('\n}\n', start)));
+    const iPlan = runner.indexOf("await commitRpc('analysis.plan_run'");
+    const iStop = runner.indexOf('if (slot.stopRequested())');
+    const iLaunch = runner.indexOf('launchCoreSolve({');
+    const iKeep = runner.indexOf('slot.keep()');
+    assert.ok(iPlan > 0 && iStop > iPlan && iLaunch > iStop && iKeep > iLaunch, `${iPlan} ${iStop} ${iLaunch} ${iKeep}`);
+    assert.equal(runner.split('await').length, 2, 'one await: the plan');
+    assert.equal(runner.split('slot.keep()').length, 2, 'kept in one place only');
+    assert.match(runner, /claimToken: slot\.token,/);
+    // startSolveBody hands over after its own stop check and the running stamp.
+    assert.ok(body.indexOf('return startSolveOnRunner({') > body.indexOf('builtFrom ? { builtFrom } : undefined'));
+  });
 });
 
 describe('project folders', () => {

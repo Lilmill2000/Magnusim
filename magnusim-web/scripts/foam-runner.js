@@ -67,7 +67,8 @@
  * prepare_stage {stage}; pre {tool, index, exit_code, parallel?, n_procs?, skipped?};
  * ranks {n_procs}; phase {phase, seconds}; progress {time, n_steps, residuals,
  * co_max?, co_mean?, delta_t?, points} (at most one per 250 ms, plus one at each
- * stage change and at the end); time_saved {t}; warning {code, message};
+ * stage change and at the end; a `solve` run's also carries open, the step the
+ * solver is on); time_saved {t}; warning {code, message};
  * end {status, error, code, result}. None carries a path, a pid, a log line or
  * exception text.
  *
@@ -135,7 +136,7 @@ import { hardwarePrefs } from './prefs.js';
 import { solveHookNames } from './solve-hooks.js';
 import { jobArgsFromParams, pluginJobEnv } from './server/registered-tool.js';
 import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from './project-layout.js';
-import { hardwareRankCap } from './w27-solve.js';
+import { hardwareRankCap } from './ranks.js';
 import { STEP_METRICS, closeStep as closeSolveStep, foldSolveEvent, newSolveFold } from './solve-fold.js';
 
 export { createFoamRecord };
@@ -700,13 +701,15 @@ function closeStep(state) {
 /**
  * Fold one solver event into the steps (solve-fold.js): a `progress` event closes
  * the step before it; a Courant/deltaT block printed before `Time = t` is step t's;
- * per step the largest initial residual of each field is kept.
+ * per step the largest initial residual of each field is kept ('max', plugin cases)
+ * or its last one ('last': a core solve, the rule its Run panel always plotted).
  * @param {ReturnType<typeof newFoamFold>} state
  * @param {any} ev
+ * @param {'max' | 'last'} [residual]
  */
-export function foldFoamEvent(state, ev) {
+export function foldFoamEvent(state, ev, residual = 'max') {
   if (!ev || !state) return;
-  takeStep(state, foldSolveEvent(state, ev, { residual: 'max' }));
+  takeStep(state, foldSolveEvent(state, ev, { residual }));
 }
 
 /**
@@ -742,6 +745,8 @@ function emitProgress(id, entry) {
   }
   const ev = takeProgressFrame(st, Date.now());
   if (!ev) return;
+  // A core solve's Run panel shows the step the solver is on (its time and Courant number).
+  if (entry.kind === 'solve' && st.current) ev.open = { ...st.current };
   updateFoamRecord(id, { time: ev.time, n_steps: ev.n_steps }, { write: 'soon' });
   deliver(id, ev);
 }
@@ -851,7 +856,7 @@ export function relayEvent(id, entry, ev) {
     case 'progress':
     case 'residual':
     case 'courant':
-      foldFoamEvent(entry.fold, ev);
+      foldFoamEvent(entry.fold, ev, entry.kind === 'solve' ? 'last' : 'max');
       maybeEmitProgress(id, entry);
       return;
     case 'time_saved': {

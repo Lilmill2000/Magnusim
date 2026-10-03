@@ -29,6 +29,9 @@ import { NO_WSL, wslBash } from './toolchain.js';
 // the Run panel, a Start right after that cancel runs, and a cancel that reaches a run that
 // had already started stops it without saying it never started. Its server holds every
 // start 4 s (MAGNUSIM_TEST_START_HOLD_MS) so the starting phase can be seen.
+// Core solves run on the step-list runner (IF Item 7): a run's relay pid is in its case's
+// status file (.magnusim-run.json) and its WSL script is solve-pf-<token>.sh (the token in
+// its case's .magnusim-ran).
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 const A = QUEUE_PROJECT_A;
 const B = QUEUE_PROJECT_B;
@@ -151,11 +154,12 @@ test('gate:h15-core-drain: core Stop while starting, draining and after a relay 
         expect(q.busy?.kind, `while R's processes live, poll ${i}`).toBe('solve');
         expect(q.items.map((r) => r.kind), `the mesh waits, poll ${i}`).toContain('mesh');
       }
-      if (q.busy?.kind === 'solve' && q.busy.phase === 'draining') sawDraining = true;
+      // It holds the slot while it stops: draining (its relay gone) or its relay still ending it (the runner).
+      if (q.busy?.kind === 'solve' && (q.busy.phase === 'draining' || q.busy.stopping === true)) sawDraining = true;
       if (/\(stopping\)/.test(String(await queueTitle()))) sawStoppingTitle = true;
       await sleep(250);
     }
-    expect(sawDraining, 'a poll saw the solve draining').toBe(true);
+    expect(sawDraining, 'a poll saw the solve hold the slot while it stopped').toBe(true);
     expect(sawStoppingTitle, 'the Queue title said (stopping)').toBe(true);
     stage('3: the forced stop drained before the slot moved on');
 
@@ -184,8 +188,16 @@ test('gate:h15-core-drain: core Stop while starting, draining and after a relay 
     await panel.locator('[data-run-start]').click();
     await solving(R5);
     plantCaseHolder(wslRoot, `cfddesk-w27-${R5}`);
-    const pid = Number((await row(R5)).pid);
-    expect(pid, JSON.stringify(await row(R5))).toBeGreaterThan(0);
+    // The run's relay: its pid is in the case's status file (the run doc names none).
+    const relayPid = () => {
+      try {
+        return Number(JSON.parse(readFileSync(join(runFolder(projects, A, R5), 'case', '.magnusim-run.json'), 'utf8')).relay_pid) || 0;
+      } catch {
+        return 0;
+      }
+    };
+    await expect.poll(relayPid, { timeout: 30_000 }).toBeGreaterThan(0);
+    const pid = relayPid();
     spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     await expect.poll(async () => {
       const b = await busy();
@@ -388,7 +400,17 @@ test('gate:h15-core-drain: core Stop while starting, draining and after a relay 
     return String(r.stdout || '').trim() === 'YES';
   }
 
-  /** How many top-level solve-<runId>.sh shells run in WSL (forked subshells not counted). */
+  /** A run's solve script id: pf-<token> on the runner (its case's .magnusim-ran), else the run id. */
+  function solveScriptId(runId) {
+    try {
+      const ran = JSON.parse(readFileSync(join(runFolder(projects, A, runId), 'case', '.magnusim-ran'), 'utf8'));
+      return ran && ran.token ? `pf-${ran.token}` : runId;
+    } catch {
+      return runId;
+    }
+  }
+
+  /** How many top-level solve-<id>.sh shells of a run run in WSL (forked subshells not counted). */
   function solveScripts(runId) {
     const script = [
       'n=0',
@@ -403,7 +425,7 @@ test('gate:h15-core-drain: core Stop while starting, draining and after a relay 
       'done',
       'echo "$n"',
     ].join('\n');
-    const r = wslBash(script, [runId, 'solve-scripts-count'], 30_000);
+    const r = wslBash(script, [solveScriptId(runId), 'solve-scripts-count'], 30_000);
     return Number(String(r.stdout || '').trim());
   }
 });

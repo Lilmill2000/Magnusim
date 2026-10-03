@@ -7,7 +7,7 @@
 // progress) takes a core relay's events at a fast case's rate, through spawnJob.
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -144,5 +144,95 @@ describe('createRunTail', () => {
     const short = createRunTail(max);
     short.push({ event: 'log', line: 'only one' });
     assert.equal(short.text(), 'only one\n');
+  });
+});
+
+// IF Item 7: a core solve on the step-list runner. The same fast case's events go
+// through the runner (its fold, at most four progress frames a second) to the 'solve'
+// kind's handler (core-solve.js); the server stays free and every step is counted.
+describe("a core solve on the runner (kind 'solve')", () => {
+  it('keeps the event loop free under a fast case, counts every step and keeps the last residual of each step', { timeout: 300_000 }, async () => {
+    const runner = await import('../foam-runner.js');
+    const store = await import('../foam-store.js');
+    const core = await import('../core-solve.js');
+    const layout = await import('../project-layout.js');
+    const io = await import('../study-io.js');
+    const projects = join(ROOT, 'projects');
+    const dir = join(projects, 'pf');
+    mkdirSync(dir, { recursive: true });
+    const g = layout.createGeometryFolder(dir, { id: 'g1', name: 'Part' });
+    writeFileSync(join(dir, 'project.json'), JSON.stringify({ id: 'pf', title: 'PF', geometries: [{ id: g.id, name: g.name }] }));
+    layout.createStudyFolder(dir, g.id, { id: 's1', name: 'Study 1' });
+    const folder = io.persistRun('pf', 's1', { id: 'rf', run_id: 'rf', name: 'Run 1', simulation_id: 's1', status: 'running' });
+    const caseDir = join(folder.dir, 'case');
+    mkdirSync(caseDir, { recursive: true });
+    store.resetFoamStoreForTests({ filePath: join(ROOT, 'foam-cases.json') });
+    const steps = 8000; // 2,000 steps a second for 4 s
+    let closed;
+    const done = new Promise((r) => (closed = r));
+    runner.setFoamRunnerDepsForTests({
+      // The relay's place: the stream above, through the real spawnJob.
+      spawnJob: (opts) => spawnJob({ ...opts, kind: KIND, jobId: `runner-${ID}`, script: STREAM, args: [String(steps), '2000'], onClose: () => {
+        opts.onClose();
+        closed();
+      } }),
+      watchWslCaseGone: () => ({ cancel() {} }),
+      killWslCase: () => {},
+      probeWslCase: async () => 'dead',
+      relayAlive: async () => false,
+      killRelay: () => {},
+      pushComputeNotice: () => {},
+      specDir: () => join(ROOT, 'foam-specs'),
+      hookNames: () => [],
+      slotsHint: () => null,
+    });
+    const rec = store.createFoamRecord({
+      kind: 'solve', project_id: 'pf', run_id: 'rf', run_name: 'Run 1', simulation_id: 's1', plugin: 'incompressible_flow',
+      case_base: folder.dir, case_parts: ['case'], case_dir: caseDir, token: 'a1b2c3d4', wsl_case: 'cfddesk-w27-rf',
+      wsl_root: '/home/tester/cases', app: 'pimpleFoam',
+    });
+    let last = Date.now();
+    let worst = 0;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      worst = Math.max(worst, now - last);
+      last = now;
+    }, 10);
+    try {
+      const out = runner.runFoamSteps({
+        job_id: rec.id,
+        claim: { kind: 'solve', project_id: 'pf', run_id: 'rf', name: 'Run 1', job_id: rec.id },
+        case_base: folder.dir, case_parts: ['case'], case_dir: caseDir, plugin: 'incompressible_flow',
+        wsl_case: 'cfddesk-w27-rf', wsl_root: '/home/tester/cases', token: 'a1b2c3d4', prepare: null, pre: [],
+        n_procs: 1, slots_hint: null, run_id: 'rf', simulation_id: 's1',
+        solver: { app: 'pimpleFoam', keep_frames: 'all', process_names: ['pimpleFoam'], stop_strategy: 'stopAt_writeNow', frame_fields: ['U', 'p'], parallel: 'none', analysis: 'incompressible_transient' },
+      });
+      assert.deepEqual(out, { ok: true });
+      await done;
+    } finally {
+      clearInterval(timer);
+    }
+    worst = Math.max(worst, Date.now() - last);
+    console.log(`[core runner flood] longest stall ${worst} ms`);
+    assert.ok(worst < 1500, `the event loop stalled ${worst} ms while the core run flooded the runner`);
+    // The relay is gone with no status file: the run drains, its live progress is whole.
+    const live = core.liveSolveOf(rec.id);
+    assert.ok(live, 'the run is followed');
+    assert.equal(live.stage, 'solve');
+    assert.equal(live.steps + 1, steps, 'every closed step is counted (the last is open)');
+    assert.equal(live.current.t, steps * 0.001);
+    assert.ok(live.series.length < steps, 'frames thinned their points');
+    assert.equal(live.step_at.length, live.series.length, 'each point keeps its step number');
+    assert.deepEqual(live.saved_times, Array.from({ length: steps / 1000 }, (_, i) => i + 1));
+    // Each step's p: the last initial residual of the step (0.5/i), not the largest (2/i).
+    for (const row of live.series) {
+      const i = Math.round(row.t / 0.001);
+      assert.ok(Math.abs(row.p - 0.5 / i) < 1e-12, `step ${i}: p ${row.p}`);
+    }
+    const doc = JSON.parse(readFileSync(join(folder.dir, 'run.json'), 'utf8'));
+    assert.equal(doc.n_saved_times, steps / 1000);
+    runner.finishFoam(rec.id, 'stopped', {});
+    runner.setFoamRunnerDepsForTests(null);
+    rmSync(join(WEB_ROOT, '.cache', 'logs', KIND, `runner-${ID}.jsonl`), { force: true });
   });
 });

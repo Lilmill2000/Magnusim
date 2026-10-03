@@ -7,7 +7,6 @@ import { projectIdOrActive } from './request-scope.js';
  * solved with the program its launch spec names. Does not re-split polyMesh.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { cpus } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import {
   existsSync,
@@ -21,13 +20,14 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PYTHON, pyTool } from './python-env.js';
-import { wslCasePath, wslDistro } from './wsl-env.js';
+import { wslCasePath, wslCaseRoot, wslDistro } from './wsl-env.js';
 import { hardwarePrefs } from './prefs.js';
+import { hardwareRankCap, savedWslSlots } from './ranks.js';
 import { probeWslMpiSlots } from './hardware-profile.js';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, liveStudyRows } from './w17-sim-catalog.js';
 import { TRANSIENT_LARGE_MESH_CELLS, simIsTransient } from './w30-transient.js';
-import { createJobLogger, MAX_LOG_BYTES } from './log.js';
+import { createJobLogger, MAX_LOG_BYTES, jobLogPath } from './log.js';
 import { envGet } from './env-compat.js';
 import { spawnJob } from './job-runner.js';
 import { foldSolveEvent } from './solve-fold.js';
@@ -70,8 +70,22 @@ import {
 } from './compute-slot.js';
 import { LOST_TEXT, killWslCase, watchWslCaseGone } from './wsl-case-watch.js';
 import { pushComputeNotice } from './server/compute-queue.ts';
-import { coreOwner, hookArgs, stopHookArgs } from './solve-hooks.js';
+import { coreOwner, hookArgs, solveHookNames, stopHookArgs } from './solve-hooks.js';
+import { stepRunRecord, stopFoamCase } from './foam-runner.js';
+import {
+  activeCoreSolves,
+  attachCoreSolveHost,
+  launchCoreSolve,
+  liveSolveOf,
+  readRunDocFile,
+  reconcileEndedRun,
+  runnerJobActive,
+  runnerRecordOf,
+} from './core-solve.js';
 import { renameSync, unlinkSync } from 'node:fs';
+
+// The rank cap lives in ranks.js (the runner reads it too); kept exported here.
+export { hardwareRankCap };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -94,36 +108,6 @@ function positiveInt(v) {
   return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
-/**
- * Physical core count (not SMT threads). One MPI rank per physical core is the
- * fastest configuration measured on this box (Ball Test, 264k cells, 120 fixed
- * steps): 16 ranks 140 ms/step, 15 → 144, 14 → 148, 12 → 163, 8 → 213, and
- * 32 ranks on hyperthreads 2542 ms/step. Binding flags, MPI transport flags and
- * renumberMesh changed nothing, so only the rank count is tuned here.
- * Resolved once, asynchronously, from CIM; `resolveNProcs` falls back to the
- * logical count if it has not answered yet.
- */
-let PHYSICAL_CORES = 0;
-function detectPhysicalCores() {
-  if (process.platform !== 'win32') return;
-  try {
-    const child = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum'],
-      { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] },
-    );
-    let out = '';
-    child.stdout.on('data', (d) => { out += String(d); });
-    child.on('close', () => {
-      const n = Number(String(out).trim());
-      if (Number.isFinite(n) && n >= 1) PHYSICAL_CORES = Math.floor(n);
-    });
-    child.on('error', () => {});
-  } catch {
-    /* keep fallback */
-  }
-}
-detectPhysicalCores();
 
 /** @type {null | { child: import('node:child_process').ChildProcess, run_id: string, wsl_case: string, project_id: string, progress: ReturnType<typeof newProgressState>, wsl_case_path?: string, jobLog?: object, protocol?: string, baseRunning?: Record<string, any>, stop_requested?: boolean, stop_requested_at?: number, stop_timer?: ReturnType<typeof setTimeout>, slot_token?: string, kill_sent?: boolean }} */
 let liveRun = null;
@@ -484,9 +468,11 @@ function enrichRunDoc(doc, opts) {
     liveRun &&
     liveRun.progress &&
     String(liveRun.run_id) === String(doc.run_id || doc.id);
-  let progress = sameLive ? snapshotProgress(liveRun.progress) : null;
+  // A run on the step-list runner: its live progress (core-solve.js).
+  const runnerLive = sameLive ? null : liveSolveOf(doc.runner_job_id);
+  let progress = sameLive ? snapshotProgress(liveRun.progress) : runnerLive ? runnerLiveProgress(doc, runnerLive) : null;
   let fromLog = false;
-  if (progressSnapshotIsThin(progress)) {
+  if (!runnerLive && progressSnapshotIsThin(progress)) {
     for (const logPath of [doc.log_jsonl_path, doc.log_path]) {
       if (!logPath || !existsSync(logPath)) continue;
       try {
@@ -545,6 +531,31 @@ function enrichRunDoc(doc, opts) {
 }
 
 /**
+ * A runner run's live progress (w27's progress shape, kept by core-solve.js). Its
+ * stage is the live one; when it has no residual points yet (a run followed after
+ * a restart) the job log's are shown.
+ * @param {any} doc
+ * @param {any} live
+ * @returns {any}
+ */
+function runnerLiveProgress(doc, live) {
+  const snap = snapshotProgress(live);
+  if (Array.isArray(snap.residuals) && snap.residuals.length) return snap;
+  for (const logPath of [doc.log_jsonl_path, doc.log_path]) {
+    if (!logPath || !existsSync(logPath)) continue;
+    try {
+      const parsed = readLogProgress(logPath, runAnalysisKeyOf(doc));
+      if (parsed && Array.isArray(parsed.residuals) && parsed.residuals.length) {
+        return { ...snap, residuals: parsed.residuals, n_steps: Math.max(Number(snap.n_steps) || 0, Number(parsed.n_steps) || 0) };
+      }
+    } catch {
+      /* try the next log */
+    }
+  }
+  return snap;
+}
+
+/**
  * The solve script copies each finished time directory to the Windows run
  * folder as it is written. Report what is on disk so Results can open mid-run
  * and still open after an early stop, even if run.json still says
@@ -588,14 +599,35 @@ function applySavedTimesFromDiskInPlace(rec) {
 
 /** A restarted run used to keep stop_requested/stage from the previous Stop. */
 function overlayLiveRunFlags(doc) {
-  if (!doc || !liveRun) return doc;
-  if (String(liveRun.run_id) !== String(doc.run_id || doc.id)) return doc;
+  if (!doc) return doc;
+  if (!liveRun || String(liveRun.run_id) !== String(doc.run_id || doc.id)) return overlayRunnerFlags(doc);
   if (liveRun.stop_requested) {
     doc.stop_requested = true;
     return doc;
   }
   doc.stop_requested = false;
   const liveStage = liveRun.progress && liveRun.progress.stage;
+  if (liveStage && liveStage !== 'copy' && liveStage !== 'reconstruct') {
+    doc.stage = liveStage;
+  } else if (doc.stage === 'stopping' || doc.stage === 'copy' || doc.stage === 'reconstruct') {
+    doc.stage = 'solve';
+  }
+  const shown = solveDisplayStage(doc);
+  if (shown) doc.stage = shown;
+  return doc;
+}
+
+/** overlayLiveRunFlags for a run on the runner: its record's stop, its live stage. */
+function overlayRunnerFlags(doc) {
+  const live = liveSolveOf(doc.runner_job_id);
+  if (!live) return doc;
+  const rec = runnerRecordOf(doc);
+  if (rec && rec.stop) {
+    doc.stop_requested = true;
+    return doc;
+  }
+  doc.stop_requested = false;
+  const liveStage = live.stage;
   if (liveStage && liveStage !== 'copy' && liveStage !== 'reconstruct') {
     doc.stage = liveStage;
   } else if (doc.stage === 'stopping' || doc.stage === 'copy' || doc.stage === 'reconstruct') {
@@ -1560,6 +1592,10 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
   if (liveRun && String(liveRun.run_id) === String(runId)) {
     return { ok: false, error: 'Stop the run before deleting it' };
   }
+  // A run on the runner, while its record is queued or running (draining too).
+  if (runnerJobActive(runnerRecordOf(readRunDocFile(id, runId, simulationId)))) {
+    return { ok: false, error: 'Stop the run before deleting it' };
+  }
   const folder = runFolderOf(id, runId, simulationId) || runFolderOf(id, runId);
   if (!folder) {
     try {
@@ -1774,6 +1810,20 @@ async function startSolveBody(opts = {}, slot) {
       },
     };
   }
+  // On the runner: its record says whether it still runs; an ended one is written now.
+  const draftRunner = draft && (draft.status === 'running' || draft.status === 'starting') ? runnerRecordOf(draft) : null;
+  if (draftRunner && runnerJobActive(draftRunner)) {
+    return {
+      ok: false,
+      status: 409,
+      bodyExtra: {
+        error: 'This run is already solving. Click Stop if you want to end it.',
+        code: 'same_run',
+        increment: INCREMENT,
+      },
+    };
+  }
+  if (draftRunner) draft = reconcileEndedRun(id, draft, draftRunner);
   if (draft && (draft.status === 'running' || draft.status === 'starting')) {
     const wslState = draft.wsl_case ? probeWslSolveSync(draft.wsl_case, draft) : 'dead';
     const block = solveStartBlockReason(draft, {
@@ -1908,7 +1958,6 @@ async function startSolveBody(opts = {}, slot) {
     saveSimulationControl(id, { endTime: et, writeInterval: wi }, draft && draft.simulation_id);
   }
   const timeDependency = isTransient ? 'Transient' : 'Steady-state';
-  const nProcs = resolveNProcs(ready.mesh.n_cells, { transient: isTransient });
   const simId = (draft && draft.simulation_id) || (ready.sim && ready.sim.id);
   const hold = Number(process.env.MAGNUSIM_TEST_START_HOLD_MS) || 0;
   if (hold > 0) await new Promise((r) => setTimeout(r, hold));
@@ -1932,6 +1981,29 @@ async function startSolveBody(opts = {}, slot) {
   const winOut = stored.case_dir;
   mkdirSync(winOut, { recursive: true });
   mkdirSync(REPORT_DIR, { recursive: true });
+  // A run solves on the step-list runner (core-solve.js). The old run path below
+  // (prepare_run here, run_solve, finishRun) runs only with MAGNUSIM_CORE_SOLVE_LEGACY=1
+  // until it is retired.
+  if (process.env.MAGNUSIM_CORE_SOLVE_LEGACY !== '1') {
+    return startSolveOnRunner({
+      id,
+      runId,
+      simId,
+      slot,
+      draft,
+      ready,
+      stored,
+      winOut,
+      isTransient,
+      timeDependency,
+      transientSettings,
+      et,
+      wi,
+      startMeshId,
+      onDone,
+    });
+  }
+  const nProcs = resolveNProcs(ready.mesh.n_cells, { transient: isTransient });
 
   // Phase 1: Python prepare_run writes the case; job-runner spawns run_solve.
   const prepArgs = [
@@ -2301,6 +2373,271 @@ async function startSolveBody(opts = {}, slot) {
 }
 
 const STOP_GRACE_MS = 20000;
+
+/**
+ * The rest of a Start on the step-list runner (core-solve.js). The run doc already
+ * says running, with its build stamp. Its analysis plans the run on the worker
+ * (analysis.plan_run: nothing here waits for Python), the ranks follow from the
+ * plan's serial_below_cells, and launchCoreSolve hands it to the runner with this
+ * Start's claim. A plan that fails marks the run failed with prepare_run's texts
+ * and its analysis's fix; a Stop that came while it was planned leaves it as it was.
+ */
+async function startSolveOnRunner(c) {
+  const { id, runId, simId, slot, draft, ready, stored, winOut, isTransient, timeDependency, transientSettings, et, wi, startMeshId, onDone } = c;
+  const failRun = (error, extra = {}) => {
+    try {
+      persistRun(id, simId, {
+        ...stored,
+        status: 'failed',
+        error,
+        note: error,
+        fix: extra.fix || null,
+        finished_at: new Date().toISOString(),
+        pid: null,
+      });
+    } catch (e) {
+      console.warn('[CFD] run not marked failed', e);
+    }
+    return {
+      ok: false,
+      status: 500,
+      bodyExtra: {
+        error,
+        increment: INCREMENT,
+        run_id: runId,
+        simulation_id: simId,
+        ...(extra.fix ? { fix: extra.fix } : {}),
+        ...(Array.isArray(extra.patches) ? { patches: extra.patches } : {}),
+      },
+    };
+  };
+  let plan;
+  try {
+    plan = await commitRpc('analysis.plan_run', {
+      project_id: id,
+      simulation_id: simId ? String(simId) : '',
+      run_id: String(runId),
+      mesh_id: startMeshId ? String(startMeshId) : '',
+      time_dependency: timeDependency,
+      ...(isTransient && transientSettings ? { transient: transientSettings } : {}),
+    });
+  } catch (err) {
+    return failRun('Failed to prepare solve case: ' + String(err));
+  }
+  if (!plan || plan.ok !== true) {
+    const errMsg = (plan && (plan.error || plan.message)) || 'the run could not be planned';
+    return failRun('Failed to prepare solve case: ' + errMsg, { fix: (plan && plan.fix) || null, patches: plan && plan.patches });
+  }
+  if (slot.stopRequested()) {
+    // Stopped while it was planned: nothing ran, the run is as it was.
+    patchRunDocIfPresent(id, runId, {
+      status: (draft && draft.status) || 'draft',
+      stage: (draft && draft.stage) || null,
+      stop_requested: !!(draft && draft.stop_requested),
+    });
+    return { ok: false, status: 409, bodyExtra: { error: 'Stopped before it started', code: 'stopped', stopped: true, run_id: runId, increment: INCREMENT } };
+  }
+  // The solver this run launches is the one its analysis planned the case for.
+  const solver = String(plan.app || '');
+  const preparedTd = String(plan.time_dependency || '');
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(solver) || preparedTd !== timeDependency) {
+    const error = !solver
+      ? 'Preparing the case did not name the solver to run.'
+      : preparedTd !== timeDependency
+        ? `The case was written for a ${preparedTd || 'different'} run (${solver}), but this run is ${timeDependency}.`
+        : `The case names an invalid solver (${solver}).`;
+    return failRun(error);
+  }
+  if (!plan.prepare || typeof plan.prepare !== 'object') {
+    return failRun('Failed to prepare solve case: the job that writes this run\'s case is not loaded');
+  }
+  const analysisKey = String(plan.analysis_key || '');
+  const launch =
+    plan.launch && typeof plan.launch === 'object'
+      ? plan.launch
+      : { app: solver, keep_frames: isTransient ? 'all' : 'latest', process_names: [solver], log_parser: null };
+  // Serial below the analysis's cell count (its launch spec; none: the rule before
+  // API 1.5), else one rank per physical core. The relay clamps by WSL's MPI slots.
+  const below =
+    plan.serial_below_cells !== null && plan.serial_below_cells !== undefined && Number.isFinite(Number(plan.serial_below_cells))
+      ? Number(plan.serial_below_cells)
+      : isTransient
+        ? TRANSIENT_LARGE_MESH_CELLS
+        : LARGE_MESH_CELLS;
+  const cells = Number(ready.mesh.n_cells) || 0;
+  const slotsHint = savedWslSlots();
+  let nProcs = launch.parallel === false || (cells > 0 && cells < below) ? 1 : hardwareRankCap();
+  if (nProcs > 1 && slotsHint) nProcs = Math.max(1, Math.min(nProcs, slotsHint));
+  // What the run is written with (the analysis's plan): recorded on the run as
+  // prepare_run's report was.
+  const report = {
+    ...(plan.plan && typeof plan.plan === 'object' ? plan.plan : {}),
+    app: solver,
+    launch,
+    time_dependency: timeDependency,
+    analysis_key: analysisKey,
+    case_dir: winOut,
+    n_procs: nProcs,
+  };
+  const transient = isTransient ? report.transient_control || null : null;
+  const hookNames = solveHookNames();
+  const owner = hookNames.length ? coreOwner(id, simId) || null : null;
+  const wslCaseId = `cfddesk-w27-${runId}`;
+  const started_at = new Date().toISOString();
+  let baseRunning = /** @type {any} */ (null);
+  const launched = launchCoreSolve({
+    projectId: id,
+    simulationId: String(simId || ''),
+    runId: String(runId),
+    runName: (draft && draft.name) || 'Run',
+    caseDir: winOut,
+    plugin: String(plan.plugin || ''),
+    analysisKey,
+    app: solver,
+    launch,
+    prepareRow: plan.prepare,
+    prepareParams: {
+      project_id: id,
+      simulation_id: simId ? String(simId) : '',
+      run_id: String(runId),
+      mesh_id: startMeshId ? String(startMeshId) : '',
+      time_dependency: timeDependency,
+      n_procs: String(nProcs),
+      ...(isTransient && transientSettings ? { transient: JSON.stringify(transientSettings) } : {}),
+    },
+    nProcs,
+    slotsHint,
+    claimToken: slot.token,
+    wslRoot: wslCaseRoot(),
+    owner,
+    hooks: hookNames,
+    onDone,
+    persistStarted: (rec) => {
+      const logPath = jobLogPath('solve', rec.id);
+      baseRunning = {
+        simulation_id: simId,
+        status: 'running',
+        mode: 'solve',
+        path_kind: solver,
+        analysis_key: analysisKey || null,
+        launch,
+        time_dependency: timeDependency,
+        ...(isTransient ? { transient } : {}),
+        run_id: runId,
+        name: (draft && draft.name) || null,
+        mesh_id: (draft && draft.mesh_id) || ready.mesh.mesh_id || null,
+        mesh_name: (draft && draft.mesh_name) || ready.mesh.mesh_name || null,
+        result_controls: (draft && Array.isArray(draft.result_controls) ? draft.result_controls : []) || [],
+        created_at: (draft && draft.created_at) || null,
+        pid: null,
+        exit_code: null,
+        error: null,
+        // Fresh start: nothing saved yet (a restarted stopped run had frames).
+        has_results: false,
+        last_saved_iteration: 0,
+        n_saved_times: 0,
+        stop_requested: false,
+        stage: 'starting',
+        finished_at: null,
+        command: null,
+        argv: null,
+        started_at,
+        log_path: logPath,
+        log_jsonl_path: logPath,
+        log_excerpt: '',
+        wsl_case: wslCaseId,
+        wsl_case_path: wslCasePath(wslCaseId),
+        case_dir: winOut,
+        n_procs: nProcs,
+        endTime: et,
+        writeInterval: wi,
+        prepare_run: report,
+        solve_protocol: 'runner',
+        runner_job_id: rec.id,
+        mesh_source: {
+          case_dir: ready.mesh.case_dir,
+          mesh_path: ready.mesh.mesh_path,
+          n_cells: ready.mesh.n_cells,
+          n_points: ready.mesh.n_points,
+        },
+        // The boundary-to-patch mapping the case is written with (the analysis's plan).
+        bcs: Array.isArray(report.bcs) ? report.bcs : [],
+        wall_default: report.wall_default || 'No-slip',
+        project_id: id,
+        // The app, the analysis family, and the physics and algorithm the case is
+        // written with.
+        note: runNote({ app: solver, nProcs, analysisKey, sim: ready.sim, prep: report }),
+        increment: INCREMENT,
+      };
+      writeRunnerDoc(id, baseRunning);
+    },
+  });
+  if (!launched.ok) {
+    // The runner ended the run (its doc says why); this Start says it too.
+    return {
+      ok: false,
+      status: 500,
+      bodyExtra: { error: `Failed to start ${solver}: ${/** @type {any} */ (launched).error}`, increment: INCREMENT, run_id: runId, simulation_id: simId },
+    };
+  }
+  // The runner holds this Start's claim now and releases it at the run's end.
+  slot.keep();
+  const cat0 = loadCatalog(id);
+  const named0 = (cat0.runs.find((r) => String(r.id) === String(runId)) || {}).name;
+  if (named0 && baseRunning) baseRunning.name = named0;
+  return {
+    ok: true,
+    status: 202,
+    bodyExtra: { ...(baseRunning || {}), runs: cat0.runs, active_run_id: runId },
+  };
+}
+
+/**
+ * A runner run's doc, whole, written to its run folder now (the runner's readers
+ * and the boot check read runner_job_id from run.json), and the study's run
+ * list as persistRunDoc keeps it. The project's run_1 stamp goes through the
+ * worker without waiting (persistRunDoc's synchronous Python call held the
+ * server for a second or more at every Start, Stop and end).
+ */
+function writeRunnerDoc(projectId, doc) {
+  if (!projectId || !doc || !doc.run_id) return;
+  const whole = { ...doc, increment: INCREMENT };
+  if (whole.name === null || whole.name === undefined) delete whole.name;
+  if (whole.simulation_id) {
+    try {
+      persistRun(projectId, whole.simulation_id, whole);
+    } catch (e) {
+      console.warn('[CFD] write run doc', e);
+    }
+  }
+  let name = whole.name || null;
+  try {
+    const cat = upsertCatalogRun(projectId, whole);
+    name = (cat.runs.find((r) => String(r.id) === String(doc.run_id)) || {}).name || name;
+  } catch (e) {
+    console.warn('[CFD] run list', e);
+  }
+  try {
+    const write = commitRpc('project.update', {
+      id: projectId,
+      run_1: {
+        run_id: String(doc.run_id),
+        name,
+        status: whole.status || null,
+        pid: null,
+        case_dir: whole.case_dir || null,
+        log_path: whole.log_path || null,
+        increment: INCREMENT,
+        updated_at: whole.finished_at || whole.started_at || new Date().toISOString(),
+      },
+      updated_at: new Date().toISOString(),
+      increment: INCREMENT,
+    });
+    if (write && typeof write.then === 'function') write.catch((e) => console.warn('[CFD] stamp run on project', e));
+  } catch (e) {
+    console.warn('[CFD] stamp run on project', e);
+  }
+}
 const wslLiveCache = new Map();
 const wslProbeInflight = new Set();
 
@@ -2453,9 +2790,9 @@ function forceKillDoc(rec, run) {
   }
 }
 
-function persistStopping(projectId, rec, extra) {
+function persistStopping(projectId, rec, extra, write = persistRunDoc) {
   if (!projectId || !rec) return;
-  persistRunDoc(projectId, {
+  write(projectId, {
     ...rec,
     status: rec.status === 'starting' ? 'starting' : 'running',
     stage: 'stopping',
@@ -2511,6 +2848,13 @@ export function stopSolve({ projectId, force, runId, starting, startId } = {}) {
     removeComputeJob('solve', h.run_id, id);
     // `cancelled`: the start ends before its run starts (a Stop of a started run says only `stopping`).
     return { ok: true, status: 200, bodyExtra: { ok: true, stopping: true, cancelled: true, run_id: h.run_id, increment: INCREMENT } };
+  }
+  // On the step-list runner: its record takes the stop (graceful, then the solver,
+  // force: everything), also while it drains. "Cancel this start" of a run this
+  // slot does not hold never gets here (below: a pending cancel).
+  if (mine || starting !== true) {
+    const onRunner = runnerSolveToStop(id, runId, mine ? h : null);
+    if (onRunner) return stopRunnerSolve(id, onRunner, { force, holder: mine ? h : null });
   }
   if (mine && h.phase === 'draining') {
     patchRunDocIfPresent(id, h.run_id, { stop_requested: true });
@@ -2589,6 +2933,48 @@ export function stopSolve({ projectId, force, runId, starting, startId } = {}) {
   };
 }
 
+/**
+ * The runner record a Stop is for: the slot holder's run, else this project's run
+ * on the runner (that run id when given); null when none runs.
+ * @param {string} projectId
+ * @param {string | undefined} runId
+ * @param {any} holder the slot holder when it is this project's solve
+ */
+function runnerSolveToStop(projectId, runId, holder) {
+  if (holder && holder.job_id) {
+    const rec = stepRunRecord(holder.job_id);
+    if (rec && rec.kind === 'solve' && runnerJobActive(rec)) return rec;
+  }
+  for (const rec of activeCoreSolves()) {
+    if (!sameProjectFolder(rec.project_id, projectId)) continue;
+    if (runId && String(rec.run_id) !== String(runId)) continue;
+    return rec;
+  }
+  return null;
+}
+
+/**
+ * Stop a run on the runner (stopFoamCase): the first Stop is graceful (the current
+ * step is written), a second raises the level, force ends everything now. The run
+ * doc says stopping, as before.
+ */
+function stopRunnerSolve(projectId, rec, { force, holder }) {
+  const again = !!rec.stop;
+  const forced = !!force || again;
+  if (holder) patchComputeSlot(holder.token, { stop_requested: true });
+  stopFoamCase(rec.id, { force: !!force });
+  const doc = readRunDocFile(String(rec.project_id), String(rec.run_id), String(rec.simulation_id || ''));
+  if (doc) persistStopping(String(rec.project_id || projectId), { ...doc, project_id: rec.project_id }, forced ? { note: 'Force-stopping.' } : undefined, writeRunnerDoc);
+  if (forced) scheduleComputeQueueKick(250);
+  return {
+    ok: true,
+    status: 200,
+    bodyExtra: forced
+      ? { ok: true, stopped: true, forced: true, run_id: rec.run_id, increment: INCREMENT }
+      : { ok: true, stopping: true, run_id: rec.run_id, increment: INCREMENT },
+  };
+}
+
 function killSolveNow(run) {
   forceKillDoc(
     { wsl_case: run && run.wsl_case, run_id: run && run.run_id, id: run && run.run_id },
@@ -2625,6 +3011,9 @@ function pidIsAlive(pid) {
 }
 
 function runProcessIsLive(doc) {
+  // On the runner: while its record is queued or running (draining too).
+  const runnerRec = runnerRecordOf(doc);
+  if (runnerRec) return runnerJobActive(runnerRec);
   const rid = doc && (doc.run_id || doc.id);
   if (
     rid &&
@@ -2647,6 +3036,10 @@ function reapStaleRunningDoc(projectId, doc) {
   if (holder && (holder.kind === 'check' || (holder.kind === 'solve' && (holder.phase === 'running' || holder.phase === 'draining') && String(holder.run_id) === String(doc.run_id || doc.id) && sameProjectFolder(holder.project_id, projectId)))) return doc;
   const st = String(doc.status || '');
   if (st !== 'running' && st !== 'starting') return doc;
+  // On the runner: its record says; an ended one is written now. With no record
+  // left (store pruned), the old probe below.
+  const runnerRec = runnerRecordOf(doc);
+  if (runnerRec) return runnerJobActive(runnerRec) ? doc : reconcileEndedRun(projectId, doc, runnerRec);
   if (runProcessIsLive(doc)) return doc;
   // Windows pid can die after Vite/HMR while the WSL solver keeps going.
   // Do not mark stopped until a probe says the case is dead.
@@ -2695,6 +3088,7 @@ let discoverLiveCache = { at: 0, found: [] };
 
 export function isLiveSolveHeld() {
   if (liveRun && liveRun.child && liveRun.child.exitCode == null && !liveRun.child.killed) return true;
+  if (activeCoreSolves().length) return true;
   return discoverLiveSolves().length > 0;
 }
 
@@ -2707,6 +3101,8 @@ export function liveSolveJobSnapshot() {
       pid: liveRun.child.pid || null,
     };
   }
+  const onRunner = activeCoreSolves()[0];
+  if (onRunner) return { kind: 'solve', run_id: onRunner.run_id || null, project_id: onRunner.project_id || null, pid: null };
   const found = discoverLiveSolves();
   if (!found.length) return null;
   return {
@@ -2777,6 +3173,8 @@ export function projectSolveSummary(projectId) {
   if (liveRun && String(liveRun.project_id) === String(projectId) && liveRun.run_id) {
     rec = loadRunDoc(projectId, liveRun.run_id) || liveRun.baseRunning || null;
   }
+  const onRunner = rec ? null : activeCoreSolves(projectId)[0];
+  if (onRunner) rec = readRunDocFile(projectId, String(onRunner.run_id), String(onRunner.simulation_id || '')) || null;
   const ranked = (rows || [])
     .filter((r) => r && (r.status === 'running' || r.status === 'starting'))
     .slice()
@@ -2804,7 +3202,7 @@ export function projectSolveSummary(projectId) {
   const live =
     liveRun && String(liveRun.project_id) === String(projectId) && String(liveRun.run_id) === docRunId
       ? liveProgressPoint(liveRun.progress)
-      : null;
+      : liveProgressPoint(liveSolveOf(doc.runner_job_id));
   const liveT = live ? live.t : 0;
   return {
     simulating: true,
@@ -2852,7 +3250,19 @@ export function getRunStatus(projectId, runId, simulationId, opts) {
       if (hit) rec.mesh_name = hit.name;
     }
   }
-  const discovered = liveRun && liveRun.run_id ? null : slim ? null : discoverLiveSolve();
+  const onRunner = liveRun && liveRun.run_id ? null : activeCoreSolves()[0] || null;
+  const discovered =
+    liveRun && liveRun.run_id
+      ? null
+      : onRunner
+        ? {
+          project_id: onRunner.project_id,
+          run_id: onRunner.run_id,
+          rec: readRunDocFile(String(onRunner.project_id), String(onRunner.run_id), String(onRunner.simulation_id || '')),
+        }
+        : slim
+          ? null
+          : discoverLiveSolve();
   const liveId = (liveRun && liveRun.run_id) || (discovered && discovered.run_id);
   const livePid = (liveRun && liveRun.project_id) || (discovered && discovered.project_id) || null;
   const scopedRuns = runsForActiveStudy(id, cat.runs, simulationId);
@@ -3199,23 +3609,6 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
   return false;
 }
 
-/**
- * The most MPI ranks this PC gives a run: one per physical core (never two on one
- * core's hyperthreads), capped by Settings → Hardware. WSL's own slot count is not
- * asked here (resolveNProcs and the plugin case relay clamp by it).
- */
-export function hardwareRankCap() {
-  const logical = Math.max(1, (cpus() || []).length);
-  // One rank per physical core. Never oversubscribe hyperthreads: OpenMPI
-  // ranks busy-poll, and two ranks on one core ran ~18x slower in testing.
-  let nProcs;
-  if (PHYSICAL_CORES >= 1) nProcs = Math.max(2, Math.min(PHYSICAL_CORES, logical));
-  else nProcs = Math.max(2, logical >= 8 ? Math.floor(logical / 2) : logical);
-  const hw = hardwarePrefs();
-  const cap = hw && Number(hw.n_procs);
-  if (Number.isFinite(cap) && cap >= 1) nProcs = Math.min(nProcs, Math.floor(cap));
-  return nProcs;
-}
 
 /**
  * Run docs the boot check looks at: every run with a WSL case that is `running`
@@ -3418,3 +3811,13 @@ export function coreSolveEvents({ seen, tail, run, saved }) {
 export function coreDrainNeeded({ exitCode, sawResult, sawWslStart, killSent }) {
   return exitCode !== 0 && !sawResult && !!(sawWslStart || killSent);
 }
+
+// The run-doc writer and the progress shape core-solve.js follows runner runs with.
+attachCoreSolveHost({
+  newState: newProgressState,
+  snapshot: snapshotProgress,
+  residualSeries: residualSeriesFor,
+  logProgress: (logPath, analysisKey) => (logPath && existsSync(logPath) ? readLogProgress(logPath, analysisKey || runAnalysisKeyOf(null)) : null),
+  writeRunDoc: (projectId, doc) => writeRunnerDoc(projectId, doc),
+  invalidate: () => invalidateLiveSolveCache(),
+});
