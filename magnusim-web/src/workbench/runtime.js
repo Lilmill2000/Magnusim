@@ -26277,22 +26277,6 @@ async function deleteBcClient(id) {
   return j;
 }
 
-function showBcPanel(which) {
-  const type =
-    which === 'po' ||
-    which === 'pi' ||
-    which === 'Pressure' ||
-    which === 'Pressure outlet' ||
-    which === 'Pressure inlet'
-      ? 'Pressure'
-      : which === 'vo' || which === 'Velocity outlet'
-        ? 'Velocity outlet'
-        : 'Velocity inlet';
-  const hit = bcList().find((b) => b.bc_type === type);
-  if (hit) showBcEditor(hit);
-  else createBcClient(type).catch((e) => console.error('[CFD] BC create', e));
-}
-
 function syncViAssignList() {
   syncBcAssignList();
 }
@@ -35550,20 +35534,6 @@ function applyStudyDropOrder(ids, geometryId) {
           ensureBcInActiveList(hit);
           showBcEditor(hit);
         }
-        return;
-      }
-      if (node.matches('[data-w19-vi="1"]')) {
-        const list = (bcCatalog && bcCatalog.bcs) || [];
-        const hit = list.find((b) => b.bc_type === 'Velocity inlet');
-        if (hit && typeof showBcEditor === 'function') showBcEditor(hit);
-        else if (typeof showBcPanel === 'function') showBcPanel('vi');
-        return;
-      }
-      if (node.matches('[data-w19-po="1"]')) {
-        const list = (bcCatalog && bcCatalog.bcs) || [];
-        const hit = list.find((b) => String(b.bc_type || '').startsWith('Pressure'));
-        if (hit && typeof showBcEditor === 'function') showBcEditor(hit);
-        else if (typeof showBcPanel === 'function') showBcPanel('po');
         return;
       }
       if (node.matches('[data-w19-bcs="1"]')) {

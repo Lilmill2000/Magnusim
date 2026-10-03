@@ -36,11 +36,6 @@
       "reason": "W18_LEGACY_AIR: the frozen Air record an older project's Air without numbers still reads, the study-fluid fallback by that name, and the X-CFD-Material-Name header."
     },
     {
-      "file": "src/workbench/runtime.js",
-      "max_hits": 7,
-      "reason": "The fluid tree folder's DOM / stored-state key ('Air', fluidTreeKey: projects' stored tree state and LeftTree's Air:<study> key use it), a saved material's kinematic_viscosity record key, and the BC tree shortcuts for 'Velocity inlet' / 'Pressure outlet'."
-    },
-    {
       "file": "python/cfddesk/case/bc_menu.py",
       "max_hits": 6,
       "reason": "_LEGACY_MENU: the menu keys v8 project.json files hold for the seven BC type keys projects have always stored, so old projects load without the plugin."
@@ -49,6 +44,11 @@
       "file": "python/cfddesk/project/legacy_sim.py",
       "max_hits": 6,
       "reason": "Frozen migrations of pre-v12 project.json files (v4 BC settings, the v12 initial-condition inlet key, the old default BC names). Read only when an old file is loaded."
+    },
+    {
+      "file": "src/workbench/runtime.js",
+      "max_hits": 4,
+      "reason": "The fluid tree folder's DOM / stored-state key ('Air', fluidTreeKey: projects' stored tree state and LeftTree's Air:<study> key use it) and a saved material's kinematic_viscosity record key."
     },
     {
       "file": "python/cfddesk/project/web_mirrors/materials.py",
