@@ -31,14 +31,14 @@
   ],
   "if_vocab": [
     {
-      "file": "src/workbench/runtime.js",
-      "max_hits": 14,
-      "reason": "The page's material tree node and fallbacks ('Air' folder, label and row name) and the BC tree shortcuts for 'Velocity inlet' / 'Pressure outlet'. Shrinks as the tree reads the study's material model and BC families."
-    },
-    {
       "file": "scripts/w18-materials.js",
       "max_hits": 13,
       "reason": "W18_LEGACY_AIR: the frozen Air record an older project's Air without numbers still reads, the study-fluid fallback by that name, and the X-CFD-Material-Name header."
+    },
+    {
+      "file": "src/workbench/runtime.js",
+      "max_hits": 7,
+      "reason": "The fluid tree folder's DOM / stored-state key ('Air', fluidTreeKey: projects' stored tree state and LeftTree's Air:<study> key use it), a saved material's kinematic_viscosity record key, and the BC tree shortcuts for 'Velocity inlet' / 'Pressure outlet'."
     },
     {
       "file": "python/cfddesk/case/bc_menu.py",

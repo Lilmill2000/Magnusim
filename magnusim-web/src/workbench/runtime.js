@@ -87,7 +87,7 @@ import {
   typeChangeFields,
   valueQuantity as bcValueQuantity,
 } from '../bcCatalog';
-import { modelFor as materialModelFor, recordFields as materialRecordFields } from '../materialModel';
+import { defaultFluidName, modelFor as materialModelFor, recordFields as materialRecordFields } from '../materialModel';
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
 import { newPluginStudy, shownStudyTitles } from '../chrome/studyName';
@@ -18531,8 +18531,8 @@ function applyCollapseSetupSection(section) {
   if (!section) return;
   collapseTreeFolder(section);
   if (section === 'Materials') {
-    treeUi.expanded.Air = false;
-    collapseTreeFolder('Air');
+    treeUi.expanded[fluidTreeKey()] = false;
+    collapseTreeFolder(fluidTreeKey());
   }
   if (section === 'Boundary conditions') {
     const bcs = bcCatalog && bcCatalog.bcs;
@@ -20717,12 +20717,12 @@ function refreshSetupTree() {
         materialsChildren =
           '<ul>' +
           '<li class="tree-node' +
-          treeExpClass('Air') +
+          treeExpClass(fluidTreeKey()) +
           sel('air') +
-          '" data-label="Air" data-w18-air="1">' +
+          '" data-label="' + fluidTreeKey() + '" data-w18-air="1">' +
           '<div class="tree-row">' +
-          (airKids ? '<span class="tw">' + treeTw('Air') + '</span>' : '') +
-          '<span class="tl">' + escapeHtml(String((_w18.material && _w18.material.name) || 'Air')) + '</span></div>' +
+          (airKids ? '<span class="tw">' + treeTw(fluidTreeKey()) + '</span>' : '') +
+          '<span class="tl">' + escapeHtml(materialShownName(_w18.material)) + '</span></div>' +
           airKids +
           '</li></ul>';
       }
@@ -22041,6 +22041,24 @@ window.__CFD_W17_CREATE__ = createSimulationClient;
  * Bank: Materials + → Air (Newtonian) → assign Body1 → ✓ save.
  * No BCs / mesh form / solves in this slice.
  * ======================================================================== */
+/**
+ * The study fluid's tree folder key (its expanded state; data-label in the
+ * fallback tree). A DOM / stored-state key, not a fluid name: projects' stored
+ * tree state and LeftTree's `Air:<study>` key use it, so it stays.
+ */
+function fluidTreeKey() {
+  return 'Air';
+}
+
+/**
+ * A material's shown name: its own; else the default fluid of the study's
+ * material model (Air for Incompressible Flow); 'Fluid' before the registry loads.
+ */
+function materialShownName(mat) {
+  const st = window.__CFD_STUDY_STATE__;
+  return String((mat && mat.name) || defaultFluidName(st && st.analysis_type) || 'Fluid');
+}
+
 /** The material model of the study's analysis (registry), or undefined before the registry loads. */
 function studyMaterialModel() {
   const st = window.__CFD_STUDY_STATE__;
@@ -22171,7 +22189,7 @@ function applyMaterialRecord(mat, projectId, opts) {
   const sameMat = !viewingMat || !incomingId || String(viewingMat) === String(incomingId);
   const row = {
     id: mat.id,
-    name: mat.name || 'Air',
+    name: materialShownName(mat),
     viscosity_model: mat.viscosity_model || (studyMaterialModel()?.record_constants?.viscosity_model ?? null),
     kinematic_viscosity: mat.kinematic_viscosity ?? materialFill(mat).kinematic_viscosity ?? null,
     density: mat.density ?? materialFill(mat).density ?? null,
@@ -22201,10 +22219,10 @@ function applyMaterialRecord(mat, projectId, opts) {
   materialCatalog.ready = true;
   materialCatalog.created = true;
   materialCatalog.libraryApplied = true;
-  materialCatalog.note = (row.name || 'Air') + ' assigned to ' + ((row.assigned_volumes || []).join(', ') || '—');
+  materialCatalog.note = materialShownName(row) + ' assigned to ' + ((row.assigned_volumes || []).join(', ') || '—');
   if (!opts || opts.openPanel !== false) {
     expandTreeFolder('Materials', sid);
-    expandTreeFolder('Air', sid);
+    expandTreeFolder(fluidTreeKey(), sid);
     openAirPanel();
   }
   refreshSetupTree();
