@@ -270,17 +270,21 @@ test.describe('Magnusim smoke', () => {
     const sample = list.find((p) => String(p.id || '').startsWith('sample-project-steady-state'));
     expect(sample, 'sample-project-steady-state* must exist').toBeTruthy();
     const id = sample.id || sample.project_id;
+    await page.goto(`/#/p/${encodeURIComponent(id)}`);
+    await expect(page.locator('#app.workbench')).toBeVisible({ timeout: 60_000 });
+    // The shared sample project can hold other specs' studies: read and click the active
+    // study's Air, not the first Air in the project or the tree.
+    await page.waitForFunction(() => !!(window.__CFD_W17__ && window.__CFD_W17__.activeId), null, { timeout: 30_000 });
+    const sid = await page.evaluate(() => window.__CFD_W17__.activeId);
     const air = async () => {
-      const r = await request.get(`/api/materials?project_id=${encodeURIComponent(id)}`);
+      const r = await request.get(`/api/materials?project_id=${encodeURIComponent(id)}&simulation_id=${encodeURIComponent(sid)}`);
       const j = await r.json();
       return (j.materials || []).find((m) => /air/i.test(String(m.name || ''))) || {};
     };
-
-    await page.goto(`/#/p/${encodeURIComponent(id)}`);
-    await expect(page.locator('#app.workbench')).toBeVisible({ timeout: 60_000 });
-    const airRow = page.locator('#left-tree [data-w18-air="1"] > .tree-row').first();
+    const study = page.locator(`#left-tree [data-w17-sim-id="${sid}"]`);
+    const airRow = study.locator('[data-w18-air="1"] > .tree-row').first();
     if (!(await airRow.isVisible().catch(() => false))) {
-      await page.locator('#left-tree [data-w18-materials="1"] > .tree-row').first().click();
+      await study.locator('[data-w18-materials="1"] > .tree-row').first().click();
     }
     await airRow.click();
     const panel = page.locator('#panel-air-material .cfd-island');
@@ -306,7 +310,7 @@ test.describe('Magnusim smoke', () => {
     await expect(row).toHaveAttribute('data-assigned', flipped.length ? '1' : '0');
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await expect.poll(async () => (await air()).assigned_volumes).toEqual(before);
-    await expect(page.locator('#left-tree [data-w18-materials="1"] > .tree-row')).toContainText('✓');
+    await expect(study.locator('[data-w18-materials="1"] > .tree-row').first()).toContainText('✓');
   });
 
   test('BC: pick a type, then Add; click a face; hub card reopens the editor', async ({ page, request }) => {
