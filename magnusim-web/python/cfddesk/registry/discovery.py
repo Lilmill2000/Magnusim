@@ -534,9 +534,16 @@ def _ui_fields(meta: dict[str, Any]) -> tuple[str | None, str]:
 # Folders of loaded plugins: each is on sys.path so a plugin can import its own
 # package (``import incompressible_flow.writer``).
 _PLUGIN_ROOTS: set[str] = set()
+# The sys.path entries discovery put there itself (a folder already on the path,
+# such as one the environment configured, is not ours to take away).
+_PLUGIN_PATHS: set[str] = set()
 
 
 def _purge_plugin_modules() -> None:
+    """Forget the loaded plugins' modules and the sys.path entries discovery added
+    for them, so the next load imports each plugin's package from the folder it
+    loads the plugin from (never from a folder of an earlier load that is still
+    first on the path)."""
     roots = tuple(str(Path(r).resolve()) for r in _PLUGIN_ROOTS)
     for name, mod in list(sys.modules.items()):
         if name.startswith(("cfddesk._plugins.", "cfddesk._bundled.")):
@@ -545,6 +552,12 @@ def _purge_plugin_modules() -> None:
         file = getattr(mod, "__file__", None) if roots else None
         if file and str(Path(file).resolve()).startswith(roots):
             del sys.modules[name]
+    for entry in _PLUGIN_PATHS:
+        while entry in sys.path:
+            sys.path.remove(entry)
+    _PLUGIN_PATHS.clear()
+    _PLUGIN_ROOTS.clear()
+    importlib.invalidate_caches()
 
 
 def _apply_disk_meta(
@@ -1007,6 +1020,7 @@ def _load_folder_plugin(
     root = str(plugin_dir.resolve())
     if root not in sys.path:
         sys.path.insert(0, root)
+        _PLUGIN_PATHS.add(root)
     _PLUGIN_ROOTS.add(root)
     try:
         spec = importlib.util.spec_from_file_location(mod_name, plugin_py)
