@@ -45,7 +45,7 @@ def worker_ping() -> dict[str, Any]:
 def registry_describe() -> dict[str, Any]:
     hub = load_all(web_root=web_root())
     out: dict[str, Any] = {}
-    for kind in ("analysis", "solver", "mesher", "bc", "material", "monitor", "filter"):
+    for kind in ("analysis", "solver", "mesher", "bc", "bc_family", "material", "monitor", "filter"):
         out[kind] = hub.registry(kind).describe()
     out["plugins"] = [
         {

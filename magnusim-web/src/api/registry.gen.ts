@@ -4,6 +4,7 @@ export type FilterKey = 'cut_plane' | 'streamlines' | 'plot_over_path' | 'iso_su
 export type MesherKey = 'standard' | 'cfmesh' | 'snappy_hexdominant' | (string & {});
 export type MaterialKey = 'newtonian_incompressible' | (string & {});
 export type BcKey = 'velocity_inlet_fixed' | 'velocity_inlet_volumetric' | 'velocity_inlet_mass' | 'velocity_outlet' | 'pressure_outlet_gauge' | 'wall_noslip' | 'wall_slip' | (string & {});
+export type BcFamilyKey = string;
 export type MonitorKey = 'area_average' | 'flow_rate' | (string & {});
 
 export interface RegistryRow {
@@ -57,6 +58,61 @@ export interface RegistryRow {
   aliases?: string[];
   user_creatable?: boolean;
   quantities?: string[];
+  /** Analyses (API 1.4): the BC types and material models it offers. */
+  bc_types?: string[];
+  material_models?: string[];
+  /** Material models (API 1.4): presets, and how a study's material record stores the properties. */
+  library?: Array<Record<string, unknown>>;
+  /** Property -> the record keys that may hold it, e.g. { nu: ['kinematic_viscosity', 'nu'] }. */
+  record_keys?: Record<string, string[]>;
+  /** Values every record of the model carries. */
+  record_constants?: Record<string, unknown>;
+  /** The preset name a record has once its values are edited by hand. */
+  custom_preset?: string;
+}
+
+/** A BC type (a variant the case writer knows); API 1.4 adds semantic, patch_type, family and match. */
+export interface BcRow extends Omit<RegistryRow, 'family'> {
+  semantic?: 'inlet' | 'outlet' | 'wall' | (string & {});
+  patch_type?: 'patch' | 'wall' | (string & {});
+  /** The BcFamily key it is a variant of; '' = none. */
+  family?: string;
+  /** The record values that select it within its family: [field, value] pairs. */
+  match?: Array<[string, string]>;
+}
+
+/** Which record field holds a value with units, and when (the first row that applies wins). */
+export interface BcFamilyValue {
+  field: string;
+  /** The record field holding its unit label. */
+  unit_field: string;
+  /** The unit quantity it converts as. */
+  quantity: string;
+  /** The record values it applies to; {} = always. */
+  when: Record<string, unknown>;
+}
+
+/** A boundary condition the user picks (API 1.4, registry kind bc_family). */
+export interface BcFamilyRow {
+  key: string;
+  label: string;
+  plugin?: string;
+  /** What a saved record stores in bc_type. */
+  record_type: string;
+  /** Older bc_type values read as this family. */
+  aliases: string[];
+  color: 'inlet' | 'outlet' | 'pressure' | 'wall' | 'other';
+  /** The picker's sub-line. */
+  hint: string;
+  /** BC type keys; the first is the default. */
+  variants: string[];
+  /** A new record's fields, per unit system. */
+  defaults: { metric?: Record<string, unknown>; imperial?: Record<string, unknown> } & Record<string, unknown>;
+  values: BcFamilyValue[];
+  /** The generic editor (JSON Schema) used when ui names no bc-settings slot component. */
+  fields: Record<string, unknown> | null;
+  /** A 'bc-settings' slot component name; '' = none. */
+  ui: string;
 }
 
 /** A quantity a run's monitors report, and how it is shown (API 1.4). */
@@ -165,7 +221,8 @@ export interface RegistryDescribe {
   filter?: RegistryRow[];
   mesher?: RegistryRow[];
   material?: RegistryRow[];
-  bc?: RegistryRow[];
+  bc?: BcRow[];
+  bc_family?: BcFamilyRow[];
   monitor?: RegistryRow[];
   plugins?: Array<Record<string, unknown>>;
   required_missing?: RequiredPluginMissing[];

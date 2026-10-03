@@ -6,32 +6,14 @@ Flow-rate and slip/no-slip are settings of those types, not extra types.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
+# The spec class lives in the registry (API 1.4); these names stay importable here.
+from cfddesk.registry.bc import BcTypeSpec as BcTypeSpec
+from cfddesk.registry.bc import PatchType as PatchType
+from cfddesk.registry.bc import SemanticClass as SemanticClass
+from cfddesk.registry.bc import WriterFn as WriterFn
 from cfddesk.registry.schema import SchemaField as SettingField
-
-SemanticClass = Literal["inlet", "outlet", "wall"]
-PatchType = Literal["patch", "wall"]
-
-
-WriterFn = Callable[[str, dict[str, Any], dict[str, Any]], str]
-# (patch_name, settings, context) -> Foam boundaryField entry body (without name braces)
-
-
-@dataclass(frozen=True)
-class BcTypeSpec:
-    key: str
-    label: str
-    semantic: SemanticClass
-    patch_type: PatchType
-    settings_schema: tuple[SettingField, ...] = ()
-    write_U: WriterFn | None = None
-    write_p: WriterFn | None = None
-    write_T: WriterFn | None = None  # energy
-    # Turbulence handled via semantic class in ras.py helpers
-    supported: bool = True
 
 
 def _entry(body: str) -> str:

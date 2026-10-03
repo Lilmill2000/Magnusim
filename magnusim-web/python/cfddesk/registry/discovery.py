@@ -573,7 +573,9 @@ def _apply_disk_meta(
         result.license = str(meta.get("license") or "")
 
 
-_REF_ANALYSIS = re.compile(r"analysis '([^']+)'")
+# A cross-reference error names the spec that broke it first: "analysis 'k': ...",
+# "bc_family 'k': ..." or "bc 'k': ...". Its owner is the plugin unloaded.
+_REF_SPEC = re.compile(r"^(analysis|bc_family|bc) '([^']+)'")
 
 
 def _drop_failed_plugin(hub: RegistryHub, plugin: str, error: str) -> None:
@@ -599,10 +601,11 @@ def _drop_failed_plugin(hub: RegistryHub, plugin: str, error: str) -> None:
 
 
 def _validate_cross_refs(hub: RegistryHub) -> None:
-    """Every AnalysisType bag key must resolve. A plugin that breaks this is unloaded
-    and listed as an error; builtins and the other plugins keep loading. A builtin
-    that breaks it is a core bug and still raises."""
-    from cfddesk.registry.bc import validate_analysis_bc_refs
+    """Every AnalysisType bag key must resolve, and BC families and BC types must
+    name each other correctly. A plugin that breaks this is unloaded and listed as
+    an error; builtins and the other plugins keep loading. A builtin that breaks it
+    is a core bug and still raises."""
+    from cfddesk.registry.bc import validate_analysis_bc_refs, validate_bc_families
     from cfddesk.registry.material import validate_analysis_material_refs
     from cfddesk.registry.monitor import validate_analysis_monitor_refs
     from cfddesk.registry.solver import validate_analysis_solver_refs
@@ -612,6 +615,7 @@ def _validate_cross_refs(hub: RegistryHub) -> None:
         validate_analysis_bc_refs,
         validate_analysis_material_refs,
         validate_analysis_monitor_refs,
+        validate_bc_families,
     )
     for _ in range(64):
         try:
@@ -619,10 +623,10 @@ def _validate_cross_refs(hub: RegistryHub) -> None:
                 check(hub)
             return
         except RegistryError as exc:
-            match = _REF_ANALYSIS.search(str(exc))
-            analyses = hub.registry("analysis")
-            key = match.group(1) if match else ""
-            owner = analyses.owner(key) if key in analyses.keys() else "builtin"
+            match = _REF_SPEC.search(str(exc))
+            kind, key = (match.group(1), match.group(2)) if match else ("analysis", "")
+            specs = hub.registry(kind)
+            owner = specs.owner(key) if key in specs.keys() else "builtin"
             if owner == "builtin":
                 raise
             _drop_failed_plugin(hub, owner, str(exc))

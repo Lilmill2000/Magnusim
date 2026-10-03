@@ -61,6 +61,7 @@ mypy_path = "sdk"
 "cfddesk/project/model.py" = ["N806"]
 "cfddesk/project/numerics.py" = ["N815"]
 "cfddesk/project/transient.py" = ["N806"]
+"cfddesk/registry/bc.py" = ["N815"]
 "cfddesk/runner/case_id.py" = ["N818"]
 "cfddesk/wsl/mesh_run.py" = ["N815"]
 "tests/unit/test_registry.py" = ["N817"]

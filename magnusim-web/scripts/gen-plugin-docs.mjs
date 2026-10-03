@@ -366,7 +366,7 @@ export function renderApiMd(py, sdkInfo, bridge, kit, registry) {
     '| Kind | Key | Label | From |',
     '| --- | --- | --- | --- |',
   );
-  for (const kind of ['analysis', 'solver', 'mesher', 'bc', 'material', 'monitor', 'filter']) {
+  for (const kind of ['analysis', 'solver', 'mesher', 'bc', 'bc_family', 'material', 'monitor', 'filter']) {
     for (const row of registry[kind] || []) L.push(`| ${kind} | ${code(row.key)} | ${cell(row.label || '')} | ${cell(row.plugin || '')} |`);
   }
   if (registry.default_analysis) {

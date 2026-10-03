@@ -325,7 +325,19 @@
       "run_defaults": {
         "end_time": 200,
         "write_interval": 50
-      }
+      },
+      "bc_types": [
+        "velocity_inlet_fixed",
+        "velocity_inlet_volumetric",
+        "velocity_inlet_mass",
+        "velocity_outlet",
+        "pressure_outlet_gauge",
+        "wall_noslip",
+        "wall_slip"
+      ],
+      "material_models": [
+        "newtonian_incompressible"
+      ]
     },
     {
       "key": "incompressible_transient",
@@ -730,7 +742,19 @@
         "n_outer_correctors": 1,
         "n_correctors": 2,
         "n_non_orth_correctors": 0
-      }
+      },
+      "bc_types": [
+        "velocity_inlet_fixed",
+        "velocity_inlet_volumetric",
+        "velocity_inlet_mass",
+        "velocity_outlet",
+        "pressure_outlet_gauge",
+        "wall_noslip",
+        "wall_slip"
+      ],
+      "material_models": [
+        "newtonian_incompressible"
+      ]
     }
   ],
   "solver": [
@@ -1184,7 +1208,11 @@
         },
         "additionalProperties": false
       },
-      "supported": true
+      "supported": true,
+      "semantic": "inlet",
+      "patch_type": "patch",
+      "family": "",
+      "match": []
     },
     {
       "key": "velocity_inlet_volumetric",
@@ -1224,7 +1252,11 @@
         },
         "additionalProperties": false
       },
-      "supported": true
+      "supported": true,
+      "semantic": "inlet",
+      "patch_type": "patch",
+      "family": "",
+      "match": []
     },
     {
       "key": "velocity_inlet_mass",
@@ -1272,7 +1304,11 @@
         },
         "additionalProperties": false
       },
-      "supported": true
+      "supported": true,
+      "semantic": "inlet",
+      "patch_type": "patch",
+      "family": "",
+      "match": []
     },
     {
       "key": "velocity_outlet",
@@ -1303,7 +1339,11 @@
         },
         "additionalProperties": false
       },
-      "supported": true
+      "supported": true,
+      "semantic": "outlet",
+      "patch_type": "patch",
+      "family": "",
+      "match": []
     },
     {
       "key": "pressure_outlet_gauge",
@@ -1325,7 +1365,11 @@
         },
         "additionalProperties": false
       },
-      "supported": true
+      "supported": true,
+      "semantic": "outlet",
+      "patch_type": "patch",
+      "family": "",
+      "match": []
     },
     {
       "key": "wall_noslip",
@@ -1390,7 +1434,11 @@
         },
         "additionalProperties": false
       },
-      "supported": true
+      "supported": true,
+      "semantic": "wall",
+      "patch_type": "wall",
+      "family": "",
+      "match": []
     },
     {
       "key": "wall_slip",
@@ -1455,14 +1503,107 @@
         },
         "additionalProperties": false
       },
-      "supported": true
+      "supported": true,
+      "semantic": "wall",
+      "patch_type": "wall",
+      "family": "",
+      "match": []
     }
   ],
+  "bc_family": [],
   "material": [
     {
       "key": "newtonian_incompressible",
       "label": "Newtonian (incompressible)",
-      "plugin": "incompressible_flow"
+      "plugin": "incompressible_flow",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "nu": {
+            "type": "number",
+            "default": 1.5e-05,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "unit": "m^2/s",
+              "group": "transport"
+            },
+            "title": "Kinematic viscosity"
+          },
+          "rho": {
+            "type": "number",
+            "default": 1.204,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "unit": "kg/m^3",
+              "group": "transport"
+            },
+            "title": "Density"
+          }
+        },
+        "additionalProperties": false
+      },
+      "library": [
+        {
+          "key": "air",
+          "name": "Air",
+          "viscosity_model": "Newtonian",
+          "nu": 1.5e-05,
+          "rho": 1.204
+        },
+        {
+          "key": "argon",
+          "name": "Argon",
+          "viscosity_model": "Newtonian",
+          "nu": 1.34e-05,
+          "rho": 1.661
+        },
+        {
+          "key": "co2",
+          "name": "Carbon dioxide",
+          "viscosity_model": "Newtonian",
+          "nu": 8.03e-06,
+          "rho": 1.842
+        },
+        {
+          "key": "hydrogen",
+          "name": "Hydrogen",
+          "viscosity_model": "Newtonian",
+          "nu": 0.000105,
+          "rho": 0.0838
+        },
+        {
+          "key": "nitrogen",
+          "name": "Nitrogen",
+          "viscosity_model": "Newtonian",
+          "nu": 1.5e-05,
+          "rho": 1.165
+        },
+        {
+          "key": "water",
+          "name": "Water",
+          "viscosity_model": "Newtonian",
+          "nu": 1.004e-06,
+          "rho": 998.2
+        },
+        {
+          "key": "seawater",
+          "name": "Seawater (3.5% saline)",
+          "viscosity_model": "Newtonian",
+          "nu": 1.05e-06,
+          "rho": 1025.0
+        },
+        {
+          "key": "custom",
+          "name": "Custom fluid",
+          "viscosity_model": "Newtonian",
+          "nu": 1.5e-05,
+          "rho": 1.204
+        }
+      ],
+      "record_keys": {},
+      "record_constants": {},
+      "custom_preset": "custom"
     }
   ],
   "monitor": [

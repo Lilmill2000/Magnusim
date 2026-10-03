@@ -75,7 +75,9 @@ def test_load_all_kinds_present():
         assert kind in hub.kinds()
         reg = get_registry(kind)
         assert hub.registry(kind) is reg
-        assert len(reg.keys()) > 0
+        # bc_family (API 1.4) starts empty: only plugins register families.
+        if kind != "bc_family":
+            assert len(reg.keys()) > 0
 
 
 def test_builtin_keys_match_land2_through_land6():

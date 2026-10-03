@@ -193,6 +193,9 @@ def describe_extra(spec: Any) -> dict[str, Any]:
         "ui": dict(_hook(spec, "ui") or {}),
         "study_defaults": study_defaults(spec),
         "run_defaults": run_defaults(spec),
+        # API 1.4: the BC types and material models the analysis offers.
+        "bc_types": [str(k) for k in getattr(spec, "bc_types", ()) or ()],
+        "material_models": [str(k) for k in getattr(spec, "material_models", ()) or ()],
     }
 
 

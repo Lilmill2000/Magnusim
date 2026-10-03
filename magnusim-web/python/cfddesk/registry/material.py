@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from cfddesk.registry.base import RegistryError
@@ -23,6 +23,14 @@ class MaterialModel:
     # Built-in newtonian_incompressible delegates to write_transport_properties.
     write_files: Callable[..., None] | None = None
     library: tuple[dict[str, Any], ...] = ()
+    # API 1.4: how a study's material record stores this model's properties.
+    # record_keys: property -> the record keys that may hold it, first preferred,
+    # e.g. {"nu": ("kinematic_viscosity", "nu"), "rho": ("density", "rho")}.
+    record_keys: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Values every record of this model carries, e.g. {"type": "Newtonian"}.
+    record_constants: dict[str, Any] = field(default_factory=dict)
+    # The preset name a record has once its values are edited by hand.
+    custom_preset: str = "custom"
 
 
 def validate_analysis_material_refs(hub: RegistryHub) -> None:

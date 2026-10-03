@@ -16,7 +16,12 @@ from cfddesk.registry.analysis import (
     write_run_case,
 )
 from cfddesk.registry.base import Registry, RegistryError, Spec
-from cfddesk.registry.bc import validate_analysis_bc_refs
+from cfddesk.registry.bc import (
+    BcFamily,
+    BcTypeSpec,
+    validate_analysis_bc_refs,
+    validate_bc_families,
+)
 from cfddesk.registry.contract import LEGACY_MONITOR_QUANTITIES
 from cfddesk.registry.discovery import (
     RegistryHub,
@@ -60,7 +65,9 @@ __all__ = [
     "analysis_has_mesh_bags",
     "validate_multi_region_meshing",
     "BcTypeSpec",
+    "BcFamily",
     "validate_analysis_bc_refs",
+    "validate_bc_families",
     "MaterialModel",
     "validate_analysis_material_refs",
     "MonitorType",
@@ -93,11 +100,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy BcTypeSpec ? avoids circular import with case.bc_registry."""
-    if name == "BcTypeSpec":
-        from cfddesk.case.bc_registry import BcTypeSpec
-
-        return BcTypeSpec
+    """Names read when used (the default analysis's keys come from its manifest)."""
     if name in ("DEFAULT_STEADY_KEY", "DEFAULT_TRANSIENT_KEY", "LEGACY_ANALYSIS_ALIAS"):
         # The default analysis's keys and alias, read from its manifest when used.
         from cfddesk.registry import analysis

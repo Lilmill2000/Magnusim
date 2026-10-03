@@ -74,6 +74,17 @@ def _schema_to_json(schema: Any, *, kind: str, key: str, bag: str) -> Any:
         return None
 
 
+def _plain_json(value: Any) -> Any:
+    """A JSON-ready copy of plain data (tuples become lists, other objects text)."""
+    if isinstance(value, dict):
+        return {str(k): _plain_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_json(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
 class Registry(Generic[T]):
     """Keyed store of specs for one kind (analysis, solver, bc, ...)."""
 
@@ -208,10 +219,11 @@ class Registry(Generic[T]):
                 "label": getattr(spec, "label", key),
                 "plugin": self._plugins.get(key, getattr(spec, "plugin", "builtin")),
             }
-            # Historical dump key: settings/params/schema -> "schema"
+            # Historical dump key: settings/params/properties/schema -> "schema"
             primary = (
                 getattr(spec, "settings_schema", None)
                 or getattr(spec, "params_schema", None)
+                or getattr(spec, "properties_schema", None)
                 or getattr(spec, "schema", None)
             )
             if primary is not None:
@@ -278,6 +290,27 @@ class Registry(Generic[T]):
                 for extra in ("application", "time_dependency", "parallel", "stop_strategy"):
                     if hasattr(spec, extra):
                         row[extra] = getattr(spec, extra)
+            if self.kind == "bc":
+                # API 1.4: what the BC type is and which family variant it is.
+                from cfddesk.registry.bc import describe_bc
+
+                row.update(describe_bc(spec))
+            if self.kind == "bc_family":
+                from cfddesk.registry.bc import describe_bc_family
+
+                row.update(describe_bc_family(spec))
+            if self.kind == "material":
+                # API 1.4: the properties form, the presets and how a record stores them.
+                if "schema" not in row:
+                    row["schema"] = _schema_to_json(
+                        getattr(spec, "properties_schema", ()) or (), kind=self.kind, key=key, bag="properties_schema"
+                    )
+                row["library"] = _plain_json(list(getattr(spec, "library", ()) or ()))
+                row["record_keys"] = {
+                    str(k): [str(a) for a in v] for k, v in dict(getattr(spec, "record_keys", None) or {}).items()
+                }
+                row["record_constants"] = _plain_json(dict(getattr(spec, "record_constants", None) or {}))
+                row["custom_preset"] = str(getattr(spec, "custom_preset", "custom") or "custom")
             if self.kind == "monitor":
                 # API 1.4: what the monitor is and measures; its fields_schema is its "schema".
                 row["target"] = str(getattr(spec, "target", "") or "")

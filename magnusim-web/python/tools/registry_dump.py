@@ -4,7 +4,7 @@
 CLI: tools/registry_dump.py [--check-requirements] [--check] [--out PATH] [--web-root PATH]
 
 Prints (or writes) JSON:
-  {analysis, solver, mesher, bc, material, monitor, filter, plugins, missing}
+  {analysis, solver, mesher, bc, bc_family, material, monitor, filter, plugins, missing}
 
 Uses existing load_all / Registry.describe / check_requirements.
 land13: W17 / MESH_ENGINES consumers read scripts/generated/registry.json via registry-defaults.js.
@@ -44,6 +44,7 @@ DUMP_KINDS: tuple[str, ...] = (
     "solver",
     "mesher",
     "bc",
+    "bc_family",
     "material",
     "monitor",
     "filter",
@@ -216,7 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Emit full cfddesk registry JSON "
-            "(analysis/solver/mesher/bc/material/monitor/filter/plugins)."
+            "(analysis/solver/mesher/bc/bc_family/material/monitor/filter/plugins)."
         )
     )
     p.add_argument(
