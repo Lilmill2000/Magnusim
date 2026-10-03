@@ -10,7 +10,7 @@ import { startHost } from './support/host-server.mjs';
 // a plugin's own family with its hint, its record is edited in a form built from
 // the family's fields (it names no UI component), the edit survives a reload, and
 // its faces paint in the family's colour ('other'). The fixture plugin
-// (python/tests/fixtures/plugins/example-extra-bc) adds an analysis that offers
+// (python/tests/fixtures/bc-plugins/example-extra-bc) adds an analysis that offers
 // Incompressible Flow's BCs plus a symmetry plane. No WSL: nothing is solved.
 const FIXTURE = 'sample-project-steady-state-e2e';
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,7 +21,7 @@ let plugins;
 
 test.beforeAll(async () => {
   plugins = mkdtempSync(join(tmpdir(), 'bc-contract-'));
-  const from = join(WEB, 'python', 'tests', 'fixtures', 'plugins', 'example-extra-bc');
+  const from = join(WEB, 'python', 'tests', 'fixtures', 'bc-plugins', 'example-extra-bc');
   cpSync(from, join(plugins, 'example-extra-bc'), {
     recursive: true,
     filter: (src) => !src.includes('__pycache__'),

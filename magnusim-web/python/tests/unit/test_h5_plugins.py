@@ -22,7 +22,9 @@ PYTHON_ROOT = WEB_ROOT / "python"
 PLUGINS = Path(__file__).resolve().parents[1] / "fixtures" / "plugins"
 TEMPLATE = WEB_ROOT / "templates" / "plugin"
 TEMPLATE_TEST = TEMPLATE / "tests" / "test_register.py"
-DEMOS = ("example-laminar", "example-extra-mesher", "example-extra-bc", "example-hook-monitor", "ui-folder-name")
+DEMOS = ("example-laminar", "example-extra-mesher", "example-hook-monitor", "ui-folder-name")
+# The BC contract's fixture lives apart, so its analysis is not in every e2e server's Create list.
+BC_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "bc-plugins" / "example-extra-bc"
 FORBIDDEN = ("cfddesk.builtin", "scripts", "src.workbench")
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "js-project"
 
@@ -58,7 +60,7 @@ def _copy_demos(web: Path) -> None:
 
 def test_gate_h5_zero_core_edits_static():
     roots = [PLUGINS / name for name in DEMOS]
-    roots.append(TEMPLATE)
+    roots += [BC_FIXTURE, TEMPLATE]
     for root in roots:
         for path in root.rglob("*.py"):
             bad = [name for name in _imports(path) if _forbidden(name)]
@@ -115,7 +117,7 @@ def test_gate_h5_demos_register(monkeypatch):
 def test_extra_bc_fixture_publishes_its_family(monkeypatch):
     """The e2e fixture for the BC contract: an analysis offering IF's BCs plus a
     symmetry plane whose family has one choice field and no UI component."""
-    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(PLUGINS))
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(BC_FIXTURE.parent))
     load_all(force=True)
     steady = get_registry("analysis").get(DEFAULT_STEADY_KEY)
     extra = get_registry("analysis").get("extra_bc_steady")

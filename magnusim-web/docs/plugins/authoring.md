@@ -174,7 +174,7 @@ validate_bc_families(hub)  # the check the host runs once every plugin has regis
 assert row["record_type"] == "Symmetry" and row["variants"] == ["symmetry_plane"], row
 ```
 
-After every plugin has registered, each family's variants must be registered BC types and each BC type's `family` a registered family; a plugin that breaks this is unloaded with the reason on its Settings row. An analysis offers BCs through its `bc_types`: clone one as in Register and add your variant (`python/tests/fixtures/plugins/example-extra-bc` does both). Its studies' BC panel then lists every family with a variant among them. With `ui` empty, the editor is a form built from `fields`. For an editor of your own, name it in `ui` and register the component from your UI:
+After every plugin has registered, each family's variants must be registered BC types and each BC type's `family` a registered family; a plugin that breaks this is unloaded with the reason on its Settings row. An analysis offers BCs through its `bc_types`: clone one as in Register and add your variant (`python/tests/fixtures/bc-plugins/example-extra-bc` does both). Its studies' BC panel then lists every family with a variant among them. With `ui` empty, the editor is a form built from `fields`. For an editor of your own, name it in `ui` and register the component from your UI:
 
 ```javascript
 host.pluginUi.registerBcSettings("my-plugin.bc", MyBcEditor, { facesNote: MyFacesNote });

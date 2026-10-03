@@ -66,11 +66,10 @@ test('@plugins gate:h5-demos-visible laminar, extra mesher, and one React copy',
   await expect(page.locator('[data-mesh-engine="1"] option', { hasText: 'Extra mesher' })).toHaveCount(1);
 
   const step = await openSettingsPlugins(page);
-  // The five example plugins (extra BC: the BC contract's fixture), the stub analysis and
-  // the study demo (H11) from the fixture folder, and the bundled plugins: Incompressible
-  // Flow, on, plus any optional bundled plugin, listed off (G11: one that ships off is
-  // listed so it can be turned on).
-  await expect(step.locator('[data-plugin-key]:not([data-plugin-source="bundled"])')).toHaveCount(7, { timeout: 15_000 });
+  // The four example plugins, the stub analysis and the study demo (H11) from the fixture
+  // folder, and the bundled plugins: Incompressible Flow, on, plus any optional bundled
+  // plugin, listed off (G11: one that ships off is listed so it can be turned on).
+  await expect(step.locator('[data-plugin-key]:not([data-plugin-source="bundled"])')).toHaveCount(6, { timeout: 15_000 });
   await expect(step.locator('[data-plugin-key="incompressible_flow"]')).toHaveCount(1);
   const optional = step.locator('[data-plugin-source="bundled"][data-plugin-default-off="1"]');
   for (let i = 0; i < (await optional.count()); i++) {
