@@ -303,8 +303,10 @@ describe('frames make the run doc', () => {
     const job = out.bodyExtra.runner_job_id;
     const run = () => w27.getRunStatus(PID, rid, SID).body.run;
     relay([{ event: 'stage', stage: 'prepare' }]);
-    console.log('DBG', JSON.stringify({ disk: runDoc(rid).has_results, run: w27.getRunStatus(PID, rid, SID).body.run.has_results, n: w27.getRunStatus(PID, rid, SID).body.run.n_saved_times, row: w27.getRunStatus(PID, rid, SID).body.runs.find((r) => r.id === rid).has_results }));
     assert.equal(run().stage, 'prepare');
+    // The relay that runs it on Windows: the Run panel's "PID n" (as run_solve's was).
+    relay([{ event: 'relay_launch', launcher_pid: 11, relay_pid: 4321, breakaway: true }]);
+    assert.deepEqual([runDoc(rid).pid, run().pid], [4321, 4321]);
     relay([{ event: 'stage', stage: 'copy_to_wsl' }]);
     assert.equal(run().stage, 'copy');
     relay([{ event: 'ranks', n_procs: 2 }]);
@@ -452,6 +454,16 @@ describe('the end', () => {
     await sleep(FRAME_WAIT);
     const now = w27.getRunStatus(PID, rid, SID).body.run;
     assert.deepEqual([now.stage, now.iteration, now.co_mean], ['solve', 2, 0.2]);
+  });
+
+  it('the relay pid shown while it solves is cleared at the end', async () => {
+    const rid = draftRun();
+    await start(rid);
+    relay([{ event: 'relay_launch', relay_pid: 5150 }]);
+    assert.equal(runDoc(rid).pid, 5150);
+    writeStatus(rid, { outcome: { ok: true, phase: 'solve', exit_code: 0 }, clean: true, exit_code: 0 });
+    fx.spawned[fx.spawned.length - 1].onClose();
+    assert.deepEqual([runDoc(rid).status, runDoc(rid).pid], ['done', null]);
   });
 
   it('a doc still running when its record ended (the server stopped between the writes) reads as ended', async () => {

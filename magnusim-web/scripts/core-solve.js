@@ -350,6 +350,14 @@ export function onCoreSolveEvent(rec, ev) {
       });
       return;
     }
+    case 'relay': {
+      // The relay's pid while the run solves (the Run panel's "PID n"); the end clears it.
+      const pid = Math.floor(Number(ev.pid));
+      if (!Number.isFinite(pid) || pid < 1) return;
+      live.pid = pid;
+      patchRun(rec, { pid });
+      return;
+    }
     case 'ranks': {
       const n = Math.floor(Number(ev.n_procs));
       if (!Number.isFinite(n) || n < 1) return;

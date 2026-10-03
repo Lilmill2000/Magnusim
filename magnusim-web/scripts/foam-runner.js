@@ -68,9 +68,10 @@
  * ranks {n_procs}; phase {phase, seconds}; progress {time, n_steps, residuals,
  * co_max?, co_mean?, delta_t?, points} (at most one per 250 ms, plus one at each
  * stage change and at the end; a `solve` run's also carries open, the step the
- * solver is on); time_saved {t}; warning {code, message};
- * end {status, error, code, result}. None carries a path, a pid, a log line or
- * exception text.
+ * solver is on); time_saved {t}; warning {code, message}; a `solve` run's relay {pid}
+ * (its relay's pid, for its Run panel);
+ * end {status, error, code, result}. None carries a path, a pid (but a `solve`
+ * run's relay), a log line or exception text.
  *
  * ### End statuses (from evidence, never from an exit code)
  * done, failed, stopped or lost. A stop that was asked for gives `stopped`; done
@@ -872,8 +873,17 @@ export function relayEvent(id, entry, ev) {
       if (message) deliver(id, { event: 'warning', code, message });
       return;
     }
+    case 'relay_launch': {
+      // A core solve's Run panel names the process that runs it on Windows (its relay),
+      // as it named run_solve's. Plugin cases get no such event.
+      const pid = Math.floor(Number(ev.relay_pid));
+      if (entry.kind !== 'solve' || !Number.isFinite(pid) || pid < 1) return;
+      updateFoamRecord(id, { relay_pid: pid });
+      deliver(id, { event: 'relay', pid });
+      return;
+    }
     default:
-      // start, result, pre_result, log, refused, relay_launch, relay_end: not frame events.
+      // start, result, pre_result, log, refused, relay_end: not frame events.
       return;
   }
 }
