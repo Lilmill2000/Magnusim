@@ -6,17 +6,21 @@ import {
   legendSeries,
   linePlotGeometry,
   nearestRow,
+  PAD_B,
   PAD_L,
   PAD_R,
+  PAD_T,
   PLOT_H,
   PLOT_W,
   seriesColor,
   tipLeft,
+  xTickLabel,
+  type LinePlotX,
   type LineRow,
   type LineSeries,
 } from './linePlotGeometry';
 
-export type { LineSeries } from './linePlotGeometry';
+export type { LinePlotX, LineSeries } from './linePlotGeometry';
 
 export interface LinePlotProps {
   rows: ReadonlyArray<Record<string, number | undefined>>;
@@ -25,8 +29,11 @@ export interface LinePlotProps {
   label: string;
   /** The row key of the x value; default 't'. */
   xKey?: string;
-  /** Iterations (labelled 1 … n) or simulated seconds (0 s … end); `max` is the planned end. */
-  x: { kind: 'iterations' | 'seconds'; max?: number };
+  /**
+   * Iterations (labelled 1 … n) or simulated seconds (0 s … end), `max` the planned end;
+   * or 'linear': a number axis with round ticks over the data (and `min`/`max`), below zero too.
+   */
+  x: LinePlotX;
   /** Log (decades; values ≤ 0 are skipped) or linear (round ticks). `unit` is shown under the y labels. */
   y: { scale: 'log' | 'linear'; unit?: string };
   /** Default true. */
@@ -49,22 +56,28 @@ interface Hover {
 function DefaultTip({
   row,
   xKey,
-  seconds,
+  x,
   series,
   metrics,
   scale,
 }: {
   row: LineRow;
   xKey: string;
-  seconds: boolean;
+  x: LinePlotX;
   series: LineSeries[];
   metrics: LineSeries[];
   scale: 'log' | 'linear';
 }) {
   const xv = Number(row[xKey]);
+  const head =
+    x.kind === 'linear'
+      ? `${x.label ?? xKey} = ${x.format ? x.format(xv) : xTickLabel(xv, 1e-4)}`
+      : x.kind === 'seconds'
+        ? `t = ${formatSimTime(xv)}`
+        : `Iteration ${Math.round(xv)}`;
   return (
     <>
-      <b className="mgk-plot-tip-head">{seconds ? `t = ${formatSimTime(xv)}` : `Iteration ${Math.round(xv)}`}</b>
+      <b className="mgk-plot-tip-head">{head}</b>
       {metrics
         .filter((m) => Number.isFinite(Number(row[m.key])))
         .map((m) => (
@@ -92,11 +105,20 @@ function DefaultTip({
 export function LinePlot({ rows, series, label, xKey = 't', x, y, legend = true, height = PLOT_H, tip }: LinePlotProps) {
   const xKind = x.kind;
   const xMax = x.max;
+  const xMin = x.kind === 'linear' ? x.min : undefined;
+  const xFormat = x.kind === 'linear' ? x.format : undefined;
   const scale = y.scale;
   const seconds = xKind === 'seconds';
+  const linear = xKind === 'linear';
   const geo = useMemo(
-    () => linePlotGeometry(rows, series, { xKey, x: { kind: xKind, max: xMax }, y: { scale }, height }),
-    [rows, series, xKey, xKind, xMax, scale, height],
+    () =>
+      linePlotGeometry(rows, series, {
+        xKey,
+        x: xKind === 'linear' ? { kind: 'linear', min: xMin, max: xMax, format: xFormat } : { kind: xKind, max: xMax },
+        y: { scale },
+        height,
+      }),
+    [rows, series, xKey, xKind, xMin, xMax, xFormat, scale, height],
   );
   const svgRef = useRef<SVGSVGElement | null>(null);
   const tipRef = useRef<HTMLDivElement | null>(null);
@@ -119,7 +141,7 @@ export function LinePlot({ rows, series, label, xKey = 't', x, y, legend = true,
     const r = svg.getBoundingClientRect();
     if (!r.width) return;
     const sx = ((e.clientX - r.left) / r.width) * PLOT_W;
-    const t = ((sx - PAD_L) / (PLOT_W - PAD_L - PAD_R)) * g.xmax;
+    const t = g.xmin + ((sx - PAD_L) / (PLOT_W - PAD_L - PAD_R)) * (g.xmax - g.xmin);
     const row = nearestRow(rows, xKey, t);
     if (!row) return;
     setHover({ row, x: (g.xOf(Number(row[xKey])) / PLOT_W) * r.width, width: r.width });
@@ -145,12 +167,31 @@ export function LinePlot({ rows, series, label, xKey = 't', x, y, legend = true,
               </text>
             </g>
           ))}
-          <text className="mgk-plot-label" x={PAD_L} y={height - 4} fontSize="8">
-            {seconds ? '0 s' : '1'}
-          </text>
-          <text className="mgk-plot-label" x={PLOT_W - PAD_R} y={height - 4} textAnchor="end" fontSize="8">
-            {seconds ? formatSimTime(g.xmax) : String(Math.round(g.xmax))}
-          </text>
+          {linear ? (
+            g.xTicks.map((d, i) => (
+              <g key={`x${i}`}>
+                <line className="mgk-plot-grid" x1={d.x.toFixed(1)} y1={PAD_T} x2={d.x.toFixed(1)} y2={height - PAD_B} />
+                <text
+                  className="mgk-plot-label"
+                  x={d.x.toFixed(1)}
+                  y={height - 4}
+                  textAnchor={i === 0 ? 'start' : i === g.xTicks.length - 1 ? 'end' : 'middle'}
+                  fontSize="8"
+                >
+                  {d.label}
+                </text>
+              </g>
+            ))
+          ) : (
+            <>
+              <text className="mgk-plot-label" x={PAD_L} y={height - 4} fontSize="8">
+                {seconds ? '0 s' : '1'}
+              </text>
+              <text className="mgk-plot-label" x={PLOT_W - PAD_R} y={height - 4} textAnchor="end" fontSize="8">
+                {seconds ? formatSimTime(g.xmax) : String(Math.round(g.xmax))}
+              </text>
+            </>
+          )}
           {y.unit ? (
             <text className="mgk-plot-label" x={PAD_L - 4} y={height - 4} textAnchor="end" fontSize="8">
               {y.unit}
@@ -171,7 +212,7 @@ export function LinePlot({ rows, series, label, xKey = 't', x, y, legend = true,
             tip ? (
               tip(hover.row)
             ) : (
-              <DefaultTip row={hover.row} xKey={xKey} seconds={seconds} series={series} metrics={g.metrics} scale={scale} />
+              <DefaultTip row={hover.row} xKey={xKey} x={x} series={series} metrics={g.metrics} scale={scale} />
             )
           ) : null}
         </div>

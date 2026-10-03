@@ -280,8 +280,8 @@ declare module '@magnusim/plugin-ui/_internal/data/ColorLegend' {
 }
 declare module '@magnusim/plugin-ui/_internal/data/LinePlot' {
   import { type ReactNode } from 'react';
-  import { type LineSeries } from '@magnusim/plugin-ui/_internal/data/linePlotGeometry';
-  export type { LineSeries } from '@magnusim/plugin-ui/_internal/data/linePlotGeometry';
+  import { type LinePlotX, type LineSeries } from '@magnusim/plugin-ui/_internal/data/linePlotGeometry';
+  export type { LinePlotX, LineSeries } from '@magnusim/plugin-ui/_internal/data/linePlotGeometry';
   export interface LinePlotProps {
       rows: ReadonlyArray<Record<string, number | undefined>>;
       series: LineSeries[];
@@ -289,11 +289,11 @@ declare module '@magnusim/plugin-ui/_internal/data/LinePlot' {
       label: string;
       /** The row key of the x value; default 't'. */
       xKey?: string;
-      /** Iterations (labelled 1 … n) or simulated seconds (0 s … end); `max` is the planned end. */
-      x: {
-          kind: 'iterations' | 'seconds';
-          max?: number;
-      };
+      /**
+       * Iterations (labelled 1 … n) or simulated seconds (0 s … end), `max` the planned end;
+       * or 'linear': a number axis with round ticks over the data (and `min`/`max`), below zero too.
+       */
+      x: LinePlotX;
       /** Log (decades; values ≤ 0 are skipped) or linear (round ticks). `unit` is shown under the y labels. */
       y: {
           scale: 'log' | 'linear';
@@ -310,7 +310,7 @@ declare module '@magnusim/plugin-ui/_internal/data/LinePlot' {
   export function LinePlot({ rows, series, label, xKey, x, y, legend, height, tip }: LinePlotProps): import("react").JSX.Element | null;
 }
 declare module '@magnusim/plugin-ui/_internal/data/index' {
-  export { LinePlot, type LinePlotProps, type LineSeries } from '@magnusim/plugin-ui/_internal/data/LinePlot';
+  export { LinePlot, type LinePlotProps, type LinePlotX, type LineSeries } from '@magnusim/plugin-ui/_internal/data/LinePlot';
   export { ColorLegend, type ColorLegendProps } from '@magnusim/plugin-ui/_internal/data/ColorLegend';
   export { COLORMAPS, colormapRgb, colormapGradient, RAINBOW_HUE, type ColormapName } from '@magnusim/plugin-ui/_internal/colormaps/index';
 }
@@ -337,12 +337,28 @@ declare module '@magnusim/plugin-ui/_internal/data/linePlotGeometry' {
       format?: (v: number) => string;
   }
   export type LineRow = Record<string, number | undefined>;
+  /**
+   * The x axis: iterations (labelled 1 … n) or simulated seconds (0 s … end), from 0
+   * to `max`; or a plain number axis ('linear') over the data, widened to `min` and
+   * `max` when given, with round ticks that may lie below zero (an angle, a
+   * coefficient, a chord position). Rows are drawn in their order, so x need not
+   * rise (a drag polar).
+   */
+  export type LinePlotX = {
+      kind: 'iterations' | 'seconds';
+      max?: number;
+  } | {
+      kind: 'linear';
+      min?: number;
+      max?: number;
+      /** The hover tip's name for x ("α"); default the row key. */
+      label?: string;
+      /** Formats an x tick and the tip's x; default as many decimals as the tick step has. */
+      format?: (v: number) => string;
+  };
   export interface LinePlotAxes {
       xKey: string;
-      x: {
-          kind: 'iterations' | 'seconds';
-          max?: number;
-      };
+      x: LinePlotX;
       y: {
           scale: 'log' | 'linear';
           unit?: string;
@@ -357,7 +373,14 @@ declare module '@magnusim/plugin-ui/_internal/data/linePlotGeometry' {
   export const PAD_T = 10;
   export const PAD_B = 18;
   export interface LinePlotGeometry {
+      /** The x range drawn: 0 … xmax, or a linear axis' round ends. */
+      xmin: number;
       xmax: number;
+      /** A linear x axis' ticks (empty for iterations and seconds, which label their ends only). */
+      xTicks: Array<{
+          x: number;
+          label: string;
+      }>;
       /** The dashed series that have values (drawn, listed and read out on hover). */
       metrics: LineSeries[];
       /** Horizontal grid lines with their labels: decades (log) or round ticks (linear). */
@@ -385,6 +408,8 @@ declare module '@magnusim/plugin-ui/_internal/data/linePlotGeometry' {
   };
   /** A tick label for a value on an axis that spans `span` (runtime.js graphTick, unchanged). */
   export function graphTick(v: number, span: number): string;
+  /** A linear x tick: as many decimals as the step needs (2 → "−4", 0.005 → "0.010"), else the axis' own format. */
+  export function xTickLabel(v: number, step: number, format?: (v: number) => string): string;
   /** The geometry of one plot; null when nothing can be drawn yet. */
   export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSeries[], axes: LinePlotAxes): LinePlotGeometry | null;
   /** The legend: solid series by their legend rule, then the dashed ones that have values. */

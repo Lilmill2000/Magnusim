@@ -1,15 +1,17 @@
 // Which browser-test suites a change runs (scripts/e2e-suites.mjs, docs/TESTING.md),
 // and the PC's WSL test lock (e2e/support/wsl-lock.mjs).
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { CONTRACT_SPECS, HOST_PATHS, LINK_HOST_PATHS, START_ACTION_HOST_PATHS, classifyPath, discoverPluginSuites, planSuites, suiteOfFilter, toWebRel } from '../e2e-suites.mjs';
+import { fileURLToPath } from 'node:url';
+import { CONTRACT_SPECS, HOST_PATHS, LINK_HOST_PATHS, START_ACTION_HOST_PATHS, classifyPath, discoverPluginSuites, isFullTier, parseArgs, planSuites, suiteEnv, suiteOfFilter, toWebRel } from '../e2e-suites.mjs';
 import { acquireWslLock, mayRunWslTests } from '../../e2e/support/wsl-lock.mjs';
 
 const PLUGINS = ['cad'];
+const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 test('documentation, unit tests and files outside the app run no browser suite', () => {
   for (const rel of [
@@ -186,6 +188,122 @@ test('a spec named on the command line runs in the suite that holds it', () => {
   assert.equal(suiteOfFilter('bundled-plugins/incompressible_flow/e2e/h7-steady-transient.spec.js', keys), 'incompressible_flow');
   assert.equal(suiteOfFilter(['magnusim-web', 'bundled-plugins', 'cad', 'e2e', 'cad-p1-scaffold.spec.ts'].join('\\'), keys), 'cad');
   assert.equal(suiteOfFilter('bundled-plugins/unknown/e2e/x.spec.js', keys), 'core');
+});
+
+test('the full tier (--all, not --fast) tells every suite MAGNUSIM_E2E_FULL=1', () => {
+  const full = (argv, base = {}) => suiteEnv(parseArgs(argv), base).MAGNUSIM_E2E_FULL;
+  // npm run test:e2e (before a push, nightly), whole suites, one suite or several.
+  assert.equal(full(['--all']), '1');
+  assert.equal(full(['--all', '--suite', 'airfoil']), '1');
+  assert.equal(full(['--all', '--full']), '1');
+  // Not the full tier: the fast tier, the changed suites, named specs, WSL turned off by hand.
+  assert.equal(full(['--all', '--fast']), undefined);
+  assert.equal(full(['--changed']), undefined);
+  assert.equal(full(['--changed', '--full']), undefined);
+  assert.equal(full(['--all', 'bundled-plugins/airfoil/e2e/airfoil.spec.js']), undefined);
+  assert.equal(full(['--all'], { MAGNUSIM_E2E_WSL: '0' }), undefined);
+  // A value set by hand is kept; the fast tier still turns WSL off.
+  assert.equal(full(['--changed'], { MAGNUSIM_E2E_FULL: '1' }), '1');
+  assert.equal(suiteEnv(parseArgs(['--all', '--fast']), {}).MAGNUSIM_E2E_WSL, '0');
+  assert.equal(suiteEnv(parseArgs(['--all']), { MAGNUSIM_E2E_SETTLED: '1' }).MAGNUSIM_E2E_SETTLED, undefined);
+  assert.equal(isFullTier(parseArgs(['--all']), {}), true);
+});
+
+const CI_YML = join(WEB, '..', '.github', 'workflows', 'ci.yml');
+
+// One job of a GitHub workflow, read line by line (comment lines dropped): whether the job
+// can be turned off (`if:`, `continue-on-error:`), and each step's command and the same two keys.
+function workflowJob(text, name) {
+  const lines = text.split(/\r?\n/).filter((l) => !/^\s*#/.test(l));
+  const start = lines.indexOf(`  ${name}:`);
+  if (start < 0) return null;
+  let end = lines.findIndex((l, i) => i > start && /^ {0,2}\S/.test(l));
+  if (end < 0) end = lines.length;
+  const body = lines.slice(start + 1, end);
+  const value = (l) => l.replace(/^[\s-]*[\w-]+:\s*/, '').replace(/\s+#.*$/, '').trim();
+  const job = { if: body.some((l) => /^ {4}if:/.test(l)), continueOnError: body.some((l) => /^ {4}continue-on-error:/.test(l)), steps: [] };
+  let step = null;
+  for (let i = 0; i < body.length; i += 1) {
+    const l = body[i];
+    if (/^ {6}- /.test(l)) {
+      step = { run: '', if: false, continueOnError: false };
+      job.steps.push(step);
+    }
+    if (!step || !/^ {6}(- | {2})[\w-]+:/.test(l)) continue;
+    const key = l.replace(/^ {6}(- | {2})/, '').split(':')[0];
+    if (key === 'if') step.if = true;
+    if (key === 'continue-on-error') step.continueOnError = value(l) !== 'false';
+    if (key === 'run') {
+      step.run = value(l);
+      if (/^[|>]/.test(step.run)) {
+        const block = [];
+        while (i + 1 < body.length && /^ {10}/.test(body[i + 1])) block.push(body[++i].trim());
+        step.run = block.join('\n');
+      }
+    }
+  }
+  return job;
+}
+
+test('a workflow job is read with its comments, conditions and run blocks', () => {
+  const yml = [
+    'jobs:',
+    '  node:',
+    '    runs-on: ubuntu-latest',
+    '    steps:',
+    '      - run: npm ci',
+    '      # - run: npx playwright test -c a/playwright.config.js',
+    '      - name: B',
+    '        if: false',
+    '        run: npx playwright test -c b/playwright.config.js',
+    '      - run: |',
+    '          echo one',
+    '          npx playwright test -c c/playwright.config.js',
+    '      - run: npx playwright test -c d/playwright.config.js # d',
+    '        continue-on-error: true',
+    '  other:',
+    '    if: false',
+    '    steps:',
+    '      - run: npx playwright test -c e/playwright.config.js',
+  ].join('\n');
+  const node = workflowJob(yml, 'node');
+  assert.deepEqual(node.steps.map((s) => [s.run, s.if, s.continueOnError]), [
+    ['npm ci', false, false],
+    ['npx playwright test -c b/playwright.config.js', true, false],
+    ['echo one\nnpx playwright test -c c/playwright.config.js', false, false],
+    ['npx playwright test -c d/playwright.config.js', false, true],
+  ]);
+  assert.equal(node.if, false);
+  assert.equal(workflowJob(yml, 'other').if, true);
+  assert.equal(workflowJob(yml, 'missing'), null);
+});
+
+test('CI runs every bundled plugin suite that runs on the core\'s Playwright', { skip: !existsSync(CI_YML) && 'no .github/workflows/ci.yml beside this folder (a snapshot)' }, () => {
+  const node = workflowJob(readFileSync(CI_YML, 'utf8'), 'node');
+  assert.ok(node, 'ci.yml has no node job');
+  assert.ok(!node.if && !node.continueOnError, 'the node job can be turned off (if: or continue-on-error:)');
+  const suites = discoverPluginSuites().filter((s) => s.run === 'playwright');
+  assert.ok(suites.length > 0);
+  for (const s of suites) {
+    // A step of its own, not commented out, not in another job, not behind if: or continue-on-error:.
+    const steps = node.steps.filter((st) => st.run === `npx playwright test -c ${s.config}`);
+    assert.ok(steps.some((st) => !st.if && !st.continueOnError), `${s.key}: the node job of ci.yml does not run ${s.config}`);
+  }
+});
+
+test('the plan says whether it is the full tier', () => {
+  const plan = (argv) => {
+    const r = spawnSync(process.execPath, ['scripts/e2e-suites.mjs', ...argv, '--json'], {
+      cwd: WEB,
+      encoding: 'utf8',
+      env: { ...process.env, MAGNUSIM_E2E_WSL: '' },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert.equal(plan(['--all']).full, true);
+  assert.equal(plan(['--all', '--fast']).full, false);
+  assert.equal(plan(['--changed', '--files', 'src/app/main.ts']).full, false);
 });
 
 test('changed paths read from magnusim-web, from the repository root, or absolute', () => {

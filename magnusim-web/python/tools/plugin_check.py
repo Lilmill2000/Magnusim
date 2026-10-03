@@ -24,9 +24,20 @@ Rules, in report order (``id``: what is checked):
   (symlink or junction) in the plugin that leads outside it, or back up into
   it (a loop), is an error: the host resolves paths and refuses what is outside.
 - ``imports``: plugins import only magnusim_sdk, cfddesk.registry, the standard
-  library and their own modules (tools/plugin_boundary.py, reused as is).
+  library and their own modules; code that runs on the plugin's own [python]
+  environment (its service module, its python="plugin" job tools and the modules
+  only they import) may also import what its lock pins. importlib.import_module
+  and __import__ count as imports (a relative name read against its package),
+  and one the check cannot read (its name or package not a string, the function
+  assigned or looked up by getattr, exec/eval/compile, runpy, a loader's
+  exec_module) is an error, and so is a relative import in plugin.py or one
+  that climbs out of the plugin (tools/plugin_boundary.py, the same rule as the
+  CI job).
 - ``register``: register() imports nothing heavy (numpy, pyvista, gmsh, OCP,
-  ...) when it runs (functions it only defines may import what they like), and
+  ...) when it runs, by an import statement or by importlib.import_module or
+  __import__ with the name written out (under any alias plugin_boundary reads,
+  ``from importlib import *`` included, and a relative name read against its
+  package; functions it only defines may import what they like), and
   loading the plugin imports nothing heavy: neither the plugin's own code at
   load time (even what the host has loaded already) nor modules it pulls in.
 - ``react``: no React of the plugin's own: not a package.json dependency, not
@@ -1080,8 +1091,8 @@ def check_load(plugin: Path, meta: dict[str, Any], report: Report, web_root: Pat
 # -- imports and register ---------------------------------------------------------
 
 
-def check_imports(plugin: Path, report: Report) -> None:
-    problems, _skipped = plugin_boundary.check_plugin(plugin, report.key or plugin.name)
+def check_imports(plugin: Path, report: Report, web_root: Path = WEB_ROOT) -> None:
+    problems, _skipped = plugin_boundary.check_plugin(plugin, report.key or plugin.name, web_root=web_root)
     for p in problems:
         report.add("error", "imports", str(p.get("problem")), str(p.get("file") or ""), int(p.get("line") or 0))
 
@@ -1146,12 +1157,19 @@ def check_register(plugin: Path, report: Report, probe: dict[str, Any] | None) -
             report.add("error", "register", "plugin.py has no top-level register(hub)", plugin_py)
         elif isinstance(found, tuple):
             where, register = found
+            where_tree = tree if where == plugin_py else _parse(where)
+            aliases = plugin_boundary.dynamic_aliases(where_tree) if where_tree is not None else {}
             for node in _runs_with(register):
                 names: list[str] = []
                 if isinstance(node, ast.Import):
                     names = [a.name for a in node.names]
                 elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
                     names = [node.module]
+                elif isinstance(node, ast.Call):
+                    # importlib.import_module("gmsh"), __import__("gmsh"): the same import.
+                    dynamic = plugin_boundary.dynamic_import(node, aliases)
+                    if dynamic is not None and dynamic[1] and not dynamic[2]:
+                        names = [dynamic[1]]
                 for name in names:
                     if name.split(".")[0] in HEAVY:
                         seen.add(name.split(".")[0])
@@ -1718,7 +1736,7 @@ def check_plugin(path: Path | str, *, run_tests: bool = True, web_root: Path = W
     check_api_version(plugin, meta, report)
     check_license(plugin, meta, report)
     probe = check_load(plugin, meta, report, web_root) if load else None
-    check_imports(plugin, report)
+    check_imports(plugin, report, web_root)
     check_register(plugin, report, probe)
     check_react(plugin, report)
     applies["workspace"] = check_workspace(plugin, meta, report, web_root)

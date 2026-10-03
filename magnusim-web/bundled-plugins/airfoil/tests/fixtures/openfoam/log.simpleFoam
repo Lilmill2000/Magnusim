@@ -1,0 +1,32 @@
+smoothSolver:  Solving for omega, Initial residual = 6.436359e-09, Final residual = 6.5398975e-10, No Iterations 3
+smoothSolver:  Solving for k, Initial residual = 9.8233016e-06, Final residual = 2.8557448e-07, No Iterations 5
+ExecutionTime = 52.06 s  ClockTime = 52 s
+
+Time = 1499
+
+smoothSolver:  Solving for Ux, Initial residual = 5.1678047e-06, Final residual = 2.3258816e-07, No Iterations 5
+smoothSolver:  Solving for Uy, Initial residual = 9.3407542e-05, Final residual = 4.4194653e-06, No Iterations 3
+GAMG:  Solving for p, Initial residual = 0.0016071088, Final residual = 3.9438045e-05, No Iterations 2
+GAMG:  Solving for p, Initial residual = 0.0015775136, Final residual = 3.6752632e-05, No Iterations 2
+time step continuity errors : sum local = 6.4471326e-06, global = 1.2089989e-07, cumulative = -0.00082720161
+smoothSolver:  Solving for omega, Initial residual = 6.429048e-09, Final residual = 6.5341746e-10, No Iterations 3
+smoothSolver:  Solving for k, Initial residual = 9.815822e-06, Final residual = 2.8538179e-07, No Iterations 5
+ExecutionTime = 52.1 s  ClockTime = 52 s
+
+Time = 1500
+
+smoothSolver:  Solving for Ux, Initial residual = 5.1335072e-06, Final residual = 2.3216837e-07, No Iterations 5
+smoothSolver:  Solving for Uy, Initial residual = 9.2789487e-05, Final residual = 4.4411765e-06, No Iterations 3
+GAMG:  Solving for p, Initial residual = 0.0016067593, Final residual = 3.9548549e-05, No Iterations 2
+GAMG:  Solving for p, Initial residual = 0.0015771443, Final residual = 3.6886017e-05, No Iterations 2
+time step continuity errors : sum local = 6.4704361e-06, global = 1.165898e-07, cumulative = -0.00082708502
+smoothSolver:  Solving for omega, Initial residual = 6.452585e-09, Final residual = 6.5287935e-10, No Iterations 3
+smoothSolver:  Solving for k, Initial residual = 9.8085266e-06, Final residual = 2.8518745e-07, No Iterations 5
+ExecutionTime = 52.13 s  ClockTime = 52 s
+
+yPlus yPlus write:
+    writing field yPlus
+    patch airfoil y+ : min = 0.15069577, max = 23.317834, average = 1.7481202
+End
+
+Finalising parallel run

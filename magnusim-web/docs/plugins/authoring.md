@@ -61,6 +61,18 @@ Do not import `cfddesk.builtin`, `scripts`, or `src.workbench`. Those are host i
 
 The check reads every `.py` and `.pyw` file of the plugin except those in `tests/`, `node_modules/`, `__pycache__/`, `site-packages/`, dot folders (`.venv`, `.git`, caches), `*.egg-info`, any virtualenv (a folder holding `pyvenv.cfg`), and `build/` or `dist/` at the plugin root, so a plugin may carry a JavaScript toolchain or a local venv. Plugin code must not import from those folders: the check follows each import segment by segment and reports one that reaches a skipped folder, and its report lists what it skipped. A compiled `.pyc` outside `__pycache__/` is refused (ship sources), and a file that is not valid Python 3 is reported, not skipped. A plugin's own ruff config may use `extend-exclude`, never `exclude` (that would replace the default list and lint `node_modules`).
 
+**Your own environment's packages.** A plugin with a `[python]` environment (below) may also import the packages its lock pins, but only in code that runs on that environment:
+
+- its service module;
+- its job tools registered with `python="plugin"`;
+- its own modules that only those two import.
+
+Code the host loads keeps the rule above: `plugin.py`, every module it imports (with `from pkg import *`, the submodules `pkg.__all__` names), every log parser module a `LogParserRef` names (the core imports it on its own Python), and job tools that run on the core's Python. A module that both sides import counts as host code. The check places a job only when `JobKind(...)` goes straight into `hub.register_job(...)` with its tool path and `python=` as plain strings, and a log parser only when its module is a plain string. If host code registers a job or names a log parser any other way (a variable, a loop, `dataclasses.replace`, an alias of `JobKind`, `setattr`), nothing counts as environment code.
+
+To know what a lock provides, the check reads the built environment's `top_level.txt` and `RECORD` files. Without a built environment, it uses each package's normalized name plus a short table of known differences (`scikit-learn` is `sklearn`, `pillow` is `PIL`: `IMPORT_NAMES` in `tools/plugin_boundary.py`). A lock never provides `cfddesk`.
+
+`importlib.import_module("x")` and `__import__("x")` count as `import x`, whether called by those names, through `from importlib import import_module as im` or `from importlib import *`, or as `<anything>.import_module(...)`. A relative name is read against `import_module`'s `package` (a string or `__package__`) or, for `__import__`, the file's own package. These are errors, because the check cannot tell what they load: such a call whose module name, package, level, globals or fromlist is not written out; an import function used other than as a direct call (`im = importlib.import_module`, `getattr(importlib, "import_module")`); `exec`, `eval` and `compile`; `runpy.run_module`/`run_path`; and a loader's `exec_module`. Relative imports in `plugin.py` are errors too: the host runs it as `cfddesk._bundled.<folder>`, so `.` and `..` there are the core's packages. Elsewhere, a relative import that climbs above the plugin's top-level package is an error. Nothing turns the check off for a line.
+
 ## Own environment and service (1.1)
 
 A plugin that needs Python packages the app does not ship (NeuralFoil, a CAD kernel, ...) declares its own environment. Its backend then runs there, in its own process, and never in the core:
@@ -321,7 +333,7 @@ The components, each as the core draws it today:
 - `PanelChrome`: a title, the body and a foot with Delete and Done, and no header buttons. `card` draws the card, for a frame; in the app's flyout the host draws it.
 - `StatusBlock`, `Elapsed` and `useElapsed`: the progress block of the Mesh and Run panels.
 - `Toast`, and `PanelError`, the card a failed panel shows.
-- `LinePlot`: a small line chart, log or linear, with a hover readout and a legend. `ColorLegend`: a colour scale with its range.
+- `LinePlot`: a small line chart, log or linear, with a hover readout and a legend. Its x axis is iterations, simulated seconds, or `kind: 'linear'`: a number axis with round ticks that may lie below zero, drawn in row order (a drag polar turns back). `ColorLegend`: a colour scale with its range.
 - Helpers: `formatSci`, `parseSci`, `formatSimTime`, `formatElapsed` and `formatEta`; the unit tables and conversions (`UNITS`, `toSi`, `fromSi`, `convertQuantity`, `fieldUnit`, `fieldQuantity`, ...); the colour maps `rainbow`, `viridis`, `balance` and `curl` (`COLORMAPS`, `colormapRgb`, `colormapGradient`).
 
 How they fit the app:

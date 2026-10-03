@@ -80,6 +80,14 @@ jobs:
       - run: npx playwright test -c bundled-plugins/incompressible_flow/e2e/playwright.config.js
         env:
           CI: "1"
+      # The Airfoil plugin's browser suite (it ships off; each test starts its own app
+      # server with it on). Its workspace, OpenFOAM-runs and folder-removed tests run here.
+      # The XFOIL test skips (xfoil.exe is MIT's Windows build), and so do the NeuralFoil
+      # gate (its environment is not built here and CI does not download it) and the
+      # OpenFOAM gate (no WSL), each with its reason.
+      - run: npx playwright test -c bundled-plugins/airfoil/e2e/playwright.config.js
+        env:
+          CI: "1"
 
   # The analysis contract's boundary: the core never imports a bundled plugin,
   # plugins import only magnusim_sdk, cfddesk.registry and the standard library,

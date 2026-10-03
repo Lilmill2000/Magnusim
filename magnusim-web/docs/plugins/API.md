@@ -820,9 +820,7 @@ interface LinePlotProps
 - `series: LineSeries[]`
 - `label: string`: The plot's accessible name (role=img).
 - `xKey?: string | undefined`: The row key of the x value; default 't'.
-- `x: { … }`: Iterations (labelled 1 … n) or simulated seconds (0 s … end); `max` is the planned end.
-- `x.kind: "iterations" | "seconds"`
-- `x.max?: number | undefined`
+- `x: LinePlotX`: Iterations (labelled 1 … n) or simulated seconds (0 s … end), `max` the planned end; or 'linear': a number axis with round ticks over the data (and `min`/`max`), below zero too.
 - `y: { … }`: Log (decades; values ≤ 0 are skipped) or linear (round ticks). `unit` is shown under the y labels.
 - `y.scale: "log" | "linear"`
 - `y.unit?: string | undefined`
@@ -985,6 +983,14 @@ The props a plugin field widget gets (pluginUi.registerFieldWidget). The schema 
 ```ts
 type IconName = 'pencil' | 'trash' | 'back' | 'document'
 ```
+
+#### LinePlotX
+
+```ts
+type LinePlotX = { kind: 'iterations' | 'seconds'; max?: number; } | { kind: 'linear'; min?: number; max?: number; /** The hover tip's name for x ("α"); default the row key. */ label?: string; /** Formats an x tick...
+```
+
+The x axis: iterations (labelled 1 … n) or simulated seconds (0 s … end), from 0 to `max`; or a plain number axis ('linear') over the data, widened to `min` and `max` when given, with round ticks that may lie below zero (an angle, a coefficient, a chord position). Rows are drawn in their order, so x need not rise (a drag polar).
 
 #### Quantity
 

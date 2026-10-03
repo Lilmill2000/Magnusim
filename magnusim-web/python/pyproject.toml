@@ -28,7 +28,7 @@ where = ["."]
 include = ["cfddesk*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "../bundled-plugins/incompressible_flow/tests", "../templates/plugin/tests"]
+testpaths = ["tests", "../bundled-plugins/airfoil/tests", "../bundled-plugins/incompressible_flow/tests", "../templates/plugin/tests"]
 pythonpath = [".", "tools", "sdk", "../bundled-plugins/incompressible_flow"]
 markers = [
   "wsl: needs WSL + OpenFOAM (deselect with -m 'not wsl')",

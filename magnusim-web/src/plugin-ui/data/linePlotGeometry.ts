@@ -23,9 +23,28 @@ export interface LineSeries {
 
 export type LineRow = Record<string, number | undefined>;
 
+/**
+ * The x axis: iterations (labelled 1 … n) or simulated seconds (0 s … end), from 0
+ * to `max`; or a plain number axis ('linear') over the data, widened to `min` and
+ * `max` when given, with round ticks that may lie below zero (an angle, a
+ * coefficient, a chord position). Rows are drawn in their order, so x need not
+ * rise (a drag polar).
+ */
+export type LinePlotX =
+  | { kind: 'iterations' | 'seconds'; max?: number }
+  | {
+      kind: 'linear';
+      min?: number;
+      max?: number;
+      /** The hover tip's name for x ("α"); default the row key. */
+      label?: string;
+      /** Formats an x tick and the tip's x; default as many decimals as the tick step has. */
+      format?: (v: number) => string;
+    };
+
 export interface LinePlotAxes {
   xKey: string;
-  x: { kind: 'iterations' | 'seconds'; max?: number };
+  x: LinePlotX;
   y: { scale: 'log' | 'linear'; unit?: string };
   height: number;
 }
@@ -39,7 +58,11 @@ export const PAD_T = 10;
 export const PAD_B = 18;
 
 export interface LinePlotGeometry {
+  /** The x range drawn: 0 … xmax, or a linear axis' round ends. */
+  xmin: number;
   xmax: number;
+  /** A linear x axis' ticks (empty for iterations and seconds, which label their ends only). */
+  xTicks: Array<{ x: number; label: string }>;
   /** The dashed series that have values (drawn, listed and read out on hover). */
   metrics: LineSeries[];
   /** Horizontal grid lines with their labels: decades (log) or round ticks (linear). */
@@ -94,6 +117,15 @@ function xValue(row: LineRow, xKey: string): number {
   return Number(row[xKey]);
 }
 
+/** A linear x tick: as many decimals as the step needs (2 → "−4", 0.005 → "0.010"), else the axis' own format. */
+export function xTickLabel(v: number, step: number, format?: (v: number) => string): string {
+  if (format) return format(v);
+  let d = 0;
+  while (d < 6 && Math.abs(Math.round(step * 10 ** d) - step * 10 ** d) > 1e-6 * 10 ** d) d++;
+  const text = v.toFixed(d);
+  return /^-0(\.0*)?$/.test(text) ? text.slice(1) : text;
+}
+
 /** The geometry of one plot; null when nothing can be drawn yet. */
 export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSeries[], axes: LinePlotAxes): LinePlotGeometry | null {
   const { xKey, height } = axes;
@@ -106,7 +138,8 @@ export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSerie
     if (t > dataMax) dataMax = t;
   }
   const planned = Number(axes.x.max) || 0;
-  const xmax =
+  let xmin = 0;
+  let xmax =
     axes.x.kind === 'seconds'
       ? planned > 0
         ? Math.max(planned, dataMax)
@@ -114,6 +147,25 @@ export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSerie
           ? dataMax
           : 1e-3
       : Math.max(planned, dataMax, 1);
+  const xTicks: LinePlotGeometry['xTicks'] = [];
+  let xTickValues: number[] = [];
+  let xStep = 1;
+  if (axes.x.kind === 'linear') {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const r of plotted) {
+      const t = xValue(r, xKey);
+      if (t < lo) lo = t;
+      if (t > hi) hi = t;
+    }
+    if (Number.isFinite(axes.x.min)) lo = Math.min(lo, Number(axes.x.min));
+    if (Number.isFinite(axes.x.max)) hi = Math.max(hi, Number(axes.x.max));
+    const nice = niceTicks(lo, hi, 5);
+    xmin = nice.lo;
+    xmax = nice.hi;
+    xTickValues = nice.ticks;
+    xStep = nice.ticks.length > 1 ? nice.ticks[1] - nice.ticks[0] : 1;
+  }
   const metrics = series.filter((s) => s.dashed && plotted.some((r) => drawable(r[s.key], scale)));
   const drawn = [...series.filter((s) => !s.dashed), ...metrics];
   // The y range, in a loop: a long run has more values than a spread call takes.
@@ -153,7 +205,11 @@ export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSerie
   }
   const lo = y0;
   const hi = y1;
-  const xOf = (t: number) => PAD_L + (Number(t) / xmax) * (PLOT_W - PAD_L - PAD_R);
+  const x0 = xmin;
+  const x1 = xmax;
+  const xOf = (t: number) => PAD_L + ((Number(t) - x0) / (x1 - x0)) * (PLOT_W - PAD_L - PAD_R);
+  const xFormat = axes.x.kind === 'linear' ? axes.x.format : undefined;
+  for (const t of xTickValues) xTicks.push({ x: xOf(t), label: xTickLabel(t, xStep, xFormat) });
   const yOf =
     scale === 'log'
       ? (v: number) => PAD_T + (1 - (Math.log10(Math.max(v, 1e-16)) - lo) / (hi - lo)) * plotH
@@ -166,7 +222,7 @@ export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSerie
     }
     if (pts.length) lines.push({ key: s.key, color: seriesColor(series, s), dashed: !!s.dashed, points: pts.join(' ') });
   }
-  return { xmax, metrics, ticks, lines, xOf };
+  return { xmin, xmax, xTicks, metrics, ticks, lines, xOf };
 }
 
 /** The legend: solid series by their legend rule, then the dashed ones that have values. */

@@ -1,0 +1,38 @@
+key = "airfoil"
+name = "Airfoil"
+version = "0.1.0"
+api_version = "1.4"
+tier = "bundled"
+required = false
+# Ships off: nothing of it runs, and existing projects look unchanged, until
+# someone turns it on in Settings > Plugins and installs its dependencies.
+default_enabled = false
+license = "GPL-3.0-or-later"
+description = "Lift, drag and moment polars of 2D airfoil sections from NeuralFoil, XFOIL and OpenFOAM 2D."
+authors = ["Magnusim"]
+
+# Its own environment: NeuralFoil and Gmsh and what they need (THIRD_PARTY_NOTICES.md).
+[python]
+requirements = "requirements.lock"
+python = ">=3.10,<3.13"
+service = "airfoil_service"
+
+[[workspaces]]
+key = "polar"
+title = "Airfoil"
+icon = "M2 12c3-4 9-6 20 0c-11 3-17 2-20 0z"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "airfoil_analysis"
+title = "Airfoil analysis"
+icon = "M2 12c3-4 9-6 20 0c-11 3-17 2-20 0z"
+workspace = "polar"
+schema_version = 1
+
+[[start_actions]]
+study_kind = "airfoil_analysis"
+label = "Analyze an airfoil"
+hint = "Polars of a 2D section from NeuralFoil, XFOIL and OpenFOAM"
+places = ["empty_project", "header", "new_project"]
+header_label = "Airfoil"

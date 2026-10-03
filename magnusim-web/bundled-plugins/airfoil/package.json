@@ -1,0 +1,38 @@
+{
+  "name": "magnusim-airfoil",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Magnusim Airfoil: the Airfoil analysis workspace plugin (no build step; its browser tests run on the core's Playwright)",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "magnusim": {
+    "e2eHostPaths": [
+      "src/workspace/",
+      "src/plugin-sdk/",
+      "src/plugin-api/",
+      "src/plugin-ui/",
+      "src/plugins/",
+      "src/app/",
+      "src/wizard/",
+      "src/panels/prefs/",
+      "src/workbench/dialogs.ts",
+      "scripts/server/",
+      "scripts/prefs.js",
+      "python/cfddesk/registry/",
+      "python/cfddesk/worker/",
+      "python/cfddesk/project/scope.py",
+      "python/cfddesk/project/web_writes.py",
+      "python/sdk/",
+      "python/tools/plugin_env.py",
+      "e2e/support/",
+      "e2e/prepare-projects.js",
+      "e2e/toolchain.js",
+      "vite.config.js",
+      "package-lock.json",
+      "scripts/foam-runner.js",
+      "scripts/foam-store.js",
+      "python/cfddesk/wsl/",
+      "python/tools/run_foam_case.py"
+    ]
+  }
+}

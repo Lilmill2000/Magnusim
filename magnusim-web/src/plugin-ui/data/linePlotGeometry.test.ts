@@ -13,6 +13,10 @@ import {
   PAD_T,
   seriesColor,
   tipLeft,
+  xTickLabel,
+  PAD_L,
+  PAD_R,
+  PLOT_W,
   type LineRow,
   type LineSeries,
 } from './linePlotGeometry';
@@ -154,6 +158,68 @@ describe('linePlotGeometry, linear scale', () => {
     const g = linePlotGeometry(rows, [{ key: 'a', label: 'A' }], { xKey: 't', x: { kind: 'iterations' }, y: { scale: 'linear' }, height: 132 });
     expect(g?.lines[0].points.split(' ')).toHaveLength(3);
     expect(linePlotGeometry([{ t: 1 }], [{ key: 'a', label: 'A' }], { xKey: 't', x: { kind: 'iterations' }, y: { scale: 'linear' }, height: 132 })).toBeNull();
+  });
+});
+
+describe('linePlotGeometry, linear x axis', () => {
+  const polar: LineRow[] = [-4, -2, 0, 2, 4, 6, 8, 10].map((a) => ({ alpha: a, cl: 0.11 * (a + 2) }));
+  const axes = (x: Record<string, unknown> = {}) =>
+    ({ xKey: 'alpha', x: { kind: 'linear', ...x }, y: { scale: 'linear' }, height: 132 }) as const;
+
+  it('spans round ticks over the data, below zero too, and places every row inside the plot', () => {
+    const g = linePlotGeometry(polar, [{ key: 'cl', label: 'Cl' }], axes());
+    expect(g?.xmin).toBe(-5);
+    expect(g?.xmax).toBe(10);
+    expect(g?.xTicks.map((t) => t.label)).toEqual(['-5', '0', '5', '10']);
+    expect(g?.xTicks[0].x).toBeCloseTo(PAD_L, 9);
+    expect(g?.xTicks[g.xTicks.length - 1].x).toBeCloseTo(PLOT_W - PAD_R, 9);
+    const xs = g!.lines[0].points.split(' ').map((p) => Number(p.split(',')[0]));
+    expect(xs[0]).toBeCloseTo(PAD_L + (1 / 15) * (PLOT_W - PAD_L - PAD_R), 1);
+    expect(xs.every((x) => x >= PAD_L - 1e-9 && x <= PLOT_W - PAD_R + 1e-9)).toBe(true);
+    expect(g?.xOf(0)).toBeCloseTo(PAD_L + (5 / 15) * (PLOT_W - PAD_L - PAD_R), 9);
+  });
+
+  it('widens to min and max, and formats ticks with its own format', () => {
+    const positive = polar.filter((r) => Number(r.alpha) >= 0);
+    const deg = (v: number) => `${v}°`;
+    let g = linePlotGeometry(positive, [{ key: 'cl', label: 'Cl' }], axes({ min: -10, format: deg }));
+    expect(g?.xmin).toBe(-10);
+    expect(g?.xmax).toBe(10);
+    expect(g?.xTicks.map((t) => t.label)).toEqual(['-10°', '-5°', '0°', '5°', '10°']);
+    g = linePlotGeometry(positive, [{ key: 'cl', label: 'Cl' }], axes({ max: 30, format: deg }));
+    expect(g?.xTicks.map((t) => t.label)).toEqual(['0°', '10°', '20°', '30°']);
+    // Data past min or max still shows: they only widen the axis.
+    g = linePlotGeometry(polar, [{ key: 'cl', label: 'Cl' }], axes({ min: 0, max: 5 }));
+    expect([g?.xmin, g?.xmax]).toEqual([-5, 10]);
+  });
+
+  it('draws rows in their order, so x may turn back (a drag polar), and keeps small x apart', () => {
+    const rows: LineRow[] = [
+      { cd: 0.012, cl: -0.4 },
+      { cd: 0.006, cl: 0.2 },
+      { cd: 0.009, cl: 0.9 },
+    ];
+    const g = linePlotGeometry(rows, [{ key: 'cl', label: 'Cl' }], { xKey: 'cd', x: { kind: 'linear' }, y: { scale: 'linear' }, height: 132 });
+    const xs = g!.lines[0].points.split(' ').map((p) => Number(p.split(',')[0]));
+    expect(xs[0]).toBeGreaterThan(xs[2]);
+    expect(xs[2]).toBeGreaterThan(xs[1]);
+    expect(xs[0] - xs[1]).toBeGreaterThan(100);
+    expect(g?.xTicks.map((t) => t.label)).toEqual(['0.006', '0.008', '0.010', '0.012']);
+  });
+
+  it('labels ticks with the decimals of their step', () => {
+    expect(xTickLabel(-4, 2)).toBe('-4');
+    expect(xTickLabel(0.01, 0.005)).toBe('0.010');
+    expect(xTickLabel(0.25, 0.25)).toBe('0.25');
+    expect(xTickLabel(-1e-12, 0.5)).toBe('0.0');
+    expect(xTickLabel(3, 1, (v) => `x${v}`)).toBe('x3');
+  });
+
+  it('leaves iterations and seconds as they were: from 0, no x ticks', () => {
+    const rows = decay(10, 1, false);
+    const g = kitGeometry(rows, 0, false);
+    expect(g?.xmin).toBe(0);
+    expect(g?.xTicks).toEqual([]);
   });
 });
 

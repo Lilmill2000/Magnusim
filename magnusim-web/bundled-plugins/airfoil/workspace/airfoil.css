@@ -1,0 +1,177 @@
+/* The Airfoil workspace, on the app's design tokens (/plugin-sdk/theme.css).
+   SPDX-License-Identifier: GPL-3.0-or-later */
+
+.af {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: var(--mg-space-4);
+  padding: var(--mg-space-4);
+  align-items: start;
+}
+
+.af-card {
+  background: var(--mg-surface);
+  border: 1px solid var(--mg-card-border);
+  border-radius: var(--mg-radius-lg);
+  box-shadow: var(--mg-shadow-xs);
+  padding: var(--mg-space-4);
+  min-width: 0;
+}
+
+.af-card h2 {
+  font-size: var(--mg-text-lg);
+  margin-top: var(--mg-space-2);
+}
+
+.af-card h2:first-child {
+  margin-top: 0;
+}
+
+.af-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mg-space-4);
+  min-width: 0;
+}
+
+.af-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mg-space-3);
+  flex-wrap: wrap;
+}
+
+.af-head h2 {
+  margin: 0;
+}
+
+.af-toolbar,
+.af-import,
+.af-run,
+.af-plot-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--mg-space-2);
+  flex-wrap: wrap;
+}
+
+.af-import,
+.af-run {
+  margin: var(--mg-space-2) 0;
+}
+
+/* The kit's LinePlot draws in a 280-unit box stretched to its width (its tick labels too):
+   each plot keeps near that width, as the core's residual plot does, instead of filling
+   a wide grid cell (600 px drew its labels twice as wide). */
+.af-plots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 300px));
+  gap: var(--mg-space-4);
+}
+
+.af-plot {
+  margin: 0;
+  min-width: 0;
+}
+
+.af-plot figcaption {
+  font-size: var(--mg-text-sm);
+  font-weight: var(--mg-weight-medium);
+  color: var(--mg-text-secondary);
+  margin-bottom: var(--mg-space-1);
+}
+
+.af-plot-tools {
+  margin-bottom: var(--mg-space-1);
+}
+
+.af-outline {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 240px;
+}
+
+.af-shape {
+  fill: var(--mg-selected-bg);
+  stroke: var(--mg-primary);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.af-chord {
+  stroke: var(--mg-border);
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.af-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--mg-text-sm);
+  margin-top: var(--mg-space-2);
+}
+
+.af-table th,
+.af-table td {
+  text-align: right;
+  padding: var(--mg-space-1) var(--mg-space-2);
+  border-bottom: 1px solid var(--mg-border-subtle);
+}
+
+.af-table th {
+  color: var(--mg-text-secondary);
+  font-weight: var(--mg-weight-medium);
+}
+
+.af-table th:first-child,
+.af-table td:first-child {
+  text-align: left;
+}
+
+.af-missing td {
+  color: var(--mg-warning);
+}
+
+.af-failed {
+  margin: var(--mg-space-2) 0;
+  padding-left: var(--mg-space-5);
+  color: var(--mg-warning);
+}
+
+.af-subhead {
+  font-size: var(--mg-text-sm);
+  font-weight: var(--mg-weight-medium);
+  color: var(--mg-text-secondary);
+  margin: var(--mg-space-3) 0 0;
+}
+
+.af-runs .af-run-status {
+  text-align: left;
+}
+
+.af-runs td.af-run-status {
+  color: var(--mg-text-secondary);
+}
+
+.af-runs tr[data-status='failed'] td.af-run-status,
+.af-runs tr[data-status='lost'] td.af-run-status {
+  color: var(--mg-warning);
+}
+
+.af-runs td.af-run-actions {
+  white-space: nowrap;
+}
+
+.af-runs td.af-run-actions .mgk-btn + .mgk-btn {
+  margin-left: var(--mg-space-3);
+}
+
+@media (max-width: 760px) {
+  .af {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

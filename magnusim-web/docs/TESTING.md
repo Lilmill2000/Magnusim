@@ -86,6 +86,10 @@ has no WSL, so CI never meshes or solves).
 - `MAGNUSIM_E2E_WSL=0` skips them on purpose.
 - `MAGNUSIM_E2E_HEAVY=0` skips only the long solves.
 - `MAGNUSIM_E2E_WSL=1` fails the run if the toolchain is missing.
+- `npm run test:e2e` is the full tier, so it sets `MAGNUSIM_E2E_FULL=1` for
+  every suite. A test whose prerequisite is missing fails there instead of
+  skipping (the Airfoil plugin's environment, built for its lock). Naming spec
+  paths, `--fast`, `--changed` and `MAGNUSIM_E2E_WSL=0` are not the full tier.
 - `e2e/phase1-land9-solve.spec.js` checks a public deployment and runs only
   with `MAGNUSIM_PUBLIC_E2E=1` and its URL settings.
 

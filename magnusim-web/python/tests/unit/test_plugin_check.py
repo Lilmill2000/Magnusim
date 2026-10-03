@@ -312,6 +312,43 @@ def test_register_body_imports_nothing_heavy(tmp_path: Path):
     assert any("register() imports numpy" in m for m in msgs), msgs
 
 
+@pytest.mark.parametrize(
+    ("code", "name"),
+    [
+        ("import importlib\n\n\ndef register(hub):\n    importlib.import_module('gmsh')\n    return None\n", "gmsh"),
+        ("def register(hub):\n    __import__('numpy.linalg')\n    return None\n", "numpy.linalg"),
+        ("from importlib import import_module as load\n\n\ndef register(hub):\n    load('scipy')\n    return None\n", "scipy"),
+        # A star import binds import_module; a relative name is read against its package.
+        ("from importlib import *\n\n\ndef register(hub):\n    import_module('gmsh')\n    return None\n", "gmsh"),
+        ("import importlib\n\n\ndef register(hub):\n    importlib.import_module('.gmsh', 'gmsh')\n    return None\n", "gmsh.gmsh"),
+    ],
+)
+def test_register_body_imports_nothing_heavy_by_name(tmp_path: Path, code: str, name: str):
+    folder = make_plugin(tmp_path)
+    (folder / "plugin.py").write_text(code, encoding="utf-8")
+    msgs = found(run(folder), "register")
+    assert any(f"register() imports {name}" in m for m in msgs), msgs
+
+
+def test_imports_on_the_plugins_own_environment(tmp_path: Path):
+    extra = '\n[python]\nrequirements = "requirements.lock"\nservice = "good_service"\n'
+    lock = "gmsh==4.15.2 \\\n    --hash=sha256:" + "0" * 64 + "\n"
+    folder = make_plugin(
+        tmp_path,
+        manifest_extra=extra,
+        files={"requirements.lock": lock, "good_service.py": "import gmsh\nfrom magnusim_sdk.service import method\n"},
+    )
+    report = run(folder)
+    assert report.checks["imports"] == "pass", found(report, "imports")
+    # The host loads plugin.py: the lock's packages are not for it.
+    (folder / "plugin.py").write_text("import gmsh\n\n\ndef register(hub):\n    return None\n", encoding="utf-8")
+    assert any("gmsh comes from gmsh, pinned in the plugin's lock" in m for m in found(run(folder), "imports"))
+    (folder / "plugin.py").write_text(PLUGIN_PY.format(key="good-plugin"), encoding="utf-8")
+    # Nor is the core, from the environment, by import statement or by name.
+    (folder / "good_service.py").write_text("import importlib\n\nscope = importlib.import_module('cfddesk.project.scope')\n", encoding="utf-8")
+    assert any("not cfddesk.project.scope" in m for m in found(run(folder), "imports"))
+
+
 def test_register_with_no_register_function(tmp_path: Path):
     folder = make_plugin(tmp_path)
     (folder / "plugin.py").write_text("PLUGIN = 'x'\n", encoding="utf-8")

@@ -205,4 +205,33 @@ describe('LinePlot', () => {
     hover(container.querySelector('.mgk-plot'), 290);
     expect(container.querySelector('.mgk-plot-tip-head')?.textContent).toBe('Iteration 10');
   });
+
+  it('draws a linear x axis with its ticks and grid, below zero too, and hovers by that x', () => {
+    const rows = [-4, -2, 0, 2, 4, 6, 8, 10].map((a) => ({ alpha: a, cl: 0.11 * (a + 2) }));
+    const { container } = render(
+      <LinePlot
+        rows={rows}
+        series={[{ key: 'cl', label: 'Cl', format: (v) => v.toFixed(3) }]}
+        label="Cl against α"
+        xKey="alpha"
+        x={{ kind: 'linear', label: 'α', format: (v) => `${v}°` }}
+        y={{ scale: 'linear' }}
+      />,
+    );
+    const texts = [...container.querySelectorAll('text')].map((t) => t.textContent);
+    expect(texts).toEqual(expect.arrayContaining(['-5°', '0°', '5°', '10°']));
+    expect(texts).not.toContain('1');
+    const xLabels = [...container.querySelectorAll('text')].filter((t) => (t.textContent || '').endsWith('°'));
+    expect(xLabels[0].getAttribute('text-anchor')).toBe('start');
+    expect(xLabels[xLabels.length - 1].getAttribute('text-anchor')).toBe('end');
+    // A vertical grid line per x tick, beside the horizontal ones.
+    const vertical = [...container.querySelectorAll('line.mgk-plot-grid')].filter((l) => l.getAttribute('x1') === l.getAttribute('x2'));
+    expect(vertical).toHaveLength(4);
+    // The left edge is α = −5°, not 0: the nearest row there is −4°.
+    hover(container.querySelector('.mgk-plot'), 40);
+    expect(container.querySelector('.mgk-plot-tip-head')?.textContent).toBe('α = -4°');
+    expect(container.querySelector('.mgk-plot-tip')?.textContent).toContain('Cl -0.220');
+    hover(container.querySelector('.mgk-plot'), 299);
+    expect(container.querySelector('.mgk-plot-tip-head')?.textContent).toBe('α = 10°');
+  });
 });

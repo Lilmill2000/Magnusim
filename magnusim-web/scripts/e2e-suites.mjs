@@ -17,6 +17,9 @@
 // Anything else (-g, --reporter=line, ...) goes to every Playwright suite that runs. A spec
 // path limits the run to the suite that holds it (e2e/... the core, bundled-plugins/<key>/...
 // that plugin).
+// The full tier (--all without --fast, whole suites, MAGNUSIM_E2E_WSL not 0) sets
+// MAGNUSIM_E2E_FULL=1 for every suite: a test whose prerequisite is missing there fails
+// instead of skipping (docs/TESTING.md).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -305,7 +308,7 @@ function changedFromGit(base) {
   return [...files];
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const o = { mode: null, fast: null, files: null, base: null, suites: [], plan: false, json: false, passthrough: [], filters: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -337,16 +340,27 @@ function playwrightCli() {
   return join(WEB_ROOT, 'node_modules', '@playwright', 'test', 'cli.js');
 }
 
-function suiteEnv(o) {
-  const env = { ...process.env };
+/**
+ * The full tier (docs/TESTING.md: before a push, and nightly): --all without --fast, whole
+ * suites (no spec paths named; --suite still counts), and WSL not turned off by hand.
+ */
+export function isFullTier(o, base = process.env) {
+  return o.mode === 'all' && !o.fast && !o.filters.length && base.MAGNUSIM_E2E_WSL !== '0';
+}
+
+/** The environment every suite runs with. MAGNUSIM_E2E_FULL=1 marks the full tier; a value set by hand is kept. */
+export function suiteEnv(o, base = process.env) {
+  const env = { ...base };
   delete env.MAGNUSIM_E2E_SETTLED;
   if (o.fast) env.MAGNUSIM_E2E_WSL = '0';
+  if (isFullTier(o, base)) env.MAGNUSIM_E2E_FULL = '1';
   return env;
 }
 
 function runPlaywright(label, config, specs, o) {
   const args = [playwrightCli(), 'test', ...(config ? ['-c', config] : []), ...o.passthrough, ...specs];
-  console.log(`\n[e2e] ${label}: playwright test ${args.slice(2).join(' ')}${o.fast ? ' (MAGNUSIM_E2E_WSL=0)' : ''}`);
+  const flags = `${o.fast ? ' (MAGNUSIM_E2E_WSL=0)' : ''}${isFullTier(o) ? ' (MAGNUSIM_E2E_FULL=1)' : ''}`;
+  console.log(`\n[e2e] ${label}: playwright test ${args.slice(2).join(' ')}${flags}`);
   return spawnSync(process.execPath, args, { cwd: WEB_ROOT, env: suiteEnv(o), stdio: 'inherit' }).status;
 }
 
@@ -367,7 +381,9 @@ function runPlugin(suite, specs, o) {
 
 function describe(plan, o, changedCount) {
   const lines = [];
-  const tier = o.fast ? 'fast tier: no WSL meshes or solves' : 'full: with WSL meshes and solves where WSL is here';
+  const tier = o.fast
+    ? 'fast tier: no WSL meshes or solves'
+    : `full: with WSL meshes and solves where WSL is here${isFullTier(o) ? '; the full tier (MAGNUSIM_E2E_FULL=1)' : ''}`;
   if (o.filters.length) lines.push(`[e2e] the named specs; ${tier}`);
   else if (o.mode === 'changed') lines.push(`[e2e] ${changedCount} changed file(s); ${tier}`);
   else lines.push(`[e2e] ${o.suites.length ? `suites ${o.suites.join(', ')}` : 'every suite'}; ${tier}`);
@@ -418,7 +434,7 @@ export function main(argv = process.argv.slice(2)) {
     for (const k of Object.keys(plan.plugins)) if (!o.suites.includes(k)) delete plan.plugins[k];
   }
   if (o.json) {
-    console.log(JSON.stringify({ fast: o.fast, ...plan }, null, 2));
+    console.log(JSON.stringify({ fast: o.fast, full: isFullTier(o), ...plan }, null, 2));
     return 0;
   }
   console.log(describe(plan, o, changedCount));

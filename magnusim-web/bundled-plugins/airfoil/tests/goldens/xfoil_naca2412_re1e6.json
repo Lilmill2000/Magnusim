@@ -1,0 +1,268 @@
+{
+ "about": "XFOIL golden for the Airfoil plugin: tests/test_xfoil_golden.py compares the shipped xfoil.exe with it.",
+ "xfoil": {
+  "version": "6.99",
+  "program": "xfoil/bin/xfoil.exe (MIT's Windows build from XFOIL6.99.zip)",
+  "sha256": "c17342f84ae260c2b11a74cd0e2fb8189a5f8954c6bb7a8467a0f27055c7faea"
+ },
+ "airfoil": {
+  "source": "naca",
+  "code": "2412",
+  "points_per_side": 81,
+  "closed_te": false
+ },
+ "section": {
+  "name": "NACA 2412",
+  "points": 161,
+  "spacing": "cosine",
+  "trailing_edge": "open"
+ },
+ "conditions": {
+  "re": 1000000.0,
+  "mach": 0.0,
+  "alpha_start": -4.0,
+  "alpha_end": 10.0,
+  "alpha_step": 1.0,
+  "ncrit": 9.0,
+  "xtr_top": 1.0,
+  "xtr_bottom": 1.0
+ },
+ "iterations": 100,
+ "paneling": {
+  "panel_nodes": 160,
+  "bunching": 1.0,
+  "te_le_density_ratio": 0.15,
+  "refined_area_le_density_ratio": 0.2,
+  "refined_area_xc_top": [
+   1.0,
+   1.0
+  ],
+  "refined_area_xc_bottom": [
+   1.0,
+   1.0
+  ]
+ },
+ "sweep_order": [
+  0.0,
+  1.0,
+  2.0,
+  3.0,
+  4.0,
+  5.0,
+  6.0,
+  7.0,
+  8.0,
+  9.0,
+  10.0,
+  -1.0,
+  -2.0,
+  -3.0,
+  -4.0
+ ],
+ "session": [
+  "PLOP",
+  "G",
+  "",
+  "LOAD airfoil.dat",
+  "PANE",
+  "OPER",
+  "VISC 1000000",
+  "MACH 0",
+  "ITER 100",
+  "VPAR",
+  "N 9",
+  "XTR 1 1",
+  "",
+  "PACC",
+  "polar.txt",
+  "",
+  "ALFA 0",
+  "CPWR cp_000.txt",
+  "ALFA 1",
+  "CPWR cp_001.txt",
+  "ALFA 2",
+  "CPWR cp_002.txt",
+  "ALFA 3",
+  "CPWR cp_003.txt",
+  "ALFA 4",
+  "CPWR cp_004.txt",
+  "ALFA 5",
+  "CPWR cp_005.txt",
+  "ALFA 6",
+  "CPWR cp_006.txt",
+  "ALFA 7",
+  "CPWR cp_007.txt",
+  "ALFA 8",
+  "CPWR cp_008.txt",
+  "ALFA 9",
+  "CPWR cp_009.txt",
+  "ALFA 10",
+  "CPWR cp_010.txt",
+  "INIT",
+  "ALFA -1",
+  "CPWR cp_011.txt",
+  "ALFA -2",
+  "CPWR cp_012.txt",
+  "ALFA -3",
+  "CPWR cp_013.txt",
+  "ALFA -4",
+  "CPWR cp_014.txt",
+  "PACC",
+  "",
+  "QUIT"
+ ],
+ "rows": [
+  {
+   "alpha": -4.0,
+   "cl": -0.1934,
+   "cd": 0.00759,
+   "cdp": 0.00217,
+   "cm": -0.0552,
+   "xtr_top": 0.8885,
+   "xtr_bottom": 0.1306,
+   "cl_cd": -25.4809
+  },
+  {
+   "alpha": -3.0,
+   "cl": -0.0841,
+   "cd": 0.00698,
+   "cdp": 0.0017,
+   "cm": -0.0544,
+   "xtr_top": 0.8436,
+   "xtr_bottom": 0.2086,
+   "cl_cd": -12.0487
+  },
+  {
+   "alpha": -2.0,
+   "cl": 0.0256,
+   "cd": 0.00649,
+   "cdp": 0.00139,
+   "cm": -0.0537,
+   "xtr_top": 0.7888,
+   "xtr_bottom": 0.3146,
+   "cl_cd": 3.94453
+  },
+  {
+   "alpha": -1.0,
+   "cl": 0.1342,
+   "cd": 0.00601,
+   "cdp": 0.00121,
+   "cm": -0.0529,
+   "xtr_top": 0.7255,
+   "xtr_bottom": 0.4774,
+   "cl_cd": 22.3295
+  },
+  {
+   "alpha": 0.0,
+   "cl": 0.2413,
+   "cd": 0.00563,
+   "cdp": 0.00122,
+   "cm": -0.0517,
+   "xtr_top": 0.657,
+   "xtr_bottom": 0.6806,
+   "cl_cd": 42.8597
+  },
+  {
+   "alpha": 1.0,
+   "cl": 0.3459,
+   "cd": 0.00548,
+   "cdp": 0.00139,
+   "cm": -0.0496,
+   "xtr_top": 0.5891,
+   "xtr_bottom": 0.856,
+   "cl_cd": 63.1204
+  },
+  {
+   "alpha": 2.0,
+   "cl": 0.4536,
+   "cd": 0.00578,
+   "cdp": 0.00168,
+   "cm": -0.0478,
+   "xtr_top": 0.5257,
+   "xtr_bottom": 0.9655,
+   "cl_cd": 78.4775
+  },
+  {
+   "alpha": 3.0,
+   "cl": 0.5944,
+   "cd": 0.00637,
+   "cdp": 0.002,
+   "cm": -0.054,
+   "xtr_top": 0.4593,
+   "xtr_bottom": 0.9943,
+   "cl_cd": 93.3124
+  },
+  {
+   "alpha": 4.0,
+   "cl": 0.7169,
+   "cd": 0.00701,
+   "cdp": 0.00234,
+   "cm": -0.0567,
+   "xtr_top": 0.3856,
+   "xtr_bottom": 0.9999,
+   "cl_cd": 102.268
+  },
+  {
+   "alpha": 5.0,
+   "cl": 0.8102,
+   "cd": 0.00794,
+   "cdp": 0.00288,
+   "cm": -0.0531,
+   "xtr_top": 0.293,
+   "xtr_bottom": 0.9999,
+   "cl_cd": 102.04
+  },
+  {
+   "alpha": 6.0,
+   "cl": 0.902,
+   "cd": 0.00932,
+   "cdp": 0.00376,
+   "cm": -0.0495,
+   "xtr_top": 0.1861,
+   "xtr_bottom": 0.9999,
+   "cl_cd": 96.7811
+  },
+  {
+   "alpha": 7.0,
+   "cl": 0.9948,
+   "cd": 0.01094,
+   "cdp": 0.00493,
+   "cm": -0.0465,
+   "xtr_top": 0.1016,
+   "xtr_bottom": 0.9999,
+   "cl_cd": 90.9324
+  },
+  {
+   "alpha": 8.0,
+   "cl": 1.0886,
+   "cd": 0.01251,
+   "cdp": 0.00627,
+   "cm": -0.0437,
+   "xtr_top": 0.0592,
+   "xtr_bottom": 0.9999,
+   "cl_cd": 87.0184
+  },
+  {
+   "alpha": 9.0,
+   "cl": 1.1801,
+   "cd": 0.01414,
+   "cdp": 0.00781,
+   "cm": -0.0407,
+   "xtr_top": 0.04,
+   "xtr_bottom": 0.9999,
+   "cl_cd": 83.4583
+  },
+  {
+   "alpha": 10.0,
+   "cl": 1.2677,
+   "cd": 0.01585,
+   "cdp": 0.00957,
+   "cm": -0.0372,
+   "xtr_top": 0.0306,
+   "xtr_bottom": 0.9999,
+   "cl_cd": 79.9811
+  }
+ ],
+ "not_converged": [],
+ "made_on": "2026-10-02"
+}
