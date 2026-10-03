@@ -1518,7 +1518,7 @@ material_assigned(m: dict) -> bool
 study_fluid(materials: list) -> dict | None
 ```
 
-The study's one fluid: the material assigned to a volume, else one named Air, else the first.
+The study's one fluid: the material assigned to a volume, else Air, else the first.
 
 #### unique_numbered_patch
 

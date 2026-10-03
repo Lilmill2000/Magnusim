@@ -117,3 +117,21 @@ def test_the_core_materials_mirror_reads_these_record_keys():
     assert mirror.record_keys() == materials.RECORD_KEYS
     assert mirror.record_keys("newtonian_incompressible") == materials.RECORD_KEYS
     assert mirror._FALLBACK_RECORD_KEYS == materials.RECORD_KEYS
+
+
+def test_study_fluid_tells_air_by_its_preset():
+    """Records of every preset, as POST /api/materials writes them: the assigned one
+    is the study's fluid, else the Air preset's wherever it sits, else the first."""
+    from magnusim_sdk.study import study_fluid
+
+    recs = [
+        {"id": p["key"], "name": p["name"], "preset": p["key"], "library": p["library"], "assigned_volumes": []}
+        for p in materials.PRESETS
+    ]
+    air = next(r for r in recs if r["preset"] == "air")
+    for rec in recs:
+        rest = [r for r in recs if r is not rec]
+        assert study_fluid([*rest, dict(rec, assigned_volumes=["Body1"])])["id"] == rec["id"]
+    assert study_fluid(list(reversed(recs))) is air
+    no_air = [r for r in recs if r is not air]
+    assert study_fluid(no_air) is no_air[0]

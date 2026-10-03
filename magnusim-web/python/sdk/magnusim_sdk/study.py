@@ -80,12 +80,36 @@ def material_assigned(m: dict) -> bool:
     return (isinstance(vols, list) and len(vols) > 0) or bool(m.get("assigned_volume"))
 
 
+# The default fluid's preset key and library codes, as a record saved from the
+# Fluid picker carries them (DEFAULT is the code older versions saved for it).
+_DEFAULT_FLUID_PRESET = "air"
+_DEFAULT_FLUID_CODES = frozenset({"AIR", "DEFAULT"})
+
+
+def _is_default_fluid(m: dict) -> bool:
+    """A record of the Air preset: its preset key says so, else its library code.
+
+    A record with neither (saved before presets) is Air when its name contains "air".
+    """
+    preset = str(m.get("preset") or "").strip().lower()
+    code = str(m.get("library") or "").strip().upper()
+    if preset:
+        return preset == _DEFAULT_FLUID_PRESET
+    if code:
+        return code in _DEFAULT_FLUID_CODES
+    return bool(re.search(r"air", str(m.get("name") or ""), re.I))
+
+
 def study_fluid(materials: list) -> dict | None:
-    """The study's one fluid: the material assigned to a volume, else one named Air, else the first."""
+    """The study's one fluid: the material assigned to a volume, else Air, else the first.
+
+    Air is a record of the Air preset (preset ``air``, else library ``AIR`` or
+    ``DEFAULT``); a record with neither key is Air when its name contains "air".
+    """
     rows = [m for m in materials if isinstance(m, dict)]
     return (
         next((m for m in rows if material_assigned(m)), None)
-        or next((m for m in rows if re.search(r"air", str(m.get("name") or ""), re.I)), None)
+        or next((m for m in rows if _is_default_fluid(m)), None)
         or (rows[0] if rows else None)
     )
 
