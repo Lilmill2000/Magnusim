@@ -4,7 +4,7 @@ export type FilterKey = 'cut_plane' | 'streamlines' | 'plot_over_path' | 'iso_su
 export type MesherKey = 'standard' | 'cfmesh' | 'snappy_hexdominant' | (string & {});
 export type MaterialKey = 'newtonian_incompressible' | (string & {});
 export type BcKey = 'velocity_inlet_fixed' | 'velocity_inlet_volumetric' | 'velocity_inlet_mass' | 'velocity_outlet' | 'pressure_outlet_gauge' | 'wall_noslip' | 'wall_slip' | (string & {});
-export type BcFamilyKey = string;
+export type BcFamilyKey = 'velocity_inlet' | 'velocity_outlet' | 'pressure_outlet' | 'wall' | (string & {});
 export type MonitorKey = 'area_average' | 'flow_rate' | (string & {});
 
 export interface RegistryRow {

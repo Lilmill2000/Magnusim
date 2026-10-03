@@ -8,19 +8,12 @@ from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 
+from .bcs import BC_KEYS
 from .monitors import MONITOR_QUANTITIES
 from .physics import DEFAULT_TURBULENCE, KINEMATIC_FIELDS, TURBULENCE_MODELS
 
-# Product BC keys from case.bc_registry.BC_TYPES (placeholders OK until BC wrap).
-_INCOMPRESSIBLE_BC_TYPES: tuple[str, ...] = (
-    "velocity_inlet_fixed",
-    "velocity_inlet_volumetric",
-    "velocity_inlet_mass",
-    "velocity_outlet",
-    "pressure_outlet_gauge",
-    "wall_noslip",
-    "wall_slip",
-)
+# Both analyses offer every BC type this plugin registers (bcs.BC_TYPES).
+_INCOMPRESSIBLE_BC_TYPES: tuple[str, ...] = BC_KEYS
 
 _FIELDS: tuple[str, ...] = ("U", "p", "k", "omega", "nut")
 

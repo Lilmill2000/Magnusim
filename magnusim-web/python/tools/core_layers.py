@@ -47,7 +47,7 @@ ALLOWED: dict[str, set[str]] = {
     "jobs": set(),
     "mesh": {"cad", "case", "project"},
     "project": {"cad", "case", "mesh", "registry", "results", "units"},
-    "registry": {"builtin", "case", "project", "wsl"},
+    "registry": {"builtin", "project", "wsl"},
     "results": set(),
     "runner": {"wsl"},
     "units": set(),

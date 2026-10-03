@@ -273,12 +273,35 @@ def test_the_plugins_material_and_monitors_are_protected():
             get_hub().unregister(kind, key, plugin="someone")
 
 
-def test_a_required_plugin_unloaded_by_cross_refs_is_reported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """A user plugin drops a BC type the required analyses use: cross-reference
-    validation unloads Incompressible Flow, and the app must say so (it used to
-    list nothing, so the page showed an empty picker and no banner)."""
+def test_a_plugin_cannot_drop_a_bc_type_incompressible_flow_protects(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Incompressible Flow's manifest protects its BC types and families: a user
+    plugin that tries to drop one fails to load itself, and the required plugin stays."""
     user = tmp_path / "plugins"
     body = "def register(hub):\n    hub.unregister('bc', 'wall_slip', plugin='dropper')\n"
+    _plugin(user, "dropper", body, overrides=["bc:wall_slip"])
+    monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(user))
+    hub = load_all()
+    assert "incompressible_steady" in get_registry("analysis").keys()
+    assert "wall_slip" in get_registry("bc").keys()
+    assert hub.required_failures == []
+    failed = {row["key"]: row["error"] for row in hub.failures}
+    assert "protected key 'wall_slip'" in failed["dropper"]
+
+
+def test_a_required_plugin_unloaded_by_cross_refs_is_reported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """A BC type the required analyses use goes missing: cross-reference
+    validation unloads Incompressible Flow, and the app must say so (it used to
+    list nothing, so the page showed an empty picker and no banner).
+
+    Incompressible Flow protects its BC types, so the test plugin lifts that
+    protection first (it stands for a plugin that gets around it)."""
+    user = tmp_path / "plugins"
+    body = (
+        "from cfddesk.registry import base\n"
+        "def register(hub):\n"
+        "    base._PLUGIN_PROTECTED.discard(('bc', 'wall_slip'))\n"
+        "    hub.unregister('bc', 'wall_slip', plugin='dropper')\n"
+    )
     _plugin(user, "dropper", body, overrides=["bc:wall_slip"])
     monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(user))
     hub = load_all()

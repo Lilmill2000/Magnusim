@@ -7,9 +7,9 @@ Conditions panel ("Velocity inlet", "Wall"): its variants are BC types, and a
 saved record (``record["bc_type"]`` is the family's ``record_type``) selects
 one of them by its values (``BcTypeSpec.match``).
 
-The built-in BC types live in case.bc_registry (BC_TYPES); this module holds
-their spec class and registers them. Do not import bc_registry at module top
-level: bc_registry imports this module.
+The core registers no BC types or families: plugins do (Incompressible Flow
+owns the product ones). case.bc_registry and case.bc_menu are 1.x shims over
+the hub. Do not import bc_registry at module top level: it imports this module.
 """
 
 from __future__ import annotations
@@ -90,19 +90,6 @@ class BcFamily:
     fields: tuple[SchemaField, ...] = ()
     ui: str = ""
     resolve: BcResolveFn | None = None
-
-
-def register_builtin_bcs(hub: RegistryHub) -> None:
-    """Register every BC_TYPES entry (idempotent same-plugin re-register).
-
-    The ``bc_family`` kind starts empty; plugins register families into it.
-    """
-    from cfddesk.case.bc_registry import BC_TYPES
-
-    reg = hub.registry("bc")
-    for spec in BC_TYPES.values():
-        reg.register(spec, plugin="builtin")
-    hub.registry("bc_family")
 
 
 def validate_analysis_bc_refs(hub: RegistryHub) -> None:

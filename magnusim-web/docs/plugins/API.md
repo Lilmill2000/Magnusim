@@ -1897,13 +1897,17 @@ What ships: the core builtins and the bundled plugins (the whole record, with sc
 | mesher | `standard` | Standard | builtin |
 | mesher | `cfmesh` | cfMesh cartesianMesh (legacy) | builtin |
 | mesher | `snappy_hexdominant` | Hex-dominant | builtin |
-| bc | `velocity_inlet_fixed` | Velocity inlet | builtin |
-| bc | `velocity_inlet_volumetric` | Velocity inlet | builtin |
-| bc | `velocity_inlet_mass` | Velocity inlet | builtin |
-| bc | `velocity_outlet` | Velocity outlet | builtin |
-| bc | `pressure_outlet_gauge` | Pressure | builtin |
-| bc | `wall_noslip` | Wall | builtin |
-| bc | `wall_slip` | Wall | builtin |
+| bc | `velocity_inlet_fixed` | Velocity inlet | incompressible_flow |
+| bc | `velocity_inlet_volumetric` | Velocity inlet | incompressible_flow |
+| bc | `velocity_inlet_mass` | Velocity inlet | incompressible_flow |
+| bc | `velocity_outlet` | Velocity outlet | incompressible_flow |
+| bc | `pressure_outlet_gauge` | Pressure | incompressible_flow |
+| bc | `wall_noslip` | Wall | incompressible_flow |
+| bc | `wall_slip` | Wall | incompressible_flow |
+| bc_family | `velocity_inlet` | Velocity inlet | incompressible_flow |
+| bc_family | `velocity_outlet` | Velocity outlet | incompressible_flow |
+| bc_family | `pressure_outlet` | Pressure | incompressible_flow |
+| bc_family | `wall` | Wall | incompressible_flow |
 | material | `newtonian_incompressible` | Newtonian (incompressible) | incompressible_flow |
 | monitor | `area_average` | Area average | incompressible_flow |
 | monitor | `flow_rate` | Flow rate | incompressible_flow |

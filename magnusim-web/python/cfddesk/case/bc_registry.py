@@ -1,11 +1,21 @@
-"""Boundary-condition type registry → OpenFOAM patch entries + snappy patch_type.
+"""Legacy (API 1.x) view of the BC types: a shim over the hub's ``bc`` registry.
 
-Product types: Velocity inlet, Velocity outlet, Pressure, Wall.
-Flow-rate and slip/no-slip are settings of those types, not extra types.
+The BC types are registered by plugins (Incompressible Flow owns the product
+ones). This module keeps the 1.x names working: ``BC_TYPES`` is a read-only
+mapping over the hub (it loads the registry once when it is still empty), and
+``get_type``/``default_settings``/``patch_type_for``/``type_labels`` keep their
+signatures.
+
+When the hub lacks one of the seven BC type keys projects have always stored
+(the plugin that owns them failed to load), ``_LEGACY_SEMANTICS`` still says
+what kind of patch it is, so meshing an old project still types its walls.
 """
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
 from typing import Any
 
 # The spec class lives in the registry (API 1.4); these names stay importable here.
@@ -13,384 +23,90 @@ from cfddesk.registry.bc import BcTypeSpec as BcTypeSpec
 from cfddesk.registry.bc import PatchType as PatchType
 from cfddesk.registry.bc import SemanticClass as SemanticClass
 from cfddesk.registry.bc import WriterFn as WriterFn
-from cfddesk.registry.schema import SchemaField as SettingField
+from cfddesk.registry.schema import SchemaField as SettingField  # noqa: F401  (1.x name)
 
-
-def _entry(body: str) -> str:
-    return body.rstrip() + "\n"
-
-
-def _fixed_vector(name: str, settings: dict, _ctx: dict) -> str:
-    v = settings.get("velocity", (0.0, 0.0, 0.0))
-    if isinstance(v, (list, tuple)) and len(v) >= 3:
-        vx, vy, vz = float(v[0]), float(v[1]), float(v[2])
-    else:
-        vx = vy = vz = 0.0
-    return _entry(
-        f"""    {name}
-    {{
-        type            fixedValue;
-        value           uniform ({vx:g} {vy:g} {vz:g});
-    }}"""
-    )
-
-
-def _velocity_inlet_fixed_U(name: str, settings: dict, ctx: dict) -> str:
-    mode = str(settings.get("direction_mode", "normal"))
-    if mode == "vector":
-        return _fixed_vector(name, settings, ctx)
-    # magnitude + inward (-outward normal) from context
-    speed = float(settings.get("speed_m_s", 0.0))
-    n = ctx.get("inward_normal")
-    if n is None:
-        n = (-1.0, 0.0, 0.0)
-    u = (n[0] * speed, n[1] * speed, n[2] * speed)
-    return _entry(
-        f"""    {name}
-    {{
-        type            fixedValue;
-        value           uniform ({u[0]:g} {u[1]:g} {u[2]:g});
-    }}"""
-    )
-
-
-def _zero_grad(name: str, _s: dict, _c: dict) -> str:
-    return _entry(
-        f"""    {name}
-    {{
-        type            zeroGradient;
-    }}"""
-    )
-
-
-def _no_slip(name: str, _s: dict, _c: dict) -> str:
-    return _entry(
-        f"""    {name}
-    {{
-        type            noSlip;
-    }}"""
-    )
-
-
-def _slip(name: str, _s: dict, _c: dict) -> str:
-    return _entry(
-        f"""    {name}
-    {{
-        type            slip;
-    }}"""
-    )
-
-
-def _flow_rate_inlet_U(name: str, settings: dict, _ctx: dict) -> str:
-    # volumetric m3/s or mass kg/s via rho
-    kind = str(settings.get("flow_kind", "volumetric"))
-    if kind == "mass":
-        rate = float(settings.get("mass_flow_kg_s", 0.0))
-        rho = float(settings.get("rho", 1.0))
-        return _entry(
-            f"""    {name}
-    {{
-        type            flowRateInletVelocity;
-        massFlowRate    constant {rate:g};
-        rho             {rho:g};
-        value           uniform (0 0 0);
-    }}"""
-        )
-    rate = float(settings.get("volumetric_flow_m3_s", 0.0))
-    return _entry(
-        f"""    {name}
-    {{
-        type            flowRateInletVelocity;
-        volumetricFlowRate constant {rate:g};
-        value           uniform (0 0 0);
-    }}"""
-    )
-
-
-def _inlet_outlet_U(name: str, _s: dict, _c: dict) -> str:
-    return _entry(
-        f"""    {name}
-    {{
-        type            inletOutlet;
-        inletValue      uniform (0 0 0);
-        value           uniform (0 0 0);
-    }}"""
-    )
-
-
-def _fixed_p(name: str, settings: dict, _ctx: dict) -> str:
-    p = float(settings.get("gauge_pressure", settings.get("pressure", 0.0)))
-    return _entry(
-        f"""    {name}
-    {{
-        type            fixedValue;
-        value           uniform {p:g};
-    }}"""
-    )
-
-
-def _T_fixed(name: str, settings: dict, _ctx: dict) -> str:
-    t = float(settings.get("temperature_K", 293.15))
-    return _entry(
-        f"""    {name}
-    {{
-        type            fixedValue;
-        value           uniform {t:g};
-    }}"""
-    )
-
-
-def _T_zero_grad(name: str, _s: dict, _c: dict) -> str:
-    return _zero_grad(name, _s, _c)
-
-
-def _T_heat_flux(name: str, settings: dict, _ctx: dict) -> str:
-    q = float(settings.get("heat_flux_W_m2", 0.0))
-    return _entry(
-        f"""    {name}
-    {{
-        type            externalWallHeatFluxTemperature;
-        mode            flux;
-        q               uniform {q:g};
-        value           uniform 293.15;
-    }}"""
-    )
-
-
-def _T_external_htc(name: str, settings: dict, _ctx: dict) -> str:
-    h = float(settings.get("htc_W_m2K", 10.0))
-    ta = float(settings.get("ambient_T_K", 293.15))
-    return _entry(
-        f"""    {name}
-    {{
-        type            externalWallHeatFluxTemperature;
-        mode            coefficient;
-        h               uniform {h:g};
-        Ta              uniform {ta:g};
-        value           uniform {ta:g};
-    }}"""
-    )
-
-
-def _wall_T(name: str, settings: dict, ctx: dict) -> str:
-    mode = str(settings.get("thermal_mode", "adiabatic"))
-    if mode == "fixed_temperature":
-        return _T_fixed(name, settings, ctx)
-    if mode == "fixed_heat_flux":
-        return _T_heat_flux(name, settings, ctx)
-    if mode == "external_heat_transfer":
-        return _T_external_htc(name, settings, ctx)
-    return _T_zero_grad(name, settings, ctx)
-
-
-_THERMAL_WALL_FIELDS = (
-    SettingField(
-        "thermal_mode",
-        "Thermal",
-        "choice",
-        default="adiabatic",
-        choices=(
-            "adiabatic",
-            "fixed_temperature",
-            "fixed_heat_flux",
-            "external_heat_transfer",
-        ),
-        energy_only=True,
-    ),
-    SettingField(
-        "temperature_K",
-        "Temperature",
-        "float",
-        default=293.15,
-        unit="K",
-        energy_only=True,
-        rate_kind="intensive",
-    ),
-    SettingField(
-        "heat_flux_W_m2",
-        "Heat flux",
-        "float",
-        default=0.0,
-        unit="W/m²",
-        energy_only=True,
-        rate_kind="extensive",
-    ),
-    SettingField(
-        "htc_W_m2K", "HTC", "float", default=10.0, unit="W/m²K", energy_only=True
-    ),
-    SettingField(
-        "ambient_T_K", "Ambient T", "float", default=293.15, unit="K", energy_only=True
-    ),
+# The BC type keys every project stored before BC types became plugin specs:
+# key -> (semantic, patch_type). Read only when the hub lacks the key.
+_LEGACY_SEMANTICS: Mapping[str, tuple[SemanticClass, PatchType]] = MappingProxyType(
+    {
+        "velocity_inlet_fixed": ("inlet", "patch"),
+        "velocity_inlet_volumetric": ("inlet", "patch"),
+        "velocity_inlet_mass": ("inlet", "patch"),
+        "velocity_outlet": ("outlet", "patch"),
+        "pressure_outlet_gauge": ("outlet", "patch"),
+        "wall_noslip": ("wall", "wall"),
+        "wall_slip": ("wall", "wall"),
+    }
 )
 
-_INLET_T = (
-    SettingField(
-        "temperature_K",
-        "Inlet temperature",
-        "float",
-        default=293.15,
-        unit="K",
-        energy_only=True,
-        rate_kind="intensive",
-    ),
-)
+_LOAD_LOCK = threading.RLock()
+_LOADING = threading.local()
+# Set on a hub once this module has asked load_all to fill it.
+_TRIED_ATTR = "_bc_shim_load_tried"
 
 
-BC_TYPES: dict[str, BcTypeSpec] = {}
+def _bc_registry() -> Any:
+    """The hub's ``bc`` registry, loaded once per hub if it is still empty."""
+    from cfddesk.registry.discovery import get_hub
+
+    hub = get_hub()
+    reg = hub.registry("bc")
+    if reg.keys() or getattr(hub, _TRIED_ATTR, False) or getattr(_LOADING, "active", False):
+        return reg
+    with _LOAD_LOCK:
+        if not getattr(hub, _TRIED_ATTR, False) and not reg.keys():
+            setattr(hub, _TRIED_ATTR, True)
+            _LOADING.active = True
+            try:
+                from cfddesk.registry.discovery import load_all
+
+                load_all()
+            except Exception:  # noqa: BLE001 - a broken load still leaves the legacy table
+                pass
+            finally:
+                _LOADING.active = False
+    return get_hub().registry("bc")
 
 
-def _reg(spec: BcTypeSpec) -> None:
-    BC_TYPES[spec.key] = spec
+def _legacy_spec(key: str) -> BcTypeSpec:
+    """A writer-less spec for a stored key whose plugin is not loaded."""
+    semantic, patch_type = _LEGACY_SEMANTICS[key]
+    return BcTypeSpec(key, key, semantic, patch_type, supported=False)
 
 
-_reg(
-    BcTypeSpec(
-        "velocity_inlet_fixed",
-        "Velocity inlet",
-        "inlet",
-        "patch",
-        (
-            SettingField(
-                "direction_mode",
-                "Direction",
-                "choice",
-                default="normal",
-                choices=("normal", "vector"),
-            ),
-            SettingField(
-                "speed_m_s",
-                "Speed",
-                "float",
-                default=20.0,
-                unit="m/s",
-                rate_kind="intensive",
-            ),
-            SettingField(
-                "velocity",
-                "Velocity vector",
-                "vector3",
-                default=(0.0, 0.0, 0.0),
-                unit="m/s",
-                rate_kind="intensive",
-            ),
-            *_INLET_T,
-        ),
-        write_U=_velocity_inlet_fixed_U,
-        write_p=_zero_grad,
-        write_T=_T_fixed,
-    )
-)
-_reg(
-    BcTypeSpec(
-        "velocity_inlet_volumetric",
-        "Velocity inlet",
-        "inlet",
-        "patch",
-        (
-            SettingField(
-                "volumetric_flow_m3_s",
-                "Volumetric flow",
-                "float",
-                default=0.0,
-                unit="m³/s",
-                rate_kind="extensive",
-            ),
-            SettingField("flow_kind", "Kind", "choice", default="volumetric", choices=("volumetric",)),
-            *_INLET_T,
-        ),
-        write_U=_flow_rate_inlet_U,
-        write_p=_zero_grad,
-        write_T=_T_fixed,
-    )
-)
-_reg(
-    BcTypeSpec(
-        "velocity_inlet_mass",
-        "Velocity inlet",
-        "inlet",
-        "patch",
-        (
-            SettingField(
-                "mass_flow_kg_s",
-                "Mass flow",
-                "float",
-                default=0.0,
-                unit="kg/s",
-                rate_kind="extensive",
-            ),
-            SettingField("rho", "Density", "float", default=1.0, unit="kg/m³"),
-            SettingField("flow_kind", "Kind", "choice", default="mass", choices=("mass",)),
-            *_INLET_T,
-        ),
-        write_U=_flow_rate_inlet_U,
-        write_p=_zero_grad,
-        write_T=_T_fixed,
-    )
-)
-_reg(
-    BcTypeSpec(
-        "velocity_outlet",
-        "Velocity outlet",
-        "outlet",
-        "patch",
-        (
-            SettingField(
-                "velocity",
-                "Velocity vector",
-                "vector3",
-                default=(0.0, 0.0, 0.0),
-                unit="m/s",
-                rate_kind="intensive",
-            ),
-        ),
-        write_U=_fixed_vector,
-        write_p=_zero_grad,
-    )
-)
-_reg(
-    BcTypeSpec(
-        "pressure_outlet_gauge",
-        "Pressure",
-        "outlet",
-        "patch",
-        (
-            SettingField(
-                "gauge_pressure",
-                "Gauge pressure",
-                "float",
-                default=0.0,
-                unit="Pa",
-                rate_kind="intensive",
-            ),
-        ),
-        write_U=_inlet_outlet_U,
-        write_p=_fixed_p,
-    )
-)
-_reg(
-    BcTypeSpec(
-        "wall_noslip",
-        "Wall",
-        "wall",
-        "wall",
-        _THERMAL_WALL_FIELDS,
-        write_U=_no_slip,
-        write_p=_zero_grad,
-        write_T=_wall_T,
-    )
-)
-_reg(
-    BcTypeSpec(
-        "wall_slip",
-        "Wall",
-        "wall",
-        "wall",
-        _THERMAL_WALL_FIELDS,
-        write_U=_slip,
-        write_p=_zero_grad,
-        write_T=_wall_T,
-    )
-)
+class _BcTypesView(Mapping[str, BcTypeSpec]):
+    """Read-only ``{key: BcTypeSpec}`` over the hub's ``bc`` registry, plus a
+    writer-less legacy spec for each stored key the hub lacks."""
+
+    def _keys(self) -> list[str]:
+        keys = list(_bc_registry().keys())
+        have = set(keys)
+        return keys + [k for k in _LEGACY_SEMANTICS if k not in have]
+
+    def __getitem__(self, key: str) -> BcTypeSpec:
+        reg = _bc_registry()
+        if key in reg.keys():
+            return reg.get(key)
+        if key in _LEGACY_SEMANTICS:
+            return _legacy_spec(key)
+        raise KeyError(key)
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        return key in _bc_registry().keys() or key in _LEGACY_SEMANTICS
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._keys())
+
+    def __len__(self) -> int:
+        return len(self._keys())
+
+    def __repr__(self) -> str:
+        return f"BC_TYPES({self._keys()!r})"
+
+
+BC_TYPES: Mapping[str, BcTypeSpec] = _BcTypesView()
 
 
 def get_type(key: str) -> BcTypeSpec:

@@ -11,9 +11,9 @@ if TYPE_CHECKING:
 def register_builtins(hub: RegistryHub) -> None:
     """Register built-in specs into `hub`.
 
-    The platform: jobs, meshers, BC types, materials, monitors and result
-    filters. Simulation types (AnalysisType + their SolverApps) come from
-    plugins; Incompressible Flow is the required bundled plugin
+    The platform: jobs, meshers and result filters. Simulation types
+    (AnalysisType + their SolverApps) and the BC types, materials and monitors
+    they use come from plugins; Incompressible Flow is the required bundled plugin
     (bundled-plugins/incompressible_flow).
     Idempotent under load_all retries (same-plugin re-register).
     Cross-ref validation (solver / bc / material / monitor bags) runs at end of
@@ -22,10 +22,11 @@ def register_builtins(hub: RegistryHub) -> None:
     from cfddesk.builtin.filters import register_filters
     from cfddesk.builtin.jobs import register_job_kinds
     from cfddesk.builtin.meshers import register_meshers
-    from cfddesk.registry.bc import register_builtin_bcs
 
     # Jobs first so mesher.generate can resolve them after load_all.
     register_job_kinds(hub)
     register_meshers(hub)
-    register_builtin_bcs(hub)
     register_filters(hub)
+    # The BC kinds exist (empty) even when no plugin registers into them.
+    hub.registry("bc")
+    hub.registry("bc_family")

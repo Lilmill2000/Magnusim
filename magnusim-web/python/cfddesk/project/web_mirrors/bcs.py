@@ -17,6 +17,23 @@ from cfddesk.project.web_mirrors._common import (
 _CORE_BC_KEYS = frozenset({"id", "name", "bc_type", "faces", "face", "simulation_id", "project_id"})
 
 
+def _record_type_of(reg_key: str) -> str:
+    """The web ``bc_type`` of a BC type key (or of a family key, the v8 menu
+    type): its family's record_type ("" if none)."""
+    from cfddesk.case.bc_registry import _bc_registry
+    from cfddesk.registry.discovery import get_hub
+
+    bcs = _bc_registry()
+    families = get_hub().registry("bc_family")
+    if reg_key in bcs.keys():
+        fam_key = str(getattr(bcs.get(reg_key), "family", "") or "")
+    else:
+        fam_key = reg_key
+    if not fam_key or fam_key not in families.keys():
+        return ""
+    return str(getattr(families.get(fam_key), "record_type", "") or "")
+
+
 def _bc_records_for_sim(
     sim: Any,
     *,
@@ -37,18 +54,9 @@ def _bc_records_for_sim(
             reg = registry_key_for_bc(bc)
         except Exception:
             reg = str(getattr(bc, "type", "") or "")
-        bc_type = str(web.get("bc_type") or "")
+        bc_type = str(web.get("bc_type") or "") or _record_type_of(reg)
         if not bc_type:
-            if reg.startswith("velocity_inlet"):
-                bc_type = "Velocity inlet"
-            elif reg.startswith("velocity_outlet"):
-                bc_type = "Velocity outlet"
-            elif reg.startswith("pressure"):
-                bc_type = "Pressure"
-            elif "wall" in reg:
-                bc_type = "Wall"
-            else:
-                bc_type = str(getattr(bc, "name", "") or reg or "Wall")
+            bc_type = str(getattr(bc, "name", "") or reg or "Wall")
         rec: dict[str, Any] = {k: v for k, v in web.items() if k not in _CORE_BC_KEYS}
         rec |= {
             "id": getattr(bc, "id", None),

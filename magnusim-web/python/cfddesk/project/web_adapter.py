@@ -8,7 +8,6 @@ owns the case (``AnalysisType.write_case``).
 from __future__ import annotations
 
 import json
-import math
 import re
 from pathlib import Path
 from typing import Any, Literal
@@ -198,10 +197,33 @@ def resolve_mesh(
 
 
 
-def web_bc_to_registry(bc: Any) -> tuple[str, dict[str, Any]]:
-    """Map web BC record → (bc_registry key, settings dict).
+def _bc_type_text(raw: Any) -> str:
+    """A bc_type compared without case or spaces ("velocity inlet" = "Velocity inlet")."""
+    return re.sub(r"\s+", "", str(raw or "")).lower()
 
-    Values are converted to SI using the record's ``unit`` field where possible.
+
+def bc_family_for(bc_type: Any) -> Any | None:
+    """The registered BC family whose record_type or an alias is ``bc_type``."""
+    from cfddesk.case.bc_registry import _bc_registry
+    from cfddesk.registry.discovery import get_hub
+
+    want = _bc_type_text(bc_type)
+    if not want:
+        return None
+    _bc_registry()  # loads the registry once when it is still empty
+    for fam in get_hub().registry("bc_family").items():
+        names = (getattr(fam, "record_type", ""), *(getattr(fam, "aliases", ()) or ()))
+        if any(_bc_type_text(n) == want for n in names):
+            return fam
+    return None
+
+
+def web_bc_to_registry(bc: Any) -> tuple[str, dict[str, Any]]:
+    """Map web BC record -> (BC type key, settings dict in SI units).
+
+    The family the record's ``bc_type`` names resolves it (``BcFamily.resolve``,
+    from the plugin that registers it). A record of no registered family reads
+    as a no-slip wall.
     """
     if not isinstance(bc, dict):
         d = {
@@ -217,79 +239,46 @@ def web_bc_to_registry(bc: Any) -> tuple[str, dict[str, Any]]:
         }
     else:
         d = dict(bc)
-
-    unit = str(d.get("unit") or "")
-    val = d.get("value")
-    settings: dict[str, Any] = {}
-
-    def _to(q: str, v: Any, u: str, default_u: str) -> float | None:
-        if v is None:
-            return None
-        try:
-            from cfddesk.units.convert import to_si
-
-            use = u if u else default_u
-            # Alias ft3/min → CFM table key
-            aliases = {
-                "ft3/min": "CFM",
-                "ft³/min": "CFM",
-                "m3/s": "m³/s",
-                "m^3/s": "m³/s",
-                "m3/h": "m³/h",
-                "m^3/h": "m³/h",
-            }
-            use = aliases.get(use, use)
-            try:
-                return float(to_si(q, float(v), use))  # type: ignore[arg-type]
-            except ValueError:
-                return float(v)
-        except Exception:
-            return float(v)
-
-    if is_wall_bc(d):
-        wt = wall_treatment(d)
-        return ("wall_slip" if wt == "Slip" else "wall_noslip"), settings
-
-    if is_velocity_inlet(d):
-        vtype = str(d.get("velocity_type") or "")
-        if re.search(r"flow\s*rate", vtype, re.I) or re.search(
-            r"ft3/min|ft³/min|m3/s|m³/s|kg/s|lb/s", unit, re.I
-        ):
-            if re.search(r"mass", str(d.get("flow_rate_type") or ""), re.I) or (
-                _to("mass_flow", val, unit, "kg/s") is not None
-                and _to("volumetric_flow", val, unit, "m³/s") is None
-            ):
-                settings["mass_flow_rate"] = _to("mass_flow", val, unit, "kg/s") or 0.0
-                return "velocity_inlet_mass", settings
-            settings["volumetric_flow_rate"] = _to("volumetric_flow", val, unit, "m³/s") or 0.0
-            return "velocity_inlet_volumetric", settings
-        speed = _to("velocity", val, unit, "m/s")
-        if speed is None:
-            speed = 1.0
-        if re.search(r"vector", str(d.get("direction") or ""), re.I) and isinstance(
-            (vector := d.get("vector")), (list, tuple)
-        ):
-            vec = [float(x) for x in vector[:3]]
-            if len(vec) != 3 or not all(math.isfinite(x) for x in vec):
-                raise ValueError("Velocity direction requires three finite components")
-            mag = math.hypot(*vec) or 1.0
-            settings["direction_mode"] = "vector"
-            settings["velocity"] = [speed * (vec[0] / mag), speed * (vec[1] / mag), speed * (vec[2] / mag)]
-        else:
-            settings["direction_mode"] = "normal"
-            settings["speed"] = speed
-        return "velocity_inlet_fixed", settings
-
-    if is_velocity_outlet(d):
-        return "velocity_outlet", settings
-
-    if is_pressure_bc(d):
-        p = _to("pressure", val, unit, "Pa")
-        settings["gauge_pressure"] = 0.0 if p is None else p
-        return "pressure_outlet_gauge", settings
-
+    fam = bc_family_for(d.get("bc_type"))
+    resolve = getattr(fam, "resolve", None) if fam is not None else None
+    if callable(resolve):
+        key, settings = resolve(d)
+        return str(key), dict(settings)
     # Fallback: wall
-    return "wall_noslip", settings
+    return "wall_noslip", {}
+
+
+def web_bc_mesh_entry(bc: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """(BC type key, SI settings) a web BC record meshes as.
+
+    The record's ``bc_type`` (or ``type``; an alias reads as its family's
+    record_type) must name a registered BC family, else ValueError. A record
+    whose values the family cannot resolve (a bad direction vector) still
+    meshes, as the family's first variant: meshing needs only its patch type.
+    """
+    raw = str(bc.get("bc_type") or bc.get("type") or "")
+    fam = bc_family_for(raw) or bc_family_for(raw.replace("_", " "))
+    if fam is None:
+        raise ValueError(f"unsupported boundary condition type: {bc.get('bc_type')!r}")
+    try:
+        return web_bc_to_registry({**bc, "bc_type": fam.record_type})
+    except ValueError:
+        return str(fam.variants[0]), {}
+
+
+def web_bc_patch_name(bc: dict[str, Any], reg_key: str) -> str:
+    """Patch name a web BC record meshes under: its name, else its BC type's semantic.
+
+    An unnamed velocity outlet keeps the name the meshers gave it before 1.4
+    ("velocity_outlet"), so it does not share "outlet" with a pressure outlet.
+    """
+    if bc.get("name"):
+        return str(bc["name"])
+    if reg_key == "velocity_outlet":
+        return "velocity_outlet"
+    from cfddesk.case.bc_registry import get_type
+
+    return get_type(reg_key).semantic
 
 
 def _active_sim_id(project_dir: Path, simulation_id: str | None) -> str | None:

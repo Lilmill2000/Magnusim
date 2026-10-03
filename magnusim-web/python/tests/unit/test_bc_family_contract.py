@@ -133,16 +133,30 @@ def test_bc_type_spec_keeps_every_import_path():
 
     assert bc_registry.BcTypeSpec is bc.BcTypeSpec is registry.BcTypeSpec
     spec = bc_registry.get_type("wall_noslip")
-    assert (spec.family, spec.match) == ("", ())
+    assert isinstance(spec, bc.BcTypeSpec)
+    assert (spec.family, spec.match) == ("wall", (("wall_type", "No-slip"),))
 
 
-def test_the_bc_family_kind_exists_and_starts_empty():
+def test_the_core_registers_no_bc_types_or_families():
+    hub = RegistryHub()
+    from cfddesk.builtin import register_builtins
+
+    register_builtins(hub)
+    assert hub.registry("bc").keys() == []
+    assert hub.registry("bc_family").keys() == []
+
+
+def test_the_bc_family_kind_lists_the_plugins_families():
     hub = load_all(force=True)
     assert "bc_family" in hub.kinds()
-    assert hub.registry("bc_family").keys() == []
+    families = hub.registry("bc_family")
+    assert families.keys() == ["velocity_inlet", "velocity_outlet", "pressure_outlet", "wall"]
+    assert {families.owner(k) for k in families.keys()} == {"incompressible_flow"}
     from cfddesk.worker import methods
 
-    assert methods.registry_describe()["bc_family"] == []
+    rows = methods.registry_describe()["bc_family"]
+    assert [row["key"] for row in rows] == families.keys()
+    assert all("resolve" not in row for row in rows)
 
 
 def test_a_good_plugin_publishes_families_variants_and_material_records(
@@ -155,9 +169,10 @@ def test_a_good_plugin_publishes_families_variants_and_material_records(
     assert bc["fx_wall_slip"]["family"] == "fx_wall"
     assert bc["fx_wall_slip"]["match"] == [["wall_type", "Slip"]]
     assert (bc["fx_wall_slip"]["semantic"], bc["fx_wall_slip"]["patch_type"]) == ("wall", "wall")
-    # Built-in BC types carry the keys too, with no family.
-    assert (bc["velocity_inlet_fixed"]["semantic"], bc["velocity_inlet_fixed"]["family"]) == ("inlet", "")
-    assert bc["velocity_inlet_fixed"]["match"] == []
+    # Incompressible Flow's BC types carry the keys too.
+    assert (bc["velocity_inlet_fixed"]["semantic"], bc["velocity_inlet_fixed"]["family"]) == ("inlet", "velocity_inlet")
+    assert bc["velocity_inlet_fixed"]["match"] == [["velocity_type", "Fixed"]]
+    assert bc["velocity_outlet"]["match"] == []
 
     fam = _rows(hub, "bc_family")["fx_wall"]
     assert fam["plugin"] == "fx-good"
@@ -212,12 +227,16 @@ def test_validate_bc_families_rules():
 
     register_builtins(hub)
     validate_bc_families(hub)  # builtins alone pass
+    from cfddesk.registry import BcTypeSpec
+
+    hub.registry("bc").register(BcTypeSpec("t_wall", "Wall", "wall", "wall"), plugin="p0")
+    validate_bc_families(hub)  # a BC type with no family passes
     fams = hub.registry("bc_family")
     fams.register(BcFamily(key="f_empty", label="E", record_type="E"), plugin="p")
     with pytest.raises(RegistryError, match="bc_family 'f_empty': lists no variants"):
         validate_bc_families(hub)
     fams.drop_plugin("p")
-    fams.register(BcFamily(key="f_color", label="C", record_type="C", variants=("wall_noslip",), color="pink"), plugin="p")  # type: ignore[arg-type]
+    fams.register(BcFamily(key="f_color", label="C", record_type="C", variants=("t_wall",), color="pink"), plugin="p")  # type: ignore[arg-type]
     with pytest.raises(RegistryError, match="bc_family 'f_color': color 'pink'"):
         validate_bc_families(hub)
 

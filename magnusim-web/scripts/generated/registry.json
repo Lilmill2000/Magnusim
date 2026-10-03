@@ -1462,7 +1462,7 @@
     {
       "key": "velocity_inlet_fixed",
       "label": "Velocity inlet",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -1519,13 +1519,18 @@
       "supported": true,
       "semantic": "inlet",
       "patch_type": "patch",
-      "family": "",
-      "match": []
+      "family": "velocity_inlet",
+      "match": [
+        [
+          "velocity_type",
+          "Fixed"
+        ]
+      ]
     },
     {
       "key": "velocity_inlet_volumetric",
       "label": "Velocity inlet",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -1563,13 +1568,22 @@
       "supported": true,
       "semantic": "inlet",
       "patch_type": "patch",
-      "family": "",
-      "match": []
+      "family": "velocity_inlet",
+      "match": [
+        [
+          "velocity_type",
+          "Flow rate"
+        ],
+        [
+          "flow_rate_type",
+          "Volumetric flow"
+        ]
+      ]
     },
     {
       "key": "velocity_inlet_mass",
       "label": "Velocity inlet",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -1615,13 +1629,22 @@
       "supported": true,
       "semantic": "inlet",
       "patch_type": "patch",
-      "family": "",
-      "match": []
+      "family": "velocity_inlet",
+      "match": [
+        [
+          "velocity_type",
+          "Flow rate"
+        ],
+        [
+          "flow_rate_type",
+          "Mass flow"
+        ]
+      ]
     },
     {
       "key": "velocity_outlet",
       "label": "Velocity outlet",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -1650,13 +1673,13 @@
       "supported": true,
       "semantic": "outlet",
       "patch_type": "patch",
-      "family": "",
+      "family": "velocity_outlet",
       "match": []
     },
     {
       "key": "pressure_outlet_gauge",
       "label": "Pressure",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -1676,13 +1699,13 @@
       "supported": true,
       "semantic": "outlet",
       "patch_type": "patch",
-      "family": "",
+      "family": "pressure_outlet",
       "match": []
     },
     {
       "key": "wall_noslip",
       "label": "Wall",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -1745,13 +1768,18 @@
       "supported": true,
       "semantic": "wall",
       "patch_type": "wall",
-      "family": "",
-      "match": []
+      "family": "wall",
+      "match": [
+        [
+          "wall_type",
+          "No-slip"
+        ]
+      ]
     },
     {
       "key": "wall_slip",
       "label": "Wall",
-      "plugin": "builtin",
+      "plugin": "incompressible_flow",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -1814,11 +1842,405 @@
       "supported": true,
       "semantic": "wall",
       "patch_type": "wall",
-      "family": "",
-      "match": []
+      "family": "wall",
+      "match": [
+        [
+          "wall_type",
+          "Slip"
+        ]
+      ]
     }
   ],
-  "bc_family": [],
+  "bc_family": [
+    {
+      "key": "velocity_inlet",
+      "label": "Velocity inlet",
+      "plugin": "incompressible_flow",
+      "record_type": "Velocity inlet",
+      "aliases": [],
+      "color": "inlet",
+      "hint": "",
+      "variants": [
+        "velocity_inlet_fixed",
+        "velocity_inlet_volumetric",
+        "velocity_inlet_mass"
+      ],
+      "defaults": {
+        "metric": {
+          "velocity_type": "Fixed",
+          "flow_rate_type": "Volumetric flow",
+          "value": 5,
+          "direction": "Normal to face",
+          "vector": [
+            0,
+            0,
+            1
+          ],
+          "apply_per_face": true,
+          "unit": "m/s"
+        },
+        "imperial": {
+          "velocity_type": "Fixed",
+          "flow_rate_type": "Volumetric flow",
+          "value": 5,
+          "direction": "Normal to face",
+          "vector": [
+            0,
+            0,
+            1
+          ],
+          "apply_per_face": true,
+          "unit": "ft/s"
+        }
+      },
+      "values": [
+        {
+          "field": "value",
+          "unit_field": "unit",
+          "quantity": "mass_flow",
+          "when": {
+            "velocity_type": "Flow rate",
+            "flow_rate_type": "Mass flow"
+          }
+        },
+        {
+          "field": "value",
+          "unit_field": "unit",
+          "quantity": "volumetric_flow",
+          "when": {
+            "velocity_type": "Flow rate"
+          }
+        },
+        {
+          "field": "value",
+          "unit_field": "unit",
+          "quantity": "velocity",
+          "when": {}
+        }
+      ],
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "velocity_type": {
+            "type": "string",
+            "default": "Fixed",
+            "enum": [
+              "Fixed",
+              "Flow rate"
+            ],
+            "title": "Velocity type"
+          },
+          "flow_rate_type": {
+            "type": "string",
+            "default": "Volumetric flow",
+            "enum": [
+              "Volumetric flow",
+              "Mass flow"
+            ],
+            "x-cfddesk": {
+              "depends_on": {
+                "velocity_type": "Flow rate"
+              }
+            },
+            "title": "Flow rate type"
+          },
+          "value": {
+            "type": "number",
+            "default": 5,
+            "title": "Value"
+          },
+          "unit": {
+            "type": "string",
+            "default": "m/s",
+            "title": "Unit"
+          },
+          "direction": {
+            "type": "string",
+            "default": "Normal to face",
+            "enum": [
+              "Normal to face",
+              "Vector"
+            ],
+            "x-cfddesk": {
+              "depends_on": {
+                "velocity_type": "Fixed"
+              }
+            },
+            "title": "Direction"
+          },
+          "vector": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "x-cfddesk": {
+              "depends_on": {
+                "velocity_type": "Fixed",
+                "direction": "Vector"
+              }
+            },
+            "title": "Vector (X Y Z)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ui": "incompressible_flow.bc"
+    },
+    {
+      "key": "velocity_outlet",
+      "label": "Velocity outlet",
+      "plugin": "incompressible_flow",
+      "record_type": "Velocity outlet",
+      "aliases": [],
+      "color": "outlet",
+      "hint": "",
+      "variants": [
+        "velocity_outlet"
+      ],
+      "defaults": {
+        "metric": {
+          "velocity_type": "Fixed",
+          "flow_rate_type": "Volumetric flow",
+          "value": 5,
+          "direction": "Normal to face",
+          "vector": [
+            0,
+            0,
+            1
+          ],
+          "apply_per_face": true,
+          "unit": "m/s"
+        },
+        "imperial": {
+          "velocity_type": "Fixed",
+          "flow_rate_type": "Volumetric flow",
+          "value": 5,
+          "direction": "Normal to face",
+          "vector": [
+            0,
+            0,
+            1
+          ],
+          "apply_per_face": true,
+          "unit": "ft/s"
+        }
+      },
+      "values": [
+        {
+          "field": "value",
+          "unit_field": "unit",
+          "quantity": "mass_flow",
+          "when": {
+            "velocity_type": "Flow rate",
+            "flow_rate_type": "Mass flow"
+          }
+        },
+        {
+          "field": "value",
+          "unit_field": "unit",
+          "quantity": "volumetric_flow",
+          "when": {
+            "velocity_type": "Flow rate"
+          }
+        },
+        {
+          "field": "value",
+          "unit_field": "unit",
+          "quantity": "velocity",
+          "when": {}
+        }
+      ],
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "velocity_type": {
+            "type": "string",
+            "default": "Fixed",
+            "enum": [
+              "Fixed",
+              "Flow rate"
+            ],
+            "title": "Velocity type"
+          },
+          "flow_rate_type": {
+            "type": "string",
+            "default": "Volumetric flow",
+            "enum": [
+              "Volumetric flow",
+              "Mass flow"
+            ],
+            "x-cfddesk": {
+              "depends_on": {
+                "velocity_type": "Flow rate"
+              }
+            },
+            "title": "Flow rate type"
+          },
+          "value": {
+            "type": "number",
+            "default": 5,
+            "title": "Value"
+          },
+          "unit": {
+            "type": "string",
+            "default": "m/s",
+            "title": "Unit"
+          },
+          "direction": {
+            "type": "string",
+            "default": "Normal to face",
+            "enum": [
+              "Normal to face",
+              "Vector"
+            ],
+            "x-cfddesk": {
+              "depends_on": {
+                "velocity_type": "Fixed"
+              }
+            },
+            "title": "Direction"
+          },
+          "vector": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "x-cfddesk": {
+              "depends_on": {
+                "velocity_type": "Fixed",
+                "direction": "Vector"
+              }
+            },
+            "title": "Vector (X Y Z)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ui": "incompressible_flow.bc"
+    },
+    {
+      "key": "pressure_outlet",
+      "label": "Pressure",
+      "plugin": "incompressible_flow",
+      "record_type": "Pressure",
+      "aliases": [
+        "Pressure inlet",
+        "Pressure outlet"
+      ],
+      "color": "pressure",
+      "hint": "",
+      "variants": [
+        "pressure_outlet_gauge"
+      ],
+      "defaults": {
+        "metric": {
+          "pressure_type": "Fixed value",
+          "value": 0,
+          "unit": "Pa"
+        },
+        "imperial": {
+          "pressure_type": "Fixed value",
+          "value": 0,
+          "unit": "psi"
+        }
+      },
+      "values": [
+        {
+          "field": "value",
+          "unit_field": "unit",
+          "quantity": "pressure",
+          "when": {}
+        }
+      ],
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "pressure_type": {
+            "type": "string",
+            "default": "Fixed value",
+            "enum": [
+              "Fixed value"
+            ],
+            "title": "Pressure type"
+          },
+          "value": {
+            "type": "number",
+            "default": 0,
+            "x-cfddesk": {
+              "quantity": "pressure"
+            },
+            "title": "Fixed value"
+          },
+          "unit": {
+            "type": "string",
+            "default": "Pa",
+            "title": "Unit"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ui": "incompressible_flow.bc"
+    },
+    {
+      "key": "wall",
+      "label": "Wall",
+      "plugin": "incompressible_flow",
+      "record_type": "Wall",
+      "aliases": [
+        "Slip wall",
+        "No-slip wall"
+      ],
+      "color": "wall",
+      "hint": "Slip or no-slip, face by face",
+      "variants": [
+        "wall_noslip",
+        "wall_slip"
+      ],
+      "defaults": {
+        "metric": {
+          "wall_type": "Slip"
+        },
+        "imperial": {
+          "wall_type": "Slip"
+        }
+      },
+      "values": [],
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "wall_type": {
+            "type": "string",
+            "default": "No-slip",
+            "enum": [
+              "No-slip",
+              "Slip"
+            ],
+            "title": "Wall type"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ui": "incompressible_flow.bc"
+    }
+  ],
   "material": [
     {
       "key": "newtonian_incompressible",

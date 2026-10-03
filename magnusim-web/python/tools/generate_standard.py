@@ -55,7 +55,7 @@ from cfddesk.mesh.web_refinements import (
 )
 from cfddesk.project.mesh_sizing import clamp_fineness
 from cfddesk.project.model import Project
-from cfddesk.project.web_adapter import study_web_bcs
+from cfddesk.project.web_adapter import study_web_bcs, web_bc_mesh_entry, web_bc_patch_name
 from cfddesk.runner.case_id import validate_wsl_case_id
 from cfddesk.runner.cleanup import remove_wsl_case
 from cfddesk.runner.sync import RESULTS_MARKER, copy_back_mesh
@@ -86,59 +86,20 @@ def _read_json(path: Path) -> dict:
         return {}
 
 
-def _web_bc_kind(bc: dict) -> str:
-    raw = str(bc.get("bc_type") or bc.get("type") or "").strip().lower().replace("_", " ")
-    if raw == "velocity inlet":
-        return "inlet"
-    if raw == "velocity outlet":
-        return "velocity_outlet"
-    if raw.startswith("pressure"):
-        return "outlet"
-    if raw in ("wall", "slip wall", "no-slip wall"):
-        return "wall"
-    raise ValueError(f"unsupported boundary condition type: {bc.get('bc_type')!r}")
-
-
-def _web_wall_reg_type(bc: dict) -> str:
-    """Registry key for an explicit web Wall BC: ``wall_slip`` or ``wall_noslip``."""
-    raw = str(bc.get("wall_type") or "").strip().lower().replace("-", "").replace("_", "").replace(" ", "")
-    return "wall_slip" if raw == "slip" else "wall_noslip"
-
-
 def _apply_web_bcs(project: Project, bcs: list[dict], n_faces: int) -> Project:
+    """Each web BC record's faces -> one patch of the BC type its family resolves.
+
+    An explicit Wall BC gets its own patch (type wall) so the solver can give
+    these faces slip / no-slip independently of the leftover `walls`.
+    """
     assigned: set[int] = set()
     for bc in bcs:
         fids = face_ids_from_web_bc(bc, n_faces)
         if not fids:
             continue
-        kind = _web_bc_kind(bc)
-        name = str(bc.get("name") or kind)
-        if kind == "inlet":
-            speed = float(bc.get("value") if bc.get("value") is not None else 5.0)
-            project, _ = project.add_bc(
-                name=name,
-                bc_type="velocity_inlet_fixed",
-                face_ids=fids,
-                settings={"speed_m_s": speed, "direction_mode": "normal"},
-            )
-        elif kind == "velocity_outlet":
-            project, _ = project.add_bc(name=name, bc_type="velocity_outlet", face_ids=fids)
-        elif kind == "outlet":
-            p = float(bc.get("value") if bc.get("value") is not None else 0.0)
-            project, _ = project.add_bc(
-                name=name,
-                bc_type="pressure_outlet_gauge",
-                face_ids=fids,
-                settings={"gauge_pressure": p},
-            )
-        else:
-            # Explicit wall BC: its own patch (type wall) so the solver can give
-            # these faces slip / no-slip independently of the leftover `walls`.
-            project, _ = project.add_bc(
-                name=name,
-                bc_type=_web_wall_reg_type(bc),
-                face_ids=fids,
-            )
+        reg_key, settings = web_bc_mesh_entry(bc)
+        name = web_bc_patch_name(bc, reg_key)
+        project, _ = project.add_bc(name=name, bc_type=reg_key, face_ids=fids, settings=settings)
         assigned.update(fids)
     return project
 

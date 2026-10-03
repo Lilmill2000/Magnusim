@@ -18,6 +18,17 @@ protected = [
   "material:newtonian_incompressible",
   "monitor:area_average",
   "monitor:flow_rate",
+  "bc:velocity_inlet_fixed",
+  "bc:velocity_inlet_volumetric",
+  "bc:velocity_inlet_mass",
+  "bc:velocity_outlet",
+  "bc:pressure_outlet_gauge",
+  "bc:wall_noslip",
+  "bc:wall_slip",
+  "bc_family:velocity_inlet",
+  "bc_family:velocity_outlet",
+  "bc_family:pressure_outlet",
+  "bc_family:wall",
 ]
 # The analysis a study gets when none is named (new studies, and studies saved
 # before analysis keys, which named it "incompressible").

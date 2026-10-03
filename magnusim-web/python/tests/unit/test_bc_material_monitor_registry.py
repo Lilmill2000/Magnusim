@@ -38,10 +38,15 @@ def test_load_all_registers_bc_material_monitor_keys():
     bc = get_registry("bc")
     assert set(bc.keys()) == set(BC_TYPES.keys())
     assert len(bc.keys()) == 7
-    # Same objects as product registry (wrap, do not duplicate definitions)
+    # Incompressible Flow owns the BC types; BC_TYPES is a view over the hub
+    # (the same objects, not a second copy).
+    assert {bc.owner(k) for k in bc.keys()} == {"incompressible_flow"}
     for key, spec in BC_TYPES.items():
         assert bc.get(key) is spec
         assert isinstance(bc.get(key), BcTypeSpec)
+    families = hub.registry("bc_family")
+    assert {families.owner(k) for k in families.keys()} == {"incompressible_flow"}
+    assert {v for f in families.items() for v in f.variants} == set(bc.keys())
 
     mat = get_registry("material")
     assert set(mat.keys()) == EXPECTED_MATERIAL_KEYS

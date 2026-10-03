@@ -4,3 +4,4 @@ extend = "../../python/pyproject.toml"
 # OpenFOAM field names (U, p) and scientific symbols keep their case.
 "incompressible_flow/writer.py" = ["N802", "N806", "N815"]
 "incompressible_flow/transient.py" = ["N806"]
+"incompressible_flow/bcs.py" = ["N802"]
