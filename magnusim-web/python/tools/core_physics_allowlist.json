@@ -91,11 +91,6 @@
       "reason": "1.x re-export of the SDK's is_velocity_inlet BC-record helper."
     },
     {
-      "file": "python/cfddesk/wsl/foam_case.py",
-      "max_hits": 1,
-      "reason": "Imported cases with no results.frameFields fall back on the U/p pair when 0/U and 0/p exist (could name LEGACY_FRAME_FIELDS instead)."
-    },
-    {
       "file": "python/tools/export_inspect_point.py",
       "max_hits": 1,
       "reason": "Checksum weights that keep the checksum the page already knew (magU, p)."

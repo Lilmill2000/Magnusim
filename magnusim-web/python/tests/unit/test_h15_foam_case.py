@@ -351,6 +351,8 @@ def test_results_rules(tmp_path: Path):
         assert bad({"kinematicFields": [], "frameFields": [name]})[0] == "bad_request", name
     # rho may be left out when no field is kinematic.
     assert check_case_local(case, "pimpleFoam", PRE, {"kinematicFields": []})["results"]["rho"] is None
+    # A case that names no frame fields (written before API 1.1) frames U and p, as it always did.
+    assert check_case_local(case, "pimpleFoam", PRE, {"kinematicFields": []})["results"]["frame_fields"] == ["U", "p"]
     assert bad({"kinematicFields": [], "frameFields": ["T"]}) == ("bad_request", "results.frameFields: 0/T is not in the case")
     assert bad({"kinematicFields": [], "frameFields": []})[0] == "bad_request"
     for name in "abcdefghi":

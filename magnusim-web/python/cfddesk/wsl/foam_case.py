@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cfddesk.registry.contract import APP_NAME_RE, field_name_ok
+from cfddesk.registry.contract import APP_NAME_RE, LEGACY_FRAME_FIELDS, field_name_ok
 from cfddesk.runner.case_id import InvalidWslCaseId, slugify_wsl_case_id, validate_wsl_case_id
 from cfddesk.wsl.mesh_run import windows_to_wsl_path
 
@@ -418,10 +418,12 @@ def check_results(results: Any, case: Path) -> dict[str, Any]:
             raise _bad("results.rho must be a number above 0 when kinematicFields lists a field")
     frames = results.get("frameFields")
     if frames is None:
-        if (case / "0" / "U").is_file() and (case / "0" / "p").is_file():
-            frames = ["U", "p"]
+        # A case written before API 1.1 names no frame fields: its frames are LEGACY_FRAME_FIELDS.
+        if all((case / "0" / name).is_file() for name in LEGACY_FRAME_FIELDS):
+            frames = list(LEGACY_FRAME_FIELDS)
         else:
-            raise _bad("results.frameFields is required: 0/U and 0/p are not both in the case")
+            legacy = " and ".join(f"0/{name}" for name in LEGACY_FRAME_FIELDS)
+            raise _bad(f"results.frameFields is required: {legacy} are not both in the case")
     if not isinstance(frames, list) or not 1 <= len(frames) <= MAX_FRAME_FIELDS:
         raise _bad(f"results.frameFields: 1 to {MAX_FRAME_FIELDS} fields")
     for name in frames:
