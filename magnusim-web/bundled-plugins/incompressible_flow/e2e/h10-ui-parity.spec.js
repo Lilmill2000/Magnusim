@@ -151,6 +151,20 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
     const toggle = form.locator(`button[aria-label="${label}"]`);
     if ((await toggle.count()) && (await toggle.getAttribute('aria-pressed')) === 'true') await toggle.click();
   }
+  // The form can still be loading the new mesh's stored settings (fineness 5), which
+  // then replace the 1 typed above: set it until it stays 1. A fine mesh (over 50,000
+  // cells) solves a transient run on every rank, where the baseline's coarse one was serial.
+  const fineness = form.locator('[data-schema-key="fineness"] input');
+  await expect
+    .poll(
+      async () => {
+        if ((await fineness.inputValue()) !== '1') await fineness.fill('1');
+        await page.waitForTimeout(500);
+        return fineness.inputValue();
+      },
+      { timeout: 30_000 },
+    )
+    .toBe('1');
   await form.locator('[data-mesh-generate="1"]').click();
   await expect
     .poll(
@@ -162,7 +176,9 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
       { timeout: 900_000, intervals: [3_000] },
     )
     .toBe('done');
-  stage(t0, 'mesh done');
+  const made = (await meshesNow()).find((row) => String(row.id) === meshId) || {};
+  stage(t0, `mesh done: ${(made.live_mesh_result || {}).n_cells} cells at fineness ${(made.settings || {}).fineness}`);
+  expect((made.settings || {}).fineness, 'the coarse mesh the baseline was recorded on').toBe(1);
 
   const studyPanel = page.locator('#panel-study-settings .cfd-island');
   const openStudy = async () => {
