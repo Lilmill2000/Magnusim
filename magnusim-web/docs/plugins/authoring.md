@@ -118,9 +118,71 @@ An `AnalysisType` needs only `key`, `label`, `category`, `time_dependency` and `
 - `launch` (or the default solver's `SolverApp`): the program, which frames to keep (`all` or `latest`), the process names Stop looks for, and `frame_fields` (fields that mark a written frame).
 - `log_parser`: `module:factory` of the parser that turns the solver's output into job events.
 - `kinematic_fields` (API 1.4): the fields your cases store divided by density (pressure in an incompressible case), shown times `rho`. The core writes them in the case's `w27-case.json` unless `write_case` listed its own; leave it `None` to say nothing (a case with no list is read as `["p"]`).
+- `monitor_quantities` (API 1.4) and `run_monitors(case_dir)`: what the Graphs panel's monitors show. Each `MonitorQuantity` reads one value of the series points (`sample`) and gives its label, unit and colour, and whether it is plotted, listed in a monitor's details, shown as a headline or exported as a CSV column. `run_monitors` returns the monitor rows (each with a `key`, a `default_quantity` and series points `{t, <sample>: value}`) and a `summary` line. The page formats and plots only what these say. A `MonitorType` with `user_creatable=True` is offered in the Monitors dialog.
 - `result_fields`: what your runs' results show, as `ResultField(key, label, unit_quantity, kind, unit, magnitude_label)` rows. Every results tool (colouring, iso surface and volume, plot over path, cutting planes, particle trace, inspect, views, legends) lists these in your order, those the frame wrote, with your labels and units; nothing else is shown for your runs. Give a velocity vector `unit_quantity="velocity"`: particle trace and vector glyphs follow the first one, and are off for a case without one. A case you write yourself can carry the list as `result_fields` in its `w27-case.json` (the core adds it after `write_case` when it is missing).
 
 `python/tests/fixtures/plugins/stub-analysis` is a complete example: a steady scalar-diffusion analysis on `laplacianFoam`, written with `magnusim_sdk` only.
+
+## Boundary conditions and materials (1.4)
+
+The Boundary Conditions and Materials panels show what the registry holds, so a plugin can add its own.
+
+A BC has two parts. A `BcTypeSpec` (kind `bc`) is one variant the case writer knows: its `semantic` (`inlet`, `outlet` or `wall`), its `patch_type` and its writers for `U` and `p`. A `BcFamily` (kind `bc_family`) is what the user picks: its `label`, `hint` and `color`; the `record_type` a saved BC stores in `bc_type`, and older `aliases`; its `variants` (BC type keys, the first the default); a new BC's `defaults` per unit system; the `values` rows that say which fields carry units; the `fields` of its generic editor; the `ui` component that replaces that editor; and `resolve`, which turns a saved BC into its variant key and SI settings for the case writer. Each variant names its `family` and the record values that select it (`match`).
+
+```python test
+from cfddesk.registry import BcFamily, BcTypeSpec, validate_bc_families
+from cfddesk.registry.discovery import RegistryHub
+from cfddesk.registry.schema import SchemaField
+
+
+def write_symmetry(name, settings, ctx):
+    return "        type            symmetryPlane;\n"
+
+
+def register_bcs(hub):
+    hub.registry("bc").register(
+        BcTypeSpec(
+            key="symmetry_plane",
+            label="Symmetry",
+            semantic="wall",
+            patch_type="patch",
+            write_U=write_symmetry,
+            write_p=write_symmetry,
+            family="symmetry",
+        ),
+        plugin="my-plugin",
+    )
+    hub.registry("bc_family").register(
+        BcFamily(
+            key="symmetry",
+            label="Symmetry",
+            record_type="Symmetry",
+            hint="Mirror plane: no flow through it",
+            variants=("symmetry_plane",),
+            defaults={"metric": {"mirror": "Plane"}, "imperial": {"mirror": "Plane"}},
+            fields=(SchemaField("mirror", "Mirror", "choice", default="Plane", choices=("Plane", "Wedge")),),
+            resolve=lambda record: ("symmetry_plane", {}),
+        ),
+        plugin="my-plugin",
+    )
+
+
+hub = RegistryHub()
+register_bcs(hub)
+validate_bc_families(hub)  # the check the host runs once every plugin has registered
+(row,) = hub.registry("bc_family").describe()
+assert row["record_type"] == "Symmetry" and row["variants"] == ["symmetry_plane"], row
+```
+
+After every plugin has registered, each family's variants must be registered BC types and each BC type's `family` a registered family; a plugin that breaks this is unloaded with the reason on its Settings row. An analysis offers BCs through its `bc_types`: clone one as in Register and add your variant (`python/tests/fixtures/plugins/example-extra-bc` does both). Its studies' BC panel then lists every family with a variant among them. With `ui` empty, the editor is a form built from `fields`. For an editor of your own, name it in `ui` and register the component from your UI:
+
+```javascript
+host.pluginUi.registerBcSettings("my-plugin.bc", MyBcEditor, { facesNote: MyFacesNote });
+```
+
+It gets `BcSettingsProps` (`src/plugin-api/slots.ts`): the saved `bc`, its `family` row, `imperial`, the assigned `faces`, `save(patch)` and `flowBasis(faces)` (one face's mean area and the fluid's density). `facesNote` is optional and is drawn under the assigned faces. Incompressible Flow's seven BC types and four families are protected: build on them, never drop them. `cfddesk.case.bc_registry` and `cfddesk.case.bc_menu` are 1.x shims kept for older code; read the registry instead.
+
+A `MaterialModel` (kind `material`) gives the Materials panel its fluids and fields: `properties_schema` (the number rows; a field's `quantity` gives its Imperial unit), `library` (the presets, rows of `key`, `name`, `values`, `library`, `codes`, `names` and optional `legacy_values`), `record_keys` (the record keys that hold each property), `record_constants` (what every record carries) and `custom_preset` (the preset a record has once the user types their own values). An analysis names its model in `material_models`. A saved material keeps its numbers; `compatibility.md` (1.4) has the rule that matches a record to its preset. Incompressible Flow's `newtonian_incompressible` (`bundled-plugins/incompressible_flow/incompressible_flow/materials.py`) is a complete example.
 
 ## UI
 
@@ -151,7 +213,7 @@ export function register(host) {
 
 A panel's `place` is `"filters"` (the Filters panel) or `"prefs"` (your row in Settings → Plugins). Those are the only places the app draws. The older names `tree`, `toolbar`, `results` and `geometry` were never shown; registering there now fails and your plugin shows an error row.
 
-`registerFieldWidget(name, Component)` renders any schema field whose `x-cfddesk.widget` is `name` with your component.
+`registerFieldWidget(name, Component)` renders any schema field whose `x-cfddesk.widget` is `name` with your component. `registerStudySettings`, `registerRunSettings` and `registerBcSettings` fill the study, run and BC editors' settings slots (above, and `compatibility.md`).
 
 Everything your `register(host)` adds is recorded under your plugin key. Disabling the plugin removes it at once, and reloading replaces it instead of adding a second copy.
 

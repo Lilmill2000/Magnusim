@@ -20,7 +20,7 @@ class MaterialModel:
     key: str
     label: str
     properties_schema: tuple[SchemaField, ...]
-    # Built-in newtonian_incompressible delegates to write_transport_properties.
+    # Accepted, not read: the analysis's write_case writes the model's files.
     write_files: Callable[..., None] | None = None
     # Presets, in picker order: {"key", "name", "values": {property: SI value},
     # "library": the code a record saves, "codes": codes a saved record may carry

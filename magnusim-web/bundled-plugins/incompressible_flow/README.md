@@ -18,13 +18,19 @@ Licence: GPL-3.0-or-later.
 |---|---|
 | Analyses | `incompressible_steady`, `incompressible_transient` (one family, `incompressible`) |
 | Solver apps | `simpleFoam`, `pimpleFoam` |
-| Material model | `newtonian_incompressible` |
-| Monitors | `area_average`, `flow_rate` |
+| BC types | `velocity_inlet_fixed`, `velocity_inlet_volumetric`, `velocity_inlet_mass`, `velocity_outlet`, `pressure_outlet_gauge`, `wall_noslip`, `wall_slip` (`bcs.py`, with their OpenFOAM writers) |
+| BC families | `velocity_inlet`, `velocity_outlet`, `pressure_outlet` ("Pressure"), `wall` (`bcs.py`: labels, hints, colours, aliases, seeds per unit system, unit fields, the generic form's fields and the record resolver) |
+| Material model | `newtonian_incompressible`, with the Fluid picker's presets at 20 °C, 1 atm: Air, Argon, Carbon dioxide, Hydrogen, Nitrogen, Water, Seawater (3.5% saline), Custom fluid (`materials.py`) |
+| Monitors | `area_average` (the one the Monitors dialog offers), `flow_rate`, and the monitor quantities the Graphs panel shows (`monitors.py`) |
 
 All of them are `protected` (no other plugin may drop them). Its manifest's
 `default_analysis` makes `incompressible_steady` the analysis a study gets when
 none is named, and maps the name studies saved before analysis keys carry
-(`incompressible`) to it. The core names none of these keys.
+(`incompressible`) to it. The core reads them through the registry. The 1.x BC
+shims (`cfddesk.case.bc_registry`, `bc_menu`) keep a frozen copy of the seven BC
+type keys old projects store, so those projects still load and mesh when this
+plugin failed to load. The BC keys and saved `bc_type` strings are the ones the
+core used before, so projects need no migration.
 
 ## What it answers (the analysis contract)
 
@@ -39,8 +45,11 @@ The core reaches the plugin only through the analysis contract
 | `write_case`, `plan_case` | `writer.py` (with `runspec.py`, `physics.py`, `function_objects.py`) |
 | `launch` | not its own hook: the core builds it from its solver apps (`solvers.py`), its `frame_fields` (`U`, `p`) and its `log_parser` (`parser.py`) |
 | `residual_series`, `result_fields` | `contract.py`, `analyses.py` |
-| `run_monitors` | `results.py` (with `monitors.py`) |
-| `ui` | `ui/StudySettings.tsx` and `ui/RunSettings.tsx` in the study and run panels' settings slots |
+| `kinematic_fields` | `physics.py` (`p`) |
+| `bc_types`, `material_models` | `analyses.py` (the specs in `bcs.py` and `materials.py`) |
+| `monitor_quantities` | `monitors.py` (`MONITOR_QUANTITIES`) |
+| `run_monitors` | `results.py` (with `monitors.py`): each row's `key`, monitor `type` and `default_quantity`, the mass flow per point and the flow balance `summary` |
+| `ui` | `ui/StudySettings.tsx` and `ui/RunSettings.tsx` in the study and run panels' settings slots; `ui/BcSettings.tsx` in the BC editor's `bc-settings` slot (`incompressible_flow.bc`, named by its families' `ui`) |
 
 The Python package imports only `magnusim_sdk` and `cfddesk.registry`
 (`python/tools/plugin_boundary.py` checks it). The UI imports only `react`, its
