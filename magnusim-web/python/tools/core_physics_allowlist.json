@@ -32,8 +32,8 @@
   "if_vocab": [
     {
       "file": "scripts/w18-materials.js",
-      "max_hits": 13,
-      "reason": "W18_LEGACY_AIR: the frozen Air record an older project's Air without numbers still reads, the study-fluid fallback by that name, and the X-CFD-Material-Name header."
+      "max_hits": 11,
+      "reason": "W18_LEGACY_AIR: the frozen Air record an older project's Air without numbers still reads (its name is also the default fluid's name when no material model is registered), and the kinematic_viscosity record key."
     },
     {
       "file": "python/cfddesk/case/bc_menu.py",

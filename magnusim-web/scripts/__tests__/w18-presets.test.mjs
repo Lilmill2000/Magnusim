@@ -11,7 +11,9 @@ import { join } from 'node:path';
 
 const root = mkdtempSync(join(tmpdir(), 'w18-presets-'));
 process.env.MAGNUSIM_PROJECTS_ROOT = root;
-const { airFromProject, buildAirMaterial, W18_META } = await import('../w18-materials.js');
+const { airFromProject, buildAirMaterial, defaultFluidName, materialHeaderName, studyFluid, W18_META } = await import(
+  '../w18-materials.js'
+);
 const { materialPreset, materialPresetOf, materialModel } = await import('../registry-defaults.js');
 
 test.after(() => rmSync(root, { recursive: true, force: true }));
@@ -116,4 +118,24 @@ test("the presets' read rule", () => {
   assert.equal(materialPresetOf('', { preset: 'water', library: 'AIR' })?.key, 'water');
   assert.equal(materialPresetOf('', { name: '' })?.key, 'air');
   assert.equal(materialPreset('not_registered', 'Air'), null);
+});
+
+test("the study's fluid: assigned first, else the model's default fluid (an older study's Air), else the first", () => {
+  assert.equal(defaultFluidName(), 'Air');
+  assert.equal(defaultFluidName('newtonian_incompressible'), 'Air');
+  const water = { name: 'Water' };
+  const air = { name: 'Air' };
+  const assigned = { name: 'Nitrogen', assigned_volumes: ['Body1'] };
+  assert.equal(studyFluid([water, air, assigned]), assigned);
+  assert.equal(studyFluid([water, air]), air);
+  assert.equal(studyFluid([water]), water);
+  assert.equal(studyFluid([]), null);
+});
+
+test('X-CFD-Material-Name is the saved material name (Air stays Air)', () => {
+  assert.equal(materialHeaderName(built(BODY)), 'Air');
+  assert.equal(materialHeaderName(built({ ...BODY, name: 'Water' })), 'Water');
+  assert.equal(materialHeaderName({ name: 'Seawater (3.5% saline)' }), 'Seawater (3.5% saline)');
+  assert.equal(materialHeaderName({ name: 'Wasser ä' }), encodeURIComponent('Wasser ä'));
+  assert.equal(materialHeaderName({}), 'Air');
 });

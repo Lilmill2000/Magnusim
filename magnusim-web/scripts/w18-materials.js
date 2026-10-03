@@ -142,11 +142,37 @@ export function airFromProject(id) {
   };
 }
 
-/** The study's one fluid (Air, Water or custom): assigned first, else an older study's Air, else the first. */
-function studyFluid(list) {
+/**
+ * The name of a material model's default fluid (its default preset); the
+ * frozen W18_LEGACY_AIR's when no material model is registered.
+ * @param {unknown} [modelKey]
+ */
+export function defaultFluidName(modelKey) {
+  const preset = materialPreset(modelKey || '', '');
+  return String((preset && preset.name) || W18_LEGACY_AIR.name);
+}
+
+/**
+ * The study's one fluid (a preset or custom): assigned first, else one named
+ * as its model's default fluid (an older study's), else the first.
+ */
+export function studyFluid(list) {
   const rows = (Array.isArray(list) ? list : []).filter(Boolean);
   const assigned = (m) => (Array.isArray(m.assigned_volumes) && m.assigned_volumes.length > 0) || !!m.assigned_volume;
-  return rows.find(assigned) || rows.find((m) => m.name === 'Air') || rows[0] || null;
+  return (
+    rows.find(assigned) || rows.find((m) => m.name === defaultFluidName(m.material_model)) || rows[0] || null
+  );
+}
+
+/**
+ * X-CFD-Material-Name for a saved material: its name; percent-encoded when it
+ * is not plain printable ASCII (a header cannot carry it as is).
+ * @param {{ name?: unknown } | null | undefined} material
+ */
+export function materialHeaderName(material) {
+  const name = String((material && material.name) || defaultFluidName(material && material.material_model));
+  // Printable ASCII is space through tilde.
+  return /^[ -~]*$/.test(name) ? name : encodeURIComponent(name);
 }
 
 function readMaterialsFile(id, simId) {
@@ -597,7 +623,7 @@ export async function handleW18Api(req, res, u, parts, helpers) {
       if (result.ok && result.body.material) {
         res.setHeader('X-CFD-Material-Id', result.body.material.id);
         res.setHeader('X-CFD-Project-Id', result.body.project_id);
-        res.setHeader('X-CFD-Material-Name', 'Air');
+        res.setHeader('X-CFD-Material-Name', materialHeaderName(result.body.material));
         res.setHeader('X-CFD-Assigned-Volume', String((result.body.assigned_volumes || [])[0] || ''));
       }
       return sendJson(res, result.status, result.body);
