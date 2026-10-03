@@ -56,11 +56,6 @@
       "reason": "Material mirror rows keep the 1.x record key kinematic_viscosity next to nu for older readers of materials.json."
     },
     {
-      "file": "scripts/w19-boundary-conditions.js",
-      "max_hits": 4,
-      "reason": "W19_VELOCITY_INLET_1 / W19_PRESSURE_OUTLET_2: exported example BC records with no reader left."
-    },
-    {
       "file": "src/plugin-ui/units.ts",
       "max_hits": 4,
       "reason": "The unit system's kinematic_viscosity quantity (plugin-ui API: units, add-only)."

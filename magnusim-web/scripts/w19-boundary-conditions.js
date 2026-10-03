@@ -70,25 +70,6 @@ function canonicalizeBcRecord(bc) {
   return { ...bc, bc_type: canonicalBcType(bc.bc_type) };
 }
 
-export const W19_VELOCITY_INLET_1 = {
-  name: 'Velocity inlet 1',
-  bc_type: 'Velocity inlet',
-  velocity_type: 'Flow rate',
-  flow_rate_type: 'Volumetric flow',
-  value: 5,
-  unit: 'ft³/min',
-  face: 'face 57@Body1',
-};
-
-export const W19_PRESSURE_OUTLET_2 = {
-  name: 'Pressure outlet 2',
-  bc_type: 'Pressure outlet',
-  pressure_type: 'Fixed value',
-  value: 0,
-  unit: 'Pa',
-  face: 'face 71@Body1',
-};
-
 function readActiveId() {
   if (!existsSync(ACTIVE_PATH)) return null;
   try {
