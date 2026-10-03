@@ -101,6 +101,18 @@ test('gate:h8-required-plugin-missing the app says the required plugin is missin
       await expect(runPanel.locator('[data-run-reason="1"]')).toContainText("Incompressible Flow failed to load, so this run can't start.");
       await expect(runPanel.locator('[data-run-start="1"]')).toBeDisabled();
     }
+    // The Monitors dialog offers the monitor types the registry has: none without the
+    // plugin, so nothing can be added (it used to offer an Area average no plugin reads).
+    const runLi = page.locator(`#left-tree li[data-w27-run="${rid}"]`).first();
+    if (!(await runLi.evaluate((el) => el.classList.contains('expanded')))) await runLi.locator(':scope > .tree-row .tw').click();
+    await page.locator(`button.rc-plus[data-w27-run-plus="${rid}"]`).click();
+    await expect(page.locator('#modal-result-control')).toBeVisible();
+    await expect(page.locator('#rc-type-list [data-rc-type]')).toHaveCount(0);
+    await expect(page.locator('#rc-type-list')).toContainText('No monitor can be added');
+    await expect(page.locator('#rc-apply')).toBeDisabled();
+    await page.locator('#rc-cancel').click();
+    await expect(page.locator('#modal-result-control')).toBeHidden();
+
     // Its fix opens Settings → Plugins.
     const runPanel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
     await expect(runPanel.locator('[data-setup-fix="1"]')).toHaveText('Open Settings → Plugins');
