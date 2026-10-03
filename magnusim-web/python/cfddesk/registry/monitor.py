@@ -1,9 +1,8 @@
 """MonitorType registry (Phase 2 land5 / land5-fix).
 
 Named MonitorType (registry type key/label/target). Distinct from
-case.function_objects.MonitorSpec (patch + kind instance descriptor) - same
-lesson as SolverApp vs settings.SolverBackend: do not collapse or rename the
-Phase 1 FO type; keep both modules' names explicit.
+case.function_objects.MonitorSpec (patch + kind instance descriptor): do not
+collapse or rename the Phase 1 FO type; keep both modules' names explicit.
 """
 
 from __future__ import annotations

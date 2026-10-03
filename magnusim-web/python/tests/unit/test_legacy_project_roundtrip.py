@@ -18,6 +18,10 @@ Ids the load makes up (a v4/v5 file has no simulation, so its recovered run
 gets a new id) are written as ``<new id>``. Nothing else is normalised: no
 golden field holds a path or a timestamp.
 
+``v11_seed_*`` are v11.json with another stored turbulence model or backend,
+recorded before the v12 seed moved to ``legacy_sim``: they pin what that seed
+gives each model.
+
 ``bc_registry_v4.json`` holds ``bc_registry.default_settings`` for the three
 BC types the v4 migration makes.
 
@@ -124,10 +128,35 @@ def _with_results(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _v11_seeded(turbulence: str, *, backend: str = "cpu", vector_inlet: bool = False) -> dict[str, Any]:
+    """v11.json with another stored turbulence model (what the v12 seed reads)."""
+    doc = _fixture(11)
+    sim = doc["simulations"][0]
+    sim["solver"].update(turbulence=turbulence, backend=backend, turbulence_intensity_pct=7.5)
+    if vector_inlet:
+        sim["boundary_conditions"][0]["settings"].update(
+            direction_mode="vector", velocity=[3.0, 4.0, 0.0]
+        )
+    return doc
+
+
+# Pre-v12 files whose v12 seed differs: the initial conditions follow the stored
+# turbulence model, the numerics the stored backend.
+SEED_CASES: dict[str, Any] = {
+    "v11_seed_kEpsilon": lambda: _v11_seeded("kEpsilon"),
+    "v11_seed_LRR": lambda: _v11_seeded("LRR"),
+    "v11_seed_SSG_amgx": lambda: _v11_seeded("SSG", backend="amgx"),
+    "v11_seed_kOmegaSST_vector": lambda: _v11_seeded("kOmegaSST", vector_inlet=True),
+}
+
+
 def load_case(name: str, tmp_path: Path) -> tuple[Project, dict[str, Any]]:
-    """Load one golden case: ``v<N>``, or a v5 file next to a results tree."""
+    """Load one golden case: ``v<N>``, a seed case, or a v5 file next to a results tree."""
     if name.startswith("v") and name[1:].isdigit():
         doc = _fixture(int(name[1:]))
+        return Project.from_dict(copy.deepcopy(doc)), doc
+    if name in SEED_CASES:
+        doc = SEED_CASES[name]()
         return Project.from_dict(copy.deepcopy(doc)), doc
     doc = _fixture(5)
     if name == "v5_recovered_run_no_solver":
@@ -135,7 +164,7 @@ def load_case(name: str, tmp_path: Path) -> tuple[Project, dict[str, Any]]:
     return Project.from_dict(copy.deepcopy(doc), project_dir=_with_results(tmp_path)), doc
 
 
-CASES = [f"v{v}" for v in VERSIONS] + ["v5_recovered_run", "v5_recovered_run_no_solver"]
+CASES = [f"v{v}" for v in VERSIONS] + ["v5_recovered_run", "v5_recovered_run_no_solver", *SEED_CASES]
 
 
 @pytest.mark.parametrize("version", VERSIONS)
@@ -170,7 +199,7 @@ def test_v4_outlet_pressure_is_converted(tmp_path: Path):
     outlet = next(bc for bc in sim.boundary_conditions if bc.patch_name == "outlet")
     # 2.5 m^2/s^2 kinematic at 1.204 kg/m^3.
     assert outlet.settings["gauge_pressure"] == pytest.approx(2.5 * 1.204)
-    assert sim.boundary.outlet_p == pytest.approx(2.5 * 1.204)
+    assert sim.legacy["boundary"]["outlet_p"] == pytest.approx(2.5 * 1.204)
 
 
 def test_recovered_run_snapshot_assumes_air_density(tmp_path: Path):
@@ -182,3 +211,53 @@ def test_recovered_run_snapshot_assumes_air_density(tmp_path: Path):
 
 def test_bc_registry_defaults_for_v4_types():
     check("bc_registry_v4", {t: default_settings(t) for t in V4_BC_TYPES})
+
+
+def test_v15_file_saves_its_legacy_blocks_unchanged(tmp_path: Path):
+    """Load, save, load and save a v15 file: the same bytes, and each study's
+    solver / boundary / numerics / initial_conditions blocks as the file has them."""
+    doc = _fixture(15)
+    first = tmp_path / "first" / "project.json"
+    Project.from_dict(copy.deepcopy(doc)).save(first)
+    second = tmp_path / "second" / "project.json"
+    Project.from_dict(json.loads(first.read_text(encoding="utf-8"))).save(second)
+    assert first.read_bytes() == second.read_bytes()
+    saved = json.loads(first.read_text(encoding="utf-8"))
+    for stored, written in zip(doc["simulations"], saved["simulations"], strict=True):
+        for key in LEGACY_BLOCKS:
+            assert json.dumps(written[key]) == json.dumps(stored[key]), key
+
+
+def test_legacy_blocks_pass_through_values_the_core_does_not_know():
+    """The core keeps the blocks as stored: no value is checked or coerced."""
+    doc = _fixture(15)
+    sim = doc["simulations"][0]
+    sim["solver"].update(turbulence="someOtherModel", backend="gpu", extra={"a": [1, 2]})
+    sim["boundary"] = {"inlet_speed_m_s": "fast"}
+    sim["numerics"] = {"anything": True}
+    project = Project.from_dict(copy.deepcopy(doc))
+    written = project.to_dict()["simulations"][0]
+    for key in LEGACY_BLOCKS:
+        assert written[key] == sim[key], key
+
+
+def test_pre_v12_unknown_turbulence_is_kept_and_seeds_no_turbulence_fields():
+    """An old solver.turbulence is an opaque string: kept as stored, and the v12
+    seed gives a value it does not know the laminar initial conditions."""
+    doc = _fixture(11)
+    doc["simulations"][0]["solver"]["turbulence"] = "someOtherModel"
+    [sim] = Project.from_dict(copy.deepcopy(doc)).to_dict()["simulations"]
+    assert sim["solver"]["turbulence"] == "someOtherModel"
+    assert sorted(sim["initial_conditions"]) == ["U", "p", "subdomains_stub", "uref_m_s"]
+
+
+def test_new_study_has_no_legacy_blocks():
+    """A study made since the split stores none of the old blocks."""
+    from cfddesk.cad.step import load_step
+
+    solid = load_step(PROJECTS.parent / "elbow.step")
+    project = Project.from_solid(solid, scale_to_metres=0.001, units_confirmed=True)
+    [sim] = project.to_dict()["simulations"]
+    assert not set(LEGACY_BLOCKS) & set(sim)
+    again = Project.from_dict(project.to_dict())
+    assert not set(LEGACY_BLOCKS) & set(again.to_dict()["simulations"][0])

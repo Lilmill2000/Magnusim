@@ -22,8 +22,7 @@ class MeshBackend:
     """Registered mesher backend (Standard / cfMesh / hex-dominant snappy).
 
     Named MeshBackend (not MeshAlgorithm / HexcoreBackend) so it does not
-    collide with project.settings Literals — same lesson as SolverApp vs
-    settings.SolverBackend (cpu|amgx).
+    collide with the project.settings Literals.
     """
 
     key: str

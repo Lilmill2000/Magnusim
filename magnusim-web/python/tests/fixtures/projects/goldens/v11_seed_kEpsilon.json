@@ -1,0 +1,229 @@
+{
+ "simulations": [
+  {
+   "analysis_type": "incompressible_steady",
+   "boundary_conditions": [
+    {
+     "face_ids": [
+      0
+     ],
+     "patch_name": "inlet",
+     "refinement_level": 2,
+     "settings": {
+      "direction_mode": "normal",
+      "speed_m_s": 0.5,
+      "temperature_K": 293.15,
+      "velocity": [
+       -1.0,
+       0.0,
+       0.0
+      ]
+     },
+     "type": "velocity_inlet",
+     "variant": "fixed_value"
+    },
+    {
+     "face_ids": [
+      1
+     ],
+     "patch_name": "outlet",
+     "refinement_level": 2,
+     "settings": {
+      "gauge_pressure": 0.0
+     },
+     "type": "pressure_outlet",
+     "variant": "fixed_gauge"
+    },
+    {
+     "face_ids": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+     ],
+     "patch_name": "walls",
+     "refinement_level": 1,
+     "settings": {
+      "ambient_T_K": 293.15,
+      "heat_flux_W_m2": 0.0,
+      "htc_W_m2K": 10.0,
+      "temperature_K": 293.15,
+      "thermal_mode": "adiabatic"
+     },
+     "type": "wall",
+     "variant": "noslip"
+    }
+   ],
+   "legacy_blocks": {
+    "boundary": {
+     "inlet_direction_mode": "normal",
+     "inlet_speed_m_s": 0.5,
+     "inlet_vector": [
+      -1.0,
+      0.0,
+      0.0
+     ],
+     "outlet_p": 0.0,
+     "walls_type": "noSlip"
+    },
+    "initial_conditions": {
+     "U": {
+      "global": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "epsilon": {
+      "global": 0.004476626090798746
+     },
+     "k": {
+      "global": 0.002109375
+     },
+     "p": {
+      "global_pa": 0.0
+     },
+     "subdomains_stub": true,
+     "uref_m_s": 0.5
+    },
+    "numerics": {
+     "ddt_default": "steadyState",
+     "div_nu_eff": "Gauss linear",
+     "div_phi_u": "bounded Gauss linearUpwindV grad(U)",
+     "grad_default": "cellLimited leastSquares 1",
+     "interpolation_default": "linear",
+     "laplacian_default": "Gauss linear limited corrected 0.5",
+     "n_non_orthogonal": 1,
+     "p_ref_cell": 0,
+     "p_ref_value_pa": 0.0,
+     "p_solver": "GAMG",
+     "relax_epsilon": 0.7,
+     "relax_k": 0.7,
+     "relax_omega": 0.7,
+     "relax_p": 0.3,
+     "relax_r": 0.5,
+     "relax_u": 0.7,
+     "relaxation_type": "manual",
+     "residual_epsilon": null,
+     "residual_k": 1e-06,
+     "residual_omega": 1e-06,
+     "residual_p": 1e-06,
+     "residual_u": 1e-06,
+     "schemes": {
+      "div_phi_U": "Gauss linear upwind v \u2207U",
+      "div_phi_k": "Bounded Gauss upwind",
+      "div_phi_omega": "Bounded Gauss upwind",
+      "divergence_default": "Gauss linear",
+      "grad_U": {
+       "limiter_coefficient": 1.0,
+       "scheme": "Celllimited leastSquares"
+      },
+      "grad_p": {
+       "limiter_coefficient": 1.0,
+       "scheme": "Celllimited leastSquares"
+      },
+      "gradient_default": {
+       "limiter_coefficient": 1.0,
+       "scheme": "Celllimited leastSquares"
+      },
+      "interpolate_HbyA": "Linear",
+      "interpolation_default": "Linear",
+      "laplacian_1AU_p": {
+       "limiter_coefficient": 0.5,
+       "scheme": "Gauss linear limited corrected"
+      },
+      "laplacian_default": {
+       "limiter_coefficient": 0.5,
+       "scheme": "Gauss linear limited corrected"
+      },
+      "laplacian_nuEff_U": {
+       "limiter_coefficient": 0.5,
+       "scheme": "Gauss linear limited corrected"
+      },
+      "laplacian_nu_U": {
+       "limiter_coefficient": 0.5,
+       "scheme": "Gauss linear limited corrected"
+      },
+      "sn_grad_default": "Limited",
+      "sn_grad_limiter_coefficient": 0.5,
+      "time_default": "Steady-state"
+     },
+     "sn_grad_default": "limited 0.5",
+     "solver_k": {
+      "absolute_tolerance": 1e-08,
+      "preconditioner": "DILU",
+      "relative_tolerance": 0.01,
+      "solver_type": "PBiCGStab"
+     },
+     "solver_omega": {
+      "absolute_tolerance": 1e-08,
+      "preconditioner": "DILU",
+      "relative_tolerance": 0.01,
+      "solver_type": "PBiCGStab"
+     },
+     "solver_p": {
+      "absolute_tolerance": 1e-06,
+      "cache_agglomeration": true,
+      "n_cells_coarsest": 100,
+      "n_merge_levels": 1,
+      "n_post_sweeps": 1,
+      "n_pre_sweeps": 2,
+      "relative_tolerance": 0.001,
+      "smoother": "Gauss-Seidel",
+      "solver_type": "GAMG"
+     },
+     "solver_u": {
+      "absolute_tolerance": 1e-08,
+      "preconditioner": "DILU",
+      "relative_tolerance": 0.01,
+      "solver_type": "PBiCGStab"
+     },
+     "turb_solver": "PBiCGStab",
+     "u_solver": "PBiCGStab",
+     "wall_dist_method": "meshWave"
+    },
+    "solver": {
+     "backend": "cpu",
+     "end_condition": "residual",
+     "end_time": 1000,
+     "energy": false,
+     "mode": "steady",
+     "residual_p": 1e-06,
+     "residual_u": 1e-06,
+     "turbulence": "kEpsilon",
+     "turbulence_intensity_pct": 7.5,
+     "warm_start": false
+    }
+   },
+   "meshes": [
+    {
+     "last_mesh_fingerprint": null,
+     "mesh_input_fingerprint": "1fe52a19f6e6f90a"
+    }
+   ],
+   "runs": [],
+   "simulation_control_keys": [
+    "cpu_mode",
+    "decompose_method",
+    "delta_t",
+    "max_runtime_s",
+    "n_cpus",
+    "potential_flow_init",
+    "write_control",
+    "write_interval"
+   ]
+  }
+ ],
+ "version": 15
+}

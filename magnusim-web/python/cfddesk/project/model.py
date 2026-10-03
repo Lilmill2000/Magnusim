@@ -1,8 +1,8 @@
 """project.json model — nested hierarchy (Geometry / Simulation / Mesh / Run).
 
 Canonical state lives in ``Project.geometries`` and ``Project.simulations``.
-The flat v5 accessors (``step_path``, ``faces``, ``mesh``, ``boundary``,
-``boundary_conditions``, ``solver``, ``mesh_fingerprint_at_last_mesh``) survive
+The flat v5 accessors (``step_path``, ``faces``, ``mesh``,
+``boundary_conditions``, ``mesh_fingerprint_at_last_mesh``) survive
 as read-only properties onto the primary geometry / simulation so existing
 callers keep working; every mutator rewrites the nested nodes.
 
@@ -20,7 +20,7 @@ block must go stale rather than be laundered.
 v11: ``BoundaryCondition.name_is_custom`` — type changes regenerate the
 default display name / patch unless the user has edited Name.
 v12: seed ``numerics`` / ``initial_conditions`` / ``simulation_control`` from
-existing SolverSettings. Does **not** touch mesh fingerprints (staleness
+the stored solver block (legacy_sim). Does **not** touch mesh fingerprints (staleness
 must be unchanged across migrate).
 v13: Phase 5 mesh schema (fineness, active_mesh_id, run.mesh_id, results_subdir).
 v14: Geometry.bodies (role/region) replaces volumes; materials body_ids;
@@ -59,7 +59,18 @@ from cfddesk.project.hierarchy import (
     default_run_results_subdir,
     next_run_name,
 )
-from cfddesk.project.legacy_sim import V7_ASSUMED_DENSITY_KG_M3, v4_bcs_from_roles
+from cfddesk.project.legacy_sim import (
+    V7_ASSUMED_DENSITY_KG_M3,
+    legacy_blocks,
+    legacy_boundary,
+    legacy_solver,
+    legacy_solver_mode,
+    recover_run_snapshot,
+    v4_bcs_from_roles,
+    v7_blocks_to_pa,
+    v7_kinematic_to_pa,
+    v12_seed,
+)
 from cfddesk.project.mesh_refinements import (
     BB_LAYER_TYPE,
     EXTRUSION_TYPE,
@@ -82,10 +93,8 @@ from cfddesk.project.mesh_refinements import (
     volume_custom_sizing_fingerprint_payload,
 )
 from cfddesk.project.settings import (
-    BoundarySettings,
     MeshSettings,
     PathsSettings,
-    SolverSettings,
     quantize_location_m,
 )
 from cfddesk.registry.analysis import (
@@ -110,7 +119,6 @@ from cfddesk.results.filters import (
     views_to_list,
 )
 from cfddesk.results.window_geom import ResultsWindowGeom
-from cfddesk.units.pressure import kinematic_to_pa
 
 FaceRole = Literal["unassigned", "inlet", "outlet", "walls"]
 ROLES: tuple[FaceRole, ...] = ("unassigned", "inlet", "outlet", "walls")
@@ -340,11 +348,11 @@ def _simulation_from_dict(data: dict, *, geometry_id: str) -> Simulation:
     active_run_id = str(data.get("active_run_id") or "")
     if active_run_id and not any(r.id == active_run_id for r in runs):
         active_run_id = ""
-    solver = SolverSettings.from_dict(data.get("solver"))
+    legacy = legacy_blocks(data)
     simulation_control = copy.deepcopy(data.get("simulation_control") or {})
     analysis_type = resolve_analysis_key(
         data.get("analysis_type"),
-        solver_mode=solver.mode,
+        solver_mode=legacy_solver_mode(legacy),
         simulation_control=simulation_control
         if isinstance(simulation_control, dict)
         else None,
@@ -360,16 +368,13 @@ def _simulation_from_dict(data: dict, *, geometry_id: str) -> Simulation:
         ],
         meshes=meshes,
         runs=runs,
-        solver=solver,
-        boundary=BoundarySettings.from_dict(data.get("boundary")),
         materials=_normalize_materials_list(data.get("materials") or []),
-        initial_conditions=copy.deepcopy(data.get("initial_conditions") or {}),
         advanced_concepts=copy.deepcopy(data.get("advanced_concepts") or {}),
-        numerics=copy.deepcopy(data.get("numerics") or {}),
         simulation_control=simulation_control,
         result_control=copy.deepcopy(data.get("result_control") or {}),
         active_mesh_id=active_mesh_id,
         active_run_id=active_run_id,
+        legacy=legacy,
     )
 
 
@@ -448,19 +453,9 @@ class Project:
         return sim.active_mesh().settings if sim is not None else MeshSettings()
 
     @property
-    def boundary(self) -> BoundarySettings:
-        sim = self.primary_simulation()
-        return sim.boundary if sim is not None else BoundarySettings()
-
-    @property
     def boundary_conditions(self) -> list[BoundaryCondition]:
         sim = self.primary_simulation()
         return sim.boundary_conditions if sim is not None else []
-
-    @property
-    def solver(self) -> SolverSettings:
-        sim = self.primary_simulation()
-        return sim.solver if sim is not None else SolverSettings()
 
     @property
     def mesh_fingerprint_at_last_mesh(self) -> str | None:
@@ -986,7 +981,7 @@ class Project:
                 if not has_mesh and not has_times:
                     continue
                 results_path = default_run_results_subdir(mesh.id, rid)
-                turb = str(getattr(self.solver, "turbulence", "") or "")
+                turb = str(legacy_solver(sim.legacy.get("solver"))["turbulence"])
                 name = next_run_name(runs, turb or "Run")
                 runs.append(
                     RunNode(
@@ -1450,8 +1445,7 @@ class Project:
             results_screenshots = list(preserve.results_screenshots)
             results_records = list(preserve.results_records)
             mesh = preserve.mesh
-            boundary = preserve.boundary
-            solver = preserve.solver
+            legacy = copy.deepcopy(prev_sim.legacy) if prev_sim is not None else {}
             paths = preserve.paths
             mesh_fp = preserve.mesh_fingerprint_at_last_mesh
             runs = list(prev_sim.runs) if prev_sim is not None else []
@@ -1489,8 +1483,7 @@ class Project:
             results_screenshots = []
             results_records = []
             mesh = MeshSettings()
-            boundary = BoundarySettings()
-            solver = SolverSettings()
+            legacy = {}
             paths = PathsSettings()
             mesh_fp = None
             runs = []
@@ -1544,10 +1537,9 @@ class Project:
             boundary_conditions=bcs,
             meshes=[mesh_node],
             runs=runs,
-            solver=solver,
-            boundary=boundary,
             materials=materials,
             active_mesh_id=mesh_node.id,
+            legacy=legacy,
         )
 
         project = Project(
@@ -1573,11 +1565,12 @@ class Project:
         return project
 
 
-def _kin_pressure_to_pa(settings: dict[str, Any], rho: float) -> dict[str, Any]:
+def _kin_pressure_to_pa(settings: dict[str, Any]) -> dict[str, Any]:
+    """A pre-v7 BC's settings with its kinematic pressures in Pa."""
     out = copy.deepcopy(settings)
     for key in _PRESSURE_SETTING_KEYS:
         if key in out and out[key] is not None:
-            out[key] = kinematic_to_pa(float(out[key]), rho)
+            out[key] = v7_kinematic_to_pa(out[key])
     return out
 
 
@@ -1627,7 +1620,6 @@ def _upgrade_to_v7(
     project: Project, *, project_dir: str | Path | None = None
 ) -> Project:
     """Kinematic→Pa, volume enumeration, Run ρ backfill, materials shape."""
-    rho0 = V7_ASSUMED_DENSITY_KG_M3
     geometries: list[Geometry] = []
     for g in project.geometries:
         g2, _note = _ensure_geometry_volumes(g, project_dir=project_dir)
@@ -1636,13 +1628,9 @@ def _upgrade_to_v7(
     simulations: list[Simulation] = []
     for sim in project.simulations:
         bcs = [
-            dataclasses.replace(bc, settings=_kin_pressure_to_pa(bc.settings, rho0))
+            dataclasses.replace(bc, settings=_kin_pressure_to_pa(bc.settings))
             for bc in sim.boundary_conditions
         ]
-        boundary = dataclasses.replace(
-            sim.boundary,
-            outlet_p=kinematic_to_pa(float(sim.boundary.outlet_p), rho0),
-        )
         materials = []
         for m in sim.materials:
             m = copy.deepcopy(m)
@@ -1651,21 +1639,11 @@ def _upgrade_to_v7(
             if "id" not in m or not m["id"]:
                 m["id"] = _new_id()
             materials.append(m)
-        ic = copy.deepcopy(sim.initial_conditions)
-        if isinstance(ic, dict):
-            for key in _PRESSURE_SETTING_KEYS:
-                if key in ic and ic[key] is not None:
-                    ic[key] = kinematic_to_pa(float(ic[key]), rho0)
-            # Nested IC blob used by Phase 2 form
-            gp = ic.get("gauge_pressure")
-            if gp is None and isinstance(ic.get("p"), (int, float)):
-                ic["gauge_pressure"] = kinematic_to_pa(float(ic["p"]), rho0)
-
         runs: list[RunNode] = []
         for run in sim.runs:
             snap = copy.deepcopy(run.settings_snapshot)
             if "density_kg_m3" not in snap:
-                snap["density_kg_m3"] = rho0
+                snap["density_kg_m3"] = V7_ASSUMED_DENSITY_KG_M3
                 snap["density_backfill"] = "RHO_AIR_assumed"
             runs.append(dataclasses.replace(run, settings_snapshot=snap))
 
@@ -1673,10 +1651,10 @@ def _upgrade_to_v7(
             dataclasses.replace(
                 sim,
                 boundary_conditions=bcs,
-                boundary=boundary,
                 materials=materials,
-                initial_conditions=ic,
                 runs=runs,
+                # boundary.outlet_p and the initial conditions' pressures.
+                legacy=v7_blocks_to_pa(sim.legacy),
             )
         )
 
@@ -2021,39 +1999,22 @@ def _upgrade_to_v11(project: Project) -> Project:
 
 
 def _upgrade_to_v12(project: Project) -> Project:
-    """Seed numerics / IC / sim-control. Never touch mesh fingerprints."""
-    from cfddesk.project.initial_conditions import rebuild_initial_conditions
-    from cfddesk.project.numerics import NumericsSettings, SimulationControlSettings
-
+    """Seed numerics / IC / sim-control (legacy_sim.v12_seed). Never touch mesh fingerprints."""
     sim = project.primary_simulation()
     if sim is None:
         return dataclasses.replace(project, version=12)
 
-    sol = sim.solver
-    numerics = NumericsSettings.from_dict(sim.numerics if sim.numerics else None)
-    if not sim.numerics:
-        numerics = NumericsSettings.from_backend(sol.backend)
-        numerics.residual_u = sol.residual_u
-        numerics.residual_p = sol.residual_p
-    else:
-        # Keep backend authoritative: sync p_solver display from backend.
-        if sol.backend == "amgx":
-            numerics.p_solver = "amgx"
-        elif numerics.p_solver == "amgx":
-            numerics.p_solver = "GAMG"
-
-    sim_ctrl = SimulationControlSettings.from_dict(
-        sim.simulation_control if sim.simulation_control else None
-    )
-    ic = sim.initial_conditions if isinstance(sim.initial_conditions, dict) else {}
-    if not ic or "p" not in ic:
-        ic = rebuild_initial_conditions(project)
-
-    project = project._replace_primary_sim(
-        numerics=numerics.to_dict(),
-        simulation_control=sim_ctrl.to_dict(),
-        initial_conditions=ic,
-    )
+    inlets: list[tuple[str, dict[str, Any]]] = []
+    for bc in sim.boundary_conditions:
+        if not bc.face_ids:
+            continue
+        try:
+            key = registry_key_for_bc(bc)
+        except KeyError:
+            continue
+        inlets.append((key, bc.settings if isinstance(bc.settings, dict) else {}))
+    legacy, control = v12_seed(sim.legacy, sim.simulation_control, inlets)
+    project = project._replace_primary_sim(legacy=legacy, simulation_control=control)
     return dataclasses.replace(project, version=12)
 
 
@@ -2283,15 +2244,7 @@ def _recover_runs(
     results_root = Path(project_dir) / paths.local_results
     if not results_root.is_dir() or not _results_look_loadable(results_root):
         return []
-    solver = SolverSettings.from_dict(data.get("solver"))
-    full = solver.to_dict()
-    raw = data.get("solver")
-    if isinstance(raw, dict) and raw:
-        snapshot = dict(full)
-        unrecoverable: list[str] = []
-    else:
-        snapshot = {}
-        unrecoverable = sorted(full)
+    snapshot, unrecoverable = recover_run_snapshot(data.get("solver"))
     return [
         RunNode(
             id=_new_id(),
@@ -2340,7 +2293,6 @@ def _migrate_flat_to_hierarchy(
     faces = _faces_from_list(data["faces"])
     mesh_data = data.get("mesh") or {}
     mesh = MeshSettings.from_dict(mesh_data)
-    boundary = BoundarySettings.from_dict(data.get("boundary"))
     bcs_data = data.get("boundary_conditions")
     if bcs_data is not None:
         bcs = [BoundaryCondition.from_dict(item) for item in bcs_data]
@@ -2372,10 +2324,13 @@ def _migrate_flat_to_hierarchy(
         boundary_conditions=bcs,
         meshes=[mesh_node],
         runs=runs,
-        solver=SolverSettings.from_dict(data.get("solver")),
-        boundary=boundary,
         materials=[],
         active_mesh_id=mesh_node.id,
+        # A v4/v5 file's flat blocks, every key filled as older builds saved them.
+        legacy={
+            "solver": legacy_solver(data.get("solver")),
+            "boundary": legacy_boundary(data.get("boundary")),
+        },
     )
     return [geometry], [simulation]
 

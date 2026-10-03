@@ -27,18 +27,15 @@ def _clean_registry():
     reset_for_tests()
 
 
-def test_settings_solver_backend_literal_untouched():
-    """project.settings.SolverBackend (cpu|amgx) must remain — not the registry class."""
-    from pathlib import Path as _Path
-
-    settings_src = (
-        _Path(__file__).resolve().parents[2] / "cfddesk" / "project" / "settings.py"
-    ).read_text(encoding="utf-8")
-    assert 'SolverBackend = Literal["cpu", "amgx"]' in settings_src
-    assert "backend: SolverBackend" in settings_src
-    # Registry public name is SolverApp, not SolverBackend
+def test_project_settings_name_no_solver_backend():
+    """The old solver block is opaque legacy data: project.settings has no
+    SolverBackend (or solver settings class), and the registry's solver type is
+    SolverApp."""
     from cfddesk import registry as reg_mod
+    from cfddesk.project import settings
 
+    assert not hasattr(settings, "SolverBackend")
+    assert not hasattr(settings, "SolverSettings")
     assert hasattr(reg_mod, "SolverApp")
     assert not hasattr(reg_mod, "SolverBackend")
 

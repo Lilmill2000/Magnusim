@@ -12,11 +12,7 @@ from cfddesk.project.mesh_refinements import (
     MeshRefinementStub,
     parse_refinement_stubs,
 )
-from cfddesk.project.settings import (
-    BoundarySettings,
-    MeshSettings,
-    SolverSettings,
-)
+from cfddesk.project.settings import MeshSettings
 
 
 def _new_id() -> str:
@@ -242,17 +238,17 @@ class Simulation:
     boundary_conditions: list  # list[BoundaryCondition]
     meshes: list[MeshNode]
     runs: list[RunNode]
-    solver: SolverSettings = field(default_factory=SolverSettings)
-    boundary: BoundarySettings = field(default_factory=BoundarySettings)
     materials: list[dict[str, Any]] = field(default_factory=list)
     # Stubs for tree nodes
-    initial_conditions: dict[str, Any] = field(default_factory=dict)
     advanced_concepts: dict[str, Any] = field(default_factory=dict)
-    numerics: dict[str, Any] = field(default_factory=dict)
     simulation_control: dict[str, Any] = field(default_factory=dict)
     result_control: dict[str, Any] = field(default_factory=dict)
     active_mesh_id: str = ""
     active_run_id: str = ""
+    # An old file's solver / boundary / numerics / initial_conditions blocks
+    # (legacy_sim.LEGACY_SIM_KEYS), kept as stored and written back unchanged.
+    # A study made since has none; nothing on a run path reads them.
+    legacy: dict[str, Any] = field(default_factory=dict)
 
     def primary_mesh(self) -> MeshNode:
         if not self.meshes:
@@ -326,20 +322,23 @@ class Simulation:
         return sim, node
 
     def to_dict(self) -> dict:
+        def legacy(*keys: str) -> dict[str, Any]:
+            # Each legacy block where older builds wrote it, when the study has it.
+            return {k: copy.deepcopy(self.legacy[k]) for k in keys if k in self.legacy}
+
         return {
             "id": self.id,
             "name": self.name,
             "analysis_type": self.analysis_type,
             "geometry_id": self.geometry_id,
             "materials": copy.deepcopy(self.materials),
-            "initial_conditions": copy.deepcopy(self.initial_conditions),
+            **legacy("initial_conditions"),
             "boundary_conditions": [bc.to_dict() for bc in self.boundary_conditions],
             "advanced_concepts": copy.deepcopy(self.advanced_concepts),
-            "numerics": copy.deepcopy(self.numerics),
+            **legacy("numerics"),
             "simulation_control": copy.deepcopy(self.simulation_control),
             "result_control": copy.deepcopy(self.result_control),
-            "solver": self.solver.to_dict(),
-            "boundary": self.boundary.to_dict(),
+            **legacy("solver", "boundary"),
             "meshes": [m.to_dict() for m in self.meshes],
             "runs": [r.to_dict() for r in self.runs],
             "active_mesh_id": self.active_mesh_id or self.primary_mesh().id,

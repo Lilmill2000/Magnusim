@@ -1,4 +1,7 @@
-"""Project-level mesh/boundary/solver/paths settings (Slice-2 schema v4).
+"""Project-level mesh and paths settings (Slice-2 schema v4).
+
+A study's old solver / boundary blocks are kept as stored (legacy_sim); the
+analysis that runs a study owns its physics settings.
 
 Disk-usage note (Gate B0 measurement): Windows-local ``results/`` copy-back
 costs ~411 MB per ~1M mesh cells, i.e. roughly ~4 GB Windows-local disk for a
@@ -14,10 +17,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Literal
 
-InletDirectionMode = Literal["normal", "vector"]
-SolverBackend = Literal["cpu", "amgx"]
-SolverEndCondition = Literal["residual", "iterations"]
-SolverMode = Literal["steady", "transient"]
 LocationSource = Literal["auto", "manual"]
 SizingMode = Literal["automatic", "manual"]
 # Hex-dominant = snappyHexMesh; Standard = gmsh BREP → gmshToFoam (Phase 5b).
@@ -26,14 +25,6 @@ MeshAlgorithm = Literal["hex-dominant", "hex-dominant-parametric", "standard"]
 # that mesher was removed, and the value stays only so projects that saved it
 # keep their mesh fingerprint (hexcore_recipe_token).
 HexcoreBackend = Literal["cfmesh", "bodyfit"]
-TurbulenceModel = Literal["laminar", "kEpsilon", "kOmegaSST", "LRR", "SSG"]
-TURBULENCE_MODELS: tuple[TurbulenceModel, ...] = (
-    "laminar",
-    "kEpsilon",
-    "kOmegaSST",
-    "LRR",
-    "SSG",
-)
 
 
 @dataclass
@@ -300,110 +291,6 @@ class MeshSettings:
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
-
-@dataclass
-class BoundarySettings:
-    """Boundary-condition inputs persisted in ``project.json`` under ``boundary``."""
-
-    inlet_speed_m_s: float = 0.5
-    inlet_direction_mode: InletDirectionMode = "normal"
-    # Used verbatim as the flow direction when mode == "vector". When
-    # mode == "normal", direction instead comes from the inlet face's
-    # geometric normal; this field is then just the last resolved/fallback
-    # direction.
-    inlet_vector: tuple[float, float, float] = (-1.0, 0.0, 0.0)
-    outlet_p: float = 0.0
-    walls_type: str = "noSlip"
-
-    def to_dict(self) -> dict:
-        return {
-            "inlet_speed_m_s": self.inlet_speed_m_s,
-            "inlet_direction_mode": self.inlet_direction_mode,
-            "inlet_vector": list(self.inlet_vector),
-            "outlet_p": self.outlet_p,
-            "walls_type": self.walls_type,
-        }
-
-    @staticmethod
-    def from_dict(data: dict | None) -> BoundarySettings:
-        if not data:
-            return BoundarySettings()
-        mode = data.get("inlet_direction_mode", "normal")
-        if mode not in ("normal", "vector"):
-            mode = "normal"
-        vec = data.get("inlet_vector", [-1.0, 0.0, 0.0])
-        return BoundarySettings(
-            inlet_speed_m_s=float(data.get("inlet_speed_m_s", 0.5)),
-            inlet_direction_mode=mode,
-            inlet_vector=(float(vec[0]), float(vec[1]), float(vec[2])),
-            outlet_p=float(data.get("outlet_p", 0.0)),
-            walls_type=str(data.get("walls_type", "noSlip")),
-        )
-
-
-@dataclass
-class SolverSettings:
-    """Solver run controls persisted in ``project.json`` under ``solver``."""
-
-    mode: SolverMode = "steady"
-    backend: SolverBackend = "amgx"
-    end_condition: SolverEndCondition = "residual"
-    end_time: int = 1000  # still / Simulation control End time (inc21a)
-    residual_u: float = 1e-6  # still Numerics Abs tol (inc21b)
-    # Legacy Project-model field; the run's case is written by its analysis
-    # (Incompressible Flow reads the web study files, not this model).
-    residual_p: float = 1e-6  # still Numerics Abs tol (inc21b)
-    turbulence: TurbulenceModel = "laminar"
-    turbulence_intensity_pct: float = 5.0
-    # Copy internalField from latest WSL time into 0/ before solve (RSM warm-start).
-    warm_start: bool = False
-    # Energy equation (thermal BCs / 0/T). Off by default — registry stubs only.
-    energy: bool = False
-
-    def to_dict(self) -> dict:
-        return {
-            "mode": self.mode,
-            "backend": self.backend,
-            "end_condition": self.end_condition,
-            "end_time": self.end_time,
-            "residual_u": self.residual_u,
-            "residual_p": self.residual_p,
-            "turbulence": self.turbulence,
-            "turbulence_intensity_pct": self.turbulence_intensity_pct,
-            "warm_start": self.warm_start,
-            "energy": self.energy,
-        }
-
-    @staticmethod
-    def from_dict(data: dict | None) -> SolverSettings:
-        if not data:
-            return SolverSettings()
-        backend = data.get("backend", "amgx")
-        if backend not in ("cpu", "amgx"):
-            backend = "amgx"
-        end_condition = data.get("end_condition", "residual")
-        if end_condition not in ("residual", "iterations"):
-            end_condition = "residual"
-        turb = data.get("turbulence", "laminar")
-        if turb not in TURBULENCE_MODELS:
-            turb = "laminar"
-        mode = data.get("mode", "steady")
-        if mode not in ("steady", "transient"):
-            mode = "steady"
-        return SolverSettings(
-            mode=mode,
-            backend=backend,
-            end_condition=end_condition,
-            end_time=int(data.get("end_time", 1000)),
-            residual_u=float(data.get("residual_u", 1e-6)),
-            residual_p=float(data.get("residual_p", 1e-6)),
-            turbulence=turb,
-            turbulence_intensity_pct=float(
-                data.get("turbulence_intensity_pct", 5.0)
-            ),
-            warm_start=bool(data.get("warm_start", False)),
-            energy=bool(data.get("energy", False)),
-        )
 
 @dataclass
 class PathsSettings:
