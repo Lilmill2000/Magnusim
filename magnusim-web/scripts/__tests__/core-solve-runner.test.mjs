@@ -303,6 +303,7 @@ describe('frames make the run doc', () => {
     const job = out.bodyExtra.runner_job_id;
     const run = () => w27.getRunStatus(PID, rid, SID).body.run;
     relay([{ event: 'stage', stage: 'prepare' }]);
+    console.log('DBG', JSON.stringify({ disk: runDoc(rid).has_results, run: w27.getRunStatus(PID, rid, SID).body.run.has_results, n: w27.getRunStatus(PID, rid, SID).body.run.n_saved_times, row: w27.getRunStatus(PID, rid, SID).body.runs.find((r) => r.id === rid).has_results }));
     assert.equal(run().stage, 'prepare');
     relay([{ event: 'stage', stage: 'copy_to_wsl' }]);
     assert.equal(run().stage, 'copy');
@@ -417,6 +418,41 @@ describe('the end', () => {
       assert.equal((await w27.deleteCatalogRun(PID, rid, SID)).ok, true);
     });
   }
+
+  it('a run started again shows none of its last attempt: no steps, residuals, Courant number or relay files', async () => {
+    const { rid, doc } = await endAs('stopped');
+    assert.ok(doc.residuals.length && doc.iteration > 0, 'the last attempt left progress');
+    w27.patchRunDocIfPresent(PID, rid, { co_mean: 0.4, co_max: 0.9, delta_t: 0.01 });
+    assert.ok(existsSync(join(caseOf(rid), '.magnusim-run.json')));
+    writeFileSync(join(caseOf(rid), '.magnusim-ran'), JSON.stringify({ job_id: doc.runner_job_id, token: 'old00000' }));
+    const before = fx.spawned.length;
+    const { out } = await start(rid);
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal(fx.spawned.length, before + 1);
+    // The relay files of the last attempt were gone before this one was spawned.
+    assert.equal(existsSync(join(caseOf(rid), '.magnusim-run.json')), false);
+    assert.equal(existsSync(join(caseOf(rid), '.magnusim-ran')), false);
+    const disk = runDoc(rid);
+    assert.deepEqual(
+      [disk.iteration, disk.sim_time, disk.n_steps, disk.residuals, disk.co_mean, disk.co_max, disk.delta_t, disk.solve_started_at, disk.has_results],
+      [0, 0, 0, [], null, null, null, null, false],
+    );
+    const row = w27.getRunStatus(PID, rid, SID).body.runs.find((r) => r.id === rid);
+    assert.deepEqual([row.status, row.iteration], ['running', 0]);
+    const run = w27.getRunStatus(PID, rid, SID).body.run;
+    assert.deepEqual([run.iteration, run.residuals, run.co_mean, run.co_max, run.delta_t], [0, [], undefined, undefined, undefined]);
+    // While its case is written the last attempt's frames are not this one's; the prepare step removes them.
+    relay([{ event: 'stage', stage: 'prepare' }]);
+    const writing = w27.getRunStatus(PID, rid, SID).body.run;
+    assert.deepEqual([writing.stage, writing.iteration, writing.has_results], ['prepare', 0, false]);
+    assert.equal(runDoc(rid).has_results, false, 'nothing of the last attempt was written back');
+    rmSync(join(caseOf(rid), '50'), { recursive: true, force: true });
+    // Its own progress shows once it reports.
+    relay([{ event: 'stage', stage: 'solve' }, ...step(1, { co: { mean: 0.2, max: 0.3, dt: 0.005 } }), ...step(2)]);
+    await sleep(FRAME_WAIT);
+    const now = w27.getRunStatus(PID, rid, SID).body.run;
+    assert.deepEqual([now.stage, now.iteration, now.co_mean], ['solve', 2, 0.2]);
+  });
 
   it('a doc still running when its record ended (the server stopped between the writes) reads as ended', async () => {
     const { rid, doc } = await endAs('done');

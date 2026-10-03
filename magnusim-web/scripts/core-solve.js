@@ -32,7 +32,7 @@
  * The state is process-wide (globalThis), so a re-imported module keeps it.
  */
 import { randomBytes } from 'node:crypto';
-import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { FOAM_TEXT, finishFoam, prepareFromJob, registerStepRunKind, runFoamSteps, stepRunRecord } from './foam-runner.js';
 import { createFoamRecord, listFoamRecords, newFoamJobId } from './foam-store.js';
@@ -600,6 +600,16 @@ export function launchCoreSolve(p) {
     p.persistStarted(rec);
   } catch (e) {
     console.warn(`[CFD core solve] ${id}: the run doc was not marked running`, e);
+  }
+  // A run started again (it stopped, failed or finished before): its case still has the
+  // last attempt's relay files. This attempt's relay writes its own; until then the old
+  // ones would name the old attempt (its status file is read if the new relay dies first).
+  for (const name of ['.magnusim-run.json', '.magnusim-ran']) {
+    try {
+      rmSync(join(p.caseDir, name), { force: true });
+    } catch (e) {
+      console.warn(`[CFD core solve] ${id}: ${name} of the last attempt not removed`, e);
+    }
   }
   const out = runFoamSteps({
     job_id: id,

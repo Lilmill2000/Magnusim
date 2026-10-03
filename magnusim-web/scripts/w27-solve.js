@@ -496,6 +496,11 @@ function enrichRunDoc(doc, opts) {
     solve_started_at: startedAt,
     ...saved,
   };
+  // A run on the runner shows its own Courant number and time step only: the doc may
+  // still hold the last attempt's until this one ends.
+  if (runnerLive) {
+    for (const k of ['co_max', 'co_mean', 'delta_t']) if (progress[k] === null || progress[k] === undefined) delete next[k];
+  }
   const shown = solveDisplayStage(next);
   if (shown) next.stage = shown;
   return next;
@@ -534,6 +539,7 @@ function runnerLiveProgress(doc, live) {
  */
 function liveSavedFields(doc) {
   if (!doc) return {};
+  if (lastAttemptFramesOnly(doc)) return {};
   const caseDir = doc.case_dir || (doc.prepare_run && doc.prepare_run.case_dir);
   if (!caseDir) return {};
   const times = listSavedTimes(caseDir);
@@ -545,6 +551,16 @@ function liveSavedFields(doc) {
     n_saved_times: times.length,
     saved_times: times,
   };
+}
+
+/**
+ * A run started again whose case is not written yet (its runner stage is starting or
+ * prepare): the time folders in it are its last attempt's, which the prepare step
+ * removes. They are not this attempt's saved frames.
+ */
+function lastAttemptFramesOnly(doc) {
+  const live = doc && doc.runner_job_id ? liveSolveOf(doc.runner_job_id) : null;
+  return !!live && (live.stage === 'starting' || live.stage === 'prepare');
 }
 
 function applySavedTimesFromDiskInPlace(rec) {
@@ -2058,10 +2074,19 @@ async function startSolveOnRunner(c) {
         pid: null,
         exit_code: null,
         error: null,
-        // Fresh start: nothing saved yet (a restarted stopped run had frames).
+        // Fresh start: nothing saved yet (a restarted stopped run had frames), and no
+        // progress yet: the last attempt's steps, residuals and time are not this one's.
         has_results: false,
         last_saved_iteration: 0,
         n_saved_times: 0,
+        iteration: 0,
+        sim_time: 0,
+        n_steps: 0,
+        residuals: [],
+        co_max: null,
+        co_mean: null,
+        delta_t: null,
+        solve_started_at: null,
         stop_requested: false,
         stage: 'starting',
         finished_at: null,
