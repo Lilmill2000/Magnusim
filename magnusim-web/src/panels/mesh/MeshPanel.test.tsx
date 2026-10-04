@@ -1,7 +1,16 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MeshJobState } from '../legacyBridge';
-import { MeshInspect, MeshSettings, formValuesFrom, generateButtonFor, queuedLine, settingsFrom } from './MeshPanel';
+import {
+  MeshInspect,
+  MeshSettings,
+  editedKeys,
+  formValuesFrom,
+  generateButtonFor,
+  mergeEdits,
+  queuedLine,
+  settingsFrom,
+} from './MeshPanel';
 
 const workerRpc = vi.fn(async () => ({ ok: true }));
 vi.mock('../../api/workerRpc', () => ({ workerRpc: (...args: unknown[]) => workerRpc(...args) }));
@@ -184,6 +193,18 @@ describe('settings mapping', () => {
     expect(formValuesFrom({ fineness: 4, mesher_settings: { fineness: 9 } }).fineness).toBe(4);
   });
 
+  it('keeps the keys the user changed over a later load', () => {
+    const shown = { fineness: 5, hex_element_core: true, add_layers: true };
+    expect(editedKeys(shown, { ...shown, fineness: 2 })).toEqual(['fineness']);
+    expect(editedKeys({}, { fineness: 2 })).toEqual([]);
+    const stored = { fineness: 7, hex_element_core: false, add_layers: true };
+    expect(mergeEdits(stored, { ...shown, fineness: 2 }, ['fineness'])).toEqual({
+      fineness: 2,
+      hex_element_core: false,
+      add_layers: true,
+    });
+  });
+
   it('labels the Generate button by queue state', () => {
     expect(generateButtonFor('generate').text).toBe('Generate');
     expect(generateButtonFor('generating')).toMatchObject({ text: 'Generating…', disabled: true });
@@ -230,6 +251,57 @@ describe('MeshSettings', () => {
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
     const posts = fetchMock.mock.calls.filter((c) => String(c[0]).includes('/api/mesh/generate'));
     expect(posts).toHaveLength(0);
+  });
+
+  it('keeps a fineness changed before the stored settings load, saves nothing until then, and generates with it', async () => {
+    let land: () => void = () => {};
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const base = fetchMock.getMockImplementation() as (input: RequestInfo | URL) => Promise<Response>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/mesh') && !url.includes('/generate')) {
+        await new Promise<void>((r) => {
+          land = r;
+        });
+      }
+      return base(input);
+    });
+    render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+    const slider = screen.getByLabelText('Fineness') as HTMLInputElement;
+    expect(slider.value).toBe('5');
+    fireEvent.change(slider, { target: { value: '3' } });
+    expect(slider.value).toBe('3');
+    // The change would be saved now; the form still shows defaults for the rest.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    expect(workerRpc).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    await act(async () => {
+      land();
+    });
+    // The stored layers (off) come in; the fineness stays the user's.
+    await waitFor(() => expect(screen.getByLabelText('Automatic boundary layers')).toHaveAttribute('aria-pressed', 'false'));
+    expect((screen.getByLabelText('Fineness') as HTMLInputElement).value).toBe('3');
+    await waitFor(() => expect(window.__CFD_MESH_GENERATE_CLICK__).toHaveBeenCalled());
+    const call = (window.__CFD_MESH_GENERATE_CLICK__ as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      settings: Record<string, unknown>;
+    };
+    expect(call.settings).toMatchObject({ fineness: 3, automatic_boundary_layers: false });
+    const saves = workerRpc.mock.calls.map((c) => (c as unknown[])[1] as { body: { settings: Record<string, unknown> } });
+    expect(saves.length).toBeGreaterThan(0);
+    for (const s of saves) expect(s.body.settings).toMatchObject({ fineness: 3, automatic_boundary_layers: false });
+  });
+
+  it('shows the stored settings over earlier changes after Restore defaults', async () => {
+    render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+    const slider = screen.getByLabelText('Fineness') as HTMLInputElement;
+    await waitFor(() => expect(slider.value).toBe('7'));
+    fireEvent.change(slider, { target: { value: '3' } });
+    expect(slider.value).toBe('3');
+    fireEvent.click(screen.getByRole('button', { name: 'Restore defaults' }));
+    await waitFor(() => expect(window.__CFD_MESH_RESTORE_DEFAULTS__).toHaveBeenCalled());
+    await waitFor(() => expect((screen.getByLabelText('Fineness') as HTMLInputElement).value).toBe('7'));
   });
 
   it('shows generating, then ready with cells and nodes, from cfd:mesh-job', async () => {

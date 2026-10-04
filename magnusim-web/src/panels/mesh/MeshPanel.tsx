@@ -3,7 +3,7 @@ import type { RJSFSchema } from '@rjsf/utils';
 import type { RegistryRow } from '../../api/registry.gen';
 import { apiGet } from '../../api/client';
 import { workerRpc } from '../../api/workerRpc';
-import { SchemaForm } from '../../forms/SchemaForm';
+import { SchemaForm, prepareSchemaForm } from '../../forms/SchemaForm';
 import { formatElapsed, useElapsed } from '../../store/jobs';
 import { useProjectStore } from '../../store/project';
 import { dispatchPanelDone, type IslandProps } from '../../islands';
@@ -180,6 +180,24 @@ export function settingsFrom(
   }
   body.mesher_settings = own;
   return body;
+}
+
+/** Keys whose value the user changed: set in `before` (what the form showed) and different in `after`. */
+export function editedKeys(before: Record<string, unknown>, after: Record<string, unknown>): string[] {
+  return Object.keys(before).filter(
+    (key) => before[key] !== undefined && JSON.stringify(before[key]) !== JSON.stringify(after[key]),
+  );
+}
+
+/** Stored form values with the user's edits on top: a late load never takes back what the user changed. */
+export function mergeEdits(
+  stored: Record<string, unknown>,
+  shown: Record<string, unknown>,
+  edited: Iterable<string>,
+): Record<string, unknown> {
+  const next = { ...stored };
+  for (const key of edited) next[key] = shown[key];
+  return next;
 }
 
 export function generateButtonFor(kind: MeshGenerateKind): { text: string; title: string; disabled: boolean } {
@@ -393,12 +411,23 @@ function CopyFromMesh({ copy, meshId, onCopied }: { copy: MeshCopyState; meshId:
 export function MeshSettings(props: IslandProps) {
   const registry = useRegistryReady();
   const rows = meshEngines((registry?.mesher || []) as RegistryRow[]);
-  const [engine, setEngine] = useState('standard');
+  const [engine, setEngineState] = useState('standard');
   const [data, setData] = useState<Record<string, unknown>>({});
   const [meshId, setMeshId] = useState(props.itemId || '');
   const [name, setName] = useState('Mesh 1');
   const [note, setNote] = useState('');
   const live = useRef(data);
+  const engineNow = useRef(engine);
+  // The form opens before the mesh's stored settings arrive. What the user changes in
+  // the meantime is theirs: a load that lands later fills in the rest and keeps it.
+  const edits = useRef({ keys: new Set<string>(), engine: false, name: false });
+  // Until the stored settings arrive the form shows defaults, so nothing is saved yet:
+  // a save then would write those defaults over the stored settings.
+  const loading = useRef<{ done: boolean; wait: Promise<void>; saveAfter: boolean }>({
+    done: false,
+    wait: Promise.resolve(),
+    saveAfter: false,
+  });
   const schema = schemaFor(engine, rows);
   const job = useMeshJob(meshId);
   const copy = useMeshCopy(meshId);
@@ -413,26 +442,53 @@ export function MeshSettings(props: IslandProps) {
     });
   }
 
+  function setEngine(next: string) {
+    engineNow.current = next;
+    setEngineState(next);
+  }
+
   function applyDoc(mesh: MeshDoc | undefined) {
     if (!mesh) return;
     if (mesh.id) setMeshId(String(mesh.id));
-    if (mesh.name || mesh.settings?.name) setName(String(mesh.name || mesh.settings?.name));
+    if ((mesh.name || mesh.settings?.name) && !edits.current.name) setName(String(mesh.name || mesh.settings?.name));
     const settings = mesh.settings || {};
-    setEngine(String(mesh.ui_mesh_engine || settings.advanced?.mesh_engine || 'standard'));
-    const next = formValuesFrom(settings);
+    if (!edits.current.engine) setEngine(String(mesh.ui_mesh_engine || settings.advanced?.mesh_engine || 'standard'));
+    const next = mergeEdits(formValuesFrom(settings), live.current, edits.current.keys);
     live.current = next;
     setData(next);
   }
 
+  /** Show the stored settings as they are: Restore defaults and Copy replace every field. */
+  function forgetEdits() {
+    edits.current = { keys: new Set(), engine: false, name: false };
+  }
+
   function load() {
     const scoped = scopeIds(props);
-    return apiGet('/api/mesh', {
+    const wait: Promise<void> = apiGet('/api/mesh', {
       project_id: scoped.project_id || undefined,
       simulation_id: scoped.simulation_id || undefined,
       mesh_id: scoped.mesh_id || scoped.item_id || undefined,
     })
       .then((j) => applyDoc((j as { mesh?: MeshDoc }).mesh))
-      .catch(() => {});
+      .catch(() => {})
+      .then(() => {
+        if (loading.current.wait !== wait) return;
+        loading.current.done = true;
+        if (loading.current.saveAfter) {
+          loading.current.saveAfter = false;
+          void save(live.current).catch(() => {});
+        }
+      });
+    loading.current = { done: false, wait, saveAfter: loading.current.saveAfter };
+    return wait;
+  }
+
+  /** The form's values once the stored settings are in: what Generate and Done save. */
+  async function loaded(): Promise<Record<string, unknown>> {
+    while (!loading.current.done) await loading.current.wait;
+    loading.current.saveAfter = false;
+    return live.current;
   }
 
   useEffect(() => {
@@ -452,7 +508,7 @@ export function MeshSettings(props: IslandProps) {
     if (job?.name && job.mesh_id && String(job.mesh_id) === String(meshId)) setName(job.name);
   }, [job?.name, job?.mesh_id, meshId]);
 
-  async function save(values: Record<string, unknown>, nextEngine = engine) {
+  async function save(values: Record<string, unknown>, nextEngine = engineNow.current) {
     const scoped = ids();
     const settings = settingsFrom(values, nextEngine, schemaFor(nextEngine, rows));
     const mesh = scoped.mesh_id || meshId || undefined;
@@ -481,7 +537,7 @@ export function MeshSettings(props: IslandProps) {
   async function generate() {
     setNote('');
     try {
-      const settings = await save(live.current);
+      const settings = await save(await loaded());
       await generateMesh({ mesh_id: meshId || undefined, settings });
     } catch (e) {
       setNote(e instanceof Error ? e.message : 'Generate failed to start');
@@ -491,7 +547,9 @@ export function MeshSettings(props: IslandProps) {
   async function restore() {
     setNote('');
     try {
+      forgetEdits();
       await restoreMeshDefaults();
+      forgetEdits();
       await load();
     } catch (e) {
       setNote(e instanceof Error ? e.message : 'Restore defaults failed');
@@ -499,6 +557,7 @@ export function MeshSettings(props: IslandProps) {
   }
 
   async function rename(next: string) {
+    edits.current.name = true;
     setName(next);
     try {
       setName(await renameMesh(next));
@@ -508,7 +567,9 @@ export function MeshSettings(props: IslandProps) {
   }
 
   function done() {
-    void save(live.current).catch(() => {});
+    void loaded()
+      .then((values) => save(values))
+      .catch(() => {});
     dispatchPanelDone();
   }
 
@@ -534,8 +595,10 @@ export function MeshSettings(props: IslandProps) {
           value={engine}
           onChange={(e) => {
             const next = e.target.value;
+            edits.current.engine = true;
             setEngine(next);
-            void save(live.current, next);
+            if (loading.current.done) void save(live.current, next);
+            else loading.current.saveAfter = true;
           }}
         >
           {rows.map((row) => (
@@ -552,7 +615,16 @@ export function MeshSettings(props: IslandProps) {
     <div data-mesh-settings-panel="1">
       <MeshTitle name={name} onRename={rename} />
       <div className="mat-panel-body">
-        {copy ? <CopyFromMesh copy={copy} meshId={meshId} onCopied={() => void load()} /> : null}
+        {copy ? (
+          <CopyFromMesh
+            copy={copy}
+            meshId={meshId}
+            onCopied={() => {
+              forgetEdits();
+              void load();
+            }}
+          />
+        ) : null}
         <div className="mat-row">
           <span className="mat-k">Algorithm</span>
           <span className="mat-v" data-mesh-algorithm="1">
@@ -569,13 +641,16 @@ export function MeshSettings(props: IslandProps) {
           hideFooter
           advancedExtra={engineRow}
           onLive={(values) => {
+            // Against what the form showed: the stored values, or the schema's defaults before they load.
+            const shown = prepareSchemaForm(schema, live.current).formData;
+            for (const key of editedKeys(shown, values)) edits.current.keys.add(key);
             live.current = values;
             setData(values);
           }}
-          onCommit={(values) => {
-            live.current = values;
-            setData(values);
-            void save(values);
+          onCommit={() => {
+            // The form's values as they are now: a load may have landed since this change.
+            if (loading.current.done) void save(live.current);
+            else loading.current.saveAfter = true;
           }}
         />
         <div className="mesh-generate-row">
