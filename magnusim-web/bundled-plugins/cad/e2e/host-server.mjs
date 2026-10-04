@@ -2,8 +2,8 @@
 // app's own startHost() (magnusim-web/e2e/support/host-server.mjs): a fresh
 // projects root and prefs in a temp folder, no user plugins, a free port with
 // +11..+13 free too, a private Vite dependency cache (.cache/host-vite here), CAD
-// turned on before the first load (it ships off; the P1 gate's off-by-default
-// test forgets that choice itself), and no sweep of WSL's cases.
+// at its manifest default (it ships on, D33: nothing turns it on), and no sweep of
+// WSL's cases.
 //
 //   node e2e/host-server.mjs [--port N] [--lock FILE] [--plugins-dir DIR]
 //     CAD_E2E_PORT_FROM: the lowest base port tried (default 8170).
@@ -39,8 +39,6 @@ export async function startHostServer({ port, lock = process.env.CAD_E2E_LOCK ||
     ...(port ? { port } : { portFrom: Number(process.env.CAD_E2E_PORT_FROM) || 8170 }),
     keepFree: KEEP_FREE,
     ...(pluginsDir ? { pluginsDir } : {}),
-    // CAD ships off (manifest default_enabled = false): on before the page first loads.
-    enablePlugins: ['cad'],
     viteCacheDir: resolve(PLUGIN_DIR, '.cache', 'host-vite'),
     lock,
     // No WSL meshes or solves here, and never a sweep of this PC's real WSL cases

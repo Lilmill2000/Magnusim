@@ -12,8 +12,8 @@ export function baseUrl(): string {
 
 /**
  * A new, empty project (API: the same route the Home page's New project uses).
- * CAD ships off (manifest default_enabled = false): unless `cadOff`, it is
- * turned on first, the way Settings' Enable does, so "+ New Part" is there.
+ * CAD ships on (D33); unless `cadOff`, it is turned on again first when a test
+ * turned it off (the way Settings' Enable does), so the Part's places are there.
  */
 export async function newProject(request: APIRequestContext, title = `CAD e2e ${Date.now()}`, opts: { cadOff?: boolean } = {}): Promise<string> {
   if (!opts.cadOff) await ensureCadOn(request);
@@ -60,14 +60,35 @@ export async function openProject(page: Page, projectId: string) {
  */
 export async function newPartFromTree(page: Page, title = 'Part 1', { offered = 'Part 1' }: { offered?: string } = {}) {
   const btn = page.locator('#plugin-studies-section [data-plugin-study-new="cad:part"]');
-  await expect(btn).toHaveText('+ New Part');
-  await btn.click();
-  const modal = page.locator('#modal-prompt');
-  await expect(modal).toBeVisible();
-  await expect(page.locator('#pm-input')).toHaveValue(offered);
-  await page.locator('#pm-input').fill(title);
-  await page.locator('#pm-confirm').click();
-  await expect(modal).toBeHidden();
+  // CAD's start action has a header button (D33): STUDIES shows once the project has a study,
+  // so the first Part comes from the header's "CAD" menu (no name prompt: the app names it
+  // "Part N"), renamed in the workspace header when the test wants another title.
+  await page.waitForFunction(() => (window as unknown as { __CFD_PLUGINS_READY__?: boolean }).__CFD_PLUGINS_READY__ === true, null, { timeout: 60_000 }).catch(() => {});
+  const header = page.locator('#ws-start-host [data-start-header="cad:part"]');
+  await expect(btn.or(header.locator('> button')).first()).toBeVisible({ timeout: 30_000 });
+  if (await btn.isVisible()) {
+    await expect(btn).toHaveText('+ New Part');
+    await btn.click();
+    const modal = page.locator('#modal-prompt');
+    await expect(modal).toBeVisible();
+    await expect(page.locator('#pm-input')).toHaveValue(offered);
+    await page.locator('#pm-input').fill(title);
+    await page.locator('#pm-confirm').click();
+    await expect(modal).toBeHidden();
+  } else {
+    await expect(header.locator('> button')).toHaveText('CAD');
+    await header.locator('> button').click();
+    await header.locator('[role="menu"] [data-start-new="cad:part"]').click();
+    await expect(page.locator('#workspace-overlay')).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator('#workspace-overlay [data-ws-title]')).toHaveText(offered, { timeout: 60_000 });
+    if (title !== offered) {
+      await page.locator('#workspace-overlay [data-ws-title]').click();
+      await expect(page.locator('#pm-input')).toHaveValue(offered);
+      await page.locator('#pm-input').fill(title);
+      await page.locator('#pm-confirm').click();
+      await expect(page.locator('#modal-prompt')).toBeHidden();
+    }
+  }
   const row = page.locator('#plugin-studies-section li[data-plugin="cad"]').filter({ has: page.locator('.tl', { hasText: title }) });
   await expect(row).toHaveCount(1);
   const studyId = await row.getAttribute('data-plugin-study');
@@ -161,7 +182,7 @@ export const historyState = (frame: Frame) =>
     .locator('[data-cad-tree] [data-feature-row]')
     .evaluateAll((rows) => rows.map((r) => (r.querySelector(':scope > .tree-row .tl')?.textContent ?? '') + (r.getAttribute('data-suppressed') === '1' ? ' (S)' : '')).join(', '));
 
-// ---- host API 1.2 (P1.5): CAD ships off; leaving with unsaved work asks
+// ---- host API 1.2 (P1.5): CAD can be turned off and on (it ships on, D33); leaving with unsaved work asks
 
 /** CAD's row in GET /api/plugins (null when it is not listed). */
 export async function cadPluginRow(request: APIRequestContext): Promise<Record<string, unknown> | null> {
@@ -169,7 +190,10 @@ export async function cadPluginRow(request: APIRequestContext): Promise<Record<s
   return ((list.plugins || []) as Record<string, unknown>[]).find((p) => p.key === 'cad') ?? null;
 }
 
-/** Turn CAD on the way Settings' Enable does (POST /api/plugins/cad/enable), then reload the registry. */
+/**
+ * CAD on, the way Settings' Enable does (POST /api/plugins/cad/enable), then reload the registry.
+ * It ships on (D33): this only matters after a test turned it off.
+ */
 export async function ensureCadOn(request: APIRequestContext): Promise<void> {
   const row = await cadPluginRow(request);
   if (row && row.status === 'enabled') return;
@@ -183,9 +207,9 @@ export async function ensureCadOn(request: APIRequestContext): Promise<void> {
 /**
  * Put CAD back the way a fresh install has it: no choice remembered on this PC
  * (neither plugins.enabled nor plugins.disabled names it in the server's local
- * JSON), then reload the registry. CAD is then off by its manifest alone; the
- * caller asserts that from what the user sees first (Settings > Plugins), then
- * from the API (P1.5 review round 1: the check here failed before any of it).
+ * JSON), then reload the registry. CAD is then on by its manifest alone (D33); the
+ * caller asserts that from what the user sees first (the header, Settings >
+ * Plugins), then from the API (P1.5 review round 1: the check here failed before any of it).
  */
 export async function resetCadToDefault(request: APIRequestContext): Promise<void> {
   const prefs = process.env.CAD_E2E_PREFS;

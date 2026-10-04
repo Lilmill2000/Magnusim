@@ -609,10 +609,13 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   `window.__CAD__.snapshot()` is for state checks only. Every bug gets its own
   e2e test.
 - Phase exit gates: `e2e/cad-p1-document.spec.js` is P1's (proposal §7, one
-  test per bullet), against host API 1.2: CAD is Off on a fresh install
-  (`resetCadToDefault()` forgets the choice in the server's prefs) and turned
-  on in Settings; every other spec turns it on through the same endpoint
-  (`newProject()` calls `ensureCadOn()`). Review round 1 added its blockers
+  test per bullet), against host API 1.2: CAD is On on a fresh install (it
+  ships on since D33; `resetCadToDefault()` forgets the choice in the server's
+  prefs), then turned off and on in Settings; every other spec turns it on again
+  through the same endpoint when a test turned it off (`newProject()` calls
+  `ensureCadOn()`). A fresh project has no STUDIES section while CAD's kind
+  opens from its header button, so `newPartFromTree()` makes the first Part from
+  the header's "CAD" menu (and renames it when the test wants another title). Review round 1 added its blockers
   there (save chip, leaving with a save on its way, keys, long names); round 2
   the side Back button, the twisty clicks and the Settings description; round 3
   the Operation row, the P1 move and the reload read with `ws.files`. Leaving
@@ -713,9 +716,15 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   `geometry` event, the study record's reserved `source_version`, and the
   manifest's `links_geometry = true` on the Part study kind (§11).
 - Host API 1.6 (L3): the exit hook `ws.nav.onLeave` and the camera it returns
-  (`ViewState`, §11). `manifest.toml` declares `api_version = "1.6"`. Start
-  actions are not used yet (Daniel's D33: CAD goes default-on with start actions
-  after gate:l3-cad, a step of its own).
+  (`ViewState`, §11). `manifest.toml` declares `api_version = "1.6"`.
+- Host API 1.4 start actions, CAD on by default (Daniel's D33, after gate:l3-cad;
+  the core half is 60bb971): no `default_enabled = false`, and one
+  `[[start_actions]]` for the Part kind: "Design a part" on the empty project and
+  in New Project's "Start from", "New design" on Home, and the header button
+  "CAD" (all four places). The header button takes the kind out of the
+  Workspaces menu, and STUDIES shows once the project has a Part
+  (`e2e/cad-start.spec.ts`; the app's `e2e/start-actions-bundled.spec.js` reads
+  the manifest).
 - After a leave that linked nothing (a refused link answered "Leave anyway", or
   no body included) the app reads its tree again (host fix 253d6a4): the
   geometry's row says "Not up to date with Part 1." at once, with no tick
@@ -730,13 +739,15 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   page's own CSS (so CAD's rules win a tie). `manifest.toml` declares
   `api_version = "1.6"` since L3 (above).
 - In the host since 42e38c6 (API 1.2): **G1** `ws.files` with etags,
-  **G7** focus on connect and `nav.setDirty`, **G11** `default_enabled = false`
-  (CAD ships off), **G12** the boundary checker skips `node_modules` and dot
-  folders.
-- CAD ships off, so the registry goldens (`npm run gen:registry:check`),
-  `python/tests/unit/test_registry_dump.py` and the core h5 / h11 / h13 / g11
-  specs pass unchanged with it in `bundled-plugins/` (checked in P1.5). The
-  plugin's first commit still adds CI jobs (`cad-plugin`, `core-without-cad`),
+  **G7** focus on connect and `nav.setDirty`, **G11** `default_enabled` (CAD
+  shipped off with it until D33), **G12** the boundary checker skips
+  `node_modules` and dot folders.
+- CAD ships on, so the generated registry (`docs/plugins/registry.json`,
+  `scripts/generated/registry.json`) has a `cad` row: `npm run gen:registry`
+  writes it, in the same commit as the flip. The core tests that count plugins,
+  kinds or header buttons run against the required plugins only (the core half
+  60bb971: `requiredBundledDir`, `bundled_manifests.py`), so they pass with CAD
+  on. The plugin's first commit still adds CI jobs (`cad-plugin`, `core-without-cad`),
   the root `ROADMAP.md` entries (the "come back to later" list) and
   `THIRD_PARTY_NOTICES.md`.
 - The workspace frame is `sandbox="allow-scripts allow-downloads"`

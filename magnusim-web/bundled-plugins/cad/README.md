@@ -2,9 +2,12 @@
 
 A parametric part modeler (SolidWorks and Fusion style) that runs as
 Magnusim's **Part** workspace. It is an optional bundled plugin that ships
-off (`default_enabled = false`): until someone turns it on in Settings >
-Plugins (Enable), nothing of it runs and projects look as they did. Once on, a
-project's STUDIES section offers **+ New Part**, and a Part opens in its own
+on (Daniel's D33); Settings > Plugins turns it off (Disable), and then nothing
+of it runs. A new Part starts from **Design a part** on an empty project or in
+the New Project dialog's "Start from", from **New design** on Home (New Project
+with "Untitled Part N", one Create), or from the header's **CAD** button (its
+menu lists the project's Parts and makes a new one); once a project has a Part,
+its STUDIES section lists it and offers **+ New Part**. A Part opens in its own
 full-page workspace over the workbench. Today (phases P1-P3 and the SD pass) a
 Part is made of sketches (lines, rectangles, circles, arcs; dimensions and
 constraints solved as you draw) extruded as new bodies or joined, cut or
@@ -96,10 +99,11 @@ CAD_E2E_VORTEX_STEP=<path> npm run test:gate:l3-cad   # exit sync (L3): the exit
   `magnusim-web/e2e/support/host-server.mjs`: a temp projects root and prefs,
   no user plugins, a free port from 8170 (or `CAD_E2E_PORT_FROM`) with
   +11..+13 also free, a private Vite dependency cache in `.cache/host-vite`, no
-  WSL meshes or solves and no sweep of WSL's cases). CAD ships off: the server
-  starts with it turned on (as Settings' Enable leaves it), the tests turn it on
-  the same way when a test turned it off, and the P1 gate's first test forgets
-  the choice and checks it is Off on a fresh install. Set
+  WSL meshes or solves and no sweep of WSL's cases). CAD ships on: the server
+  starts with CAD at its manifest default, the tests turn it on again (as
+  Settings' Enable does) when a test turned it off, and the P1 gate's first test
+  forgets the choice and checks it is On on a fresh install, then Disable and
+  Enable. `e2e/cad-start.spec.ts` clicks each place the start action is offered. Set
   `CAD_E2E_BASE_URL` to use a server that is already running, or
   `CAD_E2E_LOCK=<file>` to share one server between several runs (a live
   server named in the lock is reused, and its prefs file comes from the lock).

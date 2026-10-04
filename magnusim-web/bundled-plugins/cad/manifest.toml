@@ -9,9 +9,8 @@ version = "0.1.0"
 api_version = "1.6"
 tier = "bundled"
 required = false
-# Ships off: nothing of CAD runs, and existing projects look unchanged, until
-# someone turns it on in Settings > Plugins (host API 1.2, G11).
-default_enabled = false
+# Ships on (Daniel's D33): an optional bundled plugin, on by default. Settings >
+# Plugins turns it off (and on again); off, nothing of CAD runs.
 license = "GPL-3.0-or-later"
 description = "Parametric parts in their own workspace: sketches with dimensions and constraints, extruded into solids, booleans, an enclosure around the part for CFD, named parameters, and STEP import, editing and export."
 authors = ["Magnusim"]
@@ -39,3 +38,13 @@ schema_version = 1
 # A Part may link one project geometry (host API 1.5): its design becomes a
 # geometry the simulation side uses, and later versions of it update it.
 links_geometry = true
+
+# Where a new Part starts (host API 1.4, D33): "Design a part" on an empty project
+# and in the New Project dialog's "Start from", "New design" on Home, and the
+# header's "CAD" button (its menu lists the Parts and makes a new one).
+[[start_actions]]
+study_kind = "part"
+label = "Design a part"
+places = ["empty_project", "header", "new_project", "home"]
+home_label = "New design"
+header_label = "CAD"

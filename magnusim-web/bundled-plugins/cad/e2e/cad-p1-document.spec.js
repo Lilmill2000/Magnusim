@@ -2,13 +2,16 @@
 // and its document as a user meets them, in the real host with the real kernel.
 // Every exit bullet is a test below; each asserts what the user sees (tree text,
 // chips, computed styles, viewport pixels, the host's own rows and dialogs).
-// The host has API 1.2 (42e38c6): CAD ships off (G11), the model is kept with
-// ws.files and etags (G1), and unsaved work makes every way out ask (G7).
+// The host has API 1.2 (42e38c6): an optional bundled plugin can ship on or off
+// (G11; CAD ships on since D33), the model is kept with ws.files and etags (G1),
+// and unsaved work makes every way out ask (G7).
 //
-//   1. CAD is Off in Settings > Plugins on a fresh install, with Enable, and an
-//      existing project looks unchanged (no STUDIES, no Workspaces menu, its
-//      workspace files not served). Enable there -> STUDIES "+ New Part" opens
-//      the workspace; the tree shows Top / Front / Right plane and "No features yet".
+//   1. CAD is On in Settings > Plugins on a fresh install (no ship-off hint, with
+//      Disable), its workspace files are served, and an existing project offers it
+//      in the header ("CAD"; STUDIES stays hidden until the project has a Part).
+//      Disable there -> the header button goes and the files are not served;
+//      Enable -> back. "+ New Part" opens the workspace; the tree shows Top /
+//      Front / Right plane and "No features yet".
 //   2. A 20 x 20 rectangle sketched on Top (Sketch, R, the size typed), Extrude ->
 //      flyout "Extrude 1" -> 20 mm, Done -> "Bodies (1)" and the volume chip (8000
 //      mm³); a circle extruded with Cut -> volume = block - the overlap (analytic).
@@ -247,49 +250,60 @@ const styleOf = (loc, props) =>
 const heightOf = async (loc) => Math.round((await loc.first().boundingBox()).height);
 
 test.beforeEach(async ({ request }, info) => {
-  // The first test meets CAD off, as a fresh install has it, and turns it on in Settings (bullet 1).
+  // The first test meets CAD as a fresh install has it (on, D33), and turns it off and on in Settings (bullet 1).
   if (!/p1-document-open/.test(info.title)) await ensureCadOn(request);
 });
 
 // ---------------------------------------------------------------- 1-5
 
-test('cad:p1-document-open CAD ships off; Enable in Settings; "+ New Part" opens the workspace; a sketch extruded, a Cut, undo/redo, suppress, rollback, reopen', async ({ page, request }) => {
+test('cad:p1-document-open CAD ships on; Disable and Enable in Settings; "+ New Part" opens the workspace; a sketch extruded, a Cut, undo/redo, suppress, rollback, reopen', async ({ page, request }) => {
   const seen = await watchPage(page);
-  // 1. A fresh install: CAD's choice is not remembered on this PC, so its manifest's default_enabled = false holds.
+  // 1. A fresh install: CAD's choice is not remembered on this PC, so its manifest's default holds: on (D33).
   await resetCadToDefault(request);
   // What the user sees first (P1.5 review round 1: these come before the API's own checks).
-  // An existing project looks as it did before CAD shipped: no STUDIES section, no Workspaces menu.
+  // An existing project offers CAD in the header ("CAD", its menu makes a Part); with no Part
+  // yet, STUDIES stays hidden (the kind opens from the header button) and so does the
+  // Workspaces menu (CAD's kind is a header button).
   await openProject(page, SAMPLE_PROJECT);
   await expect(page.locator('#left-tree')).toBeVisible();
+  const cadHeader = page.locator('#ws-start-host [data-start-header="cad:part"] > button');
+  await expect(cadHeader).toHaveText('CAD');
   await expect(page.locator('#plugin-studies-section')).toBeHidden();
-  await expect(page.locator('#plugin-studies-section [data-plugin-study-new="cad:part"]')).toHaveCount(0);
   await expect(page.locator('#btn-workspaces')).toHaveCount(0);
-  // Settings > Plugins: CAD is Off, says it ships off, and offers Enable.
+  // Settings > Plugins: CAD is On, with no ship-off hint, and offers Disable.
   const step = await openSettingsPlugins(page);
   const cadRow = step.locator('[data-plugin-key="cad"]');
   await expect(cadRow.locator('.wiz-pref-copy > strong')).toHaveText('Magnusim CAD v0.1.0 · bundled');
+  await expect(cadRow.locator('.wiz-plugin-status')).toHaveText('On');
+  await expect(cadRow.locator('[data-plugin-optional-hint]')).toHaveCount(0);
+  await expect(cadRow.locator('[data-plugin-toggle="cad"]')).toHaveText('Disable');
+  await expect(cadRow).toHaveAttribute('data-plugin-status', 'enabled');
+  await expect(cadRow).not.toHaveAttribute('data-plugin-default-off', /.*/);
+  await shot(page, 'p15-settings-cad-on');
+  // The same from the API: on by its manifest alone, and its workspace files are served.
+  const fresh = await cadPluginRow(request);
+  expect(fresh).toMatchObject({ status: 'enabled' });
+  expect(fresh.default_enabled).not.toBe(false);
+  expect((await request.get(`${baseUrl()}/plugins/cad/workspace/index.html`)).status()).toBe(200);
+  // Disable: off at once, remembered; its files are not served, and the header button goes.
+  await cadRow.locator('[data-plugin-toggle="cad"]').click();
+  await expect(cadRow).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 });
   await expect(cadRow.locator('.wiz-plugin-status')).toHaveText('Off');
-  await expect(cadRow.locator('[data-plugin-optional-hint]')).toHaveText('Ships with Magnusim and stays off until you turn it on.');
   await expect(cadRow.locator('[data-plugin-toggle="cad"]')).toHaveText('Enable');
-  await expect(cadRow).toHaveAttribute('data-plugin-status', 'disabled');
-  await expect(cadRow).toHaveAttribute('data-plugin-default-off', '1');
-  await shot(page, 'p15-settings-cad-off');
-  // The same from the API: off by its manifest alone, and its workspace files are not served.
-  expect(await cadPluginRow(request)).toMatchObject({ status: 'disabled', default_enabled: false });
+  await expect(cadRow.locator('[data-plugin-optional-hint]')).toHaveCount(0);
+  expect(await cadPluginRow(request)).toMatchObject({ status: 'disabled' });
   expect((await request.get(`${baseUrl()}/plugins/cad/workspace/index.html`)).status(), 'workspace files are not served while off').toBe(404);
-  // Enable: on at once, remembered, and the hint goes.
+  await expect(cadHeader).toHaveCount(0, { timeout: 30_000 });
+  // Enable: on again at once.
   await cadRow.locator('[data-plugin-toggle="cad"]').click();
   await expect(cadRow).toHaveAttribute('data-plugin-status', 'enabled', { timeout: 30_000 });
   await expect(cadRow.locator('.wiz-plugin-status')).toHaveText('On');
   await expect(cadRow.locator('[data-plugin-toggle="cad"]')).toHaveText('Disable');
-  await expect(cadRow.locator('[data-plugin-optional-hint]')).toHaveCount(0);
   await page.locator('#wiz-next').click();
   await expect(page.locator('#setup-wizard')).toBeHidden();
-  // The same project now offers Parts.
-  await expect(page.locator('#plugin-studies-section')).toBeVisible();
-  await expect(page.locator('#plugin-studies-section [data-plugin-study-new="cad:part"]')).toHaveText('+ New Part');
-  await expect(page.locator('#btn-workspaces')).toBeVisible();
-  await shot(page, 'p15-studies-new-part');
+  // The same project offers Parts again.
+  await expect(cadHeader).toHaveText('CAD', { timeout: 30_000 });
+  await shot(page, 'p15-header-cad');
   expect(await cadPluginRow(request)).toMatchObject({ status: 'enabled', files: { max_file_bytes: 512 * 1024 * 1024, max_total_bytes: 4096 * 1024 * 1024 } });
   expect((await request.get(`${baseUrl()}/plugins/cad/workspace/index.html`)).status()).toBe(200);
 
@@ -732,6 +746,26 @@ const FOOT = ['display', 'justify-content', 'align-items', 'gap', 'margin-top', 
 const DONE = ['font-size', 'font-weight', 'font-family', 'color', 'line-height', 'background-color', 'border-top-color', 'border-top-width', 'border-top-style', 'border-top-left-radius', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'min-width', 'cursor'];
 const DELETE = ['font-size', 'font-weight', 'font-family', 'color', 'line-height', 'background-color', 'border-top-width', 'padding-top', 'padding-left', 'text-decoration-line', 'cursor'];
 
+/**
+ * The core's empty state (".sim-empty", STUDIES' "No study yet"). Since D33 STUDIES cannot show it
+ * in a project with no study (CAD's kind opens from its header button, host API 1.4), so then the
+ * same class is measured in the core's own list (#simulations-section), where the core's CSS gives it.
+ */
+async function coreEmptyStyle(page) {
+  const row = page.locator('#plugin-studies-section [data-plugin-studies-empty]');
+  if (await row.count()) return styleOf(row, EMPTY);
+  return page.locator('#simulations-section .tree-root').first().evaluate((ul, names) => {
+    const li = document.createElement('li');
+    li.className = 'sim-empty';
+    li.textContent = 'No study yet';
+    ul.appendChild(li);
+    const s = getComputedStyle(li);
+    const out = Object.fromEntries(names.map((n) => [n, s.getPropertyValue(n)]));
+    li.remove();
+    return out;
+  }, EMPTY);
+}
+
 test('cad:p1-document-parity tree rows, the flyout panel and Done match the core LeftTree and PanelChrome', async ({ page, request }) => {
   // ---- The core, read now: the sample project's tree and its Geometry flyout (PanelChrome).
   await openProject(page, SAMPLE_PROJECT);
@@ -751,7 +785,7 @@ test('cad:p1-document-parity tree rows, the flyout panel and Done match the core
     leafH: await heightOf(coreLeaf),
     twisty: await styleOf(coreFolder.locator('.tw'), TWISTY),
     label: await styleOf(coreLeaf.locator('.tl'), LABEL),
-    empty: await styleOf(page.locator('#plugin-studies-section [data-plugin-studies-empty]'), EMPTY),
+    empty: await coreEmptyStyle(page),
   };
   await coreLeaf.hover();
   core.hover = (await styleOf(coreLeaf, ['background-color']))['background-color'];
