@@ -13,6 +13,8 @@
     "test:watch": "vitest",
     "test:kernel": "vitest run tests/kernel/kernel-",
     "test:e2e": "node scripts/e2e.mjs",
+    "test:gate:l2-cad": "node scripts/gate-l2-cad.mjs",
+    "test:gate:l3-cad": "node scripts/gate-l3-cad.mjs",
     "serve:host": "node e2e/host-server.mjs",
     "check": "npm run typecheck && npm run test && npm run build"
   },

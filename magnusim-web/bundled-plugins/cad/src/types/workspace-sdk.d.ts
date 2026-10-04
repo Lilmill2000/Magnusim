@@ -19,7 +19,7 @@ declare module '@magnusim/workspace' {
    * Self-contained: no imports, so the host can serve it to any frame.
    */
   /** The bridge's version; a host accepts a workspace built for the same major version. */
-  export const SDK_VERSION = "1.1.0";
+  export const SDK_VERSION = "1.3.0";
   /** A project-level study record (plugins/<key>/studies/<sid>/study.json) plus the plugin's own fields. */
   export interface StudyRecord {
       id: string;
@@ -32,6 +32,13 @@ declare module '@magnusim/workspace' {
       plugin_version: string;
       created_at: string;
       updated_at: string;
+      /**
+       * Reserved (host 1.5): the version of the design this study saved last. A linking
+       * plugin writes it with study.update after each save; the host only reads it, and
+       * the linked geometry's row says "Not up to date" while it is newer than the
+       * version the geometry was last updated from.
+       */
+      source_version?: number;
       [field: string]: unknown;
   }
   export type UnitSystem = 'metric' | 'imperial';
@@ -51,10 +58,11 @@ declare module '@magnusim/workspace' {
       units: UnitSystem;
       theme: ThemeInfo;
       /**
-       * The host's bridge API version ("1.3"). To use a call a later host added,
-       * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2), or
-       * catch the refusal: an older host rejects a call it does not know with
-       * code "not_allowed".
+       * The host's bridge API version ("1.6"). To use a call a later host added,
+       * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2,
+       * ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5,
+       * ws.nav.onLeave 1.6), or catch the refusal: an older host
+       * rejects a call it does not know with code "not_allowed".
        */
       hostVersion: string;
   }
@@ -62,6 +70,229 @@ declare module '@magnusim/workspace' {
       event: string;
       [field: string]: unknown;
   }
+  /** A WSL step a plugin case may run before its solver (host 1.3; compatibility.md lists their arguments). */
+  export type PreTool = 'blockMesh' | 'gmshToFoam' | 'surfaceFeatureExtract' | 'snappyHexMesh' | 'extrudeMesh' | 'changeDictionary' | 'createPatch' | 'checkMesh' | 'renumberMesh' | 'decomposePar' | 'reconstructParMesh';
+  /**
+   * One WSL step. `parallel: true` runs it with `mpirun -np N … -parallel`, only
+   * between a decomposePar step and the reconstructParMesh step after it, and
+   * only for the tools that can run in parallel.
+   */
+  export interface PreStep {
+      tool: PreTool;
+      args?: string[];
+      parallel?: boolean;
+  }
+  /** A case the page wrote in its study's folder, to run with OpenFOAM in WSL (host 1.3). */
+  export interface SubmitOpenFOAM {
+      /** The case folder inside this study's folder ("cases/c1"). It must not have run before. */
+      caseRel: string;
+      /** The solver application, as system/controlDict names it; a registered solver. */
+      app: string;
+      /** Ranks for a parallel solve and parallel steps (1 to 64; the host clamps it to the PC). */
+      nProcs?: number;
+      pre?: PreStep[];
+      results: {
+          /** Fields the solver writes divided by density; shown multiplied by rho. */
+          kinematicFields: string[];
+          rho?: number;
+          /** Fields copied back for each saved frame (default U and p). */
+          frameFields?: string[];
+      };
+  }
+  export type ComputeStatus = 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'lost';
+  /** A plugin case as the page sees it: no paths. */
+  export interface ComputeJob {
+      id: string;
+      caseRel: string;
+      app: string;
+      nProcs: number;
+      status: ComputeStatus;
+      /** Where a running case is (pre_copy_in, solve, copy, stopping, …); null before it starts. */
+      stage: string | null;
+      /** A stop was asked for and the case has not ended yet. */
+      stopping: boolean;
+      /** How many jobs run or wait before it, or null when it is not queued. */
+      ahead: number | null;
+      createdAt: string | null;
+      startedAt: string | null;
+      finishedAt: string | null;
+      error: string | null;
+      /** Why it was refused or did not finish ("has_results", "launch", "lost", …). */
+      code: string | null;
+      /** Once it has ended: the saved frames' times, the last one, seconds per phase, and how the solver wrote its fields. */
+      result: {
+          savedTimes: number[];
+          lastSaved: number | null;
+          phases: Record<string, number>;
+          writeFormat: string | null;
+      } | null;
+      /** The last event's number. */
+      seq: number;
+  }
+  /** A file the page wrote in its study's folder (host 1.5): its hash, or the etag ws.files.stat gave. */
+  export interface LinkFile {
+      /** Its path from the plugin's folder, under studies/<this study>/. */
+      rel: string;
+      /** What ws.files.write returned; or `etag` (exactly one of the two). */
+      sha256?: string;
+      /** What ws.files.stat returned, for a file the plugin's backend wrote. */
+      etag?: string;
+  }
+  export interface LinkShape extends LinkFile {
+      /** 1.5 reads only 'brep': an OCCT BREP, binary (BinTools) or text (BRepTools). */
+      format: 'brep';
+  }
+  export type LinkStage = 'queued' | 'reading' | 'meshing' | 'naming' | 'matching' | 'waiting' | 'saving' | 'finishing';
+  /** A face (or body) assignment an update could not place, kept on its record (host 1.5). */
+  export interface LostFace {
+      studyId: string;
+      studyTitle: string;
+      kind: 'bc' | 'material' | 'result_control' | 'refinement' | 'mesh_doc' | 'run_doc' | 'run_result_control';
+      /** The record's registry key (its BC kind, result-control kind or mesher); a plugin's own kinds show here. */
+      registryKey: string | null;
+      /** The record's name. */
+      item: string;
+      /** The field, e.g. "faces" or "assigned_volumes". */
+      field: string;
+      /** The label it had ("face 12@Body1"), or a body label ("Body1"). */
+      old: string;
+      /** The face or body name it had (the match key). */
+      name: string | null;
+      /** The display label it had, when the sidecar gave one. */
+      label: string | null;
+      reason: 'gone' | 'claimed_twice' | 'held_elsewhere' | 'stale';
+  }
+  /** A face that boundary conditions of one study claimed after their faces merged: nobody keeps it until the user picks. */
+  export interface ClaimedTwice {
+      studyId: string;
+      studyTitle: string;
+      /** The new host face label, e.g. "face 7@Body1". */
+      target: string;
+      name: string | null;
+      label: string | null;
+      /** The boundary conditions that claimed it. */
+      items: string[];
+  }
+  export interface LinkOptions {
+      /** Required: one compound of solids, in mm. */
+      shape: LinkShape;
+      /** The face-name sidecar (magnusim_sdk.link.write_face_names writes it). */
+      faceNames?: LinkFile;
+      /** The plugin's own version of the SAVED design: a whole number that never goes down. */
+      sourceVersion: number;
+      /** The geometry rev this page last read (linkedGeometry().rev); null before the first link. */
+      basedOnRev: number | null;
+      /** The geometry's name; the default is the study's title. */
+      name?: string;
+      /**
+       * The camera the project's viewport lands with when the workspace closes (host 1.6). It
+       * stays in the app's page and is never sent to the server; the exit hook's own `view`
+       * (nav.onLeave) replaces it when it comes later. After "Continue in background" the
+       * page closes before its hook returns: only this view lands. A bad view is dropped.
+       */
+      view?: ViewState;
+      /** Called as the update moves through its stages (queued with the jobs ahead of it). */
+      onProgress?: (p: {
+          stage: LinkStage;
+          fraction: number | null;
+          label?: string;
+          ahead?: number;
+      }) => void;
+  }
+  export interface LinkResult {
+      geometryId: string;
+      name: string;
+      rev: number;
+      fromRev: number | null;
+      /** This call made the geometry: a first link, or the user chose "Save as new geometry" (a new geometryId). */
+      created: boolean;
+      /**
+       * none: nothing but sourceVersion recorded; names: names or colours only, the rev
+       * kept; faces: the same shape but lost faces came back by name (rev + 1); shape: rev + 1.
+       */
+      change: 'none' | 'names' | 'faces' | 'shape';
+      bodies: number;
+      faces: number;
+      /** Faces that carry a name from the sidecar. */
+      named: number;
+      match: {
+          byName: number;
+          byShape: number;
+          split: number;
+          merged: number;
+          movedFar: number;
+      };
+      /** Assignments this update could not place. */
+      lost: LostFace[];
+      /** Lost assignments that came back with this update. */
+      returned: LostFace[];
+      /** Open lost entries on this geometry's records after this update. */
+      stillLost: number;
+      claimedTwice: ClaimedTwice[];
+      outOfDate: {
+          meshes: {
+              studyId: string;
+              studyTitle: string;
+              meshId: string;
+              meshName: string;
+          }[];
+          runs: number;
+      };
+      seconds: number;
+  }
+  /** The project geometry this study links, as the host has it. */
+  export interface LinkedGeometry {
+      geometryId: string;
+      name: string;
+      rev: number;
+      sourceVersion: number;
+      shapeSha256: string;
+      namesSha256: string | null;
+      syncedAt: string;
+      state: 'ok' | 'queued' | 'updating' | 'failed';
+      error: string | null;
+      lostFaces: number;
+  }
+  /**
+   * A camera (host 1.6), the same for every plugin: model mm in the frame of the exported
+   * shape (the BREP has no transform), Z up as the app's viewport. `fovDeg` is the vertical
+   * angle of a perspective view (as three.js PerspectiveCamera.fov); `height` is the full
+   * visible height in mm of an orthographic one. The app's window has another width, so the
+   * sides crop differently; the vertical extent matches.
+   */
+  export interface ViewState {
+      position: [number, number, number];
+      target: [number, number, number];
+      up: [number, number, number];
+      projection: 'perspective' | 'orthographic';
+      fovDeg?: number;
+      height?: number;
+  }
+  /**
+   * Why the user leaves the workspace (host 1.6): the header's Back (`back`), the page's own
+   * nav.back() (`frame-back`), the browser's Back or Forward or a typed link (`history`),
+   * another project (`project`), Home (`home`), or results.openIn3D (`results`).
+   */
+  export type LeaveReason = 'back' | 'frame-back' | 'history' | 'project' | 'home' | 'results';
+  /** What an exit hook gets (host 1.6). */
+  export interface LeaveEvent {
+      reason: LeaveReason;
+      /** Aborted when the user cancels or stays, or the hook stalls (30 s with no progress and no call). */
+      signal: AbortSignal;
+      /** Say how far it is (0 to 1, or null) and what it does: shown in the workspace header. */
+      progress(fraction: number | null, label?: string): void;
+  }
+  /**
+   * An exit hook (host 1.6): save the design, then link it (ws.project.linkGeometry), then
+   * return. The camera it returns is the one the project's viewport lands with (not after
+   * "Continue in background": the page closes before the hook returns, so pass the camera
+   * on linkGeometry's `view`).
+   */
+  export type LeaveHandler = (leave: LeaveEvent) => Promise<{
+      view?: ViewState;
+  } | void> | {
+      view?: ViewState;
+  } | void;
   export interface ConfirmOptions {
       title: string;
       message?: string;
@@ -168,6 +399,22 @@ declare module '@magnusim/workspace' {
               title: string;
               units: UnitSystem;
           }>;
+          /**
+           * Link this study's saved design into the project as a geometry (host 1.5, a study
+           * kind with `links_geometry`). Write the files first (ws.files.write gives their
+           * sha256); the host copies them at the call, so the page may write again at once.
+           * The first call creates the geometry; a later one with equal bytes changes nothing
+           * (`none`), one that changes only names updates it in place, and one that changes
+           * the shape updates it as a queued job (it may wait for a running mesh or solve).
+           * Resolves when the update is committed. Refusals carry `.code`: "unsaved" (the page
+           * is dirty: save first), "stale" (an older design, or another tab's), "changed",
+           * "bad_brep", "empty", "bad_face_names", "unsupported_format", "plugin_needed",
+           * "busy", "gone", "cancelled" (the user removed it from the Queue: stay as you are,
+           * show no error), "superseded", "not_allowed", …
+           */
+          linkGeometry(o: LinkOptions): Promise<LinkResult>;
+          /** The geometry this study links now; null before the first link, or after the user removed it. */
+          linkedGeometry(): Promise<LinkedGeometry | null>;
       };
       ui: {
           toast(message: string, opts?: {
@@ -201,6 +448,62 @@ declare module '@magnusim/workspace' {
            * nav.back() to leave without a question.
            */
           setDirty(dirty: boolean, message?: string): Promise<void>;
+          /**
+           * The exit hook (host 1.6; an older host rejects with code "not_allowed"): the app runs
+           * it on every way out it owns (Back, nav.back(), browser Back and links, another project,
+           * Home, results.openIn3D), before it asks about unsaved work. The handler saves, calls
+           * setDirty(false), links (ws.project.linkGeometry), and returns; a page's own "Done"
+           * just calls nav.back(). Its linkGeometry call may meet the app's question ("Save as
+           * new", "Overwrite", "Keep editing"): it stays pending meanwhile, and "Keep editing"
+           * rejects it with `cancelled`, ends the leave and keeps the workspace open (return at
+           * once then). A throw, `signal` aborting, or 30 s with no progress and no call ends in
+           * one question to the user ("Couldn't update the project"). One handler per page load;
+           * null clears it. Turning the plugin off, closing or reloading the tab, and a crashed
+           * page run no hook: the geometry keeps its last update.
+           */
+          onLeave(handler: LeaveHandler | null): Promise<void>;
+      };
+      /**
+       * OpenFOAM cases this study's page writes and runs (host 1.3: check
+       * `context.hostVersion`; an older host refuses with code "not_allowed").
+       * A case runs once, from its `0/` folder, on the app's one compute slot, so
+       * it may wait in the queue. Refusals carry `.code` ("app_not_allowed",
+       * "has_results", "invalid_path", "busy", …).
+       */
+      compute: {
+          /** Queue a case; `existing` when that folder is already queued or running (its id comes back). */
+          submitOpenFOAM(opts: SubmitOpenFOAM): Promise<{
+              id: string;
+              ahead: number;
+              existing: boolean;
+          }>;
+          /**
+           * Follow a case of this study: first where it is now (queued, start, or end),
+           * then each event (stage, pre, ranks, phase, progress, time_saved, warning, end).
+           * Returns a function that stops listening.
+           */
+          events(jobId: string, onEvent: (ev: JobEvent) => void): () => void;
+          /** Stop a case: a queued one leaves the queue; a running one saves its latest frame and ends. Again to stop harder; `force` at once. */
+          stop(jobId: string, opts?: {
+              force?: boolean;
+          }): Promise<{
+              status: string;
+              stopping: boolean;
+          }>;
+          status(jobId: string): Promise<ComputeJob>;
+          /** This study's cases, newest first (a reopened page finds its running case here). */
+          list(): Promise<ComputeJob[]>;
+      };
+      results: {
+          /**
+           * Show a finished case's saved frames in the project's 3D view. The app asks
+           * first when other results are on screen, and when the page has unsaved work.
+           * Resolves { opened: false } when the user cancels or stays; when it opens,
+           * the workspace closes, so the promise may never settle.
+           */
+          openIn3D(caseRel: string): Promise<{
+              opened: boolean;
+          }>;
       };
       /**
        * Live changes the host pushes. Returns a function that stops listening.
@@ -209,6 +512,15 @@ declare module '@magnusim/workspace' {
       on(event: 'units', fn: (units: UnitSystem) => void): () => void;
       on(event: 'theme', fn: (theme: ThemeInfo) => void): () => void;
       on(event: 'study', fn: (study: StudyRecord) => void): () => void;
+      /**
+       * `geometry` (host 1.5): the geometry this study links was updated (by this page or
+       * another tab of the same study). Only the page of the study that owns it hears it.
+       */
+      on(event: 'geometry', fn: (g: {
+          geometryId: string;
+          rev: number;
+          fromRev: number | null;
+      }) => void): () => void;
       /**
        * Start an ES-module worker. A sandboxed frame cannot start a worker from a
        * URL or a module worker from a blob; this starts a classic blob worker that

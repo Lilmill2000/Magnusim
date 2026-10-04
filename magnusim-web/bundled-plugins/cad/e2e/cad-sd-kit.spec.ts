@@ -115,7 +115,7 @@ const RENDER_SPECIMENS = `(async () => {
       s('field-select', h(kit.Field, { label: 'Operation', htmlFor: 'ks-op' },
         h(kit.Select, { id: 'ks-op', label: 'Operation', value: 'join', options: [{ value: 'join', label: 'Join' }, { value: 'cut', label: 'Cut' }], onChange: none }))),
       s('toggle', flex(h(kit.Toggle, { label: 'Keep the tool bodies', checked: false, onChange: none }))),
-      s('hint', h(kit.Hint, { as: 'div' }, 'Works on imported and modelled bodies alike.')),
+      s('hint', h(kit.Hint, { as: 'div' }, 'Pick at least one target')),
       s('reason', h(kit.DisabledReason, { reason: 'Pick at least one target', role: 'status' })),
       s('nui', h(kit.Field, { label: 'Distance', htmlFor: 'ks-d' },
         h('span', { style: { display: 'inline-flex', flexDirection: 'column' } },
@@ -197,7 +197,11 @@ const COMBINE: Want[] = [
   { name: 'Toggle/root', cad: '[data-switch="keep-tools"] .mgk-switch', kit: '[data-s="toggle"] .mgk-switch' },
   { name: 'Toggle/input', cad: '[data-switch="keep-tools"] input', kit: '[data-s="toggle"] input' },
   { name: 'Toggle/track', cad: '[data-switch="keep-tools"] .mgk-switch-track', kit: '[data-s="toggle"] .mgk-switch-track', before: true },
-  { name: 'Hint', cad: '.mgk-hint', kit: '[data-s="hint"] .mgk-hint', text: 'Works on imported and modelled bodies alike.' },
+  // A new feature's "Pick ..." is a plain hint until the user does something (UX review).
+  { name: 'Hint', cad: '[data-incomplete-hint] .mgk-hint', kit: '[data-s="hint"] .mgk-hint', text: 'Pick at least one target' },
+];
+// After an interaction it is a reason.
+const COMBINE_REASON: Want[] = [
   { name: 'DisabledReason/root', cad: '[data-run-reason] .mgk-reason', kit: '[data-s="reason"] .mgk-reason' },
   { name: 'DisabledReason/msg', cad: '[data-run-reason] .mgk-reason-msg', kit: '[data-s="reason"] .mgk-reason-msg' },
 ];
@@ -216,9 +220,14 @@ test('cad:sd-kit-parity every adopted kit control in a CAD panel draws as the ki
   await page.keyboard.press('Escape');
   await tb(frame).locator('[data-command="modify.combine"]').click();
   await expect(panel(frame).locator('[data-panel-title]')).toHaveText('Combine 1');
-  await expect(panel(frame).locator('[data-run-reason] .mgk-reason-msg')).toHaveText('Pick at least one target');
+  await expect(panel(frame).locator('[data-incomplete-hint] .mgk-hint')).toHaveText('Pick at least one target');
+  await expect(panel(frame).locator('[data-run-reason]')).toHaveCount(0);
   await expect(panel(frame).locator('[data-panel-done]')).toHaveAttribute('aria-disabled', 'true');
   const combine = diffsOf(await readPairs(f, COMBINE));
+  // Keep the tool bodies turned (an interaction): the same words, now a reason.
+  await panel(frame).locator('[data-switch="keep-tools"] .cad-switch-label').click();
+  await expect(panel(frame).locator('[data-run-reason] .mgk-reason-msg')).toHaveText('Pick at least one target');
+  combine.push(...diffsOf(await readPairs(f, COMBINE_REASON)));
   await panel(frame).locator('[data-panel-delete]').click();
   await expect(panel(frame)).toHaveCount(0);
 

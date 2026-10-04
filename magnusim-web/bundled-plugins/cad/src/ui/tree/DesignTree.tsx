@@ -336,10 +336,10 @@ function BodyNode({ row, selected }: { row: BodyRow; selected: boolean }) {
           )}
         </>
       }
-      labelTitle={row.name}
+      labelTitle={!row.visible && row.inSimulation ? `${row.name} (hidden, still in the simulation)` : row.name}
       selected={selected}
       className={row.visible ? undefined : 'is-hidden-body'}
-      attrs={{ 'data-body-row': row.id, 'data-visible': row.visible ? '1' : '0' }}
+      attrs={{ 'data-body-row': row.id, 'data-visible': row.visible ? '1' : '0', 'data-in-simulation': row.inSimulation == null ? undefined : row.inSimulation ? '1' : '0', 'data-hidden-in-simulation': !row.visible && row.inSimulation ? '1' : undefined }}
       badge={
         row.valid ? null : (
           <span className="cad-badge is-warning" role="img" aria-label="What's wrong: the kernel reports this body as invalid geometry" tabIndex={0} {...tipInvalid}>
@@ -349,10 +349,30 @@ function BodyNode({ row, selected }: { row: BodyRow; selected: boolean }) {
       }
       actions={
         <>
+          {row.inSimulation == null ? null : (
+            <IconButton
+              size="row"
+              icon={row.inSimulation ? ICONS.sim : ICONS.simOff}
+              label={row.inSimulation ? `Leave ${row.name} out of the simulation` : `Include ${row.name} in the simulation`}
+              hint={
+                row.inSimulation
+                  ? row.visible
+                    ? "In the simulation: this body goes to the project's geometry"
+                    : "Hidden, still in the simulation: hiding is a view; this body goes to the project's geometry"
+                  : "Left out of the simulation: the project's geometry does not get this body"
+              }
+              pressed={row.inSimulation}
+              data-body-act="simulation"
+              disabledReason={ui.editBlock()}
+              onClick={() => ui.setBodyInSimulation(row.id, !row.inSimulation)}
+            />
+          )}
           <IconButton
             size="row"
             icon={row.visible ? ICONS.eye : ICONS.eyeOff}
             label={row.visible ? `Hide ${row.name}` : `Show ${row.name}`}
+            // A hidden body is still sent to the simulation (link review): its eye says so.
+            hint={!row.visible && row.inSimulation ? 'Hidden, still in the simulation' : undefined}
             data-body-act="visibility"
             onClick={() => ui.setBodyVisible(row.id, !row.visible)}
           />

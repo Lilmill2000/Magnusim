@@ -4,9 +4,12 @@
 // mid-height, Top and Bottom along it). Dragging an arrow moves that side out
 // or in: the side's own value (EnclosureFeature.sides) becomes its padding as
 // built plus how far the arrow went, rounded to what a pixel means at that
-// zoom. The body follows live (the panel session applies it at most every
-// 90 ms) and the release stores the value; the value shows beside the arrow
-// ("+X 12.5 mm"). The other sides keep theirs. A side goes into the part as far
+// zoom. The body follows live (the panel session takes each new value as the
+// arrow moves, so the field, Size and the label beside the arrow, "+X 12.5 mm",
+// say the same number; UX review: the field said 34.2 while the arrow said 35),
+// and the model is written once, on release (saves are held while the arrow is
+// dragged; UX review: one drag wrote the model about 8 times). The other sides
+// keep theirs. A side goes into the part as far
 // as the part's far side and no further (sideMin): the arrow stops there and
 // its value says so (SD review round 1: −X dragged past the part made a slab
 // beside it).
@@ -31,8 +34,6 @@ const SHAFT_R_PX = 1.8;
 const HEAD_PX = 16;
 const HEAD_R_PX = 6.5;
 const GRAB_PX = 12;
-/** Live drag updates at most this often (ms); the release always applies. */
-const DRAG_APPLY_MS = 90;
 
 export interface SideArrow {
   side: EnclosureSide;
@@ -193,8 +194,11 @@ export interface EnclosureToolOptions {
 export function startEnclosureHandles(services: AppServices, handle: ViewportHandle, opts: EnclosureToolOptions): { stop(): void; refresh(): void; dragging(): boolean; arrows(): SideArrow[] } {
   const layer = handle.addLayer(HANDLES_LAYER, { order: 50 });
   const arrows = new Arrows(layer, opts.color);
-  /** `applied`: a live update went to the session during this drag; `before`: the side's own value when it began (none: it followed the padding). */
-  let drag: { arrow: SideArrow; base0: Vec3; grab: number; lastApply: number; pending: { expr: string; mm: number } | null; applied: boolean; out: EnclosureOutput; before: string | undefined } | null = null;
+  /**
+   * `applied`: a live update went to the session during this drag (`last`: its value); `before`: the
+   * side's own value when it began (none: it followed the padding); `release`: lets the held saves go.
+   */
+  let drag: { arrow: SideArrow; base0: Vec3; grab: number; last: string | null; pending: { expr: string; mm: number } | null; applied: boolean; out: EnclosureOutput; before: string | undefined; release: () => void } | null = null;
   let swallowClick = false;
   /** Escape ended a drag with the button still down: the rest of that press is the drag's. */
   let held = false;
@@ -251,6 +255,7 @@ export function startEnclosureHandles(services: AppServices, handle: ViewportHan
       else sides[d.arrow.side] = d.before;
       opts.session.update({ sides } as Partial<EnclosureFeature>);
     }
+    d.release();
     refresh();
   };
   window.addEventListener('keydown', onKey, true);
@@ -280,15 +285,14 @@ export function startEnclosureHandles(services: AppServices, handle: ViewportHan
           arrows.place(handle);
           layer.changed();
           if (!next) return true;
-          d.pending = next;
           showValue(d.arrow.side, next.mm, d.arrow.base, next.limited);
-          const now = performance.now();
-          if (now - d.lastApply >= DRAG_APPLY_MS && services.doc.state.get().rebuild.status !== 'running') {
-            d.lastApply = now;
+          // Each new value at once (the rebuild takes the newest; saves wait for the release).
+          if (next.expr !== d.last) {
             apply(d.arrow.side, next.expr);
+            d.last = next.expr;
             d.applied = true;
-            d.pending = null;
           }
+          d.pending = null;
           return true;
         }
         if (e.type === 'up' || e.type === 'leave') {
@@ -304,7 +308,9 @@ export function startEnclosureHandles(services: AppServices, handle: ViewportHan
           const px = handle.pixelSize(d.base0);
           // Back where it was taken: the value it had (only if a live update changed it meanwhile).
           const last = at == null ? d.pending : (draggedSide(d.out, d.arrow.side, at - d.grab, px, units()) ?? (d.applied ? roundedDistance(d.out.pad[d.arrow.side] ?? 0, px, units()) : null));
-          if (last) apply(d.arrow.side, last.expr);
+          if (last && last.expr !== d.last) apply(d.arrow.side, last.expr);
+          // The one write of this drag.
+          d.release();
           refresh();
           return true;
         }
@@ -317,7 +323,7 @@ export function startEnclosureHandles(services: AppServices, handle: ViewportHan
         const base0: Vec3 = [a.base[0], a.base[1], a.base[2]];
         const at = axisParamAt(base0, a.dir, e.ray);
         const own = draft().sides?.[a.side];
-        drag = { arrow: a, base0, grab: at ?? 0, lastApply: 0, pending: null, applied: false, out, before: typeof own === 'string' && own !== '' ? own : undefined };
+        drag = { arrow: a, base0, grab: at ?? 0, last: null, pending: null, applied: false, out, before: typeof own === 'string' && own !== '' ? own : undefined, release: services.doc.holdSaves?.() ?? (() => {}) };
         arrows.highlight(a.side);
         cursor('grabbing');
         return true;
@@ -350,6 +356,7 @@ export function startEnclosureHandles(services: AppServices, handle: ViewportHan
     stop() {
       if (stopped) return;
       stopped = true;
+      drag?.release();
       window.removeEventListener('keydown', onKey, true);
       cursor('');
       pop();

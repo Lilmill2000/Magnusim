@@ -21,6 +21,7 @@ import type { FaceNames } from '../../types/naming';
 import { P2_ICONS } from '../p2/icons';
 import { resolveRefs } from '../p2/refs';
 import { invalidWords, kernelWords, repairFuzzy, shapeFix } from '../p2/repair';
+import { formatQuantity } from '../../ui/kit/format';
 
 export interface SplitValues {
   offset: number;
@@ -31,9 +32,10 @@ function toolBody(t: SplitTool): BodyId | null {
 }
 
 /** Words for what a split cuts with ("the Right plane", "Body 2"). */
-export function toolWords(f: SplitFeature, bodyName: (id: BodyId) => string): string {
+export function toolWords(f: SplitFeature, bodyName: (id: BodyId) => string, offset?: string | null): string {
   const t = f.tool;
-  if (t.kind === 'plane') return `the ${ORIGIN_PLANES[t.plane]?.label ?? 'plane'}`;
+  // An offset plane says its offset (UX review: "the Right plane does not cut" with an 80 mm offset).
+  if (t.kind === 'plane') return `the ${ORIGIN_PLANES[t.plane]?.label ?? 'plane'}${offset ? ` offset by ${offset}` : ''}`;
   if (t.kind === 'face') return `the face's plane`;
   return bodyName(t.body);
 }
@@ -174,8 +176,9 @@ async function buildSplit(f: SplitFeature, v: SplitValues, ctx: BuildContext): P
         bodies.push(k === 0 ? { id, shape, valid, names } : { id, shape, valid, names, name: `${def?.name ?? ctx.bodyName(target)} (${k + 1})`, color: def?.color ?? DEFAULT_BODY_COLOR });
       }
     }
-    if (!bodies.length) return { ok: false, message: `${f.name} failed: ${toolWords(f, ctx.bodyName)} does not cut ${uncut.join(', ')}` };
-    if (uncut.length) notes.push(`${toolWords(f, ctx.bodyName)} does not cut ${uncut.join(', ')}`);
+    const offset = f.tool.kind === 'plane' && Math.abs(v.offset) > 1e-9 ? formatQuantity(v.offset, 'length', ctx.doc.units).replace(/^-/, '−') : null;
+    if (!bodies.length) return { ok: false, message: `${f.name} failed: ${toolWords(f, ctx.bodyName, offset)} does not cut ${uncut.join(', ')}` };
+    if (uncut.length) notes.push(`${toolWords(f, ctx.bodyName, offset)} does not cut ${uncut.join(', ')}`);
     if (repaired.length) notes.push(`${repaired.join(', ')} ${repaired.length === 1 ? 'was' : 'were'} repaired: check the result`);
     const removed = f.tool.kind === 'body' && !f.tool.keepTool ? [f.tool.body] : [];
     const kept = new Set(bodies.map((b) => b.shape));

@@ -306,7 +306,7 @@ test("cad:p1-review3-param-in-use a parameter in use says who uses it: \"width c
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:p1-review3-not-saved a save the host refuses says why ("Not saved: the disk is full") with Retry, keeps asking before leaving, and Retry saves', async ({ page, request }) => {
+test('cad:p1-review3-not-saved a save the host refuses says why ("Not saved: the disk is full") with Retry, asks before leaving, and Retry saves', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await addSolid(page);
   await expectSaved(frame);
@@ -328,15 +328,21 @@ test('cad:p1-review3-not-saved a save the host refuses says why ("Not saved: the
   await expect(chip).toHaveAttribute('data-state', 'error');
   await expect(chip.locator('.cad-chip-v')).toHaveText('Not saved: the disk is full');
   await expect(chip.locator('[data-chip-action="Retry"]')).toHaveText('Retry');
-  // Still not saved: leaving asks, with the reason.
+  // Still not saved: leaving asks, with the reason. The exit hook tries the save once more and it
+  // is refused too; this Part was never linked and has no body to link (Extrude 1 suppressed), so
+  // nothing would go to the project anyway: it is the app's own "Leave without saving?", not
+  // "Couldn't update the project" (L3 review polish 1). Stay keeps the Part.
+  const beforeLeave = refused;
   await page.locator('#workspace-overlay [data-ws-back]').click();
-  await expect(page.locator('#cf-heading')).toHaveText('Leave without saving?');
+  await expect(page.locator('#cf-heading')).toHaveText('Leave without saving?', { timeout: 60_000 });
   await expect(page.locator('#cf-copy')).toHaveText('Magnusim CAD: Changes to Part 1 are not saved: the disk is full. Leaving discards them.');
+  await expect(page.locator('#cf-confirm')).toHaveText('Leave');
+  await expect(page.locator('#cf-cancel')).toHaveText('Stay');
   await page.locator('#cf-cancel').click();
-  // The page retries by itself (3 s, then 10 s, 30 s, a minute): one more refusal comes, and
-  // the chip still says why, with Retry.
-  const before = refused;
-  await expect.poll(() => refused, { timeout: 45_000 }).toBeGreaterThan(before);
+  await expect(page.locator('#workspace-overlay')).toBeVisible();
+  // The page retried by itself (3 s, then 10 s, 30 s, a minute) and on the way out: more refusals
+  // came, and the chip still says why, with Retry.
+  expect(refused).toBeGreaterThan(beforeLeave);
   expect(refused).toBeGreaterThanOrEqual(2);
   await expect(chip).toHaveAttribute('data-state', 'error');
   await expect(chip.locator('.cad-chip-v')).toHaveText('Not saved: the disk is full');

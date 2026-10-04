@@ -28,6 +28,7 @@ import {
   type SelectOption,
 } from '@magnusim/plugin-ui';
 import type { ReactNode } from 'react';
+import { commitPendingEdits, focusPendingEdit, pendingEdits } from '../../lib/pendingEdits';
 import { Button } from './Button';
 import { RenameTitle, type RenameFn } from './Rename';
 
@@ -80,6 +81,13 @@ export function PanelChrome({
       <Hint>Delete is off: {deleteBlock}</Hint>
     </div>
   ) : null;
+  // Done applies what is typed, as Enter would; a value a field refuses keeps the panel open on that
+  // field, its reason under it (UX review: Done closed and the refused value was dropped silently).
+  const done = () => {
+    commitPendingEdits();
+    if (pendingEdits().refused && focusPendingEdit('refused')) return;
+    onDone();
+  };
   // The kit PanelChrome's markup (mgk-panel, -head, -title, -body, -foot, -foot-left, Done), card drawn.
   const cls = ['mgk-type', 'mgk-panel', 'mgk-panel--card', 'cad-panel', accent ? `is-accent-${accent}` : '', className || ''].filter(Boolean).join(' ');
   return (
@@ -110,7 +118,7 @@ export function PanelChrome({
             </Button>
           ) : null}
         </div>
-        <Button variant="done" onClick={onDone} disabledReason={doneDisabled} tip={doneDisabled ? 'Done' : null} data-panel-done="1">
+        <Button variant="done" onClick={done} disabledReason={doneDisabled} tip={doneDisabled ? 'Done' : null} data-panel-done="1">
           Done
         </Button>
       </div>

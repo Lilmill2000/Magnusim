@@ -80,6 +80,11 @@ export function shownFaces(body: BodyInfo | undefined, refs: readonly Persistent
   return out;
 }
 
+/** The index of the face a stored name names in a list of face names (merged names included), or -1. */
+export function faceIndexIn(faces: readonly string[], name: string): number {
+  return faces.findIndex((n) => n === name || splitMerged(n).includes(name));
+}
+
 export type Resolved = { ok: true; indices: number[]; warning: string | null } | { ok: false; message: string };
 
 /**

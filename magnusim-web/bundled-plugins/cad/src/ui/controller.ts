@@ -77,6 +77,8 @@ export interface UiController {
   rollToEnd(): void;
   setRollbackIndex(index: number): void;
   setBodyVisible(id: BodyId, visible: boolean): void;
+  /** LINK: the body's "Include in simulation" toggle (one undo step). */
+  setBodyInSimulation(id: BodyId, include: boolean): void;
   featureMenu(id: FeatureId): MenuEntry[];
   bodyMenu(id: BodyId): MenuEntry[];
   showMenu(x: number, y: number, items: MenuEntry[], label?: string): void;
@@ -406,6 +408,19 @@ export function createUiController(services: AppServices): UiController {
         fail('Roll back', errText(err));
       }
     },
+    setBodyInSimulation(id, include) {
+      const name = doc.state.get().rebuild.bodies.find((b) => b.id === id)?.name ?? 'the body';
+      const action = include ? `Include ${name} in the simulation` : `Leave ${name} out of the simulation`;
+      const block = editBlock();
+      if (block) return fail(action, block);
+      settleOtherPanel(null);
+      try {
+        const r = doc.setBodyInSimulation(id, include);
+        if (!r.ok) fail(action, r.reason);
+      } catch (err) {
+        fail(action, errText(err));
+      }
+    },
     setBodyVisible(id, visible) {
       try {
         doc.setBodyVisible(id, visible);
@@ -453,7 +468,7 @@ export function createUiController(services: AppServices): UiController {
       if (bar < d.doc.features.length) items.push({ id: 'roll-end', label: 'Roll to end', run: () => c.rollToEnd() } satisfies MenuItem);
       // Refused while a later feature uses it: offered disabled, with the reason (review P2/P3 round 2:
       // "Delete Sketch 1" was offered, and only the click said no).
-      items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: `Delete ${f.name}`, danger: true, disabled: block ?? doc.removeBlock(id), run: () => c.deleteFeature(id) });
+      items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: deleteItemLabel(f.name), danger: true, disabled: block ?? doc.removeBlock(id), run: () => c.deleteFeature(id) });
       return items;
     },
     bodyMenu(id) {
@@ -465,8 +480,18 @@ export function createUiController(services: AppServices): UiController {
       const f = d.doc.features.find((x) => x.id === info.feature);
       const items: MenuEntry[] = [
         { id: 'body-visibility', label: `${hidden ? 'Show' : 'Hide'} ${info.name}`, run: () => c.setBodyVisible(id, hidden) },
-        { id: 'body-rename', label: `Rename ${info.name}`, disabled: block, run: () => c.startRename('body', id) },
       ];
+      // LINK: a solid body goes to the project's geometry unless it is left out; a surface body never does.
+      if (info.solids !== 0) {
+        const inSim = d.doc.bodies[id]?.simulation !== false;
+        items.push({
+          id: 'body-simulation',
+          label: inSim ? `Leave ${info.name} out of the simulation` : `Include ${info.name} in the simulation`,
+          disabled: block,
+          run: () => c.setBodyInSimulation(id, !inSim),
+        });
+      }
+      items.push({ id: 'body-rename', label: `Rename ${info.name}`, disabled: block, run: () => c.startRename('body', id) });
       if (f) items.push({ sep: true, id: 'sep-body-feature' }, { id: 'body-edit', label: `Edit ${f.name}`, disabled: block, run: () => c.openEdit(f.id) });
       return items;
     },
@@ -546,4 +571,12 @@ export function createUiController(services: AppServices): UiController {
 export function errText(err: unknown): string {
   const m = err instanceof Error ? err.message : String(err);
   return m.replace(/^Error:\s*/, '') || 'unknown error';
+}
+
+/**
+ * The feature menu's Delete: "Delete" and the feature's name, the word once ("Delete Extrude 1";
+ * "Delete faces 1" for the feature "Delete faces 1", not "Delete Delete faces 1"; UX review).
+ */
+export function deleteItemLabel(name: string): string {
+  return /^delete\b/i.test(name.trim()) ? `Delete${name.trim().slice(6)}` : `Delete ${name}`;
 }

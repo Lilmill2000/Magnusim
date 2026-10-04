@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DocUnits, Quantity } from '../../src/types/units';
 import type { Param } from '../../src/types/doc';
-import { NumberUnitInput } from '../../src/ui/kit/NumberUnitInput';
+import { keepBoundTogether, NumberUnitInput, QUIET_MS } from '../../src/ui/kit/NumberUnitInput';
 import { createUnitsService } from '../../src/doc/units';
 import { createFakeUnits } from './fake-doc';
 import { commitPendingEdits, pendingEdits, subscribePendingEdits } from '../../src/lib/pendingEdits';
@@ -45,8 +45,16 @@ function setup(opts: { expr: string; units?: DocUnits; params?: Param[]; quantit
   return { input, onCommit, after, error, setExpr: (e: string) => act(() => setExpr(e)), doc };
 }
 
+/** Focus goes elsewhere in the page (a press in it), as a click elsewhere does. */
+function blurInPage(input: HTMLInputElement) {
+  fireEvent.pointerDown(document.body);
+  fireEvent.blur(input);
+}
+
 function type(input: HTMLInputElement, text: string) {
-  fireEvent.focus(input);
+  // Focused as a click focuses it: the page has the keyboard (a blur then is a click
+  // elsewhere in the page, which applies; a blur because the frame lost focus does not).
+  input.focus();
   fireEvent.change(input, { target: { value: text } });
 }
 
@@ -80,6 +88,64 @@ describe('NumberUnitInput: typed text not applied yet is unsaved work (SD review
     cleanup();
     expect(pendingEdits()).toEqual({ pending: false, refused: null });
     off();
+  });
+});
+
+describe('NumberUnitInput: the pointer leaving and the frame losing focus (LINK polish, SD final review)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('the pointer leaving applies a whole value typed a while ago; never half-typed text, never one typed a moment ago, never a refusal', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-03T10:00:00Z'));
+    const s = setup({ expr: '10 mm', validate: (v) => (v > 100 ? 'Must be at most 100 mm' : null) });
+    // "-" on its way to "-5": left as typed, no reason shown.
+    type(s.input, '-');
+    vi.setSystemTime(Date.now() + QUIET_MS + 100);
+    act(() => commitPendingEdits('quiet'));
+    expect(s.onCommit).not.toHaveBeenCalled();
+    expect(s.error()).toBeNull();
+    expect(s.input.value).toBe('-');
+    // "1" typed a moment ago (on its way to "15"): left as typed.
+    type(s.input, '1');
+    act(() => commitPendingEdits('quiet'));
+    expect(s.onCommit).not.toHaveBeenCalled();
+    // "15", and the user has stopped typing: applied.
+    type(s.input, '15');
+    vi.setSystemTime(Date.now() + QUIET_MS + 100);
+    act(() => commitPendingEdits('quiet'));
+    expect(s.onCommit).toHaveBeenCalledWith('15 mm', 15);
+    // A value the field refuses: not applied, and no reason until Enter or a real blur.
+    type(s.input, '200');
+    vi.setSystemTime(Date.now() + QUIET_MS + 100);
+    act(() => commitPendingEdits('quiet'));
+    expect(s.onCommit).toHaveBeenCalledTimes(1);
+    expect(s.error()).toBeNull();
+    expect(pendingEdits()).toEqual({ pending: true, refused: null });
+  });
+
+  it('the frame losing focus (the app\'s header or dialog) applies nothing: the text waits, still unsaved', () => {
+    const s = setup({ expr: '10 mm' });
+    type(s.input, '13');
+    // No press in the page and no control taking the focus: the frame itself lost it.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 60_000);
+    fireEvent.blur(s.input);
+    vi.useRealTimers();
+    expect(s.onCommit).not.toHaveBeenCalled();
+    expect(s.input.value).toBe('13');
+    expect(pendingEdits().pending).toBe(true);
+    // A click elsewhere in the page applies it; so does focus going to another control.
+    s.input.focus();
+    blurInPage(s.input);
+    expect(s.onCommit).toHaveBeenCalledWith('13 mm', 13);
+  });
+
+  it('a reason that ends in a bracketed bound keeps the bracket on one line', () => {
+    const view = render(<span>{keepBoundTogether('−X would put the enclosure past the part (padding more than −40 mm)')}</span>);
+    const keep = view.container.querySelector('.nui-keep');
+    expect(keep?.textContent).toBe('(padding more than −40 mm)');
+    expect(view.container.textContent).toBe('−X would put the enclosure past the part (padding more than −40 mm)');
+    expect(keepBoundTogether('Enter a value')).toBe('Enter a value');
   });
 });
 
@@ -121,7 +187,7 @@ describe('NumberUnitInput', () => {
     fireEvent.focus(s.input);
     expect(s.input.value).toBe('12.3456789');
     // Untouched: blur stores nothing and the readout comes back.
-    fireEvent.blur(s.input);
+    blurInPage(s.input);
     expect(s.onCommit).not.toHaveBeenCalled();
     expect(s.input.value).toBe('12.3457');
     // Focus and Enter without a change: nothing stored either.
@@ -133,7 +199,7 @@ describe('NumberUnitInput', () => {
     fireEvent.keyDown(s.input, { key: 'Enter' });
     expect(s.onCommit).toHaveBeenLastCalledWith('12.34567891 mm', 12.34567891);
     expect(s.input.value).toBe('12.34567891');
-    fireEvent.blur(s.input);
+    blurInPage(s.input);
     expect(s.input.value).toBe('12.3457');
     cleanup();
     // Large values: grouped as a readout, plain while editing.
@@ -200,7 +266,7 @@ describe('NumberUnitInput', () => {
     const s = setup({ expr: '1 in', units: { length: 'in', angle: 'deg' } });
     expect(s.input.value).toBe('1');
     type(s.input, '2.5');
-    fireEvent.blur(s.input);
+    blurInPage(s.input);
     expect(s.onCommit).toHaveBeenCalledWith('2.5 in', 63.5);
   });
 
@@ -220,13 +286,13 @@ describe('NumberUnitInput', () => {
   it('never re-saves an untouched field (the rounded text is not stored)', () => {
     const s = setup({ expr: '20.1234567 mm' });
     fireEvent.focus(s.input);
-    fireEvent.blur(s.input);
+    blurInPage(s.input);
     fireEvent.focus(s.input);
     fireEvent.keyDown(s.input, { key: 'Enter' });
     expect(s.onCommit).not.toHaveBeenCalled();
     // The same value typed differently is not a change either.
     type(s.input, '20.1234567');
-    fireEvent.blur(s.input);
+    blurInPage(s.input);
     expect(s.onCommit).not.toHaveBeenCalled();
   });
 
@@ -235,7 +301,7 @@ describe('NumberUnitInput', () => {
     type(s.input, '99');
     fireEvent.keyDown(s.input, { key: 'Escape' });
     expect(s.input.value).toBe('20');
-    fireEvent.blur(s.input);
+    blurInPage(s.input);
     expect(s.onCommit).not.toHaveBeenCalled();
   });
 
@@ -255,7 +321,7 @@ describe('NumberUnitInput', () => {
     expect(s.input.getAttribute('aria-invalid')).toBeNull();
 
     type(s.input, 'depth');
-    fireEvent.blur(s.input);
+    blurInPage(s.input);
     expect(s.error()).toBe('Unknown parameter "depth"');
     expect(s.onCommit).not.toHaveBeenCalled();
 

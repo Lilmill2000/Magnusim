@@ -119,12 +119,14 @@ export function readDoc(raw: unknown): CadDoc {
   };
   if (d.bodies && typeof d.bodies === 'object') {
     for (const [id, b] of Object.entries(d.bodies)) {
-      // A body entry is only a name and a colour: one that cannot be read gets the defaults.
-      const def: { name?: unknown; color?: unknown } = b && typeof b === 'object' ? b : {};
+      // A body entry is a name, a colour and (LINK) whether it is left out of the
+      // simulation: one that cannot be read gets the defaults (included).
+      const def: { name?: unknown; color?: unknown; simulation?: unknown } = b && typeof b === 'object' ? b : {};
       doc.bodies[id] = {
         name: typeof def.name === 'string' && def.name ? def.name : 'Body',
         color: typeof def.color === 'string' && COLOR_RE.test(def.color) ? def.color : DEFAULT_BODY_COLOR,
       };
+      if (def.simulation === false) doc.bodies[id].simulation = false;
     }
   }
   return doc;

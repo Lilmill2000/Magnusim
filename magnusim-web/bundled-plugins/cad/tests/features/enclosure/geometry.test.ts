@@ -120,13 +120,13 @@ describe('Enclosure geometry', () => {
 
   it("refuses a side moved past the part's far side (it would hold none of the part); a side into the part is allowed and flagged", () => {
     // SD review round 1: −X = −60 on a 40 mm block made a 5 mm slab beside it, and the row stayed ok.
-    expect(enclosureShape(values({ sides: { '-x': '-100 mm' } }), PART)).toEqual({ ok: false, message: '−X would put the enclosure past the part (x ≥ 50 mm)', sides: ['-x'] });
-    expect(enclosureShape(values({ sides: { '-x': '-160 mm' } }), PART)).toEqual({ ok: false, message: '−X would put the enclosure past the part (x ≥ 50 mm)', sides: ['-x'] });
-    expect(enclosureShape(values({ sides: { '+y': '-60 mm' } }), PART)).toEqual({ ok: false, message: '+Y would put the enclosure past the part (y ≤ -30 mm)', sides: ['+y'] });
-    expect(enclosureShape(values({ shape: 'cylinder', sides: { top: '-20 mm' } }), PART)).toEqual({ ok: false, message: 'Top would put the enclosure past the part (z ≤ 0 mm)', sides: ['top'] });
-    expect(enclosureShape(values({ shape: 'cylinder', axis: 'origin:x', sides: { bottom: '-100 mm' } }), PART)).toEqual({ ok: false, message: '−X end would put the enclosure past the part (x ≥ 50 mm)', sides: ['bottom'] });
+    expect(enclosureShape(values({ sides: { '-x': '-100 mm' } }), PART)).toEqual({ ok: false, message: '−X would put the enclosure past the part (padding more than −100 mm)', sides: ['-x'] });
+    expect(enclosureShape(values({ sides: { '-x': '-160 mm' } }), PART)).toEqual({ ok: false, message: '−X would put the enclosure past the part (padding more than −100 mm)', sides: ['-x'] });
+    expect(enclosureShape(values({ sides: { '+y': '-60 mm' } }), PART)).toEqual({ ok: false, message: '+Y would put the enclosure past the part (padding more than −60 mm)', sides: ['+y'] });
+    expect(enclosureShape(values({ shape: 'cylinder', sides: { top: '-20 mm' } }), PART)).toEqual({ ok: false, message: 'Top would put the enclosure past the part (padding more than −20 mm)', sides: ['top'] });
+    expect(enclosureShape(values({ shape: 'cylinder', axis: 'origin:x', sides: { bottom: '-100 mm' } }), PART)).toEqual({ ok: false, message: '−X end would put the enclosure past the part (padding more than −100 mm)', sides: ['bottom'] });
     // The words follow the units the caller gives.
-    expect(enclosureShape(values({ sides: { '-x': '-100 mm' } }), PART, (mm) => `${mm / 25.4} in`)).toEqual({ ok: false, message: '−X would put the enclosure past the part (x ≥ 1.968503937007874 in)', sides: ['-x'] });
+    expect(enclosureShape(values({ sides: { '-x': '-100 mm' } }), PART, (mm) => `${mm / 25.4} in`)).toEqual({ ok: false, message: '−X would put the enclosure past the part (padding more than −3.937007874015748 in)', sides: ['-x'] });
     // Just inside the far side: allowed, and it cuts into the part.
     const v = values({ sides: { '-x': '-99.9 mm' } });
     const s = enclosureShape(v, PART);

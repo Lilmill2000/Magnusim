@@ -13,7 +13,7 @@
 // rebuilt volume.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Page } from '@playwright/test';
-import { addSketch, addSolid, answerLeave, baseUrl, expectLeaveQuestion, headerTakesKeyboard, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, baseUrl, headerTakesKeyboard, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 
 type Snap = {
   status: string;
@@ -231,7 +231,9 @@ test('cad:p1-doc-respawn a kernel stopped by its watchdog respawns and the part 
   expect(seen.errors).toEqual([]);
 });
 
-test('cad:p1-doc-back-quick Back right after two edits loses neither: the host asks while the save is on its way, and Back leaves once it lands', async ({ page, request }) => {
+// L3 (host API 1.6): the exit hook saves first, so Back with a save on its way no longer asks
+// "Leave without saving?": the leave waits for the save (the header says so) and then goes.
+test('cad:p1-doc-back-quick Back right after two edits loses neither: the exit waits for the save on its way (the header says so), then leaves', async ({ page, request }) => {
   const projectId = await newProject(request);
   await openProject(page, projectId);
   await newPartFromTree(page, 'Part 1');
@@ -252,12 +254,14 @@ test('cad:p1-doc-back-quick Back right after two edits loses neither: the host a
   await page.mouse.move(back.x + back.width / 2, back.y + back.height / 2, { steps: 10 });
   await page.mouse.down();
   await page.mouse.up();
-  await expectLeaveQuestion(page);
-  await answerLeave(page, false);
+  // The exit hook saves first: the header says so while the save waits, and nothing asks.
+  await expect(page.locator('[data-ws-leave-status]')).toHaveText('Saving Part 1', { timeout: 10_000 });
+  await expect(page.locator('#workspace-overlay')).toBeVisible();
+  await expect(page.locator('#modal-confirm')).toBeHidden();
   await hold.release();
-  await waitFor(frame, (s) => s.save === 'saved' && s.features.length === 2, 'both edits to save');
-  await page.locator('#workspace-overlay [data-ws-back]').click();
-  await expect(page.locator('#workspace-overlay')).toBeHidden();
+  // The save landed, then the leave went on (an empty Part: nothing to add to the project).
+  await expect(page.locator('#workspace-overlay')).toBeHidden({ timeout: 60_000 });
+  await expect(page.locator('#modal-confirm')).toBeHidden();
   const model = await pluginFile(request, projectId, `studies/${studyId}/model.json`);
   expect(model!.doc.features.map((f: { name: string }) => f.name)).toEqual(['Sketch 1', 'Sketch 2']);
 });

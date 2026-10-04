@@ -88,10 +88,56 @@ export async function partOpened(page: Page): Promise<FrameLocator> {
   return frame;
 }
 
-/** Click a Part row (a Part made earlier) and wait for the workspace to connect and the kernel handshake. */
+/**
+ * Click a Part row (a Part made earlier) and wait for the workspace to connect and the kernel
+ * handshake. Since exit sync (host API 1.6) leaving a changed Part updates its geometry, and the
+ * landing may end in the app's report ("Part 1 updated"): it is OK'd first (okLinkReport).
+ */
 export async function openPart(page: Page, row: ReturnType<Page['locator']>): Promise<FrameLocator> {
-  await row.locator('> .tree-row').click();
-  return partOpened(page);
+  for (let i = 0; ; i++) {
+    await okLinkReport(page);
+    try {
+      await row.locator('> .tree-row').click({ timeout: 5_000 });
+      break;
+    } catch (e) {
+      if (i >= 6 || !(await page.locator('#modal-confirm').isVisible())) throw e;
+    }
+  }
+  const frame = await partOpened(page);
+  await okLinkReport(page);
+  return frame;
+}
+
+/**
+ * L3: the app's report after a linked geometry's update landed ("Part 1 updated", "Part 1 v2
+ * added"), when it shows: OK. Returns its title, or null when none shows. Any other dialog is
+ * left for the caller.
+ */
+export async function okLinkReport(page: Page): Promise<string | null> {
+  const modal = page.locator('#modal-confirm');
+  if (!(await modal.isVisible())) return null;
+  const title = (await page.locator('#cf-heading').textContent()) ?? '';
+  if (!/ (updated|added)$/.test(title)) return null;
+  await page.locator('#cf-confirm').click();
+  await expect(modal).toBeHidden();
+  return title;
+}
+
+/**
+ * L3 (host API 1.6): an exit with a save still on its way waits for it (the Part's exit hook
+ * saves first): the app's header says so over the covered Part, and nothing asks.
+ */
+export async function expectLeaveWaitsForSave(page: Page, partTitle = 'Part 1'): Promise<void> {
+  await expect(page.locator('[data-ws-leave-status]')).toHaveText(`Saving ${partTitle}`, { timeout: 10_000 });
+  await expect(page.locator('[data-ws-leave-cover]')).toBeVisible();
+  await expect(page.locator('#modal-confirm')).toBeHidden();
+}
+
+/** The header's Cancel during an exit: the leave ends, the Part stays open. */
+export async function cancelLeave(page: Page): Promise<void> {
+  await page.locator('[data-ws-leave-cancel]').click();
+  await expect(page.locator('[data-ws-leave-status]')).toHaveCount(0);
+  await expect(page.locator('#workspace-overlay')).toBeVisible();
 }
 
 /** The workspace frame's Page-level handle (for evaluate()). */
@@ -425,3 +471,117 @@ export async function drawBlock(page: Page, frame: FrameLocator, w: number, d: n
 
 /** History labels as the tree shows them, in order. */
 export const historyNames = (frame: FrameLocator) => frame.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl');
+
+// ---- LINK (host API 1.5): the Part's design as a project geometry
+
+/** What the link controller answered (src/link/controller.ts LinkOutcome), JSON-safe. */
+export interface LinkOutcomeJson {
+  outcome: 'unchanged' | 'linked' | 'kept-editing' | 'superseded' | 'nothing' | 'failed' | 'unavailable';
+  code?: string;
+  message?: string;
+  sourceVersion?: number;
+  geometryId?: string;
+  result?: { geometryId: string; name: string; rev: number; fromRev: number | null; created: boolean; change: string; bodies: number; faces: number; named: number };
+}
+
+type LinkWindow = {
+  __CAD__: {
+    link: { sync(o?: { notify?: boolean }): Promise<unknown> };
+    services: {
+      bridge: { link: { linkedGeometry(): Promise<unknown> }; files: { read(rel: string): Promise<ArrayBuffer | null>; write: (...a: unknown[]) => Promise<unknown> } };
+      doc: { state: { get(): { sourceVersion: number; save: { state: string } } } };
+    };
+  };
+};
+
+/**
+ * Bring the project's geometry up to date with the open Part, as leaving the
+ * workspace will (host API 1.6): the link controller, reached by tests only (the
+ * Part has no button for it). Resolves with its outcome; while the app's question
+ * is open it stays pending, so start it, answer, then await it.
+ */
+export function syncLink(page: Page): Promise<LinkOutcomeJson> {
+  return workspaceFrame(page).evaluate(async () => JSON.parse(JSON.stringify(await (window as unknown as LinkWindow).__CAD__.link.sync())) as LinkOutcomeJson);
+}
+
+/** The geometry the Part links now (ws.project.linkedGeometry()), or null. */
+export async function linkedGeometry(page: Page): Promise<{ geometryId: string; name: string; rev: number; sourceVersion: number; shapeSha256: string; namesSha256: string | null } | null> {
+  return workspaceFrame(page).evaluate(async () => JSON.parse(JSON.stringify(await (window as unknown as LinkWindow).__CAD__.services.bridge.link.linkedGeometry())));
+}
+
+/** The Part's saved design version (the model file's save counter). */
+export async function sourceVersion(page: Page): Promise<number> {
+  return workspaceFrame(page).evaluate(() => (window as unknown as LinkWindow).__CAD__.services.doc.state.get().sourceVersion);
+}
+
+/** A file of the plugin's folder in this project, read through the Part's own ws.files (base64), or null. */
+export async function pluginFile(page: Page, rel: string): Promise<Buffer | null> {
+  const b64 = await workspaceFrame(page).evaluate(async (r) => {
+    const buf = await (window as unknown as LinkWindow).__CAD__.services.bridge.files.read(r);
+    if (!buf) return null;
+    let s = '';
+    const u8 = new Uint8Array(buf);
+    for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+    return btoa(s);
+  }, rel);
+  return b64 == null ? null : Buffer.from(b64, 'base64');
+}
+
+/** Count the Part's ws.files writes from now on (window.__linkWrites in the frame). */
+export async function countFileWrites(page: Page): Promise<void> {
+  await workspaceFrame(page).evaluate(() => {
+    const w = window as unknown as LinkWindow & { __linkWrites?: string[] };
+    const files = w.__CAD__.services.bridge.files;
+    w.__linkWrites = [];
+    const write = files.write.bind(files);
+    files.write = (...a: unknown[]) => {
+      w.__linkWrites!.push(String(a[0]));
+      return write(...a);
+    };
+  });
+}
+
+export async function fileWrites(page: Page): Promise<string[]> {
+  return workspaceFrame(page).evaluate(() => [...((window as unknown as { __linkWrites?: string[] }).__linkWrites ?? [])]);
+}
+
+/** The app's question over the workspace when the shape changed under simulation setup (#modal-link-choice). */
+export async function readLinkQuestion(page: Page): Promise<{ title: string; copy: string; overwrite: string; overwriteDisabled: boolean; overwriteLine: string; newLabel: string; cancel: string }> {
+  const modal = page.locator('#modal-link-choice');
+  await expect(modal).toBeVisible({ timeout: 120_000 });
+  return {
+    title: (await page.locator('#lc-heading').textContent()) ?? '',
+    copy: (await page.locator('#lc-copy').textContent()) ?? '',
+    overwrite: (await page.locator('#lc-overwrite').textContent()) ?? '',
+    overwriteDisabled: await page.locator('#lc-overwrite').isDisabled(),
+    overwriteLine: (await page.locator('#lc-overwrite-line').textContent()) ?? '',
+    newLabel: (await page.locator('#lc-new').textContent()) ?? '',
+    cancel: (await page.locator('#lc-cancel').textContent()) ?? '',
+  };
+}
+
+/** Answer the app's question: 'new' (Save as new geometry), 'overwrite' or 'cancel' (Keep editing). */
+export async function answerLinkQuestion(page: Page, choice: 'new' | 'overwrite' | 'cancel'): Promise<void> {
+  await expect(page.locator('#modal-link-choice')).toBeVisible({ timeout: 120_000 });
+  await page.locator({ new: '#lc-new', overwrite: '#lc-overwrite', cancel: '#lc-cancel' }[choice]).click();
+  await expect(page.locator('#modal-link-choice')).toBeHidden();
+}
+
+/** A project geometry's row in the workbench tree (after Back). */
+export const geometryRow = (page: Page, gid: string) => page.locator(`#left-tree [data-w16-geom="${gid}"] > .tree-row`);
+
+/** A simulation study on a geometry (the route the workbench uses): {id, name}. */
+export async function simulationOn(request: APIRequestContext, projectId: string, geometryId: string, base = baseUrl()): Promise<{ id: string; name: string }> {
+  const r = await request.post(`${base}/api/simulation`, { data: { project_id: projectId, geometry_id: geometryId } });
+  const j = await r.json();
+  expect(r.ok(), JSON.stringify(j)).toBe(true);
+  return { id: j.simulation.id, name: j.simulation.name };
+}
+
+/** A Wall boundary condition on some faces of a geometry's rev (setup the app's question protects). */
+export async function wallOn(request: APIRequestContext, projectId: string, simId: string, faces: string[], rev: number, base = baseUrl()): Promise<string> {
+  const r = await request.post(`${base}/api/bcs`, { data: { project_id: projectId, simulation_id: simId, name: 'Side wall', bc_type: 'Wall', faces, geometry_rev: rev } });
+  const j = await r.json();
+  expect(r.ok(), JSON.stringify(j)).toBe(true);
+  return j.bc.id;
+}

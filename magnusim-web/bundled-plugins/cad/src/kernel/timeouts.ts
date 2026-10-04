@@ -25,6 +25,8 @@ export const OP_TIMEOUTS: Partial<Record<KernelOp, number>> = {
   heal: 300_000,
   brep_write: 120_000,
   brep_read: 120_000,
+  // LINK: the solids of the design as one BREP (a brep_write plus the face walk).
+  link_export: 120_000,
   measure: 60_000,
 };
 

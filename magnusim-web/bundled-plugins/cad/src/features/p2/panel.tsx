@@ -27,6 +27,8 @@ export interface FeaturePanelKit<F extends Feature> {
   /** Apply, and show a refusal in the foot. */
   set(patch: Partial<F>): void;
   incomplete: string | null;
+  /** The user changed something in this panel (a new feature's "Pick ..." is red only from then on). */
+  touched: boolean;
 }
 
 export function useFeaturePanel<F extends Feature>({ session, feature }: FeaturePanelProps): FeaturePanelKit<F> {
@@ -38,6 +40,7 @@ export function useFeaturePanel<F extends Feature>({ session, feature }: Feature
   useStateStore(services.doc.state, (s) => s.doc.params);
   const note = useStateStore(ui.state, (s) => s.panelNote);
   const [, setTick] = useState(0);
+  const [touched, setTouched] = useState(false);
   const draft = (session.open ? session.draft : (stored ?? session.draft)) as F;
   const update = (patch: Partial<F>): string | null => {
     const block = ui.editBlock();
@@ -49,6 +52,7 @@ export function useFeaturePanel<F extends Feature>({ session, feature }: Feature
       return `${session.isNew ? 'Create' : 'Edit'} failed: ${errText(err)}`;
     }
     setTick((n) => n + 1);
+    setTouched(true);
     if (note) ui.setPanelNote(null);
     return null;
   };
@@ -68,6 +72,7 @@ export function useFeaturePanel<F extends Feature>({ session, feature }: Feature
       if (why) ui.setPanelNote(why);
     },
     incomplete,
+    touched,
   };
 }
 
@@ -79,6 +84,7 @@ export function P2FeaturePanel<F extends Feature>({
   extraFoot,
   doneDisabled,
   quietIncomplete = false,
+  fieldsSay = null,
 }: {
   props: FeaturePanelProps;
   kit: FeaturePanelKit<F>;
@@ -93,6 +99,11 @@ export function P2FeaturePanel<F extends Feature>({
   doneDisabled?: string | null;
   /** The panel says itself what a new feature still waits for (an import's progress): no red "incomplete" line. */
   quietIncomplete?: boolean;
+  /**
+   * What a field of the panel already shows under itself (an Enclosure side the part shrank
+   * under): the rebuild's failure that says the same is not said again at the foot (SD final review).
+   */
+  fieldsSay?: string | null;
 }) {
   const services = useServices();
   const ui = uiFor(services);
@@ -108,7 +119,8 @@ export function P2FeaturePanel<F extends Feature>({
   // rebuild's error is about the stored version the panel no longer shows: it is left out (review P2/P3
   // round 1: a stale "Split 1 failed: the Right plane does not cut ..." stayed beside it).
   const stale = !!incomplete && pending;
-  if (status?.state === 'error' && !stale) {
+  const saidInField = !!fieldsSay && !!status?.message && status.message.includes(fieldsSay) && !status.actions?.length;
+  if (status?.state === 'error' && !stale && !saidInField) {
     const fixes = (status.actions ?? []).map((a) => ({ label: FEATURE_ACTION_LABELS[a], run: () => ui.runFeatureAction(props.feature, a) }));
     foot.push(
       <DisabledReason key="error" fixes={fixes}>
@@ -123,7 +135,18 @@ export function P2FeaturePanel<F extends Feature>({
     );
   }
   if (incomplete && props.isNew) {
-    if (!quietIncomplete) foot.push(<DisabledReason key="incomplete">{incomplete}</DisabledReason>);
+    // What a new feature waits for: a plain hint until the user has done something in the panel,
+    // then a reason (UX review: "Pick at least one target" was red before any interaction).
+    if (!quietIncomplete)
+      foot.push(
+        kit.touched ? (
+          <DisabledReason key="incomplete">{incomplete}</DisabledReason>
+        ) : (
+          <div key="incomplete" data-incomplete-hint="1">
+            <Hint>{incomplete}</Hint>
+          </div>
+        ),
+      );
   }
   else if (incomplete && pending)
     foot.push(

@@ -7,6 +7,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { act, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Feature } from '../../src/types/doc';
+import type { DocState } from '../../src/types/doc-service';
 import { makeServices, type TestServices } from './fake-doc';
 import { mountUi } from './mount';
 
@@ -86,7 +88,7 @@ describe('feature panels', () => {
     const body = t.doc.state.get().rebuild.bodies[0];
     const pick = { item: { kind: 'face' as const, body: body.id, index: 2 }, point: [0, 0, 0] as [number, number, number], normal: null, depth: 1, screen: [5, 5] as [number, number] };
     act(() => t.services.bus.emit('viewport:contextmenu', { pick, clientX: 50, clientY: 60 }));
-    expect(ui.menu()).toEqual(['Hide Body 1', 'Rename Body 1', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', '(Roll back to here)', 'Delete Extrude 1']);
+    expect(ui.menu()).toEqual(['Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', '(Roll back to here)', 'Delete Extrude 1']);
     // Bug 2026-09-30: body and feature items shared ids (React key clash); every item id is unique.
     const ids = ui.$$('[data-cad-menu] [data-menu-item]').map((b) => b.getAttribute('data-menu-item'));
     expect(new Set(ids).size).toBe(ids.length);
@@ -227,6 +229,20 @@ describe('Parameters panel', () => {
 });
 
 describe('status chips', () => {
+  it('a removed feature (Box, Cylinder) not suppressed: the notice names it, and Suppress suppresses them in one step (L3 review B2)', () => {
+    start();
+    const chip = () => ui.$('[data-chip="removed"]');
+    const docState = t.doc.state as unknown as { set(fn: (s: DocState) => DocState): void };
+    expect(chip()).toBeNull();
+    act(() => docState.set((s) => ({ ...s, doc: { ...s.doc, features: [{ id: 'f_box', type: 'box', name: 'Old box' } as unknown as Feature] } })));
+    expect(chip()!.textContent).toBe('This Part uses a removed feature: Old boxSuppress it');
+    act(() => docState.set((s) => ({ ...s, doc: { ...s.doc, features: [...s.doc.features, { id: 'f_cyl', type: 'cylinder', name: 'Old cylinder' } as unknown as Feature] } })));
+    expect(chip()!.textContent).toBe('This Part uses removed features: Old box and Old cylinderSuppress them');
+    fireEvent.click(chip()!.querySelector('[data-chip-action="Suppress"]')!);
+    expect(t.doc.calls).toContain('suppressRemoved');
+    expect(chip()).toBeNull();
+  });
+
   it('shows save, kernel and volume states', () => {
     start();
     const chip = (k: string) => ui.$(`[data-chip="${k}"]`);
@@ -242,9 +258,14 @@ describe('status chips', () => {
     expect(t.doc.calls).toContain('retrySave');
     act(() => t.doc.setSave({ state: 'error', message: 'the disk is full' }));
     act(() => t.doc.setSave({ state: 'conflict', message: 'Changed in another tab' }));
-    expect(chip('save')!.textContent).toBe('Changed in another tabReload');
+    expect(chip('save')!.textContent).toBe("Changed in another tabReload (discard my change)Keep mine (replace the other tab's save)");
     fireEvent.click(chip('save')!.querySelector('[data-chip-action="Reload"]')!);
     expect(t.doc.calls).toContain('reload');
+    // L3 review B1: a tab with no change of its own that another tab saved over: Reload only (no Keep mine).
+    act(() => t.doc.setSave({ state: 'updated', message: 'Updated in another tab' }));
+    expect(chip('save')!.textContent).toBe('Updated in another tabReload');
+    expect(chip('save')!.getAttribute('data-state')).toBe('updated');
+    expect(chip('save')!.classList.contains('is-warning')).toBe(false);
 
     act(() => t.kernelStatus.set({ memory_high: true, heap_bytes: 1.5 * 1024 ** 3 }));
     expect(chip('memory')!.textContent).toBe('Large model · 1.5 GB memory');

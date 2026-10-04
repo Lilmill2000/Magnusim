@@ -194,13 +194,13 @@ export type EnclosureShape =
 export function enclosureShape(v: EnclosureValues, bbox: BBox, words: LengthWords = MM_WORDS): { ok: true; shape: EnclosureShape } | { ok: false; message: string; sides: EnclosureSide[] } {
   const pad: Partial<Record<EnclosureSide, number>> = {};
   for (const s of sidesOf(v.shape)) pad[s] = paddingOf(s, v, bbox);
-  // A side moved past the part's far side: the enclosure would hold none of the part.
+  // A side moved past the part's far side: the enclosure would hold none of the part. Said in
+  // the padding the user types, not as a position (UX review: "(z ≥ 25 mm)" while typing -40).
   for (const s of sidesOf(v.shape)) {
     const k = sideAxis(s, v.axis);
-    if (k == null || !(pad[s]! < MIN_SIZE_MM - sizeForSide(s, bbox, v.axis))) continue;
-    const plus = s[0] === '+' || s === 'top';
-    const a = XYZ[k].toLowerCase();
-    return { ok: false, message: `${sideLabel(s, v.axis)} would put the enclosure past the part (${a} ${plus ? '≤' : '≥'} ${words(plus ? bbox[k] : bbox[k + 3])})`, sides: [s] };
+    const size = sizeForSide(s, bbox, v.axis);
+    if (k == null || !(pad[s]! < MIN_SIZE_MM - size)) continue;
+    return { ok: false, message: `${sideLabel(s, v.axis)} would put the enclosure past the part (padding more than ${words(-size).replace(/^-/, '−')})`, sides: [s] };
   }
   if (v.shape === 'box') {
     const min: Vec3 = [bbox[0] - pad['-x']!, bbox[1] - pad['-y']!, bbox[2] - pad['-z']!];

@@ -68,6 +68,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `e2e/cad-p<n>-<gate>.spec.js` (`cad-p1-document.spec.js`, `cad-p2-step.spec.js`, `cad-p3-sketch.spec.js`), `e2e/cad-large-step.spec.js` | INTEGRATE | A phase's exit gate, named as in the proposal §7: one test per exit bullet. The large-STEP spec is opt-in (`CAD_E2E_BIG_STEP`). |
 | `e2e/cad-p1-review-polish.spec.ts`, `cad-p1-review2.spec.ts`, `cad-p1-review3.spec.ts`, `cad-p15-review1.spec.ts`, `cad-p2p3-review1.spec.ts`, `cad-p2p3-review1-polish.spec.ts`, `cad-p2p3-review2.spec.ts`, `cad-p2p3-review3.spec.ts`, `cad-p2p3-review4.spec.ts`, `tests/arch/user-files.test.ts` | INTEGRATE | Review rounds' findings (P1 rounds 1-3, P1.5 round 1, P2+P3 rounds 1-4), one test per finding. |
 | `e2e/cad-sd-kit.spec.ts` | UI-SHELL | The host UI kit in CAD's panels (§7 "UI kit"): each adopted control against the kit's own component, property by property. |
+| `src/link/**`, `src/doc/source-record.ts`, `tests/link/**`, `tests/kernel/kernel-link.test.ts`, `e2e/cad-link.spec.ts`, `e2e/cad-link-plugins.spec.ts`, `e2e/cad-link-carry.spec.ts`, `e2e/cad-link-exit.spec.ts`, `scripts/gate-l2-cad.mjs`, `scripts/gate-l3-cad.mjs` | LINK | The Part's design as a project geometry (host API 1.5 and 1.6, §11): the export, the face-name sidecar, the link controller, the study record's `source_version`, the exit hook and its camera; gate:l2-cad, gate:l3-cad. |
 | `package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `manifest.toml`, `plugin.py`, `README.md`, `ARCHITECTURE.md`, `LICENSES/**` | frozen (INTEGRATE) | New dependency? Ask INTEGRATE: one `npm install` at a time (shared `node_modules`). |
 | `workspace/**` (except `kernel/mk32.*`, `solver/planegcs.*`) | nobody by hand | Written only by `npm run build`. |
 
@@ -224,7 +225,8 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   | every shape result | adds `faces` (TopExp::MapShapes count), so names need no `props` call |
   | `import_step` | + `diagnose` -> + `unit`, `diagnostics` (per shape: BRepCheck problems, free edges, closed) of the shapes as read |
   | `heal` | `{ids, tol=0.001, sew='auto', sew_tol}` -> work copies, ShapeFix + Sewing (knit) + solids from closed shells; `{shapes, fixed, sewn, free_edges, diagnostics, history}` |
-  | `brep_write` / `brep_read` | `{ids}` -> buffer `brep` (BinTools compound) / bytes -> `{shapes}` with the same indices |
+  | `brep_write` / `brep_read` | `{ids}` -> buffer `brep` (BinTools compound, format version 4: pinned, the app's OCP 7.9.3 reads it) / bytes -> `{shapes}` with the same indices |
+  | `link_export` (LINK) | `{ids}` -> buffer `brep`: one BinTools (format 4) compound of the SOLIDS of the shapes, in order; with the app's face numbering: `visit_body` / `visit_face` per TopExp_Explorer(FACE) visit over the compound (no de-duplication: a face two solids share is visited once per solid), `solids` (`src`, `piece`, `faces`), `empty` (shapes with no solid) (§11) |
   | `press_pull` | `{id, faces, d, fuzzy}` -> prism of each planar face along +-normal, fuse (d > 0) or cut (d < 0), unify, history; `{moved, sides, op, empty}` |
   | `combine` | `{op: join|cut|intersect, targets, tools, fuzzy, unify}` -> `{results: [{target, id, empty, solids, valid, history}]}` |
   | `measure` | `{a, b?}` (sub-shapes, shapes, points, planes, axes) -> one entity's length/area/radius/centre/direction, or distance (BRepExtrema) + delta + angle |
@@ -279,6 +281,11 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   the P1 defaults). Builds may publish an `output` (a sketch's regions) that
   later features read; a feature's cache key holds its parents' keys. Every body
   carries face names (`src/naming/`).
+- **Include in simulation** (LINK, §11): `BodyDef.simulation === false` leaves
+  a body out of the project's geometry (absent = included). It is a model change
+  (one undo step: "Leave Body 1 out of the simulation"), so it is saved and is a
+  new version of the design. A derived body (a split piece) gets its BodyDef
+  then, as a rename does.
 - **View state** (`CadView`: rollback index, hidden bodies, expanded tree
   nodes, the origin planes' mode and the camera) is saved but not undoable.
   The viewport's binding puts the planes mode back when the Part is read and
@@ -326,16 +333,32 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     refused because another tab saved first) the service tells the host the
     page is dirty, with "Changes to <Part> are not saved yet." (or "...: <why>.",
     "...: it was changed in another tab."). Every way out of the workspace then
-    asks "Leave without saving?" (the header's Back, Home, the browser's Back
-    and Forward, the mouse's side buttons, a typed link) and F5 or closing the
-    tab gets the browser's own prompt. The page never reloads itself. A value
+    runs the exit hook first (host API 1.6, §11), which saves (the leave waits
+    for a save on its way, "Saving Part 1" in the app's header) and links; the
+    app asks "Leave without saving?" only when the page is still dirty after it
+    (a value typed and not applied), and "Couldn't update the project" when the
+    save or the link is refused. Turning CAD off in Settings runs no hook and
+    asks as before, and F5 or closing the tab gets the browser's own prompt. The page never reloads itself. A value
     typed in a panel field and not applied yet (NumberUnitInput commits on
     Enter or blur) counts too (`src/lib/pendingEdits.ts`, SD review round 2:
     in a real browser the frame runs in its own process and the field's blur
     came after the host had closed the workspace, so Back lost it): the page
-    is dirty while it waits, every leave signal below applies it first (as
-    Enter would), and one the field refused keeps the page dirty with
-    "...: the value typed in <field> is not applied. <reason>."
+    is dirty while it waits ("Changes typed in <field> of <Part> are not applied
+    yet.", and the save chip says "Not applied: press Enter", so it agrees with
+    the app's unsaved dot), and one the field refused keeps the page dirty with
+    "...: the value typed in <field> is not applied. <reason>.". Since LINK's
+    polish (SD final review) the signals apply it as follows: the leave keys (F5,
+    Ctrl+R / Ctrl+W, the side buttons) as Enter would; the pointer leaving the
+    frame only a whole value the field takes that was not typed in the last
+    800 ms (`commitPendingEdits('quiet')`: "-" on its way to "-5" stays typed,
+    and no refusal shows); the frame losing focus (the app's header, its dialogs,
+    another window) and the page going apply nothing, so the app's "Leaving
+    discards them" is true and Stay finds the text still typed. Since the LINK
+    UX review (U1) focus coming back to the window with nothing focused puts
+    the keyboard back in the field holding typed text (caret at the end), and an
+    Enter with nothing focused applies typed text (`installPendingEditKeys`), so
+    "press Enter" is true after Stay. A panel's Done applies what is typed; one a
+    field refuses keeps the panel open on that field.
   - **Autosave** (`src/doc/autosave.ts`): a model change is written at once;
     one write runs at a time and changes made meanwhile follow right after it,
     together. A budget spaces model writes: `SAVE_BURST` (6) back to back, then
@@ -351,10 +374,40 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     (`WsDataStore.saveModelNow`, only while this tab confirmed the stored
     version less than 10 s ago). Undo back to the stored model drops a waiting
     write and says Saved. A reopened Part says Saved with the stored `saved_at`.
+    While an Enclosure arrow is dragged, model writes are held
+    (`DocService.holdSaves()`): the drag applies live and one write follows
+    the release (flush and leaving still write).
 - **Conflicts**: a save refused because another tab wrote -> save state
-  `conflict`, edits paused, chip "Changed in another tab · Reload". A rename in
-  the host header arrives as `bridge.onStudy` with a new rev: adopt it silently
-  (the pointer field is untouched).
+  `conflict`, edits paused, chip "Changed in another tab" with two choices
+  (Daniel, 2026-10-02): "Reload (discard my change)" reads the other tab's
+  version (a toast names what this tab lost), and "Keep mine (replace the other
+  tab's save)" asks in the app's own dialog first ("Replace the other tab's
+  save?", what is lost), then writes this tab's model on top of the stored one
+  (`Autosave.keepMine`: the stored etag, the counter past both); the other tab is
+  told when it saves next. A tab with NO change of its own whose model another
+  tab saved over finds out when its window gets the focus back
+  (`Autosave.checkStored()`: the stored etag is no longer this tab's): save state
+  `updated`, chip "Updated in another tab" with Reload only, edits paused, and it
+  is not unsaved work (not dirty, no unsaved dot; L3 review B1: it used to be the
+  `conflict` state, which reported dirty and offered Keep mine over the other
+  tab's real work). Its exit reads the newer model in place and links (or skips)
+  without asking (§11). So an overwritten tab never says "Saved" (UX review). A rename in the host header arrives as
+  `bridge.onStudy` with a new rev: adopt it silently (the pointer field is
+  untouched).
+- **The design's version** (LINK, §11): every model write carries a save counter
+  (`source_version` in `model.json`), one more than the version it replaces, so it
+  never goes down (at load: the file's, or the study record's when that is
+  newer). `DocState.sourceVersion` is the stored design's. While the study links
+  a geometry, each save also goes into the study record's reserved
+  `source_version` (`src/doc/source-record.ts`: the first at once, then at most
+  one write per 1.5 s, never down), so the app's geometry row can say "Not up to
+  date with Part 1.". Not before a link: no row shows it then, and each record
+  write moves the record's rev, which refused a rename the app's header had
+  started on the old rev (e2e: a new Part's first save, then a header rename).
+  Since host cb62201 the header reads a stale rev again once and renames, so
+  such a rename goes through (`cad:link-names` renames a linked Part while its
+  page writes; the refused first call's 409 is the one console line it allows,
+  and it must be there); not writing before a link is kept (no row needs it).
 - **Undo** (`src/types/undo.ts`): model snapshots only; one action, one drag or
   one panel session = one step; 100 steps; rollback, visibility, camera and
   selection are not undoable.
@@ -625,6 +678,23 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
 - Verify for real: a panel mounting or an API answering is not a pass; only
   the end-to-end behaviour is.
 
+- **gate:l2-cad** (`npm run test:gate:l2-cad`, LINK): `tests/kernel/kernel-link.test.ts`
+  (the real kernel and the app's own checker, `python -m magnusim_sdk.link check`
+  from the core venv or `CAD_E2E_PYTHON`, on CAD exports: two bodies sharing a
+  face, a body with an internal face; every face visit's body and centroid against
+  the app's `face_visits`; the sidecar byte for byte against
+  `magnusim_sdk.link.write_face_names`; format 4; a fresh kernel's export of the
+  same design byte-identical), `tests/link/` (the controller against every answer
+  of the app; the sidecar's words), `e2e/cad-link.spec.ts` (create, update in
+  place, the no-change skip and a byte-identical re-export after a reopen, the
+  app's question answered Keep editing / Overwrite / Save as new, a stale second
+  tab, the include toggle) and `e2e/cad-link-plugins.spec.ts` (plugin_needed, on
+  its own app server with the app's link test plugins). After Keep editing the
+  specs allow no console line (the host's uncaught `BridgeError: You kept
+  editing.` is gone since cb62201). `e2e/cad-link-carry.spec.ts`
+  holds the carry-overs (two tabs: Reload or Keep mine; Finish sketch keeps the
+  camera).
+
 ## 9. Host facts and gaps
 
 - CSP: scripts/styles/fonts from `/plugin-sdk/` and `/plugins/cad/workspace/`
@@ -639,10 +709,26 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
 - A refused `ws.files` write (409 "changed", 507 "disk_full") is also logged by
   the browser as a failed resource load in the host page's console; the specs
   that cause one allow exactly that line.
+- Host API 1.5 (L2): `ws.project.linkGeometry` / `linkedGeometry`, the
+  `geometry` event, the study record's reserved `source_version`, and the
+  manifest's `links_geometry = true` on the Part study kind (§11).
+- Host API 1.6 (L3): the exit hook `ws.nav.onLeave` and the camera it returns
+  (`ViewState`, §11). `manifest.toml` declares `api_version = "1.6"`. Start
+  actions are not used yet (Daniel's D33: CAD goes default-on with start actions
+  after gate:l3-cad, a step of its own).
+- After a leave that linked nothing (a refused link answered "Leave anyway", or
+  no body included) the app reads its tree again (host fix 253d6a4): the
+  geometry's row says "Not up to date with Part 1." at once, with no tick
+  (`cad:l3-behind-row-refused`, `cad:l3-behind-row-no-body`, no reload).
+- The app's update report (host fix 253d6a4) names only what a setup holds: no
+  dialog when nothing of it changed, a toast for a mesh left out of date, and a
+  dialog naming each record and face (by CAD's labels) that was lost, split or
+  moved far (`cad:l3-report`, `cad:link-names`). A large part lands with the
+  view as given (`cad:large-step-exit-camera`, opt-in).
 - Host API 1.3 (H14): the UI kit `@magnusim/plugin-ui` in the frame's import
   map and `/plugin-sdk/plugin-ui.css` linked after `theme.css`, before the
   page's own CSS (so CAD's rules win a tie). `manifest.toml` declares
-  `api_version = "1.3"`.
+  `api_version = "1.6"` since L3 (above).
 - In the host since 42e38c6 (API 1.2): **G1** `ws.files` with etags,
   **G7** focus on connect and `nav.setDirty`, **G11** `default_enabled = false`
   (CAD ships off), **G12** the boundary checker skips `node_modules` and dot
@@ -789,3 +875,178 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   panels' words: "Start face of Extrude 2 not found on Body 1 after rebuild").
   Extrude and Enclosure name their faces; booleans
   carry names once the kernel reports `faces` and `history`.
+
+## 11. Linking a geometry (LINK, host API 1.5; exit sync 1.6)
+
+A Part is live-linked to one project geometry (decision 2026-10-01): its design
+becomes a geometry the simulation side uses, updated in place when the design
+changes. The host's contract is `docs/plugins/authoring.md` "Linking a geometry
+(1.5)" and `compatibility.md` "1.5"; this is CAD's side.
+
+- **Who runs it.** `src/link/controller.ts` (`createLinkController`). Leaving the
+  workspace runs it: the exit hook (`src/link/leave.ts`, below). There is no
+  "Sync" button (Daniel: the sync happens on exit). Tests also reach it through
+  `window.__CAD__.link.sync()`.
+- **Save, then link.** Typed values are applied (the exit hook keeps them
+  instead, below), the model is stored
+  (`doc.flush()`), the app is told the page is clean (`bridge.setDirtyNow(false)`:
+  a link while dirty is refused `unsaved`), then the export and `linkGeometry`
+  with `sourceVersion` (the stored design's counter, §6) and `basedOnRev`
+  (`linkedGeometry().rev`, null before the first link). A refused save (another
+  tab, the disk) stops it with the reason.
+- **The design linked is the one saved** (link review L2). The saved state, the
+  model and its `sourceVersion` are taken together right after the save; after
+  every wait (`linkedGeometry()`, `setDirtyNow(false)`, `bodiesAtEnd()`) they are
+  checked again (still saved, the same model object, the same counter, nothing
+  typed), and an edit in between goes back to the save (4 rounds, then "Part 1
+  kept changing while it was being added to the project. Try again."). The app
+  hears "clean" only while the state is saved. Unit: `controller.test.ts` (the
+  review's race, ported).
+- **Never a partial design** (link review L1). A feature of the history that
+  failed or was stopped (`bodiesAtEnd().failed`) refuses the link: "Combine 1
+  failed to build, so <Geometry> keeps its last update. Fix, retry or suppress it
+  first."; so does an included body the kernel calls invalid ("Body 2 is not a
+  valid solid, ... Repair it, or leave it out of the simulation, first."). So the
+  no-change rule below never pins a design the Part could not build whole. A
+  removed feature type (Box, Cylinder of an old P1 Part) has its own words, since
+  it cannot be fixed or retried: "Old box is a removed feature (Box). Suppress or
+  delete it, then leave." (L3 review B2). Such a Part says so when it opens: the
+  dock's notice "This Part uses a removed feature: Old box · Suppress it"
+  (`DocService.suppressRemoved()`: every one suppressed in one undo step, their
+  data kept).
+- **No change, no work.** When `sourceVersion` equals
+  `linkedGeometry().sourceVersion` nothing is exported or written (the common
+  "opened, looked, left"). When the geometry has a newer design (another tab's),
+  it is refused as stale at once, with the app's words, without exporting.
+- **Another tab's newer save** (L3 review B1). Before the link, a tab with no
+  change of its own (saved, nothing typed) asks whether the stored model is still
+  its own (`DocService.checkStored()`); when another tab saved over it, it reads
+  that model in place (`DocService.reload()`, "Reading Part 1 as another tab saved
+  it") and links it, or skips when the geometry has it already. Nothing asks.
+  When both tabs changed it (`conflict`), the link is refused with the chip's
+  words: "Part 1 was also changed in another tab. Choose Reload (this tab's
+  changes are lost) or Keep mine (the other tab's changes are lost), then leave."
+- **A refused save** (the disk is full): refused with the reason alone ("Saving
+  failed: the disk is full."; the app's question names the geometry next). When
+  nothing would be linked anyway (never linked, no included body: a sketch-only
+  Part) it is not a failed update (`nothingLinked`): the exit hook tells the app
+  the page's unsaved state again and returns ok, so the app asks its own "Leave
+  without saving?" with the reason (L3 review polish 1).
+- **The export** (`src/link/export.ts`): the bodies at the END of the history
+  (`DocService.bodiesAtEnd()`: the rollback bar ignored, built through the
+  rebuild cache without telling the page), in the Bodies folder's order, minus the
+  bodies left out by "Include in simulation"; hidden bodies are included (hiding
+  is a view). The kernel's `link_export` writes one BinTools compound (format
+  version 4, pinned) of their solids, in mm, with no transform; a surface body has
+  no solid and is never sent; a body of several solids sends each (ids
+  `<body id>#2`, ..., named "Bar · piece 2"). With none included, nothing is linked and it says "No body
+  is included in the simulation; <Geometry> keeps its last update.".
+- **face_names.json** (`src/link/sidecar.ts`), exactly the app's canonical form
+  (sorted keys, no whitespace, rows by index, one line; byte for byte what
+  `magnusim_sdk.link.write_face_names` writes for the same rows; no per-save
+  field): faces in the app's order (every TopExp_Explorer(FACE) visit over the
+  compound, no de-duplication: a face two bodies share is listed once per body),
+  each with `body`, `name` (the persistent face name without its internal `#k`
+  split suffix; a name longer than 200 characters keeps its start and a hash of
+  the whole) and `label` ("Extrude 1 · Side 3", "Enclosure 1 · +X face",
+  "Imported 1 · Face 12", "... · part 2" for a split piece, "A + B" for a merged
+  face; at most 120 characters); bodies with `index`, `id` (the stable body id),
+  `name` (unique in the export: "Body 1 (2)"), `label`, `color`; and
+  `shape_sha256`. Both files go to `studies/<sid>/export/` through `ws.files`,
+  and the link passes the sha256 values `ws.files.write` returned.
+- **Byte-identical.** The same saved design exports the same bytes (the kernel is
+  deterministic; BinTools writes indices, not pointers; the sidecar is canonical),
+  so a re-export after a reload is a `change: 'none'` link (`kernel-link.test.ts`
+  in a fresh kernel; `cad-link.spec.ts` after a reopen).
+- **The app's answers.** `stale`: re-read, and try once more only when this
+  design is newer than the linked one (else the app's message: "Part 1 changed in
+  another tab. Reload to continue."); `changed`: write both files again and try
+  again (twice at most); `superseded`: nothing to do; `cancelled` (the app's
+  question answered "Keep editing", or the update removed from the Queue): stay,
+  show nothing; `busy` (a "Save as new" of this study is being added): try again
+  shortly (4 times), only when the app answers so at the call (a `busy` after it
+  reported a stage is how the job ended: its message, no retry); `unsaved`: tell the app the page is clean again, once;
+  `gone` (the geometry was removed): link again as a first link, once;
+  `plugin_needed` and every other refusal: the app's message as it is. "Save as
+  new" resolves with `created` and the new geometry id; `linkedGeometry()` names
+  it from then on. The app's question itself is the app's dialog over the page;
+  the call waits while it is open.
+- **The study record.** `source_version` after each save while a geometry is
+  linked (§6), so the geometry's row can say "Not up to date with Part 1." while
+  the saved design is newer. A deliberate difference from `authoring.md`
+  ("Write the reserved study key `source_version` after each save"): before the
+  first link CAD writes it nowhere but `model.json`. No row shows it then, and
+  every study-record write moves the record's rev, which made the app's header
+  rename (sent with the rev it read) fail after a new Part's first save. The
+  first link passes `sourceVersion` itself, and from then on the record follows.
+- **One sync at a time.** A second `sync()` with the same options while one runs
+  gets the same answer; one with other options (its own signal, progress or
+  notify) runs after it, except when the running one was stopped by its signal
+  and still waits (a leave the user cancelled while a save was on its way): the
+  new call takes it over (its signal, its progress, which hears the last step
+  again), so the next exit says "Saving Part 1" too and links once.
+- **The exit hook** (host API 1.6, L3; `src/link/leave.ts`, registered in
+  `app/bootstrap.ts` once the page has connected; `bridge.onLeave` is null on an
+  older host, and a refusal `not_allowed` registers nothing). The app runs it on
+  every way out it owns (its Back, the browser's Back or a link, another project,
+  Home, Open in 3D); turning CAD off, closing or reloading the tab run nothing.
+  It runs the controller with the leave's `signal` (checked between steps: a
+  stopped leave ends quietly) and `progress` (the controller's words, then the
+  app's link stages, said again every 5 s so the app's 30 s stall clock never
+  fires during a long export) and returns `{ ok: true, view }`:
+  - `view` is the camera the user left with (`viewStateOf`): position, target
+    and up in model mm (the export has no transform), Z up, `fovDeg` the
+    vertical field of view (30, three.js `fov`), or `height` the full visible
+    height of an orthographic view at the target. Also when nothing changed
+    (the no-change rule: no export, the app lands on the same geometry with the
+    camera). The same view goes on `linkGeometry` (`SyncOptions.view`): after
+    "Continue in background" the page closes before the hook returns, so only
+    the link's view lands (host 1.6, `cad:l3-background-camera`).
+  - No body included: no link; the plain message ("No body is included in the
+    simulation; Part 1 keeps its last update.") as the leave's progress line in
+    the app's header, held 3 s so it is read (Cancel there keeps the Part). No
+    page toast: it said the same twice and covered the view controls (L3 review
+    polish 3), and it closes with the workspace anyway. An empty Part that was
+    never linked leaves at once.
+  - A save still on its way: the exit waits for it ("Saving Part 1", Cancel).
+    After 25 s (`SAVE_STUCK_MS`) it gives up with CAD's own words, "Part 1 is
+    still saving after 25 seconds.", before the app's 30 s stall question would
+    say "it did not answer" (L3 review polish 2); Stay keeps the Part, its save
+    goes on, and the next leave takes the same sync over.
+  - "Keep editing" in the app's question (`cancelled`) or a stopped leave:
+    `{ ok: true }` at once; the app has ended the leave and the Part stays.
+  - A refused link (a failed or stopped feature, an invalid body, the app's
+    refusals such as `plugin_needed`, `unsaved`, `stale`) throws CAD's reason
+    alone (`brief`: "Split 1 failed to build. Fix, retry or suppress it
+    first."); the app asks "Couldn't update the project" with it and adds what
+    became of the geometry ("Part 1 keeps its last update.").
+  - Typed text (a value typed in a field, no Enter) is not applied by the hook
+    (`typed: 'keep'`): the saved design is linked (the app hears "clean" for the
+    link, then the page's own state again, `DocService.retellDirty()`), and the
+    app's "Leave without saving?" question after the hook asks about the text,
+    as it always did ("Leaving discards them" stays true; Stay finds the text).
+  - A Part that never loaded (still loading, or unreadable): nothing to sync.
+  - The Part has no page-level "Done" (a panel's Done closes the panel); one
+    would call `nav.back()` (`bridge.back`) and the hook does the sync.
+  `window.__CAD__.leave` (`hook`, `runs`, `last`) is for the tests.
+- **The gates.** `npm run test:gate:l3-cad` is `scripts/gate-l3-cad.mjs`, built
+  like the L2 gate: it fails at once without the app's Python or the Vortex
+  (`CAD_E2E_VORTEX_STEP`), runs `L3_UNIT` (`tests/link/leave.test.ts`,
+  `controller.test.ts`, `tests/app/bootstrap.test.tsx`, `tests/doc/service.test.ts`,
+  `tests/ui/panels.test.tsx`) with `--allowOnly=false`, then
+  `e2e/cad-link-exit.spec.ts` with `CAD_L3_REQUIRE=1` and `--forbid-only` (its own
+  app server with the app's slot-hold test hook, `MAGNUSIM_TEST_SLOT_HOLD=1`, for
+  "Continue in background"), and fails on any skipped test, on a unit file that
+  ran no test, and on a census miss (`L3_E2E_CENSUS`: exactly the expected e2e
+  tests by id, each expected to pass). Its landings are strict: a report dialog
+  only where the setup needs one (its title, and its lines where the test gives
+  them), any other dialog fails (never clicked through), and the app's record of
+  the landing must agree (a dialog, a toast with its words, or nothing). No test
+  is marked `test.fail()`: the host defects the L3 reviews found (the row's tick
+  after a leave that linked nothing, a bogus "moved far" report, the large part's
+  camera) were fixed in 253d6a4 and their markers removed; a unit test checks
+  that none is left.
+  `npm run test:gate:l2-cad` is `scripts/gate-l2-cad.mjs`: it fails
+  at once without the app's Python, runs the unit tests with
+  `CAD_LINK_REQUIRE_PYTHON=1` (a missing Python fails them instead of skipping),
+  and fails on any skipped unit or e2e test in the JSON reports (link review L3).

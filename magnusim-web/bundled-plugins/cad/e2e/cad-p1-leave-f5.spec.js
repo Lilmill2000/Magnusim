@@ -189,12 +189,18 @@ test("cad:p1-leave-f5-conflict a tab behind another one never overwrites it on i
   await page2.waitForTimeout(1000);
   expect(await stored(request, projectId, studyId), 'after the pointer left B: A\'s version').toEqual(theirs);
 
-  // 3. B's Back asks (its change is not saved: A's came first); Leave closes B's workspace.
+  // 3. B's Back: its exit hook cannot save (A's came first), so the app asks (L3: "Couldn't
+  // update the project", with CAD's reason and what leaving discards); Leave anyway closes B's
+  // workspace.
   const back = await page2.locator('#workspace-overlay [data-ws-back]').boundingBox();
   await page2.mouse.move(back.x + back.width / 2, back.y + back.height / 2, { steps: 10 });
   await page2.mouse.click(back.x + back.width / 2, back.y + back.height / 2, { delay: 80 });
-  await expect(page2.locator('#cf-heading')).toHaveText('Leave without saving?');
-  await expect(page2.locator('#cf-copy')).toHaveText('Magnusim CAD: Changes to Part 1 are not saved: it was changed in another tab. Leaving discards them.');
+  await expect(page2.locator('#cf-heading')).toHaveText("Couldn't update the project");
+  // L3 review B1: the chip's words (Reload, Keep mine), and what each loses.
+  await expect(page2.locator('#cf-copy')).toHaveText(
+    "Magnusim CAD: Part 1 was also changed in another tab. Choose Reload (this tab's changes are lost) or Keep mine (the other tab's changes are lost), then leave. The project is unchanged. Its changes are not saved. Leaving discards them.",
+  );
+  await expect(page2.locator('#cf-confirm')).toHaveText('Leave anyway');
   await answerLeave(page2, true);
   await expect(page2.locator('#workspace-overlay')).toBeHidden();
   await page2.waitForTimeout(1000);

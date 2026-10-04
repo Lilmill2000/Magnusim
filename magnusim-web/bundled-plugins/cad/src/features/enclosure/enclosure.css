@@ -15,6 +15,7 @@
 
 .cad-enclosure-side .cad-enclosure-reset {
   margin-left: 0;
+  margin-right: 6px;
   white-space: nowrap;
 }
 

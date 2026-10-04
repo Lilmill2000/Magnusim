@@ -319,7 +319,7 @@ test('cad:p2-features-vortex the Vortex fluid domain: an Enclosure with a 100 mm
   const { seen, frame } = await freshPart(page, request);
   await importByPicker(page, frame, VORTEX);
   await finishImport(page, frame);
-  await expect(volumeChip(frame)).toHaveText(/44,798,500 mm³$/);
+  await expect(volumeChip(frame)).toHaveText(/4\.47985 × 10⁷ mm³$/);
   // Enclosure, Fixed 100 mm: the reference fluid_box (Box is gone since decision 2026-10-01).
   await tb(frame).locator('[data-command="cfd.enclosure"]').click();
   const p = panel(frame);
@@ -343,7 +343,7 @@ test('cad:p2-features-vortex the Vortex fluid domain: an Enclosure with a 100 mm
   await expect(keep).toBeChecked();
   await p.locator('[data-switch="keep-tools"] .cad-switch-label').click();
   await expect(keep).not.toBeChecked();
-  await expect(volumeChip(frame)).toHaveText(/213,286,000 mm³$/, { timeout: 240_000 });
+  await expect(volumeChip(frame)).toHaveText(/2\.13286 × 10⁸ mm³$/, { timeout: 240_000 });
   // The tool the cut used up is still listed, plainly, and nothing in the panel says otherwise.
   await expect(p.locator('[data-pick-field="tools"] .cad-pick-name')).toHaveText(['Vortex CFD Test v1']);
   await expect(p.locator('[data-pick-error]')).toHaveCount(0);

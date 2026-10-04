@@ -14,7 +14,7 @@ import type { BodyId, FeatureId, PersistentRef } from '../../types/doc';
 import type { SelectionItem } from '../../types/selection';
 import { PickList, type PickRow } from './PickList';
 import { usePicker } from './pick';
-import { pickFace, refLabel, shownFaces, statusLostFace } from './refs';
+import { faceIndexIn, pickFace, refLabel, shownFaces, statusLostFace } from './refs';
 
 export interface FaceFieldOptions {
   /** The feature being edited (its own faces cannot be picked for it). */
@@ -85,16 +85,28 @@ export function useFaceField(services: AppServices, o: FaceFieldOptions): FieldH
   // A face is named as Measure names it: its number on the body as shown, and the body ("Face 3 of
   // flange"); where it came from is the tooltip. (Review P2/P3 round 1: Measure said "Face 3 of
   // flange" and Delete faces "Face 7 (Imported 1 (flange.step))", even for a face Delete faces 1 had
-  // changed.) The number is taken when the face is first seen in this panel and kept while it stays
-  // open, so the live result renumbering the body's faces (or removing them) does not rename it.
+  // changed.) The number is the face's number on the body as this panel first saw it, kept while
+  // the panel stays open: the live result renumbering the body's faces (or removing them) does not
+  // rename a row, and two rows never share a number (L3 review polish 4: each hole Delete faces
+  // took was "Face 8" of the healed body at its click, so the list read "Face 8, Face 8, Face 8").
+  const firstSeen = useRef(new Map<BodyId, readonly string[]>()).current;
+  for (const b of bodies) if (b.names && !firstSeen.has(b.id)) firstSeen.set(b.id, b.names.faces);
   const seenAt = useRef(new Map<string, number>()).current;
-  const rows: PickRow[] = o.refs.map((r) => {
-    const from = refLabel(services, r);
+  const numbered: (number | undefined)[] = o.refs.map((r) => {
     if (!seenAt.has(r.name) && info) {
-      const at = shownFaces(info, [r])[0];
-      if (at != null) seenAt.set(r.name, at + 1);
+      const first = firstSeen.get(info.id);
+      let at = first ? faceIndexIn(first, r.name) : -1;
+      // A face the body did not have when the panel opened: its number on the body as shown now.
+      if (at < 0) at = shownFaces(info, [r])[0] ?? -1;
+      if (at >= 0) seenAt.set(r.name, at + 1);
     }
-    const n = seenAt.get(r.name);
+    return seenAt.get(r.name);
+  });
+  const rows: PickRow[] = o.refs.map((r, i) => {
+    const from = refLabel(services, r);
+    // Two rows on one number (a face first seen on the body as shown after an earlier pick
+    // renumbered it): the number would not tell them apart, so they say where they came from.
+    const n = numbered[i] != null && numbered.filter((x) => x === numbered[i]).length === 1 ? numbered[i] : undefined;
     // Not on the body after a rebuild (the feature's error names it, or names a face and this
     // one is not on the body shown): the row says so in red, with what the face was. Review
     // P2/P3 round 3: the row of a Press-pull broken by deleting Combine 1 looked found.

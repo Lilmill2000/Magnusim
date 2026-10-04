@@ -195,10 +195,21 @@ async function expectVolume(frame, mm3, rel = 1e-6, timeout = 60_000) {
     .toBe('ok');
 }
 
-/** A readout as the chips format it: 6 significant digits, digit groups from 10,000 up. */
+/** A readout as the chips format it: 6 significant digits, digit groups from 10,000 up, significant figures above a million when rounded. */
 const readout = (n) => {
   const v = Number(n.toPrecision(6));
-  return Math.abs(v) < 10_000 ? String(v) : v.toLocaleString('en-US', { maximumFractionDigits: 20 });
+  if (Math.abs(v) < 10_000) return String(v);
+  // 7 digits or more that 6 significant digits do not hold: significant figures ("1.30484 × 10⁸"; UX review).
+  if (Math.abs(v) >= 1_000_000 && Math.abs(v - n) > 1e-9 * Math.abs(n)) {
+    let e = Math.floor(Math.log10(Math.abs(n)));
+    let m = Number((n / 10 ** e).toPrecision(6));
+    if (Math.abs(m) >= 10) {
+      m = Number((m / 10).toPrecision(6));
+      e += 1;
+    }
+    return `${m} × 10${String(e).split('').map((c) => (c === '-' ? '⁻' : '⁰¹²³⁴⁵⁶⁷⁸⁹'[Number(c)])).join('')}`;
+  }
+  return v.toLocaleString('en-US', { maximumFractionDigits: 20 });
 };
 
 /** A block with this corner and size: a rectangle sketched on Top and extruded (helpers.ts addSolid). */
@@ -313,6 +324,16 @@ test('cad:p2-step-import flange.step by the picker: "0 problems", "Imported 1 (f
   const { seen, frame } = await freshPart(page, request);
   // Before any body: the editing commands say why.
   await expect(tb(frame).locator('[data-command="modify.press-pull"]')).toHaveAttribute('data-disabled-reason', 'Make or import a body first');
+  // What the Faces column says in the very render the diagnostics first appear in (L3 review
+  // polish 5: it read "…" until the rebuild had made the body).
+  await cad(page, () => {
+    window.__facesAtDiagnostics = null;
+    const look = () => {
+      if (window.__facesAtDiagnostics !== null || !document.querySelector('[data-import-diagnostics]')) return;
+      window.__facesAtDiagnostics = [...document.querySelectorAll('[data-import-bodies] tbody tr')].map((tr) => tr.children[2]?.textContent ?? '');
+    };
+    new MutationObserver(look).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
   await importByPicker(page, frame, FLANGE);
   const p = panel(frame);
   await expect(p.locator('[data-panel-title]')).toHaveText('Imported 1 (flange.step)');
@@ -321,6 +342,7 @@ test('cad:p2-step-import flange.step by the picker: "0 problems", "Imported 1 (f
   await expect(p.locator('[data-import-bodies] tbody td').first()).toHaveText('flange');
   await expect(p.locator('[data-import-bodies] tbody td').nth(1)).toHaveText('Solid');
   expect(await finishImport(page, frame, 'p2-import-flange-panel')).toBe('0 problems');
+  expect(await cad(page, () => window.__facesAtDiagnostics)).toEqual([REF.flange.import.faces.toLocaleString('en-US')]);
   await expect(featureRow(frame, 'Imported 1 (flange.step)')).toHaveAttribute('data-state', 'ok');
   await expect(frame.locator('[data-cad-tree] [data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (1)');
   await openBodies(frame);
@@ -374,6 +396,41 @@ test('cad:p2-step-delete-faces the 4 hole faces selected, Delete: 4 faces fewer 
   mass = await openMass(frame);
   await expect(mass.locator('[data-mass-value="faces"]')).toHaveText(new RegExp(`^${REF.flange.import.faces - 4}, `));
   await mass.locator('[data-panel-done]').click();
+  await expectSaved(frame);
+  expect(seen.csp, 'CSP violations').toEqual([]);
+  expect(seen.errors, 'console errors').toEqual([]);
+});
+
+test('cad:p2-step-delete-faces-picks the holes clicked one by one in the Delete faces panel keep their own numbers, never "Face 8, Face 8, Face 8"', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await importByPicker(page, frame, FLANGE);
+  await finishImport(page, frame);
+  await still(page);
+  // The holes' numbers on the flange as imported (what Measure says of them before any change).
+  const numbers = await cad(page, async () => {
+    const s = window.__CAD__.services;
+    const b = s.doc.state.get().rebuild.bodies[0];
+    const t = await s.kernel.call('topo', { id: b.shape, faces: 'all', edges: 'none', vertices: 'none', face_bbox: 'fast', face_mass: false });
+    return t.result.faces.filter((f) => f.type === 'cylinder').map((f) => f.i + 1);
+  });
+  expect(numbers).toHaveLength(4);
+  const holes = await holeWallPoints(page);
+  // Delete faces from the toolbar, then each hole clicked in the viewport. The live result heals
+  // each one as it is picked, so the body's faces are numbered anew before the next click.
+  await tb(frame).locator('[data-command="modify.delete-faces"]').click();
+  const p = panel(frame);
+  await expect(p.locator('[data-feature-panel="delete_faces"]')).toBeVisible();
+  for (let i = 0; i < holes.length; i++) {
+    await clickModel(page, holes[i]);
+    await expect(p.locator('[data-pick-field="faces"] [data-pick-row]')).toHaveCount(i + 1, { timeout: 30_000 });
+    await expect.poll(() => cad(page, () => window.__CAD__.services.doc.state.get().rebuild.bodies[0]?.faces ?? -1), { timeout: 30_000 }).toBe(REF.flange.import.faces - (i + 1));
+    await still(page);
+  }
+  // Each row its own number, the one the flange had when the panel opened (L3 review polish 4).
+  await expect(p.locator('[data-pick-field="faces"] .cad-pick-name')).toHaveText(numbers.map((n) => `Face ${n} of flange`));
+  await shot(page, 'p2-delete-faces-picks');
+  await p.locator('[data-panel-done]').click();
+  await expect(featureRow(frame, 'Delete faces 1')).toHaveAttribute('data-state', 'ok');
   await expectSaved(frame);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);

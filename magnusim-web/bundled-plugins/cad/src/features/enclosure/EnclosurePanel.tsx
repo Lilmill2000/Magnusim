@@ -26,7 +26,7 @@ import type { EnclosureOutput } from '../../types/doc-service';
 import type { FeaturePanelProps } from '../../types/modules';
 import type { SelectionItem } from '../../types/selection';
 import { buttonClass, Field, FieldGroup, Hint, NumberUnitInput, Select } from '../../ui/kit';
-import { formatQuantity, formatVolume, unitText } from '../../ui/kit/format';
+import { derivedLength, formatQuantity, formatVolume, unitText } from '../../ui/kit/format';
 import { useBodyField } from '../p2/fields';
 import { P2FeaturePanel, useFeaturePanel } from '../p2/panel';
 import { useSelectionMirror } from '../p2/pick';
@@ -75,6 +75,16 @@ export function EnclosurePanel(props: FeaturePanelProps) {
   const bodies = useStateStore(services.doc.state, (s) => s.rebuild.bodies);
   const handle = useStateStore(services.viewport, (s) => s.handle);
   const [picking, setPicking] = useState(false);
+  // Sides whose field shows a refusal for typed text: the cut note does not speak for them (UX review).
+  const [refused, setRefused] = useState<ReadonlySet<EnclosureSide>>(() => new Set());
+  const refusedChanged = (side: EnclosureSide, why: string | null) =>
+    setRefused((prev) => {
+      if (!!why === prev.has(side)) return prev;
+      const next = new Set(prev);
+      if (why) next.add(side);
+      else next.delete(side);
+      return next;
+    });
 
   // With none picked, the field itself says what it encloses: every solid body before it.
   const enclosed = output?.bodies ?? [];
@@ -118,13 +128,14 @@ export function EnclosurePanel(props: FeaturePanelProps) {
 
   const values = resolveEnclosure(f, units);
   const sides = sidesOf(f.shape);
-  // Each side's padding as the panel shows it: the user's own, else the padding mode's (percent needs the part's size).
+  // Each side's padding as the panel shows it: the user's own, else the padding mode's (percent needs the
+  // part's size), rounded to the display tolerance (UX review U2: "30.479999999999997", "81.28000123617929").
   const derived = (side: EnclosureSide): string => {
     const zero = `0 ${docUnits.length}`;
     if (f.padding === 'fixed') return f.distance;
     if (f.padding === 'zero' || !values.ok) return zero;
     if (!output) return '';
-    return `${paddingFromMode(side, values.values, output.bbox)} mm`;
+    return derivedLength(paddingFromMode(side, values.values, output.bbox), docUnits);
   };
   const lengthWords = (mm: number) => formatQuantity(mm, 'length', docUnits);
   // A side's typed value is checked against the part: never past its far side, never no size.
@@ -144,12 +155,16 @@ export function EnclosurePanel(props: FeaturePanelProps) {
   const faultOf = (side: EnclosureSide): string | null => (built && !built.ok && built.sides.includes(side) ? built.message : null);
   // One note for every side that goes into the part (SD review round 2: one per side, six identical
   // lines, pushed Done out of view).
-  const cutting = values.ok && output ? sides.filter((s) => !faultOf(s) && sideCuts(s, values.values, output.bbox)) : [];
+  // A side whose field refuses what was typed says only that (UX review: a refused −Z also showed the
+  // old "cuts through" note of the value it still has).
+  const cutting = values.ok && output ? sides.filter((s) => !faultOf(s) && !refused.has(s) && sideCuts(s, values.values, output.bbox)) : [];
   const cutNote = cutting.length
     ? `${listWords(cutting.map((s) => sideLabel(s, f.axis)))} ${cutting.length === 1 ? 'cuts' : 'cut'} through ${cutWords}: Combine Cut will leave the cut-off ${cutting.length === 1 ? 'part' : 'parts'} of ${cutWords} out of the fluid`
     : null;
 
-  const shapeNow = shapeOfOutput(output);
+  // What the panel's values make (the same numbers as the fields, also mid-drag before the rebuild ends;
+  // UX review: Size said 34.2 while the arrow said 35), else what was built.
+  const shapeNow = built && built.ok ? built.shape : shapeOfOutput(output);
   const sizeText = (() => {
     if (!shapeNow) return null;
     if (shapeNow.kind === 'box') {
@@ -163,7 +178,7 @@ export function EnclosurePanel(props: FeaturePanelProps) {
   const padding = PADDINGS.find((p) => p.value === f.padding) ?? PADDINGS[0];
 
   return (
-    <P2FeaturePanel props={props} kit={kit}>
+    <P2FeaturePanel props={props} kit={kit} fieldsSay={built && !built.ok ? built.message : null}>
       <Field label="Shape" htmlFor={id('shape')} field="shape">
         <Select id={id('shape')} label="Shape" field="shape" value={f.shape} onChange={(v) => kit.set({ shape: v as EnclosureFeature['shape'] })} options={SHAPES.map((o) => ({ value: o.value, label: o.label }))} />
       </Field>
@@ -243,21 +258,8 @@ export function EnclosurePanel(props: FeaturePanelProps) {
                     link comes (SD review round 1: it moved the number 75 px left) and every
                     value field of the panel sits in one column. */}
                 <span className="cad-enclosure-side" data-side={side} data-side-source={set ? 'set' : 'padding'}>
-                  {set ? (
-                    <button
-                      type="button"
-                      className={`${buttonClass('fix')} cad-enclosure-reset`}
-                      data-side-reset={key}
-                      title={`${label} follows the padding again`}
-                      onClick={() => {
-                        const next = { ...(f.sides ?? {}) };
-                        delete next[side];
-                        kit.set({ sides: next });
-                      }}
-                    >
-                      Use padding
-                    </button>
-                  ) : null}
+                  {/* "Use padding" sits in the input's own row, so a reason under the field (wider than
+                      the row) never moves it (UX review: the link shifted left in error rows). */}
                   <NumberUnitInput
                     id={id(`side-${key}`)}
                     field={`side-${key}`}
@@ -267,6 +269,24 @@ export function EnclosurePanel(props: FeaturePanelProps) {
                     units={units}
                     validate={(v) => sideProblem(side, v)}
                     problem={faultOf(side)}
+                    onRefusal={(why) => refusedChanged(side, why)}
+                    lead={
+                      set ? (
+                        <button
+                          type="button"
+                          className={`${buttonClass('fix')} cad-enclosure-reset`}
+                          data-side-reset={key}
+                          title={`${label} follows the padding again`}
+                          onClick={() => {
+                            const next = { ...(f.sides ?? {}) };
+                            delete next[side];
+                            kit.set({ sides: next });
+                          }}
+                        >
+                          Use padding
+                        </button>
+                      ) : null
+                    }
                     onCommit={(e) => kit.update({ sides: { ...(f.sides ?? {}), [side]: e } })}
                   />
                 </span>

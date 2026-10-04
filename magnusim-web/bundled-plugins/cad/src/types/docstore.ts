@@ -50,6 +50,12 @@ export interface StoredModel {
   etag: string;
   /** When it was written (ISO), when the file says. */
   savedAt?: string | null;
+  /**
+   * LINK: the save counter of this design (`source_version` in the file): every
+   * save writes one more than the version it replaces, so it never goes down.
+   * 0 for a file written before the counter.
+   */
+  sourceVersion: number;
 }
 
 /** A save refused because someone else wrote the model since we read it (another tab). */
@@ -92,8 +98,17 @@ export interface DocStore {
   readonly pointer: StudyPointer;
   /** null when the study has no model yet (a new Part). */
   loadModel(): Promise<StoredModel | null>;
-  /** Write if the stored etag still equals `ifMatch` (null = must not exist). Returns the new etag. Rejects with DocConflictError. */
-  saveModel(doc: CadDoc, ifMatch: string | null): Promise<string>;
+  /**
+   * Write if the stored etag still equals `ifMatch` (null = must not exist), with
+   * the save counter `sourceVersion` in the file. Returns the new etag. Rejects
+   * with DocConflictError.
+   */
+  saveModel(doc: CadDoc, ifMatch: string | null, sourceVersion: number): Promise<string>;
+  /**
+   * What is stored now: its etag and save counter (null when there is no model).
+   * "Keep mine" after another tab saved writes on top of it.
+   */
+  stored(): Promise<{ etag: string; sourceVersion: number } | null>;
   /**
    * The page is going this instant: post `doc` in ONE message before returning,
    * on top of `previous` (the version this tab last stored). WsDataStore only (a
@@ -102,7 +117,7 @@ export interface DocStore {
    * used). WsFilesStore has none: on a 1.2 host every save is conditional and
    * the host asks before the page goes while one is on its way.
    */
-  saveModelNow?(doc: CadDoc, previous: string | null): { etag: string; done: Promise<string> };
+  saveModelNow?(doc: CadDoc, previous: string | null, sourceVersion: number): { etag: string; done: Promise<string> };
   loadView(): Promise<CadView | null>;
   /** Last write wins; never conflicts. */
   saveView(view: CadView): Promise<void>;

@@ -169,7 +169,7 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   const menu = frame.locator('[data-cad-menu]');
   // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the CAD ones,
   // then the modules' items for a face (P2/P3, plan §3.1: after the shell's, behind a separator).
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Hide Body 1', 'Rename Body 1', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Roll back to here', 'Delete Extrude 1', 'Delete faces and heal', 'Measure', 'Press-pull', 'New sketch on this face']);
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Roll back to here', 'Delete Extrude 1', 'Delete faces and heal', 'Measure', 'Press-pull', 'New sketch on this face']);
   await menu.locator('[data-menu-item="edit"]').click();
   await expect(menu).toHaveCount(0);
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');

@@ -696,6 +696,11 @@ button.mgk-btn--link[aria-disabled="true"]:hover {
   white-space: normal;
 }
 
+/* A reason's bracketed bound stays on one line ("(x ≥ 40 mm)"; SD final review: "(x" then "≥ 40 mm)"). */
+.nui-keep {
+  white-space: nowrap;
+}
+
 /* ---- parameters table ---- */
 .cad-params {
   width: 100%;

@@ -6,9 +6,9 @@
 import type { Bridge } from '../lib/bridge';
 import type { EventBus } from '../lib/bus';
 import { newId, nextName } from '../lib/ids';
-import { commitPendingEdits, pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
+import { commitPendingEdits, pendingEditLabel, pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
 import { createStateStore } from '../lib/store';
-import { FEATURE_ACTION_LABELS, type BodyId, type BodyMaking, type CadDoc, type CadView, type Feature, type FeatureId, type FeatureStatus, type FeatureType, type Param, type ParamId, type SavedCamera } from '../types/doc';
+import { FEATURE_ACTION_LABELS, type BodyDef, type BodyId, type BodyMaking, type CadDoc, type CadView, type Feature, type FeatureId, type FeatureStatus, type FeatureType, type Param, type ParamId, type SavedCamera } from '../types/doc';
 import type { BodyProps, DocService, DocState, EditResult, EditSession, FeatureFiles, SaveState } from '../types/doc-service';
 import type { DocStore } from '../types/docstore';
 import type { CadEvents } from '../types/events';
@@ -25,7 +25,9 @@ import { createParamScope, featureExprs, paramNameProblem, usersOfParam } from '
 import { RebuildEngine, type RebuildOutput } from './rebuild';
 import { COLOR_RE, DEFAULT_BODY_COLOR, deepFreeze, emptyDoc, emptyView, PLUGIN_VERSION, readCamera, readView } from './schema';
 import { openDocStore } from './store/open';
+import { isRemovedFeature } from './features/removed';
 import { createUndoStack } from './undo';
+import { SourceRecord } from './source-record';
 import { createUnitsService } from './units';
 
 export interface DocServiceOptions {
@@ -110,6 +112,14 @@ export function createDocService(opts: DocServiceOptions): DocService {
     save: { state: 'saved', at: null },
     history: { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null },
     session: null,
+    sourceVersion: 0,
+  });
+  // LINK: the save counter goes into the study record after each save (at most one write per 1.5 s).
+  const record = new SourceRecord({
+    study: bridge.study,
+    log,
+    // Only while a geometry is linked: before that no row shows it (and a host before 1.5 has none).
+    linked: async () => !!bridge.link && (await bridge.link.linkedGeometry()) !== null,
   });
   const units = createUnitsService(
     () => state.get().doc.units,
@@ -228,6 +238,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     if (s.status === 'loading') return 'The part is still loading';
     if (s.status === 'error') return s.error ?? 'The part could not be read';
     if (s.save.state === 'conflict') return 'Changed in another tab · Reload to keep editing';
+    if (s.save.state === 'updated') return 'Updated in another tab · Reload to keep editing';
     return true;
   }
 
@@ -452,6 +463,17 @@ export function createDocService(opts: DocServiceOptions): DocService {
     });
   }
 
+  function suppressRemoved(): EditResult {
+    return edit((doc) => {
+      const gone = doc.features.filter((f) => isRemovedFeature(f) && !f.suppressed);
+      if (!gone.length) return { doc, label: '' };
+      const ids = new Set(gone.map((f) => f.id));
+      const features = doc.features.map((f) => (ids.has(f.id) ? ({ ...f, suppressed: true } as Feature) : f));
+      // One undo step for all of them (Undo brings every one back).
+      return { doc: { ...doc, features }, label: gone.length === 1 ? `Suppress ${gone[0].name}` : 'Suppress the removed features' };
+    });
+  }
+
   function dependents(doc: CadDoc, f: Feature): Feature[] {
     return doc.features.filter((g) => g.id !== f.id && dependencies(doc, g).includes(f.id));
   }
@@ -542,7 +564,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
    * piece, which has none until it is renamed or recoloured) the one the
    * rebuild shows, when a feature makes it.
    */
-  function bodyDefOf(doc: CadDoc, id: BodyId): { name: string; color: string } | null {
+  function bodyDefOf(doc: CadDoc, id: BodyId): BodyDef | null {
     const b = doc.bodies[id];
     if (b) return b;
     const built = state.get().rebuild.bodies.find((x) => x.id === id);
@@ -572,6 +594,18 @@ export function createDocService(opts: DocServiceOptions): DocService {
       if (!COLOR_RE.test(color)) return { ok: false, reason: 'A colour is written #rrggbb' };
       if (color === b.color.toLowerCase()) return { doc, label: '' };
       return { doc: { ...doc, bodies: { ...doc.bodies, [id]: { ...b, color } } }, label: `Colour of ${b.name}` };
+    });
+  }
+
+  function setBodyInSimulation(id: BodyId, include: boolean): EditResult {
+    return edit((doc) => {
+      const b = bodyDefOf(doc, id);
+      if (!b) return { ok: false, reason: 'That body is not in the part' };
+      if ((b.simulation !== false) === include) return { doc, label: '' };
+      const next = { ...b };
+      if (include) delete next.simulation;
+      else next.simulation = false;
+      return { doc: { ...doc, bodies: { ...doc.bodies, [id]: next } }, label: include ? `Include ${b.name} in the simulation` : `Leave ${b.name} out of the simulation` };
     });
   }
 
@@ -763,10 +797,18 @@ export function createDocService(opts: DocServiceOptions): DocService {
         const view = readView(await store.loadView().catch(() => null), doc.features.length);
         if (my !== loadSeq || disposed) return;
         undo.clear();
+        // The save counter never goes down: the file's, or the study record's when that is newer.
+        const loadedVersion = Math.max(model ? model.sourceVersion : 0, Number(bridge.context.study?.source_version) || 0);
         const saver = new Autosave({
           store,
           etag: model ? model.etag : null,
           savedAt: model ? (model.savedAt ?? null) : null,
+          sourceVersion: loadedVersion,
+          onSaved: (v) => {
+            if (autosave !== saver) return;
+            state.set({ sourceVersion: v });
+            record.saved(v);
+          },
           getDoc: () => state.get().doc,
           getView: () => state.get().view,
           onState: (save) => {
@@ -789,6 +831,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
           history: historyState(),
           session: null,
           rebuild: { status: 'idle', seq: state.get().rebuild.seq, features: pending, bodies: [], outputs: {}, ms: null, message: null },
+          sourceVersion: loadedVersion,
         });
         if (!model) {
           // A new Part is stored at once, so its units are fixed from now on.
@@ -822,39 +865,56 @@ export function createDocService(opts: DocServiceOptions): DocService {
   // (leaveNow): on a 1.2 host that is the same conditional write, and while it
   // runs the page is dirty, so the host asks before it goes (setDirty above); on
   // a 1.1 host it posts the model in one message (review round 2).
-  // A value typed in a panel field and not applied yet is applied first, as
-  // Enter would, so it goes with the save (SD review round 2: Back lost it).
-  const saveNow = () => {
-    commitPendingEdits();
+  // A value typed in a panel field and not applied yet: the pointer leaving the
+  // frame applies a whole one the user is not still typing (quiet: no refusal
+  // shown); the leave keys apply it as Enter would; the frame losing focus and the
+  // page going apply nothing, so the app's question ("Leaving discards them")
+  // holds (lib/pendingEdits.ts; LINK polish of the SD final review).
+  const pointerLeft = () => {
+    commitPendingEdits('quiet');
     autosave?.flushNow();
   };
-  const leaveNow = () => {
+  const saveNow = () => {
+    autosave?.flushNow();
+  };
+  const leaveKey = () => {
     commitPendingEdits();
+    autosave?.leaveNow();
+  };
+  const leaveNow = () => {
     autosave?.leaveNow();
   };
   const onLeaveKey = (e: KeyboardEvent) => {
     const k = e.key;
     const ctrl = e.ctrlKey || e.metaKey;
-    if (k === 'F5' || k === 'BrowserRefresh' || k === 'BrowserBack' || k === 'BrowserForward' || (ctrl && /^[rw]$/i.test(k)) || (ctrl && k === 'F4') || (e.altKey && (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home'))) leaveNow();
+    if (k === 'F5' || k === 'BrowserRefresh' || k === 'BrowserBack' || k === 'BrowserForward' || (ctrl && /^[rw]$/i.test(k)) || (ctrl && k === 'F4') || (e.altKey && (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home'))) leaveKey();
   };
   // The mouse's side buttons (3 = Back, 4 = Forward): the browser goes back on
   // the release, with the pointer still over the part, so the press is the signal.
   const onSideButton = (e: MouseEvent) => {
-    if (e.button === 3 || e.button === 4) leaveNow();
+    if (e.button === 3 || e.button === 4) leaveKey();
+  };
+  // Back in this tab or window: another tab may have saved over the model meanwhile (UX review: the
+  // overwritten tab still said "Saved").
+  const checkStored = () => {
+    void autosave?.checkStored();
   };
   const onVisibility = () => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') leaveNow();
+    if (typeof document === 'undefined') return;
+    if (document.visibilityState === 'hidden') leaveNow();
+    else checkStored();
   };
   if (typeof window !== 'undefined') {
     window.addEventListener('pagehide', leaveNow);
     window.addEventListener('blur', saveNow);
+    window.addEventListener('focus', checkStored);
     window.addEventListener('pointerdown', onSideButton, true);
     window.addEventListener('mousedown', onSideButton, true);
     window.addEventListener('mouseup', onSideButton, true);
   }
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', onVisibility);
-    document.documentElement.addEventListener('mouseleave', saveNow);
+    document.documentElement.addEventListener('mouseleave', pointerLeft);
     document.addEventListener('keydown', onLeaveKey, true);
   }
 
@@ -881,6 +941,9 @@ export function createDocService(opts: DocServiceOptions): DocService {
       const full = `${head} ${typed.refused.error.replace(/\.$/, '')}.`;
       return full.length <= 200 ? full : head;
     }
+    // Typed and not applied (no Enter yet): say which field, so the question is true.
+    const field = typed.pending ? pendingEditLabel() : null;
+    if (field) return `Changes typed in ${field} of ${title} are not applied yet.`;
     if (save.state === 'pending' || save.state === 'saving' || typed.pending) return `Changes to ${title} are not saved yet.`;
     return null;
   };
@@ -908,11 +971,13 @@ export function createDocService(opts: DocServiceOptions): DocService {
     session: () => open,
     rename,
     setSuppressed,
+    suppressRemoved,
     remove,
     removeBlock,
     move,
     renameBody,
     setBodyColor,
+    setBodyInSimulation,
     addParam,
     updateParam,
     removeParam,
@@ -930,12 +995,34 @@ export function createDocService(opts: DocServiceOptions): DocService {
     async flush() {
       await autosave?.flush();
     },
+    async retellDirty() {
+      const msg = disposed ? null : dirtyMessage(state.get());
+      toldDirty = msg ?? '';
+      await bridge.setDirtyNow(msg !== null, msg ?? undefined);
+    },
     retrySave() {
       autosave?.retryNow();
+    },
+    holdSaves() {
+      return autosave ? autosave.hold() : () => {};
+    },
+    async checkStored() {
+      await autosave?.checkStored();
     },
     async reload() {
       await load();
     },
+    async keepMine() {
+      const saver = autosave;
+      if (!saver || !saver.conflicted) return;
+      await saver.keepMine();
+    },
+    async bodiesAtEnd() {
+      const s = state.get();
+      if (s.status !== 'ready') throw new Error(s.status === 'loading' ? 'the part is still loading' : (s.error ?? 'the part could not be read'));
+      return engine.bodiesAtEnd(s.doc, s.view);
+    },
+    recordSettled: () => record.settled(),
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -944,16 +1031,18 @@ export function createDocService(opts: DocServiceOptions): DocService {
       offDirty();
       offTitle();
       offTyped();
+      record.dispose();
       if (typeof window !== 'undefined') {
         window.removeEventListener('pagehide', leaveNow);
         window.removeEventListener('blur', saveNow);
+        window.removeEventListener('focus', checkStored);
         window.removeEventListener('pointerdown', onSideButton, true);
         window.removeEventListener('mousedown', onSideButton, true);
         window.removeEventListener('mouseup', onSideButton, true);
       }
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisibility);
-        document.documentElement.removeEventListener('mouseleave', saveNow);
+        document.documentElement.removeEventListener('mouseleave', pointerLeft);
         document.removeEventListener('keydown', onLeaveKey, true);
       }
       const saver = autosave;

@@ -1,9 +1,12 @@
 key = "cad"
 name = "Magnusim CAD"
 version = "0.1.0"
-# 1.3: the workspace imports the host's UI kit (@magnusim/plugin-ui); a 1.2 host
-# cannot load it. It also uses ws.files and nav.setDirty (1.2).
-api_version = "1.3"
+# 1.6: leaving the Part workspace brings the project's geometry up to date
+# (ws.nav.onLeave, the exit hook) and hands the viewport the Part's camera.
+# 1.5: a Part links its design into the project as a geometry
+# (ws.project.linkGeometry, links_geometry below). 1.3: the workspace imports the
+# host's UI kit (@magnusim/plugin-ui). 1.2: ws.files and nav.setDirty.
+api_version = "1.6"
 tier = "bundled"
 required = false
 # Ships off: nothing of CAD runs, and existing projects look unchanged, until
@@ -33,3 +36,6 @@ title = "Part"
 icon = "M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8"
 workspace = "part"
 schema_version = 1
+# A Part may link one project geometry (host API 1.5): its design becomes a
+# geometry the simulation side uses, and later versions of it update it.
+links_geometry = true

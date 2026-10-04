@@ -140,10 +140,10 @@ describe('the Enclosure panel', () => {
     // A side may go into the part (with a note), but never past the part's far side (SD review
     // round 1: −X = −60 on a 40 mm block made a slab beside the part), nor past the other side.
     setField(a, 'side-nx', '-30');
-    expect(fieldError(a, 'side-nx')).toBe('−X would put the enclosure past the part (x ≥ 20 mm)');
+    expect(fieldError(a, 'side-nx')).toBe('−X would put the enclosure past the part (padding more than −20 mm)');
     expect(enclosure(a)!.sides).toEqual({});
     setField(a, 'side-nx', '-20');
-    expect(fieldError(a, 'side-nx')).toBe('−X would put the enclosure past the part (x ≥ 20 mm)');
+    expect(fieldError(a, 'side-nx')).toBe('−X would put the enclosure past the part (padding more than −20 mm)');
     expect(a.$('[data-side-note]')).toBeNull();
     setField(a, 'side-px', '-15');
     await a.settle();

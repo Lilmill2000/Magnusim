@@ -95,6 +95,7 @@ export async function sketchHarness(start: Partial<SketchFeature> = {}, opts: Ha
     save: { state: 'saved', at: null },
     history: { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null },
     session: null,
+    sourceVersion: 0,
   });
   const units = createFakeUnits(() => state.get().doc);
   let draft: SketchFeature = sketchOf({}, start);

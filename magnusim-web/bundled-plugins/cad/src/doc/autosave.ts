@@ -32,7 +32,23 @@
 // - Back to what is stored (undo to the saved model) drops a waiting write and
 //   says Saved.
 // - Writes are retried after errors (and at once with the chip's Retry) and
-//   stop for good on a conflict.
+//   stop on a conflict, until the user picks: Reload (the service reads the
+//   other tab's version) or Keep mine (keepMine(): this tab's version is written
+//   on top of the other tab's save).
+// - hold(): while an arrow is dragged, model writes wait (the changes are
+//   applied live; one write follows the release; UX review: a drag wrote the
+//   model about 8 times). flushNow() and leaveNow() still write: the page may
+//   be going.
+// - checkStored(): the window regained focus (or the exit hook is about to link):
+//   when what is stored is no longer what this tab stored or loaded (another tab
+//   saved over it) and this tab has no change of its own, it stops with
+//   'updated': "Updated in another tab", Reload only, and NOT dirty (L3 review
+//   B1: it said "Changed in another tab", which reported unsaved work and steered
+//   a clean tab toward Keep mine over the other tab's real work). A tab with a
+//   change of its own finds out when it saves: 'conflict', both tabs edited.
+// - LINK: every model write carries the design's save counter (sourceVersion):
+//   one more than the version it replaces, so it never goes down, also after
+//   Keep mine (one more than the newer of the two tabs' versions).
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { CadDoc, CadView } from '../types/doc';
@@ -57,6 +73,10 @@ export interface AutosaveOptions {
   etag: string | null;
   /** When the loaded model was stored (ISO), for the Saved chip on reopen. */
   savedAt?: string | null;
+  /** LINK: the save counter of the loaded design (the next save writes one more). */
+  sourceVersion?: number;
+  /** LINK: a model write landed with this save counter. */
+  onSaved?(sourceVersion: number): void;
   onState(s: SaveState): void;
   /** Sustained spacing once the burst is used (ms). Tests pass less. */
   intervalMs?: number;
@@ -83,7 +103,7 @@ export class Autosave {
   /** flushNow() came while a write ran: write again right after it, outside the budget. */
   private urgent = false;
   private failures = 0;
-  private stopped: 'conflict' | 'disposed' | null = null;
+  private stopped: 'conflict' | 'updated' | 'disposed' | null = null;
   private shown: SaveState['state'] | null = null;
   private tokens: number;
   private refillAt = 0;
@@ -100,9 +120,14 @@ export class Autosave {
   private gen = 0;
   /** A leaveNow() model post has not been answered yet. */
   private leaving = false;
+  /** LINK: the save counter of what this tab stored last (or loaded). */
+  private version: number;
+  /** hold() calls not released yet: model writes wait. */
+  private holds = 0;
 
   constructor(private readonly o: AutosaveOptions) {
     this.etag = o.etag;
+    this.version = Math.max(0, Math.floor(o.sourceVersion ?? 0));
     this.interval = o.intervalMs ?? SAVE_INTERVAL_MS;
     this.burst = Math.max(1, o.burst ?? SAVE_BURST);
     this.viewInterval = o.viewIntervalMs ?? VIEW_INTERVAL_MS;
@@ -114,6 +139,25 @@ export class Autosave {
 
   get conflicted(): boolean {
     return this.stopped === 'conflict';
+  }
+
+  /** Another tab saved a newer model while this tab had no change (checkStored): Reload only. */
+  get outdated(): boolean {
+    return this.stopped === 'updated';
+  }
+
+  /** LINK: the save counter of the design this tab stored last (the loaded one before any save). */
+  get sourceVersion(): number {
+    return this.version;
+  }
+
+  private saved(version: number) {
+    this.version = Math.max(this.version, version);
+    try {
+      this.o.onSaved?.(this.version);
+    } catch (e) {
+      this.o.log?.('a save listener failed', e);
+    }
   }
 
   /** When the model was last stored (ISO), or null when it never was. */
@@ -166,9 +210,49 @@ export class Autosave {
     }
   }
 
+  /**
+   * Model writes wait until the returned release() (an arrow being dragged): the changes are applied
+   * live, and one write follows the release. flushNow() and leaveNow() still write.
+   */
+  hold(): () => void {
+    this.holds++;
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      this.holds = Math.max(0, this.holds - 1);
+      if (!this.holds && this.dirty) this.kick();
+    };
+  }
+
+  /**
+   * Is what is stored still what this tab stored? (The window regained focus, or the exit hook is
+   * about to link.) Only while this tab has nothing of its own to write: when another tab saved over
+   * it, this tab stops with 'updated' ("Updated in another tab"), which is not unsaved work.
+   */
+  async checkStored(): Promise<void> {
+    if (this.stopped || this.writing || this.dirty || this.leaving || !this.etag) return;
+    const etag = this.etag;
+    let now: { etag: string; sourceVersion: number } | null;
+    try {
+      now = await this.o.store.stored();
+    } catch {
+      return;
+    }
+    if (this.stopped || this.writing || this.dirty || this.leaving || this.etag !== etag) return;
+    if (!now || now.etag === etag) return;
+    this.stopped = 'updated';
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.clearViewTimer();
+    // A view change waiting to be written is dropped: the Reload reads the other tab's view.
+    this.viewDirty = false;
+    this.send({ state: 'updated', message: 'Updated in another tab' });
+  }
+
   /** Write the model now when the budget allows, else when it next does. A running write chains by itself. */
   private kick() {
-    if (this.stopped || this.writing || this.timer) return;
+    if (this.stopped || this.writing || this.timer || this.holds) return;
     if (this.failures) {
       this.schedule(RETRY_MS[Math.min(this.failures - 1, RETRY_MS.length - 1)]);
       return;
@@ -290,13 +374,15 @@ export class Autosave {
       this.viewAt = Date.now();
     }
     this.send({ state: 'saving' });
+    const version = this.version + 1;
     try {
-      const etag = await this.o.store.saveModel(doc, this.etag);
+      const etag = await this.o.store.saveModel(doc, this.etag, version);
       this.checkedAt = Date.now();
       // A leaveNow() post overtook this write: its etag and doc stand.
       if (gen === this.gen) {
         this.etag = etag;
         this.savedDoc = doc;
+        this.saved(version);
       }
       // The view as it is now (last write wins); a leaveNow() post already wrote it.
       if (view && gen === this.gen) {
@@ -375,9 +461,10 @@ export class Autosave {
     const doc = this.o.getDoc();
     const before = { etag: this.etag, doc: this.savedDoc };
     const gen = ++this.gen;
+    const version = this.version + 1;
     let posted: { etag: string; done: Promise<string> };
     try {
-      posted = store.saveModelNow(doc, this.etag);
+      posted = store.saveModelNow(doc, this.etag, version);
     } catch (e) {
       this.o.log?.('the model was not saved', e);
       this.flushNow();
@@ -385,6 +472,9 @@ export class Autosave {
     }
     this.etag = posted.etag;
     this.savedDoc = doc;
+    // Taken now, as the etag is: a write after this post counts on from it.
+    const versionBefore = this.version;
+    this.version = version;
     this.dirty = false;
     this.urgent = false;
     this.leaving = true;
@@ -395,6 +485,7 @@ export class Autosave {
         if (this.stopped || gen !== this.gen) return;
         this.checkedAt = Date.now();
         this.failures = 0;
+        this.saved(version);
         this.savedAt = new Date().toISOString();
         if (!this.dirty && !this.writing) this.send({ state: 'saved', at: this.savedAt });
       },
@@ -404,6 +495,7 @@ export class Autosave {
         if (this.stopped || gen !== this.gen) return;
         this.etag = before.etag;
         this.savedDoc = before.doc;
+        this.version = versionBefore;
         this.failures++;
         this.dirty = true;
         this.o.log?.('the model was not saved', e);
@@ -411,6 +503,27 @@ export class Autosave {
         this.kick();
       },
     );
+  }
+
+  /**
+   * "Keep mine" after another tab saved first (the conflict chip): write this
+   * tab's model on top of what is stored now, replacing the other tab's save. Its
+   * save counter is one more than the newer of the two. Resolves once written (or
+   * refused again: a third tab saved in between, and the chip asks again).
+   */
+  async keepMine(): Promise<void> {
+    if (this.stopped !== 'conflict') return;
+    const now = await this.o.store.stored();
+    this.etag = now ? now.etag : null;
+    this.version = Math.max(this.version, now ? now.sourceVersion : 0);
+    this.stopped = null;
+    this.failures = 0;
+    this.savedDoc = null;
+    this.dirty = true;
+    this.viewDirty = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    await this.write();
   }
 
   /** Try a failed save again now (the chip's Retry), instead of waiting for the retry timer. */

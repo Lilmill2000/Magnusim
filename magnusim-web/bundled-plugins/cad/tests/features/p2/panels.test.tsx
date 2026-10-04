@@ -86,7 +86,9 @@ describe('P2 commands and panels', () => {
     expect(a.$('[data-import-file]')?.textContent).toMatch(/^flange\.step · 29\.\d KB$/);
     expect(texts(a, '[data-import-bodies] tbody td').slice(1)).toEqual(['Solid', '10', 'Valid']);
     expect(a.$(`[data-import-body="${f.items[0].body}"] td`)?.textContent?.trim()).toBe(a.services.doc.state.get().doc.bodies[f.items[0].body].name);
-    expect(a.$('[data-import-healed]')?.textContent).toBe('Healed at 0.001 mm');
+    // A clean part (0 problems, nothing knit): no "Healed at" line (UX review).
+    expect(a.$('[data-import-diagnostics]')?.textContent).toBe('0 problems');
+    expect(a.$('[data-import-healed]')).toBeNull();
     expect(a.$('[data-import-progress]')).toBeNull();
     act(() => void fireEvent.click(a.$('[data-panel-done]')!));
     expect(a.$('[data-feature-panel]')).toBeNull();
@@ -158,6 +160,9 @@ describe('P2 commands and panels', () => {
     // Each named as Measure named it when it was picked (the live result no longer has them), where it came from in the tooltip.
     expect(texts(a, '[data-pick-field="faces"] .cad-pick-name')[0]).toBe(`Face ${holes[0] + 1} of flange`);
     for (const t of texts(a, '[data-pick-field="faces"] .cad-pick-name')) expect(t).toMatch(/^Face \d+ of flange$/);
+    // Each its own number, as the flange had them when the panel opened (L3 review polish 4: every
+    // hole picked after the first was "Face 8" of the healed body at its click).
+    expect(texts(a, '[data-pick-field="faces"] .cad-pick-name')).toEqual(holes.map((i) => `Face ${i + 1} of flange`));
     expect(a.$('[data-pick-field="faces"] .cad-pick-name')?.getAttribute('title')).toMatch(/^Face \d+ of flange, from Face \d+ of Imported 1 \(flange\.step\)$/);
     // Clicking a face of the body again takes it out of the list.
     act(() => void fireEvent.click(a.$$('[data-pick-remove]')[3]));

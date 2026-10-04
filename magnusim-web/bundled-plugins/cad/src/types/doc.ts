@@ -87,6 +87,13 @@ export interface BodyDef {
   name: string;
   /** "#rrggbb"; defaults to the core body colour #bdc9db. */
   color: string;
+  /**
+   * LINK: false when the user left this body out of the simulation (the Bodies
+   * row's "Include in simulation" toggle). Absent means included: every solid
+   * body goes to the project's linked geometry unless it says false here. A
+   * surface body is never sent, whatever this says.
+   */
+  simulation?: false;
 }
 
 interface FeatureBase<T extends string> {

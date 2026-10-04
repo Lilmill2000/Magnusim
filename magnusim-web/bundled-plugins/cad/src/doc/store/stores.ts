@@ -22,6 +22,12 @@ export interface ModelFile {
    */
   etag?: string;
   saved_at: string;
+  /**
+   * LINK: the design's save counter. Each save writes one more than the version
+   * it replaces (also after another tab's save, with "Keep mine"), so it never
+   * goes down; the link sends it as `sourceVersion`. Absent in older files (0).
+   */
+  source_version?: number;
   doc: CadDoc | null;
   /** Set by a P1 build that moved the model to another store: this file is only a forwarding note. */
   moved_to?: 'files';
@@ -30,6 +36,12 @@ export interface ModelFile {
 export interface ViewFile {
   format: typeof VIEW_FORMAT;
   view: CadView;
+}
+
+/** A model file's save counter (0 when it has none or it is not a whole number). */
+export function sourceVersionOf(file: { source_version?: unknown } | null | undefined): number {
+  const v = file ? Number(file.source_version) : 0;
+  return Number.isSafeInteger(v) && v > 0 ? v : 0;
 }
 
 /** The counter of a WsDataStore version token ("12.s_ab" -> 12; none -> 0). */
@@ -61,7 +73,14 @@ export class WsDataStore implements DocStore {
     if (raw == null) return null;
     const file = modelOf(raw);
     if (file.moved_to) throw new DocReadError(`the model moved to plugin ${file.moved_to}; reload the Part`);
-    return { doc: readDoc(file.doc), etag: String(file.etag ?? ''), savedAt: typeof file.saved_at === 'string' ? file.saved_at : null };
+    return { doc: readDoc(file.doc), etag: String(file.etag ?? ''), savedAt: typeof file.saved_at === 'string' ? file.saved_at : null, sourceVersion: sourceVersionOf(file) };
+  }
+
+  async stored(): Promise<{ etag: string; sourceVersion: number } | null> {
+    const raw = await this.data.read<unknown>(this.pointer.rel);
+    if (raw == null) return null;
+    const file = raw as ModelFile;
+    return { etag: String(file.etag ?? ''), sourceVersion: sourceVersionOf(file) };
   }
 
   /** The etag of the last model write this tab posted (a conditional save or saveModelNow). */
@@ -75,7 +94,7 @@ export class WsDataStore implements DocStore {
     return !!etag && etag.endsWith(`.${this.session}`);
   }
 
-  async saveModel(doc: CadDoc, ifMatch: string | null): Promise<string> {
+  async saveModel(doc: CadDoc, ifMatch: string | null, sourceVersion: number): Promise<string> {
     const seq = this.nowSeq;
     const raw = await this.data.read<unknown>(this.pointer.rel);
     // saveModelNow() posted a newer model while this one read: this one must not land after it.
@@ -85,7 +104,7 @@ export class WsDataStore implements DocStore {
     // saveModelNow() whose answer never came back) is not.
     if (current !== ifMatch && !this.ours(current)) throw new DocConflictError();
     const etag = `${tokenNumber(current) + 1}.${this.session}`;
-    const file: ModelFile = { format: MODEL_FORMAT, etag, saved_at: new Date().toISOString(), doc };
+    const file: ModelFile = { format: MODEL_FORMAT, etag, saved_at: new Date().toISOString(), source_version: sourceVersion, doc };
     this.lastPosted = etag;
     await this.data.write(this.pointer.rel, file);
     return etag;
@@ -98,11 +117,11 @@ export class WsDataStore implements DocStore {
    * conditional write may be on its way). See DocStore.saveModelNow and
    * doc/autosave.ts leaveNow().
    */
-  saveModelNow(doc: CadDoc, previous: string | null): { etag: string; done: Promise<string> } {
+  saveModelNow(doc: CadDoc, previous: string | null, sourceVersion: number): { etag: string; done: Promise<string> } {
     this.nowSeq++;
     const base = tokenNumber(this.lastPosted) > tokenNumber(previous) ? this.lastPosted : previous;
     const etag = `${tokenNumber(base) + 1}.${this.session}`;
-    const file: ModelFile = { format: MODEL_FORMAT, etag, saved_at: new Date().toISOString(), doc };
+    const file: ModelFile = { format: MODEL_FORMAT, etag, saved_at: new Date().toISOString(), source_version: sourceVersion, doc };
     this.lastPosted = etag;
     const done = this.data.write(this.pointer.rel, file).then(() => etag);
     this.nowDone = done;
@@ -225,11 +244,17 @@ export class WsFilesStore implements DocStore {
     if (!r) return null;
     const file = modelOf(r.json);
     if (file.moved_to) throw new DocReadError(`the model moved to plugin ${file.moved_to}; reload the Part`);
-    return { doc: readDoc(file.doc), etag: r.etag, savedAt: typeof file.saved_at === 'string' ? file.saved_at : null };
+    return { doc: readDoc(file.doc), etag: r.etag, savedAt: typeof file.saved_at === 'string' ? file.saved_at : null, sourceVersion: sourceVersionOf(file) };
   }
 
-  async saveModel(doc: CadDoc, ifMatch: string | null): Promise<string> {
-    const file: ModelFile = { format: MODEL_FORMAT, saved_at: new Date().toISOString(), doc };
+  async stored(): Promise<{ etag: string; sourceVersion: number } | null> {
+    const r = await this.readJson(this.pointer.rel);
+    if (!r) return null;
+    return { etag: r.etag, sourceVersion: sourceVersionOf(r.json as ModelFile) };
+  }
+
+  async saveModel(doc: CadDoc, ifMatch: string | null, sourceVersion: number): Promise<string> {
+    const file: ModelFile = { format: MODEL_FORMAT, saved_at: new Date().toISOString(), source_version: sourceVersion, doc };
     try {
       const r = await this.files.write(this.pointer.rel, JSON.stringify(file), { ifMatch });
       return r.etag;

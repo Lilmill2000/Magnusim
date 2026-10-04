@@ -39,10 +39,31 @@ export function formatQuantity(value: number, quantity: Quantity, units: DocUnit
   return unit === '°' ? `${text}°` : `${text} ${unit}`;
 }
 
+const SUPERSCRIPT = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+
+/** "1.30484 × 10⁸": 6 significant figures, the power in superscript. */
+function timesTen(value: number): string {
+  const exp = Math.floor(Math.log10(Math.abs(value)));
+  let m = Number((value / 10 ** exp).toPrecision(6));
+  let e = exp;
+  // Rounding can reach 10 (9.999999 -> 10).
+  if (Math.abs(m) >= 10) {
+    m = Number((m / 10).toPrecision(6));
+    e += 1;
+  }
+  const power = String(e)
+    .split('')
+    .map((c) => (c === '-' ? '⁻' : SUPERSCRIPT[Number(c)]))
+    .join('');
+  return `${m} × 10${power}`;
+}
+
 /**
  * A readout number (not an input): 6 significant digits, digit groups from
  * 10,000 up ("8000", "6994.69", "26,000", "400,000,000"); tiny values in the
- * input's scientific style ("1.2000e-5").
+ * input's scientific style ("1.2000e-5"). A value of 7 digits or more that 6
+ * significant digits do not hold reads as significant figures ("1.30484 × 10⁸"):
+ * "130,484,000" would show rounded digits as if exact (UX review).
  */
 export function formatReadout(value: number): string {
   if (!Number.isFinite(value)) return '';
@@ -50,6 +71,7 @@ export function formatReadout(value: number): string {
   if (Math.abs(value) < SMALL) return value.toExponential(4);
   const n = Number(value.toPrecision(6));
   if (Math.abs(n) < 10_000) return String(n);
+  if (Math.abs(n) >= 1_000_000 && Math.abs(n - value) > 1e-9 * Math.abs(value)) return timesTen(value);
   return n.toLocaleString('en-US', { maximumFractionDigits: 20 });
 }
 
@@ -70,20 +92,42 @@ export function formatVolume(mm3: number, units: DocUnits): string {
 }
 
 /**
- * What a field shows for a value while it is not being edited: the same as a
- * readout ("20", "62.3156", "1,000,000"), so a size field and the volume chip
- * read alike (review round 2: the field said "1.0000e+6" while the chip said
- * "400,000,000 mm³"). While the field has focus it shows every digit instead
+ * What a field shows for a value while it is not being edited: as a readout
+ * ("20", "62.3156", "1,000,000"), with digit groups also above a million (a
+ * field's text is what the user typed, rounded; review round 2: the field said
+ * "1.0000e+6"). While the field has focus it shows every digit instead
  * (editTextOf), so editing never drops digits.
  */
 export function formatField(value: number): string {
-  return formatReadout(value);
+  if (!Number.isFinite(value)) return '';
+  if (value === 0) return '0';
+  if (Math.abs(value) < SMALL) return value.toExponential(4);
+  const n = Number(value.toPrecision(6));
+  if (Math.abs(n) < 10_000) return String(n);
+  return n.toLocaleString('en-US', { maximumFractionDigits: 20 });
 }
 
 /** An internal value in the display unit with all its digits (15 significant: no float noise such as 0.30000000000000004). */
 export function fullPrecision(value: number): string {
   if (!Number.isFinite(value)) return '';
-  return String(Number(value.toPrecision(15)));
+  const n = Number(value.toPrecision(15));
+  return String(Object.is(n, -0) ? 0 : n);
+}
+
+/** Decimals a derived length keeps in each display unit: about 0.1 µm, below the kernel's own noise. */
+const DERIVED_DECIMALS: Record<LengthUnit, number> = { mm: 4, cm: 5, m: 7, in: 6, ft: 7 };
+
+/**
+ * A length the app works out (an Enclosure side's padding from Percent: 10 % of
+ * 304.8 mm is 30.480000000000004 in floating point, and an exact bounding box of
+ * a curved part carries the kernel's 1e-5 mm), as the expression a field shows:
+ * rounded to the display tolerance, then every digit that is left ("30.48 mm",
+ * "81.28 mm"), never float noise (UX review U2).
+ */
+export function derivedLength(mm: number, units: DocUnits): Expr {
+  if (!Number.isFinite(mm)) return `0 ${units.length}`;
+  const v = Number(toDisplay(mm, 'length', units).toFixed(DERIVED_DECIMALS[units.length] ?? 6));
+  return `${fullPrecision(v)} ${units.length}`;
 }
 
 /**

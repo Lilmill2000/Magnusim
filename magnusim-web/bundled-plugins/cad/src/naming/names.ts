@@ -15,7 +15,7 @@ import type { FaceNames, NamingInput, NamingResult } from '../types/naming';
 export type FaceRole = 'side' | 'start' | 'end' | 'import' | 'primitive' | 'cut' | 'heal' | 'moved' | 'new' | 'gen' | 'enclosure';
 
 /** An Enclosure's face names' details in words (F:<id>:enclosure:+x is the +X face). */
-const ENCLOSURE_SIDE_WORDS: Record<string, string> = {
+export const ENCLOSURE_SIDE_WORDS: Record<string, string> = {
   '+x': '+X face',
   '-x': '−X face',
   '+y': '+Y face',

@@ -28,8 +28,16 @@ any number. Revolve, fillet and the rest of the modeling breadth are later
 phases. The description in `manifest.toml` (shown in
 Settings > Plugins) names only what ships: update it as features land.
 
-It needs Magnusim's host API 1.3: its panels are drawn with the host's UI kit
-(`@magnusim/plugin-ui`, H14), which a 1.2 host cannot give the frame. From 1.2
+It needs Magnusim's host API 1.6: a Part's design becomes a geometry of its
+project (`ws.project.linkGeometry`, the Part study kind's `links_geometry`, 1.5),
+and its panels are drawn with the host's UI kit (`@magnusim/plugin-ui`, 1.3).
+Each body has an "Include in simulation" toggle (its Bodies row and its menu),
+on for every solid body; a body left out is not part of the project's geometry.
+The sync runs when the user leaves the Part (the host's exit hook, `ws.nav.onLeave`,
+1.6): every way out (Back, the browser's Back, another project, Home, Open in 3D)
+saves the Part, brings its geometry up to date and lands in the simulation
+viewport with the Part's camera; ARCHITECTURE.md §11 has the export, the face
+names and the exit hook. From 1.2
 it uses `ws.files` to save a Part's model (etag-checked writes, so two tabs
 never overwrite each other) and asks before leaving the workspace while a
 change is not saved yet. (The document still falls back to `ws.data` on a 1.1
@@ -79,6 +87,8 @@ npm run test:e2e -- e2e/cad-p2-step.spec.js e2e/cad-p3-sketch.spec.js   # the P2
 CAD_E2E_VORTEX_STEP=<path> npm run test:e2e   # with the Vortex part: its tests run instead of being skipped
 CAD_E2E_BIG_STEP=<path> npm run test:e2e -- e2e/cad-large-step.spec.js  # the 113 MB STEP (opt-in)
 npm run test:kernel    # the kernel gates in Node (fixtures/kernel)
+npm run test:gate:l2-cad   # LINK: the export against the app's own checker, and the link e2e; fails (never skips) without the app's Python
+CAD_E2E_VORTEX_STEP=<path> npm run test:gate:l3-cad   # exit sync (L3): the exit hook's unit tests and e2e/cad-link-exit.spec.ts; fails (never skips) without the app's Python or the Vortex, on a stray .only, and on any test missing from or added to its census (every test is expected to pass; none is marked test.fail(): see ARCHITECTURE.md §11)
 ```
 
 - `npm run test:e2e` starts the host app from this checkout with the app's

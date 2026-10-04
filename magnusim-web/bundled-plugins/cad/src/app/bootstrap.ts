@@ -6,11 +6,14 @@ import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBridge } from '../lib/bridge';
 import { createBus } from '../lib/bus';
+import { installPendingEditKeys } from '../lib/pendingEdits';
 import { createSelectionStore } from '../lib/selection';
 import { createStateStore } from '../lib/store';
 import { createDocService, install as installDoc } from '../doc';
 import { PLUGIN_VERSION } from '../doc/schema';
 import { createKernelAdapter } from '../kernel';
+import { createLinkController } from '../link/controller';
+import { installLeaveHook } from '../link/leave';
 import { createModuleRegistry, discoverModules, installModules, registerModuleFeatures } from '../modules';
 import type { AppServices, AreaApis } from '../types/app';
 import type { Mode } from '../types/commands';
@@ -59,6 +62,8 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   registerModuleFeatures(doc.features, found);
   const commands = createCommandRegistry(() => services);
   const keyboard = createKeyboard(document);
+  // Typed text not applied yet: focus coming back finds its field, Enter applies it (UX review U1).
+  installPendingEditKeys(window);
   const services: AppServices = {
     bridge,
     bus,
@@ -80,7 +85,23 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   installUi(services);
   installModules(services, found);
   bindCommandShortcuts(commands, keyboard, (message) => bridge.toast(message, 'info'), () => services.mode.get().mode);
-  exposeTestHandle(services, PLUGIN_VERSION);
+  // LINK: the Part's design into the project's linked geometry. Leaving the
+  // workspace runs it: the exit hook (host API 1.6, L3), registered now that the
+  // page is connected; it hands the app the camera the user leaves with.
+  const link = createLinkController({ bridge, doc, kernel });
+  const leave = exposeTestHandle(services, PLUGIN_VERSION, link);
+  void installLeaveHook({
+    bridge,
+    doc,
+    link,
+    camera: () => services.viewport.get().handle?.camera() ?? null,
+    onOutcome: (o) => {
+      leave.last = o;
+      leave.runs++;
+    },
+  }).then((on) => {
+    leave.hook = on;
+  });
 
   createRoot(root).render(createElement(App, { services }));
 

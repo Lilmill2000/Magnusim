@@ -13,7 +13,7 @@ import type { StudyRecord } from '@magnusim/workspace';
 import type { Bridge } from '../../lib/bridge';
 import { STUDY_POINTER_FIELD, defaultPointer, readPointer, type DocStore, type StudyPointer, type WsFilesApi } from '../../types/docstore';
 import { readDoc } from '../schema';
-import { errorCode, isChanged, modelOf, WsDataStore, WsFilesStore } from './stores';
+import { errorCode, isChanged, modelOf, sourceVersionOf, WsDataStore, WsFilesStore } from './stores';
 
 /** Where the move keeps the model file as a P1 build (ws.data) last wrote it. */
 export function p1CopyRel(pointer: StudyPointer): string {
@@ -80,7 +80,8 @@ async function moveP1Model(store: WsFilesStore, files: WsFilesApi, pointer: Stud
       if (!isChanged(e)) throw e;
     }
     try {
-      await store.saveModel(doc, r.etag);
+      // The move keeps the design's save counter (a P1 file has none: 0).
+      await store.saveModel(doc, r.etag, sourceVersionOf(file));
       return `moved to plugin files (the P1 file is kept as ${p1CopyRel(pointer)})`;
     } catch (e) {
       // Another tab wrote it between the read and the write: read it again.

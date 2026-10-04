@@ -1,12 +1,21 @@
 // The one module that talks to the host bridge (@magnusim/workspace), so host
 // API churn is absorbed here. Frozen shape (scaffold); INTEGRATE adds wrappers
 // when the host gains APIs (host API 1.2: ws.files, nav.setDirty, focus on
-// connect).
+// connect; 1.5: linking a geometry; 1.6: the exit hook).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { ConfirmOptions, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
+import type { ConfirmOptions, LeaveHandler, LinkedGeometry, LinkOptions, LinkResult, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
 import type { WsFilesApi } from '../types/docstore';
 
 export type ToastKind = 'info' | 'success' | 'error';
+
+/** Host API 1.5, a study kind with `links_geometry`: the study's design as a project geometry. */
+export interface LinkApi {
+  linkGeometry(o: LinkOptions): Promise<LinkResult>;
+  /** The geometry this study links now; null before the first link, or after the user removed it. */
+  linkedGeometry(): Promise<LinkedGeometry | null>;
+  /** The linked geometry was updated (this page's link or another tab's). */
+  onGeometry(fn: (g: { geometryId: string; rev: number; fromRev: number | null }) => void): () => void;
+}
 
 export interface Bridge {
   readonly context: WorkspaceContext;
@@ -42,6 +51,15 @@ export interface Bridge {
    * message. A no-op on an older host. Never throws.
    */
   setDirty(dirty: boolean, message?: string): void;
+  /** As setDirty, and resolves once the host has heard it (a link right after it must not meet "unsaved"). */
+  setDirtyNow(dirty: boolean, message?: string): Promise<void>;
+  /** Linking a geometry (host API 1.5); null on an older host. */
+  link: LinkApi | null;
+  /**
+   * Register the exit hook (host API 1.6, `ws.nav.onLeave`; null clears it). Null on an
+   * older host, which has no exit hook (a 1.5 host also refuses the call with `not_allowed`).
+   */
+  onLeave: ((handler: LeaveHandler | null) => Promise<void>) | null;
   /** The host's bridge API is at least `major.minor` (`hostVersion`, compared as numbers). */
   hostAtLeast(major: number, minor: number): boolean;
   spawnWorker(url: string | URL): Worker;
@@ -78,6 +96,22 @@ export function createBridge(ws: Workspace): Bridge {
       : null;
   const nav = ws.nav as Workspace['nav'] & { setDirty?: (dirty: boolean, message?: string) => Promise<void> };
   const canSetDirty = host12 && typeof nav.setDirty === 'function';
+  const project = (ws as unknown as { project?: Partial<LinkApi> & { linkGeometry?: unknown; linkedGeometry?: unknown } }).project;
+  // Feature detection (compatibility.md 1.5): the host says 1.5 or newer, and its SDK has the calls.
+  const link: LinkApi | null =
+    versionAtLeast(ws.context.hostVersion, 1, 5) && project && typeof project.linkGeometry === 'function' && typeof project.linkedGeometry === 'function'
+      ? {
+          linkGeometry: (o) => (project.linkGeometry as LinkApi['linkGeometry'])(o),
+          linkedGeometry: () => (project.linkedGeometry as LinkApi['linkedGeometry'])(),
+          onGeometry: (fn) => (ws as unknown as { on(e: 'geometry', f: typeof fn): () => void }).on('geometry', fn),
+        }
+      : null;
+  // Feature detection (compatibility.md 1.6): the host says 1.6 or newer, and its SDK has the call.
+  const navLeave = (ws.nav as unknown as { onLeave?: unknown }).onLeave;
+  const onLeave =
+    versionAtLeast(ws.context.hostVersion, 1, 6) && typeof navLeave === 'function'
+      ? (handler: LeaveHandler | null) => (navLeave as (h: LeaveHandler | null) => Promise<void>).call(ws.nav, handler)
+      : null;
   return {
     context: ws.context,
     studyId: ws.context.study.id,
@@ -103,6 +137,12 @@ export function createBridge(ws: Workspace): Bridge {
       if (!canSetDirty) return;
       nav.setDirty!(dirty, message).catch((err: unknown) => console.warn('[cad] setDirty failed', err));
     },
+    async setDirtyNow(dirty, message) {
+      if (!canSetDirty) return;
+      await nav.setDirty!(dirty, message);
+    },
+    link,
+    onLeave,
     hostAtLeast: (major, minor) => versionAtLeast(ws.context.hostVersion, major, minor),
     spawnWorker: (url) => ws.spawnWorker(url),
     raw: ws,

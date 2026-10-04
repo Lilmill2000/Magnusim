@@ -3143,8 +3143,13 @@ struct MBufOut : std::streambuf {
   }
 };
 
+// The BinTools format every BREP this kernel writes uses, pinned (not
+// BinTools_FormatVersion_CURRENT): the app's OCP 7.9.3 reads versions 1 to 4, so a
+// later OCCT in the kernel can never write a BREP the app refuses (LINK, C2).
+const BinTools_FormatVersion kBinFormat = BinTools_FormatVersion_VERSION_4;
+
 // The shapes, in order, as one compound in OCCT's binary BREP format (BinTools,
-// current format version, no triangulation). Buffer `brep`.
+// format version 4, no triangulation). Buffer `brep`.
 JV opBrepWrite(const JV& q) {
   std::vector<int> ids = idList(q, "ids", true);
   if (ids.empty()) throw InputError("brep_write needs at least one shape");
@@ -3157,7 +3162,7 @@ JV opBrepWrite(const JV& q) {
   {
     MBufOut sb(buf);
     std::ostream os(&sb);
-    BinTools::Write(all, os, Standard_False, Standard_False, BinTools_FormatVersion_CURRENT);
+    BinTools::Write(all, os, Standard_False, Standard_False, kBinFormat);
     os.flush();
     if (!os) throw OcctError("writing the BREP failed");
   }
@@ -3167,6 +3172,105 @@ JV opBrepWrite(const JV& q) {
   r.set("occt", OCC_VERSION_COMPLETE);
   JV tm = JV::obj();
   tm.set("write_ms", t1 - t0);
+  r.set("timings", std::move(tm));
+  JV bufs = JV::arr();
+  bufs.push(buf.release("brep", "u8"));
+  r.set("buffers", std::move(bufs));
+  return r;
+}
+
+// ------------------------------------------------------------ link_export ---
+
+// The design as the app links it (host API 1.5, "Linking a geometry"): one
+// compound of the SOLIDS of the given shapes, in order (a shape's solids in
+// TopExp_Explorer(SOLID) order), written with BinTools format 4 (kBinFormat), no
+// triangulation. Buffer `brep`.
+// With it, the face numbering the app uses (magnusim_sdk.link.face_visits): every
+// visit of TopExp_Explorer(compound, FACE), counted with no de-duplication (a face
+// two solids share is visited once per solid), each with the 1-based solid it is
+// explored in. Per visit the result gives the solid (`visit_body`, 1-based) and the
+// face's index in its own shape's face map (`visit_face`, 0-based: the MapShapes
+// index the rest of this API uses), so the page can name each visit.
+// `solids`: per solid, the index of its shape in `ids` (`src`, 0-based), its place
+// among that shape's solids (`piece`, 1-based) and its face visits (`faces`).
+// `empty`: the indices in `ids` of the shapes with no solid (left out).
+JV opLinkExport(const JV& q) {
+  std::vector<int> ids = idList(q, "ids", true);
+  if (ids.empty()) throw InputError("link_export needs at least one shape");
+  const double t0 = nowMs();
+  BRep_Builder bb;
+  TopoDS_Compound all;
+  bb.MakeCompound(all);
+  JV empty = JV::arr();
+  std::vector<int> srcOf;    // per solid (0-based): its shape's index in ids
+  std::vector<int> pieceOf;  // per solid: its place among its shape's solids (1-based)
+  for (size_t i = 0; i < ids.size(); i++) {
+    int piece = 0;
+    for (TopExp_Explorer ex(shapeOf(ids[i]), TopAbs_SOLID); ex.More(); ex.Next()) {
+      bb.Add(all, ex.Current());
+      srcOf.push_back((int)i);
+      pieceOf.push_back(++piece);
+    }
+    if (!piece) empty.push((double)i);
+  }
+  if (srcOf.empty()) throw InputError("none of the shapes has a solid");
+
+  // Every face visit over the compound (the app's face_visits): the flat FACE walk,
+  // with the body of the solid explored at that visit. The compound holds solids
+  // only, so the flat walk is the solid-by-solid walk; both are taken, and must agree.
+  std::vector<TopoDS_Shape> flat;
+  for (TopExp_Explorer ex(all, TopAbs_FACE); ex.More(); ex.Next()) flat.push_back(ex.Current());
+  JV visitBody = JV::arr();
+  JV visitFace = JV::arr();
+  std::vector<int> facesOf;
+  size_t j = 0;
+  int body = 0;
+  for (TopExp_Explorer sx(all, TopAbs_SOLID); sx.More(); sx.Next()) {
+    body++;
+    if ((size_t)body > srcOf.size()) throw OcctError("the export has more solids than it was given");
+    Indexed& ix = indexOf(ids[srcOf[body - 1]]);
+    int n = 0;
+    for (TopExp_Explorer fx(sx.Current(), TopAbs_FACE); fx.More(); fx.Next()) {
+      if (j >= flat.size() || !flat[j].IsEqual(fx.Current())) throw OcctError("the face walk of the export does not match its solids' walk");
+      const int at = ix.f.FindIndex(fx.Current());
+      if (at < 1) throw OcctError("a face of the export is not in its shape's face map");
+      visitBody.push((double)body);
+      visitFace.push((double)(at - 1));
+      j++;
+      n++;
+    }
+    facesOf.push_back(n);
+  }
+  if (j != flat.size()) throw OcctError("the export has faces outside its solids");
+  if (facesOf.size() != srcOf.size()) throw OcctError("the export lost a solid");
+  JV solids = JV::arr();
+  for (size_t k = 0; k < srcOf.size(); k++) {
+    JV s = JV::obj();
+    s.set("src", (double)srcOf[k]);
+    s.set("piece", (double)pieceOf[k]);
+    s.set("faces", (double)facesOf[k]);
+    solids.push(std::move(s));
+  }
+
+  MBuf<uint8_t> buf;
+  {
+    MBufOut sb(buf);
+    std::ostream os(&sb);
+    BinTools::Write(all, os, Standard_False, Standard_False, kBinFormat);
+    os.flush();
+    if (!os) throw OcctError("writing the BREP failed");
+  }
+  const double t1 = nowMs();
+  JV r = JV::obj();
+  r.set("bytes", (double)buf.n);
+  r.set("occt", OCC_VERSION_COMPLETE);
+  r.set("format_version", (double)kBinFormat);
+  r.set("solids", std::move(solids));
+  r.set("empty", std::move(empty));
+  r.set("visit_body", std::move(visitBody));
+  r.set("visit_face", std::move(visitFace));
+  JV tm = JV::obj();
+  tm.set("ms", t1 - t0);
   r.set("timings", std::move(tm));
   JV bufs = JV::arr();
   bufs.push(buf.release("brep", "u8"));
@@ -4855,6 +4959,7 @@ JV dispatch(const std::string& op, const JV& q) {
   if (op == "heal") return opHeal(q);
   if (op == "brep_write") return opBrepWrite(q);
   if (op == "brep_read") return opBrepRead(q);
+  if (op == "link_export") return opLinkExport(q);
   if (op == "press_pull") return opPressPull(q);
   if (op == "combine") return opCombine(q);
   if (op == "measure") return opMeasure(q);

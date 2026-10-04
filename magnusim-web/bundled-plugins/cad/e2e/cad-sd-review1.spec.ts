@@ -185,14 +185,14 @@ test('cad:sd-review1-side-past-part a side typed or dragged past the part is ref
 
   // −60 (meant as 60): past the part's +X face. Refused, with the reason; nothing changes.
   await setField(frame, 'side-nx', '-60');
-  await expect(sideError(frame, 'nx')).toHaveText('−X would put the enclosure past the part (x ≥ 40 mm)');
+  await expect(sideError(frame, 'nx')).toHaveText('−X would put the enclosure past the part (padding more than −40 mm)');
   await expect(p.locator('.cad-enclosure-side[data-side="-x"]')).toHaveAttribute('data-side-source', 'padding');
   await expect(featureRow(frame, 'Enclosure 1')).toHaveAttribute('data-state', 'ok');
   await settled(page);
   await expectVolume(page, 'Enclosure 1', 120_000);
   // Exactly at the far side: none of the part would be inside either.
   await setField(frame, 'side-nx', '-40');
-  await expect(sideError(frame, 'nx')).toHaveText('−X would put the enclosure past the part (x ≥ 40 mm)');
+  await expect(sideError(frame, 'nx')).toHaveText('−X would put the enclosure past the part (padding more than −40 mm)');
   await shot(page, 'sd-r1-side-past-part');
 
   // −15: into the part (a symmetry plane): taken, with a note on what the fluid will be.
@@ -229,7 +229,7 @@ test('cad:sd-review1-side-past-part a side typed or dragged past the part is ref
   await expect(sideNote(frame, 'radius')).toHaveText('Radius cuts through Body 1: Combine Cut will leave the cut-off part of Body 1 out of the fluid');
   await expectVolume(page, 'Enclosure 1', Math.PI * 5 * 5 * 40, 1e-9);
   await setField(frame, 'side-top', '-25');
-  await expect(sideError(frame, 'top')).toHaveText('Top would put the enclosure past the part (z ≤ 0 mm)');
+  await expect(sideError(frame, 'top')).toHaveText('Top would put the enclosure past the part (padding more than −20 mm)');
   await expectVolume(page, 'Enclosure 1', Math.PI * 5 * 5 * 40, 1e-9);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
@@ -277,7 +277,7 @@ test('cad:sd-review1-cylinder-sides a cylinder about Z, X and Y: Radius, Top and
   await expectVolume(page, 'Enclosure 1', Math.PI * (r0x + 10) ** 2 * 60);
   // Typed past the far end: the reason names the end.
   await setField(frame, 'side-bottom', '-45');
-  await expect(sideError(frame, 'bottom')).toHaveText('−X end would put the enclosure past the part (x ≥ 40 mm)');
+  await expect(sideError(frame, 'bottom')).toHaveText('−X end would put the enclosure past the part (padding more than −40 mm)');
   await shot(page, 'sd-r1-cylinder-x');
 
   // About Y with Percent: 10 % of r0 on the radius, 10 % of the length on each end.

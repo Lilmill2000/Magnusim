@@ -7,14 +7,23 @@
 // reopen that reads the stored BREP only (no import_step, no heal). Every time
 // is recorded (console line, test annotations and large-step-times.json in the
 // test's output folder). Daniel's file is read where it is, never copied; set
-// but missing, the test fails with the path.
+// but missing, the test fails with the path. The projects made from it are
+// deleted at the end.
+// L3 (exit sync): the first Back links the 113 MB part; its time to close the
+// workspace and to land is recorded and bounded (EXIT_BUDGET_MS). A second test
+// (cad:large-step-exit-camera) checks on the same part that the project viewport
+// lands with the Part's camera exactly (host fix 253d6a4: the view is applied again
+// once the budgeted faces file has loaded), that no stall question comes while the
+// part is exported and linked, that a save held on the way out ends at 25 s in
+// CAD's own words (before the app's 30 s stall), and it records the Back-to-landing
+// times of both exits (large-step-exit-times.json).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
-import { baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { baseUrl, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 
 const BIG = process.env.CAD_E2E_BIG_STEP || '';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -24,6 +33,9 @@ const SHOTS = process.env.CAD_E2E_SHOTS || '';
 const tb = (frame) => frame.locator('[data-cad-toolbar]');
 const panel = (frame) => frame.locator('[data-cad-panel]');
 const cad = (page, fn, arg) => workspaceFrame(page).evaluate(fn, arg);
+/** The first exit of the 113 MB part (export, link, landing) took 22 s in the L3 review: the bound leaves room for a slower PC. */
+const EXIT_BUDGET_MS = 90_000;
+const landings = (page) => page.evaluate(() => window.__CFD_LANDINGS__ || 0);
 
 test.skip(!BIG, 'opt-in: set CAD_E2E_BIG_STEP to the 113 MB STEP (8m0119333_V12.step) to run it');
 
@@ -104,10 +116,10 @@ test('cad:large-step the 113 MB STEP imports through the UI with progress, 11,77
     await page.screenshot({ path: join(SHOTS, 'large-step-reading.png') });
   }
   await expect(p.locator('[data-import-diagnostics]')).toBeVisible({ timeout: 600_000 });
-  // The Faces cell is never blank: "…" while the part is rebuilt, then the count (review P2/P3 round 1:
-  // it was empty while "Rebuilding…" ran).
+  // The Faces cell has the count as soon as the diagnostics show, not "…" while the part is rebuilt
+  // (review P2/P3 round 1: it was empty; L3 review polish 5: it read "…").
   const facesFirst = await p.locator('[data-import-bodies] tbody td').nth(2).textContent();
-  expect(facesFirst).toMatch(new RegExp(`^(…|${REF.healed_counts.faces.toLocaleString('en-US')})$`));
+  expect(facesFirst).toBe(REF.healed_counts.faces.toLocaleString('en-US'));
   await expect(p.locator('[data-import-progress]')).toHaveCount(0);
   times.import_ms = Math.round(performance.now() - t0);
   const stages = await cad(page, () => window.__stages.map((s) => s.t));
@@ -193,9 +205,17 @@ test('cad:large-step the 113 MB STEP imports through the UI with progress, 11,77
   expect(ops).toContain('import_step');
   expect(ops).toContain('brep_write');
 
-  // Back and reopen: the stored BREP only (no import_step, no heal), the part as it was.
+  // Back: the first exit links the part (L3); the time to close the workspace and to land is recorded and bounded.
+  const landed0 = await landings(page);
+  const tx = performance.now();
   await page.locator('#workspace-overlay [data-ws-back]').click();
-  await expect(page.locator('#workspace-overlay')).toBeHidden();
+  await expect(page.locator('#workspace-overlay')).toBeHidden({ timeout: EXIT_BUDGET_MS });
+  times.exit_closed_ms = Math.round(performance.now() - tx);
+  await expect.poll(() => landings(page), { timeout: EXIT_BUDGET_MS }).toBeGreaterThan(landed0);
+  times.exit_landed_ms = Math.round(performance.now() - tx);
+  expect(times.exit_landed_ms, `the first exit of the 113 MB part: ${times.exit_landed_ms} ms`).toBeLessThan(EXIT_BUDGET_MS);
+  await expect(page.locator('#modal-confirm')).toBeHidden();
+  // Reopen: the stored BREP only (no import_step, no heal), the part as it was.
   const t1 = performance.now();
   const again = await openPart(page, row);
   const imported = again.locator('[data-cad-tree] [data-feature-row]').first();
@@ -220,6 +240,163 @@ test('cad:large-step the 113 MB STEP imports through the UI with progress, 11,77
   mkdirSync(test.info().outputDir, { recursive: true });
   writeFileSync(join(test.info().outputDir, 'large-step-times.json'), JSON.stringify(times, null, 2));
   if (process.env.CAD_E2E_TIMES) writeFileSync(process.env.CAD_E2E_TIMES, JSON.stringify(times, null, 2));
+  // Nothing made from Daniel's file is kept.
+  await request.post(`${baseUrl()}/api/project/delete`, { data: { project_id: projectId } }).catch(() => {});
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
+});
+
+test("cad:large-step-exit-camera the 113 MB part: the first exit lands in time with the Part camera exactly and no stall question; a save held on the way out ends at 25 s in CAD's words; the next Back links and lands with the camera", async ({ page, request }) => {
+  test.setTimeout(1_500_000);
+  expect(existsSync(BIG), `CAD_E2E_BIG_STEP is set but there is no file at ${BIG}`).toBe(true);
+  const times = { file: BIG.split(/[\\/]/).pop(), browser: test.info().project.name };
+  const seen = await watchPage(page);
+  const projectId = await newProject(request);
+  /** Every app dialog over the page, in order (title and copy), with when it showed. */
+  const watchDialogs = () =>
+    page.evaluate(() => {
+      window.__dialogs = [];
+      const look = () => {
+        const cf = document.getElementById('modal-confirm');
+        const h = document.getElementById('cf-heading');
+        if (!cf || cf.hidden || !h) return;
+        const copy = document.getElementById('cf-copy')?.textContent ?? '';
+        const last = window.__dialogs[window.__dialogs.length - 1];
+        if (!last || last.title !== h.textContent || last.copy !== copy || last.closed) window.__dialogs.push({ title: h.textContent, copy, at: performance.now() });
+      };
+      new MutationObserver(look).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['hidden'] });
+    });
+  const dialogs = () => page.evaluate(() => window.__dialogs.map((d) => ({ title: d.title, copy: d.copy })));
+  const near = (a, b, tol = 1e-3) => a.length === b.length && a.every((x, i) => Math.abs(x - b[i]) <= tol * Math.max(1, Math.abs(b[i])));
+  /** A view no framing makes, around the part's own middle; returns the Part's camera. */
+  const setView = (k) =>
+    cad(
+      page,
+      (k) => {
+        const h = window.__CAD__.services.viewport.get().handle;
+        const c = h.camera();
+        const d = [c.position[0] - c.target[0], c.position[1] - c.target[1], c.position[2] - c.target[2]];
+        h.setCamera({ ...c, position: [c.target[0] + d[0] * k + 30, c.target[1] + d[1] * k - 40, c.target[2] + d[2] * k + 20], up: [0, 0, 1] });
+        return h.camera();
+      },
+      k,
+    );
+  /** The project viewport has the Part's camera: the same eye, target and up, perspective 30 degrees. */
+  const expectSameView = async (cam, what) => {
+    let host = null;
+    await expect
+      .poll(
+        async () => {
+          host = await page.evaluate(() => window.__CFD_CAMERA__());
+          return near(host.pos, cam.position) && near(host.fp, cam.target) && near(host.vu, cam.up) && host.parallel === false && Math.abs((host.angle ?? 0) - 30) <= 1e-6;
+        },
+        { timeout: 30_000, message: `the project viewport has the Part camera (${what})` },
+      )
+      .toBe(true);
+    // It stays: nothing frames the part again once its faces file has loaded.
+    await page.waitForTimeout(3_000);
+    host = await page.evaluate(() => window.__CFD_CAMERA__());
+    expect(near(host.pos, cam.position) && near(host.fp, cam.target), `the camera held after the landing (${what}): ${JSON.stringify(host)}`).toBe(true);
+    return host;
+  };
+  /** Back, then the workspace closing and the landing, timed from the click. */
+  const exitTimed = async (key) => {
+    const landed0 = await landings(page);
+    const t0 = performance.now();
+    await page.locator('#workspace-overlay [data-ws-back]').click();
+    await expect(page.locator('#workspace-overlay')).toBeHidden({ timeout: EXIT_BUDGET_MS });
+    times[`${key}_closed_ms`] = Math.round(performance.now() - t0);
+    await expect.poll(() => landings(page), { timeout: EXIT_BUDGET_MS }).toBeGreaterThan(landed0);
+    times[`${key}_landed_ms`] = Math.round(performance.now() - t0);
+    expect(times[`${key}_landed_ms`], `${key}: Back to the landing`).toBeLessThan(EXIT_BUDGET_MS);
+    await expect.poll(() => page.evaluate(() => window.__CFD_W16__?.fingerprint?.nCells ?? 0), { timeout: 120_000 }).toBeGreaterThan(0);
+  };
+  try {
+    await openProject(page, projectId);
+    const row = await newPartFromTree(page, 'Part 1');
+    const frame = await partOpened(page);
+    await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+    const chooser = page.waitForEvent('filechooser');
+    await tb(frame).locator('[data-command="file.import-step"]').click();
+    await (await chooser).setFiles(BIG);
+    const p = panel(frame);
+    await expect(p.locator('[data-import-diagnostics]')).toBeVisible({ timeout: 600_000 });
+    await expect(p.locator('[data-import-progress]')).toHaveCount(0);
+    await p.locator('[data-panel-done]').click();
+    await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-viewport', 'ready');
+    await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 120_000 });
+    await watchDialogs();
+
+    // 1. The first exit: the export and the link of the whole part, timed; no stall question on
+    //    the way (CAD says its progress again while the kernel exports); the Part's camera exactly.
+    const cam1 = await setView(0.8);
+    await exitTimed('exit1');
+    expect(await dialogs(), 'no dialog during or after the first exit').toEqual([]);
+    const linked1 = (await (await request.get(`${baseUrl()}/api/plugin-geometry/linked?project_id=${projectId}&plugin=cad&study_id=${await row.getAttribute('data-plugin-study')}`)).json()).linked;
+    expect(linked1.rev).toBe(1);
+    await expectSameView(cam1, 'first exit');
+    expect(await page.evaluate(() => window.__CFD_LAST_LANDING__)).toMatchObject({ geometryId: linked1.geometryId, reason: 'back', view: true });
+
+    // 2. A change whose save is held: the header says "Saving Part 1" over the covered Part; at
+    //    25 s CAD gives up in its own words, before the app's 30 s stall question; Stay.
+    const again = await openPart(page, row);
+    await expect(again.locator('[data-cad-tree] [data-feature-row]').first()).toHaveAttribute('data-state', 'ok', { timeout: 300_000 });
+    await expect(again.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 120_000 });
+    const hold = await holdCommits(page);
+    await cad(page, () => {
+      const doc = window.__CAD__.services.doc;
+      const id = doc.state.get().rebuild.bodies[0].id;
+      doc.renameBody(id, 'Housing');
+    });
+    await expect.poll(() => hold.held(), { timeout: 30_000 }).toBeGreaterThan(0);
+    const ts = performance.now();
+    await page.locator('#workspace-overlay [data-ws-back]').click();
+    await expect(page.locator('[data-ws-leave-status]')).toHaveText('Saving Part 1', { timeout: 10_000 });
+    await expect(page.locator('#modal-confirm')).toBeVisible({ timeout: 40_000 });
+    times.stuck_question_ms = Math.round(performance.now() - ts);
+    expect(times.stuck_question_ms).toBeGreaterThanOrEqual(24_000);
+    expect(times.stuck_question_ms).toBeLessThan(29_500);
+    expect({
+      title: await page.locator('#cf-heading').textContent(),
+      copy: await page.locator('#cf-copy').textContent(),
+      yes: await page.locator('#cf-confirm').textContent(),
+      no: await page.locator('#cf-cancel').textContent(),
+    }).toEqual({
+      title: "Couldn't update the project",
+      copy: 'Magnusim CAD: Part 1 is still saving after 25 seconds. Part 1 keeps its last update. Its changes are not saved. Leaving discards them.',
+      yes: 'Leave anyway',
+      no: 'Stay',
+    });
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#modal-confirm')).toBeHidden();
+    await expect(page).toHaveURL(/\/ws\/cad\/part\//);
+    // Past the app's 30 s: its stall question never came (CAD's ended the leave first).
+    await page.waitForTimeout(Math.max(0, 31_000 - (performance.now() - ts)));
+    expect((await dialogs()).map((d) => d.title), 'the only question was CAD\'s').toEqual(["Couldn't update the project"]);
+    await expect(again.locator('[data-chip="save"]')).toHaveText('Saving…');
+    await hold.release();
+    await expect(again.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 60_000 });
+
+    // 3. Back again: the renamed part is linked (its newer design), timed, and lands with the camera again.
+    const cam2 = await setView(0.7);
+    await exitTimed('exit2');
+    expect((await dialogs()).map((d) => d.title), 'no dialog after the second exit').toEqual(["Couldn't update the project"]);
+    const linked2 = (await (await request.get(`${baseUrl()}/api/plugin-geometry/linked?project_id=${projectId}&plugin=cad&study_id=${await row.getAttribute('data-plugin-study')}`)).json()).linked;
+    // A body renamed only: the same shape, so the app keeps the rev (its change is "names"), with the newer design.
+    expect([linked2.geometryId, linked2.rev]).toEqual([linked1.geometryId, 1]);
+    expect(linked2.sourceVersion).toBeGreaterThan(linked1.sourceVersion);
+    await expectSameView(cam2, 'second exit');
+
+    const line = `large-step-exit ${JSON.stringify(times)}`;
+    console.log(`[cad-large-step] ${line}`);
+    test.info().annotations.push({ type: 'exit-times', description: line });
+    mkdirSync(test.info().outputDir, { recursive: true });
+    writeFileSync(join(test.info().outputDir, 'large-step-exit-times.json'), JSON.stringify(times, null, 2));
+    if (process.env.CAD_E2E_EXIT_TIMES) writeFileSync(process.env.CAD_E2E_EXIT_TIMES, JSON.stringify(times, null, 2));
+    expect(seen.csp, 'CSP violations').toEqual([]);
+    expect(seen.errors, 'console errors').toEqual([]);
+  } finally {
+    // Nothing made from Daniel's file is kept.
+    await request.post(`${baseUrl()}/api/project/delete`, { data: { project_id: projectId } }).catch(() => {});
+  }
 });

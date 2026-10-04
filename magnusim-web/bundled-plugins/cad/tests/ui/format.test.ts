@@ -1,7 +1,7 @@
 // Kit formatters: the core's formatSci, display units, and how typed values are stored.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import { exprToStore, formatField, formatQuantity, formatSci, formatVolume, parseLiteral, toDisplay, unitText, commaProblem, fullPrecision, literalDigits } from '../../src/ui/kit/format';
+import { exprToStore, formatField, formatQuantity, formatReadout, formatSci, formatVolume, parseLiteral, toDisplay, unitText, commaProblem, fullPrecision, literalDigits, derivedLength } from '../../src/ui/kit/format';
 
 const MM = { length: 'mm', angle: 'deg' } as const;
 const IN = { length: 'in', angle: 'rad' } as const;
@@ -118,5 +118,35 @@ describe('fields read like the readouts (review round 2)', () => {
     expect(fullPrecision(25.4 / 3)).toBe('8.46666666666667');
     expect(fullPrecision(0.1 + 0.2)).toBe('0.3');
     expect(fullPrecision(1234567.891)).toBe('1234567.891');
+  });
+});
+
+describe('UX review: readouts as significant figures, derived lengths without noise', () => {
+  it('a readout of 7 digits or more that 6 significant digits do not hold reads as significant figures', () => {
+    expect(formatReadout(130_483_912.3)).toBe('1.30484 × 10⁸');
+    expect(formatVolume(1_570_796.3267948966, MM)).toBe('1.5708 × 10⁶ mm³');
+    expect(formatVolume(137_448_123, MM)).toBe('1.37448 × 10⁸ mm³');
+    expect(formatReadout(-2_345_678)).toBe('-2.34568 × 10⁶');
+    // Rounding up to the next power: 9,999,999.7 is "1 × 10⁷", not "10 × 10⁶".
+    expect(formatReadout(9_999_999.7)).toBe('1 × 10⁷');
+    // Exact values keep their digit groups; fewer digits are unchanged.
+    expect(formatReadout(400_000_000)).toBe('400,000,000');
+    expect(formatReadout(1_000_000)).toBe('1,000,000');
+    expect(formatReadout(130_484.4)).toBe('130,484');
+    expect(formatReadout(6994.6909)).toBe('6994.69');
+  });
+
+  it('a field keeps its grouped look (its text is what was typed)', () => {
+    expect(formatField(1234567)).toBe('1,234,570');
+  });
+
+  it('a derived length is rounded to the display tolerance, then every digit left (U2)', () => {
+    expect(derivedLength(0.1 * 304.8, MM)).toBe('30.48 mm');
+    expect(derivedLength((10 / 100) * 812.8000123617929, MM)).toBe('81.28 mm');
+    expect(derivedLength(0.1 * 127, MM)).toBe('12.7 mm');
+    expect(derivedLength(0.1 * 63.5, MM)).toBe('6.35 mm');
+    expect(derivedLength(30.480000000000004, IN)).toBe('1.2 in');
+    expect(derivedLength(-0.00001, MM)).toBe('0 mm');
+    expect(derivedLength(12.34567, MM)).toBe('12.3457 mm');
   });
 });

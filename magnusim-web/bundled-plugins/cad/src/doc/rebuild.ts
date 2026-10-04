@@ -15,7 +15,7 @@
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { BodyId, CadDoc, CadView, Feature, FeatureAction, FeatureId, FeatureStatus } from '../types/doc';
-import type { BodyProps, BuildContext, BuiltBody, FeatureBuildResult, FeatureFiles, FeatureOutput, FeatureRegistry } from '../types/doc-service';
+import type { BodyProps, BuildContext, BuiltBody, EndBodies, FeatureBuildResult, FeatureFiles, FeatureOutput, FeatureRegistry } from '../types/doc-service';
 import type { BodyInfo, KernelAdapter, KernelCallError, TessPayload } from '../types/kernel';
 import type { BBox, ShapeId } from '../types/kernel-protocol';
 import type { SketchSolverClient } from '../types/sketch';
@@ -199,6 +199,47 @@ export class RebuildEngine {
     return this.idle;
   }
 
+  /**
+   * LINK: the bodies at the END of the history (the rollback bar ignored: the
+   * project's geometry is the finished part), built from `doc` through the same
+   * cache, without tessellation and without telling the page (the view keeps what
+   * it shows). Runs when no rebuild runs, and holds the next one until it is done.
+   * Rejects when the kernel is not running or stopped on the way.
+   */
+  async bodiesAtEnd(doc: CadDoc, view: CadView): Promise<EndBodies> {
+    while (this.running) await this.idle;
+    if (this.disposed) throw new Error('the part was closed');
+    this.running = true;
+    this.idle = new Promise<void>((r) => (this.idleResolve = r));
+    let got: EndBodies | null = null;
+    let message: string | null = null;
+    try {
+      const out = await this.build({ doc, view: { ...view, rollback: null } }, (bodies, failed) => {
+        got = {
+          failed: failed.map((id) => doc.features.find((f) => f.id === id)?.name ?? id),
+          bodies: bodies.map((b) => ({
+            id: b.id,
+            shape: b.shape,
+            valid: b.valid,
+            feature: b.feature,
+            names: b.names,
+            name: doc.bodies[b.id]?.name ?? b.name ?? 'Body',
+            color: doc.bodies[b.id]?.color ?? b.color ?? DEFAULT_BODY_COLOR,
+          })),
+        };
+      });
+      if (out?.message) message = out.message;
+    } finally {
+      this.running = false;
+      const r = this.idleResolve;
+      this.idleResolve = null;
+      r?.();
+      if (this.pending && !this.disposed) void this.pump();
+    }
+    if (!got) throw new Error(message ?? 'the kernel stopped while the part was rebuilt');
+    return got;
+  }
+
   /** Build again a feature the kernel stopped. */
   retry(feature: FeatureId): boolean {
     let hit = false;
@@ -289,8 +330,12 @@ export class RebuildEngine {
     return info;
   }
 
-  /** null when the build was replaced by a newer request or cut short by a respawn. */
-  private async build(input: RebuildInput): Promise<RebuildOutput | null> {
+  /**
+   * null when the build was replaced by a newer request or cut short by a respawn.
+   * With `exportTo` (bodiesAtEnd): the features only, never replaced by a newer
+   * request; the bodies at the end go to exportTo, and it returns null.
+   */
+  private async build(input: RebuildInput, exportTo?: (bodies: HeldBody[], failed: FeatureId[]) => void): Promise<RebuildOutput | null> {
     const t0 = performance.now();
     const { doc, view } = input;
     const kernel = this.opts.kernel;
@@ -377,7 +422,7 @@ export class RebuildEngine {
       let entry = this.cache.get(key);
       if (!entry) {
         // A newer document is waiting: stop here (finished features stay cached).
-        if (this.pending) return null;
+        if (this.pending && !exportTo) return null;
         const ctx: BuildContext = {
           kernel,
           units,
@@ -438,6 +483,12 @@ export class RebuildEngine {
         statuses[f.id] = st;
         failed.push(f.id);
       }
+    }
+
+    if (exportTo) {
+      if (epoch !== this.epoch) return null;
+      exportTo([...bodies.values()], failed);
+      return null;
     }
 
     // The bodies at the rollback bar: tessellation and (small parts) exact properties.

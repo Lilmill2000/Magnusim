@@ -164,15 +164,18 @@ export function ImportPanel(props: FeaturePanelProps) {
               <tbody>
                 {f.items.map((it) => {
                   const b = bodies.find((x) => x.id === it.body);
+                  // Before the rebuild has made the body: the kernel's count from this import or heal.
+                  const counted = b ? b.faces : (outcome?.faceCounts?.[it.index] ?? null);
                   return (
                     <tr key={it.body} data-import-body={it.body}>
                       <td>
                         <span className="cad-swatch" style={{ background: defs[it.body]?.color ?? it.stepColor ?? undefined }} aria-hidden="true" /> {defs[it.body]?.name ?? it.stepName}
                       </td>
                       <td>{it.kind === 'solid' ? 'Solid' : 'Surface'}</td>
-                      {/* Counted once the rebuild has made the body (the 113 MB part's cell was blank meanwhile). */}
-                      <td className="num" title={b ? undefined : 'Counted when the part is rebuilt'}>
-                        {b ? b.faces.toLocaleString('en-US') : '…'}
+                      {/* The count from the import itself, then the rebuilt body's; "…" only for a Part opened
+                          again before its rebuild has made the body (the 113 MB part's cell was blank once). */}
+                      <td className="num" title={counted != null ? undefined : 'Counted when the part is rebuilt'} data-import-faces={it.body}>
+                        {counted != null ? counted.toLocaleString('en-US') : '…'}
                       </td>
                       {/* A surface body passes the shape check but closes no solid: it reads Open, not Valid. */}
                       <td className={!it.valid ? 'cad-p2-bad' : it.kind === 'shell' ? 'cad-p2-warn' : 'cad-p2-ok'} title={it.reason ?? (it.kind === 'shell' && it.valid ? 'No shape errors, but the faces do not close a solid' : undefined)} data-import-check={it.body}>
@@ -257,10 +260,13 @@ export function ImportPanel(props: FeaturePanelProps) {
               <Button variant="secondary" data-import-heal="1" disabledReason={busy ? 'Wait for the current step' : (ui.editBlock() ?? null)} onClick={() => void runs.healAll(props.session, tol, knit)}>
                 Heal all
               </Button>
-              <span className="cad-p2-sub" data-import-healed="1">
-                Healed at {units.format(f.heal.tolerance, 'length')}
-                {f.heal.sew ? ', knit' : ''}
-              </span>
+              {/* Only when healing had something to do (UX review: "Healed at 0.001 mm" beside "0 problems"). */}
+              {f.heal.sew || (f.diagnostics?.problemsBefore ?? 0) > 0 || (f.diagnostics?.problemsAfter ?? 0) > 0 || (f.diagnostics?.sewn ?? 0) > 0 ? (
+                <span className="cad-p2-sub" data-import-healed="1">
+                  Healed at {units.format(f.heal.tolerance, 'length')}
+                  {f.heal.sew ? ', knit' : ''}
+                </span>
+              ) : null}
             </div>
             {/* How the shapes were loaded, for a Part opened again; not right after this panel imported or healed them. */}
             {healing || outcome ? null : output && output.type === 'import' ? (

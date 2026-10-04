@@ -10,7 +10,7 @@ import { useRef, useState } from 'react';
 import { useServices } from '../../lib/services';
 import type { CombineFeature } from '../../types/doc';
 import type { FeaturePanelProps } from '../../types/modules';
-import { Field, Hint, Select } from '../../ui/kit';
+import { Field, Select } from '../../ui/kit';
 import { useBodyField } from '../p2/fields';
 import { P2FeaturePanel, Switch, useFeaturePanel } from '../p2/panel';
 import { useSelectionMirror } from '../p2/pick';
@@ -69,7 +69,6 @@ export function CombinePanel(props: FeaturePanelProps) {
           }}
         />
       </div>
-      <Hint>Works on imported and modelled bodies alike.</Hint>
     </P2FeaturePanel>
   );
 }

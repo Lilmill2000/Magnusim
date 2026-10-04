@@ -67,3 +67,13 @@ describe('parameter names', () => {
     expect(checkParamName('Width', params, 'p1')).toEqual({ ok: true, name: 'Width' });
   });
 });
+
+describe('the feature menu says "Delete" once (UX review)', () => {
+  it('"Delete" and the name; a name that starts with the word does not repeat it', async () => {
+    const { deleteItemLabel } = await import('../../src/ui/controller');
+    expect(deleteItemLabel('Extrude 1')).toBe('Delete Extrude 1');
+    expect(deleteItemLabel('Delete faces 1')).toBe('Delete faces 1');
+    expect(deleteItemLabel('delete faces 2')).toBe('Delete faces 2');
+    expect(deleteItemLabel('Deleted stuff')).toBe('Delete Deleted stuff');
+  });
+});

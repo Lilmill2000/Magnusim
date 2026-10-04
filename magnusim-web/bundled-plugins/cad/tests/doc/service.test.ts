@@ -9,7 +9,7 @@ import { createDocService } from '../../src/doc';
 import { SAVE_BURST } from '../../src/doc/autosave';
 import { createBridge } from '../../src/lib/bridge';
 import { createBus } from '../../src/lib/bus';
-import { pendingEditsChanged, registerPendingEdit } from '../../src/lib/pendingEdits';
+import { commitPendingEdits, pendingEditsChanged, registerPendingEdit } from '../../src/lib/pendingEdits';
 import type { ExtrudeFeature, Feature, SketchFeature } from '../../src/types/doc';
 import type { DocService } from '../../src/types/doc-service';
 import type { CadEvents } from '../../src/types/events';
@@ -83,7 +83,8 @@ describe('loading and storage', () => {
     expect(s.doc.units).toEqual({ length: 'in', angle: 'deg' });
     const record = await ws.study.get();
     expect(record.doc).toEqual({ rel: MODEL, schema: 1, store: 'data', view: VIEW });
-    // Only the host's fields and the pointer: no model in the record.
+    // Only the host's fields and the pointer: no model in the record (and no source_version
+    // while nothing links a geometry: LINK, src/doc/source-record.ts).
     expect(Object.keys(record).sort()).toEqual(['created_at', 'doc', 'id', 'kind', 'plugin', 'plugin_name', 'plugin_version', 'rev', 'schema_version', 'title', 'updated_at']);
     const file = ws.json(MODEL) as { format: string; etag: string; doc: { units: unknown; features: unknown[] } };
     expect(file.format).toBe('magnusim-cad/model');
@@ -839,7 +840,7 @@ describe('ws.files (host API 1.2)', () => {
     expect(ws.log.dirty.map((d) => d.dirty)).toEqual([true, false, true, true, true, false]);
   });
 
-  it('a value typed in a panel field and not applied is unsaved work; leaving applies it first (SD review round 2: Back lost it)', async () => {
+  it('a value typed in a panel field and not applied is unsaved work; the pointer leaving applies a whole one; the frame losing focus applies nothing (SD review round 2, LINK polish)', async () => {
     const ws = host12();
     const { doc } = make({ ws, interval: 60_000, burst: 1 });
     await doc.load();
@@ -861,10 +862,22 @@ describe('ws.files (host API 1.2)', () => {
         sketch(doc);
         text = null;
       },
+      // A whole value the field takes, not typed a moment ago (NumberUnitInput's rule).
+      commitQuiet: () => {
+        if (text === 'Block') {
+          sketch(doc);
+          text = null;
+        }
+      },
     });
-    expect(ws.log.dirty).toEqual([{ dirty: true, message: 'Changes to Part 1 are not saved yet.' }]);
-    // The pointer leaves the frame (Back, Settings, the browser's controls are all outside it): applied, then written.
+    // The question names the field, and its "Leaving discards them" is true.
+    expect(ws.log.dirty).toEqual([{ dirty: true, message: 'Changes typed in Distance of Part 1 are not applied yet.' }]);
+    // The frame losing focus (the app's header or dialog) applies nothing: the text waits.
     const before = doc.state.get().doc.features.length;
+    window.dispatchEvent(new Event('blur'));
+    expect(doc.state.get().doc.features.length).toBe(before);
+    expect(ws.log.dirty.at(-1)).toEqual({ dirty: true, message: 'Changes typed in Distance of Part 1 are not applied yet.' });
+    // The pointer leaves the frame (Back, Settings, the browser's controls are all outside it): applied, then written.
     document.documentElement.dispatchEvent(new MouseEvent('mouseleave'));
     expect(doc.state.get().doc.features.length).toBe(before + 1);
     await saved(doc);
@@ -872,7 +885,7 @@ describe('ws.files (host API 1.2)', () => {
     // A refused value stays unsaved work, with the field and the reason in the question.
     text = 'bad';
     pendingEditsChanged();
-    window.dispatchEvent(new Event('blur'));
+    commitPendingEdits();
     expect(ws.log.dirty.at(-1)).toEqual({ dirty: true, message: 'Changes to Part 1 are not saved: the value typed in Distance is not applied. Distance must not be 0.' });
     off();
     expect(ws.log.dirty.at(-1)).toEqual({ dirty: false, message: '' });
@@ -922,5 +935,260 @@ describe('commands', () => {
     await vi.waitFor(() => expect(doc.state.get().doc.features).toHaveLength(1));
     off();
     keyboard.dispose();
+  });
+});
+
+describe('LINK: the design version, the include toggle, Keep mine', () => {
+  const host12 = () => createFakeWorkspace({ hostVersion: '1.2' });
+  const fileVersion = (ws: FakeWorkspace) => (ws.json(MODEL) as { source_version?: number }).source_version;
+
+  it('every save writes the next save counter into the model file; undo to the stored model writes nothing; a reopen reads it', async () => {
+    const ws = host12();
+    const a = make({ ws });
+    await a.doc.load();
+    // A new Part is stored at once: version 1.
+    expect([a.doc.state.get().sourceVersion, fileVersion(ws)]).toEqual([1, 1]);
+    sketch(a.doc);
+    await a.doc.flush();
+    expect([a.doc.state.get().sourceVersion, fileVersion(ws)]).toEqual([2, 2]);
+    sketch(a.doc, 1);
+    await a.doc.flush();
+    expect(fileVersion(ws)).toBe(3);
+    a.doc.undo();
+    await a.doc.flush();
+    expect(fileVersion(ws)).toBe(4);
+    a.doc.redo();
+    await a.doc.flush();
+    expect(fileVersion(ws)).toBe(5);
+    a.doc.dispose();
+    const b = make({ ws });
+    await b.doc.load();
+    expect(b.doc.state.get().sourceVersion).toBe(5);
+    // Nothing changed: nothing written, the counter stays.
+    await b.doc.flush();
+    expect(fileVersion(ws)).toBe(5);
+  });
+
+  it('never goes down: a study record that holds a newer version wins at load, and the next save goes past it', async () => {
+    const ws = host12();
+    const a = make({ ws });
+    await a.doc.load();
+    a.doc.dispose();
+    const rec = await ws.study.get();
+    await ws.study.update({ source_version: 40 }, rec.rev);
+    const b = make({ ws });
+    await b.doc.load();
+    expect(b.doc.state.get().sourceVersion).toBe(40);
+    sketch(b.doc);
+    await b.doc.flush();
+    expect(fileVersion(ws)).toBe(41);
+  });
+
+  it('after a save the study record gets source_version, at most one write per 1.5 s, the newest last; not while nothing is linked', async () => {
+    let linkedNow: unknown = null;
+    const ws = createFakeWorkspace({ hostVersion: '1.5', linked: () => linkedNow });
+    const writes: unknown[] = [];
+    const update = ws.study.update.bind(ws.study);
+    ws.study.update = async (patch: Record<string, unknown>, rev: number) => {
+      if ('source_version' in patch) writes.push(patch.source_version);
+      return update(patch, rev);
+    };
+    const { doc } = make({ ws, interval: 1, burst: 50 });
+    await doc.load();
+    // Not linked yet: the first save writes nothing into the record.
+    await doc.recordSettled();
+    expect((await ws.study.get()).source_version).toBeUndefined();
+    expect(writes).toEqual([]);
+    linkedNow = { geometryId: 'g1', name: 'Part 1', rev: 1, sourceVersion: 1 };
+    await new Promise((r) => setTimeout(r, 1600));
+    const t0 = Date.now();
+    for (let i = 0; i < 5; i++) {
+      sketch(doc, i);
+      await doc.flush();
+    }
+    expect(doc.state.get().sourceVersion).toBe(6);
+    await doc.recordSettled();
+    const took = Date.now() - t0;
+    expect((await ws.study.get()).source_version).toBe(6);
+    // The first write at once (version 2), then at most one per 1.5 s.
+    expect(writes[0]).toBe(2);
+    expect(writes.at(-1)).toBe(6);
+    expect(writes.length).toBeLessThanOrEqual(1 + Math.ceil(took / 1500));
+    expect([...writes].sort((x, y) => Number(x) - Number(y))).toEqual(writes);
+  }, 15_000);
+
+  it('Include in simulation: on by default, off is one undo step, saved, and read back', async () => {
+    const ws = host12();
+    const a = make({ ws });
+    await a.doc.load();
+    const made = block(a.doc);
+    await rebuilt(a.doc);
+    const id = made.body!;
+    expect(a.doc.state.get().doc.bodies[id].simulation).toBeUndefined();
+    const before = a.doc.state.get().sourceVersion;
+    expect(a.doc.setBodyInSimulation(id, false)).toEqual({ ok: true });
+    expect(a.doc.state.get().doc.bodies[id].simulation).toBe(false);
+    expect(a.doc.state.get().history.undoLabel).toBe('Leave Body 1 out of the simulation');
+    await a.doc.flush();
+    expect(a.doc.state.get().sourceVersion).toBe(before + 1);
+    expect((ws.json(MODEL) as { doc: { bodies: Record<string, { simulation?: boolean }> } }).doc.bodies[id].simulation).toBe(false);
+    a.doc.dispose();
+    const b = make({ ws });
+    await b.doc.load();
+    expect(b.doc.state.get().doc.bodies[id].simulation).toBe(false);
+    expect(b.doc.setBodyInSimulation(id, true)).toEqual({ ok: true });
+    expect(b.doc.state.get().doc.bodies[id].simulation).toBeUndefined();
+    b.doc.undo();
+    expect(b.doc.state.get().doc.bodies[id].simulation).toBe(false);
+  });
+
+  it('Keep mine after another tab saved: this tab\'s model replaces it, its counter goes past both, and the other tab is told when it saves next', async () => {
+    const ws = host12();
+    const a = make({ ws });
+    await a.doc.load();
+    const b = make({ ws });
+    await b.doc.load();
+    sketch(a.doc);
+    sketch(a.doc, 1);
+    await a.doc.flush();
+    await saved(a.doc);
+    const aVersion = fileVersion(ws)!;
+    sketch(b.doc, 2);
+    await b.doc.flush();
+    expect(b.doc.state.get().save.state).toBe('conflict');
+    await b.doc.keepMine();
+    expect(b.doc.state.get().save.state).toBe('saved');
+    expect(featureNamesOf(ws.json(MODEL))).toEqual(['Sketch 1']);
+    expect(fileVersion(ws)).toBe(aVersion + 1);
+    expect(b.doc.state.get().sourceVersion).toBe(aVersion + 1);
+    expect(b.doc.editable()).toBe(true);
+    // A's next save meets B's: the conflict chip, nothing overwritten.
+    sketch(a.doc, 3);
+    await a.doc.flush();
+    expect(a.doc.state.get().save.state).toBe('conflict');
+    expect(featureNamesOf(ws.json(MODEL))).toEqual(['Sketch 1']);
+  });
+});
+
+function featureNamesOf(file: unknown): string[] {
+  return (file as { doc: { features: { name: string }[] } }).doc.features.map((x) => x.name);
+}
+
+describe('UX review: one write per drag, a tab another tab saved over', () => {
+  const host12 = () => createFakeWorkspace({ hostVersion: '1.2' });
+
+  it('holdSaves: changes made while an arrow is dragged are written once, on release; leaving still writes', async () => {
+    const { doc, ws } = make({ interval: undefined });
+    await doc.load();
+    sketch(doc);
+    await doc.flush();
+    await saved(doc);
+    const writes = () => ws.log.dataWrites.filter((w) => w.rel === MODEL).length;
+    const first = writes();
+    const release = doc.holdSaves();
+    const s = doc.beginNew('sketch', blockSketch(60, 0) as Partial<Feature>);
+    for (let i = 1; i <= 8; i++) s.update({ points: { ...blockSketch(60, 0).points, pt_2: [70 + i, 0] } } as Partial<Feature>);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(writes()).toBe(first);
+    expect(doc.state.get().save.state).toBe('pending');
+    release();
+    await vi.waitFor(() => expect(doc.state.get().save.state).toBe('saved'), { timeout: 3000, interval: 5 });
+    expect(writes()).toBe(first + 1);
+    // Released twice: nothing more.
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(writes()).toBe(first + 1);
+    // Held again: a flush (Done, leaving) still writes.
+    const again = doc.holdSaves();
+    s.update({ points: { ...blockSketch(60, 0).points, pt_2: [90, 0] } } as Partial<Feature>);
+    await doc.flush();
+    expect(writes()).toBe(first + 2);
+    again();
+    s.commit();
+  });
+
+  it('checkStored: a clean tab whose model another tab saved over says "Updated in another tab" when it is checked (window focus), never dirty; Reload adopts it (L3 review B1)', async () => {
+    const ws = host12();
+    const a = make({ ws });
+    await a.doc.load();
+    const b = make({ ws });
+    await b.doc.load();
+    await saved(b.doc);
+    sketch(a.doc);
+    await a.doc.flush();
+    await saved(a.doc);
+    expect(b.doc.state.get().save.state).toBe('saved');
+    // A tab's own state is not touched while nothing else wrote.
+    await a.doc.checkStored();
+    expect(a.doc.state.get().save.state).toBe('saved');
+    // The window regains focus: both tabs check; B, which changed nothing, finds A's save.
+    const told = ws.log.dirty.length;
+    window.dispatchEvent(new FocusEvent('focus'));
+    await vi.waitFor(() => expect(b.doc.state.get().save).toEqual({ state: 'updated', message: 'Updated in another tab' }), { timeout: 3000, interval: 5 });
+    expect(a.doc.state.get().save.state).toBe('saved');
+    // Nothing of B's is unsaved: the app is never told B is dirty (it was: "conflict" said so).
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ws.log.dirty.slice(told).filter((d) => d.dirty)).toEqual([]);
+    expect(b.doc.editable()).toBe('Updated in another tab · Reload to keep editing');
+    await b.doc.reload();
+    expect(b.doc.state.get().save.state).toBe('saved');
+    expect(b.doc.state.get().doc.features.map((f) => f.name)).toEqual(['Sketch 1']);
+  });
+
+  it('a tab with a change of its own that another tab saved over still gets the conflict (both edited), and it is dirty', async () => {
+    const ws = host12();
+    const a = make({ ws });
+    await a.doc.load();
+    const b = make({ ws });
+    await b.doc.load();
+    await saved(b.doc);
+    sketch(a.doc);
+    await a.doc.flush();
+    await saved(a.doc);
+    sketch(b.doc, 1);
+    await b.doc.flush();
+    await vi.waitFor(() => expect(b.doc.state.get().save).toEqual({ state: 'conflict', message: 'Changed in another tab' }), { timeout: 3000, interval: 5 });
+    expect(ws.log.dirty.at(-1)).toEqual({ dirty: true, message: 'Changes to Part 1 are not saved: it was changed in another tab.' });
+  });
+
+  it('suppressRemoved: every removed Box and Cylinder is suppressed in one undo step, its data kept; Undo brings them back (L3 review B2)', async () => {
+    const ws = createFakeWorkspace({ study: { doc: { rel: MODEL, schema: 1, store: 'data', view: VIEW } } });
+    ws.folder.putJson(MODEL, {
+      format: 'magnusim-cad/model',
+      etag: '3.s_old',
+      saved_at: '2026-09-30T20:00:00.000Z',
+      doc: {
+        schema: 1,
+        units: { length: 'mm', angle: 'deg' },
+        params: [],
+        bodies: { b_1: { name: 'Body 1', color: '#bdc9db' } },
+        features: [
+          { id: 'f_box', type: 'box', name: 'Old box', op: 'new', creates: 'b_1', scope: [], origin: ['0 mm', '0 mm', '0 mm'], size: ['20 mm', '20 mm', '20 mm'] },
+          { id: 'f_cyl', type: 'cylinder', name: 'Old cylinder', op: 'cut', creates: null, scope: [], origin: ['10 mm', '10 mm', '-5 mm'], axis: 'origin:z', diameter: '10 mm', height: '40 mm' },
+        ],
+        meta: { created_at: '2026-09-30T19:00:00.000Z', written_by: '0.1.0' },
+      },
+    });
+    const { doc } = make({ ws });
+    await doc.load();
+    await rebuilt(doc);
+    expect(doc.state.get().rebuild.features.f_box).toMatchObject({ state: 'error', message: 'This part uses a removed feature (Old box)' });
+    const before = doc.state.get().doc.features;
+    expect(doc.suppressRemoved()).toEqual({ ok: true });
+    const after = doc.state.get().doc.features;
+    expect(after.map((f) => [f.name, !!f.suppressed])).toEqual([
+      ['Old box', true],
+      ['Old cylinder', true],
+    ]);
+    // The data is kept: only the suppressed flag changed.
+    expect(after.map(({ suppressed: _s, ...f }) => f)).toEqual(before);
+    expect(doc.state.get().history.undoLabel).toBe('Suppress the removed features');
+    await rebuilt(doc);
+    expect(doc.state.get().rebuild.features.f_box?.state).toBe('suppressed');
+    // Nothing left to suppress: no second undo step.
+    expect(doc.suppressRemoved()).toEqual({ ok: true });
+    doc.undo();
+    expect(doc.state.get().doc.features.map((f) => !!f.suppressed)).toEqual([false, false]);
+    expect(doc.state.get().history.canUndo).toBe(false);
   });
 });

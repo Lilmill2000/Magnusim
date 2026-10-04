@@ -3,8 +3,10 @@
 // plugin's folder (ws.data JSON and ws.files bytes over the same files, as on
 // the host), toasts, dialogs and setDirty recorded, workers from a factory you
 // pass. hostVersion "1.1" by default (ws.data only); pass "1.2" for ws.files.
+// nav.onLeave (host 1.6) keeps the handler in `leaveHook`; a host before 1.6
+// refuses it with not_allowed, as the real one does.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { ConfirmOptions, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
+import type { ConfirmOptions, LeaveHandler, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
 import { FakeFiles, FakeFolder } from '../doc/fake-files';
 
 export const SDK_VERSION = '1.1.0';
@@ -28,6 +30,8 @@ export interface FakeWorkspace extends Workspace {
   json(rel: string): unknown;
   /** Answers for the next dialogs. */
   answers: { confirm: boolean; prompt: string | null };
+  /** The exit hook the page registered (host 1.6 nav.onLeave), or null. */
+  leaveHook: LeaveHandler | null;
   /** Push a host event (units change, study renamed in the header). */
   push(event: 'units', v: UnitSystem): void;
   push(event: 'study', v: StudyRecord): void;
@@ -50,7 +54,15 @@ export function fakeStudy(over: Partial<StudyRecord> = {}): StudyRecord {
 }
 
 export function createFakeWorkspace(
-  opts: { units?: UnitSystem; study?: Partial<StudyRecord>; spawnWorker?: (url: string) => Worker; hostVersion?: string; folder?: FakeFolder } = {},
+  opts: {
+    units?: UnitSystem;
+    study?: Partial<StudyRecord>;
+    spawnWorker?: (url: string) => Worker;
+    hostVersion?: string;
+    folder?: FakeFolder;
+    /** Host API 1.5: what ws.project.linkedGeometry() answers (the calls exist only with it). */
+    linked?: () => unknown;
+  } = {},
 ): FakeWorkspace {
   let study = fakeStudy(opts.study);
   const listeners = { units: new Set<(v: UnitSystem) => void>(), study: new Set<(v: StudyRecord) => void>(), theme: new Set<(v: unknown) => void>() };
@@ -114,6 +126,16 @@ export function createFakeWorkspace(
       async info() {
         return { id: context.project.id, title: context.project.title, units: context.units };
       },
+      ...(opts.linked
+        ? {
+            async linkGeometry() {
+              throw Object.assign(new Error('fake workspace: linkGeometry is not scripted'), { code: 'failed' });
+            },
+            async linkedGeometry() {
+              return opts.linked!();
+            },
+          }
+        : {}),
     },
     ui: {
       async toast(message: string, o?: { kind?: string }) {
@@ -136,7 +158,13 @@ export function createFakeWorkspace(
       async setDirty(dirty: boolean, message?: string) {
         log.dirty.push({ dirty: dirty === true, message: String(message ?? '') });
       },
+      async onLeave(handler: LeaveHandler | null) {
+        const [maj, min] = String(context.hostVersion).split('.').map(Number);
+        if (maj < 1 || (maj === 1 && min < 6)) throw Object.assign(new Error('This version of Magnusim has no exit hook'), { code: 'not_allowed' });
+        ws.leaveHook = handler;
+      },
     },
+    leaveHook: null,
     on(event: 'units' | 'theme' | 'study', fn: (v: never) => void) {
       const set = listeners[event] as Set<(v: never) => void>;
       set.add(fn);

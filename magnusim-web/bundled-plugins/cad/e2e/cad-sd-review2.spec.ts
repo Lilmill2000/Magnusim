@@ -173,7 +173,7 @@ test('cad:sd-review2-part-shrinks the part shrinks under a side set inwards: the
 
   // Its panel: the reason under −Z (red), not only at the foot; Bodies says what it counts.
   await openFeature(frame, 'Enclosure 1');
-  await expect(sideError(frame, 'nz')).toHaveText('−Z would put the enclosure past the part (z ≥ 10 mm)');
+  await expect(sideError(frame, 'nz')).toHaveText('−Z would put the enclosure past the part (padding more than −10 mm)');
   await expect(sideField(frame, 'nz')).toHaveAttribute('aria-invalid', 'true');
   await expect(sideField(frame, 'nz')).toHaveValue('-15');
   await expect(sideError(frame, 'pz')).toHaveCount(0);
@@ -182,6 +182,14 @@ test('cad:sd-review2-part-shrinks the part shrinks under a side set inwards: the
   // The side's label stays level with its input under the reason.
   await expectLevel(frame, 'nz');
   await page.setViewportSize({ width: 1280, height: 800 });
+  // LINK polish (SD final review): the foot does not say it again under the fields, and the
+  // reason's bracketed bound stays on one line ("(z" then "≥ 10 mm)" at 1280 before; in padding
+  // words since the UX review).
+  expect((await p.locator('.cad-panel-note').allTextContents()).join(' ')).not.toContain('would put the enclosure past the part');
+  const bound = sideError(frame, 'nz').locator('.nui-keep');
+  await expect(bound).toHaveText('(padding more than −10 mm)');
+  await expect(bound).toHaveCSS('white-space', 'nowrap');
+  expect(await bound.evaluate((el) => el.getClientRects().length)).toBe(1);
   await shot(page, 'sd-r2-part-shrinks');
   // −5 fits the thinner part: the reason goes, both rows are ok again.
   await setField(frame, 'side-nz', '-5');
@@ -212,7 +220,7 @@ test('cad:sd-review2-one-note sides into the part get one note naming them; Done
   await shot(page, 'sd-r2-one-note');
   // A refused value: the reason under −X, and its label level with the input (it was centred on both).
   await setField(frame, 'side-nx', '-90');
-  await expect(sideError(frame, 'nx')).toHaveText('−X would put the enclosure past the part (x ≥ 80 mm)');
+  await expect(sideError(frame, 'nx')).toHaveText('−X would put the enclosure past the part (padding more than −80 mm)');
   await expectLevel(frame, 'nx');
   // A cylinder's Radius and Bottom too.
   await sideField(frame, 'nx').press('Escape');
@@ -222,7 +230,7 @@ test('cad:sd-review2-one-note sides into the part get one note naming them; Done
   await expectLevel(frame, 'radius');
   await sideField(frame, 'radius').press('Escape');
   await setField(frame, 'side-bottom', '-90');
-  await expect(sideError(frame, 'bottom')).toHaveText('Bottom would put the enclosure past the part (z ≥ 40 mm)');
+  await expect(sideError(frame, 'bottom')).toHaveText('Bottom would put the enclosure past the part (padding more than −40 mm)');
   await expectLevel(frame, 'bottom');
   await shot(page, 'sd-r2-label-level');
   expect(seen.csp, 'CSP violations').toEqual([]);

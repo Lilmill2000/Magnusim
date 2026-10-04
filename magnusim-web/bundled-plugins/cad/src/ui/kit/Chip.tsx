@@ -7,6 +7,8 @@ import type { ReactNode } from 'react';
 
 export interface ChipAction {
   label: string;
+  /** data-chip-action (tests); the label when absent. */
+  id?: string;
   run(): void;
 }
 
@@ -37,7 +39,7 @@ export function Chip({
       {k ? <span className="cad-chip-k">{k}</span> : null}
       <span className="cad-chip-v">{children}</span>
       {actions?.map((a) => (
-        <button key={a.label} type="button" className="cad-chip-link" onClick={a.run} data-chip-action={a.label}>
+        <button key={a.id ?? a.label} type="button" className="cad-chip-link" onClick={a.run} data-chip-action={a.id ?? a.label}>
           {a.label}
         </button>
       ))}

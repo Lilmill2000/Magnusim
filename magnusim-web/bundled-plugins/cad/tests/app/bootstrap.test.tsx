@@ -70,5 +70,28 @@ describe('bootstrap', () => {
     expect(root.querySelector('[data-chip="kernel"]')).toBeNull();
     expect(window.__CAD__?.snapshot().kernel.state).toBe('ready');
     expect(workers).toHaveLength(1);
+    // A host before 1.6 has no exit hook: nothing registered.
+    await vi.waitFor(() => expect(window.__CAD__?.leave.hook).toBe('unavailable'));
+    expect(ws.leaveHook).toBeNull();
+  });
+
+  it('L3: on a 1.6 host the exit hook is registered once the page has connected', async () => {
+    const ws = createFakeWorkspace({
+      hostVersion: '1.6',
+      spawnWorker: () => {
+        const w = new FakeWorker(okHandler());
+        w.ready();
+        return w as unknown as Worker;
+      },
+    });
+    setFakeConnection(ws);
+    const { bootstrap } = await import('../../src/app/bootstrap');
+    const root = document.createElement('div');
+    document.body.append(root);
+    await act(async () => {
+      await bootstrap(root);
+    });
+    await vi.waitFor(() => expect(window.__CAD__?.leave.hook).toBe('on'));
+    expect(typeof ws.leaveHook).toBe('function');
   });
 });

@@ -20,6 +20,9 @@ export const ICONS = {
   eye: 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z M12 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0',
   eyeOff:
     'M3 3l18 18 M10.6 6.1A10.8 10.8 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.2 3.9 M6.6 7.6C3.8 9.3 2 12 2 12s3.5 6 10 6a9.6 9.6 0 0 0 4.4-1.1 M9.9 10a3 3 0 0 0 4.1 4.1',
+  /** LINK: "Include in simulation": a part with the flow going past it; crossed out when left out. */
+  sim: 'M3 8h4 M3 12h4 M3 16h4 M10 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8z',
+  simOff: 'M3 8h4 M3 16h4 M10 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8z M3 3l18 18',
   pencil: 'M4 16.8V20h3.2L18.4 8.8l-3.2-3.2L4 16.8z M13.8 6.9l3.2 3.2',
   trash: 'M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13',
   /** Fit (F): frame corners round a box. The viewport's house button is the core's

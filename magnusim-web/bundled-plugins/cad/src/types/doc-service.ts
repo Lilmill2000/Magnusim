@@ -23,8 +23,17 @@ export type SaveState =
   | { state: 'saving' }
   /** `message` is the why of "Not saved: <why>" (the save is retried by itself). */
   | { state: 'error'; message: string }
-  /** Another tab wrote the model: edits are paused until the user reloads ("Changed in another tab · Reload"). */
-  | { state: 'conflict'; message: string };
+  /**
+   * Another tab wrote the model while this tab had a change not saved (both tabs edited): edits are
+   * paused until the user picks Reload (this tab's change is lost) or Keep mine (the other tab's is).
+   */
+  | { state: 'conflict'; message: string }
+  /**
+   * Another tab saved a newer model while this tab had no change of its own (L3 review B1): nothing
+   * here is unsaved, so the page is not dirty; edits wait for Reload ("Updated in another tab").
+   * Leaving reloads it in place and links (or skips) without asking.
+   */
+  | { state: 'updated'; message: string };
 
 /** What an import's rebuild did (its panel says "Loaded from the stored BREP in 1.2 s"; never re-heals). */
 export interface ImportOutput {
@@ -89,6 +98,12 @@ export interface DocState {
   history: { canUndo: boolean; canRedo: boolean; undoLabel: string | null; redoLabel: string | null };
   /** The panel session open right now (its feature is being edited), or null. */
   session: { id: string; feature: FeatureId; isNew: boolean } | null;
+  /**
+   * LINK: the save counter of the stored design (the model file's
+   * `source_version`): it goes up by one with every save and never down. 0 until
+   * the Part is read.
+   */
+  sourceVersion: number;
 }
 
 /**
@@ -156,6 +171,12 @@ export interface DocService {
   session(): EditSession | null;
   rename(id: FeatureId, name: string): EditResult;
   setSuppressed(id: FeatureId, suppressed: boolean): EditResult;
+  /**
+   * Suppress every feature of a removed type (Box, Cylinder: REMOVED_FEATURE_TYPES) that is not
+   * suppressed yet, in one undo step (L3 review B2: the in-CAD notice's "Suppress them"). The
+   * features stay in the Part with their data; Unsuppress or Undo brings them back.
+   */
+  suppressRemoved(): EditResult;
   /** Refused while later features depend on it ("Cylinder 1 uses Body 1 of Box 1: …"). A refusal leaves an open panel session on it as it was. */
   remove(id: FeatureId): EditResult;
   /**
@@ -170,6 +191,12 @@ export interface DocService {
   /** A body made by a feature (also a split piece with a derived id, which gets its BodyDef here). */
   renameBody(id: BodyId, name: string): EditResult;
   setBodyColor(id: BodyId, color: string): EditResult;
+  /**
+   * LINK: whether a body goes to the project's linked geometry ("Include in
+   * simulation", on by default). One undo step; a model change, so it is saved
+   * and counts as a new version of the design.
+   */
+  setBodyInSimulation(id: BodyId, include: boolean): EditResult;
   addParam(p: Omit<Param, 'id'>): ParamId | EditResult;
   /** A rename also renames the parameter in every expression that uses it. */
   updateParam(id: ParamId, patch: Partial<Omit<Param, 'id'>>): EditResult;
@@ -201,11 +228,62 @@ export interface DocService {
   measure(id: BodyId): Promise<BodyProps>;
   /** Save now whatever is pending (model and view). */
   flush(): Promise<void>;
+  /**
+   * L3: tell the app again whether the page has unsaved work (nav.setDirty), and wait until it
+   * has heard it. The link says "clean" to the app for the saved design; a value still typed in
+   * a field (not applied) is unsaved work all the same, so the exit's question asks about it.
+   */
+  retellDirty(): Promise<void>;
   /** Try a save that failed ("Not saved: <why>") again now. */
   retrySave(): void;
   /** Re-read after a conflict ("Changed in another tab · Reload"). */
   reload(): Promise<void>;
+  /**
+   * After a conflict ("Changed in another tab"): write this tab's model over the
+   * other tab's save ("Keep mine"). The caller has warned the user. Resolves once
+   * written; refused again when a third save came in between.
+   */
+  keepMine(): Promise<void>;
+  /**
+   * LINK: the bodies at the end of the history (the rollback bar ignored), built
+   * from the model as it is now, for the export. Rejects when the part cannot be
+   * built (the kernel is down).
+   */
+  bodiesAtEnd(): Promise<EndBodies>;
+  /** LINK: the newest save counter the study record holds or is about to (waits for its write). */
+  recordSettled(): Promise<void>;
+  /**
+   * Model writes wait until the returned release() (an arrow being dragged applies live; one write
+   * follows the release). Leaving still writes.
+   */
+  holdSaves(): () => void;
+  /**
+   * Is what is stored still what this tab stored or loaded? When another tab saved over it and this
+   * tab has no change of its own, the save state becomes "updated" ("Updated in another tab": not
+   * dirty, Reload only). A tab with a change finds out when it saves ("conflict").
+   */
+  checkStored(): Promise<void>;
   dispose(): void;
+}
+
+/** LINK: a body at the end of the history, as the export needs it (src/link). */
+export interface EndBody {
+  id: BodyId;
+  /** Kernel id in the current worker. */
+  shape: ShapeId;
+  valid: boolean;
+  feature: FeatureId;
+  /** Its faces' persistent names, or null when none were made. */
+  names: FaceNames | null;
+  name: string;
+  color: string;
+}
+
+/** LINK: what DocService.bodiesAtEnd() built: the bodies, and the features that failed on the way. */
+export interface EndBodies {
+  bodies: EndBody[];
+  /** Features of the history that failed or were stopped (red in the tree), by name. */
+  failed: string[];
 }
 
 /** A body as the rebuild holds it between features. */

@@ -34,10 +34,11 @@
 // Review round 1 (bugs found by clicking through; each one is a test here):
 //  11. Undo, redo, undo within 1.5 s ends on "Saved" (it stayed on "Saving…").
 //  12. Leaving while a save is on its way (its commit held, so the page is dirty
-//      for as long as the test needs) asks "Leave without saving?": the header's
-//      Back, Home and the browser's Back. Stay keeps the page and the edit; once
-//      saved, Back leaves without a question and the edit is there; Leave closes
-//      the workspace with no second question.
+//      for as long as the test needs): since L3 (host API 1.6) the Part's exit
+//      hook saves first, so the header's Back, Home and the browser's Back wait for
+//      the save ("Saving Part 1" in the header) instead of asking "Leave without
+//      saving?"; Cancel keeps the page and the edit; once saved, Back leaves and
+//      the edit is there; a save dropped on the way out is written again.
 //  13. Keys work as soon as the Part opens and again after the app's Settings,
 //      with no click in the frame; the dock says "Click here to use keyboard
 //      shortcuts" only while the frame has no keyboard focus (after a click on
@@ -45,8 +46,8 @@
 //  14. 64-character feature and body names end in an ellipsis inside the card;
 //      the row's buttons stay clear of them.
 // Review round 2:
-//  15. The mouse's side Back button over the part with a save on its way asks
-//      too; ten tree-twisty clicks never make a suppress wait. F5 with a save on
+//  15. The mouse's side Back button over the part with a save on its way waits
+//      for it too (L3); ten tree-twisty clicks never make a suppress wait. F5 with a save on
 //      its way: cad-p1-leave-f5.spec.js (the browser's own prompt).
 //  16. Settings > Plugins describes only what CAD has (since SD: sketches, extrude,
 //      booleans, the enclosure, STEP; no boxes and cylinders; nothing of later phases).
@@ -55,9 +56,9 @@
 //      is made before the feature in history; Extrude 2 joins Extrude 1.
 //  18. A reload after a save shows the saved model, read with ws.files.
 // P1.5 review round 1:
-//  19. With a save on its way, a link typed to another project asks "Leave without
-//      saving?" and Settings > Plugins > Disable asks "Turn off Magnusim CAD?", both
-//      with CAD's words; Stay and Cancel keep the edit and CAD on.
+//  19. With a save on its way, a link typed to another project waits for it (L3)
+//      and Settings > Plugins > Disable (no exit hook) asks "Turn off Magnusim CAD?"
+//      with CAD's words; Cancel keeps the edit and CAD on.
 //  20. A Cut flush against a face and a Join along an edge say what is missing
 //      (touching is not overlapping; an edge is not a shared face).
 // window.__CAD__ is used only to project model points to screen pixels and to
@@ -66,7 +67,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSketch, addSolid, answerLeave, baseUrl, cadPluginRow, drawRectangle, ensureCadOn, expectLeaveQuestion, headerTakesKeyboard, historyState, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, resetCadToDefault, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, answerLeave, baseUrl, cadPluginRow, cancelLeave, drawRectangle, ensureCadOn, expectLeaveWaitsForSave, headerTakesKeyboard, historyState, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, resetCadToDefault, watchPage, workspaceFrame } from './helpers';
 import { breakManifest } from './manifest-guard.mjs';
 import { PNG } from './png';
 
@@ -107,10 +108,21 @@ const featureRow = (frame, name) => frame.locator('[data-cad-tree] [data-feature
 const bodiesLabel = (frame) => frame.locator('[data-cad-tree] [data-bodies-folder] > .tree-row .tl');
 const volumeValue = (frame) => frame.locator('[data-chip="volume"] [data-volume-mm3]');
 
-/** A readout as the chip formats it: 6 significant digits, digit groups from 10,000 up. */
+/** A readout as the chip formats it: 6 significant digits, digit groups from 10,000 up, significant figures above a million when rounded. */
 const readout = (n) => {
   const v = Number(n.toPrecision(6));
-  return Math.abs(v) < 10_000 ? String(v) : v.toLocaleString('en-US', { maximumFractionDigits: 20 });
+  if (Math.abs(v) < 10_000) return String(v);
+  // 7 digits or more that 6 significant digits do not hold: significant figures ("1.30484 × 10⁸"; UX review).
+  if (Math.abs(v) >= 1_000_000 && Math.abs(v - n) > 1e-9 * Math.abs(n)) {
+    let e = Math.floor(Math.log10(Math.abs(n)));
+    let m = Number((n / 10 ** e).toPrecision(6));
+    if (Math.abs(m) >= 10) {
+      m = Number((m / 10).toPrecision(6));
+      e += 1;
+    }
+    return `${m} × 10${String(e).split('').map((c) => (c === '-' ? '⁻' : '⁰¹²³⁴⁵⁶⁷⁸⁹'[Number(c)])).join('')}`;
+  }
+  return v.toLocaleString('en-US', { maximumFractionDigits: 20 });
 };
 
 /** The volume chip shows `mm3` (to 6 significant digits, as the chip formats it) and carries it exactly. */
@@ -129,17 +141,19 @@ async function expectSaved(frame) {
 /**
  * Back the way a person does it: the pointer travels from where it is (inside
  * the frame) to the host's Back button and clicks it, the button held down for
- * 80 ms as a finger does (the host acts on the release). `asks`: the page has
- * unsaved work, so the app asks first (the question stays open for the caller).
+ * 80 ms as a finger does (the host acts on the release). `asks`: the app asks first
+ * (the question stays open for the caller). `waits`: a save is on its way, and the exit
+ * (host API 1.6: the Part's exit hook saves first) waits for it, saying so in the header.
  */
-async function backByPointer(page, { asks = false } = {}) {
+async function backByPointer(page, { asks = false, waits = false } = {}) {
   const back = await page.locator('#workspace-overlay [data-ws-back]').boundingBox();
   const x = back.x + back.width / 2;
   const y = back.y + back.height / 2;
   await page.mouse.move(x, y, { steps: 10 });
   await page.mouse.click(x, y, { delay: 80 });
   if (asks) await expect(page.locator('#modal-confirm')).toBeVisible();
-  else await expect(page.locator('#workspace-overlay')).toBeHidden();
+  else if (waits) await expectLeaveWaitsForSave(page);
+  else await expect(page.locator('#workspace-overlay')).toBeHidden({ timeout: 60_000 });
 }
 
 /** The host header's unsaved-work mark, and what it says (null when the page is clean). */
@@ -892,7 +906,10 @@ test('cad:p1-document-save-chip undo, redo, undo within 1.5 s ends on "Saved"; a
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:p1-document-leave-asks with a save on its way, Back, Home and the browser Back ask "Leave without saving?"; Stay keeps the edit', async ({ page, request }) => {
+// L3 (host API 1.6): the Part's exit hook saves before anything leaves, so with a save on its
+// way Back, Home and the browser's Back wait for it (the header: "Saving Part 1", with Cancel)
+// instead of asking "Leave without saving?" (P1.5). Nothing is lost either way.
+test('cad:p1-document-leave-waits with a save on its way, Back, Home and the browser Back wait for it; Cancel keeps the Part and the edit; a save dropped on the way out is written again', async ({ page, request }) => {
   const { seen, frame, row } = await freshPart(page, request);
   await addBlock(page);
   await expectSaved(frame);
@@ -907,27 +924,25 @@ test('cad:p1-document-leave-asks with a save on its way, Back, Home and the brow
   // The host's header marks the unsaved work with the Part's words.
   await expect.poll(() => headerDirty(page)).toBe('Changes to Part 1 are not saved yet.');
 
-  // Back (the header's), as a person clicks it: the app asks; Stay keeps the page and the edit.
-  await backByPointer(page, { asks: true });
-  await expectLeaveQuestion(page);
-  await shot(page, 'p15-leave-dialog');
-  await answerLeave(page, false);
-  await expect(page.locator('#workspace-overlay')).toBeVisible();
+  // Back (the header's), as a person clicks it: the exit waits for the save; Cancel keeps the
+  // page and the edit.
+  await backByPointer(page, { waits: true });
+  await shot(page, 'l3-leave-waits-for-save');
+  await cancelLeave(page);
   await expect(box1).toHaveAttribute('data-suppressed', '1');
   // Home (in the covered workbench: clicked from script, as the app's own G7 test does).
   await page.evaluate(() => document.getElementById('wb-home').click());
-  await expectLeaveQuestion(page);
-  await answerLeave(page, false);
+  await expectLeaveWaitsForSave(page);
+  await cancelLeave(page);
   await expect(page.locator('#home')).toBeHidden();
-  await expect(page.locator('#workspace-overlay')).toBeVisible();
   // The browser's Back.
   const url = page.url();
   await page.goBack();
-  await expectLeaveQuestion(page);
-  await answerLeave(page, false);
-  expect(page.url()).toBe(url);
-  await expect(page.locator('#workspace-overlay')).toBeVisible();
+  await expectLeaveWaitsForSave(page);
+  await cancelLeave(page);
+  await expect.poll(() => page.url()).toBe(url);
   await expect(box1).toHaveAttribute('data-suppressed', '1');
+  expect(hold.held(), 'the save is still on its way').toBe(1);
 
   // The save lands: Saved, the header is clean, and Back leaves without a question.
   await hold.release();
@@ -938,22 +953,19 @@ test('cad:p1-document-leave-asks with a save on its way, Back, Home and the brow
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
   await expect(featureRow(again, 'Extrude 1')).toHaveAttribute('data-suppressed', '1');
 
-  // Leave: the workspace closes at once, with no second question. Here the held write never
-  // reaches the disk (the test fails it, as a dropped connection would), and the Part
-  // reopens from what was saved, saying Saved.
+  // A save dropped on the way out (the test fails its write, as a dropped connection would):
+  // the exit's save writes it again, then the workspace closes; nothing is lost.
   const hold2 = await holdCommits(page);
   await rowMenu(again, featureRow(again, 'Extrude 1'), 'suppress');
   await expect(featureRow(again, 'Extrude 1')).not.toHaveAttribute('data-suppressed', '1');
   await expect.poll(() => hold2.held()).toBe(1);
-  await backByPointer(page, { asks: true });
-  await expectLeaveQuestion(page);
-  await answerLeave(page, true);
-  await expect(page.locator('#workspace-overlay')).toBeHidden();
-  await expect(page.locator('#workspace-frame')).toHaveCount(0);
+  await backByPointer(page, { waits: true });
   await hold2.abort();
+  await expect(page.locator('#workspace-overlay')).toBeHidden({ timeout: 60_000 });
+  await expect(page.locator('#workspace-frame')).toHaveCount(0);
   again = await openPart(page, row);
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  await expect(featureRow(again, 'Extrude 1')).toHaveAttribute('data-suppressed', '1');
+  await expect(featureRow(again, 'Extrude 1')).not.toHaveAttribute('data-suppressed', '1');
   await expect(again.locator('[data-chip="save"]')).toHaveText('Saved');
   expect(seen.csp, 'CSP violations').toEqual([]);
   // The one error is the commit this test failed on purpose.
@@ -961,9 +973,10 @@ test('cad:p1-document-leave-asks with a save on its way, Back, Home and the brow
 });
 
 // P1.5 review round 1: the other ways out the host guards, with CAD's own words. A link
-// typed to another project asks "Leave without saving?"; turning CAD off in Settings asks
-// "Turn off Magnusim CAD?". Stay (or Cancel) keeps the page, the edit, and CAD on.
-test('cad:p1-document-leave-elsewhere with a save on its way, a typed link to another project and Settings > Plugins > Disable both ask; Stay and Cancel keep the edit and CAD on', async ({ page, request }) => {
+// typed to another project waits for the save (L3: the exit hook saves first; Cancel keeps
+// the page); turning CAD off in Settings runs no exit hook and asks "Turn off Magnusim CAD?".
+// Cancel keeps the page, the edit, and CAD on.
+test('cad:p1-document-leave-elsewhere with a save on its way, a typed link to another project waits for it and Settings > Plugins > Disable asks; Cancel keeps the edit and CAD on', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await addBlock(page);
   await expectSaved(frame);
@@ -985,9 +998,9 @@ test('cad:p1-document-leave-elsewhere with a save on its way, a typed link to an
   await page.evaluate((pid) => {
     location.hash = `#/p/${pid}`;
   }, SAMPLE_PROJECT);
-  await expectLeaveQuestion(page);
-  await answerLeave(page, false);
-  expect(page.url()).toBe(url);
+  await expectLeaveWaitsForSave(page);
+  await cancelLeave(page);
+  await expect.poll(() => page.url()).toBe(url);
   await stillHere();
 
   // Settings > Plugins > Magnusim CAD > Disable, from the workspace's own header.
@@ -1039,7 +1052,7 @@ async function lookAroundTree(page, frame) {
   }
 }
 
-test('cad:p1-document-leave-side-back the mouse side Back button over the part, with a save on its way, asks first; Stay keeps the change', async ({ page, request }) => {
+test('cad:p1-document-leave-side-back the mouse side Back button over the part, with a save on its way, waits for it (L3); Cancel keeps the change', async ({ page, request }) => {
   const { seen, frame, row } = await freshPart(page, request);
   await addBlock(page);
   await addSolid(page, { at: [50, 0, 0] });
@@ -1064,15 +1077,15 @@ test('cad:p1-document-leave-side-back the mouse side Back button over the part, 
     await cdp.detach();
   };
   await sideBack();
-  await expectLeaveQuestion(page);
-  await answerLeave(page, false);
-  expect(page.url()).toBe(url);
+  await expectLeaveWaitsForSave(page);
+  await cancelLeave(page);
+  await expect.poll(() => page.url()).toBe(url);
   expect(await historyState(frame)).toBe(expected);
   await hold.release();
   await expectSaved(frame);
   // Saved: the same button leaves without a question.
   await sideBack();
-  await expect(page.locator('#workspace-overlay')).toBeHidden();
+  await expect(page.locator('#workspace-overlay')).toBeHidden({ timeout: 60_000 });
   expect(page.url()).not.toBe(url);
   const again = await openPart(page, row);
   await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
@@ -1246,8 +1259,8 @@ test('cad:p1-document-long-names 64-character names end in an ellipsis inside th
     expect(m.overlaps, `${what} row buttons clear of the label`).toBe(0);
     expect(m.card.scroll, `${what}: the tree card does not scroll sideways`).toBe(m.card.client);
   }
-  // The body row's eye and pencil are both there, beside (not over) the name.
-  expect((await measure(brow.locator('> .tree-row .tl'))).acts).toBe(2);
+  // The body row's simulation toggle (LINK), eye and pencil are all there, beside (not over) the name.
+  expect((await measure(brow.locator('> .tree-row .tl'))).acts).toBe(3);
   // The full name is the label's tooltip once it is cut.
   await frow.locator('> .tree-row .tl').hover();
   await expect(frow.locator('> .tree-row .tl')).toHaveAttribute('title', fname);
@@ -1466,10 +1479,21 @@ test('cad:p1-document-p1-part-moves a Part saved by P1 (ws.data) opens with noth
   await expect(featureRow(frame, 'Old box')).toHaveAttribute('data-state', 'error');
   await expect(featureRow(frame, 'Old box').locator('[data-feature-badge="error"]')).toHaveAttribute('aria-label', "What's wrong: This part uses a removed feature (Old box)");
   await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved');
+  // L3 review B2: the Part says so when it opens, with the one step that fixes it.
+  await expect(frame.locator('[data-chip="removed"] .cad-chip-v')).toHaveText('This Part uses a removed feature: Old box');
+  await expect(frame.locator('[data-chip="removed"] [data-chip-action]')).toHaveText(['Suppress it']);
   // An edit saves, and the reopened Part shows both (what the user sees comes first; P1.5 review round 1).
   await addBlock(page);
   await expectSaved(frame);
-  await backByPointer(page);
+  // Back: the removed Box does not build, so the Part is not added to the project (link review
+  // L1: never a partial design); the app's question says what to do (not "Fix, retry", which
+  // cannot be done for a removed type), and Leave anyway leaves.
+  await backByPointer(page, { asks: true });
+  await expect(page.locator('#cf-heading')).toHaveText("Couldn't update the project");
+  await expect(page.locator('#cf-copy')).toHaveText('Magnusim CAD: Old box is a removed feature (Box). Suppress or delete it, then leave. The project is unchanged.');
+  await expect(page.locator('#cf-confirm')).toHaveText('Leave anyway');
+  await page.locator('#cf-confirm').click();
+  await expect(page.locator('#workspace-overlay')).toBeHidden();
   const again = await openPart(page, row);
   await expect(historyLabels(again)).toHaveText(['Old box', 'Sketch 1', 'Extrude 1']);
   await expect(bodiesLabel(again)).toHaveText('Bodies (1)');

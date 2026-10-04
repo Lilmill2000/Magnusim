@@ -1,0 +1,112 @@
+// @vitest-environment node
+// gate:l2-cad fails, never passes by skipping (link review L3): without the
+// app's Python it stops at once with the reason, and a report with a skipped
+// test is a failure.
+// Owner: LINK.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { e2eVerdict, vitestVerdict } from '../../scripts/gate-l2-cad.mjs';
+import { censusVerdict, L3_E2E, L3_E2E_CENSUS, L3_UNIT, missingInputs, unitFilesVerdict } from '../../scripts/gate-l3-cad.mjs';
+
+const PLUGIN = join(__dirname, '..', '..');
+
+describe('gate:l2-cad never soft-passes', () => {
+  it('fails at once, saying why, when the app Python is missing', () => {
+    const missing = join(PLUGIN, 'no-such-python', 'python.exe');
+    const r = spawnSync(process.execPath, [join(PLUGIN, 'scripts', 'gate-l2-cad.mjs')], { cwd: PLUGIN, encoding: 'utf8', env: { ...process.env, CAD_E2E_PYTHON: missing }, timeout: 60_000 });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`[gate:l2-cad] FAILED: the app's Python is missing (looked for ${missing})`);
+  });
+
+  it('the package script is the gate script', () => {
+    const pkg = JSON.parse(readFileSync(join(PLUGIN, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+    expect(pkg.scripts['test:gate:l2-cad']).toBe('node scripts/gate-l2-cad.mjs');
+  });
+
+  it('a skipped or todo unit test fails the gate', () => {
+    expect(vitestVerdict({ success: true, numPassedTests: 30, numFailedTests: 0, numPendingTests: 2, numTodoTests: 0 })).toBe('2 unit test(s) were skipped: the gate runs every test');
+    expect(vitestVerdict({ success: true, numPassedTests: 30, numFailedTests: 0, numPendingTests: 0, numTodoTests: 1 })).toMatch(/skipped/);
+    expect(vitestVerdict({ success: false, numPassedTests: 29, numFailedTests: 1, numPendingTests: 0, numTodoTests: 0 })).toBe('1 unit test(s) failed');
+    expect(vitestVerdict(null)).toBe('vitest wrote no report');
+    expect(vitestVerdict({ success: true, numPassedTests: 0, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0 })).toBe('no unit test ran');
+    expect(vitestVerdict({ success: true, numPassedTests: 30, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0 })).toBeNull();
+  });
+
+  it('a skipped e2e test fails the gate', () => {
+    expect(e2eVerdict({ stats: { expected: 5, skipped: 1, unexpected: 0, flaky: 0 } })).toBe('1 e2e test(s) were skipped: the gate runs every test');
+    expect(e2eVerdict({ stats: { expected: 5, skipped: 0, unexpected: 1, flaky: 0 } })).toBe('1 e2e test(s) failed');
+    expect(e2eVerdict({})).toBe('Playwright wrote no report');
+    expect(e2eVerdict({ stats: { expected: 0, skipped: 0, unexpected: 0, flaky: 0 } })).toBe('no e2e test ran');
+    expect(e2eVerdict({ stats: { expected: 6, skipped: 0, unexpected: 0, flaky: 0 } })).toBeNull();
+  });
+});
+
+describe('gate:l3-cad never soft-passes', () => {
+  it('fails at once, saying why, when the app Python or the Vortex is missing', () => {
+    const missing = join(PLUGIN, 'no-such-python', 'python.exe');
+    const r = spawnSync(process.execPath, [join(PLUGIN, 'scripts', 'gate-l3-cad.mjs')], { cwd: PLUGIN, encoding: 'utf8', env: { ...process.env, CAD_E2E_PYTHON: missing }, timeout: 60_000 });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`[gate:l3-cad] FAILED: the app's Python is missing (looked for ${missing})`);
+    const has = (p: string) => p === 'py';
+    expect(missingInputs({ CAD_E2E_PYTHON: 'py' }, has)).toBe("Daniel's Vortex STEP is not set: set CAD_E2E_VORTEX_STEP to the path of Vortex CFD Test.step (the include case runs on it).");
+    expect(missingInputs({ CAD_E2E_PYTHON: 'py', CAD_E2E_VORTEX_STEP: 'nope.step' }, has)).toBe('CAD_E2E_VORTEX_STEP names no file (nope.step).');
+    expect(missingInputs({ CAD_E2E_PYTHON: 'py', CAD_E2E_VORTEX_STEP: 'v.step' }, (p) => p === 'py' || p === 'v.step')).toBeNull();
+  });
+
+  it('the package script is the gate script, and it runs the exit hook tests and the exit e2e', () => {
+    const pkg = JSON.parse(readFileSync(join(PLUGIN, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+    expect(pkg.scripts['test:gate:l3-cad']).toBe('node scripts/gate-l3-cad.mjs');
+    expect(L3_UNIT).toContain('tests/link/leave.test.ts');
+    expect(L3_E2E).toEqual(['e2e/cad-link-exit.spec.ts']);
+  });
+
+  it('runs the e2e with --forbid-only and vitest with --allowOnly=false: a stray .only fails the gate', () => {
+    const src = readFileSync(join(PLUGIN, 'scripts', 'gate-l3-cad.mjs'), 'utf8');
+    expect(src).toContain("'--forbid-only'");
+    expect(src).toContain("'--allowOnly=false'");
+  });
+
+  it('the census is the spec: every test of cad-link-exit.spec.ts by id, and exactly the test.fail() ones are expected to fail', () => {
+    const spec = readFileSync(join(PLUGIN, 'e2e', 'cad-link-exit.spec.ts'), 'utf8');
+    const blocks = spec.split(/\n  test\(/).slice(1);
+    const idOf = (b: string) => /^['"`](cad:l3-[a-z0-9-]+)/.exec(b)?.[1] ?? '?';
+    const failing = blocks.filter((b) => /^\s*test\.fail\(/m.test(b.split(/\n  \}\);/)[0])).map(idOf);
+    expect(blocks.map(idOf).sort()).toEqual(L3_E2E_CENSUS.map(([id]) => id).sort());
+    expect(failing.sort()).toEqual(L3_E2E_CENSUS.filter(([, s]) => s === 'failed').map(([id]) => id).sort());
+  });
+
+  it('no host-defect marker is left: no test.fail(), no defect allowance, every test expected to pass', () => {
+    const spec = readFileSync(join(PLUGIN, 'e2e', 'cad-link-exit.spec.ts'), 'utf8');
+    expect(spec).not.toMatch(/test\.fail\(/);
+    expect(spec).not.toMatch(/HOST.DEFECT/i);
+    expect(L3_E2E_CENSUS.filter(([, s]) => s !== 'passed')).toEqual([]);
+  });
+
+  it('the census fails a report with a test missing, an unknown one, a test.fail() marker gone or new, or a test that did not run', () => {
+    const census: [string, 'passed' | 'failed'][] = [
+      ['cad:l3-a', 'passed'],
+      ['cad:l3-b', 'failed'],
+    ];
+    const spec = (title: string, expectedStatus: string, status = expectedStatus === 'failed' ? 'failed' : 'passed') => ({ title, tests: [{ expectedStatus, status: 'expected', results: [{ status }] }] });
+    const report = (...specs: unknown[]) => ({ suites: [{ title: 'cad-link-exit.spec.ts', specs: [], suites: [{ title: 'gate:l3-cad exit sync', specs }] }] });
+    expect(censusVerdict(report(spec('cad:l3-a one', 'passed'), spec('cad:l3-b two', 'failed')), census)).toBeNull();
+    expect(censusVerdict(report(spec('cad:l3-a one', 'passed')), census)).toBe('the census is short: cad:l3-b did not run (deleted, renamed or filtered out)');
+    expect(censusVerdict(report(spec('cad:l3-a one', 'passed'), spec('cad:l3-b two', 'failed'), spec('cad:l3-c three', 'passed')), census)).toMatch(/^the census has tests it does not know: cad:l3-c/);
+    expect(censusVerdict(report(spec('cad:l3-a one', 'passed'), spec('cad:l3-b two', 'passed')), census)).toMatch(/^cad:l3-b is no longer marked test\.fail\(\)/);
+    expect(censusVerdict(report(spec('cad:l3-a one', 'failed'), spec('cad:l3-b two', 'failed')), census)).toMatch(/^cad:l3-a is marked to fail/);
+    expect(censusVerdict(report(spec('cad:l3-a one', 'passed', 'skipped'), spec('cad:l3-b two', 'failed')), census)).toBe('cad:l3-a did not run');
+    // A test.only under --forbid-only: Playwright runs nothing, and the census says so.
+    expect(censusVerdict({ suites: [] }, census)).toMatch(/^the census is short/);
+  });
+
+  it('every L3 unit file must have run tests', () => {
+    const files = ['tests/link/leave.test.ts', 'tests/link/controller.test.ts'];
+    const ran = (name: string, n: number) => ({ name, assertionResults: Array.from({ length: n }, () => ({ status: 'passed' })) });
+    expect(unitFilesVerdict({ testResults: [ran('C:\\x\\tests\\link\\leave.test.ts', 3), ran('/x/tests/link/controller.test.ts', 2)] }, files)).toBeNull();
+    expect(unitFilesVerdict({ testResults: [ran('/x/tests/link/leave.test.ts', 3)] }, files)).toBe('no unit test ran in tests/link/controller.test.ts');
+    expect(unitFilesVerdict({ testResults: [ran('/x/tests/link/leave.test.ts', 3), ran('/x/tests/link/controller.test.ts', 0)] }, files)).toBe('no unit test ran in tests/link/controller.test.ts');
+  });
+});

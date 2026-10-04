@@ -91,8 +91,18 @@ describe('bodies and selection', () => {
       [body('b1', 'f1', 'Body 1'), body('b2', 'f3', 'Body 2')],
     );
     expect(rows).toEqual([
-      { id: 'b1', name: 'Housing', color: '#ff0000', visible: true, feature: 'f1', valid: true },
-      { id: 'b2', name: 'Body 2', color: '#bdc9db', visible: false, feature: 'f3', valid: true },
+      { id: 'b1', name: 'Housing', color: '#ff0000', visible: true, feature: 'f1', valid: true, inSimulation: true },
+      { id: 'b2', name: 'Body 2', color: '#bdc9db', visible: false, feature: 'f3', valid: true, inSimulation: true },
+    ]);
+  });
+
+  it('LINK: a solid body has the Include in simulation toggle (on unless its BodyDef says false); a surface body has none', () => {
+    const surface = { ...body('b3', 'f4', 'Sheet'), solids: 0 } as BodyInfo;
+    const rows = bodyRows({ bodies: { b1: { name: 'Body 1', color: '#bdc9db' }, b2: { name: 'Body 2', color: '#bdc9db', simulation: false } } }, { hiddenBodies: [] }, [body('b1', 'f1'), body('b2', 'f2'), surface]);
+    expect(rows.map((r) => [r.id, r.inSimulation])).toEqual([
+      ['b1', true],
+      ['b2', false],
+      ['b3', null],
     ]);
   });
 

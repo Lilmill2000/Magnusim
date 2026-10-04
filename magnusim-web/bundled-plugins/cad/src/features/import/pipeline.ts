@@ -84,6 +84,12 @@ export interface ImportOutcome {
   rawShapes: ImportedShape[];
   /** Files this run wrote (a discarded new import deletes them). */
   created: string[];
+  /**
+   * Faces of each healed shape, by item index, as the kernel counted them: the panel's Faces column
+   * shows them as soon as the diagnostics do, before the rebuild has made the bodies (L3 review
+   * polish 5: the Vortex's cell read "…" meanwhile).
+   */
+  faceCounts?: (number | null)[];
 }
 
 const check = (signal: AbortSignal | undefined) => {
@@ -321,6 +327,7 @@ export async function runImport(
         raw: h.raw,
         rawShapes: h.read,
         created,
+        faceCounts: h.healed.map((x) => (typeof x.faces === 'number' ? x.faces : null)),
       };
       return { outcome, brepBytes: stored.bytes };
     } finally {

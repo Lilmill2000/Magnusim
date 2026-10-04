@@ -16,8 +16,10 @@
 //   "12.3457"; "1000000", not "1,000,000"), so an edit never drops digits the
 //   user cannot see (review round 3).
 // - Typed text that is not applied yet is unsaved work (lib/pendingEdits.ts):
-//   the page is dirty while a field holds it, and leaving applies it first, as
-//   Enter would (SD review round 2: Back to project lost it without a word).
+//   the page is dirty while a field holds it, so the app asks before leaving
+//   (SD review round 2: Back to project lost it without a word). The pointer
+//   leaving the frame applies a whole value typed a moment ago (commitQuiet); the
+//   frame losing focus applies nothing (the text waits, as the app's question says).
 // - Commas in a number are refused with a reason, as the core's number fields
 //   refuse them ("1,500" could be 1500 or 1.5; commaProblem).
 // - A bare number is stored with the display unit ("20" -> "20 mm"); anything
@@ -33,6 +35,31 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { pendingEditsChanged, registerPendingEdit } from '../../lib/pendingEdits';
 import type { Expr, Quantity, UnitsService } from '../../types/units';
 import { commaProblem, exprToStore, formatField, formatQuantity, fullPrecision, literalDigits, parseLiteral, storeUnit, toDisplay, unitText } from './format';
+
+/** Typing this recently (ms) keeps the pointer leaving the frame from applying the text. */
+export const QUIET_MS = 800;
+
+/**
+ * When the page last saw a press (ms). A field that loses focus applies its text
+ * only when the focus went somewhere in this page: to another of its controls
+ * (the blur's relatedTarget), or to a press in it (a click on the view or a panel's
+ * background focuses nothing). The frame losing focus (the app's header or dialog,
+ * another window) is neither, and applies nothing: document.hasFocus() is not
+ * reliable for that in a real browser, where the frame runs in its own process and
+ * still reports focus during the blur (LINK polish: Stay found the text applied).
+ */
+let pressedAt = 0;
+let pressedOn: EventTarget | null = null;
+if (typeof document !== 'undefined') {
+  const pressed = (e: Event) => {
+    pressedAt = Date.now();
+    pressedOn = e.target;
+  };
+  document.addEventListener('pointerdown', pressed, true);
+  document.addEventListener('mousedown', pressed, true);
+  document.addEventListener('touchstart', pressed, true);
+}
+const PRESS_MS = 1000;
 
 export interface NumberUnitInputProps {
   /** The stored expression ("20 mm", "width / 2"). */
@@ -69,6 +96,13 @@ export interface NumberUnitInputProps {
    * shown under the field, as a refusal is, while nothing is typed.
    */
   problem?: string | null;
+  /**
+   * Something drawn in the input's row before the input ("Use padding"): it stays beside the
+   * input whatever the reason under the field (UX review: the link moved left in error rows).
+   */
+  lead?: ReactNode;
+  /** The reason the field shows for typed text it refused (null when none): the panel can leave out what it would say twice. */
+  onRefusal?(why: string | null): void;
 }
 
 interface Shown {
@@ -76,6 +110,22 @@ interface Shown {
   literal: boolean;
   value: number | null;
   error: string | null;
+}
+
+/**
+ * A reason that ends in a bracketed bound ("... past the part (x ≥ 40 mm)") keeps
+ * the bracket on one line: it wrapped as "(x" / "≥ 40 mm)" (SD final review). The
+ * text is unchanged; only where the line may break. Exported for tests.
+ */
+export function keepBoundTogether(text: string): ReactNode {
+  const m = /^([\s\S]*?\s)(\([^()]*\))$/.exec(text);
+  if (!m) return text;
+  return (
+    <>
+      {m[1]}
+      <span className="nui-keep">{m[2]}</span>
+    </>
+  );
 }
 
 /** What the field shows for a stored expression. Exported for tests. */
@@ -106,7 +156,7 @@ export function editTextOf(expr: Expr, quantity: Quantity, units: UnitsService, 
   return r.ok ? fullPrecision(toDisplay(r.value, quantity, docUnits)) : t;
 }
 
-export function NumberUnitInput({ expr, quantity, units, onCommit, validate, label, id, disabled, raw = false, showUnit = true, unit, className, field, problem = null }: NumberUnitInputProps) {
+export function NumberUnitInput({ expr, quantity, units, onCommit, validate, label, id, disabled, raw = false, showUnit = true, unit, className, field, problem = null, lead, onRefusal }: NumberUnitInputProps) {
   const docUnits = units.units();
   const unitKey = `${docUnits.length}|${docUnits.angle}`;
   const shown = displayOf(expr, quantity, units, raw);
@@ -127,6 +177,8 @@ export function NumberUnitInput({ expr, quantity, units, onCommit, validate, lab
   const editing = useRef(false);
   /** The field has focus (it shows every digit then). */
   const focused = useRef(false);
+  /** When the user last typed in it (ms): the pointer leaving the frame right after typing applies nothing. */
+  const typedAt = useRef(0);
   const lastShown = useRef(shown.text);
   lastShown.current = shown.text;
   /** What the field showed when focus came (every digit): typing nothing new is "untouched". */
@@ -190,15 +242,33 @@ export function NumberUnitInput({ expr, quantity, units, onCommit, validate, lab
     setText(now);
   }
 
+  /**
+   * The pointer left the frame: apply the typed text only when it is a whole
+   * value the field takes ("-", "1e", "2." and anything refused stay as typed,
+   * with no reason shown) and nothing was typed in the last QUIET_MS.
+   */
+  function commitQuiet() {
+    if (!editing.current || errorRef.current) return;
+    if (focused.current && Date.now() - typedAt.current < QUIET_MS) return;
+    const typed = textRef.current.trim();
+    if (!typed || /[-+*/^(.eE,]$/.test(typed) || commaProblem(typed)) return;
+    const r = units.evaluate(typed, quantity);
+    if (!r.ok || validate?.(r.value, r.uses)) return;
+    commit();
+  }
+
   /** Something typed and not applied (or refused): Escape and Ctrl+Z take it back first. */
   const isPending = () => (textRef.current !== base.current && textRef.current !== lastShown.current) || !!errorRef.current;
   const pending = isPending();
   const commitRef = useRef(commit);
   commitRef.current = commit;
+  const quietRef = useRef(commitQuiet);
+  quietRef.current = commitQuiet;
   const pendingRef = useRef(isPending);
   pendingRef.current = isPending;
   const labelRef = useRef(label);
   labelRef.current = label;
+  const inputRef = useRef<HTMLInputElement | null>(null);
   // Unsaved work while typed text waits (lib/pendingEdits.ts); it goes with the field.
   useEffect(
     () =>
@@ -209,12 +279,29 @@ export function NumberUnitInput({ expr, quantity, units, onCommit, validate, lab
         pending: () => pendingRef.current(),
         error: () => errorRef.current,
         commit: () => commitRef.current(),
+        commitQuiet: () => quietRef.current(),
+        focus: () => {
+          const el = inputRef.current;
+          if (!el || el.disabled || !el.isConnected) return;
+          el.focus();
+          const n = el.value.length;
+          try {
+            el.setSelectionRange(n, n);
+          } catch {
+            /* not a text field */
+          }
+        },
       }),
     [],
   );
   useEffect(() => {
     pendingEditsChanged();
   });
+  const refusalRef = useRef(onRefusal);
+  refusalRef.current = onRefusal;
+  useEffect(() => {
+    refusalRef.current?.(error);
+  }, [error]);
   const storedError = !error && !editing.current ? (shown.error ?? problem) : null;
   const shownError = error ?? storedError;
   let after: ReactNode = null;
@@ -231,7 +318,9 @@ export function NumberUnitInput({ expr, quantity, units, onCommit, validate, lab
   return (
     <span className={['nui', shownError ? 'is-invalid' : '', className || ''].filter(Boolean).join(' ')} data-field={field}>
       <span className="mgk-type mgk-value-row">
+        {lead}
         <input
+          ref={inputRef}
           id={id}
           className="mgk-input"
           type="text"
@@ -262,11 +351,19 @@ export function NumberUnitInput({ expr, quantity, units, onCommit, validate, lab
           }}
           onChange={(e) => {
             editing.current = true;
+            typedAt.current = Date.now();
             setText(e.target.value);
             if (error) setError(null);
           }}
-          onBlur={() => {
+          onBlur={(e) => {
             focused.current = false;
+            // The whole frame lost focus (the app's header or dialog, another window):
+            // the text waits in the field, unapplied, and the page stays unsaved, so the
+            // app's "Leaving discards them" is true. Focus coming back finds it as typed.
+            // A press on the field itself (the click that started the typing) is not one elsewhere.
+            const pressedElsewhere = Date.now() - pressedAt < PRESS_MS && pressedOn !== e.currentTarget;
+            const inPage = e.relatedTarget != null || pressedElsewhere;
+            if (editing.current && !inPage) return;
             commit();
           }}
           onKeyDown={(e) => {
@@ -306,7 +403,7 @@ export function NumberUnitInput({ expr, quantity, units, onCommit, validate, lab
       </span>
       {shownError ? (
         <span className="nui-error" role="alert" data-nui-error="1">
-          {shownError}
+          {keepBoundTogether(shownError)}
         </span>
       ) : null}
     </span>

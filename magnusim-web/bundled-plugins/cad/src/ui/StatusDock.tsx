@@ -5,7 +5,15 @@
 //   volume   the selected bodies' volume, or the shown bodies' total when none
 //            is selected ("Total of 3 bodies · 24,000 mm³"); a surface body has none
 //   size     the same bodies' exact bounding box ("100 mm × 100 mm × 20 mm")
-//   save     "Saved" / "Saving…" / "Not saved: <why> · Retry" / "Changed in another tab · Reload"
+//   save     "Saved" / "Saving…" / "Not saved: <why> · Retry" / "Not applied: press Enter"
+//            (a value typed in a field, so the chip agrees with the app's unsaved
+//            dot) / "Changed in another tab · Reload (discard my change) · Keep mine
+//            (replace the other tab's save)" (both tabs edited) / "Updated in another
+//            tab · Reload" (this tab had no change: not unsaved work, L3 review B1)
+//   removed  "This Part uses a removed feature: Old box · Suppress it" while an
+//            unsuppressed Box or Cylinder (removed types) is in the history: the
+//            exit cannot link the Part until they are suppressed or deleted (L3
+//            review B2); Suppress is one undo step
 //   keys     while the frame has no keyboard focus: the host (API 1.2) gives
 //            the page the keyboard when it opens and after its own dialogs,
 //            but a click on the host's header takes it away, and then
@@ -13,9 +21,11 @@
 //            says so (proposal §3.4 hint)
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactElement } from 'react';
+import { pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
 import { useServices } from '../lib/services';
 import { useStateStore } from '../lib/store';
+import { isRemovedFeature } from '../doc/features/removed';
 import { Chip, formatQuantity, formatVolume } from './kit';
 import { selectedBodies } from './tree/model';
 
@@ -101,12 +111,32 @@ export function StatusDock() {
   const services = useServices();
   const { doc } = services;
   const k = useStateStore(services.kernel.status, (s) => ({ state: s.state, message: s.message, memoryHigh: s.memory_high, heap: s.heap_bytes }));
-  const d = useStateStore(doc.state, (s) => ({ status: s.status, rebuild: s.rebuild.status, rebuildMsg: s.rebuild.message, bodies: s.rebuild.bodies, save: s.save, units: s.doc.units }));
+  const d = useStateStore(doc.state, (s) => ({ status: s.status, rebuild: s.rebuild.status, rebuildMsg: s.rebuild.message, bodies: s.rebuild.bodies, save: s.save, units: s.doc.units, features: s.doc.features }));
   const sel = useStateStore(services.selection);
   const rebuilding = useDelayed(d.rebuild === 'running', 300);
   const [measuring, setMeasuring] = useState(false);
   const hasFocus = useHasFocus();
+  const typed = useSyncExternalStore(subscribePendingEdits, pendingEdits, pendingEdits);
   const chips: ReactElement[] = [];
+
+  /** "Keep mine": warned in the app's own words first; this tab's version then replaces the other tab's save. */
+  const keepMine = async () => {
+    const title = String(services.bridge.context.study?.title ?? '').trim() || 'this Part';
+    const ok = await services.bridge
+      .confirm({
+        title: "Replace the other tab's save?",
+        message: `Another tab saved ${title} after this tab's last save. Keep mine stores this tab's version over it: what the other tab changed since then is lost. The other tab is told to reload the next time it saves.`,
+        confirmLabel: 'Keep mine',
+      })
+      .catch(() => false);
+    if (!ok) return;
+    try {
+      await doc.keepMine();
+      if (doc.state.get().save.state === 'saved') services.bridge.toast(`Kept this tab's version of ${title}.`, 'info');
+    } catch (err) {
+      services.bridge.toast(`Keep mine failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    }
+  };
 
   if (k.state === 'starting' || k.state === 'restarting') {
     chips.push(
@@ -141,6 +171,37 @@ export function StatusDock() {
     chips.push(
       <Chip key="rebuild" chip="rebuild" state="running" busy>
         Rebuilding…
+      </Chip>,
+    );
+  }
+
+  // Removed feature types (Box, Cylinder) still in the history and not suppressed: the Part cannot go
+  // to the project until they are suppressed or deleted, so it says so when the Part opens, with the
+  // one step that fixes it (L3 review B2: every exit said "failed to build. Fix, retry or suppress").
+  const removed = d.status === 'ready' ? d.features.filter((f) => isRemovedFeature(f) && !f.suppressed) : [];
+  if (removed.length) {
+    const one = removed.length === 1;
+    const names = removed.map((f) => f.name);
+    const list = one ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+    chips.push(
+      <Chip
+        key="removed"
+        chip="removed"
+        state="removed"
+        kind="warning"
+        actions={[
+          {
+            label: one ? 'Suppress it' : 'Suppress them',
+            id: 'Suppress',
+            run: () => {
+              const r = doc.suppressRemoved();
+              if (!r.ok) services.bridge.toast(r.reason, 'error');
+            },
+          },
+        ]}
+      >
+        {one ? 'This Part uses a removed feature: ' : 'This Part uses removed features: '}
+        {list}
       </Chip>,
     );
   }
@@ -224,6 +285,8 @@ export function StatusDock() {
 
   const save = d.save;
   if (save.state === 'conflict') {
+    // Two tabs (Daniel, 2026-10-02): the other tab saved while this one had a change
+    // that was not saved. Either way is the user's choice, and nothing goes silently.
     chips.push(
       <Chip
         key="save"
@@ -232,7 +295,8 @@ export function StatusDock() {
         kind="warning"
         actions={[
           {
-            label: 'Reload',
+            label: 'Reload (discard my change)',
+            id: 'Reload',
             run: () => {
               const before = doc.state.get().doc;
               void doc
@@ -241,9 +305,43 @@ export function StatusDock() {
                 .catch((err: unknown) => services.bridge.toast(`Reload failed: ${err instanceof Error ? err.message : String(err)}`, 'error'));
             },
           },
+          {
+            label: "Keep mine (replace the other tab's save)",
+            id: 'Keep mine',
+            run: () => void keepMine(),
+          },
         ]}
       >
         {save.message || 'Changed in another tab'}
+      </Chip>,
+    );
+  } else if (save.state === 'updated') {
+    // Another tab saved while this one had no change of its own: nothing here is lost by
+    // reloading, and nothing is unsaved (no "Keep mine": there is nothing of this tab's to keep).
+    chips.push(
+      <Chip
+        key="save"
+        chip="save"
+        state="updated"
+        actions={[
+          {
+            label: 'Reload',
+            id: 'Reload',
+            run: () => {
+              void doc.reload().catch((err: unknown) => services.bridge.toast(`Reload failed: ${err instanceof Error ? err.message : String(err)}`, 'error'));
+            },
+          },
+        ]}
+      >
+        {save.message || 'Updated in another tab'}
+      </Chip>,
+    );
+  } else if (typed.pending && save.state !== 'error') {
+    // A value typed in a field and not applied: the page is unsaved (the app's dot
+    // says so), and the chip must not say Saved (SD final review).
+    chips.push(
+      <Chip key="save" chip="save" state="typed" kind={typed.refused ? 'warning' : 'info'}>
+        {typed.refused ? 'Not applied' : 'Not applied: press Enter'}
       </Chip>,
     );
   } else if (save.state === 'error') {

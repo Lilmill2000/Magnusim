@@ -8,6 +8,7 @@
 import { createBus } from '../../src/lib/bus';
 import { createBridge } from '../../src/lib/bridge';
 import { newId, nextName } from '../../src/lib/ids';
+import { isRemovedFeature } from '../../src/doc/features/removed';
 import { createSelectionStore } from '../../src/lib/selection';
 import { createStateStore } from '../../src/lib/store';
 import { createCommandRegistry } from '../../src/app/commands';
@@ -256,6 +257,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     save: { state: 'saved', at: null },
     history: { canUndo: false, canRedo: false, undoLabel: null, redoLabel: null },
     session: null,
+    sourceVersion: 1,
   });
   const units = createFakeUnits(() => state.get().doc);
   const defs = new Map<FeatureType, FeatureTypeDef>();
@@ -343,6 +345,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     if (s.status === 'loading') return 'The part is still loading';
     if (s.status === 'error') return s.error ?? 'The part could not be read';
     if (s.save.state === 'conflict') return 'Changed in another tab · Reload to keep editing';
+    if (s.save.state === 'updated') return 'Updated in another tab · Reload to keep editing';
     return true;
   };
   const settle = () => open?.commit();
@@ -471,6 +474,13 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
         features: doc.features.map((x) => (x.id === id ? ({ ...x, suppressed: suppressed || undefined } as Feature) : x)),
       }));
     },
+    suppressRemoved() {
+      calls.push('suppressRemoved');
+      return edit('Suppress the removed features', (doc) => ({
+        ...doc,
+        features: doc.features.map((x) => (isRemovedFeature(x) ? ({ ...(x as Feature), suppressed: true } as Feature) : x)),
+      }));
+    },
     removeBlock(id) {
       const f = state.get().doc.features.find((x) => x.id === id);
       if (!f) return 'That feature is not in the part';
@@ -492,6 +502,15 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       return edit('Rename body', (doc) => ({ ...doc, bodies: { ...doc.bodies, [id]: { ...doc.bodies[id], name } } }));
     },
     setBodyColor: () => ({ ok: true }),
+    setBodyInSimulation(id: BodyId, include: boolean) {
+      calls.push(`setBodyInSimulation ${id} ${include}`);
+      return edit(include ? 'Include in the simulation' : 'Leave out of the simulation', (doc) => {
+        const b = { ...doc.bodies[id] };
+        if (include) delete b.simulation;
+        else b.simulation = false;
+        return { ...doc, bodies: { ...doc.bodies, [id]: b } };
+      });
+    },
     addParam(p) {
       calls.push(`addParam ${p.name} ${p.expr} ${p.quantity}`);
       const e = editable();
@@ -587,6 +606,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       state.set((s) => ({ ...s, view: { ...s.view, sketches: { ...(s.view.sketches ?? {}), ...(mode ? { [id]: mode } : {}) } } }));
     },
     async flush() {},
+    async retellDirty() {},
     retrySave() {
       calls.push('retrySave');
       state.set((s) => ({ ...s, save: { state: 'saved', at: 'now' } }));
@@ -595,6 +615,21 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       calls.push('reload');
       state.set((s) => ({ ...s, save: { state: 'saved', at: 'now' } }));
     },
+    async keepMine() {
+      calls.push('keepMine');
+      state.set((s) => ({ ...s, save: { state: 'saved', at: 'now' }, sourceVersion: s.sourceVersion + 1 }));
+    },
+    async bodiesAtEnd() {
+      return { bodies: [], failed: [] };
+    },
+    async recordSettled() {},
+    holdSaves() {
+      calls.push('holdSaves');
+      return () => {
+        calls.push('releaseSaves');
+      };
+    },
+    async checkStored() {},
     dispose() {},
     setStatus(id, st) {
       if (st) overrides.set(id, st);

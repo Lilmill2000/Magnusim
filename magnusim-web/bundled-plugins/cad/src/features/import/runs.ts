@@ -123,8 +123,10 @@ export function createImportRuns(services: AppServices, deps: () => PipelineDeps
     rememberBrep(outcome.brep.sha256, brepBytes);
     l.raw = outcome.raw;
     l.rawShapes = outcome.rawShapes;
+    // The outcome first (its face counts), so the render that shows the diagnostics has them.
+    patch(l.session.feature, { outcome: { ...outcome, raw: null, created: [] } });
     l.session.update({ source: outcome.source, brep: outcome.brep, heal: outcome.heal, items: outcome.items, diagnostics: outcome.diagnostics } as Partial<ImportFeature>);
-    patch(l.session.feature, { outcome: { ...outcome, raw: null, created: [] }, progress: null, error: null });
+    patch(l.session.feature, { progress: null, error: null });
     return true;
   }
 
@@ -216,6 +218,7 @@ export function createImportRuns(services: AppServices, deps: () => PipelineDeps
               raw: null,
               rawShapes: [],
               created: [],
+              faceCounts: h.healed.map((x) => (typeof x.faces === 'number' ? x.faces : null)),
             },
           });
         } finally {

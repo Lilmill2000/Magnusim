@@ -115,12 +115,12 @@ describe('P2 edits on the real kernel', () => {
     const after = await settle(r.doc);
     expect(after.bodies[1].name).toBe('Right half');
     expect(r.doc.state.get().doc.bodies[rb.bodies[1].id]).toMatchObject({ name: 'Right half' });
-    // An offset that misses the body is said in red.
+    // An offset that misses the body is said in red, with the offset (UX review).
     const e = r.doc.beginEdit(split.id);
     e.update({ tool: { kind: 'plane', plane: 'origin:right', offset: '80 mm' } } as Partial<SplitFeature>);
     e.commit();
     const miss = await settle(r.doc);
-    expect(miss.features[split.id]).toMatchObject({ state: 'error', message: `Split 1 failed: the Right plane does not cut ${stepName}` });
+    expect(miss.features[split.id]).toMatchObject({ state: 'error', message: `Split 1 failed: the Right plane offset by 80 mm does not cut ${stepName}` });
   });
 
   it('Combine: join the halves back, cut and intersect with several tools, keep tools', async () => {

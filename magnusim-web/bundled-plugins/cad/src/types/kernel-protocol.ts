@@ -422,6 +422,31 @@ export interface KernelOps {
    * compound child, in order. No healing. check:false by default (the import
    * stored its validity); with check:true each shape reports `valid`.
    */
+  /**
+   * LINK (host API 1.5). The design as the app links it: one compound of the
+   * SOLIDS of `ids`, in order, as a BinTools BREP (format version 4, pinned: the
+   * app's OCP 7.9.3 reads it), no triangulation; buffer `brep`. With it the app's
+   * face numbering (magnusim_sdk.link.face_visits): every TopExp_Explorer(FACE)
+   * visit over the compound, no de-duplication, as `visit_body[i]` (the 1-based
+   * solid it is explored in) and `visit_face[i]` (the face's 0-based index in its
+   * own shape's face map). `solids[k]` is solid k + 1: its shape's index in `ids`
+   * (`src`), its place among that shape's solids (`piece`, 1-based) and its visits.
+   * `empty`: the indices in `ids` of shapes with no solid (left out). No solid at
+   * all: ok:false.
+   */
+  link_export: {
+    params: { ids: ShapeId[] };
+    result: {
+      bytes: number;
+      occt: string;
+      format_version: number;
+      solids: { src: number; piece: number; faces: number }[];
+      empty: number[];
+      visit_body: number[];
+      visit_face: number[];
+      timings: Record<string, number>;
+    };
+  };
   brep_read: {
     params: { check?: boolean };
     result: {
