@@ -117,9 +117,9 @@ def test_xfoil_status_matches_the_shipped_program(tmp_path, monkeypatch):
         assert got == {"available": True}
     else:
         assert got == {"available": False, "reason": "XFOIL ships as a Windows program (xfoil.exe), so it runs on Windows only."}
-    from airfoil import xfoil
-
-    monkeypatch.setattr(xfoil, "default_exe", lambda: tmp_path / "xfoil.exe")
+    # Patch the module the service holds: a plugin reload elsewhere in the run can put a
+    # fresh airfoil.xfoil in sys.modules, and patching that one would not reach the service.
+    monkeypatch.setattr(svc.xfoil, "default_exe", lambda: tmp_path / "xfoil.exe")
     got = svc.xfoil_status({}, {})
     assert got["available"] is False and got["reason"].startswith("XFOIL is missing from this copy of the Airfoil plugin")
 
