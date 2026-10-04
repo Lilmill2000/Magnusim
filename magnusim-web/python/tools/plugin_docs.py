@@ -84,6 +84,29 @@ def _signature(source: str, fn: ast.FunctionDef | ast.AsyncFunctionDef, *, drop_
     return f"{fn.name}({', '.join(parts)}){ret}"
 
 
+def _decorator_name(node: ast.expr) -> str:
+    """property, staticmethod, setter (of @x.setter), cached_property (of @functools.cached_property)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _literal_strings(node: ast.expr | None) -> str | None:
+    """A set, frozenset, list or tuple of string literals, written out in full; else None."""
+    wrap = ""
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("frozenset", "set", "tuple") and len(node.args) == 1 and not node.keywords:
+        wrap, node = node.func.id, node.args[0]
+    if not isinstance(node, (ast.Set, ast.List, ast.Tuple)) or not node.elts:
+        return None
+    if not all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
+        return None
+    items = ", ".join(json.dumps(e.value, ensure_ascii=False) for e in node.elts)  # type: ignore[attr-defined]
+    body = {ast.Set: "{%s}", ast.List: "[%s]", ast.Tuple: "(%s)" if len(node.elts) > 1 else "(%s,)"}[type(node)] % items
+    return f"{wrap}({body})" if wrap else body
+
+
 def _all_names(tree: ast.Module) -> list[str] | None:
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets):
@@ -123,10 +146,15 @@ def module_members(path: Path) -> dict[str, Any]:
             methods = []
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and not item.name.startswith("_"):
-                    is_static = any(isinstance(d, ast.Name) and d.id == "staticmethod" for d in item.decorator_list)
-                    methods.append(
-                        {"name": item.name, "signature": _signature(source, item, drop_self=not is_static), "doc": summary(ast.get_docstring(item))}
-                    )
+                    if any(_decorator_name(d) in ("setter", "deleter") for d in item.decorator_list):
+                        continue  # the property's own entry says it
+                    is_static = any(_decorator_name(d) == "staticmethod" for d in item.decorator_list)
+                    if any(_decorator_name(d) in ("property", "cached_property") for d in item.decorator_list):
+                        # Read as an attribute (data.root), so shown as one: name: type.
+                        sig = f"{item.name}: {_segment(source, item.returns)}" if item.returns is not None else item.name
+                    else:
+                        sig = _signature(source, item, drop_self=not is_static)
+                    methods.append({"name": item.name, "signature": sig, "doc": summary(ast.get_docstring(item))})
             members.append({"kind": "class", "name": name, "bases": bases, "doc": summary(ast.get_docstring(node)), "methods": methods})
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -138,8 +166,13 @@ def module_members(path: Path) -> dict[str, Any]:
                 public = name in wanted if wanted is not None else (name.isupper() and not name.startswith("_"))
                 if not public or name == "__all__":
                     continue
-                value = _segment(source, node.value)
-                members.append({"kind": "constant", "name": name, "value": value if len(value) <= 100 else value[:97] + "...", "doc": ""})
+                # A set or list of names is shown whole (KNOWN_KINDS: what emit accepts);
+                # anything else is cut at 100 characters.
+                names = _literal_strings(node.value)
+                value = names if names is not None else _segment(source, node.value)
+                if names is None and len(value) > 100:
+                    value = value[:97] + "..."
+                members.append({"kind": "constant", "name": name, "value": value, "doc": ""})
     reexports = [n for n in (wanted or []) if n not in defined]
     return {"doc": summary(ast.get_docstring(tree)), "members": members, "reexports": reexports}
 

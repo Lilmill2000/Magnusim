@@ -65,13 +65,33 @@ const STUDY_GONE: Blocked = {
   gone: true,
 };
 
-/** Why a plugin that is not "enabled" cannot open its workspace, as Settings → Plugins would say it. */
-export function pluginNotReady(key: string, row: PluginRow | null): Blocked {
-  if (!row) return { title: `The ${key} plugin is not installed.`, detail: 'Its studies stay in the project; install the plugin to open them.', retry: false };
+/**
+ * Why a plugin that is not "enabled" cannot open its workspace, as Settings → Plugins would say it.
+ * `knownAs`: the plugin's name as the project tree has it (its studies keep the name their
+ * plugin had), for a plugin that is not installed and so has no row of its own.
+ */
+export function pluginNotReady(key: string, row: PluginRow | null, knownAs = ''): Blocked {
+  if (!row) return { title: `The ${knownAs || key} plugin is not installed.`, detail: 'Its studies stay in the project; install the plugin to open them.', retry: false };
   const who = row.name || key;
   if (row.status === 'disabled') return { title: `${who} is off.`, detail: 'Turn it on in Settings → Plugins to open its workspace.', retry: true };
   if (row.status === 'needs setup') return { title: `${who} needs setup.`, detail: 'Install its dependencies in Settings → Plugins, then try again.', retry: true };
   return { title: `${who} did not load.`, detail: row.error || `Settings → Plugins lists it as "${row.status || 'unknown'}".`, retry: true };
+}
+
+/** The study as the project tree lists it (/api/plugin-studies): its title and its plugin's name. */
+type ListedStudy = { pluginName: string; title: string };
+
+/** The tree's names for a study whose plugin cannot open it (not installed, off): null when not listed. */
+async function listedStudy(projectId: string, plugin: string, studyId: string): Promise<ListedStudy | null> {
+  try {
+    const r = await fetch(`/api/plugin-studies?${new URLSearchParams({ project_id: projectId })}`, { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = (await r.json()) as { studies?: Array<{ id?: unknown; plugin?: unknown; plugin_name?: unknown; title?: unknown }> };
+    const hit = (j.studies || []).find((s) => s && s.plugin === plugin && s.id === studyId);
+    return hit ? { pluginName: String(hit.plugin_name || ''), title: String(hit.title || '') } : null;
+  } catch {
+    return null;
+  }
 }
 
 function projectTitle(projectId: string): string {
@@ -148,6 +168,8 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   const [leaveUi, setLeaveUi] = useState<LeaveProgress>({ running: false, shown: false, label: '', choosing: false, background: false, started: false });
   const [row, setRow] = useState<PluginRow | null>(null);
   const [study, setStudy] = useState<StudyRecord | null>(null);
+  // The tree's names for the study when its plugin cannot open it (no row, no record read).
+  const [listed, setListed] = useState<ListedStudy | null>(null);
   const [blocked, setBlocked] = useState<Blocked | null>(null);
   const [connected, setConnected] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -156,8 +178,8 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   const toastSerial = useRef(0);
   const [unsaved, setUnsaved] = useState({ dirty: false, message: '' });
   const [fullscreen, setFullscreen] = useState(false);
-  const name = (row && row.name) || route.plugin;
-  const title = (study && study.title) || route.studyId;
+  const name = (row && row.name) || (listed && listed.pluginName) || route.plugin;
+  const title = (study && study.title) || (listed && listed.title) || route.studyId;
   const projectHash = `#/p/${encodeURIComponent(route.projectId)}`;
   // What the leave question names, kept current.
   const named = useRef({ name, title });
@@ -296,7 +318,12 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
         setRow(hit);
         const who = (hit && hit.name) || route.plugin;
         if (!hit || hit.status !== 'enabled') {
-          setBlocked(pluginNotReady(route.plugin, hit));
+          // The header and the card name the plugin and the study as the project tree does,
+          // also when the plugin is not installed (never its key and the study's id).
+          const names = await listedStudy(route.projectId, route.plugin, route.studyId);
+          if (dead) return;
+          setListed(names);
+          setBlocked(pluginNotReady(route.plugin, hit, names ? names.pluginName : ''));
           return;
         }
         if (!(hit.workspaces || []).some((w) => w.key === route.workspace)) {
@@ -357,7 +384,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
           if (dead || (hit && hit.status === 'enabled')) return;
           // Unsaved work went with it, unless the user chose to turn it off here.
           const lost = lostNow();
-          setBlocked((b) => b || { ...pluginNotReady(route.plugin, hit), lost });
+          setBlocked((b) => b || { ...pluginNotReady(route.plugin, hit, named.current.name), lost });
         })
         .catch(() => undefined);
     };

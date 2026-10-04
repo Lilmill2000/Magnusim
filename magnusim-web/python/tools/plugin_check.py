@@ -788,9 +788,11 @@ def check_license(plugin: Path, meta: dict[str, Any], report: Report) -> None:
 
 # -- load (the host's own loader, in a separate process) --------------------------
 
-_COPY_IGNORE = shutil.ignore_patterns(
-    "node_modules", "__pycache__", ".venv", ".cache", ".git", ".pytest_cache", ".mypy_cache", ".ruff_cache"
-)
+# Folders the host never reads from a plugin (a developer's installs and caches): the
+# probe's copy leaves them out, and a link in them is not the host's to refuse (a
+# node_modules junction to a shared install, say).
+_NEVER_READ = ("node_modules", "__pycache__", ".venv", ".cache", ".git", ".pytest_cache", ".mypy_cache", ".ruff_cache")
+_COPY_IGNORE = shutil.ignore_patterns(*_NEVER_READ)
 
 
 def _inside(path: str, root: str) -> bool:
@@ -816,13 +818,16 @@ def link_problems(plugin: Path) -> list[tuple[Path, str]]:
     cannot use. A link to another place inside the plugin is fine."""
     root = os.path.realpath(plugin)
     out: list[tuple[Path, str]] = []
-    for top, _dirs, _names in walk(plugin):
+    for top, dirs, _names in walk(plugin):
+        dirs[:] = [d for d in dirs if d not in _NEVER_READ]
         # walk() leaves linked folders out of its lists, so list the folder itself.
         try:
             entries = sorted(os.listdir(top))
         except OSError:
             continue
         for name in entries:
+            if name in _NEVER_READ:
+                continue
             path = os.path.join(top, name)
             why = bad_link(path, root)
             if why:
@@ -1487,6 +1492,17 @@ def check_tools(plugin: Path, meta: dict[str, Any], report: Report, probe: dict[
     if service:
         applies = True
         parts = service.split(".")
+        if not all(p.isidentifier() for p in parts):
+            # A path or anything else that is no dotted module name (the host imports it
+            # with python -m): said here, never joined onto the plugin folder.
+            report.add(
+                "error",
+                "tools",
+                f"[python] service {service!r} is not a module name: give a module in the plugin folder, "
+                'such as "service" (service/__init__.py) or "backend.api"',
+                plugin / "manifest.toml",
+            )
+            return applies
         candidates = [plugin.joinpath(*parts).with_suffix(".py"), plugin.joinpath(*parts) / "__init__.py"]
         if not any(c.is_file() for c in candidates):
             report.add(

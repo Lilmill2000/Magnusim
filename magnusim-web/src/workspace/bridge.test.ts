@@ -1460,6 +1460,30 @@ describe("WorkspaceCalls: the host's question (API 1.5, LINK 5.0)", () => {
     expect(err.code).toBe('cancelled');
   });
 
+  it('Keep editing whose job ends before the answer comes back: no unhandled rejection, the call still rejects cancelled', async () => {
+    // In the app the end comes on the link stream while the choose request is still on its way.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const base = answer;
+      answer = (url, method, init) => {
+        if (!url.startsWith('/api/plugin-geometry/choose')) return base(url, method, init);
+        FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'cancelled', code: 'cancelled', error: 'You kept editing. Nothing changed.' } });
+        return new Promise((r) => setTimeout(() => r({ status: 200, body: { ok: true, job_id: LJOB, cancelled: true } }), 30));
+      };
+      const c = new WorkspaceCalls(SCOPE, { ...hooks(), linkChoice: vi.fn(async () => ({ choice: 'cancel' as const })) });
+      const p = c.handle('project.linkGeometry', CALL);
+      const err = await refused(p);
+      expect(err.code).toBe('cancelled');
+      // Node reports a rejection nobody handled after its turn ends.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('a caller that cannot ask (interactive:false, the L3 scripted exit) answers Overwrite with no dialog', async () => {
     const linkChoice = vi.fn(async () => ({ choice: 'new' as const, copy: [] }));
     const c = new WorkspaceCalls(SCOPE, { ...hooks(), linkChoice });

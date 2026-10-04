@@ -88,3 +88,47 @@ export async function newPluginStudy(
   const made = json && json.ok ? json.study : null;
   if (made && made.workspace && made.id && host.where() === from) host.open(String(made.workspace), String(made.id));
 }
+
+/** What /api/plugin-studies/rename answered. */
+export interface RenameAnswer {
+  response?: { status?: number } | null;
+  json?: { ok?: boolean; error?: string; code?: unknown } | null;
+}
+
+/** What a study's Rename (its tree row, the workspace header) needs from the workbench. */
+export interface RenameStudyHost {
+  promptName(opts: { title: string; label: string; value: string; yes: string }): Promise<unknown>;
+  rename(body: { title: string; rev: unknown }): Promise<RenameAnswer>;
+  /** The study's record as saved now (/api/plugin-studies/get), or null. */
+  read(): Promise<{ title?: unknown; rev?: unknown } | null>;
+  notice(title: string, copy: string): Promise<unknown>;
+  /** Reloads the tree (and the header), which show the new name. */
+  sync(): void;
+}
+
+/** The record changed since its rev was read (409, RPC -32009). */
+function staleRev(r: RenameAnswer): boolean {
+  return !!r && ((r.response && r.response.status === 409) || (!!r.json && r.json.code === -32009));
+}
+
+/**
+ * Rename a plugin study: asks for the name, then sends it with the rev the row or the
+ * header showed. The study may have been saved while the name was asked for (its page
+ * saving its own fields, such as the design's source_version): then the rename goes
+ * again once with the rev saved now. A rename writes only the title, so the page's
+ * write stays. If the title itself changed meanwhile (renamed in another tab), the
+ * rename is refused and says so.
+ */
+export async function renamePluginStudy(detail: { title?: unknown; rev?: unknown }, host: RenameStudyHost): Promise<void> {
+  const shown = String(detail.title ?? '');
+  const asked = await host.promptName({ title: 'Rename study', label: 'Name', value: shown, yes: 'Rename' });
+  const title = String(asked ?? '').trim();
+  if (!title || title === shown) return;
+  let r = await host.rename({ title, rev: detail.rev });
+  if (staleRev(r)) {
+    const now = await host.read().catch(() => null);
+    if (now && String(now.title ?? '') === shown && now.rev !== undefined && now.rev !== null) r = await host.rename({ title, rev: now.rev });
+  }
+  if (!r || !r.json || !r.json.ok) await host.notice('Rename failed', (r && r.json && r.json.error) || 'The study was not renamed.');
+  host.sync();
+}

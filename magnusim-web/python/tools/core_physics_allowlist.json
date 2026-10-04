@@ -27,6 +27,13 @@
         "REQUIRED_BUNDLED"
       ],
       "reason": "The product's required bundled plugin, by key and display name, so the app can say which plugin is missing when it cannot load it. Only that line is allowed."
+    },
+    {
+      "file": "docs/plugins/plugin-api.d.ts",
+      "line_contains": [
+        "export type AnalysisKey = "
+      ],
+      "reason": "Published plugin typings, generated: the key unions of the shipped registry (src/api/registry.gen.ts, which the scan skips as *.gen.ts, as it skips docs/plugins/registry.json) that the in-page host API's types carry. They change only with the registry."
     }
   ],
   "if_vocab": [
@@ -121,6 +128,11 @@
       "file": "python/sdk/magnusim_sdk/study.py",
       "max_hits": 1,
       "reason": "Published plugin API, add-only: the is_velocity_inlet BC-record helper."
+    },
+    {
+      "file": "docs/plugins/plugin-api.d.ts",
+      "max_hits": 4,
+      "reason": "Published plugin typings, generated: the key unions of the shipped registry (src/api/registry.gen.ts, which the scan skips as *.gen.ts, as it skips docs/plugins/registry.json) that the in-page host API's types carry. They change only with the registry."
     }
   ]
 }

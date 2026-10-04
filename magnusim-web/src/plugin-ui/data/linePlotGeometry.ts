@@ -249,7 +249,7 @@ export function nearestRow(rows: ReadonlyArray<LineRow>, xKey: string, x: number
   return best;
 }
 
-/** The tip's left edge: right of the cursor, or left of it when it would pass the plot's right edge. */
+/** The tip's left edge: right of the pointer, or left of it when it would pass the plot's right edge. */
 export function tipLeft(x: number, tipWidth: number, plotWidth: number): number {
   if (x + 8 + tipWidth > plotWidth) return Math.max(0, x - 8 - tipWidth);
   return x + 8;

@@ -260,7 +260,7 @@ describe('legend, colours, hover', () => {
     expect(nearestRow([], 't', 1)).toBeNull();
   });
 
-  it('puts the tip right of the cursor, and flips it left at the right edge', () => {
+  it('puts the tip right of the pointer, and flips it left at the right edge', () => {
     expect(tipLeft(100, 80, 300)).toBe(108);
     expect(tipLeft(212, 80, 300)).toBe(220);
     expect(tipLeft(213, 80, 300)).toBe(125);

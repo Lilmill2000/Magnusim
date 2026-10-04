@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { firstFreeStudyName, newPluginStudy, shownStudyTitles, takenStudyTitles, type CreateAnswer, type NewStudyHost } from './studyName';
+import {
+  firstFreeStudyName,
+  newPluginStudy,
+  renamePluginStudy,
+  shownStudyTitles,
+  takenStudyTitles,
+  type CreateAnswer,
+  type NewStudyHost,
+  type RenameAnswer,
+  type RenameStudyHost,
+} from './studyName';
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -157,5 +167,85 @@ describe('a study made without asking (ask: false)', () => {
     expect(taken).toEqual(['Demo 1', 'Wing', 'Demo 2']);
     expect(firstFreeStudyName('Demo', taken)).toBe('Demo 3');
     expect(takenStudyTitles(null)).toEqual([]);
+  });
+});
+
+// The study on disk: its page may save its own fields while the name is asked for.
+function renameHost(saved: { title: string; rev: number }, opts: { name?: unknown; whilePrompting?: () => void } = {}) {
+  const host = {
+    promptName: vi.fn(async (_o: unknown): Promise<unknown> => {
+      opts.whilePrompting?.();
+      return opts.name ?? 'Wing B';
+    }),
+    rename: vi.fn(async (body: { title: string; rev: unknown }): Promise<RenameAnswer> => {
+      if (body.rev !== saved.rev) {
+        return { response: { status: 409 }, json: { ok: false, code: -32009, error: 'This study changed in another tab. Reload it and try again.' } };
+      }
+      saved.title = body.title;
+      saved.rev += 1;
+      return { response: { status: 200 }, json: { ok: true } };
+    }),
+    read: vi.fn(async () => ({ ...saved })),
+    notice: vi.fn(async (_t: string, _c: string): Promise<unknown> => undefined),
+    sync: vi.fn(),
+  } satisfies RenameStudyHost;
+  return host;
+}
+
+describe("a plugin study's Rename (its row, the workspace header)", () => {
+  it('renames with the rev it was shown, reading nothing more', async () => {
+    const saved = { title: 'Wing', rev: 3 };
+    const host = renameHost(saved);
+    await renamePluginStudy({ title: 'Wing', rev: 3 }, host);
+    expect(host.promptName).toHaveBeenCalledWith({ title: 'Rename study', label: 'Name', value: 'Wing', yes: 'Rename' });
+    expect(host.rename.mock.calls).toEqual([[{ title: 'Wing B', rev: 3 }]]);
+    expect(host.read).not.toHaveBeenCalled();
+    expect(host.notice).not.toHaveBeenCalled();
+    expect(saved).toEqual({ title: 'Wing B', rev: 4 });
+    expect(host.sync).toHaveBeenCalledTimes(1);
+  });
+
+  it("the page saved its own fields while the name was asked for: renamed with the rev saved now, no 'Rename failed'", async () => {
+    const saved = { title: 'Wing', rev: 3 };
+    // The page's study.update lands between showing the name and Rename.
+    const host = renameHost(saved, { whilePrompting: () => void (saved.rev = 4) });
+    await renamePluginStudy({ title: 'Wing', rev: 3 }, host);
+    expect(host.rename.mock.calls).toEqual([[{ title: 'Wing B', rev: 3 }], [{ title: 'Wing B', rev: 4 }]]);
+    expect(host.notice).not.toHaveBeenCalled();
+    expect(saved).toEqual({ title: 'Wing B', rev: 5 });
+    expect(host.sync).toHaveBeenCalledTimes(1);
+  });
+
+  it('renamed in another tab meanwhile: refused and says so, the other name kept', async () => {
+    const saved = { title: 'Wing', rev: 3 };
+    const host = renameHost(saved, { whilePrompting: () => Object.assign(saved, { title: 'Wing C', rev: 4 }) });
+    await renamePluginStudy({ title: 'Wing', rev: 3 }, host);
+    expect(host.rename).toHaveBeenCalledTimes(1);
+    expect(host.notice).toHaveBeenCalledWith('Rename failed', 'This study changed in another tab. Reload it and try again.');
+    expect(saved).toEqual({ title: 'Wing C', rev: 4 });
+    expect(host.sync).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries again once only: a page that keeps saving gets the honest refusal', async () => {
+    const saved = { title: 'Wing', rev: 3 };
+    const host = renameHost(saved, { whilePrompting: () => void (saved.rev = 4) });
+    host.read.mockImplementation(async () => {
+      const now = { ...saved };
+      saved.rev += 1;
+      return now;
+    });
+    await renamePluginStudy({ title: 'Wing', rev: 3 }, host);
+    expect(host.rename).toHaveBeenCalledTimes(2);
+    expect(host.notice).toHaveBeenCalledWith('Rename failed', 'This study changed in another tab. Reload it and try again.');
+    expect(saved.title).toBe('Wing');
+  });
+
+  it('the same name, or none, sends nothing', async () => {
+    for (const name of ['Wing', '  ', '']) {
+      const host = renameHost({ title: 'Wing', rev: 3 }, { name });
+      await renamePluginStudy({ title: 'Wing', rev: 3 }, host);
+      expect(host.rename).not.toHaveBeenCalled();
+      expect(host.sync).not.toHaveBeenCalled();
+    }
   });
 });

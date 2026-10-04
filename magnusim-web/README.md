@@ -58,6 +58,12 @@ editing them. `src/` and `index.html` hot-reload normally. Restart after Python 
 Python interpreter: `MAGNUSIM_PYTHON` env var (falls back to `CFDDESK_PYTHON`), default `python\.venv\Scripts\python.exe`.
 
 
+## Plugins
+
+Plugins add workspaces, analyses and panels. The plugin docs start at
+[docs/plugins/INDEX.md](docs/plugins/INDEX.md). Make a new plugin with
+`npm run plugin:new -- <key>` and check it with `npm run plugin:check -- plugins/<key>`.
+
 ## Validation
 
 Use Node 24 LTS and Python 3.10–3.12. Run `npm test` and `npm run build` here;

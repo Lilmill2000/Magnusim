@@ -8,11 +8,14 @@
  *   python, py         run with the app's Python, magnusim_sdk and cfddesk on the
  *                      path, in a scratch folder, with scratch settings; passes on exit 0
  *   ts, tsx, js, jsx   type-checked (strict) against the published types,
- *                      docs/plugins/workspace-sdk.d.ts and plugin-ui.d.ts, and React's:
- *                      the code runs in a workspace frame, which only the app has
+ *                      docs/plugins/workspace-sdk.d.ts, plugin-ui.d.ts and plugin-api.d.ts,
+ *                      and React's: the code runs in a workspace frame or the app's page,
+ *                      which only the app has
  *   toml               a whole manifest.toml: put in a scratch plugin folder named after
- *                      its key and checked by npm run plugin:check: its manifest, key,
- *                      api_version, licence and the host loading it must pass with no
+ *                      its key, with a stub of each file it names (workspace pages, the
+ *                      ui entry, the [python] lock and service), and checked by npm run
+ *                      plugin:check: its manifest, key, api_version, licence, the host
+ *                      loading it, and its workspace, ui and tools rules must pass with no
  *                      error and no warning (a misspelt key is only a warning there, as
  *                      the host ignores it; in an example it is a mistake)
  *
@@ -105,7 +108,7 @@ function typecheck(block) {
       checkJs: true,
       types: [],
     };
-    const roots = [file, join(DOCS, 'workspace-sdk.d.ts'), join(DOCS, 'plugin-ui.d.ts')];
+    const roots = [file, join(DOCS, 'workspace-sdk.d.ts'), join(DOCS, 'plugin-ui.d.ts'), join(DOCS, 'plugin-api.d.ts')];
     const program = ts.createProgram(roots, options);
     const diags = ts.getPreEmitDiagnostics(program).filter((d) => !d.file || resolve(d.file.fileName) === resolve(file));
     if (!diags.length) return null;
@@ -122,7 +125,9 @@ function typecheck(block) {
   }
 }
 
-const MUST_PASS = ['manifest', 'key', 'api_version', 'license', 'load'];
+// The rules a manifest decides. The files it names are stubbed above, so a wrong ui_entry,
+// workspace entry or service is the example's own mistake.
+const MUST_PASS = ['manifest', 'key', 'api_version', 'license', 'load', 'workspace', 'ui', 'tools'];
 
 function checkManifest(block) {
   const key = /^key\s*=\s*"([^"]+)"/m.exec(block.code)?.[1];
@@ -144,6 +149,24 @@ function checkManifest(block) {
     if (/^\[\[workspaces\]\]/m.test(block.code) && !/^entry\s*=/m.test(block.code)) page('workspace/index.html');
     const lock = /^requirements\s*=\s*"([^"]+)"/m.exec(block.code)?.[1] || (/^\[python\]/m.test(block.code) ? 'requirements.lock' : '');
     if (lock) writeFileSync(join(dir, ...lock.split('/')), '# no packages\n');
+    // An in-page UI's entry, in a language the host bundles or loads (an entry of any
+    // other kind is left out, so the ui rule says it is missing).
+    const ui = /^ui\s*=\s*"([^"]+)"/m.exec(block.code)?.[1];
+    if (ui) {
+      const entry = /^ui_entry\s*=\s*"([^"]+)"/m.exec(block.code)?.[1] || 'index.js';
+      if (/\.(?:m?js|jsx|tsx?)$/.test(entry) && !entry.split('/').includes('..')) {
+        const file = join(dir, ...ui.split('/'), ...entry.split('/'));
+        mkdirSync(join(file, '..'), { recursive: true });
+        writeFileSync(file, 'export function register() {}\n');
+      }
+    }
+    // A [python] service: a module of that name (a name that is not a module is left out).
+    const service = /^service\s*=\s*"([^"]+)"/m.exec(block.code)?.[1];
+    if (service && /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(service)) {
+      const pkg = join(dir, ...service.split('.'));
+      mkdirSync(pkg, { recursive: true });
+      writeFileSync(join(pkg, '__init__.py'), 'from magnusim_sdk.service import method  # noqa: F401\n');
+    }
     const r = spawnSync(PYTHON, [pyTool('plugin_check.py'), '--json', '--no-tests', dir], { encoding: 'utf8', timeout: 300_000, windowsHide: true });
     let report;
     try {

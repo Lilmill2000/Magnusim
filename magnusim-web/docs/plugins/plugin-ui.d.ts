@@ -416,7 +416,7 @@ declare module '@magnusim/plugin-ui/_internal/data/linePlotGeometry' {
   export function legendSeries(rows: ReadonlyArray<LineRow>, series: LineSeries[], scale: 'log' | 'linear'): LineSeries[];
   /** The row nearest to x (by its x value), as the core plot's hover picks it. */
   export function nearestRow(rows: ReadonlyArray<LineRow>, xKey: string, x: number): LineRow | null;
-  /** The tip's left edge: right of the cursor, or left of it when it would pass the plot's right edge. */
+  /** The tip's left edge: right of the pointer, or left of it when it would pass the plot's right edge. */
   export function tipLeft(x: number, tipWidth: number, plotWidth: number): number;
   /** A value in the default tip: the series' own format, else toExponential(1). */
   export function formatValue(s: LineSeries, v: number): string;
@@ -477,7 +477,8 @@ declare module '@magnusim/plugin-ui/_internal/panels/PanelChrome' {
       children: ReactNode;
       /**
        * What Done does. Required, so Done is never a dead button: `host.pluginUi.panelDone`
-       * in the app, `() => ws.nav.back()` in a workspace frame.
+       * in the app; in a workspace frame, what closes this panel of the page (the header's
+       * Back leaves the workspace).
        */
       onDone: () => void;
       /** Shows a Delete link at the left of the foot. */

@@ -817,6 +817,10 @@ export class WorkspaceCalls {
         })
         .catch(() => undefined);
     });
+    // The job may end while the question is still being answered ("Keep editing" ends it
+    // cancelled on the stream before the choose request returns): its rejection is
+    // awaited below, so it is not an uncaught error meanwhile.
+    ending.catch(() => undefined);
     if (answer.choosing) await this.answerLinkQuestion(jobId, answer.choosing);
     const result = await ending;
     if (result && result.name) this.linkedName = result.name;

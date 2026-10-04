@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Loads this template from a plugins/ folder and checks the cloned analysis."""
 
 from __future__ import annotations

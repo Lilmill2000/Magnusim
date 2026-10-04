@@ -95,7 +95,7 @@ import {
 } from '../materialModel';
 import { useJobsStore } from '../store/jobs';
 import { applyTreeSession, setTreeActionHandler } from '../chrome/treeSession';
-import { newPluginStudy, shownStudyTitles } from '../chrome/studyName';
+import { newPluginStudy, renamePluginStudy, shownStudyTitles } from '../chrome/studyName';
 import { loadStartActions, startStudy } from '../workspace/startActions';
 import { subscribeJobEvents } from '../api/client';
 import { parsePluginScope, scopeBelongsToProject, scopeKey, studyIdFromScope } from '../scope';
@@ -6705,7 +6705,8 @@ function onPtRegionPointerUp(e) {
 /**
  * New / rename / delete a plugin study (plugins/<key>/studies) from its tree
  * row, with the app's own dialogs. A rename sends the rev the row showed: a
- * study another tab changed meanwhile is refused (409) and the message says so.
+ * study renamed in another tab meanwhile is refused (409) and the message says
+ * so; one whose page saved its own fields meanwhile is renamed with the new rev.
  */
 // The app's own dialogs, for the plugin study actions and the workspace bridge (H13).
 window.__CFD_CONFIRM__ = (opts) => confirmAction(opts);
@@ -6757,11 +6758,19 @@ async function handlePluginStudyAction(ps, action, detail) {
     return;
   }
   if (action === 'plugin-study-rename') {
-    const title = await promptName({ title: 'Rename study', label: 'Name', value: String(detail.title || ''), yes: 'Rename' });
-    if (!title || !String(title).trim() || String(title).trim() === String(detail.title || '')) return;
-    const r = await post('rename', { study_id: ps.studyId, title: String(title).trim(), rev: detail.rev });
-    if (!r.json || !r.json.ok) await notice('Rename failed', (r.json && r.json.error) || 'The study was not renamed.');
-    sync();
+    // A rev gone stale while the name was asked for (the page saved its own fields) is read again once.
+    await renamePluginStudy(detail, {
+      promptName,
+      rename: (body) => post('rename', { study_id: ps.studyId, ...body }),
+      read: async () => {
+        const q = new URLSearchParams({ project_id: pid, plugin: ps.plugin, study_id: ps.studyId });
+        const r = await fetch('/api/plugin-studies/get?' + q, { cache: 'no-store' });
+        const j = r.ok ? await r.json() : null;
+        return (j && j.study) || null;
+      },
+      notice,
+      sync,
+    });
     return;
   }
   if (action === 'plugin-study-delete') {

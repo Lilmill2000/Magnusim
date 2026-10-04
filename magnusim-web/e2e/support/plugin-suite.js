@@ -10,9 +10,15 @@ import { seedElbowProject as seedCoreElbowProject } from '../prepare-projects.js
 
 export { appSuiteConfig } from './app-config.js';
 export { NO_HEAVY, NO_WSL, wslPathExists } from '../toolchain.js';
-export { waitSlotFree } from './compute-slot.js';
+export { computeQueue, foamRecords, killFoamRelays, removeTestWslRoot, waitSlotFree } from './compute-slot.js';
 export { addAir, addBc, createStudy, setup } from './two-plates.js';
 export { PYTHON } from '../../scripts/python-env.js';
+// A second app server of its own (only the plugins a test names), and the core's
+// seeded projects for it.
+export { e2eTemp, startHost } from './host-server.mjs';
+export { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from '../prepare-projects.js';
+// The machine's WSL test lock, for a test that runs OpenFOAM itself.
+export { acquireWslLock } from './wsl-lock.mjs';
 
 /**
  * Seed a fresh copy of the core's elbow sample (one study with its mesh, Air and BCs)

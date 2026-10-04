@@ -10,19 +10,30 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { after, describe, test } from 'node:test';
 import ts from 'typescript';
 import { PYTHON } from '../python-env.js';
-import { hostApiVersion, parseArgs, render, scaffold, UsageError, WEB_ROOT } from '../plugin-new.mjs';
+import { hostApiVersion, parseArgs, render, scaffold as scaffoldPlugin, UsageError, WEB_ROOT } from '../plugin-new.mjs';
 
 const TMP = mkdtempSync(join(tmpdir(), 'magnusim-plugin-new-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
+
+// Each plugin made here, by folder: the paths scaffold() wrote that say where the app and
+// the plugin are on this PC (the trace check reads what was generated, not those).
+const INSTALL_PATHS = new Map();
+async function scaffold(input) {
+  const made = await scaffoldPlugin(input);
+  INSTALL_PATHS.set(made.dir, made.installPaths);
+  return made;
+}
 
 const SDK = JSON.parse(readFileSync(join(WEB_ROOT, 'docs', 'plugins', 'plugin-sdk.json'), 'utf8'));
 const API = hostApiVersion();
 // The app's Playwright, which `npx playwright` runs from the app folder.
 const PLAYWRIGHT_DIR = dirname(createRequire(join(WEB_ROOT, 'package.json')).resolve('@playwright/test/package.json'));
 
-/** A web root of its own: what scaffold() reads from the app (no bundled plugins, no LICENSE). */
+/** A web root of its own: what scaffold() reads from the app (no bundled plugins; a LICENSE). */
 function fakeWebRoot(name, imports = SDK.imports) {
   const root = join(TMP, name);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, 'LICENSE'), 'GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n');
   mkdirSync(join(root, 'python', 'cfddesk', 'registry'), { recursive: true });
   writeFileSync(join(root, 'python', 'cfddesk', 'registry', '__init__.py'), `API_VERSION = "${API}"\n`);
   mkdirSync(join(root, 'docs', 'plugins'), { recursive: true });
@@ -106,7 +117,9 @@ function typecheck(dir) {
 
 // A plugin made here names no coding-assistant tool or vendor, in any file. The names
 // are kept base64-encoded so this repository's own trace grep (run before a push) stays
-// clean. The editor-pointer word is fine as CSS (`…:`) and as "the …" (the mouse).
+// clean. The editor-pointer word is fine only as CSS (`…:`); the mouse is "the pointer".
+// Where the app and the plugin are installed is not generated text: a folder of this PC
+// may have any name, so the install paths scaffold() reports are left out of the check.
 // Which files a plugin gets is pinned exactly by each test below (no stray tool files).
 const TRACE_WORDS = ['Y2xhdWRl', 'YW50aHJvcGlj', 'Y2hhdGdwdA==', 'b3BlbmFp', 'Y29waWxvdA==', 'Y3Vyc29y'].map((b) => Buffer.from(b, 'base64').toString());
 const POINTER = TRACE_WORDS[5];
@@ -115,7 +128,7 @@ function traceIn(line) {
   const low = line.toLowerCase();
   for (const word of TRACE_WORDS) {
     for (let at = low.indexOf(word); at >= 0; at = low.indexOf(word, at + 1)) {
-      const allowed = word === POINTER && (low[at + word.length] === ':' || low.slice(Math.max(0, at - 4), at) === 'the ');
+      const allowed = word === POINTER && low[at + word.length] === ':';
       if (!allowed) return word;
     }
   }
@@ -123,11 +136,38 @@ function traceIn(line) {
 }
 
 function assertNoTraces(dir) {
+  const paths = INSTALL_PATHS.get(dir);
+  assert.ok(paths && paths.length, `scaffold() reported where it put ${dir}`);
+  const generated = (text) => paths.reduce((t, p) => t.split(p).join('<install path>'), text);
   for (const f of files(dir)) {
     assert.equal(traceIn(f), null, f);
-    const hit = read(dir, f).split('\n').find((line) => traceIn(line));
+    const hit = generated(read(dir, f)).split('\n').find((line) => traceIn(line));
     assert.equal(hit, undefined, `${f}: ${hit}`);
   }
+}
+
+// GUIDE.md section 14: each source file it writes says its licence near the top. Not the
+// app's own types copied into types/ (generated there), nor the built page in workspace/.
+function assertSpdx(dir) {
+  const source = files(dir).filter((f) => /\.(py|js|mjs|cjs|ts|tsx|jsx|html)$/.test(f) && !/^(types|workspace)\//.test(f));
+  assert.ok(source.length >= 3, source.join(' '));
+  for (const f of source) {
+    const head = read(dir, f).split('\n').slice(0, 10).join('\n');
+    assert.match(head, /SPDX-License-Identifier: GPL-3\.0-or-later/, `${f} has no SPDX line at the top`);
+  }
+}
+
+/** The plugin's pytest, run as GUIDE.md says: the app's interpreter, from another folder, no PYTHONPATH. */
+function pytestAlone(dir) {
+  const env = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+  delete env.PYTHONPATH;
+  return spawnSync(PYTHON, ['-m', 'pytest', '-q', '-p', 'no:cacheprovider', join(dir, 'tests')], {
+    cwd: TMP,
+    env,
+    encoding: 'utf8',
+    timeout: 300_000,
+    windowsHide: true,
+  });
 }
 
 const COMMON = ['.gitignore', 'GUIDE.md', 'LICENSE', 'manifest.toml', 'plugin.py', 'tests/conftest.py', 'tests/test_plugin.py'];
@@ -188,6 +228,17 @@ describe('a new plugin', () => {
       // From templates/plugin-workspace: its icons and opt-in examples.
       assert.match(manifest, /icon = "M4 5h16v14H4z M4 9h16"/);
       assert.match(manifest, /^# \[\[start_actions\]\]$/m);
+      // Its hint says what the button does (the sketch example's would promise drawing and simulating).
+      assert.match(manifest, /^# hint = "Makes a pad demo study and opens it"$/m);
+      assert.doesNotMatch(manifest, /simulate/);
+      // The header shows the study's title and Back (DESIGN.md 3.1): the page draws neither,
+      // and its test checks the header's title and finds kit controls by role and label.
+      assert.doesNotMatch(read(dir, 'src/main.tsx'), /study\.title|<h1/);
+      const e2eSpec = read(dir, 'tests/e2e/pad-demo.spec.js');
+      assert.match(e2eSpec, /#workspace-overlay \[data-ws-crumb\]/);
+      assert.match(e2eSpec, /getByRole\('textbox', \{ name: 'Width', exact: true \}\)/);
+      assert.doesNotMatch(e2eSpec, /xpath=|data-title/);
+      assertSpdx(dir);
       const plugin = read(dir, 'plugin.py');
       assert.match(plugin, /hub\.register_method\(PLUGIN, "area", area\)/);
       assert.match(plugin, /python="core"/);
@@ -204,11 +255,23 @@ describe('a new plugin', () => {
       assert.equal(pkg.license, 'GPL-3.0-or-later');
       assert.equal(pkg.dependencies, undefined, 'React and the kit come from the host, never from dependencies');
       assert.equal(read(dir, 'types/workspace-sdk.d.ts'), read(join(WEB_ROOT, 'docs'), 'plugins/workspace-sdk.d.ts'));
+      // Its GUIDE.md sends the reader to the host's docs, which exist.
+      for (const doc of ['GUIDE.md', 'DESIGN.md', 'API.md']) {
+        assert.ok(read(dir, 'GUIDE.md').includes('`' + doc + '`'), doc);
+        assert.ok(existsSync(join(WEB_ROOT, 'docs', 'plugins', doc)), doc);
+      }
+      assert.ok(existsSync(join(WEB_ROOT, 'docs', 'plugins', 'INDEX.md')));
+      assert.ok(read(dir, 'GUIDE.md').includes('`docs/plugins/INDEX.md`'));
       // The e2e spec runs on this app's test servers, found from where the plugin is.
       const specText = read(dir, 'tests/e2e/pad-demo.spec.js');
-      const spec = /import \{ e2eTemp, startHost \} from '([^']+)'/.exec(specText);
+      const spec = /import \{ e2eTemp, NO_GEOMETRY_PROJECT, startHost \} from '([^']+)'/.exec(specText);
       assert.ok(spec);
-      assert.equal(resolve(dir, 'tests', 'e2e', spec[1]), join(WEB_ROOT, 'e2e', 'support', 'host-server.mjs'));
+      assert.equal(resolve(dir, 'tests', 'e2e', spec[1]), join(WEB_ROOT, 'e2e', 'support', 'plugin-suite.js'));
+      // The app's harness only through its plugin seam (Playwright apart).
+      const fromApp = [...specText.matchAll(/^import .* from '(\.[^']+)';$/gm)]
+        .map((m) => resolve(dir, 'tests', 'e2e', m[1]))
+        .filter((p) => p !== join(PLAYWRIGHT_DIR, 'index.mjs'));
+      assert.deepEqual(fromApp, [join(WEB_ROOT, 'e2e', 'support', 'plugin-suite.js')]);
       // Outside the app, Node cannot find the app's Playwright from the plugin's folder:
       // the spec and its config import the app's copy by path.
       const pw = /import \{ expect, test \} from '([^']+)'/.exec(specText);
@@ -252,6 +315,11 @@ describe('a new plugin', () => {
     assert.match(read(dir, 'tests/e2e/smoke-test.spec.js'), /env\/install/);
     assert.match(read(dir, 'tests/test_plugin.py'), /def test_its_service_answers/);
     assertNoTraces(dir);
+    assertSpdx(dir);
+    // pytest alone, as GUIDE.md "Testing" runs it: its conftest finds the app's packages.
+    const alone = pytestAlone(dir);
+    assert.equal(alone.status, 0, alone.stdout + alone.stderr);
+    assert.match(alone.stdout, /\b3 passed/);
     const { status, report } = check(dir);
     assert.equal(status, 0, JSON.stringify(report.findings, null, 1));
     assert.equal(report.checks.requirements, 'pass');
@@ -273,6 +341,9 @@ describe('a new plugin', () => {
     assert.match(read(dir, 'pyproject.toml'), /laminar-x = "magnusim_plugin_laminar_x\.plugin:register"/);
     assert.match(read(dir, 'tests/test_register.py'), /get\("laminar_x"\)/);
     assertNoTraces(dir);
+    assertSpdx(dir);
+    const alone = pytestAlone(dir);
+    assert.equal(alone.status, 0, alone.stdout + alone.stderr);
     const { status, report } = check(dir);
     assert.equal(status, 0, JSON.stringify(report.findings, null, 1));
     assert.equal(report.checks.workspace, 'n/a');
@@ -362,6 +433,19 @@ describe('a new plugin', () => {
     assert.equal(dir, join(web, 'plugins', 'in-app'));
     assert.match(read(dir, 'tests/e2e/in-app.spec.js'), /^import \{ expect, test \} from '@playwright\/test';$/m);
     assert.match(read(dir, 'tests/e2e/playwright.config.js'), /^import \{ defineConfig \} from '@playwright\/test';$/m);
+  });
+
+  test("without the app's LICENSE it stops before it writes anything", async () => {
+    const web = fakeWebRoot('web-no-licence');
+    rmSync(join(web, 'LICENSE'));
+    const out = join(TMP, 'no-licence');
+    await assert.rejects(scaffold({ key: 'no-text', out, webRoot: web, build: false }), /no LICENSE \(the GPL text\)/);
+    assert.equal(existsSync(join(out, 'no-text')), false);
+    // With it, the plugin gets a copy.
+    writeFileSync(join(web, 'LICENSE'), 'GNU GENERAL PUBLIC LICENSE\n');
+    const { dir, files: made } = await scaffold({ key: 'no-text', out, webRoot: web, build: false });
+    assert.ok(made.includes('LICENSE'));
+    assert.equal(read(dir, 'LICENSE'), 'GNU GENERAL PUBLIC LICENSE\n');
   });
 
   test('never writes over a folder that has files', async () => {

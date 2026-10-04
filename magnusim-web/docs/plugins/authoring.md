@@ -2,7 +2,7 @@
 
 A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins/` or install a wheel that publishes a `cfddesk.plugins` entry point, then restart. The host loads `register(hub)` for Python and, when the manifest names a UI bundle, `register(host)` for the page.
 
-Copy `templates/plugin/` to start. That folder has `pyproject.toml`, `manifest.toml`, `register()`, and a pytest that loads the copy from a temporary `plugins/` directory.
+Start with `npm run plugin:new -- <key> [--workspace|--analysis]` from `magnusim-web/` ([GUIDE.md](GUIDE.md), "Quick start"). It writes a plugin that passes `npm run plugin:check`, with its tests. `templates/plugin/` and `templates/plugin-workspace/` are what it is made from: read them as examples, do not copy them (their keys are not yours).
 
 ## Manifest 1.6
 
@@ -19,7 +19,7 @@ ui = "ui"
 ui_entry = "index.js"
 ```
 
-`api_version` must share the host major version (`1`). A different major is listed as `incompatible` and is not registered. `authors` is a comma-separated list when you have more than one. Omit `ui` when the plugin has no browser bundle. `license` is an SPDX identifier and is shown in Settings → Plugins. The manifest `key` may differ from the folder name; the UI is still served from the folder.
+`api_version` must share the host major version (`1`). A different major is listed as `incompatible` and is not registered. `authors` is a comma-separated list when you have more than one. Omit `ui` when the plugin has no browser bundle. `license` is an SPDX identifier and is shown in Settings → Plugins. The manifest `key` must be the plugin's folder name: `plugin:check` (rule `key`) refuses any other.
 
 `overrides` is a comma-separated list of `kind:key` tokens. A plugin may replace a protected builtin only when that token is listed. New keys do not need an override.
 
@@ -259,7 +259,8 @@ import { createRoot } from 'react-dom/client';
 
 const ws = await connect();                     // context: plugin, project, study, units, theme
 const study = await ws.study.get();
-createRoot(document.getElementById('root')).render(createElement('h1', null, study.title));
+// The header shows the study's title and Back: the page draws neither.
+createRoot(document.getElementById('root')).render(createElement('p', null, `Last angle: ${String(study.last_alpha ?? 'none')}`));
 const polar = await ws.service('polar', { alpha: 4 });  // your backend
 await ws.data.write(`studies/${study.id}/polar.json`, polar);
 await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab saved first
@@ -297,7 +298,7 @@ await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab
 - **Unsaved work (1.2).** Call `ws.nav.setDirty(true, 'Sketch 2 is not saved')` on the first change that is not saved yet, and `ws.nav.setDirty(false)` once it is. While it is set, and while a `ws.files.write` is on its way, every way out of the workspace asks the user first, with your plugin's name and your message, and closing the browser tab shows the browser's own prompt. `ws.nav.back()` resolves `false` when the user stays; clear the flag first to leave without a question. Never reload your own page while dirty: a reload clears the flag and loses the work. If your page accepts dropped files, call `preventDefault()` on `dragover` and `drop`, or the browser opens the file in place of the app.
 - **Keyboard and full screen (1.2).** Your page has the keyboard when it connects and again after the app's dialogs and Settings close; listen on `window` or `document`. `document.documentElement.requestFullscreen()` from a click or key handler covers the whole screen; Esc always leaves, and the app leaves full screen before it shows a dialog. The app's toasts are not seen over a full-screen page.
 
-`python/tests/fixtures/workspace-plugins/ws-demo` is a complete example (modules, React, WebAssembly, a worker, service calls, data and study saves), driven by `e2e/h13-workspace.spec.js`. To start a workspace plugin of your own, copy `templates/plugin-workspace/`.
+`python/tests/fixtures/workspace-plugins/ws-demo` is a complete example (modules, React, WebAssembly, a worker, service calls, data and study saves), driven by `e2e/h13-workspace.spec.js`. To start a workspace plugin of your own, run `npm run plugin:new -- <key> --workspace`.
 
 ### OpenFOAM cases and solve hooks (1.3)
 
@@ -362,7 +363,7 @@ header_label = "Sketch"         # optional, 1-24 characters: the header button's
 - **Older hosts.** A 1.3 host ignores `[[start_actions]]`: your kinds still open from the Workspaces menu and STUDIES. Set `api_version = "1.4"`.
 - **`links_geometry` (parsed in 1.4, used from 1.5).** `links_geometry = true` on a study kind says its studies may link one project geometry ("Linking a geometry (1.5)" below). It must be `true` or `false`, and the kind must have a workspace.
 
-`templates/plugin-workspace/` is a working starting point: a kind, a workspace page, and commented-out `[[start_actions]]` and `links_geometry` lines. `python/tests/fixtures/start-plugins/` has two complete examples, driven by `e2e/start-actions.spec.js`.
+`npm run plugin:new -- <key> --workspace` writes a working starting point: a kind, a workspace page, and commented-out `[[start_actions]]` and `links_geometry` lines. `python/tests/fixtures/start-plugins/` has two complete examples, driven by `e2e/start-actions.spec.js`.
 
 ## Linking a geometry (1.5)
 
@@ -550,7 +551,7 @@ The components, each as the core draws it today:
 How they fit the app:
 
 - **Done.** `PanelChrome` needs `onDone`: pass `pluginUi.panelDone` in the page and `() => ws.nav.back()` in a frame. The kit's Done sends only `cfd:panel-done`; the core's own Done handling (such as saving a refinement) does not run for it.
-- **Toasts.** `pluginUi.toast(message, { kind })` shows an app toast at the bottom right; up to three stack, newest last, and while the pointer is on any of them none closes. In a frame, `ws.ui.toast` shows one inside the workspace, one at a time. Info and success close after 3.8 s and errors after 9 s; the time stops while the pointer or the focus is on a toast. A `Toast` of your own takes `paused` to hold its time the same way.
+- **Toasts.** `pluginUi.toast(message, { kind })` shows an app toast at the bottom right; up to three stack, newest last, and while the pointer is on any of them none closes. From a frame, `ws.ui.toast` shows one at the bottom right of the workspace, one at a time. The app draws it over your frame, not in your page: a test finds it as `page.locator('[data-ws-toast]')`, not in the frame. Info and success close after 3.8 s and errors after 9 s; the time stops while the pointer or the focus is on a toast. A `Toast` of your own takes `paused` to hold its time the same way.
 - **Units.** `pluginUi.unitSystem()` in the page and `ws.context.units` in a frame are `metric` or `imperial`; pass it to `NumberUnitInput`'s `units`.
 - **Field widgets.** `SchemaField(widget="my-plugin.rate")` in Python puts `x-cfddesk.widget` on the field's schema, and `pluginUi.registerFieldWidget('my-plugin.rate', Rate)` draws that field with your component, typed `ComponentType<FieldWidgetProps>`. Render only the control (the form draws the row), and use `NumberUnitInput` with `width="fill"` for the form's width. A widget registered after a form opened replaces the core control at once. `python/tests/fixtures/kit-plugins/kit-demo` is a complete example, driven by `e2e/h14-kit.spec.js`.
 - **Selects.** A kit `Select` looks like the BC and Materials panels' selects (`.bc-select`), not like a schema form's own selects. In a schema form pass `width="fill"` for the form's width; inside the study panel the core's `.sim-study-panel .schema-form select` restyles it.
@@ -576,4 +577,4 @@ Magnusim is GPL-3.0-or-later. A plugin runs inside the Magnusim Python worker an
 
 ## Registry reference
 
-`docs/plugins/registry.json` lists the keys Magnusim itself registers: analysis, solver, mesher, boundary condition, material, monitor, and filter. It holds builtins only; your plugin's keys never appear in it, and the app reads them from the live registry while it runs. `npm run gen:registry` (from `magnusim-web/`) regenerates it together with `scripts/generated/registry.json`.
+`docs/plugins/registry.json` lists every key the core and the bundled plugins that are on by default register, per kind (analysis, solver, mesher, bc, bc_family, material, monitor, filter), with `plugins`, `default_analysis` and `missing`. A bundled plugin that ships off (Airfoil) and your own plugins are not in it; the app reads those from the live registry while it runs. `npm run gen:registry` (from `magnusim-web/`) regenerates it together with `scripts/generated/registry.json`.

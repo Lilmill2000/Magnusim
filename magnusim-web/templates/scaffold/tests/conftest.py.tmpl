@@ -1,9 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Every test reads settings of its own, never this PC's (where a plugin turned
 on or off in the app would change what loads), and leaves the registry empty."""
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
+
+# The app's Python packages (cfddesk, magnusim_sdk), so `pytest` runs from any folder
+# on the app's interpreter, as plugin:check runs it.
+_APP_PYTHON = (Path(__file__).resolve().parent / "{{app_python}}").resolve()
+for _path in (_APP_PYTHON / "sdk", _APP_PYTHON):
+    if _path.is_dir() and str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 
 @pytest.fixture(autouse=True)

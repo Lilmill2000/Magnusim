@@ -1,5 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """{{name_py}}: the host loads it as the app does{{#workspace}}, its backend method answers{{/workspace}}{{#job}}, and
-its job reports progress{{/job}}. Run by `npm run plugin:check` (or pytest in this folder)."""
+its job reports progress{{/job}}. Run by `npm run plugin:check`, or from the app folder with
+`python/.venv/Scripts/python -m pytest <this plugin's folder>/tests` (the app's interpreter)."""
 
 from __future__ import annotations
 

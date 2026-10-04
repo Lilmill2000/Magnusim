@@ -6,7 +6,8 @@ export interface PanelChromeProps {
   children: ReactNode;
   /**
    * What Done does. Required, so Done is never a dead button: `host.pluginUi.panelDone`
-   * in the app, `() => ws.nav.back()` in a workspace frame.
+   * in the app; in a workspace frame, what closes this panel of the page (the header's
+   * Back leaves the workspace).
    */
   onDone: () => void;
   /** Shows a Delete link at the left of the foot. */

@@ -21,6 +21,8 @@ describe('a workspace whose plugin is not on says why', () => {
       detail: 'manifest: bad icon',
     });
     expect(pluginNotReady('ws-demo', null)).toMatchObject({ title: 'The ws-demo plugin is not installed.', retry: false });
+    // Not installed, with the name its studies keep in the project tree.
+    expect(pluginNotReady('ws-demo', null, 'Workspace demo').title).toBe('The Workspace demo plugin is not installed.');
   });
 });
 
@@ -136,6 +138,8 @@ const LOST = 'Changes that were not saved in the workspace were lost.';
 
 describe('the workspace overlay', () => {
   let pluginStatus = 'enabled';
+  // The plugin's folder is there (false: removed, so /api/plugins does not list it).
+  let installed = true;
   let studyStatus = 200;
   let fetches: string[] = [];
   let confirm: ReturnType<typeof vi.fn>;
@@ -148,6 +152,7 @@ describe('the workspace overlay', () => {
   beforeEach(async () => {
     document.body.innerHTML = SHELL;
     pluginStatus = 'enabled';
+    installed = true;
     studyStatus = 200;
     fetches = [];
     answer = false;
@@ -159,6 +164,16 @@ describe('the workspace overlay', () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         fetches.push(url);
+        if (url === '/api/plugins' && !installed) return json({ plugins: [] });
+        if (url.startsWith('/api/plugin-studies?')) {
+          // The project tree's list: a study keeps its plugin's name when the plugin is gone.
+          return json({
+            studies: [
+              { id: 'st-0', plugin: 'ws-demo', plugin_name: 'Workspace demo', title: 'Another study', available: installed },
+              { id: 'st-1', plugin: 'ws-demo', plugin_name: 'Workspace demo', title: 'Wing section', available: installed, reason: installed ? '' : 'Requires the Workspace demo plugin' },
+            ],
+          });
+        }
         if (url === '/api/plugins') {
           return json({
             plugins: [
@@ -384,6 +399,17 @@ describe('the workspace overlay', () => {
     }
   });
 
+  it("a link to a study whose plugin was removed names the plugin and the study as the tree does, never the key and the id", async () => {
+    installed = false;
+    render(<WorkspaceOverlay />);
+    await waitFor(() => expect($('[data-ws-error] h2')).toHaveTextContent('The Workspace demo plugin is not installed.'));
+    expect($('[data-ws-crumb]')).toHaveTextContent(/^Workspace demo\s*›\s*Wing section$/);
+    expect(document.body.textContent).not.toContain('st-1');
+    expect(document.getElementById('workspace-frame')).toBeNull();
+    // Nothing of the study is read through its (missing) plugin.
+    expect(fetches.filter((u) => u.startsWith('/api/plugin-studies/get'))).toEqual([]);
+  });
+
   it('closes into the "is off" card when its plugin is turned off elsewhere; with unsaved work the card says it was lost', async () => {
     const { frame } = await open();
     const port = await connect(frame);
@@ -407,6 +433,18 @@ describe('the workspace overlay', () => {
     window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { plugins: true } }));
     await waitFor(() => expect($('[data-ws-error] h2')).toHaveTextContent('Workspace demo is off.'));
     expect($('[data-ws-error]')).not.toHaveTextContent(LOST);
+  });
+
+  it('its folder removed while it is open, the card names the plugin as the header did, never by its key', async () => {
+    const { frame } = await open();
+    await connect(frame);
+    await waitFor(() => expect($('[data-ws-crumb]')).toHaveTextContent(/^Workspace demo\s*›/));
+    // /api/plugins no longer lists it: the recheck finds no row, and only the name shown so far is left.
+    installed = false;
+    window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { plugins: true } }));
+    await waitFor(() => expect($('[data-ws-error] h2')).toHaveTextContent('The Workspace demo plugin is not installed.'));
+    expect($('[data-ws-error]')).not.toHaveTextContent('ws-demo');
+    expect(document.getElementById('workspace-frame')).toBeNull();
   });
 
   it('turned off here after the user chose to discard, the card has no such line', async () => {

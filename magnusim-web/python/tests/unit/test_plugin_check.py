@@ -296,6 +296,28 @@ def test_load_reports_links_the_host_refuses_and_survives_a_loop(tmp_path: Path)
     assert done.returncode == 1
 
 
+def test_links_in_folders_the_host_never_reads_are_not_refused(tmp_path: Path):
+    # A developer's node_modules junctioned to a shared install (a snapshot of the app, a
+    # monorepo), a cache folder linked elsewhere, and a link inside a real node_modules
+    # (pnpm's layout): the host never reads these folders, so none is a load error.
+    shared = tmp_path / "shared-node-modules"
+    (shared / "pkg").mkdir(parents=True)
+    (shared / "pkg" / "index.js").write_text("module.exports = 1;\n", encoding="utf-8")
+    folder = make_plugin(tmp_path / "set")
+    dir_link(folder / "node_modules", shared)
+    dir_link(folder / ".cache", shared)
+    (folder / "ui").mkdir()
+    (folder / "ui" / "node_modules").mkdir()
+    dir_link(folder / "ui" / "node_modules" / "pkg", shared / "pkg")
+    assert plugin_check.link_problems(folder) == []
+    report = run(folder, load=True)
+    assert report.checks["load"] == "pass", plugin_check.render(report)
+    assert found(report, "load") == [] and found(report, "load", "warning") == []
+    # A link elsewhere in the plugin to the same place is still refused.
+    dir_link(folder / "vendor-js", shared)
+    assert [p.name for p, _why in plugin_check.link_problems(folder)] == ["vendor-js"]
+
+
 # -- imports and register --------------------------------------------------------------------
 
 
@@ -675,6 +697,16 @@ def test_tools_service_module_must_exist(tmp_path: Path):
     assert not found(run(folder), "tools")
 
 
+@pytest.mark.parametrize("service", ["../elsewhere", "/abs/svc", "back end", "svc.", "2fast"])
+def test_tools_a_service_that_is_no_module_name_is_an_error_not_a_crash(tmp_path: Path, service: str):
+    extra = f'\n[python]\nrequirements = "requirements.lock"\nservice = "{service}"\n'
+    folder = make_plugin(tmp_path, manifest_extra=extra, files={"requirements.lock": "# no packages\n"})
+    report = run(folder)
+    assert any(f"service {service!r} is not a module name" in m for m in found(report, "tools")), report.findings
+    # The checker ran its rules: no "plugin:check itself failed".
+    assert not any("itself failed" in f.message for f in report.findings), [f.message for f in report.findings]
+
+
 # -- requirements ----------------------------------------------------------------------------
 
 HASH = "--hash=sha256:" + "0" * 64
@@ -957,9 +989,8 @@ EXPECTED_FAILURES = {
 }
 # Findings in shipped plugins that their owners fix; the test fails once one is fixed,
 # so this list only ever shrinks.
-KNOWN_OPEN = {
-    "bundled-plugins/cad": {"copy"},  # ARCHITECTURE.md:293 names TODO outside quotes
-}
+# (CAD's ARCHITECTURE.md copy finding is fixed: none is open.)
+KNOWN_OPEN: dict[str, set[str]] = {}
 
 
 def _plugin_folders() -> list[Path]:

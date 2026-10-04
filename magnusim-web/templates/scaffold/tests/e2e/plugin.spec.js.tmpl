@@ -1,13 +1,13 @@
-// {{name}} as a user meets it: a second app server with only this plugin installed
-// (the app's e2e/support/host-server.mjs), a {{kind_title}} study opened in its workspace,
-// the form saved to the study, the backend's answer and a job's progress.
+// {{name}} as a user meets it: a second app server with only this plugin installed, a
+// {{kind_title}} study opened in its workspace, the form saved to the study, the
+// backend's answer and a job's progress. Everything it takes from the app's test
+// harness comes through e2e/support/plugin-suite.js, the one module meant for plugins.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '{{playwright}}';
 import { cpSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NO_GEOMETRY_PROJECT } from '{{app_rel}}/e2e/prepare-projects.js';
-import { e2eTemp, startHost } from '{{app_rel}}/e2e/support/host-server.mjs';
+import { e2eTemp, NO_GEOMETRY_PROJECT, startHost } from '{{app_rel}}/e2e/support/plugin-suite.js';
 
 const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const KEY = '{{key}}';
@@ -59,12 +59,16 @@ test('{{kind_title_js}}: the form saves to the study, the backend answers and th
 
   await page.goto(`${host.base}/#/p/${PROJECT}/ws/${KEY}/${KIND}/${study.id}`);
   await expect(page.locator('#workspace-overlay')).toBeVisible({ timeout: 60_000 });
+  // The app's header shows the study's title (and Back); the page draws neither.
+  await expect(page.locator('#workspace-overlay [data-ws-crumb]')).toContainText('Test {{kind_title_lower_js}}', { timeout: 60_000 });
   const frame = page.frameLocator('#workspace-frame');
-  await expect(frame.locator('[data-title]')).toHaveText('Test {{kind_title_lower_js}}', { timeout: 60_000 });
+  // A kit control is found as the user finds it: by its role and its label.
+  const width = frame.getByRole('textbox', { name: 'Width', exact: true });
+  await expect(width).toBeVisible({ timeout: 60_000 });
+  await expect(frame.locator('body')).not.toContainText('Test {{kind_title_lower_js}}');
 
   // The form saves when a field is committed, in SI: the metric project shows lengths in mm.
-  const width = frame.locator('input[aria-label="Width"]');
-  await expect(width.locator('xpath=following-sibling::*[1]')).toHaveText('mm');
+  await expect(frame.locator('[data-field="width"]')).toContainText('mm');
   await width.fill('2000');
   await width.press('Enter');
   await expect

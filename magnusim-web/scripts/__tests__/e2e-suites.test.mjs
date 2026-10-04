@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { CONTRACT_SPECS, HOST_PATHS, LINK_HOST_PATHS, START_ACTION_HOST_PATHS, classifyPath, discoverPluginSuites, isFullTier, parseArgs, planSuites, suiteEnv, suiteOfFilter, toWebRel } from '../e2e-suites.mjs';
@@ -385,31 +385,76 @@ test('a second run waits for the WSL lock, and a dead holder does not block', as
   }
 });
 
-test('a plugin suite on the core\'s Playwright reaches the core harness only through e2e/support/plugin-suite.js', () => {
-  const seam = join(WEB_ROOT, 'e2e', 'support', 'plugin-suite.js');
-  const pluginsDir = join(WEB_ROOT, 'bundled-plugins');
-  const suites = readdirSync(pluginsDir).filter((key) => existsSync(join(pluginsDir, key, 'e2e', 'playwright.config.js')));
-  assert.ok(suites.includes('incompressible_flow'), suites.join(' '));
-  const specifiers = (text) => [...text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+// Bundled plugins whose e2e/ runs on a Playwright and app server of their own, not on the
+// core's harness, and so may import the core's files directly. Each entry says why.
+const OWN_HARNESS = new Map([
+  // CAD: its own Playwright (playwright.config.ts) and its own Vite server, which builds on
+  // the core's vite.config.js; it is not run by the core's suites runner.
+  ['cad', 'playwright.config.ts'],
+]);
+
+/**
+ * Every import in a bundled plugin's e2e/ folder (all its files, at any depth) that leads
+ * out of the plugin to anything but the seam, as "key/e2e/path: specifier".
+ * @param {string} pluginsDir
+ * @param {string} seam
+ */
+function seamViolations(pluginsDir, seam) {
+  const specifiers = (text) => [...text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+|\brequire\s*\(\s*)['"]([^'"]+)['"]/gm)].map((m) => m[1]);
   const outside = [];
-  // Suites that have moved onto the seam; another bundled suite (Airfoil) still
-  // imports the core harness directly until it adopts plugin-suite.js.
-  const onSeam = ['incompressible_flow'];
-  for (const key of suites.filter((k) => onSeam.includes(k))) {
-    const dir = join(pluginsDir, key, 'e2e');
-    const files = readdirSync(dir).filter((name) => /\.(c|m)?[jt]s$/.test(name));
-    assert.ok(files.includes('seed.js') || key !== 'incompressible_flow', 'incompressible_flow seeds its own projects');
-    for (const name of files) {
-      for (const spec of specifiers(readFileSync(join(dir, name), 'utf8'))) {
+  const walk = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? (e.name === 'node_modules' ? [] : walk(join(dir, e.name))) : /\.(c|m)?[jt]sx?$/.test(e.name) ? [join(dir, e.name)] : [],
+    );
+  for (const key of readdirSync(pluginsDir)) {
+    const e2e = join(pluginsDir, key, 'e2e');
+    if (OWN_HARNESS.has(key) || !existsSync(e2e)) continue;
+    for (const file of walk(e2e)) {
+      for (const spec of specifiers(readFileSync(file, 'utf8'))) {
         if (!spec.startsWith('.')) continue;
-        const target = resolve(dir, spec);
+        const target = resolve(dirname(file), spec);
         const rel = relative(join(pluginsDir, key), target);
-        if (!rel.startsWith('..') && !rel.startsWith(sep)) continue;
-        if (target !== seam) outside.push(`${key}/e2e/${name}: ${spec}`);
+        if (!rel.startsWith('..') && !isAbsolute(rel)) continue;
+        if (target !== seam) outside.push(`${key}/e2e/${relative(e2e, file).split(sep).join('/')}: ${spec}`);
       }
     }
   }
-  assert.deepEqual(outside, [], 'import these through ../../../e2e/support/plugin-suite.js');
+  return outside;
+}
+
+test('a plugin suite on the core\'s Playwright reaches the core harness only through e2e/support/plugin-suite.js', () => {
+  const seam = join(WEB_ROOT, 'e2e', 'support', 'plugin-suite.js');
+  const pluginsDir = join(WEB_ROOT, 'bundled-plugins');
+  const suites = readdirSync(pluginsDir).filter((key) => existsSync(join(pluginsDir, key, 'e2e')));
+  for (const key of ['incompressible_flow', 'airfoil']) assert.ok(suites.includes(key), suites.join(' '));
+  assert.ok(existsSync(join(pluginsDir, 'incompressible_flow', 'e2e', 'seed.js')), 'incompressible_flow seeds its own projects');
+  // An exemption names a plugin that is there and really runs its own Playwright.
+  for (const [key, config] of OWN_HARNESS) assert.ok(existsSync(join(pluginsDir, key, 'e2e', config)), `${key}/e2e/${config}`);
+  assert.deepEqual(seamViolations(pluginsDir, seam), [], 'import these through ../../../e2e/support/plugin-suite.js');
+});
+
+test('the seam check covers every bundled suite by default, its subfolders and its config, and lets the seam through', () => {
+  const root = mkdtempSync(join(tmpdir(), 'magnusim-seam-'));
+  try {
+    const web = join(root, 'web');
+    const seam = join(web, 'e2e', 'support', 'plugin-suite.js');
+    const put = (rel, text) => {
+      const file = join(web, ...rel.split('/'));
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, text);
+    };
+    put('e2e/support/plugin-suite.js', 'export {};\n');
+    put('bundled-plugins/fresh/e2e/fresh.spec.js', "import { startHost } from '../../../e2e/support/plugin-suite.js';\nimport { own } from './helpers/own.js';\n");
+    put('bundled-plugins/fresh/e2e/helpers/own.js', "import { WEB_ROOT } from '../../../../e2e/support/host-server.mjs';\nexport const own = WEB_ROOT;\n");
+    put('bundled-plugins/fresh/e2e/playwright.config.ts', "import base from '../../../vite.config.js';\nexport default base;\n");
+    put('bundled-plugins/cad/e2e/playwright.config.ts', "import base from '../../../vite.config.js';\nexport default base;\n");
+    assert.deepEqual(seamViolations(join(web, 'bundled-plugins'), seam).sort(), [
+      'fresh/e2e/helpers/own.js: ../../../../e2e/support/host-server.mjs',
+      'fresh/e2e/playwright.config.ts: ../../../vite.config.js',
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('the plugin seam re-exports what plugin suites use', async () => {
@@ -426,6 +471,16 @@ test('the plugin seam re-exports what plugin suites use', async () => {
     'setup',
     'PYTHON',
     'seedElbowProject',
+    // Airfoil's suite: its own servers, projects, compute slot and WSL lock.
+    'startHost',
+    'e2eTemp',
+    'NO_GEOMETRY_PROJECT',
+    'prepareE2eProjectsRoot',
+    'computeQueue',
+    'foamRecords',
+    'killFoamRelays',
+    'removeTestWslRoot',
+    'acquireWslLock',
   ]) {
     assert.ok(name in seam, name);
   }

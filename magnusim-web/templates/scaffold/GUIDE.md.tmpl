@@ -1,14 +1,18 @@
 # {{name}}: plugin rules
 
 A Magnusim plugin, made with `npm run plugin:new`. The host's plugin docs are
-the app's `docs/plugins/` folder: `API.md` is the reference generated from the
-app's code (manifest keys, the workspace bridge, the UI kit, `magnusim_sdk`).
+the app's `docs/plugins/` folder. Start with `docs/plugins/INDEX.md`:
+`GUIDE.md` says how to build a plugin and when it is done, `DESIGN.md` how it
+must look and read, and `API.md` is the reference generated from the app's code
+(manifest keys, the workspace bridge, the UI kit, `magnusim_sdk`).
 
 ## Hard rules
 
 1. Python code imports only `magnusim_sdk`, `cfddesk.registry`, the standard
-   library and this plugin's own modules. `register(hub)` only declares things:
-   import heavy packages inside the functions that use them.
+   library and this plugin's own modules, and, in code that runs on its own
+   environment (its service and its `python="plugin"` jobs), its lock's packages.
+   `register(hub)` only declares things: import heavy packages inside the
+   functions that use them.
 2. The manifest's `key` is this folder's name (`{{key}}`); `api_version` is the
    host API you wrote it for (`{{api}}` here).
 3. The licence is GPL-3.0-or-later, or another licence compatible with it.
@@ -56,9 +60,12 @@ From the app folder:
 npm run plugin:check -- {{check_path}}
 ```
 
-It runs every rule above and this plugin's own pytest tests.{{#workspace}} The
+It runs every rule above and this plugin's own pytest tests. To run pytest
+alone, from the app folder, on the app's interpreter:
+`python/.venv/Scripts/python -m pytest {{check_path}}/tests`.{{#workspace}} The
 browser test needs the app: `npx playwright test -c {{e2e_config}}`. After
-changing `src/`, run `npm install` and `npm run build` in this folder.{{/workspace}}
+changing `src/`, run `npm install` and `npm run build` in this folder: the host
+serves `workspace/`, not `src/`.{{/workspace}}
 
 Done means: the real flow works end to end in the app, `plugin:check` passes,
 every bug found has a test, turning the plugin off leaves no trace, and removing

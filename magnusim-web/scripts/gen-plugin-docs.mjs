@@ -9,6 +9,7 @@
  *   hooks             python/cfddesk/registry/hooks.py (fired and reserved)
  *   the bridge        docs/plugins/workspace-sdk.d.ts ('@magnusim/workspace')
  *   the UI kit        docs/plugins/plugin-ui.d.ts ('@magnusim/plugin-ui')
+ *   the host API      docs/plugins/plugin-api.d.ts ('@magnusim/plugin-api', what register(host) gets)
  *   versions, map     docs/plugins/plugin-sdk.json
  *   builtins          docs/plugins/registry.json (npm run gen:registry)
  *
@@ -109,7 +110,7 @@ export function dtsExports(file, moduleName) {
         // A group of calls written inline (ws.study, ws.files, ...): one row per call.
         const inline = depth === 0 && ts.isPropertySignature(pd) && pd.type && ts.isTypeLiteralNode(pd.type);
         if (inline) {
-          row.members.push({ text: `${name}: { … }`, doc: docOf(p) });
+          row.members.push({ text: `${name}${optional}: { … }`, doc: docOf(p) });
           for (const sub of checker.getPropertiesOfType(pt)) member(sub, `${name}.`, depth + 1);
           return;
         }
@@ -267,7 +268,7 @@ function examples(api) {
   };
 }
 
-export function renderApiMd(py, sdkInfo, bridge, kit, registry) {
+export function renderApiMd(py, sdkInfo, bridge, kit, hostApi, registry) {
   const schema = py.manifest_schema;
   const ex = examples(py.api_version);
   const L = [];
@@ -285,10 +286,11 @@ export function renderApiMd(py, sdkInfo, bridge, kit, registry) {
     '1. [The manifest](#1-the-manifest-manifesttoml)',
     '2. [The workspace bridge](#2-the-workspace-bridge-magnusimworkspace)',
     '3. [The plugin UI kit](#3-the-plugin-ui-kit-magnusimplugin-ui)',
-    '4. [magnusim_sdk](#4-magnusim_sdk)',
-    '5. [The analysis contract](#5-the-analysis-contract)',
-    '6. [Hooks](#6-hooks)',
-    '7. [Built-in registry](#7-built-in-registry)',
+    '4. [The in-page host API](#4-the-in-page-host-api-magnusimplugin-api)',
+    '5. [magnusim_sdk](#5-magnusim_sdk)',
+    '6. [The analysis contract](#6-the-analysis-contract)',
+    '7. [Hooks](#7-hooks)',
+    '8. [Built-in registry](#8-built-in-registry)',
     '',
     '## 1. The manifest (manifest.toml)',
     '',
@@ -332,7 +334,14 @@ export function renderApiMd(py, sdkInfo, bridge, kit, registry) {
     'Components and helpers that look like the app\'s own panels, on the design tokens. Types: [plugin-ui.d.ts](plugin-ui.d.ts).',
     '',
     ...renderTs(kit),
-    '## 4. magnusim_sdk',
+    '## 4. The in-page host API (@magnusim/plugin-api)',
+    '',
+    'What a UI in the app\'s own page gets: the manifest\'s `ui` entry exports `register(host)`, and `host` is a `PluginHost`. ' +
+      'Types only: import them with `import type`, nothing is served under this name. Types: [plugin-api.d.ts](plugin-api.d.ts) ' +
+      '(it needs [plugin-ui.d.ts](plugin-ui.d.ts) beside it).',
+    '',
+    ...renderTs(hostApi),
+    '## 5. magnusim_sdk',
     '',
     'The helpers a plugin may import, in the app and in its own environment (standard library only). A plugin\'s Python code imports only ' +
       '`magnusim_sdk`, `cfddesk.registry` and the standard library. Example (a service method and one request through the service protocol):',
@@ -347,19 +356,19 @@ export function renderApiMd(py, sdkInfo, bridge, kit, registry) {
     L.push(...renderPyMembers(m.members));
   }
   const c = py.contract;
-  L.push('## 5. The analysis contract', '', `Contract version ${c.version} (\`cfddesk.registry.contract\`).`, '');
+  L.push('## 6. The analysis contract', '', `Contract version ${c.version} (\`cfddesk.registry.contract\`).`, '');
   if (c.full_doc) L.push(...c.full_doc.split('\n'), '');
   L.push('### AnalysisType', '', c.analysis_type_doc, '', '| Field | Type | Default | What it is |', '| --- | --- | --- | --- |');
   for (const f of c.analysis_type_fields) L.push(`| ${code(f.name)} | ${cell(code(f.type))} | ${f.default ? cell(code(f.default)) : ''} | ${cell(f.doc)} |`);
   L.push('', '### cfddesk.registry.contract', '', ...renderPyMembers(c.members));
   L.push(
-    '## 6. Hooks',
+    '## 7. Hooks',
     '',
     `The host fires these (host API ${py.api_version}): ${py.hooks.fired.map(code).join(', ')}.`,
     '',
     `Reserved (a plugin may listen; they never fire yet): ${py.hooks.reserved.map(code).join(', ')}.`,
     '',
-    '## 7. Built-in registry',
+    '## 8. Built-in registry',
     '',
     'What ships: the core builtins and the bundled plugins (the whole record, with schemas, is [registry.json](registry.json), from `npm run gen:registry`).',
     '',
@@ -381,9 +390,10 @@ export function generate() {
   const sdkInfo = JSON.parse(readFileSync(join(DOCS, 'plugin-sdk.json'), 'utf8'));
   const bridge = dtsExports(join(DOCS, 'workspace-sdk.d.ts'), '@magnusim/workspace');
   const kit = dtsExports(join(DOCS, 'plugin-ui.d.ts'), '@magnusim/plugin-ui');
+  const hostApi = dtsExports(join(DOCS, 'plugin-api.d.ts'), '@magnusim/plugin-api');
   const registry = JSON.parse(readFileSync(join(DOCS, 'registry.json'), 'utf8'));
   return {
-    api: renderApiMd(py, sdkInfo, bridge, kit, registry),
+    api: renderApiMd(py, sdkInfo, bridge, kit, hostApi, registry),
     schema: JSON.stringify(py.manifest_schema, null, 2) + '\n',
   };
 }

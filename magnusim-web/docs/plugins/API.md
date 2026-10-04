@@ -10,10 +10,11 @@ What a plugin can use, generated from the code that implements it. Code blocks t
 1. [The manifest](#1-the-manifest-manifesttoml)
 2. [The workspace bridge](#2-the-workspace-bridge-magnusimworkspace)
 3. [The plugin UI kit](#3-the-plugin-ui-kit-magnusimplugin-ui)
-4. [magnusim_sdk](#4-magnusim_sdk)
-5. [The analysis contract](#5-the-analysis-contract)
-6. [Hooks](#6-hooks)
-7. [Built-in registry](#7-built-in-registry)
+4. [The in-page host API](#4-the-in-page-host-api-magnusimplugin-api)
+5. [magnusim_sdk](#5-magnusim_sdk)
+6. [The analysis contract](#6-the-analysis-contract)
+7. [Hooks](#7-hooks)
+8. [Built-in registry](#8-built-in-registry)
 
 ## 1. The manifest (manifest.toml)
 
@@ -927,7 +928,7 @@ interface DisabledReasonProps
 ```
 
 - `reason: string`: Why the action is not available.
-- `fix: { … }`: A link-style button that fixes it.
+- `fix?: { … }`: A link-style button that fixes it.
 - `role?: "alert" | "status" | undefined`: None by default, as the core's run reason. 'alert' for a short error.
 
 #### ElapsedProps
@@ -1041,7 +1042,7 @@ interface PanelChromeProps
 
 - `title: string`
 - `children: ReactNode`
-- `onDone: () => void`: What Done does. Required, so Done is never a dead button: `host.pluginUi.panelDone` in the app, `() => ws.nav.back()` in a workspace frame.
+- `onDone: () => void`: What Done does. Required, so Done is never a dead button: `host.pluginUi.panelDone` in the app; in a workspace frame, what closes this panel of the page (the header's Back leaves the workspace).
 - `onDelete?: (() => void) | undefined`: Shows a Delete link at the left of the foot.
 - `deleteLabel?: string | undefined`: Default 'Delete'.
 - `footExtra?: ReactNode`: More controls at the left of the foot, after Delete.
@@ -1187,7 +1188,409 @@ type UnitSystem = 'metric' | 'imperial'
 
 The units a project or the Settings page shows (the workspace SDK's `units`).
 
-## 4. magnusim_sdk
+## 4. The in-page host API (@magnusim/plugin-api)
+
+What a UI in the app's own page gets: the manifest's `ui` entry exports `register(host)`, and `host` is a `PluginHost`. Types only: import them with `import type`, nothing is served under this name. Types: [plugin-api.d.ts](plugin-api.d.ts) (it needs [plugin-ui.d.ts](plugin-ui.d.ts) beside it).
+
+#### BcFamilyRow
+
+```ts
+interface BcFamilyRow
+```
+
+A boundary condition the user picks (API 1.4, registry kind bc_family).
+
+- `key: string`
+- `label: string`
+- `plugin?: string | undefined`
+- `record_type: string`: What a saved record stores in bc_type.
+- `aliases: string[]`: Older bc_type values read as this family.
+- `color: "inlet" | "outlet" | "pressure" | "wall" | "other"`
+- `hint: string`: The picker's sub-line.
+- `variants: string[]`: BC type keys; the first is the default.
+- `defaults: { metric?: Record<string, unknown>; imperial?: Record<string, unknown>; } & Record<string, unknown>`: A new record's fields, per unit system.
+- `values: BcFamilyValue[]`
+- `fields: Record<string, unknown> | null`: The generic editor (JSON Schema) used when ui names no bc-settings slot component.
+- `ui: string`: A 'bc-settings' slot component name; '' = none.
+
+#### BcRecord
+
+```ts
+interface BcRecord
+```
+
+One boundary condition as saved on disk (what the case writer reads).
+
+- `id: string`
+- `name: string`
+- `bc_type: string`
+- `faces: string[]`
+- `face?: string | null | undefined`
+- `value?: number | null | undefined`
+- `unit?: string | undefined`
+- `velocity_type?: string | undefined`
+- `flow_rate_type?: string | undefined`
+- `direction?: string | undefined`
+- `vector?: number[] | undefined`
+- `wall_type?: string | undefined`
+- `pressure_type?: string | undefined`
+
+#### BcSettingsProps
+
+```ts
+interface BcSettingsProps
+```
+
+What a bc-settings component gets (API 1.4). The core shows a failed save's message.
+
+- `bc: BcRecord`: The BC as saved (its faces are the ones being assigned).
+- `family: BcFamilyRow`: Its family's registry row (registry kind bc_family).
+- `imperial: boolean`: The open project shows Imperial units.
+- `faces: string[]`: The faces assigned to it now.
+- `save: (patch: Record<string, unknown>) => Promise<void>`: Merge fields into the BC and save it. A unit change alone converts the value.
+- `flowBasis: (faces: string[]) => { face_area_m2: number | null; density: number; }`: The mean area of one of these faces (m²; null without geometry) and the study's fluid density (kg/m³; 0 when unknown).
+
+#### IslandProps
+
+```ts
+interface IslandProps
+```
+
+What a replaced host panel gets (replacePanel).
+
+- `projectId?: string | undefined`
+- `simId?: string | undefined`
+- `itemId?: string | undefined`
+- `scope?: string | undefined`: The scope id of this study or mesh.
+- `panelId: string`
+
+#### PluginHost
+
+```ts
+interface PluginHost
+```
+
+What a plugin's in-page `register(host)` receives.
+
+- `React: typeof ReactModule`: The page's React. A prebuilt `.js` UI uses this instead of importing React.
+- `ReactDOM: typeof ReactDomClient`: The page's react-dom/client.
+- `pluginUi: PluginUi`
+- `scope: string`: The scope id of what was open when the UI loaded: its `p:<project id>` part names the project ('' when none was open).
+
+#### PluginJobMirror
+
+```ts
+interface PluginJobMirror
+```
+
+One job as the page follows it (useJob).
+
+- `id: string`
+- `status: string`
+- `kind?: string | undefined`
+- `progress?: number | undefined`
+- `note?: string | undefined`
+- `residual?: unknown`
+- `startedAt?: number | undefined`: Epoch ms from the first event that reported the job running.
+- `finishedAt?: number | undefined`
+- `result?: unknown`
+- `error?: string | undefined`
+- `events: Record<string, unknown>[]`
+
+#### PluginTreeNode
+
+```ts
+interface PluginTreeNode
+```
+
+A row a tree transform returns. A row is kept only when it names the open project.
+
+- `label: string`
+- `scope?: string | undefined`: A scope id with a `p:<project id>` part, or set projectId.
+- `projectId?: string | undefined`
+
+#### PluginUi
+
+```ts
+interface PluginUi
+```
+
+The API object a plugin's register(host) gets as host.pluginUi. Everything registered is recorded under the plugin's key.
+
+- `registerStudySettings: (name: string, Component: ComponentType<StudySettingsProps>) => void`: Draw an analysis's study settings in the study panel (its contract's `ui.study_settings` names it).
+- `registerRunSettings: (name: string, Component: ComponentType<RunSettingsProps>) => void`: Draw an analysis's run settings in the run panel (its contract's `ui.run_settings` names it).
+- `registerBcSettings: (name: string, Component: ComponentType<BcSettingsProps>, opts?: { facesNote?: ComponentType<BcSettingsProps>; }) => void`: Draw a BC family's fields in the BC editor (the family's `ui` names it), and optionally a line under its faces. API 1.4.
+- `SciNumberInput: ComponentType<SciNumberInputProps>`: The core's number box that reads and writes scientific notation.
+- `schema: { … }`: Helpers for an analysis's own schemas.
+- `schema.mergeObjectSchemas: (parts: Array<JsonSchema | null | undefined>) => JsonSchema`: One object schema with the properties of every part, in order.
+- `schema.pickSchemaValues: (data: Record<string, unknown>, schema: JsonSchema) => Record<string, unknown>`: The values of `data` that `schema` has properties for.
+- `registerPanel: (opts: RegisterPanelOpts) => void`: Add a panel to the Filters panel or to your row in Settings → Plugins. Any other place throws.
+- `replacePanel: (panelId: string, Component: ComponentType<IslandProps>) => void`: Draw a host panel with your component; turning your plugin off puts the host's back.
+- `registerFilterWidget: (key: string, Component: ComponentType<Record<string, unknown>>) => void`: Add a widget to the Filters panel.
+- `registerFieldWidget: (xWidget: string, Component: ComponentType<FieldWidgetProps>) => void`: Draw every schema field whose `x-cfddesk.widget` is `xWidget` with your component (only the control; the form draws the row).
+- `useProject: () => Record<string, unknown> | null`: The open project as the page holds it (a hook), or null.
+- `useSimulation: () => unknown`: The open study as the page holds it (a hook).
+- `useJob: (id: string) => PluginJobMirror | undefined`: One job as the page follows it (a hook).
+- `useRegistry: (kind?: string) => unknown`: The registry rows of one kind, or the whole registry (a hook).
+- `useViewer: () => PluginViewer`: The 3D view.
+- `usePrefs: () => Record<string, unknown>`: The user's settings as the page holds them.
+- `SchemaForm: ComponentType<SchemaFormProps>`: The core's schema form.
+- `registerTreeTransform: (fn: (nodes: PluginTreeNode[]) => PluginTreeNode[]) => void`: Add tree rows. A row is kept only when its scope or projectId names the open project.
+- `panelsFor: (place: PanelPlace) => RegisterPanelOpts[]`: The panels registered for a place.
+- `kit: typeof Kit`: The plugin UI kit, the page's own copy (the same code a workspace imports as '@magnusim/plugin-ui'). API 1.3.
+- `panelDone: () => void`: What a kit PanelChrome's Done calls in the page (it closes the flyout). API 1.3.
+- `toast: (message: string, opts?: { kind?: PluginToastKind; }) => void`: An app toast, bottom right. An unknown kind is info. API 1.3.
+- `unitSystem: () => "metric" | "imperial"`: The units the open project shows (else the Settings choice). API 1.3.
+
+#### PluginUiModule
+
+```ts
+interface PluginUiModule
+```
+
+The shape of a plugin UI module: the host calls its register once per load.
+
+- `register: (host: PluginHost) => void`
+
+#### PluginViewer
+
+```ts
+interface PluginViewer
+```
+
+The 3D view, as far as a plugin may drive it.
+
+- `render: () => void`: Draw the view again.
+- `resize: () => void`: Fit the view to its box again.
+
+#### RegisterPanelOpts
+
+```ts
+interface RegisterPanelOpts
+```
+
+A panel for registerPanel.
+
+- `key: string`: Unique across plugins; a second panel with the same key replaces the first.
+- `title: string`
+- `place: PanelPlace`
+- `Component: ComponentType<Record<string, unknown>>`
+
+#### RegistryRow
+
+```ts
+interface RegistryRow
+```
+
+- `key: string`
+- `label: string`
+- `plugin?: string | undefined`
+- `engine?: string | undefined`
+- `schema?: Record<string, unknown> | null | undefined`
+- `numerics_schema?: Record<string, unknown> | null | undefined`
+- `control_schema?: Record<string, unknown> | null | undefined`
+- `settings_schema?: Record<string, unknown> | null | undefined`
+- `params_schema?: Record<string, unknown> | null | undefined`
+- `category?: string | undefined`
+- `time_dependency?: string | undefined`
+- `default_turbulence?: string | undefined`
+- `default_solver?: string | undefined`
+- `turbulence_models?: string[] | undefined`
+- `contract?: string | undefined`: Analysis contract (API 1.1): what the core shows about an analysis.
+- `family?: AnalysisFamily | null | undefined`
+- `algorithm_label?: string | undefined`
+- `residual_keys?: string[] | undefined`
+- `residual_series?: { key: string; label: string; color: string; fields: string[]; always: boolean; dashed: boolean; max_key: string; max_label: string; swatch: string; }[] | un...`
+- `x_axis?: string | undefined`
+- `result_fields?: ResultFieldRow[] | undefined`: What results colour by, in the analysis's order.
+- `kinematic_fields?: string[] | null | undefined`: Fields its cases store divided by density (API 1.4); null when the analysis does not say.
+- `monitor_quantities?: MonitorQuantity[] | null | undefined`: The quantities its run_monitors series carry (API 1.4); null when the analysis does not say.
+- `study_defaults?: Record<string, unknown> | undefined`
+- `run_defaults?: Record<string, unknown> | undefined`
+- `ui?: Record<string, string> | undefined`
+- `application?: string | undefined`: Solver apps: the program a case runs.
+- `target?: string | undefined`: Monitor types (API 1.4): what it is placed on, what it is, other names, whether the user may add one, the quantity keys it measures.
+- `description?: string | undefined`
+- `aliases?: string[] | undefined`
+- `user_creatable?: boolean | undefined`
+- `quantities?: string[] | undefined`
+- `bc_types?: string[] | undefined`: Analyses (API 1.4): the BC types and material models it offers.
+- `material_models?: string[] | undefined`
+- `library?: Record<string, unknown>[] | undefined`: Material models (API 1.4): presets, and how a study's material record stores the properties.
+- `record_keys?: Record<string, string[]> | undefined`: Property -> the record keys that may hold it, e.g. { nu: ['kinematic_viscosity', 'nu'] }.
+- `record_constants?: Record<string, unknown> | undefined`: Values every record of the model carries.
+- `custom_preset?: string | undefined`: The preset name a record has once its values are edited by hand.
+
+#### RunSettingsProps
+
+```ts
+interface RunSettingsProps
+```
+
+What a run-settings component gets. Settings are locked once a run has started.
+
+- `run: RunState`
+- `row: RegistryRow | undefined`: The run's analysis row (registry.describe).
+- `saveSteady: (patch: { end_time?: number; write_interval?: number; }) => Promise<void>`: A steady run's iteration count and write interval.
+- `saveTransient: (settings: Record<string, unknown>) => Promise<void>`: A transient run's whole control block, as the analysis's run model defines it.
+
+#### RunState
+
+```ts
+interface RunState
+```
+
+What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
+
+- `has_run: boolean`
+- `run_id: string`
+- `name: string`
+- `status: string`
+- `transient: boolean`
+- `locked: boolean`: Started or finished runs keep their settings.
+- `running: boolean`
+- `done: boolean`
+- `can_start: boolean`
+- `queued: boolean`
+- `start: { … }`
+- `start.visible: boolean`
+- `start.enabled: boolean`
+- `start.label: string`
+- `start.title: string`
+- `stop: { … }`
+- `stop.visible: boolean`
+- `stop.label: string`
+- `stop.title: string`
+- `can_delete: boolean`
+- `reason: { text: string; fix_label: string; } | null`: Why Start is off (or what it is doing), with the label of the fix link.
+- `settings: { … }`: Steady iterations / write interval (null only before the registry has loaded).
+- `settings.end_time: number | null`
+- `settings.write_interval: number | null`
+- `analysis_key: string`: The analysis the run solves with (its settings component and residual series).
+- `transient_settings: TransientSettings`
+- `run_preview: RunPreview | null`: A transient run's resolved numbers (null until the preview arrives, or steady).
+- `progress: { … }`
+- `progress.show: boolean`
+- `progress.title: string`
+- `progress.line: string`
+- `progress.elapsed: string`
+- `progress.eta: string`
+- `progress.meta: string`
+- `progress.residuals: Record<string, number>[]`
+- `progress.end: number`
+- `copy: { … }`
+- `copy.available: boolean`
+- `copy.picking: boolean`
+- `copy.note: string`
+- `copy.sources: { id: string; label: string; }[]`
+- `mesh_ready: boolean`
+- `setup_ready: boolean | null`: The run's analysis reports no setup issue (null until it answers).
+- `older_geometry?: string | undefined`: Made on an older version of its linked geometry (API 1.5, D26): the line the panel shows, else ''.
+
+#### SchemaFormProps
+
+```ts
+interface SchemaFormProps
+```
+
+The core's schema form (the study panel's generic form).
+
+- `schema: JsonSchema`
+- `formData?: Record<string, unknown> | undefined`
+- `onCommit: (values: Record<string, unknown>) => void`: Runs on blur and Enter with the whole form's values.
+- `onLive?: ((values: Record<string, unknown>) => void) | undefined`: Runs on every change.
+- `onDone?: (() => void) | undefined`
+- `onDelete?: (() => void) | undefined`
+- `deleteLabel?: string | undefined`
+- `className?: string | undefined`
+- `hideFooter?: boolean | undefined`: Leave out the Done/Delete foot when your panel draws its own.
+- `advancedExtra?: ReactNode`: Rows added inside the Advanced disclosure.
+
+#### SciNumberInputProps
+
+```ts
+interface SciNumberInputProps
+```
+
+- `value: number | null | undefined`
+- `onCommit: (value: number) => void`: Blur and Enter. The value is always finite.
+- `onLive?: ((value: number) => void) | undefined`: Every keystroke that parses. Omit when an intermediate value must not be saved.
+- `label?: string | undefined`
+- `className?: string | undefined`
+- `id?: string | undefined`
+- `disabled?: boolean | undefined`
+
+#### StudySettingsProps
+
+```ts
+interface StudySettingsProps
+```
+
+What a study-settings component gets. The core shows a failed save's message.
+
+- `study: StudyState`
+- `row: RegistryRow | undefined`: The study's analysis row (registry.describe).
+- `rows: RegistryRow[]`: Every analysis, for the sibling of the other time dependency.
+- `save: (patch: Record<string, unknown>) => Promise<void>`
+- `setTimeDependency: (value: TimeDependency) => Promise<void>`
+
+#### StudyState
+
+```ts
+interface StudyState
+```
+
+Study (simulation) panel state. `record` is the saved study, physics keys included.
+
+- `has_study: boolean`
+- `id?: string | undefined`
+- `project_id?: string | undefined`
+- `name?: string | undefined`
+- `analysis?: string | undefined`
+- `analysis_type?: string | undefined`
+- `time_dependency?: TimeDependency | undefined`
+- `algorithm?: string | undefined`
+- `record?: Record<string, unknown> | undefined`
+
+#### FieldWidgetProps
+
+```ts
+type FieldWidgetProps = { id: string; value: unknown; label: string; schema: Record<string, unknown>; options?: Record<string, unknown>; required?: boolean; disabled?: boolean; readonly?: boolean; onChange: (v: unknown) =...
+```
+
+The props a plugin field widget gets (pluginUi.registerFieldWidget). The schema form passes these and more; a widget renders only its control, the form draws the row and the label.
+
+#### JsonSchema
+
+```ts
+type JsonSchema = Record<string, unknown>
+```
+
+A JSON Schema object, as the registry publishes it.
+
+#### PanelPlace
+
+```ts
+type PanelPlace = 'filters' | 'prefs'
+```
+
+Where a registered panel is drawn: `filters` (the Filters panel) or `prefs` (the plugin's row in Settings → Plugins). Any other place is refused.
+
+#### PluginToastKind
+
+```ts
+type PluginToastKind = 'info' | 'success' | 'error'
+```
+
+The kind of an app toast.
+
+#### TimeDependency
+
+```ts
+type TimeDependency = 'Steady-state' | 'Transient'
+```
+
+## 5. magnusim_sdk
 
 The helpers a plugin may import, in the app and in its own environment (standard library only). A plugin's Python code imports only `magnusim_sdk`, `cfddesk.registry` and the standard library. Example (a service method and one request through the service protocol):
 
@@ -1266,7 +1669,7 @@ One plugin's folder in one project. Created on first write.
 
 - `from_scope(scope: Mapping[str, Any]) -> PluginData`: The calling plugin's folder in the call's project (a service method's scope).
 - `from_env(environ: Mapping[str, str] | None = None) -> PluginData`: The plugin's folder in the project a plugin job runs for: the host sets MAGNUSIM_PROJECT_DIR and MAGNUSIM_PLUGIN_KEY for a plugin's jobs.
-- `root() -> Path`
+- `root: Path`
 - `path(*parts: str) -> Path`: A path inside this plugin's folder (never outside it).
 - `read_json(rel: str, default: Any = None) -> Any`
 - `write_json(rel: str, doc: Any) -> None`
@@ -1345,7 +1748,7 @@ Constants:
 
 - `EVENT_PREFIX = "MAGNUSIM_EVENT "`
 - `EVENT_PREFIX_ALIASES = ("MAGNUSIM_EVENT ", "CFDDESK_EVENT ")`
-- `KNOWN_KINDS = frozenset( { "start", "stage", "progress", "log", "residual", "courant", "time_saved", "counts", ...`
+- `KNOWN_KINDS = frozenset({"start", "stage", "progress", "log", "residual", "courant", "time_saved", "counts", "phase", "result", "error"})`
 
 ### magnusim_sdk.fluids
 
@@ -1874,7 +2277,7 @@ Constants:
 - `UNITS = { "velocity": {"m/s": 1.0, "km/h": 1.0 / 3.6, "mph": 0.44704, "ft/s": 0.3048, "ft/min": 0.3048 / ...`
 - `SI_DEFAULT = { "velocity": "m/s", "pressure": "Pa", "volumetric_flow": "m³/s", "mass_flow": "kg/s", "length": ...`
 
-## 5. The analysis contract
+## 6. The analysis contract
 
 Contract version 1.5 (`cfddesk.registry.contract`).
 
@@ -2182,13 +2585,13 @@ Constants:
 - `NO_MONITORS = { "rho": None, "monitors": [], "custom": [], "balance": None, "quantities": [], "summary": [], "s...`
 - `LEGACY_MONITOR_QUANTITIES = ( MonitorQuantity( "p", "Pressure", "p_Pa", unit_quantity="pressure", unit="Pa", color="#6941c6",...`
 
-## 6. Hooks
+## 7. Hooks
 
 The host fires these (host API 1.6): `case.write`, `case.written`, `solve.parse_line`, `solve.prepare`, `solve.stop`, `ui.tree.transform`.
 
 Reserved (a plugin may listen; they never fire yet): `analysis.validate`, `case.write_field`, `geometry.import`, `geometry.preview`, `mesh.fingerprint`, `mesh.generate`, `mesh.result`, `project.load`, `project.migrate`, `project.save`, `results.filter`, `results.load`.
 
-## 7. Built-in registry
+## 8. Built-in registry
 
 What ships: the core builtins and the bundled plugins (the whole record, with schemas, is [registry.json](registry.json), from `npm run gen:registry`).
 

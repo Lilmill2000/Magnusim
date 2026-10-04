@@ -56,11 +56,18 @@ import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { NO_GEOMETRY_PROJECT, prepareE2eProjectsRoot } from '../../../e2e/prepare-projects.js';
-import { computeQueue, foamRecords, killFoamRelays, removeTestWslRoot } from '../../../e2e/support/compute-slot.js';
-import { e2eTemp, startHost } from '../../../e2e/support/host-server.mjs';
-import { acquireWslLock } from '../../../e2e/support/wsl-lock.mjs';
-import { NO_WSL } from '../../../e2e/toolchain.js';
+import {
+  acquireWslLock,
+  computeQueue,
+  e2eTemp,
+  foamRecords,
+  killFoamRelays,
+  NO_GEOMETRY_PROJECT,
+  NO_WSL,
+  prepareE2eProjectsRoot,
+  removeTestWslRoot,
+  startHost,
+} from '../../../e2e/support/plugin-suite.js';
 
 const KEY = 'airfoil';
 // gate:h17-openfoam-2d runs real OpenFOAM in WSL: the local tier only (MAGNUSIM_E2E_WSL=1).
@@ -1221,6 +1228,10 @@ test('gate:h17-disable-and-remove the Airfoil folder removed: the project opens 
       // A link to the study: the workspace does not open, and nothing is written.
       await page.goto(`${host.base}/#/p/${PROJECT}/ws/${KEY}/polar/${sid}`);
       await expect(page.locator('body')).toContainText('not installed', { timeout: 30_000 });
+      // It names the plugin and the study as the project tree does, not the key and the id.
+      await expect(overlay(page).locator('[data-ws-error] h2')).toHaveText('The Airfoil plugin is not installed.');
+      await expect(overlay(page).locator('[data-ws-crumb]')).toHaveText(/^Airfoil\s*›\s*Airfoil analysis 1$/);
+      await expect(overlay(page)).not.toContainText(sid);
       await page.screenshot({ path: test.info().outputPath('removed-direct-link.png') });
       await openProject(page, host.base, PROJECT);
       await expect(row).toHaveClass(/is-unavailable/, { timeout: 30_000 });

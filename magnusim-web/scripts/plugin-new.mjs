@@ -17,9 +17,11 @@
  *   --study-kind <title>   the study kind's title (default: the plugin's name)
  *
  * Every plugin gets manifest.toml (GPL-3.0-or-later), plugin.py, GUIDE.md (the hard
- * rules and where the host docs are), LICENSE, .gitignore and tests/ (pytest; a
- * workspace plugin also tests/e2e/). The generated files come from templates/plugin,
- * templates/plugin-workspace and templates/scaffold.
+ * rules and where the host docs are), LICENSE (a copy of the app's: without one it stops),
+ * .gitignore and tests/ (pytest, which runs from any folder on the app's interpreter; a
+ * workspace plugin also tests/e2e/). Each source file it writes carries an SPDX line.
+ * The generated files come from templates/plugin, templates/plugin-workspace and
+ * templates/scaffold.
  */
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -198,6 +200,8 @@ function manifestText(o) {
     t = t.replace(/"Start a sketch"/g, JSON.stringify(`Start a ${o.kindTitle.toLowerCase()}`.slice(0, 40)));
     t = t.replace(/"New sketch"/g, JSON.stringify(`New ${o.kindTitle.toLowerCase()}`.slice(0, 40)));
     t = t.replace(/^# header_label = "Sketch"$/m, `# header_label = ${JSON.stringify(o.kindTitle.slice(0, 24))}`);
+    // The sketch example's hint promises drawing and simulating; this one says what the button does.
+    t = must(t, /^# hint = .*$/m, `# hint = ${JSON.stringify(`Makes a ${o.kindTitle.toLowerCase()} study and opens it`.slice(0, 120))}`, 'the start action hint');
     // The host docs are being reorganised; point at the generated reference.
     t = t.replace(/\((?:docs\/plugins\/)?authoring\.md, "[^"]*"\)/g, '(docs/plugins/API.md)');
     t = t.replace(/\(compatibility\.md, "## 1\.4"\)/g, '(docs/plugins/compatibility.md, 1.4)');
@@ -253,7 +257,7 @@ function analysisFiles(o) {
   test = test.replace('def test_template_registers(', 'def test_registers(').replace('"""Loads this template from a plugins/ folder and checks the cloned analysis."""', `"""Loads ${pyText(o.name)} from a plugins/ folder and checks the analysis it adds."""`);
   return {
     'plugin.py': plugin,
-    '__init__.py': `"""${pyText(o.name)} (installed as a package through an entry point; see pyproject.toml)."""\n`,
+    '__init__.py': `# SPDX-License-Identifier: GPL-3.0-or-later\n"""${pyText(o.name)} (installed as a package through an entry point; see pyproject.toml)."""\n`,
     'pyproject.toml': common(read('pyproject.toml')).replace('description = "Copy-paste Magnusim plugin"', `description = ${JSON.stringify(o.name)}`),
     'tests/test_register.py': test,
   };
@@ -264,7 +268,9 @@ function scaffoldFile(rel, o) {
 }
 
 /**
- * Write a new plugin. Returns {dir, files} (files: relative paths, sorted).
+ * Write a new plugin. Returns {dir, files, installPaths} (files: relative paths, sorted;
+ * installPaths: the paths it wrote into them that say where the app and the plugin are
+ * on this PC, such as the browser test's import of the app's test harness).
  * @param {{key: string, variant?: string, service?: boolean, venv?: boolean, studyKind?: string, name?: string, out?: string, base?: string, webRoot?: string, build?: boolean}} input
  */
 export async function scaffold(input) {
@@ -284,6 +290,11 @@ export async function scaffold(input) {
     if (/\p{Cc}/u.test(value)) throw new UsageError(`${opt}: one line of text, no control characters`);
   }
   if (!name) throw new UsageError('--name needs a name');
+  // Every plugin gets the GPL text: the app's own LICENSE, in the app folder or the one above it.
+  const licence = [join(webRoot, 'LICENSE'), join(webRoot, '..', 'LICENSE')].find((p) => existsSync(p));
+  if (!licence) {
+    throw new UsageError(`no LICENSE (the GPL text) in ${webRoot} or the folder above it: a plugin gets a copy of the app's. Put the repository's LICENSE back and try again`);
+  }
   const workspace = variant === 'workspace';
   const pythonTable = !!(input.service || input.venv);
   const flags = {
@@ -323,6 +334,8 @@ export async function scaffold(input) {
     app_rel: posixRel(e2eDir, webRoot) ?? pathToFileURL(webRoot).href,
     check_path: posixRel(webRoot, dir) ?? dir,
     e2e_config: (posixRel(webRoot, join(e2eDir, 'playwright.config.js')) ?? join(e2eDir, 'playwright.config.js')),
+    // tests/conftest.py puts the app's python/ (and python/sdk/) on sys.path from here.
+    app_python: pyText(posixRel(join(dir, 'tests'), join(webRoot, 'python')) ?? join(webRoot, 'python').split(sep).join('/')),
   };
   const o = { key, name, pkg, api, variant, flags, vars, kind: vars.kind, kindTitle, jobKey: vars.job_key, runtime: vars.runtime };
 
@@ -363,11 +376,8 @@ export async function scaffold(input) {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, text);
     }
-    const licence = [join(webRoot, 'LICENSE'), join(webRoot, '..', 'LICENSE')].find((p) => existsSync(p));
-    if (licence) {
-      copyFileSync(licence, join(work, 'LICENSE'));
-      files.LICENSE = '';
-    }
+    copyFileSync(licence, join(work, 'LICENSE'));
+    files.LICENSE = '';
     if (workspace && input.build !== false) {
       for (const rel of await buildWorkspace(work, Object.keys(info.imports))) files[rel] = '';
     }
@@ -377,7 +387,8 @@ export async function scaffold(input) {
     rmSync(work, { recursive: true, force: true });
     throw err;
   }
-  return { dir, files: Object.keys(files).sort() };
+  const installPaths = [...new Set([vars.playwright, vars.app_rel, vars.check_path, vars.e2e_config, vars.app_python])];
+  return { dir, files: Object.keys(files).sort(), installPaths };
 }
 
 /**

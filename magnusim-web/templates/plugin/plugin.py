@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Copy-paste plugin. Clone a registered builtin; do not import cfddesk.builtin."""
 
 from __future__ import annotations

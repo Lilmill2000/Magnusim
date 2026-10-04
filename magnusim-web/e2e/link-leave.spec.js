@@ -357,8 +357,15 @@ async function hookFailed(page, leave) {
 
 let t0 = 0;
 let refusals = [];
+// Uncaught errors and console errors of the app's page (its frames too), in order.
+let pageErrors = [];
 test.beforeEach(async ({ page }) => {
   refusals = [];
+  pageErrors = [];
+  page.on('pageerror', (e) => pageErrors.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => {
+    if (m.type() === 'error') pageErrors.push(`console: ${m.text()}`);
+  });
   page.on('response', (r) => {
     if (r.status() !== 409) return;
     void r
@@ -541,12 +548,16 @@ test.describe('exit sync (host API 1.6)', () => {
     await expect(page.locator('#modal-link-choice')).toBeVisible();
     expect((await seen(page)).confirm).toEqual([]);
     // Keep editing: the workspace stays, with no question, and nothing changed.
+    const errorsBefore = pageErrors.length;
     await answerQuestion(page, 'cancel');
     await expect(frame.locator('#hook-status')).toHaveText('Kept editing', { timeout: 30_000 });
     await expect(page.locator('[data-ws-leave-status]')).toHaveCount(0);
     await expect(page).toHaveURL(new RegExp(`/ws/link-demo/demo/${scope.sid}$`));
     expect((await seen(page)).confirm).toEqual([]);
     expect((await linkedOf(request, host, scope)).rev).toBe(1);
+    // Nothing uncaught (the link call's "You kept editing" rejection) and no console error.
+    await page.waitForTimeout(1_000);
+    expect(pageErrors.slice(errorsBefore), 'no page error or console error after Keep editing').toEqual([]);
     stage(t1, 'kept editing');
 
     // Overwrite: lands on rev 2; the mesh is out of date and Start refuses on it.

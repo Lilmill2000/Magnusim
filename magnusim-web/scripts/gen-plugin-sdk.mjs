@@ -7,6 +7,8 @@
  * what plugin authors build against:
  *   docs/plugins/workspace-sdk.d.ts  the types of '@magnusim/workspace'
  *   docs/plugins/plugin-ui.d.ts      the types of '@magnusim/plugin-ui' (the UI kit)
+ *   docs/plugins/plugin-api.d.ts     the types of '@magnusim/plugin-api': the host object an
+ *                                    in-page UI's register(host) gets (src/plugin-api/public.ts)
  *   docs/plugins/plugin-sdk.json     the bridge and kit versions, React version and import map
  * --check: fail when any of them is out of date (CI).
  */
@@ -34,6 +36,9 @@ const KIT_SOURCE = join(WEB_ROOT, 'src', 'plugin-ui');
 const DTS = workspaceDtsPath(WEB_ROOT);
 const KIT_DTS = pluginUiDtsPath(WEB_ROOT);
 const INFO = join(WEB_ROOT, 'docs', 'plugins', 'plugin-sdk.json');
+const API_SOURCE = join(WEB_ROOT, 'src', 'plugin-api', 'public.ts');
+const API_DTS = join(WEB_ROOT, 'docs', 'plugins', 'plugin-api.d.ts');
+const SRC = join(WEB_ROOT, 'src');
 const TOKENS = join(WEB_ROOT, 'src', 'theme', 'tokens.css');
 
 function fail(msg) {
@@ -194,6 +199,142 @@ function kitDts() {
 }
 
 /**
+ * The in-page host API's declarations (src/plugin-api/public.ts): that file and
+ * every src file its declarations reach, each as its own
+ * '@magnusim/plugin-api/_internal/<path>' module behind '@magnusim/plugin-api'.
+ * Kit files are not copied: they resolve to plugin-ui.d.ts's modules.
+ */
+function apiDts() {
+  const options = { ...KIT_COMPILER, declaration: true, emitDeclarationOnly: true };
+  const host = ts.createCompilerHost(options);
+  const emitted = new Map();
+  host.writeFile = (name, text) => {
+    if (!name.endsWith('.d.ts')) return;
+    const rel = relative(SRC, name.slice(0, -'.d.ts'.length)).split(sep).join('/');
+    if (!rel.startsWith('..')) emitted.set(rel, text);
+  };
+  // src/types/global.d.ts: the page's globals (window.__CFD_*), which src files read.
+  const program = ts.createProgram([API_SOURCE, join(SRC, 'types', 'global.d.ts')], options, host);
+  const pre = ts.getPreEmitDiagnostics(program);
+  if (pre.length) fail(`src/plugin-api/public.ts does not compile:\n${diagnostics(pre)}`);
+  const res = program.emit();
+  if (res.diagnostics.length) fail(`plugin API declaration emit failed:\n${diagnostics(res.diagnostics)}`);
+  const entry = 'plugin-api/public';
+  if (!emitted.has(entry)) fail('declaration emit wrote nothing for src/plugin-api/public.ts');
+  const resolveRel = (fromRel, spec) => {
+    const target = posix.normalize(posix.join(posix.dirname(fromRel), spec)).replace(/\.(d\.ts|tsx?|js)$/, '');
+    if (target.startsWith('..')) fail(`src/${fromRel} imports ${spec}, outside src`);
+    if (target === 'plugin-ui' || target === 'plugin-ui/index') return { name: '@magnusim/plugin-ui' };
+    if (target.startsWith('plugin-ui/')) {
+      const rest = target.slice('plugin-ui/'.length);
+      const file = emitted.has(target) ? rest : emitted.has(`${target}/index`) ? `${rest}/index` : null;
+      if (!file) fail(`src/${fromRel} imports ${spec}, which emitted no declarations`);
+      return { name: `@magnusim/plugin-ui/_internal/${file}` };
+    }
+    const file = emitted.has(target) ? target : emitted.has(`${target}/index`) ? `${target}/index` : null;
+    if (!file) fail(`src/${fromRel} imports ${spec}, which emitted no declarations`);
+    return { name: `@magnusim/plugin-api/_internal/${file}`, file };
+  };
+  // Behind the entry only the types matter: functions and constants of those files are the
+  // page's own internals, never something a plugin is handed.
+  const typesOnly = (rel, text) => {
+    if (rel === entry) return text;
+    // The source file's own header (a comment set apart by a blank line) is about its
+    // functions; the emit glues it to the first type, so it is left out.
+    const source = [`${rel}.ts`, `${rel}.tsx`].map((f) => join(SRC, f)).find((f) => existsSync(f));
+    const header = source ? /^\s*(\/\*\*[\s\S]*?\*\/)[ \t]*\r?\n[ \t]*\r?\n/.exec(readFileSync(source, 'utf8')) : null;
+    const body = header && text.trimStart().startsWith(header[1].replace(/\r\n/g, '\n')) ? text.trimStart().slice(header[1].replace(/\r\n/g, '\n').length) : text;
+    const sf = ts.createSourceFile(`${rel}.d.ts`, body, ts.ScriptTarget.Latest, true);
+    const keep = sf.statements.filter(
+      (st) => ts.isImportDeclaration(st) || ts.isInterfaceDeclaration(st) || ts.isTypeAliasDeclaration(st) || ts.isExportDeclaration(st),
+    );
+    return keep
+      .map((st) => {
+        const docs = st.jsDoc;
+        const start = docs && docs.length ? docs[docs.length - 1].getStart(sf) : st.getStart(sf);
+        return body.slice(start, st.getEnd());
+      })
+      .join('\n');
+  };
+  const done = new Map();
+  const queue = [entry];
+  while (queue.length) {
+    const rel = queue.shift();
+    if (done.has(rel)) continue;
+    const text = typesOnly(rel, emitted.get(rel)).replace(/(\bfrom\s*|\bimport\s*\(\s*)(['"])(\.{1,2}\/[^'"]*)\2/g, (_m, pre, q, spec) => {
+        const r = resolveRel(rel, spec);
+        if (r.file && !done.has(r.file)) queue.push(r.file);
+        return `${pre}${q}${r.name}${q}`;
+      });
+    done.set(rel, text);
+  }
+  const modules = [...done.keys()]
+    .sort()
+    .map((rel) => [`declare module '@magnusim/plugin-api/_internal/${rel}' {`, moduleBody(done.get(rel)), '}'].join('\n'));
+  return [
+    '/// <reference path="./plugin-ui.d.ts" />',
+    "// The types of '@magnusim/plugin-api': the host object a plugin's in-page UI",
+    '// gets in register(host). Types only: import them with `import type`; nothing',
+    '// is served under this name. Copy this file and plugin-ui.d.ts into your',
+    '// plugin, for example as types/plugin-api.d.ts and types/plugin-ui.d.ts.',
+    "// Import only from '@magnusim/plugin-api': the '_internal/' modules below hold",
+    "// its types only. React's types come from @types/react.",
+    '//',
+    '// Generated by `npm run gen:plugin-sdk` from src/plugin-api/public.ts. Do not edit.',
+    ...modules,
+    "declare module '@magnusim/plugin-api' {",
+    `  export * from '@magnusim/plugin-api/_internal/${entry}';`,
+    '}',
+    '',
+  ].join('\n');
+}
+
+/** The host API's types must compile, with the kit's, for a plugin UI that uses them. */
+function checkApiDtsCompiles(dts, kitDtsText) {
+  const cacheDir = join(WEB_ROOT, '.cache');
+  mkdirSync(cacheDir, { recursive: true });
+  const dir = mkdtempSync(join(cacheDir, 'plugin-api-dts-'));
+  let problems;
+  try {
+    writeFileSync(join(dir, 'plugin-ui.d.ts'), kitDtsText);
+    writeFileSync(join(dir, 'plugin-api.d.ts'), dts);
+    writeFileSync(
+      join(dir, 'use.tsx'),
+      [
+        '/// <reference path="./plugin-api.d.ts" />',
+        "import type { BcSettingsProps, PluginHost, StudySettingsProps } from '@magnusim/plugin-api';",
+        'function Study(p: StudySettingsProps) {',
+        "  return <p>{p.study.name ?? ''} {p.row?.label ?? ''}</p>;",
+        '}',
+        'function Bc(p: BcSettingsProps) {',
+        '  return <p>{p.faces.length} {p.family.label}</p>;',
+        '}',
+        'export function register(host: PluginHost): void {',
+        '  const { kit } = host.pluginUi;',
+        "  host.pluginUi.registerStudySettings('demo.study', Study);",
+        "  host.pluginUi.registerBcSettings('demo.bc', Bc, { facesNote: Bc });",
+        '  host.pluginUi.registerPanel({',
+        "    key: 'demo',",
+        "    title: 'Demo',",
+        "    place: 'prefs',",
+        '    Component: () => <kit.Hint>{kit.formatSci(1e-4)}</kit.Hint>,',
+        '  });',
+        "  host.pluginUi.toast(host.pluginUi.unitSystem(), { kind: 'info' });",
+        '  void host.React.createElement;',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    // skipLibCheck off: the generated .d.ts itself is checked too, not only what the sample uses.
+    const program = ts.createProgram([join(dir, 'use.tsx')], { ...KIT_COMPILER, skipLibCheck: false, noEmit: true });
+    problems = diagnostics(ts.getPreEmitDiagnostics(program));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (problems) fail(`the generated plugin-api.d.ts does not compile for a plugin:\n${problems}`);
+}
+
+/**
  * The kit's types must compile for a plugin that renders it. The sample sits
  * under .cache/ (ignored) so `react` resolves to this app's @types/react.
  */
@@ -246,6 +387,8 @@ const dts = workspaceDts();
 checkDtsCompiles(dts);
 const kitTypes = kitDts();
 checkKitDtsCompiles(kitTypes, await kitExportNames(WEB_ROOT));
+const apiTypes = apiDts();
+checkApiDtsCompiles(apiTypes, kitTypes);
 const info = JSON.stringify(pluginSdkInfo(WEB_ROOT), null, 2) + '\n';
 
 const same = (path, text) => existsSync(path) && readFileSync(path, 'utf8').replace(/\r\n/g, '\n') === text;
@@ -253,12 +396,14 @@ if (check) {
   const stale = [];
   if (!same(DTS, dts)) stale.push('docs/plugins/workspace-sdk.d.ts');
   if (!same(KIT_DTS, kitTypes)) stale.push('docs/plugins/plugin-ui.d.ts');
+  if (!same(API_DTS, apiTypes)) stale.push('docs/plugins/plugin-api.d.ts');
   if (!same(INFO, info)) stale.push('docs/plugins/plugin-sdk.json');
   if (stale.length) fail(`${stale.join(', ')} out of date; run npm run gen:plugin-sdk`);
   console.log('plugin SDK check ok');
 } else {
   writeFileSync(DTS, dts);
   writeFileSync(KIT_DTS, kitTypes);
+  writeFileSync(API_DTS, apiTypes);
   writeFileSync(INFO, info);
-  console.log('wrote docs/plugins/workspace-sdk.d.ts, docs/plugins/plugin-ui.d.ts and docs/plugins/plugin-sdk.json');
+  console.log('wrote docs/plugins/workspace-sdk.d.ts, plugin-ui.d.ts, plugin-api.d.ts and plugin-sdk.json');
 }

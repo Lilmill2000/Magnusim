@@ -2,6 +2,18 @@
 
 The host loads a plugin whose `api_version` has the same major version as its own (`cfddesk.registry.API_VERSION`). A minor version adds things; it never removes or changes what an older minor version offered, so a `1.0` plugin loads unchanged on a `1.1` host. The one exception is a safety fix, listed under the version that made it (1.2 made `ws.data` paths stricter).
 
+## Frozen at 1.6
+
+The plugin API is frozen at host API 1.6 (workspace SDK 1.3.0, plugin UI kit 1.0.0, `magnusim_sdk` 1.3.0, analysis contract 1.5). Write plugins against it. What the freeze means:
+
+1. Everything in [API.md](API.md) as of 1.6 stays: the manifest keys, the bridge calls and events, the kit's exports and props, the in-page host API, `magnusim_sdk`, the analysis contract, the fired hooks, and the refusal codes.
+2. A later change is a new minor version (1.7, 1.8, …), listed in its own section here. It only adds: a new key, call, field, prop, event or code. The host does not gate an addition by `api_version`: a plugin that declares 1.0 may use a 1.6 call on a 1.6 host. `plugin:check` warns when a manifest key is newer than the `api_version` a plugin declares. An older host ignores a manifest key it does not know and refuses a bridge call it does not have (`not_allowed`), so a page checks `ws.context.hostVersion` before it uses a newer call.
+3. An added field never changes what an existing one means. A new prop or option is optional, and leaving it out keeps the 1.6 behaviour.
+4. Nothing is removed or renamed without a new major version (2.0). A 1.x plugin is then listed as incompatible, never loaded half-working.
+5. A safety fix may make a check stricter (as 1.2 did for `ws.data` paths). It is listed under the version that made it, with what to change.
+6. A deprecated name keeps working until the next major version. It is listed here, under its version and in this list:
+   - the panel id `panel-incompressible-defaults` (1.4): use `panel-study-settings`.
+
 ## 1.6
 
 Host API 1.6 (`API_VERSION`, and `hostVersion` in a workspace's context), workspace SDK 1.3.0; `magnusim_sdk` stays 1.3.0. A 1.5 plugin loads unchanged.
@@ -110,7 +122,7 @@ Host API 1.3 (`API_VERSION`, and `hostVersion` in a workspace's context), plugin
 
 **Primary colour.** `--mg-primary` stays `#1570ef` (hover `#175cd3`); the app's own primary buttons now use it too.
 
-**Colour.** `useViewer().createRainbowLut()` uses hue 0.667 (was 0.666), the hue the app's own renders use (the kit's `RAINBOW_HUE`).
+**Colour.** The app viewer's `createRainbowLut()` uses hue 0.667 (was 0.666), the hue the app's own renders use (the kit's `RAINBOW_HUE`). It is not part of the published `PluginViewer` (API.md, section 4), which has `render` and `resize` only: a plugin draws the rainbow with the kit's `colormapRgb('rainbow')`.
 
 **Plugin OpenFOAM cases (`ws.compute`).** A workspace writes an OpenFOAM case in its study's folder (`ws.files`, or its own Python through `PluginData`) and the host runs it with OpenFOAM in WSL, on the app's one compute slot (below). Check `context.hostVersion` (1.3 or later); a 1.2 host answers `not_allowed`.
 

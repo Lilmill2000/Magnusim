@@ -1,6 +1,7 @@
 // The {{kind_title}} workspace: a form saved to the study, a call to the plugin's
 // backend and a job that reports progress. `npm run build` writes workspace/main.js;
-// React, the bridge and the UI kit come from the host (vite.config.js).
+// React, the bridge and the UI kit come from the host (vite.config.js). The app's
+// header shows the study's title and Back: the page draws neither.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { connect, type JobEvent, type StudyRecord } from '@magnusim/workspace';
 import { Button, Field, Hint, NumberUnitInput, StatusBlock } from '@magnusim/plugin-ui';
@@ -76,15 +77,18 @@ function App() {
 
   return (
     <main style={{ padding: 'var(--mg-space-4)', display: 'grid', gap: 'var(--mg-space-3)', maxWidth: 420 }}>
-      <h1 data-title style={{ fontSize: 'var(--mg-text-lg)', margin: 0 }}>
-        {study.title}
-      </h1>
-      <Field label="Width" help="The rectangle's width.">
-        <NumberUnitInput label="Width" quantity="length" units={units} valueSi={num(study, 'width')} onCommitSi={(v) => void save({ width: v })} />
-      </Field>
-      <Field label="Height" help="The rectangle's height.">
-        <NumberUnitInput label="Height" quantity="length" units={units} valueSi={num(study, 'height')} onCommitSi={(v) => void save({ height: v })} />
-      </Field>
+      {/* Kit controls take no data attributes: a test finds them by their label, and a
+          wrapper of the page's own carries the hook for the row. */}
+      <div data-field="width">
+        <Field label="Width" help="The rectangle's width.">
+          <NumberUnitInput label="Width" quantity="length" units={units} valueSi={num(study, 'width')} onCommitSi={(v) => void save({ width: v })} />
+        </Field>
+      </div>
+      <div data-field="height">
+        <Field label="Height" help="The rectangle's height.">
+          <NumberUnitInput label="Height" quantity="length" units={units} valueSi={num(study, 'height')} onCommitSi={(v) => void save({ height: v })} />
+        </Field>
+      </div>
       <div>
         <Button variant="primary" disabled={busy} onClick={() => void compute()} attrs={{ 'data-compute': '1' }}>
           {busy ? 'Computing…' : 'Compute area'}

@@ -150,10 +150,14 @@ one of two forms. `npm run test:e2e` and `test:e2e:changed` find both.
   app server, seeded projects, WSL toolchain and lock as the core suite.
   - **One seam.** Its specs, seed module and config import from the core only
     `../../../e2e/support/plugin-suite.js` (`appSuiteConfig`, `NO_WSL`,
-    `NO_HEAVY`, `wslPathExists`, `waitSlotFree`, the two-plates helpers
-    `setup`, `createStudy`, `addAir`, `addBc`, `PYTHON` and
-    `seedElbowProject`); `scripts/__tests__/e2e-suites.test.mjs` fails on any
-    other import from outside the plugin.
+    `NO_HEAVY`, `wslPathExists`, `waitSlotFree`, `computeQueue`,
+    `foamRecords`, `killFoamRelays`, `removeTestWslRoot`, `acquireWslLock`,
+    `startHost`, `e2eTemp`, `NO_GEOMETRY_PROJECT`, `prepareE2eProjectsRoot`,
+    the two-plates helpers `setup`, `createStudy`, `addAir`, `addBc`,
+    `PYTHON` and `seedElbowProject`; `docs/plugins/GUIDE.md`, "Testing", says
+    what each is); `scripts/__tests__/e2e-suites.test.mjs` fails on any
+    other import from outside the plugin, in any file of any bundled plugin's
+    `e2e/` folder (CAD, on its own Playwright, is the one listed exemption).
   - **Its own projects.** `seed` is a module (absolute path) whose default
     export gets the projects root and seeds the suite's projects, after
     `e2e/prepare-projects.js` has seeded the core's

@@ -143,6 +143,26 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     await expect(page.locator(`#plugin-studies-section [data-plugin-study="${bench.id}"]`)).toContainText('Wing section B');
     stage(t0, 'rename from the header');
 
+    // The page saves its own fields while the header's name prompt is open (between
+    // showing the name and Rename): the rename still goes through, with no "Rename
+    // failed", and the page's write stays.
+    await overlay.locator('[data-ws-title]').click();
+    await expect(page.locator('#pm-input')).toHaveValue('Wing section B');
+    const racedRev = await inside.evaluate(async () => {
+      const ws = window.__ws;
+      const now = await ws.study.get();
+      return (await ws.study.update({ span_mm: 950 }, now.rev)).rev;
+    });
+    await page.locator('#pm-input').fill('Wing section C');
+    await page.locator('#pm-confirm').click();
+    await expect(overlay.locator('[data-ws-title]')).toHaveText('Wing section C');
+    await expect(frame.locator('#bench-title')).toHaveText('Wing section C');
+    await expect(page.locator('#modal-confirm')).toBeHidden();
+    const raced = await (await request.get(`${base}/api/plugin-studies/get?project_id=${PROJECT}&plugin=${KEY}&study_id=${bench.id}`)).json();
+    expect([raced.study.title, raced.study.span_mm, raced.study.chord_mm, raced.study.rev]).toEqual(['Wing section C', 950, 120, racedRev + 1]);
+    await expect(page.locator(`#plugin-studies-section [data-plugin-study="${bench.id}"]`)).toContainText('Wing section C');
+    stage(t0, 'rename from the header while the page saved');
+
     // Back: the workbench as it was (same study, header controls back in place).
     await overlay.locator('[data-ws-back]').click();
     await expect(overlay).toBeHidden();
@@ -154,21 +174,21 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     expect(await page.evaluate(() => window.__CFD_W17__?.activeId || null)).toBe(scopeBefore.study);
     // The row's own Rename asks for a name and does not open the workspace.
     await page.locator(`#plugin-studies-section [data-plugin-study="${bench.id}"] [data-plugin-study-act="rename"]`).click();
-    await expect(page.locator('#pm-input')).toHaveValue('Wing section B');
+    await expect(page.locator('#pm-input')).toHaveValue('Wing section C');
     await expect(overlay).toBeHidden();
     await page.locator('#pm-cancel').click();
     await expect(page.locator('#pm-input')).toBeHidden();
     // Browser back reopens it, forward closes it again.
     await page.goBack();
     await expect(overlay).toBeVisible();
-    await expect(frame.locator('#bench-title')).toHaveText('Wing section B');
+    await expect(frame.locator('#bench-title')).toHaveText('Wing section C');
     await page.goForward();
     await expect(overlay).toBeHidden();
     // A deep link, reloaded, opens the workspace with the project.
     await page.goto(`${base}/#/p/${PROJECT}/ws/${KEY}/bench/${bench.id}`);
     await page.reload();
     await expect(overlay).toBeVisible({ timeout: 60_000 });
-    await expect(frame.locator('#bench-title')).toHaveText('Wing section B', { timeout: 60_000 });
+    await expect(frame.locator('#bench-title')).toHaveText('Wing section C', { timeout: 60_000 });
     expect(await page.evaluate(() => window.__CFD_W17__?.activeId || null)).toBe(scopeBefore.study);
     stage(t0, 'back, history, deep link');
 
