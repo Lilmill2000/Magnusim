@@ -1447,4 +1447,66 @@ test.describe('exit sync (host API 1.6)', () => {
     await expect.poll(async () => (await viewport(page)).cells, { timeout: 60_000 }).toBe(shown);
     stage(t1, 'the results closed by a mesh row: the new part loaded');
   });
+
+  test('gate:l3-exits a study row clicked while a mesh row opens its mesh wins, and over the open mesh it leaves the mesh stage @plugins', async ({ page, request }) => {
+    test.setTimeout(300_000);
+    const t1 = Date.now();
+    const pid = await newProject(request, host, 'Study row over the mesh');
+    const scope = await demoStudy(request, host, pid);
+    const caseDir = join(host.projects, pid, 'plugins', 'link-demo', 'studies', scope.sid, 'cases', 'fixture');
+    mkdirSync(caseDir, { recursive: true });
+    cpSync(CAVITY, caseDir, { recursive: true });
+    await openProject(page, host, pid);
+    let frame = await openWs(page, scope);
+    await edit(page, frame, 'v1');
+    await backAndLand(page, pid);
+    const gid = (await linkedOf(request, host, scope)).geometryId;
+    const sim = await studyWithBc(request, host, pid, gid, 1);
+    const { meshId } = await generatedMeshAndRun(request, host, pid, sim.id, 1);
+    await reloadProject(page, pid);
+    const meshRow = page.locator(`#left-tree [data-w20-mesh-item="${meshId}"] > .tree-row`);
+    const studyRow = (id) => page.locator(`#left-tree [data-w17-sim-id="${id}"] > .tree-row`);
+    const shownStudy = () => page.evaluate(() => String(window.__CFD_W17__?.simulation?.id || ''));
+    const inspect = () => page.evaluate(() => window.__CFD_MESH_INSPECT__ === true);
+    const stageNow = async () => (await viewport(page)).stage;
+    // The mesh's activation held until the study row is clicked (no switch then: it is the study shown).
+    const isActivate = (r) => r.method() === 'POST' && /\/api\/mesh$/.test(r.url()) && /"activate"/.test(r.postData() || '');
+    let release = () => {};
+    await page.route('**/api/mesh', async (route) => {
+      if (isActivate(route.request())) await new Promise((r) => (release = r));
+      await route.continue();
+    });
+    const heldClick = async () => {
+      const activating = page.waitForRequest(isActivate, { timeout: 30_000 });
+      await meshRow.dispatchEvent('click');
+      await activating;
+      expect(await shownStudy()).toBe(sim.id);
+      await studyRow(sim.id).dispatchEvent('click');
+      const answered = page.waitForResponse((r) => isActivate(r.request()), { timeout: 30_000 });
+      release();
+      await answered;
+      await page.waitForTimeout(1_500);
+      expect(await inspect(), 'the mesh opened after the study row').toBe(false);
+      expect(await stageNow()).toBe('setup');
+    };
+
+    // From the case's results (no study shown): the mesh row closes them, shows its study, then activates the mesh.
+    frame = await openWs(page, scope);
+    await frame.locator('#open3d').click();
+    await page.waitForFunction(() => window.__CFD_RESULTS_VIEW__ === true, null, { timeout: 120_000 });
+    await heldClick();
+    stage(t1, 'the study row won over a mesh row clicked from the results');
+    // The study's own mesh row, the same way.
+    await heldClick();
+    stage(t1, 'the study row won over its own mesh row');
+    await page.unroute('**/api/mesh');
+    // Over the open mesh: the mesh closes and the stage follows.
+    await meshRow.dispatchEvent('click');
+    await expect.poll(inspect, { timeout: 30_000 }).toBe(true);
+    await expect.poll(stageNow).toBe('mesh');
+    await studyRow(sim.id).dispatchEvent('click');
+    await expect.poll(inspect).toBe(false);
+    await expect.poll(stageNow, { timeout: 10_000 }).toBe('setup');
+    stage(t1, 'the study row over the open mesh left the mesh stage');
+  });
 });

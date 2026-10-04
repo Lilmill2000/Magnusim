@@ -35249,6 +35249,8 @@ async function applyTreeIntent(intent) {
       if (typeof selectMeshLocally === 'function') selectMeshLocally(intent.id);
       if (typeof activateMeshClient === 'function') await activateMeshClient(intent.id);
       if (intent.gen != null && intent.gen !== studySwitchGen) return;
+      // A row clicked meanwhile (the study's own row, no switch) wins over this mesh.
+      if (treeUi.selectedKey !== 'meshid:' + intent.id) return;
       if (typeof isGeneratedMeshReady === 'function' && isGeneratedMeshReady(rec)) {
         if (typeof showMeshPanel === 'function') showMeshPanel();
         if (typeof showMeshInspect === 'function') await showMeshInspect(intent.id);
@@ -35589,6 +35591,8 @@ function applyStudyDropOrder(ids, geometryId) {
             .catch((err) => console.warn('[CFD] study', err));
         } else {
           go();
+          // No switch follows to set the stage: the mesh inspect closed silently above.
+          try { applyWorkbenchStage(); } catch (_) {}
         }
         return;
       }
@@ -35813,8 +35817,11 @@ function applyStudyDropOrder(ids, geometryId) {
           markTreeSelected(selKey);
           selectMeshLocally(mid);
           showMeshPanel();
-          withMeshLoading(mid, () => activateMeshClient(mid).then(() => showMeshInspect(mid)))
-            .catch((err) => console.warn('[CFD] mesh inspect', err));
+          // Another row clicked while the mesh activates (a study row) wins: the mesh opens
+          // only while its row is still the one selected.
+          withMeshLoading(mid, () =>
+            activateMeshClient(mid).then(() => (treeUi.selectedKey === selKey ? showMeshInspect(mid) : null))
+          ).catch((err) => console.warn('[CFD] mesh inspect', err));
           return;
         }
         if (treeUi.openPanel === 'mesh' && treeUi.selectedKey === selKey) {
