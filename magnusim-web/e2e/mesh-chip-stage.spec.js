@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { MESH_CHIP_PROJECT as PID } from './prepare-projects.js';
+import { rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { seedElbowProject } from './prepare-projects.js';
 
 // The viewport's job chip named the running mesh stage by its raw key ("Meshing ... ·
 // prepare_input") while the Mesh panel said "Building the mesh input". The chip names
@@ -8,7 +10,20 @@ import { MESH_CHIP_PROJECT as PID } from './prepare-projects.js';
 // No mesher runs: Generate is answered by the test as a started snappyHexMesh job, and
 // the job's progress events are the test's.
 const JOB = 'job-mesh-chip-e2e';
+// Its own elbow project (it starts a Generate): seeded here and removed after, not on
+// every spec's test server.
+const PID = 'mesh-chip-stage-e2e';
+const PROJECTS = process.env.MAGNUSIM_PROJECTS_ROOT || resolve('e2e/.tmp-projects');
 const q = (path, extra = {}) => `${path}?${new URLSearchParams({ project_id: PID, ...extra })}`;
+
+test.beforeAll(() => {
+  rmSync(join(PROJECTS, PID), { recursive: true, force: true });
+  seedElbowProject(PROJECTS, PID, 'Mesh chip stage');
+});
+
+test.afterAll(() => {
+  rmSync(join(PROJECTS, PID), { recursive: true, force: true });
+});
 
 test('the viewport job chip names the mesh stage as the Mesh panel does, never by its key', async ({ page, request }) => {
   test.setTimeout(120_000);
