@@ -31,6 +31,10 @@ test('gate:h2-sse-chip mesh progress reaches the viewport chip', async ({ page }
     return window.__CFD_PROJECT_READY__ === id && !opening;
   }, PROJECT_A, { timeout: 60_000 });
   await page.evaluate(() => window.__CFD_WATCH_JOB__('job-h2'));
-  await expect(page.locator('#viewport-job-label')).toContainText('gmsh', { timeout: 15_000 });
+  // The chip shows the job ("Meshing" and whose mesh, past the label's default text).
+  // This job names no mesher, so its stage adds nothing: never the raw key "gmsh".
+  await expect(page.locator('#viewport-job-chip')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('#viewport-job-label')).toHaveText(/^Meshing \S/, { timeout: 15_000 });
+  await expect(page.locator('#viewport-job-label')).not.toContainText('gmsh');
   expect(statusPolls).toEqual([]);
 });

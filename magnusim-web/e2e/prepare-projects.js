@@ -35,6 +35,8 @@ export const H7_PROJECT = 'h7-steady-transient-e2e';
 export const H8_PROJECT = 'h8-contract-e2e';
 /** Own elbow project for mesh-form-load.spec.js: it saves its mesh's settings and starts a Generate. */
 export const MESH_FORM_PROJECT = 'mesh-form-load-e2e';
+/** Own elbow project for mesh-chip-stage.spec.js: it starts a Generate the test answers. */
+export const MESH_CHIP_PROJECT = 'mesh-chip-stage-e2e';
 /**
  * Own elbow project for materials-presets.spec.js: its saved Air (no library code,
  * the numbers of older versions) must open unchanged, and it adds a study.
@@ -226,6 +228,7 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
   seedElbowProject(destRoot, H7_PROJECT, 'Steady and transient');
   seedElbowProject(destRoot, H8_PROJECT, 'Analysis contract');
   seedElbowProject(destRoot, MESH_FORM_PROJECT, 'Mesh form load');
+  seedElbowProject(destRoot, MESH_CHIP_PROJECT, 'Mesh chip stage');
   seedElbowProject(destRoot, MATERIALS_PROJECT, 'Fluid presets');
   seedElbowProject(destRoot, MISSING_STUDY_PROJECT, 'Deleted study still listed');
   const missingDir = join(destRoot, MISSING_STUDY_PROJECT);

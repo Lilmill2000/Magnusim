@@ -17127,7 +17127,9 @@ function syncViewportJobChip() {
       meshName
     );
     label = who ? 'Meshing ' + who : 'Meshing';
-    if (jobState.stage) label += ' · ' + jobState.stage;
+    // The stage as the Mesh panel names it; a stage the mesher does not name adds nothing.
+    const stageWords = jobState.stage ? meshStageText() : '';
+    if (stageWords && stageWords !== 'Working') label += ' · ' + stageWords;
     const elapsedMs = meshElapsedMs();
     time = elapsedMs != null ? formatElapsed(elapsedMs) : '0:00';
   } else if (liveRun) {
