@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -31,8 +32,7 @@ from OCP.GProp import GProp_GProps
 from OCP.IMeshTools import IMeshTools_Parameters
 from OCP.Precision import Precision
 from OCP.Prs3d import Prs3d, Prs3d_Drawer
-from OCP.StdPrs import StdPrs_ToolTriangulatedShape
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SOLID
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
@@ -45,6 +45,17 @@ VIS_DEVIATION_ANGLE_DEG = 5.0  # AIS default is 20 deg
 # 8: the viewport's faceId/solidId follow face_visits. Before, a face two solids share
 # got one viewport id, so every later viewport id named another face.
 PREVIEW_VERSION = 8
+# The display budget (LINK speed plan step 4, D14): a part with this many face visits
+# or more is drawn with the AIS interactive defaults, BUDGET_DEFLECTION (0.001) x its
+# diagonal and BUDGET_ANGLE_DEG (20 deg), not 8e-5 and 5 deg, and its box comes from a
+# plain bounding box (then the triangles), not AddOptimal. On the 11,776-face part that
+# is 564 k triangles, not 6.5 M (with 5 deg kept it stays 6.6 M: the angle sets the count
+# there). Smaller parts are drawn exactly as before. cad_preview.json says so with
+# display_budget: true; the mesh input (Body1.stl) of such a part is then built from the
+# shape at CAD quality by the mesh job (prepare_input), never from this display mesh.
+BUDGET_MIN_FACES = 5000
+BUDGET_DEFLECTION = 0.001
+BUDGET_ANGLE_DEG = 20.0
 
 
 def load_step(path: Path):
@@ -76,6 +87,47 @@ def shape_bounds(shape):
     }, box
 
 
+def plain_box(shape):
+    """A quick box around the shape's geometry (``BRepBndLib.Add``), a little larger than
+    the exact one: enough to size the display deflection of a large part. AddOptimal
+    took 98 s on an 11,776-face part."""
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box, False)
+    return box
+
+
+def triangle_bounds(points) -> dict | None:
+    """The box of the display triangles' nodes (they lie on the surface)."""
+    import numpy as np
+
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    if not len(pts):
+        return None
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    return {
+        "xmin": float(lo[0]),
+        "xmax": float(hi[0]),
+        "ymin": float(lo[1]),
+        "ymax": float(hi[1]),
+        "zmin": float(lo[2]),
+        "zmax": float(hi[2]),
+    }
+
+
+def box_from_bounds(bounds: dict):
+    """A Bnd_Box with exactly these bounds (no gap)."""
+    box = Bnd_Box()
+    box.Update(
+        float(bounds["xmin"]), float(bounds["ymin"]), float(bounds["zmin"]),
+        float(bounds["xmax"]), float(bounds["ymax"]), float(bounds["zmax"]),
+    )
+    return box
+
+
+def budget_applies(n_face_visits: int) -> bool:
+    return int(n_face_visits) >= BUDGET_MIN_FACES
+
+
 def shape_center_of_mass(shape):
     """Volume COM in the STEP own axes. Does not rebase world XYZ."""
     props = GProp_GProps()
@@ -90,7 +142,7 @@ def shape_center_of_mass(shape):
     return [float(c.X()), float(c.Y()), float(c.Z())], kind
 
 
-def face_properties(shape):
+def face_properties(shape, *, bbrep: Path | None = None, processes: int | None = None, split=None):
     """Per-face area / centroid / outward normal / body, 1-based ids by ``face_visits``.
 
     Same numbering as the viewport faceId scalars and the cfddesk mesher, so
@@ -99,52 +151,24 @@ def face_properties(shape):
     (``cad.shared_faces``) is inside the part: each of its entries has
     ``shared_with``, the id of the other one, and the BC panel refuses it.
     Lengths are in the STEP's own units (mm for the files we import).
+
+    With ``bbrep`` (this shape as a binary BREP) a large part's table is split over up
+    to 4 processes (``cad.face_table``); ``split`` is one already started. The rows are
+    the serial ones in the same order; any failure computes them here instead.
     """
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.BRepGProp import BRepGProp_Face
-    from OCP.gp import gp_Pnt, gp_Vec
+    from cfddesk.cad import face_table
 
-    from cfddesk.cad import shared_faces
-
-    out = []
-    keys: list[tuple[int, int | None, float, tuple[float, float, float], object]] = []
-    for idx, body, face in face_visits(shape):
-        props = GProp_GProps()
-        BRepGProp.SurfaceProperties_s(face, props)
-        area = float(props.Mass())
-        c = props.CentreOfMass()
-        centroid = [float(c.X()), float(c.Y()), float(c.Z())]
-        keys.append((idx, body, area, (centroid[0], centroid[1], centroid[2]), face))
-        normal = None
-        try:
-            adapt = BRepAdaptor_Surface(face)
-            umin, umax, vmin, vmax = BRepTools.UVBounds_s(face)
-            u = 0.5 * (umin + umax)
-            v = 0.5 * (vmin + vmax)
-            pnt = gp_Pnt()
-            vec = gp_Vec()
-            BRepGProp_Face(face).Normal(u, v, pnt, vec)
-            if vec.Magnitude() > 0:
-                vec.Normalize()
-                normal = [float(vec.X()), float(vec.Y()), float(vec.Z())]
-            stype = str(adapt.GetType()).split("_")[-1]
-        except Exception:
-            stype = "unknown"
-        entry = {
-            "id": idx,
-            "area": area,
-            "centroid": centroid,
-            "normal": normal,
-            "surface_type": stype,
-        }
-        if body is not None:
-            entry["body"] = body
-        out.append(entry)
-    shared = shared_faces.pairs(keys)
-    for e in out:
-        if e["id"] in shared:
-            e["shared_with"] = shared[e["id"]]
-    return out
+    visits = face_visits(shape)
+    rows = None
+    if split is None and bbrep is not None:
+        split = face_table.start(bbrep, len(visits), processes)
+    if split is not None:
+        rows = split.rows()
+        if rows is not None and [r["id"] for r in rows] != [v[0] for v in visits]:
+            rows = None
+    if rows is None:
+        rows = face_table.serial_rows(visits)
+    return face_table.with_shared(rows, visits)
 
 
 def write_faces_into_meta(step: Path, meta_path: Path) -> dict:
@@ -166,17 +190,27 @@ def write_faces_into_meta(step: Path, meta_path: Path) -> dict:
     return meta
 
 
-def mesh_for_display(shape, box):
-    """AIS-equivalent tessellation with visualization-quality Prs3d settings."""
+def mesh_for_display(shape, box, *, budget: bool = False):
+    """AIS-equivalent tessellation with visualization-quality Prs3d settings.
+
+    ``budget`` (a large part, see BUDGET_MIN_FACES): the deflection is BUDGET_DEFLECTION
+    x the box's diagonal and the angle BUDGET_ANGLE_DEG, so the display mesh stays near
+    half a million triangles.
+    """
     BRepTools.Clean_s(shape)
+    coefficient = BUDGET_DEFLECTION if budget else VIS_DEVIATION_COEFFICIENT
+    angle_deg = BUDGET_ANGLE_DEG if budget else VIS_DEVIATION_ANGLE_DEG
     drawer = Prs3d_Drawer()
-    drawer.SetDeviationCoefficient(VIS_DEVIATION_COEFFICIENT)
-    drawer.SetDeviationAngle(VIS_DEVIATION_ANGLE_DEG * math.pi / 180.0)
+    drawer.SetDeviationCoefficient(coefficient)
+    drawer.SetDeviationAngle(angle_deg * math.pi / 180.0)
     lin = float(Prs3d.GetDeflection_s(box, drawer.DeviationCoefficient(), drawer.MaximalChordialDeviation()))
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
     diag = math.sqrt((xmax - xmin) ** 2 + (ymax - ymin) ** 2 + (zmax - zmin) ** 2) or 1.0
-    # Keep circles round on typical part sizes (OCCT default 0.001 is ~20-gon on this model).
-    lin = min(lin, max(diag * 8e-5, 1e-4))
+    if budget:
+        lin = max(diag * BUDGET_DEFLECTION, 1e-4)
+    else:
+        # Keep circles round on typical part sizes (OCCT default 0.001 is ~20-gon on this model).
+        lin = min(lin, max(diag * 8e-5, 1e-4))
     params = IMeshTools_Parameters()
     params.Deflection = lin
     params.Angle = drawer.DeviationAngle()
@@ -189,8 +223,8 @@ def mesh_for_display(shape, box):
     return {
         "linear_deflection": lin,
         "angular_deflection": float(drawer.DeviationAngle()),
-        "deviation_coefficient": VIS_DEVIATION_COEFFICIENT,
-        "deviation_angle_deg": VIS_DEVIATION_ANGLE_DEG,
+        "deviation_coefficient": coefficient,
+        "deviation_angle_deg": angle_deg,
         "status": int(mesher.GetStatusFlags()),
     }
 
@@ -200,53 +234,54 @@ def extract_display_faces(shape):
 
     A face two solids share is drawn once per visit, each copy with its own id and
     body, as the face table and the mesher number it.
-    """
-    verts: list[tuple[float, float, float]] = []
-    normals = []
-    tris = []
-    solid_ids = []
-    face_ids = []
-    for fid, body, face in face_visits(shape):
-        sid = body or 1
-        loc = TopLoc_Location()
-        triangulation = BRep_Tool.Triangulation_s(face, loc)
-        if triangulation is None:
-            continue
-        try:
-            StdPrs_ToolTriangulatedShape.ComputeNormals_s(face, triangulation)
-        except Exception:
-            pass
-        trsf = loc.Transformation()
-        rev = face.Orientation() == TopAbs_REVERSED
-        base = len(verts)
-        has_n = False
-        try:
-            has_n = bool(triangulation.HasNormals())
-        except Exception:
-            has_n = False
-        for i in range(1, triangulation.NbNodes() + 1):
-            pt = triangulation.Node(i)
-            pt.Transform(trsf)
-            verts.append((float(pt.X()), float(pt.Y()), float(pt.Z())))
-            if has_n:
-                nrm = triangulation.Normal(i)
-                if rev:
-                    nrm.Reverse()
-                nx, ny, nz = float(nrm.X()), float(nrm.Y()), float(nrm.Z())
-                nlen = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
-                normals.append((nx / nlen, ny / nlen, nz / nlen))
-            else:
-                normals.append((0.0, 0.0, 1.0))
-        for i in range(1, triangulation.NbTriangles() + 1):
-            t = triangulation.Triangle(i)
-            n1, n2, n3 = t.Get()
-            if rev:
-                n1, n2, n3 = n1, n3, n2
-            tris.append((base + n1 - 1, base + n2 - 1, base + n3 - 1))
-            solid_ids.append(sid)
-            face_ids.append(fid)
-    return verts, normals, tris, solid_ids, face_ids
 
+    Returns numpy arrays ``(points (n,3), normals (n,3), triangles (m,3), solid_ids,
+    face_ids)``, read in bulk (``cad.tri_arrays``): the same values the per-node loop
+    gave (``tests/unit/l4_loops.py``), about ten times faster.
+    """
+    import numpy as np
+
+    from cfddesk.cad.tri_arrays import face_triangulations
+
+    visits = face_visits(shape)
+    per_face = face_triangulations([face for _i, _b, face in visits], normals=True)
+    pts_parts, nrm_parts, tri_parts, sid_parts, fid_parts = [], [], [], [], []
+    base = 0
+    for (fid, body, _face), ft in zip(visits, per_face, strict=True):
+        if ft is None:
+            continue
+        n = len(ft.nodes)
+        pts_parts.append(ft.nodes)
+        if ft.normals is not None:
+            # Poly_Triangulation.Normal(i) is gp_Dir(stored float normal): normalised in
+            # double; Reverse() negates; then the loop normalised once more.
+            raw = ft.normals.astype(np.float64)
+            x, y, z = raw[:, 0], raw[:, 1], raw[:, 2]
+            d = np.sqrt(x * x + y * y + z * z)
+            d = np.where(d > 0, d, 1.0)
+            nx, ny, nz = x / d, y / d, z / d
+            if ft.reversed:
+                nx, ny, nz = -nx, -ny, -nz
+            nlen = np.sqrt(nx * nx + ny * ny + nz * nz)
+            nlen = np.where(nlen > 0, nlen, 1.0)
+            nrm_parts.append(np.stack([nx / nlen, ny / nlen, nz / nlen], axis=1))
+        else:
+            nrm_parts.append(np.tile(np.array([0.0, 0.0, 1.0]), (n, 1)))
+        tri = ft.triangles[:, [0, 2, 1]] if ft.reversed else ft.triangles
+        tri_parts.append(tri + base)
+        sid_parts.append(np.full(len(tri), body or 1, dtype=np.int32))
+        fid_parts.append(np.full(len(tri), fid, dtype=np.int32))
+        base += n
+    if not pts_parts:
+        empty3 = np.zeros((0, 3), dtype=np.float64)
+        return empty3, empty3.copy(), np.zeros((0, 3), dtype=np.int64), np.zeros(0, np.int32), np.zeros(0, np.int32)
+    return (
+        np.concatenate(pts_parts),
+        np.concatenate(nrm_parts),
+        np.concatenate(tri_parts),
+        np.concatenate(sid_parts),
+        np.concatenate(fid_parts),
+    )
 
 def extract_display_edges(shape):
     """Feature edges from the same visualization mesh (PolygonOnTriangulation)."""
@@ -402,12 +437,20 @@ def save_edges_vtp(path: Path, polylines):
 
 
 def save_faces_vtp(path: Path, verts, normals, tris, solid_ids=None, face_ids=None):
+    import numpy as np
+
     cell_scalars = {}
-    if solid_ids and len(solid_ids) == len(tris):
+    if solid_ids is not None and len(solid_ids) and len(solid_ids) == len(tris):
         cell_scalars["solidId"] = solid_ids
-    if face_ids and len(face_ids) == len(tris):
+    if face_ids is not None and len(face_ids) and len(face_ids) == len(tris):
         cell_scalars["faceId"] = face_ids
-    _write_binary_vtp(path, verts, polys=_flat(tris), normals=normals, cell_scalars=cell_scalars or None)
+    if isinstance(tris, np.ndarray):
+        # Triangles only: the same connectivity and offsets _flat makes, without the loop.
+        m = len(tris)
+        polys = (tris.reshape(-1).astype(np.int32), np.arange(3, 3 * m + 1, 3, dtype=np.int32))
+    else:
+        polys = _flat(tris)
+    _write_binary_vtp(path, verts, polys=polys, normals=normals, cell_scalars=cell_scalars or None)
     return len(tris)
 
 
@@ -537,67 +580,197 @@ def export_preview_from_triangles(
     return out
 
 
+def ensure_step_sidecar(step: Path, shape, *, write: bool = True) -> tuple[Path | None, bool]:
+    """The geometry's binary BREP beside its STEP (``source.bbrep``): ``(path, written now)``.
+
+    An existing sidecar at least as new as the STEP is returned as is (mesh imports
+    and IGES/BREP imports have one; ``io.read_step_shape`` reads it). Otherwise, with
+    ``write``, it is written once (speed plan step 2): without triangles, to a temp
+    name, given the STEP's own mtime, then renamed, so the geometry's age (the newer
+    of the two) stays the same and no preview goes stale. Every later read (the next
+    preview, a mesh, the face table's processes) then takes about a second instead of
+    parsing the STEP.
+
+    The preview writes it only for a part with the display budget: a BREP round trip
+    renormalises axis directions (``gp_Dir``) in the last bit, so the shapes read from
+    it are not bit-identical to the STEP's, and a plain import below the budget must
+    mesh exactly as before (the meshing session's condition 1).
+    """
+    from OCP.BinTools import BinTools, BinTools_FormatVersion
+
+    from cfddesk.cad.io import step_sidecar_path
+
+    step = Path(step)
+    side = step_sidecar_path(step)
+    try:
+        if not step.is_file():
+            return (side if side.is_file() else None), False
+        stamp = step.stat().st_mtime_ns
+        if side.is_file() and side.stat().st_mtime_ns >= stamp:
+            return side, False
+        if not write:
+            return None, False
+        tmp = side.with_name(f"{side.stem}.{os.getpid()}.tmp.bbrep")
+        try:
+            BinTools.Write_s(shape, str(tmp), False, False, BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+            os.utime(tmp, ns=(stamp, stamp))
+            os.replace(tmp, side)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return (side, True) if side.is_file() else (None, False)
+    except Exception:
+        return None, False
+
+
+def read_bbrep(path: Path):
+    from OCP.BinTools import BinTools
+    from OCP.TopoDS import TopoDS_Shape
+
+    shape = TopoDS_Shape()
+    BinTools.Read_s(shape, str(path))
+    if shape.IsNull():
+        raise RuntimeError(f"empty shape: {path}")
+    return shape
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+class _Stages:
+    """Seconds per stage of a preview (the rows of the speed plan's table)."""
+
+    def __init__(self, timings: dict | None, on_stage=None):
+        self.timings = timings
+        self.on_stage = on_stage
+
+    def __call__(self, name: str, fn):
+        import time
+
+        t0 = time.perf_counter()
+        out = fn()
+        seconds = round(time.perf_counter() - t0, 3)
+        if self.timings is not None:
+            self.timings[name] = seconds
+        if self.on_stage is not None:
+            self.on_stage(name, seconds)
+        return out
+
+
 def export_preview(
-    step: Path, edges: Path, faces: Path, meta: Path | None = None, shape=None, *, com: bool = True
+    step: Path,
+    edges: Path,
+    faces: Path,
+    meta: Path | None = None,
+    shape=None,
+    *,
+    com: bool = True,
+    bbrep: Path | None = None,
+    timings: dict | None = None,
+    on_stage=None,
+    shape_is_bbrep: bool = True,
 ) -> dict:
     """Write edges/faces VTP + cad_preview.json. ``shape`` may be a cached OCCT shape.
 
     ``com=False`` leaves the centre of mass out (a link job writes it afterwards).
+    ``bbrep`` is the shape as a binary BREP (a link job's ``source.bbrep``); for a STEP
+    it is the sidecar ``ensure_step_sidecar`` writes. A large part's face table is
+    computed from it in other processes while this one meshes (``cad.face_table``).
+    A part of BUDGET_MIN_FACES face visits or more gets the display budget.
+    ``timings`` (a dict) gets the seconds of each stage; ``on_stage(name, seconds)``
+    is called after each. ``shape_is_bbrep=False`` says ``shape`` was not read from
+    ``bbrep``'s bytes (a text BREP): the face table's processes read ``bbrep``, so this
+    process then reads it too, and every table row is the one the processes compute.
     """
+    from cfddesk.cad import face_table
     from cfddesk.cad.io import read_triangle_sidecar
 
+    stage = _Stages(timings, on_stage)
     triangles = read_triangle_sidecar(step)
     if triangles is not None:
         return export_preview_from_triangles(step, edges, faces, meta, *triangles)
     if shape is None:
-        shape = load_step(step)
-    bounds, box = shape_bounds(shape)
-    mesh_info = mesh_for_display(shape, box)
-    n_solids = count_sub(shape, TopAbs_SOLID)
+        shape = stage("read_shape", lambda: load_step(step))
     n_faces = count_sub(shape, TopAbs_FACE)
-    n_edges = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_EDGE, n_edges)
-    verts, normals, tris, solid_ids, face_ids = extract_display_faces(shape)
-    n_tris = save_faces_vtp(faces, verts, normals, tris, solid_ids, face_ids)
-    n_body = max(n_solids, 1)
-    bodies = [f"Body{i}" for i in range(1, n_body + 1)]
-    polylines = extract_display_edges(shape)
-    n_edge_pts = save_edges_vtp(edges, polylines)
-    out = {
-        "preview_version": PREVIEW_VERSION,
-        "step_path": str(step),
-        "edges_vtp": str(edges),
-        "faces_vtp": str(faces),
-        "representation": "step",
-        "display": "occt-prs3d",
-        "tessellated": False,
-        "n_solids": n_solids,
-        "bodies": bodies,
-        "n_faces": n_faces,
-        "n_edges": int(n_edges.Extent()),
-        "n_edge_polylines": len(polylines),
-        "n_edge_points": n_edge_pts,
-        "n_display_tris": n_tris,
-        "bounds": bounds,
-        **mesh_info,
-    }
-    if com:
-        centre, centre_kind = shape_center_of_mass(shape)
-        if centre:
-            out["center_of_mass"] = centre
-            out["center_of_mass_kind"] = centre_kind
+    budget = budget_applies(n_faces)
+    if bbrep is None:
+        bbrep, written = stage("write_bbrep", lambda: ensure_step_sidecar(step, shape, write=budget))
+        shape_is_bbrep = not written
+    # Started before the display mesh, read after the edges. Every way out of here
+    # (a failure, a stage that raises, the face table read or not) stops its processes
+    # and removes their rows folder; a killed process leaves that to the processes
+    # themselves (they exit with it) and to the folder's own clean-up (cad.face_table).
+    split = face_table.start(bbrep, n_faces)
     try:
-        out["faces"] = face_properties(shape)
-        out["faces_length_unit"] = "mm"
-    except Exception:
-        pass
+        if split is not None and not shape_is_bbrep:
+            shape = stage("read_bbrep", lambda: read_bbrep(bbrep))
+        if budget:
+            box = stage("bbox_plain", lambda: plain_box(shape))
+            bounds = None
+        else:
+            bounds, box = stage("bbox", lambda: shape_bounds(shape))
+        mesh_info = stage("display_mesh", lambda: mesh_for_display(shape, box, budget=budget))
+        n_solids = count_sub(shape, TopAbs_SOLID)
+        n_edges = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(shape, TopAbs_EDGE, n_edges)
+        verts, normals, tris, solid_ids, face_ids = stage("triangles", lambda: extract_display_faces(shape))
+        if budget:
+            bounds = stage("bbox_exact", lambda: triangle_bounds(verts)) or dict(
+                zip(("xmin", "ymin", "zmin", "xmax", "ymax", "zmax"), (float(v) for v in box.Get()), strict=True)
+            )
+        n_tris = stage("faces_vtp", lambda: save_faces_vtp(faces, verts, normals, tris, solid_ids, face_ids))
+        n_body = max(n_solids, 1)
+        bodies = [f"Body{i}" for i in range(1, n_body + 1)]
+        polylines = stage("edges", lambda: extract_display_edges(shape))
+        n_edge_pts = save_edges_vtp(edges, polylines)
+        out = {
+            "preview_version": PREVIEW_VERSION,
+            "step_path": str(step),
+            "edges_vtp": str(edges),
+            "faces_vtp": str(faces),
+            "representation": "step",
+            "display": "occt-prs3d",
+            "tessellated": False,
+            "n_solids": n_solids,
+            "bodies": bodies,
+            "n_faces": n_faces,
+            "n_edges": int(n_edges.Extent()),
+            "n_edge_polylines": len(polylines),
+            "n_edge_points": n_edge_pts,
+            "n_display_tris": n_tris,
+            "bounds": bounds,
+            **mesh_info,
+        }
+        if budget:
+            out["display_budget"] = True
+            if bbrep is not None and Path(bbrep).is_file():
+                # The mesh input's freshness test for a plain import (Body1.json, prepare_input).
+                out["shape_sha256"] = _sha256(Path(bbrep))
+        if com:
+            centre, centre_kind = stage("center_of_mass", lambda: shape_center_of_mass(shape))
+            if centre:
+                out["center_of_mass"] = centre
+                out["center_of_mass_kind"] = centre_kind
+        try:
+            out["faces"] = stage("face_table", lambda: face_properties(shape, split=split))
+            out["faces_length_unit"] = "mm"
+        except Exception:
+            pass
+    finally:
+        if split is not None:
+            split.close()
     meta_path = meta if meta is not None else edges.with_name("cad_preview.json")
     compact = len(out.get("faces") or []) > 2000
     meta_path.write_text(
         json.dumps(out, separators=(",", ":")) if compact else json.dumps(out, indent=2), encoding="utf-8"
     )
     return out
-
 
 def write_com_into_meta(step: Path, meta_path: Path) -> dict:
     shape = load_step(step)

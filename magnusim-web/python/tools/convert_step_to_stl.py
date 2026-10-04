@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import struct
 import sys
 from pathlib import Path
@@ -13,11 +14,9 @@ from pathlib import Path
 # Run by the server as a plain script: cfddesk lives one level up.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from OCP.BRep import BRep_Tool
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED
+from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
-from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
 LINEAR_DEFLECTION = 0.5
@@ -33,8 +32,13 @@ def load_step(path: Path):
     return read_step_shape(path)
 
 
-def tessellate_cad_quality(shape):
-    """Same Prs3d deflection the viewport uses, so snappy snaps to the CAD you see."""
+def tessellate_cad_quality(shape, bounds: dict | None = None):
+    """Same Prs3d deflection the viewport uses, so snappy snaps to the CAD you see.
+
+    ``bounds`` (the preview's ``bounds``, which a linked geometry's link/state.json
+    also holds): the box the deflection is sized from. Without, the exact box
+    (``AddOptimal``, as before; it took 98 s on an 11,776-face part).
+    """
     import math
 
     from OCP.Bnd import Bnd_Box
@@ -45,8 +49,13 @@ def tessellate_cad_quality(shape):
     from OCP.Prs3d import Prs3d, Prs3d_Drawer
 
     BRepTools.Clean_s(shape)
-    box = Bnd_Box()
-    BRepBndLib.AddOptimal_s(shape, box)
+    if bounds is not None:
+        from cfddesk.cad.preview import box_from_bounds
+
+        box = box_from_bounds(bounds)
+    else:
+        box = Bnd_Box()
+        BRepBndLib.AddOptimal_s(shape, box)
     drawer = Prs3d_Drawer()
     drawer.SetDeviationCoefficient(CAD_DEVIATION_COEFFICIENT)
     drawer.SetDeviationAngle(CAD_DEVIATION_ANGLE_DEG * math.pi / 180.0)
@@ -66,32 +75,63 @@ def tessellate_cad_quality(shape):
     return lin, float(drawer.DeviationAngle())
 
 
-def collect_mesh(shape):
-    verts = []
-    tris = []
+def has_triangulation(shape) -> bool:
+    """Any face of ``shape`` carries a stored triangulation (a BREP written from a meshed
+    shape, which the link contract accepts). ``AddOptimal`` then measures that
+    triangulation, not the geometry, until the shape is cleaned."""
+    from OCP.BRep import BRep_Tool
+    from OCP.TopLoc import TopLoc_Location
+
     exp = TopExp_Explorer(shape, TopAbs_FACE)
     while exp.More():
-        face = TopoDS.Face_s(exp.Current())
-        loc = TopLoc_Location()
-        triangulation = BRep_Tool.Triangulation_s(face, loc)
-        if triangulation is None:
-            exp.Next()
-            continue
-        trsf = loc.Transformation()
-        base = len(verts)
-        for i in range(1, triangulation.NbNodes() + 1):
-            pt = triangulation.Node(i)
-            pt.Transform(trsf)
-            verts.append((pt.X(), pt.Y(), pt.Z()))
-        rev = face.Orientation() == TopAbs_REVERSED
-        for i in range(1, triangulation.NbTriangles() + 1):
-            t = triangulation.Triangle(i)
-            n1, n2, n3 = t.Get()
-            if rev:
-                n1, n2, n3 = n1, n3, n2
-            tris.append((base + n1 - 1, base + n2 - 1, base + n3 - 1))
+        if BRep_Tool.Triangulation_s(TopoDS.Face_s(exp.Current()), TopLoc_Location()) is not None:
+            return True
         exp.Next()
-    return verts, tris
+    return False
+
+
+def collect_mesh(shape):
+    """Every face visit's triangles: points (n, 3) and 0-based triangles (m, 3), numpy.
+
+    Read in bulk (``cfddesk.cad.tri_arrays``); the same values, in the same order, as
+    the per-node loop it replaced (``tests/unit/l4_loops.py``).
+    """
+    import numpy as np
+
+    from cfddesk.cad.tri_arrays import face_triangulations
+
+    faces = []
+    exp = TopExp_Explorer(shape, TopAbs_FACE)
+    while exp.More():
+        faces.append(TopoDS.Face_s(exp.Current()))
+        exp.Next()
+    pts, tris = [], []
+    base = 0
+    for ft in face_triangulations(faces):
+        if ft is None:
+            continue
+        pts.append(ft.nodes)
+        tris.append((ft.triangles[:, [0, 2, 1]] if ft.reversed else ft.triangles) + base)
+        base += len(ft.nodes)
+    if not pts:
+        return np.zeros((0, 3), dtype=np.float64), np.zeros((0, 3), dtype=np.int64)
+    return np.concatenate(pts), np.concatenate(tris)
+
+
+def mesh_bounds(verts) -> dict:
+    import numpy as np
+
+    v = np.asarray(verts, dtype=np.float64).reshape(-1, 3)
+    lo, hi = v.min(axis=0), v.max(axis=0)
+    return {
+        "xmin": float(lo[0]),
+        "xmax": float(hi[0]),
+        "ymin": float(lo[1]),
+        "ymax": float(hi[1]),
+        "zmin": float(lo[2]),
+        "zmax": float(hi[2]),
+        "nx": len(v),
+    }
 
 
 def tessellate(shape, lin: float, ang: float):
@@ -152,33 +192,114 @@ def write_stl_from_vtp(vtp_path: Path, out: Path, meta_path: Path) -> int:
     return 0
 
 
+_STL_RECORD = [("n", "<f4", 3), ("p0", "<f4", 3), ("p1", "<f4", 3), ("p2", "<f4", 3), ("attr", "<u2")]
+
+
 def write_binary_stl(path: Path, verts, tris, header: bytes = b"mtp1 from Vortex CFD Test.step via OCP"):
+    """Binary STL, numpy: byte for byte what the per-triangle loop wrote.
+
+    The facet normal is the cross product in double, divided by its length, then stored
+    as float32, as before. The length is ``x ** 0.5`` (C ``pow``), as the loop took it:
+    ``sqrt`` differs from it in the last bit for about 1 value in 2000, which can change
+    a float32.
+    """
+    from itertools import repeat
+
+    import numpy as np
+
+    v = np.asarray(verts, dtype=np.float64).reshape(-1, 3)
+    t = np.asarray(tris, dtype=np.int64).reshape(-1, 3)
+    p0, p1, p2 = v[t[:, 0]], v[t[:, 1]], v[t[:, 2]]
+    ux, uy, uz = p1[:, 0] - p0[:, 0], p1[:, 1] - p0[:, 1], p1[:, 2] - p0[:, 2]
+    vx, vy, vz = p2[:, 0] - p0[:, 0], p2[:, 1] - p0[:, 1], p2[:, 2] - p0[:, 2]
+    nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+    sq = nx * nx + ny * ny + nz * nz
+    nlen = np.fromiter(map(float.__pow__, sq.tolist(), repeat(0.5)), dtype=np.float64, count=len(sq))
+    keep = nlen > 0
+    safe = np.where(keep, nlen, 1.0)
+    rec = np.zeros(len(t), dtype=_STL_RECORD)
+    rec["n"] = np.stack([np.where(keep, nx / safe, 0.0), np.where(keep, ny / safe, 0.0), np.where(keep, nz / safe, 0.0)], axis=1)
+    rec["p0"], rec["p1"], rec["p2"] = p0, p1, p2
     hdr = header[:80].ljust(80, b"\0")
-    buf = bytearray()
-    buf.extend(hdr)
-    buf.extend(struct.pack("<I", len(tris)))
-    for i0, i1, i2 in tris:
-        p0, p1, p2 = verts[i0], verts[i1], verts[i2]
-        ux, uy, uz = p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]
-        vx, vy, vz = p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]
-        nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
-        nlen = (nx * nx + ny * ny + nz * nz) ** 0.5
-        if nlen > 0:
-            nx, ny, nz = nx / nlen, ny / nlen, nz / nlen
-        else:
-            nx = ny = nz = 0.0
-        buf.extend(
-            struct.pack(
-                "<12fH",
-                nx, ny, nz,
-                p0[0], p0[1], p0[2],
-                p1[0], p1[1], p1[2],
-                p2[0], p2[1], p2[2],
-                0,
-            )
-        )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(buf)
+    with path.open("wb") as fh:
+        fh.write(hdr)
+        fh.write(struct.pack("<I", len(t)))
+        fh.write(rec.tobytes())
+
+
+def build_mesh_input(
+    step: Path,
+    out: Path,
+    *,
+    bounds: dict | None = None,
+    shape_sha256: str | None = None,
+    display_budget: bool = False,
+) -> dict:
+    """The Hex-dominant mesh input of a linked or display-budgeted geometry (prepare_input).
+
+    ``Body1.stl`` from the shape (``step``: the geometry's source.step, read through its
+    binary sidecar) at CAD quality, never from the display mesh. ``bounds`` sizes the
+    deflection (the preview's bounds, so no AddOptimal; see ``tessellate_cad_quality``).
+    With ``display_budget`` they are the display triangles' box, taken after the preview
+    cleaned and meshed the shape. Otherwise they are the box ``AddOptimal`` took before
+    the preview cleaned it, which for a shape that carries a stored triangulation is that
+    triangulation's box: then they are not used, and the box is taken from the cleaned
+    shape, as the CLI's ``--cad-quality`` does (the same bytes).
+    Written to a temp name and renamed, then ``Body1.json`` the same way, recording
+    ``shape_sha256`` and ``cad_quality: true``: a crash in between leaves a json that
+    does not match, and the next Generate builds again. Returns the meta, with the
+    seconds of each step in ``timings``.
+    """
+    import hashlib
+    import time
+
+    timings: dict[str, float] = {}
+
+    def timed(name: str, fn):
+        t = time.perf_counter()
+        r = fn()
+        timings[name] = round(time.perf_counter() - t, 3)
+        return r
+
+    t0 = time.perf_counter()
+    shape = timed("read_shape", lambda: load_step(step))
+    if bounds is not None and not display_budget and has_triangulation(shape):
+        bounds = None
+    lin, ang = timed("tessellate", lambda: tessellate_cad_quality(shape, bounds))
+    verts, tris = timed("collect", lambda: collect_mesh(shape))
+    if len(tris) < 4:
+        raise RuntimeError(f"the shape gave {len(tris)} triangles")
+    header = f"W16 Body1 from {Path(step).name} via OCP".encode("ascii", "replace")
+    tmp = out.with_name(f"{out.stem}.{os.getpid()}.tmp.stl")
+    try:
+        timed("write_stl", lambda: write_binary_stl(tmp, verts, tris, header=header))
+        digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
+        os.replace(tmp, out)
+    finally:
+        tmp.unlink(missing_ok=True)
+    meta = {
+        "step_path": str(step),
+        "out_stl": str(out),
+        "convert_tool": "OCP/OCCT BRepMesh_IncrementalMesh at CAD quality (mesh job prepare_input)",
+        "linear_deflection": lin,
+        "angular_deflection": ang,
+        "cad_quality": True,
+        "bounds": {**mesh_bounds(verts), "ntri": len(tris)},
+        "header": header.decode("ascii", "replace"),
+        "bodies": ["Body1"],
+        "increment": "W27",
+        "shape_sha256": shape_sha256,
+        "stl_sha256": digest,
+        "prepared_by": "prepare_input",
+        "seconds": round(time.perf_counter() - t0, 3),
+        "timings": timings,
+    }
+    meta_path = out.with_suffix(".json")
+    tmp_meta = meta_path.with_name(f"{meta_path.stem}.{os.getpid()}.tmp.json")
+    tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    os.replace(tmp_meta, meta_path)
+    return meta
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -220,19 +341,7 @@ def main(argv: list[str] | None = None) -> int:
     if len(tris) < 4:
         print("FAIL: too few triangles", file=sys.stderr)
         return 3
-    xs = [v[0] for v in verts]
-    ys = [v[1] for v in verts]
-    zs = [v[2] for v in verts]
-    bounds = {
-        "xmin": min(xs),
-        "xmax": max(xs),
-        "ymin": min(ys),
-        "ymax": max(ys),
-        "zmin": min(zs),
-        "zmax": max(zs),
-        "nx": len(verts),
-        "ntri": len(tris),
-    }
+    bounds = {**mesh_bounds(verts), "ntri": len(tris)}
     print("bounds", bounds)
     header = f"W16 Body1 from {step.name} via OCP".encode("ascii", "replace")
     write_binary_stl(out, verts, tris, header=header)

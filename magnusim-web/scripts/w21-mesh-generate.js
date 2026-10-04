@@ -25,7 +25,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensureBody1Stl, geomFileExists, geometrySidecarPath } from './w16-project-geometry.js';
+import { deferredMeshInput, ensureBody1Stl, geomFileExists, geometrySidecarPath } from './w16-project-geometry.js';
 import { activeGeometryId } from './w16-geometry-scope.js';
 import { PYTHON, pyTool } from './python-env.js';
 import { wslCasePath, wslDistro } from './wsl-env.js';
@@ -148,6 +148,21 @@ function existingFile(p) {
 }
 
 /**
+ * The shape hash when `Body1.json` says its `Body1.stl` is this shape's CAD-quality
+ * input (what `ensureBody1Stl` calls cached), else null. Reads only the small json.
+ * @param {string} jsonPath
+ * @param {string} shapeSha256
+ */
+function currentInputShape(jsonPath, shapeSha256) {
+  try {
+    const meta = JSON.parse(readFileSync(jsonPath, 'utf8'));
+    return meta && meta.cad_quality === true && shapeSha256 && String(meta.shape_sha256 || '') === shapeSha256 ? shapeSha256 : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Resolve the active geometry STEP under geometries/Geometry_*.
  * Body1.stl is optional (STEP import no longer tessellates on the way in).
  */
@@ -224,10 +239,20 @@ export function resolveProjectGeometry(projectId, opts) {
   const geometry_stamp = { file: geomFile, bytes: stepSt.size, mtime_ms: stepSt.mtimeMs };
   let body1_bytes = 0;
   let body1_sha256 = null;
+  // A linked or display-budgeted geometry (LINK 5.9): its Body1.stl, which can be
+  // hundreds of MB, is never read here. The Hex-dominant caller gives Body1.json's shape
+  // hash (null while the mesh job has yet to build the file); for any other caller
+  // (Standard, cfMesh) it is taken from Body1.json the same way.
+  const givenHash = opts && Object.prototype.hasOwnProperty.call(opts, 'body1Sha256');
+  const deferred = !givenHash && partDir ? deferredMeshInput(partDir) : null;
   if (body1_path) {
     const bodySt = statSync(body1_path);
     body1_bytes = bodySt.size;
-    if (bodySt.size >= 100) {
+    if (givenHash) {
+      body1_sha256 = opts.body1Sha256 || null;
+    } else if (deferred) {
+      body1_sha256 = currentInputShape(join(partDir, 'Body1.json'), deferred.shapeSha256);
+    } else if (bodySt.size >= 100) {
       body1_sha256 = createHash('sha256').update(readFileSync(body1_path)).digest('hex');
     }
   }
@@ -1581,7 +1606,14 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
     };
   }
 
-  const geometry = resolveProjectGeometry(projectId, { meshId });
+  // A linked or budgeted geometry: the mesh job builds its input (prepare_input) when
+  // `deferred`; w21 records Body1.json's shape hash, never reading Body1.stl (LINK 5.9).
+  const input = /** @type {{ shape_sha256?: string, cached?: boolean, deferred?: boolean }} */ (stlReady);
+  const inputShape = input.shape_sha256 ? String(input.shape_sha256) : '';
+  const geometry = resolveProjectGeometry(
+    projectId,
+    inputShape ? { meshId, body1Sha256: input.cached ? inputShape : null } : { meshId },
+  );
   if (!geometry.ok) {
     return {
       ok: false,
@@ -1648,6 +1680,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
   ];
   if (simIdSnappy) argv.push('--simulation-id', String(simIdSnappy));
   if (meshId) argv.push('--mesh-id', String(meshId));
+  if (inputShape) argv.push('--input-shape-sha256', inputShape);
   const command = argv.join(' ');
   const started_at = new Date().toISOString();
   const builtFrom = buildStampFields(project_id, meshId, simIdSnappy, generateId);
@@ -1728,6 +1761,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
       body1_path: geometry.body1_path,
       step_sha256: geometry.step_sha256,
       body1_sha256: geometry.body1_sha256,
+      ...(inputShape ? { input_shape_sha256: inputShape, input_deferred: !!input.deferred } : {}),
       geometry_name: geometry.geometry_name,
       source: 'W16_project_STEP_Body1',
     },
@@ -1811,6 +1845,18 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
       feature_level_used: lastResult && lastResult.feature_level != null ? lastResult.feature_level : null,
       walls_level_used: lastResult && lastResult.walls_level != null ? lastResult.walls_level : null,
       snap_used: lastResult && lastResult.snap != null ? lastResult.snap : null,
+      // The input the generator built or found (prepare_input): its hash, from the result.
+      ...(lastResult && lastResult.body1_sha256
+        ? {
+            geometry: {
+              ...baseRunning.geometry,
+              body1_sha256: String(lastResult.body1_sha256),
+              body1_path: lastResult.body1_path || baseRunning.geometry.body1_path,
+              mesh_input_built: !!lastResult.mesh_input_built,
+            },
+            body1_path: lastResult.body1_path || baseRunning.body1_path,
+          }
+        : {}),
       stage: status,
       error:
         status === 'done'

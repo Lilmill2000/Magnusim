@@ -42,6 +42,8 @@ _CFMESH_STAGES = (
     *_COPY_BACK,
 )
 _HEX_STAGES = (
+    # A linked or display-budgeted geometry: the mesh job builds Body1.stl first (LINK 5.9).
+    ("prepare_input", "Building the mesh input"),
     ("load_geometry", "Reading geometry"),
     ("sync_to_wsl", "Copying the case to WSL"),
     ("snappy_pipeline", "Starting the mesh in WSL"),

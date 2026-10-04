@@ -1440,6 +1440,7 @@
         }
       ],
       "stage_labels": {
+        "prepare_input": "Building the mesh input",
         "load_geometry": "Reading geometry",
         "sync_to_wsl": "Copying the case to WSL",
         "snappy_pipeline": "Starting the mesh in WSL",

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -42,6 +43,10 @@ _SNAPPY_SH = _TEMPLATES / "snappy_hexdominant.sh"
 
 PATH_KIND = "snappyHexMesh"
 
+# Test hook (inert unless set; read once): prepare_input waits while this file exists,
+# so a test can see the stage in the mesh panel. e2e/link-mesh-input.spec.js.
+_PREPARE_PAUSE = os.environ.get("MAGNUSIM_TEST_PREPARE_INPUT_PAUSE", "").strip()
+
 
 def _progress(stage: str, **extra) -> None:
     _legacy.progress(stage, **extra)
@@ -59,6 +64,60 @@ def _read_json(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def mesh_input_fresh(body1: Path, shape_sha256: str) -> bool:
+    """``Body1.stl`` is this shape's CAD-quality mesh input (its ``Body1.json`` says so)."""
+    meta = _read_json(body1.with_suffix(".json"))
+    return (
+        body1.is_file()
+        and body1.stat().st_size >= 100
+        and meta.get("cad_quality") is True
+        and bool(shape_sha256)
+        and meta.get("shape_sha256") == shape_sha256
+    )
+
+
+def prepare_input(step: Path, body1: Path, shape_sha256: str) -> dict | None:
+    """The first stage of a linked or display-budgeted geometry's Generate (LINK 5.9).
+
+    The server never builds ``Body1.stl`` for such a geometry (``ensureBody1Stl``
+    answers ``deferred``); this mesh process does, inside the mesh's own slot claim,
+    when the file is missing or was made from another shape (``Body1.json``'s
+    ``shape_sha256``, not the rev, so a names-only update keeps it). Built from the
+    shape at CAD quality, sized by the preview's bounds (``build_mesh_input``, which
+    needs to know whether they are the display budget's triangle box).
+    Returns the new file's meta, or None when it was fresh (no stage is shown).
+    """
+    if mesh_input_fresh(body1, shape_sha256):
+        return None
+    _progress("prepare_input", msg="Building the mesh input")
+    if _PREPARE_PAUSE:
+        import time
+
+        waited = 0.0
+        while Path(_PREPARE_PAUSE).exists() and waited < 600:
+            time.sleep(0.2)
+            waited += 0.2
+    from convert_step_to_stl import build_mesh_input
+
+    preview = _read_json(step.parent / "cad_preview.json")
+    bounds = preview.get("bounds")
+    if not isinstance(bounds, dict) or any(k not in bounds for k in ("xmin", "xmax", "ymin", "ymax", "zmin", "zmax")):
+        bounds = None
+    return build_mesh_input(
+        step, body1, bounds=bounds, shape_sha256=shape_sha256, display_budget=preview.get("display_budget") is True
+    )
 
 
 def render_snappy_script(*, dst: str, win_out: str, generate_id: str) -> str:
@@ -230,6 +289,12 @@ def main() -> int:
     )
     p.add_argument("--simulation-id", default="")
     p.add_argument("--mesh-id", default="")
+    p.add_argument(
+        "--input-shape-sha256",
+        default="",
+        help="A linked or display-budgeted geometry: build Body1.stl here (prepare_input) unless "
+        "Body1.json says it was made from this shape.",
+    )
     args = p.parse_args()
     _legacy.set_legacy_markers(bool(args.legacy_markers))
 
@@ -261,6 +326,23 @@ def main() -> int:
 
     if not step or not geometry_file_exists(step):
         return _result(False, error=f"missing source.step: {step}")
+    mesh_input: dict = {}
+    if args.input_shape_sha256 and body1 is not None:
+        try:
+            built = prepare_input(step, body1, str(args.input_shape_sha256))
+        except Exception as exc:
+            return _result(False, error=f"Couldn't prepare the mesh input: {exc}")
+        if built is not None:
+            mesh_input = {
+                "mesh_input_built": True,
+                "mesh_input_seconds": built.get("seconds"),
+                "mesh_input_ntri": (built.get("bounds") or {}).get("ntri"),
+            }
+        # The input's hash, which the server did not read (LINK 5.9).
+        mesh_input["body1_sha256"] = (
+            (built or {}).get("stl_sha256") or _read_json(body1.with_suffix(".json")).get("stl_sha256") or _sha256_file(body1)
+        )
+        mesh_input["body1_path"] = str(body1)
     if not body1 or not body1.is_file():
         return _result(False, error=f"missing Body1.stl: {body1}")
     if not _SNAPPY_SH.is_file():
@@ -353,6 +435,7 @@ def main() -> int:
                 True,
                 render_only=True,
                 script=str(out),
+                **mesh_input,
                 **{k: params[k] for k in ("block", "feature_level", "walls_level", "snappy_geometry_rev")},
                 snap=params["snap"],
                 add_layers=add_layers,
@@ -446,6 +529,7 @@ def main() -> int:
             generate_id=generate_id,
             wsl_case=wsl_case,
             case_dir=str(case_dir),
+            **mesh_input,
         )
     except Exception as exc:
         return _result(False, error=str(exc), traceback=traceback.format_exc()[-2000:])

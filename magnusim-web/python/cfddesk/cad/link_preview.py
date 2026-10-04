@@ -8,12 +8,16 @@ geometry folder holds: ``source.bbrep`` (BinTools), ``cad_faces.vtp``,
 mass, which is a follow-up) and ``face_names.json`` (the sidecar as sent).
 
 The report is one JSON object: ``{ok: true, n_solids, n_faces, bounds, bodies,
-names_sha256, encoding}`` or ``{ok: false, code, error}`` for a refusal of the input
+names_sha256, encoding, timings}`` or ``{ok: false, code, error}`` for a refusal of the input
 (``unsupported_format``, ``bad_brep``, ``empty``, ``bad_face_names``). The exit code is
 0 in both cases; any other failure exits non-zero, which the job reports as
 ``preview_failed``.
 
 ``--com BBREP`` prints the shape's centre of mass as one JSON line (the follow-up).
+
+Stage events (LINK speed plan step 7): after each stage the process prints
+``LINK_STAGE {"stage": ..., "seconds": ...}``, and the report's ``timings`` holds them
+all: the rows of the speed plan's table, measured in the job's own process.
 """
 
 from __future__ import annotations
@@ -32,8 +36,16 @@ def _write_report(path: Path, doc: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def build(shape_path: Path, fmt: str, names_path: Path | None, shape_sha256: str | None, out: Path) -> dict[str, Any]:
+def _stage_line(name: str, seconds: float) -> None:
+    print("LINK_STAGE " + json.dumps({"stage": name, "seconds": seconds}), flush=True)
+
+
+def build(
+    shape_path: Path, fmt: str, names_path: Path | None, shape_sha256: str | None, out: Path, *, on_stage=None
+) -> dict[str, Any]:
     """Write the geometry files into ``out``; the report (raises LinkInputError on a refusal)."""
+    import time
+
     from OCP.BinTools import BinTools
 
     from cfddesk.cad.link_input import (
@@ -46,31 +58,52 @@ def build(shape_path: Path, fmt: str, names_path: Path | None, shape_sha256: str
     )
     from cfddesk.cad.preview import export_preview
 
-    read = read_link_shape(shape_path, fmt)
-    visits = check_link_shape(read.shape)
+    timings: dict[str, float] = {}
+
+    def stage(name: str, fn):
+        t0 = time.perf_counter()
+        r = fn()
+        timings[name] = round(time.perf_counter() - t0, 3)
+        if on_stage is not None:
+            on_stage(name, timings[name])
+        return r
+
+    read = stage("read_shape", lambda: read_link_shape(shape_path, fmt))
+    visits = stage("check_shape", lambda: check_link_shape(read.shape))
     n_solids = len({body for _index, body, _face in visits if body is not None})
     names_doc = None
     summary: dict[str, Any] = {"named": 0}
     if names_path is not None:
-        names_doc = read_face_names(names_path)
-        summary = check_face_names(names_doc, visits, n_solids, shape_sha256)
+        names_doc = stage("read_names", lambda: read_face_names(names_path))
+        summary = stage("check_names", lambda: check_face_names(names_doc, visits, n_solids, shape_sha256))
     out.mkdir(parents=True, exist_ok=True)
     bbrep = out / "source.bbrep"
     if read.encoding == "binary":
         # The bytes the plugin sent: BinTools read them, so the host reads them too.
-        shutil.copyfile(shape_path, bbrep)
-    elif not BinTools.Write_s(read.shape, str(bbrep)):
+        stage("store_bbrep", lambda: shutil.copyfile(shape_path, bbrep))
+    elif not stage("store_bbrep", lambda: BinTools.Write_s(read.shape, str(bbrep))):
         raise LinkInputError("bad_brep", "The shape could not be stored as a binary BREP.")
     meta_path = out / "cad_preview.json"
     meta = export_preview(
-        out / "source.step", out / "cad_edges.vtp", out / "cad_faces.vtp", meta_path, shape=read.shape, com=False
+        out / "source.step",
+        out / "cad_edges.vtp",
+        out / "cad_faces.vtp",
+        meta_path,
+        shape=read.shape,
+        com=False,
+        bbrep=bbrep,
+        # A text BREP's shape is not read from source.bbrep's bytes; the face table's
+        # processes read those, so the preview does too before it splits.
+        shape_is_bbrep=read.encoding == "binary",
+        timings=timings,
+        on_stage=on_stage,
     )
     # The files move into the geometry folder: name them as they will be there.
     meta["step_path"] = "source.step"
     meta["edges_vtp"] = "cad_edges.vtp"
     meta["faces_vtp"] = "cad_faces.vtp"
     bodies = _name_faces(meta, names_doc, n_solids)
-    meta_path.write_text(json.dumps(meta, separators=(",", ":")), encoding="utf-8")
+    stage("write_meta", lambda: meta_path.write_text(json.dumps(meta, separators=(",", ":")), encoding="utf-8"))
     if names_path is not None:
         shutil.copyfile(names_path, out / "face_names.json")
     return {
@@ -82,6 +115,9 @@ def build(shape_path: Path, fmt: str, names_path: Path | None, shape_sha256: str
         "bodies": bodies,
         "names_sha256": canonical_names_sha256(names_doc) if names_doc is not None else None,
         "named": int(summary.get("named") or 0),
+        "display_budget": bool(meta.get("display_budget")),
+        "n_display_tris": meta.get("n_display_tris"),
+        "timings": timings,
     }
 
 
@@ -144,14 +180,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--com", type=Path, default=None, help="print the centre of mass of this binary BREP")
     args = ap.parse_args(argv)
     if args.com is not None:
-        print("LINK_COM " + json.dumps(centre_of_mass(args.com)), flush=True)
+        import time
+
+        t0 = time.perf_counter()
+        doc = centre_of_mass(args.com)
+        doc["seconds"] = round(time.perf_counter() - t0, 3)
+        print("LINK_COM " + json.dumps(doc), flush=True)
         return 0
     if args.shape is None or args.out is None or args.report is None:
         ap.error("--shape, --out and --report are required")
     from cfddesk.cad.link_input import LinkInputError
 
     try:
-        report = build(args.shape, args.format, args.names, args.shape_sha256, args.out)
+        report = build(args.shape, args.format, args.names, args.shape_sha256, args.out, on_stage=_stage_line)
     except LinkInputError as exc:
         report = {"ok": False, "code": exc.code, "error": exc.message}
     _write_report(args.report, report)

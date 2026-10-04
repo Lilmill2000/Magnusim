@@ -1,0 +1,24 @@
+{
+ "calibration": 1.536,
+ "faces": 10000,
+ "stages": {
+  "follow_up.center_of_mass": 1.624,
+  "follow_up.thumbnail": 1.633,
+  "prepare_input": 1.711,
+  "preview.bbox_exact": 0.002,
+  "preview.bbox_plain": 0.03,
+  "preview.check_names": 0.007,
+  "preview.check_shape": 0.106,
+  "preview.display_mesh": 1.348,
+  "preview.edges": 0.388,
+  "preview.face_table": 0.514,
+  "preview.faces_vtp": 0.003,
+  "preview.process_start_and_rest": 1.503,
+  "preview.read_names": 0.009,
+  "preview.read_shape": 0.099,
+  "preview.store_bbrep": 0.003,
+  "preview.total": 4.472,
+  "preview.triangles": 0.433,
+  "preview.write_meta": 0.027
+ }
+}

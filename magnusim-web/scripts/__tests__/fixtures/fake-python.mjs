@@ -3,7 +3,9 @@
 // `--import=<this file>`, so `node <tool>.py args...` runs this module first, and it
 // exits before node would read the .py file.
 //   generate_*.py      waits while $FAKE_PY_HOLD exists, then writes a small polyMesh and
-//                      w21-counts.json into --case-dir and exits 0 (a done mesh)
+//                      w21-counts.json into --case-dir and exits 0 (a done mesh); with
+//                      --input-shape-sha256 its result reports the input it built
+//                      (body1_sha256 'f' x 64, mesh_input_built), as prepare_input does
 //   convert_step_to_stl.py  writes --out (a 120-byte STL) and exits 0
 //   prepare_run.py     prints {"ok":false,"error":"fake prepare_run"} and exits 1
 //   anything else      exits 3
@@ -30,7 +32,8 @@ async function main() {
     const counts = { n_cells: 8, n_points: 27, n_faces: 36, generate_id: arg('--generate-id'), source: 'fake' };
     writeFileSync(join(caseDir, 'w21-counts.json'), JSON.stringify(counts));
     writeFileSync(join(caseDir, 'log.standard_generate.txt'), 'MESH_SCRIPT_OK\n');
-    writeSync(1, `CFMESH_RESULT ${JSON.stringify({ ok: true, ...counts })}\n`);
+    const built = args.includes('--input-shape-sha256') ? { body1_sha256: 'f'.repeat(64), mesh_input_built: true } : {};
+    writeSync(1, `CFMESH_RESULT ${JSON.stringify({ ok: true, ...counts, ...built })}\n`);
     return 0;
   }
   if (tool === 'convert_step_to_stl.py') {

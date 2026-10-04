@@ -1103,6 +1103,12 @@ async function runPreviewOf(/** @type {any} */ rec, /** @type {LiveJob} */ live)
       error: ran.timedOut ? 'The app could not mesh the shape in 15 minutes.' : `The app could not mesh the shape.${tail ? ' ' + tail.slice(0, 300) : ''}`,
     };
   }
+  // The preview's stage events (LINK_STAGE lines; the report's timings): kept on the
+  // record and logged, one row per term of the speed plan's table.
+  if (report.timings && typeof report.timings === 'object') {
+    updateLinkRecord(rec.id, { preview_timings: report.timings, display_budget: !!report.display_budget });
+    console.log(`[CFD link] ${rec.id}: preview stages ${JSON.stringify(report.timings)}`);
+  }
   return { ok: true, report };
 }
 
@@ -1871,7 +1877,22 @@ async function runFollowUps(/** @type {any} */ rec, /** @type {LiveJob} */ live,
     if (!st) return;
     await call('project.upsert_geometry', { project_id: rec.project_id, record: geometryRecord(rec, dir, st, id.source || null) }).catch(() => {});
   };
-  await Promise.all([com(), thumb(), projectJson()].map((p) => p.catch((e) => console.warn(`[CFD link] ${rec.id}: a follow-up failed`, e))));
+  /** @type {Record<string, number>} */
+  const took = {};
+  const timed = (/** @type {string} */ name, /** @type {() => Promise<void>} */ fn) => async () => {
+    const t0 = Date.now();
+    try {
+      await fn();
+    } finally {
+      took[name] = (Date.now() - t0) / 1000;
+    }
+  };
+  await Promise.all(
+    [timed('center_of_mass', com)(), timed('thumbnail', thumb)(), timed('project_json', projectJson)()].map((p) =>
+      p.catch((e) => console.warn(`[CFD link] ${rec.id}: a follow-up failed`, e)),
+    ),
+  );
+  updateLinkRecord(rec.id, { follow_timings: took });
 }
 
 // ---- removal ----------------------------------------------------------------------------

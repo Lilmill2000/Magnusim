@@ -1290,10 +1290,63 @@ function stlNeedsCadRefresh(outStl) {
   return false;
 }
 
+/** @type {Map<string, { mtimeMs: number, size: number, doc: any }>} */
+const previewBudgetSeen = new Map();
+
+/** cad_preview.json's display_budget and shape_sha256, read again only when the file changed. */
+function previewBudgetAt(metaPath) {
+  try {
+    const st = statSync(metaPath);
+    const hit = previewBudgetSeen.get(metaPath);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.doc;
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+    const doc = { display_budget: meta && meta.display_budget === true, shape_sha256: (meta && meta.shape_sha256) || '' };
+    previewBudgetSeen.set(metaPath, { mtimeMs: st.mtimeMs, size: st.size, doc });
+    return doc;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A geometry whose mesh input the mesh job builds (LINK proposal 5.9, L4): a linked
+ * geometry (it has link/state.json), or a plain import whose preview has the display
+ * budget (its VTP is not the meshing quality). Returns the shape's hash, which
+ * `Body1.json` must record for the file to be current: link/state.json's
+ * `shape_sha256`, or the one the budgeted preview recorded. Null for a plain import
+ * without the budget, which keeps today's synchronous path.
+ * @param {string} dir the geometry folder
+ * @returns {{ linked: boolean, shapeSha256: string } | null}
+ */
+export function deferredMeshInput(dir) {
+  if (!dir) return null;
+  if (isLinkedGeometryDir(dir)) {
+    let st;
+    try {
+      st = JSON.parse(readFileSync(join(dir, 'link', 'state.json'), 'utf8').replace(/^\ufeff/, ''));
+    } catch {
+      st = null;
+    }
+    const sha = st && st.shape_sha256 ? String(st.shape_sha256) : `rev-${(st && st.rev) || 0}`;
+    return { linked: true, shapeSha256: sha };
+  }
+  const budget = previewBudgetAt(join(dir, 'cad_preview.json'));
+  if (budget && budget.display_budget) {
+    return { linked: false, shapeSha256: budget.shape_sha256 || `mtime-${Math.round(geomMtimeMs(join(dir, 'source.step')))}` };
+  }
+  return null;
+}
+
 /**
  * The Hex-dominant mesh input (`Body1.stl`) of a geometry: `opts.geometryId`, the mesh's
  * own geometry (LINK proposal 5.9), else the one shown. Only the shown geometry's record
  * in project.json names the file.
+ *
+ * For a linked or display-budgeted geometry (`deferredMeshInput`) it never converts,
+ * never spawns and never reads `Body1.stl`: `{ok, deferred: true, shape_sha256}` when
+ * `Body1.json` is missing, lacks `cad_quality: true` or names another shape, and the
+ * mesh job builds the file in its first stage (`generate_snappy.py` prepare_input);
+ * `{ok, cached: true, shape_sha256}` when it is current.
  */
 export function ensureBody1Stl(projectId, opts) {
   const id = projectId || projectIdOrActive('', readActiveId);
@@ -1306,6 +1359,24 @@ export function ensureBody1Stl(projectId, opts) {
   const aid = wanted || activeGeometryId(proj);
   const shown = !wanted || wanted === String(activeGeometryId(proj) || (proj.geometry && proj.geometry.id) || '');
   const outStl = join(partDirFor(id, aid || (proj.geometry && proj.geometry.id)), 'Body1.stl');
+  const deferred = deferredMeshInput(dirname(outStl));
+  if (deferred) {
+    let meta;
+    try {
+      meta = JSON.parse(readFileSync(outStl.replace(/\.stl$/i, '.json'), 'utf8'));
+    } catch {
+      meta = null;
+    }
+    const fresh = !!(meta && meta.cad_quality === true && meta.shape_sha256 && String(meta.shape_sha256) === deferred.shapeSha256 && existsSync(outStl));
+    return {
+      ok: true,
+      path: outStl,
+      ...(fresh ? { cached: true, cad_quality: true } : { deferred: true }),
+      shape_sha256: deferred.shapeSha256,
+      linked: deferred.linked,
+      project_id: id,
+    };
+  }
   const force = !!(opts && opts.force);
   if (!force && existsSync(outStl) && statSync(outStl).size >= 100 && !stlNeedsCadRefresh(outStl)) {
     if (shown && proj.geometry && !proj.geometry.stl_path) {

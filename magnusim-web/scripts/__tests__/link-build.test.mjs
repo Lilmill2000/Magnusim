@@ -9,10 +9,16 @@
 //     its reason in the notice);
 //   - Start refuses on an out-of-date mesh, a stopped run too; a run's built_from is set at
 //     Start only;
-//   - a Hex-dominant generate builds the mesh input of the mesh's own geometry.
+//   - a Hex-dominant generate builds the mesh input of the mesh's own geometry: from L4
+//     (gate:l4-mesh-input, LINK 5.9) the server builds none for a linked or display-budgeted
+//     geometry and never reads its Body1.stl; it passes the shape's hash to the generator
+//     (prepare_input). A plain import without the budget keeps today's synchronous build.
+//     A Standard or cfMesh generate on such a geometry never reads its Body1.stl either.
 import { after, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -353,23 +359,133 @@ describe('Start', () => {
   });
 });
 
+const flagOf = (argv) => {
+  const i = argv.indexOf('--input-shape-sha256');
+  return i >= 0 ? argv[i + 1] : null;
+};
+
 describe('the mesh input', () => {
-  it("a Hex-dominant generate builds Body1.stl of the mesh's own geometry, not the shown one's", async () => {
+  it("a Hex-dominant generate defers the mesh input of the mesh's own linked geometry to the mesh job", async () => {
     const p = linkedProject({ rev: 2, engine: 'hex' });
     const out = generate(p);
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
-    await meshEnds(p);
-    assert.equal(existsSync(join(p.demo.dir, 'Body1.stl')), true);
+    // The server converted nothing: the stand-in convert would have written Body1.stl.
+    assert.equal(existsSync(join(p.demo.dir, 'Body1.stl')), false);
+    // The generator builds it, from Demo 1's shape (link/state.json's hash).
+    assert.equal(flagOf(out.bodyExtra.argv), 'a'.repeat(64));
+    const g = out.bodyExtra.geometry;
+    assert.deepEqual([g.input_shape_sha256, g.input_deferred, g.body1_sha256], ['a'.repeat(64), true, null]);
+    // The finished record takes the input's hash from the generator's result.
+    const ended = await meshEnds(p);
+    assert.deepEqual([ended.geometry.body1_sha256, ended.geometry.mesh_input_built], ['f'.repeat(64), true]);
     assert.equal(existsSync(join(p.plate.dir, 'Body1.stl')), false);
-    // Built from that geometry's own faces.
-    assert.equal(JSON.parse(readFileSync(join(p.demo.dir, 'Body1.json'), 'utf8')).from, join(p.demo.dir, 'cad_faces.vtp'));
     // The shown geometry's record does not name another geometry's file.
     const proj = JSON.parse(readFileSync(join(p.dir, 'project.json'), 'utf8'));
     assert.equal(proj.geometry.stl_path, undefined);
+    // A current input (Body1.json names this shape): not read; the record takes the shape hash.
+    writeFileSync(join(p.demo.dir, 'Body1.stl'), Buffer.alloc(4096, 9));
+    writeFileSync(join(p.demo.dir, 'Body1.json'), JSON.stringify({ cad_quality: true, shape_sha256: 'a'.repeat(64) }));
+    const cur = generate(p);
+    assert.equal(cur.ok, true, JSON.stringify(cur.bodyExtra));
+    assert.deepEqual([cur.bodyExtra.geometry.body1_sha256, cur.bodyExtra.geometry.input_deferred, flagOf(cur.bodyExtra.argv)], ['a'.repeat(64), false, 'a'.repeat(64)]);
+    await meshEnds(p);
+    assert.deepEqual(w16.ensureBody1Stl(p.pid, { geometryId: p.demo.id }), {
+      ok: true,
+      path: join(p.demo.dir, 'Body1.stl'),
+      cached: true,
+      cad_quality: true,
+      shape_sha256: 'a'.repeat(64),
+      linked: true,
+      project_id: p.pid,
+    });
+    // Another shape (an update): stale, deferred again; the file is not touched.
+    setRev(p, 3);
+    const stale = w16.ensureBody1Stl(p.pid, { geometryId: p.demo.id });
+    assert.deepEqual([stale.deferred, stale.shape_sha256], [true, 'b'.repeat(64)]);
+    assert.deepEqual(readFileSync(join(p.demo.dir, 'Body1.stl')), Buffer.alloc(4096, 9));
     // And by itself: a named geometry with no shape of its own never takes the shown one's.
     rmSync(join(p.demo.dir, 'source.bbrep'));
     rmSync(join(p.demo.dir, 'Body1.stl'));
     assert.equal(w16.ensureBody1Stl(p.pid, { geometryId: p.demo.id }).ok, false);
     assert.equal(existsSync(join(p.demo.dir, 'Body1.stl')), false);
+  });
+
+  it('a plain import with the display budget defers too; one without keeps the synchronous build from its faces', async () => {
+    const p = linkedProject({ rev: 2, engine: 'hex', meshOnPlate: true });
+    // Demo 1 shown, so the plate's record in project.json is not touched (no worker here).
+    const proj = JSON.parse(readFileSync(join(p.dir, 'project.json'), 'utf8'));
+    writeFileSync(join(p.dir, 'project.json'), JSON.stringify({ ...proj, active_geometry_id: p.demo.id, geometry: proj.geometries[1] }));
+    writeFileSync(join(p.plate.dir, 'cad_preview.json'), JSON.stringify({ display_budget: true, shape_sha256: 'c'.repeat(64), bounds: {} }));
+    const out = generate(p);
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal(existsSync(join(p.plate.dir, 'Body1.stl')), false);
+    assert.equal(flagOf(out.bodyExtra.argv), 'c'.repeat(64));
+    assert.equal(out.bodyExtra.geometry.input_deferred, true);
+    await meshEnds(p);
+    // No budget: today's path, the stand-in convert from the faces VTP, no flag.
+    writeFileSync(join(p.plate.dir, 'cad_preview.json'), JSON.stringify({ bounds: {} }));
+    const plain = generate(p);
+    assert.equal(plain.ok, true, JSON.stringify(plain.bodyExtra));
+    assert.equal(JSON.parse(readFileSync(join(p.plate.dir, 'Body1.json'), 'utf8')).from, join(p.plate.dir, 'cad_faces.vtp'));
+    assert.equal(flagOf(plain.bodyExtra.argv), null);
+    assert.equal('input_shape_sha256' in plain.bodyExtra.geometry, false);
+    await meshEnds(p);
+  });
+
+  it('a Standard or cfMesh generate never reads the Body1.stl of a linked or budgeted geometry; a plain import is hashed as before', async () => {
+    /** Body1.stl reads (fs.readFileSync, the one w21 hashes the file with) while `fn` runs. */
+    const readsOf = (fn) => {
+      const reads = [];
+      const orig = fs.readFileSync;
+      fs.readFileSync = function (f, ...rest) {
+        if (/Body1\.stl$/i.test(String(f))) reads.push(String(f));
+        return orig.call(this, f, ...rest);
+      };
+      syncBuiltinESMExports();
+      try {
+        return { out: fn(), reads };
+      } finally {
+        fs.readFileSync = orig;
+        syncBuiltinESMExports();
+      }
+    };
+    const recordHash = (p) => meshRec(p).live_mesh_result.geometry.body1_sha256;
+    const body = Buffer.alloc(1 << 20, 5);
+    for (const engine of ['standard', 'cfmesh']) {
+      const settings = { advanced: { mesh_engine: engine } };
+      // Linked: a current CAD-quality input (prepare_input left it; 325 MB on the 113 MB part).
+      const p = linkedProject({ rev: 2 });
+      writeFileSync(join(p.demo.dir, 'Body1.stl'), body);
+      writeFileSync(join(p.demo.dir, 'Body1.json'), JSON.stringify({ cad_quality: true, shape_sha256: 'a'.repeat(64) }));
+      let r = readsOf(() => generate(p, settings));
+      assert.equal(r.out.ok, true, JSON.stringify(r.out.bodyExtra));
+      assert.deepEqual(r.reads, [], `${engine}: read ${r.reads}`);
+      assert.equal(recordHash(p), 'a'.repeat(64));
+      await meshEnds(p);
+      // Another shape: still not read; the record names no input.
+      setRev(p, 3);
+      r = readsOf(() => generate(p, settings));
+      assert.equal(r.out.ok, true, JSON.stringify(r.out.bodyExtra));
+      assert.deepEqual(r.reads, [], `${engine}: read ${r.reads}`);
+      assert.equal(recordHash(p), null);
+      await meshEnds(p);
+      // A plain import with the display budget: not read either.
+      const q = linkedProject({ rev: 2, meshOnPlate: true });
+      writeFileSync(join(q.plate.dir, 'cad_preview.json'), JSON.stringify({ display_budget: true, shape_sha256: 'c'.repeat(64), bounds: {} }));
+      writeFileSync(join(q.plate.dir, 'Body1.stl'), body);
+      writeFileSync(join(q.plate.dir, 'Body1.json'), JSON.stringify({ cad_quality: true, shape_sha256: 'c'.repeat(64) }));
+      r = readsOf(() => generate(q, settings));
+      assert.equal(r.out.ok, true, JSON.stringify(r.out.bodyExtra));
+      assert.deepEqual(r.reads, [], `${engine}: read ${r.reads}`);
+      assert.equal(recordHash(q), 'c'.repeat(64));
+      await meshEnds(q);
+      // Without the budget: today's path, the file's own hash.
+      writeFileSync(join(q.plate.dir, 'cad_preview.json'), JSON.stringify({ bounds: {} }));
+      r = readsOf(() => generate(q, settings));
+      assert.equal(r.out.ok, true, JSON.stringify(r.out.bodyExtra));
+      assert.equal(r.reads.length, 1);
+      assert.equal(recordHash(q), createHash('sha256').update(body).digest('hex'));
+      await meshEnds(q);
+    }
   });
 });
