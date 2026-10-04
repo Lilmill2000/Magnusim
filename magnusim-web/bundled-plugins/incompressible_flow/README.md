@@ -68,6 +68,6 @@ own `ui/` folder and type-only host types.
 Its browser tests (real meshes and solves in WSL) are its own suite in `e2e/`,
 run on the core's Playwright: `npm run test:e2e -- --suite incompressible_flow`,
 or one spec with `npm run test:e2e -- bundled-plugins/incompressible_flow/e2e/<spec>`.
-A change here also runs the core's `h5-plugins` and `h8-contract` (the plugin host
-and the analysis contract, including what the app does when this plugin is
-missing); every core change runs this suite too (`docs/TESTING.md`).
+A change here also runs the core specs that check how the core meets its bundled
+plugins, including what the app does when this plugin is missing; every core
+change runs this suite too. `docs/TESTING.md` lists both.

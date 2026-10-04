@@ -19,6 +19,8 @@ sys.path.insert(0, str(TOOLS))
 
 from registry_dump import DUMP_KINDS, dump_registry, main  # noqa: E402
 
+from tests.unit.bundled_manifests import default_on_keys  # noqa: E402
+
 EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"}
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
 EXPECTED_FILTER_KEYS = {
@@ -118,9 +120,11 @@ def test_builtins_only_dump_ignores_installed_plugins(monkeypatch: pytest.Monkey
     builtins = dump_registry(builtins_only=True)
     assert "example_extra_mesher" not in {row["key"] for row in builtins["mesher"]}
     assert "laminar_steady" not in {row["key"] for row in builtins["analysis"]}
-    # What ships: the core plus the bundled plugins, never a user plugin.
-    assert [p["key"] for p in builtins["plugins"]] == ["incompressible_flow"]
-    assert {row["plugin"] for kind in DUMP_KINDS for row in builtins[kind]} <= {"builtin", "incompressible_flow"}
+    # What ships: the core plus the bundled plugins a fresh install turns on (every one
+    # whose manifest does not set default_enabled = false), never a user plugin.
+    shipped = default_on_keys()
+    assert sorted(p["key"] for p in builtins["plugins"]) == shipped
+    assert {row["plugin"] for kind in DUMP_KINDS for row in builtins[kind]} <= {"builtin", *shipped}
     monkeypatch.delenv("MAGNUSIM_PLUGINS_DIR")
     assert json.loads(json.dumps(builtins)) == json.loads(json.dumps(dump_registry(builtins_only=True)))
 

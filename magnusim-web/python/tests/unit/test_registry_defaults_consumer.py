@@ -83,7 +83,10 @@ def test_node_prove_registry_defaults_smoke():
     assert EXPECTED_MESHER_KEYS <= set(data.get("mesher_keys") or [])
 
 
-def test_registry_dump_check_still_green():
+def test_registry_dump_check_still_green(monkeypatch: pytest.MonkeyPatch):
+    # The committed golden is what the app's own bundled folder registers; a run of
+    # the core without its optional plugins points MAGNUSIM_BUNDLED_DIR elsewhere.
+    monkeypatch.delenv("MAGNUSIM_BUNDLED_DIR", raising=False)
     script = TOOLS / "registry_dump.py"
     proc = subprocess.run(
         [sys.executable, str(script), "--check", "--committed", str(COMMITTED_REGISTRY)],

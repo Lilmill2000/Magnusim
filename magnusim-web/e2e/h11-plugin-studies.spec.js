@@ -29,6 +29,8 @@ async function openProject(page, pid) {
 }
 
 const section = (page) => page.locator('#plugin-studies-section');
+// STUDIES "+ New <kind>" of this plugin's kinds only (other plugins that are on add their own).
+const newButtons = (page) => section(page).locator(`[data-plugin-study-new^="${PLUGIN}:"]`);
 const studyRow = (page, title) => section(page).locator('[data-plugin-study]', { has: page.locator('.tl', { hasText: title }) });
 
 async function promptAnswer(page, text) {
@@ -125,6 +127,10 @@ test('gate:h11-stale-rev a rename from a stale tab is refused and says why @plug
 test('gate:h11-disabled-study-preserved a study whose plugin is off stays greyed and unchanged @plugins', async ({ page, request }) => {
   test.setTimeout(180_000);
   const st = await createViaApi(request, FIXTURE, 'Kept study');
+  // On, its kind has its "+ New" (counted the same way below, once it is off).
+  await openProject(page, FIXTURE);
+  await expect(newButtons(page)).toHaveCount(1);
+  await page.goto('about:blank');
   const folder = join(PROJECTS_ROOT, FIXTURE, 'plugins', PLUGIN);
   const before = folderHash(folder);
   try {
@@ -136,7 +142,7 @@ test('gate:h11-disabled-study-preserved a study whose plugin is off stays greyed
     await expect(row).toHaveClass(/is-unavailable/);
     await expect(row).toContainText('Requires the Study demo plugin');
     await expect(row.getByRole('button', { name: 'Rename Kept study' })).toHaveCount(0);
-    await expect(section(page).getByRole('button', { name: /\+ New/ })).toHaveCount(0);
+    await expect(newButtons(page)).toHaveCount(0);
     // The core's own tree is untouched beside it.
     await expect(page.locator('#simulations-section')).toBeVisible();
     await row.getByRole('button', { name: 'Open Settings → Plugins' }).click();

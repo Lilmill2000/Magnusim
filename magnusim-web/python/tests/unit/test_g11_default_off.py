@@ -291,6 +291,53 @@ def test_the_shipped_golden_leaves_out_a_plugin_that_ships_off(env):
     assert every.failures == []
 
 
+def test_an_off_plugin_has_no_start_actions_until_it_is_turned_on(env):
+    """A plugin that ships off draws no start action anywhere (its catalog row and the
+    tree's kind rows say none) until someone turns it on."""
+    from cfddesk.worker import methods
+
+    manifest = env["bundled"] / KEY / "manifest.toml"
+    text = manifest.read_text(encoding="utf-8").replace('api_version = "1.1"', 'api_version = "1.4"')
+    manifest.write_text(text + '\n[[start_actions]]\nstudy_kind = "opt_case"\nlabel = "Start an optional case"\n', encoding="utf-8")
+    load_all()
+    row = _row()
+    assert (row["status"], row["start_actions"]) == ("disabled", [])
+    assert methods.plugin_studies_list(project_id="proj-a")["kinds"] == []
+    # Turned on: the same manifest's action is there (so the empty lists above were the off state).
+    methods.plugins_enable(key=KEY)
+    assert [a["label"] for a in _row()["start_actions"]] == ["Start an optional case"]
+    [kind] = methods.plugin_studies_list(project_id="proj-a")["kinds"]
+    assert kind["start_action"]["label"] == "Start an optional case"
+
+
+def test_every_real_bundled_plugin_that_ships_off_has_no_start_actions(env, monkeypatch: pytest.MonkeyPatch):
+    """On a fresh install every real bundled plugin whose manifest sets
+    default_enabled = false is off, with no start action, whatever it declares."""
+    from tests.unit.bundled_manifests import BUNDLED, default_off_keys, default_on_keys
+
+    monkeypatch.setenv("MAGNUSIM_BUNDLED_DIR", str(BUNDLED))
+    reset_for_tests()
+    load_all()
+    rows = {r["key"]: r for r in plugin_catalog()}
+    for key in default_off_keys():
+        assert (key, rows[key]["status"], rows[key]["start_actions"]) == (key, "disabled", [])
+    for key in default_on_keys():
+        assert rows[key]["status"] != "disabled", key
+
+
+def test_the_shipped_hub_is_the_default_on_bundled_folders():
+    """What a fresh install loads is every real bundled plugin whose manifest does not
+    set default_enabled = false, and nothing else."""
+    from tests.unit.bundled_manifests import default_on_keys
+
+    sys.path.insert(0, str(WEB / "python" / "tools"))
+    try:
+        from registry_dump import shipped_hub
+    finally:
+        sys.path.pop(0)
+    assert sorted(shipped_hub().manifests) == default_on_keys()
+
+
 def test_gate_g11_every_real_bundled_plugin_loads():
     """The shipped golden holds only what a fresh install turns on; this loads every
     real bundled plugin, the optional ones too, with nothing failing."""
@@ -299,6 +346,10 @@ def test_gate_g11_every_real_bundled_plugin_loads():
         from registry_dump import shipped_hub
     finally:
         sys.path.pop(0)
+    from tests.unit.bundled_manifests import bundled_manifests
+
     hub = shipped_hub(include_optional=True)
     assert hub.failures == []
     assert "incompressible_flow" in hub.manifests
+    # Every bundled folder, the ones that ship off included.
+    assert sorted(hub.manifests) == sorted(bundled_manifests())

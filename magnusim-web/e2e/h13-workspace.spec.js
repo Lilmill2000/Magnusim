@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { join } from 'node:path';
 import { NO_GEOMETRY_PROJECT } from './prepare-projects.js';
-import { startHost } from './support/host-server.mjs';
+import { e2eTemp, requiredBundledDir, startHost } from './support/host-server.mjs';
 
 // H13, a plugin's full workspace as the user meets it: a study opens in the
 // plugin's own page, in a sandboxed frame over the workbench, with the app's
@@ -11,7 +12,9 @@ import { startHost } from './support/host-server.mjs';
 // shows an error card; a plugin that is off has no launcher, and its studies'
 // Settings link looks like the app's other links; "+ New" in STUDIES offers the
 // first free name and opens the new study. A second app server with the
-// workspace fixture plugin (python/tests/fixtures/workspace-plugins).
+// workspace fixture plugin (python/tests/fixtures/workspace-plugins) and only the
+// required bundled plugins: an optional one that ships on would add its own header
+// button, Workspaces entries and "+ New" to what this spec counts.
 const PROJECT = 'sample-project-steady-state-e2e';
 const KEY = 'ws-demo';
 
@@ -23,7 +26,8 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
   test.setTimeout(300_000);
   page.setDefaultTimeout(30_000);
   const t0 = Date.now();
-  const host = await startHost({ name: 'h13', pluginsFrom: 'python/tests/fixtures/workspace-plugins' });
+  const tmp = e2eTemp('h13');
+  const host = await startHost({ name: 'h13', tmp, bundledDir: requiredBundledDir(join(tmp, 'bundled')), pluginsFrom: 'python/tests/fixtures/workspace-plugins' });
   const { base } = host;
   const newStudy = async (kind, title) => {
     const r = await request.post(`${base}/api/plugin-studies/create`, { data: { project_id: PROJECT, plugin: KEY, kind, title } });

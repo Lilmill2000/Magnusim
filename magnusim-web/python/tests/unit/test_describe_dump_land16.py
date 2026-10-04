@@ -115,13 +115,19 @@ def test_other_kinds_describe_unchanged_no_numerics_control():
             assert "control_schema" not in row
 
 
-def test_registry_dump_check_green_after_describe_fill():
+def test_registry_dump_check_green_after_describe_fill(monkeypatch: pytest.MonkeyPatch):
+    # The committed golden is what the app's own bundled folder registers; a run of
+    # the core without its optional plugins points MAGNUSIM_BUNDLED_DIR elsewhere.
+    monkeypatch.delenv("MAGNUSIM_BUNDLED_DIR", raising=False)
     assert COMMITTED_REGISTRY.is_file()
     rc = main(["--check", "--committed", str(COMMITTED_REGISTRY)])
     assert rc == 0
 
 
-def test_cli_check_subprocess_still_green():
+def test_cli_check_subprocess_still_green(monkeypatch: pytest.MonkeyPatch):
+    # The committed golden is what the app's own bundled folder registers; a run of
+    # the core without its optional plugins points MAGNUSIM_BUNDLED_DIR elsewhere.
+    monkeypatch.delenv("MAGNUSIM_BUNDLED_DIR", raising=False)
     script = TOOLS / "registry_dump.py"
     proc = subprocess.run(
         [sys.executable, str(script), "--check", "--committed", str(COMMITTED_REGISTRY)],

@@ -117,7 +117,7 @@ jobs:
           "$RUNNER_TEMP/sdk-only/bin/pip" install ./sdk
           "$RUNNER_TEMP/sdk-only/bin/python" -c "import sys, magnusim_sdk, magnusim_sdk.events, magnusim_sdk.units, magnusim_sdk.foam, magnusim_sdk.gmsh_helpers, magnusim_sdk.msh22, magnusim_sdk.proc, magnusim_sdk.study, magnusim_sdk.fluids, magnusim_sdk.progress, magnusim_sdk.data, magnusim_sdk.service; bad = [m for m in sys.modules if m.split('.')[0] in {'OCP', 'pyvista', 'gmsh', 'numpy', 'cfddesk'}]; assert not bad, bad; print('magnusim_sdk imports alone')"
 
-  # The app ships no plugins. Prove the core suites pass with no user plugin
+  # The app ships no user plugins. Prove the core suites pass with no user plugin
   # folder at all (the plugin-host gates are tagged @plugins and run in "node").
   core-without-user-plugins:
     runs-on: ubuntu-latest
@@ -158,9 +158,88 @@ jobs:
         env:
           CI: "1"
 
-  # Magnusim CAD (bundled, ships off): its own toolchain in bundled-plugins/cad.
-  # Its unit tests load the real kernel wasm in Node; its e2e starts this
-  # checkout's app with CAD turned on, the way Settings' Enable does.
+  # The bundled plugins that are not required may ship on (manifest default_enabled),
+  # so every other job runs the core with them. Prove the core works without them:
+  # a bundled folder holding only the required plugins (a top-level `required = true`
+  # in the manifest), a check that the worker loads from it, then pytest, and smoke
+  # plus lifecycle.
+  core-without-optional-plugins:
+    runs-on: ubuntu-latest
+    env:
+      MAGNUSIM_STRICT_SCOPE: "1"
+    defaults:
+      run:
+        working-directory: magnusim-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: magnusim-web/package-lock.json
+      - run: npm ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglu1-mesa libxrender1 libxext6
+          python -m pip install --upgrade "pip>=26.2" "setuptools>=83"
+          python -m pip install -r python/requirements.lock
+          python -m pip install -e "python[dev]"
+          python -m pip install -e python/sdk
+      - name: Only the required bundled plugins
+        run: |
+          dest="$RUNNER_TEMP/required-bundled"
+          mkdir -p "$dest"
+          for m in bundled-plugins/*/manifest.toml; do
+            # The top-level keys are the lines before the first [table].
+            if sed '/^\s*\[/q' "$m" | grep -Eq '^\s*required\s*=\s*true\s*(#.*)?$'; then
+              cp -r "$(dirname "$m")" "$dest/"
+            fi
+          done
+          ls "$dest"
+          test -n "$(ls -A "$dest")"
+          echo "MAGNUSIM_BUNDLED_DIR=$dest" >> "$GITHUB_ENV"
+      # The worker reads MAGNUSIM_BUNDLED_DIR: the bundled plugins it finds, on or off,
+      # are the copied ones, not the repo's. (The registry golden is the node job's:
+      # gen:registry always dumps the repo's bundled-plugins/.)
+      - name: The worker finds only the copied plugins
+        working-directory: magnusim-web/python
+        run: |
+          python - <<'EOF'
+          import os, tomllib
+          from pathlib import Path
+          from cfddesk.registry import load_all
+
+          def keys(folder):
+              out = set()
+              for m in Path(folder).glob("*/manifest.toml"):
+                  meta = tomllib.loads(m.read_text(encoding="utf-8"))
+                  out.add(str(meta.get("key") or m.parent.name))
+              return out
+
+          copied = keys(os.environ["MAGNUSIM_BUNDLED_DIR"])
+          shipped = keys("../bundled-plugins")
+          hub = load_all(force=True)
+          found = {m.key for m in hub.manifests.values() if m.source == "bundled"}
+          found |= {r["key"] for r in hub.off_plugins if r["source"] == "bundled"}
+          print("copied:", sorted(copied), "found:", sorted(found), "shipped:", sorted(shipped))
+          assert copied < shipped, "the copy holds every bundled plugin: nothing optional is left out"
+          assert found == copied, "the worker's bundled plugins are not the copied ones"
+          EOF
+      # The core's tests. The plugins' own tests run in the python job (here a plugin
+      # would load from the copy while its tests import it from bundled-plugins/).
+      - run: cd python && pytest --tb=short tests
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test e2e/smoke.spec.js e2e/lifecycle.spec.js
+        env:
+          CI: "1"
+
+  # Magnusim CAD (bundled; its manifest says whether it ships on): its own toolchain
+  # in bundled-plugins/cad. Its unit tests load the real kernel wasm in Node; its e2e
+  # starts this checkout's app with CAD on.
   cad-plugin:
     runs-on: ubuntu-latest
     defaults:

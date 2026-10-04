@@ -59,6 +59,14 @@ test('a plugin with its own suite runs that suite and only the core contract spe
   assert.deepEqual(plan.core.specs, [...CONTRACT_SPECS].sort());
 });
 
+test('a change to any bundled plugin, its manifest included, runs the spec of the real bundled start actions', () => {
+  assert.ok(CONTRACT_SPECS.includes('e2e/start-actions-bundled.spec.js'));
+  for (const spec of CONTRACT_SPECS) assert.ok(existsSync(join(WEB, spec)), spec);
+  for (const changed of ['bundled-plugins/some-plugin/manifest.toml', 'bundled-plugins/some-plugin/src/app.ts']) {
+    assert.ok(planSuites([changed], ['some-plugin']).core.specs.includes('e2e/start-actions-bundled.spec.js'), changed);
+  }
+});
+
 test('a plugin whose browser tests are still in e2e/ runs the core suite, not other plugins', () => {
   const plan = planSuites(['bundled-plugins/incompressible_flow/ui/RunSettings.tsx'], PLUGINS);
   assert.equal(plan.core.specs, null);
@@ -70,7 +78,7 @@ test('a changed core spec runs that spec alone, unless the core changed too', ()
   assert.deepEqual(planSuites(['e2e/h13-workspace.spec.js'], PLUGINS).plugins, {});
   assert.equal(planSuites(['e2e/h13-workspace.spec.js', 'src/scope.ts'], PLUGINS).core.specs, null);
   const both = planSuites(['e2e/home.spec.js', 'bundled-plugins/cad/src/app.ts'], PLUGINS);
-  assert.deepEqual(both.core.specs, ['e2e/h5-plugins.spec.js', 'e2e/h8-contract.spec.js', 'e2e/home.spec.js']);
+  assert.deepEqual(both.core.specs, [...CONTRACT_SPECS, 'e2e/home.spec.js'].sort());
 });
 
 test('a core change outside the host paths a plugin depends on does not run its suite', () => {

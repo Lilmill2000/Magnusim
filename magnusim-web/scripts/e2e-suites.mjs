@@ -31,9 +31,11 @@ const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /**
  * Core specs that also run when a bundled plugin changes: they check how the core
  * meets its bundled plugins (the Settings rows of a required plugin and of ones that
- * ship off, the app without its required plugin, the analysis contract).
+ * ship off, the app without its required plugin, the analysis contract, and the real
+ * bundled plugins' start actions at their manifest defaults, so a change to a plugin's
+ * labels, places or default_enabled is checked in the core's places).
  */
-export const CONTRACT_SPECS = ['e2e/h5-plugins.spec.js', 'e2e/h8-contract.spec.js'];
+export const CONTRACT_SPECS = ['e2e/h5-plugins.spec.js', 'e2e/h8-contract.spec.js', 'e2e/start-actions-bundled.spec.js'];
 
 /**
  * The core files a plugin's suite depends on, for a plugin that reaches the app only

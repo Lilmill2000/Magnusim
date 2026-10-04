@@ -21,6 +21,7 @@ from cfddesk.registry import load_all, reset_for_tests
 from cfddesk.registry.discovery import get_hub, plugin_catalog, study_kinds_from_meta
 from cfddesk.registry.manifest import START_ACTION_PLACES
 from cfddesk.worker import methods
+from tests.unit.bundled_manifests import required_only_copy
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 START = FIXTURES / "start-plugins"
@@ -73,6 +74,9 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (projects / "proj-a" / "project.json").write_text(json.dumps({"id": "proj-a", "title": "A"}), encoding="utf-8")
     local = tmp_path / "local.json"
     local.write_text("{}", encoding="utf-8")
+    # The required bundled plugins only: an optional one that ships on would add its
+    # catalog row and kind rows to the lists below.
+    monkeypatch.setenv("MAGNUSIM_BUNDLED_DIR", str(required_only_copy(tmp_path / "bundled")))
     monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(plugins))
     monkeypatch.setenv("MAGNUSIM_PROJECTS_ROOT", str(projects))
     monkeypatch.setenv("MAGNUSIM_PLUGIN_ENVS_DIR", str(tmp_path / "envs"))

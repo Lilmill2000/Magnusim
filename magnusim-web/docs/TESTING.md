@@ -49,7 +49,7 @@ change cannot change the core.
 | Changed | Runs |
 |---|---|
 | Documentation (`*.md`, `*.txt`, `docs/`), unit tests (`*.test.*`, `__tests__/`, `python/tests/` except `fixtures/`, a plugin's `tests/`), the plugin template, files outside `magnusim-web/` | nothing |
-| `bundled-plugins/<key>/` | that plugin's suite, plus the core specs that check how the core meets its bundled plugins (`h5-plugins`, `h8-contract`); never another plugin's suite |
+| `bundled-plugins/<key>/` | that plugin's suite, plus the core specs that check how the core meets its bundled plugins (`h5-plugins`, `h8-contract`, `start-actions-bundled`); never another plugin's suite |
 | Only core spec files (`e2e/*.spec.js`) | those specs |
 | Anything else in the app (`src/`, `scripts/`, `python/`, `e2e/support/`, fixtures, config, dependencies) | the core suite, Incompressible Flow's suite, and CAD's suite when the file is one CAD reaches (below) |
 

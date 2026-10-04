@@ -131,7 +131,10 @@ def test_analysis_schema_defaults_validate():
             assert errors == [], f"{key}.{schema_name}: {errors}"
 
 
-def test_committed_registry_json_matches_live_dump():
+def test_committed_registry_json_matches_live_dump(monkeypatch: pytest.MonkeyPatch):
+    # The committed golden is what the app's own bundled folder registers; a run of
+    # the core without its optional plugins points MAGNUSIM_BUNDLED_DIR elsewhere.
+    monkeypatch.delenv("MAGNUSIM_BUNDLED_DIR", raising=False)
     assert COMMITTED_REGISTRY.is_file(), f"missing {COMMITTED_REGISTRY}"
     ok, message = check_committed_registry(committed_path=COMMITTED_REGISTRY, force=True)
     assert ok, message
@@ -160,7 +163,10 @@ def test_intentional_registry_drift_fails_check(tmp_path: Path):
     assert rc == 1
 
 
-def test_check_cli_subprocess_smoke():
+def test_check_cli_subprocess_smoke(monkeypatch: pytest.MonkeyPatch):
+    # The committed golden is what the app's own bundled folder registers; a run of
+    # the core without its optional plugins points MAGNUSIM_BUNDLED_DIR elsewhere.
+    monkeypatch.delenv("MAGNUSIM_BUNDLED_DIR", raising=False)
     script = TOOLS / "registry_dump.py"
     assert script.is_file()
     proc = subprocess.run(

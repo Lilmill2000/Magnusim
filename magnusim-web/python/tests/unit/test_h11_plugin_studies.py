@@ -21,6 +21,7 @@ from cfddesk.registry.discovery import get_hub, study_kinds_from_meta
 from cfddesk.registry.plugin_data import PluginData, PluginDataError, StaleRevisionError
 from cfddesk.worker import methods
 from cfddesk.worker.rpc import RpcError
+from tests.unit.bundled_manifests import required_only_copy
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "plugins" / "study-demo"
 
@@ -29,12 +30,16 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "plugins" / "study-
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     plugins = tmp_path / "plugins"
     shutil.copytree(FIXTURE, plugins / "study-demo")
+    # The required bundled plugins only: an optional one that ships on would add its
+    # study kinds to the lists below.
+    bundled = required_only_copy(tmp_path / "bundled")
     projects = tmp_path / "projects"
     for pid in ("proj-a", "proj-b"):
         (projects / pid).mkdir(parents=True)
         (projects / pid / "project.json").write_text(json.dumps({"id": pid, "title": pid}), encoding="utf-8")
     local = tmp_path / "local.json"
     local.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("MAGNUSIM_BUNDLED_DIR", str(bundled))
     monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(plugins))
     monkeypatch.setenv("MAGNUSIM_PROJECTS_ROOT", str(projects))
     monkeypatch.setenv("CFDDESK_LOCAL_JSON", str(local))

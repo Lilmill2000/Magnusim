@@ -14,7 +14,8 @@
 //   seed            false: leave a missing projects root empty (default true)
 //   pluginsDir      MAGNUSIM_PLUGINS_DIR; default <tmp>/plugins (made empty when missing: no user plugins)
 //   pluginsFrom     a folder copied into pluginsDir first (relative to the checkout)
-//   bundledDir      MAGNUSIM_BUNDLED_DIR; default unset (the checkout's bundled-plugins/)
+//   bundledDir      MAGNUSIM_BUNDLED_DIR; default unset (the checkout's bundled-plugins/);
+//                   requiredBundledDir(folder) makes one with only the required plugins
 //   enablePlugins   keys of bundled plugins that ship off, turned on before the first load
 //   prefs           more prefs over {wizard_completed: true, units: 'Metric', port}
 //   env             more environment; a null value removes a variable
@@ -32,10 +33,10 @@
 // and removes the temp folder (and the lock it wrote). A worker that exits stops it too.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { prepareE2eProjectsRoot } from '../prepare-projects.js';
 
@@ -46,6 +47,30 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** A new temp folder for one server (magnusim-<name>-XXXXXX). */
 export function e2eTemp(name = 'host') {
   return mkdtempSync(join(tmpdir(), `magnusim-${name}-`));
+}
+
+/**
+ * A bundled-plugins folder at `dest` holding only the bundled plugins whose manifest
+ * says `required = true` (copied without their tests): the app without its optional
+ * plugins, whichever of them ship on. For a spec that counts what plugins add to a
+ * project (header buttons, the Workspaces menu, STUDIES), so an optional plugin that
+ * ships on does not change its answer.
+ */
+export function requiredBundledDir(dest, webRoot = WEB_ROOT) {
+  const src = join(webRoot, 'bundled-plugins');
+  mkdirSync(dest, { recursive: true });
+  for (const name of readdirSync(src)) {
+    const manifest = join(src, name, 'manifest.toml');
+    if (!existsSync(manifest)) continue;
+    // The top-level keys: the lines before the first [table].
+    const top = readFileSync(manifest, 'utf8').split(/^\s*\[/m)[0];
+    if (!/^\s*required\s*=\s*true\s*(#.*)?$/m.test(top)) continue;
+    cpSync(join(src, name), join(dest, name), {
+      recursive: true,
+      filter: (p) => !/(^|[\\/])(tests|__pycache__|node_modules)([\\/]|$)/.test(relative(src, p)),
+    });
+  }
+  return dest;
 }
 
 /** Ports something listens on (Windows netstat; elsewhere the bind test alone decides). */
