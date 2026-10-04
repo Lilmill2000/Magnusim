@@ -46,6 +46,36 @@ function plainLabel(label: string): string {
   return label.replace(/^\([^)]*\)\s*/, '') || label;
 }
 
+/**
+ * Opens once the panel's saved fluid has loaded. `dropped`: the panel left that
+ * simulation (or closed) first, and what waited on it is not done.
+ */
+interface LoadGate {
+  promise: Promise<void>;
+  open: () => void;
+  done: boolean;
+  dropped: boolean;
+}
+
+function loadGate(): LoadGate {
+  let resolve: () => void = () => {};
+  const gate: LoadGate = {
+    promise: new Promise<void>((r) => {
+      resolve = r;
+    }),
+    open: () => {
+      gate.done = true;
+      resolve();
+    },
+    done: false,
+    dropped: false,
+  };
+  return gate;
+}
+
+/** The gate before the panel's first load starts: it never opens. */
+const NO_LOAD_YET: LoadGate = { ...loadGate(), dropped: true };
+
 function useStudyState(): StudyState | null {
   const [state, setState] = useState<StudyState | null>(() => studyStateNow());
   useEffect(() => subscribeStudyState(setState), []);
@@ -80,6 +110,17 @@ export function MaterialsPanel(props: IslandProps) {
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   // The rows last loaded, shown again once the model arrives.
   const loaded = useRef<SavedMaterial[] | null>(null);
+  // Until the simulation's saved fluid has loaded nothing is shown to edit, and a save (a
+  // body picked in the viewport) waits for it. The panel used to show the preset's numbers
+  // until then: an edit made before the load landed saved a second fluid beside the
+  // simulation's, and a load landing while a field was being typed in replaced the typing.
+  const [ready, setReady] = useState(false);
+  const gate = useRef<LoadGate>(NO_LOAD_YET);
+  // Loads show in order: an older answer, or one read before a save started, never
+  // replaces what is on screen (the save's own reload follows it).
+  const loadSeq = useRef(0);
+  const shownSeq = useRef(0);
+  const savesStarted = useRef(0);
 
   function ids() {
     return scopeIds({
@@ -93,37 +134,66 @@ export function MaterialsPanel(props: IslandProps) {
     const fluid = studyFluid(rows);
     const p = presetOf(m, fluid);
     const custom = !!p && p.key === customPresetKey(m);
-    setMaterial(fluid);
-    setOthers(rows.filter((r) => r !== fluid));
-    setPreset(p?.key || '');
-    setName(custom ? String(fluid?.name || p?.name || '') : String(p?.name || fluid?.name || ''));
-    // A saved fluid keeps its numbers (one without them reads what older versions
-    // filled in); no fluid yet is a new one, with the preset's values.
-    setValues(fluid ? recordValues(m, fluid) : presetValues(p));
-    setVolumes(Array.isArray(fluid?.assigned_volumes) ? fluid.assigned_volumes.map(String) : []);
+    const shown = {
+      material: fluid,
+      others: rows.filter((r) => r !== fluid),
+      preset: p?.key || '',
+      name: custom ? String(fluid?.name || p?.name || '') : String(p?.name || fluid?.name || ''),
+      // A saved fluid keeps its numbers (one without them reads what older versions
+      // filled in); no fluid yet is a new one, with the preset's values.
+      values: fluid ? recordValues(m, fluid) : presetValues(p),
+      volumes: Array.isArray(fluid?.assigned_volumes) ? fluid.assigned_volumes.map(String) : [],
+    };
+    setMaterial(shown.material);
+    setOthers(shown.others);
+    setPreset(shown.preset);
+    setName(shown.name);
+    setValues(shown.values);
+    setVolumes(shown.volumes);
+    // A save waiting for this load runs before the next render: it reads these now.
+    live.current = { ...live.current, ...shown };
   }
 
   function load() {
     const scoped = scopeIds(props);
+    const g = gate.current;
+    const seq = ++loadSeq.current;
+    const savesBefore = savesStarted.current;
     void apiGet('/api/materials', {
       project_id: scoped.project_id || undefined,
       simulation_id: scoped.simulation_id || undefined,
     })
       .then((j) => {
+        if (g !== gate.current || seq < shownSeq.current || savesBefore !== savesStarted.current) return;
+        shownSeq.current = seq;
         const doc = j as { materials?: SavedMaterial[]; air?: SavedMaterial | null };
         const rows = Array.isArray(doc.materials) ? doc.materials : doc.air ? [doc.air] : [];
         loaded.current = rows;
         applySaved(rows);
+        if (!g.done) {
+          setNote('');
+          setReady(true);
+          g.open();
+        }
       })
-      .catch(() => {});
+      .catch((e) => {
+        if (g !== gate.current || g.done) return;
+        setNote(`Could not read this simulation's fluid: ${e instanceof Error ? e.message : String(e)}`);
+      });
     setBodies(geometryBodies());
   }
 
   useEffect(() => {
+    const g = loadGate();
+    gate.current = g;
+    setReady(false);
     load();
     const onMaterial = () => load();
     window.addEventListener('cfd:material', onMaterial);
-    return () => window.removeEventListener('cfd:material', onMaterial);
+    return () => {
+      g.dropped = true;
+      window.removeEventListener('cfd:material', onMaterial);
+    };
   }, [props.projectId, props.simId, props.scope]);
 
   // The registry (the material model) can arrive after the saved fluid.
@@ -132,7 +202,12 @@ export function MaterialsPanel(props: IslandProps) {
   }, [model?.key]);
 
   /** Write the fluid through the worker (materials.set) and tell the runtime. Saves run one at a time. */
-  function save(next: Partial<{ values: Record<string, number>; volumes: string[]; preset: string; name: string }>) {
+  function save(
+    next: Partial<{ values: Record<string, number>; volumes: string[]; preset: string; name: string }>,
+  ): Promise<unknown> {
+    const g = gate.current;
+    if (!g.done) return g.promise.then(() => (g.dropped ? undefined : save(next)));
+    savesStarted.current += 1;
     const cur = live.current;
     const fields = {
       values: next.values ? { ...cur.values, ...next.values } : cur.values,
@@ -194,7 +269,10 @@ export function MaterialsPanel(props: IslandProps) {
     return save({ preset: p.key, name: p.name, values: presetValues(p) });
   }
 
-  function toggleBody(body: string) {
+  function toggleBody(body: string): Promise<unknown> {
+    const g = gate.current;
+    // A body picked before the saved fluid loaded toggles in the loaded list.
+    if (!g.done) return g.promise.then(() => (g.dropped ? undefined : toggleBody(body)));
     return save({ volumes: toggleVolume(live.current.volumes, body) });
   }
 
@@ -215,6 +293,7 @@ export function MaterialsPanel(props: IslandProps) {
   const title = name || defaultPreset(model)?.name || 'Material';
   const viscosityModel = model?.record_constants?.viscosity_model;
   const missing = registry && !model ? "Fluids are not available: this simulation's analysis plugin is off or did not load." : '';
+  const loading = !!model && !ready;
 
   return (
     <PanelChrome
@@ -226,7 +305,12 @@ export function MaterialsPanel(props: IslandProps) {
           {missing}
         </p>
       ) : null}
-      {model ? (
+      {loading ? (
+        <p className="mat-assign-hint" role="status" data-material-loading="1">
+          Loading the fluid…
+        </p>
+      ) : null}
+      {model && ready ? (
         <div className="mat-row">
           <span className="mat-k">Fluid</span>
           <span className="mat-v">
@@ -245,7 +329,7 @@ export function MaterialsPanel(props: IslandProps) {
           </span>
         </div>
       ) : null}
-      {model && preset === customPresetKey(model) ? (
+      {model && ready && preset === customPresetKey(model) ? (
         <div className="mat-row">
           <span className="mat-k">Name</span>
           <span className="mat-v">
@@ -271,7 +355,7 @@ export function MaterialsPanel(props: IslandProps) {
           <span className="mat-v">{String(viscosityModel)}</span>
         </div>
       ) : null}
-      {properties(model).map((prop) => {
+      {(ready ? properties(model) : []).map((prop) => {
         const q = prop.quantity;
         const unit = q ? preferredUnit(q, imperial) : prop.unit;
         const si = values[prop.key];
@@ -293,36 +377,38 @@ export function MaterialsPanel(props: IslandProps) {
           </div>
         );
       })}
-      <div className="mat-assign-block">
-        <div className="mat-assign-head">
-          <span className="mat-k">Assigned volumes ({volumes.length})</span>
-          <button type="button" className="mat-clear-link" disabled={!volumes.length} onClick={() => void save({ volumes: [] })}>
-            Clear list
-          </button>
+      {ready ? (
+        <div className="mat-assign-block">
+          <div className="mat-assign-head">
+            <span className="mat-k">Assigned volumes ({volumes.length})</span>
+            <button type="button" className="mat-clear-link" disabled={!volumes.length} onClick={() => void save({ volumes: [] })}>
+              Clear list
+            </button>
+          </div>
+          <ul className="mat-assign-list" aria-label="Assigned volumes" data-material-volumes="1">
+            {listed.map((body) => {
+              const on = volumes.includes(body);
+              return (
+                <li key={body} className={`bc-assign-item${on ? ' is-focus' : ''}`} data-volume={body} data-assigned={on ? '1' : '0'}>
+                  <button
+                    type="button"
+                    className="bc-assign-pick"
+                    aria-pressed={on}
+                    title={on ? `Unassign ${body}` : `Assign ${title} to ${body}`}
+                    onClick={() => void toggleBody(body)}
+                  >
+                    {bodyDisplay(body)}
+                  </button>
+                  <span className="mat-assign-state">{on ? 'Assigned' : 'Not assigned'}</span>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="mat-assign-hint" data-material-picking="1">
+            Picking bodies: click a body in the viewport or in this list. Changes save automatically.
+          </div>
         </div>
-        <ul className="mat-assign-list" aria-label="Assigned volumes" data-material-volumes="1">
-          {listed.map((body) => {
-            const on = volumes.includes(body);
-            return (
-              <li key={body} className={`bc-assign-item${on ? ' is-focus' : ''}`} data-volume={body} data-assigned={on ? '1' : '0'}>
-                <button
-                  type="button"
-                  className="bc-assign-pick"
-                  aria-pressed={on}
-                  title={on ? `Unassign ${body}` : `Assign ${title} to ${body}`}
-                  onClick={() => void toggleBody(body)}
-                >
-                  {bodyDisplay(body)}
-                </button>
-                <span className="mat-assign-state">{on ? 'Assigned' : 'Not assigned'}</span>
-              </li>
-            );
-          })}
-        </ul>
-        <div className="mat-assign-hint" data-material-picking="1">
-          Picking bodies: click a body in the viewport or in this list. Changes save automatically.
-        </div>
-      </div>
+      ) : null}
       {note ? (
         <p className="mat-assign-hint" role="alert">
           {note}

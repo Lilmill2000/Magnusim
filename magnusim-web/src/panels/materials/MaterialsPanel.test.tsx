@@ -13,6 +13,8 @@ vi.mock('../../api/workerRpc', () => ({
 }));
 
 let stored: Record<string, unknown> | null;
+// A test holds the next GET /api/materials here until it lets it answer.
+let hold: Promise<void> | null;
 const OLD_AIR = {
   id: 'mat1',
   name: 'Air',
@@ -25,6 +27,7 @@ const OLD_AIR = {
 
 beforeEach(() => {
   stored = OLD_AIR;
+  hold = null;
   useProjectStore.setState({ registry: FIXTURE_REGISTRY as never });
   workerRpc.mockClear();
   window.__CFD_GEOMETRY_BODIES__ = () => ['Body1', 'Body2'];
@@ -34,7 +37,12 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes('/api/materials')) {
-        return new Response(JSON.stringify({ materials: stored ? [stored] : [], air: stored }), { status: 200 });
+        // The answer is what is stored when the request is read, before any hold.
+        const body = JSON.stringify({ materials: stored ? [stored] : [], air: stored });
+        const wait = hold;
+        hold = null;
+        if (wait) await wait;
+        return new Response(body, { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }),
@@ -49,6 +57,19 @@ afterEach(() => {
 
 function renderPanel() {
   return render(<MaterialsPanel panelId="panel-air-material" projectId="p1" simId="s1" scope="p:p1/s:s1" />);
+}
+
+/** Hold the next GET /api/materials; the returned function lets it answer. */
+function holdNextLoad(): () => Promise<void> {
+  let release: () => void = () => {};
+  hold = new Promise<void>((r) => {
+    release = r;
+  });
+  return async () => {
+    await act(async () => {
+      release();
+    });
+  };
 }
 
 function lastSavedAir(): Record<string, unknown> {
@@ -93,7 +114,7 @@ describe('helpers', () => {
 describe('MaterialsPanel', () => {
   it("shows tiny viscosity in scientific notation and offers the model's fluids", async () => {
     renderPanel();
-    const nu = screen.getByLabelText('Kinematic viscosity') as HTMLInputElement;
+    const nu = (await screen.findByLabelText('Kinematic viscosity')) as HTMLInputElement;
     await waitFor(() => expect(nu.value).toBe('1.5290e-5'));
     const fluid = screen.getByLabelText('Fluid') as HTMLSelectElement;
     expect(fluid.value).toBe('air');
@@ -171,7 +192,7 @@ describe('MaterialsPanel', () => {
 
   it('saves a typed viscosity through materials.set and hands it to the runtime', async () => {
     renderPanel();
-    const nu = screen.getByLabelText('Kinematic viscosity') as HTMLInputElement;
+    const nu = (await screen.findByLabelText('Kinematic viscosity')) as HTMLInputElement;
     await waitFor(() => expect(nu.value).toBe('1.5290e-5'));
     fireEvent.change(nu, { target: { value: '2e-5' } });
     await act(async () => {
@@ -202,6 +223,53 @@ describe('MaterialsPanel', () => {
     await waitFor(() => expect(workerRpc).toHaveBeenCalled());
     expect(lastSavedAir()).toMatchObject({ assigned_volumes: [], body_ids: [] });
     expect(container.querySelector('[data-volume="Body1"]')?.getAttribute('data-assigned')).toBe('0');
+  });
+
+  it("shows nothing to edit until the simulation's saved fluid has loaded", async () => {
+    const release = holdNextLoad();
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Loading the fluid'));
+    // Not the preset's numbers (1.516e-5) in the meantime: an edit there saved a second fluid.
+    expect(screen.queryByLabelText('Kinematic viscosity')).toBeNull();
+    expect(screen.queryByLabelText('Fluid')).toBeNull();
+    expect(screen.queryByText(/Picking bodies/)).toBeNull();
+    await release();
+    const nu = (await screen.findByLabelText('Kinematic viscosity')) as HTMLInputElement;
+    expect(nu.value).toBe('1.5290e-5');
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('a body picked in the viewport before the saved fluid loads toggles on that fluid', async () => {
+    const release = holdNextLoad();
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Loading the fluid'));
+    await act(async () => {
+      publishBodySelection([{ name: 'Body2', idx: 2 }]);
+    });
+    expect(workerRpc).not.toHaveBeenCalled();
+    await release();
+    await waitFor(() => expect(workerRpc).toHaveBeenCalledTimes(1));
+    // The saved fluid (its id, its Body1), not a new one with only the picked body.
+    expect(lastSavedAir()).toMatchObject({ id: 'mat1', kinematic_viscosity: 1.529e-5, assigned_volumes: ['Body1', 'Body2'] });
+  });
+
+  it('a reload read before a save never puts the older value back', async () => {
+    renderPanel();
+    const nu = (await screen.findByLabelText('Kinematic viscosity')) as HTMLInputElement;
+    await waitFor(() => expect(nu.value).toBe('1.5290e-5'));
+    // A reload starts (another part of the app changed a material) and is slow...
+    const release = holdNextLoad();
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('cfd:material'));
+    });
+    // ...the user saves meanwhile, then the reload answers with what it read before the save.
+    fireEvent.change(nu, { target: { value: '2e-5' } });
+    await act(async () => {
+      fireEvent.blur(nu);
+    });
+    await waitFor(() => expect(workerRpc).toHaveBeenCalled());
+    await release();
+    expect(nu.value).toBe('2.0000e-5');
   });
 
   it('Delete goes through the runtime', async () => {
