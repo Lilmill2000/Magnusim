@@ -65,10 +65,20 @@ describe('the words', () => {
     expect(t.title).toBe('Demo 1 v2 added');
     expect(t.copy.split('\n')).toEqual([
       'Demo 1 v2 added. Demo 1 and its studies are kept as they were.',
-      'Copied the setup of Study 1 onto it (Steady-state 2).',
+      'Copied the setup of Study 1 onto it, as Steady-state 2.',
       'These faces are not on the new shape. Each one stays listed on its record:',
       "Top: 'Boss end'",
       "Couldn't copy the setup of Study 2: its faces could not be matched",
+    ]);
+  });
+
+  it('a copy that kept its study\'s title does not repeat the name', () => {
+    const t = savedAsNewText('Part 1 v2', 'Part 1', [
+      { studyId: 's1', title: 'Incompressible Steady-state', ok: true, newTitle: 'Incompressible Steady-state', lost: [], claimedTwice: [] },
+    ]);
+    expect(t.copy.split('\n')).toEqual([
+      'Part 1 v2 added. Part 1 and its studies are kept as they were.',
+      'Copied the setup of Incompressible Steady-state onto it.',
     ]);
   });
 });

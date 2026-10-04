@@ -10,7 +10,8 @@ design tool: the host's link must work for any plugin.
   the saved design on every way out; `#hook-mode` makes it throw, stall, link without
   saving, call `nav.back()`, reload, or do nothing, and each run logs its reason in
   `studies/<id>/hook-log.json`. `workspace/exports/` holds the files its tests link (and
-  its page links through the bridge): deterministic
+  its page links through the bridge; `v4` is v1 10 mm taller, its tops and boss kept by
+  name but moved far): deterministic
   BREPs (binary and text) and face-name sidecars, built by
 
       cd python

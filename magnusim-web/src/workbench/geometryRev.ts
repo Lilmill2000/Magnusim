@@ -72,6 +72,8 @@ export interface ReloadOpts {
   deferCad?: boolean;
   /** Load it even when a reload that just ended shows the server's rev (its part was set aside). */
   force?: boolean;
+  /** Keep the viewport's camera exactly (the user moved it while a landing waited): no framing. */
+  holdCamera?: boolean;
 }
 
 interface Host {
@@ -360,7 +362,7 @@ async function reloadNow(geometryId: string, opts?: ReloadOpts, after = false): 
   const s = shown.get(geometryId);
   const run = (async () => {
     const key = s ? linkKey(s) : String(Date.now());
-    if (opts && (opts.namesOnly || opts.deferCad)) await host.reloadGeometry(geometryId, key, { ...opts });
+    if (opts && (opts.namesOnly || opts.deferCad || opts.holdCamera)) await host.reloadGeometry(geometryId, key, { ...opts });
     else await host.reloadGeometry(geometryId, key);
   })();
   reloading.set(geometryId, run);

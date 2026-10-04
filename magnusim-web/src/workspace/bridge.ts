@@ -51,6 +51,7 @@ import type {
 } from '../plugin-sdk/workspace';
 import type { LeaveReason } from './leaveGuard';
 import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestion } from './linkChoice';
+import { linkTouchesSetup, setupOf, type LinkSetup } from './linkReport';
 
 export const HOST_SDK_MAJOR = 1;
 export const HOST_API_VERSION = '1.6';
@@ -120,8 +121,11 @@ export type LeaveActivity =
   | { kind: 'progress'; fraction: number | null; label: string }
   /** Bridge calls of the page now in flight (uploads, the link): the hook is busy, not stalled. */
   | { kind: 'calls'; inFlight: number }
-  /** The link job's stage (queued with the jobs ahead of it, reading, waiting, ...). */
-  | { kind: 'link'; stage: string; ahead: number | null; label: string }
+  /**
+   * The link job's stage (queued with the jobs ahead of it, reading, waiting, ...). For
+   * `queued`, `waiting` false says it starts at once (nothing holds the slot or the study).
+   */
+  | { kind: 'link'; stage: string; ahead: number | null; label: string; waiting?: boolean }
   /**
    * The server took the link: a job (`jobId`; `create` for a first link or "Save as new",
    * which take no queue row; `queued` for an overwrite in the Queue), or nothing to do (null).
@@ -193,8 +197,11 @@ export interface BridgeHooks {
    * once the workspace is closing for it; false when the user cancelled or stayed.
    */
   openResults(caseRel: string): Promise<boolean>;
-  /** A link this page made committed with something the user must know (lost, returned, split, ...). */
-  linkReport?(result: LinkResult): void;
+  /**
+   * A link this page made committed: its result and what of it touches the user's setup
+   * (5.14; the hook decides whether that is worth a dialog, a toast or nothing).
+   */
+  linkReport?(result: LinkResult, setup: LinkSetup): void;
   /**
    * A link this page started (its job, or its answer at once): the host lands on that
    * geometry when the workspace closes (showLinkedGeometry, LINK 6.5).
@@ -335,11 +342,13 @@ function linkResultOf(raw: unknown): LinkResult {
   return raw as LinkResult;
 }
 
-/** Something in a link's result the user must be told (proposal 5.14): lost, returned, split, merged, moved far, claimed twice. */
-export function linkNeedsReport(r: LinkResult | null | undefined): boolean {
-  if (!r) return false;
-  const m = r.match || { split: 0, merged: 0, movedFar: 0 };
-  return !!(r.lost?.length || r.returned?.length || r.claimedTwice?.length || m.split || m.merged || m.movedFar);
+/**
+ * Something in a link the user must be told (proposal 5.14): a record whose face was lost,
+ * came back, split, merged, was claimed twice or moved far, or a record saved for an older
+ * version. Faces no record refers to are never worth a report.
+ */
+export function linkNeedsReport(r: LinkResult | null | undefined, setup?: LinkSetup | null): boolean {
+  return linkTouchesSetup(r, setup);
 }
 
 /** A link this page is waiting for: where its progress goes, and how it ends. */
@@ -480,14 +489,21 @@ export class WorkspaceCalls {
    * user cancelled that is still waiting) is no work of this hook.
    */
   callStart(method: string): () => void {
+    if (NOT_HOOK_WORK.has(method)) return () => undefined;
+    this.calls.set(method, (this.calls.get(method) || 0) + 1);
     const run = this.leave;
-    if (!run || NOT_HOOK_WORK.has(method)) return () => undefined;
-    run.inFlight += 1;
-    this.note({ kind: 'calls', inFlight: run.inFlight });
+    if (run) {
+      run.inFlight += 1;
+      this.note({ kind: 'calls', inFlight: run.inFlight });
+    }
     let answered = false;
     return () => {
       if (answered) return;
       answered = true;
+      const left = (this.calls.get(method) || 1) - 1;
+      if (left > 0) this.calls.set(method, left);
+      else this.calls.delete(method);
+      if (!run) return;
       run.inFlight = Math.max(0, run.inFlight - 1);
       if (this.leave === run) this.note({ kind: 'calls', inFlight: run.inFlight });
     };
@@ -782,7 +798,9 @@ export class WorkspaceCalls {
     const jobId = String(answer.job_id || '');
     if (!LINK_JOB_ID.test(jobId)) throw new BridgeError('The app did not start the link', 'failed');
     if (answer.geometry_id && !answer.choosing) this.hooks.linkStarted?.({ geometryId: String(answer.geometry_id), jobId, created: !!answer.created });
-    if (!answer.choosing) this.note({ kind: 'accepted', jobId, create: !!answer.created, queued: !!(answer as { queued?: boolean }).queued });
+    // "Queued" only for a job that waits (the server says `waiting`); one that starts at once is not.
+    const queued = !!(answer as { queued?: boolean }).queued && (answer as { waiting?: boolean }).waiting !== false;
+    if (!answer.choosing) this.note({ kind: 'accepted', jobId, create: !!answer.created, queued });
     // A page that closed before the answer came does not ask: the question stays open.
     if (epoch !== this.epoch) throw new BridgeError('the workspace closed', 'failed');
     this.linkJobs.add(jobId);
@@ -837,18 +855,34 @@ export class WorkspaceCalls {
       }
       return result;
     }
-    if (linkNeedsReport(result)) {
-      try {
-        this.hooks.linkReport?.(result);
-      } catch (e) {
-        this.hooks.log('link report failed', e);
-      }
+    const setup = this.setups.get(jobId) || setupOf(null);
+    this.setups.delete(jobId);
+    try {
+      this.hooks.linkReport?.(result, setup);
+    } catch (e) {
+      this.hooks.log('link report failed', e);
     }
     return result;
   }
 
   /** Link jobs whose report this page load has had (once per job). */
   private readonly reportedJobs = new Set<string>();
+
+  /** What of each ended link job touches the user's setup (its end event's `setup`), until reported. */
+  private readonly setups = new Map<string, LinkSetup>();
+
+  /**
+   * Calls of the page now in flight by method, whenever they began (a running leave's
+   * stall timer counts only its own: callStart). A stall names what it waited for by these.
+   */
+  private readonly calls = new Map<string, number>();
+
+  /** The page's saves now in flight through the app (a file or data write, the study's update). */
+  savesInFlight(): number {
+    let n = 0;
+    for (const [m, c] of this.calls) if (/^(files\.write|files\.delete|data\.write|study\.update)/.test(m)) n += c;
+    return n;
+  }
 
   /** "Save as new" jobs this page waits for: the old geometry's name and the copies' outcome, for the report. */
   private readonly saved = new Map<string, { oldName: string; copies: LinkCopyOutcome[] | null }>();
@@ -891,7 +925,7 @@ export class WorkspaceCalls {
       if (chosen.geometry_id && picked.choice !== 'cancel') {
         this.hooks.linkStarted?.({ geometryId: String(chosen.geometry_id), jobId, created: !!chosen.created });
       }
-      if (picked.choice !== 'cancel') this.note({ kind: 'accepted', jobId, create: picked.choice === 'new', queued: !!chosen.queued });
+      if (picked.choice !== 'cancel') this.note({ kind: 'accepted', jobId, create: picked.choice === 'new', queued: !!chosen.queued && chosen.waiting !== false });
     } catch (e) {
       const code = String((e as { code?: unknown })?.code || 'failed');
       // Answered in another tab or from the geometry's row: the job's end settles the call.
@@ -931,13 +965,13 @@ export class WorkspaceCalls {
   }
 
   /** A link job's state as the snapshot or its status has it: an ended one settles. */
-  private onLinkJob(jobId: string, job: { status?: string; result?: unknown; error?: string | null; code?: string | null; seq?: number; copies?: unknown }): void {
+  private onLinkJob(jobId: string, job: { status?: string; result?: unknown; error?: string | null; code?: string | null; seq?: number; copies?: unknown; setup?: unknown }): void {
     const status = String(job.status || '');
     if (['queued', 'running', 'choosing'].includes(status)) return;
     this.onLinkEvent(
       jobId,
       Number(job.seq) || 0,
-      { event: 'end', status, result: job.result ?? null, error: job.error ?? null, code: job.code ?? null, copies: job.copies ?? null },
+      { event: 'end', status, result: job.result ?? null, error: job.error ?? null, code: job.code ?? null, copies: job.copies ?? null, setup: job.setup ?? null },
       true,
     );
   }
@@ -956,6 +990,7 @@ export class WorkspaceCalls {
           stage: kind === 'queued' ? 'queued' : String(ev.stage || ''),
           ahead: typeof ev.ahead === 'number' ? ev.ahead : null,
           label: typeof ev.label === 'string' ? ev.label : '',
+          ...(kind === 'queued' && typeof ev.waiting === 'boolean' ? { waiting: ev.waiting } : {}),
         });
       }
       if (wait && wait.token) {
@@ -982,6 +1017,7 @@ export class WorkspaceCalls {
     const result = (ev.result || null) as LinkResult | null;
     const kept = this.saved.get(jobId);
     if (kept && Array.isArray(ev.copies)) kept.copies = ev.copies as LinkCopyOutcome[];
+    if (ev.setup && typeof ev.setup === 'object' && this.linkWaits.has(jobId)) this.setups.set(jobId, setupOf(ev.setup));
     if (status === 'done' && result && result.change && result.change !== 'none' && !this.linkEnds.has(jobId)) {
       this.linkEnds.add(jobId);
       if (this.wantsGeometry) {
@@ -1453,6 +1489,17 @@ export class WorkspaceBridge {
       this.aliveWaiters.add(fn);
       win.postMessage({ magnusim: 'probe', instance: ch.instance }, '*');
     });
+  }
+
+  /**
+   * What a stalled leave was waiting for (API 1.6, LINK 6.4): whether the page still
+   * answers the probe, and whether a save of the page's through the app (a file commit,
+   * a data write, the study's update) is still on its way, begun before the leave or in it.
+   */
+  async stallCause(): Promise<{ answers: boolean; saving: boolean }> {
+    const saving = this.calls.savesInFlight() > 0;
+    const answers = await this.probe();
+    return { answers, saving: saving || this.calls.savesInFlight() > 0 };
   }
 
   /**

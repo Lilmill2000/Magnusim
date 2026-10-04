@@ -1299,8 +1299,8 @@ describe('WorkspaceCalls: linked geometries (project.linkGeometry, API 1.5)', ()
       { event: 'linkProgress', data: { token: 't1', stage: 'queued', fraction: null, ahead: 1 } },
       { event: 'linkProgress', data: { token: 't1', stage: 'matching', fraction: null } },
     ]);
-    // Something was lost: the host's report dialog is shown.
-    expect(h.linkReport).toHaveBeenCalledWith(RESULT);
+    // The host hears the result and what of it touched the user's setup (nothing in the end event here).
+    expect(h.linkReport).toHaveBeenCalledWith(RESULT, { movedFar: [], split: [], merged: [], stale: [] });
   });
 
   it('keeps link jobs follow-only: nothing a page calls stops one', async () => {

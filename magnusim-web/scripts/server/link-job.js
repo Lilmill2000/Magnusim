@@ -164,14 +164,16 @@ function defaultDeps() {
 /**
  * @returns {{ deps: ReturnType<typeof defaultDeps>, live: Map<string, LiveJob>, locks: Map<string, string>,
  *   pending: Map<string, Pending>, bootPid: number | null, timer: ReturnType<typeof setTimeout> | null,
- *   recovering: boolean, aheads: Map<string, number> }}
+ *   recovering: boolean, aheads: Map<string, number>, waits: Map<string, boolean> }}
  */
 function L() {
   const key = Symbol.for('magnusim.linkJobs');
   const g = /** @type {any} */ (globalThis);
   if (!g[key]) {
-    g[key] = { deps: defaultDeps(), live: new Map(), locks: new Map(), pending: new Map(), bootPid: null, timer: null, recovering: false, aheads: new Map() };
+    g[key] = { deps: defaultDeps(), live: new Map(), locks: new Map(), pending: new Map(), bootPid: null, timer: null, recovering: false, aheads: new Map(), waits: new Map() };
   }
+  // Whether each queued job was last told it waits (state kept by an older module load has none yet).
+  if (!g[key].waits) g[key].waits = new Map();
   return g[key];
 }
 
@@ -433,14 +435,28 @@ export function linkJobOf(rec) {
     oldGeometryId: rec.old_geometry_id || null,
     oldGeometryName: rec.old_geometry_name || null,
     copies: Array.isArray(rec.copies) ? rec.copies : null,
+    setup: rec.setup || null,
     seq: Number(rec.seq) || 0,
   };
 }
 
-/** @param {string} id @param {string} stage @param {string} [label] */
-function setStage(id, stage, label) {
+/**
+ * What of an update touches the user's setup, for the host's report (5.14): the faces
+ * records refer to that moved far, split or merged, each with its record, and the records
+ * saved for an older version. Faces no record refers to are not in it. Not part of
+ * LinkResult (the plugin API): the host reads it from the job.
+ * @param {any} rep the plan's report
+ */
+function setupOf(rep) {
+  const s = (rep && rep.setup) || {};
+  const list = (/** @type {any} */ v) => (Array.isArray(v) ? v : []);
+  return { movedFar: list(s.moved_far), split: list(s.split), merged: list(s.merged), stale: list(rep && rep.stale) };
+}
+
+/** @param {string} id @param {string} stage @param {string} [label] @param {number | null} [fraction] */
+function setStage(id, stage, label, fraction = null) {
   updateLinkRecord(id, { stage }, { write: false });
-  emitLinkEvent(id, { event: 'stage', stage, fraction: null, ...(label ? { label } : {}) });
+  emitLinkEvent(id, { event: 'stage', stage, fraction, ...(label ? { label } : {}) });
 }
 
 /**
@@ -459,6 +475,8 @@ function finish(id, status, fields = {}) {
     result: fields.result ?? null,
     // "Save as new": what each copy of a study's setup came to (the host's report).
     ...(now && Array.isArray(now.copies) ? { copies: now.copies } : {}),
+    // What of an update touches the user's setup (the host's report, 5.14).
+    ...(now && now.setup ? { setup: now.setup } : {}),
   });
   L().aheads.delete(id);
   return now;
@@ -701,12 +719,15 @@ export async function acceptLink(c) {
 
 /** @param {any} q a queued record (or a question still open) the call joins */
 function joined(q) {
+  // Whether the job joined waits for anything ("Queued" only then; a running one does not).
+  const told = L().waits.get(q.id);
+  const waiting = q.status === 'queued' && told !== false;
   if (q.status === 'choosing') {
     return { status: 202, body: { ok: true, job_id: q.id, geometry_id: q.geometry_id, created: false, queued: false, joined: true, choosing: q.choosing } };
   }
   return {
     status: 202,
-    body: { ok: true, job_id: q.id, geometry_id: q.geometry_id, created: q.op === 'create', queued: q.op === 'update', joined: true },
+    body: { ok: true, job_id: q.id, geometry_id: q.geometry_id, created: q.op === 'create', queued: q.op === 'update', waiting, joined: true },
   };
 }
 
@@ -851,15 +872,41 @@ async function afterSnapshot(c, s) {
     return { status: 202, body: { ok: true, job_id: rec.id, geometry_id: geometryId, created: false, queued: false, choosing: question } };
   }
   if (op === 'update') {
-    enqueueUpdate(rec);
-    return { status: 202, body: { ok: true, job_id: rec.id, geometry_id: geometryId, created: false, queued: true } };
+    const waiting = enqueueUpdate(rec);
+    return { status: 202, body: { ok: true, job_id: rec.id, geometry_id: geometryId, created: false, queued: true, waiting } };
   }
-  emitLinkEvent(rec.id, { event: 'queued', ahead: 0 });
+  emitLinkEvent(rec.id, queuedEvent(rec, 0));
   startCreateWhenFree(c.projectId, c.plugin, c.studyId);
   return { status: 202, body: { ok: true, job_id: rec.id, geometry_id: geometryId, created: true, queued: false } };
 }
 
-/** An accepted overwrite joins the compute queue: its row, then `queued {ahead}`. @param {any} rec */
+/**
+ * A queued job's `queued` event: the jobs ahead of it, and whether it waits for anything
+ * (rows ahead, another job holding the slot, or another job of the study holding its lock).
+ * A job that starts as soon as the queue looks at it does not wait: the workspace header
+ * and the geometry's row show "Queued" only for one that waits.
+ * @param {any} rec @param {number | null} ahead
+ */
+function queuedEvent(rec, ahead) {
+  const holder = L().locks.get(studyKey(rec.project_id, rec.plugin, rec.study_id));
+  const locked = !!holder && holder !== rec.id;
+  const waiting = rec.op === 'create' ? locked : (Number(ahead) || 0) > 0 || locked || !!computeSlotHolder();
+  L().waits.set(rec.id, waiting);
+  return { event: 'queued', ahead, waiting };
+}
+
+/** A queued job told it would not wait finds the slot or its study's lock taken: it waits now. @param {string} id */
+function nowWaiting(id) {
+  if (!id || L().waits.get(id) !== false) return;
+  const rec = readLinkRecord(id);
+  if (rec && rec.status === 'queued') emitLinkEvent(id, queuedEvent(rec, rec.row_id ? queueAheadOf(rec.row_id) : 0));
+}
+
+/**
+ * An accepted overwrite joins the compute queue: its row, then `queued {ahead, waiting}`.
+ * Returns whether it waits.
+ * @param {any} rec
+ */
 function enqueueUpdate(rec) {
   const q = enqueueGeometryJob({
     id: `q-${Date.now().toString(36)}${String(rec.id).slice(-4)}`,
@@ -874,8 +921,10 @@ function enqueueUpdate(rec) {
     throw new Error('the update could not be queued');
   }
   updateLinkRecord(rec.id, { row_id: q.item.id });
-  emitLinkEvent(rec.id, { event: 'queued', ahead: queueAheadOf(q.item.id) });
+  const ev = queuedEvent({ ...rec, row_id: q.item.id }, queueAheadOf(q.item.id));
+  emitLinkEvent(rec.id, ev);
   scheduleComputeQueueKick(250);
+  return ev.waiting;
 }
 
 /**
@@ -939,8 +988,8 @@ export async function chooseLink(body) {
   if (choice === 'overwrite') {
     updateLinkRecord(rec.id, { status: 'queued', op: 'update', choice });
     emitLinkEvent(rec.id, { event: 'chosen', choice });
-    enqueueUpdate(readLinkRecord(rec.id));
-    return { status: 202, body: { ok: true, job_id: rec.id, geometry_id: rec.geometry_id, created: false, queued: true } };
+    const waiting = enqueueUpdate(readLinkRecord(rec.id));
+    return { status: 202, body: { ok: true, job_id: rec.id, geometry_id: rec.geometry_id, created: false, queued: true, waiting } };
   }
   const newId = `geom-${rec.id.slice(-6)}${Math.floor(Math.random() * 0xffff).toString(16).padStart(4, '0')}`;
   const jobPath = join(stagingDirOf(rec.project_id, rec.id), 'job.json');
@@ -957,7 +1006,7 @@ export async function chooseLink(body) {
     copy,
   });
   emitLinkEvent(rec.id, { event: 'chosen', choice, geometryId: newId });
-  emitLinkEvent(rec.id, { event: 'queued', ahead: 0 });
+  emitLinkEvent(rec.id, queuedEvent({ ...rec, op: 'create' }, 0));
   startCreateWhenFree(rec.project_id, rec.plugin, rec.study_id);
   return { status: 202, body: { ok: true, job_id: rec.id, geometry_id: newId, created: true, queued: false } };
 }
@@ -1010,7 +1059,7 @@ export function onLinkQueueChange() {
     const ahead = queueAheadOf(rec.row_id);
     if (ahead === null || ahead === undefined || s.aheads.get(rec.id) === ahead) continue;
     s.aheads.set(rec.id, ahead);
-    emitLinkEvent(rec.id, { event: 'queued', ahead });
+    emitLinkEvent(rec.id, queuedEvent(rec, ahead));
   }
 }
 
@@ -1021,7 +1070,10 @@ export function onLinkQueueChange() {
  */
 export function startGeometryUpdate(row) {
   const id = row && row.job_id ? String(row.job_id) : '';
-  if (computeSlotHolder()) return { busy: true };
+  if (computeSlotHolder()) {
+    nowWaiting(id);
+    return { busy: true };
+  }
   const rec = id ? readLinkRecord(id) : null;
   if (!rec || rec.op !== 'update' || rec.status !== 'queued') return { missing: true };
   const rowName = String(row.name || rec.row_name || 'Geometry update');
@@ -1040,13 +1092,19 @@ export function startGeometryUpdate(row) {
   const holder = L().locks.get(key);
   // A create of this study (a first link or "Save as new") holds the study lock with the
   // slot free: this row waits without holding up the rows of other projects behind it.
-  if (holder && holder !== rec.id) return { deferred: true };
+  if (holder && holder !== rec.id) {
+    nowWaiting(rec.id);
+    return { deferred: true };
+  }
   const claimed = claimComputeSlot(
     'geometry',
     { project_id: rec.project_id, job_id: rec.id, name: rowName, plugin: rec.plugin, study_id: rec.study_id, geometry_id: rec.geometry_id },
     { phase: 'running' },
   );
-  if (!claimed.ok) return { busy: true };
+  if (!claimed.ok) {
+    nowWaiting(rec.id);
+    return { busy: true };
+  }
   const token = claimed.token;
   try {
     L().locks.set(key, rec.id);
@@ -1186,7 +1244,7 @@ async function runUpdate(id, live) {
     report: committed.report,
     seconds: (L().deps.now() - t0) / 1000,
   });
-  updateLinkRecord(id, { result });
+  updateLinkRecord(id, { result, setup: setupOf(committed.report) });
   // The follow-ups, still inside the slot (stage finishing); then the record ends.
   setStage(id, 'finishing');
   live.phase = 'follow-ups';
@@ -1570,7 +1628,7 @@ async function runCreate(id, live) {
     const q = enqueueGeometryJob({ kind: 'geometry', project_id: rec.project_id, name: rowName, job_id: id, geometry: { plugin: rec.plugin, study_id: rec.study_id, geometry_id: geom.id } });
     if (q.ok && q.item) {
       updateLinkRecord(id, { row_id: q.item.id });
-      emitLinkEvent(id, { event: 'queued', ahead: queueAheadOf(q.item.id) });
+      emitLinkEvent(id, queuedEvent({ ...rec, op: 'update', row_id: q.item.id }, queueAheadOf(q.item.id)));
       scheduleComputeQueueKick(250);
     }
     return;
@@ -1879,12 +1937,30 @@ async function runFollowUps(/** @type {any} */ rec, /** @type {LiveJob} */ live,
   };
   /** @type {Record<string, number>} */
   const took = {};
+  // What the stage `finishing` still waits for, as each follow-up ends (its label and
+  // fraction): on a large part the centre of mass alone takes many seconds.
+  const words = /** @type {Record<string, string>} */ ({ center_of_mass: 'the centre of mass', thumbnail: 'the thumbnail', project_json: 'the project file' });
+  const left = Object.keys(words).filter((k) => (k === 'project_json' ? !o.create : o.change !== 'names'));
+  const total = left.length;
+  const tell = () => {
+    if (!total) return;
+    const done = total - left.length;
+    const names = left.map((k) => words[k]);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0] || '';
+    if (list) setStage(rec.id, 'finishing', `Finishing: ${list}${done ? ` (${done} of ${total} done)` : ''}`, done / total);
+  };
+  tell();
   const timed = (/** @type {string} */ name, /** @type {() => Promise<void>} */ fn) => async () => {
     const t0 = Date.now();
     try {
       await fn();
     } finally {
       took[name] = (Date.now() - t0) / 1000;
+      const i = left.indexOf(name);
+      if (i >= 0) {
+        left.splice(i, 1);
+        tell();
+      }
     }
   };
   await Promise.all(

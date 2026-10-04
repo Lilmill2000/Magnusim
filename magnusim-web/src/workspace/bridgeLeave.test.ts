@@ -559,3 +559,84 @@ describe('gate:l3-guard the stall timer with the real bridge: every way out the 
     });
   }
 });
+
+// Exit-sync fixes (the CAD review of 2026-10-04): "Queued" only for a job that waits; a stall
+// says what waited (the app's save, or a page that no longer answers).
+describe('exit-sync fixes: what the bridge tells a leave', () => {
+  it('a job that starts at once is not queued: the route says waiting:false, and so does its queued event', async () => {
+    route = (url) => {
+      if (url.startsWith('/api/plugin-geometry/link?')) return { status: 202, body: { ok: true, job_id: LJOB, geometry_id: 'g1', created: false, queued: true, waiting: false } };
+      if (url.startsWith('/api/plugin-geometry/status')) return { status: 200, body: { ok: true, job: { id: LJOB, status: 'queued', seq: 1 } } };
+      return { status: 200, body: { ok: true } };
+    };
+    const t = await connected();
+    await t.call('nav.leaveHook', { on: true });
+    const seen: LeaveActivity[] = [];
+    void t.bridge.runLeave('back', { signal: new AbortController().signal, interactive: true, activity: (a) => seen.push(a) });
+    await vi.waitFor(() => expect(t.events.filter((e) => e.event === 'leave')).toHaveLength(1));
+    t.send('project.linkGeometry', { ...CALL, token: 'tk' });
+    await vi.waitFor(() => expect(seen).toContainEqual({ kind: 'accepted', jobId: LJOB, create: false, queued: false }));
+    const es = FakeEventSource.made[0];
+    es.emit('link', { job_id: LJOB, seq: 2, ev: { event: 'queued', ahead: 0, waiting: false } });
+    expect(seen).toContainEqual({ kind: 'link', stage: 'queued', ahead: 0, label: '', waiting: false });
+    // The slot was taken after all: now it waits.
+    es.emit('link', { job_id: LJOB, seq: 3, ev: { event: 'queued', ahead: 0, waiting: true } });
+    expect(seen).toContainEqual({ kind: 'link', stage: 'queued', ahead: 0, label: '', waiting: true });
+    t.end();
+  });
+
+  it('stallCause: a save of the page begun before the leave and still on its way, and whether the page answers', async () => {
+    let releaseWrite: () => void = () => undefined;
+    const held = new Promise<void>((r) => (releaseWrite = r));
+    const plain = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        if (String(input).startsWith('/api/plugin-data/write')) await held;
+        return (plain as typeof fetch)(input, init);
+      }),
+    );
+    const t = await connected();
+    // The page answers the probe (the test plays the page's side of it).
+    const answerProbes = (on: boolean) => {
+      (t.win as unknown as { postMessage: (...a: unknown[]) => void }).postMessage = (msg: unknown) => {
+        const m = msg as { magnusim?: string; instance?: string };
+        if (on && m && m.magnusim === 'probe') window.dispatchEvent(new MessageEvent('message', { data: { magnusim: 'alive', instance: m.instance }, source: t.win }));
+      };
+    };
+    answerProbes(true);
+    expect(await t.bridge.stallCause()).toEqual({ answers: true, saving: false });
+    const write = t.send('data.write', { rel: 'studies/st-1/design.json', doc: { v: 2 } });
+    await vi.waitFor(() => expect(t.calls.savesInFlight()).toBe(1));
+    // A leave starts while the save is on its way: the save is no work of its hook, but a stall names it.
+    void t.bridge.runLeave('back', { signal: new AbortController().signal, interactive: true, activity: () => undefined });
+    expect(await t.bridge.stallCause()).toEqual({ answers: true, saving: true });
+    answerProbes(false);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const cause = t.bridge.stallCause();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await cause).toEqual({ answers: false, saving: true });
+    vi.useRealTimers();
+    releaseWrite();
+    await vi.waitFor(() => expect(write()).toBeTruthy());
+    expect(t.calls.savesInFlight()).toBe(0);
+    t.end();
+  });
+
+  it("an update's setup (what touched the user's records) reaches the report hook with its result", async () => {
+    route = (url) => {
+      if (url.startsWith('/api/plugin-geometry/link?')) return { status: 202, body: { ok: true, job_id: LJOB, geometry_id: 'g1', created: false, queued: true, waiting: false } };
+      if (url.startsWith('/api/plugin-geometry/status')) return { status: 200, body: { ok: true, job: { id: LJOB, status: 'running', seq: 1 } } };
+      return { status: 200, body: { ok: true } };
+    };
+    const t = await connected();
+    const linked = t.send('project.linkGeometry', { ...CALL, token: 'tk' });
+    await vi.waitFor(() => expect(FakeEventSource.made.length).toBe(1));
+    const result = { geometryId: 'g1', name: 'Demo 1', rev: 2, change: 'shape', lost: [], returned: [], claimedTwice: [], match: { byName: 21, byShape: 0, split: 0, merged: 0, movedFar: 6 } };
+    const moved = { studyId: 's1', studyTitle: 'Study 1', kind: 'bc', item: 'Side wall', field: 'faces', old: 'face 15@Body1', name: 'F:boss:end', label: 'Boss end' };
+    FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 2, ev: { event: 'end', status: 'done', result, setup: { movedFar: [moved], split: [], merged: [], stale: [] } } });
+    await vi.waitFor(() => expect(linked()).toBeTruthy());
+    expect(t.h.linkReport).toHaveBeenCalledWith(result, { movedFar: [moved], split: [], merged: [], stale: [] });
+    t.end();
+  });
+});

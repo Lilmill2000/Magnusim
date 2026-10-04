@@ -189,7 +189,7 @@ describe('gate:l3-guard the workspace header while the exit hook runs', () => {
       await waitFor(() => expect(location.hash).toBe('#/p/proj'));
       t.view.unmount();
       expect(left).toHaveLength(1);
-      expect(left[0]).toMatchObject({ projectId: 'proj', plugin: 'link-demo', studyId: 'st-1', reason: 'back', geometryId: 'g1', jobId: LJOB, view: VIEW, report: true });
+      expect(left[0]).toMatchObject({ projectId: 'proj', plugin: 'link-demo', studyId: 'st-1', reason: 'back', geometryId: 'g1', jobId: LJOB, view: VIEW, report: true, background: true });
       expect(leave).toMatch(/^leave-/);
     } finally {
       window.removeEventListener('cfd:workspace-left', onLeft);
@@ -247,7 +247,7 @@ describe('gate:l3-guard the workspace header and landing: review fixes', () => {
       await waitFor(() => expect(location.hash).toBe('#/p/proj'));
       t.view.unmount();
       expect(left).toHaveLength(1);
-      expect(left[0]).toMatchObject({ projectId: 'proj', plugin: 'link-demo', studyId: 'st-1', reason: 'back', view: VIEW, report: false });
+      expect(left[0]).toMatchObject({ projectId: 'proj', plugin: 'link-demo', studyId: 'st-1', reason: 'back', view: VIEW, report: false, background: false });
       expect(left[0].geometryId).toBeUndefined();
       expect(left[0].jobId).toBeUndefined();
     } finally {
@@ -278,7 +278,13 @@ describe('gate:l3-guard the workspace header and landing: review fixes', () => {
     es.emit('link', {
       job_id: LJOB,
       seq: 3,
-      ev: { event: 'end', status: 'done', result: { geometryId: 'g1', name: 'Demo 1', rev: 2, change: 'shape', lost: [], returned: [], claimedTwice: [], match: { byName: 1, byShape: 0, split: 1, merged: 0, movedFar: 0 } } },
+      ev: {
+        event: 'end',
+        status: 'done',
+        result: { geometryId: 'g1', name: 'Demo 1', rev: 2, change: 'shape', lost: [], returned: [], claimedTwice: [], match: { byName: 1, byShape: 0, split: 1, merged: 0, movedFar: 0 } },
+        // A record's face split: worth the report.
+        setup: { movedFar: [], split: [{ studyId: 's1', studyTitle: 'Study 1', kind: 'bc', item: 'Wall', field: 'faces', old: 'face 12@Body1', name: 'F:box:+y', label: 'Box +y', faces: 2 }], merged: [], stale: [] },
+      },
     });
     await waitFor(() => expect(linked()).toBeTruthy());
     // Inside the leave the report waits.
@@ -291,3 +297,69 @@ describe('gate:l3-guard the workspace header and landing: review fixes', () => {
     t.view.unmount();
   });
 });
+
+// Exit-sync fixes (the CAD review of 2026-10-04): an update that touched none of the user's
+// setup shows no dialog; one that only put a mesh out of date is a toast.
+describe('exit-sync fixes: the report of a link the page makes while it stays open', () => {
+  it('no record touched: no dialog; a mesh out of date: a toast in the workspace; a record touched: the dialog names it', async () => {
+    linkAnswer = { status: 202, body: { ok: true, job_id: LJOB, geometry_id: 'g1', created: false, queued: true, waiting: false } };
+    const asked: Array<{ title: string; copy: string }> = [];
+    window.__CFD_CONFIRM__ = vi.fn(async (q: { title: string; copy: string }) => {
+      asked.push({ title: q.title, copy: q.copy });
+      return true;
+    }) as unknown as typeof window.__CFD_CONFIRM__;
+    const t = await openConnected();
+    const base = { geometryId: 'g1', name: 'Demo 1', rev: 2, change: 'shape', lost: [], returned: [], claimedTwice: [], match: { byName: 21, byShape: 0, split: 0, merged: 0, movedFar: 6 } };
+    const none = { movedFar: [], split: [], merged: [], stale: [] };
+    const linkOnce = async (seq: number, result: Record<string, unknown>, setup: Record<string, unknown>) => {
+      const linked = t.send('project.linkGeometry', { shape: { rel: 'studies/st-1/design/shape.bbrep', format: 'brep', sha256: SHA_HEX }, sourceVersion: seq, basedOnRev: 1, token: `tk${seq}` });
+      const es = await waitFor(() => {
+        const found = FakeEventSource.made.find((e) => e.url.startsWith('/api/plugin-geometry/events'));
+        if (!found) throw new Error('no link stream yet');
+        return found;
+      });
+      await waitFor(() => expect(fetchedLinks()).toBeGreaterThanOrEqual(seq - 1));
+      es.emit('link', { job_id: LJOB, seq: seq * 10, ev: { event: 'end', status: 'done', result, setup } });
+      await waitFor(() => expect(linked()).toBeTruthy());
+    };
+    await linkOnce(2, base, none);
+    await act(async () => undefined);
+    expect(asked).toEqual([]);
+    expect($('[data-ws-toast]')).toBeNull();
+    t.view.unmount();
+    // Again on a fresh page: a mesh out of date is said quietly.
+    const t2 = await openConnected();
+    const meshes = { ...base, outOfDate: { meshes: [{ studyId: 's1', studyTitle: 'Study 1', meshId: 'm1', meshName: 'Mesh 1' }], runs: 0 } };
+    const linked = t2.send('project.linkGeometry', { shape: { rel: 'studies/st-1/design/shape.bbrep', format: 'brep', sha256: SHA_HEX }, sourceVersion: 3, basedOnRev: 1, token: 'tk3' });
+    // This page's own link stream (the first page's went with it).
+    const es2 = await waitFor(() => {
+      const all = FakeEventSource.made.filter((e) => e.url.startsWith('/api/plugin-geometry/events'));
+      if (all.length < 2) throw new Error('no link stream yet');
+      return all[all.length - 1];
+    });
+    await waitFor(() => expect(fetchedLinks()).toBeGreaterThanOrEqual(2));
+    es2.emit('link', { job_id: LJOB, seq: 30, ev: { event: 'end', status: 'done', result: meshes, setup: none } });
+    await waitFor(() => expect(linked()).toBeTruthy());
+    await waitFor(() => expect($('[data-ws-toast]')?.textContent).toContain('Demo 1 updated. Out of date: Mesh 1. Generate it again before you run.'));
+    expect(asked).toEqual([]);
+    // A record's face moved far: the dialog, naming the record and the face.
+    const wall = { studyId: 's1', studyTitle: 'Study 1', kind: 'bc', item: 'Side wall', field: 'faces', old: 'face 15@Body1', name: 'F:boss:end', label: 'Boss end' };
+    const job3 = 'gl-mg1abc2d-0a1b2d';
+    linkAnswer = { status: 202, body: { ok: true, job_id: job3, geometry_id: 'g1', created: false, queued: true, waiting: false } };
+    const linked3 = t2.send('project.linkGeometry', { shape: { rel: 'studies/st-1/design/shape.bbrep', format: 'brep', sha256: SHA_HEX }, sourceVersion: 4, basedOnRev: 2, token: 'tk4' });
+    await waitFor(() => expect(fetchedLinks()).toBeGreaterThanOrEqual(3));
+    es2.emit('link', { job_id: job3, seq: 40, ev: { event: 'end', status: 'done', result: { ...base, rev: 3 }, setup: { ...none, movedFar: [wall] } } });
+    await waitFor(() => expect(linked3()).toBeTruthy());
+    await waitFor(() => expect(asked).toHaveLength(1));
+    expect(asked[0]).toEqual({
+      title: 'Demo 1 updated',
+      copy: "Boundary conditions, refinements and monitors kept their faces by name.\nKept by name but moved far: Study 1 › Side wall ('Boss end'). Check it.",
+    });
+    t2.view.unmount();
+  });
+});
+
+function fetchedLinks(): number {
+  const f = globalThis.fetch as unknown as { mock: { calls: unknown[][] } };
+  return f.mock.calls.filter((c) => String(c[0]).startsWith('/api/plugin-geometry/link?')).length;
+}

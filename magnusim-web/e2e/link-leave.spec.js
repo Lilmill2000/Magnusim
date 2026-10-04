@@ -126,14 +126,17 @@ const landings = (page) => page.evaluate(() => window.__CFD_LANDINGS__ || 0);
  */
 async function awaitLanding(page, before, opts = {}) {
   const reports = [];
+  const answer = async () => {
+    reports.push(String(await page.locator('#cf-heading').textContent()));
+    // What was on screen when the report showed (for a results exit: its case attached).
+    if (opts.results) opts.results.push(await page.evaluate(() => window.__CFD_RESULTS_VIEW__ === true && /fixture/.test(String(window.__CFD_W6__?.case_dir || ''))));
+    await page.locator('#cf-confirm').click();
+  };
   await expect
     .poll(
       async () => {
         if (await page.locator('#modal-confirm').isVisible()) {
-          reports.push(String(await page.locator('#cf-heading').textContent()));
-          // What was on screen when the report showed (for a results exit: its case attached).
-          if (opts.results) opts.results.push(await page.evaluate(() => window.__CFD_RESULTS_VIEW__ === true && /fixture/.test(String(window.__CFD_W6__?.case_dir || ''))));
-          await page.locator('#cf-confirm').click();
+          await answer();
           return 'report';
         }
         return (await landings(page)) > before ? 'done' : 'waiting';
@@ -141,6 +144,13 @@ async function awaitLanding(page, before, opts = {}) {
       { timeout: 180_000, intervals: [250] },
     )
     .toBe('done');
+  // The report never holds the landing up: it shows as the landing ends.
+  const last = await page.evaluate(() => window.__CFD_LAST_LANDING__ || {});
+  if (last.report === 'dialog' && !reports.length) {
+    await expect(page.locator('#modal-confirm')).toBeVisible({ timeout: 15_000 });
+    await answer();
+    await expect(page.locator('#modal-confirm')).toBeHidden();
+  }
   return reports;
 }
 
@@ -257,6 +267,20 @@ async function generatedMeshAndRun(request, host, pid, simId, rev) {
   const rj = await r.json();
   expect(r.ok(), JSON.stringify(rj)).toBe(true);
   return { meshId, runId: String(rj.run_id || (rj.run && (rj.run.id || rj.run.run_id)) || rj.id) };
+}
+
+/** A linked geometry's face by its label, as its preview names it ("face <id>@Body<n>"). */
+async function faceOf(request, host, pid, gid, label) {
+  const meta = await getJson(request, `${host.base}/api/geometry/cad?project_id=${pid}&geometry_id=${gid}&part=preview&t=${Date.now()}`);
+  const f = (meta.faces || []).find((x) => x.label === label);
+  expect(f, `a face labelled ${label}`).toBeTruthy();
+  return `face ${f.id}@Body${f.body || 1}`;
+}
+
+/** Delete a simulation study (the geometry is no longer in use by it). */
+async function deleteStudy(request, host, pid, simId) {
+  const r = await request.post(`${host.base}/api/simulation/delete`, { data: { project_id: pid, simulation_id: simId } });
+  expect(r.ok(), await r.text()).toBe(true);
 }
 
 /** Watch for anything the app shows that a test says must not show (a dialog, a safe question). */
@@ -471,11 +495,12 @@ test.describe('exit sync (host API 1.6)', () => {
     ];
     let rev = 1;
     for (const exit of exits) {
-      // The ways out that leave the project's view as it is land with data only: the hook's
-      // camera is not applied and no dialog shows (LINK 6.5).
-      const dataOnly = ['history', 'project', 'home'].includes(exit.reason);
+      // The ways out that leave the project land with data only: the hook's camera is not
+      // applied and no dialog shows (LINK 6.5). Browser Back to the project is a way back to
+      // it, like Back: the full landing with the hook's camera (the review of 2026-10-04).
+      const dataOnly = ['project', 'home'].includes(exit.reason);
       frame = await openWs(page, scope);
-      if (dataOnly) await frame.locator('#hook-view').check();
+      if (dataOnly || exit.reason === 'history') await frame.locator('#hook-view').check();
       await edit(page, frame, exit.version);
       await watchShown(page);
       const before = await landings(page);
@@ -492,8 +517,11 @@ test.describe('exit sync (host API 1.6)', () => {
         expect((await seen(page)).confirm).toEqual([]);
         expect(last.view).toBeUndefined();
       }
-      // Browser Back stays on the project's view: its camera is not the hook's.
-      if (exit.reason === 'history') expect(isHookView(await camera(page))).toBe(false);
+      // Browser Back lands with the hook's camera, as Back does.
+      if (exit.reason === 'history') {
+        expect(last.view).toBe(true);
+        expect(isHookView(await camera(page))).toBe(true);
+      }
       rev += 1;
       await expect.poll(async () => (await linkedOf(request, host, scope)).rev, { timeout: 120_000 }).toBe(rev);
       expect(hookLog(host, scope).slice(-1)).toEqual([exit.reason]);
@@ -566,7 +594,12 @@ test.describe('exit sync (host API 1.6)', () => {
     await answerQuestion(page, 'overwrite');
     await expect(page).toHaveURL(new RegExp(`#/p/${pid}$`), { timeout: 180_000 });
     const reports = await awaitLanding(page, before);
-    expect(reports).toEqual(['Demo 1 updated']);
+    // The BC's face did not change and nothing else of the setup was touched: no dialog (the
+    // review of 2026-10-04); the mesh made at rev 1 is said quietly.
+    expect(reports).toEqual([]);
+    await expect
+      .poll(() => page.evaluate(() => window.__CFD_LINK_TOASTS__ || []), { timeout: 10_000 })
+      .toContain('Demo 1 updated. Out of date: Mesh 1. Generate it again before you run.');
     expect((await linkedOf(request, host, scope)).rev).toBe(2);
     expect((await viewport(page)).id).toBe(gid);
     await expect(page.locator('#hidden-faces-chip')).toBeHidden();
@@ -836,10 +869,14 @@ test.describe('exit sync (host API 1.6)', () => {
     stage(t1, 'unsaved: one question');
 
     // A hook that stalls after its link went through: the question says the geometry was updated.
+    // A BC on v3's -x face, which v1 splits in two: the update touches the setup, so its report is due.
+    const g3 = (await linkedOf(request, host, scope)).geometryId;
+    await studyWithBc(request, host, pid, g3, 3, await faceOf(request, host, pid, g3, 'Box -x'));
     frame = await openWs(page, scope);
     await frame.locator('#hook-after').fill('45000');
     await edit(page, frame, 'v1');
     await page.locator('#workspace-overlay [data-ws-back]').click();
+    await answerQuestion(page, 'overwrite');
     await expect(page.locator('#modal-confirm')).toBeVisible({ timeout: 60_000 });
     await expect(page.locator('#cf-heading')).toHaveText("Couldn't update the project");
     expect(await page.locator('#cf-copy').textContent()).toBe('Link demo: it did not answer for 30 seconds. Demo 1 was updated.');
@@ -920,8 +957,10 @@ test.describe('exit sync (host API 1.6)', () => {
       await expect(page.locator('#wb-link-wait')).toBeHidden();
       await expect.poll(async () => (await linkedOf(request, host, scope)).rev, { timeout: 120_000 }).toBe(2);
       await expect.poll(async () => (await viewport(page)).id, { timeout: 60_000 }).toBe(gid);
-      // Only the newer update's report: nothing about the one it replaced.
-      expect((await seen(page)).confirm).toEqual(['Demo 1 updated']);
+      // Nothing about the one it replaced, and no dialog for the newer one either: it touched
+      // none of the setup, and it landed while the user worked (the review of 2026-10-04).
+      expect((await seen(page)).confirm).toEqual([]);
+      expect(await page.evaluate(() => (window.__CFD_LINK_TOASTS__ || []).join(' '))).not.toMatch(/superseded|replaced/i);
       await expect(page.locator('.app-toasts')).not.toContainText(/fail|error|couldn|superseded|replaced/i);
       expect(hookLog(host, scope).slice(-2)).toEqual(['back', 'back']);
       // After a reload too: the part shown is the same, the row has no queue status.
@@ -1068,6 +1107,8 @@ test.describe('exit sync (host API 1.6)', () => {
     stage(t1, 'a stall from Open in 3D asked');
 
     // A change, then Open in 3D: the hook runs with `results`; the results open and stay open.
+    // A BC on v1's +y face, which v2 splits: the update touches the setup, so its report is due.
+    const bcStudy = await studyWithBc(request, host, pid, gid, 1, 'face 12@Body1');
     frame = await openWs(page, scope);
     await edit(page, frame, 'v2');
     const before = await landings(page);
@@ -1077,6 +1118,7 @@ test.describe('exit sync (host API 1.6)', () => {
       await route.continue().catch(() => {});
     });
     await frame.locator('#open3d').click();
+    await answerQuestion(page, 'overwrite');
     await expect(page).toHaveURL(new RegExp(`#/p/${pid}$`), { timeout: 180_000 });
     const atReport = [];
     const reports = await awaitLanding(page, before, { results: atReport });
@@ -1094,6 +1136,8 @@ test.describe('exit sync (host API 1.6)', () => {
     expect((await viewport(page)).stage).toBe('results');
     await shot(page, testInfo, 'l3-results-after-change.png');
     expect((await linkedOf(request, host, scope)).rev).toBe(2);
+    // The study goes: the updates below meet no question.
+    await deleteStudy(request, host, pid, bcStudy.id);
     stage(t1, 'results opened, report after');
 
     // An update that lands while the results show (queued, "Continue in background", then the
@@ -1333,12 +1377,16 @@ test.describe('exit sync (host API 1.6)', () => {
       await request.post(`${host.base}/api/compute-queue/kick`, { data: { project_id: pid } });
     };
     try {
+      // A BC on v1's +y face, which v2 splits: the update touches the setup, so its report is due.
+      const gid1 = (await linkedOf(request, host, scope)).geometryId;
+      const bcStudy = await studyWithBc(request, host, pid, gid1, 1, 'face 12@Body1');
       // Queued, then "Stay here" (twice: the second Back links the same saved design and joins its job).
       await hold();
       frame = await openWs(page, scope);
       await edit(page, frame, 'v2');
       for (let i = 0; i < 2; i++) {
         await page.locator('#workspace-overlay [data-ws-back]').click();
+        if (i === 0) await answerQuestion(page, 'overwrite');
         await expect(status).toHaveText(/^Queued( behind \d+ jobs?)? \(see Queue\)$/, { timeout: 60_000 });
         const stay = page.locator('[data-ws-leave-cancel]');
         await expect(stay).toHaveText('Stay here');
@@ -1357,6 +1405,8 @@ test.describe('exit sync (host API 1.6)', () => {
       await page.locator('#cf-confirm').click();
       await expect(page.locator('#modal-confirm')).toBeHidden();
       await expect(page).toHaveURL(wsUrl);
+      // The study goes: the links below meet no question.
+      await deleteStudy(request, host, pid, bcStudy.id);
       stage(t1, 'stayed twice; the joined update landed');
 
       // A hook that stalls now still asks after 30 s (nothing of the earlier leaves holds it off).

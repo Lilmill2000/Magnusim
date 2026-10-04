@@ -189,7 +189,10 @@ export interface LinkChoiceScope {
 }
 
 /** POST /api/plugin-geometry/choose: the answer. Throws an Error with `code` on a refusal. */
-export async function sendLinkChoice(s: LinkChoiceScope, answer: LinkChoice): Promise<{ geometry_id?: string; created?: boolean; queued?: boolean; cancelled?: boolean }> {
+export async function sendLinkChoice(
+  s: LinkChoiceScope,
+  answer: LinkChoice,
+): Promise<{ geometry_id?: string; created?: boolean; queued?: boolean; waiting?: boolean; cancelled?: boolean }> {
   const r = await fetch(`/api/plugin-geometry/choose?project_id=${encodeURIComponent(s.projectId)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -235,7 +238,8 @@ export function savedAsNewText(newName: string, oldName: string, copies: LinkCop
       lines.push(`Couldn't copy the setup of ${c.title}: ${c.error || 'it failed'}`);
       continue;
     }
-    lines.push(`Copied the setup of ${c.title} onto it${c.newTitle ? ` (${c.newTitle})` : ''}.`);
+    // The copy's own title only when it differs (a copy keeps its study's title unless taken).
+    lines.push(`Copied the setup of ${c.title} onto it${c.newTitle && c.newTitle !== c.title ? `, as ${c.newTitle}` : ''}.`);
     const lost = c.lost || [];
     if (lost.length) {
       lines.push('These faces are not on the new shape. Each one stays listed on its record:');

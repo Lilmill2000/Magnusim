@@ -40,6 +40,11 @@ export interface LeaveHook {
   geometryName(): Promise<string>;
   /** That name as last known here, at once (when the app is too slow to say). */
   lastGeometryName?(): string;
+  /**
+   * What a stalled hook was waiting for: whether the page still answers, and whether a save
+   * of the page's through the app (a file commit, a data write) is still on its way.
+   */
+  stallCause?(): Promise<{ answers: boolean; saving: boolean }>;
 }
 
 /** The open workspace, as the guard needs it. */
@@ -107,8 +112,9 @@ let approvalTimer: ReturnType<typeof setTimeout> | null = null;
 let asking = false;
 // A leave is running the page's hook (one at a time).
 let leaving = false;
-// The way out the user last chose and the guard let through, for the overlay's landing.
-let lastReason: { ws: GuardedWorkspace; reason: LeaveReason } | null = null;
+// The way out the user last chose and the guard let through, for the overlay's landing;
+// `background`: the leave went on while the link's job ran on ("Continue in background").
+let lastReason: { ws: GuardedWorkspace; reason: LeaveReason; background: boolean } | null = null;
 const IDLE: LeaveProgress = { running: false, shown: false, label: '', choosing: false, background: false, started: false };
 let progress: LeaveProgress = IDLE;
 const progressSubscribers = new Set<(p: LeaveProgress) => void>();
@@ -263,7 +269,7 @@ type LeaveUpdate = 'none' | 'running' | 'done';
  * job the server took goes on whatever the page does, and one that went through updated
  * the geometry.
  */
-function hookFailedQuestion(ws: GuardedWorkspace, message: string, geometry: string, update: LeaveUpdate): LeaveQuestion {
+function hookFailedQuestion(ws: GuardedWorkspace, message: string, geometry: string, update: LeaveUpdate, own = false): LeaveQuestion {
   const who = plainName(ws.pluginName(), ws.route.plugin);
   const msg = cleanDirtyMessage(message) || 'it could not update the project';
   const name = geometry ? plainName(geometry, geometry) : '';
@@ -276,7 +282,21 @@ function hookFailedQuestion(ws: GuardedWorkspace, message: string, geometry: str
           ? `${name} keeps its last update.`
           : 'The project is unchanged.';
   const lost = state.dirty ? ' Its changes are not saved. Leaving discards them.' : '';
-  return { title: "Couldn't update the project", copy: `${who}: ${asSentence(msg)} ${kept}${lost}`, yes: 'Leave anyway', no: 'Stay', safe: true };
+  // `own`: the message says what waited itself (the app's save), not the plugin.
+  const what = own ? asSentence(msg) : `${who}: ${asSentence(msg)}`;
+  return { title: "Couldn't update the project", copy: `${what} ${kept}${lost}`, yes: 'Leave anyway', no: 'Stay', safe: true };
+}
+
+/**
+ * What a stall's question says waited (LINK 6.4): the page's save through the app when one
+ * is still on its way ("The save of <Study> did not finish in 30 seconds", the app's file
+ * commit, not the plugin); a page that no longer answers; else the plugin's hook.
+ */
+function stallMessage(ws: GuardedWorkspace, cause: { answers: boolean; saving: boolean } | null): { message: string; own: boolean } {
+  const secs = Math.round(LEAVE_STALL_MS / 1000);
+  if (cause && cause.saving) return { message: `The save of ${plainName(ws.studyTitle(), ws.route.studyId)} did not finish in ${secs} seconds`, own: true };
+  if (cause && !cause.answers) return { message: `its page did not answer for ${secs} seconds`, own: false };
+  return { message: `it did not answer for ${secs} seconds`, own: false };
 }
 
 /** The status line's words for a link stage (LINK 6.4). */
@@ -288,6 +308,8 @@ function stageText(stage: string, ahead: number | null, label: string, create: b
     return n > 0 ? `Queued behind ${n} job${n === 1 ? '' : 's'} (see Queue)` : 'Queued (see Queue)';
   }
   if (stage === 'waiting' && label) return label;
+  // What the finishing work still waits for, as the server says (LINK 6.4's honest progress).
+  if (stage === 'finishing' && label) return label;
   const words: Record<string, string> = {
     reading: 'Reading the design',
     meshing: 'Building the part',
@@ -313,7 +335,8 @@ function publishProgress(next: LeaveProgress): void {
 /** How the hook's run ended for the guard. */
 type HookEnd =
   | { kind: 'done' }
-  | { kind: 'failed'; message: string; update: LeaveUpdate }
+  /** `stall`: nothing happened for LEAVE_STALL_MS (the question says what waited). */
+  | { kind: 'failed'; message: string; update: LeaveUpdate; stall?: boolean }
   /** "Keep editing" in the host's question, or the header's Cancel: stay, no question. */
   | { kind: 'stay' }
   /** "Continue in background", or a caller that cannot ask once the server took the link. */
@@ -367,7 +390,7 @@ function runHook(ws: GuardedWorkspace, hook: LeaveHook, reason: LeaveReason, int
       // flight (an upload, the link) or the link's job waits in the queue.
       if (choosing || inFlight > 0 || stage === 'queued' || busy()) lastActivity = now;
       if (now - lastActivity >= LEAVE_STALL_MS) {
-        finish({ kind: 'failed', message: `it did not answer for ${Math.round(LEAVE_STALL_MS / 1000)} seconds`, update }, true);
+        finish({ kind: 'failed', message: `it did not answer for ${Math.round(LEAVE_STALL_MS / 1000)} seconds`, update, stall: true }, true);
         return;
       }
       draw();
@@ -384,9 +407,12 @@ function runHook(ws: GuardedWorkspace, hook: LeaveHook, reason: LeaveReason, int
       if (a.kind === 'progress') pageLabel = a.label;
       else if (a.kind === 'calls') inFlight = a.inFlight;
       else if (a.kind === 'link') {
-        stage = a.stage;
-        ahead = a.ahead;
-        stageLabel = a.label;
+        // A job that starts at once is never shown as queued (no flash of "Queued").
+        if (!(a.stage === 'queued' && a.waiting === false)) {
+          stage = a.stage;
+          ahead = a.ahead;
+          stageLabel = a.label;
+        }
       } else if (a.kind === 'choosing') choosing = a.open;
       else if (a.kind === 'kept') {
         finish({ kind: 'stay' }, true);
@@ -500,6 +526,14 @@ export function lastLeaveReason(ws: GuardedWorkspace): LeaveReason | null {
   return lastReason && lastReason.ws === ws ? lastReason.reason : null;
 }
 
+/**
+ * That leave went on while the link's job still ran ("Continue in background", or a caller
+ * that cannot ask): its landing comes later, while the user works.
+ */
+export function lastLeaveInBackground(ws: GuardedWorkspace): boolean {
+  return !!lastReason && lastReason.ws === ws && lastReason.background;
+}
+
 /** Hear what the workspace header shows while a leave runs the page's hook. */
 export function subscribeLeaveProgress(fn: (p: LeaveProgress) => void): () => void {
   progressSubscribers.add(fn);
@@ -591,9 +625,23 @@ async function geometryNameSoon(hook: LeaveHook): Promise<string> {
   }
 }
 
-/** The guard let this way out through: the overlay's landing reads why. */
-function noteReason(ws: GuardedWorkspace | null, reason: LeaveReason): void {
-  if (ws) lastReason = { ws, reason };
+/** What a stall waited for, as the bridge knows it (LEAVE_NAME_MS at most; null when it cannot say). */
+async function stallCauseSoon(hook: LeaveHook): Promise<{ answers: boolean; saving: boolean } | null> {
+  if (!hook.stallCause) return null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), LEAVE_NAME_MS);
+  });
+  try {
+    return await Promise.race([hook.stallCause().catch(() => null), late]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** The guard let this way out through: the overlay's landing reads why (and whether the job ran on). */
+function noteReason(ws: GuardedWorkspace | null, reason: LeaveReason, background = false): void {
+  if (ws) lastReason = { ws, reason, background };
 }
 
 /**
@@ -633,7 +681,7 @@ async function confirmLeave(reason: LeaveReason, opts: { interactive?: boolean }
   const interactive = opts.interactive !== false;
   // Turning the plugin off runs no hook (D11): today's question about unsaved work only.
   const hook = reason !== 'plugin-off' && ws.hook && ws.hook.on() ? ws.hook : null;
-  let failed: { message: string; update: LeaveUpdate } | null = null;
+  let failed: { message: string; update: LeaveUpdate; stall: boolean } | null = null;
   if (hook) {
     leaving = true;
     try {
@@ -653,10 +701,10 @@ async function confirmLeave(reason: LeaveReason, opts: { interactive?: boolean }
           // The job goes on in the app; the page's unsaved work (if any) is the caller's to ask about.
           if (!interactive && state.dirty) return false;
           approve(true);
-          noteReason(ws, reason);
+          noteReason(ws, reason, true);
           return true;
         }
-        if (end.kind === 'failed') failed = { message: end.message, update: end.update };
+        if (end.kind === 'failed') failed = { message: end.message, update: end.update, stall: !!end.stall };
       }
       if (failed !== null) {
         // A caller that cannot ask stays.
@@ -664,13 +712,14 @@ async function confirmLeave(reason: LeaveReason, opts: { interactive?: boolean }
         // The question comes next: the header offers nothing meanwhile (no Cancel with
         // nothing left to cancel), and a slow app holds it up for LEAVE_NAME_MS at most.
         publishProgress({ ...progress, choosing: true, background: false });
-        const geometry = await geometryNameSoon(hook);
+        const [geometry, cause] = await Promise.all([geometryNameSoon(hook), failed.stall ? stallCauseSoon(hook) : Promise.resolve(null)]);
         if (openEnds !== ends) return false;
         publishProgress(IDLE);
+        const said = failed.stall ? stallMessage(ws, cause) : { message: failed.message, own: false };
         asking = true;
         let ok = false;
         try {
-          ok = await ask(hookFailedQuestion(ws, failed.message, geometry, failed.update), ends ? ends.signal : undefined);
+          ok = await ask(hookFailedQuestion(ws, said.message, geometry, failed.update, said.own), ends ? ends.signal : undefined);
         } finally {
           asking = false;
         }

@@ -950,8 +950,67 @@ def build_plan(
             )
     report["still_lost"] = still
     report["merged"] = list((fmap.report or {}).get("merged") or [])
+    report["setup"] = _setup_report(planned, ctx)
     report["out_of_date"] = _out_of_date(project_dir, geometry_id, studies) if change != "names" else {"meshes": [], "runs": 0}
     return {"change": change, "rev": new_rev, "patches": patches, "report": report}
+
+
+def _setup_report(planned: list[Planned], ctx: Ctx) -> dict[str, list[dict[str, Any]]]:
+    """What of a shape change touches the user's setup (the host's report, 5.14).
+
+    Only faces a record refers to count: each face a boundary condition, refinement,
+    monitor or view holds that moved far (kept by name), split into several faces, or
+    became one face with others, listed with its record. A face no record refers to is
+    never reported, however far it moved. Lost and claimed-twice faces are reported by
+    their own lists; a face of an ambiguous name group is neither split nor merged.
+    """
+    out: dict[str, list[dict[str, Any]]] = {"moved_far": [], "split": [], "merged": []}
+    if ctx.same_shape:
+        return out
+    rep = ctx.fmap.report or {}
+    moved = {face_index(m.get("old")) for m in rep.get("moved_far") or [] if isinstance(m, dict)}
+    merged = {str(m.get("target")): int(m.get("faces") or 0) for m in rep.get("merged") or [] if isinstance(m, dict)}
+    for p in planned:
+        if p.stale:
+            continue
+        seen: set[tuple[str, str]] = set()
+        for path, what in p.rec.fields:
+            # A single field mirrored from a list (a BC's `face`) is the same face again.
+            if what != "face" or _mirror_of(p.rec.kind, path) is not None:
+                continue
+            val = _get(p.rec.doc, path)
+            now = p.values.get(path)
+            held = {str(x) for x in (now if isinstance(now, list) else [now] if now else [])}
+            for v in val if isinstance(val, list) else ([val] if val else []):
+                idx = face_index(v)
+                targets = ctx.fmap.targets(idx) if idx is not None else None
+                if idx is None or not targets:
+                    continue
+                info = ctx.fmap.old_info(idx)
+                base = {
+                    "studyId": p.rec.study_id,
+                    "studyTitle": p.rec.study_title,
+                    "kind": p.rec.kind,
+                    "item": p.rec.name,
+                    "field": path_key(path),
+                    "old": str(v),
+                    "name": info.get("name"),
+                    "label": info.get("label"),
+                }
+                if idx in moved and ("moved", str(v)) not in seen:
+                    seen.add(("moved", str(v)))
+                    out["moved_far"].append(dict(base))
+                if idx in ctx.fmap.groups:
+                    continue
+                if len(targets) > 1 and ("split", str(v)) not in seen:
+                    seen.add(("split", str(v)))
+                    out["split"].append({**base, "faces": len(targets)})
+                elif len(targets) == 1 and merged.get(targets[0], 0) > 1 and targets[0] in held and ("merged", targets[0]) not in seen:
+                    # Once per record and merged face (a record that held both halves).
+                    seen.add(("merged", targets[0]))
+                    nf = ctx.fmap.new.faces.get(face_index(targets[0]) or -1) or {}
+                    out["merged"].append({**base, "target": targets[0], "targetLabel": nf.get("label") or nf.get("name") or None, "faces": merged[targets[0]]})
+    return out
 
 
 def _out_of_date(project_dir: Path, geometry_id: str, studies: list[str] | None) -> dict[str, Any]:

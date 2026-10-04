@@ -20,9 +20,12 @@ The versions:
   them are claimed twice) and its +y face is two (split); Body 1 is renamed "Fluid" with
   the same id.
 - ``v3``: v2 with the boss back (its end face returns).
+- ``v4``: v1 with both bodies 10 mm taller (z 0..40) and the boss on the new top: the same
+  faces with the same names, but the tops and the boss stand 10 mm higher, so they are
+  kept by name but moved far, while the bottoms do not move at all.
 
-Files: ``v1.bbrep``, ``v2.bbrep``, ``v3.bbrep`` (binary BREPs), ``v1.brep`` (v1 as a text
-BREP), and ``v1.face_names.json``, ``v2.face_names.json``, ``v3.face_names.json`` (written
+Files: ``v1.bbrep``, ``v2.bbrep``, ``v3.bbrep``, ``v4.bbrep`` (binary BREPs), ``v1.brep`` (v1 as a text
+BREP), and ``v1.face_names.json`` to ``v4.face_names.json`` (written
 with ``magnusim_sdk.link.write_face_names``, each carrying the sha256 of its binary BREP),
 plus ``v1-renamed.face_names.json`` (v1 with other labels: a names-only change). For
 link-demo-2, ``designs/v1.brep`` and ``designs/v2.brep`` (text BREPs) and their
@@ -51,6 +54,8 @@ OUT = PY / "tests" / "fixtures" / "link-plugins" / "link-demo" / "workspace" / "
 DESIGNS = PY / "tests" / "fixtures" / "link-plugins" / "link-demo-2" / "designs"
 SIDES = {(1, 0, 0): "+x", (-1, 0, 0): "-x", (0, 1, 0): "+y", (0, -1, 0): "-y", (0, 0, 1): "+z", (0, 0, -1): "-z"}
 BOSS = (3.0, 3.0, 30.0, 4.0, 4.0, 5.0)
+# The height of the boxes (the boss stands on top of them): v4 is 10 mm taller.
+TOP = {1: 30.0, 2: 30.0, 3: 30.0, 4: 40.0}
 
 
 def _box(x0, y0, z0, dx, dy, dz):
@@ -95,8 +100,11 @@ def _general_fuse(*shapes):
 
 
 def _version(v: int):
-    body2 = _box(0.0, -10.0, 0.0, 10.0, 10.0, 30.0)
-    if v == 1:
+    h = TOP[v]
+    body2 = _box(0.0, -10.0, 0.0, 10.0, 10.0, h)
+    if v == 4:
+        body1 = _fuse(_box(0, 0, 0, 10, 10, h), _box(0, 10, 0, 10, 10, h), _box(BOSS[0], BOSS[1], h, *BOSS[3:]))
+    elif v == 1:
         body1 = _fuse(_box(0, 0, 0, 10, 10, 30), _box(0, 10, 0, 10, 10, 30), _box(*BOSS))
     elif v == 2:
         body1 = _fuse(_box(0, 0, 0, 5, 20, 30), _box(5, 0, 0, 5, 20, 30))
@@ -105,11 +113,11 @@ def _version(v: int):
     return _general_fuse(body1, body2)
 
 
-def _face_name(body: int, normal: list[float], centroid: list[float]) -> tuple[str, str]:
+def _face_name(body: int, normal: list[float], centroid: list[float], top: float = 30.0) -> tuple[str, str]:
     side = SIDES[tuple(int(round(c)) for c in normal)]
     if body == 2:
         return f"F:b2:{side}", f"Side box {side}"
-    if centroid[2] > 30.0 + 1e-6:  # the boss stands above the box's top (z = 30)
+    if centroid[2] > top + 1e-6:  # the boss stands above the box's top
         if side == "+z":
             return "F:boss:end", "Boss end"
         return f"F:boss:{side}", f"Boss {side}"
@@ -121,7 +129,7 @@ def _names(shape, sha: str, version: int, label_prefix: str | None = None) -> tu
 
     faces = []
     for f in face_properties(shape):
-        name, label = _face_name(int(f["body"]), f["normal"], f["centroid"])
+        name, label = _face_name(int(f["body"]), f["normal"], f["centroid"], TOP[version])
         if label_prefix:
             label = f"{label_prefix} {label}"
         faces.append({"index": f["id"], "body": f["body"], "name": name, "label": label})
@@ -130,15 +138,20 @@ def _names(shape, sha: str, version: int, label_prefix: str | None = None) -> tu
     return bodies, faces
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """All versions; ``--only N`` writes version N alone (the others' bytes stay as committed)."""
     from magnusim_sdk.link import check, write_face_names
     from OCP.BinTools import BinTools
     from OCP.BRepTools import BRepTools
 
+    args = list(sys.argv[1:] if argv is None else argv)
+    only = int(args[args.index("--only") + 1]) if "--only" in args else None
+    versions = (only,) if only else (1, 2, 3, 4)
     OUT.mkdir(parents=True, exist_ok=True)
-    for stale in ("v1.bbrep", "v1.brep", "v2.bbrep", "v3.bbrep"):
-        (OUT / stale).unlink(missing_ok=True)
-    for v in (1, 2, 3):
+    for v in versions:
+        for stale in (f"v{v}.bbrep", *(("v1.brep",) if v == 1 else ())):
+            (OUT / stale).unlink(missing_ok=True)
+    for v in versions:
         shape = _version(v)
         bbrep = OUT / f"v{v}.bbrep"
         assert BinTools.Write_s(shape, str(bbrep))

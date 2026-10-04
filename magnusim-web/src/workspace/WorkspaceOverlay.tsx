@@ -13,6 +13,7 @@ import {
   continueLeaveInBackground,
   exitFrameFullscreen,
   frameMayTakeFocus,
+  lastLeaveInBackground,
   lastLeaveReason,
   leaveApproved,
   leaveInProgress,
@@ -28,7 +29,7 @@ import {
 } from './leaveGuard';
 import { openPluginResults } from './pluginResults';
 import type { WorkspaceRoute } from './route';
-import { linkReportText } from './linkReport';
+import { linkQuietText, linkReportText, linkTouchesSetup } from './linkReport';
 import { savedAsNewText, showLinkChoice } from './linkChoice';
 
 // When the host gives the keyboard to the frame (it lives with the leave guard, which needs it too).
@@ -203,6 +204,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       },
       geometryName: () => (bridgeRef.current ? bridgeRef.current.geometryName() : Promise.resolve('')),
       lastGeometryName: () => (bridgeRef.current ? bridgeRef.current.lastGeometryName() : ''),
+      stallCause: () => (bridgeRef.current ? bridgeRef.current.stallCause() : Promise.resolve({ answers: false, saving: false })),
     },
     // The user stays after a leave whose hook updated the project: its report, held back
     // for the landing, shows here now.
@@ -277,10 +279,16 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
               view: landView.current,
               // The landing shows the update's report when this page did not show it.
               report: !reported,
+              // The leave went on while the job ran ("Continue in background"): the landing
+              // comes while the user works (their camera is kept, the report is quiet).
+              background: lastLeaveInBackground(guarded),
             },
           }),
         );
       }
+      // The page may have saved a design it did not link (a refused link, Leave anyway):
+      // the geometry rows read the link state again ("Not up to date with <study>").
+      window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { link: true } }));
     };
   }, []);
 
@@ -450,13 +458,21 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       },
       // Inside a leave the landing shows the report, after the part (LINK 6.5); here only
       // for a link the page made while it stays open.
-      linkReport: (result) => {
+      // Only an update that touched the user's setup is worth a dialog (5.14); one that only
+      // put meshes out of date is a toast; one that touched nothing of it says nothing.
+      linkReport: (result, setup) => {
+        const touched = linkTouchesSetup(result, setup);
         if (leaveInProgress() || leaveApproved()) {
-          heldReport.current = linkReportText(result);
+          heldReport.current = touched ? linkReportText(result, setup) : null;
           return;
         }
         if (linked.current) linked.current.reported = true;
-        const t = linkReportText(result);
+        if (!touched) {
+          const quiet = linkQuietText(result, setup);
+          if (quiet) setToast({ id: ++toastSerial.current, text: quiet, kind: 'info' });
+          return;
+        }
+        const t = linkReportText(result, setup);
         void pageDialog((turn) =>
           window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ title: t.title, copy: t.copy, yes: 'OK', notice: true, ...turn }) : Promise.resolve(true),
         );

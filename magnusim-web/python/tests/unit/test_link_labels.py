@@ -233,10 +233,10 @@ def test_a_shared_face_has_one_index_per_body_and_an_internal_face_one():
 
 @pytest.fixture(scope="module")
 def previews(tmp_path_factory) -> dict[str, Path]:
-    """link_preview of v1, v2 and v3 (the host's own process, as the job runs it)."""
+    """link_preview of v1 to v4 (the host's own process, as the job runs it)."""
     root = tmp_path_factory.mktemp("previews")
     out = {}
-    for v in ("v1", "v2", "v3"):
+    for v in ("v1", "v2", "v3", "v4"):
         shape = EXPORTS / f"{v}.bbrep"
         dest = root / v
         report = root / f"{v}.json"
@@ -1011,3 +1011,38 @@ def test_a_single_face_field_takes_the_nearest_half_of_a_split_face_and_the_repo
     link.apply(p.root, p.gid, rel)
     assert _jr(rdir / "run.json")["views"][0]["pt"]["region"]["face"] == "face 8@Body1"
     assert {"studyId": "sim-1", "studyTitle": "Study 1", "item": "Run 1", "field": "views.0.pt.region.face"} in planned["report"]["split"]
+
+
+def test_the_setup_report_names_only_faces_a_record_refers_to(tmp_path: Path, previews):
+    """The host's report (5.14) lists faces records hold, by record: never a face no record holds.
+
+    v1 to v4 (10 mm taller): six faces kept by name moved far (the boss and Body 2's top), the
+    bottoms did not move. v1 to v2: Body 1's +y face split, its two +x halves merged.
+    """
+    p = Proj(tmp_path, previews)
+    s = p.study()
+    _write(s / BC / "BC_Floor" / "bc.json", {"id": "floor", "name": "Floor", "faces": ["face 20@Body2"], "face": "face 20@Body2", "geometry_rev": 1})
+    rep = p.commit("v4", 1)["report"]
+    # The part's own statistics still count every face (LinkResult.match, the plugin's).
+    assert rep["match"]["movedFar"] == 6 and len(rep["moved_far"]) == 6
+    assert rep["setup"] == {"moved_far": [], "split": [], "merged": []}
+    q = Proj(tmp_path / "boss", previews)
+    t = q.study()
+    _write(t / BC / "BC_Top" / "bc.json", {"id": "top", "name": "Top", "faces": ["face 15@Body1"], "face": "face 15@Body1", "geometry_rev": 1})
+    _write(t / BC / "BC_Floor" / "bc.json", {"id": "floor", "name": "Floor", "faces": ["face 20@Body2"], "geometry_rev": 1})
+    rep = q.commit("v4", 1)["report"]
+    assert rep["setup"]["moved_far"] == [
+        {"studyId": "sim-1", "studyTitle": "Study 1", "kind": "bc", "item": "Top", "field": "faces", "old": "face 15@Body1", "name": "F:boss:end", "label": "Boss end"}
+    ]
+    assert rep["setup"]["split"] == [] and rep["setup"]["merged"] == []
+    # v1 to v2: a record on the split +y face, one holding both +x halves, one on Body 2's -x (unchanged).
+    r = Proj(tmp_path / "v2", previews)
+    u = r.study()
+    _write(u / BC / "BC_Side" / "bc.json", {"id": "side", "name": "Side", "faces": ["face 12@Body1"], "geometry_rev": 1})
+    _write(u / BC / "BC_Front" / "bc.json", {"id": "front", "name": "Front", "faces": ["face 6@Body1", "face 14@Body1"], "geometry_rev": 1})
+    _write(u / BC / "BC_Far" / "bc.json", {"id": "far", "name": "Far", "faces": ["face 16@Body2"], "geometry_rev": 1})
+    rep = r.commit("v2", 1)["report"]
+    assert rep["match"]["split"] == 3 and rep["match"]["merged"] == 2
+    assert [(f["item"], f["label"], f["faces"]) for f in rep["setup"]["split"]] == [("Side", "Box +y", 2)]
+    assert [(f["item"], f["target"], f["faces"]) for f in rep["setup"]["merged"]] == [("Front", "face 10@Body1", 2)]
+    assert rep["setup"]["moved_far"] == []

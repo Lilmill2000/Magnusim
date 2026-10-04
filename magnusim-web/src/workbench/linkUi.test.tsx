@@ -9,7 +9,7 @@ import { readSetupTree, type GeomLink, type ProjectTreeDoc } from '../chrome/tre
 import { setTreeActionHandler } from '../chrome/treeSession';
 import { lostFacesOf, lostReason, bcCardSub } from '../panels/bcs/BcPanel';
 import { lastUpdateLine } from '../panels/geometry/GeometryPanel';
-import { linkReportText } from '../workspace/linkReport';
+import { linkNeedsAction, linkQuietText, linkReportText, linkTouchesSetup } from '../workspace/linkReport';
 import type { LinkResult } from '../plugin-sdk/workspace';
 import { bodyDisplay, faceDisplay, lostDisplay, resetFaceNamesForTests, setShownFaceTable } from './faceNames';
 
@@ -168,6 +168,34 @@ describe('the tree', () => {
     expect(linkStatusText('Demo 1', { ...link, updating: true }, null)).toBe("Couldn't finish updating Demo 1");
     expect(linkStatusText('Demo 1', { ...link, behind: true }, null)).toBe('Not up to date with Demo 1.');
   });
+
+  it('the geometry row has its ✓ only while the part is up to date with its study', () => {
+    const geomCheck = (c: HTMLElement) => c.querySelector('[data-w16-geom="g1"] > .tree-row > .tree-check');
+    const doc = (over: Record<string, unknown>): ProjectTreeDoc => ({ ...DOC, geometries: [{ ...DOC.geometries![0], ...over }, DOC.geometries![1]] });
+    const { container, rerender } = render(
+      <ul>
+        <SetupTreeView model={readSetupTree(doc({}))} />
+      </ul>,
+    );
+    expect(geomCheck(container)).toBeTruthy();
+    // The study's saved design is newer (a refused link, "Leave anyway"): no ✓ beside "Not up to date".
+    rerender(
+      <ul>
+        <SetupTreeView model={readSetupTree(doc({ behind: true }))} />
+      </ul>,
+    );
+    expect(container.querySelector('[data-w16-geom="g1"] [data-geom-link-status]')?.textContent).toBe('Not up to date with Demo 1.');
+    expect(geomCheck(container)).toBeNull();
+    // An update that did not finish: no ✓ either.
+    rerender(
+      <ul>
+        <SetupTreeView model={readSetupTree(doc({ updating: true }))} />
+      </ul>,
+    );
+    expect(geomCheck(container)).toBeNull();
+    // A plain geometry (an earlier version, unlinked) keeps its ✓.
+    expect(container.querySelector('[data-w16-geom="g0"] > .tree-row > .tree-check')).toBeTruthy();
+  });
 });
 
 describe('face and body labels (D15)', () => {
@@ -260,15 +288,67 @@ describe('the geometry panel and the report', () => {
       outOfDate: { meshes: [{ studyId: 's1', studyTitle: 'Study 1', meshId: 'm1', meshName: 'Mesh 1' }], runs: 0 },
       seconds: 2,
     } as LinkResult;
-    const t = linkReportText(r);
+    const at = { studyId: 's1', studyTitle: 'Study 1', kind: 'bc', field: 'faces', name: 'F:box:+y' };
+    const setup = {
+      movedFar: [],
+      split: [{ ...at, item: 'Side', old: 'face 12@Body1', label: 'Box +y', faces: 2 }],
+      merged: [],
+      stale: [],
+    };
+    const t = linkReportText(r, setup);
     expect(t.title).toBe('Demo 1 updated');
     expect(t.copy.split('\n')).toEqual([
       'Boundary conditions, refinements and monitors kept their faces by name.',
       'These faces are gone. Each one stays listed on its record and comes back if the face does:',
       "Study 1 › Top: 'Boss end'",
-      'Split: 3 faces became more than one; their records keep every part.',
+      "Split: Study 1 › Side now covers 2 faces in place of 'Box +y'.",
       "Pick one: 'Box +x' was in Inlet and Outlet.",
       'Out of date: Mesh 1. Generate it again before you run.',
     ]);
+  });
+
+  // The CAD review of 2026-10-04: "Kept by name but moved far: 1 face" after edits with no
+  // simulation, and faces no record held. Only what touches a record is reported, by name.
+  it('reports only faces a record refers to: none touched is no dialog (a mesh out of date is a quiet line), moved far names record and face', () => {
+    const base = {
+      geometryId: 'g1',
+      name: 'Part 1',
+      rev: 2,
+      fromRev: 1,
+      created: false,
+      change: 'shape',
+      bodies: 1,
+      faces: 10,
+      named: 10,
+      // Statistics of the whole part: six faces moved far, three split, but no record holds them.
+      match: { byName: 10, byShape: 0, split: 3, merged: 1, movedFar: 6 },
+      lost: [],
+      returned: [],
+      stillLost: 0,
+      claimedTwice: [],
+      outOfDate: { meshes: [], runs: 0 },
+      seconds: 2,
+    } as LinkResult;
+    const none = { movedFar: [], split: [], merged: [], stale: [] };
+    expect([linkTouchesSetup(base, none), linkNeedsAction(base, none), linkQuietText(base, none)]).toEqual([false, false, '']);
+    const meshes = { ...base, outOfDate: { meshes: [{ studyId: 's1', studyTitle: 'Study 1', meshId: 'm1', meshName: 'Mesh 1' }], runs: 0 } } as LinkResult;
+    expect(linkTouchesSetup(meshes, none)).toBe(false);
+    expect(linkQuietText(meshes, none)).toBe('Part 1 updated. Out of date: Mesh 1. Generate it again before you run.');
+    const wall = { studyId: 's1', studyTitle: 'Study 1', kind: 'bc', item: 'Wall', field: 'faces', old: 'face 6@Body1', name: 'F:x:side2', label: 'Extrude 1 · Side 2' };
+    const moved = { ...none, movedFar: [wall] };
+    expect([linkTouchesSetup(base, moved), linkNeedsAction(base, moved)]).toEqual([true, true]);
+    expect(linkReportText(base, moved).copy.split('\n')).toEqual([
+      'Boundary conditions, refinements and monitors kept their faces by name.',
+      "Kept by name but moved far: Study 1 › Wall ('Extrude 1 · Side 2'). Check it.",
+    ]);
+    // A merge on a record is reported, and needs nothing of the user (after "Continue in background", a toast).
+    const merged = { ...none, merged: [{ ...wall, faces: 2, target: 'face 3@Body1', targetLabel: 'Extrude 1 · Side 1' }] };
+    expect([linkTouchesSetup(base, merged), linkNeedsAction(base, merged)]).toEqual([true, false]);
+    expect(linkReportText(base, merged).copy.split('\n')[1]).toBe("Merged: Study 1 › Wall: 'Extrude 1 · Side 2' is now one face with 1 other face ('Extrude 1 · Side 1').");
+    expect(linkQuietText(base, merged)).toBe('Part 1 updated. 1 face of your setup changed and stayed on its record.');
+    // A record saved for an older version must be picked again.
+    const stale = { ...none, stale: [{ studyId: 's1', studyTitle: 'Study 1', item: 'Inlet', kind: 'bc' }] };
+    expect(linkNeedsAction(base, stale)).toBe(true);
+    expect(linkReportText(base, stale).copy.split('\n')[1]).toBe('Saved for an older version: Study 1 › Inlet. Pick its faces again.');
   });
 });

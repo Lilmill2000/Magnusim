@@ -1,6 +1,6 @@
 // The Demo workspace (a test fixture, host API 1.5 and 1.6): it shows its study and links one
-// of three designs from its own buttons, as a design tool would after a save. Each button
-// fetches a committed export (./exports/v1..v3, tools/gen_link_demo_fixtures.py), writes
+// of its designs from its own buttons, as a design tool would after a save. Each button
+// fetches a committed export (./exports/v1..v4, tools/gen_link_demo_fixtures.py), writes
 // it into the study's folder with ws.files.write, saves the study's source_version and
 // calls ws.project.linkGeometry. The page shows the result and the geometry events it hears.
 //
@@ -13,6 +13,8 @@
 // after it (ms); `#hook-view`
 // returns a camera, `#link-view` links with one; `#link-always` links even an unchanged
 // design (the host answers `none`). Each run appends its reason to studies/<sid>/hook-log.json.
+// A save still on its way when the hook runs is waited for, not started again (as a design
+// tool's hook waits for its own save): "Change to v4" is v1 10 mm taller (faces moved far).
 import { connect } from '@magnusim/workspace';
 
 const ws = await connect();
@@ -86,8 +88,21 @@ async function savedDesign() {
   return ws.data.read(DESIGN_REL);
 }
 
+// The save on its way (its promise), or null: a second save (the hook's) joins it.
+let saving = null;
+
 /** Save the design on screen: its export, then a newer source_version; no link. */
 async function saveDesign() {
+  if (saving) return saving;
+  saving = saveNow();
+  try {
+    return await saving;
+  } finally {
+    saving = null;
+  }
+}
+
+async function saveNow() {
   if (!design) return null;
   const shape = await put(`${design.version}.bbrep`, `studies/${sid}/design/shape.bbrep`);
   const sidecar = await put(design.names, `studies/${sid}/design/face_names.json`);
@@ -218,6 +233,7 @@ for (const [id, version, names] of [
   ['edit-v1', 'v1', 'v1.face_names.json'],
   ['edit-v2', 'v2', 'v2.face_names.json'],
   ['edit-v3', 'v3', 'v3.face_names.json'],
+  ['edit-v4', 'v4', 'v4.face_names.json'],
   ['edit-v1-renamed', 'v1', 'v1-renamed.face_names.json'],
 ]) {
   $(id).addEventListener('click', () => edit(version, names));

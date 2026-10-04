@@ -457,7 +457,8 @@ function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string 
       expandedLabel={gkey}
       selected={selectedKey === gkey}
       attrs={{ 'data-w16-geom': geom.id, 'data-scope-key': geom.scopeKey, 'data-geom-linked': geom.link ? '1' : undefined }}
-      mark={!!geom.id}
+      // No ✓ over a part that is not up to date with its study (or whose update did not finish).
+      mark={!!geom.id && !(geom.link && (geom.link.behind || geom.link.updating))}
       extra={
         geom.link ? (
           <LinkRow geom={geom} link={geom.link} />
@@ -764,6 +765,16 @@ export function LeftTree() {
     }
     setStudiesHost(document.getElementById('plugin-studies-section'));
   }, []);
+
+  // The SIMULATIONS heading counts the studies this tree lists, once it has read the
+  // project's tree: a study the workbench has not loaded yet (made by another tab or a
+  // plugin) is listed by the read, so it is counted too.
+  useEffect(() => {
+    const doc = docRef.current;
+    if (!doc || !projectId || String(doc.project_id || '') !== projectId) return;
+    const el = document.getElementById('simulations-count-label');
+    if (el) el.textContent = `SIMULATIONS (${model.geoms.reduce((n, g) => n + g.studies.length, 0)})`;
+  }, [model, projectId]);
 
   const showStudies = studiesSectionShown(projectId, studies.rows, studies.kinds);
   useEffect(() => {

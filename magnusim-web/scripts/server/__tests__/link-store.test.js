@@ -188,10 +188,12 @@ describe("the queue's side", () => {
     store.updateLinkRecord(a.id, { row_id: 'q-a', status: 'superseded' });
     job.onLinkQueueChange();
     const before = store.recentLinkEvents(b.id).map((e) => e.ev);
-    assert.deepEqual(before.at(-1), { event: 'queued', ahead: 1 });
+    // One row ahead: it waits ("Queued" shows only for a job that waits).
+    assert.deepEqual(before.at(-1), { event: 'queued', ahead: 1, waiting: true });
     queue.dropComputeRows(['q-a'], 'superseded', 'skipped');
     assert.equal(store.readLinkRecord(a.id).status, 'superseded', 'no second ending');
-    assert.deepEqual(store.recentLinkEvents(b.id).map((e) => e.ev).at(-1), { event: 'queued', ahead: 0 });
+    // Nothing ahead and the slot free: it starts as soon as the queue looks, so it does not wait.
+    assert.deepEqual(store.recentLinkEvents(b.id).map((e) => e.ev).at(-1), { event: 'queued', ahead: 0, waiting: false });
   });
 
   it("the start: busy while the slot is held; final, with a notice, when its saved input is gone", async () => {

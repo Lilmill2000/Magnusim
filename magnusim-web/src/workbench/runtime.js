@@ -195,8 +195,8 @@ import {
   withGeometryRev,
 } from './geometryRev';
 import { setShownFaceTable } from './faceNames';
-import { linkNeedsReport } from '../workspace/bridge';
-import { linkReportText } from '../workspace/linkReport';
+import { cameraMovedSince, isCameraDrag } from './landingCamera';
+import { linkNeedsAction, linkQuietText, linkReportText, linkTouchesSetup, setupOf } from '../workspace/linkReport';
 import { savedAsNewText } from '../workspace/linkChoice';
 import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId } from '../viewer/pick.ts';
 import { RAINBOW_HUE, colormapGradient } from '../plugin-ui/colormaps';
@@ -9437,6 +9437,48 @@ function syncMeshInspectPanel(statusText) {
  */
 let lastFramedBounds = null;
 const SCENE_VIEW_DIRECTION = [-0.55, -0.75, 0.42]; // from front-left, slightly above (Z up)
+// The CAD load whose faces file is still on its way (its token), or 0.
+let cadLoadInFlight = 0;
+// A linking plugin's camera applied while a CAD load was on its way (API 1.6, LINK 6.6): that
+// load applies it again in place of its framing (a large part's faces file can arrive many
+// seconds after the landing). {geomId, view, at}, or null.
+let linkViewAfterLoad = null;
+// Landings waiting for a link job, by geometry id: {cam, at, background}, the camera when
+// each began waiting. A reload of that geometry meanwhile (the job's end read from the
+// tree) keeps a camera the user has moved since, and after "Continue in background" never
+// frames the part (the user works in the project meanwhile: the landing puts the page's
+// view on it, or leaves their camera).
+const landingCams = new Map();
+// When the user last dragged or wheeled in the viewport (orbit, pan, zoom): a camera that
+// changed after it is the user's, not a framing's. A click (a face pick, a press on the
+// empty viewport, with a few pixels of jitter) is not a move.
+let viewerInputAt = 0;
+{
+  let press = null;
+  const inViewer = (e) => {
+    const t = e && e.target;
+    return !!(t && typeof t.closest === 'function' && t.closest('#viewer'));
+  };
+  document.addEventListener('pointerdown', (e) => {
+    press = inViewer(e) ? { x: e.clientX, y: e.clientY } : null;
+  }, true);
+  document.addEventListener('pointermove', (e) => {
+    if (isCameraDrag(press, e.clientX, e.clientY, e.buttons)) viewerInputAt = Date.now();
+  }, { capture: true, passive: true });
+  const release = () => {
+    press = null;
+  };
+  document.addEventListener('pointerup', release, true);
+  document.addEventListener('pointercancel', release, true);
+  document.addEventListener('wheel', (e) => {
+    if (inViewer(e)) viewerInputAt = Date.now();
+  }, { capture: true, passive: true });
+}
+
+/** The user moved the camera since `since` ({cam, at}): they dragged or wheeled in the viewport, and the view differs. */
+function userMovedCamera(since) {
+  return cameraMovedSince(since, viewerInputAt, snapshotCamera(renderer.getActiveCamera()));
+}
 
 function unionAabb(boxes) {
   const out = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
@@ -19377,12 +19419,19 @@ async function loadGeometryCad(facesUrl, edgesUrl, opts) {
   // Switching geometry keeps the view when the new one fills about the same box, so the
   // same face can be compared on both.
   const keepCamera = !!(opts && opts.keepCamera);
+  // The user's camera stays exactly as it is (a landing after they moved it): no framing.
+  const holdCamera = !!(opts && opts.holdCamera);
   clearCadEdgeDisplay();
   loadOfficialCadCom().catch(() => {});
   loadCadInsideFaces(facesUrl, token);
+  cadLoadInFlight = token;
   const facesP = geomCadFaceReader.setUrl(facesUrl);
   const edgesP = edgesUrl ? geomCadEdgeReader.setUrl(edgesUrl) : Promise.resolve();
-  await facesP;
+  try {
+    await facesP;
+  } finally {
+    if (cadLoadInFlight === token) cadLoadInFlight = 0;
+  }
   if (token !== cadLoadToken) return { fp: { empty: true }, stale: true };
   geomMapper.setInputConnection(geomCadFaceReader.getOutputPort());
   const pd = geomCadFaceReader.getOutputData();
@@ -19392,7 +19441,9 @@ async function loadGeometryCad(facesUrl, edgesUrl, opts) {
     try {
       surfaceActor.getProperty().setOpacity(0.15);
     } catch (_) {}
-    frameSceneCamera(!keepCamera);
+    const view = takeLinkViewAfterLoad();
+    if (holdCamera) holdCameraOverLoad();
+    else if (!(view && applyLinkView(view))) frameSceneCamera(!keepCamera);
     resizeViewer();
     highlightGeomBody(null);
   }
@@ -36081,7 +36132,11 @@ async function reloadLinkedGeometry(geomId, key, opts) {
     const urls = cadUrlsFor(pid, 'link-' + String(key || Date.now()), geomId);
     g.faces_url = urls.faces_url;
     g.edges_url = urls.edges_url;
-    const loaded = await loadGeometryCad(urls.faces_url, urls.edges_url, { keepCamera: true });
+    // A landing after "Continue in background" waits for this geometry: no framing (the
+    // landing puts the page's view on the part, or leaves the user's camera).
+    const waiting = landingCams.get(String(geomId));
+    const hold = !!(opts && opts.holdCamera) || !!(waiting && waiting.background) || userMovedCamera(waiting);
+    const loaded = await loadGeometryCad(urls.faces_url, urls.edges_url, { keepCamera: true, holdCamera: hold });
     // Mesh inspect shows the mesh in place of the part (a CAD load shows it).
     if (meshInspectOpen) {
       try { setGeomVisible(false); } catch (_) {}
@@ -36165,6 +36220,34 @@ function applyLinkView(view) {
   return true;
 }
 
+/**
+ * Apply a linking plugin's camera now, and again when the CAD load still on its way ends
+ * (in place of that load's framing): a large part's faces file arrives after the landing,
+ * and its load framed the part over the view the page asked for.
+ */
+function applyLinkViewOnPart(view, geomId) {
+  const ok = applyLinkView(view);
+  if (ok && cadLoadInFlight) linkViewAfterLoad = { geomId: String(geomId || ''), view, at: Date.now() };
+  return ok;
+}
+
+/** The camera a landing left for the CAD load that just ended (once; for the geometry it was meant for). */
+function takeLinkViewAfterLoad() {
+  const p = linkViewAfterLoad;
+  linkViewAfterLoad = null;
+  if (!p || Date.now() - p.at > 10 * 60 * 1000) return null;
+  return p.geomId === String((w16State.geometry && w16State.geometry.id) || '') ? p.view : null;
+}
+
+/** A load that keeps the user's camera: only the clipping range follows the new part, which counts as framed. */
+function holdCameraOverLoad() {
+  let b = null;
+  try { b = renderer.computeVisiblePropBounds(); } catch (_) {}
+  if (b && b[0] <= b[1] && b[2] <= b[3] && b[4] <= b[5]) lastFramedBounds = b.slice();
+  try { resetCameraClippingRangeLoose(); } catch (_) {}
+  try { renderWindow.render(); } catch (_) {}
+}
+
 // The viewport's camera as the snapshot has it (pos, fp, vu, parallel, scale, angle): tests read it.
 window.__CFD_CAMERA__ = () => snapshotCamera(renderer.getActiveCamera());
 // The results surface's opacity (a CAD load fades it), and whether a linked part waits for the results to close.
@@ -36186,18 +36269,35 @@ function clearLinkedFaceState() {
   try { if (compareState.on) stopCompare(); } catch (_) {}
 }
 
-/** The update's report after the landing (5.14): "Save as new" says what it added and copied. */
-async function showLandingReport(job) {
+/**
+ * The update's report after the landing (5.14), never waited for (the landing is over when
+ * it shows): 'dialog' when the update touched the user's setup ("Save as new" says what it
+ * added and copied), 'toast' for a quiet word (meshes out of date), false for nothing. After
+ * "Continue in background" (`quiet`) only what needs the user (faces to pick again or to
+ * check, a copy that failed) is a dialog; the rest is a toast, so nothing pops up mid-task.
+ */
+function showLandingReport(job, quiet) {
   if (!job || job.status !== 'done' || !job.result) return false;
+  const setup = setupOf(job.setup);
+  const savedAsNew = !!(job.saveAsNew && job.result.created);
   let t = null;
-  if (job.saveAsNew && job.result.created) {
+  let needs = false;
+  if (savedAsNew) {
     t = savedAsNewText(String(job.result.name || job.geometryName || ''), String(job.oldGeometryName || ''), job.copies || null);
-  } else if (linkNeedsReport(job.result)) {
-    t = linkReportText(job.result);
+    needs = (job.copies || []).some((c) => c && (!c.ok || (c.lost || []).length || (c.claimedTwice || []).length));
+  } else if (linkTouchesSetup(job.result, setup)) {
+    t = linkReportText(job.result, setup);
+    needs = linkNeedsAction(job.result, setup);
   }
-  if (!t) return false;
-  await confirmAction({ title: t.title, copy: t.copy, yes: 'OK', notice: true });
-  return true;
+  if (t && (!quiet || needs)) {
+    void confirmAction({ title: t.title, copy: t.copy, yes: 'OK', notice: true });
+    return 'dialog';
+  }
+  const text = t && savedAsNew ? t.copy.replace(/\n/g, ' ') : linkQuietText(job.result, setup);
+  if (!text) return false;
+  try { finishToasts.push({ text, fail: false, ms: 6000 }); } catch (_) {}
+  window.__CFD_LINK_TOASTS__ = [...(window.__CFD_LINK_TOASTS__ || []), text];
+  return 'toast';
 }
 
 /**
@@ -36283,7 +36383,31 @@ async function showLinkedGeometry(geomId, opts) {
   const pid = String(currentProjectId() || '');
   if (!geomId || !pid || String(o.projectId || '') !== pid) return { skipped: 'project' };
   const reason = String(o.reason || 'back');
-  const full = reason === 'back' || reason === 'frame-back';
+  // Browser Back that ends on this project's workbench is a way back to it too: the full
+  // landing, with the page's camera (anywhere else the address went, data only).
+  const atProject = () => {
+    try {
+      const r = parseHomeRoute();
+      return r.view === 'workbench' && String(r.projectId || '') === pid && !r.workspace;
+    } catch (_) {
+      return false;
+    }
+  };
+  const full = reason === 'back' || reason === 'frame-back' || (reason === 'history' && atProject());
+  // The camera as the landing found it: one the user moves while the landing waits for the
+  // job ("Continue in background") is theirs, and neither a framing nor the page's view moves it.
+  // After "Continue in background" the part is never framed again meanwhile.
+  const since = { cam: snapshotCamera(renderer.getActiveCamera()), at: Date.now(), background: o.background === true };
+  const gidKey = String(geomId);
+  landingCams.set(gidKey, since);
+  try {
+    return await landWhenDone(geomId, o, pid, reason, full, since);
+  } finally {
+    if (landingCams.get(gidKey) === since) landingCams.delete(gidKey);
+  }
+}
+
+async function landWhenDone(geomId, o, pid, reason, full, since) {
   let job = null;
   if (o.jobId && o.plugin && o.studyId) {
     // Back while the job runs ("Continue in background", or the page's own link): the viewport
@@ -36306,23 +36430,32 @@ async function showLinkedGeometry(geomId, opts) {
   }
   if (String(currentProjectId() || '') !== pid) return { skipped: 'project' };
   if (job && job.status !== 'done') return { skipped: String(job.status || 'unknown') };
+  const shownId = String((w16State.geometry && w16State.geometry.id) || '');
+  const userMoved = shownId === String(geomId) && userMovedCamera(since);
+  // After "Continue in background" the user worked in the project meanwhile: the part is not
+  // framed again. It gets the page's view (below) unless they moved the camera; with no view
+  // (a hook's view cannot arrive once its page has closed) their camera stays as it is.
+  const hold = userMoved || (full && shownId === String(geomId) && since.background === true);
   const resume = pauseFacePicks();
   let out;
   try {
-    out = await landLinkedGeometry(String(geomId), o, job, full, pid);
+    out = await landLinkedGeometry(String(geomId), { ...o, holdCamera: hold }, job, full, pid);
   } finally {
     resume();
   }
   if (!out || !out.landed || String(currentProjectId() || '') !== pid) return out;
-  // The page's camera (LINK 6.6): only on the full landing, while the stage shows the part.
+  // The page's camera (LINK 6.6): only on the full landing, while the stage shows the part,
+  // and never over a camera the user moved meanwhile.
   if (full && o.view) {
     const stage = String(window.__CFD_WB_STAGE__ || '');
-    out.view = stage === 'geometry' || stage === 'setup' ? applyLinkView(o.view) : false;
+    out.view = !userMoved && (stage === 'geometry' || stage === 'setup') ? applyLinkViewOnPart(o.view, geomId) : false;
   }
-  // The update's report (5.14), when the page did not show it: after the part, or after the results.
+  if (hold && !out.view) out.cameraKept = true;
+  // The update's report (5.14), when the page did not show it: after the part, or after the
+  // results. It is never waited for: the landing is over when it shows.
   if (o.report === true && job) {
-    if (full) out.report = await showLandingReport(job);
-    else if (reason === 'results' && (await waitResultsShown(pid))) out.report = await showLandingReport(job);
+    if (full) out.report = showLandingReport(job, o.background === true);
+    else if (reason === 'results' && (await waitResultsShown(pid))) out.report = showLandingReport(job, o.background === true);
   }
   return out;
 }
@@ -36387,7 +36520,8 @@ async function landLinkedGeometry(id, o, job, full, pid) {
     clearLinkedFaceState();
     // A results exit: the results are opening; the part loads when they close.
     if (loadedOld || !before || pendingCad) {
-      await reloadLinkedToServer(id, o.reason === 'results' ? { deferCad: true } : pendingCad ? { force: true } : undefined);
+      const hold = o.holdCamera ? { holdCamera: true } : {};
+      await reloadLinkedToServer(id, o.reason === 'results' ? { deferCad: true } : pendingCad ? { force: true, ...hold } : o.holdCamera ? hold : undefined);
     }
     try { applyWorkbenchStage(); } catch (_) {}
     return { landed: 'reloaded' };

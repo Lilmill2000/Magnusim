@@ -13,6 +13,7 @@ import {
   confirmLeaveWorkspace,
   continueLeaveInBackground,
   installWorkspaceLeaveGuard,
+  lastLeaveInBackground,
   lastLeaveReason,
   leaveApproved,
   leaveInProgress,
@@ -555,5 +556,93 @@ describe('gate:l3-guard review fixes: what the leave says and offers', () => {
     await tick(LEAVE_NAME_MS + 100);
     expect(await p).toBe(false);
     expect(confirm.mock.calls[0][0].copy).toBe('Link demo: The export failed. Demo 1 keeps its last update.');
+  });
+});
+
+// Exit-sync fixes (the CAD review of 2026-10-04).
+describe('exit-sync fixes: what the leave says', () => {
+  it('a stall while a save of the page is still on its way names the save, not the plugin', async () => {
+    hook.ws.hook = { ...hook.ws.hook!, stallCause: async () => ({ answers: true, saving: true }) };
+    setWorkspaceDirty(true, 'Design v2 is not saved');
+    const p = confirmLeaveWorkspace('back');
+    hook.activity({ kind: 'progress', fraction: 0.1, label: 'Saving Demo 1' });
+    await tick(LEAVE_STALL_MS + 1000);
+    expect(await p).toBe(false);
+    expect(confirm.mock.calls[0][0]).toMatchObject({
+      title: "Couldn't update the project",
+      copy: 'The save of Demo 1 did not finish in 30 seconds. Demo 1 keeps its last update. Its changes are not saved. Leaving discards them.',
+    });
+  });
+
+  it('a stall of a page that no longer answers says so; one that answers with nothing of the app on its way is the plugin\'s', async () => {
+    hook.ws.hook = { ...hook.ws.hook!, stallCause: async () => ({ answers: false, saving: false }) };
+    const p = confirmLeaveWorkspace('back');
+    await tick(LEAVE_STALL_MS + 1000);
+    expect(await p).toBe(false);
+    expect(confirm.mock.calls[0][0].copy).toBe('Link demo: its page did not answer for 30 seconds. Demo 1 keeps its last update.');
+    unregister();
+    unregister = registerOpenWorkspace(hook.ws);
+    hook.ws.hook = { ...hook.ws.hook!, stallCause: async () => ({ answers: true, saving: false }) };
+    const q = confirmLeaveWorkspace('back');
+    await tick(LEAVE_STALL_MS + 1000);
+    expect(await q).toBe(false);
+    expect(confirm.mock.calls[1][0].copy).toBe('Link demo: it did not answer for 30 seconds. Demo 1 keeps its last update.');
+  });
+
+  it('a job that starts at once never shows "Queued" (nor "Continue in background" at once); one that waits does', async () => {
+    const p = confirmLeaveWorkspace('back');
+    await tick(LEAVE_PROGRESS_MS + 300);
+    hook.activity({ kind: 'progress', fraction: 0.5, label: 'Writing Demo 1 for the project' });
+    hook.activity({ kind: 'accepted', jobId: 'gl-abcdef12-0a0b0c', create: false, queued: false });
+    hook.activity({ kind: 'link', stage: 'queued', ahead: 0, label: '', waiting: false });
+    await tick(300);
+    expect(progress.some((x) => /Queued/.test(x.label))).toBe(false);
+    expect(lastProgress()).toMatchObject({ label: 'Writing Demo 1 for the project', background: false });
+    hook.activity({ kind: 'link', stage: 'meshing', ahead: null, label: '' });
+    expect(lastProgress().label).toBe('Building the part');
+    hook.finish({ ok: true });
+    expect(await p).toBe(true);
+    unregister();
+    unregister = registerOpenWorkspace(hook.ws);
+    progress = [];
+    const q = confirmLeaveWorkspace('back');
+    await tick(LEAVE_PROGRESS_MS + 300);
+    hook.activity({ kind: 'accepted', jobId: 'gl-abcdef12-0a0b0d', create: false, queued: false });
+    hook.activity({ kind: 'link', stage: 'queued', ahead: 0, label: '', waiting: true });
+    await tick(300);
+    expect(lastProgress()).toMatchObject({ label: 'Queued (see Queue)', background: true });
+    hook.finish({ ok: true });
+    await q;
+  });
+
+  it('Finishing says what it still waits for when the server tells (on a large part the centre of mass takes many seconds)', async () => {
+    const p = confirmLeaveWorkspace('back');
+    await tick(LEAVE_PROGRESS_MS + 300);
+    hook.activity({ kind: 'accepted', jobId: 'gl-abcdef12-0a0b0c', create: false, queued: false });
+    hook.activity({ kind: 'link', stage: 'finishing', ahead: null, label: '' });
+    expect(lastProgress().label).toBe('Finishing');
+    hook.activity({ kind: 'link', stage: 'finishing', ahead: null, label: 'Finishing: the centre of mass, the thumbnail and the project file' });
+    expect(lastProgress().label).toBe('Finishing: the centre of mass, the thumbnail and the project file');
+    hook.activity({ kind: 'link', stage: 'finishing', ahead: null, label: 'Finishing: the centre of mass (2 of 3 done)' });
+    expect(lastProgress().label).toBe('Finishing: the centre of mass (2 of 3 done)');
+    hook.finish({ ok: true });
+    await p;
+  });
+
+  it('the landing hears whether the leave went on while the job ran ("Continue in background")', async () => {
+    const p = confirmLeaveWorkspace('back');
+    await tick(LEAVE_PROGRESS_MS + 300);
+    hook.activity({ kind: 'accepted', jobId: 'gl-abcdef12-0a0b0c', create: false, queued: false });
+    await tick(LEAVE_BACKGROUND_MS + 300);
+    continueLeaveInBackground();
+    expect(await p).toBe(true);
+    expect([lastLeaveReason(hook.ws), lastLeaveInBackground(hook.ws)]).toEqual(['back', true]);
+    unregister();
+    unregister = registerOpenWorkspace(hook.ws);
+    const q = confirmLeaveWorkspace('back');
+    await tick(0);
+    hook.finish({ ok: true });
+    expect(await q).toBe(true);
+    expect([lastLeaveReason(hook.ws), lastLeaveInBackground(hook.ws)]).toEqual(['back', false]);
   });
 });

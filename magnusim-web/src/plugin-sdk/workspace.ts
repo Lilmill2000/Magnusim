@@ -201,7 +201,8 @@ export interface LinkOptions {
   /**
    * The camera the project's viewport lands with when the workspace closes (host 1.6). It
    * stays in the app's page and is never sent to the server; the exit hook's own `view`
-   * (nav.onLeave) replaces it when it comes later. A bad view is dropped.
+   * (nav.onLeave) replaces it when it comes later. After "Continue in background" the
+   * page closes before its hook returns: only this view lands. A bad view is dropped.
    */
   view?: ViewState;
   /** Called as the update moves through its stages (queued with the jobs ahead of it). */
@@ -284,7 +285,9 @@ export interface LeaveEvent {
 
 /**
  * An exit hook (host 1.6): save the design, then link it (ws.project.linkGeometry), then
- * return. The camera it returns is the one the project's viewport lands with.
+ * return. The camera it returns is the one the project's viewport lands with (not after
+ * "Continue in background": the page closes before the hook returns, so pass the camera
+ * on linkGeometry's `view`).
  */
 export type LeaveHandler = (leave: LeaveEvent) => Promise<{ view?: ViewState } | void> | { view?: ViewState } | void;
 
