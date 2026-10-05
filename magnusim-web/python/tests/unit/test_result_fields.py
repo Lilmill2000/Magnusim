@@ -12,6 +12,7 @@ iso value typed in Pa cut kinematic p.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -298,13 +299,15 @@ def test_inspect_needs_a_written_frame(tmp_path: Path, monkeypatch):
     assert "time_not_found" in res["error"]["message"]
 
 
-def test_inspect_reads_a_point_on_the_outer_face():
+def test_inspect_reads_a_point_on_the_outer_face(tmp_path: Path):
     """A pick on the domain's outer face (the page probes the surface point it hit)
     lands a rounding error outside the cells: it reads the cell it lies on. A point
     clearly off the mesh is still an honest miss."""
     import export_inspect_point
 
-    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "foam-results" / "cavity-2d"
+    # A copy: loading a case writes its case.foam marker, never into the committed fixture.
+    fixture = tmp_path / "cavity-2d"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "fixtures" / "foam-results" / "cavity-2d", fixture)
     mesh, _ = case_volume.load_volume(fixture, "0.5")
     grid = export_inspect_point._point_grid(mesh)
     # The cavity's front face as the page picked it (z just past the float32 bound).
