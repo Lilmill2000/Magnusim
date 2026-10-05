@@ -4,9 +4,11 @@ from __future__ import annotations
 from conftest import FIXTURES
 
 from incompressible_flow.function_objects import (
+    field_average_block,
     js_to_precision,
     monitor_patches_from_mapped,
     monitors_functions_text,
+    result_fields_functions_text,
     surface_field_value_block,
 )
 from incompressible_flow.transient import TransientControl
@@ -148,3 +150,135 @@ def test_fo_monitor_kind_flow_vs_flow_rate_unchanged():
         assert "flow" not in get_registry("monitor").keys()
     finally:
         reset_for_tests()
+
+
+def _ctrl(average_from: float = 0.0) -> TransientControl:
+    return TransientControl(
+        end_time=5.0,
+        delta_t=0.001,
+        write_interval=0.1,
+        adjust_time_step=True,
+        max_co=1.0,
+        max_delta_t=0.1,
+        time_scheme="Euler",
+        n_outer_correctors=1,
+        n_correctors=2,
+        n_non_orthogonal_correctors=0,
+        average_from=average_from,
+    )
+
+
+def _block(text: str, name: str) -> str:
+    """One function object's body (from its name to its closing brace)."""
+    import re
+
+    m = re.search(rf"^    {name}\n    \{{\n(.*?)\n    \}}", text, re.S | re.M)
+    assert m, f"no {name} block in\n{text}"
+    return m.group(1)
+
+
+def test_result_fields_are_written_at_every_saved_time():
+    text = result_fields_functions_text(turbulent=True, rho=1.196)
+    for name, fo_type in (
+        ("yPlus", "yPlus"),
+        ("wallShearStress", "wallShearStress"),
+        ("pTotal", "pressure"),
+        ("vorticity", "vorticity"),
+        ("Q", "Q"),
+    ):
+        body = _block(text, name)
+        assert f"type            {fo_type};" in body
+        assert 'libs            ("libfieldFunctionObjects.so");' in body
+        # Worked out only when a frame is saved, and saved with it.
+        assert "executeControl  writeTime;" in body
+        assert "writeControl    writeTime;" in body
+    assert "fieldAverage" not in text
+
+
+def test_total_pressure_is_written_in_pa_as_p_total():
+    body = _block(result_fields_functions_text(turbulent=True, rho=998.2), "pTotal")
+    assert "mode            total;" in body
+    # "total(p)" is not a field name results can show; the incompressible case's p
+    # is divided by density, so the function object needs rho to write Pa.
+    assert "result          pTotal;" in body
+    assert "rho             rhoInf;" in body
+    assert "rhoInf          998.2;" in body
+
+
+def test_laminar_runs_write_no_y_plus():
+    text = result_fields_functions_text(turbulent=False, rho=1.2)
+    assert "yPlus" not in text
+    assert "type            wallShearStress;" in text
+
+
+def test_transient_runs_average_u_and_p_from_the_start():
+    text = result_fields_functions_text(turbulent=True, rho=1.2, transient=_ctrl())
+    body = _block(text, "fieldAverage")
+    assert "type            fieldAverage;" in body
+    assert "writeControl    writeTime;" in body
+    # Averaged every time step, written with the frames; no start time = from the start.
+    assert "executeControl" not in body and "timeStart" not in body
+    assert body.count("mean        on;") == 2 and body.count("prime2Mean  off;") == 2
+    assert "            U\n" in body and "            p\n" in body
+
+
+def test_averaging_starts_at_the_runs_average_from_time():
+    assert "timeStart       1.5;" in field_average_block(_ctrl(1.5))
+    assert "timeStart" not in field_average_block(_ctrl(0.0))
+
+
+def test_every_written_field_is_a_result_field():
+    from incompressible_flow import function_objects as fo
+    from incompressible_flow.analyses import _RESULT_FIELDS
+    from incompressible_flow.physics import KINEMATIC_FIELDS
+
+    keys = {f.key for f in _RESULT_FIELDS}
+    written = {
+        fo.YPLUS_FIELD, fo.WALL_SHEAR_STRESS_FIELD, fo.TOTAL_PRESSURE_FIELD, fo.VORTICITY_FIELD,
+        fo.Q_FIELD, fo.MEAN_VELOCITY_FIELD, fo.MEAN_PRESSURE_FIELD,
+    }
+    assert written <= keys
+    labels = {f.key: (f.label, f.unit, f.kind) for f in _RESULT_FIELDS}
+    assert labels["yPlus"] == ("y+", "", "scalar")
+    assert labels["wallShearStress"] == ("Wall shear stress", "Pa", "vector")
+    assert labels["pTotal"] == ("Total pressure", "Pa", "scalar")
+    assert labels["vorticity"] == ("Vorticity", "1/s", "vector")
+    assert labels["Q"] == ("Q-criterion", "1/s²", "scalar")
+    assert labels["UMean"] == ("Mean velocity", "m/s", "vector")
+    assert labels["pMean"] == ("Mean pressure", "Pa", "scalar")
+    # Stored divided by density like p (shown x rho); pTotal is written in Pa.
+    assert {"wallShearStress", "pMean"} <= set(KINEMATIC_FIELDS)
+    assert "pTotal" not in KINEMATIC_FIELDS
+
+
+def test_written_case_holds_the_result_function_objects(tmp_path):
+    import json
+
+    from conftest import JS_PROJECT
+    from conftest import run_spec as load_run_spec
+
+    from incompressible_flow.writer import write_solve_case
+
+    spec = load_run_spec(JS_PROJECT, run_id="r-fields", require_mesh=False, n_procs=1)
+    assert spec.ok, spec.error
+    write_solve_case(spec, tmp_path / "steady")
+    text = (tmp_path / "steady" / "system" / "controlDict").read_text(encoding="utf-8")
+    # The monitors stay; the result fields follow them.
+    assert text.index("mon_pressure_1") < text.index("    yPlus\n") < text.index("    Q\n")
+    assert f"rhoInf          {spec.rho:g};" in text
+    assert "fieldAverage" not in text
+    sidecar = json.loads((tmp_path / "steady" / "w27-case.json").read_text(encoding="utf-8"))
+    assert sidecar["kinematic_fields"] == ["p", "wallShearStress", "pMean"]
+
+    spec = load_run_spec(
+        JS_PROJECT,
+        run_id="r-fields-t",
+        require_mesh=False,
+        n_procs=1,
+        transient_override={"end_time": 2, "write_count": 20, "average_from": 0.5},
+    )
+    write_solve_case(spec, tmp_path / "transient")
+    text = (tmp_path / "transient" / "system" / "controlDict").read_text(encoding="utf-8")
+    assert "timeStart       0.5;" in _block(text, "fieldAverage")
+    sidecar = json.loads((tmp_path / "transient" / "w27-case.json").read_text(encoding="utf-8"))
+    assert sidecar["transient"]["average_from"] == 0.5

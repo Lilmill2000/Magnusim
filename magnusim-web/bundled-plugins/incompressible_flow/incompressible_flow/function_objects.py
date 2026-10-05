@@ -196,6 +196,107 @@ def custom_monitors_functions_text(
     )
 
 
+# Result fields the case writes at every saved time through function objects
+# (written into the time folders next to U and p; analyses._RESULT_FIELDS lists them).
+YPLUS_FIELD = "yPlus"
+WALL_SHEAR_STRESS_FIELD = "wallShearStress"
+# The pressure function object's own name for it is "total(p)", which is not a
+# plain field name results can show: it is written as pTotal.
+TOTAL_PRESSURE_FIELD = "pTotal"
+VORTICITY_FIELD = "vorticity"
+Q_FIELD = "Q"
+MEAN_VELOCITY_FIELD = "UMean"
+MEAN_PRESSURE_FIELD = "pMean"
+
+
+def _write_time_block(name: str, fo_type: str, entries: Sequence[tuple[str, str]] = ()) -> str:
+    """One function object run and written only at the saved times (writeTime)."""
+    rows = (
+        ("type", fo_type),
+        ("libs", '("libfieldFunctionObjects.so")'),
+        ("executeControl", "writeTime"),
+        ("writeControl", "writeTime"),
+        *entries,
+    )
+    body = "\n".join(f"        {key:<16}{value};" for key, value in rows)
+    return f"    {name}\n    {{\n{body}\n    }}"
+
+
+def result_fields_functions_text(
+    *,
+    turbulent: bool,
+    rho: float,
+    transient: TransientControl | None = None,
+) -> str:
+    """Function objects that write extra result fields into every saved time.
+
+    y+ (turbulent runs only: a laminar run has no wall model to report it for),
+    wall shear stress, total pressure, vorticity and the Q-criterion. A
+    transient run also averages U and p over time (UMean, pMean) from the
+    run's "Average from" time.
+
+    Kinematic like p (divided by density, results show them times rho):
+    wallShearStress and pMean. Total pressure is written in Pa: the pressure
+    function object needs the density of an incompressible case (rhoInf).
+    """
+    from .transient import foam_num
+
+    blocks: list[str] = []
+    if turbulent:
+        blocks.append(_write_time_block(YPLUS_FIELD, "yPlus", (("log", "false"),)))
+    blocks.append(_write_time_block(WALL_SHEAR_STRESS_FIELD, "wallShearStress", (("log", "false"),)))
+    blocks.append(
+        _write_time_block(
+            TOTAL_PRESSURE_FIELD,
+            "pressure",
+            (
+                ("mode", "total"),
+                ("result", TOTAL_PRESSURE_FIELD),
+                ("rho", "rhoInf"),
+                ("rhoInf", foam_num(rho)),
+            ),
+        )
+    )
+    blocks.append(_write_time_block(VORTICITY_FIELD, "vorticity"))
+    blocks.append(_write_time_block(Q_FIELD, "Q"))
+    if transient is not None:
+        blocks.append(field_average_block(transient))
+    return "\n".join(blocks)
+
+
+def field_average_block(transient: TransientControl) -> str:
+    """Time averages of U and p (UMean, pMean), from the run's "Average from" time.
+
+    Averaged every time step, written at the saved times. Frames saved before
+    the start time hold no averages.
+    """
+    from .transient import foam_num
+
+    start = float(getattr(transient, "average_from", 0.0) or 0.0)
+    start_line = f"\n        timeStart       {foam_num(start)};" if start > 0 else ""
+    return f"""    fieldAverage
+    {{
+        type            fieldAverage;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    writeTime;{start_line}
+        fields
+        (
+            U
+            {{
+                mean        on;
+                prime2Mean  off;
+                base        time;
+            }}
+            p
+            {{
+                mean        on;
+                prime2Mean  off;
+                base        time;
+            }}
+        );
+    }}"""
+
+
 def _bc_faces(bc: object) -> list[str]:
     if isinstance(bc, dict):
         return _bc_faces_adapter(bc)

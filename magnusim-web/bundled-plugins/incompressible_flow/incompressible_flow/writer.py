@@ -1028,6 +1028,13 @@ RAS
 
         extra = custom_monitors_functions_text(custom_meta, transient=spec.transient)
         functions_text = extra if not mon_patches else functions_text + "\n" + extra
+    from .function_objects import result_fields_functions_text
+
+    # Extra result fields at every saved time (y+, wall shear stress, total
+    # pressure, vorticity, Q; time averages for a transient run).
+    functions_text += "\n" + result_fields_functions_text(
+        turbulent=model != "laminar", rho=float(spec.rho), transient=spec.transient
+    )
     is_transient = spec.transient is not None
 
     if is_transient:

@@ -9,6 +9,15 @@ from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 
 from .bcs import BC_KEYS
+from .function_objects import (
+    MEAN_PRESSURE_FIELD,
+    MEAN_VELOCITY_FIELD,
+    Q_FIELD,
+    TOTAL_PRESSURE_FIELD,
+    VORTICITY_FIELD,
+    WALL_SHEAR_STRESS_FIELD,
+    YPLUS_FIELD,
+)
 from .monitors import MONITOR_QUANTITIES
 from .physics import DEFAULT_TURBULENCE, KINEMATIC_FIELDS, TURBULENCE_MODELS
 
@@ -20,14 +29,41 @@ _FIELDS: tuple[str, ...] = ("U", "p", "k", "omega", "nut")
 # What results colour by, with the units the page shows them in (pressure in
 # Pa: the case stores p divided by rho, see KINEMATIC_FIELDS). R, the Reynolds
 # stress the LRR and SSG models write, is a tensor: listed, never coloured by.
+# The rows after R are written by function objects at the saved times
+# (function_objects.result_fields_functions_text): y+ only by turbulent runs,
+# the time averages only by transient runs (and only from their "Average
+# from" time on). Results lists a row only when the frame wrote it.
 _RESULT_FIELDS: tuple[ResultField, ...] = (
     ResultField("U", "Velocity", "velocity", "vector", unit="m/s", magnitude_label="Velocity Magnitude"),
     ResultField("p", "Pressure", "pressure", "scalar", unit="Pa"),
+    ResultField(TOTAL_PRESSURE_FIELD, "Total pressure", "pressure", "scalar", unit="Pa"),
     ResultField("k", "Turbulent kinetic energy", "specific_energy", "scalar", unit="m²/s²"),
     ResultField("omega", "Specific dissipation rate", "specific_dissipation_rate", "scalar", unit="1/s"),
     ResultField("epsilon", "Turbulent dissipation rate", "dissipation_rate", "scalar", unit="m²/s³"),
     ResultField("nut", "Turbulent viscosity", "kinematic_viscosity", "scalar", unit="m²/s"),
     ResultField("R", "Reynolds stress", "specific_energy", "symm_tensor", unit="m²/s²"),
+    ResultField(YPLUS_FIELD, "y+", "dimensionless", "scalar"),
+    ResultField(
+        WALL_SHEAR_STRESS_FIELD,
+        "Wall shear stress",
+        "pressure",
+        "vector",
+        unit="Pa",
+        magnitude_label="Wall shear stress magnitude",
+    ),
+    ResultField(
+        VORTICITY_FIELD, "Vorticity", "vorticity", "vector", unit="1/s", magnitude_label="Vorticity magnitude"
+    ),
+    ResultField(Q_FIELD, "Q-criterion", "q_criterion", "scalar", unit="1/s²"),
+    ResultField(
+        MEAN_VELOCITY_FIELD,
+        "Mean velocity",
+        "velocity",
+        "vector",
+        unit="m/s",
+        magnitude_label="Mean velocity magnitude",
+    ),
+    ResultField(MEAN_PRESSURE_FIELD, "Mean pressure", "pressure", "scalar", unit="Pa"),
 )
 
 # MonitorType keys (wired to registry in land5; flow->flow_rate bag fix).

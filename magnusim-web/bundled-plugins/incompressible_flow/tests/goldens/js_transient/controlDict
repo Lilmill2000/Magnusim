@@ -80,4 +80,66 @@ functions
         operation       sum;
         fields          ( phi );
     }
+    yPlus
+    {
+        type            yPlus;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+        log             false;
+    }
+    wallShearStress
+    {
+        type            wallShearStress;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+        log             false;
+    }
+    pTotal
+    {
+        type            pressure;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+        mode            total;
+        result          pTotal;
+        rho             rhoInf;
+        rhoInf          1.196;
+    }
+    vorticity
+    {
+        type            vorticity;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+    }
+    Q
+    {
+        type            Q;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+    }
+    fieldAverage
+    {
+        type            fieldAverage;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    writeTime;
+        fields
+        (
+            U
+            {
+                mean        on;
+                prime2Mean  off;
+                base        time;
+            }
+            p
+            {
+                mean        on;
+                prime2Mean  off;
+                base        time;
+            }
+        );
+    }
 }

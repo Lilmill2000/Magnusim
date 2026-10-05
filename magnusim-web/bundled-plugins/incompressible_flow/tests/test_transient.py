@@ -102,7 +102,7 @@ def test_resolve_fixed_step():
 
 
 def test_transient_dicts_match_js_transient_golden(tmp_path, update_golden):
-    """Golden vs fixtures/golden/js_transient for system/ dicts (no FO bodies)."""
+    """Golden vs fixtures/golden/js_transient for system/ dicts."""
     ctrl = TransientControl(
         end_time=5.0,
         delta_t=0.001,
@@ -116,9 +116,14 @@ def test_transient_dicts_match_js_transient_golden(tmp_path, update_golden):
         n_non_orthogonal_correctors=0,
     )
     # FO text matching the golden's mon_/flow_ blocks (order + write interval)
-    from incompressible_flow.function_objects import monitors_functions_text
+    from incompressible_flow.function_objects import (
+        monitors_functions_text,
+        result_fields_functions_text,
+    )
 
     functions = monitors_functions_text(["pressure_1", "velocity_inlet_1"], transient=ctrl)
+    # ... and the result-field function objects the writer adds (the golden's air: rho 1.196).
+    functions += "\n" + result_fields_functions_text(turbulent=True, rho=1.196, transient=ctrl)
     case = tmp_path / "case"
     (case / "system").mkdir(parents=True)
     write_control_dict_transient(case / "system" / "controlDict", ctrl=ctrl, functions_text=functions)

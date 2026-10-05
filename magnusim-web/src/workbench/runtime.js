@@ -14177,16 +14177,22 @@ function syncChromeFromState() {
  * What a case's frames wrote (the exporter's fields_available, or /api/times
  * for the last saved time) and its sidecar's result_fields. `casePath`
  * defaults to the open case. A meta from before result_fields (a cached
- * export) leaves the rows as they were.
+ * export) leaves the rows as they were. For the open case the list is the
+ * frame on screen's: what another time wrote (a prefetched frame, /api/times'
+ * last time) is taken only while nothing is known yet, since not every frame
+ * saves every field (the 0 folder; time averages from their start time).
  */
 function noteCaseFields(meta, casePath) {
   if (!meta || typeof meta !== 'object') return;
   const key = caseFieldKey(casePath || getCaseDir());
   if (!key) return;
-  const names = Array.isArray(meta.fields_available) && meta.fields_available.length
+  const prev = caseFieldInfo.get(key) || { names: null, rows: null };
+  const metaTime = meta.time != null ? String(meta.time) : meta.end != null ? String(meta.end) : '';
+  const otherFrame =
+    !!prev.names && !!metaTime && !!getTime() && metaTime !== getTime() && key === caseFieldKey(getCaseDir());
+  const names = !otherFrame && Array.isArray(meta.fields_available) && meta.fields_available.length
     ? meta.fields_available.map(String)
     : null;
-  const prev = caseFieldInfo.get(key) || { names: null, rows: null };
   const rows = 'result_fields' in meta ? (Array.isArray(meta.result_fields) ? meta.result_fields : null) : prev.rows;
   const next = { names: names || prev.names, rows };
   if (caseFieldInfo.has(key) && JSON.stringify(next) === JSON.stringify(prev)) return;

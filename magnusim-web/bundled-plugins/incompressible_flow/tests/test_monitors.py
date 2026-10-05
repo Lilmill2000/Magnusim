@@ -196,11 +196,12 @@ def test_custom_monitors_match_the_sdk_for_saved_records():
 def test_kinematic_fields_are_declared_where_the_writer_reads_them():
     from incompressible_flow.writer import KINEMATIC_FIELDS
 
-    assert KINEMATIC_FIELDS == ("p",)
+    # p, and the wall shear stress and mean pressure the result function objects write.
+    assert KINEMATIC_FIELDS == ("p", "wallShearStress", "pMean")
     rows = {r["key"]: r for r in get_registry("analysis").describe()}
     for key in ANALYSES:
         assert get_registry("analysis").get(key).kinematic_fields == KINEMATIC_FIELDS
-        assert rows[key]["kinematic_fields"] == ["p"]
+        assert rows[key]["kinematic_fields"] == ["p", "wallShearStress", "pMean"]
 
 
 def test_result_fields_name_the_units_the_page_showed():
@@ -208,9 +209,14 @@ def test_result_fields_name_the_units_the_page_showed():
 
     rows = {r["key"]: r for r in result_fields(get_registry("analysis").get("incompressible_steady"))}
     assert {k: r["unit"] for k, r in rows.items()} == {
-        "U": "m/s", "p": "Pa", "k": "m²/s²", "omega": "1/s", "epsilon": "m²/s³", "nut": "m²/s", "R": "m²/s²",
+        "U": "m/s", "p": "Pa", "pTotal": "Pa", "k": "m²/s²", "omega": "1/s", "epsilon": "m²/s³",
+        "nut": "m²/s", "R": "m²/s²", "yPlus": "", "wallShearStress": "Pa", "vorticity": "1/s",
+        "Q": "1/s²", "UMean": "m/s", "pMean": "Pa",
     }
     assert rows["U"]["magnitude_label"] == "Velocity Magnitude" and rows["U"]["shown"] == "magU"
     assert (rows["R"]["kind"], rows["R"]["shown"]) == ("symm_tensor", None)
     shown = [r["shown"] for r in rows.values() if r["shown"]]
-    assert shown == ["magU", "p", "k", "omega", "epsilon", "nut"]
+    assert shown == [
+        "magU", "p", "pTotal", "k", "omega", "epsilon", "nut",
+        "yPlus", "magwallShearStress", "magvorticity", "Q", "magUMean", "pMean",
+    ]

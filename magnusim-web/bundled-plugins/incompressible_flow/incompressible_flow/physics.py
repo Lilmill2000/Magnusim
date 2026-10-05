@@ -21,8 +21,10 @@ DEFAULT_TURBULENCE = "kOmegaSST"
 
 # Fields the case stores divided by density (incompressible solvers solve for
 # p/rho): results show them times rho. The writer's sidecar and both analyses
-# declare this list.
-KINEMATIC_FIELDS: tuple[str, ...] = ("p",)
+# declare this list. Besides p: the wall shear stress and the time-averaged
+# pressure the result function objects write (function_objects.py). Total
+# pressure (pTotal) is written in Pa already.
+KINEMATIC_FIELDS: tuple[str, ...] = ("p", "wallShearStress", "pMean")
 
 # Display names used by V0.1.0 records ("k-omega SST") and loose spellings.
 _ALIASES: dict[str, str] = {

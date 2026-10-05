@@ -261,6 +261,15 @@
           "shown": "p"
         },
         {
+          "key": "pTotal",
+          "label": "Total pressure",
+          "unit_quantity": "pressure",
+          "kind": "scalar",
+          "unit": "Pa",
+          "magnitude_label": "",
+          "shown": "pTotal"
+        },
+        {
           "key": "k",
           "label": "Turbulent kinetic energy",
           "unit_quantity": "specific_energy",
@@ -304,10 +313,66 @@
           "unit": "m\u00b2/s\u00b2",
           "magnitude_label": "",
           "shown": null
+        },
+        {
+          "key": "yPlus",
+          "label": "y+",
+          "unit_quantity": "dimensionless",
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "yPlus"
+        },
+        {
+          "key": "wallShearStress",
+          "label": "Wall shear stress",
+          "unit_quantity": "pressure",
+          "kind": "vector",
+          "unit": "Pa",
+          "magnitude_label": "Wall shear stress magnitude",
+          "shown": "magwallShearStress"
+        },
+        {
+          "key": "vorticity",
+          "label": "Vorticity",
+          "unit_quantity": "vorticity",
+          "kind": "vector",
+          "unit": "1/s",
+          "magnitude_label": "Vorticity magnitude",
+          "shown": "magvorticity"
+        },
+        {
+          "key": "Q",
+          "label": "Q-criterion",
+          "unit_quantity": "q_criterion",
+          "kind": "scalar",
+          "unit": "1/s\u00b2",
+          "magnitude_label": "",
+          "shown": "Q"
+        },
+        {
+          "key": "UMean",
+          "label": "Mean velocity",
+          "unit_quantity": "velocity",
+          "kind": "vector",
+          "unit": "m/s",
+          "magnitude_label": "Mean velocity magnitude",
+          "shown": "magUMean"
+        },
+        {
+          "key": "pMean",
+          "label": "Mean pressure",
+          "unit_quantity": "pressure",
+          "kind": "scalar",
+          "unit": "Pa",
+          "magnitude_label": "",
+          "shown": "pMean"
         }
       ],
       "kinematic_fields": [
-        "p"
+        "p",
+        "wallShearStress",
+        "pMean"
       ],
       "monitor_quantities": [
         {
@@ -836,6 +901,15 @@
           "shown": "p"
         },
         {
+          "key": "pTotal",
+          "label": "Total pressure",
+          "unit_quantity": "pressure",
+          "kind": "scalar",
+          "unit": "Pa",
+          "magnitude_label": "",
+          "shown": "pTotal"
+        },
+        {
           "key": "k",
           "label": "Turbulent kinetic energy",
           "unit_quantity": "specific_energy",
@@ -879,10 +953,66 @@
           "unit": "m\u00b2/s\u00b2",
           "magnitude_label": "",
           "shown": null
+        },
+        {
+          "key": "yPlus",
+          "label": "y+",
+          "unit_quantity": "dimensionless",
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "yPlus"
+        },
+        {
+          "key": "wallShearStress",
+          "label": "Wall shear stress",
+          "unit_quantity": "pressure",
+          "kind": "vector",
+          "unit": "Pa",
+          "magnitude_label": "Wall shear stress magnitude",
+          "shown": "magwallShearStress"
+        },
+        {
+          "key": "vorticity",
+          "label": "Vorticity",
+          "unit_quantity": "vorticity",
+          "kind": "vector",
+          "unit": "1/s",
+          "magnitude_label": "Vorticity magnitude",
+          "shown": "magvorticity"
+        },
+        {
+          "key": "Q",
+          "label": "Q-criterion",
+          "unit_quantity": "q_criterion",
+          "kind": "scalar",
+          "unit": "1/s\u00b2",
+          "magnitude_label": "",
+          "shown": "Q"
+        },
+        {
+          "key": "UMean",
+          "label": "Mean velocity",
+          "unit_quantity": "velocity",
+          "kind": "vector",
+          "unit": "m/s",
+          "magnitude_label": "Mean velocity magnitude",
+          "shown": "magUMean"
+        },
+        {
+          "key": "pMean",
+          "label": "Mean pressure",
+          "unit_quantity": "pressure",
+          "kind": "scalar",
+          "unit": "Pa",
+          "magnitude_label": "",
+          "shown": "pMean"
         }
       ],
       "kinematic_fields": [
-        "p"
+        "p",
+        "wallShearStress",
+        "pMean"
       ],
       "monitor_quantities": [
         {

@@ -59,9 +59,10 @@ def test_kinematic_fields_in_the_contract():
     # launch=None: the core's own launch spec (the default analysis declares its own, API 1.5).
     base = replace(_analysis("incompressible_steady"), launch=None)
     rows = {r["key"]: r for r in get_registry("analysis").describe()}
-    # The default analysis declares its own: p is stored divided by rho.
-    assert rows["incompressible_steady"]["kinematic_fields"] == ["p"]
-    assert contract.kinematic_fields(base) == ("p",)
+    # The default analysis declares its own: p (and the wall shear stress and mean
+    # pressure its function objects write) are stored divided by rho.
+    assert rows["incompressible_steady"]["kinematic_fields"] == ["p", "wallShearStress", "pMean"]
+    assert contract.kinematic_fields(base) == ("p", "wallShearStress", "pMean")
     # Not declared: describe says null, the launch spec carries null.
     undeclared = replace(base, key="x_undeclared", kinematic_fields=None)
     assert contract.describe_extra(undeclared)["kinematic_fields"] is None

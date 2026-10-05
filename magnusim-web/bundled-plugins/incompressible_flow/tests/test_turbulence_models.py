@@ -281,6 +281,12 @@ def test_simplefoam_runs_two_iterations(tmp_path, channel_mesh, model):
     for name in SOLVED[model]:
         assert re.search(rf"Solving for {name}\w*,", log), f"{model}: no {name} equation in log"
     assert (case / "2" / "U").is_file()
+    # The result function objects wrote their fields into the saved time (y+ only
+    # with a turbulence model: a laminar run has none).
+    wrote = {p.name for p in (case / "2").iterdir()}
+    want = {"wallShearStress", "pTotal", "vorticity", "Q"} | ({"yPlus"} if model != "laminar" else set())
+    assert want <= wrote, sorted(wrote)
+    assert model != "laminar" or "yPlus" not in wrote
 
 
 @pytest.mark.wsl
@@ -300,6 +306,11 @@ def test_pimplefoam_runs_two_steps(tmp_path, channel_mesh, model):
     log = _solve(case, "pimpleFoam")
     for name in SOLVED[model]:
         assert re.search(rf"Solving for {name}\w*,", log), f"{model}: no {name} equation in log"
+    # A transient run also writes the time averages (averaged from the start).
+    saved = [p for p in case.iterdir() if p.is_dir() and re.fullmatch(r"[0-9.eE+-]+", p.name) and float(p.name) > 0]
+    assert saved, sorted(p.name for p in case.iterdir())
+    wrote = {p.name for p in max(saved, key=lambda p: float(p.name)).iterdir()}
+    assert {"UMean", "pMean", "wallShearStress", "pTotal", "vorticity", "Q"} <= wrote, sorted(wrote)
 
 
 @pytest.mark.parametrize(

@@ -96,7 +96,7 @@ def test_launch_spec_names_the_plugins_own_case_writer(key: str, app: str, keep:
     launch = contract.launch_spec(analysis, get_registry("solver"))
     assert (launch.app, launch.keep_frames, launch.process_names) == (app, keep, (app,))
     assert (launch.stop_strategy, launch.parallel) == ("stopAt_writeNow", True)
-    assert launch.frame_fields == ("U", "p") and launch.kinematic_fields == ("p",)
+    assert launch.frame_fields == ("U", "p") and launch.kinematic_fields == ("p", "wallShearStress", "pMean")
     assert launch.log_parser.module == "incompressible_flow.parser"
     assert launch.serial_below_cells == cells
     assert launch.prepare_job == JOB == contract.effective_prepare_job(launch)
