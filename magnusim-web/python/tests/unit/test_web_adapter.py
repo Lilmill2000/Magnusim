@@ -149,20 +149,20 @@ def test_web_bc_to_registry_dispatches_to_the_registered_family():
             return "wall_slip", {"from": "fx"}
 
         hub.registry("bc_family").register(
-            BcFamily(key="fx_sym", label="Symmetry", record_type="Symmetry plane",
+            BcFamily(key="fx_sym", label="Mirror plane", record_type="Mirror plane",
                      aliases=("Mirror",), variants=("wall_slip",), resolve=resolve),
             plugin="fx",
         )
-        assert web_bc_to_registry({"bc_type": "symmetry  Plane", "x": 1}) == ("wall_slip", {"from": "fx"})
+        assert web_bc_to_registry({"bc_type": "mirror  Plane", "x": 1}) == ("wall_slip", {"from": "fx"})
         assert web_bc_to_registry({"bc_type": "Mirror"}) == ("wall_slip", {"from": "fx"})
-        assert seen[0] == {"bc_type": "symmetry  Plane", "x": 1}
+        assert seen[0] == {"bc_type": "mirror  Plane", "x": 1}
         assert web_bc_to_registry({"bc_type": "Periodic"}) == ("wall_noslip", {})
         assert web_bc_to_registry({}) == ("wall_noslip", {})
         # Pressure's aliases reach its family.
         assert web_bc_to_registry({"bc_type": "Pressure outlet", "value": 3, "unit": "Pa"}) == (
             "pressure_outlet_gauge", {"gauge_pressure": 3.0})
         hub.registry("bc_family").drop_plugin("fx")
-        assert web_bc_to_registry({"bc_type": "Symmetry plane"}) == ("wall_noslip", {})
+        assert web_bc_to_registry({"bc_type": "Mirror plane"}) == ("wall_noslip", {})
     finally:
         reset_for_tests()
 
@@ -187,7 +187,7 @@ def test_web_bc_mesh_entry_canonicalizes_aliases_and_refuses_unknown_types():
     bad = {"bc_type": "Velocity inlet", "value": 1, "direction": "Vector", "vector": [1, "nan", 0]}
     assert web_bc_mesh_entry(bad) == ("velocity_inlet_fixed", {})
     with pytest.raises(ValueError, match="unsupported boundary condition type"):
-        web_bc_mesh_entry({"bc_type": "Symmetry"})
+        web_bc_mesh_entry({"bc_type": "Periodic"})
 
 
 def test_unnamed_web_bcs_mesh_under_the_names_the_meshers_used_before():
@@ -199,6 +199,8 @@ def test_unnamed_web_bcs_mesh_under_the_names_the_meshers_used_before():
         rec = {"bc_type": bc_type, "value": 1, "unit": "m/s" if bc_type.startswith("Velocity") else "Pa"}
         assert web_bc_patch_name(rec, web_bc_mesh_entry(rec)[0]) == name
     assert web_bc_patch_name({"bc_type": "Wall", "name": "Lid"}, "wall_noslip") == "Lid"
+    # A newer BC type meshes under its own key, never merged into "wall" or "outlet".
+    assert web_bc_patch_name({"bc_type": "Symmetry"}, web_bc_mesh_entry({"bc_type": "Symmetry"})[0]) == "symmetry"
 
 
 def test_parse_boundary_patches_indented(tmp_path: Path):

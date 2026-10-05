@@ -11,11 +11,21 @@ import { startHost } from './support/host-server.mjs';
 // the family's fields (it names no UI component), the edit survives a reload, and
 // its faces paint in the family's colour ('other'). The fixture plugin
 // (python/tests/fixtures/bc-plugins/example-extra-bc) adds an analysis that offers
-// Incompressible Flow's BCs plus a symmetry plane. No WSL: nothing is solved.
+// Incompressible Flow's BCs plus a mirror plane. No WSL: nothing is solved.
 const FIXTURE = 'sample-project-steady-state-e2e';
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 // The 'other' colour: the hub swatch (.hub-swatch-other) and the face paint (BC_KIND_RGB.other).
 const OTHER_RGB = [219, 39, 119];
+// Incompressible Flow's own families, in the order it registers them.
+const IF_FAMILIES = [
+  'velocity_inlet',
+  'velocity_outlet',
+  'pressure_outlet',
+  'total_pressure_inlet',
+  'freestream',
+  'wall',
+  'symmetry',
+];
 let host;
 let plugins;
 
@@ -47,10 +57,10 @@ test("a plugin's BC family is offered, edited in its generic form, kept, and pai
 
   await openProject(page);
 
-  // A study of Incompressible Flow's own analysis offers its four families only.
+  // A study of Incompressible Flow's own analysis offers its families only.
   await page.locator('#left-tree [data-w19-bcs="1"] .bc-plus').first().click();
   await expect(picker).toBeVisible();
-  await expect.poll(pickerKeys).toEqual(['velocity_inlet', 'velocity_outlet', 'pressure_outlet', 'wall']);
+  await expect.poll(pickerKeys).toEqual(IF_FAMILIES);
   await picker.locator('button[aria-label="Close"]').click();
 
   // A study of the fixture's analysis.
@@ -63,27 +73,27 @@ test("a plugin's BC family is offered, edited in its generic form, kept, and pai
   const bcsNow = async () =>
     (await (await request.get(`${host.base}/api/bcs?project_id=${FIXTURE}&simulation_id=${encodeURIComponent(sid)}`)).json())
       .boundary_conditions || [];
-  const symmetry = async () => (await bcsNow()).find((b) => b.bc_type === 'Symmetry') || null;
+  const mirrorBc = async () => (await bcsNow()).find((b) => b.bc_type === 'Mirror plane') || null;
 
   // The picker lists the plugin's family, with its hint, after the analysis's IF ones.
   await page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w19-bcs="1"] .bc-plus`).first().click();
   await expect(picker).toBeVisible();
-  await expect.poll(pickerKeys).toEqual(['velocity_inlet', 'velocity_outlet', 'pressure_outlet', 'wall', 'symmetry']);
-  const sym = picker.locator('[data-bc-key="symmetry"]');
-  await expect(sym.locator('.ml-type-name')).toHaveText('Symmetry');
+  await expect.poll(pickerKeys).toEqual([...IF_FAMILIES, 'mirror_plane']);
+  const sym = picker.locator('[data-bc-key="mirror_plane"]');
+  await expect(sym.locator('.ml-type-name')).toHaveText('Mirror plane');
   await expect(sym.locator('.ml-type-sub')).toHaveText('Mirror plane: no flow through it');
 
   // Add creates it with the family's seed, and opens its editor on the generic form.
   await sym.click();
   await picker.locator('[data-bc-add="1"]').click();
   await expect(editor).toBeVisible({ timeout: 15_000 });
-  await expect(editor.locator('[data-bc-title="1"]')).toHaveText(/^Symmetry \d+$/);
-  await expect.poll(async () => (await symmetry())?.mirror, { timeout: 15_000 }).toBe('Plane');
-  const id = (await symmetry()).id;
+  await expect(editor.locator('[data-bc-title="1"]')).toHaveText(/^Mirror plane \d+$/);
+  await expect.poll(async () => (await mirrorBc())?.mirror, { timeout: 15_000 }).toBe('Plane');
+  const id = (await mirrorBc()).id;
   const mirror = editor.locator('[data-schema-key="mirror"] select');
   await expect(mirror).toBeVisible();
   await expect(mirror.locator('option:checked')).toHaveText('Plane');
-  await expect(editor.getByLabel('Boundary condition type')).toHaveValue('Symmetry');
+  await expect(editor.getByLabel('Boundary condition type')).toHaveValue('Mirror plane');
 
   // A face clicked on the model is assigned and paints in the 'other' colour.
   const box = await page.locator('#viewer').boundingBox();
@@ -92,15 +102,15 @@ test("a plugin's BC family is offered, edited in its generic form, kept, and pai
   const chips = editor.locator('[data-face-picker="1"] [data-face-id]');
   await expect(chips).toHaveCount(1, { timeout: 10_000 });
   const face = await chips.first().getAttribute('data-face-id');
-  await expect.poll(async () => (await symmetry())?.faces || []).toEqual([face]);
+  await expect.poll(async () => (await mirrorBc())?.faces || []).toEqual([face]);
   await expect
     .poll(() => page.evaluate((f) => (window.__CFD_W16_STATE__.facePaint || {})[f] || null, face))
     .toEqual(OTHER_RGB);
 
   // Edit the field in the generic form: saved as the family's choice.
   await mirror.selectOption('Wedge');
-  await expect.poll(async () => (await symmetry())?.mirror, { timeout: 15_000 }).toBe('Wedge');
-  expect((await symmetry()).faces).toEqual([face]);
+  await expect.poll(async () => (await mirrorBc())?.mirror, { timeout: 15_000 }).toBe('Wedge');
+  expect((await mirrorBc()).faces).toEqual([face]);
 
   // After a reload: the edit is still there, and the hub card and the model show the colour.
   await page.reload();
@@ -114,15 +124,15 @@ test("a plugin's BC family is offered, edited in its generic form, kept, and pai
   const hub = page.locator('#panel-bcs-hub .cfd-island');
   await expect(hub).toBeVisible();
   const card = hub.locator(`[data-open-bc="${id}"]`);
-  await expect(card.locator('.hub-item-sub')).toHaveText(`Symmetry · ${face}`);
+  await expect(card.locator('.hub-item-sub')).toHaveText(`Mirror plane · ${face}`);
   const swatch = await card.locator('.hub-swatch').evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(swatch).toBe(`rgb(${OTHER_RGB.join(', ')})`);
-  await expect(hub.locator('.bc-legend')).toContainText('Symmetry');
+  await expect(hub.locator('.bc-legend')).toContainText('Mirror plane');
   await expect
     .poll(() => page.evaluate((f) => (window.__CFD_W16_STATE__.facePaint || {})[f] || null, face))
     .toEqual(OTHER_RGB);
   await card.click();
-  await expect(editor.locator('[data-bc-title="1"]')).toHaveText(/^Symmetry \d+$/);
+  await expect(editor.locator('[data-bc-title="1"]')).toHaveText(/^Mirror plane \d+$/);
   await expect(editor.locator('[data-schema-key="mirror"] select option:checked')).toHaveText('Wedge');
-  expect((await symmetry()).mirror).toBe('Wedge');
+  expect((await mirrorBc()).mirror).toBe('Wedge');
 });

@@ -12,8 +12,8 @@ declare module '@magnusim/plugin-api/_internal/api/registry.gen' {
   export type FilterKey = 'cut_plane' | 'streamlines' | 'plot_over_path' | 'iso_surface' | 'iso_volume' | 'inspect_point' | 'surface_field' | 'mesh_surface' | 'mesh_section' | (string & {});
   export type MesherKey = 'standard' | 'cfmesh' | 'snappy_hexdominant' | (string & {});
   export type MaterialKey = 'newtonian_incompressible' | (string & {});
-  export type BcKey = 'velocity_inlet_fixed' | 'velocity_inlet_volumetric' | 'velocity_inlet_mass' | 'velocity_outlet' | 'pressure_outlet_gauge' | 'wall_noslip' | 'wall_slip' | (string & {});
-  export type BcFamilyKey = 'velocity_inlet' | 'velocity_outlet' | 'pressure_outlet' | 'wall' | (string & {});
+  export type BcKey = 'velocity_inlet_fixed' | 'velocity_inlet_volumetric' | 'velocity_inlet_mass' | 'velocity_outlet' | 'pressure_outlet_gauge' | 'wall_noslip' | 'wall_slip' | 'symmetry' | 'freestream' | 'wall_moving' | 'wall_rotating' | 'total_pressure_inlet' | (string & {});
+  export type BcFamilyKey = 'velocity_inlet' | 'velocity_outlet' | 'pressure_outlet' | 'total_pressure_inlet' | 'freestream' | 'wall' | 'symmetry' | (string & {});
   export type MonitorKey = 'area_average' | 'flow_rate' | (string & {});
   export interface RegistryRow {
       key: string;
@@ -106,7 +106,7 @@ declare module '@magnusim/plugin-api/_internal/api/registry.gen' {
       record_type: string;
       /** Older bc_type values read as this family. */
       aliases: string[];
-      color: 'inlet' | 'outlet' | 'pressure' | 'wall' | 'other';
+      color: 'inlet' | 'outlet' | 'pressure' | 'freestream' | 'wall' | 'symmetry' | 'other';
       /** The picker's sub-line. */
       hint: string;
       /** BC type keys; the first is the default. */
@@ -430,6 +430,8 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       imperial: boolean;
       /** The study's analysis: the BC families it offers (its registry row's bc_types). */
       analysis_key?: string;
+      /** The study's record as saved (a BC family's fields may depend on it, e.g. its turbulence model). */
+      study?: Record<string, unknown> | null;
   }
   /** A lost face entry on a record (a linked geometry's update put it there; API 1.5). */
   export interface LostFaceEntry {
@@ -666,6 +668,8 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/slots' {
           face_area_m2: number | null;
           density: number;
       };
+      /** The study's record as saved (its turbulence model, time dependency, ...); null when not known. */
+      study?: Record<string, unknown> | null;
   }
   type AnyComponent = ComponentType<never>;
   export {};

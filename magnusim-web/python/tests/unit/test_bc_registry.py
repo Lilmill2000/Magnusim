@@ -64,11 +64,25 @@ def test_bc_menu_rpc_is_unchanged():
             },
             {"key": "velocity_outlet", "label": "Velocity outlet", "variants": [var("fixed_value", "Fixed value", "velocity_outlet")]},
             {"key": "pressure_outlet", "label": "Pressure", "variants": [var("fixed_gauge", "Fixed value", "pressure_outlet_gauge")]},
+            # Newer families: a variant without match values is the "default" one.
+            {
+                "key": "total_pressure_inlet",
+                "label": "Total pressure inlet",
+                "variants": [var("default", "Total pressure inlet", "total_pressure_inlet")],
+            },
+            {"key": "freestream", "label": "Freestream", "variants": [var("default", "Freestream", "freestream")]},
             {
                 "key": "wall",
                 "label": "Wall",
-                "variants": [var("noslip", "No-slip", "wall_noslip"), var("slip", "Slip", "wall_slip")],
+                "variants": [
+                    var("noslip", "No-slip", "wall_noslip"),
+                    var("slip", "Slip", "wall_slip"),
+                    # Newer variants: their keys come from their match values.
+                    var("moving", "Moving", "wall_moving"),
+                    var("rotating", "Rotating", "wall_rotating"),
+                ],
             },
+            {"key": "symmetry", "label": "Symmetry", "variants": [var("default", "Symmetry", "symmetry")]},
         ],
     }
 

@@ -37,7 +37,9 @@ def test_load_all_registers_bc_material_monitor_keys():
     hub = load_all()
     bc = get_registry("bc")
     assert set(bc.keys()) == set(BC_TYPES.keys())
-    assert len(bc.keys()) == 7
+    from tests.unit.if_bc_keys import IF_BC_KEYS
+
+    assert tuple(bc.keys()) == IF_BC_KEYS
     # Incompressible Flow owns the BC types; BC_TYPES is a view over the hub
     # (the same objects, not a second copy).
     assert {bc.owner(k) for k in bc.keys()} == {"incompressible_flow"}

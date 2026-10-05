@@ -1205,7 +1205,7 @@ A boundary condition the user picks (API 1.4, registry kind bc_family).
 - `plugin?: string | undefined`
 - `record_type: string`: What a saved record stores in bc_type.
 - `aliases: string[]`: Older bc_type values read as this family.
-- `color: "inlet" | "outlet" | "pressure" | "wall" | "other"`
+- `color: "inlet" | "outlet" | "pressure" | "freestream" | "wall" | "symmetry" | "other"`
 - `hint: string`: The picker's sub-line.
 - `variants: string[]`: BC type keys; the first is the default.
 - `defaults: { metric?: Record<string, unknown>; imperial?: Record<string, unknown>; } & Record<string, unknown>`: A new record's fields, per unit system.
@@ -1249,6 +1249,7 @@ What a bc-settings component gets (API 1.4). The core shows a failed save's mess
 - `faces: string[]`: The faces assigned to it now.
 - `save: (patch: Record<string, unknown>) => Promise<void>`: Merge fields into the BC and save it. A unit change alone converts the value.
 - `flowBasis: (faces: string[]) => { face_area_m2: number | null; density: number; }`: The mean area of one of these faces (m²; null without geometry) and the study's fluid density (kg/m³; 0 when unknown).
+- `study?: Record<string, unknown> | null | undefined`: The study's record as saved (its turbulence model, time dependency, ...); null when not known.
 
 #### IslandProps
 
@@ -2611,10 +2612,18 @@ What ships: the core builtins and the bundled plugins (the whole record, with sc
 | bc | `pressure_outlet_gauge` | Pressure | incompressible_flow |
 | bc | `wall_noslip` | Wall | incompressible_flow |
 | bc | `wall_slip` | Wall | incompressible_flow |
+| bc | `symmetry` | Symmetry | incompressible_flow |
+| bc | `freestream` | Freestream | incompressible_flow |
+| bc | `wall_moving` | Wall | incompressible_flow |
+| bc | `wall_rotating` | Wall | incompressible_flow |
+| bc | `total_pressure_inlet` | Total pressure inlet | incompressible_flow |
 | bc_family | `velocity_inlet` | Velocity inlet | incompressible_flow |
 | bc_family | `velocity_outlet` | Velocity outlet | incompressible_flow |
 | bc_family | `pressure_outlet` | Pressure | incompressible_flow |
+| bc_family | `total_pressure_inlet` | Total pressure inlet | incompressible_flow |
+| bc_family | `freestream` | Freestream | incompressible_flow |
 | bc_family | `wall` | Wall | incompressible_flow |
+| bc_family | `symmetry` | Symmetry | incompressible_flow |
 | material | `newtonian_incompressible` | Newtonian (incompressible) | incompressible_flow |
 | monitor | `area_average` | Area average | incompressible_flow |
 | monitor | `flow_rate` | Flow rate | incompressible_flow |

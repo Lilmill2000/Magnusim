@@ -24,6 +24,14 @@ from magnusim_sdk.foam import (
 from magnusim_sdk.foam import write_foam_text as _write_foam
 from magnusim_sdk.units import UNITS as _UNITS
 
+from .bc_kinds import (
+    is_freestream,
+    is_symmetry,
+    is_total_pressure_inlet,
+    wall_kind,
+    wall_rotation,
+    wall_velocity,
+)
 from .materials import LEGACY_AIR
 from .physics import (
     DEFAULT_PHYSICS,
@@ -45,7 +53,6 @@ if TYPE_CHECKING:
         is_velocity_inlet,
         is_velocity_outlet,
         is_wall_bc,
-        wall_treatment,
     )
     from .transient import TransientControl
 
@@ -472,6 +479,102 @@ def inlet_ref_speed(bc: dict, face_area: float, rho: float) -> float:
     return abs(inlet_speed_ms(bc))
 
 
+_FREE_OUTFLOW = {"type": "inletOutlet", "inletValue": "uniform (0 0 0)", "value": "uniform (0 0 0)"}
+
+
+def outlet_value_given(bc: dict) -> bool:
+    """True when a velocity outlet record holds a number (older records may hold none)."""
+    try:
+        return math.isfinite(float(bc["value"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def velocity_outlet_U(bc: dict, rho: float) -> dict[str, str]:
+    """A velocity outlet's 0/U entry: the outflow its panel asks for.
+
+    A speed normal to the face is surfaceNormalFixedValue with a positive
+    (outward) refValue; a speed along a vector is fixedValue; a volumetric or
+    mass flow is flowRateOutletVelocity, the rate once per assigned face (as an
+    inlet's). A record with no value keeps the free outflow (inletOutlet, no
+    backflow) older versions wrote for every velocity outlet.
+    """
+    _ensure_web_imports()
+    if not outlet_value_given(bc):
+        return dict(_FREE_OUTFLOW)
+    n_faces = max(1, len(bc_faces(bc)))
+    if uses_flow_rate(bc):
+        if is_mass_flow(bc) and mass_flow_kgs(bc) is not None:
+            return {
+                "type": "flowRateOutletVelocity",
+                "massFlowRate": f"constant {js_to_precision(abs(mass_flow_kgs(bc) or 0.0) * n_faces, 8)}",
+                "rhoOutlet": f"{rho}",
+                "value": "uniform (0 0 0)",
+            }
+        if volumetric_m3s(bc) is not None:
+            return {
+                "type": "flowRateOutletVelocity",
+                "volumetricFlowRate": f"constant {js_to_precision(abs(volumetric_m3s(bc) or 0.0) * n_faces, 8)}",
+                "value": "uniform (0 0 0)",
+            }
+        return dict(_FREE_OUTFLOW)
+    vec = vector_inlet_velocity(bc, {}) if uses_vector(bc) else None
+    if vec:
+        comps = [js_to_precision(c, 8) for c in vec["U"]]
+        return {"type": "fixedValue", "value": f"uniform ({' '.join(comps)})"}
+    return {
+        "type": "surfaceNormalFixedValue",
+        "refValue": f"uniform {js_plain_float(abs(inlet_speed_ms(bc)))}",
+        "value": "uniform (0 0 0)",
+    }
+
+
+def outlet_outflow(bc: dict) -> float | None:
+    """A velocity outlet's outflow as asked (speed, volumetric or mass flow; any unit), None without a value."""
+    if not outlet_value_given(bc):
+        return None
+    if uses_flow_rate(bc):
+        q = mass_flow_kgs(bc) if is_mass_flow(bc) else volumetric_m3s(bc)
+        return abs(q) if q is not None else None
+    return abs(inlet_speed_ms(bc))
+
+
+def freestream_speed(bc: dict) -> float:
+    """A freestream's speed in m/s (its value and unit; 0 without a value)."""
+    try:
+        v = float(bc["value"])
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    return abs(inlet_speed_ms(bc)) if math.isfinite(v) else 0.0
+
+
+def freestream_velocity(bc: dict) -> list[float]:
+    """A freestream's velocity vector in m/s: its speed along its direction (+x when it has none)."""
+    raw = bc.get("vector")
+    v = [0.0, 0.0, 0.0]
+    if isinstance(raw, (list, tuple)):
+        for i, x in enumerate(list(raw)[:3]):
+            try:
+                v[i] = float(x)
+            except (TypeError, ValueError):
+                v[i] = 0.0
+    if not all(math.isfinite(x) for x in v):
+        v = [0.0, 0.0, 0.0]
+    m = math.hypot(*v)
+    direction = [x / m for x in v] if m > 0 else [1.0, 0.0, 0.0]
+    spd = freestream_speed(bc)
+    return [spd * d for d in direction]
+
+
+def freestream_pressure_pa(bc: dict) -> float:
+    """A freestream's gauge pressure in Pa (stored in Pa; 0 when it has none)."""
+    try:
+        p = float(bc.get("freestream_pressure") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return p if math.isfinite(p) else 0.0
+
+
 def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
     """Port of writeSolveCase speedRef / dHyd selection."""
     _ensure_web_imports()
@@ -495,7 +598,12 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
         speed_ref = max(best, 0.1)
         d_hyd = 2.0 * math.sqrt(best_area / math.pi) if best_area > 0 else None
     else:
-        pm = [m.get("bc") for m in (spec.mapped or []) if is_pressure_bc(m.get("bc"))]
+        # Static pressures and total-pressure inlets: the pressure difference drives the flow.
+        pm = [
+            m.get("bc")
+            for m in (spec.mapped or [])
+            if is_pressure_bc(m.get("bc")) or is_total_pressure_inlet(m.get("bc"))
+        ]
         pvals = [pressure_pa(_bc_dict(b)) for b in pm if b]
         if len(pvals) >= 2:
             dp = max(pvals) - min(pvals)
@@ -508,6 +616,20 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
             if a > 0 and a < min_area:
                 min_area = a
         d_hyd = 2.0 * math.sqrt(min_area / math.pi) if math.isfinite(min_area) else None
+        # No inlet: a velocity outlet's outflow is the case's speed when it is faster.
+        for m in spec.mapped or []:
+            if not is_velocity_outlet(m.get("bc")):
+                continue
+            ob = _bc_dict(m.get("bc"))  # type: ignore[arg-type]
+            if not outlet_value_given(ob):
+                continue
+            faces = bc_faces(ob)
+            area = faces_area(faces, props)
+            speed_ref = max(speed_ref, inlet_ref_speed(ob, area / max(1, len(faces)), rho))
+        # No inlet: a freestream's speed is the case's speed when it is faster.
+        for m in spec.mapped or []:
+            if is_freestream(m.get("bc")):
+                speed_ref = max(speed_ref, freestream_speed(_bc_dict(m.get("bc"))))  # type: ignore[arg-type]
     if not d_hyd or not (d_hyd > 0):
         d_hyd = 0.05
     return float(speed_ref), float(d_hyd)
@@ -550,12 +672,84 @@ def _patch_names(spec: RunSpec, poly_dst: Path | None) -> list[str]:
     return out
 
 
+def turb_value_strings(k: float, omega: float) -> dict[str, str]:
+    """The value strings of k, omega, epsilon (Cmu k omega) and R (isotropic, 2/3 k I)."""
+    from .function_objects import js_to_precision as _prec
+
+    r_diag = _prec(2.0 * k / 3.0, 6)
+    return {
+        "k": _prec(k, 6),
+        "omega": _prec(omega, 6),
+        "epsilon": _prec(0.09 * k * omega, 6),
+        "R": f"({r_diag} 0 0 {r_diag} 0 {r_diag})",
+    }
+
+
+def carries_inlet_turbulence(bc: dict) -> bool:
+    """A boundary flow can come in through, with a "Turbulence at the inlet" setting."""
+    _ensure_web_imports()
+    return is_velocity_inlet(bc) or is_pressure_bc(bc) or is_total_pressure_inlet(bc) or is_freestream(bc)
+
+
+def patch_turbulence(spec: RunSpec, speed_ref: float) -> dict[str, dict[str, Any]]:
+    """{patch: scales} of each boundary whose "Turbulence at the inlet" is not Auto.
+
+    A velocity inlet's intensity is of its own speed; a pressure boundary's or
+    a total-pressure inlet's of the case's reference speed (it has no speed of
+    its own). A freestream always
+    has its own: on Auto, 5 % intensity of its speed and a turbulent viscosity
+    10 x the fluid's (the length-scale rule would size eddies by the far
+    field's size).
+    """
+    from .inlet_turbulence import (
+        DEFAULT_INTENSITY_PCT,
+        DEFAULT_RATIO,
+        RATIO,
+        patch_scales,
+        turbulence_spec,
+    )
+
+    _ensure_web_imports()
+    rho = float(spec.rho) or LEGACY_AIR["rho"]
+    props = spec.face_props or {}
+    out: dict[str, dict[str, Any]] = {}
+    for m in spec.mapped or []:
+        patch = str(m.get("patch") or "")
+        if not patch or not m.get("bc"):
+            continue
+        bc = _bc_dict(m["bc"])
+        if not carries_inlet_turbulence(bc):
+            continue
+        speed = speed_ref
+        if is_velocity_inlet(bc):
+            faces = bc_faces(bc)
+            speed = inlet_ref_speed(bc, faces_area(faces, props) / max(1, len(faces)), rho)
+        elif is_freestream(bc):
+            speed = freestream_speed(bc)
+            if turbulence_spec(bc) == "Auto":
+                bc = {
+                    "turbulence_spec": RATIO,
+                    "turbulence_intensity": DEFAULT_INTENSITY_PCT,
+                    "turbulence_viscosity_ratio": DEFAULT_RATIO,
+                }
+        scales = patch_scales(bc, speed=speed, nu=float(spec.nu))
+        if scales is not None:
+            out[patch] = scales
+    return out
+
+
 def _build_field_patches(
-    spec: RunSpec, patch_names: list[str], *, turb_values: dict[str, str]
+    spec: RunSpec,
+    patch_names: list[str],
+    *,
+    turb_values: dict[str, str],
+    patch_turb: dict[str, dict[str, str]] | None = None,
 ) -> tuple[dict, dict, dict[str, dict]]:
     """U, p and one patch dict per turbulence field the study's model reads.
 
-    ``turb_values`` holds the inlet value string for k, omega, epsilon and R.
+    ``turb_values`` holds the case-wide value string for k, omega, epsilon and
+    R (inlets on Auto, walls, the internal field); ``patch_turb`` a patch's own
+    values when its "Turbulence at the inlet" sets them.
     """
     _ensure_web_imports()
     model = getattr(getattr(spec, "physics", None), "turbulence_model", "kOmegaSST")
@@ -563,24 +757,33 @@ def _build_field_patches(
     turb: dict[str, dict[str, dict[str, str]]] = {name: {} for name in names}
 
     def set_turb(patch: str, make) -> None:
+        values = (patch_turb or {}).get(patch) or turb_values
         for name in names:
-            turb[name][patch] = make(name)
+            turb[name][patch] = make(name, values)
 
-    def fixed(name: str) -> dict[str, str]:
+    def fixed(name: str, values: dict[str, str]) -> dict[str, str]:
         if name == "nut":
             return {"type": "calculated", "value": "uniform 0"}
-        return {"type": "fixedValue", "value": f"uniform {turb_values[name]}"}
+        return {"type": "fixedValue", "value": f"uniform {values[name]}"}
 
-    def inlet_outlet(name: str) -> dict[str, str]:
+    def inlet_outlet(name: str, values: dict[str, str]) -> dict[str, str]:
         if name == "nut":
             return {"type": "calculated", "value": "uniform 0"}
-        v = turb_values[name]
+        v = values[name]
         return {"type": "inletOutlet", "inletValue": f"uniform {v}", "value": f"uniform {v}"}
 
-    def slip(name: str) -> dict[str, str]:
+    def slip(name: str, _values: dict[str, str]) -> dict[str, str]:
         if name == "nut":
             return {"type": "calculated", "value": "uniform 0"}
         return {"type": "zeroGradient"}
+
+    def symmetry(_name: str, _values: dict[str, str]) -> dict[str, str]:
+        return {"type": "symmetry"}
+
+    def freestream(name: str, values: dict[str, str]) -> dict[str, str]:
+        if name == "nut":
+            return {"type": "calculated", "value": "uniform 0"}
+        return {"type": "freestream", "freestreamValue": f"uniform {values[name]}"}
 
     wall_fn = {
         "k": "kqRWallFunction",
@@ -590,7 +793,7 @@ def _build_field_patches(
         "nut": "nutkWallFunction",
     }
 
-    def no_slip(name: str) -> dict[str, str]:
+    def no_slip(name: str, _values: dict[str, str]) -> dict[str, str]:
         value = "0" if name == "nut" else turb_values[name]
         return {"type": wall_fn[name], "value": f"uniform {value}"}
 
@@ -611,7 +814,13 @@ def _build_field_patches(
         elif is_velocity_outlet(b):
             role[patch] = {"kind": "velOutlet", "bc": b}
         elif is_wall_bc(b):
-            role[patch] = {"kind": "wall", "bc": b, "treatment": wall_treatment(b)}
+            role[patch] = {"kind": "wall", "bc": b, "treatment": wall_kind(b)}
+        elif is_symmetry(b):
+            role[patch] = {"kind": "symmetry", "bc": b}
+        elif is_freestream(b):
+            role[patch] = {"kind": "freestream", "bc": b}
+        elif is_total_pressure_inlet(b):
+            role[patch] = {"kind": "totalPressure", "bc": b}
 
     U: dict[str, dict[str, str]] = {}
     p: dict[str, dict[str, str]] = {}
@@ -662,19 +871,53 @@ def _build_field_patches(
             p[name] = {"type": "fixedValue", "value": f"uniform {js_to_precision(p_kin, 8)}"}
             set_turb(name, inlet_outlet)
         elif kind == "velOutlet":
-            U[name] = {
-                "type": "inletOutlet",
-                "inletValue": "uniform (0 0 0)",
-                "value": "uniform (0 0 0)",
-            }
+            U[name] = velocity_outlet_U(r["bc"], rho)  # type: ignore[index]
             p[name] = {"type": "zeroGradient"}
             set_turb(name, inlet_outlet)
+        elif kind == "totalPressure":
+            # Inflow at p = p0 - |U|^2/2 (kinematic); outflow holds p0 as a static pressure.
+            p0_kin = js_to_precision(pressure_pa(r["bc"]) / rho, 8)  # type: ignore[index]
+            U[name] = {"type": "pressureInletOutletVelocity", "value": "uniform (0 0 0)"}
+            p[name] = {"type": "totalPressure", "p0": f"uniform {p0_kin}", "value": f"uniform {p0_kin}"}
+            set_turb(name, inlet_outlet)
+        elif kind == "freestream":
+            # The far field: the freestream comes in where the flow enters, the
+            # rest leaves freely (freestreamVelocity / freestreamPressure switch
+            # on the flux direction).
+            fb = r["bc"]  # type: ignore[index]
+            fs_u = " ".join(js_to_precision(c, 8) for c in freestream_velocity(fb))
+            U[name] = {"type": "freestreamVelocity", "freestreamValue": f"uniform ({fs_u})"}
+            p_kin = freestream_pressure_pa(fb) / rho
+            p[name] = {"type": "freestreamPressure", "freestreamValue": f"uniform {js_to_precision(p_kin, 8)}"}
+            set_turb(name, freestream)
+        elif kind == "symmetry":
+            # Every field mirrored; the patch is made type symmetry (write_solve_case).
+            U[name] = {"type": "symmetry"}
+            p[name] = {"type": "symmetry"}
+            set_turb(name, symmetry)
         else:
             treatment = r["treatment"] if r and r.get("kind") == "wall" else wall_default
             if treatment == "Slip":
                 U[name] = {"type": "slip"}
                 p[name] = {"type": "zeroGradient"}
                 set_turb(name, slip)
+            elif treatment == "Moving":
+                # Slides along itself: the fluid sticks to it (fixedValue on a fixed mesh).
+                vel = " ".join(js_to_precision(c, 8) for c in wall_velocity(r["bc"]))  # type: ignore[index]
+                U[name] = {"type": "fixedValue", "value": f"uniform ({vel})"}
+                p[name] = {"type": "zeroGradient"}
+                set_turb(name, no_slip)
+            elif treatment == "Rotating":
+                origin, axis, omega = wall_rotation(r["bc"])  # type: ignore[index]
+                U[name] = {
+                    "type": "rotatingWallVelocity",
+                    "origin": "(" + " ".join(js_plain_float(c) for c in origin) + ")",
+                    "axis": "(" + " ".join(js_plain_float(c) for c in axis) + ")",
+                    "omega": js_to_precision(omega, 8),
+                    "value": "uniform (0 0 0)",
+                }
+                p[name] = {"type": "zeroGradient"}
+                set_turb(name, no_slip)
             else:
                 U[name] = {"type": "noSlip"}
                 p[name] = {"type": "zeroGradient"}
@@ -934,15 +1177,12 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
     turb = k_omega_from_scales(speed_ref, d_hyd)
     # epsilon = Cmu * k * omega; isotropic Reynolds stress R = (2/3) k I.
     epsilon = 0.09 * turb["k"] * turb["omega"]
-    r_diag = js_to_precision(2.0 * turb["k"] / 3.0, 6)
-    turb_values = {
-        "k": js_to_precision(turb["k"], 6),
-        "omega": js_to_precision(turb["omega"], 6),
-        "epsilon": js_to_precision(epsilon, 6),
-        "R": f"({r_diag} 0 0 {r_diag} 0 {r_diag})",
-    }
+    turb_values = turb_value_strings(turb["k"], turb["omega"])
+    # Boundaries whose "Turbulence at the inlet" sets their own values.
+    own_turb = patch_turbulence(spec, speed_ref) if model != "laminar" else {}
+    patch_turb = {patch: turb_value_strings(sc["k"], sc["omega"]) for patch, sc in own_turb.items()}
 
-    U, p, turb_patches = _build_field_patches(spec, patch_names, turb_values=turb_values)
+    U, p, turb_patches = _build_field_patches(spec, patch_names, turb_values=turb_values, patch_turb=patch_turb)
     write_vol_field(
         out / "0" / "U",
         object_name="U",
@@ -983,7 +1223,11 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
 
     # Wall functions require polyMesh type wall. gmshToFoam leftover
     # defaultFaces (prism end-caps) stay type patch unless we rewrite them.
+    # A Symmetry BC's patch is made type symmetry here (it is meshed as a plain
+    # patch), and a patch left symmetry by an earlier solve opens again when its
+    # BC is no longer one, so a BC's type can change without a new mesh.
     if poly_dst and (poly_dst / "boundary").is_file():
+        from magnusim_sdk.foam import parse_boundary_patch_types
         from magnusim_sdk.gmsh_helpers import apply_boundary_patch_types
 
         wall_names = {
@@ -996,8 +1240,20 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
             for n, spec in U.items()
             if str((spec or {}).get("type") or "") == "noSlip"
         )
-        if wall_names:
-            apply_boundary_patch_types(poly_dst / "boundary", {n: "wall" for n in wall_names})
+        # Moving and rotating walls are walls with any turbulence model (laminar too).
+        wall_names.update(
+            str(m.get("patch") or "")
+            for m in spec.mapped or []
+            if is_wall_bc(_bc_dict(m.get("bc") or {})) and wall_kind(_bc_dict(m.get("bc") or {})) in ("Moving", "Rotating")
+        )
+        wall_names.discard("")
+        patch_types = {n: "wall" for n in wall_names}
+        patch_types.update({n: "symmetry" for n, e in U.items() if str((e or {}).get("type") or "") == "symmetry"})
+        for pname, ptype in parse_boundary_patch_types(poly_dst / "boundary").items():
+            if ptype == "symmetry" and pname not in patch_types:
+                patch_types[pname] = "patch"
+        if patch_types:
+            apply_boundary_patch_types(poly_dst / "boundary", patch_types)
 
     write_foam_dict(
         out / "constant" / "transportProperties",
@@ -1091,7 +1347,7 @@ RAS
             "face_area_m2": faces_area(faces, spec.face_props) or None,
         }
         if is_wall_bc(bc):
-            entry["wall_type"] = wall_treatment(bc)
+            entry["wall_type"] = wall_kind(bc)
         mapped_meta.append(entry)
 
     sidecar: dict[str, Any] = {
@@ -1118,6 +1374,8 @@ RAS
             "k": turb["k"],
             "omega": turb["omega"],
             "epsilon": epsilon,
+            # Patches whose "Turbulence at the inlet" is not Auto: their own scales.
+            "patches": own_turb,
         },
         "numerics": {
             "residual_u": physics.residual_u,

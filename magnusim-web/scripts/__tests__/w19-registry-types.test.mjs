@@ -119,8 +119,18 @@ describe('BC types come from the registry', () => {
   it('without the live family its type is refused again', async () => {
     const r = await post({ project_id: projectId, simulation_id: SIM, bc_type: 'Porous jump', faces: [] });
     assert.equal(r.status, 400);
-    assert.deepEqual(r.json.allowed, ['Velocity inlet', 'Velocity outlet', 'Pressure', 'Wall']);
-    assert.deepEqual(W19_META.types, ['Velocity inlet', 'Velocity outlet', 'Pressure', 'Wall']);
+    const types = loadCommittedRegistry().bc_family.map((f) => f.record_type);
+    assert.deepEqual(r.json.allowed, types);
+    assert.deepEqual(W19_META.types, types);
+    assert.deepEqual(types, [
+      'Velocity inlet',
+      'Velocity outlet',
+      'Pressure',
+      'Total pressure inlet',
+      'Freestream',
+      'Wall',
+      'Symmetry',
+    ]);
   });
 
   it("'Pressure outlet' is stored as 'Pressure'", async () => {
@@ -277,5 +287,67 @@ describe('a new BC starts from its family seed', () => {
     assert.equal(v.json.bc.unit, 'ft/s');
     const w = await post({ project_id: 'normalize', simulation_id: SIM, bc_type: 'Wall', wall_type: 'no_slip', faces: [] });
     assert.equal(w.json.bc.wall_type, 'No-slip');
+  });
+});
+
+describe("Incompressible Flow's newer BCs keep their fields", () => {
+  const study = seedProject('newer', 'Imperial');
+  const save = (body) => post({ project_id: 'newer', simulation_id: SIM, ...body });
+
+  it('a freestream starts from its seed and keeps its speed, direction, pressure and turbulence', async () => {
+    const r = await save({ bc_type: 'Far field', faces: ['face 1@Body1'] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const bc = r.json.bc;
+    assert.equal(bc.bc_type, 'Freestream');
+    assert.equal(bc.name, 'Freestream 1');
+    assert.deepEqual(
+      [bc.velocity_input, bc.value, bc.unit, bc.vector, bc.freestream_pressure, bc.turbulence_spec],
+      ['Speed and direction', 10, 'ft/s', [1, 0, 0], 0, 'Auto'],
+    );
+    const edited = await save({
+      id: bc.id,
+      velocity_input: 'velocity vector',
+      vector: ['3', 0, -4],
+      value: 5,
+      freestream_pressure: '120',
+      turbulence_spec: 'Intensity and viscosity ratio',
+      turbulence_intensity: 1,
+      turbulence_viscosity_ratio: 5,
+    });
+    assert.equal(edited.status, 200, JSON.stringify(edited.json));
+    const disk = onDisk(study, bc.id);
+    assert.deepEqual(
+      [disk.velocity_input, disk.vector, disk.value, disk.freestream_pressure, disk.turbulence_spec, disk.turbulence_viscosity_ratio],
+      ['Velocity vector', [3, 0, -4], 5, 120, 'Intensity and viscosity ratio', 5],
+    );
+    const listed = getBcs('newer', undefined, SIM).body.boundary_conditions.find((b) => b.id === bc.id);
+    assert.equal(listed.turbulence_intensity, 1);
+  });
+
+  it('a total-pressure inlet, a symmetry plane and a moving or rotating wall keep theirs', async () => {
+    const tp = await save({ bc_type: 'Total pressure', faces: ['face 2@Body1'], value: 2, turbulence_spec: 'Intensity and length scale', turbulence_length_scale: 0.02 });
+    assert.equal(tp.status, 200, JSON.stringify(tp.json));
+    assert.deepEqual([tp.json.bc.bc_type, tp.json.bc.value, tp.json.bc.unit], ['Total pressure inlet', 2, 'psi']);
+    assert.equal(onDisk(study, tp.json.bc.id).turbulence_length_scale, 0.02);
+
+    const sym = await save({ bc_type: 'Symmetry', faces: ['face 3@Body1'] });
+    assert.equal(sym.status, 200, JSON.stringify(sym.json));
+    assert.equal(onDisk(study, sym.json.bc.id).bc_type, 'Symmetry');
+
+    const wall = await save({ bc_type: 'Wall', faces: ['face 4@Body1'], wall_type: 'moving', wall_velocity: [0, 2, 0] });
+    assert.equal(wall.status, 200, JSON.stringify(wall.json));
+    assert.deepEqual([wall.json.bc.wall_type, wall.json.bc.wall_velocity], ['Moving', [0, 2, 0]]);
+    const turned = await save({ id: wall.json.bc.id, wall_type: 'Rotating', rotation_axis: [0, 0, 1], rotation_speed: 1500 });
+    const disk = onDisk(study, turned.json.bc.id);
+    assert.deepEqual(
+      [disk.wall_type, disk.rotation_axis, disk.rotation_origin, disk.rotation_speed, disk.wall_velocity],
+      ['Rotating', [0, 0, 1], [0, 0, 0], 1500, [0, 2, 0]],
+    );
+    // A type change drops the old family's fields: a symmetry plane has none of the wall's.
+    const back = await save({ id: wall.json.bc.id, bc_type: 'Symmetry' });
+    const after = onDisk(study, back.json.bc.id);
+    assert.equal(after.bc_type, 'Symmetry');
+    assert.equal(after.wall_type, undefined);
+    assert.equal(after.rotation_speed, undefined);
   });
 });

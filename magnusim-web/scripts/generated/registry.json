@@ -553,7 +553,12 @@
         "velocity_outlet",
         "pressure_outlet_gauge",
         "wall_noslip",
-        "wall_slip"
+        "wall_slip",
+        "symmetry",
+        "freestream",
+        "wall_moving",
+        "wall_rotating",
+        "total_pressure_inlet"
       ],
       "material_models": [
         "newtonian_incompressible"
@@ -1215,7 +1220,12 @@
         "velocity_outlet",
         "pressure_outlet_gauge",
         "wall_noslip",
-        "wall_slip"
+        "wall_slip",
+        "symmetry",
+        "freestream",
+        "wall_moving",
+        "wall_rotating",
+        "total_pressure_inlet"
       ],
       "material_models": [
         "newtonian_incompressible"
@@ -2007,6 +2017,292 @@
           "Slip"
         ]
       ]
+    },
+    {
+      "key": "symmetry",
+      "label": "Symmetry",
+      "plugin": "incompressible_flow",
+      "supported": true,
+      "semantic": "wall",
+      "patch_type": "patch",
+      "family": "symmetry",
+      "match": []
+    },
+    {
+      "key": "freestream",
+      "label": "Freestream",
+      "plugin": "incompressible_flow",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Freestream velocity"
+          },
+          "pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa",
+              "rate_kind": "intensive"
+            },
+            "title": "Freestream pressure"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true,
+      "semantic": "outlet",
+      "patch_type": "patch",
+      "family": "freestream",
+      "match": []
+    },
+    {
+      "key": "wall_moving",
+      "label": "Wall",
+      "plugin": "incompressible_flow",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "thermal_mode": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "fixed_temperature",
+              "fixed_heat_flux",
+              "external_heat_transfer"
+            ],
+            "x-cfddesk": {
+              "energy_only": true
+            },
+            "title": "Thermal"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Temperature"
+          },
+          "heat_flux_W_m2": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2",
+              "energy_only": true,
+              "rate_kind": "extensive"
+            },
+            "title": "Heat flux"
+          },
+          "htc_W_m2K": {
+            "type": "number",
+            "default": 10.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2K",
+              "energy_only": true
+            },
+            "title": "HTC"
+          },
+          "ambient_T_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true
+            },
+            "title": "Ambient T"
+          },
+          "velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Wall velocity"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true,
+      "semantic": "wall",
+      "patch_type": "wall",
+      "family": "wall",
+      "match": [
+        [
+          "wall_type",
+          "Moving"
+        ]
+      ]
+    },
+    {
+      "key": "wall_rotating",
+      "label": "Wall",
+      "plugin": "incompressible_flow",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "thermal_mode": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "fixed_temperature",
+              "fixed_heat_flux",
+              "external_heat_transfer"
+            ],
+            "x-cfddesk": {
+              "energy_only": true
+            },
+            "title": "Thermal"
+          },
+          "temperature_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true,
+              "rate_kind": "intensive"
+            },
+            "title": "Temperature"
+          },
+          "heat_flux_W_m2": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2",
+              "energy_only": true,
+              "rate_kind": "extensive"
+            },
+            "title": "Heat flux"
+          },
+          "htc_W_m2K": {
+            "type": "number",
+            "default": 10.0,
+            "x-cfddesk": {
+              "unit": "W/m\u00b2K",
+              "energy_only": true
+            },
+            "title": "HTC"
+          },
+          "ambient_T_K": {
+            "type": "number",
+            "default": 293.15,
+            "x-cfddesk": {
+              "unit": "K",
+              "energy_only": true
+            },
+            "title": "Ambient T"
+          },
+          "origin": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m"
+            },
+            "title": "Origin"
+          },
+          "axis": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "title": "Axis"
+          },
+          "omega": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "rad/s",
+              "rate_kind": "intensive"
+            },
+            "title": "Speed"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true,
+      "semantic": "wall",
+      "patch_type": "wall",
+      "family": "wall",
+      "match": [
+        [
+          "wall_type",
+          "Rotating"
+        ]
+      ]
+    },
+    {
+      "key": "total_pressure_inlet",
+      "label": "Total pressure inlet",
+      "plugin": "incompressible_flow",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "total_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa",
+              "rate_kind": "intensive"
+            },
+            "title": "Total pressure"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true,
+      "semantic": "inlet",
+      "patch_type": "patch",
+      "family": "total_pressure_inlet",
+      "match": []
     }
   ],
   "bc_family": [
@@ -2146,6 +2442,52 @@
               }
             },
             "title": "Vector (X Y Z)"
+          },
+          "turbulence_spec": {
+            "type": "string",
+            "default": "Auto",
+            "enum": [
+              "Auto",
+              "Intensity and length scale",
+              "Intensity and viscosity ratio"
+            ],
+            "title": "Turbulence at the inlet",
+            "description": "How turbulent the flow coming in is. Auto: 5 % intensity, length scale 0.07 x the largest inlet's hydraulic diameter."
+          },
+          "turbulence_intensity": {
+            "type": "number",
+            "default": 5.0,
+            "minimum": 0,
+            "maximum": 100,
+            "x-cfddesk": {
+              "unit": "%"
+            },
+            "title": "Turbulence intensity"
+          },
+          "turbulence_length_scale": {
+            "type": "number",
+            "default": 0.01,
+            "minimum": 0,
+            "x-cfddesk": {
+              "unit": "m",
+              "quantity": "length",
+              "depends_on": {
+                "turbulence_spec": "Intensity and length scale"
+              }
+            },
+            "title": "Length scale"
+          },
+          "turbulence_viscosity_ratio": {
+            "type": "number",
+            "default": 10.0,
+            "minimum": 0,
+            "x-cfddesk": {
+              "depends_on": {
+                "turbulence_spec": "Intensity and viscosity ratio"
+              }
+            },
+            "title": "Viscosity ratio",
+            "description": "Turbulent viscosity over the fluid's own viscosity."
           }
         },
         "additionalProperties": false
@@ -2350,6 +2692,297 @@
             "type": "string",
             "default": "Pa",
             "title": "Unit"
+          },
+          "turbulence_spec": {
+            "type": "string",
+            "default": "Auto",
+            "enum": [
+              "Auto",
+              "Intensity and length scale",
+              "Intensity and viscosity ratio"
+            ],
+            "title": "Turbulence at the inlet",
+            "description": "How turbulent the flow coming in is. Auto: 5 % intensity, length scale 0.07 x the largest inlet's hydraulic diameter."
+          },
+          "turbulence_intensity": {
+            "type": "number",
+            "default": 5.0,
+            "minimum": 0,
+            "maximum": 100,
+            "x-cfddesk": {
+              "unit": "%"
+            },
+            "title": "Turbulence intensity"
+          },
+          "turbulence_length_scale": {
+            "type": "number",
+            "default": 0.01,
+            "minimum": 0,
+            "x-cfddesk": {
+              "unit": "m",
+              "quantity": "length",
+              "depends_on": {
+                "turbulence_spec": "Intensity and length scale"
+              }
+            },
+            "title": "Length scale"
+          },
+          "turbulence_viscosity_ratio": {
+            "type": "number",
+            "default": 10.0,
+            "minimum": 0,
+            "x-cfddesk": {
+              "depends_on": {
+                "turbulence_spec": "Intensity and viscosity ratio"
+              }
+            },
+            "title": "Viscosity ratio",
+            "description": "Turbulent viscosity over the fluid's own viscosity."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ui": "incompressible_flow.bc"
+    },
+    {
+      "key": "total_pressure_inlet",
+      "label": "Total pressure inlet",
+      "plugin": "incompressible_flow",
+      "record_type": "Total pressure inlet",
+      "aliases": [
+        "Total pressure"
+      ],
+      "color": "pressure",
+      "hint": "Flow comes in, driven by a fixed total pressure",
+      "variants": [
+        "total_pressure_inlet"
+      ],
+      "defaults": {
+        "metric": {
+          "value": 0,
+          "unit": "Pa"
+        },
+        "imperial": {
+          "value": 0,
+          "unit": "psi"
+        }
+      },
+      "values": [
+        {
+          "field": "value",
+          "unit_field": "unit",
+          "quantity": "pressure",
+          "when": {}
+        }
+      ],
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "default": 0,
+            "x-cfddesk": {
+              "quantity": "pressure"
+            },
+            "title": "Total pressure"
+          },
+          "unit": {
+            "type": "string",
+            "default": "Pa",
+            "title": "Unit"
+          },
+          "turbulence_spec": {
+            "type": "string",
+            "default": "Auto",
+            "enum": [
+              "Auto",
+              "Intensity and length scale",
+              "Intensity and viscosity ratio"
+            ],
+            "title": "Turbulence at the inlet",
+            "description": "How turbulent the flow coming in is. Auto: 5 % intensity, length scale 0.07 x the largest inlet's hydraulic diameter."
+          },
+          "turbulence_intensity": {
+            "type": "number",
+            "default": 5.0,
+            "minimum": 0,
+            "maximum": 100,
+            "x-cfddesk": {
+              "unit": "%"
+            },
+            "title": "Turbulence intensity"
+          },
+          "turbulence_length_scale": {
+            "type": "number",
+            "default": 0.01,
+            "minimum": 0,
+            "x-cfddesk": {
+              "unit": "m",
+              "quantity": "length",
+              "depends_on": {
+                "turbulence_spec": "Intensity and length scale"
+              }
+            },
+            "title": "Length scale"
+          },
+          "turbulence_viscosity_ratio": {
+            "type": "number",
+            "default": 10.0,
+            "minimum": 0,
+            "x-cfddesk": {
+              "depends_on": {
+                "turbulence_spec": "Intensity and viscosity ratio"
+              }
+            },
+            "title": "Viscosity ratio",
+            "description": "Turbulent viscosity over the fluid's own viscosity."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ui": "incompressible_flow.bc"
+    },
+    {
+      "key": "freestream",
+      "label": "Freestream",
+      "plugin": "incompressible_flow",
+      "record_type": "Freestream",
+      "aliases": [
+        "Far field",
+        "Far-field"
+      ],
+      "color": "freestream",
+      "hint": "Far field around a body: the undisturbed flow comes in or leaves",
+      "variants": [
+        "freestream"
+      ],
+      "defaults": {
+        "metric": {
+          "velocity_input": "Speed and direction",
+          "value": 10,
+          "vector": [
+            1,
+            0,
+            0
+          ],
+          "freestream_pressure": 0,
+          "unit": "m/s"
+        },
+        "imperial": {
+          "velocity_input": "Speed and direction",
+          "value": 10,
+          "vector": [
+            1,
+            0,
+            0
+          ],
+          "freestream_pressure": 0,
+          "unit": "ft/s"
+        }
+      },
+      "values": [
+        {
+          "field": "value",
+          "unit_field": "unit",
+          "quantity": "velocity",
+          "when": {}
+        }
+      ],
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "velocity_input": {
+            "type": "string",
+            "default": "Speed and direction",
+            "enum": [
+              "Speed and direction",
+              "Velocity vector"
+            ],
+            "title": "Velocity given as"
+          },
+          "value": {
+            "type": "number",
+            "default": 10,
+            "x-cfddesk": {
+              "quantity": "velocity"
+            },
+            "title": "Speed"
+          },
+          "unit": {
+            "type": "string",
+            "default": "m/s",
+            "title": "Unit"
+          },
+          "vector": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "title": "Direction (X Y Z)"
+          },
+          "freestream_pressure": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "Pa",
+              "quantity": "pressure"
+            },
+            "title": "Freestream pressure"
+          },
+          "turbulence_spec": {
+            "type": "string",
+            "default": "Auto",
+            "enum": [
+              "Auto",
+              "Intensity and length scale",
+              "Intensity and viscosity ratio"
+            ],
+            "title": "Turbulence at the inlet",
+            "description": "How turbulent the flow coming in is. Auto: 5 % intensity, length scale 0.07 x the largest inlet's hydraulic diameter."
+          },
+          "turbulence_intensity": {
+            "type": "number",
+            "default": 5.0,
+            "minimum": 0,
+            "maximum": 100,
+            "x-cfddesk": {
+              "unit": "%"
+            },
+            "title": "Turbulence intensity"
+          },
+          "turbulence_length_scale": {
+            "type": "number",
+            "default": 0.01,
+            "minimum": 0,
+            "x-cfddesk": {
+              "unit": "m",
+              "quantity": "length",
+              "depends_on": {
+                "turbulence_spec": "Intensity and length scale"
+              }
+            },
+            "title": "Length scale"
+          },
+          "turbulence_viscosity_ratio": {
+            "type": "number",
+            "default": 10.0,
+            "minimum": 0,
+            "x-cfddesk": {
+              "depends_on": {
+                "turbulence_spec": "Intensity and viscosity ratio"
+              }
+            },
+            "title": "Viscosity ratio",
+            "description": "Turbulent viscosity over the fluid's own viscosity."
           }
         },
         "additionalProperties": false
@@ -2366,10 +2999,12 @@
         "No-slip wall"
       ],
       "color": "wall",
-      "hint": "Slip or no-slip, face by face",
+      "hint": "No-slip, slip, moving or rotating, face by face",
       "variants": [
         "wall_noslip",
-        "wall_slip"
+        "wall_slip",
+        "wall_moving",
+        "wall_rotating"
       ],
       "defaults": {
         "metric": {
@@ -2389,11 +3024,113 @@
             "default": "No-slip",
             "enum": [
               "No-slip",
-              "Slip"
+              "Slip",
+              "Moving",
+              "Rotating"
             ],
             "title": "Wall type"
+          },
+          "wall_velocity": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m/s",
+              "quantity": "velocity",
+              "depends_on": {
+                "wall_type": "Moving"
+              }
+            },
+            "title": "Wall velocity (X Y Z)",
+            "description": "How fast the wall slides along itself."
+          },
+          "rotation_axis": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "x-cfddesk": {
+              "depends_on": {
+                "wall_type": "Rotating"
+              }
+            },
+            "title": "Axis (X Y Z)"
+          },
+          "rotation_origin": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x-cfddesk": {
+              "unit": "m",
+              "quantity": "length",
+              "depends_on": {
+                "wall_type": "Rotating"
+              }
+            },
+            "title": "Origin (X Y Z)"
+          },
+          "rotation_speed": {
+            "type": "number",
+            "default": 100.0,
+            "x-cfddesk": {
+              "unit": "rpm",
+              "depends_on": {
+                "wall_type": "Rotating"
+              }
+            },
+            "title": "Speed",
+            "description": "Turns about the axis by the right-hand rule; negative turns the other way."
           }
         },
+        "additionalProperties": false
+      },
+      "ui": "incompressible_flow.bc"
+    },
+    {
+      "key": "symmetry",
+      "label": "Symmetry",
+      "plugin": "incompressible_flow",
+      "record_type": "Symmetry",
+      "aliases": [
+        "Symmetry plane"
+      ],
+      "color": "symmetry",
+      "hint": "Mirror plane: no flow through it, no friction",
+      "variants": [
+        "symmetry"
+      ],
+      "defaults": {
+        "metric": {},
+        "imperial": {}
+      },
+      "values": [],
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       },
       "ui": "incompressible_flow.bc"

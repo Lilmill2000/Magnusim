@@ -15,17 +15,17 @@ import {
 import { useProjectStore } from './store/project';
 
 // The BC catalogue is read from the registry rows the plugins publish; these
-// tests use the committed registry (Incompressible Flow's four families) plus a
+// tests use the committed registry (Incompressible Flow's families) plus a
 // fixture family from another plugin.
 const IF_FAMILIES = (committed as unknown as RegistryDescribe).bc_family as BcFamilyRow[];
 const IF_BCS = IF_FAMILIES.flatMap((f) => f.variants);
 
-const symmetry: BcFamilyRow = {
-  key: 'symmetry',
-  label: 'Symmetry',
+const mirror: BcFamilyRow = {
+  key: 'mirror_plane',
+  label: 'Mirror plane',
   plugin: 'example-extra-bc',
-  record_type: 'Symmetry',
-  aliases: ['Symmetry plane'],
+  record_type: 'Mirror plane',
+  aliases: ['Mirror'],
   color: 'other',
   hint: 'Mirror plane: no flow through it',
   variants: ['symmetry_plane'],
@@ -39,7 +39,7 @@ const symmetry: BcFamilyRow = {
 };
 
 function family(key: string): BcFamilyRow {
-  const row = [...IF_FAMILIES, symmetry].find((f) => f.key === key);
+  const row = [...IF_FAMILIES, mirror].find((f) => f.key === key);
   if (!row) throw new Error(key);
   return row;
 }
@@ -52,7 +52,7 @@ beforeEach(() => {
         { key: 'extra_bc_steady', label: 'Extra BC', bc_types: [...IF_BCS, 'symmetry_plane'] },
         { key: 'stub_steady', label: 'Stub', bc_types: [] },
       ],
-      bc_family: [...IF_FAMILIES, symmetry],
+      bc_family: [...IF_FAMILIES, mirror],
       default_analysis: { steady: 'incompressible_steady', aliases: ['Incompressible'] },
     } as RegistryDescribe,
   });
@@ -60,24 +60,16 @@ beforeEach(() => {
 
 describe('families', () => {
   it("offers the families of the study's analysis, in registry order", () => {
-    expect(familiesFor('incompressible_steady').map((f) => f.label)).toEqual([
-      'Velocity inlet',
-      'Velocity outlet',
-      'Pressure',
-      'Wall',
-    ]);
-    expect(familiesFor('extra_bc_steady').map((f) => f.key)).toEqual([
-      'velocity_inlet',
-      'velocity_outlet',
-      'pressure_outlet',
-      'wall',
-      'symmetry',
-    ]);
+    const labels = familiesFor('incompressible_steady').map((f) => f.label);
+    expect(labels).toEqual(IF_FAMILIES.map((f) => f.label));
+    expect(labels.slice(0, 3)).toEqual(['Velocity inlet', 'Velocity outlet', 'Pressure']);
+    expect(labels).toEqual(expect.arrayContaining(['Wall', 'Symmetry', 'Freestream']));
+    expect(familiesFor('extra_bc_steady').map((f) => f.key)).toEqual([...IF_FAMILIES.map((f) => f.key), 'mirror_plane']);
     expect(familiesFor('stub_steady')).toEqual([]);
     // No analysis named: the default analysis. One not installed: every family.
-    expect(familiesFor('').map((f) => f.key)).toHaveLength(4);
-    expect(familiesFor('Incompressible').map((f) => f.key)).toHaveLength(4);
-    expect(familiesFor('gone_steady').map((f) => f.key)).toHaveLength(5);
+    expect(familiesFor('').map((f) => f.key)).toHaveLength(IF_FAMILIES.length);
+    expect(familiesFor('Incompressible').map((f) => f.key)).toHaveLength(IF_FAMILIES.length);
+    expect(familiesFor('gone_steady').map((f) => f.key)).toHaveLength(IF_FAMILIES.length + 1);
   });
 
   it('reads older type names through the aliases, ignoring case, spaces, _ and -', () => {
@@ -87,6 +79,7 @@ describe('families', () => {
     expect(canonicalBcType('velocity_inlet')).toBe('Velocity inlet');
     expect(canonicalBcType('No-slip wall')).toBe('Wall');
     expect(canonicalBcType('symmetry plane')).toBe('Symmetry');
+    expect(canonicalBcType('mirror')).toBe('Mirror plane');
     expect(canonicalBcType('  Mystery ')).toBe('Mystery');
     expect(familyOf({ type: 'velocity outlet' })?.key).toBe('velocity_outlet');
     expect(familyOf({ bc_type: 'Mystery' })).toBeUndefined();
@@ -97,7 +90,8 @@ describe('families', () => {
     expect(colorOf({ bc_type: 'Velocity outlet' })).toBe('outlet');
     expect(colorOf({ bc_type: 'Pressure outlet' })).toBe('pressure');
     expect(colorOf({ bc_type: 'Wall' })).toBe('wall');
-    expect(colorOf({ bc_type: 'Symmetry' })).toBe('other');
+    expect(colorOf({ bc_type: 'Symmetry' })).toBe('symmetry');
+    expect(colorOf({ bc_type: 'Mirror plane' })).toBe('other');
     expect(colorOf({ bc_type: 'Mystery' })).toBe('other');
     expect(colorOf(null)).toBe('other');
   });
@@ -128,7 +122,8 @@ describe('new records', () => {
       unit: 'Pa',
     });
     expect(newBcRecord(family('pressure_outlet'), true).unit).toBe('psi');
-    expect(newBcRecord(family('symmetry'), false)).toEqual({ bc_type: 'Symmetry', mirror: 'Plane' });
+    expect(newBcRecord(family('mirror_plane'), false)).toEqual({ bc_type: 'Mirror plane', mirror: 'Plane' });
+    expect(newBcRecord(family('symmetry'), true)).toEqual({ bc_type: 'Symmetry' });
   });
 
   it('starts a BC of the family the study defaults use on the choice that differs from the default', () => {
@@ -159,6 +154,7 @@ describe('value quantity', () => {
     );
     expect(valueQuantity({ bc_type: 'Pressure outlet' })?.quantity).toBe('pressure');
     expect(valueQuantity({ bc_type: 'Wall' })).toBeNull();
+    expect(valueQuantity({ bc_type: 'Mirror plane' })).toBeNull();
     expect(valueQuantity({ bc_type: 'Symmetry' })).toBeNull();
     expect(valueQuantity({ bc_type: 'Mystery' })).toBeNull();
   });

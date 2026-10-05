@@ -407,6 +407,8 @@ export interface BcState {
   imperial: boolean;
   /** The study's analysis: the BC families it offers (its registry row's bc_types). */
   analysis_key?: string;
+  /** The study's record as saved (a BC family's fields may depend on it, e.g. its turbulence model). */
+  study?: Record<string, unknown> | null;
 }
 
 export function subscribeBcState(onState: (state: BcState) => void): () => void {

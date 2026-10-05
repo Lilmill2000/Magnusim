@@ -128,7 +128,7 @@ export interface BcFamilyRow {
   record_type: string;
   /** Older bc_type values read as this family. */
   aliases: string[];
-  color: 'inlet' | 'outlet' | 'pressure' | 'wall' | 'other';
+  color: 'inlet' | 'outlet' | 'pressure' | 'freestream' | 'wall' | 'symmetry' | 'other';
   /** The picker's sub-line. */
   hint: string;
   /** BC type keys; the first is the default. */

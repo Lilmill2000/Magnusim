@@ -3,8 +3,8 @@ export type AnalysisKey = 'incompressible_steady' | 'incompressible_transient' |
 export type FilterKey = 'cut_plane' | 'streamlines' | 'plot_over_path' | 'iso_surface' | 'iso_volume' | 'inspect_point' | 'surface_field' | 'mesh_surface' | 'mesh_section' | (string & {});
 export type MesherKey = 'standard' | 'cfmesh' | 'snappy_hexdominant' | (string & {});
 export type MaterialKey = 'newtonian_incompressible' | (string & {});
-export type BcKey = 'velocity_inlet_fixed' | 'velocity_inlet_volumetric' | 'velocity_inlet_mass' | 'velocity_outlet' | 'pressure_outlet_gauge' | 'wall_noslip' | 'wall_slip' | (string & {});
-export type BcFamilyKey = 'velocity_inlet' | 'velocity_outlet' | 'pressure_outlet' | 'wall' | (string & {});
+export type BcKey = 'velocity_inlet_fixed' | 'velocity_inlet_volumetric' | 'velocity_inlet_mass' | 'velocity_outlet' | 'pressure_outlet_gauge' | 'wall_noslip' | 'wall_slip' | 'symmetry' | 'freestream' | 'wall_moving' | 'wall_rotating' | 'total_pressure_inlet' | (string & {});
+export type BcFamilyKey = 'velocity_inlet' | 'velocity_outlet' | 'pressure_outlet' | 'total_pressure_inlet' | 'freestream' | 'wall' | 'symmetry' | (string & {});
 export type MonitorKey = 'area_average' | 'flow_rate' | (string & {});
 
 export interface RegistryRow {
@@ -101,7 +101,7 @@ export interface BcFamilyRow {
   record_type: string;
   /** Older bc_type values read as this family. */
   aliases: string[];
-  color: 'inlet' | 'outlet' | 'pressure' | 'wall' | 'other';
+  color: 'inlet' | 'outlet' | 'pressure' | 'freestream' | 'wall' | 'symmetry' | 'other';
   /** The picker's sub-line. */
   hint: string;
   /** BC type keys; the first is the default. */

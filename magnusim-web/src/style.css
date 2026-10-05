@@ -3219,7 +3219,9 @@ select.fp-select {
 .hub-swatch-inlet { background: #3884e6; }
 .hub-swatch-outlet { background: #ea7024; }
 .hub-swatch-pressure { background: #9333ea; }
+.hub-swatch-freestream { background: #16a34a; }
 .hub-swatch-wall { background: #5f6b7a; }
+.hub-swatch-symmetry { background: #0891b2; }
 .hub-swatch-other { background: #db2777; }
 .hub-swatch-default { background: #d6be8c; }
 .hub-item-defaults {

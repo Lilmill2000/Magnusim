@@ -355,8 +355,9 @@ def _spec(ctx: CaseContext) -> Any:
 def _decision(spec: Any, ctx: CaseContext) -> dict:
     """What the core records about the case: the mapping, the wall default, the
     transient numbers written to controlDict, and the run note's physics."""
-    from magnusim_sdk.study import bc_faces, is_wall_bc, wall_treatment
+    from magnusim_sdk.study import bc_faces, is_wall_bc
 
+    from .bc_kinds import wall_kind
     from .contract import TURBULENCE_LABELS, algorithm_label
     from .transient import control_to_web, describe_transient
 
@@ -372,7 +373,7 @@ def _decision(spec: Any, ctx: CaseContext) -> dict:
             "unit": bc.get("unit") or None,
         }
         if is_wall_bc(bc):
-            row["wall_type"] = wall_treatment(bc)
+            row["wall_type"] = wall_kind(bc)
         rows.append(row)
     override = getattr(ctx.inputs, "transient_override", None) if ctx.inputs is not None else None
     model = spec.physics.turbulence_model

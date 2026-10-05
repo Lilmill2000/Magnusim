@@ -100,7 +100,9 @@ def test_steady_vs_transient_product_shape():
     assert "delta_t" in {f.key for f in transient.control_schema}
     assert "delta_t" not in {f.key for f in steady.control_schema}
     assert steady.category == "FLUID DYNAMICS"
-    assert len(steady.bc_types) == 7
+    from tests.unit.if_bc_keys import IF_BC_KEYS
+
+    assert steady.bc_types == IF_BC_KEYS
     assert steady.region_roles == ("fluid",)
     assert contract.study_defaults(steady)["turbulence_model"] == "kOmegaSST"
     assert "nut" in steady.fields

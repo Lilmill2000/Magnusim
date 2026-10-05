@@ -11,9 +11,9 @@ import { UNITS, preferredUnit, resolveUnit, type Quantity } from './units/conver
  */
 
 /** The colour group of a BC: the legend swatch and the face paint. */
-export type BcColor = 'inlet' | 'outlet' | 'pressure' | 'wall' | 'other';
+export type BcColor = 'inlet' | 'outlet' | 'pressure' | 'freestream' | 'wall' | 'symmetry' | 'other';
 
-const COLORS: ReadonlySet<string> = new Set(['inlet', 'outlet', 'pressure', 'wall', 'other']);
+const COLORS: ReadonlySet<string> = new Set(['inlet', 'outlet', 'pressure', 'freestream', 'wall', 'symmetry', 'other']);
 
 type BcRecordLike = Record<string, unknown> | null | undefined;
 

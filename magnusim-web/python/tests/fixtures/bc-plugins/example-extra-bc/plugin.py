@@ -1,7 +1,7 @@
-"""A BC family of its own: a symmetry plane, offered by a steady analysis.
+"""A BC family of its own: a mirror plane, offered by a steady analysis.
 
 The analysis clones Incompressible Flow's steady one and adds ``symmetry_plane``
-to its BC types. The ``symmetry`` family names no UI component, so the core's
+to its BC types. The ``mirror_plane`` family names no UI component, so the core's
 BC editor draws its one choice field as a generic form. Its writer is minimal:
 the e2e that uses it never solves.
 """
@@ -29,20 +29,20 @@ def register(hub):
     hub.registry("bc").register(
         BcTypeSpec(
             key="symmetry_plane",
-            label="Symmetry",
+            label="Mirror plane",
             semantic="wall",
             patch_type="patch",
             write_U=_symmetry,
             write_p=_symmetry,
-            family="symmetry",
+            family="mirror_plane",
         ),
         plugin=PLUGIN,
     )
     hub.registry("bc_family").register(
         BcFamily(
-            key="symmetry",
-            label="Symmetry",
-            record_type="Symmetry",
+            key="mirror_plane",
+            label="Mirror plane",
+            record_type="Mirror plane",
             color="other",
             hint="Mirror plane: no flow through it",
             variants=("symmetry_plane",),

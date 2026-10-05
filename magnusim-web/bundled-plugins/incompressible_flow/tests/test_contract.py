@@ -147,7 +147,7 @@ def _study(tmp_path: Path, *, fluid_assigned: bool, bcs: list[dict]) -> Path:
     return root
 
 
-def _ready(root: Path, patches: tuple[str, ...] = ("inlet", "outlet", "walls")) -> list[dict]:
+def _ready(root: Path, patches: tuple[str, ...] = ("inlet", "outlet", "walls"), study: dict | None = None) -> list[dict]:
     ctx = ReadyContext(
         project_dir=root,
         simulation_id="s1",
@@ -155,7 +155,7 @@ def _ready(root: Path, patches: tuple[str, ...] = ("inlet", "outlet", "walls")) 
         mesh_id="m",
         mesh_case_dir=None,
         patches=patches,
-        study={"id": "s1"},
+        study=study or {"id": "s1"},
         read_study=lambda _n: None,
         mesh={"mesh_id": "m", "mesh_name": "Mesh 1"},
         materials=tuple(assemble_study_materials(root, "s1")),
@@ -176,7 +176,7 @@ def test_ready_needs_an_assigned_fluid(tmp_path: Path):
 def test_ready_needs_a_flow_driver(tmp_path: Path):
     no_faces = {"name": "Inlet", "bc_type": "Velocity inlet", "faces": []}
     issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[no_faces, OUTLET]))
-    assert issues[0]["message"] == "Add a velocity inlet, or two pressure boundaries, each with an assigned face"
+    assert issues[0]["message"] == "Add a velocity inlet or outlet, a freestream, or two pressure boundaries, each with an assigned face"
     assert issues[0]["fix"] == {"go": "bc", "id": "b0", "name": "Inlet"}
 
 
@@ -212,16 +212,37 @@ def test_ready_with_a_velocity_outlet_beside_the_inlet_and_pressure(tmp_path: Pa
     assert _ready(root, patches=("inlet", "vent", "outlet", "walls")) == []
 
 
-def test_a_velocity_outlet_does_not_drive_the_flow(tmp_path: Path):
-    # The case writes it as a free outflow (U inletOutlet, inflow 0), so with one
-    # pressure boundary nothing sets the flow rate: V0.1.0 refused it too.
-    issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[VENT, OUTLET]), patches=("vent", "outlet"))
+def test_a_velocity_outlet_drives_the_flow(tmp_path: Path):
+    # The case writes the outflow it asks for, so with one pressure boundary (where
+    # the air comes in) the flow rate is set.
+    assert _ready(_study(tmp_path, fluid_assigned=True, bcs=[VENT, OUTLET]), patches=("vent", "outlet")) == []
+
+
+def test_a_velocity_outlet_still_needs_a_pressure_boundary(tmp_path: Path):
+    issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[INLET, VENT]), patches=("inlet", "vent"))
+    assert issues == [{"message": "Add a pressure boundary with an assigned face", "fix": {"go": "bc-picker"}}]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"value": 0, "unit": "m/s"}, {"velocity_type": "Flow rate", "flow_rate_type": "Mass flow", "value": 0, "unit": "kg/s"}],
+    ids=["speed", "mass flow"],
+)
+def test_a_velocity_outlet_that_lets_nothing_out_is_refused(tmp_path: Path, fields: dict):
+    shut = {**VENT, **fields}
+    issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[INLET, shut, OUTLET]), patches=("inlet", "vent", "outlet"))
     assert issues == [
         {
-            "message": "Add a velocity inlet, or two pressure boundaries, each with an assigned face",
-            "fix": {"go": "bc-picker"},
+            "message": 'Velocity outlet "Vent" lets nothing out (its value is 0). Give it an outflow, or make it a Wall.',
+            "fix": {"go": "bc", "id": "b1", "name": "Vent"},
         }
     ]
+
+
+def test_a_velocity_outlet_saved_without_a_value_is_not_refused(tmp_path: Path):
+    # It keeps the free outflow older versions wrote.
+    bare = {k: v for k, v in VENT.items() if k != "value"}
+    assert _ready(_study(tmp_path, fluid_assigned=True, bcs=[INLET, bare, OUTLET]), patches=("inlet", "vent", "outlet")) == []
 
 
 def test_ready_with_two_different_pressures(tmp_path: Path):
@@ -273,3 +294,67 @@ def test_run_settings_are_cleaned_by_the_run_analysis(tmp_path: Path):
     # A steady analysis cleans its own settings.
     steady = methods.analysis_run_normalize(key="incompressible_steady", settings={"end_time": "12.4"})
     assert steady["settings"] == {"end_time": 12, "write_interval": 50}
+
+
+TURBULENT_INLET = {**INLET, "turbulence_spec": "Intensity and length scale", "turbulence_intensity": 0}
+
+
+def test_inlet_turbulence_settings_must_be_positive(tmp_path: Path):
+    issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[TURBULENT_INLET, OUTLET]))
+    assert issues == [
+        {
+            "message": 'Turbulence at the inlet of "Inlet": the turbulence intensity must be above 0 % and at most 100 %.',
+            "fix": {"go": "bc", "id": "b0", "name": "Inlet"},
+        }
+    ]
+
+
+def test_a_laminar_study_ignores_inlet_turbulence_settings(tmp_path: Path):
+    root = _study(tmp_path, fluid_assigned=True, bcs=[TURBULENT_INLET, OUTLET])
+    assert _ready(root, study={"id": "s1", "turbulence_model": "laminar"}) == []
+
+
+FAR = {"name": "Far", "bc_type": "Freestream", "faces": ["face 5@B"], "value": 10, "unit": "m/s", "vector": [1, 0, 0]}
+LID = {"name": "Body", "bc_type": "Wall", "faces": ["face 6@B"], "wall_type": "No-slip"}
+
+
+def test_a_freestream_with_walls_is_ready(tmp_path: Path):
+    # It brings the flow and holds the pressure level: no other opening needed.
+    assert _ready(_study(tmp_path, fluid_assigned=True, bcs=[FAR, LID]), patches=("far", "body")) == []
+
+
+def test_a_freestreams_turbulence_settings_are_checked(tmp_path: Path):
+    bad = {**FAR, "turbulence_spec": "Intensity and viscosity ratio", "turbulence_viscosity_ratio": 0}
+    issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[bad, LID]), patches=("far", "body"))
+    assert issues[0]["message"] == 'Turbulence at the inlet of "Far": the turbulent viscosity ratio must be above 0.'
+
+
+INTAKE = {"name": "Intake", "bc_type": "Total pressure inlet", "faces": ["face 7@B"], "value": 100, "unit": "Pa"}
+
+
+def test_a_total_pressure_inlet_and_a_pressure_outlet_are_ready(tmp_path: Path):
+    assert _ready(_study(tmp_path, fluid_assigned=True, bcs=[INTAKE, OUTLET]), patches=("intake", "outlet")) == []
+
+
+def test_a_total_pressure_inlet_at_the_outlets_pressure_drives_nothing(tmp_path: Path):
+    still = {**INTAKE, "value": 0}
+    issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[still, OUTLET]), patches=("intake", "outlet"))
+    assert issues[0]["message"].startswith("Both pressure boundaries have the same value")
+
+
+def test_a_total_pressure_inlet_holds_the_pressure_for_a_velocity_outlet(tmp_path: Path):
+    assert _ready(_study(tmp_path, fluid_assigned=True, bcs=[INTAKE, VENT]), patches=("intake", "vent")) == []
+
+
+def test_a_rotating_wall_needs_an_axis(tmp_path: Path):
+    disc = {"name": "Disc", "bc_type": "Wall", "faces": ["face 9@B"], "wall_type": "Rotating", "rotation_axis": [0, 0, 0]}
+    issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[INLET, OUTLET, disc]), patches=("inlet", "outlet", "disc"))
+    assert issues == [
+        {
+            "message": 'Wall "Disc": its rotation axis has no direction (all three components are 0).',
+            "fix": {"go": "bc", "id": "b2", "name": "Disc"},
+        }
+    ]
+    turning = {**disc, "rotation_axis": [0, 0, 1]}
+    root = _study(tmp_path / "ok", fluid_assigned=True, bcs=[INLET, OUTLET, turning])
+    assert _ready(root, patches=("inlet", "outlet", "disc")) == []

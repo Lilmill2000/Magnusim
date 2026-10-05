@@ -15,6 +15,7 @@ from magnusim_sdk.study import is_pressure_bc as _is_pressure_bc_adapter
 from magnusim_sdk.study import is_velocity_inlet as _is_velocity_inlet_adapter
 from magnusim_sdk.study import is_velocity_outlet as _is_velocity_outlet_adapter
 
+from .bc_kinds import is_freestream, is_total_pressure_inlet
 from .transient import TransientControl
 
 MonitorKind = Literal["area_average", "flow"]
@@ -335,7 +336,7 @@ def monitor_patches_from_mapped(
     aa_faces: Sequence[str] | None = None,
     patch_names: Sequence[str] | None = None,
 ) -> list[str]:
-    """Inlets, pressure BCs, velocity outlets, plus AA face owners (w27)."""
+    """Inlets, pressure BCs, velocity outlets, total-pressure inlets, freestreams, plus AA face owners (w27)."""
     monitored: list[str] = []
     seen: set[str] = set()
 
@@ -352,7 +353,8 @@ def monitor_patches_from_mapped(
             items.append((m[0], str(m[1])))
 
     for bc, patch in items:
-        if _is_velocity_inlet(bc) or _is_pressure_bc(bc) or _is_velocity_outlet(bc):
+        opening = is_freestream(_as_bc_dict(bc)) or is_total_pressure_inlet(_as_bc_dict(bc))
+        if _is_velocity_inlet(bc) or _is_pressure_bc(bc) or _is_velocity_outlet(bc) or opening:
             _add(patch)
 
     names = set(patch_names or [])

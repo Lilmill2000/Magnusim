@@ -272,17 +272,22 @@ def web_bc_mesh_entry(bc: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def web_bc_patch_name(bc: dict[str, Any], reg_key: str) -> str:
-    """Patch name a web BC record meshes under: its name, else its BC type's semantic.
+    """Patch name a web BC record meshes under: its name, else a name from its BC type.
 
-    An unnamed velocity outlet keeps the name the meshers gave it before 1.4
-    ("velocity_outlet"), so it does not share "outlet" with a pressure outlet.
+    An unnamed BC of one of the seven stored BC types meshes under its type's
+    semantic ("inlet", "outlet", "wall"), as before 1.4; an unnamed velocity
+    outlet keeps "velocity_outlet", so it does not share "outlet" with a
+    pressure outlet. Any other BC type ("symmetry", ...) meshes under its own
+    key, so it never shares a patch with a BC of another kind.
     """
     if bc.get("name"):
         return str(bc["name"])
     if reg_key == "velocity_outlet":
         return "velocity_outlet"
-    from cfddesk.case.bc_registry import get_type
+    from cfddesk.case.bc_registry import _LEGACY_SEMANTICS, get_type
 
+    if reg_key not in _LEGACY_SEMANTICS:
+        return reg_key
     return get_type(reg_key).semantic
 
 

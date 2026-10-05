@@ -159,25 +159,40 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
         bc_faces,
         is_pressure_bc,
         is_velocity_inlet,
+        is_velocity_outlet,
+        is_wall_bc,
         map_bc_to_patch,
         matches_study,
     )
 
+    from .bc_kinds import is_freestream, is_total_pressure_inlet, wall_motion_problem
+    from .inlet_turbulence import settings_problem
+    from .physics import physics_from_record
     from .runspec import air_from_materials
+    from .writer import carries_inlet_turbulence, outlet_outflow
 
     sid = ctx.simulation_id
     air = air_from_materials({"materials": list(ctx.materials)}, sid)
     records = [b for b in ctx.bcs if matches_study(b, sid)]
     inlets = [b for b in records if is_velocity_inlet(b) and bc_faces(b)]
-    pressures = [b for b in records if is_pressure_bc(b) and bc_faces(b)]
+    # A total-pressure inlet holds a pressure too (its total pressure).
+    pressures = [b for b in records if (is_pressure_bc(b) or is_total_pressure_inlet(b)) and bc_faces(b)]
+    # A velocity outlet draws its outflow (the inflow then comes through a pressure boundary).
+    outlets = [b for b in records if is_velocity_outlet(b) and bc_faces(b)]
+    # A freestream both brings the flow and holds the pressure level.
+    freestreams = [b for b in records if is_freestream(b) and bc_faces(b)]
+    driven = bool(inlets or outlets or freestreams)
 
     if not air or not air.get("assigned"):
         return [{"message": "Assign a fluid to a volume first", "fix": {"go": "material"}}]
-    if not inlets and len(pressures) < 2:
+    if not driven and len(pressures) < 2:
         incomplete = next((b for b in records if not bc_faces(b)), None)
         return [
             {
-                "message": "Add a velocity inlet, or two pressure boundaries, each with an assigned face",
+                "message": (
+                    "Add a velocity inlet or outlet, a freestream, or two pressure boundaries, "
+                    "each with an assigned face"
+                ),
                 "fix": (
                     {"go": "bc", "id": incomplete.get("id"), "name": incomplete.get("name")}
                     if incomplete
@@ -185,7 +200,7 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
                 ),
             }
         ]
-    if not pressures:
+    if not pressures and not freestreams:
         return [{"message": "Add a pressure boundary with an assigned face", "fix": {"go": "bc-picker"}}]
 
     patch_names = set(ctx.patches)
@@ -205,7 +220,37 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
                     "patches": list(ctx.patches),
                 }
             ]
-    if not inlets and len(pressures) >= 2:
+    if physics_from_record(ctx.study if isinstance(ctx.study, dict) else None).turbulence_model != "laminar":
+        for bc in records:
+            problem = settings_problem(bc) if bc_faces(bc) and carries_inlet_turbulence(bc) else None
+            if problem:
+                return [
+                    {
+                        "message": f'Turbulence at the inlet of "{bc.get("name")}": {problem}.',
+                        "fix": {"go": "bc", "id": bc.get("id"), "name": bc.get("name")},
+                    }
+                ]
+    for bc in records:
+        problem = wall_motion_problem(bc) if bc_faces(bc) and is_wall_bc(bc) else None
+        if problem:
+            return [
+                {
+                    "message": f'Wall "{bc.get("name")}": {problem}.',
+                    "fix": {"go": "bc", "id": bc.get("id"), "name": bc.get("name")},
+                }
+            ]
+    closed = next((b for b in outlets if outlet_outflow(b) == 0), None)
+    if closed is not None:
+        return [
+            {
+                "message": (
+                    f'Velocity outlet "{closed.get("name")}" lets nothing out (its value is 0). '
+                    "Give it an outflow, or make it a Wall."
+                ),
+                "fix": {"go": "bc", "id": closed.get("id"), "name": closed.get("name")},
+            }
+        ]
+    if not driven and len(pressures) >= 2:
         vals = [_pressure_pa(b) for b in pressures]
         if max(vals) - min(vals) == 0:
             return [
@@ -276,8 +321,9 @@ def transient_preview(
     the Δt that lands in controlDict. Partial (settings only) until the run has
     a mesh and a flow-driving boundary condition.
     """
-    from magnusim_sdk.study import is_pressure_bc, is_velocity_inlet
+    from magnusim_sdk.study import is_pressure_bc, is_velocity_inlet, is_velocity_outlet
 
+    from .bc_kinds import is_freestream, is_total_pressure_inlet
     from .runspec import load_run_spec
     from .transient import control_to_web, resolve_transient_control
 
@@ -286,7 +332,9 @@ def transient_preview(
         return {"ok": True, "partial": True, "reason": None, "control": control_to_web(resolve_transient_control(raw, {}), raw)}
     spec = load_run_spec(inputs)
     bcs = [m.get("bc") for m in (spec.mapped or [])]
-    driven = any(is_velocity_inlet(b) for b in bcs) or sum(1 for b in bcs if is_pressure_bc(b)) >= 2
+    driven = any(is_velocity_inlet(b) or is_velocity_outlet(b) or is_freestream(b) for b in bcs) or (
+        sum(1 for b in bcs if is_pressure_bc(b) or is_total_pressure_inlet(b)) >= 2
+    )
     if not spec.ok or spec.transient is None or not driven:
         reason = spec.error if not spec.ok else ("no flow-driving boundary condition" if not driven else None)
         return {

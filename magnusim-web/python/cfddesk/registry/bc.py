@@ -50,10 +50,10 @@ class BcTypeSpec:
     match: tuple[tuple[str, str], ...] = ()
 
 
-BC_COLORS: tuple[str, ...] = ("inlet", "outlet", "pressure", "wall", "other")
+BC_COLORS: tuple[str, ...] = ("inlet", "outlet", "pressure", "freestream", "wall", "symmetry", "other")
 """The colours a BC family may use in the picker and the viewport."""
 
-BcColor = Literal["inlet", "outlet", "pressure", "wall", "other"]
+BcColor = Literal["inlet", "outlet", "pressure", "freestream", "wall", "symmetry", "other"]
 
 # (field, unit_field, quantity, when): the record field holding a value, the
 # field holding its unit label, the unit quantity it converts as, and the

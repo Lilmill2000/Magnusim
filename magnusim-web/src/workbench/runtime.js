@@ -18271,7 +18271,9 @@ const BC_KIND_RGB = {
   inlet: [56, 132, 230],
   outlet: [234, 112, 36],
   pressure: [147, 51, 234],
+  freestream: [22, 163, 74],
   wall: [95, 107, 122],
+  symmetry: [8, 145, 178],
   // a BC family that names no other colour, or a record no plugin knows
   other: [219, 39, 119],
   // faces with no BC, shown only while the Defaults panel is open (must read
@@ -26174,6 +26176,7 @@ function publishBcState() {
     pending_faces: treeUi.openPanel === 'bc-picker' ? pendingCadFaceLabels() : [],
     imperial: prefersImperialUnits(),
     analysis_key: (typeof studyAnalysisType === 'function' && studyAnalysisType()) || '',
+    study: (typeof studyCatalog !== 'undefined' && studyCatalog && studyCatalog.simulation) || null,
   };
   window.__CFD_BCS__ = detail;
   try {

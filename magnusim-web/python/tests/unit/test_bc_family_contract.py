@@ -150,7 +150,9 @@ def test_the_bc_family_kind_lists_the_plugins_families():
     hub = load_all(force=True)
     assert "bc_family" in hub.kinds()
     families = hub.registry("bc_family")
-    assert families.keys() == ["velocity_inlet", "velocity_outlet", "pressure_outlet", "wall"]
+    from tests.unit.if_bc_keys import IF_BC_FAMILIES
+
+    assert tuple(families.keys()) == IF_BC_FAMILIES
     assert {families.owner(k) for k in families.keys()} == {"incompressible_flow"}
     from cfddesk.worker import methods
 

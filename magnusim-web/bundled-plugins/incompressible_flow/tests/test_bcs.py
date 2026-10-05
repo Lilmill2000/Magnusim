@@ -51,10 +51,24 @@ RESOLVE_TABLE = [
     ("slip wall", {"bc_type": "Wall", "wall_type": "Slip"}, "wall_slip", {}),
     ("slip wall, lower case", {"bc_type": "wall", "wall_type": "slip"}, "wall_slip", {}),
     ("no_slip wall", {"bc_type": "Wall", "wall_type": "no_slip"}, "wall_noslip", {}),
+    ("moving wall", {"bc_type": "Wall", "wall_type": "Moving", "wall_velocity": [0, 2, 0]}, "wall_moving", {"velocity": [0.0, 2.0, 0.0]}),
+    ("moving wall, no velocity", {"bc_type": "Wall", "wall_type": "moving"}, "wall_moving", {"velocity": [1.0, 0.0, 0.0]}),
+    (
+        "rotating wall",
+        {"bc_type": "Wall", "wall_type": "Rotating", "rotation_axis": [0, 1, 0], "rotation_origin": [0.1, 0, 0], "rotation_speed": 60},
+        "wall_rotating",
+        {"origin": [0.1, 0.0, 0.0], "axis": [0.0, 1.0, 0.0], "omega": 2 * math.pi},
+    ),
     ("wall, no type", {"bc_type": "Wall"}, "wall_noslip", {}),
     ("Slip wall alias (type not read)", {"bc_type": "Slip wall", "wall_type": "Slip"}, "wall_noslip", {}),
     ("No-slip wall alias", {"bc_type": "No-slip wall"}, "wall_noslip", {}),
-    ("unknown type -> wall", {"bc_type": "Symmetry"}, "wall_noslip", {}),
+    ("symmetry", {"bc_type": "Symmetry"}, "symmetry", {}),
+    ("total pressure inlet, kPa", {"bc_type": "Total pressure inlet", "value": 1.5, "unit": "kPa"}, "total_pressure_inlet", {"total_pressure": 1500.0}),
+    ("Total pressure alias, no value", {"bc_type": "total pressure"}, "total_pressure_inlet", {"total_pressure": 0.0}),
+    ("freestream speed + direction, ft/s", {"bc_type": "Freestream", "value": 10, "unit": "ft/s", "vector": [0, 3, 4], "freestream_pressure": 50}, "freestream", {"velocity": [0.0, 1.8288, 2.4384], "pressure": 50.0}),
+    ("freestream, no direction", {"bc_type": "Far field", "value": 2, "unit": "m/s"}, "freestream", {"velocity": [2.0, 0.0, 0.0], "pressure": 0.0}),
+    ("Symmetry plane alias", {"bc_type": "symmetry plane"}, "symmetry", {}),
+    ("unknown type -> wall", {"bc_type": "Periodic"}, "wall_noslip", {}),
     ("empty record -> wall", {}, "wall_noslip", {}),
 ]
 
@@ -67,6 +81,9 @@ STORED_KEYS = (
     "wall_noslip",
     "wall_slip",
 )
+# Every BC type this plugin registers: the stored seven, then the newer ones.
+IF_KEYS = (*STORED_KEYS, "symmetry", "freestream", "wall_moving", "wall_rotating", "total_pressure_inlet")
+FAMILIES = ["velocity_inlet", "velocity_outlet", "pressure_outlet", "total_pressure_inlet", "freestream", "wall", "symmetry"]
 
 
 @pytest.fixture(autouse=True)
@@ -101,22 +118,22 @@ def test_a_non_finite_direction_vector_is_refused():
         bcs.resolve_record({"bc_type": V, "value": 3, "direction": "Vector", "vector": [1, math.nan, 0]})
 
 
-def test_the_plugin_registers_the_stored_keys_and_four_families():
+def test_the_plugin_registers_the_stored_keys_and_its_families():
     hub = get_hub()
     reg = hub.registry("bc")
-    assert tuple(reg.keys()) == STORED_KEYS == bcs.BC_KEYS
+    assert tuple(reg.keys()) == IF_KEYS == bcs.BC_KEYS
     assert {reg.owner(k) for k in reg.keys()} == {"incompressible_flow"}
     fams = hub.registry("bc_family")
-    assert fams.keys() == ["velocity_inlet", "velocity_outlet", "pressure_outlet", "wall"]
+    assert fams.keys() == FAMILIES
     assert {fams.owner(k) for k in fams.keys()} == {"incompressible_flow"}
     assert hub.failures == []
     for analysis in ("incompressible_steady", "incompressible_transient"):
-        assert tuple(hub.registry("analysis").get(analysis).bc_types) == STORED_KEYS
+        assert tuple(hub.registry("analysis").get(analysis).bc_types) == IF_KEYS
 
 
 def test_families_cover_every_bc_type_once():
     variants = [v for fam in bcs.BC_FAMILIES for v in fam.variants]
-    assert sorted(variants) == sorted(STORED_KEYS)
+    assert sorted(variants) == sorted(IF_KEYS)
     by_key = {spec.key: spec for spec in bcs.BC_TYPES}
     for fam in bcs.BC_FAMILIES:
         for v in fam.variants:
@@ -130,6 +147,8 @@ def test_variant_match_values_are_the_records_values():
     assert match["velocity_inlet_mass"] == (("velocity_type", "Flow rate"), ("flow_rate_type", "Mass flow"))
     assert match["wall_noslip"] == (("wall_type", "No-slip"),)
     assert match["wall_slip"] == (("wall_type", "Slip"),)
+    assert match["wall_moving"] == (("wall_type", "Moving"),)
+    assert match["wall_rotating"] == (("wall_type", "Rotating"),)
     assert match["velocity_outlet"] == match["pressure_outlet_gauge"] == ()
 
 
@@ -140,10 +159,13 @@ def test_family_labels_types_colours_and_slot():
         "velocity_outlet": ("Velocity outlet", "Velocity outlet", "outlet"),
         "pressure_outlet": ("Pressure", "Pressure", "pressure"),
         "wall": ("Wall", "Wall", "wall"),
+        "symmetry": ("Symmetry", "Symmetry", "symmetry"),
+        "freestream": ("Freestream", "Freestream", "freestream"),
+        "total_pressure_inlet": ("Total pressure inlet", "Total pressure inlet", "pressure"),
     }
     assert rows["pressure_outlet"].aliases == ("Pressure inlet", "Pressure outlet")
     assert rows["wall"].aliases == ("Slip wall", "No-slip wall")
-    assert rows["wall"].hint == "Slip or no-slip, face by face"
+    assert rows["wall"].hint == "No-slip, slip, moving or rotating, face by face"
     assert rows["wall"].variants[0] == "wall_noslip"
     assert all(f.color in BC_COLORS for f in rows.values())
     assert {f.ui for f in rows.values()} == {"incompressible_flow.bc"}
@@ -188,6 +210,9 @@ def test_value_rules_name_the_unit_quantity():
     assert quantity("velocity_outlet", {"velocity_type": "Fixed"}) == "velocity"
     assert quantity("pressure_outlet", {}) == "pressure"
     assert quantity("wall", {"wall_type": "Slip"}) is None
+    assert quantity("symmetry", {}) is None
+    assert quantity("freestream", {}) == "velocity"
+    assert quantity("total_pressure_inlet", {}) == "pressure"
 
 
 def test_generic_fields_keep_their_choices_and_defaults_consistent():
@@ -208,10 +233,27 @@ def test_generic_fields_keep_their_choices_and_defaults_consistent():
 
 def test_describe_rows_are_plain_json_without_resolve():
     rows = {row["key"]: row for row in get_hub().registry("bc_family").describe()}
-    assert set(rows) == {"velocity_inlet", "velocity_outlet", "pressure_outlet", "wall"}
+    assert list(rows) == FAMILIES
     for row in rows.values():
         assert "resolve" not in row
         json.dumps(row)
     wall = rows["wall"]["fields"]["properties"]["wall_type"]
-    assert wall["enum"] == ["No-slip", "Slip"] and wall["default"] == "No-slip"
+    assert wall["enum"] == ["No-slip", "Slip", "Moving", "Rotating"] and wall["default"] == "No-slip"
     assert rows["pressure_outlet"]["fields"]["properties"]["value"]["x-cfddesk"]["quantity"] == "pressure"
+
+
+def test_symmetry_meshes_as_its_own_plain_patch():
+    spec = get_hub().registry("bc").get("symmetry")
+    # A plain patch at mesh time (meshers keep it apart, named by the BC); the
+    # case writer makes it type symmetry at solve time.
+    assert (spec.semantic, spec.patch_type, spec.family) == ("wall", "patch", "symmetry")
+    assert "type            symmetry;" in spec.write_U("sym", {}, {})
+    fam = get_hub().registry("bc_family").get("symmetry")
+    assert (fam.hint, fam.aliases, fam.fields) == ("Mirror plane: no flow through it, no friction", ("Symmetry plane",), ())
+
+
+def test_every_bc_type_and_family_is_protected():
+    from cfddesk.registry.base import is_protected
+
+    assert all(is_protected("bc", k) for k in IF_KEYS)
+    assert all(is_protected("bc_family", k) for k in FAMILIES)

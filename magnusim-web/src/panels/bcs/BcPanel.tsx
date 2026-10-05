@@ -372,7 +372,7 @@ export function BcEditor() {
   const typeNow = canonicalBcType(bc.bc_type);
   const typeOptions = families.map((f) => ({ value: String(f.record_type), label: f.label }));
   if (!typeOptions.some((o) => o.value === typeNow)) typeOptions.push({ value: typeNow, label: family?.label || typeNow });
-  const slotProps = { bc, imperial: !!state.imperial, faces, save, flowBasis: bcFlowBasis };
+  const slotProps = { bc, imperial: !!state.imperial, faces, save, flowBasis: bcFlowBasis, study: state.study ?? null };
 
   return (
     <div data-bc-editor="1" data-bc-id={id}>

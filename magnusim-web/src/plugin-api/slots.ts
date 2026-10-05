@@ -55,6 +55,8 @@ export interface BcSettingsProps {
   save: (patch: Record<string, unknown>) => Promise<void>;
   /** The mean area of one of these faces (m²; null without geometry) and the study's fluid density (kg/m³; 0 when unknown). */
   flowBasis: (faces: string[]) => { face_area_m2: number | null; density: number };
+  /** The study's record as saved (its turbulence model, time dependency, ...); null when not known. */
+  study?: Record<string, unknown> | null;
 }
 
 type AnyComponent = ComponentType<never>;

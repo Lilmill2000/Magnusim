@@ -1,10 +1,10 @@
 """Incompressible Flow's boundary conditions: the BC types (variants) and families.
 
-The four families the Boundary Conditions panel offers (Velocity inlet, Velocity
-outlet, Pressure, Wall) and their seven BC types. The keys are the ones projects
-have always stored (``analyses.bc_types``, project.json v8 records and
-``hub.bc.extend`` name them), so nothing saved changes. Flow rate and slip /
-no-slip are settings of a family, not families of their own.
+The families the Boundary Conditions panel offers (Velocity inlet, Velocity
+outlet, Pressure, Wall, Symmetry, ...) and their BC types. The seven keys
+projects have always stored (``analyses.bc_types``, project.json v8 records and
+``hub.bc.extend`` name them) keep their meaning, so nothing saved changes. Flow
+rate and slip / no-slip are settings of a family, not families of their own.
 
 ``resolve_record`` turns a saved web record into its BC type key and SI settings
 (each family's ``resolve``).
@@ -23,9 +23,18 @@ from magnusim_sdk.study import (
     is_velocity_inlet,
     is_velocity_outlet,
     is_wall_bc,
-    wall_treatment,
 )
 from magnusim_sdk.units.convert import to_si
+
+from . import inlet_turbulence as _turb
+from .bc_kinds import (
+    is_freestream,
+    is_symmetry,
+    is_total_pressure_inlet,
+    wall_kind,
+    wall_rotation,
+    wall_velocity,
+)
 
 SettingField = SchemaField
 
@@ -34,6 +43,9 @@ VELOCITY_INLET = "velocity_inlet"
 VELOCITY_OUTLET = "velocity_outlet"
 PRESSURE = "pressure_outlet"
 WALL = "wall"
+SYMMETRY = "symmetry"
+FREESTREAM = "freestream"
+TOTAL_PRESSURE = "total_pressure_inlet"
 
 # The editor slot component (ui/) that draws every family's settings.
 BC_UI = "incompressible_flow.bc"
@@ -140,6 +152,86 @@ def _inlet_outlet_U(name: str, _s: dict, _c: dict) -> str:
         type            inletOutlet;
         inletValue      uniform (0 0 0);
         value           uniform (0 0 0);
+    }}"""
+    )
+
+
+def _symmetry(name: str, _s: dict, _c: dict) -> str:
+    return _entry(
+        f"""    {name}
+    {{
+        type            symmetry;
+    }}"""
+    )
+
+
+def _vec3(v: Any, default: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> tuple[float, float, float]:
+    if isinstance(v, (list, tuple)) and len(v) >= 3:
+        try:
+            out = (float(v[0]), float(v[1]), float(v[2]))
+        except (TypeError, ValueError):
+            return default
+        if all(math.isfinite(x) for x in out):
+            return out
+    return default
+
+
+def _freestream_U(name: str, settings: dict, _ctx: dict) -> str:
+    u = _vec3(settings.get("velocity"))
+    return _entry(
+        f"""    {name}
+    {{
+        type            freestreamVelocity;
+        freestreamValue uniform ({u[0]:g} {u[1]:g} {u[2]:g});
+    }}"""
+    )
+
+
+def _freestream_p(name: str, settings: dict, _ctx: dict) -> str:
+    p = float(settings.get("pressure", 0.0))
+    return _entry(
+        f"""    {name}
+    {{
+        type            freestreamPressure;
+        freestreamValue uniform {p:g};
+    }}"""
+    )
+
+
+def _rotating_wall_U(name: str, settings: dict, _ctx: dict) -> str:
+    o = _vec3(settings.get("origin"))
+    a = _vec3(settings.get("axis"), (0.0, 0.0, 1.0))
+    w = float(settings.get("omega", 0.0))
+    return _entry(
+        f"""    {name}
+    {{
+        type            rotatingWallVelocity;
+        origin          ({o[0]:g} {o[1]:g} {o[2]:g});
+        axis            ({a[0]:g} {a[1]:g} {a[2]:g});
+        omega           {w:g};
+        value           uniform (0 0 0);
+    }}"""
+    )
+
+
+def _pressure_inlet_outlet_U(name: str, _s: dict, _c: dict) -> str:
+    return _entry(
+        f"""    {name}
+    {{
+        type            pressureInletOutletVelocity;
+        value           uniform (0 0 0);
+    }}"""
+    )
+
+
+def _total_p(name: str, settings: dict, _ctx: dict) -> str:
+    p0 = float(settings.get("total_pressure", 0.0))
+    return _entry(
+        f"""    {name}
+    {{
+        type            totalPressure;
+        p0              uniform {p0:g};
+        value           uniform {p0:g};
     }}"""
     )
 
@@ -411,6 +503,77 @@ BC_TYPES: tuple[BcTypeSpec, ...] = (
         family=WALL,
         match=(("wall_type", "Slip"),),
     ),
+    # A mirror plane: meshed as a plain patch (its own, named by the BC), made a
+    # ``symmetry`` patch by the case writer at solve time (flat or not).
+    BcTypeSpec(
+        "symmetry",
+        "Symmetry",
+        "wall",
+        "patch",
+        (),
+        write_U=_symmetry,
+        write_p=_symmetry,
+        family=SYMMETRY,
+    ),
+    # The far field around a body: the undisturbed flow comes in or leaves.
+    BcTypeSpec(
+        "freestream",
+        "Freestream",
+        "outlet",
+        "patch",
+        (
+            SettingField("velocity", "Freestream velocity", "vector3", default=(0.0, 0.0, 0.0), unit="m/s", rate_kind="intensive"),
+            SettingField("pressure", "Freestream pressure", "float", default=0.0, unit="Pa", rate_kind="intensive"),
+        ),
+        write_U=_freestream_U,
+        write_p=_freestream_p,
+        family=FREESTREAM,
+    ),
+    # A wall sliding along itself (tangential velocity) or turning about an axis:
+    # no-slip relative to its motion, with the no-slip wall's turbulence.
+    BcTypeSpec(
+        "wall_moving",
+        "Wall",
+        "wall",
+        "wall",
+        (
+            *_THERMAL_WALL_FIELDS,
+            SettingField("velocity", "Wall velocity", "vector3", default=(0.0, 0.0, 0.0), unit="m/s", rate_kind="intensive"),
+        ),
+        write_U=_fixed_vector,
+        write_p=_zero_grad,
+        write_T=_wall_T,
+        family=WALL,
+        match=(("wall_type", "Moving"),),
+    ),
+    BcTypeSpec(
+        "wall_rotating",
+        "Wall",
+        "wall",
+        "wall",
+        (
+            *_THERMAL_WALL_FIELDS,
+            SettingField("origin", "Origin", "vector3", default=(0.0, 0.0, 0.0), unit="m"),
+            SettingField("axis", "Axis", "vector3", default=(0.0, 0.0, 1.0)),
+            SettingField("omega", "Speed", "float", default=0.0, unit="rad/s", rate_kind="intensive"),
+        ),
+        write_U=_rotating_wall_U,
+        write_p=_zero_grad,
+        write_T=_wall_T,
+        family=WALL,
+        match=(("wall_type", "Rotating"),),
+    ),
+    # Flow driven in by a fixed total pressure (static + dynamic).
+    BcTypeSpec(
+        "total_pressure_inlet",
+        "Total pressure inlet",
+        "inlet",
+        "patch",
+        (SettingField("total_pressure", "Total pressure", "float", default=0.0, unit="Pa", rate_kind="intensive"),),
+        write_U=_pressure_inlet_outlet_U,
+        write_p=_total_p,
+        family=TOTAL_PRESSURE,
+    ),
 )
 
 BC_KEYS: tuple[str, ...] = tuple(spec.key for spec in BC_TYPES)
@@ -444,6 +607,14 @@ def _to(q: str, v: Any, u: str, default_u: str) -> float | None:
         return float(v)
 
 
+def _number(v: Any, default: float) -> float:
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return default
+    return n if math.isfinite(n) else default
+
+
 def resolve_record(record: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Map a saved web BC record to (BC type key, settings in SI units).
 
@@ -456,8 +627,15 @@ def resolve_record(record: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     settings: dict[str, Any] = {}
 
     if is_wall_bc(d):
-        wt = wall_treatment(d)
-        return ("wall_slip" if wt == "Slip" else "wall_noslip"), settings
+        kind = wall_kind(d)
+        if kind == "Moving":
+            settings["velocity"] = wall_velocity(d)
+            return "wall_moving", settings
+        if kind == "Rotating":
+            origin, axis, omega = wall_rotation(d)
+            settings.update(origin=origin, axis=axis, omega=omega)
+            return "wall_rotating", settings
+        return ("wall_slip" if kind == "Slip" else "wall_noslip"), settings
 
     if is_velocity_inlet(d):
         vtype = str(d.get("velocity_type") or "")
@@ -496,6 +674,25 @@ def resolve_record(record: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         p = _to("pressure", val, unit, "Pa")
         settings["gauge_pressure"] = 0.0 if p is None else p
         return "pressure_outlet_gauge", settings
+
+    if is_symmetry(d):
+        return "symmetry", settings
+
+    if is_total_pressure_inlet(d):
+        p0 = _to("pressure", val, unit, "Pa")
+        settings["total_pressure"] = 0.0 if p0 is None else p0
+        return "total_pressure_inlet", settings
+
+    if is_freestream(d):
+        speed = _to("velocity", val, unit, "m/s")
+        direction = _vec3(d.get("vector"), (1.0, 0.0, 0.0))
+        mag = math.hypot(*direction)
+        if not mag > 0:
+            direction, mag = (1.0, 0.0, 0.0), 1.0
+        spd = abs(speed) if speed is not None else 0.0
+        settings["velocity"] = [spd * c / mag for c in direction]
+        settings["pressure"] = _number(d.get("freestream_pressure"), 0.0)
+        return "freestream", settings
 
     # Fallback: wall
     return "wall_noslip", settings
@@ -550,6 +747,105 @@ _VELOCITY_FIELDS: tuple[SchemaField, ...] = (
 )
 
 
+# "Turbulence at the inlet" (inlet_turbulence.py): on the boundaries flow comes
+# in through. The length scale is stored in metres; the panel shows it in the
+# project's unit system.
+TURBULENCE_FIELDS: tuple[SchemaField, ...] = (
+    SchemaField(
+        "turbulence_spec",
+        "Turbulence at the inlet",
+        "choice",
+        default=_turb.AUTO,
+        choices=_turb.SPECS,
+        description="How turbulent the flow coming in is. Auto: 5 % intensity, length scale 0.07 x the largest inlet's hydraulic diameter.",
+    ),
+    SchemaField(
+        "turbulence_intensity",
+        "Turbulence intensity",
+        "float",
+        default=_turb.DEFAULT_INTENSITY_PCT,
+        unit="%",
+        min=0,
+        max=100,
+    ),
+    SchemaField(
+        "turbulence_length_scale",
+        "Length scale",
+        "float",
+        default=_turb.DEFAULT_LENGTH_M,
+        unit="m",
+        quantity="length",
+        min=0,
+        depends_on={"turbulence_spec": _turb.LENGTH},
+    ),
+    SchemaField(
+        "turbulence_viscosity_ratio",
+        "Viscosity ratio",
+        "float",
+        default=_turb.DEFAULT_RATIO,
+        min=0,
+        depends_on={"turbulence_spec": _turb.RATIO},
+        description="Turbulent viscosity over the fluid's own viscosity.",
+    ),
+)
+
+
+# A wall's treatment and, for a moving or rotating wall, its motion. Numbers are
+# stored in SI (the wall velocity in m/s, the origin in m); the panel shows
+# them in the project's unit system. The rotation speed is in rpm.
+WALL_FIELDS: tuple[SchemaField, ...] = (
+    SchemaField("wall_type", "Wall type", "choice", default="No-slip", choices=("No-slip", "Slip", "Moving", "Rotating")),
+    SchemaField(
+        "wall_velocity",
+        "Wall velocity (X Y Z)",
+        "vector3",
+        default=(1.0, 0.0, 0.0),
+        unit="m/s",
+        quantity="velocity",
+        depends_on={"wall_type": "Moving"},
+        description="How fast the wall slides along itself.",
+    ),
+    SchemaField("rotation_axis", "Axis (X Y Z)", "vector3", default=(0.0, 0.0, 1.0), depends_on={"wall_type": "Rotating"}),
+    SchemaField(
+        "rotation_origin",
+        "Origin (X Y Z)",
+        "vector3",
+        default=(0.0, 0.0, 0.0),
+        unit="m",
+        quantity="length",
+        depends_on={"wall_type": "Rotating"},
+    ),
+    SchemaField(
+        "rotation_speed",
+        "Speed",
+        "float",
+        default=100.0,
+        unit="rpm",
+        depends_on={"wall_type": "Rotating"},
+        description="Turns about the axis by the right-hand rule; negative turns the other way.",
+    ),
+)
+
+# A freestream's velocity: a speed (value + unit) along a direction, or the
+# velocity's components (in ``unit``; ``value`` then holds their magnitude, so
+# both read the same). Its pressure is gauge, stored in Pa.
+FREESTREAM_INPUTS = ("Speed and direction", "Velocity vector")
+
+_FREESTREAM_FIELDS: tuple[SchemaField, ...] = (
+    SchemaField("velocity_input", "Velocity given as", "choice", default=FREESTREAM_INPUTS[0], choices=FREESTREAM_INPUTS),
+    SchemaField("value", "Speed", "float", default=10, quantity="velocity"),
+    SchemaField("unit", "Unit", "text", default="m/s"),
+    SchemaField("vector", "Direction (X Y Z)", "vector3", default=(1.0, 0.0, 0.0)),
+    SchemaField("freestream_pressure", "Freestream pressure", "float", default=0.0, unit="Pa", quantity="pressure"),
+    *TURBULENCE_FIELDS,
+)
+
+
+def _freestream_defaults() -> dict[str, dict[str, Any]]:
+    seed = {"velocity_input": FREESTREAM_INPUTS[0], "value": 10, "vector": [1, 0, 0], "freestream_pressure": 0}
+    return {"metric": {**seed, "unit": "m/s"}, "imperial": {**seed, "unit": "ft/s"}}
+
+
 def _velocity_defaults() -> dict[str, dict[str, Any]]:
     return {
         "metric": {**_VELOCITY_SEED, "unit": "m/s"},
@@ -566,7 +862,7 @@ BC_FAMILIES: tuple[BcFamily, ...] = (
         variants=("velocity_inlet_fixed", "velocity_inlet_volumetric", "velocity_inlet_mass"),
         defaults=_velocity_defaults(),
         values=_VELOCITY_VALUES,
-        fields=_VELOCITY_FIELDS,
+        fields=(*_VELOCITY_FIELDS, *TURBULENCE_FIELDS),
         ui=BC_UI,
         resolve=resolve_record,
     ),
@@ -598,7 +894,40 @@ BC_FAMILIES: tuple[BcFamily, ...] = (
             SchemaField("pressure_type", "Pressure type", "choice", default="Fixed value", choices=("Fixed value",)),
             SchemaField("value", "Fixed value", "float", default=0, quantity="pressure"),
             SchemaField("unit", "Unit", "text", default="Pa"),
+            *TURBULENCE_FIELDS,
         ),
+        ui=BC_UI,
+        resolve=resolve_record,
+    ),
+    BcFamily(
+        key=TOTAL_PRESSURE,
+        label="Total pressure inlet",
+        record_type="Total pressure inlet",
+        aliases=("Total pressure",),
+        color="pressure",
+        hint="Flow comes in, driven by a fixed total pressure",
+        variants=("total_pressure_inlet",),
+        defaults={"metric": {"value": 0, "unit": "Pa"}, "imperial": {"value": 0, "unit": "psi"}},
+        values=(("value", "unit", "pressure", {}),),
+        fields=(
+            SchemaField("value", "Total pressure", "float", default=0, quantity="pressure"),
+            SchemaField("unit", "Unit", "text", default="Pa"),
+            *TURBULENCE_FIELDS,
+        ),
+        ui=BC_UI,
+        resolve=resolve_record,
+    ),
+    BcFamily(
+        key=FREESTREAM,
+        label="Freestream",
+        record_type="Freestream",
+        aliases=("Far field", "Far-field"),
+        color="freestream",
+        hint="Far field around a body: the undisturbed flow comes in or leaves",
+        variants=("freestream",),
+        defaults=_freestream_defaults(),
+        values=(("value", "unit", "velocity", {}),),
+        fields=_FREESTREAM_FIELDS,
         ui=BC_UI,
         resolve=resolve_record,
     ),
@@ -608,12 +937,24 @@ BC_FAMILIES: tuple[BcFamily, ...] = (
         record_type="Wall",
         aliases=("Slip wall", "No-slip wall"),
         color="wall",
-        hint="Slip or no-slip, face by face",
-        variants=("wall_noslip", "wall_slip"),
+        hint="No-slip, slip, moving or rotating, face by face",
+        variants=("wall_noslip", "wall_slip", "wall_moving", "wall_rotating"),
         # A face-by-face Wall exists to differ from the study's default treatment
         # (no-slip), so a new one starts slip.
         defaults={"metric": {"wall_type": "Slip"}, "imperial": {"wall_type": "Slip"}},
-        fields=(SchemaField("wall_type", "Wall type", "choice", default="No-slip", choices=("No-slip", "Slip")),),
+        fields=WALL_FIELDS,
+        ui=BC_UI,
+        resolve=resolve_record,
+    ),
+    BcFamily(
+        key=SYMMETRY,
+        label="Symmetry",
+        record_type="Symmetry",
+        aliases=("Symmetry plane",),
+        color="symmetry",
+        hint="Mirror plane: no flow through it, no friction",
+        variants=("symmetry",),
+        defaults={"metric": {}, "imperial": {}},
         ui=BC_UI,
         resolve=resolve_record,
     ),

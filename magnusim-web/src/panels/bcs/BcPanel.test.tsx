@@ -13,11 +13,11 @@ import { BcPanel, bcCardSub } from './BcPanel';
 const IF_FAMILIES = (committed as unknown as RegistryDescribe).bc_family as BcFamilyRow[];
 const IF_BCS = IF_FAMILIES.flatMap((f) => f.variants);
 
-const symmetry: BcFamilyRow = {
-  key: 'symmetry',
-  label: 'Symmetry',
+const mirror: BcFamilyRow = {
+  key: 'mirror_plane',
+  label: 'Mirror plane',
   plugin: 'example-extra-bc',
-  record_type: 'Symmetry',
+  record_type: 'Mirror plane',
   aliases: [],
   color: 'other',
   hint: 'Mirror plane: no flow through it',
@@ -84,7 +84,7 @@ beforeEach(() => {
         { key: 'incompressible_steady', label: 'Incompressible', bc_types: IF_BCS },
         { key: 'extra_bc_steady', label: 'Extra BC', bc_types: [...IF_BCS, 'symmetry_plane'] },
       ],
-      bc_family: [...IF_FAMILIES, symmetry],
+      bc_family: [...IF_FAMILIES, mirror],
       default_analysis: { steady: 'incompressible_steady' },
     } as RegistryDescribe,
   });
@@ -152,12 +152,19 @@ describe('hub', () => {
       s.querySelector('i')?.className,
       s.textContent?.trim(),
     ]);
-    expect(legend).toEqual([
+    expect(legend.slice(0, 3)).toEqual([
       ['hub-swatch hub-swatch-inlet', 'Velocity inlet'],
       ['hub-swatch hub-swatch-outlet', 'Velocity outlet'],
       ['hub-swatch hub-swatch-pressure', 'Pressure'],
-      ['hub-swatch hub-swatch-wall', 'Wall'],
     ]);
+    expect(legend).toEqual(IF_FAMILIES.map((f) => [`hub-swatch hub-swatch-${f.color}`, f.label]));
+    expect(legend).toEqual(
+      expect.arrayContaining([
+        ['hub-swatch hub-swatch-wall', 'Wall'],
+        ['hub-swatch hub-swatch-symmetry', 'Symmetry'],
+        ['hub-swatch hub-swatch-freestream', 'Freestream'],
+      ]),
+    );
     const swatches = [...container.querySelectorAll('.hub-item-main .hub-swatch')].map((s) => s.className);
     expect(swatches.slice(0, 3)).toEqual([
       'hub-swatch hub-swatch-wall',
@@ -192,13 +199,13 @@ describe('picker', () => {
   it("lists the analysis's families with their keys and hints", () => {
     const { container, rerender } = render(<BcPanel panelId="panel-bc-picker" />);
     const keys = () => [...container.querySelectorAll('[data-bc-key]')].map((b) => b.getAttribute('data-bc-key'));
-    expect(keys()).toEqual(['velocity_inlet', 'velocity_outlet', 'pressure_outlet', 'wall']);
-    expect(container.querySelector('[data-bc-key="wall"] .ml-type-sub')?.textContent).toBe('Slip or no-slip, face by face');
+    expect(keys()).toEqual(IF_FAMILIES.map((f) => f.key));
+    expect(container.querySelector('[data-bc-key="wall"] .ml-type-sub')?.textContent).toBe('No-slip, slip, moving or rotating, face by face');
     expect(container.querySelector('[data-bc-key="velocity_inlet"] .ml-type-sub')).toBeNull();
     publish({ analysis_key: 'extra_bc_steady' });
     rerender(<BcPanel panelId="panel-bc-picker" />);
-    expect(keys()).toEqual(['velocity_inlet', 'velocity_outlet', 'pressure_outlet', 'wall', 'symmetry']);
-    expect(container.querySelector('[data-bc-key="symmetry"] .ml-type-sub')?.textContent).toBe('Mirror plane: no flow through it');
+    expect(keys()).toEqual([...IF_FAMILIES.map((f) => f.key), 'mirror_plane']);
+    expect(container.querySelector('[data-bc-key="mirror_plane"] .ml-type-sub')?.textContent).toBe('Mirror plane: no flow through it');
   });
 
   it('waits for the registry instead of offering types it does not have', () => {
@@ -222,12 +229,14 @@ describe('picker', () => {
 
 describe('editor', () => {
   it("draws the family's slot component with the BC, its family, units, faces and the flow basis", async () => {
-    publish({ active_id: 'bc2', draft_faces: ['face 13@Body1', 'face 14@Body1'], imperial: true });
+    const study = { id: 's1', turbulence_model: 'laminar' };
+    publish({ active_id: 'bc2', draft_faces: ['face 13@Body1', 'face 14@Body1'], imperial: true, study });
     const { container } = render(<BcPanel panelId="panel-bc-editor" />);
     expect(container.querySelector('[data-bc-title]')?.textContent).toBe('Pressure 2');
     expect(container.querySelector('[data-fake-if-fields="pressure_outlet"]')).not.toBeNull();
     const props = seen[seen.length - 1];
     expect(props.bc.id).toBe('bc2');
+    expect(props.study).toEqual(study);
     expect(props.family.key).toBe('pressure_outlet');
     expect(props.imperial).toBe(true);
     expect(props.faces).toEqual(['face 13@Body1', 'face 14@Body1']);
@@ -244,7 +253,7 @@ describe('editor', () => {
     publish({ active_id: 'bc2', draft_faces: ['face 13@Body1'] });
     render(<BcPanel panelId="panel-bc-editor" />);
     const type = screen.getByLabelText('Boundary condition type') as HTMLSelectElement;
-    expect([...type.options].map((o) => o.value)).toEqual(['Velocity inlet', 'Velocity outlet', 'Pressure', 'Wall']);
+    expect([...type.options].map((o) => o.value)).toEqual(IF_FAMILIES.map((f) => f.record_type));
     expect(type.value).toBe('Pressure');
     fireEvent.change(type, { target: { value: 'Wall' } });
     expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('bc2', { bc_type: 'Wall' });
@@ -266,7 +275,7 @@ describe('editor', () => {
     publish({
       analysis_key: 'extra_bc_steady',
       active_id: 's1',
-      bcs: [{ id: 's1', name: 'Symmetry 1', bc_type: 'Symmetry', faces: [], mirror: 'Wedge' }],
+      bcs: [{ id: 's1', name: 'Mirror plane 1', bc_type: 'Mirror plane', faces: [], mirror: 'Wedge' }],
     });
     const { container } = render(<BcPanel panelId="panel-bc-editor" />);
     const select = container.querySelector('[data-schema-key="mirror"] select') as HTMLSelectElement;

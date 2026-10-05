@@ -181,6 +181,32 @@ def test_the_job_writes_what_prepare_run_writes(tmp_path: Path):
     assert files(case) == files(other)
 
 
+def test_the_written_case_holds_a_velocity_outlets_speed(tmp_path: Path):
+    """A velocity outlet of 7 ft/s reaches 0/U as that outflow (it was always written as U = 0)."""
+    project, case = _project(tmp_path)
+    doc_path = project / "boundary_conditions.json"
+    doc = json.loads(doc_path.read_text(encoding="utf-8"))
+    doc["boundary_conditions"].append(
+        {
+            "name": "Vent 1",
+            "bc_type": "Velocity outlet",
+            "velocity_type": "Fixed",
+            "value": 7,
+            "unit": "ft/s",
+            "direction": "Normal to face",
+            "faces": ["face 3@Body1"],
+            "simulation_id": "sim_1",
+        }
+    )
+    doc_path.write_text(json.dumps(doc), encoding="utf-8")
+    code, _stages, _other, answer = _run(["--run-id", "r1", "--no-require-mesh"], project=project, case=case)
+    assert code == 0, answer
+    u = (case / "0" / "U").read_text(encoding="utf-8")
+    block = u.split("vent_1", 1)[1].split("}", 1)[0]
+    assert "surfaceNormalFixedValue" in block
+    assert " ".join(block.split()).find("refValue uniform 2.1336;") > 0  # 7 ft/s, out of the domain
+
+
 @pytest.mark.parametrize("where", ["stray", "other_run", "run_folder"])
 def test_a_case_dir_that_is_not_the_runs_is_refused(tmp_path: Path, where: str):
     project, case = _project(tmp_path)

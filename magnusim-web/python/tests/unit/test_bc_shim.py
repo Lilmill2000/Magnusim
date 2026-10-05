@@ -66,7 +66,9 @@ def test_bc_types_view_follows_the_hub():
     hub = load_all()
     reg = hub.registry("bc")
     assert list(BC_TYPES) == reg.keys()
-    assert len(BC_TYPES) == len(reg.keys()) == 7
+    from tests.unit.if_bc_keys import IF_BC_KEYS
+
+    assert tuple(BC_TYPES) == IF_BC_KEYS
     assert all(BC_TYPES[k] is reg.get(k) for k in reg.keys())
     assert "no_such_bc" not in BC_TYPES and 3 not in BC_TYPES
     with pytest.raises(KeyError):

@@ -85,8 +85,10 @@ def test_builtin_keys_match_land2_through_land6():
     assert set(get_registry("solver").keys()) == EXPECTED_SOLVER_KEYS
     assert EXPECTED_MESHER_KEYS <= set(get_registry("mesher").keys())
     assert set(get_registry("bc").keys()) == set(BC_TYPES.keys())
-    assert len(get_registry("bc").keys()) == 7
-    assert set(get_registry("bc_family").keys()) == {"velocity_inlet", "velocity_outlet", "pressure_outlet", "wall"}
+    from tests.unit.if_bc_keys import IF_BC_FAMILIES, IF_BC_KEYS
+
+    assert tuple(get_registry("bc").keys()) == IF_BC_KEYS
+    assert tuple(get_registry("bc_family").keys()) == IF_BC_FAMILIES
     assert set(get_registry("material").keys()) == EXPECTED_MATERIAL_KEYS
     assert set(get_registry("monitor").keys()) == EXPECTED_MONITOR_KEYS
     assert set(get_registry("filter").keys()) == EXPECTED_FILTER_KEYS

@@ -282,3 +282,12 @@ def test_written_case_holds_the_result_function_objects(tmp_path):
     assert "timeStart       0.5;" in _block(text, "fieldAverage")
     sidecar = json.loads((tmp_path / "transient" / "w27-case.json").read_text(encoding="utf-8"))
     assert sidecar["transient"]["average_from"] == 0.5
+def test_openings_get_monitors_walls_and_symmetry_planes_do_not():
+    mapped = [
+        {"bc": {"bc_type": "Freestream", "faces": ["f1"]}, "patch": "far"},
+        {"bc": {"bc_type": "Symmetry", "faces": ["f2"]}, "patch": "mid"},
+        {"bc": {"bc_type": "Wall", "faces": ["f3"]}, "patch": "lid"},
+        {"bc": {"bc_type": "Velocity outlet", "faces": ["f4"]}, "patch": "vent"},
+        {"bc": {"bc_type": "Total pressure inlet", "faces": ["f5"]}, "patch": "intake"},
+    ]
+    assert monitor_patches_from_mapped(mapped) == ["far", "vent", "intake"]

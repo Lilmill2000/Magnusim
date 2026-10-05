@@ -18,8 +18,8 @@ Licence: GPL-3.0-or-later.
 |---|---|
 | Analyses | `incompressible_steady`, `incompressible_transient` (one family, `incompressible`) |
 | Solver apps | `simpleFoam`, `pimpleFoam` |
-| BC types | `velocity_inlet_fixed`, `velocity_inlet_volumetric`, `velocity_inlet_mass`, `velocity_outlet`, `pressure_outlet_gauge`, `wall_noslip`, `wall_slip` (`bcs.py`, with their OpenFOAM writers) |
-| BC families | `velocity_inlet`, `velocity_outlet`, `pressure_outlet` ("Pressure"), `wall` (`bcs.py`: labels, hints, colours, aliases, seeds per unit system, unit fields, the generic form's fields and the record resolver) |
+| BC types | `velocity_inlet_fixed`, `velocity_inlet_volumetric`, `velocity_inlet_mass`, `velocity_outlet`, `pressure_outlet_gauge`, `wall_noslip`, `wall_slip`, `symmetry`, `freestream`, `wall_moving`, `wall_rotating`, `total_pressure_inlet` (`bcs.py`, with their OpenFOAM writers) |
+| BC families | `velocity_inlet`, `velocity_outlet`, `pressure_outlet` ("Pressure"), `total_pressure_inlet`, `freestream`, `wall`, `symmetry` (`bcs.py`: labels, hints, colours, aliases, seeds per unit system, unit fields, the generic form's fields and the record resolver) |
 | Material model | `newtonian_incompressible`, with the Fluid picker's presets at 20 °C, 1 atm: Air, Argon, Carbon dioxide, Hydrogen, Nitrogen, Water, Seawater (3.5% saline), Custom fluid (`materials.py`) |
 | Monitors | `area_average` (the one the Monitors dialog offers), `flow_rate`, and the monitor quantities the Graphs panel shows (`monitors.py`) |
 

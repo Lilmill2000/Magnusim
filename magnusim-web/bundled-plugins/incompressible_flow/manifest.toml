@@ -25,10 +25,18 @@ protected = [
   "bc:pressure_outlet_gauge",
   "bc:wall_noslip",
   "bc:wall_slip",
+  "bc:symmetry",
+  "bc:freestream",
+  "bc:total_pressure_inlet",
+  "bc:wall_moving",
+  "bc:wall_rotating",
   "bc_family:velocity_inlet",
   "bc_family:velocity_outlet",
   "bc_family:pressure_outlet",
   "bc_family:wall",
+  "bc_family:symmetry",
+  "bc_family:freestream",
+  "bc_family:total_pressure_inlet",
 ]
 # The analysis a study gets when none is named (new studies, and studies saved
 # before analysis keys, which named it "incompressible"), and the name a study

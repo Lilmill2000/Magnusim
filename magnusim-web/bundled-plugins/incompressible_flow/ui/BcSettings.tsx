@@ -6,17 +6,23 @@
  * a velocity BC says that each face gets the value on its own.
  */
 import type { ReactNode } from 'react';
-import { Select, UNITS, preferredUnit, resolveUnit, type Quantity } from '@magnusim/plugin-ui';
+import { Select, UNITS, convertQuantity, fromSi, preferredUnit, resolveUnit, toSi, type Quantity } from '@magnusim/plugin-ui';
 import type { BcSettingsProps } from '../../../src/plugin-api';
 import { host } from './host';
+import { turbulenceKey } from './StudySettings';
 
 /** The fluid density a flow-rate conversion uses when the study has none: Air at 20 C, 1 atm (materials.AIR). */
 const AIR_DENSITY = 1.204;
 
 const VELOCITY_FAMILIES = new Set(['velocity_inlet', 'velocity_outlet']);
 
-export function wallType(raw: unknown): 'Slip' | 'No-slip' {
-  return String(raw || '').toLowerCase().replace(/[\s_-]+/g, '') === 'slip' ? 'Slip' : 'No-slip';
+/** A wall's treatment (incompressible_flow.bc_kinds.WALL_KINDS). */
+export const WALL_TYPES = ['No-slip', 'Slip', 'Moving', 'Rotating'] as const;
+export type WallType = (typeof WALL_TYPES)[number];
+
+export function wallType(raw: unknown): WallType {
+  const want = String(raw || '').toLowerCase().replace(/[\s_-]+/g, '');
+  return WALL_TYPES.find((t) => t.toLowerCase().replace(/[\s_-]+/g, '') === want) || 'No-slip';
 }
 
 export function velocityUnits(velocityType?: string, flowRateType?: string): string[] {
@@ -90,8 +96,14 @@ export function perFaceHint(n: number, value: unknown, unit: string): string {
 }
 
 function wallHint(wt: string): string {
+  if (wt === 'Moving') {
+    return 'The wall slides along itself at this velocity and the air sticks to it (a belt, a lid). Give a velocity along the wall surface: a part through the wall would push air through it.';
+  }
+  if (wt === 'Rotating') {
+    return 'The wall turns about the axis through the origin at this speed (right-hand rule; negative turns the other way) and the air sticks to it. The mesh does not move: use it for round parts spinning in place.';
+  }
   return wt === 'Slip'
-    ? 'Air slides along the wall with no friction: zero velocity through it, no shear. Use for symmetry-like or idealized frictionless surfaces.'
+    ? 'Air slides along the wall with no friction: zero velocity through it, no shear. Use for idealized frictionless surfaces; for a mirror plane use Symmetry.'
     : 'Air sticks to the wall (zero velocity at the surface). This is the usual CFD wall.';
 }
 
@@ -143,8 +155,20 @@ function ValueWithUnit({
   );
 }
 
-function VelocityFields({ bc, imperial, save, flowBasis }: BcSettingsProps) {
+/** What a velocity inlet or outlet does with its value, in the user's words. */
+export function velocityHint(outlet: boolean, velocityType: string, direction: string): string {
+  if (velocityType === 'Flow rate') {
+    return outlet ? 'This much flow leaves through each face.' : 'This much flow enters through each face.';
+  }
+  if (direction === 'Vector') {
+    return outlet ? 'Air leaves at this speed moving along the vector.' : 'Air enters at this speed moving along the vector.';
+  }
+  return outlet ? 'Air leaves straight out through the face at this speed.' : 'Air enters straight in through the face at this speed.';
+}
+
+function VelocityFields({ bc, family, imperial, save, flowBasis }: BcSettingsProps) {
   const { SciNumberInput } = host().pluginUi;
+  const outlet = family.key === 'velocity_outlet';
   const vt = String(bc.velocity_type || 'Fixed');
   const fr = String(bc.flow_rate_type || 'Volumetric flow');
   const units = velocityUnits(vt, fr);
@@ -217,20 +241,92 @@ function VelocityFields({ bc, imperial, save, flowBasis }: BcSettingsProps) {
               ))}
             </span>
           </Row>
-          <div className="mat-assign-hint">Air enters at this speed moving along the vector.</div>
         </>
       ) : null}
+      <div className="mat-assign-hint" data-bc-velocity-hint="1">
+        {velocityHint(outlet, vt, direction)}
+      </div>
     </>
   );
 }
 
-function WallFields({ bc, save }: BcSettingsProps) {
+/** A vector stored in SI, shown and typed in the project's unit system's unit of `quantity`. */
+function SiVector({
+  label,
+  valueSi,
+  quantity,
+  imperial,
+  onCommitSi,
+}: {
+  label: string;
+  valueSi: number[];
+  quantity: Quantity;
+  imperial: boolean;
+  onCommitSi: (si: number[]) => void;
+}) {
+  const unit = preferredUnit(quantity, imperial);
+  const shown = valueSi.map((x) => roundShown(fromSi(quantity, x, unit)));
+  return (
+    <span className="bc-value-row">
+      <VectorInputs
+        label={label}
+        value={shown}
+        onCommit={(next) => onCommitSi(next.map((x) => roundShown(toSi(quantity, x, unit))))}
+      />
+      <span className="bc-unit-label">{unit}</span>
+    </span>
+  );
+}
+
+function WallFields({ bc, imperial, save }: BcSettingsProps) {
+  const { SciNumberInput } = host().pluginUi;
   const wt = wallType(bc.wall_type);
   return (
     <>
       <Row label="Wall type">
-        <Choice label="Wall type" value={wt} options={['No-slip', 'Slip']} onChange={(v) => void save({ wall_type: v })} />
+        <Choice label="Wall type" value={wt} options={[...WALL_TYPES]} onChange={(v) => void save({ wall_type: v })} />
       </Row>
+      {wt === 'Moving' ? (
+        <Row label="Wall velocity (X Y Z)">
+          <SiVector
+            label="Wall velocity"
+            valueSi={vec3(bc.wall_velocity, [1, 0, 0])}
+            quantity="velocity"
+            imperial={imperial}
+            onCommitSi={(next) => void save({ wall_velocity: next })}
+          />
+        </Row>
+      ) : null}
+      {wt === 'Rotating' ? (
+        <>
+          <Row label="Axis (X Y Z)">
+            <VectorInputs
+              label="Axis"
+              value={vec3(bc.rotation_axis, [0, 0, 1])}
+              onCommit={(next) => void save({ rotation_axis: next })}
+            />
+          </Row>
+          <Row label="Origin (X Y Z)">
+            <SiVector
+              label="Origin"
+              valueSi={vec3(bc.rotation_origin, [0, 0, 0])}
+              quantity="length"
+              imperial={imperial}
+              onCommitSi={(next) => void save({ rotation_origin: next })}
+            />
+          </Row>
+          <Row label="Speed">
+            <span className="bc-value-row">
+              <SciNumberInput
+                value={num(bc.rotation_speed, 100)}
+                label="Rotation speed"
+                onCommit={(n) => void save({ rotation_speed: n })}
+              />
+              <span className="bc-unit-label">rpm</span>
+            </span>
+          </Row>
+        </>
+      ) : null}
       <div className="mat-assign-hint">{wallHint(wt)}</div>
     </>
   );
@@ -258,12 +354,312 @@ function PressureFields({ bc, imperial, save }: BcSettingsProps) {
   );
 }
 
+export const SYMMETRY_HINT =
+  'A mirror plane: no flow crosses it and it has no friction; every field is mirrored across it. Use it to model half (or a quarter) of a symmetric case. The faces need not be flat.';
+
+function SymmetryFields() {
+  return (
+    <div className="mat-assign-hint" data-bc-symmetry-hint="1">
+      {SYMMETRY_HINT}
+    </div>
+  );
+}
+
+/** "Turbulence at the inlet" (incompressible_flow.inlet_turbulence.SPECS). */
+export const TURBULENCE_SPECS = ['Auto', 'Intensity and length scale', 'Intensity and viscosity ratio'] as const;
+export type TurbulenceSpec = (typeof TURBULENCE_SPECS)[number];
+
+/** The families flow comes in through: they carry "Turbulence at the inlet". */
+const TURBULENCE_FAMILIES = new Set(['velocity_inlet', 'pressure_outlet', 'total_pressure_inlet', 'freestream']);
+
+export function turbulenceSpec(raw: unknown): TurbulenceSpec {
+  const want = String(raw || '').toLowerCase().replace(/[^a-z]/g, '');
+  return TURBULENCE_SPECS.find((s) => s.toLowerCase().replace(/[^a-z]/g, '') === want) || 'Auto';
+}
+
+/** A laminar study solves no turbulence: its boundaries take no turbulence settings. */
+export function studyIsLaminar(study: Record<string, unknown> | null | undefined): boolean {
+  return !!study && turbulenceKey(study) === 'laminar';
+}
+
+/** What a "Turbulence at the inlet" choice sets, in the user's words (a freestream's Auto is its own rule). */
+export function turbulenceHint(spec: TurbulenceSpec, speedWord: string, freestream = false): string {
+  if (spec === 'Intensity and length scale') {
+    return `k from the intensity of ${speedWord}; ω (or ε) from the length scale (about 7 % of the opening's size is typical).`;
+  }
+  if (spec === 'Intensity and viscosity ratio') {
+    return `k from the intensity of ${speedWord}; ω (or ε) from a turbulent viscosity this many times the fluid's (1 to 10 is calm, 100 or more very turbulent).`;
+  }
+  if (freestream) return "Auto: 5 % intensity of the freestream speed, turbulent viscosity 10 × the fluid's.";
+  return "Auto: 5 % intensity of the case's inlet speed, length scale 0.07 × the largest inlet's hydraulic diameter.";
+}
+
+function num(v: unknown, fallback: number): number {
+  const n = Number(v);
+  return v === undefined || v === null || v === '' || !Number.isFinite(n) ? fallback : n;
+}
+
+function roundShown(n: number): number {
+  return Number.isFinite(n) ? Number(n.toPrecision(6)) : n;
+}
+
+/** A number stored in SI, shown and typed in the project's unit system's unit of `quantity`. */
+function SiNumber({
+  label,
+  valueSi,
+  quantity,
+  imperial,
+  onCommitSi,
+}: {
+  label: string;
+  valueSi: number;
+  quantity: Quantity;
+  imperial: boolean;
+  onCommitSi: (si: number) => void;
+}) {
+  const { SciNumberInput } = host().pluginUi;
+  const unit = preferredUnit(quantity, imperial);
+  return (
+    <span className="bc-value-row">
+      <SciNumberInput
+        value={roundShown(fromSi(quantity, valueSi, unit))}
+        label={label}
+        onCommit={(n) => onCommitSi(roundShown(toSi(quantity, n, unit)))}
+      />
+      <span className="bc-unit-label">{unit}</span>
+    </span>
+  );
+}
+
+function TurbulenceFields({ bc, family, imperial, save, study }: BcSettingsProps) {
+  const { SciNumberInput } = host().pluginUi;
+  if (studyIsLaminar(study)) return null;
+  const spec = turbulenceSpec(bc.turbulence_spec);
+  const speedWord =
+    family.key === 'velocity_inlet'
+      ? "this inlet's speed"
+      : family.key === 'freestream'
+        ? 'the freestream speed'
+        : "the case's reference speed";
+  return (
+    <div data-bc-turbulence="1">
+      <Row label="Turbulence at the inlet">
+        <Choice
+          label="Turbulence at the inlet"
+          value={spec}
+          options={[...TURBULENCE_SPECS]}
+          onChange={(v) => void save({ turbulence_spec: v })}
+        />
+      </Row>
+      {spec !== 'Auto' ? (
+        <Row label="Intensity">
+          <span className="bc-value-row">
+            <SciNumberInput
+              value={num(bc.turbulence_intensity, 5)}
+              label="Turbulence intensity"
+              onCommit={(n) => void save({ turbulence_intensity: n })}
+            />
+            <span className="bc-unit-label">%</span>
+          </span>
+        </Row>
+      ) : null}
+      {spec === 'Intensity and length scale' ? (
+        <Row label="Length scale">
+          <SiNumber
+            label="Length scale"
+            valueSi={num(bc.turbulence_length_scale, 0.01)}
+            quantity="length"
+            imperial={imperial}
+            onCommitSi={(n) => void save({ turbulence_length_scale: n })}
+          />
+        </Row>
+      ) : null}
+      {spec === 'Intensity and viscosity ratio' ? (
+        <Row label="Viscosity ratio">
+          <SciNumberInput
+            value={num(bc.turbulence_viscosity_ratio, 10)}
+            label="Viscosity ratio"
+            onCommit={(n) => void save({ turbulence_viscosity_ratio: n })}
+          />
+        </Row>
+      ) : null}
+      <div className="mat-assign-hint">{turbulenceHint(spec, speedWord, family.key === 'freestream')}</div>
+    </div>
+  );
+}
+
+/** How a freestream's velocity is typed (incompressible_flow.bcs.FREESTREAM_INPUTS). */
+export const FREESTREAM_INPUTS = ['Speed and direction', 'Velocity vector'] as const;
+
+const SPEED_UNITS = ['m/s', 'ft/s', 'ft/min'];
+
+function vec3(raw: unknown, fallback: number[]): number[] {
+  const v = Array.isArray(raw) ? raw.slice(0, 3).map((x) => Number(x)) : [];
+  return v.length === 3 && v.every(Number.isFinite) ? v : fallback.slice();
+}
+
+/** The velocity components a freestream's speed along its direction makes (+x when it has none), rounded as the panel shows them. */
+export function freestreamComponents(speed: number, direction: number[]): number[] {
+  const m = Math.hypot(direction[0], direction[1], direction[2]);
+  const unit = m > 0 ? direction.map((x) => x / m) : [1, 0, 0];
+  return unit.map((x) => roundShown(x * (Number.isFinite(speed) ? Math.abs(speed) : 0)));
+}
+
+export const FREESTREAM_HINT =
+  'The undisturbed flow far from the body: it comes in with this velocity where the flow enters and leaves freely elsewhere, at the freestream pressure. Put it well away from the body (a box around it).';
+
+function VectorInputs({ label, value, onCommit }: { label: string; value: number[]; onCommit: (next: number[]) => void }) {
+  const { SciNumberInput } = host().pluginUi;
+  return (
+    <span className="bc-value-row bc-vector-row">
+      {(['X', 'Y', 'Z'] as const).map((axis, i) => (
+        <SciNumberInput
+          key={axis}
+          className="bc-input bc-vec"
+          label={`${label} ${axis}`}
+          value={value[i]}
+          onCommit={(n) => {
+            const next = value.slice();
+            next[i] = n;
+            onCommit(next);
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
+function FreestreamFields({ bc, imperial, save }: BcSettingsProps) {
+  const mode = FREESTREAM_INPUTS.find((m) => m === bc.velocity_input) || FREESTREAM_INPUTS[0];
+  const unit = unitFor(bc.unit, SPEED_UNITS, imperial, 'velocity');
+  const speed = num(bc.value, 10);
+  const vector = vec3(bc.vector, [1, 0, 0]);
+  const components = mode === 'Velocity vector' ? vector : freestreamComponents(speed, vector);
+  return (
+    <>
+      <Row label="Velocity given as">
+        <Choice
+          label="Velocity given as"
+          value={mode}
+          options={[...FREESTREAM_INPUTS]}
+          onChange={(v) =>
+            // Typed as components, the vector holds the velocity itself (its length is the speed).
+            void save(v === 'Velocity vector' ? { velocity_input: v, vector: components } : { velocity_input: v })
+          }
+        />
+      </Row>
+      {mode === 'Speed and direction' ? (
+        <>
+          <Row label="Speed">
+            <ValueWithUnit
+              label="Speed"
+              value={bc.value}
+              unit={unit}
+              units={SPEED_UNITS}
+              onValue={(n) => void save({ value: n, unit })}
+              onUnit={(u) => void save({ unit: u })}
+            />
+          </Row>
+          <Row label="Direction (X Y Z)">
+            <VectorInputs label="Direction" value={vector} onCommit={(next) => void save({ vector: next })} />
+          </Row>
+        </>
+      ) : (
+        <Row label="Velocity (X Y Z)">
+          <span className="bc-value-row">
+            <VectorInputs
+              label="Velocity"
+              value={vector}
+              onCommit={(next) => void save({ vector: next, value: roundShown(Math.hypot(next[0], next[1], next[2])) })}
+            />
+            <Choice
+              label="Velocity unit"
+              value={unit}
+              options={SPEED_UNITS}
+              onChange={(u) =>
+                // The components follow the unit; the core converts the speed (value) itself.
+                void save({ unit: u, vector: vector.map((x) => roundShown(convertQuantity('velocity', x, unit, u))) })
+              }
+            />
+          </span>
+        </Row>
+      )}
+      <Row label="Pressure">
+        <SiNumber
+          label="Freestream pressure"
+          valueSi={num(bc.freestream_pressure, 0)}
+          quantity="pressure"
+          imperial={imperial}
+          onCommitSi={(n) => void save({ freestream_pressure: n })}
+        />
+      </Row>
+      <div className="mat-assign-hint" data-bc-freestream-hint="1">
+        {FREESTREAM_HINT} The pressure is gauge.
+      </div>
+    </>
+  );
+}
+
+export const TOTAL_PRESSURE_HINT =
+  'The total pressure (gauge) of the air coming in: its static pressure plus ½ρU². How fast it comes in follows from the pressure drop to the outlets. Where flow leaves through it, it holds this value as a static pressure.';
+
+function TotalPressureFields({ bc, imperial, save }: BcSettingsProps) {
+  const unit = unitFor(bc.unit, PRESSURE_UNITS, imperial, 'pressure');
+  return (
+    <>
+      <Row label="Total pressure">
+        <ValueWithUnit
+          label="Total pressure"
+          value={bc.value ?? 0}
+          unit={unit}
+          units={PRESSURE_UNITS}
+          onValue={(n) => void save({ value: n, unit })}
+          onUnit={(u) => void save({ unit: u })}
+        />
+      </Row>
+      <div className="mat-assign-hint" data-bc-total-pressure-hint="1">
+        {TOTAL_PRESSURE_HINT}
+      </div>
+    </>
+  );
+}
+
 /** The fields of one of this plugin's BC families. */
 export function BcSettings(props: BcSettingsProps) {
   const key = props.family.key;
-  if (VELOCITY_FAMILIES.has(key)) return <VelocityFields {...props} />;
+  const turbulence = TURBULENCE_FAMILIES.has(key) ? <TurbulenceFields {...props} /> : null;
+  if (VELOCITY_FAMILIES.has(key)) {
+    return (
+      <>
+        <VelocityFields {...props} />
+        {turbulence}
+      </>
+    );
+  }
   if (key === 'wall') return <WallFields {...props} />;
-  return <PressureFields {...props} />;
+  if (key === 'symmetry') return <SymmetryFields />;
+  if (key === 'total_pressure_inlet') {
+    return (
+      <>
+        <TotalPressureFields {...props} />
+        {turbulence}
+      </>
+    );
+  }
+  if (key === 'freestream') {
+    return (
+      <>
+        <FreestreamFields {...props} />
+        {turbulence}
+      </>
+    );
+  }
+  return (
+    <>
+      <PressureFields {...props} />
+      {turbulence}
+    </>
+  );
 }
 
 /** Under a velocity BC's assigned faces: each face gets the value on its own. */

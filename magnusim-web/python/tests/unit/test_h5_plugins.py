@@ -116,21 +116,21 @@ def test_gate_h5_demos_register(monkeypatch):
 
 def test_extra_bc_fixture_publishes_its_family(monkeypatch):
     """The e2e fixture for the BC contract: an analysis offering IF's BCs plus a
-    symmetry plane whose family has one choice field and no UI component."""
+    mirror plane whose family has one choice field and no UI component."""
     monkeypatch.setenv("MAGNUSIM_PLUGINS_DIR", str(BC_FIXTURE.parent))
     load_all(force=True)
     steady = get_registry("analysis").get(DEFAULT_STEADY_KEY)
     extra = get_registry("analysis").get("extra_bc_steady")
     assert extra.bc_types == (*steady.bc_types, "symmetry_plane")
-    row = next(r for r in get_registry("bc_family").describe() if r["key"] == "symmetry")
-    assert row["record_type"] == "Symmetry"
+    row = next(r for r in get_registry("bc_family").describe() if r["key"] == "mirror_plane")
+    assert row["record_type"] == "Mirror plane"
     assert row["color"] == "other"
     assert row["hint"] == "Mirror plane: no flow through it"
     assert row["variants"] == ["symmetry_plane"]
     assert row["ui"] == ""
     assert row["fields"]["properties"]["mirror"]["enum"] == ["Plane", "Wedge"]
     spec = get_registry("bc").get("symmetry_plane")
-    assert spec.family == "symmetry"
+    assert spec.family == "mirror_plane"
     assert "symmetryPlane" in spec.write_U("sym", {}, {})
 
 
