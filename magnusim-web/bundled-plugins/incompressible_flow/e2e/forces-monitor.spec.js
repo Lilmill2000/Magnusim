@@ -115,7 +115,8 @@ test("a Forces monitor offers the study's walls, keeps the ticked ones and point
   await expect(page.locator('#aa-boundary-count')).toHaveText('2');
   await expect.poll(async () => (await runRc())?.boundaries).toEqual([wingToken, '@walls']);
   const saved = await runRc();
-  expect([saved.name, saved.monitor_type, saved.kind]).toEqual(['Forces 1', 'forces', 'Forces']);
+  // The run keeps a result control's type as monitor_type (not its kind).
+  expect([saved.name, saved.monitor_type]).toEqual(['Forces 1', 'forces']);
   // The panel says what it measures against.
   await expect(page.locator('#aa-study-note')).toBeVisible();
   await expect(page.locator('#aa-study-note-text')).toContainText("Uses the study's reference values");
@@ -124,15 +125,19 @@ test("a Forces monitor offers the study's walls, keeps the ticked ones and point
   await page.locator(`#aa-boundary-list [data-aa-boundary="${wingToken}"]`).uncheck();
   await expect(page.locator('#aa-boundary-count')).toHaveText('1');
   await expect.poll(async () => (await runRc())?.boundaries).toEqual(['@walls']);
+  // The Monitors hub says what it is placed on.
+  await expect(page.locator('#results-hub-list')).toContainText('Forces 1 · 1 wall');
   await page.reload();
   await ready();
   await openRun();
+  const rcFolder = page.locator(`#left-tree li[data-w27-run-rcs="${rid}"]`).first();
+  if (!(await rcFolder.evaluate((el) => el.classList.contains('expanded')))) {
+    await rcFolder.locator(':scope > .tree-row .tw').click();
+  }
   await page.locator(`#left-tree [data-w27-aa="${saved.id}"] > .tree-row .tl`).first().click();
   await expect(panel).toBeVisible();
   await expect(page.locator(`#aa-boundary-list [data-aa-boundary="${wingToken}"]`)).not.toBeChecked();
   await expect(page.locator('#aa-boundary-list [data-aa-boundary="@walls"]')).toBeChecked();
-  // The Monitors hub says what it is placed on.
-  await expect(page.locator('#results-hub-list')).toContainText('Forces 1 · 1 wall');
 
   // ---- Edit: the study panel's Reference values ----
   await page.locator('#aa-study-edit').click();

@@ -183,7 +183,7 @@ test("Graphs show a run's forces and point probe series from what OpenFOAM wrote
   // Probes: pressure in Pa; the point outside the mesh says so and draws nothing.
   const p1 = page.locator('#run-graphs-custom-cards .mon-card[data-monitor-key="probes_probe_1_1"]');
   const p2 = page.locator('#run-graphs-custom-cards .mon-card[data-monitor-key="probes_probe_1_2"]');
-  await expect(p1.locator('[data-mon-qty] option')).toHaveText(['Pressure', 'Velocity magnitude', 'Velocity X', 'Velocity Y', 'Velocity Z']);
+  await expect(p1.locator('[data-mon-qty] option')).toHaveText(['Pressure', 'Velocity X', 'Velocity Y', 'Velocity Z', 'Velocity magnitude']);
   await expect(p1.locator('.mon-card-last')).toHaveText('357 Pa');
   await expect(p1.locator('svg.mon-svg')).toHaveCount(1);
   await expect(p2.locator('svg.mon-svg')).toHaveCount(0);

@@ -7,6 +7,12 @@ interface MonitorRow extends RunMonitor {
   final?: { pressure_Pa?: number; volumetric_flow_m3s?: number } | null;
 }
 
+/** A boundary or area-average monitor's row: it has a final pressure or volume flow (the v0.2.0 list). */
+function isLegacyRow(row: MonitorRow): boolean {
+  const f = row.final;
+  return !!f && (f.pressure_Pa != null || f.volumetric_flow_m3s != null);
+}
+
 /**
  * A row's line: a boundary or area-average monitor keeps its v0.2.0 form (its
  * final pressure and volume flow); a row that names its quantities (a Forces
@@ -14,7 +20,7 @@ interface MonitorRow extends RunMonitor {
  */
 export function runMonitorLine(row: MonitorRow, qs: readonly MonitorQuantity[]): string {
   const f = row.final;
-  if (f && (f.pressure_Pa != null || f.volumetric_flow_m3s != null)) {
+  if (f && isLegacyRow(row)) {
     return (
       String(row.name || row.patch) +
       (f.pressure_Pa != null ? ` · ${f.pressure_Pa.toFixed(1)} Pa` : '') +
@@ -65,11 +71,20 @@ export function RunMonitors({
   if (!shown.length) return null;
   return (
     <ul className="run-monitors" data-run-monitors="1">
-      {shown.map(({ row, line }) => (
-        <li key={row.key || row.patch || row.name} className="mat-assign-hint">
-          {line}
-        </li>
-      ))}
+      {shown.map(({ row, line }) =>
+        isLegacyRow(row) ? (
+          // The v0.2.0 markup (h10 parity): the name and each value its own text node.
+          <li key={row.key || row.patch || row.name} className="mat-assign-hint">
+            {row.name || row.patch}
+            {row.final?.pressure_Pa != null ? ` · ${row.final.pressure_Pa.toFixed(1)} Pa` : ''}
+            {row.final?.volumetric_flow_m3s != null ? ` · ${row.final.volumetric_flow_m3s.toExponential(3)} m³/s` : ''}
+          </li>
+        ) : (
+          <li key={row.key || row.patch || row.name} className="mat-assign-hint">
+            {line}
+          </li>
+        ),
+      )}
     </ul>
   );
 }

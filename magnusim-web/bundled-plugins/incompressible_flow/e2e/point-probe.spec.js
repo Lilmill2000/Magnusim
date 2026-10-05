@@ -136,6 +136,11 @@ test('a Point probe takes typed points and Add probe here from an Inspect pin', 
   await page.reload();
   await ready();
   await openRun(runB);
+  // The run's Monitors folder, open.
+  const rcFolder = page.locator(`#left-tree li[data-w27-run-rcs="${runB}"]`).first();
+  if (!(await rcFolder.evaluate((el) => el.classList.contains('expanded')))) {
+    await rcFolder.locator(':scope > .tree-row .tw').click();
+  }
   await page.locator(`#left-tree [data-w27-aa="${probe.id}"] > .tree-row .tl`).first().click();
   await expect(page.locator('#panel-area-average')).toBeVisible();
   await expect(page.locator('#aa-type-label')).toHaveText('Point probe');
