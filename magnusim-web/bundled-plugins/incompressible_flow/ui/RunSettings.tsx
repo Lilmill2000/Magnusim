@@ -16,6 +16,7 @@ function NumberRow({
   disabled,
   unit,
   placeholder,
+  field,
   onCommit,
 }: {
   label: string;
@@ -24,6 +25,8 @@ function NumberRow({
   disabled: boolean;
   unit?: string;
   placeholder?: string;
+  /** Marks the row (data-run-field) for tests; rows of the v0.2.0 panel carry none. */
+  field?: string;
   onCommit: (v: number | null) => void;
 }) {
   const [text, setText] = useState(value == null ? '' : String(value));
@@ -64,7 +67,7 @@ function NumberRow({
     />
   );
   return (
-    <div className="mat-row">
+    <div className="mat-row" data-run-field={field}>
       <span className="mat-k" title={title}>
         {label}
       </span>
@@ -170,6 +173,7 @@ function TransientFields({
         title="Time the Mean velocity and Mean pressure results start averaging from. 0 averages from the start; a later time leaves out the start-up. Frames saved before it hold no averages."
         value={t.average_from}
         unit="s"
+        field="average_from"
         disabled={locked}
         onCommit={(v) => v != null && save({ average_from: v })}
       />

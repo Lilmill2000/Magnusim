@@ -18,6 +18,8 @@ const UPDATE = process.env.MAGNUSIM_UPDATE_PARITY === '1';
 const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 // Rows the study panel gained after v0.2.0 (Reference values, F4), left out of the comparison.
 const STUDY_ADDED = '[data-study-reference]';
+// Rows the transient run panel gained after v0.2.0 (Average from, F2), left out of the comparison.
+const RUN_ADDED = '[data-run-field="average_from"]';
 
 function stage(t0, msg) {
   console.log(`[h10 +${Math.round((Date.now() - t0) / 1000)}s] ${msg}`);
@@ -252,9 +254,9 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   const transient = await createRun('Parity transient');
   await openRun(transient);
   await expect(runControl.locator('[data-run-transient-hint]')).toContainText('(auto)', { timeout: 60_000 });
-  await capture(page, 'run-draft-transient', runPanel);
+  await capture(page, 'run-draft-transient', runPanel, { skip: RUN_ADDED });
   await runControl.locator('details.mesh-advanced > summary').click();
-  await capture(page, 'run-draft-transient-advanced', runPanel);
+  await capture(page, 'run-draft-transient-advanced', runPanel, { skip: RUN_ADDED });
   const pv = await (
     await request.post('/api/run/transient-preview', { data: { project_id: PROJECT, run_id: transient, simulation_id: SIM } })
   ).json();
@@ -267,7 +269,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await openRun(transient);
   const plot = runControl.locator('[data-residual-plot="1"]');
   await expect(plot).toBeVisible({ timeout: 60_000 });
-  await capture(page, 'run-done-transient', runPanel);
+  await capture(page, 'run-done-transient', runPanel, { skip: RUN_ADDED });
   const box = await plot.boundingBox();
   await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2);
   await capture(page, 'residual-tip-transient', runControl.locator('[data-residual-wrap="1"]'));
@@ -317,7 +319,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
     await capture(page, `run-running-${label}`, runPanel, {
       live: true,
       settle: true,
-      skip: '[data-residual-wrap="1"], .sim-eta',
+      skip: '[data-residual-wrap="1"], .sim-eta, ' + RUN_ADDED,
     });
     await page.goto('/#/');
     if (homeParity) {
