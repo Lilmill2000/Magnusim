@@ -82,9 +82,98 @@ def read_internal_field(path: Path, kind: str):
     return "nonuniform", arr.reshape(n, 3) if comp == "vector" else arr
 
 
+# A patch's value: one for every face of it (``uniform``) or one per face (a list).
+_PATCH_VALUE = re.compile(
+    rb"\bvalue\s+uniform\s+(\([^)]*\)|[^\s;]+)\s*;|nonuniform\s+List<(scalar|vector)>\s*(\d+)\s*\("
+)
+
+
+def read_boundary_values(path: Path, kind: str):
+    """Every value a field file stores on its boundary patches, and whether any
+    patch stores one value per face.
+
+    ``(values, per_face)``: ``values`` is ``(n,)`` for a scalar or ``(n, 3)`` for a
+    vector (a uniform patch value counts once). Ascii and binary files.
+    """
+    raw = path.read_bytes()
+    width = 3 if kind == "vector" else 1
+    empty = np.zeros((0, 3) if width == 3 else (0,), dtype=np.float64)
+    start = raw.find(b"boundaryField")
+    if start < 0:
+        return empty, False
+    head = raw[:start]
+    binary = bool(re.search(rb"format\s+binary", head))
+    dtype = "<f4" if re.search(rb"scalar\s*=\s*32", head) else "<f8"
+    parts: list[np.ndarray] = []
+    per_face = False
+    pos = start
+    while True:
+        m = _PATCH_VALUE.search(raw, pos)
+        if not m:
+            break
+        if m.group(1) is not None:
+            pos = m.end()
+            try:
+                nums = [float(x) for x in m.group(1).strip(b"()").split()]
+            except ValueError:
+                continue
+            if len(nums) == width:
+                parts.append(np.asarray(nums, dtype=np.float64).reshape(1, width))
+            continue
+        w = 3 if m.group(2) == b"vector" else 1
+        n = int(m.group(3))
+        if binary:
+            nbytes = n * w * np.dtype(dtype).itemsize
+            if len(raw) < m.end() + nbytes:
+                raise RuntimeError(f"{path.name} boundary values truncated")
+            arr = np.frombuffer(raw, dtype=dtype, count=n * w, offset=m.end()).astype(np.float64)
+            pos = m.end() + nbytes + 1
+        else:
+            body = raw[m.end() :]
+            stop = body.find(b"\n)") if w == 3 else body.find(b")")
+            if n == 0:
+                stop = body.find(b")")
+            if stop < 0:
+                raise RuntimeError(f"{path.name} boundary list terminator not found")
+            text = body[:stop].translate(None, b"()").split()
+            arr = np.array(text, dtype=np.float64)
+            pos = m.end() + stop + 1
+        if w != width or arr.size != n * w:
+            continue
+        per_face = per_face or n > 0
+        parts.append(arr.reshape(n, width))
+    if not parts:
+        return empty, per_face
+    values = np.vstack(parts)
+    return (values if width == 3 else values[:, 0]), per_face
+
+
+def boundary_only_values(path: Path, kind: str):
+    """The patch values of a field stored on the boundary only (its internal field
+    uniform, some patch with a value per face: y+ or wall shear stress, which a
+    function object writes on the walls and leaves 0 inside); None otherwise."""
+    try:
+        shape, _ = read_internal_field(path, kind)
+        if shape != "uniform":
+            return None
+        values, per_face = read_boundary_values(path, kind)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return values if per_face and values.size else None
+
+
 def parse_foam_scalar_or_vector(path: Path, kind: str):
-    """Stats of an OpenFOAM internalField (ascii or binary); kind in ('vector','scalar')."""
+    """Stats of an OpenFOAM internalField (ascii or binary); kind in ('vector','scalar').
+
+    A field stored on the boundary only (see boundary_only_values) gives the stats
+    of its patch values: that is what the surface shows of it.
+    """
     shape, data = read_internal_field(path, kind)
+    boundary_only = False
+    if shape == "uniform":
+        patch_values = boundary_only_values(path, kind)
+        if patch_values is not None:
+            shape, data, boundary_only = "nonuniform", patch_values, True
     if kind == "vector":
         if shape == "uniform":
             parts = [float(x) for x in data]
@@ -125,6 +214,7 @@ def parse_foam_scalar_or_vector(path: Path, kind: str):
             "sample_head": [float(x) for x in mag[:8]],
             "sample_tail": [float(x) for x in mag[-8:]],
             "source_path": str(path),
+            "boundary_only": boundary_only,
         }
     if shape == "uniform":
         val = float(data)
@@ -164,6 +254,7 @@ def parse_foam_scalar_or_vector(path: Path, kind: str):
         "sample_head": [float(x) for x in arr[:8]],
         "sample_tail": [float(x) for x in arr[-8:]],
         "source_path": str(path),
+        "boundary_only": boundary_only,
     }
 
 
@@ -286,7 +377,8 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
     # scaled exactly once.
     surf = mesh.extract_surface()
     if scale != 1.0:
-        scale_pressure(surf, rho, names=(field,))
+        # A magnitude's vector rides along on the points: both in what the legend shows.
+        scale_pressure(surf, rho, names=tuple(dict.fromkeys((field, foam_name))))
     if field in surf.cell_data and field not in surf.point_data:
         surf = surf.cell_data_to_point_data(pass_cell_data=True)
 
@@ -323,6 +415,10 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
 
     if kind == "vector":
         proof = dict(foam_stats)
+        if scale != 1.0:
+            # A kinematic vector (wall shear stress): its range in what the surface shows.
+            for key in ("umin", "umax", "umean"):
+                proof[key] = float(proof[key]) * scale
         proof.update({"min": proof.get("umin"), "max": proof.get("umax"), "mean": proof.get("umean")})
     else:
         proof = pressure_stats_in_pa(foam_stats, rho) if scale != 1.0 else dict(foam_stats)

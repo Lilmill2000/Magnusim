@@ -26,7 +26,7 @@ import pyvista as pv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import field_scale, kinematic_fields, pressure_meta  # noqa: E402
 from case_volume import load_volume  # noqa: E402
-from export_case_field import read_internal_field  # noqa: E402
+from export_case_field import boundary_only_values, read_internal_field  # noqa: E402
 from result_names import (  # noqa: E402
     FIELD_NAME,
     dataset_shown_fields,
@@ -159,6 +159,9 @@ def uniform_values(case_dir: Path, time: str, names) -> dict[str, float]:
         except (OSError, RuntimeError, ValueError):
             continue
         if shape != "uniform":
+            continue
+        # A field stored on the walls only (y+): the probe reads its wall values.
+        if boundary_only_values(path, kind) is not None:
             continue
         out[name] = float(np.linalg.norm(data)) if kind == "vector" else float(data)
     return out

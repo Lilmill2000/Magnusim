@@ -694,6 +694,8 @@ function clearKeys(obj) {
 
 // The field on screen ('' until results load; the first listed field then).
 let activeField = '';
+// A field the frame on screen did not save (setAnimationTime): the next frame that saved it shows it again.
+let heldFrameField = '';
 let sourcePolyData = null;
 let sourceBounds = null;
 let lutRange = [0, 0.79];
@@ -7610,6 +7612,7 @@ async function loadField(field, opts) {
     return { empty: true, skipped: 'no_case' };
   }
   activeField = field;
+  heldFrameField = (opts && opts.held) || '';
   let entry;
   try {
     entry = await prefetchFieldFrame(field, getTime());
@@ -15122,12 +15125,17 @@ async function setAnimationTime(time, opts) {
     if (idx >= 0) animState.index = idx;
   }
   syncAnimChromeFromState();
-  // The field on screen, or the analysis's first when this run's analysis does not write it.
-  const field = activeField === 'cellVolume' ? activeField : defaultResultField();
+  // The field on screen (or one an earlier frame did not save), or the analysis's
+  // first when this run's analysis does not write it.
+  const field = activeField === 'cellVolume' ? activeField : heldFrameField || defaultResultField();
   const skipHeavy = !!(opts && (opts.playing || opts.skipExtras));
   try { ensureFieldCacheCase(); } catch (_) {}
   const cached = fieldFrameCache.get(fieldFrameKey(field, tstr));
   if (cached && cached.pd) {
+    if (field !== activeField) {
+      activeField = field;
+      heldFrameField = '';
+    }
     applyLoadedField(field, cached, null, { skipCut: !!opts && !!opts.playing });
     if (!(opts && opts.playing)) {
       try { await warmResultVolume(tstr); } catch (e) { console.warn('[CFD] volume warmup', e); }
@@ -15156,6 +15164,19 @@ async function setAnimationTime(time, opts) {
     });
     return { ok: true, time: tstr, fingerprint: fp, meta: window.__CFD_W6__ };
   } catch (err) {
+    // Not every frame saves every field (the 0 folder holds only the starting
+    // fields; time averages start at their own time): that frame shows the
+    // analysis's first field, and the next frame that saved this one shows it again.
+    const first = resultFieldNames()[0];
+    if (field !== 'cellVolume' && first && first !== field) {
+      try {
+        const fp = await loadField(first, { extras: !skipHeavy, held: field });
+        publishW12({ last_time: tstr, fingerprint: fp, not_in_frame: field, prove_ts: Date.now() });
+        return { ok: true, time: tstr, fingerprint: fp, meta: window.__CFD_W6__, not_in_frame: field };
+      } catch (_) {
+        // Neither loads: report the first failure below.
+      }
+    }
     publishW12({ last_time: tstr, error: String(err), empty: true, prove_ts: Date.now() });
     return { ok: false, empty: true, error: String(err), time: tstr };
   }

@@ -62,8 +62,13 @@ def field_scale(case_dir: Path, foam_name: str) -> float:
 
 
 def scale_kinematic(dataset, case_dir: Path) -> None:
-    """Multiply every kinematic field on ``dataset`` by the case's density, in place."""
-    scale_pressure(dataset, case_density(case_dir), names=kinematic_fields(case_dir))
+    """Multiply every kinematic field on ``dataset`` by the case's density, in place.
+
+    A kinematic vector's magnitude (``mag<X>``) already on the dataset is scaled
+    with it (a vector such as the wall shear stress).
+    """
+    names = kinematic_fields(case_dir)
+    scale_pressure(dataset, case_density(case_dir), names=(*names, *("mag" + n for n in names)))
 
 
 def scale_pressure(dataset, rho: float, names) -> None:
