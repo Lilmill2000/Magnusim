@@ -488,7 +488,9 @@ test.describe('Incompressible Flow smoke', () => {
     expect(JSON.parse(read('w27-case.json')).turbulence.model).toBe('kEpsilon');
 
     // Its results colour by what this run wrote, from the analysis's result
-    // fields: k and epsilon, not omega (a k-omega SST field this run has none of).
+    // fields: k and epsilon, not omega (a k-omega SST field this run has none of),
+    // and the fields every run saves (total pressure, y+, wall shear stress,
+    // vorticity, Q).
     const runNode = page.locator(`#left-tree [data-w27-run="${runId}"]`).first();
     const resultsRow = page.locator(`#left-tree [data-w27-run-results="${runId}"] > .tree-row .tl`).first();
     if (!(await resultsRow.isVisible())) await runNode.locator(':scope > .tree-row .tw').first().click();
@@ -498,7 +500,10 @@ test.describe('Incompressible Flow smoke', () => {
     await page.locator('.tb-btn[data-label="Cutting Plane"]').click();
     await expect(page.locator('#cp-coloring')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('#cp-coloring option:not([hidden])')).toHaveText(
-      ['Velocity Magnitude', 'Pressure', 'Turbulent kinetic energy', 'Turbulent dissipation rate', 'Turbulent viscosity'],
+      [
+        'Velocity Magnitude', 'Pressure', 'Total pressure', 'Turbulent kinetic energy', 'Turbulent dissipation rate',
+        'Turbulent viscosity', 'y+', 'Wall shear stress magnitude', 'Vorticity magnitude', 'Q-criterion',
+      ],
       { timeout: 60_000 },
     );
     await page.locator('#cp-coloring').selectOption('epsilon');
