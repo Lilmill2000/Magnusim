@@ -54,10 +54,18 @@ test('each new boundary condition shows its fields, saves them and keeps them af
     return id;
   };
 
+  /** Show the BC hub: the Boundary conditions row opens it, or first closes an open BC panel. */
+  const showHub = async () => {
+    const row = page.locator('#left-tree [data-w19-bcs="1"] > .tree-row .tl').first();
+    await row.click();
+    const shown = await hub.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
+    if (!shown) await row.click();
+    await expect(hub).toBeVisible();
+  };
+
   /** Open a saved BC from the hub. */
   const open = async (id) => {
-    await page.locator('#left-tree [data-w19-bcs="1"] > .tree-row .tl').first().click();
-    await expect(hub).toBeVisible();
+    await showHub();
     await hub.locator(`[data-open-bc="${id}"]`).click();
     await expect(editor).toHaveAttribute('data-bc-id', id);
   };
@@ -149,8 +157,7 @@ test('each new boundary condition shows its fields, saves them and keeps them af
   await expect.poll(async () => (await saved(vent)).value).toBe(3);
 
   // The hub's cards show the new colours.
-  await page.locator('#left-tree [data-w19-bcs="1"] > .tree-row .tl').first().click();
-  await expect(hub).toBeVisible();
+  await showHub();
   const swatch = (id) => hub.locator(`[data-open-bc="${id}"] .hub-swatch`).evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(await swatch(far)).toBe(FREESTREAM_RGB);
   expect(await swatch(mirror)).toBe(SYMMETRY_RGB);
