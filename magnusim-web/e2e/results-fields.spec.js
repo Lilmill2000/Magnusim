@@ -200,16 +200,23 @@ test("results tools list the run's result fields with their units", async ({ pag
   expect(await optionTexts('#pt-coloring')).toEqual([...fieldsA, 'Solid color']);
   const vecColor = page.locator('#result-plane-list select[data-rplane-vec-color]').first();
   expect(await vecColor.locator('option').allTextContents()).toEqual(['Solid color', ...fieldsA]);
-  // The iso value is in the iso field's unit. (The Iso Surface block has no toolbar button
-  // today; it is shown the way the toolbar would show it.)
-  await page.evaluate(() => {
-    document.getElementById('iso-block').hidden = false;
-  });
+  // The iso value is in the iso field's unit (the Iso Surface toolbar button opens it).
+  const isoBtn = page.locator('.tb-btn[data-label="Iso Surface"]');
+  await isoBtn.click();
+  await expect(page.locator('#iso-block')).toBeVisible();
   await expect(page.locator('#iso-value-unit')).toHaveText('m/s');
   await page.locator('#iso-scalar').selectOption('p');
   await expect(page.locator('#iso-value-unit')).toHaveText('Pa');
   await page.locator('#iso-scalar').selectOption('k');
   await expect(page.locator('#iso-value-unit')).toHaveText('m²/s²');
+  // Off again: the parts it made see-through come back, and the planes' block is opened
+  // again (opening a tool folds the other blocks).
+  await isoBtn.click();
+  await expect(isoBtn).not.toHaveClass(/is-active/);
+  await expect.poll(() => page.evaluate(() => window.__CFD_RESULTS_SURFACE_OPACITY__())).toBe(1);
+  if (await page.locator('#cp-block').evaluate((el) => el.classList.contains('is-collapsed'))) {
+    await page.locator('#cp-block .fp-collapse-toggle').first().click();
+  }
   // The inspect card: one row per field, each with its unit.
   const rowsA = await inspectMiddle();
   expect(rowsA.map((r) => [r.field, r.label])).toEqual([

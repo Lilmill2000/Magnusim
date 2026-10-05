@@ -665,10 +665,27 @@ function toolField(name, avoid) {
   return names[0] || (FIELD_NAME_RE.test(want) ? want : '');
 }
 
-/** An iso tool's iso field and colour field (coloured by another field when the case has one). */
+/**
+ * An iso tool's iso field and colour field. It is coloured by the field on screen,
+ * so the one colour scale and legend describe it; its Coloring picker changes that field.
+ */
 function isoToolFields(st) {
   const iso = toolField(st && st.iso_field);
-  return { iso, color: toolField(st && st.color_field, iso) };
+  const shown = defaultResultField();
+  return { iso, color: shown && resultFieldNames().includes(shown) ? shown : toolField(st && st.color_field, iso) };
+}
+
+/** A tool's Coloring pick: colour every result view by that field (as the Cutting Plane Coloring does). */
+function recolorResultsFromTool(value) {
+  const f = fieldKey(value);
+  if (!f || f === fieldKey(activeField) || window.__CFD_FILTERS_MODE__ === 'mesh') return;
+  loadField(f).catch((e) => console.error('[CFD] recolor failed', e));
+}
+
+/** A value for the results tools' readouts (4 significant digits). */
+function toolNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? formatSci(Number(n.toPrecision(4))) : '';
 }
 
 function clearKeys(obj) {
@@ -1142,6 +1159,12 @@ const isoState = {
 };
 let isoMeta = null;
 let isoLoadToken = 0;
+// Until the user types an iso value it is the middle of the iso field's range
+// (a fixed number is outside most fields' ranges and draws nothing).
+let isoValueTyped = false;
+let isoCentredFor = '';
+// What the parts looked like before an iso surface / volume made them see-through.
+let partsBeforeInnerFilter = null;
 
 // Off by default for the same reason as isoState.
 const ivState = {
@@ -4774,6 +4797,7 @@ function mainFieldColoringVisible() {
   if (nPts > 0 && cutState.partsColor && cutState.partsStyle !== 'solid') return true;
   if (typeof anyResultPlaneOn === 'function' && anyResultPlaneOn()) return true;
   if (isoState && isoState.enabled && actorIsVisible(isoActor)) return true;
+  if (ivState && ivState.enabled && actorIsVisible(ivActor)) return true;
   return false;
 }
 
@@ -7767,7 +7791,7 @@ function publishW9(extra) {
     pop_fingerprint: fp,
     n_samples: fp.n_samples,
     n_path_points: n,
-    generate_enabled: n > 0,
+    generate_enabled: n > 1,
     series_empty: !!(fp.empty || fp.n_samples === 0),
     honest_empty: !!(fp.empty || fp.n_samples === 0),
     cutting_plane_still_live: true,
@@ -7821,16 +7845,21 @@ function renderPopChart(meta) {
   const dists = (m && m.distances) || [];
   const vals = (m && m.values) || [];
   const empty = !m || m.empty || !vals.length;
+  syncPopStatus(m);
   if (empty) {
     wrap.hidden = true;
     svg.innerHTML = '';
-    if (metaEl) metaEl.textContent = m && m.reason ? `empty: ${m.reason}` : 'No series';
+    if (metaEl) metaEl.textContent = '';
     return;
   }
   wrap.hidden = false;
   const w = 320;
   const h = 160;
-  const pad = 28;
+  // Room for the value labels on the left and the distance labels below.
+  const left = 46;
+  const right = 10;
+  const top = 22;
+  const bottom = 30;
   const xmin = Math.min(...dists);
   const xmax = Math.max(...dists);
   const ymin = Math.min(...vals);
@@ -7839,19 +7868,43 @@ function renderPopChart(meta) {
   const dy = ymax - ymin || 1;
   const pts = dists
     .map((d, i) => {
-      const x = pad + ((d - xmin) / dx) * (w - 2 * pad);
-      const y = h - pad - ((vals[i] - ymin) / dy) * (h - 2 * pad);
+      const x = left + ((d - xmin) / dx) * (w - left - right);
+      const y = h - bottom - ((vals[i] - ymin) / dy) * (h - top - bottom);
       return `${x.toFixed(2)},${y.toFixed(2)}`;
     })
     .join(' ');
+  const label = (x, y, text, anchor) =>
+    `<text x="${x}" y="${y}" font-size="9" fill="#6b7280" text-anchor="${anchor || 'start'}">${escapeXml(text)}</text>`;
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   svg.innerHTML =
+    `<path d="M${left} ${top}V${h - bottom}H${w - right}" fill="none" stroke="#c4c9d2" stroke-width="1" />` +
     `<polyline fill="none" stroke="#1570ef" stroke-width="2" points="${pts}" />` +
     `<text x="8" y="14" font-size="10" fill="#4b5563">${escapeXml(popChartTitle(m))}</text>` +
-    `<text x="8" y="${h - 8}" font-size="9" fill="#6b7280">distance</text>`;
+    label(left - 4, top + 4, toolNum(ymax), 'end') +
+    label(left - 4, h - bottom, toolNum(ymin), 'end') +
+    label(left, h - bottom + 12, toolNum(xmin)) +
+    label(w - right, h - bottom + 12, toolNum(xmax), 'end') +
+    label((left + w - right) / 2, h - 4, 'Distance along the path (m)', 'middle');
   if (metaEl) {
-    metaEl.textContent = `n_samples=${m.n_samples} checksum=${Number(m.value_checksum).toFixed(6)} field=${m.field_name}`;
+    const unit = fieldInfo(String(m.field_name || m.field || '')).unit;
+    metaEl.textContent = `${m.n_samples} samples, from ${toolNum(ymin)} to ${toolNum(ymax)}${unit ? ' ' + unit : ''}`;
   }
+}
+
+/** The plot's status line: what to do next, or why there is no plot. */
+function syncPopStatus(meta) {
+  const el = document.getElementById('pop-status');
+  if (!el) return;
+  const n = (popState.points || []).length;
+  const m = meta || {};
+  let text = '';
+  if (n < 1) text = 'Type a point as x, y, z in metres and press Add. A path needs at least two points.';
+  else if (n < 2) text = 'Add a second point to make a path.';
+  else if (m.reason === 'miss_mesh') text = 'The path does not pass through the model.';
+  else if (m.reason === 'api_error' || m.reason === 'fetch_error') text = 'The plot could not be made for this result.';
+  else if (m.empty || !(m.values || []).length) text = 'Press Generate plot.';
+  el.textContent = text;
+  el.hidden = !text;
 }
 
 /** The plot's title: the sampled field's label and unit. */
@@ -7893,7 +7946,7 @@ function syncPopChromeFromState() {
       list.appendChild(li);
     });
   }
-  if (gen) gen.disabled = n < 1;
+  if (gen) gen.disabled = n < 2;
   updatePopPathActor();
 }
 
@@ -8088,7 +8141,16 @@ async function loadIsoSurface(overrides) {
     meta = { empty: true, n_cells: 0, reason: 'fetch_error', error: String(e) };
   }
   if (token !== isoLoadToken) return null;
+  const lo = meta ? Number(meta.scalar_min) : NaN;
+  const hi = meta ? Number(meta.scalar_max) : NaN;
+  const centreKey = `${getCaseDir()}|${(meta && meta.iso_field) || ''}`;
+  if (!isoValueTyped && meta && meta.iso_field && centreKey !== isoCentredFor && Number.isFinite(lo) && Number.isFinite(hi)) {
+    isoCentredFor = centreKey;
+    const mid = Number(((lo + hi) / 2).toPrecision(3));
+    if (mid !== Number(isoState.iso_value)) return loadIsoSurface({ iso_value: mid });
+  }
   isoMeta = meta;
+  syncIsoStatus(meta);
   const empty = !!(meta && meta.empty);
   const colorArr = isoColorArrayName(meta);
   isoMapper.setColorByArrayName(colorArr);
@@ -8115,6 +8177,27 @@ async function loadIsoSurface(overrides) {
   console.info('[CFD W10] iso surface', assetUrl, fp);
   try { syncSharedLegend(); } catch (_) {}
   return window.__CFD_W10__;
+}
+
+/** Why the iso surface draws nothing (the field's range at this time), or nothing to say. */
+function syncIsoStatus(meta) {
+  const el = document.getElementById('iso-status');
+  if (!el) return;
+  const m = meta || {};
+  let text = '';
+  if (m.empty) {
+    const lo = Number(m.scalar_min);
+    const hi = Number(m.scalar_max);
+    if (m.iso_field && Number.isFinite(lo) && Number.isFinite(hi)) {
+      const info = fieldInfo(m.iso_field);
+      const unit = info.unit ? ' ' + info.unit : '';
+      text = `No surface at this value. ${info.label} goes from ${toolNum(lo)} to ${toolNum(hi)}${unit} at this time.`;
+    } else {
+      text = 'The surface could not be made for this result.';
+    }
+  }
+  el.textContent = text;
+  el.hidden = !text;
 }
 
 function syncIsoChromeFromState() {
@@ -8171,7 +8254,7 @@ function ivFingerprint(meta, pd) {
     mesh_checksum: m.mesh_checksum || (pd ? meshChecksum(pd) : '00000000'),
     scalar_min: m.scalar_min != null ? m.scalar_min : null,
     scalar_max: m.scalar_max != null ? m.scalar_max : null,
-    vectors_actor: !!(isoState.vectors && isoState.enabled),
+    vectors_actor: !!(ivState.vectors && ivState.enabled),
     vectors_persist_only: false,
     actor_present: !empty && !!ivState.enabled,
     actor_opacity: ivState.opacity,
@@ -8229,6 +8312,39 @@ function syncIvRangeVisual() {
   const b = Math.max(0, Math.min(1, Math.max(low, high)));
   sel.style.left = `${a * 100}%`;
   sel.style.width = `${Math.max(0.5, (b - a) * 100)}%`;
+  syncIvRangeText();
+}
+
+/** The chosen range in the iso field's unit (from the field's range at the shown time). */
+function syncIvRangeText() {
+  const el = document.getElementById('iv-range-val');
+  if (!el) return;
+  const m = ivMeta || {};
+  const smin = Number(m.scalar_min);
+  const smax = Number(m.scalar_max);
+  if (!m.iso_field || m.iso_field !== isoToolFields(ivState).iso || !Number.isFinite(smin) || !Number.isFinite(smax)) {
+    el.textContent = '';
+    return;
+  }
+  const lo = Math.min(Number(ivState.iso_value_low), Number(ivState.iso_value_high));
+  const hi = Math.max(Number(ivState.iso_value_low), Number(ivState.iso_value_high));
+  const unit = fieldInfo(m.iso_field).unit;
+  el.textContent = `From ${toolNum(smin + lo * (smax - smin))} to ${toolNum(smin + hi * (smax - smin))}${unit ? ' ' + unit : ''}`;
+}
+
+/** Why the iso volume draws nothing, or nothing to say. */
+function syncIvStatus(meta) {
+  const el = document.getElementById('iv-status');
+  if (!el) return;
+  const m = meta || {};
+  let text = '';
+  if (m.empty) {
+    text = Number.isFinite(Number(m.scalar_min)) && m.iso_field
+      ? 'No part of the model has values in this range at this time.'
+      : 'The volume could not be made for this result.';
+  }
+  el.textContent = text;
+  el.hidden = !text;
 }
 
 function syncIvChromeFromState() {
@@ -8284,6 +8400,8 @@ async function loadIsoVolume(overrides) {
   }
   if (token !== ivLoadToken) return null;
   ivMeta = meta;
+  syncIvRangeText();
+  syncIvStatus(meta);
   const empty = !!(meta && meta.empty);
   const colorArr = ivColorArrayName(meta);
   ivMapper.setColorByArrayName(colorArr);
@@ -8308,6 +8426,7 @@ async function loadIsoVolume(overrides) {
   const fp = ivFingerprint(ivMeta, pd);
   publishW11({ iv_fingerprint: fp, last_url: assetUrl });
   console.info('[CFD W11] iso volume', assetUrl, fp);
+  try { syncSharedLegend(); } catch (_) {}
   return window.__CFD_W11__;
 }
 
@@ -12809,6 +12928,9 @@ function resetPostFilters() {
   popState.enabled = false;
   isoState.enabled = false;
   ivState.enabled = false;
+  isoValueTyped = false;
+  isoCentredFor = '';
+  partsBeforeInnerFilter = null;
   ptLinePd = null;
   try { stopAnimationPlay(); } catch (_) {}
   try {
@@ -13828,7 +13950,7 @@ document.getElementById('pt-delete')?.addEventListener('click', () => {
 })();
 
 
-const btnPlotOverPath = document.querySelector('.tb-btn[data-label="Plot-over-path"]');
+const btnPlotOverPath = document.querySelector('.tb-btn[data-label="Plot Over Path"]');
 btnPlotOverPath?.addEventListener('click', () => {
   if (popState.enabled) {
     popState.enabled = false;
@@ -13881,7 +14003,7 @@ btnPlotOverPath?.addEventListener('click', () => {
     if (pick) pick.value = '';
     syncPopChromeFromState();
     clearPopSeries();
-    publishW9({ generate_enabled: popState.points.length > 0 });
+    publishW9({ generate_enabled: popState.points.length > 1 });
   });
   clear?.addEventListener('click', () => {
     popState.points = [];
@@ -13900,11 +14022,12 @@ btnPlotOverPath?.addEventListener('click', () => {
     publishW9();
   });
   gen?.addEventListener('click', () => {
-    if ((popState.points || []).length < 1) return;
+    if ((popState.points || []).length < 2) return;
     loadPlotOverPath().catch((e) => console.error('[CFD W9] generate', e));
   });
   en?.addEventListener('change', () => {
     popState.enabled = !!en.checked;
+    btnPlotOverPath?.classList.toggle('is-active', popState.enabled);
     popPathActor.setVisibility(!!popState.enabled && (popState.points || []).length >= 2);
     const wrap = document.getElementById('pop-chart-wrap');
     if (wrap && !popState.enabled) wrap.hidden = true;
@@ -14216,6 +14339,30 @@ window.__CFD_W6__ = window.__CFD_W6__ || {
 
 publishW7({ ready: false });
 
+/**
+ * Iso surfaces and volumes sit inside the body: showing one makes the parts a
+ * translucent solid (as Particle Trace does); hiding the last one puts the parts
+ * back unless they were changed meanwhile or a particle trace still needs them.
+ */
+function seeThroughPartsForIso(on) {
+  if (on) {
+    if (!partsBeforeInnerFilter) {
+      partsBeforeInnerFilter = { opacity: cutState.partsOpacity, style: cutState.partsStyle };
+    }
+    cutState.partsOpacity = 0.3;
+    cutState.partsStyle = 'solid';
+  } else {
+    const before = partsBeforeInnerFilter;
+    if (!before || isoState.enabled || ivState.enabled) return;
+    partsBeforeInnerFilter = null;
+    if (ptState.enabled || cutState.partsOpacity !== 0.3 || cutState.partsStyle !== 'solid') return;
+    cutState.partsOpacity = before.opacity;
+    cutState.partsStyle = before.style;
+  }
+  try { syncChromeFromState(); } catch (_) {}
+  try { applyPartsAppearance(); } catch (_) {}
+}
+
 const btnIsoSurface = document.querySelector('.tb-btn[data-label="Iso Surface"]');
 btnIsoSurface?.addEventListener('click', () => {
   if (isoState.enabled) {
@@ -14225,6 +14372,7 @@ btnIsoSurface?.addEventListener('click', () => {
     btnIsoSurface.classList.remove('is-active');
     try { isoActor.setVisibility(false); } catch (_) {}
     try { syncFieldVectorGlyphs(isoVecGlyph, null, false); } catch (_) {}
+    seeThroughPartsForIso(false);
     try { renderWindow.render(); } catch (_) {}
     try { publishW10({ enabled: false }); } catch (_) {}
     try { scheduleFilterAutosave(); } catch (_) {}
@@ -14235,6 +14383,7 @@ btnIsoSurface?.addEventListener('click', () => {
   if (en) en.checked = true;
   revealPostFilter('iso-block', { collapseOthers: true });
   btnIsoSurface.classList.add('is-active');
+  seeThroughPartsForIso(true);
   loadIsoSurface().catch((e) => console.error('[CFD W10] Iso toolbar', e));
 });
 
@@ -14265,15 +14414,23 @@ btnIsoSurface?.addEventListener('click', () => {
     }
     if (en) isoState.enabled = !!en.checked;
   };
-  [sc, val, col].forEach((el) => {
+  [sc, val].forEach((el) => {
     el?.addEventListener('change', () => {
+      // A typed value is kept; a new iso field starts again from the middle of its range.
+      if (el === val) isoValueTyped = true;
+      else isoValueTyped = false;
       read();
       schedule();
     });
     el?.addEventListener('input', () => {
+      if (el === val) isoValueTyped = true;
       read();
       schedule();
     });
+  });
+  col?.addEventListener('change', () => {
+    isoState.color_field = col.value || '';
+    recolorResultsFromTool(col.value);
   });
   op?.addEventListener('input', () => {
     read();
@@ -14297,6 +14454,8 @@ btnIsoSurface?.addEventListener('click', () => {
   });
   en?.addEventListener('change', () => {
     read();
+    btnIsoSurface?.classList.toggle('is-active', isoState.enabled);
+    seeThroughPartsForIso(isoState.enabled);
     if (!isoState.enabled) {
       isoActor.setVisibility(false);
       syncFieldVectorGlyphs(isoVecGlyph, null, false);
@@ -14321,6 +14480,7 @@ btnIsoVolume?.addEventListener('click', () => {
     btnIsoVolume.classList.remove('is-active');
     try { ivActor.setVisibility(false); } catch (_) {}
     try { syncFieldVectorGlyphs(ivVecGlyph, null, false); } catch (_) {}
+    seeThroughPartsForIso(false);
     try { renderWindow.render(); } catch (_) {}
     try { publishW11({ enabled: false }); } catch (_) {}
     try { scheduleFilterAutosave(); } catch (_) {}
@@ -14331,6 +14491,7 @@ btnIsoVolume?.addEventListener('click', () => {
   if (en) en.checked = true;
   revealPostFilter('iv-block', { collapseOthers: true });
   btnIsoVolume.classList.add('is-active');
+  seeThroughPartsForIso(true);
   loadIsoVolume().catch((e) => console.error('[CFD W11] Iso Volume toolbar', e));
 });
 btnAnimation?.addEventListener('click', () => {
@@ -14407,11 +14568,13 @@ document.getElementById('anim-delete')?.addEventListener('click', () => {
     if (en) ivState.enabled = !!en.checked;
     syncIvRangeVisual();
   };
-  [sc, col].forEach((el) => {
-    el?.addEventListener('change', () => {
-      read();
-      schedule();
-    });
+  sc?.addEventListener('change', () => {
+    read();
+    schedule();
+  });
+  col?.addEventListener('change', () => {
+    ivState.color_field = col.value || '';
+    recolorResultsFromTool(col.value);
   });
   [lo, hi].forEach((el) => {
     el?.addEventListener('input', () => {
@@ -14445,6 +14608,8 @@ document.getElementById('anim-delete')?.addEventListener('click', () => {
   });
   en?.addEventListener('change', () => {
     read();
+    btnIsoVolume?.classList.toggle('is-active', ivState.enabled);
+    seeThroughPartsForIso(ivState.enabled);
     if (!ivState.enabled) {
       ivActor.setVisibility(false);
       syncFieldVectorGlyphs(ivVecGlyph, null, false);
