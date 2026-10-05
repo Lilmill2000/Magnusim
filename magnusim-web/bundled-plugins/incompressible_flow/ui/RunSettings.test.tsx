@@ -128,6 +128,28 @@ describe('run settings', () => {
       ),
     );
   });
+
+  it('transient: Average from is saved in seconds, before the end time', async () => {
+    window.__CFD_RUN_STATE__ = runState({
+      transient: true,
+      analysis_key: 'incompressible_transient',
+      transient_settings: { ...TRANSIENT_DEFAULTS },
+    });
+    renderPanel();
+    const from = screen.getByLabelText('Average from');
+    expect(from).toHaveValue('0');
+    fireEvent.change(from, { target: { value: '2.5' } });
+    fireEvent.blur(from);
+    await waitFor(() =>
+      expect(window.__CFD_RUN_TRANSIENT_SAVE__).toHaveBeenLastCalledWith(expect.objectContaining({ average_from: 2.5, end_time: 5 })),
+    );
+    // Past the 5 s end: one frame interval (0.1 s) before it.
+    fireEvent.change(from, { target: { value: '9' } });
+    fireEvent.blur(from);
+    await waitFor(() =>
+      expect(window.__CFD_RUN_TRANSIENT_SAVE__).toHaveBeenLastCalledWith(expect.objectContaining({ average_from: 4.9 })),
+    );
+  });
 });
 
 describe('normalizeTransient', () => {

@@ -10,7 +10,8 @@
     "time_scheme": "Euler",
     "n_outer_correctors": 1,
     "n_correctors": 2,
-    "n_non_orth_correctors": 0
+    "n_non_orth_correctors": 0,
+    "average_from": 0.0
   },
   "vectors": [
     {"name": "nothing typed", "raw": {}, "base": {}, "expected": {}},
@@ -24,6 +25,11 @@
     {"name": "max time step at most one frame", "raw": {"end_time": 2.0, "write_count": 20, "max_delta_t": 0.5}, "base": {}, "expected": {"end_time": 2.0, "write_count": 20, "max_delta_t": 0.1}},
     {"name": "correctors in range", "raw": {"n_outer_correctors": 99, "n_correctors": 0, "n_non_orth_correctors": 9}, "base": {}, "expected": {"n_outer_correctors": 50, "n_correctors": 1, "n_non_orth_correctors": 5}},
     {"name": "fixed step, second order", "raw": {"time_step_mode": "fixed", "time_scheme": "backward", "max_co": 0.5}, "base": {}, "expected": {"time_step_mode": "fixed", "time_scheme": "backward", "max_co": 0.5}},
-    {"name": "stored settings kept", "raw": {"end_time": 3.0}, "base": {"write_count": 30, "max_co": 2.0, "n_correctors": 3}, "expected": {"end_time": 3.0, "write_count": 30, "max_co": 2.0, "n_correctors": 3}}
+    {"name": "stored settings kept", "raw": {"end_time": 3.0}, "base": {"write_count": 30, "max_co": 2.0, "n_correctors": 3}, "expected": {"end_time": 3.0, "write_count": 30, "max_co": 2.0, "n_correctors": 3}},
+    {"name": "averaging start kept", "raw": {"average_from": 1.5}, "base": {}, "expected": {"average_from": 1.5}},
+    {"name": "averaging never before the start", "raw": {"average_from": -2}, "base": {}, "expected": {"average_from": 0.0}},
+    {"name": "averaging past the end starts one frame before it", "raw": {"end_time": 2.0, "write_count": 20, "average_from": 5}, "base": {}, "expected": {"end_time": 2.0, "write_count": 20, "average_from": 1.9}},
+    {"name": "blank averaging start keeps the stored one", "raw": {"average_from": ""}, "base": {"average_from": 1.0}, "expected": {"average_from": 1.0}},
+    {"name": "shorter run moves the stored averaging start", "raw": {"end_time": 1.0}, "base": {"average_from": 3.0}, "expected": {"end_time": 1.0, "average_from": 0.98}}
   ]
 }

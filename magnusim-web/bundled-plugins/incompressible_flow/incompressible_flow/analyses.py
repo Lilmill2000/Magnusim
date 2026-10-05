@@ -289,6 +289,19 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             advanced=True,
             description="Extra pressure corrections for skewed or non-orthogonal cells.",
         ),
+        SchemaField(
+            "average_from",
+            "Average from",
+            "float",
+            default=float(d["average_from"]),
+            min=0.0,
+            unit="s",
+            group="control",
+            description=(
+                "Time the mean velocity and mean pressure results start averaging from. "
+                "0 averages from the start; a later time leaves out the start-up."
+            ),
+        ),
     )
 
 

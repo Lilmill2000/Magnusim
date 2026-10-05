@@ -668,6 +668,17 @@
             },
             "title": "Non-orthogonal correctors",
             "description": "Extra pressure corrections for skewed or non-orthogonal cells."
+          },
+          "average_from": {
+            "type": "number",
+            "default": 0.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "unit": "s",
+              "group": "control"
+            },
+            "title": "Average from",
+            "description": "Time the mean velocity and mean pressure results start averaging from. 0 averages from the start; a later time leaves out the start-up."
           }
         },
         "additionalProperties": false
@@ -1064,7 +1075,8 @@
         "time_scheme": "Euler",
         "n_outer_correctors": 1,
         "n_correctors": 2,
-        "n_non_orth_correctors": 0
+        "n_non_orth_correctors": 0,
+        "average_from": 0.0
       },
       "bc_types": [
         "velocity_inlet_fixed",

@@ -1136,6 +1136,7 @@ RAS
             "n_outer_correctors": t.n_outer_correctors,
             "n_correctors": t.n_correctors,
             "n_non_orthogonal_correctors": t.n_non_orthogonal_correctors,
+            "average_from": t.average_from,
         }
     (out / "w27-case.json").write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
 

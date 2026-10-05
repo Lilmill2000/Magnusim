@@ -39,6 +39,8 @@ TRANSIENT_DEFAULTS: dict[str, Any] = {
     "n_outer_correctors": 1,
     "n_correctors": 2,
     "n_non_orth_correctors": 0,
+    # Time averages (UMean, pMean) start here, in seconds: 0 = from the start.
+    "average_from": 0.0,
 }
 
 
@@ -104,6 +106,8 @@ class TransientControl:
     time_step_mode: TimeStepMode = "adjustable"
     source: Mapping[str, str] | None = None
     estimate: Mapping[str, Any] | None = None
+    # Time averages (fieldAverage) start here, in seconds (0 = from the start).
+    average_from: float = 0.0
 
     @classmethod
     def from_web(cls, d: dict | None, ctx: dict | None = None) -> TransientControl:
@@ -159,7 +163,28 @@ def normalize_transient(partial: dict | None, base: dict | None = None) -> dict[
     interval = float(out["end_time"]) / frames if _num(out.get("end_time"), 0.0) > 0 else 0.0
     if isinstance(mdt, (int, float)) and interval > 0 and mdt > interval:
         out["max_delta_t"] = interval
+    # A blank or unreadable value keeps the stored one, as the Run panel does.
+    avg = _num(b.get("average_from"), 0.0)
+    raw_avg = p.get("average_from")
+    if raw_avg is not None and str(raw_avg).strip() != "":
+        avg = _num(raw_avg, avg)
+    out["average_from"] = clamp_average_from(avg, float(out["end_time"]), interval)
     return out
+
+
+def clamp_average_from(value: Any, end_time: float, interval: float) -> float:
+    """When time averaging starts (s): 0 or more and before the end time.
+
+    Not a number = 0 (from the start). At or past the end time it starts one
+    frame interval before the end, so the last frame still holds an average
+    (ui/transient.ts clamps the same way).
+    """
+    v = _num(value, 0.0)
+    if v <= 0:
+        return 0.0
+    if end_time > 0 and v >= end_time:
+        return max(0.0, end_time - interval)
+    return v
 
 
 def estimate_delta_t(
@@ -286,6 +311,7 @@ def resolve_transient_control(
         time_step_mode=mode,
         source=source,
         estimate=estimate,
+        average_from=float(t["average_from"]),
     )
 
 

@@ -17,6 +17,8 @@ export interface TransientSettings {
   n_outer_correctors: number;
   n_correctors: number;
   n_non_orth_correctors: number;
+  /** When the time averages (mean velocity, mean pressure) start, in seconds; 0 = from the start. */
+  average_from: number;
   [key: string]: unknown;
 }
 
@@ -24,6 +26,18 @@ export function frameInterval(t: Partial<TransientSettings> | null | undefined):
   const frames = Math.max(1, Math.round(Number(t && t.write_count) || 1));
   const end = Number(t && t.end_time);
   return end > 0 ? end / frames : 0;
+}
+
+/**
+ * When time averaging starts: 0 or more and before the end time. Not a number
+ * = 0; at or past the end it starts one frame interval before the end, so the
+ * last frame still holds an average (incompressible_flow.transient.clamp_average_from).
+ */
+export function clampAverageFrom(value: unknown, endTime: number, interval: number): number {
+  const v = Number(value);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  if (endTime > 0 && v >= endTime) return Math.max(0, endTime - interval);
+  return v;
 }
 
 /**
@@ -56,6 +70,7 @@ export function normalizeTransient(
     n_outer_correctors: num(src.n_outer_correctors, b.n_outer_correctors, { int: true }) as number,
     n_correctors: num(src.n_correctors, b.n_correctors, { int: true }) as number,
     n_non_orth_correctors: num(src.n_non_orth_correctors, b.n_non_orth_correctors, { int: true }) as number,
+    average_from: num(src.average_from, b.average_from) as number,
   };
   if (!(out.end_time > 0)) out.end_time = Number(b.end_time) > 0 ? Number(b.end_time) : Number(defaults.end_time);
   if (!(out.write_count >= 1)) out.write_count = Number(defaults.write_count);
@@ -68,6 +83,7 @@ export function normalizeTransient(
   out.n_outer_correctors = Math.min(Math.max(out.n_outer_correctors || 1, 1), 50);
   out.n_correctors = Math.min(Math.max(out.n_correctors || 1, 1), 10);
   out.n_non_orth_correctors = Math.min(Math.max(out.n_non_orth_correctors || 0, 0), 5);
+  out.average_from = clampAverageFrom(out.average_from, out.end_time, interval);
   return out;
 }
 

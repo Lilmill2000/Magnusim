@@ -165,6 +165,14 @@ function TransientFields({
         disabled={locked}
         onCommit={(v) => v != null && save({ write_count: Math.round(v) })}
       />
+      <NumberRow
+        label="Average from"
+        title="Time the Mean velocity and Mean pressure results start averaging from. 0 averages from the start; a later time leaves out the start-up. Frames saved before it hold no averages."
+        value={t.average_from}
+        unit="s"
+        disabled={locked}
+        onCommit={(v) => v != null && save({ average_from: v })}
+      />
       <p className="mat-assign-hint sim-tr-hint" data-run-transient-hint="1">
         {hint.text}
         {hint.warn ? <span className="sim-tr-warn"> {hint.warn}</span> : null}
@@ -266,7 +274,11 @@ function TransientFields({
             className="mat-clear-link sim-tr-reset"
             onClick={() =>
               void saveTransient({
-                ...normalizeTransient({ ...defaults, end_time: t.end_time, write_count: t.write_count }, t, defaults),
+                ...normalizeTransient(
+                  { ...defaults, end_time: t.end_time, write_count: t.write_count, average_from: t.average_from },
+                  t,
+                  defaults,
+                ),
               })
             }
           >
