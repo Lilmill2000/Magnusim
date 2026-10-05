@@ -489,6 +489,7 @@ test('the plugin seam re-exports what plugin suites use', async () => {
     'killFoamRelays',
     'removeTestWslRoot',
     'acquireWslLock',
+    'settleE2eToolchain',
   ]) {
     assert.ok(name in seam, name);
   }
@@ -523,5 +524,17 @@ test('a plugin suite seeds its own projects after the core\'s', async () => {
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("every plugin suite on the core's Playwright settles WSL with OpenFOAM, so the full tier runs its WSL gates", () => {
+  // A config that neither uses appSuiteConfig nor calls settleE2eToolchain reads
+  // MAGNUSIM_E2E_WSL unset in the full tier and skips its WSL gates without a word.
+  const suites = discoverPluginSuites(WEB).filter((s) => s.run === 'playwright');
+  assert.ok(suites.length >= 2, JSON.stringify(suites));
+  for (const s of suites) {
+    const text = readFileSync(join(WEB, s.config), 'utf8');
+    assert.ok(/appSuiteConfig\(|settleE2eToolchain\(\)/.test(text), `${s.config} does not settle the WSL toolchain`);
   }
 });

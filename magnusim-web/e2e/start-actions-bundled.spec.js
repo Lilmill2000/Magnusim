@@ -140,11 +140,11 @@ async function openProject(page, pid, { reload = false } = {}) {
   const tree = page.waitForResponse((r) => {
     const u = new URL(r.url());
     return u.pathname === '/api/project/tree' && u.searchParams.get('project_id') === pid && r.ok();
-  }, { timeout: 60_000 });
+  }, { timeout: 60_000 }).then((r) => r.json()); // read at once: a later reload drops the body
   if (reload) await page.reload();
   else await load(page, `${host.base}/#/p/${pid}`);
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id && window.__CFD_PLUGINS_READY__ === true, pid, { timeout: 60_000 });
-  const doc = await (await tree).json();
+  const doc = await tree;
   const n = sentCounts((doc.plugin_study_kinds || []).map((k) => k.workspace && k.start_action));
   await expect(page.locator('#btn-add-geometry')).toBeVisible({ timeout: 60_000 });
   await expect(headerButtons(page)).toHaveCount(n.header, { timeout: 30_000 });
@@ -153,10 +153,12 @@ async function openProject(page, pid, { reload = false } = {}) {
 
 // Home, loaded fresh (or reloaded), with its cards and drawn from the plugins it was sent.
 async function goHome(page, reload = false) {
-  const plugins = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/plugins' && r.ok(), { timeout: 60_000 });
+  const plugins = page
+    .waitForResponse((r) => new URL(r.url()).pathname === '/api/plugins' && r.ok(), { timeout: 60_000 })
+    .then((r) => r.json()); // read at once: a later reload drops the body
   if (reload) await page.reload();
   else await load(page, `${host.base}/#/`);
-  const rows = (await (await plugins).json()).plugins || [];
+  const rows = (await plugins).plugins || [];
   await expect(page.locator('#home-grid [data-project-id]').first()).toBeVisible({ timeout: 60_000 });
   const n = sentCounts(rows.filter((r) => r.status === 'enabled').flatMap((r) => r.start_actions || []));
   await expect(homeButtons(page)).toHaveCount(n.home, { timeout: 30_000 });

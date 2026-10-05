@@ -9,9 +9,15 @@
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from '@playwright/test';
+import { settleE2eToolchain } from '../../../e2e/support/plugin-suite.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = resolve(HERE, '..', '..', '..');
+
+// WSL with OpenFOAM settled once, as every app suite does (e2e/toolchain.js): the full tier
+// then runs gate:h17-openfoam-2d where WSL is here, instead of skipping it. The gate takes
+// the PC's WSL test lock itself.
+settleE2eToolchain();
 
 export default defineConfig({
   testDir: HERE,
