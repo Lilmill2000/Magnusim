@@ -535,14 +535,41 @@
               <span class="mat-panel-title" id="aa-panel-title">Area average 1</span>
             </div>
             <div class="mat-panel-body" id="aa-form" data-w22-aa-form="1">
-              <div class="mat-row"><span class="mat-k">Type</span><span class="mat-v">Area average</span></div>
+              <div class="mat-row"><span class="mat-k">Type</span><span class="mat-v" id="aa-type-label">Area average</span></div>
               <div class="mat-row">
                 <span class="mat-k">Write control</span>
                 <select id="aa-write-control" class="bc-select" aria-label="Write control">
                   <option value="Time step" selected>Time step</option>
                 </select>
               </div>
-              <div class="mat-assign-block">
+              <!-- The editor of the monitor type's target: faces (patch), boundaries or points. -->
+              <div class="mat-assign-block" id="aa-boundary-block" data-monitor-editor="boundary" hidden>
+                <div class="mat-assign-head">
+                  <span class="mat-k"><span id="aa-boundary-word">Boundaries</span> (<span id="aa-boundary-count">0</span>)</span>
+                </div>
+                <ul class="mat-assign-list aa-boundary-list" id="aa-boundary-list" aria-label="Boundaries"></ul>
+                <div class="mat-assign-hint" id="aa-boundary-hint">Tick the boundaries it measures. Changes save automatically.</div>
+              </div>
+              <div class="mat-assign-block" id="aa-point-block" data-monitor-editor="point" hidden>
+                <div class="mat-assign-head">
+                  <span class="mat-k">Points (<span id="aa-point-count">0</span>)</span>
+                  <button type="button" class="mat-clear-link" id="aa-clear-points">Clear list</button>
+                </div>
+                <ul class="mat-assign-list" id="aa-point-list" aria-label="Probe points"></ul>
+                <div class="aa-point-add" id="aa-point-add-row">
+                  <input type="text" inputmode="decimal" class="bc-input aa-point-input" id="aa-point-x" aria-label="Point X" placeholder="X" />
+                  <input type="text" inputmode="decimal" class="bc-input aa-point-input" id="aa-point-y" aria-label="Point Y" placeholder="Y" />
+                  <input type="text" inputmode="decimal" class="bc-input aa-point-input" id="aa-point-z" aria-label="Point Z" placeholder="Z" />
+                  <span class="bc-unit-label" id="aa-point-unit">mm</span>
+                  <button type="button" class="js-btn" id="aa-point-add">Add</button>
+                </div>
+                <div class="mat-assign-hint" id="aa-point-hint">Type a point in the fluid, or use Add probe here on an Inspect point pin. Changes save automatically.</div>
+              </div>
+              <p class="mat-assign-hint aa-study-note" id="aa-study-note" hidden>
+                <span id="aa-study-note-text"></span>
+                <button type="button" class="mat-clear-link" id="aa-study-edit">Edit</button>
+              </p>
+              <div class="mat-assign-block" id="aa-face-block" data-monitor-editor="patch">
                 <div class="mat-assign-head">
                   <span class="mat-k">Assigned faces (<span id="aa-assign-count">0</span>)</span>
                   <button type="button" class="mat-clear-link" id="aa-clear-assign">Clear list</button>

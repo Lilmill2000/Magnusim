@@ -68,6 +68,14 @@ export function familyOf(record: BcRecordLike): BcFamilyRow | undefined {
   return familyForType(record.bc_type || record.type);
 }
 
+/**
+ * What a saved BC is ('inlet', 'outlet', 'wall', ...): the `semantic` of its
+ * family's default BC type; '' for a record no plugin knows.
+ */
+export function familyKeyOf(record: BcRecordLike): string {
+  return String(familyOf(record)?.key || '');
+}
+
 /** The bc_type a record is saved under: its family's record_type ("Pressure outlet" is "Pressure"), else the text as given. */
 export function canonicalBcType(raw: unknown): string {
   const family = familyForType(raw);

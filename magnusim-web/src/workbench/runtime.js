@@ -42,7 +42,7 @@ import { ColorMode, ScalarMode } from '@kitware/vtk.js/Rendering/Core/Mapper/Con
 import { initHome, showHome, showWorkbench, goHomeFromWorkbench, prepareCreateModal, submitProjectModal, activateHashProject, parseHomeRoute } from '../home/controller';
 import { prefersCollapseCompletedSections } from '../prefs';
 import { openSetupWizard } from '../wizard/controller';
-import { convertQuantity, preferredUnit, unitIsImperial } from '../units/convert';
+import { convertQuantity, fieldUnit, fromSi, preferredUnit, toSi, unitIsImperial } from '../units/convert';
 import { isIsland, mountIsland, unmountIsland } from '../islands';
 import { useProjectStore } from '../store/project';
 import { workspaceHash } from '../workspace/route';
@@ -71,6 +71,9 @@ import {
   plotQuantities,
   quantityByKey,
   resolveMonitorType,
+  rowDetails as monRowDetails,
+  rowNote as monRowNote,
+  rowQuantities as monRowQuantities,
   shownValue,
   summaryOf,
   summaryText,
@@ -84,9 +87,20 @@ import {
   familyForType as bcFamilyForType,
   isUnitOf,
   newBcRecord,
+  familyKeyOf as bcFamilyKeyOf,
   typeChangeFields,
   valueQuantity as bcValueQuantity,
 } from '../bcCatalog';
+import {
+  DEFAULT_WALLS_TOKEN,
+  boundaryChoices,
+  boundaryLacksPatch,
+  meshPatchNames,
+  newMonitorRecord,
+  placedText,
+  savedPoint,
+  targetOf as monitorTargetOf,
+} from '../monitorTargets';
 import {
   defaultFluidName,
   modelFor as materialModelFor,
@@ -16282,7 +16296,22 @@ function inspectPinCardInner(pt, idx, many) {
     rows.push('<div class="inspect-pin-miss">No field data here</div>');
   }
   rows.push('<div class="inspect-pin-xyz">' + xyz + '</div>');
+  if (inspectProbeOffered()) {
+    rows.push(
+      '<button type="button" class="mat-clear-link inspect-pin-probe" data-inspect-probe="' + idx + '">Add probe here</button>'
+    );
+  }
   return rows.join('');
+}
+
+/** A point monitor type the open study's runs may add (the Inspect pin offers "Add probe here"). */
+function inspectProbeOffered() {
+  try {
+    const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
+    return registryMonitorTypes(rec).some((t) => monitorTargetOf(t) === 'point');
+  } catch (_) {
+    return false;
+  }
 }
 
 /** The fields an inspect card shows: the listed ones, and T read under an older array name. */
@@ -16725,6 +16754,8 @@ function pickInspectFromEvent(e, additive) {
     }, true);
     host.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      // The pin's own button is a click, not a drag.
+      if (e.target.closest && e.target.closest('[data-inspect-probe]')) return;
       const pin = e.target.closest && e.target.closest('.inspect-pin');
       if (pin) {
         const idx = Number(pin.getAttribute('data-idx'));
@@ -19153,7 +19184,7 @@ function isAssigningRefFace() {
 }
 
 function isAssigningAaFace() {
-  return treeUi.openPanel === 'aa';
+  return treeUi.openPanel === 'aa' && openRcTarget() === 'patch';
 }
 
 function isAssigningFace() {
@@ -29993,11 +30024,238 @@ function showAaPanel() {
   if (clearBtn) clearBtn.hidden = !!resultCatalog.read_only;
   if (delBtn) delBtn.hidden = !!resultCatalog.read_only;
   syncAaAssignList();
+  syncMonitorEditor();
   publishW22({ panel_open: true });
 }
 
+/** The monitor type of the result control the monitor panel shows (null for one no plugin knows). */
+function openRcType() {
+  try {
+    const runId = resultCatalog.editing_run_id || runCatalog.selected_run_id;
+    const rec = runId && typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
+    return resolveMonitorType(resultCatalog.area_average_1, registryMonitorTypes(rec));
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Where the open monitor is placed: 'patch' (faces in the viewport), 'boundary' or 'point'. */
+function openRcTarget() {
+  const type = openRcType();
+  return type ? monitorTargetOf(type) : 'patch';
+}
+
+/** The boundaries a monitor of this type may be placed on (the study's BCs of its kinds, the walls no BC claims). */
+function monitorBoundaryChoices(type) {
+  return boundaryChoices(bcList(), type && type.boundary_kinds, (bc) => bcFamilyKeyOf(bc));
+}
+
+/** The patch names of a run's mesh, when its record lists them (else null: not known). */
+function runMeshPatchNames(rec) {
+  const id = rec && rec.mesh_id;
+  if (!id || typeof meshList !== 'function') return null;
+  const mesh = meshList().find((m) => m && String(m.id) === String(id));
+  return meshPatchNames(mesh);
+}
+
+function monitorLengthUnit() {
+  return fieldUnit('length', prefersImperialUnits() ? 'imperial' : 'metric');
+}
+
+function fmtMonitorLength(m) {
+  return String(Number(fromSi('length', Number(m), monitorLengthUnit()).toPrecision(6)));
+}
+
+/** The Type row, the target's editor (faces, boundaries or points) and the type's study note. */
+function syncMonitorEditor() {
+  const rc = resultCatalog.area_average_1;
+  const type = openRcType();
+  const target = type ? monitorTargetOf(type) : 'patch';
+  const typeLabel = document.getElementById('aa-type-label');
+  if (typeLabel) typeLabel.textContent = (type && type.label) || 'Area average';
+  const show = (id, on) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !on;
+  };
+  show('aa-face-block', target === 'patch');
+  show('aa-boundary-block', target === 'boundary');
+  show('aa-point-block', target === 'point');
+  const noteText = String((type && type.study_note) || '');
+  show('aa-study-note', !!noteText);
+  const noteEl = document.getElementById('aa-study-note-text');
+  if (noteEl) noteEl.textContent = noteText;
+  if (target === 'boundary') syncBoundaryEditor(rc, type);
+  if (target === 'point') syncPointEditor(rc);
+}
+
+function syncBoundaryEditor(rc, type) {
+  const list = document.getElementById('aa-boundary-list');
+  const count = document.getElementById('aa-boundary-count');
+  const word = document.getElementById('aa-boundary-word');
+  const kinds = (type && type.boundary_kinds) || [];
+  if (word) word.textContent = kinds.length === 1 && kinds[0] === 'wall' ? 'Walls' : 'Boundaries';
+  const picked = ((rc && rc.boundaries) || []).map(String);
+  if (count) count.textContent = String(picked.length);
+  if (!list) return;
+  const choices = monitorBoundaryChoices(type);
+  // A saved boundary whose BC was deleted stays listed, so it can be unticked.
+  for (const token of picked) {
+    if (!choices.some((c) => c.token === token)) {
+      choices.push({ token, label: 'A deleted boundary condition', bcName: '', gone: true });
+    }
+  }
+  const rec = findRunRecord(resultCatalog.editing_run_id || runCatalog.selected_run_id);
+  const patches = runMeshPatchNames(rec);
+  const locked = !!resultCatalog.read_only;
+  list.innerHTML = choices.length
+    ? choices
+        .map((c) => {
+          const on = picked.includes(c.token);
+          let note = '';
+          if (on && c.gone) note = 'It has no faces any more: untick it.';
+          else if (on && boundaryLacksPatch(c, patches)) {
+            note =
+              c.token === DEFAULT_WALLS_TOKEN
+                ? "This run's mesh has no walls without a boundary condition."
+                : "Re-mesh to give '" + c.label + "' its own boundary.";
+          }
+          return (
+            '<li class="bc-assign-item aa-boundary-item" data-aa-boundary-item="' +
+            escapeHtml(c.token) +
+            '"><label class="aa-boundary-label"><input type="checkbox" data-aa-boundary="' +
+            escapeHtml(c.token) +
+            '"' +
+            (on ? ' checked' : '') +
+            (locked ? ' disabled' : '') +
+            ' /> <span>' +
+            escapeHtml(c.label) +
+            '</span></label>' +
+            (note ? '<div class="mat-assign-hint aa-boundary-note" data-aa-boundary-note="1">' + escapeHtml(note) + '</div>' : '') +
+            '</li>'
+          );
+        })
+        .join('')
+    : '<li class="hub-empty">The study has no boundaries this monitor can measure yet.</li>';
+}
+
+function syncPointEditor(rc) {
+  const list = document.getElementById('aa-point-list');
+  const count = document.getElementById('aa-point-count');
+  const unitEl = document.getElementById('aa-point-unit');
+  const unit = monitorLengthUnit();
+  const pts = ((rc && rc.points) || []).map(savedPoint).filter(Boolean);
+  const locked = !!resultCatalog.read_only;
+  if (count) count.textContent = String(pts.length);
+  if (unitEl) unitEl.textContent = unit;
+  const addRow = document.getElementById('aa-point-add-row');
+  if (addRow) addRow.hidden = locked;
+  const clear = document.getElementById('aa-clear-points');
+  if (clear) clear.hidden = locked || !pts.length;
+  if (!list) return;
+  list.innerHTML = pts.length
+    ? pts
+        .map(
+          (p, i) =>
+            '<li class="bc-assign-item" data-aa-point="' +
+            i +
+            '"><span class="aa-point-text">' +
+            escapeHtml(p.map(fmtMonitorLength).join(', ') + ' ' + unit) +
+            '</span>' +
+            (locked
+              ? ''
+              : '<button type="button" class="bc-assign-x" data-aa-point-remove="' +
+                i +
+                '" aria-label="Remove point ' +
+                (i + 1) +
+                '">×</button>') +
+            '</li>'
+        )
+        .join('')
+    : '<li class="hub-empty">No points yet.</li>';
+}
+
+/** Merge fields into the open monitor's result control and save the run (boundaries, points). */
+async function saveMonitorFields(fields) {
+  if (resultCatalog.read_only) return null;
+  const runId = resultCatalog.editing_run_id || runCatalog.selected_run_id;
+  const rcId = resultCatalog.editing_rc_id || (resultCatalog.area_average_1 && resultCatalog.area_average_1.id);
+  const rec = runId ? findRunRecord(runId) : null;
+  if (!rec || !rcId) return null;
+  const rcs = (rec.result_controls || []).map((r) => ({ ...r }));
+  const idx = rcs.findIndex((r) => String(r.id) === String(rcId));
+  if (idx < 0) return null;
+  rcs[idx] = { ...rcs[idx], ...fields };
+  rec.result_controls = rcs;
+  resultCatalog.area_average_1 = rcs[idx];
+  syncMonitorEditor();
+  try { syncResultsHub(); } catch (_) {}
+  try { refreshSetupTree(); } catch (_) {}
+  const j = await persistRunSettings({ run_id: runId, result_controls: rcs });
+  if (!j || j.ok === false) {
+    window.dispatchEvent(
+      new CustomEvent('cfd:toast', { detail: { message: (j && j.error) || 'The monitor was not saved.', kind: 'error' } })
+    );
+  }
+  publishW22({ saved: true });
+  return j;
+}
+
+/** "Add probe here": the point goes to the open point monitor, else to a new one on a run that has not started. */
+async function addProbeAtPoint(point) {
+  const p = savedPoint(point);
+  if (!p) return null;
+  const toast = (message, kind) => window.dispatchEvent(new CustomEvent('cfd:toast', { detail: { message, kind: kind || 'info' } }));
+  if (treeUi.openPanel === 'aa' && !resultCatalog.read_only && openRcTarget() === 'point') {
+    const rc = resultCatalog.area_average_1;
+    const pts = ((rc && rc.points) || []).map(savedPoint).filter(Boolean);
+    pts.push(p);
+    const j = await saveMonitorFields({ points: pts });
+    if (j && j.ok !== false) toast('Point added to ' + ((rc && rc.name) || 'the probe') + '.', 'success');
+    return j;
+  }
+  const runs = typeof studyRunList === 'function' ? studyRunList() : [];
+  const selected = selectedRunRecord();
+  const editable = (r) => r && !runIsLocked(r) && r.status !== 'failed' && r.status !== 'stopped';
+  const rec = editable(selected) ? selected : runs.slice().reverse().find(editable) || null;
+  if (!rec) {
+    toast('Probes are added to a run that has not started. Create a run first.', 'error');
+    return null;
+  }
+  const typeRow = registryMonitorTypes(rec).find((t) => monitorTargetOf(t) === 'point');
+  if (!typeRow) {
+    toast("This study's analysis has no point probes.", 'error');
+    return null;
+  }
+  const rcs = (rec.result_controls || []).map((r) => ({ ...r }));
+  const rcId = stampRcId();
+  const nextRc = { ...newMonitorRecord(typeRow, rcId, nextAaName(rcs, typeRow.label)), points: [p] };
+  rcs.push(nextRc);
+  rec.result_controls = rcs;
+  const j = await persistRunSettings({ run_id: rec.id, result_controls: rcs });
+  if (!j || j.ok === false) {
+    toast((j && j.error) || 'The probe was not saved.', 'error');
+    return j;
+  }
+  expandRunFolders(rec.id, 'rcs');
+  try { refreshSetupTree(); } catch (_) {}
+  try { syncResultsHub(); } catch (_) {}
+  toast(nextRc.name + ' added to ' + (rec.name || 'the run') + '.', 'success');
+  return j;
+}
+
 /** Group headings of the Monitors modal, by what a monitor type is placed on. */
-const RC_TARGET_GROUPS = { patch: 'SURFACE DATA', point: 'POINT DATA', line: 'LINE DATA', volume: 'VOLUME DATA' };
+const RC_TARGET_GROUPS = {
+  patch: 'SURFACE DATA',
+  boundary: 'BOUNDARY DATA',
+  point: 'POINT DATA',
+  line: 'LINE DATA',
+  volume: 'VOLUME DATA',
+};
+const RC_TARGET_HINTS = {
+  patch: 'Add it here, then pick faces in the viewport.',
+  boundary: 'Add it here, then tick what it measures in its panel.',
+  point: 'Add it here, then type its points or use Add probe here on an Inspect point pin.',
+};
 let rcTypeChoice = '';
 
 /** The Monitors modal: the monitor types a user may add to the run, and the chosen one's description. */
@@ -30033,7 +30291,7 @@ function fillRcTypeList(runId) {
   }
   if (title) title.textContent = chosen ? chosen.label || chosen.key : '';
   if (hint) {
-    const pick = chosen && chosen.target === 'patch' ? 'Add it here, then pick faces in the viewport.' : 'Add it here.';
+    const pick = (chosen && RC_TARGET_HINTS[chosen.target || 'patch']) || 'Add it here.';
     hint.textContent = chosen ? [chosen.description, pick].filter(Boolean).join(' ') : '';
   }
   if (apply) apply.disabled = !chosen;
@@ -30060,16 +30318,17 @@ function syncResultsHub() {
   const rec = typeof selectedRunRecord === 'function' ? selectedRunRecord() : null;
   const rcs = (rec && rec.result_controls) || [];
   const locked = !rec || (typeof runIsLocked === 'function' && runIsLocked(rec));
+  const types = registryMonitorTypes(rec);
   const html = rcs.length
     ? rcs
         .map((rc) => {
-          const n = Array.isArray(rc.faces) ? rc.faces.length : 0;
+          const placed = placedText(rc, resolveMonitorType(rc, types));
           return (
             '<li><button type="button" class="hub-item" data-open-run-rc="' +
             escapeHtml(String(rc.id || rc.name)) +
             '">' +
             escapeHtml(rc.name || rc.kind || 'Result') +
-            (n ? ' · ' + n + (n === 1 ? ' face' : ' faces') : '') +
+            (placed ? ' · ' + placed : '') +
             '</button></li>'
           );
         })
@@ -30307,6 +30566,76 @@ function toggleAssignAaFace(face) {
       .catch((e) => console.error('[CFD W22] delete', e));
   });
 
+  // A monitor on boundaries: tick or untick one.
+  document.getElementById('aa-boundary-list')?.addEventListener('change', (e) => {
+    const box = e.target.closest && e.target.closest('[data-aa-boundary]');
+    if (!box || resultCatalog.read_only) return;
+    const token = box.getAttribute('data-aa-boundary');
+    const rc = resultCatalog.area_average_1;
+    const picked = ((rc && rc.boundaries) || []).map(String).filter((t) => t !== token);
+    if (box.checked) {
+      // Keep the panel's order.
+      const order = [...document.querySelectorAll('#aa-boundary-list [data-aa-boundary]')].map((el) =>
+        el.getAttribute('data-aa-boundary')
+      );
+      picked.push(token);
+      picked.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    }
+    saveMonitorFields({ boundaries: picked }).catch((err) => console.error('[CFD] monitor boundaries', err));
+  });
+  // A monitor on points: add a typed point, remove one, clear them.
+  const pointInputs = ['aa-point-x', 'aa-point-y', 'aa-point-z'].map((id) => document.getElementById(id));
+  const addTypedPoint = () => {
+    if (resultCatalog.read_only) return;
+    const unit = monitorLengthUnit();
+    const vals = pointInputs.map((el) => {
+      const raw = el ? String(el.value || '').trim() : '';
+      const n = raw === '' ? NaN : Number(raw);
+      if (el) el.classList.toggle('is-invalid', !Number.isFinite(n));
+      return Number.isFinite(n) ? toSi('length', n, unit) : NaN;
+    });
+    if (!vals.every(Number.isFinite)) return;
+    const rc = resultCatalog.area_average_1;
+    const pts = ((rc && rc.points) || []).map(savedPoint).filter(Boolean);
+    pts.push(vals);
+    pointInputs.forEach((el) => {
+      if (el) el.value = '';
+    });
+    saveMonitorFields({ points: pts }).catch((err) => console.error('[CFD] monitor points', err));
+  };
+  document.getElementById('aa-point-add')?.addEventListener('click', addTypedPoint);
+  pointInputs.forEach((el) =>
+    el?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') addTypedPoint();
+    })
+  );
+  document.getElementById('aa-point-list')?.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('[data-aa-point-remove]');
+    if (!btn || resultCatalog.read_only) return;
+    const i = Number(btn.getAttribute('data-aa-point-remove'));
+    const rc = resultCatalog.area_average_1;
+    const pts = ((rc && rc.points) || []).map(savedPoint).filter(Boolean);
+    pts.splice(i, 1);
+    saveMonitorFields({ points: pts }).catch((err) => console.error('[CFD] monitor points', err));
+  });
+  document.getElementById('aa-clear-points')?.addEventListener('click', () => {
+    if (resultCatalog.read_only) return;
+    saveMonitorFields({ points: [] }).catch((err) => console.error('[CFD] monitor points', err));
+  });
+  // The type's study note: Edit opens the study's settings.
+  document.getElementById('aa-study-edit')?.addEventListener('click', () => {
+    activateTreePanel('study-settings', 'study-settings', { toggle: false });
+  });
+  // Inspect point pins: Add probe here.
+  document.getElementById('inspect-pins')?.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('[data-inspect-probe]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pt = inspectState.points[Number(btn.getAttribute('data-inspect-probe'))];
+    if (pt && pt.casePos) addProbeAtPoint(pt.casePos).catch((err) => console.error('[CFD] add probe', err));
+  });
+
   function openHubCustomMonitor(e) {
     const btn = e.target.closest('[data-open-run-rc], [data-open-aa]');
     if (!btn) return;
@@ -30353,19 +30682,11 @@ function toggleAssignAaFace(face) {
     const rcs = ((rec && rec.result_controls) || []).map((r) => ({ ...r }));
     const name = nextAaName(rcs, typeRow.label);
     const rcId = stampRcId();
-    const nextRc = {
-      id: rcId,
-      name,
-      monitor_type: typeRow.key,
-      kind: typeRow.label || 'Area average',
-      category: 'Surface data',
-      write_control: 'Time step',
-      faces: [],
-      results: null,
-      series: null,
-      chart_values: null,
-      results_available: false,
-    };
+    const target = monitorTargetOf(typeRow);
+    // A monitor on boundaries starts on every one it can measure (Forces: every wall).
+    const nextRc = newMonitorRecord(typeRow, rcId, name, {
+      boundaries: target === 'boundary' ? monitorBoundaryChoices(typeRow).map((c) => c.token) : [],
+    });
     rcs.push(nextRc);
     if (rec) rec.result_controls = rcs;
     resultCatalog.draft_faces = [];
@@ -30377,6 +30698,17 @@ function toggleAssignAaFace(face) {
     try { refreshSetupTree(); } catch (_) {}
     syncResultsHub();
     publishW22({ modal_applied: true });
+    if (target !== 'patch') {
+      persistRunSettings({ run_id: runId, result_controls: rcs })
+        .then((j) => {
+          if (!j || j.ok === false) throw new Error((j && j.error) || 'The monitor was not saved');
+          expandRunFolders(runId, 'rcs');
+          try { refreshSetupTree(); } catch (_) {}
+          publishW22({ saved: true, created: true });
+        })
+        .catch((e) => console.error('[CFD W22] create', e));
+      return;
+    }
     saveAreaAverageClient({
       faces: [],
       run_id: runId,
@@ -30862,15 +31194,16 @@ function syncRunResultList() {
     list.innerHTML = '<li class="hub-empty">None yet — use Add or the + on this run</li>';
     return;
   }
+  const types = registryMonitorTypes(rec);
   list.innerHTML = rcs
     .map((rc) => {
-      const n = Array.isArray(rc.faces) ? rc.faces.length : 0;
+      const placed = placedText(rc, resolveMonitorType(rc, types));
       return (
         '<li><button type="button" class="hub-item" data-open-run-rc="' +
         escapeHtml(String(rc.id || rc.name)) +
         '">' +
         escapeHtml(rc.name || rc.kind || 'Result') +
-        (n ? ' · ' + n + (n === 1 ? ' face' : ' faces') : '') +
+        (placed ? ' · ' + placed : '') +
         '</button></li>'
       );
     })
@@ -32825,7 +33158,7 @@ async function renameActiveRunClient(name) {
 
   function monQtys(m) {
     const runId = m ? monRowRun.get(m) : undefined;
-    return runMonitorQuantities(runId != null ? monState.byRun[runId] : null, runId);
+    return monRowQuantities(m, runMonitorQuantities(runId != null ? monState.byRun[runId] : null, runId));
   }
 
   /** A monitor card's id: the row's key (mon_<patch> for a boundary). */
@@ -32927,7 +33260,7 @@ async function renameActiveRunClient(name) {
 
   function monDetailRows(m) {
     const faces = monitorFaceLabels(m);
-    const rows = [];
+    const rows = monRowDetails(m);
     if (faces.length === 1) rows.push(['Face', faces[0]]);
     else if (faces.length > 1) rows.push(['Faces', faces.join(', ')]);
     const cadArea = cadAreaForLabels(faces);
@@ -32954,6 +33287,7 @@ async function renameActiveRunClient(name) {
         : '';
     const canChart = monPts(m).length >= 2;
     const canCsv = !!(m.series || []).length;
+    const note = monRowNote(m);
     const acts =
       canChart || canCsv
         ? '<div class="mon-acts">' +
@@ -32977,6 +33311,7 @@ async function renameActiveRunClient(name) {
           '<div class="sim-plot-cursor mon-plot-cursor" hidden></div>' +
           '<div class="sim-plot-tip mon-plot-tip" hidden></div></div>'
         : '') +
+      (note ? '<div class="' + (spark ? 'mat-assign-hint mon-note' : 'mon-empty mon-note') + '" data-mon-note="1">' + escapeHtml(note) + '</div>' : '') +
       acts +
       details +
       '</div>'
@@ -33406,12 +33741,11 @@ async function renameActiveRunClient(name) {
     const data = rec ? monState.byRun[rec.id] : null;
     const custom = (data && data.custom) || [];
     const types = registryMonitorTypes(rec);
+    const rowsOf = (rc) => custom.filter((c) => (rc.id && String(c.id) === String(rc.id)) || c.name === rc.name);
+    const placed = (rc) =>
+      ['faces', 'boundaries', 'points'].some((k) => Array.isArray(rc[k]) && rc[k].length);
     const rcs = ((rec && rec.result_controls) || []).filter(
-      (rc) =>
-        rc &&
-        Array.isArray(rc.faces) &&
-        rc.faces.length &&
-        (resolveMonitorType(rc, types) || custom.some((c) => (rc.id && String(c.id) === String(rc.id)) || c.name === rc.name))
+      (rc) => rc && ((placed(rc) && resolveMonitorType(rc, types)) || rowsOf(rc).length)
     );
     if (!rec || !rcs.length) {
       root.innerHTML = '';
@@ -33420,8 +33754,8 @@ async function renameActiveRunClient(name) {
     const solved = rec.status === 'done' || rec.status === 'failed' || rec.status === 'stopped';
     root.innerHTML = rcs
       .map((rc) => {
-        const m = custom.find((c) => (rc.id && String(c.id) === String(rc.id)) || c.name === rc.name);
-        if (m) return monitorCard(m);
+        const rows = rowsOf(rc);
+        if (rows.length) return rows.map(monitorCard).join('');
         if (!solved) return '';
         return (
           '<div class="mon-card"><div class="mon-card-head"><span class="mon-card-name">' +

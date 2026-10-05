@@ -20,6 +20,7 @@ from test_results import _case, _dat
 
 from incompressible_flow.monitors import (
     AREA_AVERAGE_ALIASES,
+    AREA_AVERAGE_QUANTITY_KEYS,
     MONITOR_QUANTITIES,
     custom_monitor_records,
     custom_monitors,
@@ -93,16 +94,19 @@ def _answer(key: str, case: Path) -> dict[str, Any]:
 
 
 def _without_type(answer: dict[str, Any]) -> dict[str, Any]:
+    """Rows without what they gained since: their monitor type and their quantity keys."""
     out = dict(answer)
     for group in ("monitors", "custom"):
-        out[group] = [{k: v for k, v in row.items() if k != "type"} for row in answer[group]]
+        out[group] = [{k: v for k, v in row.items() if k not in ("type", "quantities")} for row in answer[group]]
     return out
 
 
 def test_declared_quantities_are_the_table_the_page_used():
-    """Field by field the core's legacy table, so the page and CSVs stay the same."""
-    assert len(MONITOR_QUANTITIES) == len(LEGACY_MONITOR_QUANTITIES)
-    for ours, legacy in zip(MONITOR_QUANTITIES, LEGACY_MONITOR_QUANTITIES, strict=True):
+    """Field by field the core's legacy table first, so the page and CSVs stay the
+    same; boundary and area-average rows name exactly those (Forces monitors add theirs)."""
+    legacy_keys = tuple(q.key for q in LEGACY_MONITOR_QUANTITIES)
+    assert AREA_AVERAGE_QUANTITY_KEYS == legacy_keys
+    for ours, legacy in zip(MONITOR_QUANTITIES[: len(legacy_keys)], LEGACY_MONITOR_QUANTITIES, strict=True):
         for f in dataclasses.fields(legacy):
             assert getattr(ours, f.name) == getattr(legacy, f.name), (legacy.key, f.name)
     rows = {r["key"]: r for r in get_registry("analysis").describe()}
@@ -110,7 +114,8 @@ def test_declared_quantities_are_the_table_the_page_used():
         spec = get_registry("analysis").get(key)
         assert spec.monitor_quantities == MONITOR_QUANTITIES
         legacy = SimpleNamespace(key="legacy", monitor_quantities=LEGACY_MONITOR_QUANTITIES)
-        assert rows[key]["monitor_quantities"] == contract.declared_monitor_quantities(legacy)
+        declared = contract.declared_monitor_quantities(legacy)
+        assert rows[key]["monitor_quantities"][: len(declared)] == declared
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
@@ -125,6 +130,9 @@ def test_run_monitors_answer_is_what_the_core_used_to_fill_in(tmp_path: Path, na
     for field in before:
         if field in ("monitors", "custom"):
             continue
+        if field == "quantities":  # the table before, then the Forces monitors' quantities
+            assert got[field][: len(before[field])] == before[field]
+            continue
         assert got[field] == before[field], field
     trimmed = _without_type(got)
     for group in ("monitors", "custom"):
@@ -136,6 +144,8 @@ def test_run_monitors_answer_is_what_the_core_used_to_fill_in(tmp_path: Path, na
             assert list(row) == list(old)  # the same JSON, key order too
     for row in got["custom"]:
         assert row["type"] == "area_average"
+    for row in got["custom"] + got["monitors"]:
+        assert row["quantities"] == list(AREA_AVERAGE_QUANTITY_KEYS)
     for row in got["monitors"]:
         assert row["type"] == ("area_average" if row["series"] and row["series"][0]["U"] is not None else "flow_rate")
 
@@ -168,6 +178,8 @@ def test_custom_monitor_records_legacy_shapes():
         {"id": "d", "name": "Area average 4", "faces": ["f4"]},
         {"id": "e", "kind": "probe", "name": "Point", "faces": ["f5"]},
         {"id": "f", "monitor_type": "flow_rate", "name": "Flow", "faces": ["f6"]},
+        # A Forces monitor saved with the dialog's category is not an area average.
+        {"id": "g", "monitor_type": "forces", "category": "Surface data", "name": "Area average drag"},
         "not a record",
         None,
     ]
@@ -212,11 +224,12 @@ def test_result_fields_name_the_units_the_page_showed():
         "U": "m/s", "p": "Pa", "pTotal": "Pa", "k": "m²/s²", "omega": "1/s", "epsilon": "m²/s³",
         "nut": "m²/s", "R": "m²/s²", "yPlus": "", "wallShearStress": "Pa", "vorticity": "1/s",
         "Q": "1/s²", "UMean": "m/s", "pMean": "Pa",
+        "Cp": "",  # the pressure coefficient has no unit
     }
     assert rows["U"]["magnitude_label"] == "Velocity Magnitude" and rows["U"]["shown"] == "magU"
     assert (rows["R"]["kind"], rows["R"]["shown"]) == ("symm_tensor", None)
     shown = [r["shown"] for r in rows.values() if r["shown"]]
     assert shown == [
         "magU", "p", "pTotal", "k", "omega", "epsilon", "nut",
-        "yPlus", "magwallShearStress", "magvorticity", "Q", "magUMean", "pMean",
+        "yPlus", "magwallShearStress", "magvorticity", "Q", "magUMean", "pMean", "Cp",
     ]

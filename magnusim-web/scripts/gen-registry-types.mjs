@@ -85,6 +85,10 @@ export interface RegistryRow {
   aliases?: string[];
   user_creatable?: boolean;
   quantities?: string[];
+  /** A monitor placed on whole boundaries (target 'boundary'): the BC families (bc_family keys) it may be placed on ([] = any). */
+  boundary_kinds?: string[];
+  /** A line its panel shows with an Edit link to the study's settings ('' = none). */
+  study_note?: string;
   /** Analyses (API 1.4): the BC types and material models it offers. */
   bc_types?: string[];
   material_models?: string[];
@@ -178,6 +182,12 @@ export interface RunMonitor {
   /** The quantity its plot opens on (filled by the core for analyses that declare no quantities). */
   default_quantity?: string;
   series?: Array<{ t: number } & Record<string, unknown>>;
+  /** The keys of the quantities this row carries; omitted = all of the answer's quantities. */
+  quantities?: string[];
+  /** Plain text its card shows when there is nothing to plot (a point outside the fluid). */
+  note?: string;
+  /** Extra [label, text] rows of its details, before the quantities. */
+  details?: Array<[string, string]>;
   [extra: string]: unknown;
 }
 

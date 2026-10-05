@@ -2,11 +2,13 @@
  * The study panel rows between Analysis and the foot: Turbulence model, Time
  * dependency, Algorithm, the hint, and the steady SIMPLE numerics (a transient
  * study says where its time step and correctors live instead). Every value
- * here reaches the written case (incompressible_flow.physics).
+ * here reaches the written case (incompressible_flow.physics). The settings
+ * schema's "reference" group is drawn as its own section (Reference values).
  */
 import type { RJSFSchema } from '@rjsf/utils';
 import type { StudySettingsProps } from '../../../src/plugin-api';
 import { host } from './host';
+import { ReferenceValues } from './ReferenceValues';
 
 const TURBULENCE_ALIASES: Record<string, string> = {
   laminar: 'laminar',
@@ -43,6 +45,19 @@ export function numericsData(
   return data;
 }
 
+/** The settings schema without its "reference" group, and whether it had one. */
+export function splitReferenceSchema(schema: RJSFSchema): { settings: RJSFSchema; reference: boolean } {
+  const props = (schema.properties || {}) as Record<string, RJSFSchema & { 'x-cfddesk'?: { group?: string } }>;
+  const kept: Record<string, RJSFSchema> = {};
+  let reference = false;
+  for (const [key, prop] of Object.entries(props)) {
+    if (prop?.['x-cfddesk']?.group === 'reference') reference = true;
+    else kept[key] = prop;
+  }
+  const required = Array.isArray(schema.required) ? schema.required.filter((k) => k in kept) : undefined;
+  return { settings: { ...schema, properties: kept, ...(required ? { required } : {}) }, reference };
+}
+
 const TIME_HINT =
   'Steady-state solves for the converged flow with simpleFoam. Transient marches through real time with pimpleFoam and writes frames you can animate.';
 
@@ -50,7 +65,9 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
   const { SchemaForm, schema: tools } = host().pluginUi;
   const record = (study.record || {}) as Record<string, unknown>;
   const transient = study.time_dependency === 'Transient';
-  const settingsSchema = tools.mergeObjectSchemas([(row?.schema || row?.settings_schema) as RJSFSchema | undefined]);
+  const { settings: settingsSchema, reference } = splitReferenceSchema(
+    tools.mergeObjectSchemas([(row?.schema || row?.settings_schema) as RJSFSchema | undefined]),
+  );
   const numericsSchema = tools.mergeObjectSchemas([row?.numerics_schema as RJSFSchema | undefined]);
   const turbKey = turbulenceKey(record);
   const settingsData = {
@@ -118,6 +135,7 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
           Transient runs take their time step, time scheme and PIMPLE correctors from each run&apos;s panel.
         </p>
       ) : null}
+      {reference ? <ReferenceValues record={record} save={save} /> : null}
     </>
   );
 }

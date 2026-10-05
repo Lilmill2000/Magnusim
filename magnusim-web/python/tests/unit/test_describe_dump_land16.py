@@ -50,7 +50,8 @@ def test_describe_emits_numerics_and_control_for_analysis():
         assert isinstance(row.get("schema"), dict)
         assert "turbulence_model" in row["schema"]["properties"]
         # Energy / passive species never reached a solve; Phase 6 removed them.
-        assert set(row["schema"]["properties"]) == {"turbulence_model"}
+        # The study reference values (group "reference") join the turbulence model.
+        assert {k for k in row["schema"]["properties"] if not k.startswith("ref_")} == {"turbulence_model"}
         _assert_json_schema_bag(
             row["numerics_schema"],
             required_props=set(),

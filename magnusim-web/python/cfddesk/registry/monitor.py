@@ -17,7 +17,8 @@ from cfddesk.registry.schema import SchemaField
 if TYPE_CHECKING:
     from cfddesk.registry.discovery import RegistryHub
 
-MonitorTarget = Literal["patch", "point", "volume", "line"]
+# "boundary" (API 1.4): whole boundaries, each a BC's mesh patch or the walls no BC claims.
+MonitorTarget = Literal["patch", "point", "volume", "line", "boundary"]
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,13 @@ class MonitorType:
     aliases: tuple[str, ...] = ()
     user_creatable: bool = False
     quantities: tuple[str, ...] = ()
+    # API 1.4: the BC families (BcFamilySpec keys, e.g. "wall") a "boundary"
+    # monitor may be placed on, () = any; "wall" also offers the walls no BC
+    # claims. Families, not BC semantics: a symmetry plane meshes like a wall
+    # but is not one. And a line its panel shows with an Edit link that opens the
+    # study's settings ("" = none).
+    boundary_kinds: tuple[str, ...] = ()
+    study_note: str = ""
 
 
 @dataclass(frozen=True)

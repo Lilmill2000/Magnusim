@@ -1,0 +1,97 @@
+{
+  "solver": "simpleFoam",
+  "time_dependency": "Steady-state",
+  "rho": 1.2,
+  "kinematic_fields": [
+    "p"
+  ],
+  "patches": [
+    "walls",
+    "inlet",
+    "outlet",
+    "upperWall",
+    "lowerWall",
+    "frontAndBack"
+  ],
+  "reference": {
+    "speed_m_s": 10.0,
+    "speed_auto": true,
+    "pressure_Pa": 0.0,
+    "rho": 1.2,
+    "area_m2": 0.001,
+    "length_m": 0.0254,
+    "cofr_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "drag_dir": [
+      1.0,
+      0.0,
+      0.0
+    ],
+    "lift_dir": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "side_dir": [
+      0.0,
+      0.0,
+      -1.0
+    ],
+    "drag_auto": true,
+    "lift_auto": false,
+    "notes": []
+  },
+  "forces_monitors": [
+    {
+      "id": "rc-f1",
+      "name": "Forces 1",
+      "key": "forces_forces_1",
+      "coeffs_key": "coeffs_forces_1",
+      "patches": [
+        "lowerWall",
+        "upperWall"
+      ],
+      "boundaries": [
+        "lowerWall",
+        "upperWall"
+      ],
+      "missing": [
+        "Wing",
+        "Walls with no boundary condition"
+      ],
+      "notes": [
+        "Re-mesh to give 'Wing' its own boundary: it is not measured in this run.",
+        "This run's mesh has no walls without a boundary condition."
+      ],
+      "moment_coefficient": true
+    }
+  ],
+  "probe_monitors": [
+    {
+      "id": "rc-p1",
+      "name": "Probe 1",
+      "key": "probes_probe_1",
+      "points": [
+        [
+          0.1,
+          0.0,
+          0.0
+        ],
+        [
+          5.0,
+          5.0,
+          5.0
+        ],
+        [
+          0.2,
+          0.01,
+          0.0
+        ]
+      ]
+    }
+  ],
+  "monitors": []
+}

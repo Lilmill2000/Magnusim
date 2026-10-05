@@ -15,6 +15,7 @@ Quantity = Literal[
     "angular_velocity",
     "density",
     "kinematic_viscosity",
+    "area",
 ]
 
 # Multiplicative factors: value_si = value_display * factor  (temperature is affine — see convert.py)
@@ -47,6 +48,7 @@ UNITS: dict[Quantity, dict[str, float]] = {
         "cSt": 1e-6,
         "ft²/s": 0.09290304,
     },
+    "area": {"m²": 1.0, "cm²": 1e-4, "mm²": 1e-6, "in²": 0.00064516, "ft²": 0.09290304},
 }
 
 SI_DEFAULT: dict[Quantity, str] = {
@@ -60,6 +62,7 @@ SI_DEFAULT: dict[Quantity, str] = {
     "angular_velocity": "rad/s",
     "density": "kg/m³",
     "kinematic_viscosity": "m²/s",
+    "area": "m²",
 }
 
 

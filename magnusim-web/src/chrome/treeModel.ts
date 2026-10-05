@@ -1,3 +1,4 @@
+import { isPlaced } from '../monitorTargets';
 import { scopeBelongsToProject } from '../scope';
 import { runHasVisibleResults } from '../workbench/jobQueueOrder';
 import type { TreeActivity, TreeStudies } from './treeSession';
@@ -38,7 +39,8 @@ export interface StudyNode {
     busy?: boolean;
     queuePos?: number;
     scopeKey?: string;
-    resultControls?: Array<{ id: string; name: string; faces: string[]; scopeKey?: string }>;
+    /** `placed`: assigned faces, boundaries or points (the tree marks it done). */
+    resultControls?: Array<{ id: string; name: string; faces: string[]; placed?: boolean; scopeKey?: string }>;
     /** Started on an older version of its linked geometry (API 1.5, D26). */
     olderGeometry?: boolean;
   }>;
@@ -189,7 +191,7 @@ interface ProjectTreeRun {
   n_saved_times?: number;
   last_saved_iteration?: number;
   has_results?: boolean;
-  result_controls?: Array<{ id?: string; name?: string; faces?: string[]; key?: string }>;
+  result_controls?: Array<{ id?: string; name?: string; faces?: string[]; placed?: boolean; key?: string }>;
   older_geometry?: boolean;
 }
 
@@ -412,6 +414,7 @@ export function readSetupTree(
                 id: str(rc.id || rc.name, `rc_${i}`),
                 name: str(rc.name, 'Result'),
                 faces: (rc.faces || []).map((face) => str(face)).filter(Boolean),
+                placed: rc.placed ?? isPlaced(rc as Record<string, unknown>),
                 scopeKey: rc.key,
               })),
               ...(run.older_geometry ? { olderGeometry: true } : {}),

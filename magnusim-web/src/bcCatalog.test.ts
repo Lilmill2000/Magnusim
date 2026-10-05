@@ -9,6 +9,7 @@ import {
   familiesFor,
   familyOf,
   newBcRecord,
+  familyKeyOf,
   typeChangeFields,
   valueQuantity,
 } from './bcCatalog';
@@ -215,5 +216,21 @@ describe('saved records', () => {
     expect(defaultsChoiceText({ bc_type: 'Wall' }, { wall_type: 'No-slip' })).toBe('No-slip');
     expect(defaultsChoiceText({ bc_type: 'Pressure' }, { wall_type: 'No-slip' })).toBe('');
     expect(defaultsChoiceText({ bc_type: 'Wall', wall_type: 'Slip' }, null)).toBe('');
+  });
+});
+
+describe('familyKeyOf', () => {
+  it("reads a saved BC's family; a symmetry plane is not a wall", () => {
+    useProjectStore.setState({
+      registry: {
+        ...useProjectStore.getState().registry,
+        bc: (committed as unknown as RegistryDescribe).bc,
+      } as RegistryDescribe,
+    });
+    expect(familyKeyOf({ bc_type: 'Wall' })).toBe('wall');
+    expect(familyKeyOf({ bc_type: 'No-slip wall' })).toBe('wall');
+    expect(familyKeyOf({ bc_type: 'Velocity inlet' })).toBe('velocity_inlet');
+    expect(familyKeyOf({ bc_type: 'Symmetry' })).toBe('symmetry');
+    expect(familyKeyOf({ bc_type: 'Unknown' })).toBe('');
   });
 });

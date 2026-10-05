@@ -221,7 +221,7 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
               expandedLabel={`${rc.name}:${rc.id}`}
               selected={study.active && selectedKey === `aaid:${rc.id}`}
               attrs={{ 'data-w27-aa': rc.id, 'data-w27-aa-run': r.id }}
-              mark={rc.faces.length > 0}
+              mark={rc.placed ?? rc.faces.length > 0}
             >
               {rc.faces.map((f) => (
                 <Node

@@ -8,12 +8,16 @@ import {
   detailRows,
   directionSuffix,
   formatMonitorValue,
+  headlineText,
   monitorCsv,
   monitorQuantities,
   monitorTypes,
   monitorsCsv,
   plotQuantities,
   resolveMonitorType,
+  rowDetails,
+  rowNote,
+  rowQuantities,
   summaryOf,
   summaryText,
   tipLines,
@@ -41,10 +45,10 @@ const probe: RunMonitor = {
 };
 
 describe('the API 1.1 quantity table', () => {
-  it('is the table Incompressible Flow declares (docs/plugins/registry.json)', () => {
+  it('is the start of the table Incompressible Flow declares (docs/plugins/registry.json)', () => {
     const reg = JSON.parse(readFileSync('docs/plugins/registry.json', 'utf8')) as { analysis: RegistryRow[] };
     for (const row of reg.analysis.filter((r) => r.plugin === 'incompressible_flow')) {
-      expect(row.monitor_quantities).toEqual(qs);
+      expect(row.monitor_quantities!.slice(0, qs.length)).toEqual(qs);
     }
   });
 
@@ -186,5 +190,76 @@ describe('monitor types', () => {
     expect(resolveMonitorType({ name: 'Cut plane 1', category: 'Volume' }, creatable)).toBeNull();
     expect(resolveMonitorType({ monitor_type: 'missing_type', category: 'Surface data' }, creatable)).toBeNull();
     expect(resolveMonitorType(null, creatable)).toBeNull();
+  });
+});
+
+describe('rows that name their quantities (Forces monitors)', () => {
+  const force = (key: string, label: string, sample: string, extra: Partial<MonitorQuantity> = {}): MonitorQuantity => ({
+    ...q('p'),
+    key,
+    label,
+    sample,
+    unit_quantity: 'force',
+    unit: 'N',
+    headline: false,
+    csv: key + '_N',
+    ...extra,
+  });
+  const all: MonitorQuantity[] = [
+    ...qs,
+    force('Fd', 'Drag force', 'Fd_N', { headline: true }),
+    force('Fl', 'Lift force', 'Fl_N', { headline: true }),
+    force('Fx', 'Force X', 'F_N', { component: 0 }),
+    { ...force('Cd', 'Drag coefficient', 'Cd', { headline: true }), unit: '', unit_quantity: '', csv: 'Cd' },
+  ];
+  const forces: RunMonitor = {
+    key: 'forces_drag',
+    name: 'Drag',
+    type: 'forces',
+    default_quantity: 'Fd',
+    quantities: ['Fd', 'Fl', 'Fx', 'Cd'],
+    details: [['Walls', 'Wing, Flap'], ['bad'] as unknown as [string, string]],
+    note: ' Set a reference length for the moment coefficient. ',
+    series: [
+      { t: 1, Fd_N: 1.5, Fl_N: 0.25, F_N: [1.5, 0, 0.25], Cd: 0.3 },
+      { t: 2, Fd_N: 1.2, Fl_N: 0.5, F_N: [1.2, 0, 0.5], Cd: 0.24 },
+    ],
+  };
+
+  it('offers, details and exports only its own quantities', () => {
+    expect(rowQuantities(forces, all).map((x) => x.key)).toEqual(['Fd', 'Fl', 'Fx', 'Cd']);
+    expect(rowQuantities(inlet, all)).toBe(all);
+    expect(plotQuantities(rowQuantities(forces, all)).map((x) => x.label)).toEqual([
+      'Drag force',
+      'Lift force',
+      'Force X',
+      'Drag coefficient',
+    ]);
+    expect(defaultQuantity(forces, rowQuantities(forces, all))).toBe('Fd');
+    expect(detailRows(forces, rowQuantities(forces, all))).toEqual([
+      ['Drag force', '1.20 N'],
+      ['Lift force', '0.500 N'],
+      ['Force X', '1.20 N'],
+      ['Drag coefficient', '0.240'],
+    ]);
+    expect(rowDetails(forces)).toEqual([['Walls', 'Wing, Flap']]);
+    expect(rowNote(forces)).toBe('Set a reference length for the moment coefficient.');
+    expect(rowNote(inlet)).toBe('');
+  });
+
+  it('heads the Run panel line with its headline quantities', () => {
+    expect(headlineText(forces, all)).toBe('Drag · Drag force 1.20 N · Lift force 0.500 N · Drag coefficient 0.240');
+    expect(headlineText({ ...forces, series: [] }, all)).toBe('');
+  });
+
+  it('puts its own columns in the every-monitor CSV, a unitless one without brackets', () => {
+    const csv = monitorsCsv([inlet, forces], all, false).split('\n');
+    expect(csv[0]).toBe(
+      '"iteration","Inlet Pressure [Pa]","Inlet Mean velocity [m/s]","Inlet Normal velocity [m/s]",' +
+        '"Inlet Flow rate [m³/s]","Inlet Mass flow [kg/s]","Inlet Drag force [N]","Inlet Lift force [N]",' +
+        '"Inlet Drag coefficient","Drag Drag force [N]","Drag Lift force [N]","Drag Drag coefficient"',
+    );
+    expect(csv[2].split(',').slice(-3)).toEqual(['1.2', '0.5', '0.24']);
+    expect(monitorCsv(forces, rowQuantities(forces, all), false).split('\n')[0]).toBe('iteration,Fd_N,Fl_N,Fx_N,Cd');
   });
 });

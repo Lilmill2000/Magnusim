@@ -15,7 +15,12 @@ from cfddesk.registry.jobs import JobKind
 from incompressible_flow.analyses import build_incompressible_steady, build_incompressible_transient
 from incompressible_flow.bcs import register_bcs
 from incompressible_flow.materials import build_newtonian_incompressible
-from incompressible_flow.monitors import build_area_average, build_flow_rate
+from incompressible_flow.monitors import (
+    build_area_average,
+    build_flow_rate,
+    build_forces,
+    build_probe,
+)
 from incompressible_flow.solvers import build_pimple_foam, build_simple_foam
 
 KEY = "incompressible_flow"
@@ -40,6 +45,8 @@ def register(hub: Any) -> None:
     monitors = hub.registry("monitor")
     monitors.register(build_area_average(), plugin=KEY)
     monitors.register(build_flow_rate(), plugin=KEY)
+    monitors.register(build_forces(), plugin=KEY)
+    monitors.register(build_probe(), plugin=KEY)
     solvers = hub.registry("solver")
     for app in (build_simple_foam(), build_pimple_foam()):
         solvers.register(app, plugin=KEY)

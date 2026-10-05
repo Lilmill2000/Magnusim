@@ -91,6 +91,45 @@ export function quantityByKey(qs: readonly MonitorQuantity[], key: string | null
   return key ? qs.find((q) => q.key === key) : undefined;
 }
 
+/**
+ * The quantities one monitor row carries: those its `quantities` keys name (a
+ * Forces monitor's forces, a boundary's velocity, pressure and flow), in the
+ * answer's order; every quantity when the row names none.
+ */
+export function rowQuantities(row: RunMonitor | null | undefined, qs: readonly MonitorQuantity[]): readonly MonitorQuantity[] {
+  const keys = row && Array.isArray(row.quantities) ? new Set(row.quantities.map(String)) : null;
+  return keys ? qs.filter((q) => keys.has(q.key)) : qs;
+}
+
+/** A row's own note (plain text shown with its card), '' when none. */
+export function rowNote(row: RunMonitor | null | undefined): string {
+  return row && typeof row.note === 'string' ? row.note.trim() : '';
+}
+
+/** A row's own [label, text] detail rows (what it is placed on, its directions), before its quantities. */
+export function rowDetails(row: RunMonitor | null | undefined): Array<[string, string]> {
+  const raw = row && Array.isArray(row.details) ? row.details : [];
+  return raw
+    .filter((d): d is [string, string] => Array.isArray(d) && d.length >= 2 && d[0] != null && d[1] != null)
+    .map((d) => [String(d[0]), String(d[1])] as [string, string]);
+}
+
+/**
+ * The Run panel's line for a row that names its quantities: its headline
+ * quantities at its last point ("Forces 1 · 1.20 N · 0.300 N"); '' when it has none.
+ */
+export function headlineText(row: RunMonitor | null | undefined, qs: readonly MonitorQuantity[]): string {
+  const last = lastSample(row);
+  const parts = rowQuantities(row, qs)
+    .filter((q) => q.headline)
+    .map((q) => {
+      const value = formatSampleValue(q, last);
+      return value ? q.label + ' ' + value : '';
+    })
+    .filter(Boolean);
+  return parts.length ? monitorName(row) + ' · ' + parts.join(' · ') : '';
+}
+
 /** The quantities a monitor's plot may show, in order. */
 export function plotQuantities(qs: readonly MonitorQuantity[]): MonitorQuantity[] {
   return qs.filter((q) => q.plot);
@@ -268,16 +307,22 @@ export function monitorName(row: RunMonitor | null | undefined): string {
 
 /**
  * Every monitor's series in one CSV, one row per time (or iteration): each
- * monitor's number quantities (not the components of a list sample), as shown
- * (absolute values for magnitudes), headed "<monitor> <label> [<unit>]".
+ * monitor's number quantities (not the components of a list sample; only the
+ * ones the row carries), as shown (absolute values for magnitudes), headed
+ * "<monitor> <label> [<unit>]" ("<monitor> <label>" for a quantity without a unit).
  */
 export function monitorsCsv(rows: readonly RunMonitor[], qs: readonly MonitorQuantity[], timeAxis: boolean): string {
-  const cols = qs.filter((q) => q.component == null);
+  const colsOf = rows.map((m) => rowQuantities(m, qs).filter((q) => q.component == null));
   const times = new Set<number>();
   for (const m of rows) for (const s of (m.series || []) as MonitorSample[]) times.add(Number(s.t));
   const sorted = [...times].filter(Number.isFinite).sort((a, b) => a - b);
   const head = [timeAxis ? 'time_s' : 'iteration'];
-  for (const m of rows) for (const q of cols) head.push(monitorName(m) + ' ' + q.label + ' [' + unitOf(q) + ']');
+  rows.forEach((m, i) => {
+    for (const q of colsOf[i]) {
+      const unit = unitOf(q);
+      head.push(monitorName(m) + ' ' + q.label + (unit ? ' [' + unit + ']' : ''));
+    }
+  });
   const byT = rows.map((m) => {
     const map = new Map<number, MonitorSample>();
     for (const s of (m.series || []) as MonitorSample[]) map.set(Number(s.t), s);
@@ -288,7 +333,7 @@ export function monitorsCsv(rows: readonly RunMonitor[], qs: readonly MonitorQua
     const row: string[] = [String(t)];
     rows.forEach((_, i) => {
       const s = byT[i].get(t);
-      for (const q of cols) row.push(csvCell(s ? shownValue(q, s) : null));
+      for (const q of colsOf[i]) row.push(csvCell(s ? shownValue(q, s) : null));
     });
     lines.push(row.join(','));
   }

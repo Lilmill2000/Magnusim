@@ -23,7 +23,7 @@ from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 from cfddesk.registry.discovery import get_hub
 
 EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"}
-EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate"}
+EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "forces", "probe"}
 
 
 @pytest.fixture(autouse=True)

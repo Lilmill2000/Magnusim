@@ -318,6 +318,8 @@ class Registry(Generic[T]):
                 row["aliases"] = [str(a) for a in getattr(spec, "aliases", ()) or ()]
                 row["user_creatable"] = bool(getattr(spec, "user_creatable", False))
                 row["quantities"] = [str(q) for q in getattr(spec, "quantities", ()) or ()]
+                row["boundary_kinds"] = [str(k) for k in getattr(spec, "boundary_kinds", ()) or ()]
+                row["study_note"] = str(getattr(spec, "study_note", "") or "")
                 if "schema" not in row:
                     row["schema"] = _schema_to_json(
                         getattr(spec, "fields_schema", ()) or (), kind=self.kind, key=key, bag="fields_schema"

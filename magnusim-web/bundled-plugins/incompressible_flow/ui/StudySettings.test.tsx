@@ -176,3 +176,75 @@ describe('SimulationDefaults (study panel)', () => {
     expect(within(row).getByRole('textbox')).toHaveValue('2.0000e-5');
   });
 });
+
+describe('Reference values', () => {
+  const ref = (extra: Record<string, unknown> = {}) => ({ type: 'number', 'x-cfddesk': { group: 'reference', optional: true, ...extra } });
+  const vec = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3, 'x-cfddesk': { group: 'reference' } };
+  beforeEach(() => {
+    const row = useProjectStore.getState().registry!.analysis![0] as Record<string, unknown>;
+    row.schema = {
+      type: 'object',
+      properties: {
+        ...settingsSchema.properties,
+        ref_speed: ref({ quantity: 'velocity' }),
+        ref_pressure: ref({ quantity: 'pressure' }),
+        ref_area: ref({ quantity: 'area' }),
+        ref_length: ref({ quantity: 'length' }),
+        ref_cofr: vec,
+        ref_drag_dir: vec,
+        ref_lift_dir: vec,
+      },
+    };
+  });
+  afterEach(() => {
+    delete window.__CFD_PROJECT_UNITS__;
+  });
+
+  const box = (name: string) => screen.getByLabelText(name) as HTMLInputElement;
+  const type = (name: string, value: string) => {
+    fireEvent.focus(box(name));
+    fireEvent.change(box(name), { target: { value } });
+    fireEvent.blur(box(name));
+  };
+
+  it('is its own section, not rows of the turbulence form, with the blanks explained', () => {
+    renderPanel();
+    expect(screen.getByText('Reference values')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-schema-key^="ref_"]')).toHaveLength(0);
+    expect(box('Reference speed')).toHaveAttribute('placeholder', 'Inlet speed');
+    expect(box('Reference area')).toHaveAttribute('placeholder', 'Not set');
+    expect(box('Drag direction X')).toHaveAttribute('placeholder', 'auto');
+    expect(screen.getByText(/The density is the fluid/)).toBeInTheDocument();
+  });
+
+  it('saves typed values in SI and a cleared value as blank', async () => {
+    renderPanel();
+    type('Reference area', '0.5');
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ ref_area: 0.5 }));
+    // Lengths show like the geometry: millimetres.
+    type('Reference length', '250');
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ ref_length: 0.25 }));
+    type('Drag direction Y', '1');
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ ref_drag_dir: [0, 1, 0] }));
+    publish(study({}, { ref_speed: 12, ref_cofr: [0.1, 0, 0] }));
+    expect(box('Reference speed')).toHaveValue('12');
+    expect(box('Centre of rotation X')).toHaveValue('100');
+    type('Reference speed', '');
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ ref_speed: null }));
+    // A negative area is not a reference area: nothing is saved.
+    (window.__CFD_STUDY_UPDATE__ as ReturnType<typeof vi.fn>).mockClear();
+    type('Reference area', '-2');
+    expect(window.__CFD_STUDY_UPDATE__).not.toHaveBeenCalled();
+  });
+
+  it('shows Imperial projects their units', async () => {
+    window.__CFD_PROJECT_UNITS__ = () => 'Imperial';
+    window.__CFD_STUDY_STATE__ = study({}, { ref_area: 0.09290304, ref_speed: 3.048 });
+    renderPanel();
+    expect(box('Reference area')).toHaveValue('1');
+    expect(box('Reference speed')).toHaveValue('10');
+    expect(screen.getByText('ft²')).toBeInTheDocument();
+    type('Reference length', '10');
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ ref_length: 0.254 }));
+  });
+});

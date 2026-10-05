@@ -156,7 +156,11 @@ test('run monitors are drawn from the plugin: quantities, defaults, summary, exp
   expect(answer.ok, JSON.stringify(answer)).toBe(true);
   // The analysis's own answer reaches the page whole.
   expect(answer.analysis_key).toBe('incompressible_steady');
-  expect(answer.quantities.map((x) => x.key)).toEqual(['p', 'Umag', 'Ux', 'Uy', 'Uz', 'Un', 'Q', 'mdot']);
+  // The 1.1 table first (then the Forces monitors' and point probes' quantities); these rows carry the 1.1 table.
+  expect(answer.quantities.map((x) => x.key).slice(0, 8)).toEqual(['p', 'Umag', 'Ux', 'Uy', 'Uz', 'Un', 'Q', 'mdot']);
+  for (const row of [...answer.monitors, ...answer.custom]) {
+    expect(row.quantities).toEqual(['p', 'Umag', 'Ux', 'Uy', 'Uz', 'Un', 'Q', 'mdot']);
+  }
   expect(answer.summary.map((x) => x.label)).toEqual(['Flow in', 'out', 'imbalance']);
   expect(answer.summary_warn).toBe(true);
   expect(answer.monitors.map((m) => [m.key, m.default_quantity])).toEqual([
@@ -294,11 +298,12 @@ test('run monitors are drawn from the plugin: quantities, defaults, summary, exp
   await openRun(runB);
   await page.locator(`button.rc-plus[data-w27-run-plus="${runB}"]`).click();
   await expect(page.locator('#modal-result-control')).toBeVisible();
-  await expect(page.locator('#rc-type-list .cs-group-label')).toHaveText(['SURFACE DATA']);
+  await expect(page.locator('#rc-type-list .cs-group-label')).toHaveText(['SURFACE DATA', 'BOUNDARY DATA', 'POINT DATA']);
   const types = page.locator('#rc-type-list [data-rc-type]');
-  await expect(types).toHaveCount(1);
-  await expect(types).toHaveAttribute('data-rc-type', 'area_average');
-  await expect(types).toHaveText('Area average');
+  await expect(types).toHaveCount(3);
+  await expect(types.first()).toHaveAttribute('data-rc-type', 'area_average');
+  await expect(types).toHaveText(['Area average', 'Forces', 'Point probe']);
+  await expect(types.first()).toHaveClass(/is-selected/);
   await expect(page.locator('#rc-detail-title')).toHaveText('Area average');
   await expect(page.locator('#rc-detail-hint')).toHaveText(`${areaAverage.description} Add it here, then pick faces in the viewport.`);
   await page.locator('#rc-apply').click();

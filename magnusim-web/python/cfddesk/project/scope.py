@@ -396,6 +396,8 @@ def _run_node(
                     "id": item_id,
                     "name": str(row.get("name") or row.get("kind") or "Result"),
                     "faces": _faces(row),
+                    # Placed on faces, boundaries or points (its monitor type's target): the tree marks it.
+                    "placed": any(isinstance(row.get(k), list) and bool(row.get(k)) for k in ("faces", "boundaries", "points")),
                     "key": ScopeId(
                         project_id,
                         geometry_id,

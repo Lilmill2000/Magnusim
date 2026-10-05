@@ -18,6 +18,8 @@ protected = [
   "material:newtonian_incompressible",
   "monitor:area_average",
   "monitor:flow_rate",
+  "monitor:forces",
+  "monitor:probe",
   "bc:velocity_inlet_fixed",
   "bc:velocity_inlet_volumetric",
   "bc:velocity_inlet_mass",

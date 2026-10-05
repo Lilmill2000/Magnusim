@@ -140,7 +140,8 @@ def test_run_monitors_answers_carry_their_own_quantities(tmp_path: Path):
     # The hook's own answer already has every field; the core adds only quantities.
     own = run_monitors(_case(tmp_path / "own"))
     assert {k: v for k, v in got.items() if k != "quantities"} == own
-    assert [q["key"] for q in got["quantities"]] == [q.key for q in LEGACY_MONITOR_QUANTITIES]
+    legacy = [q.key for q in LEGACY_MONITOR_QUANTITIES]
+    assert [q["key"] for q in got["quantities"]][: len(legacy)] == legacy
     inlet, outlet = got["monitors"]
     assert (inlet["key"], inlet["default_quantity"], outlet["key"]) == ("mon_inlet", "Umag", "mon_outlet")
     assert inlet["series"][1]["mdot_kgs"] == pytest.approx(-0.02 * 1.2)

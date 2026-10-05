@@ -1152,6 +1152,48 @@ def _clean_prior_run(out_dir: Path) -> None:
                 p.unlink(missing_ok=True)
 
 
+def _join_functions(text: str, extra: str) -> str:
+    """controlDict function blocks plus ``extra`` (which replaces the no-monitor comment)."""
+    if not extra:
+        return text
+    if not text.strip() or text.strip().startswith("//"):
+        return extra
+    return text + "\n" + extra
+
+
+def _reference_monitors(spec: Any, poly_dst: Path | None, functions_text: str) -> tuple[str, dict[str, Any]]:
+    """The function objects of Forces monitors (which measure against the study's
+    reference values) and Point probes, and what the sidecar records about them."""
+    from .force_objects import (
+        forces_functions_text,
+        plan_forces_monitors,
+        plan_probe_monitors,
+        probes_functions_text,
+    )
+    from .reference import resolve_reference
+
+    reference = resolve_reference(spec)
+    mesh_patches: set[str] | None = None
+    if poly_dst and (poly_dst / "boundary").is_file():
+        from magnusim_sdk.foam import boundary_patch_names as _parse_boundary_patches
+
+        mesh_patches = set(_parse_boundary_patches(poly_dst / "boundary"))
+    forces = plan_forces_monitors(spec, mesh_patches, reference)
+    text = _join_functions(functions_text, forces_functions_text(forces, reference, transient=spec.transient))
+    probes = plan_probe_monitors(spec)
+    text = _join_functions(text, probes_functions_text(probes, transient=spec.transient))
+    from .pressure_coefficient import pressure_coefficient_text
+
+    cp = pressure_coefficient_text(spec, reference)
+    text = _join_functions(text, cp)
+    return text, {
+        "reference": reference.to_json(),
+        "forces_monitors": forces,
+        "probe_monitors": probes,
+        "pressure_coefficient": bool(cp),
+    }
+
+
 def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -> dict[str, Any]:
     """Write a complete run case matching the UI prepare_run contract (steady or transient).
 
@@ -1291,6 +1333,7 @@ RAS
     functions_text += "\n" + result_fields_functions_text(
         turbulent=model != "laminar", rho=float(spec.rho), transient=spec.transient
     )
+    functions_text, monitor_meta = _reference_monitors(spec, poly_dst, functions_text)
     is_transient = spec.transient is not None
 
     if is_transient:
@@ -1365,6 +1408,7 @@ RAS
         "mapped": mapped_meta,
         "monitors": mon_patches,
         "custom_monitors": custom_meta,
+        **monitor_meta,
         "turbulence": {
             "model": model,
             "intensity": turb["I"],

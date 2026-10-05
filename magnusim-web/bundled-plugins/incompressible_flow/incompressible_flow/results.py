@@ -2,9 +2,12 @@
 
 Per boundary-condition patch: area-averaged velocity and pressure
 (``mon_<patch>``) and the volumetric flow rate (``flow_<patch>``); per custom
-monitor: area-averaged velocity and pressure (``rc_<name>``). Velocities in
-m/s, pressure in Pa (kinematic × rho), flow in m³/s and kg/s. A negative flow
-rate is flow INTO the domain (OpenFOAM face normals point out).
+monitor: area-averaged velocity and pressure (``rc_<name>``); per Forces
+monitor: forces, moments and coefficients (incompressible_flow.forces_results);
+per Point probe point: pressure and velocity (incompressible_flow.probes_results).
+Velocities in m/s, pressure in Pa (kinematic × rho), flow in m³/s and kg/s. A
+negative flow rate is flow INTO the domain (OpenFOAM face normals point out).
+Each row names the quantities it carries (``quantities``).
 
 Each series point carries the samples of incompressible_flow.monitors
 MONITOR_QUANTITIES; each row its ``key``, monitor ``type`` and the
@@ -23,7 +26,10 @@ from typing import Any, TypeGuard
 
 from magnusim_sdk.foam import read_surface_field_value
 
+from .forces_results import forces_row
 from .materials import LEGACY_AIR
+from .monitors import AREA_AVERAGE_QUANTITY_KEYS
+from .probes_results import probe_rows
 
 # A run whose case metadata has no density (an older run) reads the density
 # older versions filled in.
@@ -129,6 +135,7 @@ def _patch_monitor(case_dir: Path, patch: str, bc: dict | None, rho: float) -> d
         # Velocity and pressure when the area average wrote, else only the flow.
         "type": "area_average" if mon else "flow_rate",
         "default_quantity": "p" if pressure else "Umag",
+        "quantities": list(AREA_AVERAGE_QUANTITY_KEYS),
     }
 
 
@@ -173,6 +180,7 @@ def _custom_monitor(case_dir: Path, cm: dict, rho: float) -> dict[str, Any] | No
         "series": series,
         "type": "area_average",
         "default_quantity": "p",
+        "quantities": list(AREA_AVERAGE_QUANTITY_KEYS),
     }
 
 
@@ -222,6 +230,16 @@ def run_monitors(case_dir: Path | str) -> dict[str, Any]:
             row = _custom_monitor(case, cm, rho)
             if row:
                 custom.append(row)
+    ref = meta.get("reference")
+    reference: dict[str, Any] = ref if isinstance(ref, dict) else {}
+    for plan in meta.get("forces_monitors") or []:
+        if isinstance(plan, dict):
+            row = forces_row(case, plan, reference, rho)
+            if row:
+                custom.append(row)
+    for plan in meta.get("probe_monitors") or []:
+        if isinstance(plan, dict):
+            custom.extend(probe_rows(case, plan, rho))
     # Mass balance across all monitored openings.
     sum_in = sum_out = 0.0
     for m in out:

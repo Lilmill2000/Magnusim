@@ -574,7 +574,7 @@ declare module '@magnusim/plugin-ui/_internal/units' {
    * re-exports this file) and plugins (through the kit). The tables are frozen,
    * so a plugin cannot change the core's conversions.
    */
-  export type Quantity = 'velocity' | 'pressure' | 'volumetric_flow' | 'mass_flow' | 'length' | 'temperature' | 'time' | 'angular_velocity' | 'density' | 'kinematic_viscosity';
+  export type Quantity = 'velocity' | 'pressure' | 'volumetric_flow' | 'mass_flow' | 'length' | 'temperature' | 'time' | 'angular_velocity' | 'density' | 'kinematic_viscosity' | 'area';
   /** The units a project or the Settings page shows (the workspace SDK's `units`). */
   export type UnitSystem = 'metric' | 'imperial';
   /** Multiplicative SI factors. Temperature is affine and handled in toSi/fromSi. */

@@ -1169,7 +1169,7 @@ The x axis: iterations (labelled 1 … n) or simulated seconds (0 s … end), fr
 #### Quantity
 
 ```ts
-type Quantity = 'velocity' | 'pressure' | 'volumetric_flow' | 'mass_flow' | 'length' | 'temperature' | 'time' | 'angular_velocity' | 'density' | 'kinematic_viscosity'
+type Quantity = 'velocity' | 'pressure' | 'volumetric_flow' | 'mass_flow' | 'length' | 'temperature' | 'time' | 'angular_velocity' | 'density' | 'kinematic_viscosity' | 'area'
 ```
 
 Unit tables and conversions, shared by the core (src/units/convert.ts re-exports this file) and plugins (through the kit). The tables are frozen, so a plugin cannot change the core's conversions.
@@ -1415,6 +1415,8 @@ interface RegistryRow
 - `aliases?: string[] | undefined`
 - `user_creatable?: boolean | undefined`
 - `quantities?: string[] | undefined`
+- `boundary_kinds?: string[] | undefined`: A monitor placed on whole boundaries (target 'boundary'): the BC families (bc_family keys) it may be placed on ([] = any).
+- `study_note?: string | undefined`: A line its panel shows with an Edit link to the study's settings ('' = none).
 - `bc_types?: string[] | undefined`: Analyses (API 1.4): the BC types and material models it offers.
 - `material_models?: string[] | undefined`
 - `library?: Record<string, unknown>[] | undefined`: Material models (API 1.4): presets, and how a study's material record stores the properties.
@@ -2627,6 +2629,8 @@ What ships: the core builtins and the bundled plugins (the whole record, with sc
 | material | `newtonian_incompressible` | Newtonian (incompressible) | incompressible_flow |
 | monitor | `area_average` | Area average | incompressible_flow |
 | monitor | `flow_rate` | Flow rate | incompressible_flow |
+| monitor | `forces` | Forces | incompressible_flow |
+| monitor | `probe` | Point probe | incompressible_flow |
 | filter | `cut_plane` | Cutting Plane | builtin |
 | filter | `streamlines` | Particle Trace | builtin |
 | filter | `plot_over_path` | Plot-over-path | builtin |

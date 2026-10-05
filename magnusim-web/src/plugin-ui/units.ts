@@ -13,7 +13,8 @@ export type Quantity =
   | 'time'
   | 'angular_velocity'
   | 'density'
-  | 'kinematic_viscosity';
+  | 'kinematic_viscosity'
+  | 'area';
 
 /** The units a project or the Settings page shows (the workspace SDK's `units`). */
 export type UnitSystem = 'metric' | 'imperial';
@@ -44,6 +45,7 @@ export const UNITS: Readonly<Record<Quantity, Readonly<Record<string, number>>>>
   angular_velocity: Object.freeze({ 'rad/s': 1.0, rpm: (2.0 * Math.PI) / 60.0 }),
   density: Object.freeze({ 'kg/m³': 1.0, 'lb/ft³': 16.01846337 }),
   kinematic_viscosity: Object.freeze({ 'm²/s': 1.0, cSt: 1e-6, 'ft²/s': 0.09290304 }),
+  area: Object.freeze({ 'm²': 1.0, 'cm²': 1e-4, 'mm²': 1e-6, 'in²': 0.00064516, 'ft²': 0.09290304 }),
 });
 
 const UNIT_ALIASES: Record<string, string> = {
@@ -57,6 +59,13 @@ const UNIT_ALIASES: Record<string, string> = {
   'ft^3/min': 'ft³/min',
   'kg/m3': 'kg/m³',
   'lb/ft3': 'lb/ft³',
+  m2: 'm²',
+  'm^2': 'm²',
+  cm2: 'cm²',
+  mm2: 'mm²',
+  in2: 'in²',
+  ft2: 'ft²',
+  'ft^2': 'ft²',
   inh2o: 'inH₂O',
   'inH2O': 'inH₂O',
   'in H2O': 'inH₂O',
@@ -75,6 +84,7 @@ export const IMPERIAL_DEFAULT: Readonly<Record<Quantity, string>> = Object.freez
   angular_velocity: 'rpm',
   density: 'lb/ft³',
   kinematic_viscosity: 'ft²/s',
+  area: 'ft²',
 });
 
 export function resolveUnit(quantity: Quantity, unit: string): string {
@@ -121,6 +131,7 @@ export const SI_DEFAULT: Readonly<Record<Quantity, string>> = Object.freeze({
   angular_velocity: 'rad/s',
   density: 'kg/m³',
   kinematic_viscosity: 'm²/s',
+  area: 'm²',
 });
 
 export function unitLabels(quantity: Quantity): string[] {

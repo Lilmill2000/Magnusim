@@ -2351,6 +2351,19 @@ select.fp-select {
 .inspect-pin-miss {
   color: #6b7280;
 }
+.inspect-pin-probe {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+}
+/* Monitor panel: boundaries (Forces) and points (probes). */
+.aa-boundary-label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.aa-boundary-note { margin: 2px 0 0 22px; }
+.aa-point-add { display: flex; align-items: center; gap: 4px; margin: 6px 0 2px; }
+.aa-point-add .aa-point-input { width: 56px; }
+.aa-point-add .aa-point-input.is-invalid { border-color: #d92d20; }
+.aa-point-text { font-variant-numeric: tabular-nums; }
+.aa-study-note { margin-top: 8px; }
 
 
 /* Particle Trace seed-face checkboxes */
@@ -2687,6 +2700,12 @@ select.fp-select {
 }
 .sim-study-settings .mat-row { border-bottom: 1px solid #eef1f5; }
 .sim-def-hint { margin-top: 8px; }
+/* Study panel: Reference values (Incompressible Flow). */
+.sim-ref { margin-top: 10px; }
+.sim-ref-head { margin-bottom: 2px; }
+.sim-ref .sim-def-row { align-items: center; }
+.sim-ref .sim-ref-input { width: 72px; font-weight: 500; }
+.sim-ref-vec .sim-ref-input { width: 46px; }
 .sim-copy-from {
   margin: 0 0 10px;
   padding-bottom: 10px;
@@ -3692,6 +3711,8 @@ select.fp-select {
   color: #98a2b3;
   font-style: italic;
 }
+/* A monitor row's own note (a boundary the mesh lacks, a point outside the fluid). */
+.mon-card .mon-note.mat-assign-hint { margin: 4px 0 0; }
 .mon-balance {
   margin: 0 0 8px;
   padding: 6px 10px;

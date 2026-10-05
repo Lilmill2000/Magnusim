@@ -20,6 +20,7 @@ from .function_objects import (
 )
 from .monitors import MONITOR_QUANTITIES
 from .physics import DEFAULT_TURBULENCE, KINEMATIC_FIELDS, TURBULENCE_MODELS
+from .pressure_coefficient import CP_RESULT_FIELD
 
 # Both analyses offer every BC type this plugin registers (bcs.BC_TYPES).
 _INCOMPRESSIBLE_BC_TYPES: tuple[str, ...] = BC_KEYS
@@ -67,7 +68,7 @@ _RESULT_FIELDS: tuple[ResultField, ...] = (
 )
 
 # MonitorType keys (wired to registry in land5; flow->flow_rate bag fix).
-_MONITORS: tuple[str, ...] = ("area_average", "flow_rate")
+_MONITORS: tuple[str, ...] = ("area_average", "flow_rate", "forces", "probe")
 
 _MATERIAL_MODELS: tuple[str, ...] = ("newtonian_incompressible",)
 
@@ -101,6 +102,84 @@ def _settings_schema() -> tuple[SchemaField, ...]:
                 "(LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models "
                 "suit strong swirl but may need a converged k-epsilon run first. Laminar solves "
                 "no turbulence at all."
+            ),
+        ),
+        *_reference_schema(),
+    )
+
+
+def _reference_schema() -> tuple[SchemaField, ...]:
+    """The study's reference values (incompressible_flow.reference), group
+    "reference", SI: what Forces monitors and the pressure coefficient measure
+    against. All blank by default, so nothing is copied into a new study: a
+    blank speed or direction is calculated, a blank pressure or centre of
+    rotation has a fixed default, and area and length have none."""
+    return (
+        SchemaField(
+            "ref_speed",
+            "Reference speed",
+            "float",
+            min=0.0,
+            quantity="velocity",
+            group="reference",
+            optional=True,
+            description="The free-stream speed U∞ coefficients divide by. Blank uses the inlet's speed.",
+        ),
+        SchemaField(
+            "ref_pressure",
+            "Reference pressure",
+            "float",
+            quantity="pressure",
+            group="reference",
+            optional=True,
+            description="The free-stream gauge pressure p∞ the pressure coefficient subtracts. Blank is 0 Pa.",
+        ),
+        SchemaField(
+            "ref_area",
+            "Reference area",
+            "float",
+            min=0.0,
+            quantity="area",
+            group="reference",
+            optional=True,
+            description="The area force coefficients divide by (a frontal or wing area). No coefficients without it.",
+        ),
+        SchemaField(
+            "ref_length",
+            "Reference length",
+            "float",
+            min=0.0,
+            quantity="length",
+            group="reference",
+            optional=True,
+            description="The length the moment coefficient divides by (a chord). No moment coefficient without it.",
+        ),
+        SchemaField(
+            "ref_cofr",
+            "Centre of rotation",
+            "vector3",
+            quantity="length",
+            group="reference",
+            optional=True,
+            description="The point moments are taken about. Blank is the origin.",
+        ),
+        SchemaField(
+            "ref_drag_dir",
+            "Drag direction",
+            "vector3",
+            group="reference",
+            optional=True,
+            description="The direction drag is measured along. Blank uses the inlet's flow direction, else +X.",
+        ),
+        SchemaField(
+            "ref_lift_dir",
+            "Lift direction",
+            "vector3",
+            group="reference",
+            optional=True,
+            description=(
+                "The direction lift is measured along, at right angles to drag. "
+                "Blank is +Z (+Y when drag runs along Z)."
             ),
         ),
     )
@@ -503,7 +582,7 @@ def build_incompressible_steady() -> AnalysisType:
         solver_backends=("simpleFoam",),
         default_solver="simpleFoam",
         monitors=_MONITORS,
-        result_fields=_RESULT_FIELDS,
+        result_fields=_RESULT_FIELDS + (CP_RESULT_FIELD,),
         settings_schema=_settings_schema(),
         numerics_schema=_numerics_schema(transient=False),
         control_schema=_control_schema(transient=False),
@@ -526,7 +605,7 @@ def build_incompressible_transient() -> AnalysisType:
         solver_backends=("pimpleFoam",),
         default_solver="pimpleFoam",
         monitors=_MONITORS,
-        result_fields=_RESULT_FIELDS,
+        result_fields=_RESULT_FIELDS + (CP_RESULT_FIELD,),
         settings_schema=_settings_schema(),
         numerics_schema=_numerics_schema(transient=True),
         control_schema=_control_schema(transient=True),

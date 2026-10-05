@@ -16,6 +16,8 @@ const SIM = 'sim_1';
 const BASELINE = resolve('bundled-plugins/incompressible_flow/e2e/fixtures/h10-ui-parity.json');
 const UPDATE = process.env.MAGNUSIM_UPDATE_PARITY === '1';
 const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
+// Rows the study panel gained after v0.2.0 (Reference values, F4), left out of the comparison.
+const STUDY_ADDED = '[data-study-reference]';
 
 function stage(t0, msg) {
   console.log(`[h10 +${Math.round((Date.now() - t0) / 1000)}s] ${msg}`);
@@ -227,7 +229,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
 
   // Steady-state: the study panel, a draft run, and the finished run with its residuals.
   await openStudy();
-  await capture(page, 'study-steady', studyPanel);
+  await capture(page, 'study-steady', studyPanel, { skip: STUDY_ADDED });
   const steady = await createRun('Parity steady');
   await openRun(steady);
   await capture(page, 'run-draft-steady', runPanel);
@@ -246,7 +248,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await openStudy();
   await studyPanel.getByLabel('Time dependency').selectOption('Transient');
   await expect.poll(async () => (await getJson(request, simUrl)).simulation?.analysis_type).toBe('incompressible_transient');
-  await capture(page, 'study-transient', studyPanel);
+  await capture(page, 'study-transient', studyPanel, { skip: STUDY_ADDED });
   const transient = await createRun('Parity transient');
   await openRun(transient);
   await expect(runControl.locator('[data-run-transient-hint]')).toContainText('(auto)', { timeout: 60_000 });

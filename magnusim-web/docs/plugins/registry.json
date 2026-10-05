@@ -30,6 +30,99 @@
             },
             "title": "Turbulence model",
             "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
+          },
+          "ref_speed": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "velocity",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Reference speed",
+            "description": "The free-stream speed U\u221e coefficients divide by. Blank uses the inlet's speed."
+          },
+          "ref_pressure": {
+            "type": "number",
+            "default": null,
+            "x-cfddesk": {
+              "quantity": "pressure",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Reference pressure",
+            "description": "The free-stream gauge pressure p\u221e the pressure coefficient subtracts. Blank is 0 Pa."
+          },
+          "ref_area": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "area",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Reference area",
+            "description": "The area force coefficients divide by (a frontal or wing area). No coefficients without it."
+          },
+          "ref_length": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "length",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Reference length",
+            "description": "The length the moment coefficient divides by (a chord). No moment coefficient without it."
+          },
+          "ref_cofr": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": null,
+            "x-cfddesk": {
+              "quantity": "length",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Centre of rotation",
+            "description": "The point moments are taken about. Blank is the origin."
+          },
+          "ref_drag_dir": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": null,
+            "x-cfddesk": {
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Drag direction",
+            "description": "The direction drag is measured along. Blank uses the inlet's flow direction, else +X."
+          },
+          "ref_lift_dir": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": null,
+            "x-cfddesk": {
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Lift direction",
+            "description": "The direction lift is measured along, at right angles to drag. Blank is +Z (+Y when drag runs along Z)."
           }
         },
         "additionalProperties": false
@@ -367,6 +460,15 @@
           "unit": "Pa",
           "magnitude_label": "",
           "shown": "pMean"
+        },
+        {
+          "key": "Cp",
+          "label": "Pressure coefficient",
+          "unit_quantity": "dimensionless",
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "Cp"
         }
       ],
       "kinematic_fields": [
@@ -526,6 +628,424 @@
           "details": true,
           "headline": false,
           "csv": "mass_kg_s"
+        },
+        {
+          "key": "Fd",
+          "label": "Drag force",
+          "sample": "Fd_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "drag_N"
+        },
+        {
+          "key": "Fl",
+          "label": "Lift force",
+          "sample": "Fl_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#1570ef",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "lift_N"
+        },
+        {
+          "key": "Fs",
+          "label": "Side force",
+          "sample": "Fs_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#7a5af8",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "side_N"
+        },
+        {
+          "key": "Fdp",
+          "label": "Pressure drag",
+          "sample": "Fdp_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "pressure_drag_N"
+        },
+        {
+          "key": "Fdv",
+          "label": "Viscous drag",
+          "sample": "Fdv_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "viscous_drag_N"
+        },
+        {
+          "key": "Fx",
+          "label": "Force X",
+          "sample": "F_N",
+          "component": 0,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Fx_N"
+        },
+        {
+          "key": "Fy",
+          "label": "Force Y",
+          "sample": "F_N",
+          "component": 1,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Fy_N"
+        },
+        {
+          "key": "Fz",
+          "label": "Force Z",
+          "sample": "F_N",
+          "component": 2,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Fz_N"
+        },
+        {
+          "key": "Fpx",
+          "label": "Pressure force X",
+          "sample": "Fp_N",
+          "component": 0,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fpx_N"
+        },
+        {
+          "key": "Fpy",
+          "label": "Pressure force Y",
+          "sample": "Fp_N",
+          "component": 1,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fpy_N"
+        },
+        {
+          "key": "Fpz",
+          "label": "Pressure force Z",
+          "sample": "Fp_N",
+          "component": 2,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fpz_N"
+        },
+        {
+          "key": "Fvx",
+          "label": "Viscous force X",
+          "sample": "Fv_N",
+          "component": 0,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fvx_N"
+        },
+        {
+          "key": "Fvy",
+          "label": "Viscous force Y",
+          "sample": "Fv_N",
+          "component": 1,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fvy_N"
+        },
+        {
+          "key": "Fvz",
+          "label": "Viscous force Z",
+          "sample": "Fv_N",
+          "component": 2,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fvz_N"
+        },
+        {
+          "key": "Mx",
+          "label": "Moment X",
+          "sample": "M_Nm",
+          "component": 0,
+          "unit_quantity": "moment",
+          "unit": "N\u00b7m",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Mx_Nm"
+        },
+        {
+          "key": "My",
+          "label": "Moment Y",
+          "sample": "M_Nm",
+          "component": 1,
+          "unit_quantity": "moment",
+          "unit": "N\u00b7m",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "My_Nm"
+        },
+        {
+          "key": "Mz",
+          "label": "Moment Z",
+          "sample": "M_Nm",
+          "component": 2,
+          "unit_quantity": "moment",
+          "unit": "N\u00b7m",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Mz_Nm"
+        },
+        {
+          "key": "Cd",
+          "label": "Drag coefficient",
+          "sample": "Cd",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "Cd"
+        },
+        {
+          "key": "Cl",
+          "label": "Lift coefficient",
+          "sample": "Cl",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "",
+          "color": "#1570ef",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "Cl"
+        },
+        {
+          "key": "Cs",
+          "label": "Side force coefficient",
+          "sample": "Cs",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "",
+          "color": "#7a5af8",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Cs"
+        },
+        {
+          "key": "Cm",
+          "label": "Pitching moment coefficient",
+          "sample": "CmPitch",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Cm_pitch"
+        },
+        {
+          "key": "Upt",
+          "label": "Velocity magnitude",
+          "sample": "Upt_m_s",
+          "component": null,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "velocity_magnitude_m_s"
         }
       ],
       "live_metrics": [],
@@ -594,6 +1114,99 @@
             },
             "title": "Turbulence model",
             "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
+          },
+          "ref_speed": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "velocity",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Reference speed",
+            "description": "The free-stream speed U\u221e coefficients divide by. Blank uses the inlet's speed."
+          },
+          "ref_pressure": {
+            "type": "number",
+            "default": null,
+            "x-cfddesk": {
+              "quantity": "pressure",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Reference pressure",
+            "description": "The free-stream gauge pressure p\u221e the pressure coefficient subtracts. Blank is 0 Pa."
+          },
+          "ref_area": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "area",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Reference area",
+            "description": "The area force coefficients divide by (a frontal or wing area). No coefficients without it."
+          },
+          "ref_length": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "length",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Reference length",
+            "description": "The length the moment coefficient divides by (a chord). No moment coefficient without it."
+          },
+          "ref_cofr": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": null,
+            "x-cfddesk": {
+              "quantity": "length",
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Centre of rotation",
+            "description": "The point moments are taken about. Blank is the origin."
+          },
+          "ref_drag_dir": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": null,
+            "x-cfddesk": {
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Drag direction",
+            "description": "The direction drag is measured along. Blank uses the inlet's flow direction, else +X."
+          },
+          "ref_lift_dir": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": null,
+            "x-cfddesk": {
+              "group": "reference",
+              "optional": true
+            },
+            "title": "Lift direction",
+            "description": "The direction lift is measured along, at right angles to drag. Blank is +Z (+Y when drag runs along Z)."
           }
         },
         "additionalProperties": false
@@ -1012,6 +1625,15 @@
           "unit": "Pa",
           "magnitude_label": "",
           "shown": "pMean"
+        },
+        {
+          "key": "Cp",
+          "label": "Pressure coefficient",
+          "unit_quantity": "dimensionless",
+          "kind": "scalar",
+          "unit": "",
+          "magnitude_label": "",
+          "shown": "Cp"
         }
       ],
       "kinematic_fields": [
@@ -1171,6 +1793,424 @@
           "details": true,
           "headline": false,
           "csv": "mass_kg_s"
+        },
+        {
+          "key": "Fd",
+          "label": "Drag force",
+          "sample": "Fd_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "drag_N"
+        },
+        {
+          "key": "Fl",
+          "label": "Lift force",
+          "sample": "Fl_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#1570ef",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "lift_N"
+        },
+        {
+          "key": "Fs",
+          "label": "Side force",
+          "sample": "Fs_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#7a5af8",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "side_N"
+        },
+        {
+          "key": "Fdp",
+          "label": "Pressure drag",
+          "sample": "Fdp_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "pressure_drag_N"
+        },
+        {
+          "key": "Fdv",
+          "label": "Viscous drag",
+          "sample": "Fdv_N",
+          "component": null,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "viscous_drag_N"
+        },
+        {
+          "key": "Fx",
+          "label": "Force X",
+          "sample": "F_N",
+          "component": 0,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Fx_N"
+        },
+        {
+          "key": "Fy",
+          "label": "Force Y",
+          "sample": "F_N",
+          "component": 1,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Fy_N"
+        },
+        {
+          "key": "Fz",
+          "label": "Force Z",
+          "sample": "F_N",
+          "component": 2,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Fz_N"
+        },
+        {
+          "key": "Fpx",
+          "label": "Pressure force X",
+          "sample": "Fp_N",
+          "component": 0,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fpx_N"
+        },
+        {
+          "key": "Fpy",
+          "label": "Pressure force Y",
+          "sample": "Fp_N",
+          "component": 1,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fpy_N"
+        },
+        {
+          "key": "Fpz",
+          "label": "Pressure force Z",
+          "sample": "Fp_N",
+          "component": 2,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fpz_N"
+        },
+        {
+          "key": "Fvx",
+          "label": "Viscous force X",
+          "sample": "Fv_N",
+          "component": 0,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fvx_N"
+        },
+        {
+          "key": "Fvy",
+          "label": "Viscous force Y",
+          "sample": "Fv_N",
+          "component": 1,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fvy_N"
+        },
+        {
+          "key": "Fvz",
+          "label": "Viscous force Z",
+          "sample": "Fv_N",
+          "component": 2,
+          "unit_quantity": "force",
+          "unit": "N",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": false,
+          "details": true,
+          "headline": false,
+          "csv": "Fvz_N"
+        },
+        {
+          "key": "Mx",
+          "label": "Moment X",
+          "sample": "M_Nm",
+          "component": 0,
+          "unit_quantity": "moment",
+          "unit": "N\u00b7m",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Mx_Nm"
+        },
+        {
+          "key": "My",
+          "label": "Moment Y",
+          "sample": "M_Nm",
+          "component": 1,
+          "unit_quantity": "moment",
+          "unit": "N\u00b7m",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "My_Nm"
+        },
+        {
+          "key": "Mz",
+          "label": "Moment Z",
+          "sample": "M_Nm",
+          "component": 2,
+          "unit_quantity": "moment",
+          "unit": "N\u00b7m",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Mz_Nm"
+        },
+        {
+          "key": "Cd",
+          "label": "Drag coefficient",
+          "sample": "Cd",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "Cd"
+        },
+        {
+          "key": "Cl",
+          "label": "Lift coefficient",
+          "sample": "Cl",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "",
+          "color": "#1570ef",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "Cl"
+        },
+        {
+          "key": "Cs",
+          "label": "Side force coefficient",
+          "sample": "Cs",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "",
+          "color": "#7a5af8",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Cs"
+        },
+        {
+          "key": "Cm",
+          "label": "Pitching moment coefficient",
+          "sample": "CmPitch",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "Cm_pitch"
+        },
+        {
+          "key": "Upt",
+          "label": "Velocity magnitude",
+          "sample": "Upt_m_s",
+          "component": null,
+          "unit_quantity": "velocity",
+          "unit": "m/s",
+          "color": "#3884e6",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "velocity_magnitude_m_s"
         }
       ],
       "live_metrics": [
@@ -3339,6 +4379,8 @@
         "Uy",
         "Uz"
       ],
+      "boundary_kinds": [],
+      "study_note": "",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -3368,6 +4410,8 @@
         "mdot",
         "Un"
       ],
+      "boundary_kinds": [],
+      "study_note": "",
       "schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -3381,6 +4425,72 @@
             "title": "Fields"
           }
         },
+        "additionalProperties": false
+      }
+    },
+    {
+      "key": "forces",
+      "label": "Forces",
+      "plugin": "incompressible_flow",
+      "target": "boundary",
+      "description": "Force and moment on the walls you pick, along the study's drag and lift directions, and their coefficients once the study has a reference area, at every saved step.",
+      "aliases": [],
+      "user_creatable": true,
+      "quantities": [
+        "Fd",
+        "Fl",
+        "Fs",
+        "Fdp",
+        "Fdv",
+        "Fx",
+        "Fy",
+        "Fz",
+        "Fpx",
+        "Fpy",
+        "Fpz",
+        "Fvx",
+        "Fvy",
+        "Fvz",
+        "Mx",
+        "My",
+        "Mz",
+        "Cd",
+        "Cl",
+        "Cs",
+        "Cm"
+      ],
+      "boundary_kinds": [
+        "wall"
+      ],
+      "study_note": "Uses the study's reference values: speed, area, length, directions and centre of rotation.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "key": "probe",
+      "label": "Point probe",
+      "plugin": "incompressible_flow",
+      "target": "point",
+      "description": "Pressure and velocity at points you place in the fluid, at every saved step.",
+      "aliases": [],
+      "user_creatable": true,
+      "quantities": [
+        "p",
+        "Upt",
+        "Ux",
+        "Uy",
+        "Uz"
+      ],
+      "boundary_kinds": [],
+      "study_note": "",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     }

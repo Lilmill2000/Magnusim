@@ -31,8 +31,9 @@ from magnusim_sdk.study import (
 )
 
 from .materials import LEGACY_AIR
-from .monitors import custom_monitors
+from .monitors import custom_monitors, forces_monitor_records, probe_monitor_records
 from .physics import StudyPhysics, physics_from_record
+from .reference import reference_record
 from .transient import STEADY_DEFAULTS, TransientControl, load_mesh_meta, resolve_transient_control
 
 __all__ = [
@@ -110,6 +111,12 @@ class RunSpec:
     physics: StudyPhysics = field(default_factory=StudyPhysics)
     # This run's custom monitors: {"name", "faces"} (area average on any faces).
     custom_monitors: list[dict[str, Any]] = field(default_factory=list)
+    # The study's reference values as saved (``ref_*`` keys, SI; incompressible_flow.reference).
+    reference: dict[str, Any] = field(default_factory=dict)
+    # This run's Forces monitors: {"id", "name", "boundaries"} (BC ids or names, "@walls").
+    forces_monitors: list[dict[str, Any]] = field(default_factory=list)
+    # This run's Point probes: {"id", "name", "points"} (metres, the mesh's coordinates).
+    probe_monitors: list[dict[str, Any]] = field(default_factory=list)
     analysis_key: str = ""
     time_dependency: Literal["steady", "transient"] = "steady"
     ok: bool = True
@@ -254,6 +261,9 @@ def load_run_spec(inputs: Any) -> RunSpec:
         mapped=mapped,
         physics=physics_from_record(inputs.study or None),
         custom_monitors=custom_monitors((inputs.run or {}).get("result_controls")),
+        reference=reference_record(inputs.study or None),
+        forces_monitors=forces_monitor_records((inputs.run or {}).get("result_controls")),
+        probe_monitors=probe_monitor_records((inputs.run or {}).get("result_controls")),
         analysis_key=inputs.analysis_key,
         time_dependency=td,
         ok=True,
