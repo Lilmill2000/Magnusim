@@ -45,7 +45,9 @@ async function createRun(request, name) {
 }
 
 async function openRun(page, rid) {
+  // A fresh load each time: a click on the run already open would close its panel.
   await page.goto(`/#/p/${PROJECT}`);
+  await page.reload();
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PROJECT, { timeout: 60_000 });
   const folder = page.locator(`#left-tree [data-w17-sim-id="${SIM}"] li[data-w27-sim-control="1"]`).first();
   if (!(await folder.evaluate((el) => el.classList.contains('expanded')))) {
@@ -77,22 +79,24 @@ test('the Run panel offers Stop when a monitor settles from the run monitors and
   let runControl = await openRun(page, rid);
   const select = runControl.getByLabel('Stop when a monitor settles', { exact: true });
   await expect(select).toHaveValue('');
+  // The run's monitors, then the study's boundaries, each in the order the run and the
+  // study list them (their saved order: by name).
   await expect(select.locator('option')).toHaveText([
     'Off',
+    'Area average 1 · Pressure',
+    'Area average 1 · Velocity',
     'Forces 1 · Cd',
     'Forces 1 · Cl',
     'Forces 1 · Cs',
     'Forces 1 · Cm',
     'Probe 1 · Pressure (average of its points)',
     'Probe 1 · Velocity (average of its points)',
-    'Area average 1 · Pressure',
-    'Area average 1 · Velocity',
-    'velocity_inlet_1 · Pressure',
-    'velocity_inlet_1 · Velocity',
-    'velocity_inlet_1 · Flow rate',
     'pressure_1 · Pressure',
     'pressure_1 · Velocity',
     'pressure_1 · Flow rate',
+    'velocity_inlet_1 · Pressure',
+    'velocity_inlet_1 · Velocity',
+    'velocity_inlet_1 · Flow rate',
   ]);
   await expect(runControl.getByLabel('Within', { exact: true })).toHaveCount(0);
 
