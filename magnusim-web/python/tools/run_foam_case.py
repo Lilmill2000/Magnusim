@@ -28,7 +28,7 @@ from pathlib import Path
 STARTUP_DUMP_S = 120
 if "--spec" in sys.argv and "--launch" not in sys.argv and "--selftest" not in sys.argv:
     try:
-        sys.stdout.write('MAGNUSIM_EVENT {"event":"relay_alive","pid":%d}\n' % os.getpid())
+        sys.stdout.write(f'MAGNUSIM_EVENT {{"event":"relay_alive","pid":{os.getpid()}}}\n')
         sys.stdout.flush()
     except (OSError, ValueError):
         pass

@@ -99,6 +99,14 @@ describe('stop.bat targets', { skip: PS ? false : 'no PowerShell here (stop.bat 
     assert.deepEqual(roots([...app, ...sameFolderE2e], [14]), [11]);
   });
 
+  it('a plugin case relay (run_foam_case.py) is never a target, even naming this folder and Vite (H15)', () => {
+    const relay = [
+      p(90, 1, 'node.exe', `"node" "${HERE}\python\tools\run_foam_case.py" --spec ${HERE}\.cache\vite\bin\vite.js`),
+      p(91, 1, 'python.exe', `"${HERE}\python\.venv\Scripts\python.exe" "${HERE}\python\tools\run_foam_case.py" --spec x.json`),
+    ];
+    assert.deepEqual(roots(relay, [90, 91]), []);
+  });
+
   it('the walk stops at what is not its own wrapper: an agent shell, Explorer, another folder with a similar name', () => {
     const agent = [
       p(70, 1, 'powershell.exe', 'powershell -NoProfile -ExecutionPolicy Bypass -NonInteractive -File C:\\t\\ps-script-1.ps1'),
