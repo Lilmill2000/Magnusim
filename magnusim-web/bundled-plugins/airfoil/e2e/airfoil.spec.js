@@ -368,6 +368,55 @@ test('the Airfoil workspace: section preview, saved inputs, honest engine messag
     await expect.poll(() => JSON.parse(readFileSync(studyFile, 'utf8')).view?.engine ?? null).toBe('xfoil');
     await page.screenshot({ path: test.info().outputPath('workspace-2412.png') });
 
+    // The dimensions, from 2412's digits, and drawn on the section as on an airfoil diagram.
+    const dim = (id) => ws.locator(`#${id}`);
+    await expect(dim('af-dim-thickness')).toHaveValue('12');
+    await expect(dim('af-dim-thickness-at')).toHaveValue('30');
+    await expect(dim('af-dim-camber')).toHaveValue('2');
+    await expect(dim('af-dim-camber-at')).toHaveValue('40');
+    await expect(dim('af-dim-le')).toHaveValue('1.587');
+    for (const mark of ['dim-camber', 'dim-thickness', 'dim-le-circle']) await expect(ws.locator(`[data-af="${mark}"]`)).toHaveCount(1);
+    await expect(ws.locator('[data-af="dim-thickness"]')).toContainText('thickness 12.0 % at 30 %');
+    await expect(ws.locator('[data-af="dim-camber"]')).toContainText('camber 2.0 % at 40 %');
+    const leR = async () => Number(await ws.locator('[data-af="dim-le-circle"] circle').getAttribute('r'));
+    const r0 = await leR();
+    // A blunter nose: a NACA 4-digit-modified section named by its dimensions, drawn and saved.
+    await commitField(ws, 'af-dim-le', 2.5);
+    await expect(ws.locator('.af-inputs')).toContainText('Custom t12.0@30 c2.0@40 r2.50 · thickness 12.00 %');
+    // No NACA digits for it: the field is empty and shows the section's name.
+    await expect(ws.locator('[data-af="naca"]')).toHaveValue('');
+    await expect(ws.locator('[data-af="naca"]')).toHaveAttribute('placeholder', 'Custom t12.0@30 c2.0@40 r2.50');
+    await expect.poll(leR).toBeGreaterThan(r0 * 1.5);
+    await expect
+      .poll(() => JSON.parse(readFileSync(studyFile, 'utf8')).airfoil ?? null)
+      .toMatchObject({ source: 'shape', thickness: 0.12, thickness_at: 0.3, camber: 0.02, camber_at: 0.4, le_radius: 0.025 });
+    // A thicker section keeps the nose's index: its radius grows with the thickness squared.
+    await commitField(ws, 'af-dim-thickness', 15);
+    await expect(dim('af-dim-le')).toHaveValue('3.906');
+    await expect(ws.locator('.af-inputs')).toContainText('thickness 15.00 % at 30');
+    // The thickest point moves back.
+    await commitField(ws, 'af-dim-thickness-at', 45);
+    await expect(ws.locator('.af-inputs')).toContainText(/thickness 1(4\.99|5\.00) % at 4[4-6]/);
+    // A dimension the family cannot make: the reason, its field, and nothing saved.
+    await commitField(ws, 'af-dim-thickness-at', 70);
+    await expect(ws.locator('.af-inputs [role="alert"]')).toHaveText(/Maximum-thickness position must be 20 % to 60 % of the chord/);
+    expect(JSON.parse(readFileSync(studyFile, 'utf8')).airfoil.thickness_at, 'a refused dimension was saved').toBe(0.45);
+    // Whole designation digits are named as the family names them.
+    // Each edit waits for the one before to land (the radius field shows the new radius).
+    await commitField(ws, 'af-dim-thickness-at', 30);
+    await expect(ws.locator('.af-inputs')).toContainText(/thickness 1(4\.99|5\.00) % at 30/);
+    await commitField(ws, 'af-dim-thickness', 12);
+    await expect(dim('af-dim-le')).toHaveValue('2.5');
+    await commitField(ws, 'af-dim-le', 1.587);
+    await expect(ws.locator('.af-inputs')).toContainText('NACA 2412-63 · thickness 12.00 %');
+    await page.screenshot({ path: test.info().outputPath('workspace-dimensions.png') });
+    // A NACA designation makes it that section again.
+    await ws.locator('[data-af="naca"]').fill('2412');
+    await ws.locator('[data-af="naca"]').press('Enter');
+    await expect(ws.locator('.af-inputs')).toContainText('NACA 2412 · thickness 12.00 %');
+    await expect.poll(() => JSON.parse(readFileSync(studyFile, 'utf8')).airfoil?.source ?? null).toBe('naca');
+    stage(t0, 'dimensions: edited, drawn, named, refused, and back to NACA 2412');
+
     // A new designation: the preview follows and the study keeps it.
     await ws.locator('[data-af="naca"]').fill('0012');
     await ws.locator('[data-af="naca"]').press('Enter');

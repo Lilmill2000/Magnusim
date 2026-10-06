@@ -74,6 +74,11 @@ const FIELDS = {
   ncrit: ['af-ncrit', 'Change Ncrit'],
   xtr_top: ['af-xtr-top', 'Change the upper trip'],
   xtr_bottom: ['af-xtr-bottom', 'Change the lower trip'],
+  thickness: ['af-dim-thickness', 'Change the maximum thickness'],
+  thickness_at: ['af-dim-thickness-at', 'Change where the maximum thickness is'],
+  camber: ['af-dim-camber', 'Change the maximum camber'],
+  camber_at: ['af-dim-camber-at', 'Change where the maximum camber is'],
+  le_radius: ['af-dim-le', 'Change the leading-edge radius'],
 };
 
 /** A disabled reason's fix that takes the user to the field the check named (in another card). */
@@ -173,22 +178,150 @@ function download(filename, text, type) {
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
-/** The section's outline, chord across the box, y to the same scale. */
-function Outline({ section }) {
+/** The leading-edge radius of an original NACA 4-digit section of thickness t (fractions of chord). */
+const standardLeRadius = (t) => 1.1019 * t * t;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** The 4-digit mean line at x (chord 1): its height and slope. */
+function meanLine(c, p, x) {
+  if (!(c > 0)) return { y: 0, slope: 0 };
+  if (x < p) return { y: (c / p ** 2) * (2 * p * x - x * x), slope: ((2 * c) / p ** 2) * (p - x) };
+  return { y: (c / (1 - p) ** 2) * (1 - 2 * p + 2 * p * x - x * x), slope: ((2 * c) / (1 - p) ** 2) * (p - x) };
+}
+
+/**
+ * The dimensions the editor shows (fractions of chord): the shape's own; a 4-digit code's
+ * from its digits (the family's "-63" twin, within 0.2 % of chord of it); else measured from
+ * the section, rounded into the family's ranges ('measured': an approximation).
+ */
+function dimsOf(a, section) {
+  if (a.source === 'shape') {
+    const { thickness, thickness_at, camber, camber_at, le_radius, closed_te } = a;
+    return { how: 'shape', dims: { thickness, thickness_at, camber, camber_at, le_radius, closed_te: Boolean(closed_te) } };
+  }
+  if (a.source === 'naca' && /^\d{4}$/.test(a.code)) {
+    const c = Number(a.code[0]) / 100;
+    const t = Number(a.code.slice(2)) / 100;
+    const p = c > 0 ? clamp(Number(a.code[1]) / 10, 0.1, 0.9) : 0.4;
+    return { how: 'naca4', dims: { thickness: t, thickness_at: 0.3, camber: c, camber_at: p, le_radius: standardLeRadius(t), closed_te: Boolean(a.closed_te) } };
+  }
+  if (!section) return null;
+  return {
+    how: 'measured',
+    dims: {
+      thickness: clamp(section.thickness, 0.01, 0.4),
+      thickness_at: clamp(section.thickness_at, 0.2, 0.6),
+      camber: clamp(Math.abs(section.camber), 0, 0.095),
+      camber_at: clamp(section.camber_at, 0.1, 0.9),
+      le_radius: standardLeRadius(clamp(section.thickness, 0.01, 0.4)),
+      closed_te: section.te_gap < 1e-4,
+    },
+  };
+}
+
+/** The upper and lower surface heights at x, from the Selig points (upper first). */
+function surfacesAt(section, x) {
+  let le = 0;
+  for (let i = 1; i < section.x.length; i++) if (section.x[i] < section.x[le]) le = i;
+  const at = (from, to) => {
+    for (let i = from; i < to; i++) {
+      const x0 = section.x[i];
+      const x1 = section.x[i + 1];
+      if ((x - x0) * (x - x1) <= 0 && x0 !== x1) return section.y[i] + ((x - x0) / (x1 - x0)) * (section.y[i + 1] - section.y[i]);
+    }
+    return null;
+  };
+  return { upper: at(0, le), lower: at(le, section.x.length - 1) };
+}
+
+/**
+ * The section, chord across the box, y to the same scale; with its dimensions drawn on it as
+ * on an airfoil diagram: the chord line, the camber line and its maximum, the maximum
+ * thickness and the leading-edge circle.
+ */
+function Outline({ section, dims }) {
   if (!section) return h(EmptyState, { variant: 'chart' }, 'No section yet');
   const W = 600;
   const pad = 16;
+  const top = dims ? 44 : 0;
+  const bottom = dims ? 44 : 0;
   const ys = section.y;
   const ymin = Math.min(...ys);
   const ymax = Math.max(...ys);
   const scale = W - 2 * pad;
-  const H = Math.max(80, Math.ceil((ymax - ymin) * scale + 2 * pad));
-  const pts = section.x.map((x, i) => `${(pad + x * scale).toFixed(2)},${(pad + (ymax - ys[i]) * scale).toFixed(2)}`).join(' ');
+  const H = Math.max(80, Math.ceil((ymax - ymin) * scale + 2 * pad + top + bottom));
+  const X = (x) => pad + x * scale;
+  const Y = (y) => pad + top + (ymax - y) * scale;
+  const pts = section.x.map((x, i) => `${X(x).toFixed(2)},${Y(ys[i]).toFixed(2)}`).join(' ');
+  const pct = (v, d = 1) => `${(v * 100).toFixed(d)} %`;
+  // Labels are placed by their width (about 0.55 em a character) so none runs into another.
+  const FONT = 17;
+  const widthOf = (text) => text.length * FONT * 0.55;
+  const centredAt = (x, text, lo = pad, hi = W - pad) => {
+    const half = widthOf(text) / 2;
+    return Math.min(hi - half, Math.max(lo + half, x));
+  };
+  const marks = [];
+  if (dims) {
+    const { thickness, thickness_at: tAt, camber, camber_at: cAt, le_radius: r } = dims;
+    // The camber line, dashed, and its maximum.
+    if (camber > 0) {
+      const line = [];
+      for (let i = 0; i <= 60; i++) {
+        const x = 0.5 * (1 - Math.cos((Math.PI * i) / 60));
+        line.push(`${X(x).toFixed(1)},${Y(meanLine(camber, cAt, x).y).toFixed(1)}`);
+      }
+      marks.push(h('polyline', { key: 'camber-line', className: 'af-dim-camber-line', points: line.join(' ') }));
+      marks.push(
+        h(
+          'g',
+          { key: 'camber', 'data-af': 'dim-camber' },
+          h('line', { className: 'af-dim-mark', x1: X(cAt), x2: X(cAt), y1: Y(0), y2: Y(camber) }),
+          h('circle', { className: 'af-dim-dot', cx: X(cAt), cy: Y(camber), r: 3 }),
+          h(
+            'text',
+            { className: 'af-dim-text', x: centredAt(X(cAt), `camber ${pct(camber)} at ${pct(cAt, 0)}`), y: top - 8, textAnchor: 'middle' },
+            `camber ${pct(camber)} at ${pct(cAt, 0)}`,
+          ),
+        ),
+      );
+    }
+    // The bottom row: the nose's label at the left, the thickness label right of it.
+    const leText = `LE radius ${pct(r, 2)}`;
+    const thText = `thickness ${pct(thickness)} at ${pct(tAt, 0)}`;
+    const leEnd = r > 0 ? X(0) + widthOf(leText) + 12 : pad;
+    // The maximum thickness, across the section where it is.
+    const s = surfacesAt(section, tAt);
+    if (s.upper != null && s.lower != null) {
+      marks.push(
+        h(
+          'g',
+          { key: 'thickness', 'data-af': 'dim-thickness' },
+          h('line', { className: 'af-dim-mark af-dim-strong', x1: X(tAt), x2: X(tAt), y1: Y(s.upper), y2: Y(s.lower) }),
+          h('text', { className: 'af-dim-text', x: centredAt(X(tAt), thText, leEnd), y: H - 8, textAnchor: 'middle' }, thText),
+        ),
+      );
+    }
+    // The leading-edge circle: its centre on the camber line's direction at the leading edge.
+    if (r > 0) {
+      const th = Math.atan(meanLine(camber, cAt, 0).slope);
+      marks.push(
+        h(
+          'g',
+          { key: 'le', 'data-af': 'dim-le-circle' },
+          h('circle', { className: 'af-dim-circle', cx: X(r * Math.cos(th)), cy: Y(r * Math.sin(th)), r: r * scale }),
+          h('text', { className: 'af-dim-text', x: X(0), y: H - 8, textAnchor: 'start' }, leText),
+        ),
+      );
+    }
+    marks.push(h('text', { key: 'chord', className: 'af-dim-text', x: X(1), y: Y(0) - 6, textAnchor: 'end' }, 'chord'));
+  }
   return h(
     'svg',
     { className: 'af-outline', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${section.name} outline`, 'data-af': 'outline' },
-    h('line', { className: 'af-chord', x1: pad, x2: W - pad, y1: pad + ymax * scale, y2: pad + ymax * scale }),
+    h('line', { className: 'af-chord', x1: X(0), x2: X(1), y1: Y(0), y2: Y(0) }),
     h('polyline', { className: 'af-shape', points: pts }),
+    marks,
   );
 }
 
@@ -774,6 +907,8 @@ function App() {
         airfoil: patch.replaceAirfoil || { ...settings.airfoil, ...(patch.airfoil || {}) },
         conditions: { ...settings.conditions, ...(patch.conditions || {}) },
       };
+      // A section made from its dimensions has no NACA digits: the field shows its name instead.
+      if (next.airfoil.source === 'shape') setDraftCode('');
       setSettings(next);
     },
     [settings],
@@ -1009,6 +1144,53 @@ function App() {
         : null;
   const hasPolar = Boolean((nf && nf.rows.length) || (xf && (xf.rows.length || xf.not_converged.length)) || ofRuns.length);
 
+  // The section's dimensions, editable: an edit makes the section a NACA 4-digit-modified one.
+  const dimsNow = dimsOf(a, section);
+  const editDim = (key, percent) => {
+    if (!dimsNow) return;
+    const d = { ...dimsNow.dims };
+    const v = percent / 100;
+    // A new thickness keeps the leading-edge index (the radius scales with the thickness squared).
+    if (key === 'thickness' && d.thickness > 0) d.le_radius = d.le_radius * (v / d.thickness) ** 2;
+    d[key] = v;
+    setImportNote({ error: '', warnings: [] });
+    change({ replaceAirfoil: { source: 'shape', ...d, points_per_side: a.points_per_side || 81 } });
+  };
+  const dimField = (key, id, label, help, decimals) =>
+    h(
+      Field,
+      { label, htmlFor: id, help },
+      h(NumberUnitInput, {
+        id,
+        label,
+        unit: '%',
+        valueSi: dimsNow ? Number((dimsNow.dims[key] * 100).toFixed(decimals)) : null,
+        disabled: !dimsNow,
+        onCommitSi: (v) => editDim(key, v),
+      }),
+    );
+  const dimsEditor = h(
+    'div',
+    { className: 'af-dims', 'data-af': 'dims' },
+    h('h3', null, 'Dimensions (% of chord)'),
+    dimField('thickness', 'af-dim-thickness', 'Max thickness', 'The section’s greatest thickness, across the chord', 2),
+    dimField('thickness_at', 'af-dim-thickness-at', 'at', 'Where the greatest thickness is, from the leading edge (20 % to 60 %)', 1),
+    dimField('camber', 'af-dim-camber', 'Max camber', 'How far the camber line (midway between the surfaces) rises above the chord line at most; 0 is a symmetric section', 2),
+    dimField('camber_at', 'af-dim-camber-at', 'at', 'Where the camber line is highest, from the leading edge', 1),
+    dimField(
+      'le_radius',
+      'af-dim-le',
+      'Leading-edge radius',
+      dimsNow
+        ? `The radius of the circle that fits the nose. A blunter nose stalls more gently; a sharper one has less drag at small angles. Standard for this thickness: ${(standardLeRadius(dimsNow.dims.thickness) * 100).toFixed(2)} %`
+        : 'The radius of the circle that fits the nose',
+      3,
+    ),
+    dimsNow && dimsNow.how === 'measured'
+      ? h(Hint, { tone: 'warning' }, 'Measured from this section: editing one makes it the nearest NACA 4-digit-modified section, not this exact one.')
+      : h(Hint, null, a.source === 'shape' ? 'A NACA 4-digit-modified section: thickness position and nose radius are free.' : 'Editing a dimension makes the section NACA 4-digit-modified (the “-63” of this code is the same shape within 0.2 % of the chord).'),
+  );
+
   const sectionCard = h(
     'section',
     { className: 'af-card af-inputs', 'aria-label': 'Section and conditions' },
@@ -1029,7 +1211,8 @@ function App() {
           'aria-label': 'NACA designation',
           'data-af': 'naca',
           value: draftCode,
-          placeholder: a.source === 'dat' ? a.name : '2412',
+          // A section off the designations (dimensions, an import) shows its own name here.
+          placeholder: a.source === 'dat' ? a.name : a.source === 'shape' ? (section ? section.name : 'Custom section') : '2412',
           onChange: (e) => setDraftCode(e.target.value),
           onBlur: commitCode,
           onKeyDown: (e) => {
@@ -1039,7 +1222,8 @@ function App() {
         }),
       ),
     ),
-    a.source === 'naca'
+    dimsEditor,
+    a.source === 'naca' || a.source === 'shape'
       ? h(
           'div',
           null,
@@ -1058,7 +1242,7 @@ function App() {
             {
               label: 'Closed trailing edge',
               htmlFor: 'af-closed-te',
-              help: 'Off: the NACA formula’s small trailing-edge gap. On: the surfaces meet at the trailing edge',
+              help: 'Off: the formula’s small trailing-edge gap. On: the surfaces meet at the trailing edge',
             },
             h(Toggle, {
               id: 'af-closed-te',
@@ -1094,7 +1278,7 @@ function App() {
     importNote.error ? h(DisabledReason, { reason: importNote.error, role: 'alert' }) : null,
     importNote.warnings.length ? h(Hint, { tone: 'warning' }, importNote.warnings.join(' ')) : null,
     h(SectionFacts, { section }),
-    h(Outline, { section }),
+    h(Outline, { section, dims: dimsNow ? dimsNow.dims : null }),
     h('h2', null, 'Conditions'),
     h(
       Field,

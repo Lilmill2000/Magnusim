@@ -170,6 +170,52 @@
   margin-left: var(--mg-space-3);
 }
 
+/* The section's dimensions: the editor and the marks on the drawing. */
+.af-dims {
+  margin: var(--mg-space-3) 0;
+}
+
+.af-dims h3 {
+  margin: 0 0 var(--mg-space-2);
+  font-size: var(--mg-text-sm);
+  font-weight: 600;
+  color: var(--mg-text-strong);
+}
+
+.af-dim-camber-line {
+  fill: none;
+  stroke: var(--mg-series-2);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+
+.af-dim-mark {
+  stroke: var(--mg-text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.af-dim-strong {
+  stroke: var(--mg-series-4);
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+
+.af-dim-dot {
+  fill: var(--mg-series-2);
+}
+
+.af-dim-circle {
+  fill: none;
+  stroke: var(--mg-series-3);
+  stroke-width: 1.5;
+}
+
+.af-dim-text {
+  fill: var(--mg-text-secondary);
+  font-size: 17px;
+}
+
 /* The key numbers above the plots: one line per engine. */
 .af-keys {
   display: grid;

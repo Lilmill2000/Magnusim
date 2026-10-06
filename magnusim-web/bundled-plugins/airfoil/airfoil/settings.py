@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from airfoil import naca
+from airfoil import naca, shape
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -112,10 +112,22 @@ def normalize_airfoil(raw: Any) -> dict[str, Any]:
                 f"Points per side must be from {naca.MIN_POINTS_PER_SIDE} to {naca.MAX_POINTS_PER_SIDE}.", "points_per_side"
             )
         return {"source": "naca", "code": code, "points_per_side": pps, "closed_te": bool(src.get("closed_te", False))}
+    if source == "shape":
+        # A section from its dimensions (fractions of the chord): the four-digit-modified family.
+        try:
+            dims = shape.check(src)
+        except shape.ShapeError as exc:
+            raise SettingsError(str(exc), exc.field) from None
+        pps = int(_number(src.get("points_per_side", DEFAULT_AIRFOIL["points_per_side"]), "Points per side", "points_per_side"))
+        if not naca.MIN_POINTS_PER_SIDE <= pps <= naca.MAX_POINTS_PER_SIDE:
+            raise SettingsError(
+                f"Points per side must be from {naca.MIN_POINTS_PER_SIDE} to {naca.MAX_POINTS_PER_SIDE}.", "points_per_side"
+            )
+        return {"source": "shape", **dims, "points_per_side": pps}
     if source == "dat":
         name = str(src.get("name") or "").strip()[:80] or "Imported airfoil"
         return {"source": "dat", "name": name, "file": "airfoil.dat"}
-    raise SettingsError(f"Unknown airfoil source {source!r}: use a NACA designation or import a .dat file.")
+    raise SettingsError(f"Unknown airfoil source {source!r}: use a NACA designation, the dimensions, or import a .dat file.")
 
 
 def alpha_list(conditions: dict[str, float]) -> list[float]:

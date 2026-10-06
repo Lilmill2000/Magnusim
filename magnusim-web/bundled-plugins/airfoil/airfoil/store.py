@@ -19,7 +19,7 @@ from typing import Any
 
 from magnusim_sdk.data import PluginData
 
-from airfoil import datfile, naca
+from airfoil import datfile, naca, shape
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -53,6 +53,9 @@ def section(data: PluginData | None, sid: str, airfoil: dict[str, Any]) -> tuple
     if airfoil.get("source") == "naca":
         sec = naca.generate(str(airfoil["code"]), int(airfoil["points_per_side"]), bool(airfoil.get("closed_te")))
         return sec.name, sec.x, sec.y
+    if airfoil.get("source") == "shape":
+        sh = shape.generate(airfoil, int(airfoil["points_per_side"]))
+        return sh.name, sh.x, sh.y
     if data is None:
         raise StoreError("An imported airfoil is read from the open project.")
     raw = data.read_bytes(dat_rel(sid))
