@@ -1771,18 +1771,52 @@ export function continuePlan(projectId, draft, ask) {
   }
   const from = times[times.length - 1];
   const transient = runIsTransient(doc.time_dependency ? doc : draft);
+  // A run that converged (or a part already run past its convergence) continues past
+  // it: its case is written without the stops that ended it (restart.stops_off).
+  const past = pastConvergence(doc);
+  const stopsOff = past ? { stops_off: true } : {};
   if (transient) {
     const end = Number(ask && ask.end_time);
     if (!(Number.isFinite(end) && end > from)) {
       return { ok: false, status: 400, code: 'bad_request', error: `Enter an end time after t = ${from} s (the last saved result).` };
     }
     const wi = Number(doc.transient && doc.transient.write_interval);
-    return { ok: true, doc, from, times, transient: true, endTime: end, restart: { end_time: end, write_interval: wi > 0 ? wi : null } };
+    return {
+      ok: true,
+      doc,
+      from,
+      times,
+      transient: true,
+      endTime: end,
+      past,
+      restart: { end_time: end, write_interval: wi > 0 ? wi : null, ...stopsOff },
+    };
   }
   const n = positiveInt(ask && ask.extra_iterations);
   if (!n) return { ok: false, status: 400, code: 'bad_request', error: 'Enter how many more iterations to run (1 or more).' };
   const wi = positiveInt(doc.writeInterval);
-  return { ok: true, doc, from, times, transient: false, endTime: from + n, extra: n, restart: { end_time: from + n, write_interval: wi } };
+  return {
+    ok: true,
+    doc,
+    from,
+    times,
+    transient: false,
+    endTime: from + n,
+    extra: n,
+    past,
+    restart: { end_time: from + n, write_interval: wi, ...stopsOff },
+  };
+}
+
+/**
+ * Whether a Continue of this run goes past its convergence: it converged (its
+ * `converged` set, F5), or its last part already ran past it (`continued.stops_off`).
+ * @param {any} doc
+ */
+export function pastConvergence(doc) {
+  const d = doc || {};
+  if (d.converged && typeof d.converged === 'object') return true;
+  return !!(d.continued && typeof d.continued === 'object' && d.continued.stops_off);
 }
 
 /**
@@ -1790,7 +1824,7 @@ export function continuePlan(projectId, draft, ask) {
  * where it continues from, its step count, its elapsed time, its log parts and each
  * earlier attempt's end), this attempt's status reset.
  * @param {any} old the run doc as it ended
- * @param {{ from: number, times: number[] }} cont
+ * @param {{ from: number, times: number[], past?: boolean }} cont
  */
 export function continuedRunFields(old, cont) {
   const d = old || {};
@@ -1810,6 +1844,8 @@ export function continuedRunFields(old, cont) {
     // How it ended when it converged (F5: {by, iteration | time, text?}); the new
     // attempt starts with none and gets its own when it ends.
     converged: d.converged && typeof d.converged === 'object' ? d.converged : null,
+    // That part ran past its convergence: its residual targets and settle stop were off.
+    stops_off: !!(d.continued && typeof d.continued === 'object' && d.continued.stops_off),
     last_saved_iteration: d.last_saved_iteration ?? null,
     n_steps: d.n_steps ?? null,
     end_time: d.transient && d.transient.end_time != null ? d.transient.end_time : d.endTime ?? null,
@@ -1830,6 +1866,8 @@ export function continuedRunFields(old, cont) {
       residuals_before: residuals,
       elapsed_before_s: Math.round(((Number(prev && prev.elapsed_before_s) || 0) + lastSeconds) * 1000) / 1000,
       log_paths: [...((prev && Array.isArray(prev.log_paths) && prev.log_paths) || []), ...(d.log_path ? [d.log_path] : [])],
+      // This part runs past its convergence (its stops off), or keeps its stops.
+      stops_off: !!cont.past,
     },
     attempts: [...(Array.isArray(d.attempts) ? d.attempts : []), attempt],
   };
@@ -2221,6 +2259,9 @@ async function startSolveOnRunner(c) {
       mesh_id: startMeshId ? String(startMeshId) : '',
       time_dependency: timeDependency,
       ...(isTransient && transientSettings ? { transient: transientSettings } : {}),
+      // A Continue is planned as its case is written: its new end, and past its
+      // convergence its stops off (no residual_control or stop_when in the plan).
+      ...(cont ? { restart: cont.restart } : {}),
     });
   } catch (err) {
     return failRun('Failed to prepare solve case: ' + String(err));

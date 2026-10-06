@@ -160,8 +160,12 @@ def plan_run(
     *,
     n_procs: int = 1,
     require_mesh: bool = True,
+    restart: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What the run would be written with, writing nothing.
+
+    ``restart`` (:func:`restart_arg`) plans a run continued from its latest saved
+    time, as its prepare job will write it (its new end; ``stops_off``).
 
     Ready: ``{ok, analysis_key, plugin, app, time_dependency, launch,
     prepare_job, serial_below_cells, plan}``, where ``plan`` is the analysis's
@@ -186,6 +190,7 @@ def plan_run(
         n_procs=n_procs,
         transient=transient,
         require_mesh=require_mesh,
+        restart=restart,
     )
     failed, _analysis, launch, decision = _decide(
         root, inputs, simulation_id=simulation_id, run_id=run_id, mesh_id=mesh_id, require_mesh=require_mesh
@@ -337,10 +342,11 @@ def transient_arg(text: str | None) -> dict[str, Any] | None:
 
 
 def restart_arg(text: str | None) -> dict[str, Any] | None:
-    """A prepare job's ``--restart`` value (JSON text): ``{"end_time", "write_interval"?}``
-    for a run continued from its latest saved time (``end_time`` the new end, in the
-    run's time unit; ``write_interval`` how often it saves, None to keep the run's),
-    or None when empty. Raises ValueError for anything else."""
+    """A prepare job's ``--restart`` value (JSON text): ``{"end_time", "write_interval"?,
+    "stops_off"?}`` for a run continued from its latest saved time (``end_time`` the new
+    end, in the run's time unit; ``write_interval`` how often it saves, None to keep the
+    run's; ``stops_off`` true: it continues past its convergence, written without the
+    stops that ended it), or None when empty. Raises ValueError for anything else."""
     import math
 
     raw = str(text or "").strip()
@@ -363,4 +369,10 @@ def restart_arg(text: str | None) -> dict[str, Any] | None:
     end = positive("end_time")
     if end is None:
         raise ValueError("--restart needs end_time")
-    return {"end_time": end, "write_interval": positive("write_interval")}
+    stops_off = value.get("stops_off", False)
+    if not isinstance(stops_off, bool):
+        raise ValueError("--restart stops_off must be true or false")
+    out: dict[str, Any] = {"end_time": end, "write_interval": positive("write_interval")}
+    if stops_off:
+        out["stops_off"] = True
+    return out

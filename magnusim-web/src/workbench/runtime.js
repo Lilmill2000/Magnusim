@@ -32274,6 +32274,8 @@ function computeRunState() {
     // or {error}), else null; and its study's record (the analysis's settings), for
     // the checks its panel makes before Start.
     stop_when: runStopWhen(run),
+    // Its part now (or last) runs past its convergence: written without its stops.
+    stops_off: !!(run && run.prepare_run && typeof run.prepare_run === 'object' && run.prepare_run.stops_off),
     study: runStudyRecord(rec),
   };
 }
@@ -32402,7 +32404,7 @@ function runConvergedBadge(rec) {
  * span it last ran) and why it cannot continue now.
  */
 function continueStateFor(rec, run, ctx) {
-  const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '' };
+  const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '', past_convergence: false };
   const status = String((run && run.status) || (rec && rec.status) || '');
   // A run that converged (F5) is 'done' with its `converged` set: it continues too.
   if (!rec || !run || ctx.running || !['done', 'stopped'].includes(status)) return off;
@@ -32423,6 +32425,10 @@ function continueStateFor(rec, run, ctx) {
     every = Number(run.writeInterval) > 0 ? Number(run.writeInterval) : null;
   }
   const reason = from === null ? "This run can't continue: its case folder has no saved result. Add a run to solve again." : '';
+  // It converged (or its last part ran past that): Continue runs past convergence, its stops off.
+  const past =
+    !!(run.converged && typeof run.converged === 'object') ||
+    !!(run.continued && typeof run.continued === 'object' && run.continued.stops_off);
   return {
     visible: true,
     // While another job runs a Continue queues, as Start does; a queued one is removed with Start's button.
@@ -32433,6 +32439,7 @@ function continueStateFor(rec, run, ctx) {
     value,
     write_interval: every,
     reason,
+    past_convergence: past,
   };
 }
 

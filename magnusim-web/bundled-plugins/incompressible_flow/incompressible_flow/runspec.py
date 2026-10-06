@@ -171,6 +171,14 @@ def _face_props(raw: dict[str, Any] | None) -> dict[str, FaceProps]:
     return out
 
 
+def convergence_stops_off(spec: Any) -> bool:
+    """A run continued past its convergence (RunInputs.restart ``stops_off``): its case
+    is written without the stops that ended it (the residual targets' residualControl
+    and the settle stop's runTimeControl), so it runs every iteration or to its new end."""
+    restart = getattr(spec, "restart", None)
+    return bool(isinstance(restart, dict) and restart.get("stops_off"))
+
+
 def load_run_spec(inputs: Any) -> RunSpec:
     """Build a RunSpec from the core's RunInputs for this run."""
     root = Path(inputs.project_dir)

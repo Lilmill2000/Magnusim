@@ -1498,6 +1498,7 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `settle?: Record<string, unknown> | null | undefined`: Its "Stop when a monitor settles" as its analysis stored it (API 1.4), else null.
 - `monitors?: RunSettleMonitor[] | undefined`: The monitors that stop can watch (API 1.4): the run's own, then its study's boundaries with faces.
 - `stop_when?: { label?: string; text?: string; error?: string; } | null | undefined`: A started run: what its plan said of that stop (prepare_run.stop_when: {label, text} or {error}), else null.
+- `stops_off?: boolean | undefined`: A started run whose part now (or last) ran past its convergence: its stops were off (prepare_run.stops_off).
 - `study?: Record<string, unknown> | null | undefined`: The record of the run's study when it is the open one (its analysis's settings), else null.
 
 #### SchemaFormProps

@@ -204,7 +204,18 @@ def test_restart_arg():
     assert run_case.restart_arg("null") is None
     assert run_case.restart_arg('{"end_time": 200}') == {"end_time": 200.0, "write_interval": None}
     assert run_case.restart_arg('{"end_time": 2.5, "write_interval": 0.1}') == {"end_time": 2.5, "write_interval": 0.1}
-    for bad in ("[1]", "{}", '{"end_time": 0}', '{"end_time": true}', '{"end_time": 5, "write_interval": "x"}'):
+    # Past its convergence: written without the stops that ended it.
+    past = run_case.restart_arg('{"end_time": 300, "stops_off": true}')
+    assert past == {"end_time": 300.0, "write_interval": None, "stops_off": True}
+    assert "stops_off" not in run_case.restart_arg('{"end_time": 300, "stops_off": false}')
+    for bad in (
+        "[1]",
+        "{}",
+        '{"end_time": 0}',
+        '{"end_time": true}',
+        '{"end_time": 5, "write_interval": "x"}',
+        '{"end_time": 5, "stops_off": "yes"}',
+    ):
         with pytest.raises(ValueError):
             run_case.restart_arg(bad)
 

@@ -567,6 +567,13 @@ def _decision(spec: Any, ctx: CaseContext) -> dict:
         "patches": spec.patches,
         "transient": spec.transient is not None,
     }
+    from .runspec import convergence_stops_off
+
+    if convergence_stops_off(spec):
+        # Continued past its convergence: written without its stops, so nothing
+        # here can end it early and running to its end is no "did not converge".
+        out["stops_off"] = True
+        return out
     if spec.transient is None:
         # A steady run stops itself once its residuals meet their targets
         # (residualControl): one that runs to its iteration count did not converge.

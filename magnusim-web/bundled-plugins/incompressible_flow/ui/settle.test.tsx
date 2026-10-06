@@ -294,6 +294,20 @@ describe('Stop when a monitor settles', () => {
       'Area average 1 · Velocity stays within 0.01 m/s of its average over 0.02 s',
     );
   });
+
+  it('a part continued past its convergence says its stop is off', () => {
+    window.__CFD_RUN_STATE__ = runState({
+      locked: true,
+      status: 'running',
+      settle: { source: 'monitor', id: 'rc-f', quantity: 'Cd', tolerance: 0.001, window: 100 },
+      stops_off: true,
+    });
+    renderPanel();
+    expect(document.querySelector('[data-run-settle-off]')).toHaveTextContent(
+      'Off for this part: the run continued past its convergence.',
+    );
+    expect(document.querySelector('[data-run-settle]')).not.toHaveTextContent('stays within');
+  });
 });
 
 describe('how a finished run ended', () => {

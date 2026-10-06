@@ -968,8 +968,12 @@ def analysis_plan_run(
     time_dependency: str = "",
     transient: Any = None,
     n_procs: int = 1,
+    restart: Any = None,
 ) -> dict[str, Any]:
     """What a run would be written with, writing nothing (API 1.5).
+
+    ``restart`` (an object or its JSON text, as a prepare job's ``--restart``) plans
+    a run continued from its latest saved time, as its case will be written.
 
     ``cfddesk.registry.run_case.plan_run``'s answer (the analysis's plan, its
     launch spec and plugin, the prepare JobKind and the serial threshold) plus
@@ -990,6 +994,11 @@ def analysis_plan_run(
             raise RpcError(-32602, f"transient: {exc}") from exc
     if transient is not None and not isinstance(transient, dict):
         raise RpcError(-32602, "transient must be an object")
+    if restart is not None:
+        try:
+            restart = run_case.restart_arg(restart if isinstance(restart, str) else json.dumps(restart))
+        except (TypeError, ValueError) as exc:
+            raise RpcError(-32602, f"restart: {exc}") from exc
     try:
         procs = max(1, int(n_procs or 1))
     except (TypeError, ValueError) as exc:
@@ -1003,6 +1012,7 @@ def analysis_plan_run(
         time_dependency=time_dependency or None,
         transient=transient,
         n_procs=procs,
+        restart=restart,
     )
     if not out.get("ok"):
         return out

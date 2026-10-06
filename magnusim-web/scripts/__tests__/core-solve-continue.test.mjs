@@ -330,7 +330,7 @@ describe('Continue (F6)', () => {
     assert.deepEqual(fin.residuals.map((r) => r.t), [99, 100, 101, 102, 121]);
   });
 
-  it('a run that converged (F5: done, its converged set) continues; the new attempt converges on its own', async () => {
+  it('a run that converged (F5: done, its converged set) continues past its convergence, its stops off', async () => {
     /** The runner's job log of the latest attempt says it converged (its parser's event). */
     const convergedAt = (job, time) => {
       const path = store.readFoamRecord(job).log_path;
@@ -353,21 +353,43 @@ describe('Continue (F6)', () => {
 
     ({ out } = await cont(rid, { extraIterations: 40 }));
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
-    assert.deepEqual(JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart')), { end_time: 100, write_interval: 50 });
-    // The new attempt has not converged (yet); the earlier one's end is kept with it.
+    // Past its convergence: the case writer is told to leave its stops out, and the plan
+    // is made for that case.
+    assert.deepEqual(JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart')), { end_time: 100, write_interval: 50, stops_off: true });
+    assert.deepEqual(fx.plans[fx.plans.length - 1].restart, { end_time: 100, write_interval: 50, stops_off: true });
+    // The new attempt has not converged; the earlier one's end is kept with it.
     let doc = runDoc(rid);
-    assert.deepEqual([doc.status, doc.converged], ['running', null]);
-    assert.deepEqual(doc.attempts.map((a) => [a.status, a.converged]), [['done', { by: 'residuals', iteration: 60 }]]);
+    assert.deepEqual([doc.status, doc.converged, doc.continued.stops_off], ['running', null, true]);
+    assert.deepEqual(doc.attempts.map((a) => [a.status, a.converged, a.stops_off]), [['done', { by: 'residuals', iteration: 60 }, false]]);
     assert.equal(w27.getRunStatus(PID, rid, SID).body.run.converged, null);
-    relay([{ event: 'stage', stage: 'solve' }, ...step(61), ...step(75)]);
+    relay([{ event: 'stage', stage: 'solve' }, ...step(61), ...step(100)]);
     await sleep(FRAME_WAIT);
-    saveFrame(rid, 75);
-    relay([{ event: 'time_saved', t: 75 }]);
-    convergedAt(out.bodyExtra.runner_job_id, 75);
+    saveFrame(rid, 100);
+    relay([{ event: 'time_saved', t: 100 }]);
     endRun(rid, 'done');
     doc = runDoc(rid);
-    assert.deepEqual([doc.status, doc.converged, doc.n_steps], ['done', { by: 'residuals', iteration: 75 }, 3]);
-    assert.match(doc.note, /converged after 75 iterations/);
+    assert.deepEqual([doc.status, doc.last_saved_iteration, doc.n_steps], ['done', 100, 3]);
+    assert.ok(!doc.converged, 'ran to its end past convergence: no converged end');
+    // A later Continue goes on past it too, and the part that ran with its stops off says so.
+    ({ out } = await cont(rid, { extraIterations: 10 }));
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal(JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart')).stops_off, true);
+    doc = runDoc(rid);
+    assert.deepEqual(doc.attempts.map((a) => a.stops_off), [false, true]);
+    relay([{ event: 'stage', stage: 'solve' }, ...step(101)]);
+    await sleep(FRAME_WAIT);
+    endRun(rid, 'done');
+  });
+
+  it('a run that did not converge keeps its stops when it continues', async () => {
+    const rid = await solvedRun('done');
+    const { out } = await cont(rid, { extraIterations: 10 });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal('stops_off' in JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart')), false);
+    assert.equal(runDoc(rid).continued.stops_off, false);
+    relay([{ event: 'stage', stage: 'solve' }, ...step(101)]);
+    await sleep(FRAME_WAIT);
+    endRun(rid, 'done');
   });
 
   it('a continued run that stopped and is started from the beginning is a fresh run: no restart, its parts dropped', async () => {

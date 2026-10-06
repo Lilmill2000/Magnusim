@@ -148,6 +148,14 @@ def test_analysis_plan_run_rpc(tmp_path: Path, monkeypatch):
     assert out["plan"]["n_procs"] == 4
     assert out["prepare"]["key"] == out["prepare_job"]
     assert out["serial_below_cells"] == 50_000
+    # A Continue past its convergence is planned as written: its new end, its stops off.
+    steady = methods.analysis_plan_run(project_dir=str(root), run_id="r1", restart={"end_time": 300, "stops_off": True})
+    assert steady["ok"] is True and steady["plan"]["end_time"] == 300
+    assert steady["plan"]["stops_off"] is True and "residual_control" not in steady["plan"]
+    kept = methods.analysis_plan_run(project_dir=str(root), run_id="r1", restart='{"end_time": 300}')
+    assert kept["plan"]["residual_control"] is True and "stops_off" not in kept["plan"]
+    with pytest.raises(Exception, match="restart"):
+        methods.analysis_plan_run(project_dir=str(root), run_id="r1", restart={"end_time": 0})
     with pytest.raises(Exception, match="run_id"):
         methods.analysis_plan_run(project_dir=str(root))
     with pytest.raises(Exception, match="transient"):

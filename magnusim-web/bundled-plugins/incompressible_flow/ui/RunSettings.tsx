@@ -179,7 +179,11 @@ function SettleStop({
       <div data-run-settle="1">
         <div className="mat-row">
           <span className="mat-k">Stop when settled</span>
-          {error ? (
+          {run.stops_off ? (
+            <span className="mat-v" data-run-settle-off="1">
+              Off for this part: the run continued past its convergence.
+            </span>
+          ) : error ? (
             <span className="mat-v sim-tr-warn" data-run-settle-unused="1">
               {`Stop when settled was not used: ${error}.`}
             </span>

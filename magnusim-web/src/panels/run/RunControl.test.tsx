@@ -98,4 +98,22 @@ describe('Continue a run', () => {
     expect(continueHint(c, 0, false)).toBe('Continues from the last saved result, iteration 100.');
     expect(continueHint(c, 40, true)).toBe('Continues from the last saved result, iteration 100, to iteration 140.');
   });
+
+  it('a converged run: N more iterations past convergence, its stops off for that part', () => {
+    render(<ContinueRun state={state({ past_convergence: true })} scope="p:proj" onError={() => {}} />);
+    const row = document.querySelector('[data-run-continue="1"] .sim-run-row') as HTMLElement;
+    expect(row.textContent).toContain('Run');
+    expect(row.textContent).toContain('more iterations past convergence');
+    expect(screen.getByText(
+      'Continues from the last saved result, iteration 100, to iteration 200. The residual targets and the settle stop are off for this part: it runs every iteration.',
+    )).toBeTruthy();
+    fireEvent.click(button());
+    expect(go).toHaveBeenCalledWith({ extra_iterations: 100 });
+  });
+
+  it('a converged transient run: runs on past convergence, its settle stop off', () => {
+    render(<ContinueRun state={state({ past_convergence: true, transient: true, from: 1, value: 2, write_interval: null })} scope="p:proj" onError={() => {}} />);
+    expect(screen.getByText('Run on past convergence to t =')).toBeTruthy();
+    expect(screen.getByText('Continues from the last saved result, t = 1 s. The settle stop is off for this part: it runs to the new end time.')).toBeTruthy();
+  });
 });

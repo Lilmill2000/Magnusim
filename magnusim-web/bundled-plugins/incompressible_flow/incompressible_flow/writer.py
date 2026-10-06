@@ -1237,7 +1237,10 @@ snGradSchemes {{ default {s["sn_grad"]}; }}
 wallDist {{ method meshWave; }}"""
 
 
-def _steady_fv_solution_body(physics: StudyPhysics | None = None) -> str:
+def _steady_fv_solution_body(physics: StudyPhysics | None = None, *, residual_control: bool = True) -> str:
+    """The steady fvSolution. ``residual_control`` False (a run continued past its
+    convergence) leaves out SIMPLE's residualControl: without it simpleFoam never
+    stops on its residuals."""
     from .physics import solved_turbulence_fields
 
     ph = physics or DEFAULT_PHYSICS
@@ -1246,6 +1249,7 @@ def _steady_fv_solution_body(physics: StudyPhysics | None = None) -> str:
     residual = f"p {_foam_float(ph.residual_p)}; U {ru};"
     if turb:
         residual += ' "(' + "|".join(turb) + f')" {ru};'
+    residual_line = f"    residualControl {{ {residual} }}\n" if residual_control else ""
     # SIMPLEC replaces the study's relaxation with its own (physics.solve_relax_*).
     relax_u = _foam_float(ph.solve_relax_u())
     equations = f"        U               {relax_u};\n"
@@ -1276,8 +1280,7 @@ SIMPLE
 {{
     nNonOrthogonalCorrectors {int(ph.n_non_orthogonal)};
     consistent      {"yes" if ph.simplec else "no"};
-    residualControl {{ {residual} }}
-}}
+{residual_line}}}
 {_potential_flow_dict(non_orth)}relaxationFactors
 {{
     fields
@@ -1632,13 +1635,20 @@ RAS
     )
     functions_text, monitor_meta = _reference_monitors(spec, poly_dst, functions_text)
     # "Stop when a monitor settles": a runTimeControl after the monitors it reads.
+    from .runspec import convergence_stops_off
     from .settle import plan_settle, settle_functions_text
 
-    settle_plan = plan_settle(
-        spec,
-        custom_meta=custom_meta,
-        forces_plans=monitor_meta["forces_monitors"],
-        probe_plans=monitor_meta["probe_monitors"],
+    # A run continued past its convergence runs without the stops that ended it.
+    stops_off = convergence_stops_off(spec)
+    settle_plan = (
+        None
+        if stops_off
+        else plan_settle(
+            spec,
+            custom_meta=custom_meta,
+            forces_plans=monitor_meta["forces_monitors"],
+            probe_plans=monitor_meta["probe_monitors"],
+        )
     )
     functions_text = _join_functions(functions_text, settle_functions_text(settle_plan))
     is_transient = spec.transient is not None
@@ -1679,7 +1689,7 @@ RAS
             out / "system" / "fvSolution",
             "dictionary",
             "fvSolution",
-            _steady_fv_solution_body(physics),
+            _steady_fv_solution_body(physics, residual_control=not stops_off),
         )
 
     u_max = max(50.0, 10.0 * abs(speed_ref))
@@ -1770,6 +1780,9 @@ RAS
         sidecar["settle"] = settle_plan
     if restart_from is not None:
         sidecar["restart"] = {"from_time": restart_from, "end_time": float(spec.end_time)}
+        if stops_off:
+            # Past its convergence: no residual targets, no settle stop.
+            sidecar["restart"]["stops_off"] = True
     if is_transient and spec.transient is not None:
         t = spec.transient
         sidecar["transient"] = {

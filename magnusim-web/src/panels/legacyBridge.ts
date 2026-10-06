@@ -230,6 +230,11 @@ export interface RunContinueState {
   write_interval: number | null;
   /** Why it cannot continue now, else ''. */
   reason: string;
+  /**
+   * The run converged (or its last part already ran past that): Continue runs past
+   * its convergence, without the residual targets and the settle stop.
+   */
+  past_convergence?: boolean;
 }
 
 /** What runtime.publishRunState dispatches as `cfd:run-state` for the selected run. */
@@ -292,6 +297,8 @@ export interface RunState {
   monitors?: RunSettleMonitor[];
   /** A started run: what its plan said of that stop (prepare_run.stop_when: {label, text} or {error}), else null. */
   stop_when?: { label?: string; text?: string; error?: string } | null;
+  /** A started run whose part now (or last) ran past its convergence: its stops were off (prepare_run.stops_off). */
+  stops_off?: boolean;
   /** The record of the run's study when it is the open one (its analysis's settings), else null. */
   study?: Record<string, unknown> | null;
 }

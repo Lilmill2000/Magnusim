@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import JS_PROJECT
 from conftest import run_spec as load_run_spec
+from test_turbulence_models import _project, channel_mesh  # noqa: F401  (fixture)
+from wsl_tmp_case import log, run_steps
 
+from incompressible_flow.analyses import _decision
 from incompressible_flow.forces_results import read_dat
 from incompressible_flow.writer import _steady_control_dict_body, write_solve_case
 
@@ -122,6 +127,93 @@ def test_a_restart_keeps_the_settle_stop(tmp_path: Path):
     side = json.loads((case / "w27-case.json").read_text(encoding="utf-8"))
     assert side["restart"] == {"from_time": 100.0, "end_time": 300.0}
     assert side["settle"]["text"] == "Forces 1 · Cd stayed within 0.002 of its average over 80 iterations"
+
+SETTLE = {"source": "monitor", "id": "rc-f", "quantity": "Cd", "tolerance": 0.002, "window": 80}
+
+
+def _with_settle(spec):
+    return dataclasses.replace(
+        spec,
+        reference={"ref_area": 0.5},
+        forces_monitors=[{"id": "rc-f", "name": "Forces 1", "boundaries": ["@walls"]}],
+        result_controls=[{"id": "rc-f", "name": "Forces 1", "monitor_type": "forces", "boundaries": ["@walls"]}],
+        settle=dict(SETTLE),
+    )
+
+
+def test_a_run_continued_past_its_convergence_is_written_without_its_stops(tmp_path: Path):
+    # It converged (residuals or its settle stop): its Continue runs past that, so the
+    # case has no residualControl and no settle stop, and its plan says so.
+    case = tmp_path / "case"
+    _first_run(case)
+    _save(case, "100")
+    restart = {"end_time": 300, "stops_off": True}
+    spec = _with_settle(load_run_spec(JS_PROJECT, run_id="r-cont", require_mesh=False, n_procs=1, restart=restart))
+    report = write_solve_case(spec, case)
+    assert report["ok"] is True and report["restart"] == {"from_time": 100.0, "end_time": 300.0, "stops_off": True}
+    control = (case / "system" / "controlDict").read_text(encoding="utf-8")
+    solution = (case / "system" / "fvSolution").read_text(encoding="utf-8")
+    assert _entry(control, "startFrom") == "latestTime" and _entry(control, "endTime") == "300"
+    assert "runTimeControl" not in control and "settleStop" not in control
+    simple = re.search(r"^SIMPLE\s*\{(.*?)^\}", solution, re.M | re.S)
+    assert simple and "residualControl" not in simple.group(1), solution
+    side = json.loads((case / "w27-case.json").read_text(encoding="utf-8"))
+    assert side["restart"]["stops_off"] is True and "settle" not in side
+    plan = _decision(spec, SimpleNamespace(inputs=None))
+    assert plan["stops_off"] is True and "residual_control" not in plan and "stop_when" not in plan
+
+
+def test_a_run_continued_without_converging_keeps_its_stops(tmp_path: Path):
+    case = tmp_path / "case"
+    _first_run(case)
+    _save(case, "100")
+    spec = _with_settle(load_run_spec(JS_PROJECT, run_id="r-cont", require_mesh=False, n_procs=1, restart={"end_time": 300}))
+    report = write_solve_case(spec, case)
+    assert "stops_off" not in report["restart"]
+    assert "runTimeControl" in (case / "system" / "controlDict").read_text(encoding="utf-8")
+    assert "residualControl" in (case / "system" / "fvSolution").read_text(encoding="utf-8")
+    plan = _decision(spec, SimpleNamespace(inputs=None))
+    assert plan["residual_control"] is True and "stop_when" in plan and "stops_off" not in plan
+
+
+def _saved_times(case: Path) -> list[int]:
+    return sorted(int(p.name) for p in case.iterdir() if p.is_dir() and p.name.isdigit() and p.name != "0")
+
+
+@pytest.mark.wsl
+def test_a_converged_run_continued_past_its_convergence_runs_every_iteration(tmp_path, channel_mesh):  # noqa: F811
+    # Loose residual targets: the first part converges within a few iterations.
+    root = _project(tmp_path, {"residual_u": 0.5, "residual_p": 0.5})
+    first = load_run_spec(root, run_id="r-past", require_mesh=False, n_procs=1)
+    first = dataclasses.replace(first, mesh_case_dir=channel_mesh, end_time=200, write_interval=200)
+    case = tmp_path / "case"
+    assert write_solve_case(first, case)["ok"] is True
+    assert run_steps(case, ["simpleFoam"]) == 0, log(case, "simpleFoam")[-3000:]
+    text = log(case, "simpleFoam")
+    assert "SIMPLE solution converged in" in text, text[-3000:]
+    converged_at = _saved_times(case)[-1]
+    assert 0 < converged_at < 200
+
+    def cont(extra: int, stops_off: bool) -> str:
+        restart = {"end_time": converged_at + extra, **({"stops_off": True} if stops_off else {})}
+        spec = load_run_spec(root, run_id="r-past", require_mesh=False, n_procs=1, restart=restart)
+        spec = dataclasses.replace(spec, mesh_case_dir=channel_mesh)
+        assert write_solve_case(spec, case)["ok"] is True
+        assert run_steps(case, ["simpleFoam"]) == 0, log(case, "simpleFoam")[-3000:]
+        return log(case, "simpleFoam")
+
+    # With its stops kept it converges again at once (within two iterations).
+    again = cont(20, stops_off=False)
+    assert "SIMPLE solution converged in" in again
+    assert len(re.findall(r"^Time = \d+\s*$", again, re.M)) <= 2, again[-3000:]
+    converged_at = _saved_times(case)[-1]
+    # Past its convergence: every one of the 20 iterations, to the new end.
+    past = cont(20, stops_off=True)
+    assert "converged in" not in past, past[-3000:]
+    assert len(re.findall(r"^Time = \d+\s*$", past, re.M)) == 20, past[-3000:]
+    assert re.search(rf"^Time = {converged_at + 20}\s*$", past, re.M)
+    assert _saved_times(case)[-1] == converged_at + 20
+
 
 def test_a_restart_keeps_the_mesh_its_fields_are_on(tmp_path: Path):
     case = tmp_path / "case"

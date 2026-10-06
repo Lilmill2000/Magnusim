@@ -247,12 +247,17 @@ test('a converged run says so in the Run panel and on its tree row', async ({ pa
   await expect(badge(residuals)).toHaveAttribute('title', 'Converged after 215 iterations');
   await expect(badge(settled)).toHaveText('Converged');
   await expect(badge(limit)).toHaveCount(0);
-  // Converged is finished (status done): Continue is offered, from iteration 215.
+  // Converged is finished (status done): Continue is offered, from iteration 215, past
+  // its convergence (its stops off for that part).
   const cont = runControl.locator('[data-run-continue="1"]');
   await expect(cont).toBeVisible();
   await expect(cont.locator('[data-run-continue-go="1"]')).toBeEnabled();
   await expect(cont.locator('[data-run-continue-reason="1"]')).toHaveCount(0);
   await expect(cont.locator('[data-run-continue-hint="1"]')).toContainText('Continues from the last saved result, iteration 215');
+  await expect(cont.locator('.bc-unit-label')).toHaveText('more iterations past convergence');
+  await expect(cont.locator('[data-run-continue-hint="1"]')).toContainText(
+    'The residual targets and the settle stop are off for this part: it runs every iteration.',
+  );
 
   runControl = await openRun(page, settled);
   await expect(runControl.locator('[data-run-line="1"]')).toHaveText('Converged after 140 iterations');
@@ -266,6 +271,8 @@ test('a converged run says so in the Run panel and on its tree row', async ({ pa
   await expect(runControl.locator('[data-run-settle-unused="1"]')).toHaveCount(0);
 
   runControl = await openRun(page, limit);
+  // It did not converge: its Continue keeps its stops.
+  await expect(runControl.locator('[data-run-continue="1"] .bc-unit-label')).toHaveText('more iterations');
   await expect(runControl.locator('[data-run-status="done"] > .mat-k')).toHaveText('Run finished');
   await expect(runControl.locator('[data-run-line="1"]')).toHaveText('2000 iterations');
   await expect(runControl.locator('[data-run-converged="no"]')).toHaveText(

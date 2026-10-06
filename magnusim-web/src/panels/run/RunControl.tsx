@@ -185,15 +185,21 @@ function plainNumber(n: number): string {
 export function continueHint(c: NonNullable<RunState['cont']>, amount: number, valid: boolean): string {
   if (c.from == null) return '';
   const queued = c.queue ? ' A job is running: this run continues when that job finishes.' : '';
-  if (c.transient) return `Continues from the last saved result, t = ${plainNumber(c.from)} s.` + queued;
+  // Past its convergence: the stops that ended it are off for this part.
+  const past = c.past_convergence
+    ? c.transient
+      ? ' The settle stop is off for this part: it runs to the new end time.'
+      : ' The residual targets and the settle stop are off for this part: it runs every iteration.'
+    : '';
+  if (c.transient) return `Continues from the last saved result, t = ${plainNumber(c.from)} s.` + past + queued;
   let text = `Continues from the last saved result, iteration ${plainNumber(c.from)}`;
-  if (!valid) return text + '.' + queued;
+  if (!valid) return text + '.' + past + queued;
   text += `, to iteration ${plainNumber(c.from + amount)}.`;
   const every = c.write_interval;
   if (every && amount > every && amount % every !== 0) {
     text += ` Results are saved every ${every} iterations, so the last one saved is iteration ${plainNumber(c.from + Math.floor(amount / every) * every)}.`;
   }
-  return text + queued;
+  return text + past + queued;
 }
 
 /**
@@ -225,7 +231,7 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
       <div className="sim-run-row">
         <span className="bc-value-row">
           <label className="mat-k" htmlFor="run-continue-amount">
-            {c.transient ? 'Run on to t =' : 'Run'}
+            {c.transient ? (c.past_convergence ? 'Run on past convergence to t =' : 'Run on to t =') : 'Run'}
           </label>
           <input
             id="run-continue-amount"
@@ -238,7 +244,9 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
-          <span className="bc-unit-label">{c.transient ? 's' : 'more iterations'}</span>
+          <span className="bc-unit-label">
+            {c.transient ? 's' : c.past_convergence ? 'more iterations past convergence' : 'more iterations'}
+          </span>
         </span>
         <button
           type="button"

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { NO_WSL, waitSlotFree, wslPathExists } from '../../../e2e/support/plugin-suite.js';
 
@@ -132,4 +132,82 @@ test('Continue +10 on a finished steady run: the residual plot is continuous and
   expect(Math.max(...counts)).toBe(second.residuals.length);
   await expect(plot.locator('text').last()).toHaveText(String(second.endTime));
   await expect(panel.locator('[data-run-line="1"]')).toHaveText(`${second.iteration} iterations`);
+});
+
+// A converged run continued past its convergence (WSL): loose residual targets end the
+// first part early; its Continue "+15 more iterations past convergence" runs all 15 (the
+// case has no residualControl and no settle stop), and the run says the part ran with its
+// stops off.
+test('Continue on a converged run runs every iteration past its convergence', async ({ page, request }) => {
+  test.skip(!WSL, NO_WSL);
+  test.setTimeout(2_400_000);
+  page.setDefaultTimeout(30_000);
+  const run = async (rid) => (await getJson(request, `/api/run/status?project_id=${ID}&simulation_id=${SIM}&run_id=${encodeURIComponent(rid)}`)).run || {};
+  const ended = async (rid) => {
+    await expect
+      .poll(async () => {
+        const r = await run(rid);
+        return String(r.run_id || r.id) === rid ? r.status : 'wait';
+      }, { timeout: 900_000, intervals: [3_000] })
+      .toMatch(/done|failed|stopped/);
+    return run(rid);
+  };
+  const study = async (patch) => {
+    const r = await postJson(request, '/api/simulation/update', { project_id: ID, simulation_id: SIM, ...patch });
+    expect(r.ok(), await r.text()).toBe(true);
+  };
+  await study({ time_dependency: 'Steady-state', residual_u: 0.5, residual_p: 0.5 });
+  try {
+    const meshes = async () => (await getJson(request, `/api/run/status?project_id=${ID}&simulation_id=${SIM}`)).meshes || [];
+    if (!(await meshes()).some((m) => m.ready && m.n_cells > 0)) {
+      await waitSlotFree(request, { timeoutMs: 900_000 });
+      const made = await postJson(request, '/api/mesh/generate', {
+        project_id: ID,
+        simulation_id: SIM,
+        mesh_id: 'mesh_1',
+        name: 'Mesh 1',
+        settings: { fineness: 1, hex_element_core: false, automatic_boundary_layers: false },
+      });
+      expect(made.status(), await made.text()).toBeLessThan(300);
+      await expect.poll(async () => (await meshes()).some((m) => m.ready && m.n_cells > 0), { timeout: 900_000, intervals: [3_000] }).toBe(true);
+    }
+    await waitSlotFree(request, { timeoutMs: 900_000 });
+
+    const created = await (await postJson(request, '/api/run/create', { project_id: ID, simulation_id: SIM, name: 'Past convergence' })).json();
+    const rid = String(created.run_id || (created.run && (created.run.id || created.run.run_id)) || created.id);
+    const set = await postJson(request, '/api/run/update', { project_id: ID, simulation_id: SIM, run_id: rid, endTime: 200, writeInterval: 50 });
+    expect(set.ok(), await set.text()).toBe(true);
+    let panel = await openRunPanel(page, rid);
+    await expect(panel.locator('[data-run-start]')).toBeEnabled({ timeout: 60_000 });
+    await panel.locator('[data-run-start]').click();
+    const first = await ended(rid);
+    expect(first.status, first.error || first.note).toBe('done');
+    expect(first.converged && first.converged.by).toBe('residuals');
+    const from = Number(first.last_saved_iteration);
+    expect(from).toBeLessThan(200);
+
+    // Its Continue says it goes past convergence, with its stops off.
+    panel = await openRunPanel(page, rid);
+    const box = panel.locator('[data-run-continue="1"]');
+    await expect(box.locator('.bc-unit-label')).toHaveText('more iterations past convergence');
+    await box.locator('#run-continue-amount').fill('15');
+    await expect(box.locator('[data-run-continue-hint="1"]')).toHaveText(
+      `Continues from the last saved result, iteration ${from}, to iteration ${from + 15}. The residual targets and the settle stop are off for this part: it runs every iteration.`,
+    );
+    await box.locator('[data-run-continue-go="1"]').click();
+    await expect.poll(async () => ((await run(rid)).attempts || []).length, { timeout: 120_000 }).toBe(1);
+    const second = await ended(rid);
+    expect(second.status, second.error || second.note).toBe('done');
+    // Every one of the 15: to iteration from + 15, saved there, no converged end.
+    expect(Number(second.iteration)).toBe(from + 15);
+    expect(Number(second.last_saved_iteration)).toBe(from + 15);
+    expect(second.converged ?? null).toBeNull();
+    expect(second.continued).toMatchObject({ from_time: from, stops_off: true });
+    expect(second.attempts.map((a) => [a.status, a.converged && a.converged.by, a.stops_off])).toEqual([['done', 'residuals', false]]);
+    const solution = readFileSync(join(second.case_dir, 'system', 'fvSolution'), 'utf8');
+    expect(solution).not.toContain('residualControl');
+    expect(JSON.parse(readFileSync(join(second.case_dir, 'w27-case.json'), 'utf8')).restart.stops_off).toBe(true);
+  } finally {
+    await study({ residual_u: 1e-4, residual_p: 1e-4 });
+  }
 });
