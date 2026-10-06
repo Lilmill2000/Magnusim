@@ -5,6 +5,7 @@ import ReactDOM from 'react-dom/client';
 import { FiltersPanel } from '../chrome/FiltersPanel';
 import { LeftTree } from '../chrome/LeftTree';
 import { TopToolbar } from '../chrome/TopToolbar';
+import { VtkExport } from '../chrome/VtkExport';
 import { Home } from '../home/Home';
 import { mountIsland } from '../islands';
 import { pluginUi, registerPanel, registerTreeTransform, replacePanel } from '../plugin-api';
@@ -79,6 +80,8 @@ export function AppShell() {
       <SetupWizard />
       <LeftTree />
       <TopToolbar />
+      {/* Export to ParaView (VTK) and Open case folder, for the results on screen. */}
+      <VtkExport />
       {/* Legend, timeline, compare, saved views and inspect point are owned by the
           FILTERS panel and viewport chrome; only plugin filter sections mount here. */}
       <FiltersPanel />

@@ -10,6 +10,7 @@ import type { SdkVariant } from './plugin-sdk.ts';
 import { isFrameAssetRequest } from './workspace-files.ts';
 import { attachWorkerBridge } from '../py-json.js';
 import { registerLiveRoutes } from './live-routes.js';
+import { registerVtkExportRoutes } from './vtk-export.ts';
 import { setLiveRegistry } from '../registry-defaults.js';
 
 export { Router, dispatch } from './router.ts';
@@ -82,6 +83,7 @@ export function createApiPlugin() {
         services,
         sdkVariant,
       });
+      registerVtkExportRoutes(router, { jobs, cacheDir });
       // The boot queue kick may start a plugin mesher; wait for the live registry.
       void registryReady.finally(() => live.boot());
 

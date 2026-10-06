@@ -178,6 +178,12 @@
             </div>
           </div>
         </div>
+        <div class="tb-group" data-group="EXPORT" data-chrome="post">
+          <div class="tb-group-label">EXPORT</div>
+          <div class="tb-items">
+            <button type="button" class="tb-btn" id="btn-export-vtk" data-label="Export VTK" title="Export the results as VTK files for ParaView"><span class="tb-ico" data-w241-ico="1"><svg class="tb-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M8 10l4 4 4-4"/><path d="M5 15v4h14v-4"/></g></svg></span><span class="tb-txt">Export VTK</span></button>
+          </div>
+        </div>
         <div class="tb-job" id="tb-job-slot">
           <div id="viewport-job-chip" class="viewport-job-chip" hidden>
             <span class="viewport-job-label" id="viewport-job-label">Meshing</span>
@@ -460,6 +466,10 @@
               <span class="sim-def-title" id="run-results-title">Results</span>
             </div>
             <p class="mat-assign-hint" id="run-results-hint">Start this run first. Results open here after it finishes.</p>
+            <div class="run-results-export" id="run-results-export">
+              <button type="button" class="js-btn" id="run-results-export-vtk" title="Save the fields as VTK files for ParaView">Export to ParaView (VTK)</button>
+              <button type="button" class="js-btn" id="run-results-open-folder" title="Show the run's OpenFOAM case folder; ParaView opens its case.foam directly">Open case folder</button>
+            </div>
             <div class="sim-def-foot">
               <button type="button" class="js-btn tree-panel-done">Done</button>
             </div>

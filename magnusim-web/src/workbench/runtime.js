@@ -15132,6 +15132,15 @@ function publishW121(extra) {
 
 }
 
+// Export to ParaView (src/chrome/VtkExport.tsx) reads the results on screen here.
+window.__CFD_RESULTS_ON_SCREEN__ = () => ({
+  project_id: currentProjectId() || '',
+  case_dir: hasAttachedCase() ? String(getCaseDir()) : '',
+  time: String(currentTime),
+  times: (animState.times || []).map(String),
+  seconds: animTimesAreSeconds(),
+});
+
 async function setAnimationTime(time, opts) {
   const tstr = String(time);
   const times = animState.times || [];

@@ -182,5 +182,13 @@ declare global {
     __CFD_RESULTS_VIEW__?: boolean;
     /** The scale the shown results are drawn at (1 for plugin case results). */
     __CFD_RESULTS_SCALE__?: number;
+    /** The results on screen (runtime.js), for Export to ParaView: '' case_dir when none. */
+    __CFD_RESULTS_ON_SCREEN__?: () => {
+      project_id: string;
+      case_dir: string;
+      time: string;
+      times: string[];
+      seconds: boolean;
+    };
   }
 }

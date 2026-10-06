@@ -5294,3 +5294,53 @@ body.is-recording #viewport-gizmo {
   color: #9aa3af;
   cursor: default;
 }
+
+/* Export to ParaView (VTK): src/chrome/VtkExport.tsx and the Results panel's row. */
+.run-results-export {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.run-results-export[hidden] {
+  display: none !important;
+}
+.vtk-export-card {
+  width: min(460px, 92vw);
+}
+.vtk-export-frames {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+}
+.vtk-export-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #475467;
+}
+.vtk-export-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #e4e7ec;
+  overflow: hidden;
+}
+.vtk-export-bar-fill {
+  height: 100%;
+  background: #1a1d24;
+  transition: width 0.2s ease;
+}
+.vtk-export-error {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: #b42318;
+}
+.vtk-export-folder {
+  margin-right: auto;
+}
