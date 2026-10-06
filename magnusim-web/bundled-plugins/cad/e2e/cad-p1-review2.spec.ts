@@ -384,10 +384,20 @@ test('cad:p1-review2-chip-and-menu a long body name in the volume chip ends in a
   const nameEl = chip.locator('.cad-chip-name');
   expect(await nameEl.evaluate((el) => ({ cut: el.scrollWidth > el.clientWidth, overflow: getComputedStyle(el).textOverflow }))).toEqual({ cut: true, overflow: 'ellipsis' });
   await expect(chip.locator('.cad-chip-which')).toHaveAttribute('title', name);
-  // It was 544 px wide at 1280: now it stays well clear of the viewport buttons.
+  // It was 544 px wide at 1280: now it stays well clear of the viewport buttons. The chip is capped
+  // at 320 px whatever font the platform draws (Linux CI falls back to the wider DejaVu Sans), and
+  // the name still ends in an ellipsis inside the cap.
   await page.setViewportSize({ width: 1280, height: 800 });
   const c = (await chip.boundingBox())!;
-  expect(c.width, 'chip width').toBeLessThan(340);
+  expect(c.width, 'chip width (capped)').toBeLessThanOrEqual(320.5);
+  expect(await nameEl.evaluate((el) => el.scrollWidth > el.clientWidth), 'name still cut inside the cap').toBe(true);
+  await expect(chip.locator('[data-volume-mm3]'), 'the volume itself is never cut').toBeVisible();
+  const fit = await chip.evaluate((el) => {
+    const v = el.querySelector('[data-volume-mm3]')!.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return v.right <= r.right + 0.5 && v.width > 0;
+  });
+  expect(fit, 'the volume sits whole inside the chip').toBe(true);
   const gizmo = (await frame.locator('[data-cad-gizmo]').boundingBox())!;
   expect(c.x + c.width + 40, 'clear of the viewport buttons').toBeLessThan(gizmo.x);
   await page.setViewportSize({ width: 1600, height: 1000 });

@@ -919,6 +919,30 @@ input.mgk-input.cad-param-name {
   vertical-align: bottom;
 }
 
+/* The volume chip has its own cap, so its width never depends on the font a platform falls back
+   to (Linux draws "Segoe UI" as DejaVu Sans, which is wider): the name gives way first. */
+.cad-chip[data-chip="volume"] {
+  max-width: 320px;
+}
+
+.cad-chip[data-chip="volume"] .cad-chip-v {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  white-space: pre;
+}
+
+.cad-chip[data-chip="volume"] .cad-chip-which {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.cad-chip[data-chip="volume"] .cad-chip-name {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
 .cad-chip-link {
   padding: 0;
   border: none;
