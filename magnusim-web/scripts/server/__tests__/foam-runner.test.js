@@ -569,6 +569,8 @@ describe('core solves on the runner (kind solve)', () => {
 describe('the launch is decided at close', () => {
   it('starter exit 0, close, no status file: the run drains (the slot stays held)', () => {
     const { rec, spawn, token } = started();
+    // The relay started (its first line), then ended: only the WSL case can tell what ran.
+    spawn.onEvent({ event: 'relay_alive', pid: 777 });
     spawn.onExit(0);
     assert.equal(readFoamRecord(rec.id).status, 'running', 'exit alone decides nothing');
     spawn.onClose();
@@ -586,6 +588,84 @@ describe('the launch is decided at close', () => {
     const end = readFoamRecord(rec.id);
     assert.equal(end.status, 'failed');
     assert.equal(end.code, 'relay_failed');
+    assert.equal(computeSlotHolder(), null);
+  });
+
+  it('a relay that ended before its first line and is not running starts once more; a second such end fails the launch', async () => {
+    const { rec, spawn, token } = started();
+    fx.alive = false;
+    spawn.onExit(0);
+    spawn.onClose();
+    // Held while it is decided, then the same spec goes to a new starter.
+    assert.equal(computeSlotHolder().token, token);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(fx.spawned.length, 2);
+    assert.deepEqual(fx.spawned[1].args, fx.spawned[0].args);
+    assert.equal(fx.watches.length, 0);
+    assert.equal(readFoamRecord(rec.id).status, 'running');
+    assert.equal(computeSlotHolder().token, token);
+    // That one ends the same way: the run fails as a launch, the slot is free, no third start.
+    const again = fx.spawned[1];
+    again.onExit(0);
+    again.onClose();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(fx.spawned.length, 2);
+    const end = readFoamRecord(rec.id);
+    assert.equal(end.status, 'failed');
+    assert.equal(end.code, 'launch');
+    assert.equal(end.error, 'The case could not start');
+    assert.equal(computeSlotHolder(), null);
+    assert.equal(frames(rec.id).filter((e) => e.event === 'end').length, 1);
+  });
+
+  it('a second start that runs is the run: it ends from its own evidence', async () => {
+    const { rec, spawn } = started();
+    fx.alive = false;
+    spawn.onExit(0);
+    spawn.onClose();
+    await new Promise((r) => setImmediate(r));
+    const again = fx.spawned[1];
+    again.onEvent({ event: 'relay_alive', pid: 778 });
+    writeStatus(rec.case_dir, { outcome: { ok: true, phase: 'solve', exit_code: 0 }, clean: true, exit_code: 0, n_procs: 1 });
+    again.onExit(0);
+    again.onClose();
+    assert.equal(readFoamRecord(rec.id).status, 'done');
+    assert.equal(computeSlotHolder(), null);
+  });
+
+  it('a relay that ended before its first line but still runs (its output went away): the WSL case decides, nothing starts twice', async () => {
+    const { rec, spawn, token } = started();
+    fx.alive = true;
+    spawn.onExit(0);
+    spawn.onClose();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(fx.spawned.length, 1);
+    assert.equal(fx.watches.length, 1);
+    assert.equal(computeSlotHolder().token, token);
+    assert.equal(computeSlotHolder().phase, 'draining');
+    assert.equal(readFoamRecord(rec.id).stage, 'ending');
+  });
+
+  it('a relay that ended before its first line after its case began (the marker is there): the WSL case decides', async () => {
+    const { rec, spawn } = started();
+    fx.alive = false;
+    writeFileSync(join(rec.case_dir, '.magnusim-ran'), '{}');
+    spawn.onExit(0);
+    spawn.onClose();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(fx.spawned.length, 1);
+    assert.equal(fx.watches.length, 1);
+  });
+
+  it('a Stop while it is decided: the run is stopped, not started again', async () => {
+    const { rec, spawn } = started();
+    fx.alive = false;
+    updateFoamRecord(rec.id, { stop: true });
+    spawn.onExit(0);
+    spawn.onClose();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(fx.spawned.length, 1);
+    assert.equal(readFoamRecord(rec.id).status, 'stopped');
     assert.equal(computeSlotHolder(), null);
   });
 
@@ -829,6 +909,7 @@ describe('the end from evidence', () => {
 
   it('a drain that will not end: stuck → stopped stuck; unreachable → lost', () => {
     const a = started('c1');
+    a.spawn.onEvent({ event: 'relay_alive', pid: 777 });
     a.spawn.onExit(0);
     a.spawn.onClose();
     fx.watches[0].onLost('stuck');
@@ -837,6 +918,7 @@ describe('the end from evidence', () => {
     assert.deepEqual([ra.status, ra.code, ra.error], ['stopped', 'stuck', 'Its processes in WSL would not stop. Restart WSL (wsl --shutdown) before running more cases']);
     assert.equal(computeSlotHolder(), null);
     const b = started('c2', { token: 'ccddeeff' });
+    b.spawn.onEvent({ event: 'relay_alive', pid: 777 });
     b.spawn.onExit(0);
     b.spawn.onClose();
     fx.watches[1].onLost('unreachable');

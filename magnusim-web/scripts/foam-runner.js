@@ -146,6 +146,8 @@ export { createFoamRecord };
 
 const WIN = process.platform === 'win32';
 const STATUS_FILE = '.magnusim-run.json';
+/** What the relay writes in the case once it starts its steps (cfddesk.wsl.foam_case.RAN_MARKER). */
+const RAN_MARKER = '.magnusim-ran';
 const STOP_FILE = '.magnusim-stop';
 const POLL_STATUS_MS = 2_000;
 const POLL_ALIVE_MS = 10_000;
@@ -218,6 +220,7 @@ const GATE_TEXT = Object.freeze({
 /**
  * @typedef {{
  *   token: string, kind: string, adopted: boolean, launcherExit: number | null, relayGone: boolean,
+ *   relayAlive: boolean, relaunched: boolean,
  *   allKilledAt: number | null, timers: Set<ReturnType<typeof setTimeout>>, release: () => void,
  *   gone: boolean, fold: ReturnType<typeof newFoamFold>, savedSeen: Set<number>, lastStage: string | null,
  *   relayKillTimer: ReturnType<typeof setTimeout> | null, staleLogged: boolean,
@@ -323,6 +326,10 @@ function newEntry(base) {
     ...base,
     launcherExit: null,
     relayGone: false,
+    /** The relay's first line (relay_alive) came: it started. */
+    relayAlive: false,
+    /** It was started once more after it ended before saying it was alive. */
+    relaunched: false,
     allKilledAt: null,
     timers: new Set(),
     gone: false,
@@ -640,20 +647,7 @@ export function runFoamSteps(plan) {
     updateFoamRecord(id, { status: 'running', stage: 'starting', node_pid: process.pid, started_at: new Date().toISOString(), spec_path: specPath });
     const entry = newEntry({ token: own, kind, adopted: false, release: () => releaseComputeSlot(own) });
     R().entries.set(id, entry);
-    const spawned = D().spawnJob({
-      kind,
-      jobId: id,
-      script: pyTool('run_foam_case.py'),
-      args: ['--launch', '--spec', specPath],
-      onEvent: (/** @type {any} */ ev) => onRelayEvent(id, ev),
-      onExit: (/** @type {number | null} */ code) => {
-        entry.launcherExit = typeof code === 'number' ? code : -1;
-        console.info(`[CFD runner] ${id}: starter exited ${entry.launcherExit}`);
-      },
-      onClose: () => afterRelayGone(id),
-    });
-    const logPath = spawned && spawned.jobLog && spawned.jobLog.path;
-    if (logPath) updateFoamRecord(id, { log_path: String(logPath) });
+    spawnStarter(id, entry, kind, specPath);
     deliver(id, { event: 'start' });
     return { ok: true };
   } catch (e) {
@@ -666,6 +660,30 @@ export function runFoamSteps(plan) {
     finishFoam(id, 'failed', { code: 'launch', error: FOAM_TEXT.launch });
     return { ok: false, final: true, code: 'launch', error: FOAM_TEXT.launch };
   }
+}
+
+/**
+ * The starter (run_foam_case.py --launch) of a run's relay: its pipes are the relay's.
+ * @param {string} id
+ * @param {Entry} entry
+ * @param {string} kind
+ * @param {string} specPath
+ */
+function spawnStarter(id, entry, kind, specPath) {
+  const spawned = D().spawnJob({
+    kind,
+    jobId: id,
+    script: pyTool('run_foam_case.py'),
+    args: ['--launch', '--spec', specPath],
+    onEvent: (/** @type {any} */ ev) => onRelayEvent(id, ev),
+    onExit: (/** @type {number | null} */ code) => {
+      entry.launcherExit = typeof code === 'number' ? code : -1;
+      console.info(`[CFD runner] ${id}: starter exited ${entry.launcherExit}`);
+    },
+    onClose: () => afterRelayGone(id),
+  });
+  const logPath = spawned && spawned.jobLog && spawned.jobLog.path;
+  if (logPath) updateFoamRecord(id, { log_path: String(logPath) });
 }
 
 // ---- events ----
@@ -887,6 +905,10 @@ export function relayEvent(id, entry, ev) {
       if (message) deliver(id, { event: 'warning', code, message });
       return;
     }
+    case 'relay_alive':
+      // The relay's first line: it started (afterRelayGone tells this from a relay that died starting).
+      entry.relayAlive = true;
+      return;
     case 'relay_launch': {
       // A core solve's Run panel names the process that runs it on Windows (its relay),
       // as it named run_solve's. Plugin cases get no such event.
@@ -1098,6 +1120,14 @@ export function afterRelayGone(id) {
       }
       return;
     }
+    if (!status && entry.launcherExit === 0 && !entry.relayAlive && !entry.adopted && !ranIn(rec.case_dir)) {
+      // The relay's pipes closed before its first line: it died starting (a loaded machine
+      // can fail a new process), or its output went away. The slot stays held while
+      // relaunchOrEnd decides.
+      draining = true;
+      void relaunchOrEnd(id, entry);
+      return;
+    }
     startDrain(id, entry, rec);
     draining = true;
   } catch (e) {
@@ -1110,6 +1140,63 @@ export function afterRelayGone(id) {
         console.warn(`[CFD runner] ${id}: release failed`, e);
       }
     }
+  }
+}
+
+/** Whether the relay began the case's steps (its marker is there). @param {string} caseDir */
+function ranIn(caseDir) {
+  try {
+    return existsSync(join(String(caseDir), RAN_MARKER));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * A relay that ended before it said it was alive. Still running (only its output went
+ * away): the WSL case decides, as for any relay that ended. Gone: it never reached the
+ * case, so it starts once more; a second such end, or a Stop meanwhile, ends the run.
+ * @param {string} id
+ * @param {Entry} entry
+ */
+export async function relaunchOrEnd(id, entry) {
+  let alive = null;
+  try {
+    alive = await D().relayAlive(id);
+  } catch (e) {
+    console.warn(`[CFD runner] ${id}: relay check failed`, e);
+  }
+  const rec = readFoamRecord(id);
+  if (!rec || rec.status !== 'running') {
+    if (R().entries.get(id) === entry) R().entries.delete(id);
+    entry.release();
+    return;
+  }
+  if (alive !== false) {
+    // Running, or not known: never start a second relay beside one that may run.
+    startDrain(id, entry, rec);
+    return;
+  }
+  if (!entry.relaunched && !rec.stop && rec.spec_path && existsSync(String(rec.spec_path))) {
+    entry.relaunched = true;
+    entry.gone = false;
+    entry.relayGone = false;
+    entry.launcherExit = null;
+    console.warn(`[CFD runner] ${id}: the relay ended before it started; starting it once more`);
+    try {
+      spawnStarter(id, entry, entry.kind, String(rec.spec_path));
+      return;
+    } catch (e) {
+      console.warn(`[CFD runner] ${id}: the second start failed`, e);
+    }
+  }
+  try {
+    if (rec.stop) finishFoam(id, 'stopped', {});
+    else finishFoam(id, 'failed', { code: 'launch', error: FOAM_TEXT.launch });
+  } catch (e) {
+    console.warn(`[CFD runner] ${id}: finish failed`, e);
+  } finally {
+    entry.release();
   }
 }
 

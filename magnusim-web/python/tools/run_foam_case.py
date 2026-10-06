@@ -16,8 +16,25 @@ relay trusts nothing in it. Case names never appear on a command line.
 from __future__ import annotations
 
 import argparse
+import faulthandler
+import os
 import sys
 from pathlib import Path
+
+# The relay says it is alive before any import that can take long, so the runner can
+# tell a relay that died starting (nothing said) from one that runs. A hard crash
+# leaves its stack on stderr (the job log), and a start that takes 2 minutes leaves
+# where it is; the relay cancels that once its parts run (foam_relay.Relay._run_checked).
+STARTUP_DUMP_S = 120
+if "--spec" in sys.argv and "--launch" not in sys.argv and "--selftest" not in sys.argv:
+    try:
+        sys.stdout.write('MAGNUSIM_EVENT {"event":"relay_alive","pid":%d}\n' % os.getpid())
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        pass
+    if sys.stderr is not None:
+        faulthandler.enable()
+        faulthandler.dump_traceback_later(STARTUP_DUMP_S, exit=False)
 
 CFDDESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CFDDESK_ROOT))

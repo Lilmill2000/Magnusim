@@ -59,6 +59,7 @@ changes it.
 from __future__ import annotations
 
 import datetime
+import faulthandler
 import json
 import os
 import re
@@ -1305,6 +1306,8 @@ class Relay:
             self.writer.log(f"the relay could not start its parts: {exc}")
             self._relay_end(1, {"ok": False, "phase": "start", "code": "relay_error", "error": LAUNCH_FAILED}, True)
             return 1
+        # Started: the start-up stack dump (tools/run_foam_case.py) is not wanted any more.
+        faulthandler.cancel_dump_traceback_later()
         assert self.state is not None and self.status is not None and self.controller is not None
         code = 1
         outcome: dict[str, Any] = {"ok": False, "phase": self._phase}

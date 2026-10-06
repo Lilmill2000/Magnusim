@@ -329,6 +329,8 @@ describe('Stop of a run on the runner (kind solve)', () => {
 
   it('draining (its relay died): the Stop goes to its record, the drain kills at its next probe; never the old kill', () => {
     const { rec } = onRunner('run_dr');
+    // Its relay started (its first line), then died.
+    rx.spawned[0].onEvent({ event: 'relay_alive', pid: 777 });
     rx.spawned[0].onExit(0);
     rx.spawned[0].onClose();
     assert.equal(computeSlotHolder().phase, 'draining');

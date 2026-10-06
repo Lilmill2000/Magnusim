@@ -41,6 +41,7 @@ def emit(ev):
     ev["seq"] = seq
     sys.stdout.write("MAGNUSIM_EVENT " + json.dumps(ev, separators=(",", ":")) + "\\n")
     sys.stdout.flush()
+emit({"event": "relay_alive", "pid": 1})
 emit({"event": "start", "run_id": "r1", "n_procs": 1, "app": "pimpleFoam"})
 emit({"event": "stage", "stage": "solve"})
 t0 = time.perf_counter()
