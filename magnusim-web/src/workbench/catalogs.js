@@ -79,6 +79,8 @@ export const runCatalog = {
   pending_control: {},
   // A Cores choice not saved yet, per run id ({ cores }: a whole number, or null for Auto).
   pending_cores: {},
+  // A "Stop when settled" edit not saved yet, per run id ({ settle }: the setting, or null for Off).
+  pending_settle: {},
   // The run-settings save in flight per run id (saves go out one at a time).
   settings_saves: {},
   steady_defaults: null,

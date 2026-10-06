@@ -30922,14 +30922,33 @@ function refreshTransientPreview(opts) {
 async function persistRunSettle(settle) {
   const rec = selectedRunRecord();
   if (!rec || runIsLocked(rec)) return { ok: false, error: 'This run has started: add a run to change its settings.' };
-  const j = await persistRunSettings({
-    run_id: rec.id,
-    settle: settle && typeof settle === 'object' ? settle : null,
-    settle_time_dependency: runRecIsTransient(rec) ? 'Transient' : 'Steady-state',
-  });
-  if (!j || j.ok === false) throw new Error((j && j.error) || 'Run settings not saved');
-  publishRunState();
-  return j;
+  const runId = String(rec.id || rec.run_id);
+  const value = settle && typeof settle === 'object' ? settle : null;
+  // Writers before readers: the panel shows the edit now and keeps it until its save
+  // lands, so a second edit (the window right after the amount) builds on this one.
+  const edit = { settle: value };
+  runCatalog.pending_settle[runId] = edit;
+  try { publishRunState(); } catch (_) {}
+  try {
+    const j = await persistRunSettings({
+      run_id: rec.id,
+      settle: value,
+      settle_time_dependency: runRecIsTransient(rec) ? 'Transient' : 'Steady-state',
+    });
+    if (!j || j.ok === false) throw new Error((j && j.error) || 'Run settings not saved');
+    return j;
+  } finally {
+    if (runCatalog.pending_settle[runId] === edit) delete runCatalog.pending_settle[runId];
+    try { publishRunState(); } catch (_) {}
+  }
+}
+
+/** A run's "Stop when settled" as its panel shows it: an edit not saved yet wins over the record. */
+function runSettleOf(rec) {
+  const id = rec ? String(rec.id || rec.run_id || '') : '';
+  const edit = id ? runCatalog.pending_settle[id] : null;
+  const v = edit ? edit.settle : rec && rec.settle;
+  return v && typeof v === 'object' ? v : null;
 }
 
 async function persistTransientSettings(next) {
@@ -32249,7 +32268,7 @@ function computeRunState() {
     // Whether the run's launch runs on more than one core (its last plan's), null before it started.
     launch_parallel: rec && rec.launch && typeof rec.launch.parallel === 'boolean' ? rec.launch.parallel : null,
     // API 1.4: its "Stop when a monitor settles" and the monitors it can watch.
-    settle: (rec && rec.settle && typeof rec.settle === 'object' ? rec.settle : null) || null,
+    settle: runSettleOf(rec),
     monitors: runSettleMonitors(rec),
     // What its plan said of that stop when it started (prepare_run.stop_when: {label, text}
     // or {error}), else null; and its study's record (the analysis's settings), for
