@@ -20,6 +20,9 @@ const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 const STUDY_ADDED = '[data-study-reference]';
 // Rows the transient run panel gained after v0.2.0 (Average from, F2), left out of the comparison.
 const RUN_ADDED = '[data-run-field="average_from"]';
+// The Cores row (its setting and its hint) every run panel gained after v0.2.0 (F10),
+// left out of the comparison.
+const CORES_ADDED = '[data-run-cores], [data-run-cores-hint]';
 // The turbulence models the study panel gained after v0.2.0 (F8): their options (the 2nd
 // and 4th of the list) are left out of the comparison, the other options are still
 // compared. The model's help text gained sentences about them: it is compared up to the
@@ -245,7 +248,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await capture(page, 'study-steady', studyPanel, { skip: `${STUDY_ADDED}, ${TURBULENCE_ADDED}` });
   const steady = await createRun('Parity steady');
   await openRun(steady);
-  await capture(page, 'run-draft-steady', runPanel);
+  await capture(page, 'run-draft-steady', runPanel, { skip: CORES_ADDED });
   await setField('Iterations', 10);
   await setField('Write interval', 5);
   await expect(runControl.locator('[data-run-start]')).toBeEnabled({ timeout: 60_000 });
@@ -253,7 +256,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await waitStatus(steady, /^done$/, 900_000);
   await openRun(steady);
   await expect(runControl.locator('[data-residual-plot="1"]')).toBeVisible({ timeout: 60_000 });
-  await capture(page, 'run-done-steady', runPanel);
+  await capture(page, 'run-done-steady', runPanel, { skip: CORES_ADDED });
   stage(t0, 'steady run done');
 
   // Transient: the study panel, a draft run with its time-step preview, the
@@ -265,9 +268,9 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   const transient = await createRun('Parity transient');
   await openRun(transient);
   await expect(runControl.locator('[data-run-transient-hint]')).toContainText('(auto)', { timeout: 60_000 });
-  await capture(page, 'run-draft-transient', runPanel, { skip: RUN_ADDED });
+  await capture(page, 'run-draft-transient', runPanel, { skip: `${RUN_ADDED}, ${CORES_ADDED}` });
   await runControl.locator('details.mesh-advanced > summary').click();
-  await capture(page, 'run-draft-transient-advanced', runPanel, { skip: RUN_ADDED });
+  await capture(page, 'run-draft-transient-advanced', runPanel, { skip: `${RUN_ADDED}, ${CORES_ADDED}` });
   const pv = await (
     await request.post('/api/run/transient-preview', { data: { project_id: PROJECT, run_id: transient, simulation_id: SIM } })
   ).json();
@@ -280,7 +283,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await openRun(transient);
   const plot = runControl.locator('[data-residual-plot="1"]');
   await expect(plot).toBeVisible({ timeout: 60_000 });
-  await capture(page, 'run-done-transient', runPanel, { skip: RUN_ADDED });
+  await capture(page, 'run-done-transient', runPanel, { skip: `${RUN_ADDED}, ${CORES_ADDED}` });
   const box = await plot.boundingBox();
   await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2);
   await capture(page, 'residual-tip-transient', runControl.locator('[data-residual-wrap="1"]'));
@@ -330,7 +333,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
     await capture(page, `run-running-${label}`, runPanel, {
       live: true,
       settle: true,
-      skip: '[data-residual-wrap="1"], .sim-eta, ' + RUN_ADDED,
+      skip: `[data-residual-wrap="1"], .sim-eta, ${RUN_ADDED}, ${CORES_ADDED}`,
     });
     await page.goto('/#/');
     if (homeParity) {

@@ -20,7 +20,7 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { wslCasePath, wslCaseRoot } from './wsl-env.js';
-import { hardwareRankCap, savedWslSlots } from './ranks.js';
+import { hardwareRankCap, runCoresSetting, savedWslSlots } from './ranks.js';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, liveStudyRows } from './w17-sim-catalog.js';
 import { simIsTransient } from './w30-transient.js';
@@ -1125,6 +1125,8 @@ function catalogEntryFromDoc(doc, name, prev) {
     iteration: doc.iteration != null ? doc.iteration : prev ? prev.iteration : null,
     sim_time: doc.sim_time != null ? doc.sim_time : prev ? prev.sim_time ?? null : null,
     n_procs: doc.n_procs != null ? doc.n_procs : prev ? prev.n_procs : null,
+    // The run's Cores setting (null or absent: Auto).
+    ...(doc.cores !== undefined ? { cores: doc.cores } : prev && prev.cores !== undefined ? { cores: prev.cores } : {}),
     exit_code: doc.exit_code == null ? (prev ? prev.exit_code : null) : doc.exit_code,
     // Stopped runs keep whatever iterations were written; the tree/Results
     // panel read these to decide whether partial results can be opened.
@@ -1515,6 +1517,8 @@ async function applyRunSettings(id, runId, partial) {
     rec.mesh_name = picked ? picked.name : rec.mesh_name;
   }
   if (Array.isArray(partial.result_controls)) rec.result_controls = partial.result_controls;
+  // Cores: a whole number, or null for Auto (the ranks follow the mesh and the PC).
+  if (partial.cores !== undefined) rec.cores = runCoresSetting(partial.cores);
   // Post-processing state: `views` are named filter sets the user saved for
   // this run; `current_view` is the auto-saved live filter set so Results
   // reopen exactly as they were left.
@@ -1595,6 +1599,7 @@ function loadRunDoc(projectId, runId) {
   if (rec.writeInterval != null) merged.writeInterval = rec.writeInterval;
   if (rec.time_dependency) merged.time_dependency = rec.time_dependency;
   if (rec.transient) merged.transient = rec.transient;
+  if (rec.cores !== undefined) merged.cores = rec.cores;
   if (rec.status) merged.status = rec.status;
   return merged;
 }
@@ -1906,11 +1911,21 @@ async function startSolveBody(opts = {}, slot) {
  * launch spec; none: the rule before API 1.5, LEGACY_SERIAL_BELOW_CELLS) or when
  * its launch is not parallel, else one rank per physical core (hardwareRankCap), at
  * most the WSL MPI slots Settings saved. WSL is not asked here: the relay clamps
- * by its own slot count.
+ * by its own slot count. A run's Cores setting (opts.cores, a whole number) wins
+ * over serial_below_cells (1 = serial), still at most hardwareRankCap and the
+ * saved WSL slots; a launch that is not parallel stays serial.
  * @param {unknown} nCells the mesh's cell count (unknown: 0)
- * @param {{ transient?: boolean, serialBelowCells?: unknown, parallel?: unknown }} [opts]
+ * @param {{ transient?: boolean, serialBelowCells?: unknown, parallel?: unknown, cores?: unknown }} [opts]
  */
 export function runRanks(nCells, opts = {}) {
+  const cores = runCoresSetting(opts.cores);
+  if (cores != null) {
+    if (opts.parallel === false || cores === 1) return 1;
+    let n = Math.min(hardwareRankCap(), cores);
+    const slots = savedWslSlots();
+    if (slots) n = Math.min(n, slots);
+    return Math.max(1, n);
+  }
   const given = opts.serialBelowCells;
   const below =
     given !== null && given !== undefined && given !== '' && Number.isFinite(Number(given))
@@ -2009,7 +2024,12 @@ async function startSolveOnRunner(c) {
       ? plan.launch
       : { app: solver, keep_frames: isTransient ? 'all' : 'latest', process_names: [solver], log_parser: null };
   const slotsHint = savedWslSlots();
-  const nProcs = runRanks(ready.mesh.n_cells, { transient: isTransient, serialBelowCells: plan.serial_below_cells, parallel: launch.parallel });
+  const nProcs = runRanks(ready.mesh.n_cells, {
+    transient: isTransient,
+    serialBelowCells: plan.serial_below_cells,
+    parallel: launch.parallel,
+    cores: draft && draft.cores,
+  });
   // What the run is written with (the analysis's plan): recorded on the run as
   // prepare_run's report was.
   const report = {

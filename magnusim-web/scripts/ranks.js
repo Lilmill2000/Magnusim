@@ -63,3 +63,25 @@ export function savedWslSlots() {
   const n = hw && Number(hw.wsl_mpi_slots);
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : null;
 }
+
+/**
+ * The most ranks a run gets on this PC: hardwareRankCap at most the WSL MPI slots
+ * Settings saved. The Run panel's Cores choice offers 1 up to this.
+ */
+export function runRankCap() {
+  let n = hardwareRankCap();
+  const slots = savedWslSlots();
+  if (slots) n = Math.min(n, slots);
+  return Math.max(1, n);
+}
+
+/**
+ * A run's Cores setting (run.cores) as a whole number of cores, or null for Auto
+ * (unset, blank, "auto", 0 or anything that is not a positive number).
+ * @param {unknown} v
+ */
+export function runCoresSetting(v) {
+  if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 4096) : null;
+}

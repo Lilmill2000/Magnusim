@@ -247,6 +247,10 @@ export interface RunState {
   setup_ready: boolean | null;
   /** Made on an older version of its linked geometry (API 1.5, D26): the line the panel shows, else ''. */
   older_geometry?: string;
+  /** Cores the run asks for: a whole number, or null for Auto. */
+  cores?: number | null;
+  /** Whether the run's launch is parallel (its last plan's); null before it started. */
+  launch_parallel?: boolean | null;
 }
 
 export function subscribeRunState(onState: (state: RunState) => void): () => void {
@@ -274,6 +278,13 @@ export async function saveTransientSettings(t: TransientSettings): Promise<unkno
   const fn = window.__CFD_RUN_TRANSIENT_SAVE__;
   if (!fn) throw new Error('Run settings are not ready yet.');
   return fn(t);
+}
+
+/** Save the selected run's Cores: a whole number, or null for Auto. */
+export async function saveRunCores(cores: number | null): Promise<unknown> {
+  const fn = window.__CFD_RUN_CORES_SAVE__;
+  if (!fn) throw new Error('Run settings are not ready yet.');
+  return fn(cores);
 }
 
 export async function renameRun(name: string): Promise<unknown> {

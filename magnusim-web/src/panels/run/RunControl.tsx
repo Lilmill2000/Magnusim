@@ -12,6 +12,7 @@ import {
   runCopyPick,
   runSetupFix,
   runStateNow,
+  saveRunCores,
   saveRunSettings,
   saveTransientSettings,
   simStart,
@@ -21,6 +22,7 @@ import {
 } from '../legacyBridge';
 import { mergeObjectSchemas, pickSchemaValues, scopeIds, useRegistryReady } from '../scope';
 import { ResidualPlot } from './ResidualPlot';
+import { RunCores, runCanUseCores, useRankCap } from './RunCores';
 import { RunMonitors } from './RunMonitors';
 
 /** Live run panel state from the runtime (`cfd:run-state`). */
@@ -212,6 +214,7 @@ export function RunControl(props: IslandProps) {
   const registry = useRegistryReady();
   const row = ((registry?.analysis || []) as RegistryRow[]).find((r) => r.key === state?.analysis_key);
   const { Component: Settings, waiting } = useSettingsSlot<RunSettingsProps>('run-settings', row);
+  const rankCap = useRankCap();
   if (!state || !state.has_run) {
     return (
       <div data-run-control="1">
@@ -246,6 +249,14 @@ export function RunControl(props: IslandProps) {
           </span>
         </div>
         {waiting ? null : Settings ? <Settings {...settingsProps} /> : <GenericRunSettings {...settingsProps} />}
+        {runCanUseCores(state, registry, row) ? (
+          <RunCores
+            cores={state.cores ?? null}
+            locked={state.locked}
+            cap={rankCap}
+            onSave={(cores) => void saveRunCores(cores).catch(report)}
+          />
+        ) : null}
         <div className="sim-run-row">
           {state.start.visible ? (
             <button

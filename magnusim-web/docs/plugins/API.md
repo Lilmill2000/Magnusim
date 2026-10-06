@@ -1489,6 +1489,8 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `mesh_ready: boolean`
 - `setup_ready: boolean | null`: The run's analysis reports no setup issue (null until it answers).
 - `older_geometry?: string | undefined`: Made on an older version of its linked geometry (API 1.5, D26): the line the panel shows, else ''.
+- `cores?: number | null | undefined`: Cores the run asks for: a whole number, or null for Auto.
+- `launch_parallel?: boolean | null | undefined`: Whether the run's launch is parallel (its last plan's); null before it started.
 
 #### SchemaFormProps
 

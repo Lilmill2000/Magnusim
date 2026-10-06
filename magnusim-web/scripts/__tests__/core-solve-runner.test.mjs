@@ -253,6 +253,34 @@ describe('Start hands a core solve to the runner', () => {
     assert.match(runDoc(rid).note, /^simpleFoam (\d+ ranks|serial)/);
   });
 
+  it("the run's Cores setting: saved on the run, and it wins over serial_below_cells", async () => {
+    const rid = draftRun();
+    // Saved as a whole number; Auto is null.
+    assert.equal((await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, cores: '2' })).ok, true);
+    assert.equal(runDoc(rid).cores, 2);
+    assert.equal((await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, cores: null })).ok, true);
+    assert.equal(runDoc(rid).cores, null);
+    await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, cores: 2 });
+    // An 8-cell mesh is far below serial_below_cells (200000): Auto would run it serial.
+    const { out } = await start(rid);
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    const spec = JSON.parse(readFileSync(join(ROOT, 'foam-specs', `${out.bodyExtra.runner_job_id}.json`), 'utf8'));
+    assert.equal(spec.n_procs, 2);
+    assert.deepEqual(spec.prepare.args.slice(-2), ['--n-procs', '2']);
+    const doc = runDoc(rid);
+    // The ranks it started with, and the setting it keeps.
+    assert.deepEqual([doc.n_procs, doc.cores], [2, 2]);
+  });
+
+  it('a Cores setting over the PC cap is clamped to it', async () => {
+    const rid = draftRun({ cores: 4096 });
+    const { out } = await start(rid);
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    const spec = JSON.parse(readFileSync(join(ROOT, 'foam-specs', `${out.bodyExtra.runner_job_id}.json`), 'utf8'));
+    assert.equal(spec.n_procs, (await import('../ranks.js')).hardwareRankCap());
+    assert.equal(runDoc(rid).cores, 4096);
+  });
+
   it('a not-ready plan: the run is failed with the analysis text and fix, nothing runs, the slot is free', async () => {
     const rid = draftRun();
     fx.plan = () => ({ ok: false, not_ready: true, error: 'Set the inlet velocity', fix: { go: 'bcs' }, patches: [{ op: 'x' }] });

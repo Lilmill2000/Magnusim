@@ -77,6 +77,8 @@ export const runCatalog = {
   writeInterval: null,
   // Steady settings typed but not saved yet, per run id ({ endTime, writeInterval }).
   pending_control: {},
+  // A Cores choice not saved yet, per run id ({ cores }: a whole number, or null for Auto).
+  pending_cores: {},
   // The run-settings save in flight per run id (saves go out one at a time).
   settings_saves: {},
   steady_defaults: null,

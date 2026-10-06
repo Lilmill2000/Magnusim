@@ -31129,6 +31129,8 @@ async function persistRunSettings(partial, opts) {
   if (partial && partial.transient && typeof partial.transient === 'object') body.transient = partial.transient;
   if (partial && partial.time_dependency != null) body.time_dependency = partial.time_dependency;
   if (partial && Array.isArray(partial.result_controls)) body.result_controls = partial.result_controls;
+  // Cores: a whole number, or null for Auto.
+  if (partial && partial.cores !== undefined) body.cores = partial.cores;
   // Post-processing state (saved filter-set views + the live filter set).
   if (partial && Array.isArray(partial.views)) body.views = partial.views;
   if (partial && partial.current_view !== undefined) body.current_view = partial.current_view;
@@ -31479,6 +31481,8 @@ async function copyRunSettingsFrom(srcId, opts) {
         : src.time_dependency || (runRecIsTransient(src) ? 'Transient' : 'Steady-state'),
     transient,
     result_controls: otherStudy ? dest.result_controls || [] : cloneRunResultControls(src.result_controls),
+    // Cores is the PC's, not the study's: it comes across from any run (null: Auto).
+    cores: runCoresOf(src),
   };
   const j = await persistRunSettings(body, opts);
   if (!j || j.ok === false) {
@@ -32110,7 +32114,7 @@ function computeRunState() {
       progress.eta = formatEta(solveEtaMs(etaSrc)) || '';
     }
     const bits = [];
-    if (run.n_procs > 1) bits.push(run.n_procs + ' ranks');
+    if (run.n_procs > 1) bits.push(run.n_procs + ' cores');
     else if (run.n_procs === 1) bits.push('serial');
     if (elapsedTxt && !running) bits.push(elapsedTxt);
     if (running && run.pid != null) bits.push('PID ' + run.pid);
@@ -32152,7 +32156,42 @@ function computeRunState() {
     setup_ready: setupIssue === undefined ? null : setupIssue === null,
     // Made on an older version of its linked geometry (host API 1.5, D26): the line it shows.
     older_geometry: runOlderLine(rec),
+    // Cores: a whole number, or null for Auto. A choice whose save has not landed wins.
+    cores: runCoresOf(rec),
+    // Whether the run's launch runs on more than one core (its last plan's), null before it started.
+    launch_parallel: rec && rec.launch && typeof rec.launch.parallel === 'boolean' ? rec.launch.parallel : null,
   };
+}
+
+/** A run's Cores setting: a whole number, or null for Auto. A choice not saved yet wins over the record. */
+function runCoresOf(rec) {
+  const id = rec ? String(rec.id || rec.run_id || '') : '';
+  const edit = id ? runCatalog.pending_cores[id] : null;
+  const v = edit ? edit.cores : rec && rec.cores;
+  const n = Math.floor(Number(v));
+  return v != null && v !== '' && Number.isFinite(n) && n >= 1 ? n : null;
+}
+
+/** Save the selected run's Cores (a whole number, or null for Auto). Started runs keep theirs. */
+async function persistRunCores(cores) {
+  const rec = selectedRunRecord();
+  if (!rec || runIsLocked(rec)) return null;
+  const runId = String(rec.id || rec.run_id);
+  const n = Math.floor(Number(cores));
+  const value = cores != null && cores !== '' && Number.isFinite(n) && n >= 1 ? n : null;
+  // Writers before readers: the panel shows the choice now, and keeps it until its save lands.
+  const edit = { cores: value };
+  runCatalog.pending_cores[runId] = edit;
+  rec.cores = value;
+  try { publishRunState(); } catch (_) {}
+  try {
+    const j = await persistRunSettings({ run_id: runId, cores: value });
+    if (j && j.ok === false) throw new Error(j.error || 'Cores not saved');
+    return j;
+  } finally {
+    if (runCatalog.pending_cores[runId] === edit) delete runCatalog.pending_cores[runId];
+    try { publishRunState(); } catch (_) {}
+  }
 }
 
 /** D26: the run panel's line for a run made on an older version of its linked geometry, else ''. */
@@ -33042,6 +33081,7 @@ async function renameActiveRunClient(name) {
   };
   window.__CFD_RUN_SAVE__ = (patch) => persistSimControl(patch || {});
   window.__CFD_RUN_TRANSIENT_SAVE__ = (t) => persistTransientSettings(t);
+  window.__CFD_RUN_CORES_SAVE__ = (cores) => persistRunCores(cores);
   window.__CFD_RUN_RENAME__ = (name) => renameActiveRunClient(String(name || '').trim() || 'Run 1');
   window.__CFD_RUN_DELETE__ = () => deleteSelectedRunClient();
   window.__CFD_RUN_COPY_PICK__ = (on) => {

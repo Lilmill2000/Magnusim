@@ -381,6 +381,10 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       setup_ready: boolean | null;
       /** Made on an older version of its linked geometry (API 1.5, D26): the line the panel shows, else ''. */
       older_geometry?: string;
+      /** Cores the run asks for: a whole number, or null for Auto. */
+      cores?: number | null;
+      /** Whether the run's launch is parallel (its last plan's); null before it started. */
+      launch_parallel?: boolean | null;
   }
   /** Geometry panel state: V0.1.0's Name / Representation / Volume rows. */
   export interface GeometryState {

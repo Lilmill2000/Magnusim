@@ -155,6 +155,7 @@ describe('runRanks', () => {
     const runRanks = fnSource('export function runRanks(', SRC);
     const cap = fnSource('export function hardwareRankCap(', RANKS);
     const saved = fnSource('export function savedWslSlots(', RANKS);
+    const coresSetting = fnSource('export function runCoresSetting(', RANKS);
     // runRanks asks WSL nothing: no probe, no synchronous spawn.
     assert.ok(!/probeWslMpiSlots|spawnSync|spawn\(/.test(runRanks + cap + saved));
     const oldFn = (env) =>
@@ -167,6 +168,7 @@ describe('runRanks', () => {
         const LEGACY_SERIAL_BELOW_CELLS = Object.freeze({ steady: 200000, transient: 50000 });
         ${cap}
         ${saved}
+        ${coresSetting}
         ${runRanks}
         return runRanks;`)(env);
     let checked = 0;
@@ -181,6 +183,9 @@ describe('runRanks', () => {
               // An analysis that declares no serial_below_cells (before API 1.5): the old rule.
               assert.equal(newFn(env)(cells, { transient }), want, why);
               assert.equal(newFn(env)(cells, { transient, serialBelowCells: null }), want, why);
+              // A run whose Cores is Auto (unset) keeps it.
+              assert.equal(newFn(env)(cells, { transient, cores: null }), want, why);
+              assert.equal(newFn(env)(cells, { transient, cores: undefined }), want, why);
               // Incompressible Flow declares the same numbers.
               assert.equal(newFn(env)(cells, { transient, serialBelowCells: transient ? 50000 : 200000, parallel: true }), want, why);
               // Its own number wins; a launch that is not parallel is serial.
@@ -198,7 +203,10 @@ describe('runRanks', () => {
   it('is the rule Start uses', () => {
     const start = SRC.indexOf('async function startSolveOnRunner(');
     const body = SRC.slice(start, SRC.indexOf('\n}\n', start));
-    assert.match(body, /const nProcs = runRanks\(ready\.mesh\.n_cells, \{ transient: isTransient, serialBelowCells: plan\.serial_below_cells, parallel: launch\.parallel \}\);/);
+    assert.match(
+      body,
+      /const nProcs = runRanks\(ready\.mesh\.n_cells, \{\s*transient: isTransient,\s*serialBelowCells: plan\.serial_below_cells,\s*parallel: launch\.parallel,\s*cores: draft && draft\.cores,\s*\}\);/,
+    );
     assert.equal(w27.runRanks(1000, { transient: false }), 1);
     assert.ok(w27.runRanks(300000, { transient: false }) >= 1);
   });

@@ -5,13 +5,19 @@
 import { clampPort, listenPort, publicPrefs, writeLocalDoc } from './prefs.js';
 import { runHardwareCheck } from './hardware-profile.js';
 import { envGet } from './env-compat.js';
+import { runRankCap } from './ranks.js';
+
+/** The settings the page reads, with the most cores a run gets on this PC (the Run panel's Cores choice). */
+function pagePrefs() {
+  return { ...publicPrefs(), rank_cap: runRankCap() };
+}
 
 export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBody }) {
   if (parts[0] !== 'api' || parts[1] !== 'prefs') return false;
 
   if ((req.method === 'GET' || req.method === 'HEAD') && !parts[2]) {
     return sendJson(res, 200, {
-      ...publicPrefs(),
+      ...pagePrefs(),
       listen_port: listenPort(),
     });
   }
@@ -19,7 +25,7 @@ export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBod
   if (req.method === 'POST' && parts[2] === 'hardware-check') {
     try {
       const hardware = runHardwareCheck();
-      return sendJson(res, 200, { ok: true, hardware, prefs: publicPrefs() });
+      return sendJson(res, 200, { ok: true, hardware, prefs: pagePrefs() });
     } catch (err) {
       return sendJson(res, 500, { ok: false, error: String(err && err.message ? err.message : err) });
     }
@@ -48,7 +54,7 @@ export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBod
       patch.collapse_completed_sections = !!body.collapse_completed_sections;
     }
     writeLocalDoc(patch);
-    const prefs = publicPrefs();
+    const prefs = pagePrefs();
     const bound = clampPort(envGet('BOUND_PORT')) || listenPort();
     return sendJson(res, 200, {
       ok: true,
