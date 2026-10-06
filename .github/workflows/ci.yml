@@ -282,10 +282,17 @@ jobs:
         run: npm run test:e2e
         env:
           CI: "1"
-      # The LINK gate fails, never skips, without the app's Python (the setup-python one
-      # here, with the backend installed above): its checker tests and link e2e must run.
-      # gate:l3-cad is local only: it needs a private STEP file that never goes to GitHub.
+          # Two workers on the 4-core runner; the @serial tests still run alone afterwards.
+          CAD_E2E_WORKERS: "2"
+      # The LINK gates fail, never skip, without the app's Python (the setup-python one
+      # here, with the backend installed above): their checker tests and link e2e must run.
+      # gate:l3-cad:ci is gate:l3-cad without the one case that needs a private STEP file
+      # (never on GitHub); a generated part covers what that case checks.
       - name: gate:l2-cad
         run: npm run test:gate:l2-cad
+        env:
+          CI: "1"
+      - name: gate:l3-cad:ci
+        run: npm run test:gate:l3-cad:ci
         env:
           CI: "1"
