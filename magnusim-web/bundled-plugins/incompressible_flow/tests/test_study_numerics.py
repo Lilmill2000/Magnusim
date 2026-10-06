@@ -134,6 +134,20 @@ def test_simplec_writes_consistent_and_its_own_relaxation(tmp_path):
     assert (numerics["simplec"], numerics["relax_u"], numerics["relax_p"]) == (True, 0.9, 1.0)
 
 
+@pytest.mark.parametrize("model", ["LRR", "SSG"])
+def test_simplec_keeps_a_reynolds_stress_models_lower_relaxation(tmp_path, model):
+    # SIMPLEC's 0.9 is never above the model's own: a Reynolds-stress model keeps 0.5.
+    case = _write(tmp_path, {"turbulence_model": model, "simplec": True})
+    relax = _block(_text(case, "system/fvSolution"), "relaxationFactors")
+    assert re.search(r"^\s+p\s+1;", relax, re.M)
+    for name in ("U", "R", "epsilon"):
+        assert re.search(rf"^\s+{name}\s+0\.5;", relax, re.M), name
+    assert "0.9;" not in relax
+    numerics = json.loads(_text(case, "w27-case.json"))["numerics"]
+    assert (numerics["simplec"], numerics["relax_u"], numerics["relax_p"]) == (True, 0.5, 1.0)
+    assert physics_from_record({"turbulence_model": "kEpsilon", "simplec": True}).solve_relax_u() == 0.9
+
+
 def test_simplec_off_keeps_the_studys_relaxation(tmp_path):
     solution = _text(_write(tmp_path, {"simplec": False, "relax_u": 0.5, "relax_p": 0.2}), "system/fvSolution")
     assert re.search(r"consistent\s+no;", solution)
@@ -160,6 +174,16 @@ def test_accurate_runs_in_wsl(tmp_path, channel_mesh, model):  # noqa: F811
     case = _write(tmp_path, {"turbulence_model": model, "numerics_preset": "accurate"}, mesh_dir=channel_mesh)
     text = _converge(case)
     assert re.search(r"^Time = 5\s*$", text, re.M)
+
+
+@pytest.mark.wsl
+def test_simplec_with_lrr_runs_in_wsl(tmp_path, channel_mesh):  # noqa: F811
+    case = _write(tmp_path, {"turbulence_model": "LRR", "simplec": True}, mesh_dir=channel_mesh)
+    relax = _block(_text(case, "system/fvSolution"), "relaxationFactors")
+    assert re.search(r"^\s+U\s+0\.5;", relax, re.M)
+    text = _converge(case)
+    assert re.search(r"^Time = 5\s*$", text, re.M)
+    assert re.search(r"Solving for R", text)
 
 
 @pytest.mark.wsl

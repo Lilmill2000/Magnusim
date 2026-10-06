@@ -165,7 +165,7 @@ class StudyPhysics:
 
     def solve_relax_u(self) -> float:
         """Relaxation of the velocity and turbulence equations the steady solve uses."""
-        return SIMPLEC_RELAX_U if self.simplec else self.relax_u
+        return simplec_relax_u(self.turbulence_model) if self.simplec else self.relax_u
 
     def solve_relax_p(self) -> float:
         """Relaxation of the pressure field the steady solve uses (1: none)."""
@@ -182,6 +182,12 @@ RSM_RELAX_U = 0.5
 def default_relax_u(model: str) -> float:
     """Relaxation U when the study has not set one: lower for Reynolds-stress models."""
     return RSM_RELAX_U if model in RSM_MODELS else DEFAULT_PHYSICS.relax_u
+
+
+def simplec_relax_u(model: str) -> float:
+    """SIMPLEC's relaxation of the velocity and turbulence equations: its own 0.9, but
+    never above the model's own (a Reynolds-stress model keeps its 0.5)."""
+    return min(SIMPLEC_RELAX_U, RSM_RELAX_U) if model in RSM_MODELS else SIMPLEC_RELAX_U
 
 
 def _num(value: Any) -> float | None:

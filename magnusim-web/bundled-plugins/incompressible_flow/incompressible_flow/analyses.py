@@ -29,6 +29,7 @@ from .physics import (
     KINEMATIC_FIELDS,
     NUMERICS_LABELS,
     NUMERICS_PRESETS,
+    RSM_RELAX_U,
     SIMPLEC_RELAX_U,
     TURBULENCE_CHOICE_LABELS,
     TURBULENCE_MODELS,
@@ -304,7 +305,8 @@ def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             group="relaxation",
             description=(
                 "Solves with SIMPLEC, the consistent form of SIMPLE: pressure needs no relaxation, "
-                f"so it uses {SIMPLEC_RELAX_U:g} for velocity and turbulence and leaves pressure "
+                f"so it uses {SIMPLEC_RELAX_U:g} for velocity and turbulence ({RSM_RELAX_U:g} with a "
+                "Reynolds-stress model, LRR or SSG, which needs it lower) and leaves pressure "
                 "unrelaxed in place of the relaxation below. It often converges in fewer iterations, "
                 "but not on every case: turn it off if the solve oscillates or stalls."
             ),

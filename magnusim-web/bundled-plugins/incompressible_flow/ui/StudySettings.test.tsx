@@ -234,6 +234,12 @@ describe('SimulationDefaults (study panel)', () => {
     expect(screen.queryByText('Relaxation p')).toBeNull();
     const note = view.container.querySelector('[data-study-simplec-note]') as HTMLElement;
     expect(note).toHaveTextContent('SIMPLEC relaxes velocity and turbulence by 0.9 and leaves pressure unrelaxed (1)');
+
+    // A Reynolds-stress model keeps its own lower relaxation, and the note says so.
+    publish(study({}, { simplec: true, turbulence_model: 'LRR' }));
+    expect(view.container.querySelector('[data-study-simplec-note]')).toHaveTextContent(
+      "SIMPLEC relaxes velocity and turbulence by 0.5 (the Reynolds-stress model's own, below SIMPLEC's 0.9) and leaves pressure unrelaxed (1), in place of the study's relaxation.",
+    );
   });
 
   it('shows the starting flow and saves it with the other study settings', async () => {

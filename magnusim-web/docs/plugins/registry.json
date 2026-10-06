@@ -246,7 +246,7 @@
               "group": "relaxation"
             },
             "title": "SIMPLEC (consistent)",
-            "description": "Solves with SIMPLEC, the consistent form of SIMPLE: pressure needs no relaxation, so it uses 0.9 for velocity and turbulence and leaves pressure unrelaxed in place of the relaxation below. It often converges in fewer iterations, but not on every case: turn it off if the solve oscillates or stalls."
+            "description": "Solves with SIMPLEC, the consistent form of SIMPLE: pressure needs no relaxation, so it uses 0.9 for velocity and turbulence (0.5 with a Reynolds-stress model, LRR or SSG, which needs it lower) and leaves pressure unrelaxed in place of the relaxation below. It often converges in fewer iterations, but not on every case: turn it off if the solve oscillates or stalls."
           },
           "relax_u": {
             "type": "number",

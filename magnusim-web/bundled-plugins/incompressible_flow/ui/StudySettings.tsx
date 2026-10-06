@@ -86,6 +86,9 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
   // SIMPLEC hides the relaxation rows (their depends_on, read from the saved
   // study like this note) and says what it uses instead.
   const simplecOn = hasNumerics && 'simplec' in (numericsSchema.properties || {}) && record.simplec === true;
+  // A Reynolds-stress model keeps its own lower relaxation under SIMPLEC (physics.simplec_relax_u).
+  const rsm = turbKey === 'LRR' || turbKey === 'SSG';
+  const simplecU = rsm ? Math.min(SIMPLEC_RELAX_U, RSM_RELAX_U) : SIMPLEC_RELAX_U;
 
   return (
     <>
@@ -143,8 +146,9 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
       ) : null}
       {simplecOn ? (
         <p className="mat-assign-hint sim-def-hint" data-study-simplec-note="1">
-          SIMPLEC relaxes velocity and turbulence by {SIMPLEC_RELAX_U} and leaves pressure unrelaxed ({SIMPLEC_RELAX_P}), in place of
-          the study&apos;s relaxation.
+          SIMPLEC relaxes velocity and turbulence by {simplecU}
+          {rsm ? ` (the Reynolds-stress model's own, below SIMPLEC's ${SIMPLEC_RELAX_U})` : ''} and leaves pressure unrelaxed (
+          {SIMPLEC_RELAX_P}), in place of the study&apos;s relaxation.
         </p>
       ) : null}
       {hasNumerics ? null : transient ? (
