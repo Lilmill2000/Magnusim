@@ -170,6 +170,50 @@
   margin-left: var(--mg-space-3);
 }
 
+/* The key numbers above the plots: one line per engine. */
+.af-keys {
+  display: grid;
+  gap: var(--mg-space-1);
+  margin-bottom: var(--mg-space-3);
+  font-size: var(--mg-text-xs);
+  color: var(--mg-text-body);
+}
+
+.af-keys p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mg-space-1) var(--mg-space-4);
+  margin: 0;
+}
+
+.af-key-engine {
+  font-weight: 600;
+}
+
+.af-key b {
+  font-weight: 600;
+  color: var(--mg-text-secondary);
+}
+
+/* "How to read this" and "What the columns mean": closed until asked for. */
+.af-help {
+  margin: 0 0 var(--mg-space-2);
+  font-size: var(--mg-text-xs);
+  line-height: var(--mg-line);
+  color: var(--mg-text-secondary);
+}
+
+.af-help summary {
+  cursor: pointer;
+  color: var(--mg-link);
+  width: max-content;
+}
+
+.af-help p {
+  margin: var(--mg-space-1) 0 0;
+  max-width: 72ch;
+}
+
 @media (max-width: 760px) {
   .af {
     grid-template-columns: minmax(0, 1fr);

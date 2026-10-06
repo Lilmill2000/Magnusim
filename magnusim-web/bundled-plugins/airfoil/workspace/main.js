@@ -14,6 +14,7 @@
 import { connect } from '@magnusim/workspace';
 import { createElement as h, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { keyNumbers, THIN_AIRFOIL_SLOPE } from './keyNumbers.js';
 import {
   Button,
   DisabledReason,
@@ -250,10 +251,106 @@ function PolarTable({ rows, engine, notConverged }) {
   );
 }
 
-/** One plot of the grid: its title, then the kit's LinePlot (or the empty state). */
-function PlotBox({ title, af, children }) {
-  return h('figure', { className: 'af-plot', 'data-af': af }, h('figcaption', null, title), children);
+/** What each plot shows and how to read it: one paragraph per line, plain physics. */
+const PLOT_HELP = {
+  'plot-cl-alpha': [
+    'The lift curve: how much lift the section makes (Cl, the lift per unit span divided by the dynamic pressure and the chord) at each angle of attack α.',
+    'At small angles it is a straight line: its slope is the lift slope (thin-airfoil theory gives 2π per radian, about 0.11 per degree), and it crosses Cl = 0 at the zero-lift angle α₀, below zero for a cambered section.',
+    'Where the line bends over and Cl stops rising is stall: the flow separates from the upper surface. The highest point is Cl max.',
+  ],
+  'plot-cl-cd': [
+    'The drag polar: each point is one angle of attack, with its drag (Cd) across and its lift (Cl) up.',
+    'The point where a line from the origin just touches the curve has the most lift for its drag: the best Cl/Cd (glide ratio), marked in the key numbers.',
+    'The leftmost point is the least drag (Cd min). Past stall the curve turns right and down: drag rises while lift falls.',
+  ],
+  'plot-cm-alpha': [
+    'The pitching moment about the quarter-chord point (Cm), positive nose up.',
+    'A cambered section has a negative Cm (nose down); a symmetric one has Cm near 0. A nearly flat line means the quarter chord is close to the aerodynamic centre, where the moment does not change with angle.',
+    'A sudden change in Cm is often the first sign of separation.',
+  ],
+  'plot-cp': [
+    'The pressure coefficient along the chord at one angle: Cp = (p − p∞) / (½ρV²). It is drawn with −Cp upward, so suction is up, as is usual.',
+    'The upper surface carries the suction peak near the leading edge; the gap between the upper and lower lines is the lift at each point along the chord.',
+    'After the peak the pressure rises again toward the trailing edge (the recovery). A steep recovery is where the boundary layer may separate. Choose the angle in the list.',
+  ],
+  'openfoam-residuals': [
+    'How far each equation still is from settled at each iteration (the initial residual of Ux, Uy, p, k and ω), on a log scale: lower is better.',
+    'A steady run drops several decades and then flattens. "Steady" in the runs table means Cl stopped moving over the last iterations; a run that ends not steady says by how much Cl still moved.',
+    'Residuals that stall high or rise again usually mean the mesh or the angle is too much for a steady solution (often past stall).',
+  ],
+};
+
+/** A closed "How to read this" fold. */
+function Help({ af, lines, summary = 'How to read this' }) {
+  if (!lines) return null;
+  return h(
+    'details',
+    { className: 'af-help', 'data-af': `${af}-help` },
+    h('summary', null, summary),
+    lines.map((t, i) => h('p', { key: i }, t)),
+  );
 }
+
+/** One plot of the grid: its title, its "How to read this", then the kit's LinePlot (or the empty state). */
+function PlotBox({ title, af, children }) {
+  return h('figure', { className: 'af-plot', 'data-af': af }, h('figcaption', null, title), h(Help, { af, lines: PLOT_HELP[af] }), children);
+}
+
+/** The key numbers of each shown polar, in one line per engine. */
+function KeyNumbers({ docs }) {
+  const lines = docs
+    .map((d) => ({ d, k: keyNumbers(d.rows) }))
+    .filter((x) => x.k);
+  if (!lines.length) return null;
+  const pair = (label, value, title) => h('span', { className: 'af-key', title }, h('b', null, label), ' ', value);
+  return h(
+    'div',
+    { className: 'af-keys', 'data-af': 'key-numbers' },
+    lines.map(({ d, k }) =>
+      h(
+        'p',
+        { key: d.engine, 'data-af': `key-${d.engine}` },
+        h('span', { className: 'af-key-engine', style: { color: ENGINE_COLOR[d.engine] } }, engineName(d)),
+        pair(
+          'Cl max',
+          k.clMax.stalled
+            ? `${num(k.clMax.cl, 3)} at ${deg(k.clMax.alpha)} (stall)`
+            : `${num(k.clMax.cl, 3)} at ${deg(k.clMax.alpha)}, still rising: no stall in ${deg(k.range.from)}…${deg(k.range.to)}`,
+          'The most lift in the range, and its angle. Stall is where the lift curve turns over.',
+        ),
+        k.slope
+          ? pair(
+              'Lift slope',
+              `${num(k.slope.perDeg, 4)} per degree (${num(k.slope.perRad, 2)} per radian; thin airfoil ${num(THIN_AIRFOIL_SLOPE, 2)})`,
+              `From the straight part of the lift curve, ${deg(k.slope.from)} to ${deg(k.slope.to)}.`,
+            )
+          : null,
+        k.alpha0
+          ? pair('Zero-lift α', `${deg(Number(k.alpha0.alpha.toFixed(2)))}${k.alpha0.extrapolated ? ' (from the slope: no angle has Cl ≤ 0)' : ''}`, 'The angle where the section makes no lift: below 0° for a cambered section.')
+          : null,
+        k.cdMin ? pair('Cd min', `${num(k.cdMin.cd, 5)} at ${deg(k.cdMin.alpha)}`, 'The least drag in the range.') : null,
+        k.bestLd ? pair('Best Cl/Cd', `${num(k.bestLd.ld, 1)} at ${deg(k.bestLd.alpha)}`, 'The most lift for its drag (the glide ratio): where a line from the origin touches the drag polar.') : null,
+        k.cm0 != null ? pair('Cm at 0°', num(k.cm0, 4), 'The pitching moment about the quarter chord at zero angle: negative is nose down.') : null,
+      ),
+    ),
+  );
+}
+
+/** What each table column means, per engine. */
+const COLUMN_HELP = {
+  common: [
+    'α: the angle of attack, between the chord line and the oncoming flow.',
+    'Cl: the lift coefficient (lift per unit span ÷ (½ρV² × chord)). Cd: the drag coefficient, the same way. Cm: the pitching moment about the quarter chord ÷ (½ρV² × chord²), positive nose up.',
+    'Cl/Cd: lift over drag at that angle (the glide ratio): higher is more efficient.',
+  ],
+  neuralfoil: ['Confidence: how sure NeuralFoil is that the point is inside what it learned. Below about 80 % treat the numbers as a trend only, and check them with XFOIL.'],
+  xfoil: [
+    'Transition (top): where the boundary layer on the upper surface turns turbulent, as a fraction of the chord (0 at the leading edge, 1 at the trailing edge). Forced transition puts it at the trip.',
+    '"did not converge": XFOIL found no solution at that angle (often near or past stall); that angle is left out of the plots.',
+  ],
+  openfoam: ['Iterations: how many solver iterations the angle took. "not steady" means Cl still moved at the end: run it on a finer mesh or more iterations, or treat it as unsteady flow.'],
+};
+
 
 /** Cl–α, Cl–Cd, Cm–α of every shown engine, and XFOIL's Cp(x) at one angle. */
 function Plots({ docs, xfDoc, cpAlpha, onCpAlpha }) {
@@ -342,6 +439,10 @@ function Plots({ docs, xfDoc, cpAlpha, onCpAlpha }) {
   const empty = (text) => h(EmptyState, { variant: 'chart' }, text);
   return h(
     'div',
+    null,
+    h(KeyNumbers, { docs }),
+    h(
+    'div',
     { className: 'af-plots' },
     h(
       PlotBox,
@@ -425,6 +526,7 @@ function Plots({ docs, xfDoc, cpAlpha, onCpAlpha }) {
             }),
           ),
     ),
+    ),
   );
 }
 
@@ -457,6 +559,7 @@ function ResidualPlot({ rows, planned }) {
   return h(
     'div',
     { 'data-af': 'openfoam-residuals' },
+    h(Help, { af: 'openfoam-residuals', lines: PLOT_HELP['openfoam-residuals'] }),
     h(LinePlot, {
       rows,
       series: fields.map((k) => ({ key: k, label: k, legend: 'when-data' })),
@@ -1095,6 +1198,7 @@ function App() {
     'div',
     { 'data-af': 'neuralfoil' },
     h(Hint, null, 'NeuralFoil draws the polar again as you change the inputs.'),
+    h('div', { 'data-af': 'neuralfoil-about' }, h(Hint, null, 'NeuralFoil is a neural network trained on XFOIL results: fast and good for trends. Check its Confidence column, and XFOIL for the numbers you rely on.')),
     warm.state === 'failed' ? h(DisabledReason, { reason: warm.error, role: 'alert' }) : null,
     nfState.error && nfState.error !== warm.error ? h(DisabledReason, { reason: nfState.error, role: 'alert' }) : null,
     nf
@@ -1109,6 +1213,7 @@ function App() {
   const xfoilPanel = h(
     'div',
     { 'data-af': 'xfoil' },
+    h('div', { 'data-af': 'xfoil-about' }, h(Hint, null, 'XFOIL solves the flow around the section with a panel method coupled to a boundary-layer model. Where the boundary layer turns turbulent comes from Ncrit, or from the trip with forced transition.')),
     h(
       'div',
       { className: 'af-run' },
@@ -1341,6 +1446,7 @@ function App() {
         tableDoc
           ? h(PolarTable, { rows: tableDoc.rows, engine, notConverged: engine === 'xfoil' ? tableDoc.not_converged : [] })
           : h(EmptyState, { variant: 'chart' }, tableEmpty[engine]),
+        tableDoc ? h(Help, { af: `${engine}-columns`, summary: 'What the columns mean', lines: [...COLUMN_HELP.common, ...COLUMN_HELP[engine]] }) : null,
       ),
     ),
   );

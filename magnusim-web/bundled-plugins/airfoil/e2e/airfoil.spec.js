@@ -715,6 +715,40 @@ test('gate:h17-e2e NeuralFoil and XFOIL polars of NACA 2412 at Re 1e6, α −4�
     await expect(clAlphaKeys).toHaveText([nfLegend('2412')]);
     await page.screenshot({ path: test.info().outputPath('neuralfoil-2412.png'), fullPage: true });
     stage(t0, `study ${sid}: NeuralFoil polar shown`);
+
+    // The key numbers read the shown polar: Cl max and the best Cl/Cd at the table's own
+    // angles; −4…10° is short of NACA 2412's stall, so Cl max is "still rising".
+    const nfRows = await nfTable.locator('tbody tr').evaluateAll((trs) =>
+      trs.map((tr) => {
+        const cell = (c) => Number(tr.querySelector(`[data-col="${c}"]`).textContent.replace('−', '-'));
+        return { alpha: Number(tr.dataset.alpha), cl: cell('cl'), ld: cell('cl_cd') };
+      }),
+    );
+    const top = nfRows.reduce((a, b) => (b.cl > a.cl ? b : a));
+    const best = nfRows.reduce((a, b) => (b.ld > a.ld ? b : a));
+    const nfKeys = ws.locator('[data-af="key-neuralfoil"]');
+    await expect(nfKeys).toContainText(new RegExp(`Cl max [0-9.]+ at ${top.alpha}°, still rising: no stall in −4°…10°`));
+    await expect(nfKeys).toContainText(new RegExp(`Best Cl/Cd [0-9.]+ at ${best.alpha}°`));
+    await expect(nfKeys).toContainText(/Zero-lift α −(1\.[5-9]|2\.[0-6])\d*°/);
+    const slope = Number((await nfKeys.textContent()).match(/Lift slope ([0-9.]+) per degree/)[1]);
+    expect(slope, 'lift slope per degree').toBeGreaterThan(0.09);
+    expect(slope, 'lift slope per degree').toBeLessThan(0.125);
+    // Each plot says how to read it, closed until asked for.
+    for (const [af, words] of [
+      ['plot-cl-alpha', 'The lift curve'],
+      ['plot-cl-cd', 'The drag polar'],
+      ['plot-cm-alpha', 'quarter-chord'],
+    ]) {
+      const help = ws.locator(`[data-af="${af}-help"]`);
+      await expect(help.locator('p').first()).toBeHidden();
+      await help.locator('summary').click();
+      await expect(help).toContainText(words);
+    }
+    const nfColumns = ws.locator('[data-af="neuralfoil-columns-help"]');
+    await nfColumns.locator('summary').click();
+    await expect(nfColumns).toContainText('Confidence: how sure NeuralFoil is');
+    await expect(ws.locator('[data-af="neuralfoil-about"]')).toContainText('trained on XFOIL results');
+    stage(t0, `key numbers: Cl max at ${top.alpha}°, best Cl/Cd at ${best.alpha}°, slope ${slope}/°; the folds open`);
     const saved = JSON.parse(readFileSync(join(studyDir, 'results', 'neuralfoil.json'), 'utf8'));
     expect(saved.rows).toHaveLength(15);
 
@@ -755,6 +789,10 @@ test('gate:h17-e2e NeuralFoil and XFOIL polars of NACA 2412 at Re 1e6, α −4�
     const xfCl4 = await cellNumber(xfTable.locator('tr[data-alpha="4"] [data-col="cl"]'));
     expect(Math.abs(xfCl4 - golden4) / golden4, `XFOIL Cl(4°) ${xfCl4}, golden ${golden4}`).toBeLessThan(0.02);
     stage(t0, `XFOIL Cl(4°) = ${xfCl4} (golden ${golden4})`);
+    const xfColumns = ws.locator('[data-af="xfoil-columns-help"]');
+    await xfColumns.locator('summary').click();
+    await expect(xfColumns).toContainText('Transition (top): where the boundary layer');
+    await expect(ws.locator('[data-af="key-xfoil"]')).toContainText(/Cl max [0-9.]+ at 10°, still rising/);
 
     // Both engines on every polar plot, each named with its settings; the tip reads both at 4°.
     const xfLegend = 'XFOIL · NACA 2412 · Re 1.00e+6 · Ncrit 9';
