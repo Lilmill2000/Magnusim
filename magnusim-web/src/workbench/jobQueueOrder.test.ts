@@ -964,6 +964,10 @@ describe('solveDisplayStage', () => {
     expect(solveDisplayStage({ stage: 'starting', n_saved_times: 8, last_saved_iteration: 0.26 })).toBe('solve');
     expect(solveDisplayStage({ stage: 'reconstruct', n_saved_times: 8 })).toBe('reconstruct');
   });
+
+  it('keeps a potential-flow start (initialise) until the solve begins', () => {
+    expect(solveDisplayStage({ stage: 'initialise' })).toBe('initialise');
+  });
 });
 
 describe('mergeRunCatalogRow', () => {

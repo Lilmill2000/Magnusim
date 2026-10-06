@@ -127,6 +127,73 @@
             },
             "title": "Lift direction",
             "description": "The direction lift is measured along, at right angles to drag. Blank is +Z (+Y when drag runs along Z)."
+          },
+          "initial_flow": {
+            "type": "string",
+            "default": "still",
+            "enum": [
+              "still",
+              "inlet",
+              "custom"
+            ],
+            "x-cfddesk": {
+              "group": "initial",
+              "enum_labels": [
+                "Still",
+                "From the inlet",
+                "Custom"
+              ]
+            },
+            "title": "Starting flow",
+            "description": "The velocity everywhere inside the domain when the solve starts. Still starts from rest. From the inlet starts the whole domain moving at the inlet's speed, along its vector or straight in through its faces (the fastest velocity inlet's speed and the largest one's direction), or at the freestream's velocity when there is no velocity inlet; with neither it starts from rest. Custom uses the components below."
+          },
+          "initial_ux": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "quantity": "velocity",
+              "group": "initial",
+              "depends_on": {
+                "initial_flow": "custom"
+              }
+            },
+            "title": "Starting velocity X"
+          },
+          "initial_uy": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "quantity": "velocity",
+              "group": "initial",
+              "depends_on": {
+                "initial_flow": "custom"
+              }
+            },
+            "title": "Starting velocity Y"
+          },
+          "initial_uz": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "quantity": "velocity",
+              "group": "initial",
+              "depends_on": {
+                "initial_flow": "custom"
+              }
+            },
+            "title": "Starting velocity Z"
+          },
+          "potential_flow": {
+            "type": "boolean",
+            "default": false,
+            "x-cfddesk": {
+              "group": "initial"
+            },
+            "title": "Initialise with potential flow",
+            "description": "Runs potentialFoam before the solver: a quick inviscid flow that already goes from the inlets to the outlets around the obstacles, with its pressure, as the starting point. It often saves iterations and helps a solve that diverges early. It replaces the starting flow above."
           }
         },
         "additionalProperties": false
@@ -135,6 +202,23 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
+          "numerics_preset": {
+            "type": "string",
+            "default": "robust",
+            "enum": [
+              "robust",
+              "accurate"
+            ],
+            "x-cfddesk": {
+              "group": "solution",
+              "enum_labels": [
+                "Robust",
+                "Accurate"
+              ]
+            },
+            "title": "Numerics",
+            "description": "Robust suits any mesh: first-order turbulence equations and strongly limited gradients. Accurate solves the turbulence equations to second order (limitedLinear), limits gradients less and corrects fully for non-orthogonal cells: sharper results on a good mesh, but it may need lower relaxation or fail to converge on a poor one."
+          },
           "residual_u": {
             "type": "number",
             "default": 0.0001,
@@ -155,13 +239,25 @@
             "title": "Residual p",
             "description": "Convergence target for the pressure equation. The run stops early once every residual is below its target."
           },
+          "simplec": {
+            "type": "boolean",
+            "default": false,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "SIMPLEC (consistent)",
+            "description": "Solves with SIMPLEC, the consistent form of SIMPLE: pressure needs no relaxation, so it uses 0.9 for velocity and turbulence and leaves pressure unrelaxed in place of the relaxation below. It often converges in fewer iterations, but not on every case: turn it off if the solve oscillates or stalls."
+          },
           "relax_u": {
             "type": "number",
             "default": 0.7,
             "minimum": 0.0,
             "maximum": 1.0,
             "x-cfddesk": {
-              "group": "relaxation"
+              "group": "relaxation",
+              "depends_on": {
+                "simplec": false
+              }
             },
             "title": "Relaxation U",
             "description": "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is more stable but converges more slowly. Reynolds-stress models (LRR, SSG) start at 0.5."
@@ -172,7 +268,10 @@
             "minimum": 0.0,
             "maximum": 1.0,
             "x-cfddesk": {
-              "group": "relaxation"
+              "group": "relaxation",
+              "depends_on": {
+                "simplec": false
+              }
             },
             "title": "Relaxation p",
             "description": "Under-relaxation for pressure (0 to 1). SIMPLE usually needs about 0.3; lower it if the solve oscillates or diverges."
@@ -1087,7 +1186,12 @@
         "category": "FLUID DYNAMICS",
         "time_dependency": "Steady-state",
         "algorithm": "SIMPLE",
-        "turbulence_model": "kOmegaSST"
+        "turbulence_model": "kOmegaSST",
+        "initial_flow": "still",
+        "initial_ux": 0.0,
+        "initial_uy": 0.0,
+        "initial_uz": 0.0,
+        "potential_flow": false
       },
       "run_defaults": {
         "end_time": 200,
@@ -1238,6 +1342,73 @@
             },
             "title": "Lift direction",
             "description": "The direction lift is measured along, at right angles to drag. Blank is +Z (+Y when drag runs along Z)."
+          },
+          "initial_flow": {
+            "type": "string",
+            "default": "still",
+            "enum": [
+              "still",
+              "inlet",
+              "custom"
+            ],
+            "x-cfddesk": {
+              "group": "initial",
+              "enum_labels": [
+                "Still",
+                "From the inlet",
+                "Custom"
+              ]
+            },
+            "title": "Starting flow",
+            "description": "The velocity everywhere inside the domain when the solve starts. Still starts from rest. From the inlet starts the whole domain moving at the inlet's speed, along its vector or straight in through its faces (the fastest velocity inlet's speed and the largest one's direction), or at the freestream's velocity when there is no velocity inlet; with neither it starts from rest. Custom uses the components below."
+          },
+          "initial_ux": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "quantity": "velocity",
+              "group": "initial",
+              "depends_on": {
+                "initial_flow": "custom"
+              }
+            },
+            "title": "Starting velocity X"
+          },
+          "initial_uy": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "quantity": "velocity",
+              "group": "initial",
+              "depends_on": {
+                "initial_flow": "custom"
+              }
+            },
+            "title": "Starting velocity Y"
+          },
+          "initial_uz": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "unit": "m/s",
+              "quantity": "velocity",
+              "group": "initial",
+              "depends_on": {
+                "initial_flow": "custom"
+              }
+            },
+            "title": "Starting velocity Z"
+          },
+          "potential_flow": {
+            "type": "boolean",
+            "default": false,
+            "x-cfddesk": {
+              "group": "initial"
+            },
+            "title": "Initialise with potential flow",
+            "description": "Runs potentialFoam before the solver: a quick inviscid flow that already goes from the inlets to the outlets around the obstacles, with its pressure, as the starting point. It often saves iterations and helps a solve that diverges early. It replaces the starting flow above."
           }
         },
         "additionalProperties": false
@@ -2292,7 +2463,12 @@
         "category": "FLUID DYNAMICS",
         "time_dependency": "Transient",
         "algorithm": "PIMPLE",
-        "turbulence_model": "kOmegaSST"
+        "turbulence_model": "kOmegaSST",
+        "initial_flow": "still",
+        "initial_ux": 0.0,
+        "initial_uy": 0.0,
+        "initial_uz": 0.0,
+        "potential_flow": false
       },
       "run_defaults": {
         "end_time": 5.0,

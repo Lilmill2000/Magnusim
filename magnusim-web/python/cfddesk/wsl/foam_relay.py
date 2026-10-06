@@ -78,6 +78,7 @@ from cfddesk.wsl.foam_case import (
     STATUS_FILE,
     STOP_MARKER,
     FoamCaseError,
+    case_pre_steps,
     check_case_local,
     check_case_paths,
     check_steps,
@@ -1362,6 +1363,17 @@ class Relay:
                 return code, {"ok": False, "phase": "prepare", "job": self.prepare.job, "exit_code": code}
             try:
                 self._check_case(own_marker=True)
+            except FoamCaseError as exc:
+                self.writer.emit({"event": "refused", "code": exc.code, "error": exc.error})
+                return EXIT_REFUSED, {"ok": False, "phase": "gate", "code": exc.code, "error": exc.error}
+        if s["kind"] == "solve" and not self.steps:
+            # A core solve's case may ask for WSL steps before its solver (a
+            # potential-flow start): w27-case.json's pre_steps, from the one table.
+            try:
+                declared = case_pre_steps(self.case)
+                if declared:
+                    self.steps = check_steps(declared)
+                    check_case_local(str(s["case_dir"]), None, declared, None, own_marker=True)
             except FoamCaseError as exc:
                 self.writer.emit({"event": "refused", "code": exc.code, "error": exc.error})
                 return EXIT_REFUSED, {"ok": False, "phase": "gate", "code": exc.code, "error": exc.error}

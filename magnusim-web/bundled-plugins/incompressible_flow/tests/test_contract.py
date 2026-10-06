@@ -41,6 +41,12 @@ def test_study_defaults_are_the_study_identity_and_the_schema_turbulence():
         "time_dependency": "Steady-state",
         "algorithm": "SIMPLE",
         "turbulence_model": "kOmegaSST",
+        # The starting flow's schema defaults: a still start, as before the setting.
+        "initial_flow": "still",
+        "initial_ux": 0.0,
+        "initial_uy": 0.0,
+        "initial_uz": 0.0,
+        "potential_flow": False,
     }
     t = contract.study_defaults(_analysis("incompressible_transient"))
     assert (t["analysis_type"], t["time_dependency"], t["algorithm"]) == ("incompressible_transient", "Transient", "PIMPLE")

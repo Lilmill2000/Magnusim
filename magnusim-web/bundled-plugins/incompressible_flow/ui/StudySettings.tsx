@@ -61,6 +61,10 @@ export function splitReferenceSchema(schema: RJSFSchema): { settings: RJSFSchema
   return { settings: { ...schema, properties: kept, ...(required ? { required } : {}) }, reference };
 }
 
+/** SIMPLEC's own relaxation, used in place of the study's (physics.SIMPLEC_RELAX_U / _P). */
+export const SIMPLEC_RELAX_U = 0.9;
+export const SIMPLEC_RELAX_P = 1;
+
 const TIME_HINT =
   'Steady-state solves for the converged flow with simpleFoam. Transient marches through real time with pimpleFoam and writes frames you can animate.';
 
@@ -79,6 +83,9 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
   };
   const hasSettings = Object.keys(settingsSchema.properties || {}).length > 0;
   const hasNumerics = !transient && Object.keys(numericsSchema.properties || {}).length > 0;
+  // SIMPLEC hides the relaxation rows (their depends_on, read from the saved
+  // study like this note) and says what it uses instead.
+  const simplecOn = hasNumerics && 'simplec' in (numericsSchema.properties || {}) && record.simplec === true;
 
   return (
     <>
@@ -133,7 +140,14 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
             if (Object.keys(changed).length) void save(changed);
           }}
         />
-      ) : transient ? (
+      ) : null}
+      {simplecOn ? (
+        <p className="mat-assign-hint sim-def-hint" data-study-simplec-note="1">
+          SIMPLEC relaxes velocity and turbulence by {SIMPLEC_RELAX_U} and leaves pressure unrelaxed ({SIMPLEC_RELAX_P}), in place of
+          the study&apos;s relaxation.
+        </p>
+      ) : null}
+      {hasNumerics ? null : transient ? (
         <p className="mat-assign-hint sim-def-hint" data-study-transient-note="1">
           Transient runs take their time step, time scheme and PIMPLE correctors from each run&apos;s panel.
         </p>

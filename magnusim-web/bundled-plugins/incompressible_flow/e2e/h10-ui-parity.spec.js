@@ -34,6 +34,20 @@ const TURBULENCE_ADDED = [
 const TURBULENCE_HELP =
   /(role="tooltip"> Which turbulence closure the solver uses\. k-omega SST is the general-purpose default and handles walls at any y\+\.) .*$/;
 const sameHelp = (line) => line.replace(TURBULENCE_HELP, '$1 …');
+// Study panel rows added after the baseline was recorded (the baseline is never
+// re-recorded): left out of the comparison, so every older row still must match.
+const NEW_STUDY_ROWS = [
+  // F9 numerics: the preset, SIMPLEC and its relaxation note.
+  '[data-schema-key="numerics_preset"]',
+  '[data-schema-key="simplec"]',
+  '[data-study-simplec-note]',
+  // F7 starting flow: its choice, the Custom components and the potential-flow start.
+  '[data-schema-key="initial_flow"]',
+  '[data-schema-key="initial_ux"]',
+  '[data-schema-key="initial_uy"]',
+  '[data-schema-key="initial_uz"]',
+  '[data-schema-key="potential_flow"]',
+].join(', ');
 
 function stage(t0, msg) {
   console.log(`[h10 +${Math.round((Date.now() - t0) / 1000)}s] ${msg}`);
@@ -245,7 +259,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
 
   // Steady-state: the study panel, a draft run, and the finished run with its residuals.
   await openStudy();
-  await capture(page, 'study-steady', studyPanel, { skip: `${STUDY_ADDED}, ${TURBULENCE_ADDED}` });
+  await capture(page, 'study-steady', studyPanel, { skip: `${STUDY_ADDED}, ${TURBULENCE_ADDED}, ${NEW_STUDY_ROWS}` });
   const steady = await createRun('Parity steady');
   await openRun(steady);
   await capture(page, 'run-draft-steady', runPanel, { skip: CORES_ADDED });
@@ -264,7 +278,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await openStudy();
   await studyPanel.getByLabel('Time dependency').selectOption('Transient');
   await expect.poll(async () => (await getJson(request, simUrl)).simulation?.analysis_type).toBe('incompressible_transient');
-  await capture(page, 'study-transient', studyPanel, { skip: `${STUDY_ADDED}, ${TURBULENCE_ADDED}` });
+  await capture(page, 'study-transient', studyPanel, { skip: `${STUDY_ADDED}, ${TURBULENCE_ADDED}, ${NEW_STUDY_ROWS}` });
   const transient = await createRun('Parity transient');
   await openRun(transient);
   await expect(runControl.locator('[data-run-transient-hint]')).toContainText('(auto)', { timeout: 60_000 });

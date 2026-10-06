@@ -199,6 +199,85 @@ describe('SimulationDefaults (study panel)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not change time dependency');
   });
 
+  it('says SIMPLEC uses its own relaxation in place of the hidden relaxation rows', async () => {
+    const withSimplec = {
+      type: 'object',
+      properties: {
+        numerics_preset: {
+          type: 'string',
+          title: 'Numerics',
+          enum: ['robust', 'accurate'],
+          default: 'robust',
+          'x-cfddesk': { enum_labels: ['Robust', 'Accurate'] },
+        },
+        simplec: { type: 'boolean', title: 'SIMPLEC (consistent)', default: false },
+        relax_u: { type: 'number', title: 'Relaxation U', default: 0.7, 'x-cfddesk': { depends_on: { simplec: false } } },
+        relax_p: { type: 'number', title: 'Relaxation p', default: 0.3, 'x-cfddesk': { depends_on: { simplec: false } } },
+      },
+    };
+    const reg = useProjectStore.getState().registry as { analysis: Array<Record<string, unknown>> };
+    useProjectStore.setState({ registry: { ...reg, analysis: [{ ...reg.analysis[0], numerics_schema: withSimplec }] } });
+    window.__CFD_STUDY_STATE__ = study({}, { simplec: false });
+    const view = renderPanel();
+    expect(screen.getByText('Relaxation U')).toBeInTheDocument();
+    expect(view.container.querySelector('[data-study-simplec-note]')).toBeNull();
+    const preset = screen.getByLabelText('Numerics', { selector: 'select' }) as HTMLSelectElement;
+    expect([...preset.options].map((o) => o.text)).toEqual(['Robust', 'Accurate']);
+    const accurate = [...preset.options].find((o) => o.text === 'Accurate')!;
+    fireEvent.change(preset, { target: { value: accurate.value } });
+    await waitFor(() =>
+      expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith(expect.objectContaining({ numerics_preset: 'accurate' })),
+    );
+
+    publish(study({}, { simplec: true }));
+    expect(screen.queryByText('Relaxation U')).toBeNull();
+    expect(screen.queryByText('Relaxation p')).toBeNull();
+    const note = view.container.querySelector('[data-study-simplec-note]') as HTMLElement;
+    expect(note).toHaveTextContent('SIMPLEC relaxes velocity and turbulence by 0.9 and leaves pressure unrelaxed (1)');
+  });
+
+  it('shows the starting flow and saves it with the other study settings', async () => {
+    const component = (axis: string) => ({
+      type: 'number',
+      title: `Starting velocity ${axis}`,
+      default: 0,
+      'x-cfddesk': { unit: 'm/s', quantity: 'velocity', depends_on: { initial_flow: 'custom' } },
+    });
+    const withStart = {
+      type: 'object',
+      properties: {
+        ...settingsSchema.properties,
+        initial_flow: {
+          type: 'string',
+          title: 'Starting flow',
+          enum: ['still', 'inlet', 'custom'],
+          default: 'still',
+          'x-cfddesk': { enum_labels: ['Still', 'From the inlet', 'Custom'] },
+        },
+        initial_ux: component('X'),
+        initial_uy: component('Y'),
+        initial_uz: component('Z'),
+      },
+    };
+    const reg = useProjectStore.getState().registry as { analysis: Array<Record<string, unknown>> };
+    useProjectStore.setState({ registry: { ...reg, analysis: [{ ...reg.analysis[0], schema: withStart }] } });
+    window.__CFD_STUDY_STATE__ = study({}, { initial_flow: 'still' });
+    const view = renderPanel();
+    const start = screen.getByLabelText('Starting flow', { selector: 'select' }) as HTMLSelectElement;
+    expect([...start.options].map((o) => o.text)).toEqual(['Still', 'From the inlet', 'Custom']);
+    expect(view.container.querySelector('[data-schema-key="initial_ux"]')).toBeNull();
+    const custom = [...start.options].find((o) => o.text === 'Custom')!;
+    fireEvent.change(start, { target: { value: custom.value } });
+    await waitFor(() =>
+      expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith(expect.objectContaining({ initial_flow: 'custom' })),
+    );
+
+    publish(study({}, { initial_flow: 'custom', initial_ux: 2.5 }));
+    const row = view.container.querySelector('[data-schema-key="initial_ux"]') as HTMLElement;
+    expect(within(row).getByRole('textbox')).toHaveValue('2.5');
+    expect(row).toHaveTextContent('m/s');
+  });
+
   it('keeps the saved numbers the solve will use', () => {
     window.__CFD_STUDY_STATE__ = study({}, { residual_u: 2e-5, relax_p: 0.2 });
     renderPanel();

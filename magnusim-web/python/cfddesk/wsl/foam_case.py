@@ -20,6 +20,7 @@ case-relative paths.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -69,6 +70,10 @@ STEP_TABLE: dict[str, StepRule] = {
     "createPatch": StepRule(frozenset({"-overwrite"}), ("-overwrite",), "system/createPatchDict", True),
     "checkMesh": StepRule(frozenset({"-allGeometry", "-allTopology"}), parallel=True),
     "renumberMesh": StepRule(frozenset({"-overwrite"}), ("-overwrite",), parallel=True),
+    # A potential-flow start (a core solve's case_pre_steps): writes U, p and phi into
+    # 0/. Serial only: a span ends in reconstructParMesh, which brings back the mesh
+    # but not the processors' 0/ fields, so a parallel run's start would be lost.
+    "potentialFoam": StepRule(frozenset({"-writep", "-writephi", "-initialiseUBCs"}), needs="system/fvSolution"),
     "decomposePar": StepRule(frozenset({"-force"}), ("-force",)),
     "reconstructParMesh": StepRule(frozenset({"-constant"}), ("-constant",)),
 }
@@ -461,6 +466,29 @@ def check_results(results: Any, case: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # The whole check (§7.4)
 # ---------------------------------------------------------------------------
+
+
+CASE_SIDECAR = "w27-case.json"
+
+
+def case_pre_steps(case_dir: str | Path) -> list[Any]:
+    """The WSL steps a core solve's written case asks for before its solver:
+    ``pre_steps`` in the case's ``w27-case.json`` (its analysis's case writer puts
+    them there), [] when it names none. Only read here: :func:`check_steps`
+    decides whether they may run. Raises :class:`FoamCaseError`."""
+    path = Path(case_dir) / CASE_SIDECAR
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        raise FoamCaseError("not_a_case", f"{CASE_SIDECAR} could not be read") from None
+    raw = doc.get("pre_steps") if isinstance(doc, dict) else None
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise FoamCaseError("pre_not_allowed", f"{CASE_SIDECAR}: pre_steps must be a list")
+    return raw
 
 
 def _has_results(case: Path, *, own_marker: bool) -> bool:

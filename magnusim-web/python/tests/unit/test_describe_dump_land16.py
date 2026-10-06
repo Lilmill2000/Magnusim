@@ -50,8 +50,16 @@ def test_describe_emits_numerics_and_control_for_analysis():
         assert isinstance(row.get("schema"), dict)
         assert "turbulence_model" in row["schema"]["properties"]
         # Energy / passive species never reached a solve; Phase 6 removed them.
-        # The study reference values (group "reference") join the turbulence model.
-        assert {k for k in row["schema"]["properties"] if not k.startswith("ref_")} == {"turbulence_model"}
+        # The study reference values (group "reference") join the turbulence model
+        # and the starting flow (IF features F7).
+        assert {k for k in row["schema"]["properties"] if not k.startswith("ref_")} == {
+            "turbulence_model",
+            "initial_flow",
+            "initial_ux",
+            "initial_uy",
+            "initial_uz",
+            "potential_flow",
+        }
         _assert_json_schema_bag(
             row["numerics_schema"],
             required_props=set(),
@@ -74,7 +82,18 @@ def test_describe_emits_numerics_and_control_for_analysis():
 
     # Steady SIMPLE numerics the solve reads; defaults match the pre-Phase-6 writer.
     steady_numerics = steady["numerics_schema"]["properties"]
-    assert set(steady_numerics) == {"residual_u", "residual_p", "relax_u", "relax_p", "n_non_orthogonal"}
+    assert set(steady_numerics) == {
+        "numerics_preset",
+        "residual_u",
+        "residual_p",
+        "simplec",
+        "relax_u",
+        "relax_p",
+        "n_non_orthogonal",
+    }
+    # Robust (the schemes before the preset) and SIMPLE (not SIMPLEC) by default.
+    assert steady_numerics["numerics_preset"]["default"] == "robust"
+    assert steady_numerics["simplec"]["default"] is False
     assert steady_numerics["residual_u"]["default"] == 1e-4
     assert steady_numerics["n_non_orthogonal"]["default"] == 3
     assert all(prop.get("description") for prop in steady_numerics.values())

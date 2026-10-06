@@ -372,6 +372,39 @@ describe('frames make the run doc', () => {
     assert.equal(run().stage, 'reconstruct');
     assert.equal(store.readFoamRecord(job).status, 'running');
   });
+
+  it("a potential-flow start (the case's WSL steps before the solver) shows as initialise, then the copy", async () => {
+    const rid = draftRun();
+    await start(rid);
+    const run = () => w27.getRunStatus(PID, rid, SID).body.run;
+    relay([{ event: 'stage', stage: 'prepare' }]);
+    relay([{ event: 'stage', stage: 'pre_copy_in' }]);
+    assert.equal(run().stage, 'initialise');
+    relay([{ event: 'pre', tool: 'potentialFoam', index: 1, exit_code: 0, parallel: false, n_procs: 1 }]);
+    assert.equal(run().stage, 'initialise');
+    relay([{ event: 'stage', stage: 'pre_copy_back' }]);
+    assert.equal(run().stage, 'initialise');
+    relay([{ event: 'stage', stage: 'copy_to_wsl' }]);
+    assert.equal(run().stage, 'copy');
+    relay([{ event: 'stage', stage: 'solve' }]);
+    assert.equal(run().stage, 'solve');
+  });
+
+  it('docStageOf: each runner stage the doc shows', () => {
+    const want = {
+      prepare: 'prepare',
+      pre_copy_in: 'initialise',
+      pre_copy_back: 'initialise',
+      copy_to_wsl: 'copy',
+      copy: 'copy',
+      cleanup: 'copy',
+      decompose: 'decompose',
+      solve: 'solve',
+      reconstruct: 'reconstruct',
+    };
+    for (const [stage, shown] of Object.entries(want)) assert.equal(core.docStageOf(stage, 'solve'), shown, stage);
+    assert.equal(core.docStageOf('stopping', 'solve'), 'solve', 'stopping keeps the stage shown');
+  });
 });
 
 describe('the end', () => {

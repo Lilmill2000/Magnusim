@@ -1436,3 +1436,73 @@ def test_a_core_solve_runs_a_builtin_prepare_job_then_solves(tmp_path: Path, mon
     assert kinds.index("prepare") < kinds.index("progress")
     assert {"event": "prepare", "job": "solve.prepare", "exit_code": 0} in evs
     assert evs[-1]["outcome"]["ok"] is True and evs[-1]["outcome"]["phase"] == "solve"
+
+
+PRE_STEPS_TOOL = """import json, os
+from pathlib import Path
+case = Path(os.environ['MAGNUSIM_CASE_DIR'])
+steps = json.loads(os.environ.get('FAKE_PRE_STEPS') or 'null')
+doc = {'solver': 'pimpleFoam'}
+if steps is not None:
+    doc['pre_steps'] = steps
+(case / 'w27-case.json').write_text(json.dumps(doc))
+print('MAGNUSIM_EVENT ' + json.dumps({'event': 'stage', 'stage': 'written'}), flush=True)
+"""
+
+
+def _pre_steps_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, steps: Any) -> tuple[int, list[dict[str, Any]], Recorder]:
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "fake_prepare.py").write_text(PRE_STEPS_TOOL, encoding="utf-8")
+    monkeypatch.setattr(foam_relay, "PY_TOOLS", tools)
+    monkeypatch.setenv("FAKE_PRE_STEPS", json.dumps(steps))
+    hub = FakeSolveHub(jobs={"solve.prepare": ("builtin", SimpleNamespace(tool="fake_prepare.py", python="core"))})
+    r = make_solve_run(tmp_path)
+    rec = Recorder(pre=[
+        evt(event="stage", stage="pre_copy_in", t_wall=100.0),
+        evt(event="pre", tool="potentialFoam", index=1, exit_code=0, parallel=False, n_procs=1),
+        evt(event="stage", stage="pre_copy_back", t_wall=101.0),
+        evt(event="result", ok=True, exit_code=0, t_wall=101.5),
+    ])
+    deps, _ = solve_deps(rec, hub)
+    prepare = {**_builtin_shape(), "env": {"MAGNUSIM_PLUGIN_KEY": "builtin", "MAGNUSIM_JOB_ID": JOB, "MAGNUSIM_CASE_DIR": str(r.case)}}
+    code, evs = run(make_solve_spec(r, prepare=prepare), r.root, deps)
+    return code, evs, rec
+
+
+def test_a_core_solve_runs_the_pre_steps_its_case_declares(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    code, evs, rec = _pre_steps_run(tmp_path, monkeypatch, [{"tool": "potentialFoam", "args": ["-writephi", "-writep"]}])
+    assert code == 0, evs
+    names = rec.names()
+    wsl = [i for i, (name, argv) in enumerate(rec.calls) if name == "popen" and argv[:1] == ["wsl"]]
+    assert wsl and wsl[0] < names.index("start_solve")
+    assert {"event": "pre", "tool": "potentialFoam", "index": 1, "exit_code": 0, "parallel": False, "n_procs": 1} in evs
+    assert evs[-1]["outcome"]["ok"] is True and evs[-1]["outcome"]["phase"] == "solve"
+
+
+def test_a_core_solve_without_pre_steps_goes_straight_to_its_solver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    code, evs, rec = _pre_steps_run(tmp_path, monkeypatch, None)
+    assert code == 0, evs
+    assert not [argv for name, argv in rec.calls if name == "popen" and argv[:1] == ["wsl"]]
+    assert "start_solve" in rec.names()
+
+
+@pytest.mark.parametrize(
+    ("steps", "error"),
+    [
+        ([{"tool": "setFields"}], "Step 1 (setFields): setFields is not an allowed step"),
+        ([{"tool": "potentialFoam", "args": ["-case"]}], "Step 1 (potentialFoam): -case is not allowed"),
+        ({"tool": "potentialFoam"}, "w27-case.json: pre_steps must be a list"),
+        # A span brings back only the mesh: a parallel start would be lost, so it is refused.
+        (
+            [{"tool": "decomposePar"}, {"tool": "potentialFoam", "parallel": True}, {"tool": "reconstructParMesh"}],
+            "Step 2 (potentialFoam): it cannot run in parallel",
+        ),
+    ],
+)
+def test_a_core_solves_declared_steps_are_checked_against_the_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, steps: Any, error: str):
+    code, evs, rec = _pre_steps_run(tmp_path, monkeypatch, steps)
+    assert code == 2
+    assert {"event": "refused", "code": "pre_not_allowed", "error": error} in evs
+    assert "start_solve" not in rec.names()
+    assert not [argv for name, argv in rec.calls if name == "popen" and argv[:1] == ["wsl"]]

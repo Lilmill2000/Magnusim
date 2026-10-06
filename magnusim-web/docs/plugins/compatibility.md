@@ -14,6 +14,18 @@ The plugin API is frozen at host API 1.6 (workspace SDK 1.3.0, plugin UI kit 1.0
 6. A deprecated name keeps working until the next major version. It is listed here, under its version and in this list:
    - the panel id `panel-incompressible-defaults` (1.4): use `panel-study-settings`.
 
+## Unreleased additions (next minor, 1.7)
+
+Not released yet: `API_VERSION` stays 1.6 until these ship. Each only adds.
+
+**A `potentialFoam` step.** The WSL step table (1.3) gains one row. It writes `U`, and with its flags `p` and `phi`, into `0/`. It runs serially only: a parallel span ends in `reconstructParMesh`, which brings back the mesh but not the processors' `0/` fields, so a parallel `potentialFoam` inside a span is refused ("Step 2 (potentialFoam): it cannot run in parallel").
+
+| Tool | Arguments | The host adds | Needs in the case | `parallel` |
+|---|---|---|---|---|
+| `potentialFoam` | `-writep`, `-writephi`, `-initialiseUBCs` (each once) | | `system/fvSolution` | no |
+
+**A core solve's own WSL steps.** A run of a core study runs, before its solver, the steps its written case lists as `pre_steps` in `w27-case.json` (each `{tool, args?, parallel?}`, from the same table and under the same rules as a plugin case's `pre`). The analysis's case writer (its `write_case` or `prepare_job`) puts them there; the relay reads them after the prepare step and checks them before anything reaches WSL. A list the table refuses, or a `pre_steps` that is not a list, ends the run at the gate with `pre_not_allowed`; a case without `pre_steps` runs as before. The steps run on a copy of the case, `0/` comes back to the case, and the solve then starts from it. The Run panel shows them as "Initialising flow". Incompressible Flow uses this for its study setting "Initialise with potential flow" (`potentialFoam -writephi -writep`).
+
 ## 1.6
 
 Host API 1.6 (`API_VERSION`, and `hostVersion` in a workspace's context), workspace SDK 1.3.0; `magnusim_sdk` stays 1.3.0. A 1.5 plugin loads unchanged.

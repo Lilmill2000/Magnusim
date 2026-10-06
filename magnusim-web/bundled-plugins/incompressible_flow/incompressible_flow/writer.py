@@ -40,6 +40,7 @@ from .physics import (
     SA_MODEL,
     StudyPhysics,
     TurbulenceModel,
+    potential_flow_steps,
     turbulence_fields,
 )
 
@@ -94,8 +95,13 @@ def write_fv_solution_pimple(
     ctrl: TransientControl,
     turbulence: TurbulenceModel = "kOmegaSST",
     numerics: Any | None = None,
+    potential_non_orth: int | None = None,
 ) -> None:
-    """pimpleFoam fvSolution matching w30.transientFvSolution."""
+    """pimpleFoam fvSolution matching w30.transientFvSolution.
+
+    ``potential_non_orth``: the study starts from potential flow; adds the Phi
+    solver and the potentialFlow dict potentialFoam reads.
+    """
     n_outer = max(1, int(round(ctrl.n_outer_correctors)))
     n_corr = max(1, int(round(ctrl.n_correctors)))
     n_non_orth = max(0, int(round(ctrl.n_non_orthogonal_correctors)))
@@ -144,7 +150,7 @@ solvers
         $p;
         relTol          0;
     }}
-    {eq}
+{_potential_solver(potential_non_orth)}    {eq}
     {{
         solver          smoothSolver;
         smoother        symGaussSeidel;
@@ -167,20 +173,50 @@ PIMPLE
     turbOnFinalIterOnly yes;
     consistent          no;
 }}
-{relax}
+{_potential_flow_dict(potential_non_orth)}{relax}
 
 // ************************************************************************* //
 """,
     )
 
 
+def _potential_solver(non_orth: int | None) -> str:
+    """The Phi solver potentialFoam needs (the pressure solver's settings), or nothing."""
+    if non_orth is None:
+        return ""
+    return "    Phi\n    {\n        $p;\n    }\n"
+
+
+def _potential_flow_dict(non_orth: int | None) -> str:
+    """potentialFoam's own dict, or nothing. The reference cells only matter in a
+    closed domain (no fixed pressure anywhere)."""
+    if non_orth is None:
+        return ""
+    return f"""potentialFlow
+{{
+    nNonOrthogonalCorrectors {int(non_orth)};
+    PhiRefCell      0;
+    PhiRefValue     0;
+    pRefCell        0;
+    pRefValue       0;
+}}
+"""
+
+
+# potentialFoam -writep: the divergence of the flow-direction filtered div(phi,U).
+_POTENTIAL_DIV = "    div(div(phi,U)) Gauss linear;\n"
+
+
 def write_fv_schemes_transient(
-    path: Path, *, ctrl: TransientControl, turbulence: str = "kOmegaSST"
+    path: Path, *, ctrl: TransientControl, turbulence: str = "kOmegaSST", potential: bool = False
 ) -> None:
-    """Compact transient fvSchemes matching w30.transientFvSchemes / js_transient golden."""
+    """Compact transient fvSchemes matching w30.transientFvSchemes / js_transient golden.
+
+    ``potential``: the study starts from potential flow (the scheme potentialFoam -writep reads).
+    """
     ddt = "backward" if ctrl.time_scheme == "backward" else "Euler"
     grads = _grad_lines(turbulence)
-    divs = _div_lines(turbulence, "Gauss limitedLinear 1")
+    divs = _div_lines(turbulence, "Gauss limitedLinear 1") + (_POTENTIAL_DIV if potential else "")
     _write_foam(
         path,
         _foam_header("fvSchemes")
@@ -673,6 +709,73 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
     return float(speed_ref), float(d_hyd)
 
 
+def inlet_flow_direction(bc: dict, face_props: dict[str, FaceProps]) -> list[float] | None:
+    """The unit direction a velocity inlet's flow comes in along.
+
+    Its vector when it has one, else against its faces' area-weighted outward
+    normal (the CAD face table's), None when neither gives a direction.
+    """
+    direction = inlet_direction(bc) if uses_vector(bc) else None
+    if direction is not None:
+        return direction
+    total = [0.0, 0.0, 0.0]
+    for face in bc_faces(bc):
+        fp = face_props.get(face)
+        if fp is None or fp.normal is None:
+            continue
+        area = _props_area(fp) or 1.0
+        for i in range(3):
+            total[i] -= float(fp.normal[i]) * area
+    m = math.hypot(*total)
+    if not (m > 0) or not math.isfinite(m):
+        return None
+    return [c / m for c in total]
+
+
+def initial_velocity(spec: RunSpec, speed_ref: float) -> tuple[list[float], str]:
+    """The starting velocity (0/U's internal field) in m/s and where it came from.
+
+    ``still``: 0. ``custom``: the study's components. ``inlet``: the case's
+    reference speed (the fastest velocity inlet's, as the turbulence values use)
+    along the largest velocity inlet's direction; with no velocity inlet the
+    first freestream's velocity; with neither 0 (from ``none``).
+    """
+    _ensure_web_imports()
+    physics: StudyPhysics = getattr(spec, "physics", None) or DEFAULT_PHYSICS
+    if physics.initial_flow == "custom":
+        return [float(c) for c in physics.initial_u], "custom"
+    if physics.initial_flow != "inlet":
+        return [0.0, 0.0, 0.0], "still"
+    props = spec.face_props or {}
+    best: dict[str, Any] | None = None
+    best_area = -1.0
+    for m in spec.mapped or []:
+        if not is_velocity_inlet(m.get("bc")):
+            continue
+        bc = _bc_dict(m.get("bc"))  # type: ignore[arg-type]
+        area = faces_area(bc_faces(bc), props)
+        if area > best_area:
+            best, best_area = bc, area
+    if best is not None:
+        direction = inlet_flow_direction(best, props)
+        if direction is None:
+            return [0.0, 0.0, 0.0], "none"
+        return [float(speed_ref) * c for c in direction], "inlet"
+    for m in spec.mapped or []:
+        if is_freestream(m.get("bc")):
+            return freestream_velocity(_bc_dict(m.get("bc"))), "freestream"  # type: ignore[arg-type]
+    return [0.0, 0.0, 0.0], "none"
+
+
+def _uniform_vector(v: list[float]) -> str:
+    """``uniform (x y z)``: (0 0 0) exactly as before for a still start."""
+    from .function_objects import js_to_precision as _prec
+
+    if not any(v):
+        return "uniform (0 0 0)"
+    return "uniform (" + " ".join(_prec(c, 8) if c else "0" for c in v) + ")"
+
+
 # ---------------------------------------------------------------------------
 # Patch role map + field dicts
 # ---------------------------------------------------------------------------
@@ -1039,14 +1142,14 @@ def _final_regex(eq: str) -> str:
     return eq[:-1] + 'Final"' if eq.endswith('"') else eq + "Final"
 
 
-def _grad_lines(model: str) -> str:
+def _grad_lines(model: str, limited: str = "cellLimited Gauss linear 1") -> str:
     from .physics import solved_turbulence_fields
 
     out = ""
     for name in solved_turbulence_fields(model):
         if name == "R":
             continue
-        out += f"    {'grad(' + name + ')':<15} cellLimited Gauss linear 1;\n"
+        out += f"    {'grad(' + name + ')':<15} {limited};\n"
     return out
 
 
@@ -1075,22 +1178,48 @@ def _foam_float(x: float) -> str:
     return f"{x:g}"
 
 
+# The steady schemes of each Numerics preset (physics.NUMERICS_PRESETS):
+# gradient limiter, the turbulence equations' convection scheme and the
+# non-orthogonal correction. Robust is what every study solved with before the
+# preset existed (the motorBike-tutorial style, safe on poor meshes). Accurate
+# follows the pitzDaily-tutorial style: limitedLinear (second order, bounded)
+# for the turbulence equations, multi-directional gradient limiting at half
+# strength, and full non-orthogonal correction. Momentum is second order
+# (linearUpwind) in both.
+_STEADY_SCHEMES: dict[str, dict[str, str]] = {
+    "robust": {
+        "grad": "cellLimited Gauss linear 1",
+        "turb_div": "bounded Gauss upwind",
+        "laplacian": "Gauss linear limited corrected 0.5",
+        "sn_grad": "limited corrected 0.5",
+    },
+    "accurate": {
+        "grad": "cellMDLimited Gauss linear 0.5",
+        "turb_div": "bounded Gauss limitedLinear 1",
+        "laplacian": "Gauss linear corrected",
+        "sn_grad": "corrected",
+    },
+}
+
+
 def _steady_fv_schemes_body(physics: StudyPhysics | None = None) -> str:
-    model = (physics or DEFAULT_PHYSICS).turbulence_model
+    ph = physics or DEFAULT_PHYSICS
+    model = ph.turbulence_model
+    s = _STEADY_SCHEMES.get(ph.numerics) or _STEADY_SCHEMES["robust"]
     return f"""ddtSchemes {{ default steadyState; }}
 gradSchemes
 {{
     default         Gauss linear;
-    grad(U)         cellLimited Gauss linear 1;
-{_grad_lines(model)}}}
+    grad(U)         {s["grad"]};
+{_grad_lines(model, s["grad"])}}}
 divSchemes
 {{
     default         none;
     div(phi,U)      bounded Gauss linearUpwind grad(U);
-{_div_lines(model, "bounded Gauss upwind")}}}
-laplacianSchemes {{ default Gauss linear limited corrected 0.5; }}
+{_div_lines(model, s["turb_div"])}{_POTENTIAL_DIV if ph.uses_potential_flow() else ""}}}
+laplacianSchemes {{ default {s["laplacian"]}; }}
 interpolationSchemes {{ default linear; }}
-snGradSchemes {{ default limited corrected 0.5; }}
+snGradSchemes {{ default {s["sn_grad"]}; }}
 wallDist {{ method meshWave; }}"""
 
 
@@ -1103,10 +1232,12 @@ def _steady_fv_solution_body(physics: StudyPhysics | None = None) -> str:
     residual = f"p {_foam_float(ph.residual_p)}; U {ru};"
     if turb:
         residual += ' "(' + "|".join(turb) + f')" {ru};'
-    relax_u = _foam_float(ph.relax_u)
+    # SIMPLEC replaces the study's relaxation with its own (physics.solve_relax_*).
+    relax_u = _foam_float(ph.solve_relax_u())
     equations = f"        U               {relax_u};\n"
     for name in turb:
         equations += f"        {name:<15} {relax_u};\n"
+    non_orth = ph.potential_flow_non_orth() if ph.uses_potential_flow() else None
     return f"""solvers
 {{
     p
@@ -1118,7 +1249,7 @@ def _steady_fv_solution_body(physics: StudyPhysics | None = None) -> str:
         nCellsInCoarsestLevel 20;
         maxIter         200;
     }}
-    {_equation_regex(ph.turbulence_model)}
+{_potential_solver(non_orth)}    {_equation_regex(ph.turbulence_model)}
     {{
         solver          smoothSolver;
         smoother        symGaussSeidel;
@@ -1130,14 +1261,14 @@ def _steady_fv_solution_body(physics: StudyPhysics | None = None) -> str:
 SIMPLE
 {{
     nNonOrthogonalCorrectors {int(ph.n_non_orthogonal)};
-    consistent      no;
+    consistent      {"yes" if ph.simplec else "no"};
     residualControl {{ {residual} }}
 }}
-relaxationFactors
+{_potential_flow_dict(non_orth)}relaxationFactors
 {{
     fields
     {{
-        p               {_foam_float(ph.relax_p)};
+        p               {_foam_float(ph.solve_relax_p())};
     }}
     equations
     {{
@@ -1225,6 +1356,9 @@ def _clean_prior_run(out_dir: Path) -> None:
                 shutil.rmtree(p, ignore_errors=True)
             else:
                 p.unlink(missing_ok=True)
+    # A potential-flow start's step log (foam_pre.sh: log.<tool>.<step>).
+    for old in out_dir.glob("log.potentialFoam*"):
+        old.unlink(missing_ok=True)
 
 
 def _join_functions(text: str, extra: str) -> str:
@@ -1304,14 +1438,19 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
     }
 
     U, p, turb_patches = _build_field_patches(spec, patch_names, turb_values=turb_values, patch_turb=patch_turb)
+    # The study's starting flow (Still: 0, as before the setting existed).
+    u0, u0_from = initial_velocity(spec, speed_ref)
     write_vol_field(
         out / "0" / "U",
         object_name="U",
         cls="volVectorField",
         dims="[0 1 -1 0 0 0 0]",
-        internal="uniform (0 0 0)",
+        internal=_uniform_vector(u0),
         patches=U,
     )
+    # A flux a potential-flow start left here: the solver would start from it.
+    for stale in ("phi", "Phi"):
+        (out / "0" / stale).unlink(missing_ok=True)
     write_vol_field(
         out / "0" / "p",
         object_name="p",
@@ -1423,10 +1562,16 @@ RAS
             functions_text=functions_text,
         )
         write_fv_schemes_transient(
-            out / "system" / "fvSchemes", ctrl=spec.transient, turbulence=model  # type: ignore[arg-type]
+            out / "system" / "fvSchemes",
+            ctrl=spec.transient,  # type: ignore[arg-type]
+            turbulence=model,
+            potential=physics.uses_potential_flow(),
         )
         write_fv_solution_pimple(
-            out / "system" / "fvSolution", ctrl=spec.transient, turbulence=model  # type: ignore[arg-type]
+            out / "system" / "fvSolution",
+            ctrl=spec.transient,  # type: ignore[arg-type]
+            turbulence=model,  # type: ignore[arg-type]
+            potential_non_orth=physics.potential_flow_non_orth() if physics.uses_potential_flow() else None,
         )
     else:
         write_foam_dict(
@@ -1504,9 +1649,21 @@ RAS
         "numerics": {
             "residual_u": physics.residual_u,
             "residual_p": physics.residual_p,
-            "relax_u": physics.relax_u,
-            "relax_p": physics.relax_p,
+            # The relaxation the steady solve uses (SIMPLEC's own while it is on).
+            "relax_u": physics.solve_relax_u(),
+            "relax_p": physics.solve_relax_p(),
             "n_non_orthogonal": physics.n_non_orthogonal,
+            "preset": physics.numerics,
+            "simplec": physics.simplec,
+        },
+        # The starting flow: 0/U's internal velocity (m/s), where it came from
+        # (still, custom, inlet, freestream, or none: "From the inlet" with no
+        # inlet or freestream to take it from), and the potential-flow start.
+        "initial": {
+            "flow": physics.initial_flow,
+            "velocity_m_s": u0,
+            "from": u0_from,
+            "potential_flow": physics.uses_potential_flow(),
         },
         "n_cells": spec.n_cells,
         "mesh_id": spec.mesh_id,
@@ -1515,6 +1672,10 @@ RAS
     if nu_tilda is not None:
         # Spalart-Allmaras: the Auto nuTilda (inlets on Auto and the starting field).
         sidecar["turbulence"]["nu_tilda"] = nu_tilda
+    if physics.uses_potential_flow():
+        # WSL steps the runner runs on the written case before the solver (each
+        # checked against its step table): potentialFoam writes the start into 0/.
+        sidecar["pre_steps"] = potential_flow_steps()
     if is_transient and spec.transient is not None:
         t = spec.transient
         sidecar["transient"] = {

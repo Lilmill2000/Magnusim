@@ -109,6 +109,7 @@ def test_the_table_is_the_contracts():
         "createPatch": ["-overwrite"],
         "checkMesh": ["-allGeometry", "-allTopology"],
         "renumberMesh": ["-overwrite"],
+        "potentialFoam": ["-initialiseUBCs", "-writep", "-writephi"],
         "decomposePar": ["-force"],
         "reconstructParMesh": ["-constant"],
     }

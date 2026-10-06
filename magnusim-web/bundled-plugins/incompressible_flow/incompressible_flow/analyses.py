@@ -8,6 +8,7 @@ from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 
+from . import physics as _physics
 from .bcs import BC_KEYS
 from .function_objects import (
     MEAN_PRESSURE_FIELD,
@@ -20,8 +21,15 @@ from .function_objects import (
 )
 from .monitors import MONITOR_QUANTITIES
 from .physics import (
+    DEFAULT_INITIAL_FLOW,
+    DEFAULT_NUMERICS,
     DEFAULT_TURBULENCE,
+    INITIAL_FLOW_LABELS,
+    INITIAL_FLOWS,
     KINEMATIC_FIELDS,
+    NUMERICS_LABELS,
+    NUMERICS_PRESETS,
+    SIMPLEC_RELAX_U,
     TURBULENCE_CHOICE_LABELS,
     TURBULENCE_MODELS,
 )
@@ -185,6 +193,57 @@ def _reference_schema() -> tuple[SchemaField, ...]:
                 "Blank is +Z (+Y when drag runs along Z)."
             ),
         ),
+        SchemaField(
+            "initial_flow",
+            "Starting flow",
+            "choice",
+            default=DEFAULT_INITIAL_FLOW,
+            choices=INITIAL_FLOWS,
+            choice_labels=INITIAL_FLOW_LABELS,
+            group="initial",
+            description=(
+                "The velocity everywhere inside the domain when the solve starts. Still starts from "
+                "rest. From the inlet starts the whole domain moving at the inlet's speed, along its "
+                "vector or straight in through its faces (the fastest velocity inlet's speed and the "
+                "largest one's direction), or at the freestream's velocity when there is no velocity "
+                "inlet; with neither it starts from rest. Custom uses the components below."
+            ),
+        ),
+        *(
+            SchemaField(
+                f"initial_u{axis.lower()}",
+                f"Starting velocity {axis}",
+                "float",
+                default=0.0,
+                unit="m/s",
+                quantity="velocity",
+                depends_on={"initial_flow": "custom"},
+                group="initial",
+            )
+            for axis in ("X", "Y", "Z")
+        ),
+        *_potential_flow_fields(),
+    )
+
+
+def _potential_flow_fields() -> tuple[SchemaField, ...]:
+    """The "Initialise with potential flow" row, only while physics.POTENTIAL_FLOW_READY."""
+    if not _physics.POTENTIAL_FLOW_READY:
+        return ()
+    return (
+        SchemaField(
+            "potential_flow",
+            "Initialise with potential flow",
+            "bool",
+            default=False,
+            group="initial",
+            description=(
+                "Runs potentialFoam before the solver: a quick inviscid flow that already goes "
+                "from the inlets to the outlets around the obstacles, with its pressure, as the "
+                "starting point. It often saves iterations and helps a solve that diverges early. "
+                "It replaces the starting flow above."
+            ),
+        ),
     )
 
 
@@ -197,6 +256,21 @@ def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
     if transient:
         return ()
     return (
+        SchemaField(
+            "numerics_preset",
+            "Numerics",
+            "choice",
+            default=DEFAULT_NUMERICS,
+            choices=NUMERICS_PRESETS,
+            choice_labels=NUMERICS_LABELS,
+            group="solution",
+            description=(
+                "Robust suits any mesh: first-order turbulence equations and strongly limited "
+                "gradients. Accurate solves the turbulence equations to second order (limitedLinear), "
+                "limits gradients less and corrects fully for non-orthogonal cells: sharper results "
+                "on a good mesh, but it may need lower relaxation or fail to converge on a poor one."
+            ),
+        ),
         SchemaField(
             "residual_u",
             "Residual U",
@@ -223,12 +297,27 @@ def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             ),
         ),
         SchemaField(
+            "simplec",
+            "SIMPLEC (consistent)",
+            "bool",
+            default=False,
+            group="relaxation",
+            description=(
+                "Solves with SIMPLEC, the consistent form of SIMPLE: pressure needs no relaxation, "
+                f"so it uses {SIMPLEC_RELAX_U:g} for velocity and turbulence and leaves pressure "
+                "unrelaxed in place of the relaxation below. It often converges in fewer iterations, "
+                "but not on every case: turn it off if the solve oscillates or stalls."
+            ),
+        ),
+        SchemaField(
             "relax_u",
             "Relaxation U",
             "float",
             default=0.7,
             min=0.0,
             max=1.0,
+            # SIMPLEC uses its own relaxation (physics.SIMPLEC_RELAX_U / _P).
+            depends_on={"simplec": False},
             group="relaxation",
             description=(
                 "Under-relaxation for the velocity and turbulence equations (0 to 1). Lower is "
@@ -243,6 +332,7 @@ def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             default=0.3,
             min=0.0,
             max=1.0,
+            depends_on={"simplec": False},
             group="relaxation",
             description=(
                 "Under-relaxation for pressure (0 to 1). SIMPLE usually needs about 0.3; lower it "

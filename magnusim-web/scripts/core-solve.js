@@ -17,7 +17,9 @@
  *   the runner folds a core solve's residuals by the 'last' rule, the one its
  *   Run panel always plotted), the step the solver is on (the frame's `open`),
  *   saved frames and phase times. w27's enrichRunDoc and projectSolveSummary read it.
- * - Stages: prepare shows "Writing the case"; the copy to WSL, the copy back and
+ * - Stages: prepare shows "Writing the case"; the WSL steps before the solver (a
+ *   potential-flow start's potentialFoam, between pre_copy_in and pre_copy_back)
+ *   show "initialise"; the copy to WSL, the copy back and
  *   the cleanup show "copy" (as before); decompose, solve and reconstruct show
  *   themselves; stopping and ending keep the stage shown (the doc's
  *   stop_requested says Stopping, as before).
@@ -134,9 +136,11 @@ export function docStageOf(stage, current) {
   switch (String(stage || '')) {
     case 'prepare':
       return 'prepare';
-    case 'copy_to_wsl':
     case 'pre_copy_in':
     case 'pre_copy_back':
+      // The case's own WSL steps before the solver (w27-case.json pre_steps): a potential-flow start.
+      return 'initialise';
+    case 'copy_to_wsl':
     case 'copy':
     case 'cleanup':
       return 'copy';
