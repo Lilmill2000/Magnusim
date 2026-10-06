@@ -31272,15 +31272,27 @@ function syncRunResultList() {
     .join('');
 }
 
-function openRunResultControl(runId, rcId) {
+function openRunResultControl(runId, rcId, opts) {
   const rec = findRunRecord(runId);
-  if (!rec) return;
+  const rc = rec
+    ? (rec.result_controls || []).find((r) => String(r.id) === String(rcId) || String(r.name) === String(rcId)) || null
+    : null;
+  if (!rec || !rc) {
+    // The setup tree (the project tree) can list a run's monitor before this page's
+    // run list has it, just after a load: the click is not lost. The row is marked
+    // now, the runs are read, and the monitor opens unless another row was clicked.
+    if (opts && opts.retried) return;
+    const selKey = 'aaid:' + rcId;
+    markTreeSelected(selKey);
+    refreshRunCatalog()
+      .then(() => {
+        if (treeUi.selectedKey === selKey) openRunResultControl(runId, rcId, { retried: true });
+      })
+      .catch((err) => console.warn('[CFD] open monitor', err));
+    return;
+  }
   runCatalog.selected_run_id = runId;
   runCatalog.rc_target_run_id = runId;
-  const rc = ((rec.result_controls || []).find(
-    (r) => String(r.id) === String(rcId) || String(r.name) === String(rcId)
-  )) || null;
-  if (!rc) return;
   resultCatalog.editing_run_id = runId;
   resultCatalog.editing_rc_id = rc.id;
   resultCatalog.area_average_1 = rc;

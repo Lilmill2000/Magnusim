@@ -133,6 +133,14 @@ test('a Point probe takes typed points and Add probe here from an Inspect pin', 
   await page.locator('#btn-inspect-point').click();
 
   // ---- Its panel: the point, and a typed one in mm ----
+  // Just after a load the tree can list the probe before the page has read its run:
+  // the run list answers late here, and a click on the probe still opens its panel
+  // (it was lost before: nothing happened).
+  const slowRuns = async (route) => {
+    await new Promise((r) => setTimeout(r, 2500));
+    await route.continue();
+  };
+  await page.route('**/api/run/status**', slowRuns);
   await page.reload();
   await ready();
   await openRun(runB);
@@ -142,7 +150,9 @@ test('a Point probe takes typed points and Add probe here from an Inspect pin', 
     await rcFolder.locator(':scope > .tree-row .tw').click();
   }
   await page.locator(`#left-tree [data-w27-aa="${probe.id}"] > .tree-row .tl`).first().click();
-  await expect(page.locator('#panel-area-average')).toBeVisible();
+  await expect(page.locator(`#left-tree [data-w27-aa="${probe.id}"]`)).toHaveClass(/selected/);
+  await expect(page.locator('#panel-area-average')).toBeVisible({ timeout: 20_000 });
+  await page.unroute('**/api/run/status**', slowRuns);
   await expect(page.locator('#aa-type-label')).toHaveText('Point probe');
   await expect(page.locator('#aa-face-block')).toBeHidden();
   await expect(page.locator('#aa-point-block')).toBeVisible();
