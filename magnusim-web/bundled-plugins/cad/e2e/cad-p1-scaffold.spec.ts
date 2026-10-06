@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, groupCommandLabels } from './helpers';
 import { PNG } from './png';
 
-test('cad:p1-scaffold + New Part opens an empty Part with the kernel ready', async ({ page, request }) => {
+test('cad:p1-scaffold + New Part opens an empty Part with the kernel ready', { tag: '@smoke' }, async ({ page, request }) => {
   const seen = await watchPage(page);
   const projectId = await newProject(request);
   await openProject(page, projectId);

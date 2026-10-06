@@ -22,7 +22,7 @@ type W = { __CAD__: { services: any }; __perf?: any };
 const FIXTURE = process.env.CAD_E2E_LARGE_TESS || '';
 const PERF_URL = '__perf/large-tess.bin';
 
-test('cad:p1-viewport-perf the 553k-triangle part: setBodies, BVH in the worker, orbit fps, pick time', async ({ page, request }, info) => {
+test('cad:p1-viewport-perf the 553k-triangle part: setBodies, BVH in the worker, orbit fps, pick time', { tag: '@serial' }, async ({ page, request }, info) => {
   test.skip(!FIXTURE || !existsSync(FIXTURE), 'CAD_E2E_LARGE_TESS does not name the large-part tessellation fixture');
   test.setTimeout(240_000);
   const seen = await watchPage(page);

@@ -67,6 +67,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `scripts/build.mjs` | frozen, `WORKERS` append-only | Add your worker entry to `WORKERS`; nothing else. |
 | `e2e/helpers.ts` | append-only | Add helpers at the end; do not change existing ones. |
 | `e2e/playwright.config.ts`, `global-setup.ts`, `host-server.mjs` (the app's `startHost()`, `magnusim-web/e2e/support/host-server.mjs`), `png.ts`, `manifest-guard.mjs` | frozen (INTEGRATE) | |
+| `scripts/e2e.mjs` (the runner: shards, smoke, changed, the parallel and serial phases), `scripts/e2e-shards.mjs` (the shards and the file-to-shard map), `tests/e2e/shards.test.ts` | INTEGRATE; `SHARDS` and `RULES` append-only | A new spec goes into exactly one shard of `SHARDS`, a new source folder into `RULES` (§8 "Shards"); the unit test fails on a spec in no shard or in two. |
 | `e2e/cad-p1-<area>-*.spec.ts` | the area in the name | One spec file per area at least; name tests `cad:p1-<area>-<what>`. |
 | `e2e/cad-p<n>-<gate>.spec.js` (`cad-p1-document.spec.js`, `cad-p2-step.spec.js`, `cad-p3-sketch.spec.js`), `e2e/cad-large-step.spec.js` | INTEGRATE | A phase's exit gate, named as in the proposal §7: one test per exit bullet. The large-STEP spec is opt-in (`CAD_E2E_BIG_STEP`). |
 | `e2e/cad-p1-review-polish.spec.ts`, `cad-p1-review2.spec.ts`, `cad-p1-review3.spec.ts`, `cad-p15-review1.spec.ts`, `cad-p2p3-review1.spec.ts`, `cad-p2p3-review1-polish.spec.ts`, `cad-p2p3-review2.spec.ts`, `cad-p2p3-review3.spec.ts`, `cad-p2p3-review4.spec.ts`, `tests/arch/user-files.test.ts` | INTEGRATE | Review rounds' findings (P1 rounds 1-3, P1.5 round 1, P2+P3 rounds 1-4), one test per finding. |
@@ -718,6 +719,41 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   text, computed styles, pixel colours via `e2e/png.ts`, download bytes).
   `window.__CAD__.snapshot()` is for state checks only. Every bug gets its own
   e2e test.
+- Shards, smoke and workers (`scripts/e2e.mjs`, `scripts/e2e-shards.mjs`;
+  README "The e2e suite" has the commands and the phase rule):
+  - **Shards.** Every spec is in exactly one area shard of `SHARDS` (`shell`,
+    `sketch`, `solids`, `step`, `link`, and the opt-in `big`);
+    `tests/e2e/shards.test.ts` fails on a spec in no shard or in two. A new
+    spec goes into the shard of the area it tests.
+  - **The map.** `RULES` maps a changed file to the shards that test it, first
+    match wins: an area folder to its shard (`src/sketch/` sketch, `src/link/`
+    link, the P4a feature folders solids, the STEP and body-tool folders step,
+    plus the other shards whose specs use the feature), a feature's `index.ts`
+    to shell too (the toolbar spec reaches every command), and shared code to
+    every shard (`src/doc`, `src/ui`, `src/app`, `src/viewport`, `src/naming`,
+    `src/types`, `src/lib`, `src/kernel*`, `kernel-build/`, `workspace/`,
+    `fixtures/`, `e2e/helpers.ts` and the rest of `e2e/`, the Extrude, Sketch,
+    Enclosure and shared panel folders every spec uses, and a host file of
+    `magnusim.e2eHostPaths`). Unit tests and docs map to none; an unknown
+    plugin file to every shard. A new source folder gets its rule when it is
+    made, with a case in the unit test.
+  - **Smoke.** Tests tagged `{ tag: '@smoke' }` (10-15, the unit test counts
+    them and wants one in each area shard): one path through every area. Tag
+    an existing test; never copy one into a smoke spec.
+  - **Parallel workers, one server.** The runner starts one host server, runs
+    every test but the `@serial` ones on several workers (a spec file stays in
+    one worker, in order; files run side by side), then the `@serial` tests
+    alone on one worker (`test-results/serial`). Each test makes its own
+    project, the save budget is the page's own (`src/doc/autosave.ts`), and
+    downloads and outputs are per test; what is shared is the server's plugin
+    state, its project list, and its speed. So `@serial` marks a test that
+    turns CAD off, breaks its manifest, forgets its choice in the prefs file,
+    clicks Settings > Plugins > Disable, reads Home's list of every project, or
+    times the server or the browser against a budget (contention latencies,
+    frame rates, the 113 MB part). A new test that does any of these is tagged
+    `@serial`; the unit test lists them.
+    Specs with a server of their own (`cad-link-plugins`, `cad-link-exit`) find
+    a free port and a private Vite cache, so they run in parallel too.
 - Phase exit gates: `e2e/cad-p1-document.spec.js` is P1's (proposal §7, one
   test per bullet), against host API 1.2: CAD is On on a fresh install (it
   ships on since D33; `resetCadToDefault()` forgets the choice in the server's
@@ -1335,6 +1371,17 @@ changes. The host's contract is `docs/plugins/authoring.md` "Linking a geometry
   after a leave that linked nothing, a bogus "moved far" report, the large part's
   camera) were fixed in 253d6a4 and their markers removed; a unit test checks
   that none is left.
+  `npm run test:gate:l3-cad:ci` (`gate-l3-cad.mjs --ci`) is the same gate for
+  CI, which never has Daniel's files: no Vortex needed, everything else as
+  strict (the Python, no skip, `--forbid-only`, `--allowOnly=false`), with its
+  own census `L3_E2E_CI_CENSUS`: the full census without `L3_CI_LEFT_OUT`, the
+  cases that read a private STEP, left out by `--grep-invert` on their ids (not
+  run, so not skipped). Today that is only `cad:l3-vortex-include`; its twin
+  `cad:l3-include` runs the same case on `fixtures/kernel/flange.step` (a
+  two-body exit, then the Include toggle, then nothing included).
+  `tests/link/gate.test.ts` fails when a test that reads `CAD_E2E_VORTEX_STEP`
+  or `CAD_E2E_BIG_STEP` is not left out, when any other test is missing from the
+  CI census, or when a left-out case has no twin in it.
   `npm run test:gate:l2-cad` is `scripts/gate-l2-cad.mjs`: it fails
   at once without the app's Python, runs the unit tests with
   `CAD_LINK_REQUIRE_PYTHON=1` (a missing Python fails them instead of skipping),

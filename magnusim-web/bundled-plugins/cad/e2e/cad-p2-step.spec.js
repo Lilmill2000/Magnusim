@@ -780,7 +780,7 @@ test('cad:p2-step-knit a surface-only STEP: "6 faces not in a solid", the volume
 
 // ---------------------------------------------------------------- 11. contention with a core run
 
-test('cad:p2-step-contention importing and autosaving while a core run writes its sidecar: no project.tree or runs.upsert timeouts', async ({ page, request }) => {
+test('cad:p2-step-contention importing and autosaving while a core run writes its sidecar: no project.tree or runs.upsert timeouts', { tag: '@serial' }, async ({ page, request }) => {
   test.setTimeout(480_000);
   const vortex = vortexPath();
   const { seen, frame, projectId } = await freshPart(page, request);

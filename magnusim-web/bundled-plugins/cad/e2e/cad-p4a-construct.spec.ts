@@ -105,7 +105,7 @@ test('cad:p4a-construct-toolbar CONSTRUCT has Plane, Axis and Point, after MODIF
   expect(seen.errors).toEqual([]);
 });
 
-test('cad:p4a-construct-plane-sketch a Plane 20 mm above Top, a sketch on it, Extrude 10: the body spans z 20..30, and follows the plane to 35', async ({ page, request }) => {
+test('cad:p4a-construct-plane-sketch a Plane 20 mm above Top, a sketch on it, Extrude 10: the body spans z 20..30, and follows the plane to 35', { tag: '@smoke' }, async ({ page, request }) => {
   test.setTimeout(300_000);
   const { seen, frame } = await freshPart(page, request);
   // Top plane selected first: the new Plane offsets from it.

@@ -75,7 +75,7 @@ async function waitFor(frame: Frame, fn: (s: Snap) => boolean, what: string, tim
 
 const saved = (s: Snap) => s.save === 'saved' && s.rebuild === 'done';
 
-test('cad:p1-doc-storage the model lives outside the study record, autosaves and reopens', async ({ page, request }) => {
+test('cad:p1-doc-storage the model lives outside the study record, autosaves and reopens', { tag: '@smoke' }, async ({ page, request }) => {
   const seen = await watchPage(page);
   const projectId = await newProject(request);
   await openProject(page, projectId);
@@ -233,7 +233,7 @@ test('cad:p1-doc-respawn a kernel stopped by its watchdog respawns and the part 
 
 // L3 (host API 1.6): the exit hook saves first, so Back with a save on its way no longer asks
 // "Leave without saving?": the leave waits for the save (the header says so) and then goes.
-test('cad:p1-doc-back-quick Back right after two edits loses neither: the exit waits for the save on its way (the header says so), then leaves', async ({ page, request }) => {
+test('cad:p1-doc-back-quick Back right after two edits loses neither: the exit waits for the save on its way (the header says so), then leaves', { tag: '@smoke' }, async ({ page, request }) => {
   const projectId = await newProject(request);
   await openProject(page, projectId);
   await newPartFromTree(page, 'Part 1');

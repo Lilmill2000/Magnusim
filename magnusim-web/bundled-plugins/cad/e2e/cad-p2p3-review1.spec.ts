@@ -109,6 +109,32 @@ async function settled(page: Page) {
 }
 
 /**
+ * The part is built and stays built: the sketch solver is up (its arrival rebuilds the part,
+ * src/doc/service.ts onSolverChange), no rebuild is running, and none finished for a second.
+ * A rebuild that lands after Measure has its picks clears them ("The part changed: pick
+ * again"); under load (parallel e2e workers) the solver's worker can come up after the solid
+ * is built.
+ */
+async function builtAndStill(page: Page) {
+  let last = -1;
+  await expect
+    .poll(
+      async () => {
+        const r = await cad<{ solver: boolean; status: string; seq: number }>(page, () => {
+          const services = (window as unknown as W).__CAD__.services;
+          const s = services.doc.state.get().rebuild;
+          return { solver: !!services.apis.get().solver, status: s.status, seq: s.seq };
+        });
+        const still = r.solver && r.status !== 'running' && r.seq === last;
+        last = r.seq;
+        return still;
+      },
+      { timeout: 60_000, intervals: [1_000] },
+    )
+    .toBe(true);
+}
+
+/**
  * Zoom out (the wheel, in the middle of the free view) until these model points are in the
  * view and clear of the tree and the panel, as a user does before drawing past what is framed.
  * Since round 4 a sketch is framed on what it holds, and the origin planes' 100 mm square
@@ -556,6 +582,7 @@ test('cad:p2p3-review1-measure-plane Measure takes the Top plane picked in the t
   await addSolid(page);
   await expect(frame.locator('[data-chip="volume"]')).toHaveText('Volume8000 mm³');
   await settled(page);
+  await builtAndStill(page);
   await tb(frame).locator('[data-command="inspect.measure"]').click();
   const p = panel(frame);
   await expect(p.locator('[data-tool-panel="inspect.measure"]')).toBeVisible();
@@ -1078,7 +1105,7 @@ test('cad:p2p3-review1-press-pull-curved Press-pull says why a click on a curved
   expect(seen.errors).toEqual([]);
 });
 
-test('cad:p2p3-review1-import-cancel-big (opt-in CAD_E2E_BIG_STEP) Cancel 3 s into reading the 113 MB STEP: the kernel is free at once and a block is built within seconds', async ({ page, request }) => {
+test('cad:p2p3-review1-import-cancel-big (opt-in CAD_E2E_BIG_STEP) Cancel 3 s into reading the 113 MB STEP: the kernel is free at once and a block is built within seconds', { tag: '@serial' }, async ({ page, request }) => {
   const big = process.env.CAD_E2E_BIG_STEP || '';
   test.skip(!big, 'opt-in: set CAD_E2E_BIG_STEP to the 113 MB STEP (8m0119333_V12.step)');
   test.setTimeout(300_000);

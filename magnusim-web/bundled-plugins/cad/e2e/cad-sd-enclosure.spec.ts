@@ -143,7 +143,7 @@ test('cad:sd-no-one-click-solids the toolbar has no Box or Cylinder; CFD PREP (E
 
 // ---------------------------------------------------------------- 2. Enclosure around a sketched block
 
-test('cad:sd-enclosure-box a drawn block -> Enclosure: Zero padding is its exact bounding box; Percent; Fixed; dragging +X adds that much volume; editing the block grows it and keeps +X; a Cylinder about Z; then Combine Cut with Keep tools is the fluid', async ({ page, request }) => {
+test('cad:sd-enclosure-box a drawn block -> Enclosure: Zero padding is its exact bounding box; Percent; Fixed; dragging +X adds that much volume; editing the block grows it and keeps +X; a Cylinder about Z; then Combine Cut with Keep tools is the fluid', { tag: '@smoke' }, async ({ page, request }) => {
   test.setTimeout(300_000);
   const { seen, frame } = await freshPart(page, request);
   // 40 x 30 x 20, drawn as a user draws it.

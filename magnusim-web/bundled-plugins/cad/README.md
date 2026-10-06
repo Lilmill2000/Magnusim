@@ -99,7 +99,11 @@ npm run typecheck      # tsc: src, tests, e2e
 npm test               # vitest (unit; the kernel and solver in Node)
 npm run build          # src/ -> workspace/ (page + worker modules)
 npm run build:check    # workspace/ must be exactly the build of src/ (run before every commit)
-npm run test:e2e       # build, start the host app on a free port, run e2e/ (bundled Chromium)
+npm run test:e2e       # build, start the host app on a free port, run every spec of e2e/ (bundled Chromium, parallel workers)
+npm run test:e2e:smoke # the smoke set (@smoke): one path through every area, about 2 min
+npm run test:e2e:sketch   # one area shard (shell, sketch, solids, step, link, big): see "The e2e suite" below
+npm run test:e2e:changed  # only the shards the changed files need (git status)
+npm run test:e2e:changed -- --base origin/master   # ... and the files that differ from origin/master
 CAD_E2E_CHANNELS=chrome,msedge npm run test:e2e   # also real Chrome and Edge
 npm run test:e2e -- e2e/cad-p1-document.spec.js   # the P1 exit gate only
 npm run test:e2e -- e2e/cad-p2-step.spec.js e2e/cad-p3-sketch.spec.js   # the P2 and P3 exit gates
@@ -109,6 +113,7 @@ CAD_E2E_VORTEX_STEP=<path> npm run test:e2e   # with the Vortex part: its tests 
 CAD_E2E_BIG_STEP=<path> npm run test:e2e -- e2e/cad-large-step.spec.js  # the 113 MB STEP (opt-in)
 npm run test:kernel    # the kernel gates in Node (fixtures/kernel)
 npm run test:gate:l2-cad   # LINK: the export against the app's own checker, and the link e2e; fails (never skips) without the app's Python
+npm run test:gate:l3-cad:ci   # the L3 gate for CI, as strict, without Daniel's files: every L3 case but cad:l3-vortex-include (below)
 CAD_E2E_VORTEX_STEP=<path> npm run test:gate:l3-cad   # exit sync (L3): the exit hook's unit tests and e2e/cad-link-exit.spec.ts; fails (never skips) without the app's Python or the Vortex, on a stray .only, and on any test missing from or added to its census (every test is expected to pass; none is marked test.fail(): see ARCHITECTURE.md §11)
 ```
 
@@ -154,6 +159,105 @@ CAD_E2E_VORTEX_STEP=<path> npm run test:gate:l3-cad   # exit sync (L3): the exit
 - Kernel and solver binaries are rebuilt only when their sources change, on
   Linux or WSL: `kernel-build/build.sh`, `solver-build/build.sh`. Commit
   `workspace/**/*.wasm` only on version bumps.
+- `gate:l3-cad:ci` (`npm run test:gate:l3-cad:ci`) is `gate:l3-cad` for CI,
+  which never has Daniel's STEP files. It is just as strict: it fails without
+  the app's Python, on any skipped test, on a stray `.only`
+  (`--forbid-only`, `--allowOnly=false`), and on any test missing from or added
+  to its own census (`L3_E2E_CI_CENSUS` in `scripts/gate-l3-cad.mjs`; the unit
+  test `tests/link/gate.test.ts` keeps it equal to every test of
+  `e2e/cad-link-exit.spec.ts` that reads no private file). It leaves out exactly
+  one case, by `--grep-invert` (not run, so not skipped):
+  - `cad:l3-vortex-include`: it imports Daniel's Vortex STEP
+    (`CAD_E2E_VORTEX_STEP`), which never leaves his PC. The Vortex is only a
+    convenient imported part there, so `cad:l3-include` runs the same case on
+    the repository's `fixtures/kernel/flange.step` (a 100 x 100 x 10 plate with
+    4 holes): an imported body and a block exit as a two-body geometry, then the
+    block left out with its Include toggle (the flange only, the same geometry
+    at rev 2), then nothing included (the header says so, the leave goes on).
+    Both gates run it.
+
+  The local `gate:l3-cad` stays the full gate (both include cases, the Vortex
+  required).
+
+### The e2e suite: shards, smoke, parallel workers
+
+The suite is about 250 tests. Run only what a change can break, and the whole
+suite once per phase.
+
+- **Shards** (`scripts/e2e-shards.mjs` `SHARDS`; every spec is in exactly one,
+  and `tests/e2e/shards.test.ts` fails on a spec in no shard or in two):
+
+  | Shard | `npm run` | What | Specs |
+  |---|---|---|---|
+  | shell | `test:e2e:shell` | the tree, the document (P1 gate, save, reload, two tabs), panels, the toolbar, the viewport, leaving, the UI kit | `cad-p1-*`, `cad-p15-review1`, `cad-panel-done-reach`, `cad-sd-kit`, `cad-sd-review2-leave`, `cad-p4a-toolbar` |
+  | sketch | `test:e2e:sketch` | the sketcher, profiles, Extrude of them (P3 gate, P2+P3 reviews) | `cad-p3-*`, `cad-p2p3-*` |
+  | solids | `test:e2e:solids` | P4a: the solid features, CONSTRUCT, edge names | `cad-p4a-solids`, `-construct`, `-fix1`, `-integrate` |
+  | step | `test:e2e:step` | STEP import and edit, Combine, Measure, Export, the Enclosure (P2 gate) | `cad-p2-step`, `cad-p2-features-step`, `cad-p2-kernel-ops`, `cad-sd-enclosure`, `cad-sd-review1`, `cad-sd-review2` |
+  | link | `test:e2e:link` | the Part as a project geometry (gate:l2-cad and gate:l3-cad's specs), the start actions | `cad-link*`, `cad-start` |
+  | big | `test:e2e:big` | opt-in: the 113 MB STEP (`CAD_E2E_BIG_STEP`; skipped without it) | `cad-large-step` |
+
+  A new spec goes into the shard of the area it tests.
+- **Changed files** (`npm run test:e2e:changed [-- --base <ref>]`, or
+  `-- --files a,b` where there is no git): `RULES` in `scripts/e2e-shards.mjs`
+  maps each file to shards, and only those run. `src/sketch/`,
+  `src/solver-worker/`, `solver-build/` go to sketch; `src/link/`,
+  `src/doc/source-record.ts` and the gate scripts to link; the P4a feature
+  folders to solids; the STEP and body-tool folders to step, plus the other
+  shards whose specs use them; a feature's `index.ts` to shell as well (the
+  toolbar). Shared code runs every shard: `src/doc`, `src/ui`, `src/app`,
+  `src/viewport`, `src/naming`, `src/types`, `src/lib`, `src/kernel*`,
+  `kernel-build/`, `workspace/` (the build output), `fixtures/`,
+  `e2e/helpers.ts` and the rest of `e2e/`, the Extrude, Sketch, Enclosure and
+  shared panel folders (every spec uses them), and any host file in
+  `magnusim.e2eHostPaths`. Unit tests and docs run nothing. `--plan` prints
+  what would run and why.
+- **Smoke** (`npm run test:e2e:smoke`, about 2 min): 14 existing tests tagged
+  `{ tag: '@smoke' }`, one path through every area: a new Part, the tree,
+  save and reopen, leaving with a save on its way, the toolbar at two sizes, a
+  sketch to fully defined, the plate flow, the bracket (Fillet, edge names), a
+  sketch on a CONSTRUCT plane, STEP edit and export, the Enclosure, the first
+  link, the header's start action. Tag an existing test; never copy one.
+  `--smoke` also narrows a shard: `npm run test:e2e:solids -- --smoke`.
+- **Parallel workers on one server.** The runner starts one host server and
+  runs every test but the `@serial` ones on DEFAULT_WORKERS (in
+  `scripts/e2e.mjs`) workers: a spec file runs in order in one worker, files
+  run side by side. Then the `@serial` tests run alone, on one worker (output
+  in `test-results/serial`; 11 tests, of which the 113 MB ones and viewport-perf
+  skip without their file or channel):
+  they turn CAD off, break its manifest, forget its choice in the prefs file,
+  click Settings > Plugins > Disable, read Home's list of every project, or
+  time the server or the browser (`cad:p2-step-contention`'s latencies, the
+  viewport's frame rate, the 113 MB part's budgets), which other workers' load
+  would distort. Each test makes its own project, the save
+  budget is the page's own, downloads and outputs are per test, and the specs
+  with a server of their own find a free port and their own Vite cache.
+  `CAD_E2E_WORKERS=N` (or `-- --workers N`) changes the count; with `CI` set
+  it is 1 unless `CAD_E2E_WORKERS` says otherwise.
+
+  Measured on this PC (Ryzen 9 9950X3D, 32 threads, 94 GB, other sessions
+  running), the full suite in Chromium with the Vortex set, wall clock of the
+  whole command (build, server, both phases):
+
+  | Workers | Wall | Runs |
+  |---|---|---|
+  | 1 (the runner before the split) | 44.8 min | 1 |
+  | 2 | 21.7 min | 1 |
+  | 3 (the default) | 17.0-17.5 min (19.5 min for the first) | 6; the last two with no failure |
+
+  The parallel phase is bound by the one server's throughput (its length is
+  the summed test time over the workers), so more workers mostly add
+  contention. `net::ERR_NO_BUFFER_SPACE` (this PC's Windows socket-buffer
+  failure, seen at one worker in earlier phases too) can fail a test that
+  loads a page; it is environmental: repeat the test alone.
+
+- **The phase rule** (from now on, in every phase prompt):
+  - fix rounds run the affected shards plus smoke:
+    `npm run test:e2e:changed` (or the named shards) and `npm run test:e2e:smoke`;
+  - the full suite runs ONCE per phase, at the end: `npm run test:e2e` in
+    Chromium with the parallel workers, plus Chrome once
+    (`CAD_E2E_CHANNELS=chrome npm run test:e2e -- --project chrome`);
+  - a flaky spec gets 5 lone repeats, never a full restart:
+    `npm run test:e2e -- e2e/<spec> -g "<test id>" --repeat-each 5 --workers 1`.
 
 ## Separation rules
 

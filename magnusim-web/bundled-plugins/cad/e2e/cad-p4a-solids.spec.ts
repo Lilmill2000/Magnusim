@@ -463,7 +463,7 @@ test.describe('P4a solids', () => {
     await page.keyboard.press('Escape');
     expect(seen.errors).toEqual([]);
   });
-  test('cad:p4a-bracket: plate, hole cut Through all, Fillet on three outer edges; width 60 -> 50 keeps the edge names in the panel; the fillet faces say so when clicked; 20 mm is red and the plate still shows', async ({ page, request }) => {
+  test('cad:p4a-bracket: plate, hole cut Through all, Fillet on three outer edges; width 60 -> 50 keeps the edge names in the panel; the fillet faces say so when clicked; 20 mm is red and the plate still shows', { tag: '@smoke' }, async ({ page, request }) => {
     const { seen, frame } = await freshPart(page, request);
     const plate = await workspaceFrame(page).evaluate(async () => {
       const s = (window as unknown as W).__CAD__.services;

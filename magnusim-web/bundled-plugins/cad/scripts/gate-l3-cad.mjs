@@ -14,6 +14,12 @@
 //      exactly the expected tests, by id, each run, each expected to pass. No test is
 //      marked test.fail(): the host defects of the L3 reviews were fixed in 253d6a4 and
 //      their markers are gone; a test marked to fail fails the census.
+// gate:l3-cad:ci (npm run test:gate:l3-cad:ci, `--ci`): the same gate, as strict, for CI,
+// which never has Daniel's STEP files. It does not need CAD_E2E_VORTEX_STEP; it leaves out
+// exactly the cases in L3_CI_LEFT_OUT (by --grep-invert, so they are neither run nor
+// skipped) and holds its own census, L3_E2E_CI_CENSUS: every other test of the full census.
+// Every case left out has a synthetic twin in the census (L3_CI_LEFT_OUT says which).
+// The local gate (no --ci) stays the full gate.
 // Owner: LINK.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
@@ -49,8 +55,29 @@ export const L3_E2E_CENSUS = [
   ['cad:l3-typed', 'passed'],
   ['cad:l3-report', 'passed'],
   ['cad:l3-background-camera', 'passed'],
+  ['cad:l3-include', 'passed'],
   ['cad:l3-vortex-include', 'passed'],
 ];
+
+/**
+ * The cases gate:l3-cad:ci leaves out, each with why and the test that covers the same case
+ * on the repository's own files. Only a case that needs one of Daniel's files may be here.
+ */
+export const L3_CI_LEFT_OUT = [
+  {
+    id: 'cad:l3-vortex-include',
+    why: "it imports Daniel's Vortex STEP (CAD_E2E_VORTEX_STEP), which never leaves his PC",
+    twin: 'cad:l3-include',
+  },
+];
+
+/** The census of gate:l3-cad:ci: the full census without the cases left out. */
+export const L3_E2E_CI_CENSUS = L3_E2E_CENSUS.filter(([id]) => !L3_CI_LEFT_OUT.some((l) => l.id === id));
+
+/** Playwright args that leave the CI gate's cases out (by title id, so they are not even listed). */
+export function ciGrepInvert(leftOut = L3_CI_LEFT_OUT) {
+  return ['--grep-invert', leftOut.map((l) => `${l.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).join('|')];
+}
 
 /** Every spec of a Playwright JSON report: {id, tests: [{expectedStatus, status, results}]}. */
 function specsOf(report) {
@@ -100,10 +127,11 @@ export function unitFilesVerdict(report, files = L3_UNIT) {
   return none.length ? `no unit test ran in ${none.join(', ')}` : null;
 }
 
-/** Why the gate cannot run here (a missing Python or Vortex), or null. */
-export function missingInputs(env = process.env, exists = existsSync, probe = probePython) {
+/** Why the gate cannot run here (a missing Python, or for the full gate the Vortex), or null. */
+export function missingInputs(env = process.env, exists = existsSync, probe = probePython, { ci = false } = {}) {
   const found = gatePython(env, { exists, probe });
   if (!found.python) return `${appPythonMissing(found)} The link checker cannot run.`;
+  if (ci) return null;
   const vortex = env.CAD_E2E_VORTEX_STEP || '';
   if (!vortex) return "Daniel's Vortex STEP is not set: set CAD_E2E_VORTEX_STEP to the path of Vortex CFD Test.step (the include case runs on it).";
   if (!exists(vortex)) return `CAD_E2E_VORTEX_STEP names no file (${vortex}).`;
@@ -118,17 +146,22 @@ function readJson(path) {
   }
 }
 
+const CI = process.argv.includes('--ci');
+const NAME = CI ? 'gate:l3-cad:ci' : 'gate:l3-cad';
+
 function fail(message) {
-  console.error(`[gate:l3-cad] FAILED: ${message}`);
+  console.error(`[${NAME}] FAILED: ${message}`);
   process.exit(1);
 }
 
 function main() {
-  const why = missingInputs();
+  const why = missingInputs(process.env, existsSync, probePython, { ci: CI });
   if (why) fail(why);
   const found = gatePython();
-  console.log(`[gate:l3-cad] the app's Python: ${found.python} (${found.from})`);
-  const out = join(ROOT, '.cache', 'gate-l3-cad');
+  console.log(`[${NAME}] the app's Python: ${found.python} (${found.from})`);
+  if (CI) for (const l of L3_CI_LEFT_OUT) console.log(`[${NAME}] left out: ${l.id} (${l.why}); ${l.twin} covers its case`);
+  const census = CI ? L3_E2E_CI_CENSUS : L3_E2E_CENSUS;
+  const out = join(ROOT, '.cache', CI ? 'gate-l3-cad-ci' : 'gate-l3-cad');
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   const env = { ...gateEnv(found.python), CAD_L3_REQUIRE: '1' };
@@ -141,12 +174,12 @@ function main() {
   if (vWhy) fail(vWhy);
 
   const e2eJson = join(out, 'e2e.json');
-  const e = spawnSync(process.execPath, [join(ROOT, 'scripts', 'e2e.mjs'), ...L3_E2E, '--forbid-only', '--reporter=list,json'], { cwd: ROOT, stdio: 'inherit', env: { ...env, PLAYWRIGHT_JSON_OUTPUT_NAME: e2eJson } });
+  const e = spawnSync(process.execPath, [join(ROOT, 'scripts', 'e2e.mjs'), ...L3_E2E, ...(CI ? ciGrepInvert() : []), '--forbid-only', '--reporter=list,json'], { cwd: ROOT, stdio: 'inherit', env: { ...env, PLAYWRIGHT_JSON_OUTPUT_NAME: e2eJson } });
   const eReport = readJson(e2eJson);
-  const eWhy = e2eVerdict(eReport) ?? censusVerdict(eReport) ?? (e.status !== 0 ? `the e2e run exited with ${e.status}` : null);
+  const eWhy = e2eVerdict(eReport) ?? censusVerdict(eReport, census) ?? (e.status !== 0 ? `the e2e run exited with ${e.status}` : null);
   if (eWhy) fail(eWhy);
-  const marked = L3_E2E_CENSUS.filter(([, s]) => s === 'failed').map(([id]) => id);
-  console.log(`[gate:l3-cad] passed: every unit and e2e test ran, none skipped; the census holds (${L3_E2E_CENSUS.length} e2e tests; marked test.fail(): ${marked.join(', ') || 'none'})`);
+  const marked = census.filter(([, s]) => s === 'failed').map(([id]) => id);
+  console.log(`[${NAME}] passed: every unit and e2e test ran, none skipped; the census holds (${census.length} e2e tests; marked test.fail(): ${marked.join(', ') || 'none'}${CI ? `; left out: ${L3_CI_LEFT_OUT.map((l) => l.id).join(', ')}` : ''})`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main();

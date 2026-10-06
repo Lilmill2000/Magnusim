@@ -256,7 +256,7 @@ test.beforeEach(async ({ request }, info) => {
 
 // ---------------------------------------------------------------- 1-5
 
-test('cad:p1-document-open CAD ships on; Disable and Enable in Settings; "+ New Part" opens the workspace; a sketch extruded, a Cut, undo/redo, suppress, rollback, reopen', async ({ page, request }) => {
+test('cad:p1-document-open CAD ships on; Disable and Enable in Settings; "+ New Part" opens the workspace; a sketch extruded, a Cut, undo/redo, suppress, rollback, reopen', { tag: '@serial' }, async ({ page, request }) => {
   const seen = await watchPage(page);
   // 1. A fresh install: CAD's choice is not remembered on this PC, so its manifest's default holds: on (D33).
   await resetCadToDefault(request);
@@ -578,7 +578,7 @@ test('cad:p1-document-params width = 40 mm drives an Extrude; changing width upd
 
 // ---------------------------------------------------------------- 8
 
-test('cad:p1-document-plugin-off with CAD off the Part row is greyed with its reason; on again it opens as it was', async ({ page, request }) => {
+test('cad:p1-document-plugin-off with CAD off the Part row is greyed with its reason; on again it opens as it was', { tag: '@serial' }, async ({ page, request }) => {
   const { seen, frame, row } = await freshPart(page, request);
   await addBlock(page);
   await expectVolume(frame, 8000);
@@ -671,7 +671,7 @@ async function expectBrokenRow(cadRow) {
   await expect(error).not.toContainText('bundled-plugins');
 }
 
-test('cad:p1-document-broken-manifest with a broken CAD manifest the core loads, and the CAD rows say why', async ({ page, request }) => {
+test('cad:p1-document-broken-manifest with a broken CAD manifest the core loads, and the CAD rows say why', { tag: '@serial' }, async ({ page, request }) => {
   const projectId = await newProject(request);
   await openProject(page, projectId);
   const row = await newPartFromTree(page, 'Part 1');
@@ -1012,7 +1012,7 @@ test('cad:p1-document-leave-waits with a save on its way, Back, Home and the bro
 // typed to another project waits for the save (L3: the exit hook saves first; Cancel keeps
 // the page); turning CAD off in Settings runs no exit hook and asks "Turn off Magnusim CAD?".
 // Cancel keeps the page, the edit, and CAD on.
-test('cad:p1-document-leave-elsewhere with a save on its way, a typed link to another project waits for it and Settings > Plugins > Disable asks; Cancel keeps the edit and CAD on', async ({ page, request }) => {
+test('cad:p1-document-leave-elsewhere with a save on its way, a typed link to another project waits for it and Settings > Plugins > Disable asks; Cancel keeps the edit and CAD on', { tag: '@serial' }, async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await addBlock(page);
   await expectSaved(frame);
@@ -1144,11 +1144,26 @@ test('cad:p1-document-leave-tree-twisties folders opened and closed do not hold 
   // suppress below waited for the next 1.5 s slot, and Back 600 ms later lost it.
   await lookAroundTree(page, frame);
   expect([await originOpen(), await bodiesOpen()], 'both folders flipped (five clicks each)').toEqual([!folders[0], !folders[1]]);
+  // The save chip's states from here on, with when each began (the frame's clock).
+  await workspaceFrame(page).evaluate(() => {
+    const state = () => document.querySelector('[data-chip="save"]')?.getAttribute('data-state') ?? null;
+    const log = (window.__saveChipLog = [{ s: state(), t: performance.now() }]);
+    new MutationObserver(() => {
+      const s = state();
+      if (s !== log[log.length - 1].s) log.push({ s, t: performance.now() });
+    }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-state'] });
+  });
   await rowMenu(frame, featureRow(frame, 'Extrude 3'), 'suppress');
   await expect(featureRow(frame, 'Extrude 3')).toHaveAttribute('data-suppressed', '1');
-  // Written at once (one save round trip, about 20 ms here): it does not wait for a slot.
-  await expect(chip).toHaveText('Saved', { timeout: 500 });
+  // Written at once: its write starts with no wait for a slot ("Saving…" at once, never "pending"
+  // for the 1.5 s of a slot), however long the server takes to answer (the save round trip is
+  // about 20 ms on an idle PC, longer with parallel e2e workers on the same server).
+  await expect(chip).toHaveText('Saved', { timeout: 30_000 });
   await expect(chip).toHaveAttribute('data-state', 'saved');
+  const chipLog = await workspaceFrame(page).evaluate(() => window.__saveChipLog);
+  const pendingMs = chipLog.reduce((ms, e, i) => (e.s === 'pending' ? ms + ((chipLog[i + 1]?.t ?? e.t) - e.t) : ms), 0);
+  expect(chipLog.map((e) => e.s), 'the suppress was written').toContain('saving');
+  expect(pendingMs, `time waiting for a save slot (${JSON.stringify(chipLog)})`).toBeLessThan(500);
   const expected = await historyState(frame);
   // Back a moment later, with the pointer over the part and no key or button in the frame.
   await page.waitForTimeout(150);

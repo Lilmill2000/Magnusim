@@ -218,7 +218,7 @@ test.describe('gate:l2-cad linking a Part', () => {
   });
   test.skip(process.env.CAD_LINK_REQUIRE_PYTHON !== '1' && !PYTHON, `needs the app's Python for magnusim_sdk.link check: ${appPythonMissing(FOUND)}`);
 
-  test('cad:link-create the first link adds "Part 1" to the project; its files pass the app checker; its row and the part after Back', async ({ page, request }, testInfo) => {
+  test('cad:link-create the first link adds "Part 1" to the project; its files pass the app checker; its row and the part after Back', { tag: '@smoke' }, async ({ page, request }, testInfo) => {
     test.setTimeout(300_000);
     const { seen, frame, projectId } = await freshPart(page, request);
     await addSolid(page, { size: [40, 30, 20] });

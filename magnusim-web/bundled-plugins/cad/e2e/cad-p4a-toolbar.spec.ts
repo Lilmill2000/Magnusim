@@ -190,7 +190,7 @@ async function finishSketch(frame: FrameLocator) {
   await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
 }
 
-test('cad:p4a-toolbar-reach at 1280 x 800 and 1920 x 1080 every command is a labelled button or an item of its group\'s More menu with its shortcut and tooltip, in model and sketch mode', async ({ page, request }) => {
+test('cad:p4a-toolbar-reach at 1280 x 800 and 1920 x 1080 every command is a labelled button or an item of its group\'s More menu with its shortcut and tooltip, in model and sketch mode', { tag: '@smoke' }, async ({ page, request }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const { seen, frame } = await freshPart(page, request);
   // A body, so the MODIFY commands can run (their tooltips then carry hints, not reasons).

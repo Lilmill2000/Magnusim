@@ -318,7 +318,7 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:p1-ui-tree rollback bar, suppress, failed feature, rename, delete, reopen', async ({ page, request }) => {
+test('cad:p1-ui-tree rollback bar, suppress, failed feature, rename, delete, reopen', { tag: '@smoke' }, async ({ page, request }) => {
   const { seen, frame, row: partRow } = await freshPart(page, request);
   const tb = frame.locator('[data-cad-toolbar]');
   const tree = frame.locator('[data-cad-tree]');

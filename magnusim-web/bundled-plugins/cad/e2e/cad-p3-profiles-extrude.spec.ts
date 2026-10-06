@@ -312,7 +312,7 @@ test('cad:p3-profiles-arrow dragging the extrude arrow changes the distance live
   expect(seen.errors).toEqual([]);
 });
 
-test('cad:p3-profiles-plate the plate flow: 100 x 60 with a d 20 hole, extruded 10 mm, then a d 10 hole cut from a sketch on its top face', async ({ page, request }) => {
+test('cad:p3-profiles-plate the plate flow: 100 x 60 with a d 20 hole, extruded 10 mm, then a d 10 hole cut from a sketch on its top face', { tag: '@smoke' }, async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const sk = await addSketch(page, {
     points: { pt_a: [0, 0], pt_b: [100, 0], pt_c: [100, 60], pt_d: [0, 60], pt_o: [50, 30] },

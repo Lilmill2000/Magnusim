@@ -194,7 +194,7 @@ test('cad:p2-features-size a 600 MB STEP is refused before anything uploads', as
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:p2-features-edit Delete faces of the holes, Press-pull the top +10 mm, Split by the Right plane, Check, Measure', async ({ page, request }) => {
+test('cad:p2-features-edit Delete faces of the holes, Press-pull the top +10 mm, Split by the Right plane, Check, Measure', { tag: '@smoke' }, async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await importByPicker(page, frame, FLANGE);
   await finishImport(page, frame);
@@ -286,7 +286,7 @@ test('cad:p2-features-reopen a reopened Part reads the stored BREP only, with th
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:p2-features-export Export STEP downloads the body (AP214), and Import STEP reads it back', async ({ page, request }) => {
+test('cad:p2-features-export Export STEP downloads the body (AP214), and Import STEP reads it back', { tag: '@smoke' }, async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await importByPicker(page, frame, FLANGE);
   await finishImport(page, frame);

@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { findAppPython, venvPythons } from '../../scripts/app-python.mjs';
 import { e2eVerdict, gateEnv, vitestVerdict } from '../../scripts/gate-l2-cad.mjs';
-import { censusVerdict, L3_E2E, L3_E2E_CENSUS, L3_UNIT, missingInputs, unitFilesVerdict } from '../../scripts/gate-l3-cad.mjs';
+import { censusVerdict, ciGrepInvert, L3_CI_LEFT_OUT, L3_E2E, L3_E2E_CENSUS, L3_E2E_CI_CENSUS, L3_UNIT, missingInputs, unitFilesVerdict } from '../../scripts/gate-l3-cad.mjs';
 
 const PLUGIN = join(__dirname, '..', '..');
 /** The environment with the app's Python named and missing (no other name for it left over). */
@@ -115,6 +115,49 @@ describe('gate:l3-cad never soft-passes', () => {
     expect(censusVerdict(report(spec('cad:l3-a one', 'passed', 'skipped'), spec('cad:l3-b two', 'failed')), census)).toBe('cad:l3-a did not run');
     // A test.only under --forbid-only: Playwright runs nothing, and the census says so.
     expect(censusVerdict({ suites: [] }, census)).toMatch(/^the census is short/);
+  });
+
+  it("gate:l3-cad:ci: its own script, no Vortex needed, the Python still required, and nothing but Daniel's-file cases left out", () => {
+    const pkg = JSON.parse(readFileSync(join(PLUGIN, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+    expect(pkg.scripts['test:gate:l3-cad:ci']).toBe('node scripts/gate-l3-cad.mjs --ci');
+    const PY = '/opt/app/bin/python';
+    const noProbe = () => null;
+    expect(missingInputs({ MAGNUSIM_PYTHON: PY }, (p) => p === PY, noProbe, { ci: true })).toBeNull();
+    expect(missingInputs({ MAGNUSIM_PYTHON: '/gone/python' }, () => false, noProbe, { ci: true })).toMatch(/^the app's Python is missing: MAGNUSIM_PYTHON names no file/);
+    // The CI gate fails at once without the Python, as the full gate does.
+    const missing = join(PLUGIN, 'no-such-python', 'python.exe');
+    const r = spawnSync(process.execPath, [join(PLUGIN, 'scripts', 'gate-l3-cad.mjs'), '--ci'], { cwd: PLUGIN, encoding: 'utf8', env: missingPythonEnv(missing), timeout: 60_000 });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`[gate:l3-cad:ci] FAILED: the app's Python is missing: MAGNUSIM_PYTHON names no file (${missing}).`);
+    // Left out: exactly the Vortex case, each with a reason and a twin that runs in CI.
+    expect(L3_CI_LEFT_OUT.map((l) => l.id)).toEqual(['cad:l3-vortex-include']);
+    const spec = readFileSync(join(PLUGIN, 'e2e', 'cad-link-exit.spec.ts'), 'utf8');
+    const blocks = spec.split(/\n  test\(/).slice(1);
+    const idOf = (b: string) => /^['"`](cad:l3-[a-z0-9-]+)/.exec(b)?.[1] ?? '?';
+    const body = (id: string) => blocks.find((b) => idOf(b) === id)?.split(/\n  \}\);/)[0] ?? '';
+    for (const l of L3_CI_LEFT_OUT) {
+      expect(l.why).toMatch(/Daniel's/);
+      expect(body(l.id), `${l.id} reads a private file`).toMatch(/VORTEX|BIG_STEP/);
+      expect(L3_E2E_CI_CENSUS.map(([id]) => id)).toContain(l.twin);
+      expect(body(l.twin), `${l.twin} reads no private file`).not.toMatch(/VORTEX|BIG_STEP/);
+    }
+    // Every test that reads a private file is left out; every other test is in the CI census.
+    const ids = blocks.map(idOf);
+    const privateIds = ids.filter((id) => /VORTEX|BIG_STEP/.test(body(id)));
+    expect(privateIds.sort()).toEqual(L3_CI_LEFT_OUT.map((l) => l.id).sort());
+    expect(L3_E2E_CI_CENSUS.map(([id]) => id).sort()).toEqual(ids.filter((id) => !privateIds.includes(id)).sort());
+    expect(L3_E2E_CI_CENSUS.length).toBe(L3_E2E_CENSUS.length - L3_CI_LEFT_OUT.length);
+    // Left out by --grep-invert on the title id: not run, and not reported as skipped.
+    const [flag, pattern] = ciGrepInvert();
+    expect(flag).toBe('--grep-invert');
+    const re = new RegExp(pattern);
+    expect(ids.filter((id) => re.test(`gate:l3-cad exit sync ${id} words`))).toEqual(['cad:l3-vortex-include']);
+    // The CI census is checked like the full one: a left-out case that ran anyway is unknown to it.
+    const pass = (id: string) => ({ title: `${id} words`, tests: [{ expectedStatus: 'passed', status: 'expected', results: [{ status: 'passed' }] }] });
+    const report = (list: string[]) => ({ suites: [{ title: 'cad-link-exit.spec.ts', specs: [], suites: [{ title: 'gate:l3-cad exit sync', specs: list.map(pass) }] }] });
+    expect(censusVerdict(report(L3_E2E_CI_CENSUS.map(([id]) => id)), L3_E2E_CI_CENSUS)).toBeNull();
+    expect(censusVerdict(report(L3_E2E_CENSUS.map(([id]) => id)), L3_E2E_CI_CENSUS)).toMatch(/^the census has tests it does not know: cad:l3-vortex-include/);
+    expect(censusVerdict(report(L3_E2E_CI_CENSUS.map(([id]) => id).filter((id) => id !== 'cad:l3-include')), L3_E2E_CI_CENSUS)).toMatch(/^the census is short: cad:l3-include/);
   });
 
   it('every L3 unit file must have run tests', () => {

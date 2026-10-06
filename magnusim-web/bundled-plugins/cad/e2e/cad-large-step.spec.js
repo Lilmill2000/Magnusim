@@ -39,7 +39,7 @@ const landings = (page) => page.evaluate(() => window.__CFD_LANDINGS__ || 0);
 
 test.skip(!BIG, 'opt-in: set CAD_E2E_BIG_STEP to the 113 MB STEP (8m0119333_V12.step) to run it');
 
-test('cad:large-step the 113 MB STEP imports through the UI with progress, 11,776 faces, the host stays responsive, the BREP is stored, and a reopen does not re-heal', async ({ page, request }) => {
+test('cad:large-step the 113 MB STEP imports through the UI with progress, 11,776 faces, the host stays responsive, the BREP is stored, and a reopen does not re-heal', { tag: '@serial' }, async ({ page, request }) => {
   test.setTimeout(1_200_000);
   expect(existsSync(BIG), `CAD_E2E_BIG_STEP is set but there is no file at ${BIG}`).toBe(true);
   const fileName = BIG.split(/[\\/]/).pop();
@@ -246,7 +246,7 @@ test('cad:large-step the 113 MB STEP imports through the UI with progress, 11,77
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test("cad:large-step-exit-camera the 113 MB part: the first exit lands in time with the Part camera exactly and no stall question; a save held on the way out ends at 25 s in CAD's words; the next Back links and lands with the camera", async ({ page, request }) => {
+test("cad:large-step-exit-camera the 113 MB part: the first exit lands in time with the Part camera exactly and no stall question; a save held on the way out ends at 25 s in CAD's words; the next Back links and lands with the camera", { tag: '@serial' }, async ({ page, request }) => {
   test.setTimeout(1_500_000);
   expect(existsSync(BIG), `CAD_E2E_BIG_STEP is set but there is no file at ${BIG}`).toBe(true);
   const times = { file: BIG.split(/[\\/]/).pop(), browser: test.info().project.name };

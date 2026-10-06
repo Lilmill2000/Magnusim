@@ -26,6 +26,8 @@
 //     question about the typed text (Stay keeps it; Leave discards it);
 //   - Daniel's Vortex (CAD_E2E_VORTEX_STEP) with the Include toggle: a block left out
 //     is not sent; with nothing included the leave says so in the header and goes on;
+//     the same on the repository's flange fixture (cad:l3-include, which CI's gate runs):
+//     a two-body exit first, then the block left out, then nothing included;
 //   - fixes of the L3 reviews (SCR link3/fix1.md): a clean second tab another tab saved
 //     over is not dirty and leaves without asking (B1); an old Part with removed
 //     features says what to do, and Suppress them is one undoable step (B2); a save on
@@ -1273,6 +1275,72 @@ test.describe('gate:l3-cad exit sync', () => {
     }
     expect(seen.csp, 'CSP violations').toEqual([]);
     expect(seen.errors, 'console errors').toEqual([]);
+  });
+
+  test('cad:l3-include an imported STEP body (the flange fixture) and a block: both go to the project; the block left out, only the flange; nothing included, the leave says so and goes on', async ({ page, request }) => {
+    // cad:l3-vortex-include's case on a part of the repository's own (CI has no Vortex):
+    // a multi-body exit, then the Include toggle, then nothing included.
+    test.setTimeout(480_000);
+    const FLANGE = resolve('fixtures', 'kernel', 'flange.step');
+    expect(existsSync(FLANGE), `the flange fixture is at ${FLANGE}`).toBe(true);
+    const { seen, pid, sid, frame } = await freshPart(page, request, 'CAD exit include');
+    try {
+      const chooser = page.waitForEvent('filechooser');
+      await frame.locator('[data-cad-toolbar] [data-command="file.import-step"]').click();
+      await (await chooser).setFiles(FLANGE);
+      const panel = frame.locator('[data-cad-panel="feature"]');
+      await expect(panel.locator('[data-import-diagnostics]')).toBeVisible({ timeout: 120_000 });
+      await expect(panel.locator('[data-import-progress]')).toHaveCount(0);
+      await panel.locator('[data-panel-done]').click();
+      await expect(panel).toHaveCount(0);
+      await settled(page);
+      const flangeId = await workspaceFrame(page).evaluate(() => (window as unknown as { __CAD__: { services: { doc: { state: { get(): { rebuild: { bodies: { id: string }[] } } } } } } }).__CAD__.services.doc.state.get().rebuild.bodies[0].id);
+      const block = await addSolid(page, { at: [200, 0, 0], size: [20, 20, 20] });
+      await settled(page);
+
+      // Back with both included: a two-body geometry, each body's faces named after it.
+      await backAndLand(page, pid);
+      const first = (await linkedOf(request, pid, sid))!;
+      expect(first.rev).toBe(1);
+      const sc1 = sidecarOf(pid, sid);
+      expect(sc1.bodies.map((b) => b.id)).toEqual([flangeId, block.body]);
+      expect(sc1.faces.filter((f) => f.body === 1).length, "the flange's faces (a plate with 4 holes: 10)").toBe(10);
+      expect(sc1.faces.filter((f) => f.body === 2).length, "the block's faces").toBe(6);
+      expect((await partMeta(request, pid, first.geometryId)).faces).toBe(sc1.faces.length);
+      await expect.poll(async () => (await viewport(page)).id, { timeout: 60_000 }).toBe(first.geometryId);
+
+      // The block left out with its Include toggle: the same geometry, updated to the flange only.
+      const f2 = await reopen(page);
+      await (await includeToggle(f2, block.body!)).click();
+      await expect(f2.locator(`[data-body-row="${block.body}"]`)).toHaveAttribute('data-in-simulation', '0');
+      await settled(page);
+      await backAndLand(page, pid);
+      const second = (await linkedOf(request, pid, sid))!;
+      expect([second.geometryId, second.rev]).toEqual([first.geometryId, 2]);
+      const sc2 = sidecarOf(pid, sid);
+      expect(sc2.bodies.map((b) => b.id)).toEqual([flangeId]);
+      expect(sc2.faces.length).toBe(10);
+      expect(sc2.faces.every((f) => f.body === 1)).toBe(true);
+      expect((await partMeta(request, pid, second.geometryId)).faces).toBe(10);
+
+      // The flange left out too: nothing is included. The leave says so in the header and goes on.
+      const f3 = await reopen(page);
+      await (await includeToggle(f3, flangeId)).click();
+      await expect(f3.locator(`[data-body-row="${flangeId}"]`)).toHaveAttribute('data-in-simulation', '0');
+      await settled(page);
+      await watchLeaveStatus(page);
+      await backButton(page).click();
+      await expect(leaveStatus(page)).toHaveText('No body is included in the simulation; Part 1 keeps its last update.', { timeout: 10_000 });
+      await expect(page).toHaveURL(new RegExp(`#/p/${pid}$`), { timeout: 30_000 });
+      expect(await toastSeen(page)).toEqual([]);
+      expect((await linkedOf(request, pid, sid))!.rev).toBe(2);
+      await expect.poll(() => behindOf(request, pid, first.geometryId), { timeout: 30_000 }).toBe(true);
+      await landingDialog(page, null);
+      expect(seen.csp, 'CSP violations').toEqual([]);
+      expect(seen.errors, 'console errors').toEqual([]);
+    } finally {
+      await deleteProject(request, pid);
+    }
   });
 
   test("cad:l3-vortex-include Daniel's Vortex with a block left out of the simulation: only the Vortex goes to the project; with nothing included the leave says so and goes on", async ({ page, request }) => {

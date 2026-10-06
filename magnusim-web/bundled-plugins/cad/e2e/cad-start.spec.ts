@@ -81,7 +81,7 @@ test.describe('CAD ships on: its start action in every place', () => {
     expect(seen.errors, 'console errors').toEqual([]);
   });
 
-  test('cad:start-header the header "CAD" menu: no Part yet, New Part opens Part 1; then it lists the Parts (a click opens one) and makes Part 2', async ({ page, request }) => {
+  test('cad:start-header the header "CAD" menu: no Part yet, New Part opens Part 1; then it lists the Parts (a click opens one) and makes Part 2', { tag: '@smoke' }, async ({ page, request }) => {
     test.setTimeout(300_000);
     const seen = await watchPage(page);
     await shipsOn(request);
@@ -112,7 +112,7 @@ test.describe('CAD ships on: its start action in every place', () => {
     expect(seen.errors, 'console errors').toEqual([]);
   });
 
-  test('cad:start-home Home "New design" opens New Project with "Untitled Part N" and "Design a part" chosen; one Create click opens the Part', async ({ page, request }) => {
+  test('cad:start-home Home "New design" opens New Project with "Untitled Part N" and "Design a part" chosen; one Create click opens the Part', { tag: '@serial' }, async ({ page, request }) => {
     test.setTimeout(240_000);
     const seen = await watchPage(page);
     await shipsOn(request);
@@ -137,7 +137,7 @@ test.describe('CAD ships on: its start action in every place', () => {
     expect(notHomeThumbs(seen.errors), 'console errors').toEqual([]);
   });
 
-  test('cad:start-new-project the New Project dialog "Start from": Import geometry by default, "Design a part" chosen opens a Part in the new project', async ({ page, request }) => {
+  test('cad:start-new-project the New Project dialog "Start from": Import geometry by default, "Design a part" chosen opens a Part in the new project', { tag: '@serial' }, async ({ page, request }) => {
     test.setTimeout(240_000);
     const seen = await watchPage(page);
     await shipsOn(request);

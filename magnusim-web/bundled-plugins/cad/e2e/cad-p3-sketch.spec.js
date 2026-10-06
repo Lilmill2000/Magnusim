@@ -173,7 +173,7 @@ async function circle(page, frame, centre, diameter) {
 
 // ---------------------------------------------------------------- 1-3. DOF, dimensions, driven, drag
 
-test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF"; two dimensions make it "Fully defined" in #101828; a diagonal is driven "(44.72)"; a fully defined corner will not drag; deleting a dimension gives "1 DOF" and it drags', async ({ page, request }) => {
+test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF"; two dimensions make it "Fully defined" in #101828; a diagonal is driven "(44.72)"; a fully defined corner will not drag; deleting a dimension gives "1 DOF" and it drags', { tag: '@smoke' }, async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   // Sketch is offered with nothing selected (it then waits for a plane or a flat face: SD review
   // round 1, cad-sd-review1.spec.ts); here the plane is selected first.
