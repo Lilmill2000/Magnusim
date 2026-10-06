@@ -282,3 +282,10 @@ jobs:
         run: npm run test:e2e
         env:
           CI: "1"
+      # The LINK gate fails, never skips, without the app's Python (the setup-python one
+      # here, with the backend installed above): its checker tests and link e2e must run.
+      # gate:l3-cad is local only: it needs a private STEP file that never goes to GitHub.
+      - name: gate:l2-cad
+        run: npm run test:gate:l2-cad
+        env:
+          CI: "1"
