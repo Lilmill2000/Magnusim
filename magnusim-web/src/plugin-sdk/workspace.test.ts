@@ -288,6 +288,44 @@ describe('ws.files: writing', () => {
   });
 });
 
+describe("ws.prefs: the user's prefs of this plugin (host 1.7)", () => {
+  it('gets, sets and removes by name; null when there is none; a refusal keeps its code', async () => {
+    const { ws, posts } = await open((method, params) => {
+      if (method === 'prefs.get') return params.key === 'toolbar-layout' ? { order: ['sketch'] } : null;
+      if (method === 'prefs.set' && params.key === 'big') throw { message: 'A plugin keeps at most 64 KB of prefs', code: 'too_large' };
+      return { ok: true };
+    });
+    expect(await ws.prefs.get('toolbar-layout')).toEqual({ order: ['sketch'] });
+    expect(await ws.prefs.get('none')).toBeNull();
+    expect(await ws.prefs.set('toolbar-layout', { order: [] })).toBeUndefined();
+    await ws.prefs.set('cleared', undefined);
+    await ws.prefs.remove('toolbar-layout');
+    await expect(ws.prefs.set('big', 'x')).rejects.toMatchObject({ code: 'too_large' });
+    expect(posts.map((p) => [p.method, p.params])).toEqual([
+      ['prefs.get', { key: 'toolbar-layout' }],
+      ['prefs.get', { key: 'none' }],
+      ['prefs.set', { key: 'toolbar-layout', value: { order: [] } }],
+      ['prefs.set', { key: 'cleared', value: null }],
+      ['prefs.remove', { key: 'toolbar-layout' }],
+      ['prefs.set', { key: 'big', value: 'x' }],
+    ]);
+  });
+
+  it("onChange hears another tab's change as (key, value), until it is stopped", async () => {
+    const { ws, push } = await open(() => null);
+    const heard: unknown[] = [];
+    const stop = ws.prefs.onChange((key, value) => heard.push([key, value]));
+    push({ event: 'prefs', data: { key: 'toolbar-layout', value: { order: ['a'] } } });
+    push({ event: 'prefs', data: { key: 'toolbar-layout', value: null } });
+    stop();
+    push({ event: 'prefs', data: { key: 'toolbar-layout', value: 1 } });
+    expect(heard).toEqual([
+      ['toolbar-layout', { order: ['a'] }],
+      ['toolbar-layout', null],
+    ]);
+  });
+});
+
 describe('ws.nav: Back and unsaved work', () => {
   it('setDirty sends a strict flag and the message as a string', async () => {
     const { ws, posts } = await open(() => ({ ok: true }));

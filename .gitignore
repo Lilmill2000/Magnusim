@@ -18,6 +18,7 @@ magnusim-web/.cache/
 magnusim-web/projects/
 magnusim-web/.magnusim-local.json
 magnusim-web/.cfddesk-local.json
+magnusim-web/.magnusim-plugin-prefs/
 magnusim-web/.magnusim-ready
 magnusim-web/.cfddesk-ready
 magnusim-web/dist/

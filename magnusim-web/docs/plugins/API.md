@@ -499,6 +499,11 @@ interface Workspace
 - `data: { … }`
 - `data.read<T>(rel: string): Promise<T | null>`: A JSON file from this plugin's folder in the project (null when there is none).
 - `data.write(rel: string, doc: unknown): Promise<void>`
+- `prefs: { … }`: This plugin's own preferences for the user, the same in every project (host 1.7; absent on an older host): small JSON values such as a toolbar layout or the last options used. A name is 1 to 64 of a-z, 0-9, ".", "_" and "-". A plugin keeps at most 64 KB in all; past that `set` rejects with `.code` "too_large".
+- `prefs.get<T>(key: string): Promise<T | null>`: The value, or null when there is none.
+- `prefs.set(key: string, value: unknown): Promise<void>`: Store a JSON value (null removes it).
+- `prefs.remove(key: string): Promise<void>`
+- `prefs.onChange(fn: (key: string, value: unknown) => void): () => void`: A change made in another tab or window (value null when removed); not this page's own.
 - `files: { … }`: Files of any kind in the same folder (`data` is its JSON view). Paths are relative to it; a study's study.json is read-only here, and files go inside a study's folder (studies/<id>/...), never directly in studies/. Rejections carry `.code`: "changed", "too_large", "quota", "study_record", "study_not_found", "invalid_path", "not_found", "plugin_off", ...
 - `files.read(rel: string, opts?: FileReadOptions | undefined): Promise<ArrayBuffer | null>`: The file's bytes, or a range of them (null when there is no such file).
 - `files.readBlob(rel: string, opts?: FileReadOptions | undefined): Promise<Blob | null>`: As read, as a Blob.
@@ -530,7 +535,7 @@ interface Workspace
 - `compute.list(): Promise<ComputeJob[]>`: This study's cases, newest first (a reopened page finds its running case here).
 - `results: { … }`
 - `results.openIn3D(caseRel: string): Promise<{ opened: boolean; }>`: Show a finished case's saved frames in the project's 3D view. The app asks first when other results are on screen, and when the page has unsaved work. Resolves { opened: false } when the user cancels or stays; when it opens, the workspace closes, so the promise may never settle.
-- `on(event: "units", fn: (units: UnitSystem) => void): () => void; on(event: "theme", fn: (theme: ThemeInfo) => void): () => void; on(event: "study", fn: (study: StudyRecord) => void): () => void; on(event: "geometry", fn: (g: { geometryId: string; rev: number; fromRev: number | null; }) => void): () => void`: Live changes the host pushes. Returns a function that stops listening. `study`: the study changed (renamed in the header, or saved): save next with its `rev`. `geometry` (host 1.5): the geometry this study links was updated (by this page or another tab of the same study). Only the page of the study that owns it hears it.
+- `on(event: "units", fn: (units: UnitSystem) => void): () => void; on(event: "theme", fn: (theme: ThemeInfo) => void): () => void; on(event: "study", fn: (study: StudyRecord) => void): () => void; on(event: "prefs", fn: (change: { key: string; value: unknown; }) => void): () => void; on(event: "geometry", fn: (g: { geometryId: string; rev: number; fromRev: number | null; }) => void): () => void`: Live changes the host pushes. Returns a function that stops listening. `study`: the study changed (renamed in the header, or saved): save next with its `rev`. `prefs` (host 1.7): a pref of this plugin changed in another tab (ws.prefs.onChange is the same). `geometry` (host 1.5): the geometry this study links was updated (by this page or another tab of the same study). Only the page of the study that owns it hears it.
 - `spawnWorker(url: string | URL): Worker`: Start an ES-module worker. A sandboxed frame cannot start a worker from a URL or a module worker from a blob; this starts a classic blob worker that imports your module. Messages posted before your module has loaded are held and handed to it, in order, once it has.
 
 #### WorkspaceContext

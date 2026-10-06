@@ -157,6 +157,34 @@ describe('WorkspaceCalls: the allowlist', () => {
     ]);
   });
 
+  it("keeps the user's prefs of its own plugin only, and tells the app's other tabs (not itself)", async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    const heard: unknown[] = [];
+    const other = new BroadcastChannel('magnusim-plugin-prefs');
+    other.onmessage = (e) => heard.push(e.data);
+    answer = () => ({ status: 200, body: { ok: true, value: { order: ['a', 'b'] } } });
+    expect(await c.handle('prefs.get', { key: 'toolbar-layout', plugin: 'other' })).toEqual({ order: ['a', 'b'] });
+    answer = () => ({ status: 200, body: { ok: true } });
+    await c.handle('prefs.set', { key: 'toolbar-layout', value: { order: ['b', 'a'] }, plugin: 'other' });
+    await c.handle('prefs.remove', { key: 'toolbar-layout', plugin: 'other' });
+    expect(calls.map((x) => [x.url, x.body])).toEqual([
+      ['/api/plugin-prefs/get', { plugin: 'ws-demo', key: 'toolbar-layout' }],
+      ['/api/plugin-prefs/set', { plugin: 'ws-demo', key: 'toolbar-layout', value: { order: ['b', 'a'] } }],
+      ['/api/plugin-prefs/remove', { plugin: 'ws-demo', key: 'toolbar-layout', value: null }],
+    ]);
+    await vi.waitFor(() => expect(heard.length).toBe(2));
+    expect(heard).toEqual([
+      { plugin: 'ws-demo', key: 'toolbar-layout', value: { order: ['b', 'a'] }, from: c.prefsFrom },
+      { plugin: 'ws-demo', key: 'toolbar-layout', value: null, from: c.prefsFrom },
+    ]);
+    // A refused set tells nobody.
+    answer = () => ({ status: 413, body: { ok: false, code: 'too_large', error: 'A plugin keeps at most 64 KB of prefs' } });
+    expect((await refused(c.handle('prefs.set', { key: 'big', value: 'x' }))).code).toBe('too_large');
+    await new Promise((r) => setTimeout(r, 30));
+    expect(heard.length).toBe(2);
+    other.close();
+  });
+
   it('answers project, units and theme from the host, and drives its dialogs and Back', async () => {
     const h = hooks();
     const c = new WorkspaceCalls(SCOPE, h);
@@ -1135,6 +1163,30 @@ describe('WorkspaceBridge: the handshake', () => {
   }
 
   const dirty = (id: number, message = 'Chord not saved') => ({ id, method: 'nav.setDirty', params: { dirty: true, message } });
+
+  it("hands its page another tab's change of its plugin's prefs; never another plugin's, never the page's own", async () => {
+    const t = setup();
+    const port = await welcome(t, 'p1');
+    const events: unknown[] = [];
+    port.onmessage = (e: MessageEvent) => events.push(e.data);
+    const tab = new BroadcastChannel('magnusim-plugin-prefs');
+    tab.postMessage({ plugin: 'other', key: 'layout', value: 1, from: 'tab-2' });
+    tab.postMessage({ plugin: 'ws-demo', key: 'layout', value: 2, from: (t.bridge as unknown as { calls: WorkspaceCalls }).calls.prefsFrom });
+    tab.postMessage({ plugin: 'ws-demo', key: 'layout', value: { order: ['a'] }, from: 'tab-2' });
+    tab.postMessage({ plugin: 'ws-demo', key: 'layout', from: 'tab-2' });
+    await vi.waitFor(() => expect(events.length).toBe(2));
+    expect(events).toEqual([
+      { event: 'prefs', data: { key: 'layout', value: { order: ['a'] } } },
+      { event: 'prefs', data: { key: 'layout', value: null } },
+    ]);
+    // Detached: it hears no more.
+    t.detach();
+    tab.postMessage({ plugin: 'ws-demo', key: 'layout', value: 3, from: 'tab-2' });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(events.length).toBe(2);
+    tab.close();
+    t.frame.remove();
+  });
 
   it('says nothing about unsaved work before the first channel, or when a clean channel ends', async () => {
     const t = setup();

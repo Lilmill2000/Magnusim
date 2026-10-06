@@ -73,6 +73,7 @@ export const UNGATED_PREFIXES = Object.freeze([
   '/api/plugin-data',
   '/api/plugin-files',
   '/api/plugin-geometry',
+  '/api/plugin-prefs',
   '/api/plugin-studies',
   '/api/plugins',
   '/api/prefs',

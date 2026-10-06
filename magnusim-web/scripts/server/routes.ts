@@ -30,6 +30,7 @@ import { pluginLoaded } from '../registry-defaults.js';
 import { sameProjectFolder } from '../compute-slot.js';
 import { projectDir } from '../w17-sim-catalog.js';
 import { checkRecordSave } from '../link-stamp.js';
+import { PluginPrefsError, getPluginPref, removePluginPref, setPluginPref } from '../plugin-prefs.js';
 
 export interface RouteDeps {
   worker: WorkerClient;
@@ -673,6 +674,33 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
         rel: String(body.rel || ''),
         ...(action === 'write' ? { doc: body.doc ?? null } : {}),
       });
+    });
+  }
+  // Its own prefs for this user, in every project (API 1.7), only while it is on.
+  for (const action of ['get', 'set', 'remove'] as const) {
+    router.post(`/api/plugin-prefs/${action}`, async (ctx) => {
+      const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
+      const plugin = String(body.plugin || '');
+      if (!validPluginKey(plugin)) return ctx.sendJson(400, { ok: false, code: 'invalid_plugin', error: 'invalid plugin key' });
+      let row: ListedPluginRow | undefined;
+      try {
+        row = (await listedPlugins()).find((p) => p.key === plugin);
+      } catch {
+        return ctx.sendJson(503, { ok: false, code: 'unavailable', error: 'the plugin list is not available right now' });
+      }
+      if (!row || row.status !== 'enabled') return ctx.sendJson(404, { ok: false, code: 'plugin_off', error: 'this plugin is not on' });
+      try {
+        if (action === 'get') return ctx.sendJson(200, { ok: true, value: getPluginPref(deps.webRoot, plugin, body.key) });
+        if (action === 'set') setPluginPref(deps.webRoot, plugin, body.key, body.value);
+        else removePluginPref(deps.webRoot, plugin, body.key);
+        return ctx.sendJson(200, { ok: true });
+      } catch (err) {
+        if (err instanceof PluginPrefsError) {
+          const e = err as InstanceType<typeof PluginPrefsError>;
+          return ctx.sendJson(e.status, { ok: false, code: e.code, error: e.message });
+        }
+        throw err;
+      }
     });
   }
   // Its binary files in the same folder (/api/plugin-files/*): streamed here, never through the worker.

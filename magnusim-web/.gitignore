@@ -11,6 +11,7 @@ projects/
 e2e/.tmp-projects/
 .magnusim-local.json
 .cfddesk-local.json
+.magnusim-plugin-prefs/
 .magnusim-ready
 .cfddesk-ready
 dist/

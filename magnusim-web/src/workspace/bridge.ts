@@ -390,6 +390,21 @@ async function api<T>(url: string, init?: { body?: unknown; method?: string }): 
   return (await r.json().catch(() => ({}))) as T;
 }
 
+/** The app's other tabs hear a plugin's pref changes here (same origin, same browser). */
+const PREFS_CHANNEL = 'magnusim-plugin-prefs';
+
+/** A pref this tab changed: the other tabs' pages of that plugin get a `prefs` event. */
+function announcePref(plugin: string, key: string, value: unknown, from: string): void {
+  if (typeof BroadcastChannel === 'undefined') return;
+  try {
+    const ch = new BroadcastChannel(PREFS_CHANNEL);
+    ch.postMessage({ plugin, key, value, from });
+    ch.close();
+  } catch {
+    /* no other tab hears it; each still reads the file */
+  }
+}
+
 /** An upload this workspace began: where it writes, and how far it has got. */
 interface OpenUpload {
   rel: string;
@@ -406,6 +421,8 @@ interface OpenUpload {
  */
 export class WorkspaceCalls {
   readonly scope: BridgeScope;
+  /** Who this page is in a pref change's announcement: its own change is not news to it. */
+  readonly prefsFrom = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   private readonly hooks: BridgeHooks;
   /** Jobs this workspace started (the only ones it may follow or stop). */
   readonly jobs = new Set<string>();
@@ -653,6 +670,19 @@ export class WorkspaceCalls {
         return { ok: true };
       case 'prefs.units':
         return this.hooks.units();
+      // The plugin's own prefs for this user, in every project (API 1.7). The plugin is
+      // this frame's, never one the page names.
+      case 'prefs.get': {
+        const r = await api<{ value: unknown }>('/api/plugin-prefs/get', { body: { plugin: s.plugin, key: params.key } });
+        return r.value ?? null;
+      }
+      case 'prefs.set':
+      case 'prefs.remove': {
+        const value = method === 'prefs.set' ? (params.value ?? null) : null;
+        await api(`/api/plugin-prefs/${method === 'prefs.set' ? 'set' : 'remove'}`, { body: { plugin: s.plugin, key: params.key, value } });
+        announcePref(s.plugin, String(params.key), value, this.prefsFrom);
+        return { ok: true };
+      }
       case 'theme':
         return THEME;
       case 'ui.toast': {
@@ -1427,6 +1457,8 @@ export class WorkspaceBridge {
     window.addEventListener('message', this.onMessage);
     this.frame.addEventListener('load', this.onLoad);
     window.addEventListener('cfd:units', this.onUnits);
+    const prefs = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(PREFS_CHANNEL);
+    if (prefs) prefs.onmessage = (e: MessageEvent) => this.onPref(e.data);
     // A page that already said hello to an earlier bridge never says it again by itself.
     // That happens when the dev server hot-swaps the host's code under an open
     // workspace: the frame stays, the host's effects run again. The page loads again
@@ -1440,8 +1472,16 @@ export class WorkspaceBridge {
       window.removeEventListener('message', this.onMessage);
       this.frame.removeEventListener('load', this.onLoad);
       window.removeEventListener('cfd:units', this.onUnits);
+      prefs?.close();
       this.closeChannel();
     };
+  }
+
+  /** Another tab changed a pref of this page's plugin. */
+  private onPref(data: unknown): void {
+    const m = (data || {}) as { plugin?: unknown; key?: unknown; value?: unknown; from?: unknown };
+    if (m.plugin !== this.calls.scope.plugin || typeof m.key !== 'string' || m.from === this.calls.prefsFrom) return;
+    this.channel?.port.postMessage({ event: 'prefs', data: { key: m.key, value: m.value ?? null } });
   }
 
   connected(): boolean {

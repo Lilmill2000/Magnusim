@@ -105,7 +105,7 @@ Worked examples in the app:
 4. `api_version` is the host API you wrote for. It must be at least the version of every feature you use.
 5. The licence is GPL-3.0-or-later, or a licence compatible with it.
 6. Never bundle React. The host gives you one copy.
-7. A workspace page has no `localStorage`, `sessionStorage`, IndexedDB or cookies. Keep state in the study, `ws.data` or `ws.files`.
+7. A workspace page has no `localStorage`, `sessionStorage`, IndexedDB or cookies. Keep state in the study, `ws.data` or `ws.files`; keep the user's own choices that should hold in every project (a toolbar layout, the last options used) in `ws.prefs` (host 1.7: check that `ws.prefs` is there).
 8. A workspace page runs no inline `<script>` and loads nothing from another site.
 9. Colours, sizes and fonts come from the design tokens (`var(--mg-…)`). No hex values outside a token.
 10. Use only your own data folder in a project. Never write another plugin's files or the core's.
@@ -445,6 +445,7 @@ The groups of calls (API.md, section 2, has each one):
 | `ws.service` | Your backend | 1.1 |
 | `ws.data` | JSON files in your folder of the project | 1.1 |
 | `ws.files` | Any file, streamed, with etags and size limits | 1.2 |
+| `ws.prefs` | The user's preferences for your plugin, the same in every project (64 KB) | 1.7 (unreleased) |
 | `ws.jobs` | Start, follow and stop your job kinds | 1.1 |
 | `ws.ui` | The app's toast, question and name prompt | 1.1 |
 | `ws.nav` | `back()`, `setDirty()`, `onLeave()` | 1.1, 1.2, 1.6 |
