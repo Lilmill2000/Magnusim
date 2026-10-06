@@ -7,6 +7,7 @@ before the solver (pre_steps); readers merge what each start wrote.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -79,6 +80,48 @@ def test_a_restart_has_no_pre_steps(tmp_path: Path):
     assert report["ok"] is True and "restart" in report
     assert "pre_steps" not in report and "pre_steps" not in side
 
+
+
+def test_a_potential_flow_study_restarts_without_its_potential_flow_step(tmp_path: Path):
+    # The study asks for a potential-flow start (F7): its first run lists potentialFoam
+    # as a pre_step; the run continued from its saved fields lists none.
+    case = tmp_path / "case"
+    first = load_run_spec(JS_PROJECT, run_id="r-cont", require_mesh=False, n_procs=1)
+    first = dataclasses.replace(first, physics=dataclasses.replace(first.physics, potential_flow=True))
+    assert first.physics.uses_potential_flow()
+    assert write_solve_case(first, case)["ok"] is True
+    side = json.loads((case / "w27-case.json").read_text(encoding="utf-8"))
+    assert side["pre_steps"] == [{"tool": "potentialFoam", "args": ["-writephi", "-writep"]}]
+    _save(case, "100")
+    spec = load_run_spec(JS_PROJECT, run_id="r-cont", require_mesh=False, n_procs=1, restart={"end_time": 200})
+    spec = dataclasses.replace(spec, physics=dataclasses.replace(spec.physics, potential_flow=True))
+    report = write_solve_case(spec, case)
+    side = json.loads((case / "w27-case.json").read_text(encoding="utf-8"))
+    assert report["ok"] is True and report["restart"] == {"from_time": 100.0, "end_time": 200.0}
+    assert "pre_steps" not in report and "pre_steps" not in side
+
+
+def test_a_restart_keeps_the_settle_stop(tmp_path: Path):
+    # "Stop when settled" (F5) applies to the continued part too: the controlDict
+    # starts from the latest time and still ends the solve when the monitor settles.
+    case = tmp_path / "case"
+    _first_run(case)
+    _save(case, "100")
+    spec = load_run_spec(JS_PROJECT, run_id="r-cont", require_mesh=False, n_procs=1, restart={"end_time": 300})
+    spec = dataclasses.replace(
+        spec,
+        reference={"ref_area": 0.5},
+        forces_monitors=[{"id": "rc-f", "name": "Forces 1", "boundaries": ["@walls"]}],
+        result_controls=[{"id": "rc-f", "name": "Forces 1", "monitor_type": "forces", "boundaries": ["@walls"]}],
+        settle={"source": "monitor", "id": "rc-f", "quantity": "Cd", "tolerance": 0.002, "window": 80},
+    )
+    assert write_solve_case(spec, case)["ok"] is True
+    control = (case / "system" / "controlDict").read_text(encoding="utf-8")
+    assert _entry(control, "startFrom") == "latestTime" and _entry(control, "endTime") == "300"
+    assert "runTimeControl" in control and "fields          ( Cd );" in control
+    side = json.loads((case / "w27-case.json").read_text(encoding="utf-8"))
+    assert side["restart"] == {"from_time": 100.0, "end_time": 300.0}
+    assert side["settle"]["text"] == "Forces 1 · Cd stayed within 0.002 of its average over 80 iterations"
 
 def test_a_restart_keeps_the_mesh_its_fields_are_on(tmp_path: Path):
     case = tmp_path / "case"
