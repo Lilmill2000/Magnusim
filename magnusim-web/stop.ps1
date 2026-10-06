@@ -20,56 +20,26 @@ function Read-DeskPort {
 }
 
 
-function Test-AgentWrapper([string]$commandLine) {
-  if (-not $commandLine) { return $false }
-  return $commandLine -match 'ps-script-|ExecutionPolicy Bypass -NonInteractive -File'
-}
-
-function Test-ServerProcess($proc) {
-  if (-not $proc) { return $false }
-  $name = [string]$proc.Name
-  return $name -match '^(cmd\.exe|node\.exe|esbuild\.exe)$'
-}
+# Which processes to end: scripts/stop-targets.ps1 (tested with made-up process lists).
+. (Join-Path $PSScriptRoot 'scripts\stop-targets.ps1')
 
 $port = Read-DeskPort
 Write-Host ("Stopping Magnusim on http://127.0.0.1:{0}" -f $port)
 
-$byId = @{}
-Get-CimInstance Win32_Process | ForEach-Object { $byId[[int]$_.ProcessId] = $_ }
+$procs = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine)
+$listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.OwningProcess })
+# Only this folder's Vite: another Magnusim copy on this PC (a dev tree, a release, an e2e
+# snapshot whose node_modules is a junction to this one) runs its own and must keep running.
+$launcher = Join-Path (Split-Path $PSScriptRoot -Parent) 'run.bat'
+$roots = @(Get-StopRoots -Procs $procs -Here $PSScriptRoot -Listeners $listeners -Launcher $launcher)
 
-$seeds = New-Object 'System.Collections.Generic.HashSet[int]'
-Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-  ForEach-Object { [void]$seeds.Add([int]$_.OwningProcess) }
-
-# Only this folder's Vite: another Magnusim copy on this PC (a dev tree, another
-# release) runs the same command from its own folder and must keep running.
-$here = $PSScriptRoot.TrimEnd('\') + '\'
-Get-CimInstance Win32_Process | ForEach-Object {
-  $cl = [string]$_.CommandLine
-  if ($cl -match 'run_foam_case\.py') { return }
-  if (-not $cl) { return }
-  if ($cl.IndexOf($here, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $cl -match '(vite|@esbuild)') {
-    [void]$seeds.Add([int]$_.ProcessId)
+if ($roots.Count -eq 0) {
+  if ($listeners.Count) {
+    Write-Host ("Port {0} is used by another program, not this folder's Magnusim: left running." -f $port)
+    exit 1
   }
-}
-
-if ($seeds.Count -eq 0) {
   Write-Host 'Magnusim is not running.'
   exit 2
-}
-
-$roots = New-Object 'System.Collections.Generic.HashSet[int]'
-foreach ($id in @($seeds)) {
-  $cur = $id
-  $top = $id
-  while ($byId.ContainsKey($cur)) {
-    $proc = $byId[$cur]
-    if (Test-AgentWrapper ([string]$proc.CommandLine)) { break }
-    if (-not (Test-ServerProcess $proc)) { break }
-    $top = $cur
-    $cur = [int]$proc.ParentProcessId
-  }
-  [void]$roots.Add($top)
 }
 
 foreach ($root in $roots) {
