@@ -97,6 +97,9 @@ test('Continue +10 on a finished steady run: the residual plot is continuous and
   await box.locator('#run-continue-amount').fill('10');
   await box.locator('[data-run-continue-go="1"]').click();
   await expect(panel.locator('[data-run-status]')).toHaveAttribute('data-run-status', /running|done/, { timeout: 120_000 });
+  // The Continue has started once the run keeps its first part as an attempt (until
+  // then the run still reads "done" from its first part).
+  await expect.poll(async () => ((await run(rid)).attempts || []).length, { timeout: 120_000 }).toBe(1);
   const second = await ended(rid);
   expect(second.status, second.error || second.note).toBe('done');
 
