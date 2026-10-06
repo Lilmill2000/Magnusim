@@ -971,6 +971,29 @@ function runIsTransient(rec) {
 }
 
 /**
+ * The Start gate's mesh_out_of_date refusal (validateSolveReady) as a readiness issue
+ * ({message, code, fix}), for the run panel's reason; null when the run's mesh is not out
+ * of date (or there is none: the panel says that itself).
+ */
+export function meshOutOfDateIssue(projectId, meshId, simulationId) {
+  try {
+    const mesh = resolveProjectMesh(projectId, meshId, simulationId);
+    if (!mesh.ok || !mesh.mesh_id) return null;
+    const stale = meshOutOfDate(mesh.project_id, mesh.mesh_id);
+    if (!stale.outOfDate) return null;
+    const name = mesh.mesh_name || stale.meshName;
+    return {
+      message: LINK_BUILD_TEXT.outOfDate(name, stale.geometryName),
+      code: 'mesh_out_of_date',
+      fix: { go: 'mesh', id: mesh.mesh_id, name },
+    };
+  } catch (e) {
+    console.warn('[CFD run ready] mesh build check', e);
+    return null;
+  }
+}
+
+/**
  * What every analysis needs before a run can start: its study's mesh, the
  * study itself, and the required plugins. What else blocks a run (materials,
  * boundary conditions, the analysis's own settings) is the analysis's call:
@@ -2893,6 +2916,9 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       // What blocks this run, as its analysis sees it (the page's Start gate).
       const pid = u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       try {
+        // Start refuses a mesh made from an older version of its geometry before anything
+        // the analysis checks: the gate says that first too.
+        const stale = meshOutOfDateIssue(pid, u.searchParams.get('mesh_id') || '', u.searchParams.get('simulation_id') || '');
         const verdict = await commitRpc('analysis.validate_ready', {
           project_id: pid,
           simulation_id: u.searchParams.get('simulation_id') || '',
@@ -2900,7 +2926,8 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
           mesh_id: u.searchParams.get('mesh_id') || '',
           time_dependency: u.searchParams.get('time_dependency') || '',
         });
-        return sendJson(res, 200, { ok: true, ...(verdict || {}), increment: INCREMENT });
+        const issues = verdict && Array.isArray(verdict.issues) ? verdict.issues : [];
+        return sendJson(res, 200, { ok: true, ...(verdict || {}), ...(stale ? { issues: [stale, ...issues] } : {}), increment: INCREMENT });
       } catch (e) {
         return sendJson(res, 500, { ok: false, error: String((e && e.message) || e) });
       }

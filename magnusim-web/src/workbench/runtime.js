@@ -204,6 +204,7 @@ import {
   reloadLinkedToServer,
   runOlderGeometry,
   shownGeometryKey,
+  shownGeometryRev,
   stampRecords,
   subscribeLinkedGeometries,
   withGeometryRev,
@@ -31723,6 +31724,8 @@ function runReadyStamp(rec, meshReady) {
     rec ? String(rec.id || rec.run_id || '') : '',
     rec ? String(rec.mesh_id || '') : '',
     !!meshReady,
+    // A new version of the linked geometry can put the run's mesh out of date.
+    shownGeometryRev(),
     runRecIsTransient(rec),
     mats.map((m) => [m && m.id, m && m.simulation_id, m && m.assigned_volumes, m && m.assigned_volume]),
     bcList(),

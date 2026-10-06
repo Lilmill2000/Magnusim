@@ -332,6 +332,9 @@ describe('Start', () => {
     assert.deepEqual([out.status, out.bodyExtra.code, out.bodyExtra.error, out.bodyExtra.fix], [400, 'mesh_out_of_date', text, { go: 'mesh', id: p.mid, name: 'Mesh 1' }]);
     assert.equal(run(p).status, 'draft');
     assert.equal('built_from' in run(p), false);
+    // The run panel's reason (the ready route puts it before the analysis's issues) is
+    // Start's own refusal, before any click; none for a mesh made from the current rev.
+    assert.deepEqual(w27.meshOutOfDateIssue(p.pid, p.mid, p.sid), { message: text, code: 'mesh_out_of_date', fix: { go: 'mesh', id: p.mid, name: 'Mesh 1' } });
     io.persistRun(p.pid, p.sid, { id: p.rid, status: 'stopped' });
     out = await start(p);
     assert.equal(out.bodyExtra.error, text);
@@ -339,6 +342,7 @@ describe('Start', () => {
     // Generate again: Start goes on (to the stand-in prepare_run).
     assert.equal(generate(p).ok, true);
     await meshEnds(p);
+    assert.equal(w27.meshOutOfDateIssue(p.pid, p.mid, p.sid), null);
     out = await start(p);
     assert.match(String(out.bodyExtra.error), /fake prepare_run/);
     assert.equal(run(p).built_from.geometry_rev, 3);

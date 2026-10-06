@@ -234,12 +234,14 @@ test.describe('linked geometries with a real mesher and solver (gate:l2-wsl)', (
       await expect(runPanel).toHaveAttribute('data-run-id', rid, { timeout: 15_000 });
     };
     await openRun();
-    // Start is on (else the poll shows the panel's reason), and the server refuses it.
-    await expect
-      .poll(async () => ((await runPanel.locator('[data-run-start]').isEnabled()) ? 'enabled' : await runPanel.textContent()), { timeout: 60_000 })
-      .toBe('enabled');
-    await runPanel.locator('[data-run-start]').click();
-    await expect(runPanel).toContainText('Generate Mesh 1 again first. It was made from an older version of Demo 1.', { timeout: 60_000 });
+    // The run panel says why before any click and Start is off; the server's Start refuses
+    // with the same words.
+    const outOfDate = 'Generate Mesh 1 again first. It was made from an older version of Demo 1.';
+    await expect(runPanel).toContainText(outOfDate, { timeout: 60_000 });
+    await expect(runPanel.locator('[data-run-start]')).toBeDisabled();
+    const refused = await request.post(`${host.base}/api/run/start`, { data: { project_id: pid, simulation_id: sim, run_id: rid } });
+    const refusedBody = await refused.json();
+    expect([refused.ok(), refusedBody.code, refusedBody.error], JSON.stringify(refusedBody)).toEqual([false, 'mesh_out_of_date', outOfDate]);
     await page.screenshot({ path: testInfo.outputPath('start-refused.png') }).catch(() => {});
     stage(t1, 'Start refused on the out-of-date mesh');
 

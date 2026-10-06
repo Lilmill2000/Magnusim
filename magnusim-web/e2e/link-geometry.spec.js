@@ -833,15 +833,16 @@ test.describe('linked geometries: build stamps and starts (L2 step 3)', () => {
     const past = await request.post(`${host.base}/api/mesh/generate`, { data: { project_id: scope.pid, simulation_id: sim, mesh_id: meshId, settings: { mesh_backend: 'no-such-mesher' } } });
     expect((await past.json()).error).toMatch(/not installed or is turned off/);
 
-    // Start on the out-of-date mesh: refused, with the reason in the run panel.
+    // Start on the out-of-date mesh: the run panel says why before any click and Start is
+    // off; the server's Start refuses with the same words.
+    const outOfDate = 'Generate Mesh 1 again first. It was made from an older version of Demo 1.';
     await page.locator(`#left-tree [data-w27-run="${run1}"] > .tree-row .tl`).first().click();
     await expect(runPanel).toHaveAttribute('data-run-id', run1, { timeout: 15_000 });
-    // Start is on (the reason it is off, if it is, is what the poll shows).
-    await expect
-      .poll(async () => ((await runPanel.locator('[data-run-start]').isEnabled()) ? 'enabled' : await runPanel.textContent()), { timeout: 30_000 })
-      .toBe('enabled');
-    await runPanel.locator('[data-run-start]').click();
-    await expect(runPanel).toContainText('Generate Mesh 1 again first. It was made from an older version of Demo 1.', { timeout: 30_000 });
+    await expect(runPanel).toContainText(outOfDate, { timeout: 30_000 });
+    await expect(runPanel.locator('[data-run-start]')).toBeDisabled();
+    const refused = await request.post(`${host.base}/api/run/start`, { data: { project_id: scope.pid, simulation_id: sim, run_id: run1 } });
+    const refusedBody = await refused.json();
+    expect([refused.ok(), refusedBody.code, refusedBody.error], JSON.stringify(refusedBody)).toEqual([false, 'mesh_out_of_date', outOfDate]);
     await page.screenshot({ path: testInfo.outputPath('start-refused.png') }).catch(() => {});
 
     // A first link into a project that already shows a geometry: Back shows the new one.

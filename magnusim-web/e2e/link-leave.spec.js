@@ -305,7 +305,12 @@ const camera = (page) => page.evaluate(() => window.__CFD_CAMERA__());
 const near = (a, b) => a.every((x, i) => Math.abs(x - b[i]) < 1e-6);
 const isHookView = (cam) => cam.parallel === true && near(cam.pos, [400, 15, 15]) && near(cam.fp, [0, 15, 15]);
 
-/** Points of the viewport's canvas on the part (distinct faces), as the viewport's own pick finds them (once it is drawn). */
+/**
+ * Points of the viewport's canvas on the part (distinct faces), as the viewport's own pick finds
+ * them (once it is drawn). Each is inside its face, clear of the face's edges: a click within
+ * 7 px of an edge picks the edge, and where edges fall depends on the canvas size (the panels'
+ * fonts differ by OS).
+ */
 async function partPoints(page, want = 2) {
   let found = [];
   await expect
@@ -326,18 +331,23 @@ function pointsNow(page, want) {
     const r = canvas.getBoundingClientRect();
     const out = [];
     const faces = new Set();
+    const faceAt = (x, y) => {
+      const top = document.elementFromPoint(x, y);
+      if (!top || !top.closest('#viewer')) return '';
+      const hit = window.__CFD_PICK_CAD__({ clientX: x, clientY: y });
+      return hit && hit.faceId ? `${hit.solidId || 1}:${hit.faceId}` : '';
+    };
+    // The same face 10 px all round: no edge within the click's 7 px.
+    const ring = [[10, 0], [-10, 0], [0, 10], [0, -10], [7, 7], [7, -7], [-7, 7], [-7, -7]];
     for (let fy = 0.3; fy <= 0.7 && out.length < n; fy += 0.04) {
       for (let fx = 0.3; fx <= 0.7 && out.length < n; fx += 0.04) {
         const x = Math.round(r.left + r.width * fx);
         const y = Math.round(r.top + r.height * fy);
-        const top = document.elementFromPoint(x, y);
-        if (!top || !top.closest('#viewer')) continue;
-        const hit = window.__CFD_PICK_CAD__({ clientX: x, clientY: y });
-        const key = hit && hit.faceId ? `${hit.solidId || 1}:${hit.faceId}` : '';
-        if (key && !faces.has(key)) {
-          faces.add(key);
-          out.push({ x, y, faceId: hit.faceId, solidId: hit.solidId || 1 });
-        }
+        const key = faceAt(x, y);
+        if (!key || faces.has(key) || ring.some(([dx, dy]) => faceAt(x + dx, y + dy) !== key)) continue;
+        const [solidId, faceId] = key.split(':').map(Number);
+        faces.add(key);
+        out.push({ x, y, faceId, solidId });
       }
     }
     return out;
@@ -352,7 +362,9 @@ async function faceState(page) {
   await expect(page.locator('#face-ctx-menu')).toBeVisible();
   await page.locator('#face-ctx-hide').click();
   await expect(page.locator('#hidden-faces-chip')).toBeVisible();
-  await page.mouse.click(b.x, b.y);
+  // A face still shown, found again: the hidden face no longer covers what is behind it.
+  const [shown] = await partPoints(page, 1);
+  await page.mouse.click(shown.x, shown.y);
   await expect.poll(() => page.evaluate(() => window.__CFD_VIEWPORT_FACES__().selected.length)).toBeGreaterThan(0);
   await page.evaluate(() => document.getElementById('btn-compare').click());
   await expect(page.locator('#compare-bar')).toBeVisible();
@@ -610,11 +622,10 @@ test.describe('exit sync (host API 1.6)', () => {
     const runPanel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
     await page.locator(`#left-tree [data-w27-run="${runId}"] > .tree-row .tl`).first().click();
     await expect(runPanel).toHaveAttribute('data-run-id', runId, { timeout: 15_000 });
-    await expect
-      .poll(async () => ((await runPanel.locator('[data-run-start]').isEnabled()) ? 'enabled' : await runPanel.textContent()), { timeout: 30_000 })
-      .toBe('enabled');
-    await runPanel.locator('[data-run-start]').click();
+    // The panel says why before any click (the study's other setup is not complete either:
+    // the out-of-date mesh is said first, as Start's own refusal says it), and Start is off.
     await expect(runPanel).toContainText('Generate Mesh 1 again first. It was made from an older version of Demo 1.', { timeout: 30_000 });
+    await expect(runPanel.locator('[data-run-start]')).toBeDisabled();
     await shot(page, testInfo, 'l3-overwrite-landed.png');
     stage(t1, 'overwrite landed');
 
