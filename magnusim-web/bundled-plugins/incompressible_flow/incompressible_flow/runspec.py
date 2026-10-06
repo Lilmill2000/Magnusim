@@ -126,6 +126,9 @@ class RunSpec:
     time_dependency: Literal["steady", "transient"] = "steady"
     ok: bool = True
     error: str | None = None
+    # A run continued from its latest saved time ({"end_time", "write_interval"};
+    # RunInputs.restart): end_time and write_interval are already these.
+    restart: dict[str, Any] | None = None
 
 
 def air_from_materials(
@@ -276,10 +279,25 @@ def load_run_spec(inputs: Any) -> RunSpec:
         ok=True,
         error=None,
     )
+    restart = getattr(inputs, "restart", None)
+    if restart:
+        # Continued: to the new end, saving as the run did.
+        spec = replace(
+            spec,
+            restart=dict(restart),
+            end_time=float(restart["end_time"]),
+            write_interval=float(restart.get("write_interval") or spec.write_interval),
+        )
     if td != "transient":
         return spec
     raw = inputs.transient_override if inputs.transient_override is not None else ctrl.get("transient")
     transient = resolve_transient_control(raw if isinstance(raw, dict) else {}, transient_context(spec))
+    if restart:
+        transient = replace(
+            transient,
+            end_time=float(restart["end_time"]),
+            write_interval=float(restart.get("write_interval") or transient.write_interval),
+        )
     return replace(spec, transient=transient, end_time=transient.end_time, write_interval=transient.write_interval)
 
 

@@ -24,13 +24,20 @@
  *   themselves; stopping and ending keep the stage shown (the doc's
  *   stop_requested says Stopping, as before).
  * - time_saved → the doc's saved-frame counts; ranks → n_procs and the note's
- *   "N ranks" / "serial".
+ *   "N ranks" / "serial"; warning → the doc's `warnings` ({code, message}, once per
+ *   code), which its Run panel lists.
  * - The end → the final doc (endedRunDoc: the texts the old run path wrote; a
  *   `lost` run is stopped when it saved frames, else failed, with the runner's
  *   text), the Start's onDone, the live-solve cache, a queue kick.
  * - A run that ended itself because it converged (API 1.4): its analysis's log
  *   parser said so with a `converged` event (the runner's frames leave it out, so
  *   it is read back from the end of the job log) and its doc gets `converged`.
+ *
+ * - A continued run (F6: its runner record says restart, its doc has `continued`):
+ *   the relay counts its steps from 0 and its residuals start at the time it
+ *   continued from; withContinued puts the earlier parts first (the doc's
+ *   residuals up to that time, its step count before) and the frames it saved
+ *   before count with this attempt's.
  *
  * w27-solve.js gives it the run-doc writer and the progress snapshot
  * (attachCoreSolveHost) when it loads, before the boot check can adopt a run.
@@ -343,9 +350,50 @@ function newLive(rec, adopted) {
     phases: { ...(rec.phases || {}) },
     residual_series: host ? host.residualSeries(String(rec.analysis_key || '')) : [],
   });
-  // Followed after a restart: the frames it saved before are on disk.
-  if (adopted) state.saved_times = savedTimesIn(rec.case_dir);
+  // Followed after a restart, or a continued run: the frames it saved before are on disk.
+  if (adopted || rec.restart) state.saved_times = savedTimesIn(rec.case_dir);
   return state;
+}
+
+/** The most residual points a continued run keeps over its parts together. */
+export const CONTINUED_RESIDUAL_POINTS = 400;
+
+/**
+ * Evenly picked rows, the first and the last kept.
+ * @param {any[]} rows
+ * @param {number} max
+ */
+function thinRows(rows, max) {
+  if (rows.length <= max) return rows;
+  const out = [];
+  const last = rows.length - 1;
+  for (let i = 0; i < max; i += 1) out.push(rows[Math.round((i * last) / (max - 1))]);
+  return out;
+}
+
+/**
+ * A continued run's progress over all its parts (F6): the residual points it had up to
+ * the time it continued from, then this attempt's (later than that time: the steps
+ * after the last saved result were solved again), its steps counted on from the
+ * earlier total, and its iteration and time never behind where it continued from.
+ * @param {any} progress this attempt's ({residuals, n_steps, iteration?, sim_time?})
+ * @param {any} continued the run doc's `continued` ({from_time, steps_before, residuals_before})
+ */
+export function withContinued(progress, continued) {
+  if (!progress || !continued || typeof continued !== 'object') return progress;
+  const from = Number(continued.from_time);
+  if (!Number.isFinite(from)) return progress;
+  const before = (Array.isArray(continued.residuals_before) ? continued.residuals_before : []).filter((r) => r && Number(r.t) <= from);
+  const after = (Array.isArray(progress.residuals) ? progress.residuals : []).filter((r) => r && Number(r.t) > from);
+  /** @type {Record<string, any>} */
+  const out = {
+    ...progress,
+    residuals: thinRows([...before, ...after], CONTINUED_RESIDUAL_POINTS),
+    n_steps: (Number(continued.steps_before) || 0) + (Number(progress.n_steps) || 0),
+  };
+  if ('iteration' in progress) out.iteration = Math.max(Number(progress.iteration) || 0, Math.round(from));
+  if ('sim_time' in progress) out.sim_time = Math.max(Number(progress.sim_time) || 0, from);
+  return out;
 }
 
 /** @param {any} live */
@@ -468,6 +516,16 @@ export function onCoreSolveEvent(rec, ev) {
       patchRun(rec, { pid });
       return;
     }
+    case 'warning': {
+      const code = String(ev.code ?? '');
+      const message = String(ev.message || '');
+      if (!code || !message) return;
+      const doc = readRunDocFile(String(rec.project_id), String(rec.run_id), String(rec.simulation_id));
+      const had = doc && Array.isArray(doc.warnings) ? doc.warnings : [];
+      if (had.some((/** @type {any} */ w) => w && String(w.code) === code)) return;
+      patchRun(rec, { warnings: [...had, { code, message }] });
+      return;
+    }
     case 'ranks': {
       const n = Math.floor(Number(ev.n_procs));
       if (!Number.isFinite(n) || n < 1) return;
@@ -533,7 +591,8 @@ export function endedRunDoc(doc, rec, ctx = {}) {
     error = runnerText || `${app} failed`;
     note = sentence(error);
   }
-  const snap = ctx.snap || null;
+  // A continued run: its earlier parts first (withContinued).
+  const snap = ctx.snap && d.continued ? withContinued(ctx.snap, d.continued) : ctx.snap || null;
   const phases = { ...((snap && snap.phases) || {}), ...(rec.phases || {}) };
   const n = Math.floor(Number(rec.n_procs_run || result.n_procs || d.n_procs));
   /** @type {Record<string, any>} */
@@ -683,7 +742,7 @@ export function reconcileEndedRun(projectId, doc, rec) {
  *   prepareRow: Record<string, any>, prepareParams: Record<string, unknown>,
  *   nProcs: number, slotsHint: number | null, claimToken: string, wslRoot: string,
  *   owner: string | null, hooks: string[], onDone?: Function | null,
- *   persistStarted: (rec: any) => void,
+ *   persistStarted: (rec: any) => void, restart?: boolean,
  * }} p
  * @returns {{ ok: true, record: any } | { ok: false, error: string, code?: string }}
  */
@@ -704,6 +763,8 @@ export function launchCoreSolve(p) {
     frame_fields: frames,
     parallel: launch.parallel === false ? 'none' : 'mpirun',
     analysis: p.analysisKey,
+    // Continued from its latest saved result (F6): the relay keeps the case's times.
+    ...(p.restart ? { restart: true } : {}),
   };
   const rec = createFoamRecord({
     id,
@@ -724,6 +785,7 @@ export function launchCoreSolve(p) {
     n_procs: p.nProcs,
     launch,
     prepare: { job: prepare.job, runtime: prepare.runtime },
+    ...(p.restart ? { restart: true } : {}),
   });
   try {
     p.persistStarted(rec);

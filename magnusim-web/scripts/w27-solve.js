@@ -75,6 +75,7 @@ import {
   reconcileEndedRun,
   runnerJobActive,
   runnerRecordOf,
+  withContinued,
 } from './core-solve.js';
 import { renameSync, unlinkSync } from 'node:fs';
 
@@ -113,6 +114,7 @@ const LATE_SOLVE_STAGES = new Set(['reconstruct', 'stopping']);
 /** True when the run has already left "starting" even if stage was never stamped. */
 export function runHasSolveProgress(rec) {
   if (!rec) return false;
+  if (rec.continued && typeof rec.continued === 'object') return continuedRunHasProgress(rec);
   const simT = Number(rec.sim_time != null ? rec.sim_time : rec.iteration);
   if (Number.isFinite(simT) && simT > 0) return true;
   if (Number(rec.n_steps) > 0) return true;
@@ -123,6 +125,19 @@ export function runHasSolveProgress(rec) {
   if (Array.isArray(rec.live_saved_times) && rec.live_saved_times.length) return true;
   if (Number.isFinite(Number(rec.co_max)) && Number(rec.co_max) > 0) return true;
   return false;
+}
+
+/**
+ * A continued run (F6) has progress once it made some after it continued: a time past
+ * the one it continued from, more steps than before, or a frame saved after it.
+ */
+function continuedRunHasProgress(rec) {
+  const from = Number(rec.continued.from_time) || 0;
+  const simT = Number(rec.sim_time != null ? rec.sim_time : rec.iteration);
+  if (Number.isFinite(simT) && simT > from) return true;
+  if (Number(rec.n_steps) > (Number(rec.continued.steps_before) || 0)) return true;
+  if (Number(rec.last_saved_iteration) > from) return true;
+  return Array.isArray(rec.live_saved_times) && rec.live_saved_times.some((t) => Number(t) > from);
 }
 
 /** Keep reconstruct/copy/stopping; promote starting/decompose once progress exists. */
@@ -466,9 +481,13 @@ function enrichRunDoc(doc, opts) {
       fromLog = false;
     }
   }
+  // A continued run (F6): its earlier parts' residuals and steps before this attempt's.
+  if (progress && doc.continued) progress = withContinued(progress, doc.continued);
   const saved = liveSavedFields(doc);
+  // The latest saved result on disk: what Continue starts from (null: nothing saved).
+  const continueFrom = continueFromOf(doc);
   if (!progress) {
-    const next = { ...doc, ...saved };
+    const next = { ...doc, ...saved, continue_from: continueFrom };
     const shown = solveDisplayStage(next);
     if (shown) next.stage = shown;
     return next;
@@ -499,6 +518,7 @@ function enrichRunDoc(doc, opts) {
         : doc.residuals,
     solve_started_at: startedAt,
     ...saved,
+    continue_from: continueFrom,
   };
   // A run on the runner shows its own Courant number and time step only: the doc may
   // still hold the last attempt's until this one ends.
@@ -563,8 +583,21 @@ function liveSavedFields(doc) {
  * removes. They are not this attempt's saved frames.
  */
 function lastAttemptFramesOnly(doc) {
+  // A continued run keeps its frames: they are this run's (F6).
+  if (doc && doc.continued) return false;
   const live = doc && doc.runner_job_id ? liveSolveOf(doc.runner_job_id) : null;
   return !!live && (live.stage === 'starting' || live.stage === 'prepare');
+}
+
+/**
+ * The latest saved result in a run's case folder (what Continue starts from), or
+ * null when it has none; null for a run that is not finished or stopped.
+ */
+function continueFromOf(doc) {
+  if (!doc || !CONTINUABLE.has(String(doc.status || ''))) return null;
+  const caseDir = doc.case_dir || (doc.prepare_run && doc.prepare_run.case_dir);
+  const times = caseDir ? listSavedTimes(caseDir) : [];
+  return times.length ? times[times.length - 1] : null;
 }
 
 function applySavedTimesFromDiskInPlace(rec) {
@@ -1677,6 +1710,125 @@ function writeRunSidecar(projectId, runId, body) {
   }
 }
 
+/** Run statuses Continue is offered for (F6). */
+const CONTINUABLE = new Set(['done', 'stopped', 'converged']);
+
+/**
+ * Continue a finished or stopped run from its latest saved result (F6): a Start of
+ * the same run that keeps its frames, residuals and steps. `extraIterations` (a
+ * steady run) or `endTime` (a transient run, seconds) says how far.
+ * @param {{ projectId?: string, simulationId?: string, runId?: string, extraIterations?: unknown, endTime?: unknown, startId?: string, onDone?: (result: any) => void }} [opts]
+ */
+export async function continueSolve(opts = {}) {
+  const { extraIterations, endTime, ...rest } = opts;
+  return startSolve({ ...rest, continueRun: { extra_iterations: extraIterations, end_time: endTime } });
+}
+
+/**
+ * A queued solve row, started by the compute queue: a Start, or a Continue when the
+ * row was queued by one (its `settings.continue`: {extra_iterations} or {end_time}).
+ * @param {{ project_id?: string | null, run_id?: string | null, simulation_id?: string | null, settings?: Record<string, any> | null }} item
+ */
+export async function startQueuedSolve(item) {
+  const ids = { projectId: item.project_id || null, runId: item.run_id || null, simulationId: item.simulation_id || null };
+  const cont = item.settings && typeof item.settings === 'object' ? item.settings.continue : null;
+  if (cont && typeof cont === 'object') {
+    return continueSolve({ ...ids, extraIterations: cont.extra_iterations, endTime: cont.end_time });
+  }
+  return startSolve(ids);
+}
+
+/**
+ * What a Continue of `draft` solves to, or why it cannot: the latest saved result in
+ * its case folder, the new end (steady: that plus the extra iterations; transient:
+ * the end time asked for) and the restart the prepare job writes the case with.
+ * @param {string} projectId
+ * @param {any} draft
+ * @param {{ extra_iterations?: unknown, end_time?: unknown }} ask
+ */
+export function continuePlan(projectId, draft, ask) {
+  const status = String((draft && draft.status) || '');
+  if (status === 'running' || status === 'starting') {
+    return { ok: false, status: 409, code: 'same_run', error: 'This run is already solving.' };
+  }
+  if (!CONTINUABLE.has(status)) {
+    return { ok: false, status: 409, code: 'not_continuable', error: 'Only a finished or stopped run can continue.' };
+  }
+  const runId = String(draft.id || draft.run_id || '');
+  const doc = readRunDocFile(projectId, runId, draft.simulation_id ? String(draft.simulation_id) : undefined) || draft;
+  const caseDir = doc.case_dir || draft.case_dir || (doc.prepare_run && doc.prepare_run.case_dir);
+  const times = caseDir ? listSavedTimes(caseDir) : [];
+  if (!times.length) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'no_saved_time',
+      error: "This run can't continue: its case folder has no saved result. Add a run to solve again.",
+    };
+  }
+  const from = times[times.length - 1];
+  const transient = runIsTransient(doc.time_dependency ? doc : draft);
+  if (transient) {
+    const end = Number(ask && ask.end_time);
+    if (!(Number.isFinite(end) && end > from)) {
+      return { ok: false, status: 400, code: 'bad_request', error: `Enter an end time after t = ${from} s (the last saved result).` };
+    }
+    const wi = Number(doc.transient && doc.transient.write_interval);
+    return { ok: true, doc, from, times, transient: true, endTime: end, restart: { end_time: end, write_interval: wi > 0 ? wi : null } };
+  }
+  const n = positiveInt(ask && ask.extra_iterations);
+  if (!n) return { ok: false, status: 400, code: 'bad_request', error: 'Enter how many more iterations to run (1 or more).' };
+  const wi = positiveInt(doc.writeInterval);
+  return { ok: true, doc, from, times, transient: false, endTime: from + n, extra: n, restart: { end_time: from + n, write_interval: wi } };
+}
+
+/**
+ * A continued run's doc as it starts (F6): the run so far kept (frames, residuals up to
+ * where it continues from, its step count, its elapsed time, its log parts and each
+ * earlier attempt's end), this attempt's status reset.
+ * @param {any} old the run doc as it ended
+ * @param {{ from: number, times: number[] }} cont
+ */
+export function continuedRunFields(old, cont) {
+  const d = old || {};
+  const from = Number(cont.from);
+  const prev = d.continued && typeof d.continued === 'object' ? d.continued : null;
+  const startedMs = Date.parse(String(d.started_at || ''));
+  const endedMs = Date.parse(String(d.finished_at || ''));
+  const lastSeconds = Number.isFinite(startedMs) && Number.isFinite(endedMs) && endedMs > startedMs ? (endedMs - startedMs) / 1000 : 0;
+  const residuals = (Array.isArray(d.residuals) ? d.residuals : []).filter((r) => r && Number(r.t) <= from);
+  const attempt = {
+    status: d.status || null,
+    started_at: d.started_at || null,
+    finished_at: d.finished_at || null,
+    exit_code: d.exit_code ?? null,
+    error: d.error || null,
+    note: d.note || null,
+    last_saved_iteration: d.last_saved_iteration ?? null,
+    n_steps: d.n_steps ?? null,
+    end_time: d.transient && d.transient.end_time != null ? d.transient.end_time : d.endTime ?? null,
+    runner_job_id: d.runner_job_id || null,
+    log_path: d.log_path || null,
+  };
+  return {
+    has_results: true,
+    last_saved_iteration: from,
+    n_saved_times: cont.times.length,
+    iteration: from,
+    sim_time: from,
+    n_steps: Number(d.n_steps) || 0,
+    residuals,
+    continued: {
+      from_time: from,
+      steps_before: Number(d.n_steps) || 0,
+      residuals_before: residuals,
+      elapsed_before_s: Math.round(((Number(prev && prev.elapsed_before_s) || 0) + lastSeconds) * 1000) / 1000,
+      log_paths: [...((prev && Array.isArray(prev.log_paths) && prev.log_paths) || []), ...(d.log_path ? [d.log_path] : [])],
+    },
+    attempts: [...(Array.isArray(d.attempts) ? d.attempts : []), attempt],
+  };
+}
+
 /**
  * @param {{
  *   projectId?: string,
@@ -1687,7 +1839,8 @@ function writeRunSidecar(projectId, runId, body) {
  *   transient?: object,
  *   onDone?: (result: { status: string, exit_code?: number, run_id?: string, project_id?: string, error?: string|null }) => void,
  *   startId?: string,
- * }} [opts]
+ *   continueRun?: { extra_iterations?: unknown, end_time?: unknown },
+ * }} [opts] continueRun: a Continue (continueSolve)
  */
 
 export async function startSolve(opts = {}) {
@@ -1758,7 +1911,14 @@ async function startSolveBody(opts = {}, slot) {
   // twice. Here, so the route and the queue's kick both meet it.
   const linkRefused = linkStartRefusal(id, draft.simulation_id || simulationId || (found && found.simulation_id));
   if (linkRefused) return { ...linkRefused, bodyExtra: { ...linkRefused.bodyExtra, increment: INCREMENT } };
-  if (draft && draft.status === 'done') {
+  // Continue (F6): a separate action; a plain Start of a finished run still says it finished.
+  const cont = opts.continueRun ? continuePlan(id, draft, opts.continueRun) : null;
+  if (cont && !cont.ok) {
+    // Waiting cannot change these (a queued Continue leaves the queue with its reason).
+    const final = cont.code !== 'same_run';
+    return { ok: false, status: cont.status, bodyExtra: { error: cont.error, code: cont.code, run_id: runId, ...(final ? { final: true } : {}), increment: INCREMENT } };
+  }
+  if (!cont && draft && draft.status === 'done') {
     return {
       ok: false,
       status: 409,
@@ -1865,7 +2025,13 @@ async function startSolveBody(opts = {}, slot) {
       transientSettings = await normalizeTransientSettings(id, {
         simulationId: (draft && draft.simulation_id) || (ready.sim && ready.sim.id),
         runId,
-        settings: transientIn,
+        // A continued run: its own settings to the new end, saving as often as it did.
+        settings: cont
+          ? {
+            end_time: cont.endTime,
+            ...(cont.restart.write_interval ? { write_count: Math.max(1, Math.round(cont.endTime / cont.restart.write_interval)) } : {}),
+          }
+          : transientIn,
         base: {
           ...getSimulationControl(id, draft && draft.simulation_id).transient,
           ...((draft && draft.transient) || {}),
@@ -1886,7 +2052,11 @@ async function startSolveBody(opts = {}, slot) {
   const rawEvery = writeInterval != null ? writeInterval : draft && draft.writeInterval;
   let et = positiveInt(rawEnd) ?? ctrl.endTime;
   let wi = positiveInt(rawEvery) ?? ctrl.writeInterval;
-  if (!isTransient) {
+  if (cont) {
+    // Continued: to its new end, saving as often as it did; the study's settings stay.
+    if (!isTransient) et = cont.endTime;
+    wi = positiveInt(cont.doc.writeInterval) ?? positiveInt(draft.writeInterval) ?? wi;
+  } else if (!isTransient) {
     try {
       const clean = await normalizeSteadySettings(id, {
         simulationId: (draft && draft.simulation_id) || (ready.sim && ready.sim.id),
@@ -1904,7 +2074,9 @@ async function startSolveBody(opts = {}, slot) {
       };
     }
   }
-  if (isTransient) {
+  if (cont) {
+    // A continue changes this run only.
+  } else if (isTransient) {
     saveSimulationControl(id, { endTime: et, writeInterval: wi, transient: transientSettings }, draft && draft.simulation_id);
   } else {
     saveSimulationControl(id, { endTime: et, writeInterval: wi }, draft && draft.simulation_id);
@@ -1949,6 +2121,7 @@ async function startSolveBody(opts = {}, slot) {
     wi,
     startMeshId,
     onDone,
+    cont,
   });
 }
 
@@ -1996,8 +2169,17 @@ export function runRanks(nCells, opts = {}) {
  * and its analysis's fix; a Stop that came while it was planned leaves it as it was.
  */
 async function startSolveOnRunner(c) {
-  const { id, runId, simId, slot, draft, ready, stored, winOut, isTransient, timeDependency, transientSettings, et, wi, startMeshId, onDone } = c;
+  const { id, runId, simId, slot, draft, ready, stored, winOut, isTransient, timeDependency, transientSettings, et, wi, startMeshId, onDone, cont } = c;
   const failRun = (error, extra = {}) => {
+    if (cont) {
+      // A continue that could not start leaves the run as it ended (its frames and status).
+      patchRunDocIfPresent(id, runId, { status: draft.status, stage: draft.stage || null });
+      return {
+        ok: false,
+        status: 409,
+        bodyExtra: { error, final: true, increment: INCREMENT, run_id: runId, simulation_id: simId, ...(extra.fix ? { fix: extra.fix } : {}) },
+      };
+    }
     try {
       persistRun(id, simId, {
         ...stored,
@@ -2064,6 +2246,10 @@ async function startSolveOnRunner(c) {
   if (!plan.prepare || typeof plan.prepare !== 'object') {
     return failRun('Failed to prepare solve case: the job that writes this run\'s case is not loaded');
   }
+  // Continue needs a case writer that keeps the saved times (its job takes `restart`).
+  if (cont && !(Array.isArray(plan.prepare.args_from_params) && plan.prepare.args_from_params.includes('restart'))) {
+    return failRun("This run's analysis cannot continue a run. Add a run to solve again.");
+  }
   const analysisKey = String(plan.analysis_key || '');
   const launch =
     plan.launch && typeof plan.launch === 'object'
@@ -2112,7 +2298,9 @@ async function startSolveOnRunner(c) {
       time_dependency: timeDependency,
       n_procs: String(nProcs),
       ...(isTransient && transientSettings ? { transient: JSON.stringify(transientSettings) } : {}),
+      ...(cont ? { restart: JSON.stringify(cont.restart) } : {}),
     },
+    restart: !!cont,
     nProcs,
     slotsHint,
     claimToken: slot.token,
@@ -2172,6 +2360,11 @@ async function startSolveOnRunner(c) {
         prepare_run: report,
         solve_protocol: 'runner',
         runner_job_id: rec.id,
+        // This attempt's warnings only (the runner's warning events; core-solve.js).
+        warnings: [],
+        // Continued (F6): the run so far stays (frames, residuals, steps, elapsed time, attempts).
+        // A Start from the beginning is no continued run (an earlier Continue's parts are gone).
+        ...(cont ? continuedRunFields(cont.doc, cont) : { continued: null, attempts: null }),
         mesh_source: {
           case_dir: ready.mesh.case_dir,
           mesh_path: ready.mesh.mesh_path,
@@ -2909,6 +3102,25 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       if (!started.ok) {
         return sendJson(res, started.status, { ok: false, ...(started.bodyExtra || {}) });
       }
+      res.setHeader('X-CFD-Increment', INCREMENT);
+      return sendJson(res, started.status, { ok: true, ...started.bodyExtra });
+    }
+    if (req.method === 'POST' && b === 'continue') {
+      let body = {};
+      try {
+        body = (await readJsonBody(req)) || {};
+      } catch {
+        body = {};
+      }
+      const started = await continueSolve({
+        projectId: body.project_id,
+        runId: body.run_id || body.id,
+        simulationId: body.simulation_id || u.searchParams.get('simulation_id'),
+        extraIterations: body.extra_iterations,
+        endTime: body.end_time,
+        startId: body.start_id,
+      });
+      if (!started.ok) return sendJson(res, started.status, { ok: false, ...(started.bodyExtra || {}) });
       res.setHeader('X-CFD-Increment', INCREMENT);
       return sendJson(res, started.status, { ok: true, ...started.bodyExtra });
     }

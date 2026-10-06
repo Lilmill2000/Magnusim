@@ -16,6 +16,7 @@ import {
   saveRunSettings,
   saveRunSettle,
   saveTransientSettings,
+  simContinue,
   simStart,
   simStop,
   subscribeRunState,
@@ -157,6 +158,11 @@ function RunStatus({
         </p>
       ) : null}
       {p.elapsed ? <div className="mesh-elapsed">{p.elapsed}</div> : null}
+      {(state.warnings || []).map((w) => (
+        <p className="mat-assign-hint" data-run-warning="1" key={w}>
+          {w}
+        </p>
+      ))}
       {p.eta ? <div className="sim-eta">{p.eta}</div> : null}
       <ResidualPlot
         rows={p.residuals}
@@ -166,6 +172,107 @@ function RunStatus({
       />
       {p.meta ? <div className="mesh-finished-meta">{p.meta}</div> : null}
       <RunMonitors projectId={ids.project_id} simulationId={ids.simulation_id} runId={state.run_id} live={state.running} />
+    </div>
+  );
+}
+
+/** A number as the panel writes it: at most 6 significant digits, no trailing zeros. */
+function plainNumber(n: number): string {
+  return String(Number(n.toPrecision(6)));
+}
+
+/** What a Continue of `amount` does, in words (the line under its row). */
+export function continueHint(c: NonNullable<RunState['cont']>, amount: number, valid: boolean): string {
+  if (c.from == null) return '';
+  const queued = c.queue ? ' A job is running: this run continues when that job finishes.' : '';
+  if (c.transient) return `Continues from the last saved result, t = ${plainNumber(c.from)} s.` + queued;
+  let text = `Continues from the last saved result, iteration ${plainNumber(c.from)}`;
+  if (!valid) return text + '.' + queued;
+  text += `, to iteration ${plainNumber(c.from + amount)}.`;
+  const every = c.write_interval;
+  if (every && amount > every && amount % every !== 0) {
+    text += ` Results are saved every ${every} iterations, so the last one saved is iteration ${plainNumber(c.from + Math.floor(amount / every) * every)}.`;
+  }
+  return text + queued;
+}
+
+/**
+ * Continue a finished or stopped run (F6) from its latest saved result: a steady run
+ * runs N more iterations, a transient run runs on to a later end time. The run keeps
+ * its frames, residuals and steps.
+ */
+export function ContinueRun({ state, scope, onError }: { state: RunState; scope: string | undefined; onError: (e: unknown) => void }) {
+  const c = state.cont;
+  const [text, setText] = useState('');
+  const shown = c && c.visible ? c.value : null;
+  useEffect(() => {
+    setText(shown != null ? String(shown) : '');
+  }, [state.run_id, shown]);
+  if (!c || !c.visible) return null;
+  const amount = Number(text);
+  const valid =
+    text.trim() !== '' &&
+    (c.transient ? Number.isFinite(amount) && c.from != null && amount > c.from : Number.isInteger(amount) && amount >= 1);
+  const hint = continueHint(c, amount, valid);
+  const invalid =
+    text.trim() === '' || valid
+      ? ''
+      : c.transient
+        ? `Enter an end time after t = ${plainNumber(c.from ?? 0)} s.`
+        : 'Enter a whole number of iterations, 1 or more.';
+  return (
+    <div className="sim-continue" data-run-continue="1">
+      <div className="sim-run-row">
+        <span className="bc-value-row">
+          <label className="mat-k" htmlFor="run-continue-amount">
+            {c.transient ? 'Run on to t =' : 'Run'}
+          </label>
+          <input
+            id="run-continue-amount"
+            className="bc-input"
+            type="number"
+            inputMode="decimal"
+            min={c.transient ? undefined : 1}
+            step={c.transient ? 'any' : 1}
+            aria-label={c.transient ? 'New end time (s)' : 'More iterations'}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <span className="bc-unit-label">{c.transient ? 's' : 'more iterations'}</span>
+        </span>
+        <button
+          type="button"
+          className="fp-btn fp-btn-primary"
+          data-run-continue-go="1"
+          title={
+            c.queue
+              ? 'Continue this run when the current job finishes'
+              : c.transient
+                ? 'Run on from the last saved result to this time'
+                : 'Run more iterations from the last saved result'
+          }
+          disabled={!c.enabled || !valid}
+          onClick={() => {
+            const ask = c.transient ? { end_time: amount } : { extra_iterations: amount };
+            void simContinue(ask, scope).catch(onError);
+          }}
+        >
+          {c.queue ? 'Add to queue' : 'Continue'}
+        </button>
+      </div>
+      {c.reason ? (
+        <p className="mat-assign-hint" data-run-continue-reason="1">
+          {c.reason}
+        </p>
+      ) : invalid ? (
+        <p className="mat-assign-hint" role="alert" data-run-continue-invalid="1">
+          {invalid}
+        </p>
+      ) : hint ? (
+        <p className="mat-assign-hint" data-run-continue-hint="1">
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -293,6 +400,7 @@ export function RunControl(props: IslandProps) {
             </button>
           ) : null}
         </div>
+        <ContinueRun state={state} scope={ids.scope} onError={report} />
         {state.older_geometry ? (
           <p className="mat-assign-hint" data-run-older="1">
             {state.older_geometry}

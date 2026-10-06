@@ -430,8 +430,19 @@ export function runHasSolveProgress(rec?: {
   saved_times?: unknown;
   live_saved_times?: unknown;
   co_max?: unknown;
+  continued?: unknown;
 } | null): boolean {
   if (!rec) return false;
+  // A continued run (F6): only what it made after it continued counts.
+  const cont = rec.continued && typeof rec.continued === 'object' ? (rec.continued as { from_time?: unknown; steps_before?: unknown }) : null;
+  if (cont) {
+    const from = Number(cont.from_time) || 0;
+    const t = Number(rec.sim_time != null ? rec.sim_time : rec.iteration);
+    if (Number.isFinite(t) && t > from) return true;
+    if (Number(rec.n_steps) > (Number(cont.steps_before) || 0)) return true;
+    if (Number(rec.last_saved_iteration) > from) return true;
+    return Array.isArray(rec.live_saved_times) && rec.live_saved_times.some((x) => Number(x) > from);
+  }
   const simT = Number(rec.sim_time != null ? rec.sim_time : rec.iteration);
   if (Number.isFinite(simT) && simT > 0) return true;
   if (Number(rec.n_steps) > 0) return true;
@@ -457,6 +468,7 @@ export function solveDisplayStage(
     saved_times?: unknown;
     live_saved_times?: unknown;
     co_max?: unknown;
+    continued?: unknown;
   } | null
 ): string | null {
   const stage = rec && rec.stage != null ? String(rec.stage) : '';

@@ -181,27 +181,42 @@ def parse_surface_field_value(text: str) -> dict:
     return out
 
 
+def restart_dat_files(folder: Path, stem: str) -> list[Path]:
+    """A function object's ``<stem>.dat`` files in each start-time folder of
+    ``folder`` (``postProcessing/<name>``), oldest first.
+
+    A continued run starts a new start-time folder. A run started again from the
+    same time finds ``<stem>.dat`` there and OpenFOAM writes ``<stem>_<time>.dat``
+    beside it: that one is the later. Times may be written with an exponent.
+    """
+    try:
+        times = sorted(
+            (d.name for d in folder.iterdir() if d.is_dir() and re.fullmatch(r"\d+(\.\d+)?([eE][-+]?\d+)?", d.name)),
+            key=float,
+        )
+    except OSError:
+        return []
+    out: list[Path] = []
+    for t in times:
+        for f in (folder / t / f"{stem}.dat", folder / t / f"{stem}_{t}.dat"):
+            if f.is_file():
+                out.append(f)
+    return out
+
+
 def read_surface_field_value(case_dir: Path, name: str) -> dict | None:
     """``postProcessing/<name>/<time>/surfaceFieldValue.dat``, every time folder merged.
 
-    A restart appends a new time folder; its rows supersede the earlier rows
-    from its first time on. None when the function object wrote nothing.
+    A restart appends a new time folder (or, from the same time, a
+    ``surfaceFieldValue_<time>.dat`` beside the first: restart_dat_files); its
+    rows supersede the earlier rows from its first time on. None when the
+    function object wrote nothing.
     """
     folder = Path(case_dir) / "postProcessing" / name
     if not folder.is_dir():
         return None
-    try:
-        times = sorted(
-            (d.name for d in folder.iterdir() if re.fullmatch(r"\d+(\.\d+)?", d.name)),
-            key=float,
-        )
-    except OSError:
-        return None
     merged: dict | None = None
-    for t in times:
-        f = folder / t / "surfaceFieldValue.dat"
-        if not f.is_file():
-            continue
+    for f in restart_dat_files(folder, "surfaceFieldValue"):
         try:
             parsed = parse_surface_field_value(f.read_text(encoding="utf-8", errors="replace"))
         except OSError:

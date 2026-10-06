@@ -48,6 +48,12 @@ as ``SolveContext.run_id``, and the solve never waits for ``solve.prepare``. Its
 prepare step may also be the builtin JobKind ``solve.prepare`` (its tool in
 ``python/tools``).
 Kinds ``foam`` and ``mesh`` are unchanged by any of this.
+
+``solver.restart`` (optional, ``true`` or ``false``) continues a run from its
+latest saved time: the case check keeps its times and needs one (the
+``.magnusim-ran`` rule still holds), and ``solve.sh`` runs in its restart mode.
+The case's own ``controlDict`` says ``startFrom latestTime``; the relay never
+changes it.
 """
 
 from __future__ import annotations
@@ -1075,6 +1081,9 @@ class Relay:
         parallel = raw.get("parallel", False)
         if parallel not in (True, False, "mpirun", "none"):
             raise bad
+        restart = raw.get("restart", False)
+        if not isinstance(restart, bool):
+            raise bad
         hooks = self.spec.get("hooks") or []
         if not isinstance(hooks, list) or not all(h in SOLVE_HOOKS for h in hooks):
             raise bad
@@ -1093,6 +1102,7 @@ class Relay:
             "process_names": [str(n) for n in names],
             "stop_strategy": raw["stop_strategy"],
             "parallel": parallel in (True, "mpirun"),
+            "restart": restart,
         }
 
     def gate(self) -> None:
@@ -1160,6 +1170,7 @@ class Relay:
             None,
             own_marker=own_marker,
             stop_strategy=solver["stop_strategy"] if solver else None,
+            restart=bool(solver and solver["restart"]),
         )
 
     # -- helpers -------------------------------------------------------------
@@ -1551,6 +1562,7 @@ class Relay:
             keep_frames=solver["keep_frames"],
             process_names=tuple(solver["process_names"]),
             frame_fields=tuple(solver["frame_fields"]),
+            **({"restart": True} if solver["restart"] else {}),
         )
         on_line = self.hooks.feed if self.hooks is not None else None
         parser = self.parser if self.parser is not None else GenericParser()

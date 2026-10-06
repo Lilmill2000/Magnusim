@@ -1143,6 +1143,7 @@ SOLVE_GATE_CASES = {
     "an analysis that is not a key": ({"solver": {**SOLVER, "analysis": ["x"]}}, "invalid_spec"),
     "an analysis of another plugin": ({"plugin": "other-plugin"}, "invalid_spec"),
     "an analysis that is not registered": ({"solver": {**SOLVER, "analysis": "gone_steady"}}, "analysis_unavailable"),
+    "a restart that is not true or false": ({"solver": {**SOLVER, "analysis": ANALYSIS, "restart": "yes"}}, "invalid_spec"),
 }
 
 
@@ -1219,6 +1220,66 @@ def test_a_solve_run_reads_its_output_with_the_analysis_parser(tmp_path: Path):
     assert kw["run_id"] == f"pf-{TOKEN}" and kw["wsl_case_id"] == CORE_CASE and kw["app"] == "pimpleFoam"
     assert evs[-1]["outcome"] == {"ok": True, "phase": "solve", "exit_code": 0, "stopped": False}
     assert status(r.case)["n_steps"] == 1
+
+
+def test_a_solve_sh_warning_reaches_the_events(tmp_path: Path):
+    # solve.sh's warning (restart mode: the earlier log could not be kept) is passed on.
+    r = make_solve_run(tmp_path)
+    warning = evt(event="warning", code="log_kept", message="The earlier solver log could not be kept")
+    rec = Recorder(solve=[SOLVE_OK[0], warning, *SOLVE_OK[1:]])
+    deps, _ = solve_deps(rec)
+    code, evs = run(make_solve_spec(r), r.root, deps)
+    assert code == 0, evs
+    assert {"event": "warning", "code": "log_kept", "message": "The earlier solver log could not be kept"} in evs
+
+
+def _saved_time(case: Path, t: str = "50") -> None:
+    (case / t).mkdir()
+    for f in ("U", "p"):
+        (case / t / f).write_text("x", encoding="utf-8")
+
+
+def test_a_restart_continues_a_case_with_its_saved_times(tmp_path: Path):
+    r = make_solve_run(tmp_path)
+    _saved_time(r.case)
+    restart = {**SOLVER, "analysis": ANALYSIS, "restart": True}
+    # Without the flag a case with a saved time does not run again.
+    rec = Recorder()
+    deps, _ = solve_deps(rec, popen=no_popen, start_solve=no_popen, mpi_slots=no_popen)
+    code, evs = run(make_solve_spec(r), r.root, deps)
+    assert _refused(code, evs) == "has_results" and rec.calls == []
+    # The flag reaches solve.sh (start_solve restart=True); the times stay.
+    rec = Recorder()
+    deps, _ = solve_deps(rec)
+    code, evs = run(make_solve_spec(r, solver=restart), r.root, deps)
+    assert code == 0, evs
+    (_n, kw), = [c for c in rec.calls if c[0] == "start_solve"]
+    assert kw["restart"] is True and kw["app"] == "pimpleFoam"
+    assert (r.case / "50" / "U").is_file()
+    assert evs[-1]["outcome"]["ok"] is True
+    # A plain solve passes no restart at all (solve.sh's default).
+    plain = make_solve_run(tmp_path / "plain")
+    rec = Recorder()
+    deps, _ = solve_deps(rec)
+    code, _evs = run(make_solve_spec(plain), plain.root, deps)
+    (_n, kw), = [c for c in rec.calls if c[0] == "start_solve"]
+    assert code == 0 and "restart" not in kw
+
+
+def test_a_restart_needs_a_saved_time_and_its_own_folder(tmp_path: Path):
+    r = make_solve_run(tmp_path)
+    restart = {**SOLVER, "analysis": ANALYSIS, "restart": True}
+    rec = Recorder()
+    deps, _ = solve_deps(rec, popen=no_popen, start_solve=no_popen, mpi_slots=no_popen)
+    code, evs = run(make_solve_spec(r, solver=restart), r.root, deps)
+    assert _refused(code, evs) == "not_a_case"
+    assert [e["error"] for e in evs if e["event"] == "refused"] == ["The case has no saved time to continue from."]
+    assert rec.calls == []
+    # The last attempt's .magnusim-ran still says the folder is that run's.
+    _saved_time(r.case)
+    (r.case / ".magnusim-ran").write_text(json.dumps({"job_id": "fc-old000-000000"}), encoding="utf-8")
+    code, evs = run(make_solve_spec(r, solver=restart), r.root, deps)
+    assert _refused(code, evs) == "has_results" and rec.calls == []
 
 
 def test_a_solve_without_an_analysis_uses_the_generic_parser(tmp_path: Path):

@@ -968,6 +968,16 @@ describe('solveDisplayStage', () => {
   it('keeps a potential-flow start (initialise) until the solve begins', () => {
     expect(solveDisplayStage({ stage: 'initialise' })).toBe('initialise');
   });
+
+  it('a continued run (F6) shows Starting until it makes progress after where it continued', () => {
+    const continued = { from_time: 100, steps_before: 100 };
+    const base = { stage: 'starting', continued, sim_time: 100, iteration: 100, n_steps: 100, n_saved_times: 2, last_saved_iteration: 100 };
+    expect(solveDisplayStage(base)).toBe('starting');
+    expect(solveDisplayStage({ ...base, stage: 'decompose' })).toBe('decompose');
+    expect(solveDisplayStage({ ...base, sim_time: 101, iteration: 101 })).toBe('solve');
+    expect(solveDisplayStage({ ...base, n_steps: 101 })).toBe('solve');
+    expect(solveDisplayStage({ ...base, live_saved_times: [50, 100, 150] })).toBe('solve');
+  });
 });
 
 describe('mergeRunCatalogRow', () => {

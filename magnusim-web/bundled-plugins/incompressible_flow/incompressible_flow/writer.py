@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import re
@@ -247,13 +248,18 @@ def write_control_dict_transient(
     *,
     ctrl: TransientControl,
     functions_text: str = "",
+    restart: bool = False,
 ) -> None:
-    """pimpleFoam controlDict matching w30.transientControlDict / js_transient golden."""
+    """pimpleFoam controlDict matching w30.transientControlDict / js_transient golden.
+
+    ``restart``: the run continues from its latest saved time (startFrom
+    latestTime); frames are saved every write interval from there.
+    """
     from .transient import foam_num
 
     adjust = ctrl.adjust_time_step
     body = f"""application     pimpleFoam;
-startFrom       startTime;
+startFrom       {"latestTime" if restart else "startTime"};
 startTime       0;
 stopAt          endTime;
 endTime         {foam_num(ctrl.end_time)};
@@ -1103,18 +1109,26 @@ def _build_field_patches(
     return U, p, turb
 
 
-def _steady_control_dict_body(end_time: float, write_interval: float, functions_text: str) -> str:
+def _steady_control_dict_body(
+    end_time: float, write_interval: float, functions_text: str, *, restart_from: float | None = None
+) -> str:
     # A run shorter than its write interval would write no result at all (the solve
     # "fails" with nothing to reconstruct): the last iteration is always written.
-    if float(end_time) > 0:
-        write_interval = min(float(write_interval), float(end_time))
+    # A run continued from its latest saved iteration (restart_from) counts its
+    # iterations, and its writes, from there (writeControl runTime: every write
+    # interval after the start, so the new end is written when the extra
+    # iterations are a whole number of intervals).
+    span = float(end_time) - float(restart_from or 0)
+    if span > 0:
+        write_interval = min(float(write_interval), span)
+    restart = restart_from is not None
     return f"""application     simpleFoam;
-startFrom       startTime;
+startFrom       {"latestTime" if restart else "startTime"};
 startTime       0;
 stopAt          endTime;
 endTime         {js_plain_float(float(end_time))};
 deltaT          1;
-writeControl    timeStep;
+writeControl    {"runTime" if restart else "timeStep"};
 writeInterval   {js_plain_float(float(write_interval))};
 purgeWrite      0;
 writeFormat     binary;
@@ -1331,16 +1345,56 @@ def _copy_polymesh(src_case: Path, out_dir: Path) -> Path | None:
     return poly_dst
 
 
-def _clean_prior_run(out_dir: Path) -> None:
+_TIME_NAME = re.compile(r"^\d+(\.\d+)?(?:[eE][+-]?\d+)?$")
+# The parts of a continued run's solver log (solve.sh keeps log.<app>.1, .2, ...).
+_LOG_PART = re.compile(r"^log\.(simpleFoam|pimpleFoam)\.\d+$")
+
+
+def latest_saved_time(out_dir: Path) -> float | None:
+    """The latest saved time (> 0) of a run's case whose frame has U and p, or None."""
+    best: float | None = None
+    if not out_dir.is_dir():
+        return None
+    for child in out_dir.iterdir():
+        if not (child.is_dir() and _TIME_NAME.match(child.name)):
+            continue
+        t = float(child.name)
+        if t > 0 and (child / "U").is_file() and (child / "p").is_file() and (best is None or t > best):
+            best = t
+    return best
+
+
+def restart_write_interval(span: float, every: float) -> float:
+    """A continued transient run's write interval: at most ``every``, and a whole
+    number of them over ``span`` (the new end minus the time it continues from).
+
+    adjustableRunTime counts its writes from the start time and OpenFOAM writes
+    nothing at the end time itself, so a run continued from a time off its write
+    grid (a Stop saves the current step) would otherwise never save its new end.
+    """
+    if not (span > 0 and every > 0):
+        return every
+    n = max(1, math.ceil(span / every - 1e-9))
+    return float(f"{span / n:.12g}")
+
+
+def _clean_prior_run(out_dir: Path, *, keep_times: bool = False) -> None:
+    """Remove what an earlier solve of this case left: its result times, postProcessing
+    and logs. ``keep_times`` (a run continued from its latest saved time) removes only
+    the half-copied frames."""
     if not out_dir.is_dir():
         return
     for child in list(out_dir.iterdir()):
         name = child.name
-        is_time = child.is_dir() and re.match(r"^\d+(\.\d+)?(?:[eE][+-]?\d+)?$", name) and float(name) > 0
+        is_time = child.is_dir() and _TIME_NAME.match(name) and float(name) > 0
         # .frame-<t>.part: a result frame solve.sh was still copying in.
         is_tmp = child.is_dir() and (name.startswith(".sync_") or name.startswith(".frame-"))
-        if is_time or is_tmp:
+        if is_tmp or (is_time and not keep_times):
             shutil.rmtree(child, ignore_errors=True)
+        elif not keep_times and child.is_file() and _LOG_PART.match(name):
+            child.unlink(missing_ok=True)
+    if keep_times:
+        return
     for stale in (
         "postProcessing",
         "log.simpleFoam",
@@ -1414,9 +1468,33 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
     (out / "0").mkdir(exist_ok=True)
     (out / "constant").mkdir(exist_ok=True)
     (out / "system").mkdir(exist_ok=True)
-    _clean_prior_run(out)
+    restart = getattr(spec, "restart", None)
+    restart_from: float | None = None
+    if restart:
+        # Continued from the latest saved time: the case keeps its times (and its
+        # mesh, which those fields are on); only the new end is written.
+        restart_from = latest_saved_time(out)
+        if restart_from is None:
+            return {"ok": False, "error": "This run has no saved result to continue from."}
+        if float(spec.end_time) <= restart_from:
+            end_text = js_plain_float(float(spec.end_time))
+            return {
+                "ok": False,
+                "error": f"The new end ({end_text}) must be after the last saved time ({js_plain_float(restart_from)}).",
+            }
+        if spec.transient is not None:
+            every = restart_write_interval(float(spec.end_time) - restart_from, float(spec.transient.write_interval))
+            spec = dataclasses.replace(
+                spec, transient=dataclasses.replace(spec.transient, write_interval=every), write_interval=every
+            )
+    _clean_prior_run(out, keep_times=restart_from is not None)
 
-    poly_dst = _copy_polymesh(Path(spec.mesh_case_dir), out)
+    kept_mesh = out / "constant" / "polyMesh"
+    poly_dst: Path | None
+    if restart_from is not None and (kept_mesh / "owner").is_file():
+        poly_dst = kept_mesh
+    else:
+        poly_dst = _copy_polymesh(Path(spec.mesh_case_dir), out)
     patch_names = _patch_names(spec, poly_dst)
 
     speed_ref, d_hyd = resolve_speed_and_dhyd(spec)
@@ -1570,6 +1648,7 @@ RAS
             out / "system" / "controlDict",
             ctrl=spec.transient,  # type: ignore[arg-type]
             functions_text=functions_text,
+            restart=restart_from is not None,
         )
         write_fv_schemes_transient(
             out / "system" / "fvSchemes",
@@ -1588,7 +1667,7 @@ RAS
             out / "system" / "controlDict",
             "dictionary",
             "controlDict",
-            _steady_control_dict_body(spec.end_time, spec.write_interval, functions_text),
+            _steady_control_dict_body(spec.end_time, spec.write_interval, functions_text, restart_from=restart_from),
         )
         write_foam_dict(
             out / "system" / "fvSchemes",
@@ -1689,6 +1768,8 @@ RAS
     if settle_plan is not None:
         # What the settle stop watches as written, or why it is not written.
         sidecar["settle"] = settle_plan
+    if restart_from is not None:
+        sidecar["restart"] = {"from_time": restart_from, "end_time": float(spec.end_time)}
     if is_transient and spec.transient is not None:
         t = spec.transient
         sidecar["transient"] = {
@@ -1704,9 +1785,7 @@ RAS
             "n_non_orthogonal_correctors": t.n_non_orthogonal_correctors,
             "average_from": t.average_from,
         }
-    (out / "w27-case.json").write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
-
-    return {
+    report: dict[str, Any] = {
         "ok": True,
         "case_dir": str(out),
         "solver": sidecar["solver"],
@@ -1715,3 +1794,12 @@ RAS
         "turbulence": sidecar["turbulence"],
         "polyMesh_copied": poly_dst is not None,
     }
+    if restart_from is not None:
+        report["restart"] = dict(sidecar["restart"])
+        # The steps a run takes before its solver (pre_steps, e.g. potentialFoam's
+        # starting field) belong to a run written from the start: a continued run
+        # starts from its saved fields, so it never has any.
+        sidecar.pop("pre_steps", None)
+        report.pop("pre_steps", None)
+    (out / "w27-case.json").write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+    return report

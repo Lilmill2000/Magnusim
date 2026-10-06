@@ -101,6 +101,7 @@ STOP_MARKER = ".magnusim-stop"
 RAN_MARKER = ".magnusim-ran"
 STATUS_FILE = ".magnusim-run.json"
 NOT_AGAIN = "This case already ran. Write a new case folder for each run."
+NO_SAVED_TIME = "The case has no saved time to continue from."
 ROOT_UNUSABLE = "The WSL case folder setting is not usable"
 
 
@@ -491,9 +492,16 @@ def case_pre_steps(case_dir: str | Path) -> list[Any]:
     return raw
 
 
-def _has_results(case: Path, *, own_marker: bool) -> bool:
+def _has_saved_time(case: Path) -> bool:
+    return any(c.is_dir() and TIME_DIR_RE.match(c.name) and float(c.name) > 0 for c in case.iterdir())
+
+
+def _has_results(case: Path, *, own_marker: bool, restart: bool = False) -> bool:
     if not own_marker and (case / RAN_MARKER).exists():
         return True
+    if restart:
+        # A run continued from its latest saved time keeps its times.
+        return False
     for child in case.iterdir():
         if not child.is_dir():
             continue
@@ -512,6 +520,7 @@ def check_case_local(
     *,
     own_marker: bool = False,
     stop_strategy: str | None = None,
+    restart: bool = False,
 ) -> dict[str, Any]:
     """Every case check except "a registered app"; raises :class:`FoamCaseError`.
 
@@ -520,7 +529,9 @@ def check_case_local(
     exist. ``results`` None skips the results rules. ``own_marker`` ignores this
     run's own ``.magnusim-ran`` (the check after the prepare step).
     ``stop_strategy`` ``stopAt_writeNow`` needs the ``stopAt`` and
-    ``runTimeModifiable`` lines a graceful Stop relies on.
+    ``runTimeModifiable`` lines a graceful Stop relies on. ``restart`` (a run
+    continued from its latest saved time) needs a saved time and keeps its
+    times; the ``.magnusim-ran`` rule still holds.
     """
     case = check_case_paths(case_dir)
     if app is not None and not (isinstance(app, str) and APP_NAME_RE.match(app)):
@@ -551,8 +562,10 @@ def check_case_local(
     for index, tool, rel in needs:
         if not (case / rel).is_file():
             raise FoamCaseError("not_a_case", f"{rel} is missing (step {index}, {tool} needs it)")
-    if _has_results(case, own_marker=own_marker):
+    if _has_results(case, own_marker=own_marker, restart=restart):
         raise FoamCaseError("has_results", NOT_AGAIN)
+    if restart and app is not None and not _has_saved_time(case):
+        raise FoamCaseError("not_a_case", NO_SAVED_TIME)
     steps = check_steps(pre)
     out: dict[str, Any] = {"ok": True, "steps": steps, "write_format": None, "results": None}
     if app is not None:

@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # cfddesk solve pipeline (Phase 1). Placeholders replaced by solve_run.render_solve_script:
 #   __DST__ __WIN_OUT__ __NPROCS__ __APP__ __RUN_ID__ __KEEP_FRAMES__ __FRAME_FIELDS__
+#   __RESTART__
 # Ext4 ($DST) is the case source of truth. Windows gets residuals/postProcessing,
 # viewer VTPs, logs, and saved fields as each write interval completes so
 # Results can open mid-run. KEEP_FRAMES=all keeps every result frame (a
 # transient run); latest keeps only the last one (a steady run). The analysis's
-# launch spec decides.
+# launch spec decides. RESTART=1 continues a run: the case (its controlDict says
+# startFrom latestTime) keeps every saved time, a parallel run decomposes only the
+# latest one, and the log so far is kept as the next part (log.$APP.1, .2, ...,
+# oldest first) before the new log.$APP starts.
 # Emits MAGNUSIM_EVENT JSON lines (CFDDESK_EVENT still accepted by parsers); OpenFOAM stdout passes through.
 set -uo pipefail
 DST="__DST__"
@@ -16,6 +20,7 @@ APP="__APP__"
 KEEP_FRAMES="__KEEP_FRAMES__"
 # Fields whose file in a time folder means that result frame was written (launch spec).
 FRAME_FIELDS="__FRAME_FIELDS__"
+RESTART="__RESTART__"
 
 _has_frame() {
   local f
@@ -39,6 +44,14 @@ if [ ! -d "$WIN_OUT/constant/polyMesh" ]; then
   _evt "{\"event\":\"error\",\"code\":46,\"error\":\"missing polyMesh in $WIN_OUT\"}"
   _evt "{\"event\":\"result\",\"ok\":false,\"exit_code\":46}"
   exit 46
+fi
+
+if [ "$RESTART" = "1" ] && [ -f "$WIN_OUT/log.$APP" ]; then
+  n=1
+  while [ -e "$WIN_OUT/log.$APP.$n" ]; do n=$((n + 1)); done
+  if ! mv -f "$WIN_OUT/log.$APP" "$WIN_OUT/log.$APP.$n"; then
+    _evt "{\"event\":\"warning\",\"code\":\"log_kept\",\"message\":\"The earlier solver log could not be kept\"}"
+  fi
 fi
 
 _evt "{\"event\":\"stage\",\"stage\":\"copy_to_wsl\"}"
@@ -150,7 +163,9 @@ live_sync_loop() {
 
 if [ "$NPROCS" -gt 1 ]; then
   _evt "{\"event\":\"stage\",\"stage\":\"decompose\"}"
-  openfoam2606 bash -c "cd '$DST' && decomposePar -force" 2>&1 | tee log.decomposePar
+  DECOMPOSE="decomposePar -force"
+  [ "$RESTART" = "1" ] && DECOMPOSE="decomposePar -force -latestTime"
+  openfoam2606 bash -c "cd '$DST' && $DECOMPOSE" 2>&1 | tee log.decomposePar
   EC=${PIPESTATUS[0]}
   _evt "{\"event\":\"stage\",\"stage\":\"decompose_end\",\"exit_code\":$EC}"
   if [ "$EC" -ne 0 ]; then

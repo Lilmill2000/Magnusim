@@ -98,6 +98,14 @@ export async function simStart(scope?: string): Promise<unknown> {
   return fn();
 }
 
+/** Continue the selected finished or stopped run (F6): more iterations, or on to a later end time. */
+export async function simContinue(ask: { extra_iterations?: number; end_time?: number }, scope?: string): Promise<unknown> {
+  if (scope) window.__CFD_RUN_SCOPE__ = scope;
+  const fn = window.__CFD_SIM_CONTINUE__;
+  if (!fn) throw new Error('Continue is not ready yet.');
+  return fn(ask);
+}
+
 export async function simStop(): Promise<unknown> {
   const fn = window.__CFD_SIM_STOP__;
   if (!fn) return undefined;
@@ -206,8 +214,30 @@ export interface RunPreview {
   control?: Record<string, unknown>;
 }
 
+/** The run panel's Continue (F6) for a finished or stopped run. */
+export interface RunContinueState {
+  visible: boolean;
+  enabled: boolean;
+  /** Another job runs: Continue queues this run (its button says "Add to queue"). */
+  queue?: boolean;
+  /** Continues to an end time in seconds (else more iterations). */
+  transient: boolean;
+  /** The latest saved result it continues from (iteration or seconds); null when none. */
+  from: number | null;
+  /** The default: more iterations, or the end time. */
+  value: number | null;
+  /** A steady run's write interval, in iterations. */
+  write_interval: number | null;
+  /** Why it cannot continue now, else ''. */
+  reason: string;
+}
+
 /** What runtime.publishRunState dispatches as `cfd:run-state` for the selected run. */
 export interface RunState {
+  /** Continue (F6); absent in a state published before it existed. */
+  cont?: RunContinueState;
+  /** What went wrong but did not stop the run (the runner's warnings). */
+  warnings?: string[];
   has_run: boolean;
   run_id: string;
   name: string;

@@ -53,7 +53,7 @@ def test_template_exists_and_has_placeholders():
     p = solve_template_path()
     assert p.is_file()
     text = p.read_text(encoding="utf-8")
-    for tok in ("__DST__", "__WIN_OUT__", "__NPROCS__", "__APP__", "__RUN_ID__"):
+    for tok in ("__DST__", "__WIN_OUT__", "__NPROCS__", "__APP__", "__RUN_ID__", "__RESTART__"):
         assert tok in text
     assert "MAGNUSIM_EVENT" in text
     assert 'echo "MAGNUSIM_EVENT' in text  # emit preferred brand
@@ -238,6 +238,17 @@ def test_render_solve_script_uses_the_launch_spec():
     with pytest.raises(ValueError):
         render_solve_script(app="simpleFoam", keep_frames="some", **kw)
     assert 'FRAME_FIELDS="T"' in body
+
+
+def test_render_solve_script_restart():
+    from cfddesk.wsl.solve_run import render_solve_script
+
+    kw = {"dst": "/d", "win_out": "/w", "n_procs": 2, "run_id": "r1", "app": "simpleFoam", "frame_fields": ("U", "p")}
+    assert 'RESTART="0"' in render_solve_script(**kw)
+    body = render_solve_script(restart=True, **kw)
+    assert 'RESTART="1"' in body and "__RESTART__" not in body
+    assert 'decomposePar -force -latestTime' in body
+    assert 'mv -f "$WIN_OUT/log.$APP" "$WIN_OUT/log.$APP.$n"' in body
 
 
 def test_render_solve_script_needs_the_frame_fields():

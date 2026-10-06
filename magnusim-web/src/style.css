@@ -2036,6 +2036,13 @@ select.fp-select {
   width: auto;
   flex: 1;
 }
+/* Continue a finished or stopped run (RunControl ContinueRun). */
+.sim-continue .sim-run-row {
+  align-items: center;
+}
+.sim-continue .sim-run-row .bc-value-row {
+  flex: 2;
+}
 .sim-finished {
   margin-top: 10px;
   padding-top: 8px;

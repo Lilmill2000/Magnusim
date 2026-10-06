@@ -17,7 +17,6 @@ from typing import Any
 
 from .monitors import FORCE_COEFFICIENT_KEYS, FORCE_QUANTITY_KEYS, MOMENT_COEFFICIENT_KEYS
 
-_TIME_DIR = re.compile(r"\d+(\.\d+)?(e[-+]?\d+)?", re.I)
 _TOKEN = re.compile(r"\([^)]*\)|\S+")
 
 
@@ -51,19 +50,15 @@ def parse_dat(text: str) -> tuple[list[str], list[list[float]]]:
 def read_dat(case_dir: Path, key: str, filename: str) -> list[dict[str, float]]:
     """postProcessing/<key>/<time>/<filename> as rows of ``{column: value}``,
     every time folder merged: a restart's rows supersede the earlier rows from
-    its first time on."""
+    its first time on (a restart from the same time writes <stem>_<time>.dat
+    beside the first file: magnusim_sdk.foam.restart_dat_files)."""
+    from magnusim_sdk.foam import restart_dat_files
+
     folder = Path(case_dir) / "postProcessing" / key
     if not folder.is_dir():
         return []
-    try:
-        times = sorted((d.name for d in folder.iterdir() if _TIME_DIR.fullmatch(d.name)), key=float)
-    except OSError:
-        return []
     merged: list[dict[str, float]] = []
-    for t in times:
-        f = folder / t / filename
-        if not f.is_file():
-            continue
+    for f in restart_dat_files(folder, filename.removesuffix(".dat")):
         try:
             columns, rows = parse_dat(f.read_text(encoding="utf-8", errors="replace"))
         except OSError:

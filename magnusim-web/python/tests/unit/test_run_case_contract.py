@@ -199,6 +199,25 @@ def test_transient_arg():
         run_case.transient_arg("[1]")
 
 
+def test_restart_arg():
+    assert run_case.restart_arg("") is None and run_case.restart_arg(None) is None
+    assert run_case.restart_arg("null") is None
+    assert run_case.restart_arg('{"end_time": 200}') == {"end_time": 200.0, "write_interval": None}
+    assert run_case.restart_arg('{"end_time": 2.5, "write_interval": 0.1}') == {"end_time": 2.5, "write_interval": 0.1}
+    for bad in ("[1]", "{}", '{"end_time": 0}', '{"end_time": true}', '{"end_time": 5, "write_interval": "x"}'):
+        with pytest.raises(ValueError):
+            run_case.restart_arg(bad)
+
+
+def test_run_inputs_carry_the_restart(tmp_path: Path):
+    from cfddesk.project.run_inputs import RunInputs
+
+    assert RunInputs.__dataclass_fields__["restart"].default is None
+    inputs = run_case.run_inputs(tmp_path, run_id="r1", require_mesh=False, restart={"end_time": 300.0, "write_interval": 50.0})
+    assert inputs.restart == {"end_time": 300.0, "write_interval": 50.0}
+    assert run_case.run_inputs(tmp_path, run_id="r1", require_mesh=False).restart is None
+
+
 def test_exit_codes():
     assert run_case.exit_code({"ok": True}) == 0
     assert run_case.exit_code({"ok": False, "error": "x"}) == 1

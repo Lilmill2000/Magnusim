@@ -34,6 +34,9 @@ class RunInputs:
     study: dict[str, Any] = field(default_factory=dict)
     run: dict[str, Any] = field(default_factory=dict)
     transient_override: dict[str, Any] | None = None
+    # A run continued from its latest saved time: {"end_time", "write_interval"}
+    # (run_case.restart_arg); None for a run written from the start.
+    restart: dict[str, Any] | None = None
 
 
 def gather_run_inputs(
@@ -46,12 +49,14 @@ def gather_run_inputs(
     require_mesh: bool = True,
     transient_override: dict | None = None,
     time_dependency: str | None = None,
+    restart: dict | None = None,
 ) -> RunInputs:
     """Everything a run's analysis needs, read from the project folder.
 
     ``time_dependency`` is the decision the caller already made (Node passes
     the run's). Without it: transient when transient settings are given, else
-    the run's stamp, else its study's.
+    the run's stamp, else its study's. ``restart`` continues the run from its
+    latest saved time (``RunInputs.restart``).
     """
     from cfddesk.project.paths import (
         assemble_study_bc_defaults,
@@ -122,6 +127,7 @@ def gather_run_inputs(
         study=study_doc(root, sim_id),
         run={k: v for k, v in dict(run).items() if k != "dir"},
         transient_override=transient_override,
+        restart=dict(restart) if restart else None,
     )
 
 

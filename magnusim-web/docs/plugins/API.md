@@ -1446,6 +1446,8 @@ interface RunState
 
 What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 
+- `cont?: RunContinueState | undefined`: Continue (F6); absent in a state published before it existed.
+- `warnings?: string[] | undefined`: What went wrong but did not stop the run (the runner's warnings).
 - `has_run: boolean`
 - `run_id: string`
 - `name: string`
@@ -1876,6 +1878,14 @@ parse_surface_field_value(text: str) -> dict
 ```
 
 One ``surfaceFieldValue.dat``: ``{area, faces, columns, rows}``.
+
+#### restart_dat_files
+
+```python
+restart_dat_files(folder: Path, stem: str) -> list[Path]
+```
+
+A function object's ``<stem>.dat`` files in each start-time folder of ``folder`` (``postProcessing/<name>``), oldest first.
 
 #### read_surface_field_value
 

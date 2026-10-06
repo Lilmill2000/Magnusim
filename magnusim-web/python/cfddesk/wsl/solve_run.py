@@ -67,13 +67,16 @@ def render_solve_script(
     run_id: str,
     keep_frames: str = "latest",
     frame_fields: tuple[str, ...] | list[str],
+    restart: bool = False,
 ) -> str:
     """Substitute placeholders in ``templates/solve.sh`` (LF, no BOM).
 
     ``app`` is the program the analysis's launch spec names; ``keep_frames``
     (``all`` | ``latest``) which result frames come back to Windows;
     ``frame_fields`` the fields whose files mark a written frame (the
-    launch spec's).
+    launch spec's); ``restart`` continues a run from its latest saved time
+    (the saved times stay, a parallel run decomposes the latest only, the
+    log so far is kept as log.<app>.N).
     """
     _check_names(app)
     if keep_frames not in ("all", "latest"):
@@ -93,6 +96,7 @@ def render_solve_script(
         .replace("__KEEP_FRAMES__", keep_frames)
         .replace("__FRAME_FIELDS__", " ".join(fields))
         .replace("__RUN_ID__", str(run_id))
+        .replace("__RESTART__", "1" if restart else "0")
     )
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -107,6 +111,7 @@ def write_solve_script(
     run_id: str,
     keep_frames: str = "latest",
     frame_fields: tuple[str, ...] | list[str],
+    restart: bool = False,
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,6 +123,7 @@ def write_solve_script(
         run_id=run_id,
         keep_frames=keep_frames,
         frame_fields=frame_fields,
+        restart=restart,
     )
     path.write_bytes(body.encode("utf-8"))
     return path
@@ -134,12 +140,14 @@ def start_solve(
     process_names: tuple[str, ...] | None = None,
     frame_fields: tuple[str, ...],
     script_path: Path | None = None,
+    restart: bool = False,
 ) -> subprocess.Popen:
     """Render solve.sh and spawn ``wsl -d <distro> -- bash <script>``.
 
     The Windows case at ``case_dir`` is copied into WSL by the bash template
     (same as historic ``buildSolveScript``). Caller should have written the
-    case (e.g. via ``prepare_run``) before calling.
+    case (e.g. via ``prepare_run``) before calling. ``restart``: the case
+    continues from its latest saved time (render_solve_script).
     """
     case_dir = Path(case_dir).resolve()
     if not case_dir.is_dir():
@@ -165,6 +173,7 @@ def start_solve(
         run_id=run_id,
         keep_frames=keep_frames,
         frame_fields=frame_fields,
+        restart=restart,
     )
     sh_wsl = windows_to_wsl_path(script_path)
     argv = ["wsl", "-d", get_wsl_distro(), "--", "bash", sh_wsl]

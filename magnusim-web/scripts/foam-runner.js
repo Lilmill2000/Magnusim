@@ -55,8 +55,9 @@
  *   n_procs     the ranks of parallel steps and of the solver; slots_hint the saved
  *               WSL MPI slot count (the relay clamps by WSL's own count).
  *   solver      null, or {app, keep_frames, process_names, stop_strategy, frame_fields, parallel,
- *               analysis?}; analysis (a core solve) names the analysis whose log parser
- *               the relay uses.
+ *               analysis?, restart?}; analysis (a core solve) names the analysis whose log parser
+ *               the relay uses; restart true continues the case from its latest saved time
+ *               (the relay keeps its times; solve.sh's restart mode).
  *   owner, hooks  solve hooks, only with a solver.
  *   At least one of prepare, pre and solver.
  * The record gets log_path, the run's job log (spawnJob's jobLog), at the spawn.
@@ -68,7 +69,8 @@
  * ranks {n_procs}; phase {phase, seconds}; progress {time, n_steps, residuals,
  * co_max?, co_mean?, delta_t?, points} (at most one per 250 ms, plus one at each
  * stage change and at the end; a `solve` run's also carries open, the step the
- * solver is on); time_saved {t}; warning {code, message}; a `solve` run's relay {pid}
+ * solver is on); time_saved {t}; warning {code, message} (solve.sh's error codes 46-48 and its
+ * warning codes, each with the host's own text); a `solve` run's relay {pid}
  * (its relay's pid, for its Run panel);
  * end {status, error, code, result}. None carries a path, a pid (but a `solve`
  * run's relay), a log line or exception text.
@@ -191,6 +193,11 @@ const WARNING_TEXT = Object.freeze({
   46: 'The case has no mesh (constant/polyMesh)',
   47: 'The case copy could not be opened in WSL',
   48: 'A result frame could not be copied back',
+});
+
+/** solve.sh warning codes (its `warning` events) the frame is told about, with the host's text. */
+const SOLVE_WARNING_TEXT = Object.freeze({
+  log_kept: 'The earlier solver log could not be kept',
 });
 
 /** What the relay's gate refusals say when it gave no text of its own. */
@@ -505,6 +512,7 @@ export function buildFoamSpec(plan) {
         stop_strategy: String(s.stop_strategy || 'kill'),
         parallel: String(s.parallel || 'none'),
         ...(s.analysis ? { analysis: String(s.analysis) } : {}),
+        ...(s.restart === true ? { restart: true } : {}),
       }
     : null;
   const p = plan.prepare;
@@ -870,6 +878,12 @@ export function relayEvent(id, entry, ev) {
     case 'error': {
       const code = Number(ev.code);
       const message = /** @type {any} */ (WARNING_TEXT)[code];
+      if (message) deliver(id, { event: 'warning', code, message });
+      return;
+    }
+    case 'warning': {
+      const code = String(ev.code || '');
+      const message = Object.prototype.hasOwnProperty.call(SOLVE_WARNING_TEXT, code) ? /** @type {any} */ (SOLVE_WARNING_TEXT)[code] : null;
       if (message) deliver(id, { event: 'warning', code, message });
       return;
     }

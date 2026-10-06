@@ -47,13 +47,17 @@ def run_inputs(
     n_procs: int = 1,
     transient: dict[str, Any] | None = None,
     require_mesh: bool = True,
+    restart: dict[str, Any] | None = None,
 ) -> Any:
     """What the core gathers for a run (``RunInputs``): the study's documents,
     its mesh, the run's settings and the analysis it solves with.
 
     ``transient`` holds the run's transient settings (they win over the stored
     ones); ``time_dependency`` is the run's decision ("Steady-state" or
-    "Transient"; None: the run's stamp, else its study's).
+    "Transient"; None: the run's stamp, else its study's). ``restart``
+    (:func:`restart_arg`) continues the run from its latest saved time: the
+    case keeps its saved times, starts from the latest and runs to
+    ``restart["end_time"]``.
     """
     from cfddesk.project.run_inputs import gather_run_inputs
 
@@ -66,6 +70,7 @@ def run_inputs(
         require_mesh=require_mesh,
         transient_override=transient,
         time_dependency=time_dependency or None,
+        restart=restart,
     )
 
 
@@ -329,3 +334,33 @@ def transient_arg(text: str | None) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         raise ValueError("--transient must be a JSON object")
     return value
+
+
+def restart_arg(text: str | None) -> dict[str, Any] | None:
+    """A prepare job's ``--restart`` value (JSON text): ``{"end_time", "write_interval"?}``
+    for a run continued from its latest saved time (``end_time`` the new end, in the
+    run's time unit; ``write_interval`` how often it saves, None to keep the run's),
+    or None when empty. Raises ValueError for anything else."""
+    import math
+
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    value = json.loads(raw)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("--restart must be a JSON object")
+
+    def positive(key: str) -> float | None:
+        v = value.get(key)
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+            raise ValueError(f"--restart {key} must be a number above 0")
+        return float(v)
+
+    end = positive("end_time")
+    if end is None:
+        raise ValueError("--restart needs end_time")
+    return {"end_time": end, "write_interval": positive("write_interval")}

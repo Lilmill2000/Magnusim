@@ -143,6 +143,7 @@ declare global {
     __CFD_MESH_COPY__?: import('../panels/legacyBridge').MeshCopyState;
     __CFD_SIM_START__?: () => Promise<unknown>;
     __CFD_SIM_STOP__?: () => Promise<unknown>;
+    __CFD_SIM_CONTINUE__?: (ask: { extra_iterations?: number; end_time?: number }) => Promise<unknown>;
     __CFD_REFRESH_TREE__?: () => void;
     __CFD_RUN_GATE__?: (
       runId?: string,

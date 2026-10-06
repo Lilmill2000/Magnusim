@@ -567,12 +567,14 @@ export function persistRunAt(projectDirPath, simId, run, opts) {
       }
     } catch (_) {}
     const st = String(rec.stage || '');
-    if (
-      (Number(rec.n_saved_times) > 0 ||
-        Number(rec.last_saved_iteration) > 0 ||
-        Number(rec.sim_time) > 0) &&
-      (st === 'starting' || st === 'decompose' || !st)
-    ) {
+    // A continued run (F6) starting again: its frames are from before; it solves when it says so.
+    const from = rec.continued && typeof rec.continued === 'object' ? Number(rec.continued.from_time) || 0 : null;
+    const since = from === null ? 0 : from;
+    const progressed =
+      (from === null && Number(rec.n_saved_times) > 0) ||
+      Number(rec.last_saved_iteration) > since ||
+      Number(rec.sim_time) > since;
+    if (progressed && (st === 'starting' || st === 'decompose' || !st)) {
       rec.stage = 'solve';
     }
   }

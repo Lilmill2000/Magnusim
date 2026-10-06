@@ -19,7 +19,7 @@ import {
 } from '../w21-mesh-generate.js';
 import { handleW26Api } from '../w26-mesh-refinements.js';
 import { handleResultControlsApi } from '../w22-area-average.js';
-import { handleW27Api, startSolve } from '../w27-solve.js';
+import { handleW27Api, startQueuedSolve, startSolve } from '../w27-solve.js';
 import { scheduleWslPrune } from '../wsl-prune.js';
 import { computeSlotHolder, holderIsRow, setSlotReleaseHook } from '../compute-slot.js';
 import { rediscoverAtBoot } from '../compute-rediscover.js';
@@ -131,13 +131,8 @@ function wireComputeQueue(api) {
       if (kicked.ok) api.applyKickUpdate(kicked.bodyExtra);
       return startResultFromEngine(kicked);
     },
-    startSolve: async (item) => startResultFromEngine(
-      await startSolve({
-        projectId: item.project_id || null,
-        runId: item.run_id || null,
-        simulationId: item.simulation_id || null,
-      }),
-    ),
+    // A queued Start, or a queued Continue (F6: the row's settings.continue).
+    startSolve: async (item) => startResultFromEngine(await startQueuedSolve(item)),
     live: computeQueueLive,
   });
 }

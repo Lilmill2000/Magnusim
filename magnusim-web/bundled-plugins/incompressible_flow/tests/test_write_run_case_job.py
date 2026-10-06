@@ -114,7 +114,7 @@ def test_the_job_is_registered_by_the_plugin():
     job = jobs.get(JOB)
     assert jobs.owner(JOB) == "incompressible_flow"
     assert (job.tool, job.scope, job.python) == ("incompressible_flow/jobs/write_run_case.py", "study", "core")
-    assert job.args_from_params == ("run_id", "mesh_id", "time_dependency", "n_procs", "transient")
+    assert job.args_from_params == ("run_id", "mesh_id", "time_dependency", "n_procs", "transient", "restart")
     assert get_hub().job_package(JOB) == PLUGIN_ROOT
 
 
@@ -274,6 +274,31 @@ def test_a_run_without_its_mesh_fails(tmp_path: Path):
     project, case = _project(tmp_path)
     code, _stages, _other, answer = _run(["--run-id", "r1"], project=project, case=case)
     assert code == 1 and answer["ok"] is False and answer["error"]
+    assert not case.exists()
+
+
+def test_the_job_continues_a_run_with_restart(tmp_path: Path):
+    project, case = _project(tmp_path)
+    base = ["--run-id", "r1", "--n-procs", "1", "--no-require-mesh"]
+    assert _run(base, project=project, case=case)[0] == 0
+    (case / "100").mkdir()
+    for f in ("U", "p"):
+        (case / "100" / f).write_text("saved", encoding="utf-8")
+    code, stages, _other, answer = _run([*base, "--restart", json.dumps({"end_time": 300, "write_interval": 100})], project=project, case=case)
+    assert code == 0, answer
+    assert stages == ["inputs", "mesh", "fields", "written"]
+    assert answer["restart"] == {"from_time": 100.0, "end_time": 300.0}
+    assert (case / "100" / "U").read_text(encoding="utf-8") == "saved"
+    control = (case / "system" / "controlDict").read_text(encoding="utf-8")
+    assert "startFrom       latestTime;" in control and "endTime         300;" in control
+    assert json.loads((case / "w27-case.json").read_text(encoding="utf-8"))["prepare_report"]["restart"]["from_time"] == 100.0
+
+
+@pytest.mark.parametrize("text", ["[1]", "{}", '{"end_time": 0}', '{"end_time": "x"}', '{"end_time": 10, "write_interval": -1}'])
+def test_bad_restart_text_is_refused(tmp_path: Path, text: str):
+    project, case = _project(tmp_path)
+    code, _stages, _other, answer = _run(["--run-id", "r1", "--restart", text], project=project, case=case)
+    assert code == 2 and answer["error"].startswith("restart: ")
     assert not case.exists()
 
 

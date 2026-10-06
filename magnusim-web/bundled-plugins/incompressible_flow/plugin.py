@@ -29,12 +29,13 @@ KEY = "incompressible_flow"
 def register(hub: Any) -> None:
     # The prepare step of this plugin's runs (LaunchSpec.prepare_job, API 1.5): it
     # writes a run's case into the run's own case folder, on the core's Python.
+    # Its `restart` param continues a run from its latest saved time.
     hub.register_job(
         JobKind(
             "incompressible_flow.write_run_case",
             "incompressible_flow/jobs/write_run_case.py",
             "study",
-            ("run_id", "mesh_id", "time_dependency", "n_procs", "transient"),
+            ("run_id", "mesh_id", "time_dependency", "n_procs", "transient", "restart"),
             python="core",
         ),
         plugin=KEY,

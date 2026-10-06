@@ -2,6 +2,7 @@
 
     python incompressible_flow/jobs/write_run_case.py --run-id <id> [--mesh-id <id>]
         [--time-dependency Steady-state|Transient] [--n-procs N] [--transient <json>]
+        [--restart <json>]
 
 The prepare step of an Incompressible Flow run (its ``LaunchSpec.prepare_job``).
 The host runs it on the core's Python with MAGNUSIM_PROJECT_DIR,
@@ -12,7 +13,9 @@ cannot point it anywhere else), gathers the run's inputs through
 ``validate_ready`` and writes the case with ``run_case.write_case`` (the
 analysis's writer inside the ``case.write`` hooks, which stamps
 ``w27-case.json``). What it wrote is kept in ``w27-case.json`` as
-``prepare_report``.
+``prepare_report``. ``--restart {"end_time", "write_interval"?}`` continues the
+run from its latest saved time: the case keeps its saved times, and its
+controlDict starts from the latest one and runs to the new end.
 
 Stage lines (MAGNUSIM_EVENT): ``inputs``, ``mesh``, ``fields``, ``written``.
 The last line is the answer as JSON. Exit codes: 0 written, 1 failed, 2 refused
@@ -67,6 +70,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--n-procs", type=int, default=1)
     p.add_argument("--transient", default=None, help="The run's transient settings as JSON text")
     p.add_argument(
+        "--restart",
+        default=None,
+        help='Continue the run from its latest saved time: JSON {"end_time": ..., "write_interval": ...}',
+    )
+    p.add_argument(
         "--require-mesh",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -83,6 +91,10 @@ def main(argv: list[str] | None = None) -> int:
         transient = run_case.transient_arg(args.transient)
     except ValueError as exc:
         return _answer({"ok": False, "error": f"transient: {exc}"}, run_case.EXIT_REFUSED)
+    try:
+        restart = run_case.restart_arg(args.restart)
+    except ValueError as exc:
+        return _answer({"ok": False, "error": f"restart: {exc}"}, run_case.EXIT_REFUSED)
     simulation_id = os.environ.get("MAGNUSIM_SIMULATION_ID") or None
     mesh_id = args.mesh_id or None
 
@@ -95,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         n_procs=args.n_procs,
         transient=transient,
         require_mesh=args.require_mesh,
+        restart=restart,
     )
     emit("stage", stage="inputs")
     load_all()

@@ -16957,18 +16957,20 @@ function solveEtaMs(run) {
   const transientRun = runXAxisIsSeconds(rec);
   // W30 transient: progress is physical time / simulation time. The step
   // size adapts, so this is a rolling estimate rather than a count.
+  // A continued run (F6) measures its pace from where it continued.
+  const from = Number(rec.continued && rec.continued.from_time) || 0;
   if (transientRun) {
     const t = Number(rec.sim_time) || 0;
     let end = Number(rec.transient && rec.transient.end_time) || 0;
     if (!(end > 0) && sameViewed) end = Number(w27.transient && w27.transient.end_time) || 0;
-    if (!(t > 0) || !(end > t)) return null;
-    if (t / end < 0.01 && elapsed < 15000) return null;
-    return ((end - t) / t) * elapsed;
+    if (!(t > from) || !(end > t)) return null;
+    if ((t - from) / (end - from) < 0.01 && elapsed < 15000) return null;
+    return ((end - t) / (t - from)) * elapsed;
   }
   const it = Number(rec.iteration) || 0;
   const end = Number(rec.endTime) || (sameViewed && w27.endTime) || 0;
-  if (it < 3 || end <= it) return null;
-  const per = elapsed / it;
+  if (it - from < 3 || end <= it) return null;
+  const per = elapsed / (it - from);
   if (!Number.isFinite(per) || per < 30) return null;
   return (end - it) * per;
 }
@@ -17159,8 +17161,10 @@ function solveElapsedMs(run) {
   if (!Number.isFinite(start)) return null;
   const live = rec.status === 'running' || rec.status === 'starting';
   const end = !live && rec.finished_at ? Date.parse(rec.finished_at) : Date.now();
-  if (!Number.isFinite(end)) return Date.now() - start;
-  return Math.max(0, end - start);
+  // A continued run (F6): the time its earlier parts took, then this one's.
+  const before = (Number(rec.continued && rec.continued.elapsed_before_s) || 0) * 1000;
+  if (!Number.isFinite(end)) return before + Date.now() - start;
+  return before + Math.max(0, end - start);
 }
 
 function liveSolveRecord() {
@@ -29260,7 +29264,8 @@ function liveSolveRunId() {
   );
 }
 
-function enqueueSolveJob(runId) {
+/** Queue the run's solve; `cont` (F6) queues a Continue of it ({extra_iterations} or {end_time}). */
+function enqueueSolveJob(runId, cont) {
   const rec = typeof findRunRecord === 'function' ? findRunRecord(runId) : null;
   const id = String((rec && (rec.id || rec.run_id)) || runId || '').trim();
   if (!id) return null;
@@ -29302,6 +29307,7 @@ function enqueueSolveJob(runId) {
     simulation_id: (rec && rec.simulation_id) || (typeof currentStudyId === 'function' ? currentStudyId() : null),
     project_id: typeof currentProjectId === 'function' ? currentProjectId() : null,
     name: (rec && rec.name) || 'Run',
+    ...(cont ? { settings: { continue: cont } } : {}),
   };
   return fetchComputeQueue('/api/compute-queue', {
     method: 'POST',
@@ -32029,7 +32035,8 @@ function computeRunState() {
   });
   const canStart = !!(rec && (rec.id || rec.run_id) && !running && !done && meshReady && !computeBusy && setupIssue === null);
 
-  const start = { visible: !!rec && !done && !running, enabled: false, label: 'Start', title: 'Start the solver on this run' };
+  // A finished run's queued Continue (F6) shows "Remove from queue" too.
+  const start = { visible: !!rec && ((!done && !running) || queuedHere), enabled: false, label: 'Start', title: 'Start the solver on this run' };
   if (queuedHere) {
     Object.assign(start, { enabled: true, label: 'Remove from queue', title: 'Remove this run from the queue' });
   } else if (canQueue && (computeBusy || meshSoon)) {
@@ -32076,10 +32083,13 @@ function computeRunState() {
     const qRow = (jobQueue.items || []).find((r) => r && r.kind === 'solve' && String(r.run_id) === runKey);
     const place = qRow && Number(qRow.position) > 1 ? ' Number ' + qRow.position + ' in the queue.' : '';
     const meshName = (meshRec && meshRec.name) || (rec && rec.mesh_name) || '';
+    const continues = !!(qRow && qRow.settings && qRow.settings.continue);
     want(
       (meshSoon
         ? 'Queued. Starts after its mesh' + (meshName ? ' "' + meshName + '"' : '') + ' is generated.'
-        : 'Queued. Starts when the current job finishes.') + place,
+        : continues
+          ? 'Queued. Continues when the current job finishes.'
+          : 'Queued. Starts when the current job finishes.') + place,
     );
   }
   else if (canQueue && (computeBusy || meshSoon)) {
@@ -32199,6 +32209,10 @@ function computeRunState() {
 
   const trSettings = transient ? runCatalog.transient || transientSettingsFor(rec) : transientSettingsFor(rec);
   return {
+    // Continue (F6): a finished or stopped run solves on from its latest saved result.
+    cont: continueStateFor(rec, run, { running, computeBusy, queued: queuedHere }),
+    // What went wrong but did not stop the run (the runner's warnings), in its words.
+    warnings: run && Array.isArray(run.warnings) ? run.warnings.map((w) => String((w && w.message) || '')).filter(Boolean) : [],
     has_run: !!rec,
     run_id: rec ? String(rec.id || rec.run_id || '') : '',
     name: (rec && rec.name) || (run && run.name) || 'Run',
@@ -32360,6 +32374,46 @@ function runConvergedBadge(rec) {
       : '';
   const title = 'Converged' + (at ? ' ' + at : '') + (c.by === 'monitor' && c.text ? ': ' + String(c.text) : '');
   return '<span class="tree-converged" data-run-converged="1" title="' + escapeHtml(title) + '">Converged</span>';
+}
+
+/**
+ * The run panel's Continue (F6) for a finished or stopped run: where it continues
+ * from (the latest saved result on disk, from the server), the default amount (a
+ * steady run: its last iteration count, else 100; a transient run: its end plus the
+ * span it last ran) and why it cannot continue now.
+ */
+function continueStateFor(rec, run, ctx) {
+  const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '' };
+  const status = String((run && run.status) || (rec && rec.status) || '');
+  if (!rec || !run || ctx.running || !['done', 'stopped', 'converged'].includes(status)) return off;
+  const transient = runXAxisIsSeconds(run);
+  const raw = run.continue_from !== undefined ? run.continue_from : Number(run.last_saved_iteration) > 0 ? run.last_saved_iteration : null;
+  const from = raw !== null && raw !== undefined && Number.isFinite(Number(raw)) ? Number(raw) : null;
+  const before = run.continued && typeof run.continued === 'object' ? Number(run.continued.from_time) || 0 : 0;
+  let value;
+  let every = null;
+  if (transient) {
+    const end = Math.max(Number(run.transient && run.transient.end_time) || 0, from || 0);
+    const span = end - before;
+    value = Number((end + (span > 0 ? span : 1)).toPrecision(10));
+  } else {
+    const end = Number(run.endTime) || 0;
+    const span = Math.round(end - before);
+    value = span > 0 ? span : 100;
+    every = Number(run.writeInterval) > 0 ? Number(run.writeInterval) : null;
+  }
+  const reason = from === null ? "This run can't continue: its case folder has no saved result. Add a run to solve again." : '';
+  return {
+    visible: true,
+    // While another job runs a Continue queues, as Start does; a queued one is removed with Start's button.
+    enabled: from !== null && !ctx.queued && !runCatalog.starting,
+    queue: from !== null && !ctx.queued && !!ctx.computeBusy,
+    transient,
+    from,
+    value,
+    write_interval: every,
+    reason,
+  };
 }
 
 /** D26: the run panel's line for a run made on an older version of its linked geometry, else ''. */
@@ -32892,7 +32946,15 @@ async function refreshRunCatalog() {
   return j;
 }
 
-async function startSolveClient() {
+/**
+ * Start the selected run, or (opts.cont, F6) continue it from its latest saved result:
+ * {extra_iterations} for a steady run, {end_time} for a transient one. A Continue that
+ * cannot start leaves the run as it was (it is never marked failed here) and is never
+ * queued.
+ * @param {{ cont?: { extra_iterations?: number, end_time?: number } }} [opts]
+ */
+async function startSolveClient(opts) {
+  const cont = opts && opts.cont ? opts.cont : null;
   if (!keepResultsWhileStartingRun({
     resultsOpen: !!resultsViewOpen,
     resultsRunId,
@@ -32969,6 +33031,7 @@ async function startSolveClient() {
   }
   if (cancelled()) return endWithoutStart('Stopped before it started.', true);
   let runId = runCatalog.selected_run_id;
+  if (!runId && cont) return endWithoutStart('Select the run to continue.');
   if (!runId) {
     const draft = (runCatalog.runs || []).find((r) => r.status === 'draft' || r.status === 'failed' || r.status === 'stopped');
     runId = draft && (draft.id || draft.run_id);
@@ -32979,13 +33042,16 @@ async function startSolveClient() {
   }
   start.run_id = runId;
   const rec = findRunRecord(runId);
-  if (rec && rec.status === 'done') {
+  if (!cont && rec && rec.status === 'done') {
     return failStart('This run already finished. Create a new run to solve again.');
   }
   try { clearStaleSolveLive(runId); } catch (_) {}
   const meshId = resolveRunMeshForQueue(rec) || (rec && rec.mesh_id) || '';
   const waitForMesh = !!(meshId && !runMeshIsReady(meshId) && meshWillBeReadySoon(meshId));
   const sameRunStillSolving = runStatusIsSolving(rec) && String(liveSolveRunId() || '') === String(runId);
+  // A Continue of a run that solves now is refused; one while another job runs queues as a Start does.
+  if (cont && sameRunStillSolving) return endWithoutStart('This run is already solving.');
+  const queuedText = cont ? 'Queued. Continues when the current job finishes.' : 'Queued. Starts when the current job finishes.';
   const shouldQueue = typeof startShouldEnqueue === 'function'
     ? startShouldEnqueue({
         otherJobRunning: computeJobBlocksStart(runId),
@@ -33010,7 +33076,7 @@ async function startSolveClient() {
       );
     }
     if (cancelled()) return endWithoutStart('Stopped before it started.', true);
-    const queued = await enqueueSolveJob(runId);
+    const queued = await enqueueSolveJob(runId, cont);
     if (!queued) {
       const again = runSetupIssue(rec, { mesh: false });
       return failStart(
@@ -33021,7 +33087,7 @@ async function startSolveClient() {
     showHint(
       waitForMesh && meshId && !runMeshIsReady(meshId)
         ? 'Queued. Starts after its mesh finishes.'
-        : 'Queued. Starts when the current job finishes.'
+        : queuedText
     );
     try { syncJobQueueChrome(); } catch (_) {}
     try { syncSimControlPanel(); } catch (_) {}
@@ -33031,21 +33097,36 @@ async function startSolveClient() {
   // From here a Stop also tells the server, with this click's start_id.
   start.posted = true;
   try {
-    const posted = await postRunStart({
-      run_id: runId,
-      project_id: currentProjectId() || undefined,
-      endTime: runCatalog.endTime,
-      writeInterval: runCatalog.writeInterval,
-      scope: window.__CFD_RUN_SCOPE__ || undefined,
-      start_id: start.id,
-      ...(typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {}),
-      ...(rec && runRecIsTransient(rec) ? { transient: mergeTransient() } : {}),
-    });
+    const posted = !cont
+      ? await postRunStart({
+        run_id: runId,
+        project_id: currentProjectId() || undefined,
+        endTime: runCatalog.endTime,
+        writeInterval: runCatalog.writeInterval,
+        scope: window.__CFD_RUN_SCOPE__ || undefined,
+        start_id: start.id,
+        ...(typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {}),
+        ...(rec && runRecIsTransient(rec) ? { transient: mergeTransient() } : {}),
+      })
+      : await postJson('/api/run/continue', {
+        run_id: runId,
+        project_id: currentProjectId() || undefined,
+        scope: window.__CFD_RUN_SCOPE__ || undefined,
+        start_id: start.id,
+        ...(typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {}),
+        ...(cont.end_time != null ? { end_time: cont.end_time } : { extra_iterations: cont.extra_iterations }),
+      });
     const r = posted.response;
     const j = posted.json;
     if (!(r.ok || r.status === 202) || !j || j.ok === false) {
       const err = String((j && j.error) || '');
       const busy = r.status === 409 && /already in progress|already running/i.test(err);
+      if (cont && !busy) {
+        // Refused: the run is as it ended; the panel says why.
+        const refusal = startRefusalKind(r.status, j);
+        if (refusal === 'stopped') return endWithoutStart('Stopped before it started.', true);
+        return endWithoutStart(err || 'This run could not continue.');
+      }
       if (busy) {
         if (j && j.run_id) markLiveCompute('solve', { run_id: j.run_id });
         runCatalog.starting = false;
@@ -33053,13 +33134,13 @@ async function startSolveClient() {
         runCatalog.start_error = null;
         runCatalog.start_error_run_id = null;
         if (cancelled()) return endWithoutStart('Stopped before it started.', true);
-        const queued = await enqueueSolveJob(runId);
+        const queued = await enqueueSolveJob(runId, cont);
         if (!queued) {
           // enqueueSolveJob said why (the run's own setup issue, or its mesh).
           const why = runCatalog.hint;
           return failStart((why && why.text) || 'This run cannot be queued yet.', { fix: runCatalog.start_fix || null });
         }
-        showHint('Queued. Starts when the current job finishes.');
+        showHint(queuedText);
         try { syncJobQueueChrome(); } catch (_) {}
         try { syncSimControlPanel(); } catch (_) {}
         return { ok: true, queued: true, run_id: runId };
@@ -33233,6 +33314,8 @@ async function renameActiveRunClient(name) {
 (function wireSimControlPanel() {
   window.__CFD_SIM_START__ = onSimStartClick;
   window.__CFD_SIM_STOP__ = stopSolveClient;
+  // Continue a finished or stopped run (F6): {extra_iterations} or {end_time}.
+  window.__CFD_SIM_CONTINUE__ = (ask) => startSolveClient({ cont: ask || {} });
   /* React run panel (src/panels/run/RunControl.tsx) acts only through these. */
   window.__CFD_RUN_STATE_NOW__ = () => window.__CFD_RUN_STATE__ || publishRunState();
   window.__CFD_RUN_GATE__ = () => {
