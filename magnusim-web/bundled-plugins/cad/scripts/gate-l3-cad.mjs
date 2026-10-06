@@ -1,8 +1,10 @@
 // gate:l3-cad (npm run test:gate:l3-cad): the exit-sync gate (host API 1.6, L3),
 // built like gate:l2-cad: it must FAIL, never pass by skipping.
-//   1. The app's Python (CAD_E2E_PYTHON, default ../../python/.venv/Scripts/python.exe)
-//      and Daniel's Vortex STEP (CAD_E2E_VORTEX_STEP) must be there: without either the
-//      gate stops at once and says so.
+//   1. The app's Python (scripts/app-python.mjs: MAGNUSIM_PYTHON, else the app's
+//      python/.venv, else a python or python3 on PATH that imports cfddesk and
+//      magnusim_sdk, as in CI) and Daniel's Vortex STEP (CAD_E2E_VORTEX_STEP) must be
+//      there: without either the gate stops at once and says so. Everything the gate
+//      starts gets the Python as MAGNUSIM_PYTHON.
 //   2. vitest on L3_UNIT with --allowOnly=false (a stray it.only fails), and its JSON
 //      report must show no skipped or todo test, and every L3_UNIT file with tests that ran.
 //   3. The exit e2e (e2e/cad-link-exit.spec.ts, against the real host) through
@@ -18,7 +20,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { e2eVerdict, gatePython, vitestVerdict } from './gate-l2-cad.mjs';
+import { appPythonMissing, probePython } from './app-python.mjs';
+import { e2eVerdict, gateEnv, gatePython, vitestVerdict } from './gate-l2-cad.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -98,9 +101,9 @@ export function unitFilesVerdict(report, files = L3_UNIT) {
 }
 
 /** Why the gate cannot run here (a missing Python or Vortex), or null. */
-export function missingInputs(env = process.env, exists = existsSync) {
-  const python = gatePython(env);
-  if (!exists(python)) return `the app's Python is missing (looked for ${python}); the link checker cannot run. Set CAD_E2E_PYTHON to the core venv's python.exe.`;
+export function missingInputs(env = process.env, exists = existsSync, probe = probePython) {
+  const found = gatePython(env, { exists, probe });
+  if (!found.python) return `${appPythonMissing(found)} The link checker cannot run.`;
   const vortex = env.CAD_E2E_VORTEX_STEP || '';
   if (!vortex) return "Daniel's Vortex STEP is not set: set CAD_E2E_VORTEX_STEP to the path of Vortex CFD Test.step (the include case runs on it).";
   if (!exists(vortex)) return `CAD_E2E_VORTEX_STEP names no file (${vortex}).`;
@@ -123,10 +126,12 @@ function fail(message) {
 function main() {
   const why = missingInputs();
   if (why) fail(why);
+  const found = gatePython();
+  console.log(`[gate:l3-cad] the app's Python: ${found.python} (${found.from})`);
   const out = join(ROOT, '.cache', 'gate-l3-cad');
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
-  const env = { ...process.env, CAD_E2E_PYTHON: gatePython(), CAD_LINK_REQUIRE_PYTHON: '1', CAD_L3_REQUIRE: '1' };
+  const env = { ...gateEnv(found.python), CAD_L3_REQUIRE: '1' };
 
   const vitestJson = join(out, 'vitest.json');
   const vitestCli = join(ROOT, 'node_modules', 'vitest', 'vitest.mjs');

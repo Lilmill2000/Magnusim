@@ -21,6 +21,11 @@
 //     blur arrives after the host has closed the workspace, which is how the
 //     value was lost; the bundled Chromium keeps the frame in the page's process
 //     and its blur came in time.
+//   - Linux CI: the browser's Back (the pointer never leaves the frame) opened the
+//     app's question over the frame, and the mouseleave the browser sent for that
+//     applied and saved the typed text behind it ("Saved" after Stay). A mouseleave
+//     with the pointer still over the frame, or after the field lost the keyboard,
+//     applies nothing; the checks here stay strict.
 // window.__CAD__ is used to read exact figures the panel rounds.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
@@ -92,11 +97,14 @@ async function leave(page: Page, frame: FrameLocator, how: () => Promise<void>, 
   await how();
   const modal = page.locator('#modal-confirm');
   let seen = 'wait' as 'asked' | 'left' | 'wait';
+  // The leave runs CAD's exit hook first (save, the centre of mass, the thumbnail: "Finishing" in
+  // the header), which takes longer on a loaded machine: wait for its end, the question or the
+  // workspace gone (the hook's own limit is 25 s, the app's stall clock 30 s).
   await expect
     .poll(async () => {
       seen = (await modal.isVisible()) ? 'asked' : (await overlay(page).isHidden()) ? 'left' : 'wait';
       return seen;
-    }, { timeout: 15_000 })
+    }, { timeout: 60_000 })
     .not.toBe('wait');
   if (seen === 'left') return 'left';
   await expect(page.locator('#cf-heading')).toHaveText('Leave without saving?');
@@ -213,7 +221,39 @@ const storedSide = (page: Page, side: string) =>
     const d = (window as unknown as { __CAD__: { services: { doc: { state: { get(): { doc: { features: { type: string; sides?: Record<string, string> }[] } } } } } } }).__CAD__.services.doc.state.get().doc;
     return d.features.find((x) => x.type === 'enclosure')?.sides?.[s] ?? null;
   }, side);
-const pointerLeaves = (page: Page) => workspaceFrame(page).evaluate(() => document.documentElement.dispatchEvent(new MouseEvent('mouseleave')));
+/** The pointer leaves the frame upwards, to the app's header: outside the frame when the browser says so. */
+const pointerLeaves = (page: Page) => workspaceFrame(page).evaluate(() => document.documentElement.dispatchEvent(new MouseEvent('mouseleave', { clientX: 72, clientY: -23 })));
+/** NumberUnitInput's QUIET_MS: typing this recently keeps the pointer leaving from applying the text. */
+const QUIET_MS = 800;
+/**
+ * In the page, on its own clock: type `text` into the focused Distance field, then the pointer
+ * leaves the frame at once and again every 50 ms until the text is applied. Says whether the
+ * leave at once applied it, and how long after the typing a leave first did. Typed and left in
+ * one task, so "a moment ago" holds on any machine; a fixed wait in the test cannot promise
+ * either side of QUIET_MS under load (Linux CI: it read 13 where 15 was due).
+ */
+const typeThenLeaveUntilApplied = (page: Page, text: string) =>
+  workspaceFrame(page).evaluate(async (t) => {
+    type Cad = { __CAD__: { services: { doc: { state: { get(): { doc: { features: { type: string; extent?: { distance?: string } }[] } } } } } } };
+    const stored = () => (window as unknown as Cad).__CAD__.services.doc.state.get().doc.features.find((x) => x.type === 'extrude')?.extent?.distance ?? null;
+    const leave = () => document.documentElement.dispatchEvent(new MouseEvent('mouseleave', { clientX: 72, clientY: -23 }));
+    const el = document.querySelector<HTMLInputElement>('[data-cad-panel="feature"] .nui[data-field="distance"] input');
+    if (!el || document.activeElement !== el) throw new Error('the Distance field does not have the keyboard');
+    const before = stored();
+    // Taken just before the typing, so never after the field's own time of it: a leave that
+    // applies sooner than QUIET_MS after the typing shows here as less than QUIET_MS.
+    const typedAt = Date.now();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, t);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    leave();
+    const atOnce = stored();
+    for (;;) {
+      if (stored() !== before) return { before, atOnce, after: stored(), ms: Date.now() - typedAt };
+      if (Date.now() - typedAt > 20_000) return { before, atOnce, after: stored(), ms: -1 };
+      await new Promise((r) => setTimeout(r, 50));
+      leave();
+    }
+  }, text);
 const storedDistance = (page: Page) =>
   workspaceFrame(page).evaluate(() => {
     const d = (window as unknown as { __CAD__: { services: { doc: { state: { get(): { doc: { features: { type: string; extent?: { distance?: string } }[] } } } } } } }).__CAD__.services.doc.state.get().doc;
@@ -239,18 +279,19 @@ test('cad:link-polish-typed the chip agrees with the unsaved dot; the pointer le
 
   // "-" on its way to "-5": the pointer leaving the frame applies nothing and shows no refusal.
   await typeOnly(frame, 'distance', '-');
-  await page.waitForTimeout(1000);
+  // At least QUIET_MS since the typing (a lower bound: load only makes it longer), so only the "-" keeps it.
+  await page.waitForTimeout(QUIET_MS + 200);
   await pointerLeaves(page);
   await expect(panel(frame).locator('.nui[data-field="distance"] [data-nui-error]')).toHaveCount(0);
   await expect(fieldInput(frame, 'distance')).toHaveValue('-');
   expect(await storedDistance(page)).toBe('13 mm');
-  // "15" typed a moment ago: still nothing; once the user stopped typing: applied and saved.
-  await typeOnly(frame, 'distance', '15');
-  await pointerLeaves(page);
-  expect(await storedDistance(page)).toBe('13 mm');
-  await page.waitForTimeout(1000);
-  await pointerLeaves(page);
-  await expect.poll(() => storedDistance(page)).toBe('15 mm');
+  // "15" typed a moment ago: still nothing; once the user stopped typing (QUIET_MS): applied and saved.
+  const quiet = await typeThenLeaveUntilApplied(page, '15');
+  expect(quiet.before).toBe('13 mm');
+  expect(quiet.atOnce, 'the pointer leaving right after the typing applied it').toBe('13 mm');
+  expect(quiet.after).toBe('15 mm');
+  expect(quiet.ms, 'applied before the user stopped typing (QUIET_MS)').toBeGreaterThanOrEqual(QUIET_MS);
+  await expect(fieldInput(frame, 'distance')).toHaveValue('15');
   await expectSaved(frame);
 
   // U1: typed, then the field loses the keyboard with nothing else taking it (the page's body):

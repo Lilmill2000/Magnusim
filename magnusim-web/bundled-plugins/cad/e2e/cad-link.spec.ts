@@ -32,8 +32,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { appPythonMissing, findAppPython } from '../scripts/app-python.mjs';
 import {
   addSolid,
   answerLinkQuestion,
@@ -59,7 +60,10 @@ import {
 } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
-const PYTHON = process.env.CAD_E2E_PYTHON || resolve('../../python/.venv/Scripts/python.exe');
+// The app's Python (scripts/app-python.mjs: MAGNUSIM_PYTHON, the app's venv, or a python on PATH
+// that imports cfddesk and magnusim_sdk, as in CI).
+const FOUND = findAppPython();
+const PYTHON = FOUND.python ?? '';
 
 async function shot(page: Page, name: string) {
   if (!SHOTS) return;
@@ -210,9 +214,9 @@ async function syncAnswering(page: Page, choice: 'new' | 'overwrite' | 'cancel')
 test.describe('gate:l2-cad linking a Part', () => {
   // Under the gate (CAD_LINK_REQUIRE_PYTHON=1) a missing Python fails every test here; never a skip.
   test.beforeEach(() => {
-    if (process.env.CAD_LINK_REQUIRE_PYTHON === '1' && !existsSync(PYTHON)) throw new Error(`gate:l2-cad needs the app's Python for magnusim_sdk.link check: set CAD_E2E_PYTHON (looked for ${PYTHON})`);
+    if (process.env.CAD_LINK_REQUIRE_PYTHON === '1' && !PYTHON) throw new Error(`gate:l2-cad needs the app's Python for magnusim_sdk.link check: ${appPythonMissing(FOUND)}`);
   });
-  test.skip(process.env.CAD_LINK_REQUIRE_PYTHON !== '1' && !existsSync(PYTHON), `needs the app's Python for magnusim_sdk.link check: set CAD_E2E_PYTHON (looked for ${PYTHON})`);
+  test.skip(process.env.CAD_LINK_REQUIRE_PYTHON !== '1' && !PYTHON, `needs the app's Python for magnusim_sdk.link check: ${appPythonMissing(FOUND)}`);
 
   test('cad:link-create the first link adds "Part 1" to the project; its files pass the app checker; its row and the part after Back', async ({ page, request }, testInfo) => {
     test.setTimeout(300_000);

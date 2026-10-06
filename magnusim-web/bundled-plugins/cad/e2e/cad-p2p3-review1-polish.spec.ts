@@ -146,17 +146,42 @@ const addBlock = (page: Page, origin: V3, size: V3 = [20, 20, 20]) => addSolid(p
 /** The corners of a box (origin, size). */
 const corners = (o: V3, s: V3): V3[] => [0, 1, 2, 3, 4, 5, 6, 7].map((k) => [o[0] + (k & 1 ? s[0] : 0), o[1] + (k & 2 ? s[1] : 0), o[2] + (k & 4 ? s[2] : 0)]);
 
-/** The darkest pixel within `r` px of a model point: the ink drawn there (rgb). */
-async function inkAt(page: Page, p: V3, r = 3): Promise<[number, number, number]> {
+/** An rgb colour. */
+type RGB = [number, number, number];
+
+/** The darkest pixel (the line's) and the brightest (the paper beside it) within r px of a model point. */
+async function inkAndPaper(page: Page, p: V3, r = 3): Promise<{ ink: RGB; paper: RGB }> {
   const [x, y] = await at(page, p);
   const img = PNG.decode(await page.screenshot({ clip: { x: Math.round(x) - r, y: Math.round(y) - r, width: 2 * r + 1, height: 2 * r + 1 } }));
-  let best: [number, number, number] = [255, 255, 255];
+  let ink: RGB = [255, 255, 255];
+  let paper: RGB = [0, 0, 0];
   for (let i = 0; i < img.width * img.height; i++) {
-    const c: [number, number, number] = [img.data[4 * i], img.data[4 * i + 1], img.data[4 * i + 2]];
-    if (c[0] + c[1] + c[2] < best[0] + best[1] + best[2]) best = c;
+    const c: RGB = [img.data[4 * i], img.data[4 * i + 1], img.data[4 * i + 2]];
+    if (c[0] + c[1] + c[2] < ink[0] + ink[1] + ink[2]) ink = c;
+    if (c[0] + c[1] + c[2] > paper[0] + paper[1] + paper[2]) paper = c;
   }
-  return best;
+  return { ink, paper };
 }
+
+/**
+ * How well a pixel is `colour` laid over `paper`: an antialiased line (Linux CI draws with
+ * SwiftShader, whose thin lines never reach their full colour) is
+ * coverage * colour + (1 - coverage) * paper in every channel, with one coverage. Returns the
+ * best coverage (least squares) and what is left over (rms, in rgb units): a few units for the
+ * line's own colour, tens for another colour.
+ */
+function coverageOf(px: RGB, paper: RGB, colour: RGB): { coverage: number; off: number } {
+  const d = [0, 1, 2].map((i) => paper[i] - px[i]);
+  const e = [0, 1, 2].map((i) => paper[i] - colour[i]);
+  const ee = e.reduce((s, v) => s + v * v, 0);
+  const coverage = ee ? d.reduce((s, v, i) => s + v * e[i], 0) / ee : 0;
+  const off = Math.sqrt(d.reduce((s, v, i) => s + (v - coverage * e[i]) ** 2, 0) / 3);
+  return { coverage, off };
+}
+
+/** The sketch colours (src/features/sketch/colors.ts): fully defined #101828, under defined #1570ef. */
+const FULLY: RGB = [0x10, 0x18, 0x28];
+const UNDER: RGB = [0x15, 0x70, 0xef];
 
 /** A stored sketch on the Top plane, opened in sketch mode as the session starts (as the gate's over-defined test does). */
 async function storedSketch(page: Page, frame: FrameLocator, s: { points: Record<string, Pt>; entities: unknown[]; constraints: unknown[] }) {
@@ -339,17 +364,31 @@ test('cad:p2p3-review1-sketch-colours in model mode a dimensioned rectangle is d
   await page.mouse.move(5, 5);
   await settled(page);
   await shot(page, 'r1-sketch-colours-model');
-  // #101828 on the rectangle's edges, #1570ef on the circle.
+  // #101828 on the rectangle's edges, #1570ef on the circle: each line's darkest pixel is its colour
+  // laid over the paper beside it (one coverage in every channel), clearly drawn, and not the
+  // other colour. Measured against the paper, not as an absolute sum: Linux CI's SwiftShader
+  // antialiases a 1 px line to rgb 90,100,117 (#101828 at about 66 %), where a GPU draws ~#101828.
   for (const p of [
     [10, 0, 0],
     [40, 14, 0],
   ] as V3[]) {
-    const c = await inkAt(page, p);
-    expect(c[0] + c[1] + c[2], `rectangle edge at ${p}: rgb ${c}`).toBeLessThan(260);
-    expect(c[2] - c[0], `rectangle edge at ${p}: rgb ${c} (blue)`).toBeLessThan(60);
+    const { ink, paper } = await inkAndPaper(page, p);
+    const fully = coverageOf(ink, paper, FULLY);
+    const under = coverageOf(ink, paper, UNDER);
+    const said = `rectangle edge at ${p}: rgb ${ink} on rgb ${paper}: as #101828 ${fully.coverage.toFixed(2)} off ${fully.off.toFixed(1)}, as #1570ef ${under.coverage.toFixed(2)} off ${under.off.toFixed(1)}`;
+    expect(fully.coverage, `${said} (drawn)`).toBeGreaterThan(0.4);
+    expect(fully.off, `${said} (the fully defined colour)`).toBeLessThan(15);
+    expect(under.off, `${said} (not blue)`).toBeGreaterThan(25);
   }
-  const blue = await inkAt(page, [75, 18, 0]);
-  expect(blue[2] - blue[0], `circle at the top: rgb ${blue}`).toBeGreaterThan(90);
+  {
+    const { ink, paper } = await inkAndPaper(page, [75, 18, 0]);
+    const fully = coverageOf(ink, paper, FULLY);
+    const under = coverageOf(ink, paper, UNDER);
+    const said = `circle at the top: rgb ${ink} on rgb ${paper}: as #1570ef ${under.coverage.toFixed(2)} off ${under.off.toFixed(1)}, as #101828 ${fully.coverage.toFixed(2)} off ${fully.off.toFixed(1)}`;
+    expect(under.coverage, `${said} (drawn)`).toBeGreaterThan(0.4);
+    expect(under.off, `${said} (the under defined colour)`).toBeLessThan(15);
+    expect(fully.off, `${said} (not the fully defined colour)`).toBeGreaterThan(25);
+  }
   expect(seen.csp).toEqual([]);
   expect(seen.errors).toEqual([]);
 });

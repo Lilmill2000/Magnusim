@@ -877,8 +877,13 @@ describe('ws.files (host API 1.2)', () => {
     window.dispatchEvent(new Event('blur'));
     expect(doc.state.get().doc.features.length).toBe(before);
     expect(ws.log.dirty.at(-1)).toEqual({ dirty: true, message: 'Changes typed in Distance of Part 1 are not applied yet.' });
+    // A mouseleave with the pointer still over the frame: the app's leave question came over it
+    // under a pointer that did not move (the browser's Back). Not the pointer leaving: nothing applied.
+    document.documentElement.dispatchEvent(new MouseEvent('mouseleave', { clientX: 531, clientY: 367 }));
+    expect(doc.state.get().doc.features.length).toBe(before);
+    expect(ws.log.dirty.at(-1)).toEqual({ dirty: true, message: 'Changes typed in Distance of Part 1 are not applied yet.' });
     // The pointer leaves the frame (Back, Settings, the browser's controls are all outside it): applied, then written.
-    document.documentElement.dispatchEvent(new MouseEvent('mouseleave'));
+    document.documentElement.dispatchEvent(new MouseEvent('mouseleave', { clientX: 72, clientY: -23 }));
     expect(doc.state.get().doc.features.length).toBe(before + 1);
     await saved(doc);
     expect(ws.log.dirty.at(-1)).toEqual({ dirty: false, message: '' });
@@ -1000,7 +1005,6 @@ describe('LINK: the design version, the include toggle, Keep mine', () => {
     expect((await ws.study.get()).source_version).toBeUndefined();
     expect(writes).toEqual([]);
     linkedNow = { geometryId: 'g1', name: 'Part 1', rev: 1, sourceVersion: 1 };
-    await new Promise((r) => setTimeout(r, 1600));
     const t0 = Date.now();
     for (let i = 0; i < 5; i++) {
       sketch(doc, i);
@@ -1010,11 +1014,15 @@ describe('LINK: the design version, the include toggle, Keep mine', () => {
     await doc.recordSettled();
     const took = Date.now() - t0;
     expect((await ws.study.get()).source_version).toBe(6);
-    // The first write at once (version 2), then at most one per 1.5 s.
-    expect(writes[0]).toBe(2);
+    // On the real clock only what holds on any machine (Linux CI under load: the first write
+    // came after all five saves, as 6): the counters in order, the newest last, at most one write
+    // per 1.5 s. "The first at once, then the newest after 1.5 s" is pinned on fake timers in
+    // tests/doc/source-record.test.ts.
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.every((w, i) => i === 0 || Number(w) > Number(writes[i - 1]))).toBe(true);
+    expect(Number(writes[0])).toBeGreaterThanOrEqual(2);
     expect(writes.at(-1)).toBe(6);
-    expect(writes.length).toBeLessThanOrEqual(1 + Math.ceil(took / 1500));
-    expect([...writes].sort((x, y) => Number(x) - Number(y))).toEqual(writes);
+    expect(writes.length).toBeLessThanOrEqual(1 + Math.floor(took / 1500));
   }, 15_000);
 
   it('Include in simulation: on by default, off is one undo step, saved, and read back', async () => {

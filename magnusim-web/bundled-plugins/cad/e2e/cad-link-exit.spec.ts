@@ -44,6 +44,7 @@ import { expect, test, type APIRequestContext, type FrameLocator, type Page } fr
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { appPythonMissing, findAppPython } from '../scripts/app-python.mjs';
 // @ts-expect-error the app's host helper is plain JavaScript (e2e/host-server.d.mts types CAD's wrapper only)
 import { startHost } from '../../../e2e/support/host-server.mjs';
 import { addSolid, answerLeave, answerLinkQuestion, geometryRow, holdCommits, newPartFromTree, partOpened, readLinkQuestion, watchPage, workspaceFrame } from './helpers';
@@ -52,7 +53,10 @@ type Host = { base: string; projects: string; stop(): void; log(): string };
 let host: Host | null = null;
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
-const PYTHON = process.env.CAD_E2E_PYTHON || resolve('../../python/.venv/Scripts/python.exe');
+// The app's Python (scripts/app-python.mjs: MAGNUSIM_PYTHON, the app's venv, or a python on PATH
+// that imports cfddesk and magnusim_sdk, as in CI).
+const FOUND = findAppPython();
+const PYTHON = FOUND.python ?? '';
 const VORTEX = process.env.CAD_E2E_VORTEX_STEP || '';
 const REQUIRE = process.env.CAD_L3_REQUIRE === '1';
 
@@ -60,6 +64,10 @@ test.beforeAll(async () => {
   test.setTimeout(300_000);
   host = (await startHost({
     name: 'cad-link-exit',
+    // An empty projects root, not the app's own e2e projects: the tests make theirs, and Home (the
+    // other-exits test) then lists only those, whose thumbnails CAD's links render. The app's
+    // e2e projects' thumbnails answered 500 on Linux CI (their render, the app's, not CAD's).
+    seed: false,
     enablePlugins: ['cad'],
     viteCacheDir: resolve('.cache', 'host-vite-link-exit'),
     portFrom: Number(process.env.CAD_E2E_PORT_FROM || 8170) + 30,
@@ -505,9 +513,9 @@ const notHomeThumbs = (errors: string[]) => errors.filter((e) => !/status of 404
 
 test.describe('gate:l3-cad exit sync', () => {
   test.beforeEach(() => {
-    if (REQUIRE && !existsSync(PYTHON)) throw new Error(`gate:l3-cad needs the app's Python for magnusim_sdk.link check: set CAD_E2E_PYTHON (looked for ${PYTHON})`);
+    if (REQUIRE && !PYTHON) throw new Error(`gate:l3-cad needs the app's Python for magnusim_sdk.link check: ${appPythonMissing(FOUND)}`);
   });
-  test.skip(!REQUIRE && !existsSync(PYTHON), `needs the app's Python for magnusim_sdk.link check: set CAD_E2E_PYTHON (looked for ${PYTHON})`);
+  test.skip(!REQUIRE && !PYTHON, `needs the app's Python for magnusim_sdk.link check: ${appPythonMissing(FOUND)}`);
 
   test('cad:l3-first-exit Back creates Part 1 and lands in the main viewport showing it, with the Part camera; the header shows the export while it is written', async ({ page, request }, testInfo) => {
     test.setTimeout(300_000);
@@ -684,10 +692,10 @@ test.describe('gate:l3-cad exit sync', () => {
     page.on('request', onReq);
     await watchLeaveStatus(page);
     const before = await landings(page);
-    const t0 = Date.now();
+    const t0 = performance.now();
     await backButton(page).click();
     await expect(page).toHaveURL(new RegExp(`#/p/${pid}$`), { timeout: 30_000 });
-    const closedMs = Date.now() - t0;
+    const closedMs = performance.now() - t0;
     await awaitLanding(page, before);
     page.off('request', onReq);
     // Quick: the workspace closed before the app draws any progress (400 ms), with nothing written or linked.
@@ -806,12 +814,12 @@ test.describe('gate:l3-cad exit sync', () => {
     await expect(frame.locator(`[data-body-row="${made.body}"]`)).toHaveAttribute('data-in-simulation', '0');
     await settled(page);
     await watchLeaveStatus(page);
-    const t0 = Date.now();
+    const t0 = performance.now();
     await backButton(page).click();
     await expect(leaveStatus(page)).toHaveText('No body is included in the simulation; Part 1 keeps its last update.', { timeout: 10_000 });
     await expect(page).toHaveURL(new RegExp(`#/p/${pid}$`), { timeout: 30_000 });
     // Held to be read (3 s), in the header only: no page toast said it a second time (L3 review polish 3).
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(2_900);
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(2_900);
     expect(await leaveSeen(page)).toContain('No body is included in the simulation; Part 1 keeps its last update.');
     expect(await toastSeen(page)).toEqual([]);
     expect((await linkedOf(request, pid, sid))!.rev).toBe(1);
@@ -855,10 +863,13 @@ test.describe('gate:l3-cad exit sync', () => {
     hold = await holdCommits(page);
     await setHeightNoWait(page, made.extrude, 31);
     await expect.poll(() => hold.held(), { timeout: 20_000 }).toBeGreaterThan(0);
-    const t0 = Date.now();
+    // Durations on the monotonic clock, as the page's timers run: the wall clock can be stepped
+    // meanwhile (the Linux CI mirror under WSL: the page's 25 s timer fired 22.1 s later by
+    // Date.now(), 25.0 s by the monotonic clock).
+    const t0 = performance.now();
     await backButton(page).click();
     await expect(page.locator('#modal-confirm')).toBeVisible({ timeout: 40_000 });
-    const tq = Date.now() - t0;
+    const tq = Math.round(performance.now() - t0);
     console.log(`[cad-link-exit] stuck save: the question after ${tq} ms`);
     expect(tq).toBeGreaterThanOrEqual(24_000);
     expect(tq).toBeLessThan(29_500);

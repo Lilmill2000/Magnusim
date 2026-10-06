@@ -440,6 +440,28 @@ export async function modelOnPage(page: Page, p: [number, number, number]): Prom
   return [box.x + xy![0], box.y + xy![1]];
 }
 
+/**
+ * A page point on the way from `from` toward `to` (page coordinates), as far as it can go and
+ * still be on the view's canvas with a margin: `to` itself when it is on it.
+ */
+async function insideView(page: Page, from: [number, number], to: [number, number], margin = 60): Promise<[number, number]> {
+  const frameBox = (await page.locator('#workspace-frame').boundingBox())!;
+  const r = await workspaceFrame(page).evaluate(() => {
+    const b = document.querySelector('[data-cad-viewport] canvas')!.getBoundingClientRect();
+    return { x: b.left, y: b.top, w: b.width, h: b.height };
+  });
+  const lo = [frameBox.x + r.x + margin, frameBox.y + r.y + margin];
+  const hi = [frameBox.x + r.x + r.w - margin, frameBox.y + r.y + r.h - margin];
+  let t = 1;
+  for (const i of [0, 1]) {
+    const d = to[i] - from[i];
+    if (d > 0 && to[i] > hi[i]) t = Math.min(t, (hi[i] - from[i]) / d);
+    if (d < 0 && to[i] < lo[i]) t = Math.min(t, (lo[i] - from[i]) / d);
+  }
+  t = Math.max(t, 0.05);
+  return [from[0] + t * (to[0] - from[0]), from[1] + t * (to[1] - from[1])];
+}
+
 /** No view transition runs, and sketch mode has stored every edit. */
 async function viewAndSketchIdle(page: Page) {
   const f = workspaceFrame(page);
@@ -463,7 +485,12 @@ export async function drawRectangle(page: Page, frame: FrameLocator, w: number, 
   await expect(frame.locator('[data-cad-toolbar] [data-command="sketch.rectangle"]')).toHaveClass(/is-active/);
   const o = await modelOnPage(page, [0, 0, 0]);
   await page.mouse.click(o[0], o[1]);
-  const c = await modelOnPage(page, [w * 0.8, d * 0.7, 0]);
+  // The pointer goes toward the far corner and stops inside the view: the typed sizes give the
+  // size, the pointer only the side. A large rectangle's corner can lie far outside the window
+  // (Linux CI, 600 x 400: at 3066,-580), where the view never sees the pointer, and the
+  // rectangle went to -X.
+  const far = await modelOnPage(page, [w * 0.8, d * 0.7, 0]);
+  const c = await insideView(page, o, far);
   await page.mouse.move(c[0], c[1]);
   await expect(frame.locator('[data-sketch-box="width"]')).toBeVisible();
   await page.keyboard.type(String(w));

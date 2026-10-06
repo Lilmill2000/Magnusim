@@ -621,11 +621,39 @@
  * kit's mgk-* classes, held equal to the core by the kit's parity gate). Only
  * what CAD adds is here. */
 
-/* The flyout's panel: as tall as the stage allows, scrolling inside. */
+/* The flyout's panel: as tall as the stage allows (the column above the dock, however tall the
+   dock's chips are), its head and its foot (Delete, Done) always in view; the body (and the note
+   above the foot) scroll between them. The whole panel used to scroll, so Done ran off the
+   bottom when the content was taller than the room: Linux CI's wider DejaVu Sans at 1280 x 800
+   left 30 % of Done out of view (SD review 2's Enclosure). */
 .tree-detail > .cad-panel {
+  display: flex;
+  flex-direction: column;
   margin: 0;
+  min-height: 0;
   max-height: calc(100vh - 120px);
-  overflow: auto;
+  overflow: hidden;
+}
+
+.tree-detail > .cad-panel > .mgk-panel-head,
+.tree-detail > .cad-panel > .mgk-panel-foot {
+  flex: none;
+}
+
+/* The body scrolls; a 3 px pad (given back by the margins) keeps the inputs' focus rings whole at its edges. */
+.tree-detail > .cad-panel > .mgk-panel-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 3px;
+  margin: -3px;
+}
+
+.tree-detail > .cad-panel > .cad-panel-note {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* A feature or tool panel is the core's fixed 360 px (style.css: .tree-detail > #panel-mesh-form),

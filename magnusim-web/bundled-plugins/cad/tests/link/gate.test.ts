@@ -1,24 +1,33 @@
 // @vitest-environment node
 // gate:l2-cad fails, never passes by skipping (link review L3): without the
 // app's Python it stops at once with the reason, and a report with a skipped
-// test is a failure.
+// test is a failure. The app's Python is found as scripts/app-python.mjs says:
+// MAGNUSIM_PYTHON, else the app's venv, else a python / python3 on PATH that
+// imports cfddesk and magnusim_sdk (CI has no venv).
 // Owner: LINK.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { e2eVerdict, vitestVerdict } from '../../scripts/gate-l2-cad.mjs';
+import { findAppPython, venvPythons } from '../../scripts/app-python.mjs';
+import { e2eVerdict, gateEnv, vitestVerdict } from '../../scripts/gate-l2-cad.mjs';
 import { censusVerdict, L3_E2E, L3_E2E_CENSUS, L3_UNIT, missingInputs, unitFilesVerdict } from '../../scripts/gate-l3-cad.mjs';
 
 const PLUGIN = join(__dirname, '..', '..');
+/** The environment with the app's Python named and missing (no other name for it left over). */
+const missingPythonEnv = (missing: string) => {
+  const env: Record<string, string | undefined> = { ...process.env, MAGNUSIM_PYTHON: missing };
+  delete env.CAD_E2E_PYTHON;
+  return env;
+};
 
 describe('gate:l2-cad never soft-passes', () => {
   it('fails at once, saying why, when the app Python is missing', () => {
     const missing = join(PLUGIN, 'no-such-python', 'python.exe');
-    const r = spawnSync(process.execPath, [join(PLUGIN, 'scripts', 'gate-l2-cad.mjs')], { cwd: PLUGIN, encoding: 'utf8', env: { ...process.env, CAD_E2E_PYTHON: missing }, timeout: 60_000 });
+    const r = spawnSync(process.execPath, [join(PLUGIN, 'scripts', 'gate-l2-cad.mjs')], { cwd: PLUGIN, encoding: 'utf8', env: missingPythonEnv(missing), timeout: 60_000 });
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain(`[gate:l2-cad] FAILED: the app's Python is missing (looked for ${missing})`);
+    expect(r.stderr).toContain(`[gate:l2-cad] FAILED: the app's Python is missing: MAGNUSIM_PYTHON names no file (${missing}).`);
   });
 
   it('the package script is the gate script', () => {
@@ -47,13 +56,19 @@ describe('gate:l2-cad never soft-passes', () => {
 describe('gate:l3-cad never soft-passes', () => {
   it('fails at once, saying why, when the app Python or the Vortex is missing', () => {
     const missing = join(PLUGIN, 'no-such-python', 'python.exe');
-    const r = spawnSync(process.execPath, [join(PLUGIN, 'scripts', 'gate-l3-cad.mjs')], { cwd: PLUGIN, encoding: 'utf8', env: { ...process.env, CAD_E2E_PYTHON: missing }, timeout: 60_000 });
+    const r = spawnSync(process.execPath, [join(PLUGIN, 'scripts', 'gate-l3-cad.mjs')], { cwd: PLUGIN, encoding: 'utf8', env: missingPythonEnv(missing), timeout: 60_000 });
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain(`[gate:l3-cad] FAILED: the app's Python is missing (looked for ${missing})`);
-    const has = (p: string) => p === 'py';
-    expect(missingInputs({ CAD_E2E_PYTHON: 'py' }, has)).toBe("Daniel's Vortex STEP is not set: set CAD_E2E_VORTEX_STEP to the path of Vortex CFD Test.step (the include case runs on it).");
-    expect(missingInputs({ CAD_E2E_PYTHON: 'py', CAD_E2E_VORTEX_STEP: 'nope.step' }, has)).toBe('CAD_E2E_VORTEX_STEP names no file (nope.step).');
-    expect(missingInputs({ CAD_E2E_PYTHON: 'py', CAD_E2E_VORTEX_STEP: 'v.step' }, (p) => p === 'py' || p === 'v.step')).toBeNull();
+    expect(r.stderr).toContain(`[gate:l3-cad] FAILED: the app's Python is missing: MAGNUSIM_PYTHON names no file (${missing}).`);
+    const PY = '/opt/app/bin/python';
+    const has = (p: string) => p === PY;
+    const noProbe = () => null;
+    expect(missingInputs({ MAGNUSIM_PYTHON: PY }, has, noProbe)).toBe("Daniel's Vortex STEP is not set: set CAD_E2E_VORTEX_STEP to the path of Vortex CFD Test.step (the include case runs on it).");
+    expect(missingInputs({ MAGNUSIM_PYTHON: PY, CAD_E2E_VORTEX_STEP: 'nope.step' }, has, noProbe)).toBe('CAD_E2E_VORTEX_STEP names no file (nope.step).');
+    expect(missingInputs({ MAGNUSIM_PYTHON: PY, CAD_E2E_VORTEX_STEP: 'v.step' }, (p) => p === PY || p === 'v.step', noProbe)).toBeNull();
+    // CI: no venv, the backend in setup-python's interpreter on PATH.
+    expect(missingInputs({ CAD_E2E_VORTEX_STEP: 'v.step' }, (p) => p === 'v.step', (cmd) => (cmd === 'python' ? '/opt/hostedtoolcache/Python/3.12/x64/bin/python' : null))).toBeNull();
+    // Nothing anywhere: the gate fails with what it tried, never skips.
+    expect(missingInputs({ CAD_E2E_VORTEX_STEP: 'v.step' }, (p) => p === 'v.step', noProbe)).toMatch(/^the app's Python is missing: none of MAGNUSIM_PYTHON, CAD_E2E_PYTHON is set, there is no venv \(.+\), and no python or python3 on PATH can import cfddesk and magnusim_sdk\. Set MAGNUSIM_PYTHON/);
   });
 
   it('the package script is the gate script, and it runs the exit hook tests and the exit e2e', () => {
@@ -108,5 +123,52 @@ describe('gate:l3-cad never soft-passes', () => {
     expect(unitFilesVerdict({ testResults: [ran('C:\\x\\tests\\link\\leave.test.ts', 3), ran('/x/tests/link/controller.test.ts', 2)] }, files)).toBeNull();
     expect(unitFilesVerdict({ testResults: [ran('/x/tests/link/leave.test.ts', 3)] }, files)).toBe('no unit test ran in tests/link/controller.test.ts');
     expect(unitFilesVerdict({ testResults: [ran('/x/tests/link/leave.test.ts', 3), ran('/x/tests/link/controller.test.ts', 0)] }, files)).toBe('no unit test ran in tests/link/controller.test.ts');
+  });
+});
+
+describe("the app's Python (scripts/app-python.mjs)", () => {
+  const ROOT = '/w/python';
+  const [venvWin, venvPosix] = venvPythons(ROOT);
+  const probes: string[] = [];
+  const probe = (answers: Record<string, string | null>) => (cmd: string) => {
+    probes.push(cmd);
+    return answers[cmd] ?? null;
+  };
+  const find = (env: Record<string, string | undefined>, files: string[], answers: Record<string, string | null> = {}) => {
+    probes.length = 0;
+    return findAppPython(env, { exists: (p) => files.includes(p), probe: probe(answers), pyRoot: ROOT });
+  };
+
+  it('MAGNUSIM_PYTHON first, over CAD_E2E_PYTHON, the venv and PATH', () => {
+    expect(find({ MAGNUSIM_PYTHON: '/a/python', CAD_E2E_PYTHON: '/b/python' }, ['/a/python', '/b/python', venvWin], { python: '/c/python' })).toEqual({ python: '/a/python', from: 'MAGNUSIM_PYTHON', missing: '' });
+    expect(find({ CAD_E2E_PYTHON: '/b/python' }, ['/b/python', venvWin])).toEqual({ python: '/b/python', from: 'CAD_E2E_PYTHON', missing: '' });
+    expect(probes).toEqual([]);
+  });
+
+  it('a named Python that is not there is missing: no other one is tried in its place', () => {
+    expect(find({ MAGNUSIM_PYTHON: '/gone/python' }, [venvWin], { python: '/c/python' })).toEqual({ python: null, from: 'MAGNUSIM_PYTHON', missing: 'MAGNUSIM_PYTHON names no file (/gone/python)' });
+    expect(probes).toEqual([]);
+    // A command name is run: its interpreter when it imports the backend, else missing.
+    expect(find({ MAGNUSIM_PYTHON: 'python3' }, [], { python3: '/usr/bin/python3' })).toEqual({ python: '/usr/bin/python3', from: 'MAGNUSIM_PYTHON', missing: '' });
+    expect(find({ MAGNUSIM_PYTHON: 'python3' }, [venvWin], {})).toEqual({ python: null, from: 'MAGNUSIM_PYTHON', missing: 'MAGNUSIM_PYTHON is python3, which cannot import cfddesk and magnusim_sdk' });
+  });
+
+  it('then the venv (Windows, then POSIX), without running anything', () => {
+    expect(find({}, [venvWin, venvPosix], { python: '/c/python' })).toEqual({ python: venvWin, from: 'venv', missing: '' });
+    expect(find({}, [venvPosix], { python: '/c/python' })).toEqual({ python: venvPosix, from: 'venv', missing: '' });
+    expect(probes).toEqual([]);
+  });
+
+  it('then python, then python3 on PATH, the first that imports cfddesk and magnusim_sdk (CI)', () => {
+    expect(find({}, [], { python: '/opt/py/bin/python', python3: '/usr/bin/python3' })).toEqual({ python: '/opt/py/bin/python', from: 'PATH', missing: '' });
+    expect(find({}, [], { python3: '/usr/bin/python3' })).toEqual({ python: '/usr/bin/python3', from: 'PATH', missing: '' });
+    expect(probes).toEqual(['python', 'python3']);
+    const none = find({}, []);
+    expect(none.python).toBeNull();
+    expect(none.missing).toMatch(/^none of MAGNUSIM_PYTHON, CAD_E2E_PYTHON is set, there is no venv/);
+  });
+
+  it('the gates hand the Python they found to everything they start, as MAGNUSIM_PYTHON', () => {
+    expect(gateEnv('/opt/py/bin/python', { PATH: '/bin' })).toMatchObject({ PATH: '/bin', MAGNUSIM_PYTHON: '/opt/py/bin/python', CAD_E2E_PYTHON: '/opt/py/bin/python', CAD_LINK_REQUIRE_PYTHON: '1' });
   });
 });

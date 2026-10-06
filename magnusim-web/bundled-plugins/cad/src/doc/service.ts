@@ -870,8 +870,15 @@ export function createDocService(opts: DocServiceOptions): DocService {
   // shown); the leave keys apply it as Enter would; the frame losing focus and the
   // page going apply nothing, so the app's question ("Leaving discards them")
   // holds (lib/pendingEdits.ts; LINK polish of the SD final review).
-  const pointerLeft = () => {
-    commitPendingEdits('quiet');
+  // A mouseleave with the pointer still over the frame is not the pointer leaving: the
+  // app put something over the frame under a pointer that did not move (its leave
+  // question after the browser's Back, its overlay), and the browser sent it then. It
+  // applies nothing, so a leave already on its way never finds the typed text applied
+  // and saved behind its question (Linux CI: the chip read "Saved" after Stay, where
+  // "Not applied: press Enter" was right). A pointer that really leaves the frame is
+  // outside it when the event is sent.
+  const pointerLeft = (e: Event) => {
+    if (!pointerOverFrame(e)) commitPendingEdits('quiet');
     autosave?.flushNow();
   };
   const saveNow = () => {
@@ -1053,6 +1060,16 @@ export function createDocService(opts: DocServiceOptions): DocService {
   // Tests and debugging only: the study rev the service holds.
   Object.defineProperty(service, 'studyRev', { get: () => studyRev, enumerable: false });
   return service;
+}
+
+/**
+ * A mouse event whose pointer is inside the frame's viewport (something was put over
+ * the frame under it): not the pointer leaving the frame.
+ */
+function pointerOverFrame(e: Event): boolean {
+  if (typeof window === 'undefined' || !('clientX' in e)) return false;
+  const { clientX: x, clientY: y } = e as MouseEvent;
+  return x >= 0 && y >= 0 && x < window.innerWidth && y < window.innerHeight;
 }
 
 /** "a", "a and b", "a, b and c", "a, b, c and 2 more". */

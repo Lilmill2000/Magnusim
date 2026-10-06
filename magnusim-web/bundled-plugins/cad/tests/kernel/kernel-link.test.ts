@@ -10,14 +10,15 @@
 //     CAD's link_export agree visit by visit (body and centroid);
 //   - the BinTools format version is pinned (4), and an export of the same design
 //     in a fresh kernel (a reload) is byte-identical, BREP and sidecar.
-// The app's Python is the core venv's (CAD_E2E_PYTHON, default
-// ../../python/.venv/Scripts/python.exe): without it these tests are skipped and
-// say so, except under the gate (scripts/gate-l2-cad.mjs sets
-// CAD_LINK_REQUIRE_PYTHON=1), where they fail: the gate never passes by skipping.
+// The app's Python (scripts/app-python.mjs: MAGNUSIM_PYTHON, else the app's
+// python/.venv, else a python or python3 on PATH that imports cfddesk and
+// magnusim_sdk, as in CI): without it these tests are skipped and say so, except
+// under the gate (scripts/gate-l2-cad.mjs sets CAD_LINK_REQUIRE_PYTHON=1), where
+// they fail: the gate never passes by skipping.
 // Owner: LINK.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -26,11 +27,13 @@ import type { Kernel } from '../../src/kernel-worker/kernel-api';
 import type { CadDoc } from '../../src/types/doc';
 import type { EndBody } from '../../src/types/doc-service';
 import type { KernelAdapter } from '../../src/types/kernel';
-import { call, loadKernel, PLUGIN } from './kernel-lib';
+import { call, loadKernel } from './kernel-lib';
+import { appPythonMissing, findAppPython } from '../../scripts/app-python.mjs';
 
-const PYTHON = process.env.CAD_E2E_PYTHON || join(PLUGIN, '..', '..', 'python', '.venv', 'Scripts', 'python.exe');
-const HAVE_PY = existsSync(PYTHON);
-const NO_PY = `needs the app's Python with magnusim_sdk and OCP: set CAD_E2E_PYTHON (looked for ${PYTHON})`;
+const FOUND = findAppPython();
+const PYTHON = FOUND.python ?? '';
+const HAVE_PY = !!FOUND.python;
+const NO_PY = appPythonMissing(FOUND);
 if (!HAVE_PY) console.warn(`[kernel-link] skipping the checker tests: ${NO_PY}`);
 const REQUIRE_PY = process.env.CAD_LINK_REQUIRE_PYTHON === '1';
 const itPy = (name: string, fn: () => unknown, timeout?: number) =>
@@ -38,7 +41,7 @@ const itPy = (name: string, fn: () => unknown, timeout?: number) =>
     ? it(name, fn, timeout)
     : REQUIRE_PY
       ? it(name, () => {
-          throw new Error(`gate:l2-cad ${NO_PY}`);
+          throw new Error(`gate:l2-cad: ${NO_PY}`);
         })
       : it.skip(`${name} [skipped: ${NO_PY}]`, fn);
 

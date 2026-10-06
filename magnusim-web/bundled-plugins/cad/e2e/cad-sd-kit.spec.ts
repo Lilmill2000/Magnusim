@@ -68,12 +68,20 @@ const BEFORE_PROPS = ['width', 'height', 'left', 'top', 'background-color', 'bor
 /**
  * CAD's own differences, each with its reason. Nothing else may differ.
  *  - panel card: the 3 px accent bar on the left of a feature panel (CAD's, with no kit
- *    counterpart); the card in the flyout also scrolls (overflow, not compared).
+ *    counterpart). In the flyout the card is a column (display flex, flex-direction column)
+ *    as tall as the room above the dock: its head and foot (Delete, Done) stay in view and
+ *    its body scrolls between them, so Done is always reachable (Linux CI's DejaVu Sans at
+ *    1280 x 800 put Done out of view; e2e/cad-panel-done-reach.spec.ts). The kit's card is
+ *    never height-bound, so it stays a block.
+ *  - panel body: it scrolls in the flyout, and a 3 px padding (given back by a -3 px margin,
+ *    so its content sits where the kit's does) keeps the inputs' focus rings whole at its
+ *    scrolling edges.
  *  - the number field's unit: CAD aligns units left in an 18 px column so the fields of a
  *    panel line up ("mm" under "mm"); the kit's sits after its field.
  */
 const SKIP: Record<string, string[]> = {
-  'PanelChrome/card': ['border-left-width', 'border-left-color', 'border-left-style'],
+  'PanelChrome/card': ['border-left-width', 'border-left-color', 'border-left-style', 'display', 'flex-direction'],
+  'PanelChrome/body': [...SIDES.map((s) => `margin-${s}`), ...SIDES.map((s) => `padding-${s}`)],
   'NumberUnitInput/unit': ['text-align'],
 };
 

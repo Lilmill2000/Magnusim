@@ -12,7 +12,10 @@
 //   when it is a whole value the field takes and the user is not still typing
 //   (commitPendingEdits('quiet'): "-" on the way to "-5", or "1" typed a moment
 //   ago on the way to "15", is left alone, and no refusal shows for it; LINK
-//   polish, SD final review);
+//   polish, SD final review); and only while the field still has the keyboard and
+//   the pointer is really outside the frame: a mouseleave the browser sends because
+//   the app put its leave question over the frame under a still pointer applies
+//   nothing (Linux CI, the browser's Back);
 // - the frame losing focus (the app's header, its dialogs, another window) and
 //   the page going apply nothing: the text waits in the field. While it waits
 //   the app asks before leaving, and its "Leaving discards them" is then true

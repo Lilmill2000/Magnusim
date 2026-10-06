@@ -132,8 +132,25 @@ CAD_E2E_VORTEX_STEP=<path> npm run test:gate:l3-cad   # exit sync (L3): the exit
   variable names no file), `CAD_E2E_BIG_STEP` and `CAD_KERNEL_BIG_STEP` (the
   113 MB part, opt-in). `tests/arch/user-files.test.ts` fails if a copy of one is
   in the plugin.
-  The P2 gate's native check runs the core venv's python with cadquery-ocp 7.9.3
-  inline (`CAD_E2E_PYTHON`, default `../../python/.venv/Scripts/python.exe`).
+- The app's Python: the link checker (`python -m magnusim_sdk.link check`) in
+  `gate:l2-cad`, `gate:l3-cad`, `tests/kernel/kernel-link.test.ts` and the link
+  e2e (`cad-link.spec.ts`, `cad-link-exit.spec.ts`), and the P2 gate's native
+  OCP check (cadquery-ocp 7.9.3, inline), run the interpreter that has the app's
+  backend installed. `scripts/app-python.mjs` finds it, in this order:
+  1. `MAGNUSIM_PYTHON` (the app's own override; `CAD_E2E_PYTHON`, this plugin's
+     older name for it, is read after it). A path that is not there, or a command
+     that cannot import `cfddesk` and `magnusim_sdk`, is "missing": no other
+     Python is tried in its place;
+  2. the app's venv, `magnusim-web/python/.venv` (`Scripts/python.exe` on
+     Windows, `bin/python` elsewhere);
+  3. a `python`, then a `python3`, on `PATH` that can `import cfddesk` and
+     `magnusim_sdk`. CI has no venv: the backend is pip-installed into
+     setup-python's interpreter, and this finds it.
+
+  With none, the gates FAIL at once and say what they tried (never a skip); the
+  tests and specs skip with the same words outside the gates, and fail under
+  them. The gates hand the Python they found to everything they start as
+  `MAGNUSIM_PYTHON`.
 - Kernel and solver binaries are rebuilt only when their sources change, on
   Linux or WSL: `kernel-build/build.sh`, `solver-build/build.sh`. Commit
   `workspace/**/*.wasm` only on version bumps.

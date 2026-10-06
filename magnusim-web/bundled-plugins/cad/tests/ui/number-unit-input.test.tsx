@@ -134,6 +134,15 @@ describe('NumberUnitInput: the pointer leaving and the frame losing focus (LINK 
     expect(s.onCommit).not.toHaveBeenCalled();
     expect(s.input.value).toBe('13');
     expect(pendingEdits().pending).toBe(true);
+    // A pointer leave after that (the app's leave question came over the frame) applies nothing
+    // either, however long ago the text was typed: the question's "Leaving discards them" stays true.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 60_000);
+    act(() => commitPendingEdits('quiet'));
+    vi.useRealTimers();
+    expect(s.onCommit).not.toHaveBeenCalled();
+    expect(s.input.value).toBe('13');
+    expect(pendingEdits().pending).toBe(true);
     // A click elsewhere in the page applies it; so does focus going to another control.
     s.input.focus();
     blurInPage(s.input);

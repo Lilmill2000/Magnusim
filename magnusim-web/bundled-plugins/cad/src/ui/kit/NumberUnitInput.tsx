@@ -18,8 +18,9 @@
 // - Typed text that is not applied yet is unsaved work (lib/pendingEdits.ts):
 //   the page is dirty while a field holds it, so the app asks before leaving
 //   (SD review round 2: Back to project lost it without a word). The pointer
-//   leaving the frame applies a whole value typed a moment ago (commitQuiet); the
-//   frame losing focus applies nothing (the text waits, as the app's question says).
+//   leaving the frame applies a whole value the user stopped typing, while the field
+//   still has the keyboard (commitQuiet); the frame losing focus applies nothing,
+//   then or at a later pointer leave (the text waits, as the app's question says).
 // - Commas in a number are refused with a reason, as the core's number fields
 //   refuse them ("1,500" could be 1500 or 1.5; commaProblem).
 // - A bare number is stored with the display unit ("20" -> "20 mm"); anything
@@ -245,11 +246,16 @@ export function NumberUnitInput({ expr, quantity, units, onCommit, validate, lab
   /**
    * The pointer left the frame: apply the typed text only when it is a whole
    * value the field takes ("-", "1e", "2." and anything refused stay as typed,
-   * with no reason shown) and nothing was typed in the last QUIET_MS.
+   * with no reason shown), nothing was typed in the last QUIET_MS, and the field
+   * still has the keyboard. A field that lost it (the frame lost focus: the app's
+   * header, its leave question, another window) keeps its text: the app asks before
+   * leaving, and its "Leaving discards them" stays true (CI: the browser's Back
+   * opened the question, its overlay came over the frame under a pointer that never
+   * moved, and the mouseleave that sent applied and saved the text behind it).
    */
   function commitQuiet() {
-    if (!editing.current || errorRef.current) return;
-    if (focused.current && Date.now() - typedAt.current < QUIET_MS) return;
+    if (!editing.current || errorRef.current || !focused.current) return;
+    if (Date.now() - typedAt.current < QUIET_MS) return;
     const typed = textRef.current.trim();
     if (!typed || /[-+*/^(.eE,]$/.test(typed) || commaProblem(typed)) return;
     const r = units.evaluate(typed, quantity);

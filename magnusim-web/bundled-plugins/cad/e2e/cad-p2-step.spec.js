@@ -17,7 +17,7 @@
 //      100 mm, Combine Cut (enclosure minus Vortex) = the fluid domain, 213,286,252.06
 //      mm³ (native OCCT 7.9.3, 1e-6), 22 faces, valid; Keep tools keeps Vortex.
 //      Export STEP (AP214) downloads it; the core's "+ Add geometry" takes the
-//      file and loads 22 faces; natively (CAD_E2E_PYTHON, OCP 7.9.3) it is the
+//      file and loads 22 faces; natively (the app's Python, OCP 7.9.3) it is the
 //      same volume.
 //   6. Combine Join and Intersect on imported and modelled bodies (native
 //      values), and Cut with two targets and one tool (analytic).
@@ -48,6 +48,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
+import { appPythonMissing, findAppPython } from '../scripts/app-python.mjs';
 import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, soloVolume, chipVolumes } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -57,8 +58,10 @@ const BOX20 = join(FIXTURES, 'box20.step');
 const BOX20_FACES = join(FIXTURES, 'box20-faces.step');
 const REF = JSON.parse(readFileSync(join(FIXTURES, 'reference.json'), 'utf8'));
 const VORTEX = process.env.CAD_E2E_VORTEX_STEP || '';
-// The core venv's python (cadquery-ocp 7.9.3) for the native check, run inline (the plugin holds no .py but plugin.py).
-const PYTHON = process.env.CAD_E2E_PYTHON || resolve(HERE, '..', '..', '..', 'python', '.venv', 'Scripts', 'python.exe');
+// The app's Python (cadquery-ocp 7.9.3) for the native check, run inline (the plugin holds no .py but plugin.py):
+// scripts/app-python.mjs, MAGNUSIM_PYTHON, the app's venv, or a python on PATH with the backend (CI).
+const FOUND_PYTHON = findAppPython();
+const PYTHON = FOUND_PYTHON.python ?? '';
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 
 // ---------------------------------------------------------------- helpers
@@ -256,7 +259,7 @@ async function combine(frame, op, targets, tools) {
 
 /** The native check: the STEP read by OCP 7.9.3 (the core venv), ShapeFix at 0.001 mm: volume, faces, solids. */
 function nativeStep(path) {
-  expect(existsSync(PYTHON), `no python at ${PYTHON} (set CAD_E2E_PYTHON to the core venv's python with cadquery-ocp 7.9.3)`).toBe(true);
+  expect(PYTHON, appPythonMissing(FOUND_PYTHON)).not.toBe('');
   const code = [
     'import sys, json',
     'from OCP.STEPControl import STEPControl_Reader',

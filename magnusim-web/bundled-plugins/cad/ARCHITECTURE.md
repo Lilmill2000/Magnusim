@@ -779,7 +779,7 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   `cad-p3-profiles-*` stay as area specs). The P2 gate reads the Vortex STEP
   by path (`CAD_E2E_VORTEX_STEP`, never copied; its Vortex tests are skipped
   without it, saying so) and checks the exported STEP
-  natively with the core venv's OCP 7.9.3 (`CAD_E2E_PYTHON`, inline `python -c`)
+  natively with the app's Python's OCP 7.9.3 (`scripts/app-python.mjs`, inline `python -c`)
   and in the core's own "+ Add geometry". `e2e/cad-large-step.spec.js` is the
   113 MB part (opt-in `CAD_E2E_BIG_STEP`).
   The broken-manifest test breaks `manifest.toml` in place for that one test;
@@ -808,7 +808,8 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
 
 - **gate:l2-cad** (`npm run test:gate:l2-cad`, LINK): `tests/kernel/kernel-link.test.ts`
   (the real kernel and the app's own checker, `python -m magnusim_sdk.link check`
-  from the core venv or `CAD_E2E_PYTHON`, on CAD exports: two bodies sharing a
+  from the app's Python, found by `scripts/app-python.mjs`: `MAGNUSIM_PYTHON`, the
+  app's venv, or a python on PATH with the backend as in CI; on CAD exports: two bodies sharing a
   face, a body with an internal face; every face visit's body and centroid against
   the app's `face_visits`; the sidecar byte for byte against
   `magnusim_sdk.link.write_face_names`; format 4; a fresh kernel's export of the
