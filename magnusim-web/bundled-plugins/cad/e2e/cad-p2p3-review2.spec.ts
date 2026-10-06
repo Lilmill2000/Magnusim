@@ -241,7 +241,7 @@ test('cad:p2p3-review2-driven-tab Tab stays inside "Make it driven?"; Enter on C
   await sketchIdle(page);
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   expect((await draft(page)).constraints).toHaveLength(before);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['60', '20']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['60 mm', '20 mm']);
   await page.keyboard.press('Escape');
   await finishSketch(frame);
   expect(seen.csp).toEqual([]);
@@ -306,7 +306,7 @@ async function lensExtrude(page: Page, frame: FrameLocator) {
     await sketchIdle(page);
   }
   await page.keyboard.press('Escape');
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['⌀40', '⌀40']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['⌀40 mm', '⌀40 mm']);
   await finishSketch(frame);
   await clickAt(page, [15, 5, 0]);
   await expect.poll(() => cad(page, () => (window as unknown as W).__CAD__.services.selection.get().items.map((i: { kind: string }) => i.kind))).toEqual(['region']);
@@ -379,12 +379,12 @@ test('cad:p2p3-review2-typed-snap a line typed with only a length keeps the hori
   await clickAt(page, [-60, -30, 0]);
   await sweep(page, [-60, -30, 0], [-30, -28.5, 0]);
   await expect(glyph('horizontal')).toHaveCount(1);
-  await expect(angle).toHaveValue('0');
+  await expect(angle).toHaveValue('0°');
   await page.keyboard.type('30');
   await expect(length).toBeFocused();
   await expect(length).toHaveValue('30');
   // Typing a length keeps the snap: still horizontal, the glyph still shown.
-  await expect(angle).toHaveValue('0');
+  await expect(angle).toHaveValue('0°');
   await expect(glyph('horizontal')).toHaveCount(1);
   await page.keyboard.press('Enter');
   await sketchIdle(page);
@@ -398,9 +398,9 @@ test('cad:p2p3-review2-typed-snap a line typed with only a length keeps the hori
   await clickAt(page, [40, -60, 0]);
   await sweep(page, [40, -60, 0], [41.5, -30, 0]);
   await expect(glyph('vertical')).toHaveCount(1);
-  await expect(angle).toHaveValue('90');
+  await expect(angle).toHaveValue('90°');
   await page.keyboard.type('25');
-  await expect(angle).toHaveValue('90');
+  await expect(angle).toHaveValue('90°');
   await expect(glyph('vertical')).toHaveCount(1);
   await page.keyboard.press('Enter');
   await sketchIdle(page);
@@ -510,7 +510,7 @@ test('cad:p2p3-review2-first-move one pointer move after a typed segment moves t
   const y = box.y + box.height / 2;
   await page.mouse.move(ex, y);
   // The preview follows: the boxes say about -90 degrees, and the box is no longer under the pointer.
-  await expect.poll(async () => Number(await angle.inputValue())).toBeLessThan(-80);
+  await expect.poll(async () => parseFloat(await angle.inputValue())).toBeLessThan(-80);
   const fr = (await page.locator('#workspace-frame').boundingBox())!;
   await expect.poll(() => cad<string, Pt>(page, ([px, py]) => document.elementFromPoint(px, py)?.tagName ?? 'none', [ex - fr.x, y - fr.y])).toBe('CANVAS');
   await page.mouse.down();
@@ -578,7 +578,7 @@ test('cad:p2p3-review2-center-rect-labels a centre rectangle typed 20 x 10 besid
   await sketchIdle(page);
   await page.keyboard.press('Escape');
   const dims = frame.locator('[data-sketch-dim]');
-  await expect(dims).toHaveText(['20', '10']);
+  await expect(dims).toHaveText(['20 mm', '10 mm']);
   await settled(page);
   const centre = (b: Rect): Pt => [b.x + b.width / 2, b.y + b.height / 2];
   const w = centre((await dims.nth(0).boundingBox())!);

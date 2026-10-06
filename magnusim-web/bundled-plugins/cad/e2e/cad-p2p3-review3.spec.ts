@@ -283,7 +283,7 @@ test('cad:p2p3-review3-dims-reopen a sketch reopened from the Front view: a doub
   await page.keyboard.press('Enter');
   await sketchIdle(page);
   await page.keyboard.press('Escape');
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40', '30']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm', '30 mm']);
   await finishSketch(frame);
   // Extrude 1 uses the rectangle, 10 mm.
   await clickAt(page, [20, 15, 0]);
@@ -298,12 +298,12 @@ test('cad:p2p3-review3-dims-reopen a sketch reopened from the Front view: a doub
   await featureRow(frame, 'Sketch 1').locator('> .tree-row').dblclick();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   await settled(page);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40', '30']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm', '30 mm']);
   const fb = (await page.locator('#workspace-frame').boundingBox())!;
   const before = await labelRects(frame);
   await shot(page, 'r3-dims-reopened');
   // A double-click at the 40's centre, once: its editor has the keyboard.
-  const l40 = before.find((x) => x.text === '40')!;
+  const l40 = before.find((x) => x.text === '40 mm')!;
   await page.mouse.move(fb.x + (l40.left + l40.right) / 2, fb.y + (l40.top + l40.bottom) / 2);
   await page.mouse.dblclick(fb.x + (l40.left + l40.right) / 2, fb.y + (l40.top + l40.bottom) / 2);
   await expect(frame.locator('[data-sketch-dim-edit]'), 'the 40 editor after one double-click').toBeFocused({ timeout: 5000 });
@@ -311,9 +311,9 @@ test('cad:p2p3-review3-dims-reopen a sketch reopened from the Front view: a doub
   await expect(frame.locator('[data-sketch-dim-edit]')).toHaveCount(0);
   expect(moved(before, await labelRects(frame)), 'labels after the editor closed').toEqual([]);
   // A click on the 30 selects it and moves no label.
-  const l30 = before.find((x) => x.text === '30')!;
+  const l30 = before.find((x) => x.text === '30 mm')!;
   await page.mouse.click(fb.x + (l30.left + l30.right) / 2, fb.y + (l30.top + l30.bottom) / 2);
-  await expect(frame.locator('[data-sketch-dim]').filter({ hasText: /^30$/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(frame.locator('[data-sketch-dim]').filter({ hasText: /^30 mm$/ })).toHaveAttribute('aria-pressed', 'true');
   expect(moved(before, await labelRects(frame)), 'labels after a click on the 30').toEqual([]);
   // A wheel zoom in sketch mode, then a click on the 40: no label moves.
   await page.mouse.move(fb.x + 900, fb.y + 420);
@@ -321,9 +321,9 @@ test('cad:p2p3-review3-dims-reopen a sketch reopened from the Front view: a doub
   await settled(page);
   const zoomed = await labelRects(frame);
   expect(moved(before, zoomed).length, 'the zoom moved the labels').toBeGreaterThan(0);
-  const z40 = zoomed.find((x) => x.text === '40')!;
+  const z40 = zoomed.find((x) => x.text === '40 mm')!;
   await page.mouse.click(fb.x + (z40.left + z40.right) / 2, fb.y + (z40.top + z40.bottom) / 2);
-  await expect(frame.locator('[data-sketch-dim]').filter({ hasText: /^40$/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(frame.locator('[data-sketch-dim]').filter({ hasText: /^40 mm$/ })).toHaveAttribute('aria-pressed', 'true');
   expect(moved(zoomed, await labelRects(frame)), 'labels after a click following the zoom').toEqual([]);
   await page.keyboard.press('Escape');
   await finishSketch(frame);

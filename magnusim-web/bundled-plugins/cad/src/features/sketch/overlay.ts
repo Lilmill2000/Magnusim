@@ -48,6 +48,8 @@ export function entitySegments(g: EntityGeom, plane: SketchOutput['plane']): num
     out.push(...toModel(plane, [u0, v0]), ...toModel(plane, [u1, v1]));
   };
   if (g.kind === 'line') push(g.a[0], g.a[1], g.b[0], g.b[1]);
+  // P4b (SKETCH): a spline's polyline.
+  else if (g.kind === 'spline') for (let i = 1; i < g.poly.length; i++) push(g.poly[i - 1][0], g.poly[i - 1][1], g.poly[i][0], g.poly[i][1]);
   else if (g.kind === 'circle' || g.kind === 'arc') {
     let a0 = 0;
     let sweep = 360;
@@ -103,10 +105,22 @@ export class ProfileOverlay {
       m.polygonOffsetUnits = -8;
       return m;
     };
-    this.lineMats = { under: line(c.under, LINE_PX), full: line(c.full, LINE_PX), over: line(c.over, LINE_PX), construction: line(c.construction, CONSTRUCTION_PX) };
+    // P4b (SELECT): linked geometry in purple, a lost reference in amber (projected, intersection).
+    this.lineMats = {
+      under: line(c.under, LINE_PX),
+      full: line(c.full, LINE_PX),
+      over: line(c.over, LINE_PX),
+      construction: line(c.construction, CONSTRUCTION_PX),
+      linked: line(c.linked, LINE_PX),
+      lost: line(c.lost, LINE_PX),
+      // P4b (SELECT, fix round 1, polish 4): a linked curve made construction (or an auto-made reference)
+      // stays purple, dashed as construction is, as sketch mode draws it.
+      linkedConstruction: line(c.linked, CONSTRUCTION_PX),
+    };
     // Construction lines and centerlines are dashed in model mode too, as in sketch mode (review P2/P3
     // round 1: a centerline looked solid). The dash follows the zoom (place(), every frame).
     this.lineMats.construction.dashed = true;
+    this.lineMats.linkedConstruction.dashed = true;
     const later = () => this.later();
     this.offs.push(
       services.doc.state.subscribe(later),
@@ -197,7 +211,8 @@ export class ProfileOverlay {
     if (lines) {
       let geom: EntityGeom[] = [];
       try {
-        geom = entityGeometry(feature, output.points, output.radii);
+        // P4b (SELECT): the entities as the build re-projected them, when it did.
+        geom = entityGeometry(output.entities ? { entities: output.entities } : feature, output.points, output.radii);
       } catch {
         geom = [];
       }
@@ -209,8 +224,14 @@ export class ProfileOverlay {
       const under: number[] = [];
       const full: number[] = [];
       const construction: number[] = [];
+      // P4b (SELECT): linked entities (purple) and those whose source is lost (amber).
+      const linked: number[] = [];
+      const linkedConstruction: number[] = [];
+      const lostLines: number[] = [];
+      const linkedIds = new Set((output.entities ?? feature.entities).filter((e) => e.link).map((e) => e.id));
+      const lostIds = new Set(Object.values(output.links ?? {}).flatMap((s) => s.lost ?? []));
       for (const g of geom) {
-        const arr = g.construction ? construction : state === 'fully' || (state === 'under' && fully.has(g.id)) ? full : under;
+        const arr = lostIds.has(g.id) ? lostLines : linkedIds.has(g.id) ? (g.construction ? linkedConstruction : linked) : g.construction ? construction : state === 'fully' || (state === 'under' && fully.has(g.id)) ? full : under;
         arr.push(...entitySegments(g, output.plane));
       }
       const over = state === 'over';
@@ -218,6 +239,9 @@ export class ProfileOverlay {
         [under, over ? this.lineMats.over : this.lineMats.under],
         [full, over ? this.lineMats.over : this.lineMats.full],
         [construction, this.lineMats.construction],
+        [linked, this.lineMats.linked],
+        [linkedConstruction, this.lineMats.linkedConstruction],
+        [lostLines, this.lineMats.lost],
       ] as const) {
         if (!arr.length) continue;
         const lg = new LineSegmentsGeometry();
@@ -271,6 +295,8 @@ export class ProfileOverlay {
       if (px > 0 && Math.abs(m.dashSize - 6 * px) > 1e-3 * px) {
         m.dashSize = 6 * px;
         m.gapSize = 4 * px;
+        this.lineMats.linkedConstruction.dashSize = 6 * px;
+        this.lineMats.linkedConstruction.gapSize = 4 * px;
         this.sketches.changed();
       }
     }

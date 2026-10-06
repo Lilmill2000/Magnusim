@@ -272,9 +272,9 @@ test('cad:p2p3-review1-refit-grow a block that reaches out of a view nobody has 
   await canvasIn([0, 0, 0], [20, 20, 20], 'Extrude 1');
   await canvasIn([200, 0, 0], [20, 20, 20], 'Extrude 2');
   await shot(page, 'r1-refit-grow');
-  // The user orbits: a third block far away leaves the camera where the user put it.
-  const c = (await frame.locator('.cad-viewport').boundingBox())!;
-  const mid: Pt = [c.x + c.width * 0.7, c.y + c.height * 0.5];
+  // The user orbits (a left drag, wherever it starts; Ctrl + drag draws a selection box, P4b):
+  // a third block far away leaves the camera where the user put it.
+  const mid: Pt = await at(page, [210, 10, 20]);
   await page.mouse.move(...mid);
   await page.mouse.down();
   await page.mouse.move(mid[0] + 60, mid[1] + 20, { steps: 6 });
@@ -463,7 +463,7 @@ test('cad:p2p3-review1-dimension-place a rectangle typed 60 x 20 labels its widt
   await sketchIdle(page);
   await page.keyboard.press('Escape');
   const dims = frame.locator('[data-sketch-dim]');
-  await expect(dims).toHaveText(['60', '20']);
+  await expect(dims).toHaveText(['60 mm', '20 mm']);
   await settled(page);
   const centre = (b: Box): Pt => [b.x + b.width / 2, b.y + b.height / 2];
   const w = centre((await dims.nth(0).boundingBox())!);
@@ -491,13 +491,15 @@ test('cad:p2p3-review1-symmetric-twin Symmetric on two points in one place is re
     ],
     constraints: [],
   });
-  // A window around the two points (the line runs out of it), then Ctrl+click the line.
+  // A window around the two points (the line runs out of it; Ctrl + drag since 2026-10-06), then Ctrl+click the line.
   const [x0, y0] = await at(page, [16, 4, 0]);
   const [x1, y1] = await at(page, [24, -4, 0]);
   await page.mouse.move(x0, y0);
+  await page.keyboard.down('Control');
   await page.mouse.down();
   await page.mouse.move(x1, y1, { steps: 6 });
   await page.mouse.up();
+  await page.keyboard.up('Control');
   await clickAt(page, [20, 14, 0], true);
   const btn = tb(frame).locator('[data-command="sketch.symmetric"]');
   await expect(btn).toHaveAttribute('aria-disabled', 'true');

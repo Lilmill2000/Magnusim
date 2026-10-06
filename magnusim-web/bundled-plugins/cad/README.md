@@ -8,10 +8,30 @@ the New Project dialog's "Start from", from **New design** on Home (New Project
 with "Untitled Part N", one Create), or from the header's **CAD** button (its
 menu lists the project's Parts and makes a new one); once a project has a Part,
 its STUDIES section lists it and offers **+ New Part**. A Part opens in its own
-full-page workspace over the workbench. Today (phases P1-P4a and the SD pass) a
-Part is made of sketches (lines, rectangles, circles, arcs; dimensions and
-constraints solved as you draw) turned into solids, and of imported STEP files
-(healed, with their names and colours) edited directly. Solids: Extrude (blind,
+full-page workspace over the workbench. Today (phases P1-P4b and the SD pass) a
+Part is made of sketches (lines, rectangles, circles, arcs, fit-point and
+control-point splines; dimensions and constraints solved as you draw) turned
+into solids, and of imported STEP files (healed, with their names and colours)
+edited directly. Sketch tools beyond drawing: Mirror (copies held symmetric
+about a line), Linear and Circular pattern (copies tied to their source,
+re-laid out when the count or spacing changes, editable from the Sketch panel),
+Offset (a chain of lines, arcs and splines at a distance, one side or both),
+Fillet and Chamfer of a corner, Trim and Extend (splines included), and
+Construction from the right-click menu (a checkmark state; "Make construction"
+/ "Make normal" on a mixed selection), the toolbar or X. **Project** (P) brings
+a body's vertices, edges or a face's outer edges into the sketch, or with
+Silhouette a body's outline along the sketch normal; **Intersect** adds the
+curves where the sketch plane cuts the bodies. Both are linked: drawn purple,
+fixed, re-computed at every rebuild, usable by dimensions, relations, Trim and
+regions, and turned into ordinary geometry with Break link. A source that
+disappears upstream is reported, not blocking: the curves turn amber, "Lost
+reference: ..." names what was lost, and the sketch still solves. While
+drawing, the pointer also snaps to the model itself (a vertex, an edge's
+middle, a point on an edge, a round edge's centre, where an edge pierces the
+sketch plane; Ctrl suppresses snapping), and a click there adds the linked
+reference and the relation in one undo step; Ctrl+click on a body vertex or
+edge adds it to a sketch selection for Coincident, On curve, Midpoint or a
+Dimension. Solids: Extrude (blind,
 two sides, symmetric, through all, up to a face or a vertex, along a chosen
 direction, or a flat face of a body extruded with no sketch), Revolve, Sweep
 along a sketched path, and Loft through two or more profiles, each as a new
@@ -25,9 +45,24 @@ cross; the origin's X, Y and Z axes are rows under Origin too) and points (at a 
 plane, coordinates), each a history feature that follows the model and that a
 sketch can lie on and a revolve or an extrude can use; a broken one that
 nothing uses does not stop the project's update (the header says so as it
-lands). Measure, mass
-properties, check, export to STEP; the volume chip shows each body's volume on
-its own, never a total. Solids come
+lands). The PATTERN group (beside SOLID) has **Linear pattern** (one or two
+directions; count with spacing or extent; symmetric), **Circular pattern** (an
+origin or CONSTRUCT axis, a straight edge or a round face; full 360° or a set
+angle; symmetric) and **Mirror** (an origin or CONSTRUCT plane or a flat face).
+Each repeats features (their tool bodies applied with each feature's own
+operation, or New body / Join / Cut / Intersect), bodies (copies) or faces of
+one body (the boss or pocket they bound, copied); a copy is skipped by a click
+on its number in the view, and a pattern of a mirror or a mirror of a pattern
+works. Copies are named after the pattern and their instance, so a fillet on
+copy 3 survives a count change; a failure is a red feature that says why
+("Instances 2 and 3 of Body 1 don't touch Body 1; Join needs overlap. Use New
+body or change the spacing") while the model before it still shows. Measure,
+mass properties, check, export to STEP; the volume chip shows each body's
+volume on its own, never a total. **Normal to** (N, the views menu, and the
+right-click menu of a face, a plane, a sketch's row or its curves in the view)
+turns the view square to a flat face, an origin or CONSTRUCT plane, or a sketch
+(with the sketch's own up); in sketch mode it looks at the open sketch. A curved
+face is refused in words. Solids come
 only from sketches and STEP: there is no one-click Box or Cylinder (decision
 2026-10-01; a Part saved with one opens with that row red, "This part uses a
 removed feature (Box 1)", and Delete takes it away). For CFD, **Enclosure** (the
@@ -41,9 +76,18 @@ it is drawn see-through (a click picks the part inside it), its faces are named
 by side ("+X face of Enclosure 1", "Top face"; a cylinder about X has a "+X end"),
 and Combine Cut with it as the target (Keep the tool bodies comes on) then gives
 the fluid domain. Named parameters drive
-any number. Patterns, mirror and the further sketch tools (splines, offset,
-project) are the next phase (P4b); guide rails for Loft and the rest are V1. The toolbar keeps its labels from 1280 px wide: what
-does not fit goes into its group's "More" menu (ARCHITECTURE.md §7 "Toolbar").
+any number. Guide rails for Loft and the rest are V1. The model toolbar starts compact (each group's
+main command, the rest in its "More" menu) and the sketch ribbon with every
+command, labels on one line; right-click a command for Show in toolbar / Move to
+More / Move left / Move right / Reset toolbar, or drag it along its group. The
+layout is the user's, the same in every project, and another open CAD tab follows a
+change at once (the host's plugin prefs, `ws.prefs`; on a host without them it is kept
+per project: ARCHITECTURE.md §7 "Toolbar"). Every sketch dimension shows its unit next
+to its value ("⌀125 mm", "R10 mm", "(40 mm)" driven, "fx: 40 mm", "30°"), and so do
+the value boxes while drawing and the edit box; typing "125 mm", "5 in" or a bare
+number (the document's unit) works as before. What a sketch cannot drag (a fully
+defined entity, the origin) keeps the normal arrow cursor; a drag of it says why in
+the sketch panel ("This line is fully defined: change a dimension to move it").
 The description in `manifest.toml` (shown in
 Settings > Plugins) names only what ships: update it as features land.
 
@@ -68,6 +112,31 @@ modules in the page's own workers. There is no Python backend (`plugin.py`
 registers nothing; `manifest.toml` declares the workspace and the study kind).
 
 Licence: GPL-3.0-or-later. Third-party licences: `LICENSES/`.
+
+## Mouse and keys
+
+The view moves as the core viewer's does (Daniel, 2026-10-06), in model mode
+and in sketch mode:
+
+| Input | Does |
+|---|---|
+| Left drag | Orbits, wherever it starts (empty space or a body). In sketch mode a drag that starts on sketch geometry moves it instead (what is under-defined). |
+| Shift + left drag, middle drag | Pans |
+| Wheel, right drag | Zoom (to the cursor) |
+| Alt + left drag | Orbits, always (also while a sketch tool draws) |
+| **Ctrl + drag** | **Box select**, starting anywhere: left to right a solid box selects what it encloses, right to left a dashed box what it touches; Ctrl+Shift + drag adds to the selection; an empty box clears it. The caption in the box says what it takes. Model mode: what is visible, edges with no filter, else the filter's bodies / faces / edges / vertices; sketch mode: curves, points and dimension labels, or the sketch filter's kinds |
+| Click, Ctrl+click | Select; Ctrl+click toggles one item (and, in a sketch, adds a body vertex or edge, projected) |
+| Right click | The context menu |
+
+Keys: model mode E Extrude, Q Press-pull, F Fit, N Normal to, 1-7 the standard
+views, Delete (Delete faces on faces), Ctrl+Z / Ctrl+Y. Sketch mode: L Line, R
+Rectangle, C Circle, A 3-point arc, S Spline, M Mirror, O Offset, P Project,
+D Dimension, T Trim, X Construction, N Normal to, Enter places an open tool
+step or finishes the sketch, Escape stops the tool then clears the selection.
+The rest are toolbar commands (sketch mode: Control-point spline, Linear and
+Circular pattern, Fillet, Chamfer, Intersect; model mode: Linear pattern,
+Circular pattern, Mirror and the others); Ctrl held while drawing suppresses
+snapping.
 
 ## Layout
 
@@ -109,6 +178,7 @@ npm run test:e2e -- e2e/cad-p1-document.spec.js   # the P1 exit gate only
 npm run test:e2e -- e2e/cad-p2-step.spec.js e2e/cad-p3-sketch.spec.js   # the P2 and P3 exit gates
 npm run test:e2e -- e2e/cad-p4a-solids.spec.ts e2e/cad-p4a-construct.spec.ts   # P4a: solid features, reference geometry
 npm run test:e2e -- e2e/cad-p4a-fix1.spec.ts   # P4a fix round 1: each review finding
+npm run test:e2e -- e2e/cad-p4b-pattern.spec.ts e2e/cad-p4b-sketch-tools.spec.ts e2e/cad-p4b-select.spec.ts e2e/cad-p4b-project.spec.ts e2e/cad-p4b-project-step.spec.ts   # P4b: patterns, sketch tools, selection, Project / Intersect (the step gate)
 CAD_E2E_VORTEX_STEP=<path> npm run test:e2e   # with the Vortex part: its tests run instead of being skipped
 CAD_E2E_BIG_STEP=<path> npm run test:e2e -- e2e/cad-large-step.spec.js  # the 113 MB STEP (opt-in)
 npm run test:kernel    # the kernel gates in Node (fixtures/kernel)
@@ -190,9 +260,9 @@ suite once per phase.
   | Shard | `npm run` | What | Specs |
   |---|---|---|---|
   | shell | `test:e2e:shell` | the tree, the document (P1 gate, save, reload, two tabs), panels, the toolbar, the viewport, leaving, the UI kit | `cad-p1-*`, `cad-p15-review1`, `cad-panel-done-reach`, `cad-sd-kit`, `cad-sd-review2-leave`, `cad-p4a-toolbar` |
-  | sketch | `test:e2e:sketch` | the sketcher, profiles, Extrude of them (P3 gate, P2+P3 reviews) | `cad-p3-*`, `cad-p2p3-*` |
-  | solids | `test:e2e:solids` | P4a: the solid features, CONSTRUCT, edge names | `cad-p4a-solids`, `-construct`, `-fix1`, `-integrate` |
-  | step | `test:e2e:step` | STEP import and edit, Combine, Measure, Export, the Enclosure (P2 gate) | `cad-p2-step`, `cad-p2-features-step`, `cad-p2-kernel-ops`, `cad-sd-enclosure`, `cad-sd-review1`, `cad-sd-review2` |
+  | sketch | `test:e2e:sketch` | the sketcher, profiles, Extrude of them (P3 gate, P2+P3 reviews); P4b's sketch tools, selection (boxes, the mouse binding, Construction, Normal to), Project / Intersect and model snaps | `cad-p3-*`, `cad-p2p3-*`, `cad-p4b-sketch-tools`, `cad-p4b-select`, `cad-p4b-project` |
+  | solids | `test:e2e:solids` | P4a: the solid features, CONSTRUCT, edge names; P4b: patterns and mirror, Measure picks through a rebuild | `cad-p4a-solids`, `-construct`, `-fix1`, `-integrate`, `cad-p4b-pattern` |
+  | step | `test:e2e:step` | STEP import and edit, Combine, Measure, Export, the Enclosure (P2 gate); P4b's exit gate (a sketch on an imported face with projected edges through an upstream Delete faces) | `cad-p2-step`, `cad-p2-features-step`, `cad-p2-kernel-ops`, `cad-sd-enclosure`, `cad-sd-review1`, `cad-sd-review2`, `cad-p4b-project-step` |
   | link | `test:e2e:link` | the Part as a project geometry (gate:l2-cad and gate:l3-cad's specs), the start actions | `cad-link*`, `cad-start` |
   | big | `test:e2e:big` | opt-in: the 113 MB STEP (`CAD_E2E_BIG_STEP`; skipped without it) | `cad-large-step` |
 
@@ -211,19 +281,21 @@ suite once per phase.
   shared panel folders (every spec uses them), and any host file in
   `magnusim.e2eHostPaths`. Unit tests and docs run nothing. `--plan` prints
   what would run and why.
-- **Smoke** (`npm run test:e2e:smoke`, about 2 min): 14 existing tests tagged
-  `{ tag: '@smoke' }`, one path through every area: a new Part, the tree,
-  save and reopen, leaving with a save on its way, the toolbar at two sizes, a
-  sketch to fully defined, the plate flow, the bracket (Fillet, edge names), a
-  sketch on a CONSTRUCT plane, STEP edit and export, the Enclosure, the first
-  link, the header's start action. Tag an existing test; never copy one.
+- **Smoke** (`npm run test:e2e:smoke`, about 2 min): 15 existing tests tagged
+  `{ tag: '@smoke' }` (the unit test allows 10-15), one path through every
+  area: a new Part, the tree, save and reopen, leaving with a save on its way,
+  the toolbar at two sizes, the plate flow, the bracket (Fillet, edge names), a
+  linear pattern of a hole, a fit-point spline, the sketch box selection, STEP
+  edit and export, the Enclosure, the first link, the header's start action. Tag an existing test; never copy one.
   `--smoke` also narrows a shard: `npm run test:e2e:solids -- --smoke`.
 - **Parallel workers on one server.** The runner starts one host server and
   runs every test but the `@serial` ones on DEFAULT_WORKERS (in
   `scripts/e2e.mjs`) workers: a spec file runs in order in one worker, files
   run side by side. Then the `@serial` tests run alone, on one worker (output
-  in `test-results/serial`; 11 tests, of which the 113 MB ones and viewport-perf
-  skip without their file or channel):
+  in `test-results/serial`; 17 tests, of which the 113 MB ones and viewport-perf
+  skip without their file or channel; P4b added `cad:p4b-select-box-10k`, which
+  times a box over 10,000 faces, the box timings along the user's path, and the
+  three toolbar tests that change the user's layout in the host's plugin prefs):
   they turn CAD off, break its manifest, forget its choice in the prefs file,
   click Settings > Plugins > Disable, read Home's list of every project, or
   time the server or the browser (`cad:p2-step-contention`'s latencies, the

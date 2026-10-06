@@ -8,7 +8,7 @@
 //      (40, 20) -> "Fully defined", lines #101828.
 //   2. A diagonal dimension -> "Make it driven?"; accepting shows it grey, in
 //      parentheses "(44.72)".
-//   3. A fully defined corner won't drag (cursor not-allowed). Deleting a
+//   3. A fully defined corner won't drag (the cursor stays the arrow; the panel says why). Deleting a
 //      dimension -> "Under defined · 1 DOF", and the corner drags.
 //      (1-3 are one story on one sketch; undo inside the sketch, Finish sketch,
 //      and the whole session as one undo step follow.)
@@ -173,7 +173,7 @@ async function circle(page, frame, centre, diameter) {
 
 // ---------------------------------------------------------------- 1-3. DOF, dimensions, driven, drag
 
-test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF"; two dimensions make it "Fully defined" in #101828; a diagonal is driven "(44.72)"; a fully defined corner will not drag; deleting a dimension gives "1 DOF" and it drags', { tag: '@smoke' }, async ({ page, request }) => {
+test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF"; two dimensions make it "Fully defined" in #101828; a diagonal is driven "(44.72)"; a fully defined corner will not drag; deleting a dimension gives "1 DOF" and it drags', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   // Sketch is offered with nothing selected (it then waits for a plane or a flat face: SD review
   // round 1, cad-sd-review1.spec.ts); here the plane is selected first.
@@ -213,13 +213,17 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Fully defined');
   await expect(frame.locator('[data-cad-panel="sketch"] [data-sketch-state]')).toHaveText('Fully defined');
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40', '20']);
-  // Fully defined lines are #101828: the darkest pixel across the top line.
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm', '20 mm']);
+  // Fully defined lines are #101828: the darkest pixel across the top line and across the left line.
+  // (Real Chrome draws a line that falls between two pixel rows as two lighter rows: one of the two
+  // lines is always on a whole pixel, so the nearer of the two to #101828 is the line's colour.)
   await page.mouse.move(5, 5);
   await settled(page);
+  const off = (p) => Math.abs(p[0] - 0x10) + Math.abs(p[1] - 0x18) + Math.abs(p[2] - 0x28);
   const [lx, ly] = await at(page, [12, 20, 0]);
-  const px = await darkestNear(page, lx, ly);
-  expect(Math.abs(px[0] - 0x10) + Math.abs(px[1] - 0x18) + Math.abs(px[2] - 0x28), `line pixel ${px}`).toBeLessThanOrEqual(24);
+  const [vx, vy] = await at(page, [0, 12, 0]);
+  const px = [await darkestNear(page, lx, ly), await darkestNear(page, vx, vy)].sort((a, b) => off(a) - off(b))[0];
+  expect(off(px), `line pixel ${px}`).toBeLessThanOrEqual(24);
   await shot(page, 'p3-sketch-fully-defined');
 
   // 2. A diagonal would over-define it: "Make it driven?" -> grey "(44.72)".
@@ -234,33 +238,34 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   await sketchIdle(page);
   await expect(q).toBeHidden();
   const driven = frame.locator('[data-sketch-dim][data-driving="0"]');
-  await expect(driven).toHaveText('(44.72)');
+  await expect(driven).toHaveText('(44.72 mm)');
   expect(await driven.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(102, 112, 133)');
   await expect(chip(frame)).toHaveText('Fully defined');
   await shot(page, 'p3-sketch-driven-diagonal');
 
-  // 3. A fully defined corner does not move; the cursor says so.
+  // 3. A fully defined corner does not move; the cursor stays the normal arrow, the panel says why.
   await page.keyboard.press('Escape');
   await expect(tb(frame).locator('[data-command="sketch.dimension"]')).not.toHaveClass(/is-active/);
   const [cx, cy] = await at(page, [40, 20, 0]);
   await page.mouse.move(cx, cy);
-  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => el.style.cursor)).toBe('not-allowed');
+  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => getComputedStyle(el).cursor)).not.toBe('not-allowed');
+  expect(await frame.locator('[data-cad-canvas]').evaluate((el) => el.style.cursor)).toMatch(/^(default|auto|)$/);
   await page.mouse.down();
   await page.mouse.move(cx + 60, cy - 40, { steps: 8 });
   await page.mouse.up();
   await sketchIdle(page);
-  await expect(driven).toHaveText('(44.72)');
+  await expect(driven).toHaveText('(44.72 mm)');
   // The rectangle's corner opposite the origin (the point furthest from it).
   const corner = async () => Object.values((await draft(page)).points).reduce((a, b) => (a[0] + a[1] >= b[0] + b[1] ? a : b));
   expect(await corner()).toEqual([40, 20]);
-  await expect(frame.locator('[data-cad-panel="sketch"] [data-run-reason]').first()).toContainText('fully defined: it cannot be dragged');
+  await expect(frame.locator('[data-cad-panel="sketch"] [data-run-reason]').first()).toContainText('This point is fully defined: change a dimension to move it');
 
   // Delete the 20 dimension: one DOF, and the corner drags (the driven diagonal follows).
-  await frame.locator('[data-sketch-dim]', { hasText: /^20$/ }).click();
+  await frame.locator('[data-sketch-dim]', { hasText: /^20 mm$/ }).click();
   await page.keyboard.press('Delete');
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Under defined · 1 DOF');
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40', '(44.72)']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm', '(44.72 mm)']);
   const [c2x, c2y] = await at(page, [40, 20, 0]);
   await page.mouse.move(c2x, c2y);
   await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => el.style.cursor)).toBe('move');
@@ -269,7 +274,7 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   await page.mouse.move(tx, ty, { steps: 10 });
   await page.mouse.up();
   await sketchIdle(page);
-  await expect(driven).toHaveText(/^\(5\d(\.\d+)?\)$/);
+  await expect(driven).toHaveText(/^\(5\d(\.\d+)? mm\)$/);
   const moved = await corner();
   expect(moved[0]).toBeCloseTo(40, 6);
   expect(moved[1]).toBeGreaterThan(25);
@@ -278,7 +283,7 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   // Undo inside the sketch: the drag, then the delete; redo the delete.
   await page.keyboard.press('Control+z');
   await sketchIdle(page);
-  await expect(driven).toHaveText('(44.72)');
+  await expect(driven).toHaveText('(44.72 mm)');
   await page.keyboard.press('Control+z');
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Fully defined');
@@ -298,7 +303,7 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   await sketchRow(frame).locator('> .tree-row').dblclick();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   await expect(chip(frame)).toHaveText('Under defined · 1 DOF');
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40', '(44.72)']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm', '(44.72 mm)']);
   await page.keyboard.press('Enter');
   await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
   expect(seen.csp, 'CSP violations').toEqual([]);
@@ -314,7 +319,7 @@ test('cad:p3-sketch-regions two overlapping circles give 3 shaded regions; the m
   await circle(page, frame, [0, 0, 0], 40);
   await circle(page, frame, [30, 0, 0], 40);
   await page.keyboard.press('Escape');
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['⌀40', '⌀40']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['⌀40 mm', '⌀40 mm']);
   const g = await twoCircles(page);
   expect(g.r1).toBeCloseTo(20, 9);
   expect(g.r2).toBeCloseTo(20, 9);
@@ -361,7 +366,7 @@ test('cad:p3-sketch-regions two overlapping circles give 3 shaded regions; the m
   await edit.fill('50');
   await edit.press('Enter');
   await sketchIdle(page);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['⌀40', '⌀50']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['⌀40 mm', '⌀50 mm']);
   const g2 = await twoCircles(page);
   expect(g2.r2).toBeCloseTo(25, 9);
   await finishSketch(frame);
@@ -451,7 +456,7 @@ test('cad:p3-sketch-face-cut a sketch on the top face of a 40 x 40 x 20 block, a
   await settled(page);
   await circle(page, frame, [20, 20, 20], 10);
   await page.keyboard.press('Escape');
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['⌀10']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['⌀10 mm']);
   await finishSketch(frame);
   // The circle's region, E, Cut, flipped into the block, 20 mm.
   await clickAt(page, [20, 21, 20]);

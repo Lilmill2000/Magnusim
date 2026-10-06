@@ -8,11 +8,16 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { setSelectionFilter } from '../lib/selection';
 import { useServices } from '../lib/services';
-import { useStateStore } from '../lib/store';
+import { createStateStore, useStateStore } from '../lib/store';
 import { ORIGIN_PLANES, type OriginPlaneRef } from '../types/doc';
 import type { SelectKind } from '../types/selection';
 import type { DisplayMode, PlanesMode, Projection, StandardView, ViewportHandle } from '../types/viewport';
 import { normalToTarget, VIEW_COMMANDS } from './commands';
+// P4b SELECT: the sketch selection filter (Points, Curves, Dimensions) while a sketch is edited.
+import { SKETCH_FILTERS, sketchFilterOf, type SketchPickKind } from '../sketch/select-filter';
+
+/** A services object with no mode store (tests of the chrome alone) is always in model mode. */
+const MODEL_ONLY = createStateStore<{ mode: 'model' | 'sketch' }>({ mode: 'model' });
 
 const ICON = {
   home: ['M4 11.2L12 4.5l8 6.7', 'M6.4 10.2V19.5h11.2V10.2', 'M10 19.5v-5.2h4v5.2'],
@@ -126,8 +131,18 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
   const services = useServices();
   const [open, setOpen] = useState<'filter' | 'section' | 'views' | null>(null);
   const vs = useStateStore(handle.state, (s) => ({ projection: s.projection, display: s.display, section: s.section, planes: s.planes }));
-  const filter = useStateStore(services.selection, (s) => s.filter);
+  const modelFilter = useStateStore(services.selection, (s) => s.filter);
   const items = useStateStore(services.selection, (s) => s.items);
+  // P4b SELECT: in sketch mode the chips are the sketch's own kinds.
+  const inSketch = useStateStore(services.mode ?? MODEL_ONLY, (s) => s.mode) === 'sketch';
+  const sketchFilterStore = sketchFilterOf(services);
+  const sketchKinds = useStateStore(sketchFilterStore, (s) => s.kinds);
+  const filter: string[] = inSketch ? sketchKinds : modelFilter;
+  const chips: { kind: string; label: string }[] = inSketch ? SKETCH_FILTERS : FILTERS;
+  const setSketchKind = (kind: SketchPickKind) => {
+    const next = sketchKinds.includes(kind) ? sketchKinds.filter((k) => k !== kind) : [...sketchKinds, kind];
+    sketchFilterStore.set({ kinds: SKETCH_FILTERS.map((f) => f.kind).filter((k) => next.includes(k)) });
+  };
   const section = vs.section;
   const close = () => setOpen(null);
   const toggle = (which: 'filter' | 'views') => setOpen((o) => (o === which ? null : which));
@@ -135,10 +150,10 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
   const range = open === 'section' && section ? handle.sectionRange(section.plane) : null;
   const axis = section ? sectionAxis(section.plane) : { label: 'Y', sign: 1 };
   const coordRange = range ? ([Math.min(range[0] * axis.sign, range[1] * axis.sign), Math.max(range[0] * axis.sign, range[1] * axis.sign)] as const) : null;
-  const normalTo = open === 'views' ? normalToTarget({ items }, handle) : null;
+  const normalTo = open === 'views' ? normalToTarget({ items }, handle, services.doc?.state.get()) : null;
 
   const setFilterKind = (kind: SelectKind) => {
-    const next = filter.includes(kind) ? filter.filter((k) => k !== kind) : [...filter, kind];
+    const next = modelFilter.includes(kind) ? modelFilter.filter((k) => k !== kind) : [...modelFilter, kind];
     setSelectionFilter(services.selection, FILTERS.map((f) => f.kind).filter((k) => next.includes(k)));
   };
 
@@ -169,7 +184,7 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
           <button
             type="button"
             className={`cad-vp-btn${filter.length ? ' is-on' : ''}`}
-            title={filter.length ? `Selection filter: ${FILTERS.filter((f) => filter.includes(f.kind)).map((f) => f.label).join(', ')}` : 'Selection filter'}
+            title={filter.length ? `Selection filter: ${chips.filter((f) => filter.includes(f.kind)).map((f) => f.label).join(', ')}` : 'Selection filter'}
             aria-label="Selection filter"
             aria-expanded={open === 'filter'}
             data-vp-opens="filter"
@@ -180,15 +195,30 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
           <Popover open={open === 'filter'} onClose={close} label="Selection filter" id="filter">
             <div className="cad-vp-pop-title">Select</div>
             <div className="cad-vp-chips">
-              {FILTERS.map((f) => (
-                <button key={f.kind} type="button" className={`cad-vp-chip${filter.includes(f.kind) ? ' is-on' : ''}`} aria-pressed={filter.includes(f.kind)} data-filter={f.kind} onClick={() => setFilterKind(f.kind)}>
+              {chips.map((f) => (
+                <button
+                  key={f.kind}
+                  type="button"
+                  className={`cad-vp-chip${filter.includes(f.kind) ? ' is-on' : ''}`}
+                  aria-pressed={filter.includes(f.kind)}
+                  data-filter={f.kind}
+                  onClick={() => (inSketch ? setSketchKind(f.kind as SketchPickKind) : setFilterKind(f.kind as SelectKind))}
+                >
                   {f.label}
                 </button>
               ))}
             </div>
-            <div className="cad-vp-pop-hint">{filter.length ? 'Only these can be picked in the viewport.' : 'Faces, edges, vertices and planes can be picked.'}</div>
+            <div className="cad-vp-pop-hint">
+              {inSketch
+                ? filter.length
+                  ? 'Only these can be picked or boxed in the sketch.'
+                  : 'Curves, points and dimensions can be picked or boxed.'
+                : filter.length
+                  ? 'Only these can be picked in the viewport. A box selects them too.'
+                  : 'Faces, edges, vertices and planes can be picked. A box selects edges.'}
+            </div>
             {filter.length ? (
-              <button type="button" className="cad-vp-link" data-filter-clear="1" onClick={() => setSelectionFilter(services.selection, [])}>
+              <button type="button" className="cad-vp-link" data-filter-clear="1" onClick={() => (inSketch ? sketchFilterStore.set({ kinds: [] }) : setSelectionFilter(services.selection, []))}>
                 Pick anything
               </button>
             ) : null}

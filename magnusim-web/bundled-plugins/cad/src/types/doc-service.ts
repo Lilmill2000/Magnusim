@@ -57,7 +57,24 @@ export type FeatureOutput = SketchOutput | ImportOutput | EnclosureOutput
   // P4a: what a CONSTRUCT feature built (REFERENCE, src/types/references.ts)
   | ConstructOutput
   // P4a: the edges a Fillet or Chamfer rounded (SOLIDS)
-  | EdgeChainOutput;
+  | EdgeChainOutput
+  // P4b: the copies a pattern or mirror made (PATTERN)
+  | PatternOutput;
+
+/**
+ * P4b (PATTERN): what a Linear pattern, Circular pattern or Mirror built, for its panel and the
+ * markers drawn on each copy (a click on one leaves that copy out). `at` is where the copy's marker
+ * goes (the source's centre moved as the copy is); `skipped` copies are not made; `failed` names
+ * copies the operation could not use (they turned the feature red).
+ */
+export interface PatternOutput {
+  type: 'pattern';
+  copies: { key: string; label: string; at: Vec3; skipped: boolean; failed?: boolean }[];
+  /** Copies made (not skipped). */
+  made: number;
+  /** The source's centre (the original's marker). */
+  origin: Vec3 | null;
+}
 
 /**
  * P4a (SOLIDS): what a Fillet or Chamfer built: how many edges it picked (and that its
@@ -345,6 +362,11 @@ export interface BuildContext {
   files: FeatureFiles | null;
   /** The sketch solver (re-solving a sketch whose dimensions changed); null until sketch mode's module started it. */
   solver: SketchSolverClient | null;
+  /**
+   * P4b (PATTERN): the feature types, so a feature pattern builds its source features' tool bodies
+   * again through their own builds. Absent in contexts that do not give it (unit fakes).
+   */
+  registry?: FeatureRegistry;
 }
 
 /** What a feature's build returns: bodies it created or changed, or an error. */

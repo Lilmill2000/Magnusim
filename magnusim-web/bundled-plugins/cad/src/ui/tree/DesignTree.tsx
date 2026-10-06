@@ -497,7 +497,8 @@ function Part() {
           e.preventDefault();
           if (!plane || !handle) return;
           if (!isSelected(selection.get(), item)) selectItem(selection, item, false);
-          ui.showMenu(e.clientX, e.clientY, [{ id: 'look-at', label: 'Look at', run: () => handle.lookAt(ORIGIN_PLANES[plane].normal, PLANE_UP[plane]) }], `${label} actions`);
+          // P4b SELECT: one name everywhere, "Normal to" (it was "Look at" here).
+          ui.showMenu(e.clientX, e.clientY, [{ id: 'normal-to', label: 'Normal to', run: () => handle.lookAt(ORIGIN_PLANES[plane].normal, PLANE_UP[plane]) }], `${label} actions`);
         }}
         onMouseEnter={() => {
           handle?.flash([item]);

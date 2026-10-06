@@ -23,6 +23,10 @@ import { solvedStateOf, statusOf, type SketchStatus } from './dof';
 import { SketchBuilder, type EditOutcome, type SketchDraft } from './edit';
 import { constraintLabel, DIMENSION_LABELS, entityLabel, entityOf, evaluateDimensions, isDimension, measureDimension, quantityOf, toSolverSketch, withSolved } from './model';
 import type { SolverClient } from './solver-client';
+import { prunedLinks } from './project/curves';
+import { sketchUp } from '../viewport/normal';
+// P4b (SKETCH): sketch patterns and offsets.
+import { prunedTies, tiesDissolved } from './tools/ties';
 
 /** A sketch item under the pointer or in the selection. */
 export interface SketchHit {
@@ -119,6 +123,19 @@ export interface SketchTool {
   /** The line tool: the next segment of an open chain becomes a tangent arc (or a line again). False when no chain is open. */
   toggleArc?(): boolean;
   dispose?(): void;
+  // ---- P4b (SKETCH)
+  /** Enter while the tool has an open step (sketch.enter, src/sketch/tools/commands.ts): it places what is drawn and returns true; false lets Enter finish the sketch. */
+  commit?(): boolean;
+  /** The tool's options, drawn in the sketch panel (src/sketch/tools/options.tsx). */
+  options?(): import('./tools/options').ToolOption[];
+  // ---- P4b (INTEGRATE, mouse binding 2026-10-06)
+  /**
+   * Whether a left press (no Alt) is the tool's. Absent: every left press is (the drawing tools).
+   * The Select tool takes a press on sketch geometry (to drag it) and a Ctrl press (the box); a
+   * plain or Shift press elsewhere goes to the viewport, which orbits or pans as the core viewer
+   * does; its click still reaches the tool.
+   */
+  takesPress?(e: SketchPointer): boolean;
 }
 
 export type ToolFactory = (mode: SketchMode, id: SketchToolId) => SketchTool;
@@ -139,8 +156,9 @@ export function emptyPreview(): SketchPreview {
   return { ...EMPTY_PREVIEW, lines: [], arcs: [], points: [], guides: [], glyphs: [], doomed: [], boxes: [] };
 }
 
-function snapshot(d: SketchFeature): SketchDraft & { solved: SketchFeature['solved'] } {
-  return { points: d.points, entities: d.entities, constraints: d.constraints, solved: d.solved };
+function snapshot(d: SketchFeature): SketchDraft & Pick<SketchFeature, 'solved' | 'links' | 'ties'> {
+  // P4b (SELECT): linked geometry's sources go with their entities. P4b (SKETCH): so do pattern / offset ties.
+  return { points: d.points, entities: d.entities, constraints: d.constraints, solved: d.solved, links: d.links, ties: d.ties };
 }
 
 /** ydir = normal x xdir. */
@@ -175,6 +193,8 @@ export class SketchMode implements SketchModeApi {
   private drag: { base: SketchFeature; moved: boolean } | null = null;
   /** Called with the viewport handle on enter (the overlay and the pointer router). */
   onAttach: ((handle: ViewportHandle) => () => void) | null = null;
+  /** P4b (SELECT): the overlay sends the last pointer move to the tool again (a snap on the model became ready). */
+  repeatPointer: (() => void) | null = null;
 
   constructor(
     readonly services: AppServices,
@@ -275,7 +295,8 @@ export class SketchMode implements SketchModeApi {
     clearSelection(this.services.selection);
     this.attach();
     const h = this.services.viewport.get().handle;
-    if (h && plane) h.lookAt(plane.normal, planeY(plane));
+    // P4b SELECT (fix round 1): the up every Normal to uses for a sketch (never upside down).
+    if (h && plane) h.lookAt(plane.normal, sketchUp(plane));
     this.reframeWhenRolledBack(session);
     this.services.bus.emit('sketch:mode', { feature: session.feature });
     // Solve what is stored (a parameter may have changed a dimension) and analyse it.
@@ -621,7 +642,8 @@ export class SketchMode implements SketchModeApi {
       if (this.undoStack.length > 200) this.undoStack.shift();
       this.redoStack = [];
     }
-    s.update({ points: next.points, entities: next.entities, constraints: next.constraints, solved: next.solved } as Partial<SketchFeature>);
+    // P4b (SELECT): the links, pruned to the entities still there (a deleted projected curve leaves its link).
+    s.update({ points: next.points, entities: next.entities, constraints: next.constraints, solved: next.solved, links: prunedLinks(next), ties: prunedTies(next) } as Partial<SketchFeature>);
     const d = this.stored() ?? next;
     this.view.set({ draft: d, canUndo: this.undoStack.length > 0, canRedo: this.redoStack.length > 0 });
     this.pruneSelection(d);
@@ -736,12 +758,16 @@ export class SketchMode implements SketchModeApi {
     if (!hits.length) return null;
     const ids = hits.map((h) => h.id).filter((id) => id !== 'origin');
     if (!ids.length) return null;
+    // P4b fix 1 (SKETCH, P6): a pattern or offset whose sources go is dissolved; the panel says so.
+    const before = this.stored();
     return this.apply('Delete', (d) => {
       const b = new SketchBuilder(d);
       b.remove(ids);
       return { ok: true, draft: b.result(), optional: [], removed: ids };
     }).then((r) => {
       if (r.ok) this.select([], false);
+      const lost = r.ok && before ? tiesDissolved(before, this.stored() ?? before) : null;
+      if (lost) this.note(lost);
       return r;
     });
   }
@@ -893,7 +919,8 @@ export class SketchMode implements SketchModeApi {
         if (!r.ok || !r.movable) {
           await this.solver.dragEnd().catch(() => null);
           const what = 'point' in target ? 'point' : (entityOf(d, target.entity)?.kind ?? 'entity');
-          this.note(r.ok ? `This ${what} is fully defined: it cannot be dragged` : 'The sketch is over-defined: fix the conflict before dragging');
+          // Follow-up (Daniel, 2026-10-06): no not-allowed cursor; the words say why and what to do.
+          this.note(r.ok ? `This ${what} is fully defined: change a dimension to move it` : 'The sketch is over-defined: fix the conflict before dragging');
           return false;
         }
       } catch (err) {

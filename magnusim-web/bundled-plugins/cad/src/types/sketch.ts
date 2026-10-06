@@ -48,6 +48,17 @@ export interface SketchOutput {
   source: SketchSolveSource;
   /** The face support could not be found: the sketch stayed on its stored plane. */
   supportLost?: boolean;
+  /**
+   * P4b (SELECT): each link as this rebuild found it: 'ok' (re-projected), 'lost' (its source is
+   * gone: the entities keep their last place, amber), 'changed' (a face, silhouette or section now
+   * has another number of curves: shown as it was until the sketch is opened), with the words.
+   */
+  links?: Record<string, { state: 'ok' | 'lost' | 'changed'; message?: string; lost?: string[] }>;
+  /**
+   * P4b (SELECT, fix round 1): the sketch's entities as this build used them, when a re-projection
+   * changed them (new linked curves, moved or detached points); the model-mode overlay draws these.
+   */
+  entities?: import('./doc').SketchEntity[];
 }
 
 // ------------------------------------------------------------ solver (PlaneGCS worker)
@@ -65,8 +76,11 @@ export interface SolverSketch {
     | { id: string; kind: 'line'; p: [string, string]; construction?: boolean }
     | { id: string; kind: 'circle'; c: string; r: number; construction?: boolean }
     | { id: string; kind: 'arc'; c: string; a: string; b: string; ccw?: boolean; construction?: boolean }
+    // P4b (SKETCH): a spline (its points are solver points; the curve adds no unknowns).
+    | { id: string; kind: 'spline'; form: 'fit' | 'control'; pts: string[]; degree: number; closed?: boolean; handles?: [string | null, string | null]; knots?: number[]; mults?: number[]; spans?: [number, number]; construction?: boolean }
   )[];
-  constraints: { id: string; kind: string; refs: string[]; value?: number | Vec2; driving?: boolean }[];
+  // P4b (SKETCH): number[] for the solver-only pattern ties (src/sketch/tools/ties.ts).
+  constraints: { id: string; kind: string; refs: string[]; value?: number | Vec2 | number[]; driving?: boolean }[];
 }
 
 /** Solved values (solver-api `values()`): points, radii, driven measures. */
@@ -145,7 +159,19 @@ export type SketchToolId =
   | 'centerline'
   | 'dimension'
   | 'trim'
-  | 'extend';
+  | 'extend'
+  // ---- P4b (SKETCH): splines, mirror, patterns, offset, fillet and chamfer
+  | 'spline-fit'
+  | 'spline-control'
+  | 'mirror'
+  | 'pattern-linear'
+  | 'pattern-circular'
+  | 'offset'
+  | 'fillet'
+  | 'chamfer'
+  // ---- P4b (SELECT): linked geometry
+  | 'project'
+  | 'intersect';
 
 /** Sketch mode's live state (one store; written only by src/sketch/). */
 export interface SketchModeState {

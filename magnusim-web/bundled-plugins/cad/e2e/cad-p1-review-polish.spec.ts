@@ -160,7 +160,7 @@ test('cad:p1-review-panels tiny sizes refused, grouped volume readouts and total
   const canvas = (await page.locator('#workspace-frame').boundingBox())!;
   await page.mouse.click(canvas.x + canvas.width - 40, canvas.y + 120); // empty space: clears the selection
   await page.keyboard.press('n');
-  await expect(page.locator('#workspace-overlay [data-ws-toast]')).toHaveText(/Normal to: Select a planar face or a plane to look at it straight on/);
+  await expect(page.locator('#workspace-overlay [data-ws-toast]')).toHaveText(/Normal to: Select a flat face, a plane or a sketch to look at it straight on/);
 
   // A double-click on the part's own row renames it, as the header's crumb does.
   await tree.locator('[data-part-name] > .tree-row').dblclick();

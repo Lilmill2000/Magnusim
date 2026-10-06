@@ -19,6 +19,8 @@ import { forgetBreps } from '../../src/features/import/feature';
 import { edgeWords } from '../../src/naming/edges';
 import type { ChamferFeature, Feature, FilletFeature, PersistentRef, PressPullFeature, ShellFeature, SketchFeature } from '../../src/types/doc';
 import { importFixture, type RealDoc } from '../features/p2/real-doc';
+import { PATTERN_DEFS } from '../../src/features/pattern/defs';
+import type { FeatureTypeDef } from '../../src/types/doc-service';
 import { addFeature, addSketch, body, close, edgeRef, faceRef, onFace, onPlane, openSolids, regionsOf, settle, SketchBuilder, topo, volume } from '../features/solids/solids-real';
 
 const open: RealDoc[] = [];
@@ -154,5 +156,83 @@ describe('naming corpus', () => {
     expect(Math.abs((await volume(r, b.id)) / expected(8) - 1)).toBeLessThan(1e-6);
     expect(panelWords(r, (r.doc.state.get().doc.features.find((f) => f.id === ch.id) as ChamferFeature).edges)).toEqual(wordsBefore);
     expect(sortedNames(r)).toEqual(namesBefore);
+  });
+});
+
+// ---- P4b (PATTERN): copies of patterns and mirrors keep the names of their faces, so features
+// on a copy survive upstream edits of the pattern and of its source.
+describe('naming corpus: patterns and mirrors (P4b)', () => {
+  async function partWithPatterns() {
+    const r = await part();
+    for (const d of PATTERN_DEFS) if (!r.doc.features.get(d.type)) r.doc.features.register(d as unknown as FeatureTypeDef);
+    return r;
+  }
+
+  it('a hole patterned 4 along X with a fillet on the rim of instance 3: count 4 -> 5 and spacing 20 -> 18 keep the fillet on that rim, by name, with the same words', async () => {
+    const r = await partWithPatterns();
+    const sk = new SketchBuilder();
+    sk.rect(0, 0, 100, 20);
+    const plate = await addSketch(r, onPlane('origin:top', sk));
+    expect((await addFeature(r, 'extrude', { profiles: regionsOf(r, plate), extent: { kind: 'blind', distance: '10 mm' } })).status.state).toBe('ok');
+    const hs = new SketchBuilder();
+    hs.circle([10, 10], 3);
+    const hsk = await addSketch(r, onPlane('origin:top', hs));
+    const hole = await addFeature(r, 'extrude', { profiles: regionsOf(r, hsk), extent: { kind: 'blind', distance: '10 mm' }, op: 'cut', creates: null });
+    expect(hole.status.state).toBe('ok');
+    const dir1 = (count: number, spacing: number) => ({ axis: { kind: 'origin', axis: 'origin:x' }, flip: false, count: String(count), mode: 'spacing', distance: `${spacing} mm`, symmetric: false });
+    const lp = await addFeature(r, 'pattern_linear', { of: 'features', features: [hole.id], op: 'source', dir1: dir1(4, 20) });
+    expect(lp.status).toMatchObject({ state: 'ok' });
+    const t = await topo(r, body(r));
+    const rim = t.edges.find((e) => e.type === 'circle' && Math.abs(e.mid![2] - 10) < 1e-6 && Math.abs(e.center![0] - 50) < 1e-6)!;
+    const ref = await edgeRef(r, body(r), rim.i);
+    expect(ref.name).toContain(`F:${lp.id}:i3:`);
+    const fl = await addFeature(r, 'fillet', { body: body(r).id, edges: [ref], radius: '1 mm' });
+    expect(fl.status).toMatchObject({ state: 'ok' });
+    const words = panelWords(r, [ref]);
+    // The two faces in their name's (sorted) order: either way round.
+    expect(words[0]).toMatch(/^(End of Extrude 1 · Side 1 \(instance 3\) of Extrude 2|Side 1 \(instance 3\) of Extrude 2 · End of Extrude 1)$/);
+    // A 1 mm round on a hole's rim of radius 3 removes 2 pi rho A (Pappus): A = r^2 (1 - pi/4), rho = R + its centroid's offset.
+    const A = 1 - Math.PI / 4;
+    const rho = 3 + (5 / 6 - Math.PI / 4) / A;
+    const round = 2 * Math.PI * rho * A;
+    const hole1 = Math.PI * 9 * 10;
+    expect(close(await volume(r, body(r).id), 100 * 20 * 10 - 4 * hole1 - round, 1e-6)).toBe(true);
+    const rb = await edit(r, lp.id, { dir1: dir1(5, 18) } as Partial<Feature>);
+    expect(rb.features[fl.id]).toMatchObject({ state: 'ok' });
+    expect(rb.features[fl.id].message).toBeUndefined();
+    expect(close(await volume(r, body(r).id), 100 * 20 * 10 - 5 * hole1 - round, 1e-6)).toBe(true);
+    expect(panelWords(r, (r.doc.state.get().doc.features.find((f) => f.id === fl.id) as FilletFeature).edges)).toEqual(words);
+    // The fillet face sits on the rim of instance 3, now at x = 10 + 2 x 18.
+    const t2 = await topo(r, body(r));
+    const filletFace = body(r).names!.faces.findIndex((n) => n.startsWith(`F:${fl.id}:fillet:`));
+    expect(t2.faces.find((f) => f.i === filletFace)!.centroid![0]).toBeCloseTo(46, 6);
+  });
+
+  it('a block mirrored as a new body with a fillet on the copy: the source made taller keeps the fillet, by name', async () => {
+    const r = await partWithPatterns();
+    const sk = new SketchBuilder();
+    sk.rect(5, 0, 15, 10);
+    const s = await addSketch(r, onPlane('origin:top', sk));
+    const ex = await addFeature(r, 'extrude', { profiles: regionsOf(r, s), extent: { kind: 'blind', distance: '10 mm' } });
+    const src = body(r).id;
+    const m = await addFeature(r, 'mirror', { of: 'bodies', bodies: [src], op: 'new', plane: { kind: 'origin', plane: 'origin:right' } });
+    expect(m.status).toMatchObject({ state: 'ok' });
+    const copy = r.doc.state.get().rebuild.bodies.find((b) => b.id !== src)!;
+    const t = await topo(r, copy);
+    const edge = t.edges.find((e) => e.type === 'line' && Math.abs(e.dir![2]) > 0.99 && Math.abs(e.mid![0] + 15) < 1e-6 && Math.abs(e.mid![1]) < 1e-6)!;
+    const ref = await edgeRef(r, copy, edge.i);
+    expect(ref.name.split('&').every((p) => p.includes(`F:${m.id}:m:`))).toBe(true);
+    const fl = await addFeature(r, 'fillet', { body: copy.id, edges: [ref], radius: '1 mm' });
+    expect(fl.status).toMatchObject({ state: 'ok' });
+    const words = panelWords(r, [ref]);
+    const vol = async () => (await r.doc.measure(copy.id)).volume;
+    expect(close(await vol(), 1000 - (1 - Math.PI / 4) * 10)).toBe(true);
+    const rb = await edit(r, ex.id, { extent: { kind: 'blind', distance: '12 mm' } } as Partial<Feature>);
+    expect(rb.features[fl.id]).toMatchObject({ state: 'ok' });
+    expect(rb.features[fl.id].message).toBeUndefined();
+    expect(close(await vol(), 1200 - (1 - Math.PI / 4) * 12)).toBe(true);
+    const fe = (r.doc.state.get().doc.features.find((f) => f.id === fl.id) as FilletFeature).edges;
+    const shown = r.doc.state.get().rebuild.bodies.find((b) => b.id === copy.id)!;
+    expect(fe.map((e) => edgeWords(e.name, featureName(r), shown.names?.faces ?? null))).toEqual(words);
   });
 });

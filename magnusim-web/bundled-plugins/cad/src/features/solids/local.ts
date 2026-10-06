@@ -12,6 +12,7 @@ import type { BuildContext, BuiltBody } from '../../types/doc-service';
 import type { ShapeId, TopoResult } from '../../types/kernel-protocol';
 import type { NamingLookup } from '../../types/naming';
 import type { Step } from './build';
+import { copyGoneWhy } from '../pattern/gone';
 
 /** A kernel lookup that reads every edge / vertex of a shape once per build. */
 export function cachedLookup(ctx: Pick<BuildContext, 'kernel'>): NamingLookup {
@@ -51,20 +52,25 @@ export function bodyFor(name: string, id: BodyId | '', ctx: Pick<BuildContext, '
 }
 
 /** Every stored edge, and every edge of every stored face, found on the body now (indices, no repeats). */
-export async function resolveEdgeSet(name: string, body: BuiltBody, edges: readonly PersistentRef[], faces: readonly PersistentRef[], ctx: Pick<BuildContext, 'kernel' | 'bodyName' | 'featureName'>, lookup: NamingLookup): Promise<Step<{ edges: number[]; warning: string | null }>> {
+export async function resolveEdgeSet(name: string, body: BuiltBody, edges: readonly PersistentRef[], faces: readonly PersistentRef[], ctx: Pick<BuildContext, 'kernel' | 'bodyName' | 'featureName'> & Partial<Pick<BuildContext, 'outputs'>>, lookup: NamingLookup): Promise<Step<{ edges: number[]; warning: string | null }>> {
+  // P4b (PATTERN, fix round 1 P4): a pattern copy's edge or face that is gone says why (skipped, fewer instances).
+  const why = (n: string) => {
+    const w = copyGoneWhy(n, ctx.outputs, (id) => ctx.featureName(id));
+    return w ? ` (${w})` : '';
+  };
   const out: number[] = [];
   let warning: string | null = null;
   const fname = (id: string) => ctx.featureName(id);
   const faceNames = body.names?.faces ?? null;
   for (const ref of edges) {
     const r = await resolveEdge({ ref, shape: body.shape, names: body.names!, lookup });
-    if (!r.ok) return { ok: false, message: `${name} failed: ${edgeWords(ref.name, fname, faceNames) ?? 'An edge'} not found on ${ctx.bodyName(body.id)} after rebuild` };
+    if (!r.ok) return { ok: false, message: `${name} failed: ${edgeWords(ref.name, fname, faceNames) ?? 'An edge'} not found on ${ctx.bodyName(body.id)} after rebuild${why(ref.name)}` };
     if (r.warning) warning = `${edgeWords(ref.name, fname, faceNames) ?? 'An edge'}: ${r.warning}`;
     if (!out.includes(r.index)) out.push(r.index);
   }
   for (const ref of faces) {
     const r = await resolveFace({ ref, shape: body.shape, names: body.names!, lookup });
-    if (!r.ok) return { ok: false, message: `${name} failed: ${describeFace(ref.name, fname, faceNames)} not found on ${ctx.bodyName(body.id)} after rebuild` };
+    if (!r.ok) return { ok: false, message: `${name} failed: ${describeFace(ref.name, fname, faceNames)} not found on ${ctx.bodyName(body.id)} after rebuild${why(ref.name)}` };
     if (r.warning) warning = `${describeFace(ref.name, fname, faceNames)}: ${r.warning}`;
     for (const e of await edgesOfFace(lookup, body.shape, r.index)) if (!out.includes(e)) out.push(e);
   }

@@ -37,19 +37,40 @@ const FOLD_ORDER = [
   'modify.split',
   'modify.delete-faces',
   'construct.axis',
+  // P4b PATTERN.
+  'pattern.circular',
+  'pattern.mirror',
   'solid.sweep',
   'modify.shell',
   'file.export-step',
   'solid.revolve',
   'modify.combine',
   'modify.press-pull',
+  // P4b fix round 1 (sketch review P2): Intersect and Project first, Daniel's headline tools last.
+  'sketch.intersect',
+  'sketch.project',
   'sketch.point',
   'sketch.construction',
+  'sketch.chamfer',
+  'sketch.spline-control',
   'sketch.arc-tangent',
   'sketch.rectangle-center',
   'sketch.extend',
   'sketch.centerline',
+  'sketch.offset',
+  'sketch.fillet',
+  'sketch.pattern-circular',
+  'sketch.pattern-linear',
+  'sketch.mirror',
+  'sketch.spline',
 ];
+
+/**
+ * The model commands on the bar by default (src/ui/Toolbar.tsx KEEP_IN_VIEW's model part; P4b fix
+ * round 1, Daniel: the compact layout at every width). Every other model command starts in its
+ * group's More menu.
+ */
+const MODEL_ON_BAR = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step'];
 
 type Cmd = { id: string; label: string; shortcut: string | null; hint: string | null; reason: string | null };
 type Grp = { group: string; label: string; commands: Cmd[] };
@@ -172,11 +193,16 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
     expect(await more.evaluate((el) => el === document.activeElement), `${where}: Escape gives ${g.group}'s More the keyboard`).toBe(true);
   }
   await expect(bar).toHaveAttribute('data-folded', String(folded.length));
-  // What folds is always the start of the priority list (the most-used stay in view longest).
-  const present = new Set(groups.flatMap((g) => g.commands.map((c) => c.id)));
-  const order = FOLD_ORDER.filter((id) => present.has(id));
-  expect([...folded].sort((a, b) => order.indexOf(a) - order.indexOf(b)), `${where}: folded in priority order`).toEqual(order.slice(0, folded.length));
-  return folded;
+  // In More by the default layout (model mode: everything but each group's main command), then what
+  // the width folds: always the start of the priority list of the rest (the most-used stay longest).
+  const present = groups.flatMap((g) => g.commands.map((c) => c.id));
+  const byLayout = mode === 'model' ? present.filter((id) => !MODEL_ON_BAR.includes(id)) : [];
+  expect(folded.filter((id) => byLayout.includes(id)).sort(), `${where}: the default layout's More commands`).toEqual([...byLayout].sort());
+  const byWidth = folded.filter((id) => !byLayout.includes(id));
+  await expect(bar).toHaveAttribute('data-fit-folded', String(byWidth.length));
+  const order = FOLD_ORDER.filter((id) => present.includes(id) && !byLayout.includes(id));
+  expect([...byWidth].sort((a, b) => order.indexOf(a) - order.indexOf(b)), `${where}: folded in priority order`).toEqual(order.slice(0, byWidth.length));
+  return byWidth;
 }
 
 async function sketchOnTop(frame: FrameLocator) {
@@ -209,13 +235,15 @@ test('cad:p4a-toolbar-reach at 1280 x 800 and 1920 x 1080 every command is a lab
     await shot(page, `toolbar-sketch-${size.width}`, { x: 0, y: 0, width: size.width, height: 150 });
     await finishSketch(frame);
   }
-  // 1920: every command labelled, nothing in a More menu. 1280: the less-used ones are (SOLID
-  // keeps Extrude; MODIFY Fillet; CONSTRUCT Plane; INSPECT Measure; FILE Import STEP).
+  // P4b fix round 1 (Daniel: "I prefer 1280 px (model)"): model mode is the compact layout at both
+  // sizes (checked above: everything but each group's main command in More) and the width folds
+  // nothing more. Sketch mode keeps every command on the ribbon by default; with one-line labels
+  // 1920 px folds at most the six least used (Intersect, Project, Point, Construction, Chamfer,
+  // Control-point spline: the start of FOLD_ORDER's sketch part, checked in order above).
   expect(result['model 1920']).toEqual([]);
-  expect(result['sketch 1920']).toEqual([]);
-  expect(result['model 1280'].length).toBeGreaterThanOrEqual(8);
-  expect(result['model 1280']).toEqual(expect.arrayContaining(['solid.sweep', 'solid.loft', 'construct.axis', 'construct.point', 'modify.parameters']));
-  expect(result['sketch 1280'].length).toBeGreaterThan(0);
+  expect(result['model 1280']).toEqual([]);
+  expect(result['sketch 1920'].length).toBeLessThanOrEqual(6);
+  expect(result['sketch 1280'].length).toBeGreaterThan(result['sketch 1920'].length);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
 });

@@ -594,11 +594,11 @@ test('cad:p1-document-plugin-off with CAD off the Part row is greyed with its re
     // Review round 2: the row promised sketches and STEP editing before CAD had them. Since P2/P3 it
     // names what ships (sketches, extrude, STEP) and nothing that does not (revolve, fillet, assemblies);
     // since SD no boxes or cylinders (solids come from sketches), and the enclosure for CFD; since P4a
-    // revolve, sweep, loft, fillet, chamfer, shell and reference geometry, still nothing of P4b or V1
-    // (patterns, mirror, assemblies, drawings).
+    // revolve, sweep, loft, fillet, chamfer, shell and reference geometry; since P4b splines, offsets,
+    // projected edges, patterns and mirrors; still nothing of V1 (assemblies, drawings).
     await expect(cadRow.locator('.wiz-pref-copy > strong')).toHaveText('Magnusim CAD v0.1.0 · bundled');
-    await expect(cadRow.locator('.wiz-pref-copy > span').first()).toHaveText('Parametric parts in their own workspace: sketches with dimensions and constraints; extrude, revolve, sweep and loft; fillet, chamfer, shell and booleans; reference planes, axes and points; an enclosure around the part for CFD; named parameters; and STEP import, editing and export.');
-    await expect(cadRow).not.toContainText(/pattern|mirror|assembl|drawing|spline|boxes|cylinders/i);
+    await expect(cadRow.locator('.wiz-pref-copy > span').first()).toHaveText('Parametric parts in their own workspace: sketches with dimensions and constraints, splines, offsets, sketch mirrors and patterns, and edges projected from the model; extrude, revolve, sweep and loft; fillet, chamfer, shell and booleans; linear and circular patterns and mirrors; reference planes, axes and points; an enclosure around the part for CFD; named parameters; and STEP import, editing and export.');
+    await expect(cadRow).not.toContainText(/assembl|drawing|boxes|cylinders/i);
     await cadRow.locator('[data-plugin-toggle="cad"]').click();
     // Off, and still listed so it can be turned on again (G11).
     await expect(cadRow).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 });

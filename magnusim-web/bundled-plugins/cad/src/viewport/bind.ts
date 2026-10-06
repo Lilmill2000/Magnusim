@@ -10,6 +10,8 @@
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { clearSelection, isSelected, selectItem } from '../lib/selection';
+import { selectionKey } from '../types/selection';
+import { combineSelection } from './boxselect';
 import type { AppServices } from '../types/app';
 import type { DocState } from '../types/doc-service';
 import type { BodyInfo } from '../types/kernel';
@@ -164,6 +166,14 @@ export function bindViewport(handle: ViewportHandle, services: AppServices): () 
       }
     }),
   );
+  // P4b SELECT: a box drawn by Ctrl + left drag (Ctrl+Shift adds; an empty box without Shift clears).
+  if (handle.onBoxSelect) {
+    offs.push(
+      handle.onBoxSelect((e) => {
+        selection.set((prev) => ({ ...prev, items: combineSelection(prev.items, e.items, e.combine, selectionKey) }));
+      }),
+    );
+  }
   return () => {
     for (const off of offs) off();
   };

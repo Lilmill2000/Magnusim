@@ -1,0 +1,60 @@
+/*
+ * P4b SELECT: the Sketch panel's References (linked geometry) and the Project / Intersect blocks.
+ * Purple as the curves are drawn (--cad-sketch-projected); a lost reference amber (--cad-sketch-lost).
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+.cad-sk-links {
+  list-style: none;
+  margin: 4px 0 4px;
+  padding: 0;
+}
+.cad-sk-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--mg-divider);
+}
+.cad-sk-link-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cad-sk-link-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--cad-sketch-projected);
+  vertical-align: 0;
+}
+.cad-sk-link.is-lost .cad-sk-link-dot,
+.cad-sk-link.is-changed .cad-sk-link-dot {
+  background: var(--cad-sketch-lost);
+}
+.cad-sk-link-state {
+  flex: 1 0 100%;
+  color: var(--cad-sketch-lost);
+}
+.cad-sk-link-actions {
+  display: flex;
+  gap: 8px;
+}
+.cad-sk-link-btn {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: var(--mg-link, var(--mg-primary));
+  cursor: pointer;
+}
+.cad-sk-link-btn.is-danger {
+  color: var(--mg-danger);
+}
+.cad-sk-link-btn:hover {
+  text-decoration: underline;
+}

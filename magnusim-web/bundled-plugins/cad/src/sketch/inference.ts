@@ -12,6 +12,7 @@
 import type { SketchEntity, SketchFeature, Vec2 } from '../types/doc';
 import { add, circleCircle, dist, dot, lineCircle, lineLine, norm, perp, scale, sub } from './geom';
 import { arcGeom, closestOn, distanceTo, entityOf, lineEnds, ORIGIN, pointAt } from './model';
+import type { ModelSnap } from './project/snap';
 
 export const SNAP_PX = 8;
 
@@ -23,6 +24,8 @@ export type Snap =
   | { kind: 'midpoint'; line: string }
   | { kind: 'curve'; entity: string }
   | { kind: 'intersection'; entities: [string, string] }
+  /** P4b (SELECT): a snap on model geometry (src/sketch/project/snap.ts): placing it auto-projects its source. */
+  | { kind: 'model'; model: ModelSnap }
   | null;
 
 /** The direction the new segment takes from its start. */

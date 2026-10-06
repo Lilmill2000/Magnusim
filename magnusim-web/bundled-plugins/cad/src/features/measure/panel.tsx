@@ -20,6 +20,8 @@ import { usePicker, useSelectionMirror } from '../p2/pick';
 import { createMeasureMarks, type MeasureMarks } from './overlay';
 import { itemLabel, measureRows, targetOf } from './words';
 import { showForPanel } from '../../lib/selection';
+import { kernelLookup, refOfEdge, refOfFace, refOfVertex, resolveEdge, resolveFace, resolveVertex, signatureDistance } from '../../naming';
+import type { PersistentRef } from '../../types/doc';
 
 export function MeasurePanel({ close }: ToolPanelProps) {
   const services = useServices();
@@ -66,16 +68,100 @@ export function MeasurePanel({ close }: ToolPanelProps) {
     else showForPanel(services.selection, picksNow.current);
   });
 
-  // The part changed (a rebuild): the picked indices may name other faces now.
+  // ---- P4b (PATTERN, carry-over): a rebuild keeps the picks whose faces, edges and points are
+  // still there as they were. Each pick is pinned with its body's geometry key and its persistent
+  // reference (made at pick time); after a rebuild a body with the same key keeps its picks as they
+  // are, and on a rebuilt body a pick whose name resolves to the same geometry (same place, size and
+  // direction) moves to its new index. "The part changed: pick again" only when a pick's geometry
+  // really changed or it is gone (split.md: a rebuild that changed nothing, such as the sketch solver
+  // arriving, cleared them).
   const picksRef = useRef(picks);
   picksRef.current = picks;
+  const pins = useRef(new Map<string, { tessKey: string; ref: Promise<PersistentRef | null> }>());
+  const [checked, setChecked] = useState(seq);
+  const pickKeys = picks.map(selectionKey).join('\n');
+  useEffect(() => {
+    const keys = new Set(picks.map(selectionKey));
+    for (const k of [...pins.current.keys()]) if (!keys.has(k)) pins.current.delete(k);
+    for (const p of picks) {
+      if (p.kind !== 'face' && p.kind !== 'edge' && p.kind !== 'vertex') continue;
+      const k = selectionKey(p);
+      if (pins.current.has(k)) continue;
+      const b = services.doc.state.get().rebuild.bodies.find((x) => x.id === p.body);
+      if (!b) continue;
+      const lookup = kernelLookup(services.kernel);
+      const made = p.kind === 'face' ? refOfFace(lookup, b.shape, b.names ?? null, p.index) : p.kind === 'edge' ? refOfEdge(lookup, b.shape, b.names ?? null, p.index) : refOfVertex(lookup, b.shape, b.names ?? null, p.index);
+      pins.current.set(k, { tessKey: b.tessKey, ref: made.catch(() => null) });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickKeys]);
   useEffect(() => {
     if (seq === firstSeq.current) return;
     firstSeq.current = seq;
-    if (!picksRef.current.length) return;
-    setPicks([]);
-    setNote('The part changed: pick again');
+    const cur = picksRef.current;
+    if (!cur.length) {
+      setChecked(seq);
+      return;
+    }
+    let live = true;
+    void (async () => {
+      const now = services.doc.state.get().rebuild.bodies;
+      const lookup = kernelLookup(services.kernel);
+      const kept: SelectionItem[] = [];
+      let lost = false;
+      for (const p of cur) {
+        if (p.kind === 'origin') {
+          kept.push(p);
+          continue;
+        }
+        if (p.kind !== 'face' && p.kind !== 'edge' && p.kind !== 'vertex') {
+          lost = true;
+          continue;
+        }
+        const b = now.find((x) => x.id === p.body);
+        const pin = pins.current.get(selectionKey(p));
+        if (!b || !pin) {
+          lost = true;
+          continue;
+        }
+        if (b.tessKey === pin.tessKey) {
+          kept.push(p);
+          continue;
+        }
+        const ref = await pin.ref;
+        if (!ref || !b.names) {
+          lost = true;
+          continue;
+        }
+        try {
+          const input = { ref, shape: b.shape, names: b.names, lookup };
+          const r = p.kind === 'face' ? await resolveFace(input) : p.kind === 'edge' ? await resolveEdge(input) : await resolveVertex(input);
+          // Still there and still the same (a dimension that moved the face changes what is measured).
+          const bb = b.bbox;
+          const scale = Math.max(1, Math.hypot(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]));
+          if (r.ok && r.how === 'name' && signatureDistance(ref.signature, r.signature, scale) <= 1e-7) {
+            const item: SelectionItem = { kind: p.kind, body: p.body, index: r.index };
+            pins.current.set(selectionKey(item), { tessKey: b.tessKey, ref: pin.ref });
+            kept.push(item);
+          } else lost = true;
+        } catch {
+          lost = true;
+        }
+      }
+      if (!live) return;
+      // A pick made meanwhile wins over this check.
+      if (picksRef.current === cur) {
+        if (lost || kept.some((k, i) => selectionKey(k) !== selectionKey(cur[i]))) setPicks(kept);
+        if (lost) setNote('The part changed: pick again');
+      }
+      setChecked(seq);
+    })();
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seq]);
+  // ---- end P4b (PATTERN)
 
   useEffect(() => {
     if (!handle) return;
@@ -89,6 +175,8 @@ export function MeasurePanel({ close }: ToolPanelProps) {
   const key = picks.map(selectionKey).join('\n');
   useEffect(() => {
     let live = true;
+    // P4b (PATTERN): while a rebuild's picks are being checked, nothing is measured on old indices.
+    if (checked !== seq) return;
     setResult(null);
     setError(null);
     marks.current?.clear();
@@ -119,7 +207,7 @@ export function MeasurePanel({ close }: ToolPanelProps) {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, bodies]);
+  }, [key, bodies, checked]);
 
   const rows = result ? measureRows(result, services.doc.units) : [];
   const foot = [];

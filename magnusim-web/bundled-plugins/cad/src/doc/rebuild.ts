@@ -436,6 +436,8 @@ export class RebuildEngine {
           outputs: new Map(outputs),
           files: this.opts.files ?? null,
           solver: this.opts.solver?.() ?? null,
+          // P4b (PATTERN): a feature pattern builds its source features again through their types.
+          registry: this.opts.registry,
         };
         const tf = performance.now();
         let result: FeatureBuildResult;

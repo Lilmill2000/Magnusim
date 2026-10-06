@@ -27,7 +27,8 @@ export const GROUP_LABELS: Record<ToolbarGroup, string> = {
 };
 
 /** CFD PREP (Enclosure) comes after the modelling groups (decision 2026-10-01). */
-export const MODEL_GROUPS: ModelGroup[] = ['sketch', 'solid', 'modify', 'pattern', 'construct', 'cfd', 'inspect', 'file'];
+/** P4b (PATTERN, Daniel's item 7): PATTERN sits right after SOLID, beside Extrude. */
+export const MODEL_GROUPS: ModelGroup[] = ['sketch', 'solid', 'pattern', 'modify', 'construct', 'cfd', 'inspect', 'file'];
 export const SKETCH_GROUPS: SketchGroup[] = ['draw', 'constrain', 'dimension', 'sketch-modify'];
 
 /**

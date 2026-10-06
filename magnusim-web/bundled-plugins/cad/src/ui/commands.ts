@@ -11,6 +11,7 @@ import type { CommandDef } from '../types/commands';
 import { clearSelection } from '../lib/selection';
 import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import type { SelectionItem } from '../types/selection';
+import { targetOfItem } from '../viewport/normal';
 import { uiFor, type UiController } from './controller';
 import { ICONS } from './Icon';
 import type { MenuEntry } from './kit';
@@ -195,6 +196,14 @@ export function installUi(services: AppServices): () => void {
               if (n) h.lookAt(n, Math.abs(n[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1]);
             },
           });
+        }
+        // P4b SELECT: a sketch right-clicked in the view (its profile, selected by the click): Normal to it.
+        if (!pick) {
+          const s = services.doc.state.get();
+          // (Or a sketch picked by its curve, src/sketch/project/curve-pick.ts: a feature item of a sketch.)
+          const it = services.selection.get().items.find((x) => x.kind === 'region' || x.kind === 'sketch' || (x.kind === 'feature' && s.doc.features.some((f) => f.id === x.feature && f.type === 'sketch')));
+          const t = it ? targetOfItem(s, h, it) : null;
+          if (t && t !== 'curved') items.push({ id: 'normal-to', label: `Normal to ${t.what}`, run: () => h.lookAt(t.normal, t.up) });
         }
         if (pick && (pick.item.kind === 'face' || pick.item.kind === 'edge' || pick.item.kind === 'vertex')) {
           const what = pick.item.kind === 'vertex' ? 'point' : pick.item.kind;

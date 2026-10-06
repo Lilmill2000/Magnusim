@@ -15,6 +15,7 @@ import type { BuildContext, BuiltBody } from '../../types/doc-service';
 import type { BodyInfo } from '../../types/kernel';
 import type { NamingLookup } from '../../types/naming';
 import type { SelectionItem } from '../../types/selection';
+import { copyGoneWhy } from '../pattern/gone';
 
 /** The faces in a selection (body + face index). */
 export function selectedFaces(items: readonly SelectionItem[]): { kind: 'face'; body: BodyId; index: number }[] {
@@ -101,7 +102,11 @@ export async function resolveRefs(ctx: BuildContext, body: BuiltBody, refs: read
   for (const ref of refs) {
     const r = await resolveFace({ ref, shape: body.shape, names: body.names, lookup: look });
     // Which face, in the words the panels use (review P2/P3 round 2: "Face not found after rebuild" named none).
-    if (!r.ok) return { ok: false, message: notFoundWords(describeFace(ref.name, (id) => ctx.featureName?.(id) ?? null), ctx.bodyName(body.id)) };
+    if (!r.ok) {
+      // P4b (PATTERN, fix round 1 P4): a pattern copy's face that is gone says why.
+      const why = copyGoneWhy(ref.name, ctx.outputs, (id) => ctx.featureName?.(id) ?? null);
+      return { ok: false, message: `${notFoundWords(describeFace(ref.name, (id) => ctx.featureName?.(id) ?? null), ctx.bodyName(body.id))}${why ? ` (${why})` : ''}` };
+    }
     if (r.warning) warning = r.warning;
     if (!indices.includes(r.index)) indices.push(r.index);
   }

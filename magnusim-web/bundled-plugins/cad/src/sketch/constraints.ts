@@ -3,8 +3,10 @@
 // cannot apply to the selection ("Select two lines"). Pure (unit-tested).
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { SketchFeature, SketchRelationKind, Vec2 } from '../types/doc';
-import { pointAt, pointIdOf, refKindOf, type RefKind } from './model';
+import type { SketchEntity, SketchFeature, SketchRelationKind, Vec2 } from '../types/doc';
+import { entityOf, pointAt, pointIdOf, refKindOf, type RefKind } from './model';
+// P4b (SKETCH): splines.
+import { splineOf } from './tools/spline-entity';
 
 type F = Pick<SketchFeature, 'points' | 'entities'>;
 
@@ -13,6 +15,11 @@ export interface RelationPlan {
   kind: SketchRelationKind;
   refs: string[];
   value?: Vec2;
+  /**
+   * P4b (SKETCH): what a spline needs first: `handle`, a fit spline's tangent handle at that end
+   * (where the curve's direction is now) before Tangent.
+   */
+  handle?: { spline: string; end: 0 | 1; at: Vec2 };
 }
 
 /** The relations the command adds for these picks, or why it cannot. */
@@ -50,6 +57,12 @@ export function planConstraint(f: F, kind: SketchRelationKind, picks: readonly s
   const rounds = picks.filter((_, i) => round(kinds[i]));
   const curves = picks.filter((_, i) => kinds[i] !== 'point');
   const only = (n: number) => picks.length === n;
+  // ---- P4b (SKETCH): splines
+  const splines = picks.filter((_, i) => kinds[i] === 'spline');
+  if (splines.length) {
+    const sp = planSpline(f, kind, picks, kinds, points);
+    if (sp) return sp;
+  }
   switch (kind) {
     case 'coincident':
       if (only(2) && points.length === 2) return points[0] === points[1] ? no : { ok: true, add: [{ kind, refs: points }] };
@@ -101,4 +114,44 @@ export function planConstraint(f: F, kind: SketchRelationKind, picks: readonly s
     default:
       return no;
   }
+}
+
+/**
+ * P4b (SKETCH): relations that take a spline's curve: Tangent at an end it shares with a line, an
+ * arc or another spline (a fit spline gets a tangent handle there first), and Coincident of a point
+ * with a fit spline (the point becomes a fit point). Null: the general rules decide (a spline
+ * picked with others where nothing spline-specific applies is refused by them).
+ */
+function planSpline(f: F, kind: SketchRelationKind, picks: readonly string[], kinds: (RefKind | null)[], points: string[]): ConstraintOutcome | null {
+  // Fix holds every point of a spline (the solver's own rule).
+  if (kind === 'fix') return null;
+  if (kind === 'coincident' && picks.length === 2 && points.length === 1) {
+    const spline = picks.find((_, i) => kinds[i] === 'spline')!;
+    const e = entityOf(f, spline);
+    if (e?.kind !== 'spline') return null;
+    if (e.pts.includes(points[0]) || e.handles?.includes(points[0])) return { ok: false, reason: 'That point is already one of the spline\'s points' };
+    // fix1 B2: on the curve, sliding along it (the spline keeps its shape).
+    return { ok: true, add: [{ kind, refs: [points[0], spline] }] };
+  }
+  if (kind === 'tangent') {
+    if (picks.length !== 2 || kinds.some((k) => k !== 'line' && k !== 'arc' && k !== 'spline')) return { ok: false, reason: 'Select a spline and the line, arc or spline it meets at its end' };
+    const [a, b] = picks.map((id) => entityOf(f, id)!);
+    const endsOf = (e: SketchEntity) => (e.kind === 'line' ? e.p : e.kind === 'arc' ? [e.a, e.b] : e.kind === 'spline' && !e.closed ? [e.pts[0], e.pts[e.pts.length - 1]] : []);
+    const shared = endsOf(a).find((p) => endsOf(b).includes(p));
+    if (!shared) return { ok: false, reason: 'A spline is tangent at an end it shares with the other curve: join them first' };
+    const plan: RelationPlan = { kind, refs: [a.id, b.id] };
+    for (const e of [a, b]) {
+      if (e.kind !== 'spline' || e.form !== 'fit') continue;
+      const end: 0 | 1 = e.pts[0] === shared ? 0 : 1;
+      if (e.handles?.[end]) continue;
+      const curve = splineOf(f, e);
+      if (!curve) return { ok: false, reason: 'That spline has no shape' };
+      // The handle where the curve heads now (its second pole: the shape does not jump).
+      const pole = end === 0 ? curve.poles[1] : curve.poles[curve.poles.length - 2];
+      if (plan.handle) return { ok: false, reason: 'Make two fit splines tangent one at a time' };
+      plan.handle = { spline: e.id, end, at: [pole[0], pole[1]] };
+    }
+    return { ok: true, add: [plan] };
+  }
+  return { ok: false, reason: `${kind === 'equal' ? 'Equal' : 'That relation'} does not take a spline's curve: use its points` };
 }

@@ -303,7 +303,7 @@ test('cad:p2p3-review1-driven-enter Enter on "Make it driven?" places the driven
   await expect(q).toBeHidden();
   await sketchIdle(page);
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['60', '20']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['60 mm', '20 mm']);
 
   // Again, and Enter: the focused "Make it driven" is pressed.
   await clickAt(page, [0, 0, 0]);
@@ -316,7 +316,7 @@ test('cad:p2p3-review1-driven-enter Enter on "Make it driven?" places the driven
   await sketchIdle(page);
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   const driven = frame.locator('[data-sketch-dim][data-driving="0"]');
-  await expect(driven).toHaveText('(63.25)');
+  await expect(driven).toHaveText('(63.25 mm)');
   expect(await driven.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(102, 112, 133)');
   await expect(frame.locator('[data-chip="sketch"]')).toHaveText('Fully defined');
   await shot(page, 'r1-driven-enter');
@@ -351,7 +351,7 @@ test('cad:p2p3-review1-line-chain two typed chain segments store their own lengt
   await expect(angle).not.toBeFocused();
   // (From the end at (5, 25) to (25, 30): 14.04 degrees.)
   await moveTo(page, [25, 30, 0]);
-  await expect(angle).toHaveValue('14.04');
+  await expect(angle).toHaveValue('14.04°');
   // Segment 2: 15, Tab, 0, Enter (the digits start in Length again).
   await page.keyboard.type('15');
   await expect(length).toBeFocused();
@@ -370,7 +370,7 @@ test('cad:p2p3-review1-line-chain two typed chain segments store their own lengt
   expect(g1.ang).toBeCloseTo(90, 6);
   expect(g2.len).toBeCloseTo(15, 6);
   expect(g2.ang).toBeCloseTo(0, 6);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['20', '90°', '15', '0°']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['20 mm', '90°', '15 mm', '0°']);
   expect(d.constraints.filter((c) => c.kind === 'distance' || c.kind === 'angle').map((c) => c.expr)).toEqual(['20 mm', '90 deg', '15 mm', '0 deg']);
 
   // A: the next segment is a tangent arc (A reached the tool, not a box).
@@ -434,7 +434,7 @@ test('cad:p2p3-review1-arc-radius a 3-point arc: a radius below half the chord k
   expect(Math.hypot(p1[0] - c[0], p1[1] - c[1])).toBeCloseTo(25, 6);
   expect(Math.hypot(p2[0] - c[0], p2[1] - c[1])).toBeCloseTo(25, 6);
   expect(Math.hypot(p2[0] - p1[0], p2[1] - p1[1])).toBeCloseTo(40, 3);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['R25']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['R25 mm']);
   await page.keyboard.press('Escape');
   await finishSketch(frame);
   expect(seen.csp).toEqual([]);
@@ -522,13 +522,18 @@ test('cad:p2p3-review1-toolbar-fit at 1280 x 800 and 1440 x 900 every command bu
     await expect(frame.locator('[data-command="sketch.redo"]')).toHaveAttribute('aria-label', 'Redo');
     await finishSketch(frame);
   }
-  // Wide enough (1920 px, P4a): every modelling command labelled, none in a More menu; VIEW and
-  // EDIT keep their icons (their labels are the tooltips).
+  // 1920 px: since P4b fix round 1 (Daniel: "I prefer 1280 px (model)") the model toolbar is the
+  // compact layout at every width: each group's main command labelled, the rest in its More (16),
+  // nothing folded for the width, and VIEW and EDIT have room for their labels.
   await page.setViewportSize({ width: 1920, height: 1080 });
-  await expect(frame.locator('[data-cad-toolbar="model"]')).toHaveAttribute('data-folded', '0');
-  await expect(frame.locator('[data-cad-toolbar="model"]')).toHaveAttribute('data-fit', '1');
-  await expect(frame.locator('[data-cad-toolbar] [data-tb-more]')).toHaveCount(0);
-  await expect(frame.locator('[data-command="modify.parameters"] .tb-txt')).toBeVisible();
+  const bar = frame.locator('[data-cad-toolbar="model"]');
+  await expect(bar).toHaveAttribute('data-fit-folded', '0');
+  await expect(bar).toHaveAttribute('data-folded', '16');
+  await expect(bar).toHaveAttribute('data-fit', '0');
+  for (const id of ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step'])
+    await expect(frame.locator(`[data-cad-toolbar] .tb-btn[data-command="${id}"] .tb-txt`)).toBeVisible();
+  for (const id of ['solid.revolve', 'pattern.mirror', 'modify.press-pull', 'file.export-step'])
+    await expect(frame.locator(`[data-cad-toolbar] [data-tb-more][data-more-commands~="${id}"]`)).toHaveCount(1);
   await expect(frame.locator('[data-command="edit.undo"]')).toHaveAttribute('aria-label', 'Undo');
   expect(seen.csp).toEqual([]);
   expect(seen.errors).toEqual([]);
@@ -1071,7 +1076,7 @@ test('cad:p2p3-review1-unsolvable a triangle whose sides cannot hold (10, 7.81, 
   await sketchIdle(page);
   await expect(frame.locator('[data-chip="sketch"]')).toHaveText(/^Under defined · \d+ DOF$/);
   await expect(list).toHaveCount(0);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['10', '7.81']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['10 mm', '7.81 mm']);
   // New geometry is taken again.
   await inView(page, frame, [[40, 0, 0], [60, 0, 0]]);
   await page.keyboard.press('l');

@@ -1,8 +1,8 @@
 diff --git a/build-bindings/templates/gcs_system.cpp.njk b/build-bindings/templates/gcs_system.cpp.njk
-index a948d9c..44c1139 100644
+index a948d9c..0dce4a7 100644
 --- a/build-bindings/templates/gcs_system.cpp.njk
 +++ b/build-bindings/templates/gcs_system.cpp.njk
-@@ -20,6 +20,9 @@
+@@ -20,13 +20,18 @@
  
  #include <iostream>
  #include <vector>
@@ -10,9 +10,18 @@ index a948d9c..44c1139 100644
 +#include <stdexcept>
 +#include <cstdint>
  #include "GCS.h"
++#include "MagnusimSpline.h"
  #include <emscripten.h>  
  
-@@ -126,6 +129,7 @@ class GcsSystem : System
+ using namespace GCS;
+ using namespace std;
+ 
+ class GcsSystem : System
++
+ {
+     public:
+         vector<double *> p_params;
+@@ -126,6 +131,7 @@ class GcsSystem : System
              }
              p_params.clear();
              is_fixed.clear();
@@ -20,7 +29,7 @@ index a948d9c..44c1139 100644
              clear();
          }
  
-@@ -180,6 +184,134 @@ class GcsSystem : System
+@@ -180,6 +186,148 @@ class GcsSystem : System
              clearByTag(id);
          }
  
@@ -80,6 +89,20 @@ index a948d9c..44c1139 100644
 +
 +        // Indices (into p_params) of the parameters the last diagnosis found dependent,
 +        // i.e. not fixed by the constraints.
++        // Magnusim (P4b fix 1): a point on a sketch spline at a free parameter (one call per coordinate).
++        void add_constraint_point_on_affine_spline(int p_i, int u_i, vector<int> q_i, vector<double> w, int n_poles, vector<double> flat, int degree, int tagId, bool driving)
++        {
++            if (degree < 1 || degree > 8) throw std::invalid_argument("spline degree out of range");
++            if ((int)w.size() != n_poles * (int)q_i.size()) throw std::invalid_argument("spline weights do not match");
++            if ((int)flat.size() != n_poles + degree + 1) throw std::invalid_argument("spline knots do not match");
++            vector<double*> q;
++            for (int i : q_i) q.push_back(p_params[i]);
++            Constraint* c = new ConstraintPointOnAffineSpline(p_params[p_i], p_params[u_i], q, w, n_poles, flat, degree);
++            c->setTag(tagId);
++            c->setDriving(driving);
++            addConstraint(c);
++        }
++
 +        vector<int> get_dependent_params()
 +        {
 +            vector<double *> dep;
@@ -155,13 +178,14 @@ index a948d9c..44c1139 100644
          void set_debug_mode(int debug_mode)
          {
              DebugMode debug_mode_enum = static_cast<DebugMode>(debug_mode);
-@@ -410,6 +542,17 @@ EMSCRIPTEN_BINDINGS(module) {
+@@ -410,6 +558,18 @@ EMSCRIPTEN_BINDINGS(module) {
          .function("has_redundant", &GcsSystem::has_redundant)
          .function("has_partially_redundant", &GcsSystem::has_partially_redundant)
          .function("clear_by_id", &GcsSystem::clear_by_id)
 +        .function("init_solution", &GcsSystem::init_solution)
 +        .function("solve_prepared", &GcsSystem::solve_prepared)
 +        .function("diagnose_fresh", &GcsSystem::diagnose_fresh)
++        .function("add_constraint_point_on_affine_spline", &GcsSystem::add_constraint_point_on_affine_spline)
 +        .function("get_dependent_params", &GcsSystem::get_dependent_params)
 +        .function("get_dependent_param_groups", &GcsSystem::get_dependent_param_groups)
 +        .function("params_to_buffer", &GcsSystem::params_to_buffer)
@@ -551,6 +575,144 @@ index f35b31e..0d2998c 100644
  
      void applySolution();
      void undoSolution();
+diff --git a/planegcs/MagnusimSpline.h b/planegcs/MagnusimSpline.h
+new file mode 100644
+index 0000000..a02a6ed
+--- /dev/null
++++ b/planegcs/MagnusimSpline.h
+@@ -0,0 +1,132 @@
++// SPDX-License-Identifier: LGPL-2.1-or-later
++// Magnusim CAD (P4b fix 1): a constraint the sketch solver needs that PlaneGCS does not have.
++#ifndef MAGNUSIM_SPLINE_H
++#define MAGNUSIM_SPLINE_H
++#include <vector>
++#include "Constraints.h"
++
++namespace GCS
++{
++
++// Magnusim (P4b fix 1): a point ON a sketch spline, sliding along it. The spline's poles are fixed
++// affine combinations of solver points (a control-point spline: its own points; a fit-point spline:
++// its interpolation with the chord-length parameters of the load), so for one coordinate
++//   p - sum_r N_(s-deg+r)(u) * sum_k W[(s-deg+r) * nIn + k] * q_k = 0,
++// with the curve parameter u a free unknown (the span follows u; outside the curve's range the end
++// span's polynomial goes on). pvec: [p, u, q_0 .. q_(nIn-1)].
++class ConstraintPointOnAffineSpline : public Constraint
++{
++    std::vector<double> W;
++    std::vector<double> flat;
++    int degree;
++    int nPoles;
++    int nIn;
++
++    int spanOf(double u) const
++    {
++        int n = nPoles - 1;
++        int s = degree;
++        for (int i = degree; i <= n; ++i) {
++            if (flat[i] < flat[i + 1] && flat[i] <= u) s = i;
++        }
++        return s;
++    }
++    static void basisFuns(int i, double u, int p, const std::vector<double>& U, double* N)
++    {
++        double left[16], right[16];
++        N[0] = 1.0;
++        for (int j = 1; j <= p; ++j) {
++            left[j] = u - U[i + 1 - j];
++            right[j] = U[i + j] - u;
++            double saved = 0.0;
++            for (int r = 0; r < j; ++r) {
++                double den = right[r + 1] + left[j - r];
++                double temp = den != 0.0 ? N[r] / den : 0.0;
++                N[r] = saved + right[r + 1] * temp;
++                saved = left[j - r] * temp;
++            }
++            N[j] = saved;
++        }
++    }
++    void basis(double u, int s, double* N, double* dN) const
++    {
++        basisFuns(s, u, degree, flat, N);
++        double M[16];
++        for (int r = 0; r <= degree; ++r) dN[r] = 0.0;
++        if (degree == 0) return;
++        basisFuns(s, u, degree - 1, flat, M);
++        for (int r = 0; r <= degree; ++r) {
++            int i = s - degree + r;
++            double a = 0.0, b = 0.0;
++            if (r >= 1) {
++                double den = flat[i + degree] - flat[i];
++                if (den != 0.0) a = degree / den * M[r - 1];
++            }
++            if (r <= degree - 1) {
++                double den = flat[i + degree + 1] - flat[i + 1];
++                if (den != 0.0) b = degree / den * M[r];
++            }
++            dN[r] = a - b;
++        }
++    }
++    double pole(int j)
++    {
++        double v = 0.0;
++        for (int k = 0; k < nIn; ++k) v += W[j * nIn + k] * *pvec[2 + k];
++        return v;
++    }
++
++public:
++    ConstraintPointOnAffineSpline(double* p, double* u, const std::vector<double*>& q, const std::vector<double>& w, int npoles,
++                                  const std::vector<double>& flatknots, int deg)
++        : W(w), flat(flatknots), degree(deg), nPoles(npoles), nIn((int)q.size())
++    {
++        pvec.push_back(p);
++        pvec.push_back(u);
++        for (double* x : q) pvec.push_back(x);
++        origpvec = pvec;
++        rescale();
++    }
++    ConstraintType getTypeId() override
++    {
++        return PointOnBSpline;
++    }
++    void rescale(double coef = 1.) override
++    {
++        scale = coef * 1.;
++    }
++    double error() override
++    {
++        double u = *pvec[1];
++        int s = spanOf(u);
++        double N[16], dN[16];
++        basis(u, s, N, dN);
++        double c = 0.0;
++        for (int r = 0; r <= degree; ++r) c += N[r] * pole(s - degree + r);
++        return scale * (*pvec[0] - c);
++    }
++    double grad(double* param) override
++    {
++        if (param == pvec[0]) return scale;
++        double u = *pvec[1];
++        int s = spanOf(u);
++        double N[16], dN[16];
++        basis(u, s, N, dN);
++        if (param == pvec[1]) {
++            double d = 0.0;
++            for (int r = 0; r <= degree; ++r) d += dN[r] * pole(s - degree + r);
++            return -scale * d;
++        }
++        double d = 0.0;
++        bool found = false;
++        for (int k = 0; k < nIn; ++k) {
++            if (param != pvec[2 + k]) continue;
++            found = true;
++            for (int r = 0; r <= degree; ++r) d += N[r] * W[(s - degree + r) * nIn + k];
++        }
++        return found ? -scale * d : 0.0;
++    }
++};
++
++}  // namespace GCS
++#endif
 diff --git a/planegcs/SubSystem.cpp b/planegcs/SubSystem.cpp
 index 9d88131..3eb401c 100644
 --- a/planegcs/SubSystem.cpp

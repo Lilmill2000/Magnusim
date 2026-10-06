@@ -49,7 +49,7 @@ import { dirname, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { appPythonMissing, findAppPython } from '../scripts/app-python.mjs';
-import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, soloVolume, chipVolumes } from './helpers';
+import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, soloVolume, chipVolumes, commandControl } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(HERE, '..', 'fixtures', 'kernel');
@@ -326,7 +326,8 @@ const p95 = (xs) => {
 test('cad:p2-step-import flange.step by the picker: "0 problems", "Imported 1 (flange.step)", the STEP body name; box20.step by a drop', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   // Before any body: the editing commands say why.
-  await expect(tb(frame).locator('[data-command="modify.press-pull"]')).toHaveAttribute('data-disabled-reason', 'Make or import a body first');
+  await expect(await commandControl(frame, 'modify.press-pull')).toHaveAttribute('data-disabled-reason', 'Make or import a body first');
+  await page.keyboard.press('Escape');
   // What the Faces column says in the very render the diagnostics first appear in (L3 review
   // polish 5: it read "…" until the rebuild had made the body).
   await cad(page, () => {
@@ -584,6 +585,10 @@ test("cad:p2-step-vortex-fluid Daniel's flow: Enclosure minus Vortex = the fluid
   // The core page: Back, then "+ Add geometry" with the downloaded file; its viewer loads 22 faces.
   await page.locator('#workspace-overlay [data-ws-back]').click();
   await expect(page.locator('#workspace-overlay')).toBeHidden();
+  // Back runs the exit sync (L3): the Part's design lands as the project's geometry "Part 1". Under
+  // load it can land after the overlay closes, so wait for it before the upload (P4b integration:
+  // with 3 workers it landed after "+ Add geometry" and the list held 2 rows).
+  await expect(page.locator('#geometries-list .geo-item[data-geom-id]')).toHaveCount(1, { timeout: 180_000 });
   const preview = page.waitForResponse((r) => r.url().includes('/api/geometry/cad') && r.url().includes('part=preview') && r.status() === 200, { timeout: 180_000 });
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: '+ Add geometry' }).first().click();

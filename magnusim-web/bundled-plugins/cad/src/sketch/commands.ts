@@ -28,7 +28,10 @@ import { CONSTRAIN_COMMANDS, planConstraint } from './constraints';
 import { SketchBuilder, toggleConstruction } from './edit';
 import { SKETCH_ICONS } from './icons';
 import { entityOf, ORIGIN, RELATION_LABELS } from './model';
-import { planeY, type SketchMode } from './mode';
+import { type SketchMode } from './mode';
+import { sketchUp } from '../viewport/normal';
+// P4b (SKETCH): spline handles and fit points for Tangent / Coincident.
+import { addHandle } from './tools/spline-relations';
 
 export const CURVED_FACE = 'Sketches go on flat faces: that face is curved';
 /** A CONSTRUCT plane selected that did not build (failed, suppressed or rolled back). */
@@ -250,7 +253,11 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
             const p = planConstraint(d, c.kind, sel);
             if (!p.ok) return { ok: false, reason: p.reason };
             const b = new SketchBuilder(d);
-            for (const r of p.add) b.addRelation(r.kind, r.refs, r.value ? { value: r.value } : {});
+            for (const r of p.add) {
+              // P4b (SKETCH): a fit spline's tangent handle first.
+              if (r.handle) addHandle(b, r.handle);
+              b.addRelation(r.kind, r.refs, r.value ? { value: r.value } : {});
+            }
             return b.result();
           })
           .then((r) => {
@@ -347,15 +354,18 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
   });
   reg({
     id: 'view.sketch-look',
-    label: 'Look at',
+    // P4b SELECT: one name everywhere ("Look at" before), and N as in model mode.
+    label: 'Normal to',
     mode: 'sketch',
     icon: SKETCH_ICONS.lookAt,
-    hint: 'Turn the camera to face the sketch',
+    shortcut: 'N',
+    hint: 'Look straight at the sketch',
     order: 50,
     run: () => {
       const p = mode.plane();
       const h = services.viewport.get().handle;
-      if (p && h) h.lookAt(p.normal, planeY(p));
+      // P4b SELECT (fix round 1): the same up as every Normal to of a sketch (src/viewport/normal.ts).
+      if (p && h) h.lookAt(p.normal, sketchUp(p));
     },
   });
 

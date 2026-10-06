@@ -357,6 +357,21 @@ declare module '@magnusim/workspace' {
           write(rel: string, doc: unknown): Promise<void>;
       };
       /**
+       * This plugin's own preferences for the user, the same in every project (host 1.7;
+       * absent on an older host): small JSON values such as a toolbar layout or the last
+       * options used. A name is 1 to 64 of a-z, 0-9, ".", "_" and "-". A plugin keeps at
+       * most 64 KB in all; past that `set` rejects with `.code` "too_large".
+       */
+      prefs: {
+          /** The value, or null when there is none. */
+          get<T = unknown>(key: string): Promise<T | null>;
+          /** Store a JSON value (null removes it). */
+          set(key: string, value: unknown): Promise<void>;
+          remove(key: string): Promise<void>;
+          /** A change made in another tab or window (value null when removed); not this page's own. */
+          onChange(fn: (key: string, value: unknown) => void): () => void;
+      };
+      /**
        * Files of any kind in the same folder (`data` is its JSON view). Paths are
        * relative to it; a study's study.json is read-only here, and files go inside
        * a study's folder (studies/<id>/...), never directly in studies/. Rejections
@@ -512,6 +527,11 @@ declare module '@magnusim/workspace' {
       on(event: 'units', fn: (units: UnitSystem) => void): () => void;
       on(event: 'theme', fn: (theme: ThemeInfo) => void): () => void;
       on(event: 'study', fn: (study: StudyRecord) => void): () => void;
+      /** `prefs` (host 1.7): a pref of this plugin changed in another tab (ws.prefs.onChange is the same). */
+      on(event: 'prefs', fn: (change: {
+          key: string;
+          value: unknown;
+      }) => void): () => void;
       /**
        * `geometry` (host 1.5): the geometry this study links was updated (by this page or
        * another tab of the same study). Only the page of the study that owns it hears it.

@@ -93,7 +93,9 @@ describe('sketch mode (real solver)', () => {
     h.tool('select');
     await h.drag([40, 20], [60, 35]);
     expect(JSON.stringify(h.sketch().points)).toBe(before);
-    expect(h.mode.view.get().note).toMatch(/fully defined: it cannot be dragged/);
+    expect(h.mode.view.get().note).toMatch(/fully defined: change a dimension to move it/);
+    // Follow-up (Daniel, 2026-10-06): never the not-allowed cursor in a sketch; the words say why.
+    expect(h.mode.view.get().cursor ?? '').not.toBe('not-allowed');
 
     // Delete the 20 (the right side's) dimension.
     const d20 = dims(h).find((d) => d.refs[0] !== h!.sketch().entities[0].id)!;

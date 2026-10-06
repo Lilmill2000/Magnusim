@@ -53,6 +53,8 @@ if [ ! -d "$SRC/.git" ]; then
 fi
 git -C "$SRC" fetch -q origin "$PLANEGCS_COMMIT" 2>/dev/null || true
 git -C "$SRC" checkout -q -f "$PLANEGCS_COMMIT"
+# Files the patch adds (planegcs/MagnusimSpline.h) are untracked after a build: clear them first.
+git -C "$SRC" clean -q -f -- planegcs build-bindings/templates
 git -C "$SRC" apply "$HERE/planegcs.patch"
 
 # Regenerate the embind bindings from the patched template.

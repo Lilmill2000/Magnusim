@@ -42,6 +42,12 @@ What the patch does:
    `diagnose_fresh`, `get_dependent_params`, `get_dependent_param_groups`, bulk
    parameter transfer through the WASM heap, `set_dl_gauss_step`,
    `set_sparse_sqp_min_params`.
+9. A constraint of our own (P4b fix 1), `planegcs/MagnusimSpline.h`
+   (`ConstraintPointOnAffineSpline`) and its binding
+   `add_constraint_point_on_affine_spline`: a point on a sketch spline at a free
+   curve parameter, the spline's poles being fixed affine combinations of solver
+   points (a sketch spline's "On curve"). `build.sh` clears the files the patch
+   adds before applying it again.
 
 ## Flags
 

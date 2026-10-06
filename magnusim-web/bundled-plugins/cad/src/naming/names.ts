@@ -225,6 +225,36 @@ export function describeFace(name: string, featureName: (id: FeatureId) => strin
   return `${words[0]} merged with ${words.length === 2 ? words[1] : `${words.length - 1} other faces`}`;
 }
 
+// ---- P4b (PATTERN): the faces of a pattern's or mirror's copies, F:<pattern>:i<key>:<source face>
+// (F:<mirror>:m:<source face>), src/features/pattern/naming.ts.
+
+/** Is `role` (the part after F:<feature>:) a pattern copy's ("i3", "i2.1", "i-2", the mirror's "m")? */
+export function isCopyRole(role: string): boolean {
+  return role === 'm' || /^i-?\d+(\.-?\d+)?$/.test(role);
+}
+
+/** A copy's role in words: "instance 3", "instance 3, 2", "instance −2", "the mirror copy". */
+export function copyRoleWords(role: string): string {
+  if (role === 'm') return 'the mirror copy';
+  return `instance ${role
+    .slice(1)
+    .split('.')
+    .map((n) => (n.startsWith('-') ? `−${n.slice(1)}` : n))
+    .join(', ')}`;
+}
+
+/** Face names with copy `pattern`/`role`'s prefix taken off (a copy's sides are numbered among the copy's own). */
+export function insideCopy(faceNames: readonly string[] | null, pattern: string, role: string): string[] | null {
+  if (!faceNames) return null;
+  const prefix = `F:${pattern}:${role}:`;
+  return faceNames.map((n) =>
+    splitMerged(n)
+      .map((p) => (p.startsWith(prefix) ? p.slice(prefix.length) : p))
+      .join('|'),
+  );
+}
+// ---- end P4b (PATTERN)
+
 /** One face name (not merged) in words. */
 function describeOne(name: string, featureName: (id: FeatureId) => string | null, faceNames: readonly string[] | null): string {
   const { base, k } = splitSuffix(name);
@@ -234,6 +264,8 @@ function describeOne(name: string, featureName: (id: FeatureId) => string | null
   const role = m[2];
   const detail = m[3] ?? '';
   const part = k == null ? '' : ` · part ${k + 1}`;
+  // P4b (PATTERN): a copy's face: "Side 2 of Extrude 2 · instance 3 of Linear pattern 1".
+  if (isCopyRole(role) && detail.startsWith('F:')) return `${describeOne(k == null ? detail : `${detail}#${k}`, featureName, insideCopy(faceNames, m[1], role))} · ${copyRoleWords(role)} of ${owner}`;
   // "Face 7 of Imported 1 (flange.step)", as Measure says "Face 3 of flange" (review P2/P3 round 1:
   // "Face 7 (Imported 1 (flange.step))" nested its brackets).
   if (role === 'start') return `Start face${part} of ${owner}`;

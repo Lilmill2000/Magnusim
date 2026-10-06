@@ -88,6 +88,10 @@ describe('dimensions', () => {
     expect(dimensionLabel(rect, 'c_diag')).toBe('Distance 44.72 mm');
     expect(dimensionLabel(rect, 'c_w')).toBe('Distance w');
     expect(dimensionLabel(rect, 'c_h')).toBe('Horizontal');
+    // With the units service, a bare number says its unit (follow-up: units next to every dimension value).
+    const bareDoc = sketch({ constraints: [{ id: 'c_1', kind: 'diameter', refs: ['e_1'], expr: '125', driving: true }] });
+    expect(dimensionLabel(bareDoc, 'c_1', units)).toBe('Diameter 125 mm');
+    expect(dimensionLabel(rect, 'c_w', units)).toBe('Distance w');
     expect(dimensionCount(rect)).toBe(3);
     const bad = sketch({ constraints: [{ id: 'c_1', kind: 'distance', refs: ['e_1'], expr: 'nope * 2', driving: true }] });
     const r = drivingValues(bad, units);

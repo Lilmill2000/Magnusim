@@ -8,6 +8,8 @@ import type { CommandDef } from '../types/commands';
 import type { Vec3 } from '../types/doc';
 import type { Selection } from '../types/selection';
 import type { StandardView, ViewportHandle } from '../types/viewport';
+import type { DocState } from '../types/doc-service';
+import { normalTarget } from './normal';
 
 export const VIEW_COMMANDS: { view: StandardView; label: string; shortcut: string }[] = [
   { view: 'front', label: 'Front', shortcut: '1' },
@@ -21,16 +23,16 @@ export const VIEW_COMMANDS: { view: StandardView; label: string; shortcut: strin
 
 const NO_VIEWPORT = 'The viewport is not ready';
 
-/** What Normal to would look at: the first selected planar face or origin plane, or why not. */
-export function normalToTarget(sel: Pick<Selection, 'items'>, handle: Pick<ViewportHandle, 'planeNormal'>): { normal: Vec3; up: Vec3 } | { reason: string } {
-  for (const it of sel.items) {
-    if (it.kind !== 'face' && it.kind !== 'origin') continue;
-    const n = handle.planeNormal(it);
-    if (!n) continue;
-    return { normal: n, up: Math.abs(n[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1] };
-  }
-  return { reason: 'Select a planar face or a plane to look at it straight on' };
+/**
+ * What Normal to would look at: the first selected flat face, origin plane, CONSTRUCT plane or
+ * sketch (P4b SELECT: src/viewport/normal.ts; without the document state, faces and planes only),
+ * or why not.
+ */
+export function normalToTarget(sel: Pick<Selection, 'items'>, handle: Pick<ViewportHandle, 'planeNormal'>, state?: Pick<DocState, 'doc' | 'rebuild'>): { normal: Vec3; up: Vec3 } | { reason: string } {
+  return normalTarget(state ?? NO_DOC, handle, sel.items);
 }
+
+const NO_DOC = { doc: { features: [] }, rebuild: { outputs: {} } } as unknown as Pick<DocState, 'doc' | 'rebuild'>;
 
 function viewport(s: AppServices): ViewportHandle | null {
   return s.viewport.get().handle;
@@ -63,18 +65,18 @@ export function viewportCommands(): CommandDef[] {
       id: 'view.normal-to',
       label: 'Normal to',
       shortcut: 'N',
-      hint: 'Look straight at the selected planar face or plane',
+      hint: 'Look straight at the selected flat face, plane or sketch',
       explainRefusal: true,
       enabled: (s) => {
         const h = viewport(s);
         if (!h) return NO_VIEWPORT;
-        const t = normalToTarget(s.selection.get(), h);
+        const t = normalToTarget(s.selection.get(), h, s.doc.state.get());
         return 'reason' in t ? t.reason : true;
       },
       run: (s) => {
         const h = viewport(s);
         if (!h) return;
-        const t = normalToTarget(s.selection.get(), h);
+        const t = normalToTarget(s.selection.get(), h, s.doc.state.get());
         if (!('reason' in t)) h.lookAt(t.normal, t.up);
       },
     },

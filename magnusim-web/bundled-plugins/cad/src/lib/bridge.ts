@@ -1,12 +1,24 @@
 // The one module that talks to the host bridge (@magnusim/workspace), so host
 // API churn is absorbed here. Frozen shape (scaffold); INTEGRATE adds wrappers
 // when the host gains APIs (host API 1.2: ws.files, nav.setDirty, focus on
-// connect; 1.5: linking a geometry; 1.6: the exit hook).
+// connect; 1.5: linking a geometry; 1.6: the exit hook; 1.7: ws.prefs).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ConfirmOptions, LeaveHandler, LinkedGeometry, LinkOptions, LinkResult, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
 import type { WsFilesApi } from '../types/docstore';
 
 export type ToastKind = 'info' | 'success' | 'error';
+
+/**
+ * The plugin's preferences for the user, the same in every project (`ws.prefs`, host API 1.7:
+ * small JSON values such as the toolbar layout). onChange hears a change made in another tab or
+ * window, not this page's own.
+ */
+export interface PrefsApi {
+  get<T = unknown>(key: string): Promise<T | null>;
+  set(key: string, value: unknown): Promise<void>;
+  remove(key: string): Promise<void>;
+  onChange(fn: (key: string, value: unknown) => void): () => void;
+}
 
 /** Host API 1.5, a study kind with `links_geometry`: the study's design as a project geometry. */
 export interface LinkApi {
@@ -38,6 +50,11 @@ export interface Bridge {
    * conditional writes); null on an older host, which has only `data`.
    */
   files: WsFilesApi | null;
+  /**
+   * The plugin's preferences for the user, in every project (host API 1.7, `ws.prefs`); null on an
+   * older host, whose SDK has no `prefs` (a 1.6 host keeps per-project data only).
+   */
+  prefs: PrefsApi | null;
   /** The host's toast (bottom-right of the workspace). Never throws. */
   toast(message: string, kind?: ToastKind): void;
   /** Destructive confirms only: the host's button is always red. */
@@ -112,6 +129,14 @@ export function createBridge(ws: Workspace): Bridge {
     versionAtLeast(ws.context.hostVersion, 1, 6) && typeof navLeave === 'function'
       ? (handler: LeaveHandler | null) => (navLeave as (h: LeaveHandler | null) => Promise<void>).call(ws.nav, handler)
       : null;
+  // Feature detection (compatibility.md, 1.7 `ws.prefs`): the SDK the host served has the calls.
+  // Not gated on hostVersion: the host reports 1.6 until 1.7 is released, and the SDK it serves
+  // has `prefs` exactly when its bridge answers the calls.
+  const maybePrefs = (ws as unknown as { prefs?: Partial<PrefsApi> }).prefs;
+  const prefs: PrefsApi | null =
+    maybePrefs && typeof maybePrefs.get === 'function' && typeof maybePrefs.set === 'function' && typeof maybePrefs.remove === 'function' && typeof maybePrefs.onChange === 'function'
+      ? (maybePrefs as PrefsApi)
+      : null;
   return {
     context: ws.context,
     studyId: ws.context.study.id,
@@ -127,6 +152,7 @@ export function createBridge(ws: Workspace): Bridge {
       write: (rel, doc) => ws.data.write(rel, doc),
     },
     files,
+    prefs,
     toast(message, kind = 'info') {
       ws.ui.toast(message, { kind }).catch((err: unknown) => console.warn('[cad] toast failed', err));
     },

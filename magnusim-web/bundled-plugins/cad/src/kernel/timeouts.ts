@@ -28,6 +28,12 @@ export const OP_TIMEOUTS: Partial<Record<KernelOp, number>> = {
   // LINK: the solids of the design as one BREP (a brep_write plus the face walk).
   link_export: 120_000,
   measure: 60_000,
+  // API 5 (P4b): copies of a large body; projection and section over every face of a large
+  // import; the silhouette's hidden-line removal (HLRBRep_Algo) is the slowest of them.
+  copies: 60_000,
+  project: 60_000,
+  section: 60_000,
+  silhouette: 120_000,
 };
 
 export function timeoutFor(op: KernelOp): number {

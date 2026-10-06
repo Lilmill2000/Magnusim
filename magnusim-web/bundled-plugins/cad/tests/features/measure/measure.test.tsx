@@ -83,7 +83,7 @@ async function settled(a: TestApp, n: number) {
 }
 
 describe('Measure panel', () => {
-  it('picks go to the panel; two picks show the distance; a third starts over; a rebuild clears them', async () => {
+  it('picks go to the panel; two picks show the distance; a third starts over; a rebuild keeps them unless their geometry changed', async () => {
     const real = realKernelAnywhere();
     await real.start();
     const k = withMeasure(hybridKernel(real), (p) =>
@@ -125,16 +125,62 @@ describe('Measure panel', () => {
     expect(a.view.layers.get('p2-measure')?.html.querySelector('[data-measure-label]')?.textContent).toBe('20 mm');
     expect(a.$$('[data-pick-row]').map((r) => r.textContent?.replace('×', ''))).toEqual(['Face 5 of Body 1', 'Face 6 of Body 1']);
     // A third pick starts over.
-    a.view.click({ kind: 'face', body: b.id, index: 0 });
+    // A side face (a 30 mm tall block below keeps its plane).
+    const side = b.names!.faces.findIndex((n) => n.includes(':side:'));
+    a.view.click({ kind: 'face', body: b.id, index: side });
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(a.$$('[data-pick-row]')).toHaveLength(1);
-    // The part changes (Undo of the second extrude): the picks go, and the panel says why.
+    // P4b (carry-over): a rebuild that leaves the picked body as it was (Undo of the second
+    // extrude) keeps the pick, and says nothing.
     await act(async () => {
       a.services.doc.undo();
     });
     for (let i = 0; i < 500 && a.services.doc.state.get().rebuild.bodies.length !== 1; i++) {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+    }
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(a.$$('[data-pick-row]').map((r) => r.textContent?.replace('×', ''))).toEqual([`Face ${side + 1} of Body 1`]);
+    expect(a.$('[data-tool-panel="inspect.measure"]')?.textContent).not.toContain('The part changed');
+    // The top face picked too. The extrude's height typed as "20" instead of "20 mm": the body is
+    // rebuilt (another key) with the same geometry, so both picks stay, and nothing is said.
+    const top = b.names!.faces.findIndex((n) => /:end$/.test(n));
+    a.view.click({ kind: 'face', body: b.id, index: top });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(a.$$('[data-pick-row]')).toHaveLength(2);
+    const ex = a.services.doc.state.get().doc.features.find((f) => f.type === 'extrude')!;
+    const height = async (distance: string) => {
+      const seq = a.services.doc.state.get().rebuild.seq;
+      await act(async () => {
+        const s = a.services.doc.beginEdit(ex.id);
+        s.update({ extent: { kind: 'blind', distance } } as never);
+        s.commit();
+      });
+      for (let i = 0; i < 500 && a.services.doc.state.get().rebuild.seq === seq; i++) {
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 10));
+        });
+      }
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+    };
+    const tess = a.services.doc.state.get().rebuild.bodies[0].tessKey;
+    await height('20');
+    expect(a.services.doc.state.get().rebuild.bodies[0].tessKey).not.toBe(tess);
+    expect(a.$$('[data-pick-row]')).toHaveLength(2);
+    expect(a.$('[data-tool-panel="inspect.measure"]')?.textContent).not.toContain('The part changed');
+    // The block made 30 mm tall: both picked faces really change (the top moves, the side grows):
+    // the picks go, and the panel says why.
+    await height('30 mm');
+    for (let i = 0; i < 500 && a.$$('[data-pick-row]').length !== 0; i++) {
       await act(async () => {
         await new Promise((r) => setTimeout(r, 10));
       });

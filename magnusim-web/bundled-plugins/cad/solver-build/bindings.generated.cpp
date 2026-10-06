@@ -24,12 +24,14 @@
 #include <stdexcept>
 #include <cstdint>
 #include "GCS.h"
+#include "MagnusimSpline.h"
 #include <emscripten.h>  
 
 using namespace GCS;
 using namespace std;
 
 class GcsSystem : System
+
 {
     public:
         vector<double *> p_params;
@@ -240,6 +242,20 @@ class GcsSystem : System
 
         // Indices (into p_params) of the parameters the last diagnosis found dependent,
         // i.e. not fixed by the constraints.
+        // Magnusim (P4b fix 1): a point on a sketch spline at a free parameter (one call per coordinate).
+        void add_constraint_point_on_affine_spline(int p_i, int u_i, vector<int> q_i, vector<double> w, int n_poles, vector<double> flat, int degree, int tagId, bool driving)
+        {
+            if (degree < 1 || degree > 8) throw std::invalid_argument("spline degree out of range");
+            if ((int)w.size() != n_poles * (int)q_i.size()) throw std::invalid_argument("spline weights do not match");
+            if ((int)flat.size() != n_poles + degree + 1) throw std::invalid_argument("spline knots do not match");
+            vector<double*> q;
+            for (int i : q_i) q.push_back(p_params[i]);
+            Constraint* c = new ConstraintPointOnAffineSpline(p_params[p_i], p_params[u_i], q, w, n_poles, flat, degree);
+            c->setTag(tagId);
+            c->setDriving(driving);
+            addConstraint(c);
+        }
+
         vector<int> get_dependent_params()
         {
             vector<double *> dep;
@@ -1159,6 +1175,7 @@ EMSCRIPTEN_BINDINGS(module) {
         .function("init_solution", &GcsSystem::init_solution)
         .function("solve_prepared", &GcsSystem::solve_prepared)
         .function("diagnose_fresh", &GcsSystem::diagnose_fresh)
+        .function("add_constraint_point_on_affine_spline", &GcsSystem::add_constraint_point_on_affine_spline)
         .function("get_dependent_params", &GcsSystem::get_dependent_params)
         .function("get_dependent_param_groups", &GcsSystem::get_dependent_param_groups)
         .function("params_to_buffer", &GcsSystem::params_to_buffer)

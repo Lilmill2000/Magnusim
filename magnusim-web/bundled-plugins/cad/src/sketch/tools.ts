@@ -12,14 +12,25 @@
 import type { SketchFeature, Vec2 } from '../types/doc';
 import type { SketchToolId } from '../types/sketch';
 import type { Quantity } from '../types/units';
-import { formatDimNumber, planDimension } from './dimensions';
+import { planDimension, withDisplayUnit } from './dimensions';
 import { SketchBuilder, extendAt, extendPreview, trimAt, trimPiece } from './edit';
 import { add, angleOf, ccwSweep, circleThrough, dist, norm, polar, scale, sub, tangentArc } from './geom';
 import { infer, tangentAtEnd, type Inference } from './inference';
-import { entityEnds, entityOf, ORIGIN, pointAt } from './model';
+import { entityEnds, entityLabel, entityOf, ORIGIN, pointAt } from './model';
 import { emptyPreview, storeExpr, type SketchHit, type SketchMode, type SketchPointer, type SketchPreview, type SketchTool, type ValueBox } from './mode';
-import { hitTest, samples, windowSelect } from './pick';
+import { hitTest, samples } from './pick';
+import { selectTool } from './select-tool';
+import { autoProjectItem, intersectTool, modelItemAt, projectTool } from './project/tools';
+import { linkedRefusal } from './project/curves';
+import { modelSnap, placeOnModel } from './project/snap';
+import { hiddenPoles } from './project/style';
 import { newId } from '../lib/ids';
+// P4b (SKETCH): splines, mirror, patterns, offset, fillet, chamfer.
+import { splineTool } from './tools/spline';
+import { mirrorTool } from './tools/mirror';
+import { patternTool } from './tools/pattern';
+import { offsetTool } from './tools/offset';
+import { filletTool } from './tools/fillet';
 
 type Draft = SketchFeature;
 const DRAG_PX = 4;
@@ -27,8 +38,10 @@ const DRAG_PX = 4;
 // ------------------------------------------------------------ shared pieces
 
 /** Where a click lands: an existing point (joined), or a new point with the relations its snap asks for. */
-function placePoint(b: SketchBuilder, inf: Inference, id?: string): string {
+export function placePoint(b: SketchBuilder, inf: Inference, id?: string): string {
   const s = inf.snap;
+  // P4b SELECT: a snap on the model adds its linked reference and the relation to it.
+  if (s?.kind === 'model') return placeOnModel(b, s.model, id);
   if (s?.kind === 'point' && s.id !== ORIGIN && b.points[s.id]) return s.id;
   const p = b.addPoint(inf.at, id);
   if (s?.kind === 'point') b.addRelation('coincident', [p, s.id], { inferred: true, optional: true });
@@ -48,16 +61,16 @@ function onCurve(b: SketchBuilder, p: string, entity: string) {
 }
 
 /** The point id a snap lands on when it joins an existing point (not the origin). */
-function joinedPoint(inf: Inference): string | null {
+export function joinedPoint(inf: Inference): string | null {
   return inf.snap?.kind === 'point' && inf.snap.id !== ORIGIN ? inf.snap.id : null;
 }
 
-function glyphsOf(inf: Inference | null): SketchPreview['glyphs'] {
+export function glyphsOf(inf: Inference | null): SketchPreview['glyphs'] {
   return inf && inf.glyphs.length ? [{ at: inf.at, kinds: inf.glyphs }] : [];
 }
 
 /** Value boxes typed while drawing (Fusion): text typed and valid = used; empty = follows the pointer. */
-class Boxes {
+export class Boxes {
   private typed = new Map<string, string>();
   constructor(
     private readonly mode: SketchMode,
@@ -96,8 +109,7 @@ class Boxes {
 
   /** The boxes to draw: typed text, or the value now (display units). `problems`: a typed value the shape cannot take. */
   render(now: Record<string, number>, at: Record<string, Vec2>, problems: Record<string, string | null> = {}, along: Record<string, [Vec2, Vec2]> = {}): ValueBox[] {
-    const u = this.mode.services.doc.units.units();
-    const per = { mm: 1, cm: 10, m: 1000, in: 25.4, ft: 304.8 }[u.length];
+    const units = this.mode.services.doc.units;
     return this.defs.map((d) => {
       const t = this.typed.get(d.id);
       let error: string | null = null;
@@ -108,117 +120,35 @@ class Boxes {
         else error = problems[d.id] ?? null;
       }
       const v = now[d.id] ?? 0;
-      const shown = d.quantity === 'angle' ? formatDimNumber(u.angle === 'rad' ? (v * Math.PI) / 180 : v) : formatDimNumber(v / per);
+      // The value now with its unit ("40 mm", "30°"): typing replaces it, and the same text parses back.
+      const shown = withDisplayUnit(v, d.quantity === 'angle' ? 'angle' : 'length', units);
       return { id: d.id, label: d.label, at: at[d.id] ?? [0, 0], along: along[d.id] ?? null, text: t ?? shown, locked: t != null && !error, error, quantity: d.quantity === 'angle' ? 'angle' : 'length' };
     });
   }
 }
 
-function base(mode: SketchMode, id: SketchToolId) {
+export function base(mode: SketchMode, id: SketchToolId) {
   return {
     id,
     draft: (): Draft | null => mode.draft(),
     infer: (e: SketchPointer, extra: Partial<Parameters<typeof infer>[0]> = {}): Inference => {
       const d = mode.draft();
-      return infer({ f: d ?? { points: {}, entities: [] }, at: e.uv, px: e.px, suppress: e.ctrl, ...extra });
+      // P4b SELECT: a projected spline's inner poles are never snapped to.
+      const hidden = d ? hiddenPoles(d) : null;
+      const exclude = hidden?.size ? new Set([...(extra.exclude ?? []), ...hidden]) : extra.exclude;
+      const inf = infer({ f: d ?? { points: {}, entities: [] }, at: e.uv, px: e.px, suppress: e.ctrl, ...extra, ...(exclude ? { exclude } : {}) });
+      // P4b SELECT: nothing of the sketch's own under the pointer: a vertex, an edge, a centre or a pierce point of a body.
+      if (!e.ctrl && !inf.snap && !extra.suppress) {
+        const plane = mode.plane();
+        const ms = plane ? modelSnap(mode.services, plane, e, () => mode.repeatPointer?.()) : null;
+        if (ms) return { at: ms.at, snap: { kind: 'model', model: ms }, direction: null, glyphs: [ms.glyph], guides: [] };
+      }
+      return inf;
     },
   };
 }
 
-// ------------------------------------------------------------ Select
-
-function selectTool(mode: SketchMode): SketchTool {
-  let press: { at: Vec2; px: number; hit: SketchHit | null; client: [number, number]; ctrl: boolean } | null = null;
-  let dragging: 'drag' | 'window' | 'refused' | null = null;
-  let starting: Promise<boolean> | null = null;
-  const cursorFor = (h: SketchHit | null): string => {
-    if (!h || h.what === 'constraint') return '';
-    const a = mode.view.get().analysis;
-    if (!a) return 'move';
-    const s = h.what === 'point' ? a.perPoint[h.id] : a.perEntity[h.id];
-    return s === 'fully' || h.id === ORIGIN ? 'not-allowed' : 'move';
-  };
-  return {
-    id: 'select',
-    hint: () => 'Click to select, Ctrl+click to add, drag across to select a window. Drag under-defined geometry to move it.',
-    cancel() {
-      if (dragging === 'window') {
-        dragging = null;
-        press = null;
-        mode.setPreview(null);
-        return true;
-      }
-      return false;
-    },
-    pointer(e) {
-      const d = mode.draft();
-      if (!d) return;
-      if (e.type === 'move' && !e.pressed) {
-        const h = hitTest(d, e.uv, e.px);
-        mode.setHover(h);
-        mode.view.set({ cursor: cursorFor(h) });
-        return;
-      }
-      if (e.type === 'down') {
-        press = { at: e.uv, px: e.px, hit: hitTest(d, e.uv, e.px), client: [e.clientX, e.clientY], ctrl: e.ctrl };
-        dragging = null;
-        return;
-      }
-      if (e.type === 'move' && press) {
-        const moved = Math.hypot(e.clientX - press.client[0], e.clientY - press.client[1]) > DRAG_PX;
-        if (!dragging && moved) {
-          if (press.hit && press.hit.what !== 'constraint' && press.hit.id !== ORIGIN) {
-            const h = press.hit;
-            const ent = h.what === 'entity' ? entityOf(d, h.id) : null;
-            const target = h.what === 'point' ? { point: h.id } : ent?.kind === 'point' ? { point: ent.p } : { entity: h.id, grab: press.at };
-            dragging = 'drag';
-            starting = mode.beginDrag(target);
-            void starting.then((ok) => {
-              if (!ok && dragging === 'drag') {
-                dragging = 'refused';
-                mode.view.set({ cursor: 'not-allowed' });
-              }
-            });
-          } else if (press.hit && press.hit.id === ORIGIN) {
-            dragging = 'refused';
-            mode.view.set({ cursor: 'not-allowed' });
-          } else {
-            dragging = 'window';
-          }
-        }
-        if (dragging === 'drag') {
-          void starting?.then((ok) => ok && mode.dragTo(e.uv));
-        } else if (dragging === 'window') {
-          const p = emptyPreview();
-          p.window = { a: press.at, b: e.uv, crossing: e.uv[0] < press.at[0] };
-          mode.setPreview(p);
-        }
-        return;
-      }
-      if (e.type === 'up' && press) {
-        const p = press;
-        const how = dragging;
-        press = null;
-        dragging = null;
-        if (how === 'drag') {
-          void starting?.then((ok) => (ok ? mode.endDrag() : undefined));
-          starting = null;
-        } else if (how === 'window') {
-          mode.setPreview(null);
-          const crossing = e.uv[0] < p.at[0];
-          mode.select(windowSelect(d, p.at, e.uv, crossing), p.ctrl || e.ctrl);
-        }
-        return;
-      }
-      if (e.type === 'click') {
-        const h = hitTest(d, e.uv, e.px);
-        if (h) mode.select([h], e.ctrl);
-        else if (!e.ctrl) mode.select([], false);
-        mode.note(null);
-      }
-    },
-  };
-}
+// ------------------------------------------------------------ Select: src/sketch/select-tool.ts (P4b SELECT owns it)
 
 // ------------------------------------------------------------ Line (and Centerline)
 
@@ -1029,6 +959,18 @@ function dimensionTool(mode: SketchMode): SketchTool {
         return;
       }
       if (!picks.length) return;
+      // P4b SELECT: a body vertex or edge as the second pick: auto-projected, then dimensioned to.
+      const onModel = picks.length === 1 ? modelItemAt(mode, e) : null;
+      if (onModel) {
+        const first = picks[0];
+        void autoProjectItem(mode, onModel).then((r) => {
+          if (!r || picks.length !== 1 || picks[0] !== first) return;
+          picks = [first, r.point ?? r.id];
+          highlight();
+          mode.refreshHint();
+        });
+        return;
+      }
       const plan = planDimension(d, picks, e.uv);
       if (!('kind' in plan)) {
         mode.note(plan.reason);
@@ -1062,7 +1004,8 @@ function trimTool(mode: SketchMode): SketchTool {
     const ent = entityOf(d, h.id);
     if (!ent || ent.kind === 'point') return;
     const at = e.uv;
-    void mode.apply('Trim', (cur) => trimAt(cur, h.id, at)).then(() => mode.select([], false));
+    // P4b SELECT: a linked (projected) curve follows the model: trimming it needs Break link first.
+    void mode.apply('Trim', (cur) => (linkedRefusal(cur, h.id, entityLabel(cur, h.id)) ? { ok: false, reason: linkedRefusal(cur, h.id, entityLabel(cur, h.id))! } : trimAt(cur, h.id, at))).then(() => mode.select([], false));
   }
   return {
     id: 'trim',
@@ -1120,7 +1063,8 @@ function extendTool(mode: SketchMode): SketchTool {
       }
       if (e.type !== 'click' || !h) return;
       const at = e.uv;
-      void mode.apply('Extend', (cur) => extendAt(cur, h.id, at));
+      // P4b SELECT: a linked curve cannot be extended (Break link first).
+      void mode.apply('Extend', (cur) => (linkedRefusal(cur, h.id, entityLabel(cur, h.id)) ? { ok: false, reason: linkedRefusal(cur, h.id, entityLabel(cur, h.id))! } : extendAt(cur, h.id, at)));
     },
   };
 }
@@ -1149,6 +1093,28 @@ export function makeTool(mode: SketchMode, id: SketchToolId): SketchTool {
       return trimTool(mode);
     case 'extend':
       return extendTool(mode);
+    // P4b (SELECT): linked geometry.
+    case 'project':
+      return projectTool(mode);
+    case 'intersect':
+      return intersectTool(mode);
+    // P4b (SKETCH)
+    case 'spline-fit':
+      return splineTool(mode, 'fit');
+    case 'spline-control':
+      return splineTool(mode, 'control');
+    case 'mirror':
+      return mirrorTool(mode);
+    case 'pattern-linear':
+      return patternTool(mode, 'linear');
+    case 'pattern-circular':
+      return patternTool(mode, 'circular');
+    case 'offset':
+      return offsetTool(mode);
+    case 'fillet':
+      return filletTool(mode, 'fillet');
+    case 'chamfer':
+      return filletTool(mode, 'chamfer');
     case 'select':
     default:
       return selectTool(mode);

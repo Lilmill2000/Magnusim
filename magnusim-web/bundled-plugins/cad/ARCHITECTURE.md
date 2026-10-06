@@ -10,7 +10,12 @@ the decisions win. The P2 (STEP editing) and P3 (sketcher) build follows
 ownership map (§2 here) are binding for the builders. P4a (solid features,
 reference geometry, the volume chip per body) was built by two areas, SOLIDS and
 REFERENCE, and integrated in one step; their notes are the §2 rows, §5's API 4
-table, §6's schema additions and §10's "Solid features" and "CONSTRUCT".
+table, §6's schema additions and §10's "Solid features" and "CONSTRUCT". P4b
+(patterns and mirror, the further sketch tools, Project / Intersect, box
+selection, snaps on the model, Normal to) was built by PATTERN, SKETCH and
+SELECT and integrated in one step: §2's P4b rows, §5's API 5 table, §6, §7's
+"Mouse" and "Toolbar", §8 and §10's "Patterns and mirror", "Sketch tools (P4b)"
+and "Linked sketch geometry".
 
 ## 1. Runtime topology
 
@@ -76,6 +81,9 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `src/features/{revolve,sweep,loft,fillet,chamfer,shell,pickinfo}/**`, `src/features/solids/**` (shared code, no `index.ts`), `src/naming/edges.ts`, the "P4a: solids" block of `src/types/doc.ts` and its union members (plus Extrude's `face`, `direction` and the `through_all` / `to` extents), `EdgeChainOutput` in `src/types/doc-service.ts`, kernel API 4 (`kernel-build/facade/facade.cpp`, `workspace/kernel/mk32.*`, `src/types/kernel-protocol.ts`), `tests/features/solids/**`, `tests/naming/{edges,corpus}.test.ts`, `tests/kernel/kernel-api4-solids.test.ts`, `e2e/cad-p4a-solids.spec.ts` | P4a SOLIDS | Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents Through all and Up to, Extrude a flat face, the pick chip; edge and vertex references; the persistent-naming corpus. In P4a the SOLIDS builder was the only one to edit `kernel-build/` and `workspace/kernel/` (KERNEL-HARDENING's files). |
 | `src/features/refgeom/**`, `src/types/references.ts`, the "P4a: reference geometry" block of `src/types/doc.ts`, the construct outputs in `src/types/doc-service.ts`, the `feature` sketch support (`src/features/sketch/plane.ts`, `def.ts`; Sketch on a CONSTRUCT plane in `src/sketch/commands.ts`, `mode.ts`, `panel.tsx`), the volume chip in `src/ui/StatusDock.tsx`, `tests/features/refgeom/**`, `e2e/cad-p4a-construct.spec.ts` | P4a REFERENCE | CONSTRUCT (reference Plane, Axis, Point), the shared resolver (`resolveAxis`, `resolvePlane`, `resolvePoint`) SOLIDS uses too, and the per-body volume chip (§7 "Readouts"). |
 | The toolbar's fold order (`src/ui/Toolbar.tsx` `FOLD_ORDER`, `KEEP_IN_VIEW`, the More menus), `e2e/cad-p4a-toolbar.spec.ts`, `e2e/cad-p4a-integrate.spec.ts` | INTEGRATE (P4a) | §7 "Toolbar"; the integration gaps (Extrude "Along" a CONSTRUCT plane or axis, sketch points as point inputs). |
+| `src/features/pattern/**`, `tests/features/pattern/**`, the "P4b: patterns and mirror" block of `src/types/doc.ts` and its union members, `PatternOutput` in `src/types/doc-service.ts`, kernel API 5 (`kernel-build/`, `workspace/kernel/mk32.*`, `src/types/kernel-protocol.ts`, `src/kernel/timeouts.ts` rows), `tests/kernel/kernel-api5-p4b.test.ts`, `e2e/cad-p4b-pattern.spec.ts`; Measure's pick carry-over block in `src/features/measure/panel.tsx` | P4b PATTERN | Linear pattern, Circular pattern, Mirror (features, bodies, faces); copy names; the kernel ops `copies`, `project`, `section`, `silhouette` and spline curves. In P4b only PATTERN edited the kernel. |
+| `src/sketch/tools/**`, `src/solver-worker/**`, `solver-build/**`, the "P4b (SKETCH)" blocks (`SketchSplineEntity`, `SketchTie`, `SketchFeature.ties`), `tests/sketch/p4b-*.test.ts` but links, `tests/solver/p4b-*`, `e2e/cad-p4b-sketch-tools.spec.ts` | P4b SKETCH | Fit-point and control-point splines, sketch Mirror, Linear and Circular pattern, Offset, Fillet, Chamfer, the pattern and offset rows (`ties`). |
+| `src/sketch/select-tool.ts`, `select-filter.ts`, `select-menu.ts`, `src/sketch/pick.ts`, `src/sketch/project/**`, `src/viewport/boxselect.ts`, `boxpick.ts`, `normal.ts`, `src/features/selectcount/**`, the "P4b: linked sketch geometry" block of `src/types/doc.ts`, `tests/viewport/{boxselect,normal}.test.ts`, `tests/sketch/p4b-links.test.ts`, `e2e/cad-p4b-select.spec.ts`, `e2e/cad-p4b-project.spec.ts`, `e2e/cad-p4b-project-step.spec.ts` | P4b SELECT | Construction from the right-click menu, box selection in both modes, Project / Intersect (linked geometry, Lost reference, Break link), snaps on the model, Normal to for planes and sketches. The mouse binding (§7 "Mouse") is INTEGRATE's since Daniel's decision of 2026-10-06. |
 | `package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `manifest.toml`, `plugin.py`, `README.md`, `ARCHITECTURE.md`, `LICENSES/**` | frozen (INTEGRATE) | New dependency? Ask INTEGRATE: one `npm install` at a time (shared `node_modules`). |
 | `workspace/**` (except `kernel/mk32.*`, `solver/planegcs.*`) | nobody by hand | Written only by `npm run build`. |
 
@@ -145,8 +153,8 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
 - Facade C ABI and ops: `p0/CONTRACT.md` and `src/types/kernel-protocol.ts`
   (`KernelOps` maps op -> params/result; the typed file is the one to read).
   Shape ids are integers owned by the worker; face/edge/vertex indices start at
-  0 and are stable per shape id. `version` returns `api: 4` (the contract below plus
-  the API 3 and API 4 tables at the end of this section).
+  0 and are stable per shape id. `version` returns `api: 5` (the contract below plus
+  the API 3, API 4 and API 5 tables at the end of this section).
 - Worker protocol: `ready` | `fatal` | `result` (worker -> main), `call`
   (main -> worker, `bytes` transferred as `params.ptr/len`). Buffers come back
   as ArrayBuffers in the transfer list.
@@ -292,6 +300,18 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   | `shell` | + `outside` (the wall outside the body's faces) |
   | `topo` | + `edge_ends` (edges get `first`, `last`, `vertices`, a line's `dir`) and `vertex_faces` (vertices get their sorted faces) |
   | `edge_eval` | `{id, edge, at? ({distance} or {fraction})[], plane?, near?}` -> `{type, length, first, last, closed, points: {p, tangent}[], crossings, nearest?}` (REFERENCE's point on an edge, an edge crossing a plane, a plane normal to a curve) |
+- **API 5 (P4b, the PATTERN builder; typed in `src/types/kernel-protocol.ts`, tests
+  `tests/kernel/kernel-api5-p4b.test.ts`; build be6ad470 in `kernel-build/mk32.build.txt`).**
+  Timeouts (`src/kernel/timeouts.ts`): copies, project and section 60 s, silhouette 120 s.
+  | Op / change | Params -> result (abridged) |
+  |---|---|
+  | `SketchCurve` `bspline` | `{degree, poles, knots, mults, weights?, pa?, pb?}` in `sketch_regions`, `extrude_regions`, `revolve_regions`, `sweep_regions` (profile and path) and `loft_regions`; closed when the first and last poles are equal; crossings numbered along the spline; refusals "bspline <id>: <reason>". Exact pcurves on the sketch plane; a spline-bounded region's area is integrated adaptively, and `props` integrates the volume of faces swept from a sketch spline over the knot spans (Gauss-Kronrod, `integration: "spans"`; the default rule was 0.04 % off once fused). STEP imports and boolean results keep the default rule |
+  | `copies` | `{id, transforms: [{matrix}]}` -> one copy per rigid transform or mirror (orthonormal, det ±1, no scale), `valid` per copy, `maps` when a mirrored copy renumbers faces (the patterns' copies) |
+  | `project` | edges, vertices or a face's outer wire projected along the plane normal into plane u/v as `PlaneCurve` (line, arc with `ccw`, circle, bspline, point; an end-on line is a point, an edge-on circle a line, an ellipse a rational B-spline), `src` = the edge or vertex index |
+  | `section` | `BRepAlgoAPI_Section` of a body with the plane, chained head to tail into loops (`closed`), `src.face` per curve; a miss gives `loops: []` |
+  | `silhouette` | a body's outline along the plane normal (HLR visible, outline and hidden edges moved onto the plane, a covering face split by them, the pieces over the body kept and merged): outer loops and see-through holes |
+  | `cubic: true` (project, section, silhouette) | every B-spline non-rational of degree 3 (what a sketch spline holds) |
+  Measured on the Vortex (Node): silhouette 180-220 ms, section 7-24 ms, project of 17 faces 7 ms.
 
 ## 6. Document
 
@@ -318,7 +338,17 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   sketch support `{kind: 'feature'}` (a sketch on a CONSTRUCT plane), and the
   stored references of `src/types/references.ts` (`AxisRef`, `PlaneRef`,
   `PointRef`, `EdgeRef`, `FaceRef`, `SketchCurveRef`; an `AxisRef` may be the
-  `normal` of a `PlaneRef`). CONSTRUCT features publish an `AxisOutput`,
+  `normal` of a `PlaneRef`). P4b adds, still in schema 2: `pattern_linear`,
+  `pattern_circular` and `mirror` (PATTERN; common fields `of: features | bodies
+  | faces`, `features`, `bodies`, `faceBody`, `faces`, `op` (a body op or
+  `source`: each feature's own), `creates`, `scope`, `skip` (the copies' keys);
+  they publish a `PatternOutput` for the markers and the panel), the sketch
+  entity `spline` (`form: fit | control`, `pts`, `degree`, `closed?`,
+  `handles?`; its shape is a function of its points, so it adds no unknowns),
+  `SketchFeature.ties` (the sketch pattern and offset rows: solver-only ties
+  rebuilt from each row) and `SketchFeature.links` with `SketchEntityBase.link`
+  (Project / Intersect: ordinary entities tagged with the `SketchLink` that
+  made them; sources edge, vertex, face, silhouette, section, pierce). CONSTRUCT features publish an `AxisOutput`,
   `PlaneOutput` or `PointOutput`; Fillet and Chamfer an `EdgeChainOutput`. A feature type declares what it reads and makes and which
   fields are expressions (FeatureTypeDef `uses`, `ownsBody`, `newBodies`,
   `exprs`/`mapExprs`, `isolateWhileEditing`; `src/doc/features/hooks.ts` holds
@@ -527,12 +557,45 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   second press on More closes it. Measured with labels (bundled Chromium, a
   part with a body, P4a fix round 1): 1920 px folds nothing, 1600 px six
   commands, 1440 px nine, 1280 px twelve.
+  - **The default layout and the user's own (P4b fix round 1, Daniel
+    2026-10-06: "I prefer 1280 px (model) but let people arrange the icons
+    however they want").** Model mode starts compact at every width: only each
+    group's main command(s), `KEEP_IN_VIEW` (Sketch, Extrude, Linear pattern,
+    Fillet, Chamfer, Plane, Enclosure, Measure, Import STEP), are buttons; the
+    other sixteen start in their group's More. Sketch mode starts with every
+    command on the ribbon, labels on one line, and folds by width in
+    `FOLD_ORDER` (1920 px: Intersect, Project, Point, Construction, Chamfer,
+    Control-point spline; 1600 px: ten, Spline, Mirror and both patterns still
+    shown). Users rearrange both (`src/ui/toolbar-layout.ts`): right-click a
+    button for Move to More, Move left, Move right and Reset toolbar; right-click
+    a More item for Show in toolbar (a command shown this way folds last when the
+    frame is narrow; greyed with the reason when even then it cannot fit) and
+    Reset toolbar; drag a button along its group (a drop mark shows where); a
+    right-click anywhere else on the toolbar offers Reset toolbar. Shortcuts and
+    the More menus work whatever the layout. The layout (per mode, `place` id
+    -> bar | more and each group's `order`; unknown ids are ignored, new commands
+    take their registry place) is **the user's, in every project** (P4b
+    follow-up): the host's plugin prefs, `ws.prefs` key `toolbar-layout` (host API
+    1.7, unreleased; the host does not gate an addition by `api_version`, so the
+    manifest stays `api_version = "1.6"` and `src/lib/bridge.ts` feature-detects
+    `ws.prefs` in the SDK the host served). A Reset to the defaults of both modes
+    removes the key. `ws.prefs.onChange` brings another open CAD tab's change (and
+    its Reset) to this toolbar at once. The first time, a layout a project kept
+    per project (`toolbar-layout.json` in its `ws.data`, as on a 1.6 host) is
+    copied to the prefs, once (`toolbar-layout.migrated` records that, so a Reset
+    never brings an old project's file back). On a host without `ws.prefs` (1.6),
+    or one that refuses the calls, the layout stays per project in
+    `toolbar-layout.json` (the sandboxed frame has no localStorage). The e2e that
+    change it (`cad:p4b-toolbar-customize`, `-tabs`, `-migrate`) run in the serial
+    phase: the server keeps one prefs file per plugin. The toolbar carries `data-folded` (all in More),
+    `data-fit-folded` (folded for the width), `data-layout` (default | custom)
+    and `data-layout-ready`.
   - **The priority** (most used stays longest; SolidWorks' CommandManager and
     Fusion's toolbar promote the same core commands, weighted for Magnusim's
     CFD preparation, where imported STEP parts are cleaned up and a fluid
     domain is cut):
     - never folded (`KEEP_IN_VIEW`): Sketch, Extrude (every part starts with
-      them), Fillet (the most used modify command in both) and Chamfer beside it
+      them), Linear pattern (PATTERN sits beside SOLID, Daniel's item 7), Fillet (the most used modify command in both) and Chamfer beside it
       (the two edge treatments together; P4a review), Plane (Fusion's
       Offset Plane and SolidWorks' Plane are the reference geometry people
       reach for), Enclosure (CFD PREP's only command), Measure, Import STEP; in
@@ -541,18 +604,25 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     - folded first to last: Parameters (also the tree's Parameters row;
       Fusion keeps Change Parameters in the MODIFY menu), Check, Point, Loft,
       Mass properties, Split, Delete faces (before Axis: the reference axis is
-      reached for more often; P4a review), Axis, Sweep, Shell, Export STEP,
+      reached for more often; P4a review), Axis, Circular pattern, Mirror,
+      Sweep, Shell, Export STEP,
       Revolve, Combine, Press-pull (kept longest after Fillet: Fusion
       puts Press Pull first in MODIFY, and press-pull, Combine Cut and the
       enclosure are how a STEP part becomes a fluid domain); in sketch mode
-      Point, Construction, Tangent arc, Center rectangle, Extend, Centerline.
-    So at 1280 px: SKETCH | SOLID Extrude, More (Revolve, Sweep, Loft) |
-    MODIFY Fillet, Chamfer, Press-pull, Combine, More (Parameters, Shell,
-    Delete faces, Split) | CONSTRUCT Plane, More (Axis, Point) | CFD PREP |
-    INSPECT Measure, More (Mass properties, Check) | FILE Import STEP, More
-    (Export STEP) | VIEW and EDIT as icons (keeping Chamfer beside Fillet costs
-    Revolve and Export STEP their place at 1280 px; both are one click into
-    their More).
+      (P4b fix round 1, sketch review P2: a greyed Project held its slot while
+      the new tools folded) Intersect, Project, Point, Construction, Chamfer,
+      Control-point spline, Tangent arc, Center rectangle, Extend, Centerline,
+      Offset, Fillet, Circular pattern, Linear pattern, Mirror, Spline (Daniel's
+      headline tools last). Sketch MODIFY's order: Trim, Extend, Offset,
+      Fillet, Chamfer, Mirror, Linear pattern, Circular pattern, Project,
+      Intersect (review P1: Project sat between the patterns).
+    So the model default (since P4b fix round 1, at every width): SKETCH | SOLID Extrude, More
+    (Revolve, Sweep, Loft) | PATTERN Linear pattern, More (Circular pattern,
+    Mirror) | MODIFY Fillet, Chamfer, More (Parameters, Shell, Press-pull,
+    Delete faces, Split, Combine) | CONSTRUCT Plane, More (Axis, Point) | CFD
+    PREP Enclosure | INSPECT Measure, More (Mass properties, Check) | FILE
+    Import STEP, More (Export STEP) | VIEW and EDIT (icons below about 1600 px;
+    every command is one click into its group's More).
   - A new toolbar command needs a decision: `tests/app/bootstrap.test.tsx`
     fails until it is in `FOLD_ORDER` or `KEEP_IN_VIEW`. e2e specs run a command
     with `e2e/helpers.ts` `runCommand(frame, id)` (its button, or More and the
@@ -602,9 +672,29 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   `e2e/cad-p1-document.spec.js` reads these from the core page and compares.
 - Viewport: background `#f0f2f7`, body `#bdc9db` (Phong: ambient .16, diffuse
   .78, specular .22, power 28), edges `#0a0b0e` 2.4 px, pick `#2ec47e`, set
-  `#4884eb`, hover `#b2ccff`. Mouse: left drag orbit, middle or Shift+left pan,
-  wheel or right drag zoom, right click (<= 16 px) context menu, click <= 5 px;
-  Ctrl+click toggles selection; empty click clears.
+  `#4884eb`, hover `#b2ccff`. **Mouse** (the core viewer's binding,
+  `src/workbench/runtime.js`; Daniel's decision of 2026-10-06, "Orbit like the
+  main viewer", in model and sketch mode): left drag orbit wherever it starts,
+  middle or Shift+left pan, wheel or right drag zoom, Alt+left always orbits,
+  right click (<= 16 px) context menu, click <= 5 px; Ctrl+click toggles
+  selection; empty click clears. **Ctrl+drag to box select** (P4b, no core
+  precedent; `boxStarts` in `src/viewport/boxselect.ts`): a Ctrl + left drag
+  past the click distance, starting anywhere, draws the box (`.cad-box-select`,
+  `data-box-mode`, a caption saying what it takes): left to right a solid box
+  that selects what it encloses, right to left a dashed box that selects what
+  it touches (SolidWorks); Ctrl+Shift + drag adds; a box replaces the
+  selection, so an empty one clears it. Model mode boxes only what is visible
+  (one off-screen id render of faces, edges and vertices, then the enclose test
+  on what showed: 43-51 ms on 10,000 faces), edges with no filter, else the
+  filter's bodies / faces / edges / vertices (planes are clicked). Sketch mode's
+  Select tool takes a left press only with Ctrl or on sketch geometry (the P3
+  drag of what is under-defined; `SketchTool.takesPress`); any other press is
+  the viewport's (orbit, Shift pans) and its click still reaches the tool; the
+  sketch box takes curves, points and dimension labels, tested on the screen,
+  or the sketch filter's kinds (Points / Curves / Dimensions). Drawing tools
+  take every left press (Ctrl there suppresses snapping). SELECT's first
+  binding (a left drag from empty space drew the box) was reverted the same
+  day.
   - Sources (core `src/workbench/runtime.js` at cff8aaa): background 1031;
     manipulators 1051-1066 (vtk trackball rotate: 360 deg per viewport width
     about the view-up through the pivot; pan keeps the pivot-depth point under
@@ -748,6 +838,7 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     downloads and outputs are per test; what is shared is the server's plugin
     state, its project list, and its speed. So `@serial` marks a test that
     turns CAD off, breaks its manifest, forgets its choice in the prefs file,
+    changes the user's plugin prefs (the toolbar layout, `ws.prefs`),
     clicks Settings > Plugins > Disable, reads Home's list of every project, or
     times the server or the browser against a budget (contention latencies,
     frame rates, the 113 MB part). A new test that does any of these is tagged
@@ -804,7 +895,7 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   `e2e/cad-sd-review1.spec.ts` holds SD review round 1's findings (sides past
   the part, cylinder sides and axes, two bodies and the fluid following, a
   removed Box a Combine uses, the panel's layout, see-through). `addSketch`
-  leaves the camera as it was (a sketch session's Look at is held off while it
+  leaves the camera as it was (a sketch session's Normal to is held off while it
   commits): a sketch set up "as made earlier" must not turn the view.
   No test is marked PENDING-HOST any more, and none
   depends on when an automatic save retry comes (a refusal is kept up until the
@@ -836,6 +927,24 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   Unit: `tests/naming/corpus.test.ts`
   (the persistent-naming corpus), `tests/features/solids/solids-real.test.ts`
   and `tests/features/refgeom/real-kernel.test.ts` on the real kernel.
+- P4b: `e2e/cad-p4b-pattern.spec.ts` (solids: linear of a hole with a skipped
+  copy, a fillet on copy 3 through a count change, bodies Join refused in words,
+  circular, mirror, an edge and a face picked in the view, faces, pattern of a
+  mirror and its miss, Measure picks kept through a rebuild that changes
+  nothing), `e2e/cad-p4b-sketch-tools.spec.ts` (sketch: splines, their profiles,
+  revolve, tangency and trim, Mirror, Linear and Circular pattern, Offset, Fillet
+  and Chamfer, each checked by DOF words, profile counts and analytic volumes),
+  `e2e/cad-p4b-select.spec.ts` (sketch: Construction from the menu, the sketch
+  and model boxes, the mouse binding (`cad:p4b-select-orbit-binding`), Normal to
+  from each entry point, and the @serial `cad:p4b-select-box-10k`),
+  `e2e/cad-p4b-project.spec.ts` (sketch: Project of a face, edge and vertex,
+  Silhouette, Intersect, Break link, snaps on the model and constraints to it)
+  and `e2e/cad-p4b-project-step.spec.ts` (step: the P4b exit gate, a sketch on
+  an imported face of `fixtures/kernel/flange.step` with projected edges through
+  an upstream Delete faces; its Vortex twin with `CAD_E2E_VORTEX_STEP`). Unit:
+  `tests/features/pattern/*`, `tests/sketch/p4b-*`, `tests/solver/p4b-*`,
+  `tests/viewport/{boxselect,normal}.test.ts`, the naming corpus's P4b block and
+  `tests/kernel/kernel-api5-p4b.test.ts`.
 - Real Chrome/Edge (`CAD_E2E_CHANNELS=chrome,msedge`) for anything about load
   time or process isolation: bundled Chromium caches sandboxed frames and does
   not isolate their process.
@@ -1094,6 +1203,101 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     ("Axis 5 is broken (not used by anything). Part 1 is updated without it.";
     §11). One that a built feature uses still stops it, because that feature
     failed too.
+- **Patterns and mirror** (P4b PATTERN, `src/features/pattern/`, one module,
+  three feature types; the PATTERN group right after SOLID, greyed "Make or
+  import a body first" until a body exists). Select first, then act: selected
+  feature rows, bodies or faces of one body become what is repeated; a selected
+  origin or CONSTRUCT plane is the mirror plane, an axis the circular axis.
+  - **Linear pattern**: Direction 1 (an edge, an origin or CONSTRUCT axis, a
+    sketch line, or a plane's or flat face's normal), Flip, Count (the original
+    counts), Spacing (between copies) or Extent (to the last copy), Symmetric
+    ("Count per side"), and an optional Direction 2 (one along Direction 1 is
+    refused in words). **Circular pattern**: Axis (origin or CONSTRUCT axis,
+    straight or round edge, round face, sketch line), Count, "Full 360°, equal
+    spacing" or "Angle (first to last copy)", Symmetric. **Mirror**: an origin
+    plane, a CONSTRUCT plane or a flat face.
+  - **Of**: Features (their tool bodies rebuilt through their own defs, repeated,
+    applied "As each feature" with each one's Operation, or New body / Join /
+    Cut / Intersect; nested patterns follow the chain), Bodies (copies: New body
+    "Body 1 (Instance 2)", Join fused to the body copied, Cut / Intersect on the
+    bodies the copies meet) or Faces of one body (OCCT's defeaturing takes them
+    off, so the boss or pocket they bound is copied; when it cannot, the panel
+    says so and keeps Features and Bodies). Faces are copied, never moved.
+  - Copies are keyed "2".."N", "-2".."-N", "i.j", "m"; a click on a copy's
+    number in the view (`data-pattern-marker`) skips it, and the panel's "Make
+    it again" brings it back ("4 instances: the original and 3 copies, 1
+    skipped"). Every face of copy k is `F:<pattern>:i<k>:<source face name>`
+    (a mirror's `F:<id>:m:<name>`), so a fillet on copy 3 survives a count or
+    spacing change; words "Side 1 of Extrude 2 · instance 3 of Linear pattern 1".
+  - Failures are red with the reason and the model before shows ("Linear
+    pattern 1 failed: Instances 2 and 3 of Body 1 don't touch Body 1; Join needs
+    overlap. Use New body or change the spacing", those markers red); a copy
+    that misses under Cut is an amber note. Markers of copies past the view's
+    far plane are not drawn (the panel's rows still list them).
+  - Measure keeps its picks through a rebuild that leaves their geometry where
+    it was (same key, or the name resolved with the same signature); "The part
+    changed: pick again" only when a pick's geometry really changed.
+- **Sketch tools (P4b SKETCH, `src/sketch/tools/`).** DRAW: Spline (S, fit
+  points: solver points, so they take dimensions, relations and drags; C2 cubic
+  through them, open or closed by a click on the first point; optional end
+  tangent handles) and Control-point spline (degree 3, or 5 in the panel; the
+  control polygon dashed while drawn, selected or hovered). MODIFY: Mirror (M;
+  pick entities, then the mirror line: copies held by Symmetric, points on the
+  line shared), Linear pattern and Circular pattern (copies tied to their
+  source by solver-only ties, re-laid out when Count, Spacing or Angle change in
+  the Sketch panel's pattern row; Delete pattern keeps the sources), Offset (O;
+  a chain of lines, arcs and splines, one side or both; associative for lines
+  and arcs, a spline's offset is a fit spline through samples), Fillet and
+  Chamfer of a corner. Splines take part in regions, trim and extend (as cut
+  and target), extrude, revolve and sweep. A pattern or offset copy adds no
+  freedom, so DOF words stay honest. Refused in words: a point on a
+  control-point spline, extend of a spline, a dimension on a spline curve,
+  fillet of two arcs, fillet or chamfer of a linked curve.
+- **Linked sketch geometry (P4b SELECT, `src/sketch/project/`).** Project (P)
+  takes a vertex, an edge or a face (its outer edges) of any body, imports
+  included, or with Silhouette a body's outline along the sketch normal;
+  Intersect takes bodies (none: every shown body) and adds where the sketch
+  plane cuts them ("The sketch plane doesn't cut Body 2." for a miss). Linked
+  entities are ordinary entities tagged `link` (§6): the solver fixes them, so
+  dimensions, relations, regions and trim-against work unchanged; drawn purple
+  (`--cad-sketch-projected`); re-read at every rebuild
+  (`reprojectLinks` before the sketch solves; what is constrained to them
+  follows). A source that is gone keeps its entities where they were, drawn
+  amber (`--cad-sketch-lost`), with "Lost reference: <what> not found after
+  rebuild" in the References rows and the panel's foot, and the sketch still
+  builds ("Don't block, just report"). A face, silhouette or section that now
+  gives other curves says "changed: open Sketch N to update it". Break link
+  (right-click or the References row) makes them ordinary geometry; Trim and
+  Extend refuse a linked curve. **Snaps on the model** while any drawing tool
+  runs (when the sketch's own inference finds nothing): a body vertex, an
+  edge's middle, a point on an edge, a round edge's centre (hovered first),
+  and where an edge pierces the sketch plane, by the viewport's BVH pick; Ctrl
+  suppresses them. A click there adds an auto link (light, dashed purple) and
+  the relation in one undo step. With sketch items selected, Ctrl or Shift +
+  click on a body vertex or edge adds it (auto-projected), and Dimension takes
+  one as its second pick.
+- **Construction and selection in sketch mode.** The right-click menu has
+  "Construction" as a checkmark state (`MenuItem.checked`), "Make
+  construction" / "Make normal" on a mixed selection, and points only say why
+  not; the toolbar's Construction and X do the same. The viewport's Selection
+  filter shows Points / Curves / Dimensions in sketch mode, and clicks and
+  boxes obey it. The dock's chip says "Selected · 9 edges" for several items
+  (`src/features/selectcount/`).
+- **Units and the cursor in sketches (P4b follow-up, Daniel 2026-10-06).** The cursor stays the normal
+  arrow over what cannot be dragged (a fully defined entity, the origin) and the
+  sketch panel says why ("This line is fully defined: change a dimension to move
+  it", "The origin can't be moved: it is the sketch's fixed point"); no sketch
+  shows the `not-allowed` cursor. Dimension labels, the value boxes and the edit
+  box show the display unit next to the value (`withDisplayUnit` in
+  `src/sketch/dimensions.ts`: "⌀125 mm", "(40 mm)", "fx: 40 mm", "30°"); the
+  same text parses back as typed.
+- **Normal to** (one name everywhere; sketch mode's former "Look at" is the same
+  command, `view.sketch-look`, on N in sketch mode): `view.normal-to` (N, the
+  views menu) takes a planar face, an origin or CONSTRUCT plane, or a sketch (its
+  row selected, or one of its profiles or curves), with the sketch's own up
+  (`src/viewport/normal.ts`). Right-click menus offer it on a face, a plane, a
+  sketch row, a CONSTRUCT plane row and a sketch's profile in the view ("Normal
+  to Sketch 2"). A curved face keeps the honest refusal.
 - **Commands.** `primary: true` draws the mode's primary button (Finish sketch);
   `activeWhen` draws a command pressed while its panel, tool or sketch tool is
   in use; `canRun(id)` asks without running. Shortcuts are mode-aware: a key runs
@@ -1116,7 +1320,7 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   other than bodies keeps Auto's origin planes hidden: the profile overlay does,
   while a sketch is shown or sketch mode is on). A floating panel over the left
   of the view carries `data-view-cover` (the left stack does): fit, the
-  standard views and Look at centre the part in the rest, re-aimed during the
+  standard views and Normal to centre the part in the rest, re-aimed during the
   transition when a panel opens with it. They move the image's centre
   (`CameraRig.shift`, three's view offset; every projection, ray and pick goes
   through the same camera), not the camera: a camera moved sideways saw a top

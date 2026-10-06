@@ -485,6 +485,15 @@ UI (`services.modules`), and calls every `install` after the UI shell's
   (`click` follows `up` within 5 px). Unconsumed events get the P1 behaviour.
   Sketch tools consume left presses (not Alt, not middle/right), so middle drag
   pans, wheel and right drag zoom, Alt+left orbits (§3.2 left-drag rule).
+  **P4b update (Daniel, 2026-10-06, "Orbit like the main viewer"):** in both
+  modes a left drag orbits wherever it starts and Shift + left drag pans (the
+  core viewer's binding); **Ctrl + drag box selects** (left to right encloses,
+  solid; right to left touches, dashed; Ctrl+Shift adds; an empty box clears).
+  Sketch mode's Select tool takes a left press only with Ctrl or on sketch
+  geometry (the drag of what is under-defined, `SketchTool.takesPress`); any
+  other press orbits or pans and its click still reaches the tool. Drawing
+  tools still take every left press (Ctrl there suppresses snapping).
+  ARCHITECTURE.md §7 "Mouse" is the current rule.
 - `rayAt`, `toPlane(clientX, clientY, plane) -> {p, uv}`, `pixelSize(at)` (8 px
   pick radius = `8 * pixelSize`), `onFrame` (re-place html), `project`.
 - Selection kinds added: `{kind:'sketch', feature, id, what: 'point'|'entity'|
@@ -519,7 +528,8 @@ UI (`services.modules`), and calls every `install` after the UI shell's
   (`session.update(previousDraft)`); the whole session is one document undo step.
 - Drags: solver `dragStart/Move/End` (moves coalesced in the worker); the draft
   is updated once at drag end (one undo step); a fully defined point refuses the
-  drag (`not-allowed` cursor).
+  drag (it said so with the `not-allowed` cursor until the P4b follow-up; now the
+  arrow stays and the sketch panel says why).
 - Region shading in sketch mode comes from P3-PROFILES' layer (it reads
   `rebuild.outputs[sketch]`, which the isolated rebuild refreshes after each
   draft update).
@@ -600,8 +610,24 @@ Each command: `enabled` returns the reason ("Select a planar face or a plane",
 "Select faces of one body"), `activeWhen` for its panel, icons as in
 `src/ui/Icon.tsx` (outline, 24 viewBox, stroke 1.7). Only commands that work end
 to end are registered; the proposal's other MVP sketch rows (spline, offset,
-mirror, sketch fillet, project) are not in P3: they go to the root ROADMAP
-"come back to" list, not into the UI.
+mirror, sketch fillet, project) were not in P3: P4b shipped them (below).
+
+**Commands since P3 (P4a, P4b; the toolbar order is `MODEL_GROUPS` in
+`src/types/commands.ts`, the fold order ARCHITECTURE.md §7 "Toolbar"):**
+
+| Group | Commands (id, shortcut) | Phase |
+|---|---|---|
+| SOLID | Extrude `solid.extrude` (E), Revolve, Sweep, Loft | P3, P4a |
+| PATTERN (beside SOLID) | Linear pattern `pattern.linear`, Circular pattern `pattern.circular`, Mirror `pattern.mirror` | P4b |
+| MODIFY | Fillet, Chamfer, Shell, Press-pull (Q), Delete faces, Split, Combine, Parameters | P2, P4a |
+| CONSTRUCT | Plane, Axis, Point | P4a |
+| CFD PREP | Enclosure | SD |
+| VIEW | Fit (F), standard views (1-7), Normal to `view.normal-to` (N: a flat face, an origin or CONSTRUCT plane, a sketch) | P1, P4b |
+| DRAW (sketch) | + Spline `sketch.spline` (S), Control-point spline `sketch.spline-control` | P4b |
+| MODIFY (sketch) | Trim (T), Extend, + Mirror `sketch.mirror` (M), Linear pattern `sketch.pattern-linear`, Circular pattern `sketch.pattern-circular`, Offset `sketch.offset` (O), Fillet `sketch.fillet`, Chamfer `sketch.chamfer`, Project `sketch.project` (P), Intersect `sketch.intersect` | P3, P4b |
+| VIEW (sketch) | Normal to `view.sketch-look` (N; "Look at" before P4b) | P3, P4b |
+| primary (sketch) | Finish sketch (Enter; Enter first places an open tool step, `sketch.enter`) | P3, P4b |
+
 
 ### 3.9 Delete on faces
 The shell's Delete key with only faces selected runs `modify.delete-faces` when
@@ -691,7 +717,7 @@ leave dialog, never press Enter. Every asserted number below comes from
 1. Sketch on Top, rectangle from the origin -> "Under defined · 2 DOF".
 2. Two dimensions (40, 20) -> "Fully defined"; line pixels `#101828`.
 3. A diagonal dimension -> "Make it driven?" -> Accept -> grey "(44.72)".
-4. Drag a fully defined corner -> it does not move (cursor `not-allowed`).
+4. Drag a fully defined corner -> it does not move (the arrow cursor stays; the panel says why, P4b follow-up).
 5. Delete the 20 dimension -> "Under defined · 1 DOF"; the corner drags.
 6. Two overlapping circles (r 20 at 0,0 and 30,0) -> 3 shaded regions.
 7. Extrude the lens 10 mm -> volume = lens area x 10 (analytic); radius 20 ->

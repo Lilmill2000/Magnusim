@@ -114,6 +114,42 @@
 #include <BRepFilletAPI_LocalOperation.hxx>
 #include <GeomFill_Trihedron.hxx>
 
+// P4b (API 5): B-spline sketch curves, copies, projection, section, silhouette.
+#include <Geom2d_BSplineCurve.hxx>
+#include <Geom2d_BezierCurve.hxx>
+#include <Geom2d_Circle.hxx>
+#include <Geom2d_Conic.hxx>
+#include <Geom2d_Line.hxx>
+#include <Geom2d_TrimmedCurve.hxx>
+#include <Geom2dAdaptor_Curve.hxx>
+#include <Geom2dAPI_PointsToBSpline.hxx>
+#include <Geom2dAPI_Interpolate.hxx>
+#include <TColgp_HArray1OfPnt2d.hxx>
+#include <Geom2dAPI_ProjectPointOnCurve.hxx>
+#include <Geom2dConvert.hxx>
+#include <Geom2dConvert_ApproxCurve.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_Plane.hxx>
+#include <Geom_TrimmedCurve.hxx>
+#include <Geom_BezierCurve.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
+#include <Geom_SweptSurface.hxx>
+#include <GeomAPI.hxx>
+#include <GeomProjLib.hxx>
+#include <TColgp_Array1OfPnt.hxx>
+#include <TColgp_Array1OfPnt2d.hxx>
+#include <TColStd_Array1OfInteger.hxx>
+#include <TColStd_Array1OfReal.hxx>
+#include <TopTools_HSequenceOfShape.hxx>
+#include <BRepAlgoAPI_Section.hxx>
+#include <BRepLib.hxx>
+#include <ShapeAnalysis_FreeBounds.hxx>
+#include <HLRAlgo_Projector.hxx>
+#include <HLRBRep_Algo.hxx>
+#include <HLRBRep_HLRToShape.hxx>
+#include <IntCurvesFace_ShapeIntersector.hxx>
+#include <gp.hxx>
+
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
@@ -965,7 +1001,8 @@ std::unique_ptr<Profile> buildProfile(const JV& jp, double shiftAlongNormal) {
 // combine, measure, sketch_regions, extrude_regions; 4 = P4a: revolve_regions,
 // sweep_regions, loft_regions, extrude_face, edge_eval, extents to_vertex / to_point, fillet
 // contours and diagnose, chamfer d2, shell outside, topo edge_ends / vertex_faces.
-const int kFacadeApi = 4;
+// 5 = P4b: B-spline sketch curves (R1), copies, project, section, silhouette.
+const int kFacadeApi = 5;
 
 JV opVersion(const JV&) {
   JV r = JV::obj();
@@ -2037,6 +2074,41 @@ JV opRepair(const JV& q) {
 // with volume:true) integrates adaptively to that relative error and reports
 // volume_error: the default integration is off by about 1.5e-7 on the Vortex part
 // (its B-spline faces), which the reference values share.
+// P4b (R5): does the shape have faces made from a sketch's B-spline: an extrusion or revolution of a
+// B-spline curve (or, with flatToo, a flat face bounded by a B-spline edge: a sketch region)? Their
+// volumes are integrated over the knot spans (props). STEP imports keep their own B-spline surfaces,
+// and the B-spline edges a boolean makes lie on other faces, so neither is touched (the native
+// reference values stay those of the default integration).
+bool sketchSplineFaces(const TopoDS_Shape& s, bool flatToo = false) {
+  auto splineCurve = [](Handle(Geom_Curve) c) {
+    while (!c.IsNull()) {
+      Handle(Geom_TrimmedCurve) t = Handle(Geom_TrimmedCurve)::DownCast(c);
+      if (t.IsNull()) break;
+      c = t->BasisCurve();
+    }
+    return !c.IsNull() && (c->IsKind(STANDARD_TYPE(Geom_BSplineCurve)) || c->IsKind(STANDARD_TYPE(Geom_BezierCurve)));
+  };
+  for (TopExp_Explorer fx(s, TopAbs_FACE); fx.More(); fx.Next()) {
+    const TopoDS_Face& F = TopoDS::Face(fx.Current());
+    Handle(Geom_Surface) g = BRep_Tool::Surface(F);
+    while (!g.IsNull()) {
+      Handle(Geom_RectangularTrimmedSurface) t = Handle(Geom_RectangularTrimmedSurface)::DownCast(g);
+      if (t.IsNull()) break;
+      g = t->BasisSurface();
+    }
+    if (g.IsNull()) continue;
+    Handle(Geom_SweptSurface) sw = Handle(Geom_SweptSurface)::DownCast(g);
+    if (!sw.IsNull() && splineCurve(sw->BasisCurve())) return true;
+    if (flatToo && g->IsKind(STANDARD_TYPE(Geom_Plane))) {
+      for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next()) {
+        double f, l;
+        if (splineCurve(BRep_Tool::Curve(TopoDS::Edge(ex.Current()), f, l))) return true;
+      }
+    }
+  }
+  return false;
+}
+
 JV opProps(const JV& q) {
   int sid = idParam(q.req("id"), "id");
   const TopoDS_Shape& s = shapeOf(sid);
@@ -2064,6 +2136,12 @@ JV opProps(const JV& q) {
       const double eps = q.num("volume_eps");
       if (!(eps > 0)) throw InputError("volume_eps must be > 0");
       r.set("volume_error", BRepGProp::VolumeProperties(s, vp, eps, Standard_False));
+    } else if (sketchSplineFaces(s)) {
+      // P4b (R5): faces swept from a sketch's B-spline (or flat faces bounded by one): the default
+      // integration was 0.04 % off on them (a closed spline's prism fused with another) and the eps
+      // one worse; Gauss-Kronrod over the knot spans is exact to 1e-12 here (`integration` says so).
+      r.set("volume_error", BRepGProp::VolumePropertiesGK(s, vp, 1e-9, Standard_False, Standard_True));
+      r.set("integration", "spans");
     } else {
       BRepGProp::VolumeProperties(s, vp);
     }
@@ -4236,14 +4314,114 @@ gp_Ax3 sketchFrame(const JV& pl) {
   return gp_Ax3(o, n, gp_Dir(xv));
 }
 
+// P4b (R1): a B-spline sketch curve, {degree, poles, knots, mults, weights?} in sketch u/v:
+// Geom2d_BSplineCurve(poles[, weights], knots, mults, degree, non-periodic). Refusals are
+// InputError "bspline <id>: <reason>".
+Handle(Geom2d_BSplineCurve) bspline2d(const JV& c, const std::string& id) {
+  auto bad = [&](const std::string& why) { return InputError("bspline " + id + ": " + why); };
+  const JV& jp = c.req("poles");
+  const JV& jk = c.req("knots");
+  const JV& jm = c.req("mults");
+  if (!jp.isArr() || !jk.isArr() || !jm.isArr()) throw bad("poles, knots and mults must be arrays");
+  const int deg = (int)c.num("degree");
+  if (deg < 1 || deg > 8 || (double)deg != c.num("degree")) throw bad("the degree must be a whole number from 1 to 8");
+  const int np = (int)jp.size(), nk = (int)jk.size();
+  if (np < deg + 1) throw bad("a degree " + std::to_string(deg) + " spline needs at least " + std::to_string(deg + 1) + " poles");
+  if (nk < 2 || (int)jm.size() != nk) throw bad("knots and mults must have the same length (at least 2)");
+  TColgp_Array1OfPnt2d poles(1, np);
+  for (int i = 0; i < np; ++i) poles.SetValue(i + 1, uv(jp[i]));
+  TColStd_Array1OfReal knots(1, nk);
+  TColStd_Array1OfInteger mults(1, nk);
+  int sum = 0;
+  for (int i = 0; i < nk; ++i) {
+    knots.SetValue(i + 1, jk[i].num());
+    const double m = jm[i].num();
+    if (m < 1 || m > deg + 1 || (double)(int)m != m) throw bad("each multiplicity must be a whole number from 1 to degree + 1");
+    if ((i == 0 || i == nk - 1) ? false : m > deg) throw bad("an inner knot's multiplicity must be at most the degree");
+    mults.SetValue(i + 1, (int)m);
+    sum += (int)m;
+    if (i > 0 && !(jk[i].num() > jk[i - 1].num())) throw bad("the knots must increase strictly");
+  }
+  if (sum != np + deg + 1) throw bad("the multiplicities must add up to poles + degree + 1 (" + std::to_string(np + deg + 1) + ")");
+  try {
+    if (const JV* jw = c.get("weights")) {
+      if (!jw->isNull()) {
+        if (!jw->isArr() || (int)jw->size() != np) throw bad("weights must have one value per pole");
+        TColStd_Array1OfReal w(1, np);
+        for (int i = 0; i < np; ++i) {
+          if (!((*jw)[i].num() > 0)) throw bad("weights must be > 0");
+          w.SetValue(i + 1, (*jw)[i].num());
+        }
+        return new Geom2d_BSplineCurve(poles, w, knots, mults, deg, Standard_False);
+      }
+    }
+    return new Geom2d_BSplineCurve(poles, knots, mults, deg, Standard_False);
+  } catch (const Standard_Failure& e) {
+    throw bad(failureText(e));
+  }
+}
+
+// The same B-spline on a plane frame (an affine map keeps a B-spline a B-spline).
+Handle(Geom_BSplineCurve) bsplineOnPlane(const Handle(Geom2d_BSplineCurve)& b, const gp_Ax3& ax) {
+  const int n = b->NbPoles();
+  TColgp_Array1OfPnt poles(1, n);
+  for (int i = 1; i <= n; ++i) {
+    const gp_Pnt2d q = b->Pole(i);
+    poles.SetValue(i, gp_Pnt(ax.Location().XYZ() + ax.XDirection().XYZ() * q.X() + ax.YDirection().XYZ() * q.Y()));
+  }
+  TColStd_Array1OfReal knots(1, b->NbKnots());
+  TColStd_Array1OfInteger mults(1, b->NbKnots());
+  b->Knots(knots);
+  b->Multiplicities(mults);
+  if (b->IsRational()) {
+    TColStd_Array1OfReal w(1, n);
+    b->Weights(w);
+    return new Geom_BSplineCurve(poles, w, knots, mults, b->Degree(), Standard_False);
+  }
+  return new Geom_BSplineCurve(poles, knots, mults, b->Degree(), Standard_False);
+}
+
 struct SkCurve {
-  std::string id, kind;          // line | arc | circle
-  gp_Pnt2d a, b, c;              // line ends; arc/circle centre (an arc's ends in a, b)
+  std::string id, kind;          // line | arc | circle | bspline (P4b)
+  gp_Pnt2d a, b, c;              // line ends; arc/circle centre (an arc's ends in a, b); a B-spline's ends
   double r = 0, a0 = 0, a1 = 0;  // arcs: radians from xdir
   bool ccw = true;
   double sweep = 0;              // arcs: radians, > 0, in the arc's own sense
+  Handle(Geom2d_BSplineCurve) bs;  // bspline
+  bool closed = false;             // bspline: its ends meet (a lone closed one is one loop)
   double sense() const { return kind == "arc" && !ccw ? -1.0 : 1.0; }
 };
+
+// The parameter of the point of B-spline `c` nearest to p (its ends when the projection fails).
+double bsParam(const SkCurve& c, const gp_Pnt2d& p) {
+  const double f = c.bs->FirstParameter(), l = c.bs->LastParameter();
+  double best = p.Distance(c.a) <= p.Distance(c.b) ? f : l;
+  double bd = std::min(p.Distance(c.a), p.Distance(c.b));
+  try {
+    Geom2dAPI_ProjectPointOnCurve pr(p, c.bs, f, l);
+    for (int i = 1; i <= pr.NbPoints(); ++i)
+      if (pr.Distance(i) < bd) {
+        bd = pr.Distance(i);
+        best = pr.Parameter(i);
+      }
+  } catch (const Standard_Failure&) {
+  }
+  return best;
+}
+
+double bsDistance(const SkCurve& c, const gp_Pnt2d& p) { return c.bs->Value(bsParam(c, p)).Distance(p); }
+
+// Does the B-spline run forward (its own parameter growing) from q0 to q1 (close together on it)?
+bool bsForward(const SkCurve& c, const gp_Pnt2d& q0, const gp_Pnt2d& q1) {
+  const double u0 = bsParam(c, q0), u1 = bsParam(c, q1);
+  double d = u1 - u0;
+  if (c.closed) {
+    const double per = c.bs->LastParameter() - c.bs->FirstParameter();
+    if (d > per / 2) d -= per;
+    else if (d < -per / 2) d += per;
+  }
+  return d > 0;
+}
 
 struct SkSeg {
   int owner = -1;  // curve index
@@ -4299,6 +4477,7 @@ double lineParam(const SkCurve& c, const gp_Pnt2d& p) {
 }
 
 bool onCurve(const SkCurve& c, const gp_Pnt2d& p, double eps) {
+  if (c.kind == "bspline") return bsDistance(c, p) <= eps;
   if (c.kind == "line") {
     gp_Vec2d d(c.a, c.b);
     double t = std::min(1.0, std::max(0.0, lineParam(c, p)));
@@ -4334,6 +4513,68 @@ int crossingOrdinal(const SkCurve& E, const SkCurve& F, const gp_Pnt2d& p, doubl
   if (m <= tol) return 0;  // concentric: an overlap, named by its curve ends
   const double cr = cc.Crossed(gp_Vec2d(E.c, p));
   return cr > tol * m ? 0 : (cr < -tol * m ? 1 : 0);
+}
+
+// P4b (R5): the 2D curves (pcurves) of B-spline edges on a sketch's planar faces made exact. The
+// splitter projects a B-spline onto the plane by approximation (ProjLib), which left a closed spline
+// region's area 0.008 % off and, once its prism was fused with another, its volume 0.04 % off. A
+// B-spline lying in a plane IS a B-spline in the plane's own coordinates (an affine map of its poles),
+// so the pcurve is replaced by that one, over the same parameter range.
+void exactPlanePCurves(const TopoDS_Shape& shape, const gp_Ax3& ax) {
+  BRep_Builder bb;
+  const gp_Pnt O = ax.Location();
+  const gp_Vec X(ax.XDirection().XYZ()), Y(ax.YDirection().XYZ());
+  for (TopExp_Explorer fx(shape, TopAbs_FACE); fx.More(); fx.Next()) {
+    const TopoDS_Face F = TopoDS::Face(fx.Current());
+    TopLoc_Location sl;
+    Handle(Geom_Plane) pl = Handle(Geom_Plane)::DownCast(BRep_Tool::Surface(F, sl));
+    if (pl.IsNull()) continue;
+    // The face's plane must be the sketch's own frame (the cover face is made on gp_Pln(ax)).
+    const gp_Ax3 fa = pl->Position().Transformed(sl.Transformation());
+    if (fa.Location().Distance(O) > 1e-9 || !fa.XDirection().IsParallel(ax.XDirection(), 1e-12) || !fa.YDirection().IsParallel(ax.YDirection(), 1e-12)) continue;
+    const double sx = fa.XDirection().Dot(ax.XDirection()) > 0 ? 1.0 : -1.0;
+    const double sy = fa.YDirection().Dot(ax.YDirection()) > 0 ? 1.0 : -1.0;
+    for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next()) {
+      const TopoDS_Edge E = TopoDS::Edge(ex.Current());
+      TopLoc_Location el;
+      double f, l;
+      Handle(Geom_Curve) c = BRep_Tool::Curve(E, el, f, l);
+      if (c.IsNull()) continue;
+      Handle(Geom_TrimmedCurve) tc = Handle(Geom_TrimmedCurve)::DownCast(c);
+      if (!tc.IsNull()) c = tc->BasisCurve();
+      Handle(Geom_BSplineCurve) b = Handle(Geom_BSplineCurve)::DownCast(c);
+      if (b.IsNull()) continue;
+      if (!el.IsIdentity()) b = Handle(Geom_BSplineCurve)::DownCast(b->Transformed(el.Transformation()));
+      const int n = b->NbPoles();
+      TColgp_Array1OfPnt2d poles(1, n);
+      bool flat = true;
+      for (int i = 1; i <= n; ++i) {
+        const gp_Vec v(O, b->Pole(i));
+        if (fabs(v.Dot(gp_Vec(ax.Direction().XYZ()))) > 1e-7 * std::max(1.0, v.Magnitude())) flat = false;
+        poles.SetValue(i, gp_Pnt2d(sx * v.Dot(X), sy * v.Dot(Y)));
+      }
+      if (!flat) continue;
+      TColStd_Array1OfReal knots(1, b->NbKnots());
+      TColStd_Array1OfInteger mults(1, b->NbKnots());
+      b->Knots(knots);
+      b->Multiplicities(mults);
+      Handle(Geom2d_BSplineCurve) c2;
+      try {
+        if (b->IsRational()) {
+          TColStd_Array1OfReal w(1, n);
+          b->Weights(w);
+          c2 = new Geom2d_BSplineCurve(poles, w, knots, mults, b->Degree(), b->IsPeriodic());
+        } else {
+          c2 = new Geom2d_BSplineCurve(poles, knots, mults, b->Degree(), b->IsPeriodic());
+        }
+      } catch (const Standard_Failure&) {
+        continue;
+      }
+      // Closed edges on the face (a lone closed spline) keep one pcurve: UpdateEdge with one curve.
+      bb.UpdateEdge(E, c2, F, BRep_Tool::Tolerance(E));
+      bb.Range(E, F, f, l);
+    }
+  }
 }
 
 std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
@@ -4383,6 +4624,14 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
         if (!pa.empty()) R->points.emplace_back(pa, s.a);
         if (!pb.empty()) R->points.emplace_back(pb, s.b);
       }
+    } else if (kind == "bspline") {
+      s.bs = bspline2d(c, id);
+      s.a = s.bs->StartPoint();
+      s.b = s.bs->EndPoint();
+      for (int i = 1; i <= s.bs->NbPoles(); ++i) extent = std::max({extent, fabs(s.bs->Pole(i).X()), fabs(s.bs->Pole(i).Y())});
+      const std::string pa = c.str("pa", ""), pb = c.str("pb", "");
+      if (!pa.empty()) R->points.emplace_back(pa, s.a);
+      if (!pb.empty() && pb != pa) R->points.emplace_back(pb, s.b);
     } else {
       throw InputError("unknown curve kind '" + kind + "' (" + id + ")");
     }
@@ -4393,6 +4642,12 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
   if (!(R->tol > 0)) throw InputError("tol must be > 0");
   const double tol = R->tol;
   for (auto& s : R->curves) {
+    if (s.kind == "bspline") {
+      Geom2dAdaptor_Curve ac(s.bs);
+      if (GCPnts_AbscissaPoint::Length(ac) <= tol) throw InputError("bspline " + s.id + ": the curve is shorter than the tolerance");
+      s.closed = s.a.Distance(s.b) <= tol;
+      continue;
+    }
     if (s.kind == "line" && s.a.Distance(s.b) <= tol) throw InputError("line " + s.id + " has no length");
     if (s.kind != "line" && s.r <= tol) throw InputError(s.kind + " " + s.id + " has no length");
     if (s.kind == "arc" && (s.sweep * s.r <= tol || (kTwoPi - s.sweep) * s.r <= tol)) throw InputError("arc " + s.id + " has no length");
@@ -4412,7 +4667,12 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
   };
   for (auto& s : R->curves) {
     TopoDS_Edge e;
-    if (s.kind == "line") {
+    if (s.kind == "bspline") {
+      BRepBuilderAPI_MakeEdge me(bsplineOnPlane(s.bs, R->ax));
+      if (!me.IsDone()) throw InputError("bspline " + s.id + ": the curve cannot be built");
+      e = me.Edge();
+      for (int i = 1; i <= s.bs->NbPoles(); ++i) grow(s.bs->Pole(i).X(), s.bs->Pole(i).Y());
+    } else if (s.kind == "line") {
       BRepBuilderAPI_MakeEdge me(R->to3(s.a), R->to3(s.b));
       if (!me.IsDone()) throw InputError("line " + s.id + " cannot be built");
       e = me.Edge();
@@ -4446,6 +4706,7 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
   sp.Build();
   if (sp.HasErrors()) throw OcctError("finding the sketch regions failed: " + algoErrors(sp));
   R->split = sp.Shape();
+  exactPlanePCurves(R->split, R->ax);
   const double t2 = nowMs();
 
   // Pieces: edges of the split lying on sketch curves (owners by geometry, so overlaps
@@ -4470,7 +4731,8 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
       const SkCurve& E = R->curves[owners[0]];
       const gp_Pnt2d q0 = edgePoint(*R, c, 0.25), q1 = edgePoint(*R, c, 0.5);
       bool fwd;
-      if (E.kind == "line") fwd = lineParam(E, q1) > lineParam(E, q0);
+      if (E.kind == "bspline") fwd = bsForward(E, q0, q1);
+      else if (E.kind == "line") fwd = lineParam(E, q1) > lineParam(E, q0);
       else fwd = E.sense() * wrapPi(angleAt(E, q1) - angleAt(E, q0)) > 0;
       R->pieceForward.push_back(fwd);
     }
@@ -4500,6 +4762,27 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
   R->vertName.assign(nv, "");
   R->vertReal.assign(nv, false);
   std::vector<gp_Pnt2d> vuv(nv);
+  // P4b (R1): crossings of a pair with a B-spline are numbered along the B-spline's own
+  // parameter (the first of the pair that is one): rank of each such vertex in its pair.
+  std::map<int, int> bsOrdinal;
+  {
+    std::map<std::pair<int, int>, std::vector<std::pair<double, int>>> byPair;
+    for (int v = 0; v < nv; ++v) {
+      vuv[v] = R->to2(BRep_Tool::Pnt(TopoDS::Vertex(R->verts(v + 1))));
+      auto own = R->vertOwners[v];
+      std::sort(own.begin(), own.end());
+      if (own.size() < 2) continue;
+      const SkCurve& E = R->curves[own[0]];
+      const SkCurve& F = R->curves[own[1]];
+      if (E.kind != "bspline" && F.kind != "bspline") continue;
+      const SkCurve& B = E.kind == "bspline" ? E : F;
+      byPair[{own[0], own[1]}].emplace_back(bsParam(B, vuv[v]), v);
+    }
+    for (auto& kv : byPair) {
+      std::sort(kv.second.begin(), kv.second.end());
+      for (size_t i = 0; i < kv.second.size(); ++i) bsOrdinal[kv.second[i].second] = (int)i;
+    }
+  }
   for (int v = 0; v < nv; ++v) {
     const TopoDS_Vertex& V = TopoDS::Vertex(R->verts(v + 1));
     vuv[v] = R->to2(BRep_Tool::Pnt(V));
@@ -4520,12 +4803,14 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
     } else if (own.size() >= 2) {
       const SkCurve& E = R->curves[own[0]];
       const SkCurve& F = R->curves[own[1]];
-      R->vertName[v] = "x:" + E.id + "|" + F.id + "#" + std::to_string(crossingOrdinal(E, F, vuv[v], tol));
+      const auto bo = bsOrdinal.find(v);
+      const int ord = bo != bsOrdinal.end() ? bo->second : crossingOrdinal(E, F, vuv[v], tol);
+      R->vertName[v] = "x:" + E.id + "|" + F.id + "#" + std::to_string(ord);
     } else if (!own.empty()) {
       const SkCurve& E = R->curves[own[0]];
       int k = 0;
       if (E.kind == "line") k = lineParam(E, vuv[v]) > 0.5 ? 1 : 0;
-      else if (E.kind == "arc") k = E.b.Distance(vuv[v]) < E.a.Distance(vuv[v]) ? 1 : 0;
+      else if (E.kind == "arc" || (E.kind == "bspline" && !E.closed)) k = E.b.Distance(vuv[v]) < E.a.Distance(vuv[v]) ? 1 : 0;
       R->vertName[v] = "v:" + E.id + "#" + std::to_string(k);
     }
   }
@@ -4587,7 +4872,19 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
     if (ends.size() != 2) throw OcctError("finding the sketch regions failed: curve " + E.id + " splits into an irregular chain");
     int A = ends[0], B = ends[1];
     bool ab;
-    if (E.kind == "line") {
+    if (E.kind == "bspline" && !E.closed) {
+      ab = bsParam(E, vuv[A]) < bsParam(E, vuv[B]);
+    } else if (E.kind == "bspline") {
+      // Closed: from A along the curve's own sense, a point inside the chain comes before B.
+      BRepAdaptor_Curve c(TopoDS::Edge(R->pieces(sg.pieces[0] + 1)));
+      const gp_Pnt2d m = edgePoint(*R, c, 0.5);
+      const double f = E.bs->FirstParameter(), per = E.bs->LastParameter() - f;
+      auto from = [&](const gp_Pnt2d& p) {
+        double d = fmod(bsParam(E, p) - bsParam(E, vuv[A]), per);
+        return d < 0 ? d + per : d;
+      };
+      ab = from(m) < from(vuv[B]);
+    } else if (E.kind == "line") {
       ab = lineParam(E, vuv[A]) < lineParam(E, vuv[B]);
     } else {
       // Counter-clockwise (in E's sense) from A, a point inside the chain comes before B.
@@ -4698,6 +4995,8 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
         };
         add(edgePoint(*R, c, 0));
         add(edgePoint(*R, c, 1));
+        if (c.GetType() != GeomAbs_Line && c.GetType() != GeomAbs_Circle)
+          for (int k = 1; k < 64; ++k) add(edgePoint(*R, c, k / 64.0));
         if (c.GetType() == GeomAbs_Circle) {
           const gp_Circ ci = c.Circle();
           const gp_Dir cx = ci.XAxis().Direction(), cy = ci.YAxis().Direction();
@@ -4753,7 +5052,8 @@ std::unique_ptr<SketchRegionSet> computeRegions(const JV& q) {
     for (int o : ents) rg.entities.push_back(R->curves[o].id);
     std::sort(rg.entities.begin(), rg.entities.end());
     GProp_GProps g;
-    BRepGProp::SurfaceProperties(rg.face, g);
+    if (sketchSplineFaces(rg.face, true)) BRepGProp::SurfaceProperties(rg.face, g, 1e-9);
+    else BRepGProp::SurfaceProperties(rg.face, g);
     rg.area = g.Mass();
     rg.sample = R->to2(g.CentreOfMass());
     R->regions.push_back(rg);
@@ -5307,6 +5607,13 @@ PathWire buildPath(const JV& jp) {
         pc.e = me.Edge();
       }
       scale = std::max({scale, fabs(cc.X()) + r, fabs(cc.Y()) + r});
+    } else if (kind == "bspline") {
+      Handle(Geom2d_BSplineCurve) b2 = bspline2d(c, id);
+      BRepBuilderAPI_MakeEdge me(bsplineOnPlane(b2, ax));
+      if (!me.IsDone()) throw InputError("bspline " + id + ": the path curve cannot be built");
+      pc.e = me.Edge();
+      for (int i = 1; i <= b2->NbPoles(); ++i) scale = std::max({scale, fabs(b2->Pole(i).X()), fabs(b2->Pole(i).Y())});
+      pc.circle = b2->StartPoint().Distance(b2->EndPoint()) <= 1e-9 * scale;  // a closed spline is a path on its own
     } else {
       throw InputError("unknown path curve kind '" + kind + "' (" + id + ")");
     }
@@ -5320,7 +5627,7 @@ PathWire buildPath(const JV& jp) {
   const double tol = 1e-6 * scale;
   PathWire out;
   for (auto& c : cs)
-    if (c.circle && cs.size() > 1) throw InputError("a circle is a path on its own: the path's other curves cannot join it");
+    if (c.circle && cs.size() > 1) throw InputError("a circle or a closed spline is a path on its own: the path's other curves cannot join it");
   // Chain: start at an end that no other curve meets (an open path), else anywhere (closed).
   auto meets = [&](const gp_Pnt& p, size_t self) {
     int n = 0;
@@ -5932,6 +6239,734 @@ JV opEdgeEval(const JV& q) {
   return r;
 }
 
+// ------------------------------------------------------------------ API 5 ---
+// P4b: copies of a shape under rigid transforms or a mirror (patterns), and the sketch's
+// links to the model: edges and vertices projected onto a sketch plane, a body's
+// silhouette seen along the plane's normal, and the section of bodies by the plane.
+// Curves come back in the plane's own coordinates as PlaneCurve (kernel-protocol.ts).
+
+// A transform: {matrix: [r00 r01 r02 tx r10 r11 r12 ty r20 r21 r22 tz]} (a rotation, or a
+// rotation times -1 for a mirror; no scale).
+gp_Trsf trsfOf(const JV& t) {
+  const JV& m = t.req("matrix");
+  if (!m.isArr() || m.size() != 12) throw InputError("a transform needs a 12-number matrix (3 rows of rotation and translation)");
+  double a[12];
+  for (int i = 0; i < 12; ++i) a[i] = m[i].num();
+  // Orthonormal rows, determinant +1 or -1.
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j) {
+      const double d = a[4 * i] * a[4 * j] + a[4 * i + 1] * a[4 * j + 1] + a[4 * i + 2] * a[4 * j + 2];
+      if (fabs(d - (i == j ? 1.0 : 0.0)) > 1e-9) throw InputError("a transform must be a rotation or a mirror (orthonormal, no scale)");
+    }
+  gp_Trsf tr;
+  try {
+    tr.SetValues(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]);
+  } catch (const Standard_Failure& e) {
+    throw InputError("the transform cannot be used: " + failureText(e));
+  }
+  return tr;
+}
+
+// Copies of a shape, one per transform: {id, transforms: [{matrix}]} -> {ids, faces (per copy),
+// valid (per copy), maps}. A copy keeps its source's face, edge and vertex numbering
+// (maps[k] is null); when OCCT renumbered a mirrored copy, maps[k][i] is the copy's face index
+// of source face i. The source is never changed. Every copy is checked (BRepCheck) unless
+// check:false.
+JV opCopies(const JV& q) {
+  const int sid = idParam(q.req("id"), "id");
+  const JV& jt = q.req("transforms");
+  if (!jt.isArr()) throw InputError("transforms must be an array");
+  if (jt.size() > 10000) throw InputError("at most 10,000 copies in one call");
+  const TopoDS_Shape& src = shapeOf(sid);
+  Indexed& six = indexOf(sid);
+  const bool check = q.boolean("check", true);
+  JV ids = JV::arr(), faces = JV::arr(), valid = JV::arr(), maps = JV::arr(), reasons = JV::arr();
+  bool allValid = true;
+  std::vector<int> made;
+  try {
+    for (auto& t : jt.items()) {
+      const gp_Trsf tr = trsfOf(t);
+      // A rigid move only places the same topology (a Location); a mirror rebuilds the
+      // geometry. Copy:true makes every copy independent of its source either way.
+      BRepBuilderAPI_Transform bt(src, tr, Standard_True);
+      if (!bt.IsDone()) throw OcctError("copying the shape failed");
+      const TopoDS_Shape out = bt.Shape();
+      const int id = putShape(out);
+      made.push_back(id);
+      Indexed& oix = indexOf(id);
+      bool same = oix.f.Extent() == six.f.Extent();
+      JV map = JV::arr();
+      for (int i = 1; i <= six.f.Extent(); ++i) {
+        const TopoDS_Shape m = bt.ModifiedShape(six.f(i));
+        const int k = oix.f.FindIndex(m);
+        if (k != i) same = false;
+        map.push(k - 1);
+      }
+      ids.push(id);
+      faces.push(oix.f.Extent());
+      maps.push(same ? JV() : std::move(map));
+      if (check) {
+        const Validity v = analyse(out);
+        valid.push(v.valid);
+        reasons.push(v.valid ? JV() : JV(v.reason));
+        if (!v.valid) allValid = false;
+      }
+    }
+  } catch (...) {
+    for (int id : made) g_store.erase(id);
+    throw;
+  }
+  JV r = JV::obj();
+  r.set("ids", std::move(ids));
+  r.set("faces", std::move(faces));
+  r.set("maps", std::move(maps));
+  if (check) {
+    r.set("valid", std::move(valid));
+    r.set("reasons", std::move(reasons));
+    r.set("all_valid", allValid);
+  } else {
+    r.set("checked", false);
+  }
+  return r;
+}
+
+// --- curves in a plane's coordinates -------------------------------------------------
+
+JV uvJson(const gp_Pnt2d& p) {
+  JV a = JV::arr();
+  a.push(p.X());
+  a.push(p.Y());
+  return a;
+}
+
+double degOf(double rad) { return rad / kDeg; }
+
+// {cubic: true} on project / section / silhouette: every B-spline comes back non-rational and of
+// degree 3 (an approximation within the op's tolerance where it was not one), as the sketch's
+// splines are (SKETCH's K1: no weights). Set for the length of one op.
+bool g_cubicSplines = false;
+double g_cubicTol = 1e-6;
+struct CubicScope {
+  CubicScope(const JV& q, double tol) {
+    g_cubicSplines = q.boolean("cubic", false);
+    g_cubicTol = tol;
+  }
+  ~CubicScope() { g_cubicSplines = false; }
+};
+
+// A 2D B-spline as PlaneCurve JSON.
+JV bsplineJson(Handle(Geom2d_BSplineCurve) b) {
+  if (b->IsPeriodic()) b->SetNotPeriodic();
+  if (g_cubicSplines && (b->IsRational() || b->Degree() > 3)) {
+    Handle(Geom2d_BSplineCurve) c3;
+    const double t = std::max(g_cubicTol, 1e-9);
+    // C1 (a cubic cannot be asked for C2 here: OCCT raises the degree to 5 for it).
+    try {
+      Geom2dConvert_ApproxCurve ap(b, t, GeomAbs_C1, 400, 3);
+      if (ap.HasResult() && ap.MaxError() <= 10 * t && ap.Curve()->Degree() <= 3 && !ap.Curve()->IsRational()) c3 = ap.Curve();
+    } catch (const Standard_Failure&) {
+    }
+    if (c3.IsNull()) {
+      // Fit a C2 cubic through dense points of the curve (a conic's rational form can be C0 in
+      // its parameter, which the approximation above refuses).
+      const double f = b->FirstParameter(), l = b->LastParameter();
+      const bool closed = b->StartPoint().Distance(b->EndPoint()) <= t;
+      for (int n : {64, 128, 256, 512}) {
+        const int m = closed ? n : n + 1;  // a closed curve: the seam point once (periodic)
+        Handle(TColgp_HArray1OfPnt2d) pts = new TColgp_HArray1OfPnt2d(1, m);
+        for (int k = 0; k < m; ++k) pts->SetValue(k + 1, b->Value(f + (l - f) * k / n));
+        try {
+          Geom2dAPI_Interpolate in(pts, closed ? Standard_True : Standard_False, 1e-9);
+          in.Perform();
+          if (!in.IsDone()) continue;
+          Handle(Geom2d_BSplineCurve) cand = in.Curve();
+          if (cand->IsPeriodic()) cand->SetNotPeriodic();
+          // Checked between the samples.
+          double err = 0;
+          for (int k = 0; k < 4 * n; ++k) {
+            const gp_Pnt2d p = b->Value(f + (l - f) * (k + 0.5) / (4 * n));
+            Geom2dAPI_ProjectPointOnCurve pr(p, cand);
+            if (pr.NbPoints() > 0) err = std::max(err, pr.LowerDistance());
+          }
+          c3 = cand;
+          if (err <= 10 * t) break;
+        } catch (const Standard_Failure&) {
+        }
+      }
+    }
+    if (c3.IsNull() || c3->IsRational() || c3->Degree() > 3) throw OcctError("could not turn a curve into a cubic spline");
+    b = c3;
+  }
+  if (g_cubicSplines && b->Degree() < 3) b->IncreaseDegree(3);
+  JV o = JV::obj();
+  o.set("kind", "bspline");
+  o.set("degree", b->Degree());
+  JV poles = JV::arr(), knots = JV::arr(), mults = JV::arr();
+  for (int i = 1; i <= b->NbPoles(); ++i) poles.push(uvJson(b->Pole(i)));
+  for (int i = 1; i <= b->NbKnots(); ++i) {
+    knots.push(b->Knot(i));
+    mults.push(b->Multiplicity(i));
+  }
+  o.set("poles", std::move(poles));
+  o.set("knots", std::move(knots));
+  o.set("mults", std::move(mults));
+  if (b->IsRational()) {
+    JV w = JV::arr();
+    for (int i = 1; i <= b->NbPoles(); ++i) w.push(b->Weight(i));
+    o.set("weights", std::move(w));
+  }
+  return o;
+}
+
+// The part [f, l] of a 2D curve (in the plane's u/v), run from f to l (or l to f with rev), as
+// PlaneCurve JSON: a line, an arc or a circle when it is one, a point or a line when it
+// collapsed (a line seen end-on, a circle seen edge-on), else a B-spline (exact for conics,
+// rational; an approximation within 1e-6 of the extent otherwise).
+JV planeCurve(const Handle(Geom2d_Curve)& c0, double f, double l, bool rev, double tol) {
+  Handle(Geom2d_Curve) c = c0;
+  while (true) {
+    Handle(Geom2d_TrimmedCurve) t = Handle(Geom2d_TrimmedCurve)::DownCast(c);
+    if (t.IsNull()) break;
+    c = t->BasisCurve();
+  }
+  // Collapsed: every sample within tol of one point, or of one line.
+  {
+    std::vector<gp_Pnt2d> s;
+    for (int k = 0; k <= 16; ++k) s.push_back(c->Value(f + (l - f) * k / 16.0));
+    double spread = 0;
+    for (auto& p : s) spread = std::max(spread, p.Distance(s[0]));
+    if (spread <= tol) {
+      JV o = JV::obj();
+      o.set("kind", "point");
+      o.set("p", uvJson(s[0]));
+      return o;
+    }
+    if (!c->IsKind(STANDARD_TYPE(Geom2d_Line))) {
+      // The farthest pair spans the line; all samples near it -> a segment.
+      gp_Pnt2d A = s[0], B = s[0];
+      double best = -1;
+      for (auto& p : s)
+        for (auto& q2 : s)
+          if (p.Distance(q2) > best) {
+            best = p.Distance(q2);
+            A = p;
+            B = q2;
+          }
+      gp_Vec2d d(A, B);
+      d.Normalize();
+      bool straight = true;
+      for (int k = 0; k <= 64 && straight; ++k) {
+        const gp_Pnt2d p = c->Value(f + (l - f) * k / 64.0);
+        if (fabs(gp_Vec2d(A, p).Crossed(d)) > tol) straight = false;
+      }
+      if (straight) {
+        // Extent along d of the curve (dense samples).
+        double lo = 1e300, hi = -1e300;
+        for (int k = 0; k <= 256; ++k) {
+          const double s1 = gp_Vec2d(A, c->Value(f + (l - f) * k / 256.0)).Dot(d);
+          lo = std::min(lo, s1);
+          hi = std::max(hi, s1);
+        }
+        JV o = JV::obj();
+        o.set("kind", "line");
+        const gp_Pnt2d P0(A.X() + d.X() * lo, A.Y() + d.Y() * lo), P1(A.X() + d.X() * hi, A.Y() + d.Y() * hi);
+        o.set("a", uvJson(rev ? P1 : P0));
+        o.set("b", uvJson(rev ? P0 : P1));
+        return o;
+      }
+    }
+  }
+  if (c->IsKind(STANDARD_TYPE(Geom2d_Line))) {
+    JV o = JV::obj();
+    o.set("kind", "line");
+    o.set("a", uvJson(c->Value(rev ? l : f)));
+    o.set("b", uvJson(c->Value(rev ? f : l)));
+    return o;
+  }
+  if (c->IsKind(STANDARD_TYPE(Geom2d_Circle))) {
+    Handle(Geom2d_Circle) ci = Handle(Geom2d_Circle)::DownCast(c);
+    const gp_Circ2d cc = ci->Circ2d();
+    JV o = JV::obj();
+    if (fabs((l - f) - kTwoPi) <= 1e-9 || l - f > kTwoPi) {
+      o.set("kind", "circle");
+      o.set("c", uvJson(cc.Location()));
+      o.set("r", cc.Radius());
+      return o;
+    }
+    const gp_Pnt2d ps = c->Value(rev ? l : f), pe = c->Value(rev ? f : l);
+    const gp_Pnt2d C = cc.Location();
+    o.set("kind", "arc");
+    o.set("c", uvJson(C));
+    o.set("r", cc.Radius());
+    o.set("a0", degOf(atan2(ps.Y() - C.Y(), ps.X() - C.X())));
+    o.set("a1", degOf(atan2(pe.Y() - C.Y(), pe.X() - C.X())));
+    // The circle's own sense, turned when run backwards.
+    o.set("ccw", cc.IsDirect() != rev);
+    return o;
+  }
+  Handle(Geom2d_BSplineCurve) b;
+  try {
+    if (c->IsKind(STANDARD_TYPE(Geom2d_BSplineCurve))) {
+      b = Handle(Geom2d_BSplineCurve)::DownCast(c->Copy());
+      if (b->IsPeriodic()) {
+        if (l - f < b->Period() - 1e-12) b->Segment(f, l);
+        b->SetNotPeriodic();
+      } else if (f > b->FirstParameter() + 1e-12 || l < b->LastParameter() - 1e-12) {
+        b->Segment(f, l);
+      }
+    } else {
+      Handle(Geom2d_TrimmedCurve) tc = new Geom2d_TrimmedCurve(c, f, l);
+      if (c->IsKind(STANDARD_TYPE(Geom2d_Conic)) || c->IsKind(STANDARD_TYPE(Geom2d_BezierCurve))) {
+        b = Geom2dConvert::CurveToBSplineCurve(tc);
+      } else {
+        Geom2dConvert_ApproxCurve ap(tc, std::max(tol * 0.1, 1e-9), GeomAbs_C2, 64, 8);
+        if (!ap.HasResult()) throw OcctError("could not turn a curve into a spline");
+        b = ap.Curve();
+      }
+    }
+  } catch (const Standard_Failure& e) {
+    throw OcctError("could not turn a curve into a spline: " + failureText(e));
+  }
+  if (rev) b->Reverse();
+  return bsplineJson(b);
+}
+
+// A 3D curve that lies in plane `pl`, as a 2D curve in the plane's u/v.
+Handle(Geom2d_Curve) inPlane2d(const Handle(Geom_Curve)& c3, const gp_Ax3& ax) {
+  return GeomAPI::To2d(c3, gp_Pln(ax));
+}
+
+// The 3D curve of an edge with its location applied, and its range.
+Handle(Geom_Curve) edgeCurve(const TopoDS_Edge& e, double& f, double& l) {
+  TopLoc_Location loc;
+  Handle(Geom_Curve) c = BRep_Tool::Curve(e, loc, f, l);
+  if (c.IsNull()) return c;
+  if (!loc.IsIdentity()) c = Handle(Geom_Curve)::DownCast(c->Transformed(loc.Transformation()));
+  return c;
+}
+
+// An edge projected along the plane normal onto the plane, as PlaneCurve JSON (run in the
+// edge's own orientation when `oriented`).
+JV projectEdge(const TopoDS_Edge& e, const gp_Ax3& ax, double tol, bool oriented) {
+  double f, l;
+  Handle(Geom_Curve) c3 = edgeCurve(e, f, l);
+  if (c3.IsNull() || BRep_Tool::Degenerated(e)) {
+    TopoDS_Vertex v1, v2;
+    TopExp::Vertices(e, v1, v2);
+    if (v1.IsNull()) return JV();
+    JV o = JV::obj();
+    o.set("kind", "point");
+    gp_Vec v(ax.Location(), BRep_Tool::Pnt(v1));
+    o.set("p", uvJson(gp_Pnt2d(v.Dot(gp_Vec(ax.XDirection().XYZ())), v.Dot(gp_Vec(ax.YDirection().XYZ())))));
+    return o;
+  }
+  const bool rev = oriented && e.Orientation() == TopAbs_REVERSED;
+  Handle(Geom_Plane) gpl = new Geom_Plane(ax);
+  // A curve seen end-on (a line along the normal) collapses: GeomProjLib refuses it, so the
+  // collapsed cases are found on samples first (planeCurve does it on the 2D curve too).
+  auto to2 = [&](const gp_Pnt& p) {
+    gp_Vec v(ax.Location(), p);
+    return gp_Pnt2d(v.Dot(gp_Vec(ax.XDirection().XYZ())), v.Dot(gp_Vec(ax.YDirection().XYZ())));
+  };
+  {
+    double spread = 0;
+    const gp_Pnt2d s0 = to2(c3->Value(f));
+    for (int k = 1; k <= 16; ++k) spread = std::max(spread, to2(c3->Value(f + (l - f) * k / 16.0)).Distance(s0));
+    if (spread <= tol) {
+      JV o = JV::obj();
+      o.set("kind", "point");
+      o.set("p", uvJson(s0));
+      return o;
+    }
+  }
+  Handle(Geom_Curve) pc;
+  try {
+    pc = GeomProjLib::ProjectOnPlane(new Geom_TrimmedCurve(c3, f, l), gpl, ax.Direction(), Standard_True);
+  } catch (const Standard_Failure&) {
+    pc.Nullify();
+  }
+  if (pc.IsNull()) {
+    // Fall back on a fitted spline through projected samples (never a silent drop).
+    const int n = 64;
+    TColgp_Array1OfPnt2d pts(1, n + 1);
+    for (int k = 0; k <= n; ++k) pts.SetValue(k + 1, to2(c3->Value(f + (l - f) * k / n)));
+    Geom2dAPI_PointsToBSpline fit(pts, 3, 8, GeomAbs_C2, tol);
+    if (!fit.IsDone()) throw OcctError("could not project an edge onto the plane");
+    Handle(Geom2d_BSplineCurve) b = fit.Curve();
+    return planeCurve(b, b->FirstParameter(), b->LastParameter(), rev, tol);
+  }
+  Handle(Geom2d_Curve) c2 = inPlane2d(pc, ax);
+  double pf = pc->FirstParameter(), pl2 = pc->LastParameter();
+  return planeCurve(c2, pf, pl2, rev, tol);
+}
+
+double scaleOfShape(const TopoDS_Shape& s) {
+  Bnd_Box b;
+  BRepBndLib::Add(s, b, false);
+  if (b.IsVoid()) return 1;
+  double x0, y0, z0, x1, y1, z1;
+  b.Get(x0, y0, z0, x1, y1, z1);
+  return std::max(1.0, std::max({fabs(x0), fabs(y0), fabs(z0), fabs(x1), fabs(y1), fabs(z1), x1 - x0, y1 - y0, z1 - z0}));
+}
+
+// project: {plane, items: [{id, face? (+ all_wires?), edge?, vertex?}], tol?} -> {items: [{curves:
+// (PlaneCurve & {src})[], message?}]}: each edge's curve projected along the plane normal; a
+// face gives the edges of its outer wire (all its wires with all_wires); a vertex a point.
+JV opProject(const JV& q) {
+  const gp_Ax3 ax = sketchFrame(q.req("plane"));
+  CubicScope cubic(q, q.num("tol", 1e-6));
+  const JV& items = q.req("items");
+  if (!items.isArr()) throw InputError("items must be an array");
+  JV out = JV::arr();
+  for (auto& it : items.items()) {
+    const int sid = idParam(it.req("id"), "id");
+    const double tol = q.num("tol", 1e-7 * scaleOfShape(shapeOf(sid)));
+    JV curves = JV::arr();
+    JV one = JV::obj();
+    Indexed& ix = indexOf(sid);
+    auto addEdge = [&](const TopoDS_Edge& e, bool oriented) {
+      JV c = projectEdge(e, ax, tol, oriented);
+      if (c.isNull()) return;
+      JV src = JV::obj();
+      TopoDS_Edge ef = e;
+      ef.Orientation(TopAbs_FORWARD);
+      src.set("edge", ix.e.FindIndex(ef) - 1);
+      c.set("src", std::move(src));
+      curves.push(std::move(c));
+    };
+    if (it.has("vertex")) {
+      Indexed& ixv = ix;
+      const int i = (int)it.num("vertex");
+      if (i < 0 || i >= ixv.v.Extent()) throw InputError("vertex index " + std::to_string(i) + " out of range");
+      gp_Vec v(ax.Location(), BRep_Tool::Pnt(TopoDS::Vertex(ixv.v(i + 1))));
+      JV c = JV::obj();
+      c.set("kind", "point");
+      c.set("p", uvJson(gp_Pnt2d(v.Dot(gp_Vec(ax.XDirection().XYZ())), v.Dot(gp_Vec(ax.YDirection().XYZ())))));
+      JV src = JV::obj();
+      src.set("vertex", i);
+      c.set("src", std::move(src));
+      curves.push(std::move(c));
+    } else if (it.has("edge")) {
+      addEdge(edgeAt(sid, it.req("edge")), false);
+      if (curves.size() == 0) one.set("message", "the edge has no curve to project");
+    } else if (it.has("face")) {
+      const TopoDS_Face F = faceAt(sid, it.req("face"));
+      const bool all = it.boolean("all_wires", false);
+      const TopoDS_Wire outer = BRepTools::OuterWire(F);
+      for (TopoDS_Iterator wi(F); wi.More(); wi.Next()) {
+        if (wi.Value().ShapeType() != TopAbs_WIRE) continue;
+        if (!all && !outer.IsNull() && !wi.Value().IsSame(outer)) continue;
+        for (BRepTools_WireExplorer we(TopoDS::Wire(wi.Value()), F); we.More(); we.Next()) {
+          if (BRep_Tool::Degenerated(we.Current())) continue;
+          TopoDS_Edge e = we.Current();
+          e.Orientation(we.Orientation());
+          addEdge(e, true);
+        }
+      }
+      if (curves.size() == 0) one.set("message", "the face has no edges to project");
+    } else {
+      throw InputError("each item needs a face, an edge or a vertex");
+    }
+    one.set("curves", std::move(curves));
+    out.push(std::move(one));
+  }
+  JV r = JV::obj();
+  r.set("items", std::move(out));
+  return r;
+}
+
+// Edges chained head to tail into wires (ShapeAnalysis_FreeBounds), each as {closed, edges in order}.
+struct Chain {
+  bool closed = false;
+  std::vector<TopoDS_Edge> edges;  // oriented as run
+};
+
+std::vector<Chain> chainEdges(const std::vector<TopoDS_Edge>& edges, double tol) {
+  std::vector<Chain> out;
+  if (edges.empty()) return out;
+  Handle(TopTools_HSequenceOfShape) seq = new TopTools_HSequenceOfShape();
+  for (auto& e : edges) seq->Append(e);
+  Handle(TopTools_HSequenceOfShape) wires = new TopTools_HSequenceOfShape();
+  ShapeAnalysis_FreeBounds::ConnectEdgesToWires(seq, tol, Standard_False, wires);
+  for (int i = 1; i <= wires->Length(); ++i) {
+    const TopoDS_Wire w = TopoDS::Wire(wires->Value(i));
+    Chain ch;
+    for (BRepTools_WireExplorer we(w); we.More(); we.Next()) {
+      TopoDS_Edge e = we.Current();
+      e.Orientation(we.Orientation());
+      ch.edges.push_back(e);
+    }
+    if (ch.edges.empty())
+      for (TopExp_Explorer ex(w, TopAbs_EDGE); ex.More(); ex.Next()) ch.edges.push_back(TopoDS::Edge(ex.Current()));
+    TopoDS_Vertex v1, v2;
+    TopExp::Vertices(w, v1, v2);
+    ch.closed = BRep_Tool::IsClosed(w) || (!v1.IsNull() && !v2.IsNull() && BRep_Tool::Pnt(v1).Distance(BRep_Tool::Pnt(v2)) <= tol);
+    out.push_back(std::move(ch));
+  }
+  return out;
+}
+
+// An edge lying in the plane as PlaneCurve JSON, run in its orientation.
+JV inPlaneEdge(const TopoDS_Edge& e, const gp_Ax3& ax, double tol) { return projectEdge(e, ax, tol, true); }
+
+// section: {plane, ids, tol?} -> {bodies: [{id, loops: [{closed, curves: (PlaneCurve & {src:
+// {face}})[]}]}]}: where the (infinite) plane cuts each body, chained head to tail.
+JV opSection(const JV& q) {
+  const gp_Ax3 ax = sketchFrame(q.req("plane"));
+  CubicScope cubic(q, q.num("tol", 1e-6));
+  const JV& ids = q.req("ids");
+  if (!ids.isArr()) throw InputError("ids must be an array");
+  JV bodies = JV::arr();
+  for (auto& jid : ids.items()) {
+    const int sid = idParam(jid, "id");
+    const TopoDS_Shape& S = shapeOf(sid);
+    const double tol = q.num("tol", 1e-7 * scaleOfShape(S));
+    Indexed& ix = indexOf(sid);
+    BRepAlgoAPI_Section sec(S, gp_Pln(ax), Standard_False);
+    sec.ComputePCurveOn1(Standard_False);
+    sec.Approximation(Standard_True);
+    sec.SetRunParallel(false);
+    sec.Build();
+    if (!sec.IsDone() || sec.HasErrors()) throw OcctError("the section failed: " + algoErrors(sec));
+    std::vector<TopoDS_Edge> edges;
+    for (TopExp_Explorer ex(sec.Shape(), TopAbs_EDGE); ex.More(); ex.Next()) edges.push_back(TopoDS::Edge(ex.Current()));
+    JV loops = JV::arr();
+    for (auto& ch : chainEdges(edges, std::max(tol * 10, 1e-6))) {
+      JV curves = JV::arr();
+      for (auto& e : ch.edges) {
+        JV c = inPlaneEdge(e, ax, tol);
+        if (c.isNull()) continue;
+        TopoDS_Shape F;
+        JV src = JV::obj();
+        TopoDS_Edge ef = e;
+        ef.Orientation(TopAbs_FORWARD);
+        if (sec.HasAncestorFaceOn1(ef, F) || sec.HasAncestorFaceOn1(e, F)) src.set("face", ix.f.FindIndex(F) - 1);
+        c.set("src", std::move(src));
+        curves.push(std::move(c));
+      }
+      if (curves.size() == 0) continue;
+      JV lp = JV::obj();
+      lp.set("closed", ch.closed);
+      lp.set("curves", std::move(curves));
+      loops.push(std::move(lp));
+    }
+    JV b = JV::obj();
+    b.set("id", sid);
+    b.set("loops", std::move(loops));
+    bodies.push(std::move(b));
+  }
+  JV r = JV::obj();
+  r.set("bodies", std::move(bodies));
+  return r;
+}
+
+// Consecutive lines of a loop that continue each other (a split left by HLR or the
+// splitter at a seam) merged into one; the loop's last and first too.
+JV mergeCollinear(const JV& curves, double tol) {
+  std::vector<JV> out;
+  auto isLine = [](const JV& c) { return c.isObj() && c.str("kind", "") == "line"; };
+  auto pt = [](const JV& a) { return gp_Pnt2d(a[0].num(), a[1].num()); };
+  auto joins = [&](const JV& x, const JV& y) {
+    if (!isLine(x) || !isLine(y)) return false;
+    const gp_Pnt2d a = pt(x.req("a")), b = pt(x.req("b")), c = pt(y.req("a")), d = pt(y.req("b"));
+    if (b.Distance(c) > tol) return false;
+    const gp_Vec2d u(a, b), w(c, d);
+    if (u.Magnitude() <= tol || w.Magnitude() <= tol) return true;
+    return fabs(u.Crossed(w)) <= tol * (u.Magnitude() + w.Magnitude()) && u.Dot(w) > 0;
+  };
+  for (auto& c : curves.items()) {
+    if (!out.empty() && joins(out.back(), c)) {
+      out.back().set("b", c.req("b"));
+      continue;
+    }
+    out.push_back(c);
+  }
+  if (out.size() > 1 && joins(out.back(), out.front())) {
+    out.front().set("a", out.back().req("a"));
+    out.pop_back();
+  }
+  JV r = JV::arr();
+  for (auto& c : out) r.push(c);
+  return r;
+}
+
+// silhouette: {plane, ids, tol?} -> {loops: [{curves: PlaneCurve[], hole}], empty}: the outline of
+// what the bodies cover seen along the plane normal. HLR (HLRBRep_Algo) gives the visible sharp
+// edges and the outlines in the plane's coordinates; they split a face covering them all; each
+// piece whose inside point lies over a body (a line along the normal through it meets one) is
+// covered; the covered pieces are merged and their wires are the loops (the outer ones and the
+// holes one can see through).
+JV opSilhouette(const JV& q) {
+  const gp_Ax3 ax = sketchFrame(q.req("plane"));
+  const JV& ids = q.req("ids");
+  if (!ids.isArr() || ids.size() == 0) throw InputError("silhouette needs at least one body");
+  std::vector<TopoDS_Shape> shapes;
+  double scale = 1;
+  for (auto& jid : ids.items()) {
+    shapes.push_back(shapeOf(idParam(jid, "id")));
+    scale = std::max(scale, scaleOfShape(shapes.back()));
+  }
+  const double tol = q.num("tol", 1e-7 * scale);
+  CubicScope cubic(q, std::max(tol * 10, 1e-6 * scale));
+  const gp_Ax2 cs(ax.Location(), ax.Direction(), ax.XDirection());
+  Handle(HLRBRep_Algo) algo = new HLRBRep_Algo();
+  for (auto& s : shapes) algo->Add(s);
+  algo->Projector(HLRAlgo_Projector(cs));
+  algo->Update();
+  algo->Hide();
+  HLRBRep_HLRToShape hs(algo);
+  // HLR's results lie in the projector's own plane: (x, y, 0) with x along xdir, y along normal x xdir.
+  std::vector<TopoDS_Edge> hlr;
+  for (const TopoDS_Shape& part : {hs.VCompound(), hs.OutLineVCompound(), hs.Rg1LineVCompound(), hs.HCompound(), hs.OutLineHCompound()}) {
+    if (part.IsNull()) continue;
+    for (TopExp_Explorer ex(part, TopAbs_EDGE); ex.More(); ex.Next()) hlr.push_back(TopoDS::Edge(ex.Current()));
+  }
+  JV r = JV::obj();
+  JV loops = JV::arr();
+  if (hlr.empty()) {
+    r.set("loops", std::move(loops));
+    r.set("empty", true);
+    return r;
+  }
+  // The HLR edges moved onto the sketch plane (projector coordinates -> the plane's frame).
+  gp_Trsf toPlane;
+  toPlane.SetTransformation(gp_Ax3(cs), gp_Ax3(gp::XOY()));
+  BRep_Builder bb;
+  TopoDS_Compound all;
+  bb.MakeCompound(all);
+  for (auto& e : hlr) {
+    TopoDS_Edge e2 = e;
+    BRepLib::BuildCurve3d(e2);
+    bb.Add(all, e2);
+  }
+  TopoDS_Shape onPlane = BRepBuilderAPI_Transform(all, toPlane, Standard_True).Shape();
+  TopTools_ListOfShape tools;
+  double u0 = 1e300, v0 = 1e300, u1 = -1e300, v1 = -1e300;
+  {
+    Bnd_Box b;
+    BRepBndLib::Add(onPlane, b, false);
+    for (TopExp_Explorer ex(onPlane, TopAbs_EDGE); ex.More(); ex.Next()) tools.Append(ex.Current());
+    double x0, y0, z0, x1, y1, z1;
+    b.Get(x0, y0, z0, x1, y1, z1);
+    for (double x : {x0, x1})
+      for (double y : {y0, y1})
+        for (double z : {z0, z1}) {
+          gp_Vec v(ax.Location(), gp_Pnt(x, y, z));
+          const double u = v.Dot(gp_Vec(ax.XDirection().XYZ())), w = v.Dot(gp_Vec(ax.YDirection().XYZ()));
+          u0 = std::min(u0, u);
+          v0 = std::min(v0, w);
+          u1 = std::max(u1, u);
+          v1 = std::max(v1, w);
+        }
+  }
+  const double half = std::max(u1 - u0, v1 - v0) + 1.0;
+  const double cu = 0.5 * (u0 + u1), cv = 0.5 * (v0 + v1);
+  TopoDS_Face cover = BRepBuilderAPI_MakeFace(gp_Pln(ax), cu - half, cu + half, cv - half, cv + half).Face();
+  BRepAlgoAPI_Splitter sp;
+  TopTools_ListOfShape args;
+  args.Append(cover);
+  sp.SetArguments(args);
+  sp.SetTools(tools);
+  sp.SetRunParallel(false);
+  sp.SetNonDestructive(true);
+  sp.SetFuzzyValue(std::max(tol * 10, 1e-6 * scale));
+  sp.Build();
+  if (sp.HasErrors()) throw OcctError("finding the silhouette failed: " + algoErrors(sp));
+  // The cover's own boundary edges: a piece touching them is outside.
+  TopTools_IndexedMapOfShape coverEdges;
+  {
+    TopTools_IndexedMapOfShape ce;
+    TopExp::MapShapes(cover, TopAbs_EDGE, ce);
+    for (int i = 1; i <= ce.Extent(); ++i) {
+      const TopTools_ListOfShape& mods = sp.Modified(ce(i));
+      for (TopTools_ListIteratorOfListOfShape it(mods); it.More(); it.Next()) coverEdges.Add(it.Value());
+      if (mods.IsEmpty()) coverEdges.Add(ce(i));
+    }
+  }
+  std::vector<IntCurvesFace_ShapeIntersector*> hits;
+  for (auto& s : shapes) {
+    auto* ix = new IntCurvesFace_ShapeIntersector();
+    ix->Load(s, tol);
+    hits.push_back(ix);
+  }
+  auto covered = [&](const gp_Pnt& p) {
+    const gp_Lin line(p, ax.Direction());
+    for (auto* ix : hits) {
+      ix->Perform(line, -1e100, 1e100);
+      if (ix->IsDone() && ix->NbPnt() > 0) return true;
+    }
+    return false;
+  };
+  TopoDS_Shell shell;
+  bb.MakeShell(shell);
+  int nCovered = 0;
+  try {
+    for (TopExp_Explorer fx(sp.Shape(), TopAbs_FACE); fx.More(); fx.Next()) {
+      const TopoDS_Face& F = TopoDS::Face(fx.Current());
+      bool outer = false;
+      for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More() && !outer; ex.Next())
+        if (coverEdges.FindIndex(ex.Current())) outer = true;
+      if (outer) continue;
+      // A point inside: the centroid of the largest triangle of its mesh.
+      BRepMesh_IncrementalMesh m(F, 1e-3 * half, Standard_False, 0.35, Standard_False);
+      TopLoc_Location loc;
+      Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(F, loc);
+      if (tri.IsNull() || tri->NbTriangles() == 0) continue;
+      double best = -1;
+      gp_Pnt in;
+      for (int k = 1; k <= tri->NbTriangles(); ++k) {
+        int a, b, c;
+        tri->Triangle(k).Get(a, b, c);
+        gp_Pnt pa = tri->Node(a), pb = tri->Node(b), pc = tri->Node(c);
+        const double ar = gp_Vec(pa, pb).Crossed(gp_Vec(pa, pc)).Magnitude();
+        if (ar > best) {
+          best = ar;
+          in = gp_Pnt((pa.XYZ() + pb.XYZ() + pc.XYZ()) / 3.0);
+          if (!loc.IsIdentity()) in.Transform(loc.Transformation());
+        }
+      }
+      if (!covered(in)) continue;
+      bb.Add(shell, F);
+      ++nCovered;
+    }
+  } catch (...) {
+    for (auto* ix : hits) delete ix;
+    throw;
+  }
+  for (auto* ix : hits) delete ix;
+  if (!nCovered) {
+    r.set("loops", std::move(loops));
+    r.set("empty", true);
+    return r;
+  }
+  ShapeUpgrade_UnifySameDomain u(shell, Standard_True, Standard_True, Standard_False);
+  u.Build();
+  for (TopExp_Explorer fx(u.Shape(), TopAbs_FACE); fx.More(); fx.Next()) {
+    const TopoDS_Face& F = TopoDS::Face(fx.Current());
+    const TopoDS_Wire ow = BRepTools::OuterWire(F);
+    for (TopoDS_Iterator wi(F); wi.More(); wi.Next()) {
+      if (wi.Value().ShapeType() != TopAbs_WIRE) continue;
+      JV curves = JV::arr();
+      for (BRepTools_WireExplorer we(TopoDS::Wire(wi.Value()), F); we.More(); we.Next()) {
+        TopoDS_Edge e = we.Current();
+        e.Orientation(we.Orientation());
+        JV c = inPlaneEdge(e, ax, tol);
+        if (!c.isNull() && c.str("kind") != "point") curves.push(std::move(c));
+      }
+      curves = mergeCollinear(curves, std::max(tol * 10, 1e-9 * scale));
+      if (curves.size() == 0) continue;
+      JV lp = JV::obj();
+      lp.set("hole", !wi.Value().IsSame(ow));
+      lp.set("curves", std::move(curves));
+      loops.push(std::move(lp));
+    }
+  }
+  const bool none = loops.size() == 0;
+  r.set("loops", std::move(loops));
+  r.set("empty", none);
+  return r;
+}
+
 // Deliberately exhaust memory through OCCT's allocator (gate 9 test hook).
 JV opDebugOom(const JV& q) {
   size_t step = (size_t)(q.num("step_mb", 64) * 1048576.0);
@@ -6028,6 +7063,10 @@ JV dispatch(const std::string& op, const JV& q) {
   if (op == "loft_regions") return opLoftRegions(q);
   if (op == "extrude_face") return opExtrudeFace(q);
   if (op == "edge_eval") return opEdgeEval(q);
+  if (op == "copies") return opCopies(q);
+  if (op == "project") return opProject(q);
+  if (op == "section") return opSection(q);
+  if (op == "silhouette") return opSilhouette(q);
   if (op == "debug_oom") return opDebugOom(q);
   if (op == "debug_hold") return opDebugHold(q);
   throw InputError("unknown op '" + op + "'");

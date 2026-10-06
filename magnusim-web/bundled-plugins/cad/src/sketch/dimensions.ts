@@ -45,6 +45,8 @@ export function planDimension(f: F, picks: readonly string[], at: Vec2 | null): 
   const kinds = picks.map((r) => refKindOf(f, r));
   if (picks.length === 0) return { reason: 'Pick a line, a circle, an arc or two points' };
   if (kinds.some((k) => k === null)) return { reason: 'That is not in the sketch' };
+  // P4b (SKETCH): a spline is sized by its points.
+  if (kinds.includes('spline')) return { reason: 'A spline takes dimensions on its points: pick its points (or a point and a line)' };
   const pt = (r: string) => pointAt(f, pointIdOf(f, r)!)!;
   const twoPoints = (a: string, b: string): DimensionPlan | { reason: string } => {
     const pa = pt(a);
@@ -448,19 +450,24 @@ export function formatDimNumber(v: number): string {
   return String(Object.is(r, -0) ? 0 : r);
 }
 
-/** The label of a dimension with this value (mm / deg) in the document's display units. */
-export function dimensionLabel(c: Pick<SketchDimension, 'kind' | 'expr' | 'driving'>, value: number, units: Pick<UnitsService, 'units'>): string {
+/**
+ * A value (mm / deg) as the sketch shows it, with its display unit next to it (Daniel, 2026-10-06:
+ * "it needs to be listed next to the dimension on the sketch itself"): "40 mm", "1.57 in", "30°",
+ * "0.52 rad". The same text parses back as typed ("40 mm", "30°").
+ */
+export function withDisplayUnit(value: number, quantity: 'length' | 'angle', units: Pick<UnitsService, 'units'>): string {
   const u = units.units();
+  if (quantity === 'angle') return u.angle === 'rad' ? `${formatDimNumber(value * DEG)} rad` : `${formatDimNumber(value)}°`;
+  const per = { mm: 1, cm: 10, m: 1000, in: 25.4, ft: 304.8 }[u.length];
+  return `${formatDimNumber(value / per)} ${u.length}`;
+}
+
+/** The label of a dimension with this value (mm / deg) in the document's display units, unit included ("⌀125 mm", "R10 mm", "(40 mm)", "fx: 40 mm", "30°"). */
+export function dimensionLabel(c: Pick<SketchDimension, 'kind' | 'expr' | 'driving'>, value: number, units: Pick<UnitsService, 'units'>): string {
   const v = Math.abs(value);
-  let text: string;
-  if (c.kind === 'angle') {
-    text = u.angle === 'rad' ? `${formatDimNumber(v * DEG)} rad` : `${formatDimNumber(v)}°`;
-  } else {
-    const per = { mm: 1, cm: 10, m: 1000, in: 25.4, ft: 304.8 }[u.length];
-    text = formatDimNumber(v / per);
-    if (c.kind === 'radius') text = `R${text}`;
-    if (c.kind === 'diameter') text = `⌀${text}`;
-  }
+  let text = withDisplayUnit(v, c.kind === 'angle' ? 'angle' : 'length', units);
+  if (c.kind === 'radius') text = `R${text}`;
+  if (c.kind === 'diameter') text = `⌀${text}`;
   if (!c.driving) return `(${text})`;
   return isLiteral(c.expr) ? text : `fx: ${text}`;
 }

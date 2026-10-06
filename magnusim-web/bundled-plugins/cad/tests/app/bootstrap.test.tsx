@@ -57,16 +57,30 @@ describe('bootstrap', () => {
     const groups = [...root.querySelectorAll('[data-cad-toolbar] .tb-group-label')].map((e) => e.textContent);
     // P2/P3 modules (src/features/*, src/sketch): SKETCH first, CFD PREP after the modelling groups,
     // INSPECT and FILE after it. No Box or Cylinder (decision 2026-10-01): SOLID is Extrude, then P4a's Revolve, Sweep and Loft.
-    expect(groups).toEqual(['SKETCH', 'SOLID', 'MODIFY', 'CONSTRUCT', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
+    // P4b (PATTERN): PATTERN right after SOLID, beside Extrude (Daniel's item 7).
+    expect(groups).toEqual(['SKETCH', 'SOLID', 'PATTERN', 'MODIFY', 'CONSTRUCT', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
+    // P4b fix round 1 (Daniel): the model toolbar starts compact at every width: each group's main
+    // command(s) on the bar, the rest in its More menu (in the group's order).
+    const shownIn = (g: string) => [...root.querySelectorAll(`[data-cad-toolbar] [data-group="${g}"] .tb-btn[data-command] .tb-txt`)].map((e) => e.textContent);
+    const moreIn = (g: string) => root.querySelector(`[data-cad-toolbar] [data-tb-more="${g}"]`)?.getAttribute('data-more-commands') ?? '';
+    expect(shownIn('pattern')).toEqual(['Linear pattern']);
+    expect(moreIn('pattern')).toBe('pattern.circular pattern.mirror');
+    expect(root.querySelector('[data-command="pattern.linear"]')?.getAttribute('data-disabled-reason')).toBe('Make or import a body first');
     // P4a (REFERENCE): CONSTRUCT holds the reference Plane, Axis and Point.
-    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="construct"] .tb-txt')].map((e) => e.textContent)).toEqual(['Plane', 'Axis', 'Point']);
-    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="solid"] .tb-txt')].map((e) => e.textContent)).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft']);
-    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="cfd"] .tb-txt')].map((e) => e.textContent)).toEqual(['Enclosure']);
+    expect(shownIn('construct')).toEqual(['Plane']);
+    expect(moreIn('construct')).toBe('construct.axis construct.point');
+    expect(shownIn('solid')).toEqual(['Extrude']);
+    expect(moreIn('solid')).toBe('solid.revolve solid.sweep solid.loft');
+    expect(shownIn('cfd')).toEqual(['Enclosure']);
+    expect(moreIn('cfd')).toBe('');
     // Greyed with the reason until a body exists.
     expect(root.querySelector('[data-command="cfd.enclosure"]')?.getAttribute('data-disabled-reason')).toBe('Add or import a body first');
-    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="modify"] .tb-txt')].map((e) => e.textContent)).toEqual(['Parameters', 'Fillet', 'Chamfer', 'Shell', 'Press-pull', 'Delete faces', 'Split', 'Combine']);
-    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="inspect"] .tb-txt')].map((e) => e.textContent)).toEqual(['Measure', 'Mass properties', 'Check']);
-    expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="file"] .tb-txt')].map((e) => e.textContent)).toEqual(['Import STEP', 'Export STEP']);
+    expect(shownIn('modify')).toEqual(['Fillet', 'Chamfer']);
+    expect(moreIn('modify')).toBe('modify.parameters modify.shell modify.press-pull modify.delete-faces modify.split modify.combine');
+    expect(shownIn('inspect')).toEqual(['Measure']);
+    expect(moreIn('inspect')).toBe('inspect.mass inspect.check');
+    expect(shownIn('file')).toEqual(['Import STEP']);
+    expect(moreIn('file')).toBe('file.export-step');
     expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="edit"] .tb-txt')].map((e) => e.textContent)).toEqual(['Undo', 'Redo']);
     expect(root.querySelector('[data-command="edit.undo"]')?.getAttribute('aria-disabled')).toBe('true');
     // P4a integration: the toolbar's fold order names only toolbar commands, and every toolbar
@@ -77,9 +91,10 @@ describe('bootstrap', () => {
     expect(KEEP_IN_VIEW.filter((id) => !grouped.some((c) => c.id === id))).toEqual([]);
     expect(FOLD_ORDER.filter((id) => KEEP_IN_VIEW.includes(id))).toEqual([]);
     expect(grouped.filter((c) => c.group !== 'constrain' && !FOLD_ORDER.includes(c.id) && !KEEP_IN_VIEW.includes(c.id)).map((c) => c.id)).toEqual([]);
-    // jsdom has no layout: nothing folds there.
-    expect(root.querySelector('[data-cad-toolbar]')?.getAttribute('data-folded')).toBe('0');
-    expect(root.querySelector('[data-cad-toolbar] [data-tb-more]')).toBeNull();
+    // jsdom has no layout: nothing folds there for width; 16 commands are in More by the default layout.
+    expect(root.querySelector('[data-cad-toolbar]')?.getAttribute('data-fit-folded')).toBe('0');
+    expect(root.querySelector('[data-cad-toolbar]')?.getAttribute('data-folded')).toBe('16');
+    expect(root.querySelector('[data-cad-toolbar]')?.getAttribute('data-layout')).toBe('default');
     expect(root.querySelector('[data-chip="kernel"]')).toBeNull();
     expect(window.__CAD__?.snapshot().kernel.state).toBe('ready');
     expect(workers).toHaveLength(1);

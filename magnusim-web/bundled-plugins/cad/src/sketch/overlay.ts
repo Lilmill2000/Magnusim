@@ -27,12 +27,15 @@ import { uiFor } from '../ui/controller';
 import type { MenuEntry } from '../ui/kit';
 import { dimensionLabel, layoutDimension } from './dimensions';
 import { colourOf, overIds } from './dof';
-import { toggleConstruction } from './edit';
 import { mid, polar } from './geom';
 import { GLYPH_ICON } from './icons';
 import { entityOf, evaluateDimensions, isDimension, lineEnds, measureDimension, ORIGIN, pointAt, RELATION_LABELS, refLabel } from './model';
 import { planeY, toModel, type SketchHit, type SketchMode, type SketchPointer, type SketchView } from './mode';
 import { drawnPoints, hitTest, samples } from './pick';
+// P4b SELECT
+import { constructionItems } from './select-menu';
+import { linkLook } from './project/style';
+import { linkMenuItems } from './project/menu';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -49,6 +52,9 @@ interface Palette {
   grid: string;
   gridMajor: string;
   doomed: string;
+  /** P4b (SELECT): linked geometry (purple) and a lost reference (amber). */
+  linked: string;
+  lost: string;
 }
 
 function readPalette(): Palette {
@@ -67,6 +73,8 @@ function readPalette(): Palette {
     grid: v('--mg-divider', '#e8ebf0'),
     gridMajor: v('--mg-card-border', '#cfd3db'),
     doomed: v('--mg-danger', '#b42318'),
+    linked: v('--cad-sketch-projected', '#7a3fd1'),
+    lost: v('--cad-sketch-lost', '#b54708'),
   };
 }
 
@@ -338,13 +346,17 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     // A constraint picked or hovered highlights what it constrains.
     const related = new Set<string>();
     for (const c of d.constraints) if (sel.has(c.id) || c.id === hov) c.refs.forEach((r) => related.add(r));
+    // P4b (SELECT): linked entities purple (an auto-made reference drawn light: dashed), a lost one amber.
+    const look = linkLook(d, mode.feature ? services.doc.state.get().rebuild.outputs[mode.feature] : undefined);
     for (const e of d.entities) {
       if (e.kind === 'point') continue;
       const pts = samples(d, e, 96);
       const construction = !!e.construction;
       let color = colorOf(e.id, 'entity');
       if (construction && !sel.has(e.id) && !over.has(e.id)) color = pal.construction;
-      const into = construction ? dashSegs : solidSegs;
+      const lk = look.entities.get(e.id);
+      if (lk && !sel.has(e.id)) color = lk.lost ? pal.lost : pal.linked;
+      const into = construction || lk?.light ? dashSegs : solidSegs;
       for (let i = 1; i < pts.length; i++) into.push({ a: pts[i - 1], b: pts[i], color });
       if (e.id === hov || related.has(e.id)) for (let i = 1; i < pts.length; i++) haloSegs.push({ a: pts[i - 1], b: pts[i], color: pal.hover });
     }
@@ -362,7 +374,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       if (!p) continue;
       const pe = d.entities.find((e) => e.kind === 'point' && e.p === id);
       const key = pe ? pe.id : id;
-      pts.push({ at: p, color: key === hov || related.has(id) ? pal.preview : sel.has(key) ? pal.pick : colorOf(id, 'point') });
+      const lp = look.points.get(id);
+      pts.push({ at: p, color: key === hov || related.has(id) ? pal.preview : sel.has(key) ? pal.pick : lp ? (lp.lost ? pal.lost : pal.linked) : colorOf(id, 'point') });
     }
     // What a framing shows of it: its curves and points (not the origin, nor a tool's preview).
     curvesUv = uvBoxOf([...solidSegs, ...dashSegs].flatMap((s) => [s.a, s.b]).concat(pts.slice(1).map((p) => p.at)));
@@ -389,6 +402,26 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
         for (let i = 0; i < 4; i++) (crossing ? guideSegs : prevSegs).push({ a: c[i], b: c[(i + 1) % 4], color: pal.preview });
       }
       for (const p of pv.points) pts.push({ at: p, color: pal.preview });
+    }
+    // P4b (SKETCH): a selected control-point spline shows its control polygon dashed; a fit spline its tangent handles.
+    for (const e of d.entities) {
+      // P4b SELECT: a projected spline shows no control polygon (its poles are the source's).
+      if (e.kind !== 'spline' || e.link || !(sel.has(e.id) || e.id === hov)) continue;
+      const at = (id: string) => pointAt(d, id);
+      if (e.form === 'control') {
+        const ring = e.closed ? [...e.pts, e.pts[0]] : e.pts;
+        for (let i = 1; i < ring.length; i++) {
+          const a = at(ring[i - 1]);
+          const b = at(ring[i]);
+          if (a && b) guideSegs.push({ a, b, color: pal.construction });
+        }
+      }
+      const hs = e.handles ?? [null, null];
+      ([[e.pts[0], hs[0]], [e.pts[e.pts.length - 1], hs[1]]] as [string, string | null][]).forEach(([end, h]) => {
+        const a = at(end);
+        const b = h ? at(h) : null;
+        if (a && b) guideSegs.push({ a, b, color: pal.construction });
+      });
     }
     preview.set(prevSegs);
     guides.set(guideSegs);
@@ -1013,20 +1046,24 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     const hit: SketchHit | null = sp ? hitTest(d, sp.uv, sp.px) : null;
     if (hit && !mode.selected().some((h) => h.id === hit.id)) mode.select([hit], false);
     const picked = mode.selected();
-    const entities = picked.filter((h) => h.what === 'entity').map((h) => h.id);
     const items: MenuEntry[] = [];
     if (drawing()) items.push({ id: 'cancel-tool', label: 'Stop drawing', run: () => mode.setTool('select') });
     if (picked.length) {
-      const next = toggleConstruction(d, entities);
-      const allOn = entities.length > 0 && entities.every((id) => entityOf(d, id)?.construction);
-      if (entities.length) items.push({ id: 'construction', label: allOn ? 'Normal geometry' : 'Construction', disabled: next ? null : 'Points are always construction', run: () => void services.commands.run('sketch.construction') });
+      // P4b SELECT: Construction as a state item (Make construction / Make normal on a mixed selection), and linked geometry's items.
+      items.push(...constructionItems(mode, d, picked), ...linkMenuItems(mode, d, picked));
       items.push({ id: 'delete', label: 'Delete', danger: true, disabled: picked.every((h) => h.id === ORIGIN) ? 'The origin cannot be deleted' : null, run: () => void mode.deleteSelected() });
     }
     if (items.length) items.push({ sep: true, id: 'sep-sketch' });
-    items.push({ id: 'look', label: 'Look at sketch', run: () => void services.commands.run('view.sketch-look') }, { id: 'finish', label: 'Finish sketch', run: () => mode.finish() });
+    items.push({ id: 'look', label: 'Normal to', run: () => void services.commands.run('view.sketch-look') }, { id: 'finish', label: 'Finish sketch', run: () => mode.finish() });
     uiFor(services).showMenu(e.clientX, e.clientY, items, 'Sketch');
   }
 
+  // P4b (SELECT): the last move, sent again when a snap on the model is ready (read from the kernel meanwhile).
+  let lastMove: ViewportPointer | null = null;
+  mode.repeatPointer = () => {
+    const sp = lastMove && !pressed ? toSketch('move', lastMove) : null;
+    if (sp && mode.tool) mode.tool.pointer(sp);
+  };
   const popTool = handle.pushTool({
     id: 'sketch',
     cursor: 'crosshair',
@@ -1039,9 +1076,12 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       }
       if (e.type === 'down') {
         if (e.button !== 0 || e.alt) return false;
+        const sp = toSketch('down', e);
+        // P4b (INTEGRATE, mouse binding): a press the tool leaves (the Select tool off sketch
+        // geometry, no Ctrl) orbits or pans; its click still comes to the tool.
+        if (sp && mode.tool.takesPress && !mode.tool.takesPress(sp)) return false;
         if (mode.view.get().editing) mode.view.set({ editing: null });
         pressed = true;
-        const sp = toSketch('down', e);
         if (sp) mode.tool.pointer(sp);
         return true;
       }
@@ -1059,6 +1099,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       }
       const sp = toSketch(e.type, e);
       if (sp) mode.tool.pointer(sp);
+      if (e.type === 'move') lastMove = e;
       // The boxes move out from under the pointer now, before the press that may follow.
       if (e.type === 'move' && boxEls.size) place();
       applyCursor();
@@ -1112,14 +1153,21 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   };
   const offView = mode.view.subscribe(render);
   const offSel = services.selection.subscribe(render);
+  // P4b (SELECT): a rebuild's link states (Lost reference: amber) arrive after the edit that started it.
+  const offLinks = services.doc.state.subscribe((st, prev) => {
+    const f = mode.feature;
+    if (f && st.rebuild.outputs[f] !== prev.rebuild.outputs[f] && mode.draft()?.links?.length) render();
+  });
   const offFrame = handle.onFrame(place);
   render();
 
   return () => {
     offView();
     offSel();
+    offLinks();
     offFrame();
     popTool();
+    mode.repeatPointer = null;
     document.removeEventListener('keydown', onKey, true);
     for (const l of [grid, halo, solid, dashed, preview, guides, dimLines]) l.dispose();
     dots.dispose();

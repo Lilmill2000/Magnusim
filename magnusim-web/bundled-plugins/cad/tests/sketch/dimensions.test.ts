@@ -3,7 +3,7 @@
 // label, arrows, radius / diameter / angle), and the label's words.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import { aligned, axisAligned, defaultLabelAt, dimensionLabel, layoutDimension, linearKindFor, planDimension } from '../../src/sketch/dimensions';
+import { aligned, axisAligned, defaultLabelAt, dimensionLabel, withDisplayUnit, layoutDimension, linearKindFor, planDimension } from '../../src/sketch/dimensions';
 import type { SketchDimension, Vec2 } from '../../src/types/doc';
 import { circle, merge, rectangle } from './fixtures';
 
@@ -159,13 +159,17 @@ describe('placement math', () => {
 });
 
 describe('label words', () => {
-  it('numbers in the display unit, two decimals at most; R, ⌀ and ° marks; driven in parentheses; expressions as fx', () => {
-    expect(dimensionLabel({ kind: 'distance', expr: '40 mm', driving: true }, 40, units())).toBe('40');
-    expect(dimensionLabel({ kind: 'distance', expr: '44.72 mm', driving: false }, Math.hypot(40, 20), units())).toBe('(44.72)');
-    expect(dimensionLabel({ kind: 'radius', expr: '10 mm', driving: true }, 10, units())).toBe('R10');
-    expect(dimensionLabel({ kind: 'diameter', expr: '20 mm', driving: true }, 20, units())).toBe('⌀20');
+  it('numbers in the display unit with the unit next to them (Daniel 2026-10-06), two decimals at most; R, ⌀ and ° marks; driven in parentheses; expressions as fx', () => {
+    expect(dimensionLabel({ kind: 'distance', expr: '40 mm', driving: true }, 40, units())).toBe('40 mm');
+    expect(dimensionLabel({ kind: 'distance', expr: '44.72 mm', driving: false }, Math.hypot(40, 20), units())).toBe('(44.72 mm)');
+    expect(dimensionLabel({ kind: 'radius', expr: '10 mm', driving: true }, 10, units())).toBe('R10 mm');
+    expect(dimensionLabel({ kind: 'diameter', expr: '125', driving: true }, 125, units())).toBe('⌀125 mm');
     expect(dimensionLabel({ kind: 'angle', expr: '30 deg', driving: true }, 30, units())).toBe('30°');
-    expect(dimensionLabel({ kind: 'distance', expr: 'width / 2', driving: true }, 20, units())).toBe('fx: 20');
-    expect(dimensionLabel({ kind: 'diameter', expr: '12 in', driving: true }, 304.8, units('in'))).toBe('⌀12');
+    expect(dimensionLabel({ kind: 'distance', expr: 'width / 2', driving: true }, 20, units())).toBe('fx: 20 mm');
+    expect(dimensionLabel({ kind: 'diameter', expr: '12 in', driving: true }, 304.8, units('in'))).toBe('⌀12 in');
+    // A value typed in another unit reads in the document's: 5 in in a mm document.
+    expect(dimensionLabel({ kind: 'distance', expr: '5 in', driving: true }, 127, units())).toBe('127 mm');
+    expect(withDisplayUnit(40, 'length', units('in'))).toBe('1.57 in');
+    expect(withDisplayUnit(30, 'angle', units())).toBe('30°');
   });
 });

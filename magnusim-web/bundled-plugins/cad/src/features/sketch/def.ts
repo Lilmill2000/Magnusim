@@ -15,6 +15,7 @@ import type { SketchOutput, SketchRegion, SketchSolveSource, SolverSolveResult }
 import { curvesOf, dimensionLabel, drivenMeasures, drivingValues, entityGeometry, hasProfileCurves, isDimension, sameValues, storedRadii, withOrigin, type EntityGeom } from './geometry';
 import { resolveSupport } from './plane';
 import { unpackRegions } from './regions';
+import { envOf, linkBodies, reprojectLinks } from '../../sketch/project/rebuild';
 
 /** Outline glyph (24 viewBox): a pencil over a sketched corner. */
 export const SKETCH_ICON = 'M4 4h7 M4 4v7 M5.5 19.5l1-4L16 6l3 3-9.5 9.5z M14 8l3 3';
@@ -60,19 +61,35 @@ export const sketchDef: FeatureTypeDef<SketchFeature, SketchValues> = {
   },
   // A sketch on a CONSTRUCT plane (P4a) rebuilds when the plane does, and the plane cannot be deleted under it.
   parents: (f) => (f.support?.kind === 'feature' ? [f.support.feature] : []),
-  uses: (f) => (f.support.kind === 'face' ? [f.support.body] : []),
-  exprs: (f) => f.constraints.flatMap((c, i): ExprField[] => (isDimension(c) ? [{ path: `constraints[${i}].expr`, expr: c.expr }] : [])),
-  mapExprs: (f, fn) => ({ ...f, constraints: f.constraints.map((c) => (isDimension(c) ? { ...c, expr: fn(c.expr) } : c)) }),
+  // P4b (SELECT): a sketch also reads the bodies its linked geometry (Project, Intersect) comes from.
+  uses: (f) => [...new Set([...(f.support.kind === 'face' ? [f.support.body] : []), ...linkBodies(f)])],
+  exprs: (f) => [
+    ...f.constraints.flatMap((c, i): ExprField[] => (isDimension(c) ? [{ path: `constraints[${i}].expr`, expr: c.expr }] : [])),
+    // P4b (SKETCH): sketch patterns' and offsets' values.
+    ...(f.ties ?? []).flatMap((t, i): ExprField[] => Object.entries(t.exprs).map(([k, expr]) => ({ path: `ties[${i}].exprs.${k}`, expr }))),
+  ],
+  mapExprs: (f, fn) => ({
+    ...f,
+    constraints: f.constraints.map((c) => (isDimension(c) ? { ...c, expr: fn(c.expr) } : c)),
+    // P4b (SKETCH)
+    ...(f.ties ? { ties: f.ties.map((t) => ({ ...t, exprs: Object.fromEntries(Object.entries(t.exprs).map(([k, e]) => [k, fn(e)])) })) } : {}),
+  }),
   async build(f, v, ctx) {
     const warnings: string[] = [];
     const at = await resolveSupport(f, ctx);
     if (at.warning) warnings.push(at.warning);
+    // ---- P4b (SELECT): linked geometry, read again from the bodies before the sketch (a lost one only warns).
+    const linked = f.links?.length ? await reprojectLinks(f, at.plane, envOf(ctx)) : null;
+    if (linked) {
+      warnings.push(...linked.warnings);
+      f = linked.feature;
+    }
 
     // Geometry: the stored solution when every driving dimension still has the value it was solved for.
     let points: Record<SketchPointId, Vec2> = f.points;
     let radii = storedRadii(f);
     let source: SketchSolveSource = 'stored';
-    if (!sameValues(v.dims, f.solved.values)) {
+    if (!sameValues(v.dims, f.solved.values) || linked?.moved) {
       let solved: SolverSolveResult | null = null;
       if (!ctx.solver) {
         warnings.push(`${f.name} shows its last solved shape: the sketch solver is not running`);
@@ -85,7 +102,7 @@ export const sketchDef: FeatureTypeDef<SketchFeature, SketchValues> = {
       }
       if (!solved) source = 'stored-unsolved';
       else if (!solved.solved) {
-        const conflicting = (solved.conflicting.length ? solved.conflicting : solved.redundant).map((id) => dimensionLabel(f, id));
+        const conflicting = (solved.conflicting.length ? solved.conflicting : solved.redundant).map((id) => dimensionLabel(f, id, ctx.units));
         return { ok: false, message: `${f.name} failed: the dimensions cannot all hold${conflicting.length ? ` (conflicting: ${conflicting.join(', ')})` : ''}` };
       } else {
         const next: Record<SketchPointId, Vec2> = { ...f.points };
@@ -144,6 +161,10 @@ export const sketchDef: FeatureTypeDef<SketchFeature, SketchValues> = {
       measured: drivenMeasures(f, geom, points),
       source,
       ...(at.lost ? { supportLost: true } : {}),
+      ...(linked ? { links: linked.status } : {}),
+      // P4b (SELECT, fix round 1): the curves re-projected into this build (new ones, moved points) are
+      // drawn as built until the sketch is opened and stores them.
+      ...(linked?.moved ? { entities: f.entities } : {}),
     };
     return { ok: true, bodies: [], removed: [], output, ...(warnings.length ? { warning: warnings.join('; ') } : {}) };
   },

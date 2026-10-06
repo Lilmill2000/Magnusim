@@ -31,6 +31,10 @@ export interface MenuItem {
   hint?: string;
   /** Drawn pressed: the command's panel or tool is open. */
   active?: boolean;
+  /** P4b SELECT: a state item (role menuitemcheckbox): true draws its check mark, false leaves room for it. */
+  checked?: boolean;
+  /** P4b fix 1 (TOOLBAR): a right-click on the item (the More menus' items: Show in toolbar). */
+  onContext?(x: number, y: number): void;
   run(): void;
 }
 export type MenuEntry = MenuItem | { sep: true; id: string };
@@ -54,7 +58,8 @@ function Item({ item, onRun, onHover }: { item: MenuItem; onRun(item: MenuItem):
   return (
     <button
       type="button"
-      role="menuitem"
+      role={item.checked != null ? 'menuitemcheckbox' : 'menuitem'}
+      aria-checked={item.checked != null ? item.checked : undefined}
       className={cls || undefined}
       aria-disabled={item.disabled ? true : undefined}
       aria-current={item.active ? 'true' : undefined}
@@ -64,6 +69,15 @@ function Item({ item, onRun, onHover }: { item: MenuItem; onRun(item: MenuItem):
       data-disabled-reason={item.disabled || undefined}
       {...tip}
       onPointerEnter={(e) => onHover(e.currentTarget, !!item.disabled)}
+      onContextMenu={
+        item.onContext
+          ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              item.onContext?.(e.clientX, e.clientY);
+            }
+          : undefined
+      }
       onClick={() => {
         if (!item.disabled) onRun(item);
       }}
@@ -73,6 +87,11 @@ function Item({ item, onRun, onHover }: { item: MenuItem; onRun(item: MenuItem):
           <span className="cad-menu-ico">{item.icon ? <Icon d={item.icon} size={16} stroke={1.7} /> : null}</span>
           <span className="cad-menu-label">{item.label}</span>
           {item.shortcut ? <kbd className="cad-menu-key">{item.shortcut}</kbd> : null}
+        </>
+      ) : item.checked != null ? (
+        <>
+          <span className="cad-menu-check" aria-hidden="true" data-on={item.checked ? '1' : undefined} />
+          {item.label}
         </>
       ) : (
         item.label
@@ -93,7 +112,7 @@ export function ContextMenu({ x, y, items, onClose, label = 'Actions', anchor = 
     const w = el.offsetWidth;
     const h = el.offsetHeight;
     setPos({ left: Math.max(4, Math.min(x, vw - w - 4)), top: Math.max(4, Math.min(y, vh - h - 4)) });
-    const first = el.querySelector<HTMLButtonElement>('button[role="menuitem"]:not([aria-disabled])');
+    const first = el.querySelector<HTMLButtonElement>('button[role^="menuitem"]:not([aria-disabled])');
     first?.focus({ preventScroll: true });
   }, [x, y, items]);
 
@@ -137,7 +156,7 @@ export function ContextMenu({ x, y, items, onClose, label = 'Actions', anchor = 
       style={{ left: pos.left, top: pos.top }}
       onContextMenu={(e) => e.preventDefault()}
       onKeyDown={(e) => {
-        const buttons = [...(ref.current?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])];
+        const buttons = [...(ref.current?.querySelectorAll<HTMLButtonElement>('button[role^="menuitem"]') ?? [])];
         const i = buttons.indexOf(document.activeElement as HTMLButtonElement);
         if (e.key === 'Escape') {
           e.preventDefault();

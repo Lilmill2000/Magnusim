@@ -4,7 +4,7 @@
 // "Under defined · 2 DOF"; two dimensions typed in their value boxes make it
 // "Fully defined" with lines in #101828; a diagonal asks "Make it driven?" and
 // shows grey "(44.72)"; a fully defined corner does not move (cursor
-// not-allowed); deleting a dimension gives "Under defined · 1 DOF" and the
+// the normal arrow, the panel says why; follow-up 2026-10-06); deleting a dimension gives "Under defined · 1 DOF" and the
 // corner drags; Undo inside the sketch steps back; Finish sketch, then Ctrl+Z
 // removes the whole sketch session and Ctrl+Y brings it back. Also: Escape
 // never finishes a sketch; typed lengths and angles become dimensions; trim;
@@ -158,14 +158,18 @@ test('cad:p3-sketch-rectangle-dof a rectangle from the origin, two dimensions, a
   await edit.press('Enter');
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Fully defined');
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40', '20']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm', '20 mm']);
   await expect(frame.locator('[data-cad-panel="sketch"] [data-sketch-state]')).toHaveText('Fully defined');
-  // Fully defined lines are #101828 (the darkest pixel across the top line).
+  // Fully defined lines are #101828: the darkest pixel across the top line and across the left line.
+  // (Real Chrome draws a line that falls between two pixel rows as two lighter rows: one of the two
+  // lines is always on a whole pixel, so the nearer of the two to #101828 is the line's colour.)
   await page.mouse.move(5, 5);
   await settled(page);
+  const off = (p: number[]) => Math.abs(p[0] - 0x10) + Math.abs(p[1] - 0x18) + Math.abs(p[2] - 0x28);
   const [lx, ly] = await at(page, [12, 20, 0]);
-  const px = await darkestNear(page, lx, ly);
-  expect(Math.abs(px[0] - 0x10) + Math.abs(px[1] - 0x18) + Math.abs(px[2] - 0x28), `line pixel ${px}`).toBeLessThanOrEqual(24);
+  const [vx, vy] = await at(page, [0, 12, 0]);
+  const px = [await darkestNear(page, lx, ly), await darkestNear(page, vx, vy)].sort((a, b) => off(a) - off(b))[0];
+  expect(off(px), `line pixel ${px}`).toBeLessThanOrEqual(24);
   await shot(page, 'sketch-3-fully');
 
   // A diagonal dimension would over-define it: "Make it driven?" -> grey "(44.72)".
@@ -180,26 +184,28 @@ test('cad:p3-sketch-rectangle-dof a rectangle from the origin, two dimensions, a
   await sketchIdle(page);
   await expect(q).toBeHidden();
   const driven = frame.locator('[data-sketch-dim][data-driving="0"]');
-  await expect(driven).toHaveText('(44.72)');
+  await expect(driven).toHaveText('(44.72 mm)');
   expect(await driven.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(102, 112, 133)');
   await expect(chip(frame)).toHaveText('Fully defined');
   await shot(page, 'sketch-4-driven');
 
-  // A fully defined corner does not move, and the cursor says so.
+  // A fully defined corner does not move. The cursor stays the normal arrow (Daniel, 2026-10-06: no
+  // "not-allowed" in sketches), and the panel says why in words.
   await page.keyboard.press('Escape');
   await expect(tb.locator('[data-command="sketch.dimension"]')).not.toHaveClass(/is-active/);
   const [cx, cy] = await at(page, [40, 20, 0]);
   await page.mouse.move(cx, cy);
-  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => (el as HTMLElement).style.cursor)).toBe('not-allowed');
+  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => getComputedStyle(el as HTMLElement).cursor)).not.toBe('not-allowed');
+  expect(await frame.locator('[data-cad-canvas]').evaluate((el) => (el as HTMLElement).style.cursor)).toMatch(/^(default|auto|)$/);
   await page.mouse.down();
   await page.mouse.move(cx + 60, cy - 40, { steps: 8 });
   await page.mouse.up();
   await sketchIdle(page);
-  await expect(driven).toHaveText('(44.72)');
-  await expect(frame.locator('[data-cad-panel="sketch"] [data-run-reason]').first()).toContainText('fully defined: it cannot be dragged');
+  await expect(driven).toHaveText('(44.72 mm)');
+  await expect(frame.locator('[data-cad-panel="sketch"] [data-run-reason]').first()).toContainText('This point is fully defined: change a dimension to move it');
 
   // Delete the 20 dimension: 1 DOF, and the corner drags (the driven diagonal follows).
-  await frame.locator('[data-sketch-dim]', { hasText: /^20$/ }).click();
+  await frame.locator('[data-sketch-dim]', { hasText: /^20 mm$/ }).click();
   await page.keyboard.press('Delete');
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Under defined · 1 DOF');
@@ -212,13 +218,13 @@ test('cad:p3-sketch-rectangle-dof a rectangle from the origin, two dimensions, a
   await page.mouse.move(tx, ty, { steps: 10 });
   await page.mouse.up();
   await sketchIdle(page);
-  await expect(driven).toHaveText(/^\(5\d(\.\d+)?\)$/);
+  await expect(driven).toHaveText(/^\(5\d(\.\d+)? mm\)$/);
   await shot(page, 'sketch-5-dragged');
 
   // Undo inside the sketch: the drag, then the delete.
   await page.keyboard.press('Control+z');
   await sketchIdle(page);
-  await expect(driven).toHaveText('(44.72)');
+  await expect(driven).toHaveText('(44.72 mm)');
   await page.keyboard.press('Control+z');
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Fully defined');
@@ -240,7 +246,7 @@ test('cad:p3-sketch-rectangle-dof a rectangle from the origin, two dimensions, a
   await frame.locator('[data-cad-tree] [data-feature-row] > .tree-row').dblclick();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   await expect(chip(frame)).toHaveText('Under defined · 1 DOF');
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40', '(44.72)']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm', '(44.72 mm)']);
   await page.keyboard.press('Enter');
   await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
 
@@ -267,7 +273,7 @@ test('cad:p3-sketch-escape-typed Escape never finishes a sketch; typed length an
   await page.keyboard.type('30');
   await page.keyboard.press('Enter');
   await sketchIdle(page);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['25', '30°']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['25 mm', '30°']);
   const geo = await workspaceFrame(page).evaluate(() => {
     const s = (window as unknown as { __CAD__: { services: { apis: { get(): { sketch: { draft(): { points: Record<string, number[]>; entities: { kind: string; p: string[] }[] } } } } } } }).__CAD__.services.apis.get().sketch.draft();
     const l = s.entities.find((e) => e.kind === 'line')!;
@@ -346,7 +352,8 @@ test('cad:p3-sketch-escape-typed Escape never finishes a sketch; typed length an
   const [rx, ry] = await at(page, [15.83, 11.25, 0]);
   await page.mouse.click(rx, ry, { button: 'right' });
   const menu = frame.locator('[data-cad-menu] [data-menu-item]');
-  await expect(menu).toHaveText(['Construction', 'Delete', 'Look at sketch', 'Finish sketch']);
+  // P4b SELECT: Construction is a state item; "Look at sketch" is "Normal to" (one name everywhere).
+  await expect(menu).toHaveText(['Construction', 'Delete', 'Normal to', 'Finish sketch']);
   await frame.locator('[data-cad-menu] [data-menu-item="construction"]').click();
   await sketchIdle(page);
   const construction = await workspaceFrame(page).evaluate(
@@ -414,7 +421,7 @@ test('cad:p3-sketch-face-parameter a sketch on a block face faces it; a dimensio
   await edit.fill('d_hole');
   await edit.press('Enter');
   await sketchIdle(page);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['fx: ⌀10']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['fx: ⌀10 mm']);
   await expect(chip(frame)).toHaveText('Under defined · 2 DOF');
   await shot(page, 'sketch-7-face');
   await page.keyboard.press('Escape');
@@ -439,7 +446,7 @@ test('cad:p3-sketch-face-parameter a sketch on a block face faces it; a dimensio
   // Opening the sketch shows the new value; the solved geometry is stored.
   await frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="sketch"]').last().locator('> .tree-row').dblclick();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['fx: ⌀16']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['fx: ⌀16 mm']);
   await page.keyboard.press('Enter');
   await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
   expect(seen.csp).toEqual([]);
@@ -480,7 +487,7 @@ test('cad:p3-sketch-over-defined a stored sketch whose dimensions conflict opens
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Under defined · 3 DOF');
   await expect(frame.locator('[data-sketch-conflicts]')).toHaveCount(0);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm']);
   await page.keyboard.press('Enter');
   await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
   expect(seen.csp).toEqual([]);

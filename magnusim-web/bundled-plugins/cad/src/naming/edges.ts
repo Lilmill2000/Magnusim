@@ -15,7 +15,7 @@
 import type { FeatureId, PersistentRef, RefSemantic, RefSignature, Vec3 } from '../types/doc';
 import type { ShapeId, TopoResult } from '../types/kernel-protocol';
 import type { FaceNames, NamingLookup, RefResolution } from '../types/naming';
-import { edgeName, ENCLOSURE_SIDE_WORDS, sideNumber, splitMerged, splitSuffix, vertexName } from './names';
+import { copyRoleWords, edgeName, ENCLOSURE_SIDE_WORDS, insideCopy, isCopyRole, sideNumber, splitMerged, splitSuffix, vertexName } from './names';
 import { sameKind, signatureDistance } from './resolve';
 
 type TopoEdge = TopoResult['edges'][number];
@@ -279,6 +279,11 @@ export function faceShortWords(name: string, faceNames: readonly string[] | null
   const m = /^F:([^:]+):([^:]+)(?::(.*))?$/.exec(base);
   if (!m) return { owner: null, words: 'Face' };
   const [, owner, role, detail = ''] = m;
+  // P4b (PATTERN): a pattern copy's face reads as its source's, with the copy: "Side 2 (instance 3)".
+  if (isCopyRole(role) && detail.startsWith('F:')) {
+    const inner = faceShortWords(k == null ? detail : `${detail}#${k}`, insideCopy(faceNames, owner, role));
+    return { owner: inner.owner, words: `${inner.words} (${copyRoleWords(role)})` };
+  }
   const n = /^\d+$/.test(detail) ? Number(detail) : null;
   let words: string;
   switch (role) {

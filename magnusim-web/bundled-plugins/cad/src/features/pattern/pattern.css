@@ -1,0 +1,67 @@
+/*
+ * PATTERN: the copies' markers in the view (numbered buttons on each copy; the original
+ * "1"; a skipped copy hollow and struck through; a copy the operation could not use red)
+ * and the panel's instance lines.
+ * Owner: P4b PATTERN.
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+.cad-pattern-markers .cad-pattern-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1.5px solid var(--cad-set);
+  background: var(--mg-bg);
+  color: var(--cad-set);
+  font: 600 11px/17px var(--mg-font, system-ui, sans-serif);
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.18);
+}
+.cad-pattern-markers .cad-pattern-marker:hover,
+.cad-pattern-markers .cad-pattern-marker:focus-visible {
+  background: var(--cad-hover-pick);
+  outline: none;
+}
+.cad-pattern-markers .cad-pattern-marker.is-original {
+  border-color: var(--mg-text-muted);
+  color: var(--mg-text-muted);
+  cursor: default;
+  pointer-events: none;
+}
+.cad-pattern-markers .cad-pattern-marker.is-skipped {
+  border-style: dashed;
+  color: var(--mg-text-muted);
+  border-color: var(--mg-text-muted);
+  text-decoration: line-through;
+  background: var(--mg-bg);
+  opacity: 0.9;
+}
+.cad-pattern-markers .cad-pattern-marker.is-failed {
+  border-color: var(--mg-danger);
+  color: var(--mg-danger);
+}
+.cad-pattern-instances {
+  margin: 6px 0;
+}
+.cad-pattern-count {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.cad-pattern-skipped {
+  list-style: none;
+  margin: 2px 0;
+  padding: 0;
+}
+.cad-pattern-skipped li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--mg-text-muted);
+}

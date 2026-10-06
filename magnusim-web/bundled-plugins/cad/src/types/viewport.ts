@@ -146,6 +146,18 @@ export interface ViewportPickEvent {
   clientY: number;
 }
 
+/**
+ * P4b SELECT: a box drawn by a Ctrl + left drag (model mode; Ctrl+Shift adds): left to right encloses
+ * (solid box), right to left touches (dashed box). `items` are what it found (visible items only,
+ * of the kinds the selection filter allows: edges with no filter); `combine` says how they go into
+ * the selection (Shift adds, Ctrl toggles).
+ */
+export interface BoxSelectEvent {
+  items: SelectionItem[];
+  mode: 'enclose' | 'touch';
+  combine: 'replace' | 'add' | 'toggle';
+}
+
 /** Numbers for tests and performance reports (never shown in the UI). */
 export interface ViewportStats {
   frames: number;
@@ -157,6 +169,8 @@ export interface ViewportStats {
   lastUploadFrameMs: number;
   /** Time of the last pick (ms). */
   lastPickMs: number;
+  /** P4b SELECT: time of the last box selection (ms: the GPU id pass and the enclose tests). */
+  lastBoxMs?: number;
   /** BVH build per body (ms, in the worker or on the main thread). */
   bvh: Record<BodyId, { ms: number; worker: boolean }>;
   triangles: number;
@@ -186,6 +200,10 @@ export interface ViewportHandle {
   setFilter(kinds: SelectKind[]): void;
   /** Clicks, right-clicks (context menu) and double-clicks with what is under the pointer. Returns unsubscribe. */
   onPick(fn: (e: ViewportPickEvent) => void): () => void;
+  /** P4b SELECT: box selections (a Ctrl + left drag, anywhere). Returns unsubscribe. */
+  onBoxSelect?(fn: (e: BoxSelectEvent) => void): () => void;
+  /** P4b SELECT: what a box over these frame client coordinates selects now (tests, timing). */
+  boxSelect?(rect: { x0: number; y0: number; x1: number; y1: number }, mode: 'enclose' | 'touch', kinds?: ('face' | 'edge' | 'vertex' | 'body')[]): SelectionItem[];
   /**
    * Frame the visible bodies and the shown sketches (the origin planes when there are neither),
    * keeping the view direction. Bodies the rollback hides never count.
@@ -217,6 +235,8 @@ export interface ViewportHandle {
   sectionRange(plane: OriginPlaneRef): [number, number] | null;
   /** Pick at frame client coordinates, respecting the selection filter. */
   pick(clientX: number, clientY: number): PickResult | null;
+  /** P4b SELECT: pick these kinds of body geometry (no planes) at frame client coordinates, whatever the selection filter. */
+  pickKinds?(clientX: number, clientY: number, kinds: SelectKind[]): PickResult | null;
   /** Model point to frame client coordinates (null when behind the camera). For manipulators and tests. */
   project(p: Vec3): [number, number] | null;
   /** The normal of a planar face or an origin plane (pointing out of the material), or null when it is not planar. */

@@ -9,7 +9,9 @@
 // during the build: docs/p2p3-plan.md §8). API 4 (P4a, the SOLIDS builder):
 // revolve_regions, sweep_regions, loft_regions, extrude_face, edge_eval, the
 // extents to_vertex / to_point, fillet contours and diagnose, chamfer d2 / flip,
-// shell outside, topo edge_ends / vertex_faces; `version` answers api: 4.
+// shell outside, topo edge_ends / vertex_faces. API 5 (P4b, the PATTERN builder):
+// B-spline sketch curves (SKETCH's R1), copies (patterns), project, section,
+// silhouette (SELECT); `version` answers api: 5.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { PlaneFrame, Vec2, Vec3 } from './doc';
 
@@ -235,7 +237,7 @@ export type TopoSelector = 'all' | 'none' | number[] | { start: number; count: n
  * in `buffers` come back as ArrayBuffers in the reply.
  */
 export interface KernelOps {
-  /** `api`: facade contract revision (3 = docs/p2p3-plan.md §2; 4 = P4a solids, this file). */
+  /** `api`: facade contract revision (3 = docs/p2p3-plan.md §2; 4 = P4a solids; 5 = P4b, this file). */
   version: { params: Record<string, never>; result: { occt: string; build: 'wasm32' | 'wasm64'; api?: number } };
   mem: {
     params: Record<string, never>;
@@ -652,6 +654,46 @@ export interface KernelOps {
       nearest?: { p: Vec3; tangent: Vec3; distance: number };
     };
   };
+  /**
+   * API 5 (P4b patterns). Copies of a shape, one per transform (a rotation or a mirror: an
+   * orthonormal 3x3 with determinant +-1, plus a translation; no scale), each its own shape. A copy
+   * keeps its source's numbering (`maps[k]` null); when OCCT renumbered a mirrored copy, maps[k][i]
+   * is the copy's face index of source face i. Each copy checked (valid[k], reasons[k]) unless
+   * check:false. The source never changes.
+   */
+  copies: {
+    params: CheckParam & { id: ShapeId; transforms: KernelTransform[] };
+    result: { ids: ShapeId[]; faces: number[]; maps: (number[] | null)[]; valid?: boolean[]; reasons?: (string | null)[]; all_valid?: boolean; checked?: false };
+  };
+  /**
+   * API 5 (SELECT's Project). Each item projected along the plane normal onto the plane, in the
+   * plane's u/v: an edge's curve (a line seen end-on is a point, a circle seen edge-on a line, an
+   * ellipse a rational B-spline); a face's outer wire edges, head to tail (all_wires: the holes'
+   * edges too); a vertex a point. `src` names the body's edge / vertex each curve came from.
+   */
+  project: {
+    params: { plane: PlaneFrame; items: { id: ShapeId; face?: number; all_wires?: boolean; edge?: number; vertex?: number }[]; tol?: number; cubic?: boolean };
+    result: { items: { curves: (PlaneCurve & { src: PlaneCurveSrc })[]; message?: string }[] };
+  };
+  /**
+   * API 5 (SELECT's Intersect). Where the (infinite) plane cuts each body (BRepAlgoAPI_Section), in
+   * the plane's u/v, chained head to tail into loops; `src.face` = the body's face a curve lies on.
+   * A body the plane misses has `loops: []`.
+   */
+  section: {
+    params: { plane: PlaneFrame; ids: ShapeId[]; tol?: number; cubic?: boolean };
+    result: { bodies: { id: ShapeId; loops: { closed: boolean; curves: (PlaneCurve & { src: PlaneCurveSrc })[] }[] }[] };
+  };
+  /**
+   * API 5 (SELECT's Silhouette). The outline of what the bodies cover, seen along the plane normal
+   * (HLR visible sharp edges and outlines, the covered regions merged): closed loops head to tail,
+   * the outer ones (hole: false) and the holes one can see through (hole: true); `empty` when the
+   * bodies cover nothing.
+   */
+  silhouette: {
+    params: { plane: PlaneFrame; ids: ShapeId[]; tol?: number; cubic?: boolean };
+    result: { loops: { curves: PlaneCurve[]; hole: boolean }[]; empty: boolean };
+  };
   /** Buffer: step (u8, the file's bytes). */
   export_step: { params: { shapes: { id: ShapeId; name: string; color?: [number, number, number] }[]; schema: 'AP214' | 'AP242' }; result: Record<string, never> };
 }
@@ -735,7 +777,40 @@ export type SketchCurve =
   | { id: string; kind: 'line'; a: Vec2; b: Vec2; pa?: string; pb?: string }
   | { id: string; kind: 'arc'; c: Vec2; r: number; a0: number; a1: number; ccw: boolean; pa?: string; pb?: string; pc?: string }
   | { id: string; kind: 'circle'; c: Vec2; r: number; pc?: string }
-  | { id: string; kind: 'point'; p: Vec2; pid?: string };
+  | { id: string; kind: 'point'; p: Vec2; pid?: string }
+  /**
+   * API 5 (SKETCH's R1): a clamped (non-periodic) B-spline, OCCT's Geom2d_BSplineCurve(poles[,
+   * weights], knots, mults, degree): knots strictly increasing, the end mults at most degree + 1, inner
+   * ones at most degree, sum(mults) = poles + degree + 1. Closed when poles[0] == poles[last] (pa ==
+   * pb: one named point). Crossings with it are numbered along its own parameter. `weights` (one per
+   * pole, > 0) only for rational curves (projected ellipses); absent = non-rational.
+   */
+  | { id: string; kind: 'bspline'; degree: number; poles: Vec2[]; knots: number[]; mults: number[]; weights?: number[]; pa?: string; pb?: string };
+
+/** API 5: a rigid transform or a mirror, row-major [r00 r01 r02 tx r10 r11 r12 ty r20 r21 r22 tz] (mm). */
+export interface KernelTransform {
+  matrix: number[];
+}
+
+/**
+ * API 5: a curve in a plane's own coordinates (mm, u along xdir, v along normal x xdir; arc angles
+ * in degrees from u, ccw about the normal when `ccw`), as project / section / silhouette give them.
+ * The same shapes as SketchCurve's kinds, so they go straight back into sketch_regions. With
+ * `cubic: true` on the op every B-spline is non-rational and of degree 3 (an approximation within the
+ * op's tolerance where it was not one), as the sketch's own splines are.
+ */
+export type PlaneCurve =
+  | { kind: 'line'; a: Vec2; b: Vec2 }
+  | { kind: 'arc'; c: Vec2; r: number; a0: number; a1: number; ccw: boolean }
+  | { kind: 'circle'; c: Vec2; r: number }
+  | { kind: 'bspline'; degree: number; poles: Vec2[]; knots: number[]; mults: number[]; weights?: number[] }
+  | { kind: 'point'; p: Vec2 };
+/** API 5: where a projected or section curve came from on the body (its index space at the call). */
+export interface PlaneCurveSrc {
+  edge?: number;
+  vertex?: number;
+  face?: number;
+}
 
 /** A closed region of a sketch (sketch_regions). */
 export interface KernelRegion {

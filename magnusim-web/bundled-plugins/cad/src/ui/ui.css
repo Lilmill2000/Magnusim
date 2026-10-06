@@ -72,7 +72,7 @@
   justify-content: center;
   gap: 2px;
   min-width: 64px;
-  max-width: 92px;
+  max-width: 120px;
   padding: 4px 6px;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -134,7 +134,20 @@
 
 .tb-btn .tb-txt {
   text-align: center;
-  white-space: normal;
+  /* One line (P4b fix round 1, sketch review P3: "Control-point spline" wrapped to two lines and
+     the buttons had uneven heights); a long label widens its button instead. */
+  white-space: nowrap;
+}
+
+/* Rearranging the toolbar (P4b fix round 1): the dragged command, and where it would land. */
+.tb-btn.is-dragging {
+  opacity: 0.5;
+}
+.tb-btn.is-drop-before {
+  box-shadow: inset 2px 0 0 var(--mg-primary);
+}
+.tb-btn.is-drop-after {
+  box-shadow: inset -2px 0 0 var(--mg-primary);
 }
 
 /* Fit levels (Toolbar useFitLevel): icons only where the labelled buttons do not fit the frame;
@@ -165,15 +178,19 @@
   background: var(--cad-icon-btn-hover-bg);
 }
 /* "More" with its caret: the caret sits in the button's right padding, so the button stays narrow
-   and the label on one line. */
+   and the label on one line. It hangs off the label (not the button's bottom), so it stays beside
+   "More" however tall the group is (P4b fix round 1, pattern review P5: under PATTERN's two-line
+   "Linear pattern" it sat below the label). */
 .tb-btn.tb-more .tb-txt {
+  position: relative;
   white-space: nowrap;
   margin-right: 4px;
 }
 .tb-btn.tb-more .tb-caret {
   position: absolute;
-  right: 2px;
-  bottom: 5px;
+  left: 100%;
+  bottom: 0;
+  margin-left: 1px;
   font-size: 11px;
   line-height: 1;
 }
@@ -1070,4 +1087,16 @@ input.mgk-input.cad-param-name {
 /* Renaming in place: the field and its error are not cut by the label's ellipsis. */
 .tl:has(> .cad-rename-wrap) {
   overflow: visible;
+}
+
+/* P4b SELECT: a state item of a context menu (menuitemcheckbox): its check mark column. */
+.face-ctx-menu .cad-menu-check {
+  display: inline-block;
+  width: 14px;
+  margin-right: 4px;
+  text-align: center;
+  font-weight: 700;
+}
+.face-ctx-menu .cad-menu-check[data-on]::before {
+  content: '\2713';
 }

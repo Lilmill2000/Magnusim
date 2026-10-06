@@ -7,6 +7,8 @@ import type { SketchEntity, SketchFeature, Vec2 } from '../types/doc';
 import { dist, polar } from './geom';
 import { arcGeom, distanceTo, entityPoints, lineEnds, ORIGIN, pointAt } from './model';
 import type { SketchHit } from './mode';
+import { splineSamples } from './tools/spline-entity';
+import { hiddenPoles } from './project/style';
 
 export const PICK_PX = 8;
 
@@ -16,6 +18,8 @@ type F = Pick<SketchFeature, 'points' | 'entities'>;
 export function drawnPoints(f: F): string[] {
   const out = new Set<string>();
   for (const e of f.entities) for (const p of entityPoints(e)) out.add(p);
+  // P4b SELECT: a projected spline's inner poles are not points the user sees or picks.
+  for (const p of hiddenPoles(f)) out.delete(p);
   return [...out];
 }
 
@@ -73,6 +77,8 @@ export function samples(f: F, e: SketchEntity, n = 48): Vec2[] {
       const k = Math.max(4, Math.ceil((n * g.sweep) / (2 * Math.PI)));
       return Array.from({ length: k + 1 }, (_, i) => polar(g.c, g.r, g.a0 + (g.sweep * i) / k));
     }
+    case 'spline':
+      return splineSamples(f, e, n);
   }
 }
 

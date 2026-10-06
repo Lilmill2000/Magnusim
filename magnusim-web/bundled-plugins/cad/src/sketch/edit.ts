@@ -10,8 +10,11 @@ import { newId } from '../lib/ids';
 import type { SketchConstraint, SketchDimension, SketchDimensionKind, SketchEntity, SketchFeature, SketchRelation, SketchRelationKind, Vec2 } from '../types/doc';
 import { angleOf, arcParam, circleCircle, dist, lineCircle, lineLine, onArcAngle, polar, TAU, wrap } from './geom';
 import { arcGeom, closestOn, entityOf, entityPoints, isDimension, lineEnds, ORIGIN, pointAt } from './model';
+// P4b (SKETCH): splines in trim and extend.
+import { meetCurves, meetRaySpline, onSplineRelation, splineDomainOf, splineParam, splinePiece, trimSplineAt } from './tools/spline-edit';
 
-export type SketchDraft = Pick<SketchFeature, 'points' | 'entities' | 'constraints'>;
+// P4b (SELECT): a draft may carry the sketch's links (linked geometry); edits that do not touch them keep them.
+export type SketchDraft = Pick<SketchFeature, 'points' | 'entities' | 'constraints'> & Partial<Pick<SketchFeature, 'links'>>;
 
 /** Builds one edit on a copy of a draft. `optional` constraints may be dropped when they over-define the sketch (inference). */
 export class SketchBuilder {
@@ -21,14 +24,18 @@ export class SketchBuilder {
   /** Inferred / helper constraints sketch mode drops again when the solver finds them redundant or conflicting. */
   readonly optional = new Set<string>();
 
+  /** P4b (SELECT): the sketch's links, when an edit adds one (a snap on the model). */
+  links: SketchFeature['links'];
+
   constructor(d: SketchDraft) {
     this.points = { ...d.points };
     this.entities = [...d.entities];
     this.constraints = [...d.constraints];
+    this.links = d.links;
   }
 
   result(): SketchDraft {
-    return { points: this.points, entities: this.entities, constraints: this.constraints };
+    return { points: this.points, entities: this.entities, constraints: this.constraints, ...(this.links ? { links: this.links } : {}) };
   }
 
   point(id: string): Vec2 | null {
@@ -172,11 +179,15 @@ export function paramOn(d: SketchDraft, e: SketchEntity, p: Vec2): number | null
     const g = arcGeom(d, e);
     return g ? arcParam(g, angleOf(g.c, p)) : null;
   }
+  // P4b (SKETCH): a spline's own parameter.
+  if (e.kind === 'spline') return splineParam(d, e, p);
   return null;
 }
 
 /** Where two curves meet (each within its own extent). */
 function meet(d: SketchDraft, a: SketchEntity, b: SketchEntity): Vec2[] {
+  // P4b (SKETCH): any pair with a spline is crossed as parametric curves.
+  if (a.kind === 'spline' || b.kind === 'spline') return meetCurves(d, a, b);
   const circ = (e: SketchEntity) => {
     if (e.kind === 'circle') {
       const c = pointAt(d, e.c);
@@ -207,6 +218,8 @@ function meet(d: SketchDraft, a: SketchEntity, b: SketchEntity): Vec2[] {
 function onCurveRelation(b: SketchBuilder, pointId: string, by: string) {
   const o = entityOf(b, by);
   if (!o) return;
+  // P4b (SKETCH): a fit spline takes the point as a fit point; a control spline has no on-curve relation.
+  if (o.kind === 'spline') return onSplineRelation(b, pointId, o);
   b.addRelation(o.kind === 'line' ? 'point_on_line' : 'point_on_circle', [pointId, by], { optional: true });
 }
 
@@ -235,6 +248,8 @@ export function trimAt(d: SketchDraft, id: string, at: Vec2): EditOutcome {
   const t0 = paramOn(d, e, near);
   if (t0 == null) return { ok: false, reason: 'That entity is not in the sketch' };
   const xs = crossingsOn(d, e);
+  // P4b (SKETCH): a spline is cut in its own parameter (src/sketch/tools/spline-edit.ts).
+  if (e.kind === 'spline') return trimSplineAt(d, e, t0, xs, onCurveRelation);
   const b = new SketchBuilder(d);
 
   if (e.kind === 'circle') {
@@ -402,6 +417,8 @@ function meetRay(d: SketchDraft, from: Vec2, dir: Vec2, o: SketchEntity): Vec2[]
     const g = arcGeom(d, o);
     return g ? lineCircle(from, to, g.c, g.r).filter((x) => onArcAngle(g, angleOf(g.c, x.p), 1e-9)).map((x) => x.p) : [];
   }
+  // P4b (SKETCH)
+  if (o.kind === 'spline') return meetRaySpline(d, from, dir, o);
   return [];
 }
 
@@ -413,6 +430,22 @@ export function trimPiece(d: SketchDraft, id: string, at: Vec2): Vec2[] | null {
   const t0 = near ? paramOn(d, e, near) : null;
   if (t0 == null) return null;
   const xs = crossingsOn(d, e);
+  // P4b (SKETCH): the spline piece between its nearest crossings (wrapping on a closed spline).
+  if (e.kind === 'spline') {
+    const ends = splineDomainOf(d, e);
+    if (!ends) return null;
+    const tol = 1e-9 * (ends[1] - ends[0]);
+    if (e.closed) {
+      if (xs.length < 2) return xs.length ? null : splinePiece(d, e, ends[0], ends[1]);
+      const after = xs.find((x) => x.t > t0) ?? xs[0];
+      const before = [...xs].reverse().find((x) => x.t < t0) ?? xs[xs.length - 1];
+      return splinePiece(d, e, before.t, after.t);
+    }
+    const inner = xs.filter((x) => x.t > ends[0] + tol && x.t < ends[1] - tol);
+    const lo = [...inner].reverse().find((x) => x.t < t0)?.t ?? ends[0];
+    const hi = inner.find((x) => x.t > t0)?.t ?? ends[1];
+    return splinePiece(d, e, lo, hi);
+  }
   const sampleArc = (c: Vec2, r: number, a0: number, sweep: number) => {
     const n = Math.max(4, Math.ceil((sweep / TAU) * 64));
     return Array.from({ length: n + 1 }, (_, i) => polar(c, r, a0 + (sweep * i) / n));

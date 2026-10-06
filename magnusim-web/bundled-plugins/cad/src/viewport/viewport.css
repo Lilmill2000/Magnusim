@@ -323,3 +323,29 @@
 .cad-vp-small:hover {
   background: var(--mg-btn-neutral-hover);
 }
+
+/* P4b SELECT: the selection box. Left to right encloses (solid), right to left touches (dashed),
+   as SolidWorks and Fusion draw them; the caption says what it selects. */
+.cad-box-select {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 1px solid var(--cad-box-enclose);
+  background: var(--cad-box-enclose-fill);
+}
+.cad-box-select[data-box-mode='touch'] {
+  border: 1px dashed var(--cad-box-touch);
+  background: var(--cad-box-touch-fill);
+}
+.cad-box-caption {
+  position: absolute;
+  left: 4px;
+  top: 3px;
+  font: 600 10px/1.2 var(--mg-font, inherit);
+  color: var(--cad-box-enclose);
+  white-space: nowrap;
+}
+.cad-box-select[data-box-mode='touch'] .cad-box-caption {
+  color: var(--cad-box-touch);
+}

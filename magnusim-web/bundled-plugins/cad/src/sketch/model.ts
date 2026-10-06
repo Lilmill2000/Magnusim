@@ -9,6 +9,9 @@ import { SKETCH_ORIGIN, type SketchConstraint, type SketchDimension, type Sketch
 import type { SolverSketch, SolverValues } from '../types/sketch';
 import type { Quantity, UnitsService } from '../types/units';
 import { angleOf, ccwSweep, closestOnArc, closestOnCircle, closestOnLine, closestOnSegment, cross, dist, norm, sub, wrapPi, type ArcGeom } from './geom';
+// P4b (SKETCH): splines.
+import { closestOnSplineEntity, distanceToSpline, splineEndIds, splinePointIds } from './tools/spline-entity';
+import { evaluateTies, tiesToSolver } from './tools/ties';
 
 export const ORIGIN = SKETCH_ORIGIN;
 /** The solver's id for the origin's lock (never shown; filtered out of conflict lists). */
@@ -61,6 +64,9 @@ export function entityPoints(e: SketchEntity): string[] {
       return [e.c];
     case 'arc':
       return [e.c, e.a, e.b];
+    // P4b (SKETCH): fit points or poles, then tangent handles.
+    case 'spline':
+      return splinePointIds(e);
   }
 }
 
@@ -68,10 +74,12 @@ export function entityPoints(e: SketchEntity): string[] {
 export function entityEnds(e: SketchEntity): string[] {
   if (e.kind === 'line') return [e.p[0], e.p[1]];
   if (e.kind === 'arc') return [e.a, e.b];
+  // P4b (SKETCH): an open spline's first and last points.
+  if (e.kind === 'spline') return splineEndIds(e);
   return [];
 }
 
-export type RefKind = 'point' | 'line' | 'circle' | 'arc';
+export type RefKind = 'point' | 'line' | 'circle' | 'arc' | 'spline';
 
 /** What a constraint reference is: a point id (or the origin), a point entity (a point), or a curve. */
 export function refKindOf(f: Pick<SketchFeature, 'points' | 'entities'>, ref: string): RefKind | null {
@@ -121,6 +129,9 @@ export function distanceTo(f: Pick<SketchFeature, 'points' | 'entities'>, e: Ske
       const g = arcGeom(f, e);
       return g ? dist(p, closestOnArc(p, g)) : Infinity;
     }
+    // P4b (SKETCH)
+    case 'spline':
+      return distanceToSpline(f, e, p);
   }
 }
 
@@ -143,6 +154,9 @@ export function closestOn(f: Pick<SketchFeature, 'points' | 'entities'>, e: Sket
       const g = arcGeom(f, e);
       return g ? closestOnArc(p, g) : null;
     }
+    // P4b (SKETCH)
+    case 'spline':
+      return closestOnSplineEntity(f, e, p);
   }
 }
 
@@ -259,7 +273,8 @@ export function pointLineDistance(p: Vec2, a: Vec2, b: Vec2): number {
 
 /** Solver constraint ids that stand for one stored constraint (collinear: two point_on_line). */
 export function storedIdOf(solverId: string): string | null {
-  if (solverId === ORIGIN_FIX) return null;
+  // The origin's lock and P4b's linked-geometry fixes (`#ln:`, `#lr:`) are internal.
+  if (solverId === ORIGIN_FIX || solverId.startsWith('#')) return null;
   const i = solverId.indexOf('#');
   return i > 0 ? solverId.slice(0, i) : solverId;
 }
@@ -294,6 +309,9 @@ export function toSolverSketch(f: Pick<SketchFeature, 'points' | 'entities' | 'c
         return { ...base, kind: 'circle' as const, c: e.c, r: e.r };
       case 'arc':
         return { ...base, kind: 'arc' as const, c: e.c, a: e.a, b: e.b, ...(e.ccw === false ? { ccw: false } : {}) };
+      // P4b (SKETCH): the solver sees a spline's points; the curve adds no unknowns.
+      case 'spline':
+        return { ...base, kind: 'spline' as const, form: e.form, pts: [...e.pts], degree: e.degree, ...(e.closed ? { closed: true } : {}), ...(e.handles ? { handles: [e.handles[0], e.handles[1]] as [string | null, string | null] } : {}), ...(e.knots && e.mults ? { knots: [...e.knots], mults: [...e.mults] } : {}), ...(e.spans ? { spans: [e.spans[0], e.spans[1]] as [number, number] } : {}) };
     }
   });
   const constraints: SolverSketch['constraints'] = [{ id: ORIGIN_FIX, kind: 'fix', refs: [ORIGIN], value: [0, 0] }];
@@ -316,6 +334,22 @@ export function toSolverSketch(f: Pick<SketchFeature, 'points' | 'entities' | 'c
     }
     constraints.push({ id: c.id, kind: c.kind, refs: [...c.refs] });
   }
+  // ---- P4b (SELECT): linked geometry (Project, Intersect) is fixed where its source puts it:
+  // a fix per point (`#ln:<point>`) and a circle's radius (`#lr:<entity>`). Internal ids start with
+  // '#', so they never reach conflict lists (storedIdOf).
+  const fixed = new Set<string>();
+  for (const e of f.entities) {
+    if (!e.link) continue;
+    for (const p of entityPoints(e)) {
+      if (fixed.has(p) || !points[p]) continue;
+      fixed.add(p);
+      constraints.push({ id: `#ln:${p}`, kind: 'fix', refs: [p], value: [points[p][0], points[p][1]] });
+    }
+    if (e.kind === 'circle') constraints.push({ id: `#lr:${e.id}`, kind: 'radius', refs: [e.id], value: e.r });
+  }
+  // ---- end P4b (SELECT)
+  // P4b (SKETCH): what ties pattern copies and offsets to their sources (src/sketch/tools/ties.ts).
+  constraints.push(...tiesToSolver(f, values));
   return { points, entities, constraints };
 }
 
@@ -345,12 +379,16 @@ export function evaluateDimensions(f: Pick<SketchFeature, 'constraints'>, units:
     else if ((c.kind === 'radius' || c.kind === 'diameter' || c.kind === 'distance') && !(r.value > 0)) errors[c.id] = 'Must be more than 0';
     else values[c.id] = r.value;
   }
+  // P4b (SKETCH): sketch patterns' and offsets' values.
+  const ties = evaluateTies(f as { ties?: import('../types/doc').SketchTie[] }, units);
+  Object.assign(values, ties.values);
+  Object.assign(errors, ties.errors);
   return { values, errors };
 }
 
 // ------------------------------------------------------------ words
 
-const ENTITY_WORD: Record<SketchEntity['kind'], string> = { point: 'Point', line: 'Line', circle: 'Circle', arc: 'Arc' };
+const ENTITY_WORD: Record<SketchEntity['kind'], string> = { point: 'Point', line: 'Line', circle: 'Circle', arc: 'Arc', spline: 'Spline' };
 
 /** "Line 3", "Centerline 1", "Circle 2", "Arc 1", "Point 4" (numbered by kind in drawing order). */
 export function entityLabel(f: Pick<SketchFeature, 'entities'>, id: string): string {

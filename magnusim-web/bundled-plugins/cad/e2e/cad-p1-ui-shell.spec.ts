@@ -269,8 +269,10 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   expect(await styleOf(frame.locator('.tb-group-label').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '10px', 'font-weight': '700', color: 'rgb(106, 113, 128)' });
   // Labelled buttons (P4a: Daniel works on 1280-1920 px screens). At 1600 and at 1280 px every
   // command button shown in the modelling groups has its label in view with the core's .tb-btn
-  // recipe (10px, min-width 64, radius 4); VIEW and EDIT are icons; the commands that do not fit
-  // are in their group's More menu (fewer at 1600 than at 1280), and the toolbar does not scroll.
+  // recipe (10px, min-width 64, radius 4); the toolbar does not scroll. Since P4b fix round 1 (Daniel:
+  // "I prefer 1280 px (model)") both sizes show the compact layout: each group's main command(s), the
+  // rest in its More menu, nothing more folded for the width; VIEW and EDIT keep their labels at
+  // 1600 and are icons at 1280.
   const folded: number[] = [];
   for (const size of [
     { width: 1600, height: 1000 },
@@ -278,7 +280,7 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   ]) {
     await page.setViewportSize(size);
     const bar = frame.locator('[data-cad-toolbar="model"]');
-    await expect(bar).toHaveAttribute('data-fit', '1');
+    await expect(bar).toHaveAttribute('data-fit', size.width === 1600 ? '0' : '1');
     const shown = await bar.locator('.tb-group:not([data-group="view"]):not([data-group="edit"]) .tb-btn[data-command]').evaluateAll((els) =>
       els.map((b) => {
         const s = getComputedStyle(b);
@@ -288,16 +290,14 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
         return { id: b.getAttribute('data-command'), fontSize: s.fontSize, minWidth: s.minWidth, radius: s.borderTopLeftRadius, labelShown: getComputedStyle(t).position !== 'absolute' && r.width > 12 && r.height > 8, inFrame: box.left >= 0 && box.right <= window.innerWidth };
       }),
     );
-    // At 1280 px ten keep their labels (Chamfer stays beside Fillet since the P4a fix round: Revolve
-    // and Export STEP go into their More).
-    expect(shown.length, `labelled commands at ${size.width}`).toBeGreaterThanOrEqual(10);
+    // Nine labelled: Sketch, Extrude, Linear pattern, Fillet, Chamfer, Plane, Enclosure, Measure, Import STEP.
+    expect(shown.map((b) => b.id)).toEqual(['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step']);
     for (const b of shown) expect(b, `${b.id} at ${size.width}`).toEqual({ id: b.id, fontSize: '10px', minWidth: '64px', radius: '4px', labelShown: true, inFrame: true });
     expect(await bar.evaluate((el) => el.scrollWidth - el.clientWidth), `the toolbar scrolls at ${size.width}`).toBeLessThanOrEqual(1);
     folded.push(Number(await bar.getAttribute('data-folded')));
     await shot(page, `ui-parity-toolbar-${size.width}`);
   }
-  expect(folded[0]).toBeGreaterThan(0);
-  expect(folded[1]).toBeGreaterThan(folded[0]);
+  expect(folded).toEqual([16, 16]);
   await page.setViewportSize({ width: 1600, height: 1000 });
   // The core's .measure-chip (style.css:1093-1106): 600 12px/1.35 "Segoe UI", padding 8/10/8/12 (review round 1: CAD had 6/10).
   expect(await styleOf(frame.locator('[data-chip="volume"]'), ['font-size', 'font-weight', 'font-family', 'line-height', 'color', 'background-color', 'border-top-color', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left'])).toEqual({
@@ -552,8 +552,9 @@ test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the pla
     ['origin:top', 'Top plane', [0, 0, 1]],
   ] as const) {
     await tree.locator(`[data-tree-node="${ref}"] > .tree-row`).click({ button: 'right' });
-    await expect(menu.locator('[data-menu-item]')).toHaveText(['Look at']);
-    await menu.locator('[data-menu-item="look-at"]').click();
+    // P4b SELECT: "Normal to" (one name everywhere; it was "Look at").
+    await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to']);
+    await menu.locator('[data-menu-item="normal-to"]').click();
     await expect(menu).toHaveCount(0);
     await expect.poll(() => looksAlong(page, n as unknown as [number, number, number]), { message: `${label}: Look at` }).toBe('along');
   }

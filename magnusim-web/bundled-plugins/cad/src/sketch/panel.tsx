@@ -20,6 +20,10 @@ import { statusText } from './dof';
 import { constraintLabel, entityLabel, isDimension, refLabel } from './model';
 import { modeFor } from './mode';
 import { describeFace, splitMerged } from '../naming';
+// P4b (SKETCH): the active tool's options and the sketch's patterns.
+import { ToolOptions } from './tools/options';
+import { TieRows } from './tools/tie-rows';
+import { LinksBlock } from './project/panel';
 
 function DrivenQuestion({ title, copy, accept, resolve }: { title: string; copy: string; accept: string; resolve(yes: boolean): void }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -170,6 +174,9 @@ export function SketchPanel({ session, feature, isNew }: FeaturePanelProps) {
           <div className="cad-sk-hint" data-sketch-hint="1">
             <Hint>{view.hint}</Hint>
           </div>
+          {/* P4b (SKETCH) */}
+          <ToolOptions mode={mode} />
+          <TieRows mode={mode} />
           {/* Shown while the next segment is a tangent arc too (its preview has no line): it vanished once ticked. */}
           {(mode.tool?.id === 'line' || mode.tool?.id === 'centerline') && (view.lineArc || view.preview?.lines.length) ? (
             <label className="cad-sk-check">
@@ -219,6 +226,8 @@ export function SketchPanel({ session, feature, isNew }: FeaturePanelProps) {
               </ul>
             </div>
           ) : null}
+          {/* P4b (SELECT): Project / Intersect options and the sketch's references (linked geometry). */}
+          <LinksBlock mode={mode} feature={feature} draft={draft} />
           <Hint>Ctrl while drawing adds no constraints. Alt+drag orbits; middle drag pans.</Hint>
         </div>
       </PanelChrome>

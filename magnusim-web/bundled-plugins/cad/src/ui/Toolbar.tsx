@@ -15,6 +15,13 @@
 // action shows icons (the label stays in the tooltip and the accessible name).
 // Review P2/P3 round 1: at 1280 px Undo, Redo and some views were scrolled out
 // of reach, with no scrollbar in real Chrome.
+// P4b fix round 1 (Daniel, 2026-10-06: "I prefer 1280 px (model) but let people
+// arrange the icons however they want"): model mode shows by default only each
+// group's main command (KEEP_IN_VIEW, the compact layout seen at 1280 px) at
+// every width, the rest in More; sketch mode shows every command by default.
+// Users rearrange both: right-click a command (or a More item) for Move to More /
+// Show in toolbar / Move left / Move right / Reset toolbar, or drag a command
+// along its group. The layout is kept in the project (toolbar-layout.ts).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -27,6 +34,7 @@ import { PARAMS_ID, REDO_ID, UNDO_ID } from './commands';
 import { uiFor, type UiState } from './controller';
 import { Icon, ICONS } from './Icon';
 import { useTip, type MenuEntry } from './kit';
+import { isDefault, layoutModeOf, orderIds, pinned, placeOf, toolbarPrefs, withMove, withPlace, type LayoutMode, type ModeLayout, type ToolbarPrefs } from './toolbar-layout';
 
 /**
  * The order in which commands fold into their group's "More" menu when the labelled toolbar does
@@ -35,8 +43,9 @@ import { useTip, type MenuEntry } from './kit';
  * Plane, Enclosure, Measure, Import STEP; in sketch mode Line, Rectangle, Circle, 3-point arc,
  * Dimension, Trim and Finish sketch; Chamfer stays beside Fillet). The order follows how often SolidWorks and Fusion users
  * reach for each command, weighted for Magnusim's CFD preparation (press-pull, Combine and the
- * enclosure stay longest): ARCHITECTURE.md §7 "Toolbar" gives the reasons. With labels, a
- * 1920 px frame folds nothing, 1600 px folds six, 1440 px nine and 1280 px twelve.
+ * enclosure stay longest): ARCHITECTURE.md §7 "Toolbar" gives the reasons. Since P4b fix round 1
+ * model mode starts compact (only KEEP_IN_VIEW on the bar), so this order matters there only for
+ * the commands a user put on the bar; in sketch mode it is the ribbon's fold order.
  */
 export const FOLD_ORDER: readonly string[] = [
   // Model mode.
@@ -49,6 +58,9 @@ export const FOLD_ORDER: readonly string[] = [
   'modify.split',
   'modify.delete-faces',
   'construct.axis',
+  // P4b (PATTERN): Circular pattern and Mirror fold before Sweep (Linear pattern stays in view).
+  'pattern.circular',
+  'pattern.mirror',
   'solid.sweep',
   'modify.shell',
   'file.export-step',
@@ -56,12 +68,25 @@ export const FOLD_ORDER: readonly string[] = [
   'modify.combine',
   'modify.press-pull',
   // Sketch mode (CONSTRAIN is icons by design: its glyphs are the constraints' own).
+  // P4b fix round 1 (sketch review P2): Intersect and Project fold first (a greyed Project held its
+  // slot while every new tool folded at 1600 px), then the least-used drawing helpers; Daniel's
+  // headline tools (Spline, Mirror, the patterns) stay longest of the new ones.
+  'sketch.intersect',
+  'sketch.project',
   'sketch.point',
   'sketch.construction',
+  'sketch.chamfer',
+  'sketch.spline-control',
   'sketch.arc-tangent',
   'sketch.rectangle-center',
   'sketch.extend',
   'sketch.centerline',
+  'sketch.offset',
+  'sketch.fillet',
+  'sketch.pattern-circular',
+  'sketch.pattern-linear',
+  'sketch.mirror',
+  'sketch.spline',
 ];
 
 /**
@@ -72,6 +97,8 @@ export const FOLD_ORDER: readonly string[] = [
 export const KEEP_IN_VIEW: readonly string[] = [
   'sketch.new',
   'solid.extrude',
+  // P4b (PATTERN): PATTERN's most used command.
+  'pattern.linear',
   'modify.fillet',
   // Chamfer beside Fillet: the two edge treatments sit together (P4a review).
   'modify.chamfer',
@@ -86,6 +113,7 @@ export const KEEP_IN_VIEW: readonly string[] = [
   'sketch.dimension',
   'sketch.trim',
 ];
+const KEEP_SET: ReadonlySet<string> = new Set(KEEP_IN_VIEW);
 
 /** Sentence case for the More menu's name: "MODIFY" -> "Modify", "CFD PREP" -> "Cfd prep". */
 function groupWords(label: string): string {
@@ -142,13 +170,27 @@ function reasonOf(c: CommandDef, services: AppServices): string | null {
   return ok === true ? null : ok;
 }
 
-function ToolbarButton({ c, services, active, index, primary = false }: { c: CommandDef; services: AppServices; active: boolean; index: number; primary?: boolean }) {
+/** What a group's button may do besides running its command: its right-click menu and the drag along the group. */
+interface ButtonCustom {
+  onContextMenu(e: React.MouseEvent<HTMLButtonElement>): void;
+  onPointerDown?(e: React.PointerEvent<HTMLButtonElement>): void;
+  onPointerMove?(e: React.PointerEvent<HTMLButtonElement>): void;
+  onPointerUp?(e: React.PointerEvent<HTMLButtonElement>): void;
+  onPointerCancel?(e: React.PointerEvent<HTMLButtonElement>): void;
+  /** A click that ended a drag does not run the command. */
+  takeClick?(): boolean;
+  dragging?: boolean;
+  drop?: 'before' | 'after' | null;
+}
+
+function ToolbarButton({ c, services, active, index, primary = false, custom }: { c: CommandDef; services: AppServices; active: boolean; index: number; primary?: boolean; custom?: ButtonCustom }) {
   const reason = reasonOf(c, services);
-  const tip = useTip({ text: c.label, shortcut: c.shortcut, detail: reason ?? c.hint });
+  const tip = useTip(custom?.dragging ? null : { text: c.label, shortcut: c.shortcut, detail: reason ?? c.hint });
+  const drop = custom?.drop ? ` is-drop-${custom.drop}` : '';
   return (
     <button
       type="button"
-      className={`tb-btn${primary ? ' is-primary' : ''}${active ? ' is-active' : ''}${reason ? ' is-disabled' : ''}`}
+      className={`tb-btn${primary ? ' is-primary' : ''}${active ? ' is-active' : ''}${reason ? ' is-disabled' : ''}${custom?.dragging ? ' is-dragging' : ''}${drop}`}
       data-command={c.id}
       data-index={index}
       aria-label={c.label}
@@ -157,7 +199,13 @@ function ToolbarButton({ c, services, active, index, primary = false }: { c: Com
       aria-keyshortcuts={c.shortcut ? c.shortcut.replace(/Ctrl/g, 'Control') : undefined}
       data-disabled-reason={reason ?? undefined}
       {...tip}
+      onContextMenu={custom?.onContextMenu}
+      onPointerDown={custom?.onPointerDown}
+      onPointerMove={custom?.onPointerMove}
+      onPointerUp={custom?.onPointerUp}
+      onPointerCancel={custom?.onPointerCancel}
       onClick={() => {
+        if (custom?.takeClick?.()) return;
         if (reason) return;
         void services.commands.run(c.id);
       }}
@@ -183,6 +231,7 @@ function MoreButton({
   services,
   panel,
   sketchTool,
+  itemMenu,
 }: {
   group: string;
   label: string;
@@ -191,6 +240,8 @@ function MoreButton({
   services: AppServices;
   panel: UiState['panel'];
   sketchTool: string | null;
+  /** The right-click menu of one of its items (Show in toolbar, Reset toolbar). */
+  itemMenu?(c: CommandDef, x: number, y: number): void;
 }) {
   const ui = uiFor(services);
   const owner = `tb-more:${group}`;
@@ -212,6 +263,7 @@ function MoreButton({
       ...(c.hint ? { hint: c.hint } : {}),
       disabled: reasonOf(c, services),
       active: isActive(c, panel, sketchTool),
+      ...(itemMenu ? { onContext: (x: number, y: number) => itemMenu(c, x, y) } : {}),
       run: () => void services.commands.run(c.id),
     }));
     ui.showMenu(r.left, r.bottom + 2, items, name, { owner, anchor: el });
@@ -253,6 +305,18 @@ function MoreButton({
   );
 }
 
+/** What a registry group needs to let the user rearrange it. */
+interface GroupCustom {
+  /** The right-click menu of a command shown in the group. */
+  barMenu(c: CommandDef, shown: string[], x: number, y: number): void;
+  /** The right-click menu of a command in the group's More. */
+  moreMenu(c: CommandDef, x: number, y: number): void;
+  /** Move `id` to just before `before` (null: the end) in the group's order. */
+  move(id: string, before: string | null): void;
+}
+
+const DRAG_PX = 6;
+
 function Group({
   id,
   label,
@@ -263,6 +327,8 @@ function Group({
   sketchTool,
   end = false,
   primary = false,
+  custom,
+  menu,
 }: {
   id: string;
   label: string;
@@ -273,19 +339,182 @@ function Group({
   sketchTool: string | null;
   end?: boolean;
   primary?: boolean;
+  custom?: GroupCustom;
+  /** VIEW, EDIT and the primary action: their right-click menu (Reset toolbar). */
+  menu?(x: number, y: number): void;
 }) {
   const more = folded ? commands.filter((c) => folded.has(c.id)) : [];
+  const shown = commands.filter((c) => !more.includes(c)).map((c) => c.id);
+  const items = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ id: string; x0: number; pointer: number; active: boolean } | null>(null);
+  const ate = useRef(false);
+  const [mark, setMark] = useState<{ id: string; target: string; after: boolean } | null>(null);
+  /** The shown button nearest the pointer (not the dragged one) and its side. */
+  const targetAt = (x: number, from: string): { target: string; after: boolean } | null => {
+    const els = [...(items.current?.querySelectorAll<HTMLElement>('.tb-btn[data-command]') ?? [])].filter((el) => el.dataset.command !== from);
+    let best: { target: string; after: boolean; d: number } | null = null;
+    for (const el of els) {
+      const r = el.getBoundingClientRect();
+      const mid = (r.left + r.right) / 2;
+      const d = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
+      if (!best || d < best.d) best = { target: el.dataset.command ?? '', after: x > mid, d };
+    }
+    return best ? { target: best.target, after: best.after } : null;
+  };
+  const customFor = (c: CommandDef): ButtonCustom | undefined => {
+    if (!custom) return menu ? { onContextMenu: (e) => (e.preventDefault(), e.stopPropagation(), menu(e.clientX, e.clientY)) } : undefined;
+    return {
+      onContextMenu(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        custom.barMenu(c, shown, e.clientX, e.clientY);
+      },
+      onPointerDown(e) {
+        if (e.button !== 0) return;
+        ate.current = false;
+        drag.current = { id: c.id, x0: e.clientX, pointer: e.pointerId, active: false };
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          /* synthetic events */
+        }
+      },
+      onPointerMove(e) {
+        const d = drag.current;
+        if (!d || d.pointer !== e.pointerId || d.id !== c.id) return;
+        if (!d.active && Math.abs(e.clientX - d.x0) < DRAG_PX) return;
+        d.active = true;
+        const t = targetAt(e.clientX, d.id);
+        setMark(t ? { id: d.id, ...t } : { id: d.id, target: '', after: false });
+      },
+      onPointerUp(e) {
+        const d = drag.current;
+        drag.current = null;
+        if (!d || d.pointer !== e.pointerId || !d.active) return;
+        ate.current = true;
+        setMark(null);
+        const t = targetAt(e.clientX, d.id);
+        if (!t || !t.target) return;
+        const rest = commands.map((x) => x.id).filter((x) => x !== d.id);
+        const before = t.after ? (rest[rest.indexOf(t.target) + 1] ?? null) : t.target;
+        custom.move(d.id, before);
+      },
+      onPointerCancel() {
+        drag.current = null;
+        setMark(null);
+      },
+      takeClick() {
+        const was = ate.current;
+        ate.current = false;
+        return was;
+      },
+      dragging: mark?.id === c.id,
+      drop: mark && mark.target === c.id ? (mark.after ? 'after' : 'before') : null,
+    };
+  };
   return (
-    <div className={`tb-group${end ? ' is-end' : ''}`} data-group={id} role="group" aria-label={label}>
+    <div
+      className={`tb-group${end ? ' is-end' : ''}`}
+      data-group={id}
+      role="group"
+      aria-label={label}
+      onContextMenu={
+        menu
+          ? (e) => {
+              e.preventDefault();
+              menu(e.clientX, e.clientY);
+            }
+          : undefined
+      }
+    >
       <div className="tb-group-label">{label}</div>
-      <div className="tb-items">
+      <div className="tb-items" ref={items}>
         {commands.map((c, i) =>
-          more.includes(c) ? null : <ToolbarButton key={c.id} c={c} services={services} active={isActive(c, panel, sketchTool)} index={i} primary={primary} />,
+          more.includes(c) ? null : <ToolbarButton key={c.id} c={c} services={services} active={isActive(c, panel, sketchTool)} index={i} primary={primary} custom={customFor(c)} />,
         )}
-        {more.length ? <MoreButton group={id} label={label} commands={more} first={commands.indexOf(more[0])} services={services} panel={panel} sketchTool={sketchTool} /> : null}
+        {more.length ? (
+          <MoreButton
+            group={id}
+            label={label}
+            commands={more}
+            first={commands.indexOf(more[0])}
+            services={services}
+            panel={panel}
+            sketchTool={sketchTool}
+            {...(custom ? { itemMenu: (c: CommandDef, x: number, y: number) => custom.moreMenu(c, x, y) } : {})}
+          />
+        ) : null}
       </div>
     </div>
   );
+}
+
+/**
+ * The right-click menus that rearrange the toolbar (P4b fix round 1). A command on the bar: Move to
+ * More, Move left / Move right (the keyboard's and the mouse's way to reorder, besides a drag),
+ * Reset toolbar. A command in More: Show in toolbar (greyed with the reason when the frame is too
+ * narrow for it), Reset toolbar. Anywhere else on the toolbar: Reset toolbar.
+ */
+function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode, m: ModeLayout, fitFolded: ReadonlySet<string>) {
+  const ui = uiFor(services);
+  const set = (next: ModeLayout) => prefs.setMode(mode, next);
+  const reset: MenuEntry = {
+    id: 'tb-reset',
+    label: 'Reset toolbar',
+    disabled: isDefault(m) ? 'The toolbar is already as it was at first' : null,
+    run: () => prefs.reset(mode),
+  };
+  const forGroup = (group: string, order: string[]): GroupCustom => ({
+    barMenu(c, shown, x, y) {
+      const i = shown.indexOf(c.id);
+      const after = (id: string) => order[order.indexOf(id) + 1] ?? null;
+      ui.showMenu(
+        x,
+        y,
+        [
+          { id: 'tb-to-more', label: 'Move to More', run: () => set(withPlace(m, c.id, 'more', mode, KEEP_SET)) },
+          {
+            id: 'tb-left',
+            label: 'Move left',
+            disabled: i <= 0 ? `${c.label} is the first of its group` : null,
+            run: () => set(withMove(m, group, order, c.id, shown[i - 1])),
+          },
+          {
+            id: 'tb-right',
+            label: 'Move right',
+            disabled: i < 0 || i >= shown.length - 1 ? `${c.label} is the last of its group` : null,
+            run: () => set(withMove(m, group, order, c.id, after(shown[i + 1]))),
+          },
+          { sep: true, id: 'tb-sep' },
+          reset,
+        ],
+        `Toolbar: ${c.label}`,
+      );
+    },
+    moreMenu(c, x, y) {
+      const stuck = pinned(m, c.id) && fitFolded.has(c.id);
+      ui.showMenu(
+        x,
+        y,
+        [
+          {
+            id: 'tb-to-bar',
+            label: 'Show in toolbar',
+            disabled: stuck ? 'The toolbar is full at this width: move another command to More to make room' : null,
+            run: () => set(withPlace(m, c.id, 'bar', mode, KEEP_SET)),
+          },
+          { sep: true, id: 'tb-sep' },
+          reset,
+        ],
+        `Toolbar: ${c.label}`,
+      );
+    },
+    move(id, before) {
+      set(withMove(m, group, order, id, before));
+    },
+  });
+  const menu = (x: number, y: number) => ui.showMenu(x, y, [reset], 'Toolbar');
+  return { forGroup, menu };
 }
 
 /**
@@ -351,12 +580,51 @@ export function Toolbar() {
   const panel = useStateStore(ui.state, (s) => s.panel);
   const sketchTool = useSketchTool(services);
 
-  const groups = services.commands.toolbar(mode);
-  // The commands that may fold here, in folding order (only the mode's groups' own commands).
-  const present = new Set(groups.flatMap((g) => g.commands.map((c) => c.id)));
-  const foldable = FOLD_ORDER.filter((id) => present.has(id));
-  const fit = useFitLevel(mode, [...present].join(' '), foldable.length + 2);
-  const folded = new Set(foldable.slice(0, Math.max(0, Math.min(fit.level - 1, foldable.length))));
+  const prefs = toolbarPrefs(services);
+  const { layout } = useStateStore(prefs.state);
+  const lmode = layoutModeOf(mode);
+  const ml = layout[lmode];
+  // The mode's groups in the user's order.
+  const groups = services.commands.toolbar(mode).map((g) => {
+    const byId = new Map(g.commands.map((c) => [c.id, c] as const));
+    const order = orderIds(
+      g.commands.map((c) => c.id),
+      ml.order[g.group],
+    );
+    return { ...g, commands: order.map((x) => byId.get(x)!), order };
+  });
+  // In More by the user's layout (or the default: model mode shows each group's main command).
+  const placedMore = new Set(groups.flatMap((g) => g.order.filter((x) => placeOf(x, lmode, ml, KEEP_SET) === 'more')));
+  // The commands that may fold here, in folding order (only the mode's groups' own commands on the bar).
+  const present = new Set(groups.flatMap((g) => g.order));
+  // What the user asked to see ("Show in toolbar") folds last, after the rest in FOLD_ORDER.
+  const foldable = [
+    ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && !pinned(ml, x)),
+    ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && pinned(ml, x)),
+  ];
+  const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, foldable.length + 2);
+  // Tests wait for the stored layout: the attribute is set without a render.
+  const bar = useRef<HTMLDivElement | null>(null);
+  const fitRef = fit.ref;
+  const barRef = useCallback(
+    (n: HTMLDivElement | null) => {
+      bar.current = n;
+      fitRef(n);
+    },
+    [fitRef],
+  );
+  useEffect(() => {
+    let live = true;
+    void prefs.loaded.then(() => {
+      if (live && bar.current) bar.current.dataset.layoutReady = '1';
+    });
+    return () => {
+      live = false;
+    };
+  }, [prefs, mode]);
+  const fitFolded = new Set(foldable.slice(0, Math.max(0, Math.min(fit.level - 1, foldable.length))));
+  const folded = new Set([...placedMore, ...fitFolded]);
+  const cz = customizer(services, prefs, lmode, ml, fitFolded);
   const iconLevel = fit.level >= foldable.length + 2 ? 2 : fit.level >= 1 ? 1 : 0;
   const view = viewCommands(services, mode);
   // Sketch mode undoes inside the sketch (its own Undo / Redo); model mode the document's.
@@ -367,20 +635,36 @@ export function Toolbar() {
   if (!groups.length && !view.length && !edit.length && !primary.length) return null;
   return (
     <div
-      ref={fit.ref}
+      ref={barRef}
       className={`toolbar cad-toolbar${iconLevel ? ` is-fit-${iconLevel}` : ''}`}
       role="toolbar"
       aria-label="Commands"
       data-cad-toolbar={mode}
       data-fit={iconLevel}
       data-folded={folded.size}
+      data-fit-folded={fitFolded.size}
+      data-layout={isDefault(ml) ? 'default' : 'custom'}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        cz.menu(e.clientX, e.clientY);
+      }}
     >
       {groups.map((g) => (
-        <Group key={g.group} id={g.group} label={g.label} commands={g.commands} folded={folded} services={services} panel={panel} sketchTool={sketchTool} />
+        <Group
+          key={g.group}
+          id={g.group}
+          label={g.label}
+          commands={g.commands}
+          folded={folded}
+          services={services}
+          panel={panel}
+          sketchTool={sketchTool}
+          custom={cz.forGroup(g.group, g.order)}
+        />
       ))}
-      {primary.length ? <Group id="primary" label={mode === 'sketch' ? 'SKETCH' : ''} commands={primary} services={services} panel={panel} sketchTool={sketchTool} primary /> : null}
-      {view.length ? <Group id="view" label="VIEW" commands={view} services={services} panel={panel} sketchTool={sketchTool} /> : null}
-      {edit.length ? <Group id="edit" label="EDIT" commands={edit} services={services} panel={panel} sketchTool={sketchTool} end /> : null}
+      {primary.length ? <Group id="primary" label={mode === 'sketch' ? 'SKETCH' : ''} commands={primary} services={services} panel={panel} sketchTool={sketchTool} primary menu={cz.menu} /> : null}
+      {view.length ? <Group id="view" label="VIEW" commands={view} services={services} panel={panel} sketchTool={sketchTool} menu={cz.menu} /> : null}
+      {edit.length ? <Group id="edit" label="EDIT" commands={edit} services={services} panel={panel} sketchTool={sketchTool} end menu={cz.menu} /> : null}
     </div>
   );
 }

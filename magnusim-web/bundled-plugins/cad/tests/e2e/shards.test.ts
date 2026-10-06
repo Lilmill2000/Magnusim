@@ -48,7 +48,8 @@ describe('shards', () => {
     expect(listed.filter((s) => !existsSync(join(PLUGIN, s))), 'listed specs that are not in e2e/').toEqual([]);
     expect(new Set(listed).size).toBe(listed.length);
     expect(SHARD_NAMES).toEqual(['shell', 'sketch', 'solids', 'step', 'link', 'big']);
-    expect(SHARDS.big).toEqual(['e2e/cad-large-step.spec.js']);
+    // The opt-in shard: Daniel's 113 MB part (P4b SELECT fix round 1 adds the box timed on it).
+    expect(SHARDS.big).toEqual(['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts']);
     expect(specsOf(['link', 'solids'])).toEqual([...SHARDS.solids, ...SHARDS.link]);
   });
 
@@ -83,6 +84,14 @@ describe('the file-to-shard map', () => {
     ['src/features/mass/panel.tsx', ['step']],
     ['src/features/import/pipeline.ts', ['step', 'sketch', 'link', 'big']],
     ['src/files/transfer.ts', ['step']],
+    // P4b PATTERN.
+    ['src/features/pattern/build.ts', ['solids']],
+    ['src/features/pattern/index.ts', ['solids', 'shell']],
+    ['e2e/cad-p4b-pattern.spec.ts', ['solids']],
+    // P4b SELECT.
+    ['src/features/selectcount/index.tsx', ['sketch', 'shell']],
+    ['src/sketch/project/source.ts', ['sketch']],
+    ['src/viewport/boxpick.ts', all],
     // Specs: their own shard.
     ['e2e/cad-p4a-solids.spec.ts', ['solids']],
     ['e2e/cad-link-exit.spec.ts', ['link']],
@@ -238,6 +247,15 @@ describe('the smoke and serial tags', () => {
       'cad:p1-viewport-perf',
       'cad:p2-step-contention',
       'cad:p2p3-review1-import-cancel-big',
+      // P4b SELECT: the box over a 10,000-face part, timed.
+      'cad:p4b-select-box-10k',
+      // P4b SELECT fix round 1 (B-3): the box timed along the user's path, on the 10k grid and (opt-in) the 113 MB part.
+      'cad:p4b-fix-b3-box-user-path',
+      'cad:p4b-select-big-box',
+      // P4b follow-up: the toolbar layout is the user's (ws.prefs): one file per plugin on the server.
+      'cad:p4b-toolbar-customize',
+      'cad:p4b-toolbar-migrate',
+      'cad:p4b-toolbar-tabs',
     ].sort());
   });
 });

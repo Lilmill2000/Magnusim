@@ -387,7 +387,48 @@ interface SketchEntityBase {
    * it came from. Region keys and references resolve through it.
    */
   parent?: SketchEntityId | null;
+  /**
+   * P4b (SELECT): made by this link (SketchFeature.links): fixed (the solver gets a fix per point,
+   * a fixed radius for a circle), drawn purple, re-projected at every rebuild. Break link deletes
+   * the tag: the entity becomes ordinary free geometry where it is.
+   */
+  link?: SketchLinkId;
 }
+
+// ---- P4b (SELECT): linked sketch geometry (Project, Silhouette, Intersect, auto-projected snaps)
+export type SketchLinkId = string;
+
+/** What a link reads; it is read again at every rebuild. */
+export type SketchLinkSource =
+  /** Project: one edge of a body (a straight edge seen end-on projects to a point). */
+  | { kind: 'edge'; body: BodyId; ref: PersistentRef }
+  /** Project: one vertex of a body (a sketch point). */
+  | { kind: 'vertex'; body: BodyId; ref: PersistentRef }
+  /** Project: a face's outer boundary, one curve per edge of its outer wire (keyed by edge name). */
+  | { kind: 'face'; body: BodyId; ref: PersistentRef }
+  /** Project, Silhouette: a body's outline seen along the sketch normal (closed loops). */
+  | { kind: 'silhouette'; body: BodyId }
+  /** Intersect: where the sketch plane cuts a body. */
+  | { kind: 'section'; body: BodyId }
+  /** A snap while drawing: where an edge pierces the sketch plane (the crossing nearest `near`, model mm). */
+  | { kind: 'pierce'; body: BodyId; ref: PersistentRef; near?: Vec3 };
+
+export interface SketchLink {
+  id: SketchLinkId;
+  /** 'projected' (Project, Silhouette, auto-projected snaps) or 'intersection' (Intersect). */
+  type: 'projected' | 'intersection';
+  source: SketchLinkSource;
+  /** Made by a snap on model geometry while drawing (Fusion's auto project): drawn lighter. */
+  auto?: boolean;
+  /** Each curve it made: its key in the source ('e', 'v', an edge name, 'c<k>') and the entity. */
+  entities: { key: string; entity: SketchEntityId }[];
+  /**
+   * Keys the user took out of the link (Delete of a projected curve, or Break link): never added again
+   * by a re-projection and never reported as changed (P4b fix round 1, B-2).
+   */
+  dropped?: string[];
+}
+// ---- end P4b (SELECT)
 
 /** Sketch geometry (solver-neutral; maps 1:1 onto src/solver-worker/solver-api.mjs). Coordinates are in `points`. */
 export type SketchEntity =
@@ -401,7 +442,71 @@ export type SketchEntity =
   /** `r` is the solved radius (mm). */
   | (SketchEntityBase & { kind: 'circle'; c: SketchPointId; r: number })
   /** From `a` to `b` about `c`, counter-clockwise about the sketch normal unless ccw:false. */
-  | (SketchEntityBase & { kind: 'arc'; c: SketchPointId; a: SketchPointId; b: SketchPointId; ccw?: boolean });
+  | (SketchEntityBase & { kind: 'arc'; c: SketchPointId; a: SketchPointId; b: SketchPointId; ccw?: boolean })
+  // ---- P4b (SKETCH): splines
+  | SketchSplineEntity;
+
+/**
+ * P4b (SKETCH): a spline. Its curve is a pure function of its points (src/sketch/tools/bspline.ts):
+ * no hidden solver unknowns, so its freedoms are its points' (2 each, handles included).
+ */
+export type SketchSplineEntity = SketchEntityBase & {
+  kind: 'spline';
+  /** 'fit': a C2 cubic through `pts` (chord-length parameters); 'control': `pts` are the poles of a uniform B-spline. */
+  form: 'fit' | 'control';
+  /** Point ids in order (fit points, or poles). A closed spline does not repeat its first point. */
+  pts: SketchPointId[];
+  /** fit: 3; control: 3 (default) or 5. */
+  degree: number;
+  /** Closed: no ends; the curve runs back to pts[0] smoothly. */
+  closed?: boolean;
+  /** fit, open: end-tangent handles (point ids or null): the curve's second and second-last poles. */
+  handles?: [SketchPointId | null, SketchPointId | null];
+  /**
+   * control, after a trim: the exact piece's clamped knot vector (distinct knots and their
+   * multiplicities, OCCT form). Absent: uniform knots on [0, 1].
+   */
+  knots?: number[];
+  mults?: number[];
+  /**
+   * fit, open, after a trim (fix1 B4): the first and last spans' parameter lengths as multiples of
+   * their chords, so the kept piece is exactly the curve it was. Absent: 1 (plain chord lengths).
+   */
+  spans?: [number, number];
+};
+
+/**
+ * P4b (SKETCH): a sketch pattern or an offset. Its copies are ordinary entities; what ties
+ * them to their sources is derived from this row at every solve (src/sketch/tools/ties.ts), so
+ * editing the count, the spacing or the distance re-lays them out, and they follow their sources.
+ */
+export interface SketchTie {
+  id: string;
+  kind: 'linear' | 'circular' | 'offset';
+  /** The source entities, in order. */
+  sources: SketchEntityId[];
+  /**
+   * One row per copy: where it sits ([i, k] along the two directions of a linear pattern; [i, 0]
+   * round a circular one; [side, 0] for an offset, side 1 or -1) and the source -> copy maps.
+   */
+  copies: { at: [number, number]; entities: Record<SketchEntityId, SketchEntityId>; points: Record<SketchPointId, SketchPointId> }[];
+  /** Instances per direction, the sources counting as one (circular and offset: [n, 1]). */
+  count: [number, number];
+  /**
+   * Its values as expressions: linear `spacing1`, `angle1`, `spacing2`, `angle2` (an angle is the
+   * direction from the sketch's u axis); circular `angle` (the total; 360 deg when full); offset
+   * `distance`. Evaluated with the dimensions (key `<tie id>:<name>` in SketchSolvedState.values).
+   */
+  exprs: Record<string, Expr>;
+  /** fix1 B5: instances the user deleted ([i, k]); a re-layout leaves them out. */
+  skip?: [number, number][];
+  /** linear: a line each direction runs along instead of its angle (null: the angle). */
+  along?: [SketchEntityId | null, SketchEntityId | null];
+  /** circular: the centre point (SKETCH_ORIGIN allowed); full: equal spacing round the whole circle. */
+  centre?: SketchPointId;
+  full?: boolean;
+}
+// ---- end P4b (SKETCH)
 
 export type SketchEntityKind = SketchEntity['kind'];
 
@@ -496,6 +601,10 @@ export interface SketchFeature extends FeatureBase<'sketch'> {
   entities: SketchEntity[];
   constraints: SketchConstraint[];
   solved: SketchSolvedState;
+  /** P4b (SELECT): linked geometry sources (Project, Silhouette, Intersect). Absent = none. */
+  links?: SketchLink[];
+  /** P4b (SKETCH): sketch patterns and offsets (absent = none). */
+  ties?: SketchTie[];
 }
 
 // ------------------------------------------------------------ P3: extrude
@@ -644,6 +753,89 @@ export interface ShellFeature extends FeatureBase<'shell'> {
   direction: 'inside' | 'outside';
 }
 
+// ------------------------------------------------------------ P4b: patterns and mirror (PATTERN)
+
+/**
+ * What a pattern or a mirror repeats (Daniel's item 7):
+ *   features  the tool body of each listed body-making feature (an Extrude, Revolve, Sweep, Loft, or
+ *             a pattern or mirror), made again per copy and applied with the Operation
+ *   bodies    a copy of each listed body (New body: each copy its own body; Join: fused to the body it
+ *             came from; Cut / Intersect: applied to the scope's bodies)
+ *   faces     faces of one body: the local feature they bound (a boss, a pocket, a hole) copied onto
+ *             the same body (OCCT removes the faces to find it; when it cannot, the feature fails and says so)
+ */
+export type PatternOf = 'features' | 'bodies' | 'faces';
+
+/** A pattern's Operation: a body op, or 'source' (features: each feature's own Operation). */
+export type PatternOp = BodyOp | 'source';
+
+/**
+ * Fields every pattern and the mirror have. Copies are keyed (`skip`, names): a linear pattern's
+ * "i" or "i.j" (i along direction 1, j along direction 2; negative on the other side of a symmetric
+ * one; "0" / "0.0" is the original), a circular pattern's "i", the mirror's "m". A copy's faces are
+ * named F:<pattern id>:i<key>:<source face name> (the mirror's F:<id>:m:<name>), so an edge picked on
+ * copy 3 keeps its name when the count goes from 4 to 5.
+ */
+export interface PatternCommon {
+  of: PatternOf;
+  /** of features: the features repeated, in history order. */
+  features: FeatureId[];
+  /** of bodies: the bodies copied. */
+  bodies: BodyId[];
+  /** of faces: the body the faces are on, and the faces. */
+  faceBody: BodyId | '';
+  faces: PersistentRef[];
+  op: PatternOp;
+  /** New body with features: the first copy's body (later copies derive their ids from it). Null otherwise. */
+  creates: BodyId | null;
+  /** Bodies a Join / Cut / Intersect acts on; empty = the bodies the copies meet (as Extrude). */
+  scope: BodyId[];
+  /** Copies left out, by key ("2", "1.3", "-1"); a click on a copy's marker toggles it. */
+  skip: string[];
+  /** Set by Try repair (as BodyMaking's). */
+  repair?: { fuzzy: number };
+}
+
+/** One direction of a linear pattern. */
+export interface PatternDirection {
+  /** Along an axis, an edge, a sketch line, or a plane's normal (null: not picked yet). */
+  axis: AxisRef | null;
+  flip: boolean;
+  /** Copies along it, the original included (per side when symmetric): a whole number >= 1. */
+  count: Expr;
+  /** 'spacing': `distance` between neighbours; 'extent': `distance` from the original to the last copy. */
+  mode: 'spacing' | 'extent';
+  distance: Expr;
+  /** The same copies on the other side of the original too. */
+  symmetric: boolean;
+}
+
+/** Linear pattern: one or two directions (Fusion's Rectangular pattern, SolidWorks' Linear Pattern). */
+export interface LinearPatternFeature extends FeatureBase<'pattern_linear'>, PatternCommon {
+  dir1: PatternDirection;
+  /** The second direction, or null for one. */
+  dir2: PatternDirection | null;
+}
+
+/**
+ * Circular pattern: copies turned about an axis (an origin axis, a CONSTRUCT axis, a straight edge,
+ * a round face or edge, a sketch line). 'full': `count` copies equally around 360 degrees; 'angle':
+ * `count` copies over `angle` (the first to the last), and with `symmetric` the same on the other side.
+ */
+export interface CircularPatternFeature extends FeatureBase<'pattern_circular'>, PatternCommon {
+  axis: AxisRef | null;
+  flip: boolean;
+  count: Expr;
+  mode: 'full' | 'angle';
+  angle: Expr;
+  symmetric: boolean;
+}
+
+/** Mirror: one copy reflected in a plane (an origin plane, a CONSTRUCT plane or a flat face). */
+export interface MirrorFeature extends FeatureBase<'mirror'>, PatternCommon {
+  plane: PlaneRef | null;
+}
+
 // ------------------------------------------------------------ P4a: reference geometry (REFERENCE)
 
 /**
@@ -743,7 +935,11 @@ export type Feature =
   // P4a: reference geometry (REFERENCE)
   | RefPlaneFeature
   | RefAxisFeature
-  | RefPointFeature;
+  | RefPointFeature
+  // P4b: patterns and mirror (PATTERN)
+  | LinearPatternFeature
+  | CircularPatternFeature
+  | MirrorFeature;
 export type FeatureType = Feature['type'];
 /** The feature of one type. */
 export type FeatureOf<T extends FeatureType> = Extract<Feature, { type: T }>;

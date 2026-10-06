@@ -17,7 +17,7 @@ import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
 import { ORIGIN_PLANES, type BodyId, type OriginPlaneRef, type SavedCamera, type Vec2, type Vec3 } from '../types/doc';
 import type { PickResult, SelectionItem, SelectKind } from '../types/selection';
-import type { DisplayMode, FrameBox, OverlayLayer, PlanesMode, Projection, SectionState, StandardView, ViewportBody, ViewportHandle, ViewportPickEvent, ViewportPointer, ViewportState, ViewportStats, ViewportTool } from '../types/viewport';
+import type { BoxSelectEvent, DisplayMode, FrameBox, OverlayLayer, PlanesMode, Projection, SectionState, StandardView, ViewportBody, ViewportHandle, ViewportPickEvent, ViewportPointer, ViewportState, ViewportStats, ViewportTool } from '../types/viewport';
 import { bindViewport } from './bind';
 import { BvhClient } from './bvh';
 import { CameraRig, VIEW_DIRS, type CameraPose } from './camera';
@@ -40,7 +40,10 @@ import {
 } from './colors';
 import { BODY_LIT_OFFSET_UNITS, BODY_OFFSET_UNITS, createBodyMaterial, createPointsMaterial, SEE_THROUGH_OFFSET_UNITS, setBodyColor, setClipping, setSeeThrough, type BodyMaterial } from './materials';
 import { OriginPlanes, type PlaneState } from './origin';
-import { kindsForFilter, pickAt, raycastBodies, rayAt, type PickBody, type PickView } from './pick';
+import { kindsForFilter, makeProjector, pickAt, raycastBodies, rayAt, type PickBody, type PickView } from './pick';
+// P4b SELECT: box selection.
+import { BOX_START_PX, boxCaption, boxCombine, boxFrom, boxKinds, boxStarts, type BoxKind, type BoxMode, type Rect } from './boxselect';
+import { visibleInBox } from './boxpick';
 import { DEFAULT_SECTION, SectionCaps, sectionPlane } from './section';
 import { buildBodyData, edgeSegments, HL_HOVER, HL_NONE, HL_PICK, meshCentroid, planarFaceNormal, setFaceHl, type BodyData } from './tess';
 import { Triad } from './triad';
@@ -1022,7 +1025,126 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   }
 
   // ------------------------------------------------------------ pointer input
-  let drag: { button: number; mode: 'orbit' | 'pan' | 'zoom' | null; x0: number; y0: number; x: number; y: number; moved: boolean; additive: boolean; anchor: Vector3 | null; id: number } | null = null;
+  let drag: { button: number; mode: 'orbit' | 'pan' | 'zoom' | 'box' | null; x0: number; y0: number; x: number; y: number; moved: boolean; additive: boolean; anchor: Vector3 | null; id: number; box?: boolean } | null = null;
+
+  // ---- P4b SELECT: box selection (Ctrl + left drag, anywhere; boxselect.ts boxStarts, boxpick.ts)
+  const boxListeners = new Set<(e: BoxSelectEvent) => void>();
+  let boxEl: HTMLDivElement | null = null;
+  function drawBox(x0: number, y0: number, x1: number, y1: number) {
+    const { rect, mode } = boxFrom(x0, y0, x1, y1);
+    if (!boxEl) {
+      boxEl = host.ownerDocument.createElement('div');
+      boxEl.className = 'cad-box-select';
+      boxEl.setAttribute('data-box-select', '1');
+      const cap = host.ownerDocument.createElement('span');
+      cap.className = 'cad-box-caption';
+      boxEl.appendChild(cap);
+      host.appendChild(boxEl);
+    }
+    boxEl.dataset.boxMode = mode;
+    boxEl.style.left = `${canvas.offsetLeft + rect.x0}px`;
+    boxEl.style.top = `${canvas.offsetTop + rect.y0}px`;
+    boxEl.style.width = `${rect.x1 - rect.x0}px`;
+    boxEl.style.height = `${rect.y1 - rect.y0}px`;
+    const caption = boxEl.firstElementChild as HTMLElement;
+    caption.textContent = boxCaption(mode, boxKinds(filter));
+  }
+  function removeBox() {
+    boxEl?.remove();
+    boxEl = null;
+  }
+  /** What a box selects now: visible items only (one GPU id pass), then the enclose test on what showed. */
+  function boxItems(rect: Rect, mode: BoxMode, kinds: readonly BoxKind[]): SelectionItem[] {
+    const t0 = performance.now();
+    const view = pickView();
+    const shown = order.map((id) => bodies.get(id)).filter((b): b is BodyRec => !!b && visibleOf(b));
+    const want = new Set(kinds);
+    if (!shown.length || !want.size) return [];
+    const surfaces = view.faces;
+    const vis = visibleInBox(
+      renderer,
+      view.camera,
+      shown.map((b) => ({ data: b.data, vertices: b.vertices, seeThrough: b.seeThrough })),
+      { width, height, rect, clip: view.clip, faces: surfaces, edges: want.has('edge') || (want.has('body') && !surfaces), vertices: want.has('vertex') },
+    );
+    const proj = makeProjector(view);
+    const s: [number, number] = [0, 0];
+    const inside = (x: number, y: number, z: number) => proj(x, y, z, s) && s[0] >= rect.x0 && s[0] <= rect.x1 && s[1] >= rect.y0 && s[1] <= rect.y1;
+    const allInside = (arr: ArrayLike<number>, from: number, count: number) => {
+      for (let i = from; i < from + count; i++) if (!inside(arr[3 * i], arr[3 * i + 1], arr[3 * i + 2])) return false;
+      return count > 0;
+    };
+    const sa: [number, number] = [0, 0];
+    /** An edge's polyline length on screen (px; points behind the camera end it). */
+    const screenLength = (arr: ArrayLike<number>, from: number, count: number) => {
+      let len = 0;
+      let prev = false;
+      for (let k = from; k < from + count; k++) {
+        const ok = proj(arr[3 * k], arr[3 * k + 1], arr[3 * k + 2], s);
+        if (ok && prev) len += Math.hypot(s[0] - sa[0], s[1] - sa[1]);
+        sa[0] = s[0];
+        sa[1] = s[1];
+        prev = ok;
+      }
+      return len;
+    };
+    const boxInside = (b: Box3) => {
+      for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) if (!inside(x, y, z)) return false;
+      return true;
+    };
+    const out: SelectionItem[] = [];
+    shown.forEach((b, i) => {
+      const pos = b.data.tess.positions;
+      if (want.has('body')) {
+        const touched = vis.faces[i].size > 0 || vis.edges[i].size > 0;
+        if (touched && (mode === 'touch' || boxInside(b.data.bounds) || allInside(pos, 0, pos.length / 3))) out.push({ kind: 'body', body: b.id });
+      }
+      if (want.has('face') && surfaces) {
+        for (const f of [...vis.faces[i]].sort((x, y) => x - y)) {
+          if (mode === 'touch' || allInside(pos, b.data.faceVerts[2 * f], b.data.faceVerts[2 * f + 1])) out.push({ kind: 'face', body: b.id, index: f });
+        }
+      }
+      if (want.has('edge')) {
+        const { edgePositions, edgeRanges } = b.data.tess;
+        for (const ed of [...vis.edges[i]].sort((x, y) => x - y)) {
+          // A hidden edge can show one or two pixels where it meets a visible one at a corner: an
+          // edge counts as seen with 3 pixels, or with fewer only when it is that short on screen.
+          const px = vis.edgePixels[i].get(ed) ?? 0;
+          if (px < 3 && screenLength(edgePositions, edgeRanges[2 * ed], edgeRanges[2 * ed + 1]) > px + 1.5) continue;
+          if (mode === 'touch' || allInside(edgePositions, edgeRanges[2 * ed], edgeRanges[2 * ed + 1])) out.push({ kind: 'edge', body: b.id, index: ed });
+        }
+      }
+      if (want.has('vertex') && b.vertices) {
+        for (const v of [...vis.vertices[i]].sort((x, y) => x - y)) {
+          if (mode === 'touch' || allInside(b.vertices, v, 1)) out.push({ kind: 'vertex', body: b.id, index: v });
+        }
+      }
+    });
+    stats.lastBoxMs = performance.now() - t0;
+    return out;
+  }
+  function finishBox(d: { x0: number; y0: number }, x: number, y: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) {
+    removeBox();
+    const { rect, mode } = boxFrom(d.x0, d.y0, x, y);
+    const kinds = boxKinds(filter);
+    let items: SelectionItem[] = [];
+    try {
+      items = boxItems(rect, mode, kinds);
+    } catch (err) {
+      console.error('[cad] box selection failed', err);
+    }
+    const ev: BoxSelectEvent = { items, mode, combine: boxCombine({ shift: e.shiftKey }) };
+    for (const fn of [...boxListeners]) {
+      try {
+        fn(ev);
+      } catch (err) {
+        console.error('[cad] box listener failed', err);
+      }
+    }
+    // No frame of its own (P4b fix round 1, B-3): the box is HTML, and a selection that changed asks for
+    // the one frame it needs through its highlight. On a large part each frame is the expensive part.
+  }
+  // ---- end P4b SELECT
   let hoverAt: { x: number; y: number } | null = null;
   // Hover picks run at most every HOVER_MS on a timer (not rAF: a pick must not
   // wait on a frame the browser may hold back, and a pointer that stops moving
@@ -1098,6 +1220,9 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     }
     const p = local(e);
     drag = { button: e.button, mode: null, x0: p.x, y0: p.y, x: p.x, y: p.y, moved: false, additive: e.ctrlKey || e.metaKey, anchor: null, id: e.pointerId };
+    // P4b SELECT: Ctrl + left press may become a box (once it moves past the click distance; a
+    // Ctrl+click stays a toggle pick). A plain left drag orbits, Shift + left pans (the core viewer's).
+    drag.box = boxStarts({ button: e.button, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey });
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch {
@@ -1117,15 +1242,22 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     if (drag && e.pointerId === drag.id && e.buttons === 0 && e.pointerType === 'mouse') drag = null;
     if (drag && e.pointerId === drag.id) {
       if (!drag.mode) {
-        const threshold = drag.button === 2 ? RIGHT_CLICK_PX : CLICK_PX;
+        // P4b SELECT: a Ctrl press becomes a box only past BOX_START_PX (a drifting Ctrl+click stays a toggle).
+        const threshold = drag.button === 2 ? RIGHT_CLICK_PX : drag.box ? BOX_START_PX : CLICK_PX;
         if (Math.hypot(p.x - drag.x0, p.y - drag.y0) <= threshold) return;
-        drag.mode = drag.button === 1 || (drag.button === 0 && e.shiftKey) ? 'pan' : drag.button === 2 ? 'zoom' : 'orbit';
+        drag.mode = drag.box ? 'box' : drag.button === 1 || (drag.button === 0 && e.shiftKey) ? 'pan' : drag.button === 2 ? 'zoom' : 'orbit';
         drag.moved = true;
         if (drag.mode === 'zoom') drag.anchor = anchorAt(drag.x0, drag.y0);
         if (state.get().hover) setHover(null);
         // The whole move counts from the press point.
         drag.x = drag.x0;
         drag.y = drag.y0;
+      }
+      if (drag.mode === 'box') {
+        drag.x = p.x;
+        drag.y = p.y;
+        drawBox(drag.x0, drag.y0, p.x, p.y);
+        return;
       }
       const dx = p.x - drag.x;
       const dy = p.y - drag.y;
@@ -1170,6 +1302,12 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       /* not captured */
     }
     const p = local(e);
+    if (d.mode === 'box') {
+      finishBox(d, p.x, p.y, e);
+      // P4b fix round 1 (B-3): no hover pick at the release (it would light another item and cost another
+      // frame of a large part); the hover comes back with the next pointer move.
+      return;
+    }
     if (d.moved) {
       scheduleHover(p);
       cameraMoved();
@@ -1190,7 +1328,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       captured = null;
       releaseRefit();
     }
-    if (drag && e.pointerId === drag.id) drag = null;
+    if (drag && e.pointerId === drag.id) {
+      if (drag.mode === 'box') removeBox();
+      drag = null;
+    }
   }
 
   function onWheel(e: WheelEvent) {
@@ -1239,7 +1380,20 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   ro.observe(host);
   // The floating chrome (the tree column with its panel, the dock) changes size when a panel
   // opens or a chip comes: a frame then places the plane labels clear of it again.
-  const chromeRo = new ResizeObserver(() => request());
+  // P4b fix round 1 (B-3): the chrome changing size (a dock chip coming, a panel opening) moves the plane
+  // labels and the layers' HTML (onFrame): they are placed again without drawing the scene (a frame of an 11,776-face
+  // part is the costly part of selecting thousands of edges, whose count chip resizes the dock).
+  const chromeRo = new ResizeObserver(() => {
+    if (disposed || !state.get().ready) return;
+    placePlaneLabels();
+    for (const fn of [...frameListeners]) {
+      try {
+        fn();
+      } catch (err) {
+        console.error('[cad] frame listener failed', err);
+      }
+    }
+  });
   let chromeSeen = 0;
   watchChrome = () => {
     const els = host.ownerDocument.querySelectorAll('[data-view-cover], [data-cad-dock]');
@@ -1293,6 +1447,18 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       return () => {
         pickListeners.delete(fn);
       };
+    },
+    // P4b SELECT
+    onBoxSelect(fn) {
+      boxListeners.add(fn);
+      return () => {
+        boxListeners.delete(fn);
+      };
+    },
+    boxSelect(rect, mode, kinds) {
+      const r = canvas.getBoundingClientRect();
+      const local: Rect = { x0: rect.x0 - r.left, y0: rect.y0 - r.top, x1: rect.x1 - r.left, y1: rect.y1 - r.top };
+      return boxItems(local, mode, kinds ?? boxKinds(filter));
     },
     fit(o) {
       fit(o);
@@ -1400,6 +1566,17 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     pick(clientX, clientY) {
       const r = canvas.getBoundingClientRect();
       return pickLocal(clientX - r.left, clientY - r.top);
+    },
+    // P4b SELECT: a pick of given kinds whatever the selection filter (sketch mode's Project, snaps on the model).
+    pickKinds(clientX, clientY, kinds) {
+      const r = canvas.getBoundingClientRect();
+      const x = clientX - r.left;
+      const y = clientY - r.top;
+      const t0 = performance.now();
+      const hit = pickAt(pickBodies(), [], pickView(), x, y, new Set(kinds));
+      if (hit) hit.screen = [hit.screen[0] + r.left, hit.screen[1] + r.top];
+      stats.lastPickMs = performance.now() - t0;
+      return hit;
     },
     project(p) {
       const s = projectLocal(new Vector3(...p));

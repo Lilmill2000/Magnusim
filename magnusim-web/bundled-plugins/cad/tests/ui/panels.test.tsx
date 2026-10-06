@@ -26,7 +26,20 @@ afterEach(() => {
 });
 
 const key = (k: string, init: KeyboardEventInit = {}) => act(() => void fireEvent.keyDown(document.body, { key: k, ...init }));
-const cmd = (id: string) => ui.$(`[data-command="${id}"]`)!;
+/**
+ * A command's control as the user finds it: its toolbar button, or (P4b fix round 1: the model
+ * toolbar starts compact, Parameters is in MODIFY's More) the item of its group's More menu, opened.
+ */
+const cmd = (id: string): HTMLElement => {
+  const btn = ui.$(`[data-cad-toolbar] .tb-btn[data-command="${id}"]`);
+  if (btn) return btn as HTMLElement;
+  const open = ui.$(`[data-cad-menu] [data-command="${id}"]`);
+  if (open) return open as HTMLElement;
+  const more = ui.$(`[data-tb-more][data-more-commands~="${id}"]`);
+  if (!more) throw new Error(`${id}: no toolbar button and no More item`);
+  fireEvent.click(more);
+  return ui.$(`[data-cad-menu] [data-command="${id}"]`)! as HTMLElement;
+};
 const panelTitle = () => ui.$('[data-cad-panel] [data-panel-title]')?.textContent ?? null;
 const seed = (type: 'extrude' | 'sketch') => {
   let f!: ReturnType<typeof t.doc.seed>;
@@ -48,7 +61,9 @@ describe('toolbar', () => {
     // Feature commands come from their modules (none here); the shell's own are Parameters, Undo and Redo.
     expect(ui.$$('.tb-group').map((g) => g.getAttribute('data-group'))).toEqual(['modify', 'edit']);
     expect(ui.$$('.tb-group-label').map((g) => g.textContent)).toEqual(['MODIFY', 'EDIT']);
-    expect(ui.$$('.tb-btn .tb-txt').map((b) => b.textContent)).toEqual(['Parameters', 'Undo', 'Redo']);
+    // Parameters is in MODIFY's More by default (the compact model toolbar, P4b fix round 1).
+    expect(ui.$$('.tb-btn[data-command] .tb-txt').map((b) => b.textContent)).toEqual(['Undo', 'Redo']);
+    expect(ui.$('[data-tb-more="modify"]')!.getAttribute('data-more-commands')).toBe('modify.parameters');
     expect(ui.$('[data-command="solid.box"]')).toBeNull();
     expect(ui.$('[data-command="solid.cylinder"]')).toBeNull();
     fireEvent.mouseEnter(cmd('modify.parameters'));

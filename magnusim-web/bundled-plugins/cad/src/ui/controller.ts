@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { isRemovedFeature, removedFeatureMessage } from '../doc/features/removed';
 import { clearSelection, selectItem } from '../lib/selection';
+import { targetOfItem } from '../viewport/normal';
 import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
 import type { EditSession } from '../types/doc-service';
@@ -462,6 +463,12 @@ export function createUiController(services: AppServices): UiController {
         { id: 'rename', label: `Rename ${f.name}`, disabled: block, run: () => c.startRename('feature', id) },
         { id: 'suppress', label: `${f.suppressed ? 'Unsuppress' : 'Suppress'} ${f.name}`, disabled: block, run: () => c.toggleSuppressed(id) },
       ];
+      // P4b SELECT: Normal to a sketch (its plane, its own up) or a CONSTRUCT plane, from its row.
+      if (f.type === 'sketch' || f.type === 'ref_plane') {
+        const h = services.viewport.get().handle;
+        const t = h ? targetOfItem(d, h, { kind: 'feature', feature: id }) : null;
+        items.push({ id: 'normal-to', label: 'Normal to', disabled: t && t !== 'curved' ? null : `${f.name} is not built`, run: () => (t && t !== 'curved' ? h?.lookAt(t.normal, t.up) : undefined) });
+      }
       for (const a of d.rebuild.features[id]?.actions ?? []) {
         items.push({ id: `action-${a}`, label: FEATURE_ACTION_LABELS[a], disabled: a === 'repair' ? block : null, run: () => c.runFeatureAction(id, a) });
       }

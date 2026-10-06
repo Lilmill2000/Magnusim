@@ -69,12 +69,24 @@ describe('P2 commands and panels', () => {
     const a = await start();
     // No SOLID group without the extrude module: the shell has no Box or Cylinder (decision 2026-10-01).
     expect(texts(a, '[data-cad-toolbar] .tb-group-label')).toEqual(['MODIFY', 'INSPECT', 'FILE', 'EDIT']);
-    expect(texts(a, '[data-group="modify"] .tb-txt')).toEqual(['Parameters', 'Press-pull', 'Delete faces', 'Split', 'Combine']);
-    expect(texts(a, '[data-group="inspect"] .tb-txt')).toEqual(['Measure', 'Mass properties', 'Check']);
-    expect(texts(a, '[data-group="file"] .tb-txt')).toEqual(['Import STEP', 'Export STEP']);
-    expect(a.$('[data-command="modify.press-pull"]')?.getAttribute('data-disabled-reason')).toBe('Make or import a body first');
-    expect(a.$('[data-command="modify.combine"]')?.getAttribute('data-disabled-reason')).toBe('Combine needs two bodies');
-    expect(a.$('[data-command="file.export-step"]')?.getAttribute('data-disabled-reason')).toBe('Nothing to export yet: make or import a body');
+    // The compact model toolbar (P4b fix round 1): each group's main command on the bar, the rest in its
+    // More (MODIFY's main commands, Fillet and Chamfer, are not installed here: all of MODIFY is in More).
+    expect(texts(a, '[data-group="modify"] .tb-btn[data-command] .tb-txt')).toEqual([]);
+    expect(a.$('[data-tb-more="modify"]')?.getAttribute('data-more-commands')).toBe('modify.parameters modify.press-pull modify.delete-faces modify.split modify.combine');
+    expect(texts(a, '[data-group="inspect"] .tb-btn[data-command] .tb-txt')).toEqual(['Measure']);
+    expect(a.$('[data-tb-more="inspect"]')?.getAttribute('data-more-commands')).toBe('inspect.mass inspect.check');
+    expect(texts(a, '[data-group="file"] .tb-btn[data-command] .tb-txt')).toEqual(['Import STEP']);
+    expect(a.$('[data-tb-more="file"]')?.getAttribute('data-more-commands')).toBe('file.export-step');
+    // Each says why it cannot run yet, in its More menu as on a button.
+    const reasonIn = (group: string, id: string) => {
+      act(() => void fireEvent.click(a.$(`[data-tb-more="${group}"]`)!));
+      const r = a.$(`[data-cad-menu] [data-command="${id}"]`)?.getAttribute('data-disabled-reason');
+      act(() => void fireEvent.keyDown(a.$('[data-cad-menu]')!, { key: 'Escape' }));
+      return r;
+    };
+    expect(reasonIn('modify', 'modify.press-pull')).toBe('Make or import a body first');
+    expect(reasonIn('modify', 'modify.combine')).toBe('Combine needs two bodies');
+    expect(reasonIn('file', 'file.export-step')).toBe('Nothing to export yet: make or import a body');
     expect(a.$('[data-command="file.import-step"]')?.getAttribute('data-disabled-reason')).toBeNull();
   });
 

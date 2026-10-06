@@ -8,6 +8,10 @@ import { SKETCH_ORIGIN, type SketchConstraint, type SketchConstraintId, type Ske
 import { DIMENSION_LABELS, RELATION_LABELS } from '../../sketch/model';
 import type { SketchCurve } from '../../types/kernel-protocol';
 import type { UnitsService } from '../../types/units';
+// P4b (SKETCH): splines.
+import { splineOf } from '../../sketch/tools/spline-entity';
+import { splinePolyline, type BSpline } from '../../sketch/tools/bspline';
+import { evaluateTies } from '../../sketch/tools/ties';
 
 const DEG = 180 / Math.PI;
 
@@ -16,7 +20,9 @@ export type EntityGeom =
   | { kind: 'point'; id: SketchEntityId; construction: boolean; p: Vec2; pid: SketchPointId }
   | { kind: 'line'; id: SketchEntityId; construction: boolean; a: Vec2; b: Vec2; pa: SketchPointId; pb: SketchPointId }
   | { kind: 'circle'; id: SketchEntityId; construction: boolean; c: Vec2; r: number; pc: SketchPointId }
-  | { kind: 'arc'; id: SketchEntityId; construction: boolean; c: Vec2; r: number; a: Vec2; b: Vec2; a0: number; a1: number; ccw: boolean; pa: SketchPointId; pb: SketchPointId; pc: SketchPointId };
+  | { kind: 'arc'; id: SketchEntityId; construction: boolean; c: Vec2; r: number; a: Vec2; b: Vec2; a0: number; a1: number; ccw: boolean; pa: SketchPointId; pb: SketchPointId; pc: SketchPointId }
+  /** P4b (SKETCH): a spline as its B-spline (OCCT form) and a dense polyline; `a`/`b` its ends (closed: both at pa). */
+  | { kind: 'spline'; id: SketchEntityId; construction: boolean; curve: BSpline; poly: Vec2[]; a: Vec2; b: Vec2; pa: SketchPointId; pb: SketchPointId; closed: boolean };
 
 /** The points a sketch uses, SKETCH_ORIGIN included at [0, 0]. */
 export function withOrigin(points: Record<SketchPointId, Vec2>): Record<SketchPointId, Vec2> {
@@ -67,6 +73,17 @@ export function entityGeometry(f: Pick<SketchFeature, 'entities'>, points: Recor
         const b = at(e, e.b);
         return { kind: 'arc', id: e.id, construction, c, r: Math.hypot(a[0] - c[0], a[1] - c[1]), a, b, a0: angleOf(c, a), a1: angleOf(c, b), ccw: e.ccw !== false, pa: e.a, pb: e.b, pc: e.c };
       }
+      // P4b (SKETCH): the curve from the solved points (src/sketch/tools/bspline.ts).
+      case 'spline': {
+        for (const id of [...e.pts, ...(e.handles ?? [])]) if (id) at(e, id);
+        const curve = splineOf({ points: pts }, e);
+        if (!curve) throw new Error(`spline ${e.id}: its points do not make a curve (two in one place?)`);
+        const first = curve.poles[0];
+        const last = curve.poles[curve.poles.length - 1];
+        const pa = e.pts[0];
+        const pb = e.closed ? e.pts[0] : e.pts[e.pts.length - 1];
+        return { kind: 'spline', id: e.id, construction, curve, poly: splinePolyline(curve, 24), a: [first[0], first[1]], b: [last[0], last[1]], pa, pb, closed: !!e.closed };
+      }
     }
   });
 }
@@ -84,9 +101,16 @@ export function curvesOf(geom: readonly EntityGeom[]): SketchCurve[] {
     if (g.kind === 'line') out.push({ id: g.id, kind: 'line', a: g.a, b: g.b, pa: g.pa, pb: g.pb });
     else if (g.kind === 'circle') out.push({ id: g.id, kind: 'circle', c: g.c, r: g.r, pc: g.pc });
     else if (g.kind === 'arc') out.push({ id: g.id, kind: 'arc', c: g.c, r: g.r, a0: g.a0, a1: g.a1, ccw: g.ccw, pa: g.pa, pb: g.pb, pc: g.pc });
+    // P4b (SKETCH): kernel request R1 (`bspline`, clamped, OCCT form).
+    else if (g.kind === 'spline') out.push(bsplineCurve(g));
     else out.push({ id: g.id, kind: 'point', p: g.p, pid: g.pid });
   }
   return out;
+}
+
+/** P4b (SKETCH): a spline as the kernel's `bspline` curve (R1). */
+function bsplineCurve(g: Extract<EntityGeom, { kind: 'spline' }>): SketchCurve {
+  return { id: g.id, kind: 'bspline', degree: g.curve.degree, poles: g.curve.poles.map((q) => [q[0], q[1]] as Vec2), knots: [...g.curve.knots], mults: [...g.curve.mults], pa: g.pa, pb: g.pb };
 }
 
 /** Whether the curves can bound a region at all (a sketch of points only has none; the kernel is not asked). */
@@ -99,11 +123,16 @@ export function hasProfileCurves(curves: readonly SketchCurve[]): boolean {
 export const isDimension = (c: SketchConstraint): c is SketchDimension => 'expr' in c && 'driving' in c;
 
 /** How panels and messages name a dimension: "d1", "d2", ... in the order the sketch keeps them. */
-export function dimensionLabel(f: Pick<SketchFeature, 'constraints'>, id: SketchConstraintId): string {
+export function dimensionLabel(f: Pick<SketchFeature, 'constraints'>, id: SketchConstraintId, units?: Pick<UnitsService, 'unitLabel'>): string {
   // The words sketch mode's conflict list uses ("Distance 40 mm", "Horizontal"): the user never sees ids.
   const c = f.constraints.find((x) => x.id === id);
   if (!c) return 'a constraint that is gone';
-  if (isDimension(c)) return `${DIMENSION_LABELS[c.kind]} ${c.expr}`;
+  if (isDimension(c)) {
+    // A bare number is in the document's unit: say which ("Distance 40 mm"); "40 in" or "w / 2" as typed.
+    const bare = /^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(String(c.expr));
+    const unit = bare && units ? units.unitLabel(c.kind === 'angle' ? 'angle' : 'length') : '';
+    return `${DIMENSION_LABELS[c.kind]} ${String(c.expr).trim()}${!unit ? '' : unit === '°' ? '°' : ` ${unit}`}`;
+  }
   return RELATION_LABELS[(c as SketchRelation).kind] ?? c.kind;
 }
 
@@ -119,13 +148,18 @@ export function drivingValues(f: Pick<SketchFeature, 'constraints'>, units: Unit
   const values: Record<SketchConstraintId, number> = {};
   for (const c of f.constraints) {
     if (!isDimension(c) || !c.driving) continue;
-    const label = dimensionLabel(f, c.id);
+    const label = dimensionLabel(f, c.id, units);
     const r = units.evaluate(typeof c.expr === 'string' ? c.expr : String(c.expr ?? ''), c.kind === 'angle' ? 'angle' : 'length');
     if (!r.ok) return { ok: false, message: `${label}: ${r.error}` };
     if (POSITIVE.has(c.kind) && !(r.value > 0)) return { ok: false, message: `${label}: a ${c.kind} must be more than 0` };
     if (c.kind === 'distance' && !(r.value >= 0)) return { ok: false, message: `${label}: a distance cannot be negative` };
     values[c.id] = r.value;
   }
+  // P4b (SKETCH): sketch patterns' and offsets' values (keys `<tie>:<name>`).
+  const ties = evaluateTies(f as { ties?: import('../../types/doc').SketchTie[] }, units);
+  const bad = Object.entries(ties.errors)[0];
+  if (bad) return { ok: false, message: `${(f as { ties?: { id: string; kind: string }[] }).ties?.find((t) => bad[0].startsWith(`${t.id}:`))?.kind === 'offset' ? 'Offset' : 'Sketch pattern'} ${bad[0].split(':')[1]}: ${bad[1]}` };
+  Object.assign(values, ties.values);
   return { ok: true, values };
 }
 
@@ -173,6 +207,8 @@ export function measureDimension(c: Pick<SketchDimension, 'kind' | 'refs'>, geom
     if (g) {
       if (g.kind === 'point') return { kind: 'point', p: g.p };
       if (g.kind === 'line') return { kind: 'line', a: g.a, b: g.b };
+      // P4b (SKETCH): no dimension measures a spline's curve itself (its points take dimensions).
+      if (g.kind === 'spline') return null;
       return { kind: 'curve', c: g.c, r: g.r };
     }
     const p = pts[id];

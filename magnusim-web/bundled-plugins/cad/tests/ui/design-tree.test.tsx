@@ -223,8 +223,9 @@ describe('design tree', () => {
     fireEvent.mouseLeave(ui.row(f[1].id));
     expect(t.flashes.at(-1)).toEqual([]);
     fireEvent.contextMenu(ui.row('origin:front'), { clientX: 10, clientY: 10 });
-    expect(ui.menu()).toEqual(['Look at']);
-    fireEvent.click(ui.menuItem('look-at'));
+    // P4b SELECT: one name everywhere, "Normal to" (it was "Look at").
+    expect(ui.menu()).toEqual(['Normal to']);
+    fireEvent.click(ui.menuItem('normal-to'));
     expect(t.looks.at(-1)).toEqual([[0, -1, 0], [0, 0, 1]]);
   });
 
@@ -269,7 +270,10 @@ describe('design tree', () => {
     ui = mountUi(t);
     expect(ui.$('[data-tree-empty="loading"]')!.textContent).toBe('Opening the part…');
     expect(ui.$('[data-tree-empty="history"]')).toBeNull();
-    expect(ui.$('[data-command="modify.parameters"]')!.getAttribute('data-disabled-reason')).toBe('The part is still loading');
+    // Parameters sits in MODIFY's More (the compact model toolbar): its item says why.
+    fireEvent.click(ui.$('[data-tb-more="modify"]')!);
+    expect(ui.$('[data-cad-menu] [data-command="modify.parameters"]')!.getAttribute('data-disabled-reason')).toBe('The part is still loading');
+    fireEvent.keyDown(ui.$('[data-cad-menu]')!, { key: 'Escape' });
     act(() => (t.doc.state as unknown as { set(v: object): void }).set({ status: 'error', error: 'Could not read the part: bad JSON' }));
     const err = ui.$('[data-tree-error]')!;
     expect(err.textContent).toBe('Could not read the part: bad JSONTry again');

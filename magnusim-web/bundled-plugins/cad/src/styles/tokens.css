@@ -62,6 +62,14 @@
   --cad-sketch-under: var(--mg-primary);
   --cad-sketch-full: var(--mg-text);
   --cad-sketch-over: var(--mg-danger);
+  /* P4b SELECT: linked sketch geometry (projected / intersection: purple, as SolidWorks and Fusion
+     show it), a lost reference (amber), and the selection box (enclose: solid blue; touch: dashed green). */
+  --cad-sketch-projected: #7a3fd1;
+  --cad-sketch-lost: #b54708;
+  --cad-box-enclose: #1570ef;
+  --cad-box-enclose-fill: rgba(21, 112, 239, 0.08);
+  --cad-box-touch: #12855a;
+  --cad-box-touch-fill: rgba(46, 196, 126, 0.1);
 
   /* Panels (style.css:2899-2906, 2948-3081, 3445, 3548; PanelChrome) */
   --cad-panel-accent-feature: #344054;

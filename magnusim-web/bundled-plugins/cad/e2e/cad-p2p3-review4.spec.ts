@@ -168,7 +168,7 @@ async function extrudeAt(page: Page, frame: FrameLocator, p: V3, name: string, d
 async function centredBlock(page: Page, frame: FrameLocator, w: number, h: number, pick: V3, name: string, d?: number) {
   await sketchOn(page, frame, 'top');
   await typedRect(page, frame, [0, 0, 0], [w / 4, h / 4, 0], w, h, true);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText([String(w), String(h)]);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText([`${w} mm`, `${h} mm`]);
   await finishSketch(page, frame);
   await extrudeAt(page, frame, pick, name, d);
 }
@@ -214,7 +214,7 @@ async function hiddenParts(page: Page, frame: FrameLocator, corners: V3[], label
     else if (inside(s, tree) || (pr && inside(s, pr))) out.push(`corner ${c} at ${s.map(Math.round)} is under the ${inside(s, tree) ? 'tree' : 'panel'}`);
   }
   for (const text of labels) {
-    const l = frame.locator('[data-sketch-dim]').filter({ hasText: new RegExp(`^${text}$`) });
+    const l = frame.locator('[data-sketch-dim]').filter({ hasText: new RegExp(`^${text} mm$`) });
     if (!(await l.count())) {
       out.push(`no ${text} label`);
       continue;
@@ -250,7 +250,7 @@ test('cad:p2p3-review4-reopen-frames a sketch reopened with a body made after it
   // Sketch 1 on Top: a 100 x 60 rectangle from the origin, typed.
   await sketchOn(page, frame, 'top');
   await typedRect(page, frame, [0, 0, 0], [11, 7, 0], 100, 60);
-  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['100', '60']);
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText(['100 mm', '60 mm']);
   await finishSketch(page, frame);
   // Then a 20 mm block at the origin, made after it (on the Front plane, as a box would stand there).
   await sketchOn(page, frame, 'front');
@@ -265,7 +265,7 @@ test('cad:p2p3-review4-reopen-frames a sketch reopened with a body made after it
   await shot(page, 'r4-reopen');
   expect(await hiddenParts(page, frame, corners, ['100', '60']), 'reopened').toEqual([]);
   // One double-click on the 100 edits it.
-  const l100 = (await frame.locator('[data-sketch-dim]').filter({ hasText: /^100$/ }).boundingBox())!;
+  const l100 = (await frame.locator('[data-sketch-dim]').filter({ hasText: /^100 mm$/ }).boundingBox())!;
   await page.mouse.move(l100.x + l100.width / 2, l100.y + l100.height / 2);
   await page.mouse.dblclick(l100.x + l100.width / 2, l100.y + l100.height / 2);
   await expect(frame.locator('[data-sketch-dim-edit]'), 'the 100 editor after one double-click').toBeFocused({ timeout: 5000 });

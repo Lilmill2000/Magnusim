@@ -253,7 +253,7 @@ describe('viewport commands', () => {
     await services.commands.run('view.fit');
     await services.commands.run('view.top');
     expect(calls.views).toEqual(['fit', 'top']);
-    expect(await services.commands.run('view.normal-to')).toBe('Select a planar face or a plane to look at it straight on');
+    expect(await services.commands.run('view.normal-to')).toBe('Select a flat face, a plane or a sketch to look at it straight on');
     services.selection.set({ items: [{ kind: 'origin', ref: 'origin:top' }] });
     expect(await services.commands.run('view.normal-to')).toBe(true);
     expect(calls.lookAt).toEqual([[[0, 0, 1], [0, 1, 0]]]);
@@ -301,7 +301,7 @@ describe('viewport chrome', () => {
     // Normal to is disabled with its reason while nothing planar is selected.
     const nt = el.querySelector('[data-view="normal-to"]') as HTMLButtonElement;
     expect(nt.disabled).toBe(true);
-    expect(nt.title).toMatch(/Select a planar face or a plane/);
+    expect(nt.title).toMatch(/Select a flat face, a plane or a sketch/);
     click('[data-view="top"]');
     expect(calls.views).toEqual(['home', 'top']);
     expect(el.querySelector('[data-vp-pop="views"]')).toBeNull();

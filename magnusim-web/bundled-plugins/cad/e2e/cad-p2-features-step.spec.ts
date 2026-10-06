@@ -17,7 +17,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
+import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, commandControl } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(HERE, '..', 'fixtures', 'kernel');
@@ -156,7 +156,8 @@ async function openMass(frame: FrameLocator) {
 test('cad:p2-features-import flange by the picker and box20 by a drop: progress, "0 problems", the STEP body, the volume', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   // Nothing to edit yet: the P2 commands say why.
-  await expect(tb(frame).locator('[data-command="modify.press-pull"]')).toHaveAttribute('data-disabled-reason', 'Make or import a body first');
+  await expect(await commandControl(frame, 'modify.press-pull')).toHaveAttribute('data-disabled-reason', 'Make or import a body first');
+  await page.keyboard.press('Escape');
   await importByPicker(page, frame, FLANGE);
   await expect(panel(frame).locator('.mgk-panel-title')).toHaveText('Imported 1 (flange.step)');
   expect(await finishImport(page, frame)).toBe('0 problems');

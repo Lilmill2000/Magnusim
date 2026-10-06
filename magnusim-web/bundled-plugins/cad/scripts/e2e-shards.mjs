@@ -28,6 +28,8 @@ export const SHARDS = {
     'e2e/cad-sd-kit.spec.ts',
     'e2e/cad-sd-review2-leave.spec.ts',
     'e2e/cad-p4a-toolbar.spec.ts',
+    // P4b fix round 1 (TOOLBAR): the compact model default, the sketch ribbon order, rearranging and Reset.
+    'e2e/cad-p4b-toolbar.spec.ts',
   ],
   // The sketcher (tools, relations, dimensions, value boxes), profiles, and Extrude of them
   // (P3's gate and the P2+P3 review rounds).
@@ -42,10 +44,24 @@ export const SHARDS = {
     'e2e/cad-p2p3-review2.spec.ts',
     'e2e/cad-p2p3-review3.spec.ts',
     'e2e/cad-p2p3-review4.spec.ts',
+    // P4b SELECT: Construction from the menu, box selection (sketch and model mode), Project / Intersect.
+    'e2e/cad-p4b-select.spec.ts',
+    // P4b SKETCH: splines, mirror, linear and circular patterns, offset, fillet and chamfer.
+    'e2e/cad-p4b-sketch-tools.spec.ts',
+    'e2e/cad-p4b-project.spec.ts',
   ],
   // P4a: Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents, CONSTRUCT,
   // edge and vertex names.
-  solids: ['e2e/cad-p4a-solids.spec.ts', 'e2e/cad-p4a-construct.spec.ts', 'e2e/cad-p4a-fix1.spec.ts', 'e2e/cad-p4a-integrate.spec.ts'],
+  solids: [
+    'e2e/cad-p4a-solids.spec.ts',
+    'e2e/cad-p4a-construct.spec.ts',
+    'e2e/cad-p4a-fix1.spec.ts',
+    'e2e/cad-p4a-integrate.spec.ts',
+    // P4b PATTERN: Linear pattern, Circular pattern, Mirror (features, bodies, faces), Measure picks.
+    'e2e/cad-p4b-pattern.spec.ts',
+    // P4b fix round 1 (PATTERN): one test per review finding.
+    'e2e/cad-p4b-fix1-pattern.spec.ts',
+  ],
   // STEP in and out and the body tools: import and edit (press-pull, delete faces, split),
   // Combine, Measure, Mass, Check, Export, the Enclosure (P2's gate, the SD pass).
   step: [
@@ -55,6 +71,8 @@ export const SHARDS = {
     'e2e/cad-sd-enclosure.spec.ts',
     'e2e/cad-sd-review1.spec.ts',
     'e2e/cad-sd-review2.spec.ts',
+    // P4b SELECT: a sketch on an imported face with projected edges through Delete faces (the exit gate).
+    'e2e/cad-p4b-project-step.spec.ts',
   ],
   // The Part as a project geometry (gate:l2-cad and gate:l3-cad's specs) and CAD's start actions.
   link: [
@@ -66,7 +84,7 @@ export const SHARDS = {
     'e2e/cad-start.spec.ts',
   ],
   // Opt-in: Daniel's 113 MB STEP (CAD_E2E_BIG_STEP); its tests skip without it.
-  big: ['e2e/cad-large-step.spec.js'],
+  big: ['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts'],
 };
 
 export const SHARD_NAMES = Object.keys(SHARDS);
@@ -119,6 +137,9 @@ export const RULES = [
   ['src/features/enclosure/', ALL, 'the Enclosure'],
   [/^src\/features\/(revolve|sweep|loft|fillet|chamfer|shell|refgeom|pickinfo|solids)\/index\.tsx?$/, ['solids', 'shell'], 'P4a, its command'],
   [/^src\/features\/(revolve|sweep|loft|fillet|chamfer|shell|refgeom|pickinfo|solids)\//, ['solids'], 'P4a solids and CONSTRUCT'],
+  // P4b PATTERN: the PATTERN group (its command on the toolbar: shell too).
+  [/^src\/features\/pattern\/index\.tsx?$/, ['solids', 'shell'], 'PATTERN, its commands'],
+  ['src/features/pattern/', ['solids'], 'Linear pattern, Circular pattern, Mirror'],
   [/^src\/features\/import\/index\.tsx?$/, ['step', 'sketch', 'link', 'big', 'shell'], 'Import STEP, its command'],
   ['src/features/import/', ['step', 'sketch', 'link', 'big'], 'Import STEP'],
   [/^src\/features\/(combine|split)\/index\.tsx?$/, ['step', 'sketch', 'link', 'shell'], 'body tools, their command'],
@@ -128,6 +149,9 @@ export const RULES = [
   [/^src\/features\/(mass|check|delete_faces)\/index\.tsx?$/, ['step', 'shell'], 'body tools, their command'],
   [/^src\/features\/(mass|check|delete_faces)\//, ['step'], 'Mass, Check and Delete faces'],
   ['src/files/', ['step'], 'file transfer (STEP in and out)'],
+  // P4b SELECT: the dock's selection count (the box selection's specs read it).
+  [/^src\/features\/selectcount\/index\.tsx?$/, ['sketch', 'shell'], 'the selection count chip, its module'],
+  ['src/features/selectcount/', ['sketch'], 'the selection count chip'],
   // Shared code: every shard.
   ['src/', ALL, 'shared code'],
   ['kernel-build/', ALL, 'the kernel'],

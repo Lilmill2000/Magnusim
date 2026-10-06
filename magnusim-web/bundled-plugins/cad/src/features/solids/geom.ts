@@ -13,6 +13,8 @@ import type { SketchOutput } from '../../types/sketch';
 import { entityGeometry, type EntityGeom } from '../sketch/geometry';
 import { rayPlane, toModel } from '../sketch/plane';
 import { drawnSketches, profilesView } from '../sketch/view';
+// P4b (SKETCH): splines.
+import { polyAt, polyDistance } from '../../sketch/tools/spline-entity';
 
 /** How near (CSS px) the pointer must be to pick a curve. */
 export const CURVE_PICK_PX = 8;
@@ -29,6 +31,8 @@ export function distanceToCurve(g: EntityGeom, p: Vec2): number {
     const t = Math.max(0, Math.min(1, ((p[0] - g.a[0]) * dx + (p[1] - g.a[1]) * dy) / l2));
     return Math.hypot(p[0] - (g.a[0] + t * dx), p[1] - (g.a[1] + t * dy));
   }
+  // P4b (SKETCH)
+  if (g.kind === 'spline') return polyDistance(g.poly, p);
   const rho = Math.hypot(p[0] - g.c[0], p[1] - g.c[1]);
   if (g.kind === 'circle') return Math.abs(rho - g.r);
   // An arc: on its sweep, the radial distance; else the nearer end.
@@ -45,7 +49,7 @@ export function curveWords(sketch: SketchFeature | undefined, entity: SketchEnti
   if (!sketch || !e) return 'A curve that is gone';
   const same = sketch.entities.filter((x) => x.kind === e.kind);
   const n = same.findIndex((x) => x.id === entity) + 1;
-  const word = e.kind === 'line' ? 'Line' : e.kind === 'arc' ? 'Arc' : e.kind === 'circle' ? 'Circle' : 'Point';
+  const word = e.kind === 'line' ? 'Line' : e.kind === 'arc' ? 'Arc' : e.kind === 'circle' ? 'Circle' : e.kind === 'spline' ? 'Spline' : 'Point';
   return `${word} ${n}`;
 }
 
@@ -59,7 +63,7 @@ export function sketchPointWords(sketch: SketchFeature | undefined, point: strin
   if (!sketch) return 'A point';
   const centreOf = sketch.entities.find((e) => (e.kind === 'circle' || e.kind === 'arc') && e.c === point);
   if (centreOf) return `Centre of ${curveWords(sketch, centreOf.id)}`;
-  const ends = sketch.entities.filter((e) => (e.kind === 'line' && e.p.includes(point)) || (e.kind === 'arc' && (e.a === point || e.b === point)));
+  const ends = sketch.entities.filter((e) => (e.kind === 'line' && e.p.includes(point)) || (e.kind === 'arc' && (e.a === point || e.b === point)) || (e.kind === 'spline' && !e.closed && (e.pts[0] === point || e.pts[e.pts.length - 1] === point)));
   if (ends.length === 1) return `End of ${curveWords(sketch, ends[0].id)}`;
   if (ends.length > 1) {
     const w = ends.map((e) => curveWords(sketch, e.id));
@@ -174,6 +178,8 @@ export function sketchPointUnder(services: AppServices, at: { clientX: number; c
 export function curvePolyline(g: EntityGeom, out: Pick<SketchOutput, 'plane'>): Vec3[] {
   if (g.kind === 'point') return [toModel(out.plane, g.p)];
   if (g.kind === 'line') return [toModel(out.plane, g.a), toModel(out.plane, g.b)];
+  // P4b (SKETCH)
+  if (g.kind === 'spline') return g.poly.map((q) => toModel(out.plane, q));
   let a0 = 0;
   let sweep = 360;
   if (g.kind === 'arc') {
@@ -241,6 +247,14 @@ export function sketchCurveFrame(g: EntityGeom, out: Pick<SketchOutput, 'plane'>
     const p = toModel(out.plane, [g.c[0] + g.r * Math.cos(a), g.c[1] + g.r * Math.sin(a)]);
     const ahead = toModel(out.plane, [g.c[0] + g.r * Math.cos(a) - s * Math.sin(a), g.c[1] + g.r * Math.sin(a) + s * Math.cos(a)]);
     const t = unit(sub(ahead, p));
+    return t ? { p, tangent: t } : null;
+  }
+  // P4b (SKETCH): along the spline's polyline by length.
+  if (g.kind === 'spline') {
+    const r = polyAt(g.poly, f);
+    if (!r) return null;
+    const p = toModel(out.plane, r.p);
+    const t = unit(sub(toModel(out.plane, [r.p[0] + r.dir[0], r.p[1] + r.dir[1]]), p));
     return t ? { p, tangent: t } : null;
   }
   return null;

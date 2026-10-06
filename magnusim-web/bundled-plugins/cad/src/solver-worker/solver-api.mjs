@@ -28,12 +28,25 @@
 //            point_on_circle concentric fix
 //   A constraint with driving:false is a reference (driven) dimension: it is not given to
 //   the solver, and its measured value is reported in values.measures.
+// P4b (SKETCH):
+//   entities also: {id, kind:"spline", form:"fit"|"control", pts:[...], degree, closed?, handles?:[pt|null, pt|null]}
+//     The curve is a pure function of its points (src/sketch/tools/bspline.ts): the solver
+//     holds only the points, so a spline's freedoms are its points'. tangent with a spline
+//     at a shared end works through the end's neighbour (a control spline's second pole, a
+//     fit spline's handle) as a line.
+//   solver-only kinds (sketch patterns, src/sketch/tools/pattern.ts):
+//     pattern_shift refs [p, q] value [dx, dy]: q - p = (dx, dy)
+//     pattern_along refs [p, q, L1, (L2)] value [sx, sy, d1, (d2)]: q = p + (sx, sy) + d1 dir(L1) + d2 dir(L2)
+//     offset_end refs [srcEnd, copyEnd, srcLine|srcArc]: the copy's end squared to its source
+//     pattern_rotate refs [c, p, q] value deg: q = c + R(deg) (p - c)
 
 const ALG = { BFGS: 0, LM: 1, DOGLEG: 2 };
 const STATUS = { Success: 0, Converged: 1, Failed: 2, SuccessfulSolutionInvalid: 3 };
 const TEMP_TAG = -1; // GCS::DefaultTemporaryConstraint: soft, ignored by the diagnosis
 const INTERNAL_TAG = 0; // high priority, never reported as conflicting (arc rules)
 const DEG = Math.PI / 180;
+// P4b fix 1 (SKETCH): a point on a spline needs the spline's poles as affine combinations of its points.
+import { closestOnSpline, splineAffine, splineCurve } from '../sketch/tools/bspline';
 
 export class SketchInputError extends Error {}
 
@@ -79,6 +92,7 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
   let consInfo = new Map(); // constraintId -> {tag, kind, refs, valueParams:[{idx, unit}], driving}
   let tagToCons = new Map(); // tag -> constraintId
   let paramOwner = []; // idx -> {owner, name}
+  let fitGlues = []; // P4b fix 1: points held on fit splines (their frozen parameters are checked after a solve)
   let nParams = 0;
   let dragTarget = null; // [ix, iy] fixed target params, allocated once per load
   let dragTarget2 = null; // a second pair (a line's other end; a circle's held centre)
@@ -127,7 +141,20 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
   function endIds(e) {
     if (e.kind === 'line') return e.pts;
     if (e.kind === 'arc') return [e.pts[1], e.pts[2]];
+    // P4b (SKETCH): an open spline's first and last points
+    if (e.kind === 'spline') return e.closed ? [] : [e.fitPts[0], e.fitPts[e.fitPts.length - 1]];
     return [];
+  }
+  // P4b (SKETCH): a spline at one of its ends as the line from the end to its neighbour
+  // (a control spline's next pole, a fit spline's handle): {kind:'line', p1, p2}.
+  function splineEndLine(e, endId, cid) {
+    const n = e.fitPts.length;
+    const atStart = e.fitPts[0] === endId;
+    let nb;
+    if (e.form === 'control') nb = atStart ? e.fitPts[1] : e.fitPts[n - 2];
+    else nb = atStart ? e.handleIds[0] : e.handleIds[1];
+    if (!nb) throw new SketchInputError(`constraint ${cid}: a fit spline is tangent at an end only through a tangent handle there`);
+    return { kind: 'line', p1: pointParams.get(endId), p2: pointParams.get(nb) };
   }
   function sharedEnd(id1, id2) {
     const a = endIds(entityInfo.get(id1));
@@ -199,6 +226,50 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     }
   }
 
+  // P4b fix 1 (SKETCH): point P on spline e, at a free curve parameter u (one constraint per
+  // coordinate, ConstraintPointOnAffineSpline in our PlaneGCS patch). The poles are fixed affine
+  // combinations of the spline's points and handles; a fit spline's chord-length parameters are frozen
+  // for this load, and solve() re-loads until they agree with the solved points (fitGlues).
+  function onSpline(P0, e, T, cid) {
+    if (typeof gcs.add_constraint_point_on_affine_spline !== 'function') throw new SketchInputError(`constraint ${cid}: this solver build cannot hold a point on a spline`);
+    const vals = readParams();
+    const xy = (id) => {
+      const q = pointParams.get(id);
+      return [vals[q[0]], vals[q[1]]];
+    };
+    const hs = e.handleIds.map((id) => (id ? xy(id) : null));
+    const s = { form: e.form, degree: e.raw.degree, pts: e.fitPts.map(xy), closed: e.closed, handles: hs, knots: e.raw.knots, mults: e.raw.mults, spans: e.raw.spans };
+    let aff;
+    try {
+      aff = splineAffine(s);
+    } catch (err) {
+      throw new SketchInputError(`constraint ${cid}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const inputs = [...e.fitPts, ...e.handleIds.filter((h) => h)];
+    const u0 = closestOnSpline(aff.curve, [vals[P0[0]], vals[P0[1]]]).u;
+    const ui = push(u0, false, cid, 'u');
+    const nPoles = aff.W.length;
+    const w = new M.DoubleVector();
+    for (const row of aff.W) for (const x of row) w.push_back(x);
+    const flat = new M.DoubleVector();
+    for (const x of aff.flat) flat.push_back(x);
+    try {
+      for (const k of [0, 1]) {
+        const q = new M.IntVector();
+        for (const id of inputs) q.push_back(pointParams.get(id)[k]);
+        try {
+          gcs.add_constraint_point_on_affine_spline(P0[k], ui, q, w, nPoles, flat, aff.curve.degree, T, true);
+        } finally {
+          q.delete();
+        }
+      }
+    } finally {
+      w.delete();
+      flat.delete();
+    }
+    if (e.form === 'fit') fitGlues.push({ p: P0, entity: e });
+  }
+
   function addConstraint(c, tag) {
     const cid = c.id;
     const refs = c.refs ?? [];
@@ -225,7 +296,9 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     const T = tag;
     switch (c.kind) {
       case 'coincident':
-        if (sig === 'point,point') withGeo([P(pt(0)), P(pt(1))], (a, b) => gcs.add_constraint_p2p_coincident(a, b, T, true, 1));
+        // P4b fix 1 (SKETCH): a point on a spline (it slides along it; see onSpline).
+        if (sig === 'point,spline') onSpline(pt(0), ent(1), T, cid);
+        else if (sig === 'point,point') withGeo([P(pt(0)), P(pt(1))], (a, b) => gcs.add_constraint_p2p_coincident(a, b, T, true, 1));
         else if (sig === 'point,line') withGeo([P(pt(0)), L(ent(1))], (a, l) => gcs.add_constraint_point_on_line_pl(a, l, T, true, 1));
         else if (sig === 'point,circle' || sig === 'point,arc') withGeo([P(pt(0)), C(ent(1))], (a, cc) => gcs.add_constraint_point_on_circle(a, cc, T, true, 1));
         else bad();
@@ -250,12 +323,15 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
         // Curves that share an end point get endpoint tangency (FreeCAD's angle-via-point
         // form): edge tangency plus a shared point is degenerate (its Jacobian row vanishes
         // at the solution) and would be diagnosed as redundant.
-        const curve = (k) => k === 'line' || k === 'arc' || k === 'circle';
+        const curve = (k) => k === 'line' || k === 'arc' || k === 'circle' || k === 'spline';
         let at = null;
         if (refs.length === 3 && curve(kinds[0]) && curve(kinds[1]) && kinds[2] === 'point') at = refs[2];
         else if (refs.length === 2 && curve(kinds[0]) && curve(kinds[1])) at = sharedEnd(refs[0], refs[1]);
+        if ((kinds[0] === 'spline' || kinds[1] === 'spline') && !at) throw new SketchInputError(`constraint ${cid}: a spline is tangent only at an end it shares`);
         if (at) {
-          const e1 = ent(0), e2 = ent(1);
+          // P4b (SKETCH): a spline side is the line from the end to its neighbour.
+          const e1 = kinds[0] === 'spline' ? splineEndLine(ent(0), at, cid) : ent(0);
+          const e2 = kinds[1] === 'spline' ? splineEndLine(ent(1), at, cid) : ent(1);
           const p = ptOf(at);
           const vals = readParams();
           const n1 = normalAt(e1, p, vals), n2 = normalAt(e2, p, vals);
@@ -347,7 +423,8 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
         else bad();
         break;
       case 'point_on_circle':
-        if (sig === 'point,circle' || sig === 'point,arc') withGeo([P(pt(0)), C(ent(1))], (a, cc) => gcs.add_constraint_point_on_circle(a, cc, T, true, 1));
+        if (sig === 'point,spline') onSpline(pt(0), ent(1), T, cid);
+        else if (sig === 'point,circle' || sig === 'point,arc') withGeo([P(pt(0)), C(ent(1))], (a, cc) => gcs.add_constraint_point_on_circle(a, cc, T, true, 1));
         else bad();
         break;
       case 'concentric': {
@@ -378,7 +455,86 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
           info.valueParams.push({ idx: ri, unit: 'mm' });
           withGeo([C(e)], (cc) => gcs.add_constraint_circle_radius(cc, ri, T, true, 1));
         } else if (sig === 'arc') { const e = ent(0); fixPoint(e.c); fixPoint(e.s); fixPoint(e.e); }
+        // P4b (SKETCH): a spline: every point (handles too)
+        else if (sig === 'spline') { for (const id of ent(0).pts) fixPoint(pointParams.get(id)); }
         else bad();
+        break;
+      }
+      // P4b (SKETCH): sketch pattern ties (solver-only kinds; see the header)
+      case 'pattern_shift': {
+        // q - p = value (a fixed shift, mm)
+        if (sig !== 'point,point' || !Array.isArray(c.value)) bad();
+        const Pp = pt(0), Q = pt(1);
+        const dx = push(c.value[0], true, cid, 'dx');
+        const dy = push(c.value[1], true, cid, 'dy');
+        gcs.add_constraint_difference(Pp[0], Q[0], dx, T, true, 1);
+        gcs.add_constraint_difference(Pp[1], Q[1], dy, T, true, 1);
+        break;
+      }
+      case 'pattern_along': {
+        // q = p + (sx, sy) + d1 dir(L1) [+ d2 dir(L2)]: through helper points, each leg
+        // a distance and a parallel to its line (the side the copy was made on is kept).
+        const v = Array.isArray(c.value) ? c.value : [];
+        const lines = refs.slice(2);
+        if (kinds[0] !== 'point' || kinds[1] !== 'point' || !lines.length || kinds.slice(2).some((k) => k !== 'line') || v.length !== 2 + lines.length) bad();
+        const Pp = pt(0), Q = pt(1);
+        const vals = readParams();
+        let from = Pp;
+        let cur = [vals[Pp[0]], vals[Pp[1]]];
+        const legs = [];
+        if (v[0] || v[1]) legs.push({ shift: [v[0], v[1]] });
+        lines.forEach((l, k) => legs.push({ line: ent(2 + k), d: v[2 + k] }));
+        legs.forEach((leg, k) => {
+          const last = k === legs.length - 1;
+          let guess;
+          if (leg.shift) guess = [cur[0] + leg.shift[0], cur[1] + leg.shift[1]];
+          else {
+            const e = leg.line;
+            const ux = vals[e.p2[0]] - vals[e.p1[0]], uy = vals[e.p2[1]] - vals[e.p1[1]];
+            const ul = Math.hypot(ux, uy) || 1;
+            guess = [cur[0] + (leg.d * ux) / ul, cur[1] + (leg.d * uy) / ul];
+          }
+          const to = last ? Q : [push(guess[0], false, cid, 'hx'), push(guess[1], false, cid, 'hy')];
+          if (leg.shift) {
+            const dx = push(leg.shift[0], true, cid, 'dx');
+            const dy = push(leg.shift[1], true, cid, 'dy');
+            gcs.add_constraint_difference(from[0], to[0], dx, T, true, 1);
+            gcs.add_constraint_difference(from[1], to[1], dy, T, true, 1);
+          } else if (Math.abs(leg.d) < 1e-12) {
+            withGeo([P(from), P(to)], (a, b) => gcs.add_constraint_p2p_coincident(a, b, T, true, 1));
+          } else {
+            const di = push(Math.abs(leg.d), true, cid, 'd');
+            const seg = { p1: from, p2: to };
+            withGeo([P(from), P(to)], (a, b) => gcs.add_constraint_p2p_distance(a, b, di, T, true, 1));
+            withGeo([L(seg), L(leg.line)], (a, b) => gcs.add_constraint_parallel(a, b, T, true, 1));
+          }
+          from = to;
+          cur = guess;
+        });
+        break;
+      }
+      case 'offset_end': {
+        // An offset copy's free end squared to its source: on the source line's normal through
+        // the source end, or on the ray from an arc's centre through it.
+        if (sig === 'point,point,line') withGeo([L({ p1: pt(0), p2: pt(1) }), L(ent(2))], (a, b) => gcs.add_constraint_perpendicular_ll(a, b, T, true, 1));
+        else if (sig === 'point,point,arc') withGeo([P(pt(1)), L({ p1: ent(2).c, p2: pt(0) })], (a, l) => gcs.add_constraint_point_on_line_pl(a, l, T, true, 1));
+        else bad();
+        break;
+      }
+      case 'pattern_rotate': {
+        if (sig !== 'point,point,point') bad();
+        const C0 = pt(0), Pp = pt(1), Q = pt(2);
+        const vals = readParams();
+        if (Math.hypot(vals[Pp[0]] - vals[C0[0]], vals[Pp[1]] - vals[C0[1]]) < 1e-9) {
+          // A point at the centre stays there.
+          withGeo([P(C0), P(Q)], (a, b) => gcs.add_constraint_p2p_coincident(a, b, T, true, 1));
+          break;
+        }
+        const ai = val('deg');
+        const l1 = { p1: C0, p2: Pp };
+        const l2 = { p1: C0, p2: Q };
+        withGeo([L(l1), L(l2)], (a, b) => gcs.add_constraint_equal_length(a, b, T, true, 1));
+        withGeo([L(l1), L(l2)], (a, b) => gcs.add_constraint_l2l_angle_ll(a, b, ai, T, true, 1));
         break;
       }
       default:
@@ -398,6 +554,7 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     tagToCons = new Map();
     paramOwner = [];
     nParams = 0;
+    fitGlues = [];
     sk = sketch;
 
     for (const [pid, uv] of Object.entries(sketch.points ?? {})) {
@@ -445,6 +602,17 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
           const info = { kind: 'arc', c, s, e: en, r, a0: ai0, a1: ai1, pts: [e.c, e.a, e.b], params: [...c, ...s, ...en, r, ai0, ai1] };
           entityInfo.set(e.id, info);
           withGeo([A(info)], (a) => gcs.add_constraint_arc_rules(a, INTERNAL_TAG, true, 1));
+          break;
+        }
+        // P4b (SKETCH): a spline is its points (fit points or poles, then handles).
+        case 'spline': {
+          const fitPts = [...(e.pts ?? [])];
+          if (fitPts.length < 2) throw new SketchInputError(`entity ${e.id}: a spline needs two points or more`);
+          const handleIds = [e.handles?.[0] ?? null, e.handles?.[1] ?? null];
+          const all = [...fitPts, ...handleIds.filter((h) => h && !fitPts.includes(h))];
+          const params = [];
+          for (const id of all) params.push(...ptParams(id, e.id));
+          entityInfo.set(e.id, { kind: 'spline', form: e.form === 'control' ? 'control' : 'fit', closed: !!e.closed, fitPts, handleIds, pts: all, params, raw: e });
           break;
         }
         default:
@@ -534,12 +702,43 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
       refreeze();
       return { status: 'conflicting', solved: false, dof, ...lists, values: values(lastGood), ms: performance.now() - t0 };
     }
-    const ok = solvePrepared(true);
+    let ok = solvePrepared(true);
+    // P4b fix 1 (SKETCH): a point held on a fit spline used the chord-length parameters of the load;
+    // when the solve moved the fit points, load again at the solved points until they agree.
+    for (let pass = 0; ok && fitGlues.length && pass < 6 && !drag && fitGluesOff(); pass++) {
+      const v = values(lastGood);
+      load({ ...sk, points: { ...sk.points, ...v.points } });
+      unfreeze();
+      gcs.init_solution(ALG.DOGLEG);
+      ok = solvePrepared(true);
+    }
     geomVersion++;
     const lists = diagnosisLists();
     const dof = gcs.dof();
     refreeze();
     return { status: statusOf(ok, lists), solved: ok, dof, ...lists, values: values(lastGood), ms: performance.now() - t0 };
+  }
+
+  /** Whether a point held on a fit spline is off the curve its solved points make (beyond round-off). */
+  function fitGluesOff() {
+    const vals = lastGood;
+    const xy = (id) => {
+      const q = pointParams.get(id);
+      return [vals[q[0]], vals[q[1]]];
+    };
+    for (const g of fitGlues) {
+      const e = g.entity;
+      let curve;
+      try {
+        curve = splineCurve({ form: 'fit', degree: 3, pts: e.fitPts.map(xy), closed: e.closed, handles: e.handleIds.map((id) => (id ? xy(id) : null)), spans: e.raw.spans });
+      } catch {
+        continue;
+      }
+      const p = [vals[g.p[0]], vals[g.p[1]]];
+      const scale = Math.max(1, Math.abs(p[0]) + Math.abs(p[1]));
+      if (closestOnSpline(curve, p).d > 1e-9 * scale) return true;
+    }
+    return false;
   }
 
   function setValue(constraintId, v) {
@@ -642,7 +841,17 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     if (freeze) freezeDetermined();
     const vals = readParams();
     let ends = null;
-    if (e.kind === 'line') {
+    // P4b (SKETCH): a spline translates as a whole (each of its points held softly at its start plus the offset).
+    let multi = null;
+    if (e.kind === 'spline') {
+      multi = e.pts.map((id) => {
+        const p = pointParams.get(id);
+        const start = [vals[p[0]], vals[p[1]]];
+        const t = [push(start[0], true, '#dragm', 'u'), push(start[1], true, '#dragm', 'v')];
+        withGeo([P(t), P(p)], (a, q) => gcs.add_constraint_p2p_coincident(a, q, TEMP_TAG, true, 1));
+        return { t, start };
+      });
+    } else if (e.kind === 'line') {
       ends = [[vals[e.p1[0]], vals[e.p1[1]]], [vals[e.p2[0]], vals[e.p2[1]]]];
       writeParams(ends[0], dragTarget[0]);
       writeParams(ends[1], dragTarget2[0]);
@@ -657,7 +866,7 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
       withGeo([P(dragTarget2), P(e.c)], (t, q) => gcs.add_constraint_p2p_coincident(t, q, TEMP_TAG, true, 1));
     }
     gcs.init_solution(ALG.DOGLEG);
-    drag = { kind: e.kind === 'line' ? 'line' : 'radius', entity: entityId, ends, init: [...grab], grab: [...grab], step: 0, reinits: 0, freeze, frozen: frozen.length };
+    drag = { kind: multi ? 'multi' : e.kind === 'line' ? 'line' : 'radius', entity: entityId, ends, multi, init: [...grab], grab: [...grab], step: 0, reinits: 0, freeze, frozen: frozen.length };
     const movable = e.params.some((i) => !frozen.includes(i));
     return { ok: true, at: [...grab], movable, frozenParams: frozen.length };
   }
@@ -682,7 +891,12 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     } else if (drag.step === 0) {
       drag.step = d;
     }
-    if (drag.kind === 'line') {
+    if (drag.kind === 'multi') {
+      // P4b (SKETCH): a spline's points follow the pointer's offset.
+      const du = u - drag.grab[0];
+      const dv = v - drag.grab[1];
+      for (const m of drag.multi) writeParams([m.start[0] + du, m.start[1] + dv], m.t[0]);
+    } else if (drag.kind === 'line') {
       const du = u - drag.grab[0];
       const dv = v - drag.grab[1];
       writeParams([drag.ends[0][0] + du, drag.ends[0][1] + dv], dragTarget[0]);

@@ -20,6 +20,9 @@ import { attachOverlay } from './overlay';
 import { SketchPanel } from './panel';
 import { createSolverClient } from './solver-client';
 import { makeTool } from './tools';
+import { registerLinkCommands } from './project/commands';
+// P4b (SKETCH): splines, mirror, patterns, offset, fillet, chamfer.
+import { registerSketchToolCommands } from './tools/commands';
 
 function contextMenu(services: AppServices, pick: PickResult | null): ContextMenuContribution[] {
   const mode = modeFor(services);
@@ -60,7 +63,13 @@ const sketchModule: CadModule = {
     mode.onAttach = (handle) => attachOverlay(mode, handle);
     services.apis.set({ sketch: mode, solver });
     const offCommands = registerSketchCommands(services, mode);
+    // P4b (SELECT): Project, Intersect, and the links read again when a sketch opens.
+    const offLinks = registerLinkCommands(services, mode);
+    // P4b (SKETCH)
+    const offTools = registerSketchToolCommands(services, mode);
     return () => {
+      offTools();
+      offLinks();
       offCommands();
       mode.dispose();
       solver.dispose();

@@ -28,6 +28,9 @@ export interface OverlayColors {
   full: number;
   over: number;
   construction: number;
+  /** P4b (SELECT): linked (projected, intersection) curves, and a lost reference's. */
+  linked: number;
+  lost: number;
 }
 
 export function overlayColors(): OverlayColors {
@@ -39,5 +42,7 @@ export function overlayColors(): OverlayColors {
     full: token('--mg-text', 0x101828),
     over: token('--mg-danger', 0xb42318),
     construction: token('--mg-text-muted', 0x667085),
+    linked: token('--cad-sketch-projected', 0x7a3fd1),
+    lost: token('--cad-sketch-lost', 0xb54708),
   };
 }
