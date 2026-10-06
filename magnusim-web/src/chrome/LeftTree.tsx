@@ -16,8 +16,10 @@ import {
   type PluginStudyKind,
   type PluginStudyRow,
   type ProjectTreeDoc,
+  type RunConverged,
   type StudyNode,
 } from './treeModel';
+import { formatSimTime } from '../plugin-ui/format/time';
 import { onProjectTree, readProjectTree } from './treeFeed';
 import { getTreeSession, onTreeAction, subscribeTreeSession, treeExpanded } from './treeSession';
 
@@ -32,6 +34,19 @@ function Mark({ ok, busy, queuePos }: { ok?: boolean; busy?: boolean; queuePos?:
     );
   }
   return null;
+}
+
+/** A converged run's tree badge (API 1.4): "Converged", and when and how in its title. */
+function ConvergedBadge({ converged: c }: { converged: RunConverged }) {
+  const it = Number(c.iteration);
+  const t = Number(c.time);
+  const at = it > 0 ? `after ${it} iterations` : c.time != null && Number.isFinite(t) ? `at t = ${formatSimTime(t)}` : '';
+  const title = 'Converged' + (at ? ` ${at}` : '') + (c.by === 'monitor' && c.text ? `: ${c.text}` : '');
+  return (
+    <span className="tree-converged" data-run-converged="1" title={title}>
+      Converged
+    </span>
+  );
 }
 
 function Tw({ label, fallback = false }: { label: string; fallback?: boolean }) {
@@ -188,10 +203,15 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
         busy={r.busy}
         queuePos={r.queuePos}
         extra={
-          r.olderGeometry ? (
-            <span className="tree-sub" data-run-older-geometry="1" title="Made on an older version of its geometry.">
-              Older geometry
-            </span>
+          r.olderGeometry || r.converged ? (
+            <>
+              {r.converged ? <ConvergedBadge converged={r.converged} /> : null}
+              {r.olderGeometry ? (
+                <span className="tree-sub" data-run-older-geometry="1" title="Made on an older version of its geometry.">
+                  Older geometry
+                </span>
+              ) : null}
+            </>
           ) : undefined
         }
       >

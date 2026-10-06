@@ -221,6 +221,26 @@ describe('LeftTree', () => {
     expect(document.querySelector('[data-w27-run="run1"] > .tree-row .tree-check')).toBeFalsy();
     expect(document.querySelector('[data-w27-run="run1"] > .tree-row .tree-spin')).toBeTruthy();
   });
+
+  it('a converged run has a Converged badge on its row (API 1.4); another finished run has none', () => {
+    const runs: SetupTreeModel['geoms'][number]['studies'][number]['runs'] = [
+      { id: 'r-res', name: 'Residuals', ready: true, converged: { by: 'residuals', iteration: 215 } },
+      { id: 'r-mon', name: 'Settled', ready: true, converged: { by: 'monitor', iteration: 140, text: 'Forces 1 · Cd stayed within 0.001' } },
+      { id: 'r-tr', name: 'Transient', ready: true, converged: { by: 'monitor', time: 0.25 } },
+      { id: 'r-plain', name: 'Plain', ready: true },
+    ];
+    render(
+      <ul>
+        <SetupTreeView model={{ ...fixture, geoms: [{ ...fixture.geoms[0], studies: [{ ...fixture.geoms[0].studies[0], runs }] }] }} />
+      </ul>,
+    );
+    const badge = (id: string) => document.querySelector(`[data-w27-run="${id}"] > .tree-row [data-run-converged="1"]`);
+    expect(badge('r-res')?.textContent).toBe('Converged');
+    expect(badge('r-res')?.getAttribute('title')).toBe('Converged after 215 iterations');
+    expect(badge('r-mon')?.getAttribute('title')).toBe('Converged after 140 iterations: Forces 1 · Cd stayed within 0.001');
+    expect(badge('r-tr')?.getAttribute('title')).toMatch(/^Converged at t = 0\.25/);
+    expect(badge('r-plain')).toBeNull();
+  });
 });
 
 describe('LeftTree fluid label', () => {

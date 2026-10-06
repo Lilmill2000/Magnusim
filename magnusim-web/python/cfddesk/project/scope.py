@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 from dataclasses import dataclass
@@ -423,7 +424,24 @@ def _run_node(
         "has_results": bool(run.get("has_results")),
         "result_controls": controls,
         **_run_build_fields(run, rev),
+        **_run_converged(run),
     }
+
+
+def _run_converged(run: dict[str, Any]) -> dict[str, Any]:
+    """A finished run that converged (API 1.4): ``converged`` ``{by, iteration | time, text?}``
+    for its tree badge; nothing for any other run."""
+    c = run.get("converged")
+    if str(run.get("status") or "") != "done" or not isinstance(c, dict) or c.get("by") not in ("residuals", "monitor"):
+        return {}
+    out: dict[str, Any] = {"by": c["by"]}
+    for key in ("iteration", "time"):
+        v = c.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+            out[key] = v
+    if isinstance(c.get("text"), str) and c["text"]:
+        out["text"] = c["text"]
+    return {"converged": out}
 
 
 def _run_build_fields(run: dict[str, Any], rev: int | None) -> dict[str, Any]:

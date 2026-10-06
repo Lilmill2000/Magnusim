@@ -159,6 +159,29 @@ def test_the_tree_marks_out_of_date_meshes_and_runs_on_an_older_geometry(tmp_pat
     assert "older_geometry" not in plain["runs"]["r-plate"]
 
 
+def test_the_tree_carries_how_a_finished_run_converged(tmp_path: Path) -> None:
+    # API 1.4: the tree's Converged badge reads it; only a finished run that converged has it.
+    p = _project(tmp_path)
+    root = p["root"]
+    for rid, status, converged in [
+        ("r-res", "done", {"by": "residuals", "iteration": 215, "extra": [1]}),
+        ("r-mon", "done", {"by": "monitor", "time": 0.25, "text": "Probe 1 settled"}),
+        ("r-no", "done", False),
+        ("r-run", "running", {"by": "residuals", "iteration": 9}),
+        ("r-odd", "done", {"by": "luck"}),
+    ]:
+        f = create_run_folder(root, "s-plate", {"id": rid, "name": rid})
+        _write(Path(f["dir"]) / "run.json", {"id": rid, "name": rid, "status": status, "converged": converged})
+    runs = _tree_nodes(root, "g-plate")["runs"]
+    assert {k: r.get("converged") for k, r in runs.items()} == {
+        "r-res": {"by": "residuals", "iteration": 215},
+        "r-mon": {"by": "monitor", "time": 0.25, "text": "Probe 1 settled"},
+        "r-no": None,
+        "r-run": None,
+        "r-odd": None,
+    }
+
+
 def test_face_properties_come_from_the_studys_own_geometry(tmp_path: Path) -> None:
     p = _project(tmp_path)
     root = p["root"]

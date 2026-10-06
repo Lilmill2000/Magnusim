@@ -90,6 +90,17 @@ describe('readSetupTree job marks', () => {
     expect(study.runs.find((r) => r.id === 'run2')).toMatchObject({ busy: true, ready: false, hasResults: false });
   });
 
+  it('a finished run that converged carries it (its tree badge); a running one does not', () => {
+    const doc = treeDoc();
+    doc.geometries![0].studies![0].runs = [
+      { id: 'run1', name: 'Run 1', status: 'done', converged: { by: 'residuals', iteration: 215 } },
+      { id: 'run2', name: 'Run 2', status: 'running', converged: { by: 'residuals', iteration: 9 } },
+      { id: 'run3', name: 'Run 3', status: 'done' },
+    ];
+    const runs = readSetupTree(doc, null).geoms[0].studies[0].runs;
+    expect(runs.map((r) => r.converged ?? null)).toEqual([{ by: 'residuals', iteration: 215 }, null, null]);
+  });
+
   it('exposes Results on a live run once frames exist', () => {
     const doc = treeDoc();
     doc.geometries![0].studies![0].runs![1] = {

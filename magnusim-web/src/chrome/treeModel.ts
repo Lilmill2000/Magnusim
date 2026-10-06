@@ -43,7 +43,17 @@ export interface StudyNode {
     resultControls?: Array<{ id: string; name: string; faces: string[]; placed?: boolean; scopeKey?: string }>;
     /** Started on an older version of its linked geometry (API 1.5, D26). */
     olderGeometry?: boolean;
+    /** A finished run that converged (API 1.4): how, and at which iteration or time. */
+    converged?: RunConverged;
   }>;
+}
+
+/** How a finished run converged (API 1.4): its residuals met their targets, or a monitor settled. */
+export interface RunConverged {
+  by: 'residuals' | 'monitor';
+  iteration?: number;
+  time?: number;
+  text?: string;
 }
 
 /** A geometry a plugin study links (API 1.5): what its row says and its Edit button opens. */
@@ -193,6 +203,7 @@ interface ProjectTreeRun {
   has_results?: boolean;
   result_controls?: Array<{ id?: string; name?: string; faces?: string[]; placed?: boolean; key?: string }>;
   older_geometry?: boolean;
+  converged?: RunConverged;
 }
 
 type QueueRow = NonNullable<TreeActivity['queue']>[number];
@@ -418,6 +429,7 @@ export function readSetupTree(
                 scopeKey: rc.key,
               })),
               ...(run.older_geometry ? { olderGeometry: true } : {}),
+              ...(done && run.converged && typeof run.converged === 'object' ? { converged: run.converged } : {}),
             };
           }),
         };
