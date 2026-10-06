@@ -24,6 +24,7 @@ from incompressible_flow.physics import (
     SIMPLEC_RELAX_U,
     TURBULENCE_MODELS,
     physics_from_record,
+    solved_turbulence_fields,
 )
 
 FIX = JS_PROJECT
@@ -97,9 +98,9 @@ def test_accurate_writes_second_order_turbulence_and_lighter_limiting(tmp_path, 
     assert "cellLimited" not in schemes
     assert "div(phi,U)      bounded Gauss linearUpwind grad(U);" in schemes
     assert "bounded Gauss upwind" not in schemes
-    assert re.search(r"div\(phi,epsilon\)\s+bounded Gauss limitedLinear 1;", schemes) or re.search(
-        r"div\(phi,omega\)\s+bounded Gauss limitedLinear 1;", schemes
-    )
+    # Every solved turbulence field (k, epsilon or omega, R, Spalart-Allmaras's nuTilda).
+    for name in solved_turbulence_fields(model):
+        assert re.search(rf"div\(phi,{name}\)\s+bounded Gauss limitedLinear 1;", schemes), name
     assert "laplacianSchemes { default Gauss linear corrected; }" in schemes
     assert "snGradSchemes { default corrected; }" in schemes
     sidecar = json.loads(_text(case, "w27-case.json"))
