@@ -179,6 +179,21 @@ describe('linePlotGeometry, linear x axis', () => {
     expect(g?.xOf(0)).toBeCloseTo(PAD_L + (5 / 15) * (PLOT_W - PAD_L - PAD_R), 9);
   });
 
+  it('lays out for the width it is drawn at: x spans that width, more ticks when wide, never fewer than at 280', () => {
+    const narrow = linePlotGeometry(polar, [{ key: 'cl', label: 'Cl' }], axes());
+    expect(narrow?.width).toBe(PLOT_W);
+    const wide = linePlotGeometry(polar, [{ key: 'cl', label: 'Cl' }], { ...axes(), width: 1470 });
+    expect(wide?.width).toBe(1470);
+    expect(wide?.xOf(10)).toBeCloseTo(1470 - PAD_R, 9);
+    expect(wide?.xTicks[wide.xTicks.length - 1].x).toBeCloseTo(1470 - PAD_R, 9);
+    expect(wide!.xTicks.length).toBeGreaterThan(narrow!.xTicks.length);
+    // The same y layout at any width (only x stretches).
+    expect(wide?.ticks.map((t) => t.y)).toEqual(narrow?.ticks.map((t) => t.y));
+    // An unknown or tiny width: never narrower than its labels need.
+    expect(linePlotGeometry(polar, [{ key: 'cl', label: 'Cl' }], { ...axes(), width: 0 })?.width).toBe(PLOT_W);
+    expect(linePlotGeometry(polar, [{ key: 'cl', label: 'Cl' }], { ...axes(), width: 20 })?.width).toBe(PAD_L + PAD_R + 60);
+  });
+
   it('widens to min and max, and formats ticks with its own format', () => {
     const positive = polar.filter((r) => Number(r.alpha) >= 0);
     const deg = (v: number) => `${v}°`;

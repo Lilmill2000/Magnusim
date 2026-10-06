@@ -184,10 +184,35 @@ function readParts({ sel, props, beforeProps, noBox }) {
       part.before = {};
       for (const p of beforeProps) part.before[p] = b.getPropertyValue(p);
     }
-    if (part.tag === 'polyline') part.points = el.getAttribute('points');
+    if (part.tag === 'polyline') {
+      part.points = el.getAttribute('points');
+      // The width it is drawn in: the kit draws at its own width, the core in 280 units.
+      part.viewWidth = el.ownerSVGElement ? el.ownerSVGElement.viewBox.baseVal.width : 0;
+    }
     parts[name] = part;
   }
   return { parts, twice };
+}
+
+/**
+ * Two plot lines are the same when each point sits at the same place across the plot area
+ * (x as a fraction of it: the kit draws at its own width, the core in 280 units scaled
+ * to its box) and at the same height (both are drawn at their box height).
+ */
+function samePlotLine(a, b) {
+  const PAD_L = 36;
+  const PAD_R = 8;
+  const pts = (p) =>
+    String(p.points || '')
+      .trim()
+      .split(/\s+/)
+      .map((xy) => xy.split(',').map(Number))
+      .map(([x, y]) => [(x - PAD_L) / (p.viewWidth - PAD_L - PAD_R), y]);
+  const pa = pts(a);
+  const pb = pts(b);
+  if (!a.viewWidth || !b.viewWidth || pa.length !== pb.length) return false;
+  // Points are written to 0.1 unit: 0.002 of the plot's width and 0.15 units of height.
+  return pa.every(([x, y], i) => Math.abs(x - pb[i][0]) <= 0.002 && Math.abs(y - pb[i][1]) <= 0.15);
 }
 
 /** The full list of kit-vs-core pairs on the sheet and the parts each compares. */
@@ -250,7 +275,7 @@ function diffPair(pair, core, kit) {
       const same = k.startsWith('box ') ? sameSize(a.style[k], b.style[k]) : a.style[k] === b.style[k];
       if (!same) out.push(`${where} ${k}: core ${a.style[k]} | kit ${b.style[k]}`);
     }
-    if (a.points !== b.points) out.push(`${where} points: core ${a.points} | kit ${b.points}`);
+    if (a.points !== b.points && !samePlotLine(a, b)) out.push(`${where} points: core ${a.points} | kit ${b.points}`);
     if ((PAIR_BEFORE[pair] || []).includes(name)) {
       if (!a.before || !b.before) out.push(`${where}::before: not marked on the ${a.before ? 'kit' : 'core'} side`);
       else for (const k of BEFORE_PROPS) if (a.before[k] !== b.before[k]) out.push(`${where}::before ${k}: core ${a.before[k]} | kit ${b.before[k]}`);
@@ -747,6 +772,53 @@ test.describe('h14 server', () => {
       await page.screenshot({ path: join(shots, 'h14-sheet.png') });
       stage(t0, `shots saved in ${shots}`);
     }
+  });
+
+  test('gate:h14-lineplot-width a LinePlot draws at the width it has: its text is never stretched, in the page and in a frame, after a resize too', async ({ page }) => {
+    // The Airfoil engine panel's residual plot was drawn 280 units wide and stretched to
+    // 1 470 px: its labels and lines came out 5 times wider than tall. One viewBox unit per pixel now.
+    test.setTimeout(180_000);
+    page.setDefaultTimeout(30_000);
+    await page.setViewportSize({ width: 1500, height: 900 });
+    await page.goto(`${host.base}/#/dev/ui-kit`);
+    await expect(page.locator('[data-kit-sheet-ready="page"]')).toHaveCount(1, { timeout: 60_000 });
+    let frame;
+    await expect
+      .poll(() => {
+        frame = page.frames().find((f) => f.url().includes('/plugin-sdk/ui-kit-sheet.html'));
+        return !!frame;
+      }, { timeout: 30_000 })
+      .toBe(true);
+    await expect(frame.locator('[data-kit-sheet-ready="frame"]')).toHaveCount(1, { timeout: 60_000 });
+    const plots = (side) =>
+      side.evaluate(() =>
+        [...document.querySelectorAll('[data-kit-specimen^="LinePlot/"] svg.mgk-plot-svg')].map((svg) => ({
+          name: svg.closest('[data-kit-specimen]').getAttribute('data-kit-specimen'),
+          view: svg.viewBox.baseVal.width,
+          shown: Math.round(svg.getBoundingClientRect().width),
+        })),
+      );
+    const widths = {};
+    for (const vw of [1500, 900]) {
+      await page.setViewportSize({ width: vw, height: 900 });
+      for (const [where, side] of [
+        ['page', page],
+        ['frame', frame],
+      ]) {
+        let last = [];
+        await expect
+          .poll(
+            async () => {
+              last = await plots(side);
+              return last.length >= 3 && last.every((p) => Math.abs(p.view - p.shown) <= 1) ? 'drawn at its width' : JSON.stringify(last);
+            },
+            { timeout: 10_000, message: `${where} at a ${vw} px window` },
+          )
+          .toBe('drawn at its width');
+        widths[`${where}@${vw}`] = last.map((p) => p.shown);
+      }
+    }
+    stage(Date.now(), `LinePlot widths ${JSON.stringify(widths)}`);
   });
 
   test('@plugins gate:h14-field-widget-kit a kit field widget in the Mesh panel', async ({ page, request }) => {

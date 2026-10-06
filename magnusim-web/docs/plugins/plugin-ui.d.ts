@@ -364,8 +364,13 @@ declare module '@magnusim/plugin-ui/_internal/data/linePlotGeometry' {
           unit?: string;
       };
       height: number;
+      /**
+       * The width it is drawn at, in px (the plot measures its box): one viewBox unit is one
+       * pixel, so text and lines keep their shape at any width. Default PLOT_W.
+       */
+      width?: number;
   }
-  /** The viewBox width; the height is the plot's own (default 132, as the core plot). */
+  /** The viewBox width when the plot's own is not known; the height is the plot's own (default 132, as the core plot). */
   export const PLOT_W = 280;
   export const PLOT_H = 132;
   export const PAD_L = 36;
@@ -395,6 +400,8 @@ declare module '@magnusim/plugin-ui/_internal/data/linePlotGeometry' {
           points: string;
       }>;
       xOf: (x: number) => number;
+      /** The width it was laid out for (the viewBox width). */
+      width: number;
   }
   /** The colour a series draws in: its own, else the kit's series palette by its place. */
   export function seriesColor(series: LineSeries[], s: LineSeries): string;

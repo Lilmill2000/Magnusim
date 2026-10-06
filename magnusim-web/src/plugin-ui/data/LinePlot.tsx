@@ -1,4 +1,4 @@
-import { Fragment, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import { formatSimTime } from '../format/time';
 import {
   drawable,
@@ -110,6 +110,25 @@ export function LinePlot({ rows, series, label, xKey = 't', x, y, legend = true,
   const scale = y.scale;
   const seconds = xKind === 'seconds';
   const linear = xKind === 'linear';
+  // Drawn at the width it has (a wide workspace panel or a narrow side panel): one viewBox
+  // unit per pixel, so its text and lines are never stretched. PLOT_W until it is measured.
+  const [boxWidth, setBoxWidth] = useState(0);
+  const watched = useRef<ResizeObserver | null>(null);
+  const boxRef = useCallback((el: HTMLDivElement | null) => {
+    watched.current?.disconnect();
+    watched.current = null;
+    if (!el) return;
+    const read = () => {
+      const w = el.clientWidth;
+      if (w > 0) setBoxWidth(w);
+    };
+    read();
+    if (typeof ResizeObserver !== 'undefined') {
+      watched.current = new ResizeObserver(read);
+      watched.current.observe(el);
+    }
+  }, []);
+  const width = boxWidth > 0 ? boxWidth : PLOT_W;
   const geo = useMemo(
     () =>
       linePlotGeometry(rows, series, {
@@ -117,8 +136,9 @@ export function LinePlot({ rows, series, label, xKey = 't', x, y, legend = true,
         x: xKind === 'linear' ? { kind: 'linear', min: xMin, max: xMax, format: xFormat } : { kind: xKind, max: xMax },
         y: { scale },
         height,
+        width,
       }),
-    [rows, series, xKey, xKind, xMin, xMax, xFormat, scale, height],
+    [rows, series, xKey, xKind, xMin, xMax, xFormat, scale, height, width],
   );
   const svgRef = useRef<SVGSVGElement | null>(null);
   const tipRef = useRef<HTMLDivElement | null>(null);
@@ -140,20 +160,20 @@ export function LinePlot({ rows, series, label, xKey = 't', x, y, legend = true,
     if (!svg) return;
     const r = svg.getBoundingClientRect();
     if (!r.width) return;
-    const sx = ((e.clientX - r.left) / r.width) * PLOT_W;
-    const t = g.xmin + ((sx - PAD_L) / (PLOT_W - PAD_L - PAD_R)) * (g.xmax - g.xmin);
+    const sx = ((e.clientX - r.left) / r.width) * g.width;
+    const t = g.xmin + ((sx - PAD_L) / (g.width - PAD_L - PAD_R)) * (g.xmax - g.xmin);
     const row = nearestRow(rows, xKey, t);
     if (!row) return;
-    setHover({ row, x: (g.xOf(Number(row[xKey])) / PLOT_W) * r.width, width: r.width });
+    setHover({ row, x: (g.xOf(Number(row[xKey])) / g.width) * r.width, width: r.width });
   }
 
   return (
     <div className="mgk-type mgk-linechart">
-      <div className="mgk-plot" onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+      <div ref={boxRef} className="mgk-plot" onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
         <svg
           ref={svgRef}
           className="mgk-plot-svg"
-          viewBox={`0 0 ${PLOT_W} ${height}`}
+          viewBox={`0 0 ${g.width} ${height}`}
           preserveAspectRatio="none"
           role="img"
           aria-label={label}
@@ -161,7 +181,7 @@ export function LinePlot({ rows, series, label, xKey = 't', x, y, legend = true,
         >
           {g.ticks.map((d, i) => (
             <g key={i}>
-              <line className="mgk-plot-grid" x1={PAD_L} y1={d.y.toFixed(1)} x2={PLOT_W - PAD_R} y2={d.y.toFixed(1)} />
+              <line className="mgk-plot-grid" x1={PAD_L} y1={d.y.toFixed(1)} x2={g.width - PAD_R} y2={d.y.toFixed(1)} />
               <text className="mgk-plot-label" x={PAD_L - 4} y={(d.y + 3).toFixed(1)} textAnchor="end" fontSize="8">
                 {d.label}
               </text>
@@ -187,7 +207,7 @@ export function LinePlot({ rows, series, label, xKey = 't', x, y, legend = true,
               <text className="mgk-plot-label" x={PAD_L} y={height - 4} fontSize="8">
                 {seconds ? '0 s' : '1'}
               </text>
-              <text className="mgk-plot-label" x={PLOT_W - PAD_R} y={height - 4} textAnchor="end" fontSize="8">
+              <text className="mgk-plot-label" x={g.width - PAD_R} y={height - 4} textAnchor="end" fontSize="8">
                 {seconds ? formatSimTime(g.xmax) : String(Math.round(g.xmax))}
               </text>
             </>

@@ -47,9 +47,14 @@ export interface LinePlotAxes {
   x: LinePlotX;
   y: { scale: 'log' | 'linear'; unit?: string };
   height: number;
+  /**
+   * The width it is drawn at, in px (the plot measures its box): one viewBox unit is one
+   * pixel, so text and lines keep their shape at any width. Default PLOT_W.
+   */
+  width?: number;
 }
 
-/** The viewBox width; the height is the plot's own (default 132, as the core plot). */
+/** The viewBox width when the plot's own is not known; the height is the plot's own (default 132, as the core plot). */
 export const PLOT_W = 280;
 export const PLOT_H = 132;
 export const PAD_L = 36;
@@ -69,6 +74,8 @@ export interface LinePlotGeometry {
   ticks: Array<{ y: number; label: string }>;
   lines: Array<{ key: string; color: string; dashed: boolean; points: string }>;
   xOf: (x: number) => number;
+  /** The width it was laid out for (the viewBox width). */
+  width: number;
 }
 
 /** The colour a series draws in: its own, else the kit's series palette by its place. */
@@ -147,6 +154,10 @@ export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSerie
           ? dataMax
           : 1e-3
       : Math.max(planned, dataMax, 1);
+  // Narrower than this and the axis labels would meet the lines.
+  const width = Math.max(PAD_L + PAD_R + 60, Number(axes.width) || PLOT_W);
+  // About one x tick per 60 px of plot, never fewer than the 5 a 280 px plot has.
+  const xTickCount = Math.min(12, Math.max(5, Math.round((width - PAD_L - PAD_R) / 60)));
   const xTicks: LinePlotGeometry['xTicks'] = [];
   let xTickValues: number[] = [];
   let xStep = 1;
@@ -160,7 +171,7 @@ export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSerie
     }
     if (Number.isFinite(axes.x.min)) lo = Math.min(lo, Number(axes.x.min));
     if (Number.isFinite(axes.x.max)) hi = Math.max(hi, Number(axes.x.max));
-    const nice = niceTicks(lo, hi, 5);
+    const nice = niceTicks(lo, hi, xTickCount);
     xmin = nice.lo;
     xmax = nice.hi;
     xTickValues = nice.ticks;
@@ -207,7 +218,7 @@ export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSerie
   const hi = y1;
   const x0 = xmin;
   const x1 = xmax;
-  const xOf = (t: number) => PAD_L + ((Number(t) - x0) / (x1 - x0)) * (PLOT_W - PAD_L - PAD_R);
+  const xOf = (t: number) => PAD_L + ((Number(t) - x0) / (x1 - x0)) * (width - PAD_L - PAD_R);
   const xFormat = axes.x.kind === 'linear' ? axes.x.format : undefined;
   for (const t of xTickValues) xTicks.push({ x: xOf(t), label: xTickLabel(t, xStep, xFormat) });
   const yOf =
@@ -222,7 +233,7 @@ export function linePlotGeometry(rows: ReadonlyArray<LineRow>, series: LineSerie
     }
     if (pts.length) lines.push({ key: s.key, color: seriesColor(series, s), dashed: !!s.dashed, points: pts.join(' ') });
   }
-  return { xmin, xmax, xTicks, metrics, ticks, lines, xOf };
+  return { xmin, xmax, xTicks, metrics, ticks, lines, xOf, width };
 }
 
 /** The legend: solid series by their legend rule, then the dashed ones that have values. */

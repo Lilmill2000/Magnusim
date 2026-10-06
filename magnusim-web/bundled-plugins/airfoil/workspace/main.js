@@ -463,6 +463,8 @@ function ResidualPlot({ rows, planned }) {
       label: 'Initial residuals per iteration',
       x: { kind: 'iterations', max: planned },
       y: { scale: 'log' },
+      // It spans the engine panel: taller than a side panel's plot, so its decades read.
+      height: 220,
     }),
   );
 }
