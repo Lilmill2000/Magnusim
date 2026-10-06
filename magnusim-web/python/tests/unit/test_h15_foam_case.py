@@ -188,9 +188,12 @@ def test_link_rule_by_reparse_tag(monkeypatch: pytest.MonkeyPatch):
     def st(tag: int) -> SimpleNamespace:
         return SimpleNamespace(st_reparse_tag=tag, st_mode=stat.S_IFDIR)
 
+    # The fallback values are Windows' own (Windows Python checks them here).
+    assert foam_case.IO_REPARSE_TAG_SYMLINK == getattr(stat, "IO_REPARSE_TAG_SYMLINK", 0xA000000C)
+    assert foam_case.IO_REPARSE_TAG_MOUNT_POINT == getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
     monkeypatch.setattr(foam_case.sys, "platform", "win32")
-    assert is_link(st(stat.IO_REPARSE_TAG_SYMLINK), False)  # type: ignore[arg-type]
-    assert is_link(st(stat.IO_REPARSE_TAG_MOUNT_POINT), False)  # type: ignore[arg-type]
+    assert is_link(st(foam_case.IO_REPARSE_TAG_SYMLINK), False)  # type: ignore[arg-type]
+    assert is_link(st(foam_case.IO_REPARSE_TAG_MOUNT_POINT), False)  # type: ignore[arg-type]
     # OneDrive cloud files and other tags are allowed.
     assert not is_link(st(0x9000001A), False)  # type: ignore[arg-type]
     assert not is_link(st(0), True)  # type: ignore[arg-type]

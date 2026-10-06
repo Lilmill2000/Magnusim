@@ -35,18 +35,19 @@ export async function setup(page, request, title) {
       }
     }
   };
-  // The tree reads (GET /api/project/tree) the page has sent, and how many are still out.
-  const treeReads = { sent: 0, open: 0, last: Date.now() };
+  // The tree reads (GET /api/project/tree) the page has sent, and the ones still out (each by
+  // its request: a read sent before these listeners only ends here, and is not counted).
+  const treeReads = { sent: 0, open: new Set(), last: Date.now() };
   const isTreeRead = (r) => new URL(r.url()).pathname === '/api/project/tree';
   page.on('request', (r) => {
     if (!isTreeRead(r)) return;
     treeReads.sent += 1;
-    treeReads.open += 1;
+    treeReads.open.add(r);
     treeReads.last = Date.now();
   });
   const treeReadDone = (r) => {
     if (!isTreeRead(r)) return;
-    treeReads.open -= 1;
+    treeReads.open.delete(r);
     treeReads.last = Date.now();
   };
   page.on('requestfinished', treeReadDone);
@@ -54,7 +55,7 @@ export async function setup(page, request, title) {
   // Once no tree read is out and none has come or gone for a second: the count so far.
   const treeReadsSettled = async () => {
     await expect
-      .poll(() => treeReads.open === 0 && Date.now() - treeReads.last > 1000, { timeout: 30_000 })
+      .poll(() => treeReads.open.size === 0 && Date.now() - treeReads.last > 1000, { timeout: 30_000 })
       .toBe(true);
     return treeReads.sent;
   };

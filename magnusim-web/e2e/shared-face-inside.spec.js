@@ -113,13 +113,16 @@ async function waitForInsideFaces(page) {
 
 /** Clicks the model where it shows a face in the plane x = `x` mm (as a user clicks a face they see). */
 async function clickFaceAtX(page, x) {
-  const find = () =>
-    page.evaluate((want) => {
+  // Each pick draws the viewport once (the hardware selector): a 12 px grid over the whole
+  // viewer is ~4000 draws, minutes on a 2-core software-GL runner. A 36 px grid first, the
+  // 12 px one only when that misses the face.
+  const scan = (step) =>
+    page.evaluate(([want, step]) => {
       const g = window.__e2eCadFaces();
       const box = document.getElementById('viewer').getBoundingClientRect();
       const hits = [];
-      for (let y = box.top + 4; y < box.bottom - 4; y += 12) {
-        for (let cx = box.left + 4; cx < box.right - 4; cx += 12) {
+      for (let y = box.top + 4; y < box.bottom - 4; y += step) {
+        for (let cx = box.left + 4; cx < box.right - 4; cx += step) {
           const top = document.elementFromPoint(cx, y);
           if (!top || top.tagName !== 'CANVAS' || !top.closest('#viewer')) continue;
           const hit = window.__CFD_PICK_CAD__({ clientX: cx, clientY: y });
@@ -132,7 +135,8 @@ async function clickFaceAtX(page, x) {
       const my = hits.reduce((s, h) => s + h[1], 0) / hits.length;
       hits.sort((a, b) => Math.hypot(a[0] - mx, a[1] - my) - Math.hypot(b[0] - mx, b[1] - my));
       return hits[0];
-    }, x);
+    }, [x, step]);
+  const find = async () => (await scan(36)) || scan(12);
   let at = await find();
   for (const turn of [[90, 0], [90, 0], [90, 0], [0, 60], [0, -120]]) {
     if (at) break;

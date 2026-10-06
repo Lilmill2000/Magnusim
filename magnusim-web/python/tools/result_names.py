@@ -87,7 +87,8 @@ def shown_fields(time_dir: Path) -> list[str]:
     Tensors, face fields (phi) and old-time copies (U_0) are left out."""
     out: list[str] = []
     try:
-        entries = sorted(Path(time_dir).iterdir())
+        # By name, ignoring case, on every OS (a POSIX Path sorts "U" before "k").
+        entries = sorted(Path(time_dir).iterdir(), key=lambda f: (f.name.casefold(), f.name))
     except OSError:
         return out
     for f in entries:

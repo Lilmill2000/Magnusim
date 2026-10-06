@@ -6,7 +6,7 @@ which the workspace queues with ``ws.compute.submitOpenFOAM``. The study's
 ``results/openfoam.json`` keeps every run::
 
     {"engine": "openfoam", "runs": [{case_rel, alpha, name, airfoil, conditions, level,
-      cells, compute_id, status, error, code, written_at, finished_at,
+      cells, compute_id, status, error, code, written_at, finished_at, finished_order,
       cl, cd, cm, cl_cd, cl_change, iterations, averaged, steady, residuals}, ...]}
 
 ``status`` is the host's (``queued``, ``running``, ``done``, ``failed``,
@@ -14,6 +14,8 @@ which the workspace queues with ``ws.compute.submitOpenFOAM``. The study's
 run that failed or was stopped stays listed with its reason: nothing is
 dropped. The polar of the current inputs is the latest finished run at each
 angle among those of the same section, Reynolds number and mesh level.
+"Latest" is ``finished_order`` (1, 2, ... in the order runs were collected), not
+the clock: two runs can end in the same second, and a clock can be set back.
 """
 
 from __future__ import annotations
@@ -200,7 +202,8 @@ def collect(data: PluginData, sid: str, rel: Any, status: Any, error: Any = "", 
         meta = _meta(data, sid, rel)
         run = {key: meta.get(key) for key in ("case_rel", "alpha", "name", "airfoil", "conditions", "level", "cells", "written_at")}
         doc["runs"] = [*runs(doc), run]
-    run.update(status=status, error=str(error or ""), code=str(code or ""), finished_at=_now())
+    order = 1 + max((_finished_order(r) for r in runs(doc)), default=0)
+    run.update(status=status, error=str(error or ""), code=str(code or ""), finished_at=_now(), finished_order=order)
     for key in ("cl", "cd", "cm", "cl_cd", "cl_change", "iterations", "steady", "residuals", "residuals_met", "averaged"):
         run.pop(key, None)
     if status == "done":
@@ -226,6 +229,16 @@ def delete(data: PluginData, sid: str, rel: Any) -> dict[str, Any]:
     return _save(data, sid, doc)
 
 
+def _finished_order(run: dict[str, Any]) -> int:
+    """Where a run ended among the study's runs (0 for a run collected before the order was kept)."""
+    order = run.get("finished_order")
+    return order if isinstance(order, int) and not isinstance(order, bool) else 0
+
+
+def _latest_key(run: dict[str, Any]) -> tuple[int, str]:
+    return _finished_order(run), str(run.get("finished_at", ""))
+
+
 def _same(a: Any, b: Any) -> bool:
     return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
@@ -239,7 +252,7 @@ def polar(doc: dict[str, Any], airfoil: dict[str, Any], re: float, level: str) -
         if not _same(run.get("airfoil"), airfoil) or float((run.get("conditions") or {}).get("re", -1)) != float(re):
             continue
         alpha = float(run["alpha"])
-        if alpha not in best or str(run.get("finished_at", "")) >= str(best[alpha].get("finished_at", "")):
+        if alpha not in best or _latest_key(run) >= _latest_key(best[alpha]):
             best[alpha] = run
     return [
         {

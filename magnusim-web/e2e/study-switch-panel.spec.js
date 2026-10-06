@@ -51,9 +51,13 @@ test('the study clicked last keeps its panel open when it was clicked during ano
   const node = (sid) => page.locator(`#left-tree li[data-w17-sim-id="${sid}"]`).first();
   const panel = page.locator('#panel-study-settings');
   const activeId = () => page.evaluate(() => window.__CFD_W17__.activeId);
-  /** The study's panel is open, titled with its name, and its row selected, for 2 s. */
+  /** The study's panel opens, titled with its name, and its row selected, for 2 s. */
   const shows = async (sid) => {
     await expect.poll(activeId).toBe(sid);
+    // It opens when the last switch lands (its activate reply is held back 0.8 s, longer
+    // on a loaded 2-core runner); then it must stay open.
+    await expect(panel, 'panel opens').toBeVisible({ timeout: 15_000 });
+    await expect(panel.locator('[data-panel-title="1"]')).toHaveText(names[sid], { timeout: 15_000 });
     for (let i = 0; i < 8; i++) {
       await expect(panel, `panel open, check ${i}`).toBeVisible({ timeout: 1_000 });
       await expect(panel.locator('[data-panel-title="1"]')).toHaveText(names[sid], { timeout: 1_000 });

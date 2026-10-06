@@ -10,10 +10,20 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeF
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { after, describe, it } from 'node:test';
 
 const root = mkdtempSync(join(tmpdir(), 'magnusim-thumb-race-'));
 process.env.MAGNUSIM_PROJECTS_ROOT = root;
+// The CAD preview these tests open runs the app's Python, which must be a file path (the
+// server checks it exists). CI has no python/.venv (setup-python's interpreter is on PATH):
+// name that one, before the server's modules read MAGNUSIM_PYTHON.
+const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const VENV = ['Scripts/python.exe', 'bin/python'].some((p) => existsSync(join(WEB, 'python', '.venv', p)));
+if (!VENV && !process.env.MAGNUSIM_PYTHON && !process.env.CFDDESK_PYTHON) {
+  const r = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' });
+  if (r.status === 0 && r.stdout.trim()) process.env.MAGNUSIM_PYTHON = r.stdout.trim();
+}
 const { createGeometryFolder, geometriesRoot, writeJsonAtomic } = await import('../project-layout.js');
 const { handleW16Api, setThumbRendererForTests } = await import('../w16-project-geometry.js');
 

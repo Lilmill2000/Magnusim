@@ -214,8 +214,12 @@ def test_a_run_that_did_not_finish_stays_listed_with_its_reason(project):
 
 
 @needs_gmsh
-def test_the_latest_finished_run_at_an_angle_is_its_point_and_the_csv_names_each_run(project):
+def test_the_latest_finished_run_at_an_angle_is_its_point_and_the_csv_names_each_run(project, monkeypatch):
     data, scope, sid = project
+    # The clock is set back between the runs (WSL resyncs its clock; two runs can
+    # also end in the same second): the later run is still the point.
+    stamps = iter(f"2026-10-05T12:00:{59 - i:02d}+00:00" for i in range(60))
+    monkeypatch.setattr(openfoam, "_now", lambda: next(stamps))
     for n in (1, 2):
         _write(data, sid, alpha=4.0)
         rel = f"openfoam/run-{n}-a4"
@@ -224,6 +228,7 @@ def test_the_latest_finished_run_at_an_angle_is_its_point_and_the_csv_names_each
         svc.openfoam_collect({"study_id": sid, "case_rel": rel, "status": "done"}, scope)
     rows = svc.openfoam_polar({"study_id": sid, "level": "coarse"}, scope)["rows"]
     assert [r["case_rel"] for r in rows] == ["openfoam/run-2-a4"]
+    assert [r["finished_order"] for r in openfoam.runs(openfoam.read(data, sid))] == [1, 2]
     table = list(csv_rows(svc.export_csv({"study_id": sid}, scope)["text"]))
     assert table[0] == list(export.COLUMNS)
     of = [row for row in table[1:] if row[0] == "OpenFOAM 2D"]

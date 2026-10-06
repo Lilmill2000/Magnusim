@@ -44,7 +44,8 @@ process.exit(0);
 
 describe('spawnJob with onClose', () => {
   it('onExit first; onClose only after the relay ends; lines arrive whole, per stream', async () => {
-    const t0 = Date.now();
+    // Monotonic: a wall clock can step back (WSL resyncs its clock under load).
+    const t0 = performance.now();
     const seen = { exitAt: 0, closeAt: 0, events: [], exitCode: null, closes: 0 };
     let child;
     await new Promise((done) => {
@@ -53,14 +54,14 @@ describe('spawnJob with onClose', () => {
         jobId: 'close-1',
         python: process.execPath,
         script: STARTER,
-        onEvent: (ev) => seen.events.push({ ev, at: Date.now() - t0 }),
+        onEvent: (ev) => seen.events.push({ ev, at: performance.now() - t0 }),
         onExit: (code) => {
-          seen.exitAt = Date.now() - t0;
+          seen.exitAt = performance.now() - t0;
           seen.exitCode = code;
         },
         onClose: () => {
           seen.closes += 1;
-          seen.closeAt = Date.now() - t0;
+          seen.closeAt = performance.now() - t0;
           done();
         },
       }));

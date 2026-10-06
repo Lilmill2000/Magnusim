@@ -184,12 +184,19 @@ def solve_case_id_ok(wsl_case: Any, run_id: Any, token: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# The Windows reparse tags for a symlink and a junction. Only Windows Python has
+# them in ``stat``; the values are fixed by Windows, so the rule reads the same
+# (and is testable) on every OS.
+IO_REPARSE_TAG_SYMLINK: int = getattr(stat, "IO_REPARSE_TAG_SYMLINK", 0xA000000C)
+IO_REPARSE_TAG_MOUNT_POINT: int = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
+
+
 def is_link(st: os.stat_result, is_symlink: bool) -> bool:
     """A link or junction. On Windows by reparse tag (cloud files are allowed);
     elsewhere a symlink."""
     if sys.platform == "win32":
         tag = getattr(st, "st_reparse_tag", 0)
-        return tag in (stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT)
+        return tag in (IO_REPARSE_TAG_SYMLINK, IO_REPARSE_TAG_MOUNT_POINT)
     return is_symlink
 
 

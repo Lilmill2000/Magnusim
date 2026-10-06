@@ -2101,7 +2101,10 @@ select.fp-select {
 .sim-plot-tip {
   position: absolute;
   top: 6px;
-  max-width: 170px;
+  /* As wide as its lines (fonts differ by OS), never wider than the plot. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 4px 6px;
   border: 1px solid #d0d5dd;
   border-radius: 4px;

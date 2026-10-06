@@ -52,6 +52,18 @@ def segment_resolution(subdivisions: int) -> int:
     return max(0, int(subdivisions)) + 1
 
 
+def sample_segment(src: pv.DataSet, a: np.ndarray, b: np.ndarray, resolution: int) -> pv.DataSet:
+    """``src`` sampled at resolution+1 evenly spaced points from a to b.
+
+    What ``sample_over_line`` does, with the points kept in float64: its line
+    is float32, so an end picked on the mesh's boundary (x = 0.4 becomes
+    0.4000000060) lands just outside, and pyvista 0.49 drops that sample."""
+    t = np.linspace(0.0, 1.0, int(resolution) + 1)
+    a64, b64 = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    pts = a64 + (b64 - a64) * t[:, None]
+    return pv.PolyData(np.ascontiguousarray(pts)).sample(src)
+
+
 def valid_mask(sampled: pv.DataSet) -> np.ndarray:
     n = int(getattr(sampled, "n_points", 0) or 0)
     if n == 0:
@@ -165,7 +177,7 @@ def sample_over_path(
         b = np.asarray(pts[i + 1], dtype=float)
         seg_len = float(np.linalg.norm(b - a))
         try:
-            sampled = src.sample_over_line(a, b, resolution=resolution)
+            sampled = sample_segment(src, a, b, resolution)
         except Exception:
             continue
         if sampled is None or int(getattr(sampled, "n_points", 0) or 0) == 0:

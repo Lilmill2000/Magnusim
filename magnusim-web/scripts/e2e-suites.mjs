@@ -285,11 +285,12 @@ export function planSuites(changed, suites) {
 export function toWebRel(p, repoRoot, webRoot = WEB_ROOT) {
   const root = repoRoot || dirname(webRoot);
   const webDir = relative(root, webRoot).split(sep).join('/');
+  // Either slash separates, on every OS (git and Windows shells give both).
   const slashed = p.replace(/\\/g, '/');
   let abs;
   if (isAbsolute(p)) abs = p;
-  else if (slashed === webDir || slashed.startsWith(`${webDir}/`)) abs = resolve(root, p);
-  else abs = resolve(webRoot, p);
+  else if (slashed === webDir || slashed.startsWith(`${webDir}/`)) abs = resolve(root, slashed);
+  else abs = resolve(webRoot, slashed);
   const rel = relative(webRoot, abs);
   if (isAbsolute(rel)) return `../${abs.split(sep).join('/')}`;
   return rel.split(sep).join('/');

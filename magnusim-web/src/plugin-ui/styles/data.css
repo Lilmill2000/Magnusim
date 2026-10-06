@@ -13,7 +13,7 @@
 .mgk-plot-swatch { display: inline-block; width: 12px; height: 2px; margin-right: var(--mg-space-1); vertical-align: middle; }
 .mgk-plot-cursor { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--mg-text-subtle); pointer-events: none; }
 .mgk-plot-tip {
-  position: absolute; top: 6px; max-width: 170px; padding: 4px 6px; border: 1px solid var(--mg-border);
+  position: absolute; top: 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 4px 6px; border: 1px solid var(--mg-border);
   border-radius: var(--mg-radius-sm); background: var(--mg-plot-tip-bg); box-shadow: var(--mg-shadow-xs);
   font-size: var(--mg-text-2xs); line-height: var(--mg-line-tight); color: var(--mg-text-body);
   pointer-events: none; white-space: nowrap;

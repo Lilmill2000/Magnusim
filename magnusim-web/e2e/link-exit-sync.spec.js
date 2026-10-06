@@ -366,10 +366,11 @@ test.describe('exit sync fixes (the review of the exits, 2026-10-04)', () => {
     await edit(page, frame, 'v2');
     await frame.locator('#save').click();
     await expect.poll(() => heldWrites, { timeout: 30_000 }).toBe(1);
-    const t = Date.now();
+    // Monotonic: a wall clock can step back (WSL resyncs its clock under load).
+    const t = performance.now();
     await page.locator('#workspace-overlay [data-ws-back]').click();
     await expect(page.locator('#modal-confirm')).toBeVisible({ timeout: 60_000 });
-    expect(Date.now() - t).toBeGreaterThan(29_000);
+    expect(performance.now() - t).toBeGreaterThan(29_000);
     await expect(page.locator('#cf-heading')).toHaveText("Couldn't update the project");
     await expect(page.locator('#cf-copy')).toHaveText(
       'The save of Demo 1 did not finish in 30 seconds. Demo 1 keeps its last update. Its changes are not saved. Leaving discards them.',

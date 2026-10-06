@@ -142,7 +142,8 @@ export function mayRunWslTests(args, wslSpecs) {
     filters.push(a);
   }
   if (!filters.length) return wslSpecs.length > 0;
-  const slash = (p) => p.split(sep).join('/');
+  // Either slash separates, on every OS (a Windows path read on Linux too).
+  const slash = (p) => p.split(sep).join('/').replace(/\\/g, '/');
   for (const f of filters) {
     const pattern = f.replace(/:\d+(:\d+)?$/, '');
     // Playwright reads a filter as a regular expression on the file's path; people also
