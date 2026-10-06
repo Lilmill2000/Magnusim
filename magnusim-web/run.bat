@@ -46,9 +46,19 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /C:":%MAGNUSIM_PORT%" ^| find
 REM Never let chokidar fall back to a busy-poll of the tree.
 set CHOKIDAR_USEPOLLING=0
 
+REM Steady: the app keeps the code it started with; edits in this folder while it runs
+REM reach it at the next start. "run.bat --live" follows edits as they are saved instead.
+set MAGNUSIM_STEADY=1
+if /i "%~1"=="--live" set MAGNUSIM_STEADY=0
+
 echo.
 echo Magnusim web app:  http://127.0.0.1:%MAGNUSIM_PORT%
 echo Leave this window open, or double-click stop.bat to shut it down.
+if "%MAGNUSIM_STEADY%"=="1" (
+  echo Code changes reach the app when you start it again ^(run.bat --live follows them as they are saved^).
+) else (
+  echo Live: saved code changes reload the app as they happen.
+)
 echo.
 
 start "" powershell -NoProfile -WindowStyle Hidden -Command "for ($i=0; $i -lt 60; $i++) { try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 http://127.0.0.1:%MAGNUSIM_PORT%/).StatusCode -eq 200) { Start-Process 'http://127.0.0.1:%MAGNUSIM_PORT%/'; exit 0 } } catch {} Start-Sleep -Seconds 1 }; exit 1"

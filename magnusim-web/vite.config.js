@@ -20,6 +20,12 @@ process.env.CFDDESK_BOUND_PORT = String(PORT); // legacy alias
 // mesh generate, post-processing exports via python/.venv + python/tools).
 // Server modules under scripts/ are not hot-reloaded: restart the dev server after editing them.
 
+// Steady mode (run.bat sets MAGNUSIM_STEADY=1; `run.bat --live` does not): no file watcher
+// and no hot reload, and every app module is compiled once at start (warmup), so a page
+// reload serves that same code. Edits made in this checkout while the app runs (other
+// work in progress) reach it at its next start, never in the middle of a session.
+const STEADY = process.env.MAGNUSIM_STEADY === '1';
+
 export default defineConfig({
   plugins: [react(), createApiPlugin()],
   server: {
@@ -30,11 +36,16 @@ export default defineConfig({
     fs: {
       deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git/**', '**/projects/**', '**/.cache/**', '**/runs/**', '**/python/**', '**/.*-local.json'],
     },
-    watch: {
-      usePolling: false,
-      // Chokidar passes the file's stats second; only the path is meant here.
-      ignored: (filePath) => isViteWatchIgnored(filePath),
-    },
+    hmr: STEADY ? false : undefined,
+    watch: STEADY
+      ? null
+      : {
+          usePolling: false,
+          // Chokidar passes the file's stats second; only the path is meant here.
+          ignored: (filePath) => isViteWatchIgnored(filePath),
+        },
+    // The app's entry and its two lazy imports; each one's static imports come with it.
+    ...(STEADY ? { warmup: { clientFiles: ['./src/app/main.tsx', './src/workbench/runtime.js', './src/workspace/startActions.ts'] } } : {}),
   },
   preview: {
     host: '127.0.0.1',

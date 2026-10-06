@@ -32,8 +32,13 @@ npm run dev        # http://127.0.0.1:8082 by default; preferences/MAGNUSIM_PORT
 
 Double-click `stop.bat` to kill the dev server (and only that process tree). Close the browser tab too — the vtk.js viewport keeps burning CPU if you leave it open.
 
+`run.bat` starts the app **steady** (`MAGNUSIM_STEADY=1`): no file watcher and no hot reload,
+and the app code is compiled once at start, so edits saved in this folder while you work
+reach the app the next time you start it. `run.bat --live` (or `npm run dev`) follows edits
+as they are saved instead.
+
 Server modules under `scripts/` are **not** hot-reloaded — restart the dev server after
-editing them. `src/` and `index.html` hot-reload normally. Restart after Python changes too: the persistent worker keeps imported modules in memory.
+editing them. In live mode, `src/` and `index.html` hot-reload normally. Restart after Python changes too: the persistent worker keeps imported modules in memory.
 `npm run build` builds the frontend; `npm run preview` serves that build with the local API.
 
 ## Layout
