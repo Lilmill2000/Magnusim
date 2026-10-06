@@ -19,7 +19,12 @@ from .function_objects import (
     YPLUS_FIELD,
 )
 from .monitors import MONITOR_QUANTITIES
-from .physics import DEFAULT_TURBULENCE, KINEMATIC_FIELDS, TURBULENCE_MODELS
+from .physics import (
+    DEFAULT_TURBULENCE,
+    KINEMATIC_FIELDS,
+    TURBULENCE_CHOICE_LABELS,
+    TURBULENCE_MODELS,
+)
 from .pressure_coefficient import CP_RESULT_FIELD
 
 # Both analyses offer every BC type this plugin registers (bcs.BC_TYPES).
@@ -30,6 +35,7 @@ _FIELDS: tuple[str, ...] = ("U", "p", "k", "omega", "nut")
 # What results colour by, with the units the page shows them in (pressure in
 # Pa: the case stores p divided by rho, see KINEMATIC_FIELDS). R, the Reynolds
 # stress the LRR and SSG models write, is a tensor: listed, never coloured by.
+# nuTilda is the field Spalart-Allmaras solves for (nut follows from it).
 # The rows after R are written by function objects at the saved times
 # (function_objects.result_fields_functions_text): y+ only by turbulent runs,
 # the time averages only by transient runs (and only from their "Average
@@ -42,6 +48,7 @@ _RESULT_FIELDS: tuple[ResultField, ...] = (
     ResultField("omega", "Specific dissipation rate", "specific_dissipation_rate", "scalar", unit="1/s"),
     ResultField("epsilon", "Turbulent dissipation rate", "dissipation_rate", "scalar", unit="m²/s³"),
     ResultField("nut", "Turbulent viscosity", "kinematic_viscosity", "scalar", unit="m²/s"),
+    ResultField("nuTilda", "Modified turbulent viscosity", "kinematic_viscosity", "scalar", unit="m²/s"),
     ResultField("R", "Reynolds stress", "specific_energy", "symm_tensor", unit="m²/s²"),
     ResultField(YPLUS_FIELD, "y+", "dimensionless", "scalar"),
     ResultField(
@@ -74,13 +81,7 @@ _MATERIAL_MODELS: tuple[str, ...] = ("newtonian_incompressible",)
 
 
 # The study panel's names for physics.TURBULENCE_MODELS, in the same order.
-_TURBULENCE_LABELS: tuple[str, ...] = (
-    "Laminar",
-    "k-epsilon",
-    "k-omega SST",
-    "LRR (Reynolds stress)",
-    "SSG (Reynolds stress)",
-)
+_TURBULENCE_LABELS: tuple[str, ...] = tuple(TURBULENCE_CHOICE_LABELS[m] for m in TURBULENCE_MODELS)
 
 
 def _settings_schema() -> tuple[SchemaField, ...]:
@@ -98,10 +99,12 @@ def _settings_schema() -> tuple[SchemaField, ...]:
             group="flow",
             description=(
                 "Which turbulence closure the solver uses. k-omega SST is the general-purpose "
-                "default and handles walls at any y+. k-epsilon and the Reynolds-stress models "
-                "(LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models "
-                "suit strong swirl but may need a converged k-epsilon run first. Laminar solves "
-                "no turbulence at all."
+                "default and handles walls at any y+. Spalart-Allmaras solves one equation and suits "
+                "flow around wings and bodies in a freestream; it also handles walls at any y+. "
+                "k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use "
+                "high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than "
+                "k-epsilon with separation and swirl. Reynolds-stress models suit strong swirl but "
+                "may need a converged k-epsilon run first. Laminar solves no turbulence at all."
             ),
         ),
         *_reference_schema(),

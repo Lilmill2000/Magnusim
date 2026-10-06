@@ -61,7 +61,9 @@ test('gate:h3-simulation-island defaults come from the registry schema', async (
   await expect.poll(() => 'turbulence_model' in readIdJson(PROJECT_A, 'sim_1')).toBe(false);
   await expect(turbulence.locator('option')).toHaveText([
     'Laminar',
+    'Spalart-Allmaras (one equation)',
     'k-epsilon',
+    'Realizable k-epsilon',
     'k-omega SST',
     'LRR (Reynolds stress)',
     'SSG (Reynolds stress)',

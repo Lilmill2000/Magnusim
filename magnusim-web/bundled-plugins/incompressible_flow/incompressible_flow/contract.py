@@ -18,6 +18,8 @@ from typing import Any
 
 from cfddesk.registry.contract import AnalysisFamily, LogParserRef, ReadyContext, RunModel
 
+from .physics import TURBULENCE_SHORT_LABELS
+
 FAMILY = AnalysisFamily(
     key="incompressible",
     label="Incompressible",
@@ -40,6 +42,8 @@ RESIDUAL_SERIES: tuple[dict, ...] = (
     {"key": "omega", "label": "ω", "color": "#f79009", "swatch": "w"},
     {"key": "epsilon", "label": "ε", "color": "#0ba5ec", "swatch": "epsilon"},
     {"key": "R", "label": "R", "color": "#dd2590", "fields": ["Rxx", "Rxy", "Rxz", "Ryy", "Ryz", "Rzz"], "swatch": "r"},
+    # Spalart-Allmaras's one equation (its legend swatch takes the colour).
+    {"key": "nuTilda", "label": "ν̃", "color": "#0e9384"},
 )
 # Transient runs also plot the mean Courant number per time step (dashed).
 COURANT_SERIES = {
@@ -85,13 +89,8 @@ LIVE_METRICS: tuple[dict, ...] = (
 def live_metrics(td: str) -> tuple[dict, ...]:
     return LIVE_METRICS if td == "transient" else ()
 
-TURBULENCE_LABELS = {
-    "laminar": "Laminar",
-    "kEpsilon": "k-epsilon",
-    "kOmegaSST": "k-omega SST",
-    "LRR": "LRR",
-    "SSG": "SSG",
-}
+# The run note's name of each model (physics.TURBULENCE_SHORT_LABELS).
+TURBULENCE_LABELS = TURBULENCE_SHORT_LABELS
 
 
 def algorithm_label(time_dependency: str) -> str:
@@ -220,9 +219,10 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
                     "patches": list(ctx.patches),
                 }
             ]
-    if physics_from_record(ctx.study if isinstance(ctx.study, dict) else None).turbulence_model != "laminar":
+    model = physics_from_record(ctx.study if isinstance(ctx.study, dict) else None).turbulence_model
+    if model != "laminar":
         for bc in records:
-            problem = settings_problem(bc) if bc_faces(bc) and carries_inlet_turbulence(bc) else None
+            problem = settings_problem(bc, model) if bc_faces(bc) and carries_inlet_turbulence(bc) else None
             if problem:
                 return [
                     {

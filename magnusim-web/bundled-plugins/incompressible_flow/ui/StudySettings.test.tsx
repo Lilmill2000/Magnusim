@@ -17,11 +17,19 @@ const settingsSchema = {
     turbulence_model: {
       type: 'string',
       title: 'Turbulence model',
-      enum: ['laminar', 'kEpsilon', 'kOmegaSST', 'LRR', 'SSG'],
+      enum: ['laminar', 'SpalartAllmaras', 'kEpsilon', 'realizableKE', 'kOmegaSST', 'LRR', 'SSG'],
       default: 'kOmegaSST',
       description: 'Which turbulence closure the solver uses.',
       'x-cfddesk': {
-        enum_labels: ['Laminar', 'k-epsilon', 'k-omega SST', 'LRR (Reynolds stress)', 'SSG (Reynolds stress)'],
+        enum_labels: [
+          'Laminar',
+          'Spalart-Allmaras (one equation)',
+          'k-epsilon',
+          'Realizable k-epsilon',
+          'k-omega SST',
+          'LRR (Reynolds stress)',
+          'SSG (Reynolds stress)',
+        ],
       },
     },
   },
@@ -94,6 +102,10 @@ describe('turbulenceKey', () => {
     expect(turbulenceKey({ turbulence_model: 'k-omega SST' })).toBe('kOmegaSST');
     expect(turbulenceKey({ turbulence_model: 'kEpsilon', turbulence_model_key: 'kOmegaSST' })).toBe('kEpsilon');
     expect(turbulenceKey({ defaults: { turbulence_model: 'Laminar' } })).toBe('laminar');
+    expect(turbulenceKey({ turbulence_model: 'SpalartAllmaras' })).toBe('SpalartAllmaras');
+    expect(turbulenceKey({ turbulence_model: 'Spalart-Allmaras' })).toBe('SpalartAllmaras');
+    expect(turbulenceKey({ turbulence_model: 'realizableKE' })).toBe('realizableKE');
+    expect(turbulenceKey({ turbulence_model: 'Realizable k-epsilon' })).toBe('realizableKE');
     expect(turbulenceKey({})).toBeUndefined();
   });
 });
@@ -117,7 +129,9 @@ describe('SimulationDefaults (study panel)', () => {
     const turb = screen.getByLabelText('Turbulence model', { selector: 'select' }) as HTMLSelectElement;
     expect([...turb.options].map((o) => o.text)).toEqual([
       'Laminar',
+      'Spalart-Allmaras (one equation)',
       'k-epsilon',
+      'Realizable k-epsilon',
       'k-omega SST',
       'LRR (Reynolds stress)',
       'SSG (Reynolds stress)',
@@ -139,6 +153,22 @@ describe('SimulationDefaults (study panel)', () => {
     await waitFor(() =>
       expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ turbulence_model: 'kEpsilon', turbulence_model_key: 'kEpsilon' }),
     );
+  });
+
+  it.each([
+    ['Spalart-Allmaras (one equation)', 'SpalartAllmaras'],
+    ['Realizable k-epsilon', 'realizableKE'],
+  ])('saves %s as its OpenFOAM model and shows it picked', async (label, key) => {
+    renderPanel();
+    const turb = screen.getByLabelText('Turbulence model', { selector: 'select' }) as HTMLSelectElement;
+    const option = [...turb.options].find((o) => o.text === label)!;
+    fireEvent.change(turb, { target: { value: option.value } });
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ turbulence_model: key, turbulence_model_key: key }));
+    cleanup();
+    window.__CFD_STUDY_STATE__ = study({}, { turbulence_model: key, turbulence_model_key: key });
+    renderPanel();
+    const again = screen.getByLabelText('Turbulence model', { selector: 'select' }) as HTMLSelectElement;
+    expect(again.options[again.selectedIndex].text).toBe(label);
   });
 
   it('switches time dependency through the runtime, and a transient study hides SIMPLE numerics', async () => {

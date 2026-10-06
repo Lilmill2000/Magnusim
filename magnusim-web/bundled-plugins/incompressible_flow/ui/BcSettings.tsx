@@ -382,6 +382,31 @@ export function studyIsLaminar(study: Record<string, unknown> | null | undefined
   return !!study && turbulenceKey(study) === 'laminar';
 }
 
+/**
+ * A Spalart-Allmaras study solves for one field, the modified turbulent viscosity
+ * (nuTilda), not k and omega: its viscosity-ratio setting has no intensity, and its
+ * Auto is nuTilda = 3 x the fluid's viscosity (inlet_turbulence.py).
+ */
+export function studyIsSpalartAllmaras(study: Record<string, unknown> | null | undefined): boolean {
+  return !!study && turbulenceKey(study) === 'SpalartAllmaras';
+}
+
+/** The "Turbulence at the inlet" choices: Spalart-Allmaras names the ratio setting without its intensity. */
+export function turbulenceOptions(sa: boolean): Array<{ value: TurbulenceSpec; label: string }> {
+  return TURBULENCE_SPECS.map((s) => ({ value: s, label: sa && s === 'Intensity and viscosity ratio' ? 'Viscosity ratio' : s }));
+}
+
+/** What a Spalart-Allmaras "Turbulence at the inlet" choice sets. */
+export function saTurbulenceHint(spec: TurbulenceSpec, speedWord: string): string {
+  if (spec === 'Intensity and length scale') {
+    return `ν̃ (modified turbulent viscosity) from a turbulent viscosity set by the intensity of ${speedWord} and the length scale (about 7 % of the opening's size is typical).`;
+  }
+  if (spec === 'Intensity and viscosity ratio') {
+    return "ν̃ (modified turbulent viscosity) from a turbulent viscosity this many times the fluid's (1 to 10 is calm, 100 or more very turbulent).";
+  }
+  return "Auto: ν̃ (modified turbulent viscosity) = 3 × the fluid's viscosity, a calm inflow (3 to 5 × is usual for external flow).";
+}
+
 /** What a "Turbulence at the inlet" choice sets, in the user's words (a freestream's Auto is its own rule). */
 export function turbulenceHint(spec: TurbulenceSpec, speedWord: string, freestream = false): string {
   if (spec === 'Intensity and length scale') {
@@ -434,6 +459,7 @@ function SiNumber({
 function TurbulenceFields({ bc, family, imperial, save, study }: BcSettingsProps) {
   const { SciNumberInput } = host().pluginUi;
   if (studyIsLaminar(study)) return null;
+  const sa = studyIsSpalartAllmaras(study);
   const spec = turbulenceSpec(bc.turbulence_spec);
   const speedWord =
     family.key === 'velocity_inlet'
@@ -444,14 +470,14 @@ function TurbulenceFields({ bc, family, imperial, save, study }: BcSettingsProps
   return (
     <div data-bc-turbulence="1">
       <Row label="Turbulence at the inlet">
-        <Choice
+        <Select
           label="Turbulence at the inlet"
           value={spec}
-          options={[...TURBULENCE_SPECS]}
+          options={turbulenceOptions(sa)}
           onChange={(v) => void save({ turbulence_spec: v })}
         />
       </Row>
-      {spec !== 'Auto' ? (
+      {spec === 'Intensity and length scale' || (spec === 'Intensity and viscosity ratio' && !sa) ? (
         <Row label="Intensity">
           <span className="bc-value-row">
             <SciNumberInput
@@ -483,7 +509,9 @@ function TurbulenceFields({ bc, family, imperial, save, study }: BcSettingsProps
           />
         </Row>
       ) : null}
-      <div className="mat-assign-hint">{turbulenceHint(spec, speedWord, family.key === 'freestream')}</div>
+      <div className="mat-assign-hint">
+        {sa ? saTurbulenceHint(spec, speedWord) : turbulenceHint(spec, speedWord, family.key === 'freestream')}
+      </div>
     </div>
   );
 }

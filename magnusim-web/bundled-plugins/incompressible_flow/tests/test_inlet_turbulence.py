@@ -151,3 +151,97 @@ def test_a_laminar_case_writes_no_turbulence(tmp_path: Path):
     assert not (out / "0" / "k").exists()
     side = json.loads((out / "w27-case.json").read_text(encoding="utf-8"))
     assert side["turbulence"]["patches"] == {}
+
+
+# --------------------------------------------------------------------------- Spalart-Allmaras
+
+FAR = {"name": "Far", "bc_type": "Freestream", "faces": ["face 3@B"], "value": 30, "unit": "m/s", "vector": [1, 0, 0]}
+MIRROR = {"name": "Mirror", "bc_type": "Symmetry", "faces": ["face 4@B"]}
+
+
+@pytest.mark.parametrize("ratio", [0.05, 0.21, 1.0, 10.0, 1000.0])
+def test_nu_tilda_gives_back_the_turbulent_viscosity(ratio: float):
+    nu_tilda = it.nu_tilda_from_nut(ratio * NU, NU)
+    chi = nu_tilda / NU
+    # nut = nuTilda fv1, fv1 = chi^3 / (chi^3 + cv1^3)
+    assert nu_tilda * chi**3 / (chi**3 + 7.1**3) == pytest.approx(ratio * NU, rel=1e-9)
+    assert it.nu_tilda_from_nut(0.0, NU) == 0.0
+
+
+def test_spalart_allmaras_auto_is_three_times_nu():
+    assert it.sa_auto_nu_tilda(NU) == pytest.approx(3 * NU)
+
+
+def test_spalart_allmaras_viscosity_ratio_needs_no_intensity():
+    bc = {"turbulence_spec": it.RATIO, "turbulence_intensity": 0, "turbulence_viscosity_ratio": 5}
+    assert it.settings_problem(bc, "SpalartAllmaras") is None
+    assert it.settings_problem(bc, "kOmegaSST") == "the turbulence intensity must be above 0 % and at most 100 %"
+    assert it.settings_problem({**bc, "turbulence_viscosity_ratio": 0}, "SpalartAllmaras") == (
+        "the turbulent viscosity ratio must be above 0"
+    )
+    # The length-scale setting still uses its intensity.
+    assert it.settings_problem({"turbulence_spec": it.LENGTH, "turbulence_intensity": 0}, "SpalartAllmaras") is not None
+
+
+def _field(out: Path, name: str) -> str:
+    return " ".join((out / "0" / name).read_text(encoding="utf-8").split())
+
+
+def test_spalart_allmaras_case_on_auto(tmp_path: Path):
+    spec = _spec(("inlet", INLET), ("pressure", PRESSURE), ("far", FAR), ("mirror", MIRROR), model="SpalartAllmaras")
+    out = _write(tmp_path, spec)
+    auto = turb_value_strings(0, 1, 3 * NU)["nuTilda"]
+    assert float(auto) == pytest.approx(4.5e-5)
+    nu_tilda = _field(out, "nuTilda")
+    assert "class volScalarField;" in nu_tilda and "dimensions [0 2 -1 0 0 0 0];" in nu_tilda
+    assert f"internalField uniform {auto};" in nu_tilda
+    assert f"inlet {{ type fixedValue; value uniform {auto}; }}" in nu_tilda
+    assert f"pressure {{ type inletOutlet; inletValue uniform {auto}; value uniform {auto}; }}" in nu_tilda
+    # The freestream's Auto is the same rule (no 10 x nu ratio of its own).
+    assert f"far {{ type freestream; freestreamValue uniform {auto}; }}" in nu_tilda
+    assert "mirror { type symmetry; }" in nu_tilda
+    assert "walls { type fixedValue; value uniform 0; }" in nu_tilda
+    nut = _field(out, "nut")
+    assert "walls { type nutUSpaldingWallFunction; value uniform 0; }" in nut
+    assert "far { type calculated; value uniform 0; }" in nut
+    for name in ("k", "omega", "epsilon", "R"):
+        assert not (out / "0" / name).exists(), name
+    side = json.loads((out / "w27-case.json").read_text(encoding="utf-8"))
+    assert side["turbulence"]["model"] == "SpalartAllmaras"
+    assert side["turbulence"]["nu_tilda"] == pytest.approx(3 * NU)
+    assert side["turbulence"]["patches"] == {}
+    props = " ".join((out / "constant" / "turbulenceProperties").read_text(encoding="utf-8").split())
+    assert "RASModel SpalartAllmaras;" in props
+    schemes = (out / "system" / "fvSchemes").read_text(encoding="utf-8")
+    assert "div(phi,nuTilda) bounded Gauss upwind;" in schemes
+    solution = " ".join((out / "system" / "fvSolution").read_text(encoding="utf-8").split())
+    assert '"(U|nuTilda)" {' in solution
+    assert 'residualControl { p 1e-4; U 1e-4; "(nuTilda)" 1e-4; }' in solution
+    assert "nuTilda 0.7;" in solution
+
+
+def test_spalart_allmaras_inlet_from_a_viscosity_ratio(tmp_path: Path):
+    inlet = {**INLET, "turbulence_spec": it.RATIO, "turbulence_viscosity_ratio": 10}
+    far = {**FAR, "turbulence_spec": it.RATIO, "turbulence_viscosity_ratio": 2}
+    spec = _spec(("inlet", inlet), ("pressure", PRESSURE), ("far", far), model="SpalartAllmaras")
+    own = patch_turbulence(spec, speed_ref=10.0)
+    assert set(own) == {"inlet", "far"}
+    assert own["inlet"]["nu_tilda"] == pytest.approx(it.nu_tilda_from_nut(10 * NU, NU))
+    assert own["far"]["nu_tilda"] == pytest.approx(it.nu_tilda_from_nut(2 * NU, NU))
+    out = _write(tmp_path, spec)
+    want = turb_value_strings(0, 1, own["inlet"]["nu_tilda"])["nuTilda"]
+    assert f"inlet {{ type fixedValue; value uniform {want}; }}" in _field(out, "nuTilda")
+    side = json.loads((out / "w27-case.json").read_text(encoding="utf-8"))
+    assert side["turbulence"]["patches"]["inlet"]["nu_tilda"] == pytest.approx(own["inlet"]["nu_tilda"])
+
+
+def test_realizable_k_epsilon_writes_k_epsilon_fields_and_wall_functions(tmp_path: Path):
+    out = _write(tmp_path, _spec(("inlet", INLET), ("pressure", PRESSURE), ("mirror", MIRROR), model="realizableKE"))
+    assert "walls { type epsilonWallFunction;" in _field(out, "epsilon")
+    assert "walls { type kqRWallFunction;" in _field(out, "k")
+    assert "walls { type nutkWallFunction; value uniform 0; }" in _field(out, "nut")
+    assert not (out / "0" / "omega").exists() and not (out / "0" / "nuTilda").exists()
+    props = " ".join((out / "constant" / "turbulenceProperties").read_text(encoding="utf-8").split())
+    assert "RASModel realizableKE;" in props
+    side = json.loads((out / "w27-case.json").read_text(encoding="utf-8"))
+    assert "nu_tilda" not in side["turbulence"]

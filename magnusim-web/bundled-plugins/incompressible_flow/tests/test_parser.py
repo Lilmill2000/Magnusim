@@ -35,3 +35,10 @@ def test_progress_parser_snapshot():
     assert snap["n_steps"] >= 2
     # Velocity components, pressure and the turbulence fields of the log.
     assert fields == {"Ux", "Uy", "Uz", "p", "omega", "k"}
+
+
+def test_spalart_allmaras_residual_is_read():
+    parser = IncompressibleParser()
+    line = "smoothSolver:  Solving for nuTilda, Initial residual = 0.0123, Final residual = 1e-5, No Iterations 2"
+    events = [e for e in parser.feed("Time = 1") + parser.feed(line) if e.event == "residual"]
+    assert [(e.fields["field"], e.fields["initial"]) for e in events] == [("nuTilda", 0.0123)]

@@ -17,6 +17,9 @@ const TURBULENCE_ALIASES: Record<string, string> = {
   sst: 'kOmegaSST',
   lrr: 'LRR',
   ssg: 'SSG',
+  spalartallmaras: 'SpalartAllmaras',
+  realizableke: 'realizableKE',
+  realizablekepsilon: 'realizableKE',
 };
 
 /** Model key from a study record. Created studies store "k-omega SST" as display text. */

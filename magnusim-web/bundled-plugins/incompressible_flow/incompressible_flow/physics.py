@@ -14,10 +14,41 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-TurbulenceModel = Literal["laminar", "kEpsilon", "kOmegaSST", "LRR", "SSG"]
-TURBULENCE_MODELS: tuple[str, ...] = ("laminar", "kEpsilon", "kOmegaSST", "LRR", "SSG")
+TurbulenceModel = Literal["laminar", "SpalartAllmaras", "kEpsilon", "realizableKE", "kOmegaSST", "LRR", "SSG"]
+# The study panel's order: by the number of equations solved.
+TURBULENCE_MODELS: tuple[str, ...] = (
+    "laminar",
+    "SpalartAllmaras",
+    "kEpsilon",
+    "realizableKE",
+    "kOmegaSST",
+    "LRR",
+    "SSG",
+)
 RSM_MODELS: frozenset[str] = frozenset({"LRR", "SSG"})
+SA_MODEL = "SpalartAllmaras"
 DEFAULT_TURBULENCE = "kOmegaSST"
+
+# The one table of each model's names: the study panel's choice label, and the
+# short name the run note shows ("simpleFoam serial — Incompressible / k-epsilon / SIMPLE").
+TURBULENCE_CHOICE_LABELS: dict[str, str] = {
+    "laminar": "Laminar",
+    "SpalartAllmaras": "Spalart-Allmaras (one equation)",
+    "kEpsilon": "k-epsilon",
+    "realizableKE": "Realizable k-epsilon",
+    "kOmegaSST": "k-omega SST",
+    "LRR": "LRR (Reynolds stress)",
+    "SSG": "SSG (Reynolds stress)",
+}
+TURBULENCE_SHORT_LABELS: dict[str, str] = {
+    "laminar": "Laminar",
+    "SpalartAllmaras": "Spalart-Allmaras",
+    "kEpsilon": "k-epsilon",
+    "realizableKE": "Realizable k-epsilon",
+    "kOmegaSST": "k-omega SST",
+    "LRR": "LRR",
+    "SSG": "SSG",
+}
 
 # Fields the case stores divided by density (incompressible solvers solve for
 # p/rho): results show them times rho. The writer's sidecar and both analyses
@@ -34,6 +65,9 @@ _ALIASES: dict[str, str] = {
     "sst": "kOmegaSST",
     "lrr": "LRR",
     "ssg": "SSG",
+    "spalartallmaras": "SpalartAllmaras",
+    "realizableke": "realizableKE",
+    "realizablekepsilon": "realizableKE",
 }
 
 
@@ -47,6 +81,8 @@ def turbulence_fields(model: str) -> tuple[str, ...]:
     """0/ turbulence fields a model reads (U and p are always written)."""
     if model == "laminar":
         return ()
+    if model == SA_MODEL:
+        return ("nuTilda", "nut")
     if model == "kOmegaSST":
         return ("k", "omega", "nut")
     if model in RSM_MODELS:
@@ -56,11 +92,13 @@ def turbulence_fields(model: str) -> tuple[str, ...]:
 
 def solved_turbulence_fields(model: str) -> tuple[str, ...]:
     """Transport equations the model solves (for solvers, residuals and relaxation)."""
+    if model == SA_MODEL:
+        return ("nuTilda",)
     if model == "kOmegaSST":
         return ("k", "omega")
     if model in RSM_MODELS:
         return ("R", "epsilon")
-    if model == "kEpsilon":
+    if model in ("kEpsilon", "realizableKE"):
         return ("k", "epsilon")
     return ()
 

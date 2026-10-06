@@ -386,7 +386,9 @@ test.describe('Incompressible Flow smoke', () => {
       await expect(panel.locator('[data-study-analysis]')).toHaveText(/Incompressible/);
       await expect(panel.getByLabel('Turbulence model', { exact: true }).locator('option')).toHaveText([
         'Laminar',
+        'Spalart-Allmaras (one equation)',
         'k-epsilon',
+        'Realizable k-epsilon',
         'k-omega SST',
         'LRR (Reynolds stress)',
         'SSG (Reynolds stress)',

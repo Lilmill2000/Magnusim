@@ -20,6 +20,17 @@ const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 const STUDY_ADDED = '[data-study-reference]';
 // Rows the transient run panel gained after v0.2.0 (Average from, F2), left out of the comparison.
 const RUN_ADDED = '[data-run-field="average_from"]';
+// The turbulence models the study panel gained after v0.2.0 (F8): their options (the 2nd
+// and 4th of the list) are left out of the comparison, the other options are still
+// compared. The model's help text gained sentences about them: it is compared up to the
+// end of its v0.2.0 opening (baseline and page alike).
+const TURBULENCE_ADDED = [
+  '[data-schema-key="turbulence_model"] option:nth-child(2)',
+  '[data-schema-key="turbulence_model"] option:nth-child(4)',
+].join(', ');
+const TURBULENCE_HELP =
+  /(role="tooltip"> Which turbulence closure the solver uses\. k-omega SST is the general-purpose default and handles walls at any y\+\.) .*$/;
+const sameHelp = (line) => line.replace(TURBULENCE_HELP, '$1 …');
 
 function stage(t0, msg) {
   console.log(`[h10 +${Math.round((Date.now() - t0) / 1000)}s] ${msg}`);
@@ -231,7 +242,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
 
   // Steady-state: the study panel, a draft run, and the finished run with its residuals.
   await openStudy();
-  await capture(page, 'study-steady', studyPanel, { skip: STUDY_ADDED });
+  await capture(page, 'study-steady', studyPanel, { skip: `${STUDY_ADDED}, ${TURBULENCE_ADDED}` });
   const steady = await createRun('Parity steady');
   await openRun(steady);
   await capture(page, 'run-draft-steady', runPanel);
@@ -250,7 +261,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await openStudy();
   await studyPanel.getByLabel('Time dependency').selectOption('Transient');
   await expect.poll(async () => (await getJson(request, simUrl)).simulation?.analysis_type).toBe('incompressible_transient');
-  await capture(page, 'study-transient', studyPanel, { skip: STUDY_ADDED });
+  await capture(page, 'study-transient', studyPanel, { skip: `${STUDY_ADDED}, ${TURBULENCE_ADDED}` });
   const transient = await createRun('Parity transient');
   await openRun(transient);
   await expect(runControl.locator('[data-run-transient-hint]')).toContainText('(auto)', { timeout: 60_000 });
@@ -371,6 +382,8 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   const want = JSON.parse(readFileSync(BASELINE, 'utf8'));
   expect(Object.keys(captured).sort()).toEqual(Object.keys(want).sort());
   for (const name of Object.keys(want)) {
-    expect(captured[name].join('\n'), `${name} differs from the v0.2.0 baseline`).toBe(want[name].join('\n'));
+    expect(captured[name].map(sameHelp).join('\n'), `${name} differs from the v0.2.0 baseline`).toBe(
+      want[name].map(sameHelp).join('\n'),
+    );
   }
 });

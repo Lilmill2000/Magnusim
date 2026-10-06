@@ -36,7 +36,7 @@ def test_describe_carries_the_contract():
     assert steady["family"] == transient["family"]
     assert (steady["algorithm_label"], transient["algorithm_label"]) == ("SIMPLE", "PIMPLE")
     assert (steady["x_axis"], transient["x_axis"]) == ("iterations", "seconds")
-    assert steady["residual_keys"] == ["U", "p", "k", "omega", "epsilon", "R"]
+    assert steady["residual_keys"] == ["U", "p", "k", "omega", "epsilon", "R", "nuTilda"]
     assert {f["key"] for f in steady["result_fields"]} >= {"p", "U"}
 
 

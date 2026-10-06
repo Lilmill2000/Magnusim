@@ -32,10 +32,12 @@ from .bc_kinds import (
     wall_rotation,
     wall_velocity,
 )
+from .inlet_turbulence import sa_auto_nu_tilda
 from .materials import LEGACY_AIR
 from .physics import (
     DEFAULT_PHYSICS,
     KINEMATIC_FIELDS,
+    SA_MODEL,
     StudyPhysics,
     TurbulenceModel,
     turbulence_fields,
@@ -672,17 +674,21 @@ def _patch_names(spec: RunSpec, poly_dst: Path | None) -> list[str]:
     return out
 
 
-def turb_value_strings(k: float, omega: float) -> dict[str, str]:
-    """The value strings of k, omega, epsilon (Cmu k omega) and R (isotropic, 2/3 k I)."""
+def turb_value_strings(k: float, omega: float, nu_tilda: float | None = None) -> dict[str, str]:
+    """The value strings of k, omega, epsilon (Cmu k omega) and R (isotropic, 2/3 k I),
+    and Spalart-Allmaras's nuTilda when given."""
     from .function_objects import js_to_precision as _prec
 
     r_diag = _prec(2.0 * k / 3.0, 6)
-    return {
+    out = {
         "k": _prec(k, 6),
         "omega": _prec(omega, 6),
         "epsilon": _prec(0.09 * k * omega, 6),
         "R": f"({r_diag} 0 0 {r_diag} 0 {r_diag})",
     }
+    if nu_tilda is not None:
+        out["nuTilda"] = _prec(nu_tilda, 6)
+    return out
 
 
 def carries_inlet_turbulence(bc: dict) -> bool:
@@ -700,16 +706,22 @@ def patch_turbulence(spec: RunSpec, speed_ref: float) -> dict[str, dict[str, Any
     has its own: on Auto, 5 % intensity of its speed and a turbulent viscosity
     10 x the fluid's (the length-scale rule would size eddies by the far
     field's size).
+
+    Under Spalart-Allmaras each one also carries ``nu_tilda``, from its
+    turbulent viscosity (k / omega); a freestream on Auto then has none of its
+    own (the case-wide Auto rule, nuTilda = 3 x nu, holds there too).
     """
     from .inlet_turbulence import (
         DEFAULT_INTENSITY_PCT,
         DEFAULT_RATIO,
         RATIO,
+        nu_tilda_from_nut,
         patch_scales,
         turbulence_spec,
     )
 
     _ensure_web_imports()
+    sa = getattr(getattr(spec, "physics", None), "turbulence_model", "") == SA_MODEL
     rho = float(spec.rho) or LEGACY_AIR["rho"]
     props = spec.face_props or {}
     out: dict[str, dict[str, Any]] = {}
@@ -726,7 +738,7 @@ def patch_turbulence(spec: RunSpec, speed_ref: float) -> dict[str, dict[str, Any
             speed = inlet_ref_speed(bc, faces_area(faces, props) / max(1, len(faces)), rho)
         elif is_freestream(bc):
             speed = freestream_speed(bc)
-            if turbulence_spec(bc) == "Auto":
+            if turbulence_spec(bc) == "Auto" and not sa:
                 bc = {
                     "turbulence_spec": RATIO,
                     "turbulence_intensity": DEFAULT_INTENSITY_PCT,
@@ -734,6 +746,8 @@ def patch_turbulence(spec: RunSpec, speed_ref: float) -> dict[str, dict[str, Any
                 }
         scales = patch_scales(bc, speed=speed, nu=float(spec.nu))
         if scales is not None:
+            if sa:
+                scales["nu_tilda"] = nu_tilda_from_nut(scales["k"] / scales["omega"], float(spec.nu))
             out[patch] = scales
     return out
 
@@ -790,10 +804,14 @@ def _build_field_patches(
         "R": "kqRWallFunction",
         "omega": "omegaWallFunction",
         "epsilon": "epsilonWallFunction",
-        "nut": "nutkWallFunction",
+        # Spalart-Allmaras: Spalding's law covers the wall layer at any y+.
+        "nut": "nutUSpaldingWallFunction" if model == SA_MODEL else "nutkWallFunction",
     }
 
     def no_slip(name: str, _values: dict[str, str]) -> dict[str, str]:
+        if name == "nuTilda":
+            # nuTilda is 0 at a wall (the model is integrated down to it).
+            return {"type": "fixedValue", "value": "uniform 0"}
         value = "0" if name == "nut" else turb_values[name]
         return {"type": wall_fn[name], "value": f"uniform {value}"}
 
@@ -1219,10 +1237,14 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
     turb = k_omega_from_scales(speed_ref, d_hyd)
     # epsilon = Cmu * k * omega; isotropic Reynolds stress R = (2/3) k I.
     epsilon = 0.09 * turb["k"] * turb["omega"]
-    turb_values = turb_value_strings(turb["k"], turb["omega"])
+    # Spalart-Allmaras's Auto: nuTilda = 3 x nu at the inlets and inside.
+    nu_tilda = sa_auto_nu_tilda(float(spec.nu)) if model == SA_MODEL else None
+    turb_values = turb_value_strings(turb["k"], turb["omega"], nu_tilda)
     # Boundaries whose "Turbulence at the inlet" sets their own values.
     own_turb = patch_turbulence(spec, speed_ref) if model != "laminar" else {}
-    patch_turb = {patch: turb_value_strings(sc["k"], sc["omega"]) for patch, sc in own_turb.items()}
+    patch_turb = {
+        patch: turb_value_strings(sc["k"], sc["omega"], sc.get("nu_tilda")) for patch, sc in own_turb.items()
+    }
 
     U, p, turb_patches = _build_field_patches(spec, patch_names, turb_values=turb_values, patch_turb=patch_turb)
     write_vol_field(
@@ -1242,7 +1264,7 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
         patches=p,
     )
     # Drop turbulence fields left by a previous model in this run folder.
-    for stale in ("k", "omega", "epsilon", "R", "nut"):
+    for stale in ("k", "omega", "epsilon", "R", "nut", "nuTilda"):
         (out / "0" / stale).unlink(missing_ok=True)
     field_meta = {
         "k": ("volScalarField", "[0 2 -2 0 0 0 0]"),
@@ -1250,6 +1272,7 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
         "epsilon": ("volScalarField", "[0 2 -3 0 0 0 0]"),
         "R": ("volSymmTensorField", "[0 2 -2 0 0 0 0]"),
         "nut": ("volScalarField", "[0 2 -1 0 0 0 0]"),
+        "nuTilda": ("volScalarField", "[0 2 -1 0 0 0 0]"),
     }
     for name, patches in turb_patches.items():
         cls, dims = field_meta[name]
@@ -1432,6 +1455,9 @@ RAS
         "mesh_id": spec.mesh_id,
         "run_id": spec.run_id,
     }
+    if nu_tilda is not None:
+        # Spalart-Allmaras: the Auto nuTilda (inlets on Auto and the starting field).
+        sidecar["turbulence"]["nu_tilda"] = nu_tilda
     if is_transient and spec.transient is not None:
         t = spec.transient
         sidecar["transient"] = {

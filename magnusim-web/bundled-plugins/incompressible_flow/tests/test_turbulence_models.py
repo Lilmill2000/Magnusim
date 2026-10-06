@@ -27,19 +27,25 @@ FIX = JS_PROJECT
 # 0/ turbulence fields each model must have, and the ones it must not.
 EXPECTED_FIELDS = {
     "laminar": set(),
+    "SpalartAllmaras": {"nuTilda", "nut"},
     "kEpsilon": {"k", "epsilon", "nut"},
+    "realizableKE": {"k", "epsilon", "nut"},
     "kOmegaSST": {"k", "omega", "nut"},
     "LRR": {"k", "epsilon", "R", "nut"},
     "SSG": {"k", "epsilon", "R", "nut"},
 }
 SOLVED = {
     "laminar": (),
+    "SpalartAllmaras": ("nuTilda",),
     "kEpsilon": ("k", "epsilon"),
+    "realizableKE": ("k", "epsilon"),
     "kOmegaSST": ("k", "omega"),
     "LRR": ("R", "epsilon"),
     "SSG": ("R", "epsilon"),
 }
-ALL_TURB = {"k", "omega", "epsilon", "R", "nut"}
+ALL_TURB = {"k", "omega", "epsilon", "R", "nut", "nuTilda"}
+# nut at a no-slip wall: Spalding's law (any y+) for Spalart-Allmaras, else the high-Re wall function.
+NUT_WALL = {"SpalartAllmaras": "nutUSpaldingWallFunction"}
 
 
 def _project(tmp_path: Path, record: dict) -> Path:
@@ -90,17 +96,46 @@ def test_reynolds_stress_starts_isotropic_with_wall_functions(tmp_path, model):
     assert walls and "kqRWallFunction" in walls.group(0)
 
 
-def test_panel_lists_exactly_the_five_models():
+def test_panel_lists_exactly_the_seven_models():
     from incompressible_flow.analyses import build_incompressible_steady
 
     field = next(f for f in build_incompressible_steady().settings_schema if f.key == "turbulence_model")
     assert tuple(field.choices) == TURBULENCE_MODELS
-    assert field.description
+    assert tuple(field.choice_labels) == (
+        "Laminar",
+        "Spalart-Allmaras (one equation)",
+        "k-epsilon",
+        "Realizable k-epsilon",
+        "k-omega SST",
+        "LRR (Reynolds stress)",
+        "SSG (Reynolds stress)",
+    )
+    assert "Spalart-Allmaras" in field.description and "realizable k-epsilon" in field.description
+
+
+def test_run_note_names_every_model():
+    from incompressible_flow.contract import TURBULENCE_LABELS
+
+    assert set(TURBULENCE_LABELS) == set(TURBULENCE_MODELS)
+    assert TURBULENCE_LABELS["SpalartAllmaras"] == "Spalart-Allmaras"
+    assert TURBULENCE_LABELS["realizableKE"] == "Realizable k-epsilon"
 
 
 @pytest.mark.parametrize(
     ("raw", "want"),
-    [("k-omega SST", "kOmegaSST"), ("kOmegaSST", "kOmegaSST"), ("k-epsilon", "kEpsilon"), ("Laminar", "laminar"), ("lrr", "LRR"), ("SSG", "SSG"), ("nope", None)],
+    [
+        ("k-omega SST", "kOmegaSST"),
+        ("kOmegaSST", "kOmegaSST"),
+        ("k-epsilon", "kEpsilon"),
+        ("Laminar", "laminar"),
+        ("lrr", "LRR"),
+        ("SSG", "SSG"),
+        ("SpalartAllmaras", "SpalartAllmaras"),
+        ("Spalart-Allmaras", "SpalartAllmaras"),
+        ("realizableKE", "realizableKE"),
+        ("Realizable k-epsilon", "realizableKE"),
+        ("nope", None),
+    ],
 )
 def test_normalize_turbulence(raw, want):
     assert normalize_turbulence(raw) == want
@@ -158,7 +193,7 @@ def test_steady_case_is_written_for_model(tmp_path, model):
 
     if model != "laminar":
         k_wall = re.search(r"walls\s*\{[^}]*\}", _text(case, "0/nut"))
-        assert k_wall and "nutkWallFunction" in k_wall.group(0)
+        assert k_wall and NUT_WALL.get(model, "nutkWallFunction") in k_wall.group(0)
     sidecar = json.loads(_text(case, "w27-case.json"))
     assert sidecar["turbulence"]["model"] == model
 
@@ -319,6 +354,7 @@ def test_pimplefoam_runs_two_steps(tmp_path, channel_mesh, model):
         ("smoothSolver:  Solving for epsilon, Initial residual = 0.2299, Final residual = 0.0017, No Iterations 1", "epsilon", 0.2299),
         ("smoothSolver:  Solving for Rxy, Initial residual = 0.3046, Final residual = 0.0072, No Iterations 1", "Rxy", 0.3046),
         ("[3] smoothSolver:  Solving for omega, Initial residual = 1e-3, Final residual = 1e-5, No Iterations 1", "omega", 1e-3),
+        ("smoothSolver:  Solving for nuTilda, Initial residual = 0.0359882, Final residual = 0.00060855, No Iterations 1", "nuTilda", 0.0359882),
     ],
 )
 def test_residual_parser_reads_every_models_equations(line, field, value):

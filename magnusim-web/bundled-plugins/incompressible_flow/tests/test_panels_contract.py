@@ -32,7 +32,19 @@ def test_both_analyses_name_the_plugins_settings_components():
 
 def test_residual_series_steady_and_transient():
     steady = _row("incompressible_steady")["residual_series"]
-    assert [s["key"] for s in steady] == ["U", "p", "k", "omega", "epsilon", "R"]
+    assert [s["key"] for s in steady] == ["U", "p", "k", "omega", "epsilon", "R", "nuTilda"]
+    # Spalart-Allmaras's nuTilda: no swatch class of its own, its colour is the legend's.
+    assert steady[6] == {
+        "key": "nuTilda",
+        "label": "ν̃",
+        "color": "#0e9384",
+        "fields": ["nuTilda"],
+        "always": False,
+        "dashed": False,
+        "max_key": "",
+        "max_label": "",
+        "swatch": "",
+    }
     u = steady[0]
     assert u["fields"] == ["Ux", "Uy", "Uz"] and u["always"] and u["color"] == "#1570ef" and u["swatch"] == "u"
     assert steady[3]["label"] == "ω" and steady[3]["swatch"] == "w"

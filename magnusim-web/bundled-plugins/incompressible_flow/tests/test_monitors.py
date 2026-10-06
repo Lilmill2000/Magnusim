@@ -222,7 +222,7 @@ def test_result_fields_name_the_units_the_page_showed():
     rows = {r["key"]: r for r in result_fields(get_registry("analysis").get("incompressible_steady"))}
     assert {k: r["unit"] for k, r in rows.items()} == {
         "U": "m/s", "p": "Pa", "pTotal": "Pa", "k": "m²/s²", "omega": "1/s", "epsilon": "m²/s³",
-        "nut": "m²/s", "R": "m²/s²", "yPlus": "", "wallShearStress": "Pa", "vorticity": "1/s",
+        "nut": "m²/s", "nuTilda": "m²/s", "R": "m²/s²", "yPlus": "", "wallShearStress": "Pa", "vorticity": "1/s",
         "Q": "1/s²", "UMean": "m/s", "pMean": "Pa",
         "Cp": "",  # the pressure coefficient has no unit
     }
@@ -230,6 +230,6 @@ def test_result_fields_name_the_units_the_page_showed():
     assert (rows["R"]["kind"], rows["R"]["shown"]) == ("symm_tensor", None)
     shown = [r["shown"] for r in rows.values() if r["shown"]]
     assert shown == [
-        "magU", "p", "pTotal", "k", "omega", "epsilon", "nut",
+        "magU", "p", "pTotal", "k", "omega", "epsilon", "nut", "nuTilda",
         "yPlus", "magwallShearStress", "magvorticity", "Q", "magUMean", "pMean", "Cp",
     ]

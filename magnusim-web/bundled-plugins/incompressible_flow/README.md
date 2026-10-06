@@ -55,6 +55,25 @@ The Python package imports only `magnusim_sdk` and `cfddesk.registry`
 (`python/tools/plugin_boundary.py` checks it). The UI imports only `react`, its
 own `ui/` folder and type-only host types.
 
+## Turbulence models
+
+The study panel's Turbulence model (`physics.py`: `TURBULENCE_MODELS`, the panel
+labels and the run note's names; `writer.py` writes the fields, wall functions,
+schemes and solver settings each model needs):
+
+| Model (OpenFOAM name) | Fields in 0/ | Walls |
+|---|---|---|
+| Laminar (`laminar`) | none | |
+| Spalart-Allmaras (`SpalartAllmaras`) | `nuTilda`, `nut` | `nuTilda` 0, `nut` `nutUSpaldingWallFunction` (any y+) |
+| k-epsilon (`kEpsilon`), Realizable k-epsilon (`realizableKE`) | `k`, `epsilon`, `nut` | high-Re wall functions |
+| k-omega SST (`kOmegaSST`, the default) | `k`, `omega`, `nut` | wall functions (any y+) |
+| LRR, SSG (`LRR`, `SSG`) | `k`, `epsilon`, `R`, `nut` | high-Re wall functions |
+
+A boundary's "Turbulence at the inlet" (`inlet_turbulence.py`) sets k, omega and
+epsilon; under Spalart-Allmaras it sets `nuTilda` instead: Auto is 3 x the fluid's
+viscosity, a viscosity ratio (no intensity) or an intensity and length scale give
+a turbulent viscosity that `nuTilda` is solved back from.
+
 ## Tests
 
 | What | Where | Run |

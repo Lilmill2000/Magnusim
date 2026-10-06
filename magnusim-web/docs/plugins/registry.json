@@ -13,7 +13,9 @@
             "default": "kOmegaSST",
             "enum": [
               "laminar",
+              "SpalartAllmaras",
               "kEpsilon",
+              "realizableKE",
               "kOmegaSST",
               "LRR",
               "SSG"
@@ -22,14 +24,16 @@
               "group": "flow",
               "enum_labels": [
                 "Laminar",
+                "Spalart-Allmaras (one equation)",
                 "k-epsilon",
+                "Realizable k-epsilon",
                 "k-omega SST",
                 "LRR (Reynolds stress)",
                 "SSG (Reynolds stress)"
               ]
             },
             "title": "Turbulence model",
-            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
+            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; it also handles walls at any y+. k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than k-epsilon with separation and swirl. Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
           },
           "ref_speed": {
             "type": "number",
@@ -244,7 +248,8 @@
         "k",
         "omega",
         "epsilon",
-        "R"
+        "R",
+        "nuTilda"
       ],
       "residual_series": [
         {
@@ -331,6 +336,19 @@
           "max_key": "",
           "max_label": "",
           "swatch": "r"
+        },
+        {
+          "key": "nuTilda",
+          "label": "\u03bd\u0303",
+          "color": "#0e9384",
+          "fields": [
+            "nuTilda"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": ""
         }
       ],
       "x_axis": "iterations",
@@ -397,6 +415,15 @@
           "unit": "m\u00b2/s",
           "magnitude_label": "",
           "shown": "nut"
+        },
+        {
+          "key": "nuTilda",
+          "label": "Modified turbulent viscosity",
+          "unit_quantity": "kinematic_viscosity",
+          "kind": "scalar",
+          "unit": "m\u00b2/s",
+          "magnitude_label": "",
+          "shown": "nuTilda"
         },
         {
           "key": "R",
@@ -1097,7 +1124,9 @@
             "default": "kOmegaSST",
             "enum": [
               "laminar",
+              "SpalartAllmaras",
               "kEpsilon",
+              "realizableKE",
               "kOmegaSST",
               "LRR",
               "SSG"
@@ -1106,14 +1135,16 @@
               "group": "flow",
               "enum_labels": [
                 "Laminar",
+                "Spalart-Allmaras (one equation)",
                 "k-epsilon",
+                "Realizable k-epsilon",
                 "k-omega SST",
                 "LRR (Reynolds stress)",
                 "SSG (Reynolds stress)"
               ]
             },
             "title": "Turbulence model",
-            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30). Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
+            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; it also handles walls at any y+. k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than k-epsilon with separation and swirl. Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
           },
           "ref_speed": {
             "type": "number",
@@ -1396,7 +1427,8 @@
         "k",
         "omega",
         "epsilon",
-        "R"
+        "R",
+        "nuTilda"
       ],
       "residual_series": [
         {
@@ -1485,6 +1517,19 @@
           "swatch": "r"
         },
         {
+          "key": "nuTilda",
+          "label": "\u03bd\u0303",
+          "color": "#0e9384",
+          "fields": [
+            "nuTilda"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": ""
+        },
+        {
           "key": "co_mean",
           "label": "Co mean",
           "color": "#d92d20",
@@ -1562,6 +1607,15 @@
           "unit": "m\u00b2/s",
           "magnitude_label": "",
           "shown": "nut"
+        },
+        {
+          "key": "nuTilda",
+          "label": "Modified turbulent viscosity",
+          "unit_quantity": "kinematic_viscosity",
+          "kind": "scalar",
+          "unit": "m\u00b2/s",
+          "magnitude_label": "",
+          "shown": "nuTilda"
         },
         {
           "key": "R",

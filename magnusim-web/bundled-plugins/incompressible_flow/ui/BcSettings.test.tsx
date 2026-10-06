@@ -283,6 +283,56 @@ describe('BC editor fields', () => {
     expect(screen.queryByLabelText('Viscosity ratio')).toBeNull();
   });
 
+  it('under Spalart-Allmaras sets the inlet nuTilda: Auto 3 x nu, or a viscosity ratio with no intensity', () => {
+    const inlet = {
+      id: 'v1',
+      name: 'Velocity inlet 1',
+      bc_type: 'Velocity inlet',
+      faces: [],
+      velocity_type: 'Fixed',
+      value: 5,
+      unit: 'm/s',
+      direction: 'Normal to face',
+    };
+    publish({ active_id: 'v1', bcs: [inlet], study: { id: 's1', turbulence_model: 'SpalartAllmaras' } });
+    const { container, unmount } = render(<BcPanel panelId="panel-bc-editor" />);
+    const spec = screen.getByLabelText('Turbulence at the inlet') as HTMLSelectElement;
+    expect([...spec.options].map((o) => [o.value, o.text])).toEqual([
+      ['Auto', 'Auto'],
+      ['Intensity and length scale', 'Intensity and length scale'],
+      ['Intensity and viscosity ratio', 'Viscosity ratio'],
+    ]);
+    const hint = () => container.querySelector('[data-bc-turbulence="1"] .mat-assign-hint')?.textContent;
+    expect(hint()).toBe("Auto: ν̃ (modified turbulent viscosity) = 3 × the fluid's viscosity, a calm inflow (3 to 5 × is usual for external flow).");
+    unmount();
+
+    publish({
+      active_id: 'v1',
+      bcs: [{ ...inlet, turbulence_spec: 'Intensity and viscosity ratio', turbulence_intensity: 2, turbulence_viscosity_ratio: 4 }],
+      study: { id: 's1', turbulence_model: 'Spalart-Allmaras' },
+    });
+    const second = render(<BcPanel panelId="panel-bc-editor" />);
+    expect(screen.queryByLabelText('Turbulence intensity')).toBeNull();
+    expect((screen.getByLabelText('Viscosity ratio') as HTMLInputElement).value).toBe('4');
+    expect(second.container.querySelector('[data-bc-turbulence="1"] .mat-assign-hint')?.textContent).toMatch(/^ν̃ .* turbulent viscosity this many times the fluid's/);
+    second.unmount();
+
+    // The same record under k-epsilon (and realizable k-epsilon) shows its intensity again.
+    for (const model of ['kEpsilon', 'realizableKE']) {
+      publish({
+        active_id: 'v1',
+        bcs: [{ ...inlet, turbulence_spec: 'Intensity and viscosity ratio', turbulence_intensity: 2, turbulence_viscosity_ratio: 4 }],
+        study: { id: 's1', turbulence_model: model },
+      });
+      const r = render(<BcPanel panelId="panel-bc-editor" />);
+      expect((screen.getByLabelText('Turbulence intensity') as HTMLInputElement).value).toBe('2');
+      expect([...(screen.getByLabelText('Turbulence at the inlet') as HTMLSelectElement).options].map((o) => o.text)).toContain(
+        'Intensity and viscosity ratio',
+      );
+      r.unmount();
+    }
+  });
+
   it('offers turbulence at the inlet on a pressure boundary, not on a laminar study', () => {
     publish({ active_id: 'bc1', study: { id: 's1', turbulence_model_key: 'kEpsilon' } });
     const { unmount } = render(<BcPanel panelId="panel-bc-editor" />);
