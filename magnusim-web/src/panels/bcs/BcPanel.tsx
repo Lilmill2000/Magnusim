@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { RJSFSchema } from '@rjsf/utils';
 import type { BcFamilyRow } from '../../api/registry.gen';
-import { canonicalBcType, colorOf, defaultsChoiceText, familiesFor, familyOf } from '../../bcCatalog';
+import { canonicalBcType, colorOf, defaultsChoiceText, familiesFor, familyOf, timeTableText } from '../../bcCatalog';
 import { SchemaForm } from '../../forms/SchemaForm';
 import { dispatchPanelDone, type IslandProps } from '../../islands';
 import { faceDisplay, lostDisplay, subscribeFaceNames } from '../../workbench/faceNames';
@@ -79,12 +79,21 @@ function LostFaces({ bc, studyId, onError }: { bc: BcRecord; studyId: string | n
  * plugin component its `ui` names ('bc-settings' slot).
  */
 
-/** "Pressure · face 10@Body1"; a family field the study's defaults name shows too ("Wall · Slip · ..."). */
-export function bcCardSub(bc: BcRecord, studyDefaults?: Record<string, unknown> | null): string {
+/**
+ * "Pressure · face 10@Body1"; a family field the study's defaults name shows too ("Wall · Slip · ..."),
+ * and a BC that follows a time table in a transient study says so with the table's range
+ * ("<type> · Varies with time, 1–3 m/s · ...").
+ */
+export function bcCardSub(
+  bc: BcRecord,
+  studyDefaults?: Record<string, unknown> | null,
+  study?: Record<string, unknown> | null,
+): string {
   const choice = defaultsChoiceText(bc, studyDefaults);
+  const table = timeTableText(bc, study);
   const type = String(bc.bc_type || '');
   const faces = (bc.faces || []).map(faceDisplay).join(', ') || 'no faces';
-  return choice ? `${type} · ${choice} · ${faces}` : `${type} · ${faces}`;
+  return [type, choice, table, faces].filter(Boolean).join(' · ');
 }
 
 /** Live runtime BC state (records, open BC, its faces, defaults, picker selection). */
@@ -148,7 +157,7 @@ export function BcHub() {
                 <span className="hub-item-main">
                   <span className={`hub-swatch hub-swatch-${colorOf(bc)}`} />
                   <span className="hub-item-name">{bc.name}</span>
-                  <span className="hub-item-sub">{bcCardSub(bc, state?.defaults)}</span>
+                  <span className="hub-item-sub">{bcCardSub(bc, state?.defaults, state?.study)}</span>
                 </span>
               </button>
               <button

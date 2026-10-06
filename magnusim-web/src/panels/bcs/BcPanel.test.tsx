@@ -121,6 +121,37 @@ describe('helpers', () => {
     );
     expect(bcCardSub({ id: 'a', name: 'W', bc_type: 'Wall', faces: [] }, { wall_type: 'No-slip' })).toBe('Wall · No-slip · no faces');
   });
+
+  it("says a BC follows its time table in a transient study, with the table's range in the BC's unit", () => {
+    const transient = { id: 's1', time_dependency: 'Transient' };
+    const inlet = {
+      id: 'v',
+      name: 'V',
+      bc_type: 'Velocity inlet',
+      faces: ['face 1@Body1'],
+      velocity_type: 'Fixed',
+      value: 5,
+      unit: 'm/s',
+      time_varying: true,
+      time_table: [
+        [0, 1],
+        [0.5, 3],
+        [1, 2],
+      ],
+      time_table_unit: 'm/s',
+    };
+    expect(bcCardSub(inlet, null, transient)).toBe('Velocity inlet · Varies with time, 1–3 m/s · face 1@Body1');
+    // Shown in the BC's unit, whatever unit the rows were typed in.
+    expect(bcCardSub({ ...inlet, unit: 'ft/s' }, null, transient)).toBe('Velocity inlet · Varies with time, 3.281–9.843 ft/s · face 1@Body1');
+    // A table the run would refuse has no range to show.
+    expect(bcCardSub({ ...inlet, time_table: [[0, 1]] }, null, transient)).toBe('Velocity inlet · Varies with time · face 1@Body1');
+    expect(bcCardSub({ ...inlet, time_table_unit: 'Pa' }, null, transient)).toBe('Velocity inlet · Varies with time · face 1@Body1');
+    // A steady study solves the fixed value; a table that is off is not mentioned.
+    expect(bcCardSub(inlet, null, { id: 's1', time_dependency: 'Steady-state' })).toBe('Velocity inlet · face 1@Body1');
+    expect(bcCardSub({ ...inlet, time_varying: false }, null, transient)).toBe('Velocity inlet · face 1@Body1');
+    const p = { id: 'p', name: 'P', bc_type: 'Pressure', faces: [], value: 0, unit: 'kPa', time_varying: true, time_table: [[0, 500], [1, 1500]], time_table_unit: 'Pa' };
+    expect(bcCardSub(p, null, { analysis_type: 'incompressible_transient' })).toBe('Pressure · Varies with time, 0.5–1.5 kPa · no faces');
+  });
 });
 
 describe('hub', () => {

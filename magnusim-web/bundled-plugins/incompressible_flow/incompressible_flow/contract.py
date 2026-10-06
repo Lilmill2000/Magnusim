@@ -152,6 +152,15 @@ def _mesh_web_bcs(case_dir: Path | None) -> list[dict[str, Any]]:
     return [b for b in rows if isinstance(b, dict)] if isinstance(rows, list) else []
 
 
+def study_is_transient(study: Any) -> bool:
+    """The study solves in time (its time dependency, else its analysis key)."""
+    d = study if isinstance(study, dict) else {}
+    td = str(d.get("time_dependency") or "").strip().lower()
+    if td:
+        return td.startswith("transient")
+    return str(d.get("analysis_type") or "").endswith("_transient")
+
+
 def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
     """What blocks a run: a fluid, a flow driver, a mesh patch per BC, a pressure difference."""
     from magnusim_sdk.study import (
@@ -168,7 +177,8 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
     from .inlet_turbulence import settings_problem
     from .physics import physics_from_record
     from .runspec import air_from_materials
-    from .writer import carries_inlet_turbulence, outlet_outflow
+    from .time_table import table_problem, varies_with_time
+    from .writer import carries_inlet_turbulence, inlet_quantity, outlet_outflow, pressure_values_pa
 
     sid = ctx.simulation_id
     air = air_from_materials({"materials": list(ctx.materials)}, sid)
@@ -230,6 +240,24 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
                         "fix": {"go": "bc", "id": bc.get("id"), "name": bc.get("name")},
                     }
                 ]
+    # "Varies with time" tables (transient studies only; a steady one solves the fixed value).
+    transient = study_is_transient(ctx.study)
+    for bc in records if transient else []:
+        if not bc_faces(bc) or not varies_with_time(bc):
+            continue
+        if is_velocity_inlet(bc):
+            problem = table_problem(bc, inlet_quantity(bc))
+        elif is_pressure_bc(bc) or is_total_pressure_inlet(bc):
+            problem = table_problem(bc, "pressure")
+        else:
+            continue
+        if problem:
+            return [
+                {
+                    "message": f'"Varies with time" on "{bc.get("name")}": {problem}.',
+                    "fix": {"go": "bc", "id": bc.get("id"), "name": bc.get("name")},
+                }
+            ]
     for bc in records:
         problem = wall_motion_problem(bc) if bc_faces(bc) and is_wall_bc(bc) else None
         if problem:
@@ -251,7 +279,8 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
             }
         ]
     if not driven and len(pressures) >= 2:
-        vals = [_pressure_pa(b) for b in pressures]
+        # A table's lowest and highest pressure count (the flow is driven while they differ).
+        vals = [v for b in pressures for v in pressure_values_pa(b, transient)]
         if max(vals) - min(vals) == 0:
             return [
                 {

@@ -1,7 +1,7 @@
 import type { BcFamilyRow, BcFamilyValue } from './api/registry.gen';
 import { analysisRow, siblingKey } from './analysis';
 import { useProjectStore } from './store/project';
-import { UNITS, preferredUnit, resolveUnit, type Quantity } from './units/convert';
+import { UNITS, convertQuantity, preferredUnit, resolveUnit, type Quantity } from './units/convert';
 
 /**
  * The boundary conditions the page offers, as their plugins publish them
@@ -199,6 +199,49 @@ export function valueQuantity(
 export function isUnitOf(quantity: Quantity, unit: unknown): boolean {
   const raw = String(unit || '').trim();
   return !!raw && resolveUnit(quantity, raw) in UNITS[quantity];
+}
+
+/** The study solves in time (its time dependency, else its analysis key). */
+export function studySolvesInTime(study: Record<string, unknown> | null | undefined): boolean {
+  if (!study) return false;
+  const td = String(study.time_dependency || '').trim().toLowerCase();
+  if (td) return td.startsWith('transient');
+  return String(study.analysis_type || '').endsWith('_transient');
+}
+
+function shortNumber(n: number): string {
+  return String(Number(n.toPrecision(4)));
+}
+
+/**
+ * What a BC that follows a "Varies with time" table instead of its value
+ * solves, for the places that would show the value ("Varies with time, 1–3 m/s":
+ * the table's range in the BC's unit), or '' when it solves its value (the
+ * table is off, the study is steady, or the record has no value with units).
+ * The record fields are a convention plugins share: `time_varying`,
+ * `time_table` ([[t, v], ...]) and `time_table_unit` (the unit the rows were
+ * typed in). A table without a valid range says only "Varies with time".
+ */
+export function timeTableText(record: BcRecordLike, study: Record<string, unknown> | null | undefined): string {
+  if (!record || !studySolvesInTime(study)) return '';
+  const on = record.time_varying;
+  const isOn = on === true || (typeof on === 'string' && ['true', 'yes', 'on', '1'].includes(on.trim().toLowerCase()));
+  if (!isOn) return '';
+  const vq = valueQuantity(record);
+  if (!vq) return '';
+  const unit = String(record[vq.unit_field] || '');
+  const typed = String(record.time_table_unit || unit);
+  const rows: unknown[] = Array.isArray(record.time_table) ? record.time_table : [];
+  const values = rows
+    .map((r) => (Array.isArray(r) && r[1] !== null && r[1] !== '' ? Number(r[1]) : NaN))
+    .filter((v) => Number.isFinite(v));
+  if (values.length < 2 || values.length !== rows.length || !isUnitOf(vq.quantity, typed) || !isUnitOf(vq.quantity, unit)) {
+    return 'Varies with time';
+  }
+  const shown = values.map((v) => convertQuantity(vq.quantity, v, typed, unit));
+  const lo = shortNumber(Math.min(...shown));
+  const hi = shortNumber(Math.max(...shown));
+  return `Varies with time, ${lo === hi ? lo : `${lo}–${hi}`} ${unit}`;
 }
 
 /**

@@ -10,6 +10,7 @@ import { Select, UNITS, convertQuantity, fromSi, preferredUnit, resolveUnit, toS
 import type { BcSettingsProps } from '../../../src/plugin-api';
 import { host } from './host';
 import { turbulenceKey } from './StudySettings';
+import { TimeTable, VariesWithTimeRow, isUnitOf, studyIsTransient, tableRows, variesWithTime, type TableRow } from './timeTable';
 
 /** The fluid density a flow-rate conversion uses when the study has none: Air at 20 C, 1 atm (materials.AIR). */
 const AIR_DENSITY = 1.204;
@@ -156,7 +157,12 @@ function ValueWithUnit({
 }
 
 /** What a velocity inlet or outlet does with its value, in the user's words. */
-export function velocityHint(outlet: boolean, velocityType: string, direction: string): string {
+export function velocityHint(outlet: boolean, velocityType: string, direction: string, table = false): string {
+  if (table) {
+    if (velocityType === 'Flow rate') return "The table's flow enters through each face; a negative value draws it out.";
+    if (direction === 'Vector') return "Air enters at the table's speed moving along the vector; a negative speed reverses it.";
+    return "Air enters straight in through the face at the table's speed; a negative speed blows out.";
+  }
   if (velocityType === 'Flow rate') {
     return outlet ? 'This much flow leaves through each face.' : 'This much flow enters through each face.';
   }
@@ -166,9 +172,11 @@ export function velocityHint(outlet: boolean, velocityType: string, direction: s
   return outlet ? 'Air leaves straight out through the face at this speed.' : 'Air enters straight in through the face at this speed.';
 }
 
-function VelocityFields({ bc, family, imperial, save, flowBasis }: BcSettingsProps) {
+function VelocityFields({ bc, family, imperial, save, flowBasis, study }: BcSettingsProps) {
   const { SciNumberInput } = host().pluginUi;
   const outlet = family.key === 'velocity_outlet';
+  // A velocity inlet of a transient study can follow a table instead of its value.
+  const varying = !outlet && studyIsTransient(study) && variesWithTime(bc);
   const vt = String(bc.velocity_type || 'Fixed');
   const fr = String(bc.flow_rate_type || 'Volumetric flow');
   const units = velocityUnits(vt, fr);
@@ -185,7 +193,26 @@ function VelocityFields({ bc, family, imperial, save, flowBasis }: BcSettingsPro
       { velocityType: nextVt, flowRateType: nextFr, unit: nextUnit },
       flowBasis(bc.faces || []),
     );
-    void save({ velocity_type: nextVt, flow_rate_type: nextFr, value, unit: nextUnit });
+    // A table's rows become the same flow in the new quantity too.
+    const typed = String(bc.time_table_unit || unit);
+    const rows = isUnitOf(velocityQuantity(vt, fr), typed) ? tableRows(bc.time_table) : [];
+    const table = rows.length
+      ? {
+          time_table: rows.map(([t, v]): TableRow => [
+            t,
+            v === null
+              ? null
+              : convertFlowValue(
+                  v,
+                  { velocityType: vt, flowRateType: fr, unit: typed },
+                  { velocityType: nextVt, flowRateType: nextFr, unit: nextUnit },
+                  flowBasis(bc.faces || []),
+                ),
+          ]),
+          time_table_unit: nextUnit,
+        }
+      : {};
+    void save({ velocity_type: nextVt, flow_rate_type: nextFr, value, unit: nextUnit, ...table });
   };
   return (
     <>
@@ -202,16 +229,31 @@ function VelocityFields({ bc, family, imperial, save, flowBasis }: BcSettingsPro
           />
         </Row>
       ) : null}
-      <Row label={valueLabel}>
-        <ValueWithUnit
-          label={valueLabel}
-          value={bc.value}
+      {!outlet ? (
+        <VariesWithTimeRow bc={bc} study={study} save={save} quantity={velocityQuantity(vt, fr)} unit={unit} />
+      ) : null}
+      {varying ? (
+        <TimeTable
+          bc={bc}
+          save={save}
+          quantity={velocityQuantity(vt, fr)}
           unit={unit}
           units={units}
-          onValue={(n) => void save({ value: n, unit })}
-          onUnit={(u) => void save({ unit: u })}
+          valueLabel={valueLabel}
+          speedNote
         />
-      </Row>
+      ) : (
+        <Row label={valueLabel}>
+          <ValueWithUnit
+            label={valueLabel}
+            value={bc.value}
+            unit={unit}
+            units={units}
+            onValue={(n) => void save({ value: n, unit })}
+            onUnit={(u) => void save({ unit: u })}
+          />
+        </Row>
+      )}
       {vt === 'Fixed' ? (
         <Row label="Direction">
           <Choice
@@ -244,7 +286,7 @@ function VelocityFields({ bc, family, imperial, save, flowBasis }: BcSettingsPro
         </>
       ) : null}
       <div className="mat-assign-hint" data-bc-velocity-hint="1">
-        {velocityHint(outlet, vt, direction)}
+        {velocityHint(outlet, vt, direction, varying)}
       </div>
     </>
   );
@@ -332,21 +374,27 @@ function WallFields({ bc, imperial, save }: BcSettingsProps) {
   );
 }
 
-function PressureFields({ bc, imperial, save }: BcSettingsProps) {
+function PressureFields({ bc, imperial, save, study }: BcSettingsProps) {
   const unit = unitFor(bc.unit, PRESSURE_UNITS, imperial, 'pressure');
+  const varying = studyIsTransient(study) && variesWithTime(bc);
   return (
     <>
       <Row label="Pressure type">Fixed value</Row>
-      <Row label="Fixed value">
-        <ValueWithUnit
-          label="Fixed value"
-          value={bc.value ?? 0}
-          unit={unit}
-          units={PRESSURE_UNITS}
-          onValue={(n) => void save({ value: n, unit })}
-          onUnit={(u) => void save({ unit: u })}
-        />
-      </Row>
+      <VariesWithTimeRow bc={bc} study={study} save={save} quantity="pressure" unit={unit} />
+      {varying ? (
+        <TimeTable bc={bc} save={save} quantity="pressure" unit={unit} units={PRESSURE_UNITS} valueLabel="Pressure" />
+      ) : (
+        <Row label="Fixed value">
+          <ValueWithUnit
+            label="Fixed value"
+            value={bc.value ?? 0}
+            unit={unit}
+            units={PRESSURE_UNITS}
+            onValue={(n) => void save({ value: n, unit })}
+            onUnit={(u) => void save({ unit: u })}
+          />
+        </Row>
+      )}
       <div className="mat-assign-hint">
         Sets pressure on the face. Flow can enter or leave depending on the rest of the case.
       </div>
@@ -631,20 +679,26 @@ function FreestreamFields({ bc, imperial, save }: BcSettingsProps) {
 export const TOTAL_PRESSURE_HINT =
   'The total pressure (gauge) of the air coming in: its static pressure plus ½ρU². How fast it comes in follows from the pressure drop to the outlets. Where flow leaves through it, it holds this value as a static pressure.';
 
-function TotalPressureFields({ bc, imperial, save }: BcSettingsProps) {
+function TotalPressureFields({ bc, imperial, save, study }: BcSettingsProps) {
   const unit = unitFor(bc.unit, PRESSURE_UNITS, imperial, 'pressure');
+  const varying = studyIsTransient(study) && variesWithTime(bc);
   return (
     <>
-      <Row label="Total pressure">
-        <ValueWithUnit
-          label="Total pressure"
-          value={bc.value ?? 0}
-          unit={unit}
-          units={PRESSURE_UNITS}
-          onValue={(n) => void save({ value: n, unit })}
-          onUnit={(u) => void save({ unit: u })}
-        />
-      </Row>
+      <VariesWithTimeRow bc={bc} study={study} save={save} quantity="pressure" unit={unit} />
+      {varying ? (
+        <TimeTable bc={bc} save={save} quantity="pressure" unit={unit} units={PRESSURE_UNITS} valueLabel="Total pressure" />
+      ) : (
+        <Row label="Total pressure">
+          <ValueWithUnit
+            label="Total pressure"
+            value={bc.value ?? 0}
+            unit={unit}
+            units={PRESSURE_UNITS}
+            onValue={(n) => void save({ value: n, unit })}
+            onUnit={(u) => void save({ unit: u })}
+          />
+        </Row>
+      )}
       <div className="mat-assign-hint" data-bc-total-pressure-hint="1">
         {TOTAL_PRESSURE_HINT}
       </div>
@@ -691,14 +745,16 @@ export function BcSettings(props: BcSettingsProps) {
 }
 
 /** Under a velocity BC's assigned faces: each face gets the value on its own. */
-export function BcFacesNote({ bc, family, faces, imperial }: BcSettingsProps) {
+export function BcFacesNote({ bc, family, faces, imperial, study }: BcSettingsProps) {
   if (!VELOCITY_FAMILIES.has(family.key)) return null;
   const vt = String(bc.velocity_type || 'Fixed');
   const fr = String(bc.flow_rate_type || 'Volumetric flow');
   const unit = unitFor(bc.unit, velocityUnits(vt, fr), imperial, velocityQuantity(vt, fr));
+  // A table's values go to each face too (no single total to spell out).
+  const varying = family.key === 'velocity_inlet' && studyIsTransient(study) && variesWithTime(bc);
   return (
     <div className="mat-assign-hint" data-bc-per-face="1">
-      {perFaceHint(faces.length, bc.value, unit)}
+      {perFaceHint(faces.length, varying ? undefined : bc.value, unit)}
     </div>
   );
 }

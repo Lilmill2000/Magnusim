@@ -481,6 +481,41 @@ def inlet_ref_speed(bc: dict, face_area: float, rho: float) -> float:
     return abs(inlet_speed_ms(bc))
 
 
+def spec_is_transient(spec: Any) -> bool:
+    """The run solves in time (its transient control is resolved, or about to be)."""
+    return getattr(spec, "transient", None) is not None or getattr(spec, "time_dependency", "") == "transient"
+
+
+def inlet_quantity(bc: dict) -> str:
+    """What a velocity inlet's value is: velocity, volumetric_flow or mass_flow."""
+    if uses_flow_rate(bc):
+        return "mass_flow" if is_mass_flow(bc) else "volumetric_flow"
+    return "velocity"
+
+
+def with_table_peak(bc: dict, transient: bool) -> dict:
+    """A velocity inlet whose "Varies with time" table is in effect, read as a
+    fixed one at the table's largest value: its reference speed (turbulence at
+    the inlet, the velocity cap, the time-step estimate)."""
+    from magnusim_sdk.units import SI_DEFAULT
+
+    from . import time_table as _tt
+
+    if not _tt.in_effect(bc, transient):
+        return bc
+    q = inlet_quantity(bc)
+    peak = _tt.peak_si(bc, q)
+    return bc if peak is None else {**bc, "value": peak, "unit": SI_DEFAULT[q]}  # type: ignore[index]
+
+
+def pressure_values_pa(bc: dict, transient: bool) -> list[float]:
+    """A pressure boundary's gauge pressure in Pa; with a table in effect, its lowest and highest."""
+    from . import time_table as _tt
+
+    span = _tt.span_si(bc, "pressure") if _tt.in_effect(bc, transient) else None
+    return list(span) if span else [pressure_pa(bc)]
+
+
 _FREE_OUTFLOW = {"type": "inletOutlet", "inletValue": "uniform (0 0 0)", "value": "uniform (0 0 0)"}
 
 
@@ -582,6 +617,7 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
     _ensure_web_imports()
     rho = float(spec.rho) or LEGACY_AIR["rho"]
     props = spec.face_props or {}
+    transient = spec_is_transient(spec)
     speed_ref = 1.0
     d_hyd: float | None = None
     inlets = [(m.get("bc"), m.get("patch")) for m in (spec.mapped or []) if is_velocity_inlet(m.get("bc"))]
@@ -589,7 +625,7 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
         best = 0.0
         best_area = 0.0
         for bc_raw, _patch in inlets:
-            bc = _bc_dict(bc_raw)  # type: ignore[arg-type]
+            bc = with_table_peak(_bc_dict(bc_raw), transient)  # type: ignore[arg-type]
             faces = bc_faces(bc)
             area = faces_area(faces, props)
             s = inlet_ref_speed(bc, area / max(1, len(faces)), rho)
@@ -606,7 +642,7 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
             for m in (spec.mapped or [])
             if is_pressure_bc(m.get("bc")) or is_total_pressure_inlet(m.get("bc"))
         ]
-        pvals = [pressure_pa(_bc_dict(b)) for b in pm if b]
+        pvals = [v for b in pm if b for v in pressure_values_pa(_bc_dict(b), transient)]
         if len(pvals) >= 2:
             dp = max(pvals) - min(pvals)
             speed_ref = max(1.0, math.sqrt((2.0 * abs(dp)) / rho))
@@ -735,7 +771,9 @@ def patch_turbulence(spec: RunSpec, speed_ref: float) -> dict[str, dict[str, Any
         speed = speed_ref
         if is_velocity_inlet(bc):
             faces = bc_faces(bc)
-            speed = inlet_ref_speed(bc, faces_area(faces, props) / max(1, len(faces)), rho)
+            speed = inlet_ref_speed(
+                with_table_peak(bc, spec_is_transient(spec)), faces_area(faces, props) / max(1, len(faces)), rho
+            )
         elif is_freestream(bc):
             speed = freestream_speed(bc)
             if turbulence_spec(bc) == "Auto" and not sa:
@@ -815,9 +853,13 @@ def _build_field_patches(
         value = "0" if name == "nut" else turb_values[name]
         return {"type": wall_fn[name], "value": f"uniform {value}"}
 
+    from . import time_table as _tt
+
     rho = float(spec.rho) or LEGACY_AIR["rho"]
     wall_default = spec.wall_default or "No-slip"
     props = spec.face_props or {}
+    # "Varies with time" tables replace fixed values in transient runs only.
+    transient = spec_is_transient(spec)
     role: dict[str, dict[str, Any]] = {}
     for m in spec.mapped or []:
         bc = m.get("bc")
@@ -849,7 +891,20 @@ def _build_field_patches(
         if kind == "inlet":
             bc = r["bc"]  # type: ignore[index]
             n_faces = max(1, len(bc_faces(bc)))
-            if uses_flow_rate(bc) and is_mass_flow(bc) and mass_flow_kgs(bc) is not None:
+            varying = (
+                _tt.inlet_velocity(
+                    bc,
+                    quantity=inlet_quantity(bc),
+                    n_faces=n_faces,
+                    rho=rho,
+                    direction=inlet_direction(bc) if uses_vector(bc) else None,
+                )
+                if _tt.in_effect(bc, transient)
+                else None
+            )
+            if varying:
+                U[name] = varying
+            elif uses_flow_rate(bc) and is_mass_flow(bc) and mass_flow_kgs(bc) is not None:
                 rate = (mass_flow_kgs(bc) or 0.0) * n_faces
                 U[name] = {
                     "type": "flowRateInletVelocity",
@@ -886,7 +941,8 @@ def _build_field_patches(
         elif kind == "pressure":
             p_kin = pressure_pa(r["bc"]) / rho  # type: ignore[index]
             U[name] = {"type": "pressureInletOutletVelocity", "value": "uniform (0 0 0)"}
-            p[name] = {"type": "fixedValue", "value": f"uniform {js_to_precision(p_kin, 8)}"}
+            varying_p = _tt.pressure_p(r["bc"], rho) if _tt.in_effect(r["bc"], transient) else None  # type: ignore[index]
+            p[name] = varying_p or {"type": "fixedValue", "value": f"uniform {js_to_precision(p_kin, 8)}"}
             set_turb(name, inlet_outlet)
         elif kind == "velOutlet":
             U[name] = velocity_outlet_U(r["bc"], rho)  # type: ignore[index]
@@ -896,7 +952,8 @@ def _build_field_patches(
             # Inflow at p = p0 - |U|^2/2 (kinematic); outflow holds p0 as a static pressure.
             p0_kin = js_to_precision(pressure_pa(r["bc"]) / rho, 8)  # type: ignore[index]
             U[name] = {"type": "pressureInletOutletVelocity", "value": "uniform (0 0 0)"}
-            p[name] = {"type": "totalPressure", "p0": f"uniform {p0_kin}", "value": f"uniform {p0_kin}"}
+            varying_p0 = _tt.pressure_p(r["bc"], rho, total=True) if _tt.in_effect(r["bc"], transient) else None  # type: ignore[index]
+            p[name] = varying_p0 or {"type": "totalPressure", "p0": f"uniform {p0_kin}", "value": f"uniform {p0_kin}"}
             set_turb(name, inlet_outlet)
         elif kind == "freestream":
             # The far field: the freestream comes in where the flow enters, the
