@@ -1641,7 +1641,10 @@ export class WorkspaceBridge {
 
   private onLoad = (): void => {
     const current = this.channel;
-    if (!current) return;
+    // Not welcomed yet: this load is the document that just said hello (its load event can
+    // come a moment after its hello), and the SDK answers probes only once it is welcomed.
+    // A real reload sends a new hello, which replaces the channel.
+    if (!current || !current.welcomed) return;
     this.alive = '';
     this.frame.contentWindow?.postMessage({ magnusim: 'probe', instance: current.instance }, '*');
     setTimeout(() => {

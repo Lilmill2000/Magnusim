@@ -1057,6 +1057,21 @@ describe('WorkspaceBridge: the handshake', () => {
     t.frame.remove();
   });
 
+  it('a load event right after the hello (before the welcome) is the same page: no probe, the channel stays', async () => {
+    // Edge: the CAD page said hello 1 ms before its load event; the probe went to a page not
+    // yet welcomed (the SDK answers probes only then), the channel closed, and 5 s later
+    // "Magnusim CAD didn't start".
+    const t = setup();
+    t.hello({ magnusim: 'hello', sdkVersion: '1.0.0', instance: 'i9' });
+    t.frame.dispatchEvent(new Event('load'));
+    await vi.waitFor(() => expect(t.bridge.connected()).toBe(true));
+    await new Promise((r) => setTimeout(r, 1700));
+    expect(t.bridge.connected()).toBe(true);
+    expect(t.posted.map((p) => (p[0] as { magnusim?: string }).magnusim)).toEqual(['welcome']);
+    t.detach();
+    t.frame.remove();
+  });
+
   it('hands the frame a private port; calls over it meet the allowlist; a new document ends it', async () => {
     const t = setup();
     t.hello({ magnusim: 'hello', sdkVersion: '1.0.0', instance: 'i1' });
