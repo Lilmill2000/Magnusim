@@ -1002,6 +1002,33 @@ describe('WorkspaceBridge: the handshake', () => {
     t.frame.remove();
   });
 
+  it("a bridge attached to a page that already said hello loads the page again (a dev hot swap re-runs the host's effects)", async () => {
+    const t = setup();
+    // The frame's src, without loading it (jsdom would give the frame a new window).
+    vi.spyOn(t.frame, 'getAttribute').mockImplementation((name: string) => (name === 'src' ? '/plugins/ws-demo/workspace/index.html' : null));
+    const setSrc = vi.spyOn(t.frame, 'setAttribute').mockImplementation(() => undefined);
+    // A fresh frame: attaching again (React's dev double mount) loads nothing.
+    t.detach();
+    const again = new WorkspaceBridge(t.frame, new WorkspaceCalls(SCOPE, t.h), t.h);
+    let detach = again.attach();
+    expect(setSrc).not.toHaveBeenCalled();
+    t.hello({ magnusim: 'hello', sdkVersion: '1.0.0', instance: 'i1' });
+    await vi.waitFor(() => expect(again.connected()).toBe(true));
+    expect(t.frame.dataset.wsHello).toBe('1');
+    // The host's code swapped under the open page: its effects end this bridge and start a
+    // new one on the same frame. The page will not say hello again by itself, so it loads again.
+    detach();
+    const next = new WorkspaceBridge(t.frame, new WorkspaceCalls(SCOPE, t.h), t.h);
+    detach = next.attach();
+    expect(setSrc).toHaveBeenCalledWith('src', '/plugins/ws-demo/workspace/index.html');
+    expect(t.frame.dataset.wsHello).toBeUndefined();
+    // Its hello reaches the new bridge.
+    t.hello({ magnusim: 'hello', sdkVersion: '1.0.0', instance: 'i2' });
+    await vi.waitFor(() => expect(next.connected()).toBe(true));
+    detach();
+    t.frame.remove();
+  });
+
   it('hands the frame a private port; calls over it meet the allowlist; a new document ends it', async () => {
     const t = setup();
     t.hello({ magnusim: 'hello', sdkVersion: '1.0.0', instance: 'i1' });

@@ -1401,6 +1401,9 @@ export class WorkspaceCalls {
   }
 }
 
+/** The frame's data attribute (data-ws-hello) that says a bridge welcomed its page. */
+const HELLO_SEEN = 'wsHello';
+
 /** Connects one workspace frame to the host: handshake, channel, probe after each load. */
 export class WorkspaceBridge {
   private readonly frame: HTMLIFrameElement;
@@ -1424,6 +1427,15 @@ export class WorkspaceBridge {
     window.addEventListener('message', this.onMessage);
     this.frame.addEventListener('load', this.onLoad);
     window.addEventListener('cfd:units', this.onUnits);
+    // A page that already said hello to an earlier bridge never says it again by itself.
+    // That happens when the dev server hot-swaps the host's code under an open
+    // workspace: the frame stays, the host's effects run again. The page loads again
+    // and says hello to this bridge, instead of the host waiting 5 s for nothing.
+    if (this.frame.dataset[HELLO_SEEN] === '1') {
+      delete this.frame.dataset[HELLO_SEEN];
+      const src = this.frame.getAttribute('src');
+      if (src) this.frame.setAttribute('src', src);
+    }
     return () => {
       window.removeEventListener('message', this.onMessage);
       this.frame.removeEventListener('load', this.onLoad);
@@ -1564,6 +1576,8 @@ export class WorkspaceBridge {
     // The frame's origin is opaque, so no target origin names it; only this window gets the port.
     win.postMessage({ magnusim: 'welcome', instance, context }, '*', [mc.port2]);
     channel.welcomed = true;
+    // On the element, not in this module: a hot swap of this module keeps the frame.
+    this.frame.dataset[HELLO_SEEN] = '1';
     this.hooks.connected();
   }
 

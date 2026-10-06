@@ -165,7 +165,8 @@ describe('gate:l3-guard the workspace header while the exit hook runs', () => {
     await waitFor(() => expect($('[data-ws-leave-status]')).toBeNull());
     expect(t.events.some((e) => e.event === 'leaveAbort')).toBe(true);
     expect(($('[data-ws-back]') as HTMLButtonElement).disabled).toBe(false);
-    expect(t.frame.inert).toBe(false);
+    // Inert ends in the effect after that render.
+    await waitFor(() => expect(t.frame.inert).toBe(false));
     expect(window.__CFD_CONFIRM__).not.toHaveBeenCalled();
     expect(location.hash).toBe(WS_HASH);
     t.view.unmount();
