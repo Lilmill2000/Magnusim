@@ -1436,6 +1436,7 @@ What a run-settings component gets. Settings are locked once a run has started.
 - `row: RegistryRow | undefined`: The run's analysis row (registry.describe).
 - `saveSteady: (patch: { end_time?: number; write_interval?: number; }) => Promise<void>`: A steady run's iteration count and write interval.
 - `saveTransient: (settings: Record<string, unknown>) => Promise<void>`: A transient run's whole control block, as the analysis's run model defines it.
+- `saveSettle?: ((settle: Record<string, unknown> | null) => Promise<void>) | undefined`: API 1.4: the run's "Stop when a monitor settles" (null: off), stored on the run as its analysis's run model cleans it (`settle`); `run.settle` and `run.monitors` show it.
 
 #### RunState
 
@@ -1481,6 +1482,7 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `progress.meta: string`
 - `progress.residuals: Record<string, number>[]`
 - `progress.end: number`
+- `progress.converged?: { kind: "residuals" | "monitor" | "no"; text: string; } | null | undefined`: How a finished run ended (API 1.4): converged by its residuals or a settled monitor, or `no` (it reached its end without converging); null when not known.
 - `copy: { … }`
 - `copy.available: boolean`
 - `copy.picking: boolean`
@@ -1491,6 +1493,10 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `older_geometry?: string | undefined`: Made on an older version of its linked geometry (API 1.5, D26): the line the panel shows, else ''.
 - `cores?: number | null | undefined`: Cores the run asks for: a whole number, or null for Auto.
 - `launch_parallel?: boolean | null | undefined`: Whether the run's launch is parallel (its last plan's); null before it started.
+- `settle?: Record<string, unknown> | null | undefined`: Its "Stop when a monitor settles" as its analysis stored it (API 1.4), else null.
+- `monitors?: RunSettleMonitor[] | undefined`: The monitors that stop can watch (API 1.4): the run's own, then its study's boundaries with faces.
+- `stop_when?: { label?: string; text?: string; error?: string; } | null | undefined`: A started run: what its plan said of that stop (prepare_run.stop_when: {label, text} or {error}), else null.
+- `study?: Record<string, unknown> | null | undefined`: The record of the run's study when it is the open one (its analysis's settings), else null.
 
 #### SchemaFormProps
 
@@ -1753,7 +1759,7 @@ Constants:
 
 - `EVENT_PREFIX = "MAGNUSIM_EVENT "`
 - `EVENT_PREFIX_ALIASES = ("MAGNUSIM_EVENT ", "CFDDESK_EVENT ")`
-- `KNOWN_KINDS = frozenset({"start", "stage", "progress", "log", "residual", "courant", "time_saved", "counts", "phase", "result", "error"})`
+- `KNOWN_KINDS = frozenset({"start", "stage", "progress", "log", "residual", "courant", "time_saved", "counts", "phase", "result", "error", "converged"})`
 
 ### magnusim_sdk.fluids
 

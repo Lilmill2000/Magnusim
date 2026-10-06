@@ -240,6 +240,11 @@ export interface RunState {
     meta: string;
     residuals: Array<Record<string, number>>;
     end: number;
+    /**
+     * How a finished run ended (API 1.4): converged by its residuals or a settled
+     * monitor, or `no` (it reached its end without converging); null when not known.
+     */
+    converged?: { kind: 'residuals' | 'monitor' | 'no'; text: string } | null;
   };
   copy: { available: boolean; picking: boolean; note: string; sources: Array<{ id: string; label: string }> };
   mesh_ready: boolean;
@@ -251,6 +256,30 @@ export interface RunState {
   cores?: number | null;
   /** Whether the run's launch is parallel (its last plan's); null before it started. */
   launch_parallel?: boolean | null;
+  /** Its "Stop when a monitor settles" as its analysis stored it (API 1.4), else null. */
+  settle?: Record<string, unknown> | null;
+  /** The monitors that stop can watch (API 1.4): the run's own, then its study's boundaries with faces. */
+  monitors?: RunSettleMonitor[];
+  /** A started run: what its plan said of that stop (prepare_run.stop_when: {label, text} or {error}), else null. */
+  stop_when?: { label?: string; text?: string; error?: string } | null;
+  /** The record of the run's study when it is the open one (its analysis's settings), else null. */
+  study?: Record<string, unknown> | null;
+}
+
+/** A monitor a run's "Stop when a monitor settles" can watch (API 1.4). */
+export interface RunSettleMonitor {
+  /** The result control's id, or the boundary condition's. */
+  id: string;
+  name: string;
+  /** The result control's monitor_type ('' for one saved before monitor types), or 'boundary'. */
+  kind: string;
+  source: 'monitor' | 'boundary';
+  /** A monitor saved before monitor types: its kind, type and category words. */
+  words?: string;
+  /** A monitor's faces, points and boundaries, counted: one on nothing measures nothing. */
+  targets?: number;
+  /** A boundary's bc_type. */
+  bc_type?: string;
 }
 
 export function subscribeRunState(onState: (state: RunState) => void): () => void {
@@ -285,6 +314,13 @@ export async function saveRunCores(cores: number | null): Promise<unknown> {
   const fn = window.__CFD_RUN_CORES_SAVE__;
   if (!fn) throw new Error('Run settings are not ready yet.');
   return fn(cores);
+}
+
+/** API 1.4: the selected draft run's "Stop when a monitor settles" (null: off). */
+export async function saveRunSettle(settle: Record<string, unknown> | null): Promise<unknown> {
+  const fn = window.__CFD_RUN_SETTLE_SAVE__;
+  if (!fn) throw new Error('Run settings are not ready yet.');
+  return fn(settle);
 }
 
 export async function renameRun(name: string): Promise<unknown> {

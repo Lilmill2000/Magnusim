@@ -2041,6 +2041,34 @@ select.fp-select {
   padding-top: 8px;
   border-top: 1px solid #eaecf0;
 }
+/* How a finished run ended (API 1.4): converged, or reached its end without converging. */
+.run-converged {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #05603a;
+  background: #ecfdf3;
+  border: 1px solid #abefc6;
+  border-radius: 4px;
+}
+.run-converged.is-not {
+  color: #93370d;
+  background: #fffaeb;
+  border-color: #fedf89;
+}
+.tree-converged {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: #05603a;
+  background: #ecfdf3;
+  border: 1px solid #abefc6;
+  border-radius: 999px;
+}
 .sim-residual-wrap {
   margin-top: 8px;
   position: relative;

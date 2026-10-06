@@ -39,6 +39,11 @@ export interface RunSettingsProps {
   saveSteady: (patch: { end_time?: number; write_interval?: number }) => Promise<void>;
   /** A transient run's whole control block, as the analysis's run model defines it. */
   saveTransient: (settings: Record<string, unknown>) => Promise<void>;
+  /**
+   * API 1.4: the run's "Stop when a monitor settles" (null: off), stored on the run as
+   * its analysis's run model cleans it (`settle`); `run.settle` and `run.monitors` show it.
+   */
+  saveSettle?: (settle: Record<string, unknown> | null) => Promise<void>;
 }
 
 /** What a bc-settings component gets (API 1.4). The core shows a failed save's message. */

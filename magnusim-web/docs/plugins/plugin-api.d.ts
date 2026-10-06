@@ -366,6 +366,14 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
           meta: string;
           residuals: Array<Record<string, number>>;
           end: number;
+          /**
+           * How a finished run ended (API 1.4): converged by its residuals or a settled
+           * monitor, or `no` (it reached its end without converging); null when not known.
+           */
+          converged?: {
+              kind: 'residuals' | 'monitor' | 'no';
+              text: string;
+          } | null;
       };
       copy: {
           available: boolean;
@@ -385,6 +393,33 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       cores?: number | null;
       /** Whether the run's launch is parallel (its last plan's); null before it started. */
       launch_parallel?: boolean | null;
+      /** Its "Stop when a monitor settles" as its analysis stored it (API 1.4), else null. */
+      settle?: Record<string, unknown> | null;
+      /** The monitors that stop can watch (API 1.4): the run's own, then its study's boundaries with faces. */
+      monitors?: RunSettleMonitor[];
+      /** A started run: what its plan said of that stop (prepare_run.stop_when: {label, text} or {error}), else null. */
+      stop_when?: {
+          label?: string;
+          text?: string;
+          error?: string;
+      } | null;
+      /** The record of the run's study when it is the open one (its analysis's settings), else null. */
+      study?: Record<string, unknown> | null;
+  }
+  /** A monitor a run's "Stop when a monitor settles" can watch (API 1.4). */
+  export interface RunSettleMonitor {
+      /** The result control's id, or the boundary condition's. */
+      id: string;
+      name: string;
+      /** The result control's monitor_type ('' for one saved before monitor types), or 'boundary'. */
+      kind: string;
+      source: 'monitor' | 'boundary';
+      /** A monitor saved before monitor types: its kind, type and category words. */
+      words?: string;
+      /** A monitor's faces, points and boundaries, counted: one on nothing measures nothing. */
+      targets?: number;
+      /** A boundary's bc_type. */
+      bc_type?: string;
   }
   /** Geometry panel state: V0.1.0's Name / Representation / Volume rows. */
   export interface GeometryState {
@@ -664,6 +699,11 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/slots' {
       }) => Promise<void>;
       /** A transient run's whole control block, as the analysis's run model defines it. */
       saveTransient: (settings: Record<string, unknown>) => Promise<void>;
+      /**
+       * API 1.4: the run's "Stop when a monitor settles" (null: off), stored on the run as
+       * its analysis's run model cleans it (`settle`); `run.settle` and `run.monitors` show it.
+       */
+      saveSettle?: (settle: Record<string, unknown> | null) => Promise<void>;
   }
   /** What a bc-settings component gets (API 1.4). The core shows a failed save's message. */
   export interface BcSettingsProps {

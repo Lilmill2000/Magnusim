@@ -1553,6 +1553,16 @@ RAS
         turbulent=model != "laminar", rho=float(spec.rho), transient=spec.transient
     )
     functions_text, monitor_meta = _reference_monitors(spec, poly_dst, functions_text)
+    # "Stop when a monitor settles": a runTimeControl after the monitors it reads.
+    from .settle import plan_settle, settle_functions_text
+
+    settle_plan = plan_settle(
+        spec,
+        custom_meta=custom_meta,
+        forces_plans=monitor_meta["forces_monitors"],
+        probe_plans=monitor_meta["probe_monitors"],
+    )
+    functions_text = _join_functions(functions_text, settle_functions_text(settle_plan))
     is_transient = spec.transient is not None
 
     if is_transient:
@@ -1676,6 +1686,9 @@ RAS
         # WSL steps the runner runs on the written case before the solver (each
         # checked against its step table): potentialFoam writes the start into 0/.
         sidecar["pre_steps"] = potential_flow_steps()
+    if settle_plan is not None:
+        # What the settle stop watches as written, or why it is not written.
+        sidecar["settle"] = settle_plan
     if is_transient and spec.transient is not None:
         t = spec.transient
         sidecar["transient"] = {

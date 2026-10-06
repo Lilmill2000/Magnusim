@@ -190,6 +190,7 @@ import {
 } from './resultFields';
 import { createToastQueue } from './toastQueue';
 import { runProgressText } from './runProgressText';
+import { carrySettle } from './runSettle';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
 import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js';
@@ -21441,6 +21442,7 @@ function refreshSetupTree() {
                 '<span class="tl">' +
                 escapeHtml(label) +
                 '</span>' +
+                runConvergedBadge(rec) +
                 treeJobMark(
                   rec.status === 'running' || activityBusy('solve', rid),
                   activityQueuePos('solve', rid),
@@ -22068,6 +22070,10 @@ function publishStudyState() {
   window.__CFD_STUDY_STATE__ = detail;
   try {
     window.dispatchEvent(new CustomEvent('cfd:study', { detail }));
+  } catch (_) {}
+  // The run panel reads the study's record too (its settle stop's checks).
+  try {
+    if (window.__CFD_RUN_STATE__) publishRunState();
   } catch (_) {}
   return detail;
 }
@@ -30906,6 +30912,20 @@ function refreshTransientPreview(opts) {
   }, opts && opts.now ? 0 : 250);
 }
 
+/** API 1.4: the selected draft run's "Stop when a monitor settles" (null: off). */
+async function persistRunSettle(settle) {
+  const rec = selectedRunRecord();
+  if (!rec || runIsLocked(rec)) return { ok: false, error: 'This run has started: add a run to change its settings.' };
+  const j = await persistRunSettings({
+    run_id: rec.id,
+    settle: settle && typeof settle === 'object' ? settle : null,
+    settle_time_dependency: runRecIsTransient(rec) ? 'Transient' : 'Steady-state',
+  });
+  if (!j || j.ok === false) throw new Error((j && j.error) || 'Run settings not saved');
+  publishRunState();
+  return j;
+}
+
 async function persistTransientSettings(next) {
   const rec = selectedRunRecord();
   const t = mergeTransient(next);
@@ -31141,6 +31161,11 @@ async function persistRunSettings(partial, opts) {
   if (partial && Array.isArray(partial.result_controls)) body.result_controls = partial.result_controls;
   // Cores: a whole number, or null for Auto.
   if (partial && partial.cores !== undefined) body.cores = partial.cores;
+  // API 1.4: "Stop when a monitor settles" (null turns it off).
+  if (partial && partial.settle !== undefined) {
+    body.settle = partial.settle;
+    if (partial.settle_time_dependency) body.settle_time_dependency = partial.settle_time_dependency;
+  }
   // Post-processing state (saved filter-set views + the live filter set).
   if (partial && Array.isArray(partial.views)) body.views = partial.views;
   if (partial && partial.current_view !== undefined) body.current_view = partial.current_view;
@@ -31494,6 +31519,17 @@ async function copyRunSettingsFrom(srcId, opts) {
     // Cores is the PC's, not the study's: it comes across from any run (null: Auto).
     cores: runCoresOf(src),
   };
+  // Its "Stop when settled" (API 1.4) follows its monitor to the copy, or is off with a note.
+  const destTransient = /transient/i.test(String(body.time_dependency || ''));
+  const carried = carrySettle(src, {
+    copiedControls: body.result_controls,
+    otherStudy,
+    srcTransient: runRecIsTransient(src),
+    destTransient,
+    studyBcIds: studyBcIdsWithFaces(),
+  });
+  body.settle = carried.settle;
+  body.settle_time_dependency = destTransient ? 'Transient' : 'Steady-state';
   const j = await persistRunSettings(body, opts);
   if (!j || j.ok === false) {
     console.warn('[CFD] copy run settings', j && j.error);
@@ -31505,15 +31541,29 @@ async function copyRunSettingsFrom(srcId, opts) {
   runCatalog.transient = transient;
   runCatalog.transient_preview = null;
   runCatalog.transient_preview_key = '';
-  runCopyNote = otherStudy
-    ? 'Copied the time settings from ' + (src.name || 'that run') + ' of another study. Its mesh and monitors stay there.'
-    : 'Copied from ' + (src.name || 'previous run') + '. Change anything you want.';
+  runCopyNote =
+    (otherStudy
+      ? 'Copied the time settings from ' + (src.name || 'that run') + ' of another study. Its mesh and monitors stay there.'
+      : 'Copied from ' + (src.name || 'previous run') + '. Change anything you want.') + (carried.note ? ' ' + carried.note : '');
   endRunCopyPick();
   expandRunFolders(dest.id, true);
   try { refreshSetupTree(); } catch (_) {}
   syncSimControlPanel();
   try { syncRunMeshHub(); } catch (_) {}
   try { if (typeof syncResultsHub === 'function') syncResultsHub(); } catch (_) {}
+}
+
+/** The ids of the open study's boundary conditions that have faces. */
+function studyBcIdsWithFaces() {
+  const sid = typeof currentStudyId === 'function' ? currentStudyId() : '';
+  const out = [];
+  for (const bc of bcCatalog && Array.isArray(bcCatalog.bcs) ? bcCatalog.bcs : []) {
+    if (!bc || !bc.id) continue;
+    if (sid && bc.simulation_id && String(bc.simulation_id) !== String(sid)) continue;
+    const faces = Array.isArray(bc.faces) ? bc.faces.filter(Boolean) : bc.face ? [bc.face] : [];
+    if (faces.length) out.push(String(bc.id));
+  }
+  return out;
 }
 
 function runIdFromCopyTreeNode(node) {
@@ -32056,7 +32106,7 @@ function computeRunState() {
 
   // Progress block (V0.1.0 #sim-finished).
   const hasProgress = !!(run && ['running', 'done', 'failed', 'stopped'].includes(run.status));
-  const progress = { show: hasProgress, title: 'Run', line: '', elapsed: '', eta: '', meta: '', residuals: [], end: 0 };
+  const progress = { show: hasProgress, title: 'Run', line: '', elapsed: '', eta: '', meta: '', residuals: [], end: 0, converged: null };
   if (hasProgress) {
     const it = Number(run.iteration) || 0;
     const runTransient = runXAxisIsSeconds(run);
@@ -32068,11 +32118,15 @@ function computeRunState() {
     const elapsedTxt = elapsedMs != null ? formatElapsed(elapsedMs) : null;
     const failed = run.status === 'failed';
     const stopped = run.status === 'stopped';
+    // API 1.4: how a finished run ended (converged: {by, iteration | time, text?}; false:
+    // it reached its end without converging; none: not known, the line before).
+    const converged = done && run.converged && typeof run.converged === 'object' ? run.converged : null;
     if (runCatalog.attaching) progress.title = 'Loading results';
     else if (failed) progress.title = 'Run failed';
     else if (stopped) progress.title = 'Run stopped';
     else if (running && run.stop_requested) progress.title = 'Stopping';
     else if (running) progress.title = SIM_STAGE_LABELS[solveDisplayStage(run) || run.stage] || 'Solving';
+    else if (done && converged) progress.title = 'Converged';
     else if (done) progress.title = 'Run finished';
     const simT = Number(run.sim_time != null ? run.sim_time : run.iteration) || Number(run.last_saved_iteration) || 0;
     const stage = solveDisplayStage(run) || run.stage;
@@ -32108,6 +32162,12 @@ function computeRunState() {
           : it > 0
             ? 'Stopped at iteration ' + it + ' · nothing saved yet'
             : 'Stopped';
+    } else if (done && converged) {
+      const frames = Number(run.n_saved_times) || 0;
+      const at = Number(converged.time);
+      line = runTransient
+        ? 'Converged at t = ' + formatSimTime(Number.isFinite(at) ? at : simT) + (frames ? ' · ' + frames + ' frames' : '')
+        : 'Converged after ' + (Number(converged.iteration) || it || end) + ' iterations';
     } else if (done && runTransient) {
       const frames = Number(run.n_saved_times) || 0;
       const steps = Number(run.n_steps) || 0;
@@ -32134,6 +32194,7 @@ function computeRunState() {
     progress.meta = bits.join(' · ');
     progress.residuals = Array.isArray(run.residuals) ? run.residuals : [];
     progress.end = end;
+    progress.converged = runConvergedNote(run, done, runTransient);
   }
 
   const trSettings = transient ? runCatalog.transient || transientSettingsFor(rec) : transientSettingsFor(rec);
@@ -32173,6 +32234,14 @@ function computeRunState() {
     cores: runCoresOf(rec),
     // Whether the run's launch runs on more than one core (its last plan's), null before it started.
     launch_parallel: rec && rec.launch && typeof rec.launch.parallel === 'boolean' ? rec.launch.parallel : null,
+    // API 1.4: its "Stop when a monitor settles" and the monitors it can watch.
+    settle: (rec && rec.settle && typeof rec.settle === 'object' ? rec.settle : null) || null,
+    monitors: runSettleMonitors(rec),
+    // What its plan said of that stop when it started (prepare_run.stop_when: {label, text}
+    // or {error}), else null; and its study's record (the analysis's settings), for
+    // the checks its panel makes before Start.
+    stop_when: runStopWhen(run),
+    study: runStudyRecord(rec),
   };
 }
 
@@ -32205,6 +32274,92 @@ async function persistRunCores(cores) {
     if (runCatalog.pending_cores[runId] === edit) delete runCatalog.pending_cores[runId];
     try { publishRunState(); } catch (_) {}
   }
+}
+
+/** A started run's prepare_run.stop_when (API 1.4), else null. */
+function runStopWhen(run) {
+  const prep = run && run.prepare_run && typeof run.prepare_run === 'object' ? run.prepare_run : null;
+  const s = prep && prep.stop_when;
+  return s && typeof s === 'object' ? { ...s } : null;
+}
+
+/** The record of the run's study when it is the open one, else null. */
+function runStudyRecord(rec) {
+  const sim = typeof studyCatalog !== 'undefined' ? studyCatalog.simulation : null;
+  if (!rec || !sim || typeof sim !== 'object') return null;
+  if (rec.simulation_id && sim.id && String(rec.simulation_id) !== String(sim.id)) return null;
+  return { ...sim };
+}
+
+/**
+ * The monitors a run's "Stop when a monitor settles" can watch (API 1.4): its own
+ * monitors (result controls), then its study's boundaries with faces. Its
+ * analysis's run panel decides which quantities of each it offers.
+ */
+function runSettleMonitors(rec) {
+  const out = [];
+  for (const rc of rec && Array.isArray(rec.result_controls) ? rec.result_controls : []) {
+    if (!rc || !rc.id) continue;
+    out.push({
+      id: String(rc.id),
+      name: String(rc.name || 'Monitor'),
+      kind: String(rc.monitor_type || ''),
+      source: 'monitor',
+      // Monitors saved before monitor types: their kind, type and category words.
+      words: [rc.kind, rc.type, rc.category].filter(Boolean).join(' '),
+      // What it is placed on (faces, points, boundaries): a monitor on nothing measures nothing.
+      targets: ['faces', 'points', 'boundaries'].reduce((n, k) => n + (Array.isArray(rc[k]) ? rc[k].length : 0), 0),
+    });
+  }
+  const sid = rec && rec.simulation_id;
+  for (const bc of bcCatalog && Array.isArray(bcCatalog.bcs) ? bcCatalog.bcs : []) {
+    if (!bc || !bc.id) continue;
+    if (sid && bc.simulation_id && String(bc.simulation_id) !== String(sid)) continue;
+    const faces = Array.isArray(bc.faces) ? bc.faces.filter(Boolean) : bc.face ? [bc.face] : [];
+    if (!faces.length) continue;
+    out.push({ id: String(bc.id), name: String(bc.name || 'Boundary'), kind: 'boundary', source: 'boundary', bc_type: String(bc.bc_type || '') });
+  }
+  return out;
+}
+
+/**
+ * The Run panel's line under a finished run's progress about how it ended (API 1.4),
+ * or null: converged ({kind: 'residuals' | 'monitor', text}), or reached its end
+ * without converging ({kind: 'no', text}: its run doc's converged is false).
+ */
+function runConvergedNote(run, done, transient) {
+  if (!done || !run) return null;
+  const c = run.converged;
+  if (c && typeof c === 'object') {
+    if (c.by === 'monitor') {
+      return { kind: 'monitor', text: c.text ? String(c.text) + '.' : 'Its monitor settled, so the solver stopped early.' };
+    }
+    return { kind: 'residuals', text: 'Every residual met its target, so the solver stopped early.' };
+  }
+  if (c !== false) return null;
+  // A stop its plan did not use (prepare_run.stop_when.error) was never in play.
+  const planned = runStopWhen(run);
+  const settle = !!(run.settle && typeof run.settle === 'object' && !(planned && planned.error));
+  if (transient) return { kind: 'no', text: 'Reached the end time before the monitor settled.' };
+  return {
+    kind: 'no',
+    text: settle
+      ? 'Reached the iteration limit before the residuals met their targets or the monitor settled.'
+      : 'Reached the iteration limit before the residuals met their targets.',
+  };
+}
+
+/** A converged run's tree badge (API 1.4), else ''. */
+function runConvergedBadge(rec) {
+  const c = rec && rec.status === 'done' ? rec.converged : null;
+  if (!c || typeof c !== 'object') return '';
+  const at = Number(c.iteration) > 0
+    ? 'after ' + Number(c.iteration) + ' iterations'
+    : Number.isFinite(Number(c.time)) && c.time !== null && c.time !== undefined
+      ? 'at t = ' + formatSimTime(Number(c.time))
+      : '';
+  const title = 'Converged' + (at ? ' ' + at : '') + (c.by === 'monitor' && c.text ? ': ' + String(c.text) : '');
+  return '<span class="tree-converged" data-run-converged="1" title="' + escapeHtml(title) + '">Converged</span>';
 }
 
 /** D26: the run panel's line for a run made on an older version of its linked geometry, else ''. */
@@ -33095,6 +33250,7 @@ async function renameActiveRunClient(name) {
   window.__CFD_RUN_SAVE__ = (patch) => persistSimControl(patch || {});
   window.__CFD_RUN_TRANSIENT_SAVE__ = (t) => persistTransientSettings(t);
   window.__CFD_RUN_CORES_SAVE__ = (cores) => persistRunCores(cores);
+  window.__CFD_RUN_SETTLE_SAVE__ = (settle) => persistRunSettle(settle);
   window.__CFD_RUN_RENAME__ = (name) => renameActiveRunClient(String(name || '').trim() || 'Run 1');
   window.__CFD_RUN_DELETE__ = () => deleteSelectedRunClient();
   window.__CFD_RUN_COPY_PICK__ = (on) => {

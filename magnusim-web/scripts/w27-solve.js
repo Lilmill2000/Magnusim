@@ -425,6 +425,10 @@ export function slimRunDoc(doc) {
     pid: doc.pid != null ? doc.pid : null,
     n_procs: doc.n_procs != null ? doc.n_procs : null,
     stage: solveDisplayStage(doc) || doc.stage || null,
+    // API 1.4: how a converged run ended ({by, iteration | time, text?}; false: it
+    // reached its end without converging) and its "Stop when a monitor settles".
+    converged: doc.converged !== undefined ? doc.converged : null,
+    settle: doc.settle || null,
     project_id: doc.project_id || null,
     project_title: doc.project_title || null,
     study_label: doc.study_label || null,
@@ -1110,7 +1114,7 @@ function nextRunName(list) {
   return 'Run ' + (max + 1);
 }
 
-function inferRunStatus(caseDir, endTime) {
+function inferRunStatus(caseDir, endTime, converged) {
   let maxT = 0;
   try {
     for (const name of readdirSync(caseDir)) {
@@ -1118,7 +1122,7 @@ function inferRunStatus(caseDir, endTime) {
     }
   } catch {}
   const end = Number(endTime);
-  if (Number.isFinite(end) && end > 0 && maxT > 0 && maxT + 1e-9 < end) return 'stopped';
+  if (Number.isFinite(end) && end > 0 && maxT > 0 && maxT + 1e-9 < end && !(converged && typeof converged === 'object')) return 'stopped';
   if (maxT > 0) return 'done';
   return null;
 }
@@ -1234,7 +1238,7 @@ function loadCatalog(projectId, opts) {
     if (!byId.has(item.id)) {
       // A later catalog rewrite used to drop real case folders. Bring them back.
       const doc = item.sidecar || {};
-      const inferred = inferRunStatus(item.case_dir, doc.endTime || item.meta.endTime);
+      const inferred = inferRunStatus(item.case_dir, doc.endTime || item.meta.endTime, doc.converged);
       const saved = listSavedTimes(item.case_dir);
       const lastSaved = saved.length ? saved[saved.length - 1] : 0;
       byId.set(
@@ -1263,7 +1267,7 @@ function loadCatalog(projectId, opts) {
     }
     const prev = byId.get(item.id);
     const doc = item.sidecar || {};
-    const inferred = inferRunStatus(item.case_dir, doc.endTime || item.meta.endTime || (prev && prev.endTime));
+    const inferred = inferRunStatus(item.case_dir, doc.endTime || item.meta.endTime || (prev && prev.endTime), doc.converged || (prev && prev.converged));
     const staleLive = doc.status === 'running' || doc.status === 'starting' || (prev && (prev.status === 'running' || prev.status === 'starting'));
     const status = inferred || (staleLive ? 'stopped' : doc.status || (prev && prev.status) || null);
     byId.set(item.id, {
@@ -1529,6 +1533,25 @@ async function applyRunSettings(id, runId, partial) {
     }
     // Remember the latest transient settings as the study default for new runs.
     await saveSimulationControl(id, { transient: rec.transient }, rec.simulation_id || found.sid);
+  }
+  // "Stop when a monitor settles" (API 1.4): stored on the run as its analysis's run
+  // model cleans it (null: off): the model of the run's time dependency (a draft's
+  // as its panel shows it, settle_time_dependency).
+  if (partial.settle !== undefined) {
+    const td = String(partial.settle_time_dependency || rec.time_dependency || '');
+    let clean;
+    try {
+      clean = await normalizeRunSettings(id, {
+        simulationId: rec.simulation_id || found.sid,
+        runId,
+        timeDependency: /transient/i.test(td) ? 'Transient' : 'Steady-state',
+        settings: { settle: partial.settle },
+        base: {},
+      });
+    } catch (e) {
+      return { ok: false, error: 'Run settings not saved: ' + String((e && e.message) || e) };
+    }
+    rec.settle = clean && clean.settle && typeof clean.settle === 'object' ? clean.settle : null;
   }
   if (partial.time_dependency != null && (!rec.status || rec.status === 'draft')) {
     rec.time_dependency = /transient/i.test(String(partial.time_dependency)) ? 'Transient' : 'Steady-state';
@@ -2133,6 +2156,7 @@ async function startSolveOnRunner(c) {
         stop_requested: false,
         stage: 'starting',
         finished_at: null,
+        converged: null,
         command: null,
         argv: null,
         started_at,

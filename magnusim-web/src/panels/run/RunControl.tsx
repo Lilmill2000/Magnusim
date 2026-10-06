@@ -14,6 +14,7 @@ import {
   runStateNow,
   saveRunCores,
   saveRunSettings,
+  saveRunSettle,
   saveTransientSettings,
   simStart,
   simStop,
@@ -149,6 +150,12 @@ function RunStatus({
       <div className="mesh-finished-line" data-run-line="1">
         {p.line}
       </div>
+      {p.converged ? (
+        // How it ended (API 1.4). Marked: the v0.2.0 panel (h10 parity) had no such line.
+        <p className={'run-converged' + (p.converged.kind === 'no' ? ' is-not' : '')} data-run-converged={p.converged.kind}>
+          {p.converged.text}
+        </p>
+      ) : null}
       {p.elapsed ? <div className="mesh-elapsed">{p.elapsed}</div> : null}
       {p.eta ? <div className="sim-eta">{p.eta}</div> : null}
       <ResidualPlot
@@ -236,6 +243,7 @@ export function RunControl(props: IslandProps) {
     row,
     saveSteady: (patch) => saveRunSettings(patch).then(() => undefined, report),
     saveTransient: (settings) => saveTransientSettings(settings).then(() => undefined, report),
+    saveSettle: (settle) => saveRunSettle(settle).then(() => undefined, report),
   };
   return (
     <div data-run-control="1" data-run-id={state.run_id}>

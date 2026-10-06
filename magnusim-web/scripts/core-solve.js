@@ -28,6 +28,9 @@
  * - The end → the final doc (endedRunDoc: the texts the old run path wrote; a
  *   `lost` run is stopped when it saved frames, else failed, with the runner's
  *   text), the Start's onDone, the live-solve cache, a queue kick.
+ * - A run that ended itself because it converged (API 1.4): its analysis's log
+ *   parser said so with a `converged` event (the runner's frames leave it out, so
+ *   it is read back from the end of the job log) and its doc gets `converged`.
  *
  * w27-solve.js gives it the run-doc writer and the progress snapshot
  * (attachCoreSolveHost) when it loads, before the boot check can adopt a run.
@@ -39,6 +42,7 @@ import { dirname, join } from 'node:path';
 import { FOAM_TEXT, finishFoam, prepareFromJob, registerStepRunKind, runFoamSteps, stepRunRecord } from './foam-runner.js';
 import { createFoamRecord, listFoamRecords, newFoamJobId } from './foam-store.js';
 import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from './project-layout.js';
+import { flushJobLogs } from './log.js';
 import { persistRun, runFolderOf } from './study-io.js';
 import { scheduleComputeQueueKick } from './server/compute-queue.ts';
 
@@ -47,6 +51,10 @@ const ACTIVE = new Set(['queued', 'running']);
 const LATE_STAGES = new Set(['reconstruct', 'stopping']);
 /** How much of the solver's log a finished run keeps (log_excerpt). */
 export const LOG_EXCERPT_CHARS = 6000;
+/** How much of the end of a run's job log is searched for its `converged` event. */
+export const CONVERGED_TAIL_BYTES = 256 * 1024;
+/** What ended a converged run: its residuals met their targets, or a monitor settled. */
+const CONVERGED_BY = new Set(['residuals', 'monitor']);
 
 /**
  * @typedef {{
@@ -192,6 +200,104 @@ export function solverLogExcerpt(rec) {
       }
     }
   }
+}
+
+/**
+ * The `converged` event a run's log parser gave (API 1.4: `{by: 'residuals' | 'monitor',
+ * time}`, time is the iteration of a run on an iterations axis), read from the end of
+ * its job log (the runner's frames do not carry it), or null.
+ * @param {unknown} logPath
+ * @returns {{ by: string, time: number | null } | null}
+ */
+export function convergedFromJobLog(logPath) {
+  if (!logPath) return null;
+  try {
+    // Rows are written in batches: the last ones may still wait.
+    flushJobLogs();
+  } catch {
+    /* read what is there */
+  }
+  let fd = null;
+  let text = '';
+  try {
+    const size = statSync(String(logPath)).size;
+    const want = Math.min(size, CONVERGED_TAIL_BYTES);
+    const buf = Buffer.alloc(want);
+    fd = openSync(String(logPath), 'r');
+    readSync(fd, buf, 0, want, size - want);
+    text = buf.toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* closed */
+      }
+    }
+  }
+  const lines = text.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.includes('converged')) continue;
+    let raw = line.trim();
+    const at = raw.indexOf('{');
+    if (at < 0) continue;
+    raw = raw.slice(at);
+    try {
+      const ev = JSON.parse(raw);
+      if (!ev || ev.event !== 'converged' || !CONVERGED_BY.has(String(ev.by))) continue;
+      return { by: String(ev.by), time: finite(ev.time) ? Number(ev.time) : null };
+    } catch {
+      /* not an event row */
+    }
+  }
+  return null;
+}
+
+/**
+ * A finished run's `converged` (API 1.4), or undefined to leave it out.
+ * - Converged (`ev`): `{by, iteration}` on an iterations axis or `{by, time}` (seconds),
+ *   with the sentence of its analysis's stop (prepare_run.stop_when.text) when a monitor settled.
+ * - Not converged: false when the run could have (its analysis wrote residual targets,
+ *   prepare_run.residual_control, or a settle stop it could use, prepare_run.stop_when).
+ * @param {any} doc
+ * @param {{ by: string, time: number | null } | null | undefined} ev
+ * @param {boolean} transient
+ * @param {any} snap
+ */
+export function convergedOf(doc, ev, transient, snap) {
+  const prep = doc && doc.prepare_run && typeof doc.prepare_run === 'object' ? doc.prepare_run : {};
+  const stop = prep.stop_when && typeof prep.stop_when === 'object' && !prep.stop_when.error ? prep.stop_when : null;
+  if (!ev) return prep.residual_control === true || stop ? false : undefined;
+  const at = ev.time !== null && ev.time !== undefined ? ev.time : snap && finite(snap.sim_time) ? Number(snap.sim_time) : null;
+  /** @type {Record<string, any>} */
+  const out = { by: ev.by };
+  if (at !== null) {
+    if (transient) out.time = at;
+    else out.iteration = Math.round(at);
+  }
+  if (ev.by === 'monitor' && stop && typeof stop.text === 'string' && stop.text) out.text = stop.text;
+  return out;
+}
+
+/**
+ * The note of a run that converged.
+ * @param {string} app
+ * @param {Record<string, any>} converged
+ */
+function convergedNote(app, converged) {
+  const where = finite(converged.iteration)
+    ? `after ${converged.iteration} iterations`
+    : finite(converged.time)
+      ? `at t = ${converged.time} s`
+      : '';
+  if (converged.by === 'monitor') {
+    if (converged.text) return `Converged: ${converged.text}. Results are in the run folder.`;
+    return `${app} stopped when its monitor settled${where ? ` ${where}` : ''}. Results are in the run folder.`;
+  }
+  return `${app} converged${where ? ` ${where}` : ''}: the residuals met their targets. Results are in the run folder.`;
 }
 
 /** A run's run.json as on disk, or null. @param {string} projectId @param {string} runId @param {string} [simId] */
@@ -383,10 +489,11 @@ export function onCoreSolveEvent(rec, ev) {
  * What an ended runner record makes of its run doc: the status and the texts the
  * old run path wrote, the last progress, saved frames and the log's tail.
  * done → done; stopped → stopped; failed → failed; lost → stopped when frames
- * were saved, else failed (the runner's text in both).
+ * were saved, else failed (the runner's text in both). A done run that converged
+ * (`ctx.converged`, its parser's event) says so in its note and `converged`.
  * @param {any} doc the run doc
  * @param {any} rec the ended runner record
- * @param {{ snap?: any, saved?: number[], excerpt?: string | null, now?: string }} [ctx]
+ * @param {{ snap?: any, saved?: number[], excerpt?: string | null, now?: string, converged?: { by: string, time: number | null } | null }} [ctx]
  */
 export function endedRunDoc(doc, rec, ctx = {}) {
   const d = doc || {};
@@ -407,8 +514,11 @@ export function endedRunDoc(doc, rec, ctx = {}) {
   let note;
   /** @type {string | null} */
   let error = null;
+  /** @type {Record<string, any> | false | undefined} */
+  let converged;
   if (status === 'done') {
-    note = `${app} finished. Results are in the run folder.`;
+    converged = convergedOf(d, ctx.converged, transient, ctx.snap);
+    note = converged ? convergedNote(app, converged) : `${app} finished. Results are in the run folder.`;
   } else if (status === 'stopped') {
     error = runnerText;
     if (rec.status === 'lost' && runnerText) note = sentence(runnerText);
@@ -450,6 +560,7 @@ export function endedRunDoc(doc, rec, ctx = {}) {
   }
   if (Object.keys(phases).length) out.phases = phases;
   if (Number.isFinite(n) && n >= 1) out.n_procs = n;
+  if (converged !== undefined) out.converged = converged;
   if (typeof ctx.excerpt === 'string') out.log_excerpt = ctx.excerpt;
   return out;
 }
@@ -499,6 +610,7 @@ export function onCoreSolveEnd(rec) {
       snap: endProgress(live, rec),
       saved: savedTimesIn(rec.case_dir),
       excerpt: solverLogExcerpt(rec),
+      converged: rec.status === 'done' ? convergedFromJobLog(rec.log_path) : null,
     });
     // A run deleted meanwhile stays deleted.
     if (doc && s.host) s.host.writeRunDoc(String(rec.project_id), { ...doc, ...out, run_id: String(rec.run_id) });
@@ -541,7 +653,12 @@ export function reconcileEndedRun(projectId, doc, rec) {
   if (st !== 'running' && st !== 'starting') return doc;
   const next = {
     ...doc,
-    ...endedRunDoc(doc, rec, { snap: endProgress(null, rec), saved: savedTimesIn(rec.case_dir), excerpt: solverLogExcerpt(rec) }),
+    ...endedRunDoc(doc, rec, {
+      snap: endProgress(null, rec),
+      saved: savedTimesIn(rec.case_dir),
+      excerpt: solverLogExcerpt(rec),
+      converged: rec.status === 'done' ? convergedFromJobLog(rec.log_path) : null,
+    }),
   };
   const sid = String(doc.simulation_id || rec.simulation_id || '');
   if (sid) {

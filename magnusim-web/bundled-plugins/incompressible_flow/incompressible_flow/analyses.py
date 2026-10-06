@@ -550,7 +550,7 @@ def _decision(spec: Any, ctx: CaseContext) -> dict:
     override = getattr(ctx.inputs, "transient_override", None) if ctx.inputs is not None else None
     model = spec.physics.turbulence_model
     control = control_to_web(spec.transient, override) if spec.transient is not None else None
-    return {
+    out = {
         "bcs": rows,
         "wall_default": spec.wall_default,
         "transient_control": control,
@@ -567,6 +567,25 @@ def _decision(spec: Any, ctx: CaseContext) -> dict:
         "patches": spec.patches,
         "transient": spec.transient is not None,
     }
+    if spec.transient is None:
+        # A steady run stops itself once its residuals meet their targets
+        # (residualControl): one that runs to its iteration count did not converge.
+        out["residual_control"] = True
+    stop = _stop_when(spec)
+    if stop is not None:
+        out["stop_when"] = stop
+    return out
+
+
+def _stop_when(spec: Any) -> dict | None:
+    """The run's "Stop when a monitor settles", as the run record keeps it (API 1.4):
+    ``label`` and ``text`` (the sentence its end shows: "Forces 1 · Cd stayed within
+    0.001 of its average over 100 iterations"), or ``error`` (and ``label``) when it
+    will not be written: the writer's own check (settle.check_settle). None when the
+    run has none."""
+    from .settle import check_settle
+
+    return check_settle(spec)
 
 
 def _write_web_solve_case(ctx: CaseContext) -> dict:

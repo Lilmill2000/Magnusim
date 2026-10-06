@@ -9,10 +9,13 @@ export const H10_PROJECT = 'h10-ui-parity-e2e';
 export const RUN_SETTINGS_PROJECT = 'run-settings-e2e';
 /** Own elbow project for study-start-numerics.spec.js: it edits the study's starting flow and numerics. */
 export const STUDY_START_PROJECT = 'study-start-numerics-e2e';
+/** Own elbow project for convergence.spec.js: a settle stop on a draft run, and finished runs that converged. */
+export const CONVERGENCE_PROJECT = 'convergence-e2e';
 
 /** @param {string} destRoot the test projects root */
 export default function seed(destRoot) {
   seedElbowProject(destRoot, H10_PROJECT, 'UI parity');
   seedElbowProject(destRoot, RUN_SETTINGS_PROJECT, 'Run settings');
   seedElbowProject(destRoot, STUDY_START_PROJECT, 'Study start and numerics');
+  seedElbowProject(destRoot, CONVERGENCE_PROJECT, 'Convergence');
 }

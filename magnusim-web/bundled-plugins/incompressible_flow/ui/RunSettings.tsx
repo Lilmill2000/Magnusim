@@ -1,12 +1,23 @@
 /**
  * The run panel's settings: a steady run's iterations and write interval, or a
  * transient run's simulation time, result frames, the calculated time step
- * (hint) and the advanced PIMPLE settings. Locked once the run has started.
+ * (hint) and the advanced PIMPLE settings; for either, "Stop when a monitor
+ * settles" (settle.ts). Locked once the run has started.
  */
 import { useEffect, useState } from 'react';
 import type { RunSettingsProps } from '../../../src/plugin-api';
 import type { RunState } from '../../../src/panels/legacyBridge';
 import { host } from './host';
+import {
+  choiceOf,
+  defaultWindow,
+  readSettle,
+  settleChoices,
+  settleNumber,
+  settleProblem,
+  settleSentence,
+  type SettleSetting,
+} from './settle';
 import { frameInterval, normalizeTransient, transientHint, type TransientSettings } from './transient';
 
 function NumberRow({
@@ -135,14 +146,158 @@ function SciOrAuto({
   );
 }
 
+/**
+ * "Stop when a monitor settles" (API 1.4): end the run once a monitor's quantity
+ * stays within an amount of its running average over a window. Only quantities
+ * OpenFOAM can read while it solves are offered. Marked (data-run-settle): the
+ * v0.2.0 panel had no such rows (h10 parity).
+ */
+function SettleStop({
+  run,
+  saveSettle,
+  frame,
+}: {
+  run: RunState;
+  saveSettle: RunSettingsProps['saveSettle'];
+  /** A transient run's result-frame interval in seconds (0: steady or unknown). */
+  frame: number;
+}) {
+  const transient = run.transient;
+  const choices = settleChoices(run.monitors);
+  const settle = readSettle(run.settle);
+  const chosen = choiceOf(choices, settle);
+  const save = (next: SettleSetting | null) => void saveSettle?.(next ? { ...next } : null);
+  const windowUnit = transient ? 's' : 'iterations';
+  // Never shown as active when it is not: a started run says what its plan found,
+  // a draft what the panel can tell (the same checks, settle.py check_settle).
+  const problem = settleProblem(settle, choices, run.monitors, run.study);
+  if (run.locked) {
+    if (!settle) return null;
+    const planned = run.stop_when || null;
+    const error = planned ? planned.error || '' : problem;
+    return (
+      <div data-run-settle="1">
+        <div className="mat-row">
+          <span className="mat-k">Stop when settled</span>
+          {error ? (
+            <span className="mat-v sim-tr-warn" data-run-settle-unused="1">
+              {`Stop when settled was not used: ${error}.`}
+            </span>
+          ) : (
+            <span className="mat-v">
+              {planned && planned.text
+                ? planned.text.replace(/ stayed within /, ' stays within ')
+                : chosen
+                  ? settleSentence(chosen, settle, transient)
+                  : ''}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+  const index = chosen ? choices.indexOf(chosen) : settle ? -2 : -1;
+  let hint = '';
+  if (settle && chosen && !problem) {
+    hint =
+      `Ends the run once ${settleSentence(chosen, settle, transient)}.` +
+      (!transient
+        ? ' The residual targets still end it too.'
+        : chosen.kind !== 'forces' && frame > 0
+          ? ` A window shorter than ${settleNumber((10 * frame) / 50)} s (10 monitor samples) is made that long.`
+          : '');
+  } else if (!choices.length) {
+    hint = 'Add a monitor (Monitors +) or an inlet or outlet to stop on.';
+  }
+  // A stop that would not be written says so, and how to fix it.
+  let warn = problem ? `Not used as set: ${problem}.` : '';
+  if (problem && chosen && chosen.kind === 'forces') warn += " Set it in the study's Reference values.";
+  else if (problem) warn += ' Pick another, or Off.';
+  else if (chosen && chosen.kind === 'forces' && !run.study) {
+    warn = `Force coefficients need the study's reference area${chosen.quantity.key === 'Cm' ? ' and length' : ''} (Reference values).`;
+  }
+  return (
+    <div data-run-settle="1">
+      <div className="mat-row">
+        <span
+          className="mat-k"
+          title="End the run once a monitor's value stops changing: it stays within the amount below of its average over the window. Only values OpenFOAM can read while it solves are listed: area averages, boundary pressure, velocity and flow, force coefficients, and point probes (the average of their points)."
+        >
+          Stop when settled
+        </span>
+        <select
+          className="bc-select"
+          aria-label="Stop when a monitor settles"
+          value={index >= 0 ? String(index) : index === -2 ? 'gone' : ''}
+          disabled={!choices.length && !settle}
+          onChange={(e) => {
+            const c = e.target.value === '' ? null : choices[Number(e.target.value)];
+            if (!c) return save(null);
+            const keep = settle && chosen && chosen.quantity.unit === c.quantity.unit;
+            save({
+              source: c.source,
+              id: c.id,
+              quantity: c.quantity.key,
+              tolerance: keep && settle ? settle.tolerance : c.quantity.tolerance,
+              window: settle ? settle.window : defaultWindow(transient, frame),
+            });
+          }}
+        >
+          <option value="">Off</option>
+          {index === -2 ? (
+            <option value="gone" disabled>
+              Not available (not used)
+            </option>
+          ) : null}
+          {choices.map((c, i) => (
+            <option key={`${c.source}:${c.id}:${c.quantity.key}`} value={String(i)}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      {settle && chosen ? (
+        <>
+          <NumberRow
+            label="Within"
+            title="How close the value must stay to its average over the window (in its own unit, not a percentage)."
+            value={settle.tolerance}
+            unit={chosen.quantity.unit || undefined}
+            field="settle_tolerance"
+            disabled={false}
+            onCommit={(v) => v != null && v > 0 && save({ ...settle, tolerance: v })}
+          />
+          <NumberRow
+            label="Over the last"
+            title={transient ? 'The averaging window, in seconds of simulated time.' : 'The averaging window, in iterations.'}
+            value={settle.window}
+            unit={windowUnit}
+            field="settle_window"
+            disabled={false}
+            onCommit={(v) => v != null && v > 0 && save({ ...settle, window: transient ? v : Math.max(1, Math.round(v)) })}
+          />
+        </>
+      ) : null}
+      {hint || warn ? (
+        <p className="mat-assign-hint" data-run-settle-hint="1">
+          {hint}
+          {warn ? <span className="sim-tr-warn"> {warn}</span> : null}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function TransientFields({
   run,
   defaults,
   saveTransient,
+  saveSettle,
 }: {
   run: RunState;
   defaults: Record<string, unknown>;
   saveTransient: RunSettingsProps['saveTransient'];
+  saveSettle: RunSettingsProps['saveSettle'];
 }) {
   const t = normalizeTransient(run.transient_settings, {}, defaults);
   const locked = run.locked;
@@ -181,6 +336,7 @@ function TransientFields({
         {hint.text}
         {hint.warn ? <span className="sim-tr-warn"> {hint.warn}</span> : null}
       </p>
+      <SettleStop run={run} saveSettle={saveSettle} frame={interval} />
       <details className="mesh-advanced">
         <summary>Advanced settings</summary>
         <div className="mat-row">
@@ -294,9 +450,11 @@ function TransientFields({
   );
 }
 
-export function RunSettings({ run, row, saveSteady, saveTransient }: RunSettingsProps) {
+export function RunSettings({ run, row, saveSteady, saveTransient, saveSettle }: RunSettingsProps) {
   const defaults = { ...(row?.run_defaults || {}) };
-  if (run.transient) return <TransientFields run={run} defaults={defaults} saveTransient={saveTransient} />;
+  if (run.transient) {
+    return <TransientFields run={run} defaults={defaults} saveTransient={saveTransient} saveSettle={saveSettle} />;
+  }
   return (
     <div data-run-steady="1">
       <NumberRow
@@ -313,6 +471,7 @@ export function RunSettings({ run, row, saveSteady, saveTransient }: RunSettings
         disabled={run.locked}
         onCommit={(v) => v != null && void saveSteady({ write_interval: Math.max(1, Math.round(v)) })}
       />
+      <SettleStop run={run} saveSettle={saveSettle} frame={0} />
     </div>
   );
 }

@@ -18,8 +18,9 @@ const UPDATE = process.env.MAGNUSIM_UPDATE_PARITY === '1';
 const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 // Rows the study panel gained after v0.2.0 (Reference values, F4), left out of the comparison.
 const STUDY_ADDED = '[data-study-reference]';
-// Rows the transient run panel gained after v0.2.0 (Average from, F2), left out of the comparison.
-const RUN_ADDED = '[data-run-field="average_from"]';
+// Rows the run panel gained after v0.2.0, left out of the comparison: Average from
+// (F2, transient), "Stop when a monitor settles" and how a finished run ended (F5).
+const RUN_ADDED = '[data-run-field="average_from"], [data-run-settle], [data-run-converged]';
 // The Cores row (its setting and its hint) every run panel gained after v0.2.0 (F10),
 // left out of the comparison.
 const CORES_ADDED = '[data-run-cores], [data-run-cores-hint]';
@@ -262,7 +263,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await capture(page, 'study-steady', studyPanel, { skip: `${STUDY_ADDED}, ${TURBULENCE_ADDED}, ${NEW_STUDY_ROWS}` });
   const steady = await createRun('Parity steady');
   await openRun(steady);
-  await capture(page, 'run-draft-steady', runPanel, { skip: CORES_ADDED });
+  await capture(page, 'run-draft-steady', runPanel, { skip: `${RUN_ADDED}, ${CORES_ADDED}` });
   await setField('Iterations', 10);
   await setField('Write interval', 5);
   await expect(runControl.locator('[data-run-start]')).toBeEnabled({ timeout: 60_000 });
@@ -270,7 +271,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await waitStatus(steady, /^done$/, 900_000);
   await openRun(steady);
   await expect(runControl.locator('[data-residual-plot="1"]')).toBeVisible({ timeout: 60_000 });
-  await capture(page, 'run-done-steady', runPanel, { skip: CORES_ADDED });
+  await capture(page, 'run-done-steady', runPanel, { skip: `${RUN_ADDED}, ${CORES_ADDED}` });
   stage(t0, 'steady run done');
 
   // Transient: the study panel, a draft run with its time-step preview, the

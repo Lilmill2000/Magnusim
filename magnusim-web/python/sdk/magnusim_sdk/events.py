@@ -30,6 +30,8 @@ EventKind = Literal[
     "phase",
     "result",
     "error",
+    # API 1.4: a run that ended itself because it converged (an analysis's log parser).
+    "converged",
 ]
 
 KNOWN_KINDS = frozenset(
@@ -45,6 +47,7 @@ KNOWN_KINDS = frozenset(
         "phase",
         "result",
         "error",
+        "converged",
     }
 )
 

@@ -34,6 +34,7 @@ from .materials import LEGACY_AIR
 from .monitors import custom_monitors, forces_monitor_records, probe_monitor_records
 from .physics import StudyPhysics, physics_from_record
 from .reference import reference_record
+from .settle import clean_settle
 from .transient import STEADY_DEFAULTS, TransientControl, load_mesh_meta, resolve_transient_control
 
 __all__ = [
@@ -117,6 +118,10 @@ class RunSpec:
     forces_monitors: list[dict[str, Any]] = field(default_factory=list)
     # This run's Point probes: {"id", "name", "points"} (metres, the mesh's coordinates).
     probe_monitors: list[dict[str, Any]] = field(default_factory=list)
+    # The run's result controls as saved (the monitors a settle stop can watch).
+    result_controls: list[dict[str, Any]] = field(default_factory=list)
+    # "Stop when a monitor settles" (incompressible_flow.settle.clean_settle), or None.
+    settle: dict[str, Any] | None = None
     analysis_key: str = ""
     time_dependency: Literal["steady", "transient"] = "steady"
     ok: bool = True
@@ -264,6 +269,8 @@ def load_run_spec(inputs: Any) -> RunSpec:
         reference=reference_record(inputs.study or None),
         forces_monitors=forces_monitor_records((inputs.run or {}).get("result_controls")),
         probe_monitors=probe_monitor_records((inputs.run or {}).get("result_controls")),
+        result_controls=[r for r in (inputs.run or {}).get("result_controls") or [] if isinstance(r, dict)],
+        settle=clean_settle((inputs.run or {}).get("settle"), transient=td == "transient"),
         analysis_key=inputs.analysis_key,
         time_dependency=td,
         ok=True,

@@ -169,7 +169,9 @@ test('gate:core-solve-restart: a core solve outlives the app and is followed aga
     stage(`R2's relay ended while the server was down; server up again at ${host.base}`);
     await expect.poll(async () => (await row(R2)).status, { timeout: 120_000, intervals: [1_000] }).toBe('done');
     const done2 = await runDoc(R2);
-    expect(done2.note).toBe('simpleFoam finished. Results are in the run folder.');
+    // Done: it ran its 500 iterations, or its residuals met their targets first (F5).
+    const DONE_NOTE = /^simpleFoam (?:finished|converged after \d+ iterations: the residuals met their targets)\. Results are in the run folder\.$/;
+    expect(done2.note).toMatch(DONE_NOTE);
     expect(done2.has_results).toBe(true);
     expect(record(job2).status).toBe('done');
     await waitSlotFree(request, { base: base(), timeoutMs: 120_000 });
@@ -184,7 +186,7 @@ test('gate:core-solve-restart: a core solve outlives the app and is followed aga
     stage('R2 doc set back to running while no server ran; server up again');
     expect(await busy(), 'nothing is followed: its record has ended').toBeNull();
     await expect.poll(async () => (await row(R2)).status, { timeout: 30_000, intervals: [500] }).toBe('done');
-    expect((await runDoc(R2)).note).toBe('simpleFoam finished. Results are in the run folder.');
+    expect((await runDoc(R2)).note).toMatch(DONE_NOTE);
     await expect.poll(() => readRunJson(projects, A, R2).status, { timeout: 15_000, intervals: [500] }).toBe('done');
     stage('the doc that said running is written done from its record');
   } finally {

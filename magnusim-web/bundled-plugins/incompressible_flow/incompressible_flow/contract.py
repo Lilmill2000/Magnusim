@@ -315,10 +315,22 @@ def _steady_normalize(raw: dict[str, Any]) -> dict[str, Any]:
             return fallback
         return max(1, n)
 
-    return {
+    out: dict[str, Any] = {
         "end_time": _int(raw.get("end_time"), int(d["end_time"])),
         "write_interval": _int(raw.get("write_interval"), int(d["write_interval"])),
     }
+    _settle_into(out, raw, transient=False)
+    return out
+
+
+def _settle_into(out: dict[str, Any], raw: dict[str, Any], *, transient: bool) -> None:
+    """The run's "Stop when a monitor settles" (stored on the run record as ``settle``),
+    cleaned: only when the edits name it (None turns it off), so a run without one
+    normalizes as before."""
+    if "settle" in raw:
+        from .settle import clean_settle
+
+        out["settle"] = clean_settle(raw.get("settle"), transient=transient)
 
 
 def _steady_preview(**kwargs: Any) -> dict[str, Any]:
@@ -334,7 +346,10 @@ def _transient_defaults() -> dict[str, Any]:
 def _transient_normalize(raw: dict[str, Any]) -> dict[str, Any]:
     from .transient import normalize_transient
 
-    return dict(normalize_transient(raw))
+    out = dict(normalize_transient({k: v for k, v in raw.items() if k != "settle"}))
+    out.pop("settle", None)
+    _settle_into(out, raw, transient=True)
+    return out
 
 
 def transient_preview(

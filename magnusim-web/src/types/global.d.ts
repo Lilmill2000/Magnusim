@@ -97,6 +97,7 @@ declare global {
     __CFD_RUN_SAVE__?: (patch: { end_time?: number; write_interval?: number }) => Promise<unknown>;
     __CFD_RUN_TRANSIENT_SAVE__?: (t: import('../panels/legacyBridge').TransientSettings) => Promise<unknown>;
     __CFD_RUN_CORES_SAVE__?: (cores: number | null) => Promise<unknown>;
+    __CFD_RUN_SETTLE_SAVE__?: (settle: Record<string, unknown> | null) => Promise<unknown>;
     __CFD_RUN_RENAME__?: (name: string) => Promise<unknown>;
     __CFD_RUN_DELETE__?: () => Promise<unknown>;
     __CFD_RUN_COPY_PICK__?: (on: boolean) => void;
