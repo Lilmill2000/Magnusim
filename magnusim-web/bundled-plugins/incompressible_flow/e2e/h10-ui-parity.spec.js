@@ -19,8 +19,11 @@ const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 // Rows the study panel gained after v0.2.0 (Reference values, F4), left out of the comparison.
 const STUDY_ADDED = '[data-study-reference]';
 // Rows the run panel gained after v0.2.0, left out of the comparison: Average from
-// (F2, transient), "Stop when a monitor settles" and how a finished run ended (F5).
-const RUN_ADDED = '[data-run-field="average_from"], [data-run-settle], [data-run-converged]';
+// (F2, transient), "Stop when a monitor settles" and how a finished run ended (F5),
+// and a finished run's Continue (F6).
+const RUN_ADDED = '[data-run-field="average_from"], [data-run-settle], [data-run-converged], [data-run-continue]';
+// A converged run's tree badge (F5), left out of the tree's comparison.
+const TREE_ADDED = '[data-run-converged]';
 // The Cores row (its setting and its hint) every run panel gained after v0.2.0 (F10),
 // left out of the comparison.
 const CORES_ADDED = '[data-run-cores], [data-run-cores-hint]';
@@ -311,7 +314,7 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
 
   // The core's setup tree after all of it (H11: plugin studies sit in their own
   // section below, and the simulations tree itself is unchanged).
-  await capture(page, 'tree-simulations', page.locator('#simulations-section'));
+  await capture(page, 'tree-simulations', page.locator('#simulations-section'), { skip: TREE_ADDED });
 
   // The results timeline (Animation) runs on each run's x axis: the transient
   // run's in seconds, the steady run's in iterations.
