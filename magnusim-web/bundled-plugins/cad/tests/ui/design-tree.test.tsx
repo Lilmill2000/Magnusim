@@ -28,7 +28,7 @@ describe('design tree', () => {
   it('shows the part name, the origin, bodies and the history in document order', () => {
     expect(ui.$('[data-part-name] .tl')!.textContent).toBe('Part 1');
     expect(ui.$$('.geo-head').map((e) => e.textContent)).toEqual(['PART', 'HISTORY']);
-    expect(ui.$$('[data-tree-node^="origin:"] .tl').map((e) => e.textContent)).toEqual(['Top plane', 'Front plane', 'Right plane']);
+    expect(ui.$$('[data-tree-node^="origin:"] .tl').map((e) => e.textContent)).toEqual(['Top plane', 'Front plane', 'Right plane', 'X axis', 'Y axis', 'Z axis']);
     expect(ui.history()).toEqual(['Extrude 1', 'Extrude 2', 'Extrude 3', '|']);
     expect(ui.$('[data-bodies-folder] > .tree-row .tl')!.textContent).toBe('Bodies (3)');
     expect(ui.$('[data-params-row] .tl')!.textContent).toBe('Parameters (0)');

@@ -48,7 +48,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
-import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, soloVolume, chipVolumes } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(HERE, '..', 'fixtures', 'kernel');
@@ -69,7 +69,7 @@ const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const featureRow = (frame, name) => frame.locator('[data-cad-tree] [data-feature-row]').filter({ has: frame.locator('> .tree-row .tl', { hasText: new RegExp(`^${esc(name)}$`) }) });
 const bodyRows = (frame) => frame.locator('[data-cad-tree] [data-body-row]');
 const volumeChip = (frame) => frame.locator('[data-chip="volume"]');
-const volumeValue = (frame) => frame.locator('[data-chip="volume"] [data-volume-mm3]');
+const volumeValue = (frame) => soloVolume(frame);
 const sizeChip = (frame) => frame.locator('[data-chip="size"]');
 const expectSaved = (frame) => expect(frame.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 30_000 });
 
@@ -179,7 +179,7 @@ async function openBodies(frame) {
 }
 
 async function openMass(frame) {
-  await tb(frame).locator('[data-command="inspect.mass"]').click();
+  await runCommand(frame, 'inspect.mass');
   const p = panel(frame);
   await expect(p.locator('[data-tool-panel="inspect.mass"]')).toBeVisible();
   return p;
@@ -235,7 +235,7 @@ async function addFluidEnclosure(frame) {
 
 /** Combine from the toolbar: the operation, then target and tool bodies clicked in the tree (by row index). */
 async function combine(frame, op, targets, tools) {
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   const p = panel(frame);
   await expect(p.locator('[data-feature-panel="combine"]')).toBeVisible();
   await p.locator('[data-field="op"] select').selectOption(op);
@@ -354,7 +354,8 @@ test('cad:p2-step-import flange.step by the picker: "0 problems", "Imported 1 (f
   await dropFile(page, 'box20.step', readFileSync(BOX20));
   expect(await finishImport(page, frame)).toBe('0 problems');
   await expect(featureRow(frame, 'Imported 2 (box20.step)')).toHaveAttribute('data-state', 'ok');
-  await expect(volumeChip(frame)).toHaveText(`VolumeTotal of 2 bodies · ${readout(REF.flange.import.volume + 8000)} mm³`);
+  // Each body with its own volume, never added together (P4a).
+  await expect(volumeChip(frame)).toHaveText(`Volumeflange: ${readout(REF.flange.import.volume)} mm³ · ${await bodyRows(frame).locator('.cad-body-name').nth(1).textContent()}: 8000 mm³`);
   await expectSaved(frame);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
@@ -417,7 +418,7 @@ test('cad:p2-step-delete-faces-picks the holes clicked one by one in the Delete 
   const holes = await holeWallPoints(page);
   // Delete faces from the toolbar, then each hole clicked in the viewport. The live result heals
   // each one as it is picked, so the body's faces are numbered anew before the next click.
-  await tb(frame).locator('[data-command="modify.delete-faces"]').click();
+  await runCommand(frame, 'modify.delete-faces');
   const p = panel(frame);
   await expect(p.locator('[data-feature-panel="delete_faces"]')).toBeVisible();
   for (let i = 0; i < holes.length; i++) {
@@ -476,7 +477,7 @@ test('cad:p2-step-split by the Right plane: 2 bodies of half the volume each, na
   const { seen, frame } = await freshPart(page, request);
   await importByPicker(page, frame, FLANGE);
   await finishImport(page, frame);
-  await tb(frame).locator('[data-command="modify.split"]').click();
+  await runCommand(frame, 'modify.split');
   const p = panel(frame);
   await expect(p.locator('[data-feature-panel="split"]')).toBeVisible();
   await openBodies(frame);
@@ -550,12 +551,12 @@ test("cad:p2-step-vortex-fluid Daniel's flow: Enclosure minus Vortex = the fluid
   const mass = await openMass(frame);
   await expect(mass.locator('[data-mass-value="faces"]')).toHaveText(new RegExp(`^${REF.cut_fluid.faces}, `));
   await mass.locator('[data-panel-done]').click();
-  await tb(frame).locator('[data-command="inspect.check"]').click();
+  await runCommand(frame, 'inspect.check');
   await expect(panel(frame).locator('[data-check-summary]')).toHaveText('Enclosure 1 is valid', { timeout: 60_000 });
   await panel(frame).locator('[data-panel-done]').click();
 
   // Export STEP (AP214): the download.
-  await tb(frame).locator('[data-command="file.export-step"]').click();
+  await runCommand(frame, 'file.export-step');
   const ex = panel(frame);
   await expect(ex.locator('[data-field="schema"] select')).toHaveValue('AP214');
   const dl = page.waitForEvent('download');
@@ -634,10 +635,12 @@ test('cad:p2-step-combine-targets Cut with two targets and one tool: each target
   await addBlock(page, [30, 0, 0], [20, 20, 20]);
   await addBlock(page, [10, 5, -5], [30, 10, 30]);
   const q = await combine(f2, 'cut', [0, 1], [2]);
-  await expectVolume(f2, 2 * (8000 - 2000), 1e-9);
+  // Each target 8000 - 2000 (P4a: the chip lists each body on its own, never a total).
+  await expect.poll(() => chipVolumes(f2).then((v) => v.map((x) => Math.round(x * 1e6) / 1e6)), { timeout: 60_000 }).toEqual([6000, 6000]);
   await expect(f2.locator('[data-cad-tree] [data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (2)');
-  // The panel shows its picks as the selection: the two targets, 12,000 mm³ together.
-  await expect(volumeChip(f2)).toHaveText('Volume2 bodies · 12,000 mm³');
+  // The panel shows its picks as the selection: the two targets, each with its own volume.
+  await expect(volumeChip(f2)).toHaveText(/^Volume.+: 6000 mm³ · .+: 6000 mm³$/);
+  await expect(volumeChip(f2)).not.toContainText('12,000');
   await q.locator('[data-panel-done]').click();
   await expect(featureRow(f2, 'Combine 1')).toHaveAttribute('data-state', 'ok');
   await expectSaved(f2);

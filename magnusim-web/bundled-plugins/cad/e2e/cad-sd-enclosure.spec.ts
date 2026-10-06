@@ -22,7 +22,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addSolid, baseUrl, drawBlock, modelOnPage, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, baseUrl, drawBlock, modelOnPage, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, groupCommandLabels } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REF = JSON.parse(readFileSync(resolve(HERE, '..', 'fixtures', 'kernel', 'reference.json'), 'utf8'));
@@ -120,8 +120,8 @@ async function dragArrow(page: Page, base: V3, dir: V3, mm: number, { grabPx = 3
 test('cad:sd-no-one-click-solids the toolbar has no Box or Cylinder; CFD PREP (Enclosure) comes after the modelling groups, greyed "Add or import a body first" until a body exists', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const labels = await tb(frame).locator('.tb-group-label').allTextContents();
-  expect(labels).toEqual(['SKETCH', 'SOLID', 'MODIFY', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
-  await expect(tb(frame).locator('[data-group="solid"] .tb-txt')).toHaveText(['Extrude']);
+  expect(labels).toEqual(['SKETCH', 'SOLID', 'MODIFY', 'CONSTRUCT', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
+  expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft']);
   await expect(tb(frame).locator('[data-group="cfd"] .tb-txt')).toHaveText(['Enclosure']);
   await expect(tb(frame).locator('[data-command="solid.box"], [data-command="solid.cylinder"]')).toHaveCount(0);
   const enc = tb(frame).locator('[data-command="cfd.enclosure"]');
@@ -220,7 +220,7 @@ test('cad:sd-enclosure-box a drawn block -> Enclosure: Zero padding is its exact
   await expect(p).toHaveCount(0);
 
   // The fluid: a separate Combine, Cut, the enclosure minus the block, keeping the block.
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   await expect(p.locator('[data-feature-panel="combine"]')).toBeVisible();
   await p.locator('[data-field="op"] select').selectOption('cut');
   const folder = frame.locator('[data-cad-tree] [data-bodies-folder]');
@@ -272,7 +272,7 @@ test("cad:sd-enclosure-vortex Daniel's Vortex: Enclosure, Fixed 100 mm, is the r
   await shot(page, 'sd-enclosure-vortex');
   await p.locator('[data-panel-done]').click();
 
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   await p.locator('[data-field="op"] select').selectOption('cut');
   const folder = frame.locator('[data-cad-tree] [data-bodies-folder]');
   if ((await folder.getAttribute('aria-expanded')) !== 'true') await folder.locator('> .tree-row .tw').click();

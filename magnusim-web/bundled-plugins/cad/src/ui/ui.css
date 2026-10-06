@@ -156,6 +156,54 @@
   white-space: nowrap;
 }
 
+/* A group's "More ▾" (Toolbar FOLD_ORDER): its folded commands, in a menu. Narrower than a
+   command button, so folding a group's first command frees room. */
+.cad-toolbar .tb-group .tb-btn.tb-more {
+  min-width: 40px;
+}
+.cad-toolbar .tb-btn.tb-more.is-open {
+  background: var(--cad-icon-btn-hover-bg);
+}
+/* "More" with its caret: the caret sits in the button's right padding, so the button stays narrow
+   and the label on one line. */
+.tb-btn.tb-more .tb-txt {
+  white-space: nowrap;
+  margin-right: 4px;
+}
+.tb-btn.tb-more .tb-caret {
+  position: absolute;
+  right: 2px;
+  bottom: 5px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* A command in a menu (the toolbar's More menus): icon, label, and its shortcut at the right. */
+.face-ctx-menu button.cad-menu-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.face-ctx-menu .cad-menu-ico {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: var(--mg-text-strong);
+}
+.face-ctx-menu button[aria-disabled] .cad-menu-ico {
+  color: var(--mg-text-subtle);
+}
+.face-ctx-menu .cad-menu-key {
+  margin-left: auto;
+  padding-left: 18px;
+  font: 500 11px/1 var(--mg-font);
+  color: var(--mg-text-subtle);
+}
+.face-ctx-menu button.cad-menu-cmd.is-active {
+  background: var(--cad-toolbar-active-bg);
+}
+
 /* ---- tree card (style.css:437-457, 665-805, 829-837, 2531-2540, 2634-2639) ---- */
 /* One width, whatever the rows hold: a long name ends in an ellipsis, and a glyph that comes
    (a warning in History) moves nothing beside the card. Review P2/P3 round 4: it followed its
@@ -917,6 +965,15 @@ input.mgk-input.cad-param-name {
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
+}
+
+/* P4a: several bodies, each with its own volume (never added together): shorter names. */
+.cad-chip-list .cad-chip-name {
+  max-width: 120px;
+}
+
+.cad-chip-hidden {
+  color: var(--mg-text-muted);
 }
 
 /* The volume chip has its own cap, so its width never depends on the font a platform falls back

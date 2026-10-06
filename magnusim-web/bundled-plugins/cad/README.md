@@ -8,12 +8,26 @@ the New Project dialog's "Start from", from **New design** on Home (New Project
 with "Untitled Part N", one Create), or from the header's **CAD** button (its
 menu lists the project's Parts and makes a new one); once a project has a Part,
 its STUDIES section lists it and offers **+ New Part**. A Part opens in its own
-full-page workspace over the workbench. Today (phases P1-P3 and the SD pass) a
+full-page workspace over the workbench. Today (phases P1-P4a and the SD pass) a
 Part is made of sketches (lines, rectangles, circles, arcs; dimensions and
-constraints solved as you draw) extruded as new bodies or joined, cut or
-intersected, and of imported STEP files (healed, with their names and colours)
-edited directly: delete faces, press-pull, split, Combine (join, cut,
-intersect), measure, mass properties, check, and export to STEP. Solids come
+constraints solved as you draw) turned into solids, and of imported STEP files
+(healed, with their names and colours) edited directly. Solids: Extrude (blind,
+two sides, symmetric, through all, up to a face or a vertex, along a chosen
+direction, or a flat face of a body extruded with no sketch), Revolve, Sweep
+along a sketched path, and Loft through two or more profiles, each as a new
+body or joined, cut or intersected. Edits: Fillet (tangent chains; a radius
+that is too large names the edges and the radius that works), Chamfer (one or
+two distances), Shell (inside or outside), press-pull, delete faces, split and
+Combine (join, cut, intersect). Reference geometry (the toolbar's CONSTRUCT
+group): planes (offset, at an angle, through 3 points, midplane, normal to a
+curve), axes (through 2 points, of a round face, along an edge, where 2 planes
+cross; the origin's X, Y and Z axes are rows under Origin too) and points (at a vertex, a centre, on an edge, where an edge crosses a
+plane, coordinates), each a history feature that follows the model and that a
+sketch can lie on and a revolve or an extrude can use; a broken one that
+nothing uses does not stop the project's update (the header says so as it
+lands). Measure, mass
+properties, check, export to STEP; the volume chip shows each body's volume on
+its own, never a total. Solids come
 only from sketches and STEP: there is no one-click Box or Cylinder (decision
 2026-10-01; a Part saved with one opens with that row red, "This part uses a
 removed feature (Box 1)", and Delete takes it away). For CFD, **Enclosure** (the
@@ -27,8 +41,10 @@ it is drawn see-through (a click picks the part inside it), its faces are named
 by side ("+X face of Enclosure 1", "Top face"; a cylinder about X has a "+X end"),
 and Combine Cut with it as the target (Keep the tool bodies comes on) then gives
 the fluid domain. Named parameters drive
-any number. Revolve, fillet and the rest of the modeling breadth are later
-phases. The description in `manifest.toml` (shown in
+any number. Patterns, mirror and the further sketch tools (splines, offset,
+project) are the next phase (P4b); guide rails for Loft and the rest are V1. The toolbar keeps its labels from 1280 px wide: what
+does not fit goes into its group's "More" menu (ARCHITECTURE.md §7 "Toolbar").
+The description in `manifest.toml` (shown in
 Settings > Plugins) names only what ships: update it as features land.
 
 It needs Magnusim's host API 1.6: a Part's design becomes a geometry of its
@@ -87,6 +103,8 @@ npm run test:e2e       # build, start the host app on a free port, run e2e/ (bun
 CAD_E2E_CHANNELS=chrome,msedge npm run test:e2e   # also real Chrome and Edge
 npm run test:e2e -- e2e/cad-p1-document.spec.js   # the P1 exit gate only
 npm run test:e2e -- e2e/cad-p2-step.spec.js e2e/cad-p3-sketch.spec.js   # the P2 and P3 exit gates
+npm run test:e2e -- e2e/cad-p4a-solids.spec.ts e2e/cad-p4a-construct.spec.ts   # P4a: solid features, reference geometry
+npm run test:e2e -- e2e/cad-p4a-fix1.spec.ts   # P4a fix round 1: each review finding
 CAD_E2E_VORTEX_STEP=<path> npm run test:e2e   # with the Vortex part: its tests run instead of being skipped
 CAD_E2E_BIG_STEP=<path> npm run test:e2e -- e2e/cad-large-step.spec.js  # the 113 MB STEP (opt-in)
 npm run test:kernel    # the kernel gates in Node (fixtures/kernel)

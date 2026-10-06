@@ -1311,6 +1311,25 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       cameraMoved();
       return true;
     },
+    refitIfOffScreen() {
+      if (disposed || !framed || anim) return false;
+      const box = new Box3();
+      for (const b of bodies.values()) if (visibleOf(b)) box.union(b.data.bounds);
+      box.union(layersBox(true));
+      if (box.isEmpty()) return false;
+      const off = [box.min.x, box.max.x].some((x) =>
+        [box.min.y, box.max.y].some((y) =>
+          [box.min.z, box.max.z].some((z) => {
+            const s = projectLocal(new Vector3(x, y, z));
+            return !s || s[0] < 0 || s[1] < 0 || s[0] > width || s[1] > height;
+          }),
+        ),
+      );
+      if (!off) return false;
+      fit();
+      cameraMoved();
+      return true;
+    },
     setDisplay(mode: DisplayMode) {
       if (state.get().display === mode) return;
       state.set({ display: mode });

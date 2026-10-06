@@ -8,7 +8,7 @@
 // Owner: P2-FEATURES (shared by its panels; INTEGRATE may lift it into the kit).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef } from 'react';
-import { setSelectionFilter } from '../../lib/selection';
+import { setSelectionFilter, showForPanel } from '../../lib/selection';
 import type { AppServices } from '../../types/app';
 import { selectionKey, type PickResult, type SelectionItem, type SelectKind } from '../../types/selection';
 import type { ViewportHandle } from '../../types/viewport';
@@ -82,7 +82,7 @@ export function useSelectionMirror(services: AppServices, items: SelectionItem[]
   useEffect(() => {
     last.current = key;
     const cur = services.selection.get().items.map(selectionKey).join('\n');
-    if (cur !== key) services.selection.set({ items });
+    if (cur !== key) showForPanel(services.selection, items);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [services, key]);
   useEffect(() => {

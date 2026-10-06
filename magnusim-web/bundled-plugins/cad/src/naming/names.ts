@@ -193,19 +193,40 @@ export function namesAfter(input: NamingInput, edgeFaces?: (shape: ShapeId, edge
 }
 
 /**
- * Human words for a face name in panels ("End face of Extrude 1", "Face 12 of Imported 1").
+ * A side's number among the sides of its feature that `faceNames` (a body's face names) holds,
+ * in the natural order of their tokens ("1", "2", ...), as the project's face labels number them;
+ * null without `faceNames` or when the side is not among them.
+ */
+export function sideNumber(feature: string, token: string, faceNames: readonly string[] | null | undefined): number | null {
+  if (!faceNames) return null;
+  const set = new Set<string>();
+  for (const full of faceNames)
+    for (const part of splitMerged(full)) {
+      const m = /^F:([^:]+):side:(.*)$/.exec(splitSuffix(part).base);
+      if (m && m[1] === feature) set.add(m[2]);
+    }
+  const sorted = [...set].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  const i = sorted.indexOf(token);
+  return i >= 0 ? i + 1 : null;
+}
+
+/**
+ * Human words for a face name in panels ("End face of Extrude 1", "Side 2 of Extrude 1", "Face 12
+ * of Imported 1"). A side is numbered among its feature's sides on the body (`faceNames`, the
+ * body's face names, as the PICKED chip and the Fillet panel number them); without them it is
+ * "Side face", never the sketch's internal token (P4a review: "Side e_6cctu2upm20i of Extrude 1").
  * A face merged from several says what it was made of: "End face of Extrude 1 merged with End
  * face of Extrude 2", or "... merged with 2 other faces" (review P2/P3 round 3: "(merged)" explained nothing).
  */
-export function describeFace(name: string, featureName: (id: FeatureId) => string | null): string {
+export function describeFace(name: string, featureName: (id: FeatureId) => string | null, faceNames: readonly string[] | null = null): string {
   const parts = splitMerged(name);
-  if (parts.length < 2) return describeOne(name, featureName);
-  const words = parts.map((p) => describeOne(p, featureName)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  if (parts.length < 2) return describeOne(name, featureName, faceNames);
+  const words = parts.map((p) => describeOne(p, featureName, faceNames)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
   return `${words[0]} merged with ${words.length === 2 ? words[1] : `${words.length - 1} other faces`}`;
 }
 
 /** One face name (not merged) in words. */
-function describeOne(name: string, featureName: (id: FeatureId) => string | null): string {
+function describeOne(name: string, featureName: (id: FeatureId) => string | null, faceNames: readonly string[] | null): string {
   const { base, k } = splitSuffix(name);
   const m = /^F:([^:]+):([^:]+)(?::(.*))?$/.exec(base);
   if (!m) return name;
@@ -217,7 +238,13 @@ function describeOne(name: string, featureName: (id: FeatureId) => string | null
   // "Face 7 (Imported 1 (flange.step))" nested its brackets).
   if (role === 'start') return `Start face${part} of ${owner}`;
   if (role === 'end') return `End face${part} of ${owner}`;
-  if (role === 'side') return `Side ${detail.replace(/\[.*$/, '')}${part} of ${owner}`;
+  if (role === 'side') {
+    const n = sideNumber(m[1], detail, faceNames);
+    return `${n == null ? 'Side face' : `Side ${n}`}${part} of ${owner}`;
+  }
+  if (role === 'fillet') return `Fillet face${part} of ${owner}`;
+  if (role === 'chamfer') return `Chamfer face${part} of ${owner}`;
+  if (role === 'inner') return `Inner face${part} of ${owner}`;
   if (role === 'import') return `Face ${Number(detail.split(':').pop()) + 1}${part} of ${owner}`;
   if (role === 'primitive') return `Face ${Number(detail) + 1}${part} of ${owner}`;
   if (role === 'cut') return `Cut face${part} of ${owner}`;

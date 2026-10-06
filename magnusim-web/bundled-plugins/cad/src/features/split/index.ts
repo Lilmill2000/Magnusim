@@ -12,6 +12,7 @@ import { selectedBodies } from '../../ui/tree/model';
 import { P2_ICONS } from '../p2/icons';
 import { splitDef } from './feature';
 import { SplitPanel } from './panel';
+import { userSelection } from '../../lib/selection';
 
 export const SPLIT_COMMAND = 'modify.split';
 
@@ -20,7 +21,7 @@ export function runSplit(services: AppServices): void {
   const p = ui.state.get().panel;
   if (p?.kind === 'feature' && p.isNew && p.type === 'split') return;
   const built = new Set(services.doc.state.get().rebuild.bodies.map((b) => b.id));
-  const picked = [...selectedBodies(services.selection.get())].filter((id) => built.has(id));
+  const picked = [...selectedBodies(userSelection(services.selection.get()))].filter((id) => built.has(id));
   ui.openNew('split', picked.length ? ({ targets: picked } as Partial<SplitFeature>) : undefined);
 }
 

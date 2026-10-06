@@ -9,6 +9,8 @@ export const ICONS = {
   part: 'M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8',
   origin: 'M12 4v16 M4 12h16 M12 12m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0',
   plane: 'M3 9l9-4 9 4-9 4z M3 9v6l9 4 9-4V9',
+  /** An axis (the origin's X, Y, Z rows; the CONSTRUCT Axis glyph). */
+  axis: 'M4 20L20 4 M8.5 9.5a2.5 4 45 1 0 6 6',
   point: 'M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M12 3v5 M12 16v5 M3 12h5 M16 12h5',
   /** Rows of removed feature types (a P1 Part's Box and Cylinder) keep their glyph. */
   box: 'M3 9l5-4h13v10l-5 4H3z M3 9h13v10 M16 9l5-4',
@@ -34,6 +36,8 @@ export const ICONS = {
   viewIso: 'M12 3l8 4.5v9L12 21l-8-4.5v-9z M12 12l8-4.5 M12 12v9 M12 12L4 7.5',
   warning: 'M12 3.5L2.5 20h19z M12 10v4.5 M12 17.5v.01',
   error: 'M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0 M12 7.5v5.5 M12 16.5v.01',
+  /** A toolbar group's "More" menu (its folded commands). */
+  more: 'M5 12m-1.4 0a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0 M12 12m-1.4 0a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0 M19 12m-1.4 0a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0',
 } as const;
 
 export type IconName = keyof typeof ICONS;

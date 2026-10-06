@@ -6,3 +6,4 @@ export { describeFace, edgeName, faceName, indexedNames, mergeNames, namesAfter,
 export { faceSignature, nameCandidates, resolveFace, sameKind, signatureDistance } from './resolve';
 export { refOfFace, kernelLookup } from './refs';
 export { namesFromResult } from './result';
+export { edgeSignature, edgesOfFace, edgeWords, faceShortWords, refOfEdge, refOfVertex, resolveEdge, resolveVertex, splitEdgeName, splitVertexName, vertexSignature, vertexWords } from './edges';

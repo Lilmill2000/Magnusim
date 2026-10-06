@@ -263,6 +263,12 @@ export interface ViewportHandle {
    * round 4: the view stayed on bodies the rollback hid). False when the camera was moved.
    */
   reframe(): boolean;
+  /**
+   * Fit (keeping the direction) when what is drawn now (bodies and shown sketches) reaches off the
+   * screen and nobody has orbited, panned or zoomed since the last framing; true when it did. Sketch
+   * mode's end calls it (P4a review: a first large sketch stayed half off-screen after Finish).
+   */
+  refitIfOffScreen?(): boolean;
   /** Push a pointer tool on the stack; returns pop (safe to call twice). */
   pushTool(tool: ViewportTool): () => void;
   /** The ray under frame client coordinates (model mm). */

@@ -1,6 +1,9 @@
 // While an Extrude panel is open: its pointer tool and its distance handle.
 //   - A click on a shaded region toggles it in the extrude's profiles (one
 //     sketch: a region of another sketch is refused with the reason).
+//   - P4a: with no profile picked, a click on a flat face of a body makes that
+//     face the profile (extruded with no sketch; a new extrude turns to Join);
+//     a click on it again takes it out.
 //   - The arrow at the end of the extrude (layer extrude.handle, order 50)
 //     drags the distance along the extrude direction (it keeps the offset to
 //     the pointer it was taken at); the value shows beside it, rounded to what
@@ -22,8 +25,9 @@ import { PICK_COLOR } from '../../viewport/colors';
 import { toModel } from '../sketch/plane';
 import { regionUnder } from '../sketch/pick';
 import { profilesView, sketchOutput } from '../sketch/view';
-import { resolveExtent } from './def';
+import { resolveExtent, type ExtentValues } from './def';
 import { entityParents, refOfRegion, resolveRegionRef } from './profiles';
+import { pickFace } from '../p2/refs';
 
 export const HANDLE_LAYER = 'extrude.handle';
 export const PANEL_TOOL_ID = 'extrude.panel';
@@ -50,7 +54,7 @@ export interface HandleGeometry {
   origin: Vec3;
   /** The extrude direction (sketch normal, or opposite with flip). */
   axis: Vec3;
-  extent: ExtrudeExtent;
+  extent: Extract<ExtrudeExtent, { kind: 'blind' | 'symmetric' | 'two' }>;
   arrows: Arrow[];
 }
 
@@ -65,7 +69,20 @@ const unitOf = (a: Vec3): Vec3 => {
 export function handleGeometry(f: ExtrudeFeature, services: AppServices): HandleGeometry | null {
   const s = services.doc.state.get();
   const ext = resolveExtent(f, services.doc.units);
-  if (!ext.ok || !f.profiles?.length) return null;
+  if (!ext.ok) return null;
+  // Along a picked axis: no arrow (it would point along the normal).
+  if (f.direction) return null;
+  const e = ext.values;
+  // Through all and Up to have no length to drag.
+  if (e.kind !== 'blind' && e.kind !== 'symmetric' && e.kind !== 'two') return null;
+  if (f.face) {
+    // A flat face extruded directly: the arrows start at the face as it was picked (its centroid and outward normal).
+    const n = f.face.ref.signature.dir;
+    if (!n) return null;
+    const out = unitOf(n as Vec3);
+    return arrowsFor([...f.face.ref.signature.at] as Vec3, f.flip ? [-out[0], -out[1], -out[2]] : out, e);
+  }
+  if (!f.profiles?.length) return null;
   const out = sketchOutput(s, f.profiles[0].sketch);
   if (!out) return null;
   const sketch = s.doc.features.find((g) => g.id === f.profiles[0].sketch);
@@ -81,7 +98,11 @@ export function handleGeometry(f: ExtrudeFeature, services: AppServices): Handle
   if (!sample) return null;
   const origin = toModel(out.plane, sample);
   const axis = unitOf(f.flip ? [-out.plane.normal[0], -out.plane.normal[1], -out.plane.normal[2]] : out.plane.normal);
-  const e = ext.values;
+  return arrowsFor(origin, axis, e);
+}
+
+/** The arrows of a blind, symmetric or two-sided extent from `origin` along `axis`. */
+function arrowsFor(origin: Vec3, axis: Vec3, e: Extract<ExtrudeExtent, { kind: 'blind' | 'symmetric' | 'two' }>): HandleGeometry {
   const arrows: Arrow[] = [];
   if (e.kind === 'blind') arrows.push({ which: 'd1', base: add(origin, axis, e.d), dir: e.d < 0 ? [-axis[0], -axis[1], -axis[2]] : axis });
   else if (e.kind === 'symmetric') arrows.push({ which: 'd1', base: add(origin, axis, e.d / 2), dir: axis });
@@ -93,7 +114,7 @@ export function handleGeometry(f: ExtrudeFeature, services: AppServices): Handle
 }
 
 /** The length a distance field holds (mm): blind and symmetric `d`, two sides `d1` / `d2`. */
-export function extentLength(e: ExtrudeExtent, which: 'd1' | 'd2'): number | null {
+export function extentLength(e: ExtrudeExtent | ExtentValues, which: 'd1' | 'd2'): number | null {
   if (e.kind === 'blind' || e.kind === 'symmetric') return e.d;
   if (e.kind === 'two') return which === 'd1' ? e.d1 : e.d2;
   return null;
@@ -131,6 +152,7 @@ export function draggedExtent(f: ExtrudeFeature, which: 'd1' | 'd2', t: number, 
     if (t < minMm / 2) return null;
     return { extent: { ...e, distance: roundedDistance(2 * t, pixelMm, units).expr } };
   }
+  if (e.kind !== 'two') return null;
   if (which === 'd1') return { extent: { ...e, distance: roundedDistance(t, pixelMm, units).expr } };
   return { extent: { ...e, distance2: roundedDistance(-t, pixelMm, units).expr } };
 }
@@ -308,9 +330,47 @@ export function startPanelTool(services: AppServices, handle: ViewportHandle, op
   };
   window.addEventListener('keydown', onKey, true);
 
+  /** A click on a flat face of a body: it becomes the profile (or stops being it). */
+  const toggleFace = (e: ViewportPointer): boolean => {
+    const p = handle.pick(e.clientX, e.clientY);
+    if (!p || p.item.kind !== 'face') return false;
+    const item = p.item;
+    const f = draft();
+    // Up to waiting for its face or vertex: the click is its pick list's.
+    if (f.extent.kind === 'to' && !f.extent.target) return false;
+    if (f.profiles.length) {
+      opts.note('Extrude takes sketch profiles or one flat face: remove the profiles to extrude a face');
+      return true;
+    }
+    if (!handle.planeNormal(item)) {
+      opts.note('Extrude takes a flat face: that face is curved');
+      return true;
+    }
+    const info = services.doc.state.get().rebuild.bodies.find((b) => b.id === item.body);
+    if (!info) return true;
+    void pickFace(services, info, item.index, f.id).then((r) => {
+      if (!r.ok) {
+        opts.note(r.reason);
+        return;
+      }
+      opts.note(null);
+      const now = draft();
+      if (now.face && now.face.ref.name === r.ref.name) {
+        apply({ face: null });
+        return;
+      }
+      apply({ face: { body: r.body, ref: r.ref }, ...(opts.session.isNew && now.op === 'new' ? { op: 'join' as const } : {}) });
+    });
+    return true;
+  };
+
   const toggleProfile = (e: ViewportPointer): boolean => {
     const hit = regionUnder(services, e);
-    if (!hit) return false;
+    if (!hit) return toggleFace(e);
+    if (draft().face) {
+      opts.note('Extrude takes one flat face or sketch profiles: remove the face to pick profiles');
+      return true;
+    }
     const f = draft();
     const s = services.doc.state.get();
     const from = f.profiles[0]?.sketch;

@@ -12,7 +12,7 @@ export function Overlays() {
   const menu = useStateStore(ui.state, (s) => s.menu);
   return (
     <>
-      {menu ? <ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} onClose={ui.closeMenu} /> : null}
+      {menu ? <ContextMenu x={menu.x} y={menu.y} items={menu.items} label={menu.label} anchor={menu.anchor ?? null} onClose={ui.closeMenu} /> : null}
       <TooltipLayer />
     </>
   );

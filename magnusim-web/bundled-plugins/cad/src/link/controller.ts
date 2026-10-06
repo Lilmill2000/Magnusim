@@ -19,7 +19,13 @@
 // - Never a partial design (link review L1): a feature of the history that failed
 //   or was stopped, or an included body the kernel calls invalid, refuses the
 //   link with the reason, so the skip rule above never pins a design the Part
-//   could not build whole.
+//   could not build whole. Except (Daniel, 2026-10-05) a broken reference Plane,
+//   Axis or Point that no feature uses: it makes no body, so the design is whole
+//   without it; the link goes on, the progress line says so before the export
+//   ("Axis 5 is broken (not used by anything). Part 1 is updated without it.", held
+//   `noteHoldMs` for the exit hook: the app's header shows it until the link's job
+//   takes the header over) and the outcome's `notes` keep it. One that a feature
+//   uses still refuses: that feature failed too.
 // - Another tab saved a newer design while this tab has no change of its own (L3
 //   review B1): this tab reads it in place (DocService.reload) and links that, or
 //   skips when the geometry has it already; nothing asks. Both tabs changed it: the
@@ -66,7 +72,8 @@ import { REMOVED_FEATURE_TYPES } from '../types/doc';
 export type LinkOutcome =
   /** The geometry already shows this saved design: nothing was exported. */
   | { outcome: 'unchanged'; sourceVersion: number; geometryId: string }
-  | { outcome: 'linked'; sourceVersion: number; result: LinkResult }
+  /** `notes`: what the design left out on the way (a broken reference no feature uses). */
+  | { outcome: 'linked'; sourceVersion: number; result: LinkResult; notes?: string[] }
   /** The user answered "Keep editing" (or removed the update from the Queue). */
   | { outcome: 'kept-editing'; sourceVersion: number }
   /** A newer link of this study replaced this one. */
@@ -125,6 +132,12 @@ export interface SyncOptions {
    * only the view given here lands.
    */
   view?: ViewState;
+  /**
+   * A broken reference that nothing uses is left out (`notes`): the progress line says so
+   * before the export, held this long so it can be read (the exit hook; the app's header shows
+   * the page's line only until the link's job takes over the header).
+   */
+  noteHoldMs?: number;
 }
 
 export interface LinkController {
@@ -176,6 +189,9 @@ function messageOf(e: unknown): string {
 }
 
 /** "A", "A and B", "A, B and C". */
+/** Reference geometry (CONSTRUCT): makes no body. */
+const REFERENCE_TYPES = new Set(['ref_plane', 'ref_axis', 'ref_point']);
+
 function listWords(items: readonly string[]): string {
   return items.length < 2 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
@@ -230,6 +246,9 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
       },
       get view() {
         return holder.opts.view;
+      },
+      get noteHoldMs() {
+        return holder.opts.noteHoldMs;
       },
     };
     const link = bridge.link;
@@ -344,7 +363,25 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
     // A removed type (Box, Cylinder) cannot be fixed or retried: it is suppressed or deleted (B2).
     const gone = docAt.features.filter((f) => !f.suppressed && isRemovedFeature(f));
     const goneNames = new Set(gone.map((f) => f.name));
-    const failedNow = end.failed.filter((n) => !goneNames.has(n));
+    const failedAll = end.failed.filter((n) => !goneNames.has(n));
+    // A broken reference Plane / Axis / Point that no feature uses does not stop the link (Daniel,
+    // 2026-10-05): it makes no body. A feature that uses one names it among its parents.
+    const savedFeatures = docAt.features;
+    const usedBy = (id: string) =>
+      savedFeatures.some((g) => {
+        if (g.suppressed || g.id === id) return false;
+        try {
+          return (doc.features.get(g.type)?.parents(g as never) ?? []).includes(id);
+        } catch {
+          return true;
+        }
+      });
+    const unusedBroken = failedAll.filter((n) => {
+      const f = savedFeatures.find((g) => g.name === n);
+      return !!f && REFERENCE_TYPES.has(f.type) && !usedBy(f.id);
+    });
+    const failedNow = failedAll.filter((n) => !unusedBroken.includes(n));
+    const notes = unusedBroken.length ? [`${listWords(unusedBroken)} ${unusedBroken.length === 1 ? 'is' : 'are'} broken (not used by anything).`] : [];
     if (gone.length || failedNow.length) {
       const words: string[] = [];
       const briefs: string[] = [];
@@ -365,6 +402,11 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
       return { outcome: 'failed', code: 'not_built', message: words.join(' '), brief: briefs.join(' ') };
     }
     const savedDoc = docAt;
+    if (notes.length) {
+      progress(null, `${notes.join(' ')} ${partTitle()} is updated without ${unusedBroken.length === 1 ? 'it' : 'them'}.`);
+      if (opts.noteHoldMs) await sleep(opts.noteHoldMs, opts.signal).catch(() => {});
+      if (stopped()) return stopped()!;
+    }
     const invalid = end.bodies.filter((b) => !b.valid && isIncluded(savedDoc, b.id)).map((b) => b.name);
     if (invalid.length) {
       const one = invalid.length === 1;
@@ -418,7 +460,7 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
             progress(p.fraction, p.stage === 'queued' && p.ahead ? `Queued behind ${p.ahead} ${p.ahead === 1 ? 'job' : 'jobs'} (see Queue)` : (p.label ?? STAGE_WORDS[p.stage] ?? 'Updating the project'));
           },
         });
-        return { outcome: 'linked', sourceVersion, result };
+        return { outcome: 'linked', sourceVersion, result, ...(notes.length ? { notes } : {}) };
       } catch (e) {
         const code = codeOf(e);
         if (code === 'cancelled') return { outcome: 'kept-editing', sourceVersion };
@@ -457,6 +499,7 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
   }
 
   function tell(r: LinkOutcome) {
+    if (r.outcome === 'linked' && r.notes?.length) bridge.toast(`${partTitle()} updated. ${r.notes.join(' ')}`, 'info');
     if (r.outcome === 'nothing') bridge.toast(r.message, 'info');
     else if (r.outcome === 'failed' || r.outcome === 'unavailable') bridge.toast(r.message, 'error');
   }

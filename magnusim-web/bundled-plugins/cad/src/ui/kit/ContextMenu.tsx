@@ -5,9 +5,14 @@
 // hovering an item gives it the keyboard, hovering a disabled one gives it to
 // the menu, so one item at most looks active (review P2/P3 round 3: Edit kept
 // its focus highlight while the disabled Delete beside its reason was hovered).
+// A command's item (the toolbar's More menus, P4a) draws its icon, its label
+// and its shortcut, and has the toolbar button's tooltip (label, shortcut,
+// hint or the reason it cannot run). A menu opened from a button (`anchor`)
+// toggles on that button, and Escape or Tab gives the button the keyboard back.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Icon } from '../Icon';
 import { useTip } from './Tooltip';
 
 export interface MenuItem {
@@ -16,6 +21,16 @@ export interface MenuItem {
   /** null/undefined = enabled; a string = why not. */
   disabled?: string | null;
   danger?: boolean;
+  /** A command's item: its id (data-command, as on its toolbar button). */
+  command?: string;
+  /** A command's icon (24x24 path), drawn before the label. */
+  icon?: string;
+  /** A command's shortcut ("E", "Ctrl+Z"), drawn at the item's right and in its tooltip. */
+  shortcut?: string;
+  /** A command's hint: the tooltip's second line while it can run. */
+  hint?: string;
+  /** Drawn pressed: the command's panel or tool is open. */
+  active?: boolean;
   run(): void;
 }
 export type MenuEntry = MenuItem | { sep: true; id: string };
@@ -25,27 +40,48 @@ export function isSep(e: MenuEntry): e is { sep: true; id: string } {
 }
 
 function Item({ item, onRun, onHover }: { item: MenuItem; onRun(item: MenuItem): void; onHover(el: HTMLButtonElement, disabled: boolean): void }) {
-  // Beside the item, so the reason does not cover the items under it.
-  const tip = useTip(item.disabled ? { text: item.label, detail: item.disabled, side: true } : null);
+  // Beside the item, so the reason does not cover the items under it. A command's item always has
+  // one, as its toolbar button does: the label, the shortcut, and the hint or the reason.
+  const cmd = item.command != null;
+  const tip = useTip(
+    item.disabled
+      ? { text: item.label, detail: item.disabled, side: true, ...(item.shortcut ? { shortcut: item.shortcut } : {}) }
+      : cmd
+        ? { text: item.label, side: true, ...(item.shortcut ? { shortcut: item.shortcut } : {}), ...(item.hint ? { detail: item.hint } : {}) }
+        : null,
+  );
+  const cls = [item.danger ? 'is-danger' : '', cmd ? 'cad-menu-cmd' : '', item.active ? 'is-active' : ''].filter(Boolean).join(' ');
   return (
     <button
       type="button"
       role="menuitem"
-      className={item.danger ? 'is-danger' : undefined}
+      className={cls || undefined}
       aria-disabled={item.disabled ? true : undefined}
+      aria-current={item.active ? 'true' : undefined}
+      aria-keyshortcuts={item.shortcut ? item.shortcut.replace(/Ctrl/g, 'Control') : undefined}
       data-menu-item={item.id}
+      data-command={item.command}
+      data-disabled-reason={item.disabled || undefined}
       {...tip}
       onPointerEnter={(e) => onHover(e.currentTarget, !!item.disabled)}
       onClick={() => {
         if (!item.disabled) onRun(item);
       }}
     >
-      {item.label}
+      {cmd ? (
+        <>
+          <span className="cad-menu-ico">{item.icon ? <Icon d={item.icon} size={16} stroke={1.7} /> : null}</span>
+          <span className="cad-menu-label">{item.label}</span>
+          {item.shortcut ? <kbd className="cad-menu-key">{item.shortcut}</kbd> : null}
+        </>
+      ) : (
+        item.label
+      )}
     </button>
   );
 }
 
-export function ContextMenu({ x, y, items, onClose, label = 'Actions' }: { x: number; y: number; items: MenuEntry[]; onClose(): void; label?: string }) {
+export function ContextMenu({ x, y, items, onClose, label = 'Actions', anchor = null }: { x: number; y: number; items: MenuEntry[]; onClose(): void; label?: string; anchor?: HTMLElement | null }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
 
@@ -63,7 +99,10 @@ export function ContextMenu({ x, y, items, onClose, label = 'Actions' }: { x: nu
 
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const t = e.target as Node;
+      // A press on the button that opened it is that button's own (it toggles the menu).
+      if (anchor?.contains(t)) return;
+      if (ref.current && !ref.current.contains(t)) onClose();
     };
     const onBlur = () => onClose();
     // Capture: a pointerdown anywhere else (tree, viewport canvas) closes first.
@@ -75,7 +114,7 @@ export function ContextMenu({ x, y, items, onClose, label = 'Actions' }: { x: nu
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('resize', onBlur);
     };
-  }, [onClose]);
+  }, [onClose, anchor]);
 
   const hover = (el: HTMLButtonElement, disabled: boolean) => {
     const target = disabled ? ref.current : el;
@@ -104,6 +143,7 @@ export function ContextMenu({ x, y, items, onClose, label = 'Actions' }: { x: nu
           e.preventDefault();
           e.stopPropagation();
           onClose();
+          anchor?.focus({ preventScroll: true });
         } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
           e.preventDefault();
           if (!buttons.length) return;
@@ -118,6 +158,7 @@ export function ContextMenu({ x, y, items, onClose, label = 'Actions' }: { x: nu
         } else if (e.key === 'Tab') {
           e.preventDefault();
           onClose();
+          anchor?.focus({ preventScroll: true });
         }
       }}
     >

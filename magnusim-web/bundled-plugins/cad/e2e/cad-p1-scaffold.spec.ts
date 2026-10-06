@@ -6,7 +6,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, groupCommandLabels } from './helpers';
 import { PNG } from './png';
 
 test('cad:p1-scaffold + New Part opens an empty Part with the kernel ready', async ({ page, request }) => {
@@ -27,13 +27,13 @@ test('cad:p1-scaffold + New Part opens an empty Part with the kernel ready', asy
   const tree = frame.locator('[data-cad-tree]');
   await expect(tree.locator('.geo-head')).toHaveText(['PART', 'HISTORY']);
   await expect(tree.locator('[data-tree-node="origin"] > .tree-row .tl')).toHaveText('Origin');
-  await expect(tree.locator('[data-tree-node^="origin:"] .tl')).toHaveText(['Top plane', 'Front plane', 'Right plane']);
+  await expect(tree.locator('[data-tree-node^="origin:"] .tl')).toHaveText(['Top plane', 'Front plane', 'Right plane', 'X axis', 'Y axis', 'Z axis']);
   await expect(tree.locator('[data-tree-empty="history"]')).toHaveText('No features yet');
   const tb = frame.locator('[data-cad-toolbar]');
   // P2/P3: SKETCH first; INSPECT and FILE after MODIFY. SD: no one-click solids (SOLID is Extrude
   // only), and CFD PREP (Enclosure) after the modelling groups.
-  await expect(tb.locator('.tb-group-label')).toHaveText(['SKETCH', 'SOLID', 'MODIFY', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
-  await expect(tb.locator('[data-group="solid"] .tb-txt')).toHaveText(['Extrude']);
+  await expect(tb.locator('.tb-group-label')).toHaveText(['SKETCH', 'SOLID', 'MODIFY', 'CONSTRUCT', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
+  expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft']);
   await expect(tb.locator('[data-group="cfd"] .tb-txt')).toHaveText(['Enclosure']);
   await expect(tb.locator('[data-group="edit"] [data-command="edit.undo"]')).toHaveAttribute('aria-disabled', 'true');
   await expect(frame.locator('[data-chip="kernel"]')).toHaveCount(0);

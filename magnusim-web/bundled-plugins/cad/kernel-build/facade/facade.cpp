@@ -108,6 +108,11 @@
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffsetAPI_MakePipe.hxx>
+#include <BRepOffsetAPI_MakePipeShell.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepFilletAPI_LocalOperation.hxx>
+#include <GeomFill_Trihedron.hxx>
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -957,8 +962,10 @@ std::unique_ptr<Profile> buildProfile(const JV& jp, double shiftAlongNormal) {
 // reasons), work copies, repair, lazy props, selectable topo, edge flags, extrude
 // flip / through_all / to_face; 3 = docs/p2p3-plan.md §2: `faces` on every shape
 // result, import diagnostics and unit, heal, brep_write / brep_read, press_pull,
-// combine, measure, sketch_regions, extrude_regions.
-const int kFacadeApi = 3;
+// combine, measure, sketch_regions, extrude_regions; 4 = P4a: revolve_regions,
+// sweep_regions, loft_regions, extrude_face, edge_eval, extents to_vertex / to_point, fillet
+// contours and diagnose, chamfer d2, shell outside, topo edge_ends / vertex_faces.
+const int kFacadeApi = 4;
 
 JV opVersion(const JV&) {
   JV r = JV::obj();
@@ -1141,6 +1148,19 @@ std::vector<gp_Pnt> boxCorners(const std::vector<TopoDS_Shape>& shapes) {
   return c;
 }
 
+// The exact span of `shapes` along `de`, as distances from `o` (no tolerance padding):
+// the shapes moved into a frame whose Z is `de`, then their optimal box.
+std::pair<double, double> spanAlong(const std::vector<TopoDS_Shape>& shapes, const gp_Pnt& o, const gp_Dir& de) {
+  gp_Trsf t;
+  t.SetTransformation(gp_Ax3(o, de));
+  Bnd_Box b;
+  for (auto& s : shapes) BRepBndLib::AddOptimal(s.Moved(TopLoc_Location(t)), b, Standard_False, Standard_False);
+  if (b.IsVoid()) throw InputError("the target has no geometry");
+  double x0, y0, z0, x1, y1, z1;
+  b.Get(x0, y0, z0, x1, y1, z1);
+  return {z0, z1};
+}
+
 // Faces of `from` as they end up in `res` after a boolean (modified, or kept as is).
 TopTools_ListOfShape throughBoolean(BRepAlgoAPI_BooleanOperation& bop, const TopTools_ListOfShape& from) {
   TopTools_ListOfShape out;
@@ -1179,7 +1199,10 @@ struct ExtentPlan {
 //   {kind:"blind", d}         from the profile to d (d < 0 goes the other way)
 //   {kind:"symmetric", d}     d/2 each side of the profile
 //   {kind:"two", d1, d2}      d1 along the direction, d2 against it
-//   {kind:"through_all", targets:[id], both?}  past everything in `targets` (both sides with both:true)
+//   {kind:"through_all", targets:[id], both?, fit?}  past everything in `targets` (both sides
+//                             with both:true) by a margin (a Cut or an Intersect); with fit:true
+//                             (a New body or a Join) exactly to the targets' farthest extent,
+//                             and refused when the swept profile misses every target
 //   {kind:"to_face", target:id, face:i, offset?}  up to the plane of a planar face of
 //                             `target` (the end cap lies on that plane, tilted or not;
 //                             offset moves it further along the direction)
@@ -1212,11 +1235,45 @@ ExtentPlan planExtent(const JV& ext, const gp_Pnt& o, const gp_Dir& de, bool tap
       tmax = std::max(tmax, t);
     }
     const double margin = 0.01 * c.front().Distance(c.back()) + 1.0;
-    if (ext.boolean("both", false)) {
+    if (ext.boolean("fit", false)) {
+      // A New body or a Join keeps what it makes: it ends exactly at the bodies' farthest
+      // extent (no margin of made-up length), and a profile that misses them is refused.
+      const auto span = spanAlong(targets, o, de);
+      const double eps = std::max(1e-6, 1e-9 * c.front().Distance(c.back()));
+      if (ext.boolean("both", false)) {
+        s0 = std::min(span.first, 0.0);
+        L = std::max(span.second, 0.0) - s0;
+      } else {
+        if (span.second <= eps) throw InputError("there is nothing to go through in this direction (flip it)");
+        s0 = 0;
+        L = span.second;
+      }
+      if (L <= eps) throw InputError("there is nothing to go through in this direction (flip it)");
+      bool meets = false;
+      for (auto& f : faces) {
+        if (meets) break;
+        gp_Trsf mv;
+        mv.SetTranslation(gp_Vec(de.XYZ()) * s0);
+        const TopoDS_Shape at = f.Moved(TopLoc_Location(mv));
+        BRepPrimAPI_MakePrism pr(at, gp_Vec(de.XYZ()) * L, false, true);
+        pr.Build();
+        if (!pr.IsDone()) continue;
+        for (auto& tg : targets) {
+          BRepExtrema_DistShapeShape d(pr.Shape(), tg);
+          if (d.IsDone() && (d.InnerSolution() || d.Value() <= 1e-6)) {
+            meets = true;
+            break;
+          }
+        }
+      }
+      if (!meets) throw InputError("the profile misses every body: there is nothing to go through (move the profile over a body)");
+    } else if (ext.boolean("both", false)) {
       s0 = std::min(tmin, 0.0) - margin;
       L = std::max(tmax, 0.0) + margin - s0;
     } else {
-      if (tmax <= 1e-9) throw InputError("there is nothing to go through in this direction (flip it)");
+      // The fast box is padded by the shapes' tolerances: a body that only touches the
+      // profile plane on this side still reaches a hair past it.
+      if (tmax <= std::max(1e-6, 1e-6 * c.front().Distance(c.back()))) throw InputError("there is nothing to go through in this direction (flip it)");
       s0 = 0;
       L = tmax + margin;
     }
@@ -1257,6 +1314,24 @@ ExtentPlan planExtent(const JV& ext, const gp_Pnt& o, const gp_Dir& de, bool tap
       // moved back 1 mm (every profile box corner is before the plane).
       pl.clipRef = gp_Pnt(0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * (z0 + z1)).Translated(gp_Vec(de.XYZ()) * -1.0);
     }
+  } else if (kind == "to_vertex" || kind == "to_point") {
+    // API 4: up to a point (a vertex of a body, or a point in space): the end cap lies
+    // on the plane through it, parallel to the profile; offset goes further.
+    if (tapered && kind == "to_vertex") throw InputError("taper is not available with a to-vertex extent");
+    gp_Pnt p;
+    if (kind == "to_vertex") {
+      const int tid = idParam(ext.req("target"), "target");
+      Indexed& ix = indexOf(tid);
+      const int vi = (int)ext.req("vertex").num();
+      if (vi < 0 || vi >= ix.v.Extent()) throw InputError("vertex index " + std::to_string(vi) + " out of range");
+      p = BRep_Tool::Pnt(TopoDS::Vertex(ix.v(vi + 1)));
+    } else {
+      p = pnt(ext.req("point"));
+    }
+    const double t = gp_Vec(o, p).Dot(gp_Vec(de.XYZ())) + ext.num("offset", 0);
+    if (fabs(t) <= 1e-9) throw InputError("the vertex lies in the profile's plane");
+    if (t < 0) throw InputError("the vertex is behind the profile (flip the direction)");
+    L = t;
   } else {
     throw InputError("unknown extent kind '" + kind + "'");
   }
@@ -1272,6 +1347,8 @@ struct Sweep {
   std::function<TopTools_ListOfShape(const TopoDS_Shape&)> generated;
   std::shared_ptr<Profile> prof;
   std::vector<std::shared_ptr<void>> keep;
+  // Revolve (API 4): per profile segment, whether it lies on the axis (sweeps no face).
+  std::vector<bool> onAxis;
 };
 
 // The profile moved along its plane's normal by `shift` mm (symmetric and two-sided
@@ -1722,6 +1799,13 @@ JV opSplit(const JV& q) {
 // is never changed, whatever happens. OCCT failing outright (IsDone false) is
 // ok:false; OCCT "succeeding" with an invalid solid is ok:true, valid:false and the
 // reasons (the Vortex inlet blend does this: a 7-face, 220,515 mm3 result).
+// API 4: `contours` (the edges each contour runs along, input indices: a picked edge
+// takes its tangent neighbours with it); chamfer `d2` (two distances: d on each edge's
+// reference face, d2 on the other; the reference face is the edge's lower-numbered face,
+// the other with flip:true); fillet `diagnose` (filletDiagnose: why it fails and the
+// largest radius that works, nothing stored).
+JV filletDiagnose(int sid, const JV& edges, double r);
+
 JV opFillet(const JV& q, bool chamfer) {
   int sid = idParam(q.req("id"), "id");
   const JV& edges = q.req("edges");
@@ -1729,6 +1813,11 @@ JV opFillet(const JV& q, bool chamfer) {
   for (auto& e : edges.items()) edgeAt(sid, e);  // index check against the input
   const double size = chamfer ? q.num("d") : q.num("r");
   if (!(size > 0)) throw InputError(chamfer ? "chamfer distance must be > 0" : "fillet radius must be > 0");
+  const bool two = chamfer && q.has("d2");
+  const double d2 = two ? q.num("d2") : 0;
+  if (two && !(d2 > 0)) throw InputError("the second chamfer distance must be > 0");
+  const bool flipFaces = q.boolean("flip", false);
+  if (!chamfer && q.boolean("diagnose", false)) return filletDiagnose(sid, edges, size);
   WorkCopies wc({sid});
   const int wid = wc.id(0);
   const TopoDS_Shape& s = wc.shape(0);
@@ -1736,10 +1825,23 @@ JV opFillet(const JV& q, bool chamfer) {
   Handle(BRepTools_History) h;
   TopTools_ListOfShape args;
   args.Append(s);
+  JV contours = JV::arr();
+  auto contoursOf = [&](const BRepFilletAPI_LocalOperation& op) {
+    Indexed& w = indexOf(wid);
+    for (int ic = 1; ic <= op.NbContours(); ++ic) {
+      JV c = JV::arr();
+      for (int j = 1; j <= op.NbEdges(ic); ++j) {
+        const int k = w.e.FindIndex(op.Edge(ic, j));
+        if (k) c.push(k - 1);
+      }
+      contours.push(std::move(c));
+    }
+  };
   const double t0 = nowMs();
   if (!chamfer) {
     BRepFilletAPI_MakeFillet mf(s);
     for (auto& e : edges.items()) mf.Add(size, edgeAt(wid, e));
+    contoursOf(mf);
     mf.Build();
     if (!mf.IsDone()) {
       std::ostringstream os;
@@ -1751,7 +1853,27 @@ JV opFillet(const JV& q, bool chamfer) {
     h = new BRepTools_History(args, mf);
   } else {
     BRepFilletAPI_MakeChamfer mc(s);
-    for (auto& e : edges.items()) mc.Add(size, edgeAt(wid, e));
+    if (!two) {
+      for (auto& e : edges.items()) mc.Add(size, edgeAt(wid, e));
+    } else {
+      const TopTools_IndexedDataMapOfShapeListOfShape& ef = edgeFacesOf(wid);
+      Indexed& w = indexOf(wid);
+      for (auto& e : edges.items()) {
+        const TopoDS_Edge E = edgeAt(wid, e);
+        std::vector<int> fs;
+        const int k = ef.FindIndex(E);
+        if (k)
+          for (TopTools_ListIteratorOfListOfShape it(ef(k)); it.More(); it.Next()) {
+            const int fi = w.f.FindIndex(it.Value());
+            if (fi && std::find(fs.begin(), fs.end(), fi) == fs.end()) fs.push_back(fi);
+          }
+        std::sort(fs.begin(), fs.end());
+        if (fs.empty()) throw InputError("edge " + std::to_string((int)e.num()) + " is on no face");
+        const int pick = fs.size() > 1 && flipFaces ? fs[1] : fs[0];
+        mc.Add(size, d2, E, TopoDS::Face(w.f(pick)));
+      }
+    }
+    contoursOf(mc);
     mc.Build();
     if (!mc.IsDone()) throw OcctError("chamfer failed; the body is unchanged");
     res = mc.Shape();
@@ -1763,6 +1885,7 @@ JV opFillet(const JV& q, bool chamfer) {
   JV r = JV::obj();
   r.set("id", id);
   r.set("history", historyForPairs(wc.pairs(), *h, id));
+  r.set("contours", std::move(contours));
   addValidity(r, id, q);
   JV tm = JV::obj();
   tm.set("copy_ms", wc.ms);
@@ -1809,12 +1932,14 @@ JV opDefeature(const JV& q) {
   return r;
 }
 
-// Hollow a body to wall thickness t, opening the given faces.
+// Hollow a body to wall thickness t, opening the given faces. API 4: outside:true puts the
+// wall outside the body's faces (the body becomes the cavity) instead of inside.
 JV opShell(const JV& q) {
   int sid = idParam(q.req("id"), "id");
   for (auto& f : q.req("faces").items()) faceAt(sid, f);  // index check against the input
   const double t = q.num("t");
   if (!(t > 0)) throw InputError("shell thickness must be > 0");
+  const bool outside = q.boolean("outside", false);
   WorkCopies wc({sid});
   const int wid = wc.id(0);
   const TopoDS_Shape& s = wc.shape(0);
@@ -1822,7 +1947,7 @@ JV opShell(const JV& q) {
   for (auto& f : q.req("faces").items()) rm.Append(faceAt(wid, f));
   const double t0 = nowMs();
   BRepOffsetAPI_MakeThickSolid mts;
-  mts.MakeThickSolidByJoin(s, rm, -t, q.num("tol", 1e-3), BRepOffset_Skin, false, false, GeomAbs_Intersection);
+  mts.MakeThickSolidByJoin(s, rm, outside ? t : -t, q.num("tol", 1e-3), BRepOffset_Skin, false, false, GeomAbs_Intersection);
   mts.Build();
   if (!mts.IsDone()) throw OcctError("shell failed; the body is unchanged");
   if (mts.Shape().IsNull()) throw OcctError("shell returned no shape; the body is unchanged");
@@ -2046,6 +2171,10 @@ JV opTopo(const JV& q) {
   if (fbox != "exact" && fbox != "fast" && fbox != "none") throw InputError("face_bbox must be exact, fast or none");
   const bool faceMass = q.boolean("face_mass", true);
   const bool edgeLength = q.boolean("edge_length", true);
+  // API 4 (REFERENCE's R1): edge ends (first/last point in parameter order, their vertex
+  // indices, a line's direction) and each vertex's faces.
+  const bool edgeEnds = q.boolean("edge_ends", false);
+  const bool vertexFaces = q.boolean("vertex_faces", false);
   const std::vector<int> fsel = topoSelection(q, "faces", ix.f.Extent());
   const std::vector<int> esel = topoSelection(q, "edges", ix.e.Extent());
   const std::vector<int> vsel = topoSelection(q, "vertices", ix.v.Extent());
@@ -2105,6 +2234,18 @@ JV opTopo(const JV& q) {
     if (BRep_Tool::Degenerated(E)) {
       e.set("type", "degenerate");
       e.set("length", 0.0);
+      if (edgeEnds) {
+        TopoDS_Vertex v1, v2;
+        TopExp::Vertices(E, v1, v2);
+        if (!v1.IsNull()) {
+          e.set("first", p3(BRep_Tool::Pnt(v1)));
+          e.set("last", p3(BRep_Tool::Pnt(v1)));
+        }
+        JV vs = JV::arr();
+        vs.push(v1.IsNull() ? -1 : ix.v.FindIndex(v1) - 1);
+        vs.push(v1.IsNull() ? -1 : ix.v.FindIndex(v1) - 1);
+        e.set("vertices", std::move(vs));
+      }
     } else {
       BRepAdaptor_Curve c(E);
       e.set("type", curveType(c.GetType()));
@@ -2114,6 +2255,19 @@ JV opTopo(const JV& q) {
         e.set("center", p3(c.Circle().Location()));
         e.set("radius", c.Circle().Radius());
         e.set("axis_dir", d3(c.Circle().Axis().Direction()));
+      }
+      if (edgeEnds) {
+        const gp_Pnt pf = c.Value(c.FirstParameter()), pl = c.Value(c.LastParameter());
+        e.set("first", p3(pf));
+        e.set("last", p3(pl));
+        TopoDS_Vertex v1, v2;
+        TopExp::Vertices(E, v1, v2);
+        if (!v1.IsNull() && !v2.IsNull() && BRep_Tool::Pnt(v1).Distance(pf) > BRep_Tool::Pnt(v2).Distance(pf)) std::swap(v1, v2);
+        JV vs = JV::arr();
+        vs.push(v1.IsNull() ? -1 : ix.v.FindIndex(v1) - 1);
+        vs.push(v2.IsNull() ? -1 : ix.v.FindIndex(v2) - 1);
+        e.set("vertices", std::move(vs));
+        if (c.GetType() == GeomAbs_Line && pf.Distance(pl) > 1e-12) e.set("dir", d3(gp_Dir(gp_Vec(pf, pl))));
       }
     }
     JV fl = JV::arr();
@@ -2131,10 +2285,25 @@ JV opTopo(const JV& q) {
     edges.push(std::move(e));
   }
   const double t2 = nowMs();
+  TopTools_IndexedDataMapOfShapeListOfShape vf;
+  if (vertexFaces && !vsel.empty()) TopExp::MapShapesAndAncestors(entryOf(sid).shape, TopAbs_VERTEX, TopAbs_FACE, vf);
   for (int i0 : vsel) {
     JV v = JV::obj();
     v.set("i", i0);
     v.set("p", p3(BRep_Tool::Pnt(TopoDS::Vertex(ix.v(i0 + 1)))));
+    if (vertexFaces) {
+      std::vector<int> fs;
+      const int k = vf.FindIndex(ix.v(i0 + 1));
+      if (k)
+        for (TopTools_ListIteratorOfListOfShape it(vf(k)); it.More(); it.Next()) {
+          const int fi = ix.f.FindIndex(it.Value()) - 1;
+          if (fi >= 0 && std::find(fs.begin(), fs.end(), fi) == fs.end()) fs.push_back(fi);
+        }
+      std::sort(fs.begin(), fs.end());
+      JV fl = JV::arr();
+      for (int fi : fs) fl.push(fi);
+      v.set("faces", std::move(fl));
+    }
     verts.push(std::move(v));
   }
   JV r = JV::obj();
@@ -4719,33 +4888,37 @@ std::unique_ptr<Profile> shiftedProfile(const Profile& base, double shift) {
   return P;
 }
 
-// Extrude sketch regions by key. The regions are derived again from the curves (as
-// sketch_regions) and a key that is not there is refused ("region not found: <key>").
-// Selected regions that touch are merged into one face first (UnifySameDomain: faces
-// on; edges merged only across a curve's own seam, so each side stays one
-// sub-segment), then each face is swept as `extrude` does (same extents, flip, taper)
-// and several are fused. History: `sides` per unsigned sub-segment token (faces
-// entries `seg` = that token), `caps` per region key ({start, end}; merged regions
-// share theirs), `start`/`end` = the first region's.
-JV opExtrudeRegions(const JV& q) {
-  const JV& ext = q.req("extent");
-  const bool flip = q.boolean("flip", false);
-  const double taper = q.num("taper_deg", 0);
-  const bool tapered = fabs(taper) >= 1e-12;
+// Sketch regions selected by key, merged where they touch (UnifySameDomain: faces on;
+// edges merged only across a curve's own seam, so each side stays one sub-segment), one
+// Profile per merged face with its edges tagged by their sub-segment token. The regions
+// are derived again from the curves (as sketch_regions) and a key that is not there is
+// refused ("region not found: <key>"). Shared by extrude_regions, revolve_regions,
+// sweep_regions and loft_regions (API 4); `what` names the op in messages.
+struct RegionProfiles {
+  std::unique_ptr<SketchRegionSet> R;
+  std::vector<std::shared_ptr<Profile>> profiles;  // one per merged face
+  std::vector<TopoDS_Face> faces;
+  std::vector<std::vector<std::string>> keysOf;  // the region keys of each merged face
+  std::vector<int> faceOfSel;                     // the merged face of each selected key
+  std::vector<std::string> selKeys;
+};
+
+RegionProfiles regionProfiles(const JV& q, const std::string& what) {
+  RegionProfiles out;
   const JV& jk = q.req("regions");
-  if (!jk.isArr() || jk.size() == 0) throw InputError("extrude_regions needs at least one region");
-  std::unique_ptr<SketchRegionSet> R = computeRegions(q);
+  if (!jk.isArr() || jk.size() == 0) throw InputError(what + "_regions needs at least one region");
+  out.R = computeRegions(q);
+  SketchRegionSet* R = out.R.get();
   std::map<std::string, int> byKey;
   for (size_t i = 0; i < R->regions.size(); ++i) byKey[R->regions[i].key] = (int)i;
   std::vector<int> sel;
-  std::vector<std::string> selKeys;
   for (auto& k : jk.items()) {
     const std::string key = k.str();
     auto it = byKey.find(key);
     if (it == byKey.end()) throw InputError("region not found: " + key);
     if (std::find(sel.begin(), sel.end(), it->second) != sel.end()) continue;
     sel.push_back(it->second);
-    selKeys.push_back(key);
+    out.selKeys.push_back(key);
   }
   // Merge touching regions; keep every split point (edges merge only at seams).
   TopoDS_Shell shell;
@@ -4763,17 +4936,17 @@ JV opExtrudeRegions(const JV& q) {
   // Each merged face, its region keys and its edges' tokens.
   TopTools_IndexedMapOfShape mfaces;
   TopExp::MapShapes(merged, TopAbs_FACE, mfaces);
-  std::vector<std::vector<std::string>> keysOf(mfaces.Extent());
-  std::vector<int> faceOfSel(sel.size(), -1);
+  out.keysOf.assign(mfaces.Extent(), {});
+  out.faceOfSel.assign(sel.size(), -1);
   for (size_t s = 0; s < sel.size(); ++s) {
     const TopoDS_Face& f = R->regions[sel[s]].face;
     int k = 0;
     const TopTools_ListOfShape& mods = uh->Modified(f);
     for (TopTools_ListIteratorOfListOfShape it(mods); it.More() && !k; it.Next()) k = mfaces.FindIndex(it.Value());
     if (!k) k = mfaces.FindIndex(f);
-    if (!k) throw OcctError("extrude failed: region " + selKeys[s] + " was lost while merging the profiles");
-    faceOfSel[s] = k - 1;
-    keysOf[k - 1].push_back(selKeys[s]);
+    if (!k) throw OcctError(what + " failed: region " + out.selKeys[s] + " was lost while merging the profiles");
+    out.faceOfSel[s] = k - 1;
+    out.keysOf[k - 1].push_back(out.selKeys[s]);
   }
   TopTools_IndexedMapOfShape tokEdges;
   std::vector<std::string> tokOf;
@@ -4790,8 +4963,6 @@ JV opExtrudeRegions(const JV& q) {
     for (TopTools_ListIteratorOfListOfShape it(mods); it.More(); it.Next()) noteEdge(it.Value(), tok);
     if (mods.IsEmpty() && !uh->IsRemoved(e)) noteEdge(e, tok);
   }
-  std::vector<std::shared_ptr<Profile>> profiles;
-  std::vector<TopoDS_Face> faces;
   for (int i = 1; i <= mfaces.Extent(); ++i) {
     auto P = std::make_shared<Profile>();
     P->ax = R->ax;
@@ -4800,30 +4971,31 @@ JV opExtrudeRegions(const JV& q) {
     TopExp::MapShapes(P->face, TopAbs_EDGE, fe);
     for (int k = 1; k <= fe.Extent(); ++k) {
       const int t = tokEdges.FindIndex(fe(k));
-      if (!t) throw OcctError("extrude failed: a profile edge lies on no sketch curve");
+      if (!t) throw OcctError(what + " failed: a profile edge lies on no sketch curve");
       P->segEdges.emplace_back(tokOf[t - 1], TopoDS::Edge(fe(k)));
     }
-    profiles.push_back(P);
-    faces.push_back(P->face);
+    out.profiles.push_back(P);
+    out.faces.push_back(P->face);
   }
-  const gp_Dir n = R->ax.Direction();
-  const gp_Dir de = flip ? n.Reversed() : n;
-  const gp_Pnt o = R->ax.Location();
-  const double sigma = flip ? -1.0 : 1.0;
-  const ExtentPlan pl = planExtent(ext, o, de, tapered, faces);
-  if (tapered && fabs(taper * kDeg) >= 0.5 * M_PI - 1e-6) throw InputError("taper must be between -90 and 90 degrees");
-  std::vector<Sweep> sweeps;
-  for (auto& P : profiles) {
-    const Profile& base = *P;
-    sweeps.push_back(sweepProfile([&](double shift) { return shiftedProfile(base, shift); }, pl, o, n, de, sigma, taper));
-  }
-  JV r = JV::obj();
-  int id;
+  return out;
+}
+
+// Several swept profiles as one shape (fused when there are several) and their merged
+// history: `sides` per sub-segment token, `caps` per region key ({start, end}; merged
+// regions share theirs), `start`/`end` = the first selected region's, `on_axis` (revolve).
+struct SweptOut {
+  int id = 0;
+  JV hist;
+};
+
+SweptOut fuseSweeps(std::vector<Sweep>& sweeps, const RegionProfiles& RP, const std::string& what) {
+  SweptOut so;
   std::vector<JV> hists;
+  auto axisOf = [](Sweep& sw) { return sw.onAxis.empty() ? nullptr : &sw.onAxis; };
   if (sweeps.size() == 1) {
     Sweep& sw = sweeps[0];
-    id = putShape(sw.shape);
-    hists.push_back(sweepHistory(id, *sw.prof, sw.generated, sw.first, sw.last));
+    so.id = putShape(sw.shape);
+    hists.push_back(sweepHistory(so.id, *sw.prof, sw.generated, sw.first, sw.last, axisOf(sw)));
   } else {
     TopTools_ListOfShape A, T;
     A.Append(sweeps[0].shape);
@@ -4834,22 +5006,28 @@ JV opExtrudeRegions(const JV& q) {
     fu->SetRunParallel(false);
     fu->SetToFillHistory(true);
     fu->Build();
-    if (fu->HasErrors()) throw OcctError("extrude failed while joining the profiles: " + algoErrors(*fu));
-    id = putShape(unwrap(fu->Shape()));
+    if (fu->HasErrors()) throw OcctError(what + " failed while joining the profiles: " + algoErrors(*fu));
+    so.id = putShape(unwrap(fu->Shape()));
     for (auto& sw : sweeps) {
       auto gen = sw.generated;
       hists.push_back(sweepHistory(
-          id, *sw.prof, [&](const TopoDS_Shape& e) { return throughBoolean(*fu, gen(e)); },
-          firstThroughBoolean(*fu, sw.first), firstThroughBoolean(*fu, sw.last)));
+          so.id, *sw.prof, [&](const TopoDS_Shape& e) { return throughBoolean(*fu, gen(e)); },
+          firstThroughBoolean(*fu, sw.first), firstThroughBoolean(*fu, sw.last), axisOf(sw)));
     }
   }
   JV hfaces = JV::arr();
   JV sides = JV::obj();
   JV caps = JV::obj();
+  JV axisSegs = JV::arr();
+  bool anyAxis = false;
   for (size_t i = 0; i < hists.size(); ++i) {
     for (auto& f : hists[i].get("faces")->items()) hfaces.push(f);
     for (auto& kv : hists[i].get("sides")->members()) sides.set(kv.first, kv.second);
-    for (auto& key : keysOf[i]) {
+    if (const JV* oa = hists[i].get("on_axis")) {
+      anyAxis = true;
+      for (auto& s : oa->items()) axisSegs.push(s);
+    }
+    for (auto& key : RP.keysOf[i]) {
       JV c = JV::obj();
       c.set("start", *hists[i].get("start"));
       c.set("end", *hists[i].get("end"));
@@ -4861,16 +5039,896 @@ JV opExtrudeRegions(const JV& q) {
   hist.set("edges", JV::arr());
   hist.set("deleted", JV::arr());
   hist.set("sides", std::move(sides));
-  hist.set("start", *hists[faceOfSel[0]].get("start"));
-  hist.set("end", *hists[faceOfSel[0]].get("end"));
+  hist.set("start", *hists[RP.faceOfSel[0]].get("start"));
+  hist.set("end", *hists[RP.faceOfSel[0]].get("end"));
   hist.set("caps", std::move(caps));
+  if (anyAxis) hist.set("on_axis", std::move(axisSegs));
+  so.hist = std::move(hist);
+  return so;
+}
+
+// A profile moved by a vector (copied geometry; edges mapped): the start of an extrude
+// along a direction that is not the profile's normal (API 4).
+std::unique_ptr<Profile> movedProfile(const Profile& base, const gp_Vec& v) {
+  if (v.Magnitude() < 1e-300) return shiftedProfile(base, 0);
+  std::unique_ptr<Profile> P(new Profile());
+  P->ax = base.ax;
+  gp_Trsf t;
+  t.SetTranslation(v);
+  BRepBuilderAPI_Transform tf(base.face, t, Standard_True);
+  if (!tf.IsDone()) throw OcctError("extrude failed (moving the profile)");
+  P->face = TopoDS::Face(tf.Shape());
+  for (auto& se : base.segEdges) P->segEdges.emplace_back(se.first, TopoDS::Edge(tf.ModifiedShape(se.second)));
+  P->ax.Translate(v);
+  return P;
+}
+
+// The extrude direction (API 4): the profile's normal, or `direction` (an axis the user
+// picked; not in the profile's plane, no taper), reversed with flip. `oblique`: not the normal.
+struct ExtrudeDir {
+  gp_Dir de;
+  double sigma = 1;
+  bool oblique = false;
+};
+
+ExtrudeDir extrudeDir(const JV& q, const gp_Dir& n, bool tapered) {
+  ExtrudeDir r;
+  const bool flip = q.boolean("flip", false);
+  r.sigma = flip ? -1.0 : 1.0;
+  gp_Dir d = n;
+  if (const JV* jd = q.get("direction")) {
+    if (!jd->isNull()) {
+      d = dir(*jd);
+      const double c = gp_Vec(d.XYZ()).Dot(gp_Vec(n.XYZ()));
+      if (fabs(c) < 1e-6) throw InputError("the direction lies in the profile's plane: pick one that leaves it");
+      r.oblique = fabs(c - 1) > 1e-12;
+      if (tapered && r.oblique) throw InputError("taper is not available along a direction other than the normal");
+    }
+  }
+  r.de = flip ? d.Reversed() : d;
+  return r;
+}
+
+// Extrude sketch regions by key (regionProfiles): each merged face is swept as `extrude`
+// does (same extents, flip, taper) and several are fused. History: `sides` per unsigned
+// sub-segment token (faces entries `seg` = that token), `caps` per region key ({start,
+// end}; merged regions share theirs), `start`/`end` = the first region's.
+JV opExtrudeRegions(const JV& q) {
+  const JV& ext = q.req("extent");
+  const bool flip = q.boolean("flip", false);
+  const double taper = q.num("taper_deg", 0);
+  const bool tapered = fabs(taper) >= 1e-12;
+  RegionProfiles RP = regionProfiles(q, "extrude");
+  const SketchRegionSet& R = *RP.R;
+  const gp_Dir n = R.ax.Direction();
+  const ExtrudeDir ed = extrudeDir(q, n, tapered);
+  const gp_Dir de = ed.de;
+  const gp_Pnt o = R.ax.Location();
+  const double sigma = ed.sigma;
+  (void)flip;
+  const ExtentPlan pl = planExtent(ext, o, de, tapered, RP.faces);
+  if (tapered && fabs(taper * kDeg) >= 0.5 * M_PI - 1e-6) throw InputError("taper must be between -90 and 90 degrees");
+  std::vector<Sweep> sweeps;
+  for (auto& P : RP.profiles) {
+    const Profile& base = *P;
+    // The start moves along the direction (s0 = shift * sigma).
+    auto at = [&](double shift) { return ed.oblique ? movedProfile(base, gp_Vec(de.XYZ()) * (shift * sigma)) : shiftedProfile(base, shift); };
+    sweeps.push_back(sweepProfile(at, pl, o, n, de, sigma, taper));
+  }
+  SweptOut so = fuseSweeps(sweeps, RP, "extrude");
+  JV r = JV::obj();
+  r.set("id", so.id);
+  r.set("history", std::move(so.hist));
+  addValidity(r, so.id, q);
+  r.set("from", pl.s0);
+  r.set("to", pl.s0 + pl.L);
+  r.set("direction", d3(de));
+  r.set("solids", countOf(shapeOf(so.id), TopAbs_SOLID));
+  return r;
+}
+
+// ------------------------------------------------------------------ API 4 ---
+// P4a solids: revolve, sweep and loft of sketch regions, extrude of a body's flat face,
+// fillet diagnosis, and the edge queries reference geometry needs (edge_eval, topo
+// edge_ends / vertex_faces).
+
+// A profile turned about an axis by `rad` (copied geometry; edges mapped).
+std::unique_ptr<Profile> rotatedProfile(const Profile& base, const gp_Ax1& axis, double rad) {
+  std::unique_ptr<Profile> P(new Profile());
+  P->ax = base.ax;
+  if (fabs(rad) < 1e-300) {
+    P->face = base.face;
+    P->segEdges = base.segEdges;
+    return P;
+  }
+  gp_Trsf t;
+  t.SetRotation(axis, rad);
+  BRepBuilderAPI_Transform tf(base.face, t, Standard_True);
+  if (!tf.IsDone()) throw OcctError("revolve failed (turning the profile)");
+  P->face = TopoDS::Face(tf.Shape());
+  for (auto& se : base.segEdges) P->segEdges.emplace_back(se.first, TopoDS::Edge(tf.ModifiedShape(se.second)));
+  P->ax.Transform(t);
+  return P;
+}
+
+// Points along an edge (k = 0..n), for the side tests below.
+std::vector<gp_Pnt> edgeSamples(const TopoDS_Edge& e, int n) {
+  std::vector<gp_Pnt> out;
+  if (BRep_Tool::Degenerated(e)) return out;
+  BRepAdaptor_Curve c(e);
+  const double f = c.FirstParameter(), l = c.LastParameter();
+  for (int k = 0; k <= n; ++k) out.push_back(c.Value(f + (l - f) * k / n));
+  return out;
+}
+
+// Revolve sketch regions about an axis (API 4). axis {origin, dir} in model mm (any line:
+// a sketch line, a model edge, an axis feature, an origin axis). extent:
+//   {kind:"one", angle}            degrees from the sketch, turning about +dir (right hand)
+//   {kind:"symmetric", angle}      the whole angle, half on each side of the sketch
+//   {kind:"two", angle, angle2}    angle about +dir, angle2 the other way
+// flip turns the other way. 360 in all is a full revolve (no caps). The axis must not be
+// perpendicular to the sketch plane, and a profile must not cross an axis that lies in
+// its plane (both refused with the reason). History as extrude_regions, plus `on_axis`
+// (sub-segments on the axis sweep no face). The result says the angles used.
+JV opRevolveRegions(const JV& q) {
+  RegionProfiles RP = regionProfiles(q, "revolve");
+  const SketchRegionSet& R = *RP.R;
+  const JV& jax = q.req("axis");
+  const gp_Pnt ao = pnt(jax.req("origin"));
+  gp_Dir ad = dir(jax.req("dir"));
+  if (q.boolean("flip", false)) ad.Reverse();
+  const gp_Ax1 axis(ao, ad);
+  const JV& ext = q.req("extent");
+  const std::string kind = ext.str("kind", "one");
+  double a1 = 0, a2 = 0;
+  if (kind == "one") {
+    a1 = ext.num("angle");
+  } else if (kind == "symmetric") {
+    a1 = a2 = ext.num("angle") / 2;
+  } else if (kind == "two") {
+    a1 = ext.num("angle");
+    a2 = ext.num("angle2");
+  } else {
+    throw InputError("unknown revolve extent '" + kind + "'");
+  }
+  const double total = a1 + a2;
+  if (!(total > 1e-9)) throw InputError("the revolve angle must be more than 0");
+  if (total > 360 + 1e-9) throw InputError("the angles add up to more than 360 degrees");
+  const bool full = total >= 360 - 1e-9;
+  const gp_Dir n = R.ax.Direction();
+  const double along = gp_Vec(ad.XYZ()).Dot(gp_Vec(n.XYZ()));
+  if (fabs(along) > 1 - 1e-9) throw InputError("the axis is perpendicular to the sketch plane: pick an axis that lies in the plane or beside it");
+  const double scale = std::max(1.0, R.extent);
+  const double tol = 1e-7 * scale;
+  const bool inPlane = fabs(along) < 1e-9 && fabs(gp_Vec(R.ax.Location(), ao).Dot(gp_Vec(n.XYZ()))) < 1e-6 * scale;
+  if (inPlane) {
+    for (auto& P : RP.profiles) {
+      bool pos = false, neg = false;
+      for (TopExp_Explorer ex(P->face, TopAbs_EDGE); ex.More(); ex.Next())
+        for (const gp_Pnt& p : edgeSamples(TopoDS::Edge(ex.Current()), 8)) {
+          const double s = gp_Vec(ao, p).Crossed(gp_Vec(ad.XYZ())).Dot(gp_Vec(n.XYZ()));
+          if (s > 10 * tol) pos = true;
+          else if (s < -10 * tol) neg = true;
+        }
+      if (pos && neg) throw InputError("the profile crosses the axis: keep the profile on one side of the axis");
+    }
+  }
+  const gp_Lin axisLine(ao, ad);
+  std::vector<Sweep> sweeps;
+  for (auto& P0 : RP.profiles) {
+    std::shared_ptr<Profile> P(rotatedProfile(*P0, axis, full ? 0.0 : -a2 * kDeg).release());
+    auto mr = std::make_shared<BRepPrimAPI_MakeRevol>(P->face, axis, full ? 2 * M_PI : total * kDeg, Standard_False);
+    mr->Build();
+    if (!mr->IsDone()) throw OcctError("revolve failed");
+    Sweep sw;
+    sw.keep.push_back(mr);
+    sw.prof = P;
+    sw.shape = mr->Shape();
+    sw.generated = [mr](const TopoDS_Shape& e) { return mr->Generated(e); };
+    if (!full) {
+      sw.first = mr->FirstShape();
+      sw.last = mr->LastShape();
+    }
+    sw.onAxis.assign(P->segEdges.size(), false);
+    for (size_t k = 0; k < P->segEdges.size(); ++k) {
+      bool on = true;
+      for (const gp_Pnt& p : edgeSamples(P->segEdges[k].second, 4))
+        if (axisLine.Distance(p) > 10 * tol) on = false;
+      sw.onAxis[k] = on;
+    }
+    sweeps.push_back(std::move(sw));
+  }
+  SweptOut so = fuseSweeps(sweeps, RP, "revolve");
+  JV r = JV::obj();
+  r.set("id", so.id);
+  r.set("history", std::move(so.hist));
+  addValidity(r, so.id, q);
+  r.set("full", full);
+  r.set("from_deg", full ? 0.0 : -a2);
+  r.set("to_deg", full ? 360.0 : a1);
+  r.set("solids", countOf(shapeOf(so.id), TopAbs_SOLID));
+  return r;
+}
+
+// A sweep path: curves of a sketch (lines, arcs, one circle), chained end to end into one
+// wire. `entities` (optional) picks which curves of the list make the path. Each edge of
+// the wire is tagged with its curve id, in path order.
+struct PathWire {
+  TopoDS_Wire wire;
+  std::vector<std::pair<std::string, TopoDS_Edge>> edges;
+  bool closed = false;
+};
+
+PathWire buildPath(const JV& jp) {
+  const gp_Ax3 ax = sketchFrame(jp.req("plane"));
+  auto to3 = [&](const gp_Pnt2d& q) {
+    return gp_Pnt(ax.Location().XYZ() + ax.XDirection().XYZ() * q.X() + ax.YDirection().XYZ() * q.Y());
+  };
+  std::set<std::string> want;
+  if (const JV* je = jp.get("entities"))
+    if (je->isArr())
+      for (auto& x : je->items()) want.insert(x.str());
+  struct PC {
+    std::string id;
+    TopoDS_Edge e;
+    gp_Pnt a, b;
+    bool circle = false;
+  };
+  std::vector<PC> cs;
+  double scale = 1;
+  for (auto& c : jp.req("curves").items()) {
+    const std::string kind = c.str("kind");
+    const std::string id = c.str("id");
+    if (kind == "point") continue;
+    if (!want.empty() && !want.count(id)) continue;
+    PC pc;
+    pc.id = id;
+    if (kind == "line") {
+      const gp_Pnt2d a = uv(c.req("a")), b = uv(c.req("b"));
+      BRepBuilderAPI_MakeEdge me(to3(a), to3(b));
+      if (!me.IsDone()) throw InputError("path line " + id + " cannot be built");
+      pc.e = me.Edge();
+      scale = std::max({scale, fabs(a.X()), fabs(a.Y()), fabs(b.X()), fabs(b.Y())});
+    } else if (kind == "arc" || kind == "circle") {
+      const gp_Pnt2d cc = uv(c.req("c"));
+      const double r = c.num("r");
+      if (!(r > 0)) throw InputError("path " + kind + " " + id + " needs a radius > 0");
+      gp_Circ circ(gp_Ax2(to3(cc), ax.Direction(), ax.XDirection()), r);
+      if (kind == "circle") {
+        pc.e = BRepBuilderAPI_MakeEdge(circ).Edge();
+        pc.circle = true;
+      } else {
+        const double a0 = c.num("a0") * kDeg, a1 = c.num("a1") * kDeg;
+        const bool ccw = c.boolean("ccw", true);
+        const double sweep = wrap2Pi((ccw ? 1.0 : -1.0) * (a1 - a0));
+        if (sweep < 1e-12) throw InputError("path arc " + id + " has no length");
+        BRepBuilderAPI_MakeEdge me = ccw ? BRepBuilderAPI_MakeEdge(circ, a0, a0 + sweep) : BRepBuilderAPI_MakeEdge(circ, a1, a1 + sweep);
+        if (!me.IsDone()) throw InputError("path arc " + id + " cannot be built");
+        pc.e = me.Edge();
+      }
+      scale = std::max({scale, fabs(cc.X()) + r, fabs(cc.Y()) + r});
+    } else {
+      throw InputError("unknown path curve kind '" + kind + "' (" + id + ")");
+    }
+    BRepAdaptor_Curve ac(pc.e);
+    pc.a = ac.Value(ac.FirstParameter());
+    pc.b = ac.Value(ac.LastParameter());
+    cs.push_back(pc);
+  }
+  if (cs.empty()) throw InputError("the path has no curves (construction lines are not a path)");
+  std::sort(cs.begin(), cs.end(), [](const PC& x, const PC& y) { return x.id < y.id; });
+  const double tol = 1e-6 * scale;
+  PathWire out;
+  for (auto& c : cs)
+    if (c.circle && cs.size() > 1) throw InputError("a circle is a path on its own: the path's other curves cannot join it");
+  // Chain: start at an end that no other curve meets (an open path), else anywhere (closed).
+  auto meets = [&](const gp_Pnt& p, size_t self) {
+    int n = 0;
+    for (size_t j = 0; j < cs.size(); ++j) {
+      if (j == self) continue;
+      if (cs[j].a.Distance(p) <= tol) ++n;
+      if (cs[j].b.Distance(p) <= tol) ++n;
+    }
+    return n;
+  };
+  for (size_t i = 0; i < cs.size(); ++i)
+    for (const gp_Pnt& p : {cs[i].a, cs[i].b})
+      if (meets(p, i) > 1) throw InputError("the path branches: a path is one chain of curves, end to end");
+  size_t start = 0;
+  bool startAtB = false;
+  bool open = false;
+  for (size_t i = 0; i < cs.size() && !open; ++i) {
+    if (cs[i].circle) continue;
+    if (meets(cs[i].a, i) == 0) {
+      start = i;
+      startAtB = false;
+      open = true;
+    } else if (meets(cs[i].b, i) == 0) {
+      start = i;
+      startAtB = true;
+      open = true;
+    }
+  }
+  std::vector<bool> used(cs.size(), false);
+  std::vector<std::pair<size_t, bool>> order;  // curve, reversed
+  order.push_back({start, startAtB});
+  used[start] = true;
+  gp_Pnt cur = startAtB ? cs[start].a : cs[start].b;
+  for (size_t k = 1; k < cs.size(); ++k) {
+    bool found = false;
+    for (size_t j = 0; j < cs.size() && !found; ++j) {
+      if (used[j]) continue;
+      if (cs[j].a.Distance(cur) <= tol) {
+        order.push_back({j, false});
+        cur = cs[j].b;
+        used[j] = found = true;
+      } else if (cs[j].b.Distance(cur) <= tol) {
+        order.push_back({j, true});
+        cur = cs[j].a;
+        used[j] = found = true;
+      }
+    }
+    if (!found) throw InputError("the path has a gap: its curves must join end to end in one chain");
+  }
+  const gp_Pnt begin = order[0].second ? cs[order[0].first].b : cs[order[0].first].a;
+  out.closed = cs.size() == 1 ? (cs[0].circle || cs[0].a.Distance(cs[0].b) <= tol) : (!open && cur.Distance(begin) <= tol);
+  BRepBuilderAPI_MakeWire mw;
+  for (auto& o : order) {
+    TopoDS_Edge e = cs[o.first].e;
+    if (o.second) e.Reverse();
+    mw.Add(e);
+    if (!mw.IsDone()) throw InputError("path curve " + cs[o.first].id + " does not join the path");
+    out.edges.emplace_back(cs[o.first].id, mw.Edge());
+  }
+  out.wire = mw.Wire();
+  return out;
+}
+
+// Sweep sketch regions along a path (API 4): each merged region face along the path wire
+// (buildPath). orientation "follow" (default: the profile turns with the path, corrected
+// Frenet; BRepOffsetAPI_MakePipe of the face) or "fixed" (the profile keeps its orientation
+// and is only moved along the path: BRepOffsetAPI_MakePipeShell with a fixed trihedron, one
+// pipe per wire of the face, the holes' pipes cut from the outer one; MakePipe ignores
+// GeomFill_IsFixed, P4a review). History: each side face by the profile sub-segment and the
+// path curve that made it, `sides` keyed "<token>@<path curve id>", caps `start` / `end`
+// (none on a closed path), `caps` per region key. Several regions are fused.
+JV opSweepRegions(const JV& q) {
+  RegionProfiles RP = regionProfiles(q, "sweep");
+  const PathWire path = buildPath(q.req("path"));
+  const std::string orient = q.str("orientation", "follow");
+  if (orient != "follow" && orient != "fixed") throw InputError("orientation must be follow or fixed");
+  const bool fixed = orient == "fixed";
+  // Where the path starts (the fixed sweep moves the profile by path(t) - path(start)).
+  gp_Pnt pathStart;
+  {
+    const TopoDS_Edge& e0 = path.edges.front().second;
+    BRepAdaptor_Curve c(e0);
+    pathStart = c.Value(e0.Orientation() == TopAbs_REVERSED ? c.LastParameter() : c.FirstParameter());
+  }
+  struct One {
+    TopoDS_Shape shape;
+    std::shared_ptr<BRepOffsetAPI_MakePipe> mp;                        // follow
+    std::vector<std::shared_ptr<BRepOffsetAPI_MakePipeShell>> ps;      // fixed: outer wire, then holes
+    std::vector<TopTools_IndexedMapOfShape> wireEdges;                 // fixed: the edges of each wire
+    std::shared_ptr<BRepAlgoAPI_Cut> cut;                              // fixed with holes
+    std::shared_ptr<Profile> P;
+    TopoDS_Shape first, last;
+    // The face of `shape` made by profile edge `se` along path edge `pe` (null when none).
+    TopoDS_Shape generated(const TopoDS_Edge& pe, const TopoDS_Edge& se, const gp_Pnt& start) const {
+      if (mp) return mp->Generated(pe, se);
+      for (size_t k = 0; k < ps.size(); ++k) {
+        if (!wireEdges[k].Contains(se)) continue;
+        // The face lies where the middle of the profile edge goes at the middle of the path edge.
+        BRepAdaptor_Curve cs(se), cp(pe);
+        const gp_Pnt m = cs.Value(0.5 * (cs.FirstParameter() + cs.LastParameter()));
+        const gp_Pnt pm = cp.Value(0.5 * (cp.FirstParameter() + cp.LastParameter()));
+        const gp_Pnt at = m.Translated(gp_Vec(start, pm));
+        const TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(at).Vertex();
+        TopTools_ListOfShape gen;
+        gen = ps[k]->Generated(se);
+        TopoDS_Shape best;
+        double bestD = 1e-3;
+        for (TopTools_ListIteratorOfListOfShape it(gen); it.More(); it.Next()) {
+          if (it.Value().ShapeType() != TopAbs_FACE) continue;
+          BRepExtrema_DistShapeShape d(v, it.Value());
+          if (!d.IsDone()) continue;
+          const double tol = std::max(bestD, 10 * BRep_Tool::Tolerance(TopoDS::Face(it.Value())));
+          if (d.Value() <= tol && (best.IsNull() || d.Value() < bestD)) {
+            best = it.Value();
+            bestD = std::max(d.Value(), 1e-9);
+          }
+        }
+        if (best.IsNull()) return best;
+        return cut ? firstThroughBoolean(*cut, best) : best;
+      }
+      return TopoDS_Shape();
+    }
+  };
+  std::vector<One> pipes;
+  for (auto& P : RP.profiles) {
+    One one;
+    one.P = P;
+    if (!fixed) {
+      auto mp = std::make_shared<BRepOffsetAPI_MakePipe>(path.wire, P->face, GeomFill_IsCorrectedFrenet, Standard_False);
+      mp->Build();
+      if (!mp->IsDone() || mp->Shape().IsNull()) throw OcctError("sweep failed: the profile cannot follow this path");
+      one.mp = mp;
+      one.shape = mp->Shape();
+      one.first = mp->FirstShape();
+      one.last = mp->LastShape();
+    } else {
+      const gp_Ax2 keep(P->ax.Location(), P->ax.Direction(), P->ax.XDirection());
+      std::vector<TopoDS_Wire> wires;
+      const TopoDS_Wire outer = BRepTools::OuterWire(P->face);
+      wires.push_back(outer);
+      for (TopExp_Explorer ex(P->face, TopAbs_WIRE); ex.More(); ex.Next())
+        if (!ex.Current().IsSame(outer)) wires.push_back(TopoDS::Wire(ex.Current()));
+      std::vector<TopoDS_Shape> solids;
+      for (auto& w : wires) {
+        auto ps = std::make_shared<BRepOffsetAPI_MakePipeShell>(path.wire);
+        ps->SetMode(keep);
+        ps->Add(w, Standard_False, Standard_False);
+        ps->Build();
+        if (!ps->IsDone()) throw OcctError("sweep failed: the profile cannot be moved along this path");
+        if (!ps->MakeSolid()) throw OcctError("sweep failed: the swept profile does not close into a solid");
+        TopTools_IndexedMapOfShape em;
+        TopExp::MapShapes(w, TopAbs_EDGE, em);
+        one.ps.push_back(ps);
+        one.wireEdges.push_back(em);
+        solids.push_back(ps->Shape());
+      }
+      one.first = one.ps[0]->FirstShape();
+      one.last = one.ps[0]->LastShape();
+      if (solids.size() == 1) {
+        one.shape = solids[0];
+      } else {
+        TopTools_ListOfShape A, T;
+        A.Append(solids[0]);
+        for (size_t k = 1; k < solids.size(); ++k) T.Append(solids[k]);
+        one.cut = std::make_shared<BRepAlgoAPI_Cut>();
+        one.cut->SetArguments(A);
+        one.cut->SetTools(T);
+        one.cut->SetRunParallel(false);
+        one.cut->SetToFillHistory(true);
+        one.cut->Build();
+        if (one.cut->HasErrors()) throw OcctError("sweep failed while cutting the profile's holes: " + algoErrors(*one.cut));
+        one.shape = unwrap(one.cut->Shape());
+        one.first = firstThroughBoolean(*one.cut, one.first);
+        one.last = firstThroughBoolean(*one.cut, one.last);
+      }
+    }
+    if (one.shape.IsNull()) throw OcctError("sweep failed: the profile cannot follow this path");
+    pipes.push_back(std::move(one));
+  }
+  std::shared_ptr<BRepAlgoAPI_Fuse> fu;
+  TopoDS_Shape res;
+  if (pipes.size() == 1) {
+    res = pipes[0].shape;
+  } else {
+    TopTools_ListOfShape A, T;
+    A.Append(pipes[0].shape);
+    for (size_t i = 1; i < pipes.size(); ++i) T.Append(pipes[i].shape);
+    fu = std::make_shared<BRepAlgoAPI_Fuse>();
+    fu->SetArguments(A);
+    fu->SetTools(T);
+    fu->SetRunParallel(false);
+    fu->SetToFillHistory(true);
+    fu->Build();
+    if (fu->HasErrors()) throw OcctError("sweep failed while joining the profiles: " + algoErrors(*fu));
+    res = unwrap(fu->Shape());
+  }
+  const int id = putShape(res);
+  Indexed& out = indexOf(id);
+  auto through = [&](const TopoDS_Shape& s) -> int {
+    if (s.IsNull()) return -1;
+    return faceIndexIn(id, fu ? firstThroughBoolean(*fu, s) : s);
+  };
+  JV faces = JV::arr();
+  JV sides = JV::obj();
+  JV caps = JV::obj();
+  std::vector<bool> named(out.f.Extent(), false);
+  auto addFace = [&](int fi, JV src) {
+    if (fi < 0 || named[fi]) return;
+    named[fi] = true;
+    JV f = JV::obj();
+    f.set("out", fi);
+    JV from = JV::arr();
+    from.push(std::move(src));
+    f.set("from", std::move(from));
+    faces.push(std::move(f));
+  };
+  std::vector<std::pair<int, int>> capsOf(pipes.size(), {-1, -1});
+  for (size_t i = 0; i < pipes.size(); ++i) {
+    auto& one = pipes[i];
+    for (auto& pe : path.edges)
+      for (auto& se : one.P->segEdges) {
+        TopoDS_Shape g;
+        try {
+          g = one.generated(pe.second, se.second, pathStart);
+        } catch (const Standard_Failure&) {
+          continue;
+        }
+        const int fi = through(g);
+        if (fi < 0) continue;
+        const std::string key = se.first + "@" + pe.first;
+        if (!named[fi]) sides.set(key, fi);
+        JV src = JV::obj();
+        src.set("seg", key);
+        src.set("how", "generated");
+        addFace(fi, std::move(src));
+      }
+    if (!path.closed) {
+      const int s = through(one.first), e = through(one.last);
+      capsOf[i] = {s, e};
+      for (auto cap : {std::make_pair("start", s), std::make_pair("end", e)}) {
+        JV src = JV::obj();
+        src.set("cap", cap.first);
+        src.set("how", "generated");
+        addFace(cap.second, std::move(src));
+      }
+    }
+    for (auto& key : RP.keysOf[i]) {
+      JV c = JV::obj();
+      c.set("start", capsOf[i].first >= 0 ? JV(capsOf[i].first) : JV());
+      c.set("end", capsOf[i].second >= 0 ? JV(capsOf[i].second) : JV());
+      caps.set(key, std::move(c));
+    }
+  }
+  const auto& first = capsOf[RP.faceOfSel[0]];
+  JV hist = JV::obj();
+  hist.set("faces", std::move(faces));
+  hist.set("edges", JV::arr());
+  hist.set("deleted", JV::arr());
+  hist.set("sides", std::move(sides));
+  hist.set("start", first.first >= 0 ? JV(first.first) : JV());
+  hist.set("end", first.second >= 0 ? JV(first.second) : JV());
+  hist.set("caps", std::move(caps));
+  JV r = JV::obj();
   r.set("id", id);
   r.set("history", std::move(hist));
+  addValidity(r, id, q);
+  r.set("closed_path", path.closed);
+  r.set("solids", countOf(res, TopAbs_SOLID));
+  return r;
+}
+
+// Loft through two or more sections (API 4): each section is {plane, curves, regions}
+// of one sketch whose regions make one face without holes (refused otherwise, with the
+// reason); BRepOffsetAPI_ThruSections through their outer wires, in order, as a solid
+// (ruled: straight between sections). History: side faces by the first section's
+// sub-segment token that made them (`seg` = token; faces made only by a later section's
+// edge: "<token>@<section index>"), caps `start` (first section) and `end` (last).
+JV opLoftRegions(const JV& q) {
+  const JV& secs = q.req("sections");
+  if (!secs.isArr() || secs.size() < 2) throw InputError("a loft needs at least two profiles");
+  const bool ruled = q.boolean("ruled", false);
+  auto ts = std::make_shared<BRepOffsetAPI_ThruSections>(Standard_True, ruled ? Standard_True : Standard_False, 1e-6);
+  ts->CheckCompatibility(Standard_True);
+  std::vector<std::vector<std::pair<std::string, TopoDS_Edge>>> secEdges;
+  std::vector<RegionProfiles> keepRP;
+  int i = 0;
+  for (auto& s : secs.items()) {
+    ++i;
+    RegionProfiles RP = regionProfiles(s, "loft");
+    if (RP.profiles.size() != 1) throw InputError("profile " + std::to_string(i) + " of the loft is several separate regions: pick regions that make one shape");
+    const TopoDS_Face& F = RP.profiles[0]->face;
+    int nw = 0;
+    for (TopExp_Explorer ex(F, TopAbs_WIRE); ex.More(); ex.Next()) ++nw;
+    if (nw > 1) throw InputError("profile " + std::to_string(i) + " of the loft has a hole: a loft takes profiles without holes");
+    TopoDS_Wire w = BRepTools::OuterWire(F);
+    ts->AddWire(w);
+    std::vector<std::pair<std::string, TopoDS_Edge>> es;
+    for (TopExp_Explorer ex(w, TopAbs_EDGE); ex.More(); ex.Next())
+      for (auto& se : RP.profiles[0]->segEdges)
+        if (se.second.IsSame(ex.Current())) {
+          es.emplace_back(se.first, TopoDS::Edge(ex.Current()));
+          break;
+        }
+    secEdges.push_back(es);
+    keepRP.push_back(std::move(RP));
+  }
+  ts->Build();
+  if (!ts->IsDone() || ts->Shape().IsNull()) throw OcctError("loft failed: the profiles cannot be joined into one solid");
+  const int id = putShape(unwrap(ts->Shape()));
+  Indexed& out = indexOf(id);
+  std::vector<bool> named(out.f.Extent(), false);
+  JV faces = JV::arr();
+  JV sides = JV::obj();
+  auto addFace = [&](int fi, JV src) {
+    if (fi < 0 || named[fi]) return;
+    named[fi] = true;
+    JV f = JV::obj();
+    f.set("out", fi);
+    JV from = JV::arr();
+    from.push(std::move(src));
+    f.set("from", std::move(from));
+    faces.push(std::move(f));
+  };
+  for (size_t k = 0; k < secEdges.size(); ++k)
+    for (auto& se : secEdges[k]) {
+      TopTools_ListOfShape gens;
+      try {
+        gens = ts->Generated(se.second);
+      } catch (const Standard_Failure&) {
+        continue;
+      }
+      for (TopTools_ListIteratorOfListOfShape it(gens); it.More(); it.Next()) {
+        if (it.Value().ShapeType() != TopAbs_FACE) continue;
+        const int fi = faceIndexIn(id, it.Value());
+        if (fi < 0 || named[fi]) continue;
+        const std::string key = k == 0 ? se.first : se.first + "@" + std::to_string(k);
+        sides.set(key, fi);
+        JV src = JV::obj();
+        src.set("seg", key);
+        src.set("how", "generated");
+        addFace(fi, std::move(src));
+      }
+    }
+  const int s = faceIndexIn(id, ts->FirstShape()), e = faceIndexIn(id, ts->LastShape());
+  for (auto cap : {std::make_pair("start", s), std::make_pair("end", e)}) {
+    JV src = JV::obj();
+    src.set("cap", cap.first);
+    src.set("how", "generated");
+    addFace(cap.second, std::move(src));
+  }
+  JV hist = JV::obj();
+  hist.set("faces", std::move(faces));
+  hist.set("edges", JV::arr());
+  hist.set("deleted", JV::arr());
+  hist.set("sides", std::move(sides));
+  hist.set("start", s >= 0 ? JV(s) : JV());
+  hist.set("end", e >= 0 ? JV(e) : JV());
+  JV r = JV::obj();
+  r.set("id", id);
+  r.set("history", std::move(hist));
+  addValidity(r, id, q);
+  r.set("solids", countOf(shapeOf(id), TopAbs_SOLID));
+  return r;
+}
+
+// Extrude a flat face of a body (API 4, Daniel's item 8: no sketch): the face (a copy;
+// the body is not changed) is the profile, its outward normal the direction (flip:
+// into the body). Extents as extrude (no taper). History: the side swept from input edge
+// i has `seg` "e<i>" (the caller names it by that edge), caps `start` (on the face) and
+// `end`. The result says the span used: `from`, `to` along `direction`.
+JV opExtrudeFace(const JV& q) {
+  const int sid = idParam(q.req("id"), "id");
+  const int fi = (int)q.req("face").num();
+  const TopoDS_Face F = faceAt(sid, q.req("face"));
+  gp_Pln fpl;
+  gp_Dir nOut;
+  if (!planarFace(F, fpl, nOut)) throw InputError("extrude needs a flat face: face " + std::to_string(fi) + " is " + surfWords(F));
+  if (fabs(q.num("taper_deg", 0)) >= 1e-12) throw InputError("taper is not available when extruding a face");
+  const JV& ext = q.req("extent");
+  const bool flip = q.boolean("flip", false);
+  Indexed& in = indexOf(sid);
+  BRepBuilderAPI_Copy cp(F, Standard_True, Standard_False);
+  auto base = std::make_shared<Profile>();
+  gp_Vec xv(fpl.Position().XDirection().XYZ());
+  xv -= gp_Vec(nOut.XYZ()) * xv.Dot(gp_Vec(nOut.XYZ()));
+  base->ax = gp_Ax3(fpl.Location(), nOut, gp_Dir(xv));
+  base->face = TopoDS::Face(cp.Shape());
+  TopTools_IndexedMapOfShape fe;
+  TopExp::MapShapes(F, TopAbs_EDGE, fe);
+  for (int k = 1; k <= fe.Extent(); ++k) {
+    const int ei = in.e.FindIndex(fe(k));
+    if (!ei) continue;
+    base->segEdges.emplace_back("e" + std::to_string(ei - 1), TopoDS::Edge(cp.ModifiedShape(fe(k))));
+  }
+  const gp_Dir n = nOut;
+  const ExtrudeDir ed = extrudeDir(q, n, false);
+  const gp_Dir de = ed.de;
+  const gp_Pnt o = base->ax.Location();
+  const double sigma = ed.sigma;
+  (void)flip;
+  const ExtentPlan pl = planExtent(ext, o, de, false, {base->face});
+  auto at = [&](double shift) { return ed.oblique ? movedProfile(*base, gp_Vec(de.XYZ()) * (shift * sigma)) : shiftedProfile(*base, shift); };
+  Sweep sw = sweepProfile(at, pl, o, n, de, sigma, 0.0);
+  const int id = putShape(sw.shape);
+  JV r = JV::obj();
+  r.set("id", id);
+  r.set("history", sweepHistory(id, *sw.prof, sw.generated, sw.first, sw.last));
   addValidity(r, id, q);
   r.set("from", pl.s0);
   r.set("to", pl.s0 + pl.L);
   r.set("direction", d3(de));
-  r.set("solids", countOf(shapeOf(id), TopAbs_SOLID));
+  return r;
+}
+
+// Why a fillet fails, and what would work (API 4; the Fillet feature's failure words).
+// Runs the fillet with radius r on a fresh work copy. When it fails or its result is not
+// a valid solid: `faulty` (input edge indices of the contours OCCT could not fillet),
+// `failed` (OCCT refused outright, not merely an invalid result) and `max_ok`, the
+// largest radius found to work (smaller radii tried in turn, then bisected: at most 10
+// fillets), or null. Nothing is stored.
+JV filletDiagnose(int sid, const JV& edges, double r) {
+  auto attempt = [&](double rad, std::vector<int>* faulty, bool* outright) -> bool {
+    WorkCopies wc({sid});
+    const int wid = wc.id(0);
+    BRepFilletAPI_MakeFillet mf(wc.shape(0));
+    for (auto& e : edges.items()) mf.Add(rad, edgeAt(wid, e));
+    try {
+      mf.Build();
+    } catch (const Standard_Failure&) {
+      if (outright) *outright = true;
+      return false;
+    }
+    if (!mf.IsDone()) {
+      if (outright) *outright = true;
+      if (faulty) {
+        Indexed& w = indexOf(wid);
+        for (int i = 1; i <= mf.NbFaultyContours(); ++i) {
+          const int ic = mf.FaultyContour(i);
+          if (ic < 1 || ic > mf.NbContours()) continue;
+          for (int j = 1; j <= mf.NbEdges(ic); ++j) {
+            const int k = w.e.FindIndex(mf.Edge(ic, j));
+            if (k) faulty->push_back(k - 1);
+          }
+        }
+      }
+      return false;
+    }
+    TopoDS_Shape res = mf.Shape();
+    if (res.IsNull()) return false;
+    return analyse(unwrap(res)).valid;
+  };
+  std::vector<int> faulty;
+  bool outright = false;
+  const bool ok = attempt(r, &faulty, &outright);
+  std::sort(faulty.begin(), faulty.end());
+  faulty.erase(std::unique(faulty.begin(), faulty.end()), faulty.end());
+  JV out = JV::obj();
+  out.set("done", ok);
+  out.set("failed", outright);
+  JV fj = JV::arr();
+  for (int k : faulty) fj.push(k);
+  out.set("faulty", std::move(fj));
+  if (ok) {
+    out.set("max_ok", r);
+    return out;
+  }
+  double good = -1, bad = r;
+  for (double f : {0.75, 0.5, 0.25, 0.1, 0.02}) {
+    if (attempt(r * f, nullptr, nullptr)) {
+      good = r * f;
+      break;
+    }
+    bad = r * f;
+  }
+  if (good > 0)
+    for (int k = 0; k < 4; ++k) {
+      const double mid = 0.5 * (good + bad);
+      if (attempt(mid, nullptr, nullptr)) good = mid;
+      else bad = mid;
+    }
+  out.set("max_ok", good > 0 ? JV(good) : JV());
+  return out;
+}
+
+// One curve point and its unit tangent (direction of increasing parameter).
+JV pointTangent(const BRepAdaptor_Curve& c, double u) {
+  gp_Pnt p;
+  gp_Vec v;
+  c.D1(u, p, v);
+  if (v.Magnitude() < 1e-12) {
+    const double f = c.FirstParameter(), l = c.LastParameter(), h = 1e-6 * (l - f);
+    const double u0 = std::max(f, u - h), u1 = std::min(l, u + h);
+    v = gp_Vec(c.Value(u0), c.Value(u1));
+  }
+  JV o = JV::obj();
+  o.set("p", p3(p));
+  if (v.Magnitude() > 1e-300) o.set("tangent", d3(gp_Dir(v)));
+  else o.set("tangent", vec3(0, 0, 0));
+  return o;
+}
+
+// Points of an edge (API 4, REFERENCE's request R2): by arc length from `first` or by
+// fraction of the length (`at`), every crossing with a plane (`plane`, ordered along the
+// edge; none for an edge lying in it), and the nearest point to a point (`near`). The
+// edge's own orientation is ignored: `first` is the curve's first parameter.
+JV opEdgeEval(const JV& q) {
+  const int sid = idParam(q.req("id"), "id");
+  const TopoDS_Edge E = edgeAt(sid, q.req("edge"));
+  JV r = JV::obj();
+  if (BRep_Tool::Degenerated(E)) {
+    TopoDS_Vertex v1, v2;
+    TopExp::Vertices(E, v1, v2);
+    const gp_Pnt p = v1.IsNull() ? gp_Pnt() : BRep_Tool::Pnt(v1);
+    r.set("type", "degenerate");
+    r.set("length", 0.0);
+    r.set("first", p3(p));
+    r.set("last", p3(p));
+    r.set("closed", true);
+    r.set("points", JV::arr());
+    r.set("crossings", JV::arr());
+    return r;
+  }
+  BRepAdaptor_Curve c(E);
+  const double f = c.FirstParameter(), l = c.LastParameter();
+  const double len = GCPnts_AbscissaPoint::Length(c);
+  const gp_Pnt pf = c.Value(f), pl = c.Value(l);
+  const double tol = std::max(1e-7, 1e-9 * len);
+  r.set("type", curveType(c.GetType()));
+  r.set("length", len);
+  r.set("first", p3(pf));
+  r.set("last", p3(pl));
+  r.set("closed", BRep_Tool::IsClosed(E) || pf.Distance(pl) <= tol);
+  JV pts = JV::arr();
+  if (const JV* at = q.get("at")) {
+    for (auto& a : at->items()) {
+      double d;
+      if (a.has("distance")) d = a.num("distance");
+      else if (a.has("fraction")) d = a.num("fraction") * len;
+      else throw InputError("each `at` needs a distance or a fraction");
+      if (d < -tol || d > len + tol) {
+        std::ostringstream os;
+        os << "the point is past the end of the edge (length " << len << " mm)";
+        throw InputError(os.str());
+      }
+      d = std::min(std::max(d, 0.0), len);
+      double u;
+      if (d <= 0) u = f;
+      else if (d >= len) u = l;
+      else {
+        GCPnts_AbscissaPoint ap(c, d, f);
+        if (!ap.IsDone()) throw OcctError("could not find the point at that distance along the edge");
+        u = ap.Parameter();
+      }
+      pts.push(pointTangent(c, u));
+    }
+  }
+  r.set("points", std::move(pts));
+  JV cross = JV::arr();
+  if (const JV* jp = q.get("plane")) {
+    const gp_Pnt po = pnt(jp->req("origin"));
+    const gp_Dir pn = dir(jp->req("normal"));
+    auto sd = [&](double u) { return gp_Vec(po, c.Value(u)).Dot(gp_Vec(pn.XYZ())); };
+    const int N = 256;
+    std::vector<double> roots;
+    double u0 = f, s0 = sd(f);
+    bool allIn = fabs(s0) <= tol;
+    for (int k = 1; k <= N; ++k) {
+      const double u1 = f + (l - f) * k / N;
+      const double s1 = sd(u1);
+      if (fabs(s1) > tol) allIn = false;
+      if (fabs(s0) <= tol) {
+        if (roots.empty() || fabs(roots.back() - u0) > 1e-9 * (l - f)) roots.push_back(u0);
+      } else if (s0 * s1 < 0) {
+        double a = u0, b = u1, sa = s0;
+        for (int it = 0; it < 80; ++it) {
+          const double m = 0.5 * (a + b), sm = sd(m);
+          if ((sa < 0) == (sm < 0)) {
+            a = m;
+            sa = sm;
+          } else {
+            b = m;
+          }
+        }
+        roots.push_back(0.5 * (a + b));
+      }
+      u0 = u1;
+      s0 = s1;
+    }
+    if (fabs(s0) <= tol && (roots.empty() || fabs(roots.back() - u0) > 1e-9 * (l - f))) roots.push_back(u0);
+    if (!allIn)
+      for (double u : roots) cross.push(pointTangent(c, u));
+  }
+  r.set("crossings", std::move(cross));
+  if (const JV* jn = q.get("near")) {
+    const gp_Pnt p = pnt(*jn);
+    TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(p).Vertex();
+    BRepExtrema_DistShapeShape dd(v, E);
+    if (!dd.IsDone() || dd.NbSolution() < 1) throw OcctError("could not find the nearest point on the edge");
+    double u = f;
+    if (dd.SupportTypeShape2(1) == BRepExtrema_IsOnEdge) dd.ParOnEdgeS2(1, u);
+    else {
+      const gp_Pnt hit = dd.PointOnShape2(1);
+      u = hit.Distance(pf) <= hit.Distance(pl) ? f : l;
+    }
+    JV nr = pointTangent(c, u);
+    nr.set("distance", dd.Value());
+    r.set("nearest", std::move(nr));
+  }
   return r;
 }
 
@@ -4965,6 +6023,11 @@ JV dispatch(const std::string& op, const JV& q) {
   if (op == "measure") return opMeasure(q);
   if (op == "sketch_regions") return opSketchRegions(q);
   if (op == "extrude_regions") return opExtrudeRegions(q);
+  if (op == "revolve_regions") return opRevolveRegions(q);
+  if (op == "sweep_regions") return opSweepRegions(q);
+  if (op == "loft_regions") return opLoftRegions(q);
+  if (op == "extrude_face") return opExtrudeFace(q);
+  if (op == "edge_eval") return opEdgeEval(q);
   if (op == "debug_oom") return opDebugOom(q);
   if (op == "debug_hold") return opDebugHold(q);
   throw InputError("unknown op '" + op + "'");

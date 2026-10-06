@@ -67,7 +67,8 @@ body {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  height: calc(100% - 64px);
+  /* Above the dock however tall it is (StatusDock's --cad-dock-reserve; 52 px for one row of chips). */
+  height: calc(100% - 12px - var(--cad-dock-reserve, 52px));
   pointer-events: none;
 }
 

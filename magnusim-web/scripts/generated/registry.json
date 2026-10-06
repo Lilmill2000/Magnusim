@@ -4965,7 +4965,7 @@
       "authors": [
         "Magnusim"
       ],
-      "description": "Parametric parts in their own workspace: sketches with dimensions and constraints, extruded into solids, booleans, an enclosure around the part for CFD, named parameters, and STEP import, editing and export.",
+      "description": "Parametric parts in their own workspace: sketches with dimensions and constraints; extrude, revolve, sweep and loft; fillet, chamfer, shell and booleans; reference planes, axes and points; an enclosure around the part for CFD; named parameters; and STEP import, editing and export.",
       "source": "bundled",
       "api_version": "1.6",
       "overrides": [],

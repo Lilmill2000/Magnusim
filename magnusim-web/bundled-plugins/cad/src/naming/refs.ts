@@ -9,7 +9,7 @@ import type { ShapeId, TopoResult } from '../types/kernel-protocol';
 import type { FaceNames, NamingLookup } from '../types/naming';
 import { faceSignature } from './resolve';
 
-/** A NamingLookup over the kernel's `topo` (face_mass on, fast face boxes; edges with their faces). */
+/** A NamingLookup over the kernel's `topo` (face_mass on, fast face boxes; edges with their faces and ends; vertices with their faces). */
 export function kernelLookup(kernel: KernelAdapter): NamingLookup {
   return {
     async faces(shape: ShapeId, indices: number[] | 'all'): Promise<TopoResult['faces']> {
@@ -17,8 +17,12 @@ export function kernelLookup(kernel: KernelAdapter): NamingLookup {
       return r.result.faces;
     },
     async edges(shape: ShapeId, indices: number[] | 'all'): Promise<TopoResult['edges']> {
-      const r = await kernel.call('topo', { id: shape, faces: 'none', edges: indices, vertices: 'none', edge_length: true });
+      const r = await kernel.call('topo', { id: shape, faces: 'none', edges: indices, vertices: 'none', edge_length: true, edge_ends: true });
       return r.result.edges;
+    },
+    async vertices(shape: ShapeId, indices: number[] | 'all'): Promise<TopoResult['vertices']> {
+      const r = await kernel.call('topo', { id: shape, faces: 'none', edges: 'none', vertices: indices, vertex_faces: true });
+      return r.result.vertices;
     },
   };
 }

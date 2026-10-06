@@ -10,7 +10,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, singleVolume } from './helpers';
 import { PNG } from './png';
 
 type V3 = [number, number, number];
@@ -120,7 +120,7 @@ test('cad:p3-profiles-sketchmode a rectangle and a circle drawn in sketch mode s
   await expect(panel.locator('[data-profile-list] [data-profile]')).toHaveCount(1);
   const area = Number(await panel.locator('[data-profile-area]').getAttribute('data-profile-area'));
   expect(area).toBeGreaterThan(500);
-  await expect.poll(async () => Number(await frame.locator('[data-chip="volume"] [data-volume-mm3]').getAttribute('data-volume-mm3')), { timeout: 30_000 }).toBeCloseTo(area * 10, 3);
+  await expect.poll(() => singleVolume(frame), { timeout: 30_000 }).toBeCloseTo(area * 10, 3);
   await panel.locator('[data-panel-done]').click();
   await expect(frame.locator('[data-cad-tree] [data-feature-type="extrude"]')).toHaveAttribute('data-state', 'ok');
   await expect(row).toHaveAttribute('data-sketch-shown', '0');

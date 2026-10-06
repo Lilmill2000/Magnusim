@@ -7,7 +7,10 @@ every change follows. Plans and decisions live in the project's plan folder
 `02 - P0 results and decisions.md`, `p0/CONTRACT.md`); where they disagree,
 the decisions win. The P2 (STEP editing) and P3 (sketcher) build follows
 `docs/p2p3-plan.md`: its schema, kernel API 3, extension points (§10 here) and
-ownership map (§2 here) are binding for the builders.
+ownership map (§2 here) are binding for the builders. P4a (solid features,
+reference geometry, the volume chip per body) was built by two areas, SOLIDS and
+REFERENCE, and integrated in one step; their notes are the §2 rows, §5's API 4
+table, §6's schema additions and §10's "Solid features" and "CONSTRUCT".
 
 ## 1. Runtime topology
 
@@ -69,6 +72,9 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `e2e/cad-p1-review-polish.spec.ts`, `cad-p1-review2.spec.ts`, `cad-p1-review3.spec.ts`, `cad-p15-review1.spec.ts`, `cad-p2p3-review1.spec.ts`, `cad-p2p3-review1-polish.spec.ts`, `cad-p2p3-review2.spec.ts`, `cad-p2p3-review3.spec.ts`, `cad-p2p3-review4.spec.ts`, `tests/arch/user-files.test.ts` | INTEGRATE | Review rounds' findings (P1 rounds 1-3, P1.5 round 1, P2+P3 rounds 1-4), one test per finding. |
 | `e2e/cad-sd-kit.spec.ts` | UI-SHELL | The host UI kit in CAD's panels (§7 "UI kit"): each adopted control against the kit's own component, property by property. |
 | `src/link/**`, `src/doc/source-record.ts`, `tests/link/**`, `tests/kernel/kernel-link.test.ts`, `e2e/cad-link.spec.ts`, `e2e/cad-link-plugins.spec.ts`, `e2e/cad-link-carry.spec.ts`, `e2e/cad-link-exit.spec.ts`, `scripts/gate-l2-cad.mjs`, `scripts/gate-l3-cad.mjs` | LINK | The Part's design as a project geometry (host API 1.5 and 1.6, §11): the export, the face-name sidecar, the link controller, the study record's `source_version`, the exit hook and its camera; gate:l2-cad, gate:l3-cad. |
+| `src/features/{revolve,sweep,loft,fillet,chamfer,shell,pickinfo}/**`, `src/features/solids/**` (shared code, no `index.ts`), `src/naming/edges.ts`, the "P4a: solids" block of `src/types/doc.ts` and its union members (plus Extrude's `face`, `direction` and the `through_all` / `to` extents), `EdgeChainOutput` in `src/types/doc-service.ts`, kernel API 4 (`kernel-build/facade/facade.cpp`, `workspace/kernel/mk32.*`, `src/types/kernel-protocol.ts`), `tests/features/solids/**`, `tests/naming/{edges,corpus}.test.ts`, `tests/kernel/kernel-api4-solids.test.ts`, `e2e/cad-p4a-solids.spec.ts` | P4a SOLIDS | Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents Through all and Up to, Extrude a flat face, the pick chip; edge and vertex references; the persistent-naming corpus. In P4a the SOLIDS builder was the only one to edit `kernel-build/` and `workspace/kernel/` (KERNEL-HARDENING's files). |
+| `src/features/refgeom/**`, `src/types/references.ts`, the "P4a: reference geometry" block of `src/types/doc.ts`, the construct outputs in `src/types/doc-service.ts`, the `feature` sketch support (`src/features/sketch/plane.ts`, `def.ts`; Sketch on a CONSTRUCT plane in `src/sketch/commands.ts`, `mode.ts`, `panel.tsx`), the volume chip in `src/ui/StatusDock.tsx`, `tests/features/refgeom/**`, `e2e/cad-p4a-construct.spec.ts` | P4a REFERENCE | CONSTRUCT (reference Plane, Axis, Point), the shared resolver (`resolveAxis`, `resolvePlane`, `resolvePoint`) SOLIDS uses too, and the per-body volume chip (§7 "Readouts"). |
+| The toolbar's fold order (`src/ui/Toolbar.tsx` `FOLD_ORDER`, `KEEP_IN_VIEW`, the More menus), `e2e/cad-p4a-toolbar.spec.ts`, `e2e/cad-p4a-integrate.spec.ts` | INTEGRATE (P4a) | §7 "Toolbar"; the integration gaps (Extrude "Along" a CONSTRUCT plane or axis, sketch points as point inputs). |
 | `package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `manifest.toml`, `plugin.py`, `README.md`, `ARCHITECTURE.md`, `LICENSES/**` | frozen (INTEGRATE) | New dependency? Ask INTEGRATE: one `npm install` at a time (shared `node_modules`). |
 | `workspace/**` (except `kernel/mk32.*`, `solver/planegcs.*`) | nobody by hand | Written only by `npm run build`. |
 
@@ -123,15 +129,23 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   directly); it also asks the kernel for vertex positions (`topo` with faces
   and edges `none`) so B-rep vertices are pickable. Picks go into `selection`
   (click replaces, Ctrl+click toggles, empty click clears; a right-click on an
-  unselected item selects it before `viewport:contextmenu`).
+  unselected item selects it before `viewport:contextmenu`). An open panel
+  shows what its fields hold by writing it into the selection with
+  `showForPanel` (`src/lib/selection.ts`); those arrays are marked, and every
+  command's preselection reads `userItems` / `userSelection`, which leave a
+  panel's highlight out (P4a review: the Fillet panel's face opened Chamfer with
+  it and chamfered six edges). Any other write makes a new array, so a click on
+  the same item makes it the user's. Body vertices are asked once per drawn
+  `id|tessKey`; a key that stops being drawn leaves both the cache and the
+  in-flight set, so a body that comes back (an Undo) is asked again.
 
 ## 5. Kernel
 
 - Facade C ABI and ops: `p0/CONTRACT.md` and `src/types/kernel-protocol.ts`
   (`KernelOps` maps op -> params/result; the typed file is the one to read).
   Shape ids are integers owned by the worker; face/edge/vertex indices start at
-  0 and are stable per shape id. `version` returns `api: 3` (the contract below plus
-  the API 3 table at the end of this section).
+  0 and are stable per shape id. `version` returns `api: 4` (the contract below plus
+  the API 3 and API 4 tables at the end of this section).
 - Worker protocol: `ready` | `fatal` | `result` (worker -> main), `call`
   (main -> worker, `bytes` transferred as `params.ptr/len`). Buffers come back
   as ArrayBuffers in the transfer list.
@@ -197,10 +211,15 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   big parts need a longer per-op timeout (DOC-CORE's `timeouts.ts`), or the op
   with `check:false` followed by a separate `check`.
 - **Extrude**: `flip` reverses the direction (so does d < 0 for blind); taper
-  keeps its sense when flipped. Kernel-only extents (not in the UI yet):
-  `through_all {targets, both?}` and `to_face {target, face, offset?}` (planar
-  faces, tilted or parallel; the end cap lies on the face's plane). Results say
-  the span used: `from`, `to`, `direction`.
+  keeps its sense when flipped. Extents: blind, two sides, symmetric,
+  `through_all {targets, both?}` (past every target; a body that only touches the
+  profile plane is not gone through: the padded bbox tolerance),
+  `to_face {target, face, offset?}` (planar faces, tilted or parallel; the end cap
+  lies on the face's plane), and API 4's `to_vertex {target, vertex, offset?}` and
+  `to_point {point, offset?}` (up to the plane through it, parallel to the profile).
+  API 4's `direction` (unit, model) extrudes along an axis instead of the normal
+  (refused when it lies in the profile plane; no taper with it). Results say the
+  span used: `from`, `to`, `direction`. All of them are in the UI since P4a (§10).
 - **Edge flags**: `tessellate` returns `edge_flags` (u8 per edge index,
   `EDGE_FLAG` in kernel-protocol.ts): seam 1, degenerated 2, internal 4,
   same_domain 8, smooth 16, free 32. The viewport skips `EDGE_HIDDEN` (seam,
@@ -257,6 +276,21 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     dozen curves 2-30 ms; 225 overlapping circles (841 regions) 0.53 s.
   - `kernel-build/ship.mjs` replaces the shipped kernel only while holding
     `.cache/build.lock` (e2e runs hold it), so a build never lands mid-run.
+- **API 4 (P4a, the SOLIDS builder; typed in `src/types/kernel-protocol.ts`,
+  tests `tests/kernel/kernel-api4-solids.test.ts` against analytic volumes).**
+  `regionProfiles` and `fuseSweeps` were factored out of `extrude_regions`, so
+  every sketch-region op picks and merges regions the same way.
+  | Op | Params -> result (abridged) |
+  |---|---|
+  | `revolve_regions` | `{plane, curves, regions, axis {origin, dir}, extent (one / symmetric / two, degrees), flip}` -> the solid of revolution; a full 360° turn has no caps and reports `on_axis`; refused with a reason: a profile across the axis, an axis normal to the sketch, more than 360° |
+  | `sweep_regions` | `{plane, curves, regions, path (lines and arcs of a sketch in any order, or one circle), orientation follow / fixed}` -> sides named `<token>@<path curve>`; a gap or a branch in the path is refused with a reason |
+  | `loft_regions` | `{sections (2+, each the regions of one sketch making one face without holes), ruled}` -> sides from the first section's tokens; a section with a hole or several regions is refused |
+  | `extrude_face` | `{id, face, extent, flip, direction?}` -> a flat face of a body extruded with no sketch (sides keyed `e<input edge>`); the body is never changed |
+  | `fillet` | + `contours` (the input edges each tangent chain runs along) and `diagnose: true` (nothing stored: names the faulty edges and finds the largest radius that works, up to 10 work-copy fillets) |
+  | `chamfer` | + `d2` (two distances) and `flip` (which face is the reference), `contours` |
+  | `shell` | + `outside` (the wall outside the body's faces) |
+  | `topo` | + `edge_ends` (edges get `first`, `last`, `vertices`, a line's `dir`) and `vertex_faces` (vertices get their sorted faces) |
+  | `edge_eval` | `{id, edge, at? ({distance} or {fraction})[], plane?, near?}` -> `{type, length, first, last, closed, points: {p, tangent}[], crossings, nearest?}` (REFERENCE's point on an edge, an edge crossing a plane, a plane normal to a curve) |
 
 ## 6. Document
 
@@ -275,7 +309,16 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   kept; the rebuild marks each red, "This part uses a removed feature (Box 1)",
   Edit says to delete it and sketch the shape, and Delete takes it
   away (`REMOVED_FEATURE_TYPES` in `src/types/doc.ts`). The SD pass adds
-  `enclosure` (§10). A feature type declares what it reads and makes and which
+  `enclosure` (§10). P4a adds, still in schema 2 (new types and optional fields
+  only): `revolve`, `sweep`, `loft`, `fillet`, `chamfer`, `shell` (SOLIDS; block
+  "P4a: solids"), `ref_plane`, `ref_axis`, `ref_point` (REFERENCE; block "P4a:
+  reference geometry"), Extrude's `through_all` and `to` extents, `face` (a flat
+  face extruded with no sketch) and `direction` (an `AxisRef`, "Along"), the
+  sketch support `{kind: 'feature'}` (a sketch on a CONSTRUCT plane), and the
+  stored references of `src/types/references.ts` (`AxisRef`, `PlaneRef`,
+  `PointRef`, `EdgeRef`, `FaceRef`, `SketchCurveRef`; an `AxisRef` may be the
+  `normal` of a `PlaneRef`). CONSTRUCT features publish an `AxisOutput`,
+  `PlaneOutput` or `PointOutput`; Fillet and Chamfer an `EdgeChainOutput`. A feature type declares what it reads and makes and which
   fields are expressions (FeatureTypeDef `uses`, `ownsBody`, `newBodies`,
   `exprs`/`mapExprs`, `isolateWhileEditing`; `src/doc/features/hooks.ts` holds
   the P1 defaults). Builds may publish an `output` (a sketch's regions) that
@@ -462,6 +505,60 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
 - A context menu's highlight follows the pointer: hovering an item gives it the
   keyboard, hovering a disabled one gives it to the menu, so at most one item
   looks active (round 3: Edit kept its focus ring beside the hovered Delete).
+- **Toolbar (P4a integration; Daniel works on 1280-1920 px screens and needs
+  readable labels).** Every command has its label in view from 1280 px wide. When
+  the labelled buttons do not fit the frame (`useFitLevel`, measured before
+  paint, again from the start whenever the width, the mode or the commands
+  change): first VIEW and EDIT show icons only (their glyphs are the usual ones;
+  the label stays the tooltip and the accessible name), then commands fold one by
+  one into their group's **More ▾** menu in `FOLD_ORDER` (`src/ui/Toolbar.tsx`),
+  the least used first. Only below that (narrower than 1280 px) every group but
+  the primary action shows icons. The More button is narrower than a command
+  (40 px, the caret in its padding), so folding a group's first command frees
+  room; it carries `data-tb-more`, `data-more-commands` and `aria-expanded`, is
+  drawn pressed while one of its commands' panels or tools is open, and its menu
+  is the context menu's (core `.face-ctx-menu`, `[data-cad-menu]`) with each
+  command's icon, label, shortcut (`.cad-menu-key`) and the toolbar button's
+  tooltip (label, shortcut, hint, or the reason it cannot run; a disabled item
+  says why and does not run). Keyboard: Enter, Space or Down opens it on the
+  first command that can run, Up on the last; arrows, Home and End move; Enter
+  runs; Escape or Tab closes it and gives the More button the keyboard back; a
+  second press on More closes it. Measured with labels (bundled Chromium, a
+  part with a body, P4a fix round 1): 1920 px folds nothing, 1600 px six
+  commands, 1440 px nine, 1280 px twelve.
+  - **The priority** (most used stays longest; SolidWorks' CommandManager and
+    Fusion's toolbar promote the same core commands, weighted for Magnusim's
+    CFD preparation, where imported STEP parts are cleaned up and a fluid
+    domain is cut):
+    - never folded (`KEEP_IN_VIEW`): Sketch, Extrude (every part starts with
+      them), Fillet (the most used modify command in both) and Chamfer beside it
+      (the two edge treatments together; P4a review), Plane (Fusion's
+      Offset Plane and SolidWorks' Plane are the reference geometry people
+      reach for), Enclosure (CFD PREP's only command), Measure, Import STEP; in
+      sketch mode Line, Rectangle, Circle, 3-point arc, Dimension, Trim, Finish
+      sketch, and CONSTRAIN (its glyphs are the constraints' own);
+    - folded first to last: Parameters (also the tree's Parameters row;
+      Fusion keeps Change Parameters in the MODIFY menu), Check, Point, Loft,
+      Mass properties, Split, Delete faces (before Axis: the reference axis is
+      reached for more often; P4a review), Axis, Sweep, Shell, Export STEP,
+      Revolve, Combine, Press-pull (kept longest after Fillet: Fusion
+      puts Press Pull first in MODIFY, and press-pull, Combine Cut and the
+      enclosure are how a STEP part becomes a fluid domain); in sketch mode
+      Point, Construction, Tangent arc, Center rectangle, Extend, Centerline.
+    So at 1280 px: SKETCH | SOLID Extrude, More (Revolve, Sweep, Loft) |
+    MODIFY Fillet, Chamfer, Press-pull, Combine, More (Parameters, Shell,
+    Delete faces, Split) | CONSTRUCT Plane, More (Axis, Point) | CFD PREP |
+    INSPECT Measure, More (Mass properties, Check) | FILE Import STEP, More
+    (Export STEP) | VIEW and EDIT as icons (keeping Chamfer beside Fillet costs
+    Revolve and Export STEP their place at 1280 px; both are one click into
+    their More).
+  - A new toolbar command needs a decision: `tests/app/bootstrap.test.tsx`
+    fails until it is in `FOLD_ORDER` or `KEEP_IN_VIEW`. e2e specs run a command
+    with `e2e/helpers.ts` `runCommand(frame, id)` (its button, or More and the
+    item) and read a group's commands with `groupCommandLabels`, so they pass at
+    any width; `e2e/cad-p4a-toolbar.spec.ts` reaches every command at
+    1280 x 800 and 1920 x 1080 in both modes, and `cad:p1-ui-parity` measures the
+    labelled buttons at 1600 and 1280.
 - An exported STEP names itself: FILE_NAME carries the file name, a blank author
   and organization and "Magnusim CAD" (`src/features/export/header.ts`; round 3:
   OCCT's 'Open CASCADE Shape Model' and 'Author'). Reload after "Changed in another tab" says what
@@ -562,11 +659,24 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   of a native feature (Extrude, Enclosure) ask first in the frame (Delete
   feature / Delete faces and heal / Cancel, focus on Cancel).
 - Readouts: volumes group digits from 10,000 up (a metric part of a cubic
-  metre or more reads in m³); with nothing selected the chip totals the shown
-  bodies and says so ("Total of 3 bodies", "Total of 1 shown body"); a hidden
-  body leaves the selection. A surface body (no solid: an open shell, e.g. an
-  import before knitting) has no volume: "Surface body: no volume", and in a
-  total it is not counted ("(1 surface body not counted)"). The Size chip
+  metre or more reads in m³). **The volume chip never adds bodies together**
+  (Daniel 2026-10-02, P4a: a total of a part and the air around it means
+  nothing): the selected body's volume ("Body 1 · 8000 mm³"); several bodies
+  (none selected: the shown ones; or several selected) each on its own,
+  "Body 1: 8000 mm³ · Enclosure 1: 64,000 mm³" (up to 4, then "+ N more", the
+  full list in the tooltip; of more than 4, the Enclosures and then the biggest
+  are the ones shown, in tree order, so the fluid domain is never behind "+ N
+  more"); the tree column ends above the dock however tall the dock grows (its
+  height goes into `--cad-dock-reserve` through a ResizeObserver: at 1280 px a
+  wrapped list covered the rollback bar); a hidden body is not listed and the chip says
+  "(1 hidden body not listed)"; a hidden body leaves the selection. A surface
+  body (no solid: an open shell, e.g. an import before knitting) has no volume:
+  "Surface body: no volume" ("surface body, no volume" in a list). Each value
+  carries `data-volume-mm3` and `data-volume-body`; a test reads them with
+  `e2e/helpers.ts` `chipVolumes` (all of them), `singleVolume` (NaN unless one
+  body is listed: safe in `expect.poll` while a second body briefly exists, an
+  Extrude still New body before Cut) or `soloVolume` (a locator that matches
+  only while one body is listed), never with a strict single-element read. The Size chip
   beside it gives the same bodies' exact bounding box ("100 mm × 100 mm × 20
   mm"; proposal §7 P2: press-pull grows it). Tree labels end in an ellipsis inside the card,
   with the full name as the tooltip.
@@ -675,6 +785,21 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   The broken-manifest test breaks `manifest.toml` in place for that one test;
   `e2e/manifest-guard.mjs` keeps the real file in `.cache/` and every run's
   global setup puts it back if a run stopped mid-test.
+- P4a: `e2e/cad-p4a-solids.spec.ts` (Revolve, its axis picked, Sweep, Loft on
+  a CONSTRUCT plane, Fillet with its failure words, Chamfer and Shell, the
+  extents, a face extruded, the bracket gate of proposal §7, Along a slanted
+  line), `e2e/cad-p4a-construct.spec.ts` (CONSTRUCT and the per-body volume
+  chip), `e2e/cad-p4a-toolbar.spec.ts` (every command reachable at 1280 x 800
+  and 1920 x 1080, the More menus by keyboard and mouse) and
+  `e2e/cad-p4a-integrate.spec.ts` (Along a CONSTRUCT plane, axis or origin
+  plane; a plane through three sketch points). The P4a fix round's findings are
+  `e2e/cad-p4a-fix1.spec.ts` (one test per blocker of the two reviews and the
+  polish with something to show), and the solids spec checks undo, redo, a
+  reopened panel and a reopened Part, a symmetric revolve by its box, Both sides,
+  Chamfer's Flip and Up to through the chips, with selections made by tree rows.
+  Unit: `tests/naming/corpus.test.ts`
+  (the persistent-naming corpus), `tests/features/solids/solids-real.test.ts`
+  and `tests/features/refgeom/real-kernel.test.ts` on the real kernel.
 - Real Chrome/Edge (`CAD_E2E_CHANNELS=chrome,msedge`) for anything about load
   time or process isolation: bundled Chromium caches sandboxed frames and does
   not isolate their process.
@@ -803,6 +928,135 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   Cut, the enclosure the target (a new Combine then turns Keep the tool bodies
   on), the part the tool. A cylinder enclosure is round about the bbox's
   corners (radius half the cross diagonal), not about round parts.
+- **Solid features** (P4a SOLIDS; one module folder each, shared code in
+  `src/features/solids/`). Commands open with what is selected (select first,
+  then act) and are greyed with the reason until they can run ("Draw a closed
+  profile in a sketch first", "Make or import a body first"). Every op honours
+  the kernel's `valid`, works on copies, and a failure is a red feature with the
+  reason while the body before it still shows.
+  - **Revolve** (SOLID): one sketch's regions clicked in the view; Axis (an
+    `AxisRef`): a sketch line or centerline (a sketch's only centerline is taken
+    by itself), a straight or round model edge, a round face's axis, an origin
+    axis (X, Y, Z: their rows under Origin, or clicked where the view draws them
+    while the field is active), or a CONSTRUCT axis (clicked where the view draws
+    it, or its tree row); a plane's row says it is not an axis. One side /
+    Symmetric / Two sides, Flip, Operation.
+  - **Sweep**: profiles; a Path of another sketch's curves clicked one by one
+    (drawn in the pick green; while the field is on, curves not joined yet say
+    "Not joined yet" in the field, not a red failure in the foot); Orientation
+    (Follow path: `BRepOffsetAPI_MakePipe`, corrected Frenet; Keep orientation:
+    `BRepOffsetAPI_MakePipeShell` with a fixed trihedron, one pipe per wire of the
+    profile and the holes' pipes cut away, because MakePipe ignores
+    `GeomFill_IsFixed`: P4a review. The profile is moved along the path without
+    turning, so a disc swept up a path rising 70 mm is pi r² x 70; it is not
+    moved to the path's start: draw it on a CONSTRUCT "Normal to a curve" plane
+    at the start); Operation.
+  - **Loft**: one profile per sketch, in the order picked; arrows on each row move
+    a profile earlier or later; a click on a profile inside the loft's own body
+    goes through it (`regionUnder` `through`: the feature's own preview never
+    hides its profiles); Ruled; enabled once two sketches have profiles. Guide
+    rails are V1.
+  - **Fillet / Chamfer** (MODIFY): edges of one body, or a face (all its edges);
+    a fillet face of this feature clicked takes its edge back out. "Rounds N
+    edges: k picked, … along their tangent chains" (the chain's extra edges are
+    not highlighted one by one: the fillet faces are). A failed fillet names
+    the edge and the radius that works: "Fillet 1 failed: a radius of 20 mm is
+    too large for End · Side 2 of Extrude 1: 9.9 mm or less works" (the
+    diagnosis runs up to 10 work-copy fillets, only on failure; on a very large
+    import the 20 s watchdog may stop it, and then the message has no
+    suggestion). Chamfer: equal distance or two distances with Flip; with two
+    distances the panel says which face Distance 1 is on ("Distance 1 is on End
+    face of Extrude 1; Flip sides puts it on the other face"), and a distance too
+    large says what works ("…: 4.8 mm and 1.2 mm or less work", the largest scale
+    of the distances that chamfers, found by halving on work copies; parts over
+    2,000 faces skip it). The chain hint shows only for a build that worked with
+    at least one edge.
+  - **Shell**: the faces to open (at least one: a closed shell is refused with
+    the reason), Thickness, Inside / Outside. Its rows say what a face is ("End
+    face of Extrude 1", the number on the body in the tooltip); a face picked on
+    the live result of an Outside shell (the input face turned inside out) is
+    stored with the input face's outward normal, so it is found as it is.
+  - **Extrude** gains Through all (with Both sides), Up to a face or a vertex
+    (with an Offset; a curved face is refused), and **Along**: an optional
+    direction instead of the normal, any `AxisRef` (a sketch line, a straight
+    edge, a round face's axis, a CONSTRUCT axis) or, since the integration, a
+    plane's normal (a CONSTRUCT plane, an origin plane or a flat face), clicked
+    in the view or picked by its tree row (`useAxisField` `planes: true`; the
+    `normal` member of `AxisRef`). Arrows are hidden for Through all, Up to and
+    Along. Through all as a New body or a Join ends exactly at the targets'
+    farthest extent along the direction (`through_all {fit: true}`, the exact
+    optimal box in a frame along the direction) and is refused when the swept
+    profile misses every target ("the profile misses every body: there is
+    nothing to go through"); a Cut or an Intersect goes past them by the margin
+    (P4a review: New body and Join kept made-up length). With Flip direction
+    ticked, a refusal's advice says "untick Flip direction".
+  - **Extrude a flat face** (Daniel's item 8): a flat face clicked in the panel
+    while no profile is picked, or selected before Extrude (only when no shown
+    sketch offers a profile), or "Extrude face" in the face's menu. The face is
+    the profile, with full history naming; a new one defaults to Join.
+    Press-pull stays the direct-edit equivalent.
+  - **Pick chip** (`src/features/pickinfo`): with one face, edge or point
+    picked, the dock says what it is ("Face · Fillet (Fillet 1)",
+    "Edge · End · Side 2 (Extrude 1)").
+- **CONSTRUCT** (P4a REFERENCE, `src/features/refgeom/`; Daniel's item 9). The
+  toolbar group after MODIFY: Plane, Axis, Point, each a history feature
+  (`ref_plane`, `ref_axis`, `ref_point`; rows "Plane 1" with an eye) that makes
+  no body and publishes its geometry for later features.
+  - Plane: offset (Reverse direction), at an angle (a plane and an axis in or
+    parallel to it), through 3 points, midplane, normal to a curve (an edge or a
+    sketch curve such as a Sweep path; at a point on it or at a % of its
+    length). Axis: through 2 points, the axis of a round face ("Of a round
+    face": a cylinder or cone), along an edge, where 2 planes cross; an axis with
+    no sense of its own (a round face's, a round edge's, two planes' crossing)
+    points up (+Z), else towards +Y, else +X, and Reverse direction turns it.
+    Point: at a vertex, the centre of an arc, circle or sphere, on an edge
+    (distance or %, from either end), where an edge crosses a plane, coordinates.
+  - The origin's X, Y and Z axes are rows under Origin (after the planes) and
+    are drawn on the `construct` layer (ids `origin:x` ..., `drawnOriginAxes`)
+    while selected or hovered and while a field that takes an axis is active
+    (`wantOriginAxes`: Revolve's Axis, Extrude's Along, a CONSTRUCT axis field),
+    so they can be clicked in the view; a click selects `{kind: 'origin'}`.
+  - Point inputs take a CONSTRUCT point, a vertex, the origin (a button), and
+    since the integration a point of a sketch shown (a line's end, a centre, a
+    point: `sketchPointUnder` in `src/features/solids/geom.ts`, stored as
+    `PointRef` `sketch-point`, which follows the sketch).
+  - Panels apply live with a "Built: through …, normal …" readout; pick fields
+    take clicks in the view (CONSTRUCT items first, then sketch points or
+    curves, then the viewport's pick with the field's filter) and tree rows; a
+    refused pick says why ("That face is curved: pick a plane or a flat face"),
+    and a click that meets nothing says what to click ("Nothing to pick there:
+    click a vertex, a point or a point of a sketch"). The feature being edited
+    and later ones are not pickable in its own fields (`pickableConstructs`): a
+    plane drawn over a face lets the click through to the face. Rows name what
+    they hold with numbered sides ("Side 2 of Extrude 1", from the body's face
+    names) and sketch points by their curves ("Corner of Line 1 and Line 2 of
+    Sketch 3", "Centre of Circle 1 of Sketch 2"), an import's face by its number
+    on the body ("Face 7 of flange", as Measure and Delete faces say it); never
+    an internal id.
+    Commands start from the selection (a plane selected -> Offset; two planes
+    -> Midplane; a cylindrical face -> Axis of a cylinder; ...).
+  - References are resolved at every rebuild (`resolve.ts`: `resolveAxis`,
+    `resolvePlane`, `resolvePoint`, used by Revolve's axis and Extrude's Along
+    too); a lost input turns the feature red with the reason in the panels'
+    words ("Plane 1 failed: Body 1 is not there at this point"), a repaired
+    match is amber "Reference repaired · check".
+  - A sketch can lie on a CONSTRUCT plane (`SketchSupport {kind: 'feature'}`:
+    the plane selected then Sketch, or "Sketch on Plane 1" in the view's menu)
+    and follows it; a plane that did not build leaves the sketch where it was
+    ("Sketch 2 lost its plane: it stays where it was").
+  - Drawn in the view on the `construct` layer (planes as the origin planes'
+    squares sized to the shown bodies, axes as dashed lines, points as dots,
+    each labelled clear of the chrome), hovered in the hover blue and picked in
+    the pick green; a click selects `{kind: 'feature'}`, a double-click edits,
+    a right-click opens the view's menu (the modules' actions such as "Sketch on
+    Plane 1" right after the core's view items, then the body's and the
+    feature's, Delete last). Labels sit clear of bodies (five points of the label
+    checked) and 8 px from each other. A broken CONSTRUCT feature that nothing
+    uses does not stop the exit sync (Daniel, 2026-10-05): the design is whole
+    without it, the update lands, and the app's header says so on the way out
+    ("Axis 5 is broken (not used by anything). Part 1 is updated without it.";
+    §11). One that a built feature uses still stops it, because that feature
+    failed too.
 - **Commands.** `primary: true` draws the mode's primary button (Finish sketch);
   `activeWhen` draws a command pressed while its panel, tool or sketch tool is
   in use; `canRun(id)` asks without running. Shortcuts are mode-aware: a key runs
@@ -815,7 +1069,10 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   `frame: true` makes what it draws count when the view frames the part, a
   function `frame: () => box` only the box it gives: sketch mode's layer counts
   the sketch, not its grid), `reframe()` (the last framing again with what is
-  drawn now, unless the camera was moved since),
+  drawn now, unless the camera was moved since), `refitIfOffScreen()` (a fit
+  when the bodies and shown sketches reach off the screen of an unmoved view;
+  the binding calls it when sketch mode ends, once the view is still, so a first
+  large sketch is framed after Finish sketch),
   `pushTool` (pointer events before the camera and the selection; a consumed
   press captures the gesture), `rayAt`, `toPlane`, `pixelSize`, `onFrame`,
   `lineResolution`, `setPlanesBusy(owner, busy)` (whatever draws something
@@ -851,9 +1108,10 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   that relation (horizontal, vertical, parallel, perpendicular, tangent). The
   extrude arrow shows a grab hand (closed while dragged). Constraint
   glyphs and dimension labels are buttons (Tab, Space selects, Enter edits a
-  dimension). The toolbar fits the frame from 1280 px: VIEW and EDIT, then every
-  group but the primary action, show icons only when the labels do not fit
-  (`useFitLevel` in `src/ui/Toolbar.tsx`; the label stays in the tooltip).
+  dimension). The toolbar fits the frame from 1280 px with its labels: VIEW and
+  EDIT go to icons, then the less-used commands into their group's More menu
+  (§7 "Toolbar"); only below 1280 px every group but the primary action shows
+  icons (`useFitLevel` in `src/ui/Toolbar.tsx`; the label stays in the tooltip).
   HTML in a layer that takes the pointer (sketch value boxes, labels)
   never sits under it while a tool draws: a small circle's Diameter box once took
   the rim click, so no circle was made (`src/sketch/overlay.ts` moves the boxes
@@ -885,7 +1143,18 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   "Face not found after rebuild"; the P2 features say which face, in the
   panels' words: "Start face of Extrude 2 not found on Body 1 after rebuild").
   Extrude and Enclosure name their faces; booleans
-  carry names once the kernel reports `faces` and `history`.
+  carry names once the kernel reports `faces` and `history`. P4a adds edges and
+  vertices (`src/naming/edges.ts`): an edge is `E:<faceA>&<faceB>` (its two faces'
+  names, sorted), a vertex `V:<a>&<b>&<c>`, each with a signature, resolved by name
+  then by signature and never repaired silently; their words come from
+  `edgeWords` / `vertexWords` ("End · Side 2 of Extrude 1"), and names are split
+  with `splitEdgeName` / `splitVertexName` (a face name can hold an edge name: a
+  press-pull side, a fillet face), never with a plain split on `&`. Fillet faces
+  are `F:<id>:fillet:E:<a>&<b>`, chamfer faces `…:chamfer:…`, shell inner faces
+  `F:<id>:inner:<face>`, a face extrude's sides `F:<id>:side:E:<a>&<b>`. The
+  persistent-naming corpus (`tests/naming/corpus.test.ts`: a bracket, a pipe and
+  the imported flange, each edited upstream) keeps the same names, panel words
+  and analytic volumes through the edits.
 
 ## 11. Linking a geometry (LINK, host API 1.5; exit sync 1.6)
 
@@ -924,7 +1193,15 @@ changes. The host's contract is `docs/plugins/authoring.md` "Linking a geometry
   delete it, then leave." (L3 review B2). Such a Part says so when it opens: the
   dock's notice "This Part uses a removed feature: Old box · Suppress it"
   (`DocService.suppressRemoved()`: every one suppressed in one undo step, their
-  data kept).
+  data kept). One exception (Daniel, 2026-10-05): a broken reference Plane, Axis
+  or Point that no feature uses (no unsuppressed feature names it among its
+  `parents`) makes no body, so it does not refuse the link; the outcome carries
+  `notes` ("Axis 5 is broken (not used by anything).") and the progress line
+  says "Axis 5 is broken (not used by anything). Part 1 is updated without it."
+  before the export, held `noteHoldMs` (the exit hook: NOTHING_SHOWN_MS) so the
+  app's header shows it: once the link's job runs, the header shows the job's
+  own stages, and the app's landing report is the host's (it has no place for a
+  plugin's line; a host API for that is a request to Plugin Framework).
 - **No change, no work.** When `sourceVersion` equals
   `linkedGeometry().sourceVersion` nothing is exported or written (the common
   "opened, looked, left"). When the geometry has a newer design (another tab's),

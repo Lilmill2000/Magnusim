@@ -16,6 +16,7 @@ import { P2_ICONS } from '../p2/icons';
 import { makerOf, pickFace, selectedFaces } from '../p2/refs';
 import { deleteFacesDef } from './feature';
 import { DeleteFacesPanel } from './panel';
+import { userItems } from '../../lib/selection';
 
 /** Feature types whose faces are edited directly (no "delete the feature instead?" question). */
 export const DIRECT_EDIT_TYPES = new Set(['import', 'delete_faces', 'press_pull', 'split', 'combine']);
@@ -26,7 +27,7 @@ export async function runDeleteFaces(services: AppServices): Promise<void> {
   const p = ui.state.get().panel;
   // The open Delete faces panel already takes clicked faces.
   if (p?.kind === 'feature' && p.type === 'delete_faces') return;
-  const faces = selectedFaces(services.selection.get().items);
+  const faces = selectedFaces(userItems(services.selection));
   if (!faces.length) {
     ui.openNew('delete_faces');
     return;

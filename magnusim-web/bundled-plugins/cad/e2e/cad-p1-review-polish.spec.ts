@@ -145,15 +145,16 @@ test('cad:p1-review-panels tiny sizes refused, grouped volume readouts and total
   await expect(chip).toHaveText('Volume8000 mm³');
   await panel.locator('[data-panel-done]').click();
 
-  // A cylinder (Ø20 × 20, sketched and extruded) as a second body (it overlaps the cube): the chip says it is a total.
+  // A cylinder (Ø20 × 20, sketched and extruded) as a second body (it overlaps the cube): each body
+  // with its own volume, never added together (P4a, Daniel 2026-10-02).
   await addSolid(page, { circle: true, size: [20, 20] });
-  await expect(chip).toHaveText('VolumeTotal of 2 bodies · 14,283.2 mm³');
-  // A hidden body is not counted, and the chip says the total is of the shown ones.
+  await expect(chip).toHaveText('VolumeBody 1: 8000 mm³ · Body 2: 6283.19 mm³');
+  // A hidden body is not listed, and the chip says so.
   await tree.locator('[data-bodies-folder] > .tree-row').click();
   await tree.locator('[data-body-row]').nth(1).locator('[data-body-act="visibility"]').click();
-  await expect(chip).toHaveText('VolumeTotal of 1 shown body · 8000 mm³');
+  await expect(chip).toHaveText('VolumeBody 1 · 8000 mm³ (1 hidden body not listed)');
   await tree.locator('[data-body-row]').nth(1).locator('[data-body-act="visibility"]').click();
-  await expect(chip).toHaveText('VolumeTotal of 2 bodies · 14,283.2 mm³');
+  await expect(chip).toHaveText('VolumeBody 1: 8000 mm³ · Body 2: 6283.19 mm³');
 
   // N with nothing selected says why (it did nothing; the reason was only in the Views menu).
   const canvas = (await page.locator('#workspace-frame').boundingBox())!;

@@ -24,7 +24,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, baseUrl, modelOnPage, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, baseUrl, modelOnPage, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
 import { PNG } from './png';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
@@ -329,7 +329,7 @@ test('cad:sd-review1-two-bodies the union of two bodies, bodies picked in the br
   await p.locator('[data-panel-done]').click();
 
   // The fluid: Cut with the Enclosure as the target: Keep the tool bodies comes on by itself.
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   await p.locator('[data-field="op"] select').selectOption('cut');
   await p.locator('[data-pick-list="targets"]').click();
   await bodyRows(frame).nth(2).locator('.tree-row').first().click();
@@ -477,7 +477,7 @@ test('cad:sd-review1-panel-layout Use padding does not move the field; the Perce
   await expect(p.locator('[data-panel-title]')).toHaveText('Extrude 1');
   expect(Math.round((await p.boundingBox())!.width)).toBe(360);
   await p.locator('[data-panel-done]').click();
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   await expect(p.locator('[data-panel-title]')).toHaveText('Combine 1');
   expect(Math.round((await p.boundingBox())!.width)).toBe(360);
   await p.locator('[data-panel-delete]').click();

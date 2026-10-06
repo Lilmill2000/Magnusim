@@ -27,7 +27,7 @@ function along(p: Vec3, ray: { origin: Vec3; dir: Vec3 }): number {
 }
 
 /** The region under frame client coordinates (with the pointer's model ray), or null. */
-export function regionUnder(services: AppServices, at: { clientX: number; clientY: number; ray: { origin: Vec3; dir: Vec3 } }, opts: { only?: FeatureId } = {}): RegionHit | null {
+export function regionUnder(services: AppServices, at: { clientX: number; clientY: number; ray: { origin: Vec3; dir: Vec3 } }, opts: { only?: FeatureId; through?: readonly string[] } = {}): RegionHit | null {
   const s = services.doc.state.get();
   const drawn = drawnSketches(s, services.mode.get().mode, profilesView(services).get(), services.doc.features);
   let best: RegionHit | null = null;
@@ -43,7 +43,9 @@ export function regionUnder(services: AppServices, at: { clientX: number; client
   const handle = services.viewport.get().handle;
   if (!handle) return best;
   const pick = handle.pick(at.clientX, at.clientY);
-  if (pick && (pick.item.kind === 'face' || pick.item.kind === 'edge' || pick.item.kind === 'vertex')) {
+  // A body in front hides the region, unless it is the preview of the feature picking (`through`:
+  // a loft's own body hid the profile inside it; P4a review).
+  if (pick && (pick.item.kind === 'face' || pick.item.kind === 'edge' || pick.item.kind === 'vertex') && !opts.through?.includes(pick.item.body)) {
     const tol = 3 * handle.pixelSize(best.point) + 1e-9;
     if (along(pick.point, at.ray) < best.t - tol) return null;
   }

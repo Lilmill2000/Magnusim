@@ -2,8 +2,11 @@
 //   Profiles   the regions it extrudes (a click on a shaded region in the
 //              view adds or removes one; x removes; hover shows it in the
 //              view), each with its area, "repaired" or "lost"
-//   Direction  Extent Blind / Symmetric / Two sides; Distance (and Distance
-//              2); Flip direction; the arrow in the view drags the distance
+//              P4a: or one flat face of a body (Daniel's item 8: a click on a
+//              flat face while no profile is picked), extruded with no sketch
+//   Direction  Extent Blind / Symmetric / Two sides / Through all (Both sides) /
+//              Up to (a flat face or a vertex, and an Offset); Distance (and
+//              Distance 2); Flip direction; the arrow in the view drags the distance
 //   Operation  New body / Join / Cut / Intersect, once a body is made before
 //              it in history (or when it is not New body, so it can go back)
 // Every valid change applies live (the body is the preview); Done closes;
@@ -13,7 +16,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useServices } from '../../lib/services';
 import { useStateStore } from '../../lib/store';
-import { FEATURE_ACTION_LABELS, type BodyOp, type ExtrudeExtentDef, type ExtrudeFeature, type Feature, type RegionRef } from '../../types/doc';
+import { FEATURE_ACTION_LABELS, type BodyOp, type BodyRef, type ExtrudeExtentDef, type ExtrudeFeature, type Feature, type RegionRef } from '../../types/doc';
+import { describeFace } from '../../naming';
+import { Switch } from '../p2/panel';
+import { featureNameOf, SelectionMirror, useAxisField, useTargetField } from '../solids/fields';
+import { usePicksLines } from '../solids/view';
 import type { FeaturePanelProps } from '../../types/modules';
 import type { DocUnits, Expr } from '../../types/units';
 import { errText, uiFor } from '../../ui/controller';
@@ -37,6 +44,8 @@ const EXTENTS: { value: ExtrudeExtentDef['kind']; label: string }[] = [
   { value: 'blind', label: 'Blind' },
   { value: 'symmetric', label: 'Symmetric' },
   { value: 'two', label: 'Two sides' },
+  { value: 'through_all', label: 'Through all' },
+  { value: 'to', label: 'Up to' },
 ];
 
 /** "1,256.64 mm²" in the document's length unit. */
@@ -85,6 +94,38 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
   const autoFlipped = useRef(false);
 
   const draft = (session.open ? session.draft : (stored ?? session.draft)) as ExtrudeFeature;
+  /** Up to's pick list takes viewport clicks (it is active while it waits for its face or vertex). */
+  const [targetActive, setTargetActive] = useState(false);
+  const toTarget = draft.extent.kind === 'to' ? draft.extent.target : null;
+  const waitingTarget = draft.extent.kind === 'to' && !toTarget;
+  const target = useTargetField(services, {
+    feature,
+    value: toTarget,
+    active: draft.extent.kind === 'to' && (targetActive || waitingTarget),
+    onChange: (t: BodyRef | null) => {
+      const e = draft.extent;
+      if (e.kind !== 'to') return;
+      const refused = update({ extent: { ...e, target: t } } as Partial<Feature>);
+      if (refused) ui.setPanelNote(refused);
+      else setTargetActive(!t);
+    },
+  });
+
+  /** The optional direction (an axis) takes viewport clicks only after its box is clicked. */
+  const [dirActive, setDirActive] = useState(false);
+  const direction = useAxisField(services, {
+    feature,
+    value: draft.direction ?? null,
+    active: dirActive,
+    empty: 'Normal to the profile',
+    planes: true,
+    onChange: (a) => {
+      const refused = update({ direction: a } as Partial<Feature>);
+      if (refused) ui.setPanelNote(refused);
+      setDirActive(false);
+    },
+  });
+  usePicksLines(services, direction.lines);
   const rows = profileRows(draft, { rebuild: { ...doc.state.get().rebuild, outputs }, doc: doc.state.get().doc });
   const sketchId = draft.profiles[0]?.sketch ?? null;
   // Is any profile on show to click? (A sketch an extrude uses is hidden until its eye shows it.)
@@ -191,8 +232,29 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
     const r = unitsSvc.evaluate(key === 'distance' ? ext.distance2 : ext.distance, 'length');
     return r.ok ? r.value : null;
   };
+  const offsetId = `cad-f-${feature}-offset`;
   const extentFields =
-    ext.kind === 'blind'
+    ext.kind === 'through_all'
+      ? [
+          <Switch
+            key="both"
+            field="both"
+            label="Both sides"
+            checked={!!ext.both}
+            onChange={(v) => {
+              const refused = update({ extent: { ...ext, both: v } } as Partial<Feature>);
+              if (refused) ui.setPanelNote(refused);
+            }}
+          />,
+        ]
+      : ext.kind === 'to'
+        ? [
+            <div key="target">{target.element('Up to', 'target', () => setTargetActive(true), 'Click a flat face or a vertex in the view: the extrude ends on its plane')}</div>,
+            <Field key="offset" label="Offset" htmlFor={offsetId} field="offset">
+              <NumberUnitInput id={offsetId} field="offset" label="Offset" expr={ext.offset} quantity="length" units={unitsSvc} onCommit={(e) => update({ extent: { ...ext, offset: e } } as Partial<Feature>)} />
+            </Field>,
+          ]
+        : ext.kind === 'blind'
       ? [distanceField('distance', 'Distance', ext.distance, (v) => (v === 0 ? 'Distance must not be 0' : Math.abs(v) < MIN_SIZE_MM ? 'Distance must be at least 0.000001 mm' : null))]
       : ext.kind === 'symmetric'
         ? [distanceField('distance', 'Total distance', ext.distance, (v) => (!(v > 0) ? 'Distance must be more than 0' : v < MIN_SIZE_MM ? 'Distance must be at least 0.000001 mm' : null))]
@@ -207,7 +269,14 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
     // A blind extrude the other way ("-25 mm") becomes a symmetric one of that length.
     const now = unitsSvc.evaluate(distance, 'length');
     if (kind === 'symmetric' && now.ok && now.value < 0 && /^\s*-/.test(distance)) distance = distance.replace(/^\s*-\s*/, '');
-    const next: ExtrudeExtentDef = kind === 'two' ? { kind, distance, distance2: ext.kind === 'two' ? ext.distance2 : distance } : { kind, distance };
+    const next: ExtrudeExtentDef =
+      kind === 'two'
+        ? { kind, distance, distance2: ext.kind === 'two' ? ext.distance2 : distance }
+        : kind === 'through_all'
+          ? { kind, distance, both: ext.kind === 'through_all' ? ext.both : false }
+          : kind === 'to'
+            ? { kind, distance, target: ext.kind === 'to' ? ext.target : null, offset: ext.kind === 'to' ? ext.offset : `0 ${unitsSvc.units().length}` }
+            : { kind, distance };
     const refused = update({ extent: next } as Partial<Feature>);
     if (refused) ui.setPanelNote(refused);
   };
@@ -261,10 +330,33 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
       </Field>
     ) : null;
 
+  const fname = featureNameOf(services);
+  const faceWords = draft.face ? describeFace(draft.face.ref.name, fname, services.doc.state.get().rebuild.bodies.find((b) => b.id === draft.face!.body)?.names?.faces ?? null) : '';
+  const faceRow = draft.face ? (
+    <li className="bc-assign-item" data-profile="face" data-profile-state={status?.state === 'error' && /not found on|no longer flat/.test(status.message ?? '') ? 'lost' : 'ok'}>
+      <span className="cad-profile-name" title={faceWords}>
+        {faceWords}
+      </span>
+      <span className="mat-assign-state">flat face</span>
+      <button
+        type="button"
+        className="bc-assign-x"
+        aria-label="Remove the face"
+        data-profile-remove="face"
+        onClick={() => {
+          const refused = update({ face: null } as Partial<Feature>);
+          if (refused) ui.setPanelNote(refused);
+        }}
+      >
+        ×
+      </button>
+    </li>
+  ) : null;
   const body = (
     <>
-      <FieldGroup title={sketchName ? `Profiles (${sketchName})` : 'Profiles'}>
+      <FieldGroup title={draft.face ? 'Profile (a flat face)' : sketchName ? `Profiles (${sketchName})` : 'Profiles'}>
         <ul className="mat-assign-list cad-profile-list" data-profile-list="1" aria-label="Profiles">
+          {faceRow}
           {rows.map((r) => (
             <li
               key={`${r.i}:${r.ref.region}`}
@@ -284,13 +376,26 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
             </li>
           ))}
         </ul>
-        <Hint>{rows.length ? 'Click shaded regions in the view to add or remove profiles' : pickable ? 'No profiles yet: click a shaded region of a sketch in the view' : 'No profiles yet: the sketches with closed profiles are hidden; show one with its eye in the tree'}</Hint>
+        <Hint>
+          {draft.face
+            ? 'The face is extruded along its outward normal (Flip direction: into the body)'
+            : rows.length
+              ? 'Click shaded regions in the view to add or remove profiles'
+              : pickable
+                ? services.doc.state.get().rebuild.bodies.length
+                  ? 'No profiles yet: click a shaded region of a sketch, or a flat face of a body, in the view'
+                  : 'No profiles yet: click a shaded region of a sketch in the view'
+                : services.doc.state.get().rebuild.bodies.length
+                  ? 'No profiles yet: click a flat face of a body in the view (the sketches with closed profiles are hidden; show one with its eye in the tree)'
+                  : 'No profiles yet: the sketches with closed profiles are hidden; show one with its eye in the tree'}
+        </Hint>
       </FieldGroup>
       <FieldGroup title="Direction">
         <Field label="Extent" htmlFor={`cad-f-${feature}-extent`} field="extent">
           <Select id={`cad-f-${feature}-extent`} label="Extent" field="extent" value={ext.kind} onChange={(v) => setExtentKind(v as ExtrudeExtentDef['kind'])} options={EXTENTS.map((o) => ({ value: o.value, label: o.label }))} />
         </Field>
         {extentFields}
+        {direction.element('Along', 'direction', () => setDirActive(true), 'Click a line or centerline, a straight edge, an axis, or a plane or flat face (its normal), in the view or the tree, to extrude along it; remove it to go along the normal again')}
         <Field label="Flip direction" htmlFor={`cad-f-${feature}-flip`} field="flip">
           <input
             id={`cad-f-${feature}-flip`}
@@ -308,6 +413,8 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
         </Field>
       </FieldGroup>
       {opRow}
+      {/* Up to's face or vertex shown picked (only then: the mirror takes over the selection). */}
+      {draft.extent.kind === 'to' ? <SelectionMirror items={target.highlight} /> : null}
     </>
   );
 

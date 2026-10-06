@@ -17,7 +17,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(HERE, '..', 'fixtures', 'kernel');
@@ -147,7 +147,7 @@ async function openBodies(frame: FrameLocator) {
 }
 
 async function openMass(frame: FrameLocator) {
-  await tb(frame).locator('[data-command="inspect.mass"]').click();
+  await runCommand(frame, 'inspect.mass');
   const p = panel(frame);
   await expect(p.locator('[data-tool-panel="inspect.mass"]')).toBeVisible();
   return p;
@@ -171,7 +171,8 @@ test('cad:p2-features-import flange by the picker and box20 by a drop: progress,
   await dropFile(page, 'box20.step', readFileSync(BOX20));
   expect(await finishImport(page, frame)).toBe('0 problems');
   await expect(featureRow(frame, 'Imported 2 (box20.step)')).toHaveAttribute('data-state', 'ok');
-  await expect(volumeChip(frame)).toHaveText('VolumeTotal of 2 bodies · 104,858 mm³');
+  // Each body with its own volume, never added together (P4a).
+  await expect(volumeChip(frame)).toHaveText(/^Volume.+: 96,858\.4 mm³ · .+: 8000 mm³$/);
   await expectSaved(frame);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
@@ -198,7 +199,7 @@ test('cad:p2-features-edit Delete faces of the holes, Press-pull the top +10 mm,
   await importByPicker(page, frame, FLANGE);
   await finishImport(page, frame);
   // Delete faces: the panel takes the four hole walls clicked in the viewport.
-  await tb(frame).locator('[data-command="modify.delete-faces"]').click();
+  await runCommand(frame, 'modify.delete-faces');
   const p = panel(frame);
   await expect(p.locator('[data-feature-panel="delete_faces"]')).toBeVisible();
   const holes = await holeWallPoints(page);
@@ -225,7 +226,7 @@ test('cad:p2-features-edit Delete faces of the holes, Press-pull the top +10 mm,
   await expect(mass.locator('[data-mass-value="faces"]')).toHaveText('6, 12');
   await done(page, mass);
   // Split by the Right plane: two named halves.
-  await tb(frame).locator('[data-command="modify.split"]').click();
+  await runCommand(frame, 'modify.split');
   await openBodies(frame);
   const body = frame.locator('[data-cad-tree] [data-body-row]').first();
   const name = (await body.locator('.cad-body-name').textContent())!;
@@ -235,7 +236,7 @@ test('cad:p2-features-edit Delete faces of the holes, Press-pull the top +10 mm,
   await done(page, p);
   await expect(frame.locator('[data-cad-tree] [data-body-row] .cad-body-name')).toHaveText([name, `${name} (2)`]);
   // Check: both valid.
-  await tb(frame).locator('[data-command="inspect.check"]').click();
+  await runCommand(frame, 'inspect.check');
   await expect(p.locator('[data-check-summary]')).toHaveText('All 2 bodies are valid', { timeout: 30_000 });
   await done(page, p);
   // Measure: the plate's two big faces are 20 mm apart.
@@ -289,7 +290,7 @@ test('cad:p2-features-export Export STEP downloads the body (AP214), and Import 
   const { seen, frame } = await freshPart(page, request);
   await importByPicker(page, frame, FLANGE);
   await finishImport(page, frame);
-  await tb(frame).locator('[data-command="file.export-step"]').click();
+  await runCommand(frame, 'file.export-step');
   const p = panel(frame);
   await expect(p.locator('#cad-export-name')).toHaveValue('Part 1.step');
   await expect(p.locator('[data-field="schema"] select')).toHaveValue('AP214');
@@ -307,7 +308,8 @@ test('cad:p2-features-export Export STEP downloads the body (AP214), and Import 
   // Read back: the same volume.
   await importByPicker(page, frame, path);
   await finishImport(page, frame);
-  await expect(volumeChip(frame)).toHaveText('VolumeTotal of 2 bodies · 193,717 mm³');
+  // Each body with its own volume, never added together (P4a): the copy read back is the same.
+  await expect(volumeChip(frame)).toHaveText(/^Volume.+: 96,858\.4 mm³ · .+: 96,858\.4 mm³$/);
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
@@ -330,7 +332,7 @@ test('cad:p2-features-vortex the Vortex fluid domain: an Enclosure with a 100 mm
   await expect(p.locator('[data-enclosure-size]')).toHaveText(/^Size: 504\.8 mm × 504\.8 mm × 1012\.8 mm · /);
   await done(page, p);
   // Combine: Cut, the enclosure the target, Vortex the tool (tree rows).
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   await p.locator('[data-field="op"] select').selectOption('cut');
   await openBodies(frame);
   const rows = frame.locator('[data-cad-tree] [data-body-row]');
@@ -343,7 +345,10 @@ test('cad:p2-features-vortex the Vortex fluid domain: an Enclosure with a 100 mm
   await expect(keep).toBeChecked();
   await p.locator('[data-switch="keep-tools"] .cad-switch-label').click();
   await expect(keep).not.toBeChecked();
-  await expect(volumeChip(frame)).toHaveText(/2\.13286 × 10⁸ mm³$/, { timeout: 240_000 });
+  // One body (the fluid) in the chip: with Keep the tool bodies still on, the chip lists the Vortex
+  // and the fluid ("…: 4.47985 × 10⁷ mm³ · …: 2.13286 × 10⁸ mm³"; P4a lists each body), so the
+  // pattern allows no list (no ": ") and waits for the rebuild with it off (real Chrome, P4a).
+  await expect(volumeChip(frame)).toHaveText(/^Volume([^:]* · )?2\.13286 × 10⁸ mm³$/, { timeout: 240_000 });
   // The tool the cut used up is still listed, plainly, and nothing in the panel says otherwise.
   await expect(p.locator('[data-pick-field="tools"] .cad-pick-name')).toHaveText(['Vortex CFD Test v1']);
   await expect(p.locator('[data-pick-error]')).toHaveCount(0);

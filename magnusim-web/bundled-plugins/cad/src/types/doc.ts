@@ -14,6 +14,7 @@
 //      new. The schema stays 2 (no released build reads schema 2).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { DocUnits, Expr } from './units';
+import type { AxisRef, CurveRef, EdgeRef, FaceRef, PlaneRef, PointRef } from './references';
 
 export const DOC_SCHEMA = 2 as const;
 /** Every schema readDoc reads (older ones are migrated on read and written back as DOC_SCHEMA). */
@@ -452,7 +453,9 @@ export type SketchConstraint = SketchRelation | SketchDimension;
 /** Where a sketch lies. */
 export type SketchSupport =
   | { kind: 'plane'; plane: OriginPlaneRef }
-  | { kind: 'face'; body: BodyId; face: PersistentRef };
+  | { kind: 'face'; body: BodyId; face: PersistentRef }
+  /** P4a (REFERENCE): a CONSTRUCT plane (its PlaneOutput); a sketch on it follows the plane. */
+  | { kind: 'feature'; feature: FeatureId };
 
 /** What the stored geometry satisfies, so an unchanged model rebuilds without the solver. */
 export interface SketchSolvedState {
@@ -518,7 +521,18 @@ export type ExtrudeExtentDef =
   /** `distance` is the whole length, half on each side of the sketch. */
   | { kind: 'symmetric'; distance: Expr }
   /** `distance` along the direction, `distance2` against it. */
-  | { kind: 'two'; distance: Expr; distance2: Expr };
+  | { kind: 'two'; distance: Expr; distance2: Expr }
+  /**
+   * P4a: past every body before it (or the scope's bodies), on one side or both. `distance` is
+   * the last blind distance, kept so going back to Blind gives it back.
+   */
+  | { kind: 'through_all'; both: boolean; distance: Expr }
+  /**
+   * P4a: up to a face (its plane: the end cap lies on it, tilted or not) or a vertex (the plane
+   * through it parallel to the sketch) of a body; `offset` goes further along the direction.
+   * `target.ref.signature.kind` says which. `distance` as for through_all.
+   */
+  | { kind: 'to'; target: BodyRef | null; offset: Expr; distance: Expr };
 
 /**
  * Extrude (proposal §2.5): profiles of one sketch, an extent, an Operation.
@@ -531,6 +545,179 @@ export interface ExtrudeFeature extends FeatureBase<'extrude'>, BodyMaking {
   extent: ExtrudeExtentDef;
   /** Against the sketch normal. */
   flip: boolean;
+  /**
+   * P4a (Daniel's item 8): a flat face of a body extruded directly, with no sketch (then
+   * `profiles` is empty). The direction is the face's outward normal (flip: into the body).
+   * Side faces are named by the edge they were swept from (F:<id>:side:E:<a>&<b>).
+   */
+  face?: BodyRef | null;
+  /**
+   * P4a: extrude along this axis (a sketch line, an edge, an origin axis, a CONSTRUCT axis)
+   * instead of the profile's normal; flip reverses it. Absent or null: the normal.
+   */
+  direction?: AxisRef | null;
+}
+
+// ------------------------------------------------------------ P4a: solids (SOLIDS)
+
+/** How far a revolve turns (angle expressions; 360 in all is a full turn, with no end caps). */
+export type RevolveExtentDef =
+  /** `angle` from the sketch about the axis (right hand), or the other way with flip. */
+  | { kind: 'one'; angle: Expr }
+  /** `angle` in all, half on each side of the sketch. */
+  | { kind: 'symmetric'; angle: Expr }
+  /** `angle` one way, `angle2` the other. */
+  | { kind: 'two'; angle: Expr; angle2: Expr };
+
+/**
+ * Revolve (proposal §2.5): profiles of one sketch turned about an axis (a sketch centerline or
+ * line, a straight model edge, an origin axis or a CONSTRUCT axis: AxisRef), with an
+ * Operation. Face names as Extrude's: F:<id>:side:<sub-segment token>, caps start / end
+ * (start:<n> / end:<n> with several profiles); a full turn has no caps.
+ */
+export interface RevolveFeature extends FeatureBase<'revolve'>, BodyMaking {
+  profiles: RegionRef[];
+  axis: AxisRef | null;
+  extent: RevolveExtentDef;
+  /** Turn the other way about the axis. */
+  flip: boolean;
+}
+
+/**
+ * Sweep (proposal §2.5): profiles of one sketch along a path made of curves of another sketch
+ * (lines and arcs end to end, or one circle). `orientation` follow: the profile turns with
+ * the path; fixed: it keeps its orientation. Side faces F:<id>:side:<token>@<path entity>,
+ * caps start / end (none on a closed path).
+ */
+export interface SweepFeature extends FeatureBase<'sweep'>, BodyMaking {
+  profiles: RegionRef[];
+  /** The path's sketch and its curves (entity ids, in no order); empty = every curve of it that is not construction. */
+  path: { sketch: FeatureId; entities: SketchEntityId[] } | null;
+  orientation: 'follow' | 'fixed';
+}
+
+/**
+ * Loft (proposal §2.5; guide rails are V1): a solid through two or more profiles, one per
+ * sketch, in order. ruled: flat faces between neighbouring profiles. Side faces by the first
+ * profile's sub-segment tokens, caps start (first profile) / end (last).
+ */
+export interface LoftFeature extends FeatureBase<'loft'>, BodyMaking {
+  sections: RegionRef[];
+  ruled: boolean;
+}
+
+/**
+ * Fillet (proposal §2.5): constant radius on edges of one body. A picked edge takes its
+ * tangent chain with it (the kernel follows tangency); a picked face takes all its edges.
+ * The body keeps its id; a fillet face is F:<id>:fillet:E:<a>&<b> (the edge it replaced).
+ */
+export interface FilletFeature extends FeatureBase<'fillet'> {
+  body: BodyId;
+  /** Edge references (E:<faceA>&<faceB>). */
+  edges: PersistentRef[];
+  /** Face references: every edge of each face. */
+  faces: PersistentRef[];
+  radius: Expr;
+}
+
+/** Chamfer (proposal §2.5): an equal distance, or two distances (`flip` swaps their sides). Same picks as Fillet. */
+export interface ChamferFeature extends FeatureBase<'chamfer'> {
+  body: BodyId;
+  edges: PersistentRef[];
+  faces: PersistentRef[];
+  mode: 'distance' | 'two';
+  distance: Expr;
+  /** The second distance (mode two); kept while mode is distance. */
+  distance2: Expr;
+  flip: boolean;
+}
+
+/**
+ * Shell (proposal §2.5): hollow a body to a wall thickness, the picked faces removed (open).
+ * inside: the outer size stays; outside: the body becomes the cavity. Inner faces are named
+ * F:<id>:inner:<the face they were offset from>.
+ */
+export interface ShellFeature extends FeatureBase<'shell'> {
+  body: BodyId;
+  faces: PersistentRef[];
+  thickness: Expr;
+  direction: 'inside' | 'outside';
+}
+
+// ------------------------------------------------------------ P4a: reference geometry (REFERENCE)
+
+/**
+ * How a reference Plane is made (CONSTRUCT > Plane; Daniel's must-have 9):
+ *   offset          `plane` moved `distance` along its normal (`flip`: the other way)
+ *   angle           `plane` turned `angle` about `axis` (an axis in or parallel to the plane)
+ *   three_points    through `points[0..2]` (normal by the right-hand rule, `flip` turns it)
+ *   midplane        halfway between `plane` and `plane2` (parallel: the middle; crossing: the bisector)
+ *   normal_to_curve normal to the curve `edge` (an edge, or a sketch curve such as a Sweep path) at
+ *                   `points[0]` on it, or at `percent` of its length
+ */
+export type RefPlaneMethod = 'offset' | 'angle' | 'three_points' | 'midplane' | 'normal_to_curve';
+
+/** A reference Plane (src/features/refgeom/): makes no body; publishes a PlaneOutput (a sketch can lie on it). */
+export interface RefPlaneFeature extends FeatureBase<'ref_plane'> {
+  method: RefPlaneMethod;
+  plane: PlaneRef | null;
+  plane2: PlaneRef | null;
+  axis: AxisRef | null;
+  points: PointRef[];
+  /** normal_to_curve: an edge of a body or a curve of a sketch (a Sweep path). */
+  edge: CurveRef | null;
+  /** offset: a length expression. */
+  distance: Expr;
+  /** angle: an angle expression ("30 deg"). */
+  angle: Expr;
+  /** normal_to_curve without a point: where along the edge, a plain number 0..100 ("50"). */
+  percent: Expr;
+  flip: boolean;
+}
+
+/**
+ * How a reference Axis is made (CONSTRUCT > Axis):
+ *   two_points  through `points[0]` and `points[1]`
+ *   cylinder    the axis of the cylindrical or conical face `face`
+ *   edge        along the straight edge `edge`, or the axis of a circular one
+ *   two_planes  where `planes[0]` and `planes[1]` cross
+ */
+export type RefAxisMethod = 'two_points' | 'cylinder' | 'edge' | 'two_planes';
+
+/** A reference Axis: makes no body; publishes an AxisOutput (a revolve or pattern axis, an extrude direction). */
+export interface RefAxisFeature extends FeatureBase<'ref_axis'> {
+  method: RefAxisMethod;
+  points: PointRef[];
+  face: FaceRef | null;
+  edge: EdgeRef | null;
+  planes: PlaneRef[];
+  /** The direction reversed. */
+  flip: boolean;
+}
+
+/**
+ * How a reference Point is made (CONSTRUCT > Point):
+ *   vertex       at the vertex `vertex`
+ *   center       the centre of the arc or circle `edge`, or of the spherical face `face`
+ *   on_edge      on `edge` at `distance` (mm) or `percent` of its length from its start (`fromEnd`: from its end)
+ *   edge_plane   where `edge` crosses `plane`
+ *   coordinates  at `xyz` (lengths)
+ */
+export type RefPointMethod = 'vertex' | 'center' | 'on_edge' | 'edge_plane' | 'coordinates';
+
+/** A reference Point: makes no body; publishes a PointOutput. */
+export interface RefPointFeature extends FeatureBase<'ref_point'> {
+  method: RefPointMethod;
+  vertex: PointRef | null;
+  /** on_edge: an edge or a sketch curve; center and edge_plane: an edge of a body. */
+  edge: CurveRef | null;
+  face: FaceRef | null;
+  plane: PlaneRef | null;
+  along: 'distance' | 'percent';
+  distance: Expr;
+  percent: Expr;
+  fromEnd: boolean;
+  xyz: ExprVec3;
 }
 
 /**
@@ -545,7 +732,18 @@ export type Feature =
   | CombineFeature
   | SketchFeature
   | ExtrudeFeature
-  | EnclosureFeature;
+  | EnclosureFeature
+  // P4a: solids (SOLIDS)
+  | RevolveFeature
+  | SweepFeature
+  | LoftFeature
+  | FilletFeature
+  | ChamferFeature
+  | ShellFeature
+  // P4a: reference geometry (REFERENCE)
+  | RefPlaneFeature
+  | RefAxisFeature
+  | RefPointFeature;
 export type FeatureType = Feature['type'];
 /** The feature of one type. */
 export type FeatureOf<T extends FeatureType> = Extract<Feature, { type: T }>;

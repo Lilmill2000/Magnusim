@@ -273,20 +273,25 @@ describe('status chips', () => {
     expect(chip('memory')).toBeNull();
     expect(chip('kernel')!.textContent).toBe('The kernel failed to start: out of memoryRetry');
 
-    // Volume: the shown bodies' total (said so), or the selected ones; unmeasured bodies offer Measure.
+    // Volume (P4a, Daniel 2026-10-02): the selected body's; with nothing selected each shown body on
+    // its own, never added together; unmeasured bodies offer Measure.
     act(() => {
       t.doc.seed('extrude');
       t.doc.seed('extrude');
     });
-    expect(chip('volume')!.textContent).toBe('VolumeTotal of 2 bodies · 12,000 mm³');
+    expect(chip('volume')!.textContent).toBe('VolumeBody 1: 6000 mm³ · Body 2: 6000 mm³');
+    expect(chip('volume')!.textContent).not.toContain('12,000');
     const b = t.doc.state.get().rebuild.bodies[1];
     act(() => t.services.selection.set({ items: [{ kind: 'body', body: b.id }] }));
     expect(chip('volume')!.textContent).toBe('VolumeBody 2 · 6000 mm³');
-    // A hidden body is not counted, and the chip says the total is of the shown ones.
+    // Two selected: each on its own too.
+    act(() => t.services.selection.set({ items: t.doc.state.get().rebuild.bodies.map((x) => ({ kind: 'body' as const, body: x.id })) }));
+    expect(chip('volume')!.textContent).toBe('VolumeBody 1: 6000 mm³ · Body 2: 6000 mm³');
+    // A hidden body is not listed, and the chip says so.
     act(() => t.services.selection.set({ items: [] }));
     const s0 = t.doc.state.get();
     act(() => (t.doc.state as unknown as { set(v: object): void }).set({ rebuild: { ...s0.rebuild, bodies: s0.rebuild.bodies.map((x, i) => (i === 1 ? { ...x, visible: false } : x)) } }));
-    expect(chip('volume')!.textContent).toBe('VolumeTotal of 1 shown body · 6000 mm³');
+    expect(chip('volume')!.textContent).toBe('VolumeBody 1 · 6000 mm³ (1 hidden body not listed)');
   });
 
   it('offers Measure when a large body has no volume yet', async () => {

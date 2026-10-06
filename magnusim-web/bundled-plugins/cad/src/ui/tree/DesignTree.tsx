@@ -23,6 +23,8 @@ import { errText, uiFor } from '../controller';
 import { Icon, ICONS } from '../Icon';
 import { DisabledReason, EmptyState, IconButton, InlineRename, TreeNode, TreeSection, useTip } from '../kit';
 import { sketchShown } from '../../features/sketch/view';
+import { constructKindOfType } from '../../features/refgeom/api';
+import { constructShown, constructView, ORIGIN_AXIS_NAMES, ORIGIN_AXIS_REFS } from '../../features/refgeom/scene';
 import { barIndexAt, bodyRows, dimensionsText, historyRows, rollbackIndex, selectedBodies, selectedFeatures, sketchPrefix, type BodyRow, type HistoryRow } from './model';
 
 /** A padlock (24 viewBox outline): the sketch is fully defined. */
@@ -215,6 +217,9 @@ function History() {
     const sk = row.sketch;
     const prefix = sk ? sketchPrefix(sk.state) : '';
     const shown = sk ? sketchShown({ features: d.features }, { sketches: d.sketches }, doc.features, row.id) : false;
+    // P4a (REFERENCE): a reference Plane, Axis or Point has an eye too (shown unless hidden).
+    const construct = constructKindOfType(row.type);
+    const cShown = construct ? constructShown({ sketches: d.sketches }, row.id) : false;
     items.push(
       <TreeNode
         key={row.id}
@@ -258,6 +263,7 @@ function History() {
           'data-rolled-back': row.rolledBack ? '1' : undefined,
           'data-sketch-state': sk?.state,
           'data-sketch-shown': sk ? (shown ? '1' : '0') : undefined,
+          'data-construct-shown': construct ? (cShown ? '1' : '0') : undefined,
         }}
         badge={<StatusBadge row={row} onOpen={() => onRowOpen(row)} />}
         sub={row.suppressed ? 'Suppressed' : sk ? (dimensionsText(sk.dims) ?? undefined) : undefined}
@@ -281,13 +287,35 @@ function History() {
                 }
               }}
             />
+          ) : construct ? (
+            <IconButton
+              size="row"
+              icon={cShown ? ICONS.eye : ICONS.eyeOff}
+              label={cShown ? `Hide ${row.name}` : `Show ${row.name}`}
+              hint={cShown ? 'Shown in the view' : 'Hidden in the view'}
+              data-construct-act="visibility"
+              data-visible={cShown ? '1' : '0'}
+              onClick={() => {
+                try {
+                  doc.setSketchVisibility(row.id, cShown ? 'hidden' : null);
+                } catch (err) {
+                  ui.fail(cShown ? `Hide ${row.name}` : `Show ${row.name}`, errText(err));
+                }
+              }}
+            />
           ) : undefined
         }
         onClick={(e) => onRowClick(row, e)}
         onDoubleClick={() => onRowOpen(row)}
         onContextMenu={(e) => onRowMenu(row, e)}
-        onMouseEnter={() => flash([{ kind: 'feature', feature: row.id }])}
-        onMouseLeave={() => flash([])}
+        onMouseEnter={() => {
+          flash([{ kind: 'feature', feature: row.id }]);
+          if (construct) constructView(services).set({ flash: row.id });
+        }}
+        onMouseLeave={() => {
+          flash([]);
+          if (construct) constructView(services).set({ flash: null });
+        }}
       />,
     );
   });
@@ -471,8 +499,15 @@ function Part() {
           if (!isSelected(selection.get(), item)) selectItem(selection, item, false);
           ui.showMenu(e.clientX, e.clientY, [{ id: 'look-at', label: 'Look at', run: () => handle.lookAt(ORIGIN_PLANES[plane].normal, PLANE_UP[plane]) }], `${label} actions`);
         }}
-        onMouseEnter={() => handle?.flash([item])}
-        onMouseLeave={() => handle?.flash([])}
+        onMouseEnter={() => {
+          handle?.flash([item]);
+          // The origin's axes are drawn by the CONSTRUCT layer: its hover.
+          if (!plane) constructView(services).set({ flash: ref });
+        }}
+        onMouseLeave={() => {
+          handle?.flash([]);
+          if (!plane) constructView(services).set({ flash: null });
+        }}
       />
     );
   };
@@ -488,6 +523,7 @@ function Part() {
         actions={handle && typeof handle.setPlanes === 'function' ? <PlanesEye handle={handle} /> : null}
       >
         {PLANES.map((ref) => originRow(ref, ORIGIN_PLANES[ref].label, ICONS.plane))}
+        {ORIGIN_AXIS_REFS.map((ref) => originRow(ref, ORIGIN_AXIS_NAMES[ref], ICONS.axis))}
       </TreeNode>
       {hasParams ? (
         <TreeNode

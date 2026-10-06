@@ -16,7 +16,7 @@
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { baseUrl, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { baseUrl, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, singleVolume } from './helpers';
 import { PNG } from './png';
 
 type V3 = [number, number, number];
@@ -123,13 +123,28 @@ async function expectShaded(page: Page, pt: [number, number], under: RGB, color:
 
 async function topView(frame: FrameLocator) {
   await frame.locator('[data-command="view.top"]').click();
-  await expect.poll(() => frame.locator('[data-cad-app]').evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.state.get().animating)).toBe(false);
+  // Still twice, 150 ms apart, with the same camera: a transition that starts a frame after the
+  // click is not taken for the end of it (P4a fix round: a point projected mid-turn was off the page).
+  let last = '';
+  await expect
+    .poll(
+      async () => {
+        const now = await frame.locator('[data-cad-app]').evaluate(() => {
+          const h = (window as unknown as W).__CAD__.services.viewport.get().handle;
+          return h.state.get().animating ? 'moving' : JSON.stringify(h.camera());
+        });
+        const same = now !== 'moving' && now === last;
+        last = now;
+        return same;
+      },
+      { intervals: [150] },
+    )
+    .toBe(true);
 }
 
 const sketchRow = (frame: FrameLocator) => frame.locator('[data-cad-tree] [data-feature-type="sketch"]');
 const extrudeRow = (frame: FrameLocator) => frame.locator('[data-cad-tree] [data-feature-type="extrude"]');
 const panel = (frame: FrameLocator) => frame.locator('[data-cad-panel="feature"]');
-const volumeChip = (frame: FrameLocator) => frame.locator('[data-chip="volume"] [data-volume-mm3]');
 const profileList = (frame: FrameLocator) => panel(frame).locator('[data-profile-list] [data-profile]');
 
 async function setField(p: Loc, field: string, value: string) {
@@ -141,7 +156,7 @@ async function setField(p: Loc, field: string, value: string) {
 
 /** The volume the chip reads (its exact mm³ attribute), within 1e-6 relative. */
 async function expectVolume(frame: FrameLocator, mm3: number) {
-  await expect.poll(async () => Number(await volumeChip(frame).getAttribute('data-volume-mm3')), { timeout: 30_000 }).toBeCloseTo(mm3, Math.max(0, 6 - Math.ceil(Math.log10(mm3))));
+  await expect.poll(() => singleVolume(frame), { timeout: 30_000 }).toBeCloseTo(mm3, Math.max(0, 6 - Math.ceil(Math.log10(mm3))));
 }
 
 function lensArea(r1: number, r2: number, d: number): number {

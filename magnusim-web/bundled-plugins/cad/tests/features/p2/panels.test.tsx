@@ -334,6 +334,6 @@ describe('P2 commands and panels', () => {
     await waitFor(() => expect(a.$('[data-feature-panel="delete_faces"]')).not.toBeNull());
     // Named as Measure names it (its number on the body shown, and the body); where it came from is the tooltip.
     expect(texts(a, '[data-pick-field="faces"] .cad-pick-name')).toEqual(['Face 3 of Body 1']);
-    expect(a.$('[data-pick-field="faces"] .cad-pick-name')?.getAttribute('title')).toMatch(/^Face 3 of Body 1, from (Side e_\d|Start face|End face) of Extrude 1$/);
+    expect(a.$('[data-pick-field="faces"] .cad-pick-name')?.getAttribute('title')).toMatch(/^Face 3 of Body 1, from (Side face|Start face|End face) of Extrude 1$/);
   });
 });

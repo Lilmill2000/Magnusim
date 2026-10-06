@@ -106,6 +106,27 @@
   background: var(--cad-danger-hover-bg);
   color: var(--mg-danger);
 }
+/* Move up / down in an ordered list (a loft's profiles): the remove button's size and look. */
+.cad-pick-move {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mg-text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.cad-pick-move:hover {
+  background: var(--cad-icon-btn-hover-bg);
+  color: var(--mg-text);
+}
+/* The first row cannot go up, the last cannot go down: the place is kept, the button is not shown. */
+.cad-pick-move.is-end {
+  visibility: hidden;
+}
 
 /* ---- switch ---- */
 .cad-switch-row {

@@ -5,8 +5,11 @@
 // API 3 (P2/P3, docs/p2p3-plan.md §2): import diagnostics, heal (+ sew),
 // brep_write / brep_read, press_pull, combine, measure, sketch_regions,
 // extrude_regions. The ops marked "API 3" below are the contract the KERNEL
-// builder implements; `version` answers api: 3 (all of them exist since
-// 2026-10-01; changes to this file during the build: docs/p2p3-plan.md §8).
+// builder implements (all of them exist since 2026-10-01; changes to this file
+// during the build: docs/p2p3-plan.md §8). API 4 (P4a, the SOLIDS builder):
+// revolve_regions, sweep_regions, loft_regions, extrude_face, edge_eval, the
+// extents to_vertex / to_point, fillet contours and diagnose, chamfer d2 / flip,
+// shell outside, topo edge_ends / vertex_faces; `version` answers api: 4.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { PlaneFrame, Vec2, Vec3 } from './doc';
 
@@ -164,10 +167,41 @@ export type ExtrudeExtent =
   | { kind: 'blind'; d: number }
   | { kind: 'symmetric'; d: number }
   | { kind: 'two'; d1: number; d2: number }
-  /** Past everything in `targets` (both sides of the profile with both:true). */
-  | { kind: 'through_all'; targets: ShapeId[]; both?: boolean }
+  /**
+   * Past everything in `targets` (both sides of the profile with both:true), by a margin; with
+   * fit:true (New body, Join) exactly to their farthest extent, refused when the profile misses them.
+   */
+  | { kind: 'through_all'; targets: ShapeId[]; both?: boolean; fit?: boolean }
   /** Up to the plane of planar face `face` of `target` (tilted or not); offset goes further. */
-  | { kind: 'to_face'; target: ShapeId; face: number; offset?: number };
+  | { kind: 'to_face'; target: ShapeId; face: number; offset?: number }
+  /** API 4: up to the plane through vertex `vertex` of `target`, parallel to the profile; offset goes further. */
+  | { kind: 'to_vertex'; target: ShapeId; vertex: number; offset?: number }
+  /** API 4: up to the plane through a point (mm), parallel to the profile. */
+  | { kind: 'to_point'; point: Vec3; offset?: number };
+
+/** API 4: how far a revolve turns (degrees; 360 in all is a full turn). */
+export type RevolveExtent = { kind: 'one'; angle: number } | { kind: 'symmetric'; angle: number } | { kind: 'two'; angle: number; angle2: number };
+
+/**
+ * API 4: what fillet {diagnose: true} answers (nothing is stored): done = the fillet works
+ * and is valid at that radius; failed = OCCT refused outright (else the result was invalid);
+ * faulty = input edges of the contours OCCT could not fillet; max_ok = the largest radius
+ * found to work (smaller radii tried, then bisected), or null.
+ */
+export interface FilletDiagnosis {
+  done: boolean;
+  failed: boolean;
+  faulty: number[];
+  max_ok: number | null;
+}
+
+/** API 4: the regions of one sketch (as extrude_regions takes them). */
+export interface RegionSection {
+  plane: PlaneFrame;
+  curves: SketchCurve[];
+  regions: string[];
+  tol?: number;
+}
 
 /** Common to every shape op: skip the BRepCheck of the result (see Validity). A type
  * alias, not an interface, so params stay assignable to Record<string, unknown>. */
@@ -201,7 +235,7 @@ export type TopoSelector = 'all' | 'none' | number[] | { start: number; count: n
  * in `buffers` come back as ArrayBuffers in the reply.
  */
 export interface KernelOps {
-  /** `api`: facade contract revision (3 = this file: docs/p2p3-plan.md §2). */
+  /** `api`: facade contract revision (3 = docs/p2p3-plan.md §2; 4 = P4a solids, this file). */
   version: { params: Record<string, never>; result: { occt: string; build: 'wasm32' | 'wasm64'; api?: number } };
   mem: {
     params: Record<string, never>;
@@ -263,10 +297,20 @@ export interface KernelOps {
    * ok:false ("... the body is unchanged"); OCCT "succeeding" with an invalid solid
    * is ok:true, valid:false with the reasons.
    */
-  fillet: { params: CheckParam & { id: ShapeId; edges: number[]; r: number }; result: ShapeResult };
-  chamfer: { params: CheckParam & { id: ShapeId; edges: number[]; d: number }; result: ShapeResult };
+  /**
+   * API 4: `contours` = the input edges each contour runs along (a picked edge takes its
+   * tangent neighbours with it). With diagnose:true nothing is stored: the answer is
+   * FilletDiagnosis (why it fails and the largest radius that works).
+   */
+  fillet: { params: CheckParam & { id: ShapeId; edges: number[]; r: number; diagnose?: boolean }; result: ShapeResult & { contours?: number[][] } };
+  /**
+   * API 4: d2 (two distances: d on each edge's reference face, its lower-numbered face, d2 on
+   * the other; flip:true swaps which face is the reference); `contours` as fillet.
+   */
+  chamfer: { params: CheckParam & { id: ShapeId; edges: number[]; d: number; d2?: number; flip?: boolean }; result: ShapeResult & { contours?: number[][] } };
   defeature: { params: CheckParam & { id: ShapeId; faces: number[] }; result: ShapeResult & { warnings: boolean; warning_text?: string } };
-  shell: { params: CheckParam & { id: ShapeId; faces: number[]; t: number; tol?: number }; result: ShapeResult };
+  /** API 4: outside:true puts the wall outside the body's faces (the body becomes the cavity). */
+  shell: { params: CheckParam & { id: ShapeId; faces: number[]; t: number; tol?: number; outside?: boolean }; result: ShapeResult };
   /**
    * Try to make a body valid: ShapeFix_Shape then UnifySameDomain (unify, default
    * true) on a work copy, with history against the input. A new body with its own
@@ -322,6 +366,10 @@ export interface KernelOps {
       face_bbox?: 'exact' | 'fast' | 'none';
       face_mass?: boolean;
       edge_length?: boolean;
+      /** API 4: edges also give first / last (parameter order), their vertex indices and a line's dir. */
+      edge_ends?: boolean;
+      /** API 4: vertices also give the sorted indices of their faces. */
+      vertex_faces?: boolean;
     };
     result: TopoResult;
   };
@@ -544,8 +592,65 @@ export interface KernelOps {
    * and flip as `extrude` (through_all / to_face kernel-only).
    */
   extrude_regions: {
-    params: CheckParam & { plane: PlaneFrame; curves: SketchCurve[]; regions: string[]; extent: ExtrudeExtent; flip?: boolean; taper_deg?: number; tol?: number };
+    /** API 4: direction (unit, model) instead of the plane normal; not in the plane, no taper with it. */
+    params: CheckParam & { plane: PlaneFrame; curves: SketchCurve[]; regions: string[]; extent: ExtrudeExtent; flip?: boolean; taper_deg?: number; tol?: number; direction?: Vec3 };
     result: ShapeResult & { from: number; to: number; direction: Vec3; solids: number };
+  };
+  /**
+   * API 4. Revolve sketch regions (as extrude_regions picks and merges them) about an axis
+   * (model mm): one side, symmetric or two sides; flip turns the other way. Refused: an axis
+   * perpendicular to the sketch plane, a profile across an axis in its plane, more than 360.
+   * History as extrude_regions plus `on_axis` (sub-segments on the axis sweep no face).
+   */
+  revolve_regions: {
+    params: CheckParam & RegionSection & { axis: { origin: Vec3; dir: Vec3 }; extent: RevolveExtent; flip?: boolean };
+    result: ShapeResult & { full: boolean; from_deg: number; to_deg: number; solids: number };
+  };
+  /**
+   * API 4. Sweep sketch regions along a path: curves of a sketch (lines, arcs, or one
+   * circle) chained end to end (`entities` picks some). orientation 'follow' (default) or
+   * 'fixed'. History: `sides` keyed "<sub-segment token>@<path curve id>", caps start/end
+   * (none on a closed path), `caps` per region key. Refused: a gap, a branch, no curves.
+   */
+  sweep_regions: {
+    params: CheckParam & RegionSection & { path: { plane: PlaneFrame; curves: SketchCurve[]; entities?: string[] }; orientation?: 'follow' | 'fixed' };
+    result: ShapeResult & { closed_path: boolean; solids: number };
+  };
+  /**
+   * API 4. Loft through 2+ sections (each the regions of one sketch making one face without
+   * holes), in order; ruled: straight between sections. History: sides by the first
+   * section's tokens ("<token>@<section>" for faces only a later section made), caps.
+   */
+  loft_regions: {
+    params: CheckParam & { sections: RegionSection[]; ruled?: boolean };
+    result: ShapeResult & { solids: number };
+  };
+  /**
+   * API 4. Extrude a flat face of a body (no sketch): its outward normal is the direction
+   * (flip: inward); extents as extrude, no taper. The body is not changed. History: sides
+   * `seg` "e<i>" (input edge i), caps start (on the face) / end.
+   */
+  extrude_face: {
+    params: CheckParam & { id: ShapeId; face: number; extent: ExtrudeExtent; flip?: boolean; direction?: Vec3 };
+    result: ShapeResult & { from: number; to: number; direction: Vec3 };
+  };
+  /**
+   * API 4 (REFERENCE's R2). Points of an edge by arc length from `first` or by fraction,
+   * every crossing with a plane (none for an edge in it), the nearest point to a point. The
+   * edge's orientation is ignored (first = the curve's first parameter).
+   */
+  edge_eval: {
+    params: { id: ShapeId; edge: number; at?: ({ distance: number } | { fraction: number })[]; plane?: { origin: Vec3; normal: Vec3 }; near?: Vec3 };
+    result: {
+      type: 'line' | 'circle' | 'ellipse' | 'bspline' | 'other' | 'degenerate';
+      length: number;
+      first: Vec3;
+      last: Vec3;
+      closed: boolean;
+      points: { p: Vec3; tangent: Vec3 }[];
+      crossings: { p: Vec3; tangent: Vec3 }[];
+      nearest?: { p: Vec3; tangent: Vec3; distance: number };
+    };
   };
   /** Buffer: step (u8, the file's bytes). */
   export_step: { params: { shapes: { id: ShapeId; name: string; color?: [number, number, number] }[]; schema: 'AP214' | 'AP242' }; result: Record<string, never> };
@@ -677,8 +782,14 @@ export interface TopoResult {
     radius?: number;
     axis_dir?: Vec3;
     faces: number[];
+    /** API 4, edge_ends: points at the first / last parameter, their vertex indices (-1 when missing), a line's unit direction. */
+    first?: Vec3;
+    last?: Vec3;
+    vertices?: [number, number];
+    dir?: Vec3;
   }[];
-  vertices: { i: number; p: Vec3 }[];
+  /** API 4, vertex_faces: `faces` = the sorted indices of the faces containing the vertex. */
+  vertices: { i: number; p: Vec3; faces?: number[] }[];
   /** Totals for the shape (for chunked walks). */
   counts: { faces: number; edges: number; vertices: number };
   timings: Record<string, number>;

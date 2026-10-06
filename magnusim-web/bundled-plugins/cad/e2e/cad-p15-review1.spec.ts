@@ -17,7 +17,7 @@
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, baseUrl, historyState, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, baseUrl, historyState, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
 
 type Loc = ReturnType<FrameLocator['locator']>;
 
@@ -132,7 +132,7 @@ test('cad:p15-r1-stopped-feature-retry a feature that stopped the kernel is red 
   // Two 20 mm cubes, sketched and extruded: Extrude 1 at the origin, Extrude 2 from x = 50.
   await addSolid(page);
   await addSolid(page, { at: [50, 0, 0] });
-  await expect(volumeChip(frame)).toHaveText('VolumeTotal of 2 bodies · 16,000 mm³');
+  await expect(volumeChip(frame)).toHaveText('VolumeBody 1: 8000 mm³ · Body 2: 8000 mm³');
   await expectSaved(frame);
   await expect(tb.locator('[data-command="solid.extrude"]')).toBeVisible();
   // The next extrude the kernel builds crashes its worker (the worker's own error event, while the call is in flight).
@@ -171,7 +171,7 @@ test('cad:p15-r1-stopped-feature-retry a feature that stopped the kernel is red 
   await expect(ex2).toHaveAttribute('data-state', 'ok', { timeout: 30_000 });
   await expect(reason).toHaveCount(0);
   await panel.locator('[data-panel-done]').click();
-  await expect(volumeChip(frame)).toHaveText('VolumeTotal of 2 bodies · 20,000 mm³');
+  await expect(volumeChip(frame)).toHaveText('VolumeBody 1: 8000 mm³ · Body 2: 12,000 mm³');
   await expectSaved(frame);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
@@ -189,7 +189,7 @@ test('cad:p15-r1-p1-part-repaired a P1 Part with a parameter that has no id open
   await expect(featureRow(frame, 'Old block')).toHaveAttribute('data-state', 'ok');
   await expect(volumeChip(frame)).toHaveText('Volume6000 mm³');
   await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved');
-  await frame.locator('[data-cad-toolbar] [data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   const params = frame.locator('[data-cad-panel="params"]');
   await expect(params.locator('[data-param-row="w"] [data-param-value]')).toHaveText('30 mm');
   await params.locator('[data-panel-done]').click();

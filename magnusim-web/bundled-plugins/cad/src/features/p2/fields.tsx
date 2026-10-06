@@ -8,7 +8,7 @@
 import { useRef, useState, type ReactElement } from 'react';
 import { storedBodyName } from '../../doc/features/body-ids';
 import { useStateStore } from '../../lib/store';
-import { placeWords } from '../../naming';
+import { describeFace, placeWords } from '../../naming';
 import type { AppServices } from '../../types/app';
 import type { BodyId, FeatureId, PersistentRef } from '../../types/doc';
 import type { SelectionItem } from '../../types/selection';
@@ -28,6 +28,12 @@ export interface FaceFieldOptions {
   planar?: string | null;
   /** Faces of one body only (the reason when a pick is on another), or null when any body will do (split's face). */
   oneBody?: string | null;
+  /**
+   * Rows say what a face is ("End face of Extrude 1", "Side 2 of Extrude 1") instead of its number
+   * on the body, which goes in the tooltip; faces known only by number (an import's) keep "Face 6 of
+   * flange" (Shell, P4a review: "Face 6 of Body 1" said nothing).
+   */
+  describe?: boolean;
   onChange(body: BodyId | '', refs: PersistentRef[]): void;
 }
 
@@ -37,6 +43,9 @@ export interface FieldHandle {
   /** What the viewport highlights for this field. */
   highlight: SelectionItem[];
 }
+
+/** Face names that say what the face is (a feature's start, end, side, fillet ...), not only its number. */
+const SEMANTIC_FACE = /^F:[^:]+:(start|end|side|fillet|chamfer|inner|cut)(:|#|$)/;
 
 export function useFaceField(services: AppServices, o: FaceFieldOptions): FieldHandle {
   const bodies = useStateStore(services.doc.state, (s) => s.rebuild.bodies);
@@ -117,7 +126,12 @@ export function useFaceField(services: AppServices, o: FaceFieldOptions): FieldH
     }
     // A face with a place of its own ("+Z face of Enclosure 1"), else its number on the body.
     const place = info ? placeWords(r.name) : null;
-    const label = place && info ? `${place} of ${info.name}` : n != null && info ? `Face ${n} of ${info.name}` : from;
+    const numberWords = n != null && info ? `Face ${n} of ${info.name}` : null;
+    if (o.describe && info && SEMANTIC_FACE.test(r.name)) {
+      const words = describeFace(r.name, (id) => services.doc.state.get().doc.features.find((f) => f.id === id)?.name ?? null, info.names?.faces ?? null);
+      return { key: r.name, label: words, title: numberWords ? `${words} (${numberWords})` : words, sub: r.signature.type === 'plane' ? 'flat' : r.signature.type };
+    }
+    const label = place && info ? `${place} of ${info.name}` : numberWords ?? from;
     return { key: r.name, label, title: label === from ? from : `${label}, from ${from}`, sub: r.signature.type === 'plane' ? 'flat' : r.signature.type };
   });
   const highlight: SelectionItem[] = info ? shownFaces(info, o.refs).map((index) => ({ kind: 'face', body: info.id, index })) : [];

@@ -79,11 +79,19 @@ export interface ResolvedPlane {
  * stored plane is kept and the sketch warns ("Sketch 2 lost its face: it stays
  * where it was"). Kernel stops (watchdog, crash) propagate to the rebuild.
  */
-export async function resolveSupport(f: Pick<SketchFeature, 'name' | 'support' | 'plane'>, ctx: Pick<BuildContext, 'bodies' | 'kernel'>): Promise<ResolvedPlane> {
+export async function resolveSupport(f: Pick<SketchFeature, 'name' | 'support' | 'plane'>, ctx: Pick<BuildContext, 'bodies' | 'kernel'> & Partial<Pick<BuildContext, 'outputs'>>): Promise<ResolvedPlane> {
   const s = f.support;
   if (s.kind === 'plane') {
     const p = ORIGIN_PLANES[s.plane];
     if (!p) return { plane: f.plane, lost: true, warning: `${f.name} lost its plane: it stays where it was` };
+    return { plane: { origin: [...p.origin] as Vec3, normal: [...p.normal] as Vec3, xdir: [...p.xdir] as Vec3 }, lost: false };
+  }
+  if (s.kind === 'feature') {
+    // P4a (REFERENCE): a CONSTRUCT plane. The sketch follows it; when it did not build (failed,
+    // suppressed, deleted) the sketch keeps its stored plane and says so, as for a lost face.
+    const out = ctx.outputs?.get(s.feature);
+    if (!out || out.type !== 'plane') return { plane: f.plane, lost: true, warning: `${f.name} lost its plane: it stays where it was` };
+    const p = out.frame;
     return { plane: { origin: [...p.origin] as Vec3, normal: [...p.normal] as Vec3, xdir: [...p.xdir] as Vec3 }, lost: false };
   }
   // The plan's words (docs/p2p3-plan.md §1.7); why it was lost does not change what the user can do.

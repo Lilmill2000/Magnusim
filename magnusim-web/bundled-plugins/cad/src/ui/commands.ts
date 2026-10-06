@@ -81,7 +81,7 @@ const MANY: Partial<Record<SelectionItem['kind'], string>> = { body: 'bodies', v
 /** What Delete does, for a selection it cannot remove (faces, edges, points, bodies, a plane). */
 export function deleteHint(services: AppServices, ui: UiController, items: readonly SelectionItem[]): string {
   const item = items[0];
-  if (item.kind === 'origin') return 'The origin planes cannot be deleted.';
+  if (item.kind === 'origin') return "The origin's planes and axes cannot be deleted.";
   const f = ui.featureOfItem(item);
   const name = f ? services.doc.state.get().doc.features.find((x) => x.id === f)?.name : null;
   if (item.kind === 'sketch') return name ? `Sketch geometry is deleted in the sketch: edit ${name}.` : 'Sketch geometry is deleted in its sketch.';
@@ -94,7 +94,7 @@ export function deleteHint(services: AppServices, ui: UiController, items: reado
 
 /** What F2 does, for a selection it cannot rename. */
 function renameHint(item: SelectionItem): string {
-  if (item.kind === 'origin') return 'The origin planes cannot be renamed.';
+  if (item.kind === 'origin') return "The origin's planes and axes cannot be renamed.";
   const what = item.kind === 'vertex' ? 'Points' : item.kind === 'sketch' ? 'Sketch entities' : item.kind === 'region' ? 'Profiles' : `${item.kind[0].toUpperCase()}${item.kind.slice(1)}s`;
   return `${what} have no names. F2 renames a feature or a body: select one in the tree.`;
 }
@@ -185,7 +185,7 @@ export function installUi(services: AppServices): () => void {
       // origin. Its Hide face / Show all faces are not offered: CAD does not hide faces.
       const h = services.viewport.get().handle;
       if (h) {
-        if (pick && (pick.item.kind === 'face' || pick.item.kind === 'origin')) {
+        if (pick && (pick.item.kind === 'face' || (pick.item.kind === 'origin' && !/^origin:[xyz]$/.test(pick.item.ref)))) {
           const n = h.planeNormal(pick.item);
           items.push({
             id: 'normal-to',
@@ -204,25 +204,11 @@ export function installUi(services: AppServices): () => void {
         if (items.length) items.push({ sep: true, id: 'sep-orbit' });
         items.push({ id: 'orbit-center', label: 'Orbit around model center', run: () => h.orbitAround('center') }, { id: 'orbit-origin', label: 'Orbit around origin', run: () => h.orbitAround([0, 0, 0]) });
       }
-      if (pick) {
-        if (items.length) items.push({ sep: true, id: 'sep-core' });
-        const item = pick.item;
-        if (item.kind === 'face' || item.kind === 'edge' || item.kind === 'vertex' || item.kind === 'body') {
-          items.push(...ui.bodyMenu(item.body).filter((e) => e.id !== 'body-edit' && e.id !== 'sep-body-feature'));
-        }
-        const f = ui.featureOfItem(item);
-        if (f) {
-          if (items.length) items.push({ sep: true, id: 'sep-body' });
-          items.push(...ui.featureMenu(f));
-        }
-      } else {
-        const fit = services.commands.get('view.fit');
-        if (fit) {
-          if (items.length) items.push({ sep: true, id: 'sep-core' });
-          items.push({ id: 'view.fit', label: fit.label, run: () => void services.commands.run('view.fit') });
-        }
-      }
-      // Modules' items (Delete faces, Press-pull, Measure, Edit sketch, ...), after the shell's own.
+      const isSep = (e: MenuEntry | undefined) => !!e && 'sep' in e && e.sep === true;
+      // Modules' items (Sketch on Plane 1, the CONSTRUCT actions, Delete faces, Press-pull, Measure,
+      // Edit sketch, ...) right after the core's view items, then the body's and the feature's, and
+      // the feature's Delete last of all (P4a review: Delete sat between the actions).
+      if (items.length) items.push({ sep: true, id: 'sep-core' });
       for (const m of services.modules?.all() ?? []) {
         if (!m.contextMenu) continue;
         let extra: ReturnType<NonNullable<typeof m.contextMenu>> = [];
@@ -232,10 +218,38 @@ export function installUi(services: AppServices): () => void {
           console.error(`[cad] context menu of ${m.id} failed`, err);
         }
         if (!extra.length) continue;
-        if (items.length) items.push({ sep: true, id: `sep-${m.id}` });
+        if (items.length && !isSep(items[items.length - 1])) items.push({ sep: true, id: `sep-${m.id}` });
         items.push(...extra.map((e) => ({ id: `${m.id}:${e.id}`, label: e.label, disabled: e.disabled ?? null, run: e.run })));
       }
-      ui.showMenu(clientX, clientY, items);
+      let last: MenuEntry[] = [];
+      if (pick) {
+        const item = pick.item;
+        if (item.kind === 'face' || item.kind === 'edge' || item.kind === 'vertex' || item.kind === 'body') {
+          if (items.length && !isSep(items[items.length - 1])) items.push({ sep: true, id: 'sep-modules' });
+          items.push(...ui.bodyMenu(item.body).filter((e) => e.id !== 'body-edit' && e.id !== 'sep-body-feature'));
+        }
+        const f = ui.featureOfItem(item);
+        if (f) {
+          const menu = ui.featureMenu(f);
+          const del = menu.findIndex((e) => e.id === 'delete');
+          // The Delete (and the separator before it) goes last.
+          last = del >= 0 ? menu.slice(del > 0 && isSep(menu[del - 1]) ? del - 1 : del) : [];
+          const rest = del >= 0 ? menu.slice(0, del > 0 && isSep(menu[del - 1]) ? del - 1 : del) : menu;
+          if (items.length && !isSep(items[items.length - 1])) items.push({ sep: true, id: 'sep-body' });
+          items.push(...rest);
+        }
+      } else {
+        const fit = services.commands.get('view.fit');
+        if (fit) {
+          if (items.length && !isSep(items[items.length - 1])) items.push({ sep: true, id: 'sep-modules' });
+          items.push({ id: 'view.fit', label: fit.label, run: () => void services.commands.run('view.fit') });
+        }
+      }
+      items.push(...last);
+      // No separator at either end, and none twice.
+      while (items.length && isSep(items[items.length - 1])) items.pop();
+      const clean = items.filter((e, i) => !(isSep(e) && (i === 0 || isSep(items[i - 1]))));
+      ui.showMenu(clientX, clientY, clean);
     }),
   );
 

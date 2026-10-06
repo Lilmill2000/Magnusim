@@ -165,7 +165,8 @@ export function createLeaveHandler(o: LeaveHookOptions): (leave: LeaveEvent) => 
     let r: LinkOutcome;
     try {
       r = await Promise.race([
-        link.sync({ signal, notify: false, typed: 'keep', ...(view ? { view } : {}), onProgress: (p) => say(p.fraction, p.label, p.busy === true, p.saving === true) }),
+        // A broken reference nothing uses (Daniel, 2026-10-05): the header says it is left out, long enough to read.
+        link.sync({ signal, notify: false, typed: 'keep', noteHoldMs: o.nothingShownMs ?? NOTHING_SHOWN_MS, ...(view ? { view } : {}), onProgress: (p) => say(p.fraction, p.label, p.busy === true, p.saving === true) }),
         stuckP,
       ]);
     } catch (e) {
@@ -183,6 +184,23 @@ export function createLeaveHandler(o: LeaveHookOptions): (leave: LeaveEvent) => 
       report(r, null);
       return { ok: true };
     }
+    // A line in the app's header the user gets time to read before the workspace closes (the
+    // header's line only: no page toast, it said the same twice; L3 review polish 3).
+    const showFor = async (line: string) => {
+      progress(null, line);
+      const wait = o.nothingShownMs ?? NOTHING_SHOWN_MS;
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, wait);
+        signal.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(t);
+            resolve();
+          },
+          { once: true },
+        );
+      });
+    };
     switch (r.outcome) {
       case 'linked':
       case 'unchanged':
@@ -193,20 +211,7 @@ export function createLeaveHandler(o: LeaveHookOptions): (leave: LeaveEvent) => 
         // Not a failure: the geometry keeps its last update (or none is made), and the leave goes
         // on once the user could read why. An empty Part never linked: nothing to say.
         if (!(r.empty && !r.linked)) {
-          // The header's line only (no page toast: it said the same twice; L3 review polish 3).
-          progress(null, r.message);
-          const wait = o.nothingShownMs ?? NOTHING_SHOWN_MS;
-          await new Promise<void>((resolve) => {
-            const t = setTimeout(resolve, wait);
-            signal.addEventListener(
-              'abort',
-              () => {
-                clearTimeout(t);
-                resolve();
-              },
-              { once: true },
-            );
-          });
+          await showFor(r.message);
           if (signal.aborted) {
             report(r, null);
             return { ok: true };

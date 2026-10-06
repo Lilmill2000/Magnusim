@@ -221,6 +221,21 @@ describe('the exit hook', () => {
     expect(t.progress.at(-1)).toEqual([null, 'No body is included in the simulation; Part 1 keeps its last update.']);
   });
 
+  it('a broken Axis nothing uses: the header says it is left out before the export, held to be read, then the Part is linked (Daniel, 2026-10-05)', async () => {
+    const t = setup({ version: 5, linked: linked(2, 4), end: { failed: ['Axis 5'] } });
+    (t.doc as { features: unknown }).features = { get: () => ({ parents: () => [] }) };
+    t.state.set({ doc: { ...DOC, features: [...DOC.features, { id: 'f_ax', type: 'ref_axis', name: 'Axis 5' } as unknown as CadDoc['features'][number]] } });
+    const t0 = Date.now();
+    expect(await t.leave()).toEqual({ ok: true, view: viewStateOf(CAM) });
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(25);
+    expect(t.calls).toHaveLength(1);
+    const labels = t.progress.map((p) => p[1]);
+    const at = labels.indexOf('Axis 5 is broken (not used by anything). Part 1 is updated without it.');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(labels.indexOf('Exporting Part 1') < 0 ? labels.length : labels.lastIndexOf('Writing Part 1 for the project'));
+    expect(t.toasts).toEqual([]);
+  });
+
   it('an empty Part never linked: nothing to say, it leaves at once', async () => {
     const t = setup({ end: { bodies: [] } });
     expect(await t.leave()).toEqual({ ok: true, view: viewStateOf(CAM) });

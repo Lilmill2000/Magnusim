@@ -19,6 +19,7 @@ import { PickList } from '../p2/PickList';
 import { usePicker, useSelectionMirror } from '../p2/pick';
 import { createMeasureMarks, type MeasureMarks } from './overlay';
 import { itemLabel, measureRows, targetOf } from './words';
+import { showForPanel } from '../../lib/selection';
 
 export function MeasurePanel({ close }: ToolPanelProps) {
   const services = useServices();
@@ -62,7 +63,7 @@ export function MeasurePanel({ close }: ToolPanelProps) {
   useSelectionMirror(services, picks, (added) => {
     const usable = added.filter((it) => it.kind === 'face' || it.kind === 'edge' || it.kind === 'vertex' || it.kind === 'origin');
     if (usable.length) for (const it of usable.slice(-2)) pick(it);
-    else services.selection.set({ items: picksNow.current });
+    else showForPanel(services.selection, picksNow.current);
   });
 
   // The part changed (a rebuild): the picked indices may name other faces now.

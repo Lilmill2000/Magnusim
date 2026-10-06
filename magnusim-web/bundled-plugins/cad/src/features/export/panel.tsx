@@ -15,6 +15,7 @@ import { selectedBodies } from '../../ui/tree/model';
 import { filesFor } from '../../files/transfer';
 import { formatBytes } from '../../files/words';
 import { withStepHeader } from './header';
+import { userSelection } from '../../lib/selection';
 
 export type StepSchema = 'AP214' | 'AP242';
 
@@ -36,7 +37,7 @@ export function ExportPanel({ close }: ToolPanelProps) {
   const bodies = useStateStore(services.doc.state, (s) => s.rebuild.bodies);
   const title = String(services.bridge.context.study?.title ?? 'Part');
   const [chosen, setChosen] = useState<Set<BodyId>>(() => {
-    const sel = selectedBodies(services.selection.get());
+    const sel = selectedBodies(userSelection(services.selection.get()));
     const built = services.doc.state.get().rebuild.bodies;
     const picked = built.filter((b) => sel.has(b.id)).map((b) => b.id);
     return new Set(picked.length ? picked : built.filter((b) => b.visible).map((b) => b.id));

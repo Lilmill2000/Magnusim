@@ -47,7 +47,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
 import { PNG } from './png';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -463,14 +463,15 @@ async function expectToolbarFits(page: Page, frame: FrameLocator, where: string)
   const fr = (await page.locator('#workspace-frame').boundingBox())!;
   const vp = page.viewportSize()!;
   const right = Math.min(fr.x + fr.width, vp.width);
-  const buttons = frame.locator('[data-cad-toolbar] [data-command]');
+  // Command buttons and the groups' More buttons (P4a: what does not fit is in a More menu).
+  const buttons = frame.locator('[data-cad-toolbar] [data-command], [data-cad-toolbar] [data-tb-more]');
   const n = await buttons.count();
   expect(n, `${where}: commands on the toolbar`).toBeGreaterThan(10);
   const out: string[] = [];
   for (let i = 0; i < n; i++) {
     const b = buttons.nth(i);
     const r = (await b.boundingBox())!;
-    if (!r || r.x < fr.x - 0.5 || r.x + r.width > right + 0.5) out.push(`${await b.getAttribute('data-command')} at ${Math.round(r?.x ?? -1)}..${Math.round((r?.x ?? 0) + (r?.width ?? 0))}`);
+    if (!r || r.x < fr.x - 0.5 || r.x + r.width > right + 0.5) out.push(`${(await b.getAttribute('data-command')) ?? (await b.getAttribute('aria-label'))} at ${Math.round(r?.x ?? -1)}..${Math.round((r?.x ?? 0) + (r?.width ?? 0))}`);
   }
   expect(out, `${where}: buttons outside the frame (right edge ${Math.round(right)})`).toEqual([]);
   const scroll = await frame.locator('[data-cad-toolbar]').evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth }));
@@ -495,10 +496,14 @@ test('cad:p2p3-review1-toolbar-fit at 1280 x 800 and 1440 x 900 every command bu
     await expect(frame.locator('[data-command="sketch.redo"]')).toHaveAttribute('aria-label', 'Redo');
     await finishSketch(frame);
   }
-  // Wide enough: labels everywhere again.
-  await page.setViewportSize({ width: 1600, height: 1000 });
-  await expect(frame.locator('[data-cad-toolbar="model"]')).toHaveAttribute('data-fit', '0');
-  await expect(frame.locator('[data-command="edit.undo"] .tb-txt')).toBeVisible();
+  // Wide enough (1920 px, P4a): every modelling command labelled, none in a More menu; VIEW and
+  // EDIT keep their icons (their labels are the tooltips).
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await expect(frame.locator('[data-cad-toolbar="model"]')).toHaveAttribute('data-folded', '0');
+  await expect(frame.locator('[data-cad-toolbar="model"]')).toHaveAttribute('data-fit', '1');
+  await expect(frame.locator('[data-cad-toolbar] [data-tb-more]')).toHaveCount(0);
+  await expect(frame.locator('[data-command="modify.parameters"] .tb-txt')).toBeVisible();
+  await expect(frame.locator('[data-command="edit.undo"]')).toHaveAttribute('aria-label', 'Undo');
   expect(seen.csp).toEqual([]);
   expect(seen.errors).toEqual([]);
 });
@@ -516,13 +521,13 @@ test('cad:p2p3-review1-split-piece-name a split piece used up by a Combine Join 
   if ((await folder.getAttribute('aria-expanded')) !== 'true') await folder.locator('> .tree-row .tw').click();
   const bodies = frame.locator('[data-cad-tree] [data-body-row]');
   // Split by the Right plane: flange and flange (2).
-  await tb(frame).locator('[data-command="modify.split"]').click();
+  await runCommand(frame, 'modify.split');
   await bodies.first().locator('.tree-row').first().click();
   await expect(panel(frame).locator('[data-split-pieces]')).toHaveText('2 bodies', { timeout: 30_000 });
   await panel(frame).locator('[data-panel-done]').click();
   await expect(bodies.locator('.cad-body-name')).toHaveText(['flange', 'flange (2)']);
   // Combine Join: target flange, tool flange (2).
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   const p = panel(frame);
   await p.locator('[data-field="op"] select').selectOption('join');
   await p.locator('[data-pick-list="targets"]').click();
@@ -665,7 +670,7 @@ test('cad:p2p3-review1-sketch-tools Center rectangle, Point, Centerline, Tangent
   await inView(page, frame, [[100, 30, 0], [110, 36, 0], [100, -20, 0], [80, -35, 0], [120, -35, 0], [0, 40, 0], [35, 55, 0], [60, 10, 0], [85, 0, 0], [85, 20, 0]]);
 
   // Center rectangle: the centre, then a corner: 4 lines symmetric about a construction centre point.
-  await t.locator('[data-command="sketch.rectangle-center"]').click();
+  await runCommand(frame, 'sketch.rectangle-center');
   await clickAt(page, [100, 30, 0]);
   await clickAt(page, [110, 36, 0]);
   await sketchIdle(page);
@@ -681,7 +686,7 @@ test('cad:p2p3-review1-sketch-tools Center rectangle, Point, Centerline, Tangent
   expect(Math.abs(s1[1] - s2[1])).toBeCloseTo(12, 3);
 
   // Point.
-  await t.locator('[data-command="sketch.point"]').click();
+  await runCommand(frame, 'sketch.point');
   await clickAt(page, [100, -20, 0]);
   await sketchIdle(page);
   d = await draft(page);
@@ -690,7 +695,7 @@ test('cad:p2p3-review1-sketch-tools Center rectangle, Point, Centerline, Tangent
   expect(P(d, pe.p)[1]).toBeCloseTo(-20, 0);
 
   // Centerline: a construction line, drawn dashed.
-  await t.locator('[data-command="sketch.centerline"]').click();
+  await runCommand(frame, 'sketch.centerline');
   await clickAt(page, [80, -35, 0]);
   await clickAt(page, [120, -35, 0]);
   await page.keyboard.press('Escape');
@@ -705,7 +710,7 @@ test('cad:p2p3-review1-sketch-tools Center rectangle, Point, Centerline, Tangent
   await drawLine(page, [0, 40], [20, 40]);
   d = await draft(page);
   const base = newest(d, 'line');
-  await t.locator('[data-command="sketch.arc-tangent"]').click();
+  await runCommand(frame, 'sketch.arc-tangent');
   await expect(frame.locator('[data-cad-panel="sketch"] [data-sketch-hint]')).toHaveText('Click the end of a line or an arc to start a tangent arc.');
   await clickAt(page, [...ends(d, base.id)[1], 0] as V3);
   await expect(frame.locator('[data-cad-panel="sketch"] [data-sketch-hint]')).toHaveText('Click where the tangent arc ends.');
@@ -722,7 +727,7 @@ test('cad:p2p3-review1-sketch-tools Center rectangle, Point, Centerline, Tangent
   d = await draft(page);
   const short = newest(d, 'line');
   await drawLine(page, [85, 0], [85, 20]);
-  await t.locator('[data-command="sketch.extend"]').click();
+  await runCommand(frame, 'sketch.extend');
   await clickAt(page, [69, 10, 0]);
   await sketchIdle(page);
   d = await draft(page);
@@ -801,7 +806,7 @@ test('cad:p2p3-review1-constraints each CONSTRAIN command, selected first, holds
   d = await draft(page);
   const [C1, C2, C3] = d.entities.filter((e) => e.kind === 'circle').map((e) => e.id);
   await page.keyboard.press('Escape');
-  await tb(frame).locator('[data-command="sketch.point"]').click();
+  await runCommand(frame, 'sketch.point');
   for (const p of [
     [35, 20],
     [45, 30],
@@ -892,7 +897,7 @@ test('cad:p2p3-review1-combine-no-change a Cut whose tool only touches is refuse
   const bodies = frame.locator('[data-cad-tree] [data-body-row]');
   await expect(bodies).toHaveCount(3);
   // Cut Body 1 by Body 2: nothing to cut.
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   let p = panel(frame);
   await p.locator('[data-field="op"] select').selectOption('cut');
   await p.locator('[data-pick-list="targets"]').click();
@@ -963,7 +968,7 @@ test('cad:p2p3-review1-words plain words: Delete on edges, an empty sketch, the 
   await addSolid(page, { at: [50, 0, 0] });
   const folder = frame.locator('[data-cad-tree] [data-bodies-folder]');
   if ((await folder.getAttribute('aria-expanded')) !== 'true') await folder.locator('> .tree-row .tw').click();
-  await tb(frame).locator('[data-command="modify.split"]').click();
+  await runCommand(frame, 'modify.split');
   const sp = panel(frame);
   await frame.locator('[data-cad-tree] [data-body-row]').nth(1).locator('.tree-row').first().click();
   await expect(sp.locator('[data-run-reason]')).toContainText('does not cut', { timeout: 30_000 });
@@ -1061,7 +1066,7 @@ test('cad:p2p3-review1-press-pull-curved Press-pull says why a click on a curved
   await expect(frame.locator('[data-chip="volume"]')).toContainText('mm³');
   await settled(page);
   const r = 10;
-  await tb(frame).locator('[data-command="modify.press-pull"]').click();
+  await runCommand(frame, 'modify.press-pull');
   const p = panel(frame);
   // The side of the cylinder, on the side the camera sees (default view from -x, -y).
   const side: V3 = [-r * Math.SQRT1_2, -r * Math.SQRT1_2, 5];

@@ -376,6 +376,14 @@ export class SketchMode implements SketchModeApi {
       const o = ORIGIN_PLANES[support.plane];
       plane = { origin: [...o.origin] as Vec3, normal: [...o.normal] as Vec3, xdir: [...o.xdir] as Vec3 };
       sup = support;
+    } else if (support.kind === 'feature') {
+      // P4a (REFERENCE): a CONSTRUCT plane, as built now; the sketch follows it from then on.
+      const s = this.services.doc.state.get();
+      const out = s.rebuild.outputs[support.feature];
+      const name = s.doc.features.find((f) => f.id === support.feature)?.name ?? 'that plane';
+      if (!out || out.type !== 'plane') return `${name} is not built, so a sketch cannot go on it`;
+      plane = { origin: [...out.frame.origin] as Vec3, normal: [...out.frame.normal] as Vec3, xdir: [...out.frame.xdir] as Vec3 };
+      sup = support;
     } else {
       const info = this.services.doc.state.get().rebuild.bodies.find((b) => b.id === support.body);
       if (!info) return 'that body is not built';

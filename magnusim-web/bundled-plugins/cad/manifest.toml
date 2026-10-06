@@ -12,7 +12,7 @@ required = false
 # Ships on (Daniel's D33): an optional bundled plugin, on by default. Settings >
 # Plugins turns it off (and on again); off, nothing of CAD runs.
 license = "GPL-3.0-or-later"
-description = "Parametric parts in their own workspace: sketches with dimensions and constraints, extruded into solids, booleans, an enclosure around the part for CFD, named parameters, and STEP import, editing and export."
+description = "Parametric parts in their own workspace: sketches with dimensions and constraints; extrude, revolve, sweep and loft; fillet, chamfer, shell and booleans; reference planes, axes and points; an enclosure around the part for CFD; named parameters; and STEP import, editing and export."
 authors = ["Magnusim"]
 # No [python]: all modeling runs in the workspace's own workers (OCCT and
 # PlaneGCS compiled to WebAssembly). plugin.py is the only Python file here.

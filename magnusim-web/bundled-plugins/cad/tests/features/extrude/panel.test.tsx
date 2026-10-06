@@ -135,9 +135,10 @@ describe('Extrude command', () => {
     act(() => void fireEvent.click(cmd(a, 'solid.extrude')));
     await a.settle();
     expect((a.doc.session()!.draft as ExtrudeFeature)).toMatchObject({ name: 'Extrude 2', profiles: [] });
-    expect(a.$('[data-cad-panel] .mgk-hint')!.textContent).toBe('No profiles yet: the sketches with closed profiles are hidden; show one with its eye in the tree');
+    expect(a.$('[data-cad-panel] .mgk-hint')!.textContent).toBe('No profiles yet: click a flat face of a body in the view (the sketches with closed profiles are hidden; show one with its eye in the tree)');
     act(() => void fireEvent.click(a.$('[data-tree-node="f_sk"] [data-sketch-act="visibility"]')!));
-    expect(a.$('[data-cad-panel] .mgk-hint')!.textContent).toBe('No profiles yet: click a shaded region of a sketch in the view');
+    // A body exists (Extrude 1): its flat faces can be extruded too (P4a).
+    expect(a.$('[data-cad-panel] .mgk-hint')!.textContent).toBe('No profiles yet: click a shaded region of a sketch, or a flat face of a body, in the view');
   });
 
   it('opens with every profile of a selected sketch, or the only profile there is', async () => {

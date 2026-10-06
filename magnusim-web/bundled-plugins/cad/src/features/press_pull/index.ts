@@ -12,13 +12,14 @@ import { P2_ICONS } from '../p2/icons';
 import { pickFace, selectedFaces } from '../p2/refs';
 import { pressPullDef } from './feature';
 import { PressPullPanel } from './panel';
+import { userItems } from '../../lib/selection';
 
 export async function runPressPull(services: AppServices): Promise<void> {
   const ui = uiFor(services);
   const p = ui.state.get().panel;
   if (p?.kind === 'feature' && p.isNew && p.type === 'press_pull') return;
   const h = services.viewport.get().handle;
-  const faces = selectedFaces(services.selection.get().items);
+  const faces = selectedFaces(userItems(services.selection));
   const flat = faces.filter((f) => !h || !!h.planeNormal(f));
   const bodyIds = [...new Set(flat.map((f) => f.body))];
   if (!flat.length || bodyIds.length !== 1) {

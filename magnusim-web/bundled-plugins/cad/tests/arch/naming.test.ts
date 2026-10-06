@@ -35,7 +35,12 @@ describe('grammar', () => {
     const names: Record<string, string> = { f_ex: 'Extrude 1', f_imp: 'Imported 1', f_box: 'Box 1' };
     const fn = (id: string) => names[id] ?? null;
     expect(describeFace('F:f_ex:end', fn)).toBe('End face of Extrude 1');
-    expect(describeFace('F:f_ex:side:e_1[p:a>p:b]#1', fn)).toBe('Side e_1 · part 2 of Extrude 1');
+    // A side is numbered among its feature's sides on the body, never by the sketch's token (P4a review).
+    expect(describeFace('F:f_ex:side:e_1[p:a>p:b]#1', fn)).toBe('Side face · part 2 of Extrude 1');
+    const body = ['F:f_ex:start', 'F:f_ex:end', 'F:f_ex:side:e_6cctu2upm20i[p:a>p:b]', 'F:f_ex:side:e_1[p:a>p:b]#1', 'F:f_ex:side:e_1[p:a>p:b]#0'];
+    expect(describeFace('F:f_ex:side:e_6cctu2upm20i[p:a>p:b]', fn, body)).toBe('Side 2 of Extrude 1');
+    expect(describeFace('F:f_ex:side:e_1[p:a>p:b]#1', fn, body)).toBe('Side 1 · part 2 of Extrude 1');
+    expect(describeFace('F:f_fl:fillet:E:F:f_ex:end&F:f_ex:start', (id) => (id === 'f_fl' ? 'Fillet 1' : null))).toBe('Fillet face of Fillet 1');
     expect(describeFace('F:f_imp:import:0:11', fn)).toBe('Face 12 of Imported 1');
     expect(describeFace('F:f_box:primitive:2', fn)).toBe('Face 3 of Box 1');
     expect(describeFace('F:f_gone:start', fn)).toBe('Start face of a deleted feature');

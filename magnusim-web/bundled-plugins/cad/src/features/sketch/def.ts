@@ -58,7 +58,8 @@ export const sketchDef: FeatureTypeDef<SketchFeature, SketchValues> = {
     const r = sketchDef.resolve(f, units);
     return r.ok ? null : r.message;
   },
-  parents: () => [],
+  // A sketch on a CONSTRUCT plane (P4a) rebuilds when the plane does, and the plane cannot be deleted under it.
+  parents: (f) => (f.support?.kind === 'feature' ? [f.support.feature] : []),
   uses: (f) => (f.support.kind === 'face' ? [f.support.body] : []),
   exprs: (f) => f.constraints.flatMap((c, i): ExprField[] => (isDimension(c) ? [{ path: `constraints[${i}].expr`, expr: c.expr }] : [])),
   mapExprs: (f, fn) => ({ ...f, constraints: f.constraints.map((c) => (isDimension(c) ? { ...c, expr: fn(c.expr) } : c)) }),

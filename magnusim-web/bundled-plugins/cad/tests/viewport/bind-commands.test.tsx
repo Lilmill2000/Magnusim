@@ -182,6 +182,22 @@ describe('bindViewport', () => {
     off();
   });
 
+  it('a body that comes back with an earlier tessellation (an Undo) is asked for its vertices again (P4a review)', async () => {
+    const { h, calls } = fakeHandle();
+    const { services, setBodies, topoCalls } = fakeServices(h);
+    const off = bindViewport(h, services);
+    setBodies([bodyInfo('b_1', 7, 'k1')]);
+    await vi.waitFor(() => expect(calls.vertices).toEqual([['b_1', 'k1', 6]]));
+    // An edit: a new tessellation; then Undo: the first one again, under a new shape id.
+    setBodies([bodyInfo('b_1', 8, 'k2')]);
+    await vi.waitFor(() => expect(calls.vertices).toHaveLength(2));
+    setBodies([bodyInfo('b_1', 9, 'k1')]);
+    await vi.waitFor(() => expect(calls.vertices).toEqual([['b_1', 'k1', 6], ['b_1', 'k2', 6], ['b_1', 'k1', 6]]));
+    expect((topoCalls as { id: number }[]).map((c) => c.id)).toEqual([7, 8, 9]);
+    expect(calls.setBodies.at(-1)![0].vertices).toBeNull();
+    off();
+  });
+
   it('writes picks into the selection and reads it back as highlight and filter', () => {
     const { h, calls, fire } = fakeHandle();
     const { services, bus } = fakeServices(h);

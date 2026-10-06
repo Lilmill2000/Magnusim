@@ -14,7 +14,7 @@
 //                  checkbox and Space turns it; a refused expression stays with its reason.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Frame, type FrameLocator, type Page } from '@playwright/test';
-import { addSketch, addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
 
 test.use({ viewport: { width: 1280, height: 800 } });
 
@@ -218,7 +218,7 @@ test('cad:sd-kit-parity every adopted kit control in a CAD panel draws as the ki
   await addSolid(page, { at: [0, 0, 0] });
   await addSolid(page, { at: [40, 0, 0] });
   await page.keyboard.press('Escape');
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   await expect(panel(frame).locator('[data-panel-title]')).toHaveText('Combine 1');
   await expect(panel(frame).locator('[data-incomplete-hint] .mgk-hint')).toHaveText('Pick at least one target');
   await expect(panel(frame).locator('[data-run-reason]')).toHaveCount(0);
@@ -247,7 +247,7 @@ test('cad:sd-kit-parity every adopted kit control in a CAD panel draws as the ki
   await expect(panel(frame)).toHaveCount(0);
 
   // Parameters (none yet): EmptyState and a secondary button.
-  await tb(frame).locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   await expect(panel(frame).locator('[data-params-empty]')).toHaveText('No parameters yet');
   const params = diffsOf(
     await readPairs(f, [
@@ -259,7 +259,7 @@ test('cad:sd-kit-parity every adopted kit control in a CAD panel draws as the ki
   await expect(panel(frame)).toHaveCount(0);
 
   // Export STEP: the primary button.
-  await tb(frame).locator('[data-command="file.export-step"]').click();
+  await runCommand(frame, 'file.export-step');
   await expect(panel(frame).locator('[data-export-run]')).toBeVisible();
   await expect(panel(frame).locator('[data-export-run]')).not.toHaveAttribute('aria-disabled', 'true');
   const exp = diffsOf(await readPairs(f, [{ name: 'Button/primary', cad: '[data-export-run]', kit: '[data-s="buttons"] .mgk-btn--primary' }]));
@@ -284,7 +284,7 @@ test('cad:sd-kit-behaviour Done says why it cannot close, the Switch takes Space
   await addSolid(page, { at: [0, 0, 0] });
   await addSolid(page, { at: [40, 0, 0] });
   await page.keyboard.press('Escape');
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   const p = panel(frame);
   await expect(p.locator('[data-panel-title]')).toHaveText('Combine 1');
 

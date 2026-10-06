@@ -70,7 +70,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSketch, addSolid, answerLeave, baseUrl, cadPluginRow, cancelLeave, drawRectangle, ensureCadOn, expectLeaveWaitsForSave, headerTakesKeyboard, historyState, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, resetCadToDefault, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, answerLeave, baseUrl, cadPluginRow, cancelLeave, drawRectangle, ensureCadOn, expectLeaveWaitsForSave, headerTakesKeyboard, historyState, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, resetCadToDefault, watchPage, workspaceFrame, runCommand, soloVolume } from './helpers';
 import { breakManifest } from './manifest-guard.mjs';
 import { PNG } from './png';
 
@@ -109,7 +109,7 @@ async function freshPart(page, request, title = 'Part 1') {
 const historyLabels = (frame) => frame.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl');
 const featureRow = (frame, name) => frame.locator('[data-cad-tree] [data-feature-row]').filter({ has: frame.locator('> .tree-row .tl', { hasText: new RegExp(`^${name}$`) }) });
 const bodiesLabel = (frame) => frame.locator('[data-cad-tree] [data-bodies-folder] > .tree-row .tl');
-const volumeValue = (frame) => frame.locator('[data-chip="volume"] [data-volume-mm3]');
+const volumeValue = (frame) => soloVolume(frame);
 
 /** A readout as the chip formats it: 6 significant digits, digit groups from 10,000 up, significant figures above a million when rounded. */
 const readout = (n) => {
@@ -318,7 +318,7 @@ test('cad:p1-document-open CAD ships on; Disable and Enable in Settings; "+ New 
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
   const tree = frame.locator('[data-cad-tree]');
   await expect(tree.locator('.geo-head')).toHaveText(['PART', 'HISTORY']);
-  await expect(tree.locator('[data-tree-node^="origin:"] > .tree-row .tl')).toHaveText(['Top plane', 'Front plane', 'Right plane']);
+  await expect(tree.locator('[data-tree-node^="origin:"] > .tree-row .tl')).toHaveText(['Top plane', 'Front plane', 'Right plane', 'X axis', 'Y axis', 'Z axis']);
   await expect(tree.locator('[data-tree-empty="history"]')).toHaveText('No features yet');
   await expect(bodiesLabel(frame)).toHaveText('Bodies (0)');
   await expect(frame.locator('[data-chip="volume"]')).toHaveCount(0);
@@ -534,7 +534,7 @@ test('cad:p1-document-params width = 40 mm drives an Extrude; changing width upd
   const tb = frame.locator('[data-cad-toolbar]');
   const tree = frame.locator('[data-cad-tree]');
 
-  await tb.locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   const params = frame.locator('[data-cad-panel="params"]');
   await expect(params.locator('[data-panel-title]')).toHaveText('Parameters');
   await expect(params.locator('[data-params-empty]')).toHaveText('No parameters yet');
@@ -557,7 +557,7 @@ test('cad:p1-document-params width = 40 mm drives an Extrude; changing width upd
   await expectVolume(frame, 40 * 20 * 20);
 
   // Change width: the solid follows.
-  await tb.locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   const wexpr = params.locator('[data-param-row="width"] .nui input');
   await wexpr.fill('65 mm');
   await wexpr.press('Enter');
@@ -593,10 +593,12 @@ test('cad:p1-document-plugin-off with CAD off the Part row is greyed with its re
     await expect(cadRow).toHaveAttribute('data-plugin-status', 'enabled');
     // Review round 2: the row promised sketches and STEP editing before CAD had them. Since P2/P3 it
     // names what ships (sketches, extrude, STEP) and nothing that does not (revolve, fillet, assemblies);
-    // since SD no boxes or cylinders (solids come from sketches), and the enclosure for CFD.
+    // since SD no boxes or cylinders (solids come from sketches), and the enclosure for CFD; since P4a
+    // revolve, sweep, loft, fillet, chamfer, shell and reference geometry, still nothing of P4b or V1
+    // (patterns, mirror, assemblies, drawings).
     await expect(cadRow.locator('.wiz-pref-copy > strong')).toHaveText('Magnusim CAD v0.1.0 · bundled');
-    await expect(cadRow.locator('.wiz-pref-copy > span').first()).toHaveText('Parametric parts in their own workspace: sketches with dimensions and constraints, extruded into solids, booleans, an enclosure around the part for CFD, named parameters, and STEP import, editing and export.');
-    await expect(cadRow).not.toContainText(/revolve|fillet|sweep|loft|assembl|drawing|boxes|cylinders/i);
+    await expect(cadRow.locator('.wiz-pref-copy > span').first()).toHaveText('Parametric parts in their own workspace: sketches with dimensions and constraints; extrude, revolve, sweep and loft; fillet, chamfer, shell and booleans; reference planes, axes and points; an enclosure around the part for CFD; named parameters; and STEP import, editing and export.');
+    await expect(cadRow).not.toContainText(/pattern|mirror|assembl|drawing|spline|boxes|cylinders/i);
     await cadRow.locator('[data-plugin-toggle="cad"]').click();
     // Off, and still listed so it can be turned on again (G11).
     await expect(cadRow).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 });

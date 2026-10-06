@@ -13,7 +13,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSketch, addSolid, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, groupCommandLabels, soloVolume } from './helpers';
 import { PNG } from './png';
 
 async function freshPart(page: Page, request: Parameters<typeof newProject>[0], title = 'Part 1') {
@@ -78,8 +78,8 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   const tip = frame.locator('[data-cad-tip]');
 
   // Only commands that work, in the core's toolbar groups. No one-click solids (decision 2026-10-01).
-  await expect(tb.locator('[data-group="solid"] .tb-txt')).toHaveText(['Extrude']);
-  await expect(tb.locator('[data-group="modify"] .tb-txt')).toHaveText(['Parameters', 'Press-pull', 'Delete faces', 'Split', 'Combine']);
+  expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft']);
+  expect(await groupCommandLabels(frame, 'modify')).toEqual(['Parameters', 'Fillet', 'Chamfer', 'Shell', 'Press-pull', 'Delete faces', 'Split', 'Combine']);
   await expect(tb.locator('[data-group="edit"] .tb-txt')).toHaveText(['Undo', 'Redo']);
   await expect(tb.locator('.tb-group-label').first()).toHaveText('SKETCH');
   await expect(tb.locator('.tb-group-label').last()).toHaveText('EDIT');
@@ -167,9 +167,10 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   const mid = await pagePoint(page, [10, 0, 19]);
   await page.mouse.click(mid[0], mid[1], { button: 'right' });
   const menu = frame.locator('[data-cad-menu]');
-  // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the CAD ones,
-  // then the modules' items for a face (P2/P3, plan §3.1: after the shell's, behind a separator).
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Roll back to here', 'Delete Extrude 1', 'Delete faces and heal', 'Measure', 'Press-pull', 'New sketch on this face']);
+  // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the modules'
+  // actions for a face, then the body's and the feature's, the feature's Delete last of all (P4a
+  // review: the actions first, Delete last; it sat between them).
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Roll back to here', 'Delete Extrude 1']);
   await menu.locator('[data-menu-item="edit"]').click();
   await expect(menu).toHaveCount(0);
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
@@ -266,7 +267,38 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   // Toolbar (.tb-btn 10px, labels 10px/700 #6a7180, bar #f2f3f6) and chips (600 12px #344054 on white).
   expect(await styleOf(frame.locator('[data-cad-toolbar]'), ['background-color'])).toEqual({ 'background-color': 'rgb(242, 243, 246)' });
   expect(await styleOf(frame.locator('.tb-group-label').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '10px', 'font-weight': '700', color: 'rgb(106, 113, 128)' });
-  expect(await styleOf(frame.locator('[data-command="solid.extrude"]'), ['font-size', 'min-width', 'border-top-left-radius'])).toEqual({ 'font-size': '10px', 'min-width': '64px', 'border-top-left-radius': '4px' });
+  // Labelled buttons (P4a: Daniel works on 1280-1920 px screens). At 1600 and at 1280 px every
+  // command button shown in the modelling groups has its label in view with the core's .tb-btn
+  // recipe (10px, min-width 64, radius 4); VIEW and EDIT are icons; the commands that do not fit
+  // are in their group's More menu (fewer at 1600 than at 1280), and the toolbar does not scroll.
+  const folded: number[] = [];
+  for (const size of [
+    { width: 1600, height: 1000 },
+    { width: 1280, height: 800 },
+  ]) {
+    await page.setViewportSize(size);
+    const bar = frame.locator('[data-cad-toolbar="model"]');
+    await expect(bar).toHaveAttribute('data-fit', '1');
+    const shown = await bar.locator('.tb-group:not([data-group="view"]):not([data-group="edit"]) .tb-btn[data-command]').evaluateAll((els) =>
+      els.map((b) => {
+        const s = getComputedStyle(b);
+        const t = b.querySelector('.tb-txt') as HTMLElement;
+        const r = t.getBoundingClientRect();
+        const box = b.getBoundingClientRect();
+        return { id: b.getAttribute('data-command'), fontSize: s.fontSize, minWidth: s.minWidth, radius: s.borderTopLeftRadius, labelShown: getComputedStyle(t).position !== 'absolute' && r.width > 12 && r.height > 8, inFrame: box.left >= 0 && box.right <= window.innerWidth };
+      }),
+    );
+    // At 1280 px ten keep their labels (Chamfer stays beside Fillet since the P4a fix round: Revolve
+    // and Export STEP go into their More).
+    expect(shown.length, `labelled commands at ${size.width}`).toBeGreaterThanOrEqual(10);
+    for (const b of shown) expect(b, `${b.id} at ${size.width}`).toEqual({ id: b.id, fontSize: '10px', minWidth: '64px', radius: '4px', labelShown: true, inFrame: true });
+    expect(await bar.evaluate((el) => el.scrollWidth - el.clientWidth), `the toolbar scrolls at ${size.width}`).toBeLessThanOrEqual(1);
+    folded.push(Number(await bar.getAttribute('data-folded')));
+    await shot(page, `ui-parity-toolbar-${size.width}`);
+  }
+  expect(folded[0]).toBeGreaterThan(0);
+  expect(folded[1]).toBeGreaterThan(folded[0]);
+  await page.setViewportSize({ width: 1600, height: 1000 });
   // The core's .measure-chip (style.css:1093-1106): 600 12px/1.35 "Segoe UI", padding 8/10/8/12 (review round 1: CAD had 6/10).
   expect(await styleOf(frame.locator('[data-chip="volume"]'), ['font-size', 'font-weight', 'font-family', 'line-height', 'color', 'background-color', 'border-top-color', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left'])).toEqual({
     'font-size': '12px',
@@ -422,7 +454,7 @@ test('cad:p1-ui-params the Parameters panel drives a size; bad input is refused 
   await addSolid(page);
   await expect(vol).toHaveText('Volume8000 mm³');
 
-  await tb.locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   const params = frame.locator('[data-cad-panel="params"]');
   await expect(params.locator('[data-panel-title]')).toHaveText('Parameters');
   await expect(params.locator('.mgk-panel-foot button')).toHaveText(['Done']);
@@ -451,7 +483,7 @@ test('cad:p1-ui-params the Parameters panel drives a size; bad input is refused 
   await panel.locator('[data-panel-done]').click();
 
   // Change the parameter: the solid follows.
-  await tb.locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   const wexpr = params.locator('[data-param-row="width"] .nui input');
   await wexpr.fill('width * 2');
   await wexpr.press('Enter');
@@ -502,7 +534,8 @@ test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the pla
   const tree = frame.locator('[data-cad-tree]');
   const panel = frame.locator('[data-cad-panel="feature"]');
   const menu = frame.locator('[data-cad-menu]');
-  const vol = frame.locator('[data-chip="volume"] [data-volume-mm3]');
+  // The chip's one value (two bodies exist for a moment while Extrude 2 is still New body).
+  const vol = soloVolume(frame);
   const labels = tree.locator('[data-feature-row] > .tree-row .tl');
   const row = (name: string) => tree.locator('[data-feature-row]').filter({ has: frame.locator('> .tree-row .tl', { hasText: new RegExp(`^${name}$`) }) });
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-viewport', 'ready');
@@ -583,7 +616,7 @@ test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the pla
 
   // Parameters: a cycle is refused with its path; a new one that names itself says so;
   // a unit change that does not fit says what the value is, once; a rename follows into the features.
-  await tb.locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   const params = frame.locator('[data-cad-panel="params"]');
   const add = async (name: string, expr: string) => {
     await params.locator('[aria-label="New parameter name"]').fill(name);
@@ -610,7 +643,7 @@ test('cad:p1-ui-review the behaviours review round 1 exercised: Look at, the pla
   await expect(panel.locator('.nui[data-field="distance"] [data-nui-after]')).toHaveText('= 40 mm');
   await panel.locator('[data-panel-done]').click();
   const withB = Number(await vol.getAttribute('data-volume-mm3'));
-  await tb.locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   const bname = params.locator('[data-param-row="b"] .cad-param-name');
   await bname.fill('depth');
   await bname.press('Enter');

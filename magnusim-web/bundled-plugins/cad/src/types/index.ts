@@ -12,6 +12,7 @@ export * from './kernel';
 export * from './kernel-protocol';
 export * from './modules';
 export * from './naming';
+export * from './references';
 export * from './selection';
 export * from './sketch';
 export * from './state';

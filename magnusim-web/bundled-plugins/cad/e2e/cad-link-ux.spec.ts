@@ -24,7 +24,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, countFileWrites, fileWrites, modelOnPage, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, countFileWrites, fileWrites, modelOnPage, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 type V3 = [number, number, number];
@@ -241,7 +241,7 @@ test('cad:ux-readouts-and-words significant figures for a 7-digit volume; a plai
   await page.keyboard.press('Escape');
 
   // A new Combine: what it waits for is a plain hint, not red, and no filler line.
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   const p = panel(frame);
   await expect(p.locator('[data-panel-title]')).toHaveText('Combine 1');
   await expect(p.locator('[data-incomplete-hint]')).toHaveText('Pick at least one target');

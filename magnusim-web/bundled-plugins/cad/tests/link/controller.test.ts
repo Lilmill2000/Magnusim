@@ -352,6 +352,31 @@ describe('link review fixes (L1, L2, polish)', () => {
     expect(await first.ctl.sync()).toMatchObject({ outcome: 'failed', message: 'Split 1 and Combine 1 failed to build, so nothing was added to the project. Fix, retry or suppress them first.' });
   });
 
+  it('a broken reference Plane / Axis / Point that nothing uses does not stop the link: it is named in the notes; one a feature uses still refuses (Daniel, 2026-10-05)', async () => {
+    const axis = { id: 'f_ax', type: 'ref_axis', name: 'Axis 5' } as unknown as CadDoc['features'][number];
+    const plane = { id: 'f_pl', type: 'ref_plane', name: 'Plane 1' } as unknown as CadDoc['features'][number];
+    const sketch = { id: 'f_sk', type: 'sketch', name: 'Sketch 3', uses: ['f_pl'] } as unknown as CadDoc['features'][number];
+    const registry = { get: () => ({ parents: (f: { uses?: string[] }) => f.uses ?? [] }) };
+    const unused = setup({ version: 5, linked: linked(2, 4), end: { failed: ['Axis 5'] } });
+    (unused.doc as { features: unknown }).features = registry;
+    unused.state.set({ doc: { ...DOC, features: [...DOC.features, axis] } });
+    const r = await unused.ctl.sync();
+    expect(r).toMatchObject({ outcome: 'linked', notes: ['Axis 5 is broken (not used by anything).'] });
+    expect(unused.calls).toHaveLength(1);
+    expect(unused.toasts).toEqual([['Part 1 updated. Axis 5 is broken (not used by anything).', 'info']]);
+    // A plane a sketch lies on: the sketch failed too, and the link is refused as before.
+    const used = setup({ version: 5, linked: linked(2, 4), end: { failed: ['Plane 1', 'Sketch 3'] } });
+    (used.doc as { features: unknown }).features = registry;
+    used.state.set({ doc: { ...DOC, features: [...DOC.features, plane, sketch] } });
+    expect(await used.ctl.sync({ notify: false })).toMatchObject({ outcome: 'failed', code: 'not_built', brief: 'Plane 1 and Sketch 3 failed to build. Fix, retry or suppress them first.' });
+    expect(used.calls).toEqual([]);
+    // The user suppressed the sketch: the plane is used by nothing any more.
+    const off = setup({ version: 5, linked: linked(2, 4), end: { failed: ['Plane 1'] } });
+    (off.doc as { features: unknown }).features = registry;
+    off.state.set({ doc: { ...DOC, features: [...DOC.features, plane, { ...sketch, suppressed: true } as CadDoc['features'][number]] } });
+    expect(await off.ctl.sync({ notify: false })).toMatchObject({ outcome: 'linked', notes: ['Plane 1 is broken (not used by anything).'] });
+  });
+
   it('an included body the kernel calls invalid refuses the link; left out of the simulation, it does not', async () => {
     const bad = { bodies: [{ id: 'b1', shape: 7, valid: false, feature: 'f1', names: null, name: 'Body 1', color: '#bdc9db' }] };
     const t = setup({ version: 5, linked: linked(2, 4), end: bad });

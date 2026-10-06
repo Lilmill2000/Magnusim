@@ -2,8 +2,9 @@
 //   kernel   starting / restarting, or failed with Retry
 //   rebuild  "Rebuilding…" while a rebuild runs (after a short delay, so fast
 //            rebuilds do not flicker), or "Rebuild failed: <why>"
-//   volume   the selected bodies' volume, or the shown bodies' total when none
-//            is selected ("Total of 3 bodies · 24,000 mm³"); a surface body has none
+//   volume   the selected body's volume; several bodies (selected, or shown when
+//            none is selected) each on its own, never added together ("Body 1:
+//            8000 mm³ · Enclosure 1: 64,000 mm³", Daniel 2026-10-02); a surface body has none
 //   size     the same bodies' exact bounding box ("100 mm × 100 mm × 20 mm")
 //   save     "Saved" / "Saving…" / "Not saved: <why> · Retry" / "Not applied: press Enter"
 //            (a value typed in a field, so the chip agrees with the app's unsaved
@@ -21,13 +22,14 @@
 //            says so (proposal §3.4 hint)
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { useEffect, useState, useSyncExternalStore, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import { pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
 import { useServices } from '../lib/services';
 import { useStateStore } from '../lib/store';
 import { isRemovedFeature } from '../doc/features/removed';
 import { Chip, formatQuantity, formatVolume } from './kit';
 import { selectedBodies } from './tree/model';
+import type { DocUnits } from '../types/units';
 
 /**
  * Whether keys reach the frame now: it has keyboard focus. The host gives it
@@ -107,6 +109,81 @@ function useDelayed(flag: boolean, ms: number): boolean {
   return flag && on;
 }
 
+/** Bodies listed in the volume chip before the rest go into "+ N more" (the full list is the tooltip). */
+export const VOLUME_LIST_MAX = 4;
+
+type VolumeBody = { id: string; name: string; volume: number | null; solids?: number | null };
+
+/** One body's volume in words: "8000 mm³", "Surface body: no volume" (no solid), with its pieces ("2 pieces"). */
+function volumeWords(b: VolumeBody, units: DocUnits): string {
+  if (b.solids === 0) return 'surface body, no volume';
+  return formatVolume(b.volume ?? 0, units);
+}
+
+/**
+ * The volume chip's text: one body alone, "8000 mm³" (or "Body 1 · 8000 mm³" when it is named:
+ * selected, or the others are hidden); several, each on its own, "Body 1: 8000 mm³ · Body 2:
+ * 6283.19 mm³", never added together. A surface body has no volume ("Surface body: no volume").
+ * Hidden bodies are not listed and the chip says how many.
+ */
+/**
+ * The bodies a list of more than VOLUME_LIST_MAX shows, in their own order: the CFD bodies
+ * (`first`, an Enclosure's) and then the biggest, so the fluid domain is never the one behind
+ * "+ N more" (P4a review).
+ */
+export function volumeListShown<T extends VolumeBody>(bodies: readonly T[], first: ReadonlySet<string> = new Set()): T[] {
+  if (bodies.length <= VOLUME_LIST_MAX) return [...bodies];
+  const ranked = [...bodies].sort((a, b) => Number(first.has(b.id)) - Number(first.has(a.id)) || (b.volume ?? 0) - (a.volume ?? 0));
+  const keep = new Set(ranked.slice(0, VOLUME_LIST_MAX).map((b) => b.id));
+  return bodies.filter((b) => keep.has(b.id));
+}
+
+export function VolumeList({ bodies, named, hidden, units, first }: { bodies: readonly VolumeBody[]; named: boolean; hidden: number; units: DocUnits; first?: ReadonlySet<string> }) {
+  const pieces = (b: VolumeBody) => ((b.solids ?? 0) > 1 ? ` · ${b.solids} pieces` : '');
+  const hiddenNote = hidden ? (
+    <span className="cad-chip-hidden" data-volume-hidden={String(hidden)}>
+      {' '}
+      ({hidden === 1 ? '1 hidden body' : `${hidden} hidden bodies`} not listed)
+    </span>
+  ) : null;
+  if (bodies.length === 1) {
+    const b = bodies[0];
+    const which = named || (b.solids ?? 0) > 1 ? `${b.name}${pieces(b)}` : null;
+    return (
+      <>
+        {which ? (
+          <span className="cad-chip-which" title={which}>
+            <span className="cad-chip-name">{which}</span> ·{' '}
+          </span>
+        ) : null}
+        {b.solids === 0 ? <span data-volume-surface="1" data-volume-body={b.id}>Surface body: no volume</span> : <span data-volume-mm3={String(b.volume ?? 0)} data-volume-body={b.id}>{formatVolume(b.volume ?? 0, units)}</span>}
+        {hiddenNote}
+      </>
+    );
+  }
+  const shown = volumeListShown(bodies, first);
+  const rest = bodies.length - shown.length;
+  const all = bodies.map((b) => `${b.name}${pieces(b)}: ${volumeWords(b, units)}`).join(' · ');
+  return (
+    <span className="cad-chip-list" title={all} data-volume-list={String(bodies.length)}>
+      {shown.map((b, i) => (
+        <span key={b.id} className="cad-chip-entry" data-volume-entry={b.id}>
+          {i ? ' · ' : ''}
+          <span className="cad-chip-which">
+            <span className="cad-chip-name" title={b.name}>
+              {b.name}
+            </span>
+            {pieces(b)}:{' '}
+          </span>
+          {b.solids === 0 ? <span data-volume-surface="1" data-volume-body={b.id}>surface body, no volume</span> : <span data-volume-mm3={String(b.volume ?? 0)} data-volume-body={b.id}>{formatVolume(b.volume ?? 0, units)}</span>}
+        </span>
+      ))}
+      {rest > 0 ? <span data-volume-more={String(rest)}> · + {rest} more</span> : null}
+      {hiddenNote}
+    </span>
+  );
+}
+
 export function StatusDock() {
   const services = useServices();
   const { doc } = services;
@@ -118,6 +195,7 @@ export function StatusDock() {
   const hasFocus = useHasFocus();
   const typed = useSyncExternalStore(subscribePendingEdits, pendingEdits, pendingEdits);
   const chips: ReactElement[] = [];
+  const dockRef = useDockReserve();
 
   /** "Keep mine": warned in the app's own words first; this tab's version then replaces the other tab's save. */
   const keepMine = async () => {
@@ -208,51 +286,26 @@ export function StatusDock() {
 
   if (d.status === 'ready' && d.bodies.length) {
     // Selected bodies that are no longer built (deleted, suppressed, rolled back) do not count:
-    // with none left, the chip falls back to the total (review round 2: it vanished).
+    // with none left, the chip falls back to the shown bodies (review round 2: it vanished).
     const picked = selectedBodies(sel);
     const pickedLive = d.bodies.filter((b) => picked.has(b.id));
-    // With nothing selected: the bodies shown (a hidden body is not counted), and say it is a total.
+    // With nothing selected: the bodies shown (a hidden body is not listed, and the chip says so).
     const shown = d.bodies.filter((b) => b.visible);
-    const hidden = d.bodies.length - shown.length;
+    const hidden = pickedLive.length ? 0 : d.bodies.length - shown.length;
     const chosen = pickedLive.length ? pickedLive : shown;
-    let which: string | null = null;
-    if (pickedLive.length) which = chosen.length === 1 ? chosen[0].name : `${chosen.length} bodies`;
-    else if (hidden) which = `Total of ${chosen.length} shown ${chosen.length === 1 ? 'body' : 'bodies'}`;
-    else if (chosen.length > 1) which = `Total of ${chosen.length} bodies`;
-    // One body in several separate solids says so ("Body 1 · 2 pieces"; review P2/P3 round 4: two
-    // cubes meeting at a corner after an Intersect read as one body with no word of it).
-    const pieces = chosen.length === 1 ? (chosen[0].solids ?? 0) : 0;
-    if (pieces > 1) which = `${which ?? chosen[0].name} · ${pieces} pieces`;
     const unmeasured = chosen.filter((b) => b.volume == null);
-    // A surface body (no solid: an open shell, e.g. an import before knitting) has no volume,
-    // whatever BRepGProp integrates over its faces: it is never counted (P2 integration).
-    const surfaces = chosen.filter((b) => b.solids === 0);
-    if (chosen.length && !unmeasured.length && surfaces.length === chosen.length) {
+    // Each body on its own, never added together (Daniel, 2026-10-02: "Enclosure 1: 213,286,252 mm³ ·
+    // Body1: 44,798,524 mm³"; a total of a part and the air around it means nothing).
+    const named = chosen.length > 1 || pickedLive.length > 0 || hidden > 0;
+    if (chosen.length && !unmeasured.length) {
       chips.push(
         <Chip key="volume" chip="volume" k="Volume">
-          {which ? (
-            <span className="cad-chip-which" title={which}>
-              <span className="cad-chip-name">{which}</span> ·{' '}
-            </span>
-          ) : null}
-          <span data-volume-surface="1">{surfaces.length === 1 ? 'Surface body: no volume' : 'Surface bodies: no volume'}</span>
-        </Chip>,
-      );
-    } else if (chosen.length && !unmeasured.length) {
-      const total = chosen.reduce((sum, b) => sum + (b.solids === 0 ? 0 : (b.volume ?? 0)), 0);
-      chips.push(
-        <Chip key="volume" chip="volume" k="Volume">
-          {which ? (
-            <span className="cad-chip-which" title={which}>
-              <span className="cad-chip-name">{which}</span> ·{' '}
-            </span>
-          ) : null}
-          <span data-volume-mm3={String(total)}>{formatVolume(total, d.units)}</span>
-          {surfaces.length ? <span data-volume-surface={String(surfaces.length)}> ({surfaces.length === 1 ? '1 surface body' : `${surfaces.length} surface bodies`} not counted)</span> : null}
+          <VolumeList bodies={chosen} named={named} hidden={hidden} units={d.units} first={new Set(d.features.flatMap((f) => (f.type === 'enclosure' && 'creates' in f && f.creates ? [f.creates as string] : [])))} />
         </Chip>,
       );
     } else if (chosen.length) {
       // Large parts are measured on request (the kernel's long timeout).
+      const which = named ? (chosen.length === 1 ? chosen[0].name : `${chosen.length} bodies`) : null;
       const measure = () => {
         setMeasuring(true);
         Promise.all(unmeasured.map((b) => doc.measure(b.id)))
@@ -380,8 +433,36 @@ export function StatusDock() {
   }
 
   return (
-    <div className="cad-dock" data-cad-dock="1">
+    <div className="cad-dock" data-cad-dock="1" ref={dockRef}>
       {chips}
     </div>
   );
+}
+
+/**
+ * The tree column ends above the dock, however tall the dock is: a volume list of several bodies
+ * wraps at 1280 px and covered the bottom of the tree and the rollback bar, which could then not
+ * be dragged (P4a review). The dock's height goes into --cad-dock-reserve on the stage.
+ */
+function useDockReserve() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const stage = el?.parentElement;
+    if (!el || !stage) return;
+    const set = () => {
+      const bottom = parseFloat(getComputedStyle(el).bottom) || 16;
+      const h = el.offsetHeight;
+      // The default reserve (52 px) stays when the dock is one chip high or empty.
+      stage.style.setProperty('--cad-dock-reserve', `${Math.max(52, Math.ceil(h + bottom + 8))}px`);
+    };
+    set();
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(set) : null;
+    ro?.observe(el);
+    return () => {
+      ro?.disconnect();
+      stage.style.removeProperty('--cad-dock-reserve');
+    };
+  }, []);
+  return ref;
 }

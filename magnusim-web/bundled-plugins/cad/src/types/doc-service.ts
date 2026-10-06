@@ -13,6 +13,7 @@ import type { BodyInfo, KernelAdapter } from './kernel';
 import type { BBox, ShapeId } from './kernel-protocol';
 import type { FaceNames } from './naming';
 import type { SketchOutput, SketchSolverClient } from './sketch';
+import type { ConstructOutput } from './references';
 import type { ReadonlyStateStore } from './state';
 import type { Expr, UnitsService } from './units';
 
@@ -52,7 +53,23 @@ export interface ImportOutput {
  * RebuildState.outputs and BuildContext.outputs (later features read it: an
  * extrude reads its sketch's regions). Add members as features need them.
  */
-export type FeatureOutput = SketchOutput | ImportOutput | EnclosureOutput;
+export type FeatureOutput = SketchOutput | ImportOutput | EnclosureOutput
+  // P4a: what a CONSTRUCT feature built (REFERENCE, src/types/references.ts)
+  | ConstructOutput
+  // P4a: the edges a Fillet or Chamfer rounded (SOLIDS)
+  | EdgeChainOutput;
+
+/**
+ * P4a (SOLIDS): what a Fillet or Chamfer built: how many edges it picked (and that its
+ * faces gave), and how many it rounded with their tangent chains (the kernel's contours).
+ */
+export interface EdgeChainOutput {
+  type: 'edge-chain';
+  picked: number;
+  done: number;
+  /** Chamfer with two distances: the faces Distance 1 runs on, in words (P4a review: nothing said which). */
+  distance1On?: string;
+}
 
 /**
  * What an Enclosure built (its panel and its drag arrows read it): the exact

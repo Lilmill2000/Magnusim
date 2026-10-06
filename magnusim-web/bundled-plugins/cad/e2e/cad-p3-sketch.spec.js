@@ -28,7 +28,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, soloVolume } from './helpers';
 import { PNG } from './png';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
@@ -57,7 +57,7 @@ const chip = (frame) => frame.locator('[data-chip="sketch"]');
 const featurePanel = (frame) => frame.locator('[data-cad-panel="feature"]');
 const sketchRow = (frame) => frame.locator('[data-cad-tree] [data-feature-type="sketch"]');
 const extrudeRow = (frame) => frame.locator('[data-cad-tree] [data-feature-type="extrude"]');
-const volumeValue = (frame) => frame.locator('[data-chip="volume"] [data-volume-mm3]');
+const volumeValue = (frame) => soloVolume(frame);
 
 /** Page coordinates of a model point (the viewport's own projection plus the frame's offset). */
 async function at(page, p) {

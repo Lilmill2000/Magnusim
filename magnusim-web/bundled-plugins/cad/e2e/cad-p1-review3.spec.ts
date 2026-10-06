@@ -15,7 +15,7 @@
 // Owner: INTEGRATE (review round 3).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { addSketch, addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, soloVolume, singleVolume } from './helpers';
 
 type Vec3 = [number, number, number];
 type Loc = ReturnType<FrameLocator['locator']>;
@@ -71,7 +71,7 @@ async function onPage(page: Page, pts: Vec3[]): Promise<[number, number][]> {
 async function twoBoxes(page: Page, frame: FrameLocator) {
   await addSolid(page);
   await addSolid(page, { at: [50, 0, 0], size: [30, 30, 30] });
-  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeTotal of 2 bodies · 35,000 mm³');
+  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeBody 1: 8000 mm³ · Body 2: 27,000 mm³');
   await frame.locator('[data-cad-toolbar] [data-command="view.fit"]').click();
 }
 
@@ -86,7 +86,7 @@ test('cad:p1-review3-precision a size field shows every stored digit while edite
   const { seen, frame } = await freshPart(page, request);
   // A 20 x 20 profile: its extrude's distance is the size field.
   await addSolid(page);
-  const vol = frame.locator('[data-chip="volume"] [data-volume-mm3]');
+  const vol = soloVolume(frame);
   await frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="extrude"] > .tree-row').dblclick();
   const panel = frame.locator('[data-cad-panel="feature"]');
   const len = panel.locator('.nui[data-field="distance"] input');
@@ -94,7 +94,7 @@ test('cad:p1-review3-precision a size field shows every stored digit while edite
   await len.press('Enter');
   // Still in the field: every digit; out of it: the readout's 6 significant digits.
   await expect(len).toHaveValue('12.3456789');
-  await expect.poll(async () => Number(await vol.getAttribute('data-volume-mm3'))).toBeCloseTo(12.3456789 * 400, 9);
+  await expect.poll(() => singleVolume(frame)).toBeCloseTo(12.3456789 * 400, 9);
   await len.press('Tab');
   await expect(len).toHaveValue('12.3457');
   // Back in the field: every digit again (it showed "12.3457", and an edit dropped the rest).
@@ -104,12 +104,12 @@ test('cad:p1-review3-precision a size field shows every stored digit while edite
   await len.type('1');
   await len.press('Enter');
   await expect(len).toHaveValue('12.34567891');
-  await expect.poll(async () => Number(await vol.getAttribute('data-volume-mm3'))).toBeCloseTo(12.34567891 * 400, 9);
+  await expect.poll(() => singleVolume(frame)).toBeCloseTo(12.34567891 * 400, 9);
   // Focus and leave without typing: nothing is stored again (no undo step, the value as it was).
   await len.press('Tab');
   await len.click();
   await len.press('Tab');
-  await expect.poll(async () => Number(await vol.getAttribute('data-volume-mm3'))).toBeCloseTo(12.34567891 * 400, 9);
+  await expect.poll(() => singleVolume(frame)).toBeCloseTo(12.34567891 * 400, 9);
   // Large values: grouped as a readout, plain while edited.
   await len.fill('1234567.891');
   await len.press('Enter');
@@ -139,16 +139,16 @@ test('cad:p1-review3-escape-selection Escape with nothing open lets go of the vi
   await twoBoxes(page, frame);
   await pickBody2Face(page, frame);
   await page.keyboard.press('Escape');
-  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeTotal of 2 bodies · 35,000 mm³');
+  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeBody 1: 8000 mm³ · Body 2: 27,000 mm³');
   // A panel open: the first Escape closes the panel and keeps the selection, as before.
   await pickBody2Face(page, frame);
-  await frame.locator('[data-cad-toolbar] [data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   await expect(frame.locator('[data-cad-panel="params"]')).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(frame.locator('[data-cad-panel="params"]')).toHaveCount(0);
   await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeBody 2 · 27,000 mm³');
   await page.keyboard.press('Escape');
-  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeTotal of 2 bodies · 35,000 mm³');
+  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeBody 1: 8000 mm³ · Body 2: 27,000 mm³');
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
 });
@@ -166,14 +166,14 @@ test('cad:p1-review3-hide-deselects hiding a selected body takes it, and its fac
   await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeBody 2 · 27,000 mm³');
   await body2.locator('[data-body-act="visibility"]').click();
   await expect(body2).not.toHaveClass(/selected/);
-  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeTotal of 1 shown body · 8000 mm³');
+  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeBody 1 · 8000 mm³ (1 hidden body not listed)');
   await body2.locator('[data-body-act="visibility"]').click();
   // A face selected in the viewport, then its body hidden from the viewport's own menu.
   await pickBody2Face(page, frame);
   const [at] = await onPage(page, [[65, 0, 15]]);
   await page.mouse.click(at[0], at[1], { button: 'right' });
   await frame.locator('[data-cad-menu] [data-menu-item="body-visibility"]').click();
-  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeTotal of 1 shown body · 8000 mm³');
+  await expect(frame.locator('[data-chip="volume"]')).toHaveText('VolumeBody 1 · 8000 mm³ (1 hidden body not listed)');
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
 });
@@ -274,7 +274,7 @@ test('cad:p1-review3-view-kept the origin planes Always and the camera are kept 
 test("cad:p1-review3-param-in-use a parameter in use says who uses it: \"width can't be deleted: h and Extrude 1 use it\"", async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tb = frame.locator('[data-cad-toolbar]');
-  await tb.locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   const params = frame.locator('[data-cad-panel="params"]');
   const add = async (name: string, expr: string) => {
     await params.locator('[aria-label="New parameter name"]').fill(name);
@@ -292,7 +292,7 @@ test("cad:p1-review3-param-in-use a parameter in use says who uses it: \"width c
   await setField(panel, 'distance', 'width');
   await panel.locator('[data-panel-done]').click();
   await expect(panel).toHaveCount(0);
-  await tb.locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   await params.locator('[data-param-row="width"] [data-param-delete]').click();
   await expect(params.locator('[data-param-error="width"]')).toHaveText("width can't be deleted: h and Extrude 1 use it");
   await expect(params.locator('[data-param-row="width"]')).toHaveCount(1);

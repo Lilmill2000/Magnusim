@@ -82,7 +82,10 @@ export type RefResolution =
 export interface NamingLookup {
   /** Topo of the given faces (face_mass on, face_bbox 'fast' is enough). */
   faces(shape: ShapeId, indices: number[] | 'all'): Promise<TopoResult['faces']>;
+  /** Edges with their faces (P4a: also their ends and a line's direction, topo edge_ends). */
   edges?(shape: ShapeId, indices: number[] | 'all'): Promise<TopoResult['edges']>;
+  /** P4a: vertices with the faces at each (topo vertex_faces), for vertex references (src/naming/edges.ts). */
+  vertices?(shape: ShapeId, indices: number[] | 'all'): Promise<TopoResult['vertices']>;
 }
 
 /** A stored reference resolved against one body (helper input). */

@@ -9,6 +9,6 @@ occt_key: 55fc9e3e1aa4
 compile: em++ -std=c++17 -O3 -fwasm-exceptions -msimd128 -ffile-prefix-map=<build root>=/cad-build -ffile-prefix-map=<plugin>=/cad-plugin 
 link: -O3 -fwasm-exceptions -msimd128 -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sINITIAL_MEMORY=64MB -sSTACK_SIZE=8MB -sEXPORTED_FUNCTIONS=[_mk_call,_mk_alloc,_mk_free,_malloc,_free] -sEXPORTED_RUNTIME_METHODS=[ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAPF32,HEAPU32] -sEXPORT_NAME=createMagnusimKernel -sFILESYSTEM=0 
 occt_install: occt-wasm32-55fc9e3e1aa4
-facade_sources: 051b843a04dbf4d43a2a26602bdd023361b559ac4823d8e277ac6a5c26a8ccb7
-mk32.wasm: 21279647 bytes sha256=3b7a16d6d03f78744cd5709cc773b127ec76ed51e296f65181c46cb51a87daa5
+facade_sources: f4a6ab3627ba36001e61eaa162715b9ebea587fcd8d63be747767995f7fd53c9
+mk32.wasm: 22076984 bytes sha256=4df12d7a6fe61a6e0aae3572245dce0bd560a97365f20d9d0790f4209b0c6a42
 mk32.mjs: 29426 bytes sha256=aad011be5d356a6a96a5c7e5eed1264a2c59382849d9a475fa9300732a856c59

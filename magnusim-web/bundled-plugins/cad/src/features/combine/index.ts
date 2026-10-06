@@ -11,6 +11,7 @@ import { selectedBodies } from '../../ui/tree/model';
 import { P2_ICONS } from '../p2/icons';
 import { combineDef } from './feature';
 import { CombinePanel } from './panel';
+import { userSelection } from '../../lib/selection';
 
 export const COMBINE_COMMAND = 'modify.combine';
 
@@ -19,7 +20,7 @@ export function runCombine(services: AppServices): void {
   const p = ui.state.get().panel;
   if (p?.kind === 'feature' && p.isNew && p.type === 'combine') return;
   const built = new Set(services.doc.state.get().rebuild.bodies.map((b) => b.id));
-  const picked = [...selectedBodies(services.selection.get())].filter((id) => built.has(id));
+  const picked = [...selectedBodies(userSelection(services.selection.get()))].filter((id) => built.has(id));
   const init: Partial<CombineFeature> | undefined = picked.length ? { targets: picked.slice(0, 1), tools: picked.slice(1) } : undefined;
   ui.openNew('combine', init);
 }

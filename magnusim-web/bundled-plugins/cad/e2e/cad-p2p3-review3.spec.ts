@@ -38,7 +38,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 
@@ -126,7 +126,7 @@ async function combine(frame: FrameLocator, op: 'join' | 'cut' | 'intersect', ta
   const folder = frame.locator('[data-cad-tree] [data-bodies-folder]');
   if ((await folder.getAttribute('aria-expanded')) !== 'true') await folder.locator('> .tree-row .tw').click();
   const bodies = frame.locator('[data-cad-tree] [data-body-row]');
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   const p = panel(frame);
   await p.locator('[data-field="op"] select').selectOption(op);
   await p.locator('[data-pick-list="targets"]').click();
@@ -450,7 +450,7 @@ test('cad:p2p3-review3-menu-hover hovering the disabled Delete in the tree menu 
 test("cad:p2p3-review3-step-header the exported STEP's FILE_NAME names the file and leaves the author blank", async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await addSolid(page);
-  await tb(frame).locator('[data-command="file.export-step"]').click();
+  await runCommand(frame, 'file.export-step');
   const ex = panel(frame);
   const dl = page.waitForEvent('download');
   await ex.locator('[data-export-run]').click();
@@ -495,7 +495,7 @@ test('cad:p2p3-review3-plane-labels origin plane labels are never drawn under a 
   expect(s.shown.sort()).toEqual(['Front', 'Right', 'Top']);
   expect(s.problems).toEqual([]);
   // The Parameters panel opens over the left of the view.
-  await tb(frame).locator('[data-command="modify.parameters"]').click();
+  await runCommand(frame, 'modify.parameters');
   await expect(panel(frame)).toHaveCount(1);
   await settled(page);
   s = await labels();

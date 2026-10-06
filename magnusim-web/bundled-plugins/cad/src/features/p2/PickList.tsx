@@ -31,6 +31,7 @@ export function PickList({
   error,
   single = false,
   empty = null,
+  onMove,
 }: {
   field: string;
   label: ReactNode;
@@ -46,6 +47,8 @@ export function PickList({
   single?: boolean;
   /** What an empty list means, in the list itself ("All solid bodies"), instead of "(none)". */
   empty?: string | null;
+  /** The order matters (a loft's profiles): each row gets Move up / Move down (P4a review: a section inside the body could not be reordered). */
+  onMove?(key: string, by: -1 | 1): void;
 }) {
   return (
     <div className={`cad-pick${active ? ' is-active' : ''}`} data-pick-field={field} data-active={active ? '1' : '0'}>
@@ -67,7 +70,7 @@ export function PickList({
             {empty}
           </li>
         ) : null}
-        {rows.map((r) => (
+        {rows.map((r, i) => (
           <li
             key={r.key}
             className={`bc-assign-item${r.missing ? ' is-missing' : ''}`}
@@ -87,6 +90,29 @@ export function PickList({
                 {r.sub}
               </span>
             ) : null}
+            {onMove && rows.length > 1
+              ? ([-1, 1] as const).map((by) => {
+                  const can = by < 0 ? i > 0 : i < rows.length - 1;
+                  return (
+                    <button
+                      key={by}
+                      type="button"
+                      className={`cad-pick-move${can ? '' : ' is-end'}`}
+                      aria-label={`Move ${r.label} ${by < 0 ? 'up' : 'down'}`}
+                      title={by < 0 ? 'Move up (earlier in the order)' : 'Move down (later in the order)'}
+                      data-pick-move={by < 0 ? 'up' : 'down'}
+                      tabIndex={can ? 0 : -1}
+                      aria-hidden={can ? undefined : true}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (can) onMove(r.key, by);
+                      }}
+                    >
+                      {by < 0 ? '↑' : '↓'}
+                    </button>
+                  );
+                })
+              : null}
             <button
               type="button"
               className="bc-assign-x"

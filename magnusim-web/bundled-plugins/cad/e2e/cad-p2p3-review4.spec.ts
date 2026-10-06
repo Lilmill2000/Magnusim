@@ -36,7 +36,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, singleVolume } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 const FLANGE = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'kernel', 'flange.step');
@@ -133,7 +133,7 @@ async function finishSketch(page: Page, frame: FrameLocator) {
 
 /** A rectangle typed w x h: from `corner` toward `toward` (corner tool), or about `corner` (centre tool). */
 async function typedRect(page: Page, frame: FrameLocator, corner: V3, toward: V3, w: number, h: number, centre = false) {
-  await tb(frame).locator(`[data-command="${centre ? 'sketch.rectangle-center' : 'sketch.rectangle'}"]`).click();
+  await runCommand(frame, centre ? 'sketch.rectangle-center' : 'sketch.rectangle');
   await clickAt(page, corner);
   await sweep(page, corner, toward, 4);
   await expect(frame.locator('[data-sketch-box="width"]')).toBeVisible();
@@ -179,9 +179,14 @@ async function openBodies(frame: FrameLocator) {
   return frame.locator('[data-cad-tree] [data-body-row]');
 }
 
-const volumeMm3 = async (frame: FrameLocator) => Number(await frame.locator('[data-chip="volume"] [data-volume-mm3]').getAttribute('data-volume-mm3'));
+/** The chip's one volume (mm³) once it lists a single body (a click on a body row, or a Cut that leaves one body). */
+async function volumeMm3(frame: FrameLocator): Promise<number> {
+  let v = NaN;
+  await expect.poll(async () => (v = await singleVolume(frame)), { timeout: 30_000, message: 'one volume in the chip' }).not.toBeNaN();
+  return v;
+}
 async function expectVolume(frame: FrameLocator, mm3: number, rel = 1e-6) {
-  await expect.poll(() => volumeMm3(frame).then((v) => Math.abs(v - mm3) <= rel * mm3), { timeout: 30_000, message: `volume ${mm3} mm³` }).toBe(true);
+  await expect.poll(() => singleVolume(frame).then((v) => Math.abs(v - mm3) <= rel * mm3), { timeout: 30_000, message: `volume ${mm3} mm³` }).toBe(true);
 }
 
 /** Where the tree card and the open panel are, the free part of the view right of them, and the stage. */
@@ -505,7 +510,7 @@ test('cad:p2p3-review4-split-keeps-plane Split by the Right plane at 15 mm keeps
   await finishSketch(page, frame);
   await extrudeAt(page, frame, [10, 10, 0], 'Extrude 1', 20);
   await expectVolume(frame, 8000);
-  await tb(frame).locator('[data-command="modify.split"]').click();
+  await runCommand(frame, 'modify.split');
   const p = panel(frame);
   const bodies = await openBodies(frame);
   await bodies.first().locator('.tree-row').first().click();
@@ -566,7 +571,7 @@ test('cad:p2p3-review4-tree-width the tree card keeps its width when a warning g
   await centredBlock(page, frame, 10, 20, [0, 8, 0], 'Extrude 2');
   // Combine 1 joins them (no warning), under a name of a usual length: its row is the widest.
   const bodies = await openBodies(frame);
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   const p = panel(frame);
   await p.locator('[data-pick-list="targets"]').click();
   await bodies.nth(0).locator('.tree-row').first().click();
@@ -625,7 +630,7 @@ test('cad:p2p3-review4-intersect-tools Combine Intersect with two tools keeps wh
   await centredBlock(page, frame, 40, 10, [15, 0, 0], 'Extrude 3');
   const bodies = await openBodies(frame);
   await expect(bodies).toHaveCount(3);
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   const p = panel(frame);
   await p.locator('[data-field="op"] select').selectOption('intersect');
   await expect(p.locator('[data-combine-op-hint]')).toHaveText('Keep only what each target shares with all the tools');

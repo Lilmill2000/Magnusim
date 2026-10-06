@@ -137,14 +137,14 @@ test('cad:p1-review2-escape Escape in a viewport popover closes the popover, not
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:p1-review2-volume-fallback a selected body that is suppressed or deleted leaves the selection: the chip shows the total', async ({ page, request }) => {
+test('cad:p1-review2-volume-fallback a selected body that is suppressed or deleted leaves the selection: the chip shows each shown body', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const chip = frame.locator('[data-chip="volume"]');
   const tree = frame.locator('[data-cad-tree]');
   const menu = frame.locator('[data-cad-menu]');
   await addSolid(page);
   await addSolid(page, { at: [50, 0, 0] });
-  await expect(chip).toHaveText('VolumeTotal of 2 bodies · 16,000 mm³');
+  await expect(chip).toHaveText('VolumeBody 1: 8000 mm³ · Body 2: 8000 mm³');
   await frame.locator('[data-cad-toolbar] [data-command="view.fit"]').click();
   // Right-click the second cube's front face in the viewport: it is selected (the chip says Body 2),
   // and its menu suppresses Extrude 2. The selection was left on a body that is gone, and the chip vanished.
@@ -156,9 +156,9 @@ test('cad:p1-review2-volume-fallback a selected body that is suppressed or delet
   await expect(featureRow(frame, 'Extrude 2')).toHaveAttribute('data-suppressed', '1');
   await expect(tree.locator('[data-bodies-folder] > .tree-row .tl')).toHaveText('Bodies (1)');
   await expect(chip).toHaveText('Volume8000 mm³');
-  // Unsuppressed: the old selection is gone, so the chip is the total of both.
+  // Unsuppressed: the old selection is gone, so the chip lists both, each on its own.
   await rowMenu(frame, featureRow(frame, 'Extrude 2'), 'suppress');
-  await expect(chip).toHaveText('VolumeTotal of 2 bodies · 16,000 mm³');
+  await expect(chip).toHaveText('VolumeBody 1: 8000 mm³ · Body 2: 8000 mm³');
   // Deleted from the same menu while selected: the same.
   at = await onBox2();
   await page.mouse.click(at[0], at[1], { button: 'right' });

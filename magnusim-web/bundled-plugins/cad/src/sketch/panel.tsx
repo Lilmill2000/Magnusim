@@ -84,9 +84,15 @@ export function SketchPanel({ session, feature, isNew }: FeaturePanelProps) {
     if (d.support?.kind !== 'face') return null;
     const sup = d.support;
     const body = s.rebuild.bodies.find((b) => b.id === sup.body);
-    const from = sup.face?.name ? describeFace(sup.face.name, (id) => s.doc.features.find((f) => f.id === id)?.name ?? null) : `A face of ${body?.name ?? 'a body'}`;
+    const from = sup.face?.name ? describeFace(sup.face.name, (id) => s.doc.features.find((f) => f.id === id)?.name ?? null, body?.names?.faces ?? null) : `A face of ${body?.name ?? 'a body'}`;
     const at = body?.names && sup.face?.name ? body.names.faces.findIndex((n) => n === sup.face.name || splitMerged(n).includes(sup.face.name)) : -1;
     return { label: at >= 0 && body ? `Face ${at + 1} of ${body.name}` : from, from };
+  });
+  // P4a: a sketch on a CONSTRUCT plane names it ("Plane 1").
+  const refPlane = useStateStore(services.doc.state, (s) => {
+    const d = (s.doc.features.find((f) => f.id === feature) ?? session.draft) as SketchFeature;
+    const sup = d.support;
+    return sup?.kind === 'feature' ? (s.doc.features.find((f) => f.id === sup.feature)?.name ?? 'A deleted plane') : null;
   });
   const note = useStateStore(ui.state, (s) => s.panelNote);
   const onDelete = usePanelDelete(services, feature, isNew);
@@ -94,7 +100,7 @@ export function SketchPanel({ session, feature, isNew }: FeaturePanelProps) {
   const draft = (view.draft ?? session.draft) as SketchFeature;
   if (!mode) return null;
 
-  const plane = draft.support?.kind === 'plane' ? ORIGIN_PLANES[draft.support.plane].label : (face?.label ?? 'A face');
+  const plane = draft.support?.kind === 'plane' ? ORIGIN_PLANES[draft.support.plane].label : (refPlane ?? face?.label ?? 'A face');
   const planeTitle = face && face.label !== face.from ? `${face.label}, from ${face.from}` : undefined;
   const state = view.status?.state ?? draft.solved?.state ?? 'unsolved';
   const words = view.status ? statusText(view.status, draft.entities.length === 0) : 'Solving…';

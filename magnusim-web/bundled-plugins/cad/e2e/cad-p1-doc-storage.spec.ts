@@ -13,7 +13,7 @@
 // rebuilt volume.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Page } from '@playwright/test';
-import { addSketch, addSolid, baseUrl, headerTakesKeyboard, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, baseUrl, headerTakesKeyboard, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, soloVolume } from './helpers';
 
 type Snap = {
   status: string;
@@ -110,7 +110,7 @@ test('cad:p1-doc-storage the model lives outside the study record, autosaves and
   expect(s1.bodies[0].volume!).toBeCloseTo(expected, 6);
   // The user sees it: the history is no longer empty and the volume chip shows the cut body.
   await expect(frameLoc.locator('[data-tree-empty="history"]')).toHaveCount(0);
-  const vol = frameLoc.locator('[data-chip="volume"] [data-volume-mm3]');
+  const vol = soloVolume(frameLoc);
   await expect(vol).toBeVisible();
   expect(Number(await vol.getAttribute('data-volume-mm3'))).toBeCloseTo(expected, 6);
   await expect(frameLoc.locator('[data-chip="save"]')).toHaveText('Saved');
@@ -224,7 +224,7 @@ test('cad:p1-doc-respawn a kernel stopped by its watchdog respawns and the part 
   const s2 = await waitFor(frame, (s) => s.respawns === 1 && s.seq > s1.seq && s.rebuild === 'done' && s.bodies.length === 1, 'the rebuild after the respawn');
   expect(s2.bodies[0].volume!).toBeCloseTo(s1.bodies[0].volume!, 6);
   // The user sees the same volume, and no kernel chip once it is back.
-  const vol = page.frameLocator('#workspace-frame').locator('[data-chip="volume"] [data-volume-mm3]');
+  const vol = soloVolume(page.frameLocator('#workspace-frame'));
   expect(Number(await vol.getAttribute('data-volume-mm3'))).toBeCloseTo(s1.bodies[0].volume!, 6);
   await expect(page.frameLocator('#workspace-frame').locator('[data-cad-app]')).toHaveAttribute('data-kernel', 'ready');
   expect(seen.csp).toEqual([]);

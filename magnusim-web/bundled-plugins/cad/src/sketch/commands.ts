@@ -20,9 +20,10 @@ import type { OriginPlaneRef } from '../types/doc';
 import type { SketchToolId } from '../types/sketch';
 import type { SelectionItem } from '../types/selection';
 import type { OverlayLayer } from '../types/viewport';
-import { clearSelection } from '../lib/selection';
+import { clearSelection, userItems } from '../lib/selection';
 import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import { uiFor } from '../ui/controller';
+import { constructOf, constructOutput } from '../features/refgeom/api';
 import { CONSTRAIN_COMMANDS, planConstraint } from './constraints';
 import { SketchBuilder, toggleConstruction } from './edit';
 import { SKETCH_ICONS } from './icons';
@@ -30,14 +31,26 @@ import { entityOf, ORIGIN, RELATION_LABELS } from './model';
 import { planeY, type SketchMode } from './mode';
 
 export const CURVED_FACE = 'Sketches go on flat faces: that face is curved';
+/** A CONSTRUCT plane selected that did not build (failed, suppressed or rolled back). */
+export const NOT_BUILT = ' is not built: fix it or roll forward first';
 export const PICK_PROMPT = 'Select a plane or a flat face for the sketch (Esc stops)';
 
-/** The sketch support a model selection gives: one origin plane, or one flat face. */
-export function supportFromSelection(services: AppServices, items: readonly SelectionItem[] = services.selection.get().items): { kind: 'plane'; plane: OriginPlaneRef } | { kind: 'pick'; body: string; index: number } | string {
+/** The sketch support a model selection gives: one origin plane, one CONSTRUCT plane (P4a), or one flat face. */
+export function supportFromSelection(
+  services: AppServices,
+  items: readonly SelectionItem[] = userItems(services.selection),
+): { kind: 'plane'; plane: OriginPlaneRef } | { kind: 'feature'; feature: string } | { kind: 'pick'; body: string; index: number } | string {
   const reason = 'Select a plane or a flat face, then Sketch';
   if (items.length !== 1) return reason;
   const it = items[0];
   if (it.kind === 'origin' && (it.ref === 'origin:top' || it.ref === 'origin:front' || it.ref === 'origin:right')) return { kind: 'plane', plane: it.ref };
+  // A reference Plane (its tree row, or a click on it in the view); one that did not build says so.
+  const c = constructOf(services, it);
+  if (c?.kind === 'plane') {
+    const s = services.doc.state.get();
+    if (!constructOutput(s, c.feature)) return `${s.doc.features.find((f) => f.id === c.feature)?.name ?? 'That plane'}${NOT_BUILT}`;
+    return { kind: 'feature', feature: c.feature };
+  }
   if (it.kind === 'face') {
     const h = services.viewport.get().handle;
     if (h && !h.planeNormal(it)) return CURVED_FACE;
@@ -149,11 +162,12 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
       const block = ui.editBlock();
       if (block) return block;
       // A curved face selected is a reason; anything else (nothing, an edge) waits for a pick.
-      return supportFromSelection(s) === CURVED_FACE ? CURVED_FACE : true;
+      const sup = supportFromSelection(s);
+      return sup === CURVED_FACE || (typeof sup === 'string' && sup.includes(NOT_BUILT)) ? sup : true;
     },
     run: async (s) => {
       const sup = supportFromSelection(s);
-      if (sup === CURVED_FACE) return;
+      if (sup === CURVED_FACE || (typeof sup === 'string' && sup.includes(NOT_BUILT))) return;
       if (typeof sup === 'string') {
         picker.arm();
         return;

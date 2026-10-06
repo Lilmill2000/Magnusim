@@ -16,7 +16,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, modelOnPage, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, modelOnPage, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 
@@ -147,7 +147,7 @@ test('cad:sd-review2-part-shrinks the part shrinks under a side set inwards: the
   await p.locator('[data-panel-done]').click();
 
   // The fluid: Combine Cut, the Enclosure the target, Body 1 the tool.
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   await p.locator('[data-field="op"] select').selectOption('cut');
   await p.locator('[data-pick-list="targets"]').click();
   const folder = frame.locator('[data-cad-tree] [data-bodies-folder]');

@@ -46,7 +46,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSketch, addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 
@@ -547,7 +547,7 @@ async function bodyRows(frame: FrameLocator) {
 /** Combine with one target and one tool picked from the tree. */
 async function combine(frame: FrameLocator, op: 'join' | 'cut' | 'intersect', target: number, tool: number) {
   const bodies = await bodyRows(frame);
-  await tb(frame).locator('[data-command="modify.combine"]').click();
+  await runCommand(frame, 'modify.combine');
   const p = panel(frame);
   await p.locator('[data-field="op"] select').selectOption(op);
   await p.locator('[data-pick-list="targets"]').click();
@@ -567,7 +567,7 @@ test('cad:p2p3-review2-center-rect-labels a centre rectangle typed 20 x 10 besid
   await sketchIdle(page);
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
-  await tb(frame).locator('[data-command="sketch.rectangle-center"]').click();
+  await runCommand(frame, 'sketch.rectangle-center');
   await clickAt(page, [30, 20, 0]);
   await sweep(page, [30, 20, 0], [37, 24, 0], 4);
   await expect(frame.locator('[data-sketch-box="width"]')).toBeVisible();

@@ -37,6 +37,15 @@ export interface MenuState {
   y: number;
   items: MenuEntry[];
   label: string;
+  /** Who opened it ("tb-more:modify": a toolbar group's More menu), so its button can show it open. */
+  owner?: string;
+  /** The button that opened it: a press on it toggles the menu, and Escape or Tab gives it the keyboard back. */
+  anchor?: HTMLElement | null;
+}
+
+export interface MenuOptions {
+  owner?: string;
+  anchor?: HTMLElement | null;
 }
 
 export interface UiState {
@@ -81,7 +90,7 @@ export interface UiController {
   setBodyInSimulation(id: BodyId, include: boolean): void;
   featureMenu(id: FeatureId): MenuEntry[];
   bodyMenu(id: BodyId): MenuEntry[];
-  showMenu(x: number, y: number, items: MenuEntry[], label?: string): void;
+  showMenu(x: number, y: number, items: MenuEntry[], label?: string, opts?: MenuOptions): void;
   closeMenu(): void;
   /** The feature a viewport pick belongs to (the one that last changed its body). */
   featureOfItem(item: SelectionItem): FeatureId | null;
@@ -495,10 +504,10 @@ export function createUiController(services: AppServices): UiController {
       if (f) items.push({ sep: true, id: 'sep-body-feature' }, { id: 'body-edit', label: `Edit ${f.name}`, disabled: block, run: () => c.openEdit(f.id) });
       return items;
     },
-    showMenu(x, y, items, label = 'Actions') {
+    showMenu(x, y, items, label = 'Actions', opts = {}) {
       if (!items.length) return;
       hideTip();
-      state.set({ menu: { x, y, items, label } });
+      state.set({ menu: { x, y, items, label, ...(opts.owner ? { owner: opts.owner } : {}), ...(opts.anchor ? { anchor: opts.anchor } : {}) } });
     },
     closeMenu,
     featureOfItem(item) {

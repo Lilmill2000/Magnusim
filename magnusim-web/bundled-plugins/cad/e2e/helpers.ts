@@ -2,7 +2,7 @@
 // opening the Part workspace, and collecting CSP violations / console errors
 // from the page and the frame. Owner: INTEGRATE (builders may add helpers at the end).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
+import { expect, type APIRequestContext, type FrameLocator, type Locator, type Page } from '@playwright/test';
 
 export function baseUrl(): string {
   const b = process.env.CAD_E2E_BASE_URL;
@@ -608,4 +608,96 @@ export async function wallOn(request: APIRequestContext, projectId: string, simI
   const j = await r.json();
   expect(r.ok(), JSON.stringify(j)).toBe(true);
   return j.bc.id;
+}
+
+// ---------------------------------------------------------------- P4a integration
+
+/**
+ * Runs a toolbar command as a user does: its button, or, when the toolbar folded it into its
+ * group's More menu (a frame too narrow for every label, src/ui/Toolbar.tsx FOLD_ORDER), More
+ * and then the menu's item. Fails when the command is in neither place.
+ */
+export async function runCommand(frame: FrameLocator, id: string): Promise<void> {
+  const tb = frame.locator('[data-cad-toolbar]');
+  const btn = tb.locator(`.tb-btn[data-command="${id}"]`);
+  const more = tb.locator(`[data-tb-more][data-more-commands~="${id}"]`);
+  await expect(btn.or(more), `${id}: a toolbar button or a More menu's item`).toHaveCount(1);
+  if (await btn.count()) {
+    await btn.click();
+    return;
+  }
+  const menu = frame.locator('[data-cad-menu]');
+  if ((await more.getAttribute('aria-expanded')) !== 'true') await more.click();
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  await menu.locator(`[data-command="${id}"]`).click();
+  await expect(menu).toHaveCount(0);
+}
+
+/**
+ * The labels of a toolbar group's commands in their order, the ones shown and the ones in its
+ * More menu (opened to read them, then closed with Escape), as a user finds them.
+ */
+export async function groupCommandLabels(frame: FrameLocator, group: string): Promise<string[]> {
+  const g = frame.locator(`[data-cad-toolbar] [data-group="${group}"]`);
+  const shown = await g.locator('.tb-btn[data-command]').evaluateAll((els) => els.map((e) => ({ i: Number(e.getAttribute('data-index')), label: e.getAttribute('aria-label') ?? '' })));
+  const more = g.locator('[data-tb-more]');
+  if (!(await more.count())) return shown.map((s) => s.label);
+  await more.click();
+  const menu = frame.locator('[data-cad-menu]');
+  const folded = await menu.locator('[data-command] .cad-menu-label').allTextContents();
+  const ids = ((await more.getAttribute('data-more-commands')) ?? '').split(' ');
+  await menu.press('Escape');
+  await expect(menu).toHaveCount(0);
+  // Folded commands keep their order in the group; the ids say where each one goes.
+  const order = await frame.locator('[data-cad-app]').evaluate(
+    (_el, arg) => {
+      const reg = (window as unknown as { __CAD__: { services: { commands: { toolbar(m: string): { group: string; commands: { id: string }[] }[] } } } }).__CAD__.services.commands;
+      for (const m of ['model', 'sketch']) {
+        const g2 = reg.toolbar(m).find((x) => x.group === arg.group);
+        if (g2) return g2.commands.map((c) => c.id);
+      }
+      return [];
+    },
+    { group },
+  );
+  const all = [...shown, ...folded.map((label, k) => ({ i: order.indexOf(ids[k]), label }))];
+  return all.sort((a, b) => a.i - b.i).map((x) => x.label);
+}
+
+/**
+ * The volume chip's values (mm³), one per body listed, in its order; none while it shows no
+ * volume. Never throws when there are several bodies (the chip lists each one, never a total).
+ */
+export async function chipVolumes(frame: FrameLocator): Promise<number[]> {
+  return frame.locator('[data-chip="volume"] [data-volume-mm3]').evaluateAll((els) => els.map((e) => Number(e.getAttribute('data-volume-mm3'))));
+}
+
+/**
+ * The one volume the chip shows when it lists a single body (mm³), else NaN: safe inside
+ * expect.poll while a second body briefly exists (an Extrude still New body before Cut), which a
+ * strict locator read would throw on instead of retrying.
+ */
+export async function singleVolume(frame: FrameLocator): Promise<number> {
+  const v = await chipVolumes(frame);
+  return v.length === 1 ? v[0] : NaN;
+}
+
+/**
+ * The chip's value element while it lists exactly one body (no "Body 1: … · Body 2: …" list):
+ * assertions on it wait through a moment with two bodies instead of failing in strict mode.
+ */
+export const soloVolume = (frame: FrameLocator) => frame.locator('[data-chip="volume"]:not(:has([data-volume-list])) [data-volume-mm3]');
+
+/**
+ * A toolbar command's control as a user finds it: its button, or (folded) the item of its
+ * group's More menu, which is opened for it. Close an opened menu with Escape when done.
+ */
+export async function commandControl(frame: FrameLocator, id: string): Promise<Locator> {
+  const tb = frame.locator('[data-cad-toolbar]');
+  const btn = tb.locator(`.tb-btn[data-command="${id}"]`);
+  const more = tb.locator(`[data-tb-more][data-more-commands~="${id}"]`);
+  await expect(btn.or(more), `${id}: a toolbar button or a More menu's item`).toHaveCount(1);
+  if (await btn.count()) return btn;
+  if ((await more.getAttribute('aria-expanded')) !== 'true') await more.click();
+  return frame.locator(`[data-cad-menu] [data-command="${id}"]`);
 }
