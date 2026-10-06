@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { CONVERGENCE_PROJECT } from './seed.js';
 
@@ -14,7 +14,8 @@ import { CONVERGENCE_PROJECT } from './seed.js';
 //    "Converged after N iterations" and a note of how (the residuals, or the monitor's
 //    sentence), and a "Converged" badge on its tree row. One that ran to its iteration
 //    limit keeps the v0.2.0 title and line ("Run finished", "N iterations") and a marked
-//    note that it did not converge.
+//    note that it did not converge. A converged run is a finished one: it is offered
+//    Continue (F6) from its last saved result.
 // 3. "Copy from previous run" carries the stop: it follows its monitor to the copy's
 //    own (new) monitor, and the copy's panel shows it picked.
 // Fails on the code before F5: the panel had no such setting, a converged run read
@@ -205,6 +206,10 @@ test('a converged run says so in the Run panel and on its tree row', async ({ pa
     last_saved_iteration: 215,
     converged: { by: 'residuals', iteration: 215 },
   });
+  // Its last saved result, what Continue starts from.
+  const savedAt = join((await runRow(request, residuals)).case_dir, '215');
+  mkdirSync(savedAt, { recursive: true });
+  for (const f of ['U', 'p']) writeFileSync(join(savedAt, f), 'x');
   const settled = await seedDone('Settled', {
     iteration: 140,
     last_saved_iteration: 140,
@@ -238,6 +243,12 @@ test('a converged run says so in the Run panel and on its tree row', async ({ pa
   await expect(badge(residuals)).toHaveAttribute('title', 'Converged after 215 iterations');
   await expect(badge(settled)).toHaveText('Converged');
   await expect(badge(limit)).toHaveCount(0);
+  // Converged is finished (status done): Continue is offered, from iteration 215.
+  const cont = runControl.locator('[data-run-continue="1"]');
+  await expect(cont).toBeVisible();
+  await expect(cont.locator('[data-run-continue-go="1"]')).toBeEnabled();
+  await expect(cont.locator('[data-run-continue-reason="1"]')).toHaveCount(0);
+  await expect(cont.locator('[data-run-continue-hint="1"]')).toContainText('Continues from the last saved result, iteration 215');
 
   runControl = await openRun(page, settled);
   await expect(runControl.locator('[data-run-line="1"]')).toHaveText('Converged after 140 iterations');

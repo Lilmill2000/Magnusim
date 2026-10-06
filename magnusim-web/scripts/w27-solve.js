@@ -1710,8 +1710,11 @@ function writeRunSidecar(projectId, runId, body) {
   }
 }
 
-/** Run statuses Continue is offered for (F6). */
-const CONTINUABLE = new Set(['done', 'stopped', 'converged']);
+/**
+ * Run statuses Continue is offered for (F6). A run that converged (F5) is `done`
+ * with its `converged` set, so it is offered Continue too.
+ */
+const CONTINUABLE = new Set(['done', 'stopped']);
 
 /**
  * Continue a finished or stopped run from its latest saved result (F6): a Start of
@@ -1804,6 +1807,9 @@ export function continuedRunFields(old, cont) {
     exit_code: d.exit_code ?? null,
     error: d.error || null,
     note: d.note || null,
+    // How it ended when it converged (F5: {by, iteration | time, text?}); the new
+    // attempt starts with none and gets its own when it ends.
+    converged: d.converged && typeof d.converged === 'object' ? d.converged : null,
     last_saved_iteration: d.last_saved_iteration ?? null,
     n_steps: d.n_steps ?? null,
     end_time: d.transient && d.transient.end_time != null ? d.transient.end_time : d.endTime ?? null,

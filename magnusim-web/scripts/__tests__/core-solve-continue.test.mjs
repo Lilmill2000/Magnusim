@@ -330,6 +330,46 @@ describe('Continue (F6)', () => {
     assert.deepEqual(fin.residuals.map((r) => r.t), [99, 100, 101, 102, 121]);
   });
 
+  it('a run that converged (F5: done, its converged set) continues; the new attempt converges on its own', async () => {
+    /** The runner's job log of the latest attempt says it converged (its parser's event). */
+    const convergedAt = (job, time) => {
+      const path = store.readFoamRecord(job).log_path;
+      mkdirSync(join(path, '..'), { recursive: true });
+      writeFileSync(path, JSON.stringify({ event: 'converged', by: 'residuals', time }) + '\n');
+    };
+    const rid = draftRun();
+    let { out } = await start(rid);
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    relay([{ event: 'stage', stage: 'solve' }, ...step(60)]);
+    await sleep(FRAME_WAIT);
+    saveFrame(rid, 60);
+    relay([{ event: 'time_saved', t: 60 }]);
+    convergedAt(out.bodyExtra.runner_job_id, 60);
+    endRun(rid, 'done');
+    const ended = runDoc(rid);
+    assert.deepEqual([ended.status, ended.converged], ['done', { by: 'residuals', iteration: 60 }]);
+    // Offered Continue: where it continues from, as for any finished run.
+    assert.equal(w27.getRunStatus(PID, rid, SID).body.run.continue_from, 60);
+
+    ({ out } = await cont(rid, { extraIterations: 40 }));
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.deepEqual(JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart')), { end_time: 100, write_interval: 50 });
+    // The new attempt has not converged (yet); the earlier one's end is kept with it.
+    let doc = runDoc(rid);
+    assert.deepEqual([doc.status, doc.converged], ['running', null]);
+    assert.deepEqual(doc.attempts.map((a) => [a.status, a.converged]), [['done', { by: 'residuals', iteration: 60 }]]);
+    assert.equal(w27.getRunStatus(PID, rid, SID).body.run.converged, null);
+    relay([{ event: 'stage', stage: 'solve' }, ...step(61), ...step(75)]);
+    await sleep(FRAME_WAIT);
+    saveFrame(rid, 75);
+    relay([{ event: 'time_saved', t: 75 }]);
+    convergedAt(out.bodyExtra.runner_job_id, 75);
+    endRun(rid, 'done');
+    doc = runDoc(rid);
+    assert.deepEqual([doc.status, doc.converged, doc.n_steps], ['done', { by: 'residuals', iteration: 75 }, 3]);
+    assert.match(doc.note, /converged after 75 iterations/);
+  });
+
   it('a continued run that stopped and is started from the beginning is a fresh run: no restart, its parts dropped', async () => {
     const rid = await solvedRun('stopped');
     const { out } = await cont(rid, { extraIterations: 20 });

@@ -32385,7 +32385,8 @@ function runConvergedBadge(rec) {
 function continueStateFor(rec, run, ctx) {
   const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '' };
   const status = String((run && run.status) || (rec && rec.status) || '');
-  if (!rec || !run || ctx.running || !['done', 'stopped', 'converged'].includes(status)) return off;
+  // A run that converged (F5) is 'done' with its `converged` set: it continues too.
+  if (!rec || !run || ctx.running || !['done', 'stopped'].includes(status)) return off;
   const transient = runXAxisIsSeconds(run);
   const raw = run.continue_from !== undefined ? run.continue_from : Number(run.last_saved_iteration) > 0 ? run.last_saved_iteration : null;
   const from = raw !== null && raw !== undefined && Number.isFinite(Number(raw)) ? Number(raw) : null;
