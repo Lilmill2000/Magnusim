@@ -1,6 +1,6 @@
 key = "cad"
 name = "Magnusim CAD"
-version = "0.2.0-dev"
+version = "0.1.0"
 # 1.6: leaving the Part workspace brings the project's geometry up to date
 # (ws.nav.onLeave, the exit hook) and hands the viewport the Part's camera.
 # 1.5: a Part links its design into the project as a geometry
