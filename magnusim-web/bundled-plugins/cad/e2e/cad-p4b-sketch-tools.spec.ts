@@ -1099,8 +1099,9 @@ test('cad:p4b-fu-no-not-allowed a fully defined line and the origin keep the nor
   await page.mouse.move(ox - 40, oy + 40);
   await page.mouse.move(ox, oy, { steps: 4 });
   await expect.poll(() => hovered(page)).not.toBeNull();
+  // The cursor follows the hover once the sketch's analysis is in: poll it (a loaded runner lags).
+  await expect.poll(async () => (await cursor()).style).toMatch(/^(default|auto|)$/);
   let c = await cursor();
-  expect(c.style).toMatch(/^(default|auto|)$/);
   expect(c.computed).not.toBe('not-allowed');
   await page.mouse.down();
   await page.mouse.move(ox - 50, oy + 50, { steps: 8 });
@@ -1114,8 +1115,8 @@ test('cad:p4b-fu-no-not-allowed a fully defined line and the origin keep the nor
   await page.mouse.move(bx, by - 30);
   await page.mouse.move(bx, by, { steps: 4 });
   await expect.poll(() => hovered(page)).not.toBeNull();
+  await expect.poll(async () => (await cursor()).style).toMatch(/^(default|auto|)$/);
   c = await cursor();
-  expect(c.style).toMatch(/^(default|auto|)$/);
   expect(c.computed).not.toBe('not-allowed');
   // A drag of it: nothing moves; the words say why.
   const before = (await drawn(page)).points;

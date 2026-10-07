@@ -184,9 +184,24 @@ export const historyState = (frame: Frame) =>
 
 // ---- host API 1.2 (P1.5): CAD can be turned off and on (it ships on, D33); leaving with unsaved work asks
 
+/**
+ * An idempotent read retried when the server resets the socket (ECONNRESET, "socket hang up"),
+ * which a loaded runner does to keep-alive connections now and then; up to 2 more tries.
+ */
+export async function readWithRetry<T>(read: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await read();
+    } catch (e) {
+      if (attempt >= 2 || !/ECONNRESET|socket hang up/i.test(String((e as Error)?.message ?? e))) throw e;
+      await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+    }
+  }
+}
+
 /** CAD's row in GET /api/plugins (null when it is not listed). */
 export async function cadPluginRow(request: APIRequestContext): Promise<Record<string, unknown> | null> {
-  const list = await (await request.get(`${baseUrl()}/api/plugins`)).json();
+  const list = await readWithRetry(async () => (await request.get(`${baseUrl()}/api/plugins`)).json());
   return ((list.plugins || []) as Record<string, unknown>[]).find((p) => p.key === 'cad') ?? null;
 }
 
