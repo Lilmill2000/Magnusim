@@ -224,8 +224,21 @@ test.describe('exit sync fixes (the review of the exits, 2026-10-04)', () => {
     // The job never waited for the slot: no "Queued" (not even for a moment) before it ran.
     expect(shown.statuses.filter((s) => /Queued/.test(s))).toEqual([]);
     expect(shown.statuses).toContain('Building the part');
-    // Finishing named what it still waited for, as the server told it.
-    expect(shown.statuses).toContain('Finishing: the centre of mass, the thumbnail and the project file');
+    // Finishing named what it still waited for, as the server told it: each "Finishing:" line
+    // names only the steps left, with the count done, and a later one never names more. (The
+    // first, none done, can pass before the page samples it on a loaded runner.)
+    const STEPS = ['the centre of mass', 'the thumbnail', 'the project file'];
+    const finishing = shown.statuses.filter((st) => st.startsWith('Finishing: '));
+    expect(finishing.length, JSON.stringify(shown.statuses)).toBeGreaterThan(0);
+    let wasLeft = STEPS.length;
+    for (const st of finishing) {
+      const left = STEPS.filter((x) => st.includes(x));
+      const done = Number((st.match(/\((\d) of 3 done\)/) || [0, 0])[1]);
+      expect(left.length, st).toBeGreaterThan(0);
+      expect(done + left.length, st).toBe(STEPS.length);
+      expect(left.length, JSON.stringify(finishing)).toBeLessThanOrEqual(wasLeft);
+      wasLeft = left.length;
+    }
     stage(t1, `v4 landed quietly; statuses ${JSON.stringify(shown.statuses)}`);
 
     // A second study with a BC on the boss end (face 15 at rev 2); back to v1 moves it 10 mm.
