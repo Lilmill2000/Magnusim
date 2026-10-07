@@ -23,14 +23,14 @@ September 2026 readiness audit. This list preserves the intended work.
   example an airfoil from the Airfoil plugin into a 2D wind tunnel), and the
   2D Wind Tunnel plugin itself.
 
-- **CAD plugin host calls, before its simulation phase (G3-G6, G9):** the CAD
-  workspace keeps its parts in its own files but cannot hand one to the
-  project yet. To add: a workspace call that adds a project geometry from a
-  workspace file, STEP face names kept as patch names, a call that reads the
-  project's geometries, and an “Open in CAD” action on geometry rows (G3-G6).
-  Workspace files are read whole and sent again on every open, and the CAD
-  kernel is 20 MB: stream them, let the browser revalidate them, and serve
-  precompressed copies (G9).
+- **CAD plugin host calls, still to add (G5, G6, G9):** a CAD Part already
+  becomes its project's linked geometry, with its face names as patch names
+  (host API 1.5 and 1.6, `ws.project.linkGeometry` and the exit hook). To add:
+  a call that reads the project's geometries and an “Open in CAD” action on
+  geometry rows, so a geometry added as a STEP file can be edited in CAD and
+  join the same live link (G5, G6). Workspace files are read whole and sent
+  again on every open, and the CAD kernel is 22 MB: stream them, let the
+  browser revalidate them, and serve precompressed copies (G9).
 
 - **Mesher plugins with their own engine:** a mesher plugin can register, but
   generating a mesh with it answers 400 “has no run path in this version”
@@ -96,9 +96,6 @@ September 2026 readiness audit. This list preserves the intended work.
   - Plot tips: the residual plot's and the kit LinePlot's hover tip is at most
     170 px wide and does not wrap, so a readout of four series (U, p, k, ω)
     spills past the tip's own box.
-  - The CAD plugin keeps two copies of `formatSci`
-    (`bundled-plugins/cad/src/ui/kit/format.ts`, `src/doc/units.ts`) that
-    still print 999999.9 as "1000000"; the kit's shows "1.0000e+6".
   - Units: schema forms show SI units for every quantity but length in
     imperial projects.
   - Colour: `results.color_scale.cmap` in project.json is never read; the
@@ -108,9 +105,28 @@ September 2026 readiness audit. This list preserves the intended work.
   - Dead code: `.ml-type-soon`, `.mat-check-btn`, `.mesh-toggle.is-off`,
     `residualPaths`.
 
-- **CAD plugin, after V1 (Magnusim CAD, `bundled-plugins/cad`):** V1 is
-  parametric multi-body parts (sketches, solid features, booleans, STEP
-  editing, CFD preparation). These come back in a later version:
+- **CAD plugin V1 (Magnusim CAD, `bundled-plugins/cad`; 0.1.0,
+  October 2026):** 0.1.0 is the MVP: sketches, solid features, patterns,
+  reference geometry, booleans, STEP editing, the Enclosure and the live link
+  to the project. Its known limitations are listed in the plugin's
+  `README.md`. Next, in this order:
+  - V1-M, modelling breadth: hole wizard, draft, variable-radius fillets,
+    guide rails for Sweep and Loft, 3D sketch paths, the surface basics, a
+    command palette, a view cube and mouse presets;
+  - V1-C, CFD preparation: open a project geometry added as STEP in CAD (host
+    G5, G6), split face, an internal fluid volume (the air inside a part),
+    defeature by size, projected area;
+  - from 0.1.0's limitations: Press-pull with a "keep tangent faces" switch,
+    re-rounding fillet chains and corner blends, and the "what works" search
+    above 2,000 faces; spline offsets that follow their source; Extend and
+    curve dimensions on splines; a "move faces" pattern; Revolve and Sweep
+    that join a body they touch, as an option; Sweep's Keep orientation that
+    moves the profile to the path's start; a place in the landing report for
+    a plugin's own line (the broken-reference note).
+
+- **CAD plugin, after V1:** V1 is parametric multi-body parts (sketches, solid
+  features, booleans, STEP editing, CFD preparation). These come back in a
+  later version:
   - assemblies and joints: components, mates/joints, and a 3D constraint
     solver (SolveSpace libslvs, GPL-3.0-or-later);
   - full surface modelling: trim, extend, boundary, fill and offset surfaces;

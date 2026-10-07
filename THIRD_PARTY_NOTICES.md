@@ -29,13 +29,30 @@ it does not relicense their implementations.
 
 ## Magnusim CAD plugin
 
-The optional CAD plugin (`magnusim-web/bundled-plugins/cad`) ships Open CASCADE
-Technology 7.9.3 (LGPL-2.1 with the Open CASCADE exception) and FreeCAD's
-PlaneGCS sketch solver (LGPL) as WebAssembly modules, with Eigen (MPL-2.0),
-Boost headers (BSL-1.0), the Emscripten and LLVM runtimes, musl, three.js and
-three-mesh-bvh (MIT). Their license texts, the pinned sources, our patches and
-the build scripts that rebuild both modules are in the plugin's `LICENSES/`,
-`kernel-build/` and `solver-build/` folders (see `LICENSES/README.md`).
+The CAD plugin (`magnusim-web/bundled-plugins/cad`, bundled and on by default)
+is GPL-3.0-or-later. It ships two WebAssembly modules and two JavaScript
+libraries:
+
+- `workspace/kernel/mk32.wasm`: Open CASCADE Technology 7.9.3 (LGPL-2.1 with
+  the Open CASCADE exception), including code under its own permissive notices:
+  DELABELLA (MIT, Marcin Sokalski), flex's `FlexLexer.h` (BSD-3-Clause,
+  University of California), David M. Gay's `strtod` (Lucent Technologies) and
+  Unicode conversion tables (Unicode, Inc.);
+- `workspace/solver/planegcs.wasm`: FreeCAD's PlaneGCS sketch solver
+  (LGPL-2.0-or-later) through the Salusoft89 `planegcs` wrapper
+  (LGPL-2.1-or-later), with Eigen 3.4.0 (MPL-2.0) and Boost 1.86 headers
+  (BSL-1.0);
+- in both modules: the Emscripten runtime (MIT or UIUC/NCSA), LLVM's libc++,
+  libc++abi, libunwind and compiler-rt (Apache-2.0 WITH LLVM-exception) and
+  musl (MIT);
+- bundled in `workspace/app.js` and the picking worker: three.js 0.186.1 and
+  three-mesh-bvh 0.9.15 (MIT).
+
+Their licence texts and notices are in the plugin's `LICENSES/`
+(`LICENSES/README.md` lists each one). The corresponding sources are pinned to
+exact upstream commits, with our patches and the scripts that rebuild both
+modules, in `kernel-build/` and `solver-build/`; `LICENSES/README.md` also says
+how to rebuild the plugin with a changed OCCT or PlaneGCS.
 
 ## XFOIL and the Airfoil plugin
 

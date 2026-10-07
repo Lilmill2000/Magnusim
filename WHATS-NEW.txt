@@ -1,6 +1,80 @@
-Magnusim 0.2.0
+Magnusim 0.3.0
 
-Install and run exactly as before: Setup.bat, then run.bat (see START-HERE.txt).
+Install and run as before: Setup.bat, then run.bat (see START-HERE.txt).
+The Airfoil plugin ships off: turn it on in Settings -> Plugins, then click
+Install dependencies (it downloads its own packages, about 200 MB, once).
+
+What changed since 0.2.0
+
+Plugins
+- Magnusim is now built from plugins. Settings -> Plugins lists them: turn one
+  on or off, reload them, and install a plugin's own Python packages.
+- Incompressible Flow, the solver you used in 0.2.0, is now a bundled plugin
+  (version 1.0.0). Existing projects open as before.
+- Two new bundled plugins ship with this release:
+  - Magnusim CAD 0.1.0 (on; Settings -> Plugins turns it off):
+    - Design parts inside a project. Click "Design a part" on an empty
+      project, "New design" on Home, or the CAD button in the project header.
+    - Sketch with dimensions and constraints, then Extrude, Revolve, Sweep or
+      Loft. Fillet, Chamfer, Shell, Combine, Split, patterns and mirrors,
+      reference planes, axes and points, and named parameters.
+    - Open a STEP file and edit it directly: Press-pull flat and curved faces,
+      delete faces, split, combine, and export STEP.
+    - For CFD: Enclosure wraps the part in a box or cylinder of air; Combine
+      Cut makes the fluid volume.
+    - Leave CAD and you are back in the simulation with the part as the
+      project's geometry. Boundary conditions follow the faces by name, and
+      meshes are marked out of date.
+    - What it does and its known limitations:
+      magnusim-web/bundled-plugins/cad/README.md.
+  - Airfoil 0.1.0 (off until you turn it on, see above). A 2D section from a
+    NACA 4- or 5-digit code, its dimensions, or a .dat file; lift, drag and
+    moment polars from NeuralFoil (instant), XFOIL (Windows) or an OpenFOAM
+    2D solve in the app's WSL.
+- Plugin authors: docs/plugins (GUIDE, API, authoring) and npm run plugin:new
+  / plugin:check. The plugin API is version 1.6.
+
+Incompressible Flow
+- Turbulence: Spalart-Allmaras and realizable k-epsilon join k-omega SST,
+  k-epsilon, LRR, SSG and laminar.
+- Boundary conditions: symmetry, freestream, total-pressure inlet, moving and
+  rotating walls, and inlets or pressures that change with time in transient
+  runs.
+- Results: forces and force coefficients, point probes, the pressure
+  coefficient, y+, wall shear stress, total pressure, vorticity and Q at every
+  saved time. Plot Over Path, Iso Surface and Iso Volume have their own
+  toolbar buttons. Export a run to ParaView (VTK) or open its case folder.
+- Runs say when they converged and can stop once a monitor settles; a finished
+  or stopped run can be continued from its latest result; Cores (Auto or a
+  number) per run; starting-flow options including a potential-flow start;
+  Numerics presets and SIMPLEC; an "Average from" time for transient runs.
+- The Run panel says when a mesh is out of date before Start.
+
+Meshing
+- A face two bodies share is meshed through (it is inside the fluid), and a
+  boundary condition cannot be put on it.
+- Each mesher's panel shows only the settings it uses, with its own stage
+  names and summary.
+- Faster: pressure scaling fix, binary result fields, faster reconstruct and
+  a much faster hex core.
+
+Reliability
+- Finished meshes and solves no longer leave their WSL copies behind; old
+  ones are cleaned up on the next start.
+- Deleted studies and geometries stay deleted; the setup tree updates at once.
+- run.bat keeps the app on the code it started with; stop.bat ends only this
+  folder's app.
+
+Known limits
+- On Standard (mostly tetrahedral) meshes the solver's gradient scheme
+  over-predicts a laminar pipe's pressure drop by about 16 % (as in 0.2.0).
+  A more accurate scheme is planned for the next version.
+- Airfoil's XFOIL engine runs on Windows only.
+- CAD: big STEP imports need 1-2 GB of browser memory; the rest of its
+  known limitations are in magnusim-web/bundled-plugins/cad/README.md.
+
+
+Magnusim 0.2.0 (previous release)
 
 What changed since 0.1.0
 
