@@ -560,7 +560,7 @@ How they fit the app:
 
 ## Plugins tab
 
-Settings → Plugins lists each plugin's name (or key), version, source (`bundled` from `bundled-plugins/`, `local` from `plugins/`, or `entry_point` for a wheel), and status:
+Settings → Plugins lists each plugin's name (or key), version, source (`bundled` from `bundled-plugins/`, `local` from `plugins/`, `update` for a newer copy of a bundled plugin in `plugins/`, or `entry_point` for a wheel), and status:
 
 - `enabled`, shown as On, or as Required for a required plugin, which has no Disable button.
 - `disabled`, shown as Off. An optional bundled plugin that ships off (`default_enabled = false`) is listed this way with "Ships with Magnusim and stays off until you turn it on."
@@ -568,6 +568,8 @@ Settings → Plugins lists each plugin's name (or key), version, source (`bundle
 - `missing requirement`: a WSL program or Python package in its `requires` is not found; its page UI and workspaces do not load. A missing GPU is only a note on an `enabled` row.
 - `incompatible`: its `api_version` has a different major.
 - `error`, shown as Failed to load, with the message (a manifest or `register` failure, a missing required plugin, or a UI bundle that failed in the page).
+
+**Install plugin from zip…** installs a zip made by `npm run plugin:pack` after showing what it is; **Remove** (a user plugin), **Remove update** (a newer copy of a bundled plugin) and **Remove unused copies** delete its copies from `plugins/`. A copy that is not used says why under the plugin. [GUIDE.md](GUIDE.md), "Shipping a plugin, and updates", has the rules.
 
 Enable and Disable call the plugin routes, reload the registry, and load or remove the plugin's UI at once. **Reload plugins** runs `registry.reload` and loads UI bundles again. It also stops every running plugin OpenFOAM case ("Stopped: plugins were reloaded") and takes every queued one off the queue. Disable, and removing a plugin's environment, stop only that plugin's cases; Enable and installing an environment stop nothing.
 

@@ -24,6 +24,8 @@ export interface JobRecord {
   result: unknown;
   events: object[];
   log_path: string | null;
+  /** The plugin whose tool it runs (a plugin JobKind), so a plugin's jobs can be stopped. */
+  plugin?: string;
 }
 
 export interface JobManagerOptions {
@@ -232,6 +234,17 @@ export class JobManager extends EventEmitter {
       this.finish(id, 'stopped', job.result, 'stopped');
     }
     return this.jobs.get(id) || job;
+  }
+
+  /** Stop a plugin's queued and running jobs (its folder is about to move); how many. */
+  stopPlugin(key: string): number {
+    let n = 0;
+    for (const job of [...this.jobs.values()]) {
+      if (job.plugin !== key || (job.status !== 'running' && job.status !== 'queued')) continue;
+      this.stop(job.id);
+      n += 1;
+    }
+    return n;
   }
 
   onEvents(id: string): EventEmitter {

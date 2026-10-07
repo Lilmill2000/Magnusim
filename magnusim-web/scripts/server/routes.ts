@@ -2,7 +2,8 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathIsWithin } from '../safe-path.js';
 import { BUNDLED_UI, bundlePluginUi } from './plugin-ui-bundle.ts';
-import { isLocalOperator, sendBytes, weakEtag } from './http.ts';
+import { HttpError, isLocalOperator, sendBytes, weakEtag } from './http.ts';
+import { dropUpload, incomingDir, saveUpload, UPLOAD_RE } from './plugin-packages.ts';
 import { writeSse, type JobManager, type JobRecord } from './jobs.ts';
 import { canonicalFilterKey, LEGACY_FILTER_PATHS } from './legacy-aliases.ts';
 import type { RequestContext, Router } from './router.ts';
@@ -23,8 +24,8 @@ import { FRAME_ASSET_HEADERS, frameCsp, injectWorkspaceHead, SDK_TYPES, WORKSPAC
 import { registerPluginCaseRoutes } from './plugin-cases.ts';
 import { registerLinkRoutes } from './link-routes.ts';
 import { cancelStudyQuestions } from './link-job.js';
-import { dropFoamJobs, relabelFoamJobs } from './compute-queue.ts';
-import { activeCaseKeys, bumpPluginEpoch, stopFoamCasesFor, studyHasActiveCase } from '../foam-runner.js';
+import { dropFoamJobs, queuedFoamNames, relabelFoamJobs } from './compute-queue.ts';
+import { activeCaseKeys, bumpPluginEpoch, rowNameOf, stopFoamCasesFor, studyHasActiveCase } from '../foam-runner.js';
 import { listFoamRecords, updateFoamRecord } from '../foam-store.js';
 import { pluginLoaded } from '../registry-defaults.js';
 import { sameProjectFolder } from '../compute-slot.js';
@@ -52,7 +53,9 @@ export interface RouteDeps {
   sdkVariant?: SdkVariant;
 }
 
-type ListedPluginRow = { key: string; ui?: string; dir?: string | null; tier?: string; status?: string };
+// root: the folder its files are in, "bundled" or "user" (a newer copy of a bundled
+// plugin in the plugins folder is an update: tier "bundled", root "user").
+type ListedPluginRow = { key: string; ui?: string; dir?: string | null; tier?: string; root?: string; status?: string };
 
 /** What a page may see of a plugin environment (no local paths). */
 function publicEnv(env: PluginEnv | null): Record<string, unknown> | null {
@@ -101,7 +104,9 @@ function rpcStatus(err: unknown): { status: number; body: Record<string, unknown
     }
     // -32009: the record changed since the caller read it (a plugin study's rev).
     const status = err.code === -32004 ? 404 : err.code === -32602 ? 400 : err.code === -32009 ? 409 : 500;
-    return { status, body: { error: err.message, code: err.code, ok: false } };
+    // A refusal that says why in a word (a plugin package's check: not_newer, bad_name, ...).
+    const why = err.data && typeof err.data === 'object' ? (err.data as { code?: unknown }).code : undefined;
+    return { status, body: { error: err.message, code: err.code, ...(typeof why === 'string' ? { reason: why } : {}), ok: false } };
   }
   return { status: 500, body: { error: String(err instanceof Error ? err.message : err), ok: false } };
 }
@@ -736,6 +741,83 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     ctx.sendJson(answer.status, answer.body);
   });
 
+  // Plugin packages: a zip is checked first (nothing written but the upload), then
+  // installed once the person confirms what it is. Installing or removing a copy
+  // moves the plugin's folder, so everything running from it stops first: its
+  // service, file uploads, jobs and cases.
+  const stopForSwap = (key: string, reason: string) => {
+    services.reset(key, `stopped: ${reason}`);
+    void pluginFiles.abortPlugin(key);
+    deps.jobs.stopPlugin(key);
+    listedCache = null;
+    bumpPluginEpoch(key);
+    stopFoamCasesFor({ plugin: key }, 'plugin_replaced', reason);
+  };
+  // What installing or removing a copy of a plugin stops: its running cases (a core solve
+  // of its analyses is one), its queued ones and its jobs, by name, for the confirm card.
+  const workOf = (key: string) => {
+    const running = (listFoamRecords({ kind: 'foam', status: 'running' }) as Array<Record<string, unknown>>)
+      .filter((rec) => rec.plugin === key && !rec.stop)
+      .map((rec) => String(rowNameOf(rec)));
+    const jobs = deps.jobs
+      .list()
+      .filter((job) => job.plugin === key && (job.status === 'running' || job.status === 'queued'))
+      .map((job) => String(job.kind));
+    return { running: [...running, ...jobs], queued: queuedFoamNames(key) };
+  };
+  router.get('/api/plugins/:key/work', (ctx) => {
+    const key = String(ctx.params.key || '');
+    if (!validPluginKey(key)) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
+    ctx.sendJson(200, { ok: true, key, work: workOf(key) });
+  });
+  const packageDir = incomingDir(deps.webRoot);
+  router.post('/api/plugins/package/inspect', async (ctx) => {
+    if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    let upload: string;
+    try {
+      upload = await saveUpload(ctx.req, packageDir);
+    } catch (err) {
+      const status = err instanceof HttpError ? err.status : 500;
+      return ctx.sendJson(status, { error: err instanceof Error ? err.message : String(err), ok: false });
+    }
+    const answer = await workerAnswer(deps, 'plugins.package_inspect', { upload });
+    if (!answer.ok) {
+      dropUpload(packageDir, upload);
+      return ctx.sendJson(answer.status, answer.body);
+    }
+    const pkg = (answer.body as { package?: { key?: string } }).package;
+    ctx.sendJson(200, { ...(answer.body as Record<string, unknown>), upload, work: workOf(String(pkg?.key || '')) });
+  });
+  router.post('/api/plugins/package/install', async (ctx) => {
+    if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    const body = ((await ctx.readJsonBody().catch(() => ({}))) || {}) as Record<string, unknown>;
+    const upload = String(body.upload || '');
+    const key = String(body.key || '');
+    if (!UPLOAD_RE.test(upload)) return ctx.sendJson(400, { error: 'invalid upload name', ok: false });
+    if (!validPluginKey(key)) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
+    // Checked again before anything stops: a package that cannot go in leaves the plugin running.
+    const check = await workerAnswer(deps, 'plugins.package_inspect', { upload });
+    const checked = (check.body as { package?: { key?: string } } | null)?.package;
+    if (!check.ok || !checked) return ctx.sendJson(check.status === 200 ? 400 : check.status, check.body);
+    if (checked.key !== key) return ctx.sendJson(400, { error: 'the package is not the plugin that was confirmed', ok: false });
+    stopForSwap(key, `${pluginNameOf(key)} is being updated`);
+    const answer = await workerAnswer(deps, 'plugins.package_install', { upload, key }, 300_000);
+    bumpPluginEpoch(key);
+    listedCache = null;
+    dropUpload(packageDir, upload);
+    ctx.sendJson(answer.status, answer.body);
+  });
+  router.post('/api/plugins/:key/remove', async (ctx) => {
+    if (!isLocalOperator(ctx.req)) return ctx.sendJson(403, { error: LOCAL_ONLY, ok: false });
+    const key = String(ctx.params.key || '');
+    if (!validPluginKey(key)) return ctx.sendJson(400, { error: 'invalid plugin key', ok: false });
+    stopForSwap(key, `${pluginNameOf(key)} was removed`);
+    const answer = await workerAnswer(deps, 'plugins.remove_copies', { key }, 120_000);
+    bumpPluginEpoch(key);
+    listedCache = null;
+    ctx.sendJson(answer.status, answer.body);
+  });
+
   // A plugin's own environment ([python]): its state, and building or removing it.
   router.get('/api/plugins/:key/env', async (ctx) => {
     const key = String(ctx.params.key || '');
@@ -917,7 +999,7 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       ctx.sendJson(404, { error: 'this plugin is not on, or has no workspace' });
       return;
     }
-    const file = safePluginFile(deps.webRoot, String(hit.dir || key), 'workspace', ctx.params.rest || 'index.html', hit.tier || 'user');
+    const file = safePluginFile(deps.webRoot, String(hit.dir || key), 'workspace', ctx.params.rest || 'index.html', hit.root || hit.tier || 'user');
     if (!file) {
       ctx.sendJson(404, { error: 'workspace file not found' });
       return;
@@ -952,7 +1034,7 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     }
     if (hit.ui) ui = hit.ui;
     if (hit.dir) folder = String(hit.dir);
-    if (hit.tier) tier = String(hit.tier);
+    if (hit.root || hit.tier) tier = String(hit.root || hit.tier);
     const file = safePluginFile(deps.webRoot, folder, ui, ctx.params.rest || 'index.js', tier);
     if (!file) {
       ctx.sendJson(404, { error: 'plugin ui not found' });

@@ -93,7 +93,14 @@ export function isPluginLaneMethod(method: string): boolean {
  * Calls after which the registry in the calling worker changed. The data lane
  * keeps its own registry (plugin result filters), so it reloads too.
  */
-const REGISTRY_CHANGES = new Set(['registry.reload', 'plugins.enable', 'plugins.disable']);
+const REGISTRY_CHANGES = new Set([
+  'registry.reload',
+  'plugins.enable',
+  'plugins.disable',
+  // A plugin package installed or a user copy removed (Settings > Plugins).
+  'plugins.package_install',
+  'plugins.remove_copies',
+]);
 
 export class WorkerClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;

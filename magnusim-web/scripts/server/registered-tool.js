@@ -71,6 +71,9 @@ export function startRegisteredJob(jobs, spec, params, job) {
     return;
   }
   const args = jobArgsFromParams(spec, params);
+  // Its plugin, so the plugin's jobs stop before its folder is replaced (JobManager.stopPlugin).
+  const rec = builtin || typeof jobs.get !== 'function' ? null : jobs.get(job.id);
+  if (rec) rec.plugin = String(spec.plugin);
   // A plugin job on its plugin's environment runs there, in the plugin's folder.
   jobs.spawnPython(job.id, script, args, {
     python: spec.python || null,

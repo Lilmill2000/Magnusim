@@ -53,6 +53,9 @@ class RegistryHub:
         self.required_failures: list[dict[str, Any]] = []
         # Folder plugins skipped because they are off (never imported): catalog rows.
         self.off_plugins: list[dict[str, Any]] = []
+        # Bundled keys that also have a copy in the user's plugins folder (an
+        # update): which copy is used and why the others are not (pick_plugin_copies).
+        self.plugin_copies: dict[str, dict[str, Any]] = {}
 
     def registry(self, kind: str) -> Registry[Any]:
         if kind not in self._regs:
@@ -77,6 +80,7 @@ class RegistryHub:
         self._methods.clear()
         self.required_failures.clear()
         self.off_plugins.clear()
+        self.plugin_copies.clear()
         get_hooks().clear()
 
     def current_overrides(self, plugin: str) -> list[str]:
@@ -1327,30 +1331,26 @@ def _load_ordered(
     off_names = {str(r.get("key")): str(r.get("name")) for r in hub.off_plugins}
     for child, meta in _dependency_order(found, hub, source=source):
         key = str(meta.get("key") or child.name)
-        try:
-            required, default_enabled = tier_flags(meta, tier)
-            if _parse_default_analysis(meta) and not (tier == "bundled" and required):
-                raise ValueError("[default_analysis] is only for a required bundled plugin")
-        except ValueError as exc:
-            hub.failures.append(_failure_row(key, f"manifest: {exc}", meta, source=source))
-            had_failures = True
-            continue
-        # Decided before anything is imported: a plugin that is off is never run.
-        if not plugin_is_on(key, tier=tier, required=required, default_enabled=default_enabled, state=state):
-            log.info("Plugin %s is off", key)
-            hub.off_plugins.append(_off_row(child, meta, key, tier, default_enabled))
-            off_names[key] = str(meta.get("name") or key)
-            continue
-        unmet = [
-            why
-            for req in _str_list(meta.get("requires_plugins"))
-            if (why := _requirement_met(req, hub.manifests, off_names))
-        ]
-        if unmet:
-            hub.failures.append(_failure_row(key, "; ".join(unmet), meta, source=source))
-            had_failures = True
-            continue
-        m, failed = _load_folder_plugin(child, hub, meta=meta, tier=tier)
+        copies = hub.plugin_copies.get(key) if tier == "bundled" else None
+        is_update = copies is not None and copies.get("state") == "update" and copies.get("update_dir") == child
+        marks = (len(hub.failures), len(hub.incompatible))
+        m, failed, done = _load_entry(child, meta, hub, state, tier=tier, source=source, off_names=off_names)
+        if is_update and not done and copies is not None:
+            # The update did not load: say why, undo what it registered, and use
+            # the app's own copy instead (a broken update never costs the plugin).
+            why = [str(r.get("error") or "") for r in hub.failures[marks[0]:]] + [
+                f"api_version {r.get('api_version') or ''} is incompatible with this app ({r.get('host') or ''})"
+                for r in hub.incompatible[marks[1]:]
+            ]
+            del hub.failures[marks[0]:]
+            del hub.incompatible[marks[1]:]
+            _unload_partial(hub, key, child)
+            copies["state"] = "update_failed"
+            copies["error"] = "; ".join(w for w in why if w) or "did not load"
+            log.warning("Plugin %s: the update in %s failed (%s); using the app's own copy", key, child, copies["error"])
+            b_child, b_meta = copies["bundled"]
+            m, failed, done = _load_entry(b_child, b_meta, hub, state, tier=tier, source=source, off_names=off_names)
+            child = b_child
         if failed:
             had_failures = True
         if m is not None:
@@ -1358,6 +1358,153 @@ def _load_ordered(
             hub.note_plugin_dir(m.key, child)
             manifests.append(m)
     return manifests, had_failures
+
+
+def _load_entry(
+    child: Path,
+    meta: dict[str, Any],
+    hub: RegistryHub,
+    state: PluginState,
+    *,
+    tier: str,
+    source: str,
+    off_names: dict[str, str],
+) -> tuple[PluginManifest | None, bool, bool]:
+    """Load one scanned plugin: (manifest or None, failed, done). ``done`` is
+    True when it loaded or is off, False when it has an error or incompatible row."""
+    key = str(meta.get("key") or child.name)
+    try:
+        required, default_enabled = tier_flags(meta, tier)
+        if _parse_default_analysis(meta) and not (tier == "bundled" and required):
+            raise ValueError("[default_analysis] is only for a required bundled plugin")
+    except ValueError as exc:
+        hub.failures.append(_failure_row(key, f"manifest: {exc}", meta, source=source))
+        return None, True, False
+    # Decided before anything is imported: a plugin that is off is never run.
+    if not plugin_is_on(key, tier=tier, required=required, default_enabled=default_enabled, state=state):
+        log.info("Plugin %s is off", key)
+        hub.off_plugins.append(_off_row(child, meta, key, tier, default_enabled))
+        off_names[key] = str(meta.get("name") or key)
+        return None, False, True
+    unmet = [
+        why
+        for req in _str_list(meta.get("requires_plugins"))
+        if (why := _requirement_met(req, hub.manifests, off_names))
+    ]
+    if unmet:
+        hub.failures.append(_failure_row(key, "; ".join(unmet), meta, source=source))
+        return None, True, False
+    m, failed = _load_folder_plugin(child, hub, meta=meta, tier=tier)
+    return m, failed, m is not None
+
+
+def _unload_partial(hub: RegistryHub, key: str, plugin_dir: Path) -> None:
+    """Forget what a plugin that failed part-way registered, and the modules it
+    imported from its folder, so another copy of it can load cleanly."""
+    for kind in hub.kinds():
+        for dropped in hub.registry(kind).drop_plugin(key):
+            if kind == "job":
+                hub._job_packages.pop(str(dropped), None)
+    get_hooks().clear_plugin(key)
+    for method in [n for n in hub._methods if n[0] == key]:
+        del hub._methods[method]
+    hub._loading_overrides.pop(key, None)
+    root = str(plugin_dir.resolve())
+    for name, mod in list(sys.modules.items()):
+        file = getattr(mod, "__file__", None)
+        if file and str(Path(file).resolve()).startswith(root + os.sep):
+            del sys.modules[name]
+    if root in _PLUGIN_PATHS:
+        while root in sys.path:
+            sys.path.remove(root)
+        _PLUGIN_PATHS.discard(root)
+    _PLUGIN_ROOTS.discard(root)
+    importlib.invalidate_caches()
+
+
+def _copy_meta(update_meta: dict[str, Any], bundled_meta: dict[str, Any]) -> dict[str, Any]:
+    """An update's manifest as it is loaded: whether the plugin is required and
+    whether it ships on stay the app's own copy's (an update cannot change them)."""
+    meta = dict(update_meta)
+    for name in ("required", "default_enabled"):
+        if name in bundled_meta:
+            meta[name] = bundled_meta[name]
+        else:
+            meta.pop(name, None)
+    return meta
+
+
+def pick_plugin_copies(
+    bundled: list[tuple[Path, dict[str, Any]]],
+    user: list[tuple[Path, dict[str, Any]]],
+    failed: dict[str, str] | None = None,
+) -> tuple[list[tuple[Path, dict[str, Any]]], list[tuple[Path, dict[str, Any]]], dict[str, dict[str, Any]]]:
+    """One copy of each plugin, chosen before anything is imported.
+
+    A plugin in the user's plugins folder with the key of a bundled plugin is an
+    update: the higher version is used, and on a tie the app's own copy. A used
+    update loads as the bundled plugin (tier, required, default on) from its own
+    folder; an unused one is only listed. Returns (bundled to load, user to load,
+    {key: copies}) where copies has ``bundled`` (folder, manifest),
+    ``bundled_version``, ``state`` ("update", "app" or "update_failed"),
+    ``update_dir``, ``update_version``, ``error`` and ``ignored``
+    ([{dir, version, reason}]). ``failed``: keys whose update loaded but was
+    unloaded afterwards (load_all's second pass), with why; the app's copy is used.
+    """
+    from cfddesk.registry.versions import compare_versions
+
+    by_key = {str(meta.get("key") or d.name): (d, meta) for d, meta in bundled}
+    copies: dict[str, dict[str, Any]] = {}
+    user_out: list[tuple[Path, dict[str, Any]]] = []
+    for d, meta in user:
+        key = str(meta.get("key") or d.name)
+        if key not in by_key:
+            user_out.append((d, meta))
+            continue
+        b_dir, b_meta = by_key[key]
+        row = copies.setdefault(
+            key,
+            {
+                "bundled": (b_dir, b_meta),
+                "bundled_version": str(b_meta.get("version") or "0.0.0"),
+                "state": "app",
+                "update_dir": None,
+                "update_version": "",
+                "error": "",
+                "ignored": [],
+                "candidates": [],
+            },
+        )
+        row["candidates"].append((d, meta))
+    bundled_out = list(bundled)
+    for key, row in copies.items():
+        cands = sorted(row.pop("candidates"), key=lambda c: c[0].name)
+        best = 0
+        for i, (_d, meta) in enumerate(cands):
+            if compare_versions(str(meta.get("version") or ""), str(cands[best][1].get("version") or "")) > 0:
+                best = i
+        best_ver = str(cands[best][1].get("version") or "0.0.0")
+        b_ver = row["bundled_version"]
+        for i, (d, meta) in enumerate(cands):
+            ver = str(meta.get("version") or "0.0.0")
+            if i == best and compare_versions(ver, b_ver) > 0:
+                row["update_dir"] = d
+                row["update_version"] = ver
+                if failed and key in failed:
+                    row["state"] = "update_failed"
+                    row["error"] = failed[key]
+                    continue
+                row["state"] = "update"
+                b_dir, b_meta = row["bundled"]
+                bundled_out = [(x, m) for x, m in bundled_out if x != b_dir]
+                bundled_out.append((d, _copy_meta(meta, b_meta)))
+                continue
+            if compare_versions(ver, b_ver) <= 0:
+                reason = f"Not used: the version that ships with Magnusim ({b_ver}) is the same or newer."
+            else:
+                reason = f"Not used: the plugins folder holds a newer update ({best_ver})."
+            row["ignored"].append({"dir": d.name, "version": ver, "reason": reason})
+    return bundled_out, user_out, copies
 
 
 def _off_row(child: Path, meta: dict[str, Any], key: str, tier: str, default_enabled: bool) -> dict[str, Any]:
@@ -1400,15 +1547,20 @@ def discover_bundled_plugins(
     hub: RegistryHub,
     *,
     web_root: Path | str | None = None,
+    found: list[tuple[Path, dict[str, Any]]] | None = None,
 ) -> tuple[list[PluginManifest], bool]:
     """Load the plugins that ship with the app, in dependency order.
 
     A required one (``required = true``) ignores the off list. Every key in
     :data:`REQUIRED_BUNDLED` that did not load is recorded in
-    ``hub.required_failures`` with the reason.
+    ``hub.required_failures`` with the reason. ``found``: the folders already
+    scanned (load_all passes them with the user's updates in place).
     """
     folder = bundled_dir_for(_resolve_web_root(web_root))
-    found, scan_failed = _scan_plugin_dir(folder, hub, tier="bundled")
+    if found is None:
+        found, scan_failed = _scan_plugin_dir(folder, hub, tier="bundled")
+    else:
+        scan_failed = False
     state = plugin_state(_resolve_web_root(web_root))
     manifests, failed = _load_ordered(found, hub, state, tier="bundled")
     hub.required_failures.clear()
@@ -1460,12 +1612,17 @@ def discover_folder_plugins(
     hub: RegistryHub,
     *,
     web_root: Path | str | None = None,
+    found: list[tuple[Path, dict[str, Any]]] | None = None,
 ) -> tuple[list[PluginManifest], bool]:
-    """Discover plugins under web_root/plugins. Returns (manifests, had_failures)."""
+    """Discover plugins under web_root/plugins. Returns (manifests, had_failures).
+    ``found``: the folders already scanned, without the bundled plugins' updates."""
     root = _resolve_web_root(web_root)
     if root is None:
         return [], False
-    found, scan_failed = _scan_plugin_dir(plugins_dir_for(root), hub)
+    if found is None:
+        found, scan_failed = _scan_plugin_dir(plugins_dir_for(root), hub)
+    else:
+        scan_failed = False
     manifests, failed = _load_ordered(found, hub, plugin_state(Path(root)), tier="user")
     return manifests, (scan_failed or failed)
 
@@ -1518,7 +1675,9 @@ def discover_entry_points(
     return manifests, had_failures
 
 
-def load_all(*, web_root: Path | str | None = None, force: bool = False) -> RegistryHub:
+def load_all(
+    *, web_root: Path | str | None = None, force: bool = False, _failed_updates: dict[str, str] | None = None
+) -> RegistryHub:
     """Register builtins then discover plugins, then validate analysis bag refs.
 
     Sets _LOADED True only when discovery completed without plugin-load failures.
@@ -1551,21 +1710,45 @@ def load_all(*, web_root: Path | str | None = None, force: bool = False) -> Regi
     hub.failures.clear()
     hub.incompatible.clear()
     hub.off_plugins.clear()
+    hub.plugin_copies.clear()
     hub._loading_overrides.clear()
     _purge_plugin_modules()
     get_hooks().clear()
     from cfddesk.registry.base import clear_plugin_protected
 
     clear_plugin_protected()
-    disabled = _disabled_plugins(_resolve_web_root(web_root))
+    root = _resolve_web_root(web_root)
+    disabled = _disabled_plugins(root)
+    # One copy of each plugin, chosen before any is imported: a newer copy of a
+    # bundled plugin in the user's plugins folder is used in its place.
+    b_found, b_scan_fail = _scan_plugin_dir(bundled_dir_for(root), hub, tier="bundled")
+    u_found, u_scan_fail = _scan_plugin_dir(plugins_dir_for(root), hub) if root is not None else ([], False)
+    b_found, u_found, copies = pick_plugin_copies(b_found, u_found, _failed_updates)
+    hub.plugin_copies.update(copies)
     # Order: core builtins, the bundled plugins (in dependency order), entry
     # points, then the user's plugins folder.
-    _, bundled_fail = discover_bundled_plugins(hub, web_root=web_root)
+    _, bundled_fail = discover_bundled_plugins(hub, web_root=web_root, found=b_found)
     _, ep_fail = discover_entry_points(hub, disabled)
-    _, folder_fail = discover_folder_plugins(hub, web_root=web_root)
+    _, folder_fail = discover_folder_plugins(hub, web_root=web_root, found=u_found)
+    bundled_fail = bundled_fail or b_scan_fail
+    folder_fail = folder_fail or u_scan_fail
     # After plugins: every AnalysisType bag key must resolve (solver/bc/material/monitor).
     _validate_cross_refs(hub)
     _check_default_analysis(hub)
+    # An update these checks unloaded: load everything once more with the app's own
+    # copy of it instead (as when an update fails to load), saying why.
+    if _failed_updates is None:
+        off = {str(r.get("key")) for r in hub.off_plugins}
+        lost = {
+            key: next((str(f.get("error") or "") for f in hub.failures if f.get("key") == key), "") or "it was unloaded"
+            for key, row in hub.plugin_copies.items()
+            if row.get("state") == "update" and key not in hub.manifests and key not in off
+        }
+        if lost:
+            log.warning("Plugin updates unloaded after loading (%s); using the app's own copies", ", ".join(sorted(lost)))
+            # Updates that already failed to load stay on the app's copy without a second import.
+            seen = {k: str(r.get("error") or "") for k, r in hub.plugin_copies.items() if r.get("state") == "update_failed"}
+            return load_all(web_root=web_root, force=True, _failed_updates={**seen, **lost})
     # A required plugin unloaded by these checks is missing too (the app says so).
     _record_required_failures(hub, bundled_dir_for(_resolve_web_root(web_root)))
     from cfddesk.registry.tools import sync_tool_kinds
@@ -1608,8 +1791,19 @@ def _catalog_row(
     default_enabled: bool = True,
     files: dict[str, int] | None = None,
     start_actions: list[dict[str, Any]] | None = None,
+    copy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    copy = copy or {}
     return {
+        # Which copy is used: "app" (shipped with the app), "update" (a newer copy
+        # of a bundled plugin in the user's plugins folder) or "user".
+        "copy": copy.get("copy") or ("app" if tier == "bundled" else "user"),
+        # The folder its files are served from: "bundled" or "user" (plugins/).
+        "root": copy.get("root") or ("bundled" if tier == "bundled" else "user"),
+        # The app's own version of a bundled plugin ("" for a user plugin).
+        "bundled_version": copy.get("bundled_version") or "",
+        # Copies in the user's plugins folder that are not used: [{dir, version, reason}].
+        "unused_copies": list(copy.get("unused_copies") or []),
         # "bundled" ships with the app; a required one cannot be turned off.
         "tier": tier,
         "required": required,
@@ -1657,6 +1851,27 @@ def _env_row_public(env_row: dict[str, Any] | None) -> dict[str, Any] | None:
         "service": bool(env_row.get("service")),
         "python_version": env_row.get("python_version") or "",
     }
+
+
+def _copy_fields(hub: RegistryHub, key: str, tier: str) -> dict[str, Any]:
+    """A catalog row's copy, root, bundled_version and unused_copies."""
+    row = hub.plugin_copies.get(key)
+    if row is None:
+        return {}
+    unused = list(row.get("ignored") or [])
+    if row.get("state") == "update":
+        return {"copy": "update", "root": "user", "bundled_version": row["bundled_version"], "unused_copies": unused}
+    if row.get("state") == "update_failed":
+        d = row.get("update_dir")
+        unused.insert(
+            0,
+            {
+                "dir": d.name if isinstance(d, Path) else str(d or ""),
+                "version": row.get("update_version") or "",
+                "reason": f"Failed to load, so the version that ships with Magnusim is used: {row.get('error') or ''}",
+            },
+        )
+    return {"copy": "app", "root": "bundled", "bundled_version": row["bundled_version"], "unused_copies": unused}
 
 
 def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
@@ -1751,6 +1966,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                     if status == "enabled"
                     else []
                 ),
+                copy=_copy_fields(hub, manifest.key, tier),
             )
         )
     # Folder plugins that are off: listed from their manifest, so they can be turned on.
@@ -1771,6 +1987,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 license=str(row["license"]),
                 tier=str(row["tier"]),
                 default_enabled=bool(row["default_enabled"]),
+                copy=_copy_fields(hub, str(row["key"]), str(row["tier"])),
             )
         )
     for row in hub.required_failures:
@@ -1784,6 +2001,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 error=str(row.get("error") or ""),
                 tier="bundled",
                 required=True,
+                copy=_copy_fields(hub, str(row.get("key") or ""), "bundled"),
             )
         )
     for row in hub.incompatible:
@@ -1800,6 +2018,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 enabled=False,
                 error=f"api_version {row.get('api_version') or ''} is incompatible",
                 tier="bundled" if row.get("source") == "bundled" else "user",
+                copy=_copy_fields(hub, str(row.get("key") or ""), "bundled" if row.get("source") == "bundled" else "user"),
             )
         )
     for row in hub.failures:
@@ -1817,6 +2036,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 enabled=False,
                 error=str(row.get("error") or ""),
                 tier="bundled" if row.get("source") == "bundled" else "user",
+                copy=_copy_fields(hub, str(row.get("key") or ""), "bundled" if row.get("source") == "bundled" else "user"),
             )
         )
     plugins_dir = plugins_dir_for(root) if root is not None else None

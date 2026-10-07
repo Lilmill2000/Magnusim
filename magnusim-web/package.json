@@ -32,6 +32,7 @@
     "test:docs": "node scripts/doc-tests.mjs",
     "plugin:check": "node scripts/plugin-check.mjs",
     "plugin:new": "node scripts/plugin-new.mjs",
+    "plugin:pack": "node scripts/plugin-pack.mjs",
     "guard:node-siblings": "node scripts/__tests__/test_no_node_sibling_writes.js",
     "prove:node-siblings": "node scripts/__tests__/prove-no-node-sibling-writes.mjs"
   },

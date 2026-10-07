@@ -11,8 +11,9 @@ Rules, in report order (``id``: what is checked):
   (tools/plugin_manifest_schema.py, built from cfddesk.registry.manifest);
   plugin.py exists. A key the schema does not know is a warning (the host
   ignores it without a word, so it is usually a misspelling).
-- ``key``: the manifest's key is the plugin's folder name, and a plugin that is
-  not bundled does not take a bundled plugin's key (it would replace that plugin).
+- ``key``: the manifest's key is the plugin's folder name, and a copy with a
+  bundled plugin's key is newer than the app's own (an update, used in its
+  place); one that is not newer would never be used.
 - ``api_version``: major.minor, the host's major version, not newer than this
   host. Using a manifest key newer than the declared version is a warning
   (an older host with that version ignores it).
@@ -649,16 +650,29 @@ def check_key(plugin: Path, meta: dict[str, Any], report: Report, web_root: Path
             f"key {key!r} is not the folder's name {plugin.name!r}: rename the folder or the key",
             plugin / "manifest.toml",
         )
-    if isinstance(key, str) and key and not _is_bundled(plugin, meta):
+    if isinstance(key, str) and key:
         taken = bundled_keys(web_root).get(key)
         if taken is not None and taken.resolve() != plugin.resolve():
-            report.add(
-                "error",
-                "key",
-                f"key {key!r} is a bundled plugin's key (bundled-plugins/{taken.name}): the host would put this "
-                "plugin in its place; choose another key",
-                plugin / "manifest.toml",
-            )
+            # A copy of a bundled plugin is an update: the host uses it in place of
+            # the app's own copy only while its version is higher.
+            from cfddesk.registry.versions import compare_versions
+
+            mine = str(meta.get("version") or "")
+            theirs, _ = _parse_toml(_read(taken / "manifest.toml"), source=str(taken))
+            bundled_version = str((theirs or {}).get("version") or "0.0.0")
+            if compare_versions(mine, bundled_version) > 0:
+                report.notes["key"] = (
+                    f"an update of the bundled plugin {key} (v{bundled_version}): the app uses this copy in its place"
+                )
+            else:
+                report.add(
+                    "error",
+                    "key",
+                    f"key {key!r} is a bundled plugin's key (bundled-plugins/{taken.name}, v{bundled_version}) and "
+                    f"this copy (v{mine or '?'}) is not newer, so the app would not use it: raise its version to make "
+                    "it an update, or choose another key",
+                    plugin / "manifest.toml",
+                )
 
 
 def _uses(meta: dict[str, Any]) -> list[str]:

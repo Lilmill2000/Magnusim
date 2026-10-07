@@ -771,6 +771,12 @@ export function queueAheadOf(rowId: unknown): number | null {
   return i + (slotBusy() ? 1 : 0);
 }
 
+/** The names of every queued case of one plugin, in every project (core solves of its analyses among them). */
+export function queuedFoamNames(plugin: unknown): string[] {
+  ensureLoaded();
+  return Q.items.filter((row) => row.kind === 'foam' && !!row.foam && row.foam.plugin === normId(plugin)).map((row) => String(row.name || row.id));
+}
+
 /** Queued plugin cases of one plugin in one project. */
 export function queuedFoamCount(projectId: unknown, plugin: unknown): number {
   ensureLoaded();

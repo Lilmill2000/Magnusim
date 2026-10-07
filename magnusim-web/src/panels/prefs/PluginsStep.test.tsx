@@ -8,7 +8,7 @@ import {
   setWorkspaceDirty,
   workspaceDirty,
 } from '../../workspace/leaveGuard';
-import { PluginsStep } from './PluginsStep';
+import { PluginsStep, WorkLine } from './PluginsStep';
 
 const workerRpc = vi.fn(async (_method: string, _params?: unknown) => ({}));
 vi.mock('../../api/workerRpc', () => ({
@@ -350,5 +350,195 @@ describe('turning off a plugin whose workspace is open', () => {
       expect(document.querySelector('[data-plugin-key="ws-demo"]')).toHaveAttribute('data-plugin-status', 'disabled'),
     );
     expect(confirm).not.toHaveBeenCalled();
+  });
+});
+
+describe('plugin packages and updates', () => {
+  type Call = { url: string; method: string; body: unknown };
+  let calls: Call[] = [];
+  let inspectAnswer: { status: number; body: Record<string, unknown> };
+
+  beforeEach(() => {
+    calls = [];
+    plugins = [
+      {
+        ...row('cad', true),
+        name: 'CAD',
+        version: '0.1.0',
+        tier: 'bundled',
+        source: 'bundled',
+        copy: 'app',
+        bundled_version: '0.1.0',
+        unused_copies: [],
+      },
+    ];
+    inspectAnswer = {
+      status: 200,
+      body: {
+        ok: true,
+        upload: 'upload-abc123def456',
+        package: {
+          key: 'cad',
+          name: 'CAD',
+          version: '0.2.0',
+          authors: ['Magnusim'],
+          license: 'GPL-3.0-or-later',
+          bundled_version: '0.1.0',
+          installed_version: '',
+          action: 'update',
+        },
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, method: init?.method || 'GET', body: init?.body });
+        if (url === '/api/plugins/package/inspect') {
+          return new Response(JSON.stringify(inspectAnswer.body), { status: inspectAnswer.status });
+        }
+        if (url === '/api/plugins/package/install') {
+          plugins = [{ ...plugins[0], version: '0.2.0', copy: 'update' }];
+          return new Response(JSON.stringify({ ok: true, plugins }), { status: 200 });
+        }
+        if (url === '/api/plugins/cad/remove') {
+          plugins = [{ ...plugins[0], version: '0.1.0', copy: 'app', unused_copies: [] }];
+          const removed = { key: 'cad', removed: ['cad'], bundled_version: '0.1.0' };
+          return new Response(JSON.stringify({ ok: true, plugins, removed }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: true, plugins }), { status: 200 });
+      }),
+    );
+  });
+
+  async function rowFor(selector: string): Promise<HTMLElement> {
+    return waitFor(() => {
+      const el = document.querySelector(selector) as HTMLElement | null;
+      if (!el) throw new Error(`no ${selector} yet`);
+      return el;
+    });
+  }
+
+  async function chooseZip(): Promise<File> {
+    render(<PluginsStep />);
+    await screen.findByText('cad does a thing');
+    const input = document.querySelector('[data-plugin-zip-input]') as HTMLInputElement;
+    const file = new File([new Uint8Array([80, 75, 3, 4])], 'cad-v0.2.0.zip', { type: 'application/zip' });
+    fireEvent.change(input, { target: { files: [file] } });
+    return file;
+  }
+
+  it('checks the zip first and installs only after Install, then lists the update', async () => {
+    const file = await chooseZip();
+    const card = await rowFor('[data-plugin-package="cad"]');
+    const inspect = calls.find((c) => c.url === '/api/plugins/package/inspect');
+    expect(inspect?.method).toBe('POST');
+    expect(inspect?.body).toBe(file);
+    expect(within(card).getByText('Update CAD from 0.1.0 to 0.2.0.')).toBeInTheDocument();
+    expect(within(card).getByText(/runs its own code on this PC/)).toBeInTheDocument();
+    expect(calls.some((c) => c.url === '/api/plugins/package/install')).toBe(false);
+    fireEvent.click(within(card).getByRole('button', { name: 'Install' }));
+    await screen.findByText('CAD 0.2.0 is installed.');
+    const install = calls.find((c) => c.url === '/api/plugins/package/install');
+    expect(JSON.parse(String(install?.body))).toEqual({ upload: 'upload-abc123def456', key: 'cad' });
+    const li = await rowFor('[data-plugin-key="cad"][data-plugin-copy="update"]');
+    expect(within(li).getByText(/v0\.2\.0 · update/)).toBeInTheDocument();
+    expect(within(li).getByText(/used in place of the version that ships with Magnusim \(0\.1\.0\)/)).toBeInTheDocument();
+    expect(within(li).getByRole('button', { name: 'Remove update' })).toBeInTheDocument();
+    expect(document.querySelector('[data-plugin-package]')).toBeNull();
+  });
+
+  it('Cancel installs nothing', async () => {
+    await chooseZip();
+    fireEvent.click(await rowFor('[data-plugin-package-cancel]'));
+    expect(document.querySelector('[data-plugin-package]')).toBeNull();
+    expect(calls.some((c) => c.url === '/api/plugins/package/install')).toBe(false);
+  });
+
+  it('a zip that cannot be installed says why, and no card opens', async () => {
+    inspectAnswer = {
+      status: 400,
+      body: {
+        ok: false,
+        reason: 'not_newer',
+        error: 'CAD 0.1.0 is not newer than the copy that comes with Magnusim (0.1.0), so it would not be used.',
+      },
+    };
+    await chooseZip();
+    await screen.findByText(/cad-v0\.2\.0\.zip cannot be installed: CAD 0\.1\.0 is not newer/);
+    expect(document.querySelector('[data-plugin-package]')).toBeNull();
+  });
+
+  it('Remove update asks first, then goes back to the version that ships with Magnusim', async () => {
+    plugins = [{ ...plugins[0], version: '0.2.0', copy: 'update' }];
+    render(<PluginsStep />);
+    const li = await rowFor('[data-plugin-key="cad"][data-plugin-copy="update"]');
+    fireEvent.click(within(li).getByRole('button', { name: 'Remove update' }));
+    const confirm = document.querySelector('[data-plugin-remove-confirm="cad"]') as HTMLElement;
+    expect(within(confirm).getByText('Remove the CAD 0.2.0 update?')).toBeInTheDocument();
+    expect(within(confirm).getByText(/goes back to the version it ships with \(0\.1\.0\)/)).toBeInTheDocument();
+    expect(calls.some((c) => c.url === '/api/plugins/cad/remove')).toBe(false);
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Remove' }));
+    await screen.findByText('Removed. CAD is back to the version that ships with Magnusim (0.1.0).');
+    await rowFor('[data-plugin-key="cad"][data-plugin-copy="app"]');
+  });
+
+  it('lists copies in the plugins folder that are not used, with why, and offers to remove them', async () => {
+    const reason = 'Not used: the version that ships with Magnusim (0.1.0) is the same or newer.';
+    plugins = [
+      { ...plugins[0], unused_copies: [{ dir: 'cad-old', version: '0.0.9', reason }] },
+      { ...row('mine', true), copy: 'user' },
+    ];
+    render(<PluginsStep />);
+    const unused = await rowFor('[data-plugin-unused="cad-old"]');
+    expect(unused).toHaveTextContent(`plugins/cad-old (v0.0.9): ${reason}`);
+    const cad = document.querySelector('[data-plugin-key="cad"]') as HTMLElement;
+    expect(within(cad).getByRole('button', { name: 'Remove unused copies' })).toBeInTheDocument();
+    const mine = document.querySelector('[data-plugin-key="mine"]') as HTMLElement;
+    expect(within(mine).getByRole('button', { name: 'Remove' })).toBeInTheDocument();
+  });
+});
+
+describe('what an install or a removal stops', () => {
+  it('names the running and queued work, and says nothing when nothing runs', () => {
+    const { container, rerender } = render(
+      <WorkLine work={{ running: ['Pipe · case · Incompressible Flow'], queued: ['Elbow · case · Incompressible Flow', 'Tee · case · Incompressible Flow'] }} doing="Installing it" />,
+    );
+    expect(container).toHaveTextContent(
+      'Installing it stops what runs on this plugin now: 1 running (Pipe · case · Incompressible Flow) stops; 2 queued (Elbow · case · Incompressible Flow, Tee · case · Incompressible Flow) are taken off the queue.',
+    );
+    rerender(<WorkLine work={{ running: [], queued: [] }} doing="Removing it" />);
+    expect(container.querySelector('[data-plugin-work]')).toBeNull();
+  });
+
+  it("the install card shows what the server says runs on the plugin", async () => {
+    plugins = [{ ...row('incompressible_flow', true), name: 'Incompressible Flow', tier: 'bundled', copy: 'app', required: true }];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === '/api/plugins/package/inspect') {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              upload: 'upload-abc123def456.zip',
+              package: { key: 'incompressible_flow', name: 'Incompressible Flow', version: '1.0.1', bundled_version: '1.0.0', installed_version: '', action: 'update' },
+              work: { running: ['Pipe · case · Incompressible Flow'], queued: [] },
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true, plugins }), { status: 200 });
+      }),
+    );
+    render(<PluginsStep />);
+    await screen.findByText('incompressible_flow does a thing');
+    const input = document.querySelector('[data-plugin-zip-input]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File([new Uint8Array([80, 75])], 'if.zip')] } });
+    const work = await waitFor(() => {
+      const el = document.querySelector('[data-plugin-package] [data-plugin-work]');
+      if (!el) throw new Error('no work line yet');
+      return el;
+    });
+    expect(work).toHaveTextContent('Installing it stops what runs on this plugin now: 1 running (Pipe · case · Incompressible Flow) stops.');
   });
 });

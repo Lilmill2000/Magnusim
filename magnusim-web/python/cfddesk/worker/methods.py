@@ -1839,6 +1839,142 @@ def plugins_disable(key: str) -> dict[str, Any]:
     return _set_plugin_enabled(key, False)
 
 
+_UPLOAD_RE = re.compile(r"^upload-[A-Za-z0-9]{8,64}\.zip$")
+
+
+def _upload_path(upload: str) -> Path:
+    """A zip the server saved in .cache/plugin-incoming (by its name only)."""
+    name = str(upload or "")
+    if not _UPLOAD_RE.match(name):
+        raise RpcError(-32602, "invalid upload name")
+    path = web_root() / ".cache" / "plugin-incoming" / name
+    if not path.is_file():
+        raise RpcError(-32004, "the uploaded package is gone; choose the file again")
+    return path
+
+
+def _package_error(exc: Exception) -> RpcError:
+    from cfddesk.registry.plugin_package import PackageError
+
+    if isinstance(exc, PackageError):
+        return RpcError(-32602, exc.message, {"code": exc.code})
+    return RpcError(-32603, str(exc))
+
+
+@rpc("plugins.package_inspect")
+def plugins_package_inspect(upload: str = "") -> dict[str, Any]:
+    """What installing an uploaded plugin package would do (nothing is written)."""
+    from cfddesk.registry.plugin_package import PackageError, inspect_package
+
+    try:
+        return {"ok": True, "package": inspect_package(_upload_path(upload), web_root())}
+    except PackageError as exc:
+        raise _package_error(exc) from None
+
+
+@rpc("plugins.package_install")
+def plugins_package_install(upload: str = "", key: str = "") -> dict[str, Any]:
+    """Install an uploaded package (``key``: the one the person confirmed), then
+    reload the plugins. The server has stopped the plugin's service, jobs and cases."""
+    from cfddesk.registry.plugin_package import (
+        PackageError,
+        commit_install,
+        install_package,
+        read_package,
+    )
+
+    path = _upload_path(upload)
+    parked = ""
+    try:
+        if read_package(path).key != str(key):
+            raise RpcError(-32602, "the package is not the plugin that was confirmed")
+        # Forget the loaded plugins' modules first (their folders are about to move).
+        reset_for_tests()
+        installed = install_package(path, web_root())
+        parked = str(installed.pop("parked", "") or "")
+        registry_reload()
+        # The copies it replaced stay until the new one is known to load; one that
+        # does not is taken away again and they come back.
+        why = _install_problem(str(key))
+        if why is not None:
+            what = f"{installed['name']} {installed['version']} did not load ({why})"
+            stuck = _roll_back(str(key), parked)
+            parked = ""
+            if stuck:
+                raise RpcError(-32603, f"{what}, and {stuck}", {"code": "rollback_failed"})
+            if installed.get("installed_version"):
+                keep = f"the previous version {installed['installed_version']} is kept."
+            elif installed.get("bundled_version"):
+                keep = f"Magnusim keeps the version it ships with ({installed['bundled_version']})."
+            else:
+                keep = "nothing was installed."
+            raise RpcError(-32602, f"{what}; {keep}", {"code": "did_not_load"})
+        commit_install(parked)
+        parked = ""
+    except PackageError as exc:
+        raise _package_error(exc) from None
+    finally:
+        # Anything else went wrong between the swap and the check: the old copies come back.
+        stuck = _roll_back(str(key), parked) if parked else None
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        if stuck:
+            registry_reload()
+            raise RpcError(-32603, f"The install failed, and {stuck}", {"code": "rollback_failed"})
+        registry_reload()
+    return {**plugins_list(), "installed": installed}
+
+
+def _roll_back(key: str, parked: str) -> str | None:
+    """Put back the copies an install replaced; None when done, else what to tell the
+    person (their folder is then renamed so it is never swept, and named)."""
+    from cfddesk.registry.plugin_package import PackageError, keep_parked, rollback_install
+
+    try:
+        rollback_install(key, parked, web_root())
+        return None
+    except PackageError as exc:
+        kept = keep_parked(parked)
+        if not kept:
+            return f"the previous version could not be put back ({exc.message})."
+        return f"the previous version could not be put back ({exc.message}): it is kept in {kept}; move it back to the plugins folder."
+
+
+def _install_problem(key: str) -> str | None:
+    """Why the plugin just installed did not load, or None when it loaded (or is off,
+    which runs nothing to fail)."""
+    hub = load_all(web_root=web_root())
+    copies = hub.plugin_copies.get(key)
+    if copies is not None and copies.get("state") == "update_failed":
+        return str(copies.get("error") or "it failed to load")
+    if key in hub.manifests or any(str(r.get("key")) == key for r in hub.off_plugins):
+        return None
+    rows = [str(r.get("error") or "") for r in hub.failures if str(r.get("key")) == key]
+    rows += [
+        f"plugin API {r.get('api_version') or ''} is incompatible with this app's {r.get('host') or ''}"
+        for r in hub.incompatible
+        if str(r.get("key")) == key
+    ]
+    return "; ".join(r for r in rows if r) or "it is not listed after loading"
+
+
+@rpc("plugins.remove_copies")
+def plugins_remove_copies(key: str = "") -> dict[str, Any]:
+    """Remove a plugin's copies from the user's plugins folder, then reload the plugins."""
+    from cfddesk.registry.plugin_package import PackageError, remove_user_copies
+
+    try:
+        reset_for_tests()
+        removed = remove_user_copies(str(key), web_root())
+    except PackageError as exc:
+        raise _package_error(exc) from None
+    finally:
+        registry_reload()
+    return {**plugins_list(), "removed": removed}
+
+
 # ---------------------------------------------------------------------------
 # result filters (in-process; volume stays warm for particle trace)
 # ---------------------------------------------------------------------------

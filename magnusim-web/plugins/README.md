@@ -9,5 +9,10 @@ it is written here. Check it with `npm run plugin:check -- plugins/<key>`. The
 plugin docs start at `docs/plugins/INDEX.md`. Turn plugins on or off in
 **Settings → Plugins**.
 
+A plugin someone sends you as a zip (made with `npm run plugin:pack`) is
+installed with **Settings → Plugins → Install plugin from zip…**, which puts
+it here. A newer version of a plugin that ships with the app is an update: it
+is used in place of the app's own copy, and **Remove update** goes back.
+
 The plugins that ship with the app are in `bundled-plugins/`, so this folder
 starts empty.

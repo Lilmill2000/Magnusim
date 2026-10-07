@@ -32,13 +32,16 @@ from cfddesk.registry.discovery import (  # noqa: E402
     _parse_simple_toml,
     _resolve_web_root,
     bundled_dir_for,
+    pick_plugin_copies,
     plugins_dir_for,
 )
 
 
 def _manifests(web_root: Path) -> list[tuple[str, Path, dict[str, Any], str]]:
-    """(key, folder, manifest, tier) of every folder plugin, bundled first."""
-    out: list[tuple[str, Path, dict[str, Any], str]] = []
+    """(key, folder, manifest, tier) of every folder plugin, bundled first: the
+    copy the app uses, so a newer copy of a bundled plugin in the plugins folder
+    (an update) stands in for the app's own (tier "bundled", its own folder)."""
+    scanned: dict[str, list[tuple[Path, dict[str, Any]]]] = {"bundled": [], "user": []}
     for tier, folder in (("bundled", bundled_dir_for(web_root)), ("user", plugins_dir_for(web_root))):
         if folder is None or not folder.is_dir():
             continue
@@ -48,8 +51,9 @@ def _manifests(web_root: Path) -> list[tuple[str, Path, dict[str, Any], str]]:
                 continue
             meta = _parse_simple_toml(toml.read_text(encoding="utf-8"), source=str(toml))
             if isinstance(meta, dict):
-                out.append((str(meta.get("key") or child.name), child, meta, tier))
-    return out
+                scanned[tier].append((child, meta))
+    bundled, user, _copies = pick_plugin_copies(scanned["bundled"], scanned["user"])
+    return [(str(meta.get("key") or d.name), d, meta, tier) for tier, rows in (("bundled", bundled), ("user", user)) for d, meta in rows]
 
 
 def _find(web_root: Path, key: str) -> tuple[Path, plugin_env.PythonEnvSpec]:

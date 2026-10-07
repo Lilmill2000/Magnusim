@@ -676,7 +676,7 @@ It loads your plugin the way the host does, in a child process with scratch sett
 | Rule | Checks |
 | --- | --- |
 | `manifest` | Parses and matches the schema; `plugin.py` exists |
-| `key` | `key` is the folder name, and not a bundled plugin's key |
+| `key` | `key` is the folder name; a copy with a bundled plugin's key is newer than the app's own (an update) |
 | `api_version` | Same major as the host, not newer; features need their version |
 | `license` | An SPDX expression compatible with GPL-3.0-or-later |
 | `load` | The host's own loader loads it |
@@ -693,6 +693,20 @@ It loads your plugin the way the host does, in a child process with scratch sett
 | `tests` | Your pytest passes, and `npm test` when `package.json` has a `test` script |
 
 `--no-tests` skips the last rule and reports it as skipped, never as passed.
+
+### Shipping a plugin, and updates (plugin:pack)
+
+```
+npm run plugin:pack -- <key or folder> [--out <folder>] [--no-tests] [--json]
+```
+
+It runs `plugin:check` (an error stops it), then writes `dist/<key>-v<version>.zip` (beside `magnusim-web/`, or in `--out`) and `<zip>.sha256`. A key is looked for in `bundled-plugins/`, then `plugins/`. The zip holds one folder named after the key, with the files git tracks in the plugin folder (all its files outside a git checkout), never `tests/`, `e2e/`, `node_modules/`, caches or bytecode. Keep the source of anything you ship built (GPL), as the bundled plugins do.
+
+Whoever gets the zip installs it with **Settings → Plugins → Install plugin from zip…**: the app checks it, shows its name, version and authors and what installing does, and installs it into `plugins/<key>` only after **Install**. It refuses a zip that is not one plugin folder, has a name that leaves the folder or that Windows cannot hold, a link, two names that differ only in case, more than 20000 files or 2 GB, a manifest without a key or a version number, or another major `api_version`. Installing replaces that plugin's copies in `plugins/`, and keeps them aside until the new copy has loaded: one that fails to load is taken away again, with "<Name> <version> did not load (why); the previous version … is kept" (or "nothing was installed"). **Remove** deletes the copies. A key that differs from another plugin's only in case is refused (Windows folder names ignore case). When `plugins/` is on another drive than the app, the zip is unpacked beside it on that drive.
+
+A zip with a bundled plugin's key is an **update**. The app uses whichever copy has the higher version, so an update installs only when it is newer than the copy that ships with the app. Versions compare as semantic versions: `0.2.0-dev` < `0.2.0` < `0.2.1`, and a tie goes to the app's own copy. A used update loads as the bundled plugin, from `plugins/<key>`: its tier stays bundled, and whether it is required or ships off stays the app copy's, whatever the update's manifest says. Settings shows "An update from the plugins folder, used in place of the version that ships with Magnusim (…)" and **Remove update**. When an update fails to load, the app uses its own copy and says why under the plugin; so does a copy that is not newer ("Not used: …"). When the app itself is updated to a version whose own copy is as new as the update, its own copy is used again.
+
+Installing or removing stops that plugin's service, jobs and OpenFOAM cases first (for Incompressible Flow, every running core solve too, since they run its analyses); the confirm card names what runs and will stop, and queued cases are taken off the queue. It is refused while the plugin's workspace is open. A plugin with in-page screens asks for a page reload, since the page keeps the screens it loaded. A plugin with a native Python extension (`.pyd`, `.dll`, `.so` in its folder) cannot be moved while the app has it loaded: restart the app, then install. An entry-point plugin (a wheel) is not part of this: give it its own key.
 
 ## 14. Licensing
 

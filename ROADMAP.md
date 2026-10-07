@@ -70,6 +70,16 @@ September 2026 readiness audit. This list preserves the intended work.
   answers one call at a time. To add: environments for wheel plugins, other GPU
   vendors, and concurrent calls for services that declare they are safe.
 
+- **Plugin installs that survive a crash:** installing a plugin from a zip moves
+  the copies it replaces aside until the new one has loaded, and puts them back
+  when it does not. If the app's worker dies or hangs between the move and that
+  check, the new copy stays in `plugins/<key>` and the old one is deleted with
+  the staging folder an hour later. To add: a small journal (`pending.json`
+  beside the moved copies, written before the move and removed after) that the
+  next start reads to finish the rollback; and the same for a native Python
+  extension, which needs the other worker processes to let go of the plugin
+  before its folder can move (today: restart the app, then install).
+
 - **Core UI consistency (Plugin Host H14):** the plugin UI kit
   (`magnusim-web/src/plugin-ui/`) copies today's core look, but the core does
   not use it yet. To do, each with Daniel's OK where users would see a change:

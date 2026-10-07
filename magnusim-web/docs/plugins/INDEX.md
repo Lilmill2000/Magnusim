@@ -23,6 +23,7 @@ Commands, from the app folder (`magnusim-web/`):
 | --- | --- |
 | `npm run plugin:new -- <key> [--workspace\|--analysis] [--service] [--venv] [--study-kind <title>]` | Makes a new plugin that passes every check |
 | `npm run plugin:check -- <path> [--json] [--no-tests]` | Checks a plugin against the rules and runs its tests |
+| `npm run plugin:pack -- <key or folder> [--out <folder>] [--no-tests]` | Checks a plugin, then zips it as `dist/<key>-v<version>.zip` for Settings → Plugins → Install plugin from zip ([GUIDE.md](GUIDE.md), "Shipping a plugin, and updates") |
 | `npm install`, then `npm run build`, in the plugin folder | Builds a workspace page from `src/` into `workspace/`, which the host serves |
 | `npm run dev` (or `run.bat`) | Starts the app, at http://127.0.0.1:8082 unless Settings saved another port ([GUIDE.md](GUIDE.md), "Quick start", has a second server of your own) |
 | `npx playwright test -c <plugin>/tests/e2e/playwright.config.js` | Runs a plugin's browser test on a test server of its own |

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { workerRpc } from '../../api/workerRpc';
 import { PanelBoundary } from '../../islands';
-import { panelsFor } from '../../plugin-api';
+import { panelsFor, registeredPluginKeys } from '../../plugin-api';
 import { loadPluginUi, pluginClientErrors, subscribePluginClients, type ListedPlugin } from '../../plugins/loader';
 import { useProjectStore } from '../../store/project';
 import { confirmLeaveWorkspace, leaveInProgress, openWorkspaceRoute, withdrawLeaveApproval } from '../../workspace/leaveGuard';
@@ -25,7 +25,72 @@ type EnvInstall = {
   log?: string[];
 };
 
-type PluginRow = ListedPlugin & { description?: string; python_env?: PluginEnv | null; notes?: string[] };
+/** A copy of the plugin in the user's plugins folder that the app does not use. */
+type UnusedCopy = { dir: string; version: string; reason: string };
+
+type PluginRow = ListedPlugin & {
+  description?: string;
+  python_env?: PluginEnv | null;
+  notes?: string[];
+  /** Which copy is used: "app" (ships with Magnusim), "update" (a newer copy in the plugins folder) or "user". */
+  copy?: 'app' | 'update' | 'user';
+  /** The version that ships with Magnusim, for a bundled plugin. */
+  bundled_version?: string;
+  unused_copies?: UnusedCopy[];
+};
+
+/** What a plugin package (a zip) holds and what installing it does (plugins.package_inspect). */
+type PackageInfo = {
+  upload: string;
+  file: string;
+  key: string;
+  name: string;
+  version: string;
+  description?: string;
+  authors?: string[];
+  license?: string;
+  files?: number;
+  unpacked_bytes?: number;
+  bundled_version?: string;
+  installed_version?: string;
+  action: 'install' | 'update' | 'reinstall' | 'downgrade';
+  work?: PluginWork;
+};
+
+/** What runs on a plugin now (its cases, a core solve of its analyses among them, and its jobs). */
+type PluginWork = { running: string[]; queued: string[] };
+
+/** The confirm card's line on what installing or removing stops; nothing when nothing runs. */
+export function WorkLine({ work, doing }: { work?: PluginWork | null; doing: string }) {
+  const running = work?.running || [];
+  const queued = work?.queued || [];
+  if (!running.length && !queued.length) return null;
+  const parts: string[] = [];
+  if (running.length) parts.push(`${running.length} running (${running.join(', ')}) stop${running.length === 1 ? 's' : ''}`);
+  if (queued.length) parts.push(`${queued.length} queued (${queued.join(', ')}) ${queued.length === 1 ? 'is' : 'are'} taken off the queue`);
+  return (
+    <span className="wiz-plugin-warn" data-plugin-work="1">
+      {doing} stops what runs on this plugin now: {parts.join('; ')}.
+    </span>
+  );
+}
+
+/** The one-line summary the confirm card gives of an install. */
+export function packageSummary(info: PackageInfo): string {
+  const what = `${info.name} ${info.version}`;
+  if (info.action === 'reinstall') return `Reinstall ${what} (the same version is installed now).`;
+  if (info.action === 'downgrade') return `Install ${what} in place of the newer ${info.installed_version} installed now.`;
+  if (info.bundled_version) return `Update ${info.name} from ${info.installed_version || info.bundled_version} to ${info.version}.`;
+  if (info.action === 'update') return `Update ${info.name} from ${info.installed_version} to ${info.version}.`;
+  return `Install ${what}.`;
+}
+
+async function postJson(url: string, body: unknown): Promise<Record<string, unknown>> {
+  const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const out = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) throw new Error(String(out.error || `server answered ${response.status}`));
+  return out;
+}
 
 function scopeNow(): string {
   const projectId = useProjectStore.getState().projectId || '';
@@ -89,6 +154,13 @@ export function PluginsStep() {
   const [note, setNote] = useState('');
   const [installs, setInstalls] = useState<Record<string, EnvInstall>>({});
   const [, setPanelTick] = useState(0);
+  // A checked package waiting for Install / Cancel, and a plugin whose user copies wait for Remove / Cancel.
+  const [pending, setPending] = useState<PackageInfo | null>(null);
+  const [removing, setRemoving] = useState<PluginRow | null>(null);
+  const [removingWork, setRemovingWork] = useState<PluginWork | null>(null);
+  // The page still runs the old version of these plugins' screens until it is reloaded.
+  const [stale, setStale] = useState<string[]>([]);
+  const zipInput = useRef<HTMLInputElement | null>(null);
 
   async function envOf(key: string): Promise<EnvInstall | null> {
     const response = await fetch(`/api/plugins/${encodeURIComponent(key)}/env`, { cache: 'no-store' });
@@ -234,6 +306,97 @@ export function PluginsStep() {
     }
   }
 
+  /** A plugin's folder is about to move: refused while its workspace is open (it runs from there). */
+  function workspaceOpenFor(key: string, name: string): boolean {
+    if (openWorkspaceRoute()?.plugin !== key) return false;
+    setNote(`Close the ${name} workspace first: it runs from the plugin's folder.`);
+    return true;
+  }
+
+  /** After a package install or a removal: the app's registry, tree and plugin screens as they now are. */
+  async function afterCopiesChanged(key: string) {
+    // The page keeps a plugin's screens it has loaded (a browser keeps a module once
+    // imported): a changed plugin with screens in this page needs the page reloaded.
+    const hadScreens = registeredPluginKeys().includes(key);
+    try {
+      await useProjectStore.getState().loadRegistry(true);
+    } finally {
+      window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { plugins: true } }));
+    }
+    if (hadScreens) setStale((list) => (list.includes(key) ? list : [...list, key]));
+    else await loadPluginUi(scopeNow());
+    await refresh();
+  }
+
+  async function onZipChosen(file: File | null | undefined) {
+    if (!file) return;
+    setBusy('package');
+    setNote('');
+    setPending(null);
+    setRemoving(null);
+    try {
+      const response = await fetch('/api/plugins/package/inspect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/zip' },
+        body: file,
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        package?: Omit<PackageInfo, 'upload' | 'file' | 'work'>;
+        upload?: string;
+        work?: PluginWork;
+        error?: string;
+      };
+      if (!response.ok || !body.package || !body.upload) throw new Error(body.error || `server answered ${response.status}`);
+      setPending({ ...body.package, upload: body.upload, file: file.name, work: body.work });
+    } catch (e) {
+      setNote(`${file.name} cannot be installed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy('');
+      if (zipInput.current) zipInput.current.value = '';
+    }
+  }
+
+  async function confirmPackage() {
+    const info = pending;
+    if (!info || workspaceOpenFor(info.key, info.name)) return;
+    setBusy('package');
+    setNote('');
+    try {
+      await postJson('/api/plugins/package/install', { upload: info.upload, key: info.key });
+      setPending(null);
+      await afterCopiesChanged(info.key);
+      setNote(`${info.name} ${info.version} is installed.`);
+    } catch (e) {
+      setPending(null);
+      const why = e instanceof Error ? e.message : String(e);
+      // The app's own answer when the new copy did not load already names it and says what is kept.
+      setNote(why.startsWith(`${info.name} ${info.version} `) ? why : `${info.name} ${info.version} was not installed: ${why}`);
+      await refresh();
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function confirmRemove() {
+    const row = removing;
+    if (!row || workspaceOpenFor(row.key, row.name || row.key)) return;
+    setBusy(`remove:${row.key}`);
+    setNote('');
+    try {
+      const out = (await postJson(`/api/plugins/${encodeURIComponent(row.key)}/remove`, {})) as { removed?: { bundled_version?: string } };
+      setRemoving(null);
+      await afterCopiesChanged(row.key);
+      const back = out.removed?.bundled_version;
+      setNote(back ? `Removed. ${row.name || row.key} is back to the version that ships with Magnusim (${back}).` : `${row.name || row.key} was removed.`);
+    } catch (e) {
+      setRemoving(null);
+      setNote(`Could not remove ${row.name || row.key}: ${e instanceof Error ? e.message : String(e)}`);
+      await refresh();
+    } finally {
+      setBusy('');
+    }
+  }
+
   const merged: PluginRow[] = rows.map((row) => {
     const extra = client.find((item) => item.key === row.key);
     return extra ? { ...row, ...extra, status: 'error' } : row;
@@ -257,6 +420,11 @@ export function PluginsStep() {
           const installing = !!run && run.state === 'installing';
           const needsInstall = !!env && (env.state !== 'ready' || (run && run.state === 'failed'));
           const shipsOff = row.tier === 'bundled' && row.default_enabled === false;
+          const unused = row.unused_copies || [];
+          // A copy in the plugins folder the person can take away: an update, a user
+          // plugin, or copies that are not used.
+          const removeLabel =
+            row.client ? '' : row.copy === 'update' ? 'Remove update' : row.copy === 'user' ? 'Remove' : unused.length ? 'Remove unused copies' : '';
           return (
             <li
               key={row.key}
@@ -266,16 +434,32 @@ export function PluginsStep() {
               data-plugin-source={row.source || ''}
               data-plugin-required={row.required ? '1' : undefined}
               data-plugin-default-off={shipsOff ? '1' : undefined}
+              data-plugin-copy={row.copy || undefined}
             >
               <span className="wiz-pref-copy">
                 <strong>
                   {row.name || row.key}
                   <span className="wiz-plugin-meta">
                     {' '}
-                    v{row.version || '0.0.0'} · {row.source || 'local'}
+                    v{row.version || '0.0.0'} · {row.copy === 'update' ? 'update' : row.source || 'local'}
                   </span>
                 </strong>
                 {row.description ? <span>{row.description}</span> : null}
+                {row.copy === 'update' ? (
+                  <span className="wiz-plugin-meta" data-plugin-update-note="1">
+                    An update from the plugins folder, used in place of the version that ships with Magnusim ({row.bundled_version}).
+                  </span>
+                ) : null}
+                {unused.map((u) => (
+                  <span key={u.dir} className="wiz-plugin-meta" data-plugin-unused={u.dir}>
+                    plugins/{u.dir} (v{u.version}): {u.reason}
+                  </span>
+                ))}
+                {stale.includes(row.key) ? (
+                  <span className="wiz-plugin-env" data-plugin-stale="1" role="status">
+                    This page still shows its previous version: reload the page to use the one installed now.
+                  </span>
+                ) : null}
                 {shipsOff && status === 'disabled' ? (
                   <span className="wiz-plugin-meta" data-plugin-optional-hint="1">
                     Ships with Magnusim and stays off until you turn it on.
@@ -323,6 +507,26 @@ export function PluginsStep() {
                     {busy === row.key ? 'Saving…' : status === 'disabled' ? 'Enable' : 'Disable'}
                   </button>
                 )}
+                {removeLabel ? (
+                  <button
+                    type="button"
+                    className="home-btn"
+                    data-plugin-remove={row.key}
+                    disabled={!!busy || installing}
+                    title="Delete this plugin's copies from the plugins folder"
+                    onClick={() => {
+                      setPending(null);
+                      setRemovingWork(null);
+                      setRemoving(row);
+                      void fetch(`/api/plugins/${encodeURIComponent(row.key)}/work`, { cache: 'no-store' })
+                        .then((r) => r.json())
+                        .then((b: { work?: PluginWork }) => setRemovingWork(b.work || null))
+                        .catch(() => setRemovingWork(null));
+                    }}
+                  >
+                    {busy === `remove:${row.key}` ? 'Removing…' : removeLabel}
+                  </button>
+                ) : null}
               </span>
             </li>
           );
@@ -337,6 +541,56 @@ export function PluginsStep() {
           ))}
         </div>
       ) : null}
+      {pending ? (
+        <div className="wiz-plugin-confirm" data-plugin-package={pending.key} role="dialog" aria-label={`Install ${pending.name}`}>
+          <strong>{packageSummary(pending)}</strong>
+          <span className="wiz-plugin-meta">
+            {pending.file} · {pending.key}
+            {pending.authors && pending.authors.length ? ` · by ${pending.authors.join(', ')}` : ''}
+            {pending.license ? ` · ${pending.license}` : ''}
+          </span>
+          {pending.description ? <span>{pending.description}</span> : null}
+          <span className="wiz-plugin-warn">
+            A plugin runs its own code on this PC. Install it only if you trust where it came from.
+          </span>
+          <WorkLine work={pending.work} doing="Installing it" />
+          <span className="wiz-plugin-confirm-actions">
+            <button type="button" className="home-btn" data-plugin-package-cancel disabled={busy === 'package'} onClick={() => setPending(null)}>
+              Cancel
+            </button>
+            <button type="button" className="home-btn home-btn-primary" data-plugin-package-confirm disabled={!!busy} onClick={() => void confirmPackage()}>
+              {busy === 'package' ? 'Installing…' : 'Install'}
+            </button>
+          </span>
+        </div>
+      ) : null}
+      {removing ? (
+        <div className="wiz-plugin-confirm" data-plugin-remove-confirm={removing.key} role="dialog" aria-label={`Remove ${removing.name || removing.key}`}>
+          <strong>
+            {removing.copy === 'user'
+              ? `Remove ${removing.name || removing.key}?`
+              : removing.copy === 'update'
+                ? `Remove the ${removing.name || removing.key} ${removing.version} update?`
+                : `Remove the unused copies of ${removing.name || removing.key}?`}
+          </strong>
+          <span>
+            {removing.copy === 'user'
+              ? 'Its folder is deleted from the plugins folder. Its studies and files in your projects stay, but they do not open until it is installed again.'
+              : `Its folder is deleted from the plugins folder${
+                  removing.copy === 'update' ? ` and Magnusim goes back to the version it ships with (${removing.bundled_version})` : ''
+                }.`}
+          </span>
+          <WorkLine work={removingWork} doing="Removing it" />
+          <span className="wiz-plugin-confirm-actions">
+            <button type="button" className="home-btn" data-plugin-remove-cancel disabled={!!busy} onClick={() => setRemoving(null)}>
+              Cancel
+            </button>
+            <button type="button" className="home-btn home-btn-danger" data-plugin-remove-ok disabled={!!busy} onClick={() => void confirmRemove()}>
+              {busy === `remove:${removing.key}` ? 'Removing…' : 'Remove'}
+            </button>
+          </span>
+        </div>
+      ) : null}
       <div className="wiz-plugin-actions">
         <button
           type="button"
@@ -348,6 +602,29 @@ export function PluginsStep() {
         >
           {busy === 'reload' ? 'Reloading…' : 'Reload plugins'}
         </button>
+        <button
+          type="button"
+          className="home-btn"
+          data-plugin-install-zip
+          disabled={!!busy}
+          title="Install a plugin, or a newer version of one, from a .zip made with npm run plugin:pack"
+          onClick={() => zipInput.current?.click()}
+        >
+          {busy === 'package' && !pending ? 'Checking…' : 'Install plugin from zip…'}
+        </button>
+        <input
+          ref={zipInput}
+          type="file"
+          accept=".zip,application/zip"
+          hidden
+          data-plugin-zip-input
+          onChange={(e) => void onZipChosen(e.target.files?.[0])}
+        />
+        {stale.length ? (
+          <button type="button" className="home-btn" data-plugin-page-reload onClick={() => window.location.reload()}>
+            Reload page
+          </button>
+        ) : null}
         {note ? (
           <span className="wiz-plugin-note" role="status">
             {note}

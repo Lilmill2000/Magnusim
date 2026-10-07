@@ -5084,6 +5084,20 @@ body.is-recording #viewport-gizmo {
   margin-top: 12px;
 }
 .wiz-plugin-note { font-size: 12px; color: #4b5563; }
+/* Install plugin from zip / Remove: what is about to happen, Cancel or go ahead. */
+.wiz-plugin-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  background: #f9fafb;
+  font-size: 13px;
+}
+.wiz-plugin-warn { font-size: 12px; color: #b54708; }
+.wiz-plugin-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* Plugin studies (H11): project-level studies a plugin owns, below SIMULATIONS.
    Shown in every stage (an empty project too); the simulations section's rules are untouched. */
