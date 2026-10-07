@@ -105,7 +105,7 @@ describe('PowerShell scripts', () => {
 // wsl.exe, dism.exe, the WSL services, the boot time and Administrator. On a Windows 10
 // work laptop Setup asked for a restart after every restart: it took WSL as on only when
 // "wsl --status" answered, which Windows 10 does not before a distro is installed.
-const STUB_FUNCS = ['Test-Admin', 'Restart-Elevated', 'Get-BootTime', 'Invoke-Record', 'Get-DistroObservation'];
+const STUB_FUNCS = ['Test-Admin', 'Restart-Elevated', 'Get-BootTime', 'Invoke-Record', 'Get-DistroObservation', 'Test-VirtualizationOn'];
 
 /** Ensure-WslUbuntu with the world `w` describes; {status, out, marker}. */
 function ensureWsl(w) {
@@ -130,6 +130,7 @@ function ensureWsl(w) {
         `function Get-BootTime { ${ps(w.boot || 'BOOT-NOW')} }`,
         'function Invoke-Record($a) { }',
         'function Get-DistroObservation { }',
+        `function Test-VirtualizationOn { ${w.virt === false ? '$false' : '$true'} }`,
         `function Get-Service { param($Name, $ErrorAction) ${w.services ? `@(${w.services.map((s) => `[pscustomobject]@{ Name = ${ps(s)}; Status = 'Stopped' }`).join(', ')})` : '@()'} }`,
         'function wsl.exe {',
         '  $a = $args -join " "',
@@ -137,11 +138,19 @@ function ensureWsl(w) {
         `  switch -Regex ($a) {`,
         `    '^--status' { $global:LASTEXITCODE = ${w.statusCode ?? 1}; 'status text' }`,
         `    '^--install --no-distribution' { $global:LASTEXITCODE = ${w.installCode ?? 0}; 'install text' }`,
+        `    '^--update' { $global:LASTEXITCODE = ${w.updateCode ?? 0}; ${ps(w.updateText ?? 'updated')} }`,
+        `    '^--install -d \\S+ --no-launch' { $global:LASTEXITCODE = ${w.noLaunchCode ?? 0}; 'install no-launch text' }`,
+        `    '^--install -d \\S+$' { $global:LASTEXITCODE = ${w.launchCode ?? 0}; 'install launch text' }`,
         `    '^-l -q' { $global:LASTEXITCODE = 0; ${ps((w.distros || []).join('\n'))} }`,
         "    default { $global:LASTEXITCODE = 0; '' }",
         '  }',
         '}',
-        `function dism.exe { Write-Output "DISM $($args -join ' ')" | Out-Host; $global:LASTEXITCODE = ${w.dismCode ?? 3010}; 'dism text' }`,
+        'function dism.exe {',
+        '  $a = $args -join " "',
+        '  Write-Output "DISM $a" | Out-Host',
+        `  if ($a -match 'get-featureinfo') { if (${ps(w.vmp ?? '')}) { $global:LASTEXITCODE = 0; 'Feature Name : VirtualMachinePlatform'; ${ps(`State : ${w.vmp ?? ''}`)} } else { $global:LASTEXITCODE = 740; 'Elevated permissions are required' }; return }`,
+        `  $global:LASTEXITCODE = ${w.dismCode ?? 3010}; 'dism text'`,
+        '}',
         'try { $d = Ensure-WslUbuntu; Write-Output "DISTRO $d" } catch { Write-Output ("THROWN " + $_.Exception.Message) }',
       ].join('\r\n'),
     );
@@ -188,7 +197,7 @@ describe('Setup turns WSL on without asking for a restart forever', { skip: PS ?
     assert.match(r.out, /THROWN WSL is still not turned on after the restart\. What Windows reports:/);
     assert.match(r.out, /wsl --status \(exit 1\):/);
     assert.match(r.out, /WSL services: none/);
-    assert.match(r.out, /ask IT to turn on/);
+    assert.match(r.out, /To fix:/);
     assert.doesNotMatch(r.out, /ELEVATE|needs a restart/);
   });
 
@@ -203,6 +212,50 @@ describe('Setup turns WSL on without asking for a restart forever', { skip: PS ?
     const r = ensureWsl({ admin: true, statusCode: 1, installCode: 1, dismCode: 5 });
     assert.match(r.out, /THROWN Windows did not turn on Microsoft-Windows-Subsystem-Linux \(DISM exit 5\)/);
     assert.doesNotMatch(r.out, /needs a restart/);
+  });
+
+  it("the laptop next: WSL's service is on but Virtual Machine Platform is off: Setup turns it on, then one restart", () => {
+    const r = ensureWsl({ admin: true, services: ['LxssManager'], statusCode: -1, vmp: 'Disabled', boot: 'BOOT-1' });
+    assert.match(r.out, /DISM \/online \/enable-feature \/featurename:VirtualMachinePlatform \/all \/norestart/);
+    assert.match(r.out, /Windows needs a restart to finish turning on Virtual Machine Platform\./);
+    assert.doesNotMatch(r.out, /WSLCALL --update|WSLCALL --install/);
+    assert.equal(r.status, 2, r.out);
+    assert.equal(r.marker, 'vmp|BOOT-1');
+  });
+
+  it("then WSL's download is blocked (0x80072efe) and the old wsl.exe cannot install Ubuntu: no restart, it says what to fix", () => {
+    const r = ensureWsl({
+      admin: true,
+      services: ['LxssManager'],
+      statusCode: -1,
+      vmp: 'Enabled',
+      marker: 'vmp|BOOT-1',
+      boot: 'BOOT-2',
+      updateCode: -1,
+      updateText: ['Installing: Windows Subsystem for Linux', 'Error: 0x80072efe'].join('\n'),
+      noLaunchCode: -1,
+      launchCode: -1,
+    });
+    assert.match(r.out, /WSLCALL --update/);
+    assert.match(r.out, /wsl --update did not finish \(exit -1\): it could not reach Microsoft \(a proxy or firewall\?\)/);
+    assert.match(r.out, /THROWN Could not install Ubuntu-24\.04\. What Windows reports:/);
+    assert.match(r.out, /wsl --update \(exit -1\): Installing: Windows Subsystem for Linux \/ Error: 0x80072efe/);
+    assert.match(r.out, /Virtual Machine Platform: Enabled/);
+    assert.match(r.out, /To fix:\s+- Let WSL download its update: .*usually a company proxy or firewall/);
+    assert.doesNotMatch(r.out, /needs a restart|Turn on virtualization in the BIOS/);
+    assert.equal(r.marker, 'vmp|BOOT-1');
+  });
+
+  it('virtualization off in the BIOS is named as the thing to fix', () => {
+    const r = ensureWsl({ admin: true, services: ['LxssManager'], statusCode: -1, vmp: 'Enabled', virt: false, noLaunchCode: -1, launchCode: -1 });
+    assert.match(r.out, /Virtualization \(BIOS\): off/);
+    assert.match(r.out, /- Turn on virtualization in the BIOS\/UEFI settings/);
+  });
+
+  it('an install that said it worked but is not listed yet: one restart', () => {
+    const r = ensureWsl({ admin: true, services: ['LxssManager'], statusCode: 0, vmp: 'Enabled', noLaunchCode: 0, boot: 'BOOT-3' });
+    assert.match(r.out, /Windows needs a restart to finish installing Ubuntu-24\.04\./);
+    assert.equal(r.marker, 'ubuntu|BOOT-3');
   });
 
   it('WSL on and Ubuntu there: carries on, and the restart note goes', () => {

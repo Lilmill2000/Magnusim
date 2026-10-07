@@ -569,6 +569,8 @@ function Get-WslDistroNames {
 
 function Invoke-WslText([string[]]$WslArgs) {
     # wsl.exe writes its own messages in UTF-16: read them as such. Returns {Code, Text}.
+    # What it writes to stderr is text to show, not a failure of this script.
+    $ErrorActionPreference = 'Continue'
     $prev = [Console]::OutputEncoding
     $text = ''
     $code = -1
@@ -618,16 +620,82 @@ function Clear-RebootMarker {
     Remove-Item -LiteralPath (Join-Path $LogDir 'reboot-required.txt') -ErrorAction SilentlyContinue
 }
 
+function Get-FeatureState([string]$Name) {
+    # A Windows feature's state from DISM ("Enabled", "Disabled", "Enable Pending", ...);
+    # '' when it cannot be read (DISM needs Administrator).
+    try {
+        $out = & dism.exe /online /get-featureinfo /featurename:$Name 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0 -and $out -match '(?m)^\s*State\s*:\s*(.+?)\s*$') { return $Matches[1] }
+    } catch { }
+    return ''
+}
+
+function Test-VirtualizationOn {
+    # On when the firmware has it on, or a hypervisor already runs (the firmware flag then
+    # reads false). $null when Windows does not say.
+    try {
+        if ((Get-CimInstance Win32_ComputerSystem).HypervisorPresent) { return $true }
+        $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+        if ($null -eq $cpu.VirtualizationFirmwareEnabled) { return $null }
+        return [bool]$cpu.VirtualizationFirmwareEnabled
+    } catch {
+        return $null
+    }
+}
+
+# wsl --update's answer in this run (Ensure-WslUbuntu), for the report.
+$script:WslUpdate = $null
+
+function Test-DownloadBlocked([string]$Text) {
+    # WinINet errors for a connection that was refused, cut or timed out.
+    return $Text -match '0x80072ee[2-7]|0x80072ef[13de]|0x8007274c|0x80072f8f'
+}
+
+function Get-WslFixes {
+    # What to fix, from what Windows says now.
+    $fixes = @()
+    $virt = Test-VirtualizationOn
+    if ($virt -eq $false) {
+        $fixes += "Turn on virtualization in the BIOS/UEFI settings (Intel VT-x or AMD-V, often called 'Virtualization Technology' or 'SVM'). On a work PC, IT may have to."
+    }
+    $vmp = Get-FeatureState 'VirtualMachinePlatform'
+    if ($vmp -and $vmp -ne 'Enabled') {
+        $fixes += "Turn on 'Virtual Machine Platform' in Windows Features (it is $vmp), then restart."
+    }
+    if ($script:WslUpdate -and $script:WslUpdate.Code -ne 0) {
+        if (Test-DownloadBlocked $script:WslUpdate.Text) {
+            $fixes += 'Let WSL download its update: wsl --update could not reach Microsoft (the connection was cut or timed out, usually a company proxy or firewall). Ask IT to allow it, or install the WSL .msi from https://github.com/microsoft/WSL/releases, then run Setup.bat again.'
+        } else {
+            $fixes += "Update WSL: wsl --update failed (exit $($script:WslUpdate.Code)). Run 'wsl --update' in a PowerShell window as Administrator, or install the WSL .msi from https://github.com/microsoft/WSL/releases."
+        }
+    }
+    if (-not $fixes.Count) {
+        $fixes += "Turn on virtualization in the BIOS and 'Virtual Machine Platform' in Windows Features (on a work PC, ask IT)."
+    }
+    return $fixes
+}
+
 function Get-WslReport {
-    # What Windows says about WSL, for an error that has to stop Setup.
+    # What Windows says about WSL, and what to fix, for an error that has to stop Setup.
     $lines = @()
     foreach ($a in @(@('--status'), @('--version'), @('-l', '-v'))) {
         $r = Invoke-WslText $a
         $lines += "wsl $($a -join ' ') (exit $($r.Code)):"
-        $lines += ($r.Text -split '\r?\n' | Where-Object { $_.Trim() } | Select-Object -First 8 | ForEach-Object { "  $_" })
+        $lines += ($r.Text -split '\r?\n' | Where-Object { $_.Trim() } | Select-Object -First 6 | ForEach-Object { "  $_" })
+    }
+    if ($script:WslUpdate) {
+        $first = ($script:WslUpdate.Text -split '\r?\n' | Where-Object { $_.Trim() }) -join ' / '
+        $lines += "wsl --update (exit $($script:WslUpdate.Code)): $first"
     }
     $svc = @(Get-Service -Name 'LxssManager', 'WSLService' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)=$($_.Status)" })
     $lines += "WSL services: $(if ($svc.Count) { $svc -join ', ' } else { 'none' })"
+    $vmp = Get-FeatureState 'VirtualMachinePlatform'
+    $lines += "Virtual Machine Platform: $(if ($vmp) { $vmp } else { 'unknown (needs Administrator)' })"
+    $virt = Test-VirtualizationOn
+    $lines += "Virtualization (BIOS): $(if ($virt -eq $true) { 'on' } elseif ($virt -eq $false) { 'off' } else { 'unknown' })"
+    $lines += ''
+    $lines += 'To fix:'
+    $lines += (Get-WslFixes | ForEach-Object { "  - $_" })
     return ($lines -join "`n")
 }
 
@@ -678,9 +746,7 @@ function Ensure-WslUbuntu {
 WSL is still not turned on after the restart. What Windows reports:
 $(Get-WslReport)
 
-On a work PC WSL is often blocked by company policy: ask IT to turn on
-'Windows Subsystem for Linux' and 'Virtual Machine Platform' (and virtualization
-in the BIOS). Then run Setup.bat again. Details: $LogPath
+Then run Setup.bat again. Details: $LogPath
 "@
         }
         if ($asked -and $asked.Step -eq 'wsl-feature' -and $sameBoot) {
@@ -701,17 +767,51 @@ in the BIOS). Then run Setup.bat again. Details: $LogPath
     }
 
     if (-not (Test-Admin)) { Restart-Elevated "install $wanted in WSL" }
+
+    # WSL 2 needs the Virtual Machine Platform feature; WSL's own service can be on without it.
+    $vmp = Get-FeatureState 'VirtualMachinePlatform'
+    if ($vmp -match 'Pending') {
+        if ($asked -and $asked.Step -eq 'vmp' -and $rebooted) {
+            throw @"
+Virtual Machine Platform is still waiting for a restart ($vmp). What Windows reports:
+$(Get-WslReport)
+"@
+        }
+        Request-Reboot 'vmp' 'turning on Virtual Machine Platform'
+    }
+    if ($vmp -eq 'Disabled') {
+        Write-Step 'Turning on Virtual Machine Platform (WSL 2 needs it)'
+        $out = & dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart 2>&1 | Out-String
+        $code = $LASTEXITCODE
+        Write-Host $out.Trim()
+        if ($code -ne 0 -and $code -ne 3010) {
+            throw @"
+Windows did not turn on Virtual Machine Platform (DISM exit $code).
+On a work PC this is often switched off by company policy: ask IT to turn on
+'Virtual Machine Platform' (and virtualization in the BIOS), then run Setup.bat again.
+"@
+        }
+        Request-Reboot 'vmp' 'turning on Virtual Machine Platform'
+    }
+
     Write-Step "Installing $wanted (one-time, needs Administrator)"
     Invoke-Record { Set-ComponentAttempt 'ubuntu' }
-    # Windows 10's own WSL needs the WSL 2 kernel first (wsl --update fetches current WSL).
-    $u = Invoke-WslText @('--update')
-    if ($u.Text) { Write-Host $u.Text }
-    if ($u.Code -ne 0) { Write-Warn "wsl --update did not finish (exit $($u.Code)); trying the install anyway" }
+    # Windows 10's own WSL is too old to install current Ubuntu (and has no WSL 2 kernel):
+    # wsl --update fetches current WSL from Microsoft.
+    $script:WslUpdate = Invoke-WslText @('--update')
+    if ($script:WslUpdate.Text) { Write-Host $script:WslUpdate.Text }
+    if ($script:WslUpdate.Code -ne 0) {
+        $why = if (Test-DownloadBlocked $script:WslUpdate.Text) { ': it could not reach Microsoft (a proxy or firewall?)' } else { '' }
+        Write-Warn "wsl --update did not finish (exit $($script:WslUpdate.Code))$why; trying the install anyway"
+    }
     $r = Invoke-WslText @('--install', '-d', $wanted, '--no-launch')
     if ($r.Text) { Write-Host $r.Text }
-    if ($r.Code -ne 0) {
-        Write-Warn "wsl --install -d $wanted failed; trying without --no-launch"
+    $installed = $r.Code -eq 0
+    if (-not $installed) {
+        # An older wsl.exe has no --no-launch; this one opens Ubuntu to make its user.
+        Write-Warn "wsl --install -d $wanted --no-launch failed; trying without --no-launch"
         & wsl.exe --install -d $wanted
+        $installed = $LASTEXITCODE -eq 0
     }
     Start-Sleep -Seconds 2
     $names = Get-WslDistroNames
@@ -729,9 +829,9 @@ in the BIOS). Then run Setup.bat again. Details: $LogPath
         }
     }
 
-    # Installing Ubuntu right after WSL was turned on can need a restart before the distro
-    # is listed: ask once; after a real restart, say what else to check.
-    if (-not ($asked -and $asked.Step -eq 'ubuntu' -and $rebooted)) {
+    # An install that said it worked can need a restart before the distro is listed: ask
+    # once. One that failed gains nothing from a restart: say what to fix instead.
+    if ($installed -and -not ($asked -and $asked.Step -eq 'ubuntu' -and $rebooted)) {
         Request-Reboot 'ubuntu' "installing $wanted"
     }
 
@@ -739,8 +839,7 @@ in the BIOS). Then run Setup.bat again. Details: $LogPath
 Could not install $wanted. What Windows reports:
 $(Get-WslReport)
 
-Enable Virtualization in BIOS, turn on 'Virtual Machine Platform' in Windows Features
-(on a work PC, ask IT), then run Setup.bat again.
+Then run Setup.bat again. Details: $LogPath
 "@
 }
 
