@@ -63,15 +63,16 @@ test('a plugin job that floods events leaves the event loop free; its file follo
     seen += 1;
     if (ev && ev.seq !== undefined) lastSeq = ev.seq;
   });
+  // Times are monotonic (performance.now): a wall clock can step back under load (WSL resyncs it).
   /** [time, the newest seq seen by then], every 10 ms. */
   const history = [];
   /** The job file read while the job runs: [when, the seq seen then, the file's newest seq, its status]. */
   const reads = [];
-  let last = Date.now();
+  let last = performance.now();
   let worst = 0;
   let firstAt = 0;
   const timer = setInterval(() => {
-    const now = Date.now();
+    const now = performance.now();
     worst = Math.max(worst, now - last);
     last = now;
     history.push([now, lastSeq]);
@@ -83,12 +84,12 @@ test('a plugin job that floods events leaves the event loop free; its file follo
       reads.push([now, lastSeq, own.length ? own[own.length - 1] : 0, saved.status]);
     }
   }, 10);
-  const t0 = Date.now();
+  const t0 = performance.now();
   const child = jobs.spawnPython(job.id, FLOOD, [String(steps), '2000']);
   await new Promise((done) => child.on('close', () => setImmediate(done)));
   clearInterval(timer);
-  const wall = Date.now() - t0;
-  worst = Math.max(worst, Date.now() - last);
+  const wall = performance.now() - t0;
+  worst = Math.max(worst, performance.now() - last);
   console.log(`[jobs flood] ${seen} events in ${wall} ms, stall ${worst} ms, ${persists} file writes, ${reads.length} reads while it ran`);
   // One write per EVENT_PERSIST_MS while it runs (plus its creation, start and end), not one per event.
   assert.ok(persists <= Math.ceil(wall / EVENT_PERSIST_MS) + 8, `${persists} job file writes in ${wall} ms`);

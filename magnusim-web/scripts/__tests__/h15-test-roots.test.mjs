@@ -26,7 +26,7 @@ export const H15_TESTS = [
   '__tests__/foam-relay-launch.test.mjs',
   '__tests__/foam-steps-relay.test.mjs',
   '__tests__/job-runner-close.test.mjs',
-  '__tests__/stop-ps1.test.mjs',
+  '__tests__/stop-targets.test.mjs',
   '__tests__/h15-test-roots.test.mjs',
 ];
 
