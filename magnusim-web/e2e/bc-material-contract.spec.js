@@ -96,6 +96,10 @@ test("a plugin's BC family is offered, edited in its generic form, kept, and pai
   await expect(editor.getByLabel('Boundary condition type')).toHaveValue('Mirror plane');
 
   // A face clicked on the model is assigned and paints in the 'other' colour.
+  // Wait until the model is drawn: on a cold start (a fresh install, the first test
+  // to open the project) a click before the first geometry load hits an empty canvas.
+  await page.waitForFunction(() => window.__CFD_W16_STATE__?.ready === true, null, { timeout: 60_000 });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   const box = await page.locator('#viewer').boundingBox();
   expect(box).toBeTruthy();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
