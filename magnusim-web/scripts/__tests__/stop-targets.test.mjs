@@ -24,7 +24,7 @@ const PS = powershell();
 
 const HERE = 'C:\\Users\\dev\\CFD\\magnusim-web';
 const LAUNCHER = 'C:\\Users\\dev\\CFD\\run.bat';
-const SNAP = 'C:\\Users\\dev\\AppData\\Local\\Temp\\claude\\mwsnap-1\\magnusim-web';
+const SNAP = 'C:\\Users\\dev\\AppData\\Local\\Temp\\mwsnap-1\\magnusim-web';
 
 /** Get-StopRoots over `procs` with these listeners on the app's port. */
 function roots(procs, listeners) {
