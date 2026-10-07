@@ -1,7 +1,7 @@
 {
   "name": "magnusim-cad",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0-dev",
   "description": "Magnusim CAD: the Part workspace plugin (built into workspace/ from src/)",
   "license": "GPL-3.0-or-later",
   "type": "module",
