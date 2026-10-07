@@ -150,13 +150,14 @@ describe('a closed gate', () => {
   });
   beforeEach(() => gate.resetLinkGateForTests({ writeWaitMs: 400, readWaitMs: 1200, drainMs: 300 }));
 
+  // Waits are timed on a monotonic clock: a wall clock can step back under load (WSL resyncs it).
   const post = (path, body) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
   it('holds a write, then answers 503 geometry_updating with Retry-After; another project goes on', async () => {
     assert.equal(await gate.closeGate('pa', 'Demo 1'), true);
-    const t0 = Date.now();
+    const t0 = performance.now();
     const r = await post('/api/bcs?project_id=pa', { project_id: 'pa' });
-    const waited = Date.now() - t0;
+    const waited = performance.now() - t0;
     assert.equal(r.status, 503);
     assert.equal(r.headers.get('retry-after'), '2');
     assert.deepEqual(await r.json(), { ok: false, code: 'geometry_updating', error: 'Updating Demo 1. Try again in a moment.' });
@@ -172,9 +173,9 @@ describe('a closed gate', () => {
 
   it('a read waits longer than a write, and both go through when the gate opens', async () => {
     assert.equal(await gate.closeGate('pa', 'Demo 1'), true);
-    const t0 = Date.now();
-    const read = fetch(`${base}/api/project/tree?project_id=pa`).then((r) => [r.status, Date.now() - t0]);
-    const write = post('/api/bcs?project_id=pa', { project_id: 'pa' }).then((r) => [r.status, Date.now() - t0]);
+    const t0 = performance.now();
+    const read = fetch(`${base}/api/project/tree?project_id=pa`).then((r) => [r.status, performance.now() - t0]);
+    const write = post('/api/bcs?project_id=pa', { project_id: 'pa' }).then((r) => [r.status, performance.now() - t0]);
     await sleep(700);
     gate.openGate('pa');
     const [w, rd] = await Promise.all([write, read]);
@@ -219,10 +220,10 @@ describe('a closed gate', () => {
     gate.openGate('pa');
     await sleep(100);
     assert.equal(gate.gateOpenCount('pa'), 1, 'the admitted save is counted while it runs');
-    const t0 = Date.now();
+    const t0 = performance.now();
     const closing = gate.closeGate('pa', 'Demo 1', { drainMs: 2000 });
     let closedAt = 0;
-    void closing.then(() => (closedAt = Date.now() - t0));
+    void closing.then(() => (closedAt = performance.now() - t0));
     await sleep(300);
     assert.equal(closedAt, 0, 'the close drains: it does not end while the save runs');
     release();
