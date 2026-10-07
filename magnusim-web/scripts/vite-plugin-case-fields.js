@@ -1276,49 +1276,62 @@ function ptCacheKey(caseDir, time, p) {
   return join(scopedCacheDir(root, caseDir), `pt-${h}`);
 }
 
+/**
+ * A free-text option as one argument (--name=value): a value starting with "-" (a
+ * point at a negative x, "-0.01,0,0.3") would otherwise be read as an option, and the
+ * tool would stop with "expected one argument".
+ */
+function flagValue(name, value) {
+  return `${name}=${value}`;
+}
+
+/** The export_particle_trace.py command line for a request. */
+export function ptExportArgs(caseDir, time, outDir, p) {
+  return [
+    PT_EXPORT_SCRIPT,
+    '--case',
+    caseDir,
+    '--time',
+    String(time),
+    '--out-dir',
+    outDir,
+    '--seeds-h',
+    String(p.seeds_h),
+    '--seeds-v',
+    String(p.seeds_v),
+    '--spacing',
+    String(p.spacing),
+    '--size',
+    String(p.size),
+    '--both',
+    String(p.both),
+    flagValue('--pick', p.pick || ''),
+    '--representation',
+    p.representation || 'Cylinders',
+    '--max-steps',
+    String(p.max_steps),
+    '--seed-mode',
+    p.seed_mode || 'grid',
+    '--faces',
+    (p.faces || []).join(','),
+    '--quantity-mode',
+    p.quantity_mode || 'count',
+    '--n-seeds',
+    String(p.n_seeds ?? 40),
+    '--density',
+    String(p.density ?? 10000),
+    '--region',
+    p.region || '',
+    '--vector',
+    p.vector || '',
+    '--coloring',
+    p.coloring || '',
+  ];
+}
+
 function runPtExport(caseDir, time, outDir, p) {
   return new Promise((resolveP, reject) => {
-    const args = [
-      PT_EXPORT_SCRIPT,
-      '--case',
-      caseDir,
-      '--time',
-      String(time),
-      '--out-dir',
-      outDir,
-      '--seeds-h',
-      String(p.seeds_h),
-      '--seeds-v',
-      String(p.seeds_v),
-      '--spacing',
-      String(p.spacing),
-      '--size',
-      String(p.size),
-      '--both',
-      String(p.both),
-      '--pick',
-      p.pick || '',
-      '--representation',
-      p.representation || 'Cylinders',
-      '--max-steps',
-      String(p.max_steps),
-      '--seed-mode',
-      p.seed_mode || 'grid',
-      '--faces',
-      (p.faces || []).join(','),
-      '--quantity-mode',
-      p.quantity_mode || 'count',
-      '--n-seeds',
-      String(p.n_seeds ?? 40),
-      '--density',
-      String(p.density ?? 10000),
-      '--region',
-      p.region || '',
-      '--vector',
-      p.vector || '',
-      '--coloring',
-      p.coloring || '',
-    ];
+    const args = ptExportArgs(caseDir, time, outDir, p);
     const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
@@ -1419,23 +1432,27 @@ function popCacheKey(caseDir, time, p) {
   return join(scopedCacheDir(POP_CACHE_ROOT, caseDir), `pop-${h}`);
 }
 
+/** The export_plot_over_path.py command line for a request. */
+export function popExportArgs(caseDir, time, outDir, p) {
+  return [
+    POP_EXPORT_SCRIPT,
+    '--case',
+    caseDir,
+    '--time',
+    String(time),
+    '--out-dir',
+    outDir,
+    flagValue('--points', p.points || ''),
+    '--subdivisions',
+    String(p.subdivisions),
+    '--field',
+    p.field || '',
+  ];
+}
+
 function runPopExport(caseDir, time, outDir, p) {
   return new Promise((resolveP, reject) => {
-    const args = [
-      POP_EXPORT_SCRIPT,
-      '--case',
-      caseDir,
-      '--time',
-      String(time),
-      '--out-dir',
-      outDir,
-      '--points',
-      p.points || '',
-      '--subdivisions',
-      String(p.subdivisions),
-      '--field',
-      p.field || '',
-    ];
+    const args = popExportArgs(caseDir, time, outDir, p);
     const child = spawnFilter(args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
