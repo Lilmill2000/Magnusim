@@ -136,9 +136,13 @@ test('a Point probe takes typed points and Add probe here from an Inspect pin', 
   // Just after a load the tree can list the probe before the page has read its run:
   // the run list answers late here, and a click on the probe still opens its panel
   // (it was lost before: nothing happened).
+  // A request the page dropped while it waited (a reload, or a newer run list) is
+  // already handled by the time the delay ends: only one still waiting goes on.
   const slowRuns = async (route) => {
     await new Promise((r) => setTimeout(r, 2500));
-    await route.continue();
+    await route.continue().catch((err) => {
+      if (!/already handled/i.test(String(err && err.message))) throw err;
+    });
   };
   await page.route('**/api/run/status**', slowRuns);
   await page.reload();
@@ -152,7 +156,8 @@ test('a Point probe takes typed points and Add probe here from an Inspect pin', 
   await page.locator(`#left-tree [data-w27-aa="${probe.id}"] > .tree-row .tl`).first().click();
   await expect(page.locator(`#left-tree [data-w27-aa="${probe.id}"]`)).toHaveClass(/selected/);
   await expect(page.locator('#panel-area-average')).toBeVisible({ timeout: 20_000 });
-  await page.unroute('**/api/run/status**', slowRuns);
+  // Let any delayed run list finish before going on, so none is left mid-handler.
+  await page.unrouteAll({ behavior: 'wait' });
   await expect(page.locator('#aa-type-label')).toHaveText('Point probe');
   await expect(page.locator('#aa-face-block')).toBeHidden();
   await expect(page.locator('#aa-point-block')).toBeVisible();
