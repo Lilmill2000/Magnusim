@@ -28,7 +28,7 @@ $RepoRoot = (Resolve-Path (Join-Path $WebRoot '..')).Path
 
 $LogDir = Join-Path $WebRoot '.cache\setup'
 
-$LogPath = Join-Path $LogDir 'setup.log'
+$LogPath = Join-Path $LogDir $(if ($Elevated) { 'setup-elevated.log' } else { 'setup.log' })
 
 $MagnusimLocal = Join-Path $WebRoot '.magnusim-local.json'
 $LegacyLocal = Join-Path $WebRoot '.cfddesk-local.json'
@@ -173,6 +173,14 @@ work PC, ask IT to run Setup.bat as Administrator once (or to turn on Windows lo
 paths and install WSL with Ubuntu-24.04), then run Setup.bat again yourself.
 "@
 
+    }
+
+    # What the Administrator window did (it closes when it ends), here and in setup.log.
+    $elog = Join-Path $LogDir 'setup-elevated.log'
+    if (Test-Path $elog) {
+        Write-Host ''
+        Write-Host "The Administrator window ended (exit $($p.ExitCode)). Its last lines (all of it: $elog):"
+        Get-Content -LiteralPath $elog -Tail 30 | Where-Object { $_ -notmatch '^\*+$|^(Windows PowerShell transcript|Start time|End time|Username|RunAs User|Configuration Name|Machine|Host Application|Process ID|PS[A-Z]|BuildVersion|CLRVersion|WSManStackVersion|PSRemotingProtocolVersion|SerializationVersion)' } | ForEach-Object { Write-Host "    $_" }
     }
 
     exit $p.ExitCode
@@ -559,152 +567,181 @@ function Get-WslDistroNames {
 
 
 
-function Test-WslExe {
-
-    # Windows 11 ships wsl.exe before WSL is turned on: only a working WSL answers --status.
-    if (-not (Test-Path (Join-Path $env:SystemRoot 'System32\wsl.exe'))) { return $false }
-
-    try { & wsl.exe --status 2>$null | Out-Null } catch { return $false }
-
-    return $LASTEXITCODE -eq 0
-
+function Invoke-WslText([string[]]$WslArgs) {
+    # wsl.exe writes its own messages in UTF-16: read them as such. Returns {Code, Text}.
+    $prev = [Console]::OutputEncoding
+    $text = ''
+    $code = -1
+    try {
+        [Console]::OutputEncoding = [Text.Encoding]::Unicode
+        $text = (& wsl.exe @WslArgs 2>&1 | Out-String) -replace "`0", ''
+        $code = $LASTEXITCODE
+    } catch {
+        $text = $_.Exception.Message
+    } finally {
+        [Console]::OutputEncoding = $prev
+    }
+    return [pscustomobject]@{ Code = $code; Text = $text.Trim() }
 }
 
+function Test-WslOn {
+    # WSL is turned on when Windows has its service (LxssManager: the Windows feature;
+    # WSLService: WSL from the Store), or when wsl --status answers. wsl.exe alone says
+    # nothing: Windows ships it before WSL is turned on. --status alone is not enough
+    # either: on Windows 10 it fails while no distro or WSL 2 kernel is installed yet.
+    if (-not (Test-Path (Join-Path $env:SystemRoot 'System32\wsl.exe'))) { return $false }
+    if (Get-Service -Name 'LxssManager', 'WSLService' -ErrorAction SilentlyContinue) { return $true }
+    return (Invoke-WslText @('--status')).Code -eq 0
+}
 
+function Get-BootTime {
+    try { return ([datetime](Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToString('o') } catch { return '' }
+}
+
+function Read-RebootMarker {
+    # What Setup last asked a restart for ("wsl-feature" or "ubuntu") and the boot it asked in.
+    $marker = Join-Path $LogDir 'reboot-required.txt'
+    if (-not (Test-Path $marker)) { return $null }
+    $parts = ((Get-Content -LiteralPath $marker -Raw) -replace "^$([char]0xFEFF)", '').Trim() -split '\|', 2
+    return [pscustomobject]@{ Step = $parts[0]; Boot = $(if ($parts.Count -gt 1) { $parts[1] } else { '' }) }
+}
+
+function Request-Reboot([string]$Step, [string]$What) {
+    Set-Content -Path (Join-Path $LogDir 'reboot-required.txt') -Value "$Step|$(Get-BootTime)" -Encoding utf8
+    Write-Host ''
+    Write-Host "Windows needs a restart to finish $What." -ForegroundColor Yellow
+    Write-Host 'Reboot, then double-click Setup.bat again. It will resume from here.' -ForegroundColor Yellow
+    exit 2
+}
+
+function Clear-RebootMarker {
+    Remove-Item -LiteralPath (Join-Path $LogDir 'reboot-required.txt') -ErrorAction SilentlyContinue
+}
+
+function Get-WslReport {
+    # What Windows says about WSL, for an error that has to stop Setup.
+    $lines = @()
+    foreach ($a in @(@('--status'), @('--version'), @('-l', '-v'))) {
+        $r = Invoke-WslText $a
+        $lines += "wsl $($a -join ' ') (exit $($r.Code)):"
+        $lines += ($r.Text -split '\r?\n' | Where-Object { $_.Trim() } | Select-Object -First 8 | ForEach-Object { "  $_" })
+    }
+    $svc = @(Get-Service -Name 'LxssManager', 'WSLService' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)=$($_.Status)" })
+    $lines += "WSL services: $(if ($svc.Count) { $svc -join ', ' } else { 'none' })"
+    return ($lines -join "`n")
+}
+
+function Enable-WslFeature {
+    # wsl --install turns WSL on (Windows 10 2004+ and 11). When it cannot (an older
+    # wsl.exe, or a policy), turn the two Windows features on directly.
+    Write-Step 'Enabling Windows Subsystem for Linux'
+    $r = Invoke-WslText @('--install', '--no-distribution')
+    if ($r.Text) { Write-Host $r.Text }
+    if ($r.Code -eq 0) { return }
+    Write-Warn "wsl --install did not turn WSL on (exit $($r.Code)); turning the Windows features on instead"
+    foreach ($feature in @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform')) {
+        $out = & dism.exe /online /enable-feature /featurename:$feature /all /norestart 2>&1 | Out-String
+        $code = $LASTEXITCODE
+        Write-Host $out.Trim()
+        # 3010: done, a restart finishes it.
+        if ($code -ne 0 -and $code -ne 3010) {
+            throw @"
+Windows did not turn on $feature (DISM exit $code).
+On a work PC this is often switched off by company policy: ask IT to turn on
+'Windows Subsystem for Linux' and 'Virtual Machine Platform' (and virtualization
+in the BIOS), then run Setup.bat again.
+"@
+        }
+    }
+}
 
 function Test-HasDistro([string]$Name, [string[]]$All) {
-
     foreach ($d in $All) {
-
         if ($d -eq $Name) { return $true }
-
         if ($d -replace '\s+\(.*\)$', '' -eq $Name) { return $true }
-
     }
-
     return $false
-
 }
 
-
-
 function Ensure-WslUbuntu {
-
     $wanted = 'Ubuntu-24.04'
+    $asked = Read-RebootMarker
+    $boot = Get-BootTime
+    # A note from Setup before boot times were kept has none: it is never taken as "restarted".
+    $sameBoot = $asked -and $asked.Boot -and ($asked.Boot -eq $boot)
+    $rebooted = $asked -and $asked.Boot -and ($asked.Boot -ne $boot)
 
-    if (-not (Test-WslExe)) {
+    if (-not (Test-WslOn)) {
+        # Asked for a restart to turn WSL on, restarted, and it is still off: say why, never loop.
+        if ($asked -and $asked.Step -eq 'wsl-feature' -and $rebooted) {
+            throw @"
+WSL is still not turned on after the restart. What Windows reports:
+$(Get-WslReport)
 
+On a work PC WSL is often blocked by company policy: ask IT to turn on
+'Windows Subsystem for Linux' and 'Virtual Machine Platform' (and virtualization
+in the BIOS). Then run Setup.bat again. Details: $LogPath
+"@
+        }
+        if ($asked -and $asked.Step -eq 'wsl-feature' -and $sameBoot) {
+            Request-Reboot 'wsl-feature' 'turning on WSL (it has not restarted since)'
+        }
         if (-not (Test-Admin)) { Restart-Elevated 'turn on the Windows Subsystem for Linux (WSL)' }
-
-        Write-Step 'Enabling Windows Subsystem for Linux'
-
-        & wsl.exe --install --no-distribution
-
-        Write-Host ''
-
-        Write-Host 'Windows needs a restart to finish enabling WSL.' -ForegroundColor Yellow
-
-        Write-Host 'Reboot, then double-click Setup.bat again. It will resume from here.' -ForegroundColor Yellow
-
-        Set-Content -Path (Join-Path $LogDir 'reboot-required.txt') -Value 'wsl-feature' -Encoding utf8
-
-        exit 2
-
+        Enable-WslFeature
+        Request-Reboot 'wsl-feature' 'turning on WSL'
     }
 
-
-
-    try { & wsl.exe --status | Out-Host } catch {}
+    Write-Host (Invoke-WslText @('--status')).Text
     Invoke-Record { Begin-Component 'ubuntu' (Get-DistroObservation) }
-
-
-
     $names = Get-WslDistroNames
-
     if (Test-HasDistro $wanted $names) {
-
         Write-Ok "WSL distro $wanted is installed"
-
-        Remove-Item -LiteralPath (Join-Path $LogDir 'reboot-required.txt') -ErrorAction SilentlyContinue
-
+        Clear-RebootMarker
         return $wanted
-
     }
-
-
 
     if (-not (Test-Admin)) { Restart-Elevated "install $wanted in WSL" }
-
     Write-Step "Installing $wanted (one-time, needs Administrator)"
     Invoke-Record { Set-ComponentAttempt 'ubuntu' }
-
-    & wsl.exe --install -d $wanted --no-launch
-
-    if ($LASTEXITCODE -ne 0) {
-
+    # Windows 10's own WSL needs the WSL 2 kernel first (wsl --update fetches current WSL).
+    $u = Invoke-WslText @('--update')
+    if ($u.Text) { Write-Host $u.Text }
+    if ($u.Code -ne 0) { Write-Warn "wsl --update did not finish (exit $($u.Code)); trying the install anyway" }
+    $r = Invoke-WslText @('--install', '-d', $wanted, '--no-launch')
+    if ($r.Text) { Write-Host $r.Text }
+    if ($r.Code -ne 0) {
         Write-Warn "wsl --install -d $wanted failed; trying without --no-launch"
-
         & wsl.exe --install -d $wanted
-
     }
-
     Start-Sleep -Seconds 2
-
     $names = Get-WslDistroNames
-
     if (Test-HasDistro $wanted $names) {
-
         Invoke-Record { Complete-Component 'ubuntu' (Get-DistroObservation) }
         Write-Ok "$wanted installed"
-
-        Remove-Item -LiteralPath (Join-Path $LogDir 'reboot-required.txt') -ErrorAction SilentlyContinue
-
+        Clear-RebootMarker
         return $wanted
-
     }
 
     foreach ($fallback in @('Ubuntu', 'Ubuntu-22.04')) {
-
         if (Test-HasDistro $fallback $names) {
-
             Write-Warn "Using existing distro $fallback (preferred $wanted was not installed)"
-
             return $fallback
-
         }
-
     }
 
-    # Installing Ubuntu right after WSL was turned on often needs a restart before the
-    # distro is listed. The first time, ask for one; after a restart, say what else to check.
-    $marker = Join-Path $LogDir 'reboot-required.txt'
-
-    $asked = (Test-Path $marker) -and ((Get-Content -LiteralPath $marker -Raw) -match 'ubuntu')
-
-    if (-not $asked) {
-
-        Write-Host ''
-
-        Write-Host "Windows needs a restart to finish installing $wanted." -ForegroundColor Yellow
-
-        Write-Host 'Reboot, then double-click Setup.bat again. It will resume from here.' -ForegroundColor Yellow
-
-        Set-Content -Path $marker -Value 'ubuntu' -Encoding utf8
-
-        exit 2
-
+    # Installing Ubuntu right after WSL was turned on can need a restart before the distro
+    # is listed: ask once; after a real restart, say what else to check.
+    if (-not ($asked -and $asked.Step -eq 'ubuntu' -and $rebooted)) {
+        Request-Reboot 'ubuntu' "installing $wanted"
     }
 
     throw @"
+Could not install $wanted. What Windows reports:
+$(Get-WslReport)
 
-Could not install $wanted.
-
-Enable Virtualization in BIOS, turn on 'Virtual Machine Platform' in Windows Features,
-
-then run Setup.bat again. List of distros: $($names -join ', ')
-
+Enable Virtualization in BIOS, turn on 'Virtual Machine Platform' in Windows Features
+(on a work PC, ask IT), then run Setup.bat again.
 "@
-
 }
 
 
