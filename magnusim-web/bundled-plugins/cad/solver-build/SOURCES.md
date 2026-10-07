@@ -72,3 +72,12 @@ The P3 sketcher's worker side lives in `src/solver-worker/` (`solver-api.mjs`,
 `workspace/solver/solver-worker.js` (scripts/build.mjs `WORKERS`), next to the two
 files above, and sketch mode (`src/sketch/solver-client.ts`) starts it with
 `ws.spawnWorker`.
+
+## Shipped output (CAD 0.1.0)
+
+A rebuild with `build.sh` (emsdk 6.0.10) from the pinned sources gives these files byte for byte:
+
+| File | SHA-256 |
+|---|---|
+| `workspace/solver/planegcs.wasm` | `b660883bc01f175afd2f4b48d4877d6f8b0df75ee8776775719657fe0473a464` |
+| `workspace/solver/planegcs.mjs` | `f02bc97fffa690cd2488017279ec9483d004c45b127167a0e95115d68cd30314` |

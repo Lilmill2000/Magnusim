@@ -1,4 +1,5 @@
-/* CONSTRUCT panels and labels (REFERENCE, P4a). Colours only through tokens. */
+/* CONSTRUCT panels and labels (REFERENCE, P4a). Colours only through tokens.
+ * SPDX-License-Identifier: GPL-3.0-or-later */
 .cad-construct-origin {
   display: flex;
   flex-wrap: wrap;

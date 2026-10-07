@@ -2,12 +2,14 @@
 
 This is the map for everyone changing the plugin: what runs where, which area
 owns which files, the contracts between areas (`src/types/`), and the rules
-every change follows. Plans and decisions live in the project's plan folder
-(`CAD Plugin/00 - Research and proposal.md`, `01 - Decisions 2026-09-30.md`,
-`02 - P0 results and decisions.md`, `p0/CONTRACT.md`); where they disagree,
-the decisions win. The P2 (STEP editing) and P3 (sketcher) build follows
+every change follows. The maintainer's plans and decisions are kept outside
+the repository; the decisions that shape the code are restated where they apply
+(§7's UI rules, §11's link rules), and the user-facing result is `README.md`
+(what 0.1.0 does and its known limitations) and `CHANGELOG.md`. The area names
+below (SOLIDS, REFERENCE, PATTERN, SKETCH, SELECT, ...) are the code areas of
+§2. The P2 (STEP editing) and P3 (sketcher) build follows
 `docs/p2p3-plan.md`: its schema, kernel API 3, extension points (§10 here) and
-ownership map (§2 here) are binding for the builders. P4a (solid features,
+ownership map (§2 here) are binding for each area. P4a (solid features,
 reference geometry, the volume chip per body) was built by two areas, SOLIDS and
 REFERENCE, and integrated in one step; their notes are the §2 rows, §5's API 4
 table, §6's schema additions and §10's "Solid features" and "CONSTRUCT". P4b

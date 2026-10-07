@@ -1,172 +1,475 @@
-# Magnusim CAD
+# Magnusim CAD 0.1.0
 
-A parametric part modeler (SolidWorks and Fusion style) that runs as
-Magnusim's **Part** workspace. It is an optional bundled plugin that ships
-on (Daniel's D33); Settings > Plugins turns it off (Disable), and then nothing
-of it runs. A new Part starts from **Design a part** on an empty project or in
-the New Project dialog's "Start from", from **New design** on Home (New Project
-with "Untitled Part N", one Create), or from the header's **CAD** button (its
-menu lists the project's Parts and makes a new one); once a project has a Part,
-its STUDIES section lists it and offers **+ New Part**. A Part opens in its own
-full-page workspace over the workbench. Today (phases P1-P4b and the SD pass) a
-Part is made of sketches (lines, rectangles, circles, arcs, fit-point and
-control-point splines; dimensions and constraints solved as you draw) turned
-into solids, and of imported STEP files (healed, with their names and colours)
-edited directly. Sketch tools beyond drawing: Mirror (copies held symmetric
-about a line), Linear and Circular pattern (copies tied to their source,
-re-laid out when the count or spacing changes, editable from the Sketch panel),
-Offset (a chain of lines, arcs and splines at a distance, one side or both),
-Fillet and Chamfer of a corner, Trim and Extend (splines included), and
-Construction from the right-click menu (a checkmark state; "Make construction"
-/ "Make normal" on a mixed selection), the toolbar or X. **Project** (P) brings
-a body's vertices, edges or a face's outer edges into the sketch, or with
-Silhouette a body's outline along the sketch normal; **Intersect** adds the
-curves where the sketch plane cuts the bodies. Both are linked: drawn purple,
-fixed, re-computed at every rebuild, usable by dimensions, relations, Trim and
-regions, and turned into ordinary geometry with Break link. A source that
-disappears upstream is reported, not blocking: the curves turn amber, "Lost
-reference: ..." names what was lost, and the sketch still solves. While
-drawing, the pointer also snaps to the model itself (a vertex, an edge's
-middle, a point on an edge, a round edge's centre, where an edge pierces the
-sketch plane; Ctrl suppresses snapping), and a click there adds the linked
-reference and the relation in one undo step; Ctrl+click on a body vertex or
-edge adds it to a sketch selection for Coincident, On curve, Midpoint or a
-Dimension. Solids: Extrude (blind,
-two sides, symmetric, through all, up to a face or a vertex, along a chosen
-direction, or a flat face of a body extruded with no sketch), Revolve, Sweep
-along a sketched path, and Loft through two or more profiles, each as a new
-body or joined, cut or intersected. Edits: Fillet (tangent chains; a radius
-that is too large names the edges and the radius that works), Chamfer (one or
-two distances), Shell (inside or outside), press-pull, delete faces, split and
-Combine (join, cut, intersect). Press-pull moves flat and curved faces (several
-at once, of mixed kinds) along their outward normal as a true offset: a sloping
-neighbour is extended to meet the moved face (no step), a hole's bore or a boss
-changes its radius (out adds material: 2 mm on a 10 mm bore makes it 8 mm, and
-the panel says "Bore radius 10 mm → 8 mm"), a fillet changes its radius and stays
-tangent, and a pull that would close a hole or cut the part through itself is
-red in words with what works ("the hole would close: 9.9 mm or less works").
-Fillets and chamfers beside a moved face keep their size (a box top with rounded
-edges rises; its walls stay). Where OCCT's offset cannot do it, a cylinder is
-opened or closed by a ring of material (the Vortex's outlet pipes), or flat and
-curved faces are moved as prisms or thickened faces where every neighbour is
-square to them; every result is checked (no face lost, no split from adding
-material, a plausible volume change) before it is taken, and a refusal says why
-in plain words with a distance that does work. A Press-pull saved before this
-keeps its old flat-face prism, so the part rebuilds exactly as it was made. Reference geometry (the toolbar's CONSTRUCT
-group): planes (offset, at an angle, through 3 points, midplane, normal to a
-curve), axes (through 2 points, of a round face, along an edge, where 2 planes
-cross; the origin's X, Y and Z axes are rows under Origin too) and points (at a vertex, a centre, on an edge, where an edge crosses a
-plane, coordinates), each a history feature that follows the model and that a
-sketch can lie on and a revolve or an extrude can use; a broken one that
-nothing uses does not stop the project's update (the header says so as it
-lands). The PATTERN group (beside SOLID) has **Linear pattern** (one or two
-directions; count with spacing or extent; symmetric), **Circular pattern** (an
-origin or CONSTRUCT axis, a straight edge or a round face; full 360° or a set
-angle; symmetric) and **Mirror** (an origin or CONSTRUCT plane or a flat face).
-Each repeats features (their tool bodies applied with each feature's own
-operation, or New body / Join / Cut / Intersect), bodies (copies) or faces of
-one body (the boss or pocket they bound, copied); a copy is skipped by a click
-on its number in the view, and a pattern of a mirror or a mirror of a pattern
-works. Copies are named after the pattern and their instance, so a fillet on
-copy 3 survives a count change; a failure is a red feature that says why
-("Instances 2 and 3 of Body 1 don't touch Body 1; Join needs overlap. Use New
-body or change the spacing") while the model before it still shows. Measure,
-mass properties, check, export to STEP; the volume chip shows each body's
-volume on its own, never a total. **Normal to** (N, the views menu, and the
-right-click menu of a face, a plane, a sketch's row or its curves in the view)
-turns the view square to a flat face, an origin or CONSTRUCT plane, or a sketch
-(with the sketch's own up); in sketch mode it looks at the open sketch. A curved
-face is refused in words. Solids come
-only from sketches and STEP: there is no one-click Box or Cylinder (decision
-2026-10-01; a Part saved with one opens with that row red, "This part uses a
-removed feature (Box 1)", and Delete takes it away). For CFD, **Enclosure** (the
-toolbar's CFD PREP group) makes a box or cylinder body around the part's exact
-bounding box, with zero, percent or fixed padding and its own value per side
-(typed, or dragged by the arrows in the view; Escape during a drag puts it back).
-A side may go into the part (one amber note names those sides: the fluid will
-leave the cut-off part out) but never past its far side (refused under the
-field, and the arrow stops there; also when the part later shrinks under it). It follows the part when the part changes,
-it is drawn see-through (a click picks the part inside it), its faces are named
-by side ("+X face of Enclosure 1", "Top face"; a cylinder about X has a "+X end"),
-and Combine Cut with it as the target (Keep the tool bodies comes on) then gives
-the fluid domain. Named parameters drive
-any number. Guide rails for Loft and the rest are V1. The model toolbar starts compact (each group's
-main command, the rest in its "More" menu) and the sketch ribbon with every
-command, labels on one line; right-click a command for Show in toolbar / Move to
-More / Move left / Move right / Reset toolbar, or drag it along its group. The
-layout is the user's, the same in every project, and another open CAD tab follows a
-change at once (the host's plugin prefs, `ws.prefs`; on a host without them it is kept
-per project: ARCHITECTURE.md §7 "Toolbar"). Every sketch dimension shows its unit next
-to its value ("⌀125 mm", "R10 mm", "(40 mm)" driven, "fx: 40 mm", "30°"), and so do
-the value boxes while drawing and the edit box; typing "125 mm", "5 in" or a bare
-number (the document's unit) works as before. What a sketch cannot drag (a fully
-defined entity, the origin) keeps the normal arrow cursor; a drag of it says why in
-the sketch panel ("This line is fully defined: change a dimension to move it").
-The description in `manifest.toml` (shown in
-Settings > Plugins) names only what ships: update it as features land.
+A parametric part modeler in the style of SolidWorks and Fusion, built into
+Magnusim as the **Part** workspace. You draw sketches, turn them into solids,
+edit STEP files, wrap the part in an air volume for CFD, and go back to the
+simulation with the part already in the project.
+
+It is a bundled plugin and it is on by default. Settings > Plugins turns it off
+(Disable); while it is off, nothing of it runs. Everything runs in the app's
+window: the modeling kernel (Open CASCADE 7.9.3) and the sketch solver
+(FreeCAD's PlaneGCS) run as WebAssembly in the workspace's own workers, so CAD
+needs no Python, no WSL and no internet connection.
+
+What is new in each version: `CHANGELOG.md`. How it is built: the
+[Developer](#developer) section below and `ARCHITECTURE.md`.
+
+## Contents
+
+- [Start a part](#start-a-part)
+- [The workspace](#the-workspace)
+- [Sketches](#sketches)
+- [Constraints and dimensions](#constraints-and-dimensions)
+- [Solids](#solids)
+- [Modify: fillets, shells, booleans and direct edits](#modify-fillets-shells-booleans-and-direct-edits)
+- [Patterns and mirror](#patterns-and-mirror)
+- [Reference geometry](#reference-geometry)
+- [STEP files: import, edit, export](#step-files-import-edit-export)
+- [CFD prep: Enclosure and Combine](#cfd-prep-enclosure-and-combine)
+- [Measure and inspect](#measure-and-inspect)
+- [History, parameters, undo and saving](#history-parameters-undo-and-saving)
+- [Back to the simulation](#back-to-the-simulation)
+- [Mouse and keys](#mouse-and-keys)
+- [Known limitations in 0.1.0](#known-limitations-in-010)
+- [Licence](#licence)
+- [Developer](#developer)
+
+## Start a part
+
+A Part lives in a project, like a simulation study. Start one from any of these:
+
+- **Design a part**, beside "Add geometry", on a project with no geometry yet.
+- **Start from: Design a part** in the New Project dialog.
+- **New design** on Home: it makes a project ("Untitled Part N") and opens a
+  Part in one step.
+- The **CAD** button in the project header: its menu lists the project's Parts
+  and makes a new one.
+- Once a project has a Part, the tree's STUDIES section lists it, with
+  **+ New Part**.
+
+The Part opens in its own full-page workspace over the project. It uses the
+project's units (millimetres, inches and so on); a typed value may carry its own
+unit ("125 mm", "5 in").
+
+## The workspace
+
+- **Toolbar** across the top. In model mode its groups are SKETCH, SOLID,
+  PATTERN, MODIFY, CONSTRUCT, CFD PREP, INSPECT and FILE, then the views and
+  Undo / Redo. It starts compact: each group shows its main one or two commands
+  (Sketch; Extrude; Linear pattern; Fillet and Chamfer; Plane; Enclosure;
+  Measure; Import STEP), and the rest of the group is in its **More ▾** menu. In
+  sketch mode the ribbon shows DRAW, CONSTRAIN, DIMENSION and MODIFY.
+  - Arrange it your way: right-click a command for **Show in toolbar**, **Move to
+    More**, **Move left**, **Move right** and **Reset toolbar**, or drag a command
+    along its group. The layout is yours in every project, and another open CAD
+    tab follows a change at once.
+  - A command that cannot run right now is greyed, and its tooltip says why
+    ("Make or import a body first").
+- **Design tree** on the left: **Origin** (the Top, Front and Right planes and
+  the X, Y and Z axes), **Bodies**, and **History**, the features in build order
+  with a rollback bar.
+- **Feature panels** open on the left when you make or edit a feature. Changes
+  apply live as you type or pick; **Done** closes the panel; **Delete** removes
+  the feature (on a new one it discards it).
+- **Viewport** with the view triad, the views menu (the standard views, Normal
+  to, Perspective or Orthographic, Shaded, Shaded + edges, Wireframe), the
+  **Selection filter** (Bodies, Faces, Edges, Vertices, Planes) and the
+  **Section view**.
+- **Chips** at the bottom: the selected body's volume (or each body's, never a
+  total), the number of items selected, the save state and the sketch's state.
+
+## Sketches
+
+Click **Sketch** (or right-click a flat face: **New sketch on this face**), then
+pick an origin plane, a CONSTRUCT plane or a flat face of a body. The view turns
+square to the sketch. **Finish sketch** (or Enter with no tool step open) leaves
+sketch mode; the camera stays where it is.
+
+**Draw** (DRAW group):
+
+- **Line** (L): chained lines, click by click. A, or a drag from the end, makes
+  a tangent arc.
+- **Rectangle** (R, two corners) and **Center rectangle**.
+- **Circle** (C), **3-point arc** (A), **Tangent arc**, **Point**,
+  **Centerline**.
+- **Spline** (S): a fit-point spline through the points you click. Double-click
+  or Enter places it; a click on its first point closes it. Its fit points are
+  ordinary sketch points: dimension them, relate them, drag them.
+- **Control-point spline**: degree 3 (or 5), pulled by its control points;
+  the control polygon shows dashed while it is selected.
+- **Construction** (X), or right-click a selection: **Construction** turns
+  curves into construction geometry and back. A mixed selection offers **Make
+  construction** and **Make normal**.
+
+While you draw, a value box follows the pointer: type a length or an angle and
+press Enter or Tab. The pointer snaps to the sketch (ends, midpoints, centres,
+curves, horizontal and vertical) and to the model itself: a body's vertex, an
+edge's middle, a point on an edge, a round edge's centre (hover the rim first),
+and the point where an edge pierces the sketch plane. Clicking a model snap adds
+a linked reference and the relation in one undo step. Hold Ctrl to draw without
+snapping.
+
+**Modify** (MODIFY group):
+
+- **Trim** (T) and **Extend**: click the piece to cut off, or the end to extend
+  to the next curve. Splines can be trimmed and trimmed against.
+- **Offset** (O): point at a curve; its chain (lines, arcs and splines joined end
+  to end) is previewed on the pointer's side. Click to place; **Both sides** is
+  an option. Line and arc offsets stay tied to their source.
+- **Fillet** and **Chamfer** of a sketch corner, with a Radius or Distance
+  dimension you can edit later.
+- **Mirror** (M): pick entities, then the mirror line. The copies stay
+  symmetric to their source.
+- **Linear pattern** (one or two directions; count, spacing, angle or "Along a
+  line") and **Circular pattern** (about the origin or a picked centre; full
+  circle or a total angle). The copies are tied to their source and follow it.
+  Each pattern has a row in the Sketch panel where you change its count,
+  spacing or angle, bring back a deleted copy, or **Dissolve** it (the copies
+  become free geometry where they are). Deleting a pattern's source makes the
+  next copy the source; the message offers **Dissolve pattern** instead.
+- **Project** (P): click a body's vertex, edge or face to bring it into the
+  sketch, or switch on **Silhouette** and click a body for its outline seen
+  along the sketch normal. Works on imported STEP bodies too.
+- **Intersect**: the curves where the sketch plane cuts the bodies (all shown
+  bodies, or the ones you click).
+
+Projected and intersected curves are **linked**: drawn purple, fixed in place,
+and recomputed whenever the model rebuilds, so a sketch built on them follows
+the model. Dimensions, relations, Trim (against them) and regions all use them.
+**Break link** (right-click, or the panel's References row) turns one into
+ordinary geometry. If its source disappears upstream, the curve turns amber,
+the panel says "Lost reference: ...", and the sketch still solves; nothing is
+blocked.
+
+**Select** in a sketch: click, Ctrl+click to toggle, or **Ctrl + drag a box**.
+Dragging left to right selects what the box encloses (solid box); right to left,
+what it touches (dashed box). Ctrl+Shift + drag adds to the selection. In sketch
+mode the Selection filter offers Points, Curves and Dimensions.
+
+## Constraints and dimensions
+
+**Relations** (CONSTRAIN group): Coincident, Horizontal, Vertical, Parallel,
+Perpendicular, Tangent, Equal, Midpoint, Symmetric, Concentric, Collinear and
+Fix. Select the items first, then click the relation; if the selection does not
+fit, the button says what it needs. Many relations are added for you while you
+draw (inferred).
+
+**Dimensions** (D): pick one or two items and place the label. Lengths,
+distances, radii, diameters and angles. Every label shows its unit ("⌀125 mm",
+"R10 mm", "40 mm", "30°"). Double-click a label to change it; type a number,
+a value with a unit, or an expression using your named parameters ("fx: 40 mm"
+marks a value from an expression). A dimension that would over-define the
+sketch can be placed as a **driven** (reference) dimension, shown in brackets:
+"(40 mm)".
+
+**How defined the sketch is**: the sketch chip says "Under defined · 2 DOF",
+"Fully defined", or which relations conflict. Free geometry is drawn in blue and
+fully defined geometry in black; an over-defined sketch shows red. Drag
+under-defined geometry to move it; a fully defined entity keeps the normal arrow
+and the panel says why it cannot move ("This line is fully defined: change a
+dimension to move it").
+
+## Solids
+
+Solids come only from sketches and from STEP files: there is no one-click box
+or cylinder. Every body-making feature has an **Operation**: New body, Join,
+Cut or Intersect, with the bodies it works on.
+
+**Join merges bodies that only touch** (face to face, with no overlap) into one
+body, as well as bodies that overlap. This is by design (decided for 0.1.0): two
+blocks placed side by side and joined become one solid. Use New body to keep
+touching bodies apart.
+
+- **Extrude** (E): pick sketch regions (profiles). Extents: blind, two sides,
+  symmetric, through all, or up to a face or a vertex, with an offset; along the
+  sketch normal or a chosen direction; Flip. You can also extrude a **flat face
+  of a body** directly, with no sketch: right-click it, **Extrude face**. A drag
+  arrow in the view changes the distance.
+- **Revolve**: profiles about an axis (a centerline or line of the sketch, a
+  straight or round edge, a round face's axis, an origin or CONSTRUCT axis); one
+  side, symmetric or two sides, by an angle.
+- **Sweep**: a profile along a sketched path; **Follow path** or **Keep
+  orientation**.
+- **Loft**: through two or more profiles, in the order you pick them (Move up /
+  Move down); **Ruled** for straight sides.
+
+## Modify: fillets, shells, booleans and direct edits
+
+- **Fillet**: round edges with a radius. Tangent edges are taken as a chain. A
+  radius that is too large names the edges and says which radius works.
+- **Chamfer**: one distance, or two (Flip sides swaps them). A distance that is
+  too large says what works.
+- **Shell**: hollow a body to a wall thickness, removing the faces you pick;
+  inside or outside.
+- **Combine**: Join, Cut or Intersect several target bodies with several tool
+  bodies; **Keep the tool bodies** is an option.
+- **Split**: cut a body in two by a plane, a flat face or another body.
+- **Delete faces and heal**: remove faces (a hole, a fillet, a boss) and let
+  the kernel close the gap.
+- **Press-pull** (Q): move faces along their normal. Out adds material, in
+  removes it. Flat and curved faces, several at once:
+  - a sloping neighbour is extended to meet the moved face, so no step is left;
+  - a hole's bore or a boss changes its radius, and the panel says so ("Bore
+    radius 10 mm → 8 mm"; 2 mm out on a 10 mm bore makes it 8 mm);
+  - a fillet face changes its radius and stays tangent;
+  - fillets and chamfers beside a moved face keep their size;
+  - a move that would close a hole, cut the part through itself or leave a step
+    is refused in red with a distance that works ("the hole would close: 9.9 mm
+    or less works").
+
+Every result is checked (still a valid solid, no face lost, a plausible volume
+change) before it is taken. When a feature fails, it turns red with the reason
+in plain words, and the model before it still shows.
+
+## Patterns and mirror
+
+The PATTERN group, beside SOLID:
+
+- **Linear pattern**: one or two directions (an edge, an axis, a sketch line, or
+  a plane's or flat face's normal), count with spacing or total extent,
+  symmetric.
+- **Circular pattern**: about an origin or CONSTRUCT axis, a straight edge or a
+  round face; full 360° with equal spacing, or a set angle; symmetric.
+- **Mirror**: across an origin or CONSTRUCT plane, or a flat face.
+
+Each one repeats **features** (applied with each feature's own operation, or New
+body / Join / Cut / Intersect), **bodies** (copies, named "Body 1 (Instance 2)")
+or **faces** of one body (the boss or pocket they bound). Select what to repeat
+before you click the command, or pick it in the panel. Numbered markers in the
+view show each copy: click one to skip that copy, and use **Make it again** in
+the panel to bring it back. Patterns of mirrors and mirrors of patterns work.
+Copies keep stable names, so a fillet on copy 3 survives a change of count.
+
+## Reference geometry
+
+The CONSTRUCT group adds history features you can sketch on, extrude along,
+revolve about, pattern about or mirror across. They follow the model when it
+changes.
+
+- **Plane**: offset, at an angle, through 3 points, midplane, normal to a curve
+  at a point.
+- **Axis**: through two points, of a round face, along an edge, where two planes
+  cross.
+- **Point**: at a vertex, at the centre of an arc, circle or sphere, on an edge
+  at a distance or a percentage, where an edge crosses a plane, or at
+  coordinates.
+
+The origin's X, Y and Z axes are rows under Origin and can be used the same way.
+
+## STEP files: import, edit, export
+
+- **Import STEP** (FILE group): the file is read, healed (faces knitted into
+  solids within a tolerance you can change) and added as an **Imported** feature,
+  keeping the bodies' names and colours. A large file shows its progress and can
+  be cancelled; a 113 MB, 11,776-face part imports in under a minute.
+- Edit it with the same tools as a native part: Press-pull, Delete faces,
+  Split, Combine, Fillet, Chamfer, Shell, sketches on its faces, Project of its
+  edges. Each edit is a feature on top of the import, so it can be changed or
+  undone later.
+- **Export STEP**: the bodies you pick, as STEP AP214 or AP242, in the length
+  unit you choose.
+
+## CFD prep: Enclosure and Combine
+
+**Enclosure** (CFD PREP group) makes the box or cylinder of air around the part,
+once the part has a body:
+
+- **Box**, or **Cylinder** with its axis, around the exact bounding box of the
+  bodies you choose (all of them by default).
+- **Padding**: **Zero** (tight to the part, the default), **Percent** of the
+  part's size, or **Fixed** distance. Each side then has its own value: type it,
+  or drag that side's arrow in the view (Escape during a drag puts it back).
+- A side may go into the part (an amber note names it: the fluid leaves out the
+  part beyond it), but never past the part's far side.
+- It follows the part when the part changes, keeping your padding. It is drawn
+  see-through, so a click picks the part inside it. Its faces are named by side
+  ("+X face of Enclosure 1", "Top face"), which become clear patch names in the
+  simulation.
+
+The air volume is always a separate step: **Combine**, **Cut**, with the
+Enclosure as the target and the part as the tool (**Keep the tool bodies**
+comes on). Rename the result, for example to "Fluid".
+
+## Measure and inspect
+
+- **Measure**: click faces, edges and vertices for distances, angles, lengths,
+  radii and areas. Its picks survive a rebuild that keeps their geometry.
+- **Mass properties**: volume, surface area, centroid and size, for each body
+  and in total.
+- **Check**: each body is "Valid", or its problems are listed by kind with
+  where they are.
+- The **volume chip** shows the selected body's volume; with nothing selected it
+  lists each body on its own. It never adds bodies together.
+- **Section view** cuts the view along an origin plane, so you can reach faces
+  inside the part.
+
+## History, parameters, undo and saving
+
+- **History**: right-click a feature for Edit, Rename, Suppress or Unsuppress,
+  Roll back to here, Roll to end and Delete. Drag the rollback bar to see the
+  part as it was at that feature. A feature that breaks because something
+  upstream changed is marked red with the reason; a reference it can follow
+  only approximately says "Reference repaired · check".
+- **Parameters**: named values with units and expressions. Use them in any
+  number field ("width * 2").
+- **Undo and redo** (Ctrl+Z, Ctrl+Y): up to 100 steps. One panel, one drag or one
+  action is one step.
+- **Saving is automatic.** The save chip says Saved, or what it is waiting for.
+  If you leave while a change is still being written, the app asks first.
+- **Two tabs**: if another tab saved the same Part while this tab has an
+  unsaved change, you choose: **Reload (discard my change)** or **Keep mine
+  (replace the other tab's save)**. Nothing is lost silently.
+
+## Back to the simulation
+
+A Part is **linked** to one geometry of its project. There is no export step:
+
+- **Leave the Part** any way you like (Back, the browser's Back, another
+  project, Home). The Part saves, the project's geometry is brought up to date,
+  and you land in the simulation viewport looking at the part the way you left
+  it. The first time, the geometry is created; after that it is updated in
+  place.
+- **Include in simulation**: each body has this toggle (its Bodies row and its
+  menu). It is on for every solid body. A hidden body is still in the
+  simulation while it is included.
+- **Studies are kept**: boundary conditions and refinements follow faces by
+  their CAD names. If a named face is gone, you are told which. Meshes are marked
+  out of date; nothing is deleted.
+- If nothing changed, leaving is instant. If a feature is broken, leaving asks
+  first ("Couldn't update the project", with the reason). A broken reference
+  plane, axis or point that nothing uses does not stop the update.
+
+## Mouse and keys
+
+The view moves the way the simulation viewer's does, in model and sketch mode:
+
+| Input | Does |
+|---|---|
+| Left drag | Orbits, wherever it starts. In sketch mode, a drag that starts on sketch geometry moves it instead (what is under-defined). |
+| Shift + left drag, middle drag | Pans |
+| Wheel, right drag | Zooms (to the cursor) |
+| Alt + left drag | Orbits, always (also while a sketch tool draws) |
+| **Ctrl + drag** | **Box select**: left to right selects what the box encloses (solid box), right to left what it touches (dashed box); Ctrl+Shift + drag adds; an empty box clears. In model mode it takes what is visible: edges with no filter, else the filter's bodies, faces, edges or vertices. |
+| Click, Ctrl+click | Select; Ctrl+click toggles one item (in a sketch it also adds a body vertex or edge, projected) |
+| Right click | The context menu |
+
+**Model mode:** E Extrude, Q Press-pull, F Fit, N Normal to, 1–7 the standard
+views (Front, Back, Left, Right, Top, Bottom, Isometric), Delete (on faces:
+Delete faces), Ctrl+Z / Ctrl+Y, Escape clears the selection.
+
+**Sketch mode:** L Line, R Rectangle, C Circle, A 3-point arc, S Spline,
+M Mirror, O Offset, P Project, D Dimension, T Trim, X Construction, N Normal to
+(the open sketch), Enter places an open tool step or finishes the sketch,
+Escape stops the tool, then clears the selection. Ctrl held while drawing turns
+snapping off.
+
+**Normal to** (N, the views menu, and the right-click menu of a face, a plane, a
+sketch's row or its curves in the view) turns the view square to a flat face, a
+plane or a sketch. A curved face is refused in words.
+
+## Known limitations in 0.1.0
+
+**Scope.** 0.1.0 makes multi-body parts. Assemblies and joints, surface
+modeling, 2D drawings, sheet metal and feature recognition on imported parts are
+not part of it. There is no hole wizard, draft, variable-radius fillet, guide
+rail for Loft or Sweep, or 3D sketch yet. A geometry that was added to a project
+as a STEP file cannot be opened in CAD yet: start a Part and use Import STEP.
+
+**Size.** The kernel runs in the browser with at most 4 GB of memory. A 113 MB
+STEP file (about 12,000 faces) works but takes up to a minute to import; much
+larger files may not fit. On a PC without graphics acceleration, a box selection
+or Escape on such a part pauses for about a second.
+
+**Press-pull** refuses, rather than leave a step, when a face next to the moved
+face is not square to it and OCCT's offset cannot extend it. On imported parts
+this includes many pipes and cones that meet spline faces. Faces tangent to a
+moved face always move with it (the panel says how many); there is no switch to
+keep them still. Only a simple fillet (one face between two faces) is re-rounded;
+a chain of fillets or a corner blend is refused. Chamfers keep their size only
+when a Chamfer feature made them. Some spline faces cannot be offset at all, and
+the refusal says so. On parts over 2,000 faces the "what works" distance is not
+searched ("A smaller distance may work").
+
+**Sketches.**
+- An offset of a spline is a new spline through offset points: it does not
+  follow later changes of the source spline.
+- Extend works on lines and arcs, not splines (a line or an arc can be extended
+  to a spline).
+- Dimensions take a spline's points, not the curve itself (no length or
+  curvature dimension).
+- Sketch Fillet works on two lines, or a line and an arc, that share a corner.
+- Chamfer "Same distance" writes two dimensions with the same value; changing
+  one does not change the other.
+- A projected face, silhouette or intersection whose number of curves changes
+  after an upstream edit keeps its old curves until you open the sketch ("changed:
+  open Sketch N to update it").
+- The centre snap needs the round edge hovered first. Spline edges of a body
+  offer only their end points and pierce points as snaps.
+
+**Patterns.** A pattern of faces copies the boss or pocket the faces bound; it
+does not move the original faces. A copy far outside the view has no marker;
+use the panel's Make it again row. Sketch features default to New body: a
+Revolve or Sweep touching a body is not joined to it until you choose Join.
+
+**Selection.** A box takes only what is visible. Planes are not boxed (click
+them), and in Wireframe faces and bodies are not boxed.
+
+**Other.**
+- Sweep's Keep orientation does not move the profile to the start of the path.
+- On very large imports, Fillet's "which radius works" search can run out of
+  time; you then get the failure without a suggestion.
+- The note that a broken, unused reference was left out of the update shows in
+  the header while you leave, not in the landing report.
+- Some blends OCCT 7.9.3 cannot build (for example a small tangential inlet
+  blend on a cyclone part).
+
+## Licence
+
+GPL-3.0-or-later, like Magnusim (the repository's `LICENSE`). The third-party
+parts the plugin ships (Open CASCADE, PlaneGCS, Eigen, Boost headers, the
+Emscripten and LLVM runtimes, musl, three.js, three-mesh-bvh) and where their
+sources are: `LICENSES/README.md`.
+
+## Developer
+
+### Host API
 
 It needs Magnusim's host API 1.6: a Part's design becomes a geometry of its
 project (`ws.project.linkGeometry`, the Part study kind's `links_geometry`, 1.5),
 and its panels are drawn with the host's UI kit (`@magnusim/plugin-ui`, 1.3).
-Each body has an "Include in simulation" toggle (its Bodies row and its menu),
-on for every solid body; a body left out is not part of the project's geometry.
-The sync runs when the user leaves the Part (the host's exit hook, `ws.nav.onLeave`,
-1.6): every way out (Back, the browser's Back, another project, Home, Open in 3D)
-saves the Part, brings its geometry up to date and lands in the simulation
-viewport with the Part's camera; ARCHITECTURE.md §11 has the export, the face
-names and the exit hook. From 1.2
-it uses `ws.files` to save a Part's model (etag-checked writes, so two tabs
-never overwrite each other) and asks before leaving the workspace while a
-change is not saved yet. (The document still falls back to `ws.data` on a 1.1
-host; the unit tests' fake host uses that path.)
+The sync runs when the user leaves the Part (the host's exit hook,
+`ws.nav.onLeave`, 1.6); ARCHITECTURE.md §11 has the export, the face names and
+the exit hook. From 1.2 it uses `ws.files` to save a Part's model (etag-checked
+writes, so two tabs never overwrite each other) and asks before leaving the
+workspace while a change is not saved yet. (The document still falls back to
+`ws.data` on a 1.1 host; the unit tests' fake host uses that path.) The toolbar
+layout uses the host's per-user plugin prefs (`ws.prefs`) when the host has them,
+else it is kept per project (ARCHITECTURE.md §7 "Toolbar").
 
-Everything runs in the browser, in the workspace's sandboxed frame: the OCCT
-7.9.3 modeling kernel and FreeCAD's PlaneGCS sketch solver are WebAssembly
-modules in the page's own workers. There is no Python backend (`plugin.py`
-registers nothing; `manifest.toml` declares the workspace and the study kind).
+There is no Python backend (`plugin.py` registers nothing; `manifest.toml`
+declares the workspace, the study kind and the start actions). The description
+in `manifest.toml` (shown in Settings > Plugins) names only what ships: update it
+as features land, and run `npm run gen:registry` in `magnusim-web` after.
 
-Licence: GPL-3.0-or-later. Third-party licences: `LICENSES/`.
-
-## Mouse and keys
-
-The view moves as the core viewer's does (Daniel, 2026-10-06), in model mode
-and in sketch mode:
-
-| Input | Does |
-|---|---|
-| Left drag | Orbits, wherever it starts (empty space or a body). In sketch mode a drag that starts on sketch geometry moves it instead (what is under-defined). |
-| Shift + left drag, middle drag | Pans |
-| Wheel, right drag | Zoom (to the cursor) |
-| Alt + left drag | Orbits, always (also while a sketch tool draws) |
-| **Ctrl + drag** | **Box select**, starting anywhere: left to right a solid box selects what it encloses, right to left a dashed box what it touches; Ctrl+Shift + drag adds to the selection; an empty box clears it. The caption in the box says what it takes. Model mode: what is visible, edges with no filter, else the filter's bodies / faces / edges / vertices; sketch mode: curves, points and dimension labels, or the sketch filter's kinds |
-| Click, Ctrl+click | Select; Ctrl+click toggles one item (and, in a sketch, adds a body vertex or edge, projected) |
-| Right click | The context menu |
-
-Keys: model mode E Extrude, Q Press-pull, F Fit, N Normal to, 1-7 the standard
-views, Delete (Delete faces on faces), Ctrl+Z / Ctrl+Y. Sketch mode: L Line, R
-Rectangle, C Circle, A 3-point arc, S Spline, M Mirror, O Offset, P Project,
-D Dimension, T Trim, X Construction, N Normal to, Enter places an open tool
-step or finishes the sketch, Escape stops the tool then clears the selection.
-The rest are toolbar commands (sketch mode: Control-point spline, Linear and
-Circular pattern, Fillet, Chamfer, Intersect; model mode: Linear pattern,
-Circular pattern, Mirror and the others); Ctrl held while drawing suppresses
-snapping.
-
-## Layout
+### Layout
 
 | Path | What |
 |---|---|
 | `manifest.toml`, `plugin.py` | What the host reads. `plugin.py` is the only Python file in the plugin. |
 | `src/` | TypeScript source of the workspace page and its workers. |
-| `workspace/` | **Built output only** (what the host serves to the frame): `index.html`, `app.js`, `app.css`, `kernel/` (kernel worker + `mk32.mjs/.wasm`), `solver/` (`planegcs.mjs/.wasm`). Never edit by hand. |
+| `workspace/` | **Built output only** (what the host serves to the frame): `index.html`, `app.js`, `app.css`, `kernel/` (kernel worker + `mk32.mjs/.wasm`), `solver/` (`planegcs.mjs/.wasm`), `pick/` (the picking worker). Never edit by hand. |
 | `kernel-build/` | OCCT + facade build (pinned sources, patches, scripts). See `kernel-build/SOURCES.md`. |
 | `solver-build/` | PlaneGCS build (pinned upstream, our patch, script). See `solver-build/SOURCES.md`. |
+| `LICENSES/` | Third-party licence texts and the LGPL source and relinking notes. |
 | `tests/` | Unit tests (vitest; kernel and solver tests load the real wasm in Node). |
 | `e2e/` | Playwright tests against the host app (`e2e/host-server.mjs` starts it with the app's `startHost()`). |
-| `scripts/` | `build.mjs` (page + workers), `e2e.mjs` (build + e2e under a lock). |
+| `fixtures/` | Synthetic STEP files and native reference values for the kernel tests. |
+| `scripts/` | `build.mjs` (page + workers), `e2e.mjs` (build + e2e under a lock), the shard map and the gates. |
+| `docs/` | `p2p3-plan.md`: the P2/P3 build plan (schema, kernel API 3, extension points). |
 | `ARCHITECTURE.md` | Areas, contracts and rules for anyone changing the code. |
+| `CHANGELOG.md` | What changed in each version, for users. |
 
-## Build and test
+### Build and test
 
 The plugin has its own toolchain; the core's lint, typecheck and tests never
 see `src/`, and the core's `npm test` does not run these: run them here
@@ -320,9 +623,9 @@ suite once per phase.
   `CAD_E2E_WORKERS=N` (or `-- --workers N`) changes the count; with `CI` set
   it is 1 unless `CAD_E2E_WORKERS` says otherwise.
 
-  Measured on this PC (Ryzen 9 9950X3D, 32 threads, 94 GB, other sessions
-  running), the full suite in Chromium with the Vortex set, wall clock of the
-  whole command (build, server, both phases):
+  Measured on the development PC (Ryzen 9 9950X3D, 32 threads, 94 GB, other
+  work running), the full suite in Chromium with the Vortex set, wall clock of
+  the whole command (build, server, both phases):
 
   | Workers | Wall | Runs |
   |---|---|---|
@@ -332,11 +635,11 @@ suite once per phase.
 
   The parallel phase is bound by the one server's throughput (its length is
   the summed test time over the workers), so more workers mostly add
-  contention. `net::ERR_NO_BUFFER_SPACE` (this PC's Windows socket-buffer
-  failure, seen at one worker in earlier phases too) can fail a test that
-  loads a page; it is environmental: repeat the test alone.
+  contention. `net::ERR_NO_BUFFER_SPACE` (a Windows socket-buffer failure seen
+  on that PC, at one worker in earlier phases too) can fail a test that loads a
+  page; it is environmental: repeat the test alone.
 
-- **The phase rule** (from now on, in every phase prompt):
+- **The phase rule:**
   - fix rounds run the affected shards plus smoke:
     `npm run test:e2e:changed` (or the named shards) and `npm run test:e2e:smoke`;
   - the full suite runs ONCE per phase, at the end: `npm run test:e2e` in
@@ -345,7 +648,7 @@ suite once per phase.
   - a flaky spec gets 5 lone repeats, never a full restart:
     `npm run test:e2e -- e2e/<spec> -g "<test id>" --repeat-each 5 --workers 1`.
 
-## Separation rules
+### Separation rules
 
 - The core never imports the plugin, and the plugin never imports core code:
   the page talks to the app only through `@magnusim/workspace` (the bridge),
@@ -359,7 +662,8 @@ suite once per phase.
   and no `alert`/`confirm`. Saved state goes through the bridge.
 - No change in the core is needed to build or run the plugin. The host
   features it uses (plugin files with etags, unsaved-work questions, frame
-  focus, off-by-default plugins, the UI kit) are generic host API 1.2 and
-  1.3, listed in `ARCHITECTURE.md` §9.
+  focus, off-by-default plugins, the UI kit, linked geometries, the exit hook,
+  start actions, plugin prefs) are generic host APIs, listed in
+  `ARCHITECTURE.md` §9.
 - Dependencies must be GPL-3.0-compatible; code from AGPL projects or
   jsketcher is never copied.

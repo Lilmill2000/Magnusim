@@ -3,8 +3,8 @@
 Architect's plan for the four builders who work in parallel (KERNEL,
 P2-FEATURES, P3-SKETCH, P3-PROFILES), then INTEGRATE. Read this file, then
 `ARCHITECTURE.md`, then the contracts in `src/types/`. Where this file and the
-proposal (`CAD Plugin/00 - Research and proposal.md`) disagree, this file wins;
-where it and Daniel's decisions (`01 - Decisions 2026-09-30.md`) disagree, the
+maintainer's proposal (kept outside the repository) disagree, this file wins;
+where it and Daniel's decisions (kept outside the repository) disagree, the
 decisions win.
 
 **What is already in place (written by the architect, tests green):** every
@@ -15,7 +15,7 @@ context-menu items, Delete-faces hook); schema 2 with its migration; the naming
 layer in `src/naming/` with names flowing through Box, Cylinder and their
 booleans. So a builder **only adds files in its own folders** (§4); nobody
 edits a shared file. If you need a shared change, write it in
-`<scratchpad>/cad/p2p3/requests-<builder>.md` and code against the contract
+the builders' request notes (outside the repository) and code against the contract
 meanwhile; INTEGRATE merges requests.
 
 Verified: `npm run typecheck` clean; `npx vitest run` 291 passed / 1 skipped
@@ -39,8 +39,8 @@ Files the architect changed (for INTEGRATE's review; nothing outside the plugin)
 | Viewport | `src/viewport/viewport.ts` (layers, tools, rays), `src/viewport/commands.ts` (Fit and views in both modes) |
 | Tests | new `tests/arch/{p2p3-plumbing,naming,ui-extension}.test.ts(x)`; `tests/ui/fake-doc.ts`, `tests/doc/{service,rebuild}.test.ts` (schema 3 is now "newer"; a type narrowing); `e2e/cad-p1-doc-storage.spec.ts` (new models are schema 2) |
 | Docs | this file, `ARCHITECTURE.md` (§2 ownership rows, §5 API 3 table, §6 schema 2, §9 downloads, §10 extension points) |
-A copy of `src/` and `tests/` before these changes is in
-`<scratchpad>/cad/p2p3/arch-backup/`.
+A copy of `src/` and `tests/` before these changes was kept
+outside the repository.
 
 ---
 
@@ -278,7 +278,7 @@ then `ShapeFix_Shell`/`ShapeFix_Solid` to make closed shells solids =
 Result `{shapes: [{id, from, name, color, type, faces, valid, reason?}], fixed,
 sewn, free_edges, diagnostics, history (input faces -> output faces), timings}`.
 Fixtures (KERNEL makes them natively with OCP 7.9.3 from the core venv, the
-generator kept in `<scratchpad>/cad/p2p3/kernel/`, never as a `.py` in the
+generator kept outside the repository, never as a `.py` in the
 plugin; outputs into `fixtures/kernel/` with their README rows):
 `box20-faces.step` (the 20 mm cube written as 6 unsewn faces: sew -> 1 valid
 solid, volume 8000) and `box20-gap.step` (one face moved 0.005 mm: heal 0.01
@@ -669,8 +669,8 @@ Cross-builder seams (code against the contract; integrate as they land):
 ## 5. e2e scenarios (INTEGRATE writes the gates; builders draft their parts)
 
 Daniel's STEP files are read by path, never copied: `CAD_E2E_VORTEX_STEP`
-(default `C:\Users\drmil\Desktop\3D\Step Files\Vortex CFD Test.step`),
-`CAD_E2E_BIG_STEP` (opt-in, `...\8m0119333_V12.step`). A test that needs one
+(the Vortex part, wherever it is on Daniel's PC),
+`CAD_E2E_BIG_STEP` (opt-in, the 113 MB part `8m0119333_V12.step`). A test that needs one
 and does not find it fails with the path in its message (it is not skipped
 silently); the opt-in big test is skipped with a visible reason when the
 variable is unset. The native check uses `CAD_E2E_PYTHON` (the core venv's
@@ -708,7 +708,7 @@ leave dialog, never press Enter. Every asserted number below comes from
 9. A 600 MB file (an in-page `File` of zeros, dropped on the frame) -> "This
    STEP is 600 MB. Parts can store files up to 512 MB." and nothing uploads.
 10. Contention: while the Vortex import uploads and autosaves, the core's
-    project tree answers (P0 gate-10 harness, `<scratchpad>/cad/harness`) with
+    project tree answers (the P0 gate-10 harness) with
     p95 < 3x idle and no `project.tree` / `runs.upsert` timeouts.
 11. A surface-only STEP (`fixtures/kernel/box20-faces.step`) -> diagnostics
     "6 faces not in a solid", Heal all with sewing -> 1 solid, 8,000 mm³.
@@ -748,7 +748,7 @@ Import through the UI: the panel shows upload percent, then "Reading
 volume 12,284.18 mm³ on request; the host header answers within 50 ms
 throughout (its Back button's hover style or a host ping); the BREP is stored;
 Back and reopen -> no `import_step`/`heal`, the body is back (time recorded in
-`<scratchpad>/cad/p2p3/integrate.md`).
+the integration notes).
 
 ---
 
@@ -763,8 +763,8 @@ Back and reopen -> no `import_step`/`heal`, the body is back (time recorded in
    against `reference.json` or analytic values; `kernel-build/build.sh`
    reproducible (`repro-check.sh`); `version` api 3 at the end.
 3. Each builder is done when: its feature works end to end in the frame
-   (clicked through in the e2e host, screenshots in
-   `<scratchpad>/cad/p2p3/<builder>/`), `npm run typecheck`, `npx vitest run`,
+   (clicked through in the e2e host, screenshots kept
+   with its notes), `npm run typecheck`, `npx vitest run`,
    `npm run test:kernel` (KERNEL), `npm run build:check` and the P1/P1.5 e2e
    specs it could affect are green, its e2e drafts pass, and its summary lists
    paths, commands and real failures.
@@ -794,7 +794,7 @@ Back and reopen -> no `import_step`/`heal`, the body is back (time recorded in
   their names when it is not there; `tests/arch/user-files.test.ts` fails on any
   copy of his files in the plugin.
 - Host: nothing new is needed. If a builder finds a host bug, it goes to
-  `<scratchpad>/cad/p2p3/host-issues.md`.
+  the host's maintainers.
 
 ## 8. Contract changes during the build (append-only)
 
