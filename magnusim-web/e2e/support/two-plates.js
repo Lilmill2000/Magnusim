@@ -11,8 +11,8 @@ const ROUND = join(GEOM, 'transient-test.step');
 const TEARDROP = join(GEOM, 'transient-test-teardrop.step');
 
 export async function setup(page, request, title) {
-  const t0 = Date.now();
-  const stage = (msg) => console.log(`STAGE +${Math.round((Date.now() - t0) / 1000)}s ${msg}`);
+  const t0 = performance.now();
+  const stage = (msg) => console.log(`STAGE +${Math.round((performance.now() - t0) / 1000)}s ${msg}`);
   const shot = (name) => page.screenshot({ path: test.info().outputPath(`${name}.png`) }).catch(() => {});
   await page.goto('/#/');
   await page.waitForFunction(() => typeof window.__CFD_W16_CREATE__ === 'function', null, { timeout: 60_000 });
@@ -37,25 +37,26 @@ export async function setup(page, request, title) {
   };
   // The tree reads (GET /api/project/tree) the page has sent, and the ones still out (each by
   // its request: a read sent before these listeners only ends here, and is not counted).
-  const treeReads = { sent: 0, open: new Set(), last: Date.now() };
+  const treeReads = { sent: 0, open: new Set(), last: performance.now() };
   const isTreeRead = (r) => new URL(r.url()).pathname === '/api/project/tree';
   page.on('request', (r) => {
     if (!isTreeRead(r)) return;
     treeReads.sent += 1;
     treeReads.open.add(r);
-    treeReads.last = Date.now();
+    treeReads.last = performance.now();
   });
   const treeReadDone = (r) => {
     if (!isTreeRead(r)) return;
     treeReads.open.delete(r);
-    treeReads.last = Date.now();
+    treeReads.last = performance.now();
   };
   page.on('requestfinished', treeReadDone);
   page.on('requestfailed', treeReadDone);
   // Once no tree read is out and none has come or gone for a second: the count so far.
+  // Times are on the monotonic clock: a wall clock that steps back would hold this wait.
   const treeReadsSettled = async () => {
     await expect
-      .poll(() => treeReads.open.size === 0 && Date.now() - treeReads.last > 1000, { timeout: 30_000 })
+      .poll(() => treeReads.open.size === 0 && performance.now() - treeReads.last > 1000, { timeout: 30_000 })
       .toBe(true);
     return treeReads.sent;
   };
@@ -98,7 +99,7 @@ export async function setup(page, request, title) {
   };
   // Switching is quick: the geometry and its own study (or none) within a moment.
   const timedSwitch = async (g) => {
-    const t0 = Date.now();
+    const t0 = performance.now();
     await page.locator(`#geometries-list .geo-item[data-geom-id="${g.id}"]`).click();
     await page
       .waitForFunction(
@@ -118,7 +119,7 @@ export async function setup(page, request, title) {
         }));
         throw new Error(`switch to ${g.name} (${g.id}) did not settle: ${JSON.stringify(now)}\n${e.message}`);
       });
-    return Date.now() - t0;
+    return performance.now() - t0;
   };
   return { pid, q, json, shown, study, stage, shot, round, tear, pickGeometry, timedSwitch, treeReadsSettled };
 }
