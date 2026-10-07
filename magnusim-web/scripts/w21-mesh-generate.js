@@ -1176,7 +1176,9 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     };
   }
   mkdirSync(winOut, { recursive: true });
-  reapStaleMeshGenerators(winOut);
+  // No reap here: the generator's claim_generate_case kills a leftover on this case
+  // before it writes anything. Listing processes here held the server ~1 s before
+  // every spawn (the mesh clock then restarted at the server's later start).
   // Phase 1 land10: job logs live under .cache (not projects/); job-runner/log.js owns JSONL.
   mkdirSync(REPORT_DIR, { recursive: true });
   const winLog = join(REPORT_DIR, `generate-${generateId}.log`);
@@ -1650,7 +1652,9 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
     };
   }
   mkdirSync(winOut, { recursive: true });
-  reapStaleMeshGenerators(winOut);
+  // No reap here: the generator's claim_generate_case kills a leftover on this case
+  // before it writes anything. Listing processes here held the server ~1 s before
+  // every spawn (the mesh clock then restarted at the server's later start).
   const winLog = join(REPORT_DIR, `generate-${generateId}.log`);
   const projectDir = join(PROJECTS_ROOT, project_id);
 
@@ -1907,13 +1911,22 @@ export function meshGenerateLivePid() {
   return null;
 }
 
+/**
+ * Kill generators a previous server left running on this projects folder (never
+ * another root's). Boot can run after a Generate (it waits for the registry) and
+ * again on a dev reload in this same process: what this process started is spared.
+ */
 export function reapOrphanMeshGeneratorsOnBoot() {
   try {
-    spawnSync(PYTHON, [pyTool('reap_mesh_jobs.py')], {
-      windowsHide: true,
-      timeout: 20000,
-      stdio: 'ignore',
-    });
+    spawnSync(
+      PYTHON,
+      [pyTool('reap_mesh_jobs.py'), '--projects-root', PROJECTS_ROOT, '--spare-descendants-of', String(process.pid)],
+      {
+        windowsHide: true,
+        timeout: 20000,
+        stdio: 'ignore',
+      },
+    );
   } catch {
     /* ignore */
   }

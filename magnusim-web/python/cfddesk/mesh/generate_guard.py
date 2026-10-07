@@ -3,12 +3,18 @@
 A killed wrapper used to leave a child ``generate_standard.py`` filling tets
 on the same ``--case-dir``. The next Generate then raced it and could be
 overwritten. Reap any other generator whose cmdline points at this case.
+
+At server boot, reap only generators working in this server's projects folder:
+the user's app, an e2e host on its own root or a test may be meshing elsewhere
+on the same machine at the same moment.
 """
 
 from __future__ import annotations
 
 import json
+import ntpath
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +29,59 @@ GENERATOR_SCRIPTS = (
 
 def _norm(s: str) -> str:
     return str(s or "").replace("/", "\\").lower()
+
+
+def _norm_path(s: str) -> str:
+    """A Windows path, lower case, ``/`` as ``\\``, no trailing separator."""
+    p = str(s or "").strip().strip('"')
+    if not p:
+        return ""
+    return ntpath.normpath(p).rstrip("\\").lower()
+
+
+def _arg_value(cmd: str, flag: str) -> str:
+    """The value after ``flag`` in a command line ("quoted" when it has spaces)."""
+    m = re.search(r'(?:^|\s)' + re.escape(flag) + r'(?:=|\s+)(?:"([^"]*)"|(\S+))', str(cmd or ""))
+    if not m:
+        return ""
+    return m.group(1) if m.group(1) is not None else m.group(2)
+
+
+def pids_under_projects_root(
+    rows: list[tuple[int, str]],
+    projects_root: Path | str,
+    *,
+    keep_pids: set[int] | None = None,
+) -> list[int]:
+    """Return PIDs whose command is a mesh generator for a project under ``projects_root``.
+
+    The server passes ``--project-dir <root>\\<project id>``: the project folder's
+    parent must be the root itself, so a sibling (``projects2``) or a root nested
+    inside this one belongs to another server. Without ``--project-dir`` the
+    ``--case-dir`` must lie under the root.
+    """
+    keep = set(keep_pids or ())
+    root = _norm_path(str(projects_root or ""))
+    if not root:
+        return []
+    out: list[int] = []
+    for pid, cmd in rows:
+        try:
+            n = int(pid)
+        except (TypeError, ValueError):
+            continue
+        if n <= 0 or n in keep:
+            continue
+        if not any(name in _norm(cmd) for name in GENERATOR_SCRIPTS):
+            continue
+        project_dir = _norm_path(_arg_value(cmd, "--project-dir"))
+        if project_dir:
+            mine = ntpath.dirname(project_dir).rstrip("\\") == root
+        else:
+            mine = _norm_path(_arg_value(cmd, "--case-dir")).startswith(root + "\\")
+        if mine:
+            out.append(n)
+    return out
 
 
 def pids_targeting_case(
@@ -73,20 +132,25 @@ def kill_pid_tree(pid: int) -> None:
 def _list_generator_rows() -> list[tuple[int, str]]:
     if sys.platform != "win32":
         return []
+    # [char]9, not `t: a backtick escape is literal inside '...', and with it no
+    # row ever split (every reap found nothing). UTF-8 keeps non-ASCII paths matchable.
     script = (
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
         "Get-CimInstance Win32_Process | "
         "Where-Object { $_.CommandLine -and ("
         "$_.CommandLine -like '*generate_standard.py*' -or "
         "$_.CommandLine -like '*generate_snappy.py*' -or "
         "$_.CommandLine -like '*generate_cfmesh_standard.py*'"
         ") } | "
-        "ForEach-Object { '{0}`t{1}' -f $_.ProcessId, $_.CommandLine }"
+        "ForEach-Object { '{0}{1}{2}' -f $_.ProcessId, [char]9, $_.CommandLine }"
     )
     try:
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=20,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -103,20 +167,73 @@ def _list_generator_rows() -> list[tuple[int, str]]:
     return rows
 
 
-def reap_all_generators(*, keep_pids: set[int] | None = None) -> list[int]:
-    """Kill every generate_* process (server boot / leftover after a restart)."""
+def descendants_of(parents: dict[int, int], root_pid: int) -> set[int]:
+    """Every process below ``root_pid`` in a pid -> parent pid map (not the root itself)."""
+    children: dict[int, list[int]] = {}
+    for pid, ppid in parents.items():
+        if pid != ppid:
+            children.setdefault(ppid, []).append(pid)
+    out: set[int] = set()
+    todo = list(children.get(root_pid, []))
+    while todo:
+        pid = todo.pop()
+        if pid in out:
+            continue
+        out.add(pid)
+        todo.extend(children.get(pid, []))
+    return out
+
+
+def _process_parents() -> dict[int, int]:
+    """pid -> parent pid for every process (Windows), else {}."""
+    if sys.platform != "win32":
+        return {}
+    script = (
+        "Get-CimInstance Win32_Process | "
+        "ForEach-Object { '{0}{1}{2}' -f $_.ProcessId, [char]9, $_.ParentProcessId }"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    out: dict[int, int] = {}
+    for line in (r.stdout or "").splitlines():
+        a, _, b = line.partition("\t")
+        try:
+            out[int(a)] = int(b)
+        except ValueError:
+            continue
+    return out
+
+
+def reap_generators_under_root(
+    projects_root: Path | str,
+    *,
+    keep_pids: set[int] | None = None,
+    spare_descendants_of: int | None = None,
+) -> list[int]:
+    """Kill generate_* processes left running in this projects folder (server boot).
+
+    Generators for any other projects folder, or for no project at all (tests),
+    are left alone. ``spare_descendants_of`` is the server's own pid: a mesh it
+    already started (a Generate before its boot ran, or the instance a dev
+    reload replaced in the same process) is its own work, not a leftover.
+    """
     keep = set(keep_pids or ())
     keep.add(os.getpid())
     try:
         keep.add(os.getppid())
     except OSError:
         pass
+    if spare_descendants_of:
+        keep |= descendants_of(_process_parents(), int(spare_descendants_of))
     killed: list[int] = []
-    for pid, cmd in _list_generator_rows():
-        if pid in keep:
-            continue
-        if not any(name in _norm(cmd) for name in GENERATOR_SCRIPTS):
-            continue
+    for pid in pids_under_projects_root(_list_generator_rows(), projects_root, keep_pids=keep):
         kill_pid_tree(pid)
         killed.append(pid)
     return killed
