@@ -258,6 +258,27 @@ export function layoutDimension(f: F, c: Pick<SketchDimension, 'kind' | 'refs' |
         const reach = Math.max(dist(o, ends[0]), dist(o, ends[1]));
         if (R > reach) lines.push([polar(o, reach + gap, ang), tip]);
       }
+      // fu2: a label just outside the angle (a narrow one) has the arc run on to it.
+      const at0 = Math.atan2(at[1] - o[1], at[0] - o[0]);
+      const past = wrapPi(at0 - (start + sweep));
+      const before = wrapPi(start - at0);
+      if (past > 0 && past < Math.PI / 2) {
+        const k = Math.max(2, Math.ceil((past / (Math.PI / 2)) * 16));
+        let q = polar(o, R, start + sweep);
+        for (let i = 1; i <= k; i++) {
+          const cur = polar(o, R, start + sweep + (past * i) / k);
+          lines.push([q, cur]);
+          q = cur;
+        }
+      } else if (before > 0 && before < Math.PI / 2) {
+        const k = Math.max(2, Math.ceil((before / (Math.PI / 2)) * 16));
+        let q = polar(o, R, start);
+        for (let i = 1; i <= k; i++) {
+          const cur = polar(o, R, start - (before * i) / k);
+          lines.push([q, cur]);
+          q = cur;
+        }
+      }
       const s = polar(o, R, start);
       const e = polar(o, R, start + sweep);
       const tangentS: Vec2 = [-Math.sin(start), Math.cos(start)];
@@ -430,8 +451,30 @@ export function angleLabelAt(o: Vec2, a1: number, theta: number, r0: number, px:
     if (want <= r * (1 + 1e-9)) break;
     r = want;
   }
+  // fu2 (pp final, polish b): a narrow angle's label would go far out along its bisector ((gap + reach) /
+  // sin(theta/2): a 10° pill sat 61-154 px out and met other geometry). Pushed past NARROW_STRETCH times its
+  // arc's radius, it goes just outside the angle instead when that is nearer: beside the second arm, at the
+  // arc's radius if it fits, at most 30 degrees past the arm, as a small angle is written outside its arrows;
+  // the arc runs on to it (layoutDimension). Same gap rule: its near side is LABEL_GAP_PX from both arms.
+  if (r > NARROW_STRETCH * r0 && half < Math.PI / 4) {
+    const sgn = theta >= 0 ? 1 : -1;
+    const edge = a1 + theta;
+    const cap = Math.PI / 6;
+    let R = r0;
+    let p = polar(o, R, edge + sgn * cap);
+    for (let i = 0; i < 4; i++) {
+      const n = need(p);
+      // R sin(phi) = need, phi at most 30 degrees past the arm (a pill bigger than its arc: the arc grows).
+      R = Math.max(r0, n / Math.sin(cap));
+      p = polar(o, R, edge + sgn * Math.asin(Math.min(1, n / R)));
+    }
+    if (R < r) return p;
+  }
   return polar(o, r, bis);
 }
+
+/** fu2: how far out (times its arc's radius) a narrow angle's label may go on its bisector before it goes beside the arm (when nearer). */
+export const NARROW_STRETCH = 1.25;
 
 /**
  * Where a new dimension's label goes when it has no place yet: beside what it measures, its

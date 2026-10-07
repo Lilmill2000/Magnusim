@@ -802,7 +802,7 @@ test('cad:p4b-fix1-pattern-skip fix1 B5: a deleted pattern copy stays deleted wh
   expect(seen.errors).toEqual([]);
 });
 
-test('cad:p4b-fix1-polish fillet labels stay outside and clickable (P4); Enter after typing in the pattern panel places it (P5); deleting the source says the pattern is gone (P6); chamfer Same distance is one value (P7)', async ({ page, request }) => {
+test('cad:p4b-fix1-polish fillet labels stay outside and clickable (P4); Enter after typing in the pattern panel places it (P5); deleting the source hands the pattern to its next copy (P6, fu2); chamfer Same distance is one value (P7)', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await enterSketchOnTop(page, frame);
   await typedRectangle(page, frame, 40, 30);
@@ -855,9 +855,11 @@ test('cad:p4b-fix1-polish fillet labels stay outside and clickable (P4); Enter a
   await clickAt(page, [-22, -15]);
   await page.keyboard.press('Delete');
   await sketchIdle(page);
-  await expect(panel(frame).locator('[data-run-reason]')).toContainText('Linear pattern 1 is gone with its source: the 2 copies stay as free geometry (Undo brings it back).');
+  // fu2 (Daniel 2026-10-06): the pattern now starts from its next copy (it was dissolved in fix 1).
+  await expect(panel(frame).locator('[data-tie-notice]')).toContainText('Linear pattern 1 now starts from Circle 1');
   d = await drawn(page);
   expect(d.kinds.circle).toBe(2);
+  expect(d.ties).toEqual([{ kind: 'linear', copies: 1 }]);
   expect(seen.errors).toEqual([]);
 });
 
@@ -1135,5 +1137,169 @@ test('cad:p4b-fu-no-not-allowed a fully defined line and the origin keep the nor
   await page.mouse.move(fx + 30, fy);
   await page.mouse.move(fx, fy, { steps: 4 });
   await expect.poll(async () => (await cursor()).style).toBe('move');
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:p4b-fu2-pattern-source-next deleting a pattern source: the next copy leads (one fewer, still tied, its diameter kept, 2 DOF), Dissolve pattern frees the copies, Undo restores each', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(page, frame);
+  await typedCircle(page, frame, [0, 0], 10);
+  await expect(chip(frame)).toHaveText('Fully defined');
+  await runCommand(frame, 'sketch.pattern-linear');
+  await clickAt(page, [5, 0]);
+  const opts = panel(frame).locator('[data-sketch-options="pattern-linear"]');
+  const count = opts.locator('.nui[data-field="sk-count"] input');
+  await count.fill('4');
+  await count.press('Enter');
+  await opts.locator('[data-sketch-option="place"]').click();
+  await sketchIdle(page);
+  await page.keyboard.press('Escape');
+  await expect(chip(frame)).toHaveText('Fully defined');
+  // Delete the source.
+  await clickAt(page, [5, 0]);
+  await page.keyboard.press('Delete');
+  await sketchIdle(page);
+  const notice = panel(frame).locator('[data-tie-notice]');
+  await expect(notice).toContainText('Linear pattern 1 now starts from Circle 1');
+  await expect(notice.locator('[data-tie-notice-dissolve]')).toHaveText('Dissolve pattern');
+  const row = panel(frame).locator('[data-sketch-tie][data-tie-kind="linear"]');
+  await expect(row).toHaveAttribute('data-tie-instances', '3');
+  await expect(row.locator('[data-tie-skipped]')).toContainText('1 instance deleted (skipped)');
+  // Its diameter went with it; its place on the origin did not: the new source's centre is free.
+  await expect(chip(frame)).toHaveText('Under defined · 2 DOF');
+  await expect(frame.locator('[data-sketch-dim]')).toHaveText([/^⌀10( mm)?$/]);
+  let d = await drawn(page);
+  expect(d.kinds).toEqual({ circle: 3 });
+  // The copies stay tied: drag the new source's centre 5 up, all three follow.
+  const [sx, sy] = await at(page, [20, 0, 0]);
+  const [tx, ty] = await at(page, [20, 5, 0]);
+  await page.mouse.move(sx, sy);
+  await page.mouse.down();
+  await page.mouse.move(tx, ty, { steps: 8 });
+  await page.mouse.up();
+  await sketchIdle(page);
+  d = await drawn(page);
+  const ys = d.entities.filter((e) => e.kind === 'circle').map((e) => d.points[(e as unknown as { c: string }).c][1]);
+  expect(ys[0]).toBeGreaterThan(3);
+  for (const y of ys) expect(y).toBeCloseTo(ys[0], 6);
+  // Dissolve pattern: the copies stay where they are, free (2 + 3 + 3 DOF).
+  await notice.locator('[data-tie-notice-dissolve]').click();
+  await sketchIdle(page);
+  await expect(panel(frame).locator('[data-sketch-tie]')).toHaveCount(0);
+  await expect(chip(frame)).toHaveText('Under defined · 8 DOF');
+  d = await drawn(page);
+  const xs = d.entities.filter((e) => e.kind === 'circle').map((e) => Math.round(d.points[(e as unknown as { c: string }).c][0] * 1000) / 1000).sort((a, b) => a - b);
+  expect(xs).toEqual([20, 40, 60]);
+  // Undo: the pattern again (from Circle 1); Undo the drag; Undo again: the source back, fully defined.
+  await page.keyboard.press('Control+z');
+  await sketchIdle(page);
+  await expect(row).toHaveAttribute('data-tie-instances', '3');
+  await expect(chip(frame)).toHaveText('Under defined · 2 DOF');
+  await page.keyboard.press('Control+z');
+  await sketchIdle(page);
+  await page.keyboard.press('Control+z');
+  await sketchIdle(page);
+  await expect(row).toHaveAttribute('data-tie-instances', '4');
+  await expect(chip(frame)).toHaveText('Fully defined');
+  // The row's Dissolve, at any time.
+  await row.locator('[data-tie-dissolve]').click();
+  await sketchIdle(page);
+  await expect(panel(frame).locator('[data-sketch-tie]')).toHaveCount(0);
+  d = await drawn(page);
+  expect(d.kinds).toEqual({ circle: 4 });
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:p4b-fu2-pattern-source-edges a source of four lines: one deleted leaves the pattern, all four hand it to the next copy; a pattern of two whose source goes is no longer a pattern', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(page, frame);
+  await typedRectangle(page, frame, 10, 6);
+  await runCommand(frame, 'sketch.pattern-linear');
+  for (const p of [[5, 0], [10, 3], [5, 6], [0, 3]] as V2[]) await clickAt(page, p);
+  const opts = panel(frame).locator('[data-sketch-options="pattern-linear"]');
+  const count = opts.locator('.nui[data-field="sk-count"] input');
+  await count.fill('3');
+  await count.press('Enter');
+  await opts.locator('[data-sketch-option="place"]').click();
+  await sketchIdle(page);
+  await page.keyboard.press('Escape');
+  await expect(chip(frame)).toHaveText('Fully defined');
+  const notice = panel(frame).locator('[data-tie-notice]');
+  // One line of the source: it leaves the pattern; the rest stays tied.
+  await clickAt(page, [10, 3]);
+  await page.keyboard.press('Delete');
+  await sketchIdle(page);
+  await expect(notice).toContainText('Line 2 is no longer in Linear pattern 1; its copies stay where they are.');
+  await expect(panel(frame).locator('[data-sketch-tie]')).toContainText('Linear pattern 1 of Line 1, Line 2, Line 3');
+  await page.keyboard.press('Control+z');
+  await sketchIdle(page);
+  // All four: the next rectangle leads; its 10 and 6 go with it; only its place is free.
+  await page.keyboard.down('Control');
+  for (const p of [[5, 0], [10, 3], [5, 6], [0, 3]] as V2[]) await clickAt(page, p);
+  await page.keyboard.up('Control');
+  await page.keyboard.press('Delete');
+  await sketchIdle(page);
+  await expect(notice).toContainText('Linear pattern 1 now starts from Line 1 and 3 more');
+  await expect(chip(frame)).toHaveText('Under defined · 2 DOF');
+  const d = await drawn(page);
+  expect(d.kinds).toEqual({ line: 8 });
+  // A pattern of two whose source goes: no longer a pattern, and said so.
+  await page.keyboard.press('Control+z');
+  await sketchIdle(page);
+  const row = panel(frame).locator('[data-sketch-tie]');
+  const rc = row.locator('.nui[data-field="tie-count"] input');
+  await rc.fill('2');
+  await rc.press('Enter');
+  await sketchIdle(page);
+  await page.keyboard.down('Control');
+  for (const p of [[5, 0], [10, 3], [5, 6], [0, 3]] as V2[]) await clickAt(page, p);
+  await page.keyboard.up('Control');
+  await page.keyboard.press('Delete');
+  await sketchIdle(page);
+  await expect(notice).toHaveText('Linear pattern 1 is no longer a pattern: Line 1 and 3 more were its last copy.');
+  await expect(row).toHaveCount(0);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:p4b-fu2-pattern-source-grid a 2 x 2 grid: with the next copy deleted (skipped), deleting the source hands the pattern to the first copy of the second row; every copy stays put', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(page, frame);
+  await typedCircle(page, frame, [0, 0], 10);
+  await runCommand(frame, 'sketch.pattern-linear');
+  await clickAt(page, [5, 0]);
+  const opts = panel(frame).locator('[data-sketch-options="pattern-linear"]');
+  const count = opts.locator('.nui[data-field="sk-count"] input');
+  await count.fill('2');
+  await count.press('Enter');
+  await opts.locator('[data-sketch-option="two"]').check();
+  const count2 = opts.locator('.nui[data-field="sk-count2"] input');
+  await count2.fill('2');
+  await count2.press('Enter');
+  await opts.locator('[data-sketch-option="place"]').click();
+  await sketchIdle(page);
+  await page.keyboard.press('Escape');
+  const centres = async () => {
+    const dd = await drawn(page);
+    return dd.entities
+      .filter((e) => e.kind === 'circle')
+      .map((e) => dd.points[(e as unknown as { c: string }).c].map((v) => Math.round(v * 1000) / 1000).join(','))
+      .sort();
+  };
+  expect(await centres()).toEqual(['0,0', '0,20', '20,0', '20,20']);
+  // The next instance (20, 0) deleted first: skipped.
+  await clickAt(page, [25, 0]);
+  await page.keyboard.press('Delete');
+  await sketchIdle(page);
+  // Then the source.
+  await clickAt(page, [5, 0]);
+  await page.keyboard.press('Delete');
+  await sketchIdle(page);
+  await expect(panel(frame).locator('[data-tie-notice]')).toContainText('Linear pattern 1 now starts from Circle 1');
+  const row = panel(frame).locator('[data-sketch-tie][data-tie-kind="linear"]');
+  await expect(row).toHaveAttribute('data-tie-instances', '2');
+  await expect(row.locator('[data-tie-skipped]')).toContainText('2 instances deleted (skipped)');
+  expect(await centres()).toEqual(['0,20', '20,20']);
+  // Both left are tied: the new source (0, 20) keeps its diameter, its centre is free (2 DOF); its copy has none.
+  await expect(chip(frame)).toHaveText('Under defined · 2 DOF');
   expect(seen.errors).toEqual([]);
 });

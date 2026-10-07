@@ -151,6 +151,15 @@ test('cad:p5-fix1-angle-label-gap a typed 10° and 30° line: each angle pill cl
       const anglePill = (await frame.locator('[data-sketch-dim]', { hasText: new RegExp(`^${deg}°$`) }).boundingBox())!;
       const gap = boxToSegment(anglePill, await at(page, from), await at(page, to));
       expect(gap, `${wide ? 'wide font: ' : ''}the ${deg}° pill is ${gap.toFixed(1)} px from its line`).toBeGreaterThanOrEqual(8);
+      // fu2 (pp final, polish b): near its arc, not far out on the bisector (the 10° pill was 61-154 px out).
+      const v = await at(page, from);
+      const e = await at(page, to);
+      const cx = anglePill.x + anglePill.width / 2;
+      const cy = anglePill.y + anglePill.height / 2;
+      const out = Math.hypot(cx - v[0], cy - v[1]);
+      const lenPx = Math.hypot(e[0] - v[0], e[1] - v[1]);
+      // Its arc is at 0.4 of the line; the pill stays within 0.5 of it (was up to 0.95 for 30°, wide font).
+      expect(out / lenPx, `${wide ? 'wide font: ' : ''}the ${deg}° pill is ${out.toFixed(0)} px from its vertex (line ${lenPx.toFixed(0)} px)`).toBeLessThanOrEqual(0.5);
       // Its line's own "40 mm" (the nearest 40 mm pill to the line's middle).
       const mid = await at(page, [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2]);
       const lens = frame.locator('[data-sketch-dim]', { hasText: /^40 mm$/ });

@@ -13,7 +13,9 @@
 // sees the change. Pure functions.
 // Owner: P4b SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { SketchEntity, SketchFeature, SketchTie, Vec2 } from '../../types/doc';
+import type { SketchConstraint, SketchEntity, SketchFeature, SketchTie, Vec2 } from '../../types/doc';
+import { newId } from '../../lib/ids';
+import { entityLabel, isDimension } from '../model';
 import type { SolverSketch } from '../../types/sketch';
 import type { Quantity, UnitsService } from '../../types/units';
 
@@ -75,21 +77,134 @@ export function prunedTies(f: Pick<SketchFeature, 'entities'> & { ties?: SketchT
   return out.length ? out : undefined;
 }
 
+/** fu2: an instance's place counted from the pattern's source (`base`: a promoted copy's place; default the first). */
+export function relAt(t: Pick<SketchTie, 'base'>, at: [number, number]): [number, number] {
+  return [at[0] - (t.base?.[0] ?? 0), at[1] - (t.base?.[1] ?? 0)];
+}
+
+/** "Linear pattern 2", "Circular pattern 1", "Offset 1" (numbered by kind among the ties given). */
+export function tieWords(ties: readonly SketchTie[], t: SketchTie): string {
+  const same = ties.filter((x) => x.kind === t.kind);
+  const word = t.kind === 'linear' ? 'Linear pattern' : t.kind === 'circular' ? 'Circular pattern' : 'Offset';
+  return `${word} ${same.indexOf(t) + 1}`;
+}
+
+/** What sketch mode shows after an edit changed a pattern by itself (Daniel 2026-10-06, item 3). */
+export interface TieNotice {
+  text: string;
+  /** The pattern the notice offers to dissolve (absent: nothing to offer). */
+  tie?: string;
+}
+
+type Draft = Pick<SketchFeature, 'points' | 'entities' | 'constraints'> & { ties?: SketchTie[] };
+
+/** Relations and dimensions that hold for every copy of a pattern, by kind (a rotation turns directions). */
+const ROTATION_VARIANT = new Set(['horizontal', 'vertical', 'distance_x', 'distance_y']);
+
 /**
- * fix1 P6: what a delete did to the sketch's patterns and offsets, in words: a pattern (or an offset)
- * whose source geometry went is dissolved and its copies stay as free geometry. Null when none was.
+ * fu2 (Daniel 2026-10-06, item 3): after an edit, a sketch pattern whose source geometry is gone starts
+ * from its NEXT copy (instance order: along the first direction, then the second; skipped and deleted
+ * instances passed over). That copy's entities become the sources and its place the pattern's `base`;
+ * the old source's place is skipped (one fewer instance); the other copies stay tied, now to it; the
+ * relations and dimensions the old source held within itself (a diameter, a length, Equal, Parallel...)
+ * go to the new source, the ones to other geometry do not (they would move it). A pattern left with no
+ * copy is dissolved by itself and says so. A source entity deleted while others stay just leaves the
+ * pattern. Returns the draft and the words to show (with the pattern to offer Dissolve for).
  */
-export function tiesDissolved(before: { ties?: SketchTie[] }, after: { ties?: SketchTie[] }): string | null {
-  const now = new Set((after.ties ?? []).map((t) => t.id));
-  const gone = (before.ties ?? []).filter((t) => !now.has(t.id));
-  if (!gone.length) return null;
-  const words = gone.map((t) => {
-    const same = (before.ties ?? []).filter((x) => x.kind === t.kind);
-    const word = t.kind === 'linear' ? 'Linear pattern' : t.kind === 'circular' ? 'Circular pattern' : 'Offset';
-    return `${word} ${same.indexOf(t) + 1}`;
-  });
-  const copies = gone.reduce((n, t) => n + t.copies.length, 0);
-  return `${words.join(' and ')} ${gone.length > 1 ? 'are' : 'is'} gone with ${gone.length > 1 ? 'their' : 'its'} source: ${copies === 1 ? 'its copy stays' : `the ${copies} copies stay`} as free geometry (Undo brings it back).`;
+export function promoteTies<D extends Draft>(before: Draft, next: D): { draft: D; notice: TieNotice | null } {
+  if (!next.ties?.length) return { draft: next, notice: null };
+  const have = new Set(next.entities.map((e) => e.id));
+  const beforeHave = new Set(before.entities.map((e) => e.id));
+  const ties: SketchTie[] = [];
+  const added: SketchConstraint[] = [];
+  const notes: TieNotice[] = [];
+  for (const t of next.ties) {
+    if (t.kind === 'offset') {
+      ties.push(t);
+      continue;
+    }
+    const name = tieWords(next.ties, t);
+    const present = t.sources.filter((id) => have.has(id));
+    const lost = t.sources.filter((id) => !have.has(id) && beforeHave.has(id));
+    const live = t.copies.filter((c) => Object.values(c.entities).some((id) => have.has(id)));
+    if (present.length && !lost.length) {
+      if (!live.length && t.copies.length && t.copies.some((c) => Object.values(c.entities).some((id) => beforeHave.has(id)))) {
+        notes.push({ text: `${name} is no longer a pattern: its last copy was deleted.` });
+        continue;
+      }
+      ties.push(t);
+      continue;
+    }
+    if (present.length) {
+      // Part of the source went: the rest stays the source; the copies of what went stay where they are.
+      const words = lost.map((id) => entityLabel(before, id));
+      ties.push({ ...t, sources: present, copies: t.copies.map((c) => ({ ...c, entities: Object.fromEntries(Object.entries(c.entities).filter(([src]) => !lost.includes(src))) })) });
+      notes.push({ text: `${words.join(', ')} ${words.length > 1 ? 'are' : 'is'} no longer in ${name}; ${words.length > 1 ? 'their' : 'its'} copies stay where they are.`, tie: t.id });
+      continue;
+    }
+    if (!lost.length) {
+      ties.push(t);
+      continue;
+    }
+    // The whole source went: the next whole copy is the source now.
+    const order = (c: { at: [number, number] }) => c.at[1] * 100000 + c.at[0];
+    const whole = live.filter((c) => Object.values(c.entities).every((id) => have.has(id))).sort((a, b) => order(a) - order(b));
+    const next0 = whole[0] ?? [...live].sort((a, b) => order(a) - order(b))[0];
+    if (!next0) {
+      notes.push({ text: `${name} is gone with its source.` });
+      continue;
+    }
+    const entMap = next0.entities;
+    const ptMap = next0.points;
+    const sources = t.sources.map((id) => entMap[id]).filter((id): id is string => !!id && have.has(id));
+    const copies = t.copies
+      .filter((c) => c !== next0)
+      .map((c) => ({
+        at: c.at,
+        entities: Object.fromEntries(Object.entries(c.entities).flatMap(([src, cp]) => (entMap[src] ? [[entMap[src], cp]] : []))),
+        points: Object.fromEntries(Object.entries(c.points).flatMap(([src, cp]) => (ptMap[src] ? [[ptMap[src], cp]] : []))),
+      }));
+    const oldBase: [number, number] = [t.base?.[0] ?? 0, t.base?.[1] ?? 0];
+    const promoted: SketchTie = { ...t, sources, copies, base: [next0.at[0], next0.at[1]], skip: [...(t.skip ?? []), oldBase] };
+    // The old source's own relations and dimensions go to the new one (mapped by the copy's maps).
+    const srcEnts = new Set(t.sources);
+    const srcPts = new Set(Object.keys(ptMap));
+    for (const c of before.constraints) {
+      if (next.constraints.some((x) => x.id === c.id)) continue;
+      if (!c.refs.length || !c.refs.every((r) => srcEnts.has(r) || srcPts.has(r))) continue;
+      // A Fix pins a place (the old source's), as a relation to other geometry would: not carried.
+      if (c.kind === 'fix') continue;
+      if (t.kind === 'circular' && (ROTATION_VARIANT.has(c.kind) || (c.kind === 'angle' && c.refs.length === 1))) continue;
+      const refs = c.refs.map((r) => entMap[r] ?? ptMap[r]);
+      if (refs.some((r) => !r || (!have.has(r) && !next.points[r]))) continue;
+      const moved = { ...c, id: newId('c'), refs } as SketchConstraint;
+      if (isDimension(moved) && moved.at) {
+        // The label moves with the geometry: by the shift from the old source to its new place.
+        const a = before.points[c.refs.find((r) => before.points[r] && ptMap[r]) ?? ''];
+        const b = a ? next.points[ptMap[c.refs.find((r) => before.points[r] && ptMap[r])!]] : null;
+        if (a && b) moved.at = [moved.at[0] + b[0] - a[0], moved.at[1] + b[1] - a[1]];
+      }
+      added.push(moved);
+    }
+    const label = entityLabel(next, sources[0] ?? '');
+    const more = sources.length > 1 ? ` and ${sources.length - 1} more` : '';
+    if (!copies.some((c) => Object.values(c.entities).some((id) => have.has(id)))) {
+      notes.push({ text: `${name} is no longer a pattern: ${label}${more} ${more ? 'were' : 'was'} its last copy.` });
+      continue;
+    }
+    ties.push(promoted);
+    notes.push({ text: `${name} now starts from ${label}${more}`, tie: t.id });
+  }
+  const draft = { ...next, ties: ties.length ? ties : undefined, constraints: added.length ? [...next.constraints, ...added] : next.constraints };
+  const notice = notes.length ? { text: notes.map((n) => n.text).join(' '), ...(notes.find((n) => n.tie)?.tie ? { tie: notes.find((n) => n.tie)!.tie } : {}) } : null;
+  return { draft, notice };
+}
+
+/** fu2: dissolve a pattern (or an offset): its copies stay where they are, free geometry. */
+export function dissolveTie<D extends Draft>(d: D, id: string): { ok: true; draft: D; optional: string[]; removed: string[] } | { ok: false; reason: string } {
+  if (!d.ties?.some((t) => t.id === id)) return { ok: false, reason: 'that pattern is gone' };
+  const ties = d.ties.filter((t) => t.id !== id);
+  return { ok: true, draft: { ...d, ties: ties.length ? ties : undefined }, optional: [], removed: [] };
 }
 
 /** A tie's value now: evaluated (values), else what it evaluates to in plain numbers ("20 mm"), else null. */
@@ -139,10 +254,12 @@ export function tiesToSolver(f: F, values: Readonly<Record<string, number>>): So
       continue;
     }
     for (const c of t.copies) {
+      // fu2: where this copy sits from the pattern's source (the source may be a promoted copy).
+      const at = relAt(t, c.at);
       const pairs = Object.entries(c.points).filter(([p, q]) => hasPoint(p) && hasPoint(q) && p !== q);
       if (t.kind === 'linear') {
         const along = (t.along ?? [null, null]).map((l) => (l && ents.get(l)?.kind === 'line' ? l : null));
-        const usesLines = (along[0] && c.at[0]) || (along[1] && c.at[1]);
+        const usesLines = (along[0] && at[0]) || (along[1] && at[1]);
         if (usesLines) {
           // The directions that follow a line go along it; an angle direction is a fixed shift.
           const shift: Vec2 = [0, 0];
@@ -150,7 +267,7 @@ export function tiesToSolver(f: F, values: Readonly<Record<string, number>>): So
           const dists: number[] = [];
           let ok = true;
           ([0, 1] as const).forEach((k) => {
-            if (!c.at[k]) return;
+            if (!at[k]) return;
             const s = valueOf(t, k === 0 ? 'spacing1' : 'spacing2', values);
             if (s == null) {
               ok = false;
@@ -159,28 +276,28 @@ export function tiesToSolver(f: F, values: Readonly<Record<string, number>>): So
             const l = along[k];
             if (l) {
               lines.push(l);
-              dists.push(c.at[k] * s);
+              dists.push(at[k] * s);
             } else {
               const a = valueOf(t, k === 0 ? 'angle1' : 'angle2', values);
               if (a == null) {
                 ok = false;
                 return;
               }
-              shift[0] += c.at[k] * s * Math.cos((a * Math.PI) / 180);
-              shift[1] += c.at[k] * s * Math.sin((a * Math.PI) / 180);
+              shift[0] += at[k] * s * Math.cos((a * Math.PI) / 180);
+              shift[1] += at[k] * s * Math.sin((a * Math.PI) / 180);
             }
           });
           if (!ok) continue;
           for (const [p, q] of pairs) out.push({ id: id(), kind: 'pattern_along', refs: [p, q, ...lines], value: [shift[0], shift[1], ...dists] });
         } else {
-          const d = linearShift(t, c.at, values);
+          const d = linearShift(t, at, values);
           if (!d) continue;
           for (const [p, q] of pairs) out.push({ id: id(), kind: 'pattern_shift', refs: [p, q], value: d });
         }
       } else {
         const step = circularStep(t, values);
         if (step == null || !t.centre || !hasPoint(t.centre)) continue;
-        for (const [p, q] of pairs) out.push({ id: id(), kind: 'pattern_rotate', refs: [t.centre, p, q], value: c.at[0] * step });
+        for (const [p, q] of pairs) out.push({ id: id(), kind: 'pattern_rotate', refs: [t.centre, p, q], value: at[0] * step });
       }
       // A copied circle keeps its source's radius (its centre alone does not say it).
       for (const [src, cp] of Object.entries(c.entities)) {

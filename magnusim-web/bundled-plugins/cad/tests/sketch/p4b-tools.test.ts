@@ -10,7 +10,7 @@
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createUnitsService } from '../../src/doc/units';
-import { extendAt, trimAt, type EditOutcome, type SketchDraft } from '../../src/sketch/edit';
+import { extendAt, SketchBuilder, trimAt, type EditOutcome, type SketchDraft } from '../../src/sketch/edit';
 import { entityOf, evaluateDimensions, toSolverSketch, withSolved } from '../../src/sketch/model';
 import { chamferCorner, filletCorner } from '../../src/sketch/tools/fillet';
 import { mirrorEntities } from '../../src/sketch/tools/mirror';
@@ -18,7 +18,7 @@ import { offsetChain } from '../../src/sketch/tools/offset';
 import { createPattern, updatePattern } from '../../src/sketch/tools/pattern';
 import { closestOnSpline, pointAtParam } from '../../src/sketch/tools/bspline';
 import { splineOf } from '../../src/sketch/tools/spline-entity';
-import { prunedTies, tiesDissolved } from '../../src/sketch/tools/ties';
+import { dissolveTie, promoteTies, prunedTies } from '../../src/sketch/tools/ties';
 import type { SketchConstraint, SketchEntity, SketchTie, Vec2 } from '../../src/types/doc';
 import { merge, rectangle, sketchOf, type Geo } from './fixtures';
 
@@ -291,12 +291,6 @@ describe('fix1 P4 / P6 / P7', () => {
     expect(dw.refs).toEqual(['e1']);
   });
 
-  it('P6: deleting the source of a pattern says the pattern is gone and its copies stay', () => {
-    const g = block(0, 0, 5, 5);
-    const out = ok(createPattern(g, { kind: 'linear', sources: ['e1'], count: [3, 1], exprs: { spacing1: '20 mm', angle1: '0 deg' } }, units));
-    const after = { ...out, entities: out.entities.filter((e) => e.id !== 'e1') };
-    expect(tiesDissolved(out, { ties: prunedTies(after) })).toBe('Linear pattern 1 is gone with its source: the 2 copies stay as free geometry (Undo brings it back).');
-  });
 });
 
 describe('sketch offset', () => {
@@ -494,3 +488,128 @@ describe('splines in trim', () => {
 function sampleDist(b: ReturnType<typeof splineOf> & object, p: Vec2): number {
   return closestOnSpline(b, p).d;
 }
+
+describe('fu2: deleting the source of a sketch pattern (Daniel 2026-10-06, item 3)', () => {
+  /** What sketch mode does on Delete: remove, then promote (apply), then prune (commit). */
+  function del(d: D, ids: string[]) {
+    const b = new SketchBuilder(d);
+    b.remove(ids);
+    const r = promoteTies(d, { ...d, ...b.result() });
+    return { draft: { ...r.draft, ties: prunedTies(r.draft) } as D, notice: r.notice };
+  }
+  function circleRow(n: number): D {
+    const g: Geo = {
+      points: { c0: [0, 0] },
+      entities: [{ id: 'ci', kind: 'circle', c: 'c0', r: 5 }],
+      constraints: [
+        { id: 'co', kind: 'coincident', refs: ['c0', 'origin'] },
+        { id: 'dia', kind: 'diameter', refs: ['ci'], expr: '10 mm', driving: true, at: [8, 8] },
+      ],
+    };
+    return ok(createPattern(g, { kind: 'linear', sources: ['ci'], count: [n, 1], exprs: { spacing1: '20 mm', angle1: '0 deg' } }, units));
+  }
+  const centres = (d: D) =>
+    d.entities
+      .filter((e) => e.kind === 'circle')
+      .map((e) => d.points[(e as { c: string }).c][0])
+      .sort((a, b) => a - b);
+
+  it('the next copy becomes the source; the copies stay tied; its diameter goes with it, its place on the origin does not; DOF honest', async () => {
+    const d0 = (await solve(circleRow(4))).draft;
+    expect((await solve(d0)).dof).toBe(0);
+    const { draft, notice } = del(d0, ['ci']);
+    expect(notice).toEqual({ text: 'Linear pattern 1 now starts from Circle 1', tie: d0.ties![0].id });
+    const t = draft.ties![0];
+    expect(t.base).toEqual([1, 0]);
+    expect(t.skip).toEqual([[0, 0]]);
+    expect(t.copies.map((c) => c.at[0])).toEqual([2, 3]);
+    expect(draft.constraints.filter((c) => c.kind === 'diameter')).toHaveLength(1);
+    expect(draft.constraints.some((c) => c.kind === 'coincident')).toBe(false);
+    const s = await solve(draft);
+    expect(s.over).toEqual([]);
+    // The new source's centre is free (2 DOF); its copies follow it.
+    expect(s.dof).toBe(2);
+    expect(centres(s.draft)).toEqual([20, 40, 60].map((x) => expect.closeTo(x, 9)));
+    // The row's count: 5 adds an instance at 80 (three steps from the new source).
+    const more = ok(updatePattern(s.draft, t.id, { count: [5, 1] }, units));
+    expect(centres((await solve(more)).draft)).toEqual([20, 40, 60, 80].map((x) => expect.closeTo(x, 9)));
+    // It cannot drop below the new source's place.
+    expect(updatePattern(s.draft, t.id, { count: [1, 1] }, units).ok).toBe(false);
+  });
+
+  it('a skipped next instance is passed over; a two-direction grid keeps every copy where it was', async () => {
+    let d = (await solve(circleRow(4))).draft;
+    const second = d.ties![0].copies.find((c) => c.at[0] === 1)!;
+    d = del(d, [second.entities.ci]).draft;
+    expect(d.ties![0].skip).toEqual([[1, 0]]);
+    const r = del(d, ['ci']);
+    expect(r.draft.ties![0].base).toEqual([2, 0]);
+    expect(centres((await solve(r.draft)).draft)).toEqual([40, 60].map((x) => expect.closeTo(x, 9)));
+
+    const g: Geo = { points: { c0: [0, 0] }, entities: [{ id: 'ci', kind: 'circle', c: 'c0', r: 3 }], constraints: [] };
+    const grid = (await solve(ok(createPattern(g, { kind: 'linear', sources: ['ci'], count: [2, 2], exprs: { spacing1: '20 mm', angle1: '0 deg', spacing2: '15 mm', angle2: '90 deg' } }, units)))).draft;
+    const before = grid.entities.filter((e) => e.kind === 'circle' && e.id !== 'ci').map((e) => grid.points[(e as { c: string }).c]);
+    const p = del(grid, ['ci']);
+    expect(p.draft.ties![0].base).toEqual([1, 0]);
+    const s = await solve(p.draft);
+    expect(s.over).toEqual([]);
+    const after = s.draft.entities.filter((e) => e.kind === 'circle').map((e) => s.draft.points[(e as { c: string }).c]);
+    for (const q of before) expect(after.some((a) => Math.hypot(a[0] - q[0], a[1] - q[1]) < 1e-9)).toBe(true);
+  });
+
+  it('a source of several entities: one going leaves the pattern; all going promote the next copy', async () => {
+    const g = block(0, 0, 5, 5);
+    const d = (await solve(ok(createPattern(g, { kind: 'linear', sources: ['e1', 'e2', 'e3', 'e4'], count: [3, 1], exprs: { spacing1: '20 mm', angle1: '0 deg' } }, units)))).draft;
+    const one = del(d, ['e2']);
+    expect(one.notice?.text).toBe('Line 2 is no longer in Linear pattern 1; its copies stay where they are.');
+    expect(one.draft.ties![0].sources).toEqual(['e1', 'e3', 'e4']);
+    expect((await solve(one.draft)).over).toEqual([]);
+    const all = del(d, ['e1', 'e2', 'e3', 'e4']);
+    expect(all.notice?.text).toBe('Linear pattern 1 now starts from Line 1 and 3 more');
+    expect(all.draft.ties![0].sources).toHaveLength(4);
+    // Its width and height (on its own lines) and its H / V went with it: fully defined but for its place.
+    expect(all.draft.constraints.filter((c) => c.kind === 'distance')).toHaveLength(2);
+    const s = await solve(all.draft);
+    expect(s.over).toEqual([]);
+    expect(s.dof).toBe(2);
+  });
+
+  it('down to one instance: it is no longer a pattern, and says so (source deleted, or the last copy deleted)', () => {
+    const d = circleRow(2);
+    const a = del(d, ['ci']);
+    expect(a.draft.ties).toBeUndefined();
+    expect(a.notice).toEqual({ text: 'Linear pattern 1 is no longer a pattern: Circle 1 was its last copy.' });
+    const copy = d.ties![0].copies[0].entities.ci;
+    const b = del(d, [copy]);
+    expect(b.draft.ties).toBeUndefined();
+    expect(b.notice?.text).toBe('Linear pattern 1 is no longer a pattern: its last copy was deleted.');
+  });
+
+  it('circular: the next copy leads; a Horizontal of the old source is not carried (a rotation turns it)', async () => {
+    const g: Geo = {
+      points: { a: [20, 0], b: [30, 0] },
+      entities: [{ id: 'ln', kind: 'line', p: ['a', 'b'] }],
+      constraints: [
+        { id: 'h', kind: 'horizontal', refs: ['ln'] },
+        { id: 'len', kind: 'distance', refs: ['ln'], expr: '10 mm', driving: true },
+      ],
+    };
+    const d = (await solve(ok(createPattern(g, { kind: 'circular', sources: ['ln'], count: [4, 1], exprs: {}, centre: 'origin', full: true }, units)))).draft;
+    const r = del(d, ['ln']);
+    expect(r.draft.constraints.map((c) => c.kind)).toEqual(['distance']);
+    const s = await solve(r.draft);
+    expect(s.over).toEqual([]);
+    // The new source (at 90 degrees) keeps its length; its place and direction are free: 3 DOF.
+    expect(s.dof).toBe(3);
+  });
+
+  it('Dissolve frees the copies where they stand', async () => {
+    const d = (await solve(circleRow(3))).draft;
+    const r = dissolveTie(d, d.ties![0].id);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.draft.ties).toBeUndefined();
+    const s = await solve(r.draft);
+    expect(centres(s.draft)).toEqual([0, 20, 40].map((x) => expect.closeTo(x, 9)));
+    expect(s.dof).toBe(6);
+  });
+});

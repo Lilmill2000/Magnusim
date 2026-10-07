@@ -506,6 +506,11 @@ export interface SketchTie {
   exprs: Record<string, Expr>;
   /** fix1 B5: instances the user deleted ([i, k]); a re-layout leaves them out. */
   skip?: [number, number][];
+  /**
+   * fu2 (Daniel 2026-10-06): the place ([i, k]) of the sources in the pattern's grid. A deleted source
+   * hands over to its next copy, whose place this becomes (the old place is then skipped). Absent: [0, 0].
+   */
+  base?: [number, number];
   /** linear: a line each direction runs along instead of its angle (null: the angle). */
   along?: [SketchEntityId | null, SketchEntityId | null];
   /** circular: the centre point (SKETCH_ORIGIN allowed); full: equal spacing round the whole circle. */

@@ -31,9 +31,20 @@ describe('angle labels keep a gap from both arms', () => {
         const p = angleLabelAt([0, 0], 0, th, 28 * PX, PX, pill(w, h));
         expect(gapPx(p, [0, 0], 0, w, h)).toBeGreaterThanOrEqual(LABEL_GAP_PX - 1e-6);
         expect(gapPx(p, [0, 0], th, w, h)).toBeGreaterThanOrEqual(LABEL_GAP_PX - 1e-6);
-        // On the bisector, inside the angle.
         const a = Math.atan2(p[1], p[0]);
-        expect(a).toBeCloseTo(th / 2, 9);
+        if (Math.abs(deg) >= 45) {
+          // On the bisector, inside the angle.
+          expect(a).toBeCloseTo(th / 2, 9);
+        } else {
+          // fu2 (pp final, polish b): a narrow angle's label stays near its arc (it went 61-154 px out on
+          // the bisector): just past the second arm, within 30 degrees of it, nearer than the bisector place.
+          const onBisector = (LABEL_GAP_PX + Math.max(w, h)) / Math.sin(Math.abs(th) / 2);
+          expect(Math.hypot(p[0], p[1]) / PX).toBeLessThan(onBisector);
+          expect(Math.hypot(p[0], p[1]) / PX).toBeLessThanOrEqual(2.5 * 28);
+          const past = Math.sign(th) * (a - th);
+          expect(past).toBeGreaterThan(0);
+          expect(past).toBeLessThanOrEqual(Math.PI / 6 + 1e-9);
+        }
       });
 
   it("a line's own angle: the reviewer's 10° line 40 long (the pill was on it), through defaultLabelAt", () => {

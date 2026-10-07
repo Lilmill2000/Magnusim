@@ -26,7 +26,7 @@ import type { SolverClient } from './solver-client';
 import { prunedLinks } from './project/curves';
 import { sketchUp } from '../viewport/normal';
 // P4b (SKETCH): sketch patterns and offsets.
-import { prunedTies, tiesDissolved } from './tools/ties';
+import { promoteTies, prunedTies } from './tools/ties';
 
 /** A sketch item under the pointer or in the selection. */
 export interface SketchHit {
@@ -78,6 +78,8 @@ export interface SketchView {
   preview: SketchPreview | null;
   /** The last refused action, in words (the panel's foot). */
   note: string | null;
+  /** P4b fu2 (SKETCH): what the last edit did to a pattern by itself ("Linear pattern 1 now starts from Circle 1"), with Dissolve. */
+  tieNotice?: import('./tools/ties').TieNotice | null;
   /** "Make it driven?" */
   prompt: { title: string; copy: string; accept: string; resolve(yes: boolean): void } | null;
   /** A dimension whose value box is open. */
@@ -591,7 +593,9 @@ export class SketchMode implements SketchModeApi {
       }
       const draft = 'ok' in out ? out.draft : out;
       const optional = [...('ok' in out ? out.optional : []), ...(opts.optional ?? [])];
-      const r = await this.solveEdit({ ...before, ...draft }, optional);
+      // P4b fu2 (SKETCH): a pattern whose source this edit deleted starts from its next copy.
+      const promoted = promoteTies(before, { ...before, ...draft });
+      const r = await this.solveEdit(promoted.draft, optional);
       if (!r.ok) {
         const reason = r.reason;
         if (opts.over === 'report' && r.over) return r;
@@ -601,6 +605,7 @@ export class SketchMode implements SketchModeApi {
       }
       this.commit(r.draft, !opts.noUndo);
       this.note(null);
+      this.view.set({ tieNotice: promoted.notice });
       await this.analyze();
       return { ok: true, draft: r.draft };
     });
@@ -728,7 +733,7 @@ export class SketchMode implements SketchModeApi {
       this.redoStack.push(snapshot(cur));
       this.session.update(prev as Partial<SketchFeature>);
       const d = this.stored()!;
-      this.view.set({ draft: d, canUndo: this.undoStack.length > 0, canRedo: this.redoStack.length > 0, preview: null });
+      this.view.set({ draft: d, canUndo: this.undoStack.length > 0, canRedo: this.redoStack.length > 0, preview: null, tieNotice: null });
       this.pruneSelection(d);
       await this.reload(d);
       await this.analyze();
@@ -743,7 +748,7 @@ export class SketchMode implements SketchModeApi {
       this.undoStack.push(snapshot(cur));
       this.session.update(next as Partial<SketchFeature>);
       const d = this.stored()!;
-      this.view.set({ draft: d, canUndo: this.undoStack.length > 0, canRedo: this.redoStack.length > 0, preview: null });
+      this.view.set({ draft: d, canUndo: this.undoStack.length > 0, canRedo: this.redoStack.length > 0, preview: null, tieNotice: null });
       this.pruneSelection(d);
       await this.reload(d);
       await this.analyze();
@@ -766,16 +771,13 @@ export class SketchMode implements SketchModeApi {
     if (!hits.length) return null;
     const ids = hits.map((h) => h.id).filter((id) => id !== 'origin');
     if (!ids.length) return null;
-    // P4b fix 1 (SKETCH, P6): a pattern or offset whose sources go is dissolved; the panel says so.
-    const before = this.stored();
+    // P4b fu2 (SKETCH): a pattern whose source is deleted starts from its next copy (apply, promoteTies).
     return this.apply('Delete', (d) => {
       const b = new SketchBuilder(d);
       b.remove(ids);
       return { ok: true, draft: b.result(), optional: [], removed: ids };
     }).then((r) => {
       if (r.ok) this.select([], false);
-      const lost = r.ok && before ? tiesDissolved(before, this.stored() ?? before) : null;
-      if (lost) this.note(lost);
       return r;
     });
   }

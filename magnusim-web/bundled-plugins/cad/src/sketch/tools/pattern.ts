@@ -16,7 +16,7 @@ import { emptyPreview, storeExpr, type SketchMode, type SketchTool } from '../mo
 import { hitTest, samples } from '../pick';
 import { copyEntities } from './copy';
 import type { ToolOption } from './options';
-import { circularStep, evaluateTies, linearShift } from './ties';
+import { circularStep, evaluateTies, linearShift, relAt } from './ties';
 
 /** The most copies one pattern makes. */
 export const MAX_INSTANCES = 400;
@@ -24,12 +24,14 @@ export const MAX_INSTANCES = 400;
 type Draft = SketchDraft & { ties?: SketchTie[] };
 
 /** Every instance a tie wants now, sources excluded: [i, k]. */
-export function instancesOf(t: Pick<SketchTie, 'kind' | 'count' | 'skip'>): [number, number][] {
+export function instancesOf(t: Pick<SketchTie, 'kind' | 'count' | 'skip' | 'base'>): [number, number][] {
   const out: [number, number][] = [];
+  // fu2: the sources' own place is `base` (a promoted copy's), not always the first.
+  const b = t.base ?? [0, 0];
   if (t.kind === 'linear') {
-    for (let k = 0; k < Math.max(1, t.count[1]); k++) for (let i = 0; i < Math.max(1, t.count[0]); i++) if (i || k) out.push([i, k]);
+    for (let k = 0; k < Math.max(1, t.count[1]); k++) for (let i = 0; i < Math.max(1, t.count[0]); i++) if (i !== b[0] || k !== b[1]) out.push([i, k]);
   } else if (t.kind === 'circular') {
-    for (let i = 1; i < t.count[0]; i++) out.push([i, 0]);
+    for (let i = 0; i < t.count[0]; i++) if (i !== b[0]) out.push([i, 0]);
   }
   // fix1 B5: instances the user deleted stay deleted.
   const skip = new Set((t.skip ?? []).map((s) => `${s[0]},${s[1]}`));
@@ -37,13 +39,15 @@ export function instancesOf(t: Pick<SketchTie, 'kind' | 'count' | 'skip'>): [num
 }
 
 /** The skipped instances that are still within the counts (what the row reports). */
-export function skippedOf(t: Pick<SketchTie, 'kind' | 'count' | 'skip'>): [number, number][] {
+export function skippedOf(t: Pick<SketchTie, 'kind' | 'count' | 'skip' | 'base'>): [number, number][] {
   const all = instancesOf({ ...t, skip: [] }).map((a) => `${a[0]},${a[1]}`);
   return (t.skip ?? []).filter((s) => all.includes(`${s[0]},${s[1]}`));
 }
 
 /** Where a source point goes in instance `at` (null when the tie's values cannot say). */
-export function placer(d: Pick<SketchFeature, 'points' | 'entities'>, t: SketchTie, at: [number, number], values: Readonly<Record<string, number>>): ((p: Vec2) => Vec2) | null {
+export function placer(d: Pick<SketchFeature, 'points' | 'entities'>, t: SketchTie, grid: [number, number], values: Readonly<Record<string, number>>): ((p: Vec2) => Vec2) | null {
+  // fu2: counted from the sources' place in the grid.
+  const at = relAt(t, grid);
   if (t.kind === 'linear') {
     const along = t.along ?? [null, null];
     if (!along[0] && !along[1]) {
@@ -146,6 +150,12 @@ export function updatePattern(d: Draft, id: string, patch: Partial<Pick<SketchTi
   if (next.kind !== 'offset' && (next.count[0] < 1 || next.count[1] < 1 || !Number.isInteger(next.count[0]) || !Number.isInteger(next.count[1]))) return { ok: false, reason: 'a count is a whole number, 1 or more' };
   if (next.kind === 'circular' && next.count[0] < 2) return { ok: false, reason: 'a circular pattern needs 2 instances or more' };
   if (next.kind === 'linear' && next.count[0] * next.count[1] < 2) return { ok: false, reason: 'a linear pattern needs 2 instances or more' };
+  // fu2: a pattern that starts from a later copy keeps it: the counts cannot drop below its place.
+  const base = next.base ?? [0, 0];
+  if (next.kind !== 'offset' && (base[0] >= next.count[0] || base[1] >= Math.max(1, next.count[1]))) {
+    const src = next.sources[0] ? entityLabel(d, next.sources[0]) : 'its source';
+    return { ok: false, reason: base[0] >= next.count[0] ? `the pattern starts from ${src} (instance ${base[0] + 1}): the count cannot be less than ${base[0] + 1}` : `the pattern starts from ${src} (row ${base[1] + 1}): count 2 cannot be less than ${base[1] + 1}` };
+  }
   const ev = evaluateTies({ ties: [next] }, units);
   const bad = Object.values(ev.errors)[0];
   if (bad) return { ok: false, reason: bad };

@@ -185,9 +185,52 @@ describe('Press-pull version 2 (kernel API 6, fix round 1)', () => {
     let k = curvedKernel().on('offset_faces', (p) => ({ ...refusal('volume', { dv: 1.36, expected: -486439 }), ...(p.diagnose ? { max_ok: null } : {}) }));
     let r = await pressPullDef.build(v2({ distance: '-1 mm' }), { d: -1 }, ctxOf(k, [body]));
     expect(r.ok === false && r.message).toBe('Press-pull 1 failed: the face could not be moved cleanly by -1 mm (its volume would change by 1.36 mm³ instead of about -486,439 mm³). No smaller distance works either');
-    k = curvedKernel().on('offset_faces', (p) => ({ ...refusal('step', { face: 2 }), ...(p.diagnose ? { max_ok: 4.47 } : {}) }));
+    // A step and no smaller distance works: the step is the limit, said so.
+    k = curvedKernel().on('offset_faces', (p) => ({ ...refusal('step', { face: 2 }), ...(p.diagnose ? { max_ok: null } : {}) }));
     r = await pressPullDef.build(v2({ distance: '-8 mm' }), { d: -8 }, ctxOf(k, [body]));
-    expect(r.ok === false && r.message).toMatch(/^Press-pull 1 failed: the face could not be moved cleanly by -8 mm \(a face next to it is not square to it, so moving it alone would leave a step \(.+\)\)\. Up to -4\.4 mm works$/);
+    expect(r.ok === false && r.message).toMatch(/^Press-pull 1 failed: the face could not be moved cleanly by -8 mm \(a face next to it is not square to it, so moving it alone would leave a step \(.+\)\)\. No smaller distance works either$/);
+  });
+
+  describe('fu2 (pp final, polish a): a "step" where a smaller move works names the face that goes', () => {
+    /** -8 refused as a step beside face 2, -4.47 works (result 500): the areas there say which face shrinks. */
+    const kernelWith = (after: { picked: number; side: number } | 'refused') => {
+      const k = scriptKernel()
+        .on('topo', (p) => {
+          const want = p.faces as number[];
+          const areas: Record<number, number> = p.id === 500 && after !== 'refused' ? { 5: after.picked, 2: after.side } : { 5: 600, 2: 400 };
+          return { faces: want.map((i) => ({ ...(i === 5 ? bore : FACES[i]), area: areas[i] })), edges: [], vertices: [], counts: { faces: 6, edges: 12, vertices: 8 }, timings: {} };
+        })
+        .on('offset_faces', (p) => {
+          if (p.d === -8) return { ...refusal('step', { face: 2 }), ...(p.diagnose ? { max_ok: 4.47 } : {}) };
+          return after === 'refused' ? refusal('occt') : ok(500);
+        });
+      return k;
+    };
+    const run = async (after: Parameters<typeof kernelWith>[0]) => {
+      const k = kernelWith(after);
+      const ctx = ctxOf(k, [body]);
+      const r = await pressPullDef.build(v2({ distance: '-8 mm' }), { d: -8 }, ctx);
+      return { r, k, ctx };
+    };
+
+    it('the neighbour shrinks (the cylinder below a cone at -4.6): "the face next to it would shrink to nothing"', async () => {
+      const { r, k, ctx } = await run({ picked: 650, side: 40 });
+      expect(r.ok === false && r.message).toMatch(/^Press-pull 1 failed: the face could not be moved cleanly by -8 mm \(the face next to it would shrink to nothing \(.+\)\)\. Up to -4\.4 mm works$/);
+      // The move that works was made at the found distance, then let go.
+      expect(k.calls.filter((c) => c.op === 'offset_faces').map((c) => c.params.d)).toEqual([-8, -8, -4.47]);
+      expect(ctx.releasedByCtx).toContain(500);
+    });
+
+    it('the picked face shrinks (a cone swallowed by the cylinder at +9.5): "it would be swallowed by the face next to it"', async () => {
+      const { r } = await run({ picked: 60, side: 450 });
+      expect(r.ok === false && r.message).toMatch(/^Press-pull 1 failed: the face could not be moved cleanly by -8 mm \(it would be swallowed by the face next to it \(.+\)\)\. Up to -4\.4 mm works$/);
+      expect(r.ok === false && r.message).not.toMatch(/step/);
+    });
+
+    it('when it cannot be told: "it or the face next to it would shrink to nothing", never the step', async () => {
+      const { r } = await run('refused');
+      expect(r.ok === false && r.message).toMatch(/^Press-pull 1 failed: the face could not be moved cleanly by -8 mm \(it or the face next to it would shrink to nothing \(.+\)\)\. Up to -4\.4 mm works$/);
+    });
   });
 
   it('the suggestion is rounded in the display unit (review P6: "0.389764 in")', async () => {

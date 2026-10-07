@@ -7,23 +7,42 @@
 import { useServices } from '../../lib/services';
 import { useStateStore } from '../../lib/store';
 import type { SketchFeature, SketchTie } from '../../types/doc';
-import { Button, Field, NumberUnitInput } from '../../ui/kit';
+import { Button, buttonClass, Field, NumberUnitInput } from '../../ui/kit';
 import { entityLabel } from '../model';
 import type { SketchMode } from '../mode';
 import { deleteTie, MAX_INSTANCES, skippedOf, tieLabel, updatePattern } from './pattern';
+import { dissolveTie } from './ties';
 
 export function TieRows({ mode }: { mode: SketchMode }) {
   const services = useServices();
   const draft = useStateStore(mode.view, (v) => v.draft) as SketchFeature | null;
   const over = useStateStore(mode.view, (v) => [...(v.status?.conflicting ?? []), ...(v.status?.redundant ?? [])].join(','));
   const ties = draft?.ties ?? [];
-  if (!draft || !ties.length) return null;
+  // fu2: what the last edit did to a pattern by itself, with Dissolve when the pattern lives on.
+  const notice = useStateStore(mode.view, (v) => v.tieNotice ?? null);
   const units = services.doc.units;
+  const dissolve = (id: string, label: string) => void mode.apply(`Dissolve ${label}`, (d) => dissolveTie(d, id));
+  const noticeEl = notice ? (
+    <div className="cad-sk-section" role="status" data-tie-notice="1">
+      <span className="cad-sk-selected">{notice.text}</span>
+      {notice.tie && ties.some((t) => t.id === notice.tie) ? (
+        <>
+          {' · '}
+          <button type="button" className={buttonClass('link')} data-tie-notice-dissolve={notice.tie} onClick={() => dissolve(notice.tie!, 'pattern')}>
+            Dissolve pattern
+          </button>
+        </>
+      ) : null}
+    </div>
+  ) : null;
+  if (!draft || !ties.length) return noticeEl;
   const apply = (label: string, t: SketchTie, patch: Parameters<typeof updatePattern>[2]): string | null => {
     void mode.apply(label, (d) => updatePattern(d, t.id, patch, units));
     return null;
   };
   return (
+    <>
+    {noticeEl}
     <div className="cad-sk-section" data-sketch-ties="1">
       <div className="cad-field-group-title">Patterns and offsets</div>
       {ties.map((t) => {
@@ -105,6 +124,11 @@ export function TieRows({ mode }: { mode: SketchMode }) {
               value('distance', 'Distance', 'length')
             )}
             <div className="cad-sk-actions">
+              {t.kind === 'offset' ? null : (
+                <Button variant="secondary" data-tie-dissolve={t.id} tip="The copies stay where they are, as free geometry" onClick={() => dissolve(t.id, label)}>
+                  Dissolve
+                </Button>
+              )}
               <Button variant="secondary" data-tie-delete={t.id} onClick={() => void mode.apply(`Delete ${label}`, (d) => deleteTie(d, t.id))}>
                 Delete {t.kind === 'offset' ? 'offset' : 'pattern'}
               </Button>
@@ -113,5 +137,6 @@ export function TieRows({ mode }: { mode: SketchMode }) {
         );
       })}
     </div>
+    </>
   );
 }

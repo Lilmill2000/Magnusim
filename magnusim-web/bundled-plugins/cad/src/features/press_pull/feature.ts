@@ -165,8 +165,12 @@ async function offsetBuild(f: PressPullFeature, d: number, body: BuiltBody, face
     throw err;
   }
   if (out.refused === undefined) return finishOffset(f, body, out, warning, ctx, carry);
-  const words = refusalWords(out.refused, out.about, d, body, ctx);
-  const tip = await suggestion(params, out.refused, faceCount, ctx);
+  const found: { max: number | null } = { max: null };
+  const tip = await suggestion(params, out.refused, faceCount, ctx, found);
+  // fu2 (pp final, polish a): a "step" refusal where a smaller move works is not about the step
+  // (the same neighbour was there for that move): say which face really goes.
+  const cause = out.refused.code === 'step' && found.max ? await shrinking(params, Math.sign(d) * found.max, out.refused.face, ctx) : undefined;
+  const words = refusalWords(out.refused, out.about, d, body, ctx, cause);
   const output: PressPullOutput = { type: 'press-pull', method: 'offset', faces: out.about, tangent: 0, note: null, ...(out.refused.detail ? { detail: out.refused.detail } : {}) };
   return { ok: false, message: `${f.name} failed: ${words}${tip}`, output };
 }
@@ -176,7 +180,7 @@ async function offsetBuild(f: PressPullFeature, d: number, body: BuiltBody, face
  * "the hole would close"; "the face could not be moved cleanly by -40 mm (the result would
  * lose a face (End face of Extrude 1))".
  */
-export function refusalWords(r: OffsetRefusal, about: OffsetFaceAbout[], d: number, body: BuiltBody, ctx: BuildContext): string {
+export function refusalWords(r: OffsetRefusal, about: OffsetFaceAbout[], d: number, body: BuiltBody, ctx: BuildContext, cause?: Shrinking): string {
   if (r.code === 'radius' && r.words) return r.words;
   const fw = faceWords(body, r.face, ctx);
   const subject = about.length > 1 ? 'the faces' : 'the face';
@@ -206,6 +210,11 @@ export function refusalWords(r: OffsetRefusal, about: OffsetFaceAbout[], d: numb
         return r.words ?? 'a fillet or chamfer beside it could not be put back';
       }
       case 'step':
+        // fu2 (pp final, polish a): when a smaller move works, the limit is a face going (the cone
+        // over a cylinder: swallowed at +9.5, the cylinder gone at -4.6), not the step.
+        if (cause === 'picked') return `${about.length > 1 ? 'they' : 'it'} would be swallowed by the face next to ${about.length > 1 ? 'them' : 'it'}${fw ? ` (${fw})` : ''}`;
+        if (cause === 'neighbour') return `the face next to ${about.length > 1 ? 'them' : 'it'} would shrink to nothing${fw ? ` (${fw})` : ''}`;
+        if (cause === 'either') return `${about.length > 1 ? 'they' : 'it'} or the face next to ${about.length > 1 ? 'them' : 'it'} would shrink to nothing${fw ? ` (${fw})` : ''}`;
         return `a face next to it is not square to it, so moving it alone would leave a step${fw ? ` (${fw})` : ''}`;
       default: {
         const which = r.face !== undefined ? about.find((a) => a.face === r.face) : undefined;
@@ -214,6 +223,49 @@ export function refusalWords(r: OffsetRefusal, about: OffsetFaceAbout[], d: numb
     }
   })();
   return `${subject} could not be moved cleanly by ${ctx.units.format(d, 'length')} (${why})`;
+}
+
+/** fu2: which face a move would make vanish ('either': one of the two, which could not be told). */
+export type Shrinking = 'picked' | 'neighbour' | 'either';
+
+/**
+ * fu2 (pp final, polish a): a move refused as a step where a smaller one (`works`, from the
+ * search) is made: the neighbour that is not square was there for that one too, so the real
+ * limit is a face shrinking away. The move that works is made and the picked faces' and the
+ * neighbour's areas compared with before: the one that shrank (the more) is the one that goes.
+ * 'either' when that cannot be told (the move refused now, no history, neither shrank).
+ */
+async function shrinking(params: { id: ShapeId; faces: number[]; carry?: number[]; chain: boolean }, works: number, neighbour: number | undefined, ctx: BuildContext): Promise<Shrinking> {
+  if (neighbour === undefined || neighbour < 0) return 'either';
+  let r: OffsetFacesResult;
+  try {
+    r = (await ctx.kernel.call('offset_faces', { ...params, d: works })).result;
+  } catch (err) {
+    const k = (err as KernelCallError).kind;
+    if (k === 'occt' || k === 'input' || k === 'internal') return 'either';
+    throw err;
+  }
+  if (r.refused !== undefined) return 'either';
+  try {
+    const outs = (r.history?.faces ?? []).filter((h) => h.from.some((s) => s.shape === params.id && s.face === neighbour)).map((h) => h.out);
+    const moved = r.moved.filter((i) => i >= 0);
+    if (!r.history || !moved.length) return 'either';
+    const area = async (id: ShapeId, faces: number[]) => {
+      if (!faces.length) return 0;
+      const t = await ctx.kernel.call('topo', { id, faces, edges: 'none', vertices: 'none', edge_length: false });
+      return t.result.faces.reduce((s, f) => s + (f.area ?? 0), 0);
+    };
+    const [p0, n0] = [await area(params.id, params.faces), await area(params.id, [neighbour])];
+    const [p1, n1] = [await area(r.id, moved), await area(r.id, outs)];
+    if (!(p0 > 0 && n0 > 0)) return 'either';
+    const kp = p1 / p0;
+    const kn = n1 / n0;
+    if (kp < 1 - 1e-6 && kp < kn) return 'picked';
+    if (kn < 1 - 1e-6 && kn < kp) return 'neighbour';
+    return 'either';
+  } finally {
+    await ctx.release([r.id]);
+  }
 }
 
 /** mm per display unit (1 for mm, 25.4 for in, ...). */
@@ -228,7 +280,7 @@ function mmPerUnit(ctx: BuildContext): number {
  * refusal, ". 12 mm or less works" / ". Up to -12 mm works" after the others; else "try a
  * smaller distance".
  */
-async function suggestion(params: { id: ShapeId; faces: number[]; d: number; chain: boolean; carry?: number[] }, refused: OffsetRefusal, faceCount: number, ctx: BuildContext): Promise<string> {
+async function suggestion(params: { id: ShapeId; faces: number[]; d: number; chain: boolean; carry?: number[] }, refused: OffsetRefusal, faceCount: number, ctx: BuildContext, found?: { max: number | null }): Promise<string> {
   const d = params.d;
   const radius = refused.code === 'radius';
   // Not searched (a part over 2,000 faces): a guess, said as one. Searched and nothing found: said
@@ -250,6 +302,7 @@ async function suggestion(params: { id: ShapeId; faces: number[]; d: number; cha
   }
   const max = r.max_ok;
   if (!(typeof max === 'number' && max > 0)) return none;
+  if (found) found.max = max;
   const unit = mmPerUnit(ctx);
   const shown = ctx.units.format(roundDown(max / unit) * unit, 'length');
   if (radius) return d > 0 ? `: ${shown} or less works` : `: up to -${shown} works`;

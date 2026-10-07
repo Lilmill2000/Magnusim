@@ -637,7 +637,7 @@ test.describe('Press-pull fix round 1', () => {
     expect(seen.errors).toEqual([]);
   });
 
-  test('cad:p5-fix1-b3-cone review B3: a cone over a cylinder of its radius, +1: the line says what holds ("Cone face moves 1 mm out…"), the volume is the cylinder run up to the offset cone; -8 is red (a step), with what works', async ({ page, request }) => {
+  test('cad:p5-fix1-b3-cone review B3: a cone over a cylinder of its radius, +1: the line says what holds ("Cone face moves 1 mm out…"), the volume is the cylinder run up to the offset cone; -8 and +9.5 are red naming the face that would go (fu2), with what works', async ({ page, request }) => {
     const { seen, frame } = await freshPart(page, request);
     const sketch = await cad<string>(page, (async () => {
       const s = (window as unknown as W).__CAD__.services;
@@ -693,7 +693,12 @@ test.describe('Press-pull fix round 1', () => {
     await expectSize(frame, [40, 40, 30]);
     await typeDistance(page, frame, '-8');
     await expect(featureRowNamed(frame, 'Press-pull 1')).toHaveAttribute('data-state', 'error');
-    await expect(foot(frame)).toHaveText(/^Press-pull 1 failed: the face could not be moved cleanly by -8 mm \(a face next to it is not square to it, so moving it alone would leave a step \(.+\)\)\. Up to -4\.4 mm works$/);
+    // fu2 (pp final, polish a): the limit is the cylinder below vanishing, not a step.
+    await expect(foot(frame)).toHaveText(/^Press-pull 1 failed: the face could not be moved cleanly by -8 mm \(the face next to it would shrink to nothing \(Side 2 of Revolve 1\)\)\. Up to -4\.4 mm works$/);
+    // And +9.5: the cone itself would be swallowed by the cylinder run up to it.
+    await typeDistance(page, frame, '9.5');
+    await expect(featureRowNamed(frame, 'Press-pull 1')).toHaveAttribute('data-state', 'error');
+    await expect(foot(frame)).toHaveText(/^Press-pull 1 failed: the face could not be moved cleanly by 9\.5 mm \(it would be swallowed by the face next to it \(Side 2 of Revolve 1\)\)\. 8\.9 mm or less works$/);
     await panel(frame).locator('[data-panel-delete]').click();
     expect(seen.errors).toEqual([]);
   });
