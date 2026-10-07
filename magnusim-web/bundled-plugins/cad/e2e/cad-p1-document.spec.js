@@ -68,15 +68,11 @@
 // read where the camera looks.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { addSketch, addSolid, answerLeave, baseUrl, cadPluginRow, cancelLeave, drawRectangle, ensureCadOn, expectLeaveWaitsForSave, headerTakesKeyboard, historyState, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, resetCadToDefault, watchPage, workspaceFrame, runCommand, soloVolume } from './helpers';
 import { breakManifest } from './manifest-guard.mjs';
 import { PNG } from './png';
-
-/** The plugin's version as its manifest states it (read before any test breaks the manifest). */
-const CAD_VERSION = /^version = "([^"]+)"/m.exec(readFileSync(fileURLToPath(new URL('../manifest.toml', import.meta.url)), 'utf8'))[1];
 
 const SAMPLE_PROJECT = 'sample-project-steady-state-e2e';
 
@@ -277,7 +273,7 @@ test('cad:p1-document-open CAD ships on; Disable and Enable in Settings; "+ New 
   // Settings > Plugins: CAD is On, with no ship-off hint, and offers Disable.
   const step = await openSettingsPlugins(page);
   const cadRow = step.locator('[data-plugin-key="cad"]');
-  await expect(cadRow.locator('.wiz-pref-copy > strong')).toHaveText(`Magnusim CAD v${CAD_VERSION} · bundled`);
+  await expect(cadRow.locator('.wiz-pref-copy > strong')).toHaveText('Magnusim CAD v0.1.0 · bundled');
   await expect(cadRow.locator('.wiz-plugin-status')).toHaveText('On');
   await expect(cadRow.locator('[data-plugin-optional-hint]')).toHaveCount(0);
   await expect(cadRow.locator('[data-plugin-toggle="cad"]')).toHaveText('Disable');
@@ -600,7 +596,7 @@ test('cad:p1-document-plugin-off with CAD off the Part row is greyed with its re
     // since SD no boxes or cylinders (solids come from sketches), and the enclosure for CFD; since P4a
     // revolve, sweep, loft, fillet, chamfer, shell and reference geometry; since P4b splines, offsets,
     // projected edges, patterns and mirrors; still nothing of V1 (assemblies, drawings).
-    await expect(cadRow.locator('.wiz-pref-copy > strong')).toHaveText(`Magnusim CAD v${CAD_VERSION} · bundled`);
+    await expect(cadRow.locator('.wiz-pref-copy > strong')).toHaveText('Magnusim CAD v0.1.0 · bundled');
     await expect(cadRow.locator('.wiz-pref-copy > span').first()).toHaveText('Parametric parts in their own workspace: sketches with dimensions and constraints, splines, offsets, sketch mirrors and patterns, and edges projected from the model; extrude, revolve, sweep and loft; fillet, chamfer, shell and booleans; linear and circular patterns and mirrors; reference planes, axes and points; an enclosure around the part for CFD; named parameters; and STEP import, editing and export.');
     await expect(cadRow).not.toContainText(/assembl|drawing|boxes|cylinders/i);
     await cadRow.locator('[data-plugin-toggle="cad"]').click();
