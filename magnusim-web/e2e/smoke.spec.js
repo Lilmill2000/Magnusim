@@ -29,6 +29,18 @@ async function setIslandToggle(page, label, on) {
   }
 }
 
+/**
+ * Wait until the model is drawn in the viewport, so a click on it hits a body or face.
+ * The first page to open a project waits on the server's first geometry load; a click
+ * before then lands on an empty canvas (these tests passed only when another test had
+ * opened the project first).
+ */
+async function modelShown(page) {
+  await page.waitForFunction(() => window.__CFD_W16_STATE__?.ready === true, null, { timeout: 60_000 });
+  // ready is set when the model is loaded; it is on screen a frame later.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+}
+
 // The solve, transient, results and exports, study panel and physics tests are
 // Incompressible Flow's: bundled-plugins/incompressible_flow/e2e/solve-smoke.spec.js.
 test.describe('Magnusim smoke', () => {
@@ -302,6 +314,7 @@ test.describe('Magnusim smoke', () => {
     const before = (await air()).assigned_volumes || [];
     const body = before[0] || 'Body1';
     const row = panel.locator(`[data-volume="${body}"]`);
+    await modelShown(page);
     const box = await page.locator('#viewer').boundingBox();
     expect(box).toBeTruthy();
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -350,6 +363,7 @@ test.describe('Magnusim smoke', () => {
     await expect.poll(async () => (await bcsNow()).length).toBe(before + 1);
 
     // A click on the model assigns that face and it persists.
+    await modelShown(page);
     const box = await page.locator('#viewer').boundingBox();
     expect(box).toBeTruthy();
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
