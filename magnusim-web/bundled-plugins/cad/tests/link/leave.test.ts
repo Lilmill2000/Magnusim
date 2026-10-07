@@ -212,9 +212,9 @@ describe('the exit hook', () => {
 
   it('no body included: no link; the plain message as the header line only (no page toast), held to be read; then the leave goes on (with the camera)', async () => {
     const t = setup({ bodies: { b1: { name: 'Body 1', color: '#bdc9db', simulation: false } } as CadDoc['bodies'], linked: linked(1, 2) });
-    const t0 = Date.now();
+    const t0 = performance.now();
     expect(await t.leave()).toEqual({ ok: true, view: viewStateOf(CAM) });
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(25);
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(24); // a timer may land a fraction of a ms early on this clock
     expect(t.calls).toEqual([]);
     // L3 review polish 3: the toast said it a second time and covered the view controls.
     expect(t.toasts).toEqual([]);
@@ -225,9 +225,9 @@ describe('the exit hook', () => {
     const t = setup({ version: 5, linked: linked(2, 4), end: { failed: ['Axis 5'] } });
     (t.doc as { features: unknown }).features = { get: () => ({ parents: () => [] }) };
     t.state.set({ doc: { ...DOC, features: [...DOC.features, { id: 'f_ax', type: 'ref_axis', name: 'Axis 5' } as unknown as CadDoc['features'][number]] } });
-    const t0 = Date.now();
+    const t0 = performance.now();
     expect(await t.leave()).toEqual({ ok: true, view: viewStateOf(CAM) });
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(25);
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(24); // a timer may land a fraction of a ms early on this clock
     expect(t.calls).toHaveLength(1);
     const labels = t.progress.map((p) => p[1]);
     const at = labels.indexOf('Axis 5 is broken (not used by anything). Part 1 is updated without it.');
@@ -270,9 +270,9 @@ describe('the exit hook', () => {
     const t = setup({ stuckMs: 2_000 });
     let land!: () => void;
     (t.doc.flush as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise<void>((r) => (land = r)));
-    const t0 = Date.now();
+    const t0 = performance.now();
     await expect(t.leave()).rejects.toThrow(/^Part 1 is still saving after 2 seconds\.$/);
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_900);
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(1_899);
     expect(t.outcomes.at(-1)).toMatchObject({ error: 'Part 1 is still saving after 2 seconds.' });
     // A save that lands in time never meets it.
     const quick = setup({ stuckMs: 2_000 });
