@@ -116,7 +116,7 @@ test('cad:p1-kernel-ops the kernel in the Part frame checks, copies and repairs'
   }, input);
 
   // API 3 since P2/P3 (docs/p2p3-plan.md §2; the API 3 ops: cad-p2-kernel-ops.spec.ts).
-  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 5 });
+  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 6 });
   // props: cheap by default.
   expect(out.props).toMatchObject({ faces: 17, edges: 34, bbox_mode: 'fast' });
   expect(out.props.volume).toBeUndefined();

@@ -3,7 +3,7 @@
 // label, arrows, radius / diameter / angle), and the label's words.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import { aligned, axisAligned, defaultLabelAt, dimensionLabel, withDisplayUnit, layoutDimension, linearKindFor, planDimension } from '../../src/sketch/dimensions';
+import { aligned, axisAligned, defaultLabelAt, dimensionLabel, LABEL_GAP_PX, LABEL_OFFSET_PX, withDisplayUnit, layoutDimension, linearKindFor, planDimension } from '../../src/sketch/dimensions';
 import type { SketchDimension, Vec2 } from '../../src/types/doc';
 import { circle, merge, rectangle } from './fixtures';
 
@@ -68,6 +68,79 @@ describe('where a typed dimension puts its label', () => {
     const h = defaultLabelAt(r, { kind: 'distance', refs: ['e2'] }, 1)!;
     expect(h[0]).toBeGreaterThan(60);
     expect(h[1]).toBeCloseTo(10);
+  });
+
+  // ci2: on Linux (DejaVu Sans, wider than Segoe UI) the right edge's "20 mm" pill started on the
+  // edge, so a click meant for the edge picked the label. The pill's near side keeps a gap now.
+  describe('the pill clear of what it measures, however wide its words', () => {
+    const px = 0.5; // mm per screen px
+    /** A view looking straight down at the sketch (u right, v up): a w x h px pill's reach along dir, in mm. */
+    const reachOf = (w: number, h: number) => (_at: Vec2, dir: Vec2) => ((Math.abs(dir[0]) * w) / 2 + (Math.abs(dir[1]) * h) / 2) * px;
+    /** The pill's corners (mm) around its centre. */
+    const corners = (c: Vec2, w: number, h: number): Vec2[] => [
+      [c[0] - (w / 2) * px, c[1] - (h / 2) * px],
+      [c[0] + (w / 2) * px, c[1] - (h / 2) * px],
+      [c[0] + (w / 2) * px, c[1] + (h / 2) * px],
+      [c[0] - (w / 2) * px, c[1] + (h / 2) * px],
+    ];
+    /** The least distance (screen px) from the pill to the infinite line through a, b; all its corners on one side. */
+    const gapPx = (c: Vec2, w: number, h: number, a: Vec2, b: Vec2) => {
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const d = corners(c, w, h).map((p) => ((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])) / L);
+      expect(Math.min(...d) * Math.max(...d)).toBeGreaterThan(0);
+      return Math.min(...d.map(Math.abs)) / px;
+    };
+    const r = rectangle(0, 0, 30, 20);
+
+    it.each([
+      ['a short label (Segoe UI)', 44],
+      ['a DejaVu Sans label', 56],
+      ['a very wide label', 160],
+    ])('a vertical line, %s: the near side LABEL_GAP_PX from the line', (_w, w) => {
+      const at = defaultLabelAt(r, { kind: 'distance', refs: ['e2'] }, px, reachOf(w, 18))!;
+      expect(at[1]).toBeCloseTo(10);
+      expect(gapPx(at, w, 18, [30, 0], [30, 20])).toBeGreaterThanOrEqual(LABEL_GAP_PX - 1e-9);
+      // Never nearer than it always was (a short label's place is unchanged), and no farther than it needs.
+      expect(at[0] - 30).toBeCloseTo(Math.max(LABEL_OFFSET_PX, LABEL_GAP_PX + w / 2) * px);
+    });
+
+    it('a horizontal line: a low pill keeps the usual offset, a tall one moves out', () => {
+      const low = defaultLabelAt(r, { kind: 'distance', refs: ['e1'] }, px, reachOf(200, 18))!;
+      expect(low[1]).toBeCloseTo(-LABEL_OFFSET_PX * px);
+      expect(gapPx(low, 200, 18, [0, 0], [30, 0])).toBeGreaterThanOrEqual(LABEL_GAP_PX);
+      const tall = defaultLabelAt(r, { kind: 'distance', refs: ['e1'] }, px, reachOf(40, 60))!;
+      expect(gapPx(tall, 40, 60, [0, 0], [30, 0])).toBeCloseTo(LABEL_GAP_PX);
+    });
+
+    it('a slanted line: the pill corner nearest the line is LABEL_GAP_PX from it', () => {
+      const at = defaultLabelAt(f, { kind: 'distance', refs: ['sl'] }, px, reachOf(90, 18))!;
+      expect(gapPx(at, 90, 18, [0, 50], [10, 60])).toBeCloseTo(LABEL_GAP_PX);
+    });
+
+    it('horizontal and vertical distances, and a radius', () => {
+      const x = defaultLabelAt(r, { kind: 'distance_x', refs: ['p1', 'p3'] }, px, reachOf(60, 40))!;
+      expect(x[1] - 20 - 20 * px).toBeCloseTo(LABEL_GAP_PX * px);
+      const y = defaultLabelAt(r, { kind: 'distance_y', refs: ['p1', 'p3'] }, px, reachOf(120, 18))!;
+      expect(y[0] - 30 - 60 * px).toBeCloseTo(LABEL_GAP_PX * px);
+      // c1's radius label (centre 100,0, r 10) out at 45 degrees: every corner clear of the rim.
+      const w = 140;
+      const h = 18;
+      const rad = defaultLabelAt(f, { kind: 'radius', refs: ['c1'] }, px, reachOf(w, h))!;
+      const nearest = Math.min(...corners(rad, w, h).map((p) => Math.hypot(p[0] - 100, p[1]) - 10));
+      expect(nearest / px).toBeGreaterThanOrEqual(LABEL_GAP_PX - 1e-9);
+    });
+
+    it('with no size known: the usual offset', () => {
+      const at = defaultLabelAt(r, { kind: 'distance', refs: ['e2'] }, px)!;
+      expect(at[0] - 30).toBeCloseTo(LABEL_OFFSET_PX * px);
+      expect(defaultLabelAt(r, { kind: 'distance', refs: ['e2'] }, px, () => null)).toEqual(at);
+    });
+
+    it('layoutDimension passes the size on: the dimension line runs out to the moved label', () => {
+      const lay = layoutDimension(r, { kind: 'distance', refs: ['e2'] }, px, reachOf(160, 18))!;
+      expect(lay.text[0] - 30).toBeCloseTo((LABEL_GAP_PX + 80) * px);
+      expect(Math.max(...lay.lines.flat().map((p) => p[0]))).toBeGreaterThan(lay.text[0]);
+    });
   });
 });
 

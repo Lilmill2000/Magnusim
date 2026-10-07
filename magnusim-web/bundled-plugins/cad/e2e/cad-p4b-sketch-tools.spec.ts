@@ -74,6 +74,20 @@ async function drawn(page: Page): Promise<{ kinds: Record<string, number>; point
   });
 }
 
+/**
+ * A wider font in the frame than Windows' Segoe UI (Linux CI draws with DejaVu Sans): Verdana /
+ * DejaVu Sans everywhere, and the dimension labels spaced out further, so their pills are wider
+ * than on either system. Put in before the sketch draws its labels.
+ */
+async function widerFont(page: Page) {
+  await workspaceFrame(page).evaluate(() => {
+    const s = document.createElement('style');
+    s.setAttribute('data-test-wide-font', '');
+    s.textContent = '* { font-family: Verdana, "DejaVu Sans", sans-serif !important; } .cad-sk-dim { letter-spacing: 2px !important; }';
+    document.head.append(s);
+  });
+}
+
 const chip = (frame: FrameLocator) => frame.locator('[data-chip="sketch"]');
 const panel = (frame: FrameLocator) => frame.locator('[data-cad-panel="sketch"]');
 
@@ -279,6 +293,9 @@ test('cad:p4b-sketch-spline-profiles a closed control-point spline and a Bezier 
 
 test('cad:p4b-sketch-mirror mirror a rectangle about its own edge: Symmetric copies, shared points, still fully defined, two profiles, 12000 mm3', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
+  // ci2: Linux's wider font put the 20 mm label on the right edge, so the click there picked the
+  // label. Run with a font wider still: the edge midpoints are clear of every label.
+  await widerFont(page);
   await enterSketchOnTop(page, frame);
   await typedRectangle(page, frame, 30, 20);
   await page.keyboard.press('m');
@@ -299,6 +316,170 @@ test('cad:p4b-sketch-mirror mirror a rectangle about its own edge: Symmetric cop
   await expect.poll(() => singleVolume(frame)).toBeCloseTo(12000, 3);
   expect(seen.errors).toEqual([]);
 });
+
+// ci2 (Linux CI): a click on Mirror's second edge landed on the "20 mm" label, which replaced the
+// picks with the dimension ("Selected: Distance 20 mm, Line 3"; "To mirror: Line 3"). A tool whose
+// picks are the selection keeps them now, and says a dimension or relation can't be one.
+test('cad:p4b-sketch-label-click-keeps-picks a click on a dimension label or a relation glyph while picking keeps the picks and says why: Mirror, Linear and Circular pattern, Offset, Fillet, Dimension', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(page, frame);
+  await typedRectangle(page, frame, 30, 20);
+  const label = frame.locator('[data-sketch-dim]', { hasText: /^20 mm$/ });
+  const glyph = frame.locator('[data-sketch-glyph="horizontal"]').first();
+  const note = panel(frame).locator('.mgk-reason-msg');
+  const selection = frame.locator('[data-sketch-selection] .cad-sk-selected');
+  const hint = panel(frame).locator('[data-sketch-hint]');
+
+  // Mirror: Line 1 picked, then the label and a glyph: Line 1 stays the pick; then the other two edges.
+  await page.keyboard.press('m');
+  await clickAt(page, [15, 0]);
+  const picked = panel(frame).locator('[data-sketch-option="picked"]');
+  await expect(picked).toHaveText('To mirror: Line 1');
+  await label.click();
+  await expect(note).toHaveText("Dimensions can't be mirrored: pick lines, arcs, circles, splines or points");
+  await expect(picked).toHaveText('To mirror: Line 1');
+  await expect(selection).toHaveAttribute('title', 'Line 1');
+  await expect(label).toHaveAttribute('aria-pressed', 'false');
+  await glyph.click();
+  await expect(note).toHaveText("Relations can't be mirrored: pick lines, arcs, circles, splines or points");
+  await expect(picked).toHaveText('To mirror: Line 1');
+  // A right-click on the label: no menu that would act on the picks (its Delete deletes the selection).
+  await label.click({ button: 'right' });
+  await expect(note).toHaveText("Dimensions can't be mirrored: pick lines, arcs, circles, splines or points");
+  await expect(frame.locator('[data-cad-menu]')).toHaveCount(0);
+  await expect(picked).toHaveText('To mirror: Line 1');
+  // The next pick adds to it, and the words go.
+  await clickAt(page, [30, 10]);
+  await clickAt(page, [15, 20]);
+  await expect(picked).toHaveText('To mirror: Line 1, Line 2, Line 3');
+  await expect(note).toHaveCount(0);
+  // The mirror-line step: a label is no line.
+  await panel(frame).locator('[data-sketch-option="next"]').click();
+  await expect(hint).toContainText('Click the mirror line');
+  await label.click();
+  await expect(note).toHaveText('Click a line to mirror about');
+  await expect(selection).toHaveAttribute('title', 'Line 1, Line 2, Line 3');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(selection).toHaveCount(0);
+
+  // Linear and circular patterns: the same.
+  for (const [command, words] of [
+    ['sketch.pattern-linear', 'pattern-linear'],
+    ['sketch.pattern-circular', 'pattern-circular'],
+  ] as const) {
+    await runCommand(frame, command);
+    const opts = panel(frame).locator(`[data-sketch-options="${words}"]`);
+    await clickAt(page, [15, 0]);
+    await expect(opts.locator('[data-sketch-option="picked"]')).toHaveText('To pattern: Line 1');
+    await label.click();
+    await expect(note).toHaveText("Dimensions can't be patterned: pick lines, arcs, circles, splines or points");
+    await expect(opts.locator('[data-sketch-option="picked"]')).toHaveText('To pattern: Line 1');
+    await expect(selection).toHaveAttribute('title', 'Line 1');
+    await clickAt(page, [30, 10]);
+    await expect(opts.locator('[data-sketch-option="picked"]')).toHaveText('To pattern: Line 1, Line 2');
+    await expect(note).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await expect(selection).toHaveCount(0);
+  }
+
+  // Offset: the label isn't selected; nothing is offset.
+  await page.keyboard.press('o');
+  await label.click();
+  await expect(note).toHaveText("Dimensions can't be offset: point at a line, an arc, a circle or a spline");
+  await expect(selection).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  // Fillet: the first curve stays picked.
+  await runCommand(frame, 'sketch.fillet');
+  await clickAt(page, [15, 0]);
+  await expect(hint).toContainText('Click the second curve');
+  await label.click();
+  await expect(note).toHaveText("Dimensions can't be filleted: click the second curve");
+  await expect(selection).toHaveAttribute('title', 'Line 1');
+  await expect(hint).toContainText('Click the second curve');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+
+  // Dimension: the first pick stays.
+  await runCommand(frame, 'sketch.dimension');
+  await clickAt(page, [15, 0]);
+  await expect(selection).toHaveAttribute('title', 'Line 1');
+  await label.click();
+  await expect(note).toHaveText("A dimension can't be dimensioned: pick a line, a circle, an arc or points (double-click a dimension to edit it)");
+  await expect(selection).toHaveAttribute('title', 'Line 1');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+
+  // Nothing changed, and in Select a click on the label still selects it.
+  expect((await drawn(page)).kinds).toEqual({ line: 4 });
+  await expect(chip(frame)).toHaveText('Fully defined');
+  await label.click();
+  await expect(label).toHaveAttribute('aria-pressed', 'true');
+  await expect(selection).toHaveAttribute('title', 'Distance 20 mm');
+  await label.click({ button: 'right' });
+  await expect(frame.locator('[data-cad-menu] [data-menu-item="delete"]')).toHaveText('Delete dimension');
+  await page.keyboard.press('Escape');
+  await expect(frame.locator('[data-cad-menu]')).toHaveCount(0);
+  expect(seen.errors).toEqual([]);
+});
+
+/** The least distance (px) between a box and a segment (0 when they touch or cross). */
+function boxToSegment(b: { x: number; y: number; width: number; height: number }, a: V2, c: V2): number {
+  const [l, t, r, bt] = [b.x, b.y, b.x + b.width, b.y + b.height];
+  const inBox = (p: V2) => p[0] >= l && p[0] <= r && p[1] >= t && p[1] <= bt;
+  const ptSeg = (p: V2, s: V2, e: V2) => {
+    const dx = e[0] - s[0];
+    const dy = e[1] - s[1];
+    const k = Math.max(0, Math.min(1, ((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(p[0] - s[0] - k * dx, p[1] - s[1] - k * dy);
+  };
+  const cross = (p: V2, q: V2, s: V2, e: V2) => {
+    const o = (u: V2, v: V2, w: V2) => Math.sign((v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0]));
+    return o(p, q, s) !== o(p, q, e) && o(s, e, p) !== o(s, e, q);
+  };
+  const corners: V2[] = [[l, t], [r, t], [r, bt], [l, bt]];
+  if (inBox(a) || inBox(c)) return 0;
+  for (let i = 0; i < 4; i++) if (cross(a, c, corners[i], corners[(i + 1) % 4])) return 0;
+  return Math.min(...corners.map((p) => ptSeg(p, a, c)), ...[a, c].map((p) => Math.min(...corners.map((q, i) => ptSeg(p, q, corners[(i + 1) % 4])))));
+}
+
+// ci2: a new dimension's label stands with its pill's near side a gap from what it measures,
+// whatever its words' width: Windows' font, and a font wider than Linux's DejaVu Sans.
+test('cad:p4b-sketch-dim-label-gap a typed rectangle\'s 30 mm and 20 mm pills keep clear of the edges they measure, with a wider font too', async ({ page, request }) => {
+  let narrow = 0;
+  for (const wide of [false, true]) {
+    const { seen, frame } = await freshPart(page, request);
+    if (wide) await widerFont(page);
+    await enterSketchOnTop(page, frame);
+    await typedRectangle(page, frame, 30, 20);
+    await page.mouse.move(5, 5);
+    await settled(page);
+    for (const [text, a, b] of [
+      ['30 mm', [0, 0], [30, 0]],
+      ['20 mm', [30, 0], [30, 20]],
+    ] as [string, V2, V2][]) {
+      const box = (await frame.locator('[data-sketch-dim]', { hasText: new RegExp(`^${text}$`) }).boundingBox())!;
+      const gap = boxToSegment(box, await clickPoint(page, a), await clickPoint(page, b));
+      expect(gap, `${wide ? 'wide font: ' : ''}the ${text} pill ${Math.round(box.width)} px wide is ${gap.toFixed(1)} px from its edge`).toBeGreaterThanOrEqual(8);
+      if (text === '20 mm' && !wide) narrow = box.width;
+      if (text === '20 mm' && wide) expect(box.width, 'the wider font makes the pill wider').toBeGreaterThan(narrow + 8);
+    }
+    // The edge's midpoint is the edge, not the label.
+    const [mx, my] = await clickPoint(page, [30, 10]);
+    const fbox = (await page.locator('#workspace-frame').boundingBox())!;
+    const top = await workspaceFrame(page).evaluate(([px, py]) => !!document.elementFromPoint(px, py)?.closest('[data-sketch-dim]'), [mx - fbox.x, my - fbox.y]);
+    expect(top, 'a label under the right edge\'s midpoint').toBe(false);
+    expect(seen.errors).toEqual([]);
+  }
+});
+
+async function clickPoint(page: Page, p: V2): Promise<V2> {
+  return at(page, [p[0], p[1], 0]);
+}
 
 test('cad:p4b-sketch-linear-pattern a circle in a row of 4 at 20 mm, the row count to 6; fully defined; six cylinders', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);

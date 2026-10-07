@@ -922,6 +922,11 @@ function dimensionTool(mode: SketchMode): SketchTool {
   }
   return {
     id: 'dimension',
+    // ci2: a label or glyph clicked keeps the picks (src/sketch/mode.ts refusesPick); a double-click still edits a value.
+    refusesPick: (what) =>
+      what === 'dimension'
+        ? "A dimension can't be dimensioned: pick a line, a circle, an arc or points (double-click a dimension to edit it)"
+        : "A relation can't be dimensioned: pick a line, a circle, an arc or points",
     hint: () =>
       !picks.length
         ? 'Pick a line, a circle, an arc, or two points, lines or curves to dimension.'

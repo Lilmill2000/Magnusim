@@ -34,6 +34,9 @@ export const OP_TIMEOUTS: Partial<Record<KernelOp, number>> = {
   project: 60_000,
   section: 60_000,
   silhouette: 120_000,
+  // API 6: a whole-body offset, its validity and self-interference checks; with diagnose
+  // up to 10 more runs on work copies.
+  offset_faces: 60_000,
 };
 
 export function timeoutFor(op: KernelOp): number {

@@ -1091,7 +1091,7 @@ test('cad:p2p3-review1-unsolvable a triangle whose sides cannot hold (10, 7.81, 
   expect(seen.errors).toEqual([]);
 });
 
-test('cad:p2p3-review1-press-pull-curved Press-pull says why a click on a curved face picks nothing', async ({ page, request }) => {
+test('cad:p2p3-review1-press-pull-curved Press-pull takes a click on a curved face (kernel API 6): the cylinder side 10 mm out makes it r 20', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   // A cylinder: a circle of diameter 20 on Top, extruded 20 mm.
   await addSolid(page, { circle: true, size: [20, 20] });
@@ -1103,8 +1103,11 @@ test('cad:p2p3-review1-press-pull-curved Press-pull says why a click on a curved
   // The side of the cylinder, on the side the camera sees (default view from -x, -y).
   const side: V3 = [-r * Math.SQRT1_2, -r * Math.SQRT1_2, 5];
   await clickAt(page, side);
-  await expect(p.locator('[data-pick-error="faces"]')).toHaveText('Press-pull works on flat faces: that face is curved');
-  await expect(p.locator('[data-pick-field="faces"] [data-pick-row]')).toHaveCount(0);
+  await expect(p.locator('[data-pick-field="faces"] [data-pick-row]')).toHaveCount(1);
+  await expect(p.locator('[data-pick-error="faces"]')).toHaveCount(0);
+  // The default 10 mm out: r 10 -> 20, 20 high.
+  await expect(p.locator('[data-press-line]')).toHaveText(['Cylinder radius 10 mm → 20 mm'], { timeout: 60_000 });
+  await expect.poll(async () => Number(await frame.locator('[data-chip="volume"] [data-volume-mm3]').first().getAttribute('data-volume-mm3'))).toBeCloseTo(Math.PI * 400 * 20, 3);
   await p.locator('[data-panel-delete]').click();
   expect(seen.csp).toEqual([]);
   expect(seen.errors).toEqual([]);

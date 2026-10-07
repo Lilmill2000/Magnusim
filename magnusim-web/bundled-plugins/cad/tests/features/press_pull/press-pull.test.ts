@@ -11,7 +11,8 @@ import { pressPullDef } from '../../../src/features/press_pull/feature';
 import { createUnitsService } from '../../../src/doc/units';
 import type { PersistentRef, PressPullFeature } from '../../../src/types/doc';
 import type { BuiltBody } from '../../../src/types/doc-service';
-import { ctxOf, kernelError, scriptKernel } from '../p2/script-kernel';
+import { ctxOf, scriptKernel } from '../p2/script-kernel';
+import { emptyDoc } from '../../../src/doc/schema';
 
 const units = createUnitsService(() => ({ length: 'mm', angle: 'deg' }));
 const names = indexedNames('f_box', 'primitive', 6);
@@ -97,7 +98,7 @@ describe('Press-pull build', () => {
   it('the distance must not be 0', () => {
     expect(pressPullDef.resolve(feature({ distance: '0 mm' }), units)).toEqual({ ok: false, message: 'Distance must not be 0' });
     expect(pressPullDef.incomplete(feature({ distance: '0' }), units)).toBe('Distance must not be 0');
-    expect(pressPullDef.incomplete(feature({ faces: [] }), units)).toBe('Select flat faces to press-pull');
+    expect(pressPullDef.incomplete(feature({ faces: [], version: 2 }), units)).toBe('Select faces to press-pull');
   });
 
   it('nothing left is red, never a body that vanished quietly', async () => {
@@ -106,14 +107,97 @@ describe('Press-pull build', () => {
     expect(r).toEqual({ ok: false, message: 'Press-pull 1 failed: press-pull would remove the whole body' });
   });
 
-  it("the kernel's refusal of a curved face is said", async () => {
-    const k = kernel().on('press_pull', () => {
-      throw kernelError('press_pull needs planar faces: face 3 is a cylinder', 'input', 'press_pull');
-    });
+  it('a Press-pull saved before version 2 keeps the prism path even where it leaves a step: no offset_faces call (fix round 1, B2)', async () => {
+    const k = kernel().on('press_pull', () => ({ ...moved(), sides: { '5:3': 1 } }));
     const r = await pressPullDef.build(feature(), { d: 5 }, ctxOf(k, [body]));
-    expect(r).toEqual({ ok: false, message: 'Press-pull 1 failed: press_pull needs planar faces: face 3 is a cylinder' });
+    expect(k.ops()).not.toContain('offset_faces');
+    expect(r.ok && r.output).toEqual({ type: 'press-pull', method: 'prism', faces: [], tangent: 0, note: null, legacy: true });
+    expect(pressPullDef.incomplete(feature({ faces: [] }), units)).toBe('Select flat faces to press-pull');
   });
 
+  it('a new Press-pull is version 2', () => {
+    const doc = emptyDoc('metric');
+    expect(pressPullDef.create(doc, {})).toMatchObject({ type: 'press_pull', version: 2 });
+  });
+});
+
+describe('Press-pull version 2 (kernel API 6, fix round 1)', () => {
+  const bore = { i: 5, type: 'cylinder' as const, area: 600, centroid: [10, 10, 10] as [number, number, number], radius: 10, bbox: [0, 0, 0, 20, 20, 20] as [number, number, number, number, number, number] };
+  const curvedKernel = () =>
+    scriptKernel().on('topo', (p) => {
+      if (p.faces === 'none') return { faces: [], edges: [], vertices: [], counts: { faces: 6, edges: 12, vertices: 8 }, timings: {} };
+      const want = p.faces === 'all' ? [0, 1, 2, 3, 4, 5] : (p.faces as number[]);
+      const all = [...FACES.slice(0, 5), bore];
+      return { faces: all.filter((f) => want.includes(f.i)), edges: [], vertices: [], counts: { faces: 6, edges: 12, vertices: 8 }, timings: {} };
+    });
+  const about = { face: 5, type: 'cylinder', role: 'bore', convex: false, radius: 10, new_radius: 8, tangent: [] as number[] };
+  const boreRef: PersistentRef = { name: names.faces[5], signature: { kind: 'face', type: 'cylinder', size: 600, at: [10, 10, 10], dir: null, radius: 10 } };
+  const v2 = (over: Partial<PressPullFeature> = {}) => feature({ faces: [boreRef], version: 2, ...over });
+  const refusal = (code: string, extra: Record<string, unknown> = {}) => ({ refused: { code, ...extra }, about: [{ ...about, new_radius: -1 }] });
+  const ok = (id: number, method = 'offset', extra: Record<string, unknown> = {}) => ({ ...moved(id), sides: undefined, op: undefined, empty: undefined, moved: [5], about: [about], tangent: [], method, ...extra });
+
+  it('one offset_faces call with chain on: the result, its method and its words go to the panel; the bore keeps its name', async () => {
+    const k = curvedKernel().on('offset_faces', () => ok(400, 'cylinder'));
+    const r = await pressPullDef.build(v2(), { d: 2 }, ctxOf(k, [body]));
+    expect(k.ops()).not.toContain('press_pull');
+    expect(k.calls.find((c) => c.op === 'offset_faces')!.params).toEqual({ id: 1, faces: [5], d: 2, chain: true });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.bodies[0]).toMatchObject({ shape: 400, valid: true });
+    expect(r.bodies[0].names?.faces[5]).toBe(names.faces[5]);
+    expect(r.output).toEqual({ type: 'press-pull', method: 'cylinder', faces: [about], tangent: 0, note: null, carried: { fillets: 0, chamfers: 0 } });
+  });
+
+  it("a Chamfer feature's faces go to the kernel as `carry` (put back at their size); the panel counts them", async () => {
+    const chamfered = { ...body, names: { faces: [...names.faces.slice(0, 4), 'F:f_ch:chamfer:E:a&b', names.faces[5]] } };
+    const k = curvedKernel().on('offset_faces', () => ok(401, 'offset', { carried: [4] }));
+    const r = await pressPullDef.build(v2(), { d: 2 }, ctxOf(k, [chamfered]));
+    expect(k.calls.find((c) => c.op === 'offset_faces')!.params).toEqual({ id: 1, faces: [5], d: 2, chain: true, carry: [4] });
+    expect(r.ok && r.output).toMatchObject({ carried: { fillets: 0, chamfers: 1 } });
+  });
+
+  it('a hole that would close is red, in words, with the largest distance that works (the kernel bisects every method)', async () => {
+    const k = curvedKernel().on('offset_faces', (p) => (p.diagnose ? { ...refusal('radius', { words: 'the hole would close', face: 5 }), max_ok: 9.997 } : refusal('radius', { words: 'the hole would close', face: 5 })));
+    const r = await pressPullDef.build(v2({ distance: '11 mm' }), { d: 11 }, ctxOf(k, [body]));
+    expect(r).toMatchObject({ ok: false, message: 'Press-pull 1 failed: the hole would close: 9.9 mm or less works' });
+    expect(k.calls.filter((c) => c.op === 'offset_faces').map((c) => c.params.diagnose ?? false)).toEqual([false, true]);
+  });
+
+  it('a lost face: "could not be moved cleanly by -40 mm (the result would lose a face (…)). Up to -12 mm works"', async () => {
+    const k = curvedKernel().on('offset_faces', (p) => (p.diagnose ? { ...refusal('lost', { face: 4 }), max_ok: 12.3 } : refusal('lost', { face: 4 })));
+    const r = await pressPullDef.build(v2({ distance: '-40 mm' }), { d: -40 }, ctxOf(k, [body]));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.message).toMatch(/^Press-pull 1 failed: the face could not be moved cleanly by -40 mm \(the result would lose a face \(.+\)\)\. Up to -12 mm works$/);
+  });
+
+  it("BRepCheck's words never reach the red text: they go to the panel's Details", async () => {
+    const detail = 'invalid result (BRepCheck): SelfIntersectingWire x2, UnorientableShape x1';
+    const k = curvedKernel().on('offset_faces', (p) => (p.diagnose ? { ...refusal('invalid', { detail }), max_ok: null } : refusal('invalid', { detail })));
+    const r = await pressPullDef.build(v2({ distance: '-20 mm' }), { d: -20 }, ctxOf(k, [body]));
+    expect(r).toMatchObject({ ok: false, message: 'Press-pull 1 failed: the face could not be moved cleanly by -20 mm (the result would not be a valid solid). No smaller distance works either' });
+    if (r.ok) return;
+    expect(r.message).not.toMatch(/BRepCheck|SelfIntersecting|Unorientable/);
+    expect(r.output).toMatchObject({ type: 'press-pull', detail });
+  });
+
+  it('a volume that barely moves and a step say so in words', async () => {
+    let k = curvedKernel().on('offset_faces', (p) => ({ ...refusal('volume', { dv: 1.36, expected: -486439 }), ...(p.diagnose ? { max_ok: null } : {}) }));
+    let r = await pressPullDef.build(v2({ distance: '-1 mm' }), { d: -1 }, ctxOf(k, [body]));
+    expect(r.ok === false && r.message).toBe('Press-pull 1 failed: the face could not be moved cleanly by -1 mm (its volume would change by 1.36 mm³ instead of about -486,439 mm³). No smaller distance works either');
+    k = curvedKernel().on('offset_faces', (p) => ({ ...refusal('step', { face: 2 }), ...(p.diagnose ? { max_ok: 4.47 } : {}) }));
+    r = await pressPullDef.build(v2({ distance: '-8 mm' }), { d: -8 }, ctxOf(k, [body]));
+    expect(r.ok === false && r.message).toMatch(/^Press-pull 1 failed: the face could not be moved cleanly by -8 mm \(a face next to it is not square to it, so moving it alone would leave a step \(.+\)\)\. Up to -4\.4 mm works$/);
+  });
+
+  it('the suggestion is rounded in the display unit (review P6: "0.389764 in")', async () => {
+    const k = curvedKernel().on('offset_faces', (p) => (p.diagnose ? { ...refusal('radius', { words: 'the hole would close', face: 5 }), max_ok: 9.997 } : refusal('radius', { words: 'the hole would close', face: 5 })));
+    const r = await pressPullDef.build(v2({ distance: '0.5 in' }), { d: 12.7 }, ctxOf(k, [body], { doc: emptyDoc('imperial') }));
+    expect(r).toMatchObject({ ok: false, message: 'Press-pull 1 failed: the hole would close: 0.39 in or less works' });
+  });
+});
+
+describe('Press-pull build (more)', () => {
   it('an invalid result is red with Try repair; repair runs with the fuzzy tolerance, then ShapeFix', async () => {
     const bad = () => ({ ...moved(), valid: false, reason: 'invalid result (BRepCheck): NotClosed x1' });
     let k = kernel().on('press_pull', bad);

@@ -246,6 +246,8 @@ export function filletTool(mode: SketchMode, kind: 'fillet' | 'chamfer'): Sketch
   return {
     id: kind,
     hint: () => (first ? 'Click the second curve (it must meet the first at a corner).' : 'Pick a corner or two curves.'),
+    // ci2: a label or glyph clicked keeps the first pick (src/sketch/mode.ts refusesPick).
+    refusesPick: (what) => `${what === 'dimension' ? 'Dimensions' : 'Relations'} can't be ${kind === 'fillet' ? 'filleted' : 'chamfered'}: ${first ? 'click the second curve' : 'pick a corner or two curves'}`,
     cancel() {
       const had = !!first;
       first = null;

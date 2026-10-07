@@ -137,9 +137,11 @@ describe('press_pull (API 3)', () => {
     expect(p.reason).toMatch(/^invalid result \(BRepCheck\)/);
   });
 
-  itVortex('refuses curved faces, a zero distance and a push that removes the whole body', () => {
-    const cyl = faceWhere(vortex, (f) => f.type === 'cylinder');
-    expect(tryCall(k, 'press_pull', { id: vortex, faces: [cyl], d: 1 })).toMatchObject({ ok: false, kind: 'input', error: `press_pull needs planar faces: face ${cyl} is a cylinder` });
+  itVortex('takes a curved face (API 6: a thickened face as the tool); refuses a zero distance and a push that removes the whole body', () => {
+    const cyl = faceWhere(vortex, (f) => f.type === 'cylinder' && Math.abs(f.radius - 25.4) < 1e-6 && f.area > 9000);
+    const p = call(k, 'press_pull', { id: vortex, faces: [cyl], d: 1 });
+    expect(p).toMatchObject({ valid: true, op: 'fuse', solids: 1 });
+    expect(rel(volume(k, p.id), REF.p5_offset.vortex.inlet_thick_plus_1.volume)).toBeLessThan(1e-12);
     const box = box20();
     expect(tryCall(k, 'press_pull', { id: box, faces: [topOf(box)], d: 0 })).toMatchObject({ ok: false, kind: 'input' });
     expect(tryCall(k, 'press_pull', { id: box, faces: [], d: 1 })).toMatchObject({ ok: false, kind: 'input' });

@@ -38,7 +38,21 @@ along a sketched path, and Loft through two or more profiles, each as a new
 body or joined, cut or intersected. Edits: Fillet (tangent chains; a radius
 that is too large names the edges and the radius that works), Chamfer (one or
 two distances), Shell (inside or outside), press-pull, delete faces, split and
-Combine (join, cut, intersect). Reference geometry (the toolbar's CONSTRUCT
+Combine (join, cut, intersect). Press-pull moves flat and curved faces (several
+at once, of mixed kinds) along their outward normal as a true offset: a sloping
+neighbour is extended to meet the moved face (no step), a hole's bore or a boss
+changes its radius (out adds material: 2 mm on a 10 mm bore makes it 8 mm, and
+the panel says "Bore radius 10 mm → 8 mm"), a fillet changes its radius and stays
+tangent, and a pull that would close a hole or cut the part through itself is
+red in words with what works ("the hole would close: 9.9 mm or less works").
+Fillets and chamfers beside a moved face keep their size (a box top with rounded
+edges rises; its walls stay). Where OCCT's offset cannot do it, a cylinder is
+opened or closed by a ring of material (the Vortex's outlet pipes), or flat and
+curved faces are moved as prisms or thickened faces where every neighbour is
+square to them; every result is checked (no face lost, no split from adding
+material, a plausible volume change) before it is taken, and a refusal says why
+in plain words with a distance that does work. A Press-pull saved before this
+keeps its old flat-face prism, so the part rebuilds exactly as it was made. Reference geometry (the toolbar's CONSTRUCT
 group): planes (offset, at an angle, through 3 points, midplane, normal to a
 curve), axes (through 2 points, of a round face, along an edge, where 2 planes
 cross; the origin's X, Y and Z axes are rows under Origin too) and points (at a vertex, a centre, on an edge, where an edge crosses a

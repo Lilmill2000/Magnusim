@@ -128,6 +128,8 @@ export function mirrorTool(mode: SketchMode): SketchTool {
   return {
     id: 'mirror',
     hint: () => (step === 'pick' ? 'Pick the entities to mirror (or select them first), then Enter or Next.' : 'Click the mirror line (any line, construction too).'),
+    // ci2: a label or glyph clicked while picking keeps the picks (src/sketch/mode.ts refusesPick).
+    refusesPick: (what) => (step === 'pick' ? `${what === 'dimension' ? 'Dimensions' : 'Relations'} can't be mirrored: pick lines, arcs, circles, splines or points` : 'Click a line to mirror about'),
     cancel() {
       if (step === 'line') {
         step = 'pick';
@@ -164,7 +166,10 @@ export function mirrorTool(mode: SketchMode): SketchTool {
       if (e.type !== 'click') return;
       const h = hitTest(d, e.uv, e.px);
       if (step === 'pick') {
-        if (h && h.what === 'entity') mode.select([h], true);
+        if (h && h.what === 'entity') {
+          mode.select([h], true);
+          mode.note(null);
+        }
         mode.refreshHint();
         return;
       }

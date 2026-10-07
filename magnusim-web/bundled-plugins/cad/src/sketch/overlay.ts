@@ -25,7 +25,7 @@ import type { PlaneFrame, SketchConstraint, SketchDimension, SketchFeature, Vec2
 import type { FrameBox, OverlayLayer, ViewportHandle, ViewportPointer } from '../types/viewport';
 import { uiFor } from '../ui/controller';
 import type { MenuEntry } from '../ui/kit';
-import { dimensionLabel, layoutDimension } from './dimensions';
+import { angleVertex, dimensionLabel, LABEL_GAP_PX, layoutDimension, type LabelReach } from './dimensions';
 import { colourOf, overIds } from './dof';
 import { mid, polar } from './geom';
 import { GLYPH_ICON } from './icons';
@@ -473,7 +473,26 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
 
   // ------------------------------------------------------------ html: glyphs, dimensions, boxes
   const glyphEls = new Map<string, { el: HTMLElement; at: Vec2; slot: number }>();
-  const dimEls = new Map<string, { el: HTMLElement; at: Vec2 }>();
+  /** Each dimension's label: its element, where it stands (its centre), and its size (px) when last measured. */
+  const dimEls = new Map<string, { el: HTMLElement; at: Vec2; size?: [number, number] }>();
+  /**
+   * ci2: how far a label of this size (px) reaches from its centre along a sketch direction, in mm
+   * (dimensions.ts LabelReach): the pill is upright on the screen, so it is half its width times the
+   * direction's screen x plus half its height times its screen y, at the scale the screen shows
+   * that direction at (a slanted view shortens it).
+   */
+  const labelReach =
+    ([w, h]: [number, number]): LabelReach =>
+    (at, dir) => {
+      const k = 32 * pxAt(at);
+      const s0 = screenOf(at);
+      const s1 = screenOf([at[0] + dir[0] * k, at[1] + dir[1] * k]);
+      if (!s0 || !s1) return null;
+      const len = Math.hypot(s1[0] - s0[0], s1[1] - s0[1]);
+      if (len < 1e-6) return null;
+      const reachPx = (Math.abs(s1[0] - s0[0]) / len) * (w / 2) + (Math.abs(s1[1] - s0[1]) / len) * (h / 2);
+      return (reachPx * k) / len;
+    };
   /**
    * The pixel size (mm per px where it stands) each dimension was laid out at: its label's
    * offset and its arrows are so many px. When the view's scale changes (a framing, a zoom,
@@ -500,14 +519,49 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       { passive: false },
     );
 
-  function pickConstraint(id: string, additive: boolean) {
+  function pickConstraint(id: string, additive: boolean, fromClick = false) {
+    if (refusedPick(id, fromClick)) return;
     mode.select([{ what: 'constraint', id }], additive);
+  }
+
+  /**
+   * Review P7: a refused label click says why only once it is not the first click of a
+   * double-click (which edits the value, a legitimate use in Mirror and Dimension): the note
+   * waits the double-click time and a double-click cancels it.
+   */
+  let refusalNote: ReturnType<typeof setTimeout> | null = null;
+  const DOUBLE_CLICK_MS = 400;
+  function cancelRefusalNote() {
+    if (refusalNote) clearTimeout(refusalNote);
+    refusalNote = null;
+  }
+
+  /**
+   * ci2: a tool whose picks are the selection (Mirror, the patterns, ...) keeps them when a
+   * dimension label or relation glyph is clicked, and says why it isn't a pick (SketchTool
+   * refusesPick). Linux CI: a click on Mirror's second line landed on a label, which replaced
+   * the picks with the dimension and dropped the first line. True when refused.
+   */
+  function refusedPick(id: string, deferNote = false): boolean {
+    const c = mode.draft()?.constraints.find((k) => k.id === id);
+    const why = mode.tool?.refusesPick?.(c && isDimension(c) ? 'dimension' : 'relation');
+    if (!why) return false;
+    cancelRefusalNote();
+    if (deferNote && c && isDimension(c)) {
+      refusalNote = setTimeout(() => {
+        refusalNote = null;
+        if (!mode.view.get().editing) mode.note(why);
+      }, DOUBLE_CLICK_MS);
+    } else mode.note(why);
+    return true;
   }
 
   function glyphMenu(id: string, x: number, y: number) {
     const d = mode.draft();
     const c = d?.constraints.find((k) => k.id === id);
     if (!d || !c) return;
+    // ci2: its menu acts on the selection (Delete): not while a tool's picks are the selection.
+    if (refusedPick(id)) return;
     if (!mode.selected().some((h) => h.id === id)) pickConstraint(id, false);
     const items: MenuEntry[] = [{ id: 'delete', label: `Delete ${isDimension(c) ? 'dimension' : RELATION_LABELS[c.kind as keyof typeof RELATION_LABELS]}`, danger: true, run: () => void mode.deleteSelected() }];
     if (isDimension(c)) {
@@ -617,11 +671,70 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
         const pd = v.preview.dimension;
         list.push({ id: '#preview', kind: pd.kind as SketchDimension['kind'], refs: pd.refs, expr: '', driving: true, at: pd.at, preview: true });
       }
-      for (const c of list) {
+      // ci2: each label's words first, then every label's size (one layout read for them all), then
+      // where each goes: a label with no place of its own stands with its near side a gap from what it
+      // measures, however wide its words are (Linux's DejaVu Sans put a vertical line's "20 mm" pill
+      // on the line, so a click on the line picked the label).
+      const labels = list.map((c) => {
+        const value = c.preview ? measureDimension(d, c) : dimValue(d, c);
+        const text = value == null ? '?' : dimensionLabel(c, value, services.doc.units);
+        let rec = dimEls.get(c.id);
+        if (!rec) {
+          const el = document.createElement('div');
+          el.className = 'cad-sk-dim';
+          el.setAttribute('data-sketch-dim', c.id);
+          if (!c.preview) wireDimension(el, c.id);
+          else el.classList.add('is-preview');
+          forwardWheel(el);
+          html.append(el);
+          rec = { el, at: c.at ?? [0, 0] };
+          dimEls.set(c.id, rec);
+        }
+        if (rec.el.textContent !== text) rec.el.textContent = text;
+        return { c, rec, text };
+      });
+      for (const { rec } of labels) {
+        // Hidden (off the view): the size it last had.
+        const w = rec.el.offsetWidth;
+        const h = rec.el.offsetHeight;
+        if (w > 0 && h > 0) rec.size = [w, h];
+      }
+      // Review P1: a label with no place of its own also keeps a gap from the labels placed before it
+      // (a 30° pill covered its line's "40 mm"): it is moved out, away from the one it overlaps.
+      const placed: { at: Vec2; s: [number, number]; size: [number, number] }[] = [];
+      const overlapPx = (s: [number, number], size: [number, number]) => {
+        let worst: { other: (typeof placed)[number]; by: number } | null = null;
+        for (const q of placed) {
+          const ox = (size[0] + q.size[0]) / 2 + LABEL_GAP_PX - Math.abs(s[0] - q.s[0]);
+          const oy = (size[1] + q.size[1]) / 2 + LABEL_GAP_PX - Math.abs(s[1] - q.s[1]);
+          if (ox > 0 && oy > 0 && (!worst || Math.min(ox, oy) > worst.by)) worst = { other: q, by: Math.min(ox, oy) };
+        }
+        return worst;
+      };
+      for (const { c, rec, text } of labels) {
         const px = pxAt(c.at ?? [0, 0]);
         dimPx.set(c.id, { at: c.at ?? [0, 0], px });
-        const lay = layoutDimension(d, c, px);
+        let lay = layoutDimension(d, c, px, c.at || !rec.size ? undefined : labelReach(rec.size));
         if (!lay) continue;
+        if (!c.at && !c.preview && rec.size) {
+          for (let i = 0; i < 6; i++) {
+            const s = screenOf(lay.text);
+            const hit = s ? overlapPx(s, rec.size) : null;
+            if (!hit) break;
+            const from = angleVertex(d, c) ?? hit.other.at;
+            let dir: Vec2 = [lay.text[0] - from[0], lay.text[1] - from[1]];
+            const len = Math.hypot(dir[0], dir[1]);
+            dir = len > 1e-12 ? [dir[0] / len, dir[1] / len] : [0, 1];
+            const at: Vec2 = [lay.text[0] + dir[0] * (hit.by + 2) * px, lay.text[1] + dir[1] * (hit.by + 2) * px];
+            const moved = layoutDimension(d, { ...c, at }, px);
+            if (!moved) break;
+            lay = moved;
+          }
+        }
+        {
+          const s = screenOf(lay.text);
+          if (s && rec.size) placed.push({ at: lay.text, s, size: rec.size });
+        }
         const color = c.preview ? pal.preview : sel.has(c.id) ? pal.pick : conflict.has(c.id) ? pal.over : c.driving ? pal.dim : pal.driven;
         for (const [a, b] of lay.lines) segs.push({ a, b, color });
         if (!c.preview) for (const [a, b] of lay.lines) shown.push(a, b);
@@ -633,23 +746,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
           segs.push({ a: ar.at, b: [ar.at[0] + back[0] + side[0], ar.at[1] + back[1] + side[1]], color });
           segs.push({ a: ar.at, b: [ar.at[0] + back[0] - side[0], ar.at[1] + back[1] - side[1]], color });
         }
-        const value = c.preview ? measureDimension(d, c) : dimValue(d, c);
-        const text = value == null ? '?' : dimensionLabel(c, value, services.doc.units);
         keep.add(c.id);
-        let rec = dimEls.get(c.id);
-        if (!rec) {
-          const el = document.createElement('div');
-          el.className = 'cad-sk-dim';
-          el.setAttribute('data-sketch-dim', c.id);
-          if (!c.preview) wireDimension(el, c.id);
-          else el.classList.add('is-preview');
-          forwardWheel(el);
-          html.append(el);
-          rec = { el, at: lay.text };
-          dimEls.set(c.id, rec);
-        }
         rec.at = lay.text;
-        if (rec.el.textContent !== text) rec.el.textContent = text;
         if (!c.preview) rec.el.setAttribute('aria-label', `${c.driving ? 'Dimension' : 'Driven dimension'} ${text}`);
         if (!c.preview) rec.el.setAttribute('aria-pressed', sel.has(c.id) ? 'true' : 'false');
         rec.el.setAttribute('data-driving', c.driving ? '1' : '0');
@@ -713,10 +811,11 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
         void mode.moveLabel(id, at).finally(() => {
           labelDrag = null;
         });
-      } else pickConstraint(id, e.ctrlKey || e.metaKey);
+      } else pickConstraint(id, e.ctrlKey || e.metaKey, true);
     });
     el.addEventListener('dblclick', (e) => {
       e.stopPropagation();
+      cancelRefusalNote();
       const c = mode.stored()?.constraints.find((x) => x.id === id);
       if (c && isDimension(c) && !c.driving) {
         mode.note('A driven dimension only shows a value: right-click it and Make it driving to set it');

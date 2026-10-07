@@ -27,8 +27,8 @@ export { settle };
 
 export const SOLID_DEFS = [revolveDef, sweepDef, loftDef, filletDef, chamferDef, shellDef];
 
-export async function openSolids(): Promise<RealDoc> {
-  const r = await openRealDoc();
+export async function openSolids(opts: { folder?: RealDoc['folder'] } = {}): Promise<RealDoc> {
+  const r = await openRealDoc(opts);
   registerSolidFeatures(r.doc);
   for (const d of SOLID_DEFS) if (!r.doc.features.get(d.type)) r.doc.features.register(d as unknown as FeatureTypeDef);
   return r;

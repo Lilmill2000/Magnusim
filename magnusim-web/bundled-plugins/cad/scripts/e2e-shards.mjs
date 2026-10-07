@@ -49,6 +49,8 @@ export const SHARDS = {
     // P4b SKETCH: splines, mirror, linear and circular patterns, offset, fillet and chamfer.
     'e2e/cad-p4b-sketch-tools.spec.ts',
     'e2e/cad-p4b-project.spec.ts',
+    // Press-pull fix round 1: the angle labels' gap and the label double-click in Mirror (ci2 polish).
+    'e2e/cad-p5-fix1-sketch-labels.spec.ts',
   ],
   // P4a: Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents, CONSTRUCT,
   // edge and vertex names.
@@ -73,6 +75,8 @@ export const SHARDS = {
     'e2e/cad-sd-review2.spec.ts',
     // P4b SELECT: a sketch on an imported face with projected edges through Delete faces (the exit gate).
     'e2e/cad-p4b-project-step.spec.ts',
+    // Press-pull on curved faces (kernel API 6): bores, fillets, slopes, the flange STEP and the Vortex.
+    'e2e/cad-p5-pressPull-curved.spec.ts',
   ],
   // The Part as a project geometry (gate:l2-cad and gate:l3-cad's specs) and CAD's start actions.
   link: [

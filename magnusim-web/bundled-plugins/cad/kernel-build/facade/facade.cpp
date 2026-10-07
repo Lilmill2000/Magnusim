@@ -89,6 +89,7 @@
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -108,6 +109,8 @@
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffset_MakeOffset.hxx>
+#include <BRepAlgoAPI_Check.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
@@ -1002,7 +1005,9 @@ std::unique_ptr<Profile> buildProfile(const JV& jp, double shiftAlongNormal) {
 // sweep_regions, loft_regions, extrude_face, edge_eval, extents to_vertex / to_point, fillet
 // contours and diagnose, chamfer d2, shell outside, topo edge_ends / vertex_faces.
 // 5 = P4b: B-spline sketch curves (R1), copies, project, section, silhouette.
-const int kFacadeApi = 5;
+// 6 = press-pull on curved faces: offset_faces (a true offset of picked faces, fillets
+// re-rounded), press_pull takes curved faces (a thickened face as the tool).
+const int kFacadeApi = 6;
 
 JV opVersion(const JV&) {
   JV r = JV::obj();
@@ -3682,37 +3687,64 @@ std::vector<int> facesThrough(const BRepTools_History& h, const TopoDS_Shape& s,
   return r;
 }
 
-// Press-pull planar faces of one body (work copy): a prism of each face along its own
-// outward normal by d (d > 0, fused) or into the body by |d| (d < 0, cut), all prisms
-// in one boolean with the body (no glue: a prism can reach another wall of a
-// non-convex body), then UnifySameDomain, history merged at every step. A face whose
-// neighbours are perpendicular to it grows or shrinks exactly; a slanted neighbour is
-// not extended (a step forms). `moved[i]`: the result face where faces[i] now lies
-// (the prism's far cap; -1 if it is gone), reported `modified` from that input face
-// in the history so it keeps its name. `sides["<face>:<edge>"]`: the result face swept
-// from that input edge (history `generated` from the edge), absent where the side
-// merged with a neighbour that already lay in its plane.
-JV opPressPull(const JV& q) {
-  const int sid = idParam(q.req("id"), "id");
-  const JV& jf = q.req("faces");
-  if (!jf.isArr() || jf.size() == 0) throw InputError("press_pull needs at least one face");
-  const double d = q.num("d");
-  if (!(fabs(d) > 1e-9)) throw InputError("press_pull distance must not be 0");
-  const double fuzzy = q.num("fuzzy", 0);
-  if (fuzzy < 0) throw InputError("fuzzy must be >= 0");
-  const std::string glue = q.str("glue", "off");
-  if (glue != "off" && glue != "shift") throw InputError("glue must be off or shift");
-  const bool unifyOn = q.boolean("unify", true);
-  std::vector<int> fidx;
-  for (auto& f : jf.items()) {
-    TopoDS_Face F = faceAt(sid, f);
-    const int i = (int)f.num();
-    if (std::find(fidx.begin(), fidx.end(), i) != fidx.end()) throw InputError("face " + std::to_string(i) + " is given twice");
-    gp_Pln pl;
-    gp_Dir nn;
-    if (!planarFace(F, pl, nn)) throw InputError("press_pull needs planar faces: face " + std::to_string(i) + " is " + surfWords(F));
-    fidx.push_back(i);
+// The solid between a face and its offset by d (d > 0 along the face's outward normal,
+// d < 0 against it): BRepOffset_MakeOffset thickening a copy of the face alone, its
+// side walls ruled along the normals at the face's edges. Turned outside out when OCCT
+// made it inside out (negative volume). `far` is the offset face (the face of the tool
+// that shares no edge with the face); `walls` are the others, with their edges.
+struct Thick {
+  TopoDS_Shape tool;
+  TopoDS_Shape far;
+  std::vector<TopoDS_Shape> walls;
+  std::vector<TopTools_IndexedMapOfShape> wallEdges;
+};
+
+Thick thickenFace(const TopoDS_Face& F, double d, const std::string& what) {
+  BRepOffset_MakeOffset mo;
+  mo.Initialize(F, d, 1e-7, BRepOffset_Skin, Standard_False, Standard_False, GeomAbs_Intersection, Standard_True, Standard_False);
+  try {
+    mo.MakeThickSolid();
+  } catch (const Standard_Failure& e) {
+    throw OcctError("press-pull failed: OCCT could not thicken " + what + " (" + std::string(e.GetMessageString() ? e.GetMessageString() : "exception") + "); the body is unchanged");
   }
+  if (!mo.IsDone() || mo.Shape().IsNull()) throw OcctError("press-pull failed: OCCT could not thicken " + what + "; the body is unchanged");
+  Thick t;
+  t.tool = mo.Shape();
+  GProp_GProps gp;
+  BRepGProp::VolumeProperties(t.tool, gp);
+  if (!(fabs(gp.Mass()) > 1e-12)) throw OcctError("press-pull failed: thickening " + what + " gave no volume; the body is unchanged");
+  if (gp.Mass() < 0) t.tool.Reverse();
+  TopTools_IndexedMapOfShape own;
+  TopExp::MapShapes(F, TopAbs_EDGE, own);
+  for (TopExp_Explorer ex(t.tool, TopAbs_FACE); ex.More(); ex.Next()) {
+    const TopoDS_Shape& G = ex.Current();
+    if (G.IsSame(F)) continue;
+    TopTools_IndexedMapOfShape ge;
+    TopExp::MapShapes(G, TopAbs_EDGE, ge);
+    bool touches = false;
+    for (int i = 1; i <= ge.Extent() && !touches; ++i) touches = own.Contains(ge(i));
+    if (!touches) {
+      if (t.far.IsNull()) t.far = G;
+    } else {
+      t.walls.push_back(G);
+      t.wallEdges.push_back(ge);
+    }
+  }
+  return t;
+}
+
+// Press-pull faces of one body (work copy): a tool solid per face (a flat face's prism
+// along its own outward normal; API 6: a curved face's thickened solid, Thick above),
+// d > 0 fused, d < 0 cut by |d|, all tools in one boolean with the body (no glue: a tool
+// can reach another wall of a non-convex body), then UnifySameDomain, history merged at
+// every step. A face whose neighbours are perpendicular to it grows or shrinks exactly; a
+// slanted neighbour is not extended (a step forms; offset_faces extends it). `moved[i]`:
+// the result face where faces[i] now lies (the tool's far face; -1 if it is gone),
+// reported `modified` from that input face in the history so it keeps its name.
+// `sides["<face>:<edge>"]`: the result face swept from that input edge (history
+// `generated` from the edge), absent where the side merged with a neighbour that already
+// lay in its surface.
+JV pressPullRun(int sid, const std::vector<int>& fidx, double d, double fuzzy, const std::string& glue, bool unifyOn, bool check) {
   WorkCopies wc({sid});
   const int wid = wc.id(0);
   Indexed& in = indexOf(wid);
@@ -3721,7 +3753,20 @@ JV opPressPull(const JV& q) {
     int face;
     TopoDS_Face src;
     std::shared_ptr<BRepBuilderAPI_Copy> cp;
-    std::shared_ptr<BRepPrimAPI_MakePrism> mp;
+    std::shared_ptr<BRepPrimAPI_MakePrism> mp;  // a flat face
+    std::shared_ptr<Thick> th;                  // a curved face (API 6)
+    TopoDS_Shape far() const { return mp ? mp->LastShape() : th->far; }
+    // The tool's faces swept from the copy's edge Ec.
+    std::vector<TopoDS_Shape> swept(const TopoDS_Shape& Ec) const {
+      std::vector<TopoDS_Shape> out;
+      if (mp) {
+        for (TopTools_ListIteratorOfListOfShape it(mp->Generated(Ec)); it.More(); it.Next()) out.push_back(it.Value());
+      } else {
+        for (size_t k = 0; k < th->walls.size(); ++k)
+          if (th->wallEdges[k].Contains(Ec)) out.push_back(th->walls[k]);
+      }
+      return out;
+    }
   };
   std::vector<Prism> prisms;
   TopTools_ListOfShape tools;
@@ -3729,15 +3774,21 @@ JV opPressPull(const JV& q) {
     TopoDS_Face F = TopoDS::Face(in.f(i + 1));
     gp_Pln pl;
     gp_Dir nn;
-    planarFace(F, pl, nn);
     auto cp = std::make_shared<BRepBuilderAPI_Copy>(F, Standard_True, Standard_False);
-    gp_Vec v(nn.XYZ());
-    v *= d;
-    auto mp = std::make_shared<BRepPrimAPI_MakePrism>(cp->Shape(), v, Standard_False, Standard_True);
-    mp->Build();
-    if (!mp->IsDone()) throw OcctError("press-pull failed: no prism for face " + std::to_string(i) + "; the body is unchanged");
-    tools.Append(mp->Shape());
-    prisms.push_back({i, F, cp, mp});
+    if (planarFace(F, pl, nn)) {
+      gp_Vec v(nn.XYZ());
+      v *= d;
+      auto mp = std::make_shared<BRepPrimAPI_MakePrism>(cp->Shape(), v, Standard_False, Standard_True);
+      mp->Build();
+      if (!mp->IsDone()) throw OcctError("press-pull failed: no prism for face " + std::to_string(i) + "; the body is unchanged");
+      tools.Append(mp->Shape());
+      prisms.push_back({i, F, cp, mp, nullptr});
+    } else {
+      auto th = std::make_shared<Thick>(thickenFace(TopoDS::Face(cp->Shape()), d, "face " + std::to_string(i) + " (" + surfWords(F) + ")"));
+      if (th->far.IsNull()) throw OcctError("press-pull failed: thickening face " + std::to_string(i) + " gave no offset face; the body is unchanged");
+      tools.Append(th->tool);
+      prisms.push_back({i, F, cp, nullptr, th});
+    }
   }
   std::unique_ptr<BRepAlgoAPI_BooleanOperation> bop;
   if (d > 0) bop.reset(new BRepAlgoAPI_Fuse());
@@ -3756,7 +3807,7 @@ JV opPressPull(const JV& q) {
   const double t1 = nowMs();
   Handle(BRepTools_History) bh = new BRepTools_History();
   if (!bop->History().IsNull()) bh->Merge(bop->History());
-  const Unified uni = unifyChecked(bop->Shape(), bh, unifyOn, q.boolean("check", true));
+  const Unified uni = unifyChecked(bop->Shape(), bh, unifyOn, check);
   const double t2 = nowMs();
   const TopoDS_Shape res = uni.shape;
   const Handle(BRepTools_History) hist = uni.hist;
@@ -3776,7 +3827,7 @@ JV opPressPull(const JV& q) {
   JV sides = JV::obj();
   std::set<int> movedFaces;
   for (auto& p : prisms) {
-    std::vector<int> m = facesThrough(*hist, p.mp->LastShape(), out);
+    std::vector<int> m = facesThrough(*hist, p.far(), out);
     const int mi = m.empty() ? -1 : m.front();
     moved.push(mi);
     if (mi >= 0) {
@@ -3796,9 +3847,8 @@ JV opPressPull(const JV& q) {
         continue;
       }
       std::vector<int> side;
-      const TopTools_ListOfShape& gens = p.mp->Generated(Ec);
-      for (TopTools_ListIteratorOfListOfShape it(gens); it.More(); it.Next())
-        for (int k : facesThrough(*hist, it.Value(), out))
+      for (const TopoDS_Shape& g : p.swept(Ec))
+        for (int k : facesThrough(*hist, g, out))
           if (std::find(side.begin(), side.end(), k) == side.end()) side.push_back(k);
       if (side.empty() || fromBody[side.front()] || side.front() == mi) continue;
       sides.set(std::to_string(p.face) + ":" + std::to_string(ei), side.front());
@@ -3826,6 +3876,1157 @@ JV opPressPull(const JV& q) {
   tm.set("copy_ms", wc.ms);
   tm.set("boolean_ms", t1 - t0);
   tm.set("unify_check_ms", t2 - t1);
+  r.set("timings", std::move(tm));
+  return r;
+}
+
+JV opPressPull(const JV& q) {
+  const int sid = idParam(q.req("id"), "id");
+  const JV& jf = q.req("faces");
+  if (!jf.isArr() || jf.size() == 0) throw InputError("press_pull needs at least one face");
+  const double d = q.num("d");
+  if (!(fabs(d) > 1e-9)) throw InputError("press_pull distance must not be 0");
+  const double fuzzy = q.num("fuzzy", 0);
+  if (fuzzy < 0) throw InputError("fuzzy must be >= 0");
+  const std::string glue = q.str("glue", "off");
+  if (glue != "off" && glue != "shift") throw InputError("glue must be off or shift");
+  const bool unifyOn = q.boolean("unify", true);
+  std::vector<int> fidx;
+  for (auto& f : jf.items()) {
+    TopoDS_Face F = faceAt(sid, f);
+    const int i = (int)f.num();
+    if (std::find(fidx.begin(), fidx.end(), i) != fidx.end()) throw InputError("face " + std::to_string(i) + " is given twice");
+    (void)F;
+    fidx.push_back(i);
+  }
+  return pressPullRun(sid, fidx, d, fuzzy, glue, unifyOn, q.boolean("check", true));
+}
+
+
+// ----------------------------------------------------------- offset_faces ---
+
+// API 6: offset picked faces of one body by d along their outward normals (d > 0 adds
+// material) as one true offset: BRepOffset_MakeOffset with d on each picked face, 0 on
+// every other face and join type Intersection, so the neighbours are extended or trimmed
+// to meet the moved faces (no step). A cylinder's, sphere's or cone's radius changes; a
+// fillet (a cylinder or torus blend between two tangent faces) is taken off and its edge
+// rounded again at the new radius, so it stays tangent. OCCT moves faces that are
+// tangent to a moved one with it; `tangent` lists them.
+
+// What a picked face is: its surface, its role ("flat", "bore", "cylinder", "cone",
+// "sphere", "torus", "fillet", "surface"), its radius before and after, and how far it
+// can move this way before a radius reaches 0 (`limit`, with words for it).
+struct OffPick {
+  int face = -1;
+  std::string type, role;
+  bool convex = false;
+  bool hasRadius = false;
+  double radius = 0, newRadius = 0;
+  double limit = HUGE_VAL;
+  std::string limitWords;
+  bool blend = false;
+  int s1 = -1, s2 = -1;
+  std::vector<int> tangent;
+  double area = 0;  // the face's area (mm2)
+  double span = 0;  // a fillet's arc angle (rad)
+};
+
+// A face's middle (of its parameter box) and its outward normal there.
+bool faceMid(const TopoDS_Face& F, gp_Pnt& p, gp_Dir& n, double& u, double& v) {
+  double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+  BRepTools::UVBounds(F, u0, u1, v0, v1);
+  u = 0.5 * (u0 + u1);
+  v = 0.5 * (v0 + v1);
+  BRepAdaptor_Surface s(F, false);
+  gp_Vec du, dv;
+  s.D1(u, v, p, du, dv);
+  gp_Vec nn = du.Crossed(dv);
+  if (nn.Magnitude() < 1e-12) return false;
+  n = gp_Dir(nn);
+  if (F.Orientation() == TopAbs_REVERSED) n.Reverse();
+  return true;
+}
+
+// The faces next to `F` across a smooth (tangent) edge of it, by index in `sid`.
+std::set<int> tangentNeighbours(int sid, const TopoDS_Face& F) {
+  Indexed& ix = indexOf(sid);
+  const auto& ef = edgeFacesOf(sid);
+  std::set<int> out;
+  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next()) {
+    const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
+    if (BRep_Tool::Degenerated(E) || BRep_Tool::IsClosed(E, F)) continue;
+    const int k = ef.FindIndex(E);
+    if (!k) continue;
+    for (TopTools_ListIteratorOfListOfShape it(ef(k)); it.More(); it.Next()) {
+      if (it.Value().IsSame(F)) continue;
+      const TopoDS_Face& N = TopoDS::Face(it.Value());
+      if (sameSurface(F, N) || smoothBetween(F, N, E)) {
+        const int j = ix.f.FindIndex(N);
+        if (j) out.insert(j - 1);
+      }
+    }
+  }
+  return out;
+}
+
+OffPick describeOffPick(int sid, int fi, double d) {
+  Indexed& ix = indexOf(sid);
+  const TopoDS_Face F = TopoDS::Face(ix.f(fi + 1));
+  OffPick p;
+  p.face = fi;
+  BRepAdaptor_Surface s(F, false);
+  p.type = surfType(s.GetType());
+  gp_Pnt at;
+  gp_Dir n;
+  double u = 0, v = 0;
+  const bool haveN = faceMid(F, at, n, u, v);
+  auto radialFromAxis = [&](const gp_Ax1& ax) {
+    gp_Vec w(ax.Location(), at);
+    gp_Vec along(ax.Direction());
+    along *= w.Dot(along);
+    return w - along;
+  };
+  const double ad = fabs(d);
+  // grows: the radius gets bigger with this d.
+  auto setRadius = [&](double r, bool grows, double per, const char* shrinkWords) {
+    p.hasRadius = true;
+    p.radius = r;
+    p.newRadius = grows ? r + ad * per : r - ad * per;
+    if (!grows) {
+      p.limit = r / per;
+      p.limitWords = shrinkWords;
+    }
+  };
+  switch (s.GetType()) {
+    case GeomAbs_Plane:
+      p.role = "flat";
+      break;
+    case GeomAbs_Cylinder: {
+      const gp_Cylinder c = s.Cylinder();
+      p.convex = haveN && radialFromAxis(c.Axis()).Dot(gp_Vec(n)) > 0;
+      p.role = p.convex ? "cylinder" : "bore";
+      break;
+    }
+    case GeomAbs_Cone: {
+      const gp_Cone c = s.Cone();
+      p.convex = haveN && radialFromAxis(c.Axis()).Dot(gp_Vec(n)) > 0;
+      p.role = "cone";
+      double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+      BRepTools::UVBounds(F, u0, u1, v0, v1);
+      const double sa = sin(c.SemiAngle()), ca = cos(c.SemiAngle());
+      const double r0 = c.RefRadius() + v0 * sa, r1 = c.RefRadius() + v1 * sa;
+      const double rmax = std::max(fabs(r0), fabs(r1));
+      const double rmin = r0 * r1 <= 0 ? 0 : std::min(fabs(r0), fabs(r1));
+      const bool grows = p.convex == (d > 0);
+      // No radius words for a cone (fix round 1, B3): where a neighbour is extended to meet
+      // it (a cylinder under it) its wide end stays where it was and moves along the axis.
+      p.radius = rmax;
+      p.newRadius = grows ? rmax + ad / fabs(ca) : rmax - ad / fabs(ca);
+      if (!grows && rmin > 1e-9) {
+        p.limit = rmin * fabs(ca);
+        p.limitWords = "the cone would pass its tip";
+      }
+      break;
+    }
+    case GeomAbs_Sphere: {
+      const gp_Sphere sp = s.Sphere();
+      p.convex = haveN && gp_Vec(sp.Location(), at).Dot(gp_Vec(n)) > 0;
+      p.role = "sphere";
+      setRadius(sp.Radius(), p.convex == (d > 0), 1, p.convex ? "the sphere would shrink to nothing" : "the spherical hollow would close");
+      break;
+    }
+    case GeomAbs_Torus: {
+      const gp_Torus t = s.Torus();
+      gp_Vec rad = radialFromAxis(t.Axis());
+      gp_Pnt q = t.Location();
+      if (rad.Magnitude() > 1e-12) q.Translate(rad.Normalized() * t.MajorRadius());
+      gp_Vec ax(t.Axis().Direction());
+      gp_Vec w(t.Location(), at);
+      q.Translate(ax * w.Dot(ax));
+      p.convex = haveN && gp_Vec(q, at).Dot(gp_Vec(n)) > 0;
+      p.role = "torus";
+      setRadius(t.MinorRadius(), p.convex == (d > 0), 1, "the torus's tube would close");
+      break;
+    }
+    default:
+      p.role = "surface";
+      break;
+  }
+  if (p.role == "cylinder" || p.role == "bore") {
+    const gp_Cylinder c = s.Cylinder();
+    setRadius(c.Radius(), p.convex == (d > 0), 1, p.convex ? "the cylinder would shrink to nothing" : "the hole would close");
+  }
+  // A fillet: a cylinder or torus of less than half a turn across, tangent to two faces.
+  // Its radius changes and it stays tangent: smaller as it moves out of a convex corner,
+  // larger as it moves out of a concave one.
+  if (p.role == "cylinder" || p.role == "bore" || p.role == "torus") {
+    double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+    BRepTools::UVBounds(F, u0, u1, v0, v1);
+    const double span = s.GetType() == GeomAbs_Cylinder ? u1 - u0 : v1 - v0;
+    const std::set<int> tn = tangentNeighbours(sid, F);
+    if (span < M_PI - 1e-6 && tn.size() == 2) {
+      p.blend = true;
+      p.s1 = *tn.begin();
+      p.s2 = *tn.rbegin();
+      p.role = "fillet";
+      const double r = s.GetType() == GeomAbs_Cylinder ? s.Cylinder().Radius() : s.Torus().MinorRadius();
+      p.limit = HUGE_VAL;
+      p.limitWords.clear();
+      // Out of a convex corner (d > 0 on a convex fillet) the corner gets sharper.
+      setRadius(r, p.convex != (d > 0), 1, "the fillet's radius would reach 0");
+      p.span = span;
+    }
+  }
+  GProp_GProps fp;
+  BRepGProp::SurfaceProperties(F, fp);
+  p.area = fabs(fp.Mass());
+  return p;
+}
+
+std::string offsetErrorWords(BRepOffset_Error e) {
+  switch (e) {
+    case BRepOffset_BadNormalsOnGeometry: return "OCCT found no normal on a surface";
+    case BRepOffset_C0Geometry: return "a surface is not smooth enough (C0) to offset";
+    case BRepOffset_NullOffset: return "nothing to offset";
+    case BRepOffset_NotConnectedShell: return "the faces are not connected";
+    case BRepOffset_CannotTrimEdges: return "OCCT could not trim the edges of the offset faces";
+    case BRepOffset_CannotFuseVertices: return "OCCT could not join the corners of the offset faces";
+    case BRepOffset_CannotExtentEdge: return "OCCT could not extend an edge to meet the offset faces";
+    case BRepOffset_MixedConnectivity: return "faces meet partly smoothly and partly at a sharp edge";
+    default: return "OCCT's offset failed";
+  }
+}
+
+// A face that is taken off before the move and put back after it (fix round 1): a fillet
+// picked for a new radius, or a fillet or chamfer next to a moved face that keeps its size
+// (a press-pull of a box top with rounded or chamfered edges moves the top; the side walls
+// stay and the fillets stay r 3, as SolidWorks and Fusion do; OCCT's offset alone would
+// move the tangent walls with it).
+struct Rework {
+  int face = -1;
+  bool chamfer = false;
+  bool picked = false;
+  double r = 0;  // the fillet radius to round at
+};
+
+// One offset run on a work copy (`wid`): the reworked faces taken off, the plain picks
+// offset, the reworked edges rounded or chamfered again. On a refusal `code` says why:
+// "fillet" (a fillet or chamfer could not be taken off or put back), "occt" (OCCT's offset
+// failed: `detail`). `reworked`: per input face, the result faces that replace it (a
+// re-rounded fillet, a chamfer put back, a cylinder at its new radius).
+struct OffRun {
+  TopoDS_Shape shape;
+  Handle(BRepTools_History) hist;
+  std::string code, words, detail;
+  int face = -1;
+  std::map<int, std::vector<TopoDS_Shape>> reworked;
+  bool ok() const { return code.empty(); }
+};
+
+// What `s` became through `h` (itself when untouched; nothing when removed).
+std::vector<TopoDS_Shape> imagesThrough(const BRepTools_History& h, const TopoDS_Shape& s) {
+  std::vector<TopoDS_Shape> out;
+  for (TopTools_ListIteratorOfListOfShape it(h.Modified(s)); it.More(); it.Next()) out.push_back(it.Value());
+  if (out.empty() && !h.IsRemoved(s)) out.push_back(s);
+  return out;
+}
+
+std::vector<TopoDS_Shape> imagesThrough(const BRepTools_History& h, const std::vector<TopoDS_Shape>& ss) {
+  std::vector<TopoDS_Shape> out;
+  for (auto& s : ss)
+    for (auto& g : imagesThrough(h, s)) {
+      bool dup = false;
+      for (auto& x : out) dup = dup || x.IsSame(g);
+      if (!dup) out.push_back(g);
+    }
+  return out;
+}
+
+// BRepOffset_MakeOffset reports every face and edge of its result as generated from the
+// input one it offsets (by 0 or by d) and the inputs as deleted: here that is a
+// modification, so names carry over.
+Handle(BRepTools_History) offsetHistory(const TopoDS_Shape& in, BRepOffset_MakeOffset& mo) {
+  Handle(BRepTools_History) h = new BRepTools_History();
+  for (TopAbs_ShapeEnum t : {TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX}) {
+    TopTools_IndexedMapOfShape m;
+    TopExp::MapShapes(in, t, m);
+    for (int i = 1; i <= m.Extent(); ++i) {
+      const TopoDS_Shape& S = m(i);
+      bool any = false;
+      for (TopTools_ListIteratorOfListOfShape it(mo.Modified(S)); it.More(); it.Next())
+        if (it.Value().ShapeType() == t && !it.Value().IsSame(S)) {
+          h->AddModified(S, it.Value());
+          any = true;
+        }
+      for (TopTools_ListIteratorOfListOfShape it(mo.Generated(S)); it.More(); it.Next()) {
+        if (it.Value().IsSame(S)) {
+          any = true;
+          continue;
+        }
+        if (it.Value().ShapeType() == t) {
+          h->AddModified(S, it.Value());
+          any = true;
+        } else if (t != TopAbs_VERTEX) {
+          h->AddGenerated(S, it.Value());
+        }
+      }
+      if (!any && mo.IsDeleted(S)) h->Remove(S);
+    }
+  }
+  return h;
+}
+
+// The input faces next to input face `fi` (sharing an edge).
+std::set<int> neighboursOf(int id, int fi) {
+  Indexed& ix = indexOf(id);
+  const auto& ef = edgeFacesOf(id);
+  std::set<int> out;
+  for (TopExp_Explorer ex(ix.f(fi + 1), TopAbs_EDGE); ex.More(); ex.Next()) {
+    const int k = ef.FindIndex(ex.Current());
+    if (!k) continue;
+    for (TopTools_ListIteratorOfListOfShape it(ef(k)); it.More(); it.Next()) {
+      const int j = ix.f.FindIndex(it.Value());
+      if (j && j - 1 != fi) out.insert(j - 1);
+    }
+  }
+  return out;
+}
+
+OffRun runOffset(int wid, const std::vector<OffPick>& picks, const std::vector<Rework>& rw, double d) {
+  OffRun r;
+  Indexed& in = indexOf(wid);
+  TopoDS_Shape cur = shapeOf(wid);
+  Handle(BRepTools_History) H = new BRepTools_History();
+  std::vector<const OffPick*> plain;
+  for (auto& p : picks)
+    if (!p.blend) plain.push_back(&p);
+  struct Restored {
+    const Rework* w;
+    std::vector<TopoDS_Shape> edges;
+    double d1 = 0, d2 = 0;
+    std::vector<TopoDS_Shape> f1;  // the face d1 is measured on (chamfer)
+  };
+  std::vector<Restored> rest;
+  auto fail = [&](const char* code, const std::string& words, int face) {
+    r.code = code;
+    r.words = words;
+    r.face = face;
+    return r;
+  };
+  if (!rw.empty()) {
+    BRepAlgoAPI_Defeaturing df;
+    df.SetShape(cur);
+    for (auto& w : rw) df.AddFaceToRemove(in.f(w.face + 1));
+    df.SetRunParallel(false);
+    df.SetToFillHistory(true);
+    try {
+      df.Build();
+    } catch (const Standard_Failure&) {
+    }
+    if (!df.IsDone() || df.HasErrors() || df.Shape().IsNull()) return fail("fillet", "OCCT could not take the fillet or chamfer off to put it back", rw[0].face);
+    const TopoDS_Shape D = df.Shape();
+    Handle(BRepTools_History) hD = df.History();
+    if (hD.IsNull()) {
+      TopTools_ListOfShape args;
+      args.Append(cur);
+      hD = new BRepTools_History(args, df);
+    }
+    // Edges of D that were not there before: where the faces beside a removed face now meet.
+    TopTools_IndexedMapOfShape old;
+    for (int i = 1; i <= in.e.Extent(); ++i)
+      for (auto& g : imagesThrough(*hD, in.e(i))) old.Add(g);
+    TopTools_IndexedMapOfShape dEdges;
+    TopExp::MapShapes(D, TopAbs_EDGE, dEdges);
+    TopTools_IndexedDataMapOfShapeListOfShape dEF;
+    TopExp::MapShapesAndAncestors(D, TopAbs_EDGE, TopAbs_FACE, dEF);
+    const auto& ef = edgeFacesOf(wid);
+    for (auto& w : rw) {
+      const TopoDS_Shape& C = in.f(w.face + 1);
+      TopTools_IndexedMapOfShape nb;
+      std::vector<std::pair<TopoDS_Shape, TopoDS_Shape>> spring;  // (edge of C, the input face across it)
+      for (TopExp_Explorer ex(C, TopAbs_EDGE); ex.More(); ex.Next()) {
+        const int k = ef.FindIndex(ex.Current());
+        if (!k) continue;
+        for (TopTools_ListIteratorOfListOfShape it(ef(k)); it.More(); it.Next()) {
+          if (it.Value().IsSame(C)) continue;
+          for (auto& g : imagesThrough(*hD, it.Value())) nb.Add(g);
+          spring.push_back({ex.Current(), it.Value()});
+        }
+      }
+      Restored R;
+      R.w = &w;
+      for (int i = 1; i <= dEdges.Extent(); ++i) {
+        const TopoDS_Shape& E = dEdges(i);
+        if (old.Contains(E) || BRep_Tool::Degenerated(TopoDS::Edge(E))) continue;
+        const int k = dEF.FindIndex(E);
+        if (!k) continue;
+        int on = 0;
+        for (TopTools_ListIteratorOfListOfShape it(dEF(k)); it.More(); it.Next())
+          if (nb.Contains(it.Value())) ++on;
+        if (on >= 2) R.edges.push_back(E);
+      }
+      if (R.edges.empty()) return fail("fillet", w.chamfer ? "the faces beside the chamfer do not meet once it is taken off" : "the faces beside the fillet do not meet once it is taken off", w.face);
+      if (w.chamfer) {
+        // One straight restored edge; the chamfer's size on each of its two (flat) faces.
+        if (R.edges.size() != 1) return fail("fillet", "the chamfer does not run along one straight edge", w.face);
+        BRepAdaptor_Curve ce(TopoDS::Edge(R.edges[0]));
+        if (ce.GetType() != GeomAbs_Line) return fail("fillet", "the chamfer does not run along one straight edge", w.face);
+        const gp_Lin L = ce.Line();
+        const int k = dEF.FindIndex(R.edges[0]);
+        std::vector<TopoDS_Shape> fs;
+        for (TopTools_ListIteratorOfListOfShape it(dEF(k)); it.More(); it.Next()) {
+          bool dup = false;
+          for (auto& x : fs) dup = dup || x.IsSame(it.Value());
+          if (!dup) fs.push_back(it.Value());
+        }
+        if (fs.size() != 2) return fail("fillet", "the chamfer does not lie between two faces", w.face);
+        double dist[2] = {-1, -1};
+        for (int s = 0; s < 2; ++s) {
+          BRepAdaptor_Surface as(TopoDS::Face(fs[s]), false);
+          if (as.GetType() != GeomAbs_Plane) return fail("fillet", "a face beside the chamfer is curved", w.face);
+          for (auto& sp : spring) {
+            bool here = false;
+            for (auto& g : imagesThrough(*hD, sp.second)) here = here || g.IsSame(fs[s]);
+            if (!here) continue;
+            BRepAdaptor_Curve c(TopoDS::Edge(sp.first));
+            const gp_Pnt m = c.Value(0.5 * (c.FirstParameter() + c.LastParameter()));
+            dist[s] = L.Distance(m);
+          }
+        }
+        if (!(dist[0] > 1e-7) || !(dist[1] > 1e-7)) return fail("fillet", "the chamfer's size could not be measured", w.face);
+        R.d1 = dist[0];
+        R.d2 = dist[1];
+        R.f1 = {fs[0]};
+      }
+      rest.push_back(R);
+    }
+    H->Merge(hD);
+    cur = D;
+  }
+  if (!plain.empty()) {
+    BRepOffset_MakeOffset mo;
+    mo.Initialize(cur, 0.0, 1e-7, BRepOffset_Skin, Standard_False, Standard_False, GeomAbs_Intersection, Standard_False, Standard_False);
+    for (auto* p : plain)
+      for (auto& g : imagesThrough(*H, in.f(p->face + 1))) mo.SetOffsetOnFace(TopoDS::Face(g), d);
+    try {
+      mo.MakeOffsetShape();
+    } catch (const Standard_Failure& e) {
+      r.code = "occt";
+      r.detail = std::string("OCCT's offset stopped: ") + (e.GetMessageString() && *e.GetMessageString() ? e.GetMessageString() : "an exception");
+      return r;
+    }
+    if (!mo.IsDone() || mo.Shape().IsNull()) {
+      r.code = "occt";
+      r.detail = mo.IsDone() ? "OCCT's offset returned no shape" : offsetErrorWords(mo.Error());
+      return r;
+    }
+    Handle(BRepTools_History) hO = offsetHistory(cur, mo);
+    H->Merge(hO);
+    for (auto& R : rest) {
+      R.edges = imagesThrough(*hO, R.edges);
+      R.f1 = imagesThrough(*hO, R.f1);
+    }
+    cur = mo.Shape();
+  }
+  // Fillets back (picked: at the new radius; carried: at their own), then chamfers.
+  bool anyFillet = false, anyChamfer = false;
+  for (auto& R : rest) (R.w->chamfer ? anyChamfer : anyFillet) = true;
+  if (anyFillet) {
+    BRepFilletAPI_MakeFillet mf(cur);
+    int first = -1;
+    for (auto& R : rest) {
+      if (R.w->chamfer) continue;
+      if (first < 0) first = R.w->face;
+      for (auto& E : R.edges) mf.Add(R.w->r, TopoDS::Edge(E));
+    }
+    try {
+      mf.Build();
+    } catch (const Standard_Failure&) {
+    }
+    if (!mf.IsDone() || mf.Shape().IsNull()) return fail("fillet", "OCCT could not round the edge again at that radius", first);
+    TopTools_ListOfShape args;
+    args.Append(cur);
+    Handle(BRepTools_History) hF = new BRepTools_History(args, mf);
+    H->Merge(hF);
+    for (auto& R : rest) {
+      if (R.w->chamfer) {
+        R.edges = imagesThrough(*hF, R.edges);
+        R.f1 = imagesThrough(*hF, R.f1);
+        continue;
+      }
+      for (auto& E : R.edges)
+        for (TopTools_ListIteratorOfListOfShape it(mf.Generated(E)); it.More(); it.Next())
+          if (it.Value().ShapeType() == TopAbs_FACE) r.reworked[R.w->face].push_back(it.Value());
+    }
+    cur = mf.Shape();
+  }
+  if (anyChamfer) {
+    BRepFilletAPI_MakeChamfer mc(cur);
+    int first = -1;
+    for (auto& R : rest) {
+      if (!R.w->chamfer) continue;
+      if (first < 0) first = R.w->face;
+      if (R.edges.size() != 1 || R.f1.size() != 1) return fail("fillet", "the chamfer's edge did not survive the move", R.w->face);
+      mc.Add(R.d1, R.d2, TopoDS::Edge(R.edges[0]), TopoDS::Face(R.f1[0]));
+    }
+    try {
+      mc.Build();
+    } catch (const Standard_Failure&) {
+    }
+    if (!mc.IsDone() || mc.Shape().IsNull()) return fail("fillet", "OCCT could not put the chamfer back", first);
+    TopTools_ListOfShape args;
+    args.Append(cur);
+    Handle(BRepTools_History) hC = new BRepTools_History(args, mc);
+    H->Merge(hC);
+    for (auto& kv : r.reworked) kv.second = imagesThrough(*hC, kv.second);
+    for (auto& R : rest) {
+      if (!R.w->chamfer) continue;
+      for (auto& E : R.edges)
+        for (TopTools_ListIteratorOfListOfShape it(mc.Generated(E)); it.More(); it.Next())
+          if (it.Value().ShapeType() == TopAbs_FACE) r.reworked[R.w->face].push_back(it.Value());
+    }
+    cur = mc.Shape();
+  }
+  r.shape = unwrap(cur);
+  r.hist = H;
+  return r;
+}
+
+// A cylinder pick moved by the annulus between r - |d| and r + |d| over the face's own
+// span (its u range around the axis, its v range along it), fused (d > 0) or cut (d < 0):
+// the side of r that is already material (fuse) or already empty (cut) is unchanged, so
+// the result is the face at r +- d, and no tool face lies on the picked one (OCCT 7.9.3's
+// boolean breaks on a cylinder coincident with a thickened copy of itself: the Vortex
+// outlet bores). The annulus's end planes are square to the axis: used only where the
+// face's neighbours are (stepAt).
+OffRun runCylinder(int wid, const std::vector<OffPick>& picks, double d) {
+  OffRun r;
+  Indexed& in = indexOf(wid);
+  TopTools_ListOfShape tools;
+  std::vector<std::pair<int, TopoDS_Shape>> targets;  // (pick, the tool's face at the new radius)
+  for (auto& p : picks) {
+    const TopoDS_Face F = TopoDS::Face(in.f(p.face + 1));
+    BRepAdaptor_Surface s(F, false);
+    const gp_Cylinder c = s.Cylinder();
+    const gp_Ax3 ax = c.Position();
+    const double rad = c.Radius();
+    double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+    BRepTools::UVBounds(F, u0, u1, v0, v1);
+    const double lo = std::max(rad - fabs(d), 0.0), hi = rad + fabs(d);
+    const gp_Pnt O = ax.Location();
+    const gp_Vec X(ax.XDirection()), Y(ax.YDirection()), Z(ax.Direction());
+    auto P = [&](double rr, double vv) {
+      gp_Vec w = (X * cos(u0) + Y * sin(u0)) * rr + Z * vv;
+      return O.Translated(w);
+    };
+    BRepBuilderAPI_MakePolygon poly;
+    poly.Add(P(lo, v0));
+    poly.Add(P(hi, v0));
+    poly.Add(P(hi, v1));
+    poly.Add(P(lo, v1));
+    poly.Close();
+    if (!poly.IsDone()) return r.code = "occt", r.detail = "no profile for the cylinder's ring", r;
+    BRepBuilderAPI_MakeFace mf(poly.Wire(), Standard_True);
+    if (!mf.IsDone()) return r.code = "occt", r.detail = "no profile for the cylinder's ring", r;
+    // Increasing u turns about +Z for a direct frame, about -Z for an indirect one.
+    gp_Dir axis = ax.Direction();
+    if (!ax.Direct()) axis.Reverse();
+    const double span = std::min(u1 - u0, 2 * M_PI);
+    BRepPrimAPI_MakeRevol rv(mf.Face(), gp_Ax1(O, axis), span);
+    rv.Build();
+    if (!rv.IsDone()) return r.code = "occt", r.detail = "no ring for the cylinder", r;
+    const TopoDS_Shape tool = rv.Shape();
+    const double want = p.newRadius;
+    TopoDS_Shape target;
+    for (TopExp_Explorer ex(tool, TopAbs_FACE); ex.More(); ex.Next()) {
+      BRepAdaptor_Surface ts(TopoDS::Face(ex.Current()), false);
+      if (ts.GetType() == GeomAbs_Cylinder && fabs(ts.Cylinder().Radius() - want) < 1e-7 * std::max(1.0, want)) target = ex.Current();
+    }
+    if (target.IsNull()) return r.code = "occt", r.detail = "the ring has no face at the new radius", r;
+    tools.Append(tool);
+    targets.push_back({p.face, target});
+  }
+  std::unique_ptr<BRepAlgoAPI_BooleanOperation> bop;
+  if (d > 0) bop.reset(new BRepAlgoAPI_Fuse());
+  else bop.reset(new BRepAlgoAPI_Cut());
+  TopTools_ListOfShape args;
+  args.Append(shapeOf(wid));
+  bop->SetArguments(args);
+  bop->SetTools(tools);
+  bop->SetRunParallel(false);
+  bop->SetNonDestructive(true);
+  bop->SetToFillHistory(true);
+  try {
+    bop->Build();
+  } catch (const Standard_Failure&) {
+  }
+  if (!bop->IsDone() || bop->HasErrors() || bop->Shape().IsNull()) return r.code = "occt", r.detail = "OCCT's boolean failed", r;
+  Handle(BRepTools_History) bh = new BRepTools_History();
+  if (!bop->History().IsNull()) bh->Merge(bop->History());
+  const Unified uni = unifyChecked(bop->Shape(), bh, true, false);
+  r.shape = uni.shape;
+  r.hist = uni.hist;
+  for (auto& t : targets) {
+    std::vector<TopoDS_Shape> g;
+    for (TopTools_ListIteratorOfListOfShape it(uni.hist->Modified(t.second)); it.More(); it.Next()) g.push_back(it.Value());
+    for (TopTools_ListIteratorOfListOfShape it(uni.hist->Generated(t.second)); it.More(); it.Next()) g.push_back(it.Value());
+    if (g.empty() && !uni.hist->IsRemoved(t.second)) g.push_back(t.second);
+    r.reworked[t.first] = g;
+  }
+  return r;
+}
+
+// A stored candidate result: its id, history against `sid` (every face `same` / `modified`
+// as it went; a reworked face's new faces `modified` from it), `moved` per pick.
+JV candidateJson(int sid, int wid, const std::vector<OffPick>& picks, const OffRun& run, const char* method) {
+  const int id = putShape(run.shape);
+  Indexed& out = indexOf(id);
+  Indexed& in = indexOf(wid);
+  HistBuilder hb;
+  hb.addInput(wid, *run.hist, out, sid);
+  std::set<int> kept;
+  for (auto& kv : run.reworked) {
+    std::vector<int> m;
+    for (auto& g : kv.second) {
+      const int k = out.f.FindIndex(g);
+      if (k && std::find(m.begin(), m.end(), k - 1) == m.end()) m.push_back(k - 1);
+    }
+    for (int k : m) hb.add(hb.faceFrom, k, HistBuilder::from(sid, "face", kv.first, "modified"));
+    if (!m.empty()) kept.insert(kv.first);
+  }
+  if (!kept.empty()) {
+    JV rest = JV::arr();
+    for (auto& dj : hb.deleted.items()) {
+      const JV* f = dj.get("face");
+      if (f && kept.count((int)f->num())) continue;
+      rest.push(dj);
+    }
+    hb.deleted = rest;
+  }
+  JV moved = JV::arr();
+  for (auto& p : picks) {
+    std::vector<int> m;
+    auto it = run.reworked.find(p.face);
+    if (it != run.reworked.end()) {
+      for (auto& g : it->second) {
+        const int k = out.f.FindIndex(g);
+        if (k && std::find(m.begin(), m.end(), k - 1) == m.end()) m.push_back(k - 1);
+      }
+    } else {
+      m = facesThrough(*run.hist, in.f(p.face + 1), out);
+    }
+    moved.push(m.empty() ? -1 : m.front());
+  }
+  JV r = JV::obj();
+  r.set("id", id);
+  r.set("solids", countOf(run.shape, TopAbs_SOLID));
+  r.set("moved", std::move(moved));
+  r.set("method", method);
+  r.set("history", hb.json());
+  r.set("faces", out.f.Extent());
+  r.set("valid", true);
+  return r;
+}
+
+// The volume a pick's move should add (> 0) or remove (< 0): area x d, with the
+// curvature terms where the face's growth is known exactly (a cylinder: A d (1 + k d / 2),
+// a sphere: A d (1 + k d + k^2 d^2 / 3), k = +-1/r), and a fillet's corner region (between
+// the arc and the sharp corner, (tan(phi/2) - phi/2) r^2 per unit length) at its new radius.
+double expectedDV(const OffPick& p, double d) {
+  const double A = p.area;
+  if (p.blend) {
+    const double phi = p.span;
+    if (!(phi > 1e-6) || !(p.radius > 0)) return A * d;
+    const double c = tan(phi / 2) - phi / 2;
+    const double L = A / (p.radius * phi);
+    const double sgn = p.convex ? -1 : 1;
+    return sgn * c * (p.newRadius * p.newRadius - p.radius * p.radius) * L;
+  }
+  if (p.type == "cylinder" && p.radius > 0) {
+    const double k = (p.convex ? 1 : -1) / p.radius;
+    return A * d * (1 + k * d / 2);
+  }
+  if (p.type == "sphere" && p.radius > 0) {
+    const double k = (p.convex ? 1 : -1) / p.radius;
+    return A * d * (1 + k * d + k * k * d * d / 3);
+  }
+  return A * d;
+}
+
+// Why a candidate is not accepted (empty: it is). `code`: empty (nothing left), invalid
+// (BRepCheck, `detail`), self (cuts through itself), gone (a picked face is not in the
+// result), vanish (a face next to a picked one shrinks to nothing), lost (another face is
+// gone), split (adding material made separate solids), volume (the volume moves the wrong
+// way, or by far less or far more than the faces' move: `dv`, `expected`).
+struct Verdict {
+  std::string code, detail;
+  int face = -1;
+  double dv = 0, expected = 0;
+  int solids = 0;
+  bool ok() const { return code.empty(); }
+};
+
+// The accept rule (fix round 1): every method's result is checked the same way before it
+// is taken. Volume: within 0.5x - 2x of the expected change. The curvature terms make the
+// expectation exact for faces whose neighbours are square to them (plates, bores, bosses,
+// caps: ratio 1); a sloping neighbour that is extended or trimmed moves it by its own
+// slope (the review's trapezoid: 0.67 at +40, 1.16 at -19); a hole breaking out of its
+// plate removes less than the full ring (0.96 at -12). The broken results the review found
+// were at 0.000, -0.000003 and 0.0008 (the thickened fillet at -40, the Vortex's main
+// cylinder and a B-spline face at -1).
+Verdict acceptResult(int sid, const std::vector<OffPick>& picks, const std::set<int>& carried, const std::vector<int>& tangent, double d, const JV& cand, bool selfCheck, double v0) {
+  Verdict v;
+  const int rid = (int)cand.get("id")->num();
+  const TopoDS_Shape& S1 = shapeOf(rid);
+  if (S1.IsNull() || countOf(S1, TopAbs_FACE) == 0 || countOf(S1, TopAbs_SOLID) == 0) {
+    v.code = "empty";
+    return v;
+  }
+  Validity val = analyse(S1);
+  if (!val.valid) {
+    v.code = "invalid";
+    v.detail = val.reason;
+    return v;
+  }
+  Indexed& out = indexOf(rid);
+  Indexed& in = indexOf(sid);
+  // Input face -> result faces, from the candidate's history.
+  std::vector<std::vector<int>> img(in.f.Extent());
+  for (auto& e : cand.get("history")->get("faces")->items()) {
+    const int o = (int)e.get("out")->num();
+    for (auto& s : e.get("from")->items()) {
+      const JV* sh = s.get("shape");
+      const JV* f = s.get("face");
+      if (!sh || !f || (int)sh->num() != sid) continue;
+      const int i = (int)f->num();
+      if (i >= 0 && i < (int)img.size()) img[i].push_back(o);
+    }
+  }
+  auto areaOf = [&](const std::vector<int>& os) {
+    double a = 0;
+    for (int o : os) {
+      GProp_GProps fp;
+      BRepGProp::SurfaceProperties(out.f(o + 1), fp);
+      a += fabs(fp.Mass());
+    }
+    return a;
+  };
+  std::set<int> picked;
+  for (auto& p : picks) picked.insert(p.face);
+  const JV& moved = *cand.get("moved");
+  for (size_t i = 0; i < picks.size(); ++i) {
+    const int m = (int)moved[i].num();
+    if (m < 0 || !(areaOf({m}) > 1e-6)) {
+      v.code = "gone";
+      v.face = picks[i].face;
+      return v;
+    }
+  }
+  std::set<int> nearPicks;
+  for (auto& p : picks)
+    for (int j : neighboursOf(sid, p.face)) nearPicks.insert(j);
+  for (int i = 0; i < in.f.Extent(); ++i) {
+    if (picked.count(i) || carried.count(i)) continue;
+    if (!(areaOf(img[i]) > 1e-6)) {
+      v.code = nearPicks.count(i) ? "vanish" : "lost";
+      v.face = i;
+      return v;
+    }
+  }
+  v.solids = countOf(S1, TopAbs_SOLID);
+  if (d > 0 && v.solids > countOf(shapeOf(sid), TopAbs_SOLID)) {
+    v.code = "split";
+    return v;
+  }
+  GProp_GProps gp;
+  BRepGProp::VolumeProperties(S1, gp);
+  v.dv = gp.Mass() - v0;
+  double E = 0;
+  for (auto& p : picks) E += expectedDV(p, d);
+  for (int t : tangent) {
+    OffPick tp = describeOffPick(sid, t, d);
+    E += expectedDV(tp, d);
+  }
+  v.expected = E;
+  if (fabs(E) > 1e-9 * std::max(1.0, fabs(v0))) {
+    const double ratio = v.dv / E;
+    if (!(ratio >= 0.5 && ratio <= 2.0)) {
+      v.code = "volume";
+      return v;
+    }
+  }
+  if (selfCheck) {
+    BRepAlgoAPI_Check chk(S1, Standard_False, Standard_True);
+    if (!chk.IsValid()) {
+      v.code = "self";
+      return v;
+    }
+  }
+  return v;
+}
+
+// A neighbour of a picked face that is not square to it (its normal off the picked face's
+// tangent plane by more than ~1.1 degrees at the shared edge), or -1. Moving the face alone
+// along its normal (a prism, a thickened face, a cylinder's ring) leaves a step or a groove
+// there (the review's cone: a mushroom), so those methods are not used.
+int stepAt(int sid, const std::vector<OffPick>& picks) {
+  Indexed& ix = indexOf(sid);
+  const auto& ef = edgeFacesOf(sid);
+  std::set<int> picked;
+  for (auto& p : picks) picked.insert(p.face);
+  for (auto& p : picks) {
+    const TopoDS_Face F = TopoDS::Face(ix.f(p.face + 1));
+    for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next()) {
+      const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
+      if (BRep_Tool::Degenerated(E) || BRep_Tool::IsClosed(E, F)) continue;
+      const int k = ef.FindIndex(E);
+      if (!k) continue;
+      for (TopTools_ListIteratorOfListOfShape it(ef(k)); it.More(); it.Next()) {
+        if (it.Value().IsSame(F)) continue;
+        const int j = ix.f.FindIndex(it.Value()) - 1;
+        if (j < 0 || picked.count(j)) continue;
+        double worst = 0;
+        for (double t : {0.2, 0.5, 0.8}) {
+          gp_Dir a, b;
+          if (normalOnEdge(F, E, t, a) && normalOnEdge(TopoDS::Face(it.Value()), E, t, b)) worst = std::max(worst, fabs(a.Dot(b)));
+        }
+        if (worst > 0.02) return j;
+      }
+    }
+  }
+  return -1;
+}
+
+JV aboutJson(const OffPick& p) {
+  JV o = JV::obj();
+  o.set("face", p.face);
+  o.set("type", p.type);
+  o.set("role", p.role);
+  o.set("convex", p.convex);
+  if (p.hasRadius) {
+    o.set("radius", p.radius);
+    o.set("new_radius", p.newRadius);
+  }
+  JV t = JV::arr();
+  for (int k : p.tangent) t.push(k);
+  o.set("tangent", std::move(t));
+  return o;
+}
+
+JV pressPullRun(int sid, const std::vector<int>& fidx, double d, double fuzzy, const std::string& glue, bool unifyOn, bool check);
+
+// offset_faces {id, faces, d, check?, self_check?, diagnose?, carry?, chain?}: see the API 6
+// notes above. `carry`: faces (a Chamfer feature's, by name in the document) to take off
+// and put back at their own size when they are next to a picked face; fillets next to a
+// picked face are found by their shape. `chain` (fix round 1): when the offset is refused,
+// the next method: a cylinder pick's ring (runCylinder), then the faces' prisms or
+// thickened faces (press_pull); a method that would leave a step (stepAt) is not used.
+// Every result goes through acceptResult. Success: {id, valid, faces, solids, history,
+// moved, about, tangent, method: offset / refillet / offset+refillet / cylinder / prism /
+// thicken}. A refusal is not an error: {refused: {code, words?, detail?, face?, dv?,
+// expected?, d?}, about, max_ok?}: the most telling reason of the methods tried (radius,
+// empty, gone, lost, split, volume, vanish, self, invalid, fillet, step, occt). With
+// diagnose:true, `max_ok`: the largest |d| (same sign) that some method takes, by
+// bisection on fresh work copies (at most 10 tries), or null.
+JV opOffsetFaces(const JV& q) {
+  const int sid = idParam(q.req("id"), "id");
+  const JV& jf = q.req("faces");
+  if (!jf.isArr() || jf.size() == 0) throw InputError("offset_faces needs at least one face");
+  const double d = q.num("d");
+  if (!(fabs(d) > 1e-9)) throw InputError("offset_faces distance must not be 0");
+  const bool selfCheck = q.boolean("self_check", true);
+  const bool diagnose = q.boolean("diagnose", false);
+  const bool chain = q.boolean("chain", false);
+  std::vector<int> fidx;
+  for (auto& f : jf.items()) {
+    faceAt(sid, f);
+    const int i = (int)f.num();
+    if (std::find(fidx.begin(), fidx.end(), i) != fidx.end()) throw InputError("face " + std::to_string(i) + " is given twice");
+    fidx.push_back(i);
+  }
+  std::set<int> picked(fidx.begin(), fidx.end());
+  std::vector<int> explicitCarry;
+  if (q.has("carry"))
+    for (auto& f : q.req("carry").items()) {
+      faceAt(sid, f);
+      explicitCarry.push_back((int)f.num());
+    }
+  const double t0 = nowMs();
+  Indexed& ix = indexOf(sid);
+  auto describeAll = [&](double dd) {
+    std::vector<OffPick> ps;
+    for (int i : fidx) ps.push_back(describeOffPick(sid, i, dd));
+    return ps;
+  };
+  std::vector<OffPick> picks = describeAll(d);
+  // Faces carried: fillets tangent to a non-fillet pick (by their shape), and the chamfers
+  // named in `carry` that touch a pick. A flat pick tangent to anything else is not offset
+  // (OCCT would move that face with it: the walls of a rounded box top).
+  std::map<int, Rework> carried;
+  bool flatBlocked = false;
+  for (auto& p : picks) {
+    if (p.blend) continue;
+    for (int g : tangentNeighbours(sid, TopoDS::Face(ix.f(p.face + 1)))) {
+      if (picked.count(g) || carried.count(g)) continue;
+      OffPick n = describeOffPick(sid, g, 0);
+      if (n.blend) {
+        Rework w;
+        w.face = g;
+        w.r = n.radius;
+        carried[g] = w;
+      } else if (p.role == "flat") {
+        flatBlocked = true;
+      }
+    }
+    for (int c : explicitCarry) {
+      if (picked.count(c) || carried.count(c)) continue;
+      if (!neighboursOf(sid, p.face).count(c)) continue;
+      BRepAdaptor_Surface cs(TopoDS::Face(ix.f(c + 1)), false);
+      if (cs.GetType() != GeomAbs_Plane) continue;
+      Rework w;
+      w.face = c;
+      w.chamfer = true;
+      carried[c] = w;
+    }
+  }
+  std::set<int> carriedSet;
+  for (auto& kv : carried) carriedSet.insert(kv.first);
+  // Faces OCCT moves along with a picked one: tangent to it, transitively (carried fillets stop it).
+  for (auto& p : picks) {
+    if (p.blend) continue;
+    std::set<int> seen = {p.face};
+    std::vector<int> todo = {p.face};
+    while (!todo.empty()) {
+      const int f = todo.back();
+      todo.pop_back();
+      for (int g : tangentNeighbours(sid, TopoDS::Face(ix.f(f + 1)))) {
+        if (seen.count(g) || carriedSet.count(g)) continue;
+        seen.insert(g);
+        todo.push_back(g);
+        if (!picked.count(g)) p.tangent.push_back(g);
+      }
+    }
+    std::sort(p.tangent.begin(), p.tangent.end());
+  }
+  JV about = JV::arr();
+  for (auto& p : picks) about.push(aboutJson(p));
+  std::vector<int> tangentAll;
+  for (auto& p : picks)
+    for (int k : p.tangent)
+      if (std::find(tangentAll.begin(), tangentAll.end(), k) == tangentAll.end()) tangentAll.push_back(k);
+  GProp_GProps g0;
+  BRepGProp::VolumeProperties(shapeOf(sid), g0);
+  const double v0 = g0.Mass();
+  const double t1 = nowMs();
+
+  static const char* kRank[] = {"radius", "empty", "gone", "lost", "split", "volume", "vanish", "self", "invalid", "fillet", "step", "occt"};
+  auto rankOf = [](const std::string& c) {
+    for (int i = 0; i < 12; ++i)
+      if (c == kRank[i]) return i;
+    return 12;
+  };
+  struct Why {
+    std::string code, words, detail;
+    int face = -1;
+    double dv = 0, expected = 0;
+  };
+  // Every method in turn for distance dd; the accepted candidate (stored), or null and the
+  // most telling reason.
+  auto attempt = [&](double dd, Why* why, bool keep) -> JV {
+    std::vector<OffPick> ps = describeAll(dd);
+    for (size_t i = 0; i < ps.size(); ++i) ps[i].tangent = picks[i].tangent;
+    Why best;
+    best.code = "";
+    auto note = [&](const Why& w) {
+      if (best.code.empty() || rankOf(w.code) < rankOf(best.code)) best = w;
+    };
+    for (auto& p : ps)
+      if (fabs(dd) >= p.limit * (1 - 1e-9)) {
+        Why w;
+        w.code = "radius";
+        w.words = p.limitWords;
+        w.face = p.face;
+        if (why) *why = w;
+        return JV();
+      }
+    std::vector<Rework> rw;
+    for (auto& p : ps)
+      if (p.blend) {
+        Rework w;
+        w.face = p.face;
+        w.picked = true;
+        w.r = p.newRadius;
+        rw.push_back(w);
+      }
+    for (auto& kv : carried) rw.push_back(kv.second);
+    auto judge = [&](JV cand, const std::vector<int>& tangent) -> JV {
+      Verdict v = acceptResult(sid, ps, carriedSet, tangent, dd, cand, selfCheck, v0);
+      if (v.ok()) {
+        if (!keep) g_store.erase((int)cand.get("id")->num());
+        return cand;
+      }
+      g_store.erase((int)cand.get("id")->num());
+      Why w;
+      w.code = v.code;
+      w.detail = v.detail;
+      w.face = v.face;
+      w.dv = v.dv;
+      w.expected = v.expected;
+      note(w);
+      return JV();
+    };
+    // 1. The true offset (fillets re-rounded, carried faces put back).
+    if (!flatBlocked) {
+      try {
+        WorkCopies wc({sid});
+        OffRun run = runOffset(wc.id(0), ps, rw, dd);
+        if (run.ok()) {
+          bool anyBlend = false, anyPlain = false;
+          for (auto& p : ps) (p.blend ? anyBlend : anyPlain) = true;
+          JV c = judge(candidateJson(sid, wc.id(0), ps, run, anyBlend && anyPlain ? "offset+refillet" : anyBlend ? "refillet" : "offset"), tangentAll);
+          if (!c.isNull()) return c;
+        } else {
+          Why w;
+          w.code = run.code;
+          w.words = run.words;
+          w.detail = run.detail;
+          w.face = run.face;
+          note(w);
+        }
+      } catch (const Standard_Failure& e) {
+        Why w;
+        w.code = "occt";
+        w.detail = std::string("OCCT's offset stopped: ") + (e.GetMessageString() ? e.GetMessageString() : "an exception");
+        note(w);
+      }
+    }
+    if (chain) {
+      const int step = stepAt(sid, ps);
+      if (step >= 0) {
+        Why w;
+        w.code = "step";
+        w.face = step;
+        note(w);
+      } else {
+        bool cyl = true;
+        for (auto& p : ps) cyl = cyl && !p.blend && p.type == "cylinder";
+        // 2. A cylinder's ring.
+        if (cyl) {
+          try {
+            WorkCopies wc({sid});
+            OffRun run = runCylinder(wc.id(0), ps, dd);
+            if (run.ok()) {
+              JV c = judge(candidateJson(sid, wc.id(0), ps, run, "cylinder"), {});
+              if (!c.isNull()) return c;
+            } else {
+              Why w;
+              w.code = run.code;
+              w.detail = run.detail;
+              note(w);
+            }
+          } catch (const Standard_Failure&) {
+            Why w;
+            w.code = "occt";
+            note(w);
+          }
+        }
+        // 3. The faces' prisms (flat) or thickened faces (curved).
+        try {
+          JV c = pressPullRun(sid, fidx, dd, 0, "off", true, true);
+          bool flat = true;
+          for (auto& p : ps) flat = flat && p.type == "plane";
+          c.set("method", flat ? "prism" : "thicken");
+          if (c.get("empty") && c.get("empty")->boolean()) {
+            g_store.erase((int)c.get("id")->num());
+            Why w;
+            w.code = "empty";
+            note(w);
+          } else {
+            JV ok = judge(c, {});
+            if (!ok.isNull()) return ok;
+          }
+        } catch (const OcctError& e) {
+          Why w;
+          const std::string m = e.what();
+          w.code = m.find("whole body") != std::string::npos ? "empty" : "occt";
+          if (w.code == "occt") w.detail = m;
+          note(w);
+        } catch (const Standard_Failure&) {
+          Why w;
+          w.code = "occt";
+          note(w);
+        }
+      }
+    }
+    if (why) *why = best;
+    return JV();
+  };
+
+  Why why;
+  JV got = attempt(d, &why, true);
+  const double t2 = nowMs();
+  if (!got.isNull()) {
+    const std::string method = got.get("method")->str();
+    got.set("about", about);
+    JV tangent = JV::arr();
+    if (method == "offset" || method == "offset+refillet" || method == "refillet")
+      for (int k : tangentAll) tangent.push(k);
+    got.set("tangent", std::move(tangent));
+    JV ca = JV::arr();
+    for (int c : carriedSet) ca.push(c);
+    got.set("carried", std::move(ca));
+    JV tm = JV::obj();
+    tm.set("describe_ms", t1 - t0);
+    tm.set("build_ms", t2 - t1);
+    got.set("timings", std::move(tm));
+    return got;
+  }
+  JV r = JV::obj();
+  JV rf = JV::obj();
+  rf.set("code", why.code.empty() ? "occt" : why.code);
+  if (!why.words.empty()) rf.set("words", why.words);
+  if (!why.detail.empty()) rf.set("detail", why.detail);
+  if (why.face >= 0) rf.set("face", why.face);
+  if (why.code == "volume") {
+    rf.set("dv", why.dv);
+    rf.set("expected", why.expected);
+  }
+  rf.set("d", d);
+  r.set("refused", std::move(rf));
+  r.set("about", about);
+  if (diagnose) {
+    const double sgn = d > 0 ? 1 : -1;
+    double hi = fabs(d);
+    for (auto& p : picks) hi = std::min(hi, p.limit * (1 - 1e-3));
+    auto works = [&](double a) { return !attempt(sgn * a, nullptr, false).isNull(); };
+    double good = 0, bad = fabs(d);
+    int runs = 0;
+    if (hi < fabs(d)) {
+      ++runs;
+      if (works(hi)) good = hi;
+      else bad = hi;
+    }
+    if (good == 0)
+      for (double f : {0.5, 0.25, 0.1, 0.02}) {
+        ++runs;
+        if (works(bad * f)) {
+          good = bad * f;
+          break;
+        }
+        bad = bad * f;
+      }
+    while (good > 0 && runs < 10 && (bad - good) > 1e-3 * bad) {
+      const double mid = 0.5 * (good + bad);
+      ++runs;
+      if (works(mid)) good = mid;
+      else bad = mid;
+    }
+    r.set("max_ok", good > 0 ? JV(good) : JV());
+    r.set("diagnose_runs", runs);
+  }
+  JV tm = JV::obj();
+  tm.set("describe_ms", t1 - t0);
+  tm.set("total_ms", nowMs() - t0);
   r.set("timings", std::move(tm));
   return r;
 }
@@ -7054,6 +8255,7 @@ JV dispatch(const std::string& op, const JV& q) {
   if (op == "brep_read") return opBrepRead(q);
   if (op == "link_export") return opLinkExport(q);
   if (op == "press_pull") return opPressPull(q);
+  if (op == "offset_faces") return opOffsetFaces(q);
   if (op == "combine") return opCombine(q);
   if (op == "measure") return opMeasure(q);
   if (op == "sketch_regions") return opSketchRegions(q);

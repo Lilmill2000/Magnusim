@@ -136,6 +136,14 @@ export interface SketchTool {
    * does; its click still reaches the tool.
    */
   takesPress?(e: SketchPointer): boolean;
+  // ---- ci2 (a dimension label clicked while picking)
+  /**
+   * A tool whose picks are the selection (Mirror, the patterns, Offset, Fillet, Chamfer, Dimension)
+   * can't take a dimension label or a relation glyph as a pick: these are the words why. A click on
+   * a label or glyph then keeps the picks as they are and shows the words, rather than selecting the
+   * dimension or relation in their place. Absent: the click selects it (the Select and drawing tools).
+   */
+  refusesPick?(what: 'dimension' | 'relation'): string;
 }
 
 export type ToolFactory = (mode: SketchMode, id: SketchToolId) => SketchTool;

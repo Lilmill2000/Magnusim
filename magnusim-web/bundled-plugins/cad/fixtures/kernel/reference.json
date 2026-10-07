@@ -787,5 +787,335 @@
     "dv_expected": -729658.7699003967
    }
   }
+ },
+ "p5_offset": {
+  "about": "Kernel API 6 (press-pull on curved faces) native values: OCCT 7.9.3 through cadquery-ocp 7.9.3.1.1, computed on 2026-10-06 with a generator kept outside the plugin (scratchpad cad/pp: native_offset.py). offset: BRepOffset_MakeOffset(shape, 0, 1e-7, Skin, Intersection) with SetOffsetOnFace(d) on the picked faces. refillet: BRepAlgoAPI_Defeaturing of the fillet face, then BRepFilletAPI_MakeFillet of the edges its two support faces then share, at the new radius. thick: BRepOffset_MakeOffset thickening a copy of the face by d (turned outside out at negative volume), Fuse (d > 0) / Cut (d < 0), UnifySameDomain on a copy. prism: the API 3 press_pull. Parts: bore = 60 x 40 x 10 plate minus a cylinder r 10 at (30, 20); boss = the plate plus a cylinder r 8, 15 high at (30, 20, 10); fillet = 40 x 30 x 20 box, r 5 on its vertical edge at x 40, y 30; trap = trapezoid (x 0..40 at z 0, 0..30 at z 20) extruded 30 along +Y; cone = 60 x 40 x 10 plate centred on the origin plus a frustum r 10 (z 10) to r 5 (z 20); dome = a cylinder r 10, 10 high under a half sphere; cap = the plate plus a sphere r 10 centred at (30, 20, 4) above z 10; pocket = 40 x 30 x 10 block minus a 20 x 10 pocket 5 deep at (10, 10); loft = through circles r 10 (z 0), 12 (z 10), 8 (z 20). self_ok = BRepAlgoAPI_Check(shape, no small edges, self-interference).",
+  "bore": {
+   "in": {
+    "volume": 20858.40734641021,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "plus_2": {
+    "volume": 21989.380701702532,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "minus_2": {
+    "volume": 19476.106578830695,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "thick_plus_2": {
+    "volume": 21989.380701702532,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "thick_minus_2": {
+    "volume": 19476.106578830695,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "mixed_bore_top_plus_2": {
+    "volume": 26387.25684204304,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   }
+  },
+  "boss": {
+   "in": {
+    "volume": 27015.928947446195,
+    "faces": 8,
+    "valid": true,
+    "self_ok": true
+   },
+   "plus_2": {
+    "volume": 28712.38898038469,
+    "faces": 8,
+    "valid": true,
+    "self_ok": true
+   },
+   "minus_3": {
+    "volume": 25178.097245096174,
+    "faces": 8,
+    "valid": true,
+    "self_ok": true
+   }
+  },
+  "fillet": {
+   "in": {
+    "volume": 23892.699081698724,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "plus_1": {
+    "volume": 23931.32741228718,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "minus_1": {
+    "volume": 23845.48667764616,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   }
+  },
+  "trap": {
+   "in": {
+    "volume": 21000.0,
+    "faces": 6,
+    "valid": true,
+    "self_ok": true
+   },
+   "offset_plus_5": {
+    "volume": 25312.500000000004,
+    "faces": 6,
+    "valid": true,
+    "self_ok": true
+   },
+   "offset_minus_5": {
+    "volume": 16312.500000000002,
+    "faces": 6,
+    "valid": true,
+    "self_ok": true
+   },
+   "prism_plus_5": {
+    "volume": 25500.0,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "prism_minus_5": {
+    "volume": 16500.0,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   }
+  },
+  "cone": {
+   "in": {
+    "volume": 25832.59571459404,
+    "faces": 8,
+    "valid": true,
+    "self_ok": true
+   },
+   "plus_1": {
+    "volume": 26398.726727591973,
+    "faces": 8,
+    "valid": true,
+    "self_ok": true
+   },
+   "minus_1": {
+    "volume": 25345.004517935864,
+    "faces": 8,
+    "valid": true,
+    "self_ok": true
+   }
+  },
+  "dome": {
+   "in": {
+    "volume": 5235.987755982989,
+    "faces": 3,
+    "valid": true,
+    "self_ok": true
+   },
+   "plus_2": {
+    "volume": 8143.008158104743,
+    "faces": 3,
+    "valid": true,
+    "self_ok": true
+   },
+   "minus_2": {
+    "volume": 3082.949590722783,
+    "faces": 3,
+    "valid": true,
+    "self_ok": true
+   }
+  },
+  "cap": {
+   "in": {
+    "volume": 24435.634181297784,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "plus_2": {
+    "volume": 25130.97335529232,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   },
+   "minus_2": {
+    "volume": 24092.1533845053,
+    "faces": 7,
+    "valid": true,
+    "self_ok": true
+   }
+  },
+  "pocket": {
+   "in": {
+    "volume": 11000.000000000002,
+    "faces": 11,
+    "valid": true,
+    "self_ok": true
+   },
+   "minus_3": {
+    "volume": 10400.000000000002,
+    "faces": 11,
+    "valid": true,
+    "self_ok": true
+   },
+   "minus_12": {
+    "volume": 8600.000000000002,
+    "faces": 11,
+    "valid": true,
+    "self_ok": false
+   }
+  },
+  "loft": {
+   "in": {
+    "volume": 7674.784559135271,
+    "faces": 3,
+    "valid": true,
+    "self_ok": true
+   },
+   "plus_1": {
+    "volume": 9200.786236814776,
+    "faces": 3,
+    "valid": true,
+    "self_ok": true
+   },
+   "minus_1": {
+    "volume": 6281.930500269375,
+    "faces": 3,
+    "valid": true,
+    "self_ok": true
+   }
+  },
+  "vortex": {
+   "torus_supports": [
+    "cone",
+    "plane"
+   ],
+   "torus_refillet_plus_1": {
+    "volume": 44801920.868143074,
+    "faces": 16,
+    "valid": true,
+    "self_ok": true
+   },
+   "in": {
+    "volume": 44798524.10991701,
+    "faces": 17,
+    "valid": true,
+    "self_ok": true
+   },
+   "inlet_area": 9053.314716698731,
+   "inlet_offset_plus_1_fails": true,
+   "inlet_thick_plus_1": {
+    "volume": 44807755.93767397,
+    "faces": 21,
+    "valid": true,
+    "self_ok": true
+   },
+   "inlet_thick_minus_1": {
+    "volume": 44789647.247330666,
+    "faces": 21,
+    "valid": true,
+    "self_ok": true
+   },
+   "torus_minor": 12.7
+  }
+ },
+ "p5_fix1": {
+  "about": "Press-pull fix round 1 native values: OCCT 7.9.3 through cadquery-ocp 7.9.3.1.1, computed on 2026-10-06 with a generator kept outside the plugin (scratchpad cad/pp: native_fix1.py, gen_stepped.py). STEP files are read with STEPCAFControl_Reader and ShapeFix_Shape(precision = max tolerance = 0.001), as import_step heals. offset: as p5_offset. ring: the annulus between r - |d| and r + |d| over the cylinder face's own u and v ranges (a rectangle in the axial plane revolved by the u span), BRepAlgoAPI_Fuse (d > 0) / Cut (d < 0), UnifySameDomain on a copy (kept unless invalid while the raw result is valid). stepped = fixtures/kernel/stepped-bore.step (generated natively: a 60 x 40 x 30 block, a bore r 10 through it at (30, 16), a counterbore r 15 from z 20 up; the counterbore's wall to y = 0 is 1 mm thick, so at -2 it opens into that side and OCCT's offset gives no shape). vortex: outlet_25 = the r 25.4 cylinder of the smaller area (UI Face 12), outlet_30 = the r 30.1752 one (UI Face 17), main = the r 152.4 cylinder.",
+  "stepped": {
+   "in": {
+    "volume": 58648.231222243005,
+    "faces": 9,
+    "valid": true,
+    "self_ok": true
+   },
+   "bore10_area": 1256.637061436,
+   "bore15_area": 942.477796077,
+   "bore10_offset_minus_2": {
+    "volume": 55883.62968708389,
+    "faces": 9,
+    "valid": true,
+    "self_ok": true
+   },
+   "bore10_offset_plus_1": {
+    "volume": 59842.03643060715,
+    "faces": 9,
+    "valid": true,
+    "self_ok": true
+   },
+   "bore15_offset_minus_2": null,
+   "bore15_ring_minus_2": {
+    "volume": 56714.66831011783,
+    "faces": 9,
+    "valid": true,
+    "self_ok": true
+   },
+   "bore15_offset_plus_1": {
+    "volume": 59559.29309178408,
+    "faces": 9,
+    "valid": true,
+    "self_ok": true
+   }
+  },
+  "vortex": {
+   "outlet_25_area": 8107.319665559958,
+   "outlet_30_area": 9631.495762685228,
+   "outlet_25_ring_minus_1": {
+    "volume": 44790576.41621394,
+    "faces": 16,
+    "valid": true,
+    "self_ok": true
+   },
+   "outlet_25_ring_minus_2": {
+    "volume": 44782947.87621321,
+    "faces": 16,
+    "valid": true,
+    "self_ok": true
+   },
+   "outlet_25_ring_plus_1": {
+    "volume": 44806791.053656235,
+    "faces": 16,
+    "valid": true,
+    "self_ok": true
+   },
+   "outlet_30_ring_minus_1": {
+    "volume": 44788733.05241438,
+    "faces": 16,
+    "valid": true,
+    "self_ok": true
+   },
+   "outlet_30_ring_minus_2": {
+    "volume": 44778622.776986875,
+    "faces": 16,
+    "valid": true,
+    "self_ok": true
+   },
+   "outlet_30_ring_plus_1": {
+    "volume": 44807996.04582858,
+    "faces": 16,
+    "valid": true,
+    "self_ok": true
+   },
+   "main_ring_minus_1": {
+    "volume": 44313680.89210712,
+    "faces": 16,
+    "valid": true,
+    "self_ok": true
+   }
+  }
  }
 }

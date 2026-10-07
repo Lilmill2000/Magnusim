@@ -312,6 +312,50 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   | `silhouette` | a body's outline along the plane normal (HLR visible, outline and hidden edges moved onto the plane, a covering face split by them, the pieces over the body kept and merged): outer loops and see-through holes |
   | `cubic: true` (project, section, silhouette) | every B-spline non-rational of degree 3 (what a sketch spline holds) |
   Measured on the Vortex (Node): silhouette 180-220 ms, section 7-24 ms, project of 17 faces 7 ms.
+- **API 6 (press-pull on curved faces, 2026-10-06; typed in `src/types/kernel-protocol.ts`,
+  tests `tests/kernel/kernel-api6-offset.test.ts` against analytic volumes and the native
+  OCCT 7.9.3 values in `fixtures/kernel/reference.json` `p5_offset`; build e64dc01c in
+  `kernel-build/mk32.build.txt`).** Timeout (`src/kernel/timeouts.ts`): offset_faces 60 s.
+  | Op / change | Params -> result (abridged) |
+  |---|---|
+  | `offset_faces` | `{id, faces, d, self_check?, diagnose?}` -> a true offset on a work copy: `BRepOffset_MakeOffset` (Skin, join Intersection, tolerance 1e-7) with `SetOffsetOnFace(d)` on the picked faces and 0 on the others, so the neighbours are extended or trimmed. A fillet (a cylinder or torus of less than half a turn, tangent to exactly two faces) is taken off (`BRepAlgoAPI_Defeaturing`) and the edge its two faces then share rounded again at the new radius (convex: r - d, concave: r + d), so it stays tangent. `{id, valid, faces, solids, moved, about, tangent, method: offset / refillet / offset+refillet, history}`; every face `modified` from its input face (OCCT reports offset faces as generated: `offsetHistory` maps them), a re-rounded fillet's faces `modified` from the old fillet. `about` per pick: `type`, `role` (flat, bore, cylinder, cone, sphere, torus, fillet, surface), `convex`, `radius` / `new_radius` (a cone's at its wide end), `tangent` (faces OCCT moves with it: tangent to it, transitively). A refusal is an answer, not an error: `{refused: {code, words, detail?, face?}, about, max_ok?}` with code `radius` (checked before OCCT runs: "the hole would close", "the cylinder would shrink to nothing", "the cone would pass its tip", "the fillet's radius would reach 0", ...), `fillet`, `occt` (OCCT's offset failed: its words in `detail`), `invalid` (BRepCheck), `self` (`BRepAlgoAPI_Check` self-interference) or `vanish` (a picked or neighbouring face would shrink to nothing). `diagnose: true` adds `max_ok`, the largest \|d\| (same sign) found to work, by bisection on fresh work copies (at most 10 runs; nothing stored) |
+  | `press_pull` | takes curved faces: a curved face's tool is the face thickened by d (`BRepOffset_MakeOffset` with thickening on a copy of the face, turned outside out at negative volume), its walls are its `sides` (a step where a neighbour is not square to it), its offset face is `moved` |
+  - OCCT 7.9.3 facts behind it: an offset of 0 on the other faces re-intersects every face, so
+    one bad face anywhere stops it; on the Vortex every picked face but the torus fillet stops
+    (natively too: `GeomAPI_ProjectPointOnCurve`, or an invalid result), which is why Press-pull
+    falls back to the thickened face there. A pocket floor pushed through the bottom of its block
+    passes BRepCheck with a first-order right volume while its walls cross the bottom face: only
+    the self-interference check sees it. A bore offset past its radius comes back valid as a
+    hole of radius |r - d| (r 10, d 11: r 1), so radii are checked first. OCCT moves faces
+    tangent to a moved one with it (a dome's cylinder under its sphere); a flat face tangent to
+    fillets (a box top with rounded edges) fails outright. B-spline faces work where OCCT can
+    offset them (a loft through circles does; an extruded spline side and the Vortex's
+    B-spline faces do not: refused with OCCT's reason).
+  - Timings (Node): a plate's bore 4-37 ms with its checks; the Vortex torus fillet re-rounded
+    0.44 s plus a 0.52 s self-interference check.
+  - **Fix round 1 (build 7f2899ae):**
+    - `carry`: faces to take off and put back at their own size when next to a pick: a
+      Chamfer feature's faces (named in the document; the restored edge chamfered again with
+      the sizes measured on its two flat faces), and fillets found by shape (re-rounded at
+      their radius). A flat pick tangent to anything else is not offset at all.
+    - `chain`: when the offset is refused, a cylinder pick's ring (`runCylinder`: the annulus
+      r - |d| .. r + |d| over the face's own u and v span, fused or cut, so no tool face lies
+      on the picked one), then the press_pull tools; neither where a neighbour is not square
+      to a pick (`stepAt`: normals off by more than ~1.1°), because moving the face alone
+      would leave a step or a groove (the review's cone "mushroom").
+    - Every method's result passes `acceptResult`: valid, not self-intersecting, every
+      picked face present, no other face lost, no split from adding material, and the
+      volume change within 0.5x-2x of the expected one (area x d with the curvature terms;
+      a fillet's corner region at its new radius). The broken results the review found
+      were at ratios 0.000, -0.000003 and 0.0008.
+    - Refusal codes in order of what tells most: radius, empty, gone, lost, split, volume,
+      vanish, self, invalid, fillet, step, occt. `diagnose` bisects over the whole chain with
+      the same rule.
+    - Why OCCT's offset refuses the Vortex outlets (UI Faces 12 and 17): not the cylinders
+      (true cylinders between two planes, no seam split, no tangent neighbour) but the
+      re-offset at 0 of the part's B-spline faces, which come back as invalid offset
+      surfaces (BRepCheck names faces far from the pick). The ring method does not touch
+      them; its volumes equal native OCCT's to the last digit.
 
 ## 6. Document
 
@@ -1141,6 +1185,54 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     sketch offers a profile), or "Extrude face" in the face's menu. The face is
     the profile, with full history naming; a new one defaults to Join.
     Press-pull stays the direct-edit equivalent.
+- **Press-pull on curved faces** (`src/features/press_pull/`, kernel API 6, Daniel
+  2026-10-06; the bullets below are as first built, fix round 1 follows them). Faces of one
+  body, flat or curved, several at once and of mixed kinds
+  (the face field, Q with faces selected and the face's menu take any face). The
+  distance moves each along its outward normal (> 0 adds material: a hole's bore
+  gets smaller). The build:
+  - flat faces only: the API 3 prism-and-fuse first, unchanged, so existing documents
+    rebuild to the same geometry and names; only where it leaves a step (a side face of
+    its own, from a neighbour that is not square to the face) does `offset_faces` run and
+    replace it (the slope extended); if the offset refuses, the prism result stays and
+    the panel says why there is a step;
+  - any curved face: `offset_faces`. A radius refusal is final (red, "Press-pull 1
+    failed: the hole would close: 9.9 mm or less works", the largest distance from the
+    kernel's bisection; "up to -4.9 mm works" for a negative one; parts over 2,000 faces
+    skip the search: "try a smaller distance"). Any other refusal tries `press_pull`
+    with the curved faces thickened; when that works the panel's note says what differs
+    from an offset (a step where a neighbour is not square to the face, tangent faces that
+    did not move), and nothing when nothing differs.
+  - The panel (`PressPullOutput` in `src/types/doc-service.ts`, only for a build that
+    worked) says per face "Bore radius 10 mm → 8 mm", "Cylinder radius ...", "Fillet
+    radius ...", "Cone radius at its wide end ...", "Sphere radius ...", "Torus tube
+    radius ...", "Flat face moves 2 mm out of the body" (the same line once, with a
+    count), "Also moves N tangent faces with it", and the note.
+  - Tests: `tests/features/press_pull/press-pull.test.ts` (the paths, scripted),
+    `tests/features/p2/api3-real.test.ts` (a cylinder's side on the real kernel),
+    `e2e/cad-p5-pressPull-curved.spec.ts` (step shard).
+  - **Fix round 1 (the review's B1-B4, P1-P7):**
+    - `PressPullFeature.version`: features saved before (no field) keep the API 3 prism
+      path forever (`legacyBuild`, the f54f8b7 code), and their face field takes flat faces
+      only; every new Press-pull is `version: 2` (`tests/features/press_pull/legacy-doc.test.ts`
+      reopens Parts saved that way: the same volumes and boxes).
+    - Version 2 makes one `offset_faces {chain: true, carry: <Chamfer faces>}` call; the
+      kernel's chain and accept rule decide (above). A refusal is red in plain words:
+      "the face could not be moved cleanly by -40 mm (the fillet would not fit at that
+      radius). Up to -24 mm works"; OCCT's and BRepCheck's own words go to the panel's
+      Details, never the red text. The suggestion is rounded in the display unit; when the
+      search finds nothing: "No smaller distance works either".
+    - Panel: a cone's line says what holds ("Cone face moves 1 mm out of the body, square to
+      the face": its wide end stays where a neighbour is extended to meet it); the lines
+      also show with a warning (2 separate solids); "Keeps the 2 fillets beside it at their
+      size"; no step note (no method that leaves a step is used).
+    - Picking a face no standard view shows (the Vortex outlets): the section view (the
+      viewport's own pick respects its cut); `cad:p5-fix1-vortex-outlets` uses it.
+    - Sketch labels (ci2 follow-up): an angle's label keeps the ci2 gap from both arms
+      (`angleLabelAt`), a new label keeps a gap from the labels placed before it (moved
+      out along its bisector for an angle), and a refused label click's note waits out a
+      double-click (`e2e/cad-p5-fix1-sketch-labels.spec.ts`, sketch shard;
+      `tests/sketch/angle-label.test.ts`).
   - **Pick chip** (`src/features/pickinfo`): with one face, edge or point
     picked, the dock says what it is ("Face · Fillet (Fillet 1)",
     "Edge · End · Side 2 (Extrude 1)").

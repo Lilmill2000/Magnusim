@@ -98,7 +98,7 @@ test('cad:p2-kernel-ops API 3 in the Part frame: import, heal, BREP, press-pull,
     return r;
   }, input);
 
-  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 5 });
+  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 6 });
   expect(out.import).toEqual({ unit: 'inch', faces: 17, valid: true, problems: 0, closed: true });
   expect(out.heal).toMatchObject({ before: 'shell', freeBefore: 24, shapes: 1, type: 'solid', valid: true, sewn: 6 });
   expect(out.heal.volume).toBe(REF.p2p3.heal.box20_faces['heal_0.001'].volume);

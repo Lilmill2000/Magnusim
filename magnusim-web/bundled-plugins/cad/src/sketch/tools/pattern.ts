@@ -251,6 +251,12 @@ export function patternTool(mode: SketchMode, kind: 'linear' | 'circular'): Sket
       if (picking === 'direction1' || picking === 'direction2') return 'Click the line the pattern runs along.';
       return picked().length ? `Set the ${word} in the panel, then Enter or Place pattern.` : `Pick the entities to pattern (or select them first).`;
     },
+    // ci2: a label or glyph clicked while picking keeps the picks (src/sketch/mode.ts refusesPick).
+    refusesPick: (what) => {
+      if (picking === 'centre') return 'Click a point (an end, a centre, the origin) for the centre';
+      if (picking === 'direction1' || picking === 'direction2') return 'Click a line for the direction';
+      return `${what === 'dimension' ? 'Dimensions' : 'Relations'} can't be patterned: pick lines, arcs, circles, splines or points`;
+    },
     cancel() {
       if (picking !== 'sources') {
         picking = 'sources';
@@ -349,7 +355,10 @@ export function patternTool(mode: SketchMode, kind: 'linear' | 'circular'): Sket
         refresh();
         return;
       }
-      if (h && h.what === 'entity') mode.select([h], true);
+      if (h && h.what === 'entity') {
+        mode.select([h], true);
+        mode.note(null);
+      }
       refresh();
     },
     dispose() {

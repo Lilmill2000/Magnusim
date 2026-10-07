@@ -183,7 +183,7 @@ describe('P2 commands and panels', () => {
     expect(texts(a, '[data-cad-tree] [data-feature-row] > .tree-row .tl')).toEqual(['Imported 1 (flange.step)', 'Delete faces 1']);
   });
 
-  it('Q with a flat face selected opens Press-pull with it; the distance applies live; a curved face is refused in the field', async () => {
+  it('Q with a flat face selected opens Press-pull with it; the distance applies live; a curved face is taken too (kernel API 6)', async () => {
     const a = await start();
     registerSolidFeatures(a.services.doc);
     // A 20 mm cube: a square sketched on Top, extruded 20 mm.
@@ -217,11 +217,11 @@ describe('P2 commands and panels', () => {
       fireEvent.keyDown(input, { key: 'Enter' });
     });
     expect(a.$('.nui[data-field="distance"] [data-nui-error]')?.textContent).toBe('Distance must not be 0');
-    // A face the viewport says is not flat is refused in the field, with the reason.
+    // A face the viewport says is not flat is taken into the field like a flat one (no refusal).
     a.view.flat = new Set();
     expect(a.view.click({ kind: 'face', body: b.id, index: (top + 1) % 6 })).toBe(true);
-    await waitFor(() => expect(a.$('[data-pick-error="faces"]')?.textContent).toBe('Press-pull works on flat faces: that face is curved'));
-    expect(a.$$('[data-pick-field="faces"] [data-pick-row]')).toHaveLength(1);
+    await waitFor(() => expect(a.$$('[data-pick-field="faces"] [data-pick-row]')).toHaveLength(2));
+    expect(a.$('[data-pick-error="faces"]')).toBeNull();
   });
 
   it('Mass properties, Check and Export on the imported flange', { timeout: 120_000 }, async () => {

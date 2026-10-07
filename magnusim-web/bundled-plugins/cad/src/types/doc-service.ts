@@ -10,7 +10,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { BodyDef, BodyId, CadDoc, CadView, EnclosureSide, Feature, FeatureAction, FeatureId, FeatureStatus, FeatureType, Param, ParamId, SavedCamera, StoredFileRef, Vec3 } from './doc';
 import type { BodyInfo, KernelAdapter } from './kernel';
-import type { BBox, ShapeId } from './kernel-protocol';
+import type { BBox, OffsetFaceAbout, ShapeId } from './kernel-protocol';
 import type { FaceNames } from './naming';
 import type { SketchOutput, SketchSolverClient } from './sketch';
 import type { ConstructOutput } from './references';
@@ -59,7 +59,32 @@ export type FeatureOutput = SketchOutput | ImportOutput | EnclosureOutput
   // P4a: the edges a Fillet or Chamfer rounded (SOLIDS)
   | EdgeChainOutput
   // P4b: the copies a pattern or mirror made (PATTERN)
-  | PatternOutput;
+  | PatternOutput
+  // Press-pull on curved faces (kernel API 6): what Press-pull did, for its panel
+  | PressPullOutput;
+
+/**
+ * What a Press-pull built (kernel API 6), for its panel's words ("Bore radius 10 mm -> 8 mm").
+ * `method`: prism (flat faces, the API 3 prisms: no slanted neighbour, so the same as an
+ * offset), offset (a true offset: neighbours extended or trimmed), refillet / offset+refillet
+ * (fillets rounded again at their new radius), thicken (OCCT's offset refused: the faces
+ * thickened and joined). `faces`: the picked faces as offset_faces describes them (empty on
+ * the prism path); `tangent`: how many faces moved with them because they are tangent to
+ * them; `note`: why the result differs visibly from a true offset, or null.
+ */
+export interface PressPullOutput {
+  type: 'press-pull';
+  method: 'prism' | 'offset' | 'refillet' | 'offset+refillet' | 'thicken' | 'cylinder';
+  faces: OffsetFaceAbout[];
+  tangent: number;
+  note: string | null;
+  /** Fix round 1: the fillets and chamfers beside the moved faces that were put back at their size. */
+  carried?: { fillets: number; chamfers: number };
+  /** Fix round 1: a feature made before version 2 (the prism path, kept for saved documents). */
+  legacy?: boolean;
+  /** Fix round 1: on a failure, OCCT's own words (the panel's Details), never in the red text. */
+  detail?: string;
+}
 
 /**
  * P4b (PATTERN): what a Linear pattern, Circular pattern or Mirror built, for its panel and the

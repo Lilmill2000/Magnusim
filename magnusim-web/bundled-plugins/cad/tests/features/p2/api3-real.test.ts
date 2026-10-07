@@ -101,7 +101,7 @@ describe('Press-pull on the real kernel (needs kernel API 3)', () => {
     expect(rb.bodies[0].bbox[5]).toBeCloseTo(20, 6);
   });
 
-  it.skipIf(needs())('a curved face is refused by the kernel, said in the feature', async () => {
+  it.skipIf(needs())('a curved face (kernel API 6): the cylinder side +5 mm makes it r 15, the panel output says so', async () => {
     const r = await part();
     cylinder(r.doc);
     let rb = await settle(r.doc);
@@ -113,8 +113,10 @@ describe('Press-pull on the real kernel (needs kernel API 3)', () => {
     r.doc.beginNew('press_pull', { body: b.id, faces: [p.ref], distance: '5 mm' } as Partial<PressPullFeature>).commit();
     rb = await settle(r.doc);
     const pp = r.doc.state.get().doc.features[2];
-    expect(rb.features[pp.id].state).toBe('error');
-    expect(rb.features[pp.id].message).toMatch(/^Press-pull 1 failed: press_pull needs planar faces: face \d+ is /);
+    expect(rb.features[pp.id].state).toBe('ok');
+    // A 20 mm across, 20 high cylinder: its side 5 out is r 15.
+    expect(rb.bodies[0].volume).toBeCloseTo(Math.PI * 15 * 15 * 20, 6);
+    expect(rb.outputs[pp.id]).toMatchObject({ type: 'press-pull', method: 'offset', faces: [{ role: 'cylinder', convex: true, radius: 10, new_radius: 15 }] });
   });
 });
 

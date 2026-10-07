@@ -321,17 +321,23 @@ export interface DeleteFacesFeature extends FeatureBase<'delete_faces'> {
 }
 
 /**
- * Press-pull of planar faces (proposal §2.8, §3.4): each face moves along its
- * own normal by `distance` (> 0 adds material, < 0 removes it). Kernel op
- * `press_pull` (prism of the faces, then fuse or cut, then UnifySameDomain,
- * with history; docs/p2p3-plan.md §2.4). The body keeps its id; the moved face
- * keeps its name.
+ * Press-pull (proposal §2.8, §3.4): each face moves along its own normal by
+ * `distance` (> 0 adds material, < 0 removes it). The body keeps its id; the
+ * moved face keeps its name.
+ * - No `version` (made before 2026-10-06, the f54f8b7 build and earlier): flat faces
+ *   only, kernel `press_pull` (prism of the faces, then fuse or cut, then
+ *   UnifySameDomain, with history; docs/p2p3-plan.md §2.4), forever, so a saved
+ *   document rebuilds exactly as it was made.
+ * - `version: 2` (press-pull on curved faces, kernel API 6; every new Press-pull):
+ *   flat and curved faces, kernel `offset_faces` with its method chain and accept
+ *   rule; fillets and chamfers beside a moved face keep their size.
  */
 export interface PressPullFeature extends FeatureBase<'press_pull'> {
   body: BodyId;
   faces: PersistentRef[];
   distance: Expr;
   repair?: { fuzzy: number };
+  version?: 2;
 }
 
 /** What a Split cuts with. */

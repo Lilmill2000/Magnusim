@@ -11,7 +11,8 @@
 // extents to_vertex / to_point, fillet contours and diagnose, chamfer d2 / flip,
 // shell outside, topo edge_ends / vertex_faces. API 5 (P4b, the PATTERN builder):
 // B-spline sketch curves (SKETCH's R1), copies (patterns), project, section,
-// silhouette (SELECT); `version` answers api: 5.
+// silhouette (SELECT); `version` answers api: 5. API 6 (press-pull on curved faces):
+// offset_faces, and press_pull taking curved faces; `version` answers api: 6.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { PlaneFrame, Vec2, Vec3 } from './doc';
 
@@ -506,11 +507,11 @@ export interface KernelOps {
     };
   };
   /**
-   * API 3. Press-pull planar faces of one body (work copy): a prism of each face
+   * API 3. Press-pull faces of one body (work copy): a prism of each flat face
    * along its own outward normal by d (d > 0, fused) or against it by |d|
-   * (d < 0, cut), all prisms in one boolean, then UnifySameDomain with history.
-   * Faces must be planar ("press_pull needs planar faces: face 3 is a cylinder").
-   * `moved[i]`: the result face where input face faces[i] now lies (-1 if it is
+   * (d < 0, cut), all tools in one boolean, then UnifySameDomain with history.
+   * API 6: a curved face's tool is the face thickened by d (BRepOffset_MakeOffset
+   * thickening a copy of it); its walls are its `sides`. `moved[i]`: the result face where input face faces[i] now lies (-1 if it is
    * gone). `sides`: result face per boundary edge of a moved face, keyed
    * "<input face>:<input edge>" (absent where the side merged with a neighbour
    * that already lay in that plane). d so negative that nothing is left is
@@ -522,6 +523,33 @@ export interface KernelOps {
   press_pull: {
     params: CheckParam & { id: ShapeId; faces: number[]; d: number; fuzzy?: number; glue?: 'off' | 'shift'; unify?: boolean };
     result: ShapeResult & { moved: number[]; sides: Record<string, number>; op: 'fuse' | 'cut'; empty: boolean; solids: number; unified: boolean };
+  };
+  /**
+   * API 6. Offset picked faces of one body by d along their outward normals (d > 0 adds
+   * material), as one true offset on a work copy: BRepOffset_MakeOffset with d on the
+   * picked faces, 0 on the others and join type Intersection, so the neighbours are
+   * extended or trimmed to meet them (no step). A cylinder's, cone's, sphere's or torus's
+   * radius changes; a fillet (a cylinder or torus blend of less than half a turn between
+   * two tangent faces) is taken off (BRepAlgoAPI_Defeaturing) and its edge rounded again at
+   * the new radius, so it stays tangent. OCCT moves faces tangent to a moved one with it
+   * (`tangent`). Every face keeps its name (history `modified`); a re-rounded fillet's faces
+   * are `modified` from the old fillet. A result that is invalid, cuts through itself
+   * (BRepAlgoAPI_Check) or loses a face next to a picked one is refused, as is a d that
+   * takes a radius to 0: the answer then has `refused` instead of `id` (not an error), and
+   * with diagnose:true `max_ok`, the largest |d| (same sign) found to work by bisection on
+   * fresh work copies (at most 10 runs), or null.
+   */
+  offset_faces: {
+    /**
+     * Fix round 1: `carry` (faces, e.g. a Chamfer feature's by name, put back at their own size
+     * when next to a pick; fillets next to a pick are found by shape) and `chain` (when the
+     * offset is refused: a cylinder's ring, then the prisms / thickened faces; never a method
+     * that would leave a step). Every result passes the accept rule: valid, not cutting
+     * through itself, the picked faces and every other face kept, no split from adding
+     * material, the volume change within 0.5x-2x of the faces' expected change.
+     */
+    params: CheckParam & { id: ShapeId; faces: number[]; d: number; self_check?: boolean; diagnose?: boolean; carry?: number[]; chain?: boolean };
+    result: OffsetFacesResult;
   };
   /**
    * API 3. Join / Cut / Intersect with several targets and several tools, one
@@ -726,6 +754,65 @@ export interface ShapeDiagnostics {
     closed: boolean;
   }[];
 }
+
+/** API 6: what a face picked for offset_faces is, and its radius before and after. */
+export interface OffsetFaceAbout {
+  face: number;
+  type: TopoResult['faces'][number]['type'] | 'other';
+  /**
+   * flat; bore (a concave cylinder: a hole); cylinder (convex: a boss, a shaft); cone;
+   * sphere; torus; fillet (a cylinder or torus blend between two tangent faces: re-rounded);
+   * surface (B-spline or other free-form).
+   */
+  role: 'flat' | 'bore' | 'cylinder' | 'cone' | 'sphere' | 'torus' | 'fillet' | 'surface';
+  /** The material is on the inside of the curve (a boss, a ball, a convex fillet). */
+  convex: boolean;
+  /** Cylinder, sphere and fillet radius, torus tube radius, a cone's radius at its wide end (mm). */
+  radius?: number;
+  new_radius?: number;
+  /** Faces OCCT moves with it: tangent to it, transitively (input indices). */
+  tangent: number[];
+}
+
+/** API 6: offset_faces' answer: a result, or a refusal. */
+export type OffsetFacesResult =
+  | (ShapeResult & {
+      refused?: undefined;
+      solids: number;
+      /** Per picked face: the result face where it now lies (-1 if gone). */
+      moved: number[];
+      about: OffsetFaceAbout[];
+      tangent: number[];
+      method: 'offset' | 'refillet' | 'offset+refillet' | 'cylinder' | 'prism' | 'thicken';
+      /** Fix round 1: the faces taken off and put back at their size (fillets, chamfers). */
+      carried?: number[];
+    })
+  | {
+      id?: undefined;
+      refused: {
+        /**
+         * radius: a radius would reach 0 (`words`); empty: nothing left; gone: a picked face is cut
+         * away; lost: another face is gone (`face`); vanish: a face next to a pick shrinks to
+         * nothing (`face`); split: adding material made separate solids; volume: the volume moves
+         * the wrong way or by far less / more than expected (`dv`, `expected`); self: cuts through
+         * itself; invalid: BRepCheck (`detail`); fillet: a fillet or chamfer could not be taken off
+         * or put back (`words`); step: a neighbour (`face`) is not square to the face and no method
+         * that extends it worked; occt: OCCT's offset failed (`detail`).
+         */
+        code: 'radius' | 'empty' | 'gone' | 'lost' | 'vanish' | 'split' | 'volume' | 'self' | 'invalid' | 'fillet' | 'step' | 'occt';
+        words?: string;
+        detail?: string;
+        face?: number;
+        dv?: number;
+        expected?: number;
+        d?: number;
+      };
+      about: OffsetFaceAbout[];
+      /** With diagnose: the largest |d| found to work (same sign), or null. */
+      max_ok?: number | null;
+      diagnose_runs?: number;
+      timings?: Record<string, number>;
+    };
 
 /** What `measure` measures: a sub-shape of a stored shape, a whole shape, a point or an origin plane/axis. */
 export type MeasureTarget =

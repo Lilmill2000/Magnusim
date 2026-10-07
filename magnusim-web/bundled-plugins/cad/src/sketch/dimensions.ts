@@ -136,7 +136,7 @@ export interface DimensionLayout {
  * Where a dimension draws, with its label at `at` (the default place when it
  * has none). `px` is mm per CSS pixel: gaps and overshoots are in pixels.
  */
-export function layoutDimension(f: F, c: Pick<SketchDimension, 'kind' | 'refs' | 'at'>, px: number): DimensionLayout | null {
+export function layoutDimension(f: F, c: Pick<SketchDimension, 'kind' | 'refs' | 'at'>, px: number, reach?: LabelReach): DimensionLayout | null {
   const gap = 3 * px;
   const over = 6 * px;
   const kinds = c.refs.map((r) => refKindOf(f, r));
@@ -144,7 +144,7 @@ export function layoutDimension(f: F, c: Pick<SketchDimension, 'kind' | 'refs' |
     const id = pointIdOf(f, r);
     return id ? pointAt(f, id) : null;
   };
-  const at = c.at ?? defaultLabelAt(f, c, px);
+  const at = c.at ?? defaultLabelAt(f, c, px, reach);
   if (!at) return null;
   switch (c.kind) {
     case 'distance': {
@@ -366,9 +366,79 @@ function shapePoints(f: F, refs: readonly string[]): Vec2[] {
   return out;
 }
 
-/** Where a new dimension's label goes when it has no place yet: beside what it measures. */
-export function defaultLabelAt(f: F, c: Pick<SketchDimension, 'kind' | 'refs'>, px: number): Vec2 | null {
-  const off = 28 * px;
+/** The gap (px) between a label with no place of its own and what it measures: from the pill's near side. */
+export const LABEL_GAP_PX = 10;
+/** The least distance (px) from what a dimension measures to its label's centre (a short label's place, as before). */
+export const LABEL_OFFSET_PX = 28;
+
+/**
+ * How far (mm) a dimension label's edge lies from its centre along a sketch direction `dir`
+ * (unit, u/v), for a label standing near `at`: half the pill's extent that way, as the screen
+ * shows it. The sketch overlay measures its labels for it; null when it can't tell.
+ */
+export type LabelReach = (at: Vec2, dir: Vec2) => number | null;
+
+/**
+ * How far out from `from` (along `dir`) a label's centre goes: its near side LABEL_GAP_PX from
+ * the geometry, whatever its text's width (ci2: Linux's wider DejaVu Sans put the pill of a
+ * vertical line's "20 mm" on the line, under the click meant for the line), and never nearer
+ * than LABEL_OFFSET_PX. With no reach the label sits LABEL_OFFSET_PX out.
+ */
+function labelOffset(px: number, from: Vec2, dir: Vec2, reach?: LabelReach): number {
+  const r = reach?.(from, dir);
+  const half = r != null && Number.isFinite(r) && r > 0 ? r : 0;
+  return Math.max(LABEL_OFFSET_PX * px, LABEL_GAP_PX * px + half);
+}
+
+/**
+ * The point an angle's label hangs off (its vertex), or null for other kinds: a label moved out
+ * of another's way moves away from it (review P1), so it stays on its bisector and its gap from
+ * both arms only grows.
+ */
+export function angleVertex(f: F, c: Pick<SketchDimension, 'kind' | 'refs'>): Vec2 | null {
+  if (c.kind !== 'angle') return null;
+  if (c.refs.length === 1) return lineEnds(f, c.refs[0])?.[0] ?? null;
+  const a = lineEnds(f, c.refs[0]);
+  const b = lineEnds(f, c.refs[1]);
+  if (!a || !b) return null;
+  return lineLine(a[0], a[1], b[0], b[1])?.p ?? null;
+}
+
+/**
+ * An angle's label (review P1, the ci2 gap rule for angles): on the bisector of the angle from
+ * `a1` turning `theta` about `o`, at least `r0` out and far enough that its pill's near side is
+ * LABEL_GAP_PX from both arms (a 10° line's "10°" sat on the line at 0 px, so a click on the line
+ * picked the label). A pill reaching `h` across an arm needs its centre `(gap + h) / sin(theta/2)`
+ * out; a narrow angle's label so goes out past the line's end, where the arc and its extension
+ * lines reach it. A straight angle (0°) has its label beside the arm, as a length's is.
+ */
+export function angleLabelAt(o: Vec2, a1: number, theta: number, r0: number, px: number, reach?: LabelReach): Vec2 {
+  const half = Math.abs(theta) / 2;
+  const bis = a1 + theta / 2;
+  const arms: Vec2[] = [
+    [-Math.sin(a1), Math.cos(a1)],
+    [-Math.sin(a1 + theta), Math.cos(a1 + theta)],
+  ];
+  const need = (p: Vec2) => Math.max(...arms.map((n) => LABEL_GAP_PX * px + Math.max(0, reach?.(p, n) ?? 0)));
+  if (half < 1e-6) {
+    const p = polar(o, r0, a1);
+    return add(p, scale(arms[0], labelOffset(px, p, arms[0], reach)));
+  }
+  let r = r0;
+  for (let i = 0; i < 4; i++) {
+    const want = need(polar(o, r, bis)) / Math.sin(Math.min(half, Math.PI / 2));
+    if (want <= r * (1 + 1e-9)) break;
+    r = want;
+  }
+  return polar(o, r, bis);
+}
+
+/**
+ * Where a new dimension's label goes when it has no place yet: beside what it measures, its
+ * pill clear of it (`reach`: how big the pill is; see labelOffset).
+ */
+export function defaultLabelAt(f: F, c: Pick<SketchDimension, 'kind' | 'refs'>, px: number, reach?: LabelReach): Vec2 | null {
+  const off = LABEL_OFFSET_PX * px;
   const kinds = c.refs.map((r) => refKindOf(f, r));
   const pt = (r: string) => {
     const id = pointIdOf(f, r);
@@ -379,13 +449,14 @@ export function defaultLabelAt(f: F, c: Pick<SketchDimension, 'kind' | 'refs'>, 
     const ctr = cid ? pointAt(f, cid) : null;
     const r = radiusOf(f, c.refs[0]);
     if (!ctr || r == null) return null;
-    return polar(ctr, r + off, Math.PI / 4);
+    const rim = polar(ctr, r, Math.PI / 4);
+    return polar(ctr, r + labelOffset(px, rim, [Math.SQRT1_2, Math.SQRT1_2], reach), Math.PI / 4);
   }
   if (c.kind === 'angle' && c.refs.length === 1) {
     const ends = lineEnds(f, c.refs[0]);
     if (!ends) return null;
     const ang = angleOf(ends[0], ends[1]);
-    return polar(ends[0], Math.max(off, dist(ends[0], ends[1]) * 0.4), ang / 2);
+    return angleLabelAt(ends[0], 0, ang, Math.max(off, dist(ends[0], ends[1]) * 0.4), px, reach);
   }
   if (c.kind === 'angle') {
     const a = lineEnds(f, c.refs[0]);
@@ -395,8 +466,8 @@ export function defaultLabelAt(f: F, c: Pick<SketchDimension, 'kind' | 'refs'>, 
     if (!x) return null;
     const a1 = angleOf([0, 0], sub(a[1], a[0]));
     const theta = wrapPi(angleOf([0, 0], sub(b[1], b[0])) - a1);
-    const reach = Math.min(dist(a[0], a[1]), dist(b[0], b[1]));
-    return polar(x.p, Math.max(off, reach * 0.4), a1 + theta / 2);
+    const span = Math.min(dist(a[0], a[1]), dist(b[0], b[1]));
+    return angleLabelAt(x.p, a1, theta, Math.max(off, span * 0.4), px, reach);
   }
   let p: Vec2 | null = null;
   let q: Vec2 | null = null;
@@ -419,8 +490,14 @@ export function defaultLabelAt(f: F, c: Pick<SketchDimension, 'kind' | 'refs'>, 
   }
   if (!p || !q) return null;
   const m: Vec2 = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
-  if (c.kind === 'distance_x') return [m[0], Math.max(p[1], q[1]) + off];
-  if (c.kind === 'distance_y') return [Math.max(p[0], q[0]) + off, m[1]];
+  if (c.kind === 'distance_x') {
+    const top: Vec2 = [m[0], Math.max(p[1], q[1])];
+    return [top[0], top[1] + labelOffset(px, top, [0, 1], reach)];
+  }
+  if (c.kind === 'distance_y') {
+    const right: Vec2 = [Math.max(p[0], q[0]), m[1]];
+    return [right[0] + labelOffset(px, right, [1, 0], reach), right[1]];
+  }
   const d = sub(q, p);
   const n = norm(perp(d));
   // Outward: away from the middle of the shape it measures (a rectangle's width goes below it, not
@@ -434,7 +511,8 @@ export function defaultLabelAt(f: F, c: Pick<SketchDimension, 'kind' | 'refs'>, 
     const away = dot(sub(m, c), n);
     if (Math.abs(away) > 1e-9 * Math.max(1, Math.hypot(d[0], d[1]))) side = away > 0 ? 1 : -1;
   }
-  return add(m, scale(n, side * off));
+  const out = scale(n, side);
+  return add(m, scale(out, labelOffset(px, m, out, reach)));
 }
 
 // ------------------------------------------------------------ words
