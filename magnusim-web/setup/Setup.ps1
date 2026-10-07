@@ -125,7 +125,7 @@ function Enable-WinLongPaths {
 
     } catch { }
 
-    if (-not (Test-Admin)) { Restart-Elevated }
+    if (-not (Test-Admin)) { Restart-Elevated 'turn on Windows long paths (paths over 260 characters)' }
 
     try {
 
@@ -143,11 +143,11 @@ function Enable-WinLongPaths {
 
 
 
-function Restart-Elevated {
+function Restart-Elevated([string]$Why) {
 
     Write-Host ''
 
-    Write-Host 'Windows needs Administrator once to enable WSL / Ubuntu.' -ForegroundColor Yellow
+    Write-Host "Windows needs Administrator once to $Why." -ForegroundColor Yellow
 
     Write-Host 'Approve the UAC prompt, then this window will finish (or ask you to reboot).' -ForegroundColor Yellow
 
@@ -155,9 +155,25 @@ function Restart-Elevated {
 
     if ($Plugins) { $arg += ' -Plugins' }
 
-    $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+    # One line: a blank line after a backtick continuation ends the command, and
+    # -Verb then ran as a command of its own ("The term '-Verb' is not recognized").
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
-        -Verb RunAs -ArgumentList $arg -Wait -PassThru
+    try {
+
+        $p = Start-Process -FilePath $ps -Verb RunAs -ArgumentList $arg -Wait -PassThru
+
+    } catch {
+
+        # The prompt was refused, or this account may not approve it (a work PC).
+        throw @"
+Windows did not give Setup Administrator rights ($($_.Exception.Message)).
+Setup needs them once to $Why. Run Setup.bat again and approve the prompt, or, on a
+work PC, ask IT to run Setup.bat as Administrator once (or to turn on Windows long
+paths and install WSL with Ubuntu-24.04), then run Setup.bat again yourself.
+"@
+
+    }
 
     exit $p.ExitCode
 
@@ -401,9 +417,11 @@ function Install-NpmPackages {
 
     Set-Location $WebRoot
 
-    if ((Test-Path (Join-Path $WebRoot 'node_modules\vite\package.json')) -and `
+    $vite = Join-Path $WebRoot 'node_modules\vite\package.json'
 
-        (Test-Path (Join-Path $WebRoot 'node_modules\@kitware\vtk.js\package.json'))) {
+    $vtk = Join-Path $WebRoot 'node_modules\@kitware\vtk.js\package.json'
+
+    if ((Test-Path $vite) -and (Test-Path $vtk)) {
 
         Write-Ok 'npm packages already installed'
 
@@ -543,7 +561,12 @@ function Get-WslDistroNames {
 
 function Test-WslExe {
 
-    return Test-Path (Join-Path $env:SystemRoot 'System32\wsl.exe')
+    # Windows 11 ships wsl.exe before WSL is turned on: only a working WSL answers --status.
+    if (-not (Test-Path (Join-Path $env:SystemRoot 'System32\wsl.exe'))) { return $false }
+
+    try { & wsl.exe --status 2>$null | Out-Null } catch { return $false }
+
+    return $LASTEXITCODE -eq 0
 
 }
 
@@ -571,7 +594,7 @@ function Ensure-WslUbuntu {
 
     if (-not (Test-WslExe)) {
 
-        if (-not (Test-Admin)) { Restart-Elevated }
+        if (-not (Test-Admin)) { Restart-Elevated 'turn on the Windows Subsystem for Linux (WSL)' }
 
         Write-Step 'Enabling Windows Subsystem for Linux'
 
@@ -602,13 +625,15 @@ function Ensure-WslUbuntu {
 
         Write-Ok "WSL distro $wanted is installed"
 
+        Remove-Item -LiteralPath (Join-Path $LogDir 'reboot-required.txt') -ErrorAction SilentlyContinue
+
         return $wanted
 
     }
 
 
 
-    if (-not (Test-Admin)) { Restart-Elevated }
+    if (-not (Test-Admin)) { Restart-Elevated "install $wanted in WSL" }
 
     Write-Step "Installing $wanted (one-time, needs Administrator)"
     Invoke-Record { Set-ComponentAttempt 'ubuntu' }
@@ -632,6 +657,8 @@ function Ensure-WslUbuntu {
         Invoke-Record { Complete-Component 'ubuntu' (Get-DistroObservation) }
         Write-Ok "$wanted installed"
 
+        Remove-Item -LiteralPath (Join-Path $LogDir 'reboot-required.txt') -ErrorAction SilentlyContinue
+
         return $wanted
 
     }
@@ -645,6 +672,26 @@ function Ensure-WslUbuntu {
             return $fallback
 
         }
+
+    }
+
+    # Installing Ubuntu right after WSL was turned on often needs a restart before the
+    # distro is listed. The first time, ask for one; after a restart, say what else to check.
+    $marker = Join-Path $LogDir 'reboot-required.txt'
+
+    $asked = (Test-Path $marker) -and ((Get-Content -LiteralPath $marker -Raw) -match 'ubuntu')
+
+    if (-not $asked) {
+
+        Write-Host ''
+
+        Write-Host "Windows needs a restart to finish installing $wanted." -ForegroundColor Yellow
+
+        Write-Host 'Reboot, then double-click Setup.bat again. It will resume from here.' -ForegroundColor Yellow
+
+        Set-Content -Path $marker -Value 'ubuntu' -Encoding utf8
+
+        exit 2
 
     }
 
@@ -905,6 +952,10 @@ catch {
     Write-Host $_.Exception.Message -ForegroundColor Red
 
     Write-Host "Details: $LogPath"
+
+    # The Administrator window closes when it ends: keep its message on screen.
+
+    if ($Elevated) { Read-Host 'Press Enter to close this window' | Out-Null }
 
     exit 1
 
