@@ -40,6 +40,12 @@ const PID = 'p1';
 const SID = 's1';
 const pluginDir = join(PROJECTS, PID, 'plugins', KEY);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Until ok() holds, for at most `ms` (a loaded PC can take far longer than a fixed sleep); ok()'s last answer.
+async function until(ok, ms = 10_000) {
+  const end = performance.now() + ms;
+  while (!ok() && performance.now() < end) await sleep(10);
+  return ok();
+}
 
 class FakeWorker extends EventEmitter {
   constructor() {
@@ -403,8 +409,8 @@ describe('submit', () => {
     const release = worker.holdNext('foam.check_case');
     const a = srv.post('/api/plugin-cases/submit', submitBody());
     const b = srv.post('/api/plugin-cases/submit', submitBody());
-    await sleep(120);
-    assert.equal(worker.calls.filter((c) => c[0] === 'foam.check_case').length, 2, 'both are in the check');
+    const inCheck = () => worker.calls.filter((c) => c[0] === 'foam.check_case').length;
+    assert.ok(await until(() => inCheck() === 2), `both are in the check (${inCheck()} of 2)`);
     release();
     const answers = (await Promise.all([a, b])).map((r) => [r.status, r.body.existing]).sort();
     assert.deepEqual(answers, [[200, true], [202, false]]);
