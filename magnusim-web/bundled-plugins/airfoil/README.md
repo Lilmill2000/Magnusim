@@ -1,8 +1,8 @@
 # Airfoil
 
 A bundled plugin that ships off. It adds the study kind **Airfoil analysis**,
-opened in its own workspace: a 2D section (a NACA 4- or 5-digit designation, or
-a Selig or Lednicer `.dat` file), its conditions (Reynolds number, Mach number,
+opened in its own workspace: a 2D section (a NACA 4- or 5-digit designation,
+its dimensions, or a Selig or Lednicer `.dat` file), its conditions (Reynolds number, Mach number,
 α range, Ncrit, forced transition), and its lift, drag and moment polars from:
 
 - **NeuralFoil** (MIT): a trained network, a polar in a fraction of a second,
@@ -27,6 +27,15 @@ The workspace:
 - **Section:** a NACA designation with its points per side and an open or
   closed trailing edge, or **Import .dat file** (Selig or Lednicer; repairs such
   as a reversed point order are reported). Its outline and measures follow.
+  **Dimensions (% of chord)** edits the section directly: maximum thickness and
+  where it is, maximum camber and where it is, and the leading-edge radius. They
+  start from the NACA code's digits (or, approximately, from a measured
+  section); an edit makes it a NACA four-digit-modified section
+  (`airfoil/shape.py`: Abbott and von Doenhoff 6.4, NASA TM X-3284), whose
+  thickness position and nose radius are free. Whole digits are named as that
+  family names them ("NACA 2412-63"), any other section by its dimensions
+  ("Custom t12.0@35 c2.0@40 r2.00"). The drawing marks the chord, the camber line
+  and its maximum, the maximum thickness and the leading-edge circle.
   Inputs are saved once they pass the checks; a refused one says why, and
   the Run buttons' reasons link to the field to change.
 - **Conditions and transition:** Reynolds number, Mach number, first and last
@@ -50,7 +59,11 @@ The workspace:
 - **Plots** (the kit's `LinePlot`): Cl against α, Cl against Cd, Cm against α,
   and XFOIL's Cp(x) at a chosen angle (−Cp upward). **Overlay engines** draws
   every engine's saved polar together; each legend entry names the engine and
-  the settings it ran with.
+  the settings it ran with. Above them, each shown polar's key numbers
+  (`workspace/keyNumbers.js`): Cl max and whether it stalled in the range, the
+  lift slope against thin-airfoil theory, the zero-lift angle, Cd min, the best
+  Cl/Cd and Cm at 0°. Each plot and the OpenFOAM residuals have a closed "How to
+  read this", and each table a "What the columns mean".
 - **Table and export:** the picked engine's polar, **Export all polars (CSV)**
   (every engine's saved polar, whichever table is shown: one row per engine and
   angle, the settings on each row, and an angle that did not converge as a row
@@ -79,7 +92,7 @@ Python. The app's own packages never change.
 | `manifest.toml` | Key `airfoil`, optional (`default_enabled = false`), the study kind, workspace, start action and `[python]` environment |
 | `plugin.py` | `register(hub)`: the `xfoil_polar` and `openfoam_2d` jobs |
 | `airfoil_service.py` | The service (`ws.service`): `defaults`, `check`, `import_dat`, `warmup`, `neuralfoil_polar`, `results`, `xfoil_status`, `openfoam_info`, `openfoam_record`, `openfoam_collect`, `openfoam_delete`, `openfoam_polar`, `export_csv`, `export_dat`, `migrate_study` |
-| `airfoil/` | Section geometry (`naca`, `datfile`, `geometry`), settings, storage, exports (`export`), NeuralFoil (`neural`), XFOIL (`xfoil`), and OpenFOAM 2D: the C-mesh (`cmesh`), the case (`foamcase`) and its runs (`openfoam`) |
+| `airfoil/` | Section geometry (`naca`, `shape`, `datfile`, `geometry`), settings, storage, exports (`export`), NeuralFoil (`neural`), XFOIL (`xfoil`), and OpenFOAM 2D: the C-mesh (`cmesh`), the case (`foamcase`) and its runs (`openfoam`) |
 | `jobs/xfoil_polar.py` | The XFOIL job tool |
 | `jobs/openfoam_2d.py` | The OpenFOAM 2D job tool: meshes the section and writes one angle's case |
 | `workspace/` | The workspace page (kit components, `@magnusim/workspace`) |
