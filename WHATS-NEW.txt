@@ -31,8 +31,14 @@ Plugins
     NACA 4- or 5-digit code, its dimensions, or a .dat file; lift, drag and
     moment polars from NeuralFoil (instant), XFOIL (Windows) or an OpenFOAM
     2D solve in the app's WSL.
+- Plugins can be updated on their own: Settings -> Plugins -> "Install plugin
+  from zip..." installs a plugin, or a newer version of one, from a zip. It
+  says what it installs and what running work it stops, and installs only
+  after Install. A newer copy of a plugin that ships with Magnusim is used in
+  its place ("Remove update" goes back); one that fails to load is taken away
+  again and the previous version kept.
 - Plugin authors: docs/plugins (GUIDE, API, authoring) and npm run plugin:new
-  / plugin:check. The plugin API is version 1.6.
+  / plugin:check / plugin:pack (makes the zip). The plugin API is version 1.6.
 
 Incompressible Flow
 - Turbulence: Spalart-Allmaras and realizable k-epsilon join k-omega SST,
